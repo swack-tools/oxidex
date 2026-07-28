@@ -235,24 +235,10 @@ fn parse_key_value_pairs(content: &[u8], metadata: &mut MetadataMap) {
             // Attempt to parse as numeric value, falling back to string
             let tag_value = parse_value(value);
 
-            // Picture Info fields are exposed by ExifTool in the APP12 group.
-            // Preserve the display-ready fraction rather than converting it
-            // to a floating-point value.
-            if key.eq_ignore_ascii_case("ExposureTime") {
-                metadata.insert(
-                    "APP12:ExposureTime".to_string(),
-                    TagValue::String(value.to_string()),
-                );
-            }
-
-            // Flash is a standard Picture Info field. ExifTool exposes the
-            // display-ready value (for example, "Off") in the APP12 group.
-            if key.eq_ignore_ascii_case("Flash") {
-                metadata.insert(
-                    "APP12:Flash".to_string(),
-                    TagValue::String(value.to_string()),
-                );
-            }
+            // Agfa's APP12 payload is the same ASCII "Picture Info" record
+            // ExifTool feeds to ProcessAPP12, so the canonical APP12 tag is
+            // derived by the shared port of that table.
+            super::app12_olympus::insert_picture_info_tag(key, value, metadata);
 
             metadata.insert(tag_name, tag_value);
         }
@@ -426,6 +412,24 @@ mod tests {
         assert_eq!(metadata.get_string("Agfa:FlashMode"), Some("Auto"));
     }
 
+    /// Test parsing Flash tag with numeric values (PrintConv to Off/On).
+    #[test]
+    fn test_parse_flash_numeric() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"AGFA");
+        data.push(0x00);
+        data.extend_from_slice(b"Flash=0\nFlashMode=1\n");
+
+        let result = parse_app12_agfa(&data);
+        assert!(result.is_ok());
+
+        let metadata = result.unwrap();
+        assert_eq!(metadata.get_string("APP12:Flash"), Some("Off"));
+        // FlashMode is not a recognized special tag, so it gets the generic
+        // Agfa: prefix. The parser auto-converts numeric values to Integer.
+        assert_eq!(metadata.get_integer("Agfa:FlashMode"), Some(1));
+    }
+
     /// Test that segment too short returns an error.
     #[test]
     fn test_segment_too_short() {
@@ -522,9 +526,13 @@ mod tests {
         assert!(result.is_ok());
 
         let metadata = result.unwrap();
-        assert_eq!(metadata.len(), 2);
+        // Two fields, each emitted under both the legacy Agfa: prefix and the
+        // canonical APP12: group ExifTool reports.
+        assert_eq!(metadata.len(), 4);
         assert_eq!(metadata.get_string("Agfa:ValidKey"), Some("ValidValue"));
         assert_eq!(metadata.get_string("Agfa:AnotherValid"), Some("Value"));
+        assert_eq!(metadata.get_string("APP12:ValidKey"), Some("ValidValue"));
+        assert_eq!(metadata.get_string("APP12:AnotherValid"), Some("Value"));
     }
 
     /// Test that empty keys and values are skipped.
@@ -539,8 +547,13 @@ mod tests {
         assert!(result.is_ok());
 
         let metadata = result.unwrap();
-        assert_eq!(metadata.len(), 1);
+        assert_eq!(metadata.len(), 2);
         assert_eq!(metadata.get_string("Agfa:Valid"), Some("Data"));
+        assert_eq!(metadata.get_string("APP12:Valid"), Some("Data"));
+        assert!(
+            metadata.get("APP12:EmptyValue").is_none(),
+            "APP12.pm:262 requires at least one printable character after '='"
+        );
     }
 
     /// Test parsing values with spaces.

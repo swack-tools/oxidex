@@ -290,6 +290,41 @@ fn extract_canon_string(entry: &IfdEntry, data: &[u8], byte_order: ByteOrder) ->
     }
 }
 
+/// Renders a bitmask the way ExifTool's `DecodeBits($val, undef, 16)` does.
+///
+/// Reference: `Image::ExifTool::DecodeBits` (ExifTool.pm:6362). With no lookup table the
+/// set bit numbers are emitted in ascending order joined by `,`, words are 16 bits wide
+/// and word `w` contributes bits `w*16 .. w*16+15`, and an empty result prints `(none)`:
+///
+/// ```text
+///     return '(none)' unless @bitList;
+///     return join($lookup ? ', ' : ',', @bitList);
+/// ```
+fn decode_bits_16(words: &[i16]) -> String {
+    let mut bits: Vec<String> = Vec::new();
+    for (word_index, &word) in words.iter().enumerate() {
+        for bit in 0..16usize {
+            if (word as u16) & (1u16 << bit) != 0 {
+                bits.push((word_index * 16 + bit).to_string());
+            }
+        }
+    }
+    if bits.is_empty() {
+        "(none)".to_string()
+    } else {
+        bits.join(",")
+    }
+}
+
+/// Joins a slice of AF coordinates the way ExifTool prints an `int16s[n]` value.
+fn join_i16_slice(values: &[i16]) -> String {
+    values
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 // Canon MakerNote Tag IDs
 const CANON_CAMERA_SETTINGS: u16 = 0x0001;
 const CANON_FOCAL_LENGTH: u16 = 0x0002;
@@ -314,6 +349,8 @@ const CANON_PROCESSING_INFO: u16 = 0x00A0;
 const CANON_MEASURED_COLOR: u16 = 0x00AA;
 const CANON_COLOR_SPACE: u16 = 0x00B4;
 const CANON_VRD_OFFSET: u16 = 0x00D0;
+/// ExifTool Canon.pm:1965 — `0xe0 => { Name => 'SensorInfo', ... }`
+const CANON_SENSOR_INFO: u16 = 0x00E0;
 
 // Canon signature (not always present)
 const CANON_SIGNATURE: &[u8] = b"Canon";
@@ -383,23 +420,101 @@ const SHOT_INFO_FOCUS_DISTANCE_UPPER: usize = 19;
 const SHOT_INFO_SUBJECT_DISTANCE: usize = 19;
 const SHOT_INFO_FOCUS_DISTANCE_LOWER: usize = 20;
 const SHOT_INFO_BULB_DURATION: usize = 24;
+/// ExifTool `%Canon::ShotInfo` key 27 — `Name => 'AutoRotate'` (Canon.pm:3022).
+const SHOT_INFO_AUTO_ROTATE: usize = 27;
 
 // FileInfo array indices (tag 0x0093)
+//
+// ExifTool `%Image::ExifTool::Canon::FileInfo` (Canon.pm:6842), `FORMAT => 'int16s'`:
+//
+// ```text
+//     1 => [ { Name => 'FileNumber', ... Format => 'int32u', ... } ... ],
+//     3 => { Name => 'BracketMode', PrintConv => { 0 => 'Off', 1 => 'AEB', ... } },
+//     4 => 'BracketValue', #PH
+//     5 => 'BracketShotNumber', #PH
+// ```
 const FILE_INFO_FILE_NUMBER: usize = 1;
+// NOTE: the two indices below are a legacy heuristic that has no counterpart in
+// `%Canon::FileInfo` (key 1 is a 4-byte int32u spanning int16 slots 1-2, and slot 3 is
+// BracketMode). Left unchanged here because ShutterCount is outside this change's scope.
 const FILE_INFO_SHUTTER_COUNT_LOW: usize = 2;
 const FILE_INFO_SHUTTER_COUNT_HIGH: usize = 3;
-const FILE_INFO_BRACKET_MODE: usize = 4;
-const FILE_INFO_BRACKET_VALUE: usize = 5;
+const FILE_INFO_BRACKET_MODE: usize = 3;
+const FILE_INFO_BRACKET_VALUE: usize = 4;
+const FILE_INFO_BRACKET_SHOT_NUMBER: usize = 5;
 const FILE_INFO_LENS_ID: usize = 6;
 
-// AFInfo array indices
-const AF_INFO_NUM_AF_POINTS: usize = 1;
-const AF_INFO_IMAGE_WIDTH: usize = 2;
-const AF_INFO_IMAGE_HEIGHT: usize = 3;
-const AF_INFO_AREA_WIDTH: usize = 4;
-const AF_INFO_AREA_HEIGHT: usize = 5;
-const AF_INFO_POINTS_IN_FOCUS: usize = 8;
-const AF_INFO_POINTS_SELECTED: usize = 9;
+// SensorInfo array indices (tag 0x00E0)
+//
+// ExifTool `%Image::ExifTool::Canon::SensorInfo` (Canon.pm:7409), `FORMAT => 'int16s'`,
+// `FIRST_ENTRY => 1` — entry N lives at byte offset 2*N, so the raw int16 index equals
+// the Perl key:
+//
+// ```text
+//     9 => { Name => 'BlackMaskLeftBorder', ... },
+//     10 => 'BlackMaskTopBorder', #22
+//     11 => 'BlackMaskRightBorder', #22
+//     12 => 'BlackMaskBottomBorder', #22
+// ```
+const SENSOR_INFO_BLACK_MASK_LEFT_BORDER: usize = 9;
+const SENSOR_INFO_BLACK_MASK_TOP_BORDER: usize = 10;
+const SENSOR_INFO_BLACK_MASK_RIGHT_BORDER: usize = 11;
+const SENSOR_INFO_BLACK_MASK_BOTTOM_BORDER: usize = 12;
+
+// AFInfo sequence indices (tag 0x0012)
+//
+// ExifTool `%Image::ExifTool::Canon::AFInfo` (Canon.pm:6432) is a *serial* record
+// (`PROCESS_PROC => \&ProcessSerialData`, `FORMAT => 'int16u'`) with no leading length
+// word (Canon.pm:1602 "this record does not begin with a length word"). Keys 0..7 are
+// scalars, so the raw int16 index equals the Perl key up to and including key 7:
+//
+// ```text
+//     0 => { Name => 'NumAFPoints', },
+//     1 => { Name => 'ValidAFPoints', ... },
+//     2 => { Name => 'CanonImageWidth', ... },
+//     3 => { Name => 'CanonImageHeight', ... },
+//     4 => { Name => 'AFImageWidth', ... },
+//     5 => 'AFImageHeight',
+//     6 => 'AFAreaWidth',
+//     7 => 'AFAreaHeight',
+//     8 => { Name => 'AFAreaXPositions', Format => 'int16s[$val{0}]', },
+//     9 => { Name => 'AFAreaYPositions', Format => 'int16s[$val{0}]', },
+//     10 => { Name => 'AFPointsInFocus', Format => 'int16s[int(($val{0}+15)/16)]', ... },
+// ```
+const AF_INFO_NUM_AF_POINTS: usize = 0;
+const AF_INFO_AF_IMAGE_WIDTH: usize = 4;
+const AF_INFO_AF_IMAGE_HEIGHT: usize = 5;
+const AF_INFO_AF_AREA_WIDTH: usize = 6;
+const AF_INFO_AF_AREA_HEIGHT: usize = 7;
+/// First variable-length slot of `%Canon::AFInfo` (Perl key 8, `AFAreaXPositions`).
+const AF_INFO_VARIABLE_START: usize = 8;
+
+// AFInfo2 sequence indices (tag 0x0026)
+//
+// ExifTool `%Image::ExifTool::Canon::AFInfo2` (Canon.pm:6503), also serial
+// (`PROCESS_PROC => \&ProcessSerialData`, `FORMAT => 'int16u'`). Keys 0..7 are scalars:
+//
+// ```text
+//     0 => { Name => 'AFInfoSize', Unknown => 1, ... },
+//     1 => { Name => 'AFAreaMode', PrintConv => { ... } },
+//     2 => { Name => 'NumAFPoints', RawConv => '$$self{NumAFPoints} = $val', },
+//     3 => { Name => 'ValidAFPoints', ... },
+//     4 => { Name => 'CanonImageWidth', ... },
+//     5 => { Name => 'CanonImageHeight', ... },
+//     6 => { Name => 'AFImageWidth', ... },
+//     7 => 'AFImageHeight',
+//     8 => { Name => 'AFAreaWidths', Format => 'int16s[$val{2}]', },
+//     9 => { Name => 'AFAreaHeights', Format => 'int16s[$val{2}]', },
+//     10 => { Name => 'AFAreaXPositions', Format => 'int16s[$val{2}]', },
+//     11 => { Name => 'AFAreaYPositions', Format => 'int16s[$val{2}]', },
+//     12 => { Name => 'AFPointsInFocus', Format => 'int16s[int(($val{2}+15)/16)]', ... },
+// ```
+const AF_INFO2_AF_AREA_MODE: usize = 1;
+const AF_INFO2_NUM_AF_POINTS: usize = 2;
+const AF_INFO2_AF_IMAGE_WIDTH: usize = 6;
+const AF_INFO2_AF_IMAGE_HEIGHT: usize = 7;
+/// First variable-length slot of `%Canon::AFInfo2` (Perl key 8, `AFAreaWidths`).
+const AF_INFO2_VARIABLE_START: usize = 8;
 
 // FlashInfo array indices (tag 0x0003)
 const FLASH_INFO_FLASH_GUIDE_NUMBER: usize = 0;
@@ -845,6 +960,118 @@ const_decoder!(
         (0, "Camera Local Control"),
         (3, "Computer Remote Control"),
         (4, "Camera Remote Control"),
+    ]
+);
+
+// Canon AutoRotate decoder
+//
+// ExifTool `%Image::ExifTool::Canon::ShotInfo` key 27 (Canon.pm:3022):
+//
+// ```text
+//     27 => {
+//         Name => 'AutoRotate',
+//         RawConv => '$val >= 0 ? $val : undef',
+//         PrintConv => {
+//            -1 => 'n/a', # (set to -1 when rotated by Canon software)
+//             0 => 'None',
+//             1 => 'Rotate 90 CW',
+//             2 => 'Rotate 180',
+//             3 => 'Rotate 270 CW',
+//         },
+//     },
+// ```
+//
+// The `-1 => 'n/a'` entry is unreachable: `RawConv` discards every negative value before
+// `PrintConv` runs, so the caller must skip negatives rather than map them.
+const_decoder!(
+    pub AUTO_ROTATE,
+    i16,
+    [
+        (0, "None"),
+        (1, "Rotate 90 CW"),
+        (2, "Rotate 180"),
+        (3, "Rotate 270 CW"),
+    ]
+);
+
+// Canon BracketMode decoder
+//
+// ExifTool `%Image::ExifTool::Canon::FileInfo` key 3 (Canon.pm:6929):
+//
+// ```text
+//     3 => { #PH
+//         Name => 'BracketMode',
+//         PrintConv => {
+//             0 => 'Off',
+//             1 => 'AEB',
+//             2 => 'FEB',
+//             3 => 'ISO',
+//             4 => 'WB',
+//         },
+//     },
+// ```
+const_decoder!(
+    pub BRACKET_MODE,
+    i16,
+    [(0, "Off"), (1, "AEB"), (2, "FEB"), (3, "ISO"), (4, "WB"),]
+);
+
+// Canon AFAreaMode decoder (AFInfo2 key 1)
+//
+// ExifTool `%Image::ExifTool::Canon::AFInfo2` key 1 (Canon.pm:6517):
+//
+// ```text
+//     1 => {
+//         Name => 'AFAreaMode',
+//         PrintConv => {
+//             0 => 'Off (Manual Focus)',
+//             1 => 'AF Point Expansion (surround)', #PH
+//             2 => 'Single-point AF',
+//             # 3 - n/a
+//             4 => 'Auto', #forum6237 (AiAF on A570IS)
+//             5 => 'Face Detect AF',
+//             6 => 'Face + Tracking', #PH (NC, EOS M, live view)
+//             7 => 'Zone AF', #46
+//             8 => 'AF Point Expansion (4 point)', #46/PH/forum6237
+//             9 => 'Spot AF', #46
+//             10 => 'AF Point Expansion (8 point)', #forum6237
+//             11 => 'Flexizone Multi (49 point)', #PH (NC, EOS M, live view; 750D 49 points)
+//             12 => 'Flexizone Multi (9 point)', #PH (750D, 9 points)
+//             13 => 'Flexizone Single', #PH (EOS M default, live view) ...
+//             14 => 'Large Zone AF', #PH/forum6237 (7DmkII)
+//             16 => 'Large Zone AF (vertical)', #forum16223
+//             17 => 'Large Zone AF (horizontal)', #forum16223
+//             19 => 'Flexible Zone AF 1', #github268 (R7)
+//             20 => 'Flexible Zone AF 2', #github268 (R7)
+//             21 => 'Flexible Zone AF 3', #github268 (R7)
+//             22 => 'Whole Area AF', #github268 (R7)
+//         },
+//     },
+// ```
+const_decoder!(
+    pub AF_AREA_MODE,
+    i16,
+    [
+        (0, "Off (Manual Focus)"),
+        (1, "AF Point Expansion (surround)"),
+        (2, "Single-point AF"),
+        (4, "Auto"),
+        (5, "Face Detect AF"),
+        (6, "Face + Tracking"),
+        (7, "Zone AF"),
+        (8, "AF Point Expansion (4 point)"),
+        (9, "Spot AF"),
+        (10, "AF Point Expansion (8 point)"),
+        (11, "Flexizone Multi (49 point)"),
+        (12, "Flexizone Multi (9 point)"),
+        (13, "Flexizone Single"),
+        (14, "Large Zone AF"),
+        (16, "Large Zone AF (vertical)"),
+        (17, "Large Zone AF (horizontal)"),
+        (19, "Flexible Zone AF 1"),
+        (20, "Flexible Zone AF 2"),
+        (21, "Flexible Zone AF 3"),
+        (22, "Whole Area AF"),
     ]
 );
 
@@ -1975,12 +2202,17 @@ fn parse_canon_makernote_impl(
                     // BulbDuration (index 24) - direct value in seconds
                     if array.len() > SHOT_INFO_BULB_DURATION {
                         let duration = array[SHOT_INFO_BULB_DURATION];
-                        if duration > 0 {
-                            tags.insert(
-                                "Canon:BulbDuration".to_string(),
-                                format!("{} s", duration),
-                            );
-                        }
+                        tags.insert("Canon:BulbDuration".to_string(), duration.to_string());
+                    }
+
+                    // AutoRotate (index 27). ExifTool's RawConv drops negative values.
+                    if let Some(&auto_rotate) = array.get(SHOT_INFO_AUTO_ROTATE)
+                        && auto_rotate >= 0
+                    {
+                        tags.insert(
+                            "Canon:AutoRotate".to_string(),
+                            AUTO_ROTATE.decode(auto_rotate),
+                        );
                     }
                 }
             }
@@ -2057,6 +2289,27 @@ fn parse_canon_makernote_impl(
                         }
                     }
 
+                    // BracketMode (Perl key 3)
+                    if let Some(&bracket_mode) = array.get(FILE_INFO_BRACKET_MODE) {
+                        tags.insert(
+                            "Canon:BracketMode".to_string(),
+                            BRACKET_MODE.decode(bracket_mode),
+                        );
+                    }
+
+                    // BracketValue (Perl key 4)
+                    if let Some(&bracket_value) = array.get(FILE_INFO_BRACKET_VALUE) {
+                        tags.insert("Canon:BracketValue".to_string(), bracket_value.to_string());
+                    }
+
+                    // BracketShotNumber (Perl key 5)
+                    if let Some(&bracket_shot) = array.get(FILE_INFO_BRACKET_SHOT_NUMBER) {
+                        tags.insert(
+                            "Canon:BracketShotNumber".to_string(),
+                            bracket_shot.to_string(),
+                        );
+                    }
+
                     // Extract shutter count (combine low and high words)
                     if let (Some(&low), Some(&high)) = (
                         array.get(FILE_INFO_SHUTTER_COUNT_LOW),
@@ -2073,43 +2326,155 @@ fn parse_canon_makernote_impl(
                 }
             }
 
-            // AFInfo array (Phase 3) - autofocus point information
-            CANON_AF_INFO | CANON_AF_INFO2 => {
-                // AFInfo is a SHORT array
+            // AFInfo (tag 0x0012) - autofocus information used by older Canon models
+            CANON_AF_INFO => {
                 if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
-                    // Number of AF points
-                    if let Some(&num_points) = array.get(AF_INFO_NUM_AF_POINTS)
-                        && num_points > 0
-                    {
+                    let num_points = array.get(AF_INFO_NUM_AF_POINTS).copied().unwrap_or(0);
+                    if num_points > 0 {
                         tags.insert("Canon:NumAFPoints".to_string(), num_points.to_string());
                     }
 
-                    // AF area dimensions
-                    if let Some(&width) = array.get(AF_INFO_IMAGE_WIDTH)
+                    if let Some(&width) = array.get(AF_INFO_AF_IMAGE_WIDTH)
                         && width > 0
                     {
                         tags.insert("Canon:AFImageWidth".to_string(), width.to_string());
                     }
-                    if let Some(&height) = array.get(AF_INFO_IMAGE_HEIGHT)
+                    if let Some(&height) = array.get(AF_INFO_AF_IMAGE_HEIGHT)
+                        && height > 0
+                    {
+                        tags.insert("Canon:AFImageHeight".to_string(), height.to_string());
+                    }
+                    if let Some(&area_width) = array.get(AF_INFO_AF_AREA_WIDTH) {
+                        tags.insert("Canon:AFAreaWidth".to_string(), area_width.to_string());
+                    }
+                    if let Some(&area_height) = array.get(AF_INFO_AF_AREA_HEIGHT) {
+                        tags.insert("Canon:AFAreaHeight".to_string(), area_height.to_string());
+                    }
+
+                    // Keys 8+ are variable-length: AFAreaXPositions[n], AFAreaYPositions[n]
+                    // then AFPointsInFocus as ceil(n/16) 16-bit words.
+                    if num_points > 0 {
+                        let n = num_points as usize;
+                        let x_start = AF_INFO_VARIABLE_START;
+                        let y_start = x_start + n;
+                        let focus_start = y_start + n;
+                        let focus_words = n.div_ceil(16);
+
+                        if array.len() >= y_start {
+                            tags.insert(
+                                "Canon:AFAreaXPositions".to_string(),
+                                join_i16_slice(&array[x_start..y_start]),
+                            );
+                        }
+                        if array.len() >= focus_start {
+                            tags.insert(
+                                "Canon:AFAreaYPositions".to_string(),
+                                join_i16_slice(&array[y_start..focus_start]),
+                            );
+                        }
+                        if array.len() >= focus_start + focus_words {
+                            tags.insert(
+                                "Canon:AFPointsInFocus".to_string(),
+                                decode_bits_16(&array[focus_start..focus_start + focus_words]),
+                            );
+                        }
+                    }
+                }
+            }
+
+            // AFInfo2 (tag 0x0026) - autofocus information used by newer Canon models
+            CANON_AF_INFO2 => {
+                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
+                    if let Some(&mode) = array.get(AF_INFO2_AF_AREA_MODE) {
+                        tags.insert("Canon:AFAreaMode".to_string(), AF_AREA_MODE.decode(mode));
+                    }
+
+                    let num_points = array.get(AF_INFO2_NUM_AF_POINTS).copied().unwrap_or(0);
+                    if num_points > 0 {
+                        tags.insert("Canon:NumAFPoints".to_string(), num_points.to_string());
+                    }
+
+                    if let Some(&width) = array.get(AF_INFO2_AF_IMAGE_WIDTH)
+                        && width > 0
+                    {
+                        tags.insert("Canon:AFImageWidth".to_string(), width.to_string());
+                    }
+                    if let Some(&height) = array.get(AF_INFO2_AF_IMAGE_HEIGHT)
                         && height > 0
                     {
                         tags.insert("Canon:AFImageHeight".to_string(), height.to_string());
                     }
 
-                    // AF points in focus (bitmask)
-                    if let Some(&points_in_focus) = array.get(AF_INFO_POINTS_IN_FOCUS) {
-                        tags.insert(
-                            "Canon:AFPointsInFocus".to_string(),
-                            points_in_focus.to_string(),
-                        );
-                    }
+                    // Keys 8+ are variable-length: AFAreaWidths[n], AFAreaHeights[n],
+                    // AFAreaXPositions[n], AFAreaYPositions[n], then AFPointsInFocus as
+                    // ceil(n/16) 16-bit words.
+                    if num_points > 0 {
+                        let n = num_points as usize;
+                        let widths_start = AF_INFO2_VARIABLE_START;
+                        let heights_start = widths_start + n;
+                        let x_start = heights_start + n;
+                        let y_start = x_start + n;
+                        let focus_start = y_start + n;
+                        let focus_words = n.div_ceil(16);
 
-                    // AF points selected (bitmask)
-                    if let Some(&points_selected) = array.get(AF_INFO_POINTS_SELECTED) {
-                        tags.insert(
-                            "Canon:AFPointsSelected".to_string(),
-                            points_selected.to_string(),
-                        );
+                        if array.len() >= heights_start {
+                            tags.insert(
+                                "Canon:AFAreaWidths".to_string(),
+                                join_i16_slice(&array[widths_start..heights_start]),
+                            );
+                        }
+                        if array.len() >= x_start {
+                            tags.insert(
+                                "Canon:AFAreaHeights".to_string(),
+                                join_i16_slice(&array[heights_start..x_start]),
+                            );
+                        }
+                        if array.len() >= y_start {
+                            tags.insert(
+                                "Canon:AFAreaXPositions".to_string(),
+                                join_i16_slice(&array[x_start..y_start]),
+                            );
+                        }
+                        if array.len() >= focus_start {
+                            tags.insert(
+                                "Canon:AFAreaYPositions".to_string(),
+                                join_i16_slice(&array[y_start..focus_start]),
+                            );
+                        }
+                        if array.len() >= focus_start + focus_words {
+                            tags.insert(
+                                "Canon:AFPointsInFocus".to_string(),
+                                decode_bits_16(&array[focus_start..focus_start + focus_words]),
+                            );
+                        }
+                    }
+                }
+            }
+
+            // SensorInfo (tag 0x00E0) - black mask borders
+            CANON_SENSOR_INFO => {
+                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
+                    for (index, name) in [
+                        (
+                            SENSOR_INFO_BLACK_MASK_LEFT_BORDER,
+                            "Canon:BlackMaskLeftBorder",
+                        ),
+                        (
+                            SENSOR_INFO_BLACK_MASK_TOP_BORDER,
+                            "Canon:BlackMaskTopBorder",
+                        ),
+                        (
+                            SENSOR_INFO_BLACK_MASK_RIGHT_BORDER,
+                            "Canon:BlackMaskRightBorder",
+                        ),
+                        (
+                            SENSOR_INFO_BLACK_MASK_BOTTOM_BORDER,
+                            "Canon:BlackMaskBottomBorder",
+                        ),
+                    ] {
+                        if let Some(&value) = array.get(index) {
+                            tags.insert(name.to_string(), value.to_string());
+                        }
                     }
                 }
             }
@@ -2528,6 +2893,30 @@ mod tests {
         );
     }
 
+    /// `%Canon::ShotInfo` key 27 is AutoRotate; keys 26 and 28 are CameraType and
+    /// NDFilter, so an off-by-one lands on a neighbour with a different meaning.
+    #[test]
+    fn test_parse_shot_info_auto_rotate() {
+        let mut shot_info = vec![0i16; 30];
+        shot_info[0] = 30;
+        shot_info[26] = 252; // CameraType
+        shot_info[27] = 2; // AutoRotate -> 'Rotate 180'
+        shot_info[28] = -1; // NDFilter
+        let data = canon_makernote_with_short_array(0x0004, &shot_info);
+
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+        assert_eq!(
+            result.get("Canon:AutoRotate"),
+            Some(&"Rotate 180".to_string())
+        );
+
+        // ExifTool's RawConv discards negatives before PrintConv, so -1 emits nothing.
+        shot_info[27] = -1;
+        let data = canon_makernote_with_short_array(0x0004, &shot_info);
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+        assert_eq!(result.get("Canon:AutoRotate"), None);
+    }
+
     #[test]
     fn test_parse_focal_length_array() {
         // Build test data without Canon signature for simpler offset calculation
@@ -2623,45 +3012,186 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_parse_af_info_array() {
+    /// Wraps a single Canon MakerNote IFD entry holding a SHORT array.
+    fn canon_makernote_with_short_array(tag: u16, values: &[i16]) -> Vec<u8> {
         let mut data = Vec::new();
         data.extend_from_slice(b"Canon");
         data.extend_from_slice(&[0x01, 0x00]); // 1 entry
-
-        // AFInfo tag (0x0012 or 0x0026)
-        data.extend_from_slice(&[0x26, 0x00]); // Tag: AFInfo2
+        data.extend_from_slice(&tag.to_le_bytes());
         data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
-        data.extend_from_slice(&[0x14, 0x00, 0x00, 0x00]); // Count: 20
+        data.extend_from_slice(&(values.len() as u32).to_le_bytes());
         data.extend_from_slice(&[0x17, 0x00, 0x00, 0x00]); // Offset: 23
         data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
-
-        // AFInfo array
-        // Based on ExifTool: NumAFPoints at index 1, AFImageWidth at 2, AFImageHeight at 3
-        let af_info: Vec<i16> = vec![
-            20,     // [0] Array length
-            45,     // [1] NumAFPoints (e.g., 45-point AF system)
-            5568,   // [2] AFImageWidth
-            3712,   // [3] AFImageHeight
-            9,      // [4] AFAreaWidth
-            9,      // [5] AFAreaHeight
-            2784,   // [6] AFAreaXPositions (center)
-            1856,   // [7] AFAreaYPositions (center)
-            0x0001, // [8] AFPointsInFocus (bit 0 set = center point)
-            0x0001, // [9] AFPointsSelected
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // [10-19]
-        ];
-
-        for value in af_info {
+        for value in values {
             data.extend_from_slice(&value.to_le_bytes());
         }
+        data
+    }
+
+    /// Byte-for-byte the CanonAFInfo record of
+    /// `/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr2` (Canon EOS 350D), as
+    /// dumped by `exiftool -v3`:
+    ///
+    /// ```text
+    ///   | | |     - Tag 0x0012 (48 bytes, int16u[24] read as undef[48]):
+    ///   | | |         0520: 07 00 07 00 80 0d 00 09 80 0d 00 09 bd 00 bc 00
+    ///   | | |         0530: 00 00 2b fb 1a fd 00 00 e6 02 d5 04 00 00 97 fd
+    ///   | | |         0540: 00 00 00 00 00 00 00 00 00 00 69 02 08 00 ff ff
+    /// ```
+    #[test]
+    fn test_parse_af_info_array() {
+        let af_info: Vec<i16> = vec![
+            7, 7, 3456, 2304, 3456, 2304, 189, 188, // keys 0-7
+            0, -1237, -742, 0, 742, 1237, 0, // key 8: AFAreaXPositions[7]
+            -617, 0, 0, 0, 0, 0, 617, // key 9: AFAreaYPositions[7]
+            8,   // key 10: AFPointsInFocus (bit 3)
+            -1,  // key 11
+        ];
+        let data = canon_makernote_with_short_array(0x0012, &af_info);
 
         let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
 
+        // Literal strings below are exactly what
+        // `exiftool -s -G1 CanonRaw.cr2` prints for this record.
+        assert_eq!(result.get("Canon:NumAFPoints"), Some(&"7".to_string()));
+        assert_eq!(result.get("Canon:AFImageWidth"), Some(&"3456".to_string()));
+        assert_eq!(result.get("Canon:AFImageHeight"), Some(&"2304".to_string()));
+        assert_eq!(result.get("Canon:AFAreaWidth"), Some(&"189".to_string()));
+        assert_eq!(result.get("Canon:AFAreaHeight"), Some(&"188".to_string()));
+        assert_eq!(
+            result.get("Canon:AFAreaXPositions"),
+            Some(&"0 -1237 -742 0 742 1237 0".to_string())
+        );
+        assert_eq!(
+            result.get("Canon:AFAreaYPositions"),
+            Some(&"-617 0 0 0 0 0 617".to_string())
+        );
+        assert_eq!(result.get("Canon:AFPointsInFocus"), Some(&"3".to_string()));
+        // %Canon::AFInfo has no AFPointsSelected key - it must not be invented.
+        assert_eq!(result.get("Canon:AFPointsSelected"), None);
+    }
+
+    /// Mirrors the AFInfo2 record of
+    /// `/tmp/oxidex-exiftool-cache/combined-samples/Canon1DmkIII.jpg`, whose
+    /// `exiftool -s` output is `AFAreaMode: Single-point AF`, `NumAFPoints: 45`,
+    /// `AFImageWidth: 3888`, `AFImageHeight: 2592`, `AFPointsInFocus: 13`.
+    #[test]
+    fn test_parse_af_info2_array() {
+        let n = 45usize;
+        let mut af_info2: Vec<i16> = vec![
+            0,    // key 0: AFInfoSize
+            2,    // key 1: AFAreaMode -> 'Single-point AF'
+            45,   // key 2: NumAFPoints
+            45,   // key 3: ValidAFPoints
+            3888, // key 4: CanonImageWidth
+            2592, // key 5: CanonImageHeight
+            3888, // key 6: AFImageWidth
+            2592, // key 7: AFImageHeight
+        ];
+        af_info2.extend(std::iter::repeat_n(112i16, n)); // key 8: AFAreaWidths
+        af_info2.extend(std::iter::repeat_n(168i16, n)); // key 9: AFAreaHeights
+        af_info2.extend(std::iter::repeat_n(-625i16, n)); // key 10: AFAreaXPositions
+        af_info2.extend(std::iter::repeat_n(-554i16, n)); // key 11: AFAreaYPositions
+        af_info2.extend_from_slice(&[0x2000, 0x0000, 0x0000]); // key 12: bit 13 set
+
+        let data = canon_makernote_with_short_array(0x0026, &af_info2);
+
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+
+        assert_eq!(
+            result.get("Canon:AFAreaMode"),
+            Some(&"Single-point AF".to_string())
+        );
         assert_eq!(result.get("Canon:NumAFPoints"), Some(&"45".to_string()));
-        assert_eq!(result.get("Canon:AFImageWidth"), Some(&"5568".to_string()));
-        assert_eq!(result.get("Canon:AFImageHeight"), Some(&"3712".to_string()));
-        assert_eq!(result.get("Canon:AFPointsInFocus"), Some(&"1".to_string()));
+        assert_eq!(result.get("Canon:AFImageWidth"), Some(&"3888".to_string()));
+        assert_eq!(result.get("Canon:AFImageHeight"), Some(&"2592".to_string()));
+        assert_eq!(
+            result.get("Canon:AFAreaWidths"),
+            Some(&vec!["112"; n].join(" "))
+        );
+        assert_eq!(
+            result.get("Canon:AFAreaHeights"),
+            Some(&vec!["168"; n].join(" "))
+        );
+        assert_eq!(result.get("Canon:AFPointsInFocus"), Some(&"13".to_string()));
+    }
+
+    /// Byte-for-byte the SensorInfo record of `CanonRaw.cr2`, as dumped by
+    /// `exiftool -v3`:
+    ///
+    /// ```text
+    ///   | | |     - Tag 0x00e0 (34 bytes, int16u[17] read as undef[34]):
+    ///   | | |         059e: 22 00 bc 0d 18 09 01 00 01 00 34 00 13 00 b3 0d
+    ///   | | |         05ae: 12 09 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    ///   | | |         05be: 00 00
+    /// ```
+    #[test]
+    fn test_parse_sensor_info_black_mask_borders() {
+        let sensor_info: Vec<i16> = vec![
+            34, 3516, 2328, 1, 1, 52, 19, 3507, 2322, // keys 0-8
+            11, 22, 33, 44, // keys 9-12: BlackMask left/top/right/bottom
+            0, 0, 0, 0,
+        ];
+        let data = canon_makernote_with_short_array(0x00E0, &sensor_info);
+
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+
+        assert_eq!(
+            result.get("Canon:BlackMaskLeftBorder"),
+            Some(&"11".to_string())
+        );
+        assert_eq!(
+            result.get("Canon:BlackMaskTopBorder"),
+            Some(&"22".to_string())
+        );
+        assert_eq!(
+            result.get("Canon:BlackMaskRightBorder"),
+            Some(&"33".to_string())
+        );
+        assert_eq!(
+            result.get("Canon:BlackMaskBottomBorder"),
+            Some(&"44".to_string())
+        );
+    }
+
+    /// Byte-for-byte the CanonFileInfo record of `CanonRaw.cr2`, as dumped by
+    /// `exiftool -v3`:
+    ///
+    /// ```text
+    ///   | | |     - Tag 0x0093 (32 bytes, int16u[16] read as undef[32]):
+    ///   | | |         0558: 20 00 00 19 18 00 00 00 00 00 00 00 ff ff ff ff
+    ///   | | |         0568: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    /// ```
+    ///
+    /// with the three bracket slots given distinct values so an off-by-one cannot pass.
+    #[test]
+    fn test_parse_file_info_bracket_slots() {
+        let file_info: Vec<i16> = vec![
+            32, 0x1900, 0x0018, // keys 0-2 (key 1 is the int32u FileNumber)
+            1,      // key 3: BracketMode -> 'AEB'
+            7,      // key 4: BracketValue
+            9,      // key 5: BracketShotNumber
+            -1, -1, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let data = canon_makernote_with_short_array(0x0093, &file_info);
+
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+
+        assert_eq!(result.get("Canon:BracketMode"), Some(&"AEB".to_string()));
+        assert_eq!(result.get("Canon:BracketValue"), Some(&"7".to_string()));
+        assert_eq!(
+            result.get("Canon:BracketShotNumber"),
+            Some(&"9".to_string())
+        );
+    }
+
+    #[test]
+    fn test_decode_bits_16_matches_exiftool() {
+        // ExifTool.pm DecodeBits: no lookup -> bit numbers joined by ',', '(none)' if empty.
+        assert_eq!(decode_bits_16(&[8]), "3");
+        assert_eq!(decode_bits_16(&[0]), "(none)");
+        assert_eq!(decode_bits_16(&[0x0000, 0x0020]), "21");
+        assert_eq!(decode_bits_16(&[0x0003]), "0,1");
     }
 
     #[test]

@@ -232,6 +232,25 @@ deb:
     @echo "Building Debian package..."
     cargo deb
 
+# Build Debian package for Linux x86_64 using zigbuild (requires cargo-zigbuild, zig, cargo-deb)
+deb-x86:
+    @echo "Building Debian package for x86_64-unknown-linux-musl..."
+    cargo zigbuild --release --target x86_64-unknown-linux-musl
+    cargo deb --target x86_64-unknown-linux-musl --no-build
+    @echo "Package created at target/x86_64-unknown-linux-musl/debian/"
+
+# Build Debian package for Linux aarch64 using zigbuild (requires cargo-zigbuild, zig, cargo-deb)
+deb-arm64:
+    @echo "Building Debian package for aarch64-unknown-linux-musl..."
+    cargo zigbuild --release --target aarch64-unknown-linux-musl
+    cargo deb --target aarch64-unknown-linux-musl --no-build
+    @echo "Package created at target/aarch64-unknown-linux-musl/debian/"
+
+# Build Debian packages for all Linux architectures
+deb-all: deb-x86 deb-arm64
+    @echo "All Debian packages built!"
+    @ls -la target/*/debian/*.deb 2>/dev/null || true
+
 # Build RPM package (requires cargo-generate-rpm)
 rpm:
     @echo "Building RPM package..."
@@ -360,6 +379,27 @@ tree:
 workspace:
     @echo "Workspace members:"
     @cargo metadata --format-version 1 --no-deps | jq -r '.workspace_members[]'
+
+# Autonomous fix fleet
+# --------------------
+
+# Bring the whole fix pipeline up, supervised (mergers + dispatcher + judgment queue)
+# Runs in the FOREGROUND and supervises until ^C; see `just fleet-status` / `just fleet-down`.
+# Extra args are forwarded, e.g. `just fleet-up "--workers 16"`.
+fleet-up *ARGS:
+    @./scripts/fleet_up.sh {{ARGS}}
+
+# What the fleet is actually doing right now (pidfile-exact, not a pgrep guess)
+fleet-status:
+    @./scripts/fleet_up.sh --status
+
+# Stop every tier this launcher started
+fleet-down:
+    @./scripts/fleet_up.sh --down
+
+# Preflight + resolved plan without starting or touching anything
+fleet-check:
+    @./scripts/fleet_up.sh --dry-run
 
 # Git commands
 # -------------

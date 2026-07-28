@@ -774,7 +774,42 @@ impl ElfHeader {
         }
     }
 
+    /// Returns the object file type using ExifTool's PrintConv strings
+    ///
+    /// Mirrors the `ObjectFileType` PrintConv of `%Image::ExifTool::EXE::ELF`
+    /// (offset 16, `int16u` = `e_type`), EXE.pm:770-780:
+    ///
+    /// ```text
+    ///     16 => {
+    ///         Name => 'ObjectFileType',
+    ///         Format => 'int16u',
+    ///         PrintConv => {
+    ///             0 => 'None',
+    ///             1 => 'Relocatable file',
+    ///             2 => 'Executable file',
+    ///             3 => 'Shared object file',
+    ///             4 => 'Core file',
+    ///         },
+    ///     },
+    /// ```
+    ///
+    /// Values outside the table render as `Unknown (N)`, which is ExifTool's
+    /// default rendering for an unmatched PrintConv key.
+    pub fn object_file_type_str(&self) -> String {
+        match self.e_type {
+            elf_type::ET_NONE => "None".to_string(),
+            elf_type::ET_REL => "Relocatable file".to_string(),
+            elf_type::ET_EXEC => "Executable file".to_string(),
+            elf_type::ET_DYN => "Shared object file".to_string(),
+            elf_type::ET_CORE => "Core file".to_string(),
+            other => format!("Unknown ({other})"),
+        }
+    }
+
     /// Returns the object type as a human-readable string
+    ///
+    /// This is retained for existing oxidex metadata fields. For ExifTool-compatible
+    /// output, prefer `object_file_type_str()`.
     pub fn type_str(&self) -> &'static str {
         match self.e_type {
             elf_type::ET_NONE => "None",
@@ -788,6 +823,106 @@ impl ElfHeader {
             _ if self.e_type >= elf_type::ET_LOPROC => "Processor-specific",
             _ => "Unknown",
         }
+    }
+
+    /// Returns the CPU type using ExifTool's PrintConv strings
+    ///
+    /// Mirrors the `CPUType` PrintConv of `%Image::ExifTool::EXE::ELF`
+    /// (offset 18, `int16u` = `e_machine`), EXE.pm:781-864. ExifTool's own
+    /// references for the table are:
+    ///
+    /// ```text
+    ///     18 => {
+    ///         Name => 'CPUType',
+    ///         Format => 'int16u',
+    ///         # ref /usr/include/linux/elf-em.h
+    ///         # ref https://en.wikipedia.org/wiki/Executable_and_Linkable_Format
+    /// ```
+    ///
+    /// Every arm below is the verbatim ExifTool string for that numeric key.
+    /// Values outside the table render as `Unknown (N)`, which is ExifTool's
+    /// default rendering for an unmatched PrintConv key.
+    pub fn cpu_type_str(&self) -> String {
+        let name = match self.e_machine {
+            machine_types::EM_NONE => "None",
+            machine_types::EM_M32 => "AT&T WE 32100",
+            machine_types::EM_SPARC => "SPARC",
+            machine_types::EM_386 => "i386",
+            machine_types::EM_68K => "Motorola 68000",
+            machine_types::EM_88K => "Motorola 88000",
+            machine_types::EM_IAMCU => "i486",
+            machine_types::EM_860 => "i860",
+            machine_types::EM_MIPS => "MIPS R3000",
+            machine_types::EM_S370 => "IBM System/370",
+            machine_types::EM_MIPS_RS3_LE => "MIPS R4000",
+            machine_types::EM_PARISC => "HP PA-RISC",
+            machine_types::EM_SPARC32PLUS => "Sun v8plus",
+            machine_types::EM_960 => "Intel 80960",
+            machine_types::EM_PPC => "PowerPC",
+            machine_types::EM_PPC64 => "PowerPC 64-bit",
+            machine_types::EM_S390 => "IBM S/390",
+            machine_types::EM_SPU => "Cell BE SPU",
+            machine_types::EM_V800 => "NEC V800",
+            machine_types::EM_FR20 => "Fujitsu FR20",
+            machine_types::EM_RH32 => "TRW RH-32",
+            machine_types::EM_RCE => "Motorola RCE",
+            machine_types::EM_ARM => "Arm (up to Armv7/AArch32)",
+            machine_types::EM_ALPHA => "Digital Alpha",
+            machine_types::EM_SH => "SuperH",
+            machine_types::EM_SPARCV9 => "SPARC v9 64-bit",
+            machine_types::EM_TRICORE => "Siemens TriCore",
+            machine_types::EM_ARC => "Argonaut RISC Core",
+            machine_types::EM_H8_300 => "Renesas H8/300,300H,H8S",
+            machine_types::EM_H8_300H => "Hitachi H8/300H",
+            machine_types::EM_H8S => "Hitachi H8S",
+            machine_types::EM_H8_500 => "Hitachi H8/500",
+            machine_types::EM_IA_64 => "HP/Intel IA-64",
+            machine_types::EM_MIPS_X => "Stanford MIPS-X",
+            machine_types::EM_COLDFIRE => "Motorola ColdFire",
+            machine_types::EM_68HC12 => "Motorola M68HC12",
+            0x36 => "Fujitsu MMA Multimedia Accelerator",
+            0x37 => "Siemens PCP",
+            0x38 => "Sony nCPU embedded RISC processor",
+            0x39 => "Denso NDR1 microprocessor",
+            0x3a => "Motorola Star*Core processor",
+            0x3b => "Toyota ME16 processor",
+            0x3c => "STMicroelectronics ST100 processor",
+            0x3d => "Advanced Logic Corp. TinyJ embedded processor family",
+            machine_types::EM_X86_64 => "AMD x86-64",
+            0x3f => "Sony DSP Processor",
+            0x40 => "Digital Equipment Corp. PDP-10",
+            0x41 => "Digital Equipment Corp. PDP-11",
+            0x42 => "Siemens FX66 microcontroller",
+            0x43 => "STMicroelectronics ST9+ 8/16 bit microcontroller",
+            0x44 => "STMicroelectronics ST7 8-bit microcontroller",
+            0x45 => "Motorola MC68HC16 Microcontroller",
+            0x46 => "Motorola MC68HC11 Microcontroller",
+            0x47 => "Motorola MC68HC08 Microcontroller",
+            0x48 => "Motorola MC68HC05 Microcontroller",
+            0x49 => "Silicon Graphics SVx",
+            0x4a => "STMicroelectronics ST19 8-bit microcontroller",
+            0x4b => "Digital VAX",
+            0x4c => "Axis Communications 32-bit embedded processor",
+            0x4d => "Infineon Technologies 32-bit embedded processor",
+            0x4e => "Element 14 64-bit DSP Processor",
+            0x4f => "LSI Logic 16-bit DSP Processor",
+            0x57 => "NEC v850",
+            0x58 => "Renesas M32R",
+            0x8c => "TMS320C6000 Family",
+            0xaf => "MCST Elbrus e2k",
+            machine_types::EM_AARCH64 => "Arm 64-bits (Armv8/AArch64)",
+            0xdc => "Zilog Z80",
+            machine_types::EM_RISCV => "RISC-V",
+            machine_types::EM_BPF => "Berkeley Packet Filter",
+            machine_types::EM_65816 => "WDC 65C816",
+            0x5441 => "Fujitsu FR-V",
+            0x9026 => "Alpha", // (interim value)
+            0x9041 => "m32r (old)",
+            0x9080 => "v850 (old)",
+            0xa390 => "S/390 (old)",
+            other => return format!("Unknown ({other})"),
+        };
+        name.to_string()
     }
 
     /// Returns the machine architecture as a human-readable string
@@ -1463,6 +1598,81 @@ mod tests {
         assert_eq!(header.class_str(), "64-bit");
         header.is_64bit = false;
         assert_eq!(header.class_str(), "32-bit");
+    }
+
+    /// Builds a header whose only interesting fields are `e_type`/`e_machine`.
+    fn header_with(e_type: u16, e_machine: u16) -> ElfHeader {
+        ElfHeader {
+            e_ident: [0; 16],
+            e_type,
+            e_machine,
+            e_version: 1,
+            e_entry: 0x1000,
+            e_phoff: 64,
+            e_shoff: 0,
+            e_flags: 0,
+            e_ehsize: 64,
+            e_phentsize: 56,
+            e_phnum: 1,
+            e_shentsize: 64,
+            e_shnum: 0,
+            e_shstrndx: 0,
+            is_64bit: true,
+            is_little_endian: true,
+        }
+    }
+
+    /// Every expectation here is the verbatim string from the `CPUType`
+    /// PrintConv in `%Image::ExifTool::EXE::ELF` (EXE.pm:781-864).
+    #[test]
+    fn test_cpu_type_str_matches_exiftool_printconv() {
+        // Keys the sample corpus exercises.
+        assert_eq!(header_with(2, 3).cpu_type_str(), "i386");
+        assert_eq!(header_with(3, 62).cpu_type_str(), "AMD x86-64");
+        // Keys the sample corpus does NOT exercise: these were missing entirely
+        // before this change and rendered as a bare "Unknown".
+        assert_eq!(
+            header_with(3, 0xb7).cpu_type_str(),
+            "Arm 64-bits (Armv8/AArch64)"
+        );
+        assert_eq!(header_with(3, 0xf3).cpu_type_str(), "RISC-V");
+        assert_eq!(
+            header_with(3, 0x48).cpu_type_str(),
+            "Motorola MC68HC05 Microcontroller"
+        );
+        assert_eq!(header_with(3, 0x4b).cpu_type_str(), "Digital VAX");
+        assert_eq!(header_with(3, 0x8c).cpu_type_str(), "TMS320C6000 Family");
+        assert_eq!(header_with(3, 0xdc).cpu_type_str(), "Zilog Z80");
+        assert_eq!(
+            header_with(3, 0xf7).cpu_type_str(),
+            "Berkeley Packet Filter"
+        );
+        assert_eq!(header_with(3, 0x101).cpu_type_str(), "WDC 65C816");
+        assert_eq!(header_with(3, 0x5441).cpu_type_str(), "Fujitsu FR-V");
+        assert_eq!(header_with(3, 0x9026).cpu_type_str(), "Alpha");
+        assert_eq!(header_with(3, 0xa390).cpu_type_str(), "S/390 (old)");
+        // Unmatched keys use ExifTool's default "Unknown (N)" rendering.
+        assert_eq!(header_with(3, 153).cpu_type_str(), "Unknown (153)");
+    }
+
+    /// Verbatim strings from the `ObjectFileType` PrintConv (EXE.pm:770-780).
+    #[test]
+    fn test_object_file_type_str_matches_exiftool_printconv() {
+        assert_eq!(header_with(0, 62).object_file_type_str(), "None");
+        assert_eq!(
+            header_with(1, 62).object_file_type_str(),
+            "Relocatable file"
+        );
+        assert_eq!(header_with(2, 62).object_file_type_str(), "Executable file");
+        assert_eq!(
+            header_with(3, 62).object_file_type_str(),
+            "Shared object file"
+        );
+        assert_eq!(header_with(4, 62).object_file_type_str(), "Core file");
+        assert_eq!(
+            header_with(0xfe00, 62).object_file_type_str(),
+            "Unknown (65024)"
+        );
     }
 
     #[test]

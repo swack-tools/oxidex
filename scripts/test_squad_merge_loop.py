@@ -454,7 +454,11 @@ class EnsureStagingWorktreeTests(GitRepoTestCase):
 # process_commit: the full per-commit pipeline
 # ---------------------------------------------------------------------------
 
-class ProcessCommitTests(GitRepoTestCase):
+class SquadProcessFixture(GitRepoTestCase):
+    """Shared process_commit scaffolding. Split out from the tests so a
+    second test class can reuse it WITHOUT subclassing ProcessCommitTests,
+    which would silently re-run every one of its cases."""
+
     def _setup_squad(self):
         repo = self.make_repo()
         git(repo, "branch", "squad/nikon")
@@ -484,6 +488,49 @@ class ProcessCommitTests(GitRepoTestCase):
         )
         kwargs.update(overrides)
         return sml.process_commit(**kwargs)
+
+
+class ProcessCommitTests(SquadProcessFixture):
+    def test_a_patch_another_squad_already_staged_costs_NO_work(self):
+        """The whole point: skip BEFORE validate/cherry-pick/build/compare.
+
+        Measured 2026-07-27: 35 staged commits were 7 distinct patches, so
+        ~80% of every merger's build+comparison budget went to re-deriving a
+        verdict another squad already had.
+        """
+        repo, staging, home, sha = self._setup_squad()
+        pre_tip = git_out(repo, "rev-parse", "squad/nikon").strip()
+        # canon got there first with this exact patch-id. It must be the REAL
+        # one process_commit will compute, not a placeholder -- the lookup is
+        # keyed on content, which is the whole point.
+        real_pid = sml.compute_patch_id_for_sha(repo, sha)
+        sml.record_head(sml.squad_status_file(home, "canon"), "canon-sha",
+                        status="consumed", patch_id=real_pid, format_name="NEF",
+                        work_done=True, squad_sha="canon-squad-sha", now_fn=lambda: 100)
+        did_work = []
+        result = self._process(
+            repo, staging, home, sha,
+            validate_fn=lambda *a, **kw: did_work.append("validate") or {"ok": True, "flags": [], "patch_id": "p1"},
+            cargo_test_targeted_fn=lambda *a: did_work.append("test") or (True, ""),
+            comparison_fn=lambda *a: did_work.append("compare") or {"duplicate_emissions": [], "extra_in_oxidex": []},
+        )
+        self.assertEqual(result["outcome"], "consumed_elsewhere")
+        self.assertEqual(result["staged_by"], "canon")
+        self.assertEqual(did_work, [], f"must not validate/build/compare: {did_work}")
+        self.assertEqual(git_out(repo, "rev-parse", "squad/nikon").strip(), pre_tip)
+
+    def test_a_patch_NO_other_squad_staged_is_processed_normally(self):
+        """Nothing may be starved -- the first squad to see it still works."""
+        repo, staging, home, sha = self._setup_squad()
+        pre_tip = git_out(repo, "rev-parse", "squad/nikon").strip()
+        did_work = []
+        result = self._process(
+            repo, staging, home, sha,
+            cargo_test_targeted_fn=lambda *a: did_work.append("test") or (True, ""),
+        )
+        self.assertEqual(result["outcome"], "consumed")
+        self.assertIn("test", did_work)
+        self.assertNotEqual(git_out(repo, "rev-parse", "squad/nikon").strip(), pre_tip)
 
     def test_not_novel_marks_consumed_without_work_and_skips_validate(self):
         repo, staging, home, sha = self._setup_squad()
@@ -612,6 +659,56 @@ class ProcessCommitTests(GitRepoTestCase):
         self.assertIn("duplicate_emissions", result["reason"])
         self.assertEqual(git_out(repo, "rev-parse", "squad/nikon").strip(), pre_tip)
 
+    def test_a_PRE_EXISTING_duplicate_does_not_quarantine(self):
+        """The commit is answerable for what it INTRODUCES, not what it
+        inherits.
+
+        Measured 2026-07-27: NEF carries nine duplicate_emissions on clean
+        main (EXIF:BitsPerSample, Compression, ImageHeight, ImageWidth,
+        PhotometricInterpretation, RowsPerStrip, SamplesPerPixel,
+        StripOffsets, SubfileType). The gate read duplicate_emissions
+        straight off the POST report while diffing extra_in_oxidex properly,
+        so every NEF commit was quarantined for inheriting them -- the
+        pipeline could never consume NEF work at all. The commit that
+        tripped it (d8168e7b) introduced none of the nine.
+
+        This could only bite once #135 made duplicate detection work; before
+        that the field was always empty and the missing diff was invisible.
+        """
+        repo, staging, home, sha = self._setup_squad()
+        pre_tip = git_out(repo, "rev-parse", "squad/nikon").strip()
+        inherited = ["EXIF:BitsPerSample", "EXIF:Compression", "EXIF:ImageHeight"]
+
+        def comparison_fn(staging_path, cache_dir, fmt, suffix):
+            # Identical before and after: the commit changed nothing about them.
+            return {"duplicate_emissions": list(inherited), "extra_in_oxidex": []}
+
+        result = self._process(repo, staging, home, sha, comparison_fn=comparison_fn)
+
+        self.assertEqual(result["outcome"], "consumed")
+        self.assertNotEqual(git_out(repo, "rev-parse", "squad/nikon").strip(), pre_tip)
+
+    def test_a_duplicate_introduced_ON_TOP_of_pre_existing_ones_still_quarantines(self):
+        """The diff must not blind the gate to a real new duplicate."""
+        repo, staging, home, sha = self._setup_squad()
+        pre_tip = git_out(repo, "rev-parse", "squad/nikon").strip()
+        calls = {"n": 0}
+
+        def comparison_fn(staging_path, cache_dir, fmt, suffix):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return {"duplicate_emissions": ["EXIF:Compression"], "extra_in_oxidex": []}
+            return {"duplicate_emissions": ["EXIF:Compression", "NEF:Foo"],
+                    "extra_in_oxidex": []}
+
+        result = self._process(repo, staging, home, sha, comparison_fn=comparison_fn)
+
+        self.assertEqual(result["outcome"], "quarantined")
+        self.assertIn("NEF:Foo", result["reason"])
+        # ...and it must NOT headline the inherited one.
+        self.assertNotIn("EXIF:Compression", result["reason"])
+        self.assertEqual(git_out(repo, "rev-parse", "squad/nikon").strip(), pre_tip)
+
     def test_new_oxidex_only_key_recheck_quarantines(self):
         repo, staging, home, sha = self._setup_squad()
         pre_tip = git_out(repo, "rev-parse", "squad/nikon").strip()
@@ -671,6 +768,114 @@ class BatchCheckCadenceTests(unittest.TestCase):
         self.assertFalse(sml.batch_check_due(state, batch_commits=10, batch_seconds=900, now_fn=lambda: 200))
 
 
+class OneSquadPerEmitterFileTests(SquadProcessFixture):
+    """The invariant merge_squad_into_sweep assumes and nothing enforced.
+
+    Its own docstring says a content conflict is "structurally
+    near-impossible given one squad per shared emitter file" -- but
+    squads.toml lets several squads claim a format, and squad_slot_branches
+    filters ownership not at all. So two squads fix the SAME tags in the
+    SAME file with DIFFERENT code, which patch-id dedup cannot see.
+
+    Measured 2026-07-27: PR #154 shipped duplicate match arms (six clippy
+    errors), and the next sweep collected four squads' stamps and failed
+    EVERY merge with a cross-squad conflict -- nothing_merged in one second,
+    with real work available.
+    """
+
+    def _stage_on_other_squad(self, repo, other, path, content):
+        """Put a commit touching `path` on squad/<other>."""
+        cur = git_out(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+        git(repo, "branch", "-f", f"squad/{other}", "main")
+        git(repo, "checkout", "-q", f"squad/{other}")
+        (Path(repo) / path).parent.mkdir(parents=True, exist_ok=True)
+        (Path(repo) / path).write_text(content)
+        git(repo, "add", path)
+        git(repo, "commit", "-q", "-m", f"{other} touches {path}")
+        git(repo, "checkout", "-q", cur)
+
+    def test_a_file_another_squad_is_staging_is_DEFERRED_not_consumed(self):
+        repo, staging, home, sha = self._setup_squad()
+        touched = git_out(repo, "show", "--name-only", "--format=", sha).split()
+        self.assertTrue(touched, "fixture must change at least one file")
+        self._stage_on_other_squad(repo, "canon", touched[0], "// canon's version\n")
+        did_work = []
+        result = self._process(
+            repo, staging, home, sha, all_squads=["nikon", "canon"], origin_ref="main",
+            validate_fn=lambda *a, **kw: did_work.append("validate") or {"ok": True, "flags": [], "patch_id": "p1"},
+            cargo_test_targeted_fn=lambda *a: did_work.append("test") or (True, ""),
+        )
+        self.assertEqual(result["outcome"], "deferred_file_held")
+        self.assertEqual(result["held_by"], "canon")
+        self.assertEqual(did_work, [], "must defer BEFORE paying for validate/build")
+        # DEFER, not consume: no head recorded, so a later poll re-offers it.
+        status = sml.load_squad_status(sml.squad_status_file(home, "nikon"))
+        self.assertNotIn(sha, status.get("heads", {}),
+                         "a deferred commit must NOT be marked consumed")
+
+    def test_an_untouched_file_is_processed_normally(self):
+        repo, staging, home, sha = self._setup_squad()
+        self._stage_on_other_squad(repo, "canon", "src/somewhere/else.rs", "// unrelated\n")
+        result = self._process(repo, staging, home, sha, all_squads=["nikon", "canon"], origin_ref="main")
+        self.assertEqual(result["outcome"], "consumed")
+
+    def test_without_all_squads_the_check_is_inert(self):
+        """Opt-in: an unreadable squads.toml must never block a merger."""
+        repo, staging, home, sha = self._setup_squad()
+        touched = git_out(repo, "show", "--name-only", "--format=", sha).split()
+        self._stage_on_other_squad(repo, "canon", touched[0], "// canon's version\n")
+        result = self._process(repo, staging, home, sha, all_squads=None, origin_ref="main")
+        self.assertEqual(result["outcome"], "consumed")
+
+
+class CrossSquadDuplicateSkipTests(unittest.TestCase):
+    """80% of merger work was re-validating patches another squad already had.
+
+    Measured 2026-07-27 with the full fleet up: 35 staged commits were only 7
+    distinct patches -- fix(rar) consumed by 13 squads, fix(jpeg) by 12. Each
+    duplicate cost a cherry-pick, a cargo test and a full corpus comparison to
+    reach a verdict another squad had already reached.
+    """
+
+    def _status(self, tmp, squad, patch_id, *, work_done=True, status="consumed"):
+        path = sml.squad_status_file(tmp, squad)
+        sml.record_head(path, f"sha-{squad}", status=status, patch_id=patch_id,
+                        format_name="JPEG", work_done=work_done,
+                        squad_sha=f"squadsha-{squad}" if work_done else None,
+                        now_fn=lambda: 100)
+
+    def test_finds_the_squad_that_already_staged_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._status(tmp, "canon", "PID1")
+            self.assertEqual(sml.squad_that_already_staged(tmp, "nikon", "PID1"), "canon")
+
+    def test_a_squad_does_not_match_itself(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._status(tmp, "canon", "PID1")
+            self.assertIsNone(sml.squad_that_already_staged(tmp, "canon", "PID1"))
+
+    def test_a_no_work_stamp_does_not_count_as_staged(self):
+        # "consumed, no work done" means the patch was already upstream --
+        # it was never staged by that squad, so it must not suppress anyone.
+        with tempfile.TemporaryDirectory() as tmp:
+            self._status(tmp, "canon", "PID1", work_done=False)
+            self.assertIsNone(sml.squad_that_already_staged(tmp, "nikon", "PID1"))
+
+    def test_a_quarantined_entry_does_not_count_as_staged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._status(tmp, "canon", "PID1", status="quarantined")
+            self.assertIsNone(sml.squad_that_already_staged(tmp, "nikon", "PID1"))
+
+    def test_an_unseen_patch_is_not_suppressed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._status(tmp, "canon", "PID1")
+            self.assertIsNone(sml.squad_that_already_staged(tmp, "nikon", "PID-OTHER"))
+
+    def test_missing_status_directory_never_suppresses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(sml.squad_that_already_staged(tmp, "nikon", "PID1"))
+
+
 class RunBatchCheckTests(unittest.TestCase):
     def test_passes_and_returns_fresh_baselines(self):
         def comparison_fn(staging, cache, fmt, suffix):
@@ -698,6 +903,46 @@ class RunBatchCheckTests(unittest.TestCase):
         self.assertTrue(problems)
         self.assertTrue(any("ERROR" in line for line in logged))
 
+    def test_a_PRE_EXISTING_duplicate_does_not_block_publication(self):
+        """The batch gate diffs against the squad's own prior baseline.
+
+        #147 fixed this asymmetry in the per-commit gate and missed this
+        batch one. Measured 2026-07-27 with the full autonomous fleet up: the
+        judgment daemon queued 57 of 58 entries, and the dominant reason was
+        "squad '<x>' publication is blocked by a failed batch check" -- NEF
+        carries nine duplicate_emissions on clean main, so every squad
+        holding it was blocked from publishing anything, ever.
+        """
+        inherited = {"duplicate_emissions": ["EXIF:Compression"], "extra_in_oxidex": []}
+
+        def comparison_fn(staging, cache, fmt, suffix):
+            return dict(inherited)
+
+        ok, problems, baselines = sml.run_batch_check(
+            staging_path="/unused", squad="nikon", formats=["NEF"], cache_dir="/unused",
+            comparison_fn=comparison_fn, baselines={"NEF": dict(inherited)},
+            log_fn=lambda *a: None,
+        )
+        self.assertTrue(ok, f"an inherited duplicate must not block publication: {problems}")
+        self.assertEqual(problems, [])
+
+    def test_a_duplicate_introduced_since_the_baseline_still_blocks(self):
+        """The diff must not blind the batch gate to a genuinely new one."""
+        prior = {"duplicate_emissions": ["EXIF:Compression"], "extra_in_oxidex": []}
+
+        def comparison_fn(staging, cache, fmt, suffix):
+            return {"duplicate_emissions": ["EXIF:Compression", "NEF:Foo"],
+                    "extra_in_oxidex": []}
+
+        ok, problems, baselines = sml.run_batch_check(
+            staging_path="/unused", squad="nikon", formats=["NEF"], cache_dir="/unused",
+            comparison_fn=comparison_fn, baselines={"NEF": prior}, log_fn=lambda *a: None,
+        )
+        self.assertFalse(ok)
+        self.assertTrue(any("NEF:Foo" in p for p in problems))
+        self.assertFalse(any("EXIF:Compression" in p for p in problems),
+                         "must not headline the inherited one")
+
     def test_unexplained_new_oxidex_only_fails(self):
         prior = {"extra_in_oxidex": []}
 
@@ -709,6 +954,48 @@ class RunBatchCheckTests(unittest.TestCase):
             comparison_fn=comparison_fn, baselines={"NEF": prior}, log_fn=lambda *a: None,
         )
         self.assertFalse(ok)
+
+    def test_comparison_subprocess_failure_holds_publication_instead_of_killing_the_daemon(self):
+        # run_format_comparison shells out with check=True, so any non-zero
+        # exit (operator pkill, OOM kill, a diff that breaks the
+        # tag-comparison-binary feature path) used to raise straight out of
+        # run_batch_check and kill the merger -- and nothing respawns one.
+        # Observed live 2026-07-25: 7 of 14 mergers died on this single
+        # line, stranding 68% of worker slots with no publish path.
+        logged = []
+
+        def comparison_fn(staging, cache, fmt, suffix):
+            raise subprocess.CalledProcessError(returncode=-15, cmd=["tag-comparison", "--format", fmt])
+
+        ok, problems, baselines = sml.run_batch_check(
+            staging_path="/unused", squad="nikon", formats=["NEF"], cache_dir="/unused",
+            comparison_fn=comparison_fn, baselines={}, log_fn=logged.append,
+        )
+        self.assertFalse(ok)
+        self.assertTrue(any("comparison run failed" in p for p in problems))
+        # must NOT fall through to a stale on-disk report -- a swallowed
+        # failure that reused one would hand a previous round's verdicts to
+        # the publication gate, turning a loud crash into a false "clean".
+        self.assertEqual(baselines, {"NEF": None})
+        self.assertTrue(any("ERROR" in line for line in logged))
+
+    def test_one_format_failing_does_not_abort_the_remaining_formats(self):
+        seen = []
+
+        def comparison_fn(staging, cache, fmt, suffix):
+            seen.append(fmt)
+            if fmt == "NEF":
+                raise subprocess.CalledProcessError(returncode=1, cmd=["tag-comparison"])
+            return {"duplicate_emissions": [], "extra_in_oxidex": []}
+
+        ok, problems, baselines = sml.run_batch_check(
+            staging_path="/unused", squad="nikon", formats=["NEF", "JPEG"], cache_dir="/unused",
+            comparison_fn=comparison_fn, baselines={}, log_fn=lambda *a: None,
+        )
+        self.assertEqual(seen, ["NEF", "JPEG"])
+        self.assertFalse(ok)
+        self.assertIsNone(baselines["NEF"])
+        self.assertIsNotNone(baselines["JPEG"])
 
     def test_a_format_the_comparison_fn_cannot_find_is_skipped_not_fatal(self):
         ok, problems, baselines = sml.run_batch_check(
@@ -924,6 +1211,52 @@ class ShouldRecutTests(GitRepoTestCase):
         ))
 
 
+    def test_true_when_main_moved_far_past_the_base_even_if_RECENT(self):
+        """Distance, not just age.
+
+        The time threshold assumes main moves slowly. It does not: with the
+        fleet publishing, main advanced 13 commits in about four hours on
+        2026-07-27, and every squad branch sat on a base that was HOURS old --
+        "fresh" by the time rule -- while being far enough behind that all
+        thirteen failed to merge. Simulated against main that day: merged
+        cleanly 0, conflicted 13.
+
+        The blocking commit was the sweep's own PR #154: main holds the
+        merged-and-formatted form of work the branches still carry pre-merge.
+        A branch is stale the moment its content lands upstream by another
+        route, and that is a distance question.
+        """
+        repo = self.make_repo()
+        git(repo, "branch", "squad/nikon")
+        base_sha = git_out(repo, "rev-parse", "main").strip()
+        commit_ts = int(git_out(repo, "log", "-1", "--format=%ct", base_sha).strip())
+        for i in range(10):
+            self.commit_file(repo, f"m{i}.txt", str(i), f"main moves {i}")
+        # Base is BRAND NEW by the clock -- the age clause alone says False.
+        self.assertFalse(sml.should_recut(
+            repo, "squad/nikon", origin_ref="main", staleness_seconds=10**9,
+            now_fn=lambda: commit_ts + 1, behind_commits=0,
+        ))
+        # ...but main is 10 commits past it, so the distance clause fires.
+        self.assertTrue(sml.should_recut(
+            repo, "squad/nikon", origin_ref="main", staleness_seconds=10**9,
+            now_fn=lambda: commit_ts + 1, behind_commits=8,
+        ))
+
+    def test_a_branch_only_slightly_behind_is_left_alone(self):
+        """Re-cutting is not free -- it must not fire on ordinary drift."""
+        repo = self.make_repo()
+        git(repo, "branch", "squad/nikon")
+        base_sha = git_out(repo, "rev-parse", "main").strip()
+        commit_ts = int(git_out(repo, "log", "-1", "--format=%ct", base_sha).strip())
+        for i in range(3):
+            self.commit_file(repo, f"m{i}.txt", str(i), f"main moves {i}")
+        self.assertFalse(sml.should_recut(
+            repo, "squad/nikon", origin_ref="main", staleness_seconds=10**9,
+            now_fn=lambda: commit_ts + 1, behind_commits=8,
+        ))
+
+
 class RecutSquadBranchTests(GitRepoTestCase):
     def test_recut_re_picks_only_still_open_novel_commits(self):
         repo = self.make_repo()
@@ -1095,6 +1428,119 @@ class RealFormatMatchTests(unittest.TestCase):
         _, kwargs = mock_run_format_comparison.call_args
         self.assertEqual(kwargs["semaphore_max_holders"], 2)
         self.assertEqual(kwargs["semaphore_path"], sml.DEFAULT_BUILD_SEMAPHORE_PATH)
+
+
+class PolicyVersionRetryTests(GitRepoTestCase):
+    """A rejection is permanent only with respect to the rules that
+    produced it. When the validator's acceptance policy changes, heads it
+    rejected under the OLD policy get exactly one fresh attempt -- without
+    this, the 2026-07-25 extractor fixes (which made 20 of 44 quarantined
+    heads admissible) could never have taken effect retroactively."""
+
+    def test_stale_policy_only_fires_for_quarantines(self):
+        cur = sml.validate_fix_commit.POLICY_VERSION
+        self.assertFalse(sml.stale_policy({"status": "consumed", "policy_version": cur - 1}))
+        self.assertFalse(sml.stale_policy({"status": "quarantined", "policy_version": cur}))
+        self.assertTrue(sml.stale_policy({"status": "quarantined", "policy_version": cur - 1}))
+
+    def test_unstamped_legacy_quarantine_counts_as_stale(self):
+        # Entries written before stamping existed predate every fix that
+        # made them stale, so they must be retried, not grandfathered in.
+        self.assertTrue(sml.stale_policy({"status": "quarantined"}))
+
+    def test_candidate_commits_reopens_a_stale_quarantine(self):
+        repo = self.make_repo()
+        git(repo, "branch", "squad/nikon")
+        git(repo, "checkout", "-q", "-b", "model-fix-parallel-nef")
+        c1 = self.commit_file(repo, "a.rs", "1\n", "fix a")
+        c2 = self.commit_file(repo, "b.rs", "1\n", "fix b")
+        cur = sml.validate_fix_commit.POLICY_VERSION
+
+        status = {"heads": {
+            c1: {"status": "quarantined", "policy_version": cur - 1},  # stale
+            c2: {"status": "quarantined", "policy_version": cur},      # current
+        }}
+        self.assertEqual(
+            sml.candidate_commits(repo, "model-fix-parallel-nef", "squad/nikon", status), [c1],
+        )
+
+    def test_candidate_commits_never_reopens_a_consumed_head(self):
+        repo = self.make_repo()
+        git(repo, "branch", "squad/nikon")
+        git(repo, "checkout", "-q", "-b", "model-fix-parallel-nef")
+        c1 = self.commit_file(repo, "a.rs", "1\n", "fix a")
+        cur = sml.validate_fix_commit.POLICY_VERSION
+
+        # Already published: re-cherry-picking it would duplicate the work.
+        status = {"heads": {c1: {"status": "consumed", "policy_version": cur - 99}}}
+        self.assertEqual(
+            sml.candidate_commits(repo, "model-fix-parallel-nef", "squad/nikon", status), [],
+        )
+
+    def test_quarantine_entries_are_stamped_with_the_current_policy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            qpath = Path(tmp) / "quarantine.jsonl"
+            entry = sml.append_quarantine(
+                qpath, patch_id="p1", sha="abc", format_name="NEF", squad="nikon",
+                reason="r", flags=["f"], now_fn=lambda: 1,
+            )
+        self.assertEqual(entry["policy_version"], sml.validate_fix_commit.POLICY_VERSION)
+
+    def test_recorded_quarantine_head_is_stamped_but_consumed_is_not(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "nikon.json"
+            sml.record_head(path, "sha1", status="quarantined", patch_id="p1",
+                            format_name="NEF", reason="r", now_fn=lambda: 1)
+            sml.record_head(path, "sha2", status="consumed", patch_id="p2",
+                            format_name="NEF", now_fn=lambda: 1)
+            data = sml.load_squad_status(path)
+        self.assertEqual(data["heads"]["sha1"]["policy_version"],
+                         sml.validate_fix_commit.POLICY_VERSION)
+        self.assertNotIn("policy_version", data["heads"]["sha2"])
+
+
+class PolicyVersionProcessCommitTests(SquadProcessFixture):
+    """The patch-id ledger is the SECOND gate; it has to honour the policy
+    stamp too, or candidate_commits re-offers a head that process_commit
+    then drops on the floor."""
+
+    def test_patch_id_quarantined_under_old_policy_is_revalidated(self):
+        repo, staging, home, sha = self._setup_squad()
+        patch_id = sml.compute_patch_id_for_sha(repo, sha)
+        qpath = sml.quarantine_ledger_path(home)
+        sml.append_quarantine(
+            qpath, patch_id=patch_id, sha=sha, format_name="NEF", squad="nikon",
+            reason="rejected by the old rules", flags=["printconv-unverifiable"],
+            now_fn=lambda: 1, policy_version=sml.validate_fix_commit.POLICY_VERSION - 1,
+        )
+        entries = sml.load_quarantine(qpath)
+        validated = []
+
+        result = self._process(
+            repo, staging, home, sha, quarantine_entries=entries,
+            validate_fn=lambda s, r, **kw: (validated.append(s) or
+                                            {"ok": True, "flags": [], "patch_id": patch_id}),
+        )
+
+        self.assertEqual(validated, [sha], "the new policy must actually be consulted")
+        self.assertNotEqual(result["outcome"], "skipped_quarantined")
+
+    def test_patch_id_quarantined_under_current_policy_still_skipped(self):
+        repo, staging, home, sha = self._setup_squad()
+        patch_id = sml.compute_patch_id_for_sha(repo, sha)
+        qpath = sml.quarantine_ledger_path(home)
+        sml.append_quarantine(
+            qpath, patch_id=patch_id, sha=sha, format_name="NEF", squad="nikon",
+            reason="rejected by the current rules", flags=["printconv-mismatch:Bogus"],
+            now_fn=lambda: 1,
+        )
+        entries = sml.load_quarantine(qpath)
+
+        result = self._process(
+            repo, staging, home, sha, quarantine_entries=entries,
+            validate_fn=lambda *a, **k: self.fail("must not revalidate"),
+        )
+        self.assertEqual(result["outcome"], "skipped_quarantined")
 
 
 if __name__ == "__main__":

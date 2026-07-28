@@ -538,10 +538,25 @@ impl FormatParser for GIFParser {
             "BackgroundColor".to_string(),
             TagValue::Integer(lsd.background_color_index as i64),
         );
-        // Add GIF: prefixed version for format-specific tagging
+        // Add GIF: prefixed version for format-specific tagging.
+        //
+        // This MUST carry the same value as the unprefixed key. ExifTool 13.55
+        // reports this tag in the GIF group as a plain index, not as a hex
+        // colour string:
+        //   $ exiftool -G1 -BackgroundColor GIF.gif
+        //   [GIF]  Background Color  : 0
+        // Until 2026-07-26 this insert applied a `format!("#{:02x}", ..)`
+        // transform, so oxidex emitted `BackgroundColor: 0` alongside
+        // `GIF:BackgroundColor: #00`. The tag-comparison harness normalises the
+        // group prefix away and then matched whichever of the two it happened
+        // to visit first: the same source tree reported
+        // `BackgroundColor: exiftool="0" oxidex="#00"` at 22:17 and GIF 35/35
+        // with value_differences=0 at 22:37. Its duplicate_emissions detector
+        // keys on the exact tag string, so two distinct strings each emitted
+        // once scored 0 and the divergence went unreported.
         metadata.insert(
             "GIF:BackgroundColor".to_string(),
-            TagValue::String(format!("#{:02x}", lsd.background_color_index)),
+            TagValue::Integer(lsd.background_color_index as i64),
         );
 
         // PixelAspectRatio - convert from raw value to actual ratio
@@ -654,4 +669,57 @@ impl FormatParser for GIFParser {
 pub fn parse_gif_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
     let parser = GIFParser;
     parser.parse(reader).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{TestReader, assert_no_divergent_prefixed_duplicates};
+
+    /// Minimal GIF89a: 6-byte signature, 7-byte logical screen descriptor, a
+    /// 4-entry global colour table and the trailer.
+    fn synthetic_gif(background_color_index: u8) -> Vec<u8> {
+        let mut data = b"GIF89a".to_vec();
+        data.extend_from_slice(&8u16.to_le_bytes()); // logical screen width
+        data.extend_from_slice(&8u16.to_le_bytes()); // logical screen height
+        data.push(0b1_001_0_001); // GCT present, 4 entries
+        data.push(background_color_index);
+        data.push(0); // pixel aspect ratio: not given
+        data.extend_from_slice(&[0u8; 4 * 3]); // global colour table
+        data.push(0x3B); // trailer
+        data
+    }
+
+    /// `BackgroundColor` and `GIF:BackgroundColor` are one logical tag and must
+    /// render identically. ExifTool 13.55 prints the raw palette index in the
+    /// GIF group, not a hex colour string:
+    ///
+    /// ```text
+    /// $ exiftool -G1 -BackgroundColor /tmp/oxidex-exiftool-cache/combined-samples/GIF.gif
+    /// [GIF]           Background Color                : 0
+    /// ```
+    ///
+    /// The corpus file's index is 0, where the old `format!("#{:02x}", ..)`
+    /// produced "#00" -- wrong, but close enough to 0 to read as a formatting
+    /// nicety. This test uses 42 so the two renderings are unmistakably
+    /// different ("42" vs "#2a") and the assertion cannot pass by coincidence.
+    #[test]
+    fn gif_background_color_agrees_across_prefixed_and_bare_keys() {
+        let reader = TestReader::new(synthetic_gif(42));
+        let metadata = parse_gif_metadata(&reader).unwrap();
+
+        assert_eq!(
+            metadata.get("BackgroundColor"),
+            Some(&TagValue::Integer(42)),
+            "ExifTool prints the palette index for BackgroundColor",
+        );
+        assert_eq!(
+            metadata.get("GIF:BackgroundColor"),
+            Some(&TagValue::Integer(42)),
+            "the GIF: alias must carry the same value as the bare key; a \
+             hex-formatted string here is what made the tag-comparison \
+             harness non-deterministic on 2026-07-26",
+        );
+        assert_no_divergent_prefixed_duplicates(&metadata);
+    }
 }

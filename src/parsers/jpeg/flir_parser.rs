@@ -58,6 +58,18 @@ const RECORD_TYPE_PALETTE_INFO: u16 = 0x0022;
 /// FLIR FFF record type for embedded image
 const RECORD_TYPE_EMBEDDED_IMAGE: u16 = 0x000E;
 
+/// FFF header: `string[16]` file creator (ExifTool `FLIR::Header` tag 4).
+const FFF_HEADER_CREATOR_SOFTWARE: usize = 0x04;
+
+/// FFF header: `int32u` file format version (should be 100..200).
+const FFF_HEADER_VERSION: usize = 0x14;
+
+/// FFF header: `int32u` offset to the record directory.
+const FFF_HEADER_DIR_OFFSET: usize = 0x18;
+
+/// FFF header: `int32u` number of entries in the record directory.
+const FFF_HEADER_DIR_COUNT: usize = 0x1C;
+
 /// Offset table for CameraInfo record fields.
 /// These offsets are relative to the start of the CameraInfo record data.
 mod camera_info_offsets {
@@ -155,14 +167,13 @@ mod camera_info_offsets {
 
 /// Offset table for RawData record fields
 mod raw_data_offsets {
-    /// Byte order indicator (u16)
-    pub const BYTE_ORDER: usize = 0x0000;
     /// Raw thermal image width (u16)
     pub const WIDTH: usize = 0x0002;
     /// Raw thermal image height (u16)
     pub const HEIGHT: usize = 0x0004;
-    /// Raw thermal image type (u16)
-    pub const IMAGE_TYPE: usize = 0x0010;
+    /// Start of the embedded raw thermal image (ExifTool tag index 16 with
+    /// `FORMAT => 'int16u'`, i.e. byte offset 0x20)
+    pub const IMAGE_DATA: usize = 0x0020;
 }
 
 /// Offset table for PaletteInfo record fields
@@ -205,6 +216,117 @@ struct FlirRecordEntry {
     offset: u32,
     /// Length of record data in bytes
     length: u32,
+}
+
+/// Byte order in effect while decoding a FLIR FFF structure.
+///
+/// FLIR data is *not* consistently little-endian: ExifTool notes in
+/// `FLIR.pm` `ProcessFLIR` that "in my samples FLIR APP1 is big-endian, FFF
+/// files are little-endian", and individual records may flip the order again
+/// via their own byte-order marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FlirEndian {
+    Little,
+    Big,
+}
+
+impl FlirEndian {
+    /// Build a reader over `data` using this byte order.
+    fn reader<'a>(self, data: &'a [u8]) -> EndianReader<'a> {
+        match self {
+            FlirEndian::Little => EndianReader::little_endian(data),
+            FlirEndian::Big => EndianReader::big_endian(data),
+        }
+    }
+
+    /// The opposite byte order.
+    fn flipped(self) -> Self {
+        match self {
+            FlirEndian::Little => FlirEndian::Big,
+            FlirEndian::Big => FlirEndian::Little,
+        }
+    }
+}
+
+/// Byte order for a record that carries a byte-order marker in its first
+/// `int16u`.
+///
+/// ExifTool, FLIR.pm (`CameraInfo` 0x00 / `RawData` 0x00):
+///
+/// ```text
+///     0x00 => {
+///         # use this tag only to determine the byte order
+///         # (the value should be 0x0002 if the byte order is correct)
+///         Name => 'CameraInfoByteOrder',
+///         Format => 'int16u',
+///         Hidden => 1,
+///         RawConv => 'ToggleByteOrder() if $val >= 0x0100; undef',
+///     },
+/// ```
+fn record_endian(data: &[u8], outer: FlirEndian) -> FlirEndian {
+    match outer.reader(data).u16_at(0) {
+        Some(marker) if marker >= 0x0100 => outer.flipped(),
+        _ => outer,
+    }
+}
+
+/// Render a fixed-precision decimal the way ExifTool's JSON output renders the
+/// result of a purely numeric PrintConv.
+///
+/// ExifTool emits `sprintf("%.6f", 0.01262)` as the JSON number `0.01262` and
+/// `sprintf("%.2f", 1.0)` as `1.0`, so trailing zeros are dropped but at least
+/// one decimal digit is kept.
+fn trim_decimal(formatted: String) -> String {
+    if !formatted.contains('.') {
+        return formatted;
+    }
+    let trimmed = formatted.trim_end_matches('0');
+    match trimmed.strip_suffix('.') {
+        Some(head) => format!("{head}.0"),
+        None => trimmed.to_string(),
+    }
+}
+
+/// Format a float with `sig` significant digits, as Perl's `sprintf("%.*g")`.
+///
+/// ExifTool, FLIR.pm:
+///
+/// ```text
+/// my %float8g = ( Format => 'float', PrintConv => 'sprintf("%.8g",$val)' );
+/// ```
+fn sprintf_g(value: f64, sig: usize) -> String {
+    if !value.is_finite() {
+        return format!("{value}");
+    }
+    if value == 0.0 {
+        return "0.0".to_string();
+    }
+    let exponent = value.abs().log10().floor() as i32;
+    if exponent < -4 || exponent >= sig as i32 {
+        return format!("{:.*e}", sig.saturating_sub(1), value);
+    }
+    let decimals = (sig as i32 - 1 - exponent).max(0) as usize;
+    trim_decimal(format!("{:.*}", decimals, value))
+}
+
+/// Read a fixed-width, NUL-padded string field.
+///
+/// Unlike [`try_read_string`] this returns `Some("")` for an empty field, which
+/// is what ExifTool does for `Format => 'string[N]'` tags: `FilterModel`,
+/// `LensPartNumber` and friends are reported as empty strings rather than
+/// omitted.
+fn read_fixed_string(data: &[u8], offset: usize, len: usize) -> Option<String> {
+    let end = offset.checked_add(len)?;
+    if end > data.len() {
+        return None;
+    }
+    let bytes = &data[offset..end];
+    let str_len = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    Some(
+        String::from_utf8_lossy(&bytes[..str_len])
+            .trim_end()
+            .to_string(),
+    )
 }
 
 /// Parse FLIR APP1 segment and extract thermal imaging metadata.
@@ -347,40 +469,66 @@ fn parse_fff_structure(data: &[u8], metadata: &mut MetadataMap) -> Result<(), St
     // Check for FFF magic number (optional - some FLIR segments don't have it)
     let has_fff_header = data.len() >= 4 && &data[0..4] == b"FFF\0";
 
-    if has_fff_header {
-        // Parse standard FFF format with record index
-        parse_fff_with_index(data, metadata)
-    } else {
+    if !has_fff_header {
         // Try to parse as legacy format or embedded record
-        parse_flir_legacy_format(data, metadata)
+        return parse_flir_legacy_format(data, metadata);
     }
+
+    // Determine byte order by validating the file format version, exactly as
+    // ExifTool does in FLIR.pm `ProcessFLIR`:
+    //
+    // ```text
+    //     # determine byte ordering by validating version number
+    //     for ($i=0; ; ++$i) {
+    //         my $ver = Get32u(\$hdr, 0x14);
+    //         last if $ver >= 100 and $ver < 200; # (have seen 100 and 101 - PH)
+    //         ToggleByteOrder();
+    // ```
+    let endian = match (
+        EndianReader::big_endian(data).u32_at(FFF_HEADER_VERSION),
+        EndianReader::little_endian(data).u32_at(FFF_HEADER_VERSION),
+    ) {
+        (Some(be), _) if (100..200).contains(&be) => FlirEndian::Big,
+        (_, Some(le)) if (100..200).contains(&le) => FlirEndian::Little,
+        _ => return parse_flir_legacy_format(data, metadata),
+    };
+
+    parse_fff_with_index(data, metadata, endian)
 }
 
 /// Parse FFF structure with proper record index table.
 ///
 /// The record index is located after the FFF header and contains
 /// entries pointing to different data records (CameraInfo, RawData, etc.)
-fn parse_fff_with_index(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
-    let reader = EndianReader::little_endian(data);
+fn parse_fff_with_index(
+    data: &[u8],
+    metadata: &mut MetadataMap,
+    endian: FlirEndian,
+) -> Result<(), String> {
+    let reader = endian.reader(data);
 
-    // Extract CreatorSoftware from FFF header (typically at offset 0x08, 16 bytes)
-    if let Some(creator) = try_read_string(data, 0x08, 16)
-        && !creator.is_empty()
-    {
+    // ExifTool, FLIR.pm (`Image::ExifTool::FLIR::Header`):
+    //
+    // ```text
+    //     4 => { Name => 'CreatorSoftware', Format => 'string[16]' },
+    // ```
+    if let Some(creator) = read_fixed_string(data, FFF_HEADER_CREATOR_SOFTWARE, 16) {
         metadata.insert(
             "FLIR:CreatorSoftware".to_string(),
             TagValue::String(creator),
         );
     }
 
-    // FFF header is typically 64 bytes
-    // Record index follows the header
-    // Each index entry is typically 32 bytes
-
-    // Read number of records from header (offset varies by version)
-    // Try common offset locations for record count
-    let record_count = reader.u32_at(28).unwrap_or(0) as usize;
-    let index_offset = reader.u32_at(32).unwrap_or(64) as usize;
+    // ExifTool, FLIR.pm `ProcessFLIR`:
+    //
+    // ```text
+    //     # 0x18 - int32u offset to record directory
+    //     # 0x1c - int32u number of entries in record directory
+    //     my $pos = Get32u(\$hdr, 0x18);
+    //     my $num = Get32u(\$hdr, 0x1c);
+    // ```
+    let index_offset = reader.u32_at(FFF_HEADER_DIR_OFFSET).unwrap_or(0) as usize;
+    let record_count = reader.u32_at(FFF_HEADER_DIR_COUNT).unwrap_or(0) as usize;
 
     if record_count == 0 || record_count > 100 {
         // Invalid or unreasonable record count, try legacy parsing
@@ -388,7 +536,7 @@ fn parse_fff_with_index(data: &[u8], metadata: &mut MetadataMap) -> Result<(), S
     }
 
     // Parse record index entries
-    let records = parse_record_index(data, index_offset, record_count)?;
+    let records = parse_record_index(data, index_offset, record_count, endian)?;
 
     // Process each record type
     for record in &records {
@@ -403,10 +551,10 @@ fn parse_fff_with_index(data: &[u8], metadata: &mut MetadataMap) -> Result<(), S
 
         match record.record_type {
             RECORD_TYPE_RAW_DATA => {
-                parse_raw_data_record(record_data, metadata);
+                parse_raw_data_record(record_data, metadata, record_endian(record_data, endian));
             }
             RECORD_TYPE_CAMERA_INFO => {
-                parse_camera_info_record(record_data, metadata);
+                parse_camera_info_record(record_data, metadata, record_endian(record_data, endian));
             }
             RECORD_TYPE_PALETTE_INFO => {
                 parse_palette_info_record(record_data, metadata);
@@ -444,8 +592,9 @@ fn parse_record_index(
     data: &[u8],
     offset: usize,
     count: usize,
+    endian: FlirEndian,
 ) -> Result<Vec<FlirRecordEntry>, String> {
-    let reader = EndianReader::little_endian(data);
+    let reader = endian.reader(data);
     let mut records = Vec::with_capacity(count);
 
     // Each index entry is 32 bytes in standard FFF format
@@ -528,6 +677,56 @@ fn parse_flir_legacy_format(data: &[u8], metadata: &mut MetadataMap) -> Result<(
         );
     }
 
+    // Extract camera temperature range and limit values
+    insert_temperature(
+        &reader,
+        camera_info_offsets::CAMERA_TEMP_RANGE_MAX,
+        "FLIR:CameraTemperatureRangeMax",
+        metadata,
+    );
+    insert_temperature(
+        &reader,
+        camera_info_offsets::CAMERA_TEMP_RANGE_MIN,
+        "FLIR:CameraTemperatureRangeMin",
+        metadata,
+    );
+    insert_temperature(
+        &reader,
+        camera_info_offsets::CAMERA_TEMP_MAX_CLIP,
+        "FLIR:CameraTemperatureMaxClip",
+        metadata,
+    );
+    insert_temperature(
+        &reader,
+        camera_info_offsets::CAMERA_TEMP_MIN_CLIP,
+        "FLIR:CameraTemperatureMinClip",
+        metadata,
+    );
+    insert_temperature(
+        &reader,
+        camera_info_offsets::CAMERA_TEMP_MAX_WARN,
+        "FLIR:CameraTemperatureMaxWarn",
+        metadata,
+    );
+    insert_temperature(
+        &reader,
+        camera_info_offsets::CAMERA_TEMP_MIN_WARN,
+        "FLIR:CameraTemperatureMinWarn",
+        metadata,
+    );
+    insert_temperature(
+        &reader,
+        camera_info_offsets::CAMERA_TEMP_MAX_SATURATED,
+        "FLIR:CameraTemperatureMaxSaturated",
+        metadata,
+    );
+    insert_temperature(
+        &reader,
+        camera_info_offsets::CAMERA_TEMP_MIN_SATURATED,
+        "FLIR:CameraTemperatureMinSaturated",
+        metadata,
+    );
+
     Ok(())
 }
 
@@ -538,21 +737,11 @@ fn parse_flir_legacy_format(data: &[u8], metadata: &mut MetadataMap) -> Result<(
 /// - Byte order for raw data
 /// - Image type/format identifier
 /// - Reference to the actual thermal image data
-fn parse_raw_data_record(data: &[u8], metadata: &mut MetadataMap) {
-    let reader = EndianReader::little_endian(data);
+fn parse_raw_data_record(data: &[u8], metadata: &mut MetadataMap, endian: FlirEndian) {
+    let reader = endian.reader(data);
 
-    // Parse byte order
-    if let Some(byte_order) = reader.u16_at(raw_data_offsets::BYTE_ORDER) {
-        let order_str = if byte_order == 0 {
-            "Little-endian"
-        } else {
-            "Big-endian"
-        };
-        metadata.insert(
-            "FLIR:RawDataByteOrder".to_string(),
-            TagValue::String(order_str.to_string()),
-        );
-    }
+    // Note: the `int16u` at offset 0 is ExifTool's hidden `RawDataByteOrder`
+    // marker; it selects `endian` (see `record_endian`) and is not emitted.
 
     // Parse image dimensions
     if let Some(width) = reader.u16_at(raw_data_offsets::WIDTH)
@@ -575,32 +764,47 @@ fn parse_raw_data_record(data: &[u8], metadata: &mut MetadataMap) {
         );
     }
 
-    // Parse image type
-    if let Some(image_type) = reader.u16_at(raw_data_offsets::IMAGE_TYPE) {
-        let type_str = match image_type {
-            0 => "Unknown",
-            1 => "U16 (Linear)",
-            2 => "U16 (Compressed)",
-            3 => "S16 (Linear)",
-            4 => "PNG",
-            5 => "JPEG",
-            100 => "TIFF",
-            _ => "Other",
+    // Parse image type. ExifTool derives this from the payload's magic number
+    // rather than from a numeric field (FLIR.pm `GetImageType`):
+    //
+    // ```text
+    //     my $type = 'DAT';
+    //     if ($val =~ /^\x89PNG\r\n\x1a\n/) {
+    //         $type = 'PNG';
+    //     } elsif ($val =~ /^\xff\xd8\xff/) { # (haven't seen this, but just in case - PH)
+    //         $type = 'JPG';
+    //     } elsif (length $val != $w * $h * 2) {
+    //         $et->Warn("Unrecognized FLIR $tag data format");
+    //     } elsif (GetByteOrder() eq 'II') {
+    //         $val = Image::ExifTool::MakeTiffHeader($w,$h,1,16) . $val;
+    //         $type = 'TIFF';
+    // ```
+    if data.len() > raw_data_offsets::IMAGE_DATA {
+        let image = &data[raw_data_offsets::IMAGE_DATA..];
+        let width = reader.u16_at(raw_data_offsets::WIDTH).unwrap_or(0) as usize;
+        let height = reader.u16_at(raw_data_offsets::HEIGHT).unwrap_or(0) as usize;
+
+        let type_str = if image.starts_with(b"\x89PNG\r\n\x1a\n") {
+            "PNG"
+        } else if image.starts_with(b"\xff\xd8\xff") {
+            "JPG"
+        } else if image.len() == width * height * 2 && endian == FlirEndian::Little {
+            "TIFF"
+        } else {
+            "DAT"
         };
         metadata.insert(
             "FLIR:RawThermalImageType".to_string(),
             TagValue::String(type_str.to_string()),
         );
-    }
 
-    // Note: We don't extract the actual raw thermal image data as binary
-    // to avoid bloating the metadata. The tag indicates it exists.
-    if data.len() > 32 {
+        // The image itself is not embedded in the metadata map; report it the
+        // way ExifTool reports binary tags without `-b`.
         metadata.insert(
             "FLIR:RawThermalImage".to_string(),
             TagValue::String(format!(
                 "(Binary data {} bytes, use -b option to extract)",
-                data.len() - 32
+                image.len()
             )),
         );
     }
@@ -614,27 +818,29 @@ fn parse_raw_data_record(data: &[u8], metadata: &mut MetadataMap) {
 /// - Planck constants for radiometric temperature calculation
 /// - Atmospheric correction parameters
 /// - Temperature range and limit values
-fn parse_camera_info_record(data: &[u8], metadata: &mut MetadataMap) {
-    let reader = EndianReader::little_endian(data);
+fn parse_camera_info_record(data: &[u8], metadata: &mut MetadataMap, endian: FlirEndian) {
+    let reader = endian.reader(data);
+
+    // Note: the `int16u` at offset 0 is ExifTool's hidden `CameraInfoByteOrder`
+    // marker; it selects `endian` (see `record_endian`) and is not emitted.
 
     // === Emissivity and Environmental Parameters ===
 
-    if let Some(emissivity) = reader.f32_at(camera_info_offsets::EMISSIVITY)
-        && (0.0..=1.0).contains(&emissivity)
-    {
+    // ExifTool, FLIR.pm: `0x20 => { Name => 'Emissivity', %float2f },`
+    // with `my %float2f = ( Format => 'float', PrintConv => 'sprintf("%.2f",$val)' );`
+    if let Some(emissivity) = reader.f32_at(camera_info_offsets::EMISSIVITY) {
         metadata.insert(
             "FLIR:Emissivity".to_string(),
-            TagValue::Float(emissivity as f64),
+            TagValue::String(trim_decimal(format!("{:.2}", emissivity))),
         );
     }
 
-    if let Some(distance) = reader.f32_at(camera_info_offsets::OBJECT_DISTANCE)
-        && distance > 0.0
-        && distance < 10000.0
-    {
+    // ExifTool, FLIR.pm:
+    // `0x24 => { Name => 'ObjectDistance', Format => 'float', PrintConv => 'sprintf("%.2f m",$val)' },`
+    if let Some(distance) = reader.f32_at(camera_info_offsets::OBJECT_DISTANCE) {
         metadata.insert(
             "FLIR:ObjectDistance".to_string(),
-            TagValue::Float(distance as f64),
+            TagValue::String(format!("{:.2} m", distance)),
         );
     }
 
@@ -658,44 +864,65 @@ fn parse_camera_info_record(data: &[u8], metadata: &mut MetadataMap) {
         metadata,
     );
 
-    // IR window transmission
-    if let Some(transmission) = reader.f32_at(camera_info_offsets::IR_WINDOW_TRANSMISSION)
-        && (0.0..=1.0).contains(&transmission)
-    {
+    // ExifTool, FLIR.pm: `0x34 => { Name => 'IRWindowTransmission', %float2f },`
+    if let Some(transmission) = reader.f32_at(camera_info_offsets::IR_WINDOW_TRANSMISSION) {
         metadata.insert(
             "FLIR:IRWindowTransmission".to_string(),
-            TagValue::Float(transmission as f64),
+            TagValue::String(trim_decimal(format!("{:.2}", transmission))),
         );
     }
 
-    // Relative humidity
-    if let Some(humidity) = reader.f32_at(camera_info_offsets::RELATIVE_HUMIDITY)
-        && (0.0..=100.0).contains(&humidity)
-    {
+    // ExifTool, FLIR.pm:
+    //
+    // ```text
+    //     0x3c => {
+    //         Name => 'RelativeHumidity',
+    //         Format => 'float',
+    //         ValueConv => '$val > 2 ? $val / 100 : $val', # have seen value expressed as percent in FFF file
+    //         PrintConv => 'sprintf("%.1f %%",$val*100)',
+    //     },
+    // ```
+    if let Some(humidity) = reader.f32_at(camera_info_offsets::RELATIVE_HUMIDITY) {
+        let fraction = if humidity > 2.0 {
+            humidity / 100.0
+        } else {
+            humidity
+        };
         metadata.insert(
             "FLIR:RelativeHumidity".to_string(),
-            TagValue::Float(humidity as f64),
+            TagValue::String(format!("{:.1} %", fraction * 100.0)),
         );
     }
 
     // === Planck Constants for Radiometric Calculation ===
-    // These are essential for converting raw thermal values to temperature
+    //
+    // ExifTool, FLIR.pm:
+    //
+    // ```text
+    //     0x58 => { Name => 'PlanckR1', %float8g }, #1
+    //     0x5c => { Name => 'PlanckB',  %float8g }, #1
+    //     0x60 => { Name => 'PlanckF',  %float8g }, #1
+    // ```
+    insert_float8g(
+        &reader,
+        camera_info_offsets::PLANCK_R1,
+        "FLIR:PlanckR1",
+        metadata,
+    );
+    insert_float8g(
+        &reader,
+        camera_info_offsets::PLANCK_B,
+        "FLIR:PlanckB",
+        metadata,
+    );
+    insert_float8g(
+        &reader,
+        camera_info_offsets::PLANCK_F,
+        "FLIR:PlanckF",
+        metadata,
+    );
 
-    if let Some(planck_r1) = reader.f32_at(camera_info_offsets::PLANCK_R1) {
-        metadata.insert(
-            "FLIR:PlanckR1".to_string(),
-            TagValue::Float(planck_r1 as f64),
-        );
-    }
-
-    if let Some(planck_b) = reader.f32_at(camera_info_offsets::PLANCK_B) {
-        metadata.insert("FLIR:PlanckB".to_string(), TagValue::Float(planck_b as f64));
-    }
-
-    if let Some(planck_f) = reader.f32_at(camera_info_offsets::PLANCK_F) {
-        metadata.insert("FLIR:PlanckF".to_string(), TagValue::Float(planck_f as f64));
-    }
-
+    // ExifTool, FLIR.pm: `0x308 => { Name => 'PlanckO', Format => 'int32s' },`
     if let Some(planck_o) = reader.i32_at(camera_info_offsets::PLANCK_O) {
         metadata.insert(
             "FLIR:PlanckO".to_string(),
@@ -703,49 +930,55 @@ fn parse_camera_info_record(data: &[u8], metadata: &mut MetadataMap) {
         );
     }
 
-    if let Some(planck_r2) = reader.f32_at(camera_info_offsets::PLANCK_R2) {
-        metadata.insert(
-            "FLIR:PlanckR2".to_string(),
-            TagValue::Float(planck_r2 as f64),
-        );
-    }
+    // ExifTool, FLIR.pm: `0x30c => { Name => 'PlanckR2', %float8g }, #1`
+    insert_float8g(
+        &reader,
+        camera_info_offsets::PLANCK_R2,
+        "FLIR:PlanckR2",
+        metadata,
+    );
 
     // === Atmospheric Transmission Coefficients ===
-
-    if let Some(alpha1) = reader.f32_at(camera_info_offsets::ATMOSPHERIC_TRANS_ALPHA1) {
-        metadata.insert(
-            "FLIR:AtmosphericTransAlpha1".to_string(),
-            TagValue::Float(alpha1 as f64),
-        );
-    }
-
-    if let Some(alpha2) = reader.f32_at(camera_info_offsets::ATMOSPHERIC_TRANS_ALPHA2) {
-        metadata.insert(
-            "FLIR:AtmosphericTransAlpha2".to_string(),
-            TagValue::Float(alpha2 as f64),
-        );
-    }
-
-    if let Some(beta1) = reader.f32_at(camera_info_offsets::ATMOSPHERIC_TRANS_BETA1) {
-        metadata.insert(
-            "FLIR:AtmosphericTransBeta1".to_string(),
-            TagValue::Float(beta1 as f64),
-        );
-    }
-
-    if let Some(beta2) = reader.f32_at(camera_info_offsets::ATMOSPHERIC_TRANS_BETA2) {
-        metadata.insert(
-            "FLIR:AtmosphericTransBeta2".to_string(),
-            TagValue::Float(beta2 as f64),
-        );
-    }
-
-    if let Some(trans_x) = reader.f32_at(camera_info_offsets::ATMOSPHERIC_TRANS_X) {
-        metadata.insert(
-            "FLIR:AtmosphericTransX".to_string(),
-            TagValue::Float(trans_x as f64),
-        );
-    }
+    //
+    // ExifTool, FLIR.pm (`my %float6f = ( Format => 'float', PrintConv => 'sprintf("%.6f",$val)' );`):
+    //
+    // ```text
+    //     0x070 => { Name => 'AtmosphericTransAlpha1', %float6f }, #1 (value: 0.006569)
+    //     0x074 => { Name => 'AtmosphericTransAlpha2', %float6f }, #1 (value: 0.012620)
+    //     0x078 => { Name => 'AtmosphericTransBeta1',  %float6f }, #1 (value: -0.002276)
+    //     0x07c => { Name => 'AtmosphericTransBeta2',  %float6f }, #1 (value: -0.006670)
+    //     0x080 => { Name => 'AtmosphericTransX',      %float6f }, #1 (value: 1.900000)
+    // ```
+    insert_float6f(
+        &reader,
+        camera_info_offsets::ATMOSPHERIC_TRANS_ALPHA1,
+        "FLIR:AtmosphericTransAlpha1",
+        metadata,
+    );
+    insert_float6f(
+        &reader,
+        camera_info_offsets::ATMOSPHERIC_TRANS_ALPHA2,
+        "FLIR:AtmosphericTransAlpha2",
+        metadata,
+    );
+    insert_float6f(
+        &reader,
+        camera_info_offsets::ATMOSPHERIC_TRANS_BETA1,
+        "FLIR:AtmosphericTransBeta1",
+        metadata,
+    );
+    insert_float6f(
+        &reader,
+        camera_info_offsets::ATMOSPHERIC_TRANS_BETA2,
+        "FLIR:AtmosphericTransBeta2",
+        metadata,
+    );
+    insert_float6f(
+        &reader,
+        camera_info_offsets::ATMOSPHERIC_TRANS_X,
+        "FLIR:AtmosphericTransX",
+        metadata,
+    );
 
     // === Camera Temperature Range and Limits ===
 
@@ -798,175 +1031,134 @@ fn parse_camera_info_record(data: &[u8], metadata: &mut MetadataMap) {
         metadata,
     );
 
-    // === Camera Identification ===
-
-    if let Some(model) = try_read_string(data, camera_info_offsets::CAMERA_MODEL, 32)
-        && !model.is_empty()
-    {
-        metadata.insert("FLIR:CameraModel".to_string(), TagValue::String(model));
+    // === Camera, Lens and Filter Identification ===
+    //
+    // ExifTool, FLIR.pm:
+    //
+    // ```text
+    //     0xd4 => { Name => 'CameraModel',        Format => 'string[32]' },
+    //     0xf4 => { Name => 'CameraPartNumber',   Format => 'string[16]' }, #1
+    //     0x104 => { Name => 'CameraSerialNumber',Format => 'string[16]' }, #1
+    //     0x114 => { Name => 'CameraSoftware',    Format => 'string[16]' }, #1/PH (NC)
+    //     0x170 => { Name => 'LensModel',         Format => 'string[32]' },
+    //     0x190 => { Name => 'LensPartNumber',    Format => 'string[16]' },
+    //     0x1a0 => { Name => 'LensSerialNumber',  Format => 'string[16]' },
+    //     0x1ec => { Name => 'FilterModel',       Format => 'string[16]' },
+    //     0x1fc => { Name => 'FilterPartNumber',  Format => 'string[32]' },
+    //     0x21c => { Name => 'FilterSerialNumber',Format => 'string[32]' },
+    // ```
+    //
+    // These are emitted even when blank: ExifTool reports empty `string[N]`
+    // fields as empty values rather than omitting them.
+    for (offset, len, tag) in [
+        (camera_info_offsets::CAMERA_MODEL, 32, "FLIR:CameraModel"),
+        (
+            camera_info_offsets::CAMERA_PART_NUMBER,
+            16,
+            "FLIR:CameraPartNumber",
+        ),
+        (
+            camera_info_offsets::CAMERA_SERIAL_NUMBER,
+            16,
+            "FLIR:CameraSerialNumber",
+        ),
+        (
+            camera_info_offsets::CAMERA_SOFTWARE,
+            16,
+            "FLIR:CameraSoftware",
+        ),
+        (camera_info_offsets::LENS_MODEL, 32, "FLIR:LensModel"),
+        (
+            camera_info_offsets::LENS_PART_NUMBER,
+            16,
+            "FLIR:LensPartNumber",
+        ),
+        (
+            camera_info_offsets::LENS_SERIAL_NUMBER,
+            16,
+            "FLIR:LensSerialNumber",
+        ),
+        (camera_info_offsets::FILTER_MODEL, 16, "FLIR:FilterModel"),
+        (
+            camera_info_offsets::FILTER_PART_NUMBER,
+            32,
+            "FLIR:FilterPartNumber",
+        ),
+        (
+            camera_info_offsets::FILTER_SERIAL_NUMBER,
+            32,
+            "FLIR:FilterSerialNumber",
+        ),
+    ] {
+        if let Some(value) = read_fixed_string(data, offset, len) {
+            metadata.insert(tag.to_string(), TagValue::String(value));
+        }
     }
 
-    if let Some(part_num) = try_read_string(data, camera_info_offsets::CAMERA_PART_NUMBER, 32)
-        && !part_num.is_empty()
-    {
+    // ExifTool, FLIR.pm:
+    // `0x1b4 => { Name => 'FieldOfView', Format => 'float', PrintConv => 'sprintf("%.1f deg", $val) }, #1`
+    if let Some(fov) = reader.f32_at(camera_info_offsets::FIELD_OF_VIEW) {
         metadata.insert(
-            "FLIR:CameraPartNumber".to_string(),
-            TagValue::String(part_num),
-        );
-    }
-
-    if let Some(serial) = try_read_string(data, camera_info_offsets::CAMERA_SERIAL_NUMBER, 16)
-        && !serial.is_empty()
-    {
-        metadata.insert(
-            "FLIR:CameraSerialNumber".to_string(),
-            TagValue::String(serial),
-        );
-    }
-
-    if let Some(software) = try_read_string(data, camera_info_offsets::CAMERA_SOFTWARE, 16)
-        && !software.is_empty()
-    {
-        metadata.insert(
-            "FLIR:CameraSoftware".to_string(),
-            TagValue::String(software),
-        );
-    }
-
-    // === Lens Information ===
-
-    if let Some(lens_model) = try_read_string(data, camera_info_offsets::LENS_MODEL, 32)
-        && !lens_model.is_empty()
-    {
-        metadata.insert("FLIR:LensModel".to_string(), TagValue::String(lens_model));
-    }
-
-    if let Some(lens_part) = try_read_string(data, camera_info_offsets::LENS_PART_NUMBER, 16)
-        && !lens_part.is_empty()
-    {
-        metadata.insert(
-            "FLIR:LensPartNumber".to_string(),
-            TagValue::String(lens_part),
-        );
-    }
-
-    if let Some(lens_serial) = try_read_string(data, camera_info_offsets::LENS_SERIAL_NUMBER, 16)
-        && !lens_serial.is_empty()
-    {
-        metadata.insert(
-            "FLIR:LensSerialNumber".to_string(),
-            TagValue::String(lens_serial),
-        );
-    }
-
-    if let Some(fov) = reader.f32_at(camera_info_offsets::FIELD_OF_VIEW)
-        && fov > 0.0
-        && fov < 180.0
-    {
-        metadata.insert("FLIR:FieldOfView".to_string(), TagValue::Float(fov as f64));
-    }
-
-    // Peak spectral sensitivity (wavelength in micrometers)
-    if let Some(wavelength) = reader.f32_at(camera_info_offsets::PEAK_SPECTRAL_SENSITIVITY)
-        && wavelength > 0.0
-        && wavelength < 100.0
-    {
-        metadata.insert(
-            "FLIR:PeakSpectralSensitivity".to_string(),
-            TagValue::Float(wavelength as f64),
-        );
-    }
-
-    // === Filter Information ===
-
-    if let Some(filter_model) = try_read_string(data, camera_info_offsets::FILTER_MODEL, 16)
-        && !filter_model.is_empty()
-    {
-        metadata.insert(
-            "FLIR:FilterModel".to_string(),
-            TagValue::String(filter_model),
-        );
-    }
-
-    if let Some(filter_part) = try_read_string(data, camera_info_offsets::FILTER_PART_NUMBER, 32)
-        && !filter_part.is_empty()
-    {
-        metadata.insert(
-            "FLIR:FilterPartNumber".to_string(),
-            TagValue::String(filter_part),
-        );
-    }
-
-    if let Some(filter_serial) =
-        try_read_string(data, camera_info_offsets::FILTER_SERIAL_NUMBER, 32)
-        && !filter_serial.is_empty()
-    {
-        metadata.insert(
-            "FLIR:FilterSerialNumber".to_string(),
-            TagValue::String(filter_serial),
+            "FLIR:FieldOfView".to_string(),
+            TagValue::String(format!("{:.1} deg", fov)),
         );
     }
 
     // === Raw Value Statistics ===
-
-    if let Some(min) = reader.u16_at(camera_info_offsets::RAW_VALUE_RANGE_MIN) {
-        metadata.insert(
-            "FLIR:RawValueRangeMin".to_string(),
-            TagValue::Integer(min as i64),
-        );
-    }
-
-    if let Some(max) = reader.u16_at(camera_info_offsets::RAW_VALUE_RANGE_MAX) {
-        metadata.insert(
-            "FLIR:RawValueRangeMax".to_string(),
-            TagValue::Integer(max as i64),
-        );
-    }
-
-    if let Some(median) = reader.u16_at(camera_info_offsets::RAW_VALUE_MEDIAN) {
-        metadata.insert(
-            "FLIR:RawValueMedian".to_string(),
-            TagValue::Integer(median as i64),
-        );
-    }
-
-    if let Some(range) = reader.u16_at(camera_info_offsets::RAW_VALUE_RANGE) {
-        metadata.insert(
-            "FLIR:RawValueRange".to_string(),
-            TagValue::Integer(range as i64),
-        );
+    //
+    // ExifTool, FLIR.pm:
+    //
+    // ```text
+    //     0x310 => { Name => 'RawValueRangeMin',  Format => 'int16u', Groups => { 2 => 'Image' } }, #forum10060
+    //     0x312 => { Name => 'RawValueRangeMax',  Format => 'int16u', Groups => { 2 => 'Image' } }, #forum10060
+    //     0x338 => { Name => 'RawValueMedian',    Format => 'int16u', Groups => { 2 => 'Image' } },
+    //     0x33c => { Name => 'RawValueRange',     Format => 'int16u', Groups => { 2 => 'Image' } },
+    // ```
+    for (offset, tag) in [
+        (
+            camera_info_offsets::RAW_VALUE_RANGE_MIN,
+            "FLIR:RawValueRangeMin",
+        ),
+        (
+            camera_info_offsets::RAW_VALUE_RANGE_MAX,
+            "FLIR:RawValueRangeMax",
+        ),
+        (camera_info_offsets::RAW_VALUE_MEDIAN, "FLIR:RawValueMedian"),
+        (camera_info_offsets::RAW_VALUE_RANGE, "FLIR:RawValueRange"),
+    ] {
+        if let Some(value) = reader.u16_at(offset) {
+            metadata.insert(tag.to_string(), TagValue::Integer(value as i64));
+        }
     }
 
     // === Timing and Focus ===
 
-    // Try to parse DateTimeOriginal
-    if data.len() > camera_info_offsets::DATE_TIME_ORIGINAL + 8
-        && let Some(dt) = parse_flir_datetime(data, camera_info_offsets::DATE_TIME_ORIGINAL)
-    {
-        metadata.insert("FLIR:DateTimeOriginal".to_string(), TagValue::String(dt));
+    if let Some(datetime) = flir_camera_datetime(&reader, camera_info_offsets::DATE_TIME_ORIGINAL) {
+        metadata.insert(
+            "FLIR:DateTimeOriginal".to_string(),
+            TagValue::String(datetime),
+        );
     }
 
-    if let Some(focus_steps) = reader.i16_at(camera_info_offsets::FOCUS_STEP_COUNT) {
+    // ExifTool, FLIR.pm: `0x390 => { Name => 'FocusStepCount', Format => 'int16u' },`
+    if let Some(focus_steps) = reader.u16_at(camera_info_offsets::FOCUS_STEP_COUNT) {
         metadata.insert(
             "FLIR:FocusStepCount".to_string(),
             TagValue::Integer(focus_steps as i64),
         );
     }
 
-    if let Some(focus_dist) = reader.f32_at(camera_info_offsets::FOCUS_DISTANCE)
-        && focus_dist > 0.0
-        && focus_dist < 10000.0
-    {
+    // ExifTool, FLIR.pm:
+    // `0x45c => { Name => 'FocusDistance', Format => 'float', PrintConv => 'sprintf("%.1f m",$val) },`
+    if let Some(focus_dist) = reader.f32_at(camera_info_offsets::FOCUS_DISTANCE) {
         metadata.insert(
             "FLIR:FocusDistance".to_string(),
-            TagValue::Float(focus_dist as f64),
+            TagValue::String(format!("{:.1} m", focus_dist)),
         );
     }
 
-    if let Some(frame_rate) = reader.u16_at(camera_info_offsets::FRAME_RATE)
-        && frame_rate > 0
-        && frame_rate <= 1000
-    {
+    // ExifTool, FLIR.pm: `0x464 => { Name => 'FrameRate',  Format => 'int16u' }, #SebastianHani`
+    if let Some(frame_rate) = reader.u16_at(camera_info_offsets::FRAME_RATE) {
         metadata.insert(
             "FLIR:FrameRate".to_string(),
             TagValue::Integer(frame_rate as i64),
@@ -1029,88 +1221,152 @@ fn parse_palette_info_record(data: &[u8], metadata: &mut MetadataMap) {
         metadata,
     );
 
-    // Palette method
+    // ExifTool, FLIR.pm has no PrintConv on either of these, so the raw
+    // numbers are reported:
+    //
+    // ```text
+    //     0x1a => { Name => 'PaletteMethod' }, #JD
+    //     0x1b => { Name => 'PaletteStretch' }, #JD
+    // ```
     if let Some(method) = reader.u8_at(palette_info_offsets::PALETTE_METHOD) {
-        let method_str = match method {
-            0 => "Color Wheel",
-            1 => "Color Bar",
-            2 => "Temperature Bar",
-            _ => "Unknown",
-        };
         metadata.insert(
             "FLIR:PaletteMethod".to_string(),
-            TagValue::String(method_str.to_string()),
+            TagValue::Integer(method as i64),
         );
     }
 
-    // Palette stretch
     if let Some(stretch) = reader.u8_at(palette_info_offsets::PALETTE_STRETCH) {
-        let stretch_str = match stretch {
-            0 => "Linear",
-            1 => "Histogram",
-            2 => "Manual",
-            _ => "Unknown",
-        };
         metadata.insert(
             "FLIR:PaletteStretch".to_string(),
-            TagValue::String(stretch_str.to_string()),
+            TagValue::Integer(stretch as i64),
         );
     }
 
-    // Palette file name and name
-    if let Some(filename) = try_read_string(data, palette_info_offsets::PALETTE_FILE_NAME, 32)
-        && !filename.is_empty()
-    {
-        metadata.insert(
-            "FLIR:PaletteFileName".to_string(),
-            TagValue::String(filename),
-        );
+    // Palette file name and name. ExifTool, FLIR.pm:
+    //
+    // ```text
+    //     0x30 => {
+    //         Name => 'PaletteFileName',
+    //         Format => 'string[32]',
+    //         # (not valid for all images)
+    //         RawConv => q{
+    //             $val =~ s/\0.*//;
+    //             $val =~ /^[\x20-\x7e]{3,31}$/ ? $val : undef;
+    //         },
+    //     },
+    // ```
+    for (offset, tag) in [
+        (
+            palette_info_offsets::PALETTE_FILE_NAME,
+            "FLIR:PaletteFileName",
+        ),
+        (palette_info_offsets::PALETTE_NAME, "FLIR:PaletteName"),
+    ] {
+        if let Some(value) = read_fixed_string(data, offset, 32)
+            && (3..=31).contains(&value.len())
+            && value.bytes().all(|b| (0x20..=0x7e).contains(&b))
+        {
+            metadata.insert(tag.to_string(), TagValue::String(value));
+        }
     }
 
-    if let Some(name) = try_read_string(data, palette_info_offsets::PALETTE_NAME, 32)
-        && !name.is_empty()
-    {
-        metadata.insert("FLIR:PaletteName".to_string(), TagValue::String(name));
-    }
-
-    // Note palette data presence but don't extract full binary
-    if data.len() > palette_info_offsets::PALETTE {
-        let palette_size = data.len() - palette_info_offsets::PALETTE;
-        if palette_size > 0 {
+    // ExifTool, FLIR.pm:
+    //
+    // ```text
+    //     0x70 => {
+    //         Name => 'Palette',
+    //         Format => 'undef[3*$$self{PaletteColors}]',
+    //         Notes => 'Y Cr Cb byte values for each palette color',
+    //         Binary => 1,
+    //     },
+    // ```
+    if let Some(colors) = reader.u8_at(palette_info_offsets::PALETTE_COLORS) {
+        let palette_len = 3 * colors as usize;
+        if palette_len > 0 && palette_info_offsets::PALETTE + palette_len <= data.len() {
             metadata.insert(
                 "FLIR:Palette".to_string(),
-                TagValue::String(format!("(Palette data, {} bytes)", palette_size)),
+                TagValue::String(format!(
+                    "(Binary data {} bytes, use -b option to extract)",
+                    palette_len
+                )),
             );
         }
     }
 }
 
-/// Helper function to insert a temperature value from the reader.
+/// Insert a temperature stored as float Kelvin.
 ///
-/// Validates that the temperature is in a reasonable range for Kelvin values.
+/// ExifTool, FLIR.pm:
+///
+/// ```text
+/// # tag information for floating point Kelvin tag
+/// my %floatKelvin = (
+///     Format => 'float',
+///     ValueConv => '$val - 273.15',
+///     PrintConv => 'sprintf("%.1f C",$val)',
+/// );
+/// ```
 fn insert_temperature(
     reader: &EndianReader,
     offset: usize,
     tag_name: &str,
     metadata: &mut MetadataMap,
 ) {
-    if let Some(temp) = reader.f32_at(offset) {
-        // Valid temperature range: 0K to 10000K (covers any practical thermal measurement)
-        if (0.0..=10000.0).contains(&temp) && temp.is_finite() {
-            metadata.insert(tag_name.to_string(), TagValue::Float(temp as f64));
-        }
+    if let Some(kelvin) = reader.f32_at(offset)
+        && kelvin.is_finite()
+    {
+        metadata.insert(
+            tag_name.to_string(),
+            TagValue::String(format!("{:.1} C", kelvin as f64 - 273.15)),
+        );
     }
 }
 
-/// Helper function to insert an RGB color value.
-fn insert_rgb_color(data: &[u8], offset: usize, tag_name: &str, metadata: &mut MetadataMap) {
-    if offset + 3 <= data.len() {
-        let r = data[offset];
-        let g = data[offset + 1];
-        let b = data[offset + 2];
+/// Insert a float rendered with `sprintf("%.8g")` (ExifTool's `%float8g`).
+fn insert_float8g(
+    reader: &EndianReader,
+    offset: usize,
+    tag_name: &str,
+    metadata: &mut MetadataMap,
+) {
+    if let Some(value) = reader.f32_at(offset) {
         metadata.insert(
             tag_name.to_string(),
-            TagValue::String(format!("#{:02X}{:02X}{:02X}", r, g, b)),
+            TagValue::String(sprintf_g(value as f64, 8)),
+        );
+    }
+}
+
+/// Insert a float rendered with `sprintf("%.6f")` (ExifTool's `%float6f`).
+fn insert_float6f(
+    reader: &EndianReader,
+    offset: usize,
+    tag_name: &str,
+    metadata: &mut MetadataMap,
+) {
+    if let Some(value) = reader.f32_at(offset) {
+        metadata.insert(
+            tag_name.to_string(),
+            TagValue::String(trim_decimal(format!("{:.6}", value))),
+        );
+    }
+}
+
+/// Insert a colour stored as three `int8u` components.
+///
+/// ExifTool, FLIR.pm: `0x06 => { Name => 'AboveColor', Format => 'int8u[3]',
+/// Notes => 'Y Cr Cb color components' }` — reported as space-separated
+/// decimal components, not as a hex triplet.
+fn insert_rgb_color(data: &[u8], offset: usize, tag_name: &str, metadata: &mut MetadataMap) {
+    if offset + 3 <= data.len() {
+        metadata.insert(
+            tag_name.to_string(),
+            TagValue::String(format!(
+                "{} {} {}",
+                data[offset],
+                data[offset + 1],
+                data[offset + 2]
+            )),
         );
     }
 }
@@ -1172,63 +1428,71 @@ fn is_valid_camera_model(model: &str) -> bool {
     printable_count > total / 2 && model.chars().any(|c| c.is_alphanumeric())
 }
 
-/// Parse FLIR datetime format.
+/// Decode the FLIR CameraInfo `DateTimeOriginal` field.
 ///
-/// FLIR stores dates in various formats. This function attempts to parse
-/// the most common format: seconds since 1970 (Unix timestamp) stored as f64.
-fn parse_flir_datetime(data: &[u8], offset: usize) -> Option<String> {
-    if offset + 8 > data.len() {
-        return None;
-    }
+/// ExifTool, FLIR.pm (`CameraInfo` 0x384, `Format => 'undef[10]'`):
+///
+/// ```text
+///     0x384 => {
+///         Name => 'DateTimeOriginal',
+///         Description => 'Date/Time Original',
+///         Format => 'undef[10]',
+///         Groups => { 2 => 'Time' },
+///         RawConv => q{
+///             my $tm = Get32u(\$val, 0);
+///             my $ss = Get32u(\$val, 4) & 0xffff;
+///             my $tz = Get16s(\$val, 8);
+///             ConvertUnixTime($tm - $tz * 60) . sprintf('.%.3d', $ss) . TimeZoneString(-$tz);
+///         },
+///         PrintConv => '$self->ConvertDateTime($val)',
+///     },
+/// ```
+fn flir_camera_datetime(reader: &EndianReader, offset: usize) -> Option<String> {
+    let seconds = reader.u32_at(offset)? as i64;
+    let millis = reader.u32_at(offset + 4)? & 0xffff;
+    let tz_minutes = reader.i16_at(offset + 8)? as i64;
 
-    let reader = EndianReader::little_endian(data);
+    let (year, month, day, hour, minute, second) = unix_to_datetime(seconds - tz_minutes * 60);
 
-    // FLIR typically stores time as seconds since 1970 (f64)
-    if let Some(timestamp) = reader.f64_at(offset)
-        && timestamp > 0.0
-        && timestamp < 4_000_000_000.0
-    {
-        // Valid Unix timestamp range (before ~2096)
-        let secs = timestamp as i64;
-
-        // Convert to datetime components manually
-        // This is a simplified conversion - for production use chrono crate
-        let days_since_epoch = secs / 86400;
-        let time_of_day = secs % 86400;
-
-        let hours = time_of_day / 3600;
-        let minutes = (time_of_day % 3600) / 60;
-        let seconds = time_of_day % 60;
-
-        // Simplified year calculation (not accounting for leap years precisely)
-        let year = 1970 + (days_since_epoch / 365) as i32;
-        let day_of_year = (days_since_epoch % 365) as i32;
-
-        // Approximate month/day (simplified)
-        let (month, day) = approximate_month_day(day_of_year);
-
-        return Some(format!(
-            "{:04}:{:02}:{:02} {:02}:{:02}:{:02}",
-            year, month, day, hours, minutes, seconds
-        ));
-    }
-
-    None
+    Some(format!(
+        "{year:04}:{month:02}:{day:02} {hour:02}:{minute:02}:{second:02}.{millis:03}{tz}",
+        tz = time_zone_string(-tz_minutes)
+    ))
 }
 
-/// Approximate month and day from day of year (simplified calculation).
-fn approximate_month_day(day_of_year: i32) -> (i32, i32) {
-    const DAYS_IN_MONTH: [i32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+/// Render a UTC offset in minutes as ExifTool's `TimeZoneString` does
+/// (`+HH:MM` / `-HH:MM`).
+fn time_zone_string(minutes: i64) -> String {
+    let sign = if minutes < 0 { '-' } else { '+' };
+    let abs = minutes.abs();
+    format!("{sign}{:02}:{:02}", abs / 60, abs % 60)
+}
 
-    let mut remaining = day_of_year;
-    for (i, &days) in DAYS_IN_MONTH.iter().enumerate() {
-        if remaining < days {
-            return ((i + 1) as i32, remaining + 1);
-        }
-        remaining -= days;
-    }
+/// Convert a Unix timestamp to broken-down UTC calendar fields.
+///
+/// Equivalent to ExifTool's `ConvertUnixTime`, which is `gmtime` based, so
+/// leap years are handled exactly rather than approximated.
+fn unix_to_datetime(timestamp: i64) -> (i64, i64, i64, i64, i64, i64) {
+    let days = timestamp.div_euclid(86_400);
+    let time_of_day = timestamp.rem_euclid(86_400);
 
-    (12, 31) // December 31 as fallback
+    let hour = time_of_day / 3600;
+    let minute = (time_of_day % 3600) / 60;
+    let second = time_of_day % 60;
+
+    // Howard Hinnant's `civil_from_days` algorithm.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { y + 1 } else { y };
+
+    (year, month, day, hour, minute, second)
 }
 
 #[cfg(test)]
@@ -1316,38 +1580,90 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    /// Test RGB color extraction
+    /// Colour components are reported as decimal "Y Cr Cb", per FLIR.pm's
+    /// `Format => 'int8u[3]'`.
     #[test]
     fn test_insert_rgb_color() {
-        let data = [0xFF, 0x00, 0x80];
+        let data = [170, 128, 128];
         let mut metadata = MetadataMap::new();
         insert_rgb_color(&data, 0, "TestColor", &mut metadata);
 
-        assert_eq!(metadata.get_string("TestColor"), Some("#FF0080"));
+        assert_eq!(metadata.get_string("TestColor"), Some("170 128 128"));
     }
 
-    /// Test temperature insertion with valid value
+    /// `%floatKelvin` converts to Celsius and prints `sprintf("%.1f C")`.
     #[test]
-    fn test_insert_temperature_valid() {
-        // 293.15K (20C) as little-endian f32
-        let data = [0x66, 0x66, 0x92, 0x43]; // 293.15 in little-endian
+    fn test_insert_temperature_converts_kelvin_to_celsius() {
+        // 293.15 K == 20.0 C, little-endian f32
+        let data = 293.15f32.to_le_bytes();
         let reader = EndianReader::little_endian(&data);
         let mut metadata = MetadataMap::new();
 
         insert_temperature(&reader, 0, "TestTemp", &mut metadata);
 
-        let temp = metadata.get_float("TestTemp");
-        assert!(temp.is_some());
-        let t = temp.unwrap();
-        assert!((t - 293.0).abs() < 1.0); // Allow small rounding
+        assert_eq!(metadata.get_string("TestTemp"), Some("20.0 C"));
     }
 
-    /// Test approximate month/day calculation
+    /// `sprintf("%.8g", ...)` reproduces ExifTool's Planck constant rendering.
     #[test]
-    fn test_approximate_month_day() {
-        assert_eq!(approximate_month_day(0), (1, 1)); // Jan 1
-        assert_eq!(approximate_month_day(31), (2, 1)); // Feb 1
-        assert_eq!(approximate_month_day(364), (12, 31)); // Dec 31 (non-leap year)
+    fn test_sprintf_g_matches_perl() {
+        assert_eq!(sprintf_g(13799.2685546875, 8), "13799.269");
+        assert_eq!(sprintf_g(1374.5, 8), "1374.5");
+        assert_eq!(sprintf_g(0.02224181778728962, 8), "0.022241818");
+    }
+
+    /// ExifTool renders a purely numeric PrintConv as a JSON number, so
+    /// trailing zeros disappear but one decimal digit is kept.
+    #[test]
+    fn test_trim_decimal() {
+        assert_eq!(trim_decimal("0.012620".to_string()), "0.01262");
+        assert_eq!(trim_decimal("1.00".to_string()), "1.0");
+        assert_eq!(trim_decimal("0.80".to_string()), "0.8");
+        assert_eq!(trim_decimal("-0.006670".to_string()), "-0.00667");
+    }
+
+    /// The CameraInfo `DateTimeOriginal` field is a 10-byte binary record:
+    /// `int32u` Unix seconds, `int32u` (& 0xffff) milliseconds and `int16s`
+    /// timezone minutes, per FLIR.pm's RawConv at 0x384.
+    #[test]
+    fn test_flir_camera_datetime() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&1_328_966_228u32.to_le_bytes()); // 2012:02:11 13:17:08 UTC
+        data.extend_from_slice(&253u32.to_le_bytes());
+        data.extend_from_slice(&(-60i16).to_le_bytes());
+
+        let reader = EndianReader::little_endian(&data);
+        assert_eq!(
+            flir_camera_datetime(&reader, 0),
+            Some("2012:02:11 14:17:08.253+01:00".to_string())
+        );
+    }
+
+    /// Leap years must be exact, not approximated.
+    #[test]
+    fn test_unix_to_datetime_leap_year() {
+        // 2012-02-29T00:00:00Z
+        assert_eq!(unix_to_datetime(1_330_473_600), (2012, 2, 29, 0, 0, 0));
+        // 1970-01-01T00:00:00Z
+        assert_eq!(unix_to_datetime(0), (1970, 1, 1, 0, 0, 0));
+        // 2000-03-01T12:34:56Z (400-year leap rule)
+        assert_eq!(unix_to_datetime(951_914_096), (2000, 3, 1, 12, 34, 56));
+    }
+
+    /// A record whose byte-order marker reads >= 0x0100 flips the byte order
+    /// for that record's contents (FLIR.pm `CameraInfoByteOrder`).
+    #[test]
+    fn test_record_endian_flips_on_marker() {
+        // 0x0002 read big-endian == 2, so the outer order is already correct.
+        assert_eq!(
+            record_endian(&[0x00, 0x02], FlirEndian::Big),
+            FlirEndian::Big
+        );
+        // 0x0200 read big-endian == 512 >= 0x0100, so the record is flipped.
+        assert_eq!(
+            record_endian(&[0x02, 0x00], FlirEndian::Big),
+            FlirEndian::Little
+        );
     }
 
     /// Test record entry structure

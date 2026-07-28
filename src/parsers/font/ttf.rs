@@ -21,21 +21,62 @@ const PLATFORM_MACINTOSH: u16 = 1;
 const PLATFORM_WINDOWS: u16 = 3;
 
 /// Platform-specific language IDs for localized name records.
+///
+/// The Macintosh values are the ones ExifTool lists in `%ttLang{Macintosh}`
+/// (Font.pm) -- every value below is quoted from that table, not inferred
+/// from the language's name or position. Two of them were originally wrong
+/// (Spanish as 12, Italian as 4) and the recheck still passed, because
+/// Font.ttf's Spanish and Italian records are 6 and 3: constant 12 matched
+/// nothing, and 4 matched the *Dutch* record, so `FontSubfamily-it` would
+/// have carried Dutch text. A sample only exercises the IDs it happens to
+/// contain, so these must be read off the table rather than trusted to a
+/// green recheck.
 const LANGUAGE_DANISH_MACINTOSH: u16 = 7;
 const LANGUAGE_GERMAN_MACINTOSH: u16 = 2;
 const LANGUAGE_HEBREW_MACINTOSH: u16 = 10;
+const LANGUAGE_SPANISH_MACINTOSH: u16 = 6;
+const LANGUAGE_FINNISH_MACINTOSH: u16 = 13;
+const LANGUAGE_FRENCH_MACINTOSH: u16 = 1;
+const LANGUAGE_ITALIAN_MACINTOSH: u16 = 3;
+const LANGUAGE_DUTCH_MACINTOSH: u16 = 4;
+const LANGUAGE_SWEDISH_MACINTOSH: u16 = 5;
+const LANGUAGE_PORTUGUESE_MACINTOSH: u16 = 8;
+const LANGUAGE_NORWEGIAN_MACINTOSH: u16 = 9;
+const LANGUAGE_JAPANESE_MACINTOSH: u16 = 11;
+const LANGUAGE_CHINESE_TW_MACINTOSH: u16 = 19;
+const LANGUAGE_KOREAN_MACINTOSH: u16 = 23;
+const LANGUAGE_CHINESE_CN_MACINTOSH: u16 = 33;
 const LANGUAGE_DANISH_WINDOWS: u16 = 0x0406;
 const LANGUAGE_GERMAN_WINDOWS: u16 = 0x0407;
 const LANGUAGE_HEBREW_WINDOWS: u16 = 0x040d;
+const LANGUAGE_SPANISH_WINDOWS: u16 = 0x0c0a;
+const LANGUAGE_FINNISH_WINDOWS: u16 = 0x040b;
+const LANGUAGE_FRENCH_WINDOWS: u16 = 0x040c;
+const LANGUAGE_ITALIAN_WINDOWS: u16 = 0x0410;
 const LANGUAGE_ENGLISH_WINDOWS: u16 = 0x0409;
+const LANGUAGE_JAPANESE_WINDOWS: u16 = 0x0411;
+const LANGUAGE_KOREAN_WINDOWS: u16 = 0x0412;
+const LANGUAGE_DUTCH_NL_WINDOWS: u16 = 0x0413;
+const LANGUAGE_CHINESE_TW_WINDOWS: u16 = 0x0404;
+const LANGUAGE_CHINESE_CN_WINDOWS: u16 = 0x0804;
 
-/// Name IDs for name table records
+/// Macintosh encoding (script) IDs from ExifTool's `%ttCharset{Macintosh}`
+/// (Font.pm). Only the two this parser can decode losslessly are named;
+/// see `decode_mac_hebrew` for why the CJK scripts are deliberately absent.
+const MAC_ENCODING_ROMAN: u16 = 0;
+const MAC_ENCODING_HEBREW: u16 = 5;
+
+/// Name IDs for name table records. Names match ExifTool's
+/// `%Image::ExifTool::Font::Name` table (Font.pm), which is what determines
+/// the emitted tag name.
 const NAME_COPYRIGHT: u16 = 0;
 const NAME_FONT_FAMILY: u16 = 1;
 const NAME_FONT_SUBFAMILY: u16 = 2;
+const NAME_FONT_SUBFAMILY_ID: u16 = 3;
 const NAME_FULL_FONT_NAME: u16 = 4;
 const NAME_VERSION: u16 = 5;
 const NAME_POSTSCRIPT_NAME: u16 = 6;
+const NAME_MANUFACTURER: u16 = 8;
 const NAME_DESIGNER: u16 = 9;
 const NAME_VENDOR_URL: u16 = 11;
 const NAME_LICENSE: u16 = 13;
@@ -175,6 +216,86 @@ impl TTFParser {
             .collect()
     }
 
+    /// Decodes Mac OS Hebrew (`%ttCharset{Macintosh}` encoding 5, "MacHebrew").
+    ///
+    /// Bytes below 0x80 are Unicode-identical; the 0x80..=0xFF half is
+    /// transcribed verbatim from ExifTool 13.55's
+    /// `Image/ExifTool/Charset/MacHebrew.pm`, which itself derives from
+    /// unicode.org's APPLE/HEBREW.TXT. Entries are `&str` rather than `char`
+    /// because three of them expand to multiple code points in that table
+    /// (0x81 => [0x05f2,0x05b7], 0xc0 => [0xf86a,0x05dc,0x05b9],
+    /// 0xde => [0x05b8,0xf87f]).
+    ///
+    /// This is not MacRoman with Hebrew letters appended: MacHebrew re-maps
+    /// the whole 0xA0..0xBF band to ASCII punctuation and digits (0xA0 is
+    /// SPACE, not U+00B0 DEGREE; 0xA6 is U+20AA NEW SHEQEL, not PILCROW),
+    /// and swaps the paired delimiters at 0xFB..0xFF. Deriving it from the
+    /// MacRoman table produces plausible-looking mojibake, so it is carried
+    /// straight across from the .pm.
+    fn decode_mac_hebrew(data: &[u8]) -> String {
+        #[rustfmt::skip]
+        const MAC_HEBREW_HIGH: [&str; 128] = [
+            // 0x80
+            "\u{00c4}", "\u{05f2}\u{05b7}", "\u{00c7}", "\u{00c9}",
+            "\u{00d1}", "\u{00d6}", "\u{00dc}", "\u{00e1}",
+            // 0x88
+            "\u{00e0}", "\u{00e2}", "\u{00e4}", "\u{00e3}",
+            "\u{00e5}", "\u{00e7}", "\u{00e9}", "\u{00e8}",
+            // 0x90
+            "\u{00ea}", "\u{00eb}", "\u{00ed}", "\u{00ec}",
+            "\u{00ee}", "\u{00ef}", "\u{00f1}", "\u{00f3}",
+            // 0x98
+            "\u{00f2}", "\u{00f4}", "\u{00f6}", "\u{00f5}",
+            "\u{00fa}", "\u{00f9}", "\u{00fb}", "\u{00fc}",
+            // 0xA0
+            "\u{0020}", "\u{0021}", "\u{0022}", "\u{0023}",
+            "\u{0024}", "\u{0025}", "\u{20aa}", "\u{0027}",
+            // 0xA8
+            "\u{0029}", "\u{0028}", "\u{002a}", "\u{002b}",
+            "\u{002c}", "\u{002d}", "\u{002e}", "\u{002f}",
+            // 0xB0
+            "\u{0030}", "\u{0031}", "\u{0032}", "\u{0033}",
+            "\u{0034}", "\u{0035}", "\u{0036}", "\u{0037}",
+            // 0xB8
+            "\u{0038}", "\u{0039}", "\u{003a}", "\u{003b}",
+            "\u{003c}", "\u{003d}", "\u{003e}", "\u{003f}",
+            // 0xC0
+            "\u{f86a}\u{05dc}\u{05b9}", "\u{201e}", "\u{f89b}", "\u{f89c}",
+            "\u{f89d}", "\u{f89e}", "\u{05bc}", "\u{fb4b}",
+            // 0xC8
+            "\u{fb35}", "\u{2026}", "\u{00a0}", "\u{05b8}",
+            "\u{05b7}", "\u{05b5}", "\u{05b6}", "\u{05b4}",
+            // 0xD0
+            "\u{2013}", "\u{2014}", "\u{201c}", "\u{201d}",
+            "\u{2018}", "\u{2019}", "\u{fb2a}", "\u{fb2b}",
+            // 0xD8
+            "\u{05bf}", "\u{05b0}", "\u{05b2}", "\u{05b1}",
+            "\u{05bb}", "\u{05b9}", "\u{05b8}\u{f87f}", "\u{05b3}",
+            // 0xE0
+            "\u{05d0}", "\u{05d1}", "\u{05d2}", "\u{05d3}",
+            "\u{05d4}", "\u{05d5}", "\u{05d6}", "\u{05d7}",
+            // 0xE8
+            "\u{05d8}", "\u{05d9}", "\u{05da}", "\u{05db}",
+            "\u{05dc}", "\u{05dd}", "\u{05de}", "\u{05df}",
+            // 0xF0
+            "\u{05e0}", "\u{05e1}", "\u{05e2}", "\u{05e3}",
+            "\u{05e4}", "\u{05e5}", "\u{05e6}", "\u{05e7}",
+            // 0xF8
+            "\u{05e8}", "\u{05e9}", "\u{05ea}", "\u{007d}",
+            "\u{005d}", "\u{007b}", "\u{005b}", "\u{007c}",
+        ];
+
+        let mut out = String::with_capacity(data.len());
+        for &byte in data {
+            if byte < 0x80 {
+                out.push(char::from(byte));
+            } else {
+                out.push_str(MAC_HEBREW_HIGH[(byte - 0x80) as usize]);
+            }
+        }
+        out
+    }
+
     /// Extracts a string from the name table
     fn extract_name_string(
         reader: &dyn FileReader,
@@ -204,12 +325,29 @@ impl TTFParser {
                     .collect();
                 String::from_utf16(&utf16_chars).ok()
             }
-            PLATFORM_MACINTOSH if record.encoding_id == 0 => {
+            PLATFORM_MACINTOSH if record.encoding_id == MAC_ENCODING_ROMAN => {
                 // Macintosh encoding 0 is Mac Roman, not UTF-8.
                 Some(Self::decode_mac_roman(str_data))
             }
+            PLATFORM_MACINTOSH if record.encoding_id == MAC_ENCODING_HEBREW => {
+                Some(Self::decode_mac_hebrew(str_data))
+            }
             PLATFORM_MACINTOSH => {
                 // Preserve the previous behavior for unsupported Macintosh encodings.
+                // The remaining Macintosh scripts (MacJapanese, MacKorean,
+                // MacChineseTW, MacChineseCN, ...) are NOT the standard
+                // Shift_JIS/EUC-KR/Big5/GBK codecs, so decoding them with
+                // encoding_rs would emit text that differs from ExifTool.
+                // Measured 2026-07-27 against ExifTool 13.55's own
+                // Charset/Mac*.pm tables: MacJapanese 6878/7192 two-byte
+                // sequences agree with Shift_JIS (1 differ, 313 have no
+                // Shift_JIS mapping at all) plus 68 single-byte overrides
+                // (0x5c is U+00A5 YEN, not backslash); MacKorean 8212/9361
+                // vs EUC-KR (13 differ, 1136 unmapped); MacChineseTW
+                // 13435/13461 vs Big5 (26 differ); MacChineseCN 7462/7480
+                // vs GBK (6 differ, 12 unmapped). A wrong value is worse
+                // than an open gap, so these records are left undecoded
+                // until their tables can be carried verbatim.
                 String::from_utf8(str_data.to_vec()).ok()
             }
             _ => String::from_utf8(str_data.to_vec()).ok(),
@@ -221,12 +359,87 @@ impl TTFParser {
     /// Returns the ExifTool language suffix for supported localized name records.
     fn language_suffix(record: &NameRecord) -> Option<&'static str> {
         match (record.platform_id, record.language_id) {
-            (PLATFORM_MACINTOSH, LANGUAGE_DANISH_MACINTOSH)
-            | (PLATFORM_WINDOWS, LANGUAGE_DANISH_WINDOWS) => Some("da"),
-            (PLATFORM_MACINTOSH, LANGUAGE_GERMAN_MACINTOSH)
-            | (PLATFORM_WINDOWS, LANGUAGE_GERMAN_WINDOWS) => Some("de"),
-            (PLATFORM_MACINTOSH, LANGUAGE_HEBREW_MACINTOSH)
-            | (PLATFORM_WINDOWS, LANGUAGE_HEBREW_WINDOWS) => Some("he"),
+            (PLATFORM_MACINTOSH, LANGUAGE_DANISH_MACINTOSH) => Some("da"),
+            (PLATFORM_MACINTOSH, LANGUAGE_GERMAN_MACINTOSH) => Some("de"),
+            (PLATFORM_MACINTOSH, LANGUAGE_HEBREW_MACINTOSH) => Some("he"),
+            (PLATFORM_MACINTOSH, LANGUAGE_SPANISH_MACINTOSH) => Some("es"),
+            (PLATFORM_MACINTOSH, LANGUAGE_FINNISH_MACINTOSH) => Some("fi"),
+            (PLATFORM_MACINTOSH, LANGUAGE_FRENCH_MACINTOSH) => Some("fr"),
+            (PLATFORM_MACINTOSH, LANGUAGE_ITALIAN_MACINTOSH) => Some("it"),
+            // Macintosh-only below. No Windows LCID is paired with these
+            // because ExifTool's %ttLang{Windows} spells most of them with a
+            // region subtag that %ttLang{Macintosh} does not use -- 0x0414
+            // is 'no-NO' not 'no', 0x041d is 'sv-SE' not 'sv', 0x0816 is
+            // 'pt-PT' and 0x0416 is 'pt-BR', neither of which is 'pt'. Four
+            // of today's backlog patches paired them anyway; that would have
+            // emitted FontSubfamily-no for a record ExifTool reports as
+            // FontSubfamily-no-NO. Only the Macintosh side is claimed here.
+            (PLATFORM_MACINTOSH, LANGUAGE_DUTCH_MACINTOSH) => Some("nl-NL"),
+            (PLATFORM_MACINTOSH, LANGUAGE_SWEDISH_MACINTOSH) => Some("sv"),
+            (PLATFORM_MACINTOSH, LANGUAGE_PORTUGUESE_MACINTOSH) => Some("pt"),
+            (PLATFORM_MACINTOSH, LANGUAGE_NORWEGIAN_MACINTOSH) => Some("no"),
+            // Mapped for completeness, but currently unreachable in practice:
+            // records in these languages carry Macintosh scripts this parser
+            // cannot decode losslessly (see extract_name_string), so they are
+            // dropped before a suffix is ever applied.
+            (PLATFORM_MACINTOSH, LANGUAGE_JAPANESE_MACINTOSH) => Some("ja"),
+            (PLATFORM_MACINTOSH, LANGUAGE_CHINESE_TW_MACINTOSH) => Some("zh-TW"),
+            (PLATFORM_MACINTOSH, LANGUAGE_KOREAN_MACINTOSH) => Some("ko"),
+            (PLATFORM_MACINTOSH, LANGUAGE_CHINESE_CN_MACINTOSH) => Some("zh-CN"),
+            // Windows LCIDs are a SEPARATE table with SEPARATE spellings.
+            // `ProcessTTF` looks the record up in `%ttLang{Windows}` and uses
+            // whatever string it finds verbatim, so the Windows suffix for a
+            // language is not interchangeable with its Macintosh suffix: the
+            // Macintosh side calls German 'de' while %ttLang{Windows} calls
+            // 0x0407 'de-DE'. Pairing the two arms -- which this function did
+            // until now -- emitted `FontSubfamily-de` for a record ExifTool
+            // reports as `FontSubfamily-de-DE`. Every value below is quoted
+            // from %ttLang{Windows} in Font.pm.
+            //
+            // 0x0409 is 'en-US', NOT 'en', so ExifTool suffixes it like any
+            // other language -- `$lang ne 'en'` is false only for the literal
+            // string 'en', which no Windows LCID maps to. Confirmed against
+            // the corpus: `exiftool -G1 combined-samples/Font.dfont`, whose
+            // name table is entirely Plat=3/Windows Lang=0x409, prints
+            // `FontSubfamily-en-US`, `Copyright-en-US`, `FontName-en-US` and
+            // so on for every nameID it carries.
+            (PLATFORM_WINDOWS, LANGUAGE_ENGLISH_WINDOWS) => Some("en-US"),
+            (PLATFORM_WINDOWS, LANGUAGE_DANISH_WINDOWS) => Some("da"),
+            (PLATFORM_WINDOWS, LANGUAGE_GERMAN_WINDOWS) => Some("de-DE"),
+            (PLATFORM_WINDOWS, LANGUAGE_HEBREW_WINDOWS) => Some("he"),
+            (PLATFORM_WINDOWS, LANGUAGE_SPANISH_WINDOWS) => Some("es-ES"),
+            (PLATFORM_WINDOWS, LANGUAGE_FINNISH_WINDOWS) => Some("fi"),
+            (PLATFORM_WINDOWS, LANGUAGE_FRENCH_WINDOWS) => Some("fr-FR"),
+            (PLATFORM_WINDOWS, LANGUAGE_ITALIAN_WINDOWS) => Some("it-IT"),
+            (PLATFORM_WINDOWS, LANGUAGE_JAPANESE_WINDOWS) => Some("ja"),
+            (PLATFORM_WINDOWS, LANGUAGE_KOREAN_WINDOWS) => Some("ko"),
+            (PLATFORM_WINDOWS, LANGUAGE_DUTCH_NL_WINDOWS) => Some("nl-NL"),
+            (PLATFORM_WINDOWS, LANGUAGE_CHINESE_TW_WINDOWS) => Some("zh-TW"),
+            (PLATFORM_WINDOWS, LANGUAGE_CHINESE_CN_WINDOWS) => Some("zh-CN"),
+            _ => None,
+        }
+    }
+
+    /// Maps a name-table record's name ID to the key ExifTool reports it
+    /// under in the `Font` group.
+    ///
+    /// Names are taken from `%Image::ExifTool::Font::Name` in Font.pm, which
+    /// is the table `ProcessTTF` looks the nameID up in. Note that three of
+    /// them do NOT match this parser's older un-prefixed keys: name ID 5 is
+    /// `NameTableVersion` (not "FontVersion") and name ID 6 is
+    /// `PostScriptFontName` (not "PostScriptName"). The legacy keys are left
+    /// in place for the existing TTF: aliases; this is the ExifTool-facing
+    /// spelling.
+    fn font_group_key(name_id: u16) -> Option<&'static str> {
+        match name_id {
+            NAME_COPYRIGHT => Some("Font:Copyright"),
+            NAME_FONT_FAMILY => Some("Font:FontFamily"),
+            NAME_FONT_SUBFAMILY => Some("Font:FontSubfamily"),
+            NAME_FONT_SUBFAMILY_ID => Some("Font:FontSubfamilyID"),
+            NAME_FULL_FONT_NAME => Some("Font:FontName"),
+            NAME_VERSION => Some("Font:NameTableVersion"),
+            NAME_POSTSCRIPT_NAME => Some("Font:PostScriptFontName"),
+            NAME_MANUFACTURER => Some("Font:Manufacturer"),
             _ => None,
         }
     }
@@ -272,9 +485,11 @@ impl TTFParser {
             (NAME_COPYRIGHT, "Copyright"),
             (NAME_FONT_FAMILY, "FontFamily"),
             (NAME_FONT_SUBFAMILY, "FontSubfamily"),
+            (NAME_FONT_SUBFAMILY_ID, "FontSubfamilyID"),
             (NAME_FULL_FONT_NAME, "FontName"),
             (NAME_VERSION, "FontVersion"),
             (NAME_POSTSCRIPT_NAME, "PostScriptName"),
+            (NAME_MANUFACTURER, "Manufacturer"),
             (NAME_DESIGNER, "Designer"),
             (NAME_VENDOR_URL, "VendorURL"),
             (NAME_LICENSE, "License"),
@@ -297,28 +512,20 @@ impl TTFParser {
 
                 // ExifTool reports these name-table values in the shared
                 // Font group as well.
-                let font_key = match *name_id {
-                    NAME_COPYRIGHT => Some("Font:Copyright"),
-                    NAME_FONT_FAMILY => Some("Font:FontFamily"),
-                    NAME_FULL_FONT_NAME => Some("Font:FontName"),
-                    NAME_FONT_SUBFAMILY => Some("Font:FontSubfamily"),
-                    _ => None,
-                };
+                let font_key = Self::font_group_key(*name_id);
                 if let Some(font_key) = font_key {
                     metadata.insert(font_key.to_string(), tag_value);
                 }
             }
         }
 
-        // ExifTool exposes localized name table records with a language suffix.
+        // ExifTool exposes localized name table records with a language
+        // suffix. ProcessTTF applies this to every nameID it knows, not to a
+        // hand-picked subset, so drive it off the same font_group_key table
+        // as the default-language pass above. This subsumes the previous
+        // Copyright-he special case, which only covered nameID 0 in Hebrew.
         for record in &records {
-            let base_key = match record.name_id {
-                NAME_FONT_FAMILY => Some("Font:FontFamily"),
-                NAME_FULL_FONT_NAME => Some("Font:FontName"),
-                NAME_FONT_SUBFAMILY => Some("Font:FontSubfamily"),
-                _ => None,
-            };
-            let Some(base_key) = base_key else {
+            let Some(base_key) = Self::font_group_key(record.name_id) else {
                 continue;
             };
             let Some(language) = Self::language_suffix(record) else {
@@ -328,23 +535,6 @@ impl TTFParser {
                 && !value.is_empty()
             {
                 metadata.insert(format!("{base_key}-{language}"), TagValue::String(value));
-            }
-        }
-
-        // Preserve the localized Hebrew copyright record. The language ID
-        // namespace depends on the name record's platform.
-        for record in records.iter().filter(|record| {
-            record.name_id == NAME_COPYRIGHT
-                && ((record.platform_id == PLATFORM_MACINTOSH
-                    && record.language_id == LANGUAGE_HEBREW_MACINTOSH)
-                    || (record.platform_id == PLATFORM_WINDOWS
-                        && record.language_id == LANGUAGE_HEBREW_WINDOWS))
-        }) {
-            if let Some(value) = Self::extract_name_string(reader, table, record, string_offset)?
-                && !value.is_empty()
-            {
-                metadata.insert("Font:Copyright-he".to_string(), TagValue::String(value));
-                break;
             }
         }
 
@@ -523,6 +713,210 @@ fn add_ttf_tag_aliases(metadata: &mut MetadataMap) {
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+
+    /// A Macintosh name record carrying `language_id`. Only the platform and
+    /// language fields participate in language_suffix; the rest are filler.
+    fn mac_record(language_id: u16) -> NameRecord {
+        NameRecord {
+            platform_id: PLATFORM_MACINTOSH,
+            encoding_id: 0,
+            language_id,
+            name_id: 0,
+            length: 0,
+            offset: 0,
+        }
+    }
+
+    /// Pins every Macintosh language ID to ExifTool's `%ttLang{Macintosh}`
+    /// table (Font.pm). Transcribed from that table, not from memory.
+    ///
+    /// This exists because a green recheck does not prove these are right:
+    /// a sample only exercises the IDs it actually contains, so a wrong
+    /// constant is invisible unless the sample happens to hold a record
+    /// with that ID. Font.ttf holds Dutch (4) but constant-set Italian to
+    /// 4 as well, which silently routed Dutch text into FontSubfamily-it.
+    #[test]
+    fn macintosh_language_ids_match_exiftool_ttlang_table() {
+        // Literal IDs on purpose. Writing LANGUAGE_SPANISH_MACINTOSH here
+        // instead of 6 would make this a tautology -- it would feed the
+        // constant in and assert the constant's own meaning back out, and
+        // pass for any value it held. The literals ARE the table.
+        for (id, expected) in [
+            (1, "fr"),  // %ttLang{Macintosh}: 1 => 'fr'
+            (2, "de"),  // 2 => 'de'
+            (3, "it"),  // 3 => 'it'   (4 is nl-NL, not Italian)
+            (6, "es"),  // 6 => 'es'   (12 is ar, not Spanish)
+            (7, "da"),  // 7 => 'da'
+            (10, "he"), // 10 => 'he'
+            (13, "fi"), // 13 => 'fi'
+            // Added 2026-07-27. Same rule: the number on the left is read off
+            // %ttLang{Macintosh}, not inferred. Two of today's backlog
+            // patches got these wrong in exactly the way this test exists to
+            // catch -- one set Norwegian to 12, which the table gives as
+            // 'ar', and Font.ttf has no Arabic record to expose it.
+            (4, "nl-NL"),  // 4 => 'nl-NL'  (NOT plain 'nl')
+            (5, "sv"),     // 5 => 'sv'
+            (8, "pt"),     // 8 => 'pt'
+            (9, "no"),     // 9 => 'no'     (12 is 'ar', not Norwegian)
+            (11, "ja"),    // 11 => 'ja'
+            (19, "zh-TW"), // 19 => 'zh-TW'
+            (23, "ko"),    // 23 => 'ko'
+            (33, "zh-CN"), // 33 => 'zh-CN'
+        ] {
+            let record = mac_record(id);
+            assert_eq!(
+                TTFParser::language_suffix(&record),
+                Some(expected),
+                "Macintosh language ID {id} must map to {expected:?} per ExifTool %ttLang",
+            );
+        }
+    }
+
+    /// A Windows name record carrying `language_id`.
+    fn windows_record(language_id: u16) -> NameRecord {
+        NameRecord {
+            platform_id: PLATFORM_WINDOWS,
+            encoding_id: 1,
+            language_id,
+            name_id: 0,
+            length: 0,
+            offset: 0,
+        }
+    }
+
+    /// Pins every Windows LCID to ExifTool's `%ttLang{Windows}` table
+    /// (Font.pm), which is a DIFFERENT table from `%ttLang{Macintosh}` with
+    /// DIFFERENT spellings for the same languages.
+    ///
+    /// `ProcessTTF` does `$lang = $ttLang{$sys}{$langID}` and then
+    /// `GetLangInfo($tagInfo, $lang)`, so the suffix is the table's string
+    /// verbatim -- there is no normalisation step that would strip a region
+    /// subtag. Four of these were previously aliased onto the Macintosh
+    /// suffix, so a German Windows record was emitted as `FontSubfamily-de`
+    /// where ExifTool reports `FontSubfamily-de-DE`. Font.ttf cannot expose
+    /// that: every one of its name records is platform 1 (Macintosh).
+    #[test]
+    fn windows_language_ids_match_exiftool_ttlang_table() {
+        // Literal LCIDs and literal ExifTool strings on purpose: naming the
+        // constants here would assert each constant's own value back at
+        // itself and pass for anything they held.
+        for (id, expected) in [
+            (0x0409, "en-US"), // 0x0409 => 'en-US'   (NOT bare 'en')
+            (0x0406, "da"),    // %ttLang{Windows}: 0x0406 => 'da'
+            (0x0407, "de-DE"), // 0x0407 => 'de-DE'   (NOT plain 'de')
+            (0x040b, "fi"),    // 0x040b => 'fi'
+            (0x040c, "fr-FR"), // 0x040c => 'fr-FR'   (NOT plain 'fr')
+            (0x040d, "he"),    // 0x040d => 'he'
+            (0x0410, "it-IT"), // 0x0410 => 'it-IT'   (NOT plain 'it')
+            (0x0411, "ja"),    // 0x0411 => 'ja'
+            (0x0412, "ko"),    // 0x0412 => 'ko'
+            (0x0413, "nl-NL"), // 0x0413 => 'nl-NL'
+            (0x0c0a, "es-ES"), // 0x0c0a => 'es-ES'   (NOT plain 'es')
+            (0x0404, "zh-TW"), // 0x0404 => 'zh-TW'
+            (0x0804, "zh-CN"), // 0x0804 => 'zh-CN'
+        ] {
+            let record = windows_record(id);
+            assert_eq!(
+                TTFParser::language_suffix(&record),
+                Some(expected),
+                "Windows LCID {id:#06x} must map to {expected:?} per ExifTool %ttLang{{Windows}}",
+            );
+        }
+    }
+
+    /// The Windows LCIDs three backlog patches wanted to claim under the
+    /// Macintosh spelling. `%ttLang{Windows}` gives 0x0414 => 'no-NO',
+    /// 0x0416 => 'pt-BR' and 0x041d => 'sv-SE'; claiming them as 'no', 'pt'
+    /// and 'sv' would emit a tag name ExifTool never produces. Leaving them
+    /// unmapped keeps the gap open instead of filling it with a wrong name.
+    #[test]
+    fn windows_region_tagged_language_ids_are_not_claimed_unqualified() {
+        for id in [
+            0x0414, /* no-NO, not 'no' */
+            0x0416, /* pt-BR, not 'pt' */
+            0x041d, /* sv-SE, not 'sv' */
+            0x0816, /* pt-PT, not 'pt' */
+        ] {
+            let record = windows_record(id);
+            assert_eq!(
+                TTFParser::language_suffix(&record),
+                None,
+                "Windows LCID {id:#06x} is spelled with a region subtag in \
+                 %ttLang{{Windows}}; claiming it unqualified would emit a tag \
+                 name ExifTool does not produce",
+            );
+        }
+    }
+
+    /// Macintosh and Windows suffixes for the same language must not be
+    /// assumed equal. This is the property the old paired match arms
+    /// violated.
+    #[test]
+    fn macintosh_and_windows_suffixes_differ_where_exiftool_differs() {
+        // Macintosh 2 => 'de' but Windows 0x0407 => 'de-DE'.
+        assert_eq!(TTFParser::language_suffix(&mac_record(2)), Some("de"));
+        assert_eq!(
+            TTFParser::language_suffix(&windows_record(0x0407)),
+            Some("de-DE")
+        );
+        // Macintosh 3 => 'it' but Windows 0x0410 => 'it-IT'.
+        assert_eq!(TTFParser::language_suffix(&mac_record(3)), Some("it"));
+        assert_eq!(
+            TTFParser::language_suffix(&windows_record(0x0410)),
+            Some("it-IT")
+        );
+    }
+
+    /// The IDs ExifTool assigns to languages this parser does NOT claim.
+    /// Guards the specific failure mode above: mapping one of these to a
+    /// language we do support would emit that record's text under the
+    /// wrong suffix rather than simply leaving a gap open.
+    #[test]
+    fn unclaimed_macintosh_language_ids_stay_unmapped() {
+        for id in [12 /* ar */, 14 /* el */, 32 /* ru */] {
+            let record = mac_record(id);
+            assert_eq!(
+                TTFParser::language_suffix(&record),
+                None,
+                "Macintosh language ID {id} is not a language this parser claims; \
+                 mapping it would mislabel that record's text",
+            );
+        }
+    }
+
+    /// Pins Mac OS Hebrew decoding to ExifTool's Charset/MacHebrew.pm.
+    ///
+    /// The bytes below are the FontFamily record actually stored in
+    /// /tmp/oxidex-exiftool-cache/combined-samples/Font.ttf
+    /// (Plat=1/Macintosh, Enc=5/MacHebrew, Lang=10/he), and the expected
+    /// string is what `exiftool -Font:FontFamily-he` prints for that file.
+    #[test]
+    fn mac_hebrew_decodes_to_exiftool_value() {
+        // 0xF8 0xF2 0xF0 0xF0 0xE4 -> U+05E8 U+05E2 U+05E0 U+05E0 U+05D4
+        let raanana = TTFParser::decode_mac_hebrew(&[0xf8, 0xf2, 0xf0, 0xf0, 0xe4]);
+        assert_eq!(raanana, "\u{5e8}\u{5e2}\u{5e0}\u{5e0}\u{5d4}");
+
+        // The bytes that separate MacHebrew from MacRoman. Decoding this
+        // record with the MacRoman table -- which one backlog patch did by
+        // copying MacRoman and appending the Hebrew block -- yields
+        // "°¶}|" instead. Literals are from MacHebrew.pm.
+        assert_eq!(TTFParser::decode_mac_hebrew(&[0xa0]), " "); // 0xa0 => 0x20
+        assert_eq!(TTFParser::decode_mac_hebrew(&[0xa6]), "\u{20aa}"); // 0xa6 => 0x20aa
+        assert_eq!(TTFParser::decode_mac_hebrew(&[0xfb]), "}"); // 0xfb => 0x7d
+        assert_eq!(TTFParser::decode_mac_hebrew(&[0xff]), "|"); // 0xff => 0x7c
+
+        // The three multi-code-point entries in the table.
+        assert_eq!(TTFParser::decode_mac_hebrew(&[0x81]), "\u{5f2}\u{5b7}");
+        assert_eq!(
+            TTFParser::decode_mac_hebrew(&[0xc0]),
+            "\u{f86a}\u{5dc}\u{5b9}"
+        );
+        assert_eq!(TTFParser::decode_mac_hebrew(&[0xde]), "\u{5b8}\u{f87f}");
+
+        // ASCII is pass-through: this is why FontSubfamily-he ("Regular")
+        // already matched before MacHebrew was wired.
+        assert_eq!(TTFParser::decode_mac_hebrew(b"Regular"), "Regular");
+    }
 
     #[test]
     fn test_ttf_signature_v1() {

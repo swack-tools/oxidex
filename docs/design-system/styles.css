@@ -1,0 +1,9 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500&display=swap");
+@import url("./tokens/colors.css");
+@import url("./tokens/typography.css");
+@import url("./tokens/spacing.css");
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--ox-bg); color: var(--ox-text); font-family: var(--ox-font-body); }
+a { color: var(--ox-blue); text-decoration: none; }
+a:hover { color: var(--ox-accent); text-decoration: underline; }
+::selection { background: rgba(232, 130, 74, 0.3); }

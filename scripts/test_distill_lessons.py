@@ -15,13 +15,17 @@ from distill_lessons import (
     PITFALLS_BULLET_CAP,
     PITFALLS_CHAR_CAP,
     append_lesson,
+    classify_event,
     distill_once,
     encode_lesson_line,
+    event_fingerprint_scoped,
     fingerprint_generic,
     fingerprint_scoped,
+    is_infra_reason,
     main,
     make_lesson,
     migrate_format_memory,
+    rank_by_recurrence,
 )
 
 NOW = 1_784_900_000  # fixed fake clock for every test
@@ -524,6 +528,192 @@ class LedgerContractTests(unittest.TestCase):
         # checklist_id wins over the reason when present.
         self.assertEqual(fingerprint_generic("review_rejected", "C2", "anything"),
                          fingerprint_generic("review_rejected", "C2", "else"))
+
+
+class InfraClassificationTests(unittest.TestCase):
+    """Provider outages are not knowledge. They must be classified infra
+    at the point of append, and excluded from distillation even when a
+    pre-existing row labelled one something else (231 such rows on the
+    live ledger 2026-07-25)."""
+
+    #: The four spellings that dominate the live ledger, with their
+    #: measured counts, plus the two nested forms that slipped past the
+    #: old event-only filter.
+    INFRA_REASONS = (
+        "model call failed: <urlopen error [Errno 8] nodename nor servname "
+        "provided, or not known>",                                    # 226
+        "model call failed: The read operation timed out",            # 60
+        "model call failed: HTTP Error 429: Too Many Requests",       # 54
+        "model call failed: model returned an empty reply",           # 36
+        "FAILED NEF:EXIF:CFAPattern2: model call failed: [Errno 54] "
+        "Connection reset by peer",                                    # nested
+        "review call failed: <urlopen error [Errno 8] nodename nor servname "
+        "provided, or not known>",                                    # nested
+    )
+
+    def test_every_measured_infra_reason_is_recognized(self):
+        for reason in self.INFRA_REASONS:
+            self.assertTrue(is_infra_reason(reason), reason)
+
+    def test_real_lessons_are_not_swallowed_by_the_infra_filter(self):
+        """The regex runs over every real lesson, so it must be narrow.
+        These are genuine domain failures that a sloppier pattern (e.g.
+        the legacy NOISE_RE's bare "timeout") would silently delete."""
+        for reason in (
+            "no diff in model response",
+            "gap count did not decrease",
+            "no working fix after repair attempt",
+            "error[E0308]: mismatched types in timeout_ms handler",
+            "targeted tests (jpeg) regressed: assertion failed at RateLimiter",
+            "PrintConv strings must match Perl byte-for-byte",
+        ):
+            self.assertFalse(is_infra_reason(reason), reason)
+
+    def test_classify_event_folds_outage_reason_onto_infra(self):
+        for reason in self.INFRA_REASONS:
+            self.assertEqual(classify_event("build_failed", reason), "infra")
+        self.assertEqual(classify_event("build_failed", "compile error"), "build_failed")
+
+    def test_make_lesson_classifies_at_append_time(self):
+        """The caller asked for build_failed -- from inside fix_gap's
+        `if not built:` branch an outage looks exactly like one -- and
+        the stored row must still say infra, with fingerprints computed
+        from the CORRECTED event so a replay clusters as infra too."""
+        event = make_lesson(
+            ts=NOW, worker="canon-1", format_name="CR2", module="Canon.pm",
+            event="build_failed",
+            reason="model call failed: HTTP Error 429: Too Many Requests",
+        )
+        self.assertEqual(event["event"], "infra")
+        self.assertEqual(
+            event["fingerprint_scoped"],
+            fingerprint_scoped("infra", "Canon.pm", "", event["reason"]),
+        )
+
+    def test_mislabelled_historic_rows_never_reach_a_knowledge_file(self):
+        """The ledger is append-only: rows written before classify_event
+        existed still carry an outage reason under build_failed. Only a
+        read-side filter can keep them out of the module playbooks."""
+        with tempfile.TemporaryDirectory() as home:
+            rows = [
+                # Enough copies to out-rank the real lesson if they counted.
+                make_event(event="build_failed", reason=r)
+                for r in self.INFRA_REASONS
+            ] * 3
+            rows.append(make_event(event="wrong_value", reason="a genuine lesson"))
+            write_ledger(home, rows)
+            result = run(home)
+            self.assertEqual(result["events_applied"], 1)
+            canon = (knowledge(home) / "modules" / "Canon.md").read_text()
+            self.assertIn("a genuine lesson", canon)
+            for token in ("urlopen", "429", "Connection reset", "model call failed"):
+                self.assertNotIn(token, canon)
+
+
+class RecurrenceRankingTests(unittest.TestCase):
+    """rank_by_recurrence: the mistakes that keep recurring lead, not
+    whatever happened last."""
+
+    def test_repeated_fingerprint_outranks_a_more_recent_one_off(self):
+        events = [
+            make_event(event="wrong_value", reason="PrintConv must match Perl"),
+            make_event(event="wrong_value", reason="PrintConv must match Perl"),
+            make_event(event="wrong_value", reason="PrintConv must match Perl"),
+            make_event(event="build_failed", reason="a one-off compile error"),
+        ]
+        ranked = rank_by_recurrence(events)
+        self.assertEqual([(e["reason"], n) for e, n in ranked], [
+            ("PrintConv must match Perl", 3),
+            ("a one-off compile error", 1),
+        ])
+
+    def test_ties_break_by_recency_then_deterministically(self):
+        events = [
+            make_event(event="build_failed", reason="older one-off"),
+            make_event(event="wrong_value", reason="newer one-off"),
+        ]
+        ranked = rank_by_recurrence(events)
+        self.assertEqual([e["reason"] for e, _ in ranked],
+                         ["newer one-off", "older one-off"])
+        # Same input -> same order, every time (prompt-cache friendly).
+        self.assertEqual(rank_by_recurrence(events), ranked)
+
+    def test_cluster_is_represented_by_its_newest_occurrence(self):
+        events = [
+            make_event(event="wrong_value", reason="index 41 mismatch",
+                       tag_key="JPEG:A", ts="2026-07-24T10:00:00"),
+            make_event(event="wrong_value", reason="index 42 mismatch",
+                       tag_key="JPEG:B", ts="2026-07-24T12:00:00"),
+        ]
+        ranked = rank_by_recurrence(events)
+        # Digit runs normalize away, so both are ONE recurring mistake
+        # (the K1 norm_reason convention) -- shown once, with the newest
+        # occurrence's tag/date.
+        self.assertEqual(len(ranked), 1)
+        representative, count = ranked[0]
+        self.assertEqual(count, 2)
+        self.assertEqual(representative["tag_key"], "JPEG:B")
+
+    def test_max_entries_truncates_after_ranking_not_before(self):
+        """A recurring mistake survives a tight cap even when five more
+        recent one-offs were appended after it -- the exact case a plain
+        newest-first tail got wrong."""
+        # Alphabetic suffixes on purpose: "one-off 1".."one-off 5" would
+        # all fold into ONE cluster, since norm_reason collapses digit
+        # runs to "#" (that is what makes "index 42"/"index 43" the same
+        # mistake -- see test_cluster_is_represented_by_its_newest_occurrence).
+        events = [make_event(event="wrong_value", reason="the recurring one")] * 2
+        events += [make_event(event="build_failed", reason=f"one-off {c}")
+                   for c in "abcde"]
+        ranked = rank_by_recurrence(events, max_entries=2)
+        self.assertEqual(len(ranked), 2)
+        self.assertEqual(ranked[0][0]["reason"], "the recurring one")
+        self.assertEqual(ranked[0][1], 2)
+
+    def test_writer_stamped_fingerprint_is_honored(self):
+        """A row clamped by encode_lesson_line can lose reason text but
+        keeps its fingerprint field -- trusting it keeps the row
+        clustering with its unclamped siblings."""
+        base = make_lesson(ts=NOW, worker="w1", format_name="JPEG",
+                           module="Canon.pm", event="wrong_value",
+                           reason="the full untruncated reason")
+        clamped = dict(base, reason="the full untrunc")
+        self.assertEqual(event_fingerprint_scoped(clamped),
+                         event_fingerprint_scoped(base))
+        self.assertEqual(rank_by_recurrence([base, clamped])[0][1], 2)
+
+    def test_fingerprint_recomputed_when_the_row_carries_none(self):
+        row = {"event": "wrong_value", "module": "Canon.pm", "reason": "r"}
+        self.assertEqual(event_fingerprint_scoped(row),
+                         fingerprint_scoped("wrong_value", "Canon.pm", "", "r"))
+
+    def test_free_prose_rows_are_singletons_and_degenerate_to_newest_first(self):
+        """A CHARACTERIZATION pin, not a fix: free-text prose carries no
+        repeatable identity, so recurrence ranking cannot apply to it and
+        the docstring no longer claims it does. Measured over the live
+        256KB tail 2026-07-25, the `critique` event is 112 rows -> 107
+        clusters, 106 of them singletons (95%), while build_failed is 78
+        rows -> 2 clusters with no singletons at all.
+
+        This pin exists so nobody "fixes" the degeneration by coarsening
+        the clustering key: folding distinct prose into one bucket would
+        fabricate an "xN" recurrence count that format_lessons_tail then
+        shows a worker as evidence of a repeated mistake. The real fix is
+        at the caller -- model_fix_loop.select_module_lessons drops
+        critique rows before ranking.
+        """
+        prose = [
+            "The model most likely assumed the missing tag belonged in the "
+            "top-level container parser rather than the submodule that hosts it.",
+            "The fixer most likely searched for a tag definition table, found "
+            "none, and incorrectly concluded no diff was needed.",
+            "You likely explained the fix in prose instead of emitting a patch.",
+        ]
+        events = [make_event(event="critique", reason=p) for p in prose]
+        ranked = rank_by_recurrence(events)
+        self.assertEqual([n for _, n in ranked], [1, 1, 1])
+        # ...and with every count equal, the order IS newest-first.
+        self.assertEqual([e["reason"] for e, _ in ranked], list(reversed(prose)))
 
 
 class CliTests(unittest.TestCase):

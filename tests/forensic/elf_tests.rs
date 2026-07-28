@@ -179,6 +179,14 @@ fn test_elf64_little_endian_x86_64() {
         metadata.get("EXE:Class"),
         Some(&TagValue::String("64-bit".to_string()))
     );
+    assert_eq!(
+        metadata.get("EXE:ObjectFileType"),
+        Some(&TagValue::String("Executable file".to_string()))
+    );
+    assert_eq!(
+        metadata.get("EXE:CPUType"),
+        Some(&TagValue::String("AMD x86-64".to_string()))
+    );
 }
 
 #[test]
@@ -199,6 +207,14 @@ fn test_elf32_little_endian_x86() {
     assert_eq!(
         metadata.get("EXE:Class"),
         Some(&TagValue::String("32-bit".to_string()))
+    );
+    assert_eq!(
+        metadata.get("EXE:ObjectFileType"),
+        Some(&TagValue::String("Executable file".to_string()))
+    );
+    assert_eq!(
+        metadata.get("EXE:CPUType"),
+        Some(&TagValue::String("i386".to_string()))
     );
 }
 

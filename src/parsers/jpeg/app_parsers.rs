@@ -649,14 +649,40 @@ mod tests {
         let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
             .expect("valid Picture Info APP12 data should parse");
 
-        assert!(
-            metadata.get("APP12:FNumber").is_some(),
-            "FNumber should be exposed in ExifTool's APP12 group"
-        );
+        // APP12.pm:36 `PrintConv => 'sprintf("%.1f",$val)'`
         assert_eq!(
-            metadata.get("APP12:FNumber"),
-            metadata.get("Olympus:FNumber"),
-            "APP12 FNumber should retain the parsed decimal value"
+            metadata.get_string("APP12:FNumber"),
+            Some("11.0"),
+            "APP12 FNumber is printed with one decimal place"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_f_number_strips_agfa_prefix() {
+        // APP12.pm:35 `ValueConv => '$val=~s/^[A-Za-z ]*//;$val',  # Agfa leads with an 'F'`
+        let data = b"[picture info]\r\nFNumber=F2.8\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:FNumber"), Some("2.8"));
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_lowercase_fnumber_is_not_converted() {
+        // ExifTool's table lookup is case-sensitive, so the `Fnumber`
+        // spelling written by the D-620L is added dynamically by
+        // APP12.pm:278 `$tagInfo = { Name => ucfirst $tag };` and keeps the
+        // leading 'F'.
+        let data = b"[picture info]\r\nFnumber=F2.8\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:Fnumber"), Some("F2.8"));
+        assert!(
+            metadata.get("APP12:FNumber").is_none(),
+            "the lowercase spelling must not also emit the table's FNumber tag"
         );
     }
 
@@ -878,6 +904,80 @@ mod tests {
             Some(0),
             "MODE2 should be exposed in ExifTool's APP12 group"
         );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_wb2() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nWB2=30\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_integer("APP12:WB2"), Some(30));
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_wb3() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nWB3=188,4\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:WB3"), Some("188,4"));
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_wb5() {
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nWB5=0\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_integer("APP12:WB5"), Some(0));
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_flash_off_numeric() {
+        let data = b"[picture info]\r\nFlash=0\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_string("APP12:Flash"),
+            Some("Off"),
+            "Flash=0 should be PrintConv'd to Off"
+        );
+    }
+
+    #[test]
+    fn test_parse_olympus_app12_flash_on_numeric() {
+        let data = b"[picture info]\r\nFlash=1\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_string("APP12:Flash"),
+            Some("On"),
+            "Flash=1 should be PrintConv'd to On"
+        );
+    }
+
+    #[test]
+    fn test_parse_picture_info_resolution_and_image_size_are_independent() {
+        // Resolution and ImageSize are two separate fields in ExifTool's
+        // table; ImageSize is not derived from Resolution.
+        //
+        // APP12.pm:73 `Resolution  => { },`
+        // APP12.pm:76 `ImageSize   => { PrintConv => '$val=~tr/-/x/;$val' },`
+        let data = b"[picture info]\r\nResolution=5\r\nImageSize=1280-1024\r\n";
+
+        let metadata = crate::parsers::jpeg::app_segments::parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_integer("APP12:Resolution"), Some(5));
+        assert_eq!(metadata.get_string("APP12:ImageSize"), Some("1280x1024"));
     }
 
     #[test]

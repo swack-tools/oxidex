@@ -44,6 +44,13 @@ order:
    (``model_fix_loop.cargo_test_workspace``).
 7. Auto-log ``machine_accepted`` sweep-review entries for every merged
    commit (``log_sweep_review.append_from_commits``).
+7b. ``cargo fmt --all`` over the assembled branch, committed separately
+   when (and only when) it changes something (``format_sweep_branch``,
+   injectable -- ``fmt_fn``). Nothing upstream of here ever style-checks
+   worker-authored Rust, and CI's "Lint & Audit" job runs ``cargo fmt
+   --all -- --check``, so without this every sweep PR fails CI by
+   construction -- measured on PR #124 (CI run 30186389305: Build & Test
+   green, Lint & Audit red on exactly that step).
 8. ``gh pr create`` (injectable -- ``create_pr_fn``), PR body carrying a
    per-tag evidence table (Tag / Exiftool-Value / Oxidex-Value / Sample
    count) parsed from the merged commits' trailers, plus a
@@ -83,7 +90,7 @@ import squad_merge_loop
 import validate_fix_commit
 import log_sweep_review
 from model_fix_loop import cargo_test_workspace as _real_cargo_test_workspace
-from model_fix_loop import new_oxidex_only_keys
+from model_fix_loop import new_oxidex_only_keys, newly_duplicated_emissions
 from distill_lessons import STALE_HEARTBEAT_SECONDS
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -239,7 +246,7 @@ def save_sweep_state(path, data):
     write_json_atomic(path, data)
 
 
-def collect_green_stamps(home, squads, cursor):
+def collect_green_stamps(home, squads, cursor, repo_root=None, run_git=None, log_fn=print):
     """spec M4 step 2: for every squad, the newest squad-status head
     entry (status="consumed", work_done, carrying a squad_sha) whose ts
     is newer than that squad's cursor entry. Reuses
@@ -255,6 +262,25 @@ def collect_green_stamps(home, squads, cursor):
     failure on every subsequent poll (the same "cannot re-enter -- no
     livelock" property spec M4 states for quarantined patch-ids).
 
+    "Newer" is decided by the stamp's `ts_epoch` INSTANT whenever both
+    sides have one, and only falls back to the legacy naive-local-time
+    `ts` string when either does not. The string alone is wrong twice a
+    year: inside the DST fall-back's repeated hour a LATER instant
+    produces a SMALLER string (measured with TZ=America/Los_Angeles:
+    1793521800 -> "2026-11-01T01:30:00" PDT, then 1793524500 ->
+    "2026-11-01T01:15:00" PST, 2700 real seconds later), so the newest
+    consumed head was filtered out as "not news" and that squad reported
+    no news until its next stamp.
+
+    Both fallbacks are load-bearing, not defensive padding -- they are
+    what makes this a migration rather than a stall. A cursor already on
+    disk holds only `last_ts`, and a squad-status file already on disk
+    holds only `ts`; comparing either against a fresh epoch would be
+    comparing incomparable things. Simply switching `ts` to UTC instead
+    would sort every new stamp BELOW the stored local cursor in any
+    positive-offset zone and stall every squad for the length of the
+    offset.
+
     Returns (stamps, new_cursor): stamps is
     {squad: {"squad_sha", "ts", "formats": [...]}}.
     """
@@ -264,23 +290,66 @@ def collect_green_stamps(home, squads, cursor):
     for squad in squads:
         status = squad_merge_loop.load_squad_status(squad_merge_loop.squad_status_file(home, squad))
         heads = status.get("heads") or {}
-        last_ts = (squads_cursor.get(squad) or {}).get("last_ts") or ""
+        squad_entry = squads_cursor.get(squad) or {}
+        last_ts = squad_entry.get("last_ts") or ""
+        last_epoch = squad_entry.get("last_ts_epoch")
+
+        def is_news(entry, last_ts=last_ts, last_epoch=last_epoch):
+            epoch = entry.get("ts_epoch")
+            if epoch is not None and last_epoch is not None:
+                return float(epoch) > float(last_epoch)
+            return (entry.get("ts") or "") > last_ts
+
         consumed = [
             (sha, entry) for sha, entry in heads.items()
             if entry.get("status") == "consumed" and entry.get("work_done") and entry.get("squad_sha")
-            and (entry.get("ts") or "") > last_ts
+            and is_news(entry)
         ]
         if not consumed:
             continue
-        consumed.sort(key=lambda kv: kv[1].get("ts") or "")
+        consumed.sort(key=squad_merge_loop.stamp_order_key)
         _newest_sha, newest_entry = consumed[-1]
         formats = sorted({entry.get("format") for _sha, entry in consumed if entry.get("format")})
+        squad_sha = newest_entry["squad_sha"]
+        # A stamp records the squad tip AT STAMP TIME. Nothing kept that sha
+        # reachable afterwards, and squad branches get recut routinely --
+        # should_recut does it whenever a branch drifts
+        # DEFAULT_RECUT_BEHIND_COMMITS behind origin/main. Every stamp taken
+        # before a recut then points at a commit built on the OLD base, which
+        # merges into the fresh sweep branch as a guaranteed conflict.
+        # Measured 2026-07-28: the sweep logged "cross-squad conflict merging
+        # squad/exif-core @ a2290721f7d1" round after round while
+        # squad/exif-core had long since been recut to 4a9db27b. Skip a stamp
+        # whose sha is no longer contained in its own branch; the merger will
+        # re-stamp the work against the current tip.
+        if repo_root is not None and run_git is not None:
+            rc, _out, _err = run_git(
+                ["merge-base", "--is-ancestor", squad_sha, f"squad/{squad}"], repo_root)
+            if rc != 0:
+                log_fn(
+                    f"skipping stale stamp for squad/{squad} @ {squad_sha[:12]}: no longer "
+                    f"contained in squad/{squad} (recut since it was stamped)"
+                )
+                # The cursor still advances below, so the dead stamp does not
+                # resurface as news on every subsequent poll.
+                new_cursor["squads"][squad] = {
+                    "last_ts": newest_entry.get("ts"), "last_squad_sha": squad_sha,
+                    **({"last_ts_epoch": float(newest_entry["ts_epoch"])}
+                       if newest_entry.get("ts_epoch") is not None else {}),
+                }
+                continue
         stamps[squad] = {
-            "squad_sha": newest_entry["squad_sha"], "ts": newest_entry.get("ts"), "formats": formats,
+            "squad_sha": squad_sha, "ts": newest_entry.get("ts"), "formats": formats,
         }
-        new_cursor["squads"][squad] = {
+        cursor_entry = {
             "last_ts": newest_entry.get("ts"), "last_squad_sha": newest_entry["squad_sha"],
         }
+        # Only recorded when the stamp actually carried one, so a cursor
+        # written from a legacy stamp keeps comparing by string rather
+        # than inventing an epoch nobody measured.
+        if newest_entry.get("ts_epoch") is not None:
+            cursor_entry["last_ts_epoch"] = float(newest_entry["ts_epoch"])
+        new_cursor["squads"][squad] = cursor_entry
     return stamps, new_cursor
 
 
@@ -407,12 +476,44 @@ def parse_verified_delta(value):
 
 
 def sum_verified_deltas(repo_root, shas, run_git):
-    """Sum of every commit's Verified-trailer delta -- reuses
+    """Sum of every DISTINCT commit's Verified-trailer delta -- reuses
     validate_fix_commit's own commit_message/parse_trailers (`git
-    interpret-trailers --parse`), not a second hand-rolled trailer
-    parser, per spec M4's "reuse validate_fix_commit.py machinery"."""
+    interpret-trailers --parse`), not a second hand-rolled trailer parser,
+    per spec M4's "reuse validate_fix_commit.py machinery".
+
+    DISTINCT is load-bearing, and it is keyed on PATCH-ID. This total is
+    the right-hand side of evaluate_post_merge's `measured_delta >=
+    verified_delta_sum` assertion, and the left-hand side is a MEASUREMENT
+    -- a gap closed twice still measures as one gap closed. Summing a claim
+    once per merged commit therefore compares a deduplicated quantity
+    against a duplicated one, and the sweep fails for over-delivering.
+
+    Measured 2026-07-27 on the live fleet:
+
+        measured gap delta                     40
+        sum(Verified) over all 41 commits     101   <- what this compared to
+        distinct patches                        9
+        sum(Verified) over distinct patches    27   <- actually deliverable
+
+    So the sweep closed 40 gaps against 27 claimed -- over-delivery, which
+    this gate explicitly calls "bonus yield, never a failure" -- and was
+    rejected as `measured gap delta 40 < sum(Verified)=101`. That aborted
+    every sweep and is why no sweep PR had opened.
+
+    The duplication had a cause (#150: several squads consuming the same
+    patch) and that is fixed at the source, but this assertion must be
+    robust on its own: the same patch reaching the sweep twice by any route
+    must never inflate what the sweep is held to."""
     total = 0
+    counted = set()
     for sha in shas:
+        # Same identity the quarantine ledger and the merger use, so "the
+        # same patch" means the same thing everywhere in the pipeline.
+        diff_text = validate_fix_commit.commit_diff(sha, repo_root, run_git)
+        key = validate_fix_commit.compute_patch_id(diff_text, repo_root, run_git) or sha
+        if key in counted:
+            continue
+        counted.add(key)
         message = validate_fix_commit.commit_message(sha, repo_root, run_git)
         trailers = validate_fix_commit.parse_trailers(message, repo_root, run_git)
         for value in trailers.get("Verified", []):
@@ -425,6 +526,56 @@ def sum_verified_deltas(repo_root, shas, run_git):
 # ---------------------------------------------------------------------------
 # Step 5: post-merge semantic recheck
 # ---------------------------------------------------------------------------
+
+def reattach_sweep_branch(repo_root, branch, run_git):
+    """Point `branch` at the current HEAD and check it out ATTACHED.
+    Returns (ok, message).
+
+    Everything after step 5 -- bisection's `git revert` commits, step
+    7b's cargo-fmt commit -- runs on a DETACHED HEAD, because
+    run_post_merge_recheck ends with checkout_fn(repo_root, sweep_tip)
+    and the production checkout_fn (real_checkout, also what
+    parallel_model_fix_loop.default_sweep_fn wires in) is `git checkout
+    --detach`. Commits made there are orphans: the sweep branch ref
+    never moves, and the branch ref is the ONLY thing `git push origin
+    <branch>` and `gh pr create --head <branch>` ever see.
+
+    Measured 2026-07-26 by re-running RunSweepIntegrationTests'
+    full-pass fixture with an fmt_fn that actually rewrites a .rs file
+    (as `cargo fmt --all` does) instead of the no-op lambda that fixture
+    used to inject: branch log = "fix JPEG:Foo | base", HEAD log =
+    "style: cargo fmt --all (sweep publish) | fix JPEG:Foo | base", and
+    `git show <branch>:src/parsers/jpeg/x.rs` still unformatted. The
+    same fixture with a bisected sweep shipped the QUARANTINED squad's
+    regression on the branch, because its revert commits were orphaned
+    too. Net effect on the real fleet: every sweep PR pushed
+    unformatted, CI's `cargo fmt --all -- --check` red (exactly the PR
+    #124 failure step 7b exists to fix), auto_publish_round returns
+    checks_red, nothing ever merges, and an --infinite dispatcher opens
+    one red PR per round forever.
+
+    `checkout -B` is safe here BECAUSE of the guard below and only
+    because of it: HEAD is only ever an append to the branch tip (the
+    merges run while attached; the recheck detaches AT that tip; the
+    reverts append), so `branch` is always an ancestor of HEAD. If it
+    somehow is not, this refuses rather than force-moving a ref --
+    the fleet-wide no-discard invariant.
+    """
+    rc, head, err = run_git(["rev-parse", "HEAD"], repo_root)
+    if rc != 0 or not head.strip():
+        return False, f"could not resolve HEAD: {err.strip()}"
+    rc, _out, err = run_git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], repo_root)
+    if rc != 0:
+        return False, f"sweep branch {branch} no longer exists: {err.strip()}"
+    rc, _out, _err = run_git(["merge-base", "--is-ancestor", branch, "HEAD"], repo_root)
+    if rc != 0:
+        return False, (f"refusing to move {branch} to HEAD: {branch} is not an ancestor of "
+                       f"{head.strip()[:12]} (it carries commits HEAD does not)")
+    rc, _out, err = run_git(["checkout", "-B", branch, head.strip()], repo_root)
+    if rc != 0:
+        return False, f"could not re-attach to {branch}: {err.strip()}"
+    return True, f"re-attached HEAD to {branch}"
+
 
 def run_post_merge_recheck(*, repo_root, formats, cache_dir, comparison_fn, checkout_fn, base_ref, sweep_tip):
     """spec M4 step 5: pre (origin/main-base) vs post (merged sweep
@@ -442,11 +593,44 @@ def run_post_merge_recheck(*, repo_root, formats, cache_dir, comparison_fn, chec
 
 
 def evaluate_post_merge(pre, post, verified_delta_sum):
-    """spec M4 step 5's mechanical assertion: measured gap delta >=
-    Sigma Verified trailers (over-delivery -- an Exif.pm fix closing
-    gaps in nine formats, a table port closing unenumerated siblings --
-    is logged as bonus yield, never a failure), duplicate_emissions
-    empty, new_oxidex_only empty. Returns (ok, measured_delta, problems)."""
+    """spec M4 step 5's mechanical assertion, with one clause demoted.
+
+    BLOCKING: duplicate_emissions empty, new_oxidex_only empty. Both are
+    STRUCTURAL -- they say the merged result emits something it should not,
+    which is true regardless of how many commits produced it. Both have
+    caught real defects: on 2026-07-27 new_oxidex_only caught CR2 emitting a
+    tag literally named 'EXIF:Higher resolution image exists', which is the
+    PrintConv VALUE of OPIProxy (0x15f) used as a tag NAME.
+
+    ADVISORY: `measured gap delta >= sum(Verified)`. This clause cannot work
+    at sweep scale and it blocked every sweep this session.
+
+    The left side is a MEASUREMENT of the merged whole; the right side is a
+    SUM of per-commit claims. That comparison is only valid when the claims
+    are DISJOINT, and across a sweep they routinely are not -- two commits
+    fixing overlapping gaps in one format each honestly claim the gaps they
+    closed, while the measurement counts each closed gap exactly once.
+    Deduplicating identical patches (#151) helps and is kept, but it cannot
+    fix overlap between DIFFERENT patches.
+
+    Measured 2026-07-27 across three consecutive sweeps:
+        measured 40 < sum 101   (41 commits,  9 distinct patches)
+        measured 35 < sum  65   (45 commits, 11 distinct patches)
+    Each aborted the sweep, then sent bisection hunting an offender that did
+    not exist -- and in the last one that hunt MASKED the real CR2 defect
+    above, because no single squad's removal could clear a shortfall that was
+    arithmetic rather than causal.
+
+    Nothing is lost by demoting it. Every commit's own claim is already
+    verified per-commit, twice: the worker's recheck before it commits, and
+    the merger's targeted test plus comparison before it green-stamps. The
+    sweep re-summing those verified claims adds no safety a per-commit gate
+    does not already provide, and it is the only clause here that depends on
+    how the work was PARTITIONED rather than on what the result IS.
+
+    A shortfall is still computed, logged and returned in `problems` so it
+    stays visible in the sweep record. Returns (ok, measured_delta, problems).
+    """
     problems = []
     measured_delta = 0
     has_dup_or_new = False
@@ -455,7 +639,12 @@ def evaluate_post_merge(pre, post, verified_delta_sum):
         pre_count = (pre_report or {}).get("gap_count", 0)
         post_count = (post_report or {}).get("gap_count", 0)
         measured_delta += pre_count - post_count
-        dup = (post_report or {}).get("duplicate_emissions") or []
+        # Same rule as both squad_merge_loop gates: a sweep is answerable for
+        # the duplicates it INTRODUCES, not the ones origin/main already has.
+        # This is the LAST gate before a sweep PR is opened, so leaving it
+        # post-only meant a pre-existing duplicate in any swept format could
+        # veto publication outright -- and no sweep PR has ever opened.
+        dup = newly_duplicated_emissions(pre_report, post_report)
         if dup:
             problems.append(f"{fmt}: duplicate_emissions {dup}")
             has_dup_or_new = True
@@ -463,15 +652,37 @@ def evaluate_post_merge(pre, post, verified_delta_sum):
         if introduced:
             problems.append(f"{fmt}: unexplained new_oxidex_only {introduced}")
             has_dup_or_new = True
+    # Advisory only -- see the docstring. Recorded in `problems` so the
+    # shortfall stays in the sweep record, but it does not gate the push.
     delta_ok = measured_delta >= verified_delta_sum
     if not delta_ok:
         problems.append(f"measured gap delta {measured_delta} < sum(Verified)={verified_delta_sum}")
-    return (delta_ok and not has_dup_or_new), measured_delta, problems
+    return (not has_dup_or_new), measured_delta, problems
 
 
 # ---------------------------------------------------------------------------
 # Mechanical bisection (spec M4 step 5's failure path)
 # ---------------------------------------------------------------------------
+
+#: `git revert` exits NON-ZERO with "nothing to commit, working tree clean" when
+#: the revert produces an EMPTY diff -- the contribution is already absent from
+#: the branch. That is the opposite of a failure: there is nothing to remove.
+#:
+#: Measured 2026-07-27 on sweep/tags-2026-07-27-5: squads exif-core and
+#: panasonic-leica both contributed the SAME fix (identical patch-id
+#: e906c487dec2709f5203d30d5d7ddf6a3b65de20, "fix(rw2): wire 2 missing tags"),
+#: so the second merge added nothing and reverting it was a no-op. The handler
+#: read stderr -- which git leaves EMPTY for this case, putting the message on
+#: stdout -- and reported `could not revert ... ()`, aborting the whole sweep
+#: and blocking every other squad's verified work from publishing.
+_EMPTY_REVERT_MARKERS = ("nothing to commit", "nothing added to commit")
+
+
+def _revert_was_empty(out, err):
+    """True when git refused because the revert would change nothing."""
+    blob = f"{out or ''}\n{err or ''}".lower()
+    return any(m in blob for m in _EMPTY_REVERT_MARKERS)
+
 
 def revert_squad_contribution(repo_root, info, run_git):
     """Undo one squad's contribution to the sweep branch: a controlled
@@ -491,10 +702,14 @@ def revert_squad_contribution(repo_root, info, run_git):
     cleanly (never leaves a conflicted revert sitting in the index) on
     failure. Returns (ok, message)."""
     if info["mode"] == "merge":
-        rc, _out, err = run_git(["revert", "--no-edit", "-m", "1", info["merge_sha"]], repo_root)
+        rc, out, err = run_git(["revert", "--no-edit", "-m", "1", info["merge_sha"]], repo_root)
         if rc != 0:
             run_git(["revert", "--abort"], repo_root)
-            return False, err.strip()
+            if _revert_was_empty(out, err):
+                # Already absent -- another squad contributed the identical
+                # patch first. Nothing to remove IS a successful removal.
+                return True, "nothing to revert (contribution already absent)"
+            return False, err.strip() or out.strip()
         return True, "reverted"
 
     commits = commits_in_range(repo_root, info["range_start"], info["range_end"], run_git)
@@ -506,10 +721,15 @@ def revert_squad_contribution(repo_root, info, run_git):
     if rc != 0:
         run_git(["revert", "--abort"], repo_root)
         return False, err.strip()
-    rc, _out, err = run_git(
+    rc, out, err = run_git(
         ["commit", "-m", f"Revert squad/{info['squad']} contribution {info['range_start'][:12]}..{info['range_end'][:12]}"],
         repo_root,
     )
+    if rc != 0 and _revert_was_empty(out, err):
+        # Same case on the fast-forward path: `revert --no-commit` staged an
+        # empty diff, so `git commit` refuses. The contribution is gone.
+        run_git(["reset", "--hard", "HEAD"], repo_root)
+        return True, "nothing to revert (contribution already absent)"
     if rc != 0:
         # git revert --no-commit itself finished cleanly (nothing to
         # abort there); a plain commit failing is an operational anomaly
@@ -534,6 +754,66 @@ def undo_last_revert(repo_root, run_git):
     return True, "restored"
 
 
+def bisect_lint_failure(*, repo_root, merge_infos, lint_fn, quarantine_path, run_git,
+                        log_fn=print, now_fn=time.time):
+    """Find and quarantine the squad whose contribution breaks the lint gate.
+
+    The semantic recheck has had mechanical bisection since spec M4 step 5;
+    the lint gate never did. It simply refused to push and left the cursor
+    unadvanced so "a later sweep retries these stamps whole" -- which is right
+    for a FLAKY failure and catastrophic for a deterministic one. Measured
+    2026-07-28: one candidate adding a duplicate `0xA405` match arm produced
+    `error: unreachable pattern`, and the sweep retried that identical branch
+    for 36 consecutive rounds, publishing nothing for hours. A candidate that
+    does not compile is more certainly the candidate's fault than any semantic
+    difference, so it should be the easiest to attribute, not the only one
+    with no recovery path.
+
+    Same shape as bisect_sweep_failure: revert ONE squad at a time in
+    deterministic order, re-run the gate, and the first revert that makes it
+    pass names the offender. Returns
+    {"offenders": [...], "surviving_squads": [...], "lint_passed": bool}.
+    """
+    quarantine_entries = squad_merge_loop.load_quarantine(quarantine_path)
+    offenders = []
+    surviving = set(merge_infos)
+
+    def quarantine_squad(squad, reason):
+        info = merge_infos[squad]
+        for sha in commits_contributed(repo_root, info, run_git):
+            patch_id = squad_merge_loop.compute_patch_id_for_sha(repo_root, sha)
+            entry = squad_merge_loop.append_quarantine(
+                quarantine_path, patch_id=patch_id, sha=sha, format_name=None,
+                squad=squad, reason=reason, flags=["sweep-lint-bisection"],
+                quarantine_entries=quarantine_entries, now_fn=now_fn,
+            )
+            quarantine_entries[patch_id] = entry
+
+    for squad in sorted(merge_infos):
+        info = merge_infos[squad]
+        reverted, message = revert_squad_contribution(repo_root, info, run_git)
+        if not reverted:
+            log_fn(f"lint bisection: could not revert {squad} ({message}) -- leaving it in place")
+            continue
+        ok, _ = lint_fn(repo_root)
+        if ok:
+            log_fn(f"lint bisection: {squad} is the offender -- quarantined, staying reverted")
+            quarantine_squad(squad, "overlord sweep lint bisection: breaks cargo clippy")
+            offenders.append(squad)
+            surviving.discard(squad)
+            return {"offenders": offenders, "surviving_squads": sorted(surviving),
+                    "lint_passed": True}
+        restored, r_message = undo_last_revert(repo_root, run_git)
+        if not restored:
+            log_fn(f"lint bisection: could not restore {squad} ({r_message}) -- quarantining it")
+            quarantine_squad(squad, "overlord sweep lint bisection: could not restore after probe")
+            offenders.append(squad)
+            surviving.discard(squad)
+
+    log_fn("lint bisection: no single squad's removal clears the lint gate")
+    return {"offenders": offenders, "surviving_squads": sorted(surviving), "lint_passed": False}
+
+
 def bisect_sweep_failure(*, repo_root, merge_infos, formats, cache_dir, comparison_fn, checkout_fn,
                          base_ref, verified_deltas, quarantine_path, run_git, log_fn=print,
                          now_fn=time.time):
@@ -553,10 +833,45 @@ def bisect_sweep_failure(*, repo_root, merge_infos, formats, cache_dir, comparis
     and reverted -- a fully-aborted sweep round rather than a silently
     shipped bad merge.
 
-    Returns {"offenders": [...], "surviving_squads": [...], "sweep_tip": sha}.
+    Returns {"offenders": [...], "surviving_squads": [...],
+             "unrevertable": [...], "recheck_passed": bool,
+             "sweep_tip": sha}.
+
+    ``unrevertable`` and ``recheck_passed`` exist because the caller must
+    NOT have to infer "whatever bisection rejected is no longer on this
+    branch" from ``offenders``/``surviving_squads``. Until 2026-07-26 it
+    did, and both loops here treat a FAILED ``git revert`` as "carry on"
+    -- the isolation loop ``continue``s, the full-abort loop just logs --
+    so a squad whose revert failed stayed in ``surviving``, run_sweep's
+    ``if not merge_infos:`` abort gate never fired, and the round returned
+    "ok" with the rejected content still on the branch it pushed (and,
+    since #129, auto-squash-merged on green). Both revert-failure
+    triggers are real git behaviour, verified 2026-07-26:
+
+      * empty-diff revert -- the squad's content is already on
+        origin/main under a different sha, so the ``--no-ff`` merge has an
+        empty diff against parent 1 and ``git revert --no-edit -m 1
+        <merge>`` exits 1 printing "nothing to commit, working tree
+        clean" with EMPTY stderr (then ``git revert --abort`` exits 128,
+        "no cherry-pick or revert in progress");
+      * revert CONFLICT -- two squads touching overlapping regions of a
+        shared emitter file merge cleanly but do not revert cleanly. This
+        is the likelier trigger, because the full-abort loop below is
+        ONLY reached on a genuine multi-squad interaction, i.e. exactly
+        when squads have overlapping content.
+
+    ``recheck_passed`` is taken from the recheck calls this function
+    already makes, never re-derived: the isolation loop's winning
+    ``recheck(squad)`` is evaluated at the FINAL HEAD (quarantine_squad
+    only appends to the ledger afterwards) over exactly the surviving
+    set, so it is the honest answer. It stays False on the
+    could-not-restore path, where the last recheck FAILED and the real
+    offender is still on the branch -- previously reported as "ok".
     """
     surviving = dict(merge_infos)
     offenders = []
+    unrevertable = []
+    recheck_passed = False
     quarantine_entries = squad_merge_loop.load_quarantine(quarantine_path)
 
     def quarantine_squad(squad, reason):
@@ -587,12 +902,16 @@ def bisect_sweep_failure(*, repo_root, merge_infos, formats, cache_dir, comparis
         info = merge_infos[squad]
         reverted, message = revert_squad_contribution(repo_root, info, run_git)
         if not reverted:
-            log_fn(f"bisection: could not revert squad/{squad}'s contribution ({message}) -- leaving it in place")
+            log_fn(f"bisection: could not revert squad/{squad}'s contribution ({message}) -- it is "
+                   "STILL ON THE BRANCH and was never cleared by a recheck, so this branch can no "
+                   "longer be pushed (see unrevertable)")
+            unrevertable.append(squad)
             continue
         if recheck(squad):
             log_fn(f"bisection: reverting squad/{squad} clears the sweep -- quarantining its commits")
             quarantine_squad(squad, "overlord sweep bisection: isolated as the offending squad")
             found = True
+            recheck_passed = True
             break
         restored, r_message = undo_last_revert(repo_root, run_git)
         if not restored:
@@ -611,10 +930,16 @@ def bisect_sweep_failure(*, repo_root, merge_infos, formats, cache_dir, comparis
             if reverted:
                 quarantine_squad(squad, "overlord sweep bisection: still failing after isolating every candidate")
             else:
-                log_fn(f"bisection: could not revert squad/{squad} during full abort ({message})")
+                log_fn(f"bisection: could not revert squad/{squad} during full abort ({message}) -- "
+                       "it is STILL ON THE BRANCH, which therefore cannot be pushed")
+                unrevertable.append(squad)
 
     return {
         "offenders": offenders, "surviving_squads": sorted(surviving),
+        # De-duplicated: a squad whose isolation-probe revert failed stays
+        # in `surviving`, so the full-abort loop tries and fails on it a
+        # second time. One entry per squad, one reason to refuse the push.
+        "unrevertable": sorted(set(unrevertable)), "recheck_passed": recheck_passed,
         "sweep_tip": head_sha(repo_root, run_git),
     }
 
@@ -694,9 +1019,34 @@ def render_evidence_table(rows):
 
 
 def render_judgment_queue_section(judgment_entries):
+    """spec M4(e)'s queue, rendered for the PR body -- and rendered
+    HONESTLY, which it was not until 2026-07-26.
+
+    It used to say "flagged for human judgment-queue review before
+    merge". Nothing enforces that. `judgment_entries` is interpolated
+    here and echoed in run_sweep's return dict, and the string "judgment"
+    appears nowhere in parallel_model_fix_loop.py: auto_publish_round
+    branches only on run_sweep's status and on pr_checks_state, so a
+    flagged commit squash-merges on green exactly like an unflagged one.
+    run_sweep also writes verdict="machine_accepted" for every merged
+    commit, flagged ones included, BEFORE this classification runs.
+
+    Making the queue a hard merge gate is a POLICY change with a measured
+    throughput cost, not a wording fix, and it needs the classifier's
+    precision fixed first: both sweep PRs that have ever landed (#124 ->
+    4f3eb99 and #130 -> a2aa0df) are flagged with "touches a
+    value-map/PrintConv-like table", so an unconditional hold today would
+    have published nothing at all. Until then the PR body must not
+    promise a review that no code performs.
+    """
     if not judgment_entries:
         return "No commits in this sweep require judgment-queue review -- everything ships mechanically."
-    lines = ["The following commits are flagged for human judgment-queue review before merge:", ""]
+    lines = [
+        "The following commits are flagged for the judgment queue. This is ADVISORY: nothing in the "
+        "publish path blocks on it, so these commits merge with the rest of the sweep once CI is "
+        "green -- read them here, or after the fact in sweep-review-history.jsonl.",
+        "",
+    ]
     for sha, reasons in judgment_entries:
         lines.append(f"- `{sha[:12]}`: {', '.join(reasons)}")
     return "\n".join(lines)
@@ -714,6 +1064,93 @@ def build_pr_body(*, evidence_rows, judgment_entries, branch):
         "",
         render_judgment_queue_section(judgment_entries),
     ])
+
+
+# ---------------------------------------------------------------------------
+# Step 7b: cargo fmt the sweep branch before it is ever pushed
+# ---------------------------------------------------------------------------
+
+# Deliberately its own commit, and deliberately labelled: a reviewer
+# scrolling the sweep PR's diff must be able to tell "this is rustfmt
+# moving whitespace" from "this is a worker changing tag extraction"
+# without reading either.
+FMT_COMMIT_MESSAGE = """style: cargo fmt --all (sweep publish)
+
+Worker-authored Rust reaches this branch semantically validated but never
+style-checked: validate_fix_commit.py, the per-commit merger check and the
+post-merge recheck all assert behaviour (gap deltas, no duplicate
+emissions, no unexplained oxidex-only keys) and none of them look at
+formatting. CI's "Lint & Audit" job runs `cargo fmt --all -- --check`, so
+an unformatted sweep branch fails CI by construction.
+
+Measured on PR #124 (branch sweep/tags-2026-07-26-1, the first sweep PR
+ever opened): CI run 30186389305 -- "Build & Test" success, "Lint &
+Audit" failure, and the failing step is literally `Run cargo fmt --all --
+--check`. Kept as a separate commit so the tag-fix diffs stay readable.
+"""
+
+
+def real_cargo_fmt(repo_root):
+    """`cargo fmt --all` in repo_root -> (ok, output). Injectable
+    (``fmt_fn``) so hermetic tests never shell out to a real cargo."""
+    result = subprocess.run(  # nosec B603
+        ["cargo", "fmt", "--all"], cwd=repo_root, capture_output=True, text=True,
+    )
+    return result.returncode == 0, (result.stdout + result.stderr).strip()
+
+
+def real_cargo_lint(repo_root):
+    """The EXACT lint gate CI runs -> (ok, output). Injectable (``lint_fn``).
+
+    `cargo clippy --all-features -- -D warnings`, verbatim from
+    .github/workflows/ci.yml. Not `cargo clippy`, and not `--lib`: a laxer
+    invocation than CI's passes locally and fails in CI, which is how a
+    dead assignment reached a PR on 2026-07-27 (#144).
+    """
+    result = subprocess.run(  # nosec B603
+        ["cargo", "clippy", "--all-features", "--", "-D", "warnings"],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    return result.returncode == 0, (result.stdout + result.stderr).strip()
+
+
+def format_sweep_branch(repo_root, run_git, fmt_fn=None, log_fn=print):
+    """Run cargo fmt over the assembled sweep branch and commit the
+    result, if and only if it changed something. Returns
+    {"ok", "committed", "message"}.
+
+    Only tracked *.rs files are staged (`git add -u -- '*.rs'`): rustfmt
+    never creates a file and never touches anything else, so scoping the
+    stage this way makes it impossible for a stray artifact left in the
+    sweep worktree (a comparison report, an editor swapfile) to ride
+    along inside a commit labelled "cargo fmt".
+
+    A cargo fmt that FAILS outright (no rustfmt component installed, a
+    parse error) is logged loudly and reported as ok=False, but is not
+    fatal to the caller: the worst case is the same red "Lint & Audit"
+    the sweep has always had, and a PR left open for a human beats
+    throwing away a branch full of validated fixes.
+    """
+    fmt_fn = fmt_fn or real_cargo_fmt
+    ok, output = fmt_fn(repo_root)
+    if not ok:
+        log_fn(f"cargo fmt --all FAILED on the sweep branch: {output} -- pushing unformatted "
+               "(expect CI's Lint & Audit job to go red on this PR)")
+        return {"ok": False, "committed": False, "message": f"cargo fmt failed: {output}"}
+
+    rc, _out, err = run_git(["add", "-u", "--", "*.rs"], repo_root)
+    if rc != 0:
+        return {"ok": False, "committed": False, "message": f"git add failed: {err.strip()}"}
+    rc, staged, _err = run_git(["diff", "--cached", "--name-only"], repo_root)
+    if rc != 0 or not staged.strip():
+        return {"ok": True, "committed": False, "message": "already cargo-fmt clean"}
+
+    rc, _out, err = run_git(["commit", "-m", FMT_COMMIT_MESSAGE], repo_root)
+    if rc != 0:
+        return {"ok": False, "committed": False, "message": f"git commit failed: {err.strip()}"}
+    files = [line for line in staged.splitlines() if line]
+    log_fn(f"cargo fmt --all reformatted {len(files)} file(s) -- committed separately before push")
+    return {"ok": True, "committed": True, "message": f"committed cargo fmt over {len(files)} file(s)"}
 
 
 # ---------------------------------------------------------------------------
@@ -748,16 +1185,19 @@ def real_create_pr(title, body, branch, base="main", repo_root=REPO_ROOT):
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
+def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn=None,
              squads_toml_path=DEFAULT_SQUADS_TOML, cargo_test_workspace_fn=None, create_pr_fn=None,
-             push_branch_fn=None, run_git=None, now_fn=time.time, log_fn=print, sweep_state_path=None,
-             quarantine_path=None, sweep_review_log_path=None, origin_ref=ORIGIN_MAIN,
-             dispatcher_lock_path=None):
+             push_branch_fn=None, fmt_fn=None, run_git=None, now_fn=time.time, log_fn=print,
+             sweep_state_path=None, quarantine_path=None, sweep_review_log_path=None,
+             origin_ref=ORIGIN_MAIN, dispatcher_lock_path=None):
     """One full overlord sweep pass (spec M4). See module docstring for
     the step-by-step breakdown. Returns a summary dict whose "status"
     is one of: "no_news", "branch_cut_failed", "nothing_merged",
-    "sweep_aborted" (bisection quarantined every candidate),
-    "workspace_tests_failed", "push_failed", "ok".
+    "sweep_aborted" (bisection quarantined every candidate, could not
+    revert a candidate, or ended without a passing recheck -- see
+    bisect_sweep_failure), "reattach_failed", "zero_delta" (the assembled
+    branch is tree-identical to origin_ref: nothing to publish),
+    "workspace_tests_failed", "push_failed", "pr_create_failed", "ok".
     """
     run_git = run_git or default_run_git
     cargo_test_workspace_fn = cargo_test_workspace_fn or _real_cargo_test_workspace
@@ -777,7 +1217,8 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
         log_fn(f"preflight: stale lock(s) {health['stale']} -- informational, not a hard stop")
 
     cursor = load_sweep_state(sweep_state_path)
-    stamps, new_cursor = collect_green_stamps(home, squads, cursor)
+    stamps, new_cursor = collect_green_stamps(
+        home, squads, cursor, repo_root=repo_root, run_git=run_git, log_fn=log_fn)
     if not stamps:
         log_fn("no news since last sweep -- nothing to do")
         return {"status": "no_news", "preflight": health}
@@ -857,12 +1298,96 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
             squad: info for squad, info in merge_infos.items()
             if squad in bisection_result["surviving_squads"]
         }
+        # The invariant "nothing bisection rejected is still on this
+        # branch" is now ESTABLISHED, not inferred. A squad whose revert
+        # failed is still on the branch and was never cleared by a
+        # recheck; a bisection that ended with its last recheck FAILING
+        # (the could-not-restore path) left the real offender on the
+        # branch while quarantining an innocent squad as "the offender".
+        # Either way the branch carries content this round rejected, and
+        # the answer is the same one the orphaned-revert fix landed
+        # yesterday: never push a branch bisection did not clear. Nothing
+        # is lost -- the branch is simply not pushed, the unrevertable /
+        # unverified squads are left OUT of durable_squads, so their
+        # cursor entry stays put and a later sweep retries them whole.
+        if bisection_result["unrevertable"]:
+            log_fn(f"bisection could not revert {bisection_result['unrevertable']} -- REFUSING to "
+                   f"push {branch}: it still carries content this round's recheck rejected. Their "
+                   "stamps are NOT consumed; a later sweep retries them once the revert can succeed.")
+            persist_cursor(durable_squads)
+            return {
+                "status": "sweep_aborted", "branch": branch, "bisection": bisection_result,
+                "failed_squads": failed_squads, "preflight": health,
+            }
         if not merge_infos:
             persist_cursor(durable_squads)
             return {
                 "status": "sweep_aborted", "branch": branch, "bisection": bisection_result,
                 "failed_squads": failed_squads, "preflight": health,
             }
+        if not bisection_result["recheck_passed"]:
+            log_fn(f"bisection finished without a PASSING recheck over {sorted(merge_infos)} -- "
+                   f"REFUSING to push {branch}. Their stamps are NOT consumed; a later sweep "
+                   "retries them whole.")
+            persist_cursor(durable_squads)
+            return {
+                "status": "sweep_aborted", "branch": branch, "bisection": bisection_result,
+                "failed_squads": failed_squads, "preflight": health,
+            }
+
+    # Step 5 left the worktree DETACHED at sweep_tip (see
+    # run_post_merge_recheck), and so did every bisection probe. From
+    # here on the round makes commits again -- bisection's reverts are
+    # already on this HEAD, and step 7b's fmt commit is still to come --
+    # and all of them have to be reachable from the branch ref that gets
+    # pushed. Re-attaching once, here, is the single point that
+    # guarantees it for everything downstream.
+    attached_ok, attach_message = reattach_sweep_branch(repo_root, branch, run_git)
+    if not attached_ok:
+        log_fn(f"could not re-attach HEAD to {branch}: {attach_message} -- refusing to push a branch "
+               "that does not contain this round's work (bisection reverts and/or the cargo fmt "
+               "commit); leaving everything for manual inspection")
+        # Same durability reasoning as workspace_tests_failed below: only
+        # bisection-quarantined offenders are durable, the surviving
+        # squads never reached a PR and must be retried by a later sweep.
+        persist_cursor(durable_squads)
+        return {
+            "status": "reattach_failed", "branch": branch, "message": attach_message,
+            "bisection": bisection_result, "failed_squads": failed_squads, "preflight": health,
+        }
+
+    # The repo's DURABLE idempotency rule: compare the TREE, not the SHA.
+    # A cherry-pick or a squash gives identical content a fresh sha (fresh
+    # committer timestamp), so a stamp whose whole contribution is already
+    # on origin/main still yields a branch that is N commits "ahead" while
+    # being byte-identical in content -- and pushing it restarts CI for
+    # nothing. Two ways in, both measured 2026-07-26: the stamped
+    # squad_sha is already an ancestor of origin/main (real `gh pr create`
+    # then fails outright with "No commits between main and ..."), or
+    # origin/main carries the same content under a squash-created sha
+    # (a real no-op PR, a full CI cycle, and an empty squash commit on
+    # main). The only "did anything happen" gate upstream is
+    # evaluate_post_merge's `measured_delta >= verified_delta_sum`, which
+    # passes vacuously at 0 >= 0.
+    #
+    # Placed here deliberately: after reattach (so HEAD is the branch tip
+    # that would actually be pushed) and BEFORE the multi-minute workspace
+    # suite, the fmt commit, the push and the PR. `--quiet` implies
+    # --exit-code, so rc 0 means "no differences"; two dots, not three, so
+    # a merge that neutralised main's own content is caught too.
+    rc, _out, _err = run_git(["diff", "--quiet", f"{origin_ref}..HEAD"], repo_root)
+    if rc == 0:
+        log_fn(f"{branch} is tree-identical to {origin_ref} -- every stamped contribution is already "
+               "on main; skipping the workspace suite, the fmt commit, the push and the PR")
+        # Advancing IS correct here, and required: the content is
+        # demonstrably landed, so re-collecting these stamps would spin
+        # this same round forever.
+        durable_squads.update(merge_infos.keys())
+        persist_cursor(durable_squads)
+        return {
+            "status": "zero_delta", "branch": branch, "merged_squads": sorted(merge_infos),
+            "failed_squads": failed_squads, "bisection": bisection_result, "preflight": health,
+        }
 
     all_shas = []
     for squad, info in merge_infos.items():
@@ -882,12 +1407,6 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
             "failed_squads": failed_squads, "workspace_output": workspace_output, "preflight": health,
         }
 
-    # Full success from here: every surviving squad's contribution sits on
-    # a cut, semantically-rechecked, workspace-tested sweep branch -- durable
-    # regardless of what happens to the push/PR-creation calls below.
-    durable_squads.update(merge_infos.keys())
-    persist_cursor(durable_squads)
-
     git_runner = log_sweep_review.make_git_runner(repo_root)
     written, _skipped = log_sweep_review.append_from_commits(
         sweep_review_log_path, all_shas, git_runner, verdict="machine_accepted", now_fn=now_fn,
@@ -901,23 +1420,151 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
     body = build_pr_body(evidence_rows=evidence_rows, judgment_entries=judgment_entries, branch=branch)
     title = f"sweep {branch}: {len(all_shas)} tag fix(es) across {len(merge_infos)} squad(s)"
 
+    # Formatting is deliberately the LAST thing to touch the branch.
+    # all_shas / the evidence table / the judgment queue above are the
+    # TAG-FIX commits, and the fmt commit is not one of them: it carries
+    # no trailers, closes no gap, and must not show up as a row in the
+    # PR's evidence table or as an entry in the judgment queue. Running
+    # it after cargo_test_workspace_fn is also deliberate -- rustfmt only
+    # moves whitespace, so re-running a multi-minute workspace suite
+    # afterwards would double the sweep's wall clock for no semantic gain.
+    fmt_result = format_sweep_branch(repo_root, run_git, fmt_fn=fmt_fn, log_fn=log_fn)
+
+    # The lint gate CI will apply, applied BEFORE the push rather than after.
+    #
+    # The sweep already runs cargo fmt here and commits the result, so style
+    # was covered -- but nothing ran clippy, and CI runs
+    # `cargo clippy --all-features -- -D warnings`. Measured 2026-07-27 on
+    # sweep/tags-2026-07-27-8 (PR #154), the first sweep PR this pipeline
+    # opened autonomously: fmt clean, 70 tag trailers, and SIX clippy errors
+    # -- one dead assignment and five `unreachable pattern`s, because two
+    # squads had independently fixed the same X3F/RW2 tags with DIFFERENT
+    # code. Different code means different patch-ids, so the cross-squad
+    # dedup (#150) correctly let both through, and they collided only once
+    # merged.
+    #
+    # A sweep that opens a PR which cannot merge is worse than one that opens
+    # none: it consumes the stamps, looks like success in the log, and leaves
+    # a red branch for a human to untangle.
+    #
+    # Cursor semantics deliberately match the push_failed path below: origin
+    # has nothing, so a retry cannot duplicate a PR or a branch, and the
+    # stamps must NOT be consumed.
+    lint_fn = lint_fn or real_cargo_lint
+    lint_ok, lint_output = lint_fn(repo_root)
+    if not lint_ok:
+        # Leaving the cursor unadvanced is right for a FLAKY lint failure and
+        # catastrophic for a deterministic one: the identical branch is rebuilt
+        # and re-rejected every round forever. Measured 2026-07-28 -- one
+        # candidate adding a duplicate 0xA405 arm ("error: unreachable
+        # pattern") stalled publication for 36 consecutive rounds. So isolate
+        # the offender the same way the semantic recheck does, quarantine it,
+        # and let the surviving squads through on this very round.
+        lint_bisection = bisect_lint_failure(
+            repo_root=repo_root, merge_infos=merge_infos, lint_fn=lint_fn,
+            quarantine_path=quarantine_path, run_git=run_git, log_fn=log_fn, now_fn=now_fn,
+        )
+        if lint_bisection["lint_passed"]:
+            durable_squads.update(lint_bisection["offenders"])
+            merge_infos = {
+                squad: info for squad, info in merge_infos.items()
+                if squad in lint_bisection["surviving_squads"]
+            }
+            if merge_infos:
+                log_fn(
+                    f"lint gate: quarantined {lint_bisection['offenders']} and continuing "
+                    f"with {sorted(merge_infos)}"
+                )
+                lint_ok, lint_output = True, ""
+            else:
+                log_fn("lint gate: every squad was the offender -- nothing left to push")
+    if not lint_ok:
+        tail = lint_output[-2000:]
+        log_fn(f"REFUSING to push {branch}: it does not pass the lint gate CI applies "
+               f"(cargo clippy --all-features -- -D warnings). The branch and its commits are "
+               f"unaffected and the sweep-state cursor for {sorted(merge_infos)} has NOT advanced, "
+               f"so a later sweep retries these stamps whole.\n{tail}")
+        persist_cursor(durable_squads)
+        return {
+            "status": "lint_failed", "branch": branch, "message": tail,
+            "merged_squads": sorted(merge_infos), "failed_squads": failed_squads,
+            "measured_delta": measured_delta, "verified_delta_sum": sum(verified_deltas.values()),
+            "bisection": bisection_result, "judgment_entries": judgment_entries,
+            "preflight": health, "sweep_review_written": len(written), "fmt": fmt_result,
+        }
+
     push_ok, push_message = push_branch_fn(repo_root, branch)
     if not push_ok:
-        log_fn(f"could not push {branch} to origin: {push_message} -- skipping PR creation "
-               "(the sweep branch and its commits are unaffected; retry the push/PR by hand)")
+        log_fn(f"could not push {branch} to origin: {push_message} -- skipping PR creation. The "
+               "sweep branch and its commits are unaffected, and the sweep-state cursor for "
+               f"{sorted(merge_infos)} has NOT advanced, so the next sweep re-collects these exact "
+               f"stamps and retries them whole (or retry by hand: git push -u origin {branch})")
+        # Deliberately NOT durable. Until 2026-07-26 the cursor advanced
+        # for every surviving squad here, on the rationale spelled out
+        # below the push -- "re-sweeping already-pushed content would open
+        # a SECOND PR carrying the same fixes and leave two branches
+        # racing to merge". That rationale is about content ORIGIN HAS. A
+        # failed push means origin has nothing: a retry cannot duplicate a
+        # PR or a branch, so consuming the stamps is pure downside.
+        # Measured 2026-07-26: round 1 push_failed consumed alpha's stamp,
+        # round 2 with a healthy push reported 'no_news', and the
+        # validated fix shipped only because that squad happened to stamp
+        # again later.
+        persist_cursor(durable_squads)
         return {
             "status": "push_failed", "branch": branch, "message": push_message,
             "merged_squads": sorted(merge_infos), "failed_squads": failed_squads,
             "measured_delta": measured_delta, "verified_delta_sum": sum(verified_deltas.values()),
             "bisection": bisection_result, "judgment_entries": judgment_entries, "preflight": health,
-            "sweep_review_written": len(written),
+            "sweep_review_written": len(written), "fmt": fmt_result,
         }
 
+    # The push landed, so origin now HAS this content: from here on
+    # re-sweeping the same stamps would push a second branch and open a
+    # second PR carrying identical fixes. That is what makes the advance
+    # correct at exactly this point -- not one line earlier (see the
+    # push-failure path above) and not one line later, since a failed
+    # `gh pr create` leaves the branch on origin either way.
+    durable_squads.update(merge_infos.keys())
+    persist_cursor(durable_squads)
+
     pr_result = create_pr_fn(title, body, branch, "main")
+    # `gh pr create` fails routinely and quietly: an expired token, a
+    # secondary rate limit, an org rule forbidding PRs from this actor,
+    # no network. Until 2026-07-26 this result was stuffed into the
+    # summary and never looked at, so the round still reported "ok" --
+    # and auto_publish_round then treated the failure as a live PR:
+    # pr_ref_from_result finds no http line in the empty stdout, falls
+    # back to the BRANCH NAME, and wait_for_pr_checks polls `gh pr
+    # checks <branch>` against a branch with no PR (three "unknown"
+    # answers, two 30s sleeps). Net result was an orphan branch on
+    # origin with no PR, the cursor already advanced past its stamps,
+    # 60s burned, and `overlord_sweep.py` exiting 0.
+    #
+    # Only an EXPLICIT {"ok": False} counts as a failure: create_pr_fn is
+    # injectable and several callers return None or a bare URL string,
+    # and inventing a failure for those would be a worse bug than the
+    # one being fixed.
+    if isinstance(pr_result, dict) and "ok" in pr_result and not pr_result["ok"]:
+        detail = (pr_result.get("stderr") or pr_result.get("stdout") or "").strip()
+        log_fn(f"gh pr create FAILED for {branch}: {detail} -- the branch IS pushed and its "
+               "commits are safe, but the sweep-state cursor for "
+               f"{sorted(merge_infos)} has ALREADY advanced (the content is on origin, so "
+               "re-sweeping it would open a duplicate PR): NO future sweep re-collects these "
+               "stamps, and they ship only if you open the PR by hand (`gh pr create --head "
+               f"{branch} --base main`) or that squad produces another green stamp")
+        return {
+            "status": "pr_create_failed", "branch": branch, "pr": pr_result, "message": detail,
+            "fmt": fmt_result, "merged_squads": sorted(merge_infos), "failed_squads": failed_squads,
+            "measured_delta": measured_delta, "verified_delta_sum": sum(verified_deltas.values()),
+            "bisection": bisection_result, "judgment_entries": judgment_entries, "preflight": health,
+            "sweep_review_written": len(written),
+        }
 
     return {
         "status": "ok",
         "branch": branch,
+        "fmt": fmt_result,
         "merged_squads": sorted(merge_infos),
         "failed_squads": failed_squads,
         "measured_delta": measured_delta,
@@ -934,7 +1581,11 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
 # CLI
 # ---------------------------------------------------------------------------
 
-def _real_checkout(repo_root, ref):
+def real_checkout(repo_root, ref):
+    """The real ``checkout_fn`` for the pre/post recheck's detach dance.
+    Public (not _-prefixed) because the dispatcher's own auto-publish
+    step reuses it verbatim when it calls run_sweep in-process -- see
+    parallel_model_fix_loop.default_sweep_fn."""
     subprocess.run(["git", "checkout", "--detach", ref], cwd=repo_root, check=True)  # nosec B603
 
 
@@ -954,13 +1605,23 @@ def main(argv=None):
 
     result = run_sweep(
         repo_root=repo_root, home=home, cache_dir=args.cache_dir, comparison_fn=comparison_fn,
-        checkout_fn=_real_checkout, squads_toml_path=args.squads_toml,
+        checkout_fn=real_checkout, squads_toml_path=args.squads_toml,
     )
     printable = {k: v for k, v in result.items() if k != "pr"}
     print(json.dumps(printable, indent=2, default=str))
-    if result.get("pr") is not None:
+    if result.get("status") == "pr_create_failed":
+        # Loud and unmissable: the branch is on origin but NO PR exists,
+        # and a `PR: {'ok': False, ...}` dict buried under a JSON blob is
+        # not something anyone spots in a cron log.
+        print(f"PR CREATION FAILED for {result.get('branch')} -- the branch is pushed but no PR "
+              f"exists: {result.get('message')}")
+        print(f"  retry with: gh pr create --head {result.get('branch')} --base main")
+    elif result.get("pr") is not None:
         print(f"PR: {result['pr']}")
-    return 0 if result.get("status") in ("ok", "no_news") else 1
+    # "zero_delta" joins the success set: the branch was tree-identical to
+    # origin/main, so there was genuinely nothing to publish -- the same
+    # kind of legitimate no-op as "no_news", not a failure to report.
+    return 0 if result.get("status") in ("ok", "no_news", "zero_delta") else 1
 
 
 if __name__ == "__main__":

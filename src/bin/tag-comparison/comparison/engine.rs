@@ -830,22 +830,39 @@ impl ComparisonEngine {
         }
 
         // Spec M3: any oxidex-side tag key that repeats for the SAME
-        // sample file is a duplicate emission -- the deterministic gate
-        // the literal-string diff backstop (detect_duplicate_tag_insertion
-        // in model_fix_loop.py) is blind to for registry/dynamic-name
-        // emitters. Grouped by (source_file, key) so the same key
-        // appearing once each in several DIFFERENT sample files is never
-        // mistaken for a duplicate; a missing source_file collapses to
-        // one shared "no file" bucket, which is correct as long as the
-        // caller's oxidex_tags already carries per-file provenance.
-        let mut per_file_counts: HashMap<(String, String), usize> = HashMap::new();
+        // sample file WITH A DIFFERENT VALUE is a duplicate emission --
+        // the deterministic gate the literal-string diff backstop
+        // (detect_duplicate_tag_insertion in model_fix_loop.py) is blind
+        // to for registry/dynamic-name emitters. Grouped by (source_file,
+        // key) so the same key appearing once each in several DIFFERENT
+        // sample files is never mistaken for a duplicate; a missing
+        // source_file collapses to one shared "no file" bucket, which is
+        // correct as long as the caller's oxidex_tags already carries
+        // per-file provenance.
+        //
+        // Requiring a value mismatch (not just a repeated key) avoids a
+        // false-positive that blocked every squad's batch full-corpus
+        // check on real-world JPEGs: many cameras genuinely write the
+        // same tag ID into both IFD0 and the ExifIFD with an identical
+        // value (confirmed across Samsung/Canon/Nikon/Olympus/Panasonic/
+        // FujiFilm/Leica samples) -- oxidex correctly keeps both as
+        // distinct "IFD0:X"/"ExifIFD:X" entries, and only this tool's own
+        // ExifTool-style group collapse (normalize_for_comparison, below)
+        // merges them onto one displayed key. That's expected redundancy,
+        // not a bug worth gating publication on. Two DIFFERENT values
+        // colliding on one key, though, is exactly the dynamic/registry
+        // double-emission this gate exists to catch.
+        let mut per_file_values: HashMap<(String, String), HashSet<String>> = HashMap::new();
         for tag in &oxidex_tags {
             let source = tag.source_file.clone().unwrap_or_default();
-            *per_file_counts.entry((source, tag.key())).or_insert(0) += 1;
+            per_file_values
+                .entry((source, tag.key()))
+                .or_default()
+                .insert(tag.value.clone());
         }
         let mut duplicate_keys: HashSet<String> = HashSet::new();
-        for ((_source, key), count) in per_file_counts {
-            if count > 1 {
+        for ((_source, key), values) in per_file_values {
+            if values.len() > 1 {
                 duplicate_keys.insert(key);
             }
         }
@@ -1227,6 +1244,30 @@ mod tests {
         let exiftool_tags = vec![];
 
         let result = ComparisonEngine::compare(oxidex_tags, exiftool_tags, "JPEG", 2, None);
+        assert!(result.duplicate_emissions.is_empty());
+    }
+
+    #[test]
+    fn test_same_key_same_value_same_file_is_not_a_duplicate_emission() {
+        // Real-world case: a camera writes the same tag ID (e.g. Padding,
+        // 0xEA1C) into both IFD0 and the ExifIFD with an identical value.
+        // oxidex correctly keeps these as distinct "IFD0:Padding" /
+        // "ExifIFD:Padding" raw keys; this tool's own ExifTool-style
+        // group collapse merges them onto one displayed key downstream,
+        // but that's expected redundancy, not a genuine double-emission
+        // bug -- must not be flagged.
+        let oxidex_tags = vec![
+            TagInfo::new("Padding".to_string(), "EXIF".to_string(), "0".to_string())
+                .with_source_file("canon.jpg".to_string()),
+            TagInfo::new("Padding".to_string(), "EXIF".to_string(), "0".to_string())
+                .with_source_file("canon.jpg".to_string()),
+        ];
+        let exiftool_tags = vec![
+            TagInfo::new("Padding".to_string(), "EXIF".to_string(), "0".to_string())
+                .with_source_file("canon.jpg".to_string()),
+        ];
+
+        let result = ComparisonEngine::compare(oxidex_tags, exiftool_tags, "JPEG", 1, None);
         assert!(result.duplicate_emissions.is_empty());
     }
 

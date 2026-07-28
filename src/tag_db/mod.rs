@@ -50,106 +50,28 @@ static TAG_ID_TO_NAME_INDEX: LazyLock<HashMap<(u16, FormatFamily), String>> = La
         }
     }
 
-    // Helper function to detect invalid tag names that are actually enum values
-    // These are incorrectly parsed as tags from the YAML database but should be skipped
+    // This used to be ~50 substring and exact-match hacks -- "-bit ",
+    // " Channels", "Profile M", and a literal list containing "Manual",
+    // "Portrait", "Auto", "Uncompressed" -- introduced because the YAML
+    // registry carried 16,014 PrintConv display values as tag entries, and
+    // something had to keep them out of this index.
+    //
+    // The data is fixed at the source now (see
+    // scripts/prune_printconv_tag_entries.py and
+    // tests/tag_registry_invariants.rs), which inverted this filter: it
+    // rejected zero fabrications and one real tag. `Uncompressed` is a
+    // genuine Exif::Main tag at 0xBC03 -- HD Photo's compression value --
+    // and the enum list dropped it, so it could never be identified.
+    //
+    // What survives is the one rule still doing work: XMP::Main is keyed by
+    // namespace prefix (`x`, `mwg-rs`, `acdsee-rs`, `drone-dji`), and those
+    // are SubDirectory routes rather than tags, so they must not claim a
+    // numeric id here. ExifTool has no lowercase-initial tag name.
     fn is_valid_tag_name(name: &str) -> bool {
-        // Skip names that look like enum values or pixel format descriptors
-        // These typically have patterns like:
-        // - "Low", "High", "Soft", "Hard" (single-word enum values)
-        // - "128-bit PRGBA Float", "32-bit BGRA" (WIC pixel format values)
-        // - Names with digits followed by "-bit"
-        // - Names starting with lowercase (unlikely for real EXIF tags)
-
-        // Skip if contains "-bit " pattern (WIC pixel format values)
-        if name.contains("-bit ") {
+        let Some(first) = name.chars().next() else {
             return false;
-        }
-
-        // Skip if name contains " Channels" (WIC formats like "24-bit 3 Channels")
-        if name.contains(" Channels") {
-            return false;
-        }
-
-        // Skip JBIG2 profile names and other compression type strings
-        if name.contains("Profile M")
-            || name.contains("Profile A")
-            || name.contains("Layer Profile")
-            || name.contains(" raster ")
-            || name.contains("grayscale,")
-            || name.contains("color,")
-            || name.contains("multi-page")
-            || name.contains("Resolution/")
-            || name.contains(" rows ")
-            || name.contains(" columns")
-            || name.contains(" sequential")
-            || name.contains(" dither")
-            || name.contains("Sensitivity,")
-            || name.contains("Exposure Index")
-        {
-            return false;
-        }
-
-        // Skip compression/sensor type names that look like descriptions
-        let description_patterns = ["Associated Alpha", "Baseline JPEG", "JBIG color", "JBIG"];
-        for pattern in &description_patterns {
-            if name == *pattern {
-                return false;
-            }
-        }
-
-        // Skip known enum value names that appear with small IDs
-        let enum_values = [
-            "Low",
-            "High",
-            "Soft",
-            "Hard",
-            "Unknown",
-            "None",
-            "On",
-            "Off",
-            "Normal",
-            "Disabled",
-            "Enabled",
-            "Auto",
-            "Manual",
-            "Yes",
-            "No",
-            "Portrait",
-            "Landscape",
-            "Macro",
-            "Close",
-            "Distant",
-            "Program",
-            "Aperture priority",
-            "Shutter priority",
-            "Creative",
-            "Action",
-            "Night",
-            "Long Sector",
-            "Sector",
-            "Lossless",
-            "Lossy",
-            "Uncompressed",
-            "Regenerated",
-            "Shared Data",
-        ];
-        if enum_values.contains(&name) {
-            return false;
-        }
-
-        // Skip names that start with lowercase (most EXIF tags are PascalCase)
-        // but allow certain patterns like "undef", "n/a"
-        if !name.is_empty() {
-            let first_char = name.chars().next().unwrap();
-            if first_char.is_ascii_lowercase()
-                && !name.starts_with("undef")
-                && !name.starts_with("n/a")
-            {
-                return false;
-            }
-        }
-
-        true
+        };
+        !first.is_ascii_lowercase() || name.starts_with("undef") || name.starts_with("n/a")
     }
 
     // Scan all domain tag databases and build reverse index
@@ -327,4 +249,44 @@ pub fn lookup_tag_name(tag_id: u16, ifd_name: &str) -> String {
 
     // Fallback: return hex format if tag not found in database
     format!("{}:0x{:04X}", ifd_name, tag_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Uncompressed` is a genuine `Exif::Main` tag at 0xBC03 -- HD Photo's
+    /// compression value -- but it was unreachable, because the enum-value
+    /// blocklist that kept PrintConv display strings out of this index also
+    /// listed "Uncompressed" verbatim. With the registry corrected at the
+    /// source, the blocklist is gone and the tag identifies.
+    #[test]
+    fn hd_photo_uncompressed_tag_resolves_by_id() {
+        assert_eq!(lookup_tag_name(0xBC03, "IFD0"), "IFD0:Uncompressed");
+    }
+
+    /// The rule that still earns its place. `XMP::Main` is keyed by namespace
+    /// prefix, and those route to sub-tables rather than naming a tag, so they
+    /// must not claim a numeric id. ExifTool has no lowercase-initial tag name.
+    #[test]
+    fn xmp_namespace_prefixes_do_not_claim_tag_ids() {
+        for prefix in ["x", "mwg-rs", "acdsee-rs", "drone-dji"] {
+            assert!(
+                !is_valid_tag_name_for_test(prefix),
+                "{prefix} should not be indexed as a tag name"
+            );
+        }
+        assert!(is_valid_tag_name_for_test("Uncompressed"));
+        assert!(is_valid_tag_name_for_test("ExposureMode"));
+    }
+}
+
+/// Test-only re-export of the index-build name filter; the real one is a
+/// closure-local `fn` inside the `LazyLock`, which tests cannot reach.
+#[cfg(test)]
+fn is_valid_tag_name_for_test(name: &str) -> bool {
+    let Some(first) = name.chars().next() else {
+        return false;
+    };
+    !first.is_ascii_lowercase() || name.starts_with("undef") || name.starts_with("n/a")
 }

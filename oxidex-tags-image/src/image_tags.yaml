@@ -5,10 +5,6 @@ tables:
         name: "BMPVersion"
         writable: false
         description: "BMPVersion tag"
-      - id: "0x007C"
-        name: "Windows V5"
-        writable: false
-        description: "Windows V5 tag"
       - id: "0x0004"
         name: "ImageWidth"
         writable: false
@@ -29,18 +25,6 @@ tables:
         name: "Compression"
         writable: false
         description: "Compression tag"
-      - id: "0x0001"
-        name: "8-Bit RLE"
-        writable: false
-        description: "8-Bit RLE tag"
-      - id: "0x0002"
-        name: "4-Bit RLE"
-        writable: false
-        description: "4-Bit RLE tag"
-      - id: "0x0003"
-        name: "Bitfields"
-        writable: false
-        description: "Bitfields tag"
       - id: "0x0014"
         name: "ImageLength"
         writable: false
@@ -81,14 +65,6 @@ tables:
         name: "ColorSpace"
         writable: false
         description: "ColorSpace tag"
-      - id: "0x0001"
-        name: "Device RGB"
-        writable: false
-        description: "Device RGB tag"
-      - id: "0x0002"
-        name: "Device CMYK"
-        writable: false
-        description: "Device CMYK tag"
       - id: "0x003C"
         name: "RedEndpoint"
         writable: false
@@ -117,18 +93,6 @@ tables:
         name: "RenderingIntent"
         writable: false
         description: "RenderingIntent tag"
-      - id: "0x0002"
-        name: "Proof (LCS_GM_GRAPHICS)"
-        writable: false
-        description: "Proof (LCS_GM_GRAPHICS) tag"
-      - id: "0x0004"
-        name: "Picture (LCS_GM_IMAGES)"
-        writable: false
-        description: "Picture (LCS_GM_IMAGES) tag"
-      - id: "0x0008"
-        name: "Absolute Colorimetric (LCS_GM_ABS_COLORIMETRIC)"
-        writable: false
-        description: "Absolute Colorimetric (LCS_GM_ABS_COLORIMETRIC) tag"
       - id: "0x0070"
         name: "ProfileDataOffset"
         writable: false
@@ -143,10 +107,6 @@ tables:
         name: "BMPVersion"
         writable: false
         description: "BMPVersion tag"
-      - id: "0x0040"
-        name: "OS/2 V2"
-        writable: false
-        description: "OS/2 V2 tag"
       - id: "0x0004"
         name: "ImageWidth"
         writable: false
@@ -191,66 +151,6 @@ tables:
         name: "PixelFormat"
         writable: false
         description: "PixelFormat tag"
-      - id: "0x0001"
-        name: "4:2:0 (chroma at 0.5, 0.5)"
-        writable: false
-        description: "4:2:0 (chroma at 0.5, 0.5) tag"
-      - id: "0x0002"
-        name: "4:2:2 (chroma at 0.5, 0)"
-        writable: false
-        description: "4:2:2 (chroma at 0.5, 0) tag"
-      - id: "0x0003"
-        name: "4:4:4"
-        writable: false
-        description: "4:4:4 tag"
-      - id: "0x0004"
-        name: "4:2:0 (chroma at 0, 0.5)"
-        writable: false
-        description: "4:2:0 (chroma at 0, 0.5) tag"
-      - id: "0x0005"
-        name: "4:2:2 (chroma at 0, 0)"
-        writable: false
-        description: "4:2:2 (chroma at 0, 0) tag"
-      - id: "0x1000"
-        name: "Alpha Exists (color not premultiplied)"
-        writable: false
-        description: "Alpha Exists (color not premultiplied) tag"
-      - id: "0x1004"
-        name: "Alpha Exists (color premultiplied)"
-        writable: false
-        description: "Alpha Exists (color premultiplied) tag"
-      - id: "0x0004"
-        name: "Alpha Exists (W color component)"
-        writable: false
-        description: "Alpha Exists (W color component) tag"
-      - id: "0x0001"
-        name: "RGB"
-        writable: false
-        description: "RGB tag"
-      - id: "0x0002"
-        name: "YCgCo"
-        writable: false
-        description: "YCgCo tag"
-      - id: "0x0003"
-        name: "YCbCr (BT 709)"
-        writable: false
-        description: "YCbCr (BT 709) tag"
-      - id: "0x0004"
-        name: "YCbCr (BT 2020)"
-        writable: false
-        description: "YCbCr (BT 2020) tag"
-      - id: "0x0005"
-        name: "BT 2020 Constant Luminance"
-        writable: false
-        description: "BT 2020 Constant Luminance tag"
-      - id: "0x0001"
-        name: "Limited Range"
-        writable: false
-        description: "Limited Range tag"
-      - id: "0x0003"
-        name: "Extension Present"
-        writable: false
-        description: "Extension Present tag"
       - id: "0x0006"
         name: "ImageWidth"
         writable: false
@@ -409,34 +309,6 @@ tables:
         name: "Orientation"
         writable: false
         description: "Orientation tag"
-      - id: "0x0001"
-        name: "Mirror vertical"
-        writable: false
-        description: "Mirror vertical tag"
-      - id: "0x0002"
-        name: "Mirror horizontal"
-        writable: false
-        description: "Mirror horizontal tag"
-      - id: "0x0003"
-        name: "Rotate 180"
-        writable: false
-        description: "Rotate 180 tag"
-      - id: "0x0004"
-        name: "Mirror horizontal and rotate 270 CW"
-        writable: false
-        description: "Mirror horizontal and rotate 270 CW tag"
-      - id: "0x0005"
-        name: "Rotate 90 CW"
-        writable: false
-        description: "Rotate 90 CW tag"
-      - id: "0x0006"
-        name: "Rotate 270 CW"
-        writable: false
-        description: "Rotate 270 CW tag"
-      - id: "0x0007"
-        name: "Mirror horizontal and rotate 90 CW"
-        writable: false
-        description: "Mirror horizontal and rotate 90 CW tag"
       - id: "0x0302"
         name: "ImageElements"
         writable: false
@@ -457,246 +329,14 @@ tables:
         name: "ComponentsConfiguration"
         writable: false
         description: "ComponentsConfiguration tag"
-      - id: "0x0001"
-        name: "Red (R)"
-        writable: false
-        description: "Red (R) tag"
-      - id: "0x0002"
-        name: "Green (G)"
-        writable: false
-        description: "Green (G) tag"
-      - id: "0x0003"
-        name: "Blue (B)"
-        writable: false
-        description: "Blue (B) tag"
-      - id: "0x0004"
-        name: "Alpha (matte)"
-        writable: false
-        description: "Alpha (matte) tag"
-      - id: "0x0006"
-        name: "Luminance (Y)"
-        writable: false
-        description: "Luminance (Y) tag"
-      - id: "0x0007"
-        name: "Chrominance (Cb, Cr, subsampled by two)"
-        writable: false
-        description: "Chrominance (Cb, Cr, subsampled by two) tag"
-      - id: "0x0008"
-        name: "Depth (Z)"
-        writable: false
-        description: "Depth (Z) tag"
-      - id: "0x0009"
-        name: "Composite video"
-        writable: false
-        description: "Composite video tag"
-      - id: "0x0032"
-        name: "R, G, B"
-        writable: false
-        description: "R, G, B tag"
-      - id: "0x0033"
-        name: "R, G, B, Alpha"
-        writable: false
-        description: "R, G, B, Alpha tag"
-      - id: "0x0034"
-        name: "Alpha, B, G, R"
-        writable: false
-        description: "Alpha, B, G, R tag"
-      - id: "0x0064"
-        name: "Cb, Y, Cr, Y (4:2:2)"
-        writable: false
-        description: "Cb, Y, Cr, Y (4:2:2) tag"
-      - id: "0x0065"
-        name: "Cb, Y, A, Cr, Y, A (4:2:2:4)"
-        writable: false
-        description: "Cb, Y, A, Cr, Y, A (4:2:2:4) tag"
-      - id: "0x0066"
-        name: "Cb, Y, Cr (4:4:4)"
-        writable: false
-        description: "Cb, Y, Cr (4:4:4) tag"
-      - id: "0x0067"
-        name: "Cb, Y, Cr, A (4:4:4:4)"
-        writable: false
-        description: "Cb, Y, Cr, A (4:4:4:4) tag"
-      - id: "0x0096"
-        name: "User-defined 2 component element"
-        writable: false
-        description: "User-defined 2 component element tag"
-      - id: "0x0097"
-        name: "User-defined 3 component element"
-        writable: false
-        description: "User-defined 3 component element tag"
-      - id: "0x0098"
-        name: "User-defined 4 component element"
-        writable: false
-        description: "User-defined 4 component element tag"
-      - id: "0x0099"
-        name: "User-defined 5 component element"
-        writable: false
-        description: "User-defined 5 component element tag"
-      - id: "0x009A"
-        name: "User-defined 6 component element"
-        writable: false
-        description: "User-defined 6 component element tag"
-      - id: "0x009B"
-        name: "User-defined 7 component element"
-        writable: false
-        description: "User-defined 7 component element tag"
-      - id: "0x009C"
-        name: "User-defined 8 component element"
-        writable: false
-        description: "User-defined 8 component element tag"
       - id: "0x0321"
         name: "TransferCharacteristic"
         writable: false
         description: "TransferCharacteristic tag"
-      - id: "0x0001"
-        name: "Printing density"
-        writable: false
-        description: "Printing density tag"
-      - id: "0x0002"
-        name: "Linear"
-        writable: false
-        description: "Linear tag"
-      - id: "0x0003"
-        name: "Logarithmic"
-        writable: false
-        description: "Logarithmic tag"
-      - id: "0x0004"
-        name: "Unspecified video"
-        writable: false
-        description: "Unspecified video tag"
-      - id: "0x0005"
-        name: "SMPTE 274M"
-        writable: false
-        description: "SMPTE 274M tag"
-      - id: "0x0006"
-        name: "ITU-R 709-4"
-        writable: false
-        description: "ITU-R 709-4 tag"
-      - id: "0x0007"
-        name: "ITU-R 601-5 system B or G (625)"
-        writable: false
-        description: "ITU-R 601-5 system B or G (625) tag"
-      - id: "0x0008"
-        name: "ITU-R 601-5 system M (525)"
-        writable: false
-        description: "ITU-R 601-5 system M (525) tag"
-      - id: "0x0009"
-        name: "Composite video (NTSC)"
-        writable: false
-        description: "Composite video (NTSC) tag"
-      - id: "0x000A"
-        name: "Composite video (PAL)"
-        writable: false
-        description: "Composite video (PAL) tag"
-      - id: "0x000B"
-        name: "Z (depth) - linear"
-        writable: false
-        description: "Z (depth) - linear tag"
-      - id: "0x000C"
-        name: "Z (depth) - homogeneous"
-        writable: false
-        description: "Z (depth) - homogeneous tag"
-      - id: "0x000D"
-        name: "SMPTE ADX"
-        writable: false
-        description: "SMPTE ADX tag"
-      - id: "0x000E"
-        name: "ITU-R 2020 NCL"
-        writable: false
-        description: "ITU-R 2020 NCL tag"
-      - id: "0x000F"
-        name: "ITU-R 2020 CL"
-        writable: false
-        description: "ITU-R 2020 CL tag"
-      - id: "0x0010"
-        name: "IEC 61966-2-4 xvYCC"
-        writable: false
-        description: "IEC 61966-2-4 xvYCC tag"
-      - id: "0x0011"
-        name: "ITU-R 2100 NCL/PQ"
-        writable: false
-        description: "ITU-R 2100 NCL/PQ tag"
-      - id: "0x0012"
-        name: "ITU-R 2100 ICtCp/PQ"
-        writable: false
-        description: "ITU-R 2100 ICtCp/PQ tag"
-      - id: "0x0013"
-        name: "ITU-R 2100 NCL/HLG"
-        writable: false
-        description: "ITU-R 2100 NCL/HLG tag"
-      - id: "0x0014"
-        name: "ITU-R 2100 ICtCp/HLG"
-        writable: false
-        description: "ITU-R 2100 ICtCp/HLG tag"
-      - id: "0x0015"
-        name: "RP 431-2:2011 Gama 2.6"
-        writable: false
-        description: "RP 431-2:2011 Gama 2.6 tag"
-      - id: "0x0016"
-        name: "IEC 61966-2-1 sRGB"
-        writable: false
-        description: "IEC 61966-2-1 sRGB tag"
       - id: "0x0322"
         name: "ColorimetricSpecification"
         writable: false
         description: "ColorimetricSpecification tag"
-      - id: "0x0001"
-        name: "Printing density"
-        writable: false
-        description: "Printing density tag"
-      - id: "0x0004"
-        name: "Unspecified video"
-        writable: false
-        description: "Unspecified video tag"
-      - id: "0x0005"
-        name: "SMPTE 274M"
-        writable: false
-        description: "SMPTE 274M tag"
-      - id: "0x0006"
-        name: "ITU-R 709-4"
-        writable: false
-        description: "ITU-R 709-4 tag"
-      - id: "0x0007"
-        name: "ITU-R 601-5 system B or G (625)"
-        writable: false
-        description: "ITU-R 601-5 system B or G (625) tag"
-      - id: "0x0008"
-        name: "ITU-R 601-5 system M (525)"
-        writable: false
-        description: "ITU-R 601-5 system M (525) tag"
-      - id: "0x0009"
-        name: "Composite video (NTSC)"
-        writable: false
-        description: "Composite video (NTSC) tag"
-      - id: "0x000A"
-        name: "Composite video (PAL)"
-        writable: false
-        description: "Composite video (PAL) tag"
-      - id: "0x000D"
-        name: "SMPTE ADX"
-        writable: false
-        description: "SMPTE ADX tag"
-      - id: "0x000E"
-        name: "ITU-R 2020"
-        writable: false
-        description: "ITU-R 2020 tag"
-      - id: "0x000F"
-        name: "P3D65"
-        writable: false
-        description: "P3D65 tag"
-      - id: "0x0010"
-        name: "P3DCI"
-        writable: false
-        description: "P3DCI tag"
-      - id: "0x0011"
-        name: "P3D60"
-        writable: false
-        description: "P3D60 tag"
-      - id: "0x0012"
-        name: "ACES"
-        writable: false
-        description: "ACES tag"
       - id: "0x0323"
         name: "BitDepth"
         writable: false
@@ -921,14 +561,6 @@ tables:
         name: "InterleavedField"
         writable: false
         description: "InterleavedField tag"
-      - id: "0x0001"
-        name: "Odd"
-        writable: false
-        description: "Odd tag"
-      - id: "0x0002"
-        name: "Even"
-        writable: false
-        description: "Even tag"
   - name: JPEG::Adobe
     tags:
       - id: "0x0000"
@@ -947,14 +579,6 @@ tables:
         name: "ColorTransform"
         writable: false
         description: "ColorTransform tag"
-      - id: "0x0001"
-        name: "YCbCr"
-        writable: false
-        description: "YCbCr tag"
-      - id: "0x0002"
-        name: "YCCK"
-        writable: false
-        description: "YCCK tag"
   - name: JPEG::AdobeCM
     tags:
       - id: "0x0000"
@@ -991,34 +615,6 @@ tables:
         name: "JPSFlags"
         writable: false
         description: "JPSFlags tag"
-      - id: "0x0001"
-        name: "Half width"
-        writable: false
-        description: "Half width tag"
-      - id: "0x0002"
-        name: "Left field first"
-        writable: false
-        description: "Left field first tag"
-      - id: "0x0001"
-        name: "Left Eye"
-        writable: false
-        description: "Left Eye tag"
-      - id: "0x0002"
-        name: "Right Eye"
-        writable: false
-        description: "Right Eye tag"
-      - id: "0x0002"
-        name: "Side By Side"
-        writable: false
-        description: "Side By Side tag"
-      - id: "0x0003"
-        name: "Over Under"
-        writable: false
-        description: "Over Under tag"
-      - id: "0x0004"
-        name: "Anaglyph"
-        writable: false
-        description: "Anaglyph tag"
       - id: "0x000D"
         name: "JPSType"
         writable: false
@@ -1057,18 +653,10 @@ tables:
         name: "ImageClass"
         writable: false
         description: "ImageClass tag"
-      - id: "0x0004"
-        name: "Tactical Imagery"
-        writable: false
-        description: "Tactical Imagery tag"
       - id: "0x000A"
         name: "JPEGProcess"
         writable: false
         description: "JPEGProcess tag"
-      - id: "0x0004"
-        name: "Extended sequential DCT, Huffman coding, 12-bit samples"
-        writable: false
-        description: "Extended sequential DCT, Huffman coding, 12-bit samples tag"
       - id: "0x000B"
         name: "Quality"
         writable: false
@@ -1095,22 +683,6 @@ tables:
         name: "ProfileID"
         writable: false
         description: "ProfileID tag"
-      - id: "0x0001"
-        name: "Continuous-tone Base"
-        writable: false
-        description: "Continuous-tone Base tag"
-      - id: "0x0002"
-        name: "Continuous-tone Progressive"
-        writable: false
-        description: "Continuous-tone Progressive tag"
-      - id: "0x0003"
-        name: "Bi-level Facsimile"
-        writable: false
-        description: "Bi-level Facsimile tag"
-      - id: "0x0004"
-        name: "Continuous-tone Facsimile"
-        writable: false
-        description: "Continuous-tone Facsimile tag"
       - id: "0x0003"
         name: "ColorComponents"
         writable: false
@@ -1127,50 +699,6 @@ tables:
         name: "ColorSpace"
         writable: false
         description: "ColorSpace tag"
-      - id: "0x0001"
-        name: "YCbCr, ITU-R BT 709, video"
-        writable: false
-        description: "YCbCr, ITU-R BT 709, video tag"
-      - id: "0x0002"
-        name: "No color space specified"
-        writable: false
-        description: "No color space specified tag"
-      - id: "0x0003"
-        name: "YCbCr, ITU-R BT 601-1, RGB"
-        writable: false
-        description: "YCbCr, ITU-R BT 601-1, RGB tag"
-      - id: "0x0004"
-        name: "YCbCr, ITU-R BT 601-1, video"
-        writable: false
-        description: "YCbCr, ITU-R BT 601-1, video tag"
-      - id: "0x0008"
-        name: "Gray-scale"
-        writable: false
-        description: "Gray-scale tag"
-      - id: "0x0009"
-        name: "PhotoYCC"
-        writable: false
-        description: "PhotoYCC tag"
-      - id: "0x000A"
-        name: "RGB"
-        writable: false
-        description: "RGB tag"
-      - id: "0x000B"
-        name: "CMY"
-        writable: false
-        description: "CMY tag"
-      - id: "0x000C"
-        name: "CMYK"
-        writable: false
-        description: "CMYK tag"
-      - id: "0x000D"
-        name: "YCCK"
-        writable: false
-        description: "YCCK tag"
-      - id: "0x000E"
-        name: "CIELab"
-        writable: false
-        description: "CIELab tag"
       - id: "0x000F"
         name: "BitsPerSample"
         writable: false
@@ -1179,38 +707,10 @@ tables:
         name: "Compression"
         writable: false
         description: "Compression tag"
-      - id: "0x0001"
-        name: "Modified Huffman"
-        writable: false
-        description: "Modified Huffman tag"
-      - id: "0x0002"
-        name: "Modified READ"
-        writable: false
-        description: "Modified READ tag"
-      - id: "0x0003"
-        name: "Modified Modified READ"
-        writable: false
-        description: "Modified Modified READ tag"
-      - id: "0x0004"
-        name: "JBIG"
-        writable: false
-        description: "JBIG tag"
-      - id: "0x0005"
-        name: "JPEG"
-        writable: false
-        description: "JPEG tag"
       - id: "0x0011"
         name: "ResolutionUnit"
         writable: false
         description: "ResolutionUnit tag"
-      - id: "0x0001"
-        name: "inches"
-        writable: false
-        description: "inches tag"
-      - id: "0x0002"
-        name: "cm"
-        writable: false
-        description: "cm tag"
       - id: "0x0012"
         name: "YResolution"
         writable: false
@@ -1247,18 +747,6 @@ tables:
         name: "MandatoryBackground"
         writable: false
         description: "MandatoryBackground tag"
-      - id: "0x0001"
-        name: "Color Mandatory, Image Advisory"
-        writable: false
-        description: "Color Mandatory, Image Advisory tag"
-      - id: "0x0002"
-        name: "Color Advisory, Image Mandatory"
-        writable: false
-        description: "Color Advisory, Image Mandatory tag"
-      - id: "0x0003"
-        name: "Color and Image Mandatory"
-        writable: false
-        description: "Color and Image Mandatory tag"
       - id: "0x0007"
         name: "BackgroundImageID"
         writable: false
@@ -1285,22 +773,6 @@ tables:
         name: "ColorType"
         writable: false
         description: "ColorType tag"
-      - id: "0x0002"
-        name: "RGB"
-        writable: false
-        description: "RGB tag"
-      - id: "0x0003"
-        name: "Palette"
-        writable: false
-        description: "Palette tag"
-      - id: "0x0004"
-        name: "Grayscale with Alpha"
-        writable: false
-        description: "Grayscale with Alpha tag"
-      - id: "0x0006"
-        name: "RGB with Alpha"
-        writable: false
-        description: "RGB with Alpha tag"
       - id: "0x000A"
         name: "Compression"
         writable: false
@@ -1413,46 +885,10 @@ tables:
         name: "ImageType"
         writable: false
         description: "ImageType tag"
-      - id: "0x0001"
-        name: "PNG"
-        writable: false
-        description: "PNG tag"
-      - id: "0x0002"
-        name: "JNG"
-        writable: false
-        description: "JNG tag"
       - id: "0x0003"
         name: "DeltaType"
         writable: false
         description: "DeltaType tag"
-      - id: "0x0001"
-        name: "Pixel Addition"
-        writable: false
-        description: "Pixel Addition tag"
-      - id: "0x0002"
-        name: "Alpha Addition"
-        writable: false
-        description: "Alpha Addition tag"
-      - id: "0x0003"
-        name: "Color Addition"
-        writable: false
-        description: "Color Addition tag"
-      - id: "0x0004"
-        name: "Pixel Replacement"
-        writable: false
-        description: "Pixel Replacement tag"
-      - id: "0x0005"
-        name: "Alpha Replacement"
-        writable: false
-        description: "Alpha Replacement tag"
-      - id: "0x0006"
-        name: "Color Replacement"
-        writable: false
-        description: "Color Replacement tag"
-      - id: "0x0007"
-        name: "No Change"
-        writable: false
-        description: "No Change tag"
       - id: "0x0004"
         name: "BlockSize"
         writable: false
@@ -1495,18 +931,6 @@ tables:
         name: "ColorType"
         writable: false
         description: "ColorType tag"
-      - id: "0x000A"
-        name: "Color"
-        writable: false
-        description: "Color tag"
-      - id: "0x000C"
-        name: "Gray Alpha"
-        writable: false
-        description: "Gray Alpha tag"
-      - id: "0x000E"
-        name: "Color Alpha"
-        writable: false
-        description: "Color Alpha tag"
       - id: "0x0009"
         name: "BitDepth"
         writable: false
@@ -1527,10 +951,6 @@ tables:
         name: "AlphaCompression"
         writable: false
         description: "AlphaCompression tag"
-      - id: "0x0008"
-        name: "JNG 8-bit Grayscale JDAA"
-        writable: false
-        description: "JNG 8-bit Grayscale JDAA tag"
       - id: "0x000E"
         name: "AlphaFilter"
         writable: false
@@ -1553,34 +973,6 @@ tables:
         name: "TerminationCondition"
         writable: false
         description: "TerminationCondition tag"
-      - id: "0x0001"
-        name: "Decoder discretion, not cacheable"
-        writable: false
-        description: "Decoder discretion, not cacheable tag"
-      - id: "0x0002"
-        name: "User discretion, not cacheable"
-        writable: false
-        description: "User discretion, not cacheable tag"
-      - id: "0x0003"
-        name: "External signal, not cacheable"
-        writable: false
-        description: "External signal, not cacheable tag"
-      - id: "0x0004"
-        name: "Deterministic, cacheable"
-        writable: false
-        description: "Deterministic, cacheable tag"
-      - id: "0x0005"
-        name: "Decoder discretion, cacheable"
-        writable: false
-        description: "Decoder discretion, cacheable tag"
-      - id: "0x0006"
-        name: "User discretion, cacheable"
-        writable: false
-        description: "User discretion, cacheable tag"
-      - id: "0x0007"
-        name: "External signal, cacheable"
-        writable: false
-        description: "External signal, cacheable tag"
       - id: "0x0006"
         name: "IterationMinMax"
         writable: false
@@ -1705,22 +1097,6 @@ tables:
         name: "Orientation"
         writable: false
         description: "Orientation tag"
-      - id: "0x0002"
-        name: "Flipped left-right, then up-down"
-        writable: false
-        description: "Flipped left-right, then up-down tag"
-      - id: "0x0004"
-        name: "Flipped left-right"
-        writable: false
-        description: "Flipped left-right tag"
-      - id: "0x0006"
-        name: "Flipped up-down"
-        writable: false
-        description: "Flipped up-down tag"
-      - id: "0x0008"
-        name: "Tiled"
-        writable: false
-        description: "Tiled tag"
       - id: "0x000F"
         name: "OffsetOrigin"
         writable: false
@@ -1772,29 +1148,9 @@ tables:
         writable: false
         description: "TerminationAction tag"
       - id: "0x0001"
-        name: "Display Nothing"
-        writable: false
-        description: "Display Nothing tag"
-      - id: "0x0002"
-        name: "Show First Frame"
-        writable: false
-        description: "Show First Frame tag"
-      - id: "0x0003"
-        name: "Repeat Sequence"
-        writable: false
-        description: "Repeat Sequence tag"
-      - id: "0x0001"
         name: "IterationEndAction"
         writable: false
         description: "IterationEndAction tag"
-      - id: "0x0001"
-        name: "Display Nothing"
-        writable: false
-        description: "Display Nothing tag"
-      - id: "0x0002"
-        name: "Show First Frame"
-        writable: false
-        description: "Show First Frame tag"
       - id: "0x0002"
         name: "Delay"
         writable: false
@@ -1803,60 +1159,6 @@ tables:
         name: "IterationMax"
         writable: false
         description: "IterationMax tag"
-  - name: OpenEXR::Main
-    tags:
-      - id: "0x000A"
-        name: "Long names"
-        writable: false
-        description: "Long names tag"
-      - id: "0x000B"
-        name: "Deep data"
-        writable: false
-        description: "Deep data tag"
-      - id: "0x000C"
-        name: "Multipart"
-        writable: false
-        description: "Multipart tag"
-      - id: "0x0001"
-        name: "RLE"
-        writable: false
-        description: "RLE tag"
-      - id: "0x0002"
-        name: "ZIPS"
-        writable: false
-        description: "ZIPS tag"
-      - id: "0x0003"
-        name: "ZIP"
-        writable: false
-        description: "ZIP tag"
-      - id: "0x0004"
-        name: "PIZ"
-        writable: false
-        description: "PIZ tag"
-      - id: "0x0005"
-        name: "PXR24"
-        writable: false
-        description: "PXR24 tag"
-      - id: "0x0006"
-        name: "B44"
-        writable: false
-        description: "B44 tag"
-      - id: "0x0007"
-        name: "B44A"
-        writable: false
-        description: "B44A tag"
-      - id: "0x0001"
-        name: "Cube"
-        writable: false
-        description: "Cube tag"
-      - id: "0x0001"
-        name: "Decreasing Y"
-        writable: false
-        description: "Decreasing Y tag"
-      - id: "0x0002"
-        name: "Random Y"
-        writable: false
-        description: "Random Y tag"
   - name: PCX::Main
     tags:
       - id: "0x0000"
@@ -1867,22 +1169,6 @@ tables:
         name: "Software"
         writable: false
         description: "Software tag"
-      - id: "0x0002"
-        name: "PC Paintbrush 2.8 (with palette)"
-        writable: false
-        description: "PC Paintbrush 2.8 (with palette) tag"
-      - id: "0x0003"
-        name: "PC Paintbrush 2.8 (without palette)"
-        writable: false
-        description: "PC Paintbrush 2.8 (without palette) tag"
-      - id: "0x0004"
-        name: "PC Paintbrush for Windows"
-        writable: false
-        description: "PC Paintbrush for Windows tag"
-      - id: "0x0005"
-        name: "PC Paintbrush 3.0+"
-        writable: false
-        description: "PC Paintbrush 3.0+ tag"
       - id: "0x0002"
         name: "Encoding"
         writable: false
@@ -1927,14 +1213,6 @@ tables:
         name: "ColorMode"
         writable: false
         description: "ColorMode tag"
-      - id: "0x0001"
-        name: "Color Palette"
-        writable: false
-        description: "Color Palette tag"
-      - id: "0x0002"
-        name: "Grayscale"
-        writable: false
-        description: "Grayscale tag"
       - id: "0x0046"
         name: "ScreenWidth"
         writable: false
@@ -1977,34 +1255,6 @@ tables:
         name: "ColorMode"
         writable: false
         description: "ColorMode tag"
-      - id: "0x0001"
-        name: "Grayscale"
-        writable: false
-        description: "Grayscale tag"
-      - id: "0x0002"
-        name: "Indexed"
-        writable: false
-        description: "Indexed tag"
-      - id: "0x0003"
-        name: "RGB"
-        writable: false
-        description: "RGB tag"
-      - id: "0x0004"
-        name: "CMYK"
-        writable: false
-        description: "CMYK tag"
-      - id: "0x0007"
-        name: "Multichannel"
-        writable: false
-        description: "Multichannel tag"
-      - id: "0x0008"
-        name: "Duotone"
-        writable: false
-        description: "Duotone tag"
-      - id: "0x0009"
-        name: "Lab"
-        writable: false
-        description: "Lab tag"
       - id: "0x0015"
         name: "BackgroundColor"
         writable: false
@@ -2603,186 +1853,14 @@ tables:
         name: "ColorPrimaries"
         writable: false
         description: "ColorPrimaries tag"
-      - id: "0x0002"
-        name: "Unspecified"
-        writable: false
-        description: "Unspecified tag"
-      - id: "0x0004"
-        name: "BT.470 System M (historical)"
-        writable: false
-        description: "BT.470 System M (historical) tag"
-      - id: "0x0005"
-        name: "BT.470 System B, G (historical)"
-        writable: false
-        description: "BT.470 System B, G (historical) tag"
-      - id: "0x0006"
-        name: "BT.601"
-        writable: false
-        description: "BT.601 tag"
-      - id: "0x0007"
-        name: "SMPTE 240"
-        writable: false
-        description: "SMPTE 240 tag"
-      - id: "0x0008"
-        name: "Generic film (color filters using illuminant C)"
-        writable: false
-        description: "Generic film (color filters using illuminant C) tag"
-      - id: "0x0009"
-        name: "BT.2020, BT.2100"
-        writable: false
-        description: "BT.2020, BT.2100 tag"
-      - id: "0x000A"
-        name: "SMPTE 428 (CIE 1921 XYZ)"
-        writable: false
-        description: "SMPTE 428 (CIE 1921 XYZ) tag"
-      - id: "0x000B"
-        name: "SMPTE RP 431-2"
-        writable: false
-        description: "SMPTE RP 431-2 tag"
-      - id: "0x000C"
-        name: "SMPTE EG 432-1"
-        writable: false
-        description: "SMPTE EG 432-1 tag"
-      - id: "0x0016"
-        name: "EBU Tech. 3213-E"
-        writable: false
-        description: "EBU Tech. 3213-E tag"
       - id: "0x0001"
         name: "TransferCharacteristics"
         writable: false
         description: "TransferCharacteristics tag"
-      - id: "0x0001"
-        name: "BT.709"
-        writable: false
-        description: "BT.709 tag"
-      - id: "0x0002"
-        name: "Unspecified"
-        writable: false
-        description: "Unspecified tag"
-      - id: "0x0003"
-        name: "For future use (3)"
-        writable: false
-        description: "For future use (3) tag"
-      - id: "0x0004"
-        name: "BT.470 System M (historical)"
-        writable: false
-        description: "BT.470 System M (historical) tag"
-      - id: "0x0005"
-        name: "BT.470 System B, G (historical)"
-        writable: false
-        description: "BT.470 System B, G (historical) tag"
-      - id: "0x0006"
-        name: "BT.601"
-        writable: false
-        description: "BT.601 tag"
-      - id: "0x0007"
-        name: "SMPTE 240 M"
-        writable: false
-        description: "SMPTE 240 M tag"
-      - id: "0x0008"
-        name: "Linear"
-        writable: false
-        description: "Linear tag"
-      - id: "0x0009"
-        name: "Logarithmic (100 : 1 range)"
-        writable: false
-        description: "Logarithmic (100 : 1 range) tag"
-      - id: "0x000A"
-        name: "Logarithmic (100 * Sqrt(10) : 1 range)"
-        writable: false
-        description: "Logarithmic (100 * Sqrt(10) : 1 range) tag"
-      - id: "0x000B"
-        name: "IEC 61966-2-4"
-        writable: false
-        description: "IEC 61966-2-4 tag"
-      - id: "0x000C"
-        name: "BT.1361"
-        writable: false
-        description: "BT.1361 tag"
-      - id: "0x000D"
-        name: "sRGB or sYCC"
-        writable: false
-        description: "sRGB or sYCC tag"
-      - id: "0x000E"
-        name: "BT.2020 10-bit systems"
-        writable: false
-        description: "BT.2020 10-bit systems tag"
-      - id: "0x000F"
-        name: "BT.2020 12-bit systems"
-        writable: false
-        description: "BT.2020 12-bit systems tag"
-      - id: "0x0010"
-        name: "SMPTE ST 2084, ITU BT.2100 PQ"
-        writable: false
-        description: "SMPTE ST 2084, ITU BT.2100 PQ tag"
-      - id: "0x0011"
-        name: "SMPTE ST 428"
-        writable: false
-        description: "SMPTE ST 428 tag"
-      - id: "0x0012"
-        name: "BT.2100 HLG, ARIB STD-B67"
-        writable: false
-        description: "BT.2100 HLG, ARIB STD-B67 tag"
       - id: "0x0002"
         name: "MatrixCoefficients"
         writable: false
         description: "MatrixCoefficients tag"
-      - id: "0x0001"
-        name: "BT.709"
-        writable: false
-        description: "BT.709 tag"
-      - id: "0x0002"
-        name: "Unspecified"
-        writable: false
-        description: "Unspecified tag"
-      - id: "0x0003"
-        name: "For future use (3)"
-        writable: false
-        description: "For future use (3) tag"
-      - id: "0x0004"
-        name: "US FCC 73.628"
-        writable: false
-        description: "US FCC 73.628 tag"
-      - id: "0x0005"
-        name: "BT.470 System B, G (historical)"
-        writable: false
-        description: "BT.470 System B, G (historical) tag"
-      - id: "0x0006"
-        name: "BT.601"
-        writable: false
-        description: "BT.601 tag"
-      - id: "0x0007"
-        name: "SMPTE 240 M"
-        writable: false
-        description: "SMPTE 240 M tag"
-      - id: "0x0008"
-        name: "YCgCo"
-        writable: false
-        description: "YCgCo tag"
-      - id: "0x0009"
-        name: "BT.2020 non-constant luminance, BT.2100 YCbCr"
-        writable: false
-        description: "BT.2020 non-constant luminance, BT.2100 YCbCr tag"
-      - id: "0x000A"
-        name: "BT.2020 constant luminance"
-        writable: false
-        description: "BT.2020 constant luminance tag"
-      - id: "0x000B"
-        name: "SMPTE ST 2085 YDzDx"
-        writable: false
-        description: "SMPTE ST 2085 YDzDx tag"
-      - id: "0x000C"
-        name: "Chromaticity-derived non-constant luminance"
-        writable: false
-        description: "Chromaticity-derived non-constant luminance tag"
-      - id: "0x000D"
-        name: "Chromaticity-derived constant luminance"
-        writable: false
-        description: "Chromaticity-derived constant luminance tag"
-      - id: "0x000E"
-        name: "BT.2100 ICtCp"
-        writable: false
-        description: "BT.2100 ICtCp tag"
       - id: "0x0003"
         name: "VideoFullRangeFlag"
         writable: false
@@ -2805,22 +1883,6 @@ tables:
         name: "ColorType"
         writable: false
         description: "ColorType tag"
-      - id: "0x0002"
-        name: "RGB"
-        writable: false
-        description: "RGB tag"
-      - id: "0x0003"
-        name: "Palette"
-        writable: false
-        description: "Palette tag"
-      - id: "0x0004"
-        name: "Grayscale with Alpha"
-        writable: false
-        description: "Grayscale with Alpha tag"
-      - id: "0x0006"
-        name: "RGB with Alpha"
-        writable: false
-        description: "RGB with Alpha tag"
       - id: "0x000A"
         name: "Compression"
         writable: false
@@ -2839,18 +1901,6 @@ tables:
         name: "ProfileName"
         writable: false
         description: "ProfileName tag"
-      - id: "0x0001"
-        name: "Relative Colorimetric"
-        writable: false
-        description: "Relative Colorimetric tag"
-      - id: "0x0002"
-        name: "Saturation"
-        writable: false
-        description: "Saturation tag"
-      - id: "0x0003"
-        name: "Absolute Colorimetric"
-        writable: false
-        description: "Absolute Colorimetric tag"
   - name: PNG::PhysicalPixel
     tags:
       - id: "0x0000"
@@ -2905,10 +1955,6 @@ tables:
         name: "StereoMode"
         writable: false
         description: "StereoMode tag"
-      - id: "0x0001"
-        name: "Diverging-fuse Layout"
-        writable: false
-        description: "Diverging-fuse Layout tag"
   - name: PNG::SubjectScale
     tags:
       - id: "0x0000"
@@ -3001,10 +2047,6 @@ tables:
         name: "CreatorAppID"
         writable: false
         description: "CreatorAppID tag"
-      - id: "0x0001"
-        name: "Paint Shop Pro"
-        writable: false
-        description: "Paint Shop Pro tag"
       - id: "0x0007"
         name: "CreatorAppVersion"
         writable: false
@@ -3033,30 +2075,10 @@ tables:
         name: "ResolutionUnit"
         writable: false
         description: "ResolutionUnit tag"
-      - id: "0x0001"
-        name: "inches"
-        writable: false
-        description: "inches tag"
-      - id: "0x0002"
-        name: "cm"
-        writable: false
-        description: "cm tag"
       - id: "0x0011"
         name: "Compression"
         writable: false
         description: "Compression tag"
-      - id: "0x0001"
-        name: "RLE"
-        writable: false
-        description: "RLE tag"
-      - id: "0x0002"
-        name: "LZ77"
-        writable: false
-        description: "LZ77 tag"
-      - id: "0x0003"
-        name: "JPEG"
-        writable: false
-        description: "JPEG tag"
       - id: "0x0013"
         name: "BitsPerSample"
         writable: false
@@ -3189,22 +2211,6 @@ tables:
         name: "CreatorSoftware"
         writable: false
         description: "CreatorSoftware tag"
-      - id: "0x0002"
-        name: "Mobipocket"
-        writable: false
-        description: "Mobipocket tag"
-      - id: "0x00C8"
-        name: "Kindlegen (Windows)"
-        writable: false
-        description: "Kindlegen (Windows) tag"
-      - id: "0x00C9"
-        name: "Kindlegen (Linux)"
-        writable: false
-        description: "Kindlegen (Linux) tag"
-      - id: "0x00CA"
-        name: "Kindlegen (Mac)"
-        writable: false
-        description: "Kindlegen (Mac) tag"
       - id: "0x00CD"
         name: "CreatorMajorVersion"
         writable: false
@@ -3279,14 +2285,6 @@ tables:
         name: "Compression"
         writable: false
         description: "Compression tag"
-      - id: "0x0002"
-        name: "PalmDOC"
-        writable: false
-        description: "PalmDOC tag"
-      - id: "0x4448"
-        name: "HUFF/CDIC"
-        writable: false
-        description: "HUFF/CDIC tag"
       - id: "0x0001"
         name: "UncompressedTextLength"
         writable: false
@@ -3295,78 +2293,14 @@ tables:
         name: "Encryption"
         writable: false
         description: "Encryption tag"
-      - id: "0x0001"
-        name: "Old Mobipocket"
-        writable: false
-        description: "Old Mobipocket tag"
-      - id: "0x0002"
-        name: "Mobipocket"
-        writable: false
-        description: "Mobipocket tag"
       - id: "0x0006"
         name: "MobiType"
         writable: false
         description: "MobiType tag"
-      - id: "0x0003"
-        name: "PalmDoc Book"
-        writable: false
-        description: "PalmDoc Book tag"
-      - id: "0x0004"
-        name: "Audio"
-        writable: false
-        description: "Audio tag"
-      - id: "0x00E8"
-        name: "mobipocket? generated by kindlegen1.2"
-        writable: false
-        description: "mobipocket? generated by kindlegen1.2 tag"
-      - id: "0x00F8"
-        name: "KF8: generated by kindlegen2"
-        writable: false
-        description: "KF8: generated by kindlegen2 tag"
-      - id: "0x0101"
-        name: "News"
-        writable: false
-        description: "News tag"
-      - id: "0x0102"
-        name: "News_Feed"
-        writable: false
-        description: "News_Feed tag"
-      - id: "0x0103"
-        name: "News_Magazine"
-        writable: false
-        description: "News_Magazine tag"
-      - id: "0x0201"
-        name: "PICS"
-        writable: false
-        description: "PICS tag"
-      - id: "0x0202"
-        name: "WORD"
-        writable: false
-        description: "WORD tag"
-      - id: "0x0203"
-        name: "XLS"
-        writable: false
-        description: "XLS tag"
-      - id: "0x0204"
-        name: "PPT"
-        writable: false
-        description: "PPT tag"
-      - id: "0x0205"
-        name: "TEXT"
-        writable: false
-        description: "TEXT tag"
-      - id: "0x0206"
-        name: "HTML"
-        writable: false
-        description: "HTML tag"
       - id: "0x0007"
         name: "CodePage"
         writable: false
         description: "CodePage tag"
-      - id: "0xFDE9"
-        name: "Unicode (UTF-8)"
-        writable: false
-        description: "Unicode (UTF-8) tag"
       - id: "0x0009"
         name: "MobiVersion"
         writable: false
@@ -3423,38 +2357,6 @@ tables:
         name: "ImageMedium"
         writable: false
         description: "ImageMedium tag"
-      - id: "0x0001"
-        name: "Color reversal"
-        writable: false
-        description: "Color reversal tag"
-      - id: "0x0002"
-        name: "Color hard copy"
-        writable: false
-        description: "Color hard copy tag"
-      - id: "0x0003"
-        name: "Thermal hard copy"
-        writable: false
-        description: "Thermal hard copy tag"
-      - id: "0x0004"
-        name: "Black and white negative"
-        writable: false
-        description: "Black and white negative tag"
-      - id: "0x0005"
-        name: "Black and white reversal"
-        writable: false
-        description: "Black and white reversal tag"
-      - id: "0x0006"
-        name: "Black and white hard copy"
-        writable: false
-        description: "Black and white hard copy tag"
-      - id: "0x0007"
-        name: "Internegative"
-        writable: false
-        description: "Internegative tag"
-      - id: "0x0008"
-        name: "Synthetic image"
-        writable: false
-        description: "Synthetic image tag"
       - id: "0x0016"
         name: "ProductType"
         writable: false
@@ -3491,26 +2393,6 @@ tables:
         name: "CharacterSet"
         writable: false
         description: "CharacterSet tag"
-      - id: "0x0002"
-        name: "65 characters ISO 646"
-        writable: false
-        description: "65 characters ISO 646 tag"
-      - id: "0x0003"
-        name: "95 characters ISO 646"
-        writable: false
-        description: "95 characters ISO 646 tag"
-      - id: "0x0004"
-        name: "191 characters ISO 8850-1"
-        writable: false
-        description: "191 characters ISO 8850-1 tag"
-      - id: "0x0005"
-        name: "ISO 2022"
-        writable: false
-        description: "ISO 2022 tag"
-      - id: "0x0006"
-        name: "Includes characters not ISO 2375 registered"
-        writable: false
-        description: "Includes characters not ISO 2375 registered tag"
       - id: "0x0085"
         name: "CharacterEscapeSequence"
         writable: false
@@ -3531,902 +2413,14 @@ tables:
         name: "SceneBalanceAlgorithmCommand"
         writable: false
         description: "SceneBalanceAlgorithmCommand tag"
-      - id: "0x0001"
-        name: "Neutral SBA Off, Color SBA Off"
-        writable: false
-        description: "Neutral SBA Off, Color SBA Off tag"
-      - id: "0x0002"
-        name: "Neutral SBA On, Color SBA Off"
-        writable: false
-        description: "Neutral SBA On, Color SBA Off tag"
-      - id: "0x0003"
-        name: "Neutral SBA Off, Color SBA On"
-        writable: false
-        description: "Neutral SBA Off, Color SBA On tag"
       - id: "0x0145"
         name: "SceneBalanceAlgorithmFilmID"
         writable: false
         description: "SceneBalanceAlgorithmFilmID tag"
-      - id: "0x0002"
-        name: "3M ScotchColor AT 200"
-        writable: false
-        description: "3M ScotchColor AT 200 tag"
-      - id: "0x0003"
-        name: "3M ScotchColor HR2 400"
-        writable: false
-        description: "3M ScotchColor HR2 400 tag"
-      - id: "0x0007"
-        name: "3M Scotch HR 200 Gen 2"
-        writable: false
-        description: "3M Scotch HR 200 Gen 2 tag"
-      - id: "0x0009"
-        name: "3M Scotch HR 400 Gen 2"
-        writable: false
-        description: "3M Scotch HR 400 Gen 2 tag"
-      - id: "0x0010"
-        name: "Agfa Agfacolor XRS 400 Gen 1"
-        writable: false
-        description: "Agfa Agfacolor XRS 400 Gen 1 tag"
-      - id: "0x0011"
-        name: "Agfa Agfacolor XRG/XRS 400"
-        writable: false
-        description: "Agfa Agfacolor XRG/XRS 400 tag"
-      - id: "0x0012"
-        name: "Agfa Agfacolor XRG/XRS 200"
-        writable: false
-        description: "Agfa Agfacolor XRG/XRS 200 tag"
-      - id: "0x0013"
-        name: "Agfa Agfacolor XRS 1000 Gen 2"
-        writable: false
-        description: "Agfa Agfacolor XRS 1000 Gen 2 tag"
-      - id: "0x0014"
-        name: "Agfa Agfacolor XRS 400 Gen 2"
-        writable: false
-        description: "Agfa Agfacolor XRS 400 Gen 2 tag"
-      - id: "0x0015"
-        name: "Agfa Agfacolor XRS/XRC 100"
-        writable: false
-        description: "Agfa Agfacolor XRS/XRC 100 tag"
-      - id: "0x001A"
-        name: "Fuji Reala 100 (JAPAN)"
-        writable: false
-        description: "Fuji Reala 100 (JAPAN) tag"
-      - id: "0x001B"
-        name: "Fuji Reala 100 Gen 1"
-        writable: false
-        description: "Fuji Reala 100 Gen 1 tag"
-      - id: "0x001C"
-        name: "Fuji Reala 100 Gen 2"
-        writable: false
-        description: "Fuji Reala 100 Gen 2 tag"
-      - id: "0x001D"
-        name: "Fuji SHR 400 Gen 2"
-        writable: false
-        description: "Fuji SHR 400 Gen 2 tag"
-      - id: "0x001E"
-        name: "Fuji Super HG 100"
-        writable: false
-        description: "Fuji Super HG 100 tag"
-      - id: "0x001F"
-        name: "Fuji Super HG 1600 Gen 1"
-        writable: false
-        description: "Fuji Super HG 1600 Gen 1 tag"
-      - id: "0x0020"
-        name: "Fuji Super HG 200"
-        writable: false
-        description: "Fuji Super HG 200 tag"
-      - id: "0x0021"
-        name: "Fuji Super HG 400"
-        writable: false
-        description: "Fuji Super HG 400 tag"
-      - id: "0x0022"
-        name: "Fuji Super HG 100 Gen 2"
-        writable: false
-        description: "Fuji Super HG 100 Gen 2 tag"
-      - id: "0x0023"
-        name: "Fuji Super HR 100 Gen 1"
-        writable: false
-        description: "Fuji Super HR 100 Gen 1 tag"
-      - id: "0x0024"
-        name: "Fuji Super HR 100 Gen 2"
-        writable: false
-        description: "Fuji Super HR 100 Gen 2 tag"
-      - id: "0x0025"
-        name: "Fuji Super HR 1600 Gen 2"
-        writable: false
-        description: "Fuji Super HR 1600 Gen 2 tag"
-      - id: "0x0026"
-        name: "Fuji Super HR 200 Gen 1"
-        writable: false
-        description: "Fuji Super HR 200 Gen 1 tag"
-      - id: "0x0027"
-        name: "Fuji Super HR 200 Gen 2"
-        writable: false
-        description: "Fuji Super HR 200 Gen 2 tag"
-      - id: "0x0028"
-        name: "Fuji Super HR 400 Gen 1"
-        writable: false
-        description: "Fuji Super HR 400 Gen 1 tag"
-      - id: "0x002B"
-        name: "Fuji NSP 160S (Pro)"
-        writable: false
-        description: "Fuji NSP 160S (Pro) tag"
-      - id: "0x002D"
-        name: "Kodak Kodacolor VR 100 Gen 2"
-        writable: false
-        description: "Kodak Kodacolor VR 100 Gen 2 tag"
-      - id: "0x002F"
-        name: "Kodak Gold 400 Gen 3"
-        writable: false
-        description: "Kodak Gold 400 Gen 3 tag"
-      - id: "0x0037"
-        name: "Kodak Ektar 100 Gen 1"
-        writable: false
-        description: "Kodak Ektar 100 Gen 1 tag"
-      - id: "0x0038"
-        name: "Kodak Ektar 1000 Gen 1"
-        writable: false
-        description: "Kodak Ektar 1000 Gen 1 tag"
-      - id: "0x0039"
-        name: "Kodak Ektar 125 Gen 1"
-        writable: false
-        description: "Kodak Ektar 125 Gen 1 tag"
-      - id: "0x003A"
-        name: "Kodak Royal Gold 25 RZ"
-        writable: false
-        description: "Kodak Royal Gold 25 RZ tag"
-      - id: "0x003C"
-        name: "Kodak Gold 1600 Gen 1"
-        writable: false
-        description: "Kodak Gold 1600 Gen 1 tag"
-      - id: "0x003D"
-        name: "Kodak Gold 200 Gen 2"
-        writable: false
-        description: "Kodak Gold 200 Gen 2 tag"
-      - id: "0x003E"
-        name: "Kodak Gold 400 Gen 2"
-        writable: false
-        description: "Kodak Gold 400 Gen 2 tag"
-      - id: "0x0041"
-        name: "Kodak Kodacolor VR 100 Gen 1"
-        writable: false
-        description: "Kodak Kodacolor VR 100 Gen 1 tag"
-      - id: "0x0042"
-        name: "Kodak Kodacolor VR 1000 Gen 2"
-        writable: false
-        description: "Kodak Kodacolor VR 1000 Gen 2 tag"
-      - id: "0x0043"
-        name: "Kodak Kodacolor VR 1000 Gen 1"
-        writable: false
-        description: "Kodak Kodacolor VR 1000 Gen 1 tag"
-      - id: "0x0044"
-        name: "Kodak Kodacolor VR 200 Gen 1"
-        writable: false
-        description: "Kodak Kodacolor VR 200 Gen 1 tag"
-      - id: "0x0045"
-        name: "Kodak Kodacolor VR 400 Gen 1"
-        writable: false
-        description: "Kodak Kodacolor VR 400 Gen 1 tag"
-      - id: "0x0046"
-        name: "Kodak Kodacolor VR 200 Gen 2"
-        writable: false
-        description: "Kodak Kodacolor VR 200 Gen 2 tag"
-      - id: "0x0047"
-        name: "Kodak Kodacolor VRG 100 Gen 1"
-        writable: false
-        description: "Kodak Kodacolor VRG 100 Gen 1 tag"
-      - id: "0x0048"
-        name: "Kodak Gold 100 Gen 2"
-        writable: false
-        description: "Kodak Gold 100 Gen 2 tag"
-      - id: "0x0049"
-        name: "Kodak Kodacolor VRG 200 Gen 1"
-        writable: false
-        description: "Kodak Kodacolor VRG 200 Gen 1 tag"
-      - id: "0x004A"
-        name: "Kodak Gold 400 Gen 1"
-        writable: false
-        description: "Kodak Gold 400 Gen 1 tag"
-      - id: "0x0057"
-        name: "Kodak Ektacolor Gold 160"
-        writable: false
-        description: "Kodak Ektacolor Gold 160 tag"
-      - id: "0x0058"
-        name: "Kodak Ektapress 1600 Gen 1 PPC"
-        writable: false
-        description: "Kodak Ektapress 1600 Gen 1 PPC tag"
-      - id: "0x0059"
-        name: "Kodak Ektapress Gold 100 Gen 1 PPA"
-        writable: false
-        description: "Kodak Ektapress Gold 100 Gen 1 PPA tag"
-      - id: "0x005A"
-        name: "Kodak Ektapress Gold 400 PPB-3"
-        writable: false
-        description: "Kodak Ektapress Gold 400 PPB-3 tag"
-      - id: "0x005C"
-        name: "Kodak Ektar 25 Professional PHR"
-        writable: false
-        description: "Kodak Ektar 25 Professional PHR tag"
-      - id: "0x0061"
-        name: "Kodak T-Max 100 Professional"
-        writable: false
-        description: "Kodak T-Max 100 Professional tag"
-      - id: "0x0062"
-        name: "Kodak T-Max 3200 Professional"
-        writable: false
-        description: "Kodak T-Max 3200 Professional tag"
-      - id: "0x0063"
-        name: "Kodak T-Max 400 Professional"
-        writable: false
-        description: "Kodak T-Max 400 Professional tag"
-      - id: "0x0065"
-        name: "Kodak Vericolor 400 Prof VPH"
-        writable: false
-        description: "Kodak Vericolor 400 Prof VPH tag"
-      - id: "0x0066"
-        name: "Kodak Vericolor III Pro"
-        writable: false
-        description: "Kodak Vericolor III Pro tag"
-      - id: "0x0079"
-        name: "Konika Konica Color SR-G 3200"
-        writable: false
-        description: "Konika Konica Color SR-G 3200 tag"
-      - id: "0x007A"
-        name: "Konika Konica Color Super SR100"
-        writable: false
-        description: "Konika Konica Color Super SR100 tag"
-      - id: "0x007B"
-        name: "Konika Konica Color Super SR 400"
-        writable: false
-        description: "Konika Konica Color Super SR 400 tag"
-      - id: "0x008A"
-        name: "Kodak Gold Unknown"
-        writable: false
-        description: "Kodak Gold Unknown tag"
-      - id: "0x008B"
-        name: "Kodak Unknown Neg A- Normal SBA"
-        writable: false
-        description: "Kodak Unknown Neg A- Normal SBA tag"
-      - id: "0x008F"
-        name: "Kodak Ektar 100 Gen 2"
-        writable: false
-        description: "Kodak Ektar 100 Gen 2 tag"
-      - id: "0x0093"
-        name: "Kodak Kodacolor CII"
-        writable: false
-        description: "Kodak Kodacolor CII tag"
-      - id: "0x0094"
-        name: "Kodak Kodacolor II"
-        writable: false
-        description: "Kodak Kodacolor II tag"
-      - id: "0x0095"
-        name: "Kodak Gold Plus 200 Gen 3"
-        writable: false
-        description: "Kodak Gold Plus 200 Gen 3 tag"
-      - id: "0x0096"
-        name: "Kodak Internegative +10% Contrast"
-        writable: false
-        description: "Kodak Internegative +10% Contrast tag"
-      - id: "0x0097"
-        name: "Agfa Agfacolor Ultra 50"
-        writable: false
-        description: "Agfa Agfacolor Ultra 50 tag"
-      - id: "0x0098"
-        name: "Fuji NHG 400"
-        writable: false
-        description: "Fuji NHG 400 tag"
-      - id: "0x0099"
-        name: "Agfa Agfacolor XRG 100"
-        writable: false
-        description: "Agfa Agfacolor XRG 100 tag"
-      - id: "0x009A"
-        name: "Kodak Gold Plus 100 Gen 3"
-        writable: false
-        description: "Kodak Gold Plus 100 Gen 3 tag"
-      - id: "0x009B"
-        name: "Konika Konica Color Super SR200 Gen 1"
-        writable: false
-        description: "Konika Konica Color Super SR200 Gen 1 tag"
-      - id: "0x009C"
-        name: "Konika Konica Color SR-G 160"
-        writable: false
-        description: "Konika Konica Color SR-G 160 tag"
-      - id: "0x009D"
-        name: "Agfa Agfacolor Optima 125"
-        writable: false
-        description: "Agfa Agfacolor Optima 125 tag"
-      - id: "0x009E"
-        name: "Agfa Agfacolor Portrait 160"
-        writable: false
-        description: "Agfa Agfacolor Portrait 160 tag"
-      - id: "0x00A2"
-        name: "Kodak Kodacolor VRG 400 Gen 1"
-        writable: false
-        description: "Kodak Kodacolor VRG 400 Gen 1 tag"
-      - id: "0x00A3"
-        name: "Kodak Gold 200 Gen 1"
-        writable: false
-        description: "Kodak Gold 200 Gen 1 tag"
-      - id: "0x00A4"
-        name: "Kodak Kodacolor VRG 100 Gen 2"
-        writable: false
-        description: "Kodak Kodacolor VRG 100 Gen 2 tag"
-      - id: "0x00AE"
-        name: "Kodak Internegative +20% Contrast"
-        writable: false
-        description: "Kodak Internegative +20% Contrast tag"
-      - id: "0x00AF"
-        name: "Kodak Internegative +30% Contrast"
-        writable: false
-        description: "Kodak Internegative +30% Contrast tag"
-      - id: "0x00B0"
-        name: "Kodak Internegative +40% Contrast"
-        writable: false
-        description: "Kodak Internegative +40% Contrast tag"
-      - id: "0x00B8"
-        name: "Kodak TMax-100 D-76 CI = .40"
-        writable: false
-        description: "Kodak TMax-100 D-76 CI = .40 tag"
-      - id: "0x00B9"
-        name: "Kodak TMax-100 D-76 CI = .50"
-        writable: false
-        description: "Kodak TMax-100 D-76 CI = .50 tag"
-      - id: "0x00BA"
-        name: "Kodak TMax-100 D-76 CI = .55"
-        writable: false
-        description: "Kodak TMax-100 D-76 CI = .55 tag"
-      - id: "0x00BB"
-        name: "Kodak TMax-100 D-76 CI = .70"
-        writable: false
-        description: "Kodak TMax-100 D-76 CI = .70 tag"
-      - id: "0x00BC"
-        name: "Kodak TMax-100 D-76 CI = .80"
-        writable: false
-        description: "Kodak TMax-100 D-76 CI = .80 tag"
-      - id: "0x00BD"
-        name: "Kodak TMax-100 TMax CI = .40"
-        writable: false
-        description: "Kodak TMax-100 TMax CI = .40 tag"
-      - id: "0x00BE"
-        name: "Kodak TMax-100 TMax CI = .50"
-        writable: false
-        description: "Kodak TMax-100 TMax CI = .50 tag"
-      - id: "0x00BF"
-        name: "Kodak TMax-100 TMax CI = .55"
-        writable: false
-        description: "Kodak TMax-100 TMax CI = .55 tag"
-      - id: "0x00C0"
-        name: "Kodak TMax-100 TMax CI = .70"
-        writable: false
-        description: "Kodak TMax-100 TMax CI = .70 tag"
-      - id: "0x00C1"
-        name: "Kodak TMax-100 TMax CI = .80"
-        writable: false
-        description: "Kodak TMax-100 TMax CI = .80 tag"
-      - id: "0x00C3"
-        name: "Kodak TMax-400 D-76 CI = .40"
-        writable: false
-        description: "Kodak TMax-400 D-76 CI = .40 tag"
-      - id: "0x00C4"
-        name: "Kodak TMax-400 D-76 CI = .50"
-        writable: false
-        description: "Kodak TMax-400 D-76 CI = .50 tag"
-      - id: "0x00C5"
-        name: "Kodak TMax-400 D-76 CI = .55"
-        writable: false
-        description: "Kodak TMax-400 D-76 CI = .55 tag"
-      - id: "0x00C6"
-        name: "Kodak TMax-400 D-76 CI = .70"
-        writable: false
-        description: "Kodak TMax-400 D-76 CI = .70 tag"
-      - id: "0x00D6"
-        name: "Kodak TMax-400 D-76 CI = .80"
-        writable: false
-        description: "Kodak TMax-400 D-76 CI = .80 tag"
-      - id: "0x00D7"
-        name: "Kodak TMax-400 TMax CI = .40"
-        writable: false
-        description: "Kodak TMax-400 TMax CI = .40 tag"
-      - id: "0x00D8"
-        name: "Kodak TMax-400 TMax CI = .50"
-        writable: false
-        description: "Kodak TMax-400 TMax CI = .50 tag"
-      - id: "0x00D9"
-        name: "Kodak TMax-400 TMax CI = .55"
-        writable: false
-        description: "Kodak TMax-400 TMax CI = .55 tag"
-      - id: "0x00DA"
-        name: "Kodak TMax-400 TMax CI = .70"
-        writable: false
-        description: "Kodak TMax-400 TMax CI = .70 tag"
-      - id: "0x00DB"
-        name: "Kodak TMax-400 TMax CI = .80"
-        writable: false
-        description: "Kodak TMax-400 TMax CI = .80 tag"
-      - id: "0x00E0"
-        name: "3M ScotchColor ATG 400/EXL 400"
-        writable: false
-        description: "3M ScotchColor ATG 400/EXL 400 tag"
-      - id: "0x010A"
-        name: "Agfa Agfacolor Optima 200"
-        writable: false
-        description: "Agfa Agfacolor Optima 200 tag"
-      - id: "0x010B"
-        name: "Konika Impressa 50"
-        writable: false
-        description: "Konika Impressa 50 tag"
-      - id: "0x010C"
-        name: "Polaroid Polaroid CP 200"
-        writable: false
-        description: "Polaroid Polaroid CP 200 tag"
-      - id: "0x010D"
-        name: "Konika Konica Color Super SR200 Gen 2"
-        writable: false
-        description: "Konika Konica Color Super SR200 Gen 2 tag"
-      - id: "0x010E"
-        name: "ILFORD XP2 400"
-        writable: false
-        description: "ILFORD XP2 400 tag"
-      - id: "0x010F"
-        name: "Polaroid Polaroid Color HD2 100"
-        writable: false
-        description: "Polaroid Polaroid Color HD2 100 tag"
-      - id: "0x0110"
-        name: "Polaroid Polaroid Color HD2 400"
-        writable: false
-        description: "Polaroid Polaroid Color HD2 400 tag"
-      - id: "0x0111"
-        name: "Polaroid Polaroid Color HD2 200"
-        writable: false
-        description: "Polaroid Polaroid Color HD2 200 tag"
-      - id: "0x011A"
-        name: "3M ScotchColor ATG-1 200"
-        writable: false
-        description: "3M ScotchColor ATG-1 200 tag"
-      - id: "0x011C"
-        name: "Konika XG 400"
-        writable: false
-        description: "Konika XG 400 tag"
-      - id: "0x0133"
-        name: "Kodak Universal Reversal B/W"
-        writable: false
-        description: "Kodak Universal Reversal B/W tag"
-      - id: "0x0134"
-        name: "Kodak RPC Copy Film Gen 1"
-        writable: false
-        description: "Kodak RPC Copy Film Gen 1 tag"
-      - id: "0x0138"
-        name: "Kodak Universal E6"
-        writable: false
-        description: "Kodak Universal E6 tag"
-      - id: "0x0144"
-        name: "Kodak Gold Ultra 400 Gen 4"
-        writable: false
-        description: "Kodak Gold Ultra 400 Gen 4 tag"
-      - id: "0x0148"
-        name: "Fuji Super G 100"
-        writable: false
-        description: "Fuji Super G 100 tag"
-      - id: "0x0149"
-        name: "Fuji Super G 200"
-        writable: false
-        description: "Fuji Super G 200 tag"
-      - id: "0x014A"
-        name: "Fuji Super G 400 Gen 2"
-        writable: false
-        description: "Fuji Super G 400 Gen 2 tag"
-      - id: "0x014D"
-        name: "Kodak Universal K14"
-        writable: false
-        description: "Kodak Universal K14 tag"
-      - id: "0x014E"
-        name: "Fuji Super G 400 Gen 1"
-        writable: false
-        description: "Fuji Super G 400 Gen 1 tag"
-      - id: "0x016E"
-        name: "Kodak Vericolor HC 6329 VHC"
-        writable: false
-        description: "Kodak Vericolor HC 6329 VHC tag"
-      - id: "0x016F"
-        name: "Kodak Vericolor HC 4329 VHC"
-        writable: false
-        description: "Kodak Vericolor HC 4329 VHC tag"
-      - id: "0x0170"
-        name: "Kodak Vericolor L 6013 VPL"
-        writable: false
-        description: "Kodak Vericolor L 6013 VPL tag"
-      - id: "0x0171"
-        name: "Kodak Vericolor L 4013 VPL"
-        writable: false
-        description: "Kodak Vericolor L 4013 VPL tag"
-      - id: "0x01A2"
-        name: "Kodak Ektacolor Gold II 400 Prof"
-        writable: false
-        description: "Kodak Ektacolor Gold II 400 Prof tag"
-      - id: "0x01AE"
-        name: "Kodak Royal Gold 1000"
-        writable: false
-        description: "Kodak Royal Gold 1000 tag"
-      - id: "0x01AF"
-        name: "Kodak Kodacolor VR 200 / 5093"
-        writable: false
-        description: "Kodak Kodacolor VR 200 / 5093 tag"
-      - id: "0x01B0"
-        name: "Kodak Gold Plus 100 Gen 4"
-        writable: false
-        description: "Kodak Gold Plus 100 Gen 4 tag"
-      - id: "0x01BB"
-        name: "Kodak Royal Gold 100"
-        writable: false
-        description: "Kodak Royal Gold 100 tag"
-      - id: "0x01BC"
-        name: "Kodak Royal Gold 400"
-        writable: false
-        description: "Kodak Royal Gold 400 tag"
-      - id: "0x01BD"
-        name: "Kodak Universal E6 auto-balance"
-        writable: false
-        description: "Kodak Universal E6 auto-balance tag"
-      - id: "0x01BE"
-        name: "Kodak Universal E6 illum. corr."
-        writable: false
-        description: "Kodak Universal E6 illum. corr. tag"
-      - id: "0x01BF"
-        name: "Kodak Universal K14 auto-balance"
-        writable: false
-        description: "Kodak Universal K14 auto-balance tag"
-      - id: "0x01C0"
-        name: "Kodak Universal K14 illum. corr."
-        writable: false
-        description: "Kodak Universal K14 illum. corr. tag"
-      - id: "0x01C1"
-        name: "Kodak Ektar 100 Gen 3 SY"
-        writable: false
-        description: "Kodak Ektar 100 Gen 3 SY tag"
-      - id: "0x01C8"
-        name: "Kodak Ektar 25"
-        writable: false
-        description: "Kodak Ektar 25 tag"
-      - id: "0x01C9"
-        name: "Kodak Ektar 100 Gen 3 CX"
-        writable: false
-        description: "Kodak Ektar 100 Gen 3 CX tag"
-      - id: "0x01CA"
-        name: "Kodak Ektapress Plus 100 Prof PJA-1"
-        writable: false
-        description: "Kodak Ektapress Plus 100 Prof PJA-1 tag"
-      - id: "0x01CB"
-        name: "Kodak Ektapress Gold II 100 Prof"
-        writable: false
-        description: "Kodak Ektapress Gold II 100 Prof tag"
-      - id: "0x01CC"
-        name: "Kodak Pro 100 PRN"
-        writable: false
-        description: "Kodak Pro 100 PRN tag"
-      - id: "0x01CD"
-        name: "Kodak Vericolor HC 100 Prof VHC-2"
-        writable: false
-        description: "Kodak Vericolor HC 100 Prof VHC-2 tag"
-      - id: "0x01CE"
-        name: "Kodak Prof Color Neg 100"
-        writable: false
-        description: "Kodak Prof Color Neg 100 tag"
-      - id: "0x01CF"
-        name: "Kodak Ektar 1000 Gen 2"
-        writable: false
-        description: "Kodak Ektar 1000 Gen 2 tag"
-      - id: "0x01D0"
-        name: "Kodak Ektapress Plus 1600 Pro PJC-1"
-        writable: false
-        description: "Kodak Ektapress Plus 1600 Pro PJC-1 tag"
-      - id: "0x01D1"
-        name: "Kodak Ektapress Gold II 1600 Prof"
-        writable: false
-        description: "Kodak Ektapress Gold II 1600 Prof tag"
-      - id: "0x01D2"
-        name: "Kodak Super Gold 1600 GF Gen 2"
-        writable: false
-        description: "Kodak Super Gold 1600 GF Gen 2 tag"
-      - id: "0x01D3"
-        name: "Kodak Kodacolor 100 Print Gen 4"
-        writable: false
-        description: "Kodak Kodacolor 100 Print Gen 4 tag"
-      - id: "0x01D4"
-        name: "Kodak Super Gold 100 Gen 4"
-        writable: false
-        description: "Kodak Super Gold 100 Gen 4 tag"
-      - id: "0x01D5"
-        name: "Kodak Gold 100 Gen 4"
-        writable: false
-        description: "Kodak Gold 100 Gen 4 tag"
-      - id: "0x01D6"
-        name: "Kodak Gold III 100 Gen 4"
-        writable: false
-        description: "Kodak Gold III 100 Gen 4 tag"
-      - id: "0x01D7"
-        name: "Kodak Funtime 100 FA"
-        writable: false
-        description: "Kodak Funtime 100 FA tag"
-      - id: "0x01D8"
-        name: "Kodak Funtime 200 FB"
-        writable: false
-        description: "Kodak Funtime 200 FB tag"
-      - id: "0x01D9"
-        name: "Kodak Kodacolor VR 200 Gen 4"
-        writable: false
-        description: "Kodak Kodacolor VR 200 Gen 4 tag"
-      - id: "0x01DA"
-        name: "Kodak Gold Super 200 Gen 4"
-        writable: false
-        description: "Kodak Gold Super 200 Gen 4 tag"
-      - id: "0x01DB"
-        name: "Kodak Kodacolor 200 Print Gen 4"
-        writable: false
-        description: "Kodak Kodacolor 200 Print Gen 4 tag"
-      - id: "0x01DC"
-        name: "Kodak Super Gold 200 Gen 4"
-        writable: false
-        description: "Kodak Super Gold 200 Gen 4 tag"
-      - id: "0x01DD"
-        name: "Kodak Gold 200 Gen 4"
-        writable: false
-        description: "Kodak Gold 200 Gen 4 tag"
-      - id: "0x01DE"
-        name: "Kodak Gold III 200 Gen 4"
-        writable: false
-        description: "Kodak Gold III 200 Gen 4 tag"
-      - id: "0x01DF"
-        name: "Kodak Gold Ultra 400 Gen 5"
-        writable: false
-        description: "Kodak Gold Ultra 400 Gen 5 tag"
-      - id: "0x01E0"
-        name: "Kodak Super Gold 400 Gen 5"
-        writable: false
-        description: "Kodak Super Gold 400 Gen 5 tag"
-      - id: "0x01E1"
-        name: "Kodak Gold 400 Gen 5"
-        writable: false
-        description: "Kodak Gold 400 Gen 5 tag"
-      - id: "0x01E2"
-        name: "Kodak Gold III 400 Gen 5"
-        writable: false
-        description: "Kodak Gold III 400 Gen 5 tag"
-      - id: "0x01E3"
-        name: "Kodak Kodacolor 400 Print Gen 5"
-        writable: false
-        description: "Kodak Kodacolor 400 Print Gen 5 tag"
-      - id: "0x01E4"
-        name: "Kodak Ektapress Plus 400 Prof PJB-2"
-        writable: false
-        description: "Kodak Ektapress Plus 400 Prof PJB-2 tag"
-      - id: "0x01E5"
-        name: "Kodak Ektapress Gold II 400 Prof G5"
-        writable: false
-        description: "Kodak Ektapress Gold II 400 Prof G5 tag"
-      - id: "0x01E6"
-        name: "Kodak Pro 400 PPF-2"
-        writable: false
-        description: "Kodak Pro 400 PPF-2 tag"
-      - id: "0x01E7"
-        name: "Kodak Ektacolor Gold II 400 EGP-4"
-        writable: false
-        description: "Kodak Ektacolor Gold II 400 EGP-4 tag"
-      - id: "0x01E8"
-        name: "Kodak Ektacolor Gold 400 Prof EGP-4"
-        writable: false
-        description: "Kodak Ektacolor Gold 400 Prof EGP-4 tag"
-      - id: "0x01E9"
-        name: "Kodak Ektapress Gold II Multspd PJM"
-        writable: false
-        description: "Kodak Ektapress Gold II Multspd PJM tag"
-      - id: "0x01EA"
-        name: "Kodak Pro 400 MC PMC"
-        writable: false
-        description: "Kodak Pro 400 MC PMC tag"
-      - id: "0x01EB"
-        name: "Kodak Vericolor 400 Prof VPH-2"
-        writable: false
-        description: "Kodak Vericolor 400 Prof VPH-2 tag"
-      - id: "0x01EC"
-        name: "Kodak Vericolor 400 Plus Prof VPH-2"
-        writable: false
-        description: "Kodak Vericolor 400 Plus Prof VPH-2 tag"
-      - id: "0x01ED"
-        name: "Kodak Unknown Neg Product Code 83"
-        writable: false
-        description: "Kodak Unknown Neg Product Code 83 tag"
-      - id: "0x01F9"
-        name: "Kodak Ektacolor Pro Gold 160 GPX"
-        writable: false
-        description: "Kodak Ektacolor Pro Gold 160 GPX tag"
-      - id: "0x01FC"
-        name: "Kodak Royal Gold 200"
-        writable: false
-        description: "Kodak Royal Gold 200 tag"
-      - id: "0x0205"
-        name: "Kodak 4050000000"
-        writable: false
-        description: "Kodak 4050000000 tag"
-      - id: "0x0207"
-        name: "Kodak Gold Plus 100 Gen 5"
-        writable: false
-        description: "Kodak Gold Plus 100 Gen 5 tag"
-      - id: "0x0208"
-        name: "Kodak Gold 800 Gen 1"
-        writable: false
-        description: "Kodak Gold 800 Gen 1 tag"
-      - id: "0x0209"
-        name: "Kodak Gold Super 200 Gen 5"
-        writable: false
-        description: "Kodak Gold Super 200 Gen 5 tag"
-      - id: "0x020A"
-        name: "Kodak Ektapress Plus 200 Prof"
-        writable: false
-        description: "Kodak Ektapress Plus 200 Prof tag"
-      - id: "0x020B"
-        name: "Kodak 4050 E6 auto-balance"
-        writable: false
-        description: "Kodak 4050 E6 auto-balance tag"
-      - id: "0x020C"
-        name: "Kodak 4050 E6 ilum. corr."
-        writable: false
-        description: "Kodak 4050 E6 ilum. corr. tag"
-      - id: "0x020D"
-        name: "Kodak 4050 K14"
-        writable: false
-        description: "Kodak 4050 K14 tag"
-      - id: "0x020E"
-        name: "Kodak 4050 K14 auto-balance"
-        writable: false
-        description: "Kodak 4050 K14 auto-balance tag"
-      - id: "0x020F"
-        name: "Kodak 4050 K14 ilum. corr."
-        writable: false
-        description: "Kodak 4050 K14 ilum. corr. tag"
-      - id: "0x0210"
-        name: "Kodak 4050 Reversal B&W"
-        writable: false
-        description: "Kodak 4050 Reversal B&W tag"
-      - id: "0x0214"
-        name: "Kodak Advantix 200"
-        writable: false
-        description: "Kodak Advantix 200 tag"
-      - id: "0x0215"
-        name: "Kodak Advantix 400"
-        writable: false
-        description: "Kodak Advantix 400 tag"
-      - id: "0x0216"
-        name: "Kodak Advantix 100"
-        writable: false
-        description: "Kodak Advantix 100 tag"
-      - id: "0x0217"
-        name: "Kodak Ektapress Multspd Prof PJM-2"
-        writable: false
-        description: "Kodak Ektapress Multspd Prof PJM-2 tag"
-      - id: "0x0218"
-        name: "Kodak Kodacolor VR 200 Gen 5"
-        writable: false
-        description: "Kodak Kodacolor VR 200 Gen 5 tag"
-      - id: "0x0219"
-        name: "Kodak Funtime 200 FB Gen 2"
-        writable: false
-        description: "Kodak Funtime 200 FB Gen 2 tag"
-      - id: "0x021A"
-        name: "Kodak Commercial 200"
-        writable: false
-        description: "Kodak Commercial 200 tag"
-      - id: "0x021B"
-        name: "Kodak Royal Gold 25 Copystand"
-        writable: false
-        description: "Kodak Royal Gold 25 Copystand tag"
-      - id: "0x021C"
-        name: "Kodak Kodacolor DA 100 Gen 5"
-        writable: false
-        description: "Kodak Kodacolor DA 100 Gen 5 tag"
-      - id: "0x0221"
-        name: "Kodak Kodacolor VR 400 Gen 2"
-        writable: false
-        description: "Kodak Kodacolor VR 400 Gen 2 tag"
-      - id: "0x0222"
-        name: "Kodak Gold 100 Gen 6"
-        writable: false
-        description: "Kodak Gold 100 Gen 6 tag"
-      - id: "0x0223"
-        name: "Kodak Gold 200 Gen 6"
-        writable: false
-        description: "Kodak Gold 200 Gen 6 tag"
-      - id: "0x0224"
-        name: "Kodak Gold 400 Gen 6"
-        writable: false
-        description: "Kodak Gold 400 Gen 6 tag"
-      - id: "0x0225"
-        name: "Kodak Royal Gold 100 Gen 2"
-        writable: false
-        description: "Kodak Royal Gold 100 Gen 2 tag"
-      - id: "0x0226"
-        name: "Kodak Royal Gold 200 Gen 2"
-        writable: false
-        description: "Kodak Royal Gold 200 Gen 2 tag"
-      - id: "0x0227"
-        name: "Kodak Royal Gold 400 Gen 2"
-        writable: false
-        description: "Kodak Royal Gold 400 Gen 2 tag"
-      - id: "0x0228"
-        name: "Kodak Gold Max 800 Gen 2"
-        writable: false
-        description: "Kodak Gold Max 800 Gen 2 tag"
-      - id: "0x022A"
-        name: "Kodak 4050 E6 high contrast"
-        writable: false
-        description: "Kodak 4050 E6 high contrast tag"
-      - id: "0x022B"
-        name: "Kodak 4050 E6 low saturation high contrast"
-        writable: false
-        description: "Kodak 4050 E6 low saturation high contrast tag"
-      - id: "0x022C"
-        name: "Kodak 4050 E6 low saturation"
-        writable: false
-        description: "Kodak 4050 E6 low saturation tag"
-      - id: "0x022D"
-        name: "Kodak Universal E-6 Low Saturation"
-        writable: false
-        description: "Kodak Universal E-6 Low Saturation tag"
-      - id: "0x022E"
-        name: "Kodak T-Max T400 CN"
-        writable: false
-        description: "Kodak T-Max T400 CN tag"
-      - id: "0x0233"
-        name: "Kodak Ektapress PJ100"
-        writable: false
-        description: "Kodak Ektapress PJ100 tag"
-      - id: "0x0234"
-        name: "Kodak Ektapress PJ400"
-        writable: false
-        description: "Kodak Ektapress PJ400 tag"
-      - id: "0x0235"
-        name: "Kodak Ektapress PJ800"
-        writable: false
-        description: "Kodak Ektapress PJ800 tag"
-      - id: "0x0237"
-        name: "Kodak Portra 160NC"
-        writable: false
-        description: "Kodak Portra 160NC tag"
-      - id: "0x0238"
-        name: "Kodak Portra 160VC"
-        writable: false
-        description: "Kodak Portra 160VC tag"
-      - id: "0x0239"
-        name: "Kodak Portra 400NC"
-        writable: false
-        description: "Kodak Portra 400NC tag"
-      - id: "0x023A"
-        name: "Kodak Portra 400VC"
-        writable: false
-        description: "Kodak Portra 400VC tag"
-      - id: "0x023F"
-        name: "Kodak Advantix 100-2"
-        writable: false
-        description: "Kodak Advantix 100-2 tag"
-      - id: "0x0240"
-        name: "Kodak Advantix 200-2"
-        writable: false
-        description: "Kodak Advantix 200-2 tag"
-      - id: "0x0241"
-        name: "Kodak Advantix Black & White + 400"
-        writable: false
-        description: "Kodak Advantix Black & White + 400 tag"
-      - id: "0x0242"
-        name: "Kodak Ektapress PJ800-2"
-        writable: false
-        description: "Kodak Ektapress PJ800-2 tag"
       - id: "0x014B"
         name: "CopyrightStatus"
         writable: false
         description: "CopyrightStatus tag"
-      - id: "0x00FF"
-        name: "Not specified"
-        writable: false
-        description: "Not specified tag"
       - id: "0x014C"
         name: "CopyrightFileName"
         writable: false
@@ -4435,27 +2429,3 @@ tables:
         name: "Orientation"
         writable: false
         description: "Orientation tag"
-      - id: "0x0001"
-        name: "Rotate 270 CW"
-        writable: false
-        description: "Rotate 270 CW tag"
-      - id: "0x0002"
-        name: "Rotate 180"
-        writable: false
-        description: "Rotate 180 tag"
-      - id: "0x0003"
-        name: "Rotate 90 CW"
-        writable: false
-        description: "Rotate 90 CW tag"
-      - id: "0x0001"
-        name: "Class 2 - Large format film"
-        writable: false
-        description: "Class 2 - Large format film tag"
-      - id: "0x0002"
-        name: "Class 3 - Text and graphics, high resolution"
-        writable: false
-        description: "Class 3 - Text and graphics, high resolution tag"
-      - id: "0x0003"
-        name: "Class 4 - Text and graphics, high dynamic range"
-        writable: false
-        description: "Class 4 - Text and graphics, high dynamic range tag"
