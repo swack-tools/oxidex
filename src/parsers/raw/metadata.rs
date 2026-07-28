@@ -448,13 +448,16 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         "EXIF:SensorBottomBorder".to_string()
                     }
                     (RawFormat::PanasonicRW2, 0, 0x0007) => {
-                        "EXIF:SensorRightBorder".to_string()
+                        "EXIF:SensorWidth".to_string()
                     }
                     (RawFormat::PanasonicRW2, 0, 0x0002) => {
-                        "EXIF:SensorWidth".to_string()
+                        "EXIF:RawDataOffset".to_string()
                     }
                     (RawFormat::PanasonicRW2, 0, 0x0003) => {
                         "EXIF:RawFormat".to_string()
+                    }
+                    (RawFormat::PanasonicRW2, 0, 0x0131) => {
+                        "EXIF:Software".to_string()
                     }
                     (RawFormat::PanasonicRW2, 0, 0x001B) => {
                         "EXIF:NoiseReductionParams".to_string()
@@ -960,6 +963,25 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
     // but are not part of the EXIF sub-IFD (ModifyDate and ResolutionUnit).
     for (tag_id, _field_type, _value_count, raw_bytes) in &ifd0_tags {
         match *tag_id {
+            0x0131 => {
+                // Software: ASCII string. Only insert if the outer IFD0 did not already emit it.
+                if !metadata.contains_key("EXIF:Software") {
+                    metadata.insert(
+                        "EXIF:Software".to_string(),
+                        TagValue::new_string(
+                            String::from_utf8_lossy(raw_bytes.as_ref())
+                                .trim_end_matches('\0')
+                                .to_string(),
+                        ),
+                    );
+                }
+            }
+            0x0115 => {
+                // SamplesPerPixel: SHORT
+                let val = read_tiff_u16(raw_bytes.as_ref(), byte_order).unwrap_or(0) as i64;
+                metadata.insert("EXIF:SamplesPerPixel".to_string(),
+                    TagValue::new_integer(val));
+            }
             0x0132 => {
                 // ModifyDate: ASCII string
                 metadata.insert(
@@ -1029,6 +1051,7 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
                 | 0xA301 // SceneType
                 | 0xA406 // SceneCaptureType
                 | 0xA408 // Contrast
+                | 0xA40A // Sharpness
         ) {
             continue;
         }
@@ -1645,6 +1668,13 @@ fn format_exif_display_value(
             5 => Some("Color sequential area".to_string()),
             7 => Some("Trilinear sensor".to_string()),
             8 => Some("Color sequential linear sensor".to_string()),
+            _ => None,
+        },
+        // Sharpness: SHORT[1] (0xA40A). Exif.pm PrintConv: 0=>'Normal',1=>'Soft',2=>'Hard'.
+        0xA40A if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("Normal".to_string()),
+            1 => Some("Soft".to_string()),
+            2 => Some("Hard".to_string()),
             _ => None,
         },
         _ => None,
