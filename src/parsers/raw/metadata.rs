@@ -992,6 +992,11 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
                 | 0xA401 // CustomRendered
                 | 0xA402 // ExposureMode
                 | 0xA404 // DigitalZoomRatio
+                | 0x0115 // SamplesPerPixel
+                | 0x9217 // SensingMethod
+                | 0x9293 // Saturation
+                | 0xA301 // SceneType
+                | 0xA406 // SceneCaptureType
                 | 0xA408 // Contrast
         ) {
             continue;
@@ -1062,6 +1067,16 @@ fn extract_interop_index(
     };
 
     for (tag_id, _field_type, _value_count, raw_bytes) in &interop_tags {
+        if *tag_id == 0x0002 {
+            let raw = String::from_utf8_lossy(raw_bytes.as_ref())
+                .trim_end_matches('\0')
+                .to_string();
+            metadata.insert(
+                "InteropIFD:InteropVersion".to_string(),
+                TagValue::new_string(raw),
+            );
+            continue;
+        }
         if *tag_id != 0x0001 {
             continue;
         }
@@ -1554,6 +1569,45 @@ fn format_exif_display_value(
             0 => Some("Normal".to_string()),
             1 => Some("Soft".to_string()),
             2 => Some("Hard".to_string()),
+            _ => None,
+        },
+        // SamplesPerPixel: SHORT[1] (0x0115) — no PrintConv, raw integer.
+        0x0115 if field_type == 3 && value_count >= 1 => {
+            let value = read_tiff_u16(bytes, byte_order)?;
+            Some(value.to_string())
+        }
+        // Saturation: SHORT[1] (0x9293). Exif.pm PrintConv: 0=>'Normal',1=>'Low',2=>'High'.
+        0x9293 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("Normal".to_string()),
+            1 => Some("Low".to_string()),
+            2 => Some("High".to_string()),
+            _ => None,
+        },
+        // SceneCaptureType: SHORT[1] (0xA406). Exif.pm PrintConv: 0=>'Standard',1=>'Landscape',2=>'Portrait',3=>'Night'.
+        0xA406 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("Standard".to_string()),
+            1 => Some("Landscape".to_string()),
+            2 => Some("Portrait".to_string()),
+            3 => Some("Night".to_string()),
+            _ => None,
+        },
+        // SceneType: UNDEFINED[1] (0xA301). Exif.pm PrintConv: 1=>'Directly photographed'.
+        0xA301 if field_type == 7 && value_count >= 1 => {
+            let val = bytes.first()?;
+            match val {
+                1 => Some("Directly photographed".to_string()),
+                _ => None,
+            }
+        }
+        // SensingMethod: SHORT[1] (0x9217). Exif.pm PrintConv: 2=>'One-chip color area', etc.
+        0x9217 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            1 => Some("Monochrome area".to_string()),
+            2 => Some("One-chip color area".to_string()),
+            3 => Some("Two-chip color area".to_string()),
+            4 => Some("Three-chip color area".to_string()),
+            5 => Some("Color sequential area".to_string()),
+            7 => Some("Trilinear sensor".to_string()),
+            8 => Some("Color sequential linear sensor".to_string()),
             _ => None,
         },
         _ => None,
