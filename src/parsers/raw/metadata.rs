@@ -25,9 +25,9 @@
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
+use crate::parsers::icc::parse_icc_profile_data as parse_icc;
 use crate::parsers::raw::{RawFormat, raf_parser};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
-use crate::parsers::icc::parse_icc_profile_data as parse_icc;
 use crate::tag_db::lookup_tag_name;
 
 /// Resolve RAW-specific tags using the names and groups assigned by ExifTool.
@@ -1125,7 +1125,7 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
                 | 0xA404 // DigitalZoomRatio
                 | 0xA408 // Contrast
                 | 0xA405 // FocalLengthIn35mmFormat
-            ) {
+        ) {
             continue;
         }
 
