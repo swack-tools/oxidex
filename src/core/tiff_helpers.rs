@@ -4,7 +4,7 @@
 //! processing tags, and handling sub-IFDs (EXIF, GPS), MakerNotes, and GeoTiff.
 
 use super::{FileReader, MetadataMap, TagValue};
-use crate::core::operations_helpers::read_u32;
+use crate::core::operations_helpers::{read_u16, read_u32};
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
 use crate::parsers::tiff::geotiff_parser;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
@@ -546,6 +546,7 @@ pub fn parse_gps_subifd(
     byte_order: ByteOrder,
     metadata: &mut MetadataMap,
 ) {
+    // Preserve the generic conversion path for all GPS tags it can decode.
     if let Ok(gps_tags) = parse_ifd(reader, offset, byte_order) {
         for (tag_id, field_type, value_count, raw_bytes) in gps_tags {
             let tag_name = lookup_tag_name(tag_id, "GPS");
@@ -558,6 +559,192 @@ pub fn parse_gps_subifd(
             );
             metadata.insert(tag_name, tag_value);
         }
+    }
+
+    // GPS::Main tag IDs from ExifTool's GPS table. Read these entries directly
+    // so one unsupported or malformed sibling entry cannot make parse_ifd()
+    // discard the complete GPS directory.
+    const GPS_LATITUDE_REF: u16 = 0x0001;
+    const GPS_LATITUDE: u16 = 0x0002;
+    const GPS_LONGITUDE_REF: u16 = 0x0003;
+    const GPS_LONGITUDE: u16 = 0x0004;
+    const GPS_ALTITUDE_REF: u16 = 0x0005;
+    const GPS_ALTITUDE: u16 = 0x0006;
+    const GPS_IMG_DIRECTION: u16 = 0x0011;
+
+    let Ok(count_bytes) = reader.read(offset, 2) else {
+        return;
+    };
+    let entry_count = usize::from(read_u16(count_bytes, byte_order));
+    let Some(entries_offset) = offset.checked_add(2) else {
+        return;
+    };
+
+    let mut latitude_ref = None;
+    let mut latitude = None;
+    let mut longitude_ref = None;
+    let mut longitude = None;
+    let mut altitude_ref = 0_u8;
+    let mut altitude = None;
+    let mut image_direction = None;
+
+    for index in 0..entry_count {
+        let Some(relative_offset) = index
+            .checked_mul(12)
+            .and_then(|value| u64::try_from(value).ok())
+        else {
+            break;
+        };
+        let Some(entry_offset) = entries_offset.checked_add(relative_offset) else {
+            break;
+        };
+        let Ok(entry) = reader.read(entry_offset, 12) else {
+            break;
+        };
+
+        let tag_id = read_u16(&entry[0..2], byte_order);
+        let field_type = read_u16(&entry[2..4], byte_order);
+        let value_count = read_u32(&entry[4..8], byte_order);
+        let value_field = &entry[8..12];
+
+        match (tag_id, field_type, value_count) {
+            (GPS_LATITUDE_REF, 2, 1..) => {
+                latitude_ref = value_field.first().copied();
+            }
+            (GPS_LATITUDE, 5, 3..) => {
+                latitude = read_gps_coordinate(reader, value_field, byte_order);
+            }
+            (GPS_LONGITUDE_REF, 2, 1..) => {
+                longitude_ref = value_field.first().copied();
+            }
+            (GPS_LONGITUDE, 5, 3..) => {
+                longitude = read_gps_coordinate(reader, value_field, byte_order);
+            }
+            (GPS_ALTITUDE_REF, 1, 1..) => {
+                if let Some(reference) = value_field.first() {
+                    altitude_ref = *reference;
+                }
+            }
+            (GPS_ALTITUDE, 5, 1..) => {
+                altitude = read_gps_offset_rational(reader, value_field, byte_order);
+            }
+            (GPS_IMG_DIRECTION, 5, 1..) => {
+                image_direction = read_gps_offset_rational(reader, value_field, byte_order);
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(reference) = latitude_ref {
+        let display = match reference {
+            b'N' => "North",
+            b'S' => "South",
+            _ => "Unknown",
+        };
+        metadata.insert(
+            lookup_tag_name(GPS_LATITUDE_REF, "GPS"),
+            TagValue::String(display.to_string()),
+        );
+    }
+
+    if let (Some([degrees, minutes, seconds]), Some(reference)) = (latitude, latitude_ref) {
+        metadata.insert(
+            lookup_tag_name(GPS_LATITUDE, "GPS"),
+            TagValue::String(format!(
+                "{} deg {}' {:.2}\" {}",
+                format_gps_whole(degrees),
+                format_gps_whole(minutes),
+                seconds,
+                char::from(reference)
+            )),
+        );
+    }
+
+    if let Some(reference) = longitude_ref {
+        let display = match reference {
+            b'E' => "East",
+            b'W' => "West",
+            _ => "Unknown",
+        };
+        metadata.insert(
+            lookup_tag_name(GPS_LONGITUDE_REF, "GPS"),
+            TagValue::String(display.to_string()),
+        );
+    }
+
+    if let (Some([degrees, minutes, seconds]), Some(reference)) = (longitude, longitude_ref) {
+        metadata.insert(
+            lookup_tag_name(GPS_LONGITUDE, "GPS"),
+            TagValue::String(format!(
+                "{} deg {}' {:.2}\" {}",
+                format_gps_whole(degrees),
+                format_gps_whole(minutes),
+                seconds,
+                char::from(reference)
+            )),
+        );
+    }
+
+    if let Some(value) = altitude {
+        let value = if altitude_ref == 1 { -value } else { value };
+        metadata.insert(
+            lookup_tag_name(GPS_ALTITUDE, "GPS"),
+            TagValue::String(format!("{value:.2} m")),
+        );
+    }
+
+    if let Some(value) = image_direction {
+        metadata.insert(
+            lookup_tag_name(GPS_IMG_DIRECTION, "GPS"),
+            TagValue::String(format!("{value:.1}")),
+        );
+    }
+}
+
+fn read_gps_coordinate(
+    reader: &dyn FileReader,
+    value_field: &[u8],
+    byte_order: ByteOrder,
+) -> Option<[f64; 3]> {
+    let offset = u64::from(read_u32(value_field, byte_order));
+    let bytes = reader.read(offset, 24).ok()?;
+
+    Some([
+        read_gps_rational(&bytes[0..8], byte_order)?,
+        read_gps_rational(&bytes[8..16], byte_order)?,
+        read_gps_rational(&bytes[16..24], byte_order)?,
+    ])
+}
+
+fn read_gps_offset_rational(
+    reader: &dyn FileReader,
+    value_field: &[u8],
+    byte_order: ByteOrder,
+) -> Option<f64> {
+    let offset = u64::from(read_u32(value_field, byte_order));
+    let bytes = reader.read(offset, 8).ok()?;
+    read_gps_rational(bytes, byte_order)
+}
+
+fn read_gps_rational(bytes: &[u8], byte_order: ByteOrder) -> Option<f64> {
+    if bytes.len() < 8 {
+        return None;
+    }
+
+    let numerator = read_u32(&bytes[0..4], byte_order);
+    let denominator = read_u32(&bytes[4..8], byte_order);
+    if denominator == 0 {
+        return None;
+    }
+
+    Some(f64::from(numerator) / f64::from(denominator))
+}
+
+fn format_gps_whole(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        value.to_string()
     }
 }
 
