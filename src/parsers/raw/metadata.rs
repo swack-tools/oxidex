@@ -1135,6 +1135,7 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
                 | 0xA402 // ExposureMode
                 | 0xA404 // DigitalZoomRatio
                 | 0xA408 // Contrast
+                | 0xA409 // Saturation
         ) {
             continue;
         }
@@ -1908,6 +1909,14 @@ fn format_exif_display_value(
             0 => Some("Normal".to_string()),
             1 => Some("Soft".to_string()),
             2 => Some("Hard".to_string()),
+            _ => None,
+        },
+        // Saturation: SHORT[1]. Exif.pm tag 0xA409 PrintConv:
+        // 0 => 'Normal', 1 => 'Low', 2 => 'High'.
+        0xA409 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("Normal".to_string()),
+            1 => Some("Low".to_string()),
+            2 => Some("High".to_string()),
             _ => None,
         },
         _ => None,
