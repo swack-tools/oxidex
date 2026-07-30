@@ -189,6 +189,12 @@ impl PSDParser {
 
             let resource_data = &resources_data[pos..pos + data_size];
 
+            // Legacy Photo Mechanic SoftEdit data is identified by its fixed
+            // payload layout rather than by Adobe resource 0x0428 (which is
+            // PixelAspectRatio). Check each resource before normal resource-ID
+            // dispatch so the private resource ID does not need to be guessed.
+            Self::parse_photomechanic_soft_edit(resource_data, metadata);
+
             // Process specific resources
             match resource_id {
                 RESOLUTION_INFO => {
@@ -402,6 +408,64 @@ impl PSDParser {
                 }
             }
         }
+    }
+
+    /// Parse the fixed-size Photo Mechanic SoftEdit resource.
+    ///
+    /// PhotoMechanic.pm's SoftEdit table ends at offset 0xdd, making its
+    /// payload 0xde (222) bytes. CropTop and CropRight are big-endian `int16u`
+    /// values at offsets 0xd6 and 0xd8. Rotation and Tagged are one-byte values
+    /// at offsets 0xdc and 0xdd.
+    fn parse_photomechanic_soft_edit(data: &[u8], metadata: &mut MetadataMap) {
+        const SOFT_EDIT_LENGTH: usize = 0xde;
+        const CROP_TOP_OFFSET: usize = 0xd6;
+        const CROP_RIGHT_OFFSET: usize = 0xd8;
+        const ROTATION_OFFSET: usize = 0xdc;
+        const TAGGED_OFFSET: usize = 0xdd;
+
+        if data.len() != SOFT_EDIT_LENGTH {
+            return;
+        }
+
+        let Some(crop_top_bytes) = data.get(CROP_TOP_OFFSET..CROP_TOP_OFFSET + 2) else {
+            return;
+        };
+        let Some(crop_right_bytes) = data.get(CROP_RIGHT_OFFSET..CROP_RIGHT_OFFSET + 2) else {
+            return;
+        };
+        let Some(&rotation) = data.get(ROTATION_OFFSET) else {
+            return;
+        };
+        let Some(&tagged) = data.get(TAGGED_OFFSET) else {
+            return;
+        };
+
+        // These are the directly representable rotation values accepted by
+        // the one-byte SoftEdit field. Requiring a known value and a boolean
+        // Tagged value avoids decoding an unrelated 222-byte resource.
+        if !matches!(rotation, 0 | 90 | 180) || tagged > 1 {
+            return;
+        }
+
+        let crop_top = u16::from_be_bytes([crop_top_bytes[0], crop_top_bytes[1]]);
+        let crop_right = u16::from_be_bytes([crop_right_bytes[0], crop_right_bytes[1]]);
+
+        metadata.insert(
+            "PhotoMechanic:CropTop".to_string(),
+            TagValue::Integer(crop_top as i64),
+        );
+        metadata.insert(
+            "PhotoMechanic:CropRight".to_string(),
+            TagValue::Integer(crop_right as i64),
+        );
+        metadata.insert(
+            "PhotoMechanic:Rotation".to_string(),
+            TagValue::Integer(rotation as i64),
+        );
+        metadata.insert(
+            "PhotoMechanic:Tagged".to_string(),
+            TagValue::String(if tagged == 0 { "No" } else { "Yes" }.to_string()),
+        );
     }
 }
 
@@ -712,5 +776,77 @@ mod tests {
                 .all(|(name, _)| !name.ends_with(":ThumbnailOffset")),
             "0x0201 was never present; no ThumbnailOffset should appear"
         );
+    }
+
+    #[test]
+    fn parses_photomechanic_soft_edit_during_resource_traversal() -> Result<()> {
+        const PRIVATE_RESOURCE_ID: u16 = 0x0fa0;
+
+        let mut soft_edit = vec![0u8; 0xde];
+        soft_edit[0xd6..0xd8].copy_from_slice(&618u16.to_be_bytes());
+        soft_edit[0xd8..0xda].copy_from_slice(&890u16.to_be_bytes());
+        soft_edit[0xdc] = 180;
+        soft_edit[0xdd] = 1;
+
+        // Build the complete call chain:
+        // PSDParser::parse -> parse_image_resources -> SoftEdit recognition.
+        // The private ID intentionally is not 0x0428, which PSD.pm reserves
+        // for PixelAspectRatio.
+        let resource_len = 4 + 2 + 2 + 4 + soft_edit.len();
+        let mut data = vec![0u8; 34 + resource_len];
+        data[0..4].copy_from_slice(b"8BPS");
+        data[4..6].copy_from_slice(&1u16.to_be_bytes());
+        data[12..14].copy_from_slice(&3u16.to_be_bytes());
+        data[14..18].copy_from_slice(&8u32.to_be_bytes());
+        data[18..22].copy_from_slice(&8u32.to_be_bytes());
+        data[22..24].copy_from_slice(&8u16.to_be_bytes());
+        data[24..26].copy_from_slice(&3u16.to_be_bytes());
+        // Color-mode data length is zero at 26..30.
+        data[30..34].copy_from_slice(&(resource_len as u32).to_be_bytes());
+
+        let mut pos = 34;
+        data[pos..pos + 4].copy_from_slice(b"8BIM");
+        pos += 4;
+        data[pos..pos + 2].copy_from_slice(&PRIVATE_RESOURCE_ID.to_be_bytes());
+        pos += 2;
+        // Empty Pascal resource name and its even-boundary padding.
+        data[pos..pos + 2].copy_from_slice(&[0, 0]);
+        pos += 2;
+        data[pos..pos + 4].copy_from_slice(&(soft_edit.len() as u32).to_be_bytes());
+        pos += 4;
+        data[pos..pos + soft_edit.len()].copy_from_slice(&soft_edit);
+
+        let reader = BufferedReader::from_bytes(&data);
+        let metadata = PSDParser.parse(&reader)?;
+
+        assert_eq!(
+            metadata.get("PhotoMechanic:CropTop"),
+            Some(&TagValue::Integer(618))
+        );
+        assert_eq!(
+            metadata.get("PhotoMechanic:CropRight"),
+            Some(&TagValue::Integer(890))
+        );
+        assert_eq!(
+            metadata.get("PhotoMechanic:Rotation"),
+            Some(&TagValue::Integer(180))
+        );
+        assert_eq!(
+            metadata.get("PhotoMechanic:Tagged"),
+            Some(&TagValue::String("Yes".to_string()))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn does_not_decode_unrelated_resource_as_photomechanic() {
+        let mut metadata = MetadataMap::new();
+        let mut data = vec![0u8; 0xde];
+        data[0xdc] = 45;
+        data[0xdd] = 1;
+
+        PSDParser::parse_photomechanic_soft_edit(&data, &mut metadata);
+        assert!(metadata.is_empty());
     }
 }
