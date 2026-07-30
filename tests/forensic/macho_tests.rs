@@ -71,12 +71,17 @@ fn create_macho32_header(
 ) -> Vec<u8> {
     let mut data = Vec::new();
 
-    // For testing purposes: MH_MAGIC passed = write LE (common modern case)
-    // MH_CIGAM passed = also write LE (since CIGAM indicates LE file)
-    let write_as_le = magic == MH_MAGIC || magic == MH_CIGAM;
+    // The magic is ALWAYS written big-endian, because that is how a reader
+    // must interpret it to learn the byte order at all: bytes `fe ed fa ce`
+    // read big-endian are MH_MAGIC (the file is big-endian), and `ce fa ed
+    // fe` are MH_CIGAM (the file is little-endian). Writing MH_CIGAM in
+    // little-endian order, as this helper used to, produces `fe ed fa ce` --
+    // a big-endian file wearing a little-endian label, which is not a thing
+    // that exists on disk. The body then follows the file's own order.
+    let write_as_le = magic == MH_CIGAM || magic == MH_CIGAM_64;
 
     if write_as_le {
-        data.extend_from_slice(&magic.to_le_bytes());
+        data.extend_from_slice(&magic.to_be_bytes());
         data.extend_from_slice(&cputype.to_le_bytes());
         data.extend_from_slice(&cpusubtype.to_le_bytes());
         data.extend_from_slice(&filetype.to_le_bytes());
@@ -126,11 +131,11 @@ fn create_macho64_header(
     // For testing purposes: MH_MAGIC_64 passed = write LE (common modern case)
     // MH_CIGAM_64 passed = also write LE (since CIGAM indicates LE file)
     // To create a true BE file, we'd need MH_MAGIC_64 written in BE order
-    let write_as_le = magic == MH_MAGIC_64 || magic == MH_CIGAM_64;
+    let write_as_le = magic == MH_CIGAM || magic == MH_CIGAM_64;
 
     if write_as_le {
         // Write all fields as little-endian
-        data.extend_from_slice(&magic.to_le_bytes());
+        data.extend_from_slice(&magic.to_be_bytes());
         data.extend_from_slice(&cputype.to_le_bytes());
         data.extend_from_slice(&cpusubtype.to_le_bytes());
         data.extend_from_slice(&filetype.to_le_bytes());
@@ -320,8 +325,12 @@ fn test_macho64_with_load_commands() {
     // Create a 64-bit executable with load commands
     // LC_SEGMENT_64 needs at least 72 bytes (without sections)
     // LC_UUID needs 24 bytes
+    // CIGAM_64: x86_64 is little-endian, matching the little-endian
+    // load commands below. Pairing MH_MAGIC_64 with them described a
+    // file that cannot exist, and only parsed while the load-command
+    // reader ignored byte order entirely.
     let mut data = create_macho64_header(
-        MH_MAGIC_64,
+        MH_CIGAM_64,
         CPU_TYPE_X86_64,
         3,
         MH_EXECUTE,
@@ -347,8 +356,12 @@ fn test_macho64_with_load_commands() {
 #[test]
 fn test_macho64_with_code_signature() {
     // Create a 64-bit executable with code signature load command
+    // CIGAM_64: x86_64 is little-endian, matching the little-endian
+    // load commands below. Pairing MH_MAGIC_64 with them described a
+    // file that cannot exist, and only parsed while the load-command
+    // reader ignored byte order entirely.
     let mut data = create_macho64_header(
-        MH_MAGIC_64,
+        MH_CIGAM_64,
         CPU_TYPE_ARM64,
         0,
         MH_EXECUTE,

@@ -147,7 +147,12 @@ fn parse_mach_header_be(input: &[u8], is_64bit: bool) -> IResult<&[u8], MachHead
             flags,
             reserved,
             is_64bit,
-            is_swapped: true,
+            // FALSE here: this is the big-endian reader, reached only for
+            // MH_MAGIC/MH_MAGIC_64, which mean the file is NOT swapped. Both
+            // readers used to report `true`, so the flag carried no
+            // information at all -- harmless while nothing consumed it, and
+            // wrong the moment the load-command parser needed the byte order.
+            is_swapped: false,
         },
     ))
 }

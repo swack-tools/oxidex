@@ -49,7 +49,7 @@ use crate::error::{ExifToolError, Result};
 use header_parser::{
     is_fat_magic, is_macho_magic, parse_fat_archs, parse_fat_header, parse_mach_header,
 };
-use load_command_parser::parse_all_load_commands;
+use load_command_parser::{Endian, parse_all_load_commands};
 use metadata_extractor::{extract_macho_metadata, populate_macho_info};
 use signature_parser::parse_code_signature_info;
 use structures::{MachOInfo, cpu_type};
@@ -132,11 +132,15 @@ impl MachOParser {
 
         let load_commands_data = reader.read(load_commands_offset, load_commands_size)?;
 
-        // Parse all load commands
-        let (_, commands) = parse_all_load_commands(load_commands_data, header.ncmds, is_64bit)
-            .map_err(|e| {
-                ExifToolError::parse_error(format!("Failed to parse load commands: {:?}", e))
-            })?;
+        // Parse all load commands in the file's OWN byte order. The header
+        // parser already resolved it from the magic; passing it on is what
+        // stops a big-endian binary's `cmdsize` of 56 from being read as
+        // 0x38000000 and killing the parse.
+        let endian = Endian::from_swapped(header.is_swapped);
+        let (_, commands) =
+            parse_all_load_commands(load_commands_data, header.ncmds, is_64bit, endian).map_err(
+                |e| ExifToolError::parse_error(format!("Failed to parse load commands: {:?}", e)),
+            )?;
 
         info.header = Some(header);
         populate_macho_info(&mut info, &commands);
