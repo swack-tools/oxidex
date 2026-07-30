@@ -777,8 +777,18 @@ compare-exiftool-full:
         fi
     else
         echo "📦 Downloading ExifTool $VERSION..."
+        # rm -rf FIRST. `mv src dest` when dest already exists as a directory
+        # moves src INSIDE it, producing exiftool/exiftool-<ver>/ instead of
+        # exiftool/. The cache probe above looks for "$EXIFTOOL_DIR/exiftool",
+        # one level too high for that layout, so it misses forever -- every
+        # run re-downloads and the mv then fails outright with "Directory not
+        # empty". Measured 2026-07-30: this crash-looped the dispatcher to
+        # restart 4/5 and the fleet made zero model calls. The update branch
+        # above already does this; the fresh-download branch did not.
+        rm -rf "$EXIFTOOL_DIR"
         curl -sL "https://github.com/exiftool/exiftool/archive/refs/tags/$VERSION.tar.gz" | \
             tar -xzf - -C "$CACHE_DIR" && \
+            rm -rf "$EXIFTOOL_DIR" && \
             mv "$CACHE_DIR/exiftool-$VERSION" "$EXIFTOOL_DIR"
         echo "$VERSION" > "$CACHE_DIR/.exiftool-version"
     fi
@@ -922,6 +932,7 @@ compare-exiftool-full-update:
         echo "📦 Downloading ExifTool $VERSION..."
         curl -sL "https://github.com/exiftool/exiftool/archive/refs/tags/$VERSION.tar.gz" | \
             tar -xzf - -C "$CACHE_DIR" && \
+            rm -rf "$EXIFTOOL_DIR" && \
             mv "$CACHE_DIR/exiftool-$VERSION" "$EXIFTOOL_DIR"
         echo "$VERSION" > "$CACHE_DIR/.exiftool-version"
     fi
