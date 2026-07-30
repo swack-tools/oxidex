@@ -529,6 +529,22 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         continue;
                     }
 
+                    // ExifTool's DNGPrivateData processor exposes the
+                    // length-delimited TIFF thumbnail stored in Adobe private
+                    // data as ThumbnailTIFF. Keep the DNGPrivateData tag itself
+                    // on the normal path as well.
+                    if format == RawFormat::AdobeDNG
+                        && *tag_id == 0xC634
+                        && let Some(thumbnail) = extract_dng_private_thumbnail_tiff(bytes)
+                    {
+                        let private_tag_name = lookup_raw_tag_name(*tag_id, ifd_name, format);
+                        let group = private_tag_name.split(':').next().unwrap_or(ifd_name);
+                        metadata.insert(
+                            format!("{}:ThumbnailTIFF", group),
+                            TagValue::Binary(thumbnail.to_vec()),
+                        );
+                    }
+
                     // Check for Make tag (0x010F) - needed for MakerNote dispatcher
                     if *tag_id == 0x010F && *field_type == 2 {
                         // Extract camera make for MakerNote parsing (ASCII type)
@@ -673,6 +689,16 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         && ifd_index == 0
                         && *tag_id == 0x9216
                         && let Some(value) = format_tiff_ep_standard_id(bytes, *value_count)
+                    {
+                        TagValue::new_string(value)
+                    } else if format == RawFormat::AdobeDNG
+                        && let Some(value) = format_dng_display_value(
+                            *tag_id,
+                            bytes,
+                            *field_type,
+                            *value_count,
+                            byte_order,
+                        )
                     {
                         TagValue::new_string(value)
                     } else if let Some(value) = format_exif_display_value(
@@ -844,6 +870,45 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
                         let is_nef = matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW);
                         let is_rw2 = format == RawFormat::PanasonicRW2;
+
+                        // ExifTool's TIFF directory priority selects the
+                        // primary DNG image (NewSubfileType == 0) for these
+                        // duplicated baseline TIFF tags. IFD0 describes the
+                        // RGB thumbnail in the corpus sample, while the
+                        // primary raw SubIFD carries the reported values.
+                        if format == RawFormat::AdobeDNG
+                            && dng_subifd_is_primary(&sub_tags, byte_order)
+                        {
+                            for (primary_tag_id, field_type, value_count, raw_bytes) in &sub_tags {
+                                let value = match *primary_tag_id {
+                                    // Exif.pm 0x102: BitsPerSample.
+                                    0x0102 if *field_type == 3 && *value_count >= 1 => {
+                                        read_tiff_u16(raw_bytes.as_ref(), byte_order)
+                                            .map(|value| TagValue::new_integer(i64::from(value)))
+                                    }
+                                    // Exif.pm 0x103 Compression PrintConv:
+                                    // value 7 is JPEG.
+                                    0x0103 if *field_type == 3 && *value_count >= 1 => {
+                                        read_tiff_u16(raw_bytes.as_ref(), byte_order).map(|value| {
+                                            if value == 7 {
+                                                TagValue::new_string("JPEG".to_string())
+                                            } else {
+                                                TagValue::new_integer(i64::from(value))
+                                            }
+                                        })
+                                    }
+                                    _ => None,
+                                };
+
+                                if let Some(value) = value {
+                                    // Replace the existing IFD0-resolved key;
+                                    // do not emit a parallel SubIFD key.
+                                    let name =
+                                        lookup_raw_tag_name(*primary_tag_id, "IFD0", format);
+                                    metadata.insert(name, value);
+                                }
+                            }
+                        }
 
                         // DNG: StripOffsets/StripByteCounts are renamed by
                         // ExifTool in the embedded-image SubIFDs. Exif.pm 0x111
@@ -1280,6 +1345,163 @@ fn find_jpeg_exif_tiff(jpeg: &[u8]) -> Result<Option<&[u8]>> {
     }
 
     Ok(None)
+}
+
+/// Format DNG values with ExifTool PrintConv/ValueConv behavior.
+///
+/// IDs and formats are from ExifTool's Exif.pm DNG entries:
+/// - 0xC612 DNGVersion: int8u[4]
+/// - 0xC613 DNGBackwardVersion: int8u[4]
+/// - 0xC630 DNGLensInfo: rational64u[4]
+fn format_dng_display_value(
+    tag_id: u16,
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    match tag_id {
+        0xC612 | 0xC613 if field_type == 1 && value_count == 4 => {
+            let version = bytes.get(..4)?;
+            Some(format!(
+                "{}.{}.{}.{}",
+                version[0], version[1], version[2], version[3]
+            ))
+        }
+        0xC630 if field_type == 5 && value_count == 4 => {
+            let components = bytes.get(..32)?;
+            let mut values = Vec::with_capacity(4);
+            for component in components.chunks_exact(8) {
+                let numerator = read_tiff_u32(component.get(..4)?, byte_order)?;
+                let denominator = read_tiff_u32(component.get(4..8)?, byte_order)?;
+                if denominator == 0 {
+                    return None;
+                }
+                values.push(f64::from(numerator) / f64::from(denominator));
+            }
+
+            let focal = if values[0] == values[1] {
+                format_dng_lens_number(values[0])
+            } else {
+                format!(
+                    "{}-{}",
+                    format_dng_lens_number(values[0]),
+                    format_dng_lens_number(values[1])
+                )
+            };
+            let aperture = match (values[2], values[3]) {
+                (0.0, _) => "?".to_string(),
+                (minimum, maximum) if minimum == maximum || maximum == 0.0 => {
+                    format_dng_lens_number(minimum)
+                }
+                (minimum, maximum) => format!(
+                    "{}-{}",
+                    format_dng_lens_number(minimum),
+                    format_dng_lens_number(maximum)
+                ),
+            };
+            Some(format!("{}mm f/{}", focal, aperture))
+        }
+        _ => None,
+    }
+}
+
+fn format_dng_lens_number(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{}", value as i64)
+    } else {
+        format!("{}", value)
+    }
+}
+
+/// Test whether a DNG SubIFD is the primary raw image directory.
+///
+/// TIFF tag 0x00FE is NewSubfileType; zero identifies the full-resolution
+/// primary image. A missing tag is not treated as primary because doing so
+/// would let an arbitrary preview overwrite IFD0 values.
+fn dng_subifd_is_primary(
+    tags: &[(u16, u16, u32, std::borrow::Cow<'_, [u8]>)],
+    byte_order: ByteOrder,
+) -> bool {
+    tags.iter().any(|(tag_id, field_type, value_count, bytes)| {
+        *tag_id == 0x00FE
+            && *field_type == 4
+            && *value_count >= 1
+            && read_tiff_u32(bytes.as_ref(), byte_order) == Some(0)
+    })
+}
+
+/// Extract a TIFF payload from Adobe DNGPrivateData.
+///
+/// Adobe private-data records are length delimited. ThumbnailTIFF is a TIFF
+/// payload immediately following its four-byte record length. Accept either
+/// byte order for the record length because private-data producers exist for
+/// both TIFF byte orders, but require a valid TIFF header and a complete,
+/// non-empty bounded payload before returning it.
+fn extract_dng_private_thumbnail_tiff(private_data: &[u8]) -> Option<&[u8]> {
+    const TIFF_LE: &[u8; 4] = b"II\x2a\x00";
+    const TIFF_BE: &[u8; 4] = b"MM\x00\x2a";
+
+    for offset in 4..private_data.len() {
+        let header_end = offset.checked_add(4)?;
+        let header = private_data.get(offset..header_end)?;
+        if header != TIFF_LE && header != TIFF_BE {
+            continue;
+        }
+
+        let length_start = offset.checked_sub(4)?;
+        let length_bytes: [u8; 4] = private_data
+            .get(length_start..offset)?
+            .try_into()
+            .ok()?;
+        let be_length = usize::try_from(u32::from_be_bytes(length_bytes)).ok()?;
+        let le_length = usize::try_from(u32::from_le_bytes(length_bytes)).ok()?;
+
+        for length in [be_length, le_length] {
+            if length < 8 {
+                continue;
+            }
+            let Some(end) = offset.checked_add(length) else {
+                continue;
+            };
+            if let Some(tiff) = private_data.get(offset..end)
+                && dng_embedded_tiff_header_is_valid(tiff)
+            {
+                return Some(tiff);
+            }
+        }
+    }
+
+    None
+}
+
+fn dng_embedded_tiff_header_is_valid(tiff: &[u8]) -> bool {
+    let byte_order = match tiff.get(..4) {
+        Some(b"II\x2a\x00") => ByteOrder::LittleEndian,
+        Some(b"MM\x00\x2a") => ByteOrder::BigEndian,
+        _ => return false,
+    };
+    let Some(first_ifd) = tiff
+        .get(4..8)
+        .and_then(|bytes| read_tiff_u32(bytes, byte_order))
+        .and_then(|offset| usize::try_from(offset).ok())
+    else {
+        return false;
+    };
+    let Some(count_end) = first_ifd.checked_add(2) else {
+        return false;
+    };
+    let Some(count_bytes) = tiff.get(first_ifd..count_end) else {
+        return false;
+    };
+    let Some(entry_count) = read_tiff_u16(count_bytes, byte_order).map(usize::from) else {
+        return false;
+    };
+    first_ifd
+        .checked_add(2)
+        .and_then(|offset| offset.checked_add(entry_count.checked_mul(12)?))
+        .and_then(|offset| offset.checked_add(4))
+        .is_some_and(|directory_end| directory_end <= tiff.len())
 }
 
 /// Format DNG integer-array tags whose ExifTool default output preserves all
