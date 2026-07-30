@@ -168,13 +168,32 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
 
     // Phase 2: Check simple signatures from lookup table
     for sig in SIMPLE_SIGNATURES {
+        let end = sig.offset as usize + sig.bytes.len();
         if sig.offset == 0 {
             // Optimization: most signatures are at offset 0
             if magic_bytes.starts_with(sig.bytes) {
                 return Ok(sig.format);
             }
-        } else if matches_at_offset(magic_bytes, sig.bytes, sig.offset as usize) {
-            return Ok(sig.format);
+        } else if end <= magic_bytes.len() {
+            if matches_at_offset(magic_bytes, sig.bytes, sig.offset as usize) {
+                return Ok(sig.format);
+            }
+        } else if reader.size() >= end as u64 {
+            // The signature lives past the 1 KiB probe, so the probe cannot
+            // decide it: `matches_at_offset` returns false whenever the
+            // pattern would run off the end of the buffer, which reads
+            // exactly like "no match" and silently retired ISO 9660's
+            // `CD001` at 32769 -- declared in the table, never reachable,
+            // so ISO files resolved to Unknown and never met their parser.
+            //
+            // Read only the signature's own bytes rather than widening the
+            // probe for every file: this costs one short seek, and only for
+            // signatures the probe could not have covered anyway.
+            if let Ok(probe) = reader.read(sig.offset as u64, sig.bytes.len())
+                && probe == sig.bytes
+            {
+                return Ok(sig.format);
+            }
         }
     }
 
@@ -457,6 +476,27 @@ fn is_likely_text(data: &[u8]) -> bool {
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+
+    /// ISO 9660 declares `CD001` at 32769, far past the 1 KiB probe. The
+    /// table entry existed all along; nothing could reach it, so every ISO
+    /// resolved to Unknown and its parser was dead code.
+    #[test]
+    fn test_detect_signature_beyond_the_probe_window() {
+        let mut data = vec![0u8; 40960];
+        data[32769..32774].copy_from_slice(b"CD001");
+        let reader = TestReader::new(data);
+        assert_eq!(detect_format(&reader).unwrap(), FileFormat::ISO);
+    }
+
+    /// The deep read must not invent a match for a file too short to hold
+    /// the signature -- a truncated image is Unknown, not ISO.
+    #[test]
+    fn test_deep_signature_not_claimed_when_file_is_too_short() {
+        let mut data = vec![0u8; 2048];
+        data[0..5].copy_from_slice(b"CD001"); // right bytes, wrong offset
+        let reader = TestReader::new(data);
+        assert_ne!(detect_format(&reader).unwrap(), FileFormat::ISO);
+    }
 
     #[test]
     fn test_detect_svg_with_multibyte_char_straddling_probe_boundary() {

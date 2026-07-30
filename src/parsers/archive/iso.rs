@@ -64,6 +64,52 @@ impl ISOParser {
         Ok(r.u32_at(0).unwrap_or(0))
     }
 
+    /// Reads the little-endian half of a both-endian 16-bit field (4 bytes).
+    ///
+    /// `VolumeBlockSize` is `int16u` in ExifTool's table, not `int32u`.
+    /// Reading four bytes swallows the big-endian twin that follows and
+    /// reports 526336 where the block size is 2048.
+    fn read_u16_both(reader: &dyn FileReader, offset: u64) -> Result<u16> {
+        let data = reader.read(offset, 4)?;
+        let r = EndianReader::little_endian(data);
+        Ok(r.u16_at(0).unwrap_or(0))
+    }
+
+    /// Reads the 7-byte binary directory timestamp at PVD offset 174.
+    ///
+    /// Unlike the 17-byte ASCII volume dates, this one is packed binary:
+    /// year-since-1900, month, day, hour, minute, second, then a signed
+    /// quarter-hour UTC offset (ExifTool ISO.pm, `RootDirectoryCreateDate`).
+    fn insert_directory_date(
+        reader: &dyn FileReader,
+        metadata: &mut MetadataMap,
+        key: &str,
+        offset: u64,
+    ) -> Result<()> {
+        let d = reader.read(offset, 7)?;
+        if d.len() < 7 || d[..6].iter().all(|&b| b == 0) {
+            return Ok(());
+        }
+        let tz = d[6] as i8 as i32 * 15;
+        let (sign, tz) = if tz < 0 { ('-', -tz) } else { ('+', tz) };
+        metadata.insert(
+            key.to_string(),
+            TagValue::String(format!(
+                "{:04}:{:02}:{:02} {:02}:{:02}:{:02}{}{:02}:{:02}",
+                1900 + d[0] as u32,
+                d[1],
+                d[2],
+                d[3],
+                d[4],
+                d[5],
+                sign,
+                tz / 60,
+                tz % 60,
+            )),
+        );
+        Ok(())
+    }
+
     /// Reads and inserts ISO date if valid
     fn insert_iso_date(
         reader: &dyn FileReader,
@@ -72,20 +118,39 @@ impl ISOParser {
         offset: u64,
     ) -> Result<()> {
         let data = reader.read(offset, 17)?;
+        // 16 ASCII digits then one signed byte of quarter-hour UTC offset.
+        // The hundredths and the offset are part of the value ExifTool
+        // prints (`2016:01:08 10:00:26.00+00:00`); dropping them turned two
+        // correct dates into value mismatches.
         if data.len() >= 17
             && !data[0..16].iter().all(|&b| b == b'0' || b == 0)
-            && let (Ok(yr), Ok(mo), Ok(dy), Ok(hr), Ok(mi), Ok(se)) = (
+            && let (Ok(yr), Ok(mo), Ok(dy), Ok(hr), Ok(mi), Ok(se), Ok(cs)) = (
                 std::str::from_utf8(&data[0..4]),
                 std::str::from_utf8(&data[4..6]),
                 std::str::from_utf8(&data[6..8]),
                 std::str::from_utf8(&data[8..10]),
                 std::str::from_utf8(&data[10..12]),
                 std::str::from_utf8(&data[12..14]),
+                std::str::from_utf8(&data[14..16]),
             )
         {
+            let tz = data[16] as i8 as i32 * 15;
+            let (sign, tz) = if tz < 0 { ('-', -tz) } else { ('+', tz) };
             metadata.insert(
                 key.to_string(),
-                TagValue::String(format!("{}:{}:{} {}:{}:{}", yr, mo, dy, hr, mi, se)),
+                TagValue::String(format!(
+                    "{}:{}:{} {}:{}:{}.{}{}{:02}:{:02}",
+                    yr,
+                    mo,
+                    dy,
+                    hr,
+                    mi,
+                    se,
+                    cs,
+                    sign,
+                    tz / 60,
+                    tz % 60
+                )),
             );
         }
         Ok(())
@@ -93,31 +158,74 @@ impl ISOParser {
 
     /// Extracts metadata from Primary Volume Descriptor
     fn extract_pvd_metadata(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Result<()> {
-        // String fields
-        Self::insert_pvd_string(reader, metadata, "SystemID", PVD_OFFSET + 8, 32)?;
-        Self::insert_pvd_string(reader, metadata, "VolumeID", PVD_OFFSET + 40, 32)?;
-        Self::insert_pvd_string(reader, metadata, "VolumeSetID", PVD_OFFSET + 190, 128)?;
-        Self::insert_pvd_string(reader, metadata, "PublisherID", PVD_OFFSET + 318, 128)?;
-        Self::insert_pvd_string(reader, metadata, "DataPreparerID", PVD_OFFSET + 446, 128)?;
-        Self::insert_pvd_string(reader, metadata, "ApplicationID", PVD_OFFSET + 574, 128)?;
+        // Offsets and names are ExifTool's `ISO::PrimaryVolume` table verbatim,
+        // and the names matter as much as the offsets: this parser previously
+        // read every field from the right place and then filed it under a name
+        // of its own invention (VolumeID, PublisherID, ApplicationID), so not
+        // one of the 14 tags ExifTool reports could ever match.
+        Self::insert_pvd_string(reader, metadata, "ISO:System", PVD_OFFSET + 8, 32)?;
+        Self::insert_pvd_string(reader, metadata, "ISO:VolumeName", PVD_OFFSET + 40, 32)?;
+        Self::insert_pvd_string(reader, metadata, "ISO:VolumeSetName", PVD_OFFSET + 190, 128)?;
+        Self::insert_pvd_string(reader, metadata, "ISO:Publisher", PVD_OFFSET + 318, 128)?;
+        Self::insert_pvd_string(reader, metadata, "ISO:DataPreparer", PVD_OFFSET + 446, 128)?;
+        Self::insert_pvd_string(reader, metadata, "ISO:Software", PVD_OFFSET + 574, 128)?;
+        Self::insert_pvd_string(
+            reader,
+            metadata,
+            "ISO:CopyrightFileName",
+            PVD_OFFSET + 702,
+            38,
+        )?;
+        Self::insert_pvd_string(
+            reader,
+            metadata,
+            "ISO:AbstractFileName",
+            PVD_OFFSET + 740,
+            36,
+        )?;
+        Self::insert_pvd_string(
+            reader,
+            metadata,
+            // ExifTool's spelling, typo included -- a "corrected" name is a
+            // name that does not match.
+            "ISO:BibligraphicFileName",
+            PVD_OFFSET + 776,
+            37,
+        )?;
 
-        // Volume size calculation
-        let volume_sectors = Self::read_u32_both(reader, PVD_OFFSET + 80)?;
-        let block_size = Self::read_u32_both(reader, PVD_OFFSET + 128)?;
+        // Reported as the raw count and size; VolumeSize is a Composite tag
+        // (VolumeBlockCount * VolumeBlockSize), not a field on the descriptor.
+        let block_count = Self::read_u32_both(reader, PVD_OFFSET + 80)?;
+        let block_size = Self::read_u16_both(reader, PVD_OFFSET + 128)?;
         metadata.insert(
-            "BlockSize".to_string(),
+            "ISO:VolumeBlockCount".to_string(),
+            TagValue::String(block_count.to_string()),
+        );
+        metadata.insert(
+            "ISO:VolumeBlockSize".to_string(),
             TagValue::String(block_size.to_string()),
         );
-        metadata.insert(
-            "VolumeSize".to_string(),
-            TagValue::String((volume_sectors as u64 * block_size as u64).to_string()),
-        );
 
-        // Date fields
-        Self::insert_iso_date(reader, metadata, "CreationDate", PVD_OFFSET + 813)?;
-        Self::insert_iso_date(reader, metadata, "ModificationDate", PVD_OFFSET + 830)?;
-        Self::insert_iso_date(reader, metadata, "ExpirationDate", PVD_OFFSET + 847)?;
-        Self::insert_iso_date(reader, metadata, "EffectiveDate", PVD_OFFSET + 864)?;
+        Self::insert_directory_date(
+            reader,
+            metadata,
+            "ISO:RootDirectoryCreateDate",
+            PVD_OFFSET + 174,
+        )?;
+        Self::insert_iso_date(reader, metadata, "ISO:VolumeCreateDate", PVD_OFFSET + 813)?;
+        Self::insert_iso_date(reader, metadata, "ISO:VolumeModifyDate", PVD_OFFSET + 830)?;
+        Self::insert_iso_date(
+            reader,
+            metadata,
+            "ISO:VolumeExpirationDate",
+            PVD_OFFSET + 847,
+        )?;
+        Self::insert_iso_date(
+            reader,
+            metadata,
+            "ISO:VolumeEffectiveDate",
+            PVD_OFFSET + 864,
+        )?;
 
         Ok(())
     }
@@ -200,9 +308,10 @@ mod tests {
         let reader = TestReader::new(data);
         let mut metadata = MetadataMap::new();
         ISOParser::insert_iso_date(&reader, &mut metadata, "TestDate", 32768).unwrap();
+        // Hundredths and UTC offset included, matching what ExifTool prints.
         assert_eq!(
             metadata.get("TestDate").unwrap(),
-            &TagValue::String("2024:03:15 14:30:45".to_string())
+            &TagValue::String("2024:03:15 14:30:45.00+00:00".to_string())
         );
 
         // All zeros (unset date) should not insert any value
@@ -245,42 +354,49 @@ mod tests {
         // Application ID at offset 574 (128 bytes)
         data[33342..33349].copy_from_slice(b"MKISOFS");
 
-        // Creation date at offset 813 (17 bytes: YYYYMMDDHHMMSSCC + timezone)
-        data[33581..33598].copy_from_slice(b"20240315143045000");
+        // Creation date at offset 813: 16 ASCII digits (YYYYMMDDHHMMSSCC)
+        // then ONE BINARY byte of UTC offset in 15-minute units. An ASCII
+        // '0' here is 48, i.e. +12:00 -- which is what this fixture used to
+        // say while claiming to mean UTC.
+        data[33581..33597].copy_from_slice(b"2024031514304500");
+        data[33597] = 0;
 
         let reader = TestReader::new(data);
         let parser = ISOParser;
         let metadata = parser.parse(&reader).unwrap();
 
-        // Verify extracted metadata
+        // Names are ExifTool's, and carry the ISO family prefix: the old
+        // VolumeID / PublisherID / ApplicationID spellings read the right
+        // bytes under names ExifTool never emits, so they matched nothing.
         assert_eq!(
-            metadata.get("VolumeID").unwrap(),
+            metadata.get("ISO:VolumeName").unwrap(),
             &TagValue::String("TEST_DISC_VOLUME".to_string())
         );
         assert_eq!(
-            metadata.get("SystemID").unwrap(),
+            metadata.get("ISO:System").unwrap(),
             &TagValue::String("LINUX".to_string())
         );
+        // int16u, so the big-endian twin at +2 must not be read into it.
         assert_eq!(
-            metadata.get("BlockSize").unwrap(),
+            metadata.get("ISO:VolumeBlockSize").unwrap(),
             &TagValue::String("2048".to_string())
         );
-        // Volume size = 10000 sectors * 2048 bytes
+        // The raw count; VolumeSize is a Composite of count * size upstream.
         assert_eq!(
-            metadata.get("VolumeSize").unwrap(),
-            &TagValue::String("20480000".to_string())
+            metadata.get("ISO:VolumeBlockCount").unwrap(),
+            &TagValue::String("10000".to_string())
         );
         assert_eq!(
-            metadata.get("PublisherID").unwrap(),
+            metadata.get("ISO:Publisher").unwrap(),
             &TagValue::String("TEST PUBLISHER".to_string())
         );
         assert_eq!(
-            metadata.get("ApplicationID").unwrap(),
+            metadata.get("ISO:Software").unwrap(),
             &TagValue::String("MKISOFS".to_string())
         );
         assert_eq!(
-            metadata.get("CreationDate").unwrap(),
-            &TagValue::String("2024:03:15 14:30:45".to_string())
+            metadata.get("ISO:VolumeCreateDate").unwrap(),
+            &TagValue::String("2024:03:15 14:30:45.00+00:00".to_string())
         );
     }
 }
