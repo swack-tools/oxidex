@@ -1863,17 +1863,44 @@ fn format_exif_display_value(
         }
         // CFAPattern: UNDEFINED with two endian-dependent u16 dimensions.
         0xA302 if field_type == 7 => decode_exif_cfa_pattern(bytes, byte_order),
-        // FlashpixVersion: UNDEFINED 4 bytes printed as e.g. "0100".
+        // FlashpixVersion: UNDEFINED with Exif.pm RawConv
+        // `$val=~s/\0+$//; $val`.
         0xA000 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
-            let ver_bytes = bytes.get(..count.min(4))?;
-            Some(String::from_utf8_lossy(ver_bytes).into_owned())
+            let version = String::from_utf8_lossy(bytes.get(..count)?)
+                .trim_end_matches('\0')
+                .to_string();
+            (!version.is_empty()).then_some(version)
+        }
+        // FocalLength: RATIONAL[1]. Exif.pm PrintConv:
+        // `sprintf("%.1f mm",$val)`.
+        0x920A if field_type == 5 && value_count >= 1 => {
+            let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                None
+            } else {
+                Some(format!(
+                    "{:.1} mm",
+                    f64::from(numerator) / f64::from(denominator)
+                ))
+            }
         }
         // FocalLengthIn35mmFormat: SHORT[1] with " mm" suffix.
         // Exif.pm PrintConv: $val .= " mm"
         0xA405 if field_type == 3 && value_count >= 1 => {
             let value = read_tiff_u16(bytes, byte_order)?;
             Some(format!("{} mm", value))
+        }
+        // Gamma: RATIONAL[1] with no PrintConv. A zero denominator is the
+        // undefined rational which ExifTool prints as "undef".
+        0xA500 if field_type == 5 && value_count >= 1 => {
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                Some("undef".to_string())
+            } else {
+                format_rational_as_string(bytes, byte_order)
+            }
         }
         // GainControl: SHORT[1] with PrintConv table.
         // Exif.pm: 0=>'None', 1=>'Low gain up', 2=>'High gain up',
@@ -3521,12 +3548,11 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
         }
     }
 
-    // For JPEG image sections (type 2/3), extract the standard EXIF tags that
-    // ExifTool reports from the embedded JPEG preview (ColorSpace,
-    // ComponentsConfiguration, CustomRendered, CreateDate, DateTimeOriginal,
-    // Compression, etc.).  We parse the TIFF inside the APP1 segment ourselves
-    // so we can be selective and avoid pulling in thumbnail pointers,
-    // InteropOffset, or composite tags that ExifTool does not emit for X3F.
+    // Promote the selected preview tags that ExifTool reports in its EXIF
+    // family. ComponentsConfiguration is deliberately excluded here because
+    // the pass above already emits its single physical ExifIFD entry. ISO is
+    // also excluded: X3F's existing SigmaRaw:ISO property must not be
+    // re-grouped because EXIF:ISO triggers an X3F-only Composite:ISO extra.
     if image_type == 2 || image_type == 3 {
         if data.len() > 28 + 2 && &data[28..30] == b"\xff\xd8" {
             let jpeg_data = &data[28..];
@@ -3561,45 +3587,46 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                 if let Ok(exif_tags) = parse_ifd(&reader, offset, byte_order) {
                                     for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
                                         let bytes = raw_bytes.as_ref();
-                                        let (tag_name, opt_display) = match *tag_id {
-                                            0x9003 => ("EXIF:DateTimeOriginal", None),
-                                            0x9004 => ("EXIF:CreateDate", None),
-                                            0x9101 => (
-                                                "EXIF:ComponentsConfiguration",
-                                                format_exif_display_value(
-                                                    *tag_id,
-                                                    bytes,
-                                                    *field_type,
-                                                    *value_count,
-                                                    byte_order,
-                                                ),
-                                            ),
-                                            0xA001 => (
-                                                "EXIF:ColorSpace",
-                                                format_exif_display_value(
-                                                    *tag_id,
-                                                    bytes,
-                                                    *field_type,
-                                                    *value_count,
-                                                    byte_order,
-                                                ),
-                                            ),
-                                            0xA401 => (
-                                                "EXIF:CustomRendered",
-                                                format_exif_display_value(
-                                                    *tag_id,
-                                                    bytes,
-                                                    *field_type,
-                                                    *value_count,
-                                                    byte_order,
-                                                ),
-                                            ),
-                                            _ => continue,
-                                        };
-                                        if metadata.contains_key(tag_name) {
+                                        // Existing promoted tags:
+                                        //   0x9003 DateTimeOriginal
+                                        //   0x9004 CreateDate
+                                        //   0xA001 ColorSpace
+                                        //   0xA401 CustomRendered
+                                        // Newly covered tags, from Exif.pm:
+                                        //   0x920A FocalLength
+                                        //   0xA000 FlashpixVersion
+                                        //   0xA405 FocalLengthIn35mmFormat
+                                        //   0xA420 ImageUniqueID
+                                        //   0xA500 Gamma
+                                        if !matches!(
+                                            *tag_id,
+                                            0x9003
+                                                | 0x9004
+                                                | 0x920A
+                                                | 0xA000
+                                                | 0xA001
+                                                | 0xA401
+                                                | 0xA405
+                                                | 0xA420
+                                                | 0xA500
+                                        ) {
                                             continue;
                                         }
-                                        let value = if let Some(display) = opt_display {
+
+                                        let tag_name = lookup_tag_name(*tag_id, "EXIF");
+                                        if metadata.contains_key(&tag_name) {
+                                            continue;
+                                        }
+
+                                        let value = if let Some(display) =
+                                            format_exif_display_value(
+                                                *tag_id,
+                                                bytes,
+                                                *field_type,
+                                                *value_count,
+                                                byte_order,
+                                            )
+                                        {
                                             TagValue::new_string(display)
                                         } else {
                                             raw_bytes_to_simple_tag_value(
@@ -3609,7 +3636,7 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                                 byte_order,
                                             )
                                         };
-                                        metadata.insert(tag_name.to_string(), value);
+                                        metadata.insert(tag_name, value);
                                     }
                                 }
                             }
@@ -3857,6 +3884,153 @@ fn format_x3f_compression(
     }
     // Fall back to the standard simple tag value for other values.
     raw_bytes_to_simple_tag_value(bytes, field_type, value_count, byte_order)
+}
+
+#[cfg(test)]
+mod x3f_missing_exif_tests {
+    use super::*;
+
+    #[test]
+    fn extracts_preview_exif_without_promoting_iso_or_adding_composite_iso() {
+        // Big-endian TIFF with IFD0 -> ExifIFD, matching SigmaDP2.x3f's
+        // embedded preview. Embedded ISO is present to prove that this path
+        // does not promote it alongside the existing X3F property.
+        let mut tiff = vec![0u8; 165];
+        tiff[0..8].copy_from_slice(b"MM\x00\x2a\x00\x00\x00\x08");
+        tiff[8..10].copy_from_slice(&1u16.to_be_bytes());
+        tiff[10..12].copy_from_slice(&0x8769u16.to_be_bytes());
+        tiff[12..14].copy_from_slice(&4u16.to_be_bytes());
+        tiff[14..18].copy_from_slice(&1u32.to_be_bytes());
+        tiff[18..22].copy_from_slice(&26u32.to_be_bytes());
+
+        tiff[26..28].copy_from_slice(&7u16.to_be_bytes());
+        let entries = [
+            (0x920Au16, 5u16, 1u32, 116u32.to_be_bytes()),
+            (0xA000u16, 7u16, 4u32, *b"0100"),
+            (0xA405u16, 3u16, 1u32, [0, 41, 0, 0]),
+            (0xA420u16, 2u16, 33u32, 124u32.to_be_bytes()),
+            (0xA500u16, 5u16, 1u32, 157u32.to_be_bytes()),
+            (0x9101u16, 7u16, 4u32, [1, 2, 3, 0]),
+            (0x8827u16, 3u16, 1u32, [0, 100, 0, 0]),
+        ];
+        for (index, (tag_id, field_type, count, value)) in entries.iter().enumerate() {
+            let start = 28 + index * 12;
+            tiff[start..start + 2].copy_from_slice(&tag_id.to_be_bytes());
+            tiff[start + 2..start + 4].copy_from_slice(&field_type.to_be_bytes());
+            tiff[start + 4..start + 8].copy_from_slice(&count.to_be_bytes());
+            tiff[start + 8..start + 12].copy_from_slice(value);
+        }
+        tiff[116..120].copy_from_slice(&242u32.to_be_bytes());
+        tiff[120..124].copy_from_slice(&10u32.to_be_bytes());
+        tiff[124..156].copy_from_slice(b"30313030383338321020110031646638");
+        tiff[156] = 0;
+        // Gamma numerator and denominator at 157..165 remain zero.
+
+        let app1_length =
+            u16::try_from(2 + 6 + tiff.len()).expect("synthetic APP1 length fits in u16");
+        let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
+        jpeg.extend_from_slice(&app1_length.to_be_bytes());
+        jpeg.extend_from_slice(b"Exif\0\0");
+        jpeg.extend_from_slice(&tiff);
+        jpeg.extend_from_slice(&[0xff, 0xd9]);
+
+        let mut image_section = vec![0u8; 28];
+        image_section[0..4].copy_from_slice(b"SECi");
+        image_section[4..8].copy_from_slice(&0x0002_0000u32.to_le_bytes());
+        image_section[8..12].copy_from_slice(&2u32.to_le_bytes());
+        image_section[16..20].copy_from_slice(&2640u32.to_le_bytes());
+        image_section[20..24].copy_from_slice(&1760u32.to_le_bytes());
+        image_section.extend_from_slice(&jpeg);
+
+        // One SECp property: ISO = 100. The offsets are UTF-16 code-unit
+        // offsets into the data block following the property table.
+        let mut property_section = vec![0u8; 32];
+        property_section[0..4].copy_from_slice(b"SECp");
+        property_section[4..8].copy_from_slice(&0x0002_0000u32.to_le_bytes());
+        property_section[8..12].copy_from_slice(&1u32.to_le_bytes());
+        property_section[24..28].copy_from_slice(&0u32.to_le_bytes());
+        property_section[28..32].copy_from_slice(&4u32.to_le_bytes());
+        for code_unit in "ISO\0".encode_utf16() {
+            property_section.extend_from_slice(&code_unit.to_le_bytes());
+        }
+        for code_unit in "100\0".encode_utf16() {
+            property_section.extend_from_slice(&code_unit.to_le_bytes());
+        }
+
+        let property_offset = 104u32;
+        let image_offset = property_offset
+            + u32::try_from(property_section.len())
+                .expect("synthetic property section length fits in u32");
+        let mut x3f = vec![0u8; property_offset as usize];
+        x3f[0..4].copy_from_slice(b"FOVb");
+        x3f[4..8].copy_from_slice(&0x0002_0003u32.to_le_bytes());
+        x3f.extend_from_slice(&property_section);
+        x3f.extend_from_slice(&image_section);
+
+        let directory_offset =
+            u32::try_from(x3f.len()).expect("synthetic X3F length fits in u32");
+        x3f.extend_from_slice(b"SECd");
+        x3f.extend_from_slice(&0x0002_0000u32.to_le_bytes());
+        x3f.extend_from_slice(&2u32.to_le_bytes());
+        x3f.extend_from_slice(&property_offset.to_le_bytes());
+        x3f.extend_from_slice(
+            &u32::try_from(property_section.len())
+                .expect("synthetic property section length fits in u32")
+                .to_le_bytes(),
+        );
+        x3f.extend_from_slice(b"SECp");
+        x3f.extend_from_slice(&image_offset.to_le_bytes());
+        x3f.extend_from_slice(
+            &u32::try_from(image_section.len())
+                .expect("synthetic image section length fits in u32")
+                .to_le_bytes(),
+        );
+        x3f.extend_from_slice(b"SECi");
+        x3f.extend_from_slice(&directory_offset.to_le_bytes());
+
+        // Exercise format detection, dispatch, X3F parsing and the same
+        // ExifTool-compatibility formatting used by CLI output.
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "oxidex-x3f-missing-exif-{}-{unique}.x3f",
+            std::process::id()
+        ));
+        std::fs::write(&path, &x3f).expect("synthetic X3F should be writable");
+        let parsed = crate::core::operations::read_metadata(&path)
+            .expect("synthetic X3F should pass the full read pipeline");
+        let formatted = crate::core::exiftool_compat::format_for_exiftool(&parsed);
+        let _ = std::fs::remove_file(&path);
+
+        let text = |key| parsed.get(key).and_then(TagValue::as_string);
+        assert_eq!(text("SigmaRaw:ISO"), Some("100"));
+        assert!(
+            parsed.get("EXIF:ISO").is_none(),
+            "embedded ISO must not be promoted from the preview"
+        );
+        assert!(
+            formatted.get("Composite:ISO").is_none(),
+            "the final formatted X3F output must not contain Composite:ISO"
+        );
+        assert_eq!(text("EXIF:FocalLength"), Some("24.2 mm"));
+        assert_eq!(text("EXIF:FlashpixVersion"), Some("0100"));
+        assert_eq!(text("EXIF:FocalLengthIn35mmFormat"), Some("41 mm"));
+        assert_eq!(
+            text("EXIF:ImageUniqueID"),
+            Some("30313030383338321020110031646638")
+        );
+        assert_eq!(text("EXIF:Gamma"), Some("undef"));
+        assert_eq!(
+            text("ExifIFD:ComponentsConfiguration"),
+            Some("Y, Cb, Cr, -")
+        );
+        assert!(
+            parsed.get("EXIF:ComponentsConfiguration").is_none(),
+            "ComponentsConfiguration must not be emitted under a second group"
+        );
+    }
 }
 
 // ===== Fujifilm RAF Format Parsing =====
