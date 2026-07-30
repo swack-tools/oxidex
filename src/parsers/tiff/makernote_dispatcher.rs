@@ -46,7 +46,10 @@ pub fn dispatch_makernote(
         "leica" | "leica camera ag" => Some(Box::new(leica::LeicaMakerNoteParser)),
         "sigma" | "sigma corporation" => Some(Box::new(sigma::SigmaMakerNoteParser)),
         "phase one" | "phase one a/s" => Some(Box::new(phaseone::PhaseOneMakerNoteParser)),
-        "minolta" | "konica minolta" | "minolta co., ltd." => {
+        "minolta"
+        | "konica minolta"
+        | "konica minolta digital camera"
+        | "minolta co., ltd." => {
             Some(Box::new(minolta::MinoltaParser))
         }
 
