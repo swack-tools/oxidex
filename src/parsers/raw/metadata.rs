@@ -1757,6 +1757,36 @@ fn format_exif_display_value(
             9 => Some("Bulb".to_string()),
             _ => None,
         },
+        // FocalLength: RATIONAL[1]. Exif.pm 0x920a:
+        //     PrintConv => 'sprintf("%.1f mm",$val)'
+        0x920A if field_type == 5 && value_count >= 1 => {
+            let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                None
+            } else {
+                Some(format!(
+                    "{:.1} mm",
+                    f64::from(numerator) / f64::from(denominator)
+                ))
+            }
+        }
+        // Gamma: RATIONAL[1] with no PrintConv. ExifTool renders a rational
+        // having a zero denominator as "undef".
+        0xA500 if field_type == 5 && value_count >= 1 => {
+            let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                Some("undef".to_string())
+            } else if numerator % denominator == 0 {
+                Some((numerator / denominator).to_string())
+            } else {
+                Some(format!(
+                    "{}",
+                    f64::from(numerator) / f64::from(denominator)
+                ))
+            }
+        }
         // ExifVersion: UNDEFINED. Exif.pm 0x9000 has no PrintConv, only
         //     RawConv => '$val=~s/\0+$//; $val',  # (some idiots add null terminators)
         0x9000 if field_type == 7 => {
@@ -1862,11 +1892,19 @@ fn format_exif_display_value(
         }
         // CFAPattern: UNDEFINED with two endian-dependent u16 dimensions.
         0xA302 if field_type == 7 => decode_exif_cfa_pattern(bytes, byte_order),
-        // FlashpixVersion: UNDEFINED 4 bytes printed as e.g. "0100".
+        // FlashpixVersion: UNDEFINED. Exif.pm 0xa000 RawConv, verbatim:
+        //     '$val=~s/\0+$//; $val'
         0xA000 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
-            let ver_bytes = bytes.get(..count.min(4))?;
-            Some(String::from_utf8_lossy(ver_bytes).into_owned())
+            let version = bytes.get(..count)?;
+            let trimmed = String::from_utf8_lossy(version)
+                .trim_end_matches('\0')
+                .to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
         }
         // FocalLengthIn35mmFormat: SHORT[1] with " mm" suffix.
         // Exif.pm PrintConv: $val .= " mm"
@@ -2750,6 +2788,36 @@ fn extract_nef_tags(metadata: &mut MetadataMap) {
             TagValue::new_string(bits_val),
         );
     }
+
+    #[test]
+    fn formats_x3f_embedded_exif_values() {
+        let le = ByteOrder::LittleEndian;
+        let focal_length: Vec<u8> = [242u32, 10]
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        assert_eq!(
+            format_exif_display_value(0x920A, &focal_length, 5, 1, le).as_deref(),
+            Some("24.2 mm")
+        );
+
+        let undefined_gamma: Vec<u8> = [0u32, 0]
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        assert_eq!(
+            format_exif_display_value(0xA500, &undefined_gamma, 5, 1, le).as_deref(),
+            Some("undef")
+        );
+        assert_eq!(
+            format_exif_display_value(0xA000, b"0100\0", 7, 5, le).as_deref(),
+            Some("0100")
+        );
+        assert_eq!(
+            format_exif_display_value(0xA405, &41u16.to_le_bytes(), 3, 1, le).as_deref(),
+            Some("41 mm")
+        );
+    }
 }
 
 /// Parse Canon CR3 format (ISO Base Media File Format)
@@ -3422,18 +3490,24 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                             0x829A // ExposureTime
                                                 | 0x829D // FNumber
                                                 | 0x8822 // ExposureProgram
+                                                | 0x8827 // ISO
                                                 | 0x9000 // ExifVersion
                                                 | 0x9003 // DateTimeOriginal
                                                 | 0x9004 // CreateDate
                                                 | 0x9101 // ComponentsConfiguration
                                                 | 0x9204 // ExposureCompensation
                                                 | 0x9209 // Flash
+                                                | 0x920A // FocalLength
+                                                | 0xA000 // FlashpixVersion
                                                 | 0xA001 // ColorSpace
                                                 | 0xA002 // ExifImageWidth
                                                 | 0xA003 // ExifImageHeight
                                                 | 0xA300 // FileSource
                                                 | 0xA401 // CustomRendered
                                                 | 0xA402 // ExposureMode
+                                                | 0xA405 // FocalLengthIn35mmFormat
+                                                | 0xA420 // ImageUniqueID
+                                                | 0xA500 // Gamma
                                         ) {
                                             continue;
                                         }
