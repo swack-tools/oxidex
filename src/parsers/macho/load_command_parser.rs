@@ -7,8 +7,44 @@
 use nom::{
     IResult,
     bytes::complete::take,
-    number::complete::{le_i32, le_u32, le_u64},
+    number::complete::{be_i32, be_u32, be_u64, le_i32, le_u32, le_u64},
 };
+
+/// The byte order the load commands are stored in.
+///
+/// Not a detail this module may assume. A Mach-O's magic encodes its byte
+/// order -- `0xFEEDFACE` big-endian versus the byte-reversed `0xCEFAEDFE` --
+/// and `header_parser` already resolves it onto `MachHeader::is_swapped`.
+/// Every number below used to be read little-endian regardless, so a
+/// big-endian binary's first load command (`cmd` 1, `cmdsize` 56) read as
+/// `0x01000000` and `0x38000000`; the parse died with nom's `TooLarge` and
+/// the whole file yielded no tags.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Endian {
+    big: bool,
+}
+
+impl Endian {
+    /// Byte order for a header whose magic was stored byte-reversed.
+    ///
+    /// `is_swapped` is true for CIGAM (the file is little-endian) and false
+    /// for MAGIC (big-endian, the original PowerPC order).
+    pub fn from_swapped(is_swapped: bool) -> Self {
+        Endian { big: !is_swapped }
+    }
+
+    fn u32<'a>(self, i: &'a [u8]) -> IResult<&'a [u8], u32> {
+        if self.big { be_u32(i) } else { le_u32(i) }
+    }
+
+    fn u64<'a>(self, i: &'a [u8]) -> IResult<&'a [u8], u64> {
+        if self.big { be_u64(i) } else { le_u64(i) }
+    }
+
+    fn i32<'a>(self, i: &'a [u8]) -> IResult<&'a [u8], i32> {
+        if self.big { be_i32(i) } else { le_i32(i) }
+    }
+}
 
 use super::structures::{
     BuildToolVersion, BuildVersionCommand, DylibCommand, DysymtabCommand, EncryptionInfoCommand,
@@ -22,9 +58,9 @@ use super::structures::{
 // =============================================================================
 
 /// Parse a load command header (cmd + cmdsize)
-pub fn parse_load_command_header(input: &[u8]) -> IResult<&[u8], LoadCommandHeader> {
-    let (input, cmd) = le_u32(input)?;
-    let (input, cmdsize) = le_u32(input)?;
+pub fn parse_load_command_header(input: &[u8], e: Endian) -> IResult<&[u8], LoadCommandHeader> {
+    let (input, cmd) = e.u32(input)?;
+    let (input, cmdsize) = e.u32(input)?;
     Ok((input, LoadCommandHeader { cmd, cmdsize }))
 }
 
@@ -33,26 +69,26 @@ pub fn parse_load_command_header(input: &[u8]) -> IResult<&[u8], LoadCommandHead
 // =============================================================================
 
 /// Parse a 32-bit segment command (LC_SEGMENT)
-pub fn parse_segment_command_32(input: &[u8]) -> IResult<&[u8], SegmentCommand> {
+pub fn parse_segment_command_32(input: &[u8], e: Endian) -> IResult<&[u8], SegmentCommand> {
     // Skip cmd and cmdsize (already parsed in header)
-    let (input, _cmd) = le_u32(input)?;
-    let (input, _cmdsize) = le_u32(input)?;
+    let (input, _cmd) = e.u32(input)?;
+    let (input, _cmdsize) = e.u32(input)?;
 
     // Parse segment name (16 bytes, null-padded)
     let (input, segname_bytes) = take(16usize)(input)?;
     let segname = parse_name_16(segname_bytes);
 
-    let (input, vmaddr) = le_u32(input)?;
-    let (input, vmsize) = le_u32(input)?;
-    let (input, fileoff) = le_u32(input)?;
-    let (input, filesize) = le_u32(input)?;
-    let (input, maxprot) = le_i32(input)?;
-    let (input, initprot) = le_i32(input)?;
-    let (input, nsects) = le_u32(input)?;
-    let (input, flags) = le_u32(input)?;
+    let (input, vmaddr) = e.u32(input)?;
+    let (input, vmsize) = e.u32(input)?;
+    let (input, fileoff) = e.u32(input)?;
+    let (input, filesize) = e.u32(input)?;
+    let (input, maxprot) = e.i32(input)?;
+    let (input, initprot) = e.i32(input)?;
+    let (input, nsects) = e.u32(input)?;
+    let (input, flags) = e.u32(input)?;
 
     // Parse sections
-    let (input, sections) = parse_sections_32(input, nsects)?;
+    let (input, sections) = parse_sections_32(input, nsects, e)?;
 
     Ok((
         input,
@@ -72,26 +108,26 @@ pub fn parse_segment_command_32(input: &[u8]) -> IResult<&[u8], SegmentCommand> 
 }
 
 /// Parse a 64-bit segment command (LC_SEGMENT_64)
-pub fn parse_segment_command_64(input: &[u8]) -> IResult<&[u8], SegmentCommand> {
+pub fn parse_segment_command_64(input: &[u8], e: Endian) -> IResult<&[u8], SegmentCommand> {
     // Skip cmd and cmdsize (already parsed in header)
-    let (input, _cmd) = le_u32(input)?;
-    let (input, _cmdsize) = le_u32(input)?;
+    let (input, _cmd) = e.u32(input)?;
+    let (input, _cmdsize) = e.u32(input)?;
 
     // Parse segment name (16 bytes, null-padded)
     let (input, segname_bytes) = take(16usize)(input)?;
     let segname = parse_name_16(segname_bytes);
 
-    let (input, vmaddr) = le_u64(input)?;
-    let (input, vmsize) = le_u64(input)?;
-    let (input, fileoff) = le_u64(input)?;
-    let (input, filesize) = le_u64(input)?;
-    let (input, maxprot) = le_i32(input)?;
-    let (input, initprot) = le_i32(input)?;
-    let (input, nsects) = le_u32(input)?;
-    let (input, flags) = le_u32(input)?;
+    let (input, vmaddr) = e.u64(input)?;
+    let (input, vmsize) = e.u64(input)?;
+    let (input, fileoff) = e.u64(input)?;
+    let (input, filesize) = e.u64(input)?;
+    let (input, maxprot) = e.i32(input)?;
+    let (input, initprot) = e.i32(input)?;
+    let (input, nsects) = e.u32(input)?;
+    let (input, flags) = e.u32(input)?;
 
     // Parse sections
-    let (input, sections) = parse_sections_64(input, nsects)?;
+    let (input, sections) = parse_sections_64(input, nsects, e)?;
 
     Ok((
         input,
@@ -111,22 +147,22 @@ pub fn parse_segment_command_64(input: &[u8]) -> IResult<&[u8], SegmentCommand> 
 }
 
 /// Parse 32-bit sections
-fn parse_sections_32(input: &[u8], count: u32) -> IResult<&[u8], Vec<Section>> {
+fn parse_sections_32(input: &[u8], count: u32, e: Endian) -> IResult<&[u8], Vec<Section>> {
     let mut sections = Vec::with_capacity(count as usize);
     let mut remaining = input;
 
     for _ in 0..count {
         let (input, sectname_bytes) = take(16usize)(remaining)?;
         let (input, segname_bytes) = take(16usize)(input)?;
-        let (input, addr) = le_u32(input)?;
-        let (input, size) = le_u32(input)?;
-        let (input, offset) = le_u32(input)?;
-        let (input, align) = le_u32(input)?;
-        let (input, reloff) = le_u32(input)?;
-        let (input, nreloc) = le_u32(input)?;
-        let (input, flags) = le_u32(input)?;
-        let (input, reserved1) = le_u32(input)?;
-        let (input, reserved2) = le_u32(input)?;
+        let (input, addr) = e.u32(input)?;
+        let (input, size) = e.u32(input)?;
+        let (input, offset) = e.u32(input)?;
+        let (input, align) = e.u32(input)?;
+        let (input, reloff) = e.u32(input)?;
+        let (input, nreloc) = e.u32(input)?;
+        let (input, flags) = e.u32(input)?;
+        let (input, reserved1) = e.u32(input)?;
+        let (input, reserved2) = e.u32(input)?;
 
         sections.push(Section {
             sectname: parse_name_16(sectname_bytes),
@@ -150,23 +186,23 @@ fn parse_sections_32(input: &[u8], count: u32) -> IResult<&[u8], Vec<Section>> {
 }
 
 /// Parse 64-bit sections
-fn parse_sections_64(input: &[u8], count: u32) -> IResult<&[u8], Vec<Section>> {
+fn parse_sections_64(input: &[u8], count: u32, e: Endian) -> IResult<&[u8], Vec<Section>> {
     let mut sections = Vec::with_capacity(count as usize);
     let mut remaining = input;
 
     for _ in 0..count {
         let (input, sectname_bytes) = take(16usize)(remaining)?;
         let (input, segname_bytes) = take(16usize)(input)?;
-        let (input, addr) = le_u64(input)?;
-        let (input, size) = le_u64(input)?;
-        let (input, offset) = le_u32(input)?;
-        let (input, align) = le_u32(input)?;
-        let (input, reloff) = le_u32(input)?;
-        let (input, nreloc) = le_u32(input)?;
-        let (input, flags) = le_u32(input)?;
-        let (input, reserved1) = le_u32(input)?;
-        let (input, reserved2) = le_u32(input)?;
-        let (input, reserved3) = le_u32(input)?;
+        let (input, addr) = e.u64(input)?;
+        let (input, size) = e.u64(input)?;
+        let (input, offset) = e.u32(input)?;
+        let (input, align) = e.u32(input)?;
+        let (input, reloff) = e.u32(input)?;
+        let (input, nreloc) = e.u32(input)?;
+        let (input, flags) = e.u32(input)?;
+        let (input, reserved1) = e.u32(input)?;
+        let (input, reserved2) = e.u32(input)?;
+        let (input, reserved3) = e.u32(input)?;
 
         sections.push(Section {
             sectname: parse_name_16(sectname_bytes),
@@ -194,15 +230,15 @@ fn parse_sections_64(input: &[u8], count: u32) -> IResult<&[u8], Vec<Section>> {
 // =============================================================================
 
 /// Parse a dylib command (LC_LOAD_DYLIB, LC_ID_DYLIB, etc.)
-pub fn parse_dylib_command(input: &[u8]) -> IResult<&[u8], DylibCommand> {
+pub fn parse_dylib_command(input: &[u8], e: Endian) -> IResult<&[u8], DylibCommand> {
     let full_input = input;
 
-    let (input, cmd) = le_u32(input)?;
-    let (input, cmdsize) = le_u32(input)?;
-    let (input, name_offset) = le_u32(input)?;
-    let (input, timestamp) = le_u32(input)?;
-    let (input, current_version) = le_u32(input)?;
-    let (input, compatibility_version) = le_u32(input)?;
+    let (input, cmd) = e.u32(input)?;
+    let (input, cmdsize) = e.u32(input)?;
+    let (input, name_offset) = e.u32(input)?;
+    let (input, timestamp) = e.u32(input)?;
+    let (input, current_version) = e.u32(input)?;
+    let (input, compatibility_version) = e.u32(input)?;
 
     // Parse name from offset within the command
     let name = if name_offset as usize <= cmdsize as usize {
@@ -234,9 +270,9 @@ pub fn parse_dylib_command(input: &[u8]) -> IResult<&[u8], DylibCommand> {
 // =============================================================================
 
 /// Parse a UUID command (LC_UUID)
-pub fn parse_uuid_command(input: &[u8]) -> IResult<&[u8], UuidCommand> {
-    let (input, _cmd) = le_u32(input)?;
-    let (input, _cmdsize) = le_u32(input)?;
+pub fn parse_uuid_command(input: &[u8], e: Endian) -> IResult<&[u8], UuidCommand> {
+    let (input, _cmd) = e.u32(input)?;
+    let (input, _cmdsize) = e.u32(input)?;
     let (input, uuid_bytes) = take(16usize)(input)?;
 
     let mut uuid = [0u8; 16];
@@ -250,26 +286,26 @@ pub fn parse_uuid_command(input: &[u8]) -> IResult<&[u8], UuidCommand> {
 // =============================================================================
 
 /// Parse a version_min command (LC_VERSION_MIN_*)
-pub fn parse_version_min_command(input: &[u8]) -> IResult<&[u8], VersionMinCommand> {
-    let (input, cmd) = le_u32(input)?;
-    let (input, _cmdsize) = le_u32(input)?;
-    let (input, version) = le_u32(input)?;
-    let (input, sdk) = le_u32(input)?;
+pub fn parse_version_min_command(input: &[u8], e: Endian) -> IResult<&[u8], VersionMinCommand> {
+    let (input, cmd) = e.u32(input)?;
+    let (input, _cmdsize) = e.u32(input)?;
+    let (input, version) = e.u32(input)?;
+    let (input, sdk) = e.u32(input)?;
 
     Ok((input, VersionMinCommand { cmd, version, sdk }))
 }
 
 /// Parse a build version command (LC_BUILD_VERSION)
-pub fn parse_build_version_command(input: &[u8]) -> IResult<&[u8], BuildVersionCommand> {
-    let (input, _cmd) = le_u32(input)?;
-    let (input, _cmdsize) = le_u32(input)?;
-    let (input, platform) = le_u32(input)?;
-    let (input, minos) = le_u32(input)?;
-    let (input, sdk) = le_u32(input)?;
-    let (input, ntools) = le_u32(input)?;
+pub fn parse_build_version_command(input: &[u8], e: Endian) -> IResult<&[u8], BuildVersionCommand> {
+    let (input, _cmd) = e.u32(input)?;
+    let (input, _cmdsize) = e.u32(input)?;
+    let (input, platform) = e.u32(input)?;
+    let (input, minos) = e.u32(input)?;
+    let (input, sdk) = e.u32(input)?;
+    let (input, ntools) = e.u32(input)?;
 
     // Parse tool versions
-    let (input, tools) = parse_build_tool_versions(input, ntools)?;
+    let (input, tools) = parse_build_tool_versions(input, ntools, e)?;
 
     Ok((
         input,
@@ -284,13 +320,17 @@ pub fn parse_build_version_command(input: &[u8]) -> IResult<&[u8], BuildVersionC
 }
 
 /// Parse build tool version entries
-fn parse_build_tool_versions(input: &[u8], count: u32) -> IResult<&[u8], Vec<BuildToolVersion>> {
+fn parse_build_tool_versions(
+    input: &[u8],
+    count: u32,
+    e: Endian,
+) -> IResult<&[u8], Vec<BuildToolVersion>> {
     let mut tools = Vec::with_capacity(count as usize);
     let mut remaining = input;
 
     for _ in 0..count {
-        let (input, tool) = le_u32(remaining)?;
-        let (input, version) = le_u32(input)?;
+        let (input, tool) = e.u32(remaining)?;
+        let (input, version) = e.u32(input)?;
         tools.push(BuildToolVersion { tool, version });
         remaining = input;
     }
@@ -299,10 +339,13 @@ fn parse_build_tool_versions(input: &[u8], count: u32) -> IResult<&[u8], Vec<Bui
 }
 
 /// Parse a source version command (LC_SOURCE_VERSION)
-pub fn parse_source_version_command(input: &[u8]) -> IResult<&[u8], SourceVersionCommand> {
-    let (input, _cmd) = le_u32(input)?;
-    let (input, _cmdsize) = le_u32(input)?;
-    let (input, version) = le_u64(input)?;
+pub fn parse_source_version_command(
+    input: &[u8],
+    e: Endian,
+) -> IResult<&[u8], SourceVersionCommand> {
+    let (input, _cmd) = e.u32(input)?;
+    let (input, _cmdsize) = e.u32(input)?;
+    let (input, version) = e.u64(input)?;
 
     Ok((input, SourceVersionCommand { version }))
 }
@@ -312,11 +355,11 @@ pub fn parse_source_version_command(input: &[u8]) -> IResult<&[u8], SourceVersio
 // =============================================================================
 
 /// Parse a main entry point command (LC_MAIN)
-pub fn parse_entry_point_command(input: &[u8]) -> IResult<&[u8], EntryPointCommand> {
-    let (input, _cmd) = le_u32(input)?;
-    let (input, _cmdsize) = le_u32(input)?;
-    let (input, entryoff) = le_u64(input)?;
-    let (input, stacksize) = le_u64(input)?;
+pub fn parse_entry_point_command(input: &[u8], e: Endian) -> IResult<&[u8], EntryPointCommand> {
+    let (input, _cmd) = e.u32(input)?;
+    let (input, _cmdsize) = e.u32(input)?;
+    let (input, entryoff) = e.u64(input)?;
+    let (input, stacksize) = e.u64(input)?;
 
     Ok((
         input,
@@ -332,13 +375,13 @@ pub fn parse_entry_point_command(input: &[u8]) -> IResult<&[u8], EntryPointComma
 // =============================================================================
 
 /// Parse a symbol table command (LC_SYMTAB)
-pub fn parse_symtab_command(input: &[u8]) -> IResult<&[u8], SymtabCommand> {
-    let (input, _cmd) = le_u32(input)?;
-    let (input, _cmdsize) = le_u32(input)?;
-    let (input, symoff) = le_u32(input)?;
-    let (input, nsyms) = le_u32(input)?;
-    let (input, stroff) = le_u32(input)?;
-    let (input, strsize) = le_u32(input)?;
+pub fn parse_symtab_command(input: &[u8], e: Endian) -> IResult<&[u8], SymtabCommand> {
+    let (input, _cmd) = e.u32(input)?;
+    let (input, _cmdsize) = e.u32(input)?;
+    let (input, symoff) = e.u32(input)?;
+    let (input, nsyms) = e.u32(input)?;
+    let (input, stroff) = e.u32(input)?;
+    let (input, strsize) = e.u32(input)?;
 
     Ok((
         input,
@@ -352,27 +395,27 @@ pub fn parse_symtab_command(input: &[u8]) -> IResult<&[u8], SymtabCommand> {
 }
 
 /// Parse a dynamic symbol table command (LC_DYSYMTAB)
-pub fn parse_dysymtab_command(input: &[u8]) -> IResult<&[u8], DysymtabCommand> {
-    let (input, _cmd) = le_u32(input)?;
-    let (input, _cmdsize) = le_u32(input)?;
-    let (input, ilocalsym) = le_u32(input)?;
-    let (input, nlocalsym) = le_u32(input)?;
-    let (input, iextdefsym) = le_u32(input)?;
-    let (input, nextdefsym) = le_u32(input)?;
-    let (input, iundefsym) = le_u32(input)?;
-    let (input, nundefsym) = le_u32(input)?;
-    let (input, tocoff) = le_u32(input)?;
-    let (input, ntoc) = le_u32(input)?;
-    let (input, modtaboff) = le_u32(input)?;
-    let (input, nmodtab) = le_u32(input)?;
-    let (input, extrefsymoff) = le_u32(input)?;
-    let (input, nextrefsyms) = le_u32(input)?;
-    let (input, indirectsymoff) = le_u32(input)?;
-    let (input, nindirectsyms) = le_u32(input)?;
-    let (input, extreloff) = le_u32(input)?;
-    let (input, nextrel) = le_u32(input)?;
-    let (input, locreloff) = le_u32(input)?;
-    let (input, nlocrel) = le_u32(input)?;
+pub fn parse_dysymtab_command(input: &[u8], e: Endian) -> IResult<&[u8], DysymtabCommand> {
+    let (input, _cmd) = e.u32(input)?;
+    let (input, _cmdsize) = e.u32(input)?;
+    let (input, ilocalsym) = e.u32(input)?;
+    let (input, nlocalsym) = e.u32(input)?;
+    let (input, iextdefsym) = e.u32(input)?;
+    let (input, nextdefsym) = e.u32(input)?;
+    let (input, iundefsym) = e.u32(input)?;
+    let (input, nundefsym) = e.u32(input)?;
+    let (input, tocoff) = e.u32(input)?;
+    let (input, ntoc) = e.u32(input)?;
+    let (input, modtaboff) = e.u32(input)?;
+    let (input, nmodtab) = e.u32(input)?;
+    let (input, extrefsymoff) = e.u32(input)?;
+    let (input, nextrefsyms) = e.u32(input)?;
+    let (input, indirectsymoff) = e.u32(input)?;
+    let (input, nindirectsyms) = e.u32(input)?;
+    let (input, extreloff) = e.u32(input)?;
+    let (input, nextrel) = e.u32(input)?;
+    let (input, locreloff) = e.u32(input)?;
+    let (input, nlocrel) = e.u32(input)?;
 
     Ok((
         input,
@@ -404,11 +447,11 @@ pub fn parse_dysymtab_command(input: &[u8]) -> IResult<&[u8], DysymtabCommand> {
 // =============================================================================
 
 /// Parse a linkedit data command (LC_CODE_SIGNATURE, LC_FUNCTION_STARTS, etc.)
-pub fn parse_linkedit_data_command(input: &[u8]) -> IResult<&[u8], LinkeditDataCommand> {
-    let (input, cmd) = le_u32(input)?;
-    let (input, _cmdsize) = le_u32(input)?;
-    let (input, dataoff) = le_u32(input)?;
-    let (input, datasize) = le_u32(input)?;
+pub fn parse_linkedit_data_command(input: &[u8], e: Endian) -> IResult<&[u8], LinkeditDataCommand> {
+    let (input, cmd) = e.u32(input)?;
+    let (input, _cmdsize) = e.u32(input)?;
+    let (input, dataoff) = e.u32(input)?;
+    let (input, datasize) = e.u32(input)?;
 
     Ok((
         input,
@@ -425,12 +468,12 @@ pub fn parse_linkedit_data_command(input: &[u8]) -> IResult<&[u8], LinkeditDataC
 // =============================================================================
 
 /// Parse an rpath command (LC_RPATH)
-pub fn parse_rpath_command(input: &[u8]) -> IResult<&[u8], RpathCommand> {
+pub fn parse_rpath_command(input: &[u8], e: Endian) -> IResult<&[u8], RpathCommand> {
     let full_input = input;
 
-    let (input, _cmd) = le_u32(input)?;
-    let (input, cmdsize) = le_u32(input)?;
-    let (input, path_offset) = le_u32(input)?;
+    let (input, _cmd) = e.u32(input)?;
+    let (input, cmdsize) = e.u32(input)?;
+    let (input, path_offset) = e.u32(input)?;
 
     // Parse path from offset within the command
     let path = if path_offset as usize <= cmdsize as usize {
@@ -456,16 +499,17 @@ pub fn parse_rpath_command(input: &[u8]) -> IResult<&[u8], RpathCommand> {
 pub fn parse_encryption_info_command(
     input: &[u8],
     is_64bit: bool,
+    e: Endian,
 ) -> IResult<&[u8], EncryptionInfoCommand> {
-    let (input, _cmd) = le_u32(input)?;
-    let (input, _cmdsize) = le_u32(input)?;
-    let (input, cryptoff) = le_u32(input)?;
-    let (input, cryptsize) = le_u32(input)?;
-    let (input, cryptid) = le_u32(input)?;
+    let (input, _cmd) = e.u32(input)?;
+    let (input, _cmdsize) = e.u32(input)?;
+    let (input, cryptoff) = e.u32(input)?;
+    let (input, cryptsize) = e.u32(input)?;
+    let (input, cryptid) = e.u32(input)?;
 
     // 64-bit version has a padding field
     let input = if is_64bit {
-        let (input, _pad) = le_u32(input)?;
+        let (input, _pad) = e.u32(input)?;
         input
     } else {
         input
@@ -535,9 +579,9 @@ pub enum LoadCommand {
 /// Parse a single load command from the input
 ///
 /// Returns the parsed command and advances past the entire command.
-pub fn parse_load_command(input: &[u8], _is_64bit: bool) -> IResult<&[u8], LoadCommand> {
+pub fn parse_load_command(input: &[u8], _is_64bit: bool, e: Endian) -> IResult<&[u8], LoadCommand> {
     // First peek at the header to determine command type and size
-    let (_, header) = parse_load_command_header(input)?;
+    let (_, header) = parse_load_command_header(input, e)?;
 
     // Ensure we have enough data for the entire command
     if input.len() < header.cmdsize as usize {
@@ -553,11 +597,11 @@ pub fn parse_load_command(input: &[u8], _is_64bit: bool) -> IResult<&[u8], LoadC
     // Parse based on command type
     let cmd = match header.cmd {
         load_command::LC_SEGMENT => {
-            let (_, seg) = parse_segment_command_32(cmd_data)?;
+            let (_, seg) = parse_segment_command_32(cmd_data, e)?;
             LoadCommand::Segment(seg)
         }
         load_command::LC_SEGMENT_64 => {
-            let (_, seg) = parse_segment_command_64(cmd_data)?;
+            let (_, seg) = parse_segment_command_64(cmd_data, e)?;
             LoadCommand::Segment(seg)
         }
         load_command::LC_LOAD_DYLIB
@@ -566,38 +610,38 @@ pub fn parse_load_command(input: &[u8], _is_64bit: bool) -> IResult<&[u8], LoadC
         | load_command::LC_REEXPORT_DYLIB
         | load_command::LC_LAZY_LOAD_DYLIB
         | load_command::LC_LOAD_UPWARD_DYLIB => {
-            let (_, dylib) = parse_dylib_command(cmd_data)?;
+            let (_, dylib) = parse_dylib_command(cmd_data, e)?;
             LoadCommand::Dylib(dylib)
         }
         load_command::LC_UUID => {
-            let (_, uuid) = parse_uuid_command(cmd_data)?;
+            let (_, uuid) = parse_uuid_command(cmd_data, e)?;
             LoadCommand::Uuid(uuid)
         }
         load_command::LC_VERSION_MIN_MACOSX
         | load_command::LC_VERSION_MIN_IPHONEOS
         | load_command::LC_VERSION_MIN_WATCHOS
         | load_command::LC_VERSION_MIN_TVOS => {
-            let (_, ver) = parse_version_min_command(cmd_data)?;
+            let (_, ver) = parse_version_min_command(cmd_data, e)?;
             LoadCommand::VersionMin(ver)
         }
         load_command::LC_BUILD_VERSION => {
-            let (_, build) = parse_build_version_command(cmd_data)?;
+            let (_, build) = parse_build_version_command(cmd_data, e)?;
             LoadCommand::BuildVersion(build)
         }
         load_command::LC_SOURCE_VERSION => {
-            let (_, src) = parse_source_version_command(cmd_data)?;
+            let (_, src) = parse_source_version_command(cmd_data, e)?;
             LoadCommand::SourceVersion(src)
         }
         load_command::LC_MAIN => {
-            let (_, entry) = parse_entry_point_command(cmd_data)?;
+            let (_, entry) = parse_entry_point_command(cmd_data, e)?;
             LoadCommand::EntryPoint(entry)
         }
         load_command::LC_SYMTAB => {
-            let (_, symtab) = parse_symtab_command(cmd_data)?;
+            let (_, symtab) = parse_symtab_command(cmd_data, e)?;
             LoadCommand::Symtab(symtab)
         }
         load_command::LC_DYSYMTAB => {
-            let (_, dysymtab) = parse_dysymtab_command(cmd_data)?;
+            let (_, dysymtab) = parse_dysymtab_command(cmd_data, e)?;
             LoadCommand::Dysymtab(dysymtab)
         }
         load_command::LC_CODE_SIGNATURE
@@ -608,24 +652,24 @@ pub fn parse_load_command(input: &[u8], _is_64bit: bool) -> IResult<&[u8], LoadC
         | load_command::LC_LINKER_OPTIMIZATION_HINT
         | load_command::LC_DYLD_EXPORTS_TRIE
         | load_command::LC_DYLD_CHAINED_FIXUPS => {
-            let (_, linkedit) = parse_linkedit_data_command(cmd_data)?;
+            let (_, linkedit) = parse_linkedit_data_command(cmd_data, e)?;
             LoadCommand::LinkeditData(linkedit)
         }
         load_command::LC_DYLD_INFO | load_command::LC_DYLD_INFO_ONLY => {
             // DYLD_INFO has a different structure but we'll treat it as linkedit for now
-            let (_, linkedit) = parse_linkedit_data_command(cmd_data)?;
+            let (_, linkedit) = parse_linkedit_data_command(cmd_data, e)?;
             LoadCommand::LinkeditData(linkedit)
         }
         load_command::LC_RPATH => {
-            let (_, rpath) = parse_rpath_command(cmd_data)?;
+            let (_, rpath) = parse_rpath_command(cmd_data, e)?;
             LoadCommand::Rpath(rpath)
         }
         load_command::LC_ENCRYPTION_INFO => {
-            let (_, enc) = parse_encryption_info_command(cmd_data, false)?;
+            let (_, enc) = parse_encryption_info_command(cmd_data, false, e)?;
             LoadCommand::EncryptionInfo(enc)
         }
         load_command::LC_ENCRYPTION_INFO_64 => {
-            let (_, enc) = parse_encryption_info_command(cmd_data, true)?;
+            let (_, enc) = parse_encryption_info_command(cmd_data, true, e)?;
             LoadCommand::EncryptionInfo(enc)
         }
         _ => LoadCommand::Unknown(header),
@@ -639,12 +683,13 @@ pub fn parse_all_load_commands(
     input: &[u8],
     ncmds: u32,
     is_64bit: bool,
+    e: Endian,
 ) -> IResult<&[u8], Vec<LoadCommand>> {
     let mut commands = Vec::with_capacity(ncmds as usize);
     let mut remaining = input;
 
     for _ in 0..ncmds {
-        let (rest, cmd) = parse_load_command(remaining, is_64bit)?;
+        let (rest, cmd) = parse_load_command(remaining, is_64bit, e)?;
         commands.push(cmd);
         remaining = rest;
     }
@@ -655,6 +700,23 @@ pub fn parse_all_load_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every fixture below is a little-endian byte sequence, so the byte
+    /// order is named rather than defaulted.
+    const LE: Endian = Endian { big: false };
+
+    /// The same segment command read each way. This is the whole bug in one
+    /// assertion: a big-endian `cmdsize` of 56 read little-endian is
+    /// 0x38000000, which is why the parse used to die with `TooLarge`.
+    #[test]
+    fn test_load_command_header_honours_byte_order() {
+        let be_bytes = [0, 0, 0, 1, 0, 0, 0, 56];
+        let (_, be) = parse_load_command_header(&be_bytes, Endian { big: true }).unwrap();
+        assert_eq!((be.cmd, be.cmdsize), (1, 56));
+
+        let (_, le) = parse_load_command_header(&be_bytes, LE).unwrap();
+        assert_eq!((le.cmd, le.cmdsize), (0x0100_0000, 0x3800_0000));
+    }
 
     #[test]
     fn test_parse_name_16() {
@@ -678,7 +740,7 @@ mod tests {
         data.extend_from_slice(&load_command::LC_SEGMENT_64.to_le_bytes());
         data.extend_from_slice(&72u32.to_le_bytes()); // cmdsize
 
-        let result = parse_load_command_header(&data);
+        let result = parse_load_command_header(&data, LE);
         assert!(result.is_ok());
 
         let (_, header) = result.unwrap();
@@ -696,7 +758,7 @@ mod tests {
             0x00, 0x00,
         ]);
 
-        let result = parse_uuid_command(&data);
+        let result = parse_uuid_command(&data, LE);
         assert!(result.is_ok());
 
         let (_, uuid) = result.unwrap();
@@ -712,7 +774,7 @@ mod tests {
         data.extend_from_slice(&0x000B0000u32.to_le_bytes()); // version 11.0.0
         data.extend_from_slice(&0x000C0100u32.to_le_bytes()); // sdk 12.1.0
 
-        let result = parse_version_min_command(&data);
+        let result = parse_version_min_command(&data, LE);
         assert!(result.is_ok());
 
         let (_, ver) = result.unwrap();
@@ -730,7 +792,7 @@ mod tests {
         let version: u64 = (1 << 40) | (2 << 30) | (3 << 20) | (4 << 10) | 5;
         data.extend_from_slice(&version.to_le_bytes());
 
-        let result = parse_source_version_command(&data);
+        let result = parse_source_version_command(&data, LE);
         assert!(result.is_ok());
 
         let (_, src) = result.unwrap();
@@ -747,7 +809,7 @@ mod tests {
         data.extend_from_slice(&0x2000u32.to_le_bytes()); // stroff
         data.extend_from_slice(&0x500u32.to_le_bytes()); // strsize
 
-        let result = parse_symtab_command(&data);
+        let result = parse_symtab_command(&data, LE);
         assert!(result.is_ok());
 
         let (_, symtab) = result.unwrap();
@@ -765,7 +827,7 @@ mod tests {
         data.extend_from_slice(&0x4000u64.to_le_bytes()); // entryoff
         data.extend_from_slice(&0x100000u64.to_le_bytes()); // stacksize
 
-        let result = parse_entry_point_command(&data);
+        let result = parse_entry_point_command(&data, LE);
         assert!(result.is_ok());
 
         let (_, entry) = result.unwrap();
