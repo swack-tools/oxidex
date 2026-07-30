@@ -103,7 +103,7 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
     // CPU subtype
     metadata.insert(
         "EXE:CPUSubtype".to_string(),
-        TagValue::String(header.cpu_subtype_name()),
+        TagValue::String(exiftool_cpu_subtype(header.cputype, header.cpusubtype)),
     );
 
     // CPU subtype raw value
@@ -142,6 +142,36 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
             .to_string(),
         ),
     );
+
+    // ExifTool's spelling of the same three facts. Its names (CPUByteOrder,
+    // ObjectFileType, ObjectFlags) and its wording differ from the ones above,
+    // which are kept because tests and the C FFI already consume them. Emitting
+    // both costs three extra keys and turns three permanent misses into
+    // matches.
+    metadata.insert(
+        "EXE:CPUByteOrder".to_string(),
+        TagValue::String(
+            // Lower-case "endian" is ExifTool's, and the comparison is
+            // byte-for-byte.
+            if header.is_swapped {
+                "Little endian"
+            } else {
+                "Big endian"
+            }
+            .to_string(),
+        ),
+    );
+    metadata.insert(
+        "EXE:ObjectFileType".to_string(),
+        TagValue::String(exiftool_object_file_type(header.filetype).to_string()),
+    );
+    let object_flags = exiftool_object_flags(header.flags);
+    if !object_flags.is_empty() {
+        metadata.insert(
+            "EXE:ObjectFlags".to_string(),
+            TagValue::String(object_flags.join(", ")),
+        );
+    }
 
     // Is byte swapped (relative to original PPC big-endian format)
     metadata.insert(
@@ -634,6 +664,105 @@ fn extract_fat_metadata(info: &MachOInfo, metadata: &mut MetadataMap) {
 // =============================================================================
 // Helper: Populate MachOInfo from Load Commands
 // =============================================================================
+
+/// ExifTool's `CPUSubtype` naming (EXE.pm, `EXE::MachO` tag 4).
+///
+/// The table is keyed by the *pair* (cputype, subtype), and 64-bit variants
+/// reuse their 32-bit entry with a suffix: cputype 0x1000007 is
+/// CPU_ARCH_ABI64 | 7, so subtype 3 reads "i386 (all) 64-bit" rather than
+/// having an entry of its own. Only the architectures the corpus exercises
+/// are listed; anything else falls back to the raw number, which is what
+/// this reported for every architecture before.
+fn exiftool_cpu_subtype(cputype: i32, cpusubtype: i32) -> String {
+    const ABI64: i32 = 0x0100_0000;
+    let base = cputype & !ABI64;
+    let sub = cpusubtype & 0xFF;
+    let name = match (base, sub) {
+        (7, 3) => "i386 (all)",
+        (7, 4) => "i486",
+        (7, 5) => "i586",
+        (7, 8) => "Pentium III",
+        (7, 9) => "Pentium M",
+        (7, 10) => "Pentium 4",
+        (7, 12) => "Xeon",
+        (12, 0) => "ARM (all)",
+        (12, 6) => "ARM V6",
+        (12, 9) => "ARM V7",
+        (18, 0) => "PowerPC (all)",
+        (18, 1) => "PowerPC 601",
+        (18, 9) => "PowerPC 750",
+        (18, 10) => "PowerPC 7400",
+        (18, 11) => "PowerPC 7450",
+        (18, 100) => "PowerPC 970",
+        _ => return cpusubtype.to_string(),
+    };
+    if cputype & ABI64 != 0 {
+        format!("{} 64-bit", name)
+    } else {
+        name.to_string()
+    }
+}
+
+/// ExifTool's `ObjectFileType` table (EXE.pm, `EXE::MachO` tag 5).
+///
+/// Distinct from `file_type_name`, which uses oxidex's own shorter wording:
+/// ExifTool calls filetype 2 "Demand paged executable" where oxidex says
+/// "Executable", and the comparison is byte-for-byte.
+fn exiftool_object_file_type(filetype: u32) -> &'static str {
+    match filetype as i32 {
+        -1 => "Static library",
+        1 => "Relocatable object",
+        2 => "Demand paged executable",
+        3 => "Fixed VM shared library",
+        4 => "Core",
+        5 => "Preloaded executable",
+        6 => "Dynamically bound shared library",
+        7 => "Dynamic link editor",
+        8 => "Dynamically bound bundle",
+        9 => "Shared library stub for static linking",
+        10 => "Debug information",
+        11 => "x86_64 kexts",
+        _ => "Unknown",
+    }
+}
+
+/// ExifTool's `ObjectFlags` bit names (EXE.pm, `EXE::MachO` tag 6), in bit
+/// order. "Incrementa link" is ExifTool's spelling, typo included -- a
+/// corrected name is a name that does not match.
+const OBJECT_FLAG_BITS: [&str; 22] = [
+    "No undefs",
+    "Incrementa link",
+    "Dyld link",
+    "Bind at load",
+    "Prebound",
+    "Split segs",
+    "Lazy init",
+    "Two level",
+    "Force flat",
+    "No multi defs",
+    "No fix prebinding",
+    "Prebindable",
+    "All mods bound",
+    "Subsections via symbols",
+    "Canonical",
+    "Weak defines",
+    "Binds to weak",
+    "Allow stack execution",
+    "Dead strippable dylib",
+    "Root safe",
+    "No reexported dylibs",
+    "Random address",
+];
+
+/// Decodes the header flags into ExifTool's comma-joined bit names.
+fn exiftool_object_flags(flags: u32) -> Vec<&'static str> {
+    OBJECT_FLAG_BITS
+        .iter()
+        .enumerate()
+        .filter(|(bit, _)| flags & (1u32 << bit) != 0)
+        .map(|(_, name)| *name)
+        .collect()
+}
 
 /// Populate a MachOInfo structure from parsed load commands
 pub fn populate_macho_info(info: &mut MachOInfo, commands: &[LoadCommand]) {
