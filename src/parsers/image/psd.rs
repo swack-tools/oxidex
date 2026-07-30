@@ -166,12 +166,24 @@ impl PSDParser {
             pos += 2;
 
             // Pascal string name (padded to even)
+            if pos >= resources_data.len() {
+                break;
+            }
             let name_len = resources_data[pos] as usize;
+            let name_start = pos + 1;
+            let name_end = match name_start.checked_add(name_len) {
+                Some(end) if end <= resources_data.len() => end,
+                _ => break,
+            };
+            let resource_name = &resources_data[name_start..name_end];
             let padded_name_len = if (name_len + 1).is_multiple_of(2) {
                 name_len + 1
             } else {
                 name_len + 2
             };
+            if pos + padded_name_len > resources_data.len() {
+                break;
+            }
             pos += padded_name_len;
 
             if pos + 4 > resources_data.len() {
@@ -190,6 +202,10 @@ impl PSDParser {
             let resource_data = &resources_data[pos..pos + data_size];
 
             // Process specific resources
+            if is_photo_mechanic_soft_edit_resource(resource_name) {
+                parse_photo_mechanic_soft_edit(resource_data, metadata);
+            }
+
             match resource_id {
                 RESOLUTION_INFO => {
                     Self::parse_resolution_info(resource_data, metadata);
@@ -435,6 +451,75 @@ impl FormatParser for PSDParser {
 pub fn parse_psd_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
     let parser = PSDParser;
     parser.parse(reader).map_err(|e| e.to_string())
+}
+
+/// Identify the named Photoshop plug-in resource used for Photo Mechanic
+/// soft-edit data.
+///
+/// Plug-in image resources are identified by their Pascal resource name. Match
+/// both names used by Camera Bits files without assigning an Adobe resource ID
+/// to this third-party payload.
+fn is_photo_mechanic_soft_edit_resource(name: &[u8]) -> bool {
+    name.eq_ignore_ascii_case(b"Photo Mechanic")
+        || name.eq_ignore_ascii_case(b"PhotoMechanic")
+        || name.eq_ignore_ascii_case(b"Photo Mechanic SoftEdit")
+        || name.eq_ignore_ascii_case(b"SoftEdit")
+}
+
+/// Parse Photo Mechanic's fixed-layout SoftEdit Photoshop resource.
+///
+/// Crop coordinates are big-endian `int16u` fields. Rotation and Tagged are
+/// adjacent one-byte fields at offsets 220 and 221; rotation values 0 through
+/// 3 represent clockwise quarter turns, while Tagged uses the documented
+/// PrintConv `{ 0 => "No", 1 => "Yes" }`.
+fn parse_photo_mechanic_soft_edit(data: &[u8], metadata: &mut MetadataMap) {
+    let reader = EndianReader::big_endian(data);
+
+    // SoftEdit crop layout: left=4, top=6, right=8, bottom=10.
+    if let Some(crop_top) = reader.u16_at(6) {
+        metadata.insert(
+            "PhotoMechanic:CropTop".to_string(),
+            TagValue::Integer(crop_top as i64),
+        );
+    }
+    if let Some(crop_right) = reader.u16_at(8) {
+        metadata.insert(
+            "PhotoMechanic:CropRight".to_string(),
+            TagValue::Integer(crop_right as i64),
+        );
+    }
+
+    if let Some(rotation) = data.get(220).copied() {
+        let degrees = match rotation {
+            0 => 0,
+            1 => 90,
+            2 => 180,
+            3 => 270,
+            // Some writers store degrees directly when they fit in one byte.
+            90 | 180 => rotation as i64,
+            _ => -1,
+        };
+        if degrees >= 0 {
+            metadata.insert(
+                "PhotoMechanic:Rotation".to_string(),
+                TagValue::Integer(degrees),
+            );
+        }
+    }
+
+    if let Some(tagged) = data.get(221).copied() {
+        let converted = match tagged {
+            0 => Some("No"),
+            1 => Some("Yes"),
+            _ => None,
+        };
+        if let Some(converted) = converted {
+            metadata.insert(
+                "PhotoMechanic:Tagged".to_string(),
+                TagValue::String(converted.to_string()),
+            );
+        }
+    }
 }
 
 /// Returns the offset of the IFD linked after `ifd_offset`.
@@ -712,5 +797,44 @@ mod tests {
                 .all(|(name, _)| !name.ends_with(":ThumbnailOffset")),
             "0x0201 was never present; no ThumbnailOffset should appear"
         );
+    }
+
+    #[test]
+    fn parses_photo_mechanic_soft_edit_fields() {
+        let mut data = vec![0u8; 222];
+        data[6..8].copy_from_slice(&618u16.to_be_bytes());
+        data[8..10].copy_from_slice(&890u16.to_be_bytes());
+        data[220] = 2;
+        data[221] = 1;
+
+        let mut metadata = MetadataMap::new();
+        parse_photo_mechanic_soft_edit(&data, &mut metadata);
+
+        assert_eq!(
+            metadata.get("PhotoMechanic:CropRight"),
+            Some(&TagValue::Integer(890))
+        );
+        assert_eq!(
+            metadata.get("PhotoMechanic:CropTop"),
+            Some(&TagValue::Integer(618))
+        );
+        assert_eq!(
+            metadata.get("PhotoMechanic:Rotation"),
+            Some(&TagValue::Integer(180))
+        );
+        assert_eq!(
+            metadata.get("PhotoMechanic:Tagged"),
+            Some(&TagValue::String("Yes".to_string()))
+        );
+    }
+
+    #[test]
+    fn recognizes_photo_mechanic_resource_names() {
+        assert!(is_photo_mechanic_soft_edit_resource(b"Photo Mechanic"));
+        assert!(is_photo_mechanic_soft_edit_resource(
+            b"Photo Mechanic SoftEdit"
+        ));
+        assert!(is_photo_mechanic_soft_edit_resource(b"SoftEdit"));
+        assert!(!is_photo_mechanic_soft_edit_resource(b"ResolutionInfo"));
     }
 }
