@@ -1065,12 +1065,55 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         RawFormat::NikonNEF | RawFormat::NikonNRW => {
             extract_nef_tags(&mut metadata);
         }
+        RawFormat::PanasonicRW2 => {
+            if let Err(error) = extract_rw2_preview_exif_from_file(data, &mut metadata) {
+                eprintln!("Warning: Failed to parse RW2 preview EXIF: {}", error);
+            }
+        }
         _ => {
             // Other formats don't need special handling yet
         }
     }
 
     Ok(metadata)
+}
+
+/// Locate the JPEG preview from the complete RW2 file and extract its EXIF.
+///
+/// Some RW2 files do not expose the preview bytes through the decoded value of
+/// PanasonicRaw tag 0x002e. This fallback is called directly by the active
+/// PanasonicRW2 format dispatch and checks each JPEG SOI candidate for an APP1
+/// EXIF segment before parsing it.
+fn extract_rw2_preview_exif_from_file(
+    data: &[u8],
+    metadata: &mut MetadataMap,
+) -> Result<()> {
+    let mut search_offset = 0usize;
+
+    while let Some(remaining) = data.get(search_offset..) {
+        let Some(relative_offset) = remaining
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0xd8])
+        else {
+            break;
+        };
+        let jpeg_offset = search_offset
+            .checked_add(relative_offset)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid RW2 JPEG preview offset"))?;
+        let jpeg = data
+            .get(jpeg_offset..)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid RW2 JPEG preview offset"))?;
+
+        if matches!(find_jpeg_exif_tiff(jpeg), Ok(Some(_))) {
+            return extract_rw2_embedded_exif_tags(jpeg, metadata);
+        }
+
+        search_offset = jpeg_offset
+            .checked_add(2)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid RW2 JPEG search offset"))?;
+    }
+
+    Ok(())
 }
 
 /// Extract standard EXIF tags stored only in Panasonic RW2's JpgFromRaw data.
@@ -1090,6 +1133,32 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
     let first_ifd_offset = u64::from(read_u32(first_ifd_bytes, byte_order));
     let reader = SliceReader::new(tiff_data);
     let ifd0_tags = parse_ifd(&reader, first_ifd_offset, byte_order)?;
+
+    // TIFF tags 0x0128 (ResolutionUnit) and 0x0132 (ModifyDate) live in the
+    // preview TIFF's IFD0 and are reported by ExifTool in the EXIF family.
+    for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
+        if !matches!(*tag_id, 0x0128 | 0x0132) {
+            continue;
+        }
+
+        let tag_value = format_exif_display_value(
+            *tag_id,
+            raw_bytes.as_ref(),
+            *field_type,
+            *value_count,
+            byte_order,
+        )
+        .map(TagValue::new_string)
+        .unwrap_or_else(|| {
+            raw_bytes_to_simple_tag_value(
+                raw_bytes.as_ref(),
+                *field_type,
+                *value_count,
+                byte_order,
+            )
+        });
+        metadata.insert(lookup_tag_name(*tag_id, "EXIF"), tag_value);
+    }
 
     let exif_ifd_offset =
         ifd0_tags
@@ -1130,10 +1199,13 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
                 | 0xA001 // ColorSpace
                 | 0xA002 // ExifImageWidth
                 | 0xA003 // ExifImageHeight
+                | 0xA217 // SensingMethod
+                | 0xA301 // SceneType
                 | 0xA302 // CFAPattern
                 | 0xA401 // CustomRendered
                 | 0xA402 // ExposureMode
                 | 0xA404 // DigitalZoomRatio
+                | 0xA406 // SceneCaptureType
                 | 0xA408 // Contrast
                 | 0xA409 // Saturation
         ) {
@@ -1157,9 +1229,8 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
 
     // The preview EXIF also carries an Interoperability IFD (ExifIFD tag
     // 0xA005 -> InteropOffset). ExifTool reports [InteropIFD] InteropIndex for
-    // Panasonic.rw2; oxidex never descended into it (measured gap 2026-07-27).
-    // Only InteropIndex is taken: InteropVersion is not among the gaps the
-    // comparator reports for RW2, so emitting it would add an unmatched tag.
+    // Panasonic.rw2, and reports tag 0x0002 (InteropVersion) in the EXIF
+    // family.
     if let Some(interop_offset) =
         exif_tags
             .iter()
@@ -1205,6 +1276,17 @@ fn extract_interop_index(
     };
 
     for (tag_id, _field_type, _value_count, raw_bytes) in &interop_tags {
+        // ExifTool Exif.pm InteropIFD tag 0x0002: InteropVersion.
+        if *tag_id == 0x0002 {
+            let version = String::from_utf8_lossy(raw_bytes.as_ref())
+                .trim_end_matches('\0')
+                .to_string();
+            metadata.insert(
+                lookup_tag_name(*tag_id, "EXIF"),
+                TagValue::new_string(version),
+            );
+            continue;
+        }
         if *tag_id != 0x0001 {
             continue;
         }
@@ -1653,6 +1735,23 @@ fn format_exif_display_value(
     byte_order: ByteOrder,
 ) -> Option<String> {
     match tag_id {
+        // Exif.pm tag 0x0128 ResolutionUnit PrintConv.
+        0x0128 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            1 => Some("None".to_string()),
+            2 => Some("inches".to_string()),
+            3 => Some("cm".to_string()),
+            _ => None,
+        },
+        // Exif.pm tag 0x0132 ModifyDate: ASCII with trailing NUL removed.
+        0x0132 if field_type == 2 => {
+            let count = usize::try_from(value_count).ok()?;
+            let value = bytes.get(..count)?;
+            Some(
+                String::from_utf8_lossy(value)
+                    .trim_end_matches('\0')
+                    .to_string(),
+            )
+        }
         // ComponentsConfiguration: UNDEFINED[4].
         0x9101 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
@@ -1842,6 +1941,31 @@ fn format_exif_display_value(
             0x59 => Some("Auto, Fired, Red-eye reduction".to_string()),
             0x5d => Some("Auto, Fired, Red-eye reduction, Return not detected".to_string()),
             0x5f => Some("Auto, Fired, Red-eye reduction, Return detected".to_string()),
+            _ => None,
+        },
+        // Exif.pm tag 0xA217 SensingMethod PrintConv.
+        0xA217 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            1 => Some("Not defined".to_string()),
+            2 => Some("One-chip color area".to_string()),
+            3 => Some("Two-chip color area".to_string()),
+            4 => Some("Three-chip color area".to_string()),
+            5 => Some("Color sequential area".to_string()),
+            7 => Some("Trilinear".to_string()),
+            8 => Some("Color sequential linear".to_string()),
+            _ => None,
+        },
+        // Exif.pm tag 0xA301 SceneType PrintConv.
+        0xA301 if field_type == 7 && value_count >= 1 => match *bytes.first()? {
+            1 => Some("Directly photographed".to_string()),
+            _ => None,
+        },
+        // Exif.pm tag 0xA406 SceneCaptureType PrintConv.
+        0xA406 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("Standard".to_string()),
+            1 => Some("Landscape".to_string()),
+            2 => Some("Portrait".to_string()),
+            3 => Some("Night".to_string()),
+            4 => Some("Other".to_string()),
             _ => None,
         },
         // FileSource: UNDEFINED. Exif.pm 0xa300 PrintConv, verbatim:
