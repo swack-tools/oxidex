@@ -567,7 +567,7 @@ impl MachHeader {
     pub fn cpu_type_name(&self) -> &'static str {
         match self.cputype {
             cpu_type::CPU_TYPE_I386 => "i386",
-            cpu_type::CPU_TYPE_X86_64 => "x86_64",
+            cpu_type::CPU_TYPE_X86_64 => "x86 64-bit",
             cpu_type::CPU_TYPE_ARM => "ARM",
             cpu_type::CPU_TYPE_ARM64 => "ARM64",
             cpu_type::CPU_TYPE_ARM64_32 => "ARM64_32",
@@ -587,8 +587,12 @@ impl MachHeader {
                 _ => format!("Unknown ({})", self.cpusubtype),
             },
             cpu_type::CPU_TYPE_X86_64 => match self.cpusubtype & 0xFF {
-                cpu_subtype_x86_64::CPU_SUBTYPE_X86_64_ALL => "ALL".to_string(),
-                cpu_subtype_x86_64::CPU_SUBTYPE_X86_64_H => "Haswell".to_string(),
+                cpu_subtype_x86_64::CPU_SUBTYPE_X86_64_ALL => {
+                    "i386 (all) 64-bit".to_string()
+                }
+                cpu_subtype_x86_64::CPU_SUBTYPE_X86_64_H => {
+                    "i386 (Haswell) 64-bit".to_string()
+                }
                 _ => format!("Unknown ({})", self.cpusubtype),
             },
             _ => format!("{}", self.cpusubtype),
@@ -600,9 +604,57 @@ impl MachHeader {
         file_type_name(self.filetype)
     }
 
+    /// Returns ExifTool's PrintConv string for the Mach-O object file type.
+    pub fn object_file_type_name(&self) -> &'static str {
+        match self.filetype {
+            file_type::MH_OBJECT => "Relocatable object",
+            file_type::MH_EXECUTE => "Demand paged executable",
+            file_type::MH_FVMLIB => "Fixed VM shared library",
+            file_type::MH_CORE => "Core",
+            file_type::MH_PRELOAD => "Preloaded executable",
+            file_type::MH_DYLIB => "Dynamically bound shared library",
+            file_type::MH_DYLINKER => "Dynamic link editor",
+            file_type::MH_BUNDLE => "Dynamically bound bundle",
+            file_type::MH_DYLIB_STUB => "Shared library stub for static linking",
+            file_type::MH_DSYM => "Debug information",
+            file_type::MH_KEXT_BUNDLE => "x86_64 kexts",
+            file_type::MH_FILESET => "Fileset",
+            _ => "Unknown",
+        }
+    }
+
     /// Returns list of flag names
     pub fn flag_names(&self) -> Vec<&'static str> {
         decode_flags(self.flags)
+    }
+
+    /// Returns the ExifTool PrintConv strings for Mach-O object flags.
+    pub fn object_flag_names(&self) -> Vec<&'static str> {
+        let mut names = Vec::new();
+
+        if self.flags & flags::MH_NOUNDEFS != 0 {
+            names.push("No undefs");
+        }
+        if self.flags & flags::MH_INCRLINK != 0 {
+            names.push("Incr link");
+        }
+        if self.flags & flags::MH_DYLDLINK != 0 {
+            names.push("Dyld link");
+        }
+        if self.flags & flags::MH_BINDATLOAD != 0 {
+            names.push("Bind at load");
+        }
+        if self.flags & flags::MH_TWOLEVEL != 0 {
+            names.push("Two level");
+        }
+        if self.flags & flags::MH_NO_REEXPORTED_DYLIBS != 0 {
+            names.push("No reexported dylibs");
+        }
+        if self.flags & flags::MH_PIE != 0 {
+            names.push("PIE");
+        }
+
+        names
     }
 }
 

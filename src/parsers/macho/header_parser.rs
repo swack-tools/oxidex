@@ -147,7 +147,7 @@ fn parse_mach_header_be(input: &[u8], is_64bit: bool) -> IResult<&[u8], MachHead
             flags,
             reserved,
             is_64bit,
-            is_swapped: true,
+            is_swapped: false,
         },
     ))
 }

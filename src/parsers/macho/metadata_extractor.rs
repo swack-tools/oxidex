@@ -118,6 +118,12 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
         TagValue::String(header.file_type_name().to_string()),
     );
 
+    // Object file type using ExifTool's Mach-O PrintConv strings
+    metadata.insert(
+        "EXE:ObjectFileType".to_string(),
+        TagValue::String(header.object_file_type_name().to_string()),
+    );
+
     // File type raw value
     metadata.insert(
         "EXE:FileTypeRaw".to_string(),
@@ -131,6 +137,18 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
     );
 
     // Byte order
+    metadata.insert(
+        "EXE:CPUByteOrder".to_string(),
+        TagValue::String(
+            if header.is_swapped {
+                "Little endian"
+            } else {
+                "Big endian"
+            }
+            .to_string(),
+        ),
+    );
+
     metadata.insert(
         "EXE:ByteOrder".to_string(),
         TagValue::String(
@@ -166,6 +184,14 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
         "EXE:Flags".to_string(),
         TagValue::Integer(header.flags as i64),
     );
+
+    let object_flags = header.object_flag_names();
+    if !object_flags.is_empty() {
+        metadata.insert(
+            "EXE:ObjectFlags".to_string(),
+            TagValue::String(object_flags.join(", ")),
+        );
+    }
 
     // Flags decoded
     let flag_names = header.flag_names();
