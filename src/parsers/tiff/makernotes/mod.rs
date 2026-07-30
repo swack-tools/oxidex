@@ -8,6 +8,7 @@ pub mod fujifilm_lens_database;
 pub mod leica;
 pub mod leica_lens_database;
 pub mod nikon;
+pub mod nikon_capture_data;
 pub mod nikon_lens_database;
 pub mod olympus;
 pub mod olympus_lens_database;
