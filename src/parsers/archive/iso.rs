@@ -14,6 +14,10 @@ const ISO_SIGNATURE: &[u8] = b"CD001";
 const ISO_SIGNATURE_OFFSET: u64 = 32769;
 /// Primary Volume Descriptor starts at sector 16 (offset 32768)
 const PVD_OFFSET: u64 = 32768;
+/// ISO 9660 logical sectors are 2048 bytes.
+const VOLUME_DESCRIPTOR_SIZE: u64 = 2048;
+/// Volume descriptor type 255 terminates the descriptor sequence.
+const VOLUME_DESCRIPTOR_TERMINATOR: u8 = 255;
 
 /// ISO parser for extracting metadata from ISO disc images
 pub struct ISOParser;
@@ -156,6 +160,47 @@ impl ISOParser {
         Ok(())
     }
 
+    /// Extracts metadata from boot-record volume descriptors.
+    fn extract_boot_record_metadata(
+        reader: &dyn FileReader,
+        metadata: &mut MetadataMap,
+    ) -> Result<()> {
+        let mut descriptor_offset = PVD_OFFSET;
+
+        while descriptor_offset
+            .checked_add(7)
+            .is_some_and(|end| end <= reader.size())
+        {
+            let header = reader.read(descriptor_offset, 7)?;
+            if header.get(1..6) != Some(ISO_SIGNATURE) {
+                break;
+            }
+
+            let descriptor_type = match header.first() {
+                Some(value) => *value,
+                None => break,
+            };
+            if descriptor_type == 0 {
+                // ISO.pm BootRecord tag 7: BootSystem, Format string[32].
+                Self::insert_pvd_string(
+                    reader,
+                    metadata,
+                    "ISO:BootSystem",
+                    descriptor_offset + 7,
+                    32,
+                )?;
+            }
+            if descriptor_type == VOLUME_DESCRIPTOR_TERMINATOR {
+                break;
+            }
+            descriptor_offset = match descriptor_offset.checked_add(VOLUME_DESCRIPTOR_SIZE) {
+                Some(offset) => offset,
+                None => break,
+            };
+        }
+        Ok(())
+    }
+
     /// Extracts metadata from Primary Volume Descriptor
     fn extract_pvd_metadata(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Result<()> {
         // Offsets and names are ExifTool's `ISO::PrimaryVolume` table verbatim,
@@ -255,6 +300,7 @@ impl FormatParser for ISOParser {
 
         // Extract Primary Volume Descriptor metadata
         Self::extract_pvd_metadata(reader, &mut metadata)?;
+        Self::extract_boot_record_metadata(reader, &mut metadata)?;
 
         Ok(metadata)
     }
