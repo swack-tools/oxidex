@@ -240,6 +240,209 @@ fn format_panasonic_raw_ifd0_value(
     }
 }
 
+/// Extract standard EXIF tags from the JPEG stored in PanasonicRaw tag 0x002e
+/// (`JpgFromRaw`).
+///
+/// PanasonicRaw.pm processes this value as a JPEG subdocument.  Offsets in its
+/// APP1 TIFF header are relative to the start of that embedded TIFF, so this
+/// deliberately creates a separate reader rather than applying the outer RW2
+/// base offset.
+fn extract_rw2_preview_standard_exif_tags(
+    jpeg: &[u8],
+    metadata: &mut MetadataMap,
+) -> Result<()> {
+    let mut marker_offset = 0usize;
+
+    while marker_offset.checked_add(4).is_some_and(|end| end <= jpeg.len()) {
+        if jpeg.get(marker_offset) != Some(&0xff) {
+            marker_offset += 1;
+            continue;
+        }
+
+        let marker = match jpeg.get(marker_offset + 1) {
+            Some(marker) => *marker,
+            None => break,
+        };
+
+        // SOI, EOI and restart markers do not have a segment length.
+        if marker == 0xd8 || marker == 0xd9 || (0xd0..=0xd7).contains(&marker) {
+            marker_offset += 2;
+            continue;
+        }
+
+        let length_bytes = match jpeg.get(marker_offset + 2..marker_offset + 4) {
+            Some(bytes) => bytes,
+            None => break,
+        };
+        let segment_length =
+            usize::from(u16::from_be_bytes([length_bytes[0], length_bytes[1]]));
+        if segment_length < 2 {
+            return Err(ExifToolError::parse_error(
+                "Invalid segment length in RW2 embedded JPEG",
+            ));
+        }
+
+        let payload_start = marker_offset
+            .checked_add(4)
+            .ok_or_else(|| ExifToolError::parse_error("RW2 JPEG offset overflow"))?;
+        let payload_end = payload_start
+            .checked_add(segment_length - 2)
+            .ok_or_else(|| ExifToolError::parse_error("RW2 JPEG segment overflow"))?;
+        let payload = jpeg.get(payload_start..payload_end).ok_or_else(|| {
+            ExifToolError::parse_error("Truncated segment in RW2 embedded JPEG")
+        })?;
+
+        if marker == 0xe1 && payload.starts_with(b"Exif\0\0") {
+            let tiff = payload.get(6..).ok_or_else(|| {
+                ExifToolError::parse_error("Truncated EXIF header in RW2 embedded JPEG")
+            })?;
+            extract_rw2_preview_tiff_tags(tiff, metadata)?;
+            return Ok(());
+        }
+
+        marker_offset = payload_end;
+    }
+
+    Ok(())
+}
+
+fn extract_rw2_preview_tiff_tags(tiff: &[u8], metadata: &mut MetadataMap) -> Result<()> {
+    if tiff.len() < 8 {
+        return Err(ExifToolError::parse_error(
+            "Truncated TIFF header in RW2 embedded JPEG",
+        ));
+    }
+
+    let byte_order = detect_byte_order(tiff)?;
+    let first_ifd_offset = read_u32(
+        tiff.get(4..8).ok_or_else(|| {
+            ExifToolError::parse_error("Missing IFD offset in RW2 embedded JPEG")
+        })?,
+        byte_order,
+    ) as u64;
+    let reader = SliceReader::new(tiff);
+    let ifd0_tags = parse_ifd(&reader, first_ifd_offset, byte_order)?;
+    let mut exif_ifd_offset = None;
+
+    for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
+        let bytes = raw_bytes.as_ref();
+        match *tag_id {
+            // Exif.pm 0x0132: ModifyDate, ASCII.
+            0x0132 if *field_type == 2 => {
+                if let Some(value) = format_rw2_preview_ascii(bytes, *value_count) {
+                    metadata.insert(
+                        lookup_tag_name(*tag_id, "EXIF"),
+                        TagValue::new_string(value),
+                    );
+                }
+            }
+            // Exif.pm 0x0128 ResolutionUnit PrintConv:
+            // 1 => 'None', 2 => 'inches', 3 => 'cm'.
+            0x0128 if *field_type == 3 && *value_count == 1 => {
+                if let Some(value) = read_rw2_preview_u16(bytes, byte_order) {
+                    let display = match value {
+                        1 => Some("None"),
+                        2 => Some("inches"),
+                        3 => Some("cm"),
+                        _ => None,
+                    };
+                    if let Some(display) = display {
+                        metadata.insert(
+                            lookup_tag_name(*tag_id, "EXIF"),
+                            TagValue::new_string(display),
+                        );
+                    }
+                }
+            }
+            // Exif.pm 0x8769: ExifOffset.
+            0x8769 if bytes.len() >= 4 => {
+                exif_ifd_offset = Some(read_u32(bytes, byte_order) as u64);
+            }
+            _ => {}
+        }
+    }
+
+    let Some(exif_ifd_offset) = exif_ifd_offset else {
+        return Ok(());
+    };
+    let exif_tags = parse_ifd(&reader, exif_ifd_offset, byte_order)?;
+    let mut interop_ifd_offset = None;
+
+    for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
+        let bytes = raw_bytes.as_ref();
+        match *tag_id {
+            // Exif.pm 0xA301 SceneType PrintConv:
+            // 1 => 'Directly photographed'.
+            0xA301 if *field_type == 7 && *value_count == 1 && bytes.first() == Some(&1) => {
+                metadata.insert(
+                    lookup_tag_name(*tag_id, "EXIF"),
+                    TagValue::new_string("Directly photographed"),
+                );
+            }
+            // Exif.pm 0xA406 SceneCaptureType PrintConv:
+            // 0 => 'Standard', 1 => 'Landscape', 2 => 'Portrait',
+            // 3 => 'Night'.
+            0xA406 if *field_type == 3 && *value_count == 1 => {
+                if let Some(value) = read_rw2_preview_u16(bytes, byte_order) {
+                    let display = match value {
+                        0 => Some("Standard"),
+                        1 => Some("Landscape"),
+                        2 => Some("Portrait"),
+                        3 => Some("Night"),
+                        _ => None,
+                    };
+                    if let Some(display) = display {
+                        metadata.insert(
+                            lookup_tag_name(*tag_id, "EXIF"),
+                            TagValue::new_string(display),
+                        );
+                    }
+                }
+            }
+            // Exif.pm 0xA005: InteropOffset.
+            0xA005 if bytes.len() >= 4 => {
+                interop_ifd_offset = Some(read_u32(bytes, byte_order) as u64);
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(interop_ifd_offset) = interop_ifd_offset {
+        let interop_tags = parse_ifd(&reader, interop_ifd_offset, byte_order)?;
+        for (tag_id, field_type, value_count, raw_bytes) in interop_tags {
+            // Exif.pm InteropIFD 0x0002: InteropVersion, UNDEFINED[4].
+            if tag_id == 0x0002
+                && field_type == 7
+                && let Some(value) =
+                    format_rw2_preview_ascii(raw_bytes.as_ref(), value_count)
+            {
+                metadata.insert(
+                    lookup_tag_name(tag_id, "EXIF"),
+                    TagValue::new_string(value),
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn format_rw2_preview_ascii(bytes: &[u8], value_count: u32) -> Option<String> {
+    let count = usize::try_from(value_count).ok()?;
+    let value = bytes.get(..count)?;
+    let value = String::from_utf8_lossy(value);
+    let value = value.trim_end_matches('\0');
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn read_rw2_preview_u16(bytes: &[u8], byte_order: ByteOrder) -> Option<u16> {
+    let bytes = bytes.get(..2)?;
+    Some(match byte_order {
+        ByteOrder::LittleEndian => u16::from_le_bytes([bytes[0], bytes[1]]),
+        ByteOrder::BigEndian => u16::from_be_bytes([bytes[0], bytes[1]]),
+    })
+}
+
 /// Format TIFF/EP CFAPattern2 (tag 0x828E), whose components are unsigned
 /// bytes printed by ExifTool as a space-separated list.
 fn format_cfa_pattern2(bytes: &[u8], value_count: u32) -> String {
@@ -451,6 +654,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     if format == RawFormat::PanasonicRW2 && ifd_index == 0 && *tag_id == 0x002e {
                         if let Err(error) = extract_rw2_embedded_exif_tags(bytes, &mut metadata) {
                             eprintln!("Warning: Failed to parse RW2 preview EXIF: {}", error);
+                        }
+                        if let Err(error) = extract_rw2_preview_standard_exif_tags(bytes, &mut metadata) {
+                            eprintln!("Warning: Failed to parse standard RW2 preview EXIF: {}", error);
                         }
                         // Emit the JpgFromRaw binary itself (ExifTool EXIF:JpgFromRaw)
                         metadata.insert(
