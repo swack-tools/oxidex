@@ -1193,6 +1193,10 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
                 | 0xA301 // SceneType
                 | 0xA406 // SceneCaptureType
                 | 0xA40A // Sharpness
+                | 0x8827 // ISO
+                | 0x920A // FocalLength
+                | 0xA420 // ImageUniqueID
+                | 0xA500 // Gamma
         ) {
             continue;
         }
@@ -1901,6 +1905,20 @@ fn format_exif_display_value(
             0x5f => Some("Auto, Fired, Red-eye reduction, Return detected".to_string()),
             _ => None,
         },
+        // FocalLength: RATIONAL[1]. Exif.pm 0x920a PrintConv:
+        //     sprintf("%.1f mm",$val)
+        0x920A if field_type == 5 && value_count >= 1 => {
+            let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                None
+            } else {
+                Some(format!(
+                    "{:.1} mm",
+                    f64::from(numerator) / f64::from(denominator)
+                ))
+            }
+        }
         // FileSource: UNDEFINED. Exif.pm 0xa300 PrintConv, verbatim:
         //     1 => 'Film Scanner',
         //     2 => 'Reflection Print Scanner',
@@ -1920,17 +1938,36 @@ fn format_exif_display_value(
         }
         // CFAPattern: UNDEFINED with two endian-dependent u16 dimensions.
         0xA302 if field_type == 7 => decode_exif_cfa_pattern(bytes, byte_order),
-        // FlashpixVersion: UNDEFINED 4 bytes printed as e.g. "0100".
+        // FlashpixVersion: UNDEFINED. Exif.pm 0xa000 RawConv:
+        //     $val=~s/\0+$//; $val
         0xA000 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
-            let ver_bytes = bytes.get(..count.min(4))?;
-            Some(String::from_utf8_lossy(ver_bytes).into_owned())
+            let version = bytes.get(..count)?;
+            let trimmed = String::from_utf8_lossy(version)
+                .trim_end_matches('\0')
+                .to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
         }
         // FocalLengthIn35mmFormat: SHORT[1] with " mm" suffix.
-        // Exif.pm PrintConv: $val .= " mm"
+        // Exif.pm 0xa405 PrintConv: "$val mm"
         0xA405 if field_type == 3 && value_count >= 1 => {
             let value = read_tiff_u16(bytes, byte_order)?;
             Some(format!("{} mm", value))
+        }
+        // Gamma: RATIONAL[1]. Exif.pm 0xa500 has no PrintConv. Its undefined
+        // 0/0 rational is displayed by ExifTool as "undef"; valid rationals
+        // fall through to the generic strictly typed TIFF conversion.
+        0xA500 if field_type == 5 && value_count >= 1 => {
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                Some("undef".to_string())
+            } else {
+                None
+            }
         }
         // GainControl: SHORT[1] with PrintConv table.
         // Exif.pm: 0=>'None', 1=>'Low gain up', 2=>'High gain up',
