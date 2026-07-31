@@ -14,6 +14,8 @@ const ISO_SIGNATURE: &[u8] = b"CD001";
 const ISO_SIGNATURE_OFFSET: u64 = 32769;
 /// Primary Volume Descriptor starts at sector 16 (offset 32768)
 const PVD_OFFSET: u64 = 32768;
+/// ISO 9660 logical sector size used by the volume descriptor sequence.
+const VOLUME_DESCRIPTOR_SIZE: u64 = 2048;
 
 /// ISO parser for extracting metadata from ISO disc images
 pub struct ISOParser;
@@ -229,6 +231,55 @@ impl ISOParser {
 
         Ok(())
     }
+
+    /// Scans the ISO 9660 volume descriptor sequence and extracts the
+    /// Boot System Identifier from a Boot Record descriptor.
+    ///
+    /// ISO.pm's `BootRecord` table defines `BootSystem` at byte 7 with a
+    /// fixed length of 32 bytes. Volume descriptor type 0 identifies the
+    /// Boot Record, while type 255 terminates the descriptor sequence.
+    fn extract_boot_record_metadata(
+        reader: &dyn FileReader,
+        metadata: &mut MetadataMap,
+    ) -> Result<()> {
+        let mut offset = PVD_OFFSET;
+
+        loop {
+            let Some(header_end) = offset.checked_add(7) else {
+                break;
+            };
+            if header_end > reader.size() {
+                break;
+            }
+
+            let header = reader.read(offset, 7)?;
+            if header.get(1..6) != Some(ISO_SIGNATURE) {
+                break;
+            }
+
+            let Some(&descriptor_type) = header.first() else {
+                break;
+            };
+            if descriptor_type == 0 {
+                Self::insert_pvd_string(
+                    reader,
+                    metadata,
+                    "ISO:BootSystem",
+                    offset + 7,
+                    32,
+                )?;
+            } else if descriptor_type == 255 {
+                break;
+            }
+
+            let Some(next_offset) = offset.checked_add(VOLUME_DESCRIPTOR_SIZE) else {
+                break;
+            };
+            offset = next_offset;
+        }
+
+        Ok(())
+    }
 }
 
 impl FormatParser for ISOParser {
@@ -252,6 +303,9 @@ impl FormatParser for ISOParser {
             "VolumeDescriptorType".to_string(),
             TagValue::String(descriptor_type.to_string()),
         );
+
+        // Boot records may occur anywhere in the volume descriptor sequence.
+        Self::extract_boot_record_metadata(reader, &mut metadata)?;
 
         // Extract Primary Volume Descriptor metadata
         Self::extract_pvd_metadata(reader, &mut metadata)?;
