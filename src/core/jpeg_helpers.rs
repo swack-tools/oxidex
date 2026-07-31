@@ -177,6 +177,19 @@ pub fn process_exif_segments(
                 if let Some(offset) = gps_ifd_offset {
                     parse_gps_subifd(&tiff_reader, offset, byte_order, metadata);
                 }
+
+                // Walk IFD0's next-IFD pointer to IFD1 (the thumbnail IFD), which
+                // carries Compression/ThumbnailOffset/ThumbnailLength/ThumbnailImage.
+                // `tiff_offset` is the absolute file position of the TIFF header,
+                // which ExifTool adds to the stored ThumbnailOffset.
+                crate::core::tiff_helpers::parse_ifd1_thumbnail(
+                    &tiff_reader,
+                    ifd_offset,
+                    tags.len(),
+                    byte_order,
+                    tiff_offset,
+                    metadata,
+                );
             }
         }
     }

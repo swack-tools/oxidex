@@ -561,6 +561,262 @@ pub fn parse_gps_subifd(
     }
 }
 
+// =============================================================================
+// IFD1 (Thumbnail IFD)
+// =============================================================================
+
+/// Compression (0x0103) - in IFD1 this describes the thumbnail encoding.
+const TAG_COMPRESSION: u16 = 0x0103;
+
+/// JPEGInterchangeFormat (0x0201) - ExifTool names this `ThumbnailOffset` in IFD1.
+const TAG_THUMBNAIL_OFFSET: u16 = 0x0201;
+
+/// JPEGInterchangeFormatLength (0x0202) - ExifTool names this `ThumbnailLength` in IFD1.
+const TAG_THUMBNAIL_LENGTH: u16 = 0x0202;
+
+/// Upper bound on a thumbnail we are willing to materialise, guarding against
+/// a corrupt length field causing a huge allocation. Real camera thumbnails
+/// are 5-30 KB; ExifTool's own EXIF segment ceiling is 64 KB.
+const MAX_THUMBNAIL_BYTES: u64 = 1 << 20;
+
+/// Reads the next-IFD pointer that follows an IFD's entry array.
+///
+/// Returns `None` when the pointer is unreadable, zero (end of the chain), or
+/// points back at the IFD it follows (a loop some malformed files contain).
+fn next_ifd_offset(
+    reader: &dyn FileReader,
+    ifd_offset: u64,
+    entry_count: usize,
+    byte_order: ByteOrder,
+) -> Option<u64> {
+    let pointer_offset = ifd_offset
+        .checked_add(2)?
+        .checked_add((entry_count as u64).checked_mul(12)?)?;
+
+    if pointer_offset.checked_add(4)? > reader.size() {
+        return None;
+    }
+
+    let next = read_u32(reader.read(pointer_offset, 4).ok()?, byte_order) as u64;
+
+    if next == 0 || next == ifd_offset {
+        None
+    } else {
+        Some(next)
+    }
+}
+
+/// Collects the offsets of the EXIF directories that have already been walked
+/// before IFD1 is reached: IFD0 itself, its EXIF and GPS sub-IFDs, and the
+/// Interoperability IFD that hangs off the EXIF sub-IFD.
+///
+/// ExifTool keeps the same set in `$$self{PROCESSED}` and refuses to descend
+/// into a directory address it has seen before ("IFD1 pointer references
+/// previous InteropIFD directory", `ProcessDirectory` in ExifTool.pm), which
+/// makes it report no thumbnail at all for such a file. Four samples in the
+/// corpus are built that way - SamsungSPH-A800.jpg, SamsungSPH-A940.jpg and
+/// CanonXL_H1.jpg aim IFD1 at the InteropIFD, SamsungGT-S5620.jpg aims it at
+/// the GPS IFD - and following the pointer anyway turns an unrelated
+/// directory's entries into invented thumbnail tags.
+fn visited_directory_offsets(
+    reader: &dyn FileReader,
+    ifd0_offset: u64,
+    byte_order: ByteOrder,
+) -> Vec<u64> {
+    const EXIF_IFD_POINTER: u16 = 0x8769;
+    const GPS_IFD_POINTER: u16 = 0x8825;
+
+    let mut visited = vec![ifd0_offset];
+    let Ok(ifd0) = parse_ifd(reader, ifd0_offset, byte_order) else {
+        return visited;
+    };
+
+    for (tag_id, _, _, raw_bytes) in &ifd0 {
+        if !matches!(*tag_id, EXIF_IFD_POINTER | GPS_IFD_POINTER) || raw_bytes.len() < 4 {
+            continue;
+        }
+        let sub_offset = read_u32(raw_bytes, byte_order) as u64;
+        visited.push(sub_offset);
+
+        if *tag_id != EXIF_IFD_POINTER {
+            continue;
+        }
+        let Ok(exif_ifd) = parse_ifd(reader, sub_offset, byte_order) else {
+            continue;
+        };
+        for (sub_tag, _, _, sub_bytes) in &exif_ifd {
+            if *sub_tag == INTEROPERABILITY_IFD_POINTER && sub_bytes.len() >= 4 {
+                visited.push(read_u32(sub_bytes, byte_order) as u64);
+            }
+        }
+    }
+
+    visited
+}
+
+/// Reads an IFD1 offset/length field as an unsigned integer.
+///
+/// 0x0201/0x0202 are LONG in the EXIF spec, but real files also store them as
+/// SHORT - `LeicaM8.jpg` and `LeicaM8.2.jpg` both write ThumbnailOffset as
+/// SHORT. A fixed 4-byte read of those entries sees a 2-byte inline slice and
+/// silently yields 0, so go through the type-aware converter instead.
+fn read_unsigned_field(
+    raw_bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    tag_id: u16,
+    byte_order: ByteOrder,
+) -> Option<u64> {
+    let value = raw_bytes_to_tag_value(raw_bytes, field_type, value_count, tag_id, byte_order)
+        .as_integer()?;
+    u64::try_from(value).ok()
+}
+
+/// Parses the thumbnail IFD (IFD1) that follows IFD0 and emits the thumbnail tags.
+///
+/// A JPEG's APP1 EXIF payload is a TIFF structure whose IFD0 carries a
+/// next-IFD pointer to IFD1, which holds the embedded thumbnail. Callers that
+/// only walk IFD0 never surface `Compression`, `ThumbnailOffset`,
+/// `ThumbnailLength` or `ThumbnailImage`.
+///
+/// # Offset semantics
+///
+/// `ThumbnailOffset` is stored in the file relative to the TIFF header, but
+/// ExifTool reports it as an absolute file offset - it adds the base at which
+/// the TIFF header sits. For a JPEG that base is the byte after the
+/// `Exif\0\0` APP1 header (12 for a bare APP1, 30 when a JFIF APP0 precedes
+/// it); for a standalone TIFF it is 0. `tiff_base` supplies that value, while
+/// `reader` must address the TIFF structure itself (offset 0 == TIFF header).
+///
+/// # Arguments
+///
+/// * `reader` - Reader addressing the TIFF structure (TIFF-relative offsets)
+/// * `ifd0_offset` - Offset of IFD0 within the TIFF structure
+/// * `ifd0_entry_count` - Number of entries in IFD0, used to find its next-IFD pointer
+/// * `byte_order` - Byte order for interpreting multi-byte values
+/// * `tiff_base` - Absolute file offset of the TIFF header, added to `ThumbnailOffset`
+/// * `metadata` - MetadataMap to populate
+pub fn parse_ifd1_thumbnail(
+    reader: &dyn FileReader,
+    ifd0_offset: u64,
+    ifd0_entry_count: usize,
+    byte_order: ByteOrder,
+    tiff_base: u64,
+    metadata: &mut MetadataMap,
+) {
+    let Some(ifd1_offset) = next_ifd_offset(reader, ifd0_offset, ifd0_entry_count, byte_order)
+    else {
+        // No IFD1: emit nothing. A wrong thumbnail tag is worse than a missing one.
+        return;
+    };
+
+    // An IFD1 pointer aimed at a directory the EXIF walk already visited is a
+    // malformed file, not a thumbnail. ExifTool skips the directory outright.
+    if visited_directory_offsets(reader, ifd0_offset, byte_order).contains(&ifd1_offset) {
+        return;
+    }
+
+    let Ok(entries) = parse_ifd(reader, ifd1_offset, byte_order) else {
+        return;
+    };
+
+    let mut compression: Option<i64> = None;
+    let mut thumb_offset: Option<u64> = None;
+    let mut thumb_length: Option<u64> = None;
+
+    for (tag_id, field_type, value_count, raw_bytes) in &entries {
+        match *tag_id {
+            TAG_COMPRESSION => {
+                compression = raw_bytes_to_tag_value(
+                    raw_bytes,
+                    *field_type,
+                    *value_count,
+                    *tag_id,
+                    byte_order,
+                )
+                .as_integer();
+            }
+            TAG_THUMBNAIL_OFFSET => {
+                thumb_offset =
+                    read_unsigned_field(raw_bytes, *field_type, *value_count, *tag_id, byte_order);
+            }
+            TAG_THUMBNAIL_LENGTH => {
+                thumb_length =
+                    read_unsigned_field(raw_bytes, *field_type, *value_count, *tag_id, byte_order);
+            }
+            _ => {}
+        }
+    }
+
+    // Compression carries the standard PrintConv ("JPEG (old-style)" for a
+    // thumbnail); the exiftool_compat layer applies it to the integer.
+    //
+    // Precedence: when a file carries Compression in BOTH IFD0 and IFD1, the
+    // two collapse onto a single `EXIF:Compression` in the family-normalised
+    // view, and ExifTool's default (duplicate-suppressed) output reports the
+    // IFD0 one - e.g. OlympusAIR-A01.jpg is `Uncompressed` (IFD0), not
+    // `JPEG (old-style)` (IFD1). Yield to IFD0 so the thumbnail IFD never
+    // rewrites the main image's value.
+    if let Some(value) = compression
+        && metadata.get("IFD0:Compression").is_none()
+    {
+        metadata.insert(
+            lookup_tag_name(TAG_COMPRESSION, "IFD1"),
+            TagValue::new_integer(value),
+        );
+    }
+
+    // ExifTool emits the offset/length pair only when both are present.
+    let (Some(offset), Some(length)) = (thumb_offset, thumb_length) else {
+        return;
+    };
+
+    let Some(absolute_offset) = offset.checked_add(tiff_base) else {
+        return;
+    };
+
+    // Named explicitly rather than via `lookup_tag_name`: 0x0201/0x0202 are
+    // registered under their spec names (JPEGInterchangeFormat/Length) and the
+    // reverse index resolves to those, but ExifTool names them contextually -
+    // inside IFD1 they print as ThumbnailOffset/ThumbnailLength.
+    metadata.insert(
+        "IFD1:ThumbnailOffset",
+        TagValue::new_integer(absolute_offset as i64),
+    );
+    metadata.insert("IFD1:ThumbnailLength", TagValue::new_integer(length as i64));
+
+    // ThumbnailImage is the bytes the offset/length pair points at. The bytes
+    // are NOT required to be a JPEG - ExifTool's ValidateImage only rejects a
+    // non-JPEG payload when the tag was named on the command line, so a plain
+    // extraction reports whatever is there.
+    //
+    // We emit it only when the range is actually readable. ExifTool is looser:
+    // with the Binary option off, ExtractBinary returns the literal string
+    // "Binary data $length bytes" *without seeking*, so it prints a thumbnail
+    // for a range that runs past EOF (PanasonicDMC-LS60.jpg and
+    // SonyCLIE_PEG-NZ90.jpg in the corpus are both truncated this way). Since
+    // we report a real byte count from real bytes, an unreadable range gets no
+    // tag rather than an invented length.
+    if length == 0 || length > MAX_THUMBNAIL_BYTES {
+        return;
+    }
+    let Some(end) = offset.checked_add(length) else {
+        return;
+    };
+    if end > reader.size() {
+        return;
+    }
+    let Ok(bytes) = reader.read(offset, length as usize) else {
+        return;
+    };
+    // A reader that clamps a short read instead of failing would otherwise make
+    // us report a byte count the file does not actually contain.
+    if bytes.len() as u64 != length {
+        return;
+    }
+    metadata.insert("IFD1:ThumbnailImage", TagValue::new_binary(bytes.to_vec()));
+}
+
 /// Parses MakerNote data for any supported manufacturer.
 ///
 /// Camera manufacturers store proprietary metadata in MakerNote tags.
@@ -595,5 +851,218 @@ fn parse_makernote_if_canon(
             let tag_value = TagValue::String(tag_value_str);
             metadata.insert(tag_name, tag_value);
         }
+    }
+}
+
+#[cfg(test)]
+mod ifd1_tests {
+    use super::*;
+    use crate::test_support::TestReader;
+
+    const SHORT: u16 = 3;
+    const LONG: u16 = 4;
+
+    /// Builds a little-endian TIFF whose IFD0 is empty and whose IFD1 holds the
+    /// supplied `(tag, type, value)` entries, followed by `thumb` bytes.
+    ///
+    /// Layout: header(8) | IFD0 count+next(6) | IFD1 | thumbnail
+    /// so IFD0 sits at 8, its next-IFD pointer at 10, and IFD1 at 14.
+    fn build_tiff(entries: &[(u16, u16, u32)], thumb: &[u8]) -> (Vec<u8>, u64) {
+        let ifd1_offset = 14u32;
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II");
+        data.extend_from_slice(&42u16.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes()); // IFD0 at 8
+        data.extend_from_slice(&0u16.to_le_bytes()); // IFD0 entry count
+        data.extend_from_slice(&ifd1_offset.to_le_bytes()); // IFD0 -> IFD1
+
+        data.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (tag, field_type, value) in entries {
+            data.extend_from_slice(&tag.to_le_bytes());
+            data.extend_from_slice(&field_type.to_le_bytes());
+            data.extend_from_slice(&1u32.to_le_bytes()); // value count
+            // Values are left-justified in the 4-byte field, so a SHORT lands in
+            // the low two bytes exactly as a little-endian u32 write puts it.
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        data.extend_from_slice(&0u32.to_le_bytes()); // no IFD2
+
+        let thumb_offset = data.len() as u32;
+        data.extend_from_slice(thumb);
+        (data, thumb_offset as u64)
+    }
+
+    fn run(entries: &[(u16, u16, u32)], thumb: &[u8], tiff_base: u64) -> MetadataMap {
+        let (data, _) = build_tiff(entries, thumb);
+        let reader = TestReader::new(data);
+        let mut metadata = MetadataMap::new();
+        parse_ifd1_thumbnail(
+            &reader,
+            8,
+            0,
+            ByteOrder::LittleEndian,
+            tiff_base,
+            &mut metadata,
+        );
+        metadata
+    }
+
+    #[test]
+    fn short_typed_thumbnail_offset_is_not_read_as_zero() {
+        // LeicaM8.jpg / LeicaM8.2.jpg store ThumbnailOffset as SHORT, not LONG.
+        // A fixed 4-byte read sees a 2-byte inline slice and yields 0.
+        let thumb = [0xFFu8, 0xD8, 0xFF, 0xDB];
+        let (_, thumb_offset) = build_tiff(
+            &[
+                (TAG_COMPRESSION, SHORT, 6),
+                (TAG_THUMBNAIL_OFFSET, SHORT, 0),
+                (TAG_THUMBNAIL_LENGTH, LONG, thumb.len() as u32),
+            ],
+            &thumb,
+        );
+        let metadata = run(
+            &[
+                (TAG_COMPRESSION, SHORT, 6),
+                (TAG_THUMBNAIL_OFFSET, SHORT, thumb_offset as u32),
+                (TAG_THUMBNAIL_LENGTH, LONG, thumb.len() as u32),
+            ],
+            &thumb,
+            12,
+        );
+
+        assert_eq!(
+            metadata
+                .get("IFD1:ThumbnailOffset")
+                .and_then(|v| v.as_integer()),
+            Some(thumb_offset as i64 + 12),
+            "SHORT-typed ThumbnailOffset must survive, with the TIFF base added"
+        );
+        assert_eq!(
+            metadata
+                .get("IFD1:ThumbnailLength")
+                .and_then(|v| v.as_integer()),
+            Some(thumb.len() as i64)
+        );
+        assert!(matches!(
+            metadata.get("IFD1:ThumbnailImage"),
+            Some(TagValue::Binary(bytes)) if bytes == &thumb
+        ));
+    }
+
+    #[test]
+    fn long_typed_offset_reports_absolute_position() {
+        let thumb = [0xFFu8, 0xD8, 0xFF, 0xDB, 0x00, 0x01];
+        let (_, thumb_offset) = build_tiff(
+            &[
+                (TAG_THUMBNAIL_OFFSET, LONG, 0),
+                (TAG_THUMBNAIL_LENGTH, LONG, thumb.len() as u32),
+            ],
+            &thumb,
+        );
+        let metadata = run(
+            &[
+                (TAG_THUMBNAIL_OFFSET, LONG, thumb_offset as u32),
+                (TAG_THUMBNAIL_LENGTH, LONG, thumb.len() as u32),
+            ],
+            &thumb,
+            30,
+        );
+        assert_eq!(
+            metadata
+                .get("IFD1:ThumbnailOffset")
+                .and_then(|v| v.as_integer()),
+            Some(thumb_offset as i64 + 30)
+        );
+    }
+
+    #[test]
+    fn ifd1_pointer_aimed_at_an_already_visited_directory_is_refused() {
+        // SamsungGT-S5620.jpg aims IFD1 at the GPS IFD; ExifTool warns "IFD1
+        // pointer references previous GPS directory" and reports no thumbnail.
+        // Reading that directory as IFD1 would invent one.
+        let gps_offset = 26u32;
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II");
+        data.extend_from_slice(&42u16.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes()); // IFD0 at 8
+        data.extend_from_slice(&1u16.to_le_bytes()); // one entry
+        data.extend_from_slice(&0x8825u16.to_le_bytes()); // GPS sub-IFD pointer
+        data.extend_from_slice(&LONG.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&gps_offset.to_le_bytes());
+        data.extend_from_slice(&gps_offset.to_le_bytes()); // IFD0 -> GPS, not IFD1
+        assert_eq!(data.len(), gps_offset as usize);
+
+        // A GPS directory whose entries would read as thumbnail tags.
+        data.extend_from_slice(&2u16.to_le_bytes());
+        for (tag, value) in [(TAG_THUMBNAIL_OFFSET, 60u32), (TAG_THUMBNAIL_LENGTH, 4u32)] {
+            data.extend_from_slice(&tag.to_le_bytes());
+            data.extend_from_slice(&LONG.to_le_bytes());
+            data.extend_from_slice(&1u32.to_le_bytes());
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.extend_from_slice(&[0xFF, 0xD8, 0xFF, 0xDB]);
+
+        let reader = TestReader::new(data);
+        let mut metadata = MetadataMap::new();
+        parse_ifd1_thumbnail(&reader, 8, 1, ByteOrder::LittleEndian, 0, &mut metadata);
+        assert!(metadata.get("IFD1:ThumbnailOffset").is_none());
+        assert!(metadata.get("IFD1:ThumbnailLength").is_none());
+        assert!(metadata.get("IFD1:ThumbnailImage").is_none());
+    }
+
+    #[test]
+    fn zero_length_thumbnail_keeps_the_pair_but_emits_no_image() {
+        // ExifTool.jpg and XMP.jpg both report ThumbnailOffset/Length with
+        // Length 0 and no ThumbnailImage.
+        let metadata = run(
+            &[
+                (TAG_THUMBNAIL_OFFSET, LONG, 100),
+                (TAG_THUMBNAIL_LENGTH, LONG, 0),
+            ],
+            &[],
+            0,
+        );
+        assert_eq!(
+            metadata
+                .get("IFD1:ThumbnailLength")
+                .and_then(|v| v.as_integer()),
+            Some(0)
+        );
+        assert!(metadata.get("IFD1:ThumbnailImage").is_none());
+    }
+
+    #[test]
+    fn ifd1_compression_yields_to_ifd0() {
+        // OlympusAIR-A01.jpg carries Compression in both IFDs; ExifTool's
+        // duplicate-suppressed output reports IFD0's "Uncompressed".
+        let (data, _) = build_tiff(&[(TAG_COMPRESSION, SHORT, 6)], &[]);
+        let reader = TestReader::new(data);
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:Compression", TagValue::new_integer(1));
+        parse_ifd1_thumbnail(&reader, 8, 0, ByteOrder::LittleEndian, 0, &mut metadata);
+        assert_eq!(
+            metadata
+                .get("IFD0:Compression")
+                .and_then(|v| v.as_integer()),
+            Some(1)
+        );
+        assert!(metadata.get("IFD1:Compression").is_none());
+    }
+
+    #[test]
+    fn absent_ifd1_emits_nothing() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II");
+        data.extend_from_slice(&42u16.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes()); // no IFD1
+        let reader = TestReader::new(data);
+        let mut metadata = MetadataMap::new();
+        parse_ifd1_thumbnail(&reader, 8, 0, ByteOrder::LittleEndian, 12, &mut metadata);
+        assert!(metadata.get("IFD1:ThumbnailOffset").is_none());
+        assert!(metadata.get("IFD1:Compression").is_none());
     }
 }
