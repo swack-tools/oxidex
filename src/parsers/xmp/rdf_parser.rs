@@ -296,6 +296,42 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
         }
     }
 
+    // Extract the few properties whose RDF shapes cannot be represented by
+    // the generic simple-property state machine. This pass is deliberately
+    // restricted to exact namespaces, property names, and child depths.
+    let TargetedXmpValues {
+        simple_properties,
+        custom1_tag,
+        custom1_languages,
+        derived_from_document_id,
+    } = extract_targeted_xmp_values(xml_bytes)?;
+
+    for (tag, value) in simple_properties {
+        results.retain(|(existing, _)| existing != &tag);
+        results.push((tag, value));
+    }
+
+    if let Some(base_tag) = custom1_tag {
+        // Replace the generic parser's flattened parent value with the
+        // language-qualified values from the exact Bag/li/Alt/li shape.
+        results.retain(|(existing, _)| existing != &base_tag);
+        for (language, values) in custom1_languages {
+            let tag = if language == "x-default" {
+                base_tag.clone()
+            } else {
+                format!("{base_tag}-{language}")
+            };
+            results.retain(|(existing, _)| existing != &tag);
+            results.push((tag, values.join(", ")));
+        }
+    }
+
+    if let Some(value) = derived_from_document_id {
+        const TAG: &str = "XMP:DerivedFromDocumentID";
+        results.retain(|(existing, _)| existing != TAG);
+        results.push((TAG.to_string(), value));
+    }
+
     // Post-process results to apply formatting for specific tags
     let results = results
         .into_iter()
@@ -306,6 +342,404 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
         .collect();
 
     Ok(results)
+}
+
+#[derive(Debug, Default)]
+struct TargetedXmpValues {
+    simple_properties: Vec<(String, String)>,
+    custom1_tag: Option<String>,
+    custom1_languages: Vec<(String, Vec<String>)>,
+    derived_from_document_id: Option<String>,
+}
+
+/// Extracts only the currently unsupported XMP properties and RDF shapes.
+///
+/// In particular, the PLUS list-language parser requires this exact direct
+/// child relationship:
+///
+/// `plus:Custom1/rdf:Bag/rdf:li/rdf:Alt/rdf:li[@xml:lang]`
+///
+/// Requiring every depth prevents structured bags such as AboutCvTerm,
+/// ArtworkOrObject, and Regions from being mistaken for list-language values.
+fn extract_targeted_xmp_values(xml_bytes: &[u8]) -> Result<TargetedXmpValues> {
+    // Namespace URIs from ExifTool's XMP namespace tables.
+    const PLUS_NS: &str = "http://ns.useplus.org/ldf/xmp/1.0/";
+    const XMP_MM_NS: &str = "http://ns.adobe.com/xap/1.0/mm/";
+    const ST_REF_NS: &str = "http://ns.adobe.com/xap/1.0/sType/ResourceRef#";
+
+    let mut reader = Reader::from_reader(xml_bytes);
+    reader.config_mut().trim_text(true);
+
+    let mut resolver = NamespaceResolver::new();
+    let mut result = TargetedXmpValues::default();
+    let mut buf = Vec::new();
+    let mut depth = 0usize;
+    let mut description_depths: Vec<usize> = Vec::new();
+
+    let mut simple_depth: Option<usize> = None;
+    let mut simple_tag: Option<String> = None;
+    let mut simple_text = String::new();
+
+    let mut custom_depth: Option<usize> = None;
+    let mut custom_bag_depth: Option<usize> = None;
+    let mut custom_item_depth: Option<usize> = None;
+    let mut custom_alt_depth: Option<usize> = None;
+    let mut custom_value_depth: Option<usize> = None;
+    let mut custom_language: Option<String> = None;
+    let mut custom_text = String::new();
+
+    let mut derived_depth: Option<usize> = None;
+    let mut document_id_depth: Option<usize> = None;
+    let mut document_id_text = String::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                depth += 1;
+                register_namespaces_from_element(&e, &mut resolver)?;
+                let tag_name = extract_tag_name(&e)?;
+
+                if is_rdf_description(&tag_name, &resolver) {
+                    description_depths.push(depth);
+                } else {
+                    let is_direct_description_property = description_depths
+                        .last()
+                        .is_some_and(|description_depth| depth == *description_depth + 1);
+
+                    if is_direct_description_property
+                        && simple_depth.is_none()
+                        && let Some(tag) = targeted_simple_property_tag(&tag_name, &resolver)
+                    {
+                        simple_depth = Some(depth);
+                        simple_tag = Some(tag);
+                        simple_text.clear();
+                    }
+
+                    if is_direct_description_property
+                        && custom_depth.is_none()
+                        && is_property_in_namespace(
+                            &tag_name,
+                            "Custom1",
+                            PLUS_NS,
+                            &resolver,
+                        )
+                    {
+                        custom_depth = Some(depth);
+                        result.custom1_tag = Some(format_tag_name(&tag_name, &resolver));
+                        result.custom1_languages.clear();
+                    } else if let Some(property_depth) = custom_depth {
+                        if custom_bag_depth.is_none()
+                            && depth == property_depth + 1
+                            && is_collection_container(&tag_name, &resolver)
+                            && NamespaceResolver::extract_local_name(&tag_name) == "Bag"
+                        {
+                            custom_bag_depth = Some(depth);
+                        } else if custom_bag_depth
+                            .is_some_and(|bag_depth| depth == bag_depth + 1)
+                            && custom_item_depth.is_none()
+                            && is_rdf_li(&tag_name, &resolver)
+                        {
+                            custom_item_depth = Some(depth);
+                        } else if custom_item_depth
+                            .is_some_and(|item_depth| depth == item_depth + 1)
+                            && custom_alt_depth.is_none()
+                            && is_collection_container(&tag_name, &resolver)
+                            && NamespaceResolver::extract_local_name(&tag_name) == "Alt"
+                        {
+                            custom_alt_depth = Some(depth);
+                        } else if custom_alt_depth
+                            .is_some_and(|alt_depth| depth == alt_depth + 1)
+                            && custom_value_depth.is_none()
+                            && is_rdf_li(&tag_name, &resolver)
+                            && let Some(language) = xml_lang_attribute(&e)
+                        {
+                            custom_value_depth = Some(depth);
+                            custom_language = Some(language);
+                            custom_text.clear();
+                        }
+                    }
+
+                    if is_direct_description_property
+                        && derived_depth.is_none()
+                        && is_property_in_namespace(
+                            &tag_name,
+                            "DerivedFrom",
+                            XMP_MM_NS,
+                            &resolver,
+                        )
+                    {
+                        derived_depth = Some(depth);
+                    }
+
+                    if derived_depth.is_some() {
+                        if result.derived_from_document_id.is_none()
+                            && let Some(value) = namespaced_attribute_value(
+                                &e,
+                                "documentID",
+                                ST_REF_NS,
+                                &resolver,
+                            )?
+                        {
+                            result.derived_from_document_id = Some(value);
+                        }
+
+                        if document_id_depth.is_none()
+                            && is_property_in_namespace(
+                                &tag_name,
+                                "documentID",
+                                ST_REF_NS,
+                                &resolver,
+                            )
+                        {
+                            document_id_depth = Some(depth);
+                            document_id_text.clear();
+                        }
+                    }
+                }
+            }
+
+            Ok(Event::Empty(e)) => {
+                register_namespaces_from_element(&e, &mut resolver)?;
+                let tag_name = extract_tag_name(&e)?;
+
+                // Empty elements do not increment quick-xml's open-element
+                // depth. At this point `depth == alt_depth` means the empty
+                // rdf:li is a direct child of the exact rdf:Alt.
+                if custom_alt_depth == Some(depth)
+                    && is_rdf_li(&tag_name, &resolver)
+                    && let Some(language) = xml_lang_attribute(&e)
+                {
+                    push_targeted_language_value(
+                        &mut result.custom1_languages,
+                        language,
+                        String::new(),
+                    );
+                }
+
+                let is_direct_description_property = description_depths
+                    .last()
+                    .is_some_and(|description_depth| depth == *description_depth);
+
+                if is_direct_description_property
+                    && is_property_in_namespace(
+                        &tag_name,
+                        "DerivedFrom",
+                        XMP_MM_NS,
+                        &resolver,
+                    )
+                    && let Some(value) =
+                        namespaced_attribute_value(&e, "documentID", ST_REF_NS, &resolver)?
+                {
+                    result.derived_from_document_id = Some(value);
+                } else if derived_depth.is_some()
+                    && result.derived_from_document_id.is_none()
+                    && let Some(value) =
+                        namespaced_attribute_value(&e, "documentID", ST_REF_NS, &resolver)?
+                {
+                    result.derived_from_document_id = Some(value);
+                }
+            }
+
+            Ok(Event::End(e)) => {
+                let tag_name = extract_tag_name_from_bytes(e.name().as_ref())?;
+
+                if simple_depth == Some(depth) {
+                    let value = simple_text.trim().to_string();
+                    if !value.is_empty()
+                        && let Some(tag) = simple_tag.take()
+                    {
+                        result.simple_properties.push((tag, value));
+                    }
+                    simple_depth = None;
+                    simple_tag = None;
+                    simple_text.clear();
+                }
+
+                if custom_value_depth == Some(depth) && is_rdf_li(&tag_name, &resolver) {
+                    if let Some(language) = custom_language.take() {
+                        push_targeted_language_value(
+                            &mut result.custom1_languages,
+                            language,
+                            custom_text.trim().to_string(),
+                        );
+                    }
+                    custom_value_depth = None;
+                    custom_text.clear();
+                }
+
+                if custom_alt_depth == Some(depth) {
+                    custom_alt_depth = None;
+                }
+                if custom_item_depth == Some(depth) {
+                    custom_item_depth = None;
+                }
+                if custom_bag_depth == Some(depth) {
+                    custom_bag_depth = None;
+                }
+                if custom_depth == Some(depth) {
+                    custom_depth = None;
+                }
+
+                if document_id_depth == Some(depth) {
+                    let value = document_id_text.trim();
+                    if result.derived_from_document_id.is_none() && !value.is_empty() {
+                        result.derived_from_document_id = Some(value.to_string());
+                    }
+                    document_id_depth = None;
+                    document_id_text.clear();
+                }
+                if derived_depth == Some(depth) {
+                    derived_depth = None;
+                }
+
+                if description_depths.last() == Some(&depth) {
+                    description_depths.pop();
+                }
+
+                depth = depth.saturating_sub(1);
+            }
+
+            Ok(Event::Text(e)) => {
+                if let Ok(decoded) = e.xml10_content() {
+                    let unescaped =
+                        quick_xml::escape::unescape(&decoded).unwrap_or_else(|_| decoded.clone());
+
+                    if simple_depth.is_some() {
+                        simple_text.push_str(&unescaped);
+                    }
+                    if custom_value_depth.is_some() {
+                        custom_text.push_str(&unescaped);
+                    }
+                    if document_id_depth.is_some() {
+                        document_id_text.push_str(&unescaped);
+                    }
+                }
+            }
+
+            Ok(Event::GeneralRef(e)) => {
+                if simple_depth.is_some()
+                    || custom_value_depth.is_some()
+                    || document_id_depth.is_some()
+                {
+                    let resolved = if let Ok(Some(ch)) = e.resolve_char_ref() {
+                        Some(ch.to_string())
+                    } else if let Ok(entity_name) = e.xml10_content() {
+                        resolve_predefined_entity(&entity_name).map(str::to_string)
+                    } else {
+                        None
+                    };
+
+                    if let Some(resolved) = resolved {
+                        if simple_depth.is_some() {
+                            simple_text.push_str(&resolved);
+                        }
+                        if custom_value_depth.is_some() {
+                            custom_text.push_str(&resolved);
+                        }
+                        if document_id_depth.is_some() {
+                            document_id_text.push_str(&resolved);
+                        }
+                    }
+                }
+            }
+
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(e) => {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid targeted XMP structure: {e}"
+                )));
+            }
+        }
+
+        buf.clear();
+    }
+
+    Ok(result)
+}
+
+/// Returns the reported tag for the requested simple-property coverage gaps.
+fn targeted_simple_property_tag(
+    qname: &str,
+    resolver: &NamespaceResolver,
+) -> Option<String> {
+    // Namespace URIs from ExifTool's IPTC Core and PDF/X XMP tables.
+    const IPTC_CORE_NS: &str = "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/";
+    const PDFX_NS: &str = "http://ns.adobe.com/pdfx/1.3/";
+
+    let prefix = NamespaceResolver::extract_prefix(qname)?;
+    let namespace = resolver.resolve_prefix(prefix)?;
+    let local_name = NamespaceResolver::extract_local_name(qname);
+
+    if namespace == IPTC_CORE_NS && local_name == "CountryCode" {
+        return Some(format_tag_name(qname, resolver));
+    }
+
+    if namespace == PDFX_NS {
+        // ExifTool removes non-ASCII characters while constructing unknown
+        // XMP tag IDs. XMP3.xmp uses U+2182 between the encoded name parts.
+        let cleaned_local: String = local_name
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+            .collect();
+
+        if matches!(
+            cleaned_local.as_str(),
+            "Custom0020Property00201" | "Custom0020Property00202"
+        ) {
+            let formatted = format_tag_name(qname, resolver);
+            if let Some((family, _)) = formatted.split_once(':') {
+                return Some(format!("{family}:{cleaned_local}"));
+            }
+        }
+    }
+
+    None
+}
+
+fn push_targeted_language_value(
+    language_values: &mut Vec<(String, Vec<String>)>,
+    language: String,
+    value: String,
+) {
+    if let Some((_, values)) = language_values
+        .iter_mut()
+        .find(|(existing, _)| existing == &language)
+    {
+        values.push(value);
+    } else {
+        language_values.push((language, vec![value]));
+    }
+}
+
+fn namespaced_attribute_value(
+    element: &BytesStart,
+    local_name: &str,
+    namespace: &str,
+    resolver: &NamespaceResolver,
+) -> Result<Option<String>> {
+    for attribute in element.attributes().flatten() {
+        let key = std::str::from_utf8(attribute.key.as_ref()).map_err(|e| {
+            ExifToolError::parse_error(format!("Invalid UTF-8 in attribute key: {e}"))
+        })?;
+        let Some(prefix) = NamespaceResolver::extract_prefix(key) else {
+            continue;
+        };
+
+        if NamespaceResolver::extract_local_name(key) == local_name
+            && resolver.resolve_prefix(prefix) == Some(namespace)
+        {
+            let value = std::str::from_utf8(&attribute.value).map_err(|e| {
+                ExifToolError::parse_error(format!("Invalid UTF-8 in attribute value: {e}"))
+            })?;
+            let value = value.trim();
+            if !value.is_empty() {
+                return Ok(Some(value.to_string()));
+            }
+        }
+    }
+
+    Ok(None)
 }
 
 /// Extracts flattened fields from the IPTC Extension AboutCvTerm structured bag.
@@ -1433,6 +1867,24 @@ fn register_namespaces_from_element(
     Ok(())
 }
 
+/// Namespace families that ExifTool reports differently for specific
+/// schema-defined properties.
+///
+/// PLUS Custom1 is a custom-property test field and is reported in ExifTool's
+/// generic XMP family rather than as an XMP-plus table tag.
+const PROPERTY_FAMILY_RENAMES: &[(&str, &str, &str)] =
+    &[("XMP-plus", "Custom1", "XMP")];
+
+fn exiftool_property_family<'a>(family: &'a str, local: &str) -> &'a str {
+    PROPERTY_FAMILY_RENAMES
+        .iter()
+        .find(|(source_family, property, _)| {
+            *source_family == family && *property == local
+        })
+        // The replacement is static and therefore outlives `family`.
+        .map_or(family, |(_, _, replacement)| *replacement)
+}
+
 /// Properties ExifTool reports under a different name than the XMP schema's
 /// own local name.
 ///
@@ -1492,6 +1944,7 @@ fn format_tag_name(qname: &str, resolver: &NamespaceResolver) -> String {
             local_name = capitalize_first_letter(&local_name);
         }
 
+        let family_prefix = exiftool_property_family(family_prefix, &local_name);
         // Some properties are reported by ExifTool under a different name.
         let reported = exiftool_property_name(family_prefix, &local_name);
 
