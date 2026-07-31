@@ -330,7 +330,7 @@ pub fn parse_raw_metadata(data: &[u8], format: RawFormat) -> Result<MetadataMap>
         RawFormat::SigmaX3F => parse_sigma_x3f(data, format),
 
         // Minolta MRW uses proprietary MRM format
-        RawFormat::MinoltaMRW => parse_minolta_mrw(data, format),
+        RawFormat::MinoltaMRW => parse_minolta_mrw_metadata(data, format),
 
         // Canon CRW is an older proprietary format
         RawFormat::CanonCRW => parse_canon_crw(data, format),
@@ -349,6 +349,240 @@ pub fn parse_raw_metadata(data: &[u8], format: RawFormat) -> Result<MetadataMap>
             })
         }
     }
+}
+
+/// Parse the TIFF payload embedded in a Minolta MRW/MRM file.
+///
+/// MRW is a chunked container. The TTW chunk contains a normal TIFF whose
+/// offsets are relative to that embedded TIFF, not to the MRW file. Keeping a
+/// SliceReader over that payload makes the offset base explicit and local.
+fn parse_minolta_mrw_metadata(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
+    let (tiff_offset, tiff) = find_mrw_tiff(data)
+        .ok_or_else(|| ExifToolError::parse_error("Minolta MRW contains no TIFF TTW payload"))?;
+
+    let byte_order = detect_byte_order(tiff)?;
+    let first_ifd_bytes = tiff
+        .get(4..8)
+        .ok_or_else(|| ExifToolError::parse_error("Truncated MRW TIFF header"))?;
+    let first_ifd_offset = u64::from(read_u32(first_ifd_bytes, byte_order));
+    let reader = SliceReader::new(tiff);
+    let ifd0 = parse_ifd(&reader, first_ifd_offset, byte_order)?;
+
+    let mut metadata = MetadataMap::new();
+    let exif_offset = ifd0.iter().find_map(|(tag_id, field_type, count, raw)| {
+        if *tag_id == 0x8769 && *field_type == 4 && *count >= 1 {
+            read_tiff_u32(raw.as_ref(), byte_order).map(u64::from)
+        } else {
+            None
+        }
+    });
+
+    let exif_tags = match exif_offset {
+        Some(offset) => parse_ifd(&reader, offset, byte_order).unwrap_or_default(),
+        None => Vec::new(),
+    };
+
+    let maker_note = exif_tags.iter().find_map(|(tag_id, field_type, count, raw)| {
+        if *tag_id == 0x927C && (*field_type == 7 || *field_type == 2) && *count > 0 {
+            Some(raw.as_ref())
+        } else {
+            None
+        }
+    });
+
+    let Some(maker_note) = maker_note else {
+        return Ok(metadata);
+    };
+
+    // The MakerNote payload is stored in the outer TIFF. Locate its absolute
+    // position so CameraSettings offsets can continue to be interpreted
+    // relative to the TIFF base, as they are by ExifTool.
+    let maker_abs = tiff
+        .windows(maker_note.len())
+        .position(|window| window == maker_note)
+        .map(|offset| offset as u64);
+
+    // Preserve names already present in the Minolta registry, but use the
+    // ExifTool family-0 group used by MRW MakerNotes.
+    let mut registry_tags = std::collections::HashMap::new();
+    if crate::parsers::tiff::makernote_dispatcher::dispatch_makernote(
+        "Minolta",
+        maker_note,
+        byte_order,
+        &mut registry_tags,
+    )
+    .is_ok()
+    {
+        for (name, value) in registry_tags {
+            if let Some(tag) = name.strip_prefix("Minolta:") {
+                metadata.insert(
+                    format!("MakerNotes:{}", tag),
+                    TagValue::new_string(value),
+                );
+            }
+        }
+    }
+
+    // Search only the MakerNote neighborhood for its IFD. Minolta CameraSettings
+    // uses an int32u array and its offsets are relative to the containing TIFF.
+    // Trying bounded candidate offsets avoids treating arbitrary MRW image data
+    // as a directory while still handling the different Minolta header lengths.
+    let search_start = maker_abs
+        .unwrap_or(0)
+        .saturating_sub(32) as usize;
+    let search_end = maker_abs
+        .map(|offset| {
+            (offset as usize)
+                .saturating_add(maker_note.len())
+                .saturating_add(256)
+        })
+        .unwrap_or_else(|| tiff.len())
+        .min(tiff.len());
+
+    let mut camera_settings = None;
+    for offset in (search_start..search_end).step_by(2) {
+        let entries = match parse_ifd(&reader, offset as u64, byte_order) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+
+        for (tag_id, field_type, count, raw) in entries {
+            emit_mrw_makernote_tag(
+                &mut metadata,
+                tag_id,
+                field_type,
+                count,
+                raw.as_ref(),
+                byte_order,
+            );
+            if tag_id == 0x0003 && field_type == 4 && count > 42 {
+                camera_settings = Some(raw);
+            }
+        }
+
+        if camera_settings.is_some() {
+            break;
+        }
+    }
+
+    if let Some(settings) = camera_settings {
+        let index = 42usize;
+        let start = index.checked_mul(4);
+        if let Some(start) = start
+            && let Some(bytes) = settings.get(start..start + 4)
+        {
+            let value = match byte_order {
+                ByteOrder::LittleEndian => {
+                    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+                }
+                ByteOrder::BigEndian => {
+                    u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+                }
+            };
+            metadata.insert(
+                "MakerNotes:BWFilter".to_string(),
+                TagValue::new_integer(i64::from(value)),
+            );
+        }
+    }
+
+    let _ = tiff_offset;
+    Ok(metadata)
+}
+
+/// Find the embedded TIFF header in an MRW file.
+fn find_mrw_tiff(data: &[u8]) -> Option<(usize, &[u8])> {
+    for offset in 0..data.len().saturating_sub(8) {
+        let header = data.get(offset..offset + 4)?;
+        let valid = header == b"II*\0" || header == b"MM\0*";
+        if valid {
+            return Some((offset, data.get(offset..)?));
+        }
+    }
+    None
+}
+
+/// Decode the explicitly identified MRW MakerNote tags.
+fn emit_mrw_makernote_tag(
+    metadata: &mut MetadataMap,
+    tag_id: u16,
+    field_type: u16,
+    value_count: u32,
+    bytes: &[u8],
+    byte_order: ByteOrder,
+) {
+    let value = match tag_id {
+        // Exif.pm 0xfe53: remove the "Brightness: " prefix.
+        0xFE53 if field_type == 2 || field_type == 7 => {
+            let count = match usize::try_from(value_count) {
+                Ok(count) => count,
+                Err(_) => return,
+            };
+            let raw = match bytes.get(..count) {
+                Some(raw) => raw,
+                None => return,
+            };
+            let text = String::from_utf8_lossy(raw)
+                .trim_end_matches('\0')
+                .to_string();
+            text.split_once(": ")
+                .map(|(_, value)| value.to_string())
+                .unwrap_or(text)
+        }
+        // Casio.pm 0x0017.
+        0x0017 if field_type == 3 && value_count >= 1 => {
+            let number = match read_tiff_u16(bytes, byte_order) {
+                Some(number) => number,
+                None => return,
+            };
+            match number {
+                1 => "Off".to_string(),
+                2 => "Black & White".to_string(),
+                3 => "Sepia".to_string(),
+                4 => "Red".to_string(),
+                5 => "Green".to_string(),
+                6 => "Blue".to_string(),
+                7 => "Yellow".to_string(),
+                8 => "Pink".to_string(),
+                9 => "Purple".to_string(),
+                _ => number.to_string(),
+            }
+        }
+        // Casio.pm 0x3015.
+        0x3015 if field_type == 3 && value_count >= 1 => {
+            let number = match read_tiff_u16(bytes, byte_order) {
+                Some(number) => number,
+                None => return,
+            };
+            match number {
+                0 => "Off".to_string(),
+                2 => "Black & White".to_string(),
+                3 => "Sepia".to_string(),
+                _ => number.to_string(),
+            }
+        }
+        // Minolta.pm 0x0040 is an int32u CompressedImageSize.
+        0x0040 if field_type == 4 && value_count >= 1 => {
+            let number = match read_tiff_u32(bytes, byte_order) {
+                Some(number) => number,
+                None => return,
+            };
+            number.to_string()
+        }
+        _ => return,
+    };
+
+    let name = match tag_id {
+        0xFE53 => "Brightness",
+        0x0017 => "ColorFilter",
+        0x3015 => "ColorMode",
+        0x0040 => "CompressedImageSize",
+        _ => return,
+    };
+    metadata.insert(
+        format!("MakerNotes:{}", name),
+        TagValue::new_string(value),
+    );
 }
 
 /// Parse TIFF-based raw formats using existing TIFF parser infrastructure
