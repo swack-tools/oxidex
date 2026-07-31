@@ -26,7 +26,7 @@
 
 #![allow(missing_docs)]
 #![allow(clippy::all)]
-// EXPERIMENT: allow removed
+#![allow(dead_code)] // Allow during initial development
 
 // Application Layer
 pub mod cli;
