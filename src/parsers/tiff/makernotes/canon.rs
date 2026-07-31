@@ -270,10 +270,15 @@ fn extract_canon_string_with_base(
     }
 
     let bytes = &data[relative_offset..relative_offset + byte_count];
-    let s = String::from_utf8_lossy(bytes)
-        .trim_end_matches('\0')
-        .trim()
-        .to_string();
+    // A TIFF ASCII value ends at its first NUL; Canon pads the remainder of the fixed
+    // 32-byte OwnerName/ImageType slots with unrelated bytes, so trimming only trailing
+    // NULs leaks that padding into the value (ExifTool prints "unknown", not
+    // "unknown\0\x01\0\0\0<...").
+    let terminated = match bytes.iter().position(|&b| b == 0) {
+        Some(nul) => &bytes[..nul],
+        None => bytes,
+    };
+    let s = String::from_utf8_lossy(terminated).trim().to_string();
 
     if s.is_empty() { None } else { Some(s) }
 }
@@ -325,6 +330,33 @@ fn join_i16_slice(values: &[i16]) -> String {
         .join(" ")
 }
 
+/// Drops the stray leading element from a Canon binary record that was read one slot early.
+///
+/// Every `%Canon` record with `FIRST_ENTRY => 1` (CameraSettings, ShotInfo, Processing,
+/// SensorInfo, MeasuredColor, FileInfo) and every `ColorData*` table opens with its own
+/// size in bytes; ExifTool spells that out at Canon.pm:7444 — `# 0x00: size of record in
+/// bytes`. A correctly located record therefore always satisfies
+/// `record[0] == record.len() * 2`.
+///
+/// On a large share of Canon JPEGs the MakerNote base this parser computes lands two bytes
+/// low, so the size word turns up at index 1 and every documented index is shifted by one.
+/// That single fault is why a 20D reported `SensorWidth 34` — the SensorInfo record's own
+/// byte count — instead of 3596, and why `ControlMode` read the slot before the real one.
+/// When the size word is unambiguously at index 1, dropping the leading element restores
+/// ExifTool's numbering for every index the callers below use.
+///
+/// The test is deliberately one-sided: when index 0 already holds the size the record is
+/// returned untouched, so a correctly read record can never be shifted by this function.
+/// Realignment costs the record's final element, which no index used here reaches.
+fn realign_length_prefixed_record(array: Vec<i16>) -> Vec<i16> {
+    let declares_size =
+        |slot: usize| array.get(slot).map(|&v| v as u16 as usize) == Some(array.len() * 2);
+    if !declares_size(0) && declares_size(1) {
+        return array[1..].to_vec();
+    }
+    array
+}
+
 // Canon MakerNote Tag IDs
 const CANON_CAMERA_SETTINGS: u16 = 0x0001;
 const CANON_FOCAL_LENGTH: u16 = 0x0002;
@@ -351,6 +383,12 @@ const CANON_COLOR_SPACE: u16 = 0x00B4;
 const CANON_VRD_OFFSET: u16 = 0x00D0;
 /// ExifTool Canon.pm:1965 — `0xe0 => { Name => 'SensorInfo', ... }`
 const CANON_SENSOR_INFO: u16 = 0x00E0;
+/// ExifTool Canon.pm:1607 — `0x13 => { Name => 'ThumbnailImageValidArea', ... }`
+const CANON_THUMBNAIL_IMAGE_VALID_AREA: u16 = 0x0013;
+/// ExifTool Canon.pm:1785 — `0x83 => { Name => 'OriginalDecisionDataOffset', ... }`
+const CANON_ORIGINAL_DECISION_DATA_OFFSET: u16 = 0x0083;
+/// ExifTool Canon.pm:1972 — `0x4001 => [ ... ColorData1..ColorData12 ... ]`
+const CANON_COLOR_DATA: u16 = 0x4001;
 
 // Canon signature (not always present)
 const CANON_SIGNATURE: &[u8] = b"Canon";
@@ -384,14 +422,24 @@ const CAMERA_SETTINGS_MIN_FOCAL_LENGTH: usize = 24;
 const CAMERA_SETTINGS_FOCAL_UNITS: usize = 25;
 const CAMERA_SETTINGS_MAX_APERTURE: usize = 26;
 const CAMERA_SETTINGS_MIN_APERTURE: usize = 27;
-const CAMERA_SETTINGS_FLASH_ACTIVITY: usize = 28;
+/// ExifTool `%Canon::CameraSettings` key 28 (Canon.pm:2553) — `Name => 'FlashModel'`,
+/// `Mask => 0x7f`, `RawConv => '$val == 127 ? undef : $val'`. There is no `FlashActivity`
+/// key in this table.
+const CAMERA_SETTINGS_FLASH_MODEL: usize = 28;
 const CAMERA_SETTINGS_FLASH_BITS: usize = 29;
 const CAMERA_SETTINGS_FOCUS_CONTINUOUS: usize = 32;
 const CAMERA_SETTINGS_AE_SETTING: usize = 33;
+/// ExifTool `%Canon::CameraSettings` key 35 (Canon.pm:2645) — `DisplayAperture`, not 40.
+const CAMERA_SETTINGS_DISPLAY_APERTURE: usize = 35;
 const CAMERA_SETTINGS_ZOOM_SOURCE_WIDTH: usize = 36;
 const CAMERA_SETTINGS_ZOOM_TARGET_WIDTH: usize = 37;
 const CAMERA_SETTINGS_SPOT_METERING_MODE: usize = 39;
-const CAMERA_SETTINGS_DISPLAY_APERTURE: usize = 40;
+/// ExifTool `%Canon::CameraSettings` key 40 (Canon.pm:2651) — `PhotoEffect`.
+const CAMERA_SETTINGS_PHOTO_EFFECT: usize = 40;
+/// ExifTool `%Canon::CameraSettings` key 41 (Canon.pm:2668) — `ManualFlashOutput`.
+const CAMERA_SETTINGS_MANUAL_FLASH_OUTPUT: usize = 41;
+/// ExifTool `%Canon::CameraSettings` key 42 (Canon.pm:2681) — `ColorTone`.
+const CAMERA_SETTINGS_COLOR_TONE: usize = 42;
 
 // ShotInfo array (tag 0x0004) indices
 // Reference: ExifTool Canon.pm ShotInfo table
@@ -419,9 +467,19 @@ const SHOT_INFO_FOCUS_DISTANCE_UPPER: usize = 19;
 // Alias for backward compatibility with tests
 const SHOT_INFO_SUBJECT_DISTANCE: usize = 19;
 const SHOT_INFO_FOCUS_DISTANCE_LOWER: usize = 20;
+/// ExifTool `%Canon::ShotInfo` key 21 (Canon.pm:2956) — `FNumber`.
+const SHOT_INFO_FNUMBER: usize = 21;
+/// ExifTool `%Canon::ShotInfo` key 22 (Canon.pm:2965) — `ExposureTime`.
+const SHOT_INFO_EXPOSURE_TIME: usize = 22;
+/// ExifTool `%Canon::ShotInfo` key 23 (Canon.pm:3001) — `MeasuredEV2`.
+const SHOT_INFO_MEASURED_EV2: usize = 23;
 const SHOT_INFO_BULB_DURATION: usize = 24;
 /// ExifTool `%Canon::ShotInfo` key 27 — `Name => 'AutoRotate'` (Canon.pm:3022).
 const SHOT_INFO_AUTO_ROTATE: usize = 27;
+/// ExifTool `%Canon::ShotInfo` key 28 (Canon.pm:3033) — `NDFilter`.
+const SHOT_INFO_ND_FILTER: usize = 28;
+/// ExifTool `%Canon::ShotInfo` key 29 (Canon.pm:3037) — `SelfTimer2`.
+const SHOT_INFO_SELF_TIMER2: usize = 29;
 
 // FileInfo array indices (tag 0x0093)
 //
@@ -436,13 +494,25 @@ const SHOT_INFO_AUTO_ROTATE: usize = 27;
 const FILE_INFO_FILE_NUMBER: usize = 1;
 // NOTE: the two indices below are a legacy heuristic that has no counterpart in
 // `%Canon::FileInfo` (key 1 is a 4-byte int32u spanning int16 slots 1-2, and slot 3 is
-// BracketMode). Left unchanged here because ShutterCount is outside this change's scope.
+// BracketMode). Kept for the models where oxidex has no better source, but suppressed
+// on the bodies where key 1 is known to be FileNumber.
 const FILE_INFO_SHUTTER_COUNT_LOW: usize = 2;
 const FILE_INFO_SHUTTER_COUNT_HIGH: usize = 3;
 const FILE_INFO_BRACKET_MODE: usize = 3;
 const FILE_INFO_BRACKET_VALUE: usize = 4;
 const FILE_INFO_BRACKET_SHOT_NUMBER: usize = 5;
-const FILE_INFO_LENS_ID: usize = 6;
+/// ExifTool `%Canon::FileInfo` key 8 (Canon.pm:6948) — `LongExposureNoiseReduction2`.
+const FILE_INFO_LONG_EXPOSURE_NR2: usize = 8;
+/// ExifTool `%Canon::FileInfo` key 9 (Canon.pm:6963) — `WBBracketMode`.
+const FILE_INFO_WB_BRACKET_MODE: usize = 9;
+/// ExifTool `%Canon::FileInfo` key 12 (Canon.pm:6971) — `WBBracketValueAB`.
+const FILE_INFO_WB_BRACKET_VALUE_AB: usize = 12;
+/// ExifTool `%Canon::FileInfo` key 13 (Canon.pm:6972) — `WBBracketValueGM`.
+const FILE_INFO_WB_BRACKET_VALUE_GM: usize = 13;
+/// ExifTool `%Canon::FileInfo` key 14 (Canon.pm:6973) — `FilterEffect`.
+const FILE_INFO_FILTER_EFFECT: usize = 14;
+/// ExifTool `%Canon::FileInfo` key 15 (Canon.pm:6984) — `ToningEffect`.
+const FILE_INFO_TONING_EFFECT: usize = 15;
 
 // SensorInfo array indices (tag 0x00E0)
 //
@@ -456,6 +526,12 @@ const FILE_INFO_LENS_ID: usize = 6;
 //     11 => 'BlackMaskRightBorder', #22
 //     12 => 'BlackMaskBottomBorder', #22
 // ```
+const SENSOR_INFO_SENSOR_WIDTH: usize = 1;
+const SENSOR_INFO_SENSOR_HEIGHT: usize = 2;
+const SENSOR_INFO_SENSOR_LEFT_BORDER: usize = 5;
+const SENSOR_INFO_SENSOR_TOP_BORDER: usize = 6;
+const SENSOR_INFO_SENSOR_RIGHT_BORDER: usize = 7;
+const SENSOR_INFO_SENSOR_BOTTOM_BORDER: usize = 8;
 const SENSOR_INFO_BLACK_MASK_LEFT_BORDER: usize = 9;
 const SENSOR_INFO_BLACK_MASK_TOP_BORDER: usize = 10;
 const SENSOR_INFO_BLACK_MASK_RIGHT_BORDER: usize = 11;
@@ -482,6 +558,9 @@ const SENSOR_INFO_BLACK_MASK_BOTTOM_BORDER: usize = 12;
 //     10 => { Name => 'AFPointsInFocus', Format => 'int16s[int(($val{0}+15)/16)]', ... },
 // ```
 const AF_INFO_NUM_AF_POINTS: usize = 0;
+const AF_INFO_VALID_AF_POINTS: usize = 1;
+const AF_INFO_CANON_IMAGE_WIDTH: usize = 2;
+const AF_INFO_CANON_IMAGE_HEIGHT: usize = 3;
 const AF_INFO_AF_IMAGE_WIDTH: usize = 4;
 const AF_INFO_AF_IMAGE_HEIGHT: usize = 5;
 const AF_INFO_AF_AREA_WIDTH: usize = 6;
@@ -536,10 +615,34 @@ const PROCESSING_INFO_WB_SHIFT_AB: usize = 12;
 const PROCESSING_INFO_WB_SHIFT_GM: usize = 13;
 
 // MeasuredColor array indices (tag 0x00AA)
-const MEASURED_COLOR_RED: usize = 0;
-const MEASURED_COLOR_GREEN: usize = 1;
-const MEASURED_COLOR_BLUE: usize = 2;
-const MEASURED_COLOR_TEMPERATURE: usize = 3;
+//
+// ExifTool `%Image::ExifTool::Canon::MeasuredColor` (Canon.pm:7294), `FORMAT => 'int16u'`,
+// `FIRST_ENTRY => 1` — the only named key is a 4-element array:
+//
+// ```text
+//     1 => { Name => 'MeasuredRGGB', Format => 'int16u[4]' },
+// ```
+const MEASURED_COLOR_RGGB: usize = 1;
+
+// ColorData1 indices (tag 0x4001 with an element count of 582 — 20D and 350D)
+//
+// ExifTool `%Image::ExifTool::Canon::ColorData1` (Canon.pm:7435), `FORMAT => 'int16s'`,
+// `FIRST_ENTRY => 0`, so the raw int16 index equals the Perl key. Every `WB_RGGBLevels*`
+// key is `Format => 'int16s[4]'` and each is followed 4 slots later by its `ColorTemp*`.
+const COLOR_DATA1_ELEMENT_COUNT: usize = 582;
+/// `(WB_RGGBLevels* index, ColorTemp* index, suffix)` for each preset in ColorData1.
+const COLOR_DATA1_WB_PRESETS: &[(usize, usize, &str)] = &[
+    (0x19, 0x1d, "AsShot"),
+    (0x1e, 0x22, "Auto"),
+    (0x23, 0x27, "Daylight"),
+    (0x28, 0x2c, "Shade"),
+    (0x2d, 0x31, "Cloudy"),
+    (0x32, 0x36, "Tungsten"),
+    (0x37, 0x3b, "Fluorescent"),
+    (0x3c, 0x40, "Flash"),
+    (0x41, 0x45, "Custom1"),
+    (0x46, 0x4a, "Custom2"),
+];
 
 // ============================================================================
 // DECODERS - Canon Value Decoders
@@ -635,19 +738,23 @@ const_decoder!(
 );
 
 // Canon exposure mode decoder
-// Public to allow re-use in registry module
+//
+// ExifTool `%Image::ExifTool::Canon::CameraSettings` key 20 (Canon.pm:2485). The labels
+// are ExifTool's verbatim - "Shutter speed priority AE" and "Aperture-priority AE", not
+// the shortened forms other manufacturers use.
 const_decoder!(
     pub EXPOSURE_MODE,
     i16,
     [
         (0, "Easy"),
         (1, "Program AE"),
-        (2, "Shutter Priority"),
-        (3, "Aperture Priority"),
+        (2, "Shutter speed priority AE"),
+        (3, "Aperture-priority AE"),
         (4, "Manual"),
         (5, "Depth-of-field AE"),
         (6, "M-Dep"),
         (7, "Bulb"),
+        (8, "Flexible-priority AE"),
     ]
 );
 
@@ -669,6 +776,16 @@ const_decoder!(
     pub PICTURE_STYLE,
     i32,
     [
+        // ExifTool `%pictureStyles` (Canon.pm:1118) starts at 0x00 - the "ColorMatrix"
+        // codes below 0x21 are part of the same table.
+        (0x0000, "None"),
+        (0x0001, "Standard"),
+        (0x0002, "Portrait"),
+        (0x0003, "High Saturation"),
+        (0x0004, "Adobe RGB"),
+        (0x0005, "Low Saturation"),
+        (0x0006, "CM Set 1"),
+        (0x0007, "CM Set 2"),
         (0x0021, "User Def. 1"),
         (0x0022, "User Def. 2"),
         (0x0023, "User Def. 3"),
@@ -683,6 +800,8 @@ const_decoder!(
         (0x0086, "Monochrome"),
         (0x0087, "Auto"),
         (0x0088, "Fine Detail"),
+        (0x00ff, "n/a"),
+        (0xffff, "n/a"),
     ]
 );
 
@@ -952,15 +1071,260 @@ const_decoder!(
 );
 
 // Canon control mode decoder
-// Used for ControlMode in ShotInfo (index 18)
+//
+// ExifTool `%Image::ExifTool::Canon::ShotInfo` key 18 (Canon.pm:2925):
+//
+// ```text
+//     18 => { #22
+//         Name => 'ControlMode',
+//         PrintConv => {
+//             0 => 'n/a',
+//             1 => 'Camera Local Control',
+//             # 2 - have seen this for EOS M studio picture
+//             3 => 'Computer Remote Control',
+//         },
+//     },
+// ```
 const_decoder!(
     pub CONTROL_MODE,
     i16,
     [
-        (0, "Camera Local Control"),
+        (0, "n/a"),
+        (1, "Camera Local Control"),
         (3, "Computer Remote Control"),
-        (4, "Camera Remote Control"),
     ]
+);
+
+// Canon external flash model decoder
+//
+// ExifTool `%flashModel` (Canon.pm:1028), used by `%Canon::CameraSettings` key 28 after
+// masking with 0x7f. Code 127 is discarded by that key's `RawConv`, and code 1 is
+// deliberately absent from the table upstream.
+const_decoder!(
+    pub FLASH_MODEL,
+    i16,
+    [
+        (0, "n/a"),
+        (4, "Speedlite 540EZ"),
+        (5, "Speedlite 380EX"),
+        (6, "Speedlite 550EX"),
+        (8, "Speedlite ST-E2"),
+        (9, "Speedlite MR-14EX"),
+        (12, "Speedlite 580EX"),
+        (13, "Speedlite 430EX"),
+        (17, "Speedlite 580EX II"),
+        (18, "Speedlite 430EX II"),
+        (22, "Speedlite 600EX-RT"),
+        (23, "Speedlite 600EX II-RT"),
+        (24, "Speedlite 90EX"),
+        (25, "Speedlite 430EX III-RT"),
+        (31, "Speedlite EL-1 ver2"),
+        (33, "Speedlite EL-5"),
+        (34, "Speedlite EL-10"),
+    ]
+);
+
+// Canon photo effect decoder
+// ExifTool `%Canon::CameraSettings` key 40 (Canon.pm:2651)
+const_decoder!(
+    pub PHOTO_EFFECT,
+    i16,
+    [
+        (0, "Off"),
+        (1, "Vivid"),
+        (2, "Neutral"),
+        (3, "Smooth"),
+        (4, "Sepia"),
+        (5, "B&W"),
+        (6, "Custom"),
+        (100, "My Color Data"),
+    ]
+);
+
+// Canon manual flash output decoder
+// ExifTool `%Canon::CameraSettings` key 41 (Canon.pm:2668), `PrintHex => 1`
+const_decoder!(
+    pub MANUAL_FLASH_OUTPUT,
+    i32,
+    [
+        (0, "n/a"),
+        (0x500, "Full"),
+        (0x502, "Medium"),
+        (0x504, "Low"),
+        (0x7fff, "n/a"),
+    ]
+);
+
+// Canon sharpness frequency decoder
+// ExifTool `%Canon::Processing` key 3 (Canon.pm:7220)
+const_decoder!(
+    pub SHARPNESS_FREQUENCY,
+    i16,
+    [
+        (0, "n/a"),
+        (1, "Lowest"),
+        (2, "Low"),
+        (3, "Standard"),
+        (4, "High"),
+        (5, "Highest"),
+    ]
+);
+
+// Canon long-exposure noise reduction (second flavour) decoder
+// ExifTool `%Canon::FileInfo` key 8 (Canon.pm:6948)
+const_decoder!(
+    pub LONG_EXPOSURE_NOISE_REDUCTION2,
+    i16,
+    [(0, "Off"), (1, "On (1D)"), (3, "On"), (4, "Auto"),]
+);
+
+// Canon white-balance bracket mode decoder
+// ExifTool `%Canon::FileInfo` key 9 (Canon.pm:6963)
+const_decoder!(
+    pub WB_BRACKET_MODE,
+    i16,
+    [(0, "Off"), (1, "On (shift AB)"), (2, "On (shift GM)"),]
+);
+
+// Canon monochrome filter effect decoder
+// ExifTool `%Canon::FileInfo` key 14 (Canon.pm:6973)
+const_decoder!(
+    pub FILTER_EFFECT,
+    i16,
+    [
+        (0, "None"),
+        (1, "Yellow"),
+        (2, "Orange"),
+        (3, "Red"),
+        (4, "Green"),
+    ]
+);
+
+// Canon monochrome toning effect decoder
+// ExifTool `%Canon::FileInfo` key 15 (Canon.pm:6984)
+const_decoder!(
+    pub TONING_EFFECT,
+    i16,
+    [
+        (0, "None"),
+        (1, "Sepia"),
+        (2, "Blue"),
+        (3, "Purple"),
+        (4, "Green"),
+    ]
+);
+
+// Canon D30/D60/PowerShot AF-points-in-focus code decoder
+//
+// ExifTool `%Canon::ShotInfo` key 14 (Canon.pm:2884) is a `PrintHex` lookup, not a
+// bitmask; its `RawConv` drops 0 so the caller must skip that value.
+const_decoder!(
+    pub SHOT_INFO_AF_POINTS_IN_FOCUS_CODES,
+    i32,
+    [
+        (0x3000, "None (MF)"),
+        (0x3001, "Right"),
+        (0x3002, "Center"),
+        (0x3003, "Center+Right"),
+        (0x3004, "Left"),
+        (0x3005, "Left+Right"),
+        (0x3006, "Left+Center"),
+        (0x3007, "All"),
+    ]
+);
+
+// Canon ND filter decoder
+// ExifTool `%Canon::ShotInfo` key 28 (Canon.pm:3033)
+const_decoder!(pub ND_FILTER, i16, [(-1, "n/a"), (0, "Off"), (1, "On"),]);
+
+// Canon auto exposure bracketing decoder
+// ExifTool `%Canon::ShotInfo` key 16 (Canon.pm:2907)
+const_decoder!(
+    pub AUTO_EXPOSURE_BRACKETING,
+    i16,
+    [
+        (-1, "On"),
+        (0, "Off"),
+        (1, "On (shot 1)"),
+        (2, "On (shot 2)"),
+        (3, "On (shot 3)"),
+    ]
+);
+
+// Canon serial number display format decoder
+// ExifTool Canon.pm:1615 — `0x15 => { Name => 'SerialNumberFormat', PrintHex => 1, ... }`
+const_decoder!(
+    pub SERIAL_NUMBER_FORMAT,
+    i64,
+    [(0x9000_0000, "Format 1"), (0xa000_0000, "Format 2"),]
+);
+
+// ----------------------------------------------------------------------------
+// CanonCustom::Functions350D (CanonCustom.pm:809)
+// ----------------------------------------------------------------------------
+// Selected by Canon.pm:1542 when `$$self{Model} =~ /\b(350D|REBEL XT|Kiss Digital N)\b/`.
+// Every key is an `int8u` produced by `ProcessCanonCustom` (CanonCustom.pm:2772), which
+// reads one int16 per entry and splits it into `tag = $val >> 8` / `value = $val & 0xff`.
+
+const_decoder!(
+    pub CC350D_SET_BUTTON_CROSS_KEYS_FUNC,
+    i16,
+    [
+        (0, "Normal"),
+        (1, "Set: Quality"),
+        (2, "Set: Parameter"),
+        (3, "Set: Playback"),
+        (4, "Cross keys: AF point select"),
+    ]
+);
+
+const_decoder!(
+    pub CC350D_LONG_EXPOSURE_NOISE_REDUCTION,
+    i16,
+    [(0, "Off"), (1, "On"),]
+);
+
+const_decoder!(
+    pub CC350D_FLASH_SYNC_SPEED_AV,
+    i16,
+    [(0, "Auto"), (1, "1/200 Fixed"),]
+);
+
+const_decoder!(
+    pub CC350D_SHUTTER_AE_LOCK,
+    i16,
+    [
+        (0, "AF/AE lock"),
+        (1, "AE lock/AF"),
+        (2, "AF/AF lock, No AE lock"),
+        (3, "AE/AF, No AE lock"),
+    ]
+);
+
+const_decoder!(
+    pub CC350D_AF_ASSIST_BEAM,
+    i16,
+    [
+        (0, "Emits"),
+        (1, "Does not emit"),
+        (2, "Only ext. flash emits"),
+    ]
+);
+
+const_decoder!(
+    pub CC350D_EXPOSURE_LEVEL_INCREMENTS,
+    i16,
+    [(0, "1/3 Stop"), (1, "1/2 Stop"),]
+);
+
+const_decoder!(pub CC350D_MIRROR_LOCKUP, i16, [(0, "Disable"), (1, "Enable"),]);
+
+const_decoder!(pub CC350D_ETTL_II, i16, [(0, "Evaluative"), (1, "Average"),]);
+
+const_decoder!(
+    pub CC350D_SHUTTER_CURTAIN_SYNC,
+    i16,
+    [(0, "1st-curtain sync"), (1, "2nd-curtain sync"),]
 );
 
 // Canon AutoRotate decoder
@@ -1296,6 +1660,269 @@ fn apex_to_ev(value: i16) -> String {
     }
 }
 
+/// Converts a Canon hex-based EV code to a number.
+///
+/// ExifTool `Image::ExifTool::Canon::CanonEv` (Canon.pm:10648):
+///
+/// ```text
+///     my $frac = $val & 0x1f;
+///     $val -= $frac;                       # remove fraction
+///     if ($frac == 0x0c) { $frac = 0x20 / 3; }        # 1/3 stop
+///     elsif ($frac == 0x14) { $frac = 0x40 / 3; }     # 2/3 stop
+///     return $sign * ($val + $frac) / 0x20;
+/// ```
+pub fn canon_ev(value: i32) -> f64 {
+    let sign = if value < 0 { -1.0 } else { 1.0 };
+    let magnitude = value.unsigned_abs();
+    let raw_frac = magnitude & 0x1f;
+    let whole = (magnitude - raw_frac) as f64;
+    let frac = match raw_frac {
+        0x0c => 0x20 as f64 / 3.0,
+        0x14 => 0x40 as f64 / 3.0,
+        other => other as f64,
+    };
+    sign * (whole + frac) / 32.0
+}
+
+/// Renders a number the way Perl's `sprintf("%.2g", $val)` does.
+///
+/// Used by every `%Canon` aperture key (`MaxAperture`, `TargetAperture`, `FNumber`, ...).
+/// Values large enough for `%g` to switch to exponential notation are printed in full
+/// instead, because an aperture is never displayed as `1.3e+02`.
+fn format_g2(value: f64) -> String {
+    if value == 0.0 || !value.is_finite() {
+        return "0".to_string();
+    }
+    let exponent = value.abs().log10().floor() as i32;
+    let decimals = (1 - exponent).max(0) as usize;
+    let rendered = format!("{:.*}", decimals, value);
+    if rendered.contains('.') {
+        rendered
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
+    } else {
+        rendered
+    }
+}
+
+/// Renders an exposure time the way ExifTool does.
+///
+/// ExifTool `Image::ExifTool::Exif::PrintExposureTime` (Exif.pm):
+///
+/// ```text
+///     if ($secs < 0.25001 and $secs > 0) {
+///         return sprintf("1/%d",int(0.5 + 1/$secs));
+///     }
+///     $_ = sprintf("%.1f",$secs);
+///     s/\.0$//;
+/// ```
+fn print_exposure_time(seconds: f64) -> String {
+    if seconds > 0.0 && seconds < 0.250_01 {
+        return format!("1/{}", (0.5 + 1.0 / seconds) as i64);
+    }
+    let rendered = format!("{:.1}", seconds);
+    rendered.strip_suffix(".0").unwrap_or(&rendered).to_string()
+}
+
+/// Renders an EV offset the way ExifTool does.
+///
+/// ExifTool `Image::ExifTool::Exif::PrintFraction` (Exif.pm): exact integers print as
+/// `%+d`, halves as `%+d/2`, thirds as `%+d/3`, anything else as `%+.3g`, and zero as a
+/// bare `0`.
+fn print_fraction(value: f64) -> String {
+    let value = value * 1.00001; // ExifTool's round-off guard
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    let truncated = value.trunc();
+    if truncated != 0.0 && truncated / value > 0.999 {
+        return format!("{:+}", truncated as i64);
+    }
+    let halves = (value * 2.0).trunc();
+    if halves != 0.0 && halves / (value * 2.0) > 0.999 {
+        return format!("{:+}/2", halves as i64);
+    }
+    let thirds = (value * 3.0).trunc();
+    if thirds != 0.0 && thirds / (value * 3.0) > 0.999 {
+        return format!("{:+}/3", thirds as i64);
+    }
+    let magnitude = format_significant_3(value.abs());
+    if value < 0.0 {
+        format!("-{}", magnitude)
+    } else {
+        format!("+{}", magnitude)
+    }
+}
+
+/// Renders a positive number with 3 significant digits, `%g`-style (no trailing zeros).
+fn format_significant_3(value: f64) -> String {
+    if value == 0.0 || !value.is_finite() {
+        return "0".to_string();
+    }
+    let exponent = value.abs().log10().floor() as i32;
+    let decimals = (2 - exponent).max(0) as usize;
+    let rendered = format!("{:.*}", decimals, value);
+    if rendered.contains('.') {
+        rendered
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
+    } else {
+        rendered
+    }
+}
+
+/// Renders a Canon "parameter" value (Contrast/Saturation/ColorTone style).
+///
+/// ExifTool `%Image::ExifTool::Exif::printParameter` (Exif.pm:317) maps 0 to `Normal` and
+/// defers everything else to `PrintParameter` (Exif.pm:5533), which prefixes positive
+/// values with `+` and re-signs anything above 0xfff0.
+fn print_parameter(value: i16) -> String {
+    let raw = value as u16 as i32;
+    if raw == 0 {
+        return "Normal".to_string();
+    }
+    if raw > 0xfff0 {
+        return (raw - 0x10000).to_string();
+    }
+    format!("+{}", raw)
+}
+
+/// Renders `%Canon::FileInfo` key 1 / Canon tag 0x0008 as `directory-file`.
+///
+/// ExifTool Canon.pm:1264 — `PrintConv => '$_=$val,s/(\d+)(\d{4})/$1-$2/,$_'`: the last
+/// four digits are the file number, everything before them the directory number.
+fn format_canon_file_number(value: u32) -> String {
+    let digits = value.to_string();
+    if digits.len() > 4 {
+        let split = digits.len() - 4;
+        format!("{}-{}", &digits[..split], &digits[split..])
+    } else {
+        digits
+    }
+}
+
+/// Renders a number the way Perl interpolates it into a string (no trailing zeros).
+fn format_perl_number(value: f64) -> String {
+    let rendered = format!("{:.6}", value);
+    let trimmed = rendered.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() || trimmed == "-" {
+        "0".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Decodes `%Canon::CameraSettings` key 16, `CameraISO`.
+///
+/// ExifTool `Image::ExifTool::Canon::CameraISO` (Canon.pm:10464): 0x7fff means "not
+/// present" (the key's `RawConv` drops it), bit 0x4000 marks a literal ISO in the low 14
+/// bits, and everything else is a small lookup code.
+fn camera_iso(value: i16) -> Option<String> {
+    let raw = value as u16;
+    if raw == 0x7fff {
+        return None;
+    }
+    if raw & 0x4000 != 0 {
+        return Some((raw & 0x3fff).to_string());
+    }
+    Some(match raw {
+        0 => "n/a".to_string(),
+        14 => "Auto High".to_string(),
+        15 => "Auto".to_string(),
+        16 => "50".to_string(),
+        17 => "100".to_string(),
+        18 => "200".to_string(),
+        19 => "400".to_string(),
+        20 => "800".to_string(),
+        other => format!("Unknown ({})", other),
+    })
+}
+
+/// True for the bodies whose `%Canon::FileInfo` key 1 is a 20D/350D-style `FileNumber`.
+///
+/// ExifTool Canon.pm:6850 — `Condition => '$$self{Model} =~ /\b(20D|350D|REBEL XT|Kiss
+/// Digital N)\b/'`. The same set selects `%Canon::ShotInfo` key 22's first `ExposureTime`
+/// variant (Canon.pm:2968) and excludes `%Canon::Processing` key 2's `Sharpness`
+/// (Canon.pm:7217).
+fn is_20d_or_350d(model: &str) -> bool {
+    ["20D", "350D", "REBEL XT", "Kiss Digital N"]
+        .iter()
+        .any(|needle| has_word(model, needle))
+}
+
+/// True for the bodies that select `%CanonCustom::Functions350D`.
+///
+/// ExifTool Canon.pm:1542 — `Condition => '$$self{Model} =~ /\b(350D|REBEL XT|Kiss
+/// Digital N)\b/'`. The 400D shares most of the layout but redefines keys 0 and 1, so it
+/// must not fall through to this table.
+fn is_350d_custom_functions(model: &str) -> bool {
+    ["350D", "REBEL XT", "Kiss Digital N"]
+        .iter()
+        .any(|needle| has_word(model, needle))
+}
+
+/// True for the bodies whose `%Canon::FocalLength` keys 2 and 3 hold real focal plane
+/// sizes.
+///
+/// ExifTool Canon.pm:2735:
+///
+/// ```text
+///     $$self{Model} !~ /EOS/ or
+///     $$self{Model} =~ /\b(1DS?|5D|D30|D60|10D|20D|30D|K236)$/ or
+///     $$self{Model} =~ /\b((300D|350D|400D) DIGITAL|REBEL( XTi?)?|Kiss Digital( [NX])?)$/
+/// ```
+fn focal_plane_size_supported(model: &str) -> bool {
+    if !model.contains("EOS") {
+        return true;
+    }
+    const TRAILING: &[&str] = &["1D", "1DS", "5D", "D30", "D60", "10D", "20D", "30D", "K236"];
+    if TRAILING
+        .iter()
+        .any(|suffix| model.ends_with(suffix) && has_word(model, suffix))
+    {
+        return true;
+    }
+    // Every alternative in this branch is anchored to the end of the model name by
+    // ExifTool's trailing `$`, so a body such as "Canon EOS REBEL T3i" must NOT match
+    // "REBEL" — its focal plane slots hold something else entirely.
+    const REBEL_FAMILY: &[&str] = &[
+        "300D DIGITAL",
+        "350D DIGITAL",
+        "400D DIGITAL",
+        "REBEL",
+        "REBEL XT",
+        "REBEL XTi",
+        "Kiss Digital",
+        "Kiss Digital N",
+        "Kiss Digital X",
+    ];
+    REBEL_FAMILY
+        .iter()
+        .any(|needle| model.ends_with(needle) && has_word(model, needle))
+}
+
+/// Perl `\b...\b` word-boundary containment for the model-name conditions above.
+fn has_word(haystack: &str, needle: &str) -> bool {
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut start = 0;
+    while let Some(found) = haystack[start..].find(needle) {
+        let begin = start + found;
+        let end = begin + needle.len();
+        let before_ok = begin == 0 || !is_word(haystack[..begin].chars().next_back().unwrap());
+        let after_ok = end == haystack.len() || !is_word(haystack[end..].chars().next().unwrap());
+        if before_ok && after_ok {
+            return true;
+        }
+        start = begin + 1;
+        if start >= haystack.len() {
+            break;
+        }
+    }
+    false
+}
+
 /// Formats a Canon focus distance value to a human-readable string.
 ///
 /// Canon stores focus distance in centimeters. A value of 0xFFFF (65535 or
@@ -1308,13 +1935,18 @@ fn apex_to_ev(value: i16) -> String {
 /// A formatted string with the distance in meters (e.g., "1.50 m", "7.82 m")
 /// or "inf" for infinity focus
 fn format_focus_distance(value: i16) -> String {
-    // 0xFFFF (-1 as i16) or 0 indicates infinity
-    if value == -1 || value == 0 {
+    // ExifTool `%Canon::ShotInfo` keys 19/20 declare `Format => 'int16u'`, so 0xFFFF is
+    // 65535 cm, not -1 cm:
+    //
+    // ```text
+    //     ValueConv => '$val / 100',
+    //     PrintConv => '$val > 655.345 ? "inf" : "$val m"',
+    // ```
+    let distance_m = (value as u16) as f64 / 100.0;
+    if distance_m > 655.345 {
         return "inf".to_string();
     }
-    // Canon focus distance is stored in centimeters, convert to meters
-    let distance_m = (value as f64) / 100.0;
-    format!("{:.2} m", distance_m)
+    format!("{} m", format_perl_number(distance_m))
 }
 
 /// Decodes the AF points in focus bitfield to a human-readable string.
@@ -1674,6 +2306,25 @@ fn parse_canon_makernote_impl(
         max_entries: 200,
     };
 
+    // Several `%Canon` keys are model-conditional (`%Canon::FileInfo` key 1,
+    // `%Canon::ShotInfo` key 22, `%Canon::Processing` key 2, `%Canon::FocalLength` keys
+    // 2-3, and the `CustomFunctions*` table selection). ExifTool reads `$$self{Model}`
+    // from IFD0, which the MakerNote dispatcher does not pass down; CanonImageType
+    // (MakerNote tag 0x0006) carries the same body name, so resolve it up front rather
+    // than relying on the order entries happen to arrive in.
+    let mut model = String::new();
+    let _ = parse_ifd_entries(data, byte_order, &config, |entry, ifd_data| {
+        if entry.tag_id == CANON_IMAGE_TYPE
+            && let Some(value) = extract_canon_string(entry, ifd_data, byte_order)
+        {
+            model = value;
+        }
+    });
+    let model = model;
+
+    // FocalUnits (`%Canon::CameraSettings` key 25) divides `%Canon::FocalLength` key 1.
+    let mut focal_units: i16 = 1;
+
     // Use shared IFD parser
     // Note: we don't propagate errors here to maintain existing behavior of
     // returning whatever tags we found even if parsing isn't perfect
@@ -1682,7 +2333,7 @@ fn parse_canon_makernote_impl(
             // Simple string tags (Phase 1)
             // Canon MakerNotes use TIFF-relative offsets, so we use extract_canon_string
             // which properly calculates and applies the base offset
-            CANON_IMAGE_TYPE | CANON_FIRMWARE_VERSION | CANON_OWNER_NAME | CANON_SERIAL_NUMBER => {
+            CANON_IMAGE_TYPE | CANON_FIRMWARE_VERSION | CANON_OWNER_NAME => {
                 if let Some(value) = extract_canon_string(entry, ifd_data, byte_order) {
                     let tag_name = canon_tag_to_name(entry.tag_id);
                     tags.insert(tag_name.clone(), value.clone());
@@ -1700,6 +2351,63 @@ fn parse_canon_makernote_impl(
                 }
             }
 
+            // SerialNumber (tag 0x000C) is an int32u, not a string.
+            //
+            // ExifTool Canon.pm:1299 (the fall-through variant used by every body except
+            // the D30 and the EOS-1D family):
+            //
+            // ```text
+            //     Name => 'SerialNumber',
+            //     Writable => 'int32u',
+            //     PrintConv => 'sprintf("%.10u",$val)',
+            // ```
+            CANON_SERIAL_NUMBER => {
+                let serial = entry.value_offset;
+                let rendered = if has_word(&model, "EOS D30") {
+                    format!("{:04x}{:05}", serial >> 16, serial & 0xffff)
+                } else if model.contains("EOS-1D") {
+                    format!("{:06}", serial)
+                } else {
+                    format!("{:010}", serial)
+                };
+                tags.insert("Canon:SerialNumber".to_string(), rendered);
+            }
+
+            // SerialNumberFormat (tag 0x0015) - int32u display-format selector
+            CANON_SERIAL_NUMBER_FORMAT => {
+                tags.insert(
+                    "Canon:SerialNumberFormat".to_string(),
+                    SERIAL_NUMBER_FORMAT.decode(entry.value_offset as i64),
+                );
+            }
+
+            // ThumbnailImageValidArea (tag 0x0013) - int16u[4] crop box
+            CANON_THUMBNAIL_IMAGE_VALID_AREA => {
+                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order)
+                    && array.len() >= 4
+                {
+                    tags.insert(
+                        "Canon:ThumbnailImageValidArea".to_string(),
+                        join_i16_slice(&array[..4]),
+                    );
+                }
+            }
+
+            // OriginalDecisionDataOffset (tag 0x0083) and VRDOffset (tag 0x00D0) are
+            // plain int32u offsets that ExifTool reports verbatim.
+            CANON_ORIGINAL_DECISION_DATA_OFFSET => {
+                tags.insert(
+                    "Canon:OriginalDecisionDataOffset".to_string(),
+                    entry.value_offset.to_string(),
+                );
+            }
+            CANON_VRD_OFFSET => {
+                tags.insert(
+                    "Canon:VRDOffset".to_string(),
+                    entry.value_offset.to_string(),
+                );
+            }
+
             // Canon Model ID - decode to camera model name
             // The model ID is stored as a 32-bit integer that maps to specific camera models
             CANON_MODEL_ID => {
@@ -1713,18 +2421,21 @@ fn parse_canon_makernote_impl(
                 tags.insert("Canon:CameraType".to_string(), camera_type);
             }
 
-            // Simple integer tags (Phase 1)
+            // FileNumber (tag 0x0008) - int32u, ExifTool Canon.pm:1260 renders it as
+            // `directory-file` via `s/(\d+)(\d{4})/$1-$2/`.
             CANON_FILE_NUMBER => {
-                if let Some(value) = extract_integer_value(entry) {
-                    let tag_name = canon_tag_to_name(entry.tag_id);
-                    tags.insert(tag_name, value);
-                }
+                tags.insert(
+                    "Canon:FileNumber".to_string(),
+                    format_canon_file_number(entry.value_offset),
+                );
             }
 
             // CameraSettings array (Phase 2)
             // Reference: ExifTool Canon.pm CameraSettings table
             CANON_CAMERA_SETTINGS => {
-                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
+                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order)
+                    .map(realign_length_prefixed_record)
+                {
                     // Extract specific settings from array using const decoders
                     // Note: All tag names use "Canon:" prefix for consistency
 
@@ -1842,12 +2553,12 @@ fn parse_canon_makernote_impl(
                         );
                     }
 
-                    // ISO (index 16) - ISO speed setting
-                    if array.len() > CAMERA_SETTINGS_ISO {
-                        tags.insert(
-                            "Canon:ISO".to_string(),
-                            array[CAMERA_SETTINGS_ISO].to_string(),
-                        );
+                    // CameraISO (index 16). ExifTool's RawConv drops the 0x7fff
+                    // "not present" sentinel instead of reporting it as an ISO.
+                    if let Some(&raw_iso) = array.get(CAMERA_SETTINGS_ISO)
+                        && let Some(iso) = camera_iso(raw_iso)
+                    {
+                        tags.insert("Canon:CameraISO".to_string(), iso);
                     }
 
                     // MeteringMode (index 17) - Metering mode setting
@@ -1866,12 +2577,12 @@ fn parse_canon_makernote_impl(
                         );
                     }
 
-                    // AFPoint (index 19) - AF point selected
-                    if array.len() > CAMERA_SETTINGS_AF_POINT {
-                        tags.insert(
-                            "Canon:AFPoint".to_string(),
-                            AF_POINT.decode(array[CAMERA_SETTINGS_AF_POINT]),
-                        );
+                    // AFPoint (index 19). ExifTool's `RawConv => '$val==0 ? undef : $val'`
+                    // suppresses the tag entirely on bodies that leave the slot at zero.
+                    if let Some(&af_point) = array.get(CAMERA_SETTINGS_AF_POINT)
+                        && af_point != 0
+                    {
+                        tags.insert("Canon:AFPoint".to_string(), AF_POINT.decode(af_point));
                     }
 
                     // CanonExposureMode (index 20) - Exposure mode setting
@@ -1903,7 +2614,7 @@ fn parse_canon_makernote_impl(
                     }
 
                     // Get focal units for focal length calculations (index 25)
-                    let focal_units = if array.len() > CAMERA_SETTINGS_FOCAL_UNITS {
+                    focal_units = if array.len() > CAMERA_SETTINGS_FOCAL_UNITS {
                         let units = array[CAMERA_SETTINGS_FOCAL_UNITS];
                         if units > 0 { units } else { 1 }
                     } else {
@@ -1956,17 +2667,13 @@ fn parse_canon_makernote_impl(
                         );
                     }
 
-                    // FlashActivity (index 28) - Flash fired indicator
-                    if array.len() > CAMERA_SETTINGS_FLASH_ACTIVITY {
-                        let flash_activity = array[CAMERA_SETTINGS_FLASH_ACTIVITY];
-                        tags.insert(
-                            "Canon:FlashActivity".to_string(),
-                            if flash_activity == 0 {
-                                "Did not fire".to_string()
-                            } else {
-                                "Fired".to_string()
-                            },
-                        );
+                    // FlashModel (index 28). ExifTool masks with 0x7f and discards the
+                    // "no information" code 127; there is no FlashActivity key here.
+                    if let Some(&raw_flash_model) = array.get(CAMERA_SETTINGS_FLASH_MODEL) {
+                        let masked = raw_flash_model & 0x7f;
+                        if masked != 127 {
+                            tags.insert("Canon:FlashModel".to_string(), FLASH_MODEL.decode(masked));
+                        }
                     }
 
                     // FlashBits (index 29) - Flash features bitfield
@@ -1983,49 +2690,70 @@ fn parse_canon_makernote_impl(
                         );
                     }
 
-                    // AESetting (index 33) - Auto exposure setting
-                    if array.len() > CAMERA_SETTINGS_AE_SETTING {
+                    // AESetting (index 33). `RawConv => '$val==-1 ? undef : $val'` — an
+                    // absent setting must not surface as "Unknown (-1)".
+                    if let Some(&ae_setting) = array.get(CAMERA_SETTINGS_AE_SETTING)
+                        && ae_setting != -1
+                    {
+                        tags.insert("Canon:AESetting".to_string(), AE_SETTING.decode(ae_setting));
+                    }
+
+                    // DisplayAperture (index 35). ExifTool `%Canon::CameraSettings` key 35
+                    // (Canon.pm:2645) is `RawConv => '$val ? $val : undef'`,
+                    // `ValueConv => '$val / 10'` and *no* PrintConv, so the value prints as a
+                    // bare number ("3.9"), never with an "f/" prefix.
+                    if let Some(&display_aperture) = array.get(CAMERA_SETTINGS_DISPLAY_APERTURE)
+                        && display_aperture != 0
+                    {
                         tags.insert(
-                            "Canon:AESetting".to_string(),
-                            AE_SETTING.decode(array[CAMERA_SETTINGS_AE_SETTING]),
+                            "Canon:DisplayAperture".to_string(),
+                            format_perl_number(display_aperture as f64 / 10.0),
                         );
                     }
 
-                    // ZoomSourceWidth (index 36) - Digital zoom source width
-                    if array.len() > CAMERA_SETTINGS_ZOOM_SOURCE_WIDTH {
-                        let width = array[CAMERA_SETTINGS_ZOOM_SOURCE_WIDTH];
-                        if width > 0 {
-                            tags.insert("Canon:ZoomSourceWidth".to_string(), width.to_string());
-                        }
+                    // ZoomSourceWidth (index 36) / ZoomTargetWidth (index 37). ExifTool
+                    // has no RawConv on these keys, so a zero width is still reported.
+                    if let Some(&width) = array.get(CAMERA_SETTINGS_ZOOM_SOURCE_WIDTH) {
+                        tags.insert("Canon:ZoomSourceWidth".to_string(), width.to_string());
+                    }
+                    if let Some(&width) = array.get(CAMERA_SETTINGS_ZOOM_TARGET_WIDTH) {
+                        tags.insert("Canon:ZoomTargetWidth".to_string(), width.to_string());
                     }
 
-                    // ZoomTargetWidth (index 37) - Digital zoom target width
-                    if array.len() > CAMERA_SETTINGS_ZOOM_TARGET_WIDTH {
-                        let width = array[CAMERA_SETTINGS_ZOOM_TARGET_WIDTH];
-                        if width > 0 {
-                            tags.insert("Canon:ZoomTargetWidth".to_string(), width.to_string());
-                        }
-                    }
-
-                    // SpotMeteringMode (index 39) - Spot metering point
-                    if array.len() > CAMERA_SETTINGS_SPOT_METERING_MODE {
+                    // SpotMeteringMode (index 39). `RawConv => '$val==-1 ? undef : $val'`.
+                    if let Some(&spot) = array.get(CAMERA_SETTINGS_SPOT_METERING_MODE)
+                        && spot != -1
+                    {
                         tags.insert(
                             "Canon:SpotMeteringMode".to_string(),
-                            SPOT_METERING_MODE.decode(array[CAMERA_SETTINGS_SPOT_METERING_MODE]),
+                            SPOT_METERING_MODE.decode(spot),
                         );
                     }
 
-                    // DisplayAperture (index 40) - Displayed aperture * 10
-                    if array.len() > CAMERA_SETTINGS_DISPLAY_APERTURE {
-                        let display_aperture = array[CAMERA_SETTINGS_DISPLAY_APERTURE];
-                        if display_aperture > 0 {
-                            // Convert from f-number * 10 to actual f-number
-                            let f_number = display_aperture as f64 / 10.0;
-                            tags.insert(
-                                "Canon:DisplayAperture".to_string(),
-                                format!("f/{:.1}", f_number),
-                            );
-                        }
+                    // PhotoEffect (index 40). `RawConv => '$val==-1 ? undef : $val'`.
+                    if let Some(&photo_effect) = array.get(CAMERA_SETTINGS_PHOTO_EFFECT)
+                        && photo_effect != -1
+                    {
+                        tags.insert(
+                            "Canon:PhotoEffect".to_string(),
+                            PHOTO_EFFECT.decode(photo_effect),
+                        );
+                    }
+
+                    // ManualFlashOutput (index 41) - PrintHex lookup, 0x7fff means n/a
+                    if let Some(&manual_flash) = array.get(CAMERA_SETTINGS_MANUAL_FLASH_OUTPUT) {
+                        tags.insert(
+                            "Canon:ManualFlashOutput".to_string(),
+                            MANUAL_FLASH_OUTPUT.decode(manual_flash as u16 as i32),
+                        );
+                    }
+
+                    // ColorTone (index 42). `RawConv => '$val == 0x7fff ? undef : $val'`,
+                    // then `%Image::ExifTool::Exif::printParameter`.
+                    if let Some(&color_tone) = array.get(CAMERA_SETTINGS_COLOR_TONE)
+                        && color_tone as u16 != 0x7fff
+                    {
+                        tags.insert("Canon:ColorTone".to_string(), print_parameter(color_tone));
                     }
                 }
             }
@@ -2033,49 +2761,33 @@ fn parse_canon_makernote_impl(
             // ShotInfo array (Phase 2) - Extended extraction
             // Extracts all available fields from the Canon ShotInfo array
             CANON_SHOT_INFO => {
-                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
-                    // AutoISO (index 1) - direct value, with fallback to CameraSettings ISO
-                    if array.len() > SHOT_INFO_AUTO_ISO {
-                        let auto_iso = array[SHOT_INFO_AUTO_ISO];
-                        // If AutoISO is 0, try to use CameraSettings ISO if available
-                        if auto_iso > 0 {
-                            tags.insert("Canon:AutoISO".to_string(), auto_iso.to_string());
-                        } else if let Some(iso) = tags.get("Canon:ISO") {
-                            tags.insert("Canon:AutoISO".to_string(), iso.clone());
-                        }
+                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order)
+                    .map(realign_length_prefixed_record)
+                {
+                    // AutoISO (index 1). ExifTool `%Canon::ShotInfo` key 1 (Canon.pm:2778):
+                    // `ValueConv => 'exp($val/32*log(2))*100'`, `PrintConv => '%.0f'`.
+                    // The slot is a log-scale code, never a literal ISO speed.
+                    if let Some(&auto_iso) = array.get(SHOT_INFO_AUTO_ISO) {
+                        let value = (auto_iso as f64 / 32.0 * std::f64::consts::LN_2).exp() * 100.0;
+                        tags.insert("Canon:AutoISO".to_string(), format!("{:.0}", value));
                     }
 
-                    // BaseISO (index 2) - may need conversion from APEX or different index
-                    // Note: For some camera models, BaseISO encoding varies
-                    if array.len() > SHOT_INFO_BASE_ISO {
-                        let base_iso_raw = array[SHOT_INFO_BASE_ISO];
-                        // Try to interpret the value - if it matches common ISO values, use it
-                        // Otherwise try fallback to CameraSettings ISO
-                        let base_iso = if base_iso_raw > 0 && base_iso_raw < 1000 {
-                            base_iso_raw.to_string()
-                        } else if let Some(iso) = tags.get("Canon:ISO") {
-                            iso.clone()
-                        } else {
-                            base_iso_raw.to_string()
-                        };
-                        tags.insert("Canon:BaseISO".to_string(), base_iso.clone());
-
-                        // CameraISO - use AutoISO if > 0, otherwise BaseISO
-                        if array.len() > SHOT_INFO_AUTO_ISO && array[SHOT_INFO_AUTO_ISO] > 0 {
-                            tags.insert(
-                                "Canon:CameraISO".to_string(),
-                                array[SHOT_INFO_AUTO_ISO].to_string(),
-                            );
-                        } else {
-                            tags.insert("Canon:CameraISO".to_string(), base_iso);
-                        }
+                    // BaseISO (index 2). `RawConv => '$val ? $val : undef'`,
+                    // `ValueConv => 'exp($val/32*log(2))*100/32'`, `PrintConv => '%.0f'`.
+                    if let Some(&base_iso) = array.get(SHOT_INFO_BASE_ISO)
+                        && base_iso != 0
+                    {
+                        let value =
+                            (base_iso as f64 / 32.0 * std::f64::consts::LN_2).exp() * 100.0 / 32.0;
+                        tags.insert("Canon:BaseISO".to_string(), format!("{:.0}", value));
                     }
 
-                    // MeasuredEV (index 3) - format as EV value
-                    // Use unsigned value and different scaling for MeasuredEV
-                    if array.len() > SHOT_INFO_MEASURED_EV {
-                        let raw_value = array[SHOT_INFO_MEASURED_EV] as u16;
-                        let ev = raw_value as f64 / 32.0;
+                    // MeasuredEV (index 3). ExifTool `%Canon::ShotInfo` key 3
+                    // (Canon.pm:2794): `ValueConv => '$val / 32 + 5'`, `PrintConv =>
+                    // '%.2f'`. The +5 offset is not optional — without it every EOS body
+                    // reports a light value 5 stops too dark.
+                    if let Some(&measured_ev) = array.get(SHOT_INFO_MEASURED_EV) {
+                        let ev = measured_ev as f64 / 32.0 + 5.0;
                         tags.insert("Canon:MeasuredEV".to_string(), format!("{:.2}", ev));
                     }
 
@@ -2095,11 +2807,11 @@ fn parse_canon_makernote_impl(
                         );
                     }
 
-                    // ExposureCompensation (index 6) - format as EV
-                    if array.len() > SHOT_INFO_EXPOSURE_COMPENSATION {
+                    // ExposureCompensation (index 6) - CanonEv + PrintFraction
+                    if let Some(&comp) = array.get(SHOT_INFO_EXPOSURE_COMPENSATION) {
                         tags.insert(
                             "Canon:ExposureCompensation".to_string(),
-                            apex_to_ev(array[SHOT_INFO_EXPOSURE_COMPENSATION]),
+                            print_fraction(canon_ev(comp as i32)),
                         );
                     }
 
@@ -2127,51 +2839,64 @@ fn parse_canon_makernote_impl(
                         );
                     }
 
-                    // OpticalZoomCode (index 10) - direct value
-                    if array.len() > SHOT_INFO_OPTICAL_ZOOM_CODE {
+                    // OpticalZoomCode (index 10). ExifTool `PrintConv => '$val == 8 ?
+                    // "n/a" : $val'` — every EOS body writes 8 here, which is a sentinel
+                    // rather than a zoom step.
+                    if let Some(&zoom_code) = array.get(SHOT_INFO_OPTICAL_ZOOM_CODE) {
                         tags.insert(
                             "Canon:OpticalZoomCode".to_string(),
-                            array[SHOT_INFO_OPTICAL_ZOOM_CODE].to_string(),
+                            if zoom_code == 8 {
+                                "n/a".to_string()
+                            } else {
+                                zoom_code.to_string()
+                            },
                         );
                     }
 
-                    // FlashGuideNumber (index 13) - direct value
-                    if array.len() > SHOT_INFO_FLASH_GUIDE_NUMBER {
+                    // FlashGuideNumber (index 13). `RawConv => '$val==-1 ? undef : $val'`,
+                    // `ValueConv => '$val / 32'`.
+                    if let Some(&guide_number) = array.get(SHOT_INFO_FLASH_GUIDE_NUMBER)
+                        && guide_number != -1
+                    {
                         tags.insert(
                             "Canon:FlashGuideNumber".to_string(),
-                            array[SHOT_INFO_FLASH_GUIDE_NUMBER].to_string(),
+                            format_perl_number(guide_number as f64 / 32.0),
                         );
                     }
 
-                    // AFPointsInFocus (index 14) - bitfield decoder
-                    if array.len() > SHOT_INFO_AF_POINTS_IN_FOCUS {
+                    // AFPointsInFocus (index 14). `RawConv => '$val==0 ? undef : $val'`
+                    // plus a PrintHex lookup — this slot is a code, not a bitmask, and is
+                    // only meaningful on the D30/D60 and some PowerShot bodies.
+                    if let Some(&af_points) = array.get(SHOT_INFO_AF_POINTS_IN_FOCUS)
+                        && af_points != 0
+                    {
                         tags.insert(
                             "Canon:AFPointsInFocus".to_string(),
-                            decode_af_points_in_focus(array[SHOT_INFO_AF_POINTS_IN_FOCUS]),
+                            SHOT_INFO_AF_POINTS_IN_FOCUS_CODES.decode(af_points as u16 as i32),
                         );
                     }
 
-                    // FlashExposureComp (index 15) - format as EV
-                    if array.len() > SHOT_INFO_FLASH_EXPOSURE_COMP {
+                    // FlashExposureComp (index 15) - CanonEv + PrintFraction
+                    if let Some(&flash_comp) = array.get(SHOT_INFO_FLASH_EXPOSURE_COMP) {
                         tags.insert(
                             "Canon:FlashExposureComp".to_string(),
-                            apex_to_ev(array[SHOT_INFO_FLASH_EXPOSURE_COMP]),
+                            print_fraction(canon_ev(flash_comp as i32)),
                         );
                     }
 
-                    // AutoExposureBracketing (index 16) - format as EV
-                    if array.len() > SHOT_INFO_AUTO_EXPOSURE_BRACKETING {
+                    // AutoExposureBracketing (index 16) - enumeration, not an EV offset
+                    if let Some(&aeb) = array.get(SHOT_INFO_AUTO_EXPOSURE_BRACKETING) {
                         tags.insert(
                             "Canon:AutoExposureBracketing".to_string(),
-                            apex_to_ev(array[SHOT_INFO_AUTO_EXPOSURE_BRACKETING]),
+                            AUTO_EXPOSURE_BRACKETING.decode(aeb),
                         );
                     }
 
-                    // AEBBracketValue (index 17) - format as EV
-                    if array.len() > SHOT_INFO_AEB_BRACKET_VALUE {
+                    // AEBBracketValue (index 17) - CanonEv + PrintFraction
+                    if let Some(&aeb_value) = array.get(SHOT_INFO_AEB_BRACKET_VALUE) {
                         tags.insert(
                             "Canon:AEBBracketValue".to_string(),
-                            apex_to_ev(array[SHOT_INFO_AEB_BRACKET_VALUE]),
+                            print_fraction(canon_ev(aeb_value as i32)),
                         );
                     }
 
@@ -2183,26 +2908,71 @@ fn parse_canon_makernote_impl(
                         );
                     }
 
-                    // FocusDistanceUpper (index 19) - format as "X m"
-                    if array.len() > SHOT_INFO_FOCUS_DISTANCE_UPPER {
+                    // FocusDistanceUpper (index 19) / FocusDistanceLower (index 20).
+                    // ExifTool: "FocusDistance tags are only extracted if
+                    // FocusDistanceUpper is non-zero" — key 19's RawConv returns undef on
+                    // zero and key 20 is conditional on it.
+                    let focus_distance_upper = array
+                        .get(SHOT_INFO_FOCUS_DISTANCE_UPPER)
+                        .copied()
+                        .unwrap_or(0);
+                    if focus_distance_upper != 0 {
                         tags.insert(
                             "Canon:FocusDistanceUpper".to_string(),
-                            format_focus_distance(array[SHOT_INFO_FOCUS_DISTANCE_UPPER]),
+                            format_focus_distance(focus_distance_upper),
                         );
+                        if let Some(&lower) = array.get(SHOT_INFO_FOCUS_DISTANCE_LOWER) {
+                            tags.insert(
+                                "Canon:FocusDistanceLower".to_string(),
+                                format_focus_distance(lower),
+                            );
+                        }
                     }
 
-                    // FocusDistanceLower (index 20) - format as "X m"
-                    if array.len() > SHOT_INFO_FOCUS_DISTANCE_LOWER {
+                    // FNumber (index 21). `RawConv => '$val ? $val : undef'`,
+                    // `ValueConv => 'exp(CanonEv($val)*log(2)/2)'`, `PrintConv => '%.2g'`.
+                    if let Some(&f_number) = array.get(SHOT_INFO_FNUMBER)
+                        && f_number != 0
+                    {
+                        let value =
+                            (canon_ev(f_number as i32) * std::f64::consts::LN_2 / 2.0).exp();
+                        tags.insert("Canon:FNumber".to_string(), format_g2(value));
+                    }
+
+                    // ExposureTime (index 22). ExifTool has two variants of this key: the
+                    // 20D/350D encoding carries an extra *1000/32 factor (Canon.pm:2965).
+                    if let Some(&exposure_time) = array.get(SHOT_INFO_EXPOSURE_TIME)
+                        && exposure_time != 0
+                    {
+                        let base = (-canon_ev(exposure_time as i32) * std::f64::consts::LN_2).exp();
+                        let seconds = if is_20d_or_350d(&model) {
+                            base * 1000.0 / 32.0
+                        } else {
+                            base
+                        };
                         tags.insert(
-                            "Canon:FocusDistanceLower".to_string(),
-                            format_focus_distance(array[SHOT_INFO_FOCUS_DISTANCE_LOWER]),
+                            "Canon:ExposureTime".to_string(),
+                            print_exposure_time(seconds),
                         );
                     }
 
-                    // BulbDuration (index 24) - direct value in seconds
-                    if array.len() > SHOT_INFO_BULB_DURATION {
-                        let duration = array[SHOT_INFO_BULB_DURATION];
-                        tags.insert("Canon:BulbDuration".to_string(), duration.to_string());
+                    // MeasuredEV2 (index 23). `RawConv => '$val ? $val : undef'`,
+                    // `ValueConv => '$val / 8 - 6'` (no PrintConv).
+                    if let Some(&measured_ev2) = array.get(SHOT_INFO_MEASURED_EV2)
+                        && measured_ev2 != 0
+                    {
+                        tags.insert(
+                            "Canon:MeasuredEV2".to_string(),
+                            format_perl_number(measured_ev2 as f64 / 8.0 - 6.0),
+                        );
+                    }
+
+                    // BulbDuration (index 24). `ValueConv => '$val / 10'`.
+                    if let Some(&duration) = array.get(SHOT_INFO_BULB_DURATION) {
+                        tags.insert(
+                            "Canon:BulbDuration".to_string(),
+                            format_perl_number(duration as f64 / 10.0),
+                        );
                     }
 
                     // AutoRotate (index 27). ExifTool's RawConv drops negative values.
@@ -2214,21 +2984,63 @@ fn parse_canon_makernote_impl(
                             AUTO_ROTATE.decode(auto_rotate),
                         );
                     }
+
+                    // NDFilter (index 28)
+                    if let Some(&nd_filter) = array.get(SHOT_INFO_ND_FILTER) {
+                        tags.insert("Canon:NDFilter".to_string(), ND_FILTER.decode(nd_filter));
+                    }
+
+                    // SelfTimer2 (index 29). `RawConv => '$val >= 0 ? $val : undef'`,
+                    // `ValueConv => '$val / 10'`.
+                    if let Some(&self_timer2) = array.get(SHOT_INFO_SELF_TIMER2)
+                        && self_timer2 >= 0
+                    {
+                        tags.insert(
+                            "Canon:SelfTimer2".to_string(),
+                            format_perl_number(self_timer2 as f64 / 10.0),
+                        );
+                    }
                 }
             }
 
             // FocalLength array (Phase 2)
-            // Contains focal type (Fixed/Zoom) and focal length value
+            // Contains focal type, focal length and (on supported bodies) focal plane size
             CANON_FOCAL_LENGTH => {
                 if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
-                    // array[0] = focal type (Fixed, Zoom, etc.)
-                    // Uses FOCAL_TYPE decoder to convert numeric value to string
-                    if !array.is_empty() {
-                        tags.insert("Canon:FocalType".to_string(), FOCAL_TYPE.decode(array[0]));
+                    // FocalType (key 0). `RawConv => '$val ? $val : undef'`.
+                    if let Some(&focal_type) = array.first()
+                        && focal_type != 0
+                    {
+                        tags.insert("Canon:FocalType".to_string(), FOCAL_TYPE.decode(focal_type));
                     }
-                    // array[1] = focal length in mm
-                    if array.len() > 1 {
-                        tags.insert("Canon:FocalLength".to_string(), format!("{} mm", array[1]));
+                    // FocalLength (key 1). `RawConv => '$val ? $val : undef'`,
+                    // `ValueConv => '$val / $$self{FocalUnits}'`, `PrintConv => '"$val mm"'`.
+                    if let Some(&focal_length) = array.get(1)
+                        && focal_length != 0
+                    {
+                        tags.insert(
+                            "Canon:FocalLength".to_string(),
+                            format_focal_length(focal_length, focal_units),
+                        );
+                    }
+                    // FocalPlaneXSize / FocalPlaneYSize (keys 2 and 3), in 1/1000 inch.
+                    // ExifTool only trusts these on the bodies listed in its Condition,
+                    // and drops implausibly small values via `$val < 40 ? undef : $val`.
+                    if focal_plane_size_supported(&model) {
+                        for (index, name) in [
+                            (2usize, "Canon:FocalPlaneXSize"),
+                            (3usize, "Canon:FocalPlaneYSize"),
+                        ] {
+                            if let Some(&raw) = array.get(index) {
+                                let thousandths = raw as u16 as f64;
+                                if thousandths >= 40.0 {
+                                    tags.insert(
+                                        name.to_string(),
+                                        format!("{:.2} mm", thousandths * 25.4 / 1000.0),
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2269,24 +3081,31 @@ fn parse_canon_makernote_impl(
                 }
             }
 
-            // FileInfo array (Phase 3) - contains lens ID and shutter count
+            // FileInfo array (Phase 3)
             CANON_FILE_INFO => {
                 // FileInfo is a SHORT array
-                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
-                    // Extract lens ID (index 6)
-                    if let Some(&lens_id) = array.get(FILE_INFO_LENS_ID) {
-                        if lens_id > 0 {
-                            // Look up lens name from database
-                            if let Some(lens_name) = lookup_lens_name(lens_id as u16) {
-                                tags.insert("Canon:LensType".to_string(), lens_name);
-                            } else {
-                                // Unknown lens - store ID
-                                tags.insert("Canon:LensID".to_string(), lens_id.to_string());
-                            }
-                        } else {
-                            // For compact cameras or fixed lenses, output "n/a"
-                            tags.insert("Canon:LensType".to_string(), "n/a".to_string());
-                        }
+                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order)
+                    .map(realign_length_prefixed_record)
+                {
+                    // FileNumber (Perl key 1) is an int32u spanning int16 slots 1-2 on the
+                    // 20D/350D family, with the bit layout documented at Canon.pm:6862:
+                    //
+                    // ```text
+                    //   31....24 23....16 15.....8 7......0
+                    //   00000000 ffffffff DDDDDDDD ddFFFFFF
+                    // ```
+                    let file_number_is_known = is_20d_or_350d(&model);
+                    if file_number_is_known
+                        && let (Some(&low), Some(&high)) = (array.get(1), array.get(2))
+                    {
+                        let raw = ((high as u16 as u32) << 16) | (low as u16 as u32);
+                        let value = ((raw & 0xffc0) >> 6) * 10000
+                            + ((raw >> 16) & 0xff)
+                            + ((raw & 0x3f) << 8);
+                        tags.insert(
+                            "Canon:FileNumber".to_string(),
+                            format_canon_file_number(value),
+                        );
                     }
 
                     // BracketMode (Perl key 3)
@@ -2310,11 +3129,59 @@ fn parse_canon_makernote_impl(
                         );
                     }
 
-                    // Extract shutter count (combine low and high words)
-                    if let (Some(&low), Some(&high)) = (
-                        array.get(FILE_INFO_SHUTTER_COUNT_LOW),
-                        array.get(FILE_INFO_SHUTTER_COUNT_HIGH),
-                    ) {
+                    // LongExposureNoiseReduction2 (Perl key 8). `RawConv => '$val<0 ? undef'`.
+                    if let Some(&long_exposure_nr) = array.get(FILE_INFO_LONG_EXPOSURE_NR2)
+                        && long_exposure_nr >= 0
+                    {
+                        tags.insert(
+                            "Canon:LongExposureNoiseReduction2".to_string(),
+                            LONG_EXPOSURE_NOISE_REDUCTION2.decode(long_exposure_nr),
+                        );
+                    }
+
+                    // WBBracketMode (Perl key 9)
+                    if let Some(&wb_bracket_mode) = array.get(FILE_INFO_WB_BRACKET_MODE) {
+                        tags.insert(
+                            "Canon:WBBracketMode".to_string(),
+                            WB_BRACKET_MODE.decode(wb_bracket_mode),
+                        );
+                    }
+
+                    // WBBracketValueAB / WBBracketValueGM (Perl keys 12 and 13)
+                    if let Some(&value_ab) = array.get(FILE_INFO_WB_BRACKET_VALUE_AB) {
+                        tags.insert("Canon:WBBracketValueAB".to_string(), value_ab.to_string());
+                    }
+                    if let Some(&value_gm) = array.get(FILE_INFO_WB_BRACKET_VALUE_GM) {
+                        tags.insert("Canon:WBBracketValueGM".to_string(), value_gm.to_string());
+                    }
+
+                    // FilterEffect / ToningEffect (Perl keys 14 and 15).
+                    // Both have `RawConv => '$val==-1 ? undef : $val'`.
+                    if let Some(&filter_effect) = array.get(FILE_INFO_FILTER_EFFECT)
+                        && filter_effect != -1
+                    {
+                        tags.insert(
+                            "Canon:FilterEffect".to_string(),
+                            FILTER_EFFECT.decode(filter_effect),
+                        );
+                    }
+                    if let Some(&toning_effect) = array.get(FILE_INFO_TONING_EFFECT)
+                        && toning_effect != -1
+                    {
+                        tags.insert(
+                            "Canon:ToningEffect".to_string(),
+                            TONING_EFFECT.decode(toning_effect),
+                        );
+                    }
+
+                    // Legacy ShutterCount heuristic: slots 2-3 have no counterpart in
+                    // %Canon::FileInfo, so only keep it where key 1 is not a FileNumber.
+                    if !file_number_is_known
+                        && let (Some(&low), Some(&high)) = (
+                            array.get(FILE_INFO_SHUTTER_COUNT_LOW),
+                            array.get(FILE_INFO_SHUTTER_COUNT_HIGH),
+                        )
+                    {
                         let shutter_count = ((high as u32) << 16) | (low as u32 & 0xFFFF);
                         if shutter_count > 0 {
                             tags.insert(
@@ -2326,12 +3193,136 @@ fn parse_canon_makernote_impl(
                 }
             }
 
+            // ProcessingInfo (tag 0x00A0) - ExifTool `%Image::ExifTool::Canon::Processing`
+            // (Canon.pm:7201), `FORMAT => 'int16s'`, `FIRST_ENTRY => 1`.
+            CANON_PROCESSING_INFO => {
+                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order)
+                    .map(realign_length_prefixed_record)
+                {
+                    if let Some(&tone_curve) = array.get(PROCESSING_INFO_TONE_CURVE) {
+                        tags.insert(
+                            "Canon:ToneCurve".to_string(),
+                            TONE_CURVE.decode(tone_curve as i32),
+                        );
+                    }
+
+                    // Key 2 (Sharpness) is deliberately left alone: it is excluded on the
+                    // 20D/350D by ExifTool's Condition and carries `Priority => 0`
+                    // elsewhere, so CameraSettings key 15 stays authoritative.
+
+                    if let Some(&frequency) = array.get(PROCESSING_INFO_SHARPNESS_FREQ) {
+                        tags.insert(
+                            "Canon:SharpnessFrequency".to_string(),
+                            SHARPNESS_FREQUENCY.decode(frequency),
+                        );
+                    }
+
+                    for (index, name) in [
+                        (PROCESSING_INFO_SENSOR_RED_LEVEL, "Canon:SensorRedLevel"),
+                        (PROCESSING_INFO_SENSOR_BLUE_LEVEL, "Canon:SensorBlueLevel"),
+                        (PROCESSING_INFO_WHITE_BALANCE_RED, "Canon:WhiteBalanceRed"),
+                        (PROCESSING_INFO_WHITE_BALANCE_BLUE, "Canon:WhiteBalanceBlue"),
+                        (PROCESSING_INFO_COLOR_TEMPERATURE, "Canon:ColorTemperature"),
+                        (PROCESSING_INFO_WB_SHIFT_AB, "Canon:WBShiftAB"),
+                        (PROCESSING_INFO_WB_SHIFT_GM, "Canon:WBShiftGM"),
+                    ] {
+                        if let Some(&value) = array.get(index) {
+                            tags.insert(name.to_string(), value.to_string());
+                        }
+                    }
+
+                    // WhiteBalance (key 8). `RawConv => '$val < 0 ? undef : $val'` — the
+                    // -32768 sentinel means "not recorded here".
+                    if let Some(&white_balance) = array.get(PROCESSING_INFO_WHITE_BALANCE)
+                        && white_balance >= 0
+                    {
+                        tags.insert(
+                            "Canon:WhiteBalance".to_string(),
+                            WHITE_BALANCE.decode(white_balance),
+                        );
+                    }
+
+                    if let Some(&picture_style) = array.get(PROCESSING_INFO_PICTURE_STYLE) {
+                        tags.insert(
+                            "Canon:PictureStyle".to_string(),
+                            PICTURE_STYLE.decode(picture_style as u16 as i32),
+                        );
+                    }
+
+                    // DigitalGain (key 11). `ValueConv => '$val / 10'`.
+                    if let Some(&digital_gain) = array.get(PROCESSING_INFO_DIGITAL_GAIN) {
+                        tags.insert(
+                            "Canon:DigitalGain".to_string(),
+                            format_perl_number(digital_gain as f64 / 10.0),
+                        );
+                    }
+                }
+            }
+
+            // MeasuredColor (tag 0x00AA) - ExifTool `%Canon::MeasuredColor` key 1 is a
+            // single `int16u[4]` value, not four scalars.
+            CANON_MEASURED_COLOR => {
+                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order)
+                    .map(realign_length_prefixed_record)
+                    && array.len() >= MEASURED_COLOR_RGGB + 4
+                {
+                    tags.insert(
+                        "Canon:MeasuredRGGB".to_string(),
+                        array[MEASURED_COLOR_RGGB..MEASURED_COLOR_RGGB + 4]
+                            .iter()
+                            .map(|v| (*v as u16).to_string())
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    );
+                }
+            }
+
+            // ColorData (tag 0x4001) - only the 582-element ColorData1 layout (20D and
+            // 350D) is implemented; every other element count selects a different
+            // ExifTool table whose indices do not line up.
+            CANON_COLOR_DATA => {
+                if let Some(raw_record) = extract_canon_i16_array(entry, ifd_data, byte_order) {
+                    // ExifTool picks the ColorData table by the record's declared element
+                    // count, so that count is read before any realignment shortens it.
+                    let declared_elements = raw_record.len();
+                    let array = realign_length_prefixed_record(raw_record);
+                    if declared_elements == COLOR_DATA1_ELEMENT_COUNT {
+                        for &(levels_index, temp_index, suffix) in COLOR_DATA1_WB_PRESETS {
+                            if let Some(levels) = array.get(levels_index..levels_index + 4) {
+                                tags.insert(
+                                    format!("Canon:WB_RGGBLevels{}", suffix),
+                                    join_i16_slice(levels),
+                                );
+                            }
+                            if let Some(&temperature) = array.get(temp_index) {
+                                tags.insert(
+                                    format!("Canon:ColorTemp{}", suffix),
+                                    temperature.to_string(),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
             // AFInfo (tag 0x0012) - autofocus information used by older Canon models
             CANON_AF_INFO => {
                 if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
                     let num_points = array.get(AF_INFO_NUM_AF_POINTS).copied().unwrap_or(0);
                     if num_points > 0 {
                         tags.insert("Canon:NumAFPoints".to_string(), num_points.to_string());
+                    }
+
+                    // ValidAFPoints (key 1), CanonImageWidth (key 2), CanonImageHeight
+                    // (key 3) - scalars ExifTool reports alongside the AF geometry.
+                    if let Some(&valid_points) = array.get(AF_INFO_VALID_AF_POINTS) {
+                        tags.insert("Canon:ValidAFPoints".to_string(), valid_points.to_string());
+                    }
+                    if let Some(&width) = array.get(AF_INFO_CANON_IMAGE_WIDTH) {
+                        tags.insert("Canon:CanonImageWidth".to_string(), width.to_string());
+                    }
+                    if let Some(&height) = array.get(AF_INFO_CANON_IMAGE_HEIGHT) {
+                        tags.insert("Canon:CanonImageHeight".to_string(), height.to_string());
                     }
 
                     if let Some(&width) = array.get(AF_INFO_AF_IMAGE_WIDTH)
@@ -2451,10 +3442,67 @@ fn parse_canon_makernote_impl(
                 }
             }
 
-            // SensorInfo (tag 0x00E0) - black mask borders
+            // CustomFunctions (tag 0x000F).
+            //
+            // ExifTool Canon.pm:1500 picks a per-body table; only
+            // `%CanonCustom::Functions350D` (CanonCustom.pm:809) is implemented here, so
+            // the record is skipped on every other body rather than decoded with the
+            // wrong labels. `ProcessCanonCustom` (CanonCustom.pm:2772) reads one int16
+            // per entry after a leading byte-length word and splits it into
+            // `tag = $val >> 8` / `value = $val & 0xff`.
+            CANON_CUSTOM_FUNCTIONS => {
+                if is_350d_custom_functions(&model)
+                    && let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order)
+                    && array.first().map(|&len| len as u16 as usize) == Some(array.len() * 2)
+                {
+                    for &word in &array[1..] {
+                        let raw = word as u16;
+                        let function = raw >> 8;
+                        let value = (raw & 0xff) as i16;
+                        let (name, rendered) = match function {
+                            0 => (
+                                "Canon:SetButtonCrossKeysFunc",
+                                CC350D_SET_BUTTON_CROSS_KEYS_FUNC.decode(value),
+                            ),
+                            1 => (
+                                "Canon:LongExposureNoiseReduction",
+                                CC350D_LONG_EXPOSURE_NOISE_REDUCTION.decode(value),
+                            ),
+                            2 => (
+                                "Canon:FlashSyncSpeedAv",
+                                CC350D_FLASH_SYNC_SPEED_AV.decode(value),
+                            ),
+                            3 => ("Canon:Shutter-AELock", CC350D_SHUTTER_AE_LOCK.decode(value)),
+                            4 => ("Canon:AFAssistBeam", CC350D_AF_ASSIST_BEAM.decode(value)),
+                            5 => (
+                                "Canon:ExposureLevelIncrements",
+                                CC350D_EXPOSURE_LEVEL_INCREMENTS.decode(value),
+                            ),
+                            6 => ("Canon:MirrorLockup", CC350D_MIRROR_LOCKUP.decode(value)),
+                            7 => ("Canon:ETTLII", CC350D_ETTL_II.decode(value)),
+                            8 => (
+                                "Canon:ShutterCurtainSync",
+                                CC350D_SHUTTER_CURTAIN_SYNC.decode(value),
+                            ),
+                            _ => continue,
+                        };
+                        tags.insert(name.to_string(), rendered);
+                    }
+                }
+            }
+
+            // SensorInfo (tag 0x00E0) - sensor dimensions, image borders, black mask
             CANON_SENSOR_INFO => {
-                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
+                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order)
+                    .map(realign_length_prefixed_record)
+                {
                     for (index, name) in [
+                        (SENSOR_INFO_SENSOR_WIDTH, "Canon:SensorWidth"),
+                        (SENSOR_INFO_SENSOR_HEIGHT, "Canon:SensorHeight"),
+                        (SENSOR_INFO_SENSOR_LEFT_BORDER, "Canon:SensorLeftBorder"),
+                        (SENSOR_INFO_SENSOR_TOP_BORDER, "Canon:SensorTopBorder"),
+                        (SENSOR_INFO_SENSOR_RIGHT_BORDER, "Canon:SensorRightBorder"),
+                        (SENSOR_INFO_SENSOR_BOTTOM_BORDER, "Canon:SensorBottomBorder"),
                         (
                             SENSOR_INFO_BLACK_MASK_LEFT_BORDER,
                             "Canon:BlackMaskLeftBorder",
@@ -2669,7 +3717,7 @@ mod tests {
         assert_eq!(CAMERA_SETTINGS_FOCUS_TYPE, 18);
         assert_eq!(CAMERA_SETTINGS_AF_POINT, 19);
         assert_eq!(CAMERA_SETTINGS_EXPOSURE_MODE, 20);
-        assert_eq!(CAMERA_SETTINGS_FLASH_ACTIVITY, 28);
+        assert_eq!(CAMERA_SETTINGS_FLASH_MODEL, 28);
         assert_eq!(CAMERA_SETTINGS_FOCUS_CONTINUOUS, 32);
     }
 
@@ -2739,8 +3787,8 @@ mod tests {
     fn test_decode_exposure_mode() {
         assert_eq!(EXPOSURE_MODE.decode(0), "Easy");
         assert_eq!(EXPOSURE_MODE.decode(1), "Program AE");
-        assert_eq!(EXPOSURE_MODE.decode(2), "Shutter Priority");
-        assert_eq!(EXPOSURE_MODE.decode(3), "Aperture Priority");
+        assert_eq!(EXPOSURE_MODE.decode(2), "Shutter speed priority AE");
+        assert_eq!(EXPOSURE_MODE.decode(3), "Aperture-priority AE");
         assert_eq!(EXPOSURE_MODE.decode(4), "Manual");
         assert_eq!(EXPOSURE_MODE.decode(5), "Depth-of-field AE");
         assert_eq!(EXPOSURE_MODE.decode(6), "M-Dep");
@@ -2786,7 +3834,7 @@ mod tests {
             0,  // [13] Contrast: Normal
             0,  // [14] Saturation: Normal
             0,  // [15] Sharpness: Normal
-            80, // [16] ISO: 80
+            19, // [16] CameraISO code 19 -> ISO 400 (ExifTool Canon.pm:10475)
             3,  // [17] Metering mode: Evaluative
             0,  // [18] Focus type
             0,  // [19] AF point
@@ -2816,7 +3864,11 @@ mod tests {
             result.get("Canon:ExposureMode"),
             Some(&"Program AE".to_string())
         );
-        assert_eq!(result.get("Canon:ISO"), Some(&"80".to_string()));
+        // `%Canon::CameraSettings` key 16 is CameraISO, whose ValueConv is a lookup
+        // (Canon.pm:10464) - the slot is a code, not a literal speed, and there is no
+        // `ISO` key in this table.
+        assert_eq!(result.get("Canon:CameraISO"), Some(&"400".to_string()));
+        assert_eq!(result.get("Canon:ISO"), None);
     }
 
     #[test]
@@ -2876,9 +3928,13 @@ mod tests {
 
         let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
 
-        assert_eq!(result.get("Canon:AutoISO"), Some(&"100".to_string()));
-        assert_eq!(result.get("Canon:BaseISO"), Some(&"100".to_string()));
-        assert_eq!(result.get("Canon:MeasuredEV"), Some(&"4.00".to_string()));
+        // AutoISO/BaseISO are log-scale codes: ExifTool applies
+        // `exp($val/32*log(2))*100` and `.../32` respectively (Canon.pm:2778, 2789),
+        // so raw 100 is ISO 872 / ISO 27, not ISO 100.
+        assert_eq!(result.get("Canon:AutoISO"), Some(&"872".to_string()));
+        assert_eq!(result.get("Canon:BaseISO"), Some(&"27".to_string()));
+        // MeasuredEV carries ExifTool's empirical +5 offset (`$val / 32 + 5`).
+        assert_eq!(result.get("Canon:MeasuredEV"), Some(&"9.00".to_string()));
         assert_eq!(
             result.get("Canon:TargetAperture"),
             Some(&"f/5.7".to_string())
@@ -2887,9 +3943,11 @@ mod tests {
             result.get("Canon:TargetExposureTime"),
             Some(&"1/8".to_string())
         );
+        // `PrintConv => '$val > 655.345 ? "inf" : "$val m"'` interpolates the number
+        // without padding, so 1000 cm prints as "10 m".
         assert_eq!(
             result.get("Canon:FocusDistanceUpper"),
-            Some(&"10.00 m".to_string())
+            Some(&"10 m".to_string())
         );
     }
 
@@ -2973,30 +4031,56 @@ mod tests {
         );
     }
 
+    /// Byte-for-byte the CanonFileInfo record of
+    /// `/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr2` (Canon EOS 350D), as
+    /// dumped by `exiftool -v3`:
+    ///
+    /// ```text
+    ///   | | |     - Tag 0x0093 (32 bytes, int16u[16] read as undef[32]):
+    ///   | | |         0558: 20 00 00 19 18 00 00 00 00 00 00 00 ff ff ff ff
+    ///   | | |         0568: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    /// ```
+    ///
+    /// `%Canon::FileInfo` has no LensID key - key 6 is RawJpgQuality - so a lens name
+    /// must never be sourced from this record.
     #[test]
-    fn test_parse_file_info_with_lens_id() {
+    fn test_parse_file_info_350d() {
         let mut data = Vec::new();
         data.extend_from_slice(b"Canon");
-        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&[0x02, 0x00]); // 2 entries
 
+        // CanonImageType (0x0006) - selects the 20D/350D FileNumber variant
+        data.extend_from_slice(&[0x06, 0x00]); // Tag
+        data.extend_from_slice(&[0x02, 0x00]); // Type: ASCII
+        data.extend_from_slice(&[0x18, 0x00, 0x00, 0x00]); // Count: 24
+        data.extend_from_slice(&[0x23, 0x00, 0x00, 0x00]); // Offset: 35 (5 sig + 30 IFD)
         // FileInfo tag (0x0093)
         data.extend_from_slice(&[0x93, 0x00]); // Tag
         data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
         data.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // Count: 16
-        data.extend_from_slice(&[0x17, 0x00, 0x00, 0x00]); // Offset: 23
+        data.extend_from_slice(&[0x3B, 0x00, 0x00, 0x00]); // Offset: 59 (35 + 24)
         data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
 
-        // FileInfo array (16 values)
-        // Based on ExifTool Canon.pm: LensID is at index 6
+        let mut model = b"Canon EOS 350D DIGITAL".to_vec();
+        model.resize(24, 0);
+        data.extend_from_slice(&model);
+
         let file_info: Vec<i16> = vec![
-            16,  // [0] Array length
-            0,   // [1] File number
-            0,   // [2] Shutter count low
-            0,   // [3] Shutter count high
-            0,   // [4] Bracket mode
-            0,   // [5] Bracket value
-            368, // [6] LensID: Canon EF 24-70mm f/2.8L II USM
-            0, 0, 0, 0, 0, 0, 0, 0, 0, // [7-15]
+            0x0020, // [0] record length in bytes
+            0x1900, // [1] FileNumber low half (int32u spans slots 1-2)
+            0x0018, // [2] FileNumber high half
+            0,      // [3] BracketMode
+            0,      // [4] BracketValue
+            0,      // [5] BracketShotNumber
+            -1,     // [6] RawJpgQuality (dropped: <= 0)
+            -1,     // [7] RawJpgSize (dropped: < 0)
+            0,      // [8] LongExposureNoiseReduction2
+            0,      // [9] WBBracketMode
+            0, 0, // [10-11]
+            0, // [12] WBBracketValueAB
+            0, // [13] WBBracketValueGM
+            0, // [14] FilterEffect
+            0, // [15] ToningEffect
         ];
 
         for value in file_info {
@@ -3005,11 +4089,24 @@ mod tests {
 
         let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
 
-        // Should extract lens name from database
+        // Literal strings below are exactly what `exiftool -s` prints for this record.
         assert_eq!(
-            result.get("Canon:LensType"),
-            Some(&"Canon EF 24-70mm f/2.8L II USM".to_string())
+            result.get("Canon:FileNumber"),
+            Some(&"100-0024".to_string())
         );
+        assert_eq!(result.get("Canon:BracketMode"), Some(&"Off".to_string()));
+        assert_eq!(
+            result.get("Canon:LongExposureNoiseReduction2"),
+            Some(&"Off".to_string())
+        );
+        assert_eq!(result.get("Canon:WBBracketMode"), Some(&"Off".to_string()));
+        assert_eq!(result.get("Canon:WBBracketValueAB"), Some(&"0".to_string()));
+        assert_eq!(result.get("Canon:WBBracketValueGM"), Some(&"0".to_string()));
+        assert_eq!(result.get("Canon:FilterEffect"), Some(&"None".to_string()));
+        assert_eq!(result.get("Canon:ToningEffect"), Some(&"None".to_string()));
+        // %Canon::FileInfo defines neither of these - they must not be invented.
+        assert_eq!(result.get("Canon:LensType"), None);
+        assert_eq!(result.get("Canon:ShutterCount"), None);
     }
 
     /// Wraps a single Canon MakerNote IFD entry holding a SHORT array.
@@ -3311,13 +4408,76 @@ mod tests {
         assert_eq!(PROCESSING_INFO_WB_SHIFT_GM, 13);
     }
 
+    /// `%Canon::MeasuredColor` has a single named key: `1 => MeasuredRGGB`, an
+    /// `int16u[4]`. There are no separate red/green/blue/temperature keys, and
+    /// `FIRST_ENTRY => 1` means the array does not start at index 0.
     #[test]
     fn test_measured_color_indices() {
-        // Verify MeasuredColor array indices
-        assert_eq!(MEASURED_COLOR_RED, 0);
-        assert_eq!(MEASURED_COLOR_GREEN, 1);
-        assert_eq!(MEASURED_COLOR_BLUE, 2);
-        assert_eq!(MEASURED_COLOR_TEMPERATURE, 3);
+        assert_eq!(MEASURED_COLOR_RGGB, 1);
+    }
+
+    /// ExifTool Canon.pm:2735 anchors every alternative of the FocalPlane*Size
+    /// `Condition` to the end of the model name:
+    ///
+    /// ```text
+    ///     $$self{Model} !~ /EOS/ or
+    ///     $$self{Model} =~ /\b(1DS?|5D|D30|D60|10D|20D|30D|K236)$/ or
+    ///     $$self{Model} =~ /\b((300D|350D|400D) DIGITAL|REBEL( XTi?)?|Kiss Digital( [NX])?)$/
+    /// ```
+    ///
+    /// Dropping the anchor would hand every later Rebel a focal plane size read out of
+    /// slots that hold something else on those bodies.
+    #[test]
+    fn test_focal_plane_size_supported_is_end_anchored() {
+        // Non-EOS bodies always qualify.
+        assert!(focal_plane_size_supported("Canon PowerShot S30"));
+        // Listed bodies, at the end of the name.
+        assert!(focal_plane_size_supported("Canon EOS 350D DIGITAL"));
+        assert!(focal_plane_size_supported("Canon EOS DIGITAL REBEL XT"));
+        assert!(focal_plane_size_supported("Canon EOS Kiss Digital N"));
+        assert!(focal_plane_size_supported("Canon EOS 5D"));
+        assert!(focal_plane_size_supported("Canon EOS 20D"));
+        // Same tokens, but not at the end: ExifTool's `$` rejects these.
+        assert!(!focal_plane_size_supported("Canon EOS REBEL T3i"));
+        assert!(!focal_plane_size_supported("Canon EOS Kiss Digital X4"));
+        assert!(!focal_plane_size_supported("Canon EOS 5D Mark III"));
+        assert!(!focal_plane_size_supported("Canon EOS 350D DIGITAL X"));
+        // Unlisted EOS bodies never qualify.
+        assert!(!focal_plane_size_supported("Canon EOS R5"));
+        assert!(!focal_plane_size_supported("Canon EOS 40D"));
+    }
+
+    /// The 20D/350D family selects `%Canon::FileInfo` key 1's `FileNumber` variant and
+    /// `%Canon::ShotInfo` key 22's first `ExposureTime` variant (Canon.pm:6850, 2968);
+    /// `%CanonCustom::Functions350D` (Canon.pm:1542) excludes the 20D from that set.
+    #[test]
+    fn test_model_conditions() {
+        for model in [
+            "Canon EOS 20D",
+            "Canon EOS 350D DIGITAL",
+            "Canon EOS DIGITAL REBEL XT",
+            "Canon EOS Kiss Digital N",
+        ] {
+            assert!(is_20d_or_350d(model), "{model}");
+        }
+        assert!(!is_20d_or_350d("Canon EOS 30D"));
+        assert!(!is_20d_or_350d("Canon EOS 400D DIGITAL"));
+
+        assert!(is_350d_custom_functions("Canon EOS 350D DIGITAL"));
+        assert!(is_350d_custom_functions("Canon EOS DIGITAL REBEL XT"));
+        // The 400D redefines keys 0 and 1, and the 20D uses a different table entirely.
+        assert!(!is_350d_custom_functions("Canon EOS 20D"));
+        assert!(!is_350d_custom_functions("Canon EOS 400D DIGITAL"));
+    }
+
+    /// `has_word` stands in for Perl's `\b`, so a model token must not match inside a
+    /// longer alphanumeric run.
+    #[test]
+    fn test_has_word_respects_boundaries() {
+        assert!(has_word("Canon EOS 5D", "5D"));
+        assert!(has_word("Canon EOS 5D Mark III", "5D"));
+        assert!(!has_word("Canon EOS 15D", "5D"));
+        assert!(!has_word("Canon EOS 5DS", "5D"));
     }
 
     // TODO: Enable these tests once ProcessingInfo array parsing is implemented
