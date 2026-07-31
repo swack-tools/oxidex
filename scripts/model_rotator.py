@@ -178,8 +178,50 @@ def probe_all(base_url, api_key, models, timeout=90, log=print):
 # Scoring from the existing manifest log
 # ---------------------------------------------------------------------------
 
+def _infer_provider(model_name):
+    """Provider for manifest lines written before provider= existed.
+
+    Historical lines carry only a model id, but the two providers used
+    distinct casing/catalogues -- wafer's ids are CamelCase
+    (DeepSeek-V4-Pro, Kimi-K2.6, GLM-5.2) and clawbay's are lowercase
+    (deepseek-v4-pro, gpt-5.5). Best-effort, so old rows still land in a
+    provider bucket instead of being silently merged with new ones.
+    """
+    if model_name in CANDIDATES_BY_PROVIDER["wafer.ai"]:
+        return "wafer"
+    if model_name.lower() == model_name:
+        return "theclawbay"
+    return "unknown"
+
+
+def classify_failure(line):
+    """'429' | '500' | 'retry' for a RETRY/ERROR manifest line.
+
+    These are genuinely different problems and must not share a bucket:
+      429  -> quota/rate. The account is the limit, not the model. This
+              is what silently killed the fleet for five hours when a
+              weekly spend cap hit -- indistinguishable from "the model
+              got worse" if lumped into one retry count.
+      500  -> provider-side fault (5xx). Transient, usually recovers.
+      retry-> the HTTP call SUCCEEDED but the reply was unusable (empty
+              reply, truncated reasoning). That is a model-quality
+              signal, and the only one of the three that says anything
+              about whether this model can actually do the work.
+    """
+    if "429" in line:
+        return "429"
+    if re.search(r"HTTPError (5\d\d)", line) or re.search(r"\b5\d\d: '", line):
+        return "500"
+    return "retry"
+
+
 def score_models(manifest_path, since_iso=None, repo=None, git_run=None):
-    """{model: {ok, retry, success_rate, p50_latency, fixes}}.
+    """{provider-model: {ok, retry, http_429, http_500, success_rate,
+    p50_latency, fixes}}.
+
+    Keys are provider-qualified ("theclawbay-deepseek-v4-pro") because
+    the same model id behaves differently per provider -- see
+    provider_slug in model_fix_loop.py.
 
     `fixes` counts landed fix(...) commits whose subject via-list names
     the model -- the only per-model success signal the fleet records.
@@ -193,10 +235,15 @@ def score_models(manifest_path, since_iso=None, repo=None, git_run=None):
                 continue
             if since_iso and line[:19] < since_iso:
                 continue
-            name = m.group(1)
-            s = stats.setdefault(name, {"ok": 0, "retry": 0, "lat": [], "fixes": 0})
-            if "RETRY" in line:
-                s["retry"] += 1
+            model = m.group(1)
+            pm = re.search(r"provider=([A-Za-z0-9._-]+)", line)
+            provider = pm.group(1) if pm else _infer_provider(model)
+            name = f"{provider}-{model}"
+            s = stats.setdefault(name, {"ok": 0, "retry": 0, "http_429": 0,
+                                        "http_500": 0, "lat": [], "fixes": 0})
+            if "RETRY" in line or "ERROR=" in line:
+                kind = classify_failure(line)
+                s["http_429" if kind == "429" else "http_500" if kind == "500" else "retry"] += 1
             elif line.rstrip().endswith("OK"):
                 s["ok"] += 1
                 e = re.search(r"elapsed=([\d.]+)s", line)
@@ -215,15 +262,24 @@ def score_models(manifest_path, since_iso=None, repo=None, git_run=None):
             if not via:
                 continue
             for name in {n.strip() for n in via.group(1).split("/")}:
-                stats.setdefault(name, {"ok": 0, "retry": 0, "lat": [], "fixes": 0})
-                stats[name]["fixes"] += 1
+                # via-lists carry bare model ids; credit the fix to every
+                # provider bucket serving that model rather than inventing
+                # a provider the commit never recorded.
+                for key in list(stats) or []:
+                    if key.split("-", 1)[-1] == name:
+                        stats[key]["fixes"] += 1
 
     out = {}
     for name, s in stats.items():
-        total = s["ok"] + s["retry"]
+        # success_rate is share of ALL attempts that came back usable --
+        # quota and provider faults count against it, because from the
+        # fleet's point of view they cost exactly the same wall-clock.
+        total = s["ok"] + s["retry"] + s["http_429"] + s["http_500"]
         out[name] = {
             "ok": s["ok"],
             "retry": s["retry"],
+            "http_429": s["http_429"],
+            "http_500": s["http_500"],
             "success_rate": (s["ok"] / total) if total else None,
             "p50_latency": statistics.median(s["lat"]) if s["lat"] else None,
             "fixes": s["fixes"],
@@ -444,12 +500,13 @@ def main(argv=None):
         if (now - last_report) >= args.report_seconds:
             log("=" * 62)
             log("SCOREBOARD (per model, from manifest.log + landed fix commits)")
-            log(f"  {'model':<24}{'ok':>6}{'retry':>7}{'succ%':>8}{'p50s':>8}{'fixes':>7}")
+            log(f"  {'provider-model':<34}{'ok':>6}{'retry':>7}{'429':>6}{'500':>6}{'succ%':>8}{'p50s':>7}{'fixes':>7}")
             for name, s in sorted(scores.items(),
                                   key=lambda kv: -(kv[1]["success_rate"] or 0)):
                 sr = "n/a" if s["success_rate"] is None else f"{100*s['success_rate']:.1f}"
                 lat = "n/a" if s["p50_latency"] is None else f"{s['p50_latency']:.0f}"
-                log(f"  {name:<24}{s['ok']:>6}{s['retry']:>7}{sr:>8}{lat:>8}{s['fixes']:>7}")
+                log(f"  {name:<34}{s['ok']:>6}{s['retry']:>7}{s['http_429']:>6}"
+                    f"{s['http_500']:>6}{sr:>8}{lat:>7}{s['fixes']:>7}")
             log("=" * 62)
             last_report = now
 

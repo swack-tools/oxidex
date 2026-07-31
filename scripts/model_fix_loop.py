@@ -4853,6 +4853,24 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     return False, reason, None, messages
 
 
+def provider_slug(base_url):
+    """Short, stable provider token for manifest lines ("theclawbay",
+    "wafer", ...).
+
+    The same model id can be served by more than one provider and behave
+    completely differently: DeepSeek-V4-Pro scored 98.7% on wafer and
+    81.8% on clawbay purely because clawbay hit a weekly spend cap and
+    started 429ing. Without the provider on the line those two are one
+    indistinguishable bucket, so a provider-level failure looks like the
+    model degrading and the scoreboard blames the wrong thing.
+    """
+    if not base_url:
+        return "unknown"
+    host = re.sub(r"^https?://", "", str(base_url)).split("/")[0].split(":")[0]
+    parts = [p for p in host.split(".") if p not in ("www", "api", "pass", "com", "ai", "io", "net")]
+    return (parts[-1] if parts else host) or "unknown"
+
+
 DEFAULT_MAX_REPAIR_ROUNDS = 5
 
 #: fix_gap gives up on a target after this many CONSECUTIVE rounds whose
@@ -8091,7 +8109,7 @@ def main(argv=None):
                 with req_manifest_path.open("a") as f:
                     f.write(
                         f"{time.strftime('%Y-%m-%dT%H:%M:%S')} phase={phase} worker={worker_label} "
-                        f"tier={tier} model={model} RETRY {msg}\n"
+                        f"tier={tier} provider={provider_slug(base_url)} model={model} RETRY {msg}\n"
                     )
 
             captured_usage = {}
@@ -8120,7 +8138,8 @@ def main(argv=None):
                 elapsed = time.time() - t0
                 with req_manifest_path.open("a") as f:
                     f.write(
-                        f"{ts} phase={phase} worker={worker_label} tier={tier} model={model} "
+                        f"{ts} phase={phase} worker={worker_label} tier={tier} "
+                        f"provider={provider_slug(base_url)} model={model} "
                         f"prompt_chars={prompt_chars} elapsed={elapsed:.1f}s ERROR={e}\n"
                     )
                 raise
@@ -8129,7 +8148,8 @@ def main(argv=None):
             reply_path.write_text(reply)
             with req_manifest_path.open("a") as f:
                 f.write(
-                    f"{ts} phase={phase} worker={worker_label} tier={tier} model={model} "
+                    f"{ts} phase={phase} worker={worker_label} tier={tier} "
+                    f"provider={provider_slug(base_url)} model={model} "
                     f"prompt_chars={prompt_chars} elapsed={elapsed:.1f}s reply_chars={len(reply)} OK\n"
                 )
             # Cache accounting goes to a separate cache-stats.log rather than
