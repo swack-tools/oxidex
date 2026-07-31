@@ -3893,6 +3893,15 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
 /// # Returns
 ///
 /// Metadata extracted from MRW file including EXIF from TTW block.
+/// True when the TTW block identified the body as a DiMAGE A200, which is the
+/// one model whose WBG levels are stored in GBRG rather than RGGB order.
+fn model_is_dimage_a200(metadata: &MetadataMap) -> bool {
+    metadata
+        .get("IFD0:Model")
+        .and_then(|v| v.as_string())
+        .is_some_and(|m| m.trim() == "DiMAGE A200")
+}
+
 fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
     metadata.insert(
@@ -3939,6 +3948,18 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         for (key, value) in tiff_metadata {
                             metadata.insert(key, value);
                         }
+                    }
+                    // The generic TIFF walk above cannot decode the Minolta
+                    // MakerNote: Minolta writes its value offsets relative to
+                    // the TIFF base rather than to the note itself, so the
+                    // shared dispatcher -- which only ever sees the note's own
+                    // bytes -- would resolve every one of them into the wrong
+                    // part of the block. Decode it here, where the base is the
+                    // TTW buffer we already hold.
+                    for (key, value) in
+                        crate::parsers::raw::minolta_makernote::parse_ttw_makernotes(block_data)
+                    {
+                        metadata.insert(key, value);
                     }
                 }
             }
@@ -4010,12 +4031,17 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         );
                     }
                     if let (Some(img_h), Some(img_w)) = (reader.u16_at(12), reader.u16_at(14)) {
+                        // MinoltaRaw::PRD groups these under MakerNotes, not
+                        // EXIF -- ExifTool reports them as [MinoltaRaw]. The
+                        // EXIF:ImageWidth/Height pair comes from the TTW
+                        // block's own IFD0, so emitting these as EXIF both hid
+                        // the MakerNotes tags and duplicated the IFD0 values.
                         metadata.insert(
-                            "EXIF:ImageWidth".to_string(),
+                            "MakerNotes:ImageWidth".to_string(),
                             TagValue::Integer(img_w as i64),
                         );
                         metadata.insert(
-                            "EXIF:ImageHeight".to_string(),
+                            "MakerNotes:ImageHeight".to_string(),
                             TagValue::Integer(img_h as i64),
                         );
                     }
@@ -4035,7 +4061,16 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 };
                 for (off, name) in [(1usize, "Saturation"), (2, "Contrast"), (3, "Sharpness")] {
                     if let Some(v) = i8(off) {
-                        metadata.insert(format!("MakerNotes:{name}"), TagValue::Integer(v as i64));
+                        // These are plain int8s in MinoltaRaw::RIF with no
+                        // PrintConv, unlike the identically named EXIF enums.
+                        // Emitting them as integers let the shared
+                        // ExifTool-compat layer apply the EXIF 0 => "Normal"
+                        // mapping by name, which turned ExifTool's "0" into
+                        // "Normal"; a string keeps the raw reading intact.
+                        metadata.insert(
+                            format!("MakerNotes:{name}"),
+                            TagValue::new_string(v.to_string()),
+                        );
                     }
                 }
                 if let Some(v) = block_data.get(4) {
@@ -4081,7 +4116,9 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         }),
                     );
                 }
-                if let Some(v) = block_data.get(6) {
+                // RawConv drops 255 outright, so an unset ISO stays absent
+                // rather than being reported as a 26-million-ISO exposure.
+                if let Some(v) = block_data.get(6).filter(|v| **v != 255) {
                     // ValueConv 2 ** (($val-48)/8) * 100, with three coded
                     // exceptions ExifTool lists explicitly.
                     let s = match v {
@@ -4094,6 +4131,19 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         }
                     };
                     metadata.insert("MakerNotes:ISOSetting".to_string(), TagValue::new_string(s));
+                }
+                if let Some(v) = block_data.get(7) {
+                    // RIF offset 7 is ColorMode, using Minolta's own colour
+                    // mode table. The block was decoded either side of this
+                    // byte but never at it.
+                    metadata.insert(
+                        "MakerNotes:ColorMode".to_string(),
+                        TagValue::new_string(
+                            crate::parsers::raw::minolta_makernote::minolta_color_mode(u32::from(
+                                *v,
+                            )),
+                        ),
+                    );
                 }
                 for (off, name) in [
                     (8usize, "WB_RBLevelsTungsten"),
@@ -4138,32 +4188,47 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 }
             }
             b"\x00WBG" => {
-                // WBG block contains white balance info
-                if block_data.len() >= 8 {
-                    let reader = crate::io::EndianReader::big_endian(block_data);
-                    // WBG structure varies but typically contains R/G/B multipliers
-                    if let (Some(r), Some(g), Some(b)) =
-                        (reader.u16_at(0), reader.u16_at(2), reader.u16_at(4))
-                    {
-                        // Values are typically scaled, convert to ratio
-                        let g_val = g as f64;
-                        if g_val > 0.0 {
-                            let r_ratio = r as f64 / g_val;
-                            let b_ratio = b as f64 / g_val;
-                            metadata.insert(
-                                "MakerNotes:ColorBalanceRed".to_string(),
-                                TagValue::Float(r_ratio),
-                            );
-                            metadata.insert(
-                                "MakerNotes:ColorBalanceGreen".to_string(),
-                                TagValue::Float(1.0),
-                            );
-                            metadata.insert(
-                                "MakerNotes:ColorBalanceBlue".to_string(),
-                                TagValue::Float(b_ratio),
-                            );
-                        }
-                    }
+                // MinoltaRaw::WBG -- a four-byte scale vector followed by four
+                // 16-bit levels. The previous reading treated the block as
+                // R/G/B multipliers and divided them into each other to make
+                // up ColorBalanceRed/Green/Blue; no such tags exist here.
+                // ExifTool's real ColorBalance* live in the MakerNote's
+                // CameraSettings, and the ratios this produced (0.85 for a
+                // channel ExifTool reports as 1.988) were wrong besides.
+                let reader = crate::io::EndianReader::big_endian(block_data);
+                if let Some(scale) = block_data.get(0..4) {
+                    metadata.insert(
+                        "MakerNotes:WBScale".to_string(),
+                        TagValue::new_string(
+                            scale
+                                .iter()
+                                .map(|v| v.to_string())
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                        ),
+                    );
+                }
+                // The A200 writes these four levels in GBRG order; every other
+                // body uses RGGB. Only the name differs.
+                let levels: Option<Vec<u16>> = (0..4)
+                    .map(|i| reader.u16_at(4 + i * 2))
+                    .collect::<Option<Vec<_>>>();
+                if let Some(levels) = levels {
+                    let name = if model_is_dimage_a200(&metadata) {
+                        "MakerNotes:WB_GBRGLevels"
+                    } else {
+                        "MakerNotes:WB_RGGBLevels"
+                    };
+                    metadata.insert(
+                        name.to_string(),
+                        TagValue::new_string(
+                            levels
+                                .iter()
+                                .map(|v| v.to_string())
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                        ),
+                    );
                 }
             }
             _ => {

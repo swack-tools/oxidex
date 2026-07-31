@@ -8,6 +8,7 @@ pub mod format_detection;
 pub mod metadata;
 
 // Format-specific parsers
+pub mod minolta_makernote;
 pub mod raf_parser;
 
 // Re-export the public API

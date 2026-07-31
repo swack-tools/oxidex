@@ -669,9 +669,18 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     {
         return TagValue::String("undef".to_string());
     }
-    // Also handle string representations of special values
+    // Also handle string representations of special values.
+    //
+    // A few tags print the literal "inf" on purpose rather than as the symptom
+    // of a divide-by-zero: Minolta's FocusDistance has the PrintConv
+    // `$val ? "$val m" : "inf"`, so a focus distance of zero means "focused at
+    // infinity" and ExifTool reports exactly "inf". Rewriting those to "undef"
+    // would replace a real reading with an error marker.
+    const DELIBERATE_INFINITY: &[&str] = &["FocusDistance"];
     if let Some(s) = value.as_string() {
-        if s == "inf" || s == "-inf" || s == "Infinity" || s == "-Infinity" {
+        if (s == "inf" || s == "-inf" || s == "Infinity" || s == "-Infinity")
+            && !DELIBERATE_INFINITY.contains(&base_name)
+        {
             return TagValue::String("undef".to_string());
         }
         if s == "-0" || s == "-0.0" {
