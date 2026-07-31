@@ -1920,11 +1920,38 @@ fn format_exif_display_value(
         }
         // CFAPattern: UNDEFINED with two endian-dependent u16 dimensions.
         0xA302 if field_type == 7 => decode_exif_cfa_pattern(bytes, byte_order),
-        // FlashpixVersion: UNDEFINED 4 bytes printed as e.g. "0100".
+        // FlashpixVersion: Exif.pm 0xa000 RawConv removes trailing nulls.
         0xA000 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
-            let ver_bytes = bytes.get(..count.min(4))?;
-            Some(String::from_utf8_lossy(ver_bytes).into_owned())
+            let version = bytes.get(..count)?;
+            let version = String::from_utf8_lossy(version)
+                .trim_end_matches('\0')
+                .to_string();
+            if version.is_empty() {
+                None
+            } else {
+                Some(version)
+            }
+        }
+        // FocalLength: Exif.pm 0x920a, rational64u with
+        // PrintConv => 'sprintf("%.1f mm",$val)'.
+        0x920A if field_type == 5 && value_count >= 1 => {
+            let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                None
+            } else {
+                Some(format!(
+                    "{:.1} mm",
+                    f64::from(numerator) / f64::from(denominator)
+                ))
+            }
+        }
+        // Gamma: Exif.pm 0xa500 is rational64u with no PrintConv. ExifTool
+        // renders the sample's invalid rational (zero denominator) as "undef".
+        0xA500 if field_type == 5 && value_count >= 1 => {
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            (denominator == 0).then(|| "undef".to_string())
         }
         // FocalLengthIn35mmFormat: SHORT[1] with " mm" suffix.
         // Exif.pm PrintConv: $val .= " mm"
@@ -3601,8 +3628,10 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
         // with an APP1 EXIF segment. Parse it to extract the specific EXIF
         // tags that ExifTool reports for X3F but oxidex currently misses:
         //   DateTimeOriginal (0x9003), CreateDate (0x9004),
-        //   ComponentsConfiguration (0x9101), ColorSpace (0xA001),
-        //   CustomRendered (0xA401), Compression (0x0103 from IFD1).
+        //   ComponentsConfiguration (0x9101), FocalLength (0x920a),
+        //   FlashpixVersion (0xa000), ColorSpace (0xa001), CustomRendered
+        //   (0xa401), FocalLengthIn35mmFormat (0xa405), ImageUniqueID
+        //   (0xa420), Gamma (0xa500), and Compression (0x0103 from IFD1).
         //
         // We intentionally skip MakerNote, InteropOffset, and all other
         // tags to match ExifTool's X3F output exactly and avoid triggering
@@ -3645,12 +3674,17 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                                 | 0x9101 // ComponentsConfiguration
                                                 | 0x9204 // ExposureCompensation
                                                 | 0x9209 // Flash
+                                                | 0x920A // FocalLength (Exif.pm 0x920a)
+                                                | 0xA000 // FlashpixVersion (Exif.pm 0xa000)
                                                 | 0xA001 // ColorSpace
                                                 | 0xA002 // ExifImageWidth
                                                 | 0xA003 // ExifImageHeight
                                                 | 0xA300 // FileSource
                                                 | 0xA401 // CustomRendered
                                                 | 0xA402 // ExposureMode
+                                                | 0xA405 // FocalLengthIn35mmFormat (Exif.pm 0xa405)
+                                                | 0xA420 // ImageUniqueID (Exif.pm 0xa420)
+                                                | 0xA500 // Gamma (Exif.pm 0xa500)
                                         ) {
                                             continue;
                                         }
