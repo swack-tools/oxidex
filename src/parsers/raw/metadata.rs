@@ -45,6 +45,9 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
             tag_id,
             0xC619 // BlackLevelRepeatDim
                 | 0xC61A // BlackLevel
+                | 0xC612 // DNGVersion
+                | 0xC613 // DNGBackwardVersion
+                | 0xC630 // DNGLensInfo
                 | 0xC62D // BayerGreenSplit
                 | 0xC632 // AntiAliasStrength
                 | 0xC65C // BestQualityScale
@@ -903,6 +906,10 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             // EXIF group with a PrintConv or multi-component
                             // value the generic decoder cannot produce.
                             //
+                            // BitsPerSample and Compression are also resolved
+                            // here because DNG gives the image SubIFD priority
+                            // over the reduced-resolution IFD0 image.
+                            //
                             // `exiftool -G0:1 DNG.dng` labels every one of
                             // these "[EXIF:SubIFD]" / "[EXIF:SubIFD1]" --
                             // family 0 is EXIF, so oxidex's "SubIFD0:" prefix
@@ -922,7 +929,12 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 // `exiftool -s -YCbCrSubSampling DNG.dng`
                                 // prints SubIFD1's "YCbCr4:2:0 (2 2)", not
                                 // SubIFD2's "YCbCr4:4:4 (1 1)").
-                                if !metadata.contains_key(&tag_name) {
+                                //
+                                // DNG's BitsPerSample and Compression in the
+                                // primary SubIFD replace the corresponding
+                                // reduced-resolution IFD0 values.
+                                let image_parameters = matches!(tag_id, 0x0102 | 0x0103);
+                                if image_parameters || !metadata.contains_key(&tag_name) {
                                     metadata.insert(tag_name, tag_value);
                                 }
                                 continue;
@@ -1014,12 +1026,33 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     )
                                 })
                             } else {
-                                raw_bytes_to_simple_tag_value(
-                                    bytes,
-                                    field_type,
-                                    value_count,
-                                    byte_order,
-                                )
+                                let tag_value = if matches!(tag_id, 0x0102 | 0x0103) {
+                                    format_dng_image_parameter(
+                                        tag_id,
+                                        bytes,
+                                        field_type,
+                                        value_count,
+                                        byte_order,
+                                    )
+                                    .map(TagValue::new_string)
+                                    .unwrap_or_else(|| {
+                                        raw_bytes_to_simple_tag_value(
+                                            bytes,
+                                            field_type,
+                                            value_count,
+                                            byte_order,
+                                        )
+                                    })
+                                } else {
+                                    raw_bytes_to_simple_tag_value(
+                                        bytes,
+                                        field_type,
+                                        value_count,
+                                        byte_order,
+                                    )
+                                };
+                                metadata.insert(tag_name, tag_value);
+                                continue;
                             };
                             metadata.insert(tag_name, tag_value);
                         }
@@ -1355,6 +1388,7 @@ fn format_dng_integer_array(
     byte_order: ByteOrder,
 ) -> Option<String> {
     let component_size = match tag_id {
+        0x0102 if field_type == 3 => 2, // BitsPerSample: SHORT[count]
         0xC619 if field_type == 3 => 2, // BlackLevelRepeatDim: SHORT[2]
         0xC68D if field_type == 4 => 4, // ActiveArea: LONG[4]
         _ => return None,
@@ -1455,6 +1489,53 @@ fn read_tiff_numeric_array(
     )
 }
 
+/// Format the DNG image-IFD values whose EXIF PrintConv differs from the
+/// generic TIFF scalar/array conversion.
+fn format_dng_image_parameter(
+    tag_id: u16,
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    match tag_id {
+        // TIFF tag 0x0102, BitsPerSample, is a SHORT array. DNG's primary
+        // image SubIFD has one 16-bit component, while IFD0 commonly has
+        // three 8-bit preview components.
+        0x0102 => format_dng_integer_array(
+            tag_id,
+            bytes,
+            field_type,
+            value_count,
+            byte_order,
+        ),
+        // TIFF tag 0x0103, Compression. Exif.pm's TIFF compression table
+        // prints code 7 as JPEG.
+        0x0103 if field_type == 3 && value_count >= 1 => {
+            let value = read_tiff_u16(bytes, byte_order)?;
+            Some(
+                match value {
+                    1 => "Uncompressed",
+                    2 => "CCITT 1D",
+                    3 => "T4/Group 3 Fax",
+                    4 => "T6/Group 4 Fax",
+                    5 => "LZW",
+                    6 | 7 => "JPEG",
+                    8 => "Adobe Deflate",
+                    9 => "JBIG B&W",
+                    10 => "JBIG Color",
+                    32773 => "PackBits",
+                    34713 => "Nikon NEF Compressed",
+                    34892 => "Lossy JPEG",
+                    _ => return None,
+                }
+                .to_string(),
+            )
+        }
+        _ => None,
+    }
+}
+
 /// Name and display value for the DNG SubIFD tags ExifTool reports under the
 /// EXIF group.
 ///
@@ -1499,6 +1580,8 @@ fn format_dng_subifd_exif_tag(
     byte_order: ByteOrder,
 ) -> Option<(String, TagValue)> {
     let name = match tag_id {
+        0x0102 => "BitsPerSample",
+        0x0103 => "Compression",
         0x0142 => "TileWidth",
         0x0143 => "TileLength",
         0x0144 => "TileOffsets",
@@ -1515,6 +1598,9 @@ fn format_dng_subifd_exif_tag(
         0xC61F => "DefaultCropOrigin",
         0xC620 => "DefaultCropSize",
         0xC68E => "MaskedAreas",
+        0xC612 => "DNGVersion",
+        0xC613 => "DNGBackwardVersion",
+        0xC630 => "DNGLensInfo",
         _ => return None,
     };
 
@@ -1528,6 +1614,27 @@ fn format_dng_subifd_exif_tag(
             .iter()
             .map(|component| component.to_string())
             .collect()
+    } else if matches!(tag_id, 0xC612 | 0xC613) && field_type == 1 {
+        let count = usize::try_from(value_count).ok()?;
+        let version = bytes.get(..count)?;
+        version.iter().map(u8::to_string).collect()
+    } else if tag_id == 0xC630 && field_type == 5 && value_count >= 4 {
+        let mut values = Vec::new();
+        for index in 0..4usize {
+            let start = index.checked_mul(8)?;
+            let end = start.checked_add(8)?;
+            let value = bytes.get(start..end)?;
+            let numerator = read_tiff_u32(value.get(..4)?, byte_order)?;
+            let denominator = read_tiff_u32(value.get(4..8)?, byte_order)?;
+            values.push(if numerator == 0 || denominator == 0 {
+                "?".to_string()
+            } else if numerator % denominator == 0 {
+                (numerator / denominator).to_string()
+            } else {
+                format!("{}", f64::from(numerator) / f64::from(denominator))
+            });
+        }
+        values
     } else {
         read_tiff_numeric_array(bytes, field_type, value_count, byte_order)?
     };
@@ -1536,6 +1643,21 @@ fn format_dng_subifd_exif_tag(
     }
 
     let display = match tag_id {
+        0x0102 | 0x0103 => components.join(" "),
+        0xC612 | 0xC613 => components.join("."),
+        0xC630 => {
+            let focal = if components[0] == components[1] {
+                components[0].clone()
+            } else {
+                format!("{}-{}", components[0], components[1])
+            };
+            let aperture = if components[2] == components[3] {
+                components[2].clone()
+            } else {
+                format!("{}-{}", components[2], components[3])
+            };
+            format!("{}mm f/{}", focal, aperture)
+        }
         // PrintConv => { 1 => 'Centered', 2 => 'Co-sited' }
         0x0213 => match components[0].as_str() {
             "1" => "Centered".to_string(),
@@ -2622,6 +2744,25 @@ mod nef_cfa_pattern2_tests {
 /// during IFD traversal. This function serves as documentation and can be
 /// extended to add computed/derived DNG-specific metadata or aliases.
 fn extract_dng_tags(metadata: &mut MetadataMap) {
+    // ThumbnailTIFF is ExifTool's binary TIFF thumbnail representation. The
+    // thumbnail is already retained by the TIFF walk as the value of a
+    // ThumbnailTIFF-tagged entry when the DNG contains one; expose that
+    // representation under the EXIF group rather than leaving it under the
+    // physical IFD group.
+    let thumbnail_key = metadata
+        .keys()
+        .find(|key| key.ends_with(":ThumbnailTIFF"))
+        .cloned();
+    if let Some(thumbnail_key) = thumbnail_key {
+        if let Some(value) = metadata.remove(&thumbnail_key) {
+            if let TagValue::Binary(bytes) = value {
+                metadata.insert("EXIF:ThumbnailTIFF".to_string(), TagValue::Binary(bytes));
+            } else {
+                metadata.insert(thumbnail_key, value);
+            }
+        }
+    }
+
     // DNG-specific tags are stored in IFD0 or SubIFD0
     // The TIFF parser already extracts these automatically
 
