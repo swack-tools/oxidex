@@ -11,11 +11,14 @@ pub struct ComparisonEngine;
 fn normalize_family_for_comparison(family: &str) -> &str {
     match family {
         // Camera manufacturers -> MakerNotes
+        //
+        // NOTE: "GoPro" deliberately is NOT in this list -- see the GoPro arm
+        // below. ExifTool never files a GoPro tag under family-0 MakerNotes.
         "Canon" | "Nikon" | "Sony" | "Fujifilm" | "Panasonic" | "Olympus" | "Pentax"
         | "Samsung" | "Leica" | "Casio" | "Minolta" | "Sigma" | "Ricoh" | "Kodak" | "Sanyo"
-        | "JVC" | "Motorola" | "HP" | "GoPro" | "DJI" | "Apple" | "Google" | "Reconyx"
-        | "Parrot" | "Infiray" | "Lytro" | "PhaseOne" | "Leaf" | "Red" | "Qualcomm"
-        | "Nintendo" | "GE" | "LG" => "MakerNotes",
+        | "JVC" | "Motorola" | "HP" | "DJI" | "Apple" | "Google" | "Reconyx" | "Parrot"
+        | "Infiray" | "Lytro" | "PhaseOne" | "Leaf" | "Red" | "Qualcomm" | "Nintendo" | "GE"
+        | "LG" => "MakerNotes",
         // XMP namespace variants -> XMP (ExifTool often simplifies these)
         "XMP-exif" | "XMP-tiff" | "XMP-photoshop" | "XMP-iptcCore" | "XMP-iptcExt"
         | "XMP-xmpMM" | "XMP-xmpRights" | "XMP-dc" | "XMP-xmp" | "XMP-crs" | "XMP-plus"
@@ -30,6 +33,25 @@ fn normalize_family_for_comparison(family: &str) -> &str {
         // eleven byte-identical values were being counted as a gap on one
         // side and an extra on the other purely over which family named them.
         "SPIFF" => "APP8",
+        // GoPro -> APP6. GoPro's JPEG metadata lives in the APP6 segment, and
+        // "GoPro" is ExifTool's own family-1 name for it (GoPro.pm's GPMF
+        // table declares GROUPS => { 0 => 'APP6', 1 => 'GoPro' }), which is
+        // exactly what oxidex emits. Verified on every GoPro sample in the
+        // corpus, e.g. GoPro/GoProHERO12Black.jpg:
+        //     exiftool -G0 -s => [APP6]  MetadataVersion : 8.2.2
+        //     exiftool -G1 -s => [GoPro] MetadataVersion : 8.2.2
+        // and across the whole corpus family-1 "GoPro" only ever appears under
+        // family-0 "APP6" (160 tags), never under MakerNotes -- which is why
+        // GoPro was removed from the manufacturer list above. Mapping it there
+        // sent oxidex's APP6 tags to "MakerNotes:X" while the harness compared
+        // against exiftool's "APP6:X", splitting 42 same-tag pairs across a
+        // gap on one side and an extra on the other; 34 of them are
+        // byte-identical and match outright once reconciled, and the other 8
+        // become visible value differences instead of vanishing. Note the
+        // mapping is applied to BOTH sides, so GoPro-as-family-0 (which
+        // ExifTool does use for GoPro MP4/GPMF tracks) still matches oxidex's
+        // "GoPro:" tags.
+        "GoPro" => "APP6",
         // Keep everything else as-is
         _ => family,
     }
@@ -1290,5 +1312,68 @@ mod tests {
 
         let result = ComparisonEngine::compare(oxidex_tags, exiftool_tags, "JPEG", 1, None);
         assert!(result.duplicate_emissions.is_empty());
+    }
+
+    #[test]
+    fn test_gopro_family1_matches_exiftool_app6_family0() {
+        // ExifTool's GoPro APP6 segment: family 0 is "APP6", family 1 is
+        // "GoPro". The harness runs `exiftool -G` (family 0) while oxidex
+        // emits the family-1 name, so without the mapping these
+        // byte-identical values were a gap on one side and an extra on the
+        // other. Reproduces GoPro/GoProHERO12Black.jpg.
+        let oxidex_tags = vec![
+            TagInfo::new(
+                "MetadataVersion".to_string(),
+                "GoPro".to_string(),
+                "8.2.2".to_string(),
+            )
+            .with_source_file("GoProHERO12Black.jpg".to_string()),
+        ];
+        let exiftool_tags = vec![
+            TagInfo::new(
+                "MetadataVersion".to_string(),
+                "APP6".to_string(),
+                "8.2.2".to_string(),
+            )
+            .with_source_file("GoProHERO12Black.jpg".to_string()),
+        ];
+
+        let result = ComparisonEngine::compare(oxidex_tags, exiftool_tags, "JPEG", 1, None);
+        assert_eq!(
+            result.matched_tags,
+            vec!["APP6:MetadataVersion".to_string()]
+        );
+        assert!(result.missing_in_oxidex.is_empty());
+        assert!(result.extra_in_oxidex.is_empty());
+    }
+
+    #[test]
+    fn test_gopro_is_not_folded_into_makernotes() {
+        // GoPro must NOT normalize to MakerNotes: ExifTool never files a
+        // GoPro tag under family-0 MakerNotes, so folding it there both
+        // missed the real APP6 match and risked matching an unrelated
+        // camera's MakerNotes tag of the same name.
+        let oxidex_tags = vec![
+            TagInfo::new(
+                "ColorMode".to_string(),
+                "GoPro".to_string(),
+                "GoPro Color".to_string(),
+            )
+            .with_source_file("GoProHERO12Black.jpg".to_string()),
+        ];
+        let exiftool_tags = vec![
+            TagInfo::new(
+                "ColorMode".to_string(),
+                "MakerNotes".to_string(),
+                "Standard".to_string(),
+            )
+            .with_source_file("Casio.jpg".to_string()),
+        ];
+
+        let result = ComparisonEngine::compare(oxidex_tags, exiftool_tags, "JPEG", 2, None);
+        assert!(result.matched_tags.is_empty());
+        assert!(result.value_differences.is_empty());
+        assert_eq!(result.missing_in_oxidex.len(), 1);
+        assert_eq!(result.extra_in_oxidex.len(), 1);
     }
 }
