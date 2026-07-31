@@ -187,10 +187,12 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
     {
         let ext_lower = ext_str.to_lowercase();
 
-        // File type extension
+        // File type extension. ExifTool reports the format's canonical
+        // extension rather than echoing the filename, so `clip.m2ts` reports
+        // `mts`.
         metadata.insert(
             "File:FileTypeExtension".to_string(),
-            TagValue::new_string(ext_lower.clone()),
+            TagValue::new_string(get_file_type_extension(&ext_lower).to_string()),
         );
 
         // File type (human-readable)
@@ -373,9 +375,21 @@ fn get_file_type(extension: &str) -> &'static str {
         "cam" => "CAM",
         "mp4" => "MP4",
         "mov" => "MOV",
+        // MPEG-4 audio/video variants of the QuickTime container. ExifTool
+        // derives these from the `ftyp` major brand; keyed here on extension
+        // to match how this table resolves every other format.
+        "m4a" => "M4A",
+        "m4b" => "M4B",
+        "m4p" => "M4P",
+        "m4v" => "M4V",
         "avi" => "AVI",
         "mkv" => "MKV",
         "flv" => "FLV",
+        // MPEG-2 Transport Stream. ExifTool maps m2t/m2ts/mts (and ts) to the
+        // M2TS file type. `ts` is deliberately excluded here: this lookup is
+        // keyed on the extension alone with no content check, and `.ts` also
+        // means TypeScript source, which would be confidently mislabelled.
+        "mts" | "m2ts" | "m2t" => "M2TS",
         "wmv" | "asf" => "ASF",
         "mp3" => "MP3",
         "wav" => "WAV",
@@ -390,6 +404,18 @@ fn get_file_type(extension: &str) -> &'static str {
         "7z" => "7Z",
         "gz" | "tar" => "TAR",
         _ => "Unknown",
+    }
+}
+
+/// Maps a raw filename extension to ExifTool's canonical `FileTypeExtension`.
+///
+/// ExifTool reports the format's preferred extension (its `%fileTypeExt`
+/// table) rather than echoing the filename, so a `.m2ts` file reports `mts`.
+/// Extensions with no such override are returned unchanged.
+fn get_file_type_extension(extension: &str) -> &str {
+    match extension {
+        "m2ts" | "m2t" => "mts",
+        other => other,
     }
 }
 
@@ -408,9 +434,14 @@ fn get_mime_type(extension: &str) -> &'static str {
         "cam" => "image/x-casio-cam",
         "mp4" => "video/mp4",
         "mov" => "video/quicktime",
+        // ExifTool QuickTime.pm %mimeLookup
+        "m4a" | "m4b" | "m4p" => "audio/mp4",
+        "m4v" => "video/x-m4v",
         "avi" => "video/x-msvideo",
         "mkv" => "video/x-matroska",
         "flv" => "video/x-flv",
+        // See `get_file_type` for why `ts` is excluded.
+        "mts" | "m2ts" | "m2t" => "video/m2ts",
         "wmv" | "asf" => "video/x-ms-wmv",
         "mp3" => "audio/mpeg",
         "wav" => "audio/wav",
@@ -452,6 +483,87 @@ mod tests {
         assert_eq!(get_mime_type("jpg"), "image/jpeg");
         assert_eq!(get_mime_type("png"), "image/png");
         assert_eq!(get_mime_type("unknown"), "application/octet-stream");
+    }
+
+    /// The File group is excluded from the tag-comparison harness, so these
+    /// mappings are only ever covered by tests like this one.
+    #[test]
+    fn test_m2ts_file_type_and_mime() {
+        for ext in ["mts", "m2ts", "m2t"] {
+            assert_eq!(get_file_type(ext), "M2TS", "FileType for .{ext}");
+            assert_eq!(get_mime_type(ext), "video/m2ts", "MIMEType for .{ext}");
+        }
+    }
+
+    /// ExifTool reports the format's canonical extension, not the filename's.
+    #[test]
+    fn test_m2ts_file_type_extension_is_canonicalised() {
+        assert_eq!(get_file_type_extension("m2ts"), "mts");
+        assert_eq!(get_file_type_extension("m2t"), "mts");
+        assert_eq!(get_file_type_extension("mts"), "mts");
+        // Extensions without an override pass through untouched.
+        assert_eq!(get_file_type_extension("jpg"), "jpg");
+        assert_eq!(get_file_type_extension("mov"), "mov");
+    }
+
+    #[test]
+    fn test_m4a_family_file_type_and_mime() {
+        assert_eq!(get_file_type("m4a"), "M4A");
+        assert_eq!(get_file_type("m4b"), "M4B");
+        assert_eq!(get_file_type("m4p"), "M4P");
+        assert_eq!(get_file_type("m4v"), "M4V");
+        assert_eq!(get_mime_type("m4a"), "audio/mp4");
+        assert_eq!(get_mime_type("m4b"), "audio/mp4");
+        assert_eq!(get_mime_type("m4p"), "audio/mp4");
+        assert_eq!(get_mime_type("m4v"), "video/x-m4v");
+    }
+
+    /// Neighbouring container formats must be undisturbed by the additions
+    /// above -- an over-eager mapping is worse than a missing one.
+    #[test]
+    fn test_neighbouring_video_formats_unchanged() {
+        assert_eq!(get_file_type("mov"), "MOV");
+        assert_eq!(get_mime_type("mov"), "video/quicktime");
+        assert_eq!(get_file_type("mp4"), "MP4");
+        assert_eq!(get_mime_type("mp4"), "video/mp4");
+        assert_eq!(get_file_type("avi"), "AVI");
+        assert_eq!(get_mime_type("avi"), "video/x-msvideo");
+    }
+
+    /// `.ts` is an M2TS extension for ExifTool, but this table has no content
+    /// check and `.ts` is overwhelmingly TypeScript source. Claiming it here
+    /// would confidently mislabel every TypeScript file.
+    #[test]
+    fn test_ts_extension_is_not_claimed_as_m2ts() {
+        assert_eq!(get_file_type("ts"), "Unknown");
+        assert_eq!(get_mime_type("ts"), "application/octet-stream");
+    }
+
+    /// End-to-end regression for the reported bug: a `.mts` file reported
+    /// FileType=Unknown and MIMEType=application/octet-stream.
+    #[test]
+    fn test_extract_file_metadata_reports_m2ts_file_group() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("clip.mts");
+        std::fs::write(&path, b"placeholder").expect("write");
+
+        let meta = extract_file_metadata(&path).expect("extract");
+        assert_eq!(meta.get_string("File:FileType"), Some("M2TS"));
+        assert_eq!(meta.get_string("File:FileTypeExtension"), Some("mts"));
+        assert_eq!(meta.get_string("File:MIMEType"), Some("video/m2ts"));
+    }
+
+    /// End-to-end regression for the second reported misdetection (.m4a).
+    #[test]
+    fn test_extract_file_metadata_reports_m4a_file_group() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("track.m4a");
+        std::fs::write(&path, b"placeholder").expect("write");
+
+        let meta = extract_file_metadata(&path).expect("extract");
+        assert_eq!(meta.get_string("File:FileType"), Some("M4A"));
+        assert_eq!(meta.get_string("File:FileTypeExtension"), Some("m4a"));
+        assert_eq!(meta.get_string("File:MIMEType"), Some("audio/mp4"));
     }
 
     #[cfg(unix)]
