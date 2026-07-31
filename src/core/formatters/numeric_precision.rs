@@ -533,6 +533,78 @@ pub fn format_three_decimal_values(value: &str) -> String {
         .join(" ")
 }
 
+/// Number of significant digits Perl stringifies a double with (`DBL_DIG`).
+const PERL_SIG_DIGITS: i32 = 15;
+
+/// Renders a float the way Perl stringifies a double, i.e. `sprintf "%.15g"`.
+///
+/// Any ExifTool value that reaches the output without a PrintConv is just a
+/// Perl scalar being interpolated into a string, and Perl does that with 15
+/// significant digits. Neither of Rust's obvious spellings agrees:
+/// `{}` emits the shortest round-trip form (all 17 digits of a double, and
+/// never an exponent), and a fixed `{:.5}` truncates. Both differ from
+/// ExifTool byte-for-byte, and the comparison harness compares bytes.
+///
+/// # Examples
+///
+/// ```
+/// use oxidex::core::formatters::numeric_precision::perl_number;
+///
+/// // 15 significant digits, not the 17 of the shortest round-trip form
+/// assert_eq!(perl_number(148.34216308593750), "148.342163085938");
+/// // Whole values lose the decimal point entirely
+/// assert_eq!(perl_number(1.0), "1");
+/// // Below 1e-4, %g switches to exponent form with a signed 2-digit exponent
+/// assert_eq!(perl_number(1.06550110802548e-13), "1.06550110802548e-13");
+/// ```
+pub fn perl_number(v: f64) -> String {
+    if v.is_nan() {
+        return "NaN".to_string();
+    }
+    if v.is_infinite() {
+        return if v.is_sign_negative() { "-Inf" } else { "Inf" }.to_string();
+    }
+    // Perl prints -0.0 as "0", and log10(0) below would be meaningless anyway.
+    if v == 0.0 {
+        return "0".to_string();
+    }
+
+    // %g chooses between %e and %f on the decimal exponent the value has
+    // *after* rounding to PERL_SIG_DIGITS, so read the exponent back off the
+    // rounded scientific form rather than computing log10 directly --
+    // 9.9999e2 rounded to 3 digits is 1e3 and lands in the other bucket.
+    let scientific = format!("{:.*e}", (PERL_SIG_DIGITS - 1) as usize, v);
+    let (mantissa, exponent) = scientific
+        .split_once('e')
+        .expect("Rust's {:e} always emits an exponent");
+    let exponent: i32 = exponent
+        .parse()
+        .expect("Rust's {:e} always emits a decimal exponent");
+
+    if exponent < -4 || exponent >= PERL_SIG_DIGITS {
+        // Exponent form. Rust writes the exponent bare ("e-13", "e20"); C and
+        // Perl always sign it and pad it to two digits ("e-13", "e+20").
+        return format!(
+            "{}e{}{:02}",
+            trim_insignificant_zeros(mantissa),
+            if exponent < 0 { '-' } else { '+' },
+            exponent.abs()
+        );
+    }
+
+    // Fixed form, carrying whatever is left of the 15 digits after the point.
+    let decimals = (PERL_SIG_DIGITS - 1 - exponent).max(0) as usize;
+    trim_insignificant_zeros(&format!("{:.*}", decimals, v))
+}
+
+/// Drops the trailing zeros `%g` suppresses, and the bare point left behind.
+fn trim_insignificant_zeros(s: &str) -> String {
+    if !s.contains('.') {
+        return s.to_string();
+    }
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
 // ============================================================================
 // UNIT TESTS
 // ============================================================================
@@ -874,5 +946,52 @@ mod tests {
             format_exif_rational("GreenMatrixColumn", 0.3851234567),
             "0.38512"
         );
+    }
+
+    // ------------------------------------------------------------------------
+    // Perl double stringification (%.15g)
+    // ------------------------------------------------------------------------
+
+    /// The f64 an ExifTool 'float' record widens to, from its raw big-endian
+    /// bytes. Spelling the input as bits rather than as a decimal literal
+    /// keeps the test tied to the sample rather than to a transcription of it.
+    fn f32_bits(bits: u32) -> f64 {
+        f64::from(f32::from_bits(bits))
+    }
+
+    #[test]
+    fn test_perl_number_keeps_15_significant_digits() {
+        // Every expectation below is `perl -e 'printf "%.15g", ...'`, which is
+        // what ExifTool prints for a value with no PrintConv. The inputs are
+        // the exact f32s from GoProHERO8Black.jpg / GoProHERO12Black.jpg.
+        assert_eq!(perl_number(f32_bits(0x4314_5798)), "148.342163085938");
+        assert_eq!(perl_number(f32_bits(0x431c_82f4)), "156.511535644531");
+        assert_eq!(perl_number(f32_bits(0x3f36_a666)), "0.713476538658142");
+        assert_eq!(perl_number(f32_bits(0x3f92_4925)), "1.14285719394684");
+        // Rust's shortest round-trip form would keep two more digits here
+        assert_ne!(perl_number(f32_bits(0x3f92_4925)), "1.1428571939468384");
+    }
+
+    #[test]
+    fn test_perl_number_switches_to_exponent_form_below_1e_minus_4() {
+        // %g uses %e once the exponent drops below -4, with a signed,
+        // two-digit exponent -- Rust's {:e} alone writes "e-13" unsigned.
+        assert_eq!(perl_number(f32_bits(0xaa76_a795)), "-2.19073308213753e-13");
+        assert_eq!(perl_number(f32_bits(0x29ef_edf5)), "1.06550110802548e-13");
+        assert_eq!(perl_number(1e-5), "1e-05");
+        // ... and stays in fixed form at exactly -4
+        assert_eq!(perl_number(1e-4), "0.0001");
+        // Large magnitudes cross over at 15 digits and gain a "+"
+        assert_eq!(perl_number(1e15), "1e+15");
+        assert_eq!(perl_number(1e14), "100000000000000");
+    }
+
+    #[test]
+    fn test_perl_number_trims_to_bare_integers_and_normalizes_zero() {
+        assert_eq!(perl_number(1.0), "1");
+        assert_eq!(perl_number(0.0), "0");
+        assert_eq!(perl_number(-0.0), "0");
+        assert_eq!(perl_number(-1.5), "-1.5");
+        assert_eq!(perl_number(10.026666666666667), "10.0266666666667");
     }
 }

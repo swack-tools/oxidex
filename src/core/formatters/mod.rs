@@ -39,6 +39,7 @@ pub use interop_version::decode_version_bytes;
 pub use numeric_precision::{
     format_exif_rational, format_icc_value, format_integer_precision_values,
     format_three_decimal_values, is_icc_matrix_tag, is_integer_precision_tag, is_three_decimal_tag,
+    perl_number,
 };
 pub use scene_type::decode_scene_type;
 pub use unit_suffixes::format_with_unit;

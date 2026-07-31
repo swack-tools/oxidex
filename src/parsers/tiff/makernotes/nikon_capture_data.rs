@@ -12,6 +12,7 @@
 //! truncated from 32 bits to 16 (`0x008ae85e` stored as `0xE85E`) by an
 //! older generator, so every lookup by real id would miss.
 
+use crate::core::formatters::numeric_precision::perl_number;
 use std::collections::HashMap;
 
 /// Bytes of record header preceding each value: the 32-bit id, ten bytes this
@@ -546,27 +547,6 @@ fn render_sub(bytes: &[u8], format: SubFormat) -> Option<String> {
             perl_number(v)
         }
     })
-}
-
-/// Renders a float the way ExifTool does.
-///
-/// Perl stringifies with 15 significant digits, so 10.026666666666667 prints
-/// as "10.0266666666667". Rust's shortest-round-trip default keeps all 17,
-/// and the comparison is byte-for-byte -- four otherwise-correct CropData and
-/// WBAdjData values differed only in their tail.
-fn perl_number(v: f64) -> String {
-    if v.fract() == 0.0 && v.abs() < 1e15 {
-        return format!("{}", v as i64);
-    }
-    let magnitude = if v == 0.0 {
-        0
-    } else {
-        v.abs().log10().floor() as i32
-    };
-    let decimals = (15 - 1 - magnitude).clamp(0, 17) as usize;
-    let rendered = format!("{:.*}", decimals, v);
-    let trimmed = rendered.trim_end_matches('0').trim_end_matches('.');
-    trimmed.to_string()
 }
 
 fn parse_sub_table(data: &[u8], table: &SubTable, tags: &mut HashMap<String, String>) {
