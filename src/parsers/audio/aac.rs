@@ -143,8 +143,11 @@ impl FormatParser for AacParser {
             return Ok(metadata);
         }
 
-        // Otherwise, try to parse as pure ADTS AAC
-        let header = magic;
+        // Otherwise, try to parse as pure ADTS AAC. The ADTS header is 7
+        // bytes: handing `parse_adts_header` the 4-byte magic made it fail
+        // its own length check on every real AAC file, so the format
+        // silently produced no tags at all.
+        let header = reader.read(0, 7)?;
         let header_reader = EndianReader::big_endian(header);
 
         // Verify ADTS sync word (0xFFF in first 12 bits)
@@ -161,7 +164,12 @@ impl FormatParser for AacParser {
         // Parse ADTS header
         let adts_info = parse_adts_header(header)?;
 
-        // Add metadata
+        // ExifTool's AAC table names these ProfileType / SampleRate /
+        // Channels (AAC.pm bits 016-017, 018-021 and 023-025).
+        metadata.insert(
+            "AAC:ProfileType".to_string(),
+            TagValue::new_string(adts_info.profile_type.to_string()),
+        );
         metadata.insert(
             "AAC:AudioObjectType".to_string(),
             TagValue::new_string(adts_info.profile.to_string()),
@@ -174,6 +182,12 @@ impl FormatParser for AacParser {
             "AAC:ChannelConfiguration".to_string(),
             TagValue::new_integer(adts_info.channel_config as i64),
         );
+
+        // The encoder name lives in the first frame's filler payload.
+        if let Some(encoder) = read_encoder_from_first_frame(reader, header, adts_info.frame_length)
+        {
+            metadata.insert("AAC:Encoder".to_string(), TagValue::new_string(encoder));
+        }
         metadata.insert(
             "AAC:FrameLength".to_string(),
             TagValue::new_integer(adts_info.frame_length as i64),
@@ -187,21 +201,25 @@ impl FormatParser for AacParser {
             TagValue::new_string("AAC".to_string()),
         );
 
-        // Channels: Convert channel_config to channel count
-        let channel_count: i64 = match adts_info.channel_config {
-            0 => 0, // AOT Specific config (not standard)
-            1 => 1, // Mono
-            2 => 2, // Stereo
-            3 => 3, // Stereo + Center
-            4 => 4, // Stereo + Center + LFE (5.0 would be 5)
-            5 => 5, // Stereo + Center + LFE + Back
-            6 => 6, // 5.1 surround
-            7 => 8, // 7.1 surround
-            _ => 2, // Default to stereo for unknown
-        };
+        // Channels uses ExifTool's PrintConv for the channel configuration
+        // code: 6 and 7 print as "5+1" and "7+1", and an unset code prints
+        // "?" rather than being silently rounded to stereo.
         metadata.insert(
             "AAC:Channels".to_string(),
-            TagValue::new_integer(channel_count),
+            TagValue::new_string(
+                match adts_info.channel_config {
+                    0 => "?",
+                    1 => "1",
+                    2 => "2",
+                    3 => "3",
+                    4 => "4",
+                    5 => "5",
+                    6 => "5+1",
+                    7 => "7+1",
+                    _ => "?",
+                }
+                .to_string(),
+            ),
         );
 
         // BitRate: Estimate from frame size and sample rate
@@ -293,9 +311,70 @@ impl FormatParser for AacParser {
 /// ADTS header information
 struct AdtsInfo {
     profile: &'static str,
+    /// ExifTool's `ProfileType` PrintConv for the same 2-bit code.
+    profile_type: &'static str,
     sample_rate: u32,
     channel_config: u8,
     frame_length: u16,
+}
+
+/// Reads the encoder string from the first ADTS frame's filler element.
+///
+/// ExifTool takes `Encoder` from the filler payload (element id 6) of the
+/// first frame, skipping the CRC when one is present, and accepts the value
+/// only when the trimmed bytes are entirely printable ASCII.
+fn read_encoder_from_first_frame(
+    reader: &dyn FileReader,
+    header: &[u8],
+    frame_length: u16,
+) -> Option<String> {
+    if frame_length <= 8 {
+        return None;
+    }
+    let payload_len = usize::from(frame_length) - 7;
+    if 7 + payload_len as u64 > reader.size() {
+        return None;
+    }
+    let payload = reader.read(7, payload_len).ok()?;
+
+    // Bit 15 of the header ("CRC absent") is set when there is no CRC.
+    let no_crc = header[1] & 0x01 != 0;
+    let blocks = usize::from(header[6] & 0x03);
+    let mut pos = if no_crc { 0 } else { 2 + 2 * blocks };
+
+    if pos + 2 > payload.len() {
+        return None;
+    }
+    let word = u16::from_be_bytes([payload[pos], payload[pos + 1]]);
+    // Syntactic element id 6 is FIL (filler), which carries the encoder.
+    if word >> 13 != 6 {
+        return None;
+    }
+
+    let mut count = usize::from((word >> 9) & 0x0f);
+    pos += 1;
+    if count == 15 {
+        // An escape count of 15 means the real length follows.
+        count += usize::from((word >> 1) & 0xff);
+        count = count.checked_sub(1)?;
+        pos += 1;
+    }
+    let end = pos.checked_add(count).filter(|e| *e <= payload.len())?;
+
+    let raw = &payload[pos..end];
+    let trimmed = raw
+        .iter()
+        .position(|&b| b != 0)
+        .map(|start| &raw[start..])
+        .unwrap_or(&[]);
+    let trimmed = match trimmed.iter().rposition(|&b| b != 0) {
+        Some(last) => &trimmed[..=last],
+        None => return None,
+    };
+    if trimmed.is_empty() || !trimmed.iter().all(|&b| (0x20..=0x7e).contains(&b)) {
+        return None;
+    }
+    Some(String::from_utf8_lossy(trimmed).into_owned())
 }
 
 /// Parse ADTS header (7 bytes)
@@ -343,8 +422,18 @@ fn parse_adts_header(header: &[u8]) -> Result<AdtsInfo> {
         "Unknown"
     };
 
+    // ExifTool treats code 3 as reserved and rejects the file rather than
+    // labelling it, so an out-of-table code must report itself.
+    let profile_type = match profile_idx {
+        0 => "Main",
+        1 => "Low Complexity",
+        2 => "Scalable Sampling Rate",
+        _ => "Reserved",
+    };
+
     Ok(AdtsInfo {
         profile,
+        profile_type,
         sample_rate,
         channel_config,
         frame_length,

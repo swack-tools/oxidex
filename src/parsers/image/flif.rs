@@ -1,27 +1,34 @@
 //! FLIF (Free Lossless Image Format) parser
 //!
-//! FLIF format structure:
+//! FLIF format structure (<http://flif.info/>, mirrored by ExifTool's
+//! FLIF.pm):
 //! - Magic: 4 bytes "FLIF"
-//! - Header byte: interlaced(4 bits) + animated(1 bit) + channels(2 bits) + bytes_per_channel(1 bit)
-//! - Width: varint encoding
-//! - Height: varint encoding
-//! - Frame count: varint (if animated)
-//! - Metadata chunks: iCCP, eXif, eXmp (optional)
-
-#![allow(dead_code)]
+//! - Byte 4: image type, an ASCII character in `0x30..=0x6f` encoding
+//!   colour channels, interlacing and animation together
+//! - Byte 5: bit-depth code, ASCII '0' (custom), '1' (8-bit) or '2' (16-bit)
+//! - Width and height: varints, each stored one less than its true value
+//! - Frame count: varint stored two less than its true value, present only
+//!   when the image-type character is greater than 'H'
+//! - Metadata chunks: `<4-byte name><varint length><DEFLATE payload>` for
+//!   iCCP, eXif and eXmp, terminated by the image chunk whose first byte is
+//!   below 0x20 and which encodes the `Encoding` tag
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
-use crate::io::{ByteOrder as EndianByteOrder, EndianReader};
-use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
-use std::io;
+use crate::parsers::image::embedded::{
+    parse_embedded_exif, parse_embedded_icc, parse_embedded_xmp,
+};
 
 const FLIF_SIGNATURE: &[u8] = b"FLIF";
 
+/// Guard against a corrupt chunk length making us allocate the world.
+const FLIF_MAX_CHUNK_LEN: u64 = 10_000_000;
+
 /// Parser for FLIF (Free Lossless Image Format) files
 ///
-/// Extracts metadata from FLIF format images including dimensions, color type, bit depth,
-/// interlacing, animation, and embedded EXIF data.
+/// Extracts the FLIF header (image type, bit depth, dimensions, animation
+/// frame count and encoding) plus any ICC profile, EXIF or XMP carried in
+/// the file's DEFLATE-compressed metadata chunks.
 pub struct FLIFParser;
 
 impl FLIFParser {
@@ -48,8 +55,13 @@ impl FormatParser for FLIFParser {
             TagValue::String(reader.size().to_string()),
         );
 
-        // Parse FLIF header and metadata chunks
-        parse_flif_header(reader, &mut metadata)?;
+        // The whole file is read once: chunk payloads are DEFLATE streams
+        // whose inflated size is unknown up front, so slicing them out of
+        // one buffer is both simpler and cheaper than seeking.
+        let size = reader.size() as usize;
+        let data = reader.read(0, size)?;
+
+        parse_flif_header(data, &mut metadata)?;
 
         Ok(metadata)
     }
@@ -59,294 +71,206 @@ impl FormatParser for FLIFParser {
     }
 }
 
+/// Decoded image-type character.
+struct ImageType {
+    /// ExifTool's printed `ImageType` string.
+    label: String,
+    /// Animated images carry an extra frame-count varint.
+    animated: bool,
+}
+
+/// Decodes the image-type character (ExifTool FLIF tag 0).
+///
+/// The character is a single opaque code, not a bit-field: ExifTool spells
+/// out all twelve valid values, so an unrecognised one reports its own
+/// character rather than being folded onto a neighbouring label.
+fn decode_image_type(code: u8) -> ImageType {
+    let label = match code {
+        b'1' => "Grayscale (non-interlaced)",
+        b'3' => "RGB (non-interlaced)",
+        b'4' => "RGBA (non-interlaced)",
+        b'A' => "Grayscale (interlaced)",
+        b'C' => "RGB (interlaced)",
+        b'D' => "RGBA (interlaced)",
+        b'Q' => "Grayscale Animation (non-interlaced)",
+        b'S' => "RGB Animation (non-interlaced)",
+        b'T' => "RGBA Animation (non-interlaced)",
+        b'a' => "Grayscale Animation (interlaced)",
+        b'c' => "RGB Animation (interlaced)",
+        b'd' => "RGBA Animation (interlaced)",
+        _ => "",
+    };
+    ImageType {
+        label: if label.is_empty() {
+            format!("Unknown ({})", code as char)
+        } else {
+            label.to_string()
+        },
+        // Animated types are exactly those whose character sorts above 'H'.
+        animated: code > b'H',
+    }
+}
+
 /// Parse FLIF header and extract metadata
-fn parse_flif_header(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Result<()> {
-    if reader.size() < 6 {
+fn parse_flif_header(data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
+    if data.len() < 6 {
         return Err(ExifToolError::parse_error("FLIF file too short"));
     }
 
-    // Read header byte at offset 4
-    let header_data = reader.read(4, 10)?; // Read enough for header + varints
-    let header_byte = header_data[0];
+    let type_code = data[4];
+    let depth_code = data[5];
+    // ExifTool refuses the file outright unless both header characters are
+    // in range, so a malformed header is a parse error rather than a
+    // silently mislabelled image.
+    if !(0x30..=0x6f).contains(&type_code) || !(b'0'..=b'2').contains(&depth_code) {
+        return Err(ExifToolError::parse_error("Invalid FLIF header"));
+    }
 
-    // Parse header byte: IIIIIACT
-    // I = interlacing (4 bits), A = animated (1 bit), C = channels (2 bits), T = bytes_per_channel (1 bit)
-    let interlaced = (header_byte >> 4) & 0x0F;
-    let animated = (header_byte >> 3) & 0x01;
-    let channels = (header_byte >> 1) & 0x03;
-    let bytes_per_channel = header_byte & 0x01;
-
-    // Decode color type from channels
-    let color_type = match channels {
-        0 => "Grayscale",
-        2 => "RGB",
-        3 => "RGBA",
-        _ => return Err(ExifToolError::parse_error("Invalid FLIF channels value")),
-    };
+    let image_type = decode_image_type(type_code);
     metadata.insert(
-        "FLIF:ColorType".to_string(),
-        TagValue::String(color_type.to_string()),
+        "FLIF:ImageType".to_string(),
+        TagValue::String(image_type.label),
+    );
+    metadata.insert(
+        "FLIF:BitDepth".to_string(),
+        TagValue::String(
+            match depth_code {
+                b'0' => "Custom",
+                b'1' => "8",
+                _ => "16",
+            }
+            .to_string(),
+        ),
     );
 
-    // Decode bit depth
-    let bit_depth = if bytes_per_channel == 0 { 8 } else { 16 };
-    metadata.insert("FLIF:BitDepth".to_string(), TagValue::Integer(bit_depth));
-
-    // Decode interlacing
-    if interlaced > 0 {
-        metadata.insert(
-            "FLIF:Interlaced".to_string(),
-            TagValue::String("Yes".to_string()),
-        );
-    }
-
-    // Decode animation flag
-    let is_animated = animated == 1;
-    if is_animated {
-        metadata.insert(
-            "FLIF:Animated".to_string(),
-            TagValue::String("Yes".to_string()),
-        );
-    }
-
-    // Parse varint-encoded width and height
-    let mut offset = 5u64; // Start after magic + header byte
-    let (width, width_bytes) = read_varint(reader, offset)?;
-    offset += width_bytes;
-    let (height, height_bytes) = read_varint(reader, offset)?;
-    offset += height_bytes;
-
+    let mut pos = 6usize;
+    // Width and height are each stored one less than their true value.
+    let (width, len) = read_varint(data, pos).ok_or_else(invalid_varint)?;
+    pos += len;
+    let (height, len) = read_varint(data, pos).ok_or_else(invalid_varint)?;
+    pos += len;
     metadata.insert(
         "FLIF:ImageWidth".to_string(),
-        TagValue::Integer(width as i64),
+        TagValue::Integer(i64::from(width) + 1),
     );
     metadata.insert(
         "FLIF:ImageHeight".to_string(),
-        TagValue::Integer(height as i64),
+        TagValue::Integer(i64::from(height) + 1),
     );
 
-    // Parse frame count if animated
-    if is_animated {
-        let (frame_count, frame_bytes) = read_varint(reader, offset)?;
-        offset += frame_bytes;
+    if image_type.animated {
+        // Frame count is stored two less than its true value.
+        let (frames, len) = read_varint(data, pos).ok_or_else(invalid_varint)?;
+        pos += len;
         metadata.insert(
-            "FLIF:FrameCount".to_string(),
-            TagValue::Integer(frame_count as i64),
+            "FLIF:AnimationFrames".to_string(),
+            TagValue::Integer(i64::from(frames) + 2),
         );
     }
 
-    // Look for metadata chunks
-    parse_flif_metadata_chunks(reader, offset, metadata)?;
+    parse_flif_chunks(data, pos, metadata);
 
     Ok(())
 }
 
-/// Parse FLIF metadata chunks (iCCP, eXif, eXmp)
-fn parse_flif_metadata_chunks(
-    reader: &dyn FileReader,
-    mut offset: u64,
-    metadata: &mut MetadataMap,
-) -> Result<()> {
-    let file_size = reader.size();
+fn invalid_varint() -> ExifToolError {
+    ExifToolError::parse_error("Invalid FLIF varint")
+}
 
-    // Metadata chunks appear before image data
-    // They are identified by 4-byte FourCC codes
-    while offset + 8 <= file_size {
-        // Try to read chunk header
-        let chunk_header = match reader.read(offset, 8) {
-            Ok(data) => data,
-            Err(_) => break, // End of metadata section
+/// Walks the metadata chunks that precede the image data.
+fn parse_flif_chunks(data: &[u8], mut pos: usize, metadata: &mut MetadataMap) {
+    while pos + 4 <= data.len() {
+        let name = [data[pos], data[pos + 1], data[pos + 2], data[pos + 3]];
+
+        // A first byte below 0x20 is the start of the image data, and
+        // encodes the Encoding tag rather than naming a chunk.
+        if name[0] < 0x20 {
+            metadata.insert(
+                "FLIF:Encoding".to_string(),
+                TagValue::String(if name[0] == 0 {
+                    "FLIF16".to_string()
+                } else {
+                    format!("Unknown ({})", name[0])
+                }),
+            );
+            return;
+        }
+
+        pos += 4;
+
+        let Some((len, len_bytes)) = read_varint(data, pos) else {
+            return;
+        };
+        pos += len_bytes;
+        if u64::from(len) > FLIF_MAX_CHUNK_LEN {
+            return;
+        }
+        let Some(end) = pos.checked_add(len as usize).filter(|e| *e <= data.len()) else {
+            return;
         };
 
-        // Check for known chunk types
-        let chunk_type = &chunk_header[0..4];
-
-        // If not a valid chunk type, we've reached image data
-        if !matches!(chunk_type, b"iCCP" | b"eXif" | b"eXmp") {
-            break;
-        }
-
-        // Read chunk size (4 bytes, big-endian after chunk type)
-        let size_reader = EndianReader::big_endian(&chunk_header[4..8]);
-        let chunk_size = size_reader.u32_at(0).unwrap_or(0) as u64;
-
-        offset += 8;
-
-        // Ensure chunk doesn't exceed file size
-        if offset + chunk_size > file_size {
-            break;
-        }
-
-        match chunk_type {
-            b"eXif" => {
-                // Parse EXIF metadata
-                if let Ok(exif_data) = reader.read(offset, chunk_size as usize) {
-                    let _ = parse_flif_exif(exif_data, metadata);
+        // Every FLIF metadata chunk is raw-DEFLATE compressed.
+        if matches!(&name, b"iCCP" | b"eXif" | b"eXmp")
+            && let Some(inflated) = raw_inflate(&data[pos..end])
+        {
+            match &name {
+                b"iCCP" => {
+                    parse_embedded_icc(&inflated, metadata);
+                }
+                b"eXif" => {
+                    // ExifTool's SubDirectory declares Start => 6, skipping
+                    // the "Exif\0\0" header that FLIF stores ahead of the
+                    // TIFF block.
+                    let tiff = if inflated.len() > 6 && inflated.starts_with(b"Exif\0\0") {
+                        &inflated[6..]
+                    } else {
+                        &inflated[..]
+                    };
+                    parse_embedded_exif(tiff, metadata);
+                }
+                _ => {
+                    parse_embedded_xmp(&inflated, metadata);
                 }
             }
-            b"iCCP" => {
-                metadata.insert(
-                    "FLIF:ICCProfileSize".to_string(),
-                    TagValue::Integer(chunk_size as i64),
-                );
-            }
-            b"eXmp" => {
-                if let Ok(xmp_data) = reader.read(offset, chunk_size as usize)
-                    && let Ok(xmp_str) = std::str::from_utf8(xmp_data)
-                {
-                    metadata.insert(
-                        "XMP:RawXMP".to_string(),
-                        TagValue::String(xmp_str.to_string()),
-                    );
-                }
-            }
-            _ => {}
         }
 
-        offset += chunk_size;
+        pos = end;
     }
-
-    Ok(())
 }
 
-/// Parse EXIF data from FLIF eXif chunk
-fn parse_flif_exif(exif_data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
-    if exif_data.len() < 8 {
-        return Err(ExifToolError::parse_error("EXIF data too short"));
+/// Inflates a raw DEFLATE stream (no zlib or gzip wrapper).
+fn raw_inflate(compressed: &[u8]) -> Option<Vec<u8>> {
+    use flate2::read::DeflateDecoder;
+    use std::io::Read;
+
+    let mut out = Vec::new();
+    let mut decoder = DeflateDecoder::new(compressed);
+    // A truncated stream still yields everything decoded so far, which is
+    // what ExifTool's rawinflate produces too; only a total failure with no
+    // output is treated as "not decodable".
+    match decoder.read_to_end(&mut out) {
+        Ok(_) => Some(out),
+        Err(_) if !out.is_empty() => Some(out),
+        Err(_) => None,
     }
+}
 
-    // Detect byte order
-    let byte_order = match &exif_data[0..2] {
-        b"II" => ByteOrder::LittleEndian,
-        b"MM" => ByteOrder::BigEndian,
-        _ => return Err(ExifToolError::parse_error("Invalid TIFF byte order")),
-    };
-
-    // Create EndianReader with appropriate byte order
-    let endian_order = match byte_order {
-        ByteOrder::LittleEndian => EndianByteOrder::Little,
-        ByteOrder::BigEndian => EndianByteOrder::Big,
-    };
-    let tiff_reader = EndianReader::new(exif_data, endian_order);
-
-    // Verify TIFF magic (0x002A)
-    let magic = tiff_reader.u16_at(2).unwrap_or(0);
-    if magic != 0x002A {
-        return Err(ExifToolError::parse_error("Invalid TIFF magic number"));
-    }
-
-    // Get IFD0 offset
-    let ifd_offset = tiff_reader.u32_at(4).unwrap_or(0);
-
-    // Create in-memory reader for EXIF data
-    let exif_reader = FLIFExifReader::new(exif_data.to_vec());
-
-    // Parse IFD0
-    if let Ok(ifd0_tags) = parse_ifd(&exif_reader, ifd_offset as u64, byte_order) {
-        for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
-            let tag_name = crate::tag_db::lookup_tag_name(*tag_id, "EXIF");
-            let tag_value =
-                raw_bytes_to_tag_value(raw_bytes, *field_type, *value_count, byte_order);
-            metadata.insert(format!("EXIF:{}", tag_name), tag_value);
+/// Reads a FLIF varint: 7 bits per byte, most-significant group first, high
+/// bit marks continuation. Returns the raw value and its encoded length --
+/// the per-field `+1`/`+2` biases are applied by the caller because they
+/// differ per field.
+fn read_varint(data: &[u8], pos: usize) -> Option<(u32, usize)> {
+    let mut value: u32 = 0;
+    for i in 0..5 {
+        let byte = *data.get(pos + i)?;
+        value = value
+            .checked_mul(128)?
+            .checked_add(u32::from(byte & 0x7f))?;
+        if byte & 0x80 == 0 {
+            return Some((value, i + 1));
         }
     }
-
-    Ok(())
-}
-
-/// Read FLIF varint-encoded integer
-/// Returns (value, bytes_read)
-fn read_varint(reader: &dyn FileReader, offset: u64) -> Result<(u32, u64)> {
-    let first_byte = reader.read(offset, 1)?[0];
-
-    if first_byte < 128 {
-        // Single byte: value = byte + 1
-        Ok((first_byte as u32 + 1, 1))
-    } else {
-        // Two bytes: value = ((byte - 128) << 8) + next_byte + 129
-        if offset + 2 > reader.size() {
-            return Err(ExifToolError::parse_error("Incomplete varint"));
-        }
-        let second_byte = reader.read(offset + 1, 1)?[0];
-        let value = ((first_byte as u32 - 128) << 8) + second_byte as u32 + 129;
-        Ok((value, 2))
-    }
-}
-
-/// In-memory reader for FLIF EXIF data
-struct FLIFExifReader {
-    data: Vec<u8>,
-}
-
-impl FLIFExifReader {
-    fn new(data: Vec<u8>) -> Self {
-        Self { data }
-    }
-}
-
-impl FileReader for FLIFExifReader {
-    fn read(&self, offset: u64, length: usize) -> io::Result<&[u8]> {
-        let start = offset as usize;
-        let end = start + length;
-        if end > self.data.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "read beyond end of EXIF data",
-            ));
-        }
-        Ok(&self.data[start..end])
-    }
-
-    fn size(&self) -> u64 {
-        self.data.len() as u64
-    }
-}
-
-/// Convert raw EXIF bytes to TagValue
-fn raw_bytes_to_tag_value(
-    bytes: &[u8],
-    field_type: u16,
-    value_count: u32,
-    byte_order: ByteOrder,
-) -> TagValue {
-    use crate::parsers::common::exif_types::ExifType;
-
-    // Create EndianReader with appropriate byte order
-    let endian_order = match byte_order {
-        ByteOrder::LittleEndian => EndianByteOrder::Little,
-        ByteOrder::BigEndian => EndianByteOrder::Big,
-    };
-    let reader = EndianReader::new(bytes, endian_order);
-
-    if let Some(exif_type) = ExifType::from_u16(field_type) {
-        match exif_type {
-            ExifType::Byte if !bytes.is_empty() => {
-                if value_count == 1 {
-                    return TagValue::Integer(reader.u8_at(0).unwrap_or(0) as i64);
-                }
-                return TagValue::Binary(bytes.to_vec());
-            }
-            ExifType::Ascii => {
-                let text = String::from_utf8_lossy(bytes);
-                return TagValue::String(text.trim_end_matches('\0').to_string());
-            }
-            ExifType::Short if bytes.len() >= 2 => {
-                if value_count == 1 {
-                    let val = reader.u16_at(0).unwrap_or(0);
-                    return TagValue::Integer(val as i64);
-                }
-            }
-            ExifType::Long if bytes.len() >= 4 => {
-                if value_count == 1 {
-                    let val = reader.u32_at(0).unwrap_or(0);
-                    return TagValue::Integer(val as i64);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    TagValue::Binary(bytes.to_vec())
+    None
 }
 
 /// Parses metadata from FLIF files.
@@ -355,4 +279,96 @@ fn raw_bytes_to_tag_value(
 pub fn parse_flif_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
     let parser = FLIFParser;
     parser.parse(reader).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::buffered_reader::BufferedReader;
+
+    /// Renders a tag the way a reader would see it, so expectations can be
+    /// written against ExifTool's printed strings regardless of whether the
+    /// parser stored a string or an integer.
+    fn text(metadata: &MetadataMap, key: &str) -> String {
+        match metadata.get(key) {
+            Some(TagValue::String(s)) => s.clone(),
+            Some(TagValue::Integer(i)) => i.to_string(),
+            Some(other) => panic!("{key} is not a printable scalar: {other:?}"),
+            None => panic!("missing tag {key}"),
+        }
+    }
+
+    #[test]
+    fn varints_are_big_endian_groups() {
+        assert_eq!(read_varint(&[0x0f], 0), Some((15, 1)));
+        assert_eq!(read_varint(&[0x81, 0x00], 0), Some((128, 2)));
+        assert_eq!(read_varint(&[0x8e, 0x25], 0), Some((1829, 2)));
+        assert_eq!(read_varint(&[0x81], 0), None);
+    }
+
+    #[test]
+    fn image_type_char_is_a_code_not_a_bitfield() {
+        assert_eq!(decode_image_type(b'3').label, "RGB (non-interlaced)");
+        assert!(!decode_image_type(b'3').animated);
+        assert_eq!(
+            decode_image_type(b'S').label,
+            "RGB Animation (non-interlaced)"
+        );
+        assert!(decode_image_type(b'S').animated);
+        // Unrecognised codes report themselves.
+        assert_eq!(decode_image_type(b'Z').label, "Unknown (Z)");
+    }
+
+    /// Header of the ExifTool distribution's FLIF.flif sample: 16x16 RGB.
+    #[test]
+    fn decodes_sample_header() {
+        // "FLIF" '3' '1' 0x0f 0x0f then the image chunk marker.
+        let data = b"FLIF31\x0f\x0f\x00\x00\x00\x00";
+        let mut metadata = MetadataMap::new();
+        parse_flif_header(data, &mut metadata).unwrap();
+
+        assert_eq!(text(&metadata, "FLIF:ImageType"), "RGB (non-interlaced)");
+        assert_eq!(text(&metadata, "FLIF:BitDepth"), "8");
+        // 0x0f is stored one less than the real dimension.
+        assert_eq!(text(&metadata, "FLIF:ImageWidth"), "16");
+        assert_eq!(text(&metadata, "FLIF:ImageHeight"), "16");
+        assert_eq!(text(&metadata, "FLIF:Encoding"), "FLIF16");
+        assert!(metadata.get("FLIF:AnimationFrames").is_none());
+    }
+
+    #[test]
+    fn animated_header_reads_frame_count() {
+        // 'S' is an animated type, so a frame-count varint follows.
+        let data = b"FLIFS1\x0f\x0f\x03\x00\x00\x00\x00";
+        let mut metadata = MetadataMap::new();
+        parse_flif_header(data, &mut metadata).unwrap();
+        // 0x03 is stored two less than the real frame count.
+        assert_eq!(text(&metadata, "FLIF:AnimationFrames"), "5");
+    }
+
+    #[test]
+    fn rejects_malformed_header_characters() {
+        let mut metadata = MetadataMap::new();
+        // 0x7f is outside the valid image-type range.
+        assert!(parse_flif_header(b"FLIF\x7f1\x0f\x0f\x00", &mut metadata).is_err());
+    }
+
+    #[test]
+    fn inflates_deflate_chunk_payloads() {
+        use flate2::Compression;
+        use flate2::write::DeflateEncoder;
+        use std::io::Write;
+
+        let payload = b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"></x:xmpmeta>";
+        let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(payload).unwrap();
+        let compressed = encoder.finish().unwrap();
+        assert_eq!(raw_inflate(&compressed).as_deref(), Some(&payload[..]));
+    }
+
+    #[test]
+    fn rejects_non_flif_data() {
+        let reader = BufferedReader::from_bytes(b"not a flif file");
+        assert!(parse_flif_metadata(&reader).is_err());
+    }
 }

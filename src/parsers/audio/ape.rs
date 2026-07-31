@@ -1,42 +1,29 @@
 //! APE (Monkey's Audio) format parser
 //!
-//! Implements metadata extraction from APE audio files, parsing the MAC header
-//! and APEv2 tags.
-//!
-//! # Supported Metadata
-//!
-//! - **MAC Header:** Version, compression level, sample rate, channels, bits per sample
-//! - **APEv2 Tags:** Artist, Album, Title, Genre, Year, Track, Comment
-//!
-//! # ExifTool Compatibility
-//!
-//! Maps to ExifTool tags from `APE.pm` module:
-//! - `APE:Version` → File format version from MAC header
-//! - `APE:CompressionLevel` → Compression level from MAC header
-//! - `APE:SampleRate` → Sample rate from MAC header
+//! Implements metadata extraction from APE audio files, parsing the MAC
+//! header and the APEv1/APEv2 tag block.
 //!
 //! # File Structure
 //!
 //! ```text
-//! [MAC Header - 76 bytes]
+//! [MAC descriptor]
 //!   ├─ Signature: "MAC " (4 bytes)
-//!   ├─ Version: 2 bytes
-//!   ├─ Compression level: 2 bytes
-//!   └─ Audio properties...
-//! [APE Frames]
-//! [APEv2 Tag - at end of file]
-//!   ├─ Preamble: "APETAGEX" (8 bytes)
-//!   ├─ Version: 4 bytes (2000)
-//!   └─ Tag items
+//!   ├─ Version: int16u  (e.g. 3990 == 3.99)
+//!   ├─ Descriptor length: int32u at offset 8   (v3.98+)
+//!   └─ Header length: int32u at offset 12      (v3.98+)
+//! [MAC header]  -- at <descriptor length>, <header length> bytes (v3.98+)
+//! [APE frames]
+//! [APE tag]
+//!   ├─ Optional 32-byte header "APETAGEX"
+//!   ├─ Tag items: <int32u value length><int32u flags><key>\0<value>
+//!   └─ 32-byte footer "APETAGEX" (size field COVERS the footer)
 //! ```
 //!
 //! # References
 //!
 //! - Monkey's Audio SDK
-//! - APEv2 Specification
+//! - <http://www.personal.uni-jena.de/~pfk/mpp/sv8/apetag.html>
 //! - ExifTool Source: `lib/Image/ExifTool/APE.pm`
-
-#![allow(dead_code)]
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
@@ -46,11 +33,24 @@ use encoding_rs::UTF_8;
 /// MAC file signature
 const MAC_SIGNATURE: &[u8] = b"MAC ";
 
-/// APEv2 tag signature
-const APEV2_SIGNATURE: &[u8] = b"APETAGEX";
+/// APE tag signature, used by both the optional header and the footer
+const APE_TAG_SIGNATURE: &[u8] = b"APETAGEX";
 
-/// APEv2 tag version
-const APEV2_VERSION: u32 = 2000;
+/// Size of an APE tag header/footer block.
+const APE_TAG_BLOCK_LEN: u64 = 32;
+
+/// Last MAC version that uses the pre-3.98 header layout.
+const MAC_OLD_HEADER_MAX_VERSION: u16 = 3970;
+
+/// Refuse to buffer an implausibly large tag block.
+const MAX_APE_TAG_SIZE: u64 = 1_000_000;
+
+/// Cap on tag items, so a corrupt count cannot spin.
+const MAX_APE_ITEMS: u32 = 1000;
+
+/// Item flag bits selecting the value's type; `0b10` means binary.
+const APE_ITEM_TYPE_MASK: u32 = 0x06;
+const APE_ITEM_TYPE_BINARY: u32 = 0x02;
 
 /// APE parser
 pub struct ApeParser;
@@ -76,50 +76,23 @@ impl FormatParser for ApeParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
         let file_size = reader.size();
 
-        // Verify MAC signature
-        if file_size < 76 {
+        if file_size < APE_TAG_BLOCK_LEN {
             return Err(ExifToolError::parse_error("File too small to be APE"));
         }
 
-        let header = reader.read(0, 76)?;
-        if &header[0..4] != MAC_SIGNATURE {
+        let descriptor = reader.read(0, 32)?;
+        if &descriptor[0..4] != MAC_SIGNATURE {
             return Err(ExifToolError::parse_error(format!(
                 "Invalid APE signature: expected {:?}, found {:?}",
                 MAC_SIGNATURE,
-                &header[0..4]
+                &descriptor[0..4]
             )));
         }
 
-        let mut metadata = MetadataMap::with_capacity(16);
+        let mut metadata = MetadataMap::with_capacity(24);
 
-        // Parse MAC header
-        parse_mac_header(header, &mut metadata)?;
-
-        // Look for APEv2 tag at end of file
-        // APEv2 tags can be up to several KB, but typically are smaller
-        // Read last 8KB to find the footer
-        let footer_search_size = 8192u64.min(file_size);
-        let footer_offset = file_size - footer_search_size;
-        let footer_region = reader.read(footer_offset, footer_search_size as usize)?;
-
-        // Search for APEv2 signature
-        if let Some(tag_footer_pos) = find_apev2_footer(footer_region) {
-            let tag_footer_offset = footer_offset + tag_footer_pos as u64;
-
-            // Read APEv2 footer (32 bytes)
-            let apev2_footer = reader.read(tag_footer_offset, 32)?;
-
-            // Parse footer to get tag size
-            if let Ok(tag_size) = parse_apev2_footer(apev2_footer) {
-                // Read entire tag (including footer)
-                let tag_start = tag_footer_offset - tag_size as u64;
-                if tag_start < file_size && tag_size < 1_000_000 {
-                    // Safety limit
-                    let tag_data = reader.read(tag_start, (tag_size + 32) as usize)?;
-                    parse_apev2_tag(tag_data, &mut metadata)?;
-                }
-            }
-        }
+        parse_mac_audio_header(reader, descriptor, &mut metadata)?;
+        parse_ape_tag(reader, &mut metadata)?;
 
         Ok(metadata)
     }
@@ -129,174 +102,216 @@ impl FormatParser for ApeParser {
     }
 }
 
-/// Parse MAC header (76 bytes)
-fn parse_mac_header(header: &[u8], metadata: &mut MetadataMap) -> Result<()> {
-    if header.len() < 76 {
-        return Err(ExifToolError::parse_error("MAC header too small"));
-    }
+/// Parses the MAC audio header.
+///
+/// Which layout applies depends on the version in the descriptor: 3.97 and
+/// earlier inline the header right after the 4-byte signature, while 3.98+
+/// place it at a descriptor-relative offset that must be read from the
+/// descriptor itself. Reading 3.98+ fields at fixed offsets in the
+/// descriptor -- the shape of the previous implementation -- lands in the
+/// MD5/reserved area and yields zeros.
+fn parse_mac_audio_header(
+    reader: &dyn FileReader,
+    descriptor: &[u8],
+    metadata: &mut MetadataMap,
+) -> Result<()> {
+    let desc = EndianReader::little_endian(descriptor);
+    let version = desc.u16_at(4).unwrap_or(0);
 
-    let reader = EndianReader::little_endian(header);
-
-    // Version (bytes 4-5, little-endian)
-    let version = reader.u16_at(4).unwrap_or(0);
-
-    // Compression level (bytes 6-7, little-endian)
-    let compression_level = reader.u16_at(6).unwrap_or(0);
-
-    // Sample rate (bytes 16-19, little-endian) - offset depends on version
-    // For v3.98+ (version >= 3980)
-    let sample_rate = if version >= 3980 {
-        reader.u32_at(16).unwrap_or(0)
-    } else {
-        // Older versions have different layout
-        reader.u32_at(12).unwrap_or(0)
-    };
-
-    // Channels (bytes 22-23, little-endian) - varies by version
-    let channels = if version >= 3980 {
-        reader.u16_at(22).unwrap_or(0)
-    } else {
-        reader.u16_at(18).unwrap_or(0)
-    };
-
-    // Bits per sample (bytes 24-25, little-endian) - varies by version
-    let bits_per_sample = if version >= 3980 {
-        reader.u16_at(24).unwrap_or(0)
-    } else {
-        reader.u16_at(20).unwrap_or(0)
-    };
-
-    metadata.insert(
-        "APE:Version".to_string(),
-        TagValue::new_string(format!("{:.2}", version as f64 / 1000.0)),
-    );
-
-    let compression_name = match compression_level {
-        1000 => "Fast",
-        2000 => "Normal",
-        3000 => "High",
-        4000 => "Extra High",
-        5000 => "Insane",
-        _ => "Unknown",
-    };
-    metadata.insert(
-        "APE:CompressionLevel".to_string(),
-        TagValue::new_string(compression_name.to_string()),
-    );
-
-    metadata.insert(
-        "APE:SampleRate".to_string(),
-        TagValue::new_integer(sample_rate as i64),
-    );
-    metadata.insert(
-        "APE:Channels".to_string(),
-        TagValue::new_integer(channels as i64),
-    );
-    metadata.insert(
-        "APE:BitsPerSample".to_string(),
-        TagValue::new_integer(bits_per_sample as i64),
-    );
-
-    Ok(())
-}
-
-/// Find APEv2 footer in data
-fn find_apev2_footer(data: &[u8]) -> Option<usize> {
-    // Search for "APETAGEX" signature
-    data.windows(8).position(|window| window == APEV2_SIGNATURE)
-}
-
-/// Parse APEv2 footer to get tag size (32 bytes)
-fn parse_apev2_footer(footer: &[u8]) -> Result<u32> {
-    if footer.len() < 32 || &footer[0..8] != APEV2_SIGNATURE {
-        return Err(ExifToolError::parse_error("Invalid APEv2 footer"));
-    }
-
-    let reader = EndianReader::little_endian(footer);
-
-    // Version (bytes 8-11, little-endian)
-    let version = reader.u32_at(8).unwrap_or(0);
-    if version != APEV2_VERSION {
-        return Err(ExifToolError::parse_error("Unsupported APEv2 version"));
-    }
-
-    // Tag size excluding footer (bytes 12-15, little-endian)
-    let tag_size = reader.u32_at(12).unwrap_or(0);
-
-    Ok(tag_size)
-}
-
-/// Parse APEv2 tag
-fn parse_apev2_tag(data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
-    if data.len() < 32 {
-        return Ok(());
-    }
-
-    // Verify header signature (APEv2 tags have both header and footer)
-    if &data[0..8] != APEV2_SIGNATURE {
-        return Ok(());
-    }
-
-    let reader = EndianReader::little_endian(data);
-
-    // Item count (bytes 16-19, little-endian)
-    let item_count = reader.u32_at(16).unwrap_or(0);
-
-    // Safety limit
-    const MAX_ITEMS: u32 = 1000;
-    let safe_item_count = item_count.min(MAX_ITEMS);
-
-    // Parse tag items (start after 32-byte header)
-    let mut offset = 32;
-
-    for _ in 0..safe_item_count {
-        if offset + 8 > data.len() {
-            break;
-        }
-
-        // Item value size (4 bytes, little-endian)
-        let value_size = reader.u32_at(offset).unwrap_or(0) as usize;
-
-        // Item flags (4 bytes, little-endian)
-        let _flags = reader.u32_at(offset + 4).unwrap_or(0);
-
-        offset += 8;
-
-        // Read key (null-terminated UTF-8 string)
-        let key_start = offset;
-        let mut key_end = key_start;
-        while key_end < data.len() && data[key_end] != 0 {
-            key_end += 1;
-        }
-
-        if key_end >= data.len() {
-            break;
-        }
-
-        let key_bytes = &data[key_start..key_end];
-        let (key, _, _) = UTF_8.decode(key_bytes);
-
-        offset = key_end + 1; // Skip null terminator
-
-        // Read value
-        if offset + value_size > data.len() {
-            break;
-        }
-
-        let value_bytes = &data[offset..offset + value_size];
-        let (value, _, _) = UTF_8.decode(value_bytes);
-
-        // Store metadata with APE: prefix
-        let tag_name = format!("APE:{}", key);
+    if version <= MAC_OLD_HEADER_MAX_VERSION {
+        // Old layout: fields are indexed from just past the signature.
+        let header = &descriptor[4..];
+        let h = EndianReader::little_endian(header);
+        // ExifTool's ValueConv is $val / 1000, printed as e.g. 3.97.
         metadata.insert(
-            tag_name,
-            TagValue::new_string(value.trim_end_matches('\0').to_string()),
+            "APE:APEVersion".to_string(),
+            TagValue::new_string(format_version(h.u16_at(0).unwrap_or(0))),
         );
-
-        offset += value_size;
+        insert_int(metadata, "CompressionLevel", h.u16_at(2).map(i64::from));
+        insert_int(metadata, "Channels", h.u16_at(6).map(i64::from));
+        insert_int(metadata, "SampleRate", h.u32_at(8).map(i64::from));
+        insert_int(metadata, "TotalFrames", h.u32_at(20).map(i64::from));
+        insert_int(metadata, "FinalFrameBlocks", h.u32_at(24).map(i64::from));
+        return Ok(());
     }
 
+    // New layout (3.98+): the descriptor tells us where the header lives.
+    let descriptor_len = u64::from(desc.u32_at(8).unwrap_or(0));
+    let header_len = u64::from(desc.u32_at(12).unwrap_or(0));
+    // ExifTool rejects lengths with the high bit set rather than trusting them.
+    if descriptor_len & 0x8000_0000 != 0 || header_len & 0x8000_0000 != 0 {
+        return Ok(());
+    }
+    if header_len < 24 || descriptor_len.saturating_add(header_len) > reader.size() {
+        return Ok(());
+    }
+
+    let header = reader.read(descriptor_len, header_len as usize)?;
+    let h = EndianReader::little_endian(header);
+
+    // ExifTool reports CompressionLevel as the raw code (1000/2000/...),
+    // with no PrintConv, so it must not be mapped to a name here.
+    insert_int(metadata, "CompressionLevel", h.u16_at(0).map(i64::from));
+    insert_int(metadata, "BlocksPerFrame", h.u32_at(4).map(i64::from));
+    insert_int(metadata, "FinalFrameBlocks", h.u32_at(8).map(i64::from));
+    insert_int(metadata, "TotalFrames", h.u32_at(12).map(i64::from));
+    insert_int(metadata, "BitsPerSample", h.u16_at(16).map(i64::from));
+    insert_int(metadata, "Channels", h.u16_at(18).map(i64::from));
+    insert_int(metadata, "SampleRate", h.u32_at(20).map(i64::from));
+
     Ok(())
+}
+
+fn insert_int(metadata: &mut MetadataMap, name: &str, value: Option<i64>) {
+    if let Some(value) = value {
+        metadata.insert(format!("APE:{}", name), TagValue::new_integer(value));
+    }
+}
+
+/// Formats a MAC version code the way ExifTool's `$val / 1000` does.
+fn format_version(version: u16) -> String {
+    format!("{}", f64::from(version) / 1000.0)
+}
+
+/// Locates and parses the APE tag block at the end of the file.
+fn parse_ape_tag(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Result<()> {
+    let file_size = reader.size();
+    if file_size < APE_TAG_BLOCK_LEN {
+        return Ok(());
+    }
+
+    // The footer is the LAST 32 bytes, not the first "APETAGEX" found in a
+    // trailing window: when a tag carries both a header and a footer, the
+    // first match is the header, whose own `size` field then points the
+    // data start 32 bytes too far and drops the first item.
+    let footer_offset = file_size - APE_TAG_BLOCK_LEN;
+    let footer = reader.read(footer_offset, APE_TAG_BLOCK_LEN as usize)?;
+    if &footer[0..8] != APE_TAG_SIGNATURE {
+        return Ok(());
+    }
+
+    let f = EndianReader::little_endian(footer);
+    // `size` counts the item data PLUS this 32-byte footer.
+    let total_size = u64::from(f.u32_at(12).unwrap_or(0));
+    let item_count = f.u32_at(16).unwrap_or(0);
+    if total_size < APE_TAG_BLOCK_LEN || total_size > MAX_APE_TAG_SIZE {
+        return Ok(());
+    }
+    let data_size = total_size - APE_TAG_BLOCK_LEN;
+    let Some(data_start) = (footer_offset + APE_TAG_BLOCK_LEN).checked_sub(total_size) else {
+        return Ok(());
+    };
+
+    let data = reader.read(data_start, data_size as usize)?;
+    parse_ape_tag_items(data, item_count, metadata);
+
+    Ok(())
+}
+
+/// Walks the `<length><flags><key>\0<value>` items of an APE tag block.
+fn parse_ape_tag_items(data: &[u8], item_count: u32, metadata: &mut MetadataMap) {
+    let mut pos = 0usize;
+    for _ in 0..item_count.min(MAX_APE_ITEMS) {
+        if pos + 8 > data.len() {
+            break;
+        }
+        let r = EndianReader::little_endian(data);
+        let value_len = r.u32_at(pos).unwrap_or(0) as usize;
+        let flags = r.u32_at(pos + 4).unwrap_or(0);
+        pos += 8;
+
+        let Some(key_end) = data[pos..].iter().position(|&b| b == 0).map(|i| pos + i) else {
+            break;
+        };
+        let (key, _, _) = UTF_8.decode(&data[pos..key_end]);
+        pos = key_end + 1;
+
+        let Some(value_end) = pos.checked_add(value_len).filter(|e| *e <= data.len()) else {
+            break;
+        };
+        let mut value_bytes = &data[pos..value_end];
+        pos = value_end;
+
+        let name = make_tag_name(&key);
+
+        if flags & APE_ITEM_TYPE_MASK == APE_ITEM_TYPE_BINARY {
+            // Cover art items lead with a printable filename terminated by
+            // a NUL; ExifTool splits that off into a "<tag> Desc" tag and
+            // reports the remaining bytes as the binary value.
+            if key.starts_with("Cover Art")
+                && let Some(nul) = value_bytes.iter().position(|&b| b == 0)
+                && value_bytes[..nul]
+                    .iter()
+                    .all(|&b| (0x20..=0x7e).contains(&b))
+            {
+                if nul > 0 {
+                    let (desc, _, _) = UTF_8.decode(&value_bytes[..nul]);
+                    metadata.insert(
+                        format!("APE:{}", make_tag_name(&format!("{} Desc", key))),
+                        TagValue::new_string(desc.to_string()),
+                    );
+                }
+                value_bytes = &value_bytes[nul + 1..];
+            }
+            metadata.insert(
+                format!("APE:{}", name),
+                TagValue::Binary(value_bytes.to_vec()),
+            );
+        } else {
+            let (value, _, _) = UTF_8.decode(value_bytes);
+            metadata.insert(
+                format!("APE:{}", name),
+                TagValue::new_string(value.trim_end_matches('\0').to_string()),
+            );
+        }
+    }
+}
+
+/// Derives a tag name from an APE item key.
+///
+/// Mirrors ExifTool's `APE::MakeTag`: lowercase the key, capitalize the
+/// first letter, then drop every run of non-word characters while
+/// capitalizing whatever follows it -- so `Media Jukebox: Date` becomes
+/// `MediaJukeboxDate` and `Cover Art (front)` becomes `CoverArtFront`.
+/// Underscores between alphanumerics are treated the same way.
+fn make_tag_name(key: &str) -> String {
+    // Two APE keys have explicit names in ExifTool's table that the
+    // generic rule alone would not produce a different result for, but
+    // which are listed there for documentation; the generic rule already
+    // yields ToolVersion / ToolName, so no special-casing is needed.
+    let lowered = key.to_lowercase();
+    let mut out = String::with_capacity(lowered.len());
+    let mut capitalize_next = true;
+    let mut prev_alnum = false;
+
+    for ch in lowered.chars() {
+        let is_word = ch.is_alphanumeric() || ch == '_';
+        if !is_word && ch != '-' {
+            // Run of invalid characters: skip it, capitalize what follows.
+            capitalize_next = true;
+            prev_alnum = false;
+            continue;
+        }
+        if ch == '_' {
+            // `([a-z0-9])_([a-z])` -> drop the underscore, uppercase next.
+            if prev_alnum {
+                capitalize_next = true;
+                continue;
+            }
+            out.push('_');
+            prev_alnum = false;
+            continue;
+        }
+        if capitalize_next {
+            out.extend(ch.to_uppercase());
+            capitalize_next = false;
+        } else {
+            out.push(ch);
+        }
+        prev_alnum = ch.is_alphanumeric();
+    }
+
+    out
 }
 
 #[cfg(test)]
@@ -304,23 +319,84 @@ mod tests {
     use super::*;
     use crate::test_support::TestReader;
 
-    #[test]
-    fn test_ape_signature_valid() {
-        // Minimal APE file with MAC header
-        let mut data = vec![0u8; 1000];
+    /// Renders a tag the way a reader would see it, so expectations can be
+    /// written against ExifTool's printed strings regardless of whether the
+    /// parser stored a string or an integer.
+    fn text(metadata: &MetadataMap, key: &str) -> String {
+        match metadata.get(key) {
+            Some(TagValue::String(s)) => s.clone(),
+            Some(TagValue::Integer(i)) => i.to_string(),
+            Some(other) => panic!("{key} is not a printable scalar: {other:?}"),
+            None => panic!("missing tag {key}"),
+        }
+    }
+
+    /// Builds a v3.99 APE file: 32-byte descriptor, 24-byte header at
+    /// offset 52, then an APE tag block terminated by a footer.
+    fn build_ape(items: &[(&str, u32, &[u8])]) -> Vec<u8> {
+        let mut data = vec![0u8; 52];
         data[0..4].copy_from_slice(b"MAC ");
-        data[4..6].copy_from_slice(&3990u16.to_le_bytes()); // version 3.99
-        data[6..8].copy_from_slice(&2000u16.to_le_bytes()); // normal compression
-        data[16..20].copy_from_slice(&44100u32.to_le_bytes()); // sample rate
-        data[22..24].copy_from_slice(&2u16.to_le_bytes()); // stereo
-        data[24..26].copy_from_slice(&16u16.to_le_bytes()); // 16-bit
+        data[4..6].copy_from_slice(&3990u16.to_le_bytes());
+        data[8..12].copy_from_slice(&52u32.to_le_bytes()); // descriptor length
+        data[12..16].copy_from_slice(&24u32.to_le_bytes()); // header length
 
-        let reader = TestReader::new(data);
-        let parser = ApeParser;
-        let result = parser.parse(&reader);
-        assert!(result.is_ok());
+        let mut header = vec![0u8; 24];
+        header[0..2].copy_from_slice(&3000u16.to_le_bytes()); // CompressionLevel
+        header[4..8].copy_from_slice(&73728u32.to_le_bytes()); // BlocksPerFrame
+        header[8..12].copy_from_slice(&42662u32.to_le_bytes()); // FinalFrameBlocks
+        header[12..16].copy_from_slice(&2u32.to_le_bytes()); // TotalFrames
+        header[16..18].copy_from_slice(&16u16.to_le_bytes()); // BitsPerSample
+        header[18..20].copy_from_slice(&2u16.to_le_bytes()); // Channels
+        header[20..24].copy_from_slice(&44100u32.to_le_bytes()); // SampleRate
+        data.extend_from_slice(&header);
 
-        let metadata = result.unwrap();
+        let mut tag = Vec::new();
+        for (key, flags, value) in items {
+            tag.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            tag.extend_from_slice(&flags.to_le_bytes());
+            tag.extend_from_slice(key.as_bytes());
+            tag.push(0);
+            tag.extend_from_slice(value);
+        }
+
+        let total_size = tag.len() as u32 + 32;
+        data.extend_from_slice(&tag);
+        data.extend_from_slice(b"APETAGEX");
+        data.extend_from_slice(&2000u32.to_le_bytes());
+        data.extend_from_slice(&total_size.to_le_bytes());
+        data.extend_from_slice(&(items.len() as u32).to_le_bytes());
+        data.extend_from_slice(&0x4000_0000u32.to_le_bytes());
+        data.extend_from_slice(&[0u8; 8]);
+        data
+    }
+
+    #[test]
+    fn reads_new_layout_audio_header() {
+        let reader = TestReader::new(build_ape(&[]));
+        let metadata = ApeParser.parse(&reader).unwrap();
+
+        // ExifTool reports the raw compression code, not a friendly name.
+        assert_eq!(
+            metadata.get("APE:CompressionLevel").unwrap().as_integer(),
+            Some(3000)
+        );
+        assert_eq!(
+            metadata.get("APE:BlocksPerFrame").unwrap().as_integer(),
+            Some(73728)
+        );
+        assert_eq!(
+            metadata.get("APE:FinalFrameBlocks").unwrap().as_integer(),
+            Some(42662)
+        );
+        assert_eq!(
+            metadata.get("APE:TotalFrames").unwrap().as_integer(),
+            Some(2)
+        );
+        assert_eq!(
+            metadata.get("APE:BitsPerSample").unwrap().as_integer(),
+            Some(16)
+        );
+        assert_eq!(metadata.get("APE:Channels").unwrap().as_integer(), Some(2));
         assert_eq!(
             metadata.get("APE:SampleRate").unwrap().as_integer(),
             Some(44100)
@@ -328,8 +404,50 @@ mod tests {
     }
 
     #[test]
+    fn reads_tag_items_from_a_footer_only_tag() {
+        let reader = TestReader::new(build_ape(&[
+            ("Artist", 0, b"Kraftwerk".as_slice()),
+            ("Tool Name", 0, b"Media Center".as_slice()),
+            ("Media Jukebox: Date", 0, b"38353".as_slice()),
+        ]));
+        let metadata = ApeParser.parse(&reader).unwrap();
+
+        assert_eq!(text(&metadata, "APE:Artist"), "Kraftwerk");
+        assert_eq!(text(&metadata, "APE:ToolName"), "Media Center");
+        assert_eq!(text(&metadata, "APE:MediaJukeboxDate"), "38353");
+    }
+
+    #[test]
+    fn splits_cover_art_description_from_binary_value() {
+        let mut value = b"C:\\art.jpg".to_vec();
+        value.push(0);
+        value.extend_from_slice(&[0xff, 0xd8, 0xff, 0xe0]);
+        let reader = TestReader::new(build_ape(&[("Cover Art (front)", 0x02, &value)]));
+        let metadata = ApeParser.parse(&reader).unwrap();
+
+        assert_eq!(text(&metadata, "APE:CoverArtFrontDesc"), "C:\\art.jpg");
+        match metadata.get("APE:CoverArtFront").unwrap() {
+            TagValue::Binary(bytes) => assert_eq!(bytes.len(), 4),
+            other => panic!("expected binary cover art, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn make_tag_name_matches_exiftool_rules() {
+        assert_eq!(make_tag_name("Artist"), "Artist");
+        assert_eq!(make_tag_name("Tool Version"), "ToolVersion");
+        assert_eq!(make_tag_name("Media Jukebox: Date"), "MediaJukeboxDate");
+        assert_eq!(make_tag_name("Cover Art (front)"), "CoverArtFront");
+        assert_eq!(make_tag_name("Cover Art (front) Desc"), "CoverArtFrontDesc");
+        assert_eq!(
+            make_tag_name("replay_gain_track_gain"),
+            "ReplayGainTrackGain"
+        );
+    }
+
+    #[test]
     fn test_ape_signature_invalid() {
-        let data = b"INVALID DATA";
+        let data = b"INVALID DATA XXXXXXXXXXXXXXXXXXXXXXX";
         let reader = TestReader::from_slice(data);
         let parser = ApeParser;
         let result = parser.parse(&reader);
