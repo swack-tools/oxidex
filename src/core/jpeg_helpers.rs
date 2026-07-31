@@ -168,9 +168,11 @@ pub fn process_exif_segments(
                 let (exif_ifd_offset, gps_ifd_offset) =
                     process_ifd0_tags(&tags, byte_order, metadata);
 
-                // Parse EXIF Sub-IFD if present
+                // Parse EXIF Sub-IFD if present. `tiff_offset` is the absolute
+                // file position of the TIFF header, which ExifTool adds to
+                // stored offsets (e.g. the Interop IFD's OtherImageStart).
                 if let Some(offset) = exif_ifd_offset {
-                    parse_exif_subifd(&tiff_reader, offset, byte_order, metadata);
+                    parse_exif_subifd(&tiff_reader, offset, byte_order, tiff_offset, metadata);
                 }
 
                 // Parse GPS Sub-IFD if present
