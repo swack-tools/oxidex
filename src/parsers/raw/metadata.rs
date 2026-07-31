@@ -1091,6 +1091,33 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
     let reader = SliceReader::new(tiff_data);
     let ifd0_tags = parse_ifd(&reader, first_ifd_offset, byte_order)?;
 
+    // PanasonicRaw.pm makes JpgFromRaw (outer tag 0x002e) a JPEG
+    // subdirectory. These standard Exif::Main IFD0 tags are therefore emitted
+    // from the preview's existing EXIF parse, not from the outer Panasonic IFD.
+    for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
+        if !matches!(*tag_id, 0x0128 | 0x0132) {
+            continue;
+        }
+
+        let tag_value = if let Some(value) = format_exif_display_value(
+            *tag_id,
+            raw_bytes.as_ref(),
+            *field_type,
+            *value_count,
+            byte_order,
+        ) {
+            TagValue::new_string(value)
+        } else {
+            raw_bytes_to_simple_tag_value(
+                raw_bytes.as_ref(),
+                *field_type,
+                *value_count,
+                byte_order,
+            )
+        };
+        metadata.insert(lookup_tag_name(*tag_id, "EXIF"), tag_value);
+    }
+
     let exif_ifd_offset =
         ifd0_tags
             .iter()
@@ -1136,11 +1163,18 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
                 | 0xA404 // DigitalZoomRatio
                 | 0xA408 // Contrast
                 | 0xA409 // Saturation
+                | 0xA217 // SensingMethod
+                | 0xA301 // SceneType
+                | 0xA406 // SceneCaptureType
         ) {
             continue;
         }
 
-        let tag_name = lookup_tag_name(tag_id, "ExifIFD");
+        let tag_name = if matches!(tag_id, 0xA217 | 0xA301 | 0xA406) {
+            lookup_tag_name(tag_id, "EXIF")
+        } else {
+            lookup_tag_name(tag_id, "ExifIFD")
+        };
         let tag_value = if let Some(value) = format_exif_display_value(
             tag_id,
             raw_bytes.as_ref(),
@@ -1156,10 +1190,8 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
     }
 
     // The preview EXIF also carries an Interoperability IFD (ExifIFD tag
-    // 0xA005 -> InteropOffset). ExifTool reports [InteropIFD] InteropIndex for
-    // Panasonic.rw2; oxidex never descended into it (measured gap 2026-07-27).
-    // Only InteropIndex is taken: InteropVersion is not among the gaps the
-    // comparator reports for RW2, so emitting it would add an unmatched tag.
+    // 0xA005 -> InteropOffset). Descend through that existing pointer for both
+    // InteropIndex and InteropVersion.
     if let Some(interop_offset) =
         exif_tags
             .iter()
@@ -1171,7 +1203,7 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
                 }
             })
     {
-        extract_interop_index(&reader, interop_offset, byte_order, metadata);
+        extract_interop_tags(&reader, interop_offset, byte_order, metadata);
     }
 
     Ok(())
@@ -1193,7 +1225,7 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
 ///
 /// Values outside the table are printed unconverted by ExifTool, so an
 /// unrecognised index falls through to the trimmed raw string.
-fn extract_interop_index(
+fn extract_interop_tags(
     reader: &SliceReader<'_>,
     interop_offset: u64,
     byte_order: ByteOrder,
@@ -1204,23 +1236,45 @@ fn extract_interop_index(
         return;
     };
 
-    for (tag_id, _field_type, _value_count, raw_bytes) in &interop_tags {
-        if *tag_id != 0x0001 {
-            continue;
+    for (tag_id, field_type, value_count, raw_bytes) in &interop_tags {
+        match *tag_id {
+            0x0001 => {
+                let raw = String::from_utf8_lossy(raw_bytes.as_ref())
+                    .trim_end_matches('\0')
+                    .to_string();
+                let printed = match raw.as_str() {
+                    "R98" => "R98 - DCF basic file (sRGB)".to_string(),
+                    "R03" => "R03 - DCF option file (Adobe RGB)".to_string(),
+                    "THM" => "THM - DCF thumbnail file".to_string(),
+                    _ => raw,
+                };
+                metadata.insert(
+                    "InteropIFD:InteropIndex".to_string(),
+                    TagValue::new_string(printed),
+                );
+            }
+            // Exif::Interop 0x0002 is UNDEFINED[4], containing ASCII digits
+            // such as "0100". ExifTool reports it in family 0 as
+            // EXIF:InteropVersion.
+            0x0002 if *field_type == 7 => {
+                let Some(count) = usize::try_from(*value_count).ok() else {
+                    continue;
+                };
+                let Some(version) = raw_bytes.as_ref().get(..count) else {
+                    continue;
+                };
+                let version = String::from_utf8_lossy(version)
+                    .trim_end_matches('\0')
+                    .to_string();
+                if !version.is_empty() {
+                    metadata.insert(
+                        lookup_tag_name(*tag_id, "EXIF"),
+                        TagValue::new_string(version),
+                    );
+                }
+            }
+            _ => {}
         }
-        let raw = String::from_utf8_lossy(raw_bytes.as_ref())
-            .trim_end_matches('\0')
-            .to_string();
-        let printed = match raw.as_str() {
-            "R98" => "R98 - DCF basic file (sRGB)".to_string(),
-            "R03" => "R03 - DCF option file (Adobe RGB)".to_string(),
-            "THM" => "THM - DCF thumbnail file".to_string(),
-            _ => raw,
-        };
-        metadata.insert(
-            "InteropIFD:InteropIndex".to_string(),
-            TagValue::new_string(printed),
-        );
     }
 }
 
@@ -1690,6 +1744,15 @@ fn format_exif_display_value(
                 Some(format!("{}", f64::from(numerator) / f64::from(denominator)))
             }
         }
+        // ResolutionUnit: SHORT[1]. Exif.pm 0x0128 PrintConv.
+        0x0128 if field_type == 3 && value_count >= 1 => {
+            match read_tiff_u16(bytes, byte_order)? {
+                1 => Some("None".to_string()),
+                2 => Some("inches".to_string()),
+                3 => Some("cm".to_string()),
+                _ => None,
+            }
+        }
         // ColorSpace: SHORT[1].
         // CalibrationIlluminant1/2: int16u, and ExifTool prints them through
         // the SAME %lightSource hash that LightSource (0x9208) uses --
@@ -1863,6 +1926,34 @@ fn format_exif_display_value(
         }
         // CFAPattern: UNDEFINED with two endian-dependent u16 dimensions.
         0xA302 if field_type == 7 => decode_exif_cfa_pattern(bytes, byte_order),
+        // SensingMethod: SHORT[1]. Exif.pm 0xA217 PrintConv.
+        0xA217 if field_type == 3 && value_count >= 1 => {
+            match read_tiff_u16(bytes, byte_order)? {
+                1 => Some("Not defined".to_string()),
+                2 => Some("One-chip color area".to_string()),
+                3 => Some("Two-chip color area".to_string()),
+                4 => Some("Three-chip color area".to_string()),
+                5 => Some("Color sequential area".to_string()),
+                7 => Some("Trilinear".to_string()),
+                8 => Some("Color sequential linear".to_string()),
+                _ => None,
+            }
+        }
+        // SceneType: UNDEFINED[1]. Exif.pm defines only value 1.
+        0xA301 if field_type == 7 && value_count >= 1 => match bytes.first()? {
+            1 => Some("Directly photographed".to_string()),
+            _ => None,
+        },
+        // SceneCaptureType: SHORT[1]. Exif.pm 0xA406 PrintConv.
+        0xA406 if field_type == 3 && value_count >= 1 => {
+            match read_tiff_u16(bytes, byte_order)? {
+                0 => Some("Standard".to_string()),
+                1 => Some("Landscape".to_string()),
+                2 => Some("Portrait".to_string()),
+                3 => Some("Night".to_string()),
+                _ => None,
+            }
+        }
         // FlashpixVersion: UNDEFINED 4 bytes printed as e.g. "0100".
         0xA000 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
