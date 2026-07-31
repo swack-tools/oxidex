@@ -299,6 +299,17 @@ fn extension_to_format(ext: &str) -> Option<&'static str> {
         "jxl" => Some("JXL"),
         "avif" => Some("AVIF"),
         "3gp" | "3g2" => Some("3GP"),
+        // ExifTool's family-0 group for a transport stream is M2TS whether the
+        // file is .mts, .m2ts or a bare .ts, and that is the prefix oxidex
+        // emits too. Without this mapping the format was simply invisible to
+        // the harness: --format M2TS found no files and reported 0/0, which
+        // reads exactly like "already at parity".
+        "mts" | "m2ts" | "ts" => Some("M2TS"),
+        // Kept separate from MP4 rather than folded into it: both report their
+        // tags under the QuickTime group, but an audio-only .m4a exercises a
+        // different set of atoms, and merging the two would hide which one a
+        // coverage change came from.
+        "m4a" => Some("M4A"),
         "flv" => Some("FLV"),
         "wmv" | "asf" => Some("WMV"),
         "mxf" => Some("MXF"),
