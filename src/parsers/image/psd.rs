@@ -38,6 +38,18 @@ const COPYRIGHT_FLAG: u16 = 0x040A; // Copyright flag
 /// Extracts metadata from PSD files including dimensions, color mode, channels,
 /// bit depth, and embedded EXIF/IPTC/XMP data.
 pub struct PSDParser;
+/// Formats a PSD resolution the way ExifTool prints it.
+///
+/// The header stores a fixed-point value that is almost always whole, and
+/// ExifTool prints it without a fractional part -- "72", not "72.00". A
+/// hard-coded two decimals turned a correct number into a value mismatch.
+fn format_psd_resolution(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{}", value as i64)
+    } else {
+        format!("{}", value)
+    }
+}
 
 impl PSDParser {
     /// Verifies the PSD file signature ("8BPS")
@@ -82,21 +94,30 @@ impl PSDParser {
         // Channels (offset 12, 2 bytes)
         let channels = header_reader.u16_at(12).unwrap_or(0);
         metadata.insert(
-            "NumChannels".to_string(),
+            "Photoshop:NumChannels".to_string(),
             TagValue::Integer(channels as i64),
         );
 
         // Height (offset 14, 4 bytes)
         let height = header_reader.u32_at(14).unwrap_or(0);
-        metadata.insert("ImageHeight".to_string(), TagValue::Integer(height as i64));
+        metadata.insert(
+            "Photoshop:ImageHeight".to_string(),
+            TagValue::Integer(height as i64),
+        );
 
         // Width (offset 18, 4 bytes)
         let width = header_reader.u32_at(18).unwrap_or(0);
-        metadata.insert("ImageWidth".to_string(), TagValue::Integer(width as i64));
+        metadata.insert(
+            "Photoshop:ImageWidth".to_string(),
+            TagValue::Integer(width as i64),
+        );
 
         // Bit Depth (offset 22, 2 bytes)
         let depth = header_reader.u16_at(22).unwrap_or(0);
-        metadata.insert("BitDepth".to_string(), TagValue::Integer(depth as i64));
+        metadata.insert(
+            "Photoshop:BitDepth".to_string(),
+            TagValue::Integer(depth as i64),
+        );
 
         // Color Mode (offset 24, 2 bytes)
         let color_mode = header_reader.u16_at(24).unwrap_or(0);
@@ -112,7 +133,7 @@ impl PSDParser {
             _ => "Unknown",
         };
         metadata.insert(
-            "ColorMode".to_string(),
+            "Photoshop:ColorMode".to_string(),
             TagValue::String(color_mode_name.to_string()),
         );
 
@@ -262,12 +283,12 @@ impl PSDParser {
         let v_res = v_res_fixed as f64 / 65536.0;
 
         metadata.insert(
-            "XResolution".to_string(),
-            TagValue::String(format!("{:.2}", h_res)),
+            "Photoshop:XResolution".to_string(),
+            TagValue::String(format_psd_resolution(h_res)),
         );
         metadata.insert(
-            "YResolution".to_string(),
-            TagValue::String(format!("{:.2}", v_res)),
+            "Photoshop:YResolution".to_string(),
+            TagValue::String(format_psd_resolution(v_res)),
         );
         metadata.insert(
             "ResolutionUnit".to_string(),
