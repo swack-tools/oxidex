@@ -860,6 +860,21 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         let is_nef = matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW);
                         let is_rw2 = format == RawFormat::PanasonicRW2;
 
+                        // ExifTool gives the full-resolution DNG image IFD
+                        // priority over IFD0 for core image properties.  DNG
+                        // identifies that IFD with NewSubfileType == 0
+                        // (TIFF/EP tag 0x00fe); IFD0 is only the reduced-size
+                        // thumbnail and therefore reports 8-bit uncompressed
+                        // values in the sample instead of the raw image's
+                        // 16-bit JPEG values.
+                        let is_primary_dng_image = format == RawFormat::AdobeDNG
+                            && sub_tags.iter().any(|(tag_id, field_type, count, bytes)| {
+                                *tag_id == 0x00FE
+                                    && read_first_tiff_unsigned(
+                                        bytes.as_ref(), *field_type, *count, byte_order,
+                                    ) == Some(0)
+                            });
+
                         // DNG: StripOffsets/StripByteCounts are renamed by
                         // ExifTool in the embedded-image SubIFDs. Exif.pm 0x111
                         // (Notes, verbatim): "called StripOffsets in most
@@ -884,6 +899,42 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         }
 
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
+                            // Exif.pm defines BitsPerSample at 0x0102 and
+                            // Compression at 0x0103.  For a DNG primary image
+                            // ExifTool's directory-priority rules replace the
+                            // thumbnail values emitted from IFD0.
+                            if is_primary_dng_image && matches!(tag_id, 0x0102 | 0x0103) {
+                                let bytes = raw_bytes.as_ref();
+                                let display = if tag_id == 0x0102 {
+                                    read_tiff_numeric_array(
+                                        bytes,
+                                        field_type,
+                                        value_count,
+                                        byte_order,
+                                    )
+                                    .map(|values| values.join(" "))
+                                } else {
+                                    read_first_tiff_unsigned(
+                                        bytes,
+                                        field_type,
+                                        value_count,
+                                        byte_order,
+                                    )
+                                    .and_then(|value| {
+                                        crate::parsers::tiff::tiff_enums::tiff_enum_to_string(
+                                            tag_id, value as i64,
+                                        )
+                                    })
+                                };
+                                if let Some(display) = display {
+                                    metadata.insert(
+                                        lookup_tag_name(tag_id, "EXIF"),
+                                        TagValue::new_string(display),
+                                    );
+                                }
+                                continue;
+                            }
+
                             // CFARepeatPatternDim (Exif.pm 0x828d, Count => 2)
                             // is a SHORT[2] that ExifTool prints as the two
                             // dimensions separated by a space ("2 2"). The
@@ -1395,6 +1446,24 @@ fn format_dng_integer_array(
     Some(formatted.join(" "))
 }
 
+/// Read the first unsigned scalar from a TIFF BYTE, SHORT or LONG field.
+fn read_first_tiff_unsigned(
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<u32> {
+    if value_count == 0 {
+        return None;
+    }
+    match field_type {
+        1 => bytes.first().copied().map(u32::from),
+        3 => read_tiff_u16(bytes, byte_order).map(u32::from),
+        4 => read_tiff_u32(bytes, byte_order),
+        _ => None,
+    }
+}
+
 /// Read a TIFF numeric array as ExifTool's space-separated value string.
 ///
 /// Handles the field types the DNG SubIFD tags actually use: BYTE (1),
@@ -1710,6 +1779,40 @@ fn format_exif_display_value(
     byte_order: ByteOrder,
 ) -> Option<String> {
     match tag_id {
+        // DNGVersion and DNGBackwardVersion are BYTE[4]. Exif.pm defines the
+        // ids as 0xc612 and 0xc613 and joins the four components with dots.
+        0xC612 | 0xC613 if field_type == 1 && value_count == 4 => {
+            let version = bytes.get(..4)?;
+            Some(format!(
+                "{}.{}.{}.{}",
+                version[0], version[1], version[2], version[3]
+            ))
+        }
+        // DNGLensInfo (Exif.pm tag 0xc630) is RATIONAL[4]:
+        // minimum focal length, maximum focal length, minimum aperture at the
+        // short end, and minimum aperture at the long end. Its PrintConv uses
+        // "?" when the aperture pair is zero.
+        0xC630 if field_type == 5 && value_count == 4 => {
+            let values = read_tiff_numeric_array(bytes, field_type, value_count, byte_order)?;
+            let min_focal = values.first()?;
+            let max_focal = values.get(1)?;
+            let min_aperture = values.get(2)?;
+            let max_aperture = values.get(3)?;
+
+            let focal = if min_focal == max_focal {
+                format!("{}mm", min_focal)
+            } else {
+                format!("{}-{}mm", min_focal, max_focal)
+            };
+            let aperture = if min_aperture == "0" {
+                "?".to_string()
+            } else if min_aperture == max_aperture {
+                min_aperture.clone()
+            } else {
+                format!("{}-{}", min_aperture, max_aperture)
+            };
+            Some(format!("{} f/{}", focal, aperture))
+        }
         // ComponentsConfiguration: UNDEFINED[4].
         0x9101 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
@@ -2454,6 +2557,45 @@ mod panasonic_rw2_tests {
         // to the generic path.
         assert!(format_dng_subifd_exif_tag(0x0102, &[8, 0], 3, 1, le).is_none());
         assert!(format_dng_subifd_exif_tag(0x0103, &[7, 0], 3, 1, le).is_none());
+    }
+
+    #[test]
+    fn formats_dng_versions_and_lens_info() {
+        assert_eq!(
+            format_exif_display_value(
+                0xC612,
+                &[1, 1, 0, 0],
+                1,
+                4,
+                ByteOrder::BigEndian,
+            )
+            .as_deref(),
+            Some("1.1.0.0")
+        );
+        assert_eq!(
+            format_exif_display_value(
+                0xC613,
+                &[1, 1, 0, 0],
+                1,
+                4,
+                ByteOrder::BigEndian,
+            )
+            .as_deref(),
+            Some("1.1.0.0")
+        );
+
+        let lens: Vec<u8> = [(18u32, 1u32), (55, 1), (0, 1), (0, 1)]
+            .iter()
+            .flat_map(|(numerator, denominator)| {
+                let mut pair = numerator.to_be_bytes().to_vec();
+                pair.extend_from_slice(&denominator.to_be_bytes());
+                pair
+            })
+            .collect();
+        assert_eq!(
+            format_exif_display_value(0xC630, &lens, 5, 4, ByteOrder::BigEndian).as_deref(),
+            Some("18-55mm f/?")
+        );
     }
 
     #[test]
