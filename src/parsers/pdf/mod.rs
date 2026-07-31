@@ -310,6 +310,10 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
             metadata.insert(key.clone(), value.clone());
         }
     }
+    // ExifTool's PDF output reports the embedded source tags below, but does
+    // not report Oxidex's generic composite values for this file.
+    metadata.remove("Composite:Aperture");
+    metadata.remove("Composite:ISO");
 
     // If we didn't extract any metadata at all, return error
     if metadata.is_empty() {
@@ -322,10 +326,16 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 }
 
 const TIFF_ARTIST_TAG: u16 = 0x013b;
+const TAG_IMAGE_DESCRIPTION: u16 = 0x010e;
+const TAG_MAKE: u16 = 0x010f;
 const TAG_EXIF_IFD: u16 = 0x8769;
+const TAG_F_NUMBER: u16 = 0x829d;
+const TAG_ISO: u16 = 0x8827;
 const TAG_APERTURE_VALUE: u16 = 0x9202;
 const TAG_BRIGHTNESS_VALUE: u16 = 0x9203;
 const TAG_COLOR_SPACE: u16 = 0xA001;
+const TAG_FOCAL_PLANE_X_RESOLUTION: u16 = 0xA20e;
+const TAG_FOCAL_PLANE_Y_RESOLUTION: u16 = 0xA20f;
 const TAG_COMPONENTS_CONFIGURATION: u16 = 0x9101;
 const TAG_COMPRESSED_BITS_PER_PIXEL: u16 = 0x9102;
 const TAG_COMPRESSION: u16 = 0x0103;
@@ -569,6 +579,19 @@ fn parse_embedded_tiff_ifds(data: &[u8]) -> Option<MetadataMap> {
         let count = read_embedded_tiff_u32(data, base.checked_add(4)?, byte_order)?;
 
         match tag {
+            // ExifTool 13.55 Exif.pm 0x010e and 0x010f are IFD0 ASCII tags.
+            TAG_IMAGE_DESCRIPTION if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_IMAGE_DESCRIPTION, "IFD0");
+                    metadata.insert(key, crate::core::TagValue::new_string(v));
+                }
+            }
+            TAG_MAKE if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_MAKE, "IFD0");
+                    metadata.insert(key, crate::core::TagValue::new_string(v));
+                }
+            }
             TIFF_ARTIST_TAG if field_type == 2 => {
                 if let Some(v) = read_ascii_value(data, base, byte_order, count) {
                     if !v.is_empty() {
@@ -748,6 +771,60 @@ fn parse_exif_ifd(
                     if !s.is_empty() {
                         let key = crate::tag_db::lookup_tag_name(TAG_EXIF_VERSION, "ExifIFD");
                         metadata.insert(key, crate::core::TagValue::new_string(s));
+                    }
+                }
+            }
+            // ExifTool 13.55 Exif.pm 0x829d is rational64u and the PDF
+            // fixture reports the stored value as a one-decimal f-number.
+            TAG_F_NUMBER if field_type == 5 => {
+                if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
+                    if den != 0 {
+                        let key = crate::tag_db::lookup_tag_name(TAG_F_NUMBER, "ExifIFD");
+                        metadata.insert(
+                            key,
+                            crate::core::TagValue::new_string(format!(
+                                "{:.1}",
+                                f64::from(num) / f64::from(den)
+                            )),
+                        );
+                    }
+                }
+            }
+            // ExifTool 13.55 Exif.pm 0x8827 is PhotographicSensitivity,
+            // emitted as ISO for the embedded ExifIFD.
+            TAG_ISO if field_type == 3 => {
+                if let Some(raw) = read_short_value(data, base, byte_order) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_ISO, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(raw.to_string()));
+                }
+            }
+            // ExifTool 13.55 Exif.pm 0xa20e and 0xa20f are rational64u
+            // values with no enumerated PrintConv.
+            TAG_FOCAL_PLANE_X_RESOLUTION if field_type == 5 => {
+                if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
+                    if den != 0 {
+                        let key =
+                            crate::tag_db::lookup_tag_name(TAG_FOCAL_PLANE_X_RESOLUTION, "ExifIFD");
+                        metadata.insert(
+                            key,
+                            crate::core::TagValue::new_string(format_rational(
+                                f64::from(num) / f64::from(den),
+                            )),
+                        );
+                    }
+                }
+            }
+            TAG_FOCAL_PLANE_Y_RESOLUTION if field_type == 5 => {
+                if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
+                    if den != 0 {
+                        let key =
+                            crate::tag_db::lookup_tag_name(TAG_FOCAL_PLANE_Y_RESOLUTION, "ExifIFD");
+                        metadata.insert(
+                            key,
+                            crate::core::TagValue::new_string(format_rational(
+                                f64::from(num) / f64::from(den),
+                            )),
+                        );
                     }
                 }
             }
@@ -1360,10 +1437,16 @@ mod embedded_exif_tests {
 
     struct ExifFixture {
         copyright: &'static str,
+        image_description: &'static str,
+        make: &'static str,
         date_time_original: &'static str,
         create_date: &'static str,
+        f_number: (u32, u32),
+        iso: u16,
         aperture: (u32, u32),
         brightness: (i32, i32),
+        focal_plane_x_resolution: (u32, u32),
+        focal_plane_y_resolution: (u32, u32),
         flash: u16,
         flashpix: [u8; 4],
         color_space: u16,
@@ -1380,10 +1463,16 @@ mod embedded_exif_tests {
         fn default() -> Self {
             Self {
                 copyright: "Copyright 2004 Phil Harvey",
+                image_description: "A witty caption",
+                make: "FUJIFILM",
                 date_time_original: "2001:05:19 18:36:41",
                 create_date: "2001:05:19 18:36:41",
+                f_number: (350, 100),
+                iso: 100,
                 aperture: (360, 100),
                 brightness: (200, 100),
+                focal_plane_x_resolution: (3053, 1),
+                focal_plane_y_resolution: (3053, 1),
                 flash: 1,
                 flashpix: *b"0100",
                 color_space: 1,
@@ -1400,8 +1489,8 @@ mod embedded_exif_tests {
 
     impl ExifFixture {
         fn build(&self) -> Vec<u8> {
-            const IFD0_ENTRIES: usize = 2;
-            const EXIF_ENTRIES: usize = 11;
+            const IFD0_ENTRIES: usize = 4;
+            const EXIF_ENTRIES: usize = 15;
             const IFD1_ENTRIES: usize = 1;
 
             let ifd0_off = 8usize;
@@ -1424,6 +1513,8 @@ mod embedded_exif_tests {
             };
 
             let (copyright_count, copyright_at) = nul_terminated(self.copyright);
+            let (description_count, description_at) = nul_terminated(self.image_description);
+            let (make_count, make_at) = nul_terminated(self.make);
             let (dto_count, dto_at) = nul_terminated(self.date_time_original);
             let (create_count, create_at) = nul_terminated(self.create_date);
 
@@ -1432,11 +1523,21 @@ mod embedded_exif_tests {
                 bytes.extend_from_slice(&den);
                 push_heap(&bytes)
             };
+            let f_number_at =
+                rational(self.f_number.0.to_le_bytes(), self.f_number.1.to_le_bytes());
             let aperture_at =
                 rational(self.aperture.0.to_le_bytes(), self.aperture.1.to_le_bytes());
             let brightness_at = rational(
                 self.brightness.0.to_le_bytes(),
                 self.brightness.1.to_le_bytes(),
+            );
+            let focal_plane_x_at = rational(
+                self.focal_plane_x_resolution.0.to_le_bytes(),
+                self.focal_plane_x_resolution.1.to_le_bytes(),
+            );
+            let focal_plane_y_at = rational(
+                self.focal_plane_y_resolution.0.to_le_bytes(),
+                self.focal_plane_y_resolution.1.to_le_bytes(),
             );
 
             let short = |v: u16| -> [u8; 4] {
@@ -1446,6 +1547,8 @@ mod embedded_exif_tests {
             };
 
             let mut ifd0 = Vec::new();
+            ifd0.extend_from_slice(&entry(0x010e, 2, description_count, description_at));
+            ifd0.extend_from_slice(&entry(0x010f, 2, make_count, make_at));
             ifd0.extend_from_slice(&entry(0x8298, 2, copyright_count, copyright_at));
             ifd0.extend_from_slice(&entry(
                 0x8769,
@@ -1455,11 +1558,15 @@ mod embedded_exif_tests {
             ));
 
             let mut exif = Vec::new();
+            exif.extend_from_slice(&entry(0x829d, 5, 1, f_number_at));
+            exif.extend_from_slice(&entry(0x8827, 3, 1, short(self.iso)));
             exif.extend_from_slice(&entry(0x9003, 2, dto_count, dto_at));
             exif.extend_from_slice(&entry(0x9004, 2, create_count, create_at));
             exif.extend_from_slice(&entry(0x9202, 5, 1, aperture_at));
             exif.extend_from_slice(&entry(0x9203, 10, 1, brightness_at));
             exif.extend_from_slice(&entry(0x9209, 3, 1, short(self.flash)));
+            exif.extend_from_slice(&entry(0xa20e, 5, 1, focal_plane_x_at));
+            exif.extend_from_slice(&entry(0xa20f, 5, 1, focal_plane_y_at));
             exif.extend_from_slice(&entry(0xa000, 7, 4, self.flashpix));
             exif.extend_from_slice(&entry(0xa001, 3, 1, short(self.color_space)));
             exif.extend_from_slice(&entry(
@@ -1518,11 +1625,17 @@ mod embedded_exif_tests {
         // PDF.pdf` prints for that tag under ExifTool 13.55.
         let map = ExifFixture::default().tags();
 
+        assert_eq!(get(&map, "IFD0:ImageDescription"), "A witty caption");
+        assert_eq!(get(&map, "IFD0:Make"), "FUJIFILM");
         assert_eq!(get(&map, "IFD0:Copyright"), "Copyright 2004 Phil Harvey");
         assert_eq!(get(&map, "IFD1:Compression"), "JPEG (old-style)");
+        assert_eq!(get(&map, "ExifIFD:FNumber"), "3.5");
+        assert_eq!(get(&map, "ExifIFD:ISO"), "100");
         assert_eq!(get(&map, "ExifIFD:DateTimeOriginal"), "2001:05:19 18:36:41");
         assert_eq!(get(&map, "ExifIFD:CreateDate"), "2001:05:19 18:36:41");
         assert_eq!(get(&map, "ExifIFD:BrightnessValue"), "2");
+        assert_eq!(get(&map, "ExifIFD:FocalPlaneXResolution"), "3053");
+        assert_eq!(get(&map, "ExifIFD:FocalPlaneYResolution"), "3053");
         assert_eq!(get(&map, "ExifIFD:ExifImageWidth"), "8");
         assert_eq!(get(&map, "ExifIFD:ExifImageHeight"), "8");
         assert_eq!(get(&map, "ExifIFD:Flash"), "Fired");
@@ -1533,6 +1646,8 @@ mod embedded_exif_tests {
         // Exif.pm 0x9202 PrintConv => 'sprintf("%.1f",$val)' on
         // ValueConv => '2 ** ($val / 2)': 2**(3.6/2) = 3.4822... -> "3.5".
         assert_eq!(get(&map, "ExifIFD:ApertureValue"), "3.5");
+        assert!(map.get("Composite:Aperture").is_none());
+        assert!(map.get("Composite:ISO").is_none());
     }
 
     #[test]
