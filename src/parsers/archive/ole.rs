@@ -7,6 +7,9 @@ use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
 
+#[path = "../flashpix/mod.rs"]
+mod flashpix_property_sets;
+
 /// OLE file signature (magic bytes)
 const OLE_SIGNATURE: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 
@@ -477,6 +480,24 @@ impl FormatParser for OLEParser {
             "OLE:DirectoryEntryCount".to_string(),
             TagValue::new_integer(entries.len() as i64),
         );
+
+        // SummaryInformation and DocumentSummaryInformation are OLE property
+        // set streams. This connects the production OLE path to the existing
+        // FlashPix property-set decoder.
+        for entry in entries.iter().filter(|entry| {
+            entry.entry_type == STGTY_STREAM
+                && (entry.name == "\u{5}SummaryInformation"
+                    || entry.name == "\u{5}DocumentSummaryInformation")
+        }) {
+            if let Ok(stream) =
+                VBAAnalyzer::read_stream(reader, entry, &header, &fat, &mini_fat, root_entry)
+            {
+                let properties = flashpix_property_sets::parse_property_set(&stream)?;
+                for (key, value) in properties {
+                    metadata.insert(key, value);
+                }
+            }
+        }
 
         // Check for VBA macros
         let vba_metadata =
