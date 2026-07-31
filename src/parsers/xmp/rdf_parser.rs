@@ -851,6 +851,32 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
 /// `List => 'Seq'` allows several owners; multiple values are joined the same
 /// way `extract_about_cv_term_values` joins its list.
 fn extract_plus_copyright_owner_name(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
+    // Every PLUS sequence-of-structs in the schema has the identical shape --
+    // a container holding rdf:Seq/rdf:li[parseType=Resource] wrapping one
+    // named field -- and ExifTool reports only the inner field. This walker
+    // was written for CopyrightOwner alone; the other three were left to the
+    // generic path, which emits the CONTAINER under its bare name instead
+    // (XMP-plus:ImageCreator rather than XMP-plus:ImageCreatorName) and so
+    // matched nothing.
+    const PLUS_SEQUENCES: &[(&str, &str)] = &[
+        ("CopyrightOwner", "CopyrightOwnerName"),
+        ("ImageCreator", "ImageCreatorName"),
+        ("ImageSupplier", "ImageSupplierName"),
+        ("Licensor", "LicensorName"),
+    ];
+    let mut out = Vec::new();
+    for (container, field) in PLUS_SEQUENCES {
+        out.extend(extract_plus_sequence_field(xml_bytes, container, field)?);
+    }
+    Ok(out)
+}
+
+/// Collects one PLUS container's inner field; see the table above.
+fn extract_plus_sequence_field(
+    xml_bytes: &[u8],
+    container: &str,
+    field: &str,
+) -> Result<Vec<(String, String)>> {
     const PLUS_NS: &str = "http://ns.useplus.org/ldf/xmp/1.0/";
 
     let mut reader = Reader::from_reader(xml_bytes);
@@ -873,12 +899,12 @@ fn extract_plus_copyright_owner_name(xml_bytes: &[u8]) -> Result<Vec<(String, St
                 let tag_name = extract_tag_name(&e)?;
 
                 if owner_depth.is_none()
-                    && is_property_in_namespace(&tag_name, "CopyrightOwner", PLUS_NS, &resolver)
+                    && is_property_in_namespace(&tag_name, container, PLUS_NS, &resolver)
                 {
                     owner_depth = Some(depth);
                 } else if owner_depth.is_some()
                     && name_depth.is_none()
-                    && is_property_in_namespace(&tag_name, "CopyrightOwnerName", PLUS_NS, &resolver)
+                    && is_property_in_namespace(&tag_name, field, PLUS_NS, &resolver)
                 {
                     name_depth = Some(depth);
                     current_value.clear();
@@ -924,10 +950,7 @@ fn extract_plus_copyright_owner_name(xml_bytes: &[u8]) -> Result<Vec<(String, St
     if names.is_empty() {
         Ok(Vec::new())
     } else {
-        Ok(vec![(
-            "XMP:CopyrightOwnerName".to_string(),
-            names.join(", "),
-        )])
+        Ok(vec![(format!("XMP:{field}"), names.join(", "))])
     }
 }
 
