@@ -3563,6 +3563,40 @@ fn map_x3f_property_name(name: &str) -> String {
     }
 }
 
+/// Apply Exif.pm display conversions needed by values in an X3F preview's
+/// ExifIFD. The preview TIFF's byte order is passed explicitly.
+fn format_x3f_preview_exif_value(
+    tag_id: u16,
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    match tag_id {
+        // Exif.pm 0xA500 is rational64u. ExifTool displays a rational with a
+        // zero denominator as "undef".
+        0xA500 if field_type == 5 && value_count >= 1 => {
+            let denominator_bytes: [u8; 4] = bytes.get(4..8)?.try_into().ok()?;
+            let denominator = match byte_order {
+                ByteOrder::LittleEndian => u32::from_le_bytes(denominator_bytes),
+                ByteOrder::BigEndian => u32::from_be_bytes(denominator_bytes),
+            };
+            if denominator == 0 {
+                Some("undef".to_string())
+            } else {
+                format_exif_display_value(
+                    tag_id,
+                    bytes,
+                    field_type,
+                    value_count,
+                    byte_order,
+                )
+            }
+        }
+        _ => format_exif_display_value(tag_id, bytes, field_type, value_count, byte_order),
+    }
+}
+
 /// Parse X3F image section for embedded EXIF data
 ///
 /// X3F image sections (SECi) can contain embedded TIFF/EXIF data. This function
@@ -3632,6 +3666,10 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                             if let Some(offset) = exif_ifd_offset {
                                 if let Ok(exif_tags) = parse_ifd(&reader, offset, byte_order) {
                                     for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
+                                        // ISO (0x8827) is deliberately absent:
+                                        // X3F's canonical ISO is the SigmaRaw
+                                        // property, not the JPEG preview value.
+                                        // Importing it also creates Composite:ISO.
                                         // Whitelist: exact tag IDs ExifTool
                                         // emits for SigmaDP2.x3f.
                                         if !matches!(
@@ -3645,19 +3683,22 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                                 | 0x9101 // ComponentsConfiguration
                                                 | 0x9204 // ExposureCompensation
                                                 | 0x9209 // Flash
+                                                | 0x9208 // LightSource
                                                 | 0xA001 // ColorSpace
                                                 | 0xA002 // ExifImageWidth
                                                 | 0xA003 // ExifImageHeight
                                                 | 0xA300 // FileSource
                                                 | 0xA401 // CustomRendered
                                                 | 0xA402 // ExposureMode
+                                                | 0xA420 // ImageUniqueID
+                                                | 0xA500 // Gamma
                                         ) {
                                             continue;
                                         }
                                         let bytes = raw_bytes.as_ref();
                                         let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
                                         let tag_value = if let Some(value) =
-                                            format_exif_display_value(
+                                            format_x3f_preview_exif_value(
                                                 *tag_id,
                                                 bytes,
                                                 *field_type,
@@ -3674,6 +3715,84 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                             )
                                         };
                                         metadata.insert(tag_name, tag_value);
+                                    }
+
+                                    // ExifIFD tag 0xA005 points to the preview
+                                    // TIFF's Interoperability IFD. Its offsets
+                                    // use the same TIFF-header-relative base.
+                                    let interop_offset = exif_tags.iter().find_map(
+                                        |(tag_id, field_type, value_count, raw_bytes)| {
+                                            if *tag_id == 0xA005
+                                                && *field_type == 4
+                                                && *value_count >= 1
+                                            {
+                                                read_tiff_u32(raw_bytes.as_ref(), byte_order)
+                                                    .map(u64::from)
+                                            } else {
+                                                None
+                                            }
+                                        },
+                                    );
+
+                                    if let Some(interop_offset) = interop_offset
+                                        && let Ok(interop_tags) =
+                                            parse_ifd(&reader, interop_offset, byte_order)
+                                    {
+                                        for (
+                                            tag_id,
+                                            _field_type,
+                                            value_count,
+                                            raw_bytes,
+                                        ) in &interop_tags
+                                        {
+                                            let bytes = raw_bytes.as_ref();
+                                            let value = match *tag_id {
+                                                // Exif.pm InteropIndex
+                                                // PrintConv table, verbatim.
+                                                0x0001 => {
+                                                    let raw =
+                                                        String::from_utf8_lossy(bytes)
+                                                            .trim_end_matches('\0')
+                                                            .to_string();
+                                                    match raw.as_str() {
+                                                        "R98" => {
+                                                            "R98 - DCF basic file (sRGB)"
+                                                                .to_string()
+                                                        }
+                                                        "R03" => {
+                                                            "R03 - DCF option file (Adobe RGB)"
+                                                                .to_string()
+                                                        }
+                                                        "THM" => {
+                                                            "THM - DCF thumbnail file".to_string()
+                                                        }
+                                                        _ => raw,
+                                                    }
+                                                }
+                                                // Exif.pm InteropVersion tag
+                                                // 0x0002 is UNDEFINED[4]
+                                                // containing ASCII digits.
+                                                0x0002 => {
+                                                    let Some(count) =
+                                                        usize::try_from(*value_count).ok()
+                                                    else {
+                                                        continue;
+                                                    };
+                                                    let Some(version) = bytes.get(..count) else {
+                                                        continue;
+                                                    };
+                                                    String::from_utf8_lossy(version)
+                                                        .trim_end_matches('\0')
+                                                        .to_string()
+                                                }
+                                                _ => continue,
+                                            };
+
+                                            metadata.insert(
+                                                lookup_tag_name(*tag_id, "InteropIFD"),
+                                                TagValue::new_string(value),
+                                            );
+                                        }
                                     }
                                 }
                             }
