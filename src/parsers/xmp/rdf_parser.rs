@@ -275,6 +275,14 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
         }
     }
 
+    // PLUS Custom1 is specifically defined as a Bag of language alternatives.
+    // Replace the generic collection value with ExifTool's per-language lists.
+    let custom1_values = extract_plus_custom1_lang_alt_values(xml_bytes)?;
+    if !custom1_values.is_empty() {
+        results.retain(|(tag, _)| tag != "XMP:Custom1" && tag != "XMP-plus:Custom1");
+        results.extend(custom1_values);
+    }
+
     // Flatten top-level `rdf:parseType="Resource"` structures into
     // ParentField tags, the way ExifTool's XMP::GetXMPTagID builds tag IDs
     // ("$tag .= ucfirst($nm)", XMP.pm). This is what produces e.g.
@@ -285,6 +293,13 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
         if !results.iter().any(|(t, _)| t == tag) {
             results.push((tag.clone(), value.clone()));
         }
+    }
+
+    if let Some(document_id) = extract_derived_from_document_id(xml_bytes)? {
+        const TAG: &str = "XMP:DerivedFromDocumentID";
+
+        results.retain(|(tag, _)| tag != TAG);
+        results.push((TAG.to_string(), document_id));
     }
 
     // PLUS CopyrightOwner is a Seq of structures rather than a bare struct,
@@ -300,6 +315,7 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
     let results = results
         .into_iter()
         .map(|(tag, value)| {
+            let tag = canonicalize_xmp_tag_name(tag);
             let formatted = format_xmp_value(&tag, &value);
             (tag, formatted)
         })
@@ -824,6 +840,273 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
     Ok(results)
 }
 
+/// Extracts language-qualified lists from the PLUS `Custom1` property.
+///
+/// This pass is intentionally limited to the exact `plus:Custom1` property.
+/// Other XMP properties may use the same Bag-of-Alt RDF shape without having
+/// equivalent flattened language tags in ExifTool's tables.
+fn extract_plus_custom1_lang_alt_values(
+    xml_bytes: &[u8],
+) -> Result<Vec<(String, String)>> {
+    const PLUS_NS: &str = "http://ns.useplus.org/ldf/xmp/1.0/";
+
+    let mut reader = Reader::from_reader(xml_bytes);
+    reader.config_mut().trim_text(true);
+
+    let mut resolver = NamespaceResolver::new();
+    let mut results = Vec::new();
+    let mut buf = Vec::new();
+    let mut depth = 0usize;
+    let mut description_depth = None;
+    let mut property_depth = None;
+    let mut property_name = String::new();
+    let mut bag_depth = None;
+    let mut item_depth = None;
+    let mut alt_depth = None;
+    let mut language_item_depth = None;
+    let mut current_language = None;
+    let mut current_value = String::new();
+    let mut language_values: Vec<(String, Vec<String>)> = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                depth += 1;
+                register_namespaces_from_element(&e, &mut resolver)?;
+                let tag_name = extract_tag_name(&e)?;
+
+                if description_depth.is_none()
+                    && is_rdf_description(&tag_name, &resolver)
+                {
+                    description_depth = Some(depth);
+                } else if property_depth.is_none()
+                    && description_depth.is_some_and(|d| depth == d + 1)
+                    && is_property_in_namespace(&tag_name, "Custom1", PLUS_NS, &resolver)
+                {
+                    property_depth = Some(depth);
+                    property_name = format_tag_name(&tag_name, &resolver);
+                    language_values.clear();
+                } else if property_depth.is_some_and(|d| depth == d + 1)
+                    && bag_depth.is_none()
+                    && is_collection_container(&tag_name, &resolver)
+                    && NamespaceResolver::extract_local_name(&tag_name) == "Bag"
+                {
+                    bag_depth = Some(depth);
+                } else if bag_depth.is_some_and(|d| depth == d + 1)
+                    && item_depth.is_none()
+                    && is_rdf_li(&tag_name, &resolver)
+                {
+                    item_depth = Some(depth);
+                } else if item_depth.is_some_and(|d| depth == d + 1)
+                    && alt_depth.is_none()
+                    && is_collection_container(&tag_name, &resolver)
+                    && NamespaceResolver::extract_local_name(&tag_name) == "Alt"
+                {
+                    alt_depth = Some(depth);
+                } else if alt_depth.is_some_and(|d| depth == d + 1)
+                    && language_item_depth.is_none()
+                    && is_rdf_li(&tag_name, &resolver)
+                    && let Some(language) = xml_lang_attribute(&e)
+                {
+                    language_item_depth = Some(depth);
+                    current_language = Some(language);
+                    current_value.clear();
+                }
+            }
+
+            Ok(Event::End(_)) => {
+                if language_item_depth == Some(depth) {
+                    if let Some(language) = current_language.take() {
+                        push_language_value(
+                            &mut language_values,
+                            language,
+                            current_value.trim().to_string(),
+                        );
+                    }
+                    current_value.clear();
+                    language_item_depth = None;
+                }
+
+                if alt_depth == Some(depth) {
+                    alt_depth = None;
+                }
+                if item_depth == Some(depth) {
+                    item_depth = None;
+                }
+                if bag_depth == Some(depth) {
+                    bag_depth = None;
+                }
+
+                if property_depth == Some(depth) {
+                    for (language, values) in &language_values {
+                        let tag = if language == "x-default" {
+                            property_name.clone()
+                        } else {
+                            format!("{property_name}-{language}")
+                        };
+                        results.push((tag, values.join(", ")));
+                    }
+
+                    property_depth = None;
+                    property_name.clear();
+                    language_values.clear();
+                }
+
+                if description_depth == Some(depth) {
+                    description_depth = None;
+                }
+
+                depth = depth.saturating_sub(1);
+            }
+
+            Ok(Event::Empty(e)) => {
+                register_namespaces_from_element(&e, &mut resolver)?;
+                let tag_name = extract_tag_name(&e)?;
+
+                // XMP9.xmp contains an explicitly empty French alternative
+                // in the second outer item. It occupies a list position.
+                if alt_depth == Some(depth)
+                    && is_rdf_li(&tag_name, &resolver)
+                    && let Some(language) = xml_lang_attribute(&e)
+                {
+                    push_language_value(&mut language_values, language, String::new());
+                }
+            }
+
+            Ok(Event::Text(e)) => {
+                if language_item_depth.is_some()
+                    && let Ok(decoded) = e.xml10_content()
+                {
+                    let unescaped =
+                        quick_xml::escape::unescape(&decoded).unwrap_or_else(|_| decoded.clone());
+                    current_value.push_str(&unescaped);
+                }
+            }
+
+            Ok(Event::GeneralRef(e)) => {
+                if language_item_depth.is_some()
+                    && let Ok(entity_name) = e.xml10_content()
+                {
+                    if let Ok(Some(ch)) = e.resolve_char_ref() {
+                        current_value.push(ch);
+                    } else if let Some(resolved) = resolve_predefined_entity(&entity_name) {
+                        current_value.push_str(resolved);
+                    } else {
+                        current_value.push('&');
+                        current_value.push_str(&entity_name);
+                        current_value.push(';');
+                    }
+                }
+            }
+
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(e) => {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid PLUS Custom1 language alternatives: {e}"
+                )));
+            }
+        }
+
+        buf.clear();
+    }
+
+    Ok(results)
+}
+
+fn push_language_value(
+    values: &mut Vec<(String, Vec<String>)>,
+    language: String,
+    value: String,
+) {
+    if let Some((_, existing)) = values
+        .iter_mut()
+        .find(|(existing_language, _)| *existing_language == language)
+    {
+        existing.push(value);
+    } else {
+        values.push((language, vec![value]));
+    }
+}
+
+/// Extracts `stRef:documentID` specifically from `xmpMM:DerivedFrom`.
+///
+/// Older Adobe XMP serializes this resource-reference field as an attribute
+/// instead of a child property, so the normal structured-field pass does not
+/// see it.
+fn extract_derived_from_document_id(xml_bytes: &[u8]) -> Result<Option<String>> {
+    const XMP_MM_NS: &str = "http://ns.adobe.com/xap/1.0/mm/";
+    const ST_REF_NS: &str = "http://ns.adobe.com/xap/1.0/sType/ResourceRef#";
+
+    let mut reader = Reader::from_reader(xml_bytes);
+    let mut resolver = NamespaceResolver::new();
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                register_namespaces_from_element(&e, &mut resolver)?;
+                let tag_name = extract_tag_name(&e)?;
+
+                if is_property_in_namespace(&tag_name, "DerivedFrom", XMP_MM_NS, &resolver)
+                    && let Some(value) = namespaced_attribute_value(
+                        &e,
+                        "documentID",
+                        ST_REF_NS,
+                        &resolver,
+                    )?
+                {
+                    return Ok(Some(value));
+                }
+            }
+
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(e) => {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid XMP DerivedFrom structure: {e}"
+                )));
+            }
+        }
+
+        buf.clear();
+    }
+
+    Ok(None)
+}
+
+fn namespaced_attribute_value(
+    element: &BytesStart,
+    expected_local_name: &str,
+    expected_namespace: &str,
+    resolver: &NamespaceResolver,
+) -> Result<Option<String>> {
+    for attr in element.attributes().flatten() {
+        let key = std::str::from_utf8(attr.key.as_ref()).map_err(|e| {
+            ExifToolError::parse_error(format!("Invalid UTF-8 in XMP attribute name: {e}"))
+        })?;
+        let Some(prefix) = NamespaceResolver::extract_prefix(key) else {
+            continue;
+        };
+
+        if NamespaceResolver::extract_local_name(key) != expected_local_name
+            || resolver.resolve_prefix(prefix) != Some(expected_namespace)
+        {
+            continue;
+        }
+
+        let value = std::str::from_utf8(attr.value.as_ref()).map_err(|e| {
+            ExifToolError::parse_error(format!("Invalid UTF-8 in XMP attribute value: {e}"))
+        })?;
+        let value = value.trim();
+        if !value.is_empty() {
+            return Ok(Some(value.to_string()));
+        }
+    }
+
+    Ok(None)
+}
+
 /// Extracts `plus:CopyrightOwnerName` from the PLUS `CopyrightOwner` sequence.
 ///
 /// `PLUS.pm` defines the structure and its flattened name:
@@ -1161,6 +1444,76 @@ fn is_property_in_namespace(
 }
 
 #[cfg(test)]
+mod corpus_coverage_gap_tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    fn load_corpus_sample(file_name: &str) -> Option<Vec<u8>> {
+        let configured_root =
+            std::env::var_os("OXIDEX_EXIFTOOL_SAMPLE_DIR").map(PathBuf::from);
+        let cached_root =
+            Path::new("/tmp/oxidex-exiftool-cache/combined-samples").to_path_buf();
+
+        configured_root
+            .into_iter()
+            .chain(std::iter::once(cached_root))
+            .find_map(|root| std::fs::read(root.join(file_name)).ok())
+    }
+
+    #[test]
+    fn extracts_reported_xmp3_corpus_tags() {
+        let Some(xml) = load_corpus_sample("XMP3.xmp") else {
+            return;
+        };
+        let parsed = parse_xmp(&xml).unwrap();
+
+        assert!(parsed.contains(&("XMP:CountryCode".to_string(), "CA".to_string())));
+        assert!(parsed.contains(&(
+            "XMP:Custom0020Property00201".to_string(),
+            "a custom property value".to_string(),
+        )));
+        assert!(parsed.contains(&(
+            "XMP:Custom0020Property00202".to_string(),
+            "some other value".to_string(),
+        )));
+        assert!(!parsed
+            .iter()
+            .any(|(tag, _)| tag.starts_with("XMP:BTestTag-")));
+    }
+
+    #[test]
+    fn extracts_reported_xmp9_corpus_language_lists() {
+        let Some(xml) = load_corpus_sample("XMP9.xmp") else {
+            return;
+        };
+        let parsed = parse_xmp(&xml).unwrap();
+
+        assert!(parsed.contains(&(
+            "XMP:Custom1-de".to_string(),
+            "de1, de3".to_string(),
+        )));
+        assert!(parsed.contains(&(
+            "XMP:Custom1-fr".to_string(),
+            "fr1, , fr3".to_string(),
+        )));
+        assert!(!parsed.iter().any(|(tag, _)| tag == "XMP-plus:Custom1"));
+    }
+
+    #[test]
+    fn extracts_reported_derived_from_id_from_xmp_corpus() {
+        let Some(xml) = load_corpus_sample("XMP.xmp") else {
+            return;
+        };
+        let parsed = parse_xmp(&xml).unwrap();
+
+        assert!(parsed.contains(&(
+            "XMP:DerivedFromDocumentID".to_string(),
+            "adobe:docid:photoshop:f481cc67-d8f5-11d9-a31e-a1606d941d83".to_string(),
+        )));
+    }
+}
+
+#[cfg(test)]
 mod about_cv_term_tests {
     use super::*;
 
@@ -1410,6 +1763,24 @@ fn register_namespaces_from_element(
     Ok(())
 }
 
+/// Applies ExifTool table names after namespace-family formatting.
+///
+/// These are table-defined exceptions to the default namespace family, so the
+/// canonicalization is shared by element, attribute, and focused-pass output.
+fn canonicalize_xmp_tag_name(tag: String) -> String {
+    if tag == "XMP-iptcCore:CountryCode" {
+        return "XMP:CountryCode".to_string();
+    }
+
+    if let Some(suffix) = tag.strip_prefix("XMP-plus:Custom1") {
+        if suffix.is_empty() || suffix.starts_with('-') {
+            return format!("XMP:Custom1{suffix}");
+        }
+    }
+
+    tag
+}
+
 /// Formats a tag name to match ExifTool's XMP output conventions.
 ///
 /// ExifTool uses a simplified "XMP:" prefix for most common XMP properties,
@@ -1426,6 +1797,9 @@ fn format_tag_name(qname: &str, resolver: &NamespaceResolver) -> String {
     use super::namespace_mapping::namespace_to_family;
 
     let mut local_name = NamespaceResolver::extract_local_name(qname).to_string();
+    // XMP3.xmp uses U+2182 immediately before an ASCII "0020" escape in
+    // custom XML names. ExifTool omits this marker from the reported tag ID.
+    local_name = local_name.replace('\u{2182}', "");
 
     // Extract namespace prefix from the qualified name
     if let Some(prefix) = NamespaceResolver::extract_prefix(qname) {
