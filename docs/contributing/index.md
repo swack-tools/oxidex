@@ -528,6 +528,49 @@ cargo bench
 
 ## Documentation
 
+### Building the Documentation Site
+
+The site is [VitePress](https://vitepress.dev/) and lives in `docs/`. A fresh clone
+builds with no extra setup:
+
+```bash
+cd docs
+npm ci
+npm run docs:build   # or: npm run docs:dev
+```
+
+**About `docs/reference/comparison/`.** The per-format ExifTool comparison report is a
+generated artifact, not a checked-in one — the directory is listed in `.gitignore` and
+the deploy workflow regenerates it on every deploy. So on a clean checkout it is empty.
+
+You do **not** need to generate it to build or preview the docs. `npm run docs:build`
+runs `scripts/ensure-comparison-stub.mjs` first, which drops a clearly-labelled
+placeholder page at `/reference/comparison/` so every link resolves and the build
+succeeds. If you want the real tables locally:
+
+```bash
+just compare-exiftool-full-update
+```
+
+That downloads a sample corpus, builds the `tag-comparison` binary in release mode and
+runs it against a real ExifTool install, so it needs a Rust toolchain plus Perl and
+takes a while. Once it has run, the stub script sees the generated `index.md` and leaves
+it alone.
+
+The `Docs Build` CI workflow builds the site from a clean checkout on every PR that
+touches `docs/`, deliberately *without* running the generator — that is what keeps the
+cold-clone build honest.
+
+### Two markdown patterns that silently break the build
+
+VitePress compiles markdown through Vue, so two things that look like prose are treated
+as code and fail the build. Both have broken this site before:
+
+- A line that **starts** with a bare angle-bracket tag is parsed as a Vue component.
+- Unfenced double curly braces are parsed as a Vue interpolation.
+
+Keep either inside a fenced code block or inline backticks and they are safe.
+
 ### Inline Documentation
 
 Use rustdoc for all public APIs:
