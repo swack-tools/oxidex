@@ -811,19 +811,9 @@ fn extract_derived_from_ids(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
                     && is_property_in_namespace(&tag_name, "DerivedFrom", XMP_MM_NS, &resolver)
                 {
                     derived_depth = Some(depth);
-                    append_derived_from_attributes(
-                        &e,
-                        &resolver,
-                        ST_REF_NS,
-                        &mut results,
-                    )?;
+                    append_derived_from_attributes(&e, &resolver, ST_REF_NS, &mut results)?;
                 } else if derived_depth.is_some() {
-                    append_derived_from_attributes(
-                        &e,
-                        &resolver,
-                        ST_REF_NS,
-                        &mut results,
-                    )?;
+                    append_derived_from_attributes(&e, &resolver, ST_REF_NS, &mut results)?;
 
                     if field_depth.is_none() {
                         field_tag = derived_from_field_tag(&tag_name, &resolver, ST_REF_NS);
@@ -870,19 +860,9 @@ fn extract_derived_from_ids(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
                 if derived_depth.is_none()
                     && is_property_in_namespace(&tag_name, "DerivedFrom", XMP_MM_NS, &resolver)
                 {
-                    append_derived_from_attributes(
-                        &e,
-                        &resolver,
-                        ST_REF_NS,
-                        &mut results,
-                    )?;
+                    append_derived_from_attributes(&e, &resolver, ST_REF_NS, &mut results)?;
                 } else if derived_depth.is_some() {
-                    append_derived_from_attributes(
-                        &e,
-                        &resolver,
-                        ST_REF_NS,
-                        &mut results,
-                    )?;
+                    append_derived_from_attributes(&e, &resolver, ST_REF_NS, &mut results)?;
                     if let Some(tag) = derived_from_field_tag(&tag_name, &resolver, ST_REF_NS)
                         && let Some(value) = resource_attribute(&e)?
                     {

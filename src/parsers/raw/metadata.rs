@@ -1347,8 +1347,7 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
             );
         }
         if let (Some(offset), Some(length)) = (thumbnail_offset, thumbnail_length)
-            && let (Ok(offset), Ok(length)) =
-                (usize::try_from(offset), usize::try_from(length))
+            && let (Ok(offset), Ok(length)) = (usize::try_from(offset), usize::try_from(length))
             && let Some(end) = offset.checked_add(length)
             && let Some(image) = tiff_data.get(offset..end)
         {
