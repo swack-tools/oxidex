@@ -518,6 +518,21 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         continue; // Don't add raw MakerNote to metadata, will be parsed separately
                     }
 
+                    // XMP packet (tag 0x02BC, ApplicationNotes). RAW files
+                    // carry their XMP here exactly as JPEG carries it in APP1,
+                    // and oxidex has had an XMP parser all along -- this walk
+                    // simply never handed the bytes to it, so every RAW file
+                    // reported zero XMP tags while ExifTool read them.
+                    if *tag_id == 0x02BC {
+                        if let Ok(xmp_tags) = crate::parsers::xmp::rdf_parser::parse_xmp(bytes) {
+                            for (tag_name, tag_value) in xmp_tags {
+                                metadata.insert(tag_name, TagValue::new_string(tag_value));
+                            }
+                        }
+                        // The raw packet itself is not a tag ExifTool reports.
+                        continue;
+                    }
+
                     // IPTC-NAA (tag 0x83BB) – parse embedded IPTC records
                     if *tag_id == 0x83BB {
                         if let Ok(iptc_tags) = parse_iptc_naa(bytes) {
