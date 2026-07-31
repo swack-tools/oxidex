@@ -69,7 +69,7 @@ MakerNote parsers for 39+ camera manufacturers are **fully implemented and conne
 | RAW photos | ✅ 90% | DNG, CR2, NEF, ARW, etc. |
 | Video files | ✅ 90% | QuickTime, Matroska, RIFF |
 | Audio files | ✅ 100% | ID3, FLAC, Vorbis, AAC |
-| PDF documents | ✅ 75% | Info dict, XMP |
+| PDF documents | ✅ 90% | Info dict, XMP |
 | Office docs | ✅ 75% | OOXML, iWork |
 | Executables | ✅ 80% | PE, ELF, Mach-O |
 
@@ -105,13 +105,13 @@ MakerNote parsers for 39+ camera manufacturers are **fully implemented and conne
 | MP4 | 90% | ✅ Good |
 | MOV | 90% | ✅ Good |
 | ZIP | 90% | ✅ Good |
+| PDF | 90% | ✅ Good |
 | BMP | 90% | ✅ Good |
 | GIF | 90% | ✅ Good |
 | WebP | 90% | ✅ Good |
 | Mach-O | 75% | ✅ Good |
 | TEXT | 75% | ✅ Good |
 | ELF | 75% | ✅ Good |
-| PDF | 75% | ✅ Good |
 | DOCX | 75% | ✅ Good |
 | XLSX | 75% | ✅ Good |
 | JPEG | 60% | ✅ Good |
