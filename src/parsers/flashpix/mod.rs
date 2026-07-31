@@ -190,6 +190,15 @@ pub fn parse_property_set(data: &[u8]) -> Result<MetadataMap> {
         return Ok(metadata);
     }
 
+    // Property IDs are local to the property set. In particular, 0x02 is
+    // Title in SummaryInformation but Category in DocumentSummaryInformation.
+    let section_fmtid = &data[28..44];
+    let is_summary_info = section_fmtid == FMTID_SUMMARY_INFO;
+    let is_document_summary_info = section_fmtid == FMTID_DOC_SUMMARY_INFO;
+    if !is_summary_info && !is_document_summary_info {
+        return Ok(metadata);
+    }
+
     let reader = EndianReader::little_endian(data);
 
     // Parse property set header
@@ -245,25 +254,39 @@ pub fn parse_property_set(data: &[u8]) -> Result<MetadataMap> {
         let vt_type = reader.u16_at(abs_offset as u64).unwrap_or(0);
         let value_offset = abs_offset + 4;
 
+        if prop_id == PID_CODEPAGE {
+            if vt_type == VT_I2
+                && let Ok(code_page) = reader.u16_at(value_offset as u64)
+            {
+                let value = match code_page {
+                    10000 => TagValue::String(
+                        "Mac Roman (Western European)".to_string(),
+                    ),
+                    _ => TagValue::Integer(i64::from(code_page)),
+                };
+                metadata.insert("FlashPix:CodePage", value);
+            }
+            continue;
+        }
+
         if let Some(value) = parse_property_value(data, value_offset, vt_type) {
-            let tag_name = match prop_id {
-                PID_CODEPAGE => "FlashPix:CodePage",
-                PID_TITLE => "FlashPix:Title",
-                PID_SUBJECT => "FlashPix:Subject",
-                PID_AUTHOR => "FlashPix:Author",
-                PID_KEYWORDS => "FlashPix:Keywords",
-                PID_COMMENTS => "FlashPix:Comments",
-                PID_TEMPLATE => "FlashPix:Template",
-                PID_LASTAUTHOR => "FlashPix:LastModifiedBy",
-                PID_REVNUMBER => "FlashPix:RevisionNumber",
-                PID_EDITTIME => "FlashPix:TotalEditTime",
-                PID_LASTPRINTED => "FlashPix:LastPrinted",
-                PID_CREATE_DTM => "FlashPix:CreateDate",
-                PID_LASTSAVE_DTM => "FlashPix:ModifyDate",
-                PID_PAGECOUNT => "FlashPix:Pages",
-                PID_COMPANY => "FlashPix:Company",
-                PID_MANAGER => "FlashPix:Manager",
-                PID_CATEGORY => "FlashPix:Category",
+            let tag_name = match (is_summary_info, is_document_summary_info, prop_id) {
+                (true, false, PID_TITLE) => "FlashPix:Title",
+                (true, false, PID_SUBJECT) => "FlashPix:Subject",
+                (true, false, PID_AUTHOR) => "FlashPix:Author",
+                (true, false, PID_KEYWORDS) => "FlashPix:Keywords",
+                (true, false, PID_COMMENTS) => "FlashPix:Comments",
+                (true, false, PID_TEMPLATE) => "FlashPix:Template",
+                (true, false, PID_LASTAUTHOR) => "FlashPix:LastModifiedBy",
+                (true, false, PID_REVNUMBER) => "FlashPix:RevisionNumber",
+                (true, false, PID_EDITTIME) => "FlashPix:TotalEditTime",
+                (true, false, PID_LASTPRINTED) => "FlashPix:LastPrinted",
+                (true, false, PID_CREATE_DTM) => "FlashPix:CreateDate",
+                (true, false, PID_LASTSAVE_DTM) => "FlashPix:ModifyDate",
+                (true, false, PID_PAGECOUNT) => "FlashPix:Pages",
+                (false, true, PID_COMPANY) => "FlashPix:Company",
+                (false, true, PID_MANAGER) => "FlashPix:Manager",
+                (false, true, PID_CATEGORY) => "FlashPix:Category",
                 _ => continue,
             };
 
