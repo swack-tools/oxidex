@@ -15,6 +15,7 @@ the whole test via env patching, which also covers squad_merge_loop.py's
 own internal git calls (its `_git` helper doesn't take an env override,
 so it inherits process os.environ at call time).
 """
+import errno
 import json
 import os
 import signal
@@ -1622,6 +1623,133 @@ class CandidateBranchExclusivityTests(GitRepoTestCase):
         path.write_text('[squads."sigma-c2pa"]\nmodules = ["Sigma"]\nformats = ["X3F"]\n')
         self.assertEqual(sml.candidate_worker_branches(repo, path, "sigma-c2pa"),
                          [("X3F", "model-fix-parallel-x3f")])
+
+
+# ---------------------------------------------------------------------------
+# Crash classification + bounded transient retry (merger supervision)
+# ---------------------------------------------------------------------------
+
+class ClassifyExceptionTests(unittest.TestCase):
+    """transient = "the machine cannot serve this right now" (the 2026-07-30
+    ENOSPC mass death); everything else is a bug and must stay fatal."""
+
+    def test_enospc_is_transient(self):
+        exc = OSError(errno.ENOSPC, "No space left on device")
+        self.assertEqual(sml.classify_exception(exc), "transient")
+
+    def test_plain_bug_is_fatal(self):
+        self.assertEqual(sml.classify_exception(ValueError("bad config")), "fatal")
+
+    def test_oserror_with_non_resource_errno_is_fatal(self):
+        # ENOENT is a wrong path, not a wedged machine -- retrying cannot fix it.
+        self.assertEqual(sml.classify_exception(OSError(errno.ENOENT, "gone")), "fatal")
+
+    def test_walks_the_explicit_cause_chain(self):
+        # The real ENOSPC surfaced through tempfile/contextlib wrappers; a
+        # domain exception raised `from` it must not reclassify a full disk.
+        try:
+            try:
+                raise OSError(errno.ENOSPC, "No space left on device")
+            except OSError as inner:
+                raise RuntimeError("could not create scratch file") from inner
+        except RuntimeError as exc:
+            self.assertEqual(sml.classify_exception(exc), "transient")
+
+    def test_walks_the_implicit_context_chain(self):
+        try:
+            try:
+                raise OSError(errno.EMFILE, "too many open files")
+            except OSError:
+                raise KeyError("state")  # implicit __context__, no `from`
+        except KeyError as exc:
+            self.assertEqual(sml.classify_exception(exc), "transient")
+
+    def test_self_referential_chain_terminates(self):
+        exc = RuntimeError("loop")
+        exc.__cause__ = exc
+        self.assertEqual(sml.classify_exception(exc), "fatal")
+
+
+class TransientBackoffTests(unittest.TestCase):
+    def test_exponential_from_base(self):
+        self.assertEqual(sml.transient_backoff_seconds(1), 30.0)
+        self.assertEqual(sml.transient_backoff_seconds(2), 60.0)
+        self.assertEqual(sml.transient_backoff_seconds(3), 120.0)
+
+    def test_capped_so_a_wedged_machine_is_not_hammered(self):
+        self.assertEqual(sml.transient_backoff_seconds(50), 600.0)
+
+    def test_nonpositive_count_gets_the_base(self):
+        self.assertEqual(sml.transient_backoff_seconds(0), 30.0)
+
+
+class MainTransientRetryTests(unittest.TestCase):
+    """main()'s --infinite loop: bounded retry for machine-resource
+    failures, immediate non-zero exit for anything else (so the
+    supervisor's restart budget -- not a silent retry loop -- is what
+    surfaces a real bug)."""
+
+    def _run(self, outcomes, argv_extra=(), sleeps=None):
+        steps = iter(outcomes)
+        sleeps = [] if sleeps is None else sleeps
+
+        def fake_run_locked(home, squad, fn, **kwargs):
+            step = next(steps)
+            if isinstance(step, BaseException):
+                raise step
+            return step
+
+        with patch.object(sml, "run_locked", fake_run_locked):
+            return sml.main(["--squad", "nikon", *argv_extra], sleep_fn=sleeps.append)
+
+    def test_fatal_error_exits_2_without_retrying(self):
+        sleeps = []
+        rc = self._run([ValueError("bug")], argv_extra=["--infinite"], sleeps=sleeps)
+        self.assertEqual(rc, 2)
+        self.assertEqual(sleeps, [])
+
+    def test_transient_error_in_once_mode_still_exits_nonzero(self):
+        # --once has no retry budget: a single pass that failed is a failed
+        # run, whatever the cause.
+        rc = self._run([OSError(errno.ENOSPC, "No space left on device")])
+        self.assertEqual(rc, 2)
+
+    def test_transient_budget_exhaustion_exits_3_after_backoffs(self):
+        sleeps = []
+        rc = self._run(
+            [OSError(errno.ENOSPC, "no space")] * 3,
+            argv_extra=["--infinite", "--max-transient-failures", "2"],
+            sleeps=sleeps,
+        )
+        self.assertEqual(rc, 3)
+        self.assertEqual(sleeps, [30.0, 60.0])
+
+    def test_successful_pass_resets_the_transient_budget(self):
+        # ENOSPC, ENOSPC, success, ENOSPC, bug -- with a budget of 2. If the
+        # success did NOT reset the streak, the third ENOSPC would exhaust
+        # the budget (rc 3); reaching the fatal error instead (rc 2) proves
+        # the reset happened and the streak restarted from the base backoff.
+        sleeps = []
+        rc = self._run(
+            [
+                OSError(errno.ENOSPC, "no space"),
+                OSError(errno.ENOSPC, "no space"),
+                {"status": "merged"},
+                OSError(errno.ENOSPC, "no space"),
+                ValueError("bug"),
+            ],
+            argv_extra=["--infinite", "--max-transient-failures", "2"],
+            sleeps=sleeps,
+        )
+        self.assertEqual(rc, 2)
+        self.assertEqual(sleeps[:2], [30.0, 60.0])
+        # After the success: one poll sleep (120s default), then the streak
+        # restarts from the 30s base rather than continuing at 120s.
+        self.assertEqual(sleeps[2:], [120.0, 30.0])
+
+    def test_keyboard_interrupt_propagates_uncaught(self):
+        with self.assertRaises(KeyboardInterrupt):
+            self._run([KeyboardInterrupt()], argv_extra=["--infinite"])
 
 
 if __name__ == "__main__":
