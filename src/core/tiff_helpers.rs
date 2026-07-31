@@ -547,17 +547,230 @@ pub fn parse_gps_subifd(
     metadata: &mut MetadataMap,
 ) {
     if let Ok(gps_tags) = parse_ifd(reader, offset, byte_order) {
+        let mut latitude_ref = None;
+        let mut longitude_ref = None;
+        let mut altitude_below_sea_level = false;
+
+        // GPS reference values are separate IFD entries from their
+        // corresponding coordinates, so collect them before emitting the
+        // coordinate tags regardless of IFD entry order.
+        for (tag_id, field_type, value_count, raw_bytes) in &gps_tags {
+            let bytes = raw_bytes.as_ref();
+            match *tag_id {
+                0x0001 if *field_type == 2 && *value_count >= 1 => {
+                    latitude_ref = gps_reference(bytes);
+                }
+                0x0003 if *field_type == 2 && *value_count >= 1 => {
+                    longitude_ref = gps_reference(bytes);
+                }
+                0x0005 if *field_type == 1 && *value_count == 1 => {
+                    altitude_below_sea_level = bytes.first().copied() == Some(1);
+                }
+                _ => {}
+            }
+        }
+
         for (tag_id, field_type, value_count, raw_bytes) in gps_tags {
             let tag_name = lookup_tag_name(tag_id, "GPS");
-            let tag_value = raw_bytes_to_tag_value(
-                raw_bytes.as_ref(),
-                field_type,
-                value_count,
-                tag_id,
-                byte_order,
-            );
+            let bytes = raw_bytes.as_ref();
+            let tag_value = match tag_id {
+                // GPSLatitudeRef is an ASCII "N" or "S" value.
+                0x0001 if field_type == 2 && value_count >= 1 => latitude_ref
+                    .as_deref()
+                    .map(|reference| {
+                        TagValue::String(gps_latitude_reference(reference).to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        raw_bytes_to_tag_value(
+                            bytes,
+                            field_type,
+                            value_count,
+                            tag_id,
+                            byte_order,
+                        )
+                    }),
+                // GPSLongitudeRef is an ASCII "E" or "W" value.
+                0x0003 if field_type == 2 && value_count >= 1 => longitude_ref
+                    .as_deref()
+                    .map(|reference| {
+                        TagValue::String(gps_longitude_reference(reference).to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        raw_bytes_to_tag_value(
+                            bytes,
+                            field_type,
+                            value_count,
+                            tag_id,
+                            byte_order,
+                        )
+                    }),
+                // GPSLatitude and GPSLongitude are three unsigned rationals:
+                // degrees, minutes, and seconds.
+                0x0002 | 0x0004 if field_type == 5 && value_count == 3 => {
+                    let reference = if tag_id == 0x0002 {
+                        latitude_ref.as_deref()
+                    } else {
+                        longitude_ref.as_deref()
+                    };
+
+                    match gps_coordinate(bytes, byte_order, reference) {
+                        Some(value) => TagValue::String(value),
+                        None => raw_bytes_to_tag_value(
+                            bytes,
+                            field_type,
+                            value_count,
+                            tag_id,
+                            byte_order,
+                        ),
+                    }
+                }
+                // GPSAltitude is one unsigned rational. GPSAltitudeRef is
+                // zero for above sea level and one for below sea level.
+                0x0006 if field_type == 5 && value_count == 1 => {
+                    match gps_rational(bytes, 0, byte_order) {
+                        Some(value) => {
+                            let value = if altitude_below_sea_level {
+                                -value
+                            } else {
+                                value
+                            };
+                            TagValue::String(format!("{value:.2} m"))
+                        }
+                        None => raw_bytes_to_tag_value(
+                            bytes,
+                            field_type,
+                            value_count,
+                            tag_id,
+                            byte_order,
+                        ),
+                    }
+                }
+                // GPSImgDirection is one unsigned rational, displayed in
+                // degrees with one decimal place.
+                0x0011 if field_type == 5 && value_count == 1 => {
+                    match gps_rational(bytes, 0, byte_order) {
+                        Some(value) => TagValue::String(format!("{value:.1}")),
+                        None => raw_bytes_to_tag_value(
+                            bytes,
+                            field_type,
+                            value_count,
+                            tag_id,
+                            byte_order,
+                        ),
+                    }
+                }
+                _ => raw_bytes_to_tag_value(
+                    bytes,
+                    field_type,
+                    value_count,
+                    tag_id,
+                    byte_order,
+                ),
+            };
             metadata.insert(tag_name, tag_value);
         }
+    }
+}
+
+fn gps_reference(bytes: &[u8]) -> Option<String> {
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    std::str::from_utf8(bytes.get(..end)?)
+        .ok()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn gps_latitude_reference(reference: &str) -> &str {
+    match reference {
+        "N" => "North",
+        "S" => "South",
+        _ => reference,
+    }
+}
+
+fn gps_longitude_reference(reference: &str) -> &str {
+    match reference {
+        "E" => "East",
+        "W" => "West",
+        _ => reference,
+    }
+}
+
+fn gps_coordinate(
+    bytes: &[u8],
+    byte_order: ByteOrder,
+    reference: Option<&str>,
+) -> Option<String> {
+    let degrees = gps_rational(bytes, 0, byte_order)?;
+    let minutes = gps_rational(bytes, 8, byte_order)?;
+    let seconds = gps_rational(bytes, 16, byte_order)?;
+    let reference = reference.unwrap_or("");
+
+    Some(format!(
+        "{} deg {}' {:.2}\"{}",
+        gps_whole_number(degrees),
+        gps_whole_number(minutes),
+        seconds,
+        if reference.is_empty() {
+            String::new()
+        } else if reference == "N" || reference == "S" {
+            format!(" {}", gps_latitude_reference(reference))
+        } else {
+            format!(" {}", gps_longitude_reference(reference))
+        }
+    ))
+}
+
+fn gps_rational(bytes: &[u8], offset: usize, byte_order: ByteOrder) -> Option<f64> {
+    let numerator_bytes = bytes.get(offset..offset.checked_add(4)?)?;
+    let denominator_offset = offset.checked_add(4)?;
+    let denominator_bytes = bytes.get(denominator_offset..denominator_offset.checked_add(4)?)?;
+
+    let numerator = match byte_order {
+        ByteOrder::LittleEndian => u32::from_le_bytes([
+            numerator_bytes[0],
+            numerator_bytes[1],
+            numerator_bytes[2],
+            numerator_bytes[3],
+        ]),
+        ByteOrder::BigEndian => u32::from_be_bytes([
+            numerator_bytes[0],
+            numerator_bytes[1],
+            numerator_bytes[2],
+            numerator_bytes[3],
+        ]),
+    };
+    let denominator = match byte_order {
+        ByteOrder::LittleEndian => u32::from_le_bytes([
+            denominator_bytes[0],
+            denominator_bytes[1],
+            denominator_bytes[2],
+            denominator_bytes[3],
+        ]),
+        ByteOrder::BigEndian => u32::from_be_bytes([
+            denominator_bytes[0],
+            denominator_bytes[1],
+            denominator_bytes[2],
+            denominator_bytes[3],
+        ]),
+    };
+
+    if denominator == 0 {
+        None
+    } else {
+        Some(f64::from(numerator) / f64::from(denominator))
+    }
+}
+
+fn gps_whole_number(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        format!("{value}")
     }
 }
 
