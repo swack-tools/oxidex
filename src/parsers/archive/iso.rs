@@ -15,6 +15,15 @@ const ISO_SIGNATURE_OFFSET: u64 = 32769;
 /// Primary Volume Descriptor starts at sector 16 (offset 32768)
 const PVD_OFFSET: u64 = 32768;
 
+/// Size of one ISO 9660 volume descriptor.
+const DESCRIPTOR_SIZE: u64 = 2048;
+
+/// Descriptor type byte: a boot record.
+const DESCRIPTOR_BOOT_RECORD: u8 = 0;
+
+/// Descriptor type byte: the set terminator.
+const DESCRIPTOR_TERMINATOR: u8 = 255;
+
 /// ISO parser for extracting metadata from ISO disc images
 pub struct ISOParser;
 
@@ -156,6 +165,39 @@ impl ISOParser {
         Ok(())
     }
 
+    /// Reads `BootSystem` from the boot record, if the image has one.
+    ///
+    /// The descriptors form a chain of 2048-byte sectors from 32768, each
+    /// tagged by a leading type byte, and the boot record is NOT first --
+    /// this image has the primary volume at 32768 and the boot record at
+    /// 34816. Reading a fixed offset finds only whichever descriptor happens
+    /// to lead, which is why BootSystem was the one tag #184 left behind.
+    fn extract_boot_record(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Result<()> {
+        let mut offset = PVD_OFFSET;
+        while offset + DESCRIPTOR_SIZE <= reader.size() {
+            let head = reader.read(offset, 6)?;
+            if head.get(1..6) != Some(ISO_SIGNATURE) {
+                break;
+            }
+            match head[0] {
+                DESCRIPTOR_TERMINATOR => break,
+                DESCRIPTOR_BOOT_RECORD => {
+                    // ExifTool extracts BootSystem even when empty, as the
+                    // indication that the image is bootable.
+                    let raw = reader.read(offset + 7, 32)?;
+                    let value = String::from_utf8_lossy(raw)
+                        .trim_end_matches(|c: char| c == '\0' || c == ' ')
+                        .to_string();
+                    metadata.insert("ISO:BootSystem", TagValue::String(value));
+                    return Ok(());
+                }
+                _ => {}
+            }
+            offset += DESCRIPTOR_SIZE;
+        }
+        Ok(())
+    }
+
     /// Extracts metadata from Primary Volume Descriptor
     fn extract_pvd_metadata(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Result<()> {
         // Offsets and names are ExifTool's `ISO::PrimaryVolume` table verbatim,
@@ -255,6 +297,9 @@ impl FormatParser for ISOParser {
 
         // Extract Primary Volume Descriptor metadata
         Self::extract_pvd_metadata(reader, &mut metadata)?;
+
+        // The boot record lives in a later descriptor sector, if at all.
+        Self::extract_boot_record(reader, &mut metadata)?;
 
         Ok(metadata)
     }
