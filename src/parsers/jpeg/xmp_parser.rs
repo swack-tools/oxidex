@@ -84,6 +84,48 @@ const XMP_IDENTIFIER: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 /// # Ok(())
 /// # }
 /// ```
+/// Transcodes an XMP packet to UTF-8 if it is stored as UTF-16.
+///
+/// The XMP specification permits UTF-8, UTF-16BE and UTF-16LE, and real files
+/// use all three -- ExifTool.jpg in the sample corpus stores its packet as
+/// UTF-16BE. `parse_xmp` reads UTF-8, so an unconverted UTF-16 packet parses
+/// to nothing and returns Ok(empty): a silent miss of every XMP tag in the
+/// file, indistinguishable from a file that simply has no XMP.
+///
+/// Detection follows the spec's own rule -- the packet begins with `<?xpacket`
+/// (or a BOM), so the first two bytes identify the width and order:
+///   `EF BB BF` UTF-8 BOM · `FE FF` UTF-16BE BOM · `FF FE` UTF-16LE BOM
+///   `00 xx`    UTF-16BE (no BOM) · `xx 00` UTF-16LE (no BOM)
+fn xmp_payload_to_utf8(payload: &[u8]) -> Option<Vec<u8>> {
+    let decode16 = |be: bool, body: &[u8]| -> Option<Vec<u8>> {
+        if body.len() < 2 {
+            return None;
+        }
+        let units: Vec<u16> = body
+            .chunks_exact(2)
+            .map(|c| {
+                if be {
+                    u16::from_be_bytes([c[0], c[1]])
+                } else {
+                    u16::from_le_bytes([c[0], c[1]])
+                }
+            })
+            .collect();
+        String::from_utf16(&units).ok().map(String::into_bytes)
+    };
+
+    match payload {
+        [0xEF, 0xBB, 0xBF, rest @ ..] => Some(rest.to_vec()),
+        [0xFE, 0xFF, rest @ ..] => decode16(true, rest),
+        [0xFF, 0xFE, rest @ ..] => decode16(false, rest),
+        // No BOM: a UTF-16 packet's first character is ASCII, so exactly one
+        // of the two leading bytes is zero.
+        [0x00, b, ..] if *b != 0 => decode16(true, payload),
+        [b, 0x00, ..] if *b != 0 => decode16(false, payload),
+        _ => None,
+    }
+}
+
 pub fn extract_xmp_from_segments(segments: &[Segment]) -> Result<Vec<(String, String)>> {
     let mut all_xmp_tags = Vec::new();
 
@@ -101,7 +143,10 @@ pub fn extract_xmp_from_segments(segments: &[Segment]) -> Result<Vec<(String, St
         }
 
         // Extract the XML payload (skip the 29-byte XMP identifier)
-        let xml_payload = &segment.data[XMP_IDENTIFIER.len()..];
+        let raw_payload = &segment.data[XMP_IDENTIFIER.len()..];
+        // A UTF-16 packet must be transcoded first; see xmp_payload_to_utf8.
+        let converted = xmp_payload_to_utf8(raw_payload);
+        let xml_payload: &[u8] = converted.as_deref().unwrap_or(raw_payload);
 
         // Parse the XMP XML data for standard properties
         let xmp_tags = parse_xmp(xml_payload).map_err(|e| {
