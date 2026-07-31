@@ -513,6 +513,8 @@ impl ExifToolExtractor {
             "JXL" => vec!["jxl"],
             "AVIF" => vec!["avif"],
             "3GP" => vec!["3gp", "3g2"],
+            "M2TS" => vec!["mts", "m2ts", "ts"],
+            "M4A" => vec!["m4a"],
             "FLV" => vec!["flv"],
             "WMV" => vec!["wmv", "asf"],
             "MXF" => vec!["mxf"],

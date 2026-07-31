@@ -7,6 +7,7 @@
 pub mod asf;
 pub mod avi;
 pub mod flv;
+pub mod h264;
 pub mod mkv;
 pub mod mp4;
 pub mod mts;
