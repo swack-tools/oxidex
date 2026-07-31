@@ -347,6 +347,189 @@ class NormalizeModelConfigTests(unittest.TestCase):
         self.assertEqual(config["max_prompt_tokens"], 8192)
 
 
+class ClearBlacklistKeepingHistoryTests(unittest.TestCase):
+    """The blacklist-exhaustion reset must stay revisitable (it is the only
+    way an `unreachable` tag comes back if a sample appears later) while
+    keeping the failure history the next prompt learns from."""
+
+    def _entry(self, n_attempts=39):
+        return {
+            "fails": 10, "blacklisted": True, "blacklisted_at": 1,
+            "blacklisted_by": "w", "blacklist_reason": "r", "unreachable": True,
+            "claimed_by": "w", "claimed_at": 2, "tier": "T1",
+            "canonical_module": "M", "canonical_table": "M::T",
+            "attempts": [{"round": i, "reason": "no diff in model response"}
+                         for i in range(1, n_attempts + 1)],
+        }
+
+    def test_tag_becomes_claimable_again(self):
+        state = {"K": self._entry()}
+        model_fix_loop.clear_blacklist_keeping_history(state, "K")
+        entry = state["K"]
+        self.assertEqual(entry["fails"], 0)
+        self.assertFalse(entry["blacklisted"])
+        for field in ("blacklisted_at", "blacklisted_by", "blacklist_reason",
+                      "unreachable", "claimed_by", "claimed_at"):
+            self.assertNotIn(field, entry, f"{field} must not survive the reset")
+
+    def test_keeps_a_bounded_tail_of_the_history(self):
+        state = {"K": self._entry()}
+        model_fix_loop.clear_blacklist_keeping_history(state, "K")
+        kept = state["K"]["attempts"]
+        self.assertEqual(len(kept), model_fix_loop.DEFAULT_RESET_ATTEMPT_HISTORY)
+        # The MOST RECENT attempts, not the oldest.
+        self.assertEqual([a["round"] for a in kept], [34, 35, 36, 37, 38, 39])
+
+    def test_history_does_not_grow_across_repeated_cycles(self):
+        state = {"K": self._entry()}
+        for expected_cycle in (1, 2, 3):
+            model_fix_loop.clear_blacklist_keeping_history(state, "K")
+            self.assertEqual(state["K"]["reset_cycles"], expected_cycle)
+            self.assertLessEqual(
+                len(state["K"]["attempts"]),
+                model_fix_loop.DEFAULT_RESET_ATTEMPT_HISTORY,
+            )
+
+    def test_retained_history_reaches_the_next_prompt(self):
+        state = {"K": self._entry()}
+        model_fix_loop.clear_blacklist_keeping_history(state, "K")
+        rendered = model_fix_loop.format_previous_attempts(state["K"]["attempts"])
+        self.assertIn("Previous attempts on this exact tag", rendered)
+        self.assertIn("no diff in model response", rendered)
+
+    def test_keeps_attribution_and_ignores_missing_keys(self):
+        state = {"K": self._entry()}
+        model_fix_loop.clear_blacklist_keeping_history(state, "K")
+        self.assertEqual(state["K"]["canonical_table"], "M::T")
+        self.assertEqual(state["K"]["tier"], "T1")
+        empty = {}
+        model_fix_loop.clear_blacklist_keeping_history(empty, "absent")
+        self.assertEqual(empty, {})
+
+    def test_keep_zero_drops_history_but_still_unblocks(self):
+        state = {"K": self._entry()}
+        model_fix_loop.clear_blacklist_keeping_history(state, "K", keep=0)
+        self.assertEqual(state["K"]["attempts"], [])
+        self.assertFalse(state["K"]["blacklisted"])
+
+
+class SynthesizeGitHeadersTests(unittest.TestCase):
+    """synthesize_git_headers is the fix for the fleet's largest
+    patch-rejection cause -- see the function docstring for the measurement.
+    """
+
+    def test_inserts_header_before_each_bare_file_block(self):
+        diff = (
+            "--- a/mod.rs\n+++ b/mod.rs\n@@ -3 +3,2 @@\n pub mod xmp;\n+pub mod fp;\n"
+            "--- a/sub/other.rs\n+++ b/sub/other.rs\n@@ -1 +1 @@\n-old\n+new\n"
+        )
+        out = model_fix_loop.synthesize_git_headers(diff)
+        self.assertIn("diff --git a/mod.rs b/mod.rs\n--- a/mod.rs", out)
+        self.assertIn("diff --git a/sub/other.rs b/sub/other.rs\n--- a/sub/other.rs", out)
+        # Nothing else changed: strip the added lines and the original is back.
+        self.assertEqual(
+            "\n".join(line for line in out.split("\n")
+                      if not line.startswith("diff --git ")),
+            diff,
+        )
+
+    def test_leaves_well_formed_git_diff_byte_identical(self):
+        diff = (
+            "diff --git a/foo.rs b/foo.rs\nindex 1111111..2222222 100644\n"
+            "--- a/foo.rs\n+++ b/foo.rs\n@@ -1 +1 @@\n-old\n+new\n"
+        )
+        self.assertEqual(model_fix_loop.synthesize_git_headers(diff), diff)
+
+    def test_is_idempotent(self):
+        diff = "--- a/foo.rs\n+++ b/foo.rs\n@@ -1 +1 @@\n-old\n+new\n"
+        once = model_fix_loop.synthesize_git_headers(diff)
+        self.assertEqual(model_fix_loop.synthesize_git_headers(once), once)
+
+    def test_skips_creation_and_deletion_blocks(self):
+        """A bare `diff --git` in front of a /dev/null block makes git read
+        it as modifying an existing file. Measured: doing so turned 4
+        previously-applying real diffs into failures."""
+        created = "--- /dev/null\n+++ b/build.rs\n@@ -0,0 +1 @@\n+fn main() {}\n"
+        self.assertEqual(model_fix_loop.synthesize_git_headers(created), created)
+        deleted = "--- a/gone.rs\n+++ /dev/null\n@@ -1 +0,0 @@\n-fn main() {}\n"
+        self.assertEqual(model_fix_loop.synthesize_git_headers(deleted), deleted)
+
+    def test_does_not_fire_on_hunk_body_text(self):
+        """A deleted line starting "-- " renders as "--- ", an added line
+        starting "++ " as "+++ ". Only a pair followed by "@@" is a header."""
+        diff = (
+            "--- a/foo.rs\n+++ b/foo.rs\n@@ -1,2 +1,2 @@\n"
+            "--- not a header\n+++ also not a header\n"
+        )
+        out = model_fix_loop.synthesize_git_headers(diff)
+        self.assertEqual(out.count("diff --git "), 1)
+        self.assertTrue(out.startswith("diff --git a/foo.rs b/foo.rs"))
+
+
+class GitApplyMultiFileRecountTests(unittest.TestCase):
+    """End-to-end against real git: the exact shape that made the whole
+    5-rung ladder fail on a correct multi-file diff."""
+
+    def _repo(self, tmpdir):
+        root = Path(tmpdir)
+        (root / "sub").mkdir()
+        (root / "mod.rs").write_text("pub mod a;\npub mod b;\npub mod xmp;\n")
+        (root / "sub" / "other.rs").write_text("fn one() {}\nfn two() {}\nfn three() {}\n")
+        for argv in (["git", "init", "-q", "."], ["git", "config", "user.email", "t@t"],
+                     ["git", "config", "user.name", "t"], ["git", "add", "-A"],
+                     ["git", "commit", "-qm", "init"]):
+            subprocess.run(argv, cwd=root, check=True, capture_output=True)
+        return root
+
+    #: Byte-for-byte what `git diff -U1` emits for the two edits below, with
+    #: only the `diff --git`/`index` lines removed -- i.e. a provably correct
+    #: diff in exactly the shape models produce.
+    MULTI_FILE_DIFF = (
+        "--- a/mod.rs\n+++ b/mod.rs\n@@ -3 +3,2 @@ pub mod b;\n"
+        " pub mod xmp;\n+pub mod flashpix;\n"
+        "--- a/sub/other.rs\n+++ b/sub/other.rs\n@@ -1,3 +1,3 @@\n"
+        " fn one() {}\n-fn two() {}\n+fn two() { /* patched */ }\n fn three() {}\n"
+    )
+
+    def test_bare_multi_file_diff_defeats_every_recount_rung(self):
+        """Regression witness: without normalization git blames file #1 and
+        no rung recovers, because all of them pass --recount."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = self._repo(tmpdir)
+            for _rung, argv in model_fix_loop.GIT_APPLY_LADDER:
+                if "--recount" not in argv:
+                    continue  # the no-recount rung is the safety net, not the bug
+                result = subprocess.run(
+                    argv[:2] + ["--check"] + argv[2:], input=self.MULTI_FILE_DIFF,
+                    capture_output=True, text=True, cwd=root,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                if "3way" not in argv:
+                    self.assertIn("mod.rs", result.stderr)
+
+    def test_normalized_multi_file_diff_applies_at_the_exact_rung(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = self._repo(tmpdir)
+            applied, message, rung = model_fix_loop.git_apply_with_rung(
+                self.MULTI_FILE_DIFF, root
+            )
+            self.assertTrue(applied, message)
+            self.assertEqual(rung, "exact")
+            self.assertIn("pub mod flashpix;", (root / "mod.rs").read_text())
+            self.assertIn("/* patched */", (root / "sub" / "other.rs").read_text())
+
+    def test_single_file_diff_still_applies(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = self._repo(tmpdir)
+            one_file = (
+                "--- a/mod.rs\n+++ b/mod.rs\n@@ -3 +3,2 @@ pub mod b;\n"
+                " pub mod xmp;\n+pub mod flashpix;\n"
+            )
+            applied, message, rung = model_fix_loop.git_apply_with_rung(one_file, root)
+            self.assertTrue(applied, message)
+            self.assertEqual(rung, "exact")
+
+
 class ExtractDiffTests(unittest.TestCase):
     def test_extracts_fenced_diff_block(self):
         text = (
@@ -354,7 +537,10 @@ class ExtractDiffTests(unittest.TestCase):
             "@@ -1 +1 @@\n-old\n+new\n```\nDone."
         )
         diff = extract_diff(text)
-        self.assertTrue(diff.startswith("--- a/foo.rs"))
+        # extract_diff normalizes through synthesize_git_headers, which
+        # prepends the `diff --git` line the model omitted -- see that
+        # function for why --recount needs it on multi-file diffs.
+        self.assertTrue(diff.startswith("diff --git a/foo.rs b/foo.rs\n--- a/foo.rs"))
         self.assertIn("+new", diff)
 
     def test_falls_back_to_bare_diff_git_header(self):
@@ -368,6 +554,8 @@ class ExtractDiffTests(unittest.TestCase):
         text = "```diff \r\n--- a/foo.rs\r\n+++ b/foo.rs\r\n```\n"
         diff = extract_diff(text)
         self.assertIsNotNone(diff)
+        # No "@@" line here, so this is not a complete file block and
+        # synthesize_git_headers deliberately leaves it alone.
         self.assertTrue(diff.startswith("--- a/foo.rs"))
 
 
@@ -5090,8 +5278,12 @@ class AttemptBuildTests(unittest.TestCase):
         )
         self.assertTrue(built)
         self.assertEqual(len(calls), 2)
-        # The two chunks concatenate back into exactly the original diff.
-        self.assertEqual(applied_diffs, ["--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n"])
+        # The two chunks concatenate back into exactly the original diff,
+        # plus the `diff --git` line synthesize_git_headers adds.
+        self.assertEqual(
+            applied_diffs,
+            ["diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n"],
+        )
         self.assertEqual(diff, applied_diffs[0])
 
     def test_prompts_for_the_next_chunk_between_patch_messages(self):
@@ -7472,16 +7664,23 @@ class RunTagLoopTests(unittest.TestCase):
         self.assertEqual(result["cycles_reset"], 1)
         self.assertEqual(len(attempts), 1)
 
-    def test_exhaustion_reset_deletes_exactly_the_considered_keys(self):
+    def test_exhaustion_reset_clears_exactly_the_considered_keys(self):
         # The reset is scoped to the explicit key list this worker
         # considered at claim-filter time (its own format's tags) --
         # entries belonging to other formats/workers in the same shared
         # state file must survive untouched. The old `state = {}` wiped
         # them all, including live claims.
+        #
+        # The considered keys are now CLEARED rather than deleted (see
+        # clear_blacklist_keeping_history): equally claimable again, but
+        # the attempt history that feeds the next prompt survives.
         gaps = [make_gap()]  # this worker considers NEF:EXIF:LensModel + NEF:EXIF:ISO
 
         store, load, save = self._state_io()
-        store["NEF:EXIF:LensModel"] = {"fails": 2, "blacklisted": True}
+        store["NEF:EXIF:LensModel"] = {
+            "fails": 2, "blacklisted": True,
+            "attempts": [{"round": 1, "reason": "gap count did not decrease"}],
+        }
         store["NEF:EXIF:ISO"] = {"fails": 2, "blacklisted": True}
         # Another format's blacklist entry and another worker's live
         # claim, both sharing this state file:
@@ -7498,10 +7697,18 @@ class RunTagLoopTests(unittest.TestCase):
             max_rounds=1,
         )
         self.assertEqual(result["cycles_reset"], 1)
-        self.assertNotIn("NEF:EXIF:LensModel", store)
-        self.assertNotIn("NEF:EXIF:ISO", store)
-        self.assertIn("XMP:XMP:Title", store)
-        self.assertIn("JPEG:APP12:Qualite", store)
+        # Considered keys: claimable again...
+        for key in ("NEF:EXIF:LensModel", "NEF:EXIF:ISO"):
+            self.assertEqual(store[key]["fails"], 0)
+            self.assertFalse(store[key]["blacklisted"])
+            self.assertEqual(store[key]["reset_cycles"], 1)
+        # ...but no longer amnesiac about what already failed.
+        self.assertEqual(
+            [a["reason"] for a in store["NEF:EXIF:LensModel"]["attempts"]],
+            ["gap count did not decrease"],
+        )
+        # Other formats'/workers' entries untouched, claims included.
+        self.assertEqual(store["XMP:XMP:Title"], {"fails": 10, "blacklisted": True})
         self.assertEqual(store["JPEG:APP12:Qualite"]["claimed_by"], "jpeg-worker")
 
     def test_torn_state_file_raises_instead_of_wiping(self):
