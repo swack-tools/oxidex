@@ -296,6 +296,17 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
         }
     }
 
+    // Structures reached through a Bag/Seq of rdf:li -- LocationShown,
+    // LocationCreated, Manifest, MWG keyword hierarchies. Appended last so the
+    // focused passes above, which know their schemas' FlatName overrides, keep
+    // precedence over this one's plain path concatenation.
+    let list_structs = extract_list_struct_values(xml_bytes)?;
+    for (tag, value) in &list_structs {
+        if !results.iter().any(|(t, _)| t == tag) {
+            results.push((tag.clone(), value.clone()));
+        }
+    }
+
     // Post-process results to apply formatting for specific tags
     let results = results
         .into_iter()
@@ -824,6 +835,157 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
     Ok(results)
 }
 
+/// Flattens structures reached through an `rdf:Bag`/`rdf:Seq` of
+/// `rdf:li rdf:parseType="Resource"`.
+///
+/// [`extract_top_level_struct_values`] deliberately stops at structures that
+/// are a direct child of an `rdf:Description`. The other shape a struct takes
+/// is a *list* of them, and it is by far the more common one in real files:
+/// `Iptc4xmpExt:LocationShown`, `Iptc4xmpExt:LocationCreated`,
+/// `xmpMM:Manifest` and MWG's keyword hierarchy are all Bags or Seqs of
+/// structures. ExifTool names their fields the same way either way -- walk the
+/// property path, concatenate `ucfirst` of each non-RDF name, skip the RDF
+/// structural elements (`XMP.pm`, `GetXMPTagID`) -- so `Iptc4xmpExt:LocationShown`
+/// / `rdf:Bag` / `rdf:li` / `Iptc4xmpExt:City` becomes `LocationShownCity`, and
+/// the nested `xmpMM:Manifest` / `rdf:Seq` / `rdf:li` / `stMfs:reference` /
+/// `stRef:filePath` becomes `ManifestReferenceFilePath`.
+///
+/// ExifTool reports these tags as Lists: every `rdf:li` contributes one value,
+/// entries that omit a field simply do not contribute (XMP4.xmp's fourth
+/// LocationCreated has no City, and ExifTool's LocationCreatedCity is still
+/// three items). Values are joined the way ExifTool's own text output joins a
+/// List.
+///
+/// `mwg-rs:Regions` is excluded for the same reason the top-level pass excludes
+/// it: MWG.pm gives its fields `FlatName` overrides, so its flattened names are
+/// `RegionName`/`RegionAreaH`/`RegionExtensions...` rather than the
+/// `RegionsRegionList...` this concatenation builds. Emitting those would trade
+/// missing tags for wrong ones.
+fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
+    const MWG_RS_NS: &str = "http://www.metadataworkinggroup.com/schemas/regions/";
+
+    let mut reader = Reader::from_reader(xml_bytes);
+    reader.config_mut().trim_text(true);
+
+    let mut resolver = NamespaceResolver::new();
+    let mut buf = Vec::new();
+    let mut depth = 0usize;
+
+    let mut description_depth: Option<usize> = None;
+    let mut container_depth: Option<usize> = None;
+    let mut container_name = String::new();
+    // Field names below the container, with the RDF structural elements left
+    // out -- the rest of ExifTool's tag ID, in pieces.
+    let mut path: Vec<String> = Vec::new();
+    let mut text = String::new();
+    // (flattened id, values) in first-seen order.
+    let mut collected: Vec<(String, Vec<String>)> = Vec::new();
+
+    let mut push_value = |flat_id: String, value: String| {
+        if let Some((_, values)) = collected.iter_mut().find(|(id, _)| *id == flat_id) {
+            values.push(value);
+        } else {
+            collected.push((flat_id, vec![value]));
+        }
+    };
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                depth += 1;
+                register_namespaces_from_element(&e, &mut resolver)?;
+                let tag_name = extract_tag_name(&e)?;
+
+                if is_rdf_description(&tag_name, &resolver) {
+                    description_depth = Some(depth);
+                } else if container_depth.is_none() {
+                    let is_container_candidate = description_depth
+                        .is_some_and(|parent| depth == parent + 1)
+                        && !is_rdf_namespace(&tag_name, &resolver)
+                        && !has_parse_type_resource(&e)
+                        && !is_property_in_namespace(&tag_name, "Regions", MWG_RS_NS, &resolver);
+                    if is_container_candidate {
+                        let local = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
+                        container_depth = Some(depth);
+                        container_name = if is_flat_name_suppressed(&local) {
+                            String::new()
+                        } else {
+                            local
+                        };
+                        path.clear();
+                        text.clear();
+                    }
+                } else if is_rdf_namespace(&tag_name, &resolver) {
+                    // rdf:Bag / rdf:Seq / rdf:Alt / rdf:li carry no name.
+                    if is_rdf_li(&tag_name, &resolver) {
+                        text.clear();
+                    }
+                } else {
+                    path.push(ucfirst(NamespaceResolver::extract_local_name(&tag_name)));
+                    text.clear();
+                }
+            }
+
+            Ok(Event::Text(e)) => {
+                if container_depth.is_some()
+                    && let Ok(decoded) = e.xml10_content()
+                {
+                    let unescaped =
+                        quick_xml::escape::unescape(&decoded).unwrap_or_else(|_| decoded.clone());
+                    text.push_str(&unescaped);
+                }
+            }
+
+            Ok(Event::End(e)) => {
+                let tag_name = extract_tag_name_from_bytes(e.name().as_ref())?;
+
+                if container_depth == Some(depth) {
+                    container_depth = None;
+                    container_name.clear();
+                    path.clear();
+                    text.clear();
+                } else if container_depth.is_some() {
+                    let value = text.trim().to_string();
+                    // Only struct *fields* are flattened; text directly under
+                    // the container is the whole property, which the ordinary
+                    // RDF pass already reports.
+                    if !value.is_empty() && !path.is_empty() {
+                        push_value(format!("{}{}", container_name, path.join("")), value);
+                    }
+                    text.clear();
+                    if !is_rdf_namespace(&tag_name, &resolver) {
+                        path.pop();
+                    }
+                }
+
+                if description_depth == Some(depth) {
+                    description_depth = None;
+                }
+                depth = depth.saturating_sub(1);
+            }
+
+            Ok(Event::Empty(e)) => {
+                register_namespaces_from_element(&e, &mut resolver)?;
+            }
+
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+        buf.clear();
+    }
+
+    Ok(collected
+        .into_iter()
+        .map(|(flat_id, values)| {
+            (
+                format!("XMP:{}", exiftool_flat_tag_name(&flat_id)),
+                values.join(", "),
+            )
+        })
+        .collect())
+}
+
 /// Extracts `plus:CopyrightOwnerName` from the PLUS `CopyrightOwner` sequence.
 ///
 /// `PLUS.pm` defines the structure and its flattened name:
@@ -1122,7 +1284,264 @@ const FLAT_TAG_RENAMES: &[(&str, &str)] = &[
     ("TaxonTaxonRank", "TaxonRank"),
     // DarwinCore.pm:310
     ("TaxonTaxonRemarks", "TaxonRemarks"),
+    // XMP2.pl:514
+    ("AboutCvTermCvTermId", "AboutCvTermId"),
+    // XMP2.pl:515
+    ("AboutCvTermCvTermName", "AboutCvTermName"),
+    // XMP2.pl:516
+    ("AboutCvTermCvTermRefinedAbout", "AboutCvTermRefinedAbout"),
+    // XMP2.pl:553
+    (
+        "ArtworkOrObjectAOCircaDateCreated",
+        "ArtworkCircaDateCreated",
+    ),
+    // XMP2.pl:556
+    (
+        "ArtworkOrObjectAOContentDescription",
+        "ArtworkContentDescription",
+    ),
+    // XMP2.pl:557
+    (
+        "ArtworkOrObjectAOContributionDescription",
+        "ArtworkContributionDescription",
+    ),
+    // XMP2.pl:542
+    ("ArtworkOrObjectAOCopyrightNotice", "ArtworkCopyrightNotice"),
+    // XMP2.pl:543
+    ("ArtworkOrObjectAOCreator", "ArtworkCreator"),
+    // XMP2.pl:552
+    ("ArtworkOrObjectAOCreatorId", "ArtworkCreatorID"),
+    // XMP2.pl:549
+    (
+        "ArtworkOrObjectAOCurrentCopyrightOwnerId",
+        "ArtworkCopyrightOwnerID",
+    ),
+    // XMP2.pl:548
+    (
+        "ArtworkOrObjectAOCurrentCopyrightOwnerName",
+        "ArtworkCopyrightOwnerName",
+    ),
+    // XMP2.pl:551
+    ("ArtworkOrObjectAOCurrentLicensorId", "ArtworkLicensorID"),
+    // XMP2.pl:550
+    (
+        "ArtworkOrObjectAOCurrentLicensorName",
+        "ArtworkLicensorName",
+    ),
+    // XMP2.pl:544
+    ("ArtworkOrObjectAODateCreated", "ArtworkDateCreated"),
+    // XMP2.pl:558
+    (
+        "ArtworkOrObjectAOPhysicalDescription",
+        "ArtworkPhysicalDescription",
+    ),
+    // XMP2.pl:545
+    ("ArtworkOrObjectAOSource", "ArtworkSource"),
+    // XMP2.pl:546
+    ("ArtworkOrObjectAOSourceInvNo", "ArtworkSourceInventoryNo"),
+    // XMP2.pl:555
+    ("ArtworkOrObjectAOSourceInvURL", "ArtworkSourceInvURL"),
+    // XMP2.pl:554
+    ("ArtworkOrObjectAOStylePeriod", "ArtworkStylePeriod"),
+    // XMP2.pl:547
+    ("ArtworkOrObjectAOTitle", "ArtworkTitle"),
+    // XMP2.pl:581
+    (
+        "EmbdEncRightsExprEncRightsExpr",
+        "EmbeddedEncodedRightsExpr",
+    ),
+    // XMP2.pl:582
+    (
+        "EmbdEncRightsExprRightsExprEncType",
+        "EmbeddedEncodedRightsExprType",
+    ),
+    // XMP2.pl:583
+    (
+        "EmbdEncRightsExprRightsExprLangId",
+        "EmbeddedEncodedRightsExprLangID",
+    ),
+    // XMP2.pl:600
+    (
+        "LinkedEncRightsExprLinkedRightsExpr",
+        "LinkedEncodedRightsExpr",
+    ),
+    // XMP2.pl:601
+    (
+        "LinkedEncRightsExprRightsExprEncType",
+        "LinkedEncodedRightsExprType",
+    ),
+    // XMP2.pl:602
+    (
+        "LinkedEncRightsExprRightsExprLangId",
+        "LinkedEncodedRightsExprLangID",
+    ),
+    // XMP2.pl:635
+    (
+        "PersonInImageWDetailsPersonCharacteristic",
+        "PersonInImageCharacteristic",
+    ),
+    // XMP2.pl:636
+    (
+        "PersonInImageWDetailsPersonCharacteristicCvId",
+        "PersonInImageCvTermCvId",
+    ),
+    // XMP2.pl:637
+    (
+        "PersonInImageWDetailsPersonCharacteristicCvTermId",
+        "PersonInImageCvTermId",
+    ),
+    // XMP2.pl:638
+    (
+        "PersonInImageWDetailsPersonCharacteristicCvTermName",
+        "PersonInImageCvTermName",
+    ),
+    // XMP2.pl:639
+    (
+        "PersonInImageWDetailsPersonCharacteristicCvTermRefinedAbout",
+        "PersonInImageCvTermRefinedAbout",
+    ),
+    // XMP2.pl:640
+    (
+        "PersonInImageWDetailsPersonDescription",
+        "PersonInImageDescription",
+    ),
+    // XMP2.pl:633
+    ("PersonInImageWDetailsPersonId", "PersonInImageId"),
+    // XMP2.pl:634
+    ("PersonInImageWDetailsPersonName", "PersonInImageName"),
+    // XMP2.pl:654
+    (
+        "ProductInImageProductDescription",
+        "ProductInImageDescription",
+    ),
+    // XMP2.pl:653
+    ("ProductInImageProductGTIN", "ProductInImageGTIN"),
+    // XMP2.pl:652
+    ("ProductInImageProductName", "ProductInImageName"),
+    // XMP2.pl:668
+    ("RegistryIdRegEntryRole", "RegistryEntryRole"),
+    // XMP2.pl:666
+    ("RegistryIdRegItemId", "RegistryItemID"),
+    // XMP2.pl:667
+    ("RegistryIdRegOrgId", "RegistryOrganisationID"),
+    // XMP2.pl:1291
+    ("SubVersionsFileName", "SubVersionFileName"),
+    // XMP2.pl:1290
+    ("SubVersionsVersRef", "SubVersionReference"),
+    // XMP2.pl:1266
+    ("TagStructureLabelName", "LabelName1"),
+    // XMP2.pl:1269
+    ("TagStructureParentReference", "ParentReference1"),
+    // XMP2.pl:1267
+    ("TagStructureReference", "Reference1"),
+    // XMP2.pl:1268
+    ("TagStructureSubLabels", "SubLabels1"),
+    // XMP2.pl:1270
+    ("TagStructureSubLabelsLabelName", "LabelName2"),
+    // XMP2.pl:1273
+    ("TagStructureSubLabelsParentReference", "ParentReference2"),
+    // XMP2.pl:1271
+    ("TagStructureSubLabelsReference", "Reference2"),
+    // XMP2.pl:1272
+    ("TagStructureSubLabelsSubLabels", "SubLabels2"),
+    // XMP2.pl:1274
+    ("TagStructureSubLabelsSubLabelsLabelName", "LabelName3"),
+    // XMP2.pl:1277
+    (
+        "TagStructureSubLabelsSubLabelsParentReference",
+        "ParentReference3",
+    ),
+    // XMP2.pl:1275
+    ("TagStructureSubLabelsSubLabelsReference", "Reference3"),
+    // XMP2.pl:1276
+    ("TagStructureSubLabelsSubLabelsSubLabels", "SubLabels3"),
+    // XMP2.pl:1278
+    (
+        "TagStructureSubLabelsSubLabelsSubLabelsLabelName",
+        "LabelName4",
+    ),
+    // XMP2.pl:1281
+    (
+        "TagStructureSubLabelsSubLabelsSubLabelsParentReference",
+        "ParentReference4",
+    ),
+    // XMP2.pl:1279
+    (
+        "TagStructureSubLabelsSubLabelsSubLabelsReference",
+        "Reference4",
+    ),
+    // XMP2.pl:1280
+    (
+        "TagStructureSubLabelsSubLabelsSubLabelsSubLabels",
+        "SubLabels4",
+    ),
+    // XMP2.pl:1282
+    (
+        "TagStructureSubLabelsSubLabelsSubLabelsSubLabelsLabelName",
+        "LabelName5",
+    ),
+    // XMP2.pl:1285
+    (
+        "TagStructureSubLabelsSubLabelsSubLabelsSubLabelsParentReference",
+        "ParentReference5",
+    ),
+    // XMP2.pl:1283
+    (
+        "TagStructureSubLabelsSubLabelsSubLabelsSubLabelsReference",
+        "Reference5",
+    ),
+    // XMP2.pl:1284
+    (
+        "TagStructureSubLabelsSubLabelsSubLabelsSubLabelsSubLabels",
+        "SubLabels5",
+    ),
+    // XMP2.pl:1286
+    (
+        "TagStructureSubLabelsSubLabelsSubLabelsSubLabelsSubLabelsLabelName",
+        "LabelName6",
+    ),
+    // XMP2.pl:1288
+    (
+        "TagStructureSubLabelsSubLabelsSubLabelsSubLabelsSubLabelsParentReference",
+        "ParentReference6",
+    ),
+    // XMP2.pl:1287
+    (
+        "TagStructureSubLabelsSubLabelsSubLabelsSubLabelsSubLabelsReference",
+        "Reference6",
+    ),
 ];
+
+/// Structure properties whose own name contributes nothing to the flattened
+/// tag ID.
+///
+/// `AddFlattenedTags` skips a property's name segment when the table declares
+/// `FlatName => ''`, so `plus:Licensee`/`plus:LicenseeName` flattens to
+/// `LicenseeName`, not `LicenseeLicenseeName`. Transcribed from every
+/// `FlatName => ''` in ExifTool 13.59.
+const FLAT_NAME_SUPPRESSED: &[&str] = &[
+    // DarwinCore.pm:101, 131, 153, 247
+    "GeologicalContext",
+    "Identification",
+    "MeasurementOrFact",
+    "ResourceRelationship",
+    // PLUS.pm:2324, 2329, 2334, 2488, 2494, 2500
+    "Licensee",
+    "EndUser",
+    "Licensor",
+    "CopyrightOwner",
+    "ImageCreator",
+    "ImageSupplier",
+    // XMP.pm:1188
+    "Fonts",
+    // MWG.pm:537
+    "Collections",
+];
+
+/// Reports whether a structure property's name is dropped from flattened IDs.
+fn is_flat_name_suppressed(local_name: &str) -> bool {
+    FLAT_NAME_SUPPRESSED.contains(&local_name)
+}
 
 /// Maps a concatenated flattened tag ID to the name ExifTool reports for it.
 fn exiftool_flat_tag_name(flat_id: &str) -> &str {
@@ -1447,6 +1866,12 @@ const PROPERTY_RENAMES: &[(&str, &str, &str)] = &[
     ("XMP-plus", "Version", "PLUSVersion"),
     // TIFF calls it ImageLength; every ExifTool group calls it ImageHeight.
     ("XMP-tiff", "ImageLength", "ImageHeight"),
+    // XMP.pm:2143-2144 -- the EXIF schema's pixel-dimension properties are
+    // reported under the same names the EXIF group uses.
+    ("XMP-exif", "PixelXDimension", "ExifImageWidth"),
+    ("XMP-exif", "PixelYDimension", "ExifImageHeight"),
+    // XMP.pm:2096 -- `ExposureBiasValue => { Name => 'ExposureCompensation' }`.
+    ("XMP-exif", "ExposureBiasValue", "ExposureCompensation"),
 ];
 
 /// Applies [`PROPERTY_RENAMES`], leaving anything unlisted untouched.
@@ -1537,6 +1962,12 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
     // Extract local tag name (after colon)
     let local_name = tag.split(':').last().unwrap_or(tag);
 
+    // PLUS controlled-vocabulary properties are URIs until both of `%plusVocab`'s
+    // conversions have run; see `plus_vocab`.
+    if let Some(converted) = super::plus_vocab::convert(local_name, value) {
+        return converted;
+    }
+
     match local_name {
         // IPTC Urgency (0-8 scale)
         "Urgency" => format_iptc_urgency(value),
@@ -1570,6 +2001,19 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         "Aperture" => format_exif_aperture(value),
         "ExposureCompensation" => format_exif_exposure_compensation(value),
         "FocalLength" => format_exif_focal_length(value),
+
+        // XMP.pm:2088/2102 -- ApertureValue and MaxApertureValue are APEX,
+        // ValueConv 'sqrt(2) ** $val', PrintConv sprintf("%.1f").
+        "ApertureValue" | "MaxApertureValue" => format_xmp_apex_aperture(value),
+
+        // XMP.pm:2081 -- ShutterSpeedValue is APEX,
+        // ValueConv 'abs($val)<100 ? 1/(2**$val) : 0', PrintConv
+        // PrintExposureTime.
+        "ShutterSpeedValue" => format_xmp_apex_shutter_speed(value),
+
+        // XMP.pm:2173-2174 -- plain rationals with no PrintConv, so ExifTool
+        // prints the quotient with Perl's default 15-significant-digit format.
+        "FocalPlaneXResolution" | "FocalPlaneYResolution" => format_xmp_plain_rational(value),
 
         // Photoshop numeric tags
         "Quality" => format_photoshop_quality(value),
@@ -1904,14 +2348,120 @@ fn format_exif_aperture(value: &str) -> String {
 /// - ExposureCompensation: EV offset value
 /// - BrightnessValue: Alternative brightness tag
 fn format_exif_exposure_compensation(value: &str) -> String {
-    let trimmed = value.trim();
-
-    if let Ok(num) = trimmed.parse::<f64>() {
-        // Format with appropriate precision (2 decimal places)
-        format!("{:.2}", num)
-    } else {
-        trimmed.to_string()
+    match parse_xmp_number(value) {
+        // XMP.pm:2099 -- `PrintConv => Image::ExifTool::Exif::PrintFraction`.
+        // The old `{:.2}` here printed XMP.xmp's exif:ExposureBiasValue of
+        // "-3/3" as "-1.00" (and, before that, could not parse the rational at
+        // all); ExifTool prints "-1".
+        Some(number) => print_exif_fraction(number),
+        None => value.trim().to_string(),
     }
+}
+
+/// Parses an XMP numeric value, which the schema may store as a `rational`.
+///
+/// `XMP.pm` marks most EXIF-derived properties `Writable => 'rational'`, and
+/// real files write them that way: XMP.xmp carries `exif:FocalLength` as
+/// "5800/1000" and `exif:FocalPlaneXResolution` as "2272000/224". The numeric
+/// formatters used to call `str::parse::<f64>` directly, which fails on those,
+/// so every one of them passed the raw fraction through untouched.
+fn parse_xmp_number(value: &str) -> Option<f64> {
+    let trimmed = value.trim();
+    if let Some((numerator, denominator)) = trimmed.split_once('/') {
+        let numerator: f64 = numerator.trim().parse().ok()?;
+        let denominator: f64 = denominator.trim().parse().ok()?;
+        if denominator == 0.0 {
+            return None;
+        }
+        return Some(numerator / denominator);
+    }
+    trimmed.parse().ok()
+}
+
+/// `Image::ExifTool::Exif::PrintFraction` (`Exif.pm:5516`), verbatim.
+fn print_exif_fraction(value: f64) -> String {
+    // Exif.pm:5521 -- "avoid round-off errors".
+    let value = value * 1.00001;
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    let close_enough = |scaled: f64| {
+        let truncated = scaled.trunc();
+        truncated != 0.0 && truncated / scaled > 0.999
+    };
+    if close_enough(value) {
+        return format!("{:+}", value.trunc() as i64);
+    }
+    if close_enough(value * 2.0) {
+        return format!("{:+}/2", (value * 2.0).trunc() as i64);
+    }
+    if close_enough(value * 3.0) {
+        return format!("{:+}/3", (value * 3.0).trunc() as i64);
+    }
+    format!("{:+.3}", value)
+}
+
+/// APEX aperture: `sqrt(2) ** $val`, printed with one decimal.
+fn format_xmp_apex_aperture(value: &str) -> String {
+    match parse_xmp_number(value) {
+        Some(apex) => format!("{:.1}", std::f64::consts::SQRT_2.powf(apex)),
+        None => value.trim().to_string(),
+    }
+}
+
+/// APEX shutter speed: `1/(2**$val)`, printed by `PrintExposureTime`.
+fn format_xmp_apex_shutter_speed(value: &str) -> String {
+    let Some(apex) = parse_xmp_number(value) else {
+        return value.trim().to_string();
+    };
+    // XMP.pm:2083 -- values of 100 or more collapse to zero rather than
+    // underflowing.
+    let seconds = if apex.abs() < 100.0 {
+        1.0 / 2f64.powf(apex)
+    } else {
+        0.0
+    };
+    print_xmp_exposure_time(seconds)
+}
+
+/// `Image::ExifTool::Exif::PrintExposureTime` (`Exif.pm`), verbatim.
+fn print_xmp_exposure_time(seconds: f64) -> String {
+    if seconds < 0.25001 && seconds > 0.0 {
+        return format!("1/{}", (0.5 + 1.0 / seconds) as i64);
+    }
+    if seconds == seconds.trunc() {
+        return format!("{}", seconds as i64);
+    }
+    format!("{:.1}", seconds)
+}
+
+/// A rational with no PrintConv, printed the way Perl prints a number.
+///
+/// Perl's default stringification is 15 significant digits with trailing zeros
+/// removed, which is why ExifTool reports 2272000/224 as "10142.8571428571".
+fn format_xmp_plain_rational(value: &str) -> String {
+    let Some(number) = parse_xmp_number(value) else {
+        return value.trim().to_string();
+    };
+    let formatted = format!("{:.*e}", 14, number);
+    // Round-trip through the 15-significant-digit form, then render plainly.
+    let rounded: f64 = formatted.parse().unwrap_or(number);
+    let mut text = format!("{}", rounded);
+    if let Some(dot) = text.find('.') {
+        // Perl keeps at most 15 significant digits.
+        let significant = text[..dot].trim_start_matches('-').len();
+        let keep = 15usize.saturating_sub(significant);
+        if text.len() - dot - 1 > keep {
+            text = format!("{:.*}", keep, rounded);
+            while text.ends_with('0') {
+                text.pop();
+            }
+            if text.ends_with('.') {
+                text.pop();
+            }
+        }
+    }
+    text
 }
 
 /// Formats EXIF focal length value.
@@ -1923,19 +2473,14 @@ fn format_exif_exposure_compensation(value: &str) -> String {
 /// - FocalLength: Lens focal length in mm
 /// - FocalLengthIn35mmFilm: Equivalent focal length
 fn format_exif_focal_length(value: &str) -> String {
-    let trimmed = value.trim();
-
-    if let Ok(num) = trimmed.parse::<f64>() {
-        // Format focal length in mm
-        if (num - num.round()).abs() < 0.01 {
-            // Whole millimeters
-            format!("{:.0} mm", num)
-        } else {
-            // Decimal millimeters
-            format!("{:.1} mm", num)
-        }
-    } else {
-        trimmed.to_string()
+    // XMP.pm:2161-2165 -- `Writable => 'rational'`, `PrintConv =>
+    // 'sprintf("%.1f mm",$val)'`. One decimal always, including whole
+    // millimetres, and the stored form is a fraction: XMP.xmp writes
+    // "5800/1000", which the old plain-float parse could not read at all, so
+    // the tag was reported as "5800/1000 mm".
+    match parse_xmp_number(value) {
+        Some(number) => format!("{:.1} mm", number),
+        None => value.trim().to_string(),
     }
 }
 
@@ -2736,7 +3281,9 @@ mod tests {
             .iter()
             .find(|(n, _)| n == "XMP-exif:FocalLength")
             .map(|(_, v)| v.as_str());
-        assert_eq!(focal, Some("85 mm"));
+        // XMP.pm:2164 -- `PrintConv => 'sprintf("%.1f mm",$val)'`, one decimal
+        // even for a whole number of millimetres.
+        assert_eq!(focal, Some("85.0 mm"));
     }
 
     #[test]
@@ -2812,10 +3359,12 @@ mod tests {
         assert_eq!(format_exif_aperture("5.6"), "f/5.6");
         assert_eq!(format_exif_aperture("8"), "f/8");
 
-        // EXIF focal length formatting
-        assert_eq!(format_exif_focal_length("50"), "50 mm");
-        assert_eq!(format_exif_focal_length("85.0"), "85 mm");
+        // EXIF focal length formatting. XMP.pm:2164 prints one decimal
+        // unconditionally, and the stored form may be a rational.
+        assert_eq!(format_exif_focal_length("50"), "50.0 mm");
+        assert_eq!(format_exif_focal_length("85.0"), "85.0 mm");
         assert_eq!(format_exif_focal_length("24.5"), "24.5 mm");
+        assert_eq!(format_exif_focal_length("5800/1000"), "5.8 mm");
 
         // TIFF resolution formatting
         assert_eq!(format_tiff_resolution("300"), "300");
@@ -2828,11 +3377,14 @@ mod tests {
 
     #[test]
     fn test_exposure_compensation_formatting() {
-        // Test exposure compensation formatting with 2 decimal places
-        assert_eq!(format_exif_exposure_compensation("1.0"), "1.00");
-        assert_eq!(format_exif_exposure_compensation("-0.5"), "-0.50");
-        assert_eq!(format_exif_exposure_compensation("0"), "0.00");
-        assert_eq!(format_exif_exposure_compensation("0.3"), "0.30");
+        // XMP.pm:2099 -- `PrintConv => Image::ExifTool::Exif::PrintFraction`,
+        // not a fixed two decimals: whole stops print signed, halves and
+        // thirds print as fractions, and the stored form is a rational.
+        assert_eq!(format_exif_exposure_compensation("1.0"), "+1");
+        assert_eq!(format_exif_exposure_compensation("-0.5"), "-1/2");
+        assert_eq!(format_exif_exposure_compensation("0"), "0");
+        assert_eq!(format_exif_exposure_compensation("1/3"), "+1/3");
+        assert_eq!(format_exif_exposure_compensation("-3/3"), "-1");
     }
 
     #[test]
@@ -3119,5 +3671,155 @@ mod top_level_struct_tests {
         "#;
 
         assert!(extract_plus_copyright_owner_name(xml).unwrap().is_empty());
+    }
+
+    /// XMP.xmp stores every EXIF-derived number as a rational; the formatters
+    /// used to call `parse::<f64>` straight on "5800/1000" and pass the raw
+    /// fraction through.
+    #[test]
+    fn xmp_rationals_parse() {
+        assert_eq!(parse_xmp_number("5800/1000"), Some(5.8));
+        assert_eq!(parse_xmp_number("-3/3"), Some(-1.0));
+        assert_eq!(parse_xmp_number("2.5"), Some(2.5));
+        assert_eq!(parse_xmp_number("1/0"), None);
+        assert_eq!(parse_xmp_number("not a number"), None);
+    }
+
+    /// Values quoted from `exiftool -G1 -s XMP.xmp` (ExifTool 13.59).
+    #[test]
+    fn xmp_apex_and_rational_values_match_exiftool() {
+        // [XMP] ApertureValue : 2.8   (exif:ApertureValue = 95/32)
+        assert_eq!(format_xmp_apex_aperture("95/32"), "2.8");
+        // [XMP] MaxApertureValue : 2.8
+        assert_eq!(format_xmp_apex_aperture("95/32"), "2.8");
+        // [XMP] ShutterSpeedValue : 0.4   (exif:ShutterSpeedValue = 42/32)
+        assert_eq!(format_xmp_apex_shutter_speed("42/32"), "0.4");
+        // [XMP] FocalLength : 5.8 mm   (exif:FocalLength = 5800/1000)
+        assert_eq!(format_exif_focal_length("5800/1000"), "5.8 mm");
+        // [XMP] FocalPlaneXResolution : 10142.8571428571
+        assert_eq!(format_xmp_plain_rational("2272000/224"), "10142.8571428571");
+        // [XMP] ExposureCompensation : -1   (exif:ExposureBiasValue = -3/3)
+        assert_eq!(format_exif_exposure_compensation("-3/3"), "-1");
+    }
+
+    /// PrintFraction is what EXIF-style exposure compensation goes through;
+    /// whole stops print signed, thirds and halves print as fractions.
+    #[test]
+    fn print_fraction_follows_exif_pm() {
+        assert_eq!(print_exif_fraction(0.0), "0");
+        assert_eq!(print_exif_fraction(-1.0), "-1");
+        assert_eq!(print_exif_fraction(2.0), "+2");
+        assert_eq!(print_exif_fraction(1.0 / 3.0), "+1/3");
+        assert_eq!(print_exif_fraction(0.5), "+1/2");
+    }
+
+    /// XMP.pm renames three exif-namespace properties; without these the tags
+    /// landed under names ExifTool never prints.
+    #[test]
+    fn exif_namespace_property_renames() {
+        assert_eq!(
+            exiftool_property_name("XMP-exif", "PixelXDimension"),
+            "ExifImageWidth"
+        );
+        assert_eq!(
+            exiftool_property_name("XMP-exif", "PixelYDimension"),
+            "ExifImageHeight"
+        );
+        assert_eq!(
+            exiftool_property_name("XMP-exif", "ExposureBiasValue"),
+            "ExposureCompensation"
+        );
+        // The rename is namespace scoped.
+        assert_eq!(
+            exiftool_property_name("XMP-tiff", "PixelXDimension"),
+            "PixelXDimension"
+        );
+    }
+
+    /// `FlatName => ''` drops the structure's own name segment, so PLUS
+    /// Licensee/LicenseeName is LicenseeName rather than LicenseeLicenseeName.
+    #[test]
+    fn flat_name_suppression_covers_the_plus_structures() {
+        for name in ["Licensee", "Licensor", "CopyrightOwner", "ImageCreator"] {
+            assert!(is_flat_name_suppressed(name), "{name}");
+        }
+        assert!(!is_flat_name_suppressed("LocationShown"));
+    }
+
+    /// A Bag of structures flattens to Container+Field, one value per rdf:li.
+    /// Quoted from `exiftool -G1 -s XMP7.xmp`:
+    ///   [XMP] LocationShownCity        : London, Paris, Berlin
+    ///   [XMP] LocationShownCountryCode : GB, FR, DE
+    #[test]
+    fn list_struct_flattening_matches_exiftool() {
+        let xml = br#"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+ <rdf:Description rdf:about=''
+  xmlns:Iptc4xmpExt='http://iptc.org/std/Iptc4xmpExt/2008-02-29/'>
+  <Iptc4xmpExt:LocationShown>
+   <rdf:Bag>
+    <rdf:li rdf:parseType='Resource'>
+     <Iptc4xmpExt:City>London</Iptc4xmpExt:City>
+     <Iptc4xmpExt:CountryCode>GB</Iptc4xmpExt:CountryCode>
+    </rdf:li>
+    <rdf:li rdf:parseType='Resource'>
+     <Iptc4xmpExt:City>Paris</Iptc4xmpExt:City>
+     <Iptc4xmpExt:CountryCode>FR</Iptc4xmpExt:CountryCode>
+    </rdf:li>
+   </rdf:Bag>
+  </Iptc4xmpExt:LocationShown>
+ </rdf:Description>
+</rdf:RDF>"#;
+        let tags = extract_list_struct_values(xml).unwrap();
+        assert_eq!(
+            tags.iter()
+                .find(|(t, _)| t == "XMP:LocationShownCity")
+                .map(|(_, v)| v.as_str()),
+            Some("London, Paris")
+        );
+        assert_eq!(
+            tags.iter()
+                .find(|(t, _)| t == "XMP:LocationShownCountryCode")
+                .map(|(_, v)| v.as_str()),
+            Some("GB, FR")
+        );
+        // The container itself is not a flattened tag.
+        assert!(!tags.iter().any(|(t, _)| t == "XMP:LocationShown"));
+    }
+
+    /// A field that is itself a structure keeps concatenating:
+    /// `xmpMM:Manifest`/`stMfs:reference`/`stRef:filePath` is
+    /// ManifestReferenceFilePath, quoted from `exiftool -G1 -s XMP3.xmp`.
+    #[test]
+    fn nested_list_struct_fields_concatenate() {
+        let xml = br#"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+         xmlns:stMfs='http://ns.adobe.com/xap/1.0/sType/ManifestItem#'
+         xmlns:stRef='http://ns.adobe.com/xap/1.0/sType/ResourceRef#'
+         xmlns:xmpMM='http://ns.adobe.com/xap/1.0/mm/'>
+ <rdf:Description>
+  <xmpMM:Manifest>
+   <rdf:Seq>
+    <rdf:li rdf:parseType='Resource'>
+     <stMfs:linkForm>EmbedByReference</stMfs:linkForm>
+     <stMfs:reference rdf:parseType='Resource'>
+      <stRef:filePath>C:\some path\file.ext</stRef:filePath>
+     </stMfs:reference>
+    </rdf:li>
+   </rdf:Seq>
+  </xmpMM:Manifest>
+ </rdf:Description>
+</rdf:RDF>"#;
+        let tags = extract_list_struct_values(xml).unwrap();
+        assert_eq!(
+            tags.iter()
+                .find(|(t, _)| t == "XMP:ManifestLinkForm")
+                .map(|(_, v)| v.as_str()),
+            Some("EmbedByReference")
+        );
+        assert_eq!(
+            tags.iter()
+                .find(|(t, _)| t == "XMP:ManifestReferenceFilePath")
+                .map(|(_, v)| v.as_str()),
+            Some(r"C:\some path\file.ext")
+        );
     }
 }

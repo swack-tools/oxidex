@@ -9,6 +9,7 @@ pub mod metadata;
 
 // Format-specific parsers
 pub mod raf_parser;
+pub mod sigma_lens_types;
 
 // Re-export the public API
 pub use format_detection::{RawFormat, detect_raw_format};
