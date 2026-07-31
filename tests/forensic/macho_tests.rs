@@ -200,7 +200,9 @@ fn test_macho64_executable_x86_64() {
     let metadata = parser.parse(&reader).expect("Failed to parse Mach-O");
 
     // Verify basic metadata - new API uses MachO: prefix
-    assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "x86_64");
+    // ExifTool MacOS.pm renders CPU type 0x01000007 as "x86 64-bit"
+    // (verified: `exiftool -EXE:CPUType /bin/ls` -> "x86 64-bit, ARM 64-bit").
+    assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "x86 64-bit");
     assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
     assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
 }

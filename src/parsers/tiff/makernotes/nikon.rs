@@ -270,6 +270,143 @@ fn decode_vignette_control(value: i32) -> &'static str {
     }
 }
 
+/// Return the four bytes stored in an inline Nikon IFD value.
+///
+/// `IfdEntry::value_offset` has already been converted to the embedded TIFF's
+/// native integer representation. Converting it back with the same byte order
+/// recovers the original bytes without relying on the outer NEF byte order.
+fn inline_value_bytes(value: u32, byte_order: ByteOrder) -> [u8; 4] {
+    match byte_order {
+        ByteOrder::LittleEndian => value.to_le_bytes(),
+        ByteOrder::BigEndian => value.to_be_bytes(),
+    }
+}
+
+/// Read an UNDEFINED Nikon MakerNote value.
+///
+/// Nikon MakerNote offsets are relative to the embedded TIFF header at byte 10
+/// of the MakerNote, not to the beginning of the outer NEF TIFF.
+fn nikon_undefined_value(
+    entry: &IfdEntry,
+    data: &[u8],
+    tiff_start: usize,
+    byte_order: ByteOrder,
+) -> Option<Vec<u8>> {
+    let count = usize::try_from(entry.value_count).ok()?;
+    if count <= 4 {
+        let inline = inline_value_bytes(entry.value_offset, byte_order);
+        return Some(inline.get(..count)?.to_vec());
+    }
+
+    let offset = usize::try_from(entry.value_offset).ok()?;
+    let start = tiff_start.checked_add(offset)?;
+    let end = start.checked_add(count)?;
+    Some(data.get(start..end)?.to_vec())
+}
+
+/// Decode `%Image::ExifTool::Nikon::AFInfo` from Nikon.pm.
+///
+/// The four-byte AFInfo record stores AFAreaMode at byte 0, AFPoint at byte 1,
+/// a reserved byte at byte 2, and the AFPointsInFocus bit mask at byte 3.
+fn decode_af_info(entry: &IfdEntry, byte_order: ByteOrder, tags: &mut HashMap<String, String>) {
+    let value = inline_value_bytes(entry.value_offset, byte_order);
+
+    // Nikon.pm AFInfo AFAreaMode PrintConv values.
+    let area_mode = match value[0] {
+        0 => "Single Area",
+        1 => "Dynamic Area",
+        2 => "Dynamic Area, Closest Subject",
+        3 => "Group Dynamic",
+        4 => "Single Area (wide)",
+        5 => "Dynamic Area (wide)",
+        _ => return,
+    };
+    tags.insert("Nikon:AFAreaMode".to_string(), area_mode.to_string());
+
+    // Nikon.pm AFInfo AFPoint values for the five-point AF system used by the
+    // D70 sample.
+    let af_point = match value[1] {
+        0 => "Center",
+        1 => "Top",
+        2 => "Bottom",
+        3 => "Mid-left",
+        4 => "Mid-right",
+        _ => return,
+    };
+    tags.insert("Nikon:AFPoint".to_string(), af_point.to_string());
+
+    // Nikon.pm AFInfo AFPointsInFocus bit assignments.
+    const AF_POINTS: &[(u8, &str)] = &[
+        (0x01, "Center"),
+        (0x02, "Top"),
+        (0x04, "Bottom"),
+        (0x08, "Mid-left"),
+        (0x10, "Mid-right"),
+    ];
+    let points = AF_POINTS
+        .iter()
+        .filter_map(|(mask, name)| (value[3] & mask != 0).then_some(*name))
+        .collect::<Vec<_>>();
+    if !points.is_empty() {
+        tags.insert("Nikon:AFPointsInFocus".to_string(), points.join(", "));
+    }
+}
+
+/// Extract AFAperture from `%Image::ExifTool::Nikon::LensData01`.
+///
+/// LensData01 begins with its four-byte ASCII version and stores AFAperture at
+/// byte 5. Nikon.pm converts this APEX value with `2 ** ($val / 24)`.
+fn decode_lens_data_af_aperture(data: &[u8], tags: &mut HashMap<String, String>) {
+    let Some(version) = data.get(0..4) else {
+        return;
+    };
+    if !version.iter().all(u8::is_ascii_digit) {
+        return;
+    }
+
+    let Some(raw_aperture) = data.get(5).copied() else {
+        return;
+    };
+    let aperture = 2_f64.powf(f64::from(raw_aperture) / 24.0);
+    tags.insert("Nikon:AFAperture".to_string(), format!("{aperture:.1}"));
+}
+
+/// Decode the header of `%Image::ExifTool::Nikon::NEFLinearizationTable`.
+///
+/// The Nikon.pm binary table starts with a four-byte ASCII version, followed
+/// by the one-byte BitDepth at offset 4 and three one-byte fixed-point
+/// ColorGain components at offsets 5 through 7. ColorGain uses 8 fractional
+/// bits and is printed with two decimal places.
+fn decode_nef_linearization_header(data: &[u8], tags: &mut HashMap<String, String>) {
+    let Some(version) = data.get(0..4) else {
+        return;
+    };
+    if !version.iter().all(u8::is_ascii_digit) {
+        return;
+    }
+
+    let Some(bit_depth) = data.get(4).copied() else {
+        return;
+    };
+    // Nikon NEF data uses these bit depths. Rejecting other values prevents a
+    // malformed or unrelated tag payload from generating plausible metadata.
+    if matches!(bit_depth, 8 | 12 | 14 | 16) {
+        tags.insert("Nikon:BitDepth".to_string(), bit_depth.to_string());
+    }
+
+    let Some(gains) = data.get(5..8) else {
+        return;
+    };
+    tags.insert(
+        "Nikon:ColorGain".to_string(),
+        gains
+            .iter()
+            .map(|gain| format!("{:.2}", f64::from(*gain) / 256.0))
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+}
+
 /// Represents a Nikon MakerNote parser
 pub struct NikonParser;
 
@@ -478,6 +615,12 @@ impl MakerNoteParser for NikonParser {
 
                     // LensData array (complex)
                     NIKON_LENS_DATA => {
+                        if let Some(lens_data) =
+                            nikon_undefined_value(entry, data, tiff_start, tiff_byte_order)
+                        {
+                            decode_lens_data_af_aperture(&lens_data, tags);
+                        }
+
                         if let Some(array) = extract_u16_array(entry, data, byte_order) {
                             // Extract lens ID and look up lens name
                             if array.len() > LENS_DATA_LENS_ID {
@@ -750,10 +893,20 @@ impl MakerNoteParser for NikonParser {
 
                     // Array tags
                     NIKON_AF_INFO => {
+                        decode_af_info(entry, tiff_byte_order, tags);
+
                         if let Some(array) = extract_u16_array(entry, data, byte_order)
                             && !array.is_empty()
                         {
                             tags.insert("Nikon:AFInfo".to_string(), format!("{}", array[0]));
+                        }
+                    }
+
+                    NIKON_NEF_LINEAR_ZOOM => {
+                        if let Some(linearization) =
+                            nikon_undefined_value(entry, data, tiff_start, tiff_byte_order)
+                        {
+                            decode_nef_linearization_header(&linearization, tags);
                         }
                     }
 

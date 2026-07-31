@@ -275,6 +275,21 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
         }
     }
 
+    // PLUS Custom1 is a Bag whose entries are language alternatives. Preserve
+    // the list independently for each language, including explicitly empty
+    // entries (XMP9.xmp).
+    for (tag, value) in extract_custom1_language_values(xml_bytes)? {
+        results.retain(|(existing, _)| existing != &tag && existing != "XMP-plus:Custom1");
+        results.push((tag, value));
+    }
+
+    // ResourceRef fields may use element or RDF attribute shorthand. Handle
+    // both forms, including a nested rdf:Description (XMP.xmp).
+    for (tag, value) in extract_derived_from_ids(xml_bytes)? {
+        results.retain(|(existing, _)| existing != &tag);
+        results.push((tag, value));
+    }
+
     // Flatten top-level `rdf:parseType="Resource"` structures into
     // ParentField tags, the way ExifTool's XMP::GetXMPTagID builds tag IDs
     // ("$tag .= ucfirst($nm)", XMP.pm). This is what produces e.g.
@@ -665,6 +680,280 @@ fn extract_artwork_title_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)
     }
 
     Ok(results)
+}
+
+/// Extracts PLUS Custom1's Bag-of-Alt values, retaining list positions that
+/// are represented by explicitly empty language alternatives.
+fn extract_custom1_language_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
+    const PLUS_NS: &str = "http://ns.useplus.org/ldf/xmp/1.0/";
+
+    let mut reader = Reader::from_reader(xml_bytes);
+    reader.config_mut().trim_text(true);
+
+    let mut resolver = NamespaceResolver::new();
+    let mut buf = Vec::new();
+    let mut depth = 0usize;
+    let mut property_depth: Option<usize> = None;
+    let mut language_li_depth: Option<usize> = None;
+    let mut current_language: Option<String> = None;
+    let mut current_value = String::new();
+    let mut values: Vec<(String, String)> = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                depth += 1;
+                register_namespaces_from_element(&e, &mut resolver)?;
+                let tag_name = extract_tag_name(&e)?;
+
+                if property_depth.is_none()
+                    && is_property_in_namespace(&tag_name, "Custom1", PLUS_NS, &resolver)
+                {
+                    property_depth = Some(depth);
+                    values.clear();
+                } else if property_depth.is_some()
+                    && language_li_depth.is_none()
+                    && is_rdf_li(&tag_name, &resolver)
+                    && let Some(language) = xml_lang_attribute(&e)
+                {
+                    language_li_depth = Some(depth);
+                    current_language = Some(language);
+                    current_value.clear();
+                }
+            }
+
+            Ok(Event::End(_)) => {
+                if language_li_depth == Some(depth) {
+                    if let Some(language) = current_language.take() {
+                        values.push((language, current_value.trim().to_string()));
+                    }
+                    language_li_depth = None;
+                    current_value.clear();
+                }
+
+                if property_depth == Some(depth) {
+                    property_depth = None;
+                }
+                depth = depth.saturating_sub(1);
+            }
+
+            Ok(Event::Text(e)) => {
+                if language_li_depth.is_some()
+                    && let Ok(decoded) = e.xml10_content()
+                {
+                    let unescaped =
+                        quick_xml::escape::unescape(&decoded).unwrap_or_else(|_| decoded.clone());
+                    current_value.push_str(&unescaped);
+                }
+            }
+
+            Ok(Event::Empty(e)) => {
+                register_namespaces_from_element(&e, &mut resolver)?;
+                let tag_name = extract_tag_name(&e)?;
+                if property_depth.is_some()
+                    && is_rdf_li(&tag_name, &resolver)
+                    && let Some(language) = xml_lang_attribute(&e)
+                {
+                    values.push((language, String::new()));
+                }
+            }
+
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(e) => {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid PLUS Custom1 XML: {e}"
+                )));
+            }
+        }
+        buf.clear();
+    }
+
+    let mut languages: Vec<(String, Vec<String>)> = Vec::new();
+    for (language, value) in values {
+        if let Some((_, language_values)) =
+            languages.iter_mut().find(|(known, _)| known == &language)
+        {
+            language_values.push(value);
+        } else {
+            languages.push((language, vec![value]));
+        }
+    }
+
+    Ok(languages
+        .into_iter()
+        .map(|(language, language_values)| {
+            let tag = if language == "x-default" {
+                "XMP:Custom1".to_string()
+            } else {
+                format!("XMP:Custom1-{language}")
+            };
+            (tag, language_values.join(", "))
+        })
+        .collect())
+}
+
+/// Extracts xmpMM:DerivedFrom ResourceRef identifiers from either child
+/// elements or RDF attribute shorthand.
+fn extract_derived_from_ids(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
+    const XMP_MM_NS: &str = "http://ns.adobe.com/xap/1.0/mm/";
+    const ST_REF_NS: &str = "http://ns.adobe.com/xap/1.0/sType/ResourceRef#";
+
+    let mut reader = Reader::from_reader(xml_bytes);
+    reader.config_mut().trim_text(true);
+
+    let mut resolver = NamespaceResolver::new();
+    let mut buf = Vec::new();
+    let mut depth = 0usize;
+    let mut derived_depth: Option<usize> = None;
+    let mut field_depth: Option<usize> = None;
+    let mut field_tag: Option<&'static str> = None;
+    let mut field_value = String::new();
+    let mut results = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                depth += 1;
+                register_namespaces_from_element(&e, &mut resolver)?;
+                let tag_name = extract_tag_name(&e)?;
+
+                if derived_depth.is_none()
+                    && is_property_in_namespace(&tag_name, "DerivedFrom", XMP_MM_NS, &resolver)
+                {
+                    derived_depth = Some(depth);
+                    append_derived_from_attributes(&e, &resolver, ST_REF_NS, &mut results)?;
+                } else if derived_depth.is_some() {
+                    append_derived_from_attributes(&e, &resolver, ST_REF_NS, &mut results)?;
+
+                    if field_depth.is_none() {
+                        field_tag = derived_from_field_tag(&tag_name, &resolver, ST_REF_NS);
+                        if field_tag.is_some() {
+                            field_depth = Some(depth);
+                            field_value.clear();
+                        }
+                    }
+                }
+            }
+
+            Ok(Event::End(_)) => {
+                if field_depth == Some(depth) {
+                    if let Some(tag) = field_tag.take() {
+                        let value = field_value.trim();
+                        if !value.is_empty() {
+                            upsert_string_result(&mut results, tag, value.to_string());
+                        }
+                    }
+                    field_depth = None;
+                    field_value.clear();
+                }
+
+                if derived_depth == Some(depth) {
+                    derived_depth = None;
+                }
+                depth = depth.saturating_sub(1);
+            }
+
+            Ok(Event::Text(e)) => {
+                if field_depth.is_some()
+                    && let Ok(decoded) = e.xml10_content()
+                {
+                    let unescaped =
+                        quick_xml::escape::unescape(&decoded).unwrap_or_else(|_| decoded.clone());
+                    field_value.push_str(&unescaped);
+                }
+            }
+
+            Ok(Event::Empty(e)) => {
+                register_namespaces_from_element(&e, &mut resolver)?;
+                let tag_name = extract_tag_name(&e)?;
+
+                if derived_depth.is_none()
+                    && is_property_in_namespace(&tag_name, "DerivedFrom", XMP_MM_NS, &resolver)
+                {
+                    append_derived_from_attributes(&e, &resolver, ST_REF_NS, &mut results)?;
+                } else if derived_depth.is_some() {
+                    append_derived_from_attributes(&e, &resolver, ST_REF_NS, &mut results)?;
+                    if let Some(tag) = derived_from_field_tag(&tag_name, &resolver, ST_REF_NS)
+                        && let Some(value) = resource_attribute(&e)?
+                    {
+                        upsert_string_result(&mut results, tag, value);
+                    }
+                }
+            }
+
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(e) => {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid XMP DerivedFrom XML: {e}"
+                )));
+            }
+        }
+        buf.clear();
+    }
+
+    Ok(results)
+}
+
+fn derived_from_field_tag(
+    qname: &str,
+    resolver: &NamespaceResolver,
+    st_ref_namespace: &str,
+) -> Option<&'static str> {
+    if is_property_in_namespace(qname, "documentID", st_ref_namespace, resolver) {
+        Some("XMP:DerivedFromDocumentID")
+    } else if is_property_in_namespace(qname, "instanceID", st_ref_namespace, resolver) {
+        Some("XMP:DerivedFromInstanceID")
+    } else {
+        None
+    }
+}
+
+fn append_derived_from_attributes(
+    element: &BytesStart,
+    resolver: &NamespaceResolver,
+    st_ref_namespace: &str,
+    results: &mut Vec<(String, String)>,
+) -> Result<()> {
+    for attr in element.attributes().flatten() {
+        let key = std::str::from_utf8(attr.key.as_ref()).map_err(|e| {
+            ExifToolError::parse_error(format!("Invalid UTF-8 in DerivedFrom attribute: {e}"))
+        })?;
+        let Some(tag) = derived_from_field_tag(key, resolver, st_ref_namespace) else {
+            continue;
+        };
+        let value = std::str::from_utf8(&attr.value).map_err(|e| {
+            ExifToolError::parse_error(format!("Invalid UTF-8 in DerivedFrom value: {e}"))
+        })?;
+        if !value.trim().is_empty() {
+            upsert_string_result(results, tag, value.trim().to_string());
+        }
+    }
+    Ok(())
+}
+
+fn resource_attribute(element: &BytesStart) -> Result<Option<String>> {
+    for attr in element.attributes().flatten() {
+        let key = std::str::from_utf8(attr.key.as_ref()).map_err(|e| {
+            ExifToolError::parse_error(format!("Invalid UTF-8 in RDF attribute: {e}"))
+        })?;
+        if key == "rdf:resource" {
+            let value = std::str::from_utf8(&attr.value).map_err(|e| {
+                ExifToolError::parse_error(format!("Invalid UTF-8 in RDF resource: {e}"))
+            })?;
+            return Ok(Some(value.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+fn upsert_string_result(results: &mut Vec<(String, String)>, tag: &str, value: String) {
+    if let Some((_, existing)) = results.iter_mut().find(|(known, _)| known == tag) {
+        *existing = value;
+    } else {
+        results.push((tag.to_string(), value));
+    }
 }
 
 /// Flattens top-level `rdf:parseType="Resource"` structures into ExifTool's
@@ -2167,6 +2456,10 @@ fn format_tag_name(qname: &str, resolver: &NamespaceResolver) -> String {
     use super::namespace_mapping::namespace_to_family;
 
     let mut local_name = NamespaceResolver::extract_local_name(qname).to_string();
+    // XMP encodes otherwise-invalid property-name characters as U+2182 plus
+    // four hexadecimal digits. ExifTool's generated tag ID drops the marker
+    // but retains those digits (XMP3.xmp).
+    local_name.retain(|ch| ch != '\u{2182}');
 
     // Extract namespace prefix from the qualified name
     if let Some(prefix) = NamespaceResolver::extract_prefix(qname) {
@@ -2178,6 +2471,12 @@ fn format_tag_name(qname: &str, resolver: &NamespaceResolver) -> String {
             // Unknown namespace - use generic XMP prefix
             "XMP"
         };
+
+        // XMP.pm reports exif:PixelYDimension as ExifImageHeight in the
+        // generic XMP family rather than under XMP-exif (XMP.xmp).
+        if family_prefix == "XMP-exif" && local_name == "PixelYDimension" {
+            return "XMP:ExifImageHeight".to_string();
+        }
 
         // ExifTool capitalizes the first letter of all XMP property names
         // to create consistent PascalCase tag names (e.g., album → Album)
