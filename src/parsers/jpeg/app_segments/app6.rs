@@ -41,6 +41,8 @@
 //! }
 //! ```
 
+use crate::core::formatters::numeric_precision::perl_number;
+use crate::core::value_formatter::format_exif_datetime;
 use crate::core::{MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
@@ -162,7 +164,10 @@ fn gopro_tag_name(fourcc: &str) -> Option<&'static str> {
         "MINF" => "Model",
         "MMOD" => "MediaMode",
         "MTRX" => "AccelerometerMatrix",
-        "MUID" => "MediaUID",
+        // GoPro.pm defines MUID twice; the later definition wins in Perl, so
+        // the name is MediaUniqueID. The earlier "MediaUID" entry (GoPro.pm:293)
+        // is dead code and never reaches ExifTool's output.
+        "MUID" => "MediaUniqueID",
         "MWET" => "MicrophoneWet",
         "MXCF" => "MappingXMode",
         "MYCF" => "MappingYMode",
@@ -207,6 +212,65 @@ fn gopro_tag_name(fourcc: &str) -> Option<&'static str> {
     })
 }
 
+/// GoPro tags ExifTool marks `Binary => 1`, whose value it never prints.
+///
+/// The byte count in ExifTool's placeholder is the length of the *converted*
+/// value string, not of the record: CORI's four quaternion floats occupy 16
+/// bytes on disk but convert to "1 0 0 0" and report 7.
+const BINARY_TAGS: &[&str] = &["CORI", "GRAV", "IORI"];
+
+/// Renders a Unix epoch second the way ExifTool's `ConvertUnixTime` does.
+///
+/// The conversion is UTC: `ConvertUnixTime` only reaches for `localtime` when
+/// passed a true second argument, and GoPro.pm's CDAT passes none.
+fn convert_unix_time(seconds: i64) -> String {
+    // ExifTool reports the epoch itself as an all-zero date, not as 1970.
+    if seconds == 0 {
+        return "0000:00:00 00:00:00".to_string();
+    }
+    chrono::DateTime::from_timestamp(seconds, 0)
+        .map_or_else(|| seconds.to_string(), |dt| format_exif_datetime(&dt))
+}
+
+/// Reassembles GoPro's media ID from the 32-bit words it is stored as.
+///
+/// ExifTool's MUID PrintConv is `sprintf('%.8x', $_)` over each word, joined
+/// with nothing between them -- eight words become one 64-character hex
+/// string. A word that is not a number is passed through rather than
+/// silently becoming "00000000", though the decoder cannot produce one.
+fn media_unique_id(words: &str) -> String {
+    words
+        .split_whitespace()
+        .map(|word| {
+            word.parse::<u32>()
+                .map_or_else(|_| word.to_string(), |n| format!("{:08x}", n))
+        })
+        .collect()
+}
+
+/// Renders a signed count of minutes as ExifTool's `TimeZoneString` does.
+fn time_zone_string(minutes: i64) -> String {
+    let sign = if minutes < 0 { '-' } else { '+' };
+    let minutes = minutes.unsigned_abs();
+    format!("{}{:02}:{:02}", sign, minutes / 60, minutes % 60)
+}
+
+/// Substitutes ExifTool's placeholder for a tag it declares `Binary => 1`.
+fn binary_placeholder(value: &TagValue) -> TagValue {
+    let printed = match value {
+        TagValue::String(s) => s.clone(),
+        TagValue::Integer(i) => i.to_string(),
+        TagValue::Float(f) => perl_number(*f),
+        // Unreachable: every GoPro tag in BINARY_TAGS is a numeric record,
+        // and those decode to exactly the three variants above.
+        other => return other.clone(),
+    };
+    TagValue::String(format!(
+        "(Binary data {} bytes, use -b option to extract)",
+        printed.len()
+    ))
+}
+
 /// Applies ExifTool print conversions for the GoPro tags that define them.
 fn gopro_print_conv(fourcc: &str, value: TagValue) -> TagValue {
     // Tags using %noYes = ( N => 'No', Y => 'Yes' ) in GoPro.pm
@@ -214,9 +278,28 @@ fn gopro_print_conv(fourcc: &str, value: TagValue) -> TagValue {
         "AUBT", "AUPT", "CLDP", "DZOM", "EISE", "HDRV", "ORDP", "SCAP", "SMTR",
     ];
 
+    // The two integer-valued conversions come first; the string table below
+    // would pass their values through untouched.
+    if let Some(n) = value.as_integer() {
+        match fourcc {
+            // CDAT: RawConv => 'ConvertUnixTime($val)'
+            "CDAT" => return TagValue::String(convert_unix_time(n)),
+            // TZON: PrintConv => 'Image::ExifTool::TimeZoneString($val)'
+            "TZON" => return TagValue::String(time_zone_string(n)),
+            _ => {}
+        }
+    }
+
     let TagValue::String(s) = &value else {
         return value;
     };
+
+    // MUID arrives as the space-joined 32-bit words ReadValue produced, which
+    // is exactly what ExifTool's PrintConv splits on.
+    if fourcc == "MUID" {
+        return TagValue::String(media_unique_id(s));
+    }
+
     let mapped = match (fourcc, s.as_str()) {
         ("OREN", "U") => "Up",
         ("OREN", "D") => "Down",
@@ -329,34 +412,100 @@ fn parse_gpmf_records(data: &[u8], metadata: &mut MetadataMap, depth: u8) {
             continue;
         };
         if let Some(value) = decode_gpmf_value(format, size, count, value_data) {
-            metadata.insert(
-                format!("GoPro:{}", tag_name),
-                gopro_print_conv(fourcc, value),
-            );
+            let value = gopro_print_conv(fourcc, value);
+            let value = if BINARY_TAGS.contains(&fourcc) {
+                binary_placeholder(&value)
+            } else {
+                value
+            };
+            metadata.insert(format!("GoPro:{}", tag_name), value);
         }
     }
 }
 
+/// Byte width of one scalar of a GPMF format code.
+///
+/// This is ExifTool's `%goProFmt` (GPMF code -> ExifTool format) composed with
+/// `FormatSize`, plus the `%goProSize` overrides for the three fixed-width
+/// codes that map to 'undef'. Codes absent from ExifTool's table also read as
+/// 'undef', whose scalar is a single byte.
+fn gpmf_scalar_width(format: u8) -> usize {
+    match format {
+        b'b' | b'B' | b'c' => 1,
+        b's' | b'S' => 2,
+        b'l' | b'L' | b'f' | b'q' => 4,
+        b'j' | b'J' | b'd' | b'Q' => 8,
+        b'F' => 4,         // FourCC   (%goProSize)
+        b'G' | b'U' => 16, // UUID, 16-byte date (%goProSize)
+        _ => 1,            // 'undef'
+    }
+}
+
+/// True for the GPMF codes ExifTool reads as text or as opaque bytes.
+///
+/// These are the formats whose multi-element records it unpacks as a
+/// fixed-width list rather than reading straight through.
+fn is_textual_format(format: u8) -> bool {
+    !matches!(
+        format,
+        b'b' | b'B' | b's' | b'S' | b'l' | b'L' | b'j' | b'J' | b'f' | b'd' | b'q' | b'Q'
+    )
+}
+
 /// Decodes a GPMF record payload into a TagValue.
 ///
-/// Single numeric elements become Integer/Float; multi-element numerics are
-/// space-joined strings (ExifTool's ReadValue list convention); 'c' data is a
-/// NUL-trimmed string; unhandled formats are kept as Binary.
+/// Mirrors ExifTool's ProcessGoPro. Two of its rules are easy to get wrong:
+///
+/// 1. A record's `count` is the number of *structures*, and `size` their
+///    stride -- not the number of scalars. ExifTool multiplies them into a
+///    byte length and hands that to ReadValue, which derives the scalar count
+///    from the format's own width (`int($size / $len)`). POLY arrives as one
+///    28-byte element and is seven floats.
+/// 2. Textual and opaque formats are the exception: with more than one
+///    element of more than one byte, ExifTool unpacks them as a fixed-width
+///    list, `A$len` for strings (which drops the padding) and `a$len` for
+///    'undef' (which does not). PYCF's seven NUL-padded 8-byte slots are
+///    seven elements, not one 56-byte blob.
+///
+/// Multi-scalar numeric records join with a space, as ReadValue does. Floats
+/// render through [`perl_number`], since ExifTool is just interpolating a
+/// Perl double into a string.
 fn decode_gpmf_value(format: u8, size: usize, count: usize, data: &[u8]) -> Option<TagValue> {
     if data.is_empty() {
         return None;
     }
+
+    // Rule 2: fixed-width list of textual/opaque elements.
+    if is_textual_format(format) && count > 1 && size > 1 {
+        let elements: Option<Vec<TagValue>> = data
+            .chunks_exact(size)
+            .map(|chunk| decode_gpmf_list_element(format, chunk).map(TagValue::String))
+            .collect();
+        // A slot that is not text leaves the whole list undecodable; keep the
+        // payload rather than emitting a list with holes punched in it.
+        return Some(match elements.filter(|e| !e.is_empty()) {
+            Some(elements) => TagValue::Array(elements),
+            None => TagValue::Binary(data.to_vec()),
+        });
+    }
+
+    // Rule 1: one ReadValue over the whole payload, counting scalars by width.
+    let width = gpmf_scalar_width(format);
+    // ReadValue yields nothing when the payload cannot hold a single scalar.
+    let scalars = data.len() / width;
+    if scalars == 0 {
+        return None;
+    }
     let reader = EndianReader::big_endian(data);
 
-    // Integer element reader for one element at byte offset `off`
     let int_at = |off: usize| -> Option<i64> {
         match format {
-            b'b' => reader.i8_at(off).map(|v| v as i64),
-            b'B' => reader.u8_at(off).map(|v| v as i64),
-            b's' => reader.i16_at(off).map(|v| v as i64),
-            b'S' => reader.u16_at(off).map(|v| v as i64),
-            b'l' => reader.i32_at(off).map(|v| v as i64),
-            b'L' => reader.u32_at(off).map(|v| v as i64),
+            b'b' => reader.i8_at(off).map(i64::from),
+            b'B' => reader.u8_at(off).map(i64::from),
+            b's' => reader.i16_at(off).map(i64::from),
+            b'S' => reader.u16_at(off).map(i64::from),
+            b'l' => reader.i32_at(off).map(i64::from),
+            b'L' => reader.u32_at(off).map(i64::from),
             b'j' => reader.i64_at(off),
             b'J' => reader.u64_at(off).map(|v| v as i64),
             _ => None,
@@ -364,42 +513,76 @@ fn decode_gpmf_value(format: u8, size: usize, count: usize, data: &[u8]) -> Opti
     };
 
     match format {
-        b'c' | b'C' => std::str::from_utf8(data)
-            .ok()
-            .map(|s| TagValue::String(s.trim_end_matches('\0').to_string())),
         b'b' | b'B' | b's' | b'S' | b'l' | b'L' | b'j' | b'J' => {
-            if count == 1 {
-                int_at(0).map(TagValue::Integer)
-            } else {
-                let values: Vec<String> = (0..count)
-                    .map_while(|i| int_at(i * size))
-                    .map(|v| v.to_string())
-                    .collect();
-                (!values.is_empty()).then(|| TagValue::String(values.join(" ")))
+            let values: Vec<i64> = (0..scalars).map_while(|i| int_at(i * width)).collect();
+            match values.as_slice() {
+                [] => None,
+                [single] => Some(TagValue::Integer(*single)),
+                many => Some(TagValue::String(
+                    many.iter()
+                        .map(i64::to_string)
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                )),
             }
         }
         b'f' | b'd' => {
             let float_at = |off: usize| -> Option<f64> {
                 if format == b'f' {
-                    reader.f32_at(off).map(|v| v as f64)
+                    reader.f32_at(off).map(f64::from)
                 } else {
                     reader.f64_at(off)
                 }
             };
-            if count == 1 {
-                float_at(0).map(TagValue::Float)
-            } else {
-                let values: Vec<String> = (0..count)
-                    .map_while(|i| float_at(i * size))
-                    .map(|v| v.to_string())
-                    .collect();
-                (!values.is_empty()).then(|| TagValue::String(values.join(" ")))
-            }
+            let values: Vec<String> = (0..scalars)
+                .map_while(|i| float_at(i * width))
+                .map(perl_number)
+                .collect();
+            (!values.is_empty()).then(|| TagValue::String(values.join(" ")))
         }
-        // 'F' (FourCC), 'G' (UUID), 'U' (date), 'q'/'Q' (fixed-point), '?'
-        // (TYPE-defined structure) and anything else: keep raw bytes.
-        _ => Some(TagValue::Binary(data.to_vec())),
+        // Everything else reads as text or as raw bytes: 'c' strings, plus
+        // the 'undef' codes 'F' (FourCC, e.g. PRJT's "GPRO"), 'G' (UUID),
+        // 'U' (date) and '?' (TYPE-defined structure, which we cannot decode
+        // without tracking TYPE). 'q'/'Q' fixed-point is not yet handled and
+        // falls through here too.
+        _ => Some(match decode_gpmf_text(format, data) {
+            Some(text) => TagValue::String(text),
+            None => TagValue::Binary(data.to_vec()),
+        }),
     }
+}
+
+/// Decodes a whole textual GPMF payload, as ExifTool's ReadValue does.
+///
+/// A 'string' is truncated at its first NUL; every other code reads as
+/// 'undef', whose bytes pass through untouched. Returns `None` when the bytes
+/// are not valid UTF-8, leaving the caller to keep them as binary.
+fn decode_gpmf_text(format: u8, data: &[u8]) -> Option<String> {
+    let bytes = if format == b'c' {
+        let end = data.iter().position(|&b| b == 0).unwrap_or(data.len());
+        &data[..end]
+    } else {
+        data
+    };
+    std::str::from_utf8(bytes).ok().map(str::to_string)
+}
+
+/// Decodes one fixed-width slot of a GPMF list, as Perl's unpack does.
+///
+/// `A$len` (strings) strips trailing spaces and NULs from each slot -- note
+/// that it strips the *padding*, and does not cut at the first NUL the way
+/// ReadValue does. `a$len` ('undef') passes the bytes through untouched.
+fn decode_gpmf_list_element(format: u8, chunk: &[u8]) -> Option<String> {
+    let bytes = if format == b'c' {
+        let end = chunk
+            .iter()
+            .rposition(|&b| b != 0 && b != b' ')
+            .map_or(0, |i| i + 1);
+        &chunk[..end]
+    } else {
+        chunk
+    };
+    std::str::from_utf8(bytes).ok().map(str::to_string)
 }
 
 /// Parses TDHD (True Definition High Definition) metadata.
@@ -646,5 +829,253 @@ mod tests {
         let data = b"AB";
         let result = parse_app6(data);
         assert!(result.is_err());
+    }
+
+    // ------------------------------------------------------------------------
+    // GPMF value conversion, against exiftool 13.59 on the real samples.
+    //
+    // Every record below is byte-for-byte the one in the named sample (see
+    // the APP6 "GoPro" segment), and every expectation is the corresponding
+    // line of `exiftool -G0 -s <sample>`.
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn test_gpmf_size_is_a_struct_stride_not_a_scalar_count() {
+        // GoProHERO12Black.jpg: POLY fmt='f' size=28 count=1 -- one 28-byte
+        // structure, which ReadValue splits into seven floats. Reading
+        // `count` as the scalar count yields only the leading 0.
+        //   [APP6] PolynomialCoefficients : 0 2.10214114189148 0.142030909657478
+        //          -1.01693856716156 0.630049288272858 -2.19073308213753e-13
+        //          1.06550110802548e-13
+        let poly = [
+            0x00, 0x00, 0x00, 0x00, 0x40, 0x06, 0x89, 0x7b, 0x3e, 0x11, 0x70, 0x8d, 0xbf, 0x82,
+            0x2b, 0x0b, 0x3f, 0x21, 0x4a, 0xe9, 0xaa, 0x76, 0xa7, 0x95, 0x29, 0xef, 0xed, 0xf5,
+        ];
+        let payload = gopro_payload(&[gpmf_record(b"POLY", b'f', 28, 1, &poly)]);
+        let metadata = parse_app6(&payload).unwrap();
+        assert_eq!(
+            metadata.get_string("GoPro:PolynomialCoefficients"),
+            Some(
+                "0 2.10214114189148 0.142030909657478 -1.01693856716156 \
+                 0.630049288272858 -2.19073308213753e-13 1.06550110802548e-13"
+            )
+        );
+    }
+
+    #[test]
+    fn test_gpmf_floats_use_perl_stringification() {
+        // GoProHERO8Black.jpg:  [APP6] DiagonalFieldOfView : 148.342163085938
+        // GoProHERO12Black.jpg: [APP6] ZoomScaleNormalization : 0.713476538658142
+        //                       [APP6] AspectRatioWarped     : 1.14285719394684
+        let payload = gopro_payload(&[
+            gpmf_record(b"ZFOV", b'f', 4, 1, &[0x43, 0x14, 0x57, 0x98]),
+            gpmf_record(b"ZMPL", b'f', 4, 1, &[0x3f, 0x36, 0xa6, 0x66]),
+            gpmf_record(b"ARWA", b'f', 4, 1, &[0x3f, 0x92, 0x49, 0x25]),
+            gpmf_record(b"ARUW", b'f', 4, 1, &[0x3f, 0x92, 0x49, 0x25]),
+            // A whole value keeps no decimal point: MappingXCoefficients : 1
+            gpmf_record(b"MAPX", b'f', 4, 1, &[0x3f, 0x80, 0x00, 0x00]),
+        ]);
+        let metadata = parse_app6(&payload).unwrap();
+        assert_eq!(
+            metadata.get_string("GoPro:DiagonalFieldOfView"),
+            Some("148.342163085938")
+        );
+        assert_eq!(
+            metadata.get_string("GoPro:ZoomScaleNormalization"),
+            Some("0.713476538658142")
+        );
+        assert_eq!(
+            metadata.get_string("GoPro:AspectRatioWarped"),
+            Some("1.14285719394684")
+        );
+        assert_eq!(
+            metadata.get_string("GoPro:AspectRatioUnwarped"),
+            Some("1.14285719394684")
+        );
+        assert_eq!(metadata.get_string("GoPro:MappingXCoefficients"), Some("1"));
+    }
+
+    #[test]
+    fn test_gpmf_creation_date_and_time_zone_convert() {
+        // GoProHERO12Black.jpg: CDAT fmt='J' 0x64f6388d, TZON fmt='s' 0xff10
+        //   [APP6] CreationDate : 2023:09:04 20:05:33   (ConvertUnixTime, UTC)
+        //   [APP6] TimeZone     : -04:00                (-240 minutes)
+        let payload = gopro_payload(&[
+            gpmf_record(
+                b"CDAT",
+                b'J',
+                8,
+                1,
+                &[0x00, 0x00, 0x00, 0x00, 0x64, 0xf6, 0x38, 0x8d],
+            ),
+            gpmf_record(b"TZON", b's', 2, 1, &[0xff, 0x10]),
+        ]);
+        let metadata = parse_app6(&payload).unwrap();
+        assert_eq!(
+            metadata.get_string("GoPro:CreationDate"),
+            Some("2023:09:04 20:05:33")
+        );
+        assert_eq!(metadata.get_string("GoPro:TimeZone"), Some("-04:00"));
+    }
+
+    #[test]
+    fn test_gpmf_time_zone_string_covers_both_signs_and_partial_hours() {
+        // ExifTool's TimeZoneString over a signed count of minutes.
+        assert_eq!(time_zone_string(-240), "-04:00");
+        assert_eq!(time_zone_string(60), "+01:00");
+        assert_eq!(time_zone_string(0), "+00:00");
+        assert_eq!(time_zone_string(330), "+05:30");
+        assert_eq!(time_zone_string(-570), "-09:30");
+    }
+
+    #[test]
+    fn test_gpmf_epoch_zero_is_an_all_zero_date() {
+        // ConvertUnixTime returns this sentinel rather than 1970.
+        assert_eq!(convert_unix_time(0), "0000:00:00 00:00:00");
+    }
+
+    #[test]
+    fn test_gpmf_fixed_width_string_list_splits_and_drops_padding() {
+        // GoProHERO12Black.jpg: PYCF fmt='c' size=8 count=7 -- seven 8-byte
+        // NUL-padded slots, which ExifTool unpacks as "(A8)7".
+        //   [APP6] PolynomialPower : r0, r1, r2, r3, r4, r5, r6
+        let mut pycf = Vec::new();
+        for i in 0..7u8 {
+            pycf.extend_from_slice(b"r");
+            pycf.push(b'0' + i);
+            pycf.extend_from_slice(&[0; 6]);
+        }
+        let payload = gopro_payload(&[gpmf_record(b"PYCF", b'c', 8, 7, &pycf)]);
+        let metadata = parse_app6(&payload).unwrap();
+        let Some(TagValue::Array(elements)) = metadata.get("GoPro:PolynomialPower") else {
+            panic!(
+                "PolynomialPower should be a list, got {:?}",
+                metadata.get("GoPro:PolynomialPower")
+            );
+        };
+        let elements: Vec<&str> = elements
+            .iter()
+            .map(|e| match e {
+                TagValue::String(s) => s.as_str(),
+                other => panic!("unexpected element {:?}", other),
+            })
+            .collect();
+        assert_eq!(elements, ["r0", "r1", "r2", "r3", "r4", "r5", "r6"]);
+    }
+
+    #[test]
+    fn test_gpmf_single_element_string_is_not_split() {
+        // GoProHERO12Black.jpg: MXCF fmt='c' size=8 count=1 -- count is 1, so
+        // the fixed-width list rule does not apply and ReadValue truncates the
+        // whole payload at its first NUL.
+        //   [APP6] MappingXMode : x1
+        let payload = gopro_payload(&[gpmf_record(b"MXCF", b'c', 8, 1, b"x1\0\0\0\0\0\0")]);
+        let metadata = parse_app6(&payload).unwrap();
+        assert_eq!(metadata.get_string("GoPro:MappingXMode"), Some("x1"));
+    }
+
+    #[test]
+    fn test_gpmf_binary_tags_report_the_converted_length() {
+        // GoProHERO12Black.jpg. ExifTool declares these Binary => 1, and the
+        // byte count in its placeholder is the length of the value it would
+        // have printed -- not of the record, which is 16 and 12 bytes.
+        //   [APP6] CameraOrientation : (Binary data 7 bytes, ...)   "1 0 0 0"
+        //   [APP6] GravityVector     : (Binary data 54 bytes, ...)
+        let quaternion = [
+            0x3f, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00,
+        ];
+        let gravity = [
+            0x3d, 0x13, 0xe1, 0x28, 0x3f, 0x7e, 0x59, 0xfd, 0x3d, 0xdb, 0x81, 0xb7,
+        ];
+        let payload = gopro_payload(&[
+            gpmf_record(b"CORI", b'f', 16, 1, &quaternion),
+            gpmf_record(b"IORI", b'f', 16, 1, &quaternion),
+            gpmf_record(b"GRAV", b'f', 12, 1, &gravity),
+        ]);
+        let metadata = parse_app6(&payload).unwrap();
+        assert_eq!(
+            metadata.get_string("GoPro:CameraOrientation"),
+            Some("(Binary data 7 bytes, use -b option to extract)")
+        );
+        assert_eq!(
+            metadata.get_string("GoPro:ImageOrientation"),
+            Some("(Binary data 7 bytes, use -b option to extract)")
+        );
+        assert_eq!(
+            metadata.get_string("GoPro:GravityVector"),
+            Some("(Binary data 54 bytes, use -b option to extract)")
+        );
+    }
+
+    #[test]
+    fn test_gpmf_fourcc_renders_as_text() {
+        // GoProHERO12Black.jpg: PRJT fmt='F' size=4 count=1. ExifTool reads
+        // 'F' as 'undef' and prints the four bytes verbatim.
+        //   [APP6] LensProjection : GPRO
+        let payload = gopro_payload(&[gpmf_record(b"PRJT", b'F', 4, 1, b"GPRO")]);
+        let metadata = parse_app6(&payload).unwrap();
+        assert_eq!(metadata.get_string("GoPro:LensProjection"), Some("GPRO"));
+    }
+
+    #[test]
+    fn test_gpmf_multi_scalar_integers_still_join_with_spaces() {
+        // VERS fmt='B' size=1 count=3 -- one byte per element, so `count` and
+        // the scalar count agree here and the PrintConv still applies.
+        //   [APP6] MetadataVersion : 8.2.2
+        let payload = gopro_payload(&[gpmf_record(b"VERS", b'B', 1, 3, &[8, 2, 2])]);
+        let metadata = parse_app6(&payload).unwrap();
+        assert_eq!(metadata.get_string("GoPro:MetadataVersion"), Some("8.2.2"));
+    }
+
+    #[test]
+    fn test_gpmf_media_unique_id_is_hex_not_decimal_words() {
+        // GoProHERO12Black.jpg: MUID fmt='L' size=4 count=8 -- eight
+        // big-endian uint32s, which GoPro.pm's PrintConv reformats as
+        // sprintf('%.8x') each and concatenates with no separator.
+        //   [APP6] MediaUniqueID : 70048c6e0dfb69c0e2ceb4f32a51cae5
+        //                          317ea9c8979eea8b23ed73fe35671534
+        let muid = [
+            0x70, 0x04, 0x8c, 0x6e, 0x0d, 0xfb, 0x69, 0xc0, 0xe2, 0xce, 0xb4, 0xf3, 0x2a, 0x51,
+            0xca, 0xe5, 0x31, 0x7e, 0xa9, 0xc8, 0x97, 0x9e, 0xea, 0x8b, 0x23, 0xed, 0x73, 0xfe,
+            0x35, 0x67, 0x15, 0x34,
+        ];
+        let payload = gopro_payload(&[gpmf_record(b"MUID", b'L', 4, 8, &muid)]);
+        let metadata = parse_app6(&payload).unwrap();
+        assert_eq!(
+            metadata.get_string("GoPro:MediaUniqueID"),
+            Some("70048c6e0dfb69c0e2ceb4f32a51cae5317ea9c8979eea8b23ed73fe35671534")
+        );
+        // The name comes from GoPro.pm's *later* MUID definition; the earlier
+        // "MediaUID" one is overridden and must not appear.
+        assert!(metadata.get("GoPro:MediaUID").is_none());
+    }
+
+    #[test]
+    fn test_gpmf_media_unique_id_zero_pads_each_word() {
+        // GoProHERO8Black.jpg: the trailing four words are zero, and each
+        // must still contribute eight hex digits rather than a single "0".
+        //   [APP6] MediaUniqueID : 859830e2f50cb3397a6216f09553fce8
+        //                          00000000000000000000000000000000
+        let muid = [
+            0x85, 0x98, 0x30, 0xe2, 0xf5, 0x0c, 0xb3, 0x39, 0x7a, 0x62, 0x16, 0xf0, 0x95, 0x53,
+            0xfc, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+        ];
+        let payload = gopro_payload(&[gpmf_record(b"MUID", b'L', 4, 8, &muid)]);
+        let metadata = parse_app6(&payload).unwrap();
+        assert_eq!(
+            metadata.get_string("GoPro:MediaUniqueID"),
+            Some("859830e2f50cb3397a6216f09553fce800000000000000000000000000000000")
+        );
+    }
+
+    #[test]
+    fn test_gpmf_record_too_short_for_one_scalar_yields_nothing() {
+        // ReadValue returns '' when the payload cannot hold a single scalar,
+        // so no tag is produced rather than a value read out of bounds.
+        let payload = gopro_payload(&[gpmf_record(b"ZFOV", b'f', 1, 2, &[0x43, 0x14])]);
+        let metadata = parse_app6(&payload).unwrap();
+        assert!(metadata.get("GoPro:DiagonalFieldOfView").is_none());
     }
 }
