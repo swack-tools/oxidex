@@ -265,6 +265,113 @@ fn decode_vignette_control(value: i32) -> &'static str {
     }
 }
 
+/// Reconstruct the four physical bytes in an inline TIFF IFD value field.
+///
+/// `parse_ifd_entries` exposes the field as a numeric `u32`, so the embedded
+/// Nikon TIFF byte order is required to recover the original byte sequence.
+fn inline_entry_bytes(value: u32, byte_order: ByteOrder) -> [u8; 4] {
+    match byte_order {
+        ByteOrder::LittleEndian => value.to_le_bytes(),
+        ByteOrder::BigEndian => value.to_be_bytes(),
+    }
+}
+
+/// Read an IFD entry's value bytes relative to the embedded Nikon TIFF header.
+///
+/// Nikon Type 3 MakerNote offsets are relative to the TIFF header at byte 10,
+/// not the beginning of the complete MakerNote. Small values remain inline in
+/// the four-byte IFD value field.
+fn nikon_entry_value_bytes(
+    entry: &IfdEntry,
+    tiff_data: &[u8],
+    byte_order: ByteOrder,
+) -> Option<Vec<u8>> {
+    let component_size = match entry.field_type {
+        1 | 2 | 6 | 7 => 1usize,
+        3 | 8 => 2,
+        4 | 9 | 11 => 4,
+        5 | 10 | 12 => 8,
+        _ => return None,
+    };
+    let count = usize::try_from(entry.value_count).ok()?;
+    let byte_count = count.checked_mul(component_size)?;
+
+    if byte_count <= 4 {
+        let inline = inline_entry_bytes(entry.value_offset, byte_order);
+        return Some(inline.get(..byte_count)?.to_vec());
+    }
+
+    let offset = usize::try_from(entry.value_offset).ok()?;
+    let end = offset.checked_add(byte_count)?;
+    Some(tiff_data.get(offset..end)?.to_vec())
+}
+
+/// Decode Nikon.pm's `AFInfo` AFAreaMode byte (MakerNote tag 0x0088).
+fn decode_af_area_mode(value: u8) -> Option<&'static str> {
+    Some(match value {
+        0 => "Single Area",
+        1 => "Dynamic Area",
+        2 => "Closest Subject",
+        3 => "Group Dynamic",
+        4 => "Single Area (wide)",
+        5 => "Dynamic Area (wide)",
+        _ => return None,
+    })
+}
+
+/// Decode Nikon.pm's `AFInfo` AFPoint byte (MakerNote tag 0x0088).
+fn decode_af_point(value: u8) -> Option<&'static str> {
+    Some(match value {
+        0 => "Center",
+        1 => "Top",
+        2 => "Bottom",
+        3 => "Mid-left",
+        4 => "Mid-right",
+        5 => "Upper-left",
+        6 => "Upper-right",
+        7 => "Lower-left",
+        8 => "Lower-right",
+        _ => return None,
+    })
+}
+
+/// Decode the focus-point mask from Nikon.pm's five-point `AFInfo` table.
+fn decode_af_points_in_focus(mask: u16) -> Option<String> {
+    // Nikon.pm AFInfo PrintConv bit assignments, in table order.
+    const POINTS: &[(u16, &str)] = &[
+        (0x0001, "Center"),
+        (0x0002, "Top"),
+        (0x0004, "Bottom"),
+        (0x0008, "Mid-left"),
+        (0x0010, "Mid-right"),
+    ];
+
+    let points = POINTS
+        .iter()
+        .filter_map(|(bit, name)| (mask & bit != 0).then_some(*name))
+        .collect::<Vec<_>>();
+
+    if points.is_empty() {
+        None
+    } else {
+        Some(points.join(", "))
+    }
+}
+
+/// Decode AFAperture from Nikon.pm's `LensData01` table.
+///
+/// LensDataVersion occupies bytes 0..4, AFAperture is byte 5, and Nikon.pm's
+/// ValueConv is `2 ** ($val / 24)`. Its PrintConv displays one decimal place.
+fn decode_lens_data_01_af_aperture(data: &[u8]) -> Option<String> {
+    let version = data.get(0..4)?;
+    if version != b"0100" && version != b"0101" {
+        return None;
+    }
+
+    let encoded = f64::from(*data.get(5)?);
+    Some(format!("{:.1}", 2_f64.powf(encoded / 24.0)))
+}
+
 /// Represents a Nikon MakerNote parser
 pub struct NikonParser;
 
@@ -459,6 +566,17 @@ impl MakerNoteParser for NikonParser {
 
                     // LensData array (complex)
                     NIKON_LENS_DATA => {
+                        // Nikon.pm selects LensData01 for versions 0100/0101.
+                        // The record is byte-oriented even though older generic
+                        // handling below interprets it as numeric components.
+                        if let Some(lens_data) =
+                            nikon_entry_value_bytes(entry, tiff_data, tiff_byte_order)
+                            && let Some(aperture) =
+                                decode_lens_data_01_af_aperture(&lens_data)
+                        {
+                            tags.insert("MakerNotes:AFAperture".to_string(), aperture);
+                        }
+
                         if let Some(array) = extract_u16_array(entry, data, byte_order) {
                             // Extract lens ID and look up lens name
                             if array.len() > LENS_DATA_LENS_ID {
@@ -731,10 +849,35 @@ impl MakerNoteParser for NikonParser {
 
                     // Array tags
                     NIKON_AF_INFO => {
-                        if let Some(array) = extract_u16_array(entry, data, byte_order)
-                            && !array.is_empty()
+                        if let Some(af_info) =
+                            nikon_entry_value_bytes(entry, tiff_data, tiff_byte_order)
+                            && let Some(fields) = af_info.get(..4)
                         {
-                            tags.insert("Nikon:AFInfo".to_string(), format!("{}", array[0]));
+                            if let Some(area_mode) = decode_af_area_mode(fields[0]) {
+                                tags.insert(
+                                    "MakerNotes:AFAreaMode".to_string(),
+                                    area_mode.to_string(),
+                                );
+                            }
+
+                            if let Some(point) = decode_af_point(fields[1]) {
+                                tags.insert(
+                                    "MakerNotes:AFPoint".to_string(),
+                                    point.to_string(),
+                                );
+                            }
+
+                            // Nikon.pm defines this AFInfo field as int16u
+                            // with ByteOrder => 'MM'. This field-specific
+                            // order applies even when the surrounding Nikon
+                            // MakerNote TIFF is little-endian.
+                            let points_mask = u16::from_be_bytes([fields[2], fields[3]]);
+                            if let Some(points) = decode_af_points_in_focus(points_mask) {
+                                tags.insert(
+                                    "MakerNotes:AFPointsInFocus".to_string(),
+                                    points,
+                                );
+                            }
                         }
                     }
 
@@ -1129,5 +1272,49 @@ mod tests {
 
         // Test unknown lens
         assert_eq!(parser.lookup_lens(65000), None);
+    }
+
+    #[test]
+    fn decodes_d70_af_info_from_little_endian_tiff_entry() {
+        // Nikon.nef stores tag 0x0088's physical bytes as 00 00 00 01.
+        // parse_ifd_entries reads that little-endian LONG as 0x01000000.
+        let fields = inline_entry_bytes(0x0100_0000, ByteOrder::LittleEndian);
+        assert_eq!(fields, [0, 0, 0, 1]);
+        assert_eq!(decode_af_area_mode(fields[0]), Some("Single Area"));
+        assert_eq!(decode_af_point(fields[1]), Some("Center"));
+
+        // AFPointsInFocus is always big-endian within AFInfo.
+        let mask = u16::from_be_bytes([fields[2], fields[3]]);
+        assert_eq!(
+            decode_af_points_in_focus(mask).as_deref(),
+            Some("Center")
+        );
+    }
+
+    #[test]
+    fn decodes_same_af_info_from_big_endian_tiff_entry() {
+        // The same physical AFInfo sequence is numeric value 1 when the
+        // enclosing TIFF entry itself is big-endian.
+        let fields = inline_entry_bytes(1, ByteOrder::BigEndian);
+        assert_eq!(fields, [0, 0, 0, 1]);
+        assert_eq!(decode_af_area_mode(fields[0]), Some("Single Area"));
+        assert_eq!(decode_af_point(fields[1]), Some("Center"));
+
+        let mask = u16::from_be_bytes([fields[2], fields[3]]);
+        assert_eq!(
+            decode_af_points_in_focus(mask).as_deref(),
+            Some("Center")
+        );
+    }
+
+    #[test]
+    fn decodes_lens_data_01_af_aperture() {
+        // 44 is Nikon's encoded aperture value in the sample:
+        // 2 ** (44 / 24) is displayed as 3.6.
+        let lens_data = [b'0', b'1', b'0', b'0', 0, 44];
+        assert_eq!(
+            decode_lens_data_01_af_aperture(&lens_data).as_deref(),
+            Some("3.6")
+        );
     }
 }
