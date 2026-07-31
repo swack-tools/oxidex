@@ -249,10 +249,13 @@ pub fn parse_ifd(
     let mut result = Vec::with_capacity(entry_count as usize);
 
     for entry in ifd_entries {
-        // Get type information
-        let exif_type = ExifType::from_u16(entry.field_type).ok_or_else(|| {
-            ExifToolError::parse_error(format!("Unknown EXIF type code: {}", entry.field_type))
-        })?;
+        // Get type information. ExifTool skips entries with an unknown/invalid
+        // format type (e.g. type 0 written by some corrupted camera firmware)
+        // rather than abandoning the directory, so a single bad entry doesn't
+        // cost the entire IFD chain (IFD0 -> ExifIFD -> GPS -> IFD1).
+        let Some(exif_type) = ExifType::from_u16(entry.field_type) else {
+            continue;
+        };
 
         let type_size = exif_type.size_in_bytes();
         let total_size = type_size * entry.value_count as usize;
@@ -693,13 +696,92 @@ mod tests {
         let reader = TestReader::new(data);
         let result = parse_ifd(&reader, 0, ByteOrder::LittleEndian);
 
-        // Should fail due to unknown type
-        assert!(result.is_err());
-        if let Err(ExifToolError::ParseError { message, .. }) = result {
-            assert!(message.contains("Unknown EXIF type"));
-        } else {
-            panic!("Expected ParseError");
-        }
+        // The bad entry is skipped (matching ExifTool), leaving an empty
+        // directory rather than an error.
+        let entries = result.expect("unknown type should be skipped, not fatal");
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_parse_ifd_skips_bad_type_entry_keeps_valid_entries() {
+        // A directory with one type-0 entry (as written by e.g. the Samsung
+        // GT-S9402 for tag 0x8827) sandwiched between valid entries must
+        // yield the valid entries instead of aborting the whole IFD.
+        let mut data = vec![0u8; 200];
+
+        // Entry count: 3 (little-endian)
+        data[0] = 0x03;
+        data[1] = 0x00;
+
+        // === Entry 1 (valid): Model (0x0110), ASCII, "EOS\0" inline ===
+        data[2] = 0x10;
+        data[3] = 0x01;
+        data[4] = 0x02; // Type = ASCII
+        data[5] = 0x00;
+        data[6] = 0x04; // Count = 4
+        data[7] = 0x00;
+        data[8] = 0x00;
+        data[9] = 0x00;
+        data[10] = b'E';
+        data[11] = b'O';
+        data[12] = b'S';
+        data[13] = 0x00;
+
+        // === Entry 2 (malformed): ISO (0x8827) with type 0 ===
+        data[14] = 0x27;
+        data[15] = 0x88;
+        data[16] = 0x00; // Type = 0 (invalid)
+        data[17] = 0x00;
+        data[18] = 0x01; // Count = 1
+        data[19] = 0x00;
+        data[20] = 0x00;
+        data[21] = 0x00;
+        data[22] = 0x64; // Value = 100
+        data[23] = 0x00;
+        data[24] = 0x00;
+        data[25] = 0x00;
+
+        // === Entry 3 (valid): Orientation (0x0112), SHORT, value 1 inline ===
+        data[26] = 0x12;
+        data[27] = 0x01;
+        data[28] = 0x03; // Type = SHORT
+        data[29] = 0x00;
+        data[30] = 0x01; // Count = 1
+        data[31] = 0x00;
+        data[32] = 0x00;
+        data[33] = 0x00;
+        data[34] = 0x01; // Value = 1
+        data[35] = 0x00;
+        data[36] = 0x00;
+        data[37] = 0x00;
+
+        // Next IFD offset: 0
+        data[38] = 0x00;
+        data[39] = 0x00;
+        data[40] = 0x00;
+        data[41] = 0x00;
+
+        let reader = TestReader::new(data);
+        let entries = parse_ifd(&reader, 0, ByteOrder::LittleEndian)
+            .expect("directory with one bad entry must still parse");
+
+        // The two valid entries survive; the type-0 entry is dropped.
+        assert_eq!(entries.len(), 2);
+
+        let (tag_id, field_type, count, value) = &entries[0];
+        assert_eq!(*tag_id, 0x0110);
+        assert_eq!(*field_type, 2);
+        assert_eq!(*count, 4);
+        assert_eq!(value.as_ref(), b"EOS\0");
+
+        let (tag_id, field_type, count, value) = &entries[1];
+        assert_eq!(*tag_id, 0x0112);
+        assert_eq!(*field_type, 3);
+        assert_eq!(*count, 1);
+        assert_eq!(value.as_ref(), &[0x01, 0x00]);
+
+        // The malformed tag must not appear at all.
+        assert!(entries.iter().all(|(tag, _, _, _)| *tag != 0x8827));
     }
 
     #[test]
