@@ -3144,11 +3144,14 @@ fn parse_sigma_x3f(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
     if columns > 0 && rows > 0 {
         metadata.insert(
-            "EXIF:ImageWidth".to_string(),
+            "SigmaRaw:ImageWidth".to_string(),
+            // ExifTool files the X3F header's own dimensions under SigmaRaw,
+            // not EXIF -- `exiftool -G1` prints [SigmaRaw] ImageWidth. The
+            // values were already right; only the family was wrong.
             TagValue::new_string(columns.to_string()),
         );
         metadata.insert(
-            "EXIF:ImageHeight".to_string(),
+            "SigmaRaw:ImageHeight".to_string(),
             TagValue::new_string(rows.to_string()),
         );
     }
