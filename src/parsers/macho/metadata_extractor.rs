@@ -91,7 +91,7 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
     // CPU type
     metadata.insert(
         "EXE:CPUType".to_string(),
-        TagValue::String(header.cpu_type_name().to_string()),
+        TagValue::String(exiftool_cpu_type(header).to_string()),
     );
 
     // CPU type raw value
@@ -665,6 +665,19 @@ fn extract_fat_metadata(info: &MachOInfo, metadata: &mut MetadataMap) {
 // Helper: Populate MachOInfo from Load Commands
 // =============================================================================
 
+/// ExifTool's `CPUType` naming (EXE.pm, `EXE::MachO` tag 2).
+///
+/// Mach-O's `CPU_TYPE_X86_64` value is `CPU_ARCH_ABI64 | CPU_TYPE_I386`
+/// (`0x01000007`), but ExifTool displays it as "x86 64-bit", not the
+/// conventional ABI spelling "x86_64". Other CPU types retain the existing
+/// names until their exact ExifTool PrintConv values are implemented.
+fn exiftool_cpu_type(header: &MachHeader) -> &'static str {
+    match header.cputype {
+        super::structures::cpu_type::CPU_TYPE_X86_64 => "x86 64-bit",
+        _ => header.cpu_type_name(),
+    }
+}
+
 /// ExifTool's `CPUSubtype` naming (EXE.pm, `EXE::MachO` tag 4).
 ///
 /// The table is keyed by the *pair* (cputype, subtype), and 64-bit variants
@@ -856,6 +869,20 @@ mod tests {
         assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
         assert_eq!(metadata.get_integer("EXE:IsPIE").unwrap(), 1);
         assert_eq!(metadata.get_integer("EXE:HasTwoLevelNamespace").unwrap(), 1);
+    }
+
+    #[test]
+    fn test_exiftool_x86_64_cpu_type() {
+        let mut header = create_test_header();
+        header.cputype = cpu_type::CPU_TYPE_X86_64;
+        let mut metadata = MetadataMap::new();
+
+        extract_header_metadata(&header, &mut metadata);
+
+        assert_eq!(
+            metadata.get_string("EXE:CPUType").unwrap(),
+            "x86 64-bit"
+        );
     }
 
     #[test]
