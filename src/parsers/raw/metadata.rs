@@ -444,6 +444,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 let mut sub_ifd_offsets = Vec::new();
                 let mut makernote_data: Option<Vec<u8>> = None;
                 let mut camera_make: Option<String> = None;
+                let mut dng_adobe_private_data: Option<Vec<u8>> = None;
 
                 // Convert tags to metadata
                 for (tag_id, field_type, value_count, raw_bytes) in &tags {
@@ -453,7 +454,16 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // carries a handful of standard EXIF tags omitted from the
                     // outer Panasonic RAW IFDs.
                     if format == RawFormat::PanasonicRW2 && ifd_index == 0 && *tag_id == 0x002e {
-                        if let Err(error) = extract_rw2_embedded_exif_tags(bytes, &mut metadata) {
+                        // Where this preview starts in the RW2 itself, needed
+                        // to turn its IFD1 ThumbnailOffset back into the
+                        // absolute file position ExifTool reports.
+                        let jpeg_file_offset =
+                            tiff_external_entry_extent(data, ifd_offset, byte_order, 0x002e)
+                                .map(|(offset, _length)| offset)
+                                .unwrap_or(0);
+                        if let Err(error) =
+                            extract_rw2_embedded_exif_tags(bytes, jpeg_file_offset, &mut metadata)
+                        {
                             eprintln!("Warning: Failed to parse RW2 preview EXIF: {}", error);
                         }
                         // Emit the JpgFromRaw binary itself (ExifTool EXIF:JpgFromRaw)
@@ -462,6 +472,18 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             TagValue::Binary(bytes.to_vec()),
                         );
                         // Prevent further processing of this tag (generic code would emit it as a raw blob)
+                        continue;
+                    }
+
+                    // RW2 IFD0 sub-directories that PanasonicRaw::Main routes
+                    // into ProcessBinaryData tables. Without this they were
+                    // emitted as opaque "IFD0:0x0027"/"IFD0:0x0119" blobs.
+                    if format == RawFormat::PanasonicRW2 && ifd_index == 0 && *tag_id == 0x0027 {
+                        extract_panasonic_raw_wb_info2(bytes, byte_order, &mut metadata);
+                        continue;
+                    }
+                    if format == RawFormat::PanasonicRW2 && ifd_index == 0 && *tag_id == 0x0119 {
+                        extract_panasonic_raw_distortion_info(bytes, byte_order, &mut metadata);
                         continue;
                     }
 
@@ -534,6 +556,22 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     if *tag_id == 0x927C {
                         makernote_data = Some(bytes.to_vec());
                         continue; // Don't add raw MakerNote to metadata, will be parsed separately
+                    }
+
+                    // DNGPrivateData (0xC634). When it starts with "Adobe\0"
+                    // the DNG Converter parked the source file's MakerNote in
+                    // it -- 138 of the 141 tags oxidex was missing on
+                    // Canon350D.dng live in there. ExifTool flags the tag
+                    // Binary+Protected and never prints the blob itself, so
+                    // this consumes it instead of emitting an oxidex-only
+                    // "EXIF:0xC634" hex blob.
+                    if format == RawFormat::AdobeDNG
+                        && ifd_index == 0
+                        && *tag_id == 0xC634
+                        && bytes.starts_with(b"Adobe\0")
+                    {
+                        dng_adobe_private_data = Some(bytes.to_vec());
+                        continue;
                     }
 
                     // XMP packet (tag 0x02BC, ApplicationNotes). RAW files
@@ -703,6 +741,17 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         )
                     {
                         TagValue::new_string(value)
+                    } else if format == RawFormat::AdobeDNG
+                        && ifd_index == 0
+                        && let Some(value) = format_dng_ifd0_tag(
+                            *tag_id,
+                            bytes,
+                            *field_type,
+                            *value_count,
+                            byte_order,
+                        )
+                    {
+                        TagValue::new_string(value)
                     } else if matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW)
                         && ifd_index == 0
                         && *tag_id == 0x9216
@@ -845,6 +894,15 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             metadata.insert(tag_name, TagValue::new_string(tag_value));
                         }
                     }
+                }
+
+                // Recover the MakerNote the Adobe DNG Converter relocated into
+                // DNGPrivateData. The DNG carries no 0x927C of its own, so
+                // this is the only route to those tags.
+                if let (Some(make), Some(private)) =
+                    (camera_make.as_ref(), dng_adobe_private_data.as_ref())
+                {
+                    extract_dng_adobe_private_data(private, make, &mut metadata);
                 }
 
                 // Parse GPS Sub-IFD if present
@@ -1120,10 +1178,18 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 /// TIFF offsets in an APP1 EXIF payload are relative to its embedded TIFF
 /// header. Giving that header its own `SliceReader` keeps the offset base and
 /// byte order local to this parse instead of mutating parser-wide state.
-fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Result<()> {
-    let Some(tiff_data) = find_jpeg_exif_tiff(jpeg)? else {
+fn extract_rw2_embedded_exif_tags(
+    jpeg: &[u8],
+    jpeg_file_offset: usize,
+    metadata: &mut MetadataMap,
+) -> Result<()> {
+    let Some((tiff_start_in_jpeg, tiff_data)) = find_jpeg_exif_tiff(jpeg)? else {
         return Ok(());
     };
+    // Where the preview's TIFF header sits in the RW2 itself. ThumbnailOffset
+    // is stored relative to that header but reported by ExifTool as a
+    // position in the physical file.
+    let tiff_base_in_file = jpeg_file_offset.saturating_add(tiff_start_in_jpeg);
 
     let byte_order = detect_byte_order(tiff_data)?;
     let first_ifd_bytes = tiff_data
@@ -1147,18 +1213,36 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
         return Ok(());
     };
 
-    // IFD0 of the RW2's JpgFromRaw preview carries three standard TIFF tags
-    // that ExifTool reports and this function used to walk straight past,
-    // because it read IFD0 only to find the ExifIFD pointer. Sweep #185
-    // claimed ResolutionUnit and ModifyDate among six tags and delivered one
+    // PrintIM (0xC4A5). PrintIM.pm's ProcessPrintIM checks for a "PrintIM"
+    // signature and then reads PrintIMVersion as four bytes at offset 8:
+    //     $et->HandleTag($tagTablePtr, 'PrintIMVersion',
+    //                    substr($$dataPt, $offset + 8, 4), ...);
+    // Every other entry in that block is Unknown, so ExifTool reports exactly
+    // one PrintIM tag by default.
+    for (tag_id, _field_type, _value_count, raw_bytes) in &ifd0_tags {
+        let bytes = raw_bytes.as_ref();
+        if *tag_id == 0xC4A5 && bytes.len() >= 12 && bytes.starts_with(b"PrintIM") {
+            metadata.insert(
+                "PrintIM:PrintIMVersion".to_string(),
+                TagValue::new_string(String::from_utf8_lossy(&bytes[8..12]).to_string()),
+            );
+        }
+    }
+
+    // IFD0 of the RW2's JpgFromRaw preview carries standard TIFF tags that
+    // ExifTool reports and this function used to walk straight past, because
+    // it read IFD0 only to find the ExifIFD pointer. Sweep #185 claimed
+    // ResolutionUnit and ModifyDate among six tags and delivered one
     // (Saturation); these are the rest of that claim, verified.
     for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
         if !matches!(
             *tag_id,
             0x011A // XResolution
+                | 0x011B // YResolution
                 | 0x0128 // ResolutionUnit
                 | 0x0131 // Software
                 | 0x0132 // ModifyDate
+                | 0x0213 // YCbCrPositioning
         ) {
             continue;
         }
@@ -1198,6 +1282,22 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
             byte_order,
         ) {
             TagValue::new_string(value)
+        } else if *tag_id == 0x0213 && *field_type == 3 {
+            // Exif.pm 0x0213 PrintConv => { 1 => 'Centered', 2 => 'Co-sited' }
+            let raw = read_tiff_u16(raw_bytes.as_ref(), byte_order);
+            TagValue::new_string(match raw {
+                Some(1) => "Centered".to_string(),
+                Some(2) => "Co-sited".to_string(),
+                Some(other) => other.to_string(),
+                None => continue,
+            })
+        } else if *field_type == 5 {
+            // XResolution/YResolution are RATIONAL; ExifTool prints 180/1 as
+            // "180", not as a fraction.
+            match format_rational_as_string(raw_bytes.as_ref(), byte_order) {
+                Some(value) => TagValue::new_string(value),
+                None => continue,
+            }
         } else if *field_type == 2 {
             // ASCII. ExifTool trims the trailing padding, so this file's
             // "Ver.1.0 " is reported as "Ver.1.0" -- a trailing space is a
@@ -1281,6 +1381,50 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
         metadata.insert(tag_name, tag_value);
     }
 
+    // The Panasonic MakerNote lives in the preview's ExifIFD (0x927C) --
+    // ExifTool reports 54 [Panasonic] tags for Panasonic.rw2 that oxidex read
+    // straight past, because this walk only ever looked at a fixed list of
+    // standard EXIF ids.
+    //
+    // The offsets inside it are relative to the PREVIEW's TIFF header, not to
+    // the MakerNote, so the block is repacked before being handed to the
+    // dispatcher (see rebuild_relocated_makernote). MakerNotes.pm gives
+    // MakerNotePanasonic `Start => '$valuePtr + 12'`, i.e. a fixed 12-byte
+    // "Panasonic\0\0\0" header ahead of the IFD, which is preserved verbatim.
+    if let Some((makernote_offset, makernote_len)) =
+        tiff_external_entry_extent(tiff_data, exif_ifd_offset, byte_order, 0x927C)
+        && let Some(makernote) = tiff_data.get(makernote_offset..makernote_offset + makernote_len)
+        && makernote.starts_with(b"Panasonic\0\0\0")
+        && let Ok(base) = u32::try_from(makernote_offset)
+        && let Some(rebuilt) = rebuild_relocated_makernote(
+            &makernote[12..],
+            base + 12,
+            byte_order,
+            Some(PANASONIC_DEREFERENCED_TAGS),
+        )
+    {
+        let mut block = Vec::with_capacity(12 + rebuilt.len());
+        block.extend_from_slice(b"Panasonic\0\0\0");
+        block.extend_from_slice(&rebuilt);
+
+        let mut tags = std::collections::HashMap::new();
+        match crate::parsers::tiff::makernote_dispatcher::dispatch_makernote(
+            "Panasonic",
+            &block,
+            byte_order,
+            &mut tags,
+        ) {
+            Ok(()) => {
+                for (tag_name, tag_value) in tags {
+                    metadata.insert(tag_name, TagValue::new_string(tag_value));
+                }
+            }
+            Err(error) => {
+                eprintln!("Warning: Failed to parse RW2 preview MakerNote: {}", error)
+            }
+        }
+    }
+
     // The preview EXIF also carries an Interoperability IFD (ExifIFD tag
     // 0xA005 -> InteropOffset). ExifTool reports [InteropIFD] InteropIndex for
     // Panasonic.rw2; oxidex never descended into it (measured gap 2026-07-27).
@@ -1299,8 +1443,10 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
     }
 
     // The next-IFD pointer after preview IFD0 leads to the thumbnail IFD.
-    // Its 0x0201/0x0202 values are offsets and lengths relative to this
-    // embedded TIFF header, matching ExifTool's Panasonic RW2 values.
+    // Its 0x0201/0x0202 values are stored relative to this embedded TIFF
+    // header; ExifTool reports ThumbnailOffset as a position in the physical
+    // file (11976 for Panasonic.rw2 = stored 10428 plus the preview TIFF's
+    // 1548-byte offset into the RW2), so `tiff_base_in_file` is added back.
     let ifd0_entry_count = u64::try_from(ifd0_tags.len()).ok();
     let next_ifd_position = ifd0_entry_count.and_then(|entry_count| {
         first_ifd_offset
@@ -1337,7 +1483,7 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
         if let Some(offset) = thumbnail_offset {
             metadata.insert(
                 lookup_tag_name(0x0201, "EXIF"),
-                TagValue::new_integer(i64::from(offset)),
+                TagValue::new_integer(i64::from(offset) + tiff_base_in_file as i64),
             );
         }
         if let Some(length) = thumbnail_length {
@@ -1422,7 +1568,11 @@ fn extract_interop_index(
 }
 
 /// Locate the TIFF header in a JPEG APP1 EXIF segment.
-fn find_jpeg_exif_tiff(jpeg: &[u8]) -> Result<Option<&[u8]>> {
+/// Returns the TIFF header's offset WITHIN `jpeg` alongside the TIFF slice.
+/// Tags whose value is a file offset (ThumbnailOffset) are stated relative to
+/// that TIFF header, and ExifTool reports them as absolute positions in the
+/// physical file, so the caller needs the base to reconstruct them.
+fn find_jpeg_exif_tiff(jpeg: &[u8]) -> Result<Option<(usize, &[u8])>> {
     if jpeg.get(..2) != Some(&[0xff, 0xd8]) {
         return Ok(None);
     }
@@ -1472,7 +1622,10 @@ fn find_jpeg_exif_tiff(jpeg: &[u8]) -> Result<Option<&[u8]>> {
             .ok_or_else(|| ExifToolError::parse_error("Truncated JPEG segment"))?;
 
         if marker == 0xe1 && payload.get(..6) == Some(b"Exif\0\0") {
-            return Ok(payload.get(6..));
+            let tiff_start = payload_start
+                .checked_add(6)
+                .ok_or_else(|| ExifToolError::parse_error("Invalid JPEG segment offset"))?;
+            return Ok(payload.get(6..).map(|tiff| (tiff_start, tiff)));
         }
         offset = segment_end;
     }
@@ -1533,6 +1686,91 @@ fn format_dng_integer_array(
     };
 
     Some(formatted.join(" "))
+}
+
+/// Format the DNG IFD0 tags whose stored bytes ExifTool converts into
+/// something other than a numeric list, verbatim from Exif.pm.
+///
+/// ```text
+///     0xc612 => { Name => 'DNGVersion',         Writable => 'int8u', Count => 4,
+///                 PrintConv => '$val =~ tr/ /./; $val' },          # line 3258
+///     0xc613 => { Name => 'DNGBackwardVersion', Writable => 'int8u', Count => 4,
+///                 PrintConv => '$val =~ tr/ /./; $val' },          # line 3274
+///     0xc630 => { Name => 'DNGLensInfo', Writable => 'rational64u', Count => 4,
+///                 PrintConv => \&PrintLensInfo },                  # line 3485
+///     0xc65d => { Name => 'RawDataUniqueID', Format => 'undef', Count => 16,
+///                 ValueConv => 'uc(unpack("H*",$val))' },          # line 3655
+/// ```
+/// Without these the four tags surfaced as
+/// `(Binary data N bytes, use -b option to extract)` or as a raw component
+/// list -- measured on Canon350D.dng, where oxidex reported `18 55 0 0` for
+/// DNGLensInfo and a binary-data placeholder for the other three.
+fn format_dng_ifd0_tag(
+    tag_id: u16,
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    match tag_id {
+        // int8u[4] printed with '.' between components.
+        0xC612 | 0xC613 if field_type == 1 && value_count == 4 => Some(
+            bytes
+                .get(..4)?
+                .iter()
+                .map(|component| component.to_string())
+                .collect::<Vec<_>>()
+                .join("."),
+        ),
+        // 16 raw bytes as an uppercase hex string.
+        0xC65D if value_count == 16 => Some(
+            bytes
+                .get(..16)?
+                .iter()
+                .map(|byte| format!("{:02X}", byte))
+                .collect::<String>(),
+        ),
+        // rational64u[4]: min focal, max focal, min f, max f.
+        0xC630 if field_type == 5 && value_count == 4 => {
+            // Exif.pm's rational ValueConv yields 'inf' for n/0 and 'undef'
+            // for 0/0; PrintLensInfo maps both to '?'. Anything else prints
+            // as the plain number.
+            let component = |index: usize| -> Option<String> {
+                let start = index * 8;
+                let numerator = read_tiff_u32(bytes.get(start..start + 4)?, byte_order)?;
+                let denominator = read_tiff_u32(bytes.get(start + 4..start + 8)?, byte_order)?;
+                Some(if denominator == 0 {
+                    "?".to_string()
+                } else if numerator % denominator == 0 {
+                    (numerator / denominator).to_string()
+                } else {
+                    format!("{}", f64::from(numerator) / f64::from(denominator))
+                })
+            };
+            let values: Vec<String> = (0..4).map(component).collect::<Option<_>>()?;
+
+            // PrintLensInfo, Exif.pm:5705-5723:
+            //     $val = $vals[0];
+            //     $val .= "-$vals[1]" if $vals[1] and $vals[1] ne $vals[0];
+            //     $val .= "mm f/$vals[2]";
+            //     $val .= "-$vals[3]" if $vals[3] and $vals[3] ne $vals[2];
+            // ("if $vals[1]" is Perl truthiness, so a literal "0" upper bound
+            // -- which the Pentax Q writes for prime lenses -- is skipped.)
+            let mut printed = values[0].clone();
+            if values[1] != "0" && values[1] != values[0] {
+                printed.push('-');
+                printed.push_str(&values[1]);
+            }
+            printed.push_str("mm f/");
+            printed.push_str(&values[2]);
+            if values[3] != "0" && values[3] != values[2] {
+                printed.push('-');
+                printed.push_str(&values[3]);
+            }
+            Some(printed)
+        }
+        _ => None,
+    }
 }
 
 /// Read a TIFF numeric array as ExifTool's space-separated value string.
@@ -1984,31 +2222,9 @@ fn format_exif_display_value(
         }
         // LightSource: SHORT[1]. Exif.pm 0x9208 PrintConv => \%lightSource,
         // whose full table (Exif.pm lines 139-162) is reproduced verbatim.
-        0x9208 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
-            0 => Some("Unknown".to_string()),
-            1 => Some("Daylight".to_string()),
-            2 => Some("Fluorescent".to_string()),
-            3 => Some("Tungsten (Incandescent)".to_string()),
-            4 => Some("Flash".to_string()),
-            9 => Some("Fine Weather".to_string()),
-            10 => Some("Cloudy".to_string()),
-            11 => Some("Shade".to_string()),
-            12 => Some("Daylight Fluorescent".to_string()),
-            13 => Some("Day White Fluorescent".to_string()),
-            14 => Some("Cool White Fluorescent".to_string()),
-            15 => Some("White Fluorescent".to_string()),
-            16 => Some("Warm White Fluorescent".to_string()),
-            17 => Some("Standard Light A".to_string()),
-            18 => Some("Standard Light B".to_string()),
-            19 => Some("Standard Light C".to_string()),
-            20 => Some("D55".to_string()),
-            21 => Some("D65".to_string()),
-            22 => Some("D75".to_string()),
-            23 => Some("D50".to_string()),
-            24 => Some("ISO Studio Tungsten".to_string()),
-            255 => Some("Other".to_string()),
-            _ => None,
-        },
+        0x9208 if field_type == 3 && value_count >= 1 => {
+            exif_light_source_label(read_tiff_u16(bytes, byte_order)?).map(str::to_string)
+        }
         // Flash: SHORT[1]. Exif.pm 0x9209 PrintConv => \%flash, whose full
         // table (Exif.pm lines 172-199) is reproduced verbatim.
         0x9209 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
@@ -2170,6 +2386,493 @@ fn format_exif_display_value(
 }
 
 /// Format a RATIONAL pair whose value_count >= 1.
+/// `%Image::ExifTool::Exif::lightSource` (Exif.pm lines 139-162), reproduced
+/// verbatim.
+///
+/// Shared by EXIF LightSource (0x9208), the DNG CalibrationIlluminant pair
+/// (0xC65A/0xC65B, whose `PrintConv => \%lightSource` is Exif.pm:3639) and
+/// PanasonicRaw's WBType1..7 (`%wbTypeInfo` in PanasonicRaw.pm:46 is
+/// `PrintConv => \%Image::ExifTool::Exif::lightSource`).
+///
+/// Returns `None` for codes the hash has no entry for (5-8, 25-254, ...).
+/// ExifTool prints the bare number in that case, and a missing label is far
+/// better than one borrowed from a neighbouring code.
+fn exif_light_source_label(code: u16) -> Option<&'static str> {
+    Some(match code {
+        0 => "Unknown",
+        1 => "Daylight",
+        2 => "Fluorescent",
+        3 => "Tungsten (Incandescent)",
+        4 => "Flash",
+        9 => "Fine Weather",
+        10 => "Cloudy",
+        11 => "Shade",
+        12 => "Daylight Fluorescent",
+        13 => "Day White Fluorescent",
+        14 => "Cool White Fluorescent",
+        15 => "White Fluorescent",
+        16 => "Warm White Fluorescent",
+        17 => "Standard Light A",
+        18 => "Standard Light B",
+        19 => "Standard Light C",
+        20 => "D55",
+        21 => "D65",
+        22 => "D75",
+        23 => "D50",
+        24 => "ISO Studio Tungsten",
+        255 => "Other",
+        _ => return None,
+    })
+}
+
+/// Read one `int16u` at element index `index` of a `FORMAT => 'int16u'`
+/// ProcessBinaryData block.
+fn binary_u16_at(bytes: &[u8], index: usize, byte_order: ByteOrder) -> Option<u16> {
+    let start = index.checked_mul(2)?;
+    read_tiff_u16(bytes.get(start..start.checked_add(2)?)?, byte_order)
+}
+
+/// Read one `int16s` at element index `index` of a `FORMAT => 'int16s'`
+/// ProcessBinaryData block.
+fn binary_i16_at(bytes: &[u8], index: usize, byte_order: ByteOrder) -> Option<i16> {
+    binary_u16_at(bytes, index, byte_order).map(|value| value as i16)
+}
+
+/// Print a value ExifTool derived by a numeric ValueConv with no PrintConv:
+/// an exact integer loses its fractional part, everything else round-trips.
+fn print_plain_number(value: f64) -> String {
+    if value == value.trunc() && value.abs() < 1e15 {
+        format!("{}", value as i64)
+    } else {
+        format!("{}", value)
+    }
+}
+
+/// PanasonicRaw IFD0 tag 0x0027 (WBInfo2), `%Image::ExifTool::PanasonicRaw::WBInfo2`.
+///
+/// `FORMAT => 'int16u'`, `FIRST_ENTRY => 0`, so every numeric key in that
+/// table is an INDEX of two bytes, not a byte offset:
+/// ```text
+///      0 => 'NumWBEntries',
+///      1 => { Name => 'WBType1',       %wbTypeInfo },
+///      2 => { Name => 'WB_RGBLevels1', Format => 'int16u[3]' },
+///      5 => WBType2, 6 => WB_RGBLevels2, 9 => WBType3, 10 => WB_RGBLevels3,
+///     13 => WBType4, 14 => WB_RGBLevels4, 17 => WBType5, 18 => WB_RGBLevels5,
+///     21 => WBType6, 22 => WB_RGBLevels6, 25 => WBType7, 26 => WB_RGBLevels7,
+/// ```
+/// i.e. entry *n* (1-based) is at index `1 + 4 * (n - 1)`.
+///
+/// The sibling table `WBInfo` (IFD0 tag 0x0011, PanasonicRawVersion < 200)
+/// has a different stride and emits WB_RBLevels rather than WB_RGBLevels; it
+/// is deliberately not handled here because no sample exercises it and
+/// guessing the layout would fabricate values.
+fn extract_panasonic_raw_wb_info2(bytes: &[u8], byte_order: ByteOrder, metadata: &mut MetadataMap) {
+    let Some(entries) = binary_u16_at(bytes, 0, byte_order) else {
+        return;
+    };
+    metadata.insert(
+        "PanasonicRaw:NumWBEntries".to_string(),
+        TagValue::new_integer(i64::from(entries)),
+    );
+
+    // The table stops at WBType7/WB_RGBLevels7 no matter what NumWBEntries
+    // claims, so clamp rather than trusting the file's own count.
+    for n in 1..=u16::min(entries, 7) {
+        let base = 1 + 4 * (usize::from(n) - 1);
+        if let Some(kind) = binary_u16_at(bytes, base, byte_order) {
+            let printed = exif_light_source_label(kind)
+                .map(str::to_string)
+                .unwrap_or_else(|| kind.to_string());
+            metadata.insert(
+                format!("PanasonicRaw:WBType{}", n),
+                TagValue::new_string(printed),
+            );
+        }
+        let levels: Option<Vec<String>> = (0..3)
+            .map(|i| binary_u16_at(bytes, base + 1 + i, byte_order).map(|v| v.to_string()))
+            .collect();
+        if let Some(levels) = levels {
+            metadata.insert(
+                format!("PanasonicRaw:WB_RGBLevels{}", n),
+                TagValue::new_string(levels.join(" ")),
+            );
+        }
+    }
+}
+
+/// PanasonicRaw IFD0 tag 0x0119 (DistortionInfo),
+/// `%Image::ExifTool::PanasonicRaw::DistortionInfo`.
+///
+/// `FORMAT => 'int16s'`, `FIRST_ENTRY => 0`; the numeric keys are indices of
+/// two SIGNED bytes each. Reproduced verbatim from PanasonicRaw.pm:436-490:
+/// ```text
+///      2 => DistortionParam02   ValueConv => '$val / 32768'
+///      4 => DistortionParam04   ValueConv => '$val / 32768'
+///      5 => DistortionScale     ValueConv => '1 / (1 + $val/32768)'
+///    7.1 => DistortionCorrection Mask => 0x0f, PrintConv => {0=>'Off',1=>'On'}
+///      8 => DistortionParam08   ValueConv => '$val / 32768'
+///      9 => DistortionParam09   ValueConv => '$val / 32768'
+///     11 => DistortionParam11   ValueConv => '$val / 32768'
+///     12 => DistortionN         Unknown => 1
+/// ```
+/// Indices 0, 1, 3, 6, 10, 13, 14 and 15 are checksums or undocumented, and
+/// index 12 is `Unknown => 1` so ExifTool suppresses it without -u. None of
+/// them are emitted.
+fn extract_panasonic_raw_distortion_info(
+    bytes: &[u8],
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    // ProcessDistortionInfo warns and still parses when the length is wrong,
+    // but every documented index lives inside the 32-byte form; anything
+    // shorter would read past the end of a truncated block.
+    if bytes.len() < 32 {
+        return;
+    }
+
+    for (index, name) in [
+        (2usize, "DistortionParam02"),
+        (4, "DistortionParam04"),
+        (8, "DistortionParam08"),
+        (9, "DistortionParam09"),
+        (11, "DistortionParam11"),
+    ] {
+        if let Some(raw) = binary_i16_at(bytes, index, byte_order) {
+            metadata.insert(
+                format!("PanasonicRaw:{}", name),
+                TagValue::new_string(print_plain_number(f64::from(raw) / 32768.0)),
+            );
+        }
+    }
+
+    if let Some(raw) = binary_i16_at(bytes, 5, byte_order) {
+        let denominator = 1.0 + f64::from(raw) / 32768.0;
+        if denominator != 0.0 {
+            metadata.insert(
+                "PanasonicRaw:DistortionScale".to_string(),
+                TagValue::new_string(print_plain_number(1.0 / denominator)),
+            );
+        }
+    }
+
+    // 7.1: Mask => 0x0f. The upper nibble has been seen set on the GF5/GX1,
+    // which is exactly why ExifTool masks instead of comparing the whole
+    // value; an unmasked read would print "Off" for -4095.
+    if let Some(raw) = binary_i16_at(bytes, 7, byte_order) {
+        let masked = raw & 0x0f;
+        let printed = match masked {
+            0 => "Off".to_string(),
+            1 => "On".to_string(),
+            other => other.to_string(),
+        };
+        metadata.insert(
+            "PanasonicRaw:DistortionCorrection".to_string(),
+            TagValue::new_string(printed),
+        );
+    }
+}
+
+/// Panasonic MakerNote tag ids whose out-of-line value
+/// `parsers::tiff::makernotes::panasonic` actually dereferences (its
+/// `extract_string_value` list). Every other tag in that parser reads the
+/// entry's `value_offset` field as if it were the value, so an out-of-line
+/// entry outside this set makes it print an offset: Panasonic.rw2 produced
+/// `AFPointPosition = 9046`, `FaceDetection = Unknown (9062)` and
+/// `BabyAge2 = 9104`, which are the rebuilt offsets of 0x4D, 0x4E and 0x8010
+/// verbatim. Those entries are dropped before the block reaches the parser.
+const PANASONIC_DEREFERENCED_TAGS: &[u16] = &[
+    0x0001, 0x0002, 0x0025, 0x0026, 0x0033, 0x0052, 0x0054, 0x0065, 0x0066, 0x0067, 0x0069, 0x006B,
+    0x006D, 0x006F, 0x0080,
+];
+
+/// Locate one IFD entry's out-of-line value inside `tiff` and return its
+/// `(offset, length)`.
+///
+/// `parse_ifd` hands back the value bytes but not where they came from, and
+/// relocating a MakerNote needs exactly that: the offset IS the base its own
+/// internal offsets are stated against. Returns `None` for a value small
+/// enough to be stored inline in the entry, which by definition has no
+/// offset.
+fn tiff_external_entry_extent(
+    tiff: &[u8],
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+    wanted_tag: u16,
+) -> Option<(usize, usize)> {
+    let ifd_offset = usize::try_from(ifd_offset).ok()?;
+    let entry_count = usize::from(read_tiff_u16(
+        tiff.get(ifd_offset..ifd_offset + 2)?,
+        byte_order,
+    )?);
+    for index in 0..entry_count {
+        let start = ifd_offset.checked_add(2 + index * 12)?;
+        let entry = tiff.get(start..start.checked_add(12)?)?;
+        if read_tiff_u16(&entry[..2], byte_order)? != wanted_tag {
+            continue;
+        }
+        let field_type = read_tiff_u16(&entry[2..4], byte_order)?;
+        let value_count = usize::try_from(read_tiff_u32(&entry[4..8], byte_order)?).ok()?;
+        let length = tiff_field_type_size(field_type)?.checked_mul(value_count)?;
+        if length <= 4 {
+            return None;
+        }
+        let offset = usize::try_from(read_tiff_u32(&entry[8..12], byte_order)?).ok()?;
+        return Some((offset, length));
+    }
+    None
+}
+
+/// TIFF field-type sizes, indexed by the type code. `None` for codes the TIFF
+/// specification does not define.
+fn tiff_field_type_size(field_type: u16) -> Option<usize> {
+    Some(match field_type {
+        1 | 2 | 6 | 7 => 1, // BYTE, ASCII, SBYTE, UNDEFINED
+        3 | 8 => 2,         // SHORT, SSHORT
+        4 | 9 | 11 => 4,    // LONG, SLONG, FLOAT
+        5 | 10 | 12 => 8,   // RATIONAL, SRATIONAL, DOUBLE
+        _ => return None,
+    })
+}
+
+/// Rebuild a MakerNote IFD whose value offsets are stated in some OTHER
+/// coordinate system into a self-contained block whose offsets are indices
+/// into the returned buffer.
+///
+/// A MakerNote's `value_offset` fields are almost never relative to the
+/// MakerNote itself: they are offsets into the enclosing TIFF, or -- for a
+/// MakerNote the Adobe DNG Converter relocated into DNGPrivateData -- offsets
+/// into a file that no longer exists. `source_base` is the value of
+/// `value_offset` that corresponds to byte 0 of `ifd`.
+///
+/// * Adobe MakN: `ProcessAdobeMakN` (DNG.pm:685) reads the base from the
+///   record header -- `my $originalPos = Get32u($dataPt, $start + 2);` -- and
+///   then `$fix = $dataPos + $dirStart - $originalPos;`.
+/// * RW2 preview MakerNote: MakerNotes.pm gives MakerNotePanasonic
+///   `Start => '$valuePtr + 12'` and no `Base`, so offsets stay relative to
+///   the preview's own TIFF header and the base is where the MakerNote value
+///   sits inside it.
+///
+/// Nothing inside the block announces that base, and the values are not
+/// necessarily flush against the IFD -- Canon350D leaves a two-byte gap --
+/// so handing the raw slice to a parser that infers the base from the layout
+/// misreads every offset-based tag by the size of that gap.
+///
+/// This repacks the directory instead: entries keep their tag/type/count, but
+/// offset-based values are copied out and their offsets rewritten to point at
+/// their new home immediately after the rebuilt IFD header. The result is an
+/// ordinary, self-consistent MakerNote directory in which `value_offset` is
+/// simply an index from the start of the returned buffer.
+///
+/// Entries whose value cannot be located inside the block are dropped rather
+/// than pointed at substitute bytes: a missing tag beats a fabricated one.
+///
+/// `external_allowlist`, when given, restricts which OUT-OF-LINE entries
+/// survive. It exists because not every manufacturer parser follows an
+/// offset: one that reads `value_offset` directly will happily print the
+/// offset itself as the tag's value. Restricting the rebuilt directory to the
+/// out-of-line ids the target parser actually dereferences keeps that
+/// nonsense out of the output. `None` keeps every entry.
+fn rebuild_relocated_makernote(
+    ifd: &[u8],
+    source_base: u32,
+    byte_order: ByteOrder,
+    external_allowlist: Option<&[u16]>,
+) -> Option<Vec<u8>> {
+    let entry_count = usize::from(read_tiff_u16(ifd.get(..2)?, byte_order)?);
+    // A MakerNote IFD with more entries than this is not one; ExifTool's own
+    // LocateIFD applies the same kind of sanity bound before trusting a count.
+    if entry_count == 0 || entry_count > 500 {
+        return None;
+    }
+    let source_header_size = 2usize.checked_add(entry_count.checked_mul(12)?)? + 4;
+    if ifd.len() < source_header_size {
+        return None;
+    }
+
+    // (tag_id, field_type, value_count, inline-or-external payload)
+    let mut kept: Vec<([u8; 8], Option<&[u8]>, [u8; 4])> = Vec::with_capacity(entry_count);
+    for index in 0..entry_count {
+        let start = 2 + index * 12;
+        let entry = ifd.get(start..start + 12)?;
+        let tag_id = read_tiff_u16(&entry[..2], byte_order)?;
+        let field_type = read_tiff_u16(&entry[2..4], byte_order)?;
+        let value_count = read_tiff_u32(&entry[4..8], byte_order)?;
+        let value_offset = read_tiff_u32(&entry[8..12], byte_order)?;
+
+        let mut head = [0u8; 8];
+        head.copy_from_slice(&entry[..8]);
+        let mut tail = [0u8; 4];
+        tail.copy_from_slice(&entry[8..12]);
+
+        let total = tiff_field_type_size(field_type)
+            .and_then(|size| size.checked_mul(usize::try_from(value_count).ok()?));
+        let Some(total) = total else {
+            // Unknown field type: no way to know how many bytes it owns, so
+            // pass the entry through untouched and let the parser ignore it.
+            kept.push((head, None, tail));
+            continue;
+        };
+        if total <= 4 {
+            // Inline value, stored in the offset field itself.
+            kept.push((head, None, tail));
+            continue;
+        }
+
+        if external_allowlist.is_some_and(|allowed| !allowed.contains(&tag_id)) {
+            continue;
+        }
+
+        let Some(relative) = value_offset.checked_sub(source_base) else {
+            continue;
+        };
+        let Ok(relative) = usize::try_from(relative) else {
+            continue;
+        };
+        let Some(payload) = relative
+            .checked_add(total)
+            .and_then(|end| ifd.get(relative..end))
+        else {
+            continue;
+        };
+        kept.push((head, Some(payload), tail));
+    }
+
+    let header_size = 2 + kept.len() * 12 + 4;
+    let mut out = vec![0u8; header_size];
+    let count = u16::try_from(kept.len()).ok()?;
+    out[..2].copy_from_slice(&match byte_order {
+        ByteOrder::LittleEndian => count.to_le_bytes(),
+        ByteOrder::BigEndian => count.to_be_bytes(),
+    });
+    for (index, (head, payload, tail)) in kept.iter().enumerate() {
+        let start = 2 + index * 12;
+        out[start..start + 8].copy_from_slice(head);
+        match payload {
+            Some(bytes) => {
+                let offset = u32::try_from(out.len()).ok()?;
+                let encoded = match byte_order {
+                    ByteOrder::LittleEndian => offset.to_le_bytes(),
+                    ByteOrder::BigEndian => offset.to_be_bytes(),
+                };
+                out[start + 8..start + 12].copy_from_slice(&encoded);
+                out.extend_from_slice(bytes);
+            }
+            None => out[start + 8..start + 12].copy_from_slice(tail),
+        }
+    }
+    Some(out)
+}
+
+/// Extract the MakerNotes the Adobe DNG Converter stashed in DNGPrivateData
+/// (IFD0 tag 0xC634).
+///
+/// Exif.pm:3530 names the tag `DNGAdobeData` when the value starts with
+/// `Adobe\0`, and flags it `Binary`+`Protected` -- ExifTool never prints the
+/// blob, it descends into it. `ProcessAdobeData` (DNG.pm:240) reads a 6-byte
+/// `Adobe\0` header and then a flat sequence of records:
+/// ```text
+///     my ($tag, $size) = unpack("x${pos}a4N", $$dataPt);   # 4-char tag, big-endian size
+///     $pos += 8;
+///     ...
+///     $pos += $size;
+///     ++$pos if $size & 0x01;   # (darn padding)
+/// ```
+/// Only the `MakN` record is handled here; `CRW `, `MRW `, `SR2 `, `RAF `,
+/// `Pano`, `Koda` and `Leaf` carry formats this function does not decode, and
+/// are skipped rather than guessed at.
+///
+/// The MakN record's own header is `ProcessAdobeMakN` (DNG.pm:685): two bytes
+/// of byte order ("II"/"MM") -- which need NOT match the enclosing TIFF, and
+/// on Canon350D.dng does not -- then the 4-byte big-endian original position,
+/// then the MakerNote itself. Camera Raw's JPEG-conversion bug adds 12 more
+/// header bytes, detected exactly as ExifTool detects it:
+/// ```text
+///     $hdrLen += 12 if $len >= 18 and substr($$dataPt, $start+6, 4) eq "\0\0\0\x01";
+/// ```
+fn extract_dng_adobe_private_data(data: &[u8], make: &str, metadata: &mut MetadataMap) {
+    if !data.starts_with(b"Adobe\0") {
+        return;
+    }
+
+    let mut pos = 6usize;
+    while pos + 8 <= data.len() {
+        let Some(record_tag) = data.get(pos..pos + 4) else {
+            return;
+        };
+        let Some(size) = read_tiff_u32(&data[pos + 4..pos + 8], ByteOrder::BigEndian) else {
+            return;
+        };
+        pos += 8;
+        let Ok(size) = usize::try_from(size) else {
+            return;
+        };
+        let Some(block) = pos.checked_add(size).and_then(|end| data.get(pos..end)) else {
+            return; // truncated record: ExifTool's `last if $pos + $size > $end`
+        };
+
+        if record_tag == b"MakN" {
+            parse_adobe_makn_record(block, make, metadata);
+        }
+
+        pos += size;
+        if size & 1 == 1 {
+            pos += 1;
+        }
+    }
+}
+
+/// Decode one `MakN` record from DNGPrivateData and hand the recovered
+/// MakerNote to the manufacturer dispatcher.
+///
+/// The rebuild expects a bare IFD, which is what Canon (and Minolta) write.
+/// A MakerNote that leads with a manufacturer signature -- "Nikon\0",
+/// "Panasonic\0\0\0", "OLYMP", "SONY DSC " and the rest -- makes the first
+/// two bytes decode as an absurd entry count, `rebuild_relocated_makernote`
+/// rejects it, and nothing is emitted. ExifTool skips those headers via
+/// `MakerNotes::LocateIFD`; doing the same here needs a sample to verify
+/// against, and inventing the header lengths blind would risk decoding a
+/// misaligned directory into confident nonsense.
+fn parse_adobe_makn_record(block: &[u8], make: &str, metadata: &mut MetadataMap) {
+    if block.len() < 6 {
+        return;
+    }
+    let byte_order = match &block[..2] {
+        b"II" => ByteOrder::LittleEndian,
+        b"MM" => ByteOrder::BigEndian,
+        _ => return,
+    };
+    let Some(original_pos) = read_tiff_u32(&block[2..6], ByteOrder::BigEndian) else {
+        return;
+    };
+
+    let mut header_len = 6usize;
+    if block.len() >= 18 && block.get(6..10) == Some(&[0, 0, 0, 1]) {
+        header_len += 12;
+    }
+    let Some(ifd) = block.get(header_len..) else {
+        return;
+    };
+
+    let Some(rebuilt) = rebuild_relocated_makernote(ifd, original_pos, byte_order, None) else {
+        eprintln!("Warning: DNGPrivateData MakN record is not a parsable MakerNote IFD");
+        return;
+    };
+
+    let mut tags = std::collections::HashMap::new();
+    if let Err(error) = crate::parsers::tiff::makernote_dispatcher::dispatch_makernote(
+        make, &rebuilt, byte_order, &mut tags,
+    ) {
+        eprintln!(
+            "Warning: Failed to parse DNGPrivateData MakerNote for {}: {}",
+            make, error
+        );
+        return;
+    }
+    for (tag_name, tag_value) in tags {
+        metadata.insert(tag_name, TagValue::new_string(tag_value));
+    }
+}
+
 fn format_rational_as_string(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
     let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
     let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
@@ -2636,7 +3339,7 @@ mod panasonic_rw2_tests {
         jpeg.extend_from_slice(&[0xff, 0xd9]);
 
         let mut metadata = MetadataMap::new();
-        extract_rw2_embedded_exif_tags(&jpeg, &mut metadata)
+        extract_rw2_embedded_exif_tags(&jpeg, 0, &mut metadata)
             .expect("synthetic preview EXIF should parse");
 
         assert_eq!(
@@ -3470,7 +4173,7 @@ fn parse_x3f_embedded_jpeg_exif(
     jpeg_file_offset: usize,
     metadata: &mut MetadataMap,
 ) {
-    let Ok(Some(tiff_data)) = find_jpeg_exif_tiff(jpeg_data) else {
+    let Ok(Some((tiff_start_in_jpeg, tiff_data))) = find_jpeg_exif_tiff(jpeg_data) else {
         return;
     };
     let Ok(byte_order) = detect_byte_order(tiff_data) else {
@@ -3559,14 +4262,13 @@ fn parse_x3f_embedded_jpeg_exif(
     // prints 2372 (= 2360 + 12) and on the X3F prints 2664 (= 2360 + 12 + 292,
     // the JpgFromRaw payload starting at file offset 292).
     //
-    // The APP1 gate in the caller guarantees the Exif segment is the JPEG's
-    // first, so its TIFF header is at a fixed +12: SOI(2) + APP1 marker(2) +
-    // length(2) + "Exif\0\0"(6).
-    const JPEG_APP1_TIFF_OFFSET: usize = 12;
+    // `find_jpeg_exif_tiff` reports where the TIFF header sits inside the
+    // JPEG (12 here: SOI(2) + APP1 marker(2) + length(2) + "Exif\0\0"(6),
+    // since the APP1 gate in the caller guarantees Exif is the first segment).
     if let Some((_, _, _, raw_bytes)) = ifd1_tags.iter().find(|(id, ..)| *id == 0x0201)
         && let Some(stored) = read_tiff_u32(raw_bytes.as_ref(), byte_order)
     {
-        let absolute = u64::from(stored) + (jpeg_file_offset + JPEG_APP1_TIFF_OFFSET) as u64;
+        let absolute = u64::from(stored) + (jpeg_file_offset + tiff_start_in_jpeg) as u64;
         metadata.insert(
             "IFD1:ThumbnailOffset".to_string(),
             TagValue::new_integer(absolute as i64),
@@ -6063,7 +6765,7 @@ mod rw2_embedded_exif_printconv_tests {
     fn extract(entries: &[Entry<'_>], big_endian: bool) -> MetadataMap {
         let jpeg = build_preview_jpeg(entries, big_endian);
         let mut metadata = MetadataMap::new();
-        extract_rw2_embedded_exif_tags(&jpeg, &mut metadata)
+        extract_rw2_embedded_exif_tags(&jpeg, 0, &mut metadata)
             .expect("synthetic RW2 preview EXIF must parse");
         metadata
     }
@@ -6396,6 +7098,339 @@ mod backlog_group_1_printconv_tests {
                 raw
             );
         }
+    }
+
+    // ---- PanasonicRaw WBInfo2 / DistortionInfo --------------------------
+
+    /// IFD0 tag 0x0027 of Panasonic.rw2, verbatim (58 bytes, int16u,
+    /// little-endian).
+    const RW2_WB_INFO2: &[u8] = &[
+        0x07, 0x00, 0x09, 0x00, 0x3d, 0x02, 0x00, 0x01, 0xa0, 0x01, 0x0a, 0x00, 0x76, 0x02, 0x00,
+        0x01, 0x83, 0x01, 0x0b, 0x00, 0xbe, 0x02, 0x00, 0x01, 0x63, 0x01, 0x03, 0x00, 0x7a, 0x01,
+        0x00, 0x01, 0x50, 0x02, 0x04, 0x00, 0x8b, 0x02, 0x00, 0x01, 0x79, 0x01, 0x14, 0x00, 0x4e,
+        0x02, 0x00, 0x01, 0xa5, 0x01, 0x18, 0x00, 0x7a, 0x01, 0x00, 0x01, 0x50, 0x02,
+    ];
+
+    /// IFD0 tag 0x0119 of Panasonic.rw2, verbatim (32 bytes, int16s,
+    /// little-endian).
+    const RW2_DISTORTION_INFO: &[u8] = &[
+        0xb2, 0xdc, 0x71, 0x72, 0x61, 0x01, 0x00, 0x00, 0xa2, 0x02, 0x00, 0x00, 0xf1, 0x00, 0x01,
+        0x00, 0xd2, 0x0f, 0xbe, 0x00, 0x01, 0x01, 0xf6, 0xfc, 0xe8, 0x08, 0xb2, 0x02, 0xda, 0x97,
+        0x7f, 0x95,
+    ];
+
+    /// Every value here is `exiftool -G1 -a Panasonic.rw2`, byte for byte.
+    /// The WBType labels come from %lightSource, so a stride error would move
+    /// them one four-element group over and relabel them silently -- checking
+    /// the levels alongside pins the stride down.
+    #[test]
+    fn panasonic_raw_wb_info2_matches_exiftool() {
+        let mut metadata = MetadataMap::new();
+        extract_panasonic_raw_wb_info2(RW2_WB_INFO2, ByteOrder::LittleEndian, &mut metadata);
+
+        let expect = |key: &str, value: &str| {
+            assert_eq!(
+                metadata.get(key).and_then(TagValue::as_string).as_deref(),
+                Some(value),
+                "{}",
+                key
+            );
+        };
+        assert_eq!(
+            metadata.get("PanasonicRaw:NumWBEntries"),
+            Some(&TagValue::new_integer(7))
+        );
+        expect("PanasonicRaw:WBType1", "Fine Weather");
+        expect("PanasonicRaw:WB_RGBLevels1", "573 256 416");
+        expect("PanasonicRaw:WBType2", "Cloudy");
+        expect("PanasonicRaw:WB_RGBLevels2", "630 256 387");
+        expect("PanasonicRaw:WBType3", "Shade");
+        expect("PanasonicRaw:WB_RGBLevels3", "702 256 355");
+        expect("PanasonicRaw:WBType4", "Tungsten (Incandescent)");
+        expect("PanasonicRaw:WB_RGBLevels4", "378 256 592");
+        expect("PanasonicRaw:WBType5", "Flash");
+        expect("PanasonicRaw:WB_RGBLevels5", "651 256 377");
+        expect("PanasonicRaw:WBType6", "D55");
+        expect("PanasonicRaw:WB_RGBLevels6", "590 256 421");
+        expect("PanasonicRaw:WBType7", "ISO Studio Tungsten");
+        expect("PanasonicRaw:WB_RGBLevels7", "378 256 592");
+        // The table stops at 7 entries; nothing beyond it may be invented.
+        assert!(metadata.get("PanasonicRaw:WBType8").is_none());
+    }
+
+    /// A WBType code %lightSource has no entry for must print the raw number
+    /// rather than borrow a neighbouring label.
+    #[test]
+    fn panasonic_raw_wb_type_outside_light_source_prints_raw() {
+        // One entry, type 5 (absent from %lightSource), levels 1 2 3.
+        let block: Vec<u8> = [1u16, 5, 1, 2, 3]
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        let mut metadata = MetadataMap::new();
+        extract_panasonic_raw_wb_info2(&block, ByteOrder::LittleEndian, &mut metadata);
+        assert_eq!(
+            metadata
+                .get("PanasonicRaw:WBType1")
+                .and_then(TagValue::as_string)
+                .as_deref(),
+            Some("5")
+        );
+    }
+
+    /// Values from `exiftool -G1 -a Panasonic.rw2`. The divisor is 32768 and
+    /// every quotient here is an exact binary fraction, so any rounding or
+    /// off-by-one index shows up immediately.
+    #[test]
+    fn panasonic_raw_distortion_info_matches_exiftool() {
+        let mut metadata = MetadataMap::new();
+        extract_panasonic_raw_distortion_info(
+            RW2_DISTORTION_INFO,
+            ByteOrder::LittleEndian,
+            &mut metadata,
+        );
+
+        let expect = |key: &str, value: &str| {
+            assert_eq!(
+                metadata.get(key).and_then(TagValue::as_string).as_deref(),
+                Some(value),
+                "{}",
+                key
+            );
+        };
+        expect("PanasonicRaw:DistortionParam02", "0.010772705078125");
+        expect("PanasonicRaw:DistortionParam04", "0.02056884765625");
+        expect("PanasonicRaw:DistortionScale", "1");
+        expect("PanasonicRaw:DistortionCorrection", "On");
+        expect("PanasonicRaw:DistortionParam08", "0.12359619140625");
+        expect("PanasonicRaw:DistortionParam09", "0.00579833984375");
+        expect("PanasonicRaw:DistortionParam11", "-0.02374267578125");
+        // Index 12 is `Unknown => 1` and 0/1/3/6/10/13/14/15 are checksums or
+        // undocumented; none of them may surface.
+        assert!(metadata.get("PanasonicRaw:DistortionN").is_none());
+    }
+
+    /// DistortionCorrection is `7.1 => { Mask => 0x0f }`. ExifTool masks
+    /// because the GF5/GX1 set the upper nibble, which makes the whole value
+    /// -4095; comparing unmasked would print "Off" for a corrected image.
+    #[test]
+    fn panasonic_raw_distortion_correction_is_masked() {
+        let mut block = RW2_DISTORTION_INFO.to_vec();
+        block[14..16].copy_from_slice(&(-4095i16).to_le_bytes());
+        let mut metadata = MetadataMap::new();
+        extract_panasonic_raw_distortion_info(&block, ByteOrder::LittleEndian, &mut metadata);
+        assert_eq!(
+            metadata
+                .get("PanasonicRaw:DistortionCorrection")
+                .and_then(TagValue::as_string)
+                .as_deref(),
+            Some("On")
+        );
+    }
+
+    /// A block shorter than the 32 bytes ProcessDistortionInfo expects must
+    /// produce nothing rather than read past the end.
+    #[test]
+    fn panasonic_raw_distortion_info_rejects_short_block() {
+        let mut metadata = MetadataMap::new();
+        extract_panasonic_raw_distortion_info(
+            &RW2_DISTORTION_INFO[..16],
+            ByteOrder::LittleEndian,
+            &mut metadata,
+        );
+        assert_eq!(metadata.len(), 0);
+    }
+
+    // ---- Relocated MakerNote rebuild ------------------------------------
+
+    /// Build a one-entry MakerNote IFD whose single value is out of line,
+    /// stated against `source_base`, and separated from the IFD header by
+    /// `gap` bytes of padding.
+    fn synthetic_relocated_ifd(source_base: u32, gap: usize, payload: &[u8]) -> Vec<u8> {
+        let header_size = 2 + 12 + 4;
+        let mut ifd = vec![0u8; header_size + gap];
+        ifd[..2].copy_from_slice(&1u16.to_le_bytes());
+        ifd[2..4].copy_from_slice(&0x1234u16.to_le_bytes()); // tag id
+        ifd[4..6].copy_from_slice(&1u16.to_le_bytes()); // BYTE
+        ifd[6..10].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+        ifd[10..14].copy_from_slice(&(source_base + (header_size + gap) as u32).to_le_bytes());
+        ifd.extend_from_slice(payload);
+        ifd
+    }
+
+    /// The point of the rebuild: a parser that assumes the values start
+    /// immediately after the IFD header reads two bytes early on Canon350D's
+    /// relocated MakerNote, because Canon left a two-byte gap there. After
+    /// the rebuild the value sits exactly at its rewritten offset.
+    #[test]
+    fn relocated_makernote_rebuild_absorbs_the_gap() {
+        let payload = b"0123456789";
+        for gap in [0usize, 2, 7] {
+            let ifd = synthetic_relocated_ifd(700, gap, payload);
+            let rebuilt = rebuild_relocated_makernote(&ifd, 700, ByteOrder::LittleEndian, None)
+                .expect("synthetic IFD rebuilds");
+
+            let header_size = 2 + 12 + 4;
+            assert_eq!(u16::from_le_bytes([rebuilt[0], rebuilt[1]]), 1);
+            let new_offset = u32::from_le_bytes(rebuilt[10..14].try_into().unwrap()) as usize;
+            assert_eq!(new_offset, header_size, "gap {}", gap);
+            assert_eq!(
+                &rebuilt[new_offset..new_offset + payload.len()],
+                payload,
+                "gap {}",
+                gap
+            );
+        }
+    }
+
+    /// An entry pointing outside the block is dropped, not aimed at whatever
+    /// bytes happen to be in range.
+    #[test]
+    fn relocated_makernote_rebuild_drops_unlocatable_entries() {
+        let mut ifd = synthetic_relocated_ifd(700, 0, b"0123456789");
+        ifd[10..14].copy_from_slice(&9_999_999u32.to_le_bytes());
+        let rebuilt = rebuild_relocated_makernote(&ifd, 700, ByteOrder::LittleEndian, None)
+            .expect("synthetic IFD rebuilds");
+        assert_eq!(u16::from_le_bytes([rebuilt[0], rebuilt[1]]), 0);
+    }
+
+    /// The allowlist keeps a parser that never dereferences an offset from
+    /// printing the offset as the value.
+    #[test]
+    fn relocated_makernote_rebuild_honours_external_allowlist() {
+        let ifd = synthetic_relocated_ifd(700, 0, b"0123456789");
+        let kept = rebuild_relocated_makernote(&ifd, 700, ByteOrder::LittleEndian, Some(&[0x1234]))
+            .expect("allowlisted rebuild");
+        assert_eq!(u16::from_le_bytes([kept[0], kept[1]]), 1);
+
+        let dropped = rebuild_relocated_makernote(&ifd, 700, ByteOrder::LittleEndian, Some(&[]))
+            .expect("filtered rebuild");
+        assert_eq!(u16::from_le_bytes([dropped[0], dropped[1]]), 0);
+    }
+
+    /// Inline values (<= 4 bytes) live in the offset field itself and must be
+    /// copied through untouched -- rewriting them would destroy the value.
+    #[test]
+    fn relocated_makernote_rebuild_preserves_inline_values() {
+        let header_size = 2 + 12 + 4;
+        let mut ifd = vec![0u8; header_size];
+        ifd[..2].copy_from_slice(&1u16.to_le_bytes());
+        ifd[2..4].copy_from_slice(&0x0010u16.to_le_bytes());
+        ifd[4..6].copy_from_slice(&4u16.to_le_bytes()); // LONG
+        ifd[6..10].copy_from_slice(&1u32.to_le_bytes());
+        ifd[10..14].copy_from_slice(&0x8000_0189u32.to_le_bytes()); // CanonModelID
+        let rebuilt = rebuild_relocated_makernote(&ifd, 700, ByteOrder::LittleEndian, None)
+            .expect("synthetic IFD rebuilds");
+        assert_eq!(
+            u32::from_le_bytes(rebuilt[10..14].try_into().unwrap()),
+            0x8000_0189
+        );
+    }
+
+    /// `ProcessAdobeData` walks 4-char tag / big-endian size records with odd
+    /// sizes padded to even. A record type this code does not decode must be
+    /// skipped without derailing the walk.
+    #[test]
+    fn adobe_private_data_skips_unknown_records_and_pads() {
+        let mut blob = b"Adobe\0".to_vec();
+        blob.extend_from_slice(b"CRW ");
+        blob.extend_from_slice(&3u32.to_be_bytes());
+        blob.extend_from_slice(&[1, 2, 3]);
+        blob.push(0); // padding, because the size was odd
+
+        // A MakN record whose payload is not a usable IFD: the walk must
+        // still terminate cleanly and emit nothing.
+        blob.extend_from_slice(b"MakN");
+        blob.extend_from_slice(&6u32.to_be_bytes());
+        blob.extend_from_slice(b"II\0\0\0\0");
+
+        let mut metadata = MetadataMap::new();
+        extract_dng_adobe_private_data(&blob, "Canon", &mut metadata);
+        assert_eq!(metadata.len(), 0);
+    }
+
+    /// Anything that is not Adobe's container is left alone.
+    #[test]
+    fn adobe_private_data_ignores_foreign_blobs() {
+        let mut metadata = MetadataMap::new();
+        extract_dng_adobe_private_data(b"SONY DSC \0\0\0", "Sony", &mut metadata);
+        assert_eq!(metadata.len(), 0);
+    }
+
+    // ---- DNG IFD0 conversions -------------------------------------------
+
+    /// All four values are `exiftool -s` output for Canon350D.dng.
+    #[test]
+    fn dng_ifd0_conversions_match_exiftool() {
+        let be = ByteOrder::BigEndian;
+        assert_eq!(
+            format_dng_ifd0_tag(0xC612, &[1, 1, 0, 0], 1, 4, be).as_deref(),
+            Some("1.1.0.0")
+        );
+        assert_eq!(
+            format_dng_ifd0_tag(0xC613, &[1, 1, 0, 0], 1, 4, be).as_deref(),
+            Some("1.1.0.0")
+        );
+
+        let unique_id = [
+            0x03, 0x58, 0xdb, 0x4e, 0x08, 0x63, 0x2d, 0x90, 0x92, 0x51, 0x71, 0xa6, 0xbb, 0x88,
+            0x48, 0xa2,
+        ];
+        assert_eq!(
+            format_dng_ifd0_tag(0xC65D, &unique_id, 1, 16, be).as_deref(),
+            Some("0358DB4E08632D90925171A6BB8848A2")
+        );
+
+        // 18/1, 55/1, 0/0, 0/0 -> "18-55mm f/?" (0/0 is 'undef', printed '?')
+        let mut lens = Vec::new();
+        for (numerator, denominator) in [(18u32, 1u32), (55, 1), (0, 0), (0, 0)] {
+            lens.extend_from_slice(&numerator.to_be_bytes());
+            lens.extend_from_slice(&denominator.to_be_bytes());
+        }
+        assert_eq!(
+            format_dng_ifd0_tag(0xC630, &lens, 5, 4, be).as_deref(),
+            Some("18-55mm f/?")
+        );
+    }
+
+    /// PrintLensInfo suppresses the upper bound when it is zero or equal to
+    /// the lower bound, so a prime with a fixed aperture prints as one focal
+    /// length and one f-number.
+    #[test]
+    fn dng_lens_info_collapses_equal_and_zero_bounds() {
+        let build = |components: [(u32, u32); 4]| {
+            let mut bytes = Vec::new();
+            for (numerator, denominator) in components {
+                bytes.extend_from_slice(&numerator.to_be_bytes());
+                bytes.extend_from_slice(&denominator.to_be_bytes());
+            }
+            bytes
+        };
+        let be = ByteOrder::BigEndian;
+        assert_eq!(
+            format_dng_ifd0_tag(
+                0xC630,
+                &build([(50, 1), (50, 1), (14, 10), (14, 10)]),
+                5,
+                4,
+                be
+            )
+            .as_deref(),
+            Some("50mm f/1.4")
+        );
+        // "if $vals[1]" is a truthiness test: a literal zero upper bound is
+        // dropped rather than printed as "50-0".
+        assert_eq!(
+            format_dng_ifd0_tag(
+                0xC630,
+                &build([(50, 1), (0, 1), (14, 10), (0, 1)]),
+                5,
+                4,
+                be
+            )
+            .as_deref(),
+            Some("50mm f/1.4")
+        );
     }
 
     // ---- FileSource (Exif.pm:2757) --------------------------------------
