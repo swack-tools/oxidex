@@ -399,6 +399,12 @@ impl PSDParser {
     fn parse_iptc_data(data: &[u8], metadata: &mut MetadataMap) {
         if let Ok(records) = parse_all_iptc_records(data) {
             for record in records {
+                // PhotoMechanic.pm identifies IPTC application dataset 221 as
+                // a SoftEdit block whose fields are addressed by byte offset.
+                if record.record_number == 2 && record.dataset_number == 221 {
+                    Self::parse_photo_mechanic_soft_edit(&record.data, metadata);
+                    continue;
+                }
                 // Only process Application Record (record 2)
                 if record.record_number == 2 {
                     let tag_name = dataset_to_tag_name(record.record_number, record.dataset_number);
@@ -422,6 +428,24 @@ impl PSDParser {
                     }
                 }
             }
+        }
+    }
+
+    /// Parse fields from a Photo Mechanic SoftEdit IPTC payload.
+    fn parse_photo_mechanic_soft_edit(data: &[u8], metadata: &mut MetadataMap) {
+        // Image::ExifTool::PhotoMechanic::SoftEdit:
+        // offset 221 is Tagged, with PrintConv 0 => "No", 1 => "Yes".
+        let tagged = match data.get(221).copied() {
+            Some(0) => Some("No"),
+            Some(1) => Some("Yes"),
+            _ => None,
+        };
+
+        if let Some(value) = tagged {
+            metadata.insert(
+                "PhotoMechanic:Tagged".to_string(),
+                TagValue::String(value.to_string()),
+            );
         }
     }
 }
@@ -732,6 +756,34 @@ mod tests {
                 .iter()
                 .all(|(name, _)| !name.ends_with(":ThumbnailOffset")),
             "0x0201 was never present; no ThumbnailOffset should appear"
+        );
+    }
+
+    #[test]
+    fn parses_photo_mechanic_tagged_from_soft_edit() {
+        // IPTC application record 2, dataset 221, containing a 222-byte
+        // Photo Mechanic SoftEdit payload. PhotoMechanic.pm defines Tagged at
+        // byte offset 221 and converts the stored value 1 to exactly "Yes".
+        let mut soft_edit = vec![0u8; 222];
+        soft_edit[221] = 1;
+
+        let mut iptc = Vec::with_capacity(5 + soft_edit.len());
+        iptc.push(0x1c);
+        iptc.push(2);
+        iptc.push(221);
+        iptc.extend_from_slice(&(soft_edit.len() as u16).to_be_bytes());
+        iptc.extend_from_slice(&soft_edit);
+
+        let mut metadata = MetadataMap::new();
+        PSDParser::parse_iptc_data(&iptc, &mut metadata);
+
+        assert_eq!(
+            metadata.get("PhotoMechanic:Tagged"),
+            Some(&TagValue::String("Yes".to_string()))
+        );
+        assert!(
+            metadata.get("IPTC:Unknown-2-221").is_none(),
+            "the SoftEdit payload must not also be emitted as a raw IPTC tag"
         );
     }
 }
