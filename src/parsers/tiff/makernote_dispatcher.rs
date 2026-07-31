@@ -25,6 +25,33 @@ pub fn dispatch_makernote(
     byte_order: ByteOrder,
     tags: &mut HashMap<String, String>,
 ) -> Result<(), String> {
+    dispatch_makernote_with_model(make, None, data, byte_order, tags)
+}
+
+/// Dispatches MakerNote data to the appropriate manufacturer parser, passing
+/// along the camera model.
+///
+/// Some MakerNote structures cannot be decoded from their own bytes alone --
+/// Nikon's `AFInfo` picks its byte order from the model string, for example --
+/// so callers that already know the model should prefer this entry point.
+/// [`dispatch_makernote`] is the same call with no model.
+///
+/// # Arguments
+/// * `make` - Camera manufacturer name (e.g., "Canon", "Nikon", "Sony")
+/// * `model` - Camera model name (EXIF `Model`), if known
+/// * `data` - Raw MakerNote data bytes
+/// * `byte_order` - Byte order for parsing
+/// * `tags` - HashMap to insert extracted tags into
+///
+/// # Returns
+/// Ok(()) on success, Err(message) on parse failure
+pub fn dispatch_makernote_with_model(
+    make: &str,
+    model: Option<&str>,
+    data: &[u8],
+    byte_order: ByteOrder,
+    tags: &mut HashMap<String, String>,
+) -> Result<(), String> {
     use crate::parsers::tiff::makernotes::shared::MakerNoteParser;
 
     // Normalize make string (trim whitespace, case-insensitive matching)
@@ -97,7 +124,7 @@ pub fn dispatch_makernote(
         // Validate header if parser provides validation
         if parser.validate_header(data) {
             // Parse MakerNote data
-            parser.parse(data, byte_order, tags)?;
+            parser.parse_with_model(data, byte_order, model, tags)?;
         }
     }
 
