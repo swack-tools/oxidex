@@ -13,6 +13,7 @@ pub mod color_balance;
 pub mod lens_data;
 pub mod shot_info;
 
+use super::nikon_capture_data;
 use crate::error::{ExifToolError, Result};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use crate::parsers::tiff::makernotes::shared::ifd_parser_base::{
@@ -34,6 +35,10 @@ use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_u16_array, extract_u32_array};
 
 // Nikon MakerNote Tag IDs (from ExifTool Nikon.pm)
+/// Nikon Capture NX edit history (`NikonCaptureData`), a record stream
+/// rather than an IFD.
+const NIKON_CAPTURE_DATA: u16 = 0x0E01;
+
 const NIKON_VERSION: u16 = 0x0001;
 const NIKON_ISO_SPEED: u16 = 0x0002;
 const NIKON_COLOR_MODE: u16 = 0x0003;
@@ -353,6 +358,20 @@ impl MakerNoteParser for NikonParser {
                 // which starts at byte 10 (tiff_start) in the full data buffer
 
                 match entry.tag_id {
+                    // Nikon Capture NX edit history. Not an IFD -- a stream of
+                    // variable-length records with 32-bit ids, always
+                    // little-endian, walked by nikon_capture_data. It is
+                    // reached only from here: the existing NikonCaptureParser
+                    // is dispatched on a MakerNote *signature*, which no NEF
+                    // presents, so it never ran.
+                    NIKON_CAPTURE_DATA => {
+                        let start = tiff_start + entry.value_offset as usize;
+                        let end = start.saturating_add(entry.value_count as usize);
+                        if let Some(block) = data.get(start..end) {
+                            nikon_capture_data::parse_nikon_capture_data(block, tags);
+                        }
+                    }
+
                     // Simple string tags
                     NIKON_VERSION | NIKON_SERIAL_NUMBER => {
                         // String offsets are relative to the TIFF header (byte 10)
