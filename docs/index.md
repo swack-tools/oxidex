@@ -24,8 +24,10 @@ features:
     title: Memory Safe
     details: Rust eliminates buffer overflows, use-after-free bugs, and entire classes of vulnerabilities
   - icon: 🎯
-    title: 32,677 Metadata Tags
-    details: Complete parity with ExifTool across 140+ format families, automatically synchronized
+    title: 16,677 Metadata Tags
+    details: 58% ExifTool tag parity across 140+ format families — tracked automatically, updated on every push
+    link: /reference/tag-coverage-analysis
+    linkText: View Coverage
   - icon: 🤖
     title: AI Integration
     details: MCP server for Claude and other AI assistants - manage metadata through natural conversation
