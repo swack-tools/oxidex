@@ -1213,10 +1213,8 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
     }
 
     // The preview EXIF also carries an Interoperability IFD (ExifIFD tag
-    // 0xA005 -> InteropOffset). ExifTool reports [InteropIFD] InteropIndex for
-    // Panasonic.rw2; oxidex never descended into it (measured gap 2026-07-27).
-    // Only InteropIndex is taken: InteropVersion is not among the gaps the
-    // comparator reports for RW2, so emitting it would add an unmatched tag.
+    // 0xA005 -> InteropOffset). Extract both InteropIndex and the missing
+    // InteropVersion from that directory.
     if let Some(interop_offset) =
         exif_tags
             .iter()
@@ -1261,23 +1259,44 @@ fn extract_interop_index(
         return;
     };
 
-    for (tag_id, _field_type, _value_count, raw_bytes) in &interop_tags {
-        if *tag_id != 0x0001 {
-            continue;
+    for (tag_id, field_type, value_count, raw_bytes) in &interop_tags {
+        match *tag_id {
+            // InteropIndex, Exif.pm InteropIFD tag 0x0001.
+            0x0001 => {
+                let raw = String::from_utf8_lossy(raw_bytes.as_ref())
+                    .trim_end_matches('\0')
+                    .to_string();
+                let printed = match raw.as_str() {
+                    "R98" => "R98 - DCF basic file (sRGB)".to_string(),
+                    "R03" => "R03 - DCF option file (Adobe RGB)".to_string(),
+                    "THM" => "THM - DCF thumbnail file".to_string(),
+                    _ => raw,
+                };
+                metadata.insert(
+                    "InteropIFD:InteropIndex".to_string(),
+                    TagValue::new_string(printed),
+                );
+            }
+            // InteropVersion, Exif.pm InteropIFD tag 0x0002, is UNDEFINED[4]
+            // with no PrintConv; Panasonic stores the displayed ASCII version.
+            0x0002 if *field_type == 7 => {
+                let Some(count) = usize::try_from(*value_count).ok() else {
+                    continue;
+                };
+                let Some(version) = raw_bytes.as_ref().get(..count) else {
+                    continue;
+                };
+                metadata.insert(
+                    lookup_tag_name(*tag_id, "EXIF"),
+                    TagValue::new_string(
+                        String::from_utf8_lossy(version)
+                            .trim_end_matches('\0')
+                            .to_string(),
+                    ),
+                );
+            }
+            _ => {}
         }
-        let raw = String::from_utf8_lossy(raw_bytes.as_ref())
-            .trim_end_matches('\0')
-            .to_string();
-        let printed = match raw.as_str() {
-            "R98" => "R98 - DCF basic file (sRGB)".to_string(),
-            "R03" => "R03 - DCF option file (Adobe RGB)".to_string(),
-            "THM" => "THM - DCF thumbnail file".to_string(),
-            _ => raw,
-        };
-        metadata.insert(
-            "InteropIFD:InteropIndex".to_string(),
-            TagValue::new_string(printed),
-        );
     }
 }
 
