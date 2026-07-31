@@ -77,7 +77,9 @@ FORMAT_TO_DIR = {
     "Opus": ["parsers/audio"],
     "OGG": ["parsers/audio"],
     "WAV": ["parsers/audio"],
-    "FLASHPIX": ["parsers/flashpix"],
+    # FlashPix property sets are MS-OLEPS, parsed by the OLE compound-file
+    # reader in parsers/archive -- there is no separate flashpix parser.
+    "FLASHPIX": ["parsers/archive"],
     "IPTC": ["parsers/jpeg"],
 }
 
