@@ -91,7 +91,7 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
     // CPU type
     metadata.insert(
         "EXE:CPUType".to_string(),
-        TagValue::String(header.cpu_type_name().to_string()),
+        TagValue::String(exiftool_cpu_type(header).to_string()),
     );
 
     // CPU type raw value
@@ -703,6 +703,20 @@ fn exiftool_cpu_subtype(cputype: i32, cpusubtype: i32) -> String {
     }
 }
 
+/// ExifTool's `CPUType` PrintConv spelling for the CPU type in the Mach-O
+/// header (EXE.pm, `EXE::MachO` tag 2).
+///
+/// `CPU_TYPE_X86_64` is 0x0100_0007 in the Mach-O ABI and ExifTool renders
+/// this as "x86 64-bit", rather than oxidex's internal "x86_64" spelling.
+/// Other values retain the existing names until their ExifTool table entries
+/// are covered individually.
+fn exiftool_cpu_type(header: &MachHeader) -> &'static str {
+    match header.cputype {
+        super::structures::cpu_type::CPU_TYPE_X86_64 => "x86 64-bit",
+        _ => header.cpu_type_name(),
+    }
+}
+
 /// ExifTool's `ObjectFileType` table (EXE.pm, `EXE::MachO` tag 5).
 ///
 /// Distinct from `file_type_name`, which uses oxidex's own shorter wording:
@@ -856,6 +870,23 @@ mod tests {
         assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
         assert_eq!(metadata.get_integer("EXE:IsPIE").unwrap(), 1);
         assert_eq!(metadata.get_integer("EXE:HasTwoLevelNamespace").unwrap(), 1);
+    }
+
+    #[test]
+    fn test_extract_x86_64_cpu_type_uses_exiftool_spelling() {
+        let header = MachHeader {
+            cputype: cpu_type::CPU_TYPE_X86_64,
+            cpusubtype: 3,
+            ..create_test_header()
+        };
+        let mut metadata = MetadataMap::new();
+
+        extract_header_metadata(&header, &mut metadata);
+
+        assert_eq!(
+            metadata.get_string("EXE:CPUType").unwrap(),
+            "x86 64-bit"
+        );
     }
 
     #[test]
