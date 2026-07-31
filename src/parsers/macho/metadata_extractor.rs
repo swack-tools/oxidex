@@ -11,7 +11,7 @@ use super::segment_parser::SegmentStats;
 use super::signature_parser::{has_developer_id, is_adhoc_signed};
 use super::structures::{
     BuildVersionCommand, DylibCommand, EntryPointCommand, MachHeader, MachOInfo, RpathCommand,
-    SymtabCommand, UuidCommand, VersionMinCommand,
+    SymtabCommand, UuidCommand, VersionMinCommand, cpu_type,
 };
 use super::symbol_parser::SymbolStats;
 use super::version_parser::format_version_with_name;
@@ -86,12 +86,24 @@ pub fn extract_macho_metadata(info: &MachOInfo) -> MetadataMap {
     metadata
 }
 
+/// Return ExifTool's PrintConv spelling for a Mach-O CPU type.
+///
+/// `CPU_TYPE_X86_64` is the existing Mach-O ABI constant 0x01000007.
+/// Keep the existing architecture name as the fallback until the remaining
+/// EXE.pm CPUType table entries are verified byte-for-byte.
+fn exiftool_cpu_type_name(header: &MachHeader) -> &'static str {
+    match header.cputype {
+        cpu_type::CPU_TYPE_X86_64 => "x86 64-bit",
+        _ => header.cpu_type_name(),
+    }
+}
+
 /// Extract metadata from the Mach-O header
 fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
     // CPU type
     metadata.insert(
         "EXE:CPUType".to_string(),
-        TagValue::String(header.cpu_type_name().to_string()),
+        TagValue::String(exiftool_cpu_type_name(header).to_string()),
     );
 
     // CPU type raw value
