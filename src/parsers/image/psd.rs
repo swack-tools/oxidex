@@ -393,6 +393,8 @@ impl PSDParser {
                 metadata.insert(tag_name, TagValue::String(value));
             }
         }
+
+        parse_photo_mechanic_xmp(xmp, metadata);
     }
 
     /// Parse IPTC data from image resource block
@@ -456,6 +458,159 @@ impl FormatParser for PSDParser {
 pub fn parse_psd_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
     let parser = PSDParser;
     parser.parse(reader).map_err(|e| e.to_string())
+}
+
+const PHOTO_MECHANIC_NAMESPACE: &str = "http://ns.camerabits.com/photomechanic/1.0/";
+
+/// Extracts the scalar fields stored in Photo Mechanic's structured XMP
+/// properties.  The namespace prefix is resolved from its URI because XML
+/// prefixes are document-local and are not fixed by the XMP specification.
+fn parse_photo_mechanic_xmp(xmp: &str, metadata: &mut MetadataMap) {
+    let Some(prefix) = xmp_namespace_prefix(xmp, PHOTO_MECHANIC_NAMESPACE) else {
+        return;
+    };
+
+    for container_name in ["SoftEdit", "Prefs"] {
+        let Some(container) = xmp_element_contents(xmp, &prefix, container_name) else {
+            continue;
+        };
+
+        for field_name in ["CropRight", "CropTop", "Rotation"] {
+            let Some(value) = xmp_property_value(container, &prefix, field_name) else {
+                continue;
+            };
+            let Ok(value) = value.trim().parse::<i64>() else {
+                continue;
+            };
+            metadata.insert(
+                format!("PhotoMechanic:{field_name}"),
+                TagValue::Integer(value),
+            );
+        }
+
+        if let Some(value) = xmp_property_value(container, &prefix, "Tagged") {
+            let value = match value.trim() {
+                "0" | "false" | "False" => Some("No"),
+                "1" | "true" | "True" => Some("Yes"),
+                _ => None,
+            };
+            if let Some(value) = value {
+                metadata.insert(
+                    "PhotoMechanic:Tagged".to_string(),
+                    TagValue::String(value.to_string()),
+                );
+            }
+        }
+    }
+}
+
+/// Finds the prefix whose declaration has the requested namespace URI.
+///
+/// This deliberately examines the first byte after `=`.  The previous
+/// implementation compared a slice extending beyond the quote, so it could
+/// never recognize a valid declaration.
+fn xmp_namespace_prefix(xmp: &str, namespace_uri: &str) -> Option<String> {
+    let mut search_from = 0usize;
+    while let Some(relative_start) = xmp.get(search_from..)?.find("xmlns:") {
+        let declaration_start = search_from.checked_add(relative_start)?;
+        let prefix_start = declaration_start.checked_add("xmlns:".len())?;
+        let declaration = xmp.get(prefix_start..)?;
+        let equals_position = declaration.find('=')?;
+        let prefix = declaration.get(..equals_position)?.trim();
+        if prefix.is_empty()
+            || !prefix
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+        {
+            search_from = prefix_start.checked_add(equals_position + 1)?;
+            continue;
+        }
+
+        let value_start = equals_position.checked_add(1)?;
+        let value = declaration.get(value_start..)?.trim_start();
+        let quote = value.as_bytes().first().copied();
+        let Some(quote @ (b'\'' | b'"')) = quote else {
+            search_from = prefix_start.checked_add(equals_position + 1)?;
+            continue;
+        };
+
+        let quoted_value = value.get(1..)?;
+        let end = quoted_value.find(quote as char)?;
+        if quoted_value.get(..end)? == namespace_uri {
+            return Some(prefix.to_string());
+        }
+
+        search_from = prefix_start.checked_add(equals_position + 1)?;
+    }
+
+    None
+}
+
+/// Returns the text between a namespace-qualified opening and closing element.
+fn xmp_element_contents<'a>(
+    xmp: &'a str,
+    prefix: &str,
+    local_name: &str,
+) -> Option<&'a str> {
+    let qualified_name = format!("{prefix}:{local_name}");
+    let opening = format!("<{qualified_name}");
+    let closing = format!("</{qualified_name}>");
+    let mut search_from = 0usize;
+
+    while let Some(relative_start) = xmp.get(search_from..)?.find(&opening) {
+        let opening_start = search_from.checked_add(relative_start)?;
+        let after_name = opening_start.checked_add(opening.len())?;
+        let delimiter = xmp.as_bytes().get(after_name).copied()?;
+
+        // Avoid treating SoftEditExtra as SoftEdit.
+        if delimiter != b'>' && !delimiter.is_ascii_whitespace() {
+            search_from = after_name;
+            continue;
+        }
+
+        let opening_tail = xmp.get(after_name..)?;
+        let relative_content_start = opening_tail.find('>')?;
+        let content_start = after_name
+            .checked_add(relative_content_start)?
+            .checked_add(1)?;
+        let content = xmp.get(content_start..)?;
+        let relative_content_end = content.find(&closing)?;
+        return content.get(..relative_content_end);
+    }
+
+    None
+}
+
+/// Reads a field from either a nested element or an RDF attribute.
+fn xmp_property_value<'a>(container: &'a str, prefix: &str, local_name: &str) -> Option<&'a str> {
+    if let Some(value) = xmp_element_contents(container, prefix, local_name) {
+        return Some(value);
+    }
+
+    let qualified_name = format!("{prefix}:{local_name}");
+    let mut search_from = 0usize;
+    while let Some(relative_start) = container.get(search_from..)?.find(&qualified_name) {
+        let name_start = search_from.checked_add(relative_start)?;
+        let after_name = name_start.checked_add(qualified_name.len())?;
+        let remainder = container.get(after_name..)?;
+        let remainder = remainder.trim_start();
+        if !remainder.starts_with('=') {
+            search_from = after_name;
+            continue;
+        }
+
+        let quoted = remainder.get(1..)?.trim_start();
+        let quote = quoted.as_bytes().first().copied();
+        let Some(quote @ (b'\'' | b'"')) = quote else {
+            search_from = after_name;
+            continue;
+        };
+        let value = quoted.get(1..)?;
+        let end = value.find(quote as char)?;
+        return value.get(..end);
+    }
+
+    None
 }
 
 /// Returns the offset of the IFD linked after `ifd_offset`.
@@ -569,6 +724,45 @@ fn raw_bytes_to_tag_value(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_photo_mechanic_structured_xmp_with_resolved_namespace() {
+        let xmp = r#"
+            <rdf:Description
+                xmlns:cb="http://ns.camerabits.com/photomechanic/1.0/">
+                <cb:SoftEdit>
+                    <rdf:Description>
+                        <cb:CropRight>890</cb:CropRight>
+                        <cb:CropTop>618</cb:CropTop>
+                        <cb:Rotation>180</cb:Rotation>
+                    </rdf:Description>
+                </cb:SoftEdit>
+                <cb:Prefs>
+                    <rdf:Description cb:Tagged="1"/>
+                </cb:Prefs>
+            </rdf:Description>
+        "#;
+        let mut metadata = MetadataMap::new();
+
+        PSDParser::parse_xmp_data(xmp, &mut metadata);
+
+        assert_eq!(
+            metadata.get("PhotoMechanic:CropRight"),
+            Some(&TagValue::Integer(890))
+        );
+        assert_eq!(
+            metadata.get("PhotoMechanic:CropTop"),
+            Some(&TagValue::Integer(618))
+        );
+        assert_eq!(
+            metadata.get("PhotoMechanic:Rotation"),
+            Some(&TagValue::Integer(180))
+        );
+        assert_eq!(
+            metadata.get("PhotoMechanic:Tagged"),
+            Some(&TagValue::String("Yes".to_string()))
+        );
+    }
 
     #[test]
     fn parses_compression_from_embedded_exif_ifd1() {
