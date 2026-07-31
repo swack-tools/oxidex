@@ -113,6 +113,22 @@ pub fn parse_mts_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
     parser.parse(reader).map_err(|e| e.to_string())
 }
 
+/// Whether this file is an MPEG-2 transport stream, for the file-type
+/// detection layer.
+///
+/// This deliberately returns a bool rather than exposing [`PacketLayout`].
+/// Detection needs a yes/no, not the packet geometry, and publishing the
+/// struct would make its field layout part of a cross-module contract for no
+/// benefit -- anyone later changing how the arrival timecode is handled would
+/// have to reason about a caller in `src/core`. A bool has no such coupling.
+///
+/// Detection is not a signature match: a transport stream has no magic number.
+/// The probe validates a 0x47 sync byte repeating at the packet stride, which
+/// is the only thing that distinguishes one.
+pub(crate) fn is_transport_stream(reader: &dyn FileReader) -> bool {
+    PacketLayout::detect(reader).is_ok()
+}
+
 /// Where the packet grid starts and how wide each packet is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PacketLayout {
@@ -1002,6 +1018,27 @@ mod tests {
         assert_eq!(layout.packet_len, M2TS_PACKET_SIZE);
         assert_eq!(layout.timecode_len, 4);
         assert_eq!(layout.start, 0);
+    }
+
+    /// The file-type detection layer's entry point. It must agree with
+    /// `PacketLayout::detect` without exposing the layout itself.
+    #[test]
+    fn test_is_transport_stream() {
+        let mut data = Vec::new();
+        for _ in 0..5 {
+            data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+            data.extend_from_slice(&null_packet());
+        }
+        assert!(is_transport_stream(&TestReader::from_slice(&data)));
+
+        // No sync byte at any stride: not a transport stream.
+        assert!(!is_transport_stream(&TestReader::from_slice(
+            &[0xffu8; M2TS_PACKET_SIZE * 5]
+        )));
+        // Too short to validate the four packets ExifTool requires.
+        assert!(!is_transport_stream(
+            &TestReader::from_slice(&null_packet())
+        ));
     }
 
     /// A timecode whose first byte is 0x47 must not shift the packet grid --
