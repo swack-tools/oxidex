@@ -321,6 +321,9 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     Ok(metadata)
 }
 
+// Standard TIFF tag IDs from ExifTool 13.55 Exif.pm.
+const TAG_IMAGE_DESCRIPTION: u16 = 0x010e;
+const TAG_MAKE: u16 = 0x010f;
 const TIFF_ARTIST_TAG: u16 = 0x013b;
 const TAG_EXIF_IFD: u16 = 0x8769;
 const TAG_APERTURE_VALUE: u16 = 0x9202;
@@ -339,6 +342,9 @@ const TAG_FLASH: u16 = 0x9209;
 const TAG_FLASHPIX_VERSION: u16 = 0xA000;
 const TAG_EXIF_IMAGE_WIDTH: u16 = 0xA002;
 const TAG_EXIF_IMAGE_HEIGHT: u16 = 0xA003;
+// ExifTool 13.55 Exif.pm: FocalPlaneX/YResolution.
+const TAG_FOCAL_PLANE_X_RESOLUTION: u16 = 0xA20e;
+const TAG_FOCAL_PLANE_Y_RESOLUTION: u16 = 0xA20f;
 const TAG_FOCAL_PLANE_RESOLUTION_UNIT: u16 = 0xA210;
 const TAG_FILE_SOURCE: u16 = 0xA300;
 
@@ -569,6 +575,18 @@ fn parse_embedded_tiff_ifds(data: &[u8]) -> Option<MetadataMap> {
         let count = read_embedded_tiff_u32(data, base.checked_add(4)?, byte_order)?;
 
         match tag {
+            TAG_IMAGE_DESCRIPTION if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_IMAGE_DESCRIPTION, "IFD0");
+                    metadata.insert(key, crate::core::TagValue::new_string(v));
+                }
+            }
+            TAG_MAKE if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_MAKE, "IFD0");
+                    metadata.insert(key, crate::core::TagValue::new_string(v));
+                }
+            }
             TIFF_ARTIST_TAG if field_type == 2 => {
                 if let Some(v) = read_ascii_value(data, base, byte_order, count) {
                     if !v.is_empty() {
@@ -867,6 +885,40 @@ fn parse_exif_ifd(
                     if let Some(label) = lookup_label(FLASH_LABELS, raw) {
                         let key = crate::tag_db::lookup_tag_name(TAG_FLASH, "ExifIFD");
                         metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
+                    }
+                }
+            }
+            // ExifTool 13.55 Exif.pm 0xa20e and 0xa20f are unsigned
+            // rationals without a PrintConv.
+            TAG_FOCAL_PLANE_X_RESOLUTION if field_type == 5 => {
+                if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
+                    if den != 0 {
+                        let key = crate::tag_db::lookup_tag_name(
+                            TAG_FOCAL_PLANE_X_RESOLUTION,
+                            "ExifIFD",
+                        );
+                        metadata.insert(
+                            key,
+                            crate::core::TagValue::new_string(format_rational(
+                                f64::from(num) / f64::from(den),
+                            )),
+                        );
+                    }
+                }
+            }
+            TAG_FOCAL_PLANE_Y_RESOLUTION if field_type == 5 => {
+                if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
+                    if den != 0 {
+                        let key = crate::tag_db::lookup_tag_name(
+                            TAG_FOCAL_PLANE_Y_RESOLUTION,
+                            "ExifIFD",
+                        );
+                        metadata.insert(
+                            key,
+                            crate::core::TagValue::new_string(format_rational(
+                                f64::from(num) / f64::from(den),
+                            )),
+                        );
                     }
                 }
             }
