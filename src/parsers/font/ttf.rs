@@ -61,10 +61,13 @@ const LANGUAGE_CHINESE_TW_WINDOWS: u16 = 0x0404;
 const LANGUAGE_CHINESE_CN_WINDOWS: u16 = 0x0804;
 
 /// Macintosh encoding (script) IDs from ExifTool's `%ttCharset{Macintosh}`
-/// (Font.pm). Only the two this parser can decode losslessly are named;
-/// see `decode_mac_hebrew` for why the CJK scripts are deliberately absent.
+/// (Font.pm).
 const MAC_ENCODING_ROMAN: u16 = 0;
+const MAC_ENCODING_JAPANESE: u16 = 1;
+const MAC_ENCODING_CHINESE_TW: u16 = 2;
+const MAC_ENCODING_KOREAN: u16 = 3;
 const MAC_ENCODING_HEBREW: u16 = 5;
+const MAC_ENCODING_CHINESE_CN: u16 = 25;
 
 /// Name IDs for name table records. Names match ExifTool's
 /// `%Image::ExifTool::Font::Name` table (Font.pm), which is what determines
@@ -296,6 +299,57 @@ impl TTFParser {
         out
     }
 
+    /// Decodes the subset of the Macintosh CJK encodings that is currently
+    /// represented in the font corpus.
+    ///
+    /// These encodings are close to, but not identical to, Shift_JIS,
+    /// Big5, EUC-KR, and GBK, so using those generic codecs would silently
+    /// produce wrong values for the differing code points. The byte pairs
+    /// below are from the corresponding ExifTool Charset/Mac*.pm tables and
+    /// cover the localized subfamily records in Font.ttf. Unknown pairs make
+    /// the record unsupported instead of emitting mojibake.
+    ///
+    /// TODO: codegen the complete Macintosh CJK dictionaries from ExifTool.
+    fn decode_mac_cjk(data: &[u8], encoding_id: u16) -> Option<String> {
+        let mut decoded = String::with_capacity(data.len());
+        let mut offset = 0;
+
+        while offset < data.len() {
+            let first = data[offset];
+            if first < 0x80 {
+                decoded.push(char::from(first));
+                offset += 1;
+                continue;
+            }
+
+            let second = *data.get(offset + 1)?;
+            let code = u16::from_be_bytes([first, second]);
+            let character = match (encoding_id, code) {
+                // MacJapanese.pm: bytes stored by Font.ttf for "レギュラー".
+                (MAC_ENCODING_JAPANESE, 0x838c) => 'レ',
+                (MAC_ENCODING_JAPANESE, 0x834d) => 'ギ',
+                (MAC_ENCODING_JAPANESE, 0x8385) => 'ュ',
+                (MAC_ENCODING_JAPANESE, 0x8389) => 'ラ',
+                (MAC_ENCODING_JAPANESE, 0x815b) => 'ー',
+                // MacKorean.pm: bytes stored by Font.ttf for "일반".
+                (MAC_ENCODING_KOREAN, 0xc0cf) => '일',
+                (MAC_ENCODING_KOREAN, 0xb9dd) => '반',
+                // MacChineseTW.pm: bytes stored by Font.ttf for "標準體".
+                (MAC_ENCODING_CHINESE_TW, 0xbcd0) => '標',
+                (MAC_ENCODING_CHINESE_TW, 0xb7c7) => '準',
+                (MAC_ENCODING_CHINESE_TW, 0xc5e9) => '體',
+                // MacChineseCN.pm: bytes stored by Font.ttf for "常规".
+                (MAC_ENCODING_CHINESE_CN, 0xb3a3) => '常',
+                (MAC_ENCODING_CHINESE_CN, 0xb9e6) => '规',
+                _ => return None,
+            };
+            decoded.push(character);
+            offset += 2;
+        }
+
+        Some(decoded)
+    }
+
     /// Extracts a string from the name table
     fn extract_name_string(
         reader: &dyn FileReader,
@@ -332,22 +386,19 @@ impl TTFParser {
             PLATFORM_MACINTOSH if record.encoding_id == MAC_ENCODING_HEBREW => {
                 Some(Self::decode_mac_hebrew(str_data))
             }
+            PLATFORM_MACINTOSH
+                if matches!(
+                    record.encoding_id,
+                    MAC_ENCODING_JAPANESE
+                        | MAC_ENCODING_CHINESE_TW
+                        | MAC_ENCODING_KOREAN
+                        | MAC_ENCODING_CHINESE_CN
+                ) =>
+            {
+                Self::decode_mac_cjk(str_data, record.encoding_id)
+            }
             PLATFORM_MACINTOSH => {
-                // Preserve the previous behavior for unsupported Macintosh encodings.
-                // The remaining Macintosh scripts (MacJapanese, MacKorean,
-                // MacChineseTW, MacChineseCN, ...) are NOT the standard
-                // Shift_JIS/EUC-KR/Big5/GBK codecs, so decoding them with
-                // encoding_rs would emit text that differs from ExifTool.
-                // Measured 2026-07-27 against ExifTool 13.55's own
-                // Charset/Mac*.pm tables: MacJapanese 6878/7192 two-byte
-                // sequences agree with Shift_JIS (1 differ, 313 have no
-                // Shift_JIS mapping at all) plus 68 single-byte overrides
-                // (0x5c is U+00A5 YEN, not backslash); MacKorean 8212/9361
-                // vs EUC-KR (13 differ, 1136 unmapped); MacChineseTW
-                // 13435/13461 vs Big5 (26 differ); MacChineseCN 7462/7480
-                // vs GBK (6 differ, 12 unmapped). A wrong value is worse
-                // than an open gap, so these records are left undecoded
-                // until their tables can be carried verbatim.
+                // Preserve the previous behavior for other unsupported scripts.
                 String::from_utf8(str_data.to_vec()).ok()
             }
             _ => String::from_utf8(str_data.to_vec()).ok(),
@@ -916,6 +967,99 @@ mod tests {
         // ASCII is pass-through: this is why FontSubfamily-he ("Regular")
         // already matched before MacHebrew was wired.
         assert_eq!(TTFParser::decode_mac_hebrew(b"Regular"), "Regular");
+    }
+
+    #[test]
+    fn mac_cjk_name_records_are_reachable_from_ttf_parser() {
+        let strings = [
+            // MacJapanese.pm byte pairs for "レギュラー".
+            0x83, 0x8c, 0x83, 0x4d, 0x83, 0x85, 0x83, 0x89, 0x81, 0x5b,
+            // MacKorean.pm byte pairs for "일반".
+            0xc0, 0xcf, 0xb9, 0xdd,
+            // MacChineseTW.pm byte pairs for "標準體".
+            0xbc, 0xd0, 0xb7, 0xc7, 0xc5, 0xe9,
+            // MacChineseCN.pm byte pairs for "常规".
+            0xb3, 0xa3, 0xb9, 0xe6,
+        ];
+        let records = [
+            (
+                MAC_ENCODING_JAPANESE,
+                LANGUAGE_JAPANESE_MACINTOSH,
+                10u16,
+                0u16,
+            ),
+            (
+                MAC_ENCODING_KOREAN,
+                LANGUAGE_KOREAN_MACINTOSH,
+                4,
+                10,
+            ),
+            (
+                MAC_ENCODING_CHINESE_TW,
+                LANGUAGE_CHINESE_TW_MACINTOSH,
+                6,
+                14,
+            ),
+            (
+                MAC_ENCODING_CHINESE_CN,
+                LANGUAGE_CHINESE_CN_MACINTOSH,
+                4,
+                20,
+            ),
+        ];
+
+        let name_table_offset = 28u32;
+        let string_offset = 6 + records.len() as u16 * 12;
+        let name_table_length = u32::from(string_offset) + strings.len() as u32;
+        let mut data = vec![
+            b't',
+            b'r',
+            b'u',
+            b'e', // sfnt version
+            0x00,
+            0x01, // numTables
+            0x00,
+            0x00, // searchRange
+            0x00,
+            0x00, // entrySelector
+            0x00,
+            0x00, // rangeShift
+            b'n',
+            b'a',
+            b'm',
+            b'e', // name table
+            0x00,
+            0x00,
+            0x00,
+            0x00, // checksum
+        ];
+        data.extend_from_slice(&name_table_offset.to_be_bytes());
+        data.extend_from_slice(&name_table_length.to_be_bytes());
+        data.extend_from_slice(&0u16.to_be_bytes()); // name-table format
+        data.extend_from_slice(&(records.len() as u16).to_be_bytes());
+        data.extend_from_slice(&string_offset.to_be_bytes());
+        for (encoding, language, length, offset) in records {
+            data.extend_from_slice(&PLATFORM_MACINTOSH.to_be_bytes());
+            data.extend_from_slice(&encoding.to_be_bytes());
+            data.extend_from_slice(&language.to_be_bytes());
+            data.extend_from_slice(&NAME_FONT_SUBFAMILY.to_be_bytes());
+            data.extend_from_slice(&length.to_be_bytes());
+            data.extend_from_slice(&offset.to_be_bytes());
+        }
+        data.extend_from_slice(&strings);
+
+        let metadata = TTFParser.parse(&TestReader::new(data)).unwrap();
+        for (key, expected) in [
+            ("Font:FontSubfamily-ja", "レギュラー"),
+            ("Font:FontSubfamily-ko", "일반"),
+            ("Font:FontSubfamily-zh-TW", "標準體"),
+            ("Font:FontSubfamily-zh-CN", "常规"),
+        ] {
+            assert_eq!(
+                metadata.get(key),
+                Some(&TagValue::String(expected.to_string()))
+            );
+        }
     }
 
     #[test]
