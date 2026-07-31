@@ -857,6 +857,27 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     };
 
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
+                        // DNG.pm ProcessDNG gives the full-resolution raw IFD
+                        // priority over the reduced-resolution IFD0 thumbnail
+                        // for image properties such as BitsPerSample and
+                        // Compression. DNG identifies the primary image with
+                        // TIFF NewSubfileType (0x00fe) == 0.
+                        let is_primary_dng_image = format == RawFormat::AdobeDNG
+                            && sub_tags.iter().any(
+                                |(tag_id, field_type, value_count, raw_bytes)| {
+                                    if *tag_id != 0x00FE || *value_count < 1 {
+                                        return false;
+                                    }
+                                    match *field_type {
+                                        3 => read_tiff_u16(raw_bytes.as_ref(), byte_order)
+                                            .map(u32::from)
+                                            == Some(0),
+                                        4 => read_tiff_u32(raw_bytes.as_ref(), byte_order)
+                                            == Some(0),
+                                        _ => false,
+                                    }
+                                },
+                            );
                         let is_nef = matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW);
                         let is_rw2 = format == RawFormat::PanasonicRW2;
 
@@ -884,6 +905,43 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         }
 
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
+                            // Exif.pm defines BitsPerSample at 0x0102 and
+                            // Compression at 0x0103. For DNG, ProcessDNG
+                            // reports these values from the primary raw image
+                            // instead of the reduced-resolution IFD0 preview.
+                            // Update the existing EXIF keys in place rather
+                            // than emitting parallel SubIFD keys.
+                            if is_primary_dng_image && matches!(tag_id, 0x0102 | 0x0103) {
+                                let display = match tag_id {
+                                    0x0102 => read_tiff_numeric_array(
+                                        raw_bytes.as_ref(),
+                                        field_type,
+                                        value_count,
+                                        byte_order,
+                                    )
+                                    .map(|components| components.join(" ")),
+                                    // Exif.pm's Compression PrintConv maps
+                                    // TIFF compression code 7 to "JPEG".
+                                    0x0103 if field_type == 3 && value_count >= 1 => {
+                                        read_tiff_u16(raw_bytes.as_ref(), byte_order).map(
+                                            |compression| match compression {
+                                                1 => "Uncompressed".to_string(),
+                                                7 => "JPEG".to_string(),
+                                                other => other.to_string(),
+                                            },
+                                        )
+                                    }
+                                    _ => None,
+                                };
+                                if let Some(display) = display {
+                                    metadata.insert(
+                                        lookup_tag_name(tag_id, "EXIF"),
+                                        TagValue::new_string(display),
+                                    );
+                                    continue;
+                                }
+                            }
+
                             // CFARepeatPatternDim (Exif.pm 0x828d, Count => 2)
                             // is a SHORT[2] that ExifTool prints as the two
                             // dimensions separated by a space ("2 2"). The
@@ -1710,6 +1768,54 @@ fn format_exif_display_value(
     byte_order: ByteOrder,
 ) -> Option<String> {
     match tag_id {
+        // DNG.pm defines DNGVersion (0xc612) and DNGBackwardVersion
+        // (0xc613) as int8u[4]. Their PrintConv joins the four components
+        // with periods, for example "1.1.0.0".
+        0xC612 | 0xC613 if field_type == 1 && value_count >= 4 => {
+            let version = bytes.get(..4)?;
+            Some(format!(
+                "{}.{}.{}.{}",
+                version[0], version[1], version[2], version[3]
+            ))
+        }
+        // DNG.pm tag 0xc630 (DNGLensInfo) is rational64u[4]:
+        // minimum focal length, maximum focal length, minimum aperture at
+        // minimum focal length, and minimum aperture at maximum focal length.
+        // Its PrintConv suppresses a repeated range endpoint and prints an
+        // unknown aperture pair as "f/?".
+        0xC630 if field_type == 5 && value_count >= 4 => {
+            let components =
+                read_tiff_numeric_array(bytes, field_type, 4, byte_order)?;
+            let minimum_focal_length = components.first()?;
+            let maximum_focal_length = components.get(1)?;
+            let minimum_aperture = components.get(2)?;
+            let maximum_aperture = components.get(3)?;
+
+            let mut display = minimum_focal_length.clone();
+            if maximum_focal_length != minimum_focal_length {
+                display.push('-');
+                display.push_str(maximum_focal_length);
+            }
+            display.push_str("mm");
+
+            let aperture_is_known = minimum_aperture
+                .parse::<f64>()
+                .ok()
+                .map(|value| value != 0.0)
+                .unwrap_or(false);
+            if aperture_is_known {
+                display.push_str(" f/");
+                display.push_str(minimum_aperture);
+                if maximum_aperture != minimum_aperture {
+                    display.push('-');
+                    display.push_str(maximum_aperture);
+                }
+            } else {
+                display.push_str(" f/?");
+            }
+
+            Some(display)
+        }
         // ComponentsConfiguration: UNDEFINED[4].
         0x9101 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
@@ -2197,6 +2303,71 @@ mod cfa_pattern_tests {
         let bytes = [2, 0, 2, 0, 2];
         assert_eq!(
             decode_exif_cfa_pattern(&bytes, ByteOrder::LittleEndian),
+            None
+        );
+    }
+}
+
+#[cfg(test)]
+mod dng_display_value_tests {
+    use super::*;
+
+    #[test]
+    fn formats_dng_version_byte_arrays() {
+        assert_eq!(
+            format_exif_display_value(
+                0xC612,
+                &[1, 1, 0, 0],
+                1,
+                4,
+                ByteOrder::LittleEndian,
+            )
+            .as_deref(),
+            Some("1.1.0.0")
+        );
+        assert_eq!(
+            format_exif_display_value(
+                0xC613,
+                &[1, 1, 0, 0],
+                1,
+                4,
+                ByteOrder::BigEndian,
+            )
+            .as_deref(),
+            Some("1.1.0.0")
+        );
+    }
+
+    #[test]
+    fn formats_dng_lens_info_with_unknown_aperture() {
+        let values = [(18u32, 1u32), (55, 1), (0, 1), (0, 1)];
+        let bytes: Vec<u8> = values
+            .iter()
+            .flat_map(|(numerator, denominator)| {
+                numerator
+                    .to_le_bytes()
+                    .into_iter()
+                    .chain(denominator.to_le_bytes())
+            })
+            .collect();
+
+        assert_eq!(
+            format_exif_display_value(
+                0xC630,
+                &bytes,
+                5,
+                4,
+                ByteOrder::LittleEndian,
+            )
+            .as_deref(),
+            Some("18-55mm f/?")
+        );
+    }
+
+    #[test]
+    fn rejects_truncated_dng_version() {
+        assert_eq!(
+            format_exif_display_value(0xC612, &[1, 1, 0], 1, 4, ByteOrder::LittleEndian),
             None
         );
     }
