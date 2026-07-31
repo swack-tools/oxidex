@@ -1,0 +1,22 @@
+- generic [ref=f2e2]:
+  - heading "Spacing & shape" [level=1] [ref=f2e3]
+  - paragraph [ref=f2e4]: 4px grid. Radius caps at 4px — 2px on chips. No shadows; one glow per page, on the hero only.
+  - generic [ref=f2e5]:
+    - generic [ref=f2e6]: Scale
+    - generic [ref=f2e7]: "--ox-sp-1 · 4px"
+    - generic [ref=f2e10]: "--ox-sp-2 · 8px"
+    - generic [ref=f2e13]: "--ox-sp-3 · 12px"
+    - generic [ref=f2e16]: "--ox-sp-4 · 16px"
+    - generic [ref=f2e19]: "--ox-sp-6 · 24px"
+    - generic [ref=f2e22]: "--ox-sp-10 · 40px"
+    - generic [ref=f2e25]: "--ox-sp-16 · 64px"
+  - generic [ref=f2e28]:
+    - generic [ref=f2e29]: Radius & elevation
+    - generic [ref=f2e30]:
+      - generic [ref=f2e31]:
+        - text: 4px card corner
+        - generic [ref=f2e32]: 2px chip
+        - generic [ref=f2e34]: Stepped surface + 1px border. No shadow.
+      - generic [ref=f2e35]:
+        - text: hero glow
+        - generic [ref=f2e36]: "box-shadow: var(--ox-glow) — exactly one element per page."

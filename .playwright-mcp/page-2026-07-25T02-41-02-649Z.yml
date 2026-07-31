@@ -1,0 +1,25 @@
+- generic [ref=f2e2]:
+  - heading "Type" [level=1] [ref=f2e3]
+  - paragraph [ref=f2e4]: IBM Plex Mono is the voice — headings, data, labels, nav, buttons. Inter carries prose only.
+  - generic [ref=f2e5]:
+    - generic [ref=f2e6]: .ox-h1 · 56px mono
+    - generic [ref=f2e7]: oxidex inspect
+  - generic [ref=f2e8]:
+    - generic [ref=f2e9]: .ox-h2 · 36px mono
+    - generic [ref=f2e10]: Benchmarks
+  - generic [ref=f2e11]:
+    - generic [ref=f2e12]: .ox-h3 · 24px mono
+    - generic [ref=f2e13]: Tag coverage
+  - generic [ref=f2e14]:
+    - generic [ref=f2e15]: .ox-label · 12px caps
+    - generic [ref=f2e16]: Format support
+  - generic [ref=f2e17]:
+    - generic [ref=f2e18]: .ox-mono · 13px mono
+    - generic [ref=f2e19]: 0x0110 Model ILCE-7M4
+  - generic [ref=f2e20]:
+    - generic [ref=f2e21]: .ox-body · 15px Inter
+    - paragraph [ref=f2e22]: Body prose uses Inter, and only for paragraphs longer than about two lines — like this one. Everything shorter stays in mono, because short strings are data, and data speaks mono in this system.
+  - generic [ref=f2e23]:
+    - generic [ref=f2e24]: Don't
+    - generic [ref=f2e25]: Bold heading
+    - generic [ref=f2e26]: Headings are spaced (0.04em), never bold. Terminal text isn't bold — it's spaced.

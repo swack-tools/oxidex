@@ -1,0 +1,5 @@
+- generic [ref=f4e3]:
+  - generic [ref=f4e6]:
+    - status
+  - region "Notifications (F8)":
+    - list

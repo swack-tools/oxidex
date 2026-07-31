@@ -1,0 +1,2 @@
+[    3611ms] [INFO] [O11Y] [DatadogRUM] Initialized {service: claude-ai, env: production, version: 9c302dc2ae} @ https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/shared-0-5AKrPIDc.js:0
+[    6824ms] [LOG] recaptchacompat disabled @ https://js.hcaptcha.com/1/api.js?render=explicit&recaptchacompat=off&onload=__antClientAttestationHcaptchaInvisibleReady:3

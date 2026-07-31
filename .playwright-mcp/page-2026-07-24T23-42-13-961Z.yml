@@ -1,0 +1,44 @@
+- generic [ref=f18e4]:
+  - generic "NavBar" [ref=f18e7]
+  - generic [ref=f18e8]:
+    - generic [ref=f18e9]:
+      - img "OxiDex mark" [ref=f18e10]
+      - generic [ref=f18e11]:
+        - generic [ref=f18e12]: oxidex inspect
+        - generic [ref=f18e13]: Every byte of metadata, parsed at Rust speed.
+        - generic [ref=f18e14]:
+          - generic "Button" [ref=f18e16]
+          - generic "Button" [ref=f18e18]
+    - generic [ref=f18e19]:
+      - generic "StatTile" [ref=f18e21]
+      - generic "StatTile" [ref=f18e23]
+      - generic "StatTile" [ref=f18e25]
+    - generic [ref=f18e26]:
+      - generic "SidebarNav" [ref=f18e28]
+      - generic [ref=f18e29]:
+        - generic [ref=f18e30]:
+          - generic "TagChip" [ref=f18e32]
+          - generic "TagChip" [ref=f18e34]
+          - generic "TagChip" [ref=f18e36]
+          - generic "TagChip" [ref=f18e38]
+        - generic "DataTable" [ref=f18e40]
+        - generic "HexViewer" [ref=f18e42]
+        - generic "Callout" [ref=f18e44]
+        - generic "TerminalBlock" [ref=f18e46]
+    - generic [ref=f18e47]:
+      - generic [ref=f18e48]: Benchmarks
+      - generic [ref=f18e49]:
+        - generic "BenchmarkBar" [ref=f18e51]
+        - generic "ScanLine" [ref=f18e53]
+        - generic [ref=f18e54]:
+          - generic "Badge" [ref=f18e56]
+          - generic "Badge" [ref=f18e58]
+          - generic "Badge" [ref=f18e60]
+          - generic "Badge" [ref=f18e62]
+          - generic "Badge" [ref=f18e64]
+    - generic [ref=f18e65]:
+      - generic [ref=f18e66]: GPL-3.0
+      - link "oxidex.net" [ref=f18e67] [cursor=pointer]:
+        - /url: https://oxidex.net
+      - link "github.com/swack-tools/oxidex" [ref=f18e68] [cursor=pointer]:
+        - /url: https://github.com/swack-tools/oxidex

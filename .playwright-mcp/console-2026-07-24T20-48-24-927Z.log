@@ -1,0 +1,3 @@
+[    6700ms] [INFO] %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold @ https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js:29904
+[    6717ms] [WARNING] You are using the in-browser Babel transformer. Be sure to precompile your scripts for production - https://babeljs.io/docs/setup/ @ https://unpkg.com/@babel/standalone@7.29.0/babel.min.js:2
+[    6746ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://5ad8ee91-589a-4594-b5ac-322178778535.claudeusercontent.com/favicon.ico:0
