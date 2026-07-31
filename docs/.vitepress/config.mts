@@ -2,9 +2,18 @@ import { defineConfig } from 'vitepress'
 import fs from 'node:fs'
 import path from 'node:path'
 
-// Dynamically generate sidebar items for comparison formats
+// Dynamically generate sidebar items for comparison formats.
+//
+// docs/reference/comparison/ is gitignored and produced by
+// `just compare-exiftool-full-update` (see scripts/ensure-comparison-stub.mjs),
+// so on a fresh clone it may hold nothing but the generated stub. Returning an
+// empty list keeps a cold `npm run docs:build` working instead of throwing
+// ENOENT while the config is still loading.
 function getComparisonFormats() {
   const comparisonDir = path.resolve(__dirname, '../reference/comparison')
+  if (!fs.existsSync(comparisonDir)) {
+    return []
+  }
   const files = fs.readdirSync(comparisonDir)
 
   return files

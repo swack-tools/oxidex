@@ -5,8 +5,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "docs:dev": "vitepress dev",
-    "docs:build": "vitepress build",
+    "comparison:stub": "node scripts/ensure-comparison-stub.mjs",
+    "docs:dev": "npm run comparison:stub && vitepress dev",
+    "docs:build": "npm run comparison:stub && vitepress build",
     "docs:preview": "vitepress preview"
   },
   "devDependencies": {

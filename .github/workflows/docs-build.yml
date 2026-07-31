@@ -1,0 +1,70 @@
+name: Docs Build
+
+# Builds the VitePress site exactly the way a contributor does on a fresh clone:
+# a clean checkout, no generated artifacts, and no `just compare-exiftool-full-update`.
+#
+# deploy-docs.yml cannot catch a cold-build break, because it regenerates
+# docs/reference/comparison/ before it builds and only runs on push to main.
+# ci.yml cannot catch it either: it carries `paths-ignore: docs/**`. So until this
+# workflow existed, no PR ever built the docs and a broken build looked exactly
+# like a healthy one.
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs-build.yml'
+  pull_request:
+    branches: ['**']
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs-build.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cold-build:
+    name: Build docs from a clean checkout
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # The whole point of this job is that the generated report is absent. If a
+      # future change ever commits it or generates it earlier, this job would
+      # quietly stop testing the cold path, so fail loudly instead.
+      - name: Assert the generated comparison report is absent
+        run: |
+          if [ -e docs/reference/comparison/index.md ]; then
+            echo "::error::docs/reference/comparison/index.md exists in a clean checkout." \
+                 "This job must build WITHOUT the generated report so it reproduces a fresh clone."
+            exit 1
+          fi
+          echo "Confirmed: docs/reference/comparison/ has no generated report (cold-clone conditions)."
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Install docs dependencies
+        run: npm ci
+        working-directory: docs
+
+      - name: Build VitePress site
+        run: npm run docs:build
+        working-directory: docs
+
+      - name: Verify the site actually rendered
+        run: |
+          test -f docs/.vitepress/dist/index.html \
+            || { echo "::error::VitePress produced no index.html"; exit 1; }
+          test -f docs/.vitepress/dist/reference/comparison/index.html \
+            || { echo "::error::The comparison placeholder page was not rendered"; exit 1; }
+          echo "Cold docs build succeeded."
