@@ -1812,6 +1812,20 @@ fn format_exif_display_value(
             255 => Some("Other".to_string()),
             _ => None,
         },
+        // FocalLength: RATIONAL[1]. Exif.pm 0x920a PrintConv, verbatim:
+        //     sprintf("%.1f mm",$val)
+        0x920A if field_type == 5 && value_count >= 1 => {
+            let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                None
+            } else {
+                Some(format!(
+                    "{:.1} mm",
+                    f64::from(numerator) / f64::from(denominator)
+                ))
+            }
+        }
         // Flash: SHORT[1]. Exif.pm 0x9209 PrintConv => \%flash, whose full
         // table (Exif.pm lines 172-199) is reproduced verbatim.
         0x9209 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
@@ -1863,11 +1877,18 @@ fn format_exif_display_value(
         }
         // CFAPattern: UNDEFINED with two endian-dependent u16 dimensions.
         0xA302 if field_type == 7 => decode_exif_cfa_pattern(bytes, byte_order),
-        // FlashpixVersion: UNDEFINED 4 bytes printed as e.g. "0100".
+        // FlashpixVersion: Exif.pm 0xa000 RawConv, verbatim:
+        //     $val=~s/\0+$//; $val
         0xA000 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
-            let ver_bytes = bytes.get(..count.min(4))?;
-            Some(String::from_utf8_lossy(ver_bytes).into_owned())
+            let version = String::from_utf8_lossy(bytes.get(..count)?)
+                .trim_end_matches('\0')
+                .to_string();
+            if version.is_empty() {
+                None
+            } else {
+                Some(version)
+            }
         }
         // FocalLengthIn35mmFormat: SHORT[1] with " mm" suffix.
         // Exif.pm PrintConv: $val .= " mm"
@@ -1899,6 +1920,22 @@ fn format_exif_display_value(
             2 => Some("Auto bracket".to_string()),
             _ => None,
         },
+        // Gamma: Exif.pm 0xa500 is rational64u with no PrintConv. ExifTool
+        // renders SigmaDP2's zero-denominator value as "undef".
+        0xA500 if field_type == 5 && value_count >= 1 => {
+            let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                Some("undef".to_string())
+            } else if numerator % denominator == 0 {
+                Some((numerator / denominator).to_string())
+            } else {
+                Some(format!(
+                    "{}",
+                    f64::from(numerator) / f64::from(denominator)
+                ))
+            }
+        }
         // DigitalZoomRatio: RATIONAL[1].
         0xA404 if field_type == 5 && value_count >= 1 => {
             // Reuse the same rational formatting as CompressedBitsPerPixel (0x9102).
@@ -3026,8 +3063,22 @@ fn parse_sigma_x3f(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         TagValue::new_string(format!("{}.{}", version_major, version_minor)),
     );
 
-    // Unique identifier (16 bytes at offset 8)
-    // Skip for now - it's binary data
+    // SigmaRaw.pm's X3F header stores ImageUniqueID as the 16 bytes at offset
+    // 8, not in the preview's EXIF 0xa420 ASCII entry. On SigmaDP2.x3f these
+    // bytes are:
+    //   30 31 30 30 38 33 38 32 10 20 11 4b 31 64 66 38
+    // ExifTool prints the binary identifier as lowercase hexadecimal.
+    if let Some(identifier) = data.get(8..24) {
+        let value = identifier
+            .iter()
+            .map(|byte| format!("{:02x}", byte))
+            .collect::<Vec<_>>()
+            .join("");
+        metadata.insert(
+            lookup_tag_name(0xA420, "EXIF"),
+            TagValue::new_string(value),
+        );
+    }
 
     // Mark bits at offset 24
     let _mark_bits = u32::from_le_bytes([data[24], data[25], data[26], data[27]]);
@@ -3529,7 +3580,11 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                             *tag_id,
                                             0x829A // ExposureTime
                                                 | 0x829D // FNumber
+                                                | 0x920A // FocalLength
                                                 | 0x8822 // ExposureProgram
+                                                | 0xA000 // FlashpixVersion
+                                                | 0xA405 // FocalLengthIn35mmFormat
+                                                | 0xA500 // Gamma
                                                 | 0x9000 // ExifVersion
                                                 | 0x9003 // DateTimeOriginal
                                                 | 0x9004 // CreateDate
@@ -3547,14 +3602,26 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                         }
                                         let bytes = raw_bytes.as_ref();
                                         let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
-                                        let tag_value = if let Some(value) =
+                                        // ExifTool's X3F output preserves one
+                                        // decimal place for this preview value
+                                        // ("41.0 mm"), unlike the generic
+                                        // integer EXIF display ("41 mm").
+                                        let display_value = if *tag_id == 0xA405
+                                            && *field_type == 3
+                                            && *value_count >= 1
+                                        {
+                                            read_tiff_u16(bytes, byte_order)
+                                                .map(|value| format!("{:.1} mm", f64::from(value)))
+                                        } else {
                                             format_exif_display_value(
                                                 *tag_id,
                                                 bytes,
                                                 *field_type,
                                                 *value_count,
                                                 byte_order,
-                                            ) {
+                                            )
+                                        };
+                                        let tag_value = if let Some(value) = display_value {
                                             TagValue::new_string(value)
                                         } else {
                                             raw_bytes_to_simple_tag_value(
@@ -5857,6 +5924,57 @@ mod backlog_group_1_printconv_tests {
         assert_eq!(
             format_exif_display_value(0x9000, b"0230\0", 7, 5, ByteOrder::BigEndian).as_deref(),
             Some("0230")
+        );
+    }
+
+    // ---- X3F preview/header EXIF values ----------------------------------
+
+    #[test]
+    fn x3f_focal_length_print_conv_matches_exiftool() {
+        let mut focal_length = 242u32.to_le_bytes().to_vec();
+        focal_length.extend_from_slice(&10u32.to_le_bytes());
+        assert_eq!(
+            format_exif_display_value(
+                0x920A,
+                &focal_length,
+                5,
+                1,
+                ByteOrder::LittleEndian
+            )
+            .as_deref(),
+            Some("24.2 mm")
+        );
+    }
+
+    #[test]
+    fn x3f_header_image_unique_id_uses_all_sixteen_bytes() {
+        let mut data = vec![0u8; 40];
+        data[..4].copy_from_slice(b"FOVb");
+        data[4..8].copy_from_slice(&0x0002_0003u32.to_le_bytes());
+        data[8..24].copy_from_slice(b"01008382\x10\x20\x11K1df8");
+
+        let metadata =
+            parse_sigma_x3f(&data, RawFormat::SigmaX3F).expect("minimal X3F header should parse");
+        assert_eq!(
+            metadata.get("EXIF:ImageUniqueID"),
+            Some(&TagValue::new_string(
+                "30313030383338321020114b31646638"
+            ))
+        );
+    }
+
+    #[test]
+    fn x3f_gamma_zero_denominator_is_undef() {
+        assert_eq!(
+            format_exif_display_value(
+                0xA500,
+                &[0, 0, 0, 0, 0, 0, 0, 0],
+                5,
+                1,
+                ByteOrder::LittleEndian
+            )
+            .as_deref(),
+            Some("undef")
         );
     }
 
