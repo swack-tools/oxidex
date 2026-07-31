@@ -1433,6 +1433,31 @@ fn register_namespaces_from_element(
     Ok(())
 }
 
+/// Properties ExifTool reports under a different name than the XMP schema's
+/// own local name.
+///
+/// Keyed on (family prefix, local name) because the rename is namespace
+/// specific: `tiff:ImageLength` is ExifTool's `ImageHeight`, but a bare
+/// `ImageLength` in some other schema is not.
+const PROPERTY_RENAMES: &[(&str, &str, &str)] = &[
+    // XMP.pm: the photoshop namespace's ICCProfile is reported with the
+    // "Name" suffix, matching the PLUS sequences above it.
+    ("XMP-photoshop", "ICCProfile", "ICCProfileName"),
+    // plus:Version is the PLUS schema version, not a generic Version.
+    ("XMP-plus", "Version", "PLUSVersion"),
+    // TIFF calls it ImageLength; every ExifTool group calls it ImageHeight.
+    ("XMP-tiff", "ImageLength", "ImageHeight"),
+];
+
+/// Applies [`PROPERTY_RENAMES`], leaving anything unlisted untouched.
+fn exiftool_property_name<'a>(family: &str, local: &'a str) -> &'a str {
+    PROPERTY_RENAMES
+        .iter()
+        .find(|(f, l, _)| *f == family && *l == local)
+        // The replacement is a 'static str, which outlives 'a.
+        .map_or(local, |(_, _, renamed)| *renamed)
+}
+
 /// Formats a tag name to match ExifTool's XMP output conventions.
 ///
 /// ExifTool uses a simplified "XMP:" prefix for most common XMP properties,
@@ -1467,8 +1492,11 @@ fn format_tag_name(qname: &str, resolver: &NamespaceResolver) -> String {
             local_name = capitalize_first_letter(&local_name);
         }
 
+        // Some properties are reported by ExifTool under a different name.
+        let reported = exiftool_property_name(family_prefix, &local_name);
+
         // Format with the appropriate family prefix
-        format!("{}:{}", family_prefix, local_name)
+        format!("{}:{}", family_prefix, reported)
     } else {
         // No namespace prefix - use generic "XMP:" prefix
         // Still capitalize to match ExifTool's PascalCase convention
