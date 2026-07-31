@@ -386,11 +386,42 @@ impl PSDParser {
         }
     }
 
-    /// Extract metadata from XMP using the proper RDF parser
+    /// Extract metadata from XMP using the proper RDF parser.
+    ///
+    /// Camera Bits stores Photo Mechanic properties in its XMP namespace.  The
+    /// generic RDF parser intentionally normalizes simple properties to the
+    /// `XMP:` family, but ExifTool reports these four properties in the
+    /// `PhotoMechanic` family. Move the existing values instead of inserting a
+    /// parallel copy.
     fn parse_xmp_data(xmp: &str, metadata: &mut MetadataMap) {
         if let Ok(xmp_tags) = parse_xmp(xmp.as_bytes()) {
             for (tag_name, value) in xmp_tags {
                 metadata.insert(tag_name, TagValue::String(value));
+            }
+
+            // Namespace URI from PhotoMechanic.pm's XMP namespace definition.
+            // Scope the rewrite to this exact document namespace so unrelated
+            // XMP properties with names such as Rotation aren't reclassified.
+            if xmp.contains("http://ns.camerabits.com/photomechanic/1.0/") {
+                for property in ["CropRight", "CropTop", "Rotation", "Tagged"] {
+                    let xmp_name = format!("XMP:{property}");
+                    if let Some(value) = metadata.remove(&xmp_name) {
+                        let value = if property == "Tagged" {
+                            match value {
+                                TagValue::String(raw) if raw == "0" => {
+                                    TagValue::String("No".to_string())
+                                }
+                                TagValue::String(raw) if raw == "1" => {
+                                    TagValue::String("Yes".to_string())
+                                }
+                                other => other,
+                            }
+                        } else {
+                            value
+                        };
+                        metadata.insert(format!("PhotoMechanic:{property}"), value);
+                    }
+                }
             }
         }
     }
@@ -733,5 +764,47 @@ mod tests {
                 .all(|(name, _)| !name.ends_with(":ThumbnailOffset")),
             "0x0201 was never present; no ThumbnailOffset should appear"
         );
+    }
+
+    #[test]
+    fn photo_mechanic_xmp_properties_use_photo_mechanic_group() {
+        let xmp = br#"
+            <x:xmpmeta xmlns:x="adobe:ns:meta/">
+              <rdf:RDF
+                xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                xmlns:photomechanic="http://ns.camerabits.com/photomechanic/1.0/">
+                <rdf:Description rdf:about="">
+                  <photomechanic:CropRight>890</photomechanic:CropRight>
+                  <photomechanic:CropTop>618</photomechanic:CropTop>
+                  <photomechanic:Rotation>180</photomechanic:Rotation>
+                  <photomechanic:Tagged>1</photomechanic:Tagged>
+                </rdf:Description>
+              </rdf:RDF>
+            </x:xmpmeta>
+        "#;
+
+        let mut metadata = MetadataMap::new();
+        PSDParser::parse_xmp_data(
+            std::str::from_utf8(xmp).unwrap_or_default(),
+            &mut metadata,
+        );
+
+        assert_eq!(
+            metadata.get("PhotoMechanic:CropRight"),
+            Some(&TagValue::String("890".to_string()))
+        );
+        assert_eq!(
+            metadata.get("PhotoMechanic:CropTop"),
+            Some(&TagValue::String("618".to_string()))
+        );
+        assert_eq!(
+            metadata.get("PhotoMechanic:Rotation"),
+            Some(&TagValue::String("180".to_string()))
+        );
+        assert_eq!(
+            metadata.get("PhotoMechanic:Tagged"),
+            Some(&TagValue::String("Yes".to_string()))
+        );
+        assert!(metadata.get("XMP:Tagged").is_none());
     }
 }
