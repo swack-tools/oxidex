@@ -14,6 +14,8 @@ const ISO_SIGNATURE: &[u8] = b"CD001";
 const ISO_SIGNATURE_OFFSET: u64 = 32769;
 /// Primary Volume Descriptor starts at sector 16 (offset 32768)
 const PVD_OFFSET: u64 = 32768;
+/// ISO 9660 volume descriptors occupy one 2048-byte logical sector each.
+const VOLUME_DESCRIPTOR_SIZE: u64 = 2048;
 
 /// Size of one ISO 9660 volume descriptor.
 const DESCRIPTOR_SIZE: u64 = 2048;
@@ -62,6 +64,55 @@ impl ISOParser {
             .to_string();
         if !s.is_empty() {
             metadata.insert(key.to_string(), TagValue::String(s));
+        }
+        Ok(())
+    }
+
+    /// Extracts `BootSystem` from an ISO 9660 Boot Record volume descriptor.
+    ///
+    /// ExifTool's `ISO::BootRecord` table defines this as `string[32]` at
+    /// descriptor-relative offset 7. ISO fixed-width strings terminate at the
+    /// first NUL; its ValueConv then removes trailing spaces.
+    fn insert_boot_system(
+        reader: &dyn FileReader,
+        metadata: &mut MetadataMap,
+        descriptor_offset: u64,
+    ) -> Result<()> {
+        let data = reader.read(descriptor_offset + 7, 32)?;
+        let end = data.iter().position(|&byte| byte == 0).unwrap_or(data.len());
+        let value = String::from_utf8_lossy(&data[..end])
+            .trim_end_matches(' ')
+            .to_string();
+        if !value.is_empty() {
+            metadata.insert("ISO:BootSystem".to_string(), TagValue::String(value));
+        }
+        Ok(())
+    }
+
+    /// Walks the offset-based ISO 9660 volume descriptor sequence.
+    fn extract_boot_record_metadata(
+        reader: &dyn FileReader,
+        metadata: &mut MetadataMap,
+    ) -> Result<()> {
+        let mut descriptor_offset = PVD_OFFSET;
+        while descriptor_offset <= reader.size().saturating_sub(7) {
+            let header = reader.read(descriptor_offset, 7)?;
+            if header.get(1..6) != Some(ISO_SIGNATURE) {
+                break;
+            }
+
+            match header.first().copied() {
+                // ISO 9660 descriptor type 0 is a Boot Record.
+                Some(0) => {
+                    Self::insert_boot_system(reader, metadata, descriptor_offset)?;
+                    return Ok(());
+                }
+                // ISO 9660 descriptor type 255 terminates the descriptor set.
+                Some(255) => break,
+                _ => {}
+            }
+
+            descriptor_offset += VOLUME_DESCRIPTOR_SIZE;
         }
         Ok(())
     }
@@ -297,6 +348,7 @@ impl FormatParser for ISOParser {
 
         // Extract Primary Volume Descriptor metadata
         Self::extract_pvd_metadata(reader, &mut metadata)?;
+        Self::extract_boot_record_metadata(reader, &mut metadata)?;
 
         // The boot record lives in a later descriptor sector, if at all.
         Self::extract_boot_record(reader, &mut metadata)?;
