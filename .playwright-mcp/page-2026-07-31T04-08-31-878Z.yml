@@ -1,0 +1,110 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e4]:
+    - generic [ref=e7]:
+      - generic "Download paused (click to resume) [Shift+P]" [ref=e8] [cursor=pointer]
+      - button [ref=e11] [cursor=pointer]
+    - generic [ref=e13] [cursor=pointer]:
+      - generic "Current speed (click to set speed limit) [Shift+L]" [ref=e14]: "--- MB/s"
+      - generic "Remaining time (click for more statistics) [Shift+A]" [ref=e16]: 0h 0m
+    - generic [ref=e20]:
+      - button "Refresh [Shift+R]" [ref=e21] [cursor=pointer]
+      - button "tune" [ref=e23] [cursor=pointer]
+    - generic [ref=e26]:
+      - button [ref=e28] [cursor=pointer]
+      - textbox "Search in downloads [Shift+F]" [ref=e30]:
+        - /placeholder: Search in downloads
+      - generic "Clear [Shift+C]" [ref=e31] [cursor=pointer]
+    - list [ref=e33]:
+      - listitem [ref=e34]:
+        - link "Downloads" [ref=e35] [cursor=pointer]:
+          - /url: "#DownloadsTab"
+      - listitem [ref=e36]:
+        - link "History" [ref=e37] [cursor=pointer]:
+          - /url: "#HistoryTab"
+      - listitem [ref=e38]:
+        - link "Statistics" [ref=e39] [cursor=pointer]:
+          - /url: "#StatisticsTab"
+      - listitem [ref=e40]:
+        - link "Messages 16" [ref=e41] [cursor=pointer]:
+          - /url: "#MessagesTab"
+          - text: Messages
+          - generic [ref=e42]: "16"
+      - listitem [ref=e43]:
+        - link "Settings" [ref=e44] [cursor=pointer]:
+          - /url: "#ConfigTab"
+  - generic [ref=e47]:
+    - generic [ref=e48]:
+      - button "add Add" [ref=e50] [cursor=pointer]:
+        - generic [ref=e51]: add
+        - text: Add
+      - generic [ref=e52]:
+        - button "edit Edit" [ref=e53] [cursor=pointer]:
+          - generic [ref=e54]: edit
+          - text: Edit
+        - button "merge Merge" [ref=e55] [cursor=pointer]:
+          - generic [ref=e56]: merge
+          - text: Merge
+        - button "pause Pause" [ref=e57] [cursor=pointer]:
+          - generic [ref=e58]: pause
+          - text: Pause
+        - button "play_arrow Resume" [ref=e59] [cursor=pointer]:
+          - generic [ref=e60]: play_arrow
+          - text: Resume
+        - button "delete Delete" [ref=e61] [cursor=pointer]:
+          - generic [ref=e62]: delete
+          - text: Delete
+      - generic [ref=e63]:
+        - button "vertical_align_top" [ref=e64] [cursor=pointer]
+        - button "north" [ref=e66] [cursor=pointer]
+        - button "south" [ref=e68] [cursor=pointer]
+        - button "vertical_align_bottom" [ref=e70] [cursor=pointer]
+    - generic [ref=e72]:
+      - list [ref=e74]:
+        - listitem:
+          - link "← Prev" [ref=e75]:
+            - /url: "#"
+        - listitem:
+          - link "Next →" [ref=e76]:
+            - /url: "#"
+      - generic [ref=e77]:
+        - combobox [ref=e78]:
+          - option "5"
+          - option "10" [selected]
+          - option "15"
+          - option "20"
+          - option "30"
+          - option "50"
+          - option "100"
+        - text: records per page
+    - table [ref=e79]:
+      - rowgroup [ref=e80]:
+        - row [ref=e81]:
+          - columnheader [ref=e82]
+          - columnheader [ref=e84]:
+            - link "Priority" [ref=e85] [cursor=pointer]:
+              - /url: "#"
+          - columnheader "Status" [ref=e86]
+          - columnheader [ref=e87]:
+            - link "Name" [ref=e88] [cursor=pointer]:
+              - /url: "#"
+          - columnheader [ref=e89]:
+            - link "Category" [ref=e90] [cursor=pointer]:
+              - /url: "#"
+          - columnheader [ref=e91]:
+            - link "Age" [ref=e92] [cursor=pointer]:
+              - /url: "#"
+          - columnheader [ref=e93]:
+            - generic [ref=e94]:
+              - link "Size" [ref=e95] [cursor=pointer]:
+                - /url: "#"
+              - link "Left" [ref=e96] [cursor=pointer]:
+                - /url: "#"
+          - columnheader "Est. Time" [ref=e97]
+        - row
+      - rowgroup
+    - generic [ref=e100]:
+      - heading "Download queue is empty." [level=4] [ref=e101]
+      - generic [ref=e102]:
+        - text: To add downloads click Add button or put nzb-files into incoming nzb-directory (option
+        - emphasis [ref=e103]: NzbDir
+        - text: ).
