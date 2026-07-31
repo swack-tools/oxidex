@@ -412,6 +412,11 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     // CR2 IFD0 thumbnail byte count for PreviewImage/PreviewImageLength
     let mut cr2_thumbnail_length: Option<u32> = None;
 
+    // DNG files may contain an RGB thumbnail in IFD0 and the full-resolution
+    // raw image in a SubIFD. Select the winning image only after all candidate
+    // IFDs have been visited so traversal order cannot restore preview values.
+    let mut dng_image_candidate: Option<DngImageCandidate> = None;
+
     // Add format-specific tag to identify file type
     metadata.insert(
         "File:FileType".to_string(),
@@ -434,6 +439,20 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         // Parse this IFD
         match parse_ifd(&reader, ifd_offset, byte_order) {
             Ok(tags) => {
+                if format == RawFormat::AdobeDNG {
+                    let mut candidate = DngImageCandidateAccumulator::default();
+                    for (tag_id, field_type, value_count, raw_bytes) in &tags {
+                        candidate.observe(
+                            *tag_id,
+                            *field_type,
+                            *value_count,
+                            raw_bytes.as_ref(),
+                            byte_order,
+                        );
+                    }
+                    select_dng_image_candidate(&mut dng_image_candidate, candidate.finish());
+                }
+
                 // Track sub-IFD offsets, MakerNote data, and camera make
                 let mut exif_ifd_offset = None;
                 let mut gps_ifd_offset = None;
@@ -857,6 +876,19 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     };
 
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
+                        if format == RawFormat::AdobeDNG {
+                            let mut candidate = DngImageCandidateAccumulator::default();
+                            for (tag_id, field_type, value_count, raw_bytes) in &sub_tags {
+                                candidate.observe(
+                                    *tag_id,
+                                    *field_type,
+                                    *value_count,
+                                    raw_bytes.as_ref(),
+                                    byte_order,
+                                );
+                            }
+                            select_dng_image_candidate(&mut dng_image_candidate, candidate.finish());
+                        }
                         let is_nef = matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW);
                         let is_rw2 = format == RawFormat::PanasonicRW2;
 
@@ -1082,6 +1114,29 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         }
         _ => {
             // Other formats don't need special handling yet
+        }
+    }
+
+    // DNG.pm's processing gives the primary raw image priority over the
+    // reduced-resolution IFD0 thumbnail for these image properties. Assign
+    // them once here, after all IFDs have been considered, rather than letting
+    // whichever directory happened to be traversed last win.
+    if let Some(candidate) = dng_image_candidate {
+        metadata.insert(
+            lookup_tag_name(0x0102, "EXIF"),
+            TagValue::new_string(candidate.bits_per_sample),
+        );
+        if let Some(compression) = candidate.compression {
+            let display = match compression {
+                // TIFF/Exif.pm Compression values used by this DNG sample.
+                1 => "Uncompressed".to_string(),
+                7 => "JPEG".to_string(),
+                other => other.to_string(),
+            };
+            metadata.insert(
+                lookup_tag_name(0x0103, "EXIF"),
+                TagValue::new_string(display),
+            );
         }
     }
 
@@ -1338,6 +1393,134 @@ fn find_jpeg_exif_tiff(jpeg: &[u8]) -> Result<Option<&[u8]>> {
     }
 
     Ok(None)
+}
+
+/// Image-level DNG values selected after examining every top-level IFD and
+/// SubIFD. Offsets remain owned by the existing TIFF traversal; this stores
+/// only decoded scalar properties needed for priority selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DngImageCandidate {
+    bits_per_sample: String,
+    compression: Option<u32>,
+    is_reduced: bool,
+    is_raw_photometric: bool,
+    pixel_count: u64,
+    maximum_bits_per_sample: u32,
+}
+
+impl DngImageCandidate {
+    /// Prefer a raw-photometric image, then a non-reduced image, then the
+    /// largest dimensions. The final bit-depth component makes selection
+    /// deterministic when malformed files contain otherwise equal candidates.
+    fn priority(&self) -> (bool, bool, u64, u32) {
+        (
+            self.is_raw_photometric,
+            !self.is_reduced,
+            self.pixel_count,
+            self.maximum_bits_per_sample,
+        )
+    }
+}
+
+#[derive(Debug, Default)]
+struct DngImageCandidateAccumulator {
+    new_subfile_type: u32,
+    width: Option<u32>,
+    height: Option<u32>,
+    bits_per_sample: Option<String>,
+    maximum_bits_per_sample: u32,
+    compression: Option<u32>,
+    photometric_interpretation: Option<u32>,
+}
+
+impl DngImageCandidateAccumulator {
+    fn observe(
+        &mut self,
+        tag_id: u16,
+        field_type: u16,
+        value_count: u32,
+        bytes: &[u8],
+        byte_order: ByteOrder,
+    ) {
+        if value_count == 0 {
+            return;
+        }
+
+        let scalar = || match field_type {
+            3 => read_tiff_u16(bytes, byte_order).map(u32::from),
+            4 => read_tiff_u32(bytes, byte_order),
+            _ => None,
+        };
+
+        match tag_id {
+            // TIFF NewSubfileType is a bitmask. Bit 0 denotes a
+            // reduced-resolution image; equality with 0 or 1 is insufficient
+            // because other independent bits may also be present.
+            0x00FE => {
+                if let Some(value) = scalar() {
+                    self.new_subfile_type = value;
+                }
+            }
+            // TIFF ImageWidth and ImageLength.
+            0x0100 => self.width = scalar(),
+            0x0101 => self.height = scalar(),
+            // TIFF BitsPerSample is SHORT with one component per sample.
+            0x0102 if field_type == 3 => {
+                if let Some(components) =
+                    read_tiff_numeric_array(bytes, field_type, value_count, byte_order)
+                {
+                    self.maximum_bits_per_sample = components
+                        .iter()
+                        .filter_map(|component| component.parse::<u32>().ok())
+                        .max()
+                        .unwrap_or(0);
+                    self.bits_per_sample = Some(components.join(" "));
+                }
+            }
+            // TIFF Compression and PhotometricInterpretation.
+            0x0103 => self.compression = scalar(),
+            0x0106 => self.photometric_interpretation = scalar(),
+            _ => {}
+        }
+    }
+
+    fn finish(self) -> Option<DngImageCandidate> {
+        let bits_per_sample = self.bits_per_sample?;
+        let pixel_count = u64::from(self.width.unwrap_or(0))
+            .saturating_mul(u64::from(self.height.unwrap_or(0)));
+
+        // DNG 1.x assigns 32803 to CFA and 34892 to LinearRaw
+        // PhotometricInterpretation. These identify primary raw-image
+        // candidates more reliably than directory position.
+        let is_raw_photometric =
+            matches!(self.photometric_interpretation, Some(32803 | 34892));
+
+        Some(DngImageCandidate {
+            bits_per_sample,
+            compression: self.compression,
+            is_reduced: self.new_subfile_type & 1 != 0,
+            is_raw_photometric,
+            pixel_count,
+            maximum_bits_per_sample: self.maximum_bits_per_sample,
+        })
+    }
+}
+
+fn select_dng_image_candidate(
+    selected: &mut Option<DngImageCandidate>,
+    candidate: Option<DngImageCandidate>,
+) {
+    let Some(candidate) = candidate else {
+        return;
+    };
+
+    let replace = selected
+        .as_ref()
+        .map(|current| candidate.priority() > current.priority())
+        .unwrap_or(true);
+    if replace {
+        *selected = Some(candidate);
+    }
 }
 
 /// Format DNG integer-array tags whose ExifTool default output preserves all
@@ -1710,6 +1893,51 @@ fn format_exif_display_value(
     byte_order: ByteOrder,
 ) -> Option<String> {
     match tag_id {
+        // DNG.pm defines DNGVersion (0xc612) and DNGBackwardVersion
+        // (0xc613) as int8u[4]. Their PrintConv joins the four components
+        // with periods, for example "1.1.0.0".
+        0xC612 | 0xC613 if field_type == 1 && value_count >= 4 => {
+            let version = bytes.get(..4)?;
+            Some(format!(
+                "{}.{}.{}.{}",
+                version[0], version[1], version[2], version[3]
+            ))
+        }
+        // DNG.pm tag 0xc630 (DNGLensInfo) is rational64u[4]:
+        // minimum focal length, maximum focal length, minimum aperture at
+        // minimum focal length, and minimum aperture at maximum focal length.
+        0xC630 if field_type == 5 && value_count >= 4 => {
+            let components = read_tiff_numeric_array(bytes, field_type, 4, byte_order)?;
+            let minimum_focal_length = components.first()?;
+            let maximum_focal_length = components.get(1)?;
+            let minimum_aperture = components.get(2)?;
+            let maximum_aperture = components.get(3)?;
+
+            let mut display = minimum_focal_length.clone();
+            if maximum_focal_length != minimum_focal_length {
+                display.push('-');
+                display.push_str(maximum_focal_length);
+            }
+            display.push_str("mm");
+
+            let aperture_is_known = minimum_aperture
+                .parse::<f64>()
+                .ok()
+                .map(|value| value != 0.0)
+                .unwrap_or(false);
+            if aperture_is_known {
+                display.push_str(" f/");
+                display.push_str(minimum_aperture);
+                if maximum_aperture != minimum_aperture {
+                    display.push('-');
+                    display.push_str(maximum_aperture);
+                }
+            } else {
+                display.push_str(" f/?");
+            }
+
+            Some(display)
+        }
         // ComponentsConfiguration: UNDEFINED[4].
         0x9101 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
@@ -2199,6 +2427,148 @@ mod cfa_pattern_tests {
             decode_exif_cfa_pattern(&bytes, ByteOrder::LittleEndian),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod dng_display_value_tests {
+    use super::*;
+
+    #[test]
+    fn formats_dng_version_byte_arrays() {
+        assert_eq!(
+            format_exif_display_value(
+                0xC612,
+                &[1, 1, 0, 0],
+                1,
+                4,
+                ByteOrder::LittleEndian,
+            )
+            .as_deref(),
+            Some("1.1.0.0")
+        );
+        assert_eq!(
+            format_exif_display_value(
+                0xC613,
+                &[1, 1, 0, 0],
+                1,
+                4,
+                ByteOrder::BigEndian,
+            )
+            .as_deref(),
+            Some("1.1.0.0")
+        );
+    }
+
+    #[test]
+    fn formats_dng_lens_info_with_unknown_aperture() {
+        let values = [(18u32, 1u32), (55, 1), (0, 1), (0, 1)];
+        let bytes: Vec<u8> = values
+            .iter()
+            .flat_map(|(numerator, denominator)| {
+                numerator
+                    .to_le_bytes()
+                    .into_iter()
+                    .chain(denominator.to_le_bytes())
+            })
+            .collect();
+
+        assert_eq!(
+            format_exif_display_value(
+                0xC630,
+                &bytes,
+                5,
+                4,
+                ByteOrder::LittleEndian,
+            )
+            .as_deref(),
+            Some("18-55mm f/?")
+        );
+    }
+
+    #[test]
+    fn rejects_truncated_dng_version() {
+        assert_eq!(
+            format_exif_display_value(0xC612, &[1, 1, 0], 1, 4, ByteOrder::LittleEndian),
+            None
+        );
+    }
+
+    #[test]
+    fn selects_full_resolution_raw_dng_image_over_thumbnail() {
+        let mut selected = None;
+
+        let thumbnail = DngImageCandidate {
+            bits_per_sample: "8 8 8".to_string(),
+            compression: Some(1),
+            is_reduced: true,
+            is_raw_photometric: false,
+            pixel_count: 120 * 80,
+            maximum_bits_per_sample: 8,
+        };
+        let raw = DngImageCandidate {
+            bits_per_sample: "16".to_string(),
+            compression: Some(7),
+            is_reduced: false,
+            is_raw_photometric: true,
+            pixel_count: 4000 * 3000,
+            maximum_bits_per_sample: 16,
+        };
+
+        select_dng_image_candidate(&mut selected, Some(thumbnail));
+        select_dng_image_candidate(&mut selected, Some(raw.clone()));
+
+        assert_eq!(selected, Some(raw));
+    }
+
+    #[test]
+    fn treats_new_subfile_type_as_a_bitmask() {
+        let mut accumulator = DngImageCandidateAccumulator::default();
+        accumulator.observe(
+            0x00FE,
+            4,
+            1,
+            &5u32.to_le_bytes(),
+            ByteOrder::LittleEndian,
+        );
+        accumulator.observe(
+            0x0102,
+            3,
+            1,
+            &8u16.to_le_bytes(),
+            ByteOrder::LittleEndian,
+        );
+
+        let candidate = accumulator.finish();
+        assert_eq!(
+            candidate.as_ref().map(|candidate| candidate.is_reduced),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn raw_photometric_candidate_beats_unmarked_preview() {
+        let mut selected = Some(DngImageCandidate {
+            bits_per_sample: "8 8 8".to_string(),
+            compression: Some(1),
+            // Some preview IFDs omit NewSubfileType, so dimensions and raw
+            // photometric interpretation must also participate in selection.
+            is_reduced: false,
+            is_raw_photometric: false,
+            pixel_count: 120 * 80,
+            maximum_bits_per_sample: 8,
+        });
+        let raw = DngImageCandidate {
+            bits_per_sample: "16".to_string(),
+            compression: Some(7),
+            is_reduced: false,
+            is_raw_photometric: true,
+            pixel_count: 4000 * 3000,
+            maximum_bits_per_sample: 16,
+        };
+
+        select_dng_image_candidate(&mut selected, Some(raw.clone()));
+        assert_eq!(selected, Some(raw));
     }
 }
 
