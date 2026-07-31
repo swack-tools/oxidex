@@ -12,8 +12,10 @@ use crate::io::EndianReader;
 /// ISO 9660 signature at offset 32769: "CD001"
 const ISO_SIGNATURE: &[u8] = b"CD001";
 const ISO_SIGNATURE_OFFSET: u64 = 32769;
-/// Primary Volume Descriptor starts at sector 16 (offset 32768)
-const PVD_OFFSET: u64 = 32768;
+/// ISO 9660 volume descriptors begin at sector 16 and occupy one sector each.
+const VOLUME_DESCRIPTOR_START_OFFSET: u64 = 32768;
+const VOLUME_DESCRIPTOR_SECTOR_SIZE: u64 = 2048;
+const VOLUME_DESCRIPTOR_HEADER_SIZE: u64 = 7;
 
 /// ISO parser for extracting metadata from ISO disc images
 pub struct ISOParser;
@@ -35,7 +37,7 @@ impl ISOParser {
             return Ok(0);
         }
 
-        let descriptor = reader.read(PVD_OFFSET, 1)?;
+        let descriptor = reader.read(VOLUME_DESCRIPTOR_START_OFFSET, 1)?;
         Ok(descriptor[0])
     }
 
@@ -156,31 +158,99 @@ impl ISOParser {
         Ok(())
     }
 
+    /// Walks the ISO 9660 volume descriptor sequence, extracting boot-record
+    /// metadata and returning the first Primary Volume Descriptor offset.
+    fn scan_volume_descriptors(
+        reader: &dyn FileReader,
+        metadata: &mut MetadataMap,
+    ) -> Result<Option<u64>> {
+        let mut offset = VOLUME_DESCRIPTOR_START_OFFSET;
+        let mut primary_volume_offset = None;
+
+        while offset
+            .checked_add(VOLUME_DESCRIPTOR_HEADER_SIZE)
+            .is_some_and(|end| end <= reader.size())
+        {
+            let header = reader.read(offset, VOLUME_DESCRIPTOR_HEADER_SIZE as usize)?;
+            if header.get(1..6) != Some(ISO_SIGNATURE) {
+                break;
+            }
+
+            let Some(descriptor_type) = header.first().copied() else {
+                break;
+            };
+            match descriptor_type {
+                // ISO.pm BootRecord tag 7 is a fixed 32-byte string immediately
+                // after the seven-byte volume descriptor header. ExifTool's
+                // string format terminates at NUL before its ValueConv removes
+                // trailing spaces.
+                0 => {
+                    let field_offset = offset + VOLUME_DESCRIPTOR_HEADER_SIZE;
+                    if field_offset
+                        .checked_add(32)
+                        .is_some_and(|end| end <= reader.size())
+                    {
+                        let data = reader.read(field_offset, 32)?;
+                        let string_bytes = match data.iter().position(|&byte| byte == 0) {
+                            Some(end) => &data[..end],
+                            None => data,
+                        };
+                        let value = String::from_utf8_lossy(string_bytes)
+                            .trim_end_matches(' ')
+                            .to_string();
+                        if !value.is_empty() {
+                            metadata.insert(
+                                "ISO:BootSystem".to_string(),
+                                TagValue::String(value),
+                            );
+                        }
+                    }
+                }
+                1 if primary_volume_offset.is_none() => {
+                    primary_volume_offset = Some(offset);
+                }
+                255 => break,
+                _ => {}
+            }
+
+            let Some(next_offset) = offset.checked_add(VOLUME_DESCRIPTOR_SECTOR_SIZE) else {
+                break;
+            };
+            offset = next_offset;
+        }
+
+        Ok(primary_volume_offset)
+    }
+
     /// Extracts metadata from Primary Volume Descriptor
-    fn extract_pvd_metadata(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Result<()> {
+    fn extract_pvd_metadata(
+        reader: &dyn FileReader,
+        metadata: &mut MetadataMap,
+        pvd_offset: u64,
+    ) -> Result<()> {
         // Offsets and names are ExifTool's `ISO::PrimaryVolume` table verbatim,
         // and the names matter as much as the offsets: this parser previously
         // read every field from the right place and then filed it under a name
         // of its own invention (VolumeID, PublisherID, ApplicationID), so not
         // one of the 14 tags ExifTool reports could ever match.
-        Self::insert_pvd_string(reader, metadata, "ISO:System", PVD_OFFSET + 8, 32)?;
-        Self::insert_pvd_string(reader, metadata, "ISO:VolumeName", PVD_OFFSET + 40, 32)?;
-        Self::insert_pvd_string(reader, metadata, "ISO:VolumeSetName", PVD_OFFSET + 190, 128)?;
-        Self::insert_pvd_string(reader, metadata, "ISO:Publisher", PVD_OFFSET + 318, 128)?;
-        Self::insert_pvd_string(reader, metadata, "ISO:DataPreparer", PVD_OFFSET + 446, 128)?;
-        Self::insert_pvd_string(reader, metadata, "ISO:Software", PVD_OFFSET + 574, 128)?;
+        Self::insert_pvd_string(reader, metadata, "ISO:System", pvd_offset + 8, 32)?;
+        Self::insert_pvd_string(reader, metadata, "ISO:VolumeName", pvd_offset + 40, 32)?;
+        Self::insert_pvd_string(reader, metadata, "ISO:VolumeSetName", pvd_offset + 190, 128)?;
+        Self::insert_pvd_string(reader, metadata, "ISO:Publisher", pvd_offset + 318, 128)?;
+        Self::insert_pvd_string(reader, metadata, "ISO:DataPreparer", pvd_offset + 446, 128)?;
+        Self::insert_pvd_string(reader, metadata, "ISO:Software", pvd_offset + 574, 128)?;
         Self::insert_pvd_string(
             reader,
             metadata,
             "ISO:CopyrightFileName",
-            PVD_OFFSET + 702,
+            pvd_offset + 702,
             38,
         )?;
         Self::insert_pvd_string(
             reader,
             metadata,
             "ISO:AbstractFileName",
-            PVD_OFFSET + 740,
+            pvd_offset + 740,
             36,
         )?;
         Self::insert_pvd_string(
@@ -189,14 +259,14 @@ impl ISOParser {
             // ExifTool's spelling, typo included -- a "corrected" name is a
             // name that does not match.
             "ISO:BibligraphicFileName",
-            PVD_OFFSET + 776,
+            pvd_offset + 776,
             37,
         )?;
 
         // Reported as the raw count and size; VolumeSize is a Composite tag
         // (VolumeBlockCount * VolumeBlockSize), not a field on the descriptor.
-        let block_count = Self::read_u32_both(reader, PVD_OFFSET + 80)?;
-        let block_size = Self::read_u16_both(reader, PVD_OFFSET + 128)?;
+        let block_count = Self::read_u32_both(reader, pvd_offset + 80)?;
+        let block_size = Self::read_u16_both(reader, pvd_offset + 128)?;
         metadata.insert(
             "ISO:VolumeBlockCount".to_string(),
             TagValue::String(block_count.to_string()),
@@ -210,21 +280,21 @@ impl ISOParser {
             reader,
             metadata,
             "ISO:RootDirectoryCreateDate",
-            PVD_OFFSET + 174,
+            pvd_offset + 174,
         )?;
-        Self::insert_iso_date(reader, metadata, "ISO:VolumeCreateDate", PVD_OFFSET + 813)?;
-        Self::insert_iso_date(reader, metadata, "ISO:VolumeModifyDate", PVD_OFFSET + 830)?;
+        Self::insert_iso_date(reader, metadata, "ISO:VolumeCreateDate", pvd_offset + 813)?;
+        Self::insert_iso_date(reader, metadata, "ISO:VolumeModifyDate", pvd_offset + 830)?;
         Self::insert_iso_date(
             reader,
             metadata,
             "ISO:VolumeExpirationDate",
-            PVD_OFFSET + 847,
+            pvd_offset + 847,
         )?;
         Self::insert_iso_date(
             reader,
             metadata,
             "ISO:VolumeEffectiveDate",
-            PVD_OFFSET + 864,
+            pvd_offset + 864,
         )?;
 
         Ok(())
@@ -253,8 +323,12 @@ impl FormatParser for ISOParser {
             TagValue::String(descriptor_type.to_string()),
         );
 
-        // Extract Primary Volume Descriptor metadata
-        Self::extract_pvd_metadata(reader, &mut metadata)?;
+        // Boot records may precede the Primary Volume Descriptor, so walk the
+        // descriptor sequence instead of treating sector 16 as the PVD.
+        let primary_volume_offset = Self::scan_volume_descriptors(reader, &mut metadata)?;
+        if let Some(pvd_offset) = primary_volume_offset {
+            Self::extract_pvd_metadata(reader, &mut metadata, pvd_offset)?;
+        }
 
         Ok(metadata)
     }
