@@ -567,7 +567,7 @@ impl MachHeader {
     pub fn cpu_type_name(&self) -> &'static str {
         match self.cputype {
             cpu_type::CPU_TYPE_I386 => "i386",
-            cpu_type::CPU_TYPE_X86_64 => "x86_64",
+            cpu_type::CPU_TYPE_X86_64 => "x86 64-bit",
             cpu_type::CPU_TYPE_ARM => "ARM",
             cpu_type::CPU_TYPE_ARM64 => "ARM64",
             cpu_type::CPU_TYPE_ARM64_32 => "ARM64_32",
