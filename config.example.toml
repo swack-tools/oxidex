@@ -35,7 +35,19 @@ thinking = false
 temperature = 0.7
 max_prompt_tags = 40
 max_prompt_file_bytes = 60000
+# timeout: SOCKET read timeout. It bounds a single stalled read, and every
+# byte that arrives resets it -- so under stream = true it does NOT bound
+# the call. Raise it for providers that hold a connection open a long time
+# before sending their first token.
 timeout = 600
+# deadline_seconds (default 120): wall-clock ceiling on ONE model call,
+# checked as stream chunks arrive and NOT reset by arriving data. This is
+# the knob that actually bounds a call. Measured on one provider: a single
+# request ran 2118s against timeout=1200 by trickling SSE chunks, because
+# no individual read ever stalled. On expiry the connection is closed and
+# the request is replayed, counting against max_retries. Set to a very
+# large number (or omit and accept 120) rather than disabling it.
+deadline_seconds = 120
 max_request_turns = 20
 max_request_repeats = 3
 max_verify_turns = 10

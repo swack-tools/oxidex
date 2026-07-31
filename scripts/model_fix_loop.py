@@ -70,6 +70,14 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           with keepalives well past this before ever
                           sending real content, so raise it if a provider
                           is otherwise reliable but just slow)
+    deadline_seconds       default 120 (wall-clock ceiling on ONE model
+                          call, checked as stream chunks arrive). Unlike
+                          timeout, arriving data does NOT reset it, so
+                          this is what actually bounds a call: a provider
+                          trickling SSE chunks satisfies timeout forever
+                          (measured 2118s against timeout=1200). On expiry
+                          the connection is closed and the request is
+                          replayed, counting against max_retries.
     max_request_turns      default 20 (worker only; how many REQUEST:
                           <path> investigation turns -- see
                           attempt_build/resolve_request -- the fixer gets
@@ -146,6 +154,8 @@ Usage:
     uv run scripts/model_fix_loop.py --config /path/to/config.toml
 """
 import argparse
+import datetime
+import email.utils
 import fcntl
 import functools
 import json
@@ -294,6 +304,143 @@ DEFAULT_MAX_RETRIES = 1000
 DEFAULT_RETRY_BACKOFF_SECONDS = 2
 DEFAULT_MAX_RETRY_BACKOFF_SECONDS = 120  # cap growth -- 2**1000 would otherwise be absurd
 
+# Hard wall-clock ceiling on ONE model call, distinct from `timeout`.
+#
+# `timeout` is urlopen's socket timeout: it bounds how long a single read
+# may block, and every byte that arrives resets it. Under stream=True that
+# makes it nearly unbounded in practice -- a provider trickling one SSE
+# chunk every few seconds keeps resetting the clock forever. Measured on
+# theclawbay.com: a single call ran 2118s against a configured
+# timeout=1200, because no individual read ever stalled that long.
+#
+# deadline_seconds is measured once from the start of the request and
+# checked as chunks arrive, so a slow-drip response is abandoned and
+# replayed instead of hanging a worker. Kept as a separate knob because
+# raising `timeout` is still legitimate for providers that hold a
+# connection open before their first token.
+DEFAULT_DEADLINE_SECONDS = 120
+
+
+class ModelCallDeadlineExceeded(Exception):
+    """One model call outlived deadline_seconds of wall clock.
+
+    Retryable by design: raising it from inside the `with urlopen(...)`
+    block closes the connection (killing the in-flight response), and
+    call_model's retry loop then replays the same request. Deliberately
+    NOT an HTTPError/URLError subclass -- a slow provider is neither a
+    rate limit nor an unreachable host, and conflating it with either
+    would report the wrong thing to the rate governor.
+    """
+
+
+class ModelQuotaExhausted(Exception):
+    """Raised only after the FULL retry ladder was spent and every attempt
+    came back as an account/billing-quota 429.
+
+    Policy: all 429s are retried, quota ones included -- the shared token
+    bucket's global cooldown paces them, so a fleet waiting out even a
+    multi-day billing window settles into one poll per cooldown cap and
+    resumes on its own the moment the window rolls over. Nothing here
+    shortcuts a retry.
+
+    This exists purely so the final error names the real cause. Providers
+    overload 429 for "you are going too fast" and "your account is out of
+    budget", and those demand completely different responses from a human;
+    a bare "HTTP Error 429" after a long ride-out points at rate limits
+    when the answer is billing.
+
+    Observed on theclawbay.com, which is explicit about the difference:
+        {"error": "weekly cost limit reached for this account",
+         "code": "weekly_cost_limit_reached",
+         "theclawbayError": {"category": "quota", "retryable": false}}
+    """
+
+
+def _quota_exhausted_message(err):
+    """If an HTTPError is a non-retryable quota/billing 429, return a short
+    human message; otherwise None (meaning: treat as an ordinary retryable
+    rate limit).
+
+    Conservative by construction -- it only opts OUT of retrying when the
+    provider explicitly says the condition is not retryable, or names a
+    quota/limit-reached code. Anything unparseable is simply not labelled.
+
+    This is a LABEL, not a control-flow decision -- every 429 is retried
+    either way (see call_model). It only determines whether the log says
+    "waiting on a spent budget" or "being throttled", and which cause the
+    final exception names once the retry ladder is fully spent.
+    """
+    if getattr(err, "code", None) != 429:
+        return None
+    try:
+        # HTTPError's fp is single-read; this is the only consumer, and the
+        # body is only needed for classification. Capped so a misbehaving
+        # provider can't stream an unbounded "error" at us.
+        body = json.loads(err.read(65536))
+    except Exception:  # nosec B110 -- unparseable body => treat as retryable
+        return None
+    if not isinstance(body, dict):
+        return None
+    vendor = body.get("theclawbayError")
+    vendor = vendor if isinstance(vendor, dict) else {}
+    retryable = vendor.get("retryable", body.get("retryable"))
+    code = str(vendor.get("code") or body.get("code") or "")
+    category = str(vendor.get("category") or "")
+    looks_like_quota = (
+        category == "quota"
+        or code.endswith("_limit_reached")
+        or "cost_limit" in code
+        or "quota" in code
+    )
+    if retryable is False or looks_like_quota:
+        detail = (
+            vendor.get("userMessage")
+            or body.get("error")
+            or code
+            or "provider reported a non-retryable 429"
+        )
+        return f"{detail} (code={code or 'unknown'})"
+    return None
+
+
+def _retry_after_seconds(headers, now_fn=time.time):
+    """Parse a Retry-After header into seconds, or None if absent/unusable.
+
+    RFC 9110 allows either delta-seconds ("30") or an HTTP-date
+    ("Wed, 21 Oct 2026 07:28:00 GMT"); providers send both. A server
+    telling us exactly how long to wait beats any backoff curve we could
+    guess, so this is preferred over the exponential cooldown whenever
+    it is larger. Malformed values return None rather than raising --
+    a broken header must never take down the loop.
+    """
+    if not headers:
+        return None
+    raw = None
+    # email.message.Message (urllib's header type) is case-insensitive via
+    # .get; a plain dict from a test/mock may not be.
+    try:
+        raw = headers.get("Retry-After")
+    except AttributeError:
+        return None
+    if raw is None:
+        return None
+    raw = str(raw).strip()
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(int(raw)))
+    except ValueError:
+        pass
+    try:
+        when = email.utils.parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=datetime.timezone.utc)
+    return max(0.0, when.timestamp() - now_fn())
+
 
 def extract_cache_usage(usage):
     """Pull (cached_input_tokens, total_input_tokens) out of a response's
@@ -356,7 +503,8 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
                 max_retry_backoff_seconds=DEFAULT_MAX_RETRY_BACKOFF_SECONDS, sleep_fn=time.sleep,
                 log_fn=None, usage_fn=None, prompt_cache="auto",
                 governor_path=None, governor_calls_per_minute=None, governor_burst=None,
-                governor_cooldown_seconds=None, governor_max_cooldown_seconds=None):
+                governor_cooldown_seconds=None, governor_max_cooldown_seconds=None,
+                deadline_seconds=DEFAULT_DEADLINE_SECONDS):
     """POST a chat-completions request, retrying on transient upstream
     failures, and return the assistant's reply text.
 
@@ -412,6 +560,15 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
     keepalives well past 120s before ever sending real content, so this is
     configurable per [worker]/[reviewer] rather than a fixed value.
 
+    deadline_seconds (default DEFAULT_DEADLINE_SECONDS) is the wall-clock
+    ceiling on ONE attempt, and is the knob that actually bounds a call.
+    timeout alone does not: it limits a single read, and every arriving
+    SSE chunk resets it, so a slow-drip stream can run for hours without
+    ever tripping it (measured: 2118s against timeout=1200). When the
+    deadline is hit the connection is closed and the request is REPLAYED
+    like any other transient failure, counting against max_retries. Pass
+    None to disable and restore the old unbounded behavior.
+
     log_fn(str), if given, is called once per retry -- otherwise a worker
     riding out a long stretch of transient failures (a real, intended
     outcome of max_retries being high) produces zero log output for
@@ -435,6 +592,7 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
         else governor_max_cooldown_seconds
     )
     last_error = None
+    last_quota_message = None
     for attempt in range(max_retries + 1):
         if attempt > 0:
             delay = min(retry_backoff_seconds * (2 ** (attempt - 1)), max_retry_backoff_seconds)
@@ -450,12 +608,55 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
             reply, usage = _call_model_once(
                 messages, base_url, api_key, model, max_tokens, reasoning_effort,
                 stream, thinking, temperature, timeout, prompt_cache,
+                deadline_seconds=deadline_seconds,
             )
-        except urllib.error.HTTPError as e:
-            governor_report(governor_path, limited=(e.code in DEFAULT_RETRYABLE_HTTP_STATUSES),
+        except ModelCallDeadlineExceeded as e:
+            # The provider was reachable and answering, just far too slowly
+            # to be worth waiting on -- the connection has already been
+            # closed by leaving _call_model_once's `with` block. Replay it.
+            # limited=False on purpose: a slow response is not a rate
+            # limit, and reporting it as one would put the entire fleet
+            # into cooldown over one sluggish call.
+            governor_report(governor_path, limited=False,
                             cooldown_seconds=governor_cooldown_seconds,
                             max_cooldown_seconds=governor_max_cooldown_seconds)
-            if e.code not in DEFAULT_RETRYABLE_HTTP_STATUSES:
+            last_error = e
+            continue
+        except urllib.error.HTTPError as e:
+            limited = e.code in DEFAULT_RETRYABLE_HTTP_STATUSES
+            # EVERY 429 is retried, including an account/billing quota
+            # ("weekly cost limit reached"), and the shared token bucket's
+            # global cooldown is what paces it. That cooldown grows
+            # exponentially per consecutive limited outcome and caps at
+            # governor_max_cooldown_seconds, so waiting out a multi-day
+            # quota window settles into one poll per cap interval per
+            # fleet rather than a hot retry loop -- cheap enough to simply
+            # sit there until the window rolls over, with no operator
+            # action needed to resume.
+            #
+            # The quota case is still CLASSIFIED, purely so the log says
+            # "waiting on a spent budget" instead of "being throttled":
+            # those need very different responses from a human, and the
+            # raw 429 alone cannot tell them apart.
+            quota_message = _quota_exhausted_message(e) if limited else None
+            if quota_message is not None:
+                last_quota_message = quota_message
+                if log_fn:
+                    log_fn(
+                        f"429 quota exhausted ({quota_message}) -- retrying; "
+                        f"the governor cooldown paces this until the window resets"
+                    )
+            # A 429 usually carries Retry-After; honoring it beats guessing
+            # with an exponential curve, and it feeds the GLOBAL cooldown
+            # so the whole fleet waits out the window the server named.
+            governor_report(governor_path, limited=limited,
+                            cooldown_seconds=governor_cooldown_seconds,
+                            max_cooldown_seconds=governor_max_cooldown_seconds,
+                            retry_after_seconds=(
+                                _retry_after_seconds(getattr(e, "headers", None))
+                                if limited else None
+                            ))
+            if not limited:
                 raise
             last_error = e
             continue
@@ -486,6 +687,16 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
                         cooldown_seconds=governor_cooldown_seconds,
                         max_cooldown_seconds=governor_max_cooldown_seconds)
         return reply
+    # Only reached once the ENTIRE retry ladder is spent. If the thing we
+    # kept retrying was a spent budget, say so: a bare "HTTP Error 429" at
+    # this point reads as throttling and sends an operator looking at rate
+    # limits instead of at billing. This does not shortcut any retry --
+    # every attempt was still made.
+    if last_quota_message is not None:
+        raise ModelQuotaExhausted(
+            f"{model} via {base_url}: {last_quota_message} "
+            f"(still 429ing after {max_retries} retries)"
+        ) from last_error
     # last_error is only None if max_retries < 0 (range(max_retries + 1) never
     # iterates) -- guard against `raise None`, which would raise a confusing
     # TypeError instead of surfacing the actual misconfiguration.
@@ -493,7 +704,36 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
 
 
 def _call_model_once(messages, base_url, api_key, model, max_tokens, reasoning_effort, stream, thinking,
-                      temperature, timeout, prompt_cache="auto"):
+                      temperature, timeout, prompt_cache="auto",
+                      deadline_seconds=None, now_fn=None):
+    """One HTTP attempt. Raises ModelCallDeadlineExceeded if the call
+    outlives deadline_seconds of wall clock (None disables the deadline,
+    preserving the old unbounded behavior for callers that want it).
+
+    The socket timeout bounds a single stalled read; the deadline bounds
+    the whole call. Both are needed: a provider can satisfy the former
+    indefinitely by trickling SSE chunks, which is precisely the failure
+    this deadline exists to cut off.
+    """
+    # Resolved here, not as a def-time default: binding time.monotonic at
+    # import makes the clock unpatchable, which silently disables every
+    # test that injects one -- caught only because a deadline test kept
+    # returning the full slow reply instead of raising.
+    now_fn = time.monotonic if now_fn is None else now_fn
+    started = now_fn()
+
+    def remaining():
+        if deadline_seconds is None:
+            return None
+        return deadline_seconds - (now_fn() - started)
+
+    def check_deadline(where):
+        left = remaining()
+        if left is not None and left <= 0:
+            raise ModelCallDeadlineExceeded(
+                f"model call exceeded deadline_seconds={deadline_seconds} while {where}"
+            )
+
     url = base_url.rstrip("/") + "/chat/completions"
     payload = {
         "model": model,
@@ -526,16 +766,30 @@ def _call_model_once(messages, base_url, api_key, model, max_tokens, reasoning_e
             ),
         },
     )
+    # Never let one socket read outlast the whole call's deadline: without
+    # this, a connection that stalls right before the deadline still blocks
+    # for the full (much larger) `timeout` before anything notices.
+    effective_timeout = timeout
+    left = remaining()
+    if left is not None:
+        effective_timeout = max(1.0, min(timeout, left))
     # base_url is developer-supplied local config (MODEL_FIX_BASE_URL /
     # REVIEW_BASE_URL), never network- or attacker-controlled input.
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
+    with urllib.request.urlopen(req, timeout=effective_timeout) as resp:  # nosec B310
         if not stream:
             response = json.loads(resp.read())
+            check_deadline("reading a non-streamed response")
             return response["choices"][0]["message"]["content"], response.get("usage")
 
         chunks = []
         usage = None
         for raw_line in resp:
+            # Checked per chunk, not per read: this is the only place that
+            # can catch a response which is technically still alive but is
+            # never going to finish in a useful amount of time. Leaving the
+            # `with` block by raising closes the connection, which is what
+            # actually kills the in-flight request.
+            check_deadline("streaming the response")
             line = raw_line.decode("utf-8").strip()
             if not line.startswith("data:"):
                 continue
@@ -786,11 +1040,19 @@ def governor_acquire(path, calls_per_minute=DEFAULT_GOVERNOR_CALLS_PER_MINUTE,
 
 def governor_report(path, limited, cooldown_seconds=DEFAULT_GOVERNOR_COOLDOWN_SECONDS,
                     max_cooldown_seconds=DEFAULT_GOVERNOR_MAX_COOLDOWN_SECONDS,
-                    now_fn=time.time):
+                    now_fn=time.time, retry_after_seconds=None):
     """Record one call outcome. limited=True (429 or 5xx) sets/extends
     the GLOBAL cooldown with exponential growth per consecutive limited
     outcome, capped; limited=False resets the streak (the next limited
-    outcome starts from the base cooldown again). path=None disables."""
+    outcome starts from the base cooldown again). path=None disables.
+
+    retry_after_seconds, when the response carried a Retry-After header,
+    is the server's own statement of how long to wait. It raises the
+    cooldown floor: the effective wait becomes max(exponential backoff,
+    Retry-After). It deliberately bypasses max_cooldown_seconds, which
+    exists to cap our *guessing* -- ignoring an explicit instruction to
+    wait longer just earns another 429 the moment the cap expires.
+    """
     if path is None:
         return
     def mutate(state):
@@ -800,6 +1062,8 @@ def governor_report(path, limited, cooldown_seconds=DEFAULT_GOVERNOR_COOLDOWN_SE
                 cooldown_seconds * (2 ** (state["consecutive_limited"] - 1)),
                 max_cooldown_seconds,
             )
+            if retry_after_seconds is not None:
+                backoff = max(backoff, retry_after_seconds)
             state["cooldown_until"] = max(state["cooldown_until"], now_fn() + backoff)
         else:
             state["consecutive_limited"] = 0
@@ -1794,6 +2058,10 @@ def review_verdict(gap, diff, config, call_model_fn=call_model, pick_model_fn=ra
             config.get("retry_backoff_seconds", DEFAULT_RETRY_BACKOFF_SECONDS),
             config.get("max_retry_backoff_seconds", DEFAULT_MAX_RETRY_BACKOFF_SECONDS),
         )
+    except ModelQuotaExhausted:
+        # A spent budget is not a verdict on the patch. Reporting it as a
+        # failed review would discard work that was never actually judged.
+        raise
     except Exception as e:
         return False, f"review call failed: {e}"
     return extract_review_verdict(reply)
@@ -2012,6 +2280,14 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                 config.get("retry_backoff_seconds", DEFAULT_RETRY_BACKOFF_SECONDS),
                 config.get("max_retry_backoff_seconds", DEFAULT_MAX_RETRY_BACKOFF_SECONDS),
             )
+        except ModelQuotaExhausted:
+            # NOT a failure of this tag: the account is out of budget and
+            # every subsequent tag would "fail" identically. Swallowing it
+            # here would feed the cross-round 2-strikes skip-list and
+            # blacklist perfectly good tags over a billing problem --
+            # the same misattribution a DNS outage once caused (see
+            # call_model's URLError handling). Let it reach the operator.
+            raise
         except Exception as e:
             # Network/timeout/HTTP/malformed-response failures are a normal
             # cost of "any model" -- a single bad call must not kill the
@@ -3251,6 +3527,7 @@ def _normalize_model_config(table):
         "thinking": table.get("thinking", True),
         "temperature": table.get("temperature", 0),
         "timeout": table.get("timeout", 120),
+        "deadline_seconds": table.get("deadline_seconds", DEFAULT_DEADLINE_SECONDS),
         "max_request_turns": table.get("max_request_turns", DEFAULT_MAX_REQUEST_TURNS),
         "max_repair_rounds": table.get("max_repair_rounds", DEFAULT_MAX_REPAIR_ROUNDS),
         "max_request_repeats": table.get("max_request_repeats", DEFAULT_MAX_REQUEST_REPEATS),
@@ -3503,6 +3780,7 @@ def main(argv=None):
                 "phase": phase, "model": model, "base_url": base_url, "max_tokens": max_tokens,
                 "reasoning_effort": reasoning_effort, "stream": stream,
                 "thinking": thinking, "temperature": temperature, "timeout": timeout,
+                "deadline_seconds": config.get("deadline_seconds", DEFAULT_DEADLINE_SECONDS),
                 "prompt_chars": prompt_chars, "messages": messages,
             }, indent=2))
             t0 = time.time()
@@ -3541,6 +3819,7 @@ def main(argv=None):
                     governor_burst=config["governor_burst"],
                     governor_cooldown_seconds=config["governor_cooldown_seconds"],
                     governor_max_cooldown_seconds=config["governor_max_cooldown_seconds"],
+                    deadline_seconds=config.get("deadline_seconds", DEFAULT_DEADLINE_SECONDS),
                 )
             except Exception as e:
                 elapsed = time.time() - t0
