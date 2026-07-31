@@ -13,7 +13,7 @@ This document is automatically updated on each push to `main`. Last updated: **2
 | Total Tags | 16,677 |
 | Tag Tables | 931 |
 | Domains | 6 |
-| Format Parsers | 38 |
+| Format Parsers | 37 |
 | ExifTool Parity | 58%* |
 
 *ExifTool officially documents ~28,853 unique tags. OxiDex defines 16,677 tags (including variant definitions).
@@ -123,7 +123,6 @@ MakerNote parsers for 39+ camera manufacturers are **fully implemented and conne
 
 | Format | Coverage | Priority |
 |--------|----------|----------|
-| FLASHPIX | 10% | Medium |
 
 ---
 
@@ -182,10 +181,6 @@ MakerNote parsers for 39+ camera manufacturers are **fully implemented and conne
 ---
 
 ## Recommendations
-
-### Formats Needing Enhancement
-
-- **FLASHPIX** (10% coverage)
 
 ---
 
