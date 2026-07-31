@@ -296,6 +296,20 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
         }
     }
 
+    // XMP-xmpBJ JobRef is a Bag of structures, likewise out of the generic
+    // pass's reach. ExifTool reports only the flattened fields, so drop the
+    // container tag once a field has replaced it rather than reporting a
+    // JobRef tag ExifTool never emits.
+    let job_ref_fields = extract_job_ref_fields(xml_bytes)?;
+    if !job_ref_fields.is_empty() {
+        results.retain(|(tag, _)| tag != "XMP:JobRef");
+        for (tag, value) in &job_ref_fields {
+            if !results.iter().any(|(t, _)| t == tag) {
+                results.push((tag.clone(), value.clone()));
+            }
+        }
+    }
+
     // Post-process results to apply formatting for specific tags
     let results = results
         .into_iter()
@@ -954,6 +968,128 @@ fn extract_plus_sequence_field(
     }
 }
 
+/// Collects the flattened fields of the XMP-xmpBJ JobRef structure.
+///
+/// `JobRef` is `List => 'Bag'` over `%sJobRef` (XMP.pm:345-351, 1175), so its
+/// shape is `xmpBJ:JobRef / rdf:Bag / rdf:li[parseType=Resource] /
+/// stJob:{id,name,url}`. That is one level deeper than the bare
+/// `parseType="Resource"` structs the generic pass walks, so the generic pass
+/// reports only the container -- oxidex emitted `XMP:JobRef` where ExifTool
+/// reports `XMP:JobRefName` (measured on combined-samples/Photoshop.psd).
+///
+/// Deliberately table-driven rather than generic: the flattened name is
+/// `STRUCT_NAME . ucfirst(field)`, and only structures whose ExifTool
+/// definition has actually been read can be named with confidence.
+fn extract_job_ref_fields(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
+    const XMP_BJ_NS: &str = "http://ns.adobe.com/xap/1.0/bj/";
+    const ST_JOB_NS: &str = "http://ns.adobe.com/xap/1.0/sType/Job#";
+    // %sJobRef fields, in XMP.pm declaration order.
+    const FIELDS: &[(&str, &str)] = &[
+        ("id", "JobRefId"),
+        ("name", "JobRefName"),
+        ("url", "JobRefUrl"),
+    ];
+
+    let mut reader = Reader::from_reader(xml_bytes);
+    reader.config_mut().trim_text(true);
+
+    let mut resolver = NamespaceResolver::new();
+    let mut collected: Vec<(&'static str, Vec<String>)> =
+        FIELDS.iter().map(|(_, tag)| (*tag, Vec::new())).collect();
+    let mut buf = Vec::new();
+    let mut depth = 0usize;
+
+    let mut job_ref_depth: Option<usize> = None;
+    let mut field_depth: Option<usize> = None;
+    let mut field_index: Option<usize> = None;
+    let mut current_value = String::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                depth += 1;
+                register_namespaces_from_element(&e, &mut resolver)?;
+                let tag_name = extract_tag_name(&e)?;
+
+                if job_ref_depth.is_none()
+                    && is_property_in_namespace(&tag_name, "JobRef", XMP_BJ_NS, &resolver)
+                {
+                    job_ref_depth = Some(depth);
+                } else if job_ref_depth.is_some() && field_depth.is_none() {
+                    if let Some(index) = FIELDS.iter().position(|(field, _)| {
+                        is_property_in_namespace(&tag_name, field, ST_JOB_NS, &resolver)
+                    }) {
+                        field_depth = Some(depth);
+                        field_index = Some(index);
+                        current_value.clear();
+                    }
+                }
+            }
+
+            Ok(Event::End(_)) => {
+                if field_depth == Some(depth) {
+                    let value = current_value.trim().to_string();
+                    if let (Some(index), false) = (field_index, value.is_empty()) {
+                        collected[index].1.push(value);
+                    }
+                    field_depth = None;
+                    field_index = None;
+                    current_value.clear();
+                }
+                if job_ref_depth == Some(depth) {
+                    job_ref_depth = None;
+                }
+                depth = depth.saturating_sub(1);
+            }
+
+            Ok(Event::Text(e)) => {
+                if field_depth.is_some()
+                    && let Ok(decoded) = e.xml10_content()
+                {
+                    let unescaped =
+                        quick_xml::escape::unescape(&decoded).unwrap_or_else(|_| decoded.clone());
+                    current_value.push_str(&unescaped);
+                }
+            }
+
+            Ok(Event::GeneralRef(e)) => {
+                // quick-xml reports `&apos;` and friends as their own event
+                // rather than as text. Without this arm the field value silently
+                // lost the character: "This isn't a job" arrived as
+                // "This isnt a job".
+                if field_depth.is_some()
+                    && let Ok(entity_name) = e.xml10_content()
+                {
+                    if let Ok(Some(ch)) = e.resolve_char_ref() {
+                        current_value.push(ch);
+                    } else if let Some(resolved) = resolve_predefined_entity(&entity_name) {
+                        current_value.push_str(resolved);
+                    } else {
+                        current_value.push('&');
+                        current_value.push_str(&entity_name);
+                        current_value.push(';');
+                    }
+                }
+            }
+
+            Ok(Event::Empty(e)) => {
+                register_namespaces_from_element(&e, &mut resolver)?;
+            }
+
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+        buf.clear();
+    }
+
+    Ok(collected
+        .into_iter()
+        .filter(|(_, values)| !values.is_empty())
+        .map(|(tag, values)| (format!("XMP:{tag}"), values.join(", ")))
+        .collect())
+}
+
 /// ExifTool tag names for flattened structure fields whose reported name is
 /// not the concatenated tag ID.
 ///
@@ -1184,6 +1320,123 @@ fn is_property_in_namespace(
 }
 
 #[cfg(test)]
+mod legacy_adobe_xmp_tests {
+    use super::*;
+
+    /// The XMP packet Photoshop 7.0 writes, as found in
+    /// /tmp/oxidex-exiftool-cache/combined-samples/Photoshop.psd: the wrapper
+    /// is `x:xapmeta` with an `x:xaptk` toolkit attribute, and rdf:Description
+    /// carries an unprefixed `about`.
+    const LEGACY_PACKET: &[u8] = br#"
+        <x:xapmeta xmlns:x='adobe:ns:meta/' x:xaptk='XMP toolkit 2.8.2-33, framework 1.5'>
+        <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+         <rdf:Description about='uuid:c197d41e-f8f7-11d9-b03e-c023c3939af5'
+          xmlns:stJob='http://ns.adobe.com/xap/1.0/sType/Job#'
+          xmlns:xapBJ='http://ns.adobe.com/xap/1.0/bj/'>
+          <xapBJ:JobRef>
+           <rdf:Bag>
+            <rdf:li rdf:parseType='Resource'>
+             <stJob:name>This isn&apos;t a job</stJob:name>
+            </rdf:li>
+           </rdf:Bag>
+          </xapBJ:JobRef>
+         </rdf:Description>
+        </rdf:RDF>
+        </x:xapmeta>"#;
+
+    fn value_of(results: &[(String, String)], tag: &str) -> Option<String> {
+        results
+            .iter()
+            .find(|(name, _)| name == tag)
+            .map(|(_, value)| value.clone())
+    }
+
+    #[test]
+    fn xaptk_on_xapmeta_yields_the_toolkit_string() {
+        // XMP.pm %recognizedAttrs maps both 'x:xmptk' and 'x:xaptk' onto
+        // XMPToolkit. Recognising only the modern spelling dropped the tag on
+        // every file an Adobe toolkit older than 2004 wrote.
+        let results = parse_xmp(LEGACY_PACKET).unwrap();
+        assert_eq!(
+            value_of(&results, "XMP:XMPToolkit").as_deref(),
+            Some("XMP toolkit 2.8.2-33, framework 1.5")
+        );
+    }
+
+    #[test]
+    fn an_unprefixed_about_attribute_is_still_rdf_about() {
+        // XMP.pm:4081-4086 -- an attribute with no prefix takes the namespace
+        // of the element it sits on, and this attribute only ever sits on
+        // rdf:Description, so bare `about` IS `rdf:about`.
+        let results = parse_xmp(LEGACY_PACKET).unwrap();
+        assert_eq!(
+            value_of(&results, "XMP:About").as_deref(),
+            Some("uuid:c197d41e-f8f7-11d9-b03e-c023c3939af5")
+        );
+    }
+
+    #[test]
+    fn job_ref_is_reported_by_its_flattened_field_name() {
+        // %sJobRef (XMP.pm:345-351) has STRUCT_NAME 'JobRef' and a 'name'
+        // field, so ExifTool reports JobRefName. The container tag JobRef is
+        // not something ExifTool ever emits, so it must not survive alongside.
+        let results = parse_xmp(LEGACY_PACKET).unwrap();
+        assert_eq!(
+            value_of(&results, "XMP:JobRefName").as_deref(),
+            Some("This isn't a job"),
+            "the &apos; entity must survive as an apostrophe"
+        );
+        assert!(
+            value_of(&results, "XMP:JobRef").is_none(),
+            "the struct container must not be reported next to its flattened field"
+        );
+    }
+
+    #[test]
+    fn the_modern_spelling_still_works() {
+        // Guard against fixing the legacy spelling by replacing the modern one.
+        let modern = br#"
+            <x:xmpmeta xmlns:x='adobe:ns:meta/' x:xmptk='Image::ExifTool 12.46'>
+            <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+             <rdf:Description rdf:about='uuid:modern'
+              xmlns:dc='http://purl.org/dc/elements/1.1/'>
+              <dc:format>image/jpeg</dc:format>
+             </rdf:Description>
+            </rdf:RDF>
+            </x:xmpmeta>"#;
+        let results = parse_xmp(modern).unwrap();
+        assert_eq!(
+            value_of(&results, "XMP:XMPToolkit").as_deref(),
+            Some("Image::ExifTool 12.46")
+        );
+        assert_eq!(
+            value_of(&results, "XMP:About").as_deref(),
+            Some("uuid:modern")
+        );
+    }
+
+    #[test]
+    fn a_packet_without_a_job_ref_gains_no_job_tags() {
+        let plain = br#"
+            <x:xmpmeta xmlns:x='adobe:ns:meta/'>
+            <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+             <rdf:Description rdf:about=''
+              xmlns:dc='http://purl.org/dc/elements/1.1/'>
+              <dc:format>image/jpeg</dc:format>
+             </rdf:Description>
+            </rdf:RDF>
+            </x:xmpmeta>"#;
+        let results = parse_xmp(plain).unwrap();
+        assert!(
+            results
+                .iter()
+                .all(|(tag, _)| !tag.starts_with("XMP:JobRef")),
+            "found unexpected JobRef tags: {results:?}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod about_cv_term_tests {
     use super::*;
 
@@ -1248,9 +1501,15 @@ fn extract_tag_name_from_bytes(name_bytes: &[u8]) -> Result<String> {
 /// Checks if a tag name represents an x:xmpmeta element.
 ///
 /// The xmpmeta element wraps XMP data and may contain the XMPToolkit attribute.
+///
+/// Pre-2004 Adobe toolkits spell the same element `x:xapmeta` -- that is what
+/// Photoshop 7.0 writes, and it is the wrapper in
+/// /tmp/oxidex-exiftool-cache/combined-samples/Photoshop.psd. ExifTool reads
+/// both spellings (XMP.pm %recognizedAttrs lists `x:xmptk` and `x:xaptk` side
+/// by side), so the toolkit string must not be lost just because the file is old.
 fn is_xmpmeta(tag_name: &str) -> bool {
     // Check for x:xmpmeta or xmpmeta (with or without prefix)
-    tag_name == "x:xmpmeta" || tag_name == "xmpmeta"
+    matches!(tag_name, "x:xmpmeta" | "xmpmeta" | "x:xapmeta" | "xapmeta")
 }
 
 /// Extracts XMPToolkit from x:xmpmeta element attributes.
@@ -1266,8 +1525,10 @@ fn extract_xmpmeta_attributes(
             ExifToolError::parse_error(format!("Invalid UTF-8 in attribute key: {}", e))
         })?;
 
-        // Check for x:xmptk or xmptk attribute (XMP Toolkit version)
-        if key == "x:xmptk" || key == "xmptk" {
+        // Check for x:xmptk or xmptk attribute (XMP Toolkit version).
+        // `x:xaptk` is the older Adobe spelling of the same attribute; XMP.pm
+        // maps both onto the XMPToolkit tag.
+        if matches!(key, "x:xmptk" | "xmptk" | "x:xaptk" | "xaptk") {
             let value = std::str::from_utf8(&attr.value).map_err(|e| {
                 ExifToolError::parse_error(format!("Invalid UTF-8 in XMPToolkit value: {}", e))
             })?;
@@ -1317,8 +1578,15 @@ fn extract_description_attributes(
             continue;
         }
 
-        // Handle rdf:about attribute (the subject URI)
-        if key == "rdf:about" {
+        // Handle rdf:about attribute (the subject URI).
+        //
+        // An attribute with no prefix inherits the namespace of the element it
+        // sits on (XMP.pm:4081-4086: "assume same namespace as parent"), and
+        // this function only ever runs on rdf:Description. So a bare
+        // `about='uuid:...'` -- what Photoshop 7.0 writes, and what
+        // combined-samples/Photoshop.psd contains -- is the same property as
+        // `rdf:about` and must produce the same About tag.
+        if key == "rdf:about" || key == "about" {
             results.push(("XMP:About".to_string(), value.trim().to_string()));
             continue;
         }
