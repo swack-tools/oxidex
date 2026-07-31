@@ -1172,6 +1172,7 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
             })
     {
         extract_interop_index(&reader, interop_offset, byte_order, metadata);
+        extract_interop_version(&reader, interop_offset, byte_order, metadata);
     }
 
     Ok(())
@@ -1222,6 +1223,50 @@ fn extract_interop_index(
             TagValue::new_string(printed),
         );
     }
+}
+
+/// Emit Interoperability IFD tag 0x0002 as EXIF:InteropVersion.
+///
+/// Exif.pm defines InteropVersion as four UNDEFINED bytes. There is no
+/// PrintConv: ExifTool displays the byte characters directly, so the sample's
+/// `30 31 30 30` payload is displayed as `0100`.
+fn extract_interop_version(
+    reader: &SliceReader<'_>,
+    interop_offset: u64,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    let Ok(interop_tags) = parse_ifd(reader, interop_offset, byte_order) else {
+        return;
+    };
+
+    let Some((_, field_type, value_count, raw_bytes)) = interop_tags
+        .iter()
+        .find(|(tag_id, _, _, _)| *tag_id == 0x0002)
+    else {
+        return;
+    };
+    if *field_type != 7 {
+        return;
+    }
+
+    let Some(count) = usize::try_from(*value_count).ok() else {
+        return;
+    };
+    let Some(version_bytes) = raw_bytes.as_ref().get(..count) else {
+        return;
+    };
+    let version = String::from_utf8_lossy(version_bytes)
+        .trim_end_matches('\0')
+        .to_string();
+    if version.is_empty() {
+        return;
+    }
+
+    metadata.insert(
+        lookup_tag_name(0x0002, "EXIF"),
+        TagValue::new_string(version),
+    );
 }
 
 /// Locate the TIFF header in a JPEG APP1 EXIF segment.
