@@ -1765,6 +1765,20 @@ fn format_exif_display_value(
             0xffff => Some("Uncalibrated".to_string()),
             _ => None,
         },
+        // FocalLength: RATIONAL[1]. Exif.pm 0x920a PrintConv:
+        //     sprintf("%.1f mm",$val)
+        0x920A if field_type == 5 && value_count >= 1 => {
+            let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                None
+            } else {
+                Some(format!(
+                    "{:.1} mm",
+                    f64::from(numerator) / f64::from(denominator)
+                ))
+            }
+        }
         // ExposureTime: RATIONAL[1]. Exif.pm 0x829a PrintConv is
         // Image::ExifTool::Exif::PrintExposureTime.
         0x829A if field_type == 5 && value_count >= 1 => {
@@ -1920,11 +1934,30 @@ fn format_exif_display_value(
         }
         // CFAPattern: UNDEFINED with two endian-dependent u16 dimensions.
         0xA302 if field_type == 7 => decode_exif_cfa_pattern(bytes, byte_order),
-        // FlashpixVersion: UNDEFINED 4 bytes printed as e.g. "0100".
+        // FlashpixVersion: UNDEFINED. Exif.pm 0xa000 RawConv removes trailing
+        // NUL bytes (including non-standard terminators), then prints the
+        // remaining version bytes unchanged.
         0xA000 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
-            let ver_bytes = bytes.get(..count.min(4))?;
-            Some(String::from_utf8_lossy(ver_bytes).into_owned())
+            let version = bytes.get(..count)?;
+            let trimmed = String::from_utf8_lossy(version)
+                .trim_end_matches('\0')
+                .to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        }
+        // Gamma: RATIONAL[1] with no PrintConv. ExifTool renders an invalid
+        // zero-denominator rational as "undef".
+        0xA500 if field_type == 5 && value_count >= 1 => {
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                Some("undef".to_string())
+            } else {
+                format_rational_as_string(bytes, byte_order)
+            }
         }
         // FocalLengthIn35mmFormat: SHORT[1] with " mm" suffix.
         // Exif.pm PrintConv: $val .= " mm"
@@ -3645,12 +3678,17 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                                 | 0x9101 // ComponentsConfiguration
                                                 | 0x9204 // ExposureCompensation
                                                 | 0x9209 // Flash
+                                                 | 0x920A // FocalLength
+                                                 | 0xA000 // FlashpixVersion
                                                 | 0xA001 // ColorSpace
                                                 | 0xA002 // ExifImageWidth
                                                 | 0xA003 // ExifImageHeight
                                                 | 0xA300 // FileSource
                                                 | 0xA401 // CustomRendered
                                                 | 0xA402 // ExposureMode
+                                                 | 0xA405 // FocalLengthIn35mmFormat
+                                                 | 0xA420 // ImageUniqueID
+                                                 | 0xA500 // Gamma
                                         ) {
                                             continue;
                                         }
