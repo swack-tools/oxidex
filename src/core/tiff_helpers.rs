@@ -529,6 +529,98 @@ fn parse_interop_subifd(
     }
 }
 
+/// Read one unsigned EXIF RATIONAL from already bounds-checked IFD value data.
+fn read_gps_rational(bytes: &[u8], offset: usize, byte_order: ByteOrder) -> Option<f64> {
+    let numerator_bytes = bytes.get(offset..offset.checked_add(4)?)?;
+    let denominator_offset = offset.checked_add(4)?;
+    let denominator_bytes =
+        bytes.get(denominator_offset..denominator_offset.checked_add(4)?)?;
+    let denominator = read_u32(denominator_bytes, byte_order);
+    if denominator == 0 {
+        return None;
+    }
+
+    Some(read_u32(numerator_bytes, byte_order) as f64 / denominator as f64)
+}
+
+fn gps_reference(
+    gps_tags: &[(u16, u16, u32, std::borrow::Cow<[u8]>)],
+    tag_id: u16,
+) -> Option<u8> {
+    gps_tags
+        .iter()
+        .find(|(id, _, _, _)| *id == tag_id)
+        .and_then(|(_, _, _, bytes)| bytes.first().copied())
+}
+
+fn gps_tag_value(
+    tag_id: u16,
+    field_type: u16,
+    value_count: u32,
+    bytes: &[u8],
+    byte_order: ByteOrder,
+    latitude_ref: Option<u8>,
+    longitude_ref: Option<u8>,
+) -> TagValue {
+    // Numeric IDs below are from the Exif GPS IFD table:
+    // 0x0001/0x0003 are latitude/longitude references,
+    // 0x0002/0x0004 are latitude/longitude coordinates,
+    // 0x0006 is altitude, and 0x0011 is image direction.
+    match tag_id {
+        0x0001 => match bytes.first() {
+            Some(b'N') => TagValue::String("North".to_string()),
+            Some(b'S') => TagValue::String("South".to_string()),
+            _ => raw_bytes_to_tag_value(bytes, field_type, value_count, tag_id, byte_order),
+        },
+        0x0003 => match bytes.first() {
+            Some(b'E') => TagValue::String("East".to_string()),
+            Some(b'W') => TagValue::String("West".to_string()),
+            _ => raw_bytes_to_tag_value(bytes, field_type, value_count, tag_id, byte_order),
+        },
+        0x0002 | 0x0004 if value_count == 3 => {
+            let coordinate = (
+                read_gps_rational(bytes, 0, byte_order),
+                read_gps_rational(bytes, 8, byte_order),
+                read_gps_rational(bytes, 16, byte_order),
+            );
+            let reference = if tag_id == 0x0002 {
+                latitude_ref
+            } else {
+                longitude_ref
+            };
+
+            match coordinate {
+                (Some(degrees), Some(minutes), Some(seconds)) => {
+                    let suffix = reference
+                        .filter(|value| matches!(value, b'N' | b'S' | b'E' | b'W'))
+                        .map(char::from);
+                    let formatted = match suffix {
+                        Some(suffix) => format!(
+                            "{} deg {}' {:.2}\" {}",
+                            degrees as u32, minutes as u32, seconds, suffix
+                        ),
+                        None => format!(
+                            "{} deg {}' {:.2}\"",
+                            degrees as u32, minutes as u32, seconds
+                        ),
+                    };
+                    TagValue::String(formatted)
+                }
+                _ => raw_bytes_to_tag_value(bytes, field_type, value_count, tag_id, byte_order),
+            }
+        }
+        0x0006 => match read_gps_rational(bytes, 0, byte_order) {
+            Some(altitude) => TagValue::String(format!("{altitude:.2} m")),
+            None => raw_bytes_to_tag_value(bytes, field_type, value_count, tag_id, byte_order),
+        },
+        0x0011 => match read_gps_rational(bytes, 0, byte_order) {
+            Some(direction) => TagValue::String(format!("{direction:.1}")),
+            None => raw_bytes_to_tag_value(bytes, field_type, value_count, tag_id, byte_order),
+        },
+        _ => raw_bytes_to_tag_value(bytes, field_type, value_count, tag_id, byte_order),
+    }
+}
+
 /// Parses a GPS sub-IFD and extracts GPS tags.
 ///
 /// The GPS sub-IFD contains GPS positioning information including
@@ -547,17 +639,84 @@ pub fn parse_gps_subifd(
     metadata: &mut MetadataMap,
 ) {
     if let Ok(gps_tags) = parse_ifd(reader, offset, byte_order) {
+        // References may appear after their associated coordinate, so collect
+        // them before converting values.
+        let latitude_ref = gps_reference(&gps_tags, 0x0001);
+        let longitude_ref = gps_reference(&gps_tags, 0x0003);
+
         for (tag_id, field_type, value_count, raw_bytes) in gps_tags {
-            let tag_name = lookup_tag_name(tag_id, "GPS");
-            let tag_value = raw_bytes_to_tag_value(
-                raw_bytes.as_ref(),
+            // JPEG Exif GPS values originate in APP1. Resolve their names
+            // through the tag database rather than constructing a group
+            // prefix locally.
+            let tag_name = lookup_tag_name(tag_id, "APP1");
+            let tag_value = gps_tag_value(
+                tag_id,
                 field_type,
                 value_count,
-                tag_id,
+                raw_bytes.as_ref(),
                 byte_order,
+                latitude_ref,
+                longitude_ref,
             );
             metadata.insert(tag_name, tag_value);
         }
+    }
+}
+
+#[cfg(test)]
+mod gps_conversion_tests {
+    use super::*;
+
+    fn be_rational(numerator: u32, denominator: u32) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(8);
+        bytes.extend_from_slice(&numerator.to_be_bytes());
+        bytes.extend_from_slice(&denominator.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn formats_reported_jpeg_gps_values() {
+        let mut latitude = Vec::new();
+        latitude.extend_from_slice(&be_rational(45, 1));
+        latitude.extend_from_slice(&be_rational(0, 1));
+        latitude.extend_from_slice(&be_rational(1858, 100));
+
+        assert_eq!(
+            gps_tag_value(
+                0x0002,
+                5,
+                3,
+                &latitude,
+                ByteOrder::BigEndian,
+                Some(b'N'),
+                None,
+            ),
+            TagValue::String("45 deg 0' 18.58\" N".to_string())
+        );
+        assert_eq!(
+            gps_tag_value(
+                0x0006,
+                5,
+                1,
+                &be_rational(35283, 100),
+                ByteOrder::BigEndian,
+                None,
+                None,
+            ),
+            TagValue::String("352.83 m".to_string())
+        );
+        assert_eq!(
+            gps_tag_value(
+                0x0011,
+                5,
+                1,
+                &be_rational(0, 1),
+                ByteOrder::BigEndian,
+                None,
+                None,
+            ),
+            TagValue::String("0.0".to_string())
+        );
     }
 }
 
