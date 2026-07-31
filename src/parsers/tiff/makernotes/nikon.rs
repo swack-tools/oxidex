@@ -88,7 +88,7 @@ const NIKON_ACTIVE_D_LIGHTING: u16 = 0x00B3;
 const NIKON_PICTURE_CONTROL: u16 = 0x00B4; // Array tag
 const NIKON_WORLD_TIME: u16 = 0x00B5;
 const NIKON_ISO_INFO: u16 = 0x00B6; // Array tag
-const NIKON_VIGNETTE_CONTROL: u16 = 0x00B7;
+const NIKON_AF_INFO2: u16 = 0x00B7; // AFInfo2 byte record
 const NIKON_DISTORTION_CONTROL: u16 = 0x00B8;
 const NIKON_SATURATION_TEXT: u16 = 0x00AA; // Saturation as text
 const NIKON_VARI_PROGRAM: u16 = 0x00AB; // VariProgram
@@ -118,7 +118,7 @@ const NIKON_IMAGE_ADJUSTMENT: u16 = 0x0080; // Image Adjustment
 const NIKON_AUX_LENS: u16 = 0x0082; // Auxiliary Lens
 const NIKON_MULTI_EXPOSURE: u16 = 0x00B2; // Multi Exposure
 // Note: 0x00B0=ColorSpace, 0x00B7=VignetteControl, 0x00B8=DistortionControl are primary
-// (HIGH_ISO_NR, AF_INFO2, FILE_INFO are alternate names for same tag IDs)
+// in some older tables; Nikon AFInfo2 uses 0x00B7 in the NEF MakerNote table.
 
 // Nikon header signatures
 const NIKON_HEADER_TYPE2: &[u8] = b"Nikon\0\x02\x10\x00\x00";
@@ -270,6 +270,170 @@ fn decode_vignette_control(value: i32) -> &'static str {
     }
 }
 
+/// Return the bytes belonging to a Nikon MakerNote IFD entry.
+///
+/// Nikon offsets are relative to the embedded TIFF header at byte 10. Values
+/// occupying four bytes or fewer are stored directly in the IFD value field,
+/// so their original byte representation must be reconstructed using the
+/// embedded TIFF byte order.
+fn nikon_entry_bytes<'a>(
+    entry: &IfdEntry,
+    data: &'a [u8],
+    tiff_start: usize,
+    byte_order: ByteOrder,
+) -> Option<std::borrow::Cow<'a, [u8]>> {
+    let unit_size = match entry.field_type {
+        1 | 2 | 6 | 7 => 1usize,
+        3 | 8 => 2,
+        4 | 9 | 11 => 4,
+        5 | 10 | 12 => 8,
+        _ => return None,
+    };
+    let count = usize::try_from(entry.value_count).ok()?;
+    let byte_len = count.checked_mul(unit_size)?;
+
+    if byte_len <= 4 {
+        let inline = match byte_order {
+            ByteOrder::LittleEndian => entry.value_offset.to_le_bytes(),
+            ByteOrder::BigEndian => entry.value_offset.to_be_bytes(),
+        };
+        return Some(std::borrow::Cow::Owned(inline[..byte_len].to_vec()));
+    }
+
+    let relative_offset = usize::try_from(entry.value_offset).ok()?;
+    let start = tiff_start.checked_add(relative_offset)?;
+    let end = start.checked_add(byte_len)?;
+    data.get(start..end).map(std::borrow::Cow::Borrowed)
+}
+
+/// Decode AFAperture from an unencrypted LensData01 record.
+///
+/// Nikon.pm's `%Image::ExifTool::Nikon::LensData01` defines byte 5 as
+/// AFAperture and applies `2 ** ($val / 24)`. Versions 0201 and later are
+/// encrypted, so they are deliberately excluded from this decoder.
+fn parse_lens_data_01(lens_data: &[u8], tags: &mut HashMap<String, String>) {
+    let Some(version) = lens_data.get(..4) else {
+        return;
+    };
+    if !matches!(version, b"0100" | b"0101") {
+        return;
+    }
+
+    let Some(encoded_aperture) = lens_data.get(5) else {
+        return;
+    };
+    let aperture = 2.0_f64.powf(f64::from(*encoded_aperture) / 24.0);
+    tags.insert(
+        "MakerNotes:AFAperture".to_string(),
+        format!("{aperture:.1}"),
+    );
+}
+
+/// Decode Nikon AFInfo2 (MakerNote tag 0x00B7).
+///
+/// These byte indices are the entries in ExifTool's Nikon AFInfo2 table:
+/// AFAreaMode is index 1, AFPointsInFocus starts at index 14, and AFPoint is
+/// index 19. They are not the layout of the older four-byte AFInfo tag 0x0088.
+fn parse_af_info2(data: &[u8], tags: &mut HashMap<String, String>) {
+    const AF_AREA_MODE_INDEX: usize = 1;
+    const AF_POINTS_IN_FOCUS_INDEX: usize = 14;
+    const AF_POINT_INDEX: usize = 19;
+
+    if let Some(area_mode) = data.get(AF_AREA_MODE_INDEX).and_then(|value| match value {
+        0 => Some("Single Area"),
+        1 => Some("Dynamic Area"),
+        2 => Some("Closest Subject"),
+        3 => Some("Group Dynamic"),
+        4 => Some("Single Area (wide)"),
+        5 => Some("Dynamic Area (wide)"),
+        _ => None,
+    }) {
+        tags.insert("MakerNotes:AFAreaMode".to_string(), area_mode.to_string());
+    }
+
+    if let Some(af_point) = data.get(AF_POINT_INDEX).and_then(|value| match value {
+        0 => Some("Center"),
+        1 => Some("Top"),
+        2 => Some("Bottom"),
+        3 => Some("Mid-left"),
+        4 => Some("Mid-right"),
+        _ => None,
+    }) {
+        tags.insert("MakerNotes:AFPoint".to_string(), af_point.to_string());
+    }
+
+    // AFInfo2 stores this five-point mask in the two bytes beginning at table
+    // index 14. Nikon.pm interprets the mask in big-endian bit order.
+    if let Some(mask_bytes) = data.get(AF_POINTS_IN_FOCUS_INDEX..AF_POINTS_IN_FOCUS_INDEX + 2) {
+        let mask = u16::from_be_bytes([mask_bytes[0], mask_bytes[1]]);
+        let point_names = [
+            (0x0001, "Center"),
+            (0x0002, "Top"),
+            (0x0004, "Bottom"),
+            (0x0008, "Mid-left"),
+            (0x0010, "Mid-right"),
+        ];
+        let points = point_names
+            .iter()
+            .filter_map(|(bit, name)| (mask & bit != 0).then_some(*name))
+            .collect::<Vec<_>>();
+
+        if !points.is_empty() {
+            tags.insert(
+                "MakerNotes:AFPointsInFocus".to_string(),
+                points.join(", "),
+            );
+        }
+    }
+}
+
+/// Promote Nikon Capture values to the family-0 names emitted by ExifTool.
+///
+/// `nikon_capture_data` parses the nested record stream before this function
+/// runs. Older versions of that parser used Nikon/NikonCapture prefixes for
+/// these fields, while ExifTool reports both as MakerNotes tags. Moving the
+/// value avoids parallel duplicate emissions.
+fn normalize_nikon_capture_names(tags: &mut HashMap<String, String>) {
+    fn move_first(
+        tags: &mut HashMap<String, String>,
+        destination: &str,
+        sources: &[&str],
+    ) {
+        if tags.contains_key(destination) {
+            for source in sources {
+                tags.remove(*source);
+            }
+            return;
+        }
+
+        for source in sources {
+            if let Some(value) = tags.remove(*source) {
+                tags.insert(destination.to_string(), value);
+                break;
+            }
+        }
+    }
+
+    move_first(
+        tags,
+        "MakerNotes:BitDepth",
+        &[
+            "NikonCapture:BitDepth",
+            "NikonCapture:OutputBitDepth",
+            "Nikon:BitDepth",
+        ],
+    );
+    move_first(
+        tags,
+        "MakerNotes:BrightnessAdj",
+        &[
+            "NikonCapture:BrightnessAdj",
+            "NikonCapture:BrightnessAdjustment",
+            "Nikon:BrightnessAdj",
+        ],
+    );
+}
+
 /// Represents a Nikon MakerNote parser
 pub struct NikonParser;
 
@@ -369,6 +533,7 @@ impl MakerNoteParser for NikonParser {
                         let end = start.saturating_add(entry.value_count as usize);
                         if let Some(block) = data.get(start..end) {
                             nikon_capture_data::parse_nikon_capture_data(block, tags);
+                            normalize_nikon_capture_names(tags);
                         }
                     }
 
@@ -462,14 +627,6 @@ impl MakerNoteParser for NikonParser {
                         );
                     }
 
-                    NIKON_VIGNETTE_CONTROL => {
-                        let value = entry.value_offset as i32;
-                        tags.insert(
-                            "Nikon:VignetteControl".to_string(),
-                            decode_vignette_control(value).to_string(),
-                        );
-                    }
-
                     // Lens information (simple format)
                     NIKON_LENS_TYPE => {
                         let value = entry.value_offset;
@@ -478,6 +635,15 @@ impl MakerNoteParser for NikonParser {
 
                     // LensData array (complex)
                     NIKON_LENS_DATA => {
+                        if let Some(lens_data) =
+                            nikon_entry_bytes(entry, data, tiff_start, tiff_byte_order)
+                        {
+                            parse_lens_data_01(lens_data.as_ref(), tags);
+                        }
+
+                        // Preserve the existing compatibility extraction for
+                        // lens records that it already supports. LensData01
+                        // decoding above adds only the missing AFAperture.
                         if let Some(array) = extract_u16_array(entry, data, byte_order) {
                             // Extract lens ID and look up lens name
                             if array.len() > LENS_DATA_LENS_ID {
@@ -748,12 +914,21 @@ impl MakerNoteParser for NikonParser {
 
                     // Note: HIGH_ISO_NR (0x00B0) removed - same tag ID as ColorSpace, handled above
 
-                    // Array tags
+                    // Older four-byte AFInfo. Keep the compatibility value,
+                    // but do not decode it using AFInfo2's unrelated indices.
                     NIKON_AF_INFO => {
                         if let Some(array) = extract_u16_array(entry, data, byte_order)
                             && !array.is_empty()
                         {
                             tags.insert("Nikon:AFInfo".to_string(), format!("{}", array[0]));
+                        }
+                    }
+
+                    NIKON_AF_INFO2 => {
+                        if let Some(af_info) =
+                            nikon_entry_bytes(entry, data, tiff_start, tiff_byte_order)
+                        {
+                            parse_af_info2(af_info.as_ref(), tags);
                         }
                     }
 
@@ -984,7 +1159,7 @@ fn nikon_tag_to_name(tag_id: u16) -> String {
         NIKON_PICTURE_CONTROL => "PictureControl",
         NIKON_WORLD_TIME => "WorldTime",
         NIKON_ISO_INFO => "ISOInfo",
-        NIKON_VIGNETTE_CONTROL => "VignetteControl", // 0x00B7 (also AF_INFO2)
+        NIKON_AF_INFO2 => "AFInfo2",
         NIKON_DISTORTION_CONTROL => "DistortionControl", // 0x00B8 (also FILE_INFO)
 
         _ => return format!("Nikon:Unknown-{:#06X}", tag_id),
