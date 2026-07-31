@@ -51,6 +51,12 @@ const OGG_FLAC_MARKER: u8 = 0x7F;
 /// FLAC metadata block type for Vorbis Comment
 const FLAC_METADATA_VORBIS_COMMENT: u8 = 4;
 
+/// Ogg Opus identification packet marker
+const OPUS_HEAD: &[u8] = b"OpusHead";
+
+/// Ogg Opus comment packet marker
+const OPUS_TAGS: &[u8] = b"OpusTags";
+
 /// OGG parser
 pub struct OggParser;
 
@@ -170,6 +176,18 @@ impl FormatParser for OggParser {
                         }
                         _ => {}
                     }
+                }
+                // Ogg Opus: the identification and comment packets are
+                // named outright rather than carrying a packet-type byte.
+                // Detection currently resolves every "OggS" file to OGG
+                // (the signature table matches before the Opus variant
+                // probe runs), so an Opus stream reaches this parser and
+                // has to be handled here rather than in the Opus parser.
+                else if page_body.len() >= 8 && &page_body[0..8] == OPUS_HEAD {
+                    parse_opus_head(&page_body[8..], &mut metadata);
+                } else if page_body.len() >= 8 && &page_body[0..8] == OPUS_TAGS {
+                    parse_vorbis_comments(&page_body[8..], &mut metadata)?;
+                    break; // comments are the last metadata packet
                 }
                 // OGG FLAC header: 0x7F "FLAC" version info + STREAMINFO
                 else if page_body.len() >= 13
@@ -394,6 +412,159 @@ fn parse_ogg_flac_header(data: &[u8], metadata: &mut MetadataMap) -> Result<()> 
     Ok(())
 }
 
+/// Parses the body of an `OpusHead` identification packet.
+///
+/// Layout after the 8-byte marker (ExifTool's `Opus::Header` table):
+/// version (int8u), channel count (int8u), pre-skip (int16u), input sample
+/// rate (int32u), output gain (int16u), channel mapping family (int8u).
+fn parse_opus_head(data: &[u8], metadata: &mut MetadataMap) {
+    if data.len() < 10 {
+        return;
+    }
+    let reader = EndianReader::little_endian(data);
+
+    if let Some(version) = reader.u8_at(0) {
+        metadata.insert(
+            "Opus:OpusVersion".to_string(),
+            TagValue::new_integer(i64::from(version)),
+        );
+    }
+    if let Some(channels) = reader.u8_at(1) {
+        metadata.insert(
+            "Opus:AudioChannels".to_string(),
+            TagValue::new_integer(i64::from(channels)),
+        );
+    }
+    if let Some(sample_rate) = reader.u32_at(4) {
+        metadata.insert(
+            "Opus:SampleRate".to_string(),
+            TagValue::new_integer(i64::from(sample_rate)),
+        );
+    }
+    if let Some(gain) = reader.u16_at(8) {
+        // ExifTool's ValueConv is 10 ** ($val/5120), i.e. the raw Q7.8 dB
+        // value converted to a linear gain factor.
+        let linear = 10f64.powf(f64::from(gain) / 5120.0);
+        metadata.insert("Opus:OutputGain".to_string(), TagValue::Float(linear));
+    }
+}
+
+/// Decodes a `METADATA_BLOCK_PICTURE` payload into ExifTool's
+/// `FLAC:Picture*` tags.
+///
+/// The block is the same structure a native FLAC PICTURE block uses: four
+/// big-endian int32 fields interleaved with two length-prefixed strings,
+/// then the image bytes. It arrives base64-encoded inside a Vorbis comment.
+fn parse_picture_block(data: &[u8], metadata: &mut MetadataMap) {
+    /// Reads a big-endian u32 and advances `pos`.
+    fn take_u32(data: &[u8], pos: &mut usize) -> Option<u32> {
+        let end = pos.checked_add(4)?;
+        if end > data.len() {
+            return None;
+        }
+        let value =
+            u32::from_be_bytes([data[*pos], data[*pos + 1], data[*pos + 2], data[*pos + 3]]);
+        *pos = end;
+        Some(value)
+    }
+
+    let mut pos = 0usize;
+    let Some(picture_type) = take_u32(data, &mut pos) else {
+        return;
+    };
+    metadata.insert(
+        "FLAC:PictureType".to_string(),
+        TagValue::new_string(picture_type_name(picture_type)),
+    );
+
+    // MIME type and description are int32u-length-prefixed strings.
+    let Some(mime_len) = take_u32(data, &mut pos) else {
+        return;
+    };
+    let Some(mime_end) = pos
+        .checked_add(mime_len as usize)
+        .filter(|e| *e <= data.len())
+    else {
+        return;
+    };
+    metadata.insert(
+        "FLAC:PictureMIMEType".to_string(),
+        TagValue::new_string(String::from_utf8_lossy(&data[pos..mime_end]).into_owned()),
+    );
+    pos = mime_end;
+
+    let Some(desc_len) = take_u32(data, &mut pos) else {
+        return;
+    };
+    let Some(desc_end) = pos
+        .checked_add(desc_len as usize)
+        .filter(|e| *e <= data.len())
+    else {
+        return;
+    };
+    metadata.insert(
+        "FLAC:PictureDescription".to_string(),
+        TagValue::new_string(String::from_utf8_lossy(&data[pos..desc_end]).into_owned()),
+    );
+    pos = desc_end;
+
+    let mut picture_len = 0u32;
+    for name in [
+        "FLAC:PictureWidth",
+        "FLAC:PictureHeight",
+        "FLAC:PictureBitsPerPixel",
+        "FLAC:PictureIndexedColors",
+        "FLAC:PictureLength",
+    ] {
+        let Some(value) = take_u32(data, &mut pos) else {
+            return;
+        };
+        picture_len = value;
+        metadata.insert(name.to_string(), TagValue::new_integer(i64::from(value)));
+    }
+
+    // The image is exactly PictureLength bytes (ExifTool's
+    // `Format => 'undef[$val{7}]'`), so anything past that is padding and
+    // must not be counted -- the reported byte count is a tag of its own.
+    let end = (pos + picture_len as usize).min(data.len());
+    if pos < end {
+        metadata.insert(
+            "FLAC:Picture".to_string(),
+            TagValue::Binary(data[pos..end].to_vec()),
+        );
+    }
+}
+
+/// ExifTool's shared picture-type PrintConv (ID3, ASF and FLAC all use it).
+fn picture_type_name(code: u32) -> String {
+    match code {
+        0 => "Other",
+        1 => "32x32 PNG Icon",
+        2 => "Other Icon",
+        3 => "Front Cover",
+        4 => "Back Cover",
+        5 => "Leaflet",
+        6 => "Media",
+        7 => "Lead Artist",
+        8 => "Artist",
+        9 => "Conductor",
+        10 => "Band",
+        11 => "Composer",
+        12 => "Lyricist",
+        13 => "Recording Studio or Location",
+        14 => "Recording Session",
+        15 => "Performance",
+        16 => "Capture from Movie or Video",
+        17 => "Bright(ly) Colored Fish",
+        18 => "Illustration",
+        19 => "Band Logo",
+        20 => "Publisher Logo",
+        // Unknown codes report themselves rather than borrowing a label.
+        other => return format!("Unknown ({})", other),
+    }
+    .to_string()
+}
+
 /// Simple base64 decoder for embedded binary data
 fn base64_decode(input: &str) -> std::result::Result<Vec<u8>, &'static str> {
     const DECODE_TABLE: [i8; 256] = {
@@ -587,7 +758,16 @@ fn parse_vorbis_comments(data: &[u8], metadata: &mut MetadataMap) -> Result<()> 
 
             // Handle binary data (like CoverArt which is base64-encoded)
             let upper_field = field_name.to_uppercase();
-            if upper_field == "COVERART" || upper_field == "METADATA_BLOCK_PICTURE" {
+            if upper_field == "METADATA_BLOCK_PICTURE" {
+                // ExifTool decodes this into the FLAC::Picture table rather
+                // than reporting one opaque blob, so the picture's type,
+                // MIME type, description and dimensions all become tags.
+                if let Ok(decoded) = base64_decode(field_value) {
+                    parse_picture_block(&decoded, metadata);
+                } else {
+                    metadata.insert(tag_name, TagValue::new_string(field_value.to_string()));
+                }
+            } else if upper_field == "COVERART" {
                 // Decode base64 to get actual size
                 if let Ok(decoded) = base64_decode(field_value) {
                     let size = decoded.len();
