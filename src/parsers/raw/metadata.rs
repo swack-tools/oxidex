@@ -251,6 +251,233 @@ fn format_cfa_pattern2(bytes: &[u8], value_count: u32) -> String {
         .join(" ")
 }
 
+/// Return the absolute offset of the TIFF payload in a Minolta MRW file.
+///
+/// MRW uses an MRM container made up of 4-byte block names followed by
+/// big-endian u32 block lengths. The `\0TTW` block contains a normal TIFF
+/// stream; all offsets in that stream and its Minolta MakerNote remain
+/// relative to the start of this TIFF payload.
+fn minolta_mrw_tiff_base(data: &[u8]) -> Option<usize> {
+    if data.get(..4)? != b"\0MRM" {
+        return None;
+    }
+
+    let mut block_offset = 8usize;
+    while block_offset.checked_add(8)? <= data.len() {
+        let block_name = data.get(block_offset..block_offset.checked_add(4)?)?;
+        let length_bytes: [u8; 4] = data
+            .get(block_offset.checked_add(4)?..block_offset.checked_add(8)?)?
+            .try_into()
+            .ok()?;
+        let payload_length = usize::try_from(u32::from_be_bytes(length_bytes)).ok()?;
+        let payload_offset = block_offset.checked_add(8)?;
+        let block_end = payload_offset.checked_add(payload_length)?;
+        data.get(payload_offset..block_end)?;
+
+        if block_name == b"\0TTW" {
+            return Some(payload_offset);
+        }
+        block_offset = block_end;
+    }
+    None
+}
+
+fn minolta_tiff_u16(data: &[u8], offset: usize, byte_order: ByteOrder) -> Option<u16> {
+    let bytes: [u8; 2] = data.get(offset..offset.checked_add(2)?)?.try_into().ok()?;
+    Some(match byte_order {
+        ByteOrder::LittleEndian => u16::from_le_bytes(bytes),
+        ByteOrder::BigEndian => u16::from_be_bytes(bytes),
+    })
+}
+
+fn minolta_tiff_u32(data: &[u8], offset: usize, byte_order: ByteOrder) -> Option<u32> {
+    let bytes: [u8; 4] = data.get(offset..offset.checked_add(4)?)?.try_into().ok()?;
+    Some(match byte_order {
+        ByteOrder::LittleEndian => u32::from_le_bytes(bytes),
+        ByteOrder::BigEndian => u32::from_be_bytes(bytes),
+    })
+}
+
+fn minolta_relative_offset(base: usize, relative: u32) -> Option<usize> {
+    base.checked_add(usize::try_from(relative).ok()?)
+}
+
+/// Find an entry in an IFD and return `(field_type, count, value_or_offset)`.
+fn minolta_ifd_entry(
+    data: &[u8],
+    ifd_offset: usize,
+    tag_id: u16,
+    byte_order: ByteOrder,
+) -> Option<(u16, u32, u32)> {
+    let entry_count = usize::from(minolta_tiff_u16(data, ifd_offset, byte_order)?);
+    let entries_offset = ifd_offset.checked_add(2)?;
+
+    for index in 0..entry_count {
+        let entry_offset = entries_offset.checked_add(index.checked_mul(12)?)?;
+        data.get(entry_offset..entry_offset.checked_add(12)?)?;
+        if minolta_tiff_u16(data, entry_offset, byte_order)? != tag_id {
+            continue;
+        }
+
+        let field_type =
+            minolta_tiff_u16(data, entry_offset.checked_add(2)?, byte_order)?;
+        let count = minolta_tiff_u32(data, entry_offset.checked_add(4)?, byte_order)?;
+        let value_or_offset =
+            minolta_tiff_u32(data, entry_offset.checked_add(8)?, byte_order)?;
+        return Some((field_type, count, value_or_offset));
+    }
+    None
+}
+
+fn minolta_setting_u32(
+    data: &[u8],
+    settings_offset: usize,
+    settings_count: usize,
+    index: usize,
+    byte_order: ByteOrder,
+) -> Option<u32> {
+    if index >= settings_count {
+        return None;
+    }
+    let relative_offset = index.checked_mul(4)?;
+    minolta_tiff_u32(
+        data,
+        settings_offset.checked_add(relative_offset)?,
+        byte_order,
+    )
+}
+
+/// Extract the requested Minolta Main and CameraSettings values from MRW.
+///
+/// The indices are from `Image::ExifTool::Minolta::CameraSettings`
+/// (`Format => int32u`, `FIRST_ENTRY => 0`) in Minolta.pm: Contrast=28,
+/// ColorMode=40, ColorFilter=41, Brightness=44 and DECPosition=50.
+/// Neighboring entries are IntervalMode=38, BWFilter=42,
+/// SpotFocusPointX=45 and SpotFocusPointY=46.
+fn extract_minolta_mrw_makernote_tags(
+    data: &[u8],
+    metadata: &mut MetadataMap,
+) -> Result<()> {
+    let Some(tiff_base) = minolta_mrw_tiff_base(data) else {
+        return Ok(());
+    };
+    let byte_order = match data.get(tiff_base..).and_then(|bytes| bytes.get(..2)) {
+        Some(b"II") => ByteOrder::LittleEndian,
+        Some(b"MM") => ByteOrder::BigEndian,
+        _ => return Ok(()),
+    };
+
+    let Some(first_ifd_field) = tiff_base.checked_add(4) else {
+        return Ok(());
+    };
+    let Some(first_ifd_relative) = minolta_tiff_u32(data, first_ifd_field, byte_order) else {
+        return Ok(());
+    };
+    let Some(ifd0_offset) = minolta_relative_offset(tiff_base, first_ifd_relative) else {
+        return Ok(());
+    };
+
+    // ExifIFDPointer is TIFF tag 0x8769.
+    let Some((_, _, exif_relative)) =
+        minolta_ifd_entry(data, ifd0_offset, 0x8769, byte_order)
+    else {
+        return Ok(());
+    };
+    let Some(exif_ifd_offset) = minolta_relative_offset(tiff_base, exif_relative) else {
+        return Ok(());
+    };
+
+    // MakerNote is EXIF tag 0x927c.
+    let Some((_, _, maker_relative)) =
+        minolta_ifd_entry(data, exif_ifd_offset, 0x927c, byte_order)
+    else {
+        return Ok(());
+    };
+    let Some(maker_ifd_offset) = minolta_relative_offset(tiff_base, maker_relative) else {
+        return Ok(());
+    };
+
+    // Minolta.pm Main tag 0x0040 is an int32u CompressedImageSize.
+    if let Some((4, 1, compressed_size)) =
+        minolta_ifd_entry(data, maker_ifd_offset, 0x0040, byte_order)
+    {
+        metadata.insert(
+            "MakerNotes:CompressedImageSize".to_string(),
+            TagValue::new_integer(i64::from(compressed_size)),
+        );
+    }
+
+    // Minolta.pm Main tag 0x0003 is the int32u CameraSettings array.
+    let Some((4, settings_count, settings_relative)) =
+        minolta_ifd_entry(data, maker_ifd_offset, 0x0003, byte_order)
+    else {
+        return Ok(());
+    };
+    let Some(settings_offset) = minolta_relative_offset(tiff_base, settings_relative) else {
+        return Ok(());
+    };
+    let Some(settings_count) = usize::try_from(settings_count).ok() else {
+        return Ok(());
+    };
+    let setting = |index| {
+        minolta_setting_u32(
+            data,
+            settings_offset,
+            settings_count,
+            index,
+            byte_order,
+        )
+    };
+
+    if let Some(value) = setting(28) {
+        metadata.insert(
+            "MakerNotes:Contrast".to_string(),
+            TagValue::new_integer(i64::from(value) - 3),
+        );
+    }
+    if let Some(value) = setting(40)
+        && let Some(printed) = match value {
+            0 => Some("Natural color"),
+            1 => Some("Black & White"),
+            2 => Some("Vivid color"),
+            3 => Some("Solarization"),
+            4 => Some("Adobe RGB"),
+            _ => None,
+        }
+    {
+        metadata.insert(
+            "MakerNotes:ColorMode".to_string(),
+            TagValue::new_string(printed.to_string()),
+        );
+    }
+    if let Some(value) = setting(41) {
+        metadata.insert(
+            "MakerNotes:ColorFilter".to_string(),
+            TagValue::new_integer(i64::from(value) - 3),
+        );
+    }
+    if let Some(value) = setting(44) {
+        metadata.insert(
+            "MakerNotes:Brightness".to_string(),
+            TagValue::new_string((f64::from(value) / 8.0 - 6.0).to_string()),
+        );
+    }
+    if let Some(value) = setting(50)
+        && let Some(printed) = match value {
+            0 => Some("Exposure"),
+            1 => Some("Filter"),
+            _ => None,
+        }
+    {
+        metadata.insert(
+            "MakerNotes:DECPosition".to_string(),
+            TagValue::new_string(printed.to_string()),
+        );
+    }
+
+    Ok(())
+}
+
 /// Parse metadata from camera raw file
 ///
 /// This is the main entry point for raw format metadata extraction.
@@ -330,7 +557,11 @@ pub fn parse_raw_metadata(data: &[u8], format: RawFormat) -> Result<MetadataMap>
         RawFormat::SigmaX3F => parse_sigma_x3f(data, format),
 
         // Minolta MRW uses proprietary MRM format
-        RawFormat::MinoltaMRW => parse_minolta_mrw(data, format),
+        RawFormat::MinoltaMRW => {
+            let mut metadata = parse_minolta_mrw(data, format)?;
+            extract_minolta_mrw_makernote_tags(data, &mut metadata)?;
+            Ok(metadata)
+        }
 
         // Canon CRW is an older proprietary format
         RawFormat::CanonCRW => parse_canon_crw(data, format),
