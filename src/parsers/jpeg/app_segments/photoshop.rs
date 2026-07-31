@@ -1,8 +1,11 @@
 //! APP13 Photoshop Image Resource Block (IRB) parser
 //!
-//! JPEG APP13 segments (marker 0xFFED) can contain Adobe Photoshop metadata
-//! stored in Image Resource Blocks (8BIM format). This module extends the
-//! existing IPTC parser to extract additional Photoshop-specific tags.
+//! JPEG APP13 segments (marker 0xFFED) carry Adobe Photoshop metadata as a
+//! run of Image Resource Blocks ("8BIM"). This module extracts the resources
+//! ExifTool reports by default from `%Image::ExifTool::Photoshop::Main`;
+//! resource 0x0404 (IPTCData) is left to the dedicated IPTC parser, and every
+//! resource ExifTool marks `Unknown => 1` is skipped so oxidex does not emit
+//! tags ExifTool hides.
 //!
 //! # Photoshop IRB Format
 //!
@@ -16,7 +19,19 @@
 //! - Resource Name: Pascal string (1 byte length + data), padded to even length
 //! - Data Size: 4 bytes (big-endian)
 //! - Data: variable length, padded to even length
+//!
+//! # Binary sub-directories
+//!
+//! Several resources are `ProcessBinaryData` tables. In those tables the
+//! numeric keys are INDICES in units of the table's default `FORMAT`, not
+//! byte offsets: `Photoshop::Resolution` declares `FORMAT => 'int16u'` (so
+//! index 2 is byte 4) and `Photoshop::JPEG_Quality` declares
+//! `FORMAT => 'int16s'`, while `SliceInfo`, `VersionInfo` and
+//! `PrintScaleInfo` have no `FORMAT` and therefore default to `int8u`, where
+//! index and byte offset coincide. `var_ustr32` entries shift every later
+//! index by the byte length of the decoded string (ExifTool.pm:10012).
 
+use super::perl_number;
 use crate::core::{MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use nom::{
@@ -29,21 +44,18 @@ use nom::{
 const PHOTOSHOP_SIGNATURE: &[u8] = b"Photoshop 3.0\0";
 const EIGHTBIM_SIGNATURE: &[u8] = b"8BIM";
 
-// Resource IDs for Photoshop tags
+// Resource IDs handled here (ids from Photoshop.pm's %Photoshop::Main)
+const RES_JPEG_QUALITY: u16 = 0x0406;
 const RES_RESOLUTION_INFO: u16 = 0x03ED;
-const RES_ALPHA_CHANNELS: u16 = 0x03EE;
-const RES_CAPTION: u16 = 0x03F0;
-const RES_BORDER_INFO: u16 = 0x03F1;
-const RES_BACKGROUND_COLOR: u16 = 0x03F2;
 const RES_COPYRIGHT_FLAG: u16 = 0x040A;
 const RES_URL: u16 = 0x040B;
-const RES_THUMBNAIL: u16 = 0x040C;
 const RES_GLOBAL_ANGLE: u16 = 0x040D;
 const RES_GLOBAL_ALTITUDE: u16 = 0x0419;
-const RES_PRINT_SCALE: u16 = 0x0426;
-const RES_PRINT_INFO: u16 = 0x042F;
-const RES_PRINT_STYLE: u16 = 0x043B;
-const RES_PRINT_FLAGS_INFO: u16 = 0x2710;
+const RES_SLICE_INFO: u16 = 0x041A;
+const RES_URL_LIST: u16 = 0x041E;
+const RES_VERSION_INFO: u16 = 0x0421;
+const RES_IPTC_DIGEST: u16 = 0x0425;
+const RES_PRINT_SCALE_INFO: u16 = 0x0426;
 
 /// Represents an Adobe Photoshop Image Resource Block
 #[derive(Debug, Clone, PartialEq)]
@@ -51,6 +63,7 @@ struct ImageResourceBlock<'a> {
     /// Resource ID (e.g., 0x03ED for Resolution Info)
     id: u16,
     /// Resource name (Pascal string)
+    #[allow(dead_code)]
     name: &'a [u8],
     /// Resource data payload
     data: &'a [u8],
@@ -99,195 +112,213 @@ fn parse_image_resource_block(input: &[u8]) -> IResult<&[u8], ImageResourceBlock
     Ok((input, ImageResourceBlock { id, name, data }))
 }
 
-/// Parse ResolutionInfo structure (resource 0x03ED)
-fn parse_resolution_info(data: &[u8]) -> Result<MetadataMap> {
-    let mut metadata = MetadataMap::new();
+/// Big-endian readers over a resource payload; `None` when out of range so a
+/// truncated resource drops its remaining tags instead of inventing values.
+fn be_u16_at(data: &[u8], off: usize) -> Option<u16> {
+    Some(u16::from_be_bytes(data.get(off..off + 2)?.try_into().ok()?))
+}
 
-    if data.len() < 16 {
-        return Ok(metadata);
-    }
+fn be_i16_at(data: &[u8], off: usize) -> Option<i16> {
+    be_u16_at(data, off).map(|v| v as i16)
+}
 
-    // Resolution is stored as fixed-point 16.16 (4 bytes each)
-    let h_res_raw = i32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-    let _h_res = h_res_raw as f64 / 65536.0;
+fn be_u32_at(data: &[u8], off: usize) -> Option<u32> {
+    Some(u32::from_be_bytes(data.get(off..off + 4)?.try_into().ok()?))
+}
 
-    let h_res_unit = u16::from_be_bytes([data[4], data[5]]);
-    let width_unit = u16::from_be_bytes([data[6], data[7]]);
+fn be_f32_at(data: &[u8], off: usize) -> Option<f32> {
+    be_u32_at(data, off).map(f32::from_bits)
+}
 
-    let v_res_raw = i32::from_be_bytes([data[8], data[9], data[10], data[11]]);
-    let _v_res = v_res_raw as f64 / 65536.0;
+/// Formats a PrintConv hash miss the way ExifTool does, so an unrecognised
+/// code reports itself instead of being rounded to a neighbouring label.
+fn unknown_code(value: i64) -> TagValue {
+    TagValue::String(format!("Unknown ({})", value))
+}
 
-    let _v_res_unit = u16::from_be_bytes([data[12], data[13]]);
-    let height_unit = u16::from_be_bytes([data[14], data[15]]);
-
-    metadata.insert(
-        "Photoshop:XResolution",
-        TagValue::Rational {
-            numerator: h_res_raw,
-            denominator: 65536,
-        },
-    );
-    metadata.insert(
-        "Photoshop:YResolution",
-        TagValue::Rational {
-            numerator: v_res_raw,
-            denominator: 65536,
-        },
-    );
-
-    // Resolution unit: 1=pixels/inch, 2=pixels/cm
-    let res_unit_str = match h_res_unit {
-        1 => "inches",
-        2 => "cm",
-        _ => "Unknown",
+/// Reads a `var_ustr32` value at `offset`: an int32u character count followed
+/// by that many UTF-16BE code units.
+///
+/// Returns the decoded string and the byte length of the character data,
+/// which is what ExifTool adds to `$varSize` to shift every later index.
+fn read_var_ustr32(data: &[u8], offset: usize) -> Option<(String, usize)> {
+    let chars = be_u32_at(data, offset)? as usize;
+    let byte_len = chars.checked_mul(2)?;
+    let start = offset + 4;
+    let bytes = data.get(start..start.checked_add(byte_len)?)?;
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|c| u16::from_be_bytes([c[0], c[1]]))
+        .collect();
+    let decoded = String::from_utf16_lossy(&units);
+    // ExifTool truncates the decoded string at its first NUL.
+    let decoded = match decoded.split_once('\0') {
+        Some((head, _)) => head.to_string(),
+        None => decoded,
     };
-    metadata.insert(
-        "Photoshop:ResolutionUnit",
-        TagValue::String(res_unit_str.to_string()),
-    );
+    Some((decoded, byte_len))
+}
 
-    // Width/Height unit: 1=inches, 2=cm, 3=points, 4=picas, 5=columns
-    let width_unit_str = match width_unit {
-        1 => "inches",
-        2 => "cm",
-        3 => "points",
-        4 => "picas",
-        5 => "columns",
-        _ => "Unknown",
+/// `%Photoshop::Resolution` (resource 0x03ED), `FORMAT => 'int16u'`.
+///
+/// Index 0 -> byte 0 (XResolution, int32u), index 2 -> byte 4
+/// (DisplayedUnitsX), index 4 -> byte 8 (YResolution), index 6 -> byte 12
+/// (DisplayedUnitsY).
+fn parse_resolution_info(data: &[u8], metadata: &mut MetadataMap) {
+    // ValueConv '$val / 0x10000', PrintConv 'int($val * 100 + 0.5) / 100'
+    let resolution = |raw: u32| -> TagValue {
+        let value = raw as f64 / 65536.0;
+        TagValue::String(perl_number((value * 100.0 + 0.5).trunc() / 100.0))
     };
-    metadata.insert(
-        "Photoshop:WidthUnit",
-        TagValue::String(width_unit_str.to_string()),
-    );
-
-    let height_unit_str = match height_unit {
-        1 => "inches",
-        2 => "cm",
-        3 => "points",
-        4 => "picas",
-        5 => "columns",
-        _ => "Unknown",
+    let displayed_units = |raw: u16| -> TagValue {
+        match raw {
+            1 => TagValue::String("inches".to_string()),
+            2 => TagValue::String("cm".to_string()),
+            other => unknown_code(other as i64),
+        }
     };
-    metadata.insert(
-        "Photoshop:HeightUnit",
-        TagValue::String(height_unit_str.to_string()),
-    );
 
-    Ok(metadata)
-}
-
-/// Parse GlobalAngle (resource 0x040D)
-fn parse_global_angle(data: &[u8]) -> Result<i32> {
-    if data.len() < 4 {
-        return Err(ExifToolError::parse_error("GlobalAngle data too short"));
+    if let Some(raw) = be_u32_at(data, 0) {
+        metadata.insert("Photoshop:XResolution", resolution(raw));
     }
-    Ok(i32::from_be_bytes([data[0], data[1], data[2], data[3]]))
-}
-
-/// Parse GlobalAltitude (resource 0x0419)
-fn parse_global_altitude(data: &[u8]) -> Result<i32> {
-    if data.len() < 4 {
-        return Err(ExifToolError::parse_error("GlobalAltitude data too short"));
+    if let Some(raw) = be_u16_at(data, 4) {
+        metadata.insert("Photoshop:DisplayedUnitsX", displayed_units(raw));
     }
-    Ok(i32::from_be_bytes([data[0], data[1], data[2], data[3]]))
-}
-
-/// Parse CopyrightFlag (resource 0x040A)
-fn parse_copyright_flag(data: &[u8]) -> Result<bool> {
-    if data.is_empty() {
-        return Err(ExifToolError::parse_error("CopyrightFlag data too short"));
+    if let Some(raw) = be_u32_at(data, 8) {
+        metadata.insert("Photoshop:YResolution", resolution(raw));
     }
-    Ok(data[0] != 0)
-}
-
-/// Parse URL string (resource 0x040B)
-fn parse_url(data: &[u8]) -> Result<String> {
-    std::str::from_utf8(data)
-        .map(|s| s.trim_end_matches('\0').to_string())
-        .map_err(|_| ExifToolError::parse_error("Invalid UTF-8 in URL"))
-}
-
-/// Parse caption/description string (resource 0x03F0)
-fn parse_caption(data: &[u8]) -> Result<String> {
-    // Caption is stored as a Pascal string
-    if data.is_empty() {
-        return Ok(String::new());
+    if let Some(raw) = be_u16_at(data, 12) {
+        metadata.insert("Photoshop:DisplayedUnitsY", displayed_units(raw));
     }
-
-    let length = data[0] as usize;
-    if length + 1 > data.len() {
-        return Ok(String::new());
-    }
-
-    std::str::from_utf8(&data[1..=length])
-        .map(|s| s.to_string())
-        .map_err(|_| ExifToolError::parse_error("Invalid UTF-8 in caption"))
 }
 
-/// Parse PrintStyle descriptor (resource 0x043B)
-fn parse_print_style(data: &[u8]) -> Result<MetadataMap> {
-    let mut metadata = MetadataMap::new();
-
-    // PrintStyle is a descriptor structure - simplified parsing
-    // For now, just note its presence
-    if !data.is_empty() {
+/// `%Photoshop::PrintScaleInfo` (resource 0x0426); no `FORMAT`, so indices
+/// are byte offsets.
+fn parse_print_scale_info(data: &[u8], metadata: &mut MetadataMap) {
+    if let Some(style) = be_u16_at(data, 0) {
+        let value = match style {
+            0 => TagValue::String("Centered".to_string()),
+            1 => TagValue::String("Size to Fit".to_string()),
+            2 => TagValue::String("User Defined".to_string()),
+            other => unknown_code(other as i64),
+        };
+        metadata.insert("Photoshop:PrintStyle", value);
+    }
+    if let (Some(x), Some(y)) = (be_f32_at(data, 2), be_f32_at(data, 6)) {
         metadata.insert(
-            "Photoshop:PrintStylePresent",
-            TagValue::String("Yes".to_string()),
+            "Photoshop:PrintPosition",
+            TagValue::String(format!(
+                "{} {}",
+                perl_number(x as f64),
+                perl_number(y as f64)
+            )),
         );
     }
-
-    Ok(metadata)
+    if let Some(scale) = be_f32_at(data, 10) {
+        metadata.insert(
+            "Photoshop:PrintScale",
+            TagValue::String(perl_number(scale as f64)),
+        );
+    }
 }
 
-/// Parse PrintFlags (resource 0x2710)
-fn parse_print_flags(data: &[u8]) -> Result<MetadataMap> {
-    let mut metadata = MetadataMap::new();
-
-    if data.len() >= 2 {
-        let flags = u16::from_be_bytes([data[0], data[1]]);
-        metadata.insert("Photoshop:PrintFlags", TagValue::Integer(flags as i64));
-
-        // Parse individual flag bits
-        if flags & 0x0001 != 0 {
-            metadata.insert(
-                "Photoshop:PrintLabels",
-                TagValue::String("True".to_string()),
-            );
-        }
-        if flags & 0x0002 != 0 {
-            metadata.insert(
-                "Photoshop:PrintCropMarks",
-                TagValue::String("True".to_string()),
-            );
-        }
-        if flags & 0x0004 != 0 {
-            metadata.insert(
-                "Photoshop:PrintColorBars",
-                TagValue::String("True".to_string()),
-            );
-        }
-        if flags & 0x0008 != 0 {
-            metadata.insert(
-                "Photoshop:PrintRegistrationMarks",
-                TagValue::String("True".to_string()),
-            );
-        }
-        if flags & 0x0010 != 0 {
-            metadata.insert(
-                "Photoshop:PrintNegative",
-                TagValue::String("True".to_string()),
-            );
-        }
+/// `%Photoshop::SliceInfo` (resource 0x041A); no `FORMAT`, so indices are
+/// byte offsets, and NumSlices sits after the variable-length group name.
+fn parse_slice_info(data: &[u8], metadata: &mut MetadataMap) {
+    let mut var_size = 0usize;
+    if let Some((name, byte_len)) = read_var_ustr32(data, 20) {
+        metadata.insert("Photoshop:SlicesGroupName", TagValue::String(name));
+        var_size = byte_len;
     }
+    if let Some(count) = be_u32_at(data, 24 + var_size) {
+        metadata.insert("Photoshop:NumSlices", TagValue::Integer(count as i64));
+    }
+}
 
-    Ok(metadata)
+/// `%Photoshop::VersionInfo` (resource 0x0421); no `FORMAT`, so indices are
+/// byte offsets, and ReaderName sits after the variable-length WriterName.
+fn parse_version_info(data: &[u8], metadata: &mut MetadataMap) {
+    if let Some(&flag) = data.get(4) {
+        let value = match flag {
+            0 => TagValue::String("No".to_string()),
+            1 => TagValue::String("Yes".to_string()),
+            other => unknown_code(other as i64),
+        };
+        metadata.insert("Photoshop:HasRealMergedData", value);
+    }
+    let mut var_size = 0usize;
+    if let Some((writer, byte_len)) = read_var_ustr32(data, 5) {
+        metadata.insert("Photoshop:WriterName", TagValue::String(writer));
+        var_size = byte_len;
+    }
+    if let Some((reader, _)) = read_var_ustr32(data, 9 + var_size) {
+        metadata.insert("Photoshop:ReaderName", TagValue::String(reader));
+    }
+}
+
+/// `%Photoshop::JPEG_Quality` (resource 0x0406), `FORMAT => 'int16s'`.
+///
+/// Index 0 -> byte 0, index 1 -> byte 2, index 2 -> byte 4.
+fn parse_jpeg_quality(data: &[u8], metadata: &mut MetadataMap) {
+    if let Some(quality) = be_i16_at(data, 0) {
+        // PrintConv => '$val + 4'
+        metadata.insert(
+            "Photoshop:PhotoshopQuality",
+            TagValue::Integer(quality as i64 + 4),
+        );
+    }
+    let Some(format) = be_i16_at(data, 2) else {
+        return;
+    };
+    let format_value = match format {
+        0x0000 => TagValue::String("Standard".to_string()),
+        0x0001 => TagValue::String("Optimized".to_string()),
+        0x0101 => TagValue::String("Progressive".to_string()),
+        other => unknown_code(other as i64),
+    };
+    metadata.insert("Photoshop:PhotoshopFormat", format_value);
+
+    // ProgressiveScans has Condition '$$self{PhotoshopFormat} == 0x0101'
+    if format != 0x0101 {
+        return;
+    }
+    if let Some(scans) = be_i16_at(data, 4) {
+        let value = match scans {
+            1 => TagValue::String("3 Scans".to_string()),
+            2 => TagValue::String("4 Scans".to_string()),
+            3 => TagValue::String("5 Scans".to_string()),
+            other => unknown_code(other as i64),
+        };
+        metadata.insert("Photoshop:ProgressiveScans", value);
+    }
+}
+
+/// Resource 0x041E: an int32u entry count, then per entry a skipped word and
+/// ID followed by a `var_ustr32` URL.
+///
+/// ExifTool declares this `List => 1`; oxidex joins the entries with a space
+/// (an empty list becomes an empty string), matching how the rest of the
+/// codebase renders ExifTool list values.
+fn parse_url_list(data: &[u8]) -> Option<TagValue> {
+    let count = be_u32_at(data, 0)?;
+    let mut urls: Vec<String> = Vec::new();
+    let mut pos = 4usize;
+    for _ in 0..count {
+        pos += 8; // skip the word and ID preceding each URL
+        let Some((url, byte_len)) = read_var_ustr32(data, pos) else {
+            break;
+        };
+        urls.push(url);
+        pos += 4 + byte_len;
+    }
+    Some(TagValue::String(urls.join(" ")))
 }
 
 /// Extracts Photoshop metadata from APP13 segment data.
 ///
 /// This function parses Photoshop Image Resource Blocks (8BIM) from APP13
-/// segments and extracts various Photoshop-specific metadata tags.
+/// segments and extracts the Photoshop-specific tags ExifTool reports by
+/// default. IPTC (resource 0x0404) is handled by the IPTC parser instead.
 ///
 /// # Parameters
 ///
@@ -299,9 +330,7 @@ fn parse_print_flags(data: &[u8]) -> Result<MetadataMap> {
 ///
 /// # Errors
 ///
-/// Returns `ParseError` if:
-/// - Data doesn't start with Photoshop signature
-/// - 8BIM blocks are malformed
+/// Returns `ParseError` if the data doesn't start with the Photoshop signature.
 pub fn parse_photoshop_irb(data: &[u8]) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
 
@@ -320,104 +349,74 @@ pub fn parse_photoshop_irb(data: &[u8]) -> Result<MetadataMap> {
             break;
         }
 
-        match parse_image_resource_block(current) {
-            Ok((remaining, block)) => {
-                // Parse specific resource types
-                match block.id {
-                    RES_RESOLUTION_INFO => {
-                        if let Ok(res_metadata) = parse_resolution_info(block.data) {
-                            // TODO: extend not available, iterate instead
-                            for (k, v) in res_metadata.iter() {
-                                metadata.insert(k.clone(), v.clone());
-                            }
-                        }
-                    }
-                    RES_COPYRIGHT_FLAG => {
-                        if let Ok(flag) = parse_copyright_flag(block.data) {
-                            metadata.insert(
-                                "Photoshop:CopyrightFlag",
-                                TagValue::String(if flag { "True" } else { "False" }.to_string()),
-                            );
-                        }
-                    }
-                    RES_URL => {
-                        if let Ok(url) = parse_url(block.data) {
-                            metadata.insert("Photoshop:URL", TagValue::String(url));
-                        }
-                    }
-                    RES_CAPTION => {
-                        if let Ok(caption) = parse_caption(block.data)
-                            && !caption.is_empty()
-                        {
-                            metadata.insert("Photoshop:Caption", TagValue::String(caption));
-                        }
-                    }
-                    RES_GLOBAL_ANGLE => {
-                        if let Ok(angle) = parse_global_angle(block.data) {
-                            metadata
-                                .insert("Photoshop:GlobalAngle", TagValue::Integer(angle as i64));
-                        }
-                    }
-                    RES_GLOBAL_ALTITUDE => {
-                        if let Ok(altitude) = parse_global_altitude(block.data) {
-                            metadata.insert(
-                                "Photoshop:GlobalAltitude",
-                                TagValue::Integer(altitude as i64),
-                            );
-                        }
-                    }
-                    RES_PRINT_STYLE => {
-                        if let Ok(style_metadata) = parse_print_style(block.data) {
-                            // TODO: extend not available, iterate instead
-                            for (k, v) in style_metadata.iter() {
-                                metadata.insert(k.clone(), v.clone());
-                            }
-                        }
-                    }
-                    RES_PRINT_FLAGS_INFO => {
-                        if let Ok(flags_metadata) = parse_print_flags(block.data) {
-                            // TODO: extend not available, iterate instead
-                            for (k, v) in flags_metadata.iter() {
-                                metadata.insert(k.clone(), v.clone());
-                            }
-                        }
-                    }
-                    RES_THUMBNAIL => {
-                        // Just note presence, don't extract full thumbnail
-                        metadata.insert(
-                            "Photoshop:ThumbnailPresent",
-                            TagValue::String("Yes".to_string()),
-                        );
-                    }
-                    RES_ALPHA_CHANNELS => {
-                        if !block.data.is_empty() {
-                            metadata.insert(
-                                "Photoshop:AlphaChannelsPresent",
-                                TagValue::String("Yes".to_string()),
-                            );
-                        }
-                    }
-                    RES_PRINT_INFO => {
-                        if !block.data.is_empty() {
-                            metadata.insert(
-                                "Photoshop:PrintInfoPresent",
-                                TagValue::String("Yes".to_string()),
-                            );
-                        }
-                    }
-                    _ => {
-                        // For other resource types, just note their presence
-                        // This helps with debugging and completeness
-                    }
-                }
+        let Ok((remaining, block)) = parse_image_resource_block(current) else {
+            // Failed to parse block, stop processing
+            break;
+        };
 
-                current = remaining;
+        match block.id {
+            RES_RESOLUTION_INFO => parse_resolution_info(block.data, &mut metadata),
+            RES_JPEG_QUALITY => parse_jpeg_quality(block.data, &mut metadata),
+            RES_SLICE_INFO => parse_slice_info(block.data, &mut metadata),
+            RES_VERSION_INFO => parse_version_info(block.data, &mut metadata),
+            RES_PRINT_SCALE_INFO => parse_print_scale_info(block.data, &mut metadata),
+            RES_COPYRIGHT_FLAG => {
+                if let Some(&flag) = block.data.first() {
+                    let value = match flag {
+                        0 => TagValue::String("False".to_string()),
+                        1 => TagValue::String("True".to_string()),
+                        other => unknown_code(other as i64),
+                    };
+                    metadata.insert("Photoshop:CopyrightFlag", value);
+                }
             }
-            Err(_) => {
-                // Failed to parse block, stop processing
-                break;
+            RES_URL => {
+                // Writable => 'string': only the terminating NUL is dropped,
+                // the padding spaces this resource often carries are kept.
+                let text = String::from_utf8_lossy(block.data);
+                metadata.insert(
+                    "Photoshop:URL",
+                    TagValue::String(text.trim_end_matches('\0').to_string()),
+                );
             }
+            RES_URL_LIST => {
+                if let Some(value) = parse_url_list(block.data) {
+                    metadata.insert("Photoshop:URL_List", value);
+                }
+            }
+            RES_GLOBAL_ANGLE => {
+                if let Some(angle) = be_u32_at(block.data, 0) {
+                    metadata.insert("Photoshop:GlobalAngle", TagValue::Integer(angle as i64));
+                }
+            }
+            RES_GLOBAL_ALTITUDE => {
+                if let Some(altitude) = be_u32_at(block.data, 0) {
+                    metadata.insert(
+                        "Photoshop:GlobalAltitude",
+                        TagValue::Integer(altitude as i64),
+                    );
+                }
+            }
+            RES_IPTC_DIGEST => {
+                // ValueConv => 'unpack("H*", $val)'
+                metadata.insert(
+                    "Photoshop:IPTCDigest",
+                    TagValue::String(
+                        block
+                            .data
+                            .iter()
+                            .map(|b| format!("{:02x}", b))
+                            .collect::<String>(),
+                    ),
+                );
+            }
+            // Resource 0x0404 (IPTCData) is parsed by the IPTC parser, and
+            // every other resource is either `Unknown => 1` in Photoshop.pm
+            // or not yet ported; either way ExifTool shows nothing for it.
+            _ => {}
         }
+
+        current = remaining;
     }
 
     Ok(metadata)
@@ -427,105 +426,217 @@ pub fn parse_photoshop_irb(data: &[u8]) -> Result<MetadataMap> {
 mod tests {
     use super::*;
 
+    /// Builds one 8BIM resource block with an empty resource name.
+    fn irb_block(id: u16, data: &[u8]) -> Vec<u8> {
+        let mut block = b"8BIM".to_vec();
+        block.extend_from_slice(&id.to_be_bytes());
+        block.push(0x00); // empty Pascal-string name
+        block.push(0x00); // pad to even length
+        block.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        block.extend_from_slice(data);
+        if data.len() % 2 == 1 {
+            block.push(0x00);
+        }
+        block
+    }
+
+    fn irb_segment(blocks: &[Vec<u8>]) -> Vec<u8> {
+        let mut data = PHOTOSHOP_SIGNATURE.to_vec();
+        for block in blocks {
+            data.extend_from_slice(block);
+        }
+        data
+    }
+
+    /// The resources carried by combined-samples/ExifTool.jpg, byte for byte.
+    /// Every expected value below comes from
+    /// `exiftool -json -G combined-samples/ExifTool.jpg` (ExifTool 13.55).
+    fn exiftool_jpg_segment() -> Vec<u8> {
+        let mut version_info = vec![0x00, 0x00, 0x00, 0x01, 0x01];
+        version_info.extend_from_slice(&15u32.to_be_bytes());
+        for c in "Adobe Photoshop".encode_utf16() {
+            version_info.extend_from_slice(&c.to_be_bytes());
+        }
+        version_info.extend_from_slice(&19u32.to_be_bytes());
+        for c in "Adobe Photoshop 7.0".encode_utf16() {
+            version_info.extend_from_slice(&c.to_be_bytes());
+        }
+        version_info.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+
+        let mut slice_info = vec![0x00, 0x00, 0x00, 0x06];
+        slice_info.extend_from_slice(&[0u8; 16]);
+        slice_info.extend_from_slice(&4u32.to_be_bytes());
+        for c in "IPTC".encode_utf16() {
+            slice_info.extend_from_slice(&c.to_be_bytes());
+        }
+        slice_info.extend_from_slice(&1u32.to_be_bytes());
+
+        irb_segment(&[
+            irb_block(
+                0x0425,
+                &[
+                    0x05, 0xad, 0x17, 0x70, 0xb1, 0xa9, 0x5f, 0x1f, 0x97, 0x88, 0xac, 0x99, 0x5f,
+                    0xa6, 0x47, 0xda,
+                ],
+            ),
+            irb_block(
+                0x03ed,
+                &[
+                    0x00, 0x48, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x48, 0x00, 0x00, 0x00,
+                    0x01, 0x00, 0x01,
+                ],
+            ),
+            irb_block(
+                0x0426,
+                &[
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0x80, 0x00,
+                    0x00,
+                ],
+            ),
+            irb_block(0x040d, &[0x00, 0x00, 0x00, 0x1e]),
+            irb_block(0x0419, &[0x00, 0x00, 0x00, 0x1e]),
+            irb_block(0x040a, &[0x00]),
+            irb_block(0x040b, b"https://exiftool.org/                    "),
+            irb_block(0x041e, &[0x00, 0x00, 0x00, 0x00]),
+            irb_block(0x041a, &slice_info),
+            irb_block(0x0421, &version_info),
+            irb_block(0x0406, &[0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x01]),
+        ])
+    }
+
+    #[test]
+    fn test_exiftool_jpg_resources_match_exiftool() {
+        let m = parse_photoshop_irb(&exiftool_jpg_segment()).unwrap();
+
+        assert_eq!(
+            m.get_string("Photoshop:IPTCDigest"),
+            Some("05ad1770b1a95f1f9788ac995fa647da")
+        );
+        assert_eq!(m.get_string("Photoshop:XResolution"), Some("72"));
+        assert_eq!(m.get_string("Photoshop:DisplayedUnitsX"), Some("inches"));
+        assert_eq!(m.get_string("Photoshop:YResolution"), Some("72"));
+        assert_eq!(m.get_string("Photoshop:DisplayedUnitsY"), Some("inches"));
+        assert_eq!(m.get_string("Photoshop:PrintStyle"), Some("Centered"));
+        assert_eq!(m.get_string("Photoshop:PrintPosition"), Some("0 0"));
+        assert_eq!(m.get_string("Photoshop:PrintScale"), Some("1"));
+        assert_eq!(m.get_integer("Photoshop:GlobalAngle"), Some(30));
+        assert_eq!(m.get_integer("Photoshop:GlobalAltitude"), Some(30));
+        assert_eq!(m.get_string("Photoshop:CopyrightFlag"), Some("False"));
+        assert_eq!(
+            m.get_string("Photoshop:URL"),
+            Some("https://exiftool.org/                    ")
+        );
+        assert_eq!(m.get_string("Photoshop:URL_List"), Some(""));
+        assert_eq!(m.get_string("Photoshop:SlicesGroupName"), Some("IPTC"));
+        assert_eq!(m.get_integer("Photoshop:NumSlices"), Some(1));
+        assert_eq!(m.get_string("Photoshop:HasRealMergedData"), Some("Yes"));
+        assert_eq!(
+            m.get_string("Photoshop:WriterName"),
+            Some("Adobe Photoshop")
+        );
+        assert_eq!(
+            m.get_string("Photoshop:ReaderName"),
+            Some("Adobe Photoshop 7.0")
+        );
+        assert_eq!(m.get_integer("Photoshop:PhotoshopQuality"), Some(7));
+        assert_eq!(m.get_string("Photoshop:PhotoshopFormat"), Some("Standard"));
+        // ProgressiveScans is conditional on PhotoshopFormat == 0x0101
+        assert!(m.get("Photoshop:ProgressiveScans").is_none());
+        assert_eq!(m.len(), 20);
+    }
+
+    #[test]
+    fn test_hidden_and_iptc_resources_emit_nothing() {
+        // 0x0404 belongs to the IPTC parser; 0x03f3/0x0408/0x2710 are all
+        // `Unknown => 1` in Photoshop.pm, so ExifTool hides them by default.
+        let segment = irb_segment(&[
+            irb_block(0x0404, &[0x1c, 0x02, 0x00, 0x00, 0x02]),
+            irb_block(0x03f3, &[0x00; 9]),
+            irb_block(0x0408, &[0x00; 16]),
+            irb_block(0x2710, &[0x00; 10]),
+            irb_block(0x040d, &[0x00, 0x00, 0x00, 0x1e]),
+        ]);
+        let m = parse_photoshop_irb(&segment).unwrap();
+        assert_eq!(m.get_integer("Photoshop:GlobalAngle"), Some(30));
+        assert_eq!(m.len(), 1);
+    }
+
+    #[test]
+    fn test_progressive_scans_only_when_format_is_progressive() {
+        let segment = irb_segment(&[irb_block(
+            0x0406,
+            &[0x00, 0x08, 0x01, 0x01, 0x00, 0x02, 0x00],
+        )]);
+        let m = parse_photoshop_irb(&segment).unwrap();
+        assert_eq!(m.get_integer("Photoshop:PhotoshopQuality"), Some(12));
+        assert_eq!(
+            m.get_string("Photoshop:PhotoshopFormat"),
+            Some("Progressive")
+        );
+        assert_eq!(m.get_string("Photoshop:ProgressiveScans"), Some("4 Scans"));
+    }
+
+    #[test]
+    fn test_unknown_enum_codes_report_themselves() {
+        let segment = irb_segment(&[
+            irb_block(0x040a, &[0x07]),
+            irb_block(
+                0x0426,
+                &[
+                    0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00,
+                ],
+            ),
+            irb_block(
+                0x03ed,
+                &[
+                    0x00, 0x48, 0x00, 0x00, 0x00, 0x09, 0x00, 0x01, 0x00, 0x48, 0x00, 0x00, 0x00,
+                    0x09, 0x00, 0x01,
+                ],
+            ),
+        ]);
+        let m = parse_photoshop_irb(&segment).unwrap();
+        assert_eq!(m.get_string("Photoshop:CopyrightFlag"), Some("Unknown (7)"));
+        assert_eq!(m.get_string("Photoshop:PrintStyle"), Some("Unknown (9)"));
+        assert_eq!(
+            m.get_string("Photoshop:DisplayedUnitsX"),
+            Some("Unknown (9)")
+        );
+    }
+
+    #[test]
+    fn test_url_list_with_entries() {
+        let mut data = 2u32.to_be_bytes().to_vec();
+        for url in ["ab", "cd"] {
+            data.extend_from_slice(&[0x00; 8]); // skipped word and ID
+            data.extend_from_slice(&(url.len() as u32).to_be_bytes());
+            for c in url.encode_utf16() {
+                data.extend_from_slice(&c.to_be_bytes());
+            }
+        }
+        let m = parse_photoshop_irb(&irb_segment(&[irb_block(0x041e, &data)])).unwrap();
+        assert_eq!(m.get_string("Photoshop:URL_List"), Some("ab cd"));
+    }
+
+    #[test]
+    fn test_truncated_resource_drops_later_tags() {
+        // ResolutionInfo cut short after XResolution: the remaining indices
+        // are absent rather than defaulted.
+        let segment = irb_segment(&[irb_block(0x03ed, &[0x00, 0x48, 0x00, 0x00, 0x00, 0x01])]);
+        let m = parse_photoshop_irb(&segment).unwrap();
+        assert_eq!(m.get_string("Photoshop:XResolution"), Some("72"));
+        assert_eq!(m.get_string("Photoshop:DisplayedUnitsX"), Some("inches"));
+        assert!(m.get("Photoshop:YResolution").is_none());
+        assert!(m.get("Photoshop:DisplayedUnitsY").is_none());
+    }
+
     #[test]
     fn test_parse_image_resource_block_minimal() {
-        let mut data = Vec::new();
-        data.extend_from_slice(b"8BIM");
-        data.extend_from_slice(&[0x04, 0x0D]); // GlobalAngle
-        data.push(0x00); // Empty name
-        data.push(0x00); // Padding
-        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x04]); // Size: 4
-        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x1E]); // Angle: 30
-
-        let result = parse_image_resource_block(&data);
-        assert!(result.is_ok());
-
-        let (remaining, block) = result.unwrap();
+        let data = irb_block(0x040D, &[0x00, 0x00, 0x00, 0x1E]);
+        let (remaining, block) = parse_image_resource_block(&data).unwrap();
         assert_eq!(block.id, 0x040D);
         assert_eq!(block.data, &[0x00, 0x00, 0x00, 0x1E]);
         assert!(remaining.is_empty());
-    }
-
-    #[test]
-    fn test_parse_resolution_info() {
-        let mut data = Vec::new();
-        // H resolution: 72.0 (72 * 65536 = 4718592 = 0x00480000)
-        data.extend_from_slice(&[0x00, 0x48, 0x00, 0x00]);
-        data.extend_from_slice(&[0x00, 0x01]); // H unit: inches
-        data.extend_from_slice(&[0x00, 0x01]); // Width unit: inches
-        // V resolution: 72.0
-        data.extend_from_slice(&[0x00, 0x48, 0x00, 0x00]);
-        data.extend_from_slice(&[0x00, 0x01]); // V unit: inches
-        data.extend_from_slice(&[0x00, 0x01]); // Height unit: inches
-
-        let result = parse_resolution_info(&data);
-        assert!(result.is_ok());
-
-        let metadata = result.unwrap();
-        assert_eq!(
-            metadata.get_string("Photoshop:ResolutionUnit").as_deref(),
-            Some("inches")
-        );
-    }
-
-    #[test]
-    fn test_parse_global_angle() {
-        let data = [0x00, 0x00, 0x00, 0x5A]; // 90 degrees
-        let result = parse_global_angle(&data);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 90);
-    }
-
-    #[test]
-    fn test_parse_copyright_flag() {
-        let data_true = [0x01];
-        let data_false = [0x00];
-
-        assert_eq!(parse_copyright_flag(&data_true).unwrap(), true);
-        assert_eq!(parse_copyright_flag(&data_false).unwrap(), false);
-    }
-
-    #[test]
-    fn test_parse_url() {
-        let data = b"https://example.com\0";
-        let result = parse_url(data);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "https://example.com");
-    }
-
-    #[test]
-    fn test_parse_photoshop_irb_complete() {
-        let mut data = Vec::new();
-
-        // Photoshop signature
-        data.extend_from_slice(PHOTOSHOP_SIGNATURE);
-
-        // GlobalAngle block
-        data.extend_from_slice(b"8BIM");
-        data.extend_from_slice(&[0x04, 0x0D]); // ID: GlobalAngle
-        data.push(0x00); // Empty name
-        data.push(0x00); // Padding
-        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x04]); // Size: 4
-        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x78]); // Angle: 120
-
-        // CopyrightFlag block
-        data.extend_from_slice(b"8BIM");
-        data.extend_from_slice(&[0x04, 0x0A]); // ID: CopyrightFlag
-        data.push(0x00); // Empty name
-        data.push(0x00); // Padding
-        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // Size: 1
-        data.push(0x01); // True
-        data.push(0x00); // Padding
-
-        let result = parse_photoshop_irb(&data);
-        assert!(result.is_ok());
-
-        let metadata = result.unwrap();
-        assert_eq!(metadata.get_integer("Photoshop:GlobalAngle"), Some(120));
-        assert_eq!(
-            metadata.get_string("Photoshop:CopyrightFlag").as_deref(),
-            Some("True")
-        );
     }
 
     #[test]
