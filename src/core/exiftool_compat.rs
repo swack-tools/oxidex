@@ -569,10 +569,12 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     }
 
     // ---------------------------------------------------------------------
-    // Rule 14: ThumbnailImage (format binary thumbnail data)
-    // Format thumbnail images with ExifTool-compatible message
+    // Rule 14: ThumbnailImage / OtherImage (format binary embedded images)
+    // Format embedded image blobs with ExifTool-compatible message.
+    // OtherImage is the 0x0201/0x0202 pair's blob from a non-IFD1 directory
+    // (see `parse_interop_subifd`).
     // ---------------------------------------------------------------------
-    if is_thumbnail_image(base_name)
+    if (is_thumbnail_image(base_name) || base_name == "OtherImage")
         && let TagValue::Binary(data) = value
     {
         return TagValue::String(format!(
@@ -2165,5 +2167,18 @@ mod tests {
         assert!(is_thumbnail_image("ThumbnailImage"));
         assert!(!is_thumbnail_image("PreviewImage"));
         assert!(!is_thumbnail_image("JpgFromRaw"));
+    }
+
+    #[test]
+    fn test_other_image_binary_formatting() {
+        // OtherImage (the 0x0201/0x0202 blob from a non-IFD1 directory, e.g.
+        // an image-carrying InteropIFD) gets the same ExifTool-compatible
+        // binary placeholder as ThumbnailImage.
+        let value = TagValue::Binary(vec![0u8; 5146]);
+        let formatted = format_tag_value("InteropIFD:OtherImage", &value);
+        assert_eq!(
+            formatted.as_string(),
+            Some("(Binary data 5146 bytes, use -b option to extract)")
+        );
     }
 }

@@ -40,6 +40,28 @@ const RELATED_IMAGE_HEIGHT: u16 = 0x1002;
 /// Found in the EXIF IFD, points to a sub-IFD containing interop tags.
 const INTEROPERABILITY_IFD_POINTER: u16 = 0xA005;
 
+// Image-carrying tags some cameras (Samsung SPH-A800/A940, Canon XL H1) write
+// into the Interoperability IFD alongside - or instead of - the DCF tags.
+// 0x0201/0x0202 are the JPEGInterchangeFormat pair, but ExifTool names that
+// pair contextually: ThumbnailOffset/ThumbnailLength ONLY inside IFD1; in any
+// other directory (including this one) it reports OtherImageStart /
+// OtherImageLength, plus the derived OtherImage blob.
+
+/// XResolution (0x011A) - resolution of the embedded image.
+const TAG_X_RESOLUTION: u16 = 0x011A;
+
+/// YResolution (0x011B) - resolution of the embedded image.
+const TAG_Y_RESOLUTION: u16 = 0x011B;
+
+/// ResolutionUnit (0x0128) - unit for the resolution pair.
+const TAG_RESOLUTION_UNIT: u16 = 0x0128;
+
+/// JPEGInterchangeFormat (0x0201) - `OtherImageStart` outside IFD1.
+const TAG_OTHER_IMAGE_START: u16 = 0x0201;
+
+/// JPEGInterchangeFormatLength (0x0202) - `OtherImageLength` outside IFD1.
+const TAG_OTHER_IMAGE_LENGTH: u16 = 0x0202;
+
 // =============================================================================
 // Interoperability IFD Helper Functions
 // =============================================================================
@@ -134,9 +156,11 @@ pub fn parse_ifd_chain(
         let (exif_offset, gps_offset, makernote_data) =
             process_tiff_ifd_tags(&tags, ifd_name, byte_order, metadata);
 
-        // Parse EXIF Sub-IFD if present
+        // Parse EXIF Sub-IFD if present. A standalone TIFF's structure starts
+        // at file offset 0, so the TIFF base ExifTool adds to stored offsets
+        // is 0 here.
         if let Some(offset) = exif_offset {
-            parse_exif_subifd(reader, offset, byte_order, metadata);
+            parse_exif_subifd(reader, offset, byte_order, 0, metadata);
         }
 
         // Parse GPS Sub-IFD if present
@@ -417,11 +441,15 @@ fn process_tiff_ifd_tags<'a>(
 /// * `reader` - File reader providing access to the file
 /// * `offset` - Offset to the EXIF sub-IFD
 /// * `byte_order` - Byte order for interpreting multi-byte values
+/// * `tiff_base` - Absolute file offset of the TIFF header (0 for a standalone
+///   TIFF), added to stored offsets such as `OtherImageStart` the way ExifTool
+///   absolutises them
 /// * `metadata` - MetadataMap to populate
 pub fn parse_exif_subifd(
     reader: &dyn FileReader,
     offset: u64,
     byte_order: ByteOrder,
+    tiff_base: u64,
     metadata: &mut MetadataMap,
 ) {
     if let Ok(exif_tags) = parse_ifd(reader, offset, byte_order) {
@@ -463,7 +491,7 @@ pub fn parse_exif_subifd(
         // Third pass: Parse Interoperability IFD if pointer was found
         // The Interop IFD contains DCF conformance tags like InteropIndex and InteropVersion
         if let Some(iop_offset) = interop_ifd_offset {
-            parse_interop_subifd(reader, iop_offset, byte_order, metadata);
+            parse_interop_subifd(reader, iop_offset, byte_order, tiff_base, metadata);
         }
     }
 }
@@ -481,52 +509,154 @@ pub fn parse_exif_subifd(
 /// - **RelatedImageWidth (0x1001)**: Width of the related full-resolution image
 /// - **RelatedImageHeight (0x1002)**: Height of the related full-resolution image
 ///
-/// All tags are output with the "EXIF:" prefix to match ExifTool's output format.
+/// Those DCF tags are output with the "EXIF:" prefix to match ExifTool's output
+/// format (and the surgical writer's key-anticipation in
+/// `carried_class_reader_keys`, `src/writers/exif_surgical.rs`).
+///
+/// # Image-carrying Interop directories
+///
+/// Some cameras (SamsungSPH-A800.jpg, SamsungSPH-A940.jpg and CanonXL_H1.jpg
+/// in the corpus) write an embedded image into the Interoperability IFD
+/// instead: `Compression`/`XResolution`/`YResolution`/`ResolutionUnit` plus
+/// the JPEGInterchangeFormat pair 0x0201/0x0202. ExifTool names that pair
+/// contextually - `ThumbnailOffset`/`ThumbnailLength` ONLY inside IFD1; here
+/// it reports `OtherImageStart`/`OtherImageLength` and the derived
+/// `OtherImage` blob. These are emitted under the "InteropIFD:" prefix, the
+/// family-1 group ExifTool assigns them (`exiftool -G1`).
 ///
 /// # Arguments
 ///
 /// * `reader` - File reader providing access to the file
 /// * `offset` - Offset to the Interoperability sub-IFD
 /// * `byte_order` - Byte order for interpreting multi-byte values
+/// * `tiff_base` - Absolute file offset of the TIFF header, added to
+///   `OtherImageStart` exactly as `parse_ifd1_thumbnail` absolutises
+///   `ThumbnailOffset`
 /// * `metadata` - MetadataMap to populate with Interop tags
 fn parse_interop_subifd(
     reader: &dyn FileReader,
     offset: u64,
     byte_order: ByteOrder,
+    tiff_base: u64,
     metadata: &mut MetadataMap,
 ) {
     // Attempt to parse the Interoperability IFD structure
-    if let Ok(interop_tags) = parse_ifd(reader, offset, byte_order) {
-        for (tag_id, field_type, value_count, raw_bytes) in interop_tags {
-            let bytes = raw_bytes.as_ref();
+    let Ok(interop_tags) = parse_ifd(reader, offset, byte_order) else {
+        return;
+    };
 
-            // Get the Interop tag name - use our local mapping for known tags
-            let tag_base_name = interop_tag_to_name(tag_id);
+    let mut other_image_start: Option<u64> = None;
+    let mut other_image_length: Option<u64> = None;
 
-            // Skip unknown tags (they would return "Unknown" from interop_tag_to_name)
-            if tag_base_name == "Unknown" {
-                continue;
+    for (tag_id, field_type, value_count, raw_bytes) in &interop_tags {
+        let bytes = raw_bytes.as_ref();
+
+        match *tag_id {
+            // Image-carrying tags: emitted under the "InteropIFD:" group.
+            // ExifTool's default (duplicate-suppressed) output only reports
+            // these when IFD0 does not already own the same tag name - the
+            // IFD0 copy has priority, the Interop copy priority 0 - so yield
+            // to an existing IFD0 twin the same way `parse_ifd1_thumbnail`
+            // yields IFD1:Compression to IFD0:Compression.
+            TAG_COMPRESSION | TAG_X_RESOLUTION | TAG_Y_RESOLUTION | TAG_RESOLUTION_UNIT => {
+                let tag_name = lookup_tag_name(*tag_id, "InteropIFD");
+                let base_name = tag_name
+                    .split_once(':')
+                    .map_or(tag_name.as_str(), |(_, n)| n);
+                if metadata.get(&format!("IFD0:{}", base_name)).is_some() {
+                    continue;
+                }
+                let tag_value =
+                    raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order);
+                metadata.insert(tag_name, tag_value);
             }
-
-            // Build the full tag name with "EXIF:" prefix to match ExifTool output
-            let tag_name = format!("EXIF:{}", tag_base_name);
-
-            // Convert the raw bytes to a TagValue
-            let mut tag_value =
-                raw_bytes_to_tag_value(bytes, field_type, value_count, tag_id, byte_order);
-
-            // Apply special formatting for InteropIndex
-            // ExifTool formats this as "R98 - DCF basic file (sRGB)" etc.
-            if tag_id == INTEROP_INDEX
-                && let Some(raw_index) = tag_value.as_string()
-            {
-                let formatted = format_interop_index(raw_index);
-                tag_value = TagValue::String(formatted);
+            // The offset/length pair is emitted after the loop, once both
+            // halves are known.
+            TAG_OTHER_IMAGE_START => {
+                other_image_start =
+                    read_unsigned_field(bytes, *field_type, *value_count, *tag_id, byte_order);
             }
+            TAG_OTHER_IMAGE_LENGTH => {
+                other_image_length =
+                    read_unsigned_field(bytes, *field_type, *value_count, *tag_id, byte_order);
+            }
+            _ => {
+                // DCF conformance tags - use our local mapping for known tags
+                let tag_base_name = interop_tag_to_name(*tag_id);
 
-            metadata.insert(tag_name, tag_value);
+                // Skip unknown tags (they would return "Unknown" from interop_tag_to_name)
+                if tag_base_name == "Unknown" {
+                    continue;
+                }
+
+                // Build the full tag name with "EXIF:" prefix to match ExifTool output
+                let tag_name = format!("EXIF:{}", tag_base_name);
+
+                // Convert the raw bytes to a TagValue
+                let mut tag_value =
+                    raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order);
+
+                // Apply special formatting for InteropIndex
+                // ExifTool formats this as "R98 - DCF basic file (sRGB)" etc.
+                if *tag_id == INTEROP_INDEX
+                    && let Some(raw_index) = tag_value.as_string()
+                {
+                    let formatted = format_interop_index(raw_index);
+                    tag_value = TagValue::String(formatted);
+                }
+
+                metadata.insert(tag_name, tag_value);
+            }
         }
     }
+
+    // ExifTool emits the offset/length pair only when both are present.
+    let (Some(image_offset), Some(length)) = (other_image_start, other_image_length) else {
+        return;
+    };
+
+    // The stored value is TIFF-relative; ExifTool reports the absolute file
+    // offset (stored value + TIFF base), same as ThumbnailOffset in IFD1.
+    let Some(absolute_offset) = image_offset.checked_add(tiff_base) else {
+        return;
+    };
+
+    // Named explicitly rather than via `lookup_tag_name`: 0x0201/0x0202 are
+    // registered under IFD1's contextual names, but outside IFD1 ExifTool
+    // reports them as OtherImageStart/OtherImageLength.
+    metadata.insert(
+        "InteropIFD:OtherImageStart",
+        TagValue::new_integer(absolute_offset as i64),
+    );
+    metadata.insert(
+        "InteropIFD:OtherImageLength",
+        TagValue::new_integer(length as i64),
+    );
+
+    // OtherImage is the bytes the pair points at, emitted only when the range
+    // is actually readable - the same byte-range validation
+    // `parse_ifd1_thumbnail` applies to ThumbnailImage.
+    if length == 0 || length > MAX_THUMBNAIL_BYTES {
+        return;
+    }
+    let Some(end) = image_offset.checked_add(length) else {
+        return;
+    };
+    if end > reader.size() {
+        return;
+    }
+    let Ok(bytes) = reader.read(image_offset, length as usize) else {
+        return;
+    };
+    // A reader that clamps a short read instead of failing would otherwise make
+    // us report a byte count the file does not actually contain.
+    if bytes.len() as u64 != length {
+        return;
+    }
+    metadata.insert(
+        "InteropIFD:OtherImage",
+        TagValue::new_binary(bytes.to_vec()),
+    );
 }
 
 /// Parses a GPS sub-IFD and extracts GPS tags.
@@ -756,9 +886,13 @@ pub fn parse_ifd1_thumbnail(
     // view, and ExifTool's default (duplicate-suppressed) output reports the
     // IFD0 one - e.g. OlympusAIR-A01.jpg is `Uncompressed` (IFD0), not
     // `JPEG (old-style)` (IFD1). Yield to IFD0 so the thumbnail IFD never
-    // rewrites the main image's value.
+    // rewrites the main image's value. An image-carrying Interoperability IFD
+    // (see `parse_interop_subifd`) also wins: it is walked before IFD1, and
+    // with both copies at ExifTool priority 0 the first-extracted one is the
+    // one ExifTool displays.
     if let Some(value) = compression
         && metadata.get("IFD0:Compression").is_none()
+        && metadata.get("InteropIFD:Compression").is_none()
     {
         metadata.insert(
             lookup_tag_name(TAG_COMPRESSION, "IFD1"),
@@ -1061,6 +1195,19 @@ mod ifd1_tests {
     }
 
     #[test]
+    fn ifd1_compression_yields_to_interop() {
+        // An image-carrying Interop IFD is walked before IFD1; with both
+        // copies at ExifTool priority 0 the first-extracted (Interop) one is
+        // the one ExifTool displays.
+        let (data, _) = build_tiff(&[(TAG_COMPRESSION, SHORT, 6)], &[]);
+        let reader = TestReader::new(data);
+        let mut metadata = MetadataMap::new();
+        metadata.insert("InteropIFD:Compression", TagValue::new_integer(6));
+        parse_ifd1_thumbnail(&reader, 8, 0, ByteOrder::LittleEndian, 0, &mut metadata);
+        assert!(metadata.get("IFD1:Compression").is_none());
+    }
+
+    #[test]
     fn absent_ifd1_emits_nothing() {
         let mut data = Vec::new();
         data.extend_from_slice(b"II");
@@ -1073,5 +1220,231 @@ mod ifd1_tests {
         parse_ifd1_thumbnail(&reader, 8, 0, ByteOrder::LittleEndian, 12, &mut metadata);
         assert!(metadata.get("IFD1:ThumbnailOffset").is_none());
         assert!(metadata.get("IFD1:Compression").is_none());
+    }
+}
+
+#[cfg(test)]
+mod interop_tests {
+    use super::*;
+    use crate::test_support::TestReader;
+
+    const ASCII: u16 = 2;
+    const SHORT: u16 = 3;
+    const LONG: u16 = 4;
+    const RATIONAL: u16 = 5;
+
+    /// Builds a little-endian buffer whose Interoperability IFD sits at offset
+    /// 8 and holds the supplied raw `(tag, type, count, value_field)` entries,
+    /// followed by `tail` bytes (offset-stored values and/or an embedded
+    /// image). Returns the buffer and the offset at which `tail` begins.
+    fn build_interop(entries: &[(u16, u16, u32, u32)], tail: &[u8]) -> (Vec<u8>, u64) {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II");
+        data.extend_from_slice(&42u16.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes()); // IFD at 8
+        data.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (tag, field_type, count, value) in entries {
+            data.extend_from_slice(&tag.to_le_bytes());
+            data.extend_from_slice(&field_type.to_le_bytes());
+            data.extend_from_slice(&count.to_le_bytes());
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        data.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
+        let tail_offset = data.len() as u64;
+        data.extend_from_slice(tail);
+        (data, tail_offset)
+    }
+
+    fn run(entries: &[(u16, u16, u32, u32)], tail: &[u8], tiff_base: u64) -> MetadataMap {
+        let (data, _) = build_interop(entries, tail);
+        let reader = TestReader::new(data);
+        let mut metadata = MetadataMap::new();
+        parse_interop_subifd(
+            &reader,
+            8,
+            ByteOrder::LittleEndian,
+            tiff_base,
+            &mut metadata,
+        );
+        metadata
+    }
+
+    /// The tail offset for `n` entries: header(8) + count(2) + 12n + next(4).
+    fn tail_offset_for(entry_count: u64) -> u64 {
+        8 + 2 + 12 * entry_count + 4
+    }
+
+    #[test]
+    fn image_carrying_interop_names_the_pair_other_image_not_thumbnail() {
+        // SamsungSPH-A800.jpg / SamsungSPH-A940.jpg / CanonXL_H1.jpg embed an
+        // image via 0x0201/0x0202 in the Interop IFD. ExifTool names that
+        // pair ThumbnailOffset/ThumbnailLength ONLY in IFD1; here it must be
+        // OtherImageStart/OtherImageLength (+ derived OtherImage).
+        let blob = [0xFFu8, 0xD8, 0xFF, 0xDB];
+        let blob_offset = tail_offset_for(3);
+        let metadata = run(
+            &[
+                (TAG_COMPRESSION, SHORT, 1, 6),
+                (TAG_OTHER_IMAGE_START, LONG, 1, blob_offset as u32),
+                (TAG_OTHER_IMAGE_LENGTH, LONG, 1, blob.len() as u32),
+            ],
+            &blob,
+            30,
+        );
+
+        // Offset is absolutised with the TIFF base, exactly like ThumbnailOffset.
+        assert_eq!(
+            metadata
+                .get("InteropIFD:OtherImageStart")
+                .and_then(|v| v.as_integer()),
+            Some(blob_offset as i64 + 30)
+        );
+        assert_eq!(
+            metadata
+                .get("InteropIFD:OtherImageLength")
+                .and_then(|v| v.as_integer()),
+            Some(blob.len() as i64)
+        );
+        assert!(matches!(
+            metadata.get("InteropIFD:OtherImage"),
+            Some(TagValue::Binary(bytes)) if bytes == &blob
+        ));
+        assert_eq!(
+            metadata
+                .get("InteropIFD:Compression")
+                .and_then(|v| v.as_integer()),
+            Some(6)
+        );
+
+        // The naming rule: never the IFD1-only names, under any group.
+        for key in [
+            "InteropIFD:ThumbnailOffset",
+            "InteropIFD:ThumbnailLength",
+            "InteropIFD:ThumbnailImage",
+            "IFD1:ThumbnailOffset",
+            "IFD1:ThumbnailLength",
+            "IFD1:ThumbnailImage",
+        ] {
+            assert!(metadata.get(key).is_none(), "{} must not be emitted", key);
+        }
+    }
+
+    #[test]
+    fn resolution_tags_yield_to_ifd0_twins() {
+        // ExifTool's default (duplicate-suppressed) output does not repeat
+        // XResolution/YResolution/ResolutionUnit out of the Interop IFD when
+        // IFD0 already owns them - all three target corpus files are built
+        // this way. Compression has no IFD0 twin here, so it IS emitted.
+        let mut rational_tail = Vec::new();
+        rational_tail.extend_from_slice(&72u32.to_le_bytes());
+        rational_tail.extend_from_slice(&1u32.to_le_bytes());
+        let x_res_offset = tail_offset_for(3) as u32;
+
+        let (data, _) = build_interop(
+            &[
+                (TAG_COMPRESSION, SHORT, 1, 6),
+                (TAG_X_RESOLUTION, RATIONAL, 1, x_res_offset),
+                (TAG_RESOLUTION_UNIT, SHORT, 1, 2),
+            ],
+            &rational_tail,
+        );
+        let reader = TestReader::new(data);
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:XResolution", TagValue::new_rational(72, 1));
+        metadata.insert("IFD0:ResolutionUnit", TagValue::new_integer(2));
+        parse_interop_subifd(&reader, 8, ByteOrder::LittleEndian, 0, &mut metadata);
+
+        assert!(metadata.get("InteropIFD:XResolution").is_none());
+        assert!(metadata.get("InteropIFD:ResolutionUnit").is_none());
+        assert_eq!(
+            metadata
+                .get("InteropIFD:Compression")
+                .and_then(|v| v.as_integer()),
+            Some(6)
+        );
+    }
+
+    #[test]
+    fn resolution_tags_emit_when_ifd0_lacks_them() {
+        let mut rational_tail = Vec::new();
+        rational_tail.extend_from_slice(&72u32.to_le_bytes());
+        rational_tail.extend_from_slice(&1u32.to_le_bytes());
+        let x_res_offset = tail_offset_for(2) as u32;
+
+        let metadata = run(
+            &[
+                (TAG_X_RESOLUTION, RATIONAL, 1, x_res_offset),
+                (TAG_RESOLUTION_UNIT, SHORT, 1, 2),
+            ],
+            &rational_tail,
+            0,
+        );
+
+        assert!(matches!(
+            metadata.get("InteropIFD:XResolution"),
+            Some(TagValue::Rational {
+                numerator: 72,
+                denominator: 1
+            })
+        ));
+        assert_eq!(
+            metadata
+                .get("InteropIFD:ResolutionUnit")
+                .and_then(|v| v.as_integer()),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn unreadable_other_image_range_keeps_pair_but_no_blob() {
+        // Mirror of the thumbnail rule: the offset/length pair reports the
+        // stored numbers, but a blob is only materialised from readable bytes.
+        let metadata = run(
+            &[
+                (TAG_OTHER_IMAGE_START, LONG, 1, 4000),
+                (TAG_OTHER_IMAGE_LENGTH, LONG, 1, 100),
+            ],
+            &[],
+            12,
+        );
+        assert_eq!(
+            metadata
+                .get("InteropIFD:OtherImageStart")
+                .and_then(|v| v.as_integer()),
+            Some(4012)
+        );
+        assert_eq!(
+            metadata
+                .get("InteropIFD:OtherImageLength")
+                .and_then(|v| v.as_integer()),
+            Some(100)
+        );
+        assert!(metadata.get("InteropIFD:OtherImage").is_none());
+    }
+
+    #[test]
+    fn lone_offset_without_length_emits_no_pair() {
+        let metadata = run(&[(TAG_OTHER_IMAGE_START, LONG, 1, 60)], &[], 0);
+        assert!(metadata.get("InteropIFD:OtherImageStart").is_none());
+        assert!(metadata.get("InteropIFD:OtherImageLength").is_none());
+        assert!(metadata.get("InteropIFD:OtherImage").is_none());
+    }
+
+    #[test]
+    fn dcf_conformance_tags_keep_their_exif_keys() {
+        // The pre-existing DCF path is untouched: InteropIndex still lands on
+        // "EXIF:InteropIndex" (the key the surgical writer anticipates) with
+        // ExifTool's expanded description.
+        let metadata = run(
+            &[(INTEROP_INDEX, ASCII, 4, u32::from_le_bytes(*b"R98\0"))],
+            &[],
+            0,
+        );
+        assert_eq!(
+            metadata
+                .get("EXIF:InteropIndex")
+                .and_then(|v| v.as_string()),
+            Some("R98 - DCF basic file (sRGB)")
+        );
     }
 }
