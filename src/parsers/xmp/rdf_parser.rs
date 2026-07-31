@@ -296,6 +296,17 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
         }
     }
 
+    // xmpMM:JobRef is a structured property. ExifTool reports the stJob
+    // members as JobRefName, JobRefID, and JobRefURL rather than the
+    // JobRef container itself.
+    results.retain(|(tag, _)| tag != "XMP:JobRef");
+    let job_ref_fields = extract_xmpmm_job_ref_values(xml_bytes)?;
+    for (tag, value) in job_ref_fields {
+        if !results.iter().any(|(existing, _)| existing == &tag) {
+            results.push((tag, value));
+        }
+    }
+
     // Post-process results to apply formatting for specific tags
     let results = results
         .into_iter()
@@ -304,6 +315,116 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
             (tag, formatted)
         })
         .collect();
+
+    Ok(results)
+}
+
+/// Extracts scalar members of the xmpMM:JobRef structure.
+///
+/// XMP Media Management stores JobRef values in an RDF collection whose
+/// members use the stJob namespace:
+/// `stJob:name`, `stJob:id`, and `stJob:url`.
+fn extract_xmpmm_job_ref_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
+    let mut reader = Reader::from_reader(xml_bytes);
+    reader.config_mut().trim_text(true);
+
+    let mut resolver = NamespaceResolver::new();
+    let mut values: [Vec<String>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    let mut buf = Vec::new();
+    let mut depth = 0usize;
+    let mut job_ref_depth = None;
+    let mut field_depth = None;
+    let mut field_index = None;
+    let mut field_value = String::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(element)) => {
+                depth += 1;
+                register_namespaces_from_element(&element, &mut resolver)?;
+                let tag_name = extract_tag_name(&element)?;
+
+                if job_ref_depth.is_none()
+                    && is_property_in_namespace(
+                        &tag_name,
+                        "JobRef",
+                        "http://ns.adobe.com/xap/1.0/mm/",
+                        &resolver,
+                    )
+                {
+                    job_ref_depth = Some(depth);
+                } else if job_ref_depth.is_some() && field_depth.is_none() {
+                    // The fields are scoped to JobRef, so matching their
+                    // local names is sufficient even when the source uses a
+                    // different prefix for the stJob namespace.
+                    field_index = match NamespaceResolver::extract_local_name(&tag_name) {
+                        "name" => Some(0),
+                        "id" => Some(1),
+                        "url" => Some(2),
+                        _ => None,
+                    };
+                    if field_index.is_some() {
+                        field_depth = Some(depth);
+                        field_value.clear();
+                    }
+                }
+            }
+
+            Ok(Event::End(_)) => {
+                if field_depth == Some(depth) {
+                    if let Some(index) = field_index.take() {
+                        let value = field_value.trim();
+                        if !value.is_empty() {
+                            values[index].push(value.to_string());
+                        }
+                    }
+                    field_depth = None;
+                    field_value.clear();
+                }
+
+                if job_ref_depth == Some(depth) {
+                    job_ref_depth = None;
+                }
+
+                depth = depth.saturating_sub(1);
+            }
+
+            Ok(Event::Text(event)) => {
+                if field_depth.is_some()
+                    && let Ok(decoded) = event.xml10_content()
+                {
+                    let unescaped =
+                        quick_xml::escape::unescape(&decoded).unwrap_or_else(|_| decoded.clone());
+                    field_value.push_str(&unescaped);
+                }
+            }
+
+            Ok(Event::Empty(element)) => {
+                register_namespaces_from_element(&element, &mut resolver)?;
+            }
+
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid XMP JobRef structure: {}",
+                    error
+                )));
+            }
+        }
+        buf.clear();
+    }
+
+    const FIELD_NAMES: [&str; 3] = ["JobRefName", "JobRefID", "JobRefURL"];
+    let mut results = Vec::new();
+    for (index, field_name) in FIELD_NAMES.iter().enumerate() {
+        if !values[index].is_empty() {
+            results.push((
+                format!("XMP:{field_name}"),
+                values[index].join(", "),
+            ));
+        }
+    }
 
     Ok(results)
 }
