@@ -1329,6 +1329,11 @@
 #define SHN_XINDEX 65535
 
 /*
+ Minimum APP8 payload length before ExifTool reads an isothermal record.
+ */
+#define INFIRAY_ISOTHERMAL_MIN_LENGTH 32
+
+/*
  Emissivity (f32) - thermal emissivity of the target object
  */
 #define EMISSIVITY 32
