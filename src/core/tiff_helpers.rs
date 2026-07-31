@@ -8,7 +8,7 @@ use crate::core::operations_helpers::read_u32;
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
 use crate::parsers::tiff::geotiff_parser;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
-use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote;
+use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_model;
 use crate::tag_db::lookup_tag_name;
 use std::collections::HashMap;
 
@@ -579,11 +579,20 @@ fn parse_makernote_if_canon(
 ) {
     // Extract camera make from metadata to determine which parser to use
     let make = metadata.get_string("IFD0:Make").unwrap_or("");
+    // A few MakerNote sub-structures are laid out per camera model rather than
+    // self-describing (Nikon AFInfo's byte order, for one).
+    let model = metadata.get_string("IFD0:Model");
 
     if !make.is_empty() {
         // Parse MakerNote using the dispatcher
         let mut makernote_tags = HashMap::new();
-        if let Err(_e) = dispatch_makernote(make, makernote_data, byte_order, &mut makernote_tags) {
+        if let Err(_e) = dispatch_makernote_with_model(
+            make,
+            model,
+            makernote_data,
+            byte_order,
+            &mut makernote_tags,
+        ) {
             // Silently skip failed MakerNote parsing
             return;
         }

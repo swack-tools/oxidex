@@ -810,14 +810,25 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 // Parse MakerNote if present and we have the camera make
                 if let (Some(make), Some(mn_data)) = (camera_make.as_ref(), makernote_data.as_ref())
                 {
+                    // Some MakerNote structures are laid out per camera model
+                    // (Nikon's AFInfo picks its byte order from it), so pass
+                    // along whichever Model the IFDs above already recorded.
+                    let camera_model = metadata
+                        .get_string("IFD0:Model")
+                        .or_else(|| metadata.get_string("EXIF:Model"))
+                        .map(str::to_string);
+
                     // Use the MakerNote dispatcher to parse manufacturer-specific tags
                     let mut makernote_tags = std::collections::HashMap::new();
-                    if let Err(e) = crate::parsers::tiff::makernote_dispatcher::dispatch_makernote(
-                        make,
-                        mn_data,
-                        byte_order,
-                        &mut makernote_tags,
-                    ) {
+                    if let Err(e) =
+                        crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_model(
+                            make,
+                            camera_model.as_deref(),
+                            mn_data,
+                            byte_order,
+                            &mut makernote_tags,
+                        )
+                    {
                         eprintln!("Warning: Failed to parse MakerNote for {}: {}", make, e);
                     } else {
                         // Add parsed MakerNote tags to metadata

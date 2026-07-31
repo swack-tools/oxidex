@@ -9,9 +9,12 @@
 #![allow(unused_imports)]
 
 // Submodules for extended tag parsing
+pub mod af_info;
 pub mod color_balance;
 pub mod lens_data;
 pub mod shot_info;
+pub mod sub_ifds;
+pub mod value_reader;
 
 use super::nikon_capture_data;
 use crate::error::{ExifToolError, Result};
@@ -29,6 +32,10 @@ use nom::{
     number::complete::{be_u16, be_u32, le_u16, le_u32},
 };
 use std::collections::HashMap;
+use value_reader::{
+    ascii_value, binary_placeholder, decode_bits, format_number, format_string, print_fraction,
+    print_lens_info, rational_value, read_u16, value_bytes,
+};
 
 use super::nikon_lens_database::lookup_lens_name;
 use super::shared::MakerNoteParser;
@@ -49,10 +56,17 @@ const NIKON_FOCUS_MODE: u16 = 0x0007;
 const NIKON_FLASH_SETTING: u16 = 0x0008;
 const NIKON_FLASH_TYPE: u16 = 0x0009;
 const NIKON_WHITE_BALANCE_FINE: u16 = 0x000B;
-const NIKON_COLOR_BALANCE: u16 = 0x000C;
-const NIKON_PROGRAM_SHIFT: u16 = 0x000F;
-const NIKON_EXPOSURE_DIFF: u16 = 0x0010;
-const NIKON_ISO_SELECTION: u16 = 0x0011; // Also NIKON_PREVIEW_IFD
+/// `WB_RBLevels`, four rationals (ref `Nikon::Main` 0x000c, D1X).
+const NIKON_WB_RB_LEVELS: u16 = 0x000C;
+const NIKON_PROGRAM_SHIFT: u16 = 0x000D;
+const NIKON_EXPOSURE_DIFF: u16 = 0x000E;
+const NIKON_ISO_SELECTION: u16 = 0x000F;
+/// Sub-IFD holding the JPEG preview (`Nikon::PreviewIFD`).
+const NIKON_PREVIEW_IFD: u16 = 0x0011;
+/// Offsets recorded by Nikon Capture (`Nikon::CaptureOffsets`).
+const NIKON_CAPTURE_OFFSETS: u16 = 0x0E0E;
+/// Sub-IFD written by Nikon Scan (`Nikon::Scan`).
+const NIKON_SCAN_IFD: u16 = 0x0E10;
 const NIKON_LENS_TYPE: u16 = 0x0083;
 const NIKON_LENS: u16 = 0x0084;
 const NIKON_FLASH_MODE: u16 = 0x0087;
@@ -75,6 +89,9 @@ const NIKON_SENSOR_PIXEL_SIZE: u16 = 0x009A;
 const NIKON_SCENE_ASSIST: u16 = 0x009C;
 const NIKON_RETOUCH_HISTORY: u16 = 0x009E;
 const NIKON_SERIAL_NUMBER: u16 = 0x001D;
+/// `SerialNumber` again: 0x001d is used as the decryption key, 0x00a0 is the
+/// one D-series bodies actually write (ref `Nikon::Main`).
+const NIKON_SERIAL_NUMBER_ALT: u16 = 0x00A0;
 const NIKON_IMAGE_DATA_SIZE: u16 = 0x00A2;
 const NIKON_IMAGE_COUNT: u16 = 0x00A5;
 const NIKON_DELETED_IMAGE_COUNT: u16 = 0x00A6;
@@ -82,30 +99,28 @@ const NIKON_SHUTTER_COUNT: u16 = 0x00A7;
 const NIKON_FLASH_INFO: u16 = 0x00A8; // Array tag
 const NIKON_IMAGE_OPTIMIZATION: u16 = 0x00A9;
 const NIKON_TONE_COMP: u16 = 0x0081;
-const NIKON_COLOR_SPACE: u16 = 0x00B0;
-const NIKON_VR_INFO: u16 = 0x00B1; // Array tag - vibration reduction
-const NIKON_ACTIVE_D_LIGHTING: u16 = 0x00B3;
-const NIKON_PICTURE_CONTROL: u16 = 0x00B4; // Array tag
-const NIKON_WORLD_TIME: u16 = 0x00B5;
-const NIKON_ISO_INFO: u16 = 0x00B6; // Array tag
-const NIKON_VIGNETTE_CONTROL: u16 = 0x00B7;
-const NIKON_DISTORTION_CONTROL: u16 = 0x00B8;
+// The 0x00b0-0x00b8 block below used to be mapped to ColorSpace, VRInfo,
+// MultiExposure, ActiveD-Lighting, PictureControl, WorldTime, ISOInfo,
+// VignetteControl and DistortionControl. Only MultiExposure was right: in
+// `Nikon::Main` those ids are MultiExposure (0xb0), HighISONoiseReduction
+// (0xb1), ToningEffect (0xb3), AFInfo2 (0xb7) and FileInfo (0xb8), with 0xb2,
+// 0xb4 and 0xb5 unassigned. The settings tags actually live down in the
+// 0x001e-0x002a range, which is where they are keyed from now.
+const NIKON_MULTI_EXPOSURE: u16 = 0x00B0;
 const NIKON_SATURATION_TEXT: u16 = 0x00AA; // Saturation as text
 const NIKON_VARI_PROGRAM: u16 = 0x00AB; // VariProgram
 const NIKON_IMAGE_PROCESSING: u16 = 0x001A; // Image processing
-const NIKON_DISTORT_INFO: u16 = 0x002B; // Distortion info
-const NIKON_WORLD_TIME_ALT: u16 = 0x0024; // World time alternate
-const NIKON_ISO_INFO_ALT: u16 = 0x0025; // ISO info alternate
-const NIKON_VR_INFO_ALT: u16 = 0x001F; // VR info alternate
+const NIKON_WORLD_TIME: u16 = 0x0024;
+const NIKON_VR_INFO: u16 = 0x001F;
 const NIKON_FLASH_EXPOSURE_COMP: u16 = 0x0012; // Flash exposure compensation
 const NIKON_EXTERNAL_FLASH_COMP: u16 = 0x0017; // External flash exposure compensation
 const NIKON_FLASH_BRACKET_VALUE: u16 = 0x0018; // Flash exposure bracket value
 const NIKON_EXPOSURE_BRACKET_VALUE: u16 = 0x0019; // Exposure bracket value
-const NIKON_COLOR_SPACE_ALT: u16 = 0x001E; // Color space alternate
+const NIKON_COLOR_SPACE: u16 = 0x001E;
 const NIKON_IMAGE_AUTH: u16 = 0x0020; // Image authentication
-const NIKON_ACTIVE_D_LIGHTING_ALT: u16 = 0x0022; // Active D-Lighting alternate
+const NIKON_ACTIVE_D_LIGHTING: u16 = 0x0022;
 const NIKON_PICTURE_CONTROL_DATA: u16 = 0x0023; // Picture control data
-const NIKON_VIGNETTE_CONTROL_ALT: u16 = 0x0026; // Vignette control alternate
+const NIKON_VIGNETTE_CONTROL: u16 = 0x002A;
 const NIKON_AF_INFO: u16 = 0x0088; // AF Info
 const NIKON_AUTO_BRACKET_RELEASE: u16 = 0x008A; // Auto bracket release
 const NIKON_MANUAL_FOCUS_DIST: u16 = 0x0085; // Manual focus distance
@@ -116,7 +131,6 @@ const NIKON_ISO_SETTING: u16 = 0x0013; // ISO Setting
 const NIKON_IMAGE_BOUNDARY: u16 = 0x0016; // Image Boundary
 const NIKON_IMAGE_ADJUSTMENT: u16 = 0x0080; // Image Adjustment
 const NIKON_AUX_LENS: u16 = 0x0082; // Auxiliary Lens
-const NIKON_MULTI_EXPOSURE: u16 = 0x00B2; // Multi Exposure
 // Note: 0x00B0=ColorSpace, 0x00B7=VignetteControl, 0x00B8=DistortionControl are primary
 // (HIGH_ISO_NR, AF_INFO2, FILE_INFO are alternate names for same tag IDs)
 
@@ -146,127 +160,231 @@ const LENS_DATA_MAX_FOCAL_LENGTH: usize = 10;
 const LENS_DATA_MAX_APERTURE_AT_MIN_FOCAL: usize = 11;
 const LENS_DATA_MAX_APERTURE_AT_MAX_FOCAL: usize = 12;
 
-/// Decodes Nikon quality setting to human-readable string
-fn decode_quality(value: i32) -> &'static str {
+/// Decodes Nikon flash mode to human-readable string (`Nikon::Main` 0x0087).
+fn decode_flash_mode(value: i32) -> String {
     match value {
-        1 => "VGA Basic",
-        2 => "VGA Normal",
-        3 => "VGA Fine",
-        4 => "SXGA Basic",
-        5 => "SXGA Normal",
-        6 => "SXGA Fine",
-        7 => "XGA Basic",
-        8 => "XGA Normal",
-        9 => "XGA Fine",
-        10 => "UXGA Basic",
-        11 => "UXGA Normal",
-        12 => "UXGA Fine",
-        _ => "Unknown",
+        0 => "Did Not Fire".to_string(),
+        1 => "Fired, Manual".to_string(),
+        3 => "Not Ready".to_string(),
+        7 => "Fired, External".to_string(),
+        8 => "Fired, Commander Mode".to_string(),
+        9 => "Fired, TTL Mode".to_string(),
+        18 => "LED Light".to_string(),
+        other => format!("Unknown ({})", other),
     }
 }
 
-/// Decodes Nikon white balance setting to human-readable string
-fn decode_white_balance(value: i32) -> &'static str {
+/// `Nikon::Main` 0x0083 `LensType`: a bit field, then a sequence of rewrites
+/// that reorder the flags into Nikon's own naming order (`E` first, `1` first,
+/// `FT-1` last) and collapse `D G` to plain `G`.
+fn decode_lens_type(value: u32) -> String {
+    if value == 0 {
+        return "AF".to_string();
+    }
+    let mut s = decode_bits(
+        value,
+        8,
+        &[
+            (0, "MF"),
+            (1, "D"),
+            (2, "G"),
+            (3, "VR"),
+            (4, "1"),
+            (5, "FT-1"),
+            (6, "E"),
+            (7, "AF-P"),
+        ],
+    );
+    // s/,//g; s/\bD G\b/G/;
+    s = s.replace(',', "");
+    s = replace_bounded_once(&s, "D G", "G");
+    // s/ E\b// and s/^(G )?/E /;
+    if let Some(stripped) = remove_bounded_once(&s, " E") {
+        s = match stripped.strip_prefix("G ") {
+            Some(rest) => format!("E {}", rest),
+            None => format!("E {}", stripped),
+        };
+    }
+    // s/ 1// and $_ = "1 $_";
+    if let Some(stripped) = remove_plain_once(&s, " 1") {
+        s = format!("1 {}", stripped);
+    }
+    // s/FT-1 // and $_ .= ' FT-1';
+    if let Some(stripped) = remove_plain_once(&s, "FT-1 ") {
+        s = format!("{} FT-1", stripped);
+    }
+    s
+}
+
+/// `Nikon::Main` 0x0089 `ShootingMode`: a bit field with a "Single-Frame"
+/// prefix when none of the release-mode bits (0x87) are set.
+///
+/// Bit 5 is model-dependent: the D70 uses it for "Unused LE-NR Slowdown" and
+/// every other body for "Auto ISO".
+fn decode_shooting_mode(value: u32, model: Option<&str>) -> String {
+    let is_d70 = model.is_some_and(|m| {
+        m.match_indices("D70").any(|(idx, _)| {
+            !m[idx + 3..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        })
+    });
+    let bit5 = if is_d70 {
+        "Unused LE-NR Slowdown"
+    } else {
+        "Auto ISO"
+    };
+    let labels = [
+        (0u32, "Continuous"),
+        (1, "Delay"),
+        (2, "PC Control"),
+        (3, "Self-timer"),
+        (4, "Exposure Bracketing"),
+        (5, bit5),
+        (6, "White-Balance Bracketing"),
+        (7, "IR Control"),
+        (8, "D-Lighting Bracketing"),
+        (11, "Pre-capture"),
+    ];
+    if value & 0x87 == 0 {
+        if value == 0 {
+            return "Single-Frame".to_string();
+        }
+        return format!("Single-Frame, {}", decode_bits(value, 32, &labels));
+    }
+    decode_bits(value, 32, &labels)
+}
+
+/// Perl `s/\bNEEDLE\b/REPLACEMENT/`: replace the first whole-word occurrence.
+fn replace_bounded_once(haystack: &str, needle: &str, replacement: &str) -> String {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut search = 0;
+    while let Some(rel) = haystack[search..].find(needle) {
+        let idx = search + rel;
+        let end = idx + needle.len();
+        let before_ok = haystack[..idx]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !is_word(c));
+        let after_ok = haystack[end..].chars().next().is_none_or(|c| !is_word(c));
+        if before_ok && after_ok {
+            return format!("{}{}{}", &haystack[..idx], replacement, &haystack[end..]);
+        }
+        search = idx + 1;
+    }
+    haystack.to_string()
+}
+
+/// Perl `s/NEEDLE\b//`: remove the first occurrence followed by a word
+/// boundary. Returns `None` when nothing matched, mirroring the `and` guard
+/// that Perl puts on the result of the substitution.
+fn remove_bounded_once(haystack: &str, needle: &str) -> Option<String> {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut search = 0;
+    while let Some(rel) = haystack[search..].find(needle) {
+        let idx = search + rel;
+        let end = idx + needle.len();
+        if haystack[end..].chars().next().is_none_or(|c| !is_word(c)) {
+            return Some(format!("{}{}", &haystack[..idx], &haystack[end..]));
+        }
+        search = idx + 1;
+    }
+    None
+}
+
+/// Perl `s/NEEDLE//` with no boundary assertions.
+fn remove_plain_once(haystack: &str, needle: &str) -> Option<String> {
+    let idx = haystack.find(needle)?;
+    Some(format!(
+        "{}{}",
+        &haystack[..idx],
+        &haystack[idx + needle.len()..]
+    ))
+}
+
+/// ExifTool `%cropHiSpeed` (`Nikon::Main` 0x001b).
+fn decode_crop_hi_speed(value: u16) -> String {
     match value {
-        0 => "Auto",
-        1 => "Daylight",
-        2 => "Incandescent",
-        3 => "Fluorescent",
-        4 => "Cloudy",
-        5 => "Speedlight",
-        6 => "Custom",
-        7 => "Shade",
-        8 => "Kelvin",
-        _ => "Unknown",
+        0 => "Off".to_string(),
+        1 => "1.3x Crop".to_string(),
+        2 => "DX Crop".to_string(),
+        3 => "5:4 Crop".to_string(),
+        4 => "3:2 Crop".to_string(),
+        6 => "16:9 Crop".to_string(),
+        8 => "2.7x Crop".to_string(),
+        9 => "DX Movie 16:9 Crop".to_string(),
+        10 => "1.3x Movie Crop".to_string(),
+        11 => "FX Uncropped".to_string(),
+        12 => "DX Uncropped".to_string(),
+        13 => "2.8x Movie Crop".to_string(),
+        14 => "1.4x Movie Crop".to_string(),
+        15 => "1.5x Movie Crop".to_string(),
+        17 => "FX 1:1 Crop".to_string(),
+        18 => "DX 1:1 Crop".to_string(),
+        other => format!("Unknown ({})", other),
     }
 }
 
-/// Decodes Nikon focus mode to human-readable string
-fn decode_focus_mode(value: i32) -> &'static str {
+/// ExifTool's `my ($a,$b,$c)=unpack("c3",$val); $c ? $a*($b/$c) : 0`.
+///
+/// Nikon packs several EV-style values as a signed byte triple: numerator,
+/// multiplier and divisor. Used by ProgramShift, ExposureDifference and the
+/// flash compensations.
+fn nikon_signed_ev(bytes: &[u8]) -> Option<f64> {
+    if bytes.len() < 3 {
+        return None;
+    }
+    let a = bytes[0] as i8 as f64;
+    let b = bytes[1] as i8 as f64;
+    let c = bytes[2] as i8 as f64;
+    Some(if c != 0.0 { a * (b / c) } else { 0.0 })
+}
+
+/// The unsigned variant, `unpack("C3",$val)`, used by `LensFStops` (0x008b).
+fn nikon_unsigned_ratio(bytes: &[u8]) -> Option<f64> {
+    if bytes.len() < 3 {
+        return None;
+    }
+    let (a, b, c) = (bytes[0] as f64, bytes[1] as f64, bytes[2] as f64);
+    Some(if c != 0.0 { a * (b / c) } else { 0.0 })
+}
+
+/// `Nikon::Main` 0x001e `ColorSpace`.
+fn decode_color_space(value: u32) -> String {
     match value {
-        0 => "AF-S",
-        1 => "AF-C",
-        2 => "AF-A",
-        3 => "MF (Manual)",
-        4 => "AF-S (Single)",
-        5 => "AF-C (Continuous)",
-        _ => "Unknown",
+        1 => "sRGB".to_string(),
+        2 => "Adobe RGB".to_string(),
+        other => format!("Unknown ({})", other),
     }
 }
 
-/// Decodes Nikon flash setting to human-readable string
-fn decode_flash_setting(value: i32) -> &'static str {
+/// `Nikon::Main` 0x0022 `ActiveD-Lighting`.
+fn decode_active_d_lighting(value: u32) -> String {
     match value {
-        0 => "Normal",
-        1 => "Red-eye Reduction",
-        2 => "Rear Curtain",
-        3 => "Slow Sync",
-        4 => "Red-eye + Slow",
-        5 => "Rear + Slow",
-        6 => "Off",
-        _ => "Unknown",
+        0 => "Off".to_string(),
+        1 => "Low".to_string(),
+        3 => "Normal".to_string(),
+        5 => "High".to_string(),
+        7 => "Extra High".to_string(),
+        8 => "Extra High 1".to_string(),
+        9 => "Extra High 2".to_string(),
+        10 => "Extra High 3".to_string(),
+        11 => "Extra High 4".to_string(),
+        0xFFFF => "Auto".to_string(),
+        other => format!("Unknown ({})", other),
     }
 }
 
-/// Decodes Nikon flash mode to human-readable string
-fn decode_flash_mode(value: i32) -> &'static str {
+/// `Nikon::Main` 0x002a `VignetteControl`. Note the gaps: the levels are
+/// 0/1/3/5, not 0/1/2/3.
+fn decode_vignette_control(value: u32) -> String {
     match value {
-        0 => "Did Not Fire",
-        1 => "Fired, Manual",
-        3 => "Not Ready",
-        7 => "Fired, External",
-        8 => "Fired, Commander Mode",
-        9 => "Fired, TTL Mode",
-        _ => "Unknown",
-    }
-}
-
-/// Decodes Nikon shooting mode to human-readable string
-fn decode_shooting_mode(value: i32) -> &'static str {
-    match value {
-        0 => "Single Frame",
-        1 => "Continuous",
-        2 => "Self-timer",
-        3 => "Delayed Remote",
-        4 => "Quick-Response Remote",
-        5 => "Self-timer (Mirror Up)",
-        6 => "Interval Timer",
-        _ => "Unknown",
-    }
-}
-
-/// Decodes Nikon color space to human-readable string
-fn decode_color_space(value: i32) -> &'static str {
-    match value {
-        1 => "sRGB",
-        2 => "Adobe RGB",
-        _ => "Unknown",
-    }
-}
-
-/// Decodes Nikon Active D-Lighting setting to human-readable string
-fn decode_active_d_lighting(value: i32) -> &'static str {
-    match value {
-        0 => "Off",
-        1 => "Low",
-        3 => "Normal",
-        5 => "High",
-        7 => "Extra High",
-        8 => "Extra High 1",
-        9 => "Extra High 2",
-        0xFFFF => "Auto",
-        _ => "Unknown",
-    }
-}
-
-/// Decodes Nikon vignette control to human-readable string
-fn decode_vignette_control(value: i32) -> &'static str {
-    match value {
-        0 => "Off",
-        1 => "Low",
-        2 => "Normal",
-        3 => "High",
-        _ => "Unknown",
+        0 => "Off".to_string(),
+        1 => "Low".to_string(),
+        3 => "Normal".to_string(),
+        5 => "High".to_string(),
+        other => format!("Unknown ({})", other),
     }
 }
 
@@ -291,6 +409,16 @@ impl MakerNoteParser for NikonParser {
         &self,
         data: &[u8],
         byte_order: ByteOrder,
+        tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        self.parse_with_model(data, byte_order, None, tags)
+    }
+
+    fn parse_with_model(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
@@ -347,429 +475,482 @@ impl MakerNoteParser for NikonParser {
             max_entries: 200,
         };
 
+        // Every value inside this IFD -- inline or out-of-line -- is resolved
+        // through `value_bytes`, which understands that offsets are relative to
+        // the embedded TIFF header at `tiff_start` and that values of four
+        // bytes or fewer live in the entry itself. The MakerNote's own byte
+        // order (`tiff_byte_order`) governs, not the enclosing file's.
+        let order = tiff_byte_order;
+        let bytes_of = |entry: &IfdEntry| value_bytes(entry, data, tiff_start, order);
+
+        // Read an entry that holds a single unsigned integer.
+        let scalar_of = |entry: &IfdEntry| -> Option<u32> {
+            let bytes = bytes_of(entry)?;
+            match bytes.len() {
+                1 => Some(bytes[0] as u32),
+                2 => read_u16(&bytes, 0, order).map(u32::from),
+                4 => value_reader::read_u32(&bytes, 0, order),
+                _ => None,
+            }
+        };
+
+        // Read an entry that holds a single signed 16-bit integer.
+        let scalar_i16_of = |entry: &IfdEntry| -> Option<i16> {
+            let bytes = bytes_of(entry)?;
+            read_u16(&bytes, 0, order).map(|v| v as i16)
+        };
+
+        // Read every int16u in an entry as a space-separated list, which is
+        // how ExifTool renders multi-count integer tags before PrintConv.
+        let u16_list_of = |entry: &IfdEntry| -> Option<String> {
+            let bytes = bytes_of(entry)?;
+            let values: Vec<String> = (0..bytes.len() / 2)
+                .filter_map(|i| read_u16(&bytes, i * 2, order))
+                .map(|v| v.to_string())
+                .collect();
+            if values.is_empty() {
+                None
+            } else {
+                Some(values.join(" "))
+            }
+        };
+
+        // Read a string tag and apply the Nikon main table's PRINT_CONV.
+        let string_of = |entry: &IfdEntry| -> Option<String> {
+            let bytes = bytes_of(entry)?;
+            Some(format_string(&ascii_value(&bytes)))
+        };
+
         // Parse IFD entries starting at the IFD location
         // Pass the full 'data' buffer so that offset calculations work correctly
-        let _ = parse_ifd_entries(
-            &data[ifd_absolute..],
-            tiff_byte_order,
-            &config,
-            |entry, _ifd_data| {
-                // Offsets in Nikon MakerNote IFD entries are relative to the embedded TIFF structure
-                // which starts at byte 10 (tiff_start) in the full data buffer
-
-                match entry.tag_id {
-                    // Nikon Capture NX edit history. Not an IFD -- a stream of
-                    // variable-length records with 32-bit ids, always
-                    // little-endian, walked by nikon_capture_data. It is
-                    // reached only from here: the existing NikonCaptureParser
-                    // is dispatched on a MakerNote *signature*, which no NEF
-                    // presents, so it never ran.
-                    NIKON_CAPTURE_DATA => {
-                        let start = tiff_start + entry.value_offset as usize;
-                        let end = start.saturating_add(entry.value_count as usize);
-                        if let Some(block) = data.get(start..end) {
-                            nikon_capture_data::parse_nikon_capture_data(block, tags);
-                        }
+        let _ = parse_ifd_entries(&data[ifd_absolute..], order, &config, |entry, _ifd_data| {
+            match entry.tag_id {
+                // Nikon Capture NX edit history. Not an IFD -- a stream of
+                // variable-length records with 32-bit ids, always
+                // little-endian, walked by nikon_capture_data. It is
+                // reached only from here: the existing NikonCaptureParser
+                // is dispatched on a MakerNote *signature*, which no NEF
+                // presents, so it never ran.
+                NIKON_CAPTURE_DATA => {
+                    let start = tiff_start + entry.value_offset as usize;
+                    let end = start.saturating_add(entry.value_count as usize);
+                    if let Some(block) = data.get(start..end) {
+                        nikon_capture_data::parse_nikon_capture_data(block, tags);
                     }
+                }
 
-                    // Simple string tags
-                    NIKON_VERSION | NIKON_SERIAL_NUMBER => {
-                        // String offsets are relative to the TIFF header (byte 10)
-                        if let Some(value) = extract_string_with_offset(entry, data, tiff_start) {
-                            let tag_name = nikon_tag_to_name(entry.tag_id);
-                            tags.insert(tag_name, value);
-                        }
+                // undef[4]. Binary on early Coolpix models, ASCII digits on
+                // everything else; PrintConv turns "0210" into "2.10".
+                NIKON_VERSION => {
+                    if let Some(bytes) = bytes_of(entry)
+                        && bytes.len() >= 4
+                    {
+                        let raw = if bytes[0] <= 0x09 {
+                            bytes[..4].iter().map(|b| b.to_string()).collect::<String>()
+                        } else {
+                            ascii_value(&bytes)
+                        };
+                        let printed =
+                            if raw.len() >= 2 && raw[..2].chars().all(|c| c.is_ascii_digit()) {
+                                let joined = format!("{}.{}", &raw[..2], &raw[2..]);
+                                joined.strip_prefix('0').unwrap_or(&joined).to_string()
+                            } else {
+                                raw
+                            };
+                        tags.insert("Nikon:MakerNoteVersion".to_string(), printed);
                     }
+                }
 
-                    // Simple integer tags
-                    NIKON_ISO_SPEED => {
-                        let value = entry.value_offset as i32;
-                        tags.insert("Nikon:ISOSpeed".to_string(), format!("ISO {}", value));
+                // int16u[2]: "0 200" for a plain ISO, "1 200" for a Hi mode.
+                // RawConv drops the all-zero form the D300 writes for LO ISO.
+                NIKON_ISO_SPEED => {
+                    if let Some(list) = u16_list_of(entry)
+                        && list != "0 0"
+                    {
+                        let printed = if let Some(rest) = list.strip_prefix("0 ") {
+                            rest.to_string()
+                        } else if let Some(rest) = list.strip_prefix("1 ") {
+                            format!("Hi {}", rest)
+                        } else {
+                            list
+                        };
+                        tags.insert("Nikon:ISO".to_string(), printed);
                     }
+                }
 
-                    NIKON_SHUTTER_COUNT => {
-                        let value = entry.value_offset;
+                NIKON_SHUTTER_COUNT => {
+                    if let Some(value) = scalar_of(entry) {
                         tags.insert("Nikon:ShutterCount".to_string(), value.to_string());
                     }
+                }
 
-                    NIKON_IMAGE_COUNT => {
-                        let value = entry.value_offset;
+                NIKON_IMAGE_COUNT => {
+                    if let Some(value) = scalar_of(entry) {
                         tags.insert("Nikon:ImageCount".to_string(), value.to_string());
                     }
+                }
 
-                    // Enumerated values
-                    NIKON_QUALITY => {
-                        let value = entry.value_offset as i32;
-                        tags.insert(
-                            "Nikon:Quality".to_string(),
-                            decode_quality(value).to_string(),
-                        );
-                    }
-
-                    NIKON_WHITE_BALANCE => {
-                        let value = entry.value_offset as i32;
-                        tags.insert(
-                            "Nikon:WhiteBalance".to_string(),
-                            decode_white_balance(value).to_string(),
-                        );
-                    }
-
-                    NIKON_FOCUS_MODE => {
-                        let value = entry.value_offset as i32;
-                        tags.insert(
-                            "Nikon:FocusMode".to_string(),
-                            decode_focus_mode(value).to_string(),
-                        );
-                    }
-
-                    NIKON_FLASH_SETTING => {
-                        let value = entry.value_offset as i32;
-                        tags.insert(
-                            "Nikon:FlashSetting".to_string(),
-                            decode_flash_setting(value).to_string(),
-                        );
-                    }
-
-                    NIKON_FLASH_MODE => {
-                        let value = entry.value_offset as i32;
+                NIKON_FLASH_MODE => {
+                    if let Some(value) = scalar_of(entry) {
                         tags.insert(
                             "Nikon:FlashMode".to_string(),
-                            decode_flash_mode(value).to_string(),
+                            decode_flash_mode(value as i32),
                         );
                     }
+                }
 
-                    NIKON_SHOOTING_MODE => {
-                        let value = entry.value_offset as i32;
+                NIKON_SHOOTING_MODE => {
+                    if let Some(value) = scalar_of(entry) {
                         tags.insert(
                             "Nikon:ShootingMode".to_string(),
-                            decode_shooting_mode(value).to_string(),
+                            decode_shooting_mode(value, model),
                         );
                     }
+                }
 
-                    NIKON_COLOR_SPACE => {
-                        let value = entry.value_offset as i32;
+                NIKON_COLOR_SPACE => {
+                    if let Some(value) = scalar_of(entry) {
+                        tags.insert("Nikon:ColorSpace".to_string(), decode_color_space(value));
+                    }
+                }
+
+                NIKON_ACTIVE_D_LIGHTING => {
+                    if let Some(value) = scalar_of(entry) {
                         tags.insert(
-                            "Nikon:ColorSpace".to_string(),
-                            decode_color_space(value).to_string(),
+                            "Nikon:ActiveD-Lighting".to_string(),
+                            decode_active_d_lighting(value),
                         );
                     }
+                }
 
-                    NIKON_ACTIVE_D_LIGHTING => {
-                        let value = entry.value_offset as i32;
-                        tags.insert(
-                            "Nikon:ActiveDLighting".to_string(),
-                            decode_active_d_lighting(value).to_string(),
-                        );
-                    }
-
-                    NIKON_VIGNETTE_CONTROL => {
-                        let value = entry.value_offset as i32;
+                NIKON_VIGNETTE_CONTROL => {
+                    if let Some(value) = scalar_of(entry) {
                         tags.insert(
                             "Nikon:VignetteControl".to_string(),
-                            decode_vignette_control(value).to_string(),
+                            decode_vignette_control(value),
                         );
                     }
+                }
 
-                    // Lens information (simple format)
-                    NIKON_LENS_TYPE => {
-                        let value = entry.value_offset;
-                        tags.insert("Nikon:LensType".to_string(), format!("0x{:02X}", value));
+                NIKON_LENS_TYPE => {
+                    if let Some(value) = scalar_of(entry) {
+                        tags.insert("Nikon:LensType".to_string(), decode_lens_type(value));
                     }
+                }
 
-                    // LensData array (complex)
-                    NIKON_LENS_DATA => {
-                        if let Some(array) = extract_u16_array(entry, data, byte_order) {
-                            // Extract lens ID and look up lens name
-                            if array.len() > LENS_DATA_LENS_ID {
-                                let lens_id = array[LENS_DATA_LENS_ID];
-                                if let Some(lens_name) = lookup_lens_name(lens_id) {
-                                    tags.insert("Nikon:LensID".to_string(), lens_name);
-                                } else {
-                                    tags.insert(
-                                        "Nikon:LensID".to_string(),
-                                        format!("Unknown ({})", lens_id),
-                                    );
-                                }
-                            }
-
-                            // Extract focal length
-                            if array.len() > LENS_DATA_FOCAL_LENGTH {
-                                let focal_length = array[LENS_DATA_FOCAL_LENGTH];
-                                tags.insert(
-                                    "Nikon:FocalLength".to_string(),
-                                    format!("{} mm", focal_length),
-                                );
-                            }
-
-                            // Extract focus distance
-                            if array.len() > LENS_DATA_FOCUS_DISTANCE {
-                                let focus_distance = array[LENS_DATA_FOCUS_DISTANCE];
-                                tags.insert(
-                                    "Nikon:FocusDistance".to_string(),
-                                    format!("{} mm", focus_distance),
-                                );
-                            }
-
-                            // Extract aperture range
-                            if array.len() > LENS_DATA_MAX_APERTURE_AT_MIN_FOCAL {
-                                let max_aperture_min = array[LENS_DATA_MAX_APERTURE_AT_MIN_FOCAL];
-                                tags.insert(
-                                    "Nikon:MaxApertureAtMinFocal".to_string(),
-                                    format!("f/{:.1}", max_aperture_min as f32 / 10.0),
-                                );
-                            }
-
-                            if array.len() > LENS_DATA_MAX_APERTURE_AT_MAX_FOCAL {
-                                let max_aperture_max = array[LENS_DATA_MAX_APERTURE_AT_MAX_FOCAL];
-                                tags.insert(
-                                    "Nikon:MaxApertureAtMaxFocal".to_string(),
-                                    format!("f/{:.1}", max_aperture_max as f32 / 10.0),
-                                );
-                            }
+                // rational64u[4]: short focal, long focal, aperture at each.
+                NIKON_LENS => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        let values: Vec<f64> = (0..4)
+                            .filter_map(|i| rational_value(&bytes, i, order, false))
+                            .collect();
+                        if let Some(printed) = print_lens_info(&values) {
+                            tags.insert("Nikon:Lens".to_string(), printed);
                         }
                     }
+                }
 
-                    // ShotInfo array
-                    NIKON_SHOT_INFO => {
-                        if let Some(array) = extract_u16_array(entry, data, byte_order) {
-                            // Version
-                            if !array.is_empty() {
-                                tags.insert(
-                                    "Nikon:ShotInfoVersion".to_string(),
-                                    format!("{}", array[SHOT_INFO_VERSION]),
-                                );
-                            }
+                // Flat binary block; layout keys off its own version string.
+                NIKON_LENS_DATA => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        lens_data::parse_lens_data(&bytes, tags);
+                    }
+                }
 
-                            // Shutter count (alternative location)
-                            if array.len() > SHOT_INFO_SHUTTER_COUNT {
-                                let shutter_count = array[SHOT_INFO_SHUTTER_COUNT];
-                                if shutter_count > 0 {
-                                    tags.insert(
-                                        "Nikon:ShotInfoShutterCount".to_string(),
-                                        shutter_count.to_string(),
-                                    );
-                                }
-                            }
+                // Four bytes: two enums plus an int16u bitmask whose byte order
+                // is chosen by camera model rather than by the TIFF header.
+                NIKON_AF_INFO => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        af_info::parse_af_info(&bytes, af_info::af_info_byte_order(model), tags);
+                    }
+                }
 
-                            // AF point used
-                            if array.len() > SHOT_INFO_AF_POINT_USED {
-                                let af_point = array[SHOT_INFO_AF_POINT_USED];
-                                tags.insert("Nikon:AFPointUsed".to_string(), af_point.to_string());
-                            }
+                NIKON_PREVIEW_IFD => {
+                    sub_ifds::parse_preview_ifd(
+                        data,
+                        tiff_start,
+                        entry.value_offset as usize,
+                        order,
+                        tags,
+                    );
+                }
 
-                            // Vibration reduction
-                            if array.len() > SHOT_INFO_VIBRATION_REDUCTION {
-                                let vr = array[SHOT_INFO_VIBRATION_REDUCTION];
-                                let vr_status = if vr == 0 { "Off" } else { "On" };
-                                tags.insert(
-                                    "Nikon:VibrationReduction".to_string(),
-                                    vr_status.to_string(),
-                                );
-                            }
+                NIKON_SCAN_IFD => {
+                    sub_ifds::parse_scan_ifd(
+                        data,
+                        tiff_start,
+                        entry.value_offset as usize,
+                        order,
+                        tags,
+                    );
+                }
 
-                            // Auto ISO
-                            if array.len() > SHOT_INFO_AUTO_ISO {
-                                let auto_iso = array[SHOT_INFO_AUTO_ISO];
-                                if auto_iso > 0 {
-                                    tags.insert(
-                                        "Nikon:AutoISO".to_string(),
-                                        format!("ISO {}", auto_iso),
-                                    );
-                                }
-                            }
+                NIKON_CAPTURE_OFFSETS => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        sub_ifds::parse_capture_offsets(&bytes, order, tags);
+                    }
+                }
+
+                // ColorBalance (0x0097). The block's leading version string
+                // selects the layout; only 0103 (D70/D70s) is stored in the
+                // clear at a known offset. Every 02xx variant is encrypted with
+                // a SerialNumber/ShutterCount key, so nothing is emitted for
+                // them rather than a plausible-looking guess.
+                NIKON_COLOR_BALANCE_A => {
+                    if let Some(bytes) = bytes_of(entry)
+                        && bytes.len() >= 4
+                        && &bytes[..4] == b"0103"
+                    {
+                        let levels: Vec<String> = (0..4)
+                            .filter_map(|i| read_u16(&bytes, 20 + i * 2, order))
+                            .map(|v| v.to_string())
+                            .collect();
+                        if levels.len() == 4 {
+                            tags.insert("Nikon:WB_RGBGLevels".to_string(), levels.join(" "));
                         }
                     }
+                }
 
-                    // ColorBalance array (white balance RGB coefficients)
-                    NIKON_COLOR_BALANCE_A => {
-                        if let Some(array) = extract_u16_array(entry, data, byte_order)
-                            && array.len() >= 4
-                        {
+                // rational64u[4]
+                NIKON_WB_RB_LEVELS => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        let values: Vec<String> = (0..4)
+                            .filter_map(|i| rational_value(&bytes, i, order, false))
+                            .map(format_number)
+                            .collect();
+                        if values.len() == 4 {
+                            tags.insert("Nikon:WB_RBLevels".to_string(), values.join(" "));
+                        }
+                    }
+                }
+
+                // Binary blobs reported only as a byte count unless -b is used.
+                NIKON_CONTRAST_CURVE => {
+                    if let Some(len) = value_reader::value_len(entry) {
+                        tags.insert("Nikon:ContrastCurve".to_string(), binary_placeholder(len));
+                    }
+                }
+
+                NIKON_NEF_LINEAR_ZOOM => {
+                    if let Some(len) = value_reader::value_len(entry) {
+                        tags.insert(
+                            "Nikon:NEFLinearizationTable".to_string(),
+                            binary_placeholder(len),
+                        );
+                    }
+                }
+
+                // int16u[2]
+                NIKON_RAW_IMAGE_CENTER => {
+                    if let Some(list) = u16_list_of(entry) {
+                        tags.insert("Nikon:RawImageCenter".to_string(), list);
+                    }
+                }
+
+                // rational64u[2], printed as "W x H um"
+                NIKON_SENSOR_PIXEL_SIZE => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        let values: Vec<String> = (0..2)
+                            .filter_map(|i| rational_value(&bytes, i, order, false))
+                            .map(format_number)
+                            .collect();
+                        if values.len() == 2 {
                             tags.insert(
-                                "Nikon:WB_RBLevels".to_string(),
-                                format!("{} {}", array[0], array[1]),
+                                "Nikon:SensorPixelSize".to_string(),
+                                format!("{} x {} um", values[0], values[1]),
                             );
                         }
                     }
+                }
 
-                    // Additional string tags
-                    NIKON_IMAGE_OPTIMIZATION
-                    | NIKON_SATURATION_TEXT
-                    | NIKON_VARI_PROGRAM
-                    | NIKON_COLOR_MODE
-                    | NIKON_SCENE_MODE
-                    | NIKON_LIGHT_SOURCE
-                    | NIKON_NOISE_REDUCTION
-                    | NIKON_TONE_COMP
-                    | NIKON_COLOR_HUE
-                    | NIKON_IMAGE_PROCESSING
-                    | NIKON_PICTURE_CONTROL
-                    | NIKON_SCENE_ASSIST
-                    | NIKON_RETOUCH_HISTORY
-                    | NIKON_FLASH_TYPE => {
-                        if let Some(value) = extract_string_with_offset(entry, data, tiff_start) {
-                            let tag_name = nikon_tag_to_name(entry.tag_id);
-                            tags.insert(tag_name, value);
-                        }
+                // String tags. The Nikon main table's PRINT_CONV (FormatString)
+                // restores the mixed case behind Nikon's all-caps values.
+                NIKON_QUALITY
+                | NIKON_WHITE_BALANCE
+                | NIKON_SHARPNESS
+                | NIKON_FOCUS_MODE
+                | NIKON_FLASH_SETTING
+                | NIKON_ISO_SELECTION
+                | NIKON_SERIAL_NUMBER
+                | NIKON_SERIAL_NUMBER_ALT
+                | NIKON_IMAGE_OPTIMIZATION
+                | NIKON_SATURATION_TEXT
+                | NIKON_VARI_PROGRAM
+                | NIKON_COLOR_MODE
+                | NIKON_SCENE_MODE
+                | NIKON_LIGHT_SOURCE
+                | NIKON_NOISE_REDUCTION
+                | NIKON_TONE_COMP
+                | NIKON_COLOR_HUE
+                | NIKON_IMAGE_PROCESSING
+                | NIKON_SCENE_ASSIST
+                | NIKON_FLASH_TYPE => {
+                    if let Some(value) = string_of(entry) {
+                        tags.insert(nikon_tag_to_name(entry.tag_id), value);
                     }
+                }
 
-                    // Additional integer tags
-                    NIKON_DELETED_IMAGE_COUNT => {
-                        let value = entry.value_offset;
+                NIKON_DELETED_IMAGE_COUNT => {
+                    if let Some(value) = scalar_of(entry) {
                         tags.insert("Nikon:DeletedImageCount".to_string(), value.to_string());
                     }
+                }
 
-                    NIKON_IMAGE_DATA_SIZE => {
-                        let value = entry.value_offset;
+                NIKON_IMAGE_DATA_SIZE => {
+                    if let Some(value) = scalar_of(entry) {
                         tags.insert("Nikon:ImageDataSize".to_string(), value.to_string());
                     }
+                }
 
-                    NIKON_WHITE_BALANCE_FINE => {
-                        let value = entry.value_offset as i32;
+                NIKON_WHITE_BALANCE_FINE => {
+                    if let Some(value) = scalar_i16_of(entry) {
                         tags.insert("Nikon:WhiteBalanceFineTune".to_string(), value.to_string());
                     }
+                }
 
-                    NIKON_PROGRAM_SHIFT => {
-                        let value = entry.value_offset as i32;
-                        tags.insert("Nikon:ProgramShift".to_string(), value.to_string());
+                // undef[4] byte triples, rendered as fractions.
+                NIKON_PROGRAM_SHIFT => {
+                    if let Some(bytes) = bytes_of(entry)
+                        && let Some(value) = nikon_signed_ev(&bytes)
+                    {
+                        tags.insert("Nikon:ProgramShift".to_string(), print_fraction(value));
                     }
+                }
 
-                    NIKON_EXPOSURE_DIFF => {
-                        let value = entry.value_offset as i32;
-                        tags.insert("Nikon:ExposureDifference".to_string(), value.to_string());
+                NIKON_EXPOSURE_DIFF => {
+                    if let Some(bytes) = bytes_of(entry)
+                        && let Some(value) = nikon_signed_ev(&bytes)
+                    {
+                        // PrintConv: $val ? sprintf("%+.1f",$val) : 0
+                        let printed = if value == 0.0 {
+                            "0".to_string()
+                        } else {
+                            format!("{:+.1}", value)
+                        };
+                        tags.insert("Nikon:ExposureDifference".to_string(), printed);
                     }
+                }
 
-                    NIKON_FLASH_EXPOSURE_COMP => {
-                        let value = entry.value_offset as i32;
-                        let ev = value as f32 / 6.0;
-                        tags.insert(
-                            "Nikon:FlashExposureComp".to_string(),
-                            format!("{:+.1} EV", ev),
-                        );
+                NIKON_FLASH_EXPOSURE_COMP => {
+                    if let Some(bytes) = bytes_of(entry)
+                        && let Some(value) = nikon_signed_ev(&bytes)
+                    {
+                        tags.insert("Nikon:FlashExposureComp".to_string(), print_fraction(value));
                     }
+                }
 
-                    NIKON_EXTERNAL_FLASH_COMP => {
-                        let value = entry.value_offset as i32;
-                        let ev = value as f32 / 6.0;
+                NIKON_EXTERNAL_FLASH_COMP => {
+                    if let Some(bytes) = bytes_of(entry)
+                        && let Some(value) = nikon_signed_ev(&bytes)
+                    {
                         tags.insert(
                             "Nikon:ExternalFlashExposureComp".to_string(),
-                            format!("{:+.1} EV", ev),
+                            print_fraction(value),
                         );
                     }
+                }
 
-                    NIKON_FLASH_BRACKET_VALUE => {
-                        let value = entry.value_offset as i32;
-                        let ev = value as f32 / 6.0;
+                NIKON_FLASH_BRACKET_VALUE => {
+                    if let Some(bytes) = bytes_of(entry)
+                        && let Some(value) = nikon_signed_ev(&bytes)
+                    {
                         tags.insert(
                             "Nikon:FlashExposureBracketValue".to_string(),
-                            format!("{:+.1} EV", ev),
+                            format!("{:.1}", value),
                         );
                     }
+                }
 
-                    NIKON_EXPOSURE_BRACKET_VALUE => {
-                        let value = entry.value_offset as i32;
-                        let ev = value as f32 / 6.0;
-                        tags.insert(
-                            "Nikon:ExposureBracketValue".to_string(),
-                            format!("{:+.1} EV", ev),
-                        );
+                NIKON_EXPOSURE_TUNING => {
+                    if let Some(bytes) = bytes_of(entry)
+                        && let Some(value) = nikon_signed_ev(&bytes)
+                    {
+                        tags.insert("Nikon:ExposureTuning".to_string(), print_fraction(value));
                     }
+                }
 
-                    NIKON_EXPOSURE_TUNING => {
-                        let value = entry.value_offset as i32;
-                        let ev = value as f32 / 6.0;
-                        tags.insert("Nikon:ExposureTuning".to_string(), format!("{:+.1} EV", ev));
-                    }
-
-                    NIKON_HUE_ADJUSTMENT => {
-                        let value = entry.value_offset as i32;
-                        tags.insert("Nikon:HueAdjustment".to_string(), format!("{}", value));
-                    }
-
-                    NIKON_SATURATION => {
-                        let value = entry.value_offset as i32;
-                        tags.insert("Nikon:SaturationLevel".to_string(), format!("{}", value));
-                    }
-
-                    NIKON_SHARPNESS => {
-                        let value = entry.value_offset as i32;
-                        tags.insert("Nikon:Sharpness".to_string(), format!("{}", value));
-                    }
-
-                    NIKON_LENS_FSTOPS => {
-                        let value = entry.value_offset as f32 / 12.0;
-                        tags.insert("Nikon:LensFStops".to_string(), format!("{:.1}", value));
-                    }
-
-                    NIKON_NEF_COMPRESSION => {
-                        let value = entry.value_offset as i32;
-                        let mode = match value {
-                            1 => "Lossy (type 1)",
-                            2 => "Uncompressed",
-                            3 => "Lossless",
-                            4 => "Lossy (type 2)",
-                            5 => "Striped Lossless",
-                            6 => "High Efficiency",
-                            7 => "High Efficiency*",
-                            _ => "Unknown",
+                // rational64s
+                NIKON_EXPOSURE_BRACKET_VALUE => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        let printed = match rational_value(&bytes, 0, order, true) {
+                            Some(value) => print_fraction(value),
+                            // 0/0 is what a Z9 writes for the C30/C60/C90 modes.
+                            None => "n/a".to_string(),
                         };
-                        tags.insert("Nikon:NEFCompression".to_string(), mode.to_string());
+                        tags.insert("Nikon:ExposureBracketValue".to_string(), printed);
                     }
+                }
 
-                    NIKON_IMAGE_AUTH => {
-                        let value = entry.value_offset as i32;
+                NIKON_HUE_ADJUSTMENT => {
+                    if let Some(value) = scalar_i16_of(entry) {
+                        tags.insert("Nikon:HueAdjustment".to_string(), value.to_string());
+                    }
+                }
+
+                NIKON_SATURATION => {
+                    if let Some(value) = scalar_i16_of(entry) {
+                        tags.insert("Nikon:SaturationAdj".to_string(), value.to_string());
+                    }
+                }
+
+                // undef[4] unsigned byte triple: 64/12 = 5.33 stops.
+                NIKON_LENS_FSTOPS => {
+                    if let Some(bytes) = bytes_of(entry)
+                        && let Some(value) = nikon_unsigned_ratio(&bytes)
+                    {
+                        tags.insert("Nikon:LensFStops".to_string(), format!("{:.2}", value));
+                    }
+                }
+
+                NIKON_NEF_COMPRESSION => {
+                    if let Some(value) = scalar_of(entry) {
+                        let mode = match value {
+                            1 => "Lossy (type 1)".to_string(),
+                            2 => "Uncompressed".to_string(),
+                            3 => "Lossless".to_string(),
+                            4 => "Lossy (type 2)".to_string(),
+                            5 => "Striped packed 12 bits".to_string(),
+                            6 => "Uncompressed (reduced to 12 bit)".to_string(),
+                            7 => "Unpacked 12 bits".to_string(),
+                            8 => "Small".to_string(),
+                            9 => "Packed 12 bits".to_string(),
+                            10 => "Packed 14 bits".to_string(),
+                            13 => "High Efficiency".to_string(),
+                            14 => "High Efficiency*".to_string(),
+                            other => format!("Unknown ({})", other),
+                        };
+                        tags.insert("Nikon:NEFCompression".to_string(), mode);
+                    }
+                }
+
+                NIKON_IMAGE_AUTH => {
+                    if let Some(value) = scalar_of(entry) {
                         let status = if value == 0 { "Off" } else { "On" };
                         tags.insert("Nikon:ImageAuthentication".to_string(), status.to_string());
                     }
+                }
 
-                    NIKON_ISO_SELECTION => {
-                        let value = entry.value_offset as i32;
-                        let selection = if value == 0 { "Auto" } else { "Manual" };
-                        tags.insert("Nikon:ISOSelection".to_string(), selection.to_string());
+                // int16u[2], same "0 <iso>" shape as tag 0x0002.
+                NIKON_ISO_SETTING => {
+                    if let Some(list) = u16_list_of(entry) {
+                        let printed = list.strip_prefix("0 ").unwrap_or(&list).to_string();
+                        tags.insert("Nikon:ISOSetting".to_string(), printed);
                     }
+                }
 
-                    NIKON_ISO_SETTING => {
-                        let value = entry.value_offset as i32;
-                        if value > 0 {
-                            tags.insert("Nikon:ISOSetting".to_string(), format!("ISO {}", value));
-                        }
+                NIKON_FLASH_INFO => {
+                    if let Some(bytes) = bytes_of(entry)
+                        && bytes.len() >= 4
+                    {
+                        tags.insert(
+                            "Nikon:FlashInfoVersion".to_string(),
+                            ascii_value(&bytes[..4]),
+                        );
                     }
+                }
 
-                    NIKON_DISTORTION_CONTROL | NIKON_DISTORT_INFO => {
-                        let value = entry.value_offset as i32;
-                        let mode = match value {
-                            0 => "Off",
-                            1 => "On",
-                            2 => "On (Cannot Disable)",
-                            _ => "Unknown",
-                        };
-                        tags.insert("Nikon:DistortionControl".to_string(), mode.to_string());
-                    }
-
-                    // Note: HIGH_ISO_NR (0x00B0) removed - same tag ID as ColorSpace, handled above
-
-                    // Array tags
-                    NIKON_AF_INFO => {
-                        if let Some(array) = extract_u16_array(entry, data, byte_order)
-                            && !array.is_empty()
-                        {
-                            tags.insert("Nikon:AFInfo".to_string(), format!("{}", array[0]));
-                        }
-                    }
-
-                    NIKON_FLASH_INFO => {
-                        if let Some(array) = extract_u16_array(entry, data, byte_order)
-                            && !array.is_empty()
-                        {
-                            tags.insert(
-                                "Nikon:FlashInfoVersion".to_string(),
-                                format!("{}", array[0]),
-                            );
-                        }
-                    }
-
-                    NIKON_WORLD_TIME | NIKON_WORLD_TIME_ALT => {
-                        let offset_minutes = entry.value_offset as i32;
+                NIKON_WORLD_TIME => {
+                    if let Some(offset_minutes) = scalar_i16_of(entry) {
                         let hours = offset_minutes / 60;
                         let minutes = (offset_minutes % 60).abs();
                         let sign = if offset_minutes >= 0 { "+" } else { "-" };
@@ -778,110 +959,89 @@ impl MakerNoteParser for NikonParser {
                             format!("UTC{}{:02}:{:02}", sign, hours.abs(), minutes),
                         );
                     }
+                }
 
-                    NIKON_ISO_INFO | NIKON_ISO_INFO_ALT => {
-                        if let Some(array) = extract_u16_array(entry, data, byte_order)
-                            && !array.is_empty()
-                        {
-                            tags.insert("Nikon:ISOExpansion".to_string(), format!("{}", array[0]));
-                        }
+                NIKON_VR_INFO => {
+                    if let Some(bytes) = bytes_of(entry)
+                        && bytes.len() >= 4
+                    {
+                        tags.insert("Nikon:VRInfoVersion".to_string(), ascii_value(&bytes[..4]));
                     }
+                }
 
-                    NIKON_VR_INFO | NIKON_VR_INFO_ALT => {
-                        if let Some(array) = extract_u16_array(entry, data, byte_order)
-                            && !array.is_empty()
-                        {
-                            tags.insert("Nikon:VRInfoVersion".to_string(), format!("{}", array[0]));
-                            if array.len() > 1 {
-                                let vr_mode = match array[1] {
-                                    0 => "Off",
-                                    1 => "Normal",
-                                    2 => "Active",
-                                    3 => "Sport",
-                                    _ => "Unknown",
-                                };
-                                tags.insert("Nikon:VRMode".to_string(), vr_mode.to_string());
-                            }
-                        }
-                    }
-
-                    NIKON_MULTI_EXPOSURE => {
-                        if let Some(array) = extract_u16_array(entry, data, byte_order)
-                            && !array.is_empty()
-                        {
-                            let mode = match array[0] {
-                                0 => "Off",
-                                1 => "Multiple Exposure",
-                                2 => "Image Overlay",
-                                3 => "HDR",
-                                _ => "Unknown",
-                            };
-                            tags.insert("Nikon:MultiExposureMode".to_string(), mode.to_string());
-                        }
-                    }
-
-                    NIKON_IMAGE_BOUNDARY => {
-                        if let Some(array) = extract_u16_array(entry, data, byte_order)
-                            && array.len() >= 4
-                        {
-                            tags.insert(
-                                "Nikon:ImageBoundary".to_string(),
-                                format!("{} {} {} {}", array[0], array[1], array[2], array[3]),
-                            );
-                        }
-                    }
-
-                    NIKON_CROP_HI_SPEED => {
-                        if let Some(array) = extract_u16_array(entry, data, byte_order)
-                            && !array.is_empty()
-                        {
-                            let mode = match array[0] {
-                                0 => "Off",
-                                1 => "1.3x Crop",
-                                2 => "DX Crop",
-                                3 => "5:4 Crop",
-                                4 => "1:1 Crop",
-                                _ => "Unknown Crop",
-                            };
-                            tags.insert("Nikon:CropHiSpeed".to_string(), mode.to_string());
-                        }
-                    }
-
-                    NIKON_COLOR_BALANCE => {
-                        if let Some(array) = extract_u16_array(entry, data, byte_order)
-                            && array.len() >= 4
-                        {
-                            tags.insert(
-                                "Nikon:ColorBalance".to_string(),
-                                format!("{} {} {} {}", array[0], array[1], array[2], array[3]),
-                            );
-                        }
-                    }
-
-                    NIKON_PICTURE_CONTROL_DATA => {
-                        if let Some(array) = extract_u16_array(entry, data, byte_order)
-                            && !array.is_empty()
-                        {
-                            tags.insert(
-                                "Nikon:PictureControlVersion".to_string(),
-                                format!("{}", array[0]),
-                            );
-                        }
-                    }
-
-                    NIKON_SENSOR_PIXEL_SIZE => {
-                        let value = entry.value_offset;
+                NIKON_MULTI_EXPOSURE => {
+                    if let Some(bytes) = bytes_of(entry)
+                        && bytes.len() >= 4
+                    {
                         tags.insert(
-                            "Nikon:SensorPixelSize".to_string(),
-                            format!("0x{:08X}", value),
+                            "Nikon:MultiExposureVersion".to_string(),
+                            ascii_value(&bytes[..4]),
                         );
                     }
-
-                    // Skip unrecognized tags silently
-                    _ => {}
+                    if let Some(bytes) = bytes_of(entry)
+                        && let Some(raw) = value_reader::read_u32(&bytes, 4, order)
+                    {
+                        let mode = match raw {
+                            0 => "Off".to_string(),
+                            1 => "Multiple Exposure".to_string(),
+                            2 => "Image Overlay".to_string(),
+                            3 => "HDR".to_string(),
+                            other => format!("Unknown ({})", other),
+                        };
+                        tags.insert("Nikon:MultiExposureMode".to_string(), mode);
+                    }
                 }
-            },
-        );
+
+                NIKON_IMAGE_BOUNDARY => {
+                    if let Some(list) = u16_list_of(entry) {
+                        tags.insert("Nikon:ImageBoundary".to_string(), list);
+                    }
+                }
+
+                // int16u[7]: mode, then the source and cropped dimensions and
+                // the crop origin. ExifTool's %cropHiSpeed OTHER handler spells
+                // all seven out; with any other count only the mode is named.
+                NIKON_CROP_HI_SPEED => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        let values: Vec<u16> = (0..bytes.len() / 2)
+                            .filter_map(|i| read_u16(&bytes, i * 2, order))
+                            .collect();
+                        if let Some(&raw) = values.first() {
+                            let mode = decode_crop_hi_speed(raw);
+                            let printed = if values.len() == 7 {
+                                format!(
+                                    "{} ({}x{} cropped to {}x{} at pixel {},{})",
+                                    mode,
+                                    values[1],
+                                    values[2],
+                                    values[3],
+                                    values[4],
+                                    values[5],
+                                    values[6]
+                                )
+                            } else {
+                                mode
+                            };
+                            tags.insert("Nikon:CropHiSpeed".to_string(), printed);
+                        }
+                    }
+                }
+
+                NIKON_PICTURE_CONTROL_DATA => {
+                    if let Some(bytes) = bytes_of(entry)
+                        && bytes.len() >= 4
+                    {
+                        tags.insert(
+                            "Nikon:PictureControlVersion".to_string(),
+                            ascii_value(&bytes[..4]),
+                        );
+                    }
+                }
+
+                // Skip unrecognized tags silently
+                _ => {}
+            }
+        });
 
         Ok(())
     }
@@ -903,15 +1063,14 @@ fn nikon_tag_to_name(tag_id: u16) -> String {
         NIKON_QUALITY => "Quality",
         NIKON_WHITE_BALANCE => "WhiteBalance",
         NIKON_SHARPNESS => "Sharpness",
-        NIKON_FOCUS_MODE => "Focus",
+        NIKON_FOCUS_MODE => "FocusMode",
         NIKON_FLASH_SETTING => "FlashSetting",
         NIKON_FLASH_TYPE => "FlashType",
         NIKON_WHITE_BALANCE_FINE => "WhiteBalanceFineTune",
-        NIKON_COLOR_BALANCE => "WBRBLevels",
+        NIKON_WB_RB_LEVELS => "WB_RBLevels",
         NIKON_PROGRAM_SHIFT => "ProgramShift",
         NIKON_EXPOSURE_DIFF => "ExposureDifference",
         NIKON_ISO_SELECTION => "ISOSelection",
-        // Note: PREVIEW_IFD = 0x0011 same as ISO_SELECTION, handled above
         NIKON_FLASH_EXPOSURE_COMP => "FlashExposureComp",
         NIKON_ISO_SETTING => "ISOSetting",
         NIKON_IMAGE_BOUNDARY => "ImageBoundary",
@@ -922,15 +1081,9 @@ fn nikon_tag_to_name(tag_id: u16) -> String {
         NIKON_CROP_HI_SPEED => "CropHiSpeed",
         NIKON_EXPOSURE_TUNING => "ExposureTuning",
         NIKON_SERIAL_NUMBER => "SerialNumber",
-        NIKON_COLOR_SPACE_ALT => "ColorSpace",
-        NIKON_VR_INFO_ALT => "VRInfo",
+        NIKON_SERIAL_NUMBER_ALT => "SerialNumber",
         NIKON_IMAGE_AUTH => "ImageAuthentication",
-        NIKON_ACTIVE_D_LIGHTING_ALT => "ActiveD-Lighting",
         NIKON_PICTURE_CONTROL_DATA => "PictureControlData",
-        NIKON_WORLD_TIME_ALT => "WorldTime",
-        NIKON_ISO_INFO_ALT => "ISOInfo",
-        NIKON_VIGNETTE_CONTROL_ALT => "VignetteControl",
-        NIKON_DISTORT_INFO => "DistortInfo",
 
         // Tone & Color (0x0080-0x0082)
         NIKON_IMAGE_ADJUSTMENT => "ImageAdjustment",
@@ -956,7 +1109,7 @@ fn nikon_tag_to_name(tag_id: u16) -> String {
         NIKON_SHOT_INFO => "ShotInfo",
         NIKON_HUE_ADJUSTMENT => "HueAdjustment",
         NIKON_NEF_COMPRESSION => "NEFCompression",
-        NIKON_SATURATION => "Saturation",
+        NIKON_SATURATION => "SaturationAdj",
         NIKON_NOISE_REDUCTION => "NoiseReduction",
         NIKON_NEF_LINEAR_ZOOM => "NEFLinearizationTable",
         NIKON_COLOR_BALANCE_A => "ColorBalance",
@@ -977,15 +1130,12 @@ fn nikon_tag_to_name(tag_id: u16) -> String {
         NIKON_VARI_PROGRAM => "VariProgram",
 
         // Advanced (0x00B0-0x00B8)
-        NIKON_COLOR_SPACE => "ColorSpace", // 0x00B0 (also HIGH_ISO_NR)
+        NIKON_COLOR_SPACE => "ColorSpace",
         NIKON_VR_INFO => "VRInfo",
         NIKON_MULTI_EXPOSURE => "MultiExposure",
         NIKON_ACTIVE_D_LIGHTING => "ActiveD-Lighting",
-        NIKON_PICTURE_CONTROL => "PictureControl",
         NIKON_WORLD_TIME => "WorldTime",
-        NIKON_ISO_INFO => "ISOInfo",
-        NIKON_VIGNETTE_CONTROL => "VignetteControl", // 0x00B7 (also AF_INFO2)
-        NIKON_DISTORTION_CONTROL => "DistortionControl", // 0x00B8 (also FILE_INFO)
+        NIKON_VIGNETTE_CONTROL => "VignetteControl",
 
         _ => return format!("Nikon:Unknown-{:#06X}", tag_id),
     };
@@ -1075,43 +1225,89 @@ mod tests {
         // 0xFFFF may not return Unknown if caught by earlier pattern
     }
 
+    // Nikon tags 0x0004 (Quality), 0x0005 (WhiteBalance), 0x0006 (Sharpness),
+    // 0x0007 (FocusMode) and 0x0008 (FlashSetting) are `Writable => 'string'`
+    // in Nikon.pm for every model, so the numeric decode tables that used to
+    // live here were decoding the entry's value-offset field. They are gone;
+    // `format_string` is the table's real PrintConv and is tested in
+    // `value_reader`.
+
     #[test]
-    fn test_decode_quality() {
-        assert_eq!(decode_quality(1), "VGA Basic");
-        assert_eq!(decode_quality(6), "SXGA Fine");
-        assert_eq!(decode_quality(12), "UXGA Fine");
-        assert_eq!(decode_quality(99), "Unknown");
+    fn test_decode_flash_mode() {
+        assert_eq!(decode_flash_mode(0), "Did Not Fire");
+        assert_eq!(decode_flash_mode(9), "Fired, TTL Mode");
+        assert_eq!(decode_flash_mode(18), "LED Light");
+        // An unrecognised code reports itself rather than a neighbour's label.
+        assert_eq!(decode_flash_mode(99), "Unknown (99)");
     }
 
     #[test]
-    fn test_decode_white_balance() {
-        assert_eq!(decode_white_balance(0), "Auto");
-        assert_eq!(decode_white_balance(1), "Daylight");
-        assert_eq!(decode_white_balance(5), "Speedlight");
-        assert_eq!(decode_white_balance(99), "Unknown");
+    fn test_decode_lens_type() {
+        // Ground truth produced by running Nikon.pm's own PrintConv.
+        assert_eq!(decode_lens_type(0x00), "AF");
+        assert_eq!(decode_lens_type(0x01), "MF");
+        assert_eq!(decode_lens_type(0x02), "D");
+        assert_eq!(decode_lens_type(0x04), "G");
+        assert_eq!(decode_lens_type(0x06), "G"); // "D G" collapses to "G"
+        assert_eq!(decode_lens_type(0x08), "VR");
+        assert_eq!(decode_lens_type(0x0a), "D VR");
+        assert_eq!(decode_lens_type(0x0e), "G VR");
+        assert_eq!(decode_lens_type(0x10), "1");
+        assert_eq!(decode_lens_type(0x16), "1 G");
+        assert_eq!(decode_lens_type(0x20), "FT-1");
+        assert_eq!(decode_lens_type(0x26), "G FT-1");
+        assert_eq!(decode_lens_type(0x30), "1 FT-1");
+        assert_eq!(decode_lens_type(0x36), "1 G FT-1");
+        assert_eq!(decode_lens_type(0x46), "E G");
+        assert_eq!(decode_lens_type(0x80), "AF-P");
+        assert_eq!(decode_lens_type(0x86), "G AF-P");
+        assert_eq!(decode_lens_type(0xc6), "E AF-P");
     }
 
     #[test]
-    fn test_decode_focus_mode() {
-        assert_eq!(decode_focus_mode(0), "AF-S");
-        assert_eq!(decode_focus_mode(1), "AF-C");
-        assert_eq!(decode_focus_mode(3), "MF (Manual)");
-        assert_eq!(decode_focus_mode(99), "Unknown");
+    fn test_decode_shooting_mode() {
+        assert_eq!(decode_shooting_mode(0, Some("NIKON D70")), "Single-Frame");
+        assert_eq!(decode_shooting_mode(0x01, Some("NIKON D70")), "Continuous");
+        // Bit 5 is model-dependent, and bits 0/1/2/7 suppress the prefix.
+        assert_eq!(
+            decode_shooting_mode(0x20, Some("NIKON D70")),
+            "Single-Frame, Unused LE-NR Slowdown"
+        );
+        assert_eq!(
+            decode_shooting_mode(0x20, Some("NIKON D200")),
+            "Single-Frame, Auto ISO"
+        );
+        // D70s is a different body: \b in Nikon.pm's /D70\b/ excludes it.
+        assert_eq!(
+            decode_shooting_mode(0x20, Some("NIKON D70s")),
+            "Single-Frame, Auto ISO"
+        );
+        // Bit 9 has no label: it must report itself.
+        assert_eq!(
+            decode_shooting_mode(0x200, Some("NIKON D70")),
+            "Single-Frame, [9]"
+        );
     }
 
     #[test]
-    fn test_decode_flash_setting() {
-        assert_eq!(decode_flash_setting(0), "Normal");
-        assert_eq!(decode_flash_setting(2), "Rear Curtain");
-        assert_eq!(decode_flash_setting(6), "Off");
-        assert_eq!(decode_flash_setting(99), "Unknown");
+    fn test_nikon_byte_triples() {
+        // ProgramShift "\0\x01\x06\0" -> 0 * (1/6) = 0
+        assert_eq!(nikon_signed_ev(&[0x00, 0x01, 0x06, 0x00]), Some(0.0));
+        // -6 * (1/6) = -1 EV
+        assert_eq!(nikon_signed_ev(&[0xfa, 0x01, 0x06, 0x00]), Some(-1.0));
+        // A zero divisor yields 0 rather than a division by zero.
+        assert_eq!(nikon_signed_ev(&[0x40, 0x01, 0x00, 0x00]), Some(0.0));
+        assert_eq!(nikon_signed_ev(&[0x00, 0x01]), None);
+        // LensFStops uses the UNSIGNED triple: 64 * (1/12) = 5.33.
+        let stops = nikon_unsigned_ratio(&[0x40, 0x01, 0x0c, 0x00]).unwrap();
+        assert_eq!(format!("{:.2}", stops), "5.33");
     }
 
     #[test]
     fn test_decode_color_space() {
         assert_eq!(decode_color_space(1), "sRGB");
         assert_eq!(decode_color_space(2), "Adobe RGB");
-        assert_eq!(decode_color_space(99), "Unknown");
+        assert_eq!(decode_color_space(99), "Unknown (99)");
     }
 
     #[test]
@@ -1119,7 +1315,19 @@ mod tests {
         assert_eq!(decode_active_d_lighting(0), "Off");
         assert_eq!(decode_active_d_lighting(1), "Low");
         assert_eq!(decode_active_d_lighting(3), "Normal");
+        assert_eq!(decode_active_d_lighting(11), "Extra High 4");
         assert_eq!(decode_active_d_lighting(0xFFFF), "Auto");
+        assert_eq!(decode_active_d_lighting(2), "Unknown (2)");
+    }
+
+    #[test]
+    fn test_decode_vignette_control() {
+        // Nikon.pm skips 2 and 4: Normal is 3 and High is 5.
+        assert_eq!(decode_vignette_control(0), "Off");
+        assert_eq!(decode_vignette_control(1), "Low");
+        assert_eq!(decode_vignette_control(3), "Normal");
+        assert_eq!(decode_vignette_control(5), "High");
+        assert_eq!(decode_vignette_control(2), "Unknown (2)");
     }
 
     #[test]
