@@ -84,6 +84,32 @@ variables. Each of the [worker] and [reviewer] tables takes:
     max_retry_backoff_seconds default 120 (caps the exponential backoff's
                           growth -- otherwise a large max_retries implies
                           an absurd wait on later attempts)
+    governor_calls_per_minute default 30 (cross-process rate governor:
+                          steady-state model-call budget shared by every
+                          worker through one flock-guarded token bucket
+                          at ~/.oxidex/logs/rate-governor.json -- see
+                          governor_acquire. The governor is
+                          account-global, so the [worker] table's knobs
+                          govern every phase, reviewer calls included)
+    governor_burst         default 5 (bucket capacity -- calls that may
+                          go out back-to-back before the per-minute
+                          refill rate throttles the rest)
+    governor_cooldown_seconds default 30 (base GLOBAL cooldown one
+                          rate-limited call (429/5xx) imposes on the
+                          whole fleet via governor_report; doubles per
+                          consecutive limited outcome)
+    governor_max_cooldown_seconds default 300 (cap on that exponential
+                          cooldown growth)
+    max_cluster_tags       default 6 (worker only; sibling-tag
+                          clustering -- the selected tag pulls up to
+                          max_cluster_tags - 1 still-active sibling tags
+                          (same format/family/parser files) into one fix
+                          conversation -- see choose_next_gap. 1 restores
+                          the old one-tag-per-conversation behavior)
+    use_sccache            default true; false sets OXIDEX_USE_SCCACHE=0
+                          so cargo_env never routes rustc through
+                          sccache (cargo's normal per-worktree
+                          incremental cache only)
 
 [reviewer] defaults to [worker] entirely when omitted, so a single table
 covers both the fixer and the reviewer by default -- add [reviewer] only to
@@ -107,6 +133,7 @@ Usage:
     uv run scripts/model_fix_loop.py --config /path/to/config.toml
 """
 import argparse
+import fcntl
 import functools
 import json
 import os
@@ -243,7 +270,10 @@ def compact_messages(messages, trigger_tokens=DEFAULT_COMPACTION_TRIGGER_TOKENS,
     return compacted
 
 
-DEFAULT_RETRYABLE_HTTP_STATUSES = {500, 502, 503, 504}
+# 429 is retryable now that the governor paces retries fleet-wide (see
+# governor_acquire/governor_report) instead of each process backing off
+# independently against the shared account limit.
+DEFAULT_RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
 DEFAULT_MAX_RETRIES = 1000
 DEFAULT_RETRY_BACKOFF_SECONDS = 2
 DEFAULT_MAX_RETRY_BACKOFF_SECONDS = 120  # cap growth -- 2**1000 would otherwise be absurd
@@ -308,14 +338,17 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
                 temperature=0, timeout=120, max_retries=DEFAULT_MAX_RETRIES,
                 retry_backoff_seconds=DEFAULT_RETRY_BACKOFF_SECONDS,
                 max_retry_backoff_seconds=DEFAULT_MAX_RETRY_BACKOFF_SECONDS, sleep_fn=time.sleep,
-                log_fn=None, usage_fn=None, prompt_cache="auto"):
+                log_fn=None, usage_fn=None, prompt_cache="auto",
+                governor_path=None, governor_calls_per_minute=None, governor_burst=None,
+                governor_cooldown_seconds=None, governor_max_cooldown_seconds=None):
     """POST a chat-completions request, retrying on transient upstream
     failures, and return the assistant's reply text.
 
     Retries (with exponential backoff -- retry_backoff_seconds, *2, *4, ...,
     capped at max_retry_backoff_seconds so a large max_retries doesn't
-    imply an absurd wait -- up to max_retries times) on: a 5xx HTTPError
-    (500/502/503/504 -- server-side, not this request's fault, confirmed
+    imply an absurd wait -- up to max_retries times) on: a retryable
+    HTTPError (429/500/502/503/504 -- rate limiting or server-side, not
+    this request's fault, confirmed
     to occur in bursts across otherwise-unrelated concurrent workers), a
     connection-level URLError (DNS resolution failure, refused connection,
     TLS handshake failure, or a stalled read -- no HTTP response was ever
@@ -325,12 +358,24 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
     comes back completely empty (a provider occasionally returns "200 OK"
     with zero content -- not a legitimate model answer, indistinguishable
     from a dropped/truncated response, and retrying is cheap compared to
-    burning a whole fix attempt on it). A non-5xx HTTPError (4xx: bad
-    request, auth, etc.) fails immediately -- retrying an actual
-    client-side problem just wastes time and can mask a real config
-    issue. max_retries is high (not unlimited) specifically to ride out a
-    long transient outage rather than give up and blacklist a tag over
-    infrastructure, not the tag itself, being the problem.
+    burning a whole fix attempt on it). A non-retryable HTTPError (4xx
+    other than 429: bad request, auth, etc.) fails immediately --
+    retrying an actual client-side problem just wastes time and can mask
+    a real config issue. max_retries is high (not unlimited) specifically
+    to ride out a long transient outage rather than give up and blacklist
+    a tag over infrastructure, not the tag itself, being the problem.
+
+    governor_path (None disables, keeping every old caller byte-identical
+    in behavior) points at the cross-process rate-governor state file (see
+    governor_acquire/governor_report): every attempt first acquires one
+    governor slot (waiting out the shared token bucket and any fleet-wide
+    cooldown, reusing this call's sleep_fn), and every outcome is reported
+    back -- limited=True for a retryable HTTPError (429/5xx, which
+    sets/extends the GLOBAL cooldown so one limited worker pauses the
+    whole fleet), limited=False for a success or a connection-level
+    URLError (infrastructure being unreachable is not rate limiting). The
+    governor_* knobs default to None, resolved to the DEFAULT_GOVERNOR_*
+    values at call time (they are defined later in this module).
 
     When stream is True, the response arrives as OpenAI-compatible SSE
     ("data: {...}" lines terminated by "data: [DONE]") -- each chunk's
@@ -357,6 +402,22 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
     however long that takes, which looks indistinguishable from "stuck"
     to anything tailing the log or a dashboard reading it.
     """
+    # The DEFAULT_GOVERNOR_* constants live after the Task-1 governor
+    # section below this function; resolving them here at call time (not
+    # in the def-time defaults) avoids a NameError at import.
+    governor_calls_per_minute = (
+        DEFAULT_GOVERNOR_CALLS_PER_MINUTE if governor_calls_per_minute is None
+        else governor_calls_per_minute
+    )
+    governor_burst = DEFAULT_GOVERNOR_BURST if governor_burst is None else governor_burst
+    governor_cooldown_seconds = (
+        DEFAULT_GOVERNOR_COOLDOWN_SECONDS if governor_cooldown_seconds is None
+        else governor_cooldown_seconds
+    )
+    governor_max_cooldown_seconds = (
+        DEFAULT_GOVERNOR_MAX_COOLDOWN_SECONDS if governor_max_cooldown_seconds is None
+        else governor_max_cooldown_seconds
+    )
     last_error = None
     for attempt in range(max_retries + 1):
         if attempt > 0:
@@ -367,12 +428,17 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
                     f"waiting {delay}s"
                 )
             sleep_fn(delay)
+        governor_acquire(governor_path, governor_calls_per_minute, governor_burst,
+                         sleep_fn=sleep_fn)
         try:
             reply, usage = _call_model_once(
                 messages, base_url, api_key, model, max_tokens, reasoning_effort,
                 stream, thinking, temperature, timeout, prompt_cache,
             )
         except urllib.error.HTTPError as e:
+            governor_report(governor_path, limited=(e.code in DEFAULT_RETRYABLE_HTTP_STATUSES),
+                            cooldown_seconds=governor_cooldown_seconds,
+                            max_cooldown_seconds=governor_max_cooldown_seconds)
             if e.code not in DEFAULT_RETRYABLE_HTTP_STATUSES:
                 raise
             last_error = e
@@ -389,6 +455,10 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
             # attempts and got it blacklisted without the model ever
             # actually being asked -- see urlopen error "nodename nor
             # servname provided" in a real run's attempt history.
+            # Connection failures aren't rate limiting: limited=False.
+            governor_report(governor_path, limited=False,
+                            cooldown_seconds=governor_cooldown_seconds,
+                            max_cooldown_seconds=governor_max_cooldown_seconds)
             last_error = e
             continue
         if not reply:
@@ -396,6 +466,9 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
             continue
         if usage_fn is not None:
             usage_fn(usage)
+        governor_report(governor_path, limited=False,
+                        cooldown_seconds=governor_cooldown_seconds,
+                        max_cooldown_seconds=governor_max_cooldown_seconds)
         return reply
     # last_error is only None if max_retries < 0 (range(max_retries + 1) never
     # iterates) -- guard against `raise None`, which would raise a confusing
@@ -610,12 +683,112 @@ def cargo_env():
     across worktrees instead of every worker cold-compiling the same ~60
     crates independently. A no-op (falls back to the plain environment,
     i.e. cargo's normal incremental cache only) when sccache isn't on PATH,
-    so this never breaks an environment that doesn't have it.
+    so this never breaks an environment that doesn't have it. Respects an
+    explicit RUSTC_WRAPPER already in the environment, and can be disabled
+    outright with OXIDEX_USE_SCCACHE=0 (main() sets that env var from
+    config.toml's use_sccache knob).
     """
     env = dict(os.environ)
-    if shutil.which("sccache"):
+    if (
+        os.environ.get("OXIDEX_USE_SCCACHE") != "0"
+        and "RUSTC_WRAPPER" not in env
+        and shutil.which("sccache")
+    ):
         env["RUSTC_WRAPPER"] = "sccache"
     return env
+
+
+DEFAULT_GOVERNOR_PATH = OXIDEX_HOME / "logs" / "rate-governor.json"
+DEFAULT_GOVERNOR_CALLS_PER_MINUTE = 30
+DEFAULT_GOVERNOR_BURST = 5
+DEFAULT_GOVERNOR_COOLDOWN_SECONDS = 30
+DEFAULT_GOVERNOR_MAX_COOLDOWN_SECONDS = 300
+
+
+def _governor_locked(path, mutate_fn, now_fn):
+    """Run mutate_fn(state) -> (new_state, result) under an exclusive
+    flock on path's sibling lockfile, loading/saving the JSON state
+    around it. A missing or corrupt state file becomes a fresh
+    permissive state -- the governor must never brick the loop over its
+    own bookkeeping."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_suffix(".lock")
+    with open(lock_path, "w") as lock_f:
+        fcntl.flock(lock_f, fcntl.LOCK_EX)
+        try:
+            state = json.loads(path.read_text())
+            if not isinstance(state, dict):
+                raise ValueError("state is not a dict")
+        except (OSError, ValueError):
+            state = {}
+        state.setdefault("tokens", float(DEFAULT_GOVERNOR_BURST))
+        state.setdefault("last_refill", now_fn())
+        state.setdefault("cooldown_until", 0.0)
+        state.setdefault("consecutive_limited", 0)
+        new_state, result = mutate_fn(state)
+        path.write_text(json.dumps(new_state))
+        return result
+
+
+def governor_acquire(path, calls_per_minute=DEFAULT_GOVERNOR_CALLS_PER_MINUTE,
+                     burst=DEFAULT_GOVERNOR_BURST, now_fn=time.time,
+                     sleep_fn=time.sleep, jitter_fn=random.random):
+    """Block until this process may make one model API call.
+
+    Cross-process token bucket + global cooldown, shared by every worker
+    through one flock-guarded JSON file: refill at calls_per_minute/60
+    tokens/sec (capped at burst), spend one per call, and honor
+    cooldown_until -- which governor_report sets GLOBALLY on a 429/5xx,
+    so one worker being limited pauses the whole fleet instead of the
+    other N-1 continuing to hammer the shared account limit (measured
+    today: 20 independent backoffs -> 13k 429s and zero successes in an
+    hour). Waits carry +/-20% jitter so workers don't all wake at the
+    same instant. path=None disables (old callers, tests).
+    """
+    if path is None:
+        return
+    while True:
+        def try_take(state):
+            now = now_fn()
+            rate = calls_per_minute / 60.0
+            elapsed = max(0.0, now - state["last_refill"])
+            state["tokens"] = min(float(burst), state["tokens"] + elapsed * rate)
+            state["last_refill"] = now
+            if now < state["cooldown_until"]:
+                return state, state["cooldown_until"] - now
+            if state["tokens"] < 1.0:
+                return state, (1.0 - state["tokens"]) / rate
+            state["tokens"] -= 1.0
+            return state, None
+
+        wait = _governor_locked(path, try_take, now_fn)
+        if wait is None:
+            return
+        sleep_fn(wait * (0.8 + 0.4 * jitter_fn()))
+
+
+def governor_report(path, limited, cooldown_seconds=DEFAULT_GOVERNOR_COOLDOWN_SECONDS,
+                    max_cooldown_seconds=DEFAULT_GOVERNOR_MAX_COOLDOWN_SECONDS,
+                    now_fn=time.time):
+    """Record one call outcome. limited=True (429 or 5xx) sets/extends
+    the GLOBAL cooldown with exponential growth per consecutive limited
+    outcome, capped; limited=False resets the streak (the next limited
+    outcome starts from the base cooldown again). path=None disables."""
+    if path is None:
+        return
+    def mutate(state):
+        if limited:
+            state["consecutive_limited"] += 1
+            backoff = min(
+                cooldown_seconds * (2 ** (state["consecutive_limited"] - 1)),
+                max_cooldown_seconds,
+            )
+            state["cooldown_until"] = max(state["cooldown_until"], now_fn() + backoff)
+        else:
+            state["consecutive_limited"] = 0
+        return state, None
+    _governor_locked(path, mutate, now_fn)
 
 
 def cargo_build(repo_root):
@@ -656,6 +829,19 @@ def cargo_test_workspace(repo_root):
     regressed" with no detail to act on."""
     result = subprocess.run(  # nosec B603
         ["cargo", "test", "--workspace"],
+        capture_output=True, text=True, cwd=repo_root, env=cargo_env(),
+    )
+    return result.returncode == 0, result.stdout + result.stderr
+
+
+def cargo_test_targeted(repo_root, filter_str):
+    """Fast first-line test gate: only lib tests whose names match
+    filter_str (the format lowercased -- best-effort, zero matches is a
+    pass, which cargo already treats as success). The full workspace
+    suite still gates every commit; this just stops candidates that are
+    about to die at review from paying the full-suite price first."""
+    result = subprocess.run(  # nosec B603
+        ["cargo", "test", "--lib", filter_str],
         capture_output=True, text=True, cwd=repo_root, env=cargo_env(),
     )
     return result.returncode == 0, result.stdout + result.stderr
@@ -957,6 +1143,69 @@ def build_perl_reference_block(gap, lib_dir, max_tags_shown=DEFAULT_MAX_PERL_SNI
     )
 
 
+DEFAULT_MAX_PRECEDENT_CHARS = 3000
+SIBLING_LITERAL_RE_TEMPLATE = r'"({family}:[A-Za-z0-9_]+)"'
+
+
+def find_implemented_sibling(gap, repo_root):
+    """First already-implemented same-family tag literal in the gap's own
+    parser files, excluding the gap's own tags -- the nearest working
+    example of 'how tags in this table get wired'."""
+    families, own = set(), set()
+    for e in gap["missing_tags"]:
+        families.add(e["family"]); own.add(f'{e["family"]}:{e["name"]}')
+    for d in gap["value_differences"]:
+        fam = d["tag_key"].split(":")[0]
+        families.add(fam); own.add(d["tag_key"])
+    for f in gap["parser_files"]:
+        try:
+            text = (Path(repo_root) / f).read_text(errors="replace")
+        except OSError:
+            continue
+        for family in sorted(families):
+            for m in re.finditer(SIBLING_LITERAL_RE_TEMPLATE.format(family=re.escape(family)), text):
+                if m.group(1) not in own:
+                    return m.group(1)
+    return None
+
+
+def _run_git(args, cwd):
+    try:
+        result = subprocess.run(  # nosec B603 -- fixed git argv, no untrusted input
+            ["git", *args], capture_output=True, text=True, cwd=cwd, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout if result.returncode == 0 else ""
+
+
+def build_neighbor_precedent_block(gap, repo_root, git_runner_fn=None):
+    """The historical diff that added the nearest implemented sibling tag
+    -- nearly every landed fix this loop has produced was 'generalize the
+    neighboring tag's branch' (LightS from ColorMode, MODE3-6 from
+    MODE1/2, ZipCRC from ZipBitFlag), so showing how the neighbor was
+    added (implementation AND its test) up front replaces a whole
+    REQUEST investigation. Empty string on any miss; never fatal."""
+    git_runner_fn = git_runner_fn or _run_git
+    sibling = find_implemented_sibling(gap, repo_root)
+    if not sibling:
+        return ""
+    files = list(gap["parser_files"])
+    sha = git_runner_fn(["log", "-S", sibling, "-1", "--format=%H", "--", *files], repo_root).strip()
+    if not sha:
+        return ""
+    patch = git_runner_fn(["show", sha], repo_root)
+    if not patch:
+        return ""
+    if len(patch) > DEFAULT_MAX_PRECEDENT_CHARS:
+        patch = patch[:DEFAULT_MAX_PRECEDENT_CHARS] + "\n... (truncated)"
+    return (
+        f"\n\nHow the neighboring tag {sibling} was added to this same code path "
+        "(historical commit -- pattern-match this, including adding an equivalent test):\n"
+        f"{patch}"
+    )
+
+
 PERL_MODULE_HEADER_RE = re.compile(r"^--- (\S+\.pm)(?:, table (\S+))?", re.MULTILINE)
 NOTES_START_RE = re.compile(r"^\s*NOTES\s*=>\s*q[qw]?([{(\[])\s*$")
 _NOTES_CLOSERS = {"{": "}", "(": ")", "[": "]"}
@@ -1075,15 +1324,14 @@ def build_format_overview_block(lib_dir, perl_reference_block):
 
 
 RUST_ARCHITECTURE_CONSTRAINTS = """
-CRITICAL RUST ARCHITECTURE CONSTRAINTS (porting ExifTool's Perl to Rust -- do not write "Perl in Rust"):
-- No dynamic-typing crutches. Do not introduce Box<dyn Any>, serde_json::Value, or a new ad hoc HashMap<String, X> as a stand-in for Perl's autovivified hashes -- use this codebase's own TagValue enum and MetadataMap (see src/core/), which already exist for exactly this.
-- No regex crate for binary/byte-level parsing. This is a memory-mapped/byte-slice format; slice &[u8] directly (or use nom/winnow if the surrounding file already does) rather than treating binary data as UTF-8 text a regex can search.
-- No self-referential structs for IFD/directory trees (a struct holding a reference to its own parent or child). Store an absolute byte offset (usize) or index instead, exactly like ExifTool's own IFD-offset-based traversal.
-- Do not inline a large hardcoded lookup table (e.g. a full MakerNote-style tag dictionary) directly into a diff. If a tag needs a name/ID lookup, wire it through this codebase's existing tag database (oxidex-tags-*, lookup_tag_name()) instead of hand-writing a new static table.
-- No new global mutable state (a `static mut`, or a bare `static` with interior mutability introduced just for this fix). Thread whatever context (byte order, base offset) is needed as an explicit parameter, matching how neighboring functions in the file already do it.
-- No unwrap()/expect()/panic!() on data derived from the file being parsed. A real-world file can be corrupt or unexpected; propagate errors via this codebase's Result<T, ExifToolError> (see src/error/) so a single malformed tag can't crash the whole parse.
-- Endianness travels through function signatures -- an explicit byte-order parameter or the file's existing endian-aware reader type -- never through globals or implicit state (ExifTool's own Perl mutates a global byte order; do not mirror that).
-- Common Perl-builtin translations: unpack("N",...) -> u32::from_be_bytes, unpack("V",...) -> u32::from_le_bytes, unpack("n",...)/unpack("v",...) -> u16::from_be_bytes/u16::from_le_bytes, substr($v, off, len) -> a bounds-checked slice &v[off..off + len].
+CRITICAL RUST ARCHITECTURE CONSTRAINTS (you are porting ExifTool's Perl to Rust -- do NOT write "Perl in Rust"):
+1. STATE: No new global mutable state (no `static mut`, no interior-mutability statics). Thread endianness/base-offset context as explicit function parameters through the function signatures, or the file's existing endian-aware reader -- exactly like neighboring functions do (ExifTool's own Perl mutates a global byte order; never mirror that).
+2. TYPES: No dynamic-typing crutches -- no Box<dyn Any>, no serde_json::Value, no new ad hoc HashMap<String, X> mimicking Perl's autovivified hashes. Use this codebase's strictly-typed TagValue enum into MetadataMap (src/core/), which exist for exactly this.
+3. BYTES: Parse binary by slicing &[u8] through the existing FileReader/reader helpers (or nom/winnow where the surrounding file already uses them) -- never the regex crate on bytes, and never refactor a whole parser onto new lifetimes for a one-tag fix.
+4. TREES: No self-referential structs for IFD/directory trees. Store absolute byte offsets (usize) or indices, matching ExifTool's own offset-based traversal.
+5. BLOAT: Never inline a massive lookup table into a diff. Wire names/IDs through the existing tag database (oxidex-tags-*, lookup_tag_name()); if a huge dictionary is genuinely required, stub it `// TODO: codegen dictionary` and implement only the parsing logic.
+6. ERRORS: No unwrap()/expect()/panic!() on data derived from the parsed file -- propagate Result<T, ExifToolError> (src/error/) so one malformed tag can't kill the parse.
+7. PERL MAP: unpack("N",...) -> u32::from_be_bytes, unpack("V",...) -> u32::from_le_bytes, unpack("n"/"v") -> u16::from_be_bytes/u16::from_le_bytes, substr($v, off, len) -> a bounds-checked slice &v[off..off + len].
 """.strip()
 
 
@@ -1310,7 +1558,8 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
                   max_file_bytes=DEFAULT_MAX_PROMPT_FILE_BYTES, samples_dir=None,
                   max_samples_listed=DEFAULT_MAX_SAMPLE_FILES_LISTED, previous_attempts=None,
                   perl_lib_dir=None, sweep_review_log_path=None, format_memory_dir=None,
-                  max_prompt_tokens=DEFAULT_MAX_PROMPT_TOKENS):
+                  max_prompt_tokens=DEFAULT_MAX_PROMPT_TOKENS,
+                  neighbor_precedent_block=""):
     """Format one gap into a model prompt, capped so a huge format (e.g.
     JPEG with thousands of gaps and dozens of parser files) becomes an
     iterative, tractable request instead of one impossibly large prompt.
@@ -1345,6 +1594,11 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
     reviewer's verdicts on specific merged/rejected commits), this is the
     loop's own accumulated, periodically-condensed account of everything
     tried on this format so far. None omits this section.
+
+    neighbor_precedent_block is a pre-rendered string (see
+    build_neighbor_precedent_block, built by the caller so build_prompt
+    itself stays free of subprocess calls) inserted after the Perl
+    reference in the stable per-tag section; "" (the default) omits it.
 
     Sections are ordered static-first (constraints/pitfalls/manifest),
     then per-tag content, then volatile history, so the byte-stable
@@ -1426,8 +1680,8 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
 
     manifest = build_reply_shape_manifest(max_prompt_tokens)
     prompt = (
-        f"You are fixing ExifTool tag-coverage gaps in the oxidex Rust codebase, format \"{gap['format']}\".\n\n"
         f"{RUST_ARCHITECTURE_CONSTRAINTS}\n\n"
+        f"You are fixing ExifTool tag-coverage gaps in the oxidex Rust codebase, format \"{gap['format']}\".\n\n"
         f"{KNOWN_PITFALLS}\n\n"
         f"{manifest}\n\n"
         f"Missing entirely (ExifTool extracts it, oxidex doesn't):\n{missing}\n\n"
@@ -1437,6 +1691,7 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
         f"{samples_block}"
         f"{exact_sample_block}"
         f"{perl_block}"
+        f"{neighbor_precedent_block}"
         f"{sweep_review_block}"
         f"{memory_block}"
         f"{attempts_block}\n\n"
@@ -1948,6 +2203,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             git_apply_fn=git_apply,
             git_checkout_clean_fn=git_checkout_clean, git_commit_fn=git_commit,
             cargo_build_fn=cargo_build, cargo_test_workspace_fn=cargo_test_workspace,
+            cargo_test_targeted_fn=cargo_test_targeted,
             cargo_check_fn=cargo_check,
             attempt_build_fn=attempt_build, review_fn=review_verdict,
             critique_fn=critique_failed_attempt,
@@ -1955,6 +2211,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             review_config=None, recheck_fn=None, repo_root=None, samples_dir=None,
             previous_attempts=None, detect_duplicate_fn=detect_duplicate_tag_insertion,
             perl_lib_dir=None, sweep_review_log_path=None, format_memory_dir=None,
+            neighbor_precedent_block="",
             max_repair_rounds=DEFAULT_MAX_REPAIR_ROUNDS):
     """Attempt to close one format's gaps via up to max_repair_rounds
     candidates, each round feeding the previous round's outcome -- build
@@ -2001,6 +2258,12 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
 
     cargo_check_fn is threaded to attempt_build_fn for the VERIFY protocol.
 
+    cargo_test_targeted_fn(repo_root, filter_str) -> (success, output) is
+    the cheap first-line test gate (cargo test --lib <format lowercased>)
+    run right after the gap-count gate; the full workspace suite via
+    cargo_test_workspace_fn only runs once a candidate has survived
+    review, immediately before the commit.
+
     log_fn(str) is called with a one-line status update at every decision
     point (build result, gap delta, review verdict, commit) -- defaults to
     print, so `--only-format`'s stdout (which parallel_model_fix_loop.py
@@ -2010,7 +2273,9 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
     recheck_fn(format_name) -> int must return the gap count for that
     format after the attempted fix (used to confirm real progress). If not
     provided, progress can never be confirmed and the attempt always fails
-    the "gap count did not decrease" check.
+    the "gap count did not decrease" check. It may instead return a
+    (count, detail) tuple, where a non-None detail string replaces the
+    generic "gap count did not decrease" as the failure reason.
 
     previous_attempts, if given, is passed straight through to build_prompt
     (see format_previous_attempts) -- prior rounds' diffs/failure reasons
@@ -2044,6 +2309,10 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
     and triggering summarization when it grows too large is the caller's
     job (see main()'s real_fix_tag), since that's bookkeeping about the
     *result* of this call, not something fix_gap itself needs to do.
+
+    neighbor_precedent_block, a pre-rendered string, is passed straight
+    through to build_prompt (see build_neighbor_precedent_block) -- built
+    by the caller so fix_gap stays free of git subprocess calls.
     """
     repo_root = repo_root or REPO_ROOT
     review_config = review_config or config
@@ -2052,7 +2321,13 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
     fmt = gap["format"]
     messages = [{"role": "user", "content": build_prompt(
         gap, repo_root=repo_root,
-        max_tags=config["max_prompt_tags"],
+        # A clustered gap (see make_cluster_gap) must show EVERY member
+        # tag, even when max_prompt_tags is 1 -- the whole point of the
+        # cluster is one conversation covering the sibling family.
+        max_tags=(
+            (len(gap["missing_tags"]) + len(gap["value_differences"]))
+            if gap.get("clustered") else config["max_prompt_tags"]
+        ),
         max_file_bytes=config["max_prompt_file_bytes"],
         samples_dir=samples_dir,
         perl_lib_dir=perl_lib_dir,
@@ -2060,6 +2335,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         format_memory_dir=format_memory_dir,
         previous_attempts=previous_attempts,
         max_prompt_tokens=config.get("max_prompt_tokens", DEFAULT_MAX_PROMPT_TOKENS),
+        neighbor_precedent_block=neighbor_precedent_block,
     )}]
 
     rounds = []  # every non-fixed round: {"diff", "reason", "critique"} -- see run_tag_loop
@@ -2112,27 +2388,27 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
                 return outcome
             continue
 
-        remaining = recheck_fn(fmt) if recheck_fn else gap["gap_count"]
+        recheck_result = recheck_fn(fmt) if recheck_fn else gap["gap_count"]
+        recheck_detail = None
+        if isinstance(recheck_result, tuple):
+            remaining, recheck_detail = recheck_result
+        else:
+            remaining = recheck_result
         log_fn(f"[{fmt}] gaps {gap['gap_count']} -> {remaining}")
         if remaining >= gap["gap_count"]:
             git_checkout_clean_fn(repo_root)
-            reason = "gap count did not decrease"
+            reason = recheck_detail or "gap count did not decrease"
             log_fn(f"[{fmt}] {reason}, reverting")
             outcome = critique_and_continue("gap_not_closed", reason, round_index)
             if outcome:
                 return outcome
             continue
 
-        tests_passed, test_output = cargo_test_workspace_fn(repo_root)
-        if not tests_passed:
+        t_ok, t_out = cargo_test_targeted_fn(repo_root, fmt.lower())
+        if not t_ok:
             git_checkout_clean_fn(repo_root)
-            # Failure detail (which assertion, panic message) is usually
-            # near the end, right before the "test result: FAILED" summary
-            # -- the full output can run to thousands of lines for a
-            # 2000+-test workspace run, so only the tail is kept.
-            tail = test_output[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]
-            reason = f"cargo test --workspace regressed:\n{tail}"
-            log_fn(f"[{fmt}] cargo test --workspace regressed, reverting")
+            reason = f"targeted tests ({fmt.lower()}) regressed:\n{t_out[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]}"
+            log_fn(f"[{fmt}] targeted tests regressed, reverting")
             outcome = critique_and_continue("test_regressed", reason, round_index)
             if outcome:
                 return outcome
@@ -2149,6 +2425,20 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             gap, diff, review_config, call_model_fn=review_call_model_fn, pick_model_fn=pick_model_fn,
         )
         if approved:
+            tests_passed, test_output = cargo_test_workspace_fn(repo_root)
+            if not tests_passed:
+                git_checkout_clean_fn(repo_root)
+                # Failure detail (which assertion, panic message) is usually
+                # near the end, right before the "test result: FAILED" summary
+                # -- the full output can run to thousands of lines for a
+                # 2000+-test workspace run, so only the tail is kept.
+                tail = test_output[-DEFAULT_MAX_TEST_OUTPUT_CHARS:]
+                reason = f"cargo test --workspace regressed:\n{tail}"
+                log_fn(f"[{fmt}] cargo test --workspace regressed, reverting")
+                outcome = critique_and_continue("test_regressed", reason, round_index)
+                if outcome:
+                    return outcome
+                continue
             closed = gap["gap_count"] - remaining
             git_commit_fn(
                 f"fix({fmt.lower()}): wire {closed} missing tags "
@@ -2260,6 +2550,32 @@ def expand_gaps_to_tags(gaps):
     return tag_gaps
 
 
+def tag_still_open(match, tag_gap):
+    """Is this one tag still a gap in a fresh comparison? Checks BOTH
+    lists regardless of the tag's original kind: a kind=="missing" tag
+    that a fix made present-but-wrong moves from missing_in_oxidex into
+    value_differences -- counting only its original list called that
+    "closed", which is exactly how a wrong-valued XMP:ArtworkTitle fix
+    passed recheck and survived to human sweep review. Returns None
+    (closed), ("missing",), or ("value_differs", exiftool_value,
+    oxidex_value) so the caller can put the actual values in front of
+    the model on the retry."""
+    if not match:
+        return None
+    if tag_gap["kind"] == "missing":
+        fam, name = tag_gap["entry"]["family"], tag_gap["entry"]["name"]
+        if any(t.get("family") == fam and t.get("name") == name
+               for t in match.get("missing_tags") or []):
+            return ("missing",)
+        key = f"{fam}:{name}"
+    else:
+        key = tag_gap["entry"]["tag_key"]
+    for d in match.get("value_differences") or []:
+        if d.get("tag_key") == key:
+            return ("value_differs", d.get("exiftool_value"), d.get("oxidex_value"))
+    return None
+
+
 def make_single_tag_gap(tag_gap):
     """Build a synthetic single-tag "gap" dict with the same shape fix_gap/
     build_prompt already expect (format/missing_tags/value_differences/
@@ -2275,6 +2591,61 @@ def make_single_tag_gap(tag_gap):
         "gap_count": 1,
         "parser_files": tag_gap["parser_files"],
     }
+
+
+DEFAULT_MAX_CLUSTER_TAGS = 6
+
+
+def cluster_key(tag_gap):
+    """Which tags belong in one conversation: same format, same family
+    (middle component of the tag key -- EXIF, APP12, ZIP, ...), same
+    parser files. Sibling tags in one table are usually one generalized
+    branch away from each other (BlackLevelRed/Green/Blue, MODE1..6,
+    ZipCRC/ZipCompressedSize all were), so investigating them separately
+    re-pays the whole context cost per tag."""
+    parts = tag_gap["tag_key"].split(":")
+    family = parts[1] if len(parts) >= 3 else ""
+    return (tag_gap["format"], family, tuple(tag_gap.get("parser_files") or ()))
+
+
+def make_cluster_gap(leader):
+    """make_single_tag_gap generalized to a leader plus its
+    cluster_members: one gap dict whose tag lists union every member,
+    gap_count == member count (so fix_gap's decrease check means "at
+    least one of these closed"), and "clustered": True (so build_prompt
+    shows every member even when max_prompt_tags is 1)."""
+    members = [leader] + list(leader.get("cluster_members") or [])
+    missing = [m["entry"] for m in members if m["kind"] == "missing"]
+    diffs = [m["entry"] for m in members if m["kind"] == "diff"]
+    return {
+        "format": leader["format"],
+        "missing_tags": missing,
+        "value_differences": diffs,
+        "gap_count": len(members),
+        "parser_files": leader["parser_files"],
+        "clustered": True,
+    }
+
+
+DEFAULT_LANDED_TAGS_PATH = OXIDEX_HOME / "logs" / "landed-tags.log"
+
+
+def load_landed_tags(path):
+    """tag_keys the sweep has already landed (see log_sweep_review.py's
+    accepted-verdict append) -- workers skip these instead of re-deriving
+    a fix that's already merged (observed live: the ZIP worker reproduced
+    the identical ZipCRC diff a full round after the sweep landed it).
+    Missing/corrupt file = empty set; each line is "<iso-ts> <tag_key>"."""
+    try:
+        text = Path(path).read_text()
+    except OSError:
+        return set()
+    landed = set()
+    for line in text.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2:
+            landed.add(parts[1])
+    return landed
 
 
 def load_tag_state(path):
@@ -2307,7 +2678,7 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
                   load_state_fn=load_tag_state, save_state_fn=save_tag_state,
                   max_rounds=None, max_fails=DEFAULT_MAX_TAG_FAILS, blacklist_full=False,
                   worker_id=None, claim_stale_seconds=1800, max_distinct_tags=None,
-                  refresh_worktree_fn=None):
+                  refresh_worktree_fn=None, max_cluster_tags=1, landed_tags_path=None):
     """Loop-until-everything-found driver, blacklisting individual TAGS
     (never a whole format) after max_fails failed attempts each. State
     persists to disk at state_path, so the blacklist -- and each tag's
@@ -2352,6 +2723,20 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
     shared tag pool in a parallel run (see [parallel].max_tags_per_process
     in config.toml).
 
+    max_cluster_tags, when > 1, lets the selected tag pull up to
+    max_cluster_tags - 1 additional still-active sibling tags (same
+    cluster_key: format, family, parser files) into one fix conversation
+    as its "cluster_members". Members are claimed alongside the leader; a
+    fixed/duplicate outcome clears every member's state entry, while a
+    failure charges only the leader's fail budget and simply releases the
+    members' claims. The default of 1 preserves the original
+    one-tag-per-conversation behavior exactly.
+
+    landed_tags_path, if given, is re-read at the top of every round
+    (see load_landed_tags); any active tag whose tag_key is already in
+    that set is skipped -- its state entry cleared like a duplicate --
+    instead of re-deriving a fix the sweep has already merged.
+
     refresh_worktree_fn(), if given, is called at the start of every
     round before find_gaps_fn() -- see main()'s wiring to the real
     refresh_worktree(repo_root, base_ref), which fast-forwards this
@@ -2391,6 +2776,7 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
             break
 
         state = load_state_fn(state_path)  # fresh read -- other workers may have updated it
+        landed = load_landed_tags(landed_tags_path) if landed_tags_path else set()
         active = [
             tg for tg in tag_gaps
             if not state.get(tg["tag_key"], {}).get("blacklisted")
@@ -2398,6 +2784,14 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
             and (max_distinct_tags is None or len(seen_tag_keys) < max_distinct_tags
                  or tg["tag_key"] in seen_tag_keys)
         ]
+
+        landed_hits = [tg for tg in active if tg["tag_key"] in landed]
+        if landed_hits:
+            for tg in landed_hits:
+                log_fn(f"[{tg['tag_key']}] skipped -- already landed via sweep")
+                state.pop(tg["tag_key"], None)
+            active = [tg for tg in active if tg["tag_key"] not in landed]
+            save_state_fn(state_path, state)
 
         if not active and max_distinct_tags is not None and len(seen_tag_keys) >= max_distinct_tags:
             log_fn(f"Reached max_distinct_tags={max_distinct_tags} for this process -- stopping.")
@@ -2430,6 +2824,24 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
         entry["claimed_at"] = time.time()
         save_state_fn(state_path, state)
 
+        if max_cluster_tags > 1:
+            leader_key = cluster_key(tag_gap)
+            members = []
+            for cand in active[1:]:
+                if len(members) >= max_cluster_tags - 1:
+                    break
+                if cluster_key(cand) == leader_key:
+                    members.append(cand)
+            for m in members:
+                m_entry = state.setdefault(m["tag_key"], {"fails": 0, "blacklisted": False, "attempts": []})
+                m_entry["claimed_by"] = worker_id
+                m_entry["claimed_at"] = time.time()
+                seen_tag_keys.add(m["tag_key"])
+            if members:
+                tag_gap = dict(tag_gap, cluster_members=members)
+                save_state_fn(state_path, state)
+                log_fn(f"clustered {len(members)} sibling tag(s) with {tag_gap['tag_key']}")
+
         # One line per round naming both the round number and the tag --
         # the single source watch_parallel_fix.py's dashboard reads to
         # show "what iteration is this worker on, and on what tag" without
@@ -2450,6 +2862,8 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
         if result["status"] == "fixed":
             fixed.append({"tag_key": tag_gap["tag_key"], **result})
             state.pop(tag_gap["tag_key"], None)
+            for m in tag_gap.get("cluster_members") or []:
+                state.pop(m["tag_key"], None)
             log_fn(f"[{tag_gap['tag_key']}] FIXED")
         elif result["status"] == "duplicate":
             # Already fixed elsewhere (see fix_gap's detect_duplicate_fn)
@@ -2460,9 +2874,20 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
             # would, and move on to a different tag next round.
             skipped.append({"tag_key": tag_gap["tag_key"], **result})
             state.pop(tag_gap["tag_key"], None)
+            for m in tag_gap.get("cluster_members") or []:
+                state.pop(m["tag_key"], None)
             log_fn(f"[{tag_gap['tag_key']}] SKIPPED (already fixed elsewhere)")
         else:
             failed.append({"tag_key": tag_gap["tag_key"], **result})
+            # A cluster failure charges only the leader -- members are
+            # simply released (claims dropped) so they stay eligible,
+            # individually or under a future leader, without inheriting
+            # a fail count for an attempt that was the leader's.
+            for m in tag_gap.get("cluster_members") or []:
+                me = state.get(m["tag_key"])
+                if me:
+                    me.pop("claimed_by", None)
+                    me.pop("claimed_at", None)
             rounds_list = result.get("rounds") or [
                 {"diff": result.get("diff"), "reason": result.get("reason", "unknown"), "critique": None}
             ]
@@ -2634,6 +3059,12 @@ def _normalize_model_config(table):
         "max_retries": table.get("max_retries", DEFAULT_MAX_RETRIES),
         "retry_backoff_seconds": table.get("retry_backoff_seconds", DEFAULT_RETRY_BACKOFF_SECONDS),
         "max_retry_backoff_seconds": table.get("max_retry_backoff_seconds", DEFAULT_MAX_RETRY_BACKOFF_SECONDS),
+        "governor_calls_per_minute": table.get("governor_calls_per_minute", DEFAULT_GOVERNOR_CALLS_PER_MINUTE),
+        "governor_burst": table.get("governor_burst", DEFAULT_GOVERNOR_BURST),
+        "governor_cooldown_seconds": table.get("governor_cooldown_seconds", DEFAULT_GOVERNOR_COOLDOWN_SECONDS),
+        "governor_max_cooldown_seconds": table.get("governor_max_cooldown_seconds", DEFAULT_GOVERNOR_MAX_COOLDOWN_SECONDS),
+        "max_cluster_tags": table.get("max_cluster_tags", DEFAULT_MAX_CLUSTER_TAGS),
+        "use_sccache": table.get("use_sccache", True),
     }
 
 
@@ -2771,6 +3202,10 @@ def main(argv=None):
             )
             return 1
 
+    # Before the first cargo subprocess: let config.toml's use_sccache knob
+    # (worker table, default on) reach cargo_env's OXIDEX_USE_SCCACHE gate.
+    os.environ["OXIDEX_USE_SCCACHE"] = "1" if config.get("use_sccache", True) else "0"
+
     def find_gaps_fn():
         if args.only_format:
             report_path = run_format_comparison(args.only_format, args.cache_dir)
@@ -2873,6 +3308,14 @@ def main(argv=None):
                     max_retries, retry_backoff_seconds, max_retry_backoff_seconds,
                     log_fn=log_retry, usage_fn=capture_usage,
                     prompt_cache=config.get("prompt_cache", "auto"),
+                    # The governor is account-global, so worker-vs-reviewer
+                    # knob differences don't matter -- every phase shares the
+                    # worker config's knobs and the one state file.
+                    governor_path=DEFAULT_GOVERNOR_PATH,
+                    governor_calls_per_minute=config["governor_calls_per_minute"],
+                    governor_burst=config["governor_burst"],
+                    governor_cooldown_seconds=config["governor_cooldown_seconds"],
+                    governor_max_cooldown_seconds=config["governor_max_cooldown_seconds"],
                 )
             except Exception as e:
                 elapsed = time.time() - t0
@@ -2956,19 +3399,22 @@ def main(argv=None):
             path = run_format_comparison(fmt, args.cache_dir)
             regrouped = group_gaps_by_format(load_comparison_report(path))
             match = next((g for g in regrouped if g["format"] == fmt), None)
-            if not match:
-                return 0
-            if tag_gap["kind"] == "missing":
-                fam, name = tag_gap["entry"]["family"], tag_gap["entry"]["name"]
-                present = any(
-                    t["family"] == fam and t["name"] == name for t in match["missing_tags"]
-                )
-            else:
-                tk = tag_gap["entry"]["tag_key"]
-                present = any(d["tag_key"] == tk for d in match["value_differences"])
-            return 1 if present else 0
+            targets = [tag_gap] + list(tag_gap.get("cluster_members") or [])
+            open_count, detail = 0, None
+            for t in targets:
+                st = tag_still_open(match, t)
+                if st:
+                    open_count += 1
+                    if st[0] == "value_differs" and detail is None:
+                        detail = (f'{t["tag_key"]}: present but wrong -- expected (exiftool): '
+                                  f'"{st[1]}" / got (oxidex): "{st[2]}". Fix the value.')
+            return (open_count, detail) if detail else open_count
 
-        single_gap = make_single_tag_gap(tag_gap)
+        single_gap = make_cluster_gap(tag_gap)
+        # Computed once per attempt (two git subprocess calls) and shared
+        # by the preview and the real prompt below, so both show the
+        # exact same precedent.
+        precedent = build_neighbor_precedent_block(single_gap, REPO_ROOT)
         # Log the exact prompt this round is about to send -- to the
         # screen and to a per-worker file -- before the call goes out, so
         # "what is it sending" is visible immediately rather than only
@@ -2976,13 +3422,18 @@ def main(argv=None):
         # dump.
         prompt_preview = build_prompt(
             single_gap, repo_root=REPO_ROOT,
-            max_tags=cfg["max_prompt_tags"], max_file_bytes=cfg["max_prompt_file_bytes"],
+            # Mirror fix_gap's clustered max_tags so the preview shows
+            # exactly what the model will actually receive.
+            max_tags=(single_gap["gap_count"] if single_gap.get("clustered")
+                      else cfg["max_prompt_tags"]),
+            max_file_bytes=cfg["max_prompt_file_bytes"],
             samples_dir=Path(args.cache_dir) / "combined-samples",
             previous_attempts=previous_attempts,
             perl_lib_dir=perl_lib_dir,
             sweep_review_log_path=sweep_review_log_path,
             format_memory_dir=format_memory_dir,
             max_prompt_tokens=cfg.get("max_prompt_tokens", DEFAULT_MAX_PROMPT_TOKENS),
+            neighbor_precedent_block=precedent,
         )
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         banner = f"\n{'=' * 20} [{ts}] worker={worker_label} tag={tag_gap['tag_key']} {'=' * 20}\n"
@@ -3000,6 +3451,7 @@ def main(argv=None):
             perl_lib_dir=perl_lib_dir,
             sweep_review_log_path=sweep_review_log_path,
             format_memory_dir=format_memory_dir,
+            neighbor_precedent_block=precedent,
             max_repair_rounds=cfg.get("max_repair_rounds", DEFAULT_MAX_REPAIR_ROUNDS),
         )
         if result["status"] == "fixed":
@@ -3032,6 +3484,8 @@ def main(argv=None):
         log_fn=timestamped_log, max_fails=args.max_tag_fails,
         blacklist_full=args.blacklist_full, worker_id=args.worker_id,
         max_distinct_tags=max_tags_per_process, refresh_worktree_fn=refresh_worktree_fn,
+        max_cluster_tags=config["max_cluster_tags"],
+        landed_tags_path=DEFAULT_LANDED_TAGS_PATH,
     )
     print(f"stopped after {summary['rounds']} rounds")
     print(f"  fixed:   {len(summary['fixed'])} tags")
