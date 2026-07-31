@@ -3291,6 +3291,68 @@ fn convert_x3f_property_value(property: &str, value: &str) -> Option<String> {
         // SigmaRaw.pm:257  PrintConv => PrintExposureTime (already seconds)
         "SHUTTER" => Some(print_exposure_time(value.parse::<f64>().ok()?)),
 
+        // Enumerated properties. Each table is SigmaRaw.pm's PrintConv
+        // verbatim; an unrecognised code passes through rather than being
+        // guessed at, so a camera this build has never seen reports its raw
+        // code instead of a plausible-looking lie.
+        "AEMODE" => Some(
+            match value {
+                "8" => "8-segment",
+                "C" => "Center-weighted average",
+                "A" => "Average",
+                other => other,
+            }
+            .to_string(),
+        ),
+        "DRIVE" => Some(
+            match value {
+                "SINGLE" => "Single Shot",
+                "MULTI" => "Multi Shot",
+                "2S" => "2 s Timer",
+                "10S" => "10 s Timer",
+                "UP" => "Mirror Up",
+                "AB" => "Auto Bracket",
+                "OFF" => "Off",
+                other => other,
+            }
+            .to_string(),
+        ),
+        "FOCUS" => Some(
+            match value {
+                "AF" => "Auto-focus Locked",
+                "M" => "Manual",
+                other => other,
+            }
+            .to_string(),
+        ),
+        "PMODE" => Some(
+            match value {
+                "P" => "Program",
+                "A" => "Aperture Priority",
+                "S" => "Shutter Priority",
+                "M" => "Manual",
+                other => other,
+            }
+            .to_string(),
+        ),
+        "RESOLUTION" => Some(
+            match value {
+                "LOW" => "Low",
+                "MED" => "Medium",
+                "HI" => "High",
+                other => other,
+            }
+            .to_string(),
+        ),
+        "FLASH" => Some(
+            match value {
+                "OFF" => "Off",
+                "ON" => "On",
+                other => other,
+            }
+            .to_string(),
+        ),
+
         _ => None,
     }
 }
@@ -3324,11 +3386,52 @@ fn format_unix_time_exiftool(epoch_seconds: i64) -> Option<String> {
 
 /// Map X3F property names to ExifTool-compatible tag names
 fn map_x3f_property_name(name: &str) -> String {
+    // Every property in this list is family SigmaRaw as ExifTool reports it --
+    // verified against `exiftool -G1 Sigma.x3f`, which files even Make, Model
+    // and SerialNumber there rather than under EXIF or MakerNotes. Sending
+    // them to EXIF:/MakerNotes: put correct values under keys ExifTool never
+    // emits, so they matched nothing and counted as extras on both sides.
     match name {
-        "CAMMANUF" => "EXIF:Make".to_string(),
-        "CAMMODEL" => "EXIF:Model".to_string(),
-        "CAMSERIAL" => "MakerNotes:SerialNumber".to_string(),
-        "FIRMWARE" => "MakerNotes:Firmware".to_string(),
+        "CAMMANUF" => "SigmaRaw:Make".to_string(),
+        "CAMMODEL" => "SigmaRaw:Model".to_string(),
+        "CAMNAME" => "SigmaRaw:CameraName".to_string(),
+        "CAMSERIAL" => "SigmaRaw:SerialNumber".to_string(),
+        "FIRMWARE" | "FIRMVERS" => "SigmaRaw:FirmwareVersion".to_string(),
+
+        // Keys that appear in real files and had no mapping at all, so they
+        // were emitted raw (SigmaRaw:AEMODE, SigmaRaw:DRIVE, ...). Names are
+        // SigmaRaw.pm's.
+        "AEMODE" => "SigmaRaw:MeteringMode".to_string(),
+        "AFAREA" => "SigmaRaw:AFArea".to_string(),
+        "AFINFOCUS" => "SigmaRaw:AFInFocus".to_string(),
+        "AFMODE" => "SigmaRaw:FocusMode".to_string(),
+        "AP_DESC" => "SigmaRaw:ApertureDisplayed".to_string(),
+        "BRACKET" => "SigmaRaw:BracketShot".to_string(),
+        "BURST" => "SigmaRaw:BurstShot".to_string(),
+        "CM_DESC" => "SigmaRaw:SceneCaptureType".to_string(),
+        "COLORSPACE" => "SigmaRaw:ColorSpace".to_string(),
+        "DRIVE" => "SigmaRaw:DriveMode".to_string(),
+        "EVAL_STATE" => "SigmaRaw:EvalState".to_string(),
+        "EXPNET" => "SigmaRaw:NetExposureCompensation".to_string(),
+        "FLASH" => "SigmaRaw:FlashMode".to_string(),
+        "FLASHEXPCOMP" => "SigmaRaw:FlashExpComp".to_string(),
+        "FLASHPOWER" => "SigmaRaw:FlashPower".to_string(),
+        "FLASHTTLMODE" => "SigmaRaw:FlashTTLMode".to_string(),
+        "FLASHTYPE" => "SigmaRaw:FlashType".to_string(),
+        "FOCUS" => "SigmaRaw:Focus".to_string(),
+        "IMAGERBOARDID" => "SigmaRaw:ImagerBoardID".to_string(),
+        "IMAGEBOARDID" => "SigmaRaw:ImageBoardID".to_string(),
+        "IMAGERTEMP" => "SigmaRaw:SensorTemperature".to_string(),
+        "PMODE" => "SigmaRaw:ExposureProgram".to_string(),
+        "RESOLUTION" => "SigmaRaw:Quality".to_string(),
+        "SENSORID" => "SigmaRaw:SensorID".to_string(),
+        "SH_DESC" => "SigmaRaw:ShutterSpeedDisplayed".to_string(),
+        "WB_DESC" => "SigmaRaw:WhiteBalance".to_string(),
+        "VERSION_BF" => "SigmaRaw:VersionBF".to_string(),
+        // LENSMODEL is deliberately absent: SigmaRaw.pm resolves it through
+        // the separate "Sigma LensType" table, and emitting SigmaRaw:LensType
+        // carrying the raw id (145) would trade a missing tag for a wrong
+        // value.
         // SigmaRaw.pm:187 -- EXPTIME is IntegrationTime, NOT ExposureTime.
         // That is SHUTTER (SigmaRaw.pm:254). Mapping EXPTIME to ExposureTime
         // reported IntegrationTime's raw microseconds (24140) as the shutter
@@ -3339,18 +3442,14 @@ fn map_x3f_property_name(name: &str) -> String {
         "FLENGTH" => "SigmaRaw:FocalLength".to_string(),
         "FLEQ35MM" => "SigmaRaw:FocalLengthIn35mmFormat".to_string(),
         "ISO" => "SigmaRaw:ISO".to_string(),
-        "WB" | "WBAL" => "SigmaRaw:WhiteBalance".to_string(),
         "EXPCOMP" => "SigmaRaw:ExposureCompensation".to_string(),
-        "EXPMODE" => "SigmaRaw:ExposureProgram".to_string(),
-        "FLASHM" => "SigmaRaw:FlashMode".to_string(),
-        "DRIVEMODE" => "SigmaRaw:DriveMode".to_string(),
-        "COLORMODE" => "SigmaRaw:ColorMode".to_string(),
-        "SHARPNESS" => "SigmaRaw:Sharpness".to_string(),
-        "CONTRAST" => "SigmaRaw:Contrast".to_string(),
-        "SATURATION" => "SigmaRaw:Saturation".to_string(),
         "TIME" => "SigmaRaw:DateTimeOriginal".to_string(),
-        "LENSARANGE" => "MakerNotes:LensApertureRange".to_string(),
-        "LENSFRANGE" => "MakerNotes:LensFocalRange".to_string(),
+        "LENSARANGE" => "SigmaRaw:LensApertureRange".to_string(),
+        "LENSFRANGE" => "SigmaRaw:LensFocalRange".to_string(),
+        // EXPMODE, FLASHM, DRIVEMODE, WB/WBAL and COLORMODE are gone: none of
+        // them is a key SigmaRaw.pm defines. They were spellings of keys that
+        // do exist (PMODE, FLASH, DRIVE, WB_DESC), so the entries could never
+        // fire while the real keys fell through unmapped.
         _ => format!("SigmaRaw:{}", name),
     }
 }
@@ -4956,6 +5055,52 @@ mod tests {
 
         let metadata = result.unwrap();
         assert!(metadata.contains_key("File:FileType"));
+    }
+
+    #[test]
+    fn test_x3f_property_names_are_exiftools() {
+        // Family matters as much as the name: ExifTool files all of these
+        // under SigmaRaw, including Make and Model.
+        assert_eq!(map_x3f_property_name("CAMMANUF"), "SigmaRaw:Make");
+        assert_eq!(map_x3f_property_name("CAMSERIAL"), "SigmaRaw:SerialNumber");
+        assert_eq!(
+            map_x3f_property_name("LENSARANGE"),
+            "SigmaRaw:LensApertureRange"
+        );
+
+        // Keys that real files carry and that used to fall through unmapped,
+        // emitting SigmaRaw:AEMODE and friends.
+        assert_eq!(map_x3f_property_name("AEMODE"), "SigmaRaw:MeteringMode");
+        assert_eq!(map_x3f_property_name("PMODE"), "SigmaRaw:ExposureProgram");
+        assert_eq!(map_x3f_property_name("DRIVE"), "SigmaRaw:DriveMode");
+        assert_eq!(map_x3f_property_name("WB_DESC"), "SigmaRaw:WhiteBalance");
+
+        // LENSMODEL stays unmapped on purpose -- see the note in the match.
+        assert_eq!(map_x3f_property_name("LENSMODEL"), "SigmaRaw:LENSMODEL");
+    }
+
+    #[test]
+    fn test_x3f_enumerated_values_decode() {
+        assert_eq!(
+            convert_x3f_property_value("AEMODE", "8").unwrap(),
+            "8-segment"
+        );
+        assert_eq!(convert_x3f_property_value("PMODE", "P").unwrap(), "Program");
+        assert_eq!(
+            convert_x3f_property_value("DRIVE", "SINGLE").unwrap(),
+            "Single Shot"
+        );
+        assert_eq!(
+            convert_x3f_property_value("FOCUS", "AF").unwrap(),
+            "Auto-focus Locked"
+        );
+        assert_eq!(
+            convert_x3f_property_value("RESOLUTION", "HI").unwrap(),
+            "High"
+        );
+
+        // An unknown code passes through rather than being guessed at.
+        assert_eq!(convert_x3f_property_value("DRIVE", "WAT").unwrap(), "WAT");
     }
 
     #[test]
