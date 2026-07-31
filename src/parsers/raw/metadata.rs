@@ -329,8 +329,14 @@ pub fn parse_raw_metadata(data: &[u8], format: RawFormat) -> Result<MetadataMap>
         // Sigma X3F uses proprietary FOVb format
         RawFormat::SigmaX3F => parse_sigma_x3f(data, format),
 
-        // Minolta MRW uses proprietary MRM format
-        RawFormat::MinoltaMRW => parse_minolta_mrw(data, format),
+        // Minolta MRW uses the proprietary MRM container. Retain the existing
+        // parser's file-level metadata, then augment it with the specifically
+        // supported tags from the embedded TTW TIFF.
+        RawFormat::MinoltaMRW => {
+            let mut metadata = parse_minolta_mrw(data, format)?;
+            parse_minolta_mrw_ttw(data, &mut metadata)?;
+            Ok(metadata)
+        }
 
         // Canon CRW is an older proprietary format
         RawFormat::CanonCRW => parse_canon_crw(data, format),
@@ -349,6 +355,301 @@ pub fn parse_raw_metadata(data: &[u8], format: RawFormat) -> Result<MetadataMap>
             })
         }
     }
+}
+
+/// Extract the requested Minolta MakerNote tags from the TIFF payload in the
+/// exact `\0TTW` block of an MRW/MRM file.
+///
+/// TIFF and MakerNote offsets in this block are relative to the embedded TIFF
+/// header, so every offset below is an index into `tiff`, never the outer MRW.
+fn parse_minolta_mrw_ttw(data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
+    let tiff = find_mrw_ttw_chunk(data)?;
+    let byte_order = detect_byte_order(tiff)?;
+    let first_ifd_offset = read_mrw_u32(
+        tiff.get(4..8)
+            .ok_or_else(|| ExifToolError::parse_error("Truncated MRW TIFF header"))?,
+        byte_order,
+    )
+    .and_then(|offset| usize::try_from(offset).ok())
+    .ok_or_else(|| ExifToolError::parse_error("Invalid MRW TIFF IFD0 offset"))?;
+
+    // Exif.pm tag 0x8769 is the ExifIFD pointer.
+    let (_, _, _, exif_pointer) =
+        mrw_ifd_entry_data(tiff, first_ifd_offset, 0x8769, byte_order)?
+            .ok_or_else(|| ExifToolError::parse_error("MRW TIFF contains no ExifIFD"))?;
+    let exif_ifd_offset = read_mrw_u32(exif_pointer, byte_order)
+        .and_then(|offset| usize::try_from(offset).ok())
+        .ok_or_else(|| ExifToolError::parse_error("Invalid MRW ExifIFD pointer"))?;
+
+    // Exif.pm tag 0x927c is MakerNote. For an external value,
+    // mrw_ifd_entry_data returns its TIFF-relative absolute byte offset.
+    let (_, _, maker_note_offset, _) =
+        mrw_ifd_entry_data(tiff, exif_ifd_offset, 0x927C, byte_order)?
+            .ok_or_else(|| ExifToolError::parse_error("MRW ExifIFD contains no MakerNote"))?;
+
+    // Minolta.pm, Image::ExifTool::Minolta::Main:
+    // 0x0040 => { Name => 'CompressedImageSize', Writable => 'int32u' }
+    if let Some((field_type, count, _, value)) =
+        mrw_ifd_entry_data(tiff, maker_note_offset, 0x0040, byte_order)?
+        && field_type == 4
+        && count >= 1
+        && let Some(size) = read_mrw_u32(value, byte_order)
+    {
+        metadata.insert(
+            "MakerNotes:CompressedImageSize".to_string(),
+            TagValue::new_integer(i64::from(size)),
+        );
+    }
+
+    // Minolta.pm Main tag 0x0003 is the CameraSettings int32u array.
+    // CameraSettings has FIRST_ENTRY=0; the exact zero-based entries used here
+    // are 28 Contrast, 40 ColorMode, 41 ColorFilter, 44 Brightness and
+    // 50 DECPosition. Index 42 is BWFilter, but it is deliberately not emitted
+    // here because this change is restricted to the six reported gaps.
+    if let Some((field_type, count, _, settings)) =
+        mrw_ifd_entry_data(tiff, maker_note_offset, 0x0003, byte_order)?
+        && field_type == 4
+    {
+        emit_mrw_camera_settings(metadata, settings, count, byte_order);
+    }
+
+    Ok(())
+}
+
+/// Walk the MRM chunk sequence and return only the payload of its `\0TTW`
+/// chunk. MRW chunk lengths are big-endian regardless of TIFF byte order.
+fn find_mrw_ttw_chunk(data: &[u8]) -> Result<&[u8]> {
+    if data.get(..4) != Some(b"\0MRM") {
+        return Err(ExifToolError::parse_error("Invalid Minolta MRW signature"));
+    }
+
+    let outer_length_bytes = data
+        .get(4..8)
+        .ok_or_else(|| ExifToolError::parse_error("Truncated Minolta MRM header"))?;
+    let outer_length = usize::try_from(u32::from_be_bytes([
+        outer_length_bytes[0],
+        outer_length_bytes[1],
+        outer_length_bytes[2],
+        outer_length_bytes[3],
+    ]))
+    .map_err(|_| ExifToolError::parse_error("Invalid Minolta MRM length"))?;
+    let container_end = 8usize
+        .checked_add(outer_length)
+        .map(|end| end.min(data.len()))
+        .ok_or_else(|| ExifToolError::parse_error("Invalid Minolta MRM length"))?;
+
+    let mut offset = 8usize;
+    while offset < container_end {
+        let header_end = offset
+            .checked_add(8)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid Minolta MRW chunk offset"))?;
+        let header = data
+            .get(offset..header_end)
+            .ok_or_else(|| ExifToolError::parse_error("Truncated Minolta MRW chunk header"))?;
+        let payload_length = usize::try_from(u32::from_be_bytes([
+            header[4], header[5], header[6], header[7],
+        ]))
+        .map_err(|_| ExifToolError::parse_error("Invalid Minolta MRW chunk length"))?;
+        let payload_end = header_end
+            .checked_add(payload_length)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid Minolta MRW chunk length"))?;
+        if payload_end > container_end {
+            return Err(ExifToolError::parse_error(
+                "Minolta MRW chunk extends outside MRM container",
+            ));
+        }
+        let payload = data
+            .get(header_end..payload_end)
+            .ok_or_else(|| ExifToolError::parse_error("Truncated Minolta MRW chunk payload"))?;
+
+        if header.get(..4) == Some(b"\0TTW") {
+            return Ok(payload);
+        }
+        offset = payload_end;
+    }
+
+    Err(ExifToolError::parse_error(
+        "Minolta MRW contains no TTW chunk",
+    ))
+}
+
+/// Return an IFD entry's type, count, TIFF-relative data offset and data slice.
+///
+/// External values are sliced using their TIFF-relative offset. Inline values
+/// are sliced directly from the entry's four-byte value field.
+fn mrw_ifd_entry_data<'a>(
+    tiff: &'a [u8],
+    ifd_offset: usize,
+    wanted_tag: u16,
+    byte_order: ByteOrder,
+) -> Result<Option<(u16, u32, usize, &'a [u8])>> {
+    let count_end = ifd_offset
+        .checked_add(2)
+        .ok_or_else(|| ExifToolError::parse_error("Invalid MRW IFD offset"))?;
+    let entry_count = read_mrw_u16(
+        tiff.get(ifd_offset..count_end)
+            .ok_or_else(|| ExifToolError::parse_error("Truncated MRW IFD entry count"))?,
+        byte_order,
+    )
+    .ok_or_else(|| ExifToolError::parse_error("Invalid MRW IFD entry count"))?;
+
+    for index in 0..usize::from(entry_count) {
+        let relative_entry_offset = index
+            .checked_mul(12)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid MRW IFD entry index"))?;
+        let entry_offset = count_end
+            .checked_add(relative_entry_offset)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid MRW IFD entry offset"))?;
+        let entry_end = entry_offset
+            .checked_add(12)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid MRW IFD entry size"))?;
+        let entry = tiff
+            .get(entry_offset..entry_end)
+            .ok_or_else(|| ExifToolError::parse_error("Truncated MRW IFD entry"))?;
+
+        let tag_id = read_mrw_u16(&entry[0..2], byte_order)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid MRW IFD tag id"))?;
+        if tag_id != wanted_tag {
+            continue;
+        }
+
+        let field_type = read_mrw_u16(&entry[2..4], byte_order)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid MRW IFD field type"))?;
+        let value_count = read_mrw_u32(&entry[4..8], byte_order)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid MRW IFD value count"))?;
+        let component_size = match field_type {
+            1 | 2 | 7 => 1usize,
+            3 => 2,
+            4 | 9 => 4,
+            5 | 10 => 8,
+            _ => return Ok(None),
+        };
+        let value_count_usize = usize::try_from(value_count)
+            .map_err(|_| ExifToolError::parse_error("Invalid MRW IFD value count"))?;
+        let byte_len = value_count_usize
+            .checked_mul(component_size)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid MRW IFD value size"))?;
+
+        if byte_len <= 4 {
+            let value_offset = entry_offset
+                .checked_add(8)
+                .ok_or_else(|| ExifToolError::parse_error("Invalid inline MRW IFD offset"))?;
+            let value = entry
+                .get(8..8 + byte_len)
+                .ok_or_else(|| ExifToolError::parse_error("Truncated inline MRW IFD value"))?;
+            return Ok(Some((field_type, value_count, value_offset, value)));
+        }
+
+        let value_offset = read_mrw_u32(&entry[8..12], byte_order)
+            .and_then(|offset| usize::try_from(offset).ok())
+            .ok_or_else(|| ExifToolError::parse_error("Invalid MRW IFD value offset"))?;
+        let value_end = value_offset
+            .checked_add(byte_len)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid MRW IFD value size"))?;
+        let value = tiff
+            .get(value_offset..value_end)
+            .ok_or_else(|| ExifToolError::parse_error("MRW IFD value is outside TTW data"))?;
+        return Ok(Some((field_type, value_count, value_offset, value)));
+    }
+
+    Ok(None)
+}
+
+fn emit_mrw_camera_settings(
+    metadata: &mut MetadataMap,
+    settings: &[u8],
+    value_count: u32,
+    byte_order: ByteOrder,
+) {
+    let read_setting = |index: usize| -> Option<u32> {
+        if index >= usize::try_from(value_count).ok()? {
+            return None;
+        }
+        let start = index.checked_mul(4)?;
+        let end = start.checked_add(4)?;
+        read_mrw_u32(settings.get(start..end)?, byte_order)
+    };
+
+    // Minolta.pm CameraSettings index 44:
+    // Name => 'Brightness', ValueConv => '$val / 8 - 6'
+    if let Some(raw) = read_setting(44) {
+        metadata.insert(
+            "MakerNotes:Brightness".to_string(),
+            TagValue::new_string(format!("{}", f64::from(raw) / 8.0 - 6.0)),
+        );
+    }
+
+    // Minolta.pm CameraSettings index 41:
+    // Name => 'ColorFilter', ValueConv => '$val - 3'
+    if let Some(raw) = read_setting(41) {
+        metadata.insert(
+            "MakerNotes:ColorFilter".to_string(),
+            TagValue::new_integer(i64::from(raw) - 3),
+        );
+    }
+
+    // Minolta.pm CameraSettings index 40 PrintConv.
+    if let Some(raw) = read_setting(40) {
+        let color_mode = match raw {
+            0 => Some("Natural color"),
+            1 => Some("Black & White"),
+            2 => Some("Vivid color"),
+            3 => Some("Solarization"),
+            4 => Some("Adobe RGB"),
+            _ => None,
+        };
+        if let Some(color_mode) = color_mode {
+            metadata.insert(
+                "MakerNotes:ColorMode".to_string(),
+                TagValue::new_string(color_mode.to_string()),
+            );
+        }
+    }
+
+    // Minolta.pm CameraSettings index 28:
+    // Name => 'Contrast', ValueConv => '$val - 3'
+    if let Some(raw) = read_setting(28) {
+        metadata.insert(
+            "MakerNotes:Contrast".to_string(),
+            TagValue::new_integer(i64::from(raw) - 3),
+        );
+    }
+
+    // Minolta.pm CameraSettings index 50 PrintConv:
+    // 0 => 'Exposure', 1 => 'Filter'
+    if let Some(raw) = read_setting(50) {
+        let position = match raw {
+            0 => Some("Exposure"),
+            1 => Some("Filter"),
+            _ => None,
+        };
+        if let Some(position) = position {
+            metadata.insert(
+                "MakerNotes:DECPosition".to_string(),
+                TagValue::new_string(position.to_string()),
+            );
+        }
+    }
+}
+
+fn read_mrw_u16(bytes: &[u8], byte_order: ByteOrder) -> Option<u16> {
+    let bytes = bytes.get(..2)?;
+    Some(match byte_order {
+        ByteOrder::LittleEndian => u16::from_le_bytes([bytes[0], bytes[1]]),
+        ByteOrder::BigEndian => u16::from_be_bytes([bytes[0], bytes[1]]),
+    })
+}
+
+fn read_mrw_u32(bytes: &[u8], byte_order: ByteOrder) -> Option<u32> {
+    let bytes = bytes.get(..4)?;
+    Some(match byte_order {
+        ByteOrder::LittleEndian => {
+            u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+        }
+        ByteOrder::BigEndian => {
+            u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+        }
+    })
 }
 
 /// Parse TIFF-based raw formats using existing TIFF parser infrastructure
