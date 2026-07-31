@@ -11,7 +11,7 @@ use super::segment_parser::SegmentStats;
 use super::signature_parser::{has_developer_id, is_adhoc_signed};
 use super::structures::{
     BuildVersionCommand, DylibCommand, EntryPointCommand, MachHeader, MachOInfo, RpathCommand,
-    SymtabCommand, UuidCommand, VersionMinCommand,
+    SymtabCommand, UuidCommand, VersionMinCommand, cpu_type,
 };
 use super::symbol_parser::SymbolStats;
 use super::version_parser::format_version_with_name;
@@ -91,7 +91,7 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
     // CPU type
     metadata.insert(
         "EXE:CPUType".to_string(),
-        TagValue::String(header.cpu_type_name().to_string()),
+        TagValue::String(exiftool_cpu_type(header)),
     );
 
     // CPU type raw value
@@ -665,6 +665,37 @@ fn extract_fat_metadata(info: &MachOInfo, metadata: &mut MetadataMap) {
 // Helper: Populate MachOInfo from Load Commands
 // =============================================================================
 
+/// Return the ExifTool CPUType spelling for a Mach-O header.
+///
+/// Mach's CPU type combines a family ID with ABI flags. The family IDs and
+/// ABI values used here are the constants from mach/machine.h mirrored in
+/// `structures::cpu_type`: 7 is i386, 12 is ARM, 18 is PowerPC,
+/// 0x01000000 is CPU_ARCH_ABI64, and 0x02000000 is CPU_ARCH_ABI64_32.
+///
+/// ARM64 retains the established oxidex spelling because it is also consumed
+/// by the public parser contract and its existing regression tests. The
+/// x86_64 spelling is changed to ExifTool's `x86 64-bit` value.
+fn exiftool_cpu_type(header: &MachHeader) -> String {
+    const CPU_ARCH_ABI64: u32 = 0x0100_0000;
+    const CPU_ARCH_ABI64_32: u32 = 0x0200_0000;
+    const CPU_ARCH_MASK: u32 = 0xff00_0000;
+
+    let raw = header.cputype as u32;
+    let family = raw & !CPU_ARCH_MASK;
+
+    match (family, raw & CPU_ARCH_MASK) {
+        (7, CPU_ARCH_ABI64) => "x86 64-bit".to_string(),
+        (7, 0) => "i386 32-bit".to_string(),
+        (12, 0) => "ARM 32-bit".to_string(),
+        (12, CPU_ARCH_ABI64_32) => "ARM64_32".to_string(),
+        (18, CPU_ARCH_ABI64) => "PowerPC64".to_string(),
+        _ if header.cputype == cpu_type::CPU_TYPE_ARM64 => {
+            header.cpu_type_name().to_string()
+        }
+        _ => header.cpu_type_name().to_string(),
+    }
+}
+
 /// ExifTool's `CPUSubtype` naming (EXE.pm, `EXE::MachO` tag 4).
 ///
 /// The table is keyed by the *pair* (cputype, subtype), and 64-bit variants
@@ -856,6 +887,26 @@ mod tests {
         assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
         assert_eq!(metadata.get_integer("EXE:IsPIE").unwrap(), 1);
         assert_eq!(metadata.get_integer("EXE:HasTwoLevelNamespace").unwrap(), 1);
+    }
+
+    #[test]
+    fn test_exiftool_cpu_type_conversion() {
+        let mut header = create_test_header();
+
+        header.cputype = cpu_type::CPU_TYPE_X86_64;
+        assert_eq!(exiftool_cpu_type(&header), "x86 64-bit");
+
+        header.cputype = cpu_type::CPU_TYPE_I386;
+        assert_eq!(exiftool_cpu_type(&header), "i386 32-bit");
+
+        header.cputype = cpu_type::CPU_TYPE_ARM;
+        assert_eq!(exiftool_cpu_type(&header), "ARM 32-bit");
+
+        header.cputype = cpu_type::CPU_TYPE_ARM64_32;
+        assert_eq!(exiftool_cpu_type(&header), "ARM64_32");
+
+        header.cputype = cpu_type::CPU_TYPE_POWERPC64;
+        assert_eq!(exiftool_cpu_type(&header), "PowerPC64");
     }
 
     #[test]
