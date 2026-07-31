@@ -390,8 +390,13 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     Ok(metadata)
 }
 
+// TIFF/EXIF tag IDs from ExifTool 13.55 Exif.pm.
+const TAG_IMAGE_DESCRIPTION: u16 = 0x010e;
+const TAG_MAKE: u16 = 0x010f;
 const TIFF_ARTIST_TAG: u16 = 0x013b;
 const TAG_EXIF_IFD: u16 = 0x8769;
+const TAG_F_NUMBER: u16 = 0x829d;
+const TAG_ISO: u16 = 0x8827;
 const TAG_APERTURE_VALUE: u16 = 0x9202;
 const TAG_BRIGHTNESS_VALUE: u16 = 0x9203;
 const TAG_COLOR_SPACE: u16 = 0xA001;
@@ -406,6 +411,8 @@ const TAG_DATE_TIME_ORIGINAL: u16 = 0x9003;
 const TAG_CREATE_DATE: u16 = 0x9004;
 const TAG_FLASH: u16 = 0x9209;
 const TAG_FLASHPIX_VERSION: u16 = 0xA000;
+const TAG_FOCAL_PLANE_X_RESOLUTION: u16 = 0xA20E;
+const TAG_FOCAL_PLANE_Y_RESOLUTION: u16 = 0xA20F;
 const TAG_EXIF_IMAGE_WIDTH: u16 = 0xA002;
 const TAG_EXIF_IMAGE_HEIGHT: u16 = 0xA003;
 const TAG_FOCAL_PLANE_RESOLUTION_UNIT: u16 = 0xA210;
@@ -583,10 +590,15 @@ fn extract_embedded_exif_metadata(
     Ok(find_embedded_exif_tags(data).unwrap_or_default())
 }
 
-/// Searches raw PDF bytes for embedded TIFF/EXIF headers and returns
-/// recognised EXIF tags from the first valid IFD0+ExifIFD chain.
+/// Searches raw PDF bytes for embedded TIFF/EXIF headers and merges recognised
+/// tags from every valid IFD0+ExifIFD chain.
+///
+/// Photoshop PDFs may contain both an EXIF Photoshop image-resource block and
+/// a TIFF/JPEG payload. Stopping at the first recognised TIFF loses fields
+/// which exist only in the later directory.
 fn find_embedded_exif_tags(data: &[u8]) -> Option<MetadataMap> {
     let mut cursor = 0usize;
+    let mut metadata = MetadataMap::new();
 
     while cursor < data.len() {
         let remaining = data.get(cursor..)?;
@@ -598,12 +610,18 @@ fn find_embedded_exif_tags(data: &[u8]) -> Option<MetadataMap> {
         };
         let tiff_offset = cursor.checked_add(rel_off)?;
         if let Some(tags) = parse_embedded_tiff_ifds(data.get(tiff_offset..)?) {
-            return Some(tags);
+            for (key, value) in tags {
+                metadata.insert(key, value);
+            }
         }
         cursor = tiff_offset.checked_add(1)?;
     }
 
-    None
+    if metadata.is_empty() {
+        None
+    } else {
+        Some(metadata)
+    }
 }
 
 /// Parse IFD0 and optionally the ExifIFD sub-IFD, collecting recognised tags.
@@ -621,7 +639,7 @@ fn parse_embedded_tiff_ifds(data: &[u8]) -> Option<MetadataMap> {
     }
 
     let ifd0_offset = usize::try_from(read_embedded_tiff_u32(data, 4, byte_order)?).ok()?;
-    let mut metadata = MetadataMap::with_capacity(8);
+    let mut metadata = MetadataMap::with_capacity(10);
     let mut exif_ifd_offset: Option<usize> = None;
 
     // ---- IFD0 entries ------------------------------------------------------
@@ -638,6 +656,19 @@ fn parse_embedded_tiff_ifds(data: &[u8]) -> Option<MetadataMap> {
         let count = read_embedded_tiff_u32(data, base.checked_add(4)?, byte_order)?;
 
         match tag {
+            // ExifTool 13.55 Exif.pm 0x010e and 0x010f are IFD0 ASCII tags.
+            TAG_IMAGE_DESCRIPTION if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_IMAGE_DESCRIPTION, "IFD0");
+                    metadata.insert(key, crate::core::TagValue::new_string(v));
+                }
+            }
+            TAG_MAKE if field_type == 2 => {
+                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_MAKE, "IFD0");
+                    metadata.insert(key, crate::core::TagValue::new_string(v));
+                }
+            }
             TIFF_ARTIST_TAG if field_type == 2 => {
                 if let Some(v) = read_ascii_value(data, base, byte_order, count) {
                     if !v.is_empty() {
@@ -795,7 +826,7 @@ fn parse_exif_ifd(
     let entries_end = entries_offset.checked_add(entries_len)?;
     data.get(entries_offset..entries_end)?;
 
-    let mut metadata = MetadataMap::with_capacity(6);
+    let mut metadata = MetadataMap::with_capacity(10);
 
     for i in 0..entry_count {
         let base = entries_offset.checked_add(i.checked_mul(12)?)?;
@@ -804,6 +835,46 @@ fn parse_exif_ifd(
         let count = read_embedded_tiff_u32(data, base.checked_add(4)?, byte_order)?;
 
         match tag {
+            // ExifTool 13.55 Exif.pm 0x829d is rational64u with
+            // PrintConv => 'sprintf("%.1f",$val)'.
+            TAG_F_NUMBER if field_type == 5 => {
+                if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
+                    if den != 0 {
+                        let key = crate::tag_db::lookup_tag_name(TAG_F_NUMBER, "ExifIFD");
+                        metadata.insert(
+                            key,
+                            crate::core::TagValue::new_string(format!(
+                                "{:.1}",
+                                f64::from(num) / f64::from(den)
+                            )),
+                        );
+                    }
+                }
+            }
+            // ExifTool 13.55 Exif.pm 0x8827 is the int16u ISO scalar.
+            TAG_ISO if field_type == 3 && count == 1 => {
+                if let Some(raw) = read_short_value(data, base, byte_order) {
+                    let key = crate::tag_db::lookup_tag_name(TAG_ISO, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(raw.to_string()));
+                }
+            }
+            // ExifTool 13.55 Exif.pm 0xa20e/0xa20f are rational64u values
+            // without PrintConv.
+            TAG_FOCAL_PLANE_X_RESOLUTION | TAG_FOCAL_PLANE_Y_RESOLUTION
+                if field_type == 5 =>
+            {
+                if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
+                    if den != 0 {
+                        let key = crate::tag_db::lookup_tag_name(tag, "ExifIFD");
+                        metadata.insert(
+                            key,
+                            crate::core::TagValue::new_string(format_rational(
+                                f64::from(num) / f64::from(den),
+                            )),
+                        );
+                    }
+                }
+            }
             // ExifTool 13.55 Exif.pm 0x9000 has no PrintConv, only
             // `RawConv => '$val=~s/\0+$//; $val'`, so the four undef bytes are
             // emitted verbatim minus any trailing NULs ("0210" for PDF.pdf).
@@ -1296,6 +1367,25 @@ mod embedded_exif_tests {
             .get_string("IFD0:Artist")
             .expect("must contain Artist tag");
         assert_eq!(artist, "Phil Harvey");
+    }
+
+    #[test]
+    fn extracts_reported_tags_from_the_pdf_coverage_sample() {
+        let pdf = include_bytes!("../../../samples/PDF.pdf");
+        let map = find_embedded_exif_tags(pdf).expect("PDF.pdf must contain embedded EXIF");
+
+        assert_eq!(map.get_string("IFD0:ImageDescription"), Some("A witty caption"));
+        assert_eq!(map.get_string("IFD0:Make"), Some("FUJIFILM"));
+        assert_eq!(map.get_string("ExifIFD:FNumber"), Some("3.5"));
+        assert_eq!(map.get_string("ExifIFD:ISO"), Some("100"));
+        assert_eq!(
+            map.get_string("ExifIFD:FocalPlaneXResolution"),
+            Some("3053")
+        );
+        assert_eq!(
+            map.get_string("ExifIFD:FocalPlaneYResolution"),
+            Some("3053")
+        );
     }
 
     /// Builds a PDF-ish buffer wrapping a little-endian TIFF whose IFD0 points
