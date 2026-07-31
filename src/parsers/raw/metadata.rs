@@ -330,7 +330,15 @@ pub fn parse_raw_metadata(data: &[u8], format: RawFormat) -> Result<MetadataMap>
         RawFormat::SigmaX3F => parse_sigma_x3f(data, format),
 
         // Minolta MRW uses proprietary MRM format
-        RawFormat::MinoltaMRW => parse_minolta_mrw(data, format),
+        RawFormat::MinoltaMRW => {
+            let mut metadata = parse_minolta_mrw(data, format)?;
+            // CameraSettings are optional. Preserve metadata already parsed
+            // from the MRW container if this nested MakerNote is malformed.
+            if let Err(error) = extract_minolta_mrw_camera_settings(data, &mut metadata) {
+                eprintln!("Warning: Failed to parse MRW CameraSettings: {}", error);
+            }
+            Ok(metadata)
+        }
 
         // Canon CRW is an older proprietary format
         RawFormat::CanonCRW => parse_canon_crw(data, format),
@@ -2987,6 +2995,371 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     }
 
     Ok(metadata)
+}
+
+/// A bounds-checked TIFF IFD value encountered while traversing an MRW TTW
+/// block. All external offsets remain relative to the TTW TIFF header.
+struct MrwIfdValue<'a> {
+    field_type: u16,
+    count: u32,
+    value_or_offset: u32,
+    bytes: &'a [u8],
+}
+
+/// Extract selected entries from Minolta's int32u CameraSettings table.
+///
+/// The reachable path from the RAW dispatcher is:
+///
+/// `MinoltaMRW -> parse_minolta_mrw -> this function -> \0TTW TIFF ->
+/// IFD0 0x8769 -> ExifIFD 0x927c -> MakerNote 0x0003`.
+///
+/// `%Image::ExifTool::Minolta::CameraSettings` has `FIRST_ENTRY => 0`.
+/// The indices used here are the Minolta.pm table indices:
+///
+/// * 28: Contrast
+/// * 40: ColorMode
+/// * 41: ColorFilter
+/// * 44: Brightness
+/// * 50: DECPosition
+///
+/// Minolta Main tag 0x0040 is CompressedImageSize (`int32u`).
+fn extract_minolta_mrw_camera_settings(
+    data: &[u8],
+    metadata: &mut MetadataMap,
+) -> Result<()> {
+    let Some(tiff) = find_mrw_ttw_tiff(data)? else {
+        return Ok(());
+    };
+
+    let byte_order = detect_byte_order(tiff)?;
+    let first_ifd_bytes = tiff
+        .get(4..8)
+        .ok_or_else(|| ExifToolError::parse_error("Truncated TIFF header in MRW TTW block"))?;
+    let first_ifd_offset = usize::try_from(read_u32(first_ifd_bytes, byte_order))
+        .map_err(|_| ExifToolError::parse_error("MRW IFD0 offset is too large"))?;
+
+    // TIFF/EXIF tag 0x8769 is ExifIFDPointer.
+    let Some(exif_pointer) =
+        find_mrw_ifd_value(tiff, first_ifd_offset, 0x8769, byte_order)?
+    else {
+        return Ok(());
+    };
+    if exif_pointer.field_type != 4 || exif_pointer.count < 1 {
+        return Ok(());
+    }
+    let exif_ifd_offset = usize::try_from(
+        read_tiff_u32(exif_pointer.bytes, byte_order)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid MRW ExifIFD pointer"))?,
+    )
+    .map_err(|_| ExifToolError::parse_error("MRW ExifIFD offset is too large"))?;
+
+    // TIFF/EXIF tag 0x927c is MakerNote. Its offset and offsets within the
+    // Minolta IFD are relative to the TTW TIFF base.
+    let Some(maker_note) =
+        find_mrw_ifd_value(tiff, exif_ifd_offset, 0x927c, byte_order)?
+    else {
+        return Ok(());
+    };
+    let maker_note_offset = if maker_note.bytes.len() > 4 {
+        usize::try_from(maker_note.value_or_offset)
+            .map_err(|_| ExifToolError::parse_error("MRW MakerNote offset is too large"))?
+    } else {
+        return Ok(());
+    };
+
+    // Minolta.pm, Image::ExifTool::Minolta::Main:
+    // 0x0040 => {
+    //     Name => 'CompressedImageSize',
+    //     Writable => 'int32u',
+    // }
+    if let Some(compressed_size) =
+        find_mrw_ifd_value(tiff, maker_note_offset, 0x0040, byte_order)?
+    {
+        if compressed_size.field_type == 4 && compressed_size.count >= 1 {
+            if let Some(value) = read_tiff_u32(compressed_size.bytes, byte_order) {
+                metadata.insert(
+                    "MakerNotes:CompressedImageSize".to_string(),
+                    TagValue::new_integer(i64::from(value)),
+                );
+            }
+        }
+    }
+
+    // Minolta Main tag 0x0003 references CameraSettings, an int32u table with
+    // FIRST_ENTRY=0.
+    let Some(camera_settings) =
+        find_mrw_ifd_value(tiff, maker_note_offset, 0x0003, byte_order)?
+    else {
+        return Ok(());
+    };
+
+    let setting = |index: usize| -> Option<u32> {
+        let start = index.checked_mul(4)?;
+        let end = start.checked_add(4)?;
+        read_tiff_u32(camera_settings.bytes.get(start..end)?, byte_order)
+    };
+
+    // CameraSettings index 28: Contrast, Format => int32s.
+    if let Some(value) = setting(28) {
+        metadata.insert(
+            "MakerNotes:Contrast".to_string(),
+            TagValue::new_integer(minolta_signed_setting(value)),
+        );
+    }
+
+    // CameraSettings index 40: ColorMode with the complete PrintConv below.
+    if let Some(value) = setting(40) {
+        metadata.insert(
+            "MakerNotes:ColorMode".to_string(),
+            TagValue::new_string(format_minolta_color_mode(value)),
+        );
+    }
+
+    // CameraSettings index 41: ColorFilter, Format => int32s.
+    if let Some(value) = setting(41) {
+        metadata.insert(
+            "MakerNotes:ColorFilter".to_string(),
+            TagValue::new_integer(minolta_signed_setting(value)),
+        );
+    }
+
+    // CameraSettings index 44: Brightness, Format => int32s,
+    // ValueConv => '$val / 8'.
+    if let Some(value) = setting(44) {
+        metadata.insert(
+            "MakerNotes:Brightness".to_string(),
+            TagValue::new_string(format_minolta_brightness(value)),
+        );
+    }
+
+    // CameraSettings index 50: DECPosition with the complete PrintConv below.
+    if let Some(value) = setting(50) {
+        metadata.insert(
+            "MakerNotes:DECPosition".to_string(),
+            TagValue::new_string(format_minolta_dec_position(value)),
+        );
+    }
+
+    Ok(())
+}
+
+/// Interpret a CameraSettings word as Minolta's `int32s` format.
+fn minolta_signed_setting(value: u32) -> i64 {
+    i64::from(value as i32)
+}
+
+/// Complete ColorMode PrintConv from
+/// `%Image::ExifTool::Minolta::CameraSettings`.
+fn format_minolta_color_mode(value: u32) -> String {
+    match value {
+        0 => "Natural color".to_string(),
+        1 => "Black & White".to_string(),
+        2 => "Vivid color".to_string(),
+        3 => "Solarization".to_string(),
+        4 => "Adobe RGB".to_string(),
+        5 => "Sepia".to_string(),
+        9 => "Natural".to_string(),
+        12 => "Portrait".to_string(),
+        13 => "Natural sRGB".to_string(),
+        14 => "Natural+ sRGB".to_string(),
+        15 => "Landscape".to_string(),
+        16 => "Evening".to_string(),
+        17 => "Night Portrait".to_string(),
+        18 => "Night View".to_string(),
+        other => format!("Unknown ({})", other),
+    }
+}
+
+/// Apply Minolta.pm's Brightness ValueConv (`$val / 8`) over the complete
+/// signed input range. Exact integers are printed without a decimal suffix.
+fn format_minolta_brightness(value: u32) -> String {
+    let eighths = minolta_signed_setting(value);
+    if eighths % 8 == 0 {
+        (eighths / 8).to_string()
+    } else {
+        format!("{}", eighths as f64 / 8.0)
+    }
+}
+
+/// Complete DECPosition PrintConv from
+/// `%Image::ExifTool::Minolta::CameraSettings`.
+fn format_minolta_dec_position(value: u32) -> String {
+    match value {
+        0 => "Exposure".to_string(),
+        1 => "Contrast".to_string(),
+        2 => "Saturation".to_string(),
+        3 => "Filter".to_string(),
+        other => format!("Unknown ({})", other),
+    }
+}
+
+/// Locate the TIFF payload of the `\0TTW` block in an MRM container.
+///
+/// MRM block lengths are big-endian regardless of the byte order of the TIFF
+/// payload. TIFF byte order is detected separately by the caller.
+fn find_mrw_ttw_tiff(data: &[u8]) -> Result<Option<&[u8]>> {
+    if data.get(..4) != Some(b"\0MRM") {
+        return Ok(None);
+    }
+
+    // The MRM header is eight bytes. Each child block has a four-byte name,
+    // a big-endian u32 payload length, and then its payload.
+    let mut offset = 8usize;
+    while offset < data.len() {
+        let header_end = offset
+            .checked_add(8)
+            .ok_or_else(|| ExifToolError::parse_error("MRW block offset overflow"))?;
+        let header = data
+            .get(offset..header_end)
+            .ok_or_else(|| ExifToolError::parse_error("Truncated MRW block header"))?;
+        let length = usize::try_from(u32::from_be_bytes([
+            header[4], header[5], header[6], header[7],
+        ]))
+        .map_err(|_| ExifToolError::parse_error("MRW block length is too large"))?;
+        let payload_end = header_end
+            .checked_add(length)
+            .ok_or_else(|| ExifToolError::parse_error("MRW block length overflow"))?;
+        let payload = data
+            .get(header_end..payload_end)
+            .ok_or_else(|| ExifToolError::parse_error("Truncated MRW block payload"))?;
+
+        if &header[..4] == b"\0TTW" {
+            return Ok(Some(payload));
+        }
+        offset = payload_end;
+    }
+
+    Ok(None)
+}
+
+/// Find one TIFF IFD entry and return a checked slice containing its value.
+fn find_mrw_ifd_value<'a>(
+    tiff: &'a [u8],
+    ifd_offset: usize,
+    wanted_tag: u16,
+    byte_order: ByteOrder,
+) -> Result<Option<MrwIfdValue<'a>>> {
+    let count_end = ifd_offset
+        .checked_add(2)
+        .ok_or_else(|| ExifToolError::parse_error("MRW IFD offset overflow"))?;
+    let entry_count = usize::from(
+        read_tiff_u16(
+            tiff.get(ifd_offset..count_end)
+                .ok_or_else(|| ExifToolError::parse_error("Truncated MRW IFD entry count"))?,
+            byte_order,
+        )
+        .ok_or_else(|| ExifToolError::parse_error("Invalid MRW IFD entry count"))?,
+    );
+
+    for index in 0..entry_count {
+        let relative = index
+            .checked_mul(12)
+            .and_then(|value| value.checked_add(2))
+            .ok_or_else(|| ExifToolError::parse_error("MRW IFD entry offset overflow"))?;
+        let entry_start = ifd_offset
+            .checked_add(relative)
+            .ok_or_else(|| ExifToolError::parse_error("MRW IFD entry offset overflow"))?;
+        let entry_end = entry_start
+            .checked_add(12)
+            .ok_or_else(|| ExifToolError::parse_error("MRW IFD entry length overflow"))?;
+        let entry = tiff
+            .get(entry_start..entry_end)
+            .ok_or_else(|| ExifToolError::parse_error("Truncated MRW IFD entry"))?;
+
+        let tag_id = read_tiff_u16(&entry[0..2], byte_order)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid MRW IFD tag ID"))?;
+        if tag_id != wanted_tag {
+            continue;
+        }
+
+        let field_type = read_tiff_u16(&entry[2..4], byte_order)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid MRW TIFF field type"))?;
+        let count = read_tiff_u32(&entry[4..8], byte_order)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid MRW TIFF value count"))?;
+        let value_or_offset = read_tiff_u32(&entry[8..12], byte_order)
+            .ok_or_else(|| ExifToolError::parse_error("Invalid MRW TIFF value offset"))?;
+
+        let component_size = match field_type {
+            1 | 2 | 6 | 7 => 1usize,
+            3 | 8 => 2,
+            4 | 9 | 11 => 4,
+            5 | 10 | 12 => 8,
+            _ => return Ok(None),
+        };
+        let byte_count = usize::try_from(count)
+            .ok()
+            .and_then(|count| count.checked_mul(component_size))
+            .ok_or_else(|| ExifToolError::parse_error("MRW TIFF value length overflow"))?;
+
+        let bytes = if byte_count <= 4 {
+            entry
+                .get(8..8 + byte_count)
+                .ok_or_else(|| ExifToolError::parse_error("Truncated inline MRW TIFF value"))?
+        } else {
+            let value_start = usize::try_from(value_or_offset)
+                .map_err(|_| ExifToolError::parse_error("MRW TIFF value offset is too large"))?;
+            let value_end = value_start
+                .checked_add(byte_count)
+                .ok_or_else(|| ExifToolError::parse_error("MRW TIFF value offset overflow"))?;
+            tiff.get(value_start..value_end)
+                .ok_or_else(|| ExifToolError::parse_error("Truncated external MRW TIFF value"))?
+        };
+
+        return Ok(Some(MrwIfdValue {
+            field_type,
+            count,
+            value_or_offset,
+            bytes,
+        }));
+    }
+
+    Ok(None)
+}
+
+#[cfg(test)]
+mod minolta_mrw_camera_settings_tests {
+    use super::*;
+
+    #[test]
+    fn formats_all_minolta_color_modes() {
+        let expected = [
+            (0, "Natural color"),
+            (1, "Black & White"),
+            (2, "Vivid color"),
+            (3, "Solarization"),
+            (4, "Adobe RGB"),
+            (5, "Sepia"),
+            (9, "Natural"),
+            (12, "Portrait"),
+            (13, "Natural sRGB"),
+            (14, "Natural+ sRGB"),
+            (15, "Landscape"),
+            (16, "Evening"),
+            (17, "Night Portrait"),
+            (18, "Night View"),
+        ];
+
+        for (value, printed) in expected {
+            assert_eq!(format_minolta_color_mode(value), printed);
+        }
+        assert_eq!(format_minolta_color_mode(99), "Unknown (99)");
+    }
+
+    #[test]
+    fn formats_all_minolta_dec_positions() {
+        assert_eq!(format_minolta_dec_position(0), "Exposure");
+        assert_eq!(format_minolta_dec_position(1), "Contrast");
+        assert_eq!(format_minolta_dec_position(2), "Saturation");
+        assert_eq!(format_minolta_dec_position(3), "Filter");
+        assert_eq!(format_minolta_dec_position(4), "Unknown (4)");
+    }
+
+    #[test]
+    fn applies_brightness_conversion_to_signed_values() {
+        assert_eq!(format_minolta_brightness(6), "0.75");
+        assert_eq!(format_minolta_brightness(8), "1");
+        assert_eq!(format_minolta_brightness((-6_i32) as u32), "-0.75");
+    }
 }
 
 /// Parse Sigma X3F format
