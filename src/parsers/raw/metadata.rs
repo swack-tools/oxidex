@@ -411,6 +411,10 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
     // CR2 IFD0 thumbnail byte count for PreviewImage/PreviewImageLength
     let mut cr2_thumbnail_length: Option<u32> = None;
+    // CR2 IFD0 thumbnail offset for PreviewImageStart. Held aside and emitted after the
+    // IFD walk for the same reason as the length above: IFD2 and IFD3 also carry
+    // StripOffsets, and this parser folds every IFD past IFD1 into the IFD0 namespace.
+    let mut cr2_preview_image_start: Option<u32> = None;
 
     // Add format-specific tag to identify file type
     metadata.insert(
@@ -496,6 +500,20 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         cr2_thumbnail_length = Some(read_u32(bytes, byte_order));
                     }
 
+                    // CR2 IFD0: StripOffsets (0x0111) is PreviewImageStart here.
+                    //
+                    // Exif.pm 0x111 Notes, verbatim: "called StripOffsets in most
+                    // locations, but it is PreviewImageStart in IFD0 of CR2 images and
+                    // various IFD's of DNG images except for SubIFD2 where it is
+                    // JpgFromRawStart".
+                    if format == RawFormat::CanonCR2
+                        && ifd_index == 0
+                        && *tag_id == 0x0111
+                        && bytes.len() >= 4
+                    {
+                        cr2_preview_image_start = Some(read_u32(bytes, byte_order));
+                    }
+
                     // Check for SubIFD pointer (tag 0x014A) - common in RAW formats
                     // SubIFD contains RAW image data and RAW-specific metadata
                     if *tag_id == 0x014A {
@@ -551,12 +569,13 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         camera_make = Some(make_str.trim_end_matches('\0').trim().to_string());
                     }
 
-                    // CR2 IFD1 thumbnail/preview tags: ExifTool reports
-                    // PreviewImage and PreviewImageLength under the EXIF
-                    // group, derived from the IFD1 JPEGInterchangeFormat*
-                    // entries. The generic lookup_tag_name path indexes
-                    // these under their EXIF-spec names, so we name them
-                    // explicitly to match ExifTool's output.
+                    // CR2 IFD1 holds the *thumbnail*, not the preview: ExifTool reports
+                    // its JPEGInterchangeFormat/JPEGInterchangeFormatLength entries as
+                    // ThumbnailOffset / ThumbnailLength / ThumbnailImage, while the
+                    // Preview* trio comes from IFD0's Strip* entries (handled above).
+                    // Naming IFD1's length PreviewImageLength here left ThumbnailLength
+                    // and ThumbnailImage unreported and only survived because the IFD0
+                    // value overwrote it after the walk.
                     if format == RawFormat::CanonCR2 && ifd_index == 1 {
                         match *tag_id {
                             0x0201 if bytes.len() >= 4 => {
@@ -570,11 +589,11 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             0x0202 if bytes.len() >= 4 => {
                                 let value = read_u32(bytes, byte_order);
                                 metadata.insert(
-                                    "EXIF:PreviewImageLength".to_string(),
+                                    "EXIF:ThumbnailLength".to_string(),
                                     TagValue::new_integer(value as i64),
                                 );
                                 metadata.insert(
-                                    "EXIF:PreviewImage".to_string(),
+                                    "EXIF:ThumbnailImage".to_string(),
                                     TagValue::new_string(format!(
                                         "(Binary data {} bytes, use -b option to extract)",
                                         value
@@ -1058,6 +1077,14 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
             extract_dng_tags(&mut metadata);
         }
         RawFormat::CanonCR2 => {
+            // Emit EXIF:PreviewImageStart from the IFD0 thumbnail JPEG offset
+            // (StripOffsets, 0x0111).
+            if let Some(start) = cr2_preview_image_start {
+                metadata.insert(
+                    "EXIF:PreviewImageStart".to_string(),
+                    TagValue::new_integer(start as i64),
+                );
+            }
             // Emit EXIF:PreviewImage / PreviewImageLength from the IFD0
             // thumbnail JPEG byte count (StripByteCounts, 0x0117).
             if let Some(length) = cr2_thumbnail_length {
