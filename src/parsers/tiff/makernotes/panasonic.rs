@@ -53,19 +53,18 @@ const PANASONIC_HEADER: &[u8] = b"Panasonic\0\0\0";
 // ============================================================================
 // Using const_decoder! macro to eliminate decoder function duplication
 
-// Quality mode decoder - maps values to image quality settings
-const_decoder!(pub QUALITY,
+// Image quality decoder (tag 0x0001) - ExifTool Panasonic.pm ImageQuality PrintConv
+const_decoder!(pub IMAGE_QUALITY,
     i32,
     [
-        (1, "Economy"),
-        (2, "Normal"),
-        (3, "Fine"),
-        (4, "Super Fine"),
-        (5, "Extra Fine"),
-        (6, "RAW"),
-        (7, "RAW + Fine"),
-        (8, "RAW + Normal"),
+        (1, "TIFF"),
+        (2, "High"),
+        (3, "Normal"),
+        (6, "Very High"),
+        (7, "RAW"),
         (9, "Motion Picture"),
+        (11, "Full HD Movie"),
+        (12, "4k Movie"),
     ]
 );
 
@@ -103,34 +102,22 @@ const_decoder!(pub FOCUS_MODE,
     ]
 );
 
-// AF area mode decoder - maps values to AF area selection modes
-const_decoder!(pub AF_AREA_MODE,
-    i32,
-    [
-        (0, "Face Detection"),
-        (1, "49-Area"),
-        (2, "Tracking"),
-        (3, "1-Area"),
-        (4, "Pinpoint"),
-        (8, "Multi"),
-        (16, "1-Area (high speed)"),
-        (17, "49-Area (high speed)"),
-        (18, "Tracking (high speed)"),
-        (32, "1-Area (video)"),
-    ]
-);
+// AF area mode (tag 0x000F) is an int8u pair; see decode_af_area_mode below.
 
-// Image stabilization decoder - maps values to IS modes
+// Image stabilization decoder (tag 0x001A) - ExifTool Panasonic.pm ImageStabilization PrintConv
 const_decoder!(pub IMAGE_STABILIZATION,
     i32,
     [
-        (2, "Mode 1"),
+        (2, "On, Optical"),
         (3, "Off"),
-        (4, "Mode 2"),
-        (6, "Mode 3"),
-        (34, "Mode 1 (video)"),
-        (35, "Off (video)"),
-        (36, "Mode 2 (video)"),
+        (4, "On, Mode 2"),
+        (5, "On, Optical Panning"),
+        (6, "On, Body-only"),
+        (7, "On, Body-only Panning"),
+        (9, "Dual IS"),
+        (10, "Dual IS Panning"),
+        (11, "Dual2 IS"),
+        (12, "Dual2 IS Panning"),
     ]
 );
 
@@ -176,35 +163,20 @@ const_decoder!(pub CONTRAST_MODE,
     ]
 );
 
-// Film mode (Photo Style) decoder - maps values to picture styles
+// Film mode decoder (tag 0x0042) - ExifTool Panasonic.pm FilmMode PrintConv
 const_decoder!(pub FILM_MODE,
     i32,
     [
-        (1, "Standard"),
-        (2, "Dynamic"),
-        (3, "Nature"),
-        (4, "Smooth"),
+        (0, "n/a"),
+        (1, "Standard (color)"),
+        (2, "Dynamic (color)"),
+        (3, "Nature (color)"),
+        (4, "Smooth (color)"),
         (5, "Standard (B&W)"),
         (6, "Dynamic (B&W)"),
         (7, "Smooth (B&W)"),
-        (9, "Scenery"),
-        (10, "Portrait"),
-        (11, "Monochrome"),
-        (12, "Natural"),
-        (13, "Vivid"),
-        (14, "Flat"),
-        (15, "Landscape"),
-        (16, "Monochrome High Contrast"),
-        (17, "Blue Filter"),
-        (18, "Sepia"),
-        (19, "Nostalgic"),
-        (20, "Old Days"),
-        (21, "High Contrast B&W"),
-        (22, "Cinelike D"),
-        (23, "Cinelike V"),
-        (24, "Like 709"),
-        (25, "V-Log"),
-        (26, "V-Log L"),
+        (10, "Nostalgic"),
+        (11, "Vibrant"),
     ]
 );
 
@@ -269,10 +241,21 @@ const_decoder!(pub PHOTO_STYLE,
 // Macro mode decoder - maps values to macro mode settings
 const_decoder!(pub MACRO_MODE, i32, [(1, "On"), (2, "Off"),]);
 
-// Rotation decoder - maps values to image rotation
+// Rotation decoder (tag 0x0030) - ExifTool Panasonic.pm Rotation PrintConv
 const_decoder!(pub ROTATION,
     i32,
-    [(1, "0°"), (3, "180°"), (6, "90° CW"), (8, "270° CW"),]
+    [
+        (1, "Horizontal (normal)"),
+        (3, "Rotate 180"),
+        (6, "Rotate 90 CW"),
+        (8, "Rotate 270 CW"),
+    ]
+);
+
+// Color mode decoder (tag 0x0032) - ExifTool Panasonic.pm ColorMode PrintConv
+const_decoder!(pub COLOR_MODE,
+    i32,
+    [(0, "Normal"), (1, "Natural"), (2, "Vivid"),]
 );
 
 // Internal ND filter decoder - maps values to ND filter settings
@@ -337,9 +320,18 @@ const_decoder!(pub COLOR_EFFECT, i32,
      (5, "Sepia"), (6, "Happy"), (8, "Vivid"),]
 );
 
-// Self timer mode decoder (tag 0x002E)
-const_decoder!(pub SELF_TIMER_MODE, i32,
-    [(1, "Off"), (2, "10 s"), (3, "2 s"), (4, "10 s / 3 shots"),]
+// Self timer decoder (tag 0x002E) - ExifTool Panasonic.pm SelfTimer PrintConv
+const_decoder!(pub SELF_TIMER, i32,
+    [
+        (0, "Off (0)"),
+        (1, "Off"),
+        (2, "10 s"),
+        (3, "2 s"),
+        (4, "10 s / 3 pictures"),
+        (258, "2 s after shutter pressed"),
+        (266, "10 s after shutter pressed"),
+        (778, "3 photos after 10 s"),
+    ]
 );
 
 // AF assist lamp decoder (tag 0x0031)
@@ -362,13 +354,8 @@ const_decoder!(pub WORLD_TIME_LOCATION, i32, [(1, "Home"), (2, "Destination"),])
 // Text stamp decoder (tag 0x003B, 0x003E, 0x8008, 0x8009)
 const_decoder!(pub TEXT_STAMP, i32, [(1, "Off"), (2, "On"),]);
 
-// Advanced scene type decoder (tag 0x003D)
-const_decoder!(pub ADVANCED_SCENE_TYPE, i32,
-    [(1, "Normal"), (2, "Outdoor/Illuminations/Flower/HDR Art"),
-     (3, "Indoor/Architecture/Objects/HDR B&W"), (4, "Creative"), (5, "Auto"),
-     (7, "Expressive"), (8, "Retro"), (9, "Pure"), (10, "Elegant"),
-     (12, "Monochrome"), (13, "Dynamic Art"), (14, "Silhouette"),]
-);
+// AdvancedSceneType (tag 0x003D) has no PrintConv in ExifTool Panasonic.pm;
+// it is reported as its raw numeric value.
 
 // Bracket settings decoder (tag 0x0045)
 const_decoder!(pub BRACKET_SETTINGS, i32,
@@ -436,6 +423,34 @@ impl MakerNoteParser for PanasonicParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
+        self.parse_impl(data, byte_order, None, tags)
+    }
+
+    fn parse_with_model(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        self.parse_impl(data, byte_order, model, tags)
+    }
+
+    fn lookup_lens(&self, lens_id: u16) -> Option<String> {
+        lookup_lens_name(lens_id)
+    }
+}
+
+impl PanasonicParser {
+    /// Shared implementation behind [`MakerNoteParser::parse`] and
+    /// [`MakerNoteParser::parse_with_model`].
+    fn parse_impl(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
         if data.is_empty() {
             return Ok(());
         }
@@ -470,27 +485,24 @@ impl MakerNoteParser for PanasonicParser {
 
         // Extract tags from entries
         for entry in entries {
-            self.parse_entry(&entry, data, ifd_offset, &registry, tags);
+            self.parse_entry(&entry, data, ifd_offset, byte_order, model, &registry, tags);
         }
 
         Ok(())
     }
 
-    fn lookup_lens(&self, lens_id: u16) -> Option<String> {
-        lookup_lens_name(lens_id)
-    }
-}
-
-impl PanasonicParser {
     /// Parse a single IFD entry using registry-based tag definitions
     ///
     /// Uses the Panasonic tag registry to determine tag names and apply value decoders.
     /// Special cases (lens lookups, custom formatting) are handled inline.
+    #[allow(clippy::too_many_arguments)]
     fn parse_entry(
         &self,
         entry: &IfdEntry,
         data: &[u8],
         ifd_offset: usize,
+        byte_order: ByteOrder,
+        model: Option<&str>,
         registry: &super::shared::tag_registry::TagRegistry,
         tags: &mut HashMap<String, String>,
     ) {
@@ -500,15 +512,127 @@ impl PanasonicParser {
         // These tags contain text data that needs to be extracted from the makernote
         match tag_id {
             // Basic info strings
-            0x0001 | 0x0002 | 0x0025 | 0x0026 | 0x0052 | 0x0054 |
-            // Supplementary info strings (BabyAge, Title, BabyName)
-            0x0033 | 0x0065 | 0x0066 |
+            0x0026 | 0x0052 | 0x0054 |
+            // Supplementary info strings (Title, BabyName)
+            0x0065 | 0x0066 |
             // Location-related strings
             0x0067 | 0x0069 | 0x006B | 0x006D | 0x006F | 0x0080 => {
                 if let Some(value) = extract_string_value(entry, data, ifd_offset)
                     && let Some(tag_name) = registry.get_tag_name(tag_id) {
                         tags.insert(format!("Panasonic:{}", tag_name), value);
                     }
+                return;
+            }
+            // BabyAge: ExifTool maps the "9999:99:99 00:00:00" sentinel to "(not set)"
+            0x0033 => {
+                if let Some(value) = extract_string_value(entry, data, ifd_offset) {
+                    tags.insert("Panasonic:BabyAge".to_string(), format_baby_age(&value));
+                }
+                return;
+            }
+            // InternalSerialNumber: ExifTool reformats "(F35) 2008:07:01 no. 0058".
+            // Match the pattern on the raw bytes first: the trailing bytes of the
+            // 16-byte field are often not valid UTF-8, which must not hide a
+            // well-formed serial prefix.
+            0x0025 => {
+                if let Some(bytes) = extract_raw_bytes(entry, data, ifd_offset, byte_order) {
+                    let prefix = String::from_utf8_lossy(&bytes);
+                    let formatted = format_internal_serial_number(&prefix);
+                    if formatted != prefix {
+                        tags.insert("Panasonic:InternalSerialNumber".to_string(), formatted);
+                        return;
+                    }
+                }
+                if let Some(value) = extract_string_value(entry, data, ifd_offset) {
+                    tags.insert(
+                        "Panasonic:InternalSerialNumber".to_string(),
+                        format_internal_serial_number(&value),
+                    );
+                }
+                return;
+            }
+            // FirmwareVersion: undef; binary versions are rendered as dotted bytes
+            0x0002 => {
+                if let Some(bytes) = extract_raw_bytes(entry, data, ifd_offset, byte_order) {
+                    tags.insert(
+                        "Panasonic:FirmwareVersion".to_string(),
+                        format_firmware_version(&bytes),
+                    );
+                }
+                return;
+            }
+            // MakerNoteVersion: undef bytes shown as text (e.g. "0130"); out-of-line
+            // or non-text values keep the raw number, as before this conversion existed
+            0x8000 => {
+                let printed = if entry.value_count <= 4 {
+                    extract_raw_bytes(entry, data, ifd_offset, byte_order)
+                        .and_then(|bytes| undef_bytes_to_string(&bytes))
+                } else {
+                    None
+                };
+                tags.insert(
+                    "Panasonic:MakerNoteVersion".to_string(),
+                    printed.unwrap_or_else(|| entry.value_offset.to_string()),
+                );
+                return;
+            }
+            // AFAreaMode: an int8u pair decoded as "a b" (model-conditional for the DMC-FZ10)
+            0x000F => {
+                let printed =
+                    match extract_component_values(entry, data, ifd_offset, byte_order) {
+                        Some(values) => decode_af_area_mode(&values, model),
+                        // Value unreachable (out-of-line offset outside this
+                        // MakerNote slice): keep the raw field, as before
+                        None => format!("Unknown ({})", entry.value_offset),
+                    };
+                tags.insert("Panasonic:AFAreaMode".to_string(), printed);
+                return;
+            }
+            // TimeSincePowerOn: centiseconds rendered as "[DD days ]HH:MM:SS.ss"
+            0x0029 => {
+                tags.insert(
+                    "Panasonic:TimeSincePowerOn".to_string(),
+                    format_time_since_power_on(entry.value_offset),
+                );
+                return;
+            }
+            // TravelDay: 65535 means "n/a"
+            0x0036 => {
+                let value = inline_u16_value(entry, byte_order);
+                let printed = if value == 0xFFFF {
+                    "n/a".to_string()
+                } else {
+                    value.to_string()
+                };
+                tags.insert("Panasonic:TravelDay".to_string(), printed);
+                return;
+            }
+            // Contrast / Saturation / Sharpness: int16s with ExifTool's printParameter
+            // conversion (0 => "Normal", positive => "+N", negative => "-N")
+            0x0039 | 0x0040 | 0x0041 => {
+                let value = inline_u16_value(entry, byte_order) as i16;
+                if let Some(tag_name) = registry.get_tag_name(tag_id) {
+                    tags.insert(format!("Panasonic:{}", tag_name), print_parameter(value));
+                }
+                return;
+            }
+            // FlashBias: int16s thirds of EV rendered as a signed fraction ("0", "+1/3", ...)
+            0x0024 => {
+                let value = inline_u16_value(entry, byte_order) as i16;
+                tags.insert(
+                    "Panasonic:FlashBias".to_string(),
+                    print_fraction(f64::from(value) / 3.0),
+                );
+                return;
+            }
+            // ImageQuality: int16u enum; read the inline SHORT respecting byte order
+            // (big-endian files store it in the high half of the value field)
+            0x0001 => {
+                let value = i32::from(inline_u16_value(entry, byte_order));
+                tags.insert(
+                    "Panasonic:ImageQuality".to_string(),
+                    IMAGE_QUALITY.decode(value),
+                );
                 return;
             }
             _ => {}
@@ -529,19 +653,6 @@ impl PanasonicParser {
             return;
         }
 
-        // Special case: Flash Bias requires EV formatting
-        if tag_id == 0x0024 {
-            // PANA_FLASH_BIAS
-            let value = entry.value_offset as i32;
-            if let Some(tag_name) = registry.get_tag_name(tag_id) {
-                tags.insert(
-                    format!("Panasonic:{}", tag_name),
-                    format!("{:.1} EV", value as f32 / 10.0),
-                );
-            }
-            return;
-        }
-
         // Special case: Roll and Pitch angles require degree formatting
         if tag_id == 0x008D || tag_id == 0x008E {
             // PANA_ROLL_ANGLE, PANA_PITCH_ANGLE
@@ -551,26 +662,6 @@ impl PanasonicParser {
                     format!("Panasonic:{}", tag_name),
                     format!("{:.1}°", value as f32 / 10.0),
                 );
-            }
-            return;
-        }
-
-        // Special case: Self Timer requires unit formatting
-        if tag_id == 0x002E {
-            // PANA_SELF_TIMER
-            let value = entry.value_offset;
-            if let Some(tag_name) = registry.get_tag_name(tag_id) {
-                tags.insert(format!("Panasonic:{}", tag_name), format!("{} s", value));
-            }
-            return;
-        }
-
-        // Special case: Color Temp Kelvin requires unit formatting
-        if tag_id == 0x0044 {
-            // PANA_COLOR_TEMP_KELVIN
-            let value = entry.value_offset;
-            if let Some(tag_name) = registry.get_tag_name(tag_id) {
-                tags.insert(format!("Panasonic:{}", tag_name), format!("{} K", value));
             }
             return;
         }
@@ -690,16 +781,308 @@ fn extract_string_value(entry: &IfdEntry, full_data: &[u8], ifd_offset: usize) -
     None
 }
 
+/// Extracts the raw value bytes of an IFD entry (int8u/undef style counts)
+///
+/// Handles both inline values (≤4 bytes, stored in the value field in the
+/// file's byte order) and offset-based values, using the same offset
+/// convention as [`extract_string_value`].
+fn extract_raw_bytes(
+    entry: &IfdEntry,
+    full_data: &[u8],
+    ifd_offset: usize,
+    byte_order: ByteOrder,
+) -> Option<Vec<u8>> {
+    let byte_count = entry.value_count as usize;
+
+    if byte_count <= 4 {
+        let bytes = match byte_order {
+            ByteOrder::LittleEndian => entry.value_offset.to_le_bytes(),
+            ByteOrder::BigEndian => entry.value_offset.to_be_bytes(),
+        };
+        return Some(bytes[0..byte_count].to_vec());
+    }
+
+    // For longer values, read from offset (relative to IFD start, as in
+    // extract_string_value)
+    let abs_offset = ifd_offset + entry.value_offset as usize;
+    full_data
+        .get(abs_offset..abs_offset + byte_count)
+        .map(|b| b.to_vec())
+}
+
+/// Numeric value of an entry that is nominally a single int16u/int16s.
+///
+/// A count==1 SHORT/SSHORT stores its value in the FIRST two bytes of the
+/// 4-byte value field, which after parsing the field as a u32 is the high half
+/// on big-endian files and the low half on little-endian files. Anything else
+/// keeps the low 16 bits of the parsed field (the pre-existing behavior).
+fn inline_u16_value(entry: &IfdEntry, byte_order: ByteOrder) -> u16 {
+    if entry.value_count == 1 && matches!(entry.field_type, 3 | 8) {
+        match byte_order {
+            ByteOrder::LittleEndian => (entry.value_offset & 0xFFFF) as u16,
+            ByteOrder::BigEndian => (entry.value_offset >> 16) as u16,
+        }
+    } else {
+        (entry.value_offset & 0xFFFF) as u16
+    }
+}
+
+/// Extracts an entry's value as a list of numeric components, honoring the
+/// entry's field type: int8u/undef entries yield one component per byte,
+/// int16u entries one per 16-bit word. Returns None for unsupported types or
+/// unreachable out-of-line values.
+fn extract_component_values(
+    entry: &IfdEntry,
+    full_data: &[u8],
+    ifd_offset: usize,
+    byte_order: ByteOrder,
+) -> Option<Vec<u32>> {
+    let count = entry.value_count as usize;
+    match entry.field_type {
+        // BYTE / UNDEF: one byte per component
+        1 | 7 => extract_raw_bytes(entry, full_data, ifd_offset, byte_order)
+            .map(|bytes| bytes.iter().map(|&b| u32::from(b)).collect()),
+        // SHORT: two bytes per component
+        3 => {
+            let byte_len = count.checked_mul(2)?;
+            let bytes: Vec<u8> = if byte_len <= 4 {
+                let field = match byte_order {
+                    ByteOrder::LittleEndian => entry.value_offset.to_le_bytes(),
+                    ByteOrder::BigEndian => entry.value_offset.to_be_bytes(),
+                };
+                field[0..byte_len].to_vec()
+            } else {
+                let abs_offset = ifd_offset + entry.value_offset as usize;
+                full_data.get(abs_offset..abs_offset + byte_len)?.to_vec()
+            };
+            Some(
+                bytes
+                    .chunks_exact(2)
+                    .map(|c| match byte_order {
+                        ByteOrder::LittleEndian => u32::from(u16::from_le_bytes([c[0], c[1]])),
+                        ByteOrder::BigEndian => u32::from(u16::from_be_bytes([c[0], c[1]])),
+                    })
+                    .collect(),
+            )
+        }
+        _ => None,
+    }
+}
+
+/// Renders undef bytes as text, trimming trailing NULs (e.g. MakerNoteVersion "0130")
+fn undef_bytes_to_string(bytes: &[u8]) -> Option<String> {
+    let s = std::str::from_utf8(bytes).ok()?.trim_end_matches('\0');
+    Some(s.to_string())
+}
+
+/// FirmwareVersion (0x0002) rendering, from ExifTool Panasonic.pm:
+/// ValueConv: `$val=~/[\0-\x2f]/ ? join(" ",unpack("C*",$val)) : $val`
+/// PrintConv: `$val=~tr/ /./; $val`
+///
+/// A value containing any byte <= 0x2F is binary: its bytes are printed as
+/// decimal numbers joined with dots (`[0,1,0,0]` -> "0.1.0.0"). Otherwise the
+/// value is text, with spaces replaced by dots.
+fn format_firmware_version(bytes: &[u8]) -> String {
+    if bytes.iter().any(|&b| b <= 0x2F) {
+        bytes
+            .iter()
+            .map(|b| b.to_string())
+            .collect::<Vec<_>>()
+            .join(".")
+    } else {
+        String::from_utf8_lossy(bytes).replace(' ', ".")
+    }
+}
+
+/// InternalSerialNumber (0x0025) rendering, from ExifTool Panasonic.pm:
+/// `return $val unless $val=~/^([A-Z][0-9A-Z]{2})(\d{2})(\d{2})(\d{2})(\d{4})/;
+///  my $yr = $2 + ($2 < 70 ? 2000 : 1900);
+///  return "($1) $yr:$3:$4 no. $5";`
+fn format_internal_serial_number(value: &str) -> String {
+    let b = value.as_bytes();
+    let matches = b.len() >= 13
+        && b[0].is_ascii_uppercase()
+        && b[1..3]
+            .iter()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+        && b[3..13].iter().all(|c| c.is_ascii_digit());
+    if !matches {
+        return value.to_string();
+    }
+    let yy: u32 = value[3..5].parse().unwrap_or(0);
+    let year = yy + if yy < 70 { 2000 } else { 1900 };
+    format!(
+        "({}) {}:{}:{} no. {}",
+        &value[0..3],
+        year,
+        &value[5..7],
+        &value[7..9],
+        &value[9..13]
+    )
+}
+
+/// BabyAge (0x0033) rendering, from ExifTool Panasonic.pm:
+/// `$val eq "9999:99:99 00:00:00" ? "(not set)" : $val`
+fn format_baby_age(value: &str) -> String {
+    if value == "9999:99:99 00:00:00" {
+        "(not set)".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+/// TimeSincePowerOn (0x0029) rendering, from ExifTool Panasonic.pm: the raw
+/// value counts 1/100 s; printed as "[DD days ]HH:MM:SS.ss" (63308 -> "00:10:33.08")
+fn format_time_since_power_on(centiseconds: u32) -> String {
+    let mut cs = u64::from(centiseconds);
+    let mut prefix = String::new();
+    const DAY_CS: u64 = 24 * 3600 * 100;
+    if cs >= DAY_CS {
+        let days = cs / DAY_CS;
+        prefix = format!("{} days ", days);
+        cs -= days * DAY_CS;
+    }
+    let hours = cs / 360_000;
+    cs %= 360_000;
+    let minutes = cs / 6_000;
+    cs %= 6_000;
+    format!(
+        "{}{:02}:{:02}:{:02}.{:02}",
+        prefix,
+        hours,
+        minutes,
+        cs / 100,
+        cs % 100
+    )
+}
+
+/// ExifTool's Image::ExifTool::Exif::PrintFraction, used for FlashBias:
+/// prints a signed value in thirds ("0", "+1", "+1/3", "-2/3", ...)
+fn print_fraction(value: f64) -> String {
+    let val = value * 1.00001; // avoid round-off errors, as ExifTool does
+    if val == 0.0 {
+        return "0".to_string();
+    }
+    if val.trunc() / val > 0.999 {
+        return format!("{:+}", val.trunc() as i64);
+    }
+    if (val * 2.0).trunc() / (val * 2.0) > 0.999 {
+        return format!("{:+}/2", (val * 2.0).trunc() as i64);
+    }
+    if (val * 3.0).trunc() / (val * 3.0) > 0.999 {
+        return format!("{:+}/3", (val * 3.0).trunc() as i64);
+    }
+    // Unreachable for int16s/3 inputs; matches ExifTool's %+.3g fallback closely enough
+    format!("{:+}", val)
+}
+
+/// ExifTool's %Image::ExifTool::Exif::printParameter conversion, used for
+/// Contrast/Saturation/Sharpness: 0 => "Normal", positive => "+N", negative => "-N"
+fn print_parameter(value: i16) -> String {
+    if value == 0 {
+        "Normal".to_string()
+    } else if value > 0 {
+        format!("+{}", value)
+    } else {
+        value.to_string()
+    }
+}
+
+/// AFAreaMode (0x000F) int8u pair table from ExifTool Panasonic.pm ("other
+/// models" variant), keyed as "first second"
+const AF_AREA_MODE_PAIRS: &[(u32, u32, &str)] = &[
+    (0, 1, "9-area"),
+    (0, 16, "3-area (high speed)"),
+    (0, 23, "23-area"),
+    (0, 49, "49-area"),
+    (0, 225, "225-area"),
+    (1, 0, "Spot Focusing"),
+    (1, 1, "5-area"),
+    (16, 0, "1-area"),
+    (16, 16, "1-area (high speed)"),
+    (16, 32, "1-area +"),
+    (16, 225, "225-area 2"),
+    (17, 0, "Full Area"),
+    (32, 0, "Tracking"),
+    (32, 1, "3-area (left)?"),
+    (32, 2, "3-area (center)?"),
+    (32, 3, "3-area (right)?"),
+    (32, 16, "Zone"),
+    (32, 18, "Zone (horizontal/vertical)"),
+    (64, 0, "Face Detect"),
+    (64, 1, "Face Detect (animal detect on)"),
+    (64, 2, "Face Detect (animal detect off)"),
+    (128, 0, "Pinpoint focus"),
+    (240, 0, "Tracking"),
+];
+
+/// Decodes AFAreaMode (0x000F), an int8u pair, per ExifTool Panasonic.pm.
+///
+/// The DMC-FZ10 uses its own two-entry table (condition
+/// `$$self{Model} =~ /DMC-FZ10\b/`); every other model uses the general table.
+/// A one-value entry decodes via the single '16' => 'Normal?' mapping. Values
+/// of any other shape miss the table and are shown ExifTool-style as
+/// "Unknown (a b ...)".
+fn decode_af_area_mode(values: &[u32], model: Option<&str>) -> String {
+    let unknown = || {
+        format!(
+            "Unknown ({})",
+            values
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
+        )
+    };
+    if is_dmc_fz10(model) {
+        return match values {
+            [0, 1] => "Spot Mode On".to_string(),
+            [0, 16] => "Spot Mode Off".to_string(),
+            _ => unknown(),
+        };
+    }
+    match values {
+        // (only mode for DMC-LC20)
+        [16] => "Normal?".to_string(),
+        [a, b] => AF_AREA_MODE_PAIRS
+            .iter()
+            .find(|(pa, pb, _)| pa == a && pb == b)
+            .map(|(_, _, name)| (*name).to_string())
+            .unwrap_or_else(unknown),
+        _ => unknown(),
+    }
+}
+
+/// Matches ExifTool's `/DMC-FZ10\b/` model condition: "DMC-FZ10" followed by a
+/// word boundary (so DMC-FZ100 and DC-FZ10002 do not match)
+fn is_dmc_fz10(model: Option<&str>) -> bool {
+    let Some(model) = model else { return false };
+    let needle = "DMC-FZ10";
+    let mut start = 0;
+    while let Some(pos) = model[start..].find(needle) {
+        let end = start + pos + needle.len();
+        let boundary = model[end..]
+            .chars()
+            .next()
+            .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+        if boundary {
+            return true;
+        }
+        start = end;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_decode_quality() {
-        assert_eq!(QUALITY.decode(2), "Normal");
-        assert_eq!(QUALITY.decode(3), "Fine");
-        assert_eq!(QUALITY.decode(6), "RAW");
-        assert_eq!(QUALITY.decode(7), "RAW + Fine");
+    fn test_decode_image_quality() {
+        assert_eq!(IMAGE_QUALITY.decode(2), "High");
+        assert_eq!(IMAGE_QUALITY.decode(3), "Normal");
+        assert_eq!(IMAGE_QUALITY.decode(7), "RAW");
+        assert_eq!(IMAGE_QUALITY.decode(12), "4k Movie");
     }
 
     #[test]
@@ -718,10 +1101,171 @@ mod tests {
 
     #[test]
     fn test_decode_film_mode() {
-        assert_eq!(FILM_MODE.decode(1), "Standard");
-        assert_eq!(FILM_MODE.decode(22), "Cinelike D");
-        assert_eq!(FILM_MODE.decode(23), "Cinelike V");
-        assert_eq!(FILM_MODE.decode(25), "V-Log");
+        assert_eq!(FILM_MODE.decode(0), "n/a");
+        assert_eq!(FILM_MODE.decode(1), "Standard (color)");
+        assert_eq!(FILM_MODE.decode(5), "Standard (B&W)");
+        assert_eq!(FILM_MODE.decode(11), "Vibrant");
+    }
+
+    #[test]
+    fn test_decode_image_stabilization() {
+        assert_eq!(IMAGE_STABILIZATION.decode(2), "On, Optical");
+        assert_eq!(IMAGE_STABILIZATION.decode(4), "On, Mode 2");
+        assert_eq!(IMAGE_STABILIZATION.decode(9), "Dual IS");
+        assert_eq!(IMAGE_STABILIZATION.decode(34), "Unknown (34)");
+    }
+
+    #[test]
+    fn test_decode_rotation() {
+        assert_eq!(ROTATION.decode(1), "Horizontal (normal)");
+        assert_eq!(ROTATION.decode(3), "Rotate 180");
+        assert_eq!(ROTATION.decode(6), "Rotate 90 CW");
+        assert_eq!(ROTATION.decode(8), "Rotate 270 CW");
+    }
+
+    #[test]
+    fn test_decode_self_timer() {
+        assert_eq!(SELF_TIMER.decode(1), "Off");
+        assert_eq!(SELF_TIMER.decode(2), "10 s");
+        assert_eq!(SELF_TIMER.decode(4), "10 s / 3 pictures");
+        assert_eq!(SELF_TIMER.decode(778), "3 photos after 10 s");
+    }
+
+    #[test]
+    fn test_decode_color_mode() {
+        assert_eq!(COLOR_MODE.decode(0), "Normal");
+        assert_eq!(COLOR_MODE.decode(1), "Natural");
+        assert_eq!(COLOR_MODE.decode(2), "Vivid");
+    }
+
+    #[test]
+    fn test_format_firmware_version() {
+        // Binary version bytes are joined with dots (Panasonic.rw2 / Panasonic.jpg)
+        assert_eq!(format_firmware_version(&[0, 1, 0, 0]), "0.1.0.0");
+        assert_eq!(format_firmware_version(&[0, 1, 0, 8]), "0.1.0.8");
+        // Pure text stays text (no byte <= 0x2F)
+        assert_eq!(format_firmware_version(b"0130"), "0130");
+    }
+
+    #[test]
+    fn test_format_internal_serial_number() {
+        // Panasonic.rw2's serial
+        assert_eq!(
+            format_internal_serial_number("F350807010058"),
+            "(F35) 2008:07:01 no. 0058"
+        );
+        // Panasonic.jpg's serial (digits allowed in the series code)
+        assert_eq!(
+            format_internal_serial_number("S000407190102"),
+            "(S00) 2004:07:19 no. 0102"
+        );
+        // Trailing junk after the 13 significant characters is ignored
+        assert_eq!(
+            format_internal_serial_number("F350807010058\u{10}"),
+            "(F35) 2008:07:01 no. 0058"
+        );
+        // Two-digit years >= 70 are 19xx
+        assert_eq!(
+            format_internal_serial_number("XYZ9901011234"),
+            "(XYZ) 1999:01:01 no. 1234"
+        );
+        // Non-matching values pass through unchanged
+        assert_eq!(format_internal_serial_number("hello"), "hello");
+        assert_eq!(format_internal_serial_number(""), "");
+    }
+
+    #[test]
+    fn test_format_baby_age() {
+        assert_eq!(format_baby_age("9999:99:99 00:00:00"), "(not set)");
+        assert_eq!(
+            format_baby_age("2008:07:01 12:00:00"),
+            "2008:07:01 12:00:00"
+        );
+    }
+
+    #[test]
+    fn test_format_time_since_power_on() {
+        // Panasonic.rw2: 63308 cs = 10 min 33.08 s
+        assert_eq!(format_time_since_power_on(63308), "00:10:33.08");
+        // Panasonic.jpg: 696 cs = 6.96 s
+        assert_eq!(format_time_since_power_on(696), "00:00:06.96");
+        assert_eq!(format_time_since_power_on(0), "00:00:00.00");
+        // Day rollover keeps ExifTool's "N days " prefix
+        assert_eq!(
+            format_time_since_power_on(24 * 3600 * 100 + 123_456),
+            "1 days 00:20:34.56"
+        );
+    }
+
+    #[test]
+    fn test_print_fraction() {
+        assert_eq!(print_fraction(0.0), "0");
+        assert_eq!(print_fraction(3.0 / 3.0), "+1");
+        assert_eq!(print_fraction(1.0 / 3.0), "+1/3");
+        assert_eq!(print_fraction(2.0 / 3.0), "+2/3");
+        assert_eq!(print_fraction(-3.0 / 3.0), "-1");
+        assert_eq!(print_fraction(-1.0 / 3.0), "-1/3");
+        assert_eq!(print_fraction(1.5), "+3/2");
+    }
+
+    #[test]
+    fn test_print_parameter() {
+        assert_eq!(print_parameter(0), "Normal");
+        assert_eq!(print_parameter(1), "+1");
+        assert_eq!(print_parameter(-1), "-1");
+    }
+
+    #[test]
+    fn test_decode_af_area_mode() {
+        // Panasonic.rw2: '16 0'
+        assert_eq!(decode_af_area_mode(&[16, 0], None), "1-area");
+        // Panasonic.jpg: '0 1'
+        assert_eq!(decode_af_area_mode(&[0, 1], None), "9-area");
+        assert_eq!(decode_af_area_mode(&[0, 49], None), "49-area");
+        assert_eq!(decode_af_area_mode(&[16], None), "Normal?");
+        assert_eq!(decode_af_area_mode(&[99, 99], None), "Unknown (99 99)");
+        // DMC-FZ10 uses its own table
+        assert_eq!(
+            decode_af_area_mode(&[0, 16], Some("DMC-FZ10")),
+            "Spot Mode Off"
+        );
+        assert_eq!(
+            decode_af_area_mode(&[0, 1], Some("DMC-FZ10")),
+            "Spot Mode On"
+        );
+        // The FZ10 condition is a word-boundary match, so FZ100 is not FZ10
+        assert_eq!(
+            decode_af_area_mode(&[0, 16], Some("DMC-FZ100")),
+            "3-area (high speed)"
+        );
+        // SHORT-typed pairs keep their 16-bit components (DMC-LZ20)
+        assert_eq!(decode_af_area_mode(&[16384, 0], None), "Unknown (16384 0)");
+    }
+
+    #[test]
+    fn test_inline_u16_value() {
+        // Little-endian SHORT count 1: value in the low half
+        let le = IfdEntry {
+            tag_id: 0x01,
+            field_type: 3,
+            value_count: 1,
+            value_offset: 0x0000_0002,
+        };
+        assert_eq!(inline_u16_value(&le, ByteOrder::LittleEndian), 2);
+        // Big-endian SHORT count 1: value in the high half (DMC-LC20 ImageQuality)
+        let be = IfdEntry {
+            tag_id: 0x01,
+            field_type: 3,
+            value_count: 1,
+            value_offset: 0x0002_0000,
+        };
+        assert_eq!(inline_u16_value(&be, ByteOrder::BigEndian), 2);
+    }
+
+    #[test]
+    fn test_undef_bytes_to_string() {
+        assert_eq!(undef_bytes_to_string(b"0130"), Some("0130".to_string()));
+        assert_eq!(undef_bytes_to_string(b"0131\0\0"), Some("0131".to_string()));
     }
 
     #[test]
