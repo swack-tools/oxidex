@@ -129,7 +129,9 @@ const KNOWN_TAGS: &[&str] = &[
 /// # Returns
 ///
 /// Returns a `Result<MetadataMap>` containing extracted Olympus metadata tags.
-/// On success, tags are prefixed with "Olympus:" (e.g., "Olympus:CameraType").
+/// On success, tags are prefixed with "APP12:" (e.g., "APP12:CameraType"),
+/// matching the family-0 group ExifTool reports for
+/// `Image::ExifTool::APP12::PictureInfo`.
 ///
 /// # Errors
 ///
@@ -144,7 +146,7 @@ const KNOWN_TAGS: &[&str] = &[
 ///
 /// let data = b"Type=OLYMPUS DIGITAL CAMERA\rResolution=2048x1536";
 /// let metadata = parse_app12_olympus(data)?;
-/// assert_eq!(metadata.get_string("Olympus:Type"), Some("OLYMPUS DIGITAL CAMERA"));
+/// assert_eq!(metadata.get_string("APP12:CameraType"), Some("OLYMPUS DIGITAL CAMERA"));
 /// ```
 pub fn parse_app12_olympus(data: &[u8]) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
@@ -242,7 +244,7 @@ fn is_olympus_picture_info(text: &str) -> bool {
 /// Parse key=value pairs from Olympus Picture Info text.
 ///
 /// This function extracts all key=value pairs from the text data and
-/// stores them in the metadata map with the "Olympus:" prefix.
+/// stores them in the metadata map with the "APP12:" prefix.
 ///
 /// # Arguments
 ///
@@ -261,10 +263,6 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
 
         // Parse key=value pair
         if let Some((key, value)) = parse_single_pair(line) {
-            // Normalize the tag name and add to metadata
-            let tag_name = normalize_tag_name(&key);
-            let tag_value = parse_tag_value(&tag_name, &value);
-
             // Emit the canonical ExifTool APP12 tag for this field.
             insert_picture_info_tag(&key, &value, metadata);
 
@@ -287,8 +285,6 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
                 metadata.insert("APP12:STB6".to_string(), app12_value);
             }
-
-            metadata.insert(format!("Olympus:{}", tag_name), tag_value);
         }
     }
 }
@@ -1228,14 +1224,11 @@ mod tests {
         let metadata = result.unwrap();
 
         assert_eq!(
-            metadata.get_string("Olympus:CameraType"),
+            metadata.get_string("APP12:CameraType"),
             Some("OLYMPUS DIGITAL CAMERA")
         );
-        assert_eq!(
-            metadata.get_string("Olympus:ImageResolution"),
-            Some("2048x1536")
-        );
-        assert_eq!(metadata.get_string("Olympus:Macro"), Some("Off"));
+        assert_eq!(metadata.get_string("APP12:Resolution"), Some("2048x1536"));
+        assert_eq!(metadata.get_string("APP12:Macro"), Some("Off"));
     }
 
     /// Test the diagnostic CAM4 field exposed by ExifTool as APP12:CAM4.
@@ -1328,7 +1321,7 @@ mod tests {
         let metadata = result.unwrap();
 
         // The second ID value should overwrite the first
-        assert!(metadata.contains_key("Olympus:CameraID"));
+        assert!(metadata.contains_key("APP12:ID"));
     }
 
     /// Test ExifTool-compatible extraction of CAM2 from diagnostic information.
@@ -1392,23 +1385,16 @@ mod tests {
         assert!(result.is_ok());
         let metadata = result.unwrap();
 
-        // Check rational exposure time
-        if let Some(TagValue::Rational {
-            numerator,
-            denominator,
-        }) = metadata.get("Olympus:ExposureTime")
-        {
-            assert_eq!(*numerator, 1);
-            assert_eq!(*denominator, 250);
-        } else {
-            panic!("Expected Rational value for ExposureTime");
-        }
+        // `ExposureTime` is not a field name in %APP12::PictureInfo (only the
+        // `Shutter`/`shtr` fields carry that Name), so it takes the dynamic
+        // path and is reported verbatim.
+        assert_eq!(metadata.get_string("APP12:ExposureTime"), Some("1/250"));
 
-        // Check float aperture
-        assert_eq!(metadata.get_float("Olympus:FNumber"), Some(2.8));
+        // APP12.pm:36 `PrintConv => 'sprintf("%.1f",$val)'`
+        assert_eq!(metadata.get_string("APP12:FNumber"), Some("2.8"));
 
         // Check integer ISO
-        assert_eq!(metadata.get_integer("Olympus:ISO"), Some(400));
+        assert_eq!(metadata.get_integer("APP12:ISO"), Some(400));
     }
 
     /// Test parsing flash modes
@@ -1420,7 +1406,9 @@ mod tests {
         assert!(result.is_ok());
         let metadata = result.unwrap();
 
-        assert_eq!(metadata.get_string("Olympus:Flash"), Some("Fired"));
+        // APP12.pm:62 `Flash => { PrintConv => { 0 => 'Off', 1 => 'On' } }`:
+        // a value outside the two defines is passed through unchanged.
+        assert_eq!(metadata.get_string("APP12:Flash"), Some("On"));
     }
 
     /// Test that non-Olympus data is rejected
@@ -1460,9 +1448,9 @@ mod tests {
         let metadata = result.unwrap();
 
         // Section headers should be skipped
-        assert!(!metadata.contains_key("Olympus:[picture info]"));
+        assert!(!metadata.contains_key("APP12:[picture info]"));
         assert_eq!(
-            metadata.get_string("Olympus:CameraType"),
+            metadata.get_string("APP12:CameraType"),
             Some("OLYMPUS DIGITAL CAMERA")
         );
     }
@@ -1477,10 +1465,10 @@ mod tests {
         let metadata = result.unwrap();
 
         assert_eq!(
-            metadata.get_string("Olympus:CameraType"),
+            metadata.get_string("APP12:CameraType"),
             Some("OLYMPUS DIGITAL CAMERA")
         );
-        assert_eq!(metadata.get_integer("Olympus:Zoom"), Some(3));
+        assert_eq!(metadata.get_integer("APP12:Zoom"), Some(3));
     }
 
     /// Test parsing with quoted values
@@ -1492,8 +1480,8 @@ mod tests {
         assert!(result.is_ok());
         let metadata = result.unwrap();
 
-        assert_eq!(metadata.get_string("Olympus:Model"), Some("C-5050Z"));
-        assert_eq!(metadata.get_string("Olympus:Make"), Some("OLYMPUS"));
+        assert_eq!(metadata.get_string("APP12:Model"), Some("C-5050Z"));
+        assert_eq!(metadata.get_string("APP12:Make"), Some("OLYMPUS"));
     }
 
     /// Test normalize_tag_name function
@@ -1582,10 +1570,7 @@ mod tests {
         assert!(result.is_ok());
         let metadata = result.unwrap();
 
-        assert_eq!(
-            metadata.get_string("Olympus:ImageResolution"),
-            Some("2560x1920")
-        );
+        assert_eq!(metadata.get_string("APP12:Resolution"), Some("2560x1920"));
     }
 
     /// Test null byte delimiter handling
@@ -1597,11 +1582,8 @@ mod tests {
         assert!(result.is_ok());
         let metadata = result.unwrap();
 
-        assert_eq!(
-            metadata.get_string("Olympus:CameraType"),
-            Some("Test Camera")
-        );
-        assert_eq!(metadata.get_integer("Olympus:ISO"), Some(200));
+        assert_eq!(metadata.get_string("APP12:CameraType"), Some("Test Camera"));
+        assert_eq!(metadata.get_integer("APP12:ISO"), Some(200));
     }
 
     /// Test decode_olympus_text with valid UTF-8
