@@ -3946,26 +3946,70 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 // PRD block contains image dimensions and sensor info
                 if block_data.len() >= 8 {
                     let reader = crate::io::EndianReader::big_endian(block_data);
-                    // PRD structure:
-                    // - 2 bytes: version?
-                    // - 2 bytes: sensor width
-                    // - 2 bytes: sensor height
-                    // - 2 bytes: image width
-                    // - 2 bytes: image height
-                    // etc.
-                    if let (Some(_version), Some(sensor_w), Some(sensor_h)) =
-                        (reader.u16_at(0), reader.u16_at(2), reader.u16_at(4))
+                    // MinoltaRaw::PRD, offsets verbatim from ExifTool. The
+                    // previous layout was a guess -- its own comment said
+                    // "2 bytes: version?" -- and put SensorWidth at 2 and
+                    // SensorHeight at 4, which lands inside the eight-byte
+                    // FirmwareID string. That is why a 3272x2456 sensor was
+                    // reported as 12848x12336: 0x3230 and 0x3030 are the
+                    // ASCII digits "20" and "00" of firmware "27200001".
+                    if let Some(raw) = block_data.get(0..8) {
+                        let firmware = String::from_utf8_lossy(raw)
+                            .trim_end_matches(|c: char| c == '\0' || c.is_whitespace())
+                            .to_string();
+                        if !firmware.is_empty() {
+                            metadata.insert(
+                                "MakerNotes:FirmwareID".to_string(),
+                                TagValue::new_string(firmware),
+                            );
+                        }
+                    }
+                    if let (Some(sensor_h), Some(sensor_w)) = (reader.u16_at(8), reader.u16_at(10))
                     {
-                        metadata.insert(
-                            "MakerNotes:SensorWidth".to_string(),
-                            TagValue::Integer(sensor_w as i64),
-                        );
                         metadata.insert(
                             "MakerNotes:SensorHeight".to_string(),
                             TagValue::Integer(sensor_h as i64),
                         );
+                        metadata.insert(
+                            "MakerNotes:SensorWidth".to_string(),
+                            TagValue::Integer(sensor_w as i64),
+                        );
                     }
-                    if let (Some(img_w), Some(img_h)) = (reader.u16_at(6), reader.u16_at(8)) {
+                    if let Some(v) = block_data.get(16) {
+                        metadata.insert(
+                            "MakerNotes:RawDepth".to_string(),
+                            TagValue::Integer(*v as i64),
+                        );
+                    }
+                    if let Some(v) = block_data.get(17) {
+                        metadata.insert(
+                            "MakerNotes:BitDepth".to_string(),
+                            TagValue::Integer(*v as i64),
+                        );
+                    }
+                    if let Some(v) = block_data.get(18) {
+                        // An unlisted code reports itself rather than being
+                        // rounded to Padded or Linear.
+                        metadata.insert(
+                            "MakerNotes:StorageMethod".to_string(),
+                            TagValue::new_string(match v {
+                                82 => "Padded".to_string(),
+                                89 => "Linear".to_string(),
+                                other => other.to_string(),
+                            }),
+                        );
+                    }
+                    if let Some(v) = block_data.get(23) {
+                        metadata.insert(
+                            "MakerNotes:BayerPattern".to_string(),
+                            TagValue::new_string(match v {
+                                1 => "RGGB".to_string(),
+                                4 => "GBRG".to_string(),
+                                other => other.to_string(),
+                            }),
+                        );
+                    }
+                    if let (Some(img_h), Some(img_w)) = (reader.u16_at(12), reader.u16_at(14)) {
                         metadata.insert(
                             "EXIF:ImageWidth".to_string(),
                             TagValue::Integer(img_w as i64),
@@ -3975,6 +4019,122 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             TagValue::Integer(img_h as i64),
                         );
                     }
+                }
+            }
+            b"\x00RIF" => {
+                // MinoltaRaw::RIF -- requested-image-file settings. Offsets are
+                // ExifTool's; the table's FORMAT is int8u so its keys ARE byte
+                // offsets. This block was never dispatched at all, so every
+                // tag in it was missing rather than wrong.
+                let i8 = |o: usize| block_data.get(o).map(|v| *v as i8);
+                let be16 = |o: usize| -> Option<u16> {
+                    Some(u16::from_be_bytes([
+                        *block_data.get(o)?,
+                        *block_data.get(o + 1)?,
+                    ]))
+                };
+                for (off, name) in [(1usize, "Saturation"), (2, "Contrast"), (3, "Sharpness")] {
+                    if let Some(v) = i8(off) {
+                        metadata.insert(format!("MakerNotes:{name}"), TagValue::Integer(v as i64));
+                    }
+                }
+                if let Some(v) = block_data.get(4) {
+                    // ExifTool's ConvertWBMode: the low nibble names the mode
+                    // and the high nibble, when 6..=12, is appended as (hi-8).
+                    let lo = v & 0x0f;
+                    let name = match lo {
+                        0 => "Auto",
+                        1 => "Daylight",
+                        2 => "Cloudy",
+                        3 => "Tungsten",
+                        4 => "Flash/Fluorescent",
+                        5 => "Fluorescent",
+                        6 => "Shade",
+                        7 => "User 1",
+                        8 => "User 2",
+                        9 => "User 3",
+                        10 => "Temperature",
+                        _ => "",
+                    };
+                    let mut s = if name.is_empty() {
+                        format!("Unknown ({lo})")
+                    } else {
+                        name.to_string()
+                    };
+                    let hi = v >> 4;
+                    if (6..=12).contains(&hi) {
+                        s.push_str(&format!(" ({})", hi as i16 - 8));
+                    }
+                    metadata.insert("MakerNotes:WBMode".to_string(), TagValue::new_string(s));
+                }
+                if let Some(v) = block_data.get(5) {
+                    metadata.insert(
+                        "MakerNotes:ProgramMode".to_string(),
+                        TagValue::new_string(match v {
+                            0 => "None".to_string(),
+                            1 => "Portrait".to_string(),
+                            2 => "Text".to_string(),
+                            3 => "Night Portrait".to_string(),
+                            4 => "Sunset".to_string(),
+                            5 => "Sports".to_string(),
+                            other => other.to_string(),
+                        }),
+                    );
+                }
+                if let Some(v) = block_data.get(6) {
+                    // ValueConv 2 ** (($val-48)/8) * 100, with three coded
+                    // exceptions ExifTool lists explicitly.
+                    let s = match v {
+                        0 => "Auto".to_string(),
+                        174 => "80 (Zone Matching Low)".to_string(),
+                        184 => "200 (Zone Matching High)".to_string(),
+                        other => {
+                            let iso = 2f64.powf((f64::from(*other) - 48.0) / 8.0) * 100.0;
+                            format!("{}", iso.round() as i64)
+                        }
+                    };
+                    metadata.insert("MakerNotes:ISOSetting".to_string(), TagValue::new_string(s));
+                }
+                for (off, name) in [
+                    (8usize, "WB_RBLevelsTungsten"),
+                    (12, "WB_RBLevelsDaylight"),
+                    (16, "WB_RBLevelsCloudy"),
+                    (20, "WB_RBLevelsCoolWhiteF"),
+                    (24, "WB_RBLevelsFlash"),
+                    (28, "WB_RBLevelsCustom"),
+                ] {
+                    if let (Some(a), Some(b)) = (be16(off), be16(off + 2)) {
+                        metadata.insert(
+                            format!("MakerNotes:{name}"),
+                            TagValue::new_string(format!("{a} {b}")),
+                        );
+                    }
+                }
+                if let Some(v) = i8(56) {
+                    metadata.insert(
+                        "MakerNotes:ColorFilter".to_string(),
+                        TagValue::Integer(v as i64),
+                    );
+                }
+                if let Some(v) = block_data.get(57) {
+                    metadata.insert(
+                        "MakerNotes:BWFilter".to_string(),
+                        TagValue::Integer(*v as i64),
+                    );
+                }
+                if let Some(v) = block_data.get(58) {
+                    metadata.insert(
+                        "MakerNotes:ZoneMatching".to_string(),
+                        TagValue::new_string(match v {
+                            0 => "ISO Setting Used".to_string(),
+                            1 => "High Key".to_string(),
+                            2 => "Low Key".to_string(),
+                            other => other.to_string(),
+                        }),
+                    );
+                }
+                if let Some(v) = i8(59) {
+                    metadata.insert("MakerNotes:Hue".to_string(), TagValue::Integer(v as i64));
                 }
             }
             b"\x00WBG" => {
