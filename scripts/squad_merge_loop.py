@@ -81,13 +81,16 @@ Usage:
     uv run scripts/squad_merge_loop.py --squad canon --recut
 """
 import argparse
+import errno
 import json
 import os
+import shutil
 import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
 import sys
 import tempfile
 import time
 import tomllib
+import traceback
 from pathlib import Path
 
 from find_tag_gaps import (
@@ -1530,6 +1533,95 @@ def run_locked(home, squad, fn, *, now_fn=time.time, kill_fn=None, script_sha=No
 
 
 # ---------------------------------------------------------------------------
+# Crash classification: when this daemon may retry, and when it must not
+# ---------------------------------------------------------------------------
+#
+# WHY THIS EXISTS
+# ---------------
+# `main`'s `while True:` had no exception handling at all, so ANY exception
+# out of a poll killed the daemon. On 2026-07-30 at 23:40:41 the disk hit
+# 100% and eleven of the fourteen mergers died inside 32 seconds, none of
+# them on anything to do with merging:
+#
+#   9x  find_tag_gaps.py:98 _semaphore_locked -> NamedTemporaryFile
+#       OSError: [Errno 28] No space left on device:
+#       '.../logs/build-semaphore.json._reu5673.tmp'
+#   2x  distill_lessons.py:768 write_lock -> mkstemp
+#       OSError: [Errno 28] ... '.../logs/knowledge/.distiller.lock.*.tmp'
+#
+# Both are the merger asking the filesystem for a scratch file before doing
+# any work. Neither says anything is wrong with the merger, the squad branch
+# or the commits -- the machine was simply out of space for ten minutes.
+# Dying on that, permanently, is the wrong answer.
+#
+# The wrong FIX is a bare `except: continue`. A merger that retries forever
+# against a genuinely broken input is the same stall wearing a different hat:
+# it looks alive, publishes nothing, and nobody is paged. So the retry here
+# is bounded three ways -- only for errors that describe the MACHINE, only
+# MAX_TRANSIENT_FAILURES times consecutively, and with a backoff -- and any
+# successful pass resets the budget. Everything else exits non-zero and lets
+# the supervisor's restart budget surface it as GIVING UP.
+
+#: errnos meaning "the machine cannot serve this right now", not "this
+#: program is wrong". Retrying one of these can succeed with no code change;
+#: retrying anything else cannot.
+TRANSIENT_ERRNOS = frozenset({
+    errno.ENOSPC,   # disk full -- the 2026-07-30 mass death
+    errno.EDQUOT,   # quota exhausted; same shape as ENOSPC
+    errno.EROFS,    # filesystem went read-only under us
+    errno.EIO,      # transient device error
+    errno.ENOMEM,   # out of memory
+    errno.EMFILE,   # per-process fd limit
+    errno.ENFILE,   # system-wide fd limit
+    errno.EAGAIN,   # fork/thread resource exhaustion (load average ~400 here)
+})
+
+DEFAULT_MAX_TRANSIENT_FAILURES = 20
+TRANSIENT_BACKOFF_BASE = 30.0
+TRANSIENT_BACKOFF_MAX = 600.0
+
+
+def classify_exception(exc):
+    """``"transient"`` if `exc` (or anything it was raised from) describes a
+    machine resource shortage, else ``"fatal"``.
+
+    The chain walk matters: the ENOSPC that killed nine mergers surfaced
+    through ``contextlib``/``tempfile`` frames, and a future refactor that
+    wraps it in a domain exception must not silently reclassify a full disk
+    as a bug. ``KeyboardInterrupt``/``SystemExit`` never reach here -- the
+    caller re-raises them before classifying.
+    """
+    seen = set()
+    cur = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, OSError) and cur.errno in TRANSIENT_ERRNOS:
+            return "transient"
+        cur = cur.__cause__ or cur.__context__
+    return "fatal"
+
+
+def transient_backoff_seconds(consecutive, base=TRANSIENT_BACKOFF_BASE,
+                              cap=TRANSIENT_BACKOFF_MAX):
+    """Exponential, capped. A merger that died because the disk filled must
+    not spin retrying -- each attempt itself wants a temp file, so a tight
+    loop is a load source on an already-wedged machine."""
+    if consecutive < 1:
+        return base
+    delay = base * (2 ** (consecutive - 1))
+    return float(min(delay, cap))
+
+
+def free_space_note(path):
+    """Best-effort ``free=12.3GB`` for the crash line. Never raises: this
+    runs on the path where the disk is already known to be unhappy."""
+    try:
+        return "free=%.1fGB" % (shutil.disk_usage(str(path)).free / 1e9)
+    except OSError:
+        return "free=unknown"
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1556,6 +1648,12 @@ def main(argv=None, sleep_fn=time.sleep, now_fn=time.time, kill_fn=None):
                         help="default: <home>/logs/sweep-review-history.jsonl")
     parser.add_argument("--once", action="store_true", help="single pass then exit (default)")
     parser.add_argument("--infinite", action="store_true", help="poll forever until interrupted")
+    parser.add_argument("--max-transient-failures", type=int,
+                        default=DEFAULT_MAX_TRANSIENT_FAILURES,
+                        help="consecutive machine-resource failures (disk full, fd "
+                             "exhaustion, OOM) tolerated in --infinite mode before "
+                             "exiting non-zero. Any successful poll resets the count. "
+                             "Non-resource errors are never retried.")
     parser.add_argument("--recut", action="store_true",
                         help="run only the squad-branch re-cut (spec M5), then exit")
     args = parser.parse_args(argv)
@@ -1594,8 +1692,70 @@ def main(argv=None, sleep_fn=time.sleep, now_fn=time.time, kill_fn=None):
             now_fn=now_fn, log_fn=print, heartbeat_fn=heartbeat,
         )
 
+    consecutive_transient = 0
     while True:
-        outcome = run_locked(home, args.squad, one_pass, now_fn=now_fn, kill_fn=kill_fn)
+        try:
+            outcome = run_locked(home, args.squad, one_pass, now_fn=now_fn, kill_fn=kill_fn)
+        except (KeyboardInterrupt, SystemExit):
+            # An operator or the supervisor asked us to stop. Not a crash.
+            raise
+        except Exception as exc:  # noqa: BLE001 -- deliberately broad; see below
+            # ALWAYS say why, BEFORE deciding what to do about it. The
+            # 2026-07-30 deaths were diagnosable only because Python's
+            # default handler printed a traceback on the way out; a daemon
+            # that decides to keep running must not become quieter than the
+            # one that crashed.
+            kind = classify_exception(exc)
+            print(
+                f"[{args.squad}] merger pass FAILED ({kind}): "
+                f"{type(exc).__name__}: {exc} [{free_space_note(home)}]",
+                file=sys.stderr, flush=True,
+            )
+            traceback.print_exc()
+            sys.stderr.flush()
+
+            if kind == "fatal" or not args.infinite:
+                # A bug, bad config, or a one-shot run. Exit non-zero so the
+                # supervisor counts a restart and eventually reports GIVING
+                # UP, instead of this process hiding the defect behind a
+                # retry loop.
+                print(
+                    f"[{args.squad}] EXITING on a {kind} error -- this will not "
+                    "fix itself by retrying; the supervisor's restart budget "
+                    "is the right place for it to surface",
+                    file=sys.stderr, flush=True,
+                )
+                return 2
+
+            consecutive_transient += 1
+            if consecutive_transient > args.max_transient_failures:
+                print(
+                    f"[{args.squad}] EXITING after {consecutive_transient} consecutive "
+                    f"transient failures (limit {args.max_transient_failures}). The machine "
+                    "has not recovered; retrying further would just be a stall that "
+                    f"looks alive. Last cause above. [{free_space_note(home)}]",
+                    file=sys.stderr, flush=True,
+                )
+                return 3
+
+            delay = transient_backoff_seconds(consecutive_transient)
+            print(
+                f"[{args.squad}] transient failure "
+                f"{consecutive_transient}/{args.max_transient_failures} -- "
+                f"retrying in {delay:.0f}s",
+                file=sys.stderr, flush=True,
+            )
+            sleep_fn(delay)
+            continue
+
+        if consecutive_transient:
+            print(
+                f"[{args.squad}] recovered after {consecutive_transient} "
+                "transient failure(s) -- budget reset",
+                file=sys.stderr, flush=True,
+            )
+            consecutive_transient = 0
+
         if outcome["status"] == "already_running":
             print(f"another merger already holds the lock for squad {args.squad!r} -- exiting quietly")
         if args.recut or not args.infinite:

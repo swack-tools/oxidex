@@ -60,6 +60,12 @@
 #     changes how many workers queue behind it.
 
 set -euo pipefail
+# -E (errtrace) propagates the ERR trap into shell FUNCTIONS. Without it the
+# trap installed in main() would not fire inside write_state/supervise/... --
+# i.e. it would be absent from exactly the code that has actually killed this
+# script. See on_err: on 2026-07-30 the supervisor died inside write_state and
+# left no log line at all, because `set -e` exits silently by design.
+set -E
 
 # printf '%(...)T' (used once per log line) is bash >= 4.2, and this script is
 # the thing that is supposed to fail LOUDLY rather than half-work. macOS ships
@@ -131,6 +137,12 @@ FLEET_WORKERS="${FLEET_WORKERS:-32}"
 FLEET_CONFIG="${FLEET_CONFIG:-}"
 FLEET_REPO="${OXIDEX_FLEET_REPO:-}"
 
+# How often to repeat the "cannot write the state file" warning while the
+# condition persists. The warning goes to a log that is very probably on the
+# same filesystem that just filled, so it must not be per-tick.
+FLEET_STATE_WARN_EVERY="${FLEET_STATE_WARN_EVERY:-30}"
+STATE_WRITE_FAILURES=0
+
 # Resolved by pin_repo(); every tier is invoked as "$PINNED_REPO/scripts/<x>.py".
 PINNED_REPO=""
 PINNED_CONFIG=""
@@ -164,10 +176,16 @@ log() {
     shift
     local line
     printf -v line '%(%Y-%m-%dT%H:%M:%S)T [%s] %s' -1 "$tag" "$*"
+    # Both writes are guarded and the function always returns 0. Logging is
+    # the one thing that must still work when the disk is full -- and it is
+    # precisely then that an append fails. Unguarded, a failed `>>` under
+    # `set -e` would kill the supervisor from inside its own error path (and
+    # recurse through the ERR trap, which also logs).
     if [ -n "${FLEET_LOG:-}" ] && [ -d "$(dirname "$FLEET_LOG")" ]; then
-        printf '%s\n' "$line" >>"$FLEET_LOG"
+        printf '%s\n' "$line" >>"$FLEET_LOG" 2>/dev/null || true
     fi
-    printf '%s\n' "$line" >&2
+    printf '%s\n' "$line" >&2 || true
+    return 0
 }
 
 die() {
@@ -812,6 +830,35 @@ tier_alive() {
     pid_matches "${TIER_PID[i]}" "${TIER_PATTERN[i]}"
 }
 
+owned_formats() {
+    # Formats the named squad EXCLUSIVELY consumes, per #209's
+    # format_owner_map. Asked of fleet_health.py rather than reimplemented in
+    # bash on purpose: the ownership rules (module-name match, then most
+    # specialised claimant, then name order) live in exactly one place, and a
+    # second copy here would drift the first time squads.toml changes.
+    #
+    # Best-effort and always rc 0 -- a supervisor must not die because it
+    # could not enrich a log line.
+    local squad=$1 out
+    [ -n "$squad" ] || return 0
+    [ -n "${PINNED_REPO:-}" ] || return 0
+    out=$(python3 "$PINNED_REPO/scripts/fleet_health.py" \
+            --squads-toml "$PINNED_REPO/scripts/squads.toml" \
+            --formats-for "$squad" 2>/dev/null | tr '\n' ' ') || out=""
+    printf '%s' "${out% }"
+    return 0
+}
+
+owned_formats_note() {
+    # " [owns: JPEG]" or "" -- suffix for the DEAD line, so the blast radius
+    # is visible on the first line about the death rather than only after a
+    # tier exhausts its restart budget.
+    local fmts
+    fmts=$(owned_formats "${TIER_ARG[$1]}")
+    [ -n "$fmts" ] && printf ' [exclusively owns: %s]' "$fmts"
+    return 0
+}
+
 backoff_seconds() {
     # Exponential with a ceiling: a tier that dies because the disk filled
     # should not hammer the disk, but a tier that died once on a transient
@@ -831,7 +878,29 @@ write_state() {
     # The pidfile and state file are what make --status and --down EXACT.
     # Written atomically so a --status racing a restart never reads a half
     # file.
+    #
+    # NOTHING IN HERE MAY KILL THE SUPERVISOR. This function is bookkeeping;
+    # restarting dead tiers is the mission, and losing the former must never
+    # cost the latter.
+    #
+    # It ran under `set -e` with an unguarded `mv` until 2026-07-30, when the
+    # disk filled at 23:40:41. Eleven of fourteen mergers died on ENOSPC.
+    # supervise() did its job -- it detected five of them and logged
+    # `restart 1/5 in 10s` for each. Then this function's own `mv` returned
+    # ENOSPC and `set -e` killed the supervisor BETWEEN scheduling those
+    # restarts and performing them. The last two lines of its stderr were:
+    #
+    #     2026-07-30T23:40:43 [fleet-up] merger:standards-appn restart 1/5 in 10s
+    #     mv: No space left on device (os error 28)
+    #
+    # No "fleet down", no FATAL, no trap -- `set -e` exits silently. It left
+    # $FLEET_STATEFILE.96880 on disk holding the CORRECT new state (five
+    # tiers moved to `0 backoff`) that the rename never installed, so the
+    # live state file went on claiming all fourteen mergers were `running`
+    # for the next hour while nothing supervised them. A supervisor that
+    # cannot record what it is doing must keep doing it.
     local tmp=$FLEET_STATEFILE.$$
+    local ok=1
     {
         printf 'supervisor\t%s\t%s\tfleet_up.sh\n' "$$" running
         local i
@@ -839,9 +908,46 @@ write_state() {
             printf '%s\t%s\t%s\t%s\n' \
                 "${TIER_TAG[i]}" "${TIER_PID[i]}" "${TIER_STATE[i]}" "${TIER_PATTERN[i]}"
         done
-    } >"$tmp"
-    mv -f "$tmp" "$FLEET_STATEFILE"
-    printf '%s\n' "$$" >"$FLEET_PIDFILE"
+    } >"$tmp" 2>/dev/null || ok=0
+    if [ "$ok" -eq 1 ]; then
+        mv -f "$tmp" "$FLEET_STATEFILE" 2>/dev/null || ok=0
+    fi
+    if [ "$ok" -eq 1 ]; then
+        printf '%s\n' "$$" >"$FLEET_PIDFILE" 2>/dev/null || ok=0
+    fi
+
+    if [ "$ok" -eq 1 ]; then
+        # Recovered: say so once, so the gap in the state file's mtime is
+        # explainable after the fact rather than mysterious.
+        if [ "$STATE_WRITE_FAILURES" -gt 0 ]; then
+            log "fleet-up" "state file writable again after $STATE_WRITE_FAILURES failed attempt(s)"
+            STATE_WRITE_FAILURES=0
+        fi
+        return 0
+    fi
+
+    # Failed. Do not leave the partial temp behind (it is what filled the
+    # disk's last bytes in the first place), and do not spam a log that is
+    # very probably on the same full filesystem -- warn on the 1st failure
+    # and then every FLEET_STATE_WARN_EVERY-th.
+    rm -f "$tmp" 2>/dev/null || true
+    STATE_WRITE_FAILURES=$((STATE_WRITE_FAILURES + 1))
+    if [ "$STATE_WRITE_FAILURES" -eq 1 ] \
+       || [ $((STATE_WRITE_FAILURES % FLEET_STATE_WARN_EVERY)) -eq 0 ]; then
+        log "fleet-up" "WARNING cannot write $FLEET_STATEFILE" \
+            "(attempt $STATE_WRITE_FAILURES; disk full?). --status/--down are STALE" \
+            "until this clears; supervision continues. $(disk_free_human)"
+    fi
+    return 0
+}
+
+disk_free_human() {
+    # Best-effort one-liner for the state-write warning. Never fails: a
+    # supervisor must not die trying to explain why it is unhappy.
+    local free
+    free=$(df -h "$FLEET_LOG_DIR" 2>/dev/null | awk 'NR==2 {print $4}' 2>/dev/null) || free=""
+    [ -n "$free" ] && printf 'free=%s' "$free" || printf 'free=unknown'
+    return 0
 }
 
 resync_due() {
@@ -885,7 +991,7 @@ supervise() {
             fi
             # Dead.
             if [ "${TIER_STATE[i]}" = running ]; then
-                log "fleet-up" "${TIER_TAG[i]} (pid ${TIER_PID[i]}) is DEAD"
+                log "fleet-up" "${TIER_TAG[i]} (pid ${TIER_PID[i]}) is DEAD$(owned_formats_note "$i")"
                 TIER_PID[i]=0
                 TIER_RESTARTS[i]=$((TIER_RESTARTS[i] + 1))
                 if [ "${TIER_RESTARTS[i]}" -gt "$FLEET_MAX_RESTARTS" ]; then
@@ -896,6 +1002,18 @@ supervise() {
                     TIER_STATE[i]=failed
                     log "fleet-up" "GIVING UP on ${TIER_TAG[i]}: ${TIER_RESTARTS[i]} restarts" \
                         "exceeded FLEET_MAX_RESTARTS=$FLEET_MAX_RESTARTS. Investigate its lines in $FLEET_LOG."
+                    # Since #209 each format has exactly ONE consuming squad,
+                    # so a permanently failed merger is a TOTAL LOSS for the
+                    # formats it owns -- not degraded throughput. Name them
+                    # here: "merger:standards-appn failed" means nothing to a
+                    # tired operator, "JPEG now has no consumer" does.
+                    local lost
+                    lost=$(owned_formats "${TIER_ARG[i]}")
+                    if [ -n "$lost" ]; then
+                        log "fleet-up" "ALARM ${TIER_TAG[i]} is the EXCLUSIVE owner of: $lost." \
+                            "Work for those formats is now stranded -- no other squad consumes them." \
+                            "Check: $PINNED_REPO/scripts/fleet_health.py"
+                    fi
                     failed=$((failed + 1))
                     continue
                 fi
@@ -956,6 +1074,27 @@ shutdown_children() {
             kill -KILL "${TIER_PID[i]}" 2>/dev/null || true
         fi
     done
+}
+
+on_err() {
+    # `set -e` terminates SILENTLY. That is how this supervisor vanished on
+    # 2026-07-30 at 23:40:43 -- an ENOSPC `mv` inside write_state, no log
+    # line, no exit message, 11 dead mergers left unsupervised for an hour
+    # while the state file it failed to update still said "running".
+    #
+    # This trap costs nothing when nothing is wrong and converts any future
+    # unguarded failure from "the fleet quietly stopped" into a line naming
+    # the command, the line number and the exit code. It is deliberately the
+    # LAST thing that runs, so it must not itself be able to fail: every
+    # command in here is guarded.
+    local rc=$? cmd=${BASH_COMMAND:-?} line=${BASH_LINENO[0]:-?}
+    [ "$SHUTTING_DOWN" -eq 1 ] && return 0
+    log "fleet-up" "FATAL: supervisor dying on an unguarded failure --" \
+        "rc=$rc at ${BASH_SOURCE[0]:-fleet_up.sh}:$line: $cmd" || true
+    log "fleet-up" "FATAL: $(disk_free_human 2>/dev/null || true)." \
+        "Tiers this launcher started are now ORPHANED and unsupervised;" \
+        "re-run $0 to re-adopt them, or --down to stop them." || true
+    return 0
 }
 
 on_signal() {
@@ -1103,6 +1242,7 @@ cmd_up() {
     sync_worktrees "$FLEET_WORKTREE_BASE"
 
     trap on_signal INT TERM
+    trap on_err ERR
     # fd 3 is the interruptible-sleep channel for `read -t` in supervise().
     # It MUST be a fifo we hold open read-write and never write to: reading
     # /dev/null returns EOF instantly, so `read -t` would return immediately
