@@ -146,6 +146,15 @@ const LENS_DATA_MAX_FOCAL_LENGTH: usize = 10;
 const LENS_DATA_MAX_APERTURE_AT_MIN_FOCAL: usize = 11;
 const LENS_DATA_MAX_APERTURE_AT_MAX_FOCAL: usize = 12;
 
+// Nikon.pm, Image::ExifTool::Nikon::AFInfo. The table has FORMAT => 'int8u'
+// and FIRST_ENTRY => 0; AFPointsInFocus overrides its entry format to int16u.
+const AF_INFO_AREA_MODE_INDEX: usize = 0;
+const AF_INFO_POINT_INDEX: usize = 1;
+const AF_INFO_POINTS_IN_FOCUS_INDEX: usize = 2;
+
+// Nikon.pm, Image::ExifTool::Nikon::LensData01, FORMAT => 'int8u'.
+const LENS_DATA_01_AF_APERTURE_INDEX: usize = 5;
+
 /// Decodes Nikon quality setting to human-readable string
 fn decode_quality(value: i32) -> &'static str {
     match value {
@@ -268,6 +277,141 @@ fn decode_vignette_control(value: i32) -> &'static str {
         3 => "High",
         _ => "Unknown",
     }
+}
+
+/// Recover the bytes represented by a Nikon MakerNote IFD entry.
+///
+/// External offsets in Nikon type-3 MakerNotes are relative to the embedded
+/// TIFF header at `tiff_start`. Inline values are reconstructed using the
+/// embedded TIFF byte order already parsed by `NikonParser::parse`.
+fn nikon_entry_bytes<'a>(
+    entry: &IfdEntry,
+    data: &'a [u8],
+    tiff_start: usize,
+    byte_order: ByteOrder,
+) -> Option<std::borrow::Cow<'a, [u8]>> {
+    let component_size = match entry.field_type {
+        1 | 2 | 6 | 7 => 1usize,
+        3 | 8 => 2,
+        4 | 9 | 11 => 4,
+        5 | 10 | 12 => 8,
+        _ => return None,
+    };
+    let count = usize::try_from(entry.value_count).ok()?;
+    let byte_len = count.checked_mul(component_size)?;
+
+    if byte_len <= 4 {
+        let inline = match byte_order {
+            ByteOrder::LittleEndian => entry.value_offset.to_le_bytes(),
+            ByteOrder::BigEndian => entry.value_offset.to_be_bytes(),
+        };
+        return Some(std::borrow::Cow::Owned(
+            inline.get(..byte_len)?.to_vec(),
+        ));
+    }
+
+    let relative_offset = usize::try_from(entry.value_offset).ok()?;
+    let start = tiff_start.checked_add(relative_offset)?;
+    let end = start.checked_add(byte_len)?;
+    Some(std::borrow::Cow::Borrowed(data.get(start..end)?))
+}
+
+/// Decode Nikon MakerNote tag 0x0088 with the Nikon.pm `AFInfo` table.
+///
+/// The parent table's unit is int8u, so its numeric entries are byte indices.
+/// The AFPointsInFocus entry at index 2 overrides the format to int16u.
+fn decode_af_info(
+    entry: &IfdEntry,
+    data: &[u8],
+    tiff_start: usize,
+    byte_order: ByteOrder,
+    tags: &mut HashMap<String, String>,
+) {
+    let Some(bytes) = nikon_entry_bytes(entry, data, tiff_start, byte_order) else {
+        return;
+    };
+
+    if let Some(&value) = bytes.get(AF_INFO_AREA_MODE_INDEX) {
+        let printed = match value {
+            0 => "Single Area",
+            1 => "Dynamic Area",
+            2 => "Dynamic Area, Closest Subject",
+            3 => "Group Dynamic",
+            4 => "Single Area (wide)",
+            5 => "Dynamic Area (wide)",
+            _ => return,
+        };
+        tags.insert(
+            "MakerNotes:AFAreaMode".to_string(),
+            printed.to_string(),
+        );
+    }
+
+    // Nikon.pm's AF-point PrintConv table for the D70-era AFInfo record.
+    const AF_POINTS: [&str; 9] = [
+        "Center",
+        "Top",
+        "Bottom",
+        "Mid-left",
+        "Mid-right",
+        "Upper-left",
+        "Upper-right",
+        "Lower-left",
+        "Lower-right",
+    ];
+
+    if let Some(&value) = bytes.get(AF_INFO_POINT_INDEX)
+        && let Some(point) = AF_POINTS.get(usize::from(value))
+    {
+        tags.insert("MakerNotes:AFPoint".to_string(), (*point).to_string());
+    }
+
+    let Some(mask_bytes) = bytes.get(
+        AF_INFO_POINTS_IN_FOCUS_INDEX
+            ..AF_INFO_POINTS_IN_FOCUS_INDEX.saturating_add(2),
+    ) else {
+        return;
+    };
+    let mask = match byte_order {
+        ByteOrder::LittleEndian => u16::from_le_bytes([mask_bytes[0], mask_bytes[1]]),
+        ByteOrder::BigEndian => u16::from_be_bytes([mask_bytes[0], mask_bytes[1]]),
+    };
+
+    let points = AF_POINTS
+        .iter()
+        .enumerate()
+        .filter_map(|(bit, point)| {
+            let bit = u32::try_from(bit).ok()?;
+            if mask & 1u16.checked_shl(bit).unwrap_or(0) != 0 {
+                Some(*point)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if !points.is_empty() {
+        tags.insert(
+            "MakerNotes:AFPointsInFocus".to_string(),
+            points.join(", "),
+        );
+    }
+}
+
+/// Decode LensData01 AFAperture.
+///
+/// Nikon.pm stores this at byte index 5 and applies
+/// `2 ** ($val / 24)`. LensData version 0201 and newer is encrypted; decoding
+/// those versions requires ExifTool's large translation dictionaries.
+fn decode_lens_data_01_af_aperture(bytes: &[u8]) -> Option<String> {
+    let version = std::str::from_utf8(bytes.get(..4)?).ok()?;
+    if version >= "0201" {
+        // TODO: codegen dictionary for Nikon LensData decryption tables.
+        return None;
+    }
+
+    let encoded = f64::from(*bytes.get(LENS_DATA_01_AF_APERTURE_INDEX)?);
+    Some(format!("{:.1}", 2f64.powf(encoded / 24.0)))
 }
 
 /// Represents a Nikon MakerNote parser
@@ -478,6 +622,17 @@ impl MakerNoteParser for NikonParser {
 
                     // LensData array (complex)
                     NIKON_LENS_DATA => {
+                        // LensData is a byte-indexed binary table. Decode the
+                        // requested LensData01 field from the original bytes
+                        // before retaining the existing legacy lens handling.
+                        if let Some(bytes) =
+                            nikon_entry_bytes(entry, data, tiff_start, tiff_byte_order)
+                            && let Some(aperture) =
+                                decode_lens_data_01_af_aperture(bytes.as_ref())
+                        {
+                            tags.insert("MakerNotes:AFAperture".to_string(), aperture);
+                        }
+
                         if let Some(array) = extract_u16_array(entry, data, byte_order) {
                             // Extract lens ID and look up lens name
                             if array.len() > LENS_DATA_LENS_ID {
@@ -750,11 +905,13 @@ impl MakerNoteParser for NikonParser {
 
                     // Array tags
                     NIKON_AF_INFO => {
-                        if let Some(array) = extract_u16_array(entry, data, byte_order)
-                            && !array.is_empty()
-                        {
-                            tags.insert("Nikon:AFInfo".to_string(), format!("{}", array[0]));
-                        }
+                        decode_af_info(
+                            entry,
+                            data,
+                            tiff_start,
+                            tiff_byte_order,
+                            tags,
+                        );
                     }
 
                     NIKON_FLASH_INFO => {
