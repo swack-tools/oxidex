@@ -2056,6 +2056,14 @@ fn extract_itunes_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<()
         for item in items {
             let atom_bytes = item.atom_type.as_bytes();
 
+            // '----' is the iTunes freeform container: a mean/name/data
+            // triplet whose 'name' child, not the atom type, identifies the
+            // tag. Emitting it under the literal name "----" is never right.
+            if atom_bytes == b"----" {
+                extract_itunes_freeform(&item, metadata);
+                continue;
+            }
+
             // Each item contains a data atom
             if let Some(data_atom) = item.find_child("data")
                 && let Some(value) = extract_itunes_data_value(data_atom.data)
@@ -2084,6 +2092,8 @@ fn extract_itunes_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<()
                     b"gnre" => Cow::Borrowed("ItemList:Genre"),
                     b"desc" => Cow::Borrowed("ItemList:Description"),
                     b"ldes" => Cow::Borrowed("ItemList:LongDescription"),
+                    b"cpil" => Cow::Borrowed("ItemList:Compilation"),
+                    b"pgap" => Cow::Borrowed("ItemList:PlayGap"),
                     _ => {
                         if let Ok(s) = std::str::from_utf8(atom_bytes) {
                             Cow::Owned(format!("ItemList:{}", s))
@@ -2142,6 +2152,21 @@ fn extract_itunes_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<()
                     formatted_track_or_disc = true;
                 }
 
+                // ExifTool prints these two flags rather than their raw byte.
+                let value = match (atom_bytes, value.as_integer()) {
+                    (b"cpil", Some(flag)) => TagValue::new_string(match flag {
+                        0 => "No".to_string(),
+                        1 => "Yes".to_string(),
+                        other => format!("Unknown ({})", other),
+                    }),
+                    (b"pgap", Some(flag)) => TagValue::new_string(match flag {
+                        0 => "Insert Gap".to_string(),
+                        1 => "No Gap".to_string(),
+                        other => format!("Unknown ({})", other),
+                    }),
+                    _ => value,
+                };
+
                 // For trkn/disk, don't insert the raw binary ItemList value - only the formatted QuickTime value
                 if !formatted_track_or_disc {
                     if let Some(qt_tag_name) = qt_tag {
@@ -2162,6 +2187,67 @@ fn extract_itunes_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<()
     }
 
     Ok(())
+}
+
+/// Extract one iTunes freeform (`----`) item.
+///
+/// Mirrors ExifTool's `QuickTime::iTunesInfo` table. The atom is a triplet:
+/// `mean` names the vendor (normally `com.apple.iTunes`), `name` gives the tag
+/// name, and `data` holds the value. ExifTool extracts every such tag whether
+/// or not its table names it, deriving the tag name from the `name` child.
+fn extract_itunes_freeform(item: &Atom, metadata: &mut MetadataMap) {
+    let Some(name_atom) = item.find_child("name") else {
+        return;
+    };
+    let Some(data_atom) = item.find_child("data") else {
+        return;
+    };
+    // Both children carry a 4-byte version/flags header before their payload.
+    let Some(name) = std::str::from_utf8(skip_version_flags(name_atom.data))
+        .ok()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    else {
+        return;
+    };
+    let Some(value) = extract_itunes_data_value(data_atom.data) else {
+        return;
+    };
+
+    let (tag, value) = match name {
+        // Ten space-separated 8-digit hex words. ExifTool's PrintConv strips
+        // the leading zeros of each word and the leading whitespace.
+        "iTunNORM" => (
+            "VolumeNormalization",
+            match value.as_string() {
+                Some(text) => TagValue::new_string(strip_hex_word_padding(text)),
+                None => value,
+            },
+        ),
+        // Same shape, twelve words; ExifTool keeps the atom name as the tag.
+        "iTunSMPB" => (
+            "iTunSMPB",
+            match value.as_string() {
+                Some(text) => TagValue::new_string(strip_hex_word_padding(text)),
+                None => value,
+            },
+        ),
+        other => (other, value),
+    };
+
+    metadata.insert(format!("ItemList:{}", tag), value);
+}
+
+/// ExifTool's `$val=~s/ 0+(\w)/ $1/g; $val=~s/^\s+//;` for the packed hex
+/// word lists iTunes writes.
+fn strip_hex_word_padding(text: &str) -> String {
+    text.split_whitespace()
+        .map(|word| {
+            let trimmed = word.trim_start_matches('0');
+            if trimmed.is_empty() { "0" } else { trimmed }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Extract MP4 metadata using keys/ilst atoms
@@ -3325,6 +3411,103 @@ mod tests {
             Some(TagValue::String(s)) => assert_eq!(s, "Test"),
             _ => panic!("Expected string value"),
         }
+    }
+
+    /// Build a `moov/udta/meta/ilst` tree around one raw ilst item.
+    fn itunes_meta_atom(item: &[u8]) -> Vec<u8> {
+        let mut ilst = Vec::new();
+        ilst.extend_from_slice(&((item.len() + 8) as u32).to_be_bytes());
+        ilst.extend_from_slice(b"ilst");
+        ilst.extend_from_slice(item);
+
+        let mut meta = vec![0x00, 0x00, 0x00, 0x00]; // version/flags
+        meta.extend_from_slice(&ilst);
+        meta
+    }
+
+    /// One ilst item: a four-character type with the given child atoms.
+    fn ilst_item(kind: &[u8; 4], children: &[u8]) -> Vec<u8> {
+        let mut item = Vec::new();
+        item.extend_from_slice(&((children.len() + 8) as u32).to_be_bytes());
+        item.extend_from_slice(kind);
+        item.extend_from_slice(children);
+        item
+    }
+
+    fn child_atom(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut atom = Vec::new();
+        atom.extend_from_slice(&((payload.len() + 8) as u32).to_be_bytes());
+        atom.extend_from_slice(kind);
+        atom.extend_from_slice(payload);
+        atom
+    }
+
+    /// `cpil` and `pgap` are flags ExifTool prints as words, not as the raw
+    /// byte the atom stores.
+    #[test]
+    fn test_itunes_flag_print_conversions() {
+        for (kind, raw, expected) in [
+            (b"cpil", 0u8, "No"),
+            (b"cpil", 1, "Yes"),
+            (b"pgap", 0, "Insert Gap"),
+            (b"pgap", 1, "No Gap"),
+        ] {
+            let data = child_atom(
+                b"data",
+                &[0x00, 0x00, 0x00, 0x15, 0x00, 0x00, 0x00, 0x00, raw],
+            );
+            let meta_atom = child_atom(b"meta", &itunes_meta_atom(&ilst_item(kind, &data)));
+            let atoms = super::super::atom_parser::parse_atoms(&meta_atom)
+                .unwrap()
+                .1;
+            let mut metadata = MetadataMap::new();
+            extract_itunes_metadata(&atoms[0], &mut metadata).unwrap();
+
+            let name = if kind == b"cpil" {
+                "ItemList:Compilation"
+            } else {
+                "ItemList:PlayGap"
+            };
+            match metadata.get(name) {
+                Some(TagValue::String(s)) => assert_eq!(s, expected),
+                other => panic!("{} -> {:?}", name, other),
+            }
+        }
+    }
+
+    /// The `----` freeform container is named by its `name` child, never by
+    /// the literal atom type.
+    #[test]
+    fn test_itunes_freeform_uses_name_child() {
+        let mut children = child_atom(b"mean", b"\x00\x00\x00\x00com.apple.iTunes");
+        children.extend_from_slice(&child_atom(b"name", b"\x00\x00\x00\x00iTunNORM"));
+        children.extend_from_slice(&child_atom(
+            b"data",
+            b"\x00\x00\x00\x01\x00\x00\x00\x00 00000080 00000000 00000610",
+        ));
+
+        let meta_atom = child_atom(b"meta", &itunes_meta_atom(&ilst_item(b"----", &children)));
+        let atoms = super::super::atom_parser::parse_atoms(&meta_atom)
+            .unwrap()
+            .1;
+        let mut metadata = MetadataMap::new();
+        extract_itunes_metadata(&atoms[0], &mut metadata).unwrap();
+
+        assert!(metadata.get("ItemList:----").is_none());
+        match metadata.get("ItemList:VolumeNormalization") {
+            Some(TagValue::String(s)) => assert_eq!(s, "80 0 610"),
+            other => panic!("VolumeNormalization -> {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_strip_hex_word_padding() {
+        assert_eq!(
+            strip_hex_word_padding(" 00000080 00000000 0000289C"),
+            "80 0 289C"
+        );
+        // An all-zero word must survive as "0" rather than vanishing.
+        assert_eq!(strip_hex_word_padding("00000000"), "0");
     }
 
     #[test]
