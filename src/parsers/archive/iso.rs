@@ -14,6 +14,10 @@ const ISO_SIGNATURE: &[u8] = b"CD001";
 const ISO_SIGNATURE_OFFSET: u64 = 32769;
 /// Primary Volume Descriptor starts at sector 16 (offset 32768)
 const PVD_OFFSET: u64 = 32768;
+/// ISO 9660 logical-sector size used by the volume descriptor sequence.
+const VOLUME_DESCRIPTOR_SIZE: u64 = 2048;
+const BOOT_RECORD_TYPE: u8 = 0;
+const VOLUME_DESCRIPTOR_TERMINATOR: u8 = 255;
 
 /// ISO parser for extracting metadata from ISO disc images
 pub struct ISOParser;
@@ -156,6 +160,60 @@ impl ISOParser {
         Ok(())
     }
 
+    /// Scans the ISO 9660 volume descriptor sequence for a boot record.
+    ///
+    /// ExifTool's `ISO::BootRecord` table defines `BootSystem` at byte 7 as a
+    /// 32-byte string. ISO strings terminate at the first NUL; its ValueConv
+    /// then removes trailing spaces.
+    fn extract_boot_record_metadata(
+        reader: &dyn FileReader,
+        metadata: &mut MetadataMap,
+    ) -> Result<()> {
+        let mut offset = PVD_OFFSET;
+
+        while offset
+            .checked_add(7)
+            .is_some_and(|end| end <= reader.size())
+        {
+            let header = reader.read(offset, 7)?;
+            if header.get(1..6) != Some(ISO_SIGNATURE) {
+                break;
+            }
+
+            let descriptor_type = match header.first() {
+                Some(value) => *value,
+                None => break,
+            };
+            if descriptor_type == BOOT_RECORD_TYPE {
+                let data = reader.read(offset + 7, 32)?;
+                let end = match data.iter().position(|&byte| byte == 0) {
+                    Some(position) => position,
+                    None => data.len(),
+                };
+                let value = String::from_utf8_lossy(&data[..end])
+                    .trim_end_matches(' ')
+                    .to_string();
+                if !value.is_empty() {
+                    metadata.insert(
+                        "ISO:BootSystem".to_string(),
+                        TagValue::String(value),
+                    );
+                }
+                break;
+            }
+            if descriptor_type == VOLUME_DESCRIPTOR_TERMINATOR {
+                break;
+            }
+
+            offset = match offset.checked_add(VOLUME_DESCRIPTOR_SIZE) {
+                Some(next) => next,
+                None => break,
+            };
+        }
+
+        Ok(())
+    }
+
     /// Extracts metadata from Primary Volume Descriptor
     fn extract_pvd_metadata(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Result<()> {
         // Offsets and names are ExifTool's `ISO::PrimaryVolume` table verbatim,
@@ -255,6 +313,7 @@ impl FormatParser for ISOParser {
 
         // Extract Primary Volume Descriptor metadata
         Self::extract_pvd_metadata(reader, &mut metadata)?;
+        Self::extract_boot_record_metadata(reader, &mut metadata)?;
 
         Ok(metadata)
     }
