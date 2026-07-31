@@ -1155,14 +1155,42 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
     for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
         if !matches!(
             *tag_id,
-            0x0128 // ResolutionUnit
+            0x011A // XResolution
+                | 0x0128 // ResolutionUnit
                 | 0x0131 // Software
                 | 0x0132 // ModifyDate
         ) {
             continue;
         }
-        let tag_name = lookup_tag_name(*tag_id, "IFD0");
-        let tag_value = if let Some(value) = format_exif_display_value(
+        // ExifTool promotes the preview's XResolution to the EXIF group,
+        // while the other preview IFD0 tags retain their IFD0 lookup context.
+        let tag_name = if *tag_id == 0x011A {
+            lookup_tag_name(*tag_id, "EXIF")
+        } else {
+            lookup_tag_name(*tag_id, "IFD0")
+        };
+        let tag_value = if *tag_id == 0x011A && *field_type == 5 && raw_bytes.len() >= 8 {
+            let numerator = read_tiff_u32(&raw_bytes[0..4], byte_order);
+            let denominator = read_tiff_u32(&raw_bytes[4..8], byte_order);
+            match (numerator, denominator) {
+                (Some(numerator), Some(denominator)) if denominator != 0 => {
+                    if numerator % denominator == 0 {
+                        TagValue::new_integer(i64::from(numerator / denominator))
+                    } else {
+                        TagValue::new_string(format!(
+                            "{}",
+                            f64::from(numerator) / f64::from(denominator)
+                        ))
+                    }
+                }
+                _ => raw_bytes_to_simple_tag_value(
+                    raw_bytes.as_ref(),
+                    *field_type,
+                    *value_count,
+                    byte_order,
+                ),
+            }
+        } else if let Some(value) = format_exif_display_value(
             *tag_id,
             raw_bytes.as_ref(),
             *field_type,
@@ -1204,6 +1232,7 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
             0x9101 // ComponentsConfiguration
                 | 0x9102 // CompressedBitsPerPixel
                 | 0x9208 // LightSource
+                | 0xA403 // WhiteBalance
                 | 0xA405 // FocalLengthIn35mmFormat
                 | 0xA407 // GainControl
                 | 0xA000 // FlashpixVersion
@@ -1225,7 +1254,20 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
         }
 
         let tag_name = lookup_tag_name(tag_id, "ExifIFD");
-        let tag_value = if let Some(value) = format_exif_display_value(
+        // Exif.pm 0xa403 is a single int16u with the PrintConv table
+        // 0 => "Auto", 1 => "Manual".
+        let tag_value = if tag_id == 0xA403 && field_type == 3 && value_count == 1 {
+            match read_tiff_u16(raw_bytes.as_ref(), byte_order) {
+                Some(0) => TagValue::new_string("Auto".to_string()),
+                Some(1) => TagValue::new_string("Manual".to_string()),
+                _ => raw_bytes_to_simple_tag_value(
+                    raw_bytes.as_ref(),
+                    field_type,
+                    value_count,
+                    byte_order,
+                ),
+            }
+        } else if let Some(value) = format_exif_display_value(
             tag_id,
             raw_bytes.as_ref(),
             field_type,
@@ -1242,8 +1284,6 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
     // The preview EXIF also carries an Interoperability IFD (ExifIFD tag
     // 0xA005 -> InteropOffset). ExifTool reports [InteropIFD] InteropIndex for
     // Panasonic.rw2; oxidex never descended into it (measured gap 2026-07-27).
-    // Only InteropIndex is taken: InteropVersion is not among the gaps the
-    // comparator reports for RW2, so emitting it would add an unmatched tag.
     if let Some(interop_offset) =
         exif_tags
             .iter()
@@ -1256,6 +1296,67 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
             })
     {
         extract_interop_index(&reader, interop_offset, byte_order, metadata);
+    }
+
+    // The next-IFD pointer after preview IFD0 leads to the thumbnail IFD.
+    // Its 0x0201/0x0202 values are offsets and lengths relative to this
+    // embedded TIFF header, matching ExifTool's Panasonic RW2 values.
+    let ifd0_entry_count = u64::try_from(ifd0_tags.len()).ok();
+    let next_ifd_position = ifd0_entry_count.and_then(|entry_count| {
+        first_ifd_offset
+            .checked_add(2)?
+            .checked_add(entry_count.checked_mul(12)?)
+    });
+    let thumbnail_ifd_offset = next_ifd_position
+        .and_then(|offset| reader.read(offset, 4).ok())
+        .map(|bytes| u64::from(read_u32(bytes, byte_order)));
+
+    if let Some(thumbnail_ifd_offset) = thumbnail_ifd_offset
+        && thumbnail_ifd_offset != 0
+        && let Ok(thumbnail_tags) = parse_ifd(&reader, thumbnail_ifd_offset, byte_order)
+    {
+        let mut thumbnail_offset = None;
+        let mut thumbnail_length = None;
+        for (tag_id, field_type, value_count, raw_bytes) in thumbnail_tags {
+            if field_type != 4 || value_count != 1 {
+                continue;
+            }
+            match tag_id {
+                // Exif.pm 0x0201: JPEGInterchangeFormat.
+                0x0201 => {
+                    thumbnail_offset = read_tiff_u32(raw_bytes.as_ref(), byte_order);
+                }
+                // Exif.pm 0x0202: JPEGInterchangeFormatLength.
+                0x0202 => {
+                    thumbnail_length = read_tiff_u32(raw_bytes.as_ref(), byte_order);
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(offset) = thumbnail_offset {
+            metadata.insert(
+                lookup_tag_name(0x0201, "EXIF"),
+                TagValue::new_integer(i64::from(offset)),
+            );
+        }
+        if let Some(length) = thumbnail_length {
+            metadata.insert(
+                lookup_tag_name(0x0202, "EXIF"),
+                TagValue::new_integer(i64::from(length)),
+            );
+        }
+        if let (Some(offset), Some(length)) = (thumbnail_offset, thumbnail_length)
+            && let (Ok(offset), Ok(length)) =
+                (usize::try_from(offset), usize::try_from(length))
+            && let Some(end) = offset.checked_add(length)
+            && let Some(image) = tiff_data.get(offset..end)
+        {
+            metadata.insert(
+                "EXIF:ThumbnailImage".to_string(),
+                TagValue::Binary(image.to_vec()),
+            );
+        }
     }
 
     Ok(())
@@ -1288,23 +1389,36 @@ fn extract_interop_index(
         return;
     };
 
-    for (tag_id, _field_type, _value_count, raw_bytes) in &interop_tags {
-        if *tag_id != 0x0001 {
-            continue;
+    for (tag_id, field_type, value_count, raw_bytes) in &interop_tags {
+        match *tag_id {
+            0x0001 => {
+                let raw = String::from_utf8_lossy(raw_bytes.as_ref())
+                    .trim_end_matches('\0')
+                    .to_string();
+                let printed = match raw.as_str() {
+                    "R98" => "R98 - DCF basic file (sRGB)".to_string(),
+                    "R03" => "R03 - DCF option file (Adobe RGB)".to_string(),
+                    "THM" => "THM - DCF thumbnail file".to_string(),
+                    _ => raw,
+                };
+                metadata.insert(
+                    lookup_tag_name(*tag_id, "InteropIFD"),
+                    TagValue::new_string(printed),
+                );
+            }
+            // Exif.pm InteropIFD 0x0002: InteropVersion, UNDEFINED[4].
+            // ExifTool reports this preview-derived value in the EXIF group.
+            0x0002 if *field_type == 7 && *value_count == 4 => {
+                let Some(version) = raw_bytes.get(..4) else {
+                    continue;
+                };
+                metadata.insert(
+                    lookup_tag_name(*tag_id, "EXIF"),
+                    TagValue::new_string(String::from_utf8_lossy(version).into_owned()),
+                );
+            }
+            _ => {}
         }
-        let raw = String::from_utf8_lossy(raw_bytes.as_ref())
-            .trim_end_matches('\0')
-            .to_string();
-        let printed = match raw.as_str() {
-            "R98" => "R98 - DCF basic file (sRGB)".to_string(),
-            "R03" => "R03 - DCF option file (Adobe RGB)".to_string(),
-            "THM" => "THM - DCF thumbnail file".to_string(),
-            _ => raw,
-        };
-        metadata.insert(
-            "InteropIFD:InteropIndex".to_string(),
-            TagValue::new_string(printed),
-        );
     }
 }
 
