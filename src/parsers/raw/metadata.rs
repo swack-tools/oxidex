@@ -4175,10 +4175,11 @@ fn parse_sigma_x3f(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 /// whitelists let 16 through, so 27 correctly-parsed tags were being discarded
 /// on the way out.
 ///
-/// The MakerNote (0x927C) is deliberately left alone -- see
-/// `parse_x3f_image_section`'s caller notes; oxidex's Sigma MakerNote registry
-/// disagrees with `Sigma.pm` on tag IDs 0x1a-0x30, so dispatching it here would
-/// trade missing tags for wrong ones.
+/// The MakerNote (0x927C) is NOT routed through the shared MakerNote
+/// dispatcher: oxidex's `parsers::tiff::makernotes::sigma` registry disagrees
+/// with `Sigma.pm` on most tag IDs from 0x0018 up, so dispatching it here
+/// would trade missing tags for wrong ones. `raw::sigma_makernote`
+/// transcribes `Sigma.pm` directly instead.
 fn parse_x3f_embedded_jpeg_exif(
     jpeg_data: &[u8],
     jpeg_file_offset: usize,
@@ -4217,6 +4218,21 @@ fn parse_x3f_embedded_jpeg_exif(
             }
         }
         emit_x3f_exif_tags(&exif_tags, "ExifIFD", byte_order, metadata);
+
+        // The Sigma MakerNote lives in the preview's ExifIFD. `parse_ifd`
+        // hands back a MakerNote entry's payload, but the offsets INSIDE it
+        // address the enclosing TIFF, so the decoder needs the entry's own
+        // position rather than its bytes.
+        if let Some(makernote_offset) =
+            ifd_entry_value_offset(tiff_data, offset, byte_order, 0x927C)
+        {
+            crate::parsers::raw::sigma_makernote::parse_sigma_makernote(
+                tiff_data,
+                makernote_offset as usize,
+                (jpeg_file_offset + tiff_start_in_jpeg) as u64,
+                metadata,
+            );
+        }
     }
 
     if let Some(offset) = interop_ifd_offset
@@ -4284,7 +4300,51 @@ fn parse_x3f_embedded_jpeg_exif(
             "IFD1:ThumbnailOffset".to_string(),
             TagValue::new_integer(absolute as i64),
         );
+
+        // ThumbnailImage is the DataTag the ThumbnailOffset/ThumbnailLength
+        // pair addresses. The stored offset is TIFF-relative, which is how it
+        // indexes `tiff_data`; only the reported tag is absolutised.
+        if let Some((_, _, _, length_bytes)) = ifd1_tags.iter().find(|(id, ..)| *id == 0x0202)
+            && let Some(length) = read_tiff_u32(length_bytes.as_ref(), byte_order)
+            && length > 0
+            && let Some(thumbnail) =
+                tiff_data.get(stored as usize..(stored as usize).saturating_add(length as usize))
+        {
+            metadata.insert(
+                "IFD1:ThumbnailImage".to_string(),
+                TagValue::new_binary(thumbnail.to_vec()),
+            );
+        }
     }
+}
+
+/// Returns the value-offset field of one IFD entry, i.e. where its payload
+/// starts inside the enclosing TIFF.
+///
+/// `parse_ifd` hands back an entry's BYTES, which is the wrong currency for a
+/// MakerNote: the offsets stored inside a MakerNote IFD are relative to the
+/// TIFF header it is embedded in, not to the MakerNote payload, so its
+/// position is what a decoder needs. Only meaningful for entries whose value
+/// does not fit in the four inline bytes - which a MakerNote never does.
+fn ifd_entry_value_offset(
+    tiff: &[u8],
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+    wanted_tag: u16,
+) -> Option<u32> {
+    let base = usize::try_from(ifd_offset).ok()?;
+    let count = usize::from(read_tiff_u16(tiff.get(base..base + 2)?, byte_order)?);
+
+    for i in 0..count {
+        let entry = base.checked_add(2)?.checked_add(i.checked_mul(12)?)?;
+        let tag_id = read_tiff_u16(tiff.get(entry..entry + 2)?, byte_order)?;
+        if tag_id != wanted_tag {
+            continue;
+        }
+        return read_tiff_u32(tiff.get(entry + 8..entry + 12)?, byte_order);
+    }
+
+    None
 }
 
 /// Emits every named tag of one parsed IFD from an X3F's embedded JPEG.

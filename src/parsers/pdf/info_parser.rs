@@ -597,17 +597,22 @@ fn skip_to_next_line(input: &[u8]) -> &[u8] {
 // ═══════════════════════════════════════════════════════════════════════════
 //
 
-/// Parses the Info object and extracts the dictionary
+/// Parses the Info object and extracts the dictionary.
+///
+/// The caller hands this a fixed-size window starting at the Info object's
+/// xref offset, so the window routinely runs past `endobj` and into whatever
+/// object follows -- an image stream, a Photoshop resource block, a Flate
+/// payload. PDF is a binary container, so that trailing slab is not text.
+/// Decoding the whole window as UTF-8 first therefore rejected every PDF
+/// whose Info object happens to sit near binary data (PDF.pdf lost
+/// Producer/Creator/CreateDate/ModifyDate that way), even though the
+/// dictionary itself is plain ASCII. Scan for the delimiters over bytes and
+/// hand only the dictionary body to the entry parser.
 fn parse_info_object(input: &[u8]) -> Result<HashMap<String, String>> {
-    let input_str = str::from_utf8(input)
-        .map_err(|_| ExifToolError::parse_error("Info object contains invalid UTF-8"))?;
-
-    let dict_start = input_str
-        .find("<<")
+    let dict_start = find_bytes(input, b"<<")
         .ok_or_else(|| ExifToolError::parse_error("Info dictionary start << not found"))?;
 
-    let dict_end = input_str[dict_start..]
-        .find(">>")
+    let dict_end = find_bytes(&input[dict_start..], b">>")
         .ok_or_else(|| ExifToolError::parse_error("Info dictionary end >> not found"))?;
 
     // Calculate dictionary bounds with overflow protection
@@ -618,19 +623,28 @@ fn parse_info_object(input: &[u8]) -> Result<HashMap<String, String>> {
         .checked_add(dict_end)
         .ok_or_else(|| ExifToolError::parse_error("Dictionary end offset overflow"))?;
 
-    if content_end > input_str.len() {
+    if content_end > input.len() || content_start > content_end {
         return Err(ExifToolError::parse_error(
             "Dictionary extends beyond input",
         ));
     }
 
-    let dict_content = &input_str[content_start..content_end];
+    let dict_content = &input[content_start..content_end];
 
     // Parse dictionary entries
-    let (_, entries) = parse_dict_entries(dict_content.as_bytes())
+    let (_, entries) = parse_dict_entries(dict_content)
         .map_err(|_| ExifToolError::parse_error("Failed to parse Info dictionary entries"))?;
 
     Ok(entries)
+}
+
+/// Byte-level substring search (the `str::find` equivalent for a slab that
+/// is not guaranteed to be valid UTF-8).
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 /// Parses dictionary entries (key-value pairs)

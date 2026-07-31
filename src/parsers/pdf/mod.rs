@@ -50,6 +50,7 @@ pub mod encryption_parser;
 pub mod font_parser;
 pub mod info_parser;
 pub mod permissions_parser;
+pub mod photoshop_resources;
 pub mod resources_parser;
 pub mod root_parser;
 pub mod shared;
@@ -371,9 +372,26 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     //     }
     // }
 
+    // A Photoshop-authored PDF parks the image's whole 8BIM resource block in
+    // the page dictionary (/PieceInfo /AdobePhotoshop /Private
+    // /ImageResources). ExifTool walks it and reports the Photoshop, IPTC and
+    // EXIF tags it carries.
+    if let Ok(photoshop_metadata) = photoshop_resources::parse_photoshop_image_resources(reader) {
+        for (key, value) in photoshop_metadata.iter() {
+            metadata.insert(key.clone(), value.clone());
+        }
+    }
+
     // PDF image streams may contain complete TIFF/EXIF payloads. Extract
     // metadata from these payloads after the PDF-level resource parsers have
     // run so the standard IFD tag database determines the canonical key.
+    //
+    // This runs AFTER the resource-block walk on purpose. Both reach the same
+    // TIFF bytes, but the shared IFD walk still lacks several EXIF PrintConvs
+    // (APEX aperture/shutter, FileSource, FocalPlaneResolutionUnit - the same
+    // values JPEG gets wrong today), while the arms below transcribe them
+    // from Exif.pm. Letting the narrower-but-converted walk have the last
+    // word keeps those tags matching ExifTool.
     if let Ok(exif_metadata) = extract_embedded_exif_metadata(reader) {
         for (key, value) in exif_metadata.iter() {
             metadata.insert(key.clone(), value.clone());
@@ -392,7 +410,10 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 
 const TIFF_ARTIST_TAG: u16 = 0x013b;
 const TAG_EXIF_IFD: u16 = 0x8769;
+const TAG_SHUTTER_SPEED_VALUE: u16 = 0x9201;
 const TAG_APERTURE_VALUE: u16 = 0x9202;
+const TAG_MAX_APERTURE_VALUE: u16 = 0x9205;
+const TAG_NOISE: u16 = 0x920D;
 const TAG_BRIGHTNESS_VALUE: u16 = 0x9203;
 const TAG_COLOR_SPACE: u16 = 0xA001;
 const TAG_COMPONENTS_CONFIGURATION: u16 = 0x9101;
@@ -859,7 +880,9 @@ fn parse_exif_ifd(
             // The inherited code stopped after the ValueConv and printed the
             // full f64, so PDF.pdf reported "3.4822022531844965" where
             // ExifTool reports "3.5".
-            TAG_APERTURE_VALUE if field_type == 5 => {
+            // 0x9205 MaxApertureValue carries the identical ValueConv and
+            // PrintConv (Exif.pm), so it takes the same arm.
+            TAG_APERTURE_VALUE | TAG_MAX_APERTURE_VALUE if field_type == 5 => {
                 if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
                     let apex = if den != 0 {
                         f64::from(num) / f64::from(den)
@@ -867,11 +890,52 @@ fn parse_exif_ifd(
                         0.0
                     };
                     let f_number = 2.0_f64.powf(apex / 2.0);
-                    let key = crate::tag_db::lookup_tag_name(TAG_APERTURE_VALUE, "ExifIFD");
+                    let key = crate::tag_db::lookup_tag_name(tag, "ExifIFD");
                     metadata.insert(
                         key,
                         crate::core::TagValue::new_string(format!("{:.1}", f_number)),
                     );
+                }
+            }
+            // ExifTool 13.55 Exif.pm 0x9201:
+            //   ValueConv => 'abs($val)<100 ? 2**(-$val) : 0',
+            //   PrintConv => 'Image::ExifTool::Exif::PrintExposureTime($val)',
+            // so PDF.pdf's stored APEX 600/100 becomes 2**-6 = 0.015625 s and
+            // prints as "1/64", not as the raw rational.
+            TAG_SHUTTER_SPEED_VALUE if field_type == 10 || field_type == 5 => {
+                if let Some((num, den)) = read_signed_rational_value(data, base, byte_order) {
+                    if den != 0 {
+                        let apex = f64::from(num) / f64::from(den);
+                        let seconds = if apex.abs() < 100.0 {
+                            2.0_f64.powf(-apex)
+                        } else {
+                            0.0
+                        };
+                        let key =
+                            crate::tag_db::lookup_tag_name(TAG_SHUTTER_SPEED_VALUE, "ExifIFD");
+                        metadata.insert(
+                            key,
+                            crate::core::TagValue::new_string(print_exposure_time(seconds)),
+                        );
+                    }
+                }
+            }
+            // ExifTool 13.55 Exif.pm 0x920d: `0x920d => 'Noise'` - a bare
+            // name with no PrintConv, so the rational is printed as a plain
+            // number ("6" for PDF.pdf's 600/100). oxidex's generated tag
+            // registry only carries Noise at its 0xa20d spelling, so the key
+            // is stated here rather than looked up: without it the shared IFD
+            // walk emits the unnamed `ExifIFD:0x920D`.
+            TAG_NOISE if field_type == 5 => {
+                if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
+                    if den != 0 {
+                        metadata.insert(
+                            "ExifIFD:Noise".to_string(),
+                            crate::core::TagValue::new_string(format_rational(
+                                f64::from(num) / f64::from(den),
+                            )),
+                        );
+                    }
                 }
             }
             // ExifTool 13.55 Exif.pm 0x9203: Writable => 'rational64s', no
@@ -1181,6 +1245,22 @@ fn print_fraction(val: f64) -> String {
         return format!("{:+}/3", (val * 3.0).trunc() as i64);
     }
     format_signed_g3(val)
+}
+
+/// Port of `Image::ExifTool::Exif::PrintExposureTime` (ExifTool 13.55
+/// Exif.pm), which renders a shutter speed in seconds.
+///
+/// Anything shorter than about a quarter second becomes the reciprocal form
+/// photographers read ("1/64"); a whole number of seconds prints without a
+/// decimal point, and everything else to one decimal place.
+fn print_exposure_time(seconds: f64) -> String {
+    if seconds > 0.0 && seconds < 0.25001 {
+        return format!("1/{}", (0.5 + 1.0 / seconds) as i64);
+    }
+    if seconds == seconds.trunc() {
+        return format!("{}", seconds as i64);
+    }
+    format!("{:.1}", seconds)
 }
 
 /// Reproduces Perl's `sprintf("%+.3g", $val)`: three significant digits, `%e`
