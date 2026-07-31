@@ -116,6 +116,22 @@ fn is_enum_like_value(value: &str) -> bool {
 fn normalize_value_for_comparison(tag_key: &str, value: &str) -> String {
     let normalized = value.trim();
 
+    // ExifTool's JSON writer turns a PrintConv result of "True"/"False" into a
+    // bare JSON boolean, and lowercases it on the way out. From the exiftool
+    // script's EscapeJSON (line 3806):
+    //
+    //     return lc($str) if $str =~ /^(true|false)$/i and $json < 2;
+    //
+    // So Photoshop:CopyrightFlag, whose PrintConv is { 0 => 'False', 1 => 'True' }
+    // (Photoshop.pm:171-181), prints as "False" under `exiftool -G1 -s` but
+    // arrives here as "false" through `-j`. That is a serialization artifact of
+    // the harness's own transport, not a parser disagreement -- byte-for-byte
+    // identical in ExifTool's human-readable output. Fold the case so the two
+    // spellings of one value stop being counted as a difference.
+    if normalized.eq_ignore_ascii_case("true") || normalized.eq_ignore_ascii_case("false") {
+        return normalized.to_ascii_lowercase();
+    }
+
     // Handle GPS direction refs: "North" vs "N", "East" vs "E", etc.
     if tag_key.contains("GPSLatitudeRef") || tag_key.contains("GPSDestLatitudeRef") {
         if normalized.eq_ignore_ascii_case("north") || normalized == "N" {
