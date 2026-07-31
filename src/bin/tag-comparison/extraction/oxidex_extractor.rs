@@ -1086,6 +1086,7 @@ impl OxiDexExtractor {
             "ICO" => vec!["ico"],
             "SVG" => vec!["svg"],
             "EPS" => vec!["eps", "ps"],
+            "FLIF" => vec!["flif"],
             "EXR" => vec!["exr"],
             "JXL" => vec!["jxl"],
             "AVIF" => vec!["avif"],

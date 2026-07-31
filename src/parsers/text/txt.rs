@@ -18,7 +18,7 @@
 //! - MIMEType: "text/plain"
 //! - MIMEEncoding: Detected encoding (utf-8, utf-16le, utf-16be, us-ascii, etc.)
 //! - ByteOrderMark: "Yes" or "No"
-//! - Newlines: Line ending style (Unix LF, Windows CRLF, Mac CR, Mixed, or (none))
+//! - Newlines: Line ending style (Unix LF, Windows CRLF, Macintosh CR, Mixed, or (none))
 //! - LineCount: Number of lines in the file
 //! - WordCount: Number of words in the file
 
@@ -60,6 +60,10 @@ pub enum Encoding {
     UTF32LE,
     /// UTF-32 Big Endian
     UTF32BE,
+    /// Single-byte 8-bit text with no C1 control bytes (ISO-8859-1)
+    Latin1,
+    /// Single-byte 8-bit text using the C1 range (MacRoman, CP1252, ...)
+    Unknown8Bit,
     /// Unknown or binary
     Unknown,
 }
@@ -74,8 +78,22 @@ impl Encoding {
             Encoding::UTF16BE => "utf-16be",
             Encoding::UTF32LE => "utf-32le",
             Encoding::UTF32BE => "utf-32be",
+            Encoding::Latin1 => "iso-8859-1",
+            Encoding::Unknown8Bit => "unknown-8bit",
             Encoding::Unknown => "unknown",
         }
+    }
+
+    /// Whether statistics can be generated for this encoding.
+    ///
+    /// ExifTool reports `Newlines`, `LineCount` and `WordCount` only for
+    /// single-byte encodings (`Text.pm` returns early once `$isUTF8` is
+    /// undefined, which is exactly the UTF-16/UTF-32 cases).
+    fn is_single_byte(&self) -> bool {
+        matches!(
+            self,
+            Encoding::ASCII | Encoding::UTF8 | Encoding::Latin1 | Encoding::Unknown8Bit
+        )
     }
 }
 
@@ -100,7 +118,7 @@ impl LineEnding {
         match self {
             LineEnding::LF => "Unix LF",
             LineEnding::CRLF => "Windows CRLF",
-            LineEnding::CR => "Mac CR",
+            LineEnding::CR => "Macintosh CR",
             LineEnding::Mixed => "Mixed",
             LineEnding::None => "(none)",
         }
@@ -170,8 +188,14 @@ impl TXTParser {
             return (Encoding::UTF8, false);
         }
 
-        // Could add more heuristics for UTF-16 without BOM
-        (Encoding::Unknown, false)
+        // Not UTF-8, so it is single-byte 8-bit text. ExifTool distinguishes
+        // the two cases by the C1 range: a file using only 0xA0-0xFF is
+        // reported as iso-8859-1, one that touches 0x80-0x9F (MacRoman,
+        // CP1252, ...) as unknown-8bit.
+        if data.iter().any(|&byte| (0x80..=0x9F).contains(&byte)) {
+            return (Encoding::Unknown8Bit, false);
+        }
+        (Encoding::Latin1, false)
     }
 
     /// Checks if data is valid ASCII (all bytes < 128)
@@ -265,7 +289,10 @@ impl TXTParser {
             TagValue::String(if has_bom { "Yes" } else { "No" }.to_string()),
         );
 
-        // Try to decode as UTF-8 for further analysis
+        // Decode for further analysis. Multi-byte encodings are skipped the
+        // way ExifTool skips them; single-byte 8-bit text is transcoded from
+        // Latin-1 so that its newlines and statistics are still reported.
+        let decoded;
         let text = match encoding {
             Encoding::UTF8 => {
                 let start = if has_bom { 3 } else { 0 };
@@ -274,6 +301,10 @@ impl TXTParser {
             }
             Encoding::ASCII => std::str::from_utf8(data)
                 .map_err(|e| ExifToolError::parse_error(format!("Invalid ASCII: {}", e)))?,
+            _ if encoding.is_single_byte() => {
+                decoded = data.iter().map(|&byte| byte as char).collect::<String>();
+                &decoded
+            }
             _ => {
                 // For other encodings, we can't easily analyze without additional dependencies
                 // Just return what we have
@@ -443,6 +474,24 @@ mod tests {
         assert!(has_bom);
     }
 
+    /// ExifTool separates the two single-byte cases by the C1 range: only
+    /// 0xA0-0xFF is iso-8859-1, anything touching 0x80-0x9F is unknown-8bit.
+    #[test]
+    fn test_encoding_detection_latin1() {
+        let (encoding, has_bom) = TXTParser::detect_encoding(b"this \xe9 is Latin1\r\n");
+        assert_eq!(encoding, Encoding::Latin1);
+        assert_eq!(encoding.mime_name(), "iso-8859-1");
+        assert!(!has_bom);
+    }
+
+    #[test]
+    fn test_encoding_detection_unknown_8bit() {
+        let (encoding, has_bom) = TXTParser::detect_encoding(b"this \x8e is MacRoman\r");
+        assert_eq!(encoding, Encoding::Unknown8Bit);
+        assert_eq!(encoding.mime_name(), "unknown-8bit");
+        assert!(!has_bom);
+    }
+
     #[test]
     fn test_line_ending_detection_lf() {
         let text = "Line 1\nLine 2\nLine 3";
@@ -459,6 +508,20 @@ mod tests {
     fn test_line_ending_detection_cr() {
         let text = "Line 1\rLine 2\rLine 3";
         assert_eq!(TXTParser::detect_line_endings(text), LineEnding::CR);
+        // ExifTool's Newlines PrintConv spells this "Macintosh CR".
+        assert_eq!(LineEnding::CR.display_name(), "Macintosh CR");
+    }
+
+    /// Statistics must still be reported for 8-bit text: the parser used to
+    /// return early for anything that was not ASCII or UTF-8.
+    #[test]
+    fn test_stats_reported_for_eight_bit_text() {
+        let reader = crate::test_support::TestReader::new(b"this \xe9 is Latin1\r\n".to_vec());
+        let metadata = TXTParser::parse_text_content(&reader).unwrap();
+        assert_eq!(metadata.get_string("MIMEEncoding"), Some("iso-8859-1"));
+        assert_eq!(metadata.get_string("Newlines"), Some("Windows CRLF"));
+        assert_eq!(metadata.get_string("LineCount"), Some("1"));
+        assert_eq!(metadata.get_string("WordCount"), Some("4"));
     }
 
     #[test]
