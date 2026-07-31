@@ -2218,7 +2218,7 @@ fn extract_itunes_freeform(item: &Atom, metadata: &mut MetadataMap) {
         // Ten space-separated 8-digit hex words. ExifTool's PrintConv strips
         // the leading zeros of each word and the leading whitespace.
         "iTunNORM" => (
-            "VolumeNormalization",
+            "VolumeNormalization".to_string(),
             match value.as_string() {
                 Some(text) => TagValue::new_string(strip_hex_word_padding(text)),
                 None => value,
@@ -2226,16 +2226,73 @@ fn extract_itunes_freeform(item: &Atom, metadata: &mut MetadataMap) {
         ),
         // Same shape, twelve words; ExifTool keeps the atom name as the tag.
         "iTunSMPB" => (
-            "iTunSMPB",
+            "iTunSMPB".to_string(),
             match value.as_string() {
                 Some(text) => TagValue::new_string(strip_hex_word_padding(text)),
                 None => value,
             },
         ),
-        other => (other, value),
+        other => (itunes_freeform_tag_name(other), value),
     };
 
+    // A name made entirely of characters ExifTool strips leaves nothing to
+    // report; emitting a bare "ItemList:" key would be worse than dropping it.
+    if tag.is_empty() {
+        return;
+    }
     metadata.insert(format!("ItemList:{}", tag), value);
+}
+
+/// Tag name for a freeform item the `iTunesInfo` table names explicitly, or
+/// ExifTool's fallback for one it does not.
+///
+/// The named entries are the plain renames from `QuickTime::iTunesInfo`;
+/// without them a file carrying, say, `DISCNUMBER` would be reported under
+/// that spelling rather than ExifTool's `DiscNumber`.
+fn itunes_freeform_tag_name(name: &str) -> String {
+    let renamed = match name {
+        "iTunEXTC" => Some("ContentRating"),
+        "DISCNUMBER" => Some("DiscNumber"),
+        "TRACKNUMBER" => Some("TrackNumber"),
+        "ARTISTS" => Some("Artists"),
+        "CATALOGNUMBER" => Some("CatalogNumber"),
+        "RATING" => Some("Rating"),
+        "MEDIA" => Some("Media"),
+        "SCRIPT" => Some("Script"),
+        "BARCODE" => Some("Barcode"),
+        "LABEL" => Some("Label"),
+        "MOOD" => Some("Mood"),
+        "DIRECTOR" => Some("Director"),
+        "DIRECTOR_OF_PHOTOGRAPHY" => Some("DirectorOfPhotography"),
+        "PRODUCTION_DESIGNER" => Some("ProductionDesigner"),
+        "COSTUME_DESIGNER" => Some("CostumeDesigner"),
+        "SCREENPLAY_BY" => Some("ScreenplayBy"),
+        "EDITED_BY" => Some("EditedBy"),
+        "PRODUCER" => Some("Producer"),
+        "popularimeter" => Some("Popularimeter"),
+        "Dynamic Range (DR)" => Some("DynamicRange"),
+        "initialkey" => Some("InitialKey"),
+        "originalyear" => Some("OriginalYear"),
+        "originaldate" => Some("OriginalDate"),
+        "~length" => Some("Length"),
+        "Volume Level (ReplayGain)" => Some("ReplayVolumeLevel"),
+        "Dynamic Range (R128)" => Some("DynamicRangeR128"),
+        "Volume Level (R128)" => Some("VolumeLevelR128"),
+        "Peak Level (Sample)" => Some("PeakLevelSample"),
+        "Peak Level (R128)" => Some("PeakLevelR128"),
+        _ => None,
+    };
+    match renamed {
+        Some(tag) => tag.to_string(),
+        // ExifTool's fallback for a name its table does not list is
+        // `tr/-_a-zA-Z0-9//dc`: drop every other character. Without this a
+        // name like "Encoding Params" would keep its space and never match
+        // ExifTool's "EncodingParams".
+        None => name
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect(),
+    }
 }
 
 /// ExifTool's `$val=~s/ 0+(\w)/ $1/g; $val=~s/^\s+//;` for the packed hex
@@ -3508,6 +3565,30 @@ mod tests {
         );
         // An all-zero word must survive as "0" rather than vanishing.
         assert_eq!(strip_hex_word_padding("00000000"), "0");
+    }
+
+    /// Freeform names are either renamed by ExifTool's table or reduced to
+    /// `[-_a-zA-Z0-9]`; passing the raw name straight through would report a
+    /// tag under a spelling ExifTool never emits.
+    #[test]
+    fn test_itunes_freeform_tag_names_follow_exiftool() {
+        // Explicit table renames.
+        assert_eq!(itunes_freeform_tag_name("DISCNUMBER"), "DiscNumber");
+        assert_eq!(itunes_freeform_tag_name("iTunEXTC"), "ContentRating");
+        assert_eq!(itunes_freeform_tag_name("~length"), "Length");
+        assert_eq!(
+            itunes_freeform_tag_name("Volume Level (R128)"),
+            "VolumeLevelR128"
+        );
+        // Not in the table: keep only the characters ExifTool keeps.
+        assert_eq!(
+            itunes_freeform_tag_name("Encoding Params"),
+            "EncodingParams"
+        );
+        assert_eq!(itunes_freeform_tag_name("IMDB_ID"), "IMDB_ID");
+        assert_eq!(itunes_freeform_tag_name("Tool Version"), "ToolVersion");
+        // Nothing survives the filter, so there is no tag to report.
+        assert_eq!(itunes_freeform_tag_name("(...)"), "");
     }
 
     #[test]
