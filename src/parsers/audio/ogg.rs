@@ -508,6 +508,7 @@ fn parse_picture_block(data: &[u8], metadata: &mut MetadataMap) {
     );
     pos = desc_end;
 
+    let mut picture_len = 0u32;
     for name in [
         "FLAC:PictureWidth",
         "FLAC:PictureHeight",
@@ -518,14 +519,18 @@ fn parse_picture_block(data: &[u8], metadata: &mut MetadataMap) {
         let Some(value) = take_u32(data, &mut pos) else {
             return;
         };
+        picture_len = value;
         metadata.insert(name.to_string(), TagValue::new_integer(i64::from(value)));
     }
 
-    // Whatever remains is the image itself, capped by the declared length.
-    if pos < data.len() {
+    // The image is exactly PictureLength bytes (ExifTool's
+    // `Format => 'undef[$val{7}]'`), so anything past that is padding and
+    // must not be counted -- the reported byte count is a tag of its own.
+    let end = (pos + picture_len as usize).min(data.len());
+    if pos < end {
         metadata.insert(
             "FLAC:Picture".to_string(),
-            TagValue::Binary(data[pos..].to_vec()),
+            TagValue::Binary(data[pos..end].to_vec()),
         );
     }
 }

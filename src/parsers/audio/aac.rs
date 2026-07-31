@@ -5,16 +5,22 @@
 //!
 //! # Supported Metadata
 //!
-//! - **ADTS Header:** Profile, sample rate, channel configuration, bitrate
-//! - **Frame Info:** Frame count, duration estimation
+//! - **ADTS Header:** Profile, sample rate, channel configuration, frame length
+//! - **Frame Info:** Count of the ADTS frames actually present
+//! - **Filler Payload:** Encoder name from the first frame
 //! - **iTunes Atoms (M4A):** Title, Artist, Album, and 35+ other metadata tags
+//!
+//! Nothing here is extrapolated: no average bitrate and no duration, because
+//! both would have to be projected from a single frame and `AAC.pm` says
+//! outright that every frame must be scanned first.
 //!
 //! # ExifTool Compatibility
 //!
-//! Maps to ExifTool tags:
-//! - `AAC:AudioObjectType` → Profile from ADTS header
-//! - `AAC:SampleRate` → Sample rate from ADTS header
-//! - `AAC:ChannelConfiguration` → Channel config from ADTS header
+//! Maps to ExifTool tags (`AAC.pm`):
+//! - `AAC:ProfileType` → bits 016-017 of the ADTS header
+//! - `AAC:SampleRate` → bits 018-021
+//! - `AAC:Channels` → bits 023-025
+//! - `AAC:Encoder` → filler payload of the first frame
 //! - iTunes atoms → `ItemList:*` and `QuickTime:*` tags
 //!
 //! # File Structure
@@ -127,19 +133,9 @@ impl FormatParser for AacParser {
                 eprintln!("Warning: Failed to extract iTunes metadata: {}", e);
             }
 
-            // Add AAC format-specific tags for M4A files
-            // AudioEncoding: Always "AAC" for M4A files
-            metadata.insert(
-                "AAC:AudioEncoding".to_string(),
-                TagValue::new_string("AAC".to_string()),
-            );
-
-            // iTunesVersion: M4A is iTunes version 1 format (could be enhanced in future)
-            metadata.insert(
-                "AAC:iTunesVersion".to_string(),
-                TagValue::new_string("1".to_string()),
-            );
-
+            // No synthetic AAC:AudioEncoding / AAC:iTunesVersion here: both
+            // were fixed strings that restated the container rather than
+            // anything read out of it, and ExifTool reports neither tag.
             return Ok(metadata);
         }
 
@@ -193,14 +189,6 @@ impl FormatParser for AacParser {
             TagValue::new_integer(adts_info.frame_length as i64),
         );
 
-        // Add AAC format-specific tags for ExifTool compatibility
-
-        // AudioEncoding: Always "AAC" for AAC/ADTS files
-        metadata.insert(
-            "AAC:AudioEncoding".to_string(),
-            TagValue::new_string("AAC".to_string()),
-        );
-
         // Channels uses ExifTool's PrintConv for the channel configuration
         // code: 6 and 7 print as "5+1" and "7+1", and an unset code prints
         // "?" rather than being silently rounded to stereo.
@@ -222,37 +210,15 @@ impl FormatParser for AacParser {
             ),
         );
 
-        // BitRate: Estimate from frame size and sample rate
-        // AAC frames typically contain 1024 samples
-        let samples_per_frame = 1024u64;
-        let bitrate_bps =
-            (adts_info.frame_length as u64 * adts_info.sample_rate as u64 * 8) / samples_per_frame;
-        let bitrate_kbps = bitrate_bps / 1000;
-        metadata.insert(
-            "AAC:BitRate".to_string(),
-            TagValue::new_integer(bitrate_kbps as i64),
-        );
+        // AAC:BitRate, AAC:ObjectType and AAC:ProfileLevel used to be
+        // emitted here. ObjectType and ProfileLevel were re-spellings of
+        // AudioObjectType with no ExifTool counterpart, and BitRate
+        // extrapolated the whole file's rate from the first frame alone --
+        // ExifTool's own AAC.pm notes that "all frames must be scanned to
+        // calculate average bitrate", so that number was a guess wearing a
+        // measurement's name.
 
-        // ObjectType: Same as AudioObjectType but in a different tag format
-        metadata.insert(
-            "AAC:ObjectType".to_string(),
-            TagValue::new_string(adts_info.profile.to_string()),
-        );
-
-        // ProfileLevel: Format as "LC" or similar based on profile
-        let profile_level = match adts_info.profile {
-            "Main" => "Main",
-            "LC (Low Complexity)" => "LC",
-            "SSR (Scalable Sampling Rate)" => "SSR",
-            "LTP (Long Term Prediction)" => "LTP",
-            _ => "Unknown",
-        };
-        metadata.insert(
-            "AAC:ProfileLevel".to_string(),
-            TagValue::new_string(profile_level.to_string()),
-        );
-
-        // Estimate duration by counting frames (scan up to 1MB)
+        // Count the ADTS frames that are actually present (scan up to 1MB).
         let scan_size = 1_000_000u64.min(file_size);
         let mut frame_count = 0u64;
         let mut offset = 0u64;
@@ -282,23 +248,10 @@ impl FormatParser for AacParser {
                 "AAC:FrameCount".to_string(),
                 TagValue::new_integer(frame_count as i64),
             );
-
-            // Estimate total frames from file size
-            let avg_frame_size = offset / frame_count;
-            if avg_frame_size > 0 {
-                let estimated_total_frames = file_size / avg_frame_size;
-
-                // Calculate duration (1024 samples per frame)
-                let samples_per_frame = 1024u64;
-                let total_samples = estimated_total_frames * samples_per_frame;
-                let duration_secs = total_samples as f64 / adts_info.sample_rate as f64;
-
-                metadata.insert(
-                    "AAC:Duration".to_string(),
-                    TagValue::new_string(format!("{:.2}", duration_secs)),
-                );
-            }
         }
+        // AAC:Duration used to be derived here by extrapolating an average
+        // frame size over the file length. That is a projection, not a
+        // measurement, and ExifTool publishes no Duration for AAC at all.
 
         Ok(metadata)
     }
@@ -987,7 +940,7 @@ mod tests {
     fn test_itunes_track_number() {
         // Track number format: 2 bytes reserved + 2 bytes current + 2 bytes total
         // Example: track 5 of 12
-        let mut value = vec![0x00, 0x00, 0x00, 0x05, 0x00, 0x0C];
+        let value = vec![0x00, 0x00, 0x00, 0x05, 0x00, 0x0C];
         let result = format_track_disk_tag(&value, 0);
         assert!(result.is_some());
         assert_eq!(result.unwrap().as_string(), Some("5 of 12"));
