@@ -24,6 +24,12 @@ fn normalize_family_for_comparison(family: &str) -> &str {
         "FLIR" => "APP1",
         // HDR -> APP11
         "HDR" => "APP11",
+        // SPIFF -> APP8. SPIFF is ExifTool's own family-1 name for the
+        // segment and is what oxidex emits; the harness asks exiftool for
+        // family 0, which calls it APP8. Same case as FLIR and HDR above --
+        // eleven byte-identical values were being counted as a gap on one
+        // side and an extra on the other purely over which family named them.
+        "SPIFF" => "APP8",
         // Keep everything else as-is
         _ => family,
     }
