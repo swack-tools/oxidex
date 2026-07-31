@@ -128,29 +128,45 @@ pub fn ascii_value(bytes: &[u8]) -> String {
     String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
-/// Format a float the way Perl stringifies a number, which is how ExifTool's
-/// rational values reach `PrintLensInfo` and friends: `18/1` prints as `18`,
-/// `35/10` as `3.5`.
+/// Render a `rational64u`/`rational64s` the way ExifTool does.
+///
+/// `Image::ExifTool::GetRational64u` ends in `RoundFloat($num/$den, 10)`, and
+/// `RoundFloat` is `sprintf("%.${sig}g", $val)` -- so a 64-bit rational carries
+/// TEN significant digits, not Perl's usual fifteen. That is the difference
+/// between `4557/2048` printing as ExifTool's `2.225097656` and as the exact
+/// `2.22509765625`.
 pub fn format_number(value: f64) -> String {
-    if value == value.trunc() && value.abs() < 1e15 {
-        return format!("{}", value as i64);
+    format_significant(value, 10)
+}
+
+/// C's `%.<precision>g` with no sign flag: `precision` significant digits,
+/// `%e` style outside `-4 <= exp < precision`, trailing zeros trimmed.
+fn format_significant(value: f64, precision: usize) -> String {
+    if value == 0.0 {
+        return "0".to_string();
     }
     if !value.is_finite() {
         return format!("{}", value);
     }
-    // Perl stringifies with 15 SIGNIFICANT digits, not 15 decimal places --
-    // `{:.15}` on 102.4 leaks the binary representation as
-    // "102.400000000000006". Scale the precision by the exponent instead, then
-    // trim the trailing zeros the fixed-precision formatter leaves behind.
-    let exponent = value.abs().log10().floor() as i32;
-    let decimals = (14 - exponent).clamp(0, 17) as usize;
-    let s = format!("{:.*}", decimals, value);
-    let s = if s.contains('.') {
-        s.trim_end_matches('0').trim_end_matches('.')
+    let precision = precision.max(1);
+    // The exponent %g switches on is the one the value has AFTER rounding to
+    // `precision` digits, so read it back off a rounded rendering rather than
+    // computing log10 of the unrounded value.
+    let scientific = format!("{:.*e}", precision - 1, value);
+    let (mantissa, exp_text) = scientific.split_once('e').unwrap_or((&scientific, "0"));
+    let exponent: i32 = exp_text.parse().unwrap_or(0);
+    if exponent < -4 || exponent >= precision as i32 {
+        // C renders the exponent with a sign and at least two digits.
+        format!(
+            "{}e{}{:02}",
+            trim_zeros(mantissa),
+            if exponent < 0 { '-' } else { '+' },
+            exponent.abs()
+        )
     } else {
-        &s
-    };
-    s.to_string()
+        let decimals = (precision as i32 - 1 - exponent).max(0) as usize;
+        trim_zeros(&format!("{:.*}", decimals, value))
+    }
 }
 
 /// Nikon aperture encoding: `2**($val/24)` (ExifTool `%nikonApertureConversions`).
@@ -192,27 +208,11 @@ fn format_g3(val: f64) -> String {
     if val == 0.0 {
         return "+0".to_string();
     }
-    let exp = val.abs().log10().floor() as i32;
-    if !(-5..3).contains(&exp) {
-        // %g switches to %e outside this range; C renders a 2-digit exponent.
-        let mantissa = val / 10.0_f64.powi(exp);
-        let mantissa = trim_zeros(&format!("{:.2}", mantissa));
-        let sign = if exp < 0 { '-' } else { '+' };
-        format!(
-            "{}{}e{}{:02}",
-            if val < 0.0 { "" } else { "+" },
-            mantissa,
-            sign,
-            exp.abs()
-        )
+    let body = format_significant(val, 3);
+    if val > 0.0 {
+        format!("+{}", body)
     } else {
-        let decimals = (2 - exp).max(0) as usize;
-        let body = trim_zeros(&format!("{:.*}", decimals, val));
-        if val > 0.0 {
-            format!("+{}", body)
-        } else {
-            body
-        }
+        body
     }
 }
 
@@ -457,17 +457,25 @@ mod tests {
     }
 
     #[test]
-    fn format_number_matches_perl_stringification() {
+    fn format_number_rounds_to_ten_significant_digits_like_exiftool() {
         assert_eq!(format_number(18.0), "18");
         assert_eq!(format_number(3.5), "3.5");
         assert_eq!(format_number(7.8), "7.8");
-        // Perl uses 15 SIGNIFICANT digits. 102.4 has no exact binary form, so
-        // 15 *decimal places* would leak "102.400000000000006".
         assert_eq!(format_number(102.4), "102.4");
         assert_eq!(format_number(1234.5), "1234.5");
         assert_eq!(format_number(0.001), "0.001");
         assert_eq!(format_number(-4.5), "-4.5");
-        assert_eq!(format_number(2.015162472363), "2.015162472363");
-        assert_eq!(format_number(1.0 / 3.0), "0.333333333333333");
+        assert_eq!(format_number(0.0), "0");
+        // WB_RBLevels off a D5: 4557/2048 is exactly 2.22509765625, and
+        // ExifTool reports 2.225097656 -- RoundFloat(..., 10).
+        assert_eq!(format_number(4557.0 / 2048.0), "2.225097656");
+        assert_eq!(format_number(3120.0 / 2048.0), "1.5234375");
+        // NikonCoolpixP60's PreviewIFD XResolution.
+        assert_eq!(format_number(0.00319652120842234), "0.003196521208");
+        assert_eq!(format_number(1.0 / 3.0), "0.3333333333");
+        // %g leaves fixed notation at exp -4 and switches at -5.
+        assert_eq!(format_number(0.0001234), "0.0001234");
+        assert_eq!(format_number(0.00001234), "1.234e-05");
+        assert_eq!(format_number(1.0e11), "1e+11");
     }
 }

@@ -111,6 +111,8 @@ const NIKON_SATURATION_TEXT: u16 = 0x00AA; // Saturation as text
 const NIKON_VARI_PROGRAM: u16 = 0x00AB; // VariProgram
 const NIKON_IMAGE_PROCESSING: u16 = 0x001A; // Image processing
 const NIKON_WORLD_TIME: u16 = 0x0024;
+/// `Nikon::ISOInfo`, whose SubDirectory pins `ByteOrder => 'BigEndian'`.
+const NIKON_ISO_INFO: u16 = 0x0025;
 const NIKON_VR_INFO: u16 = 0x001F;
 const NIKON_FLASH_EXPOSURE_COMP: u16 = 0x0012; // Flash exposure compensation
 const NIKON_EXTERNAL_FLASH_COMP: u16 = 0x0017; // External flash exposure compensation
@@ -350,13 +352,88 @@ fn nikon_unsigned_ratio(bytes: &[u8]) -> Option<f64> {
     Some(if c != 0.0 { a * (b / c) } else { 0.0 })
 }
 
+/// `Nikon::ISOInfo` `ISOExpansion` (offset 4) and `ISOExpansion2` (offset 10).
+///
+/// The two tags carry `PrintHex => 1`, so an unlisted code prints its hex form.
+/// They also carry DIFFERENT tables: `ISOExpansion` names Hi 2.3 through Hi 5.0
+/// (0x109-0x114) and `ISOExpansion2` stops at Hi 2.0, so `0x10c` is `Hi 3.0` on
+/// one and `Unknown (0x10c)` on the other. `extended` selects the longer table.
+fn iso_expansion(value: u16, extended: bool) -> String {
+    let name = match value {
+        0x000 => "Off",
+        0x101 => "Hi 0.3",
+        0x102 => "Hi 0.5",
+        0x103 => "Hi 0.7",
+        0x104 => "Hi 1.0",
+        0x105 => "Hi 1.3",
+        0x106 => "Hi 1.5",
+        0x107 => "Hi 1.7",
+        0x108 => "Hi 2.0",
+        0x109 if extended => "Hi 2.3",
+        0x10a if extended => "Hi 2.5",
+        0x10b if extended => "Hi 2.7",
+        0x10c if extended => "Hi 3.0",
+        0x10d if extended => "Hi 3.3",
+        0x10e if extended => "Hi 3.5",
+        0x10f if extended => "Hi 3.7",
+        0x110 if extended => "Hi 4.0",
+        0x111 if extended => "Hi 4.3",
+        0x112 if extended => "Hi 4.5",
+        0x113 if extended => "Hi 4.7",
+        0x114 if extended => "Hi 5.0",
+        0x201 => "Lo 0.3",
+        0x202 => "Lo 0.5",
+        0x203 => "Lo 0.7",
+        0x204 => "Lo 1.0",
+        other => return format!("Unknown (0x{:x})", other),
+    };
+    name.to_string()
+}
+
+/// `%cropHiSpeed` applied to a whole `int16u[n]` value.
+///
+/// ExifTool looks the joined value up in the hash first, so a lone code prints
+/// its label. Anything else falls to the `OTHER` handler, which spells out all
+/// seven fields when there are exactly seven and otherwise reports the entire
+/// value as `Unknown (...)` -- it does NOT fall back to naming element zero.
+fn print_crop_hi_speed(values: &[u16]) -> Option<String> {
+    match values.len() {
+        0 => None,
+        1 => Some(decode_crop_hi_speed(values[0])),
+        7 => Some(format!(
+            "{} ({}x{} cropped to {}x{} at pixel {},{})",
+            decode_crop_hi_speed(values[0]),
+            values[1],
+            values[2],
+            values[3],
+            values[4],
+            values[5],
+            values[6]
+        )),
+        _ => {
+            let joined: Vec<String> = values.iter().map(u16::to_string).collect();
+            Some(format!("Unknown ({})", joined.join(" ")))
+        }
+    }
+}
+
 /// `Nikon::Main` 0x001e `ColorSpace`.
 fn decode_color_space(value: u32) -> String {
     match value {
         1 => "sRGB".to_string(),
         2 => "Adobe RGB".to_string(),
+        // Observed on a Z8 with Tone Mode set to HLG.
+        4 => "BT.2100".to_string(),
         other => format!("Unknown ({})", other),
     }
+}
+
+/// `Nikon::WorldTime` tag 0: an int16s offset in minutes, printed by ExifTool
+/// as `sprintf("%s%.2d:%.2d", $sign, $h, abs($val)-60*$h)`.
+fn print_time_zone(offset_minutes: i16) -> String {
+    let sign = if offset_minutes < 0 { '-' } else { '+' };
+    let total = (offset_minutes as i32).abs();
+    format!("{}{:02}:{:02}", sign, total / 60, total % 60)
 }
 
 /// `Nikon::Main` 0x0022 `ActiveD-Lighting`.
@@ -771,7 +848,6 @@ impl MakerNoteParser for NikonParser {
                 | NIKON_FOCUS_MODE
                 | NIKON_FLASH_SETTING
                 | NIKON_ISO_SELECTION
-                | NIKON_SERIAL_NUMBER
                 | NIKON_SERIAL_NUMBER_ALT
                 | NIKON_IMAGE_OPTIMIZATION
                 | NIKON_SATURATION_TEXT
@@ -790,6 +866,16 @@ impl MakerNoteParser for NikonParser {
                     }
                 }
 
+                // 0x001d carries `PrintConv => undef`, which switches the
+                // table's FormatString off: this serial is the decryption key
+                // and must be reported exactly as written ("No= 30045efe",
+                // not "No= 30045Efe").
+                NIKON_SERIAL_NUMBER => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        tags.insert("Nikon:SerialNumber".to_string(), ascii_value(&bytes));
+                    }
+                }
+
                 NIKON_DELETED_IMAGE_COUNT => {
                     if let Some(value) = scalar_of(entry) {
                         tags.insert("Nikon:DeletedImageCount".to_string(), value.to_string());
@@ -802,9 +888,18 @@ impl MakerNoteParser for NikonParser {
                     }
                 }
 
+                // int16s with `Count => -1`: the older bodies write one value
+                // and the DSLRs write two, so every element has to be printed
+                // ("0 0", not "0").
                 NIKON_WHITE_BALANCE_FINE => {
-                    if let Some(value) = scalar_i16_of(entry) {
-                        tags.insert("Nikon:WhiteBalanceFineTune".to_string(), value.to_string());
+                    if let Some(bytes) = bytes_of(entry) {
+                        let values: Vec<String> = (0..bytes.len() / 2)
+                            .filter_map(|i| read_u16(&bytes, i * 2, order))
+                            .map(|v| (v as i16).to_string())
+                            .collect();
+                        if !values.is_empty() {
+                            tags.insert("Nikon:WhiteBalanceFineTune".to_string(), values.join(" "));
+                        }
                     }
                 }
 
@@ -931,9 +1026,19 @@ impl MakerNoteParser for NikonParser {
                 }
 
                 // int16u[2], same "0 <iso>" shape as tag 0x0002.
+                // Nikon.pm declares this int16u[2] with `PrintConv => s/^0 //`,
+                // but the D3/D3X/Df write it on disk as `undef[4]`. ExifTool
+                // honours the entry's own format, so their four NUL bytes read
+                // back as an empty string rather than as the number 0 -- decode
+                // by declared type, not by the table's nominal one.
                 NIKON_ISO_SETTING => {
-                    if let Some(list) = u16_list_of(entry) {
-                        let printed = list.strip_prefix("0 ").unwrap_or(&list).to_string();
+                    let printed = if entry.field_type == 3 {
+                        u16_list_of(entry)
+                            .map(|list| list.strip_prefix("0 ").unwrap_or(&list).to_string())
+                    } else {
+                        bytes_of(entry).map(|bytes| ascii_value(&bytes))
+                    };
+                    if let Some(printed) = printed {
                         tags.insert("Nikon:ISOSetting".to_string(), printed);
                     }
                 }
@@ -949,23 +1054,72 @@ impl MakerNoteParser for NikonParser {
                     }
                 }
 
+                // `Nikon::WorldTime`: an int16s minute offset, then two int8u
+                // enums. ExifTool names the offset `TimeZone` and prints it as
+                // `+09:00` -- there is no tag called `WorldTime`, so emitting
+                // one would be a name nothing can match.
                 NIKON_WORLD_TIME => {
-                    if let Some(offset_minutes) = scalar_i16_of(entry) {
-                        let hours = offset_minutes / 60;
-                        let minutes = (offset_minutes % 60).abs();
-                        let sign = if offset_minutes >= 0 { "+" } else { "-" };
-                        tags.insert(
-                            "Nikon:WorldTime".to_string(),
-                            format!("UTC{}{:02}:{:02}", sign, hours.abs(), minutes),
-                        );
+                    if let Some(bytes) = bytes_of(entry) {
+                        if let Some(raw) = read_u16(&bytes, 0, order) {
+                            tags.insert("Nikon:TimeZone".to_string(), print_time_zone(raw as i16));
+                        }
+                        if let Some(&raw) = bytes.get(2) {
+                            let printed = match raw {
+                                0 => "No".to_string(),
+                                1 => "Yes".to_string(),
+                                other => format!("Unknown ({})", other),
+                            };
+                            tags.insert("Nikon:DaylightSavings".to_string(), printed);
+                        }
+                        if let Some(&raw) = bytes.get(3) {
+                            let printed = match raw {
+                                0 => "Y/M/D".to_string(),
+                                1 => "M/D/Y".to_string(),
+                                2 => "D/M/Y".to_string(),
+                                other => format!("Unknown ({})", other),
+                            };
+                            tags.insert("Nikon:DateDisplayFormat".to_string(), printed);
+                        }
                     }
                 }
 
+                // `Nikon::VRInfo`: a version string, then int8u enums.
                 NIKON_VR_INFO => {
-                    if let Some(bytes) = bytes_of(entry)
-                        && bytes.len() >= 4
-                    {
-                        tags.insert("Nikon:VRInfoVersion".to_string(), ascii_value(&bytes[..4]));
+                    if let Some(bytes) = bytes_of(entry) {
+                        if bytes.len() >= 4 {
+                            tags.insert(
+                                "Nikon:VRInfoVersion".to_string(),
+                                ascii_value(&bytes[..4]),
+                            );
+                        }
+                        if let Some(&raw) = bytes.get(4) {
+                            let printed = match raw {
+                                // 'n/a' is what a 1V1 with a non-VR lens writes.
+                                0 => "n/a".to_string(),
+                                1 => "On".to_string(),
+                                2 => "Off".to_string(),
+                                other => format!("Unknown ({})", other),
+                            };
+                            tags.insert("Nikon:VibrationReduction".to_string(), printed);
+                        }
+                    }
+                }
+
+                // `Nikon::ISOInfo`. The SubDirectory pins `ByteOrder =>
+                // 'BigEndian'`, so the two int16u fields are read big-endian
+                // regardless of the MakerNote's own order.
+                NIKON_ISO_INFO => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        for (at, name, extended) in
+                            [(4usize, "ISOExpansion", true), (10, "ISOExpansion2", false)]
+                        {
+                            if let Some(raw) = read_u16(&bytes, at, ByteOrder::BigEndian) {
+                                tags.insert(
+                                    format!("Nikon:{}", name),
+                                    iso_expansion(raw, extended),
+                                );
+                            }
+                        }
                     }
                 }
 
@@ -999,29 +1153,13 @@ impl MakerNoteParser for NikonParser {
                 }
 
                 // int16u[7]: mode, then the source and cropped dimensions and
-                // the crop origin. ExifTool's %cropHiSpeed OTHER handler spells
-                // all seven out; with any other count only the mode is named.
+                // the crop origin.
                 NIKON_CROP_HI_SPEED => {
                     if let Some(bytes) = bytes_of(entry) {
                         let values: Vec<u16> = (0..bytes.len() / 2)
                             .filter_map(|i| read_u16(&bytes, i * 2, order))
                             .collect();
-                        if let Some(&raw) = values.first() {
-                            let mode = decode_crop_hi_speed(raw);
-                            let printed = if values.len() == 7 {
-                                format!(
-                                    "{} ({}x{} cropped to {}x{} at pixel {},{})",
-                                    mode,
-                                    values[1],
-                                    values[2],
-                                    values[3],
-                                    values[4],
-                                    values[5],
-                                    values[6]
-                                )
-                            } else {
-                                mode
-                            };
+                        if let Some(printed) = print_crop_hi_speed(&values) {
                             tags.insert("Nikon:CropHiSpeed".to_string(), printed);
                         }
                     }
@@ -1134,7 +1272,8 @@ fn nikon_tag_to_name(tag_id: u16) -> String {
         NIKON_VR_INFO => "VRInfo",
         NIKON_MULTI_EXPOSURE => "MultiExposure",
         NIKON_ACTIVE_D_LIGHTING => "ActiveD-Lighting",
-        NIKON_WORLD_TIME => "WorldTime",
+        NIKON_WORLD_TIME => "TimeZone",
+        NIKON_ISO_INFO => "ISOInfo",
         NIKON_VIGNETTE_CONTROL => "VignetteControl",
 
         _ => return format!("Nikon:Unknown-{:#06X}", tag_id),
@@ -1307,7 +1446,52 @@ mod tests {
     fn test_decode_color_space() {
         assert_eq!(decode_color_space(1), "sRGB");
         assert_eq!(decode_color_space(2), "Adobe RGB");
+        assert_eq!(decode_color_space(4), "BT.2100");
         assert_eq!(decode_color_space(99), "Unknown (99)");
+    }
+
+    #[test]
+    fn test_print_time_zone() {
+        // Values observed across the Nikon sample corpus.
+        assert_eq!(print_time_zone(0), "+00:00");
+        assert_eq!(print_time_zone(540), "+09:00");
+        assert_eq!(print_time_zone(-300), "-05:00");
+        assert_eq!(print_time_zone(-480), "-08:00");
+        assert_eq!(print_time_zone(330), "+05:30");
+        assert_eq!(print_time_zone(-210), "-03:30");
+    }
+
+    #[test]
+    fn test_iso_expansion() {
+        // Values observed across the Nikon sample corpus.
+        assert_eq!(iso_expansion(0x000, true), "Off");
+        assert_eq!(iso_expansion(0x104, true), "Hi 1.0");
+        assert_eq!(iso_expansion(0x204, true), "Lo 1.0");
+        assert_eq!(iso_expansion(0x000, false), "Off");
+        assert_eq!(iso_expansion(0x204, false), "Lo 1.0");
+        // ISOExpansion2's table stops at Hi 2.0, so the codes above it are
+        // named on one tag and unknown on the other.
+        assert_eq!(iso_expansion(0x10c, true), "Hi 3.0");
+        assert_eq!(iso_expansion(0x10c, false), "Unknown (0x10c)");
+        // PrintHex renders an unlisted code in hex, not decimal.
+        assert_eq!(iso_expansion(0x305, true), "Unknown (0x305)");
+    }
+
+    #[test]
+    fn test_print_crop_hi_speed() {
+        assert_eq!(
+            print_crop_hi_speed(&[12, 5600, 3728, 5600, 3728, 0, 0]).unwrap(),
+            "DX Uncropped (5600x3728 cropped to 5600x3728 at pixel 0,0)"
+        );
+        assert_eq!(
+            print_crop_hi_speed(&[0, 3904, 2616, 3904, 2616, 0, 0]).unwrap(),
+            "Off (3904x2616 cropped to 3904x2616 at pixel 0,0)"
+        );
+        assert_eq!(print_crop_hi_speed(&[2]).unwrap(), "DX Crop");
+        assert_eq!(print_crop_hi_speed(&[99]).unwrap(), "Unknown (99)");
+        // Any other count reports the whole value, not just element zero.
+        assert_eq!(print_crop_hi_speed(&[0, 1]).unwrap(), "Unknown (0 1)");
+        assert!(print_crop_hi_speed(&[]).is_none());
     }
 
     #[test]
