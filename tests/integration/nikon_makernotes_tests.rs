@@ -168,7 +168,7 @@ fn test_nikon_parse_basic_tags() {
     // IFD at offset 18 (10 + 8): entry count (little-endian)
     data.extend_from_slice(&[0x02, 0x00]); // 2 entries
 
-    // Entry 1: ISO Speed (tag 0x0002)
+    // Entry 1: ISO (tag 0x0002)
     data.extend_from_slice(&[0x02, 0x00]); // Tag ID
     data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
@@ -186,9 +186,11 @@ fn test_nikon_parse_basic_tags() {
     let mut tags = HashMap::new();
     parse_nikon_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
 
-    // Verify extracted tags
-    assert!(tags.contains_key("Nikon:ISOSpeed"));
-    assert_eq!(tags.get("Nikon:ISOSpeed"), Some(&"ISO 100".to_string()));
+    // Verify extracted tags. Nikon.pm calls tag 0x0002 "ISO" (int16u), and
+    // ExifTool prints the bare number -- there is no "ISOSpeed" tag and no
+    // "ISO " prefix.
+    assert!(tags.contains_key("Nikon:ISO"));
+    assert_eq!(tags.get("Nikon:ISO"), Some(&"100".to_string()));
 
     assert!(tags.contains_key("Nikon:ShutterCount"));
     assert_eq!(tags.get("Nikon:ShutterCount"), Some(&"10000".to_string()));
@@ -213,23 +215,27 @@ fn test_nikon_parse_enumerated_values() {
     // IFD: 3 entries
     data.extend_from_slice(&[0x03, 0x00]);
 
-    // Entry 1: Quality (tag 0x0004) = Fine (value 3)
+    // Nikon.pm declares 0x0004/0x0005/0x0007 as `Writable => 'string'` for
+    // every model: the camera writes ASCII in all caps and the table's
+    // PRINT_CONV (FormatString) fixes the case on the way out.
+
+    // Entry 1: Quality (tag 0x0004) = "RAW"
     data.extend_from_slice(&[0x04, 0x00]); // Tag
-    data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
-    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
-    data.extend_from_slice(&[0x03, 0x00, 0x00, 0x00]); // Value: 3
+    data.extend_from_slice(&[0x02, 0x00]); // Type: ASCII
+    data.extend_from_slice(&[0x04, 0x00, 0x00, 0x00]); // Count: 4 (fits inline)
+    data.extend_from_slice(b"RAW\0");
 
-    // Entry 2: White Balance (tag 0x0005) = Auto (value 0)
+    // Entry 2: White Balance (tag 0x0005) = "AUTO"
     data.extend_from_slice(&[0x05, 0x00]);
-    data.extend_from_slice(&[0x03, 0x00]);
-    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-    data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Auto
+    data.extend_from_slice(&[0x02, 0x00]);
+    data.extend_from_slice(&[0x04, 0x00, 0x00, 0x00]);
+    data.extend_from_slice(b"AUTO");
 
-    // Entry 3: Focus Mode (tag 0x0007) = AF-S (value 0)
+    // Entry 3: Focus Mode (tag 0x0007) = "AF-S"
     data.extend_from_slice(&[0x07, 0x00]);
-    data.extend_from_slice(&[0x03, 0x00]);
-    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-    data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+    data.extend_from_slice(&[0x02, 0x00]);
+    data.extend_from_slice(&[0x04, 0x00, 0x00, 0x00]);
+    data.extend_from_slice(b"AF-S");
 
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
 
@@ -237,7 +243,7 @@ fn test_nikon_parse_enumerated_values() {
     parse_nikon_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
 
     // Verify decoded values
-    assert_eq!(tags.get("Nikon:Quality"), Some(&"VGA Fine".to_string()));
+    assert_eq!(tags.get("Nikon:Quality"), Some(&"RAW".to_string()));
     assert_eq!(tags.get("Nikon:WhiteBalance"), Some(&"Auto".to_string()));
     assert_eq!(tags.get("Nikon:FocusMode"), Some(&"AF-S".to_string()));
 }
@@ -279,18 +285,20 @@ fn test_nikon_parser_big_endian() {
     // IFD: 1 entry (big-endian)
     data.extend_from_slice(&[0x00, 0x01]); // Entry count (BE)
 
-    // Entry: ISO Speed (tag 0x0002) = 200
+    // Entry: ISO (tag 0x0002) = 200.
+    // TIFF left-justifies a value that fits in the 4-byte field, so a
+    // big-endian int16u of 200 is stored as 00 C8 00 00 -- not 00 00 00 C8.
     data.extend_from_slice(&[0x00, 0x02]); // Tag ID (BE)
     data.extend_from_slice(&[0x00, 0x03]); // Type: SHORT (BE)
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // Count: 1 (BE)
-    data.extend_from_slice(&[0x00, 0x00, 0x00, 0xC8]); // Value: 200 (BE)
+    data.extend_from_slice(&[0x00, 0xC8, 0x00, 0x00]); // Value: 200 (BE)
 
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD (BE)
 
     let mut tags = HashMap::new();
     parse_nikon_makernotes(&data, ByteOrder::BigEndian, &mut tags);
 
-    assert_eq!(tags.get("Nikon:ISOSpeed"), Some(&"ISO 200".to_string()));
+    assert_eq!(tags.get("Nikon:ISO"), Some(&"200".to_string()));
 }
 
 #[test]
