@@ -43,9 +43,12 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
     } else if format == RawFormat::AdobeDNG
         && matches!(
             tag_id,
-            0xC619 // BlackLevelRepeatDim
+            0xC612 // DNGVersion
+                | 0xC613 // DNGBackwardVersion
+                | 0xC619 // BlackLevelRepeatDim
                 | 0xC61A // BlackLevel
                 | 0xC62D // BayerGreenSplit
+                | 0xC630 // DNGLensInfo
                 | 0xC632 // AntiAliasStrength
                 | 0xC65C // BestQualityScale
                 | 0xC68D // ActiveArea
@@ -434,6 +437,25 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         // Parse this IFD
         match parse_ifd(&reader, ifd_offset, byte_order) {
             Ok(tags) => {
+                // ExifTool exposes the uncompressed reduced-resolution image
+                // in DNG IFD0 as ThumbnailTIFF. Its bytes are addressed by
+                // TIFF StripOffsets (0x0111) and StripByteCounts (0x0117).
+                if format == RawFormat::AdobeDNG
+                    && ifd_index == 0
+                    && let Some(thumbnail) =
+                        extract_dng_thumbnail_tiff(data, &tags, byte_order)
+                {
+                    // Derive the family-0 group from the same generated tag
+                    // database used by the neighboring TIFF tags.
+                    let compression_name = lookup_tag_name(0x0103, "EXIF");
+                    if let Some((group, _)) = compression_name.split_once(':') {
+                        metadata.insert(
+                            format!("{}:ThumbnailTIFF", group),
+                            TagValue::Binary(thumbnail),
+                        );
+                    }
+                }
+
                 // Track sub-IFD offsets, MakerNote data, and camera make
                 let mut exif_ifd_offset = None;
                 let mut gps_ifd_offset = None;
@@ -675,6 +697,16 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         && let Some(value) = format_tiff_ep_standard_id(bytes, *value_count)
                     {
                         TagValue::new_string(value)
+                    } else if format == RawFormat::AdobeDNG
+                        && let Some(value) = format_dng_display_value(
+                            *tag_id,
+                            bytes,
+                            *field_type,
+                            *value_count,
+                            byte_order,
+                        )
+                    {
+                        TagValue::new_string(value)
                     } else if let Some(value) = format_exif_display_value(
                         *tag_id,
                         bytes,
@@ -844,6 +876,8 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
                         let is_nef = matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW);
                         let is_rw2 = format == RawFormat::PanasonicRW2;
+                        let is_primary_dng_ifd = format == RawFormat::AdobeDNG
+                            && is_primary_dng_subifd(&sub_tags, sub_index, byte_order);
 
                         // DNG: StripOffsets/StripByteCounts are renamed by
                         // ExifTool in the embedded-image SubIFDs. Exif.pm 0x111
@@ -869,6 +903,29 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         }
 
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
+                            // DNG IFD0 is normally a reduced-resolution
+                            // thumbnail, while the primary SubIFD describes
+                            // the raw image. ExifTool's directory priority
+                            // selects these two tags from that primary IFD.
+                            if is_primary_dng_ifd
+                                && matches!(tag_id, 0x0102 | 0x0103)
+                                && let Some(value) = format_dng_primary_image_tag(
+                                    tag_id,
+                                    raw_bytes.as_ref(),
+                                    field_type,
+                                    value_count,
+                                    byte_order,
+                                )
+                            {
+                                // Replace the existing EXIF key instead of
+                                // emitting a parallel physical-SubIFD key.
+                                metadata.insert(
+                                    lookup_tag_name(tag_id, "EXIF"),
+                                    TagValue::new_string(value),
+                                );
+                                continue;
+                            }
+
                             // CFARepeatPatternDim (Exif.pm 0x828d, Count => 2)
                             // is a SHORT[2] that ExifTool prints as the two
                             // dimensions separated by a space ("2 2"). The
@@ -1281,6 +1338,214 @@ fn find_jpeg_exif_tiff(jpeg: &[u8]) -> Result<Option<&[u8]>> {
     }
 
     Ok(None)
+}
+
+/// Read a TIFF LONG array without reducing it to the first component.
+fn read_tiff_u32_array(
+    bytes: &[u8],
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<Vec<u32>> {
+    let count = usize::try_from(value_count).ok()?;
+    let byte_len = count.checked_mul(4)?;
+    let values = bytes.get(..byte_len)?;
+
+    Some(
+        values
+            .chunks_exact(4)
+            .map(|chunk| match byte_order {
+                ByteOrder::LittleEndian => {
+                    u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+                }
+                ByteOrder::BigEndian => {
+                    u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+                }
+            })
+            .collect(),
+    )
+}
+
+/// Extract the uncompressed reduced-resolution DNG image represented by IFD0
+/// StripOffsets/StripByteCounts.
+///
+/// The constants are TIFF/Exif.pm tag IDs: Compression (0x0103),
+/// StripOffsets (0x0111), and StripByteCounts (0x0117). Compression value 1 is
+/// Exif.pm's "Uncompressed" entry.
+fn extract_dng_thumbnail_tiff<B: AsRef<[u8]>>(
+    data: &[u8],
+    tags: &[(u16, u16, u32, B)],
+    byte_order: ByteOrder,
+) -> Option<Vec<u8>> {
+    let compression =
+        tags.iter()
+            .find_map(|(tag_id, field_type, value_count, bytes)| {
+                if *tag_id == 0x0103 && *field_type == 3 && *value_count >= 1 {
+                    read_tiff_u16(bytes.as_ref(), byte_order)
+                } else {
+                    None
+                }
+            })?;
+    if compression != 1 {
+        return None;
+    }
+
+    let offsets = tags
+        .iter()
+        .find_map(|(tag_id, field_type, value_count, bytes)| {
+            if *tag_id == 0x0111 && *field_type == 4 {
+                read_tiff_u32_array(bytes.as_ref(), *value_count, byte_order)
+            } else {
+                None
+            }
+        })?;
+    let byte_counts =
+        tags.iter()
+            .find_map(|(tag_id, field_type, value_count, bytes)| {
+                if *tag_id == 0x0117 && *field_type == 4 {
+                    read_tiff_u32_array(bytes.as_ref(), *value_count, byte_order)
+                } else {
+                    None
+                }
+            })?;
+
+    if offsets.is_empty() || offsets.len() != byte_counts.len() {
+        return None;
+    }
+
+    let total_len = byte_counts.iter().try_fold(0usize, |total, count| {
+        total.checked_add(usize::try_from(*count).ok()?)
+    })?;
+    if total_len == 0 || total_len > data.len() {
+        return None;
+    }
+
+    let mut thumbnail = Vec::with_capacity(total_len);
+    for (offset, byte_count) in offsets.iter().zip(&byte_counts) {
+        let start = usize::try_from(*offset).ok()?;
+        let count = usize::try_from(*byte_count).ok()?;
+        let end = start.checked_add(count)?;
+        thumbnail.extend_from_slice(data.get(start..end)?);
+    }
+
+    Some(thumbnail)
+}
+
+/// Determine whether a DNG SubIFD represents the primary raw image.
+///
+/// TIFF tag 0x00FE is NewSubfileType; value 0 identifies a primary image.
+/// Older DNG writers may omit it from the first SubIFD, so SubIFD0 is the
+/// conservative fallback.
+fn is_primary_dng_subifd<B: AsRef<[u8]>>(
+    tags: &[(u16, u16, u32, B)],
+    sub_index: usize,
+    byte_order: ByteOrder,
+) -> bool {
+    tags.iter()
+        .find_map(|(tag_id, field_type, value_count, bytes)| {
+            if *tag_id != 0x00FE || *value_count < 1 {
+                return None;
+            }
+
+            match *field_type {
+                3 => read_tiff_u16(bytes.as_ref(), byte_order).map(u32::from),
+                4 => read_tiff_u32(bytes.as_ref(), byte_order),
+                _ => None,
+            }
+        })
+        .map(|new_subfile_type| new_subfile_type == 0)
+        .unwrap_or(sub_index == 0)
+}
+
+/// Format baseline TIFF values selected from the primary DNG raw SubIFD.
+fn format_dng_primary_image_tag(
+    tag_id: u16,
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    match tag_id {
+        // Exif.pm 0x0102 BitsPerSample is an int16u array.
+        0x0102 if field_type == 3 => {
+            let values = read_tiff_numeric_array(bytes, field_type, value_count, byte_order)?;
+            Some(values.join(" "))
+        }
+        // Exif.pm 0x0103 Compression is one int16u with a PrintConv table.
+        0x0103 if field_type == 3 && value_count >= 1 => {
+            let value = read_tiff_u16(bytes, byte_order)?;
+            crate::parsers::tiff::tiff_enums::tiff_enum_to_string(tag_id, i64::from(value))
+                .or_else(|| Some(value.to_string()))
+        }
+        _ => None,
+    }
+}
+
+/// Render DNG IFD0 values whose stored representation differs from ExifTool's
+/// default text output.
+fn format_dng_display_value(
+    tag_id: u16,
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    match tag_id {
+        // Exif.pm 0xC612 DNGVersion and 0xC613 DNGBackwardVersion are BYTE[4],
+        // printed as four decimal components separated by periods.
+        0xC612 | 0xC613 if matches!(field_type, 1 | 7) && value_count >= 4 => {
+            let version = bytes.get(..4)?;
+            Some(format!(
+                "{}.{}.{}.{}",
+                version[0], version[1], version[2], version[3]
+            ))
+        }
+        // Exif.pm 0xC630 DNGLensInfo is RATIONAL[4]: minimum and maximum focal
+        // lengths followed by the corresponding minimum apertures.
+        0xC630 if field_type == 5 && value_count >= 4 => {
+            let values = bytes.get(..32)?;
+            let mut rationals = Vec::with_capacity(4);
+            for pair in values.chunks_exact(8) {
+                let numerator = read_tiff_u32(pair.get(..4)?, byte_order)?;
+                let denominator = read_tiff_u32(pair.get(4..8)?, byte_order)?;
+                if denominator == 0 {
+                    return None;
+                }
+                rationals.push((numerator, denominator));
+            }
+
+            let print_rational = |(numerator, denominator): (u32, u32)| {
+                if numerator % denominator == 0 {
+                    (numerator / denominator).to_string()
+                } else {
+                    format!("{}", f64::from(numerator) / f64::from(denominator))
+                }
+            };
+            let equal_rational = |left: (u32, u32), right: (u32, u32)| {
+                u64::from(left.0) * u64::from(right.1)
+                    == u64::from(right.0) * u64::from(left.1)
+            };
+
+            let mut lens = print_rational(rationals[0]);
+            if !equal_rational(rationals[0], rationals[1]) {
+                lens.push('-');
+                lens.push_str(&print_rational(rationals[1]));
+            }
+            lens.push_str("mm f/");
+
+            if rationals[2].0 == 0 {
+                lens.push('?');
+            } else {
+                lens.push_str(&print_rational(rationals[2]));
+                if rationals[3].0 != 0 && !equal_rational(rationals[2], rationals[3]) {
+                    lens.push('-');
+                    lens.push_str(&print_rational(rationals[3]));
+                }
+            }
+
+            Some(lens)
+        }
+        _ => None,
+    }
 }
 
 /// Format DNG integer-array tags whose ExifTool default output preserves all
@@ -2137,6 +2402,91 @@ mod dng_integer_array_tests {
         assert_eq!(
             format_dng_integer_array(0xC61A, &[1, 0], 3, 1, ByteOrder::LittleEndian),
             None
+        );
+    }
+
+    #[test]
+    fn formats_dng_versions_and_lens_info() {
+        let le = ByteOrder::LittleEndian;
+        assert_eq!(
+            format_dng_display_value(0xC612, &[1, 1, 0, 0], 1, 4, le).as_deref(),
+            Some("1.1.0.0")
+        );
+        assert_eq!(
+            format_dng_display_value(0xC613, &[1, 1, 0, 0], 1, 4, le).as_deref(),
+            Some("1.1.0.0")
+        );
+
+        let lens: Vec<u8> = [(18u32, 1u32), (55, 1), (0, 1), (0, 1)]
+            .iter()
+            .flat_map(|(numerator, denominator)| {
+                let mut pair = numerator.to_le_bytes().to_vec();
+                pair.extend_from_slice(&denominator.to_le_bytes());
+                pair
+            })
+            .collect();
+        assert_eq!(
+            format_dng_display_value(0xC630, &lens, 5, 4, le).as_deref(),
+            Some("18-55mm f/?")
+        );
+    }
+
+    #[test]
+    fn formats_primary_dng_bits_and_compression() {
+        let le = ByteOrder::LittleEndian;
+        assert_eq!(
+            format_dng_primary_image_tag(0x0102, &16u16.to_le_bytes(), 3, 1, le)
+                .as_deref(),
+            Some("16")
+        );
+        assert_eq!(
+            format_dng_primary_image_tag(0x0103, &7u16.to_le_bytes(), 3, 1, le)
+                .as_deref(),
+            Some("JPEG")
+        );
+    }
+
+    #[test]
+    fn extracts_dng_thumbnail_strips_with_checked_offsets() {
+        let le = ByteOrder::LittleEndian;
+        let mut data = vec![0u8; 32];
+        data[20..24].copy_from_slice(&[1, 2, 3, 4]);
+        data[28..32].copy_from_slice(&[5, 6, 7, 8]);
+
+        let tags = vec![
+            (
+                0x0103,
+                3,
+                1,
+                {
+                    let mut bytes = 1u16.to_le_bytes().to_vec();
+                    bytes.extend_from_slice(&[0, 0]);
+                    bytes
+                },
+            ),
+            (
+                0x0111,
+                4,
+                2,
+                [20u32, 28]
+                    .iter()
+                    .flat_map(|value| value.to_le_bytes())
+                    .collect(),
+            ),
+            (
+                0x0117,
+                4,
+                2,
+                [4u32, 4]
+                    .iter()
+                    .flat_map(|value| value.to_le_bytes())
+                    .collect(),
+            ),
+        ];
+
+        assert_eq!(
+            extract_dng_thumbnail_tiff(&data, &tags, le),
+            Some(vec![1, 2, 3, 4, 5, 6, 7, 8])
         );
     }
 }
