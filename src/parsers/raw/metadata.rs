@@ -1091,6 +1091,35 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
     let reader = SliceReader::new(tiff_data);
     let ifd0_tags = parse_ifd(&reader, first_ifd_offset, byte_order)?;
 
+    // The JpgFromRaw preview's TIFF IFD0 carries standard TIFF tags which are
+    // separate from the outer PanasonicRaw IFD0. Exif.pm defines
+    // ResolutionUnit at 0x0128 and ModifyDate at 0x0132; ExifTool reports
+    // both in the EXIF family for Panasonic RW2.
+    for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
+        if !matches!(*tag_id, 0x0128 | 0x0132) {
+            continue;
+        }
+
+        let tag_value = if let Some(value) = format_exif_display_value(
+            *tag_id,
+            raw_bytes.as_ref(),
+            *field_type,
+            *value_count,
+            byte_order,
+        ) {
+            TagValue::new_string(value)
+        } else {
+            raw_bytes_to_simple_tag_value(
+                raw_bytes.as_ref(),
+                *field_type,
+                *value_count,
+                byte_order,
+            )
+        };
+
+        metadata.insert(lookup_tag_name(*tag_id, "EXIF"), tag_value);
+    }
+
     let exif_ifd_offset =
         ifd0_tags
             .iter()
@@ -1123,6 +1152,9 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
             tag_id,
             0x9101 // ComponentsConfiguration
                 | 0x9102 // CompressedBitsPerPixel
+                | 0xA217 // SensingMethod
+                | 0xA301 // SceneType
+                | 0xA403 // SceneCaptureType
                 | 0x9208 // LightSource
                 | 0xA405 // FocalLengthIn35mmFormat
                 | 0xA407 // GainControl
@@ -1140,7 +1172,12 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
             continue;
         }
 
-        let tag_name = lookup_tag_name(tag_id, "ExifIFD");
+        let ifd_name = if matches!(tag_id, 0xA217 | 0xA301 | 0xA403) {
+            "EXIF"
+        } else {
+            "ExifIFD"
+        };
+        let tag_name = lookup_tag_name(tag_id, ifd_name);
         let tag_value = if let Some(value) = format_exif_display_value(
             tag_id,
             raw_bytes.as_ref(),
@@ -1158,8 +1195,8 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
     // The preview EXIF also carries an Interoperability IFD (ExifIFD tag
     // 0xA005 -> InteropOffset). ExifTool reports [InteropIFD] InteropIndex for
     // Panasonic.rw2; oxidex never descended into it (measured gap 2026-07-27).
-    // Only InteropIndex is taken: InteropVersion is not among the gaps the
-    // comparator reports for RW2, so emitting it would add an unmatched tag.
+    // InteropVersion (InteropIFD tag 0x0002) is also reported in the EXIF
+    // family.
     if let Some(interop_offset) =
         exif_tags
             .iter()
@@ -1177,7 +1214,8 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
     Ok(())
 }
 
-/// Emit InteropIFD tag 0x0001 (InteropIndex) with ExifTool's PrintConv.
+/// Emit InteropIFD tag 0x0001 (InteropIndex) with ExifTool's PrintConv and
+/// tag 0x0002 (InteropVersion) as its stored version string.
 ///
 /// Exif.pm, Image::ExifTool::Exif::Main InteropIFD table, verbatim:
 /// ```text
