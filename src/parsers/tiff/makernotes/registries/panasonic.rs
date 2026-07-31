@@ -17,13 +17,13 @@ use super::super::shared::{generic_decoders::*, tag_registry::TagRegistry};
 // Re-export decoders from panasonic.rs
 // These decoders are defined using const_decoder! macros in the main parser
 use super::super::panasonic::{
-    ADVANCED_SCENE_TYPE, AF_AREA_MODE, AF_ASSIST_LAMP, AUDIO, BRACKET_SETTINGS, BURST_MODE,
-    BURST_SPEED, CLEAR_RETOUCH, COLOR_EFFECT, CONTRAST_MODE, CONVERSION_LENS, FACE_DETECTION,
-    FILM_MODE, FLASH_CURTAIN, FLASH_WARNING, FOCUS_MODE, HDR, IMAGE_STABILIZATION,
-    INTELLIGENT_D_RANGE, INTELLIGENT_EXPOSURE, INTELLIGENT_RESOLUTION, INTERNAL_ND_FILTER,
-    LONG_EXPOSURE_NR, MACRO_MODE, NOISE_REDUCTION, OPTICAL_ZOOM_MODE, PHOTO_STYLE, ROTATION,
-    SELF_TIMER_MODE, SHADING_COMPENSATION, SHOOTING_MODE, SHUTTER_TYPE, SWEEP_PANORAMA_DIRECTION,
-    TEXT_STAMP, TIMER_RECORDING, TOUCH_AE, WHITE_BALANCE, WORLD_TIME_LOCATION,
+    AF_ASSIST_LAMP, AUDIO, BRACKET_SETTINGS, BURST_MODE, BURST_SPEED, CLEAR_RETOUCH, COLOR_EFFECT,
+    COLOR_MODE, CONTRAST_MODE, CONVERSION_LENS, FACE_DETECTION, FILM_MODE, FLASH_CURTAIN,
+    FLASH_WARNING, FOCUS_MODE, HDR, IMAGE_QUALITY, IMAGE_STABILIZATION, INTELLIGENT_D_RANGE,
+    INTELLIGENT_EXPOSURE, INTELLIGENT_RESOLUTION, INTERNAL_ND_FILTER, LONG_EXPOSURE_NR, MACRO_MODE,
+    NOISE_REDUCTION, OPTICAL_ZOOM_MODE, PHOTO_STYLE, ROTATION, SELF_TIMER, SHADING_COMPENSATION,
+    SHOOTING_MODE, SHUTTER_TYPE, SWEEP_PANORAMA_DIRECTION, TEXT_STAMP, TIMER_RECORDING, TOUCH_AE,
+    WHITE_BALANCE, WORLD_TIME_LOCATION,
 };
 
 // ============================================================================
@@ -50,7 +50,6 @@ pub fn panasonic_registry() -> TagRegistry {
         // ====================================================================
         // String tags - text-based metadata fields
         // ====================================================================
-        .register_string_tag(0x0001, "ImageQuality")
         .register_string_tag(0x0002, "FirmwareVersion")
         .register_string_tag(0x0025, "InternalSerialNumber")
         .register_string_tag(0x0026, "PanasonicExifVersion")
@@ -69,9 +68,11 @@ pub fn panasonic_registry() -> TagRegistry {
         // Enumerated tags with decoders - values mapped to human-readable strings
         // ====================================================================
         // Basic camera settings
+        .register_enum_tag_required(0x0001, "ImageQuality", &IMAGE_QUALITY)
         .register_enum_tag_required(0x0003, "WhiteBalance", &WHITE_BALANCE)
         .register_enum_tag_required(0x0007, "FocusMode", &FOCUS_MODE)
-        .register_enum_tag_required(0x000F, "AFAreaMode", &AF_AREA_MODE)
+        // 0x000F AFAreaMode is an int8u pair decoded in parse_entry
+        .register_raw(0x000F, "AFAreaMode")
         .register_enum_tag_required(0x001A, "ImageStabilization", &IMAGE_STABILIZATION)
         .register_enum_tag_required(0x001C, "MacroMode", &MACRO_MODE)
         .register_enum_tag_required(0x001F, "ShootingMode", &SHOOTING_MODE)
@@ -80,10 +81,10 @@ pub fn panasonic_registry() -> TagRegistry {
         .register_enum_tag_required(0x002A, "BurstMode", &BURST_MODE)
         .register_enum_tag_required(0x002C, "ContrastMode", &CONTRAST_MODE)
         .register_enum_tag_required(0x002D, "NoiseReduction", &NOISE_REDUCTION)
-        .register_enum_tag_required(0x002E, "SelfTimer", &SELF_TIMER_MODE)
+        .register_enum_tag_required(0x002E, "SelfTimer", &SELF_TIMER)
         .register_enum_tag_required(0x0030, "Rotation", &ROTATION)
         .register_enum_tag_required(0x0031, "AFAssistLamp", &AF_ASSIST_LAMP)
-        .register_raw(0x0032, "ColorMode")
+        .register_enum_tag_required(0x0032, "ColorMode", &COLOR_MODE)
         .register_enum_tag_required(0x0034, "OpticalZoomMode", &OPTICAL_ZOOM_MODE)
         .register_enum_tag_required(0x0035, "ConversionLens", &CONVERSION_LENS)
         .register_integer_tag(0x0036, "TravelDay", None)
@@ -93,7 +94,8 @@ pub fn panasonic_registry() -> TagRegistry {
         .register_enum_tag_required(0x003A, "WorldTimeLocation", &WORLD_TIME_LOCATION)
         .register_enum_tag_required(0x003B, "TextStamp", &TEXT_STAMP)
         .register_integer_tag(0x003C, "ProgramISO", None)
-        .register_enum_tag_required(0x003D, "AdvancedSceneType", &ADVANCED_SCENE_TYPE)
+        // AdvancedSceneType has no PrintConv in ExifTool; it stays numeric
+        .register_integer_tag(0x003D, "AdvancedSceneType", None)
         .register_enum_tag_required(0x003E, "TextStamp2", &TEXT_STAMP)
         .register_integer_tag(0x003F, "FacesDetected", None)
         .register_integer_tag(0x0044, "ColorTempKelvin", None)

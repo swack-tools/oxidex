@@ -290,12 +290,12 @@ fn test_panasonic_parse_enumerated_values() {
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
     data.extend_from_slice(&[0x07, 0x00, 0x00, 0x00]);
 
-    // Entry 4: FilmMode (tag 0x0042) = Cinelike D (value 22)
-    // Registry: 0x0042 = FilmMode
+    // Entry 4: FilmMode (tag 0x0042) = Dynamic (color) (value 2)
+    // Registry: 0x0042 = FilmMode (table from ExifTool Panasonic.pm)
     data.extend_from_slice(&[0x42, 0x00]);
     data.extend_from_slice(&[0x03, 0x00]);
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-    data.extend_from_slice(&[0x16, 0x00, 0x00, 0x00]); // 22
+    data.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]); // 2
 
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
 
@@ -317,7 +317,7 @@ fn test_panasonic_parse_enumerated_values() {
     );
     assert_eq!(
         tags.get("Panasonic:FilmMode"),
-        Some(&"Cinelike D".to_string())
+        Some(&"Dynamic (color)".to_string())
     );
 }
 
