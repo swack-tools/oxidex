@@ -31,52 +31,12 @@ pub use photoshop::parse_photoshop_irb;
 /// Renders a number the way Perl stringifies an NV (`%.15g`), which is what
 /// every ExifTool value ultimately goes through.
 ///
-/// A 32-bit float widened to a double keeps its binary error, so 1.1f32
-/// prints as "1.10000002384186" here exactly as it does under ExifTool --
-/// rounding it to "1.1" would be a value ExifTool never reports.
-pub(crate) fn perl_number(value: f64) -> String {
-    if value == 0.0 {
-        // Perl prints both +0.0 and -0.0 as "0".
-        return "0".to_string();
-    }
-    if !value.is_finite() {
-        return format!("{}", value);
-    }
-    let exponent = value.abs().log10().floor() as i32;
-    let rendered = if !(-4..15).contains(&exponent) {
-        format!("{:.14e}", value)
-    } else {
-        let precision = (14 - exponent).max(0) as usize;
-        format!("{:.*}", precision, value)
-    };
-    trim_trailing_zeros(&rendered)
-}
-
-/// Drops the trailing zeros `%g` suppresses ("72.00000000000000" -> "72") and
-/// rewrites Rust's exponent suffix in C's `%g` form, which is what Perl
-/// prints: a sign is always present and the exponent is at least two digits,
-/// so `1e20` becomes `1e+20` and `1.5e-7` becomes `1.5e-07`.
-fn trim_trailing_zeros(rendered: &str) -> String {
-    let (mantissa, exponent) = match rendered.split_once('e') {
-        Some((m, e)) => (m, Some(e)),
-        None => (rendered, None),
-    };
-    let mantissa = if mantissa.contains('.') {
-        mantissa.trim_end_matches('0').trim_end_matches('.')
-    } else {
-        mantissa
-    };
-    match exponent {
-        Some(e) => {
-            let (sign, digits) = match e.strip_prefix('-') {
-                Some(rest) => ('-', rest),
-                None => ('+', e.strip_prefix('+').unwrap_or(e)),
-            };
-            format!("{}e{}{:0>2}", mantissa, sign, digits)
-        }
-        None => mantissa.to_string(),
-    }
-}
+/// Re-exported from the shared formatter so every APP-segment parser and the
+/// TIFF MakerNote parsers stringify through one implementation. A 32-bit
+/// float widened to a double keeps its binary error, so 1.1f32 prints as
+/// "1.10000002384186" here exactly as it does under ExifTool -- rounding it
+/// to "1.1" would be a value ExifTool never reports.
+pub(crate) use crate::core::formatters::perl_number;
 
 #[cfg(test)]
 mod tests {
