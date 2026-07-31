@@ -409,8 +409,10 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     let mut ifd_offset = first_ifd_offset;
     let mut ifd_index = 0;
 
-    // CR2 IFD0 thumbnail byte count for PreviewImage/PreviewImageLength
+    // CR2 IFD0 preview byte count and IFD1 thumbnail location.
     let mut cr2_thumbnail_length: Option<u32> = None;
+    let mut cr2_ifd1_thumbnail_offset: Option<u32> = None;
+    let mut cr2_ifd1_thumbnail_length: Option<u32> = None;
 
     // Add format-specific tag to identify file type
     metadata.insert(
@@ -490,10 +492,27 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // thumbnail JPEG preview (ExifTool EXIF:PreviewImage).
                     if format == RawFormat::CanonCR2
                         && ifd_index == 0
-                        && *tag_id == 0x0117
                         && bytes.len() >= 4
                     {
-                        cr2_thumbnail_length = Some(read_u32(bytes, byte_order));
+                        match *tag_id {
+                            // Exif.pm 0x0111 notes that StripOffsets is named
+                            // PreviewImageStart in IFD0 of CR2 images.
+                            0x0111 => {
+                                let value = read_u32(bytes, byte_order);
+                                metadata.insert(
+                                    "EXIF:PreviewImageStart".to_string(),
+                                    TagValue::new_integer(i64::from(value)),
+                                );
+                                continue;
+                            }
+                            // Exif.pm 0x0117 is the OffsetPair companion of
+                            // StripOffsets and supplies PreviewImageLength.
+                            0x0117 => {
+                                cr2_thumbnail_length = Some(read_u32(bytes, byte_order));
+                                continue;
+                            }
+                            _ => {}
+                        }
                     }
 
                     // Check for SubIFD pointer (tag 0x014A) - common in RAW formats
@@ -561,6 +580,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         match *tag_id {
                             0x0201 if bytes.len() >= 4 => {
                                 let value = read_u32(bytes, byte_order);
+                                cr2_ifd1_thumbnail_offset = Some(value);
                                 metadata.insert(
                                     "EXIF:ThumbnailOffset".to_string(),
                                     TagValue::new_integer(value as i64),
@@ -569,16 +589,10 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             }
                             0x0202 if bytes.len() >= 4 => {
                                 let value = read_u32(bytes, byte_order);
+                                cr2_ifd1_thumbnail_length = Some(value);
                                 metadata.insert(
-                                    "EXIF:PreviewImageLength".to_string(),
-                                    TagValue::new_integer(value as i64),
-                                );
-                                metadata.insert(
-                                    "EXIF:PreviewImage".to_string(),
-                                    TagValue::new_string(format!(
-                                        "(Binary data {} bytes, use -b option to extract)",
-                                        value
-                                    )),
+                                    "EXIF:ThumbnailLength".to_string(),
+                                    TagValue::new_integer(i64::from(value)),
                                 );
                                 continue;
                             }
@@ -697,6 +711,16 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         *value_count,
                         byte_order,
                     ) {
+                        TagValue::new_string(value)
+                    } else if format == RawFormat::CanonCR2
+                        && *tag_id == 0xC5D8
+                        && let Some(value) = format_cr2_cfa_pattern(
+                            bytes,
+                            *field_type,
+                            *value_count,
+                            byte_order,
+                        )
+                    {
                         TagValue::new_string(value)
                     } else if format == RawFormat::AdobeDNG {
                         format_dng_integer_array(
@@ -1074,6 +1098,18 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         )),
                     );
                 }
+            }
+            if let (Some(offset), Some(length)) =
+                (cr2_ifd1_thumbnail_offset, cr2_ifd1_thumbnail_length)
+                && let (Ok(start), Ok(length)) =
+                    (usize::try_from(offset), usize::try_from(length))
+                && let Some(end) = start.checked_add(length)
+                && let Some(thumbnail) = data.get(start..end)
+            {
+                metadata.insert(
+                    "EXIF:ThumbnailImage".to_string(),
+                    TagValue::Binary(thumbnail.to_vec()),
+                );
             }
             extract_cr2_tags(&mut metadata);
         }
@@ -2042,6 +2078,44 @@ fn format_rational_as_string(bytes: &[u8], byte_order: ByteOrder) -> Option<Stri
     Some(format!("{}", f64::from(numerator) / f64::from(denominator)))
 }
 
+/// Format CanonRaw tag 0xC5D8 (CR2CFAPattern).
+///
+/// CanonRaw.pm defines this as `int16u`, `Count => 4`, with these exact
+/// PrintConv keys. It is not the dimension-and-cell representation used by
+/// EXIF tag 0xA302, and the generic SHORT decoder otherwise emits only the
+/// first component.
+fn format_cr2_cfa_pattern(
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    if field_type != 3 || value_count != 4 {
+        return None;
+    }
+
+    let values = bytes.get(..8)?;
+    let read_component = |chunk: &[u8]| match byte_order {
+        ByteOrder::LittleEndian => u16::from_le_bytes([chunk[0], chunk[1]]),
+        ByteOrder::BigEndian => u16::from_be_bytes([chunk[0], chunk[1]]),
+    };
+    let components = [
+        read_component(&values[0..2]),
+        read_component(&values[2..4]),
+        read_component(&values[4..6]),
+        read_component(&values[6..8]),
+    ];
+
+    let pattern = match components {
+        [1, 2, 0, 1] => "[Red,Green][Green,Blue]",
+        [0, 1, 1, 2] => "[Green,Red][Blue,Green]",
+        [2, 1, 1, 0] => "[Green,Blue][Red,Green]",
+        [1, 0, 2, 1] => "[Blue,Green][Green,Red]",
+        _ => return None,
+    };
+    Some(pattern.to_string())
+}
+
 /// Format PanasonicRaw tag 0x0009 (CFAPattern).
 ///
 /// Panasonic stores the Bayer arrangement as a single SHORT enum rather than
@@ -2198,6 +2272,64 @@ mod cfa_pattern_tests {
         assert_eq!(
             decode_exif_cfa_pattern(&bytes, ByteOrder::LittleEndian),
             None
+        );
+    }
+
+    #[test]
+    fn extracts_cr2_preview_thumbnail_and_cfa_pattern_through_dispatch() {
+        let mut data = vec![0u8; 104];
+        data[0..12].copy_from_slice(b"II\x2a\x00\x10\x00\x00\x00CR\x02\x00");
+
+        // IFD0 at 16: CR2 PreviewImageStart/Length plus CR2CFAPattern.
+        data[16..18].copy_from_slice(&3u16.to_le_bytes());
+        let ifd0_entries = [
+            (0x0111u16, 4u16, 1u32, 100u32.to_le_bytes()),
+            (0x0117u16, 4u16, 1u32, 4u32.to_le_bytes()),
+            (0xC5D8u16, 3u16, 4u32, 92u32.to_le_bytes()),
+        ];
+        for (index, (tag_id, field_type, count, value)) in ifd0_entries.iter().enumerate() {
+            let start = 18 + index * 12;
+            data[start..start + 2].copy_from_slice(&tag_id.to_le_bytes());
+            data[start + 2..start + 4].copy_from_slice(&field_type.to_le_bytes());
+            data[start + 4..start + 8].copy_from_slice(&count.to_le_bytes());
+            data[start + 8..start + 12].copy_from_slice(value);
+        }
+        data[54..58].copy_from_slice(&58u32.to_le_bytes());
+
+        // IFD1 at 58: JPEGInterchangeFormat/Length point to a four-byte JPEG.
+        data[58..60].copy_from_slice(&2u16.to_le_bytes());
+        let ifd1_entries = [
+            (0x0201u16, 4u16, 1u32, 88u32.to_le_bytes()),
+            (0x0202u16, 4u16, 1u32, 4u32.to_le_bytes()),
+        ];
+        for (index, (tag_id, field_type, count, value)) in ifd1_entries.iter().enumerate() {
+            let start = 60 + index * 12;
+            data[start..start + 2].copy_from_slice(&tag_id.to_le_bytes());
+            data[start + 2..start + 4].copy_from_slice(&field_type.to_le_bytes());
+            data[start + 4..start + 8].copy_from_slice(&count.to_le_bytes());
+            data[start + 8..start + 12].copy_from_slice(value);
+        }
+        data[88..92].copy_from_slice(&[0xff, 0xd8, 0xff, 0xd9]);
+        data[92..100].copy_from_slice(&[1, 0, 2, 0, 0, 0, 1, 0]);
+        data[100..104].copy_from_slice(&[0xff, 0xd8, 0xff, 0xd9]);
+
+        let metadata =
+            parse_raw_metadata(&data, RawFormat::CanonCR2).expect("synthetic CR2 should parse");
+        assert_eq!(
+            metadata.get("EXIF:PreviewImageStart"),
+            Some(&TagValue::new_integer(100))
+        );
+        assert_eq!(
+            metadata.get("EXIF:ThumbnailLength"),
+            Some(&TagValue::new_integer(4))
+        );
+        assert_eq!(
+            metadata.get("EXIF:ThumbnailImage"),
+            Some(&TagValue::Binary(vec![0xff, 0xd8, 0xff, 0xd9]))
+        );
+        assert_eq!(
+            metadata.get("EXIF:CR2CFAPattern"),
+            Some(&TagValue::new_string("[Red,Green][Green,Blue]"))
         );
     }
 }
