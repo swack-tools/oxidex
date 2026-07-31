@@ -924,20 +924,23 @@ mod tests {
 
     /// A PAT naming a single program carried on `pmt_pid`.
     fn pat_section(pmt_pid: u16) -> Vec<u8> {
-        // table_id, syntax+length, program_number, version, section numbers
+        // Everything after the 3-byte table_id/section_length header. Program
+        // entries begin at section byte 8, so all five header-tail bytes have
+        // to be present; dropping any of them slides the entry backwards and
+        // the parser then reads a PID that was never written.
         let body = [
-            0x00u8,
-            0x01,
-            0xc1,
-            0x00,
-            0x00,
-            0x00,
-            0x01,
+            0x00u8, // transport_stream_id (high)
+            0x01,   // transport_stream_id (low)
+            0xc1,   // version / current_next_indicator
+            0x00,   // section_number
+            0x00,   // last_section_number
+            0x00,   // program_number (high)
+            0x01,   // program_number (low)
             (pmt_pid >> 8) as u8 | 0xe0,
             (pmt_pid & 0xff) as u8,
         ];
         let mut section = vec![0x00u8, 0x80, 0x00];
-        section.extend_from_slice(&body[3..]);
+        section.extend_from_slice(&body);
         section.extend_from_slice(&[0, 0, 0, 0]); // CRC
         let len = (section.len() - 3) as u16;
         section[1] = 0x80 | ((len >> 8) as u8 & 0x0f);
