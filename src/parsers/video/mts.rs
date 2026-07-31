@@ -1132,11 +1132,21 @@ mod tests {
             true,
             &psi_payload(&pmt_section(0x81, 0x1100, &[])),
         ));
-        // PES payload: sample rate code 0 in the top 2 bits after the sync word.
+        // The parser only accumulates a payload that starts with a real PES
+        // packet (`strip_pes_header`), so the AC-3 bytes must arrive wrapped
+        // in one: start code + private_stream_1, then an empty optional
+        // header, then the elementary stream.
         data.extend_from_slice(&ts_packet(
             0x1100,
             true,
-            &[0x00, 0x00, 0x0b, 0x77, 0xaa, 0xbb, 0x3f],
+            &[
+                0x00, 0x00, 0x01, 0xbd, // PES start code, private_stream_1
+                0x00, 0x08, // packet_length: optional header + payload
+                0x80, 0x00, 0x00, // marker bits '10', no flags, no header data
+                // AC-3 sync word, CRC, and the byte whose top 2 bits are the
+                // sample rate code (0 => 48000).
+                0x0b, 0x77, 0xaa, 0xbb, 0x3f,
+            ],
         ));
         data.extend_from_slice(&null_packet());
 
