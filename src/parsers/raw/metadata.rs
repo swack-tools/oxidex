@@ -3159,11 +3159,28 @@ fn parse_sigma_x3f(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         TagValue::new_string(format!("{}.{}", version_major, version_minor)),
     );
 
-    // Unique identifier (16 bytes at offset 8)
-    // Skip for now - it's binary data
+    // Unique identifier (16 bytes at offset 8).
+    //
+    // SigmaRaw.pm:75 -- Header index 2 is `undef[16]` with
+    // `ValueConv => 'unpack("H*", $val)'`, i.e. a lowercase hex dump of the
+    // raw bytes, NOT a printable string. The first 8 digits are the ASCII
+    // serial number with an extra leading "0" ("02001234" on Sigma.x3f),
+    // which is why the tag looks half-readable.
+    metadata.insert(
+        "SigmaRaw:ImageUniqueID".to_string(),
+        TagValue::new_string(hex::encode(&data[8..24])),
+    );
 
-    // Mark bits at offset 24
-    let _mark_bits = u32::from_le_bytes([data[24], data[25], data[26], data[27]]);
+    // Mark bits at offset 24 (Header index 6).
+    //
+    // SigmaRaw.pm:81 declares `PrintConv => { BITMASK => { } }` -- an empty
+    // bit lookup, so ExifTool::DecodeBits renders no set bits as "(none)"
+    // and any set bit as "[n]" joined with ", " (ExifTool.pm:6385-6407).
+    let mark_bits = u32::from_le_bytes([data[24], data[25], data[26], data[27]]);
+    metadata.insert(
+        "SigmaRaw:MarkBits".to_string(),
+        TagValue::new_string(print_x3f_mark_bits(mark_bits)),
+    );
 
     // Image dimensions at offset 28-35
     let columns = u32::from_le_bytes([data[28], data[29], data[30], data[31]]);
@@ -3207,20 +3224,27 @@ fn parse_sigma_x3f(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         }
     }
 
-    // Color mode string (32 bytes at offset 72) - introduced in v2.3
+    // String at offset 72 (Header index 18), 32 bytes - introduced in v2.3.
+    //
+    // SigmaRaw.pm:88 names this SceneCaptureType, not ColorMode. Emitting it
+    // as SigmaRaw:ColorMode put a correct value ("Standard" on SigmaDP2.x3f)
+    // under a key ExifTool never emits, so it counted as an extra on one side
+    // while SigmaRaw:SceneCaptureType counted as missing on the other.
     if version >= 0x00020003 && data.len() >= 104 {
-        let cm_bytes = &data[72..104];
-        if let Some(end) = cm_bytes.iter().position(|&b| b == 0) {
+        let sct_bytes = &data[72..104];
+        if let Some(end) = sct_bytes.iter().position(|&b| b == 0) {
             if end > 0 {
-                if let Ok(cm) = std::str::from_utf8(&cm_bytes[..end]) {
+                if let Ok(sct) = std::str::from_utf8(&sct_bytes[..end]) {
                     metadata.insert(
-                        "SigmaRaw:ColorMode".to_string(),
-                        TagValue::new_string(cm.to_string()),
+                        "SigmaRaw:SceneCaptureType".to_string(),
+                        TagValue::new_string(sct.to_string()),
                     );
                 }
             }
         }
     }
+
+    parse_x3f_extended_header(data, version_major, version_minor, &mut metadata);
 
     // Find directory section - it's near the end of the file
     // The directory offset is stored at (file_size - 4)
@@ -3295,7 +3319,7 @@ fn parse_sigma_x3f(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
             }
             b"SECi" | b"IMA0" | b"IMA1" | b"IMA2" => {
                 // Image section - may contain embedded EXIF data
-                parse_x3f_image_section(entry_data, &mut metadata, format);
+                parse_x3f_image_section(entry_data, entry_offset, &mut metadata, format);
             }
             b"CAMF" => {
                 // Camera settings - complex format, skip for now
@@ -3307,6 +3331,322 @@ fn parse_sigma_x3f(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     }
 
     Ok(metadata)
+}
+
+/// Walks the EXIF of the JPEG embedded in an X3F image section.
+///
+/// `SigmaRaw.pm`'s Main NOTES: "Metadata is also extracted from the JpgFromRaw
+/// image if it exists (all models but the SD9 and SD10)." ExifTool runs its
+/// ordinary JPEG reader over that image, so the EXIF group of an X3F is
+/// whatever a standalone `exiftool` run on the extracted JpgFromRaw reports:
+/// all of IFD0, all of the ExifIFD, the Interoperability IFD, and IFD1's
+/// thumbnail pointers.
+///
+/// This used to be two overlapping passes, each keeping a hand-written
+/// whitelist of about fifteen tag IDs "to match ExifTool's X3F output exactly".
+/// Measured on SigmaDP2.x3f: ExifTool reports 43 EXIF keys there and the
+/// whitelists let 16 through, so 27 correctly-parsed tags were being discarded
+/// on the way out.
+///
+/// The MakerNote (0x927C) is deliberately left alone -- see
+/// `parse_x3f_image_section`'s caller notes; oxidex's Sigma MakerNote registry
+/// disagrees with `Sigma.pm` on tag IDs 0x1a-0x30, so dispatching it here would
+/// trade missing tags for wrong ones.
+fn parse_x3f_embedded_jpeg_exif(
+    jpeg_data: &[u8],
+    jpeg_file_offset: usize,
+    metadata: &mut MetadataMap,
+) {
+    let Ok(Some(tiff_data)) = find_jpeg_exif_tiff(jpeg_data) else {
+        return;
+    };
+    let Ok(byte_order) = detect_byte_order(tiff_data) else {
+        return;
+    };
+    if tiff_data.len() < 8 {
+        return;
+    }
+    let ifd0_offset = u64::from(read_u32(&tiff_data[4..8], byte_order));
+    let reader = SliceReader::new(tiff_data);
+    let Ok(ifd0_tags) = parse_ifd(&reader, ifd0_offset, byte_order) else {
+        return;
+    };
+
+    let mut exif_ifd_offset: Option<u64> = None;
+    for (tag_id, _field_type, _value_count, raw_bytes) in &ifd0_tags {
+        if *tag_id == 0x8769 && raw_bytes.as_ref().len() >= 4 {
+            exif_ifd_offset = Some(u64::from(read_u32(raw_bytes.as_ref(), byte_order)));
+        }
+    }
+    emit_x3f_exif_tags(&ifd0_tags, "IFD0", byte_order, metadata);
+
+    let mut interop_ifd_offset: Option<u64> = None;
+    if let Some(offset) = exif_ifd_offset
+        && let Ok(exif_tags) = parse_ifd(&reader, offset, byte_order)
+    {
+        for (tag_id, _field_type, _value_count, raw_bytes) in &exif_tags {
+            if *tag_id == 0xA005 && raw_bytes.as_ref().len() >= 4 {
+                interop_ifd_offset = Some(u64::from(read_u32(raw_bytes.as_ref(), byte_order)));
+            }
+        }
+        emit_x3f_exif_tags(&exif_tags, "ExifIFD", byte_order, metadata);
+    }
+
+    if let Some(offset) = interop_ifd_offset
+        && let Ok(interop_tags) = parse_ifd(&reader, offset, byte_order)
+    {
+        emit_x3f_exif_tags(&interop_tags, "InteropIFD", byte_order, metadata);
+    }
+
+    // The next-IFD pointer sits immediately after IFD0's entries: 2 bytes of
+    // count plus 12 bytes per entry.
+    let ifd1_pos = ifd0_offset + 2 + ifd0_tags.len() as u64 * 12;
+    if ifd1_pos + 4 > tiff_data.len() as u64 {
+        return;
+    }
+    let ifd1_offset = read_u32(
+        &tiff_data[ifd1_pos as usize..(ifd1_pos + 4) as usize],
+        byte_order,
+    );
+    if ifd1_offset == 0 {
+        return;
+    }
+    let Ok(ifd1_tags) = parse_ifd(&reader, u64::from(ifd1_offset), byte_order) else {
+        return;
+    };
+    // Only IFD1's own tags. Orientation/XResolution/YResolution/ResolutionUnit/
+    // YCbCrPositioning repeat here with the same ExifTool names as IFD0's, and
+    // family 0 collapses both IFDs into "EXIF", so emitting them again would
+    // let the thumbnail's copy overwrite the main image's.
+    for (tag_id, field_type, value_count, raw_bytes) in &ifd1_tags {
+        if !matches!(
+            *tag_id,
+            0x0103 // Compression
+                | 0x0202 // ThumbnailLength
+        ) {
+            continue;
+        }
+        emit_x3f_exif_tag(
+            *tag_id,
+            *field_type,
+            *value_count,
+            raw_bytes.as_ref(),
+            "IFD1",
+            byte_order,
+            metadata,
+        );
+    }
+
+    // ThumbnailOffset is an IsOffset tag: ExifTool reports it relative to the
+    // enclosing file, not to the TIFF header. `ProcessX3FDirectory` bumps
+    // `$$et{BASE}` by the JpgFromRaw's own file offset before calling
+    // ProcessJPEG (SigmaRaw.pm:578-582), and the EXIF reader adds the TIFF
+    // header's 12-byte position inside the JPEG on top of that. Measured on
+    // SigmaDP2.x3f: the stored value is 2360, `exiftool` on the extracted JPEG
+    // prints 2372 (= 2360 + 12) and on the X3F prints 2664 (= 2360 + 12 + 292,
+    // the JpgFromRaw payload starting at file offset 292).
+    //
+    // The APP1 gate in the caller guarantees the Exif segment is the JPEG's
+    // first, so its TIFF header is at a fixed +12: SOI(2) + APP1 marker(2) +
+    // length(2) + "Exif\0\0"(6).
+    const JPEG_APP1_TIFF_OFFSET: usize = 12;
+    if let Some((_, _, _, raw_bytes)) = ifd1_tags.iter().find(|(id, ..)| *id == 0x0201)
+        && let Some(stored) = read_tiff_u32(raw_bytes.as_ref(), byte_order)
+    {
+        let absolute = u64::from(stored) + (jpeg_file_offset + JPEG_APP1_TIFF_OFFSET) as u64;
+        metadata.insert(
+            "IFD1:ThumbnailOffset".to_string(),
+            TagValue::new_integer(absolute as i64),
+        );
+    }
+}
+
+/// Emits every named tag of one parsed IFD from an X3F's embedded JPEG.
+fn emit_x3f_exif_tags(
+    tags: &[(u16, u16, u32, impl AsRef<[u8]>)],
+    ifd_name: &str,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    for (tag_id, field_type, value_count, raw_bytes) in tags {
+        emit_x3f_exif_tag(
+            *tag_id,
+            *field_type,
+            *value_count,
+            raw_bytes.as_ref(),
+            ifd_name,
+            byte_order,
+            metadata,
+        );
+    }
+}
+
+/// Emits one EXIF tag from an X3F's embedded JPEG, skipping the ones ExifTool
+/// consumes structurally rather than reporting.
+fn emit_x3f_exif_tag(
+    tag_id: u16,
+    field_type: u16,
+    value_count: u32,
+    bytes: &[u8],
+    ifd_name: &str,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    // Sub-directory pointers are followed, never reported, and the MakerNote is
+    // handled (or, here, deliberately not handled) separately.
+    if matches!(
+        tag_id,
+        0x8769 // ExifOffset
+            | 0x8825 // GPSInfo
+            | 0xA005 // InteropOffset
+            | 0x927C // MakerNote
+    ) {
+        return;
+    }
+    let tag_name = match (ifd_name, tag_id) {
+        // 0x0202 carries three different ExifTool names depending on the
+        // directory (JPEGInterchangeFormatLength, PreviewImageLength,
+        // ThumbnailLength), and the tag database resolves it to one of the
+        // others, so the IFD1 spelling has to be pinned here -- the same rule
+        // psd.rs applies in `lookup_ifd1_tag_name`. (0x0201 needs a base
+        // adjustment as well and is handled by the caller.)
+        ("IFD1", 0x0202) => "IFD1:ThumbnailLength".to_string(),
+        _ => lookup_tag_name(tag_id, ifd_name),
+    };
+    // An unrecognised ID falls back to a hex name ExifTool never prints, which
+    // would land as an oxidex-only tag.
+    if tag_name.contains(":0x") {
+        return;
+    }
+    let tag_value = if let Some(value) =
+        format_exif_display_value(tag_id, bytes, field_type, value_count, byte_order)
+    {
+        TagValue::new_string(value)
+    } else {
+        raw_bytes_to_simple_tag_value(bytes, field_type, value_count, byte_order)
+    };
+    metadata.insert(tag_name, tag_value);
+}
+
+/// Applies `SigmaRaw.pm`'s LENSMODEL ValueConv + PrintConv.
+///
+/// The stored value is a hex string without the `0x` (`"145"`). ExifTool's
+/// ValueConv turns that into the number 0x145 and its PrintConv looks it up in
+/// `%sigmaLensTypes` with `PrintHex => 1`, so an id the table does not carry
+/// prints as `Unknown (0x145)`. A value that is not hex digits at all -- the
+/// blank LENSMODEL SigmaDP2.x3f writes -- fails the ValueConv regex, stays a
+/// string, misses the lookup, and prints as `Unknown ( )`.
+fn print_sigma_lens_type(value: &str) -> String {
+    let is_hex_string = !value.is_empty() && value.chars().all(|c| c.is_ascii_hexdigit());
+    if is_hex_string && let Ok(lens_type) = u32::from_str_radix(value, 16) {
+        return match crate::parsers::raw::sigma_lens_types::lookup(lens_type) {
+            Some(name) => name.to_string(),
+            None => format!("Unknown (0x{:x})", lens_type),
+        };
+    }
+    format!("Unknown ({})", value)
+}
+
+/// Renders the X3F header's `MarkBits` field the way ExifTool does.
+///
+/// `SigmaRaw.pm:81` gives the tag `PrintConv => { BITMASK => { } }`. An empty
+/// BITMASK lookup still counts as a lookup in `ExifTool::DecodeBits`
+/// (`ExifTool.pm:6385`), so every set bit prints as `[n]`, the parts are joined
+/// with `", "`, and a value with no bits set prints as `(none)`.
+fn print_x3f_mark_bits(value: u32) -> String {
+    let bits: Vec<String> = (0..32)
+        .filter(|i| value & (1u32 << i) != 0)
+        .map(|i| format!("[{}]", i))
+        .collect();
+    if bits.is_empty() {
+        "(none)".to_string()
+    } else {
+        bits.join(", ")
+    }
+}
+
+/// Parses the 160-byte X3F extended header that follows the fixed header.
+///
+/// `SigmaRaw.pm:289 ProcessX3FHeader` reads it as 32 single-byte tag IDs at
+/// `hdrLen`, followed by 32 little-endian floats at `hdrLen + 32 + i * 4`. Slot
+/// `i` carries the value for the tag whose ID is byte `i`; ID 0 means "unused"
+/// and is skipped. IDs index `SigmaRaw::HeaderExt` (`SigmaRaw.pm:113-129`),
+/// every entry of which prints via `sprintf("%.1f",$val)`.
+///
+/// `ProcessX3F` (`SigmaRaw.pm:616-624`) only reads the block for file versions
+/// above 2.0 and below 4.0, and places it directly after the fixed header --
+/// which is 104 bytes from 2.3 on (SceneCaptureType was appended) and 72 bytes
+/// before that.
+///
+/// This block is where ExposureAdjust/Contrast/Shadow/Highlight/Saturation/
+/// Sharpness/RedAdjust/GreenAdjust/BlueAdjust/X3FillLight live. They are not
+/// SECp properties, so the property walk could never reach them and all ten
+/// were reported missing on both sample files.
+fn parse_x3f_extended_header(
+    data: &[u8],
+    version_major: u32,
+    version_minor: u32,
+    metadata: &mut MetadataMap,
+) {
+    // ExifTool gates on `2 < $ver < 4` with $ver the decimal "major.minor".
+    // Version 4+ uses a different 0x300-byte header with no extended block,
+    // and 2.0 predates the block entirely.
+    let has_extended_header = match version_major {
+        2 => version_minor > 0,
+        3 => true,
+        _ => false,
+    };
+    if !has_extended_header {
+        return;
+    }
+
+    // SceneCaptureType (32 bytes) was appended to the fixed header in 2.3.
+    let header_len = if version_minor > 2 { 104usize } else { 72 };
+
+    // The block is 32 ID bytes plus 32 four-byte floats.
+    if data.len() < header_len + 160 {
+        return;
+    }
+    let ids = &data[header_len..header_len + 32];
+    let values_start = header_len + 32;
+
+    for (index, &tag_id) in ids.iter().enumerate() {
+        let Some(name) = x3f_header_ext_tag_name(tag_id) else {
+            continue;
+        };
+        let offset = values_start + index * 4;
+        let value = f32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]);
+        metadata.insert(
+            format!("SigmaRaw:{}", name),
+            TagValue::new_string(format!("{:.1}", value)),
+        );
+    }
+}
+
+/// Maps an X3F extended-header tag ID to its ExifTool name.
+///
+/// Verbatim from `%Image::ExifTool::SigmaRaw::HeaderExt` (`SigmaRaw.pm:113`).
+/// ID 0 is `Unused` there and is deliberately not returned -- `ProcessX3FHeader`
+/// skips those slots rather than emitting a tag.
+fn x3f_header_ext_tag_name(tag_id: u8) -> Option<&'static str> {
+    match tag_id {
+        1 => Some("ExposureAdjust"),
+        2 => Some("Contrast"),
+        3 => Some("Shadow"),
+        4 => Some("Highlight"),
+        5 => Some("Saturation"),
+        6 => Some("Sharpness"),
+        7 => Some("RedAdjust"),
+        8 => Some("GreenAdjust"),
+        9 => Some("BlueAdjust"),
+        10 => Some("X3FillLight"),
+        _ => None,
+    }
 }
 
 /// Parse X3F property section (SECp)
@@ -3426,6 +3766,11 @@ fn convert_x3f_property_value(property: &str, value: &str) -> Option<String> {
 
         // SigmaRaw.pm:257  PrintConv => PrintExposureTime (already seconds)
         "SHUTTER" => Some(print_exposure_time(value.parse::<f64>().ok()?)),
+
+        // SigmaRaw.pm:227-234
+        //   ValueConv => '$val =~ /^[0-9a-f]+$/i ? hex($val) : $val'
+        //   PrintHex => 1, PrintConv => \%Image::ExifTool::Sigma::sigmaLensTypes
+        "LENSMODEL" => Some(print_sigma_lens_type(value)),
 
         // Enumerated properties. Each table is SigmaRaw.pm's PrintConv
         // verbatim; an unrecognised code passes through rather than being
@@ -3582,6 +3927,12 @@ fn map_x3f_property_name(name: &str) -> String {
         "TIME" => "SigmaRaw:DateTimeOriginal".to_string(),
         "LENSARANGE" => "SigmaRaw:LensApertureRange".to_string(),
         "LENSFRANGE" => "SigmaRaw:LensFocalRange".to_string(),
+        // SigmaRaw.pm:227 -- LENSMODEL is LensType, resolved through the shared
+        // "Sigma LensType" table. It used to be left unmapped on purpose,
+        // because emitting the raw id (145) under a real tag name would have
+        // been a wrong value; with the table transcribed, the PrintConv can be
+        // applied properly (see `convert_x3f_property_value`).
+        "LENSMODEL" => "SigmaRaw:LensType".to_string(),
         // EXPMODE, FLASHM, DRIVEMODE, WB/WBAL and COLORMODE are gone: none of
         // them is a key SigmaRaw.pm defines. They were spellings of keys that
         // do exist (PMODE, FLASH, DRIVE, WB_DESC), so the entries could never
@@ -3595,7 +3946,12 @@ fn map_x3f_property_name(name: &str) -> String {
 /// X3F image sections (SECi) can contain embedded TIFF/EXIF data. This function
 /// searches for TIFF headers throughout the image section data to locate and parse
 /// any embedded metadata.
-fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawFormat) {
+fn parse_x3f_image_section(
+    data: &[u8],
+    section_file_offset: usize,
+    metadata: &mut MetadataMap,
+    format: RawFormat,
+) {
     if data.len() < 28 {
         return;
     }
@@ -3611,248 +3967,41 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
 
     let image_type = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
     let _image_format = u32::from_le_bytes([data[12], data[13], data[14], data[15]]);
-    let columns = u32::from_le_bytes([data[16], data[17], data[18], data[19]]);
-    let rows = u32::from_le_bytes([data[20], data[21], data[22], data[23]]);
-    // Row stride at bytes 24-27 is not used for metadata extraction but
-    // is part of the SECi header layout.
-    let _row_stride = u32::from_le_bytes([data[24], data[25], data[26], data[27]]);
+    // Columns/rows at 16-23 and the row stride at 24-27 describe the image
+    // data, not metadata. They used to be published as
+    // MakerNotes:PreviewImageSize, but ExifTool takes that tag from the Sigma
+    // MakerNote inside the embedded JPEG (Sigma.pm 0x1c) and never from this
+    // header: on SigmaDP2.x3f ExifTool reports 640x480 while these fields say
+    // 567x378, so the emission was a wrong value under a real tag name.
 
-    // Store preview image dimensions for type 2/3
-    if (image_type == 2 || image_type == 3) && columns > 0 && rows > 0 {
-        metadata.insert(
-            "MakerNotes:PreviewImageSize".to_string(),
-            TagValue::new_string(format!("{}x{}", columns, rows)),
-        );
-
-        // Image types 2 (thumbnail) and 3 (preview JPEG) contain JPEG data
-        // with an APP1 EXIF segment. Parse it to extract the specific EXIF
-        // tags that ExifTool reports for X3F but oxidex currently misses:
-        //   DateTimeOriginal (0x9003), CreateDate (0x9004),
-        //   ComponentsConfiguration (0x9101), ColorSpace (0xA001),
-        //   CustomRendered (0xA401), Compression (0x0103 from IFD1).
-        //
-        // We intentionally skip MakerNote, InteropOffset, and all other
-        // tags to match ExifTool's X3F output exactly and avoid triggering
-        // unwanted composite tag generation.
-        if data.len() > 28 {
-            let jpeg_data = &data[28..];
-            if let Ok(Some(tiff_data)) = find_jpeg_exif_tiff(jpeg_data) {
-                if let Ok(byte_order) = detect_byte_order(tiff_data) {
-                    if tiff_data.len() >= 8 {
-                        let first_ifd_offset = read_u32(&tiff_data[4..8], byte_order) as u64;
-                        let reader = SliceReader::new(tiff_data);
-
-                        if let Ok(ifd0_tags) = parse_ifd(&reader, first_ifd_offset, byte_order) {
-                            let mut exif_ifd_offset: Option<u64> = None;
-
-                            for (tag_id, _field_type, _value_count, raw_bytes) in &ifd0_tags {
-                                if *tag_id == 0x8769 && raw_bytes.as_ref().len() >= 4 {
-                                    exif_ifd_offset =
-                                        Some(read_u32(raw_bytes.as_ref(), byte_order) as u64);
-                                }
-                            }
-
-                            // Parse ExifIFD: only the tags ExifTool reports
-                            // for X3F files.  Extracting MarkerNote or
-                            // InteropOffset here adds oxidex-only tags and
-                            // triggers spurious composite generation.
-                            if let Some(offset) = exif_ifd_offset {
-                                if let Ok(exif_tags) = parse_ifd(&reader, offset, byte_order) {
-                                    for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
-                                        // Whitelist: exact tag IDs ExifTool
-                                        // emits for SigmaDP2.x3f.
-                                        if !matches!(
-                                            *tag_id,
-                                            0x829A // ExposureTime
-                                                | 0x829D // FNumber
-                                                | 0x8822 // ExposureProgram
-                                                | 0x9000 // ExifVersion
-                                                | 0x9003 // DateTimeOriginal
-                                                | 0x9004 // CreateDate
-                                                | 0x9101 // ComponentsConfiguration
-                                                | 0x9204 // ExposureCompensation
-                                                | 0x9209 // Flash
-                                                | 0xA001 // ColorSpace
-                                                | 0xA002 // ExifImageWidth
-                                                | 0xA003 // ExifImageHeight
-                                                | 0xA300 // FileSource
-                                                | 0xA401 // CustomRendered
-                                                | 0xA402 // ExposureMode
-                                        ) {
-                                            continue;
-                                        }
-                                        let bytes = raw_bytes.as_ref();
-                                        let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
-                                        let tag_value = if let Some(value) =
-                                            format_exif_display_value(
-                                                *tag_id,
-                                                bytes,
-                                                *field_type,
-                                                *value_count,
-                                                byte_order,
-                                            ) {
-                                            TagValue::new_string(value)
-                                        } else {
-                                            raw_bytes_to_simple_tag_value(
-                                                bytes,
-                                                *field_type,
-                                                *value_count,
-                                                byte_order,
-                                            )
-                                        };
-                                        metadata.insert(tag_name, tag_value);
-                                    }
-                                }
-                            }
-
-                            // Parse IFD1 for Compression (0x0103). The
-                            // next-IFD pointer sits immediately after IFD0's
-                            // entries: 2 bytes count + N*12 bytes entries.
-                            //
-                            // This previously added a further "+ 4", reading
-                            // the four bytes *after* the pointer instead of the
-                            // pointer itself. Measured on SigmaDP2.x3f
-                            // (2026-07-27): IFD0 is at 8 with 10 entries, so
-                            // the pointer is at 130 and holds 2230 (a valid
-                            // IFD1 whose 0x0103 is 6 => "JPEG (old-style)");
-                            // reading at 134 yielded 1397311309, which is not
-                            // a valid IFD offset, so parse_ifd failed and
-                            // EXIF:Compression was never emitted.
-                            let ifd0_entry_count = ifd0_tags.len() as u64;
-                            let ifd1_pos = first_ifd_offset + 2 + ifd0_entry_count * 12;
-                            if ifd1_pos + 4 <= tiff_data.len() as u64 {
-                                let ifd1_offset = read_u32(
-                                    &tiff_data[ifd1_pos as usize..(ifd1_pos + 4) as usize],
-                                    byte_order,
-                                );
-                                if ifd1_offset != 0 {
-                                    if let Ok(ifd1_tags) =
-                                        parse_ifd(&reader, ifd1_offset as u64, byte_order)
-                                    {
-                                        for (tag_id, field_type, value_count, raw_bytes) in
-                                            &ifd1_tags
-                                        {
-                                            if *tag_id == 0x0103 {
-                                                let bytes = raw_bytes.as_ref();
-                                                let tag_value = format_x3f_compression(
-                                                    bytes,
-                                                    *field_type,
-                                                    *value_count,
-                                                    byte_order,
-                                                );
-                                                metadata.insert(
-                                                    "ExifIFD:Compression".to_string(),
-                                                    tag_value,
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    // ExifTool only treats an image section as a preview when its header is
+    // exactly version 2.0 / type 2 / format 0x12, i.e. JPEG-compressed
+    // (SigmaRaw.pm:551, `unless ($buff =~ /^SECi\0\0\x02\0\x02\0\0\0\x12\0\0\0/)`
+    // ... `next`). Sigma.x3f's three image sections are types 3, 2-format-0x0b
+    // and 2-format-0x03, all of which fail the gate -- which is exactly why
+    // ExifTool reports no PreviewImage and no JpgFromRaw for the SD10.
+    const X3F_JPEG_PREVIEW_HEADER: &[u8] = b"SECi\0\0\x02\0\x02\0\0\0\x12\0\0\0";
+    if data.len() > 28 && data.starts_with(X3F_JPEG_PREVIEW_HEADER) {
+        let payload = &data[28..];
+        // SigmaRaw.pm:559 -- a preview that begins with an APP1 marker is the
+        // JpgFromRaw, and it is the one ExifTool runs ProcessJPEG over.
+        if payload.starts_with(b"\xff\xd8\xff\xe1") {
+            metadata.insert(
+                "SigmaRaw:JpgFromRaw".to_string(),
+                TagValue::new_binary(payload.to_vec()),
+            );
+            parse_x3f_embedded_jpeg_exif(payload, section_file_offset + 28, metadata);
+        } else {
+            metadata.insert(
+                "SigmaRaw:PreviewImage".to_string(),
+                TagValue::new_binary(payload.to_vec()),
+            );
         }
+        return;
     }
 
-    // For JPEG image sections (type 2/3), extract the standard EXIF tags that
-    // ExifTool reports from the embedded JPEG preview (ColorSpace,
-    // ComponentsConfiguration, CustomRendered, CreateDate, DateTimeOriginal,
-    // Compression, etc.).  We parse the TIFF inside the APP1 segment ourselves
-    // so we can be selective and avoid pulling in thumbnail pointers,
-    // InteropOffset, or composite tags that ExifTool does not emit for X3F.
+    // Any other type-2/3 section is image data ExifTool ignores outright.
     if image_type == 2 || image_type == 3 {
-        if data.len() > 28 + 2 && &data[28..30] == b"\xff\xd8" {
-            let jpeg_data = &data[28..];
-            if let Ok(Some(tiff_data)) = find_jpeg_exif_tiff(jpeg_data) {
-                if let Ok(byte_order) = detect_byte_order(tiff_data) {
-                    if tiff_data.len() >= 8 {
-                        let ifd0_offset = read_u32(&tiff_data[4..8], byte_order) as u64;
-                        let reader = SliceReader::new(tiff_data);
-                        if let Ok(ifd0_tags) = parse_ifd(&reader, ifd0_offset, byte_order) {
-                            let mut exif_ifd_offset = None;
-                            for (tag_id, _field_type, _value_count, raw_bytes) in &ifd0_tags {
-                                let bytes = raw_bytes.as_ref();
-                                if *tag_id == 0x8769 && bytes.len() >= 4 {
-                                    exif_ifd_offset = Some(read_u32(bytes, byte_order) as u64);
-                                    continue;
-                                }
-                                // Compression (0x0103) – ExifTool reports "JPEG (old-style)"
-                                if *tag_id == 0x0103 && !metadata.contains_key("EXIF:Compression") {
-                                    let comp_val = read_tiff_u16(bytes, byte_order).unwrap_or(0);
-                                    let comp_str = match comp_val {
-                                        1 => "Uncompressed",
-                                        6 => "JPEG (old-style)",
-                                        _ => "unknown",
-                                    };
-                                    metadata.insert(
-                                        "EXIF:Compression".to_string(),
-                                        TagValue::new_string(comp_str.to_string()),
-                                    );
-                                }
-                            }
-                            if let Some(offset) = exif_ifd_offset {
-                                if let Ok(exif_tags) = parse_ifd(&reader, offset, byte_order) {
-                                    for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
-                                        let bytes = raw_bytes.as_ref();
-                                        let (tag_name, opt_display) = match *tag_id {
-                                            0x9003 => ("EXIF:DateTimeOriginal", None),
-                                            0x9004 => ("EXIF:CreateDate", None),
-                                            0x9101 => (
-                                                "EXIF:ComponentsConfiguration",
-                                                format_exif_display_value(
-                                                    *tag_id,
-                                                    bytes,
-                                                    *field_type,
-                                                    *value_count,
-                                                    byte_order,
-                                                ),
-                                            ),
-                                            0xA001 => (
-                                                "EXIF:ColorSpace",
-                                                format_exif_display_value(
-                                                    *tag_id,
-                                                    bytes,
-                                                    *field_type,
-                                                    *value_count,
-                                                    byte_order,
-                                                ),
-                                            ),
-                                            0xA401 => (
-                                                "EXIF:CustomRendered",
-                                                format_exif_display_value(
-                                                    *tag_id,
-                                                    bytes,
-                                                    *field_type,
-                                                    *value_count,
-                                                    byte_order,
-                                                ),
-                                            ),
-                                            _ => continue,
-                                        };
-                                        if metadata.contains_key(tag_name) {
-                                            continue;
-                                        }
-                                        let value = if let Some(display) = opt_display {
-                                            TagValue::new_string(display)
-                                        } else {
-                                            raw_bytes_to_simple_tag_value(
-                                                bytes,
-                                                *field_type,
-                                                *value_count,
-                                                byte_order,
-                                            )
-                                        };
-                                        metadata.insert(tag_name.to_string(), value);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
         return;
     }
 
@@ -5436,8 +5585,9 @@ mod tests {
         assert_eq!(map_x3f_property_name("DRIVE"), "SigmaRaw:DriveMode");
         assert_eq!(map_x3f_property_name("WB_DESC"), "SigmaRaw:WhiteBalance");
 
-        // LENSMODEL stays unmapped on purpose -- see the note in the match.
-        assert_eq!(map_x3f_property_name("LENSMODEL"), "SigmaRaw:LENSMODEL");
+        // LENSMODEL is LensType now that %sigmaLensTypes is transcribed; it
+        // was left unmapped while emitting the raw id would have been a lie.
+        assert_eq!(map_x3f_property_name("LENSMODEL"), "SigmaRaw:LensType");
     }
 
     #[test]
@@ -6541,5 +6691,45 @@ mod rational_array_tests {
     fn x3f_exptime_is_integration_time_not_exposure_time() {
         assert_eq!(map_x3f_property_name("EXPTIME"), "SigmaRaw:IntegrationTime");
         assert_eq!(map_x3f_property_name("SHUTTER"), "SigmaRaw:ExposureTime");
+    }
+
+    /// SigmaRaw.pm:81 gives MarkBits an empty BITMASK, so DecodeBits prints
+    /// "(none)" when nothing is set and "[n]" per set bit otherwise. Both
+    /// sample X3F files carry 0.
+    #[test]
+    fn x3f_mark_bits_render_like_decode_bits() {
+        assert_eq!(print_x3f_mark_bits(0), "(none)");
+        assert_eq!(print_x3f_mark_bits(0b1001), "[0], [3]");
+    }
+
+    /// The extended header maps slot -> tag id, not slot -> tag. Both samples
+    /// store X3FillLight (id 10) in slot 6, ahead of RedAdjust (id 7), so an
+    /// implementation that assumed positional order would mislabel four tags.
+    #[test]
+    fn x3f_header_ext_ids_follow_sigmaraw_headerext() {
+        assert_eq!(x3f_header_ext_tag_name(1), Some("ExposureAdjust"));
+        assert_eq!(x3f_header_ext_tag_name(10), Some("X3FillLight"));
+        assert_eq!(x3f_header_ext_tag_name(7), Some("RedAdjust"));
+        // 0 is HeaderExt's "Unused" slot marker, which ExifTool skips.
+        assert_eq!(x3f_header_ext_tag_name(0), None);
+        assert_eq!(x3f_header_ext_tag_name(11), None);
+    }
+
+    /// Sigma.x3f stores LENSMODEL as the hex string "145"; ExifTool reports
+    /// `Sigma Lens (0x145)`, which is a real entry in %sigmaLensTypes rather
+    /// than a fallback. SigmaDP2.x3f leaves the property blank and ExifTool
+    /// reports `Unknown ( )`.
+    #[test]
+    fn x3f_lens_type_matches_exiftool_on_both_samples() {
+        assert_eq!(print_sigma_lens_type("145"), "Sigma Lens (0x145)");
+        assert_eq!(print_sigma_lens_type(" "), "Unknown ( )");
+        // An id the table does not carry keeps ExifTool's PrintHex form.
+        assert_eq!(print_sigma_lens_type("fff"), "Unknown (0xfff)");
+    }
+
+    /// LENSMODEL used to be left unmapped so it surfaced as SigmaRaw:LENSMODEL.
+    #[test]
+    fn x3f_lensmodel_maps_to_lens_type() {
+        assert_eq!(map_x3f_property_name("LENSMODEL"), "SigmaRaw:LensType");
     }
 }
