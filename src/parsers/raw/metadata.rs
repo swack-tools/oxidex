@@ -2622,6 +2622,8 @@ mod nef_cfa_pattern2_tests {
 /// during IFD traversal. This function serves as documentation and can be
 /// extended to add computed/derived DNG-specific metadata or aliases.
 fn extract_dng_tags(metadata: &mut MetadataMap) {
+    suppress_duplicate_dng_xmp_exif_tags(metadata);
+
     // DNG-specific tags are stored in IFD0 or SubIFD0
     // The TIFF parser already extracts these automatically
 
@@ -2662,6 +2664,29 @@ fn extract_dng_tags(metadata: &mut MetadataMap) {
             "DNG:AvailableColorCalibration".to_string(),
             TagValue::new_string(available_color_tags.join(", ")),
         );
+    }
+}
+
+/// Suppress embedded XMP-exif aliases when the native EXIF IFD already
+/// provides the equivalent value.
+///
+/// DNG XMP packets commonly repeat EXIF values. The generic XMP parser emits
+/// those properties using their XML namespace, but ExifTool's default output
+/// keeps the native EXIF tag when both representations are present. Resolve
+/// the native names through the tag database instead of assuming a group
+/// prefix or a database spelling.
+fn suppress_duplicate_dng_xmp_exif_tags(metadata: &mut MetadataMap) {
+    let duplicate_tags = [
+        ("XMP-exif:ExposureBiasValue", 0x9204u16),
+        ("XMP-exif:Flash", 0x9209u16),
+        ("XMP-exif:ISOSpeedRatings", 0x8827u16),
+    ];
+
+    for (xmp_tag_name, exif_tag_id) in duplicate_tags {
+        let exif_tag_name = lookup_tag_name(exif_tag_id, "ExifIFD");
+        if metadata.contains_key(&exif_tag_name) {
+            metadata.remove(xmp_tag_name);
+        }
     }
 }
 
