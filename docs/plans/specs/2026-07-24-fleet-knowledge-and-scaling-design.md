@@ -294,8 +294,8 @@ multi-slot squads (382/2 = 191 vs sony-minolta's 259), so it yields the slot.
 
 **Worker identity at >1 worker per squad** (this was unspecified in the critiqued
 design and is now explicit): worktree `~/.oxidex/worktrees/parallel-fix/
-model-fix-<squad>-<n>`, branch `model-fix-parallel-<squad>-<n>`, `--worker-id
-<squad>-<n>`. The worker id flows into: the claim record, `/tmp/tagcmp-*` suffix,
+model-fix-<squad>-<n>`, branch `model-fix-parallel-<squad>-<n>`, `--worker-id <squad>-<n>`.
+The worker id flows into: the claim record, `/tmp/tagcmp-*` suffix,
 `tag-fix-prompts/process-<id>-prompt.log`, and **all `model-fix-diffs/` /
 `model-fix-requests/` filenames** (`{ts}-{worker}-{phase}-…`), ending the same-second
 artifact overwrites. Worktrees are per-slot and reused across rounds
@@ -376,8 +376,8 @@ confirms the previous commit was consumed.
 ### M1 — Commit contract: evidence trailers + `validate_fix_commit.py`
 
 `git_commit` (`model_fix_loop.py:577`) gains a trailers dict, emitted via repeated
-`-m` blocks. From data already in scope in `fix_gap`: `Format:`, one `Tag:
-<family>:<name>` per cluster member, `Sample: <source_file>`, `Exiftool-Value:`
+`-m` blocks. From data already in scope in `fix_gap`: `Format:`, one `Tag: <family>:<name>`
+per cluster member, `Sample: <source_file>`, `Exiftool-Value:`
 (sanitized: single line, ≤200 chars), `Oxidex-Value:` (post-fix, from the live
 re-extraction of K5), `Perl-Ref: <pm-file>:<line>`, `Verified: recheck-pass
 gaps=<before>-><after>`, `Worker: <worker_id>`, `Table: <canonical_table>`.

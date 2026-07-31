@@ -1498,6 +1498,56 @@ DEFAULT_MAX_SAMPLE_FILES_LISTED = 15
 DEFAULT_MAX_ATTEMPT_DIFF_CHARS = 2000
 
 
+#: One-line explanation of each rejection code, shown at the head of the
+#: previous-attempts section so a worker does not have to infer what a
+#: marker means from the prose around it.
+REJECTION_CODE_GUIDANCE = {
+    "patch-did-not-apply": (
+        "your diff was never written to disk -- a context/path problem, not a logic "
+        "problem. The FIX may well have been right."
+    ),
+    "build-failed": "the diff applied and the compiler rejected it.",
+    "tag-still-absent": "it built, and the target tag is still missing from oxidex's output.",
+    "wrong-value": (
+        "it built and the tag now appears, but its value disagrees with ExifTool -- "
+        "chase the value, not the wiring."
+    ),
+    "gap-set-churned": (
+        "it built and DID close a gap; the rebuild revealed another, so the count "
+        "stayed flat. The approach works -- extend it."
+    ),
+    "gap-set-unchanged": (
+        "it built and changed NOTHING observable. The code you edited is not running "
+        "for this file, or is not the copy that runs. Stop patching it and find out why."
+    ),
+    "format-unreachable": (
+        "oxidex emits nothing format-specific for this format's own sample -- its "
+        "parser never executes."
+    ),
+}
+
+
+def summarize_rejection_codes(previous_attempts):
+    """Roll a tag's attempt history up into "<code> x<n>" counts, most
+    frequent first -- the compressed answer to "what keeps going wrong
+    here". "" when no attempt carries a rejection code (every attempt
+    recorded before this taxonomy existed, and every legacy-contract
+    caller), so this section simply does not appear for them."""
+    counts = {}
+    for attempt in previous_attempts or []:
+        code = rejection_code(attempt.get("reason"))
+        if code:
+            counts[code] = counts.get(code, 0) + 1
+    if not counts:
+        return ""
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    lines = [
+        f"- {code} x{n}: {REJECTION_CODE_GUIDANCE.get(code, '')}".rstrip()
+        for code, n in ordered
+    ]
+    return "How the previous attempts on this tag failed:\n" + "\n".join(lines) + "\n\n"
+
+
 def format_previous_attempts(previous_attempts, max_diff_chars=DEFAULT_MAX_ATTEMPT_DIFF_CHARS):
     """Render a tag's attempt history (see run_tag_loop's persisted
     per-tag "attempts" list) into a prompt section, so a later round gets
@@ -1505,7 +1555,14 @@ def format_previous_attempts(previous_attempts, max_diff_chars=DEFAULT_MAX_ATTEM
     repeating the same broken approach from scratch. Each diff is
     truncated -- the point is "what direction was tried", not a byte-exact
     replay -- so this stays bounded even after many rounds' worth of
-    history accumulates for one stubborn tag."""
+    history accumulates for one stubborn tag.
+
+    When those attempts carry rejection codes (see annotate_rejection),
+    the section opens with summarize_rejection_codes' rollup: the diffs
+    below say what was tried, and a worker reading five of them still has
+    to work out for itself that all five failed the same way. Absent for
+    an unannotated history, so nothing changes for a caller whose
+    attempts predate the taxonomy."""
     if not previous_attempts:
         return ""
     blocks = []
@@ -1525,7 +1582,8 @@ def format_previous_attempts(previous_attempts, max_diff_chars=DEFAULT_MAX_ATTEM
         blocks.append(block)
     return (
         "\n\nPrevious attempts on this exact tag, in order (learn from these -- do not "
-        "repeat the same broken approach):\n\n" + "\n\n".join(blocks)
+        "repeat the same broken approach):\n\n"
+        + summarize_rejection_codes(previous_attempts) + "\n\n".join(blocks)
     )
 
 
@@ -4045,6 +4103,268 @@ def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
     return f"{rejection} Try a path from the list shown earlier in this conversation."
 
 
+# --- Rejection taxonomy ------------------------------------------------------
+#
+# Every failed attempt used to reach the worker as one of two strings:
+# "no working fix after repair attempt" (which conflated "the patch never
+# applied" with "it applied and the compiler rejected it") and "gap count
+# did not decrease" (which conflated "your patch was wrong", "your patch
+# closed A and the rebuild revealed B", and "no diff to this file can EVER
+# move this number because the code path is unreachable"). A worker given
+# either string has nothing to act on, so it resends a variation of the
+# same doomed approach until its fail budget runs out. 419 successful
+# model calls in one hour landed zero tags on 2026-07-30, and every gap
+# closed by hand that day fell into a class no worker could have
+# diagnosed from those two strings.
+#
+# These codes are carried INSIDE the reason text (see annotate_rejection)
+# rather than in a new field, deliberately: the reason is what already
+# flows to every consumer -- the repair turn's "That attempt failed"
+# message, run_tag_loop's persisted per-tag attempts list (and from there
+# format_previous_attempts, i.e. the NEXT prompt for this tag), the K1
+# lessons ledger, and watch_parallel_fix.py's log scraper. Adding a field
+# would have reached none of them without touching all of them.
+
+#: The model never produced a diff that git apply accepted.
+REJECT_PATCH_NOT_APPLIED = "patch-did-not-apply"
+#: The diff applied cleanly; cargo rejected it.
+REJECT_BUILD_FAILED = "build-failed"
+#: Built, but the tag this attempt targeted is still missing from oxidex.
+REJECT_TAG_STILL_ABSENT = "tag-still-absent"
+#: Built, the tag now appears, but its value disagrees with ExifTool.
+REJECT_WRONG_VALUE = "wrong-value"
+#: Built, and the format's gap SET is byte-identical before and after --
+#: the patch changed nothing observable. This is the structural signal:
+#: the target is out of reach of a single-tag diff to this parser.
+REJECT_GAP_SET_UNCHANGED = "gap-set-unchanged"
+#: Built, the gap COUNT did not move, but the gap SET did -- the patch
+#: closed one gap and the rebuild revealed another. Emphatically not the
+#: same failure as the one above, and the count alone cannot tell them
+#: apart (see gap_set_delta).
+REJECT_GAP_SET_CHURNED = "gap-set-churned"
+#: Not a patch failure at all: oxidex emits nothing format-specific for
+#: this format's own sample, so its parser never runs and no diff to it
+#: can move the gap. Raised BEFORE a worker is dispatched.
+REJECT_FORMAT_UNREACHABLE = "format-unreachable"
+
+REJECTION_MARKER_RE = re.compile(r"\[reject:([a-z-]+)\]")
+
+
+def annotate_rejection(reason, code, detail=""):
+    """Stamp a rejection code (and optional actionable detail) onto a
+    failure reason, idempotently.
+
+    The marker is APPENDED, never prepended and never a replacement: every
+    existing consumer that greps the leading text of a reason
+    (watch_parallel_fix.REGRESSED_RE's "gap count did not decrease",
+    distill_lessons.INFRA_REASON_RE's "model call failed:", the tests that
+    assert on the historical strings) keeps working unchanged, while the
+    code and its explanation ride along for the worker and the distiller.
+
+    A reason that already carries a marker is returned untouched -- the
+    first (most specific) classification wins, so a reason annotated deep
+    in fix_gap is not relabelled by a broader classifier further out.
+    """
+    reason = str(reason or "")
+    if not code or REJECTION_MARKER_RE.search(reason):
+        return reason
+    marker = f"[reject:{code}]"
+    return f"{reason} {marker} {detail}".rstrip() if detail else f"{reason} {marker}"
+
+
+def rejection_code(reason):
+    """The rejection code carried by a reason string, or None. Readers
+    (format_previous_attempts, dashboards, the distiller) use this rather
+    than re-deriving a classification from prose."""
+    m = REJECTION_MARKER_RE.search(str(reason or ""))
+    return m.group(1) if m else None
+
+
+def gap_keys(report):
+    """The SET of still-open gap keys in one per-format comparison dict --
+    missing_in_oxidex ("family:name") and value_differences ("tag_key")
+    together, since a tag that moves between those two lists has not been
+    closed (see tag_still_open's own docstring for how that exact confusion
+    shipped a wrong-valued XMP:ArtworkTitle).
+
+    A missing/falsy report is an empty set, not an error: callers compare
+    two of these and an unavailable side must degrade to "cannot tell",
+    which they check for explicitly rather than inferring from {}.
+    """
+    report = report or {}
+    keys = {
+        f"{e.get('family')}:{e.get('name')}"
+        for e in (report.get("missing_tags") or report.get("missing_in_oxidex") or [])
+    }
+    keys |= {
+        str(d.get("tag_key"))
+        for d in (report.get("value_differences") or [])
+        if d.get("tag_key")
+    }
+    return keys
+
+
+def gap_set_delta(pre_report, post_report):
+    """Compare the SET of open gaps before and after an attempt, not the
+    count. Returns {"closed": [...], "opened": [...], "still_open": [...]},
+    each sorted.
+
+    gap_count is a single integer, and a patch that closes gap A while the
+    rebuild reveals gap B leaves that integer untouched -- indistinguishable
+    from a patch that did nothing at all, which is how a worker that was
+    genuinely making progress got told "gap count did not decrease" and
+    burned its remaining rounds re-deriving the same change. This project
+    has been bitten by count-vs-set comparisons repeatedly; the count is
+    kept as the gate (it is what the commit's Verified: trailer promises)
+    but the SET is what the worker is told about.
+
+    Pure set arithmetic over two comparison dicts. Lineage -- that the two
+    reports describe the same format in the same worktree modulo the change
+    under test -- is the caller's responsibility, exactly as for
+    new_oxidex_only_keys.
+    """
+    pre, post = gap_keys(pre_report), gap_keys(post_report)
+    return {
+        "closed": sorted(pre - post),
+        "opened": sorted(post - pre),
+        "still_open": sorted(pre & post),
+    }
+
+
+#: A rendered gap-set delta names at most this many tags per bucket; the
+#: rest are summarized as a count. A NEF rebuild can reveal dozens at once
+#: and the reason string rides in a 2000-byte K1 ledger line.
+GAP_SET_DELTA_MAX_NAMED = 6
+
+
+def _name_list(keys, limit=GAP_SET_DELTA_MAX_NAMED):
+    shown = ", ".join(keys[:limit])
+    if len(keys) > limit:
+        shown += f", +{len(keys) - limit} more"
+    return shown
+
+
+def format_gap_set_delta(delta):
+    """Render gap_set_delta's dict as one human/model-readable clause,
+    e.g. "closed 1 (EXIF:Make), opened 2 (EXIF:Model, EXIF:Software)".
+    "" for a None delta so callers can concatenate unconditionally."""
+    if not delta:
+        return ""
+    parts = []
+    for bucket, label in (("closed", "closed"), ("opened", "opened")):
+        keys = delta.get(bucket) or []
+        if keys:
+            parts.append(f"{label} {len(keys)} ({_name_list(keys)})")
+    if not parts:
+        return f"gap set unchanged ({len(delta.get('still_open') or [])} still open)"
+    return ", ".join(parts)
+
+
+#: Appended to a REJECT_GAP_SET_UNCHANGED reason. This is the one message
+#: whose whole job is to stop the worker resending a variation of the same
+#: patch: nothing it did was observable, so the fault is upstream of the
+#: lines it edited.
+GAP_SET_UNCHANGED_ADVICE = (
+    "The gap set is IDENTICAL before and after your patch -- not one tag closed, "
+    "not one opened. Your change had no observable effect, so the problem is not "
+    "the lines you edited. Before patching this file again, prove the code you are "
+    "editing actually runs for this sample: check that the format is detected at "
+    "all (a signature declared past the detection buffer resolves the file to "
+    "Unknown and the parser never runs), that there is only ONE live parser for "
+    "this format (a second, dead copy absorbs patches silently), and that the "
+    "values the parser needs (byte order, base offsets) are actually threaded to "
+    "the function you changed. If none of those hold, this target cannot be closed "
+    "by a diff to this file and should be reported rather than retried."
+)
+
+
+def classify_build_rejection(reason):
+    """The rejection code for a reason produced by attempt_build's
+    `built is False` path, without re-parsing prose.
+
+    Returns the code already stamped on the reason when there is one (the
+    apply-exhaustion path stamps REJECT_PATCH_NOT_APPLIED itself), None for
+    an infrastructure failure (a 429 is not a rejection of anything -- see
+    INFRA_FAILURE_PREFIX and run_tag_loop's infra_only branch, which
+    charges nothing for it), and REJECT_BUILD_FAILED otherwise. "Otherwise"
+    is deliberately the fallback rather than a positive match: every
+    remaining way out of attempt_build with built=False (a compile error,
+    "no diff in model response", an exhausted request/verify budget) is a
+    failure of the model's own output that a compiler or a parser already
+    described in the conversation."""
+    reason = str(reason or "")
+    if reason.startswith(INFRA_FAILURE_PREFIX):
+        return None
+    return rejection_code(reason) or REJECT_BUILD_FAILED
+
+
+def classify_recheck_rejection(base_reason, pre_report, post_report, tag_verdicts=None):
+    """Turn a failed recheck into (annotated_reason, code, delta).
+
+    `base_reason` is whatever fix_gap already computed ("gap count did not
+    decrease", or recheck_fn's own detail string) and is preserved verbatim
+    at the head of the result.
+
+    Precedence, most actionable first, and every verdict below is backed
+    by evidence rather than inferred from the count:
+      wrong-value      -- the target tag is present now but disagrees with
+                          ExifTool; the worker has a concrete value to chase.
+      gap-set-unchanged-- not one tag opened or closed anywhere in this
+                          format. Structurally out of reach.
+      tag-still-absent -- the set DID move, and the target is still open.
+                          The patch did something; it did not do this.
+      gap-set-churned  -- the set moved and the target is no longer open,
+                          so the count is only flat because the rebuild
+                          revealed as many gaps as this patch closed. The
+                          approach WORKS and must not be thrown away.
+
+    pre_report/post_report None is the legacy int/2-tuple recheck_fn
+    contract: no set information exists, so nothing can honestly be
+    claimed beyond what the count already said. The base reason is
+    returned UNANNOTATED (with REJECT_TAG_STILL_ABSENT reported to the
+    caller for bookkeeping) -- a marker there would assert evidence this
+    function does not have, and would change a string that predates it.
+
+    `tag_verdicts` is the list of tag_still_open() results for this gap's
+    own target tags, so this function stays pure -- fix_gap already
+    computes them.
+    """
+    for verdict in tag_verdicts or []:
+        if verdict and verdict[0] == "value_differs":
+            return annotate_rejection(base_reason, REJECT_WRONG_VALUE), REJECT_WRONG_VALUE, None
+    if pre_report is None or post_report is None:
+        return str(base_reason), REJECT_TAG_STILL_ABSENT, None
+    delta = gap_set_delta(pre_report, post_report)
+    if not delta["closed"] and not delta["opened"]:
+        return (
+            annotate_rejection(base_reason, REJECT_GAP_SET_UNCHANGED, GAP_SET_UNCHANGED_ADVICE),
+            REJECT_GAP_SET_UNCHANGED,
+            delta,
+        )
+    moved = f"the gap COUNT is flat but the gap SET moved: {format_gap_set_delta(delta)}."
+    if any(tag_verdicts or []):
+        return (
+            annotate_rejection(
+                base_reason, REJECT_TAG_STILL_ABSENT,
+                f"{moved} So your patch DID have an effect -- it just was not on the tag "
+                "you were asked to close, which is still open. Keep what worked and aim "
+                "it at the target.",
+            ),
+            REJECT_TAG_STILL_ABSENT,
+            delta,
+        )
+    return (
+        annotate_rejection(
+            base_reason, REJECT_GAP_SET_CHURNED,
+            f"{moved} Your patch closed its target; the rebuild revealed as many gaps as "
+            "it closed, which is why the count did not drop. Do not discard this "
+            "approach -- extend it to the newly-opened tag(s).",
+        ),
+        REJECT_GAP_SET_CHURNED,
+        delta,
+    )
+
+
 def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_fn,
                    cargo_build_fn, config, repo_root, pick_model_fn=random.choice,
                    samples_dir=None, cargo_check_fn=None):
@@ -4086,6 +4406,18 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     config["max_verify_turns"] (default DEFAULT_MAX_VERIFY_TURNS).
     None (the default) keeps VERIFY off: such replies get an
     "unavailable" message, so old callers and tests are unaffected.
+
+    Exhausting both diff attempts returns "no working fix after repair
+    attempt". When the LAST of those attempts died at `git apply` rather
+    than at `cargo build`, the reason additionally carries
+    REJECT_PATCH_NOT_APPLIED and the apply error (see annotate_rejection):
+    those two exhaustion paths used to produce the identical string, so a
+    worker whose diffs never even landed on disk was told the same thing
+    as one whose code did not compile -- and the two need opposite fixes.
+    The build-exhaustion string is left exactly as it always was; the
+    compiler's own output is already in the conversation, and
+    classify_build_rejection maps the unmarked string to
+    REJECT_BUILD_FAILED for readers that want a code for it.
     """
     max_request_turns = config.get("max_request_turns", DEFAULT_MAX_REQUEST_TURNS)
     request_turns_used = 0
@@ -4098,6 +4430,10 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     forced_diff_retry_used = False
     patch_chunks = {}
     patch_turns_used = 0
+    # None until a real diff attempt fails; then ("apply", msg) or
+    # ("build", msg) -- the only place in this module that can still tell
+    # those two apart once the loop is over (see the return below).
+    last_diff_failure = None
     current_phase = "explore" if len(messages) == 1 else "patch"
     while diff_attempts_used < 2:  # one initial attempt + one repair round-trip
         messages[:] = compact_messages(
@@ -4295,6 +4631,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
         applied, apply_msg = git_apply_fn(diff, repo_root)
         if not applied:
             git_checkout_clean_fn(repo_root)
+            last_diff_failure = ("apply", apply_msg)
             patch_chunks = {}  # a resend may be a fresh single diff or a fresh chunk sequence
             messages.append({
                 "role": "user",
@@ -4308,6 +4645,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
             return True, None, diff, messages
 
         git_checkout_clean_fn(repo_root)
+        last_diff_failure = ("build", build_err)
         patch_chunks = {}
         messages.append({
             "role": "user",
@@ -4315,10 +4653,28 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
         })
         current_phase = "patch"
 
-    return False, "no working fix after repair attempt", None, messages
+    reason = "no working fix after repair attempt"
+    if last_diff_failure and last_diff_failure[0] == "apply":
+        reason = annotate_rejection(
+            reason, REJECT_PATCH_NOT_APPLIED,
+            f"every diff was rejected by git apply (last error: {last_diff_failure[1]}). "
+            "Nothing was ever written to disk, so this says nothing about whether the "
+            "FIX is right -- resend as a minimal unified diff with correct a/ b/ paths "
+            "and exact context lines, or request the file again to re-read its current "
+            "contents.",
+        )
+    return False, reason, None, messages
 
 
 DEFAULT_MAX_REPAIR_ROUNDS = 5
+
+#: fix_gap gives up on a target after this many CONSECUTIVE rounds whose
+#: patch left the format's gap set byte-identical (see
+#: REJECT_GAP_SET_UNCHANGED). Two, not one: the first such round can still
+#: be a near miss the critique can steer, but a second in a row means the
+#: worker cannot reach the thing it is aiming at, and every further round
+#: is a fixer call plus a critique call spent proving that again.
+MAX_GAP_SET_UNCHANGED_ROUNDS = 2
 # 3000 was observed live keeping only leading compiler warnings for a
 # workspace with many test binaries, cutting off before the actual
 # "FAILURES:" section / panic detail cargo prints near the end -- the
@@ -4393,6 +4749,18 @@ INFRA_FAILURE_PREFIX = "model call failed:"
 
 # --- K5: reviewer evidence defaults -----------------------------------------
 
+def _resolve_oxidex_binary(repo_root):
+    """This worktree's own oxidex binary, or None. target/debug first,
+    target/fixloop next (see cargo_build's "fixloop" profile -- the one
+    this loop's own build step actually produces)."""
+    repo_root = Path(repo_root)
+    return next(
+        (c for c in (repo_root / "target" / "debug" / "oxidex",
+                     repo_root / "target" / "fixloop" / "oxidex") if c.is_file()),
+        None,
+    )
+
+
 def default_extract_live_evidence(repo_root, sample_path, tag_keys):
     """K5 real default for fix_gap's extract_evidence_fn: shell out to
     exiftool and this worktree's own oxidex binary for just the target
@@ -4410,11 +4778,7 @@ def default_extract_live_evidence(repo_root, sample_path, tag_keys):
     if not sample_path or not tag_keys:
         return ""
     repo_root = Path(repo_root)
-    binary = next(
-        (c for c in (repo_root / "target" / "debug" / "oxidex",
-                     repo_root / "target" / "fixloop" / "oxidex") if c.is_file()),
-        None,
-    )
+    binary = _resolve_oxidex_binary(repo_root)
     if binary is None or not shutil.which("exiftool"):
         return ""
     try:
@@ -4445,6 +4809,169 @@ def default_extract_live_evidence(repo_root, sample_path, tag_keys):
             continue
         lines.append(f"{tag_key}: exiftool={et_val!r} oxidex={ox_val!r} (post-fix)")
     return "\n".join(lines)
+
+
+# --- Pre-dispatch reachability ----------------------------------------------
+#
+# oxidex emits File:* (and a handful of ungrouped) tags for ANY byte
+# sequence at all -- run it on a plain text file and it still reports
+# FileName, FileSize, FilePermissions. So "produces zero tags" is never
+# literally true and cannot be the test. What IS true of a format whose
+# parser never runs: every tag it emits comes from that generic
+# filesystem path, and nothing is group-qualified by a real parser.
+#
+# That is what ISO 9660 looked like on 2026-07-30 at 0% parity: the parser
+# was present and correct, but its signature sits at byte 32769 while
+# detection only buffers 1 KiB, so the file resolved to Unknown and iso.rs
+# never executed. Every patch to iso.rs was doomed before it was written,
+# and the loop had no way to know.
+#
+# `File:FileType == "Unknown"` looks like the obvious test for that and is
+# NOT usable as one -- measured against the live corpus on 2026-07-30, PSD,
+# TTF, PE and XMP all report File:FileType=Unknown while their parsers run
+# perfectly and emit 6, 6, 56 and 54 format-specific tags respectively.
+# Skipping on that signal alone would have starved four healthy formats
+# (386 open tags between them at the time) to save two. The emitted-tag
+# test below is the one that separates them, so it is the only one that
+# gates a skip; FileType is reported alongside as corroboration, never as
+# a trigger.
+#: Tag groups oxidex fills in from the filesystem regardless of whether
+#: any format parser ran. A file whose entire output is drawn from these
+#: has had no format-specific parsing done to it.
+FILESYSTEM_TAG_FAMILIES = frozenset({"File", "SourceFile", "ExifTool", "System"})
+
+#: File:FileType value oxidex reports when detection did not resolve the
+#: file to any known format. Reported, never acted on -- see above.
+UNKNOWN_FILE_TYPE = "Unknown"
+
+
+def format_specific_tag_keys(tags, filesystem_families=FILESYSTEM_TAG_FAMILIES):
+    """The keys of `tags` (one oxidex -j object) that came from a format
+    parser rather than the generic filesystem path: sorted, group-qualified
+    ("EXIF:Make"), excluding filesystem_families.
+
+    Ungrouped keys (oxidex emits bare "FileSize"/"LineCount"/"WordCount"
+    alongside the grouped copies) are excluded too -- they are duplicates
+    of grouped entries or generic file facts, and counting them would make
+    every file look parsed."""
+    return sorted(
+        k for k in (tags or {})
+        if ":" in k and k.split(":", 1)[0] not in filesystem_families
+    )
+
+
+def default_format_reachable(fmt, sample_path, repo_root=None, run_fn=None, timeout=30):
+    """Does oxidex parse `sample_path` as anything at all?
+
+    Returns (reachable, detail):
+      True  -- oxidex emits at least one format-specific tag for this
+               sample, so a patch to its parser can move the gap.
+      False -- oxidex refuses the file outright (non-zero exit, no output),
+               or emits nothing outside FILESYSTEM_TAG_FAMILIES. Its parser
+               is not running; no single-tag diff can close anything here.
+      None  -- undetermined (no binary built yet, no sample on record, the
+               subprocess failed or printed unparseable JSON). Callers MUST
+               treat None as reachable: a skip on "we could not check" would
+               silently stop the fleet the first time a worktree was mid-
+               rebuild, which is strictly worse than the waste this avoids.
+
+    Deliberately conservative in the same direction throughout: every
+    ambiguous outcome is None, and File:FileType=Unknown -- which looks
+    like the definitive signal and is not (see FILESYSTEM_TAG_FAMILIES'
+    comment) -- never triggers a skip on its own. Verified on the live
+    corpus 2026-07-30: False for ISO and Mach-O (the two formats hand-fixed
+    that day for exactly this reason), True for all sixteen other formats
+    the fleet had open tags on.
+
+    run_fn(argv, timeout) -> (returncode, stdout) is injectable so tests
+    never shell out; it defaults to subprocess.run.
+    """
+    if not fmt or not sample_path:
+        return None, "no sample file on record for this format"
+    binary = _resolve_oxidex_binary(repo_root or REPO_ROOT)
+    if binary is None:
+        return None, "no oxidex binary built in this worktree yet"
+
+    def _run(argv, _timeout):
+        proc = subprocess.run(  # nosec B603
+            argv, capture_output=True, text=True, timeout=_timeout,
+        )
+        return proc.returncode, proc.stdout
+
+    run_fn = run_fn or _run
+    try:
+        code, stdout = run_fn([str(binary), "-j", str(sample_path)], timeout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None, "oxidex could not be run on this sample"
+    if code != 0 and not (stdout or "").strip():
+        # oxidex refusing the file outright -- "Unsupported format: Format
+        # Unknown not yet supported" (ISO) or a parser that errored before
+        # emitting anything (Mach-O). Nothing downstream of detection ran.
+        return False, (
+            f"oxidex exited {code} with no output for {sample_path} -- nothing "
+            f"downstream of format detection runs for {fmt}, so no patch to its "
+            "parser can move this gap"
+        )
+    try:
+        tags = json.loads(stdout)
+        tags = tags[0] if isinstance(tags, list) else tags
+    except (ValueError, IndexError):
+        return None, "oxidex output was not parseable JSON"
+    if not isinstance(tags, dict):
+        return None, "oxidex output was not parseable JSON"
+
+    specific = format_specific_tag_keys(tags)
+    file_type = tags.get("File:FileType")
+    if not specific:
+        return False, (
+            f"oxidex emits no format-specific tags for {sample_path} -- only "
+            f"{'/'.join(sorted(FILESYSTEM_TAG_FAMILIES))} filesystem tags "
+            f"(File:FileType={file_type!r}). The {fmt} parser produced nothing, so "
+            "no patch to it can move this gap"
+        )
+    return True, (
+        f"oxidex emits {len(specific)} format-specific tag(s) for {sample_path} "
+        f"(File:FileType={file_type!r})"
+    )
+
+
+def format_unreachable_reason(fmt, detail=""):
+    """The single rejection string for a target skipped pre-dispatch --
+    annotated with REJECT_FORMAT_UNREACHABLE so the distiller and every
+    dashboard can count these separately from real patch failures."""
+    return annotate_rejection(
+        f"format {fmt} produces no output; parser unreachable",
+        REJECT_FORMAT_UNREACHABLE, detail,
+    )
+
+
+def make_reachability_fn(repo_root=None, check_fn=None, log_fn=None):
+    """Build run_tag_loop's reachability_fn: a per-format-memoized
+    (tag_gap) -> (reachable, detail) closure over default_format_reachable.
+
+    Memoized because the answer is a property of the worktree's binary and
+    the format's own sample, not of the tag -- re-running oxidex for every
+    one of a format's several hundred open tags would cost more than the
+    calls it saves. The memo lives for one process; a worker is respawned
+    often enough that a format which becomes reachable mid-run is picked up
+    on the next spawn, and an UNREACHABLE verdict blacklists the tag anyway
+    (see run_tag_loop), so a stale positive is the only direction this can
+    err and it errs toward doing the work.
+    """
+    check_fn = check_fn or default_format_reachable
+    cache = {}
+
+    def reachability_fn(tag_gap):
+        fmt = tag_gap.get("format")
+        if fmt not in cache:
+            sample = (tag_gap.get("entry") or {}).get("source_file")
+            cache[fmt] = check_fn(fmt, sample, repo_root)
+            if log_fn:
+                reachable, detail = cache[fmt]
+                log_fn(f"[{fmt}] reachability: {reachable} -- {detail}")
+        return cache[fmt]
+
+    return reachability_fn
 
 
 def default_emission_scan(repo_root, parser_files, tag_keys, diff_text=None):
@@ -4715,6 +5242,15 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
     (count, detail) tuple, where a non-None detail string replaces the
     generic "gap count did not decrease" as the failure reason.
 
+    On the 3-tuple contract (see recheck_baseline below), a failed recheck
+    is additionally classified by classify_recheck_rejection and the
+    resulting rejection code stamped onto the reason: wrong-value,
+    gap-set-churned (the count is flat but the SET moved -- the patch DID
+    work), or gap-set-unchanged (nothing moved at all). Two CONSECUTIVE
+    gap-set-unchanged rounds end the attempt immediately with
+    result["rejection_code"] set, rather than spending the remaining
+    repair rounds -- see MAX_GAP_SET_UNCHANGED_ROUNDS.
+
     previous_attempts, if given, is passed straight through to build_prompt
     (see format_previous_attempts) -- prior rounds' diffs/failure reasons
     for this exact gap, so a repair round-trip driven by run_tag_loop's
@@ -4820,6 +5356,10 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
 
     rounds = []  # every non-fixed round: {"diff", "reason", "critique"} -- see run_tag_loop
     diff = None
+    # Consecutive rounds whose patch left the format's gap SET completely
+    # untouched. Only ever non-zero on the 3-tuple recheck_fn contract
+    # (recheck_baseline + post_match both present) -- see the gate below.
+    gap_set_unchanged_rounds = 0
 
     def lesson(event, reason, **kwargs):
         """K1 writer shorthand bound to this call's fixed identity
@@ -4931,7 +5471,47 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         if remaining >= gap["gap_count"]:
             git_checkout_clean_fn(repo_root)
             reason = recheck_detail or "gap count did not decrease"
+            # Compare the SET of open gaps, not just the count. The count
+            # is flat in two completely different situations -- "the patch
+            # did nothing" and "the patch closed A and the rebuild revealed
+            # B" -- and telling a worker in the second situation that its
+            # gap count did not decrease is how a working approach gets
+            # abandoned. classify_recheck_rejection stamps the reason with
+            # which one this is; the count still governs the gate, because
+            # the count is what the commit's Verified: trailer promises.
+            # Both dicts absent (the legacy int/2-tuple recheck_fn
+            # contract, which is what every pre-existing caller and test
+            # uses) leaves the reason byte-for-byte as it has always been.
+            tag_verdicts = (
+                [tag_still_open(post_match, m) for m in _gap_member_tag_gaps(gap)]
+                if post_match is not None else None
+            )
+            reason, reject_code, delta = classify_recheck_rejection(
+                reason, recheck_baseline, post_match, tag_verdicts,
+            )
+            if delta:
+                log_fn(f"[{fmt}] gap set delta: {format_gap_set_delta(delta)}")
             log_fn(f"[{fmt}] {reason}, reverting")
+            gap_set_unchanged_rounds = (
+                gap_set_unchanged_rounds + 1 if reject_code == REJECT_GAP_SET_UNCHANGED else 0
+            )
+            if gap_set_unchanged_rounds >= MAX_GAP_SET_UNCHANGED_ROUNDS:
+                # Two consecutive rounds where nothing in the format's gap
+                # set moved. The remaining repair rounds are a fixer call
+                # plus a critique call each, spent re-deriving a change
+                # whose predecessors were already proven to have no
+                # observable effect. Stop and say so, so run_tag_loop
+                # persists a reason the NEXT round for this tag can read.
+                lesson("gap_not_closed", reason, tag_key=_gap_primary_tag_key(gap))
+                log_fn(
+                    f"[{fmt}] abandoning after {gap_set_unchanged_rounds} rounds with an "
+                    "unchanged gap set -- target is structurally out of reach"
+                )
+                rounds.append({"diff": diff, "reason": reason, "critique": GAP_SET_UNCHANGED_ADVICE})
+                return {
+                    "format": fmt, "status": "failed", "reason": reason,
+                    "diff": diff, "rounds": rounds, "rejection_code": reject_code,
+                }
             # Spec M3/K1: classify via tag_still_open's own verdict when
             # the recheck_fn contract supplies a post-attempt comparison
             # dict -- "wrong_value" (with the live values as evidence)
@@ -6371,7 +6951,7 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
                   max_distinct_tags=None,
                   refresh_worktree_fn=None, max_cluster_tags=1, landed_tags_path=None,
                   heartbeat_seconds=DEFAULT_HEARTBEAT_SECONDS, time_fn=time.time,
-                  attribution=None):
+                  attribution=None, reachability_fn=None):
     """Loop-until-everything-found driver, blacklisting individual TAGS
     (never a whole format) after max_fails failed attempts each. State
     persists to disk at state_path, so the blacklist -- and each tag's
@@ -6477,6 +7057,21 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
     (resolve_canonical_table already treats a missing attribution as
     "can't resolve, don't exclude"), so every existing caller keeps its
     exact prior behavior -- this is advisory and strictly additive.
+
+    reachability_fn(tag_gap) -> (reachable, detail) is the PRE-DISPATCH
+    gate (see make_reachability_fn/default_format_reachable). It runs
+    after the claim and before fix_gap_fn, and ONLY a hard False skips:
+    the tag is recorded in `skipped` with status "unreachable", its state
+    entry is blacklisted with the reason attached, and not one model call
+    is made. True and None (undetermined -- no binary yet, no sample on
+    record) both proceed exactly as before.
+
+    This is the cheapest possible answer to the class of target that
+    caused 419 successful model calls to land zero tags on 2026-07-30: a
+    format whose parser never executes cannot be fixed by any diff to
+    that parser, and no amount of critique will tell a worker that. None
+    (the default) disables the gate entirely, so every existing caller
+    behaves exactly as it did before.
     """
     fixed, failed, skipped = [], [], []
     cycles_reset = 0
@@ -6644,6 +7239,43 @@ def run_tag_loop(config, find_gaps_fn, fix_gap_fn, state_path,
             seen_tag_keys.add(m["tag_key"])
         if tag_gap.get("cluster_members"):
             log_fn(f"clustered {len(tag_gap['cluster_members'])} sibling tag(s) with {tag_gap['tag_key']}")
+
+        # Pre-dispatch reachability gate. Deliberately here rather than in
+        # claim()'s filter: this shells out to the oxidex binary, and a
+        # subprocess has no business running inside the state flock.
+        # Deliberately a hard `is False` rather than a falsy check: an
+        # undetermined verdict (None) must dispatch, never skip.
+        if reachability_fn is not None:
+            reachable, detail = reachability_fn(tag_gap)
+            if reachable is False:
+                reason = format_unreachable_reason(tag_gap["format"], detail)
+                log_fn(f"[{tag_gap['tag_key']}] SKIPPED (unreachable): {reason}")
+                skipped.append({
+                    "tag_key": tag_gap["tag_key"], "format": tag_gap["format"],
+                    "status": "unreachable", "reason": reason,
+                })
+
+                def release_unreachable(state, _reason=reason):
+                    """Blacklist the leader (so this process stops
+                    re-picking a target no diff can close) and release
+                    every member's claim. Charged to no fail budget: the
+                    tag is not at fault, its format's parser is."""
+                    for key in ([tag_gap["tag_key"]]
+                                + [m["tag_key"] for m in tag_gap.get("cluster_members") or []]):
+                        member_entry = state.setdefault(
+                            key, {"fails": 0, "blacklisted": False, "attempts": []},
+                        )
+                        member_entry.pop("claimed_by", None)
+                        member_entry.pop("claimed_at", None)
+                        member_entry["blacklisted"] = True
+                        member_entry["blacklisted_at"] = time_fn()
+                        member_entry["blacklisted_by"] = worker_id
+                        member_entry["blacklist_reason"] = _reason
+                        member_entry["unreachable"] = True
+                    return state, None
+
+                locked(release_unreachable)
+                continue
 
         # One line per round naming both the round number and the tag --
         # the single source watch_parallel_fix.py's dashboard reads to
@@ -7522,11 +8154,23 @@ def main(argv=None):
         claim_stale_seconds=config["claim_stale_seconds"],
         heartbeat_seconds=config["heartbeat_seconds"],
         attribution=gap_attribution,
+        # Pre-dispatch reachability: one oxidex run per FORMAT (memoized),
+        # against that format's own sample, before any model call is spent
+        # on it. A format whose parser never executes -- ISO 9660 on
+        # 2026-07-30, whose signature sits at byte 32769 while detection
+        # buffers 1 KiB -- is skipped with a reason instead of retried.
+        reachability_fn=make_reachability_fn(REPO_ROOT, log_fn=timestamped_log),
     )
     print(f"stopped after {summary['rounds']} rounds")
     print(f"  fixed:   {len(summary['fixed'])} tags")
     print(f"  failed:  {len(summary['failed'])} attempts")
-    print(f"  skipped: {len(summary['skipped'])} tags (already fixed elsewhere)")
+    # "skipped" now carries two distinct kinds: status "duplicate" (already
+    # fixed elsewhere) and status "unreachable" (the pre-dispatch gate --
+    # zero model calls spent). Counting them together would hide exactly
+    # the number this gate exists to make visible.
+    unreachable = [s for s in summary["skipped"] if s.get("status") == "unreachable"]
+    print(f"  skipped: {len(summary['skipped']) - len(unreachable)} tags (already fixed elsewhere)")
+    print(f"  unreachable: {len(unreachable)} tags (format parser never runs -- no calls spent)")
     print(f"  cycles reset (blacklist exhausted): {summary['cycles_reset']}")
     return 0
 

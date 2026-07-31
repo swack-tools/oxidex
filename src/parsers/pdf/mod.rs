@@ -67,6 +67,56 @@ use encryption_parser::parse_encryption_metadata;
 /// PDF signature/magic bytes
 const PDF_SIGNATURE: &[u8] = b"%PDF-";
 
+/// The page tree root's `/Count`, which ExifTool reports as PageCount.
+///
+/// Taken from the object that also declares `/Type /Pages`: a `/Count` alone
+/// is ambiguous, since a PDF's outline and structure trees use the same key.
+fn pdf_page_count(data: &[u8]) -> Option<u32> {
+    let text = String::from_utf8_lossy(data);
+    for (idx, _) in text.match_indices("/Type") {
+        let window = &text[idx..text.len().min(idx + 400)];
+        if !window.contains("/Pages") {
+            continue;
+        }
+        // The dictionary may list /Count before or after /Type.
+        let start = idx.saturating_sub(400);
+        let around = &text[start..text.len().min(idx + 400)];
+        if let Some(cpos) = around.find("/Count") {
+            let rest = &around[cpos + 6..];
+            let digits: String = rest
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if let Ok(n) = digits.parse::<u32>() {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+/// The first `/MediaBox`, rendered as ExifTool prints it.
+///
+/// The file stores `[0 0 612 792]`; ExifTool reports `[0,0,612,792]` --
+/// comma separated, no spaces.
+fn pdf_media_box(data: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(data);
+    let pos = text.find("/MediaBox")?;
+    let rest = &text[pos + 9..];
+    let open = rest.find('[')?;
+    let close = rest.find(']')?;
+    if close <= open {
+        return None;
+    }
+    let inner = &rest[open + 1..close];
+    let parts: Vec<&str> = inner.split_whitespace().collect();
+    if parts.is_empty() {
+        return None;
+    }
+    Some(format!("[{}]", parts.join(",")))
+}
+
 /// Parses PDF file and extracts all metadata.
 ///
 /// This function reads the PDF file structure, verifies the signature,
@@ -168,6 +218,25 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         "PDF:Linearized".to_string(),
         crate::core::TagValue::new_string(if is_linearized { "Yes" } else { "No" }),
     );
+
+    // Page tree facts. ExifTool reports PageCount from the page tree root's
+    // /Count and MediaBox from the first /MediaBox it finds, both of which
+    // sit in plain object dictionaries rather than the Info dict this parser
+    // already reads -- so neither was ever emitted.
+    if let Ok(all) = reader.read(0, reader.size().min(4 * 1024 * 1024) as usize) {
+        if let Some(count) = pdf_page_count(all) {
+            metadata.insert(
+                "PDF:PageCount".to_string(),
+                crate::core::TagValue::new_integer(count as i64),
+            );
+        }
+        if let Some(media_box) = pdf_media_box(all) {
+            metadata.insert(
+                "PDF:MediaBox".to_string(),
+                crate::core::TagValue::new_string(media_box),
+            );
+        }
+    }
 
     // Extract Info dictionary metadata
     match info_parser::parse_info_dict(reader) {
