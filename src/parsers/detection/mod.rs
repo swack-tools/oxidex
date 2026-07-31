@@ -458,7 +458,14 @@ fn is_likely_text(data: &[u8]) -> bool {
     // data, which keeps the pre-existing strictness for mixed binary content.
     let text = utf8_prefix(data);
     if text.is_empty() || data.len() - text.len() > 3 {
-        return false;
+        // Not UTF-8. It may still be single-byte 8-bit text (Latin-1,
+        // MacRoman, any legacy code page), which the UTF-8 gate above can
+        // never admit: one 0xE9 in an 18-byte Latin-1 file strands 13 bytes
+        // outside the valid prefix and reads exactly like binary. Every such
+        // file resolved to Unknown, so the dispatched TXT parser -- which
+        // reports MIMEEncoding, Newlines, LineCount and WordCount -- never
+        // ran on any non-UTF-8 text file at all.
+        return is_likely_eight_bit_text(data);
     }
 
     let printable_count = text
@@ -470,6 +477,37 @@ fn is_likely_text(data: &[u8]) -> bool {
     // If at least 95% of characters are printable, consider it text
     let ratio = printable_count as f64 / total_count as f64;
     ratio >= 0.95
+}
+
+/// Control bytes that disqualify a buffer from being single-byte text.
+///
+/// Mirrors ExifTool's `Text.pm` `ProcessTXT` gate
+/// (`/([\0-\x06\x0e-\x1a\x1c-\x1f\x7f])/`): a buffer holding any of these is
+/// binary, or multi-byte Unicode that is only recognised by its BOM.
+fn is_binary_control_byte(byte: u8) -> bool {
+    matches!(byte, 0x00..=0x06 | 0x0E..=0x1A | 0x1C..=0x1F | 0x7F)
+}
+
+/// Checks whether a non-UTF-8 buffer looks like single-byte 8-bit text.
+///
+/// Two conditions, both needed:
+///
+/// 1. No binary control bytes, per ExifTool's rule above.
+/// 2. A majority of the bytes are printable ASCII. High bytes alone satisfy
+///    condition 1 -- a run of 0xFF passes it -- so this is what separates
+///    8-bit *text* from high-entropy binary that merely happens to avoid the
+///    control range.
+fn is_likely_eight_bit_text(data: &[u8]) -> bool {
+    if data.is_empty() || data.iter().copied().any(is_binary_control_byte) {
+        return false;
+    }
+
+    let printable_ascii = data
+        .iter()
+        .filter(|&&byte| byte.is_ascii_graphic() || matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
+        .count();
+
+    printable_ascii * 2 >= data.len()
 }
 
 #[cfg(test)]
@@ -512,6 +550,31 @@ mod tests {
 
         let reader = TestReader::new(data.into_bytes());
         assert_eq!(detect_format(&reader).unwrap(), FileFormat::SVG);
+    }
+
+    /// Single-byte 8-bit text is not valid UTF-8, so the UTF-8 gate rejected
+    /// it and every Latin-1 or MacRoman .txt resolved to Unknown -- the TXT
+    /// parser was dispatched but never reached by any of them.
+    #[test]
+    fn test_detect_latin1_text() {
+        let reader = TestReader::new(b"this \xe9 is Latin1\r\n".to_vec());
+        assert_eq!(detect_format(&reader).unwrap(), FileFormat::TXT);
+    }
+
+    #[test]
+    fn test_detect_macroman_text() {
+        // 0x8E lands in the C1 range, which is what makes this
+        // unknown-8bit rather than iso-8859-1.
+        let reader = TestReader::new(b"this \x8e is MacRoman\r".to_vec());
+        assert_eq!(detect_format(&reader).unwrap(), FileFormat::TXT);
+    }
+
+    /// High bytes alone clear ExifTool's control-character gate, so the
+    /// 8-bit path must not claim binary that merely avoids that range.
+    #[test]
+    fn test_high_byte_run_is_not_claimed_as_text() {
+        let reader = TestReader::new(vec![0xFF; 512]);
+        assert_eq!(detect_format(&reader).unwrap(), FileFormat::Unknown);
     }
 
     #[test]

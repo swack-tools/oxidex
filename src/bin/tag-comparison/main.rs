@@ -294,6 +294,7 @@ fn extension_to_format(ext: &str) -> Option<&'static str> {
         "ico" => Some("ICO"),
         "svg" => Some("SVG"),
         "eps" | "ps" => Some("EPS"),
+        "flif" => Some("FLIF"),
         "exr" => Some("EXR"),
         "jxl" => Some("JXL"),
         "avif" => Some("AVIF"),
