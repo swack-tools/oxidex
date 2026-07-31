@@ -29,6 +29,7 @@ const EXIF_DATA_1: u16 = 0x0422; // EXIF data 1
 const EXIF_DATA_3: u16 = 0x0423; // EXIF data 3
 const XMP_DATA: u16 = 0x0424; // XMP metadata
 const ICC_PROFILE: u16 = 0x040F; // ICC profile
+const PHOTO_MECHANIC_SOFT_EDIT: u16 = 0x0427; // Photo Mechanic SoftEdit
 const RESOLUTION_INFO: u16 = 0x03ED; // Resolution info
 const PRINT_FLAGS: u16 = 0x03F1; // Print flags
 const COPYRIGHT_FLAG: u16 = 0x040A; // Copyright flag
@@ -197,6 +198,9 @@ impl PSDParser {
                 EXIF_DATA_1 | EXIF_DATA_3 => {
                     Self::parse_exif_data(resource_data, metadata);
                 }
+                PHOTO_MECHANIC_SOFT_EDIT => {
+                    Self::parse_photo_mechanic_soft_edit(resource_data, metadata);
+                }
                 COPYRIGHT_FLAG => {
                     if !resource_data.is_empty() && resource_data[0] != 0 {
                         metadata.insert(
@@ -273,6 +277,21 @@ impl PSDParser {
             "ResolutionUnit".to_string(),
             TagValue::String(unit_name.to_string()),
         );
+    }
+
+    /// Parse the Photo Mechanic SoftEdit resource.
+    ///
+    /// PhotoMechanic.pm defines CropRight as a big-endian int32u at
+    /// offset 0x0c in the 0x0427 resource.  The Photoshop 0x0426
+    /// resource is PrintScale and must not be interpreted using this
+    /// table.
+    fn parse_photo_mechanic_soft_edit(data: &[u8], metadata: &mut MetadataMap) {
+        if let Some(value) = read_be_u32(data, 0x0c) {
+            metadata.insert(
+                "PhotoMechanic:CropRight".to_string(),
+                TagValue::Integer(value as i64),
+            );
+        }
     }
 
     /// Parse embedded EXIF data
@@ -476,6 +495,14 @@ fn lookup_ifd1_tag_name(tag_id: u16) -> String {
     }
 
     database_name
+}
+
+fn read_be_u32(data: &[u8], offset: usize) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    let bytes = data.get(offset..end)?;
+    Some(u32::from_be_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3],
+    ]))
 }
 
 /// Converts raw bytes to TagValue
