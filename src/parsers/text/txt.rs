@@ -8,7 +8,7 @@
 //! Plain text files are unstructured data but contain useful metadata:
 //! - Character encoding (UTF-8, UTF-16LE, UTF-16BE, ASCII, etc.)
 //! - Byte Order Mark (BOM) presence
-//! - Line ending style (CRLF, LF, CR, or mixed)
+//! - Line ending style (CRLF, LF, or CR)
 //! - Text statistics (line count, word count, character count)
 //!
 //! # Supported Metadata
@@ -18,9 +18,9 @@
 //! - MIMEType: "text/plain"
 //! - MIMEEncoding: Detected encoding (utf-8, utf-16le, utf-16be, us-ascii, etc.)
 //! - ByteOrderMark: "Yes" or "No"
-//! - Newlines: Line ending style (Unix LF, Windows CRLF, Macintosh CR, Mixed, or (none))
-//! - LineCount: Number of lines in the file
-//! - WordCount: Number of words in the file
+//! - Newlines: Line ending style (Unix LF, Windows CRLF, Macintosh CR, or (none))
+//! - LineCount: Number of lines in the file (single-byte encodings only)
+//! - WordCount: Number of words in the file (single-byte encodings only)
 
 #![allow(dead_code)]
 
@@ -84,20 +84,38 @@ impl Encoding {
         }
     }
 
-    /// Whether statistics can be generated for this encoding.
+    /// Whether ExifTool reports `ByteOrderMark` for this encoding.
     ///
-    /// ExifTool reports `Newlines`, `LineCount` and `WordCount` only for
-    /// single-byte encodings (`Text.pm` returns early once `$isUTF8` is
-    /// undefined, which is exactly the UTF-16/UTF-32 cases).
-    fn is_single_byte(&self) -> bool {
-        matches!(
+    /// It leaves `$isBOM` undefined -- and so omits the tag entirely -- for
+    /// the encodings that have no byte order to mark.
+    fn can_carry_bom(&self) -> bool {
+        !matches!(
             self,
-            Encoding::ASCII | Encoding::UTF8 | Encoding::Latin1 | Encoding::Unknown8Bit
+            Encoding::ASCII | Encoding::Latin1 | Encoding::Unknown8Bit | Encoding::Unknown
         )
+    }
+
+    /// The byte pattern surrounding a newline in this multi-byte encoding.
+    ///
+    /// Returns (leading padding, trailing padding, the CR-LF sequence), the
+    /// three parts of `Text.pm`'s newline regexes. `None` for encodings that
+    /// are not multi-byte.
+    fn multibyte_newline_pattern(&self) -> Option<(&'static [u8], &'static [u8], &'static [u8])> {
+        match self {
+            Encoding::UTF16LE => Some((b"", b"\0", b"\r\0\n")),
+            Encoding::UTF16BE => Some((b"\0", b"", b"\r\0\n")),
+            Encoding::UTF32LE => Some((b"", b"\0\0\0", b"\r\0\0\0\n")),
+            Encoding::UTF32BE => Some((b"\0\0\0", b"", b"\r\0\0\0\n")),
+            _ => None,
+        }
     }
 }
 
 /// Line ending style
+///
+/// These are exactly the four values in ExifTool's `Newlines` PrintConv.
+/// There is deliberately no "mixed" state: ExifTool names a file after the
+/// first newline sequence it contains, however the rest of it is terminated.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LineEnding {
     /// Unix/Linux/macOS (LF, \n)
@@ -106,8 +124,6 @@ pub enum LineEnding {
     CRLF,
     /// Old Mac (CR, \r)
     CR,
-    /// Mixed line endings
-    Mixed,
     /// No line endings found
     None,
 }
@@ -119,8 +135,19 @@ impl LineEnding {
             LineEnding::LF => "Unix LF",
             LineEnding::CRLF => "Windows CRLF",
             LineEnding::CR => "Macintosh CR",
-            LineEnding::Mixed => "Mixed",
             LineEnding::None => "(none)",
+        }
+    }
+
+    /// The byte sequence that separates records for this line ending.
+    ///
+    /// ExifTool assigns the detected newline to Perl's `$/` before counting
+    /// lines, and leaves `$/` at its `"\n"` default when it found none.
+    fn separator(&self) -> &'static str {
+        match self {
+            LineEnding::CRLF => "\r\n",
+            LineEnding::CR => "\r",
+            LineEnding::LF | LineEnding::None => "\n",
         }
     }
 }
@@ -213,17 +240,53 @@ impl TXTParser {
     ///
     /// Detected line ending style
     pub fn detect_line_endings(text: &str) -> LineEnding {
-        let has_crlf = text.contains("\r\n");
-        let has_lf = text.contains('\n') && !has_crlf;
-        let has_cr = text.contains('\r') && !has_crlf;
-
-        match (has_crlf, has_lf, has_cr) {
-            (true, false, false) => LineEnding::CRLF,
-            (false, true, false) => LineEnding::LF,
-            (false, false, true) => LineEnding::CR,
-            (false, false, false) => LineEnding::None,
-            _ => LineEnding::Mixed,
+        // ExifTool takes the *first* newline sequence in the file
+        // (`$nl = $1 if $$dataPt =~ /(\r\n|\r|\n)/` in Text.pm) and has no
+        // notion of a mixed file. Reporting "Mixed" for one -- as this did --
+        // emitted a value no ExifTool PrintConv can ever produce.
+        let bytes = text.as_bytes();
+        for (index, &byte) in bytes.iter().enumerate() {
+            match byte {
+                b'\r' if bytes.get(index + 1) == Some(&b'\n') => return LineEnding::CRLF,
+                b'\r' => return LineEnding::CR,
+                b'\n' => return LineEnding::LF,
+                _ => {}
+            }
         }
+
+        LineEnding::None
+    }
+
+    /// Finds the newline sequence in a buffer holding a multi-byte encoding.
+    ///
+    /// ExifTool matches these against the raw bytes rather than against
+    /// decoded text, so the encoding's NUL padding is part of the pattern
+    /// (`Text.pm` strips the NULs back out of whatever it captured).
+    fn detect_multibyte_line_endings(data: &[u8], encoding: &Encoding) -> LineEnding {
+        let Some((leading, trailing, crlf)) = encoding.multibyte_newline_pattern() else {
+            return LineEnding::None;
+        };
+
+        for start in 0..data.len() {
+            let Some(rest) = data[start..].strip_prefix(leading) else {
+                continue;
+            };
+            // Alternation order matters, exactly as in the Perl regex: the
+            // CR-LF pair has to be tried before the bare CR it starts with.
+            for (candidate, line_ending) in [
+                (crlf, LineEnding::CRLF),
+                (b"\r".as_slice(), LineEnding::CR),
+                (b"\n".as_slice(), LineEnding::LF),
+            ] {
+                if let Some(tail) = rest.strip_prefix(candidate)
+                    && tail.starts_with(trailing)
+                {
+                    return line_ending;
+                }
+            }
+        }
+
+        LineEnding::None
     }
 
     /// Computes text statistics
@@ -236,19 +299,26 @@ impl TXTParser {
     ///
     /// Text statistics (line count, word count, character count)
     pub fn compute_stats(text: &str) -> TextStats {
+        // Lines are the records left by the file's own separator. Counting
+        // '\n' regardless -- as this did -- reported every CR-terminated
+        // (classic Macintosh) file as a single line no matter how long.
+        let separator = Self::detect_line_endings(text).separator();
         let line_count = if text.is_empty() {
             0
         } else {
-            // Count newlines, but ensure at least 1 line if text is not empty
-            let newline_count = text.matches('\n').count();
-            if newline_count == 0 && !text.is_empty() {
-                1
-            } else {
-                newline_count + if text.ends_with('\n') { 0 } else { 1 }
-            }
+            let terminated = text.matches(separator).count();
+            terminated + usize::from(!text.ends_with(separator))
         };
 
-        let word_count = text.split_whitespace().filter(|s| !s.is_empty()).count();
+        // ExifTool counts runs of `\S` in bytes, so only ASCII whitespace
+        // separates words; `split_whitespace` would also break on Unicode
+        // spaces such as the non-breaking space Latin-1 puts at 0xA0.
+        let word_count = text
+            .split(|character: char| {
+                matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}')
+            })
+            .filter(|word| !word.is_empty())
+            .count();
 
         let char_count = text.chars().count();
 
@@ -284,14 +354,20 @@ impl TXTParser {
             TagValue::String(encoding.mime_name().to_string()),
         );
 
-        metadata.insert(
-            "ByteOrderMark".to_string(),
-            TagValue::String(if has_bom { "Yes" } else { "No" }.to_string()),
-        );
+        // ExifTool only answers the BOM question for encodings that can
+        // carry one (`HandleTag(ByteOrderMark => $isBOM) if defined $isBOM`).
+        // Reporting "No" for us-ascii or iso-8859-1 states something ExifTool
+        // deliberately declines to state.
+        if encoding.can_carry_bom() {
+            metadata.insert(
+                "ByteOrderMark".to_string(),
+                TagValue::String(if has_bom { "Yes" } else { "No" }.to_string()),
+            );
+        }
 
-        // Decode for further analysis. Multi-byte encodings are skipped the
-        // way ExifTool skips them; single-byte 8-bit text is transcoded from
-        // Latin-1 so that its newlines and statistics are still reported.
+        // Decode for further analysis. Only a single-byte encoding gets line
+        // and word statistics -- `Text.pm` returns before counting once
+        // `$isUTF8` is undefined, which is exactly the multi-byte cases.
         let decoded;
         let text = match encoding {
             Encoding::UTF8 => {
@@ -301,15 +377,23 @@ impl TXTParser {
             }
             Encoding::ASCII => std::str::from_utf8(data)
                 .map_err(|e| ExifToolError::parse_error(format!("Invalid ASCII: {}", e)))?,
-            _ if encoding.is_single_byte() => {
+            // 8-bit text is transcoded from Latin-1 so that its newlines and
+            // statistics are reported like any other single-byte file's.
+            Encoding::Latin1 | Encoding::Unknown8Bit => {
                 decoded = data.iter().map(|&byte| byte as char).collect::<String>();
                 &decoded
             }
-            _ => {
-                // For other encodings, we can't easily analyze without additional dependencies
-                // Just return what we have
+            Encoding::UTF16LE | Encoding::UTF16BE | Encoding::UTF32LE | Encoding::UTF32BE => {
+                // Newlines is *not* gated on a single-byte encoding, and
+                // ExifTool finds it in the raw bytes without decoding.
+                let line_ending = Self::detect_multibyte_line_endings(data, &encoding);
+                metadata.insert(
+                    "Newlines".to_string(),
+                    TagValue::String(line_ending.display_name().to_string()),
+                );
                 return Ok(metadata);
             }
+            Encoding::Unknown => return Ok(metadata),
         };
 
         // Detect line endings
@@ -522,12 +606,77 @@ mod tests {
         assert_eq!(metadata.get_string("Newlines"), Some("Windows CRLF"));
         assert_eq!(metadata.get_string("LineCount"), Some("1"));
         assert_eq!(metadata.get_string("WordCount"), Some("4"));
+        // iso-8859-1 has no byte order to mark, so ExifTool says nothing.
+        assert_eq!(metadata.get_string("ByteOrderMark"), None);
     }
 
     #[test]
     fn test_line_ending_detection_none() {
         let text = "Single line no ending";
         assert_eq!(TXTParser::detect_line_endings(text), LineEnding::None);
+    }
+
+    /// ExifTool names a file after its *first* newline sequence; it has no
+    /// "Mixed" value, so a file that mixes styles must not invent one.
+    #[test]
+    fn test_line_ending_detection_takes_the_first_sequence() {
+        assert_eq!(
+            TXTParser::detect_line_endings("first\nsecond\r\nthird"),
+            LineEnding::LF
+        );
+        assert_eq!(
+            TXTParser::detect_line_endings("first\r\nsecond\nthird"),
+            LineEnding::CRLF
+        );
+        assert_eq!(
+            TXTParser::detect_line_endings("first\rsecond\nthird"),
+            LineEnding::CR
+        );
+    }
+
+    /// Records are separated by the file's own newline, so a classic
+    /// Macintosh file has as many lines as it has carriage returns -- not the
+    /// single line a bare '\n' count reports.
+    #[test]
+    fn test_line_count_follows_the_detected_separator() {
+        assert_eq!(TXTParser::compute_stats("a\rb\rc").line_count, 3);
+        assert_eq!(TXTParser::compute_stats("a\rb\rc\r").line_count, 3);
+        assert_eq!(TXTParser::compute_stats("a\r\nb\r\n").line_count, 2);
+        assert_eq!(TXTParser::compute_stats("a\nb\nc").line_count, 3);
+    }
+
+    /// ExifTool counts runs of `\S` over bytes, so Latin-1's non-breaking
+    /// space at 0xA0 is part of a word rather than a break between two.
+    #[test]
+    fn test_word_count_breaks_only_on_ascii_whitespace() {
+        assert_eq!(TXTParser::compute_stats("one\u{a0}two three").word_count, 2);
+    }
+
+    /// Newlines is reported for the multi-byte encodings as well; only the
+    /// line and word statistics are restricted to single-byte files.
+    #[test]
+    fn test_newlines_reported_for_utf16() {
+        let mut data = b"\xfe\xff".to_vec(); // UTF-16BE BOM
+        data.extend_from_slice(b"\x00t\x00e\x00x\x00t\x00\n");
+
+        let reader = crate::test_support::TestReader::new(data);
+        let metadata = TXTParser::parse_text_content(&reader).unwrap();
+        assert_eq!(metadata.get_string("MIMEEncoding"), Some("utf-16be"));
+        assert_eq!(metadata.get_string("Newlines"), Some("Unix LF"));
+        // Statistics stay absent, as they do in ExifTool.
+        assert_eq!(metadata.get_string("LineCount"), None);
+        assert_eq!(metadata.get_string("WordCount"), None);
+    }
+
+    #[test]
+    fn test_newlines_reported_for_utf16le_crlf() {
+        let mut data = b"\xff\xfe".to_vec(); // UTF-16LE BOM
+        data.extend_from_slice(b"t\x00e\x00\r\x00\n\x00");
+
+        let reader = crate::test_support::TestReader::new(data);
+        let metadata = TXTParser::parse_text_content(&reader).unwrap();
+        assert_eq!(metadata.get_string("MIMEEncoding"), Some("utf-16le"));
+        assert_eq!(metadata.get_string("Newlines"), Some("Windows CRLF"));
     }
 
     #[test]

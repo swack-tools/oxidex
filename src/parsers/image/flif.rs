@@ -108,9 +108,12 @@ fn parse_flif_header(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Res
         return Err(ExifToolError::parse_error("Invalid FLIF header"));
     }
 
-    if let Some(name) = image_type_name(image_type) {
-        metadata.insert("ImageType".to_string(), TagValue::String(name.to_string()));
-    }
+    // A character with no name is still reported, as the raw value -- that is
+    // what an ExifTool PrintConv does when a value is not in its table.
+    let type_name = image_type_name(image_type)
+        .map(str::to_string)
+        .unwrap_or_else(|| (image_type as char).to_string());
+    metadata.insert("ImageType".to_string(), TagValue::String(type_name));
 
     metadata.insert(
         "BitDepth".to_string(),
@@ -174,12 +177,15 @@ fn parse_flif_metadata_chunks(
             break;
         };
         if first < 0x20 {
-            if first == 0 {
-                metadata.insert(
-                    "Encoding".to_string(),
-                    TagValue::String("FLIF16".to_string()),
-                );
-            }
+            // ExifTool emits tag 5 for whatever this byte is; only 0 has a
+            // PrintConv name, and anything else prints as the raw number.
+            metadata.insert(
+                "Encoding".to_string(),
+                match first {
+                    0 => TagValue::String("FLIF16".to_string()),
+                    other => TagValue::Integer(other as i64),
+                },
+            );
             break;
         }
 
@@ -330,8 +336,11 @@ fn read_varint(reader: &dyn FileReader, offset: u64) -> Result<(u32, u64)> {
         }
         let byte = reader.read(offset + consumed, 1)?[0];
         consumed += 1;
+        // Multiply rather than shift: `checked_shl` only rejects a shift
+        // wider than the type, so it would discard the top seven bits of a
+        // five-group varint and report success.
         value = value
-            .checked_shl(7)
+            .checked_mul(128)
             .and_then(|shifted| shifted.checked_add((byte & 0x7F) as u32))
             .ok_or_else(|| ExifToolError::parse_error("FLIF varint overflow"))?;
         if byte & 0x80 == 0 {
@@ -522,6 +531,94 @@ mod tests {
 
         let metadata = parse_flif_metadata(&TestReader::new(data)).unwrap();
         assert_eq!(metadata.get_string("XMP:Creator"), Some("Phil Harvey"));
+    }
+
+    /// A five-group varint carries 35 bits, so the accumulator has to reject
+    /// the overflow rather than silently drop the top bits.
+    #[test]
+    fn test_varint_overflow_is_rejected() {
+        let reader = TestReader::new(vec![0xFF, 0xFF, 0xFF, 0xFF, 0x7F]);
+        assert!(read_varint(&reader, 0).is_err());
+
+        // Six groups is refused on length alone.
+        let reader = TestReader::new(vec![0x81, 0x80, 0x80, 0x80, 0x80, 0x00]);
+        assert!(read_varint(&reader, 0).is_err());
+    }
+
+    /// Compress `payload` the way FLIF stores a metadata chunk and wrap it in
+    /// a minimal 16x16 RGB file.
+    fn flif_with_chunk(name: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        use flate2::Compression;
+        use flate2::write::DeflateEncoder;
+        use std::io::Write;
+
+        let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(payload).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let mut data = b"FLIF31".to_vec();
+        data.extend_from_slice(&[0x0F, 0x0F]);
+        data.extend_from_slice(name);
+        data.extend_from_slice(&encode_varint(compressed.len() as u32));
+        data.extend_from_slice(&compressed);
+        data.push(0x00);
+        data
+    }
+
+    /// A big-endian TIFF whose IFD0 points at both an ExifIFD and a GPS IFD,
+    /// prefixed with the "Exif\0\0" introducer the eXif chunk carries.
+    fn exif_chunk_with_sub_ifds() -> Vec<u8> {
+        fn entry(tag: u16, field_type: u16, count: u32, value: [u8; 4]) -> Vec<u8> {
+            let mut bytes = tag.to_be_bytes().to_vec();
+            bytes.extend_from_slice(&field_type.to_be_bytes());
+            bytes.extend_from_slice(&count.to_be_bytes());
+            bytes.extend_from_slice(&value);
+            bytes
+        }
+
+        // IFD0 holds three entries, so it spans 8..50; ExifIFD and the GPS
+        // IFD hold one each, at 50 and 68.
+        const EXIF_IFD_OFFSET: u32 = 50;
+        const GPS_IFD_OFFSET: u32 = 68;
+
+        let mut tiff = b"MM\x00\x2a".to_vec();
+        tiff.extend_from_slice(&8u32.to_be_bytes());
+
+        tiff.extend_from_slice(&3u16.to_be_bytes());
+        tiff.extend(entry(0x0112, 3, 1, [0x00, 0x01, 0x00, 0x00])); // Orientation
+        tiff.extend(entry(0x8769, 4, 1, EXIF_IFD_OFFSET.to_be_bytes()));
+        tiff.extend(entry(0x8825, 4, 1, GPS_IFD_OFFSET.to_be_bytes()));
+        tiff.extend_from_slice(&0u32.to_be_bytes());
+        assert_eq!(tiff.len(), EXIF_IFD_OFFSET as usize);
+
+        tiff.extend_from_slice(&1u16.to_be_bytes());
+        tiff.extend(entry(0xA002, 4, 1, 640u32.to_be_bytes())); // ExifImageWidth
+        tiff.extend_from_slice(&0u32.to_be_bytes());
+        assert_eq!(tiff.len(), GPS_IFD_OFFSET as usize);
+
+        tiff.extend_from_slice(&1u16.to_be_bytes());
+        tiff.extend(entry(0x0001, 2, 2, *b"N\0\0\0")); // GPSLatitudeRef
+        tiff.extend_from_slice(&0u32.to_be_bytes());
+
+        let mut chunk = b"Exif\0\0".to_vec();
+        chunk.extend_from_slice(&tiff);
+        chunk
+    }
+
+    /// IFD0's ExifIFD and GPS pointers have to be followed; stopping at IFD0
+    /// drops every exposure and location tag a FLIF can carry.
+    #[test]
+    fn test_exif_chunk_sub_ifd_pointers_are_followed() {
+        let data = flif_with_chunk(b"eXif", &exif_chunk_with_sub_ifds());
+        let metadata = parse_flif_metadata(&TestReader::new(data)).unwrap();
+
+        assert_eq!(
+            metadata.get_string("ExifByteOrder"),
+            Some("Big-endian (Motorola, MM)")
+        );
+        assert_eq!(metadata.get_integer("IFD0:Orientation"), Some(1));
+        assert_eq!(metadata.get_integer("ExifIFD:ExifImageWidth"), Some(640));
+        assert_eq!(metadata.get_string("GPS:GPSLatitudeRef"), Some("N"));
     }
 
     #[test]
