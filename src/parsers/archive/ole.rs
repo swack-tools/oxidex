@@ -3,12 +3,19 @@
 //! This module parses Microsoft Compound File Binary Format files (.doc, .xls, .ppt, .msg)
 //! and extracts metadata including VBA macro detection for forensic analysis.
 
+use super::ole_properties::{self, PropertySet};
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
 
 /// OLE file signature (magic bytes)
 const OLE_SIGNATURE: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+
+/// Directory-entry names of the metadata streams. The leading 0x05 is part of
+/// the name as stored in the compound file.
+const SUMMARY_INFORMATION_STREAM: &str = "\u{5}SummaryInformation";
+const DOCUMENT_SUMMARY_INFORMATION_STREAM: &str = "\u{5}DocumentSummaryInformation";
+const CURRENT_USER_STREAM: &str = "Current User";
 
 /// Directory entry type constants
 const STGTY_INVALID: u8 = 0;
@@ -391,12 +398,17 @@ impl OLEParser {
                 String::new()
             };
 
-            // Skip empty entries
-            if name.is_empty() {
+            let entry_type = entry_data[66];
+
+            // Skip empty entries -- but never the root storage. MS-CFB 2.6.2
+            // requires exactly one root entry and every mini-stream read is
+            // relative to it, yet some real files (ExifTool's own FlashPix.ppt
+            // among them) leave its name field mangled. Dropping it here left
+            // `root_entry` unset, which silently turned every mini-stream read
+            // -- the SummaryInformation streams included -- into no data.
+            if name.is_empty() && entry_type != STGTY_ROOT {
                 continue;
             }
-
-            let entry_type = entry_data[66];
             let left_sibling = entry.u32_at(68).unwrap_or(0);
             let right_sibling = entry.u32_at(72).unwrap_or(0);
             let child_did = entry.u32_at(76).unwrap_or(0);
@@ -452,6 +464,51 @@ impl OLEParser {
         )?;
         Ok(Self::read_u32_entries(&bytes))
     }
+
+    /// Extract the FlashPix property sets carried by Office/CFB documents.
+    ///
+    /// ExifTool reports these under the `FlashPix` group for every compound
+    /// file, not just FPX images, so `.doc`/`.xls`/`.ppt`/`.msg` all pick up
+    /// Title, Author, CreateDate and friends here.
+    fn extract_property_sets(
+        reader: &dyn FileReader,
+        entries: &[DirectoryEntry],
+        header: &OLEHeader,
+        fat: &[u32],
+        mini_fat: &[u32],
+        root_entry: Option<&DirectoryEntry>,
+        metadata: &mut MetadataMap,
+    ) {
+        for entry in entries {
+            if entry.entry_type != STGTY_STREAM {
+                continue;
+            }
+            let set = match entry.name.as_str() {
+                SUMMARY_INFORMATION_STREAM => Some(PropertySet::SummaryInfo),
+                DOCUMENT_SUMMARY_INFORMATION_STREAM => Some(PropertySet::DocumentInfo),
+                CURRENT_USER_STREAM => {
+                    if let Ok(data) =
+                        VBAAnalyzer::read_stream(reader, entry, header, fat, mini_fat, root_entry)
+                        && let Some(user) = ole_properties::parse_current_user(&data)
+                    {
+                        metadata.insert("FlashPix:CurrentUser", TagValue::new_string(user));
+                    }
+                    continue;
+                }
+                _ => None,
+            };
+
+            let Some(set) = set else {
+                continue;
+            };
+            let Ok(data) =
+                VBAAnalyzer::read_stream(reader, entry, header, fat, mini_fat, root_entry)
+            else {
+                continue;
+            };
+            ole_properties::parse_property_stream(&data, set, metadata);
+        }
+    }
 }
 
 impl FormatParser for OLEParser {
@@ -476,6 +533,17 @@ impl FormatParser for OLEParser {
         metadata.insert(
             "OLE:DirectoryEntryCount".to_string(),
             TagValue::new_integer(entries.len() as i64),
+        );
+
+        // FlashPix property sets (SummaryInformation / DocumentSummaryInformation)
+        Self::extract_property_sets(
+            reader,
+            &entries,
+            &header,
+            &fat,
+            &mini_fat,
+            root_entry,
+            &mut metadata,
         );
 
         // Check for VBA macros
