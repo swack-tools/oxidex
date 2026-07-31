@@ -212,6 +212,66 @@ def squad_formats(squads_toml_path, squad):
     return list(cfg.get("formats") or [])
 
 
+def format_owner_map(squads_toml_path):
+    """format (lowercased) -> the ONE squad that consumes that format's
+    legacy per-format worker branch.
+
+    squads.toml's ``formats`` is many-to-one on purpose -- 13 of the 14
+    squads list "JPEG" -- and it is correct AS the advisory "which
+    formats must this squad re-verify" list its own comment calls it.
+    It is NOT a work partition, and candidate_worker_branches was reading
+    it as one: there is exactly ONE model-fix-parallel-jpeg branch, so
+    all 13 mergers resolved to the same branch and each cherry-picked the
+    same commits onto its own staging branch. Measured 2026-07-30: a
+    single 28-line change to app12_olympus.rs existed as 13 commits
+    sharing one patch-id (5703eaa44c114f4c), 8 of them created inside a
+    37-second window; squad/tail, the only squad not listing JPEG, was
+    the only one without it. Across all 14 branches, 22 commits carried
+    just 7 distinct patch-ids.
+
+    The existing guards (squad_that_already_staged, squad_holding_any_file)
+    cannot close this: both read state another merger only writes AFTER a
+    full cherry-pick + cargo test + corpus compare, while all 13 mergers
+    poll on the same 60s cadence -- so they all look, all see nothing
+    staged, and all proceed. squad_that_already_staged's own docstring
+    concedes it ("a race between two mergers checking at once degrades to
+    exactly today's behaviour"). Those guards stay: they remain the right
+    second line of defence for genuinely different code touching one file.
+    This function removes the race instead of narrowing it.
+
+    Ownership rule, in order:
+      1. the squad whose ``modules`` names the format itself -- JPEG.pm
+         belongs to standards-appn, XMP.pm to xmp, PDF.pm to ps-docs.
+         This is squads.toml's own documented routing key ("attribute_gaps
+         routes every attributed gap module -> squad through this table").
+      2. otherwise the MOST SPECIALISED claimant: fewest formats listed,
+         so RW2 goes to panasonic-leica (2) rather than exif-core (9).
+      3. ties broken by squad name, so the map is stable.
+
+    Pure and total -- config in, mapping out. No clock, no disk state, no
+    lock, so two mergers evaluating in the same instant cannot both claim.
+    """
+    with open(squads_toml_path, "rb") as f:
+        squads = tomllib.load(f).get("squads") or {}
+    sizes = {name: len(cfg.get("formats") or []) for name, cfg in squads.items()}
+    module_owner = {}
+    for name in sorted(squads):
+        for module in squads[name].get("modules") or []:
+            module_owner.setdefault(module.lower(), name)
+    owners = {}
+    for name in sorted(squads):
+        for fmt in squads[name].get("formats") or []:
+            key = fmt.lower()
+            if module_owner.get(key) == name:
+                owners[key] = name          # rule 1 -- names the module outright
+                continue
+            if key in owners and module_owner.get(key) == owners[key]:
+                continue                    # rule 1 already settled it
+            if key not in owners or sizes[name] < sizes[owners[key]]:
+                owners[key] = name          # rules 2 and 3
+    return owners
+
+
 # ---------------------------------------------------------------------------
 # Git mechanics (real subprocess; list-argv only, no shell=True)
 # ---------------------------------------------------------------------------
@@ -373,9 +433,20 @@ def candidate_worker_branches(repo_root, squads_toml_path, squad):
     (a slot's format cycles round to round, so there is no static
     per-branch format to pair it with the way there is here); see
     squad_slot_branches / commit_format_trailer for that discovery path,
-    consulted alongside this one in poll_once."""
+    consulted alongside this one in poll_once.
+
+    Only the format's OWNING squad consumes its worker branch (see
+    format_owner_map): a per-format branch is a single shared resource,
+    and handing it to all 13 squads that merely LIST the format is what
+    produced 13 copies of one patch-id. Filtering here, rather than in
+    squad_formats, is deliberate and load-bearing -- poll_once unions
+    squad_formats into the batch full-corpus check, and a squad must
+    still VERIFY JPEG even once it no longer CONSUMES the JPEG branch."""
+    owners = format_owner_map(squads_toml_path)
     out = []
     for fmt in squad_formats(squads_toml_path, squad):
+        if owners.get(fmt.lower(), squad) != squad:
+            continue
         branch = worker_branch_name(fmt)
         if branch_exists(repo_root, branch):
             out.append((fmt, branch))
