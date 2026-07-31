@@ -409,8 +409,11 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     let mut ifd_offset = first_ifd_offset;
     let mut ifd_index = 0;
 
-    // CR2 IFD0 thumbnail byte count for PreviewImage/PreviewImageLength
+    // CR2 IFD0 StripOffsets/StripByteCounts for the embedded JPEG preview.
+    let mut cr2_preview_start: Option<u32> = None;
     let mut cr2_thumbnail_length: Option<u32> = None;
+    let mut cr2_thumbnail_start: Option<u32> = None;
+    let mut cr2_ifd1_thumbnail_length: Option<u32> = None;
 
     // Add format-specific tag to identify file type
     metadata.insert(
@@ -486,14 +489,33 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         continue; // Don't add pointer tag to metadata
                     }
 
-                    // CR2 IFD0: capture the StripByteCounts value for the
-                    // thumbnail JPEG preview (ExifTool EXIF:PreviewImage).
+                    // In Canon's CR2 table, TIFF StripOffsets (0x0111) is
+                    // PreviewImageStart. StripByteCounts (0x0117) remains the
+                    // PreviewImageLength value emitted by the generic CR2
+                    // handling below.
                     if format == RawFormat::CanonCR2
                         && ifd_index == 0
-                        && *tag_id == 0x0117
                         && bytes.len() >= 4
                     {
-                        cr2_thumbnail_length = Some(read_u32(bytes, byte_order));
+                        match *tag_id {
+                            0x0111 => {
+                                let value = read_u32(bytes, byte_order);
+                                cr2_preview_start = Some(value);
+                                metadata.insert(
+                                    renamed_lookup_tag_name(
+                                        0x0111,
+                                        "EXIF",
+                                        "PreviewImageStart",
+                                    ),
+                                    TagValue::new_integer(i64::from(value)),
+                                );
+                                continue;
+                            }
+                            0x0117 => {
+                                cr2_thumbnail_length = Some(read_u32(bytes, byte_order));
+                            }
+                            _ => {}
+                        }
                     }
 
                     // Check for SubIFD pointer (tag 0x014A) - common in RAW formats
@@ -552,7 +574,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     }
 
                     // CR2 IFD1 thumbnail/preview tags: ExifTool reports
-                    // PreviewImage and PreviewImageLength under the EXIF
+                    // ThumbnailLength under the EXIF group, derived from the
                     // group, derived from the IFD1 JPEGInterchangeFormat*
                     // entries. The generic lookup_tag_name path indexes
                     // these under their EXIF-spec names, so we name them
@@ -561,24 +583,27 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         match *tag_id {
                             0x0201 if bytes.len() >= 4 => {
                                 let value = read_u32(bytes, byte_order);
+                                cr2_thumbnail_start = Some(value);
                                 metadata.insert(
-                                    "EXIF:ThumbnailOffset".to_string(),
+                                    renamed_lookup_tag_name(
+                                        0x0201,
+                                        "EXIF",
+                                        "ThumbnailOffset",
+                                    ),
                                     TagValue::new_integer(value as i64),
                                 );
                                 continue;
                             }
                             0x0202 if bytes.len() >= 4 => {
                                 let value = read_u32(bytes, byte_order);
+                                cr2_ifd1_thumbnail_length = Some(value);
                                 metadata.insert(
-                                    "EXIF:PreviewImageLength".to_string(),
+                                    renamed_lookup_tag_name(
+                                        0x0202,
+                                        "EXIF",
+                                        "ThumbnailLength",
+                                    ),
                                     TagValue::new_integer(value as i64),
-                                );
-                                metadata.insert(
-                                    "EXIF:PreviewImage".to_string(),
-                                    TagValue::new_string(format!(
-                                        "(Binary data {} bytes, use -b option to extract)",
-                                        value
-                                    )),
                                 );
                                 continue;
                             }
@@ -1063,18 +1088,45 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
             if let Some(length) = cr2_thumbnail_length {
                 if length > 0 {
                     metadata.insert(
-                        "EXIF:PreviewImageLength".to_string(),
+                        renamed_lookup_tag_name(0x0117, "EXIF", "PreviewImageLength"),
                         TagValue::new_integer(length as i64),
-                    );
-                    metadata.insert(
-                        "EXIF:PreviewImage".to_string(),
-                        TagValue::new_string(format!(
-                            "(Binary data {} bytes, use -b option to extract)",
-                            length
-                        )),
                     );
                 }
             }
+
+            // CanonRaw.pm exposes the JPEG at the CR2 preview offset as the
+            // EXIF thumbnail. Older CR2 files may not have an IFD1 pair, so
+            // locate the JPEG end marker when only IFD0 StripOffsets exists.
+            let image_start = cr2_thumbnail_start.or(cr2_preview_start);
+            if let Some(start) = image_start
+                && let Ok(start) = usize::try_from(start)
+                && let Some(image) = data.get(start..)
+            {
+                let image_length = if let Some(length) = cr2_ifd1_thumbnail_length {
+                    usize::try_from(length)
+                        .ok()
+                        .and_then(|length| image.get(..length))
+                        .map(|thumbnail| (thumbnail, length))
+                } else {
+                    image
+                        .windows(2)
+                        .position(|window| window == b"\xff\xd9")
+                        .and_then(|end| end.checked_add(2))
+                        .and_then(|length| image.get(..length).map(|thumbnail| (thumbnail, length)))
+                };
+
+                if let Some((thumbnail, length)) = image_length {
+                    metadata.insert(
+                        renamed_lookup_tag_name(0x0202, "EXIF", "ThumbnailLength"),
+                        TagValue::new_integer(length as i64),
+                    );
+                    metadata.insert(
+                        renamed_lookup_tag_name(0x0201, "EXIF", "ThumbnailImage"),
+                        TagValue::Binary(thumbnail.to_vec()),
+                    );
+                }
+            }
+
             extract_cr2_tags(&mut metadata);
         }
         RawFormat::NikonNEF | RawFormat::NikonNRW => {
@@ -1595,6 +1647,16 @@ fn format_dng_subifd_exif_tag(
     Some((format!("EXIF:{}", name), TagValue::new_string(display)))
 }
 
+/// Rename a tag while retaining the group selected by the tag database.
+fn renamed_lookup_tag_name(tag_id: u16, table: &str, name: &str) -> String {
+    let resolved = lookup_tag_name(tag_id, table);
+    if let Some((group, _)) = resolved.rsplit_once(':') {
+        format!("{}:{}", group, name)
+    } else {
+        name.to_string()
+    }
+}
+
 fn read_tiff_u16(bytes: &[u8], byte_order: ByteOrder) -> Option<u16> {
     let bytes: [u8; 2] = bytes.get(..2)?.try_into().ok()?;
     Some(match byte_order {
@@ -2025,6 +2087,17 @@ fn format_exif_display_value(
             2 => Some("Hard".to_string()),
             _ => None,
         },
+        // CanonRaw.pm 0xc640, CR2CFAPattern. This is a single int16u
+        // enumeration, not the dimensioned EXIF CFAPattern payload (0xa302).
+        0xC640 if field_type == 3 && value_count >= 1 => {
+            match read_tiff_u16(bytes, byte_order)? {
+                1 => Some("[Red,Green][Green,Blue]".to_string()),
+                2 => Some("[Green,Red][Blue,Green]".to_string()),
+                3 => Some("[Green,Blue][Red,Green]".to_string()),
+                4 => Some("[Blue,Green][Green,Red]".to_string()),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
