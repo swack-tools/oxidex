@@ -34,6 +34,7 @@
 pub mod history_parser;
 pub mod namespace_mapping;
 pub mod namespace_resolver;
+pub mod plus_vocab;
 pub mod rdf_parser;
 
 use crate::core::{FileReader, MetadataMap, TagValue};
