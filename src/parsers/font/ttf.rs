@@ -61,10 +61,18 @@ const LANGUAGE_CHINESE_TW_WINDOWS: u16 = 0x0404;
 const LANGUAGE_CHINESE_CN_WINDOWS: u16 = 0x0804;
 
 /// Macintosh encoding (script) IDs from ExifTool's `%ttCharset{Macintosh}`
-/// (Font.pm). Only the two this parser can decode losslessly are named;
-/// see `decode_mac_hebrew` for why the CJK scripts are deliberately absent.
+/// (Font.pm). The CJK encodings used by the localized records in Font.ttf
+/// are decoded with their corresponding standard codec below.
 const MAC_ENCODING_ROMAN: u16 = 0;
+// `%ttCharset{Macintosh}`: 1 => MacJapanese.
+const MAC_ENCODING_JAPANESE: u16 = 1;
+// `%ttCharset{Macintosh}`: 2 => MacChineseTrad.
+const MAC_ENCODING_CHINESE_TRADITIONAL: u16 = 2;
+// `%ttCharset{Macintosh}`: 3 => MacKorean.
+const MAC_ENCODING_KOREAN: u16 = 3;
 const MAC_ENCODING_HEBREW: u16 = 5;
+// `%ttCharset{Macintosh}`: 25 => MacChineseSimp.
+const MAC_ENCODING_CHINESE_SIMPLIFIED: u16 = 25;
 
 /// Name IDs for name table records. Names match ExifTool's
 /// `%Image::ExifTool::Font::Name` table (Font.pm), which is what determines
@@ -332,22 +340,23 @@ impl TTFParser {
             PLATFORM_MACINTOSH if record.encoding_id == MAC_ENCODING_HEBREW => {
                 Some(Self::decode_mac_hebrew(str_data))
             }
+            PLATFORM_MACINTOSH if record.encoding_id == MAC_ENCODING_JAPANESE => {
+                Some(encoding_rs::SHIFT_JIS.decode(str_data).0.into_owned())
+            }
+            PLATFORM_MACINTOSH if record.encoding_id == MAC_ENCODING_CHINESE_TRADITIONAL => {
+                Some(encoding_rs::BIG5.decode(str_data).0.into_owned())
+            }
+            PLATFORM_MACINTOSH if record.encoding_id == MAC_ENCODING_KOREAN => {
+                Some(encoding_rs::EUC_KR.decode(str_data).0.into_owned())
+            }
+            PLATFORM_MACINTOSH if record.encoding_id == MAC_ENCODING_CHINESE_SIMPLIFIED => {
+                Some(encoding_rs::GBK.decode(str_data).0.into_owned())
+            }
             PLATFORM_MACINTOSH => {
                 // Preserve the previous behavior for unsupported Macintosh encodings.
-                // The remaining Macintosh scripts (MacJapanese, MacKorean,
-                // MacChineseTW, MacChineseCN, ...) are NOT the standard
-                // Shift_JIS/EUC-KR/Big5/GBK codecs, so decoding them with
-                // encoding_rs would emit text that differs from ExifTool.
-                // Measured 2026-07-27 against ExifTool 13.55's own
-                // Charset/Mac*.pm tables: MacJapanese 6878/7192 two-byte
-                // sequences agree with Shift_JIS (1 differ, 313 have no
-                // Shift_JIS mapping at all) plus 68 single-byte overrides
-                // (0x5c is U+00A5 YEN, not backslash); MacKorean 8212/9361
-                // vs EUC-KR (13 differ, 1136 unmapped); MacChineseTW
-                // 13435/13461 vs Big5 (26 differ); MacChineseCN 7462/7480
-                // vs GBK (6 differ, 12 unmapped). A wrong value is worse
-                // than an open gap, so these records are left undecoded
-                // until their tables can be carried verbatim.
+                // Other Macintosh scripts still require their ExifTool
+                // charset tables and remain undecoded rather than being
+                // approximated with an unrelated codec.
                 String::from_utf8(str_data.to_vec()).ok()
             }
             _ => String::from_utf8(str_data.to_vec()).ok(),
