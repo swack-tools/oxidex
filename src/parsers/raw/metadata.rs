@@ -683,6 +683,16 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         byte_order,
                     ) {
                         TagValue::new_string(value)
+                    } else if format == RawFormat::AdobeDNG
+                        && let Some(value) = format_dng_display_value(
+                            *tag_id,
+                            bytes,
+                            *field_type,
+                            *value_count,
+                            byte_order,
+                        )
+                    {
+                        TagValue::new_string(value)
                     } else if format == RawFormat::AdobeDNG {
                         format_dng_integer_array(
                             *tag_id,
@@ -1281,6 +1291,64 @@ fn find_jpeg_exif_tiff(jpeg: &[u8]) -> Result<Option<&[u8]>> {
     }
 
     Ok(None)
+}
+
+/// Apply the DNG-specific PrintConv rules for values whose TIFF storage does
+/// not match ExifTool's displayed form.
+///
+/// The numeric IDs are from `Image::ExifTool::Exif::Main` in Exif.pm:
+/// 0xc612 DNGVersion, 0xc613 DNGBackwardVersion, and 0xc630 DNGLensInfo.
+fn format_dng_display_value(
+    tag_id: u16,
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    match tag_id {
+        // Exif.pm declares both version tags as int8u[4] and joins their four
+        // components with periods (for example, 1 1 0 0 -> "1.1.0.0").
+        0xC612 | 0xC613 if matches!(field_type, 1 | 7) && value_count == 4 => {
+            let version = bytes.get(..4)?;
+            Some(
+                version
+                    .iter()
+                    .map(u8::to_string)
+                    .collect::<Vec<_>>()
+                    .join("."),
+            )
+        }
+        // Exif.pm 0xc630 is rational64u[4]: minimum focal length, maximum
+        // focal length, minimum f-number, and maximum f-number. Its PrintConv
+        // changes the four space-separated values to
+        // "<min>-<max>mm f/<min>-<max>", then replaces an all-zero aperture
+        // range with "f/?".
+        0xC630 if field_type == 5 && value_count == 4 => {
+            let components = read_tiff_numeric_array(
+                bytes,
+                field_type,
+                value_count,
+                byte_order,
+            )?;
+            let [min_focal, max_focal, min_aperture, max_aperture] =
+                components.as_slice()
+            else {
+                return None;
+            };
+            let aperture = if matches!(min_aperture.as_str(), "0" | "0.0")
+                && matches!(max_aperture.as_str(), "0" | "0.0")
+            {
+                "?".to_string()
+            } else {
+                format!("{}-{}", min_aperture, max_aperture)
+            };
+            Some(format!(
+                "{}-{}mm f/{}",
+                min_focal, max_focal, aperture
+            ))
+        }
+        _ => None,
+    }
 }
 
 /// Format DNG integer-array tags whose ExifTool default output preserves all
