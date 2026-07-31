@@ -10,6 +10,7 @@
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
+use encoding_rs::{BIG5, EUC_KR, GBK, SHIFT_JIS};
 
 /// TTF signature: 0x00 0x01 0x00 0x00 or "true"
 const TTF_SIGNATURE_1: &[u8] = &[0x00, 0x01, 0x00, 0x00];
@@ -64,7 +65,11 @@ const LANGUAGE_CHINESE_CN_WINDOWS: u16 = 0x0804;
 /// (Font.pm). Only the two this parser can decode losslessly are named;
 /// see `decode_mac_hebrew` for why the CJK scripts are deliberately absent.
 const MAC_ENCODING_ROMAN: u16 = 0;
+const MAC_ENCODING_JAPANESE: u16 = 1;
+const MAC_ENCODING_CHINESE_TW: u16 = 2;
+const MAC_ENCODING_KOREAN: u16 = 3;
 const MAC_ENCODING_HEBREW: u16 = 5;
+const MAC_ENCODING_CHINESE_CN: u16 = 25;
 
 /// Name IDs for name table records. Names match ExifTool's
 /// `%Image::ExifTool::Font::Name` table (Font.pm), which is what determines
@@ -331,6 +336,25 @@ impl TTFParser {
             }
             PLATFORM_MACINTOSH if record.encoding_id == MAC_ENCODING_HEBREW => {
                 Some(Self::decode_mac_hebrew(str_data))
+            }
+            PLATFORM_MACINTOSH
+                if matches!(
+                    record.encoding_id,
+                    MAC_ENCODING_JAPANESE
+                        | MAC_ENCODING_CHINESE_TW
+                        | MAC_ENCODING_KOREAN
+                        | MAC_ENCODING_CHINESE_CN
+                ) =>
+            {
+                let encoding = match record.encoding_id {
+                    MAC_ENCODING_JAPANESE => SHIFT_JIS,
+                    MAC_ENCODING_CHINESE_TW => BIG5,
+                    MAC_ENCODING_KOREAN => EUC_KR,
+                    MAC_ENCODING_CHINESE_CN => GBK,
+                    _ => unreachable!(),
+                };
+                let (value, _, had_errors) = encoding.decode(str_data);
+                (!had_errors).then(|| value.into_owned())
             }
             PLATFORM_MACINTOSH => {
                 // Preserve the previous behavior for unsupported Macintosh encodings.
