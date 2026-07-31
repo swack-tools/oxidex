@@ -2758,7 +2758,7 @@ becomes
 
 - [ ] **Step 4: Leave everything else in the workflow untouched**
 
-Do not touch: the pinned ExifTool git-clone step, the `concurrency`/`permissions` blocks, the `rust-cache` step, the weekly cron trigger, or the artifact-upload step's paths (still point at `${{ env.TAGMATRIX_WORK }}/results.json` etc. — unchanged since the Rust binary writes to the same `TAGMATRIX_WORK` location).
+Do not touch: the pinned ExifTool git-clone step, the `concurrency`/`permissions` blocks, the `rust-cache` step, the weekly cron trigger, or the artifact-upload step's paths (still point at `env.TAGMATRIX_WORK`-relative `results.json` etc. — unchanged since the Rust binary writes to the same `TAGMATRIX_WORK` location).
 
 - [ ] **Step 5: Validate the workflow YAML parses**
 
