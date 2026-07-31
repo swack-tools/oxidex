@@ -1901,6 +1901,20 @@ fn format_exif_display_value(
             0x5f => Some("Auto, Fired, Red-eye reduction, Return detected".to_string()),
             _ => None,
         },
+        // FocalLength: RATIONAL[1]. Exif.pm 0x920a PrintConv:
+        //     sprintf("%.1f mm",$val)
+        0x920A if field_type == 5 && value_count >= 1 => {
+            let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if denominator == 0 {
+                None
+            } else {
+                Some(format!(
+                    "{:.1} mm",
+                    f64::from(numerator) / f64::from(denominator)
+                ))
+            }
+        }
         // FileSource: UNDEFINED. Exif.pm 0xa300 PrintConv, verbatim:
         //     1 => 'Film Scanner',
         //     2 => 'Reflection Print Scanner',
@@ -1931,6 +1945,17 @@ fn format_exif_display_value(
         0xA405 if field_type == 3 && value_count >= 1 => {
             let value = read_tiff_u16(bytes, byte_order)?;
             Some(format!("{} mm", value))
+        }
+        // Gamma: RATIONAL[1]. Exif.pm 0xa500 has no PrintConv. A zero
+        // denominator is ExifTool's undefined rational value.
+        0xA500 if field_type == 5 && value_count >= 1 => {
+            let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+            let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+            if numerator == 0 && denominator == 0 {
+                Some("undef".to_string())
+            } else {
+                None
+            }
         }
         // GainControl: SHORT[1] with PrintConv table.
         // Exif.pm: 0=>'None', 1=>'Low gain up', 2=>'High gain up',
@@ -3639,18 +3664,24 @@ fn parse_x3f_image_section(data: &[u8], metadata: &mut MetadataMap, format: RawF
                                             0x829A // ExposureTime
                                                 | 0x829D // FNumber
                                                 | 0x8822 // ExposureProgram
+                                                 | 0x8827 // ISO
                                                 | 0x9000 // ExifVersion
                                                 | 0x9003 // DateTimeOriginal
                                                 | 0x9004 // CreateDate
                                                 | 0x9101 // ComponentsConfiguration
                                                 | 0x9204 // ExposureCompensation
                                                 | 0x9209 // Flash
+                                                 | 0x920A // FocalLength
+                                                 | 0xA000 // FlashpixVersion
                                                 | 0xA001 // ColorSpace
                                                 | 0xA002 // ExifImageWidth
                                                 | 0xA003 // ExifImageHeight
                                                 | 0xA300 // FileSource
                                                 | 0xA401 // CustomRendered
                                                 | 0xA402 // ExposureMode
+                                                 | 0xA405 // FocalLengthIn35mmFormat
+                                                 | 0xA420 // ImageUniqueID
+                                                 | 0xA500 // Gamma
                                         ) {
                                             continue;
                                         }
