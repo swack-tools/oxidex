@@ -67,6 +67,520 @@ const MAIN_TAGS: &[(u32, &str, Format)] = &[
     (0xfe44_3a45, "ImageDustOff", Format::Int8uOffOn),
 ];
 
+// =============================================================================
+// SubDirectory tables
+// =============================================================================
+
+/// One field inside a binary-data sub-table: (key, name, format).
+///
+/// `key` is ExifTool's table key. It is a BYTE offset only when the table's
+/// FORMAT is int8u; for a table declaring `FORMAT => 'int32u'` the keys are
+/// indices in units of that format, so key 2 means byte 8. Getting this
+/// backwards makes DLightingHQ's three fields overlap at bytes 0,1,2 and
+/// yields garbage -- see `SubTable::stride`.
+struct Field {
+    key: usize,
+    name: &'static str,
+    format: SubFormat,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum SubFormat {
+    U8,
+    U8Enum(&'static [(u8, &'static str)]),
+    U16,
+    U16Enum(&'static [(u16, &'static str)]),
+    I16,
+    U32,
+    Double,
+    /// int16s with `ValueConv => '$val / 100'` (ExposureAdj).
+    I16Hundredths,
+    /// A double printed via `sprintf("%.4f")` (ExposureAdj2).
+    Double4dp,
+    /// A double carrying `ValueConv => '$val / 2'`. Nikon stores the crop
+    /// rectangle and its source resolution at twice their reported size, so
+    /// a 3008-wide crop is written 6016.
+    DoubleHalved,
+}
+
+struct SubTable {
+    /// Bytes per table key. 1 for `FORMAT => 'int8u'` (the default), 4 for
+    /// `FORMAT => 'int32u'`.
+    stride: usize,
+    fields: &'static [Field],
+}
+
+const OFF_ON: &[(u8, &str)] = &[(0, "Off"), (1, "On")];
+
+const CROP_DATA: &[Field] = &[
+    Field {
+        key: 30,
+        name: "CropLeft",
+        format: SubFormat::DoubleHalved,
+    },
+    Field {
+        key: 38,
+        name: "CropTop",
+        format: SubFormat::DoubleHalved,
+    },
+    Field {
+        key: 46,
+        name: "CropRight",
+        format: SubFormat::DoubleHalved,
+    },
+    Field {
+        key: 54,
+        name: "CropBottom",
+        format: SubFormat::DoubleHalved,
+    },
+    Field {
+        key: 142,
+        name: "CropOutputWidthInches",
+        format: SubFormat::Double,
+    },
+    Field {
+        key: 150,
+        name: "CropOutputHeightInches",
+        format: SubFormat::Double,
+    },
+    Field {
+        key: 158,
+        name: "CropScaledResolution",
+        format: SubFormat::Double,
+    },
+    Field {
+        key: 174,
+        name: "CropSourceResolution",
+        format: SubFormat::DoubleHalved,
+    },
+    Field {
+        key: 182,
+        name: "CropOutputResolution",
+        format: SubFormat::Double,
+    },
+    Field {
+        key: 190,
+        name: "CropOutputScale",
+        format: SubFormat::Double,
+    },
+    Field {
+        key: 198,
+        name: "CropOutputWidth",
+        format: SubFormat::Double,
+    },
+    Field {
+        key: 206,
+        name: "CropOutputHeight",
+        format: SubFormat::Double,
+    },
+    Field {
+        key: 214,
+        name: "CropOutputPixels",
+        format: SubFormat::Double,
+    },
+];
+
+const NOISE_REDUCTION: &[Field] = &[
+    Field {
+        key: 4,
+        name: "EdgeNoiseReduction",
+        format: SubFormat::U8Enum(OFF_ON),
+    },
+    Field {
+        key: 5,
+        name: "ColorMoireReductionMode",
+        format: SubFormat::U8Enum(&[(0, "Off"), (1, "Low"), (2, "Medium"), (3, "High")]),
+    },
+    Field {
+        key: 9,
+        name: "NoiseReductionIntensity",
+        format: SubFormat::U32,
+    },
+    Field {
+        key: 13,
+        name: "NoiseReductionSharpness",
+        format: SubFormat::U32,
+    },
+    Field {
+        key: 17,
+        name: "NoiseReductionMethod",
+        format: SubFormat::U16Enum(&[
+            (0, "Faster"),
+            (1, "Better Quality"),
+            (2, "Better Quality 2013"),
+        ]),
+    },
+];
+
+const UNSHARP_DATA: &[Field] = &[
+    Field {
+        key: 0,
+        name: "UnsharpCount",
+        format: SubFormat::U8,
+    },
+    Field {
+        key: 19,
+        name: "Unsharp1Color",
+        format: SubFormat::U16Enum(&[
+            (0, "RGB"),
+            (1, "Red"),
+            (2, "Green"),
+            (3, "Blue"),
+            (4, "Yellow"),
+            (5, "Magenta"),
+            (6, "Cyan"),
+        ]),
+    },
+    Field {
+        key: 23,
+        name: "Unsharp1Intensity",
+        format: SubFormat::U16,
+    },
+    Field {
+        key: 25,
+        name: "Unsharp1HaloWidth",
+        format: SubFormat::U16,
+    },
+    Field {
+        key: 27,
+        name: "Unsharp1Threshold",
+        format: SubFormat::U8,
+    },
+];
+
+const WB_ADJ: &[Field] = &[
+    Field {
+        key: 0,
+        name: "WBAdjRedBalance",
+        format: SubFormat::Double,
+    },
+    Field {
+        key: 8,
+        name: "WBAdjBlueBalance",
+        format: SubFormat::Double,
+    },
+    Field {
+        key: 16,
+        name: "WBAdjMode",
+        format: SubFormat::U8Enum(&[
+            (1, "Use Gray Point"),
+            (2, "Recorded Value"),
+            (3, "Use Temperature"),
+            (4, "Calculate Automatically"),
+            (5, "Auto2"),
+            (6, "Underwater"),
+            (7, "Auto1"),
+        ]),
+    },
+    Field {
+        key: 20,
+        name: "WBAdjLighting",
+        format: SubFormat::U16Enum(&[
+            (0, "None"),
+            (256, "Incandescent"),
+            (512, "Daylight (direct sunlight)"),
+            (513, "Daylight (shade)"),
+            (514, "Daylight (cloudy)"),
+            (768, "Standard Fluorescent (warm white)"),
+            (769, "Standard Fluorescent (3700K)"),
+            (770, "Standard Fluorescent (cool white)"),
+            (771, "Standard Fluorescent (5000K)"),
+            (772, "Standard Fluorescent (daylight)"),
+            (773, "Standard Fluorescent (high temperature mercury vapor)"),
+            (1024, "High Color Rendering Fluorescent (warm white)"),
+            (1025, "High Color Rendering Fluorescent (3700K)"),
+            (1026, "High Color Rendering Fluorescent (cool white)"),
+            (1027, "High Color Rendering Fluorescent (5000K)"),
+            (1028, "High Color Rendering Fluorescent (daylight)"),
+            (1280, "Flash"),
+            (1281, "Flash (FL-G1 filter)"),
+            (1282, "Flash (FL-G2 filter)"),
+            (1283, "Flash (TN-A1 filter)"),
+            (1284, "Flash (TN-A2 filter)"),
+            (1536, "Sodium Vapor Lamps"),
+        ]),
+    },
+    Field {
+        key: 24,
+        name: "WBAdjTemperature",
+        format: SubFormat::U16,
+    },
+];
+
+const PHOTO_EFFECTS: &[Field] = &[
+    Field {
+        key: 0,
+        name: "PhotoEffectsType",
+        format: SubFormat::U8Enum(&[(0, "None"), (1, "B&W"), (2, "Sepia"), (3, "Tinted")]),
+    },
+    Field {
+        key: 4,
+        name: "PhotoEffectsRed",
+        format: SubFormat::I16,
+    },
+    Field {
+        key: 6,
+        name: "PhotoEffectsGreen",
+        format: SubFormat::I16,
+    },
+    Field {
+        key: 8,
+        name: "PhotoEffectsBlue",
+        format: SubFormat::I16,
+    },
+];
+
+// FORMAT => 'int32u': keys are int32u INDICES, so 0,1,2 are bytes 0,4,8.
+const D_LIGHTING_HQ: &[Field] = &[
+    Field {
+        key: 0,
+        name: "D-LightingHQShadow",
+        format: SubFormat::U32,
+    },
+    Field {
+        key: 1,
+        name: "D-LightingHQHighlight",
+        format: SubFormat::U32,
+    },
+    Field {
+        key: 2,
+        name: "D-LightingHQColorBoost",
+        format: SubFormat::U32,
+    },
+];
+
+const D_LIGHTING_HS: &[Field] = &[
+    Field {
+        key: 0,
+        name: "D-LightingHSAdjustment",
+        format: SubFormat::U32,
+    },
+    Field {
+        key: 1,
+        name: "D-LightingHSColorBoost",
+        format: SubFormat::U32,
+    },
+];
+
+const BRIGHTNESS: &[Field] = &[
+    Field {
+        key: 0,
+        name: "BrightnessAdj",
+        format: SubFormat::Double,
+    },
+    Field {
+        key: 8,
+        name: "EnhanceDarkTones",
+        format: SubFormat::U8Enum(OFF_ON),
+    },
+];
+
+const COLOR_BOOST: &[Field] = &[
+    Field {
+        key: 0,
+        name: "ColorBoostType",
+        format: SubFormat::U8Enum(&[(0, "Nature"), (1, "People")]),
+    },
+    Field {
+        key: 1,
+        name: "ColorBoostLevel",
+        format: SubFormat::U32,
+    },
+];
+
+const EXPOSURE: &[Field] = &[
+    Field {
+        key: 0,
+        name: "ExposureAdj",
+        format: SubFormat::I16Hundredths,
+    },
+    Field {
+        key: 18,
+        name: "ExposureAdj2",
+        format: SubFormat::Double4dp,
+    },
+];
+
+const RED_EYE: &[Field] = &[Field {
+    key: 0,
+    name: "RedEyeCorrection",
+    format: SubFormat::U8Enum(&[(0, "Off"), (1, "Automatic"), (2, "Click on Eyes")]),
+}];
+
+/// Main-table ids that carry a sub-table rather than a scalar.
+///
+/// These ids are absent from `exiftool -f -listx` -- a SubDirectory has no
+/// printable value of its own, the same reason ExifOffset and GPSInfo are
+/// missing from it -- so they come from NikonCapture.pm directly.
+const SUBDIRS: &[(u32, &str, SubTable)] = &[
+    (
+        0x3742_33e0,
+        "CropData",
+        SubTable {
+            stride: 1,
+            fields: CROP_DATA,
+        },
+    ),
+    (
+        0x926f_13e0,
+        "NoiseReductionData",
+        SubTable {
+            stride: 1,
+            fields: NOISE_REDUCTION,
+        },
+    ),
+    (
+        0xe42b_5161,
+        "UnsharpData",
+        SubTable {
+            stride: 1,
+            fields: UNSHARP_DATA,
+        },
+    ),
+    (
+        0xbf3c_6c20,
+        "WBAdjData",
+        SubTable {
+            stride: 1,
+            fields: WB_ADJ,
+        },
+    ),
+    (
+        0xb038_4e1e,
+        "PhotoEffectsData",
+        SubTable {
+            stride: 1,
+            fields: PHOTO_EFFECTS,
+        },
+    ),
+    (
+        0x890f_f591,
+        "D-LightingHQData",
+        SubTable {
+            stride: 4,
+            fields: D_LIGHTING_HQ,
+        },
+    ),
+    (
+        0xe37b_4337,
+        "D-LightingHSData",
+        SubTable {
+            stride: 4,
+            fields: D_LIGHTING_HS,
+        },
+    ),
+    (
+        0x8458_9434,
+        "BrightnessData",
+        SubTable {
+            stride: 1,
+            fields: BRIGHTNESS,
+        },
+    ),
+    (
+        0xb999_a36f,
+        "ColorBoostData",
+        SubTable {
+            stride: 1,
+            fields: COLOR_BOOST,
+        },
+    ),
+    (
+        0x56a5_4260,
+        "Exposure",
+        SubTable {
+            stride: 1,
+            fields: EXPOSURE,
+        },
+    ),
+    (
+        0x3cfc_73c6,
+        "RedEyeData",
+        SubTable {
+            stride: 1,
+            fields: RED_EYE,
+        },
+    ),
+];
+
+fn render_sub(bytes: &[u8], format: SubFormat) -> Option<String> {
+    fn u16le(b: &[u8]) -> Option<u16> {
+        Some(u16::from_le_bytes([*b.first()?, *b.get(1)?]))
+    }
+    Some(match format {
+        SubFormat::U8 => bytes.first()?.to_string(),
+        SubFormat::U8Enum(t) => {
+            let v = *bytes.first()?;
+            // An unlisted code reports itself rather than being mapped to a
+            // neighbouring label.
+            t.iter()
+                .find(|(k, _)| *k == v)
+                .map(|(_, s)| s.to_string())
+                .unwrap_or_else(|| v.to_string())
+        }
+        SubFormat::U16 => u16le(bytes)?.to_string(),
+        SubFormat::U16Enum(t) => {
+            let v = u16le(bytes)?;
+            t.iter()
+                .find(|(k, _)| *k == v)
+                .map(|(_, s)| s.to_string())
+                .unwrap_or_else(|| v.to_string())
+        }
+        SubFormat::I16 => i16::from_le_bytes([*bytes.first()?, *bytes.get(1)?]).to_string(),
+        SubFormat::I16Hundredths => {
+            let v = i16::from_le_bytes([*bytes.first()?, *bytes.get(1)?]);
+            perl_number(f64::from(v) / 100.0)
+        }
+        SubFormat::Double4dp => {
+            format!(
+                "{:.4}",
+                f64::from_le_bytes(bytes.get(..8)?.try_into().ok()?)
+            )
+        }
+        SubFormat::U32 => u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?).to_string(),
+        SubFormat::Double | SubFormat::DoubleHalved => {
+            let mut v = f64::from_le_bytes(bytes.get(..8)?.try_into().ok()?);
+            if format == SubFormat::DoubleHalved {
+                v /= 2.0;
+            }
+            perl_number(v)
+        }
+    })
+}
+
+/// Renders a float the way ExifTool does.
+///
+/// Perl stringifies with 15 significant digits, so 10.026666666666667 prints
+/// as "10.0266666666667". Rust's shortest-round-trip default keeps all 17,
+/// and the comparison is byte-for-byte -- four otherwise-correct CropData and
+/// WBAdjData values differed only in their tail.
+fn perl_number(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 {
+        return format!("{}", v as i64);
+    }
+    let magnitude = if v == 0.0 {
+        0
+    } else {
+        v.abs().log10().floor() as i32
+    };
+    let decimals = (15 - 1 - magnitude).clamp(0, 17) as usize;
+    let rendered = format!("{:.*}", decimals, v);
+    let trimmed = rendered.trim_end_matches('0').trim_end_matches('.');
+    trimmed.to_string()
+}
+
+fn parse_sub_table(data: &[u8], table: &SubTable, tags: &mut HashMap<String, String>) {
+    for f in table.fields {
+        let at = f.key * table.stride;
+        if at >= data.len() {
+            continue;
+        }
+        if let Some(v) = render_sub(&data[at..], f.format) {
+            tags.insert(format!("Nikon:{}", f.name), v);
+        }
+    }
+}
+
 fn render(value: &[u8], format: Format) -> Option<String> {
     Some(match format {
         Format::Int8uOffOn => match *value.first()? {
@@ -129,10 +643,12 @@ pub fn parse_nikon_capture_data(data: &[u8], tags: &mut HashMap<String, String>)
             break;
         }
 
-        if let Some((_, name, format)) = MAIN_TAGS.iter().find(|(tid, _, _)| *tid == id)
-            && let Some(rendered) = render(&data[pos..pos + size], *format)
-        {
-            tags.insert(format!("Nikon:{}", name), rendered);
+        if let Some((_, name, format)) = MAIN_TAGS.iter().find(|(tid, _, _)| *tid == id) {
+            if let Some(rendered) = render(&data[pos..pos + size], *format) {
+                tags.insert(format!("Nikon:{}", name), rendered);
+            }
+        } else if let Some((_, _, table)) = SUBDIRS.iter().find(|(tid, _, _)| *tid == id) {
+            parse_sub_table(&data[pos..pos + size], table, tags);
         }
 
         pos += size;

@@ -851,6 +851,32 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
 /// `List => 'Seq'` allows several owners; multiple values are joined the same
 /// way `extract_about_cv_term_values` joins its list.
 fn extract_plus_copyright_owner_name(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
+    // Every PLUS sequence-of-structs in the schema has the identical shape --
+    // a container holding rdf:Seq/rdf:li[parseType=Resource] wrapping one
+    // named field -- and ExifTool reports only the inner field. This walker
+    // was written for CopyrightOwner alone; the other three were left to the
+    // generic path, which emits the CONTAINER under its bare name instead
+    // (XMP-plus:ImageCreator rather than XMP-plus:ImageCreatorName) and so
+    // matched nothing.
+    const PLUS_SEQUENCES: &[(&str, &str)] = &[
+        ("CopyrightOwner", "CopyrightOwnerName"),
+        ("ImageCreator", "ImageCreatorName"),
+        ("ImageSupplier", "ImageSupplierName"),
+        ("Licensor", "LicensorName"),
+    ];
+    let mut out = Vec::new();
+    for (container, field) in PLUS_SEQUENCES {
+        out.extend(extract_plus_sequence_field(xml_bytes, container, field)?);
+    }
+    Ok(out)
+}
+
+/// Collects one PLUS container's inner field; see the table above.
+fn extract_plus_sequence_field(
+    xml_bytes: &[u8],
+    container: &str,
+    field: &str,
+) -> Result<Vec<(String, String)>> {
     const PLUS_NS: &str = "http://ns.useplus.org/ldf/xmp/1.0/";
 
     let mut reader = Reader::from_reader(xml_bytes);
@@ -873,12 +899,12 @@ fn extract_plus_copyright_owner_name(xml_bytes: &[u8]) -> Result<Vec<(String, St
                 let tag_name = extract_tag_name(&e)?;
 
                 if owner_depth.is_none()
-                    && is_property_in_namespace(&tag_name, "CopyrightOwner", PLUS_NS, &resolver)
+                    && is_property_in_namespace(&tag_name, container, PLUS_NS, &resolver)
                 {
                     owner_depth = Some(depth);
                 } else if owner_depth.is_some()
                     && name_depth.is_none()
-                    && is_property_in_namespace(&tag_name, "CopyrightOwnerName", PLUS_NS, &resolver)
+                    && is_property_in_namespace(&tag_name, field, PLUS_NS, &resolver)
                 {
                     name_depth = Some(depth);
                     current_value.clear();
@@ -924,10 +950,7 @@ fn extract_plus_copyright_owner_name(xml_bytes: &[u8]) -> Result<Vec<(String, St
     if names.is_empty() {
         Ok(Vec::new())
     } else {
-        Ok(vec![(
-            "XMP:CopyrightOwnerName".to_string(),
-            names.join(", "),
-        )])
+        Ok(vec![(format!("XMP:{field}"), names.join(", "))])
     }
 }
 
@@ -1410,6 +1433,31 @@ fn register_namespaces_from_element(
     Ok(())
 }
 
+/// Properties ExifTool reports under a different name than the XMP schema's
+/// own local name.
+///
+/// Keyed on (family prefix, local name) because the rename is namespace
+/// specific: `tiff:ImageLength` is ExifTool's `ImageHeight`, but a bare
+/// `ImageLength` in some other schema is not.
+const PROPERTY_RENAMES: &[(&str, &str, &str)] = &[
+    // XMP.pm: the photoshop namespace's ICCProfile is reported with the
+    // "Name" suffix, matching the PLUS sequences above it.
+    ("XMP-photoshop", "ICCProfile", "ICCProfileName"),
+    // plus:Version is the PLUS schema version, not a generic Version.
+    ("XMP-plus", "Version", "PLUSVersion"),
+    // TIFF calls it ImageLength; every ExifTool group calls it ImageHeight.
+    ("XMP-tiff", "ImageLength", "ImageHeight"),
+];
+
+/// Applies [`PROPERTY_RENAMES`], leaving anything unlisted untouched.
+fn exiftool_property_name<'a>(family: &str, local: &'a str) -> &'a str {
+    PROPERTY_RENAMES
+        .iter()
+        .find(|(f, l, _)| *f == family && *l == local)
+        // The replacement is a 'static str, which outlives 'a.
+        .map_or(local, |(_, _, renamed)| *renamed)
+}
+
 /// Formats a tag name to match ExifTool's XMP output conventions.
 ///
 /// ExifTool uses a simplified "XMP:" prefix for most common XMP properties,
@@ -1444,8 +1492,11 @@ fn format_tag_name(qname: &str, resolver: &NamespaceResolver) -> String {
             local_name = capitalize_first_letter(&local_name);
         }
 
+        // Some properties are reported by ExifTool under a different name.
+        let reported = exiftool_property_name(family_prefix, &local_name);
+
         // Format with the appropriate family prefix
-        format!("{}:{}", family_prefix, local_name)
+        format!("{}:{}", family_prefix, reported)
     } else {
         // No namespace prefix - use generic "XMP:" prefix
         // Still capitalize to match ExifTool's PascalCase convention

@@ -518,6 +518,21 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         continue; // Don't add raw MakerNote to metadata, will be parsed separately
                     }
 
+                    // XMP packet (tag 0x02BC, ApplicationNotes). RAW files
+                    // carry their XMP here exactly as JPEG carries it in APP1,
+                    // and oxidex has had an XMP parser all along -- this walk
+                    // simply never handed the bytes to it, so every RAW file
+                    // reported zero XMP tags while ExifTool read them.
+                    if *tag_id == 0x02BC {
+                        if let Ok(xmp_tags) = crate::parsers::xmp::rdf_parser::parse_xmp(bytes) {
+                            for (tag_name, tag_value) in xmp_tags {
+                                metadata.insert(tag_name, TagValue::new_string(tag_value));
+                            }
+                        }
+                        // The raw packet itself is not a tag ExifTool reports.
+                        continue;
+                    }
+
                     // IPTC-NAA (tag 0x83BB) – parse embedded IPTC records
                     if *tag_id == 0x83BB {
                         if let Ok(iptc_tags) = parse_iptc_naa(bytes) {
@@ -1105,6 +1120,44 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
         return Ok(());
     };
 
+    // IFD0 of the RW2's JpgFromRaw preview carries three standard TIFF tags
+    // that ExifTool reports and this function used to walk straight past,
+    // because it read IFD0 only to find the ExifIFD pointer. Sweep #185
+    // claimed ResolutionUnit and ModifyDate among six tags and delivered one
+    // (Saturation); these are the rest of that claim, verified.
+    for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
+        if !matches!(
+            *tag_id,
+            0x0128 // ResolutionUnit
+                | 0x0131 // Software
+                | 0x0132 // ModifyDate
+        ) {
+            continue;
+        }
+        let tag_name = lookup_tag_name(*tag_id, "IFD0");
+        let tag_value = if let Some(value) = format_exif_display_value(
+            *tag_id,
+            raw_bytes.as_ref(),
+            *field_type,
+            *value_count,
+            byte_order,
+        ) {
+            TagValue::new_string(value)
+        } else if *field_type == 2 {
+            // ASCII. ExifTool trims the trailing padding, so this file's
+            // "Ver.1.0 " is reported as "Ver.1.0" -- a trailing space is a
+            // value mismatch, not a cosmetic difference.
+            TagValue::new_string(
+                String::from_utf8_lossy(raw_bytes.as_ref())
+                    .trim_end_matches(|c: char| c == '\0' || c.is_whitespace())
+                    .to_string(),
+            )
+        } else {
+            raw_bytes_to_simple_tag_value(raw_bytes.as_ref(), *field_type, *value_count, byte_order)
+        };
+        metadata.insert(tag_name, tag_value);
+    }
+
     let exif_tags = parse_ifd(&reader, exif_ifd_offset, byte_order)?;
 
     for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
@@ -1136,6 +1189,10 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
                 | 0xA404 // DigitalZoomRatio
                 | 0xA408 // Contrast
                 | 0xA409 // Saturation
+                | 0xA217 // SensingMethod
+                | 0xA301 // SceneType
+                | 0xA406 // SceneCaptureType
+                | 0xA40A // Sharpness
         ) {
             continue;
         }
@@ -1917,6 +1974,55 @@ fn format_exif_display_value(
             0 => Some("Normal".to_string()),
             1 => Some("Low".to_string()),
             2 => Some("High".to_string()),
+            _ => None,
+        },
+
+        // ResolutionUnit (Exif.pm 0x0128). ExifTool prints the unit in lower
+        // case -- "inches", not "Inches".
+        0x0128 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            1 => Some("None".to_string()),
+            2 => Some("inches".to_string()),
+            3 => Some("cm".to_string()),
+            _ => None,
+        },
+
+        // SensingMethod (Exif.pm 0xa217). Note 6 is absent from ExifTool's
+        // table, so it falls through rather than being invented.
+        0xA217 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            1 => Some("Not defined".to_string()),
+            2 => Some("One-chip color area".to_string()),
+            3 => Some("Two-chip color area".to_string()),
+            4 => Some("Three-chip color area".to_string()),
+            5 => Some("Color sequential area".to_string()),
+            7 => Some("Trilinear".to_string()),
+            8 => Some("Color sequential linear".to_string()),
+            _ => None,
+        },
+
+        // SceneType (Exif.pm 0xa301) is UNDEFINED[1], not SHORT: its single
+        // byte is the value, so it is read directly rather than through
+        // read_tiff_u16.
+        0xA301 if value_count >= 1 => match bytes.first()? {
+            1 => Some("Directly photographed".to_string()),
+            _ => None,
+        },
+
+        // SceneCaptureType (Exif.pm 0xa406)
+        0xA406 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("Standard".to_string()),
+            1 => Some("Landscape".to_string()),
+            2 => Some("Portrait".to_string()),
+            3 => Some("Night".to_string()),
+            4 => Some("Other".to_string()),
+            _ => None,
+        },
+
+        // Sharpness (Exif.pm 0xa40a) -- same conversion as Contrast (0xa408),
+        // NOT the same as Saturation (0xa409), whose 1/2 are Low/High.
+        0xA40A if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("Normal".to_string()),
+            1 => Some("Soft".to_string()),
+            2 => Some("Hard".to_string()),
             _ => None,
         },
         _ => None,
@@ -3038,11 +3144,14 @@ fn parse_sigma_x3f(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
     if columns > 0 && rows > 0 {
         metadata.insert(
-            "EXIF:ImageWidth".to_string(),
+            "SigmaRaw:ImageWidth".to_string(),
+            // ExifTool files the X3F header's own dimensions under SigmaRaw,
+            // not EXIF -- `exiftool -G1` prints [SigmaRaw] ImageWidth. The
+            // values were already right; only the family was wrong.
             TagValue::new_string(columns.to_string()),
         );
         metadata.insert(
-            "EXIF:ImageHeight".to_string(),
+            "SigmaRaw:ImageHeight".to_string(),
             TagValue::new_string(rows.to_string()),
         );
     }
