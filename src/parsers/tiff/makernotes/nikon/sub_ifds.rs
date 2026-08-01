@@ -116,6 +116,16 @@ pub fn parse_preview_ifd(
                 tags.insert("Nikon:PreviewImageLength".to_string(), value.to_string());
             }
         }
+        0x0213 => {
+            if let Some(value) = scalar_u32(entry, data, tiff_start, order) {
+                let printed = match value {
+                    1 => "Centered".to_string(),
+                    2 => "Co-sited".to_string(),
+                    other => format!("Unknown ({})", other),
+                };
+                tags.insert("Nikon:YCbCrPositioning".to_string(), printed);
+            }
+        }
         _ => {}
     });
 }
