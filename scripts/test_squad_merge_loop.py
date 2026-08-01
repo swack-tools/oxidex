@@ -1258,6 +1258,32 @@ class ShouldRecutTests(GitRepoTestCase):
             now_fn=lambda: commit_ts + 1, behind_commits=8,
         ))
 
+    def test_single_operational_commit_forces_immediate_recut(self):
+        """Workers must not keep executing old fleet code for eight commits."""
+        repo = self.make_repo()
+        git(repo, "branch", "squad/nikon")
+        base_sha = git_out(repo, "rev-parse", "main").strip()
+        commit_ts = int(git_out(repo, "log", "-1", "--format=%ct", base_sha).strip())
+        self.commit_file(
+            repo, "scripts/find_tag_gaps.py", "# new semaphore policy\n",
+            "fix: update build semaphore policy",
+        )
+        self.assertTrue(sml.should_recut(
+            repo, "squad/nikon", origin_ref="main", staleness_seconds=10**9,
+            now_fn=lambda: commit_ts + 1, behind_commits=8,
+        ))
+
+    def test_test_only_script_drift_does_not_force_recut(self):
+        repo = self.make_repo()
+        git(repo, "branch", "squad/nikon")
+        base_sha = git_out(repo, "rev-parse", "main").strip()
+        commit_ts = int(git_out(repo, "log", "-1", "--format=%ct", base_sha).strip())
+        self.commit_file(repo, "scripts/test_helper.py", "# tests only\n", "test: helper")
+        self.assertFalse(sml.should_recut(
+            repo, "squad/nikon", origin_ref="main", staleness_seconds=10**9,
+            now_fn=lambda: commit_ts + 1, behind_commits=8,
+        ))
+
 
 class RecutSquadBranchTests(GitRepoTestCase):
     def test_recut_re_picks_only_still_open_novel_commits(self):
