@@ -9,14 +9,21 @@
 //! Like Sony's, a Minolta MakerNote is an IFD whose entry offsets are relative
 //! to the TIFF header, so anything longer than four bytes needs `data_base` to
 //! be resolvable at all.
+//!
+//! Four of its sub-directories are decoded only for the DSLR-A100, whose
+//! layout no other body shares; their tables live in
+//! [`super::minolta_a100_tables`] and are read by the same binary-data
+//! interpreter Sony's enciphered blocks use.
 
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use std::collections::HashMap;
 
+use super::minolta_a100_tables as a100;
 use super::minolta_lens_database::lookup_minolta_lens;
 use super::minolta_tables::CAMERA_SETTINGS;
 use super::shared::MakerNoteParser;
 use super::sony::binary::{lookup, print_float, unknown, unknown_hex};
+use super::sony::binary_data;
 use super::sony::value::SonyValue;
 
 // ============================================================================
@@ -246,6 +253,19 @@ static MAIN_TABLE: &[MainTag] = &[
 const TAG_CAMERA_SETTINGS_OLD: u16 = 0x0001;
 const TAG_CAMERA_SETTINGS: u16 = 0x0003;
 
+/// The four `Minolta::Main` sub-directories ExifTool decodes only for the Sony
+/// DSLR-A100, with the byte order each one declares.
+///
+/// All four are gated on `$$self{Model} eq "DSLR-A100"`; nothing else writes
+/// them in a shape these tables describe, so decoding them on another body
+/// would produce confident nonsense rather than nothing.
+const A100_SUBDIRS: &[(u16, usize, ByteOrder)] = &[
+    (0x0010, a100::idx::CAMERAINFOA100, ByteOrder::LittleEndian),
+    (0x0018, a100::idx::ISINFOA100, ByteOrder::BigEndian),
+    (0x0020, a100::idx::WBINFOA100, ByteOrder::BigEndian),
+    (0x0114, a100::idx::CAMERASETTINGSA100, ByteOrder::BigEndian),
+];
+
 fn render(print: &Print, value: &SonyValue<'_>) -> Option<String> {
     match print {
         Print::Int => value.first_int().map(|v| v.to_string()),
@@ -282,9 +302,12 @@ pub fn parse_minolta_ifd(
     byte_order: ByteOrder,
     data_base: Option<u32>,
     sony_host: bool,
+    model: Option<&str>,
 ) -> (Vec<(String, String)>, Vec<(String, String)>) {
     let mut main = Vec::new();
     let mut sub_dir = Vec::new();
+    let is_a100 = model == Some("DSLR-A100");
+    let mut a100_ctx = binary_data::Ctx::new(model, None);
 
     let Some(ifd) = data.get(ifd_index..) else {
         return (main, sub_dir);
@@ -319,6 +342,28 @@ pub fn parse_minolta_ifd(
         let Some(value) = resolve(data, &entry, byte_order, data_base) else {
             continue;
         };
+
+        if is_a100
+            && let Some((_, table, order)) = A100_SUBDIRS.iter().find(|(id, _, _)| *id == tag_id)
+        {
+            let mut found = Vec::new();
+            binary_data::process(
+                a100::TABLES,
+                *table,
+                value.bytes(),
+                *order,
+                &mut a100_ctx,
+                &mut found,
+            );
+            // All four tables are PRIORITY => 0, the same tier CameraSettings
+            // reports under.
+            sub_dir.extend(
+                found
+                    .into_iter()
+                    .map(|f| (format!("Minolta:{}", f.name), f.value)),
+            );
+            continue;
+        }
 
         if matches!(tag_id, TAG_CAMERA_SETTINGS_OLD | TAG_CAMERA_SETTINGS) {
             let mut tags = HashMap::new();
@@ -437,7 +482,7 @@ impl MakerNoteParser for MinoltaParser {
             return Err("Minolta MakerNote data too short".to_string());
         }
         // A Minolta MakerNote has no header: the IFD starts at byte 0.
-        let (main, sub_dir) = parse_minolta_ifd(data, 0, byte_order, data_base, false);
+        let (main, sub_dir) = parse_minolta_ifd(data, 0, byte_order, data_base, false, _model);
 
         // ExifTool prefers the higher-priority Main entry when both tables
         // define a name, and the first-extracted copy among equals.

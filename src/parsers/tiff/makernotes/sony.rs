@@ -7,11 +7,22 @@
 //! model string for others - so a table that decodes one body will silently
 //! mis-decode another.
 //!
+//! Several of those sub-directories - 0x2010, 0x900b, 0x9050 and the 0x94xx
+//! family - are also enciphered with a byte substitution before they are
+//! stored. See [`enciphered`].
+//!
 //! ## Layout
 //! * [`main_table`] - tags stored directly as IFD entries
 //! * [`amount`] - the `CameraInfo2` / `FocusInfo` / `CameraSettings`
 //!   sub-directories written by the A-mount DSLRs
 //! * [`binary`] - the shared `ProcessBinaryData` addressing and print helpers
+//! * [`enciphered`] - Sony's substitution cipher, and the `Sony::Main` entries
+//!   whose sub-directories are written through it (0x2010, 0x9050, 0x94xx)
+//! * [`enciphered_tables`] - those sub-directories' tables, transcribed from
+//!   ExifTool
+//! * [`binary_data`] - the `ProcessBinaryData` interpreter those tables need,
+//!   which is richer than [`binary`]: Conditions, data members, Hooks and
+//!   nested sub-directories
 //! * [`lens_spec`] - the packed eight-byte `LensSpec`
 //! * [`value`] - typed access to one IFD entry's bytes
 //!
@@ -26,6 +37,9 @@
 
 pub mod amount;
 pub mod binary;
+pub mod binary_data;
+pub mod enciphered;
+pub mod enciphered_tables;
 pub mod lens_spec;
 pub mod main_table;
 pub mod value;
@@ -64,6 +78,9 @@ const TAG_CAMERA_SETTINGS: u16 = 0x0114;
 /// MakerNote, which the DSLR-A100 writes alongside its Sony one. A stored zero
 /// means the IFD is absent.
 const TAG_MINOLTA_MAKERNOTE: u16 = 0xb028;
+/// 0x1003's only job outside its own sub-directory is to set
+/// `$$self{Panorama}`, which two of the 0x2010 variants are gated on.
+const TAG_PANORAMA: u16 = 0x1003;
 
 /// Largest plausible entry count for a Sony MakerNote IFD.
 const MAX_ENTRIES: u16 = 200;
@@ -300,12 +317,50 @@ fn parse_sony_makernote_impl(
     // loses to 0xb025 despite coming later).
     let mut found: Vec<Found> = Vec::new();
 
+    // The `$$self{...}` members ExifTool threads between Sony's enciphered
+    // directories, filled as the IFD is walked. The walk is in *file* order,
+    // not tag-id order, because that is the order `ProcessExif` uses and a
+    // Sony MakerNote IFD is not sorted: whether 0x9405 sees the `FlashFired`
+    // 0x9050 sets depends on which entry the body wrote first, and ExifTool
+    // has exactly the same dependence.
+    let mut cipher_ctx = binary_data::Ctx::new(model, None);
+    let mut panorama = false;
+
     for entry in &entries {
         let Some(value) = ifd.value(entry) else {
             continue;
         };
 
+        if enciphered::is_root_tag(entry.tag_id) {
+            let tags = enciphered::decode_root(
+                entry.tag_id,
+                value.bytes(),
+                byte_order,
+                panorama,
+                &mut cipher_ctx,
+            );
+            for tag in tags {
+                found.push(Found::new(
+                    format!("Sony:{}", tag.name),
+                    tag.value,
+                    if tag.low_priority {
+                        SUB_DIRECTORY_PRIORITY
+                    } else {
+                        DEFAULT_PRIORITY
+                    },
+                ));
+            }
+            continue;
+        }
+
         match entry.tag_id {
+            TAG_PANORAMA => {
+                // ExifTool's Condition is an assignment: the flag is set on
+                // every body that writes 0x1003, whether or not the
+                // sub-directory that follows is processed.
+                let b = value.bytes();
+                panorama = b.starts_with(&[0x01, 0x01]) || b.starts_with(&[0, 0, 0x01, 0x01]);
+            }
             TAG_CAMERA_INFO => {
                 let mut tags = HashMap::new();
                 amount::extract_camera_info2(value.bytes(), &mut tags);
@@ -335,6 +390,7 @@ fn parse_sony_makernote_impl(
                     byte_order,
                     data_base,
                     true,
+                    model,
                 );
                 // The nested Main table carries ExifTool's default priority,
                 // the same as Sony's own, so it overrides the 0xb0xx scalars
@@ -412,18 +468,30 @@ fn push_all(found: &mut Vec<Found>, tags: HashMap<String, String>, priority: u8)
     );
 }
 
-/// Keeps the copy of each tag name ExifTool would display: highest priority,
-/// and among equals the one extracted last.
+/// Keeps the copy of each tag name ExifTool would display.
+///
+/// `FoundTag` (`ExifTool.pm`) replaces an existing tag when the new one's
+/// priority is at least the old one's, but first *promotes* a stored priority
+/// of 0 to 1: "promote existing 0-priority tag so it takes precedence over a
+/// new 0-tag". So among `Priority => 0` copies the **first** extracted wins,
+/// while any default-priority copy displaces whatever came before it.
+///
+/// The distinction is load-bearing here: the SLT/ILCA bodies write
+/// `DistortionCorrParams` into both 0x2010 and 0x9405, both `PRIORITY => 0`,
+/// with different values. ExifTool reports 0x9405's, because a Sony MakerNote
+/// IFD is *not* sorted by tag id -- the ILCA-68 lists 0x9400..0x940f, then
+/// 0xa100, then 0x2010 -- and 0x9405 is therefore the copy it reaches first.
 fn resolve_duplicates(found: Vec<Found>) -> HashMap<String, String> {
     let mut winners: HashMap<String, (u8, String, String)> = HashMap::new();
     for tag in found {
         let name = tag.name().to_string();
-        match winners.get(&name) {
-            Some((priority, _, _)) if *priority > tag.priority => continue,
-            _ => {
-                winners.insert(name, (tag.priority, tag.key, tag.value));
+        if let Some((stored, _, _)) = winners.get(&name) {
+            let effective = (*stored).max(DEFAULT_PRIORITY);
+            if tag.priority < effective {
+                continue;
             }
         }
+        winners.insert(name, (tag.priority, tag.key, tag.value));
     }
     winners
         .into_values()
