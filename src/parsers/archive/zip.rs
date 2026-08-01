@@ -719,7 +719,7 @@ mod tests {
         let mut buffer = std::io::Cursor::new(Vec::new());
         {
             let mut zip = ZipWriter::new(&mut buffer);
-            zip.set_comment("Test archive comment");
+            zip.set_comment("Test archive comment").unwrap();
             zip.finish().unwrap();
         }
 
