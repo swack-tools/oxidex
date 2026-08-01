@@ -395,7 +395,7 @@ mod tests {
     fn test_parse_complete_lens_info() {
         // Complete structure: type, min_focal, max_focal, min_aperture, max_aperture
         let mut data = vec![
-            0x30, 0x00, // LensType: 48 (Canon EF 50mm f/1.8 II)
+            0x30, 0x00, // LensType: 48 (Canon EF-S 18-55mm f/3.5-5.6 IS)
             0x32, 0x00, // MinFocalLength: 50mm
             0x32, 0x00, // MaxFocalLength: 50mm
             0xA0, 0x00, // MinAperture: APEX * 32 = 160, roughly f/22
@@ -561,12 +561,19 @@ mod tests {
         assert!(result.is_none());
     }
 
-    /// Test known Canon lens IDs from database
+    /// Test known Canon lens IDs from database.
+    ///
+    /// Expected names are the literal right-hand sides of `%canonLensTypes`
+    /// lines, quoted beside each. This test used to assert
+    /// `Canon EF 50mm f/1.8 II` for id 48, which is the name ExifTool files
+    /// under id 29 (Canon.pm:157) - it came from the hand-written table this
+    /// lookup used to read, not from ExifTool.
     #[test]
     fn test_known_lens_ids() {
-        // Test several known Canon lens IDs
+        // Canon.pm:99  `1 => 'Canon EF 50mm f/1.8',`
         assert_eq!(lookup_lens_type(1), "Canon EF 50mm f/1.8");
-        assert_eq!(lookup_lens_type(48), "Canon EF 50mm f/1.8 II");
+        // Canon.pm:199  `48 => 'Canon EF-S 18-55mm f/3.5-5.6 IS',`
+        assert_eq!(lookup_lens_type(48), "Canon EF-S 18-55mm f/3.5-5.6 IS");
 
         // Unknown should indicate it's unknown
         let unknown = lookup_lens_type(65000);
@@ -601,7 +608,7 @@ mod tests {
     #[test]
     fn test_zoom_lens_focal_lengths() {
         let data = vec![
-            0x29, 0x00, // LensType: 41 (Canon EF 100-400mm f/4.5-5.6L IS USM)
+            0x29, 0x00, // LensType: 41 (Canon EF 28-90mm f/4-5.6)
             0x64, 0x00, // MinFocalLength: 100mm
             0x90, 0x01, // MaxFocalLength: 400mm
             0x00, 0x00, // MinAperture (placeholder)

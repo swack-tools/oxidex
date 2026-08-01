@@ -11,7 +11,3 @@ pub use super::shared::{LensDatabase, StaticLensDb};
 pub fn lookup_lens_name(lens_id: u16) -> Option<String> {
     canon::lookup(lens_id).map(|s| s.to_string())
 }
-
-pub fn get_lens_database() -> &'static impl LensDatabase {
-    &canon::LENS_DB
-}

@@ -4077,22 +4077,28 @@ fn parse_canon_makernote_impl_with_model(
                         tags.insert("Canon:ExposureMode".to_string(), exposure_mode);
                     }
 
-                    // LensType (index 22) - Lens type ID
-                    if array.len() > CAMERA_SETTINGS_LENS_TYPE {
-                        let lens_id = array[CAMERA_SETTINGS_LENS_TYPE];
-                        if lens_id > 0 {
-                            // Try to look up lens name from database
-                            if let Some(lens_name) = lookup_lens_name(lens_id as u16) {
-                                tags.insert("Canon:LensType".to_string(), lens_name);
-                            } else {
-                                tags.insert(
-                                    "Canon:LensType".to_string(),
-                                    format!("Unknown ({})", lens_id),
-                                );
-                            }
-                        } else {
-                            // For compact cameras or fixed lenses, output "n/a"
-                            tags.insert("Canon:LensType".to_string(), "n/a".to_string());
+                    // LensType (`%Canon::CameraSettings` key 22, Canon.pm:2499):
+                    //
+                    // ```text
+                    //     Format => 'int16u',
+                    //     RawConv => '$val ? $$self{LensType}=$val : undef',
+                    //     PrintConv => \%canonLensTypes,
+                    // ```
+                    //
+                    // The slot is int16u, so 0xFFFF is 65535 - the key ExifTool
+                    // files "n/a" under - and not -1. Zero is vetoed by the
+                    // RawConv and suppresses the tag entirely rather than
+                    // printing "n/a"; a body with no lens reports 0xFFFF, not 0.
+                    // An id the table does not carry gets ExifTool's ordinary
+                    // unmatched-PrintConv rendering.
+                    if let Some(&raw) = array.get(CAMERA_SETTINGS_LENS_TYPE) {
+                        let lens_id = raw as u16;
+                        if lens_id != 0 {
+                            tags.insert(
+                                "Canon:LensType".to_string(),
+                                lookup_lens_name(lens_id)
+                                    .unwrap_or_else(|| format!("Unknown ({})", lens_id)),
+                            );
                         }
                     }
 
@@ -5928,19 +5934,40 @@ mod tests {
         assert!(!parser.validate_header(too_short));
     }
 
+    /// Spot-checks against `%canonLensTypes`. Every expected string below is
+    /// the literal right-hand side of a Canon.pm line, quoted in the comment.
     #[test]
     fn test_lens_lookup() {
         let parser = CanonParser;
 
-        // Test EF lens lookup
-        assert!(parser.lookup_lens(368).is_some());
+        // Canon.pm:99  `1 => 'Canon EF 50mm f/1.8',`
         assert_eq!(
-            parser.lookup_lens(368),
-            Some("Canon EF 24-70mm f/2.8L II USM".to_string())
+            parser.lookup_lens(1),
+            Some("Canon EF 50mm f/1.8".to_string())
         );
 
-        // Test unknown lens
+        // An id shared by several lenses prints ExifTool's own combined string;
+        // only Composite:LensID narrows it, and that is not this tag.
+        // Canon.pm:480  `368 => 'Sigma 14-24mm f/2.8 DG HSM | A or other Sigma Lens',`
+        assert_eq!(
+            parser.lookup_lens(368),
+            Some("Sigma 14-24mm f/2.8 DG HSM | A or other Sigma Lens".to_string())
+        );
+
+        // Canon.pm:583  `61182 => 'Canon RF 50mm F1.2L USM or other Canon RF Lens',`
+        // The 68 RF lenses ExifTool files under 61182.1-61182.68 all report this
+        // id; none of them has an id of its own.
+        assert_eq!(
+            parser.lookup_lens(61182),
+            Some("Canon RF 50mm F1.2L USM or other Canon RF Lens".to_string())
+        );
+
+        // Canon.pm:652  `65535 => 'n/a',` - what a body with no lens reports.
+        assert_eq!(parser.lookup_lens(65535), Some("n/a".to_string()));
+
+        // Absent from %canonLensTypes.
         assert_eq!(parser.lookup_lens(65000), None);
+        assert_eq!(parser.lookup_lens(61183), None);
     }
 
     // ========================================================================
