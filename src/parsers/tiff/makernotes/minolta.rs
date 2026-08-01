@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use super::minolta_lens_database::lookup_minolta_lens;
 use super::minolta_tables::CAMERA_SETTINGS;
 use super::shared::MakerNoteParser;
+use super::shared::print_im::decode_print_im_from_ifd;
 use super::sony::binary::{lookup, print_float, unknown, unknown_hex};
 use super::sony::value::SonyValue;
 
@@ -443,6 +444,9 @@ impl MakerNoteParser for MinoltaParser {
         // define a name, and the first-extracted copy among equals.
         for (key, value) in sub_dir.into_iter().chain(main) {
             tags.insert(key, value);
+        }
+        if let Some(version) = decode_print_im_from_ifd(ctx, 0, byte_order) {
+            tags.insert("PrintIM:PrintIMVersion".to_string(), version);
         }
         Ok(())
     }

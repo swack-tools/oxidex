@@ -8,6 +8,7 @@ use crate::core::operations_helpers::read_u32;
 use crate::core::tag_conversion::{parse_string_to_tag_value, raw_bytes_to_tag_value};
 use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd};
 use crate::io::EndianReader;
+use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::jpeg::app_segments::app8_isothermal::INFIRAY_ISOTHERMAL_MIN_LENGTH;
 use crate::parsers::jpeg::app_segments::{
     parse_app6_ijpeg, parse_app10_hdr, parse_app11_jpeg_hdr, parse_app12_olympus,
@@ -257,6 +258,16 @@ fn process_ifd0_tags(
             let offset = read_u32(bytes, byte_order);
             gps_ifd_offset = Some(offset as u64);
             continue; // Don't add the pointer tag to metadata
+        }
+
+        // Exif.pm 0xc4a5 is a SubDirectory into PrintIM.pm, not a printable
+        // binary tag. ProcessPrintIM validates the directory and exposes only
+        // PrintIMVersion by default.
+        if *tag_id == 0xC4A5 {
+            if let Some(version) = decode_print_im_version(bytes, byte_order) {
+                metadata.insert(PRINT_IM_VERSION_TAG, TagValue::new_string(version));
+            }
+            continue;
         }
 
         // Check for IPTC-NAA (tag 0x83BB = 33723).
@@ -569,14 +580,12 @@ pub fn process_sof_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     }
 }
 
-/// Processes APP6 segments and extracts GoPro GPMF, TDHD, or NITF metadata.
+/// Processes APP6 segments and extracts EPPIM, GoPro GPMF, TDHD, or NITF metadata.
 ///
 /// APP6 segments (marker 0xFFE6) are dispatched on the same identifier
-/// conditions ExifTool uses: GoPro GPMF ("GoPro\0"), HP/Toshiba TDHD
-/// ("TDHD\x01\0\0\0"), and NITF ("NITF\0"). Tags are emitted under the APP6:
-/// family with ExifTool tag names (e.g. APP6:Model, APP6:CameraSerialNumber) --
-/// APP6 is ExifTool's family-0 group for all three; GoPro/NITF are only its
-/// family-1 names. Unrecognized APP6 payloads extract nothing.
+/// conditions ExifTool uses: Toshiba PrintIM ("EPPIM\0"), GoPro GPMF
+/// ("GoPro\0"), HP/Toshiba TDHD ("TDHD\x01\0\0\0"), and NITF ("NITF\0").
+/// Unrecognized APP6 payloads extract nothing.
 ///
 /// # Arguments
 ///
@@ -933,4 +942,48 @@ fn has_ijpeg_header(segments: &[Segment]) -> bool {
         .iter()
         .filter(|s| s.marker == APP2_MARKER)
         .any(|s| s.data.len() >= 10 && &s.data[4..10] == b"IJPEG\0")
+}
+
+#[cfg(test)]
+mod print_im_tests {
+    use super::*;
+    use crate::parsers::jpeg::segment_parser::parse_segments;
+    use crate::test_support::TestReader;
+
+    fn print_im_block(version: &[u8; 4]) -> Vec<u8> {
+        let mut block = b"PrintIM\0".to_vec();
+        block.extend_from_slice(version);
+        block.extend_from_slice(&[0, 0, 0, 0]); // reserved + zero entries
+        block
+    }
+
+    fn jpeg_with_ifd0_print_im(version: &[u8; 4]) -> Vec<u8> {
+        let value = print_im_block(version);
+        let mut tiff = b"II\x2a\0\x08\0\0\0\x01\0".to_vec();
+        tiff.extend_from_slice(&0xC4A5u16.to_le_bytes());
+        tiff.extend_from_slice(&7u16.to_le_bytes());
+        tiff.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        tiff.extend_from_slice(&26u32.to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        tiff.extend_from_slice(&value);
+
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend_from_slice(&tiff);
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        jpeg.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+        jpeg.extend_from_slice(&payload);
+        jpeg.extend_from_slice(&[0xFF, 0xD9]);
+        jpeg
+    }
+
+    #[test]
+    fn jpeg_ifd0_dispatches_tag_c4a5_to_print_im() {
+        let reader = TestReader::new(jpeg_with_ifd0_print_im(b"0300"));
+        let segments = parse_segments(&reader).unwrap();
+        let mut metadata = MetadataMap::new();
+        process_exif_segments(&segments, &reader, &mut metadata);
+
+        assert_eq!(metadata.get_string("PrintIM:PrintIMVersion"), Some("0300"));
+        assert!(metadata.get("IFD0:PrintIM").is_none());
+    }
 }

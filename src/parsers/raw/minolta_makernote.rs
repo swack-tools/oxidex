@@ -21,6 +21,8 @@
 //! tables -- are deliberately left undecoded rather than guessed at.
 
 use crate::core::TagValue;
+use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
+use crate::parsers::tiff::ifd_parser::ByteOrder;
 use std::collections::HashMap;
 
 /// A parsed value plus the tags it produced.
@@ -979,8 +981,16 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> Tags {
             }
             // 0x0e00 PrintIM.
             0x0e00 => {
-                if let Some((k, v)) = print_im_version(e.bytes(t)) {
-                    tags.insert(k, v);
+                let order = if t.big_endian {
+                    ByteOrder::BigEndian
+                } else {
+                    ByteOrder::LittleEndian
+                };
+                if let Some(version) = decode_print_im_version(e.bytes(t), order) {
+                    tags.insert(
+                        PRINT_IM_VERSION_TAG.to_string(),
+                        TagValue::new_string(version),
+                    );
                 }
             }
             _ => {}
@@ -1001,18 +1011,6 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> Tags {
     }
 
     tags
-}
-
-/// Extract `PrintIM:PrintIMVersion` from a PrintIM directory: the literal
-/// `PrintIM\0` signature followed by a four-byte ASCII version at offset 8.
-fn print_im_version(bytes: &[u8]) -> Option<(String, TagValue)> {
-    if bytes.len() < 12 || &bytes[0..7] != b"PrintIM" {
-        return None;
-    }
-    Some((
-        "PrintIM:PrintIMVersion".to_string(),
-        TagValue::new_string(String::from_utf8_lossy(&bytes[8..12]).to_string()),
-    ))
 }
 
 // ============================================================================
@@ -1055,8 +1053,16 @@ pub fn parse_ttw_makernotes(ttw: &[u8]) -> Tags {
             0x0110 => model = e.ascii(&t),
             0x8769 => exif_ifd = e.as_u32(&t),
             0xc4a5 => {
-                if let Some((k, v)) = print_im_version(e.bytes(&t)) {
-                    tags.insert(k, v);
+                let order = if t.big_endian {
+                    ByteOrder::BigEndian
+                } else {
+                    ByteOrder::LittleEndian
+                };
+                if let Some(version) = decode_print_im_version(e.bytes(&t), order) {
+                    tags.insert(
+                        PRINT_IM_VERSION_TAG.to_string(),
+                        TagValue::new_string(version),
+                    );
                 }
             }
             _ => {}

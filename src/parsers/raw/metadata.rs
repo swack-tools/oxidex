@@ -25,6 +25,7 @@
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
+use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::icc::parse_icc_profile_data as parse_icc;
 use crate::parsers::raw::{RawFormat, raf_parser};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
@@ -1229,19 +1230,12 @@ fn extract_rw2_embedded_exif_tags(
         return Ok(());
     };
 
-    // PrintIM (0xC4A5). PrintIM.pm's ProcessPrintIM checks for a "PrintIM"
-    // signature and then reads PrintIMVersion as four bytes at offset 8:
-    //     $et->HandleTag($tagTablePtr, 'PrintIMVersion',
-    //                    substr($$dataPt, $offset + 8, 4), ...);
-    // Every other entry in that block is Unknown, so ExifTool reports exactly
-    // one PrintIM tag by default.
     for (tag_id, _field_type, _value_count, raw_bytes) in &ifd0_tags {
         let bytes = raw_bytes.as_ref();
-        if *tag_id == 0xC4A5 && bytes.len() >= 12 && bytes.starts_with(b"PrintIM") {
-            metadata.insert(
-                "PrintIM:PrintIMVersion".to_string(),
-                TagValue::new_string(String::from_utf8_lossy(&bytes[8..12]).to_string()),
-            );
+        if *tag_id == 0xC4A5
+            && let Some(version) = decode_print_im_version(bytes, byte_order)
+        {
+            metadata.insert(PRINT_IM_VERSION_TAG, TagValue::new_string(version));
         }
     }
 
@@ -5500,20 +5494,15 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                         continue;
                                     }
 
-                                    // PrintIM directory (tag 0xC4A5): a small proprietary
-                                    // sub-block starting with "PrintIM\0" followed by a
-                                    // 4-byte ASCII version string at offset 8. ExifTool
-                                    // reports this under its own "PrintIM" family.
-                                    if *tag_id == 0xC4A5
-                                        && bytes.len() >= 12
-                                        && &bytes[0..7] == b"PrintIM"
-                                    {
-                                        let version =
-                                            String::from_utf8_lossy(&bytes[8..12]).to_string();
-                                        metadata.insert(
-                                            "PrintIM:PrintIMVersion".to_string(),
-                                            TagValue::new_string(version),
-                                        );
+                                    if *tag_id == 0xC4A5 {
+                                        if let Some(version) =
+                                            decode_print_im_version(bytes, byte_order)
+                                        {
+                                            metadata.insert(
+                                                PRINT_IM_VERSION_TAG,
+                                                TagValue::new_string(version),
+                                            );
+                                        }
                                         continue;
                                     }
 

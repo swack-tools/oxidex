@@ -48,6 +48,7 @@ use value_reader::{
 use super::nikon_lens_database::lookup_lens_name;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_u16_array, extract_u32_array};
+use super::shared::print_im::decode_print_im_from_ifd;
 
 // Nikon MakerNote Tag IDs (from ExifTool Nikon.pm)
 /// Nikon Capture NX edit history (`NikonCaptureData`), a record stream
@@ -530,8 +531,12 @@ impl MakerNoteParser for NikonParser {
     }
 
     fn validate_header(&self, data: &[u8]) -> bool {
-        // Nikon Type 2/3 headers start with "Nikon\0"
-        data.len() >= 6 && &data[0..6] == b"Nikon\0"
+        // Nikon Type 2/3 start with "Nikon\0". Early Nikon Type 1 notes are
+        // a headerless IFD and are selected by the camera make.
+        data.starts_with(b"Nikon\0")
+            || data
+                .get(..2)
+                .is_some_and(|count| !count[0].is_ascii_alphabetic())
     }
 
     fn parse(
@@ -586,6 +591,12 @@ impl MakerNoteParser for NikonParser {
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
+        if !ctx.payload().starts_with(b"Nikon\0") {
+            if let Some(version) = decode_print_im_from_ifd(ctx, 0, byte_order) {
+                tags.insert("PrintIM:PrintIMVersion".to_string(), version);
+            }
+            return Ok(());
+        }
         self.parse_with_model_and_values(ctx.window(), byte_order, model, tags, value_forms)
     }
 
@@ -722,6 +733,14 @@ impl MakerNoteParser for NikonParser {
         let mut count_key: Option<u32> = None;
         let _ = parse_ifd_entries(&data[ifd_absolute..], order, &config, |entry, _ifd_data| {
             match entry.tag_id {
+                0x0E00 => {
+                    if let Some(bytes) = bytes_of(entry)
+                        && let Some(version) =
+                            crate::parsers::common::print_im::decode_print_im_version(&bytes, order)
+                    {
+                        tags.insert("PrintIM:PrintIMVersion".to_string(), version);
+                    }
+                }
                 NIKON_SERIAL_NUMBER => {
                     if let Some(bytes) = bytes_of(entry) {
                         serial_raw = Some(ascii_value(&bytes));

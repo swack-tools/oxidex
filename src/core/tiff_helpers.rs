@@ -6,6 +6,7 @@
 use super::{FileReader, MetadataMap, TagValue};
 use crate::core::operations_helpers::read_u32;
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
+use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::tiff::geotiff_parser;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, find_entry_position, parse_ifd};
 use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values;
@@ -92,6 +93,34 @@ pub(crate) fn interop_tag_to_name(tag_id: u16) -> &'static str {
         RELATED_IMAGE_WIDTH => "RelatedImageWidth",
         RELATED_IMAGE_HEIGHT => "RelatedImageHeight",
         _ => "Unknown",
+    }
+}
+
+#[cfg(test)]
+mod print_im_dispatch_tests {
+    use super::*;
+    use crate::test_support::TestReader;
+
+    #[test]
+    fn standalone_tiff_ifd0_dispatches_tag_c4a5_to_print_im() {
+        let mut value = b"PrintIM\0".to_vec();
+        value.extend_from_slice(b"0250");
+        value.extend_from_slice(&[0, 0, 0, 0]);
+
+        let mut tiff = b"II\x2a\0\x08\0\0\0\x01\0".to_vec();
+        tiff.extend_from_slice(&0xC4A5u16.to_le_bytes());
+        tiff.extend_from_slice(&7u16.to_le_bytes());
+        tiff.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        tiff.extend_from_slice(&26u32.to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        tiff.extend_from_slice(&value);
+
+        let reader = TestReader::new(tiff);
+        let mut metadata = MetadataMap::new();
+        parse_ifd_chain(&reader, 8, ByteOrder::LittleEndian, &mut metadata).unwrap();
+
+        assert_eq!(metadata.get_string("PrintIM:PrintIMVersion"), Some("0250"));
+        assert!(metadata.get("IFD0:PrintIM").is_none());
     }
 }
 
@@ -283,6 +312,15 @@ fn process_tiff_ifd_tags<'a>(
             let offset = read_u32(bytes, byte_order);
             gps_ifd_offset = Some(offset as u64);
             continue; // Don't add the pointer tag to metadata
+        }
+
+        // Exif.pm 0xc4a5 declares a PrintIM SubDirectory. Keep the raw
+        // directory out of the map even when PrintIM.pm rejects its contents.
+        if *tag_id == 0xC4A5 {
+            if let Some(version) = decode_print_im_version(bytes, byte_order) {
+                metadata.insert(PRINT_IM_VERSION_TAG, TagValue::new_string(version));
+            }
+            continue;
         }
 
         // Check for GeoTiff tags
@@ -1099,6 +1137,12 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
     // Add manufacturer tags to metadata
     // Note: tag names already include manufacturer prefix (e.g., "Canon:", "Nikon:")
     for (tag_name, tag_value_str) in makernote_tags {
+        // ExifTool gives the standard IFD0 PrintIM directory higher priority
+        // than a MakerNote copy. Minolta.jpg carries 0250 in IFD0 and 0100 in
+        // its MakerNote; the default visible value is 0250.
+        if tag_name == PRINT_IM_VERSION_TAG && metadata.contains_key(PRINT_IM_VERSION_TAG) {
+            continue;
+        }
         // Convert string value to TagValue
         let tag_value = TagValue::String(tag_value_str);
         metadata.insert(tag_name, tag_value);

@@ -46,6 +46,8 @@ use crate::core::value_formatter::format_exif_datetime;
 use crate::core::{MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
+use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
+use crate::parsers::tiff::ifd_parser::ByteOrder;
 
 /// Minimum APP6 payload length before ExifTool will read it as an InfiRay
 /// MixMode record (ExifTool.pm:8162: `$$self{HasIJPEG} and $length >= 129`).
@@ -55,6 +57,7 @@ const INFIRAY_MIXMODE_MIN_LENGTH: usize = 129;
 ///
 /// This function dispatches to format-specific parsers based on the segment
 /// identifier, using the same conditions as ExifTool's JPEG.pm APP6 table:
+/// - Toshiba PrintIM - starts with "EPPIM\0"
 /// - NITF data - starts with "NITF\0"
 /// - TDHD data (HP/Toshiba) - starts with "TDHD\x01\0\0\0"
 /// - GoPro GPMF data - starts with "GoPro\0"
@@ -121,7 +124,11 @@ pub fn parse_app6_ijpeg(data: &[u8], is_ijpeg: bool) -> Result<MetadataMap> {
     // Dispatch on the same identifier conditions ExifTool's actual READ path
     // uses (ExifTool.pm's ProcessJPEG APP6 handling, not JPEG.pm's table
     // Condition which is never consulted for reads), and in the same order:
-    // NITF, HP TDHD, GoPro, then the identifier-less InfiRay MixMode.
+    // EPPIM, NITF, HP TDHD, GoPro, then the identifier-less InfiRay MixMode.
+
+    if data.starts_with(b"EPPIM\0") {
+        return Ok(parse_eppim(data));
+    }
 
     if data.starts_with(b"NITF\0") {
         return Ok(parse_nitf(&data[5..]));
@@ -141,9 +148,92 @@ pub fn parse_app6_ijpeg(data: &[u8], is_ijpeg: bool) -> Result<MetadataMap> {
         return Ok(parse_infiray_mix_mode(data));
     }
 
-    // Unknown APP6 formats (EPPIM, DJI DTAT, Motorola MMIMETA, ...) extract
+    // Unknown APP6 formats (DJI DTAT, Motorola MMIMETA, ...) extract
     // nothing, matching ExifTool's default (no -u) behavior.
     Ok(MetadataMap::new())
+}
+
+/// Parse Toshiba's EPPIM APP6 wrapper (`JPEG.pm` `%JPEG::EPPIM`).
+///
+/// `ExifTool.pm` removes the six-byte `EPPIM\0` identifier and calls
+/// `ProcessTIFF`; the TIFF table declares only tag 0xc4a5, a PrintIM
+/// SubDirectory. This follows that directory edge and never searches the
+/// payload for a coincidental `PrintIM` byte sequence.
+fn parse_eppim(data: &[u8]) -> MetadataMap {
+    let mut metadata = MetadataMap::new();
+    let Some(tiff) = data.get(6..) else {
+        return metadata;
+    };
+    if tiff.len() < 8 {
+        return metadata;
+    }
+
+    let byte_order = match tiff.get(..2) {
+        Some(b"II") => ByteOrder::LittleEndian,
+        Some(b"MM") => ByteOrder::BigEndian,
+        _ => return metadata,
+    };
+    let reader = EndianReader::new(tiff, byte_order.to_io_byte_order());
+    if reader.u16_at(2) != Some(42) {
+        return metadata;
+    }
+    let Some(ifd_offset) = reader.u32_at(4).map(|n| n as usize) else {
+        return metadata;
+    };
+    let Some(entry_count) = reader.u16_at(ifd_offset).map(usize::from) else {
+        return metadata;
+    };
+
+    for index in 0..entry_count {
+        let Some(entry_at) = ifd_offset
+            .checked_add(2)
+            .and_then(|at| index.checked_mul(12).and_then(|n| at.checked_add(n)))
+        else {
+            break;
+        };
+        let (Some(tag), Some(field_type), Some(value_count), Some(value_or_offset)) = (
+            reader.u16_at(entry_at),
+            reader.u16_at(entry_at + 2),
+            reader.u32_at(entry_at + 4),
+            reader.u32_at(entry_at + 8),
+        ) else {
+            break;
+        };
+        if tag != 0xC4A5 {
+            continue;
+        }
+
+        let Some(unit_size) = tiff_field_size(field_type) else {
+            continue;
+        };
+        let Some(value_len) = unit_size.checked_mul(value_count as usize) else {
+            continue;
+        };
+        let value = if value_len <= 4 {
+            tiff.get(entry_at + 8..entry_at + 8 + value_len)
+        } else {
+            let start = value_or_offset as usize;
+            start
+                .checked_add(value_len)
+                .and_then(|end| tiff.get(start..end))
+        };
+        if let Some(version) = value.and_then(|v| decode_print_im_version(v, byte_order)) {
+            metadata.insert(PRINT_IM_VERSION_TAG, TagValue::new_string(version));
+        }
+        break;
+    }
+
+    metadata
+}
+
+fn tiff_field_size(field_type: u16) -> Option<usize> {
+    Some(match field_type {
+        1 | 2 | 6 | 7 => 1,
+        3 | 8 => 2,
+        4 | 9 | 11 => 4,
+        5 | 10 | 12 => 8,
+        _ => return None,
+    })
 }
 
 /// Maps GPMF FourCC codes to ExifTool tag names (GoPro.pm %GoPro::GPMF).
@@ -995,6 +1085,36 @@ mod tests {
         assert_eq!(m.len(), 12);
         // The raw-blob placeholder this table replaced must be gone
         assert!(m.get("APP6:NITFData").is_none());
+    }
+
+    #[test]
+    fn test_parse_app6_eppim_follows_its_tiff_print_im_directory() {
+        // ExifTool.jpg's structure reduced to one EPPIM IFD entry. Offsets in
+        // this embedded TIFF are measured after the six-byte EPPIM identifier.
+        let mut payload = b"EPPIM\0II\x2a\0\x08\0\0\0\x01\0".to_vec();
+        payload.extend_from_slice(&0xC4A5u16.to_le_bytes());
+        payload.extend_from_slice(&7u16.to_le_bytes()); // UNDEFINED
+        payload.extend_from_slice(&22u32.to_le_bytes());
+        payload.extend_from_slice(&26u32.to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes()); // next IFD
+        payload.extend_from_slice(b"PrintIM\0");
+        payload.extend_from_slice(b"0250");
+        payload.extend_from_slice(&[0, 0]);
+        payload.extend_from_slice(&1u16.to_le_bytes());
+        payload.extend_from_slice(&[0; 6]);
+
+        let metadata = parse_app6(&payload).unwrap();
+        assert_eq!(metadata.get_string("PrintIM:PrintIMVersion"), Some("0250"));
+        assert_eq!(metadata.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_app6_eppim_does_not_scan_for_print_im() {
+        let mut payload = b"EPPIM\0II\x2a\0\x08\0\0\0\0\0\0\0\0\0".to_vec();
+        payload.extend_from_slice(b"PrintIM\0");
+        payload.extend_from_slice(b"0250\0\0\0\0");
+
+        assert!(parse_app6(&payload).unwrap().is_empty());
     }
 
     #[test]
