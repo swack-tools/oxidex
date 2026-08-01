@@ -565,6 +565,10 @@ const CANON_FLASH_INFO: u16 = 0x0003;
 const CANON_AF_INFO: u16 = 0x0012;
 const CANON_SERIAL_NUMBER_FORMAT: u16 = 0x0015;
 const CANON_AF_INFO2: u16 = 0x0026;
+/// ExifTool Canon.pm:1764 -- `0x3c => { Name => 'AFInfo3', ... TagTable =>
+/// 'Image::ExifTool::Canon::AFInfo2' }`. A second MakerNote tag carrying the very same
+/// `%Canon::AFInfo2` record, used by the G1XmkII and the EOS M bodies after it.
+const CANON_AF_INFO3: u16 = 0x003C;
 const CANON_FILE_INFO: u16 = 0x0093;
 const CANON_LENS_MODEL: u16 = 0x0095;
 const CANON_INTERNAL_SERIAL_NUMBER: u16 = 0x0096;
@@ -2880,6 +2884,7 @@ pub fn canon_tag_to_name(tag_id: u16) -> String {
         CANON_AF_INFO => "AFInfo",
         CANON_SERIAL_NUMBER_FORMAT => "SerialNumberFormat",
         CANON_AF_INFO2 => "AFInfo2",
+        CANON_AF_INFO3 => "AFInfo3",
         CANON_FILE_INFO => "FileInfo",
         CANON_LENS_MODEL => "LensModel",
         CANON_INTERNAL_SERIAL_NUMBER => "InternalSerialNumber",
@@ -4072,23 +4077,28 @@ fn parse_canon_makernote_impl_with_model(
                 }
             }
 
-            // The plain %Canon binary sub-tables that hang off a MakerNote tag with no
-            // ExifTool Condition -- CropInfo, AspectInfo, ModifiedInfo, AFConfig,
-            // VignettingCorr2, LightingOpt, MultiExp, HDRInfo and the rest. See
-            // `binary_tables` for the transcription and what it deliberately omits.
+            // The plain %Canon binary sub-tables -- CropInfo, AspectInfo, ModifiedInfo,
+            // AFConfig, VignettingCorr, ContrastInfo, FaceDetect1/3, Ambience and the
+            // rest. See `binary_tables` for the transcription, the ExifTool `Condition`
+            // each tag carries, and what the transcription deliberately omits.
             tag if binary_tables::handles_tag(tag) => {
                 if let Some(raw_record) =
                     extract_canon_binary_words_with_base(entry, ifd_data, byte_order, base)
                 {
-                    // `FIRST_ENTRY => 1` tables open with their own byte count, so they go
-                    // through the same realignment guard as the other length-prefixed
-                    // records; `FIRST_ENTRY => 0` tables are indexed from 0 as stored.
+                    // Tables that open with their own byte count go through the
+                    // realignment guard; the others are indexed from 0 as stored.
                     let record = if binary_tables::table_is_length_prefixed(tag) {
                         realign_length_prefixed_record(raw_record)
                     } else {
                         raw_record
                     };
-                    binary_tables::parse_binary_table(tag, &record, byte_order, &mut tags);
+                    // ExifTool's Condition reads `$$valPt`, the untyped bytes, so the
+                    // predicate has to see them rather than the byte-order-decoded words.
+                    let raw_bytes =
+                        extract_canon_bytes_with_base(entry, ifd_data, base).unwrap_or_default();
+                    binary_tables::parse_binary_table(
+                        tag, raw_bytes, &record, byte_order, &mut tags,
+                    );
                 }
             }
 
@@ -4276,8 +4286,12 @@ fn parse_canon_makernote_impl_with_model(
                 }
             }
 
-            // AFInfo2 (tag 0x0026) - autofocus information used by newer Canon models
-            CANON_AF_INFO2 => {
+            // AFInfo2 (tag 0x0026) - autofocus information used by newer Canon models.
+            // AFInfo3 (tag 0x003c) is the same `%Canon::AFInfo2` record under a second
+            // tag id (Canon.pm:1764). The two are alternatives, not siblings: all 42
+            // sample-corpus files that carry 0x003c carry no 0x0026 at all, so reading
+            // only 0x0026 left them with no AF tags whatsoever.
+            CANON_AF_INFO2 | CANON_AF_INFO3 => {
                 if let Some(array) =
                     extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
                 {
