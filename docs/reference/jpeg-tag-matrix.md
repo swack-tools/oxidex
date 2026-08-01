@@ -15,13 +15,13 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 
 | Classification | Tags |
 |---|---|
-| 📖 Read only | 2349 |
+| 📖 Read only | 2350 |
 | ❌ Unsupported | 1886 |
 | 🐛 Read OK, write broken | 225 |
 | ❔ Untestable | 219 |
 | ✅ Full (read + write) | 57 |
 | ⚠️ Full (write non-standard encoding) | 47 |
-| 🐛 Read broken | 29 |
+| 🐛 Read broken | 28 |
 | 🚫 Not writable in ExifTool (no synthetic sample possible; untested) | 585 |
 
 ## Per-group breakdown
@@ -76,7 +76,7 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | XMP-drone-dji | 0 | 25 | 0 | 0 | 0 | 3 | 0 | 28 |
 | XMP-dwc | 0 | 145 | 12 | 0 | 0 | 103 | 3 | 263 |
 | XMP-et | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
-| XMP-exif | 0 | 88 | 3 | 4 | 0 | 5 | 0 | 100 |
+| XMP-exif | 0 | 89 | 3 | 3 | 0 | 5 | 0 | 100 |
 | XMP-exifEX | 0 | 26 | 0 | 0 | 0 | 16 | 0 | 42 |
 | XMP-expressionmedia | 0 | 4 | 0 | 0 | 0 | 0 | 0 | 4 |
 | XMP-extensis | 0 | 8 | 0 | 0 | 0 | 0 | 0 | 8 |
@@ -1178,7 +1178,7 @@ references are into this repo.
 | `ReleaseDate` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `ReleaseTime` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Snapshots` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `Tagged` | ✅ ok | — unsupported (silent no-op) | `True` |
+| `Tagged` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `True` |
 
 ### XMP-acdsee-rs
 
@@ -2170,7 +2170,7 @@ references are into this repo.
 | `PerspectiveHorizontal` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `PerspectiveRotate` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `PerspectiveScale` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `PerspectiveUpright` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Off` |
+| `PerspectiveUpright` | ✅ ok | — unsupported (silent no-op) | `Off` |
 | `PerspectiveVertical` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `PerspectiveX` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `PerspectiveY` | ✅ ok | — unsupported (silent no-op) | `1.5` |
@@ -3287,7 +3287,7 @@ references are into this repo.
 | `PerspectiveHorizontal` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `PerspectiveRotate` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `PerspectiveScale` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `PerspectiveUpright` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `Off` |
+| `PerspectiveUpright` | ✅ ok | — unsupported (silent no-op) | `Off` |
 | `PerspectiveVertical` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `PerspectiveX` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `PerspectiveY` | ✅ ok | — unsupported (silent no-op) | `1.5` |
@@ -3947,7 +3947,7 @@ references are into this repo.
 | `SceneCaptureType` | ✅ ok | — unsupported (silent no-op) | `Standard` |
 | `SceneType` | ✅ ok | — unsupported (silent no-op) | `Directly photographed` |
 | `SensingMethod` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | — unsupported (silent no-op) | `Monochrome area` |
-| `Sharpness` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | — unsupported (silent no-op) | `Normal` |
+| `Sharpness` | ✅ ok | — unsupported (silent no-op) | `Normal` |
 | `ShutterSpeedValue` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `SpatialFrequencyResponse` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `SpatialFrequencyResponseColumns` | ✅ ok | — unsupported (silent no-op) | `3` |
