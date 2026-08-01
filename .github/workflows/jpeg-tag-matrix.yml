@@ -30,7 +30,22 @@ env:
 jobs:
   tag-matrix:
     name: ExifTool comparison matrix
-    runs-on: ubuntu-latest
+    # 16x -- the heaviest job in the repo, and the only one that earns a runner
+    # this size. Two reasons:
+    #
+    #  1. `run --workers N` builds a rayon global thread pool of N threads
+    #     (src/bin/jpeg-tag-matrix/matrix.rs), each spawning an exiftool
+    #     process per tag. On the old 2-vCPU runner, `--workers 8` was 4x
+    #     oversubscribed: 8 workers contending for 2 cores. That step alone
+    #     took ~8m50s of a ~13m job.
+    #  2. The release build of oxidex + jpeg-tag-matrix (~3m20s) parallelises
+    #     across codegen units.
+    #
+    # Not 32x: past ~16 the build phase is bounded by dependency-graph
+    # ordering rather than cores, and the matrix run's remaining serial work
+    # (manifest generation, report writing) does not shrink at all. The extra
+    # 16 vCPU would be paid for and left idle.
+    runs-on: warp-ubuntu-latest-x64-16x
     timeout-minutes: 90
     permissions:
       contents: write
@@ -75,8 +90,12 @@ jobs:
       - name: Generate ExifTool tag manifest
         run: ./target/release/jpeg-tag-matrix manifest --flag-noops
 
+      # Workers must track the runner's vCPU count. Each worker alternates
+      # between Rust work and a blocking exiftool subprocess, so one worker
+      # per core keeps the machine busy without oversubscribing it. Raising
+      # the runner size without raising this leaves most of the box idle.
       - name: Run tag matrix (read + write round-trips)
-        run: ./target/release/jpeg-tag-matrix run --workers 8
+        run: ./target/release/jpeg-tag-matrix run --workers 16
 
       - name: Generate reports and check baseline
         run: ./target/release/jpeg-tag-matrix report --check-baseline

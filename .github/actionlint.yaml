@@ -1,0 +1,20 @@
+# actionlint cannot know about runner labels that are not GitHub-hosted, so
+# without this file every `runs-on:` in this repo is reported as an unknown
+# label and the real findings are buried.
+#
+# This lists the labels that are *valid*, not the ones that are appropriate.
+# Which size a given job should use is a separate judgement, argued at each
+# `runs-on:` -- see the comments there. WarpBuild x64 sizing is 2x=2vCPU/7GB,
+# 4x=4/16, 8x=8/32, 16x=16/64, 32x=32/128, all with a 150GB SSD.
+self-hosted-runner:
+  labels:
+    # WarpBuild Ubuntu x64
+    - warp-ubuntu-latest-x64-2x
+    - warp-ubuntu-latest-x64-4x
+    - warp-ubuntu-latest-x64-8x
+    - warp-ubuntu-latest-x64-16x
+    - warp-ubuntu-latest-x64-32x
+    # WarpBuild Ubuntu arm64
+    - warp-ubuntu-latest-arm64-2x
+    # WarpBuild macOS
+    - warp-macos-15-arm64-6x

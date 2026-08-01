@@ -17,10 +17,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64 - native build on x64
+          # Linux x86_64 - native build on x64. 8x: a from-scratch
+          # `cargo build --release` with no warm cache, which parallelises
+          # across codegen units.
           - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-          # Linux ARM64 - native build on arm64
+            os: warp-ubuntu-latest-x64-8x
+          # Linux ARM64 - native build on arm64. Left at 2x: unchanged by this
+          # migration, and now the long pole of the release. Worth revisiting
+          # separately against measured arm64 build times.
           - target: aarch64-unknown-linux-musl
             os: warp-ubuntu-latest-arm64-2x
     steps:
@@ -59,7 +63,9 @@ jobs:
 
   build-windows:
     name: Build Windows (x86_64)
-    runs-on: ubuntu-latest
+    # 8x: same profile as the Linux x64 build -- a cold cross-compile of the
+    # whole workspace via mingw.
+    runs-on: warp-ubuntu-latest-x64-8x
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -251,7 +257,9 @@ jobs:
   create-release:
     name: Create GitHub Release
     needs: [build-linux, build-windows, build-macos]
-    runs-on: ubuntu-latest
+    # 2x: downloads artifacts, copies files and calls the releases API.
+    # Nothing is compiled here.
+    runs-on: warp-ubuntu-latest-x64-2x
     permissions:
       contents: write
     steps:
@@ -341,7 +349,8 @@ jobs:
   update-docs:
     name: Update GitHub Pages
     needs: create-release
-    runs-on: ubuntu-latest
+    # 2x: git operations, awk and sed against the gh-pages branch.
+    runs-on: warp-ubuntu-latest-x64-2x
     permissions:
       contents: write
     steps:
