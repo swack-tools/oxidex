@@ -9,7 +9,7 @@ Empirical OxiDex ↔ ExifTool tag mapping for JPEG: for each tag, ExifTool write
 Only tags OxiDex can **read** from JPEG are listed here (including those whose value formatting differs from ExifTool). The full classification of all tested tags — including unsupported and broken ones — is in the [JPEG Tag Matrix](/reference/jpeg-tag-matrix). See also [ExifTool Coverage](/reference/tag-coverage-analysis) for the tag-database view and the [Compatibility overview](/reference/comparison/) for fixture-based comparisons across formats.
 
 
-**2678** ExifTool tags readable, **122** writable via the CLI (of 4812 ExifTool-writable JPEG tags tested).
+**2679** ExifTool tags readable, **122** writable via the CLI (of 4812 ExifTool-writable JPEG tags tested).
 
 
 ## ExifIFD (90 readable tags)
@@ -735,7 +735,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-acdsee:ReleaseDate` | `XMP:ReleaseDate` | — | `2024:01:15 10:30:00` |
 | `XMP-acdsee:ReleaseTime` | `XMP:ReleaseTime` | — | `OxTest` |
 | `XMP-acdsee:Snapshots` | `XMP:Snapshots` | — | `OxTest` |
-| `XMP-acdsee:Tagged` | `XMP:Tagged` | — | `True` |
+| `XMP-acdsee:Tagged` | `XMP:Tagged` * | — | `True` |
 
 ## XMP-album (1 readable tags)
 
@@ -1008,7 +1008,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-crd:PerspectiveHorizontal` | `XMP:PerspectiveHorizontal` | — | `3` |
 | `XMP-crd:PerspectiveRotate` | `XMP:PerspectiveRotate` | — | `1.5` |
 | `XMP-crd:PerspectiveScale` | `XMP:PerspectiveScale` | — | `3` |
-| `XMP-crd:PerspectiveUpright` | `XMP:PerspectiveUpright` * | — | `Off` |
+| `XMP-crd:PerspectiveUpright` | `XMP:PerspectiveUpright` | — | `Off` |
 | `XMP-crd:PerspectiveVertical` | `XMP:PerspectiveVertical` | — | `3` |
 | `XMP-crd:PerspectiveX` | `XMP:PerspectiveX` | — | `1.5` |
 | `XMP-crd:PerspectiveY` | `XMP:PerspectiveY` | — | `1.5` |
@@ -1336,7 +1336,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-crs:PerspectiveHorizontal` | `XMP:PerspectiveHorizontal` | — | `3` |
 | `XMP-crs:PerspectiveRotate` | `XMP:PerspectiveRotate` | — | `1.5` |
 | `XMP-crs:PerspectiveScale` | `XMP:PerspectiveScale` | — | `3` |
-| `XMP-crs:PerspectiveUpright` | `XMP:PerspectiveUpright` * | — | `Off` |
+| `XMP-crs:PerspectiveUpright` | `XMP:PerspectiveUpright` | — | `Off` |
 | `XMP-crs:PerspectiveVertical` | `XMP:PerspectiveVertical` | — | `3` |
 | `XMP-crs:PerspectiveX` | `XMP:PerspectiveX` | — | `1.5` |
 | `XMP-crs:PerspectiveY` | `XMP:PerspectiveY` | — | `1.5` |
@@ -1681,7 +1681,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-et:OriginalImageHashType` | `XMP:OriginalImageHashType` | — | `OxTest` |
 | `XMP-et:OriginalImageMD5` | `XMP:OriginalImageMD5` | — | `OxTest` |
 
-## XMP-exif (91 readable tags)
+## XMP-exif (92 readable tags)
 
 | ExifTool tag | OxiDex key | OxiDex write | Example value |
 |---|---|---|---|
@@ -1764,6 +1764,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-exif:RelatedSoundFile` | `XMP-exif:RelatedSoundFile` | — | `OxTest` |
 | `XMP-exif:SceneCaptureType` | `XMP-exif:SceneCaptureType` | — | `Standard` |
 | `XMP-exif:SceneType` | `XMP-exif:SceneType` | — | `Directly photographed` |
+| `XMP-exif:Sharpness` | `XMP-exif:Sharpness` | — | `Normal` |
 | `XMP-exif:ShutterSpeedValue` | `XMP-exif:ShutterSpeedValue` | — | `1.5` |
 | `XMP-exif:SpatialFrequencyResponseColumns` | `XMP:SpatialFrequencyResponseColumns` | — | `3` |
 | `XMP-exif:SpatialFrequencyResponseNames` | `XMP:SpatialFrequencyResponseNames` | — | `OxTest` |
@@ -2340,7 +2341,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-plus:CopyrightRegistrationNumber` | `XMP-plus:CopyrightRegistrationNumber` | — | `OxTest` |
 | `XMP-plus:CopyrightStatus` | `XMP-plus:CopyrightStatus` | — | `Protected` |
 | `XMP-plus:CreditLineRequired` | `XMP-plus:CreditLineRequired` | — | `Credit Adjacent To Image` |
-| `XMP-plus:Custom1` | `XMP:Custom1` | — | `OxTest` |
+| `XMP-plus:Custom1` | `XMP-plus:Custom1` | — | `OxTest` |
 | `XMP-plus:Custom10` | `XMP-plus:Custom10` | — | `OxTest` |
 | `XMP-plus:Custom2` | `XMP-plus:Custom2` | — | `OxTest` |
 | `XMP-plus:Custom3` | `XMP-plus:Custom3` | — | `OxTest` |
