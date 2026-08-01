@@ -21,7 +21,6 @@ pub mod phaseone_lens_database;
 pub mod registries;
 pub mod shared;
 pub mod sigma;
-pub mod sigma_lens_database;
 pub mod sony;
 pub mod sony_lens_database;
 
