@@ -379,28 +379,40 @@ fn handle_rational_type(
 
 /// Formats a GPS coordinate from 3 rational values.
 fn format_gps_coordinate(bytes: &[u8], byte_order: ByteOrder) -> TagValue {
+    let Some(degrees) = gps_coordinate_degrees(bytes, byte_order) else {
+        return TagValue::new_string("");
+    };
+
+    TagValue::new_string(format_dms(degrees))
+}
+
+/// Return the full-precision ValueConv form of a three-rational GPS coordinate.
+///
+/// The visible tag is rounded to hundredths of an arc-second, but Composite
+/// GPS tags consume decimal degrees before that PrintConv.  Keep this private
+/// form beside the visible DMS string so a derived position never reparses a
+/// rounded display value.
+pub(crate) fn gps_coordinate_degrees(bytes: &[u8], byte_order: ByteOrder) -> Option<f64> {
+    if bytes.len() < 24 {
+        return None;
+    }
     let mut dms = Vec::new();
     for i in 0..3 {
         let offset = i * 8;
         let numerator = read_u32(&bytes[offset..offset + 4], byte_order);
         let denominator = read_u32(&bytes[offset + 4..offset + 8], byte_order);
-        if denominator != 0 {
-            dms.push(numerator as f64 / denominator as f64);
-        } else {
-            dms.push(numerator as f64);
+        // ExifTool leaves a coordinate with an invalid rational empty. Turning
+        // 0/0 into zero would manufacture a real location at the equator.
+        if denominator == 0 {
+            return None;
         }
+        dms.push(numerator as f64 / denominator as f64);
     }
-
-    // GPS.pm's %coordConv (GPS.pm:16-20) is a ValueConv/PrintConv PAIR:
-    // `ToDegrees($val)` collapses the three stored components to one decimal
-    // degree value, and only then does `ToDMS($self, $val, 1)` split it back
-    // out. Printing the stored components directly is not the same operation
-    // whenever a camera writes fractional minutes: Apple_iPhone2.jpg stores
-    // GPSLatitude as `46/1 860/100 0/1`, so ExifTool prints
-    // `46 deg 8' 36.00"` (46 + 8.6/60 = 46.14333 deg) where reading the
-    // components off the wire gives `46 deg 8' 0"`.
-    let degrees_total = dms[0] + dms[1] / 60.0 + dms[2] / 3600.0;
-    TagValue::new_string(format_dms(degrees_total))
+    // EXIF permits fractional degrees or minutes as well as fractional
+    // seconds. ExifTool normalizes all three into DMS and its default
+    // CoordFormat prints seconds to two decimals. GPS.jpg, for example, stores
+    // `54 59.38 0` and therefore means 54 deg 59' 22.80", not 54 deg 59' 0".
+    Some(dms[0] + dms[1] / 60.0 + dms[2] / 3600.0)
 }
 
 /// ExifTool's `ToDMS($self, $val, 1)` with the default CoordFormat.
@@ -869,6 +881,27 @@ mod tests {
         assert_eq!(
             parse_string_to_tag_value("Phil Harvey"),
             TagValue::String("Phil Harvey".to_string())
+        );
+    }
+
+    #[test]
+    fn gps_coordinate_normalizes_fractional_minutes_like_exiftool() {
+        // GPS.jpg stores 54 degrees, 59.38 minutes, zero seconds. Fractional
+        // minutes must be carried into seconds by the default DMS rendering.
+        let bytes =
+            make_rational_array_bytes(&[(54, 1), (5938, 100), (0, 1)], ByteOrder::LittleEndian);
+        assert_eq!(
+            raw_bytes_to_tag_value(&bytes, 5, 3, 0x0002, ByteOrder::LittleEndian).as_string(),
+            Some("54 deg 59' 22.80\"")
+        );
+    }
+
+    #[test]
+    fn gps_coordinate_refuses_invalid_rationals() {
+        let bytes = make_rational_array_bytes(&[(0, 0), (0, 0), (0, 0)], ByteOrder::LittleEndian);
+        assert_eq!(
+            raw_bytes_to_tag_value(&bytes, 5, 3, 0x0002, ByteOrder::LittleEndian).as_string(),
+            Some("")
         );
     }
 
