@@ -260,6 +260,57 @@ class BuildSemaphoreTests(unittest.TestCase):
                 self.assertNotIn("dead", state["holders"])
                 self.assertIn("replacement", state["holders"])
 
+    def test_waiters_acquire_in_fifo_order(self):
+        clock = [100.0]
+        now_fn = lambda: clock[0]
+
+        with patch("find_tag_gaps._pid_is_alive", return_value=True):
+            self.assertTrue(find_tag_gaps._try_acquire_build_slot(
+                self.path, 1, 900, now_fn, "holder",
+            ))
+            clock[0] = 101.0
+            self.assertFalse(find_tag_gaps._try_acquire_build_slot(
+                self.path, 1, 900, now_fn, "first",
+            ))
+            clock[0] = 102.0
+            self.assertFalse(find_tag_gaps._try_acquire_build_slot(
+                self.path, 1, 900, now_fn, "second",
+            ))
+            find_tag_gaps._release_build_slot(self.path, "holder")
+
+            # Polling sooner cannot let the younger waiter jump the queue.
+            clock[0] = 103.0
+            self.assertFalse(find_tag_gaps._try_acquire_build_slot(
+                self.path, 1, 900, now_fn, "second",
+            ))
+            self.assertTrue(find_tag_gaps._try_acquire_build_slot(
+                self.path, 1, 900, now_fn, "first",
+            ))
+            find_tag_gaps._release_build_slot(self.path, "first")
+            self.assertTrue(find_tag_gaps._try_acquire_build_slot(
+                self.path, 1, 900, now_fn, "second",
+            ))
+
+    def test_abandoned_waiter_does_not_pin_fifo_head(self):
+        self.path.write_text(json.dumps({
+            "holders": {},
+            "waiters": {
+                "abandoned": {
+                    "pid": 1,
+                    "enqueued_at": 100.0,
+                    "heartbeat": 100.0,
+                },
+            },
+        }))
+
+        with patch("find_tag_gaps._pid_is_alive", return_value=True):
+            self.assertTrue(find_tag_gaps._try_acquire_build_slot(
+                self.path, 1, 900, lambda: 200.0, "replacement",
+            ))
+        state = json.loads(self.path.read_text())
+        self.assertNotIn("abandoned", state["waiters"])
+        self.assertIn("replacement", state["holders"])
+
     def test_renewing_the_same_holder_id_never_blocks_itself(self):
         # A nested/re-entrant call with the SAME holder_id (e.g. a
         # heartbeat-style renewal) must not deadlock against its own
