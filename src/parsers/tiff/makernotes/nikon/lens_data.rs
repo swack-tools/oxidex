@@ -81,6 +81,16 @@ const LAYOUT_01: LensDataLayout = LensDataLayout {
 /// string. Tags whose offsets fall outside the block are skipped rather than
 /// defaulted.
 pub fn parse_lens_data(data: &[u8], tags: &mut HashMap<String, String>) {
+    parse_lens_data_with_values(data, tags, &mut HashMap::new());
+}
+
+/// Parse plaintext LensData while retaining ValueConv forms separately from
+/// their rounded PrintConv strings.
+pub fn parse_lens_data_with_values(
+    data: &[u8],
+    tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
+) {
     if data.len() < 4 {
         return;
     }
@@ -126,6 +136,7 @@ pub fn parse_lens_data(data: &[u8], tags: &mut HashMap<String, String>) {
             format!("{:.2} m", metres)
         };
         tags.insert("Nikon:FocusDistance".to_string(), printed);
+        value_forms.insert("Nikon:FocusDistance".to_string(), metres.to_string());
     }
     if let Some(raw) = layout.focal_length.and_then(at) {
         tags.insert(

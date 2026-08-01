@@ -91,6 +91,9 @@ fn lookup_rank(key: &str) -> (u8, &str) {
 /// match wins over a suffix match so an explicitly-grouped tag is preferred;
 /// otherwise [`lookup_rank`] supplies a stable group preference.
 fn lookup(map: &MetadataMap, name: &str) -> Option<String> {
+    if let Some(v) = map.value_form(name) {
+        return Some(v.to_string());
+    }
     if let Some(v) = map.get(name).and_then(value_string) {
         return Some(v);
     }
@@ -98,7 +101,14 @@ fn lookup(map: &MetadataMap, name: &str) -> Option<String> {
     map.iter()
         .filter(|(k, _)| k.ends_with(&suffix))
         .min_by_key(|(k, _)| lookup_rank(k))
-        .and_then(|(_, v)| value_string(v))
+        // Prefer the unrounded ValueConv form when a parser recorded one: the
+        // printed value is rounded for display, and re-parsing it compounds
+        // precision loss down a derivation chain (FocusDistance -> DOF).
+        .and_then(|(k, v)| {
+            map.value_form(k)
+                .map(str::to_string)
+                .or_else(|| value_string(v))
+        })
 }
 
 /// Resolve a composite input, preferring an already-computed unrounded value.
@@ -301,6 +311,27 @@ mod tests {
         apply(&mut m);
         assert_eq!(m.get_string("Composite:Aperture"), Some("14.0"));
         assert_eq!(m.get_string("Composite:DOF"), Some("inf (4.31 m - inf)"));
+    }
+
+    #[test]
+    fn depth_of_field_uses_value_conv_precision_not_printed_distance() {
+        let mut m = map_of(&[
+            ("EXIF:FocalLength", "50.0 mm"),
+            ("EXIF:FNumber", "4.0"),
+            ("Composite:ScaleFactor35efl", "1.5"),
+            ("Nikon:FocusDistance", "0.71 m"),
+        ]);
+        m.set_value_form("Nikon:FocusDistance", "0.707945784384138");
+
+        apply(&mut m);
+
+        // ExifTool keeps the unrounded Nikon ValueConv form private while the
+        // visible tag remains its two-decimal PrintConv form.
+        assert_eq!(m.get_string("Nikon:FocusDistance"), Some("0.71 m"));
+        assert_eq!(
+            m.get_string("Composite:DOF"),
+            Some("0.03 m (0.69 - 0.72 m)")
+        );
     }
 
     #[test]
