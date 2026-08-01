@@ -30,10 +30,11 @@
 //!
 //! ExifTool reaches the trailer by peeling off whatever trailers follow it one
 //! at a time and passing the accumulated offset to `ProcessCanonVRD`. oxidex
-//! has no trailer chain, so this module scans backwards from the end of the
-//! file for a footer whose declared size lands exactly on a matching header.
-//! That two-point check matters: in `ExifTool.jpg` the VRD trailer is not last
-//! -- a FotoStation trailer and an Android one follow it.
+//! has no trailer chain -- see [`crate::parsers::trailer`] -- so this module
+//! scans backwards from the end of the file for a footer whose declared size
+//! lands exactly on a matching header. That two-point check matters: in
+//! `ExifTool.jpg` the VRD trailer is not last -- PhotoMechanic, MIE, Samsung
+//! and Vivo trailers all follow it.
 
 mod ver1_table;
 
@@ -200,13 +201,10 @@ pub fn parse_vrd_file(reader: &dyn FileReader) -> Result<MetadataMap> {
 /// size it declares, and require the header to sit exactly that far back and
 /// carry the same signature.
 fn find_trailer(file: &[u8]) -> Option<&[u8]> {
-    // A footer ending at `end` starts at end-0x40; scan from the end of the
-    // file inwards so the trailer found first is the last one written.
-    (OVERHEAD..=file.len()).rev().find_map(|end| {
+    // The footer opens with the signature and runs 0x40 bytes to the end of
+    // the trailer.
+    crate::parsers::trailer::find_last(file, OVERHEAD, SIGNATURE, FOOTER_LEN, |file, end| {
         let footer = &file[end - FOOTER_LEN..end];
-        if !footer.starts_with(SIGNATURE) {
-            return None;
-        }
         let size = be_u32(footer, FOOTER_SIZE_OFFSET)? as usize;
         // `$dirLen < 0x80000000 and $raf->Seek(-$dirLen, 1)`
         let dir_len = size.checked_add(OVERHEAD)?;

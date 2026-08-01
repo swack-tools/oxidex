@@ -666,6 +666,17 @@ pub fn extract_iptc_from_block(data: &[u8]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Decodes a raw IPTC IIM block, keeping repeatable datasets as lists.
+///
+/// The [`TagValue`]-valued counterpart of [`extract_iptc_from_block`], and the
+/// block-level counterpart of [`extract_iptc_values_from_segments`]. A caller
+/// that inserts [`extract_iptc_from_block`]'s pairs into a map one at a time
+/// keeps only the last value of a dataset written more than once, which for
+/// `Keywords` or `SupplementalCategories` silently drops every entry but one.
+pub fn extract_iptc_values_from_block(data: &[u8]) -> Vec<(String, TagValue)> {
+    collapse_iptc_entries(extract_iptc_entries_from_block(data))
+}
+
 /// Same as [`extract_iptc_from_block`], but keeps each entry's record and
 /// dataset numbers so a caller can tell a repeatable dataset from a
 /// single-valued one.
