@@ -27,8 +27,14 @@ pub mod pentax; // Pentax migration (Batch 1, Task 1.3) // Leica migration (Batc
 
 // Batch 2: Smartphone manufacturers
 pub mod microsoft; // Microsoft migration complete (Batch 2, Task 2.1)
-pub mod qualcomm;
-pub mod samsung; // Samsung migration complete (Batch 2, Task 2.2) // Qualcomm migration complete (Batch 2, Task 2.3)
+pub mod samsung; // Samsung migration complete (Batch 2, Task 2.2)
+
+// (no `qualcomm` registry: ExifTool's Qualcomm.pm has no TIFF-IFD MakerNote
+// table -- its two tables (`Main`, `DualCamera`) are string-id-keyed and
+// reached only from JPEG APP7/APP4 segments, never from a Make="Qualcomm"
+// MakerNote IFD. This registry's numeric ids and tag names (ClearSight,
+// ChromaFlash, OptiZoom, ...) appear in zero ExifTool source files -- see
+// `makernotes::qualcomm` deletion for the same finding.)
 
 // Batch 3: Specialty Device Manufacturers
 pub mod dji; // DJI migration complete (Batch 3, Task 3.1)
@@ -78,7 +84,6 @@ pub use pentax::pentax_registry;
 
 // Batch 2 exports
 pub use microsoft::microsoft_registry;
-pub use qualcomm::qualcomm_registry;
 pub use samsung::samsung_registry;
 
 // Batch 3 exports

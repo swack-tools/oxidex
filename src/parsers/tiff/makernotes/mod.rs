@@ -27,8 +27,11 @@ pub mod sony_lens_database;
 pub mod apple;
 pub mod google;
 pub mod microsoft;
-pub mod qualcomm;
 pub mod samsung;
+
+// (no `qualcomm` parser: fabricated tag table with no ExifTool source --
+// see `registries::mod` for the finding. ExifTool's real Qualcomm.pm tables
+// are read from JPEG APP7/APP4 segments, not a TIFF MakerNote IFD.)
 
 // Legacy camera manufacturers (Phase 4)
 pub mod casio;
