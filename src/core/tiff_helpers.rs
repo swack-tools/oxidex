@@ -339,72 +339,10 @@ fn process_tiff_ifd_tags<'a>(
         // Check for IPTC-NAA tag (0x83BB = 33723)
         // Contains IPTC IIM (Information Interchange Model) metadata
         if *tag_id == 0x83BB && !bytes.is_empty() {
-            use crate::core::value_formatter::{format_iptc_date, format_iptc_time};
-            use crate::parsers::jpeg::iptc_parser::{
-                dataset_to_tag_name, decode_iptc_string, parse_all_iptc_records,
-            };
-
-            match parse_all_iptc_records(bytes) {
-                Ok(records) => {
-                    // Track keywords for aggregation (ExifTool combines them)
-                    let mut keywords: Vec<String> = Vec::new();
-
-                    for record in records {
-                        // Only handle Record 2 (Application Record)
-                        if record.record_number != 2 {
-                            continue;
-                        }
-
-                        let tag_name =
-                            dataset_to_tag_name(record.record_number, record.dataset_number);
-                        let mut value = decode_iptc_string(&record.data);
-
-                        // Apply formatting for specific dataset types
-                        match record.dataset_number {
-                            0 => {
-                                // ApplicationRecordVersion (dataset 0) is a numeric value
-                                // It's stored as 2 bytes big-endian
-                                if record.data.len() >= 2 {
-                                    let version =
-                                        u16::from_be_bytes([record.data[0], record.data[1]]);
-                                    metadata.insert(
-                                        "IPTC:ApplicationRecordVersion".to_string(),
-                                        TagValue::Integer(version as i64),
-                                    );
-                                }
-                                continue;
-                            }
-                            25 => {
-                                // Keywords (dataset 25) - collect for aggregation
-                                keywords.push(value);
-                                continue;
-                            }
-                            55 => {
-                                // DateCreated: YYYYMMDD -> YYYY:MM:DD
-                                value = format_iptc_date(&value);
-                            }
-                            60 => {
-                                // TimeCreated: HHMMSS±HHMM -> HH:MM:SS±HH:MM
-                                value = format_iptc_time(&value);
-                            }
-                            _ => {}
-                        }
-
-                        metadata.insert(tag_name, TagValue::String(value));
-                    }
-
-                    // Add aggregated keywords if any
-                    if !keywords.is_empty() {
-                        metadata.insert(
-                            "IPTC:Keywords".to_string(),
-                            TagValue::Array(keywords.into_iter().map(TagValue::String).collect()),
-                        );
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Warning: Failed to parse IPTC metadata in TIFF: {}", e);
-                }
-            }
+            // Decoded by the shared IIM walk so the IPTC in a TIFF reads
+            // identically to the same bytes in a JPEG APP13 segment,
+            // including the datasets IPTC.pm reports as lists.
+            crate::parsers::jpeg::iptc_parser::insert_iptc_records(bytes, metadata);
             // Skip adding the raw IPTC tag since we've parsed it
             continue;
         }

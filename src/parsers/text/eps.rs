@@ -7,16 +7,9 @@
 
 #![allow(dead_code)]
 
-use crate::core::tag_conversion::parse_string_to_tag_value;
-use crate::core::value_formatter::{
-    format_iptc_coded_charset, format_iptc_date, format_iptc_record_version, format_iptc_time,
-    format_iptc_urgency,
-};
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
-use crate::parsers::jpeg::iptc_parser::{
-    dataset_to_tag_name, decode_iptc_string, parse_all_iptc_records,
-};
+use crate::parsers::jpeg::iptc_parser::insert_iptc_records;
 use crate::parsers::xmp::{parse_xmp, parse_xmp_history};
 
 /// Maximum bytes to read from EPS file for parsing
@@ -410,43 +403,11 @@ impl EPSParser {
                 if id == IPTC_RESOURCE_ID && data_start + data_size <= data.len() && data_size > 0 {
                     let iptc_data = &data[data_start..data_start + data_size];
 
-                    // Parse IPTC records
-                    if let Ok(records) = parse_all_iptc_records(iptc_data) {
-                        // List-type IPTC datasets (Keywords, SupplementalCategories)
-                        // can legitimately repeat; accumulate instead of
-                        // overwriting so all values are preserved.
-                        let mut keywords: Vec<String> = Vec::new();
-                        let mut supplemental_categories: Vec<String> = Vec::new();
-
-                        for record in records {
-                            let tag_name =
-                                dataset_to_tag_name(record.record_number, record.dataset_number);
-                            let value = format_iptc_record_value(
-                                record.record_number,
-                                record.dataset_number,
-                                &record.data,
-                            );
-
-                            match (record.record_number, record.dataset_number) {
-                                (2, 25) => keywords.push(value),
-                                (2, 20) => supplemental_categories.push(value),
-                                _ => {
-                                    metadata.insert(tag_name, parse_string_to_tag_value(&value));
-                                }
-                            }
-                        }
-
-                        if !keywords.is_empty() {
-                            insert_iptc_list(metadata, "IPTC:Keywords", keywords);
-                        }
-                        if !supplemental_categories.is_empty() {
-                            insert_iptc_list(
-                                metadata,
-                                "IPTC:SupplementalCategories",
-                                supplemental_categories,
-                            );
-                        }
-                    }
+                    // The shared IIM walk merges list datasets with whatever a
+                    // prior 8BIM block already contributed (EPS can carry the
+                    // same IPTC twice, raw-binary and hex-encoded), so the two
+                    // blocks yield one complete list rather than two halves.
+                    insert_iptc_records(iptc_data, metadata);
                 }
 
                 // Move past this block
@@ -643,62 +604,6 @@ fn extract_xml_element_text(text: &str, tag_name: &str) -> Option<String> {
     let start = text.find(&open)? + open.len();
     let relative_end = text[start..].find(&close)?;
     Some(text[start..start + relative_end].trim().to_string())
-}
-
-/// Converts a raw IPTC IIM record payload to its string representation,
-/// applying the same record/dataset-specific formatting ExifTool uses
-/// (binary version numbers, date/time reformatting, and Urgency's
-/// human-readable suffix).
-fn format_iptc_record_value(record_number: u8, dataset_number: u8, data: &[u8]) -> String {
-    if record_number == 1 {
-        return match dataset_number {
-            0 => format_iptc_record_version(data), // EnvelopeRecordVersion
-            70 => format_iptc_date(&decode_iptc_string(data)), // DateSent
-            80 => format_iptc_time(&decode_iptc_string(data)), // TimeSent
-            90 => format_iptc_coded_charset(data), // CodedCharacterSet
-            _ => decode_iptc_string(data),
-        };
-    }
-
-    if record_number == 2 {
-        return match dataset_number {
-            0 => format_iptc_record_version(data), // ApplicationRecordVersion
-            10 => format_iptc_urgency(&decode_iptc_string(data)),
-            30 | 37 | 47 | 55 | 62 => format_iptc_date(&decode_iptc_string(data)),
-            35 | 38 | 60 | 63 => format_iptc_time(&decode_iptc_string(data)),
-            _ => decode_iptc_string(data),
-        };
-    }
-
-    decode_iptc_string(data)
-}
-
-/// Inserts a possibly multi-valued IPTC tag (e.g. Keywords,
-/// SupplementalCategories) into the metadata map. If the tag already has a
-/// value (from a prior 8BIM block, e.g. raw-binary vs. hex-decoded
-/// Photoshop data), the new values are merged rather than overwriting.
-/// Single-valued results are stored as a plain string; multi-valued results
-/// are stored as a `TagValue::Array` so downstream formatting matches
-/// ExifTool's List-type tag representation.
-fn insert_iptc_list(metadata: &mut MetadataMap, key: &str, mut values: Vec<String>) {
-    let mut all_values: Vec<String> = match metadata.get(key) {
-        Some(TagValue::Array(existing)) => existing
-            .iter()
-            .filter_map(|v| v.as_string().map(|s| s.to_string()))
-            .collect(),
-        Some(TagValue::String(s)) => vec![s.clone()],
-        _ => Vec::new(),
-    };
-    all_values.append(&mut values);
-
-    if all_values.len() == 1 {
-        metadata.insert(key.to_string(), TagValue::new_string(all_values.remove(0)));
-    } else {
-        metadata.insert(
-            key.to_string(),
-            TagValue::Array(all_values.into_iter().map(TagValue::new_string).collect()),
-        );
-    }
 }
 
 /// Parses metadata from EPS files.

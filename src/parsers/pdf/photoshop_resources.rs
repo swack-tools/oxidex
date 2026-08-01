@@ -12,7 +12,7 @@
 //!
 //! | 8BIM id | Payload | Decoder |
 //! |---|---|---|
-//! | 0x0404 | IPTC IIM records | [`parse_all_iptc_records`] |
+//! | 0x0404 | IPTC IIM records | [`insert_iptc_records`] |
 //! | 0x0422 | A self-contained TIFF/EXIF block | [`parse_embedded_exif`] |
 //! | others | Photoshop resources | [`parse_photoshop_irb`] |
 //!
@@ -24,9 +24,7 @@ use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::Result;
 use crate::parsers::image::embedded::parse_embedded_exif;
 use crate::parsers::jpeg::app_segments::photoshop::parse_photoshop_irb;
-use crate::parsers::jpeg::iptc_parser::{
-    dataset_to_tag_name, decode_iptc_string, parse_all_iptc_records,
-};
+use crate::parsers::jpeg::iptc_parser::insert_iptc_records;
 use crate::parsers::pdf::shared::PdfContext;
 
 /// "Photoshop 3.0\0" preamble that JPEG's APP13 segment carries in front of
@@ -49,13 +47,6 @@ const RES_EXIF: u16 = 0x0422;
 /// resource blocks are a few kB; this only exists so a corrupt `/Length`
 /// cannot ask for an unbounded allocation.
 const MAX_STREAM_BYTES: usize = 16 * 1024 * 1024;
-
-/// IPTC application-record datasets ExifTool reports as lists because the
-/// IIM spec marks them repeatable. Every other dataset keeps last-wins
-/// semantics, which is what a single-valued map insert already does.
-///
-/// 20 = SupplementalCategories, 25 = Keywords (IPTC.pm, `List => 1`).
-const REPEATABLE_IPTC_DATASETS: [u8; 2] = [20, 25];
 
 /// Extracts the Photoshop image-resource block a Photoshop-authored PDF
 /// stores in its page dictionary, and decodes the Photoshop, IPTC and EXIF
@@ -86,7 +77,7 @@ pub fn parse_photoshop_image_resources(reader: &dyn FileReader) -> Result<Metada
     // deliberately leaves alone, so they are walked here.
     for (id, payload) in image_resource_blocks(&resources) {
         match id {
-            RES_IPTC => insert_iptc_tags(payload, &mut metadata),
+            RES_IPTC => insert_iptc_records(payload, &mut metadata),
             RES_EXIF => {
                 let mut exif = MetadataMap::new();
                 // ExifTool reports the byte order of every TIFF block it
@@ -176,75 +167,6 @@ fn image_resource_blocks(data: &[u8]) -> Vec<(u16, &[u8])> {
     }
 
     blocks
-}
-
-/// Decodes the IPTC IIM records in resource 0x0404 into `IPTC:` tags.
-///
-/// Datasets IPTC.pm marks `List => 1` are accumulated into an array; every
-/// other dataset is single-valued. Formatting (record version as an integer,
-/// `YYYYMMDD` -> `YYYY:MM:DD` dates, `HHMMSS+HHMM` -> `HH:MM:SS+HH:MM`
-/// times) matches `Image::ExifTool::IPTC`, and the numeric PrintConvs
-/// (`Urgency` -> "8 (least urgent)") are applied by the exiftool-compat
-/// layer from the raw value.
-fn insert_iptc_tags(payload: &[u8], metadata: &mut MetadataMap) {
-    use crate::core::value_formatter::{format_iptc_date, format_iptc_time, format_iptc_urgency};
-
-    let Ok(records) = parse_all_iptc_records(payload) else {
-        return;
-    };
-
-    let mut lists: Vec<(String, Vec<TagValue>)> = Vec::new();
-
-    for record in records {
-        // Record 1 is the envelope and record 2 the application record;
-        // ExifTool reports both under the IPTC family.
-        let tag_name = dataset_to_tag_name(record.record_number, record.dataset_number);
-
-        // ApplicationRecordVersion / EnvelopeRecordVersion are binary int16u,
-        // not text (IPTC.pm `Format => 'int16u'`).
-        if record.dataset_number == 0 {
-            if record.data.len() >= 2 {
-                let version = u16::from_be_bytes([record.data[0], record.data[1]]);
-                metadata.insert(tag_name, TagValue::Integer(version as i64));
-            }
-            continue;
-        }
-
-        let text = decode_iptc_string(&record.data);
-        let text = match (record.record_number, record.dataset_number) {
-            (1, 70) | (2, 30) | (2, 37) | (2, 47) | (2, 55) | (2, 62) | (2, 70) => {
-                format_iptc_date(&text)
-            }
-            (1, 80) | (2, 35) | (2, 38) | (2, 60) | (2, 63) => format_iptc_time(&text),
-            // Urgency PrintConv: 0 => '0 (reserved)', 1 => '1 (most urgent)',
-            // 5 => '5 (normal)', 8 => '8 (least urgent)' (IPTC.pm).
-            (2, 10) => format_iptc_urgency(&text),
-            _ => text,
-        };
-
-        if record.record_number == 2 && REPEATABLE_IPTC_DATASETS.contains(&record.dataset_number) {
-            match lists.iter_mut().find(|(name, _)| *name == tag_name) {
-                Some((_, values)) => values.push(TagValue::String(text)),
-                None => lists.push((tag_name, vec![TagValue::String(text)])),
-            }
-            continue;
-        }
-
-        metadata.insert(tag_name, TagValue::String(text));
-    }
-
-    for (tag_name, values) in lists {
-        // ExifTool prints a one-element list as a bare scalar.
-        let value = if values.len() == 1 {
-            values
-                .into_iter()
-                .next()
-                .unwrap_or(TagValue::String(String::new()))
-        } else {
-            TagValue::Array(values)
-        };
-        metadata.insert(tag_name, value);
-    }
 }
 
 /// Walks the thumbnail IFD (IFD1) of the TIFF block in resource 0x0422.
@@ -570,7 +492,7 @@ mod tests {
         iptc.extend_from_slice(b"pic");
 
         let mut metadata = MetadataMap::new();
-        insert_iptc_tags(&iptc, &mut metadata);
+        insert_iptc_records(&iptc, &mut metadata);
 
         assert_eq!(
             metadata.get("IPTC:Keywords"),
@@ -589,7 +511,7 @@ mod tests {
     fn application_record_version_is_an_integer() {
         let iptc = [0x1C, 0x02, 0x00, 0x00, 0x02, 0x00, 0x02];
         let mut metadata = MetadataMap::new();
-        insert_iptc_tags(&iptc, &mut metadata);
+        insert_iptc_records(&iptc, &mut metadata);
         assert_eq!(
             metadata.get("IPTC:ApplicationRecordVersion"),
             Some(&TagValue::Integer(2))

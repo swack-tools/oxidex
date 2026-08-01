@@ -302,11 +302,12 @@ pub fn process_xmp_segments(segments: &[Segment], metadata: &mut MetadataMap) {
 pub fn process_iptc_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     match crate::parsers::jpeg::iptc_parser::extract_iptc_from_segments(segments) {
         Ok(iptc_tags) => {
-            // Add all IPTC tags to metadata
-            for (tag_name, value) in iptc_tags {
-                // Try to parse as integer first, then as float, otherwise keep as string
-                let tag_value = parse_string_to_tag_value(&value);
-                metadata.insert(tag_name, tag_value);
+            // Values arrive already typed: the extractor applies IPTC.pm's
+            // formats and PrintConvs, and hands back a list for the datasets
+            // IIM lets repeat. Re-deriving a type from a string here would
+            // flatten those lists back to text.
+            for (tag_name, value) in iptc_tags.iter() {
+                metadata.insert(tag_name.clone(), value.clone());
             }
         }
         Err(e) => {

@@ -3,10 +3,11 @@
 //! This module handles parsing of IPTC data in JPEG APP13 segments.
 //! IPTC data is stored in Adobe Photoshop Image Resource Blocks (8BIM).
 
+use crate::core::tag_conversion::parse_string_to_tag_value;
 use crate::core::value_formatter::{
-    format_iptc_coded_charset, format_iptc_date, format_iptc_record_version, format_iptc_time,
-    format_iptc_urgency,
+    format_iptc_coded_charset, format_iptc_date, format_iptc_time, format_iptc_urgency,
 };
+use crate::core::{MetadataMap, TagValue};
 use crate::error::Result;
 use crate::parsers::jpeg::segment_parser::Segment;
 use nom::{
@@ -264,6 +265,152 @@ pub fn decode_iptc_string(data: &[u8]) -> String {
     s.trim().to_string()
 }
 
+/// The `(record, dataset)` pairs `Image::ExifTool::IPTC` flags as lists.
+///
+/// IIM lets these datasets repeat, and ExifTool reports every occurrence: a
+/// file with three `2:25` records yields `["ExifTool","Test","IPTC"]`, not
+/// the last one. The set is every tag carrying `Flags => 'List'` (plus
+/// `CatalogSets`, which spells it `List => 1`) in IPTC.pm, grouped by the
+/// record whose table defines it. Any dataset absent from this table keeps
+/// last-wins semantics, which is what ExifTool does for non-list tags.
+const LIST_DATASETS: &[(u8, u8)] = &[
+    // Record 1 -- EnvelopeRecord
+    (1, 5),  // Destination
+    (1, 50), // ProductID
+    // Record 2 -- ApplicationRecord
+    (2, 4),   // ObjectAttributeReference
+    (2, 12),  // SubjectReference
+    (2, 20),  // SupplementalCategories
+    (2, 25),  // Keywords
+    (2, 26),  // ContentLocationCode
+    (2, 27),  // ContentLocationName
+    (2, 45),  // ReferenceService
+    (2, 47),  // ReferenceDate
+    (2, 50),  // ReferenceNumber
+    (2, 80),  // By-line
+    (2, 85),  // By-lineTitle
+    (2, 118), // Contact
+    (2, 122), // Writer-Editor
+    (2, 255), // CatalogSets
+    // Record 8 -- ObjectData
+    (8, 10), // SubFile
+];
+
+/// True when ExifTool reports repeated occurrences of this dataset as a list.
+pub fn is_list_dataset(record_number: u8, dataset_number: u8) -> bool {
+    LIST_DATASETS.contains(&(record_number, dataset_number))
+}
+
+/// Converts one IIM record's payload to the value ExifTool prints for it.
+///
+/// Returns `None` when the record carries nothing worth emitting (a record
+/// version with fewer than the two bytes its `int16u` format requires), so
+/// callers skip the tag rather than invent an empty one.
+///
+/// The conversions mirror `Image::ExifTool::IPTC`:
+/// - dataset 0 of any record is `Format => 'int16u'`, a number not text;
+/// - `CodedCharacterSet` (1:90) is an ISO 2022 escape sequence;
+/// - date datasets render `YYYYMMDD` as `YYYY:MM:DD`;
+/// - time datasets render `HHMMSS±HHMM` as `HH:MM:SS±HH:MM`;
+/// - `Urgency` (2:10) gains its PrintConv description.
+///
+/// Everything else is decoded text, then narrowed to an integer or float
+/// when it parses as one, because ExifTool prints e.g. `Category` unquoted.
+pub fn format_iptc_record_value(
+    record_number: u8,
+    dataset_number: u8,
+    data: &[u8],
+) -> Option<TagValue> {
+    // EnvelopeRecordVersion / ApplicationRecordVersion.
+    if dataset_number == 0 {
+        if data.len() < 2 {
+            return None;
+        }
+        return Some(TagValue::Integer(
+            u16::from_be_bytes([data[0], data[1]]) as i64
+        ));
+    }
+
+    let text = decode_iptc_string(data);
+    let formatted = match (record_number, dataset_number) {
+        // CodedCharacterSet is an escape sequence, so it reads the raw bytes
+        // rather than the decoded text.
+        (1, 90) => format_iptc_coded_charset(data),
+        // DateSent, ReleaseDate, ExpirationDate, ReferenceDate, DateCreated,
+        // DigitalCreationDate.
+        (1, 70) | (2, 30) | (2, 37) | (2, 47) | (2, 55) | (2, 62) => format_iptc_date(&text),
+        // TimeSent, ReleaseTime, ExpirationTime, TimeCreated,
+        // DigitalCreationTime.
+        (1, 80) | (2, 35) | (2, 38) | (2, 60) | (2, 63) => format_iptc_time(&text),
+        (2, 10) => format_iptc_urgency(&text),
+        _ => text,
+    };
+
+    // Narrowed after formatting, not before: only the urgencies IPTC.pm gives
+    // no description keep a bare number, and a reformatted date or time no
+    // longer parses as one. ExifTool prints those same values unquoted.
+    Some(parse_string_to_tag_value(&formatted))
+}
+
+/// Decodes a run of IPTC IIM records into `metadata`.
+///
+/// This is the one place IIM payloads become tags: JPEG APP13, TIFF's
+/// IPTC-NAA tag, PSD and EPS 8BIM blocks and PDF image resources all reach
+/// it, so a file's IPTC reads the same whichever container carries it.
+///
+/// Repeated records of a [`LIST_DATASETS`] dataset accumulate into a
+/// [`TagValue::Array`] instead of overwriting each other; a dataset seen
+/// once stays a bare scalar, which is how ExifTool prints a one-element
+/// list. Values already present under a list key are kept and extended, so
+/// IPTC split across several 8BIM blocks or APP13 segments still yields one
+/// complete list.
+pub fn insert_iptc_records(payload: &[u8], metadata: &mut MetadataMap) {
+    let Ok(records) = parse_all_iptc_records(payload) else {
+        return;
+    };
+
+    let mut lists: Vec<(String, Vec<TagValue>)> = Vec::new();
+
+    for record in records {
+        let tag_name = dataset_to_tag_name(record.record_number, record.dataset_number);
+        let Some(value) =
+            format_iptc_record_value(record.record_number, record.dataset_number, &record.data)
+        else {
+            continue;
+        };
+
+        if !is_list_dataset(record.record_number, record.dataset_number) {
+            metadata.insert(tag_name, value);
+            continue;
+        }
+
+        match lists.iter_mut().find(|(name, _)| *name == tag_name) {
+            Some((_, values)) => values.push(value),
+            None => {
+                // Seed from whatever this key already holds so a second
+                // block extends the list rather than replacing it.
+                let mut values = match metadata.get(&tag_name) {
+                    Some(TagValue::Array(existing)) => existing.clone(),
+                    Some(existing) => vec![existing.clone()],
+                    None => Vec::new(),
+                };
+                values.push(value);
+                lists.push((tag_name, values));
+            }
+        }
+    }
+
+    for (tag_name, mut values) in lists {
+        // ExifTool prints a one-element list as a bare scalar.
+        let value = if values.len() == 1 {
+            values.remove(0)
+        } else {
+            TagValue::Array(values)
+        };
+        metadata.insert(tag_name, value);
+    }
+}
+
 /// Extracts IPTC metadata from JPEG segments.
 ///
 /// This function scans through all segments, identifies APP13 segments with
@@ -276,10 +423,12 @@ pub fn decode_iptc_string(data: &[u8]) -> String {
 ///
 /// # Returns
 ///
-/// Vector of (tag_name, value) tuples where tag_name is in the format
-/// "IPTC:PropertyName" (e.g., "IPTC:ObjectName", "IPTC:By-line").
+/// A [`MetadataMap`] of `IPTC:`-prefixed tags. Datasets IIM allows to repeat
+/// come back as a [`TagValue::Array`]; a map rather than a pair list is what
+/// makes that possible, since repeated keys in a pair list collapse to the
+/// last one when the caller folds them into a map.
 ///
-/// Returns an empty vector if no IPTC segments are found (not an error).
+/// Returns an empty map if no IPTC segments are found (not an error).
 ///
 /// # Errors
 ///
@@ -287,8 +436,8 @@ pub fn decode_iptc_string(data: &[u8]) -> String {
 /// - APP13 segment is malformed
 /// - 8BIM resource blocks are invalid
 /// - IPTC records cannot be parsed
-pub fn extract_iptc_from_segments(segments: &[Segment]) -> Result<Vec<(String, String)>> {
-    let mut all_iptc_tags = Vec::new();
+pub fn extract_iptc_from_segments(segments: &[Segment]) -> Result<MetadataMap> {
+    let mut all_iptc_tags = MetadataMap::new();
 
     // Iterate through all segments looking for APP13 segments
     for segment in segments {
@@ -316,75 +465,7 @@ pub fn extract_iptc_from_segments(segments: &[Segment]) -> Result<Vec<(String, S
                 Ok((remaining, block)) => {
                     // Check if this is the IPTC resource block (ID 0x0404)
                     if block.id == IPTC_RESOURCE_ID {
-                        // Parse IPTC records from the block data
-                        match parse_all_iptc_records(block.data) {
-                            Ok(records) => {
-                                // Convert records to tag name/value pairs
-                                for record in records {
-                                    let tag_name = dataset_to_tag_name(
-                                        record.record_number,
-                                        record.dataset_number,
-                                    );
-
-                                    // Some fields need raw byte handling instead of string decoding
-                                    let value = if record.record_number == 1 {
-                                        match record.dataset_number {
-                                            0 => {
-                                                // EnvelopeRecordVersion: binary u16
-                                                format_iptc_record_version(&record.data)
-                                            }
-                                            70 => {
-                                                // DateSent: YYYYMMDD -> YYYY:MM:DD
-                                                format_iptc_date(&decode_iptc_string(&record.data))
-                                            }
-                                            80 => {
-                                                // TimeSent: HHMMSS±HHMM -> HH:MM:SS±HH:MM
-                                                format_iptc_time(&decode_iptc_string(&record.data))
-                                            }
-                                            90 => {
-                                                // CodedCharacterSet: ISO 2022 escape sequence
-                                                format_iptc_coded_charset(&record.data)
-                                            }
-                                            _ => decode_iptc_string(&record.data),
-                                        }
-                                    } else if record.record_number == 2 {
-                                        match record.dataset_number {
-                                            0 => {
-                                                // ApplicationRecordVersion: binary u16
-                                                format_iptc_record_version(&record.data)
-                                            }
-                                            10 => {
-                                                // Urgency: add description to match ExifTool
-                                                format_iptc_urgency(&decode_iptc_string(
-                                                    &record.data,
-                                                ))
-                                            }
-                                            30 | 37 | 47 | 55 | 62 | 70 => {
-                                                // Date fields: YYYYMMDD -> YYYY:MM:DD
-                                                // 30=ReleaseDate, 37=ExpirationDate, 47=ReferenceDate
-                                                // 55=DateCreated, 62=DigitalCreationDate, 70=DateSent
-                                                format_iptc_date(&decode_iptc_string(&record.data))
-                                            }
-                                            35 | 38 | 60 | 63 => {
-                                                // Time fields: HHMMSS±HHMM -> HH:MM:SS±HH:MM
-                                                // 35=ReleaseTime, 38=ExpirationTime, 60=TimeCreated
-                                                // 63=DigitalCreationTime
-                                                format_iptc_time(&decode_iptc_string(&record.data))
-                                            }
-                                            _ => decode_iptc_string(&record.data),
-                                        }
-                                    } else {
-                                        decode_iptc_string(&record.data)
-                                    };
-
-                                    all_iptc_tags.push((tag_name, value));
-                                }
-                            }
-                            Err(e) => {
-                                // Log error but continue processing other blocks
-                                eprintln!("Warning: Failed to parse IPTC records: {}", e);
-                            }
-                        }
+                        insert_iptc_records(block.data, &mut all_iptc_tags);
                     }
 
                     current = remaining;
@@ -589,13 +670,14 @@ mod tests {
         assert_eq!(tags.len(), 2);
 
         // Check tags
-        let title = tags.iter().find(|(k, _)| k == "IPTC:ObjectName");
-        assert!(title.is_some());
-        assert_eq!(title.unwrap().1, "Test Title");
-
-        let author = tags.iter().find(|(k, _)| k == "IPTC:By-line");
-        assert!(author.is_some());
-        assert_eq!(author.unwrap().1, "Test Author");
+        assert_eq!(
+            tags.get("IPTC:ObjectName"),
+            Some(&TagValue::String("Test Title".to_string()))
+        );
+        assert_eq!(
+            tags.get("IPTC:By-line"),
+            Some(&TagValue::String("Test Author".to_string()))
+        );
     }
 
     #[test]
@@ -605,5 +687,141 @@ mod tests {
         let result = extract_iptc_from_segments(&segments);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 0);
+    }
+
+    /// Appends one IIM record to `out`.
+    fn push_record(out: &mut Vec<u8>, record: u8, dataset: u8, data: &[u8]) {
+        out.push(IPTC_TAG_MARKER);
+        out.push(record);
+        out.push(dataset);
+        out.extend_from_slice(&(data.len() as u16).to_be_bytes());
+        out.extend_from_slice(data);
+    }
+
+    /// Wraps IIM records in the APP13 -> "Photoshop 3.0\0" -> 8BIM 0x0404
+    /// envelope a real JPEG carries them in.
+    fn app13_segment(iptc: &[u8]) -> Vec<u8> {
+        let mut payload = PHOTOSHOP_SIGNATURE.to_vec();
+        payload.extend_from_slice(EIGHTBIM_SIGNATURE);
+        payload.extend_from_slice(&IPTC_RESOURCE_ID.to_be_bytes());
+        payload.extend_from_slice(&[0x00, 0x00]); // empty Pascal name, padded
+        payload.extend_from_slice(&(iptc.len() as u32).to_be_bytes());
+        payload.extend_from_slice(iptc);
+        payload
+    }
+
+    /// ExifTool reports every dataset IPTC.pm flags `List` as an array, so
+    /// repeated records must accumulate rather than overwrite each other.
+    /// IPTC.jpg carries three Keywords and three SupplementalCategories;
+    /// before this, only the last of each survived.
+    #[test]
+    fn repeated_list_datasets_accumulate_into_an_array() {
+        use crate::core::{MetadataMap, TagValue};
+
+        let mut iptc = Vec::new();
+        for keyword in ["ExifTool", "Test", "IPTC"] {
+            push_record(&mut iptc, 2, 25, keyword.as_bytes());
+        }
+        for category in ["amazing", "image", "utilities"] {
+            push_record(&mut iptc, 2, 20, category.as_bytes());
+        }
+        // A non-list dataset keeps last-wins semantics.
+        push_record(&mut iptc, 2, 5, b"Test IPTC picture");
+
+        let data = app13_segment(&iptc);
+        let segments = vec![Segment::new(APP13_MARKER, 0, &data)];
+
+        let mut metadata = MetadataMap::new();
+        crate::core::jpeg_helpers::process_iptc_segments(&segments, &mut metadata);
+
+        assert_eq!(
+            metadata.get("IPTC:Keywords"),
+            Some(&TagValue::Array(vec![
+                TagValue::String("ExifTool".to_string()),
+                TagValue::String("Test".to_string()),
+                TagValue::String("IPTC".to_string()),
+            ]))
+        );
+        assert_eq!(
+            metadata.get("IPTC:SupplementalCategories"),
+            Some(&TagValue::Array(vec![
+                TagValue::String("amazing".to_string()),
+                TagValue::String("image".to_string()),
+                TagValue::String("utilities".to_string()),
+            ]))
+        );
+        assert_eq!(
+            metadata.get("IPTC:ObjectName"),
+            Some(&TagValue::String("Test IPTC picture".to_string()))
+        );
+    }
+
+    /// The list set is every dataset IPTC.pm flags `List`, not just Keywords
+    /// and SupplementalCategories: By-line among them, which MWG.jpg repeats.
+    /// A dataset outside the set still takes the last value.
+    #[test]
+    fn list_datasets_beyond_keywords_accumulate() {
+        use crate::core::{MetadataMap, TagValue};
+
+        let mut iptc = Vec::new();
+        push_record(&mut iptc, 2, 80, b"First Creator"); // By-line, a list
+        push_record(&mut iptc, 2, 80, b"Second Creator");
+        push_record(&mut iptc, 2, 105, b"First Headline"); // Headline, not a list
+        push_record(&mut iptc, 2, 105, b"Second Headline");
+
+        let data = app13_segment(&iptc);
+        let segments = vec![Segment::new(APP13_MARKER, 0, &data)];
+
+        let mut metadata = MetadataMap::new();
+        crate::core::jpeg_helpers::process_iptc_segments(&segments, &mut metadata);
+
+        assert_eq!(
+            metadata.get("IPTC:By-line"),
+            Some(&TagValue::Array(vec![
+                TagValue::String("First Creator".to_string()),
+                TagValue::String("Second Creator".to_string()),
+            ]))
+        );
+        assert_eq!(
+            metadata.get("IPTC:Headline"),
+            Some(&TagValue::String("Second Headline".to_string()))
+        );
+    }
+
+    /// An Urgency IPTC.pm gives no description stays a bare number, the way
+    /// ExifTool prints it; only 1, 5 and 8 gain a parenthetical and so become
+    /// text.
+    #[test]
+    fn urgency_without_a_printconv_stays_numeric() {
+        use crate::core::TagValue;
+
+        assert_eq!(
+            format_iptc_record_value(2, 10, b"2"),
+            Some(TagValue::Integer(2))
+        );
+        assert_eq!(
+            format_iptc_record_value(2, 10, b"8"),
+            Some(TagValue::String("8 (least urgent)".to_string()))
+        );
+    }
+
+    /// ExifTool prints a one-element list as a bare scalar, not a 1-array.
+    #[test]
+    fn a_single_list_dataset_value_stays_scalar() {
+        use crate::core::{MetadataMap, TagValue};
+
+        let mut iptc = Vec::new();
+        push_record(&mut iptc, 2, 25, b"solo");
+
+        let data = app13_segment(&iptc);
+        let segments = vec![Segment::new(APP13_MARKER, 0, &data)];
+
+        let mut metadata = MetadataMap::new();
+        crate::core::jpeg_helpers::process_iptc_segments(&segments, &mut metadata);
+
+        assert_eq!(
+            metadata.get("IPTC:Keywords"),
+            Some(&TagValue::String("solo".to_string()))
+        );
     }
 }

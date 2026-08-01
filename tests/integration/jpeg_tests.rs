@@ -734,8 +734,10 @@ fn test_jpeg_with_iptc_metadata() {
     let iptc_tags = extract_iptc_from_segments(&segments).expect("Failed to extract IPTC");
 
     assert_eq!(iptc_tags.len(), 1);
-    assert_eq!(iptc_tags[0].0, "IPTC:ObjectName");
-    assert_eq!(iptc_tags[0].1, "IPTC Title");
+    assert_eq!(
+        iptc_tags.get("IPTC:ObjectName"),
+        Some(&oxidex::core::TagValue::String("IPTC Title".to_string()))
+    );
 }
 
 /// Creates a minimal valid 128-byte ICC profile header for testing.
