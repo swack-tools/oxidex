@@ -533,18 +533,21 @@ static FOCUS_MODE_201B: &[(i64, &str)] = &[
 static AF_AREA_MODE_SETTING_SLT: &[(i64, &str)] =
     &[(0, "Wide"), (4, "Local"), (8, "Zone"), (9, "Spot")];
 
-/// `AFAreaModeSetting` (0x201c) for `ILCA-` bodies.
+/// `AFAreaModeSetting` (0x201c) for `ILCA-` bodies (Sony.pm:1292-1304).
 static AF_AREA_MODE_SETTING_ILCA: &[(i64, &str)] = &[
     (0, "Wide"),
     (4, "Flexible Spot"),
     (8, "Zone"),
     (9, "Center"),
+    (12, "Expanded Flexible Spot"),
 ];
 
 /// `AFTracking` (0x2021).
 static AF_TRACKING: &[(i64, &str)] = &[(0, "Off"), (1, "Face tracking"), (2, "Lock On AF")];
 
-/// `AFPointSelected` (0x201e) for `SLT-`/`HV` bodies.
+/// `AFPointSelected` (0x201e) for `SLT-`/`HV` bodies, and for an ILCE/ILME
+/// whose `AFAreaModeSetting` is 4 -- an A-mount lens on an LA-EA2/EA4 adapter
+/// (Sony.pm:1326-1354).
 static AF_POINT_SELECTED_SLT: &[(i64, &str)] = &[
     (0, "Auto"),
     (1, "Center"),
@@ -568,9 +571,243 @@ static AF_POINT_SELECTED_SLT: &[(i64, &str)] = &[
     (19, "Upper Far Left"),
 ];
 
+/// `AFAreaModeSetting` (0x201c) for NEX, ILCE, ILME, ZV and the eight DSC
+/// bodies ExifTool names (Sony.pm:1275-1289). `0` prints as `Wide` even on the
+/// NEX and ILCE-3000/3500, where Sony's own menu calls it `Multi`.
+static AF_AREA_MODE_SETTING_ILCE: &[(i64, &str)] = &[
+    (0, "Wide"),
+    (1, "Center"),
+    (3, "Flexible Spot"),
+    (4, "Flexible Spot (LA-EA4)"),
+    (9, "Center (LA-EA4)"),
+    (11, "Zone"),
+    (12, "Expanded Flexible Spot"),
+    (13, "Custom AF Area"),
+];
+
+/// `AFPointSelected` (0x201e) for the ILCA-68 and ILCA-77M2 (Sony.pm:1357-1368),
+/// `%afPoints79` plus the `-1 => 'Auto'` and `39 => 'E6 (Center)'` the arm adds.
+/// Keys are post-`ValueConv`, which is `$val - 1`.
+static AF_POINT_SELECTED_ILCA_79: &[(i64, &str)] = &[
+    (-1, "Auto"),
+    (0, "A5"),
+    (1, "A6"),
+    (2, "A7"),
+    (3, "B2"),
+    (4, "B3"),
+    (5, "B4"),
+    (6, "B5"),
+    (7, "B6"),
+    (8, "B7"),
+    (9, "B8"),
+    (10, "B9"),
+    (11, "B10"),
+    (12, "C1"),
+    (13, "C2"),
+    (14, "C3"),
+    (15, "C4"),
+    (16, "C5"),
+    (17, "C6"),
+    (18, "C7"),
+    (19, "C8"),
+    (20, "C9"),
+    (21, "C10"),
+    (22, "C11"),
+    (23, "D1"),
+    (24, "D2"),
+    (25, "D3"),
+    (26, "D4"),
+    (27, "D5"),
+    (28, "D6"),
+    (29, "D7"),
+    (30, "D8"),
+    (31, "D9"),
+    (32, "D10"),
+    (33, "D11"),
+    (34, "E1"),
+    (35, "E2"),
+    (36, "E3"),
+    (37, "E4"),
+    (38, "E5"),
+    (39, "E6 (Center)"),
+    (40, "E7"),
+    (41, "E8"),
+    (42, "E9"),
+    (43, "E10"),
+    (44, "E11"),
+    (45, "F1"),
+    (46, "F2"),
+    (47, "F3"),
+    (48, "F4"),
+    (49, "F5"),
+    (50, "F6"),
+    (51, "F7"),
+    (52, "F8"),
+    (53, "F9"),
+    (54, "F10"),
+    (55, "F11"),
+    (56, "G1"),
+    (57, "G2"),
+    (58, "G3"),
+    (59, "G4"),
+    (60, "G5"),
+    (61, "G6"),
+    (62, "G7"),
+    (63, "G8"),
+    (64, "G9"),
+    (65, "G10"),
+    (66, "G11"),
+    (67, "H2"),
+    (68, "H3"),
+    (69, "H4"),
+    (70, "H5"),
+    (71, "H6"),
+    (72, "H7"),
+    (73, "H8"),
+    (74, "H9"),
+    (75, "H10"),
+    (76, "I5"),
+    (77, "I6"),
+    (78, "I7"),
+];
+
+/// `AFPointSelected` (0x201e) for the ILCA-99M2 (Sony.pm:1370-1381), `%afPoints99M2`
+/// plus `0 => 'Auto'` and `162 => 'E6 (162, Center)'`. Its `OTHER` sub is
+/// `sub { shift }`, so an unmatched value passes through unchanged.
+static AF_POINT_SELECTED_ILCA_99M2: &[(i64, &str)] = &[
+    (0, "Auto"),
+    (93, "A5 (93)"),
+    (94, "A6 (94)"),
+    (95, "A7 (95)"),
+    (106, "B2 (106)"),
+    (107, "B3 (107)"),
+    (108, "B4 (108)"),
+    (110, "B5 (110)"),
+    (111, "B6 (111)"),
+    (112, "B7 (112)"),
+    (114, "B8 (114)"),
+    (115, "B9 (115)"),
+    (116, "B10 (116)"),
+    (122, "C1 (122)"),
+    (123, "C2 (123)"),
+    (124, "C3 (124)"),
+    (125, "C4 (125)"),
+    (127, "C5 (127)"),
+    (128, "C6 (128)"),
+    (129, "C7 (129)"),
+    (131, "C8 (131)"),
+    (132, "C9 (132)"),
+    (133, "C10 (133)"),
+    (134, "C11 (134)"),
+    (139, "D1 (139)"),
+    (140, "D2 (140)"),
+    (141, "D3 (141)"),
+    (142, "D4 (142)"),
+    (144, "D5 (144)"),
+    (145, "D6 (145)"),
+    (146, "D7 (146)"),
+    (148, "D8 (148)"),
+    (149, "D9 (149)"),
+    (150, "D10 (150)"),
+    (151, "D11 (151)"),
+    (156, "E1 (156)"),
+    (157, "E2 (157)"),
+    (158, "E3 (158)"),
+    (159, "E4 (159)"),
+    (161, "E5 (161)"),
+    (162, "E6 (162, Center)"),
+    (163, "E7 (163)"),
+    (165, "E8 (165)"),
+    (166, "E9 (166)"),
+    (167, "E10 (167)"),
+    (168, "E11 (168)"),
+    (173, "F1 (173)"),
+    (174, "F2 (174)"),
+    (175, "F3 (175)"),
+    (176, "F4 (176)"),
+    (178, "F5 (178)"),
+    (179, "F6 (179)"),
+    (180, "F7 (180)"),
+    (182, "F8 (182)"),
+    (183, "F9 (183)"),
+    (184, "F10 (184)"),
+    (185, "F11 (185)"),
+    (190, "G1 (190)"),
+    (191, "G2 (191)"),
+    (192, "G3 (192)"),
+    (193, "G4 (193)"),
+    (195, "G5 (195)"),
+    (196, "G6 (196)"),
+    (197, "G7 (197)"),
+    (199, "G8 (199)"),
+    (200, "G9 (200)"),
+    (201, "G10 (201)"),
+    (202, "G11 (202)"),
+    (208, "H2 (208)"),
+    (209, "H3 (209)"),
+    (210, "H4 (210)"),
+    (212, "H5 (212)"),
+    (213, "H6 (213)"),
+    (214, "H7 (214)"),
+    (216, "H8 (216)"),
+    (217, "H9 (217)"),
+    (218, "H10 (218)"),
+    (229, "I5 (229)"),
+    (230, "I6 (230)"),
+    (231, "I7 (231)"),
+];
+
+/// `AFPointSelected` (0x201e) for any ILCA with `AFAreaModeSetting` set to Zone
+/// (Sony.pm:1383-1399).
+static AF_POINT_SELECTED_ILCA_ZONE: &[(i64, &str)] = &[
+    (0, "n/a"),
+    (1, "Top Left Zone"),
+    (2, "Top Zone"),
+    (3, "Top Right Zone"),
+    (4, "Left Zone"),
+    (5, "Center Zone"),
+    (6, "Right Zone"),
+    (7, "Bottom Left Zone"),
+    (8, "Bottom Zone"),
+    (9, "Bottom Right Zone"),
+];
+
+/// `AFPointSelected` (0x201e) for NEX, ILCE, ILME, ZV and DSC-RX bodies
+/// (Sony.pm:1403-1419); non-zero only when the AF area is a Zone.
+static AF_POINT_SELECTED_ILCE_ZONE: &[(i64, &str)] = &[
+    (0, "n/a"),
+    (1, "Center Zone"),
+    (2, "Top Zone"),
+    (3, "Right Zone"),
+    (4, "Left Zone"),
+    (5, "Bottom Zone"),
+    (6, "Bottom Right Zone"),
+    (7, "Bottom Left Zone"),
+    (8, "Top Left Zone"),
+    (9, "Top Right Zone"),
+];
+
 // ============================================================================
 // Table definition
 // ============================================================================
+
+/// The state a `Main` entry's `Condition` can test.
+///
+/// ExifTool threads these as `$$self{...}` data members filled while it walks
+/// the IFD, so a tag sees only what entries *before* it wrote. The Sony walk in
+/// `sony.rs` is in file order for exactly that reason, and this carries the
+/// same discipline into the table: a member is `None` until the entry that
+/// defines it has been read.
+pub struct MainCtx<'a> {
+    /// The EXIF `Model`, which most Sony `Condition`s key on.
+    pub model: Option<&'a str>,
+    /// The raw value of `AFAreaModeSetting` (0x201c). ExifTool stores it as
+    /// `$$self{AFAreaILCE}` on the NEX/ILCE arm (Sony.pm:1279) and as
+    /// `$$self{AFAreaILCA}` on the ILCA arm (Sony.pm:1297); which name it lands
+    /// under is decided by the same `Model` test the readers apply, so one
+    /// field serves both.
+    pub af_area_mode_setting: Option<i64>,
+}
 
 /// How a `Main`-table entry turns its raw IFD value into ExifTool's string.
 pub enum Print {
@@ -582,9 +819,10 @@ pub enum Print {
     MapHex(&'static [(i64, &'static str)]),
     /// ExifTool's `$val > 0 ? "+$val" : $val` slider rendering.
     Adjust,
-    /// Anything with real logic; `model` is the EXIF `Model`, which several
-    /// Sony tags condition on. Returning `None` drops the tag.
-    Fn(fn(&SonyValue<'_>, Option<&str>) -> Option<String>),
+    /// Anything with real logic. `ctx` carries the EXIF `Model`, which many
+    /// Sony tags condition on, and the `$$self{...}` data members ExifTool
+    /// fills as it walks the IFD. Returning `None` drops the tag.
+    Fn(fn(&SonyValue<'_>, &MainCtx<'_>) -> Option<String>),
 }
 
 /// One `Main`-table entry.
@@ -646,7 +884,7 @@ const fn int(id: u16, name: &'static str) -> MainTag {
 const fn func(
     id: u16,
     name: &'static str,
-    f: fn(&SonyValue<'_>, Option<&str>) -> Option<String>,
+    f: fn(&SonyValue<'_>, &MainCtx<'_>) -> Option<String>,
 ) -> MainTag {
     tag(id, name, Print::Fn(f))
 }
@@ -671,7 +909,7 @@ const fn func(
 ///   they are hidden without `-u`.
 pub static MAIN_TABLE: &[MainTag] = &[
     map(0x0102, "Quality", QUALITY),
-    func(0x0104, "FlashExposureComp", |v, _| {
+    func(0x0104, "FlashExposureComp", |v, _cx| {
         v.rational(0).map(print_float)
     }),
     map_hex(0x0105, "Teleconverter", TELECONVERTER),
@@ -682,7 +920,7 @@ pub static MAIN_TABLE: &[MainTag] = &[
     int(0x2002, "Rating"),
     map_hex(0x2008, "LongExposureNoiseReduction", LONG_EXPOSURE_NR),
     map(0x2009, "HighISONoiseReduction", HIGH_ISO_NR),
-    func(0x200a, "HDR", |v, _| {
+    func(0x200a, "HDR", |v, _cx| {
         // Stored as one int32u but read as two int16u, each with its own
         // PrintConv; ExifTool joins the components with "; ".
         let words = v.as_u16_pair()?;
@@ -698,40 +936,79 @@ pub static MAIN_TABLE: &[MainTag] = &[
     map(0x2011, "VignettingCorrection", CORRECTION_SETTING),
     map(0x2012, "LateralChromaticAberration", CORRECTION_SETTING),
     map(0x2013, "DistortionCorrectionSetting", CORRECTION_SETTING),
-    func(0x2014, "WBShiftAB_GM", |v, _| Some(v.join_ints())),
+    func(0x2014, "WBShiftAB_GM", |v, _cx| Some(v.join_ints())),
     map(0x2016, "AutoPortraitFramed", AUTO_PORTRAIT_FRAMED),
     map(0x2017, "FlashAction", FLASH_ACTION_MAIN),
     map(0x201a, "ElectronicFrontCurtainShutter", EFCS),
-    func(0x201b, "FocusMode", |v, model| {
+    func(0x201b, "FocusMode", |v, cx| {
         // ExifTool restricts this to non-DSC bodies plus a named handful of
         // late DSC models; only the non-DSC half is reachable here.
-        let model = model?;
+        let model = cx.model?;
         (!model.starts_with("DSC-")).then(|| ())?;
         let raw = v.first_int()?;
         Some(lookup(FOCUS_MODE_201B, raw).unwrap_or_else(|| unknown(raw)))
     }),
-    func(0x201c, "AFAreaModeSetting", |v, model| {
+    func(0x201c, "AFAreaModeSetting", |v, cx| {
         let raw = v.first_int()?;
-        let table = af_area_mode_setting_table(model?)?;
+        let table = af_area_mode_setting_table(cx.model?)?;
         Some(lookup(table, raw).unwrap_or_else(|| unknown(raw)))
     }),
-    func(0x201e, "AFPointSelected", |v, model| {
-        let model = model?;
+    func(0x201e, "AFPointSelected", |v, cx| {
+        // ExifTool's five arms, in its order (Sony.pm:1321-1421). The three
+        // ILCA arms are gated on `$$self{AFAreaILCA}` and the ILCE half of the
+        // first on `$$self{AFAreaILCE}`; both are the raw AFAreaModeSetting
+        // this walk recorded when it passed 0x201c.
+        let model = cx.model?;
         let raw = v.first_int()?;
-        if model.starts_with("SLT-") || model.starts_with("HV") {
+
+        // Arm 1: SLT/HV outright, or an ILCE/ILME reporting AFAreaModeSetting 4
+        // -- `Flexible Spot (LA-EA4)`, i.e. an A-mount lens on an adapter, which
+        // is what puts the SLT's phase-detect point names back in play.
+        if model.starts_with("SLT-")
+            || model.starts_with("HV")
+            || ((model.starts_with("ILCE-") || model.starts_with("ILME-"))
+                && cx.af_area_mode_setting == Some(4))
+        {
             return Some(lookup(AF_POINT_SELECTED_SLT, raw).unwrap_or_else(|| unknown(raw)));
         }
-        // ILCA-68/77M2 shift the value by one and name the points on a grid;
-        // only the shared "Auto" end of that list is transcribed here, so any
-        // real point selection is dropped rather than guessed at.
-        if model.starts_with("ILCA-68") || model.starts_with("ILCA-77M2") {
-            return (raw == 0).then(|| "Auto".to_string());
+
+        if model.starts_with("ILCA-") {
+            // Every ILCA arm requires the data member to be defined; when 0x201c
+            // was absent no arm matches and ExifTool prints nothing.
+            let af_area = cx.af_area_mode_setting?;
+            // Arm 4: any ILCA whose AF area is Zone reads the zone table.
+            if af_area == 8 {
+                return Some(
+                    lookup(AF_POINT_SELECTED_ILCA_ZONE, raw).unwrap_or_else(|| unknown(raw)),
+                );
+            }
+            // Arm 2: `ValueConv => '$val - 1'` runs before the PrintConv, so the
+            // lookup and any "Unknown (n)" both use the shifted number.
+            if model.starts_with("ILCA-68") || model.starts_with("ILCA-77M2") {
+                let shifted = raw - 1;
+                return Some(
+                    lookup(AF_POINT_SELECTED_ILCA_79, shifted).unwrap_or_else(|| unknown(shifted)),
+                );
+            }
+            // Arm 3: `OTHER => sub { shift }` prints an unmatched value as the
+            // bare number rather than wrapping it.
+            if model.starts_with("ILCA-99M2") {
+                return Some(
+                    lookup(AF_POINT_SELECTED_ILCA_99M2, raw).unwrap_or_else(|| raw.to_string()),
+                );
+            }
+            return None;
+        }
+
+        // Arm 5.
+        if is_ilce_af_point_body(model) {
+            return Some(lookup(AF_POINT_SELECTED_ILCE_ZONE, raw).unwrap_or_else(|| unknown(raw)));
         }
         None
     }),
     map(0x2021, "AFTracking", AF_TRACKING),
     map(0x2023, "MultiFrameNREffect", MULTI_FRAME_NR_EFFECT),
-    func(0x202e, "Quality", |v, _| {
+    func(0x202e, "Quality", |v, _cx| {
         let key = v.join_ints();
         QUALITY2
             .iter()
@@ -739,7 +1016,7 @@ pub static MAIN_TABLE: &[MainTag] = &[
             .map(|(_, name)| (*name).to_string())
             .or_else(|| Some(format!("Unknown ({})", key)))
     }),
-    func(0xb000, "FileFormat", |v, _| {
+    func(0xb000, "FileFormat", |v, _cx| {
         let key = v.join_ints();
         FILE_FORMAT
             .iter()
@@ -748,7 +1025,7 @@ pub static MAIN_TABLE: &[MainTag] = &[
             .or_else(|| Some(format!("Unknown ({})", key)))
     }),
     map(0xb001, "SonyModelID", SONY_MODEL_ID),
-    func(0xb020, "CreativeStyle", |v, _| {
+    func(0xb020, "CreativeStyle", |v, _cx| {
         let raw = v.string()?;
         Some(
             CREATIVE_STYLE
@@ -758,7 +1035,7 @@ pub static MAIN_TABLE: &[MainTag] = &[
                 .unwrap_or(raw),
         )
     }),
-    func(0xb021, "ColorTemperature", |v, _| {
+    func(0xb021, "ColorTemperature", |v, _cx| {
         let raw = v.first_int()?;
         Some(match raw {
             0 => "Auto".to_string(),
@@ -766,14 +1043,14 @@ pub static MAIN_TABLE: &[MainTag] = &[
             other => other.to_string(),
         })
     }),
-    func(0xb022, "ColorCompensationFilter", |v, _| {
+    func(0xb022, "ColorCompensationFilter", |v, _cx| {
         v.first_int_as::<i32>().map(|v| v.to_string())
     }),
     map(0xb023, "SceneMode", SCENE_MODE),
     map(0xb024, "ZoneMatching", ZONE_MATCHING),
     map(0xb025, "DynamicRangeOptimizer", DYNAMIC_RANGE_OPTIMIZER),
     map(0xb026, "ImageStabilization", IMAGE_STABILIZATION),
-    func(0xb027, "LensType", |v, _| {
+    func(0xb027, "LensType", |v, _cx| {
         let raw = v.first_int()?;
         Some(
             sony_lenses::lookup(u16::try_from(raw).ok()?)
@@ -782,16 +1059,16 @@ pub static MAIN_TABLE: &[MainTag] = &[
         )
     }),
     map(0xb029, "ColorMode", COLOR_MODE),
-    func(0xb02a, "LensSpec", |v, _| print_lens_spec(v.bytes())),
-    func(0xb02b, "FullImageSize", |v, _| v.reversed_size()),
-    func(0xb02c, "PreviewImageSize", |v, _| v.reversed_size()),
+    func(0xb02a, "LensSpec", |v, _cx| print_lens_spec(v.bytes())),
+    func(0xb02b, "FullImageSize", |v, _cx| v.reversed_size()),
+    func(0xb02c, "PreviewImageSize", |v, _cx| v.reversed_size()),
     map(0xb040, "Macro", MACRO).drop_when(65535),
     map(0xb044, "AFIlluminator", AF_ILLUMINATOR).drop_when(65535),
     map(0xb047, "JPEGQuality", JPEG_QUALITY).drop_when(65535),
-    func(0xb048, "FlashLevel", |v, model| {
+    func(0xb048, "FlashLevel", |v, cx| {
         let raw = v.first_int_as::<i16>()? as i64;
         // RawConv drops the A100's -1; every other body reports a real level.
-        if raw == -1 && model.is_some_and(|m| m.starts_with("DSLR-A100")) {
+        if raw == -1 && cx.model.is_some_and(|m| m.starts_with("DSLR-A100")) {
             return None;
         }
         Some(lookup(FLASH_LEVEL, raw).unwrap_or_else(|| unknown(raw)))
@@ -799,7 +1076,7 @@ pub static MAIN_TABLE: &[MainTag] = &[
     map(0xb049, "ReleaseMode", RELEASE_MODE).drop_when(65535),
     // `OTHER => sub { shift }`: a burst position other than 0 prints as the
     // bare number, not as "Unknown (N)".
-    func(0xb04a, "SequenceNumber", |v, _| {
+    func(0xb04a, "SequenceNumber", |v, _cx| {
         let raw = v.first_int()?;
         (raw != 65535).then(|| lookup(SEQUENCE_NUMBER, raw).unwrap_or_else(|| raw.to_string()))
     }),
@@ -817,6 +1094,8 @@ pub static MAIN_TABLE: &[MainTag] = &[
 fn af_area_mode_setting_table(model: &str) -> Option<&'static [(i64, &'static str)]> {
     if model.starts_with("SLT-") || model.starts_with("HV") {
         Some(AF_AREA_MODE_SETTING_SLT)
+    } else if is_ilce_af_area_body(model) {
+        Some(AF_AREA_MODE_SETTING_ILCE)
     } else if model.starts_with("ILCA-") {
         Some(AF_AREA_MODE_SETTING_ILCA)
     } else {
@@ -824,9 +1103,38 @@ fn af_area_mode_setting_table(model: &str) -> Option<&'static [(i64, &'static st
     }
 }
 
+/// Sony.pm:1276 --
+/// `/^(NEX-|ILCE-|ILME-|ZV-|DSC-(RX10M4|RX100M6|RX100M7|RX100M5A|HX95|HX99|RX0M2|RX1RM3))/`
+///
+/// The DSC alternatives are unanchored at their right-hand end, so `DSC-RX100M7A`
+/// matches through `RX100M7`, exactly as the Perl does.
+fn is_ilce_af_area_body(model: &str) -> bool {
+    const DSC: &[&str] = &[
+        "RX10M4", "RX100M6", "RX100M7", "RX100M5A", "HX95", "HX99", "RX0M2", "RX1RM3",
+    ];
+    model.starts_with("NEX-")
+        || model.starts_with("ILCE-")
+        || model.starts_with("ILME-")
+        || model.starts_with("ZV-")
+        || model
+            .strip_prefix("DSC-")
+            .is_some_and(|rest| DSC.iter().any(|d| rest.starts_with(d)))
+}
+
+/// Sony.pm:1406 -- `/^(NEX-|ILCE-|ILME-|ZV-|DSC-RX)/`, the wider body list the
+/// last `AFPointSelected` arm uses. Every `DSC-RX` qualifies here, not just the
+/// eight `AFAreaModeSetting` names them.
+fn is_ilce_af_point_body(model: &str) -> bool {
+    model.starts_with("NEX-")
+        || model.starts_with("ILCE-")
+        || model.starts_with("ILME-")
+        || model.starts_with("ZV-")
+        || model.starts_with("DSC-RX")
+}
+
 impl Print {
     /// Renders `value` the way ExifTool would, or `None` to drop the tag.
-    pub fn apply(&self, value: &SonyValue<'_>, model: Option<&str>) -> Option<String> {
+    pub fn apply(&self, value: &SonyValue<'_>, ctx: &MainCtx<'_>) -> Option<String> {
         match self {
             Print::Int => value.first_int().map(|v| v.to_string()),
             Print::Map(m) => {
@@ -838,20 +1146,20 @@ impl Print {
                 Some(lookup(m, raw).unwrap_or_else(|| unknown_hex(raw)))
             }
             Print::Adjust => value.first_int().map(signed_adjustment),
-            Print::Fn(f) => f(value, model),
+            Print::Fn(f) => f(value, ctx),
         }
     }
 }
 
 impl MainTag {
     /// Renders the value, honouring the `RawConv` that drops it entirely.
-    pub fn render(&self, value: &SonyValue<'_>, model: Option<&str>) -> Option<String> {
+    pub fn render(&self, value: &SonyValue<'_>, ctx: &MainCtx<'_>) -> Option<String> {
         if let Some(dropped) = self.drop_raw
             && value.first_int() == Some(dropped)
         {
             return None;
         }
-        self.print.apply(value, model)
+        self.print.apply(value, ctx)
     }
 }
 
@@ -863,6 +1171,7 @@ pub fn main_tag(id: u16) -> Option<&'static MainTag> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parsers::tiff::ifd_parser::ByteOrder;
 
     #[test]
     fn quality_printconv_matches_exiftool() {
@@ -894,5 +1203,114 @@ mod tests {
         assert_eq!(lookup(SONY_MODEL_ID, 256), Some("DSLR-A100".to_string()));
         assert_eq!(lookup(SONY_MODEL_ID, 260), Some("DSLR-A350".to_string()));
         assert_eq!(lookup(SONY_MODEL_ID, 319), Some("ILCA-77M2".to_string()));
+    }
+
+    /// One int8u component, which is how Sony writes both 0x201c and 0x201e.
+    fn int8u(v: u8) -> SonyValue<'static> {
+        SonyValue::new(1, 1, vec![v], ByteOrder::LittleEndian)
+    }
+
+    fn ctx(model: &str, af_area: Option<i64>) -> MainCtx<'_> {
+        MainCtx {
+            model: Some(model),
+            af_area_mode_setting: af_area,
+        }
+    }
+
+    fn render(id: u16, raw: u8, model: &str, af_area: Option<i64>) -> Option<String> {
+        main_tag(id)
+            .expect("tag in MAIN_TABLE")
+            .render(&int8u(raw), &ctx(model, af_area))
+    }
+
+    /// `exiftool -G1 -s combined-samples/Sony/*.jpg`, byte for byte. Each raw
+    /// value is the one that file stores, read with `exiftool -v2`.
+    #[test]
+    fn af_area_mode_setting_picks_exiftools_arm_per_body() {
+        // SLT arm (Sony.pm:1264): SonySLT-A58.jpg stores 9 and prints "Spot",
+        // which is "Center" on the ILCA arm -- the two tables disagree on the
+        // same number, so picking the wrong arm is a wrong value, not a gap.
+        assert_eq!(render(0x201c, 9, "SLT-A58", None).as_deref(), Some("Spot"));
+        assert_eq!(
+            render(0x201c, 9, "ILCA-68", None).as_deref(),
+            Some("Center")
+        );
+        // NEX/ILCE arm (Sony.pm:1275), previously absent entirely.
+        assert_eq!(
+            render(0x201c, 0, "ILCE-6000", None).as_deref(),
+            Some("Wide")
+        );
+        assert_eq!(
+            render(0x201c, 1, "ILCE-7S", None).as_deref(),
+            Some("Center")
+        );
+        assert_eq!(
+            render(0x201c, 3, "ILCE-6600", None).as_deref(),
+            Some("Flexible Spot")
+        );
+        assert_eq!(render(0x201c, 11, "NEX-5T", None).as_deref(), Some("Zone"));
+        // The DSC alternatives are a fixed list; DSC-RX100M7A matches through
+        // the RX100M7 alternative, and a DSC outside the list gets no arm.
+        assert_eq!(
+            render(0x201c, 0, "DSC-RX100M7A", None).as_deref(),
+            Some("Wide")
+        );
+        assert_eq!(render(0x201c, 0, "DSC-W120", None), None);
+    }
+
+    #[test]
+    fn af_point_selected_follows_exiftools_five_arms() {
+        // Arm 1, SLT: SonySLT-A99.jpg stores 16.
+        assert_eq!(
+            render(0x201e, 16, "SLT-A99", Some(4)).as_deref(),
+            Some("Upper Far Right")
+        );
+        // Arm 1's ILCE half needs AFAreaModeSetting == 4; without it the body
+        // falls to arm 5, where the same raw value means something else.
+        assert_eq!(
+            render(0x201e, 4, "ILCE-7RM2", Some(4)).as_deref(),
+            Some("Right")
+        );
+        assert_eq!(
+            render(0x201e, 4, "ILCE-7RM2", Some(0)).as_deref(),
+            Some("Left Zone")
+        );
+        // Arm 2: ValueConv is $val - 1, so the stored 0 is -1 -> "Auto".
+        assert_eq!(
+            render(0x201e, 0, "ILCA-77M2", Some(9)).as_deref(),
+            Some("Auto")
+        );
+        assert_eq!(
+            render(0x201e, 40, "ILCA-77M2", Some(9)).as_deref(),
+            Some("E6 (Center)")
+        );
+        // Arm 3: no ValueConv, and OTHER passes an unmatched value through.
+        assert_eq!(
+            render(0x201e, 0, "ILCA-99M2", Some(0)).as_deref(),
+            Some("Auto")
+        );
+        assert_eq!(
+            render(0x201e, 162, "ILCA-99M2", Some(0)).as_deref(),
+            Some("E6 (162, Center)")
+        );
+        assert_eq!(
+            render(0x201e, 5, "ILCA-99M2", Some(0)).as_deref(),
+            Some("5")
+        );
+        // Arm 4: any ILCA whose AF area is Zone reads the zone names instead.
+        assert_eq!(
+            render(0x201e, 5, "ILCA-77M2", Some(8)).as_deref(),
+            Some("Center Zone")
+        );
+        // Arm 5.
+        assert_eq!(
+            render(0x201e, 0, "ILCE-6000", Some(0)).as_deref(),
+            Some("n/a")
+        );
+        assert_eq!(render(0x201e, 0, "DSC-RX1", None).as_deref(), Some("n/a"));
+        // No arm matches an ILCA with the data member undefined, and none
+        // matches a DSC outside the DSC-RX family.
+        assert_eq!(render(0x201e, 0, "ILCA-77M2", None), None);
+        assert_eq!(render(0x201e, 0, "DSC-W120", None), None);
     }
 }
