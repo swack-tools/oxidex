@@ -77,6 +77,12 @@ pub(crate) enum PrintConv {
     None,
     /// A literal lookup hash. An unlisted value prints as ExifTool's `Unknown (n)`.
     Map(&'static [(i64, &'static str)]),
+    /// A lookup hash plus ExifTool's `OTHER` fallback, run for a value the hash
+    /// does not list. `OTHER` is an anonymous Perl closure, so the vendor module
+    /// carries a hand-written translation of the one body and the generator
+    /// binds it by that body's deparsed text -- an upstream edit stops the
+    /// generator rather than leaving a stale conversion behind a real tag name.
+    MapOr(&'static [(i64, &'static str)], fn(i64) -> String),
 }
 
 /// One field of a `ProcessBinaryData` table.
@@ -201,6 +207,10 @@ fn render(elem: &Elem, conv: PrintConv) -> String {
                 || format!("Unknown ({v})"),
                 |(_, label)| (*label).to_string(),
             ),
+            PrintConv::MapOr(table, other) => table
+                .iter()
+                .find(|(key, _)| key == v)
+                .map_or_else(|| other(*v), |(_, label)| (*label).to_string()),
         },
     }
 }
