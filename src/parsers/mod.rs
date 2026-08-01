@@ -22,6 +22,7 @@ impl Default for DetectorMode {
 
 pub mod archive;
 pub mod audio;
+pub mod canon_vrd;
 pub mod common;
 pub mod detection;
 pub mod document;

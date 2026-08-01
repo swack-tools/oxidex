@@ -558,6 +558,28 @@ const PERL_SIG_DIGITS: i32 = 15;
 /// assert_eq!(perl_number(1.06550110802548e-13), "1.06550110802548e-13");
 /// ```
 pub fn perl_number(v: f64) -> String {
+    perl_g(v, PERL_SIG_DIGITS)
+}
+
+/// Renders a float as C's `sprintf "%.<sig_digits>g"`.
+///
+/// `perl_number` is this with Perl's default of 15 digits. ExifTool also
+/// writes explicit widths in PrintConv expressions -- `sprintf("%.7g",$val)`
+/// in `%CanonVRD::Ver1`, for instance -- which need the same `%g` rules at a
+/// different precision.
+///
+/// # Examples
+///
+/// ```
+/// use oxidex::core::formatters::numeric_precision::perl_g;
+///
+/// // Trailing zeros and the bare point are suppressed, as %g does
+/// assert_eq!(perl_g(0.0, 7), "0");
+/// assert_eq!(perl_g(5184.0, 7), "5184");
+/// // Rounded to 7 significant digits, not 15
+/// assert_eq!(perl_g(1234.56789, 7), "1234.568");
+/// ```
+pub fn perl_g(v: f64, sig_digits: i32) -> String {
     if v.is_nan() {
         return "NaN".to_string();
     }
@@ -570,10 +592,10 @@ pub fn perl_number(v: f64) -> String {
     }
 
     // %g chooses between %e and %f on the decimal exponent the value has
-    // *after* rounding to PERL_SIG_DIGITS, so read the exponent back off the
+    // *after* rounding to sig_digits, so read the exponent back off the
     // rounded scientific form rather than computing log10 directly --
     // 9.9999e2 rounded to 3 digits is 1e3 and lands in the other bucket.
-    let scientific = format!("{:.*e}", (PERL_SIG_DIGITS - 1) as usize, v);
+    let scientific = format!("{:.*e}", (sig_digits - 1).max(0) as usize, v);
     let (mantissa, exponent) = scientific
         .split_once('e')
         .expect("Rust's {:e} always emits an exponent");
@@ -581,7 +603,7 @@ pub fn perl_number(v: f64) -> String {
         .parse()
         .expect("Rust's {:e} always emits a decimal exponent");
 
-    if exponent < -4 || exponent >= PERL_SIG_DIGITS {
+    if exponent < -4 || exponent >= sig_digits {
         // Exponent form. Rust writes the exponent bare ("e-13", "e20"); C and
         // Perl always sign it and pad it to two digits ("e-13", "e+20").
         return format!(
@@ -592,8 +614,8 @@ pub fn perl_number(v: f64) -> String {
         );
     }
 
-    // Fixed form, carrying whatever is left of the 15 digits after the point.
-    let decimals = (PERL_SIG_DIGITS - 1 - exponent).max(0) as usize;
+    // Fixed form, carrying whatever is left of the digits after the point.
+    let decimals = (sig_digits - 1 - exponent).max(0) as usize;
     trim_insignificant_zeros(&format!("{:.*}", decimals, v))
 }
 
