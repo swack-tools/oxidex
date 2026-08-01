@@ -36,6 +36,7 @@ use std::collections::HashMap;
 
 use super::custom_functions2_tables::CUSTOM_FUNCTIONS2;
 use super::print_exposure_time;
+use crate::core::formatters::numeric_precision::perl_number;
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
@@ -144,37 +145,9 @@ impl Cf2Value {
     fn render_raw(self) -> String {
         match self {
             Cf2Value::Int(v) => v.to_string(),
-            Cf2Value::Float(v) => format_perl_number(v),
+            Cf2Value::Float(v) => perl_number(v),
         }
     }
-}
-
-/// Perl's default numeric stringification: up to 15 significant digits, trailing zeros
-/// dropped, and an integral value printed without a decimal point.
-fn format_perl_number(value: f64) -> String {
-    if value == value.trunc() && value.abs() < 1e15 {
-        return format!("{}", value as i64);
-    }
-    let mut rendered = format!("{:.*e}", 14, value);
-    // Convert Rust's `1.5e-3` exponent form back to Perl's plain-decimal rendering for
-    // the magnitudes this table produces (shutter speeds and apertures).
-    if let Some((mantissa, exp)) = rendered.split_once('e') {
-        let exp: i32 = exp.parse().unwrap_or(0);
-        if (-6..15).contains(&exp) {
-            let decimals = (14 - exp).clamp(0, 17) as usize;
-            rendered = format!("{:.*}", decimals, value);
-            let trimmed = rendered.trim_end_matches('0').trim_end_matches('.');
-            return trimmed.to_string();
-        }
-        let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
-        return format!(
-            "{}e{}{:02}",
-            mantissa,
-            if exp < 0 { '-' } else { '+' },
-            exp.abs()
-        );
-    }
-    rendered
 }
 
 /// C's `%.<precision>g`, which is what Perl's `sprintf` calls.

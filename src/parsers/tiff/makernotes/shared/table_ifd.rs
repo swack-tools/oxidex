@@ -180,48 +180,7 @@ pub fn print_rational(num: i64, den: i64) -> String {
 
 /// Format a float the way Perl stringifies one: `%.15g`, trailing zeros gone.
 pub fn fmt_g15(x: f64) -> String {
-    if !x.is_finite() {
-        return if x.is_nan() {
-            "nan".into()
-        } else if x > 0.0 {
-            "inf".into()
-        } else {
-            "-inf".into()
-        };
-    }
-    if x == 0.0 {
-        return "0".into();
-    }
-    let exp = x.abs().log10().floor() as i32;
-    // %g switches to exponential outside [-4, precision).
-    if exp < -4 || exp >= 15 {
-        // C's %g writes the exponent with a sign and at least two digits
-        // ("1.733823728e-07"); Rust's `{:e}` writes "1.733823728e-7".
-        let s = format!("{:.*e}", 14, x);
-        let (mantissa, exponent) = s.split_once('e').unwrap_or((s.as_str(), "0"));
-        let mut m = mantissa.to_string();
-        if m.contains('.') {
-            while m.ends_with('0') {
-                m.pop();
-            }
-            if m.ends_with('.') {
-                m.pop();
-            }
-        }
-        let e: i32 = exponent.parse().unwrap_or(0);
-        return format!("{}e{}{:02}", m, if e < 0 { '-' } else { '+' }, e.abs());
-    }
-    let decimals = (14 - exp).max(0) as usize;
-    let mut s = format!("{:.*}", decimals, x);
-    if s.contains('.') {
-        while s.ends_with('0') {
-            s.pop();
-        }
-        if s.ends_with('.') {
-            s.pop();
-        }
-    }
-    if s == "-0" { "0".into() } else { s }
+    crate::core::formatters::numeric_precision::perl_number(x)
 }
 
 /// Per-element conversion inside a `PrintConv => [ ... ]` list.
