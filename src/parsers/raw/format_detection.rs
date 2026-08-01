@@ -128,6 +128,71 @@ pub enum RawFormat {
     GenericREV,
 }
 
+impl RawFormat {
+    /// ExifTool's `FileType` for this format.
+    ///
+    /// The variant names carry the manufacturer for readability at the call
+    /// site, so `format!("{:?}", format)` -- which is what the raw parsers used
+    /// to write into `File:FileType` -- put `CanonCR2`, `NikonNEF`,
+    /// `AdobeDNG`, `SigmaX3F`, `MinoltaMRW`, `FujifilmRAF`, `PanasonicRW2`,
+    /// `PhaseOneIIQ` and `CanonCRW` on those files. ExifTool reports the bare
+    /// format name: `CR2`, `NEF`, `DNG`, ...
+    ///
+    /// Every name below is the key ExifTool's `%fileTypeLookup` resolves that
+    /// extension to, after chasing scalar aliases the way `GetFileType` does --
+    /// which is why `OlympusORI` reports `ORF` (`ORI => 'ORF'`) and `HEIFHIF`
+    /// reports `HEIF` (`HIF => 'HEIF'`) rather than echoing their own
+    /// extension.
+    #[must_use]
+    pub fn file_type(self) -> &'static str {
+        match self {
+            Self::CanonCR2 => "CR2",
+            Self::CanonCR3 => "CR3",
+            Self::CanonCRW => "CRW",
+            Self::NikonNEF => "NEF",
+            Self::NikonNRW => "NRW",
+            Self::SonyARW => "ARW",
+            Self::SonySR2 => "SR2",
+            Self::SonySRF => "SRF",
+            Self::SonySRW => "SRW",
+            Self::SonyARQ => "ARQ",
+            Self::FujifilmRAF => "RAF",
+            Self::OlympusORF => "ORF",
+            // `ORI => 'ORF'` in %fileTypeLookup: an .ori reports as ORF.
+            Self::OlympusORI => "ORF",
+            Self::PentaxPEF => "PEF",
+            Self::PanasonicRW2 => "RW2",
+            Self::PanasonicRWL => "RWL",
+            Self::Hasselblad3FR => "3FR",
+            Self::HasselbladFFF => "FFF",
+            Self::PhaseOneIIQ => "IIQ",
+            Self::MamiyaMEF => "MEF",
+            Self::LeafMOS => "MOS",
+            Self::KodakDCR => "DCR",
+            Self::KodakKDC => "KDC",
+            Self::MinoltaMRW => "MRW",
+            Self::EpsonERF => "ERF",
+            Self::SigmaX3F => "X3F",
+            Self::GoProGPR => "GPR",
+            Self::AdobeDNG => "DNG",
+            // `HIF => 'HEIF'` in %fileTypeLookup.
+            Self::HEIFHIF => "HEIF",
+            Self::LightLRI => "LRI",
+            Self::GenericRAW => "RAW",
+            // ExifTool 13.30's %fileTypeLookup has no entry for these five
+            // extensions -- `exiftool` reports "Unknown file type" for them --
+            // so there is no upstream name to match. They keep the bare
+            // extension, which is at least the shape of a FileType rather than
+            // a Rust identifier.
+            Self::SonyARI => "ARI",
+            Self::MinoltaMDC => "MDC",
+            Self::SinarSTI => "STI",
+            Self::GenericCAM => "CAM",
+            Self::GenericREV => "REV",
+        }
+    }
+}
+
 /// Detect raw format from magic bytes and file extension
 ///
 /// This function analyzes the first bytes of a file and its extension to determine

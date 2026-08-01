@@ -346,7 +346,7 @@ pub fn parse_raw_metadata(data: &[u8], format: RawFormat) -> Result<MetadataMap>
                 let mut metadata = MetadataMap::new();
                 metadata.insert(
                     "File:FileType".to_string(),
-                    TagValue::new_string(format!("{:?}", format)),
+                    TagValue::new_string(format.file_type()),
                 );
                 Ok(metadata)
             })
@@ -422,7 +422,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     // Add format-specific tag to identify file type
     metadata.insert(
         "File:FileType".to_string(),
-        TagValue::new_string(format!("{:?}", format)),
+        TagValue::new_string(format.file_type()),
     );
 
     // Walk the IFD chain (IFD0, IFD1, etc.)
@@ -4256,7 +4256,7 @@ fn parse_sigma_x3f(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
     metadata.insert(
         "File:FileType".to_string(),
-        TagValue::new_string(format!("{:?}", format)),
+        TagValue::new_string(format.file_type()),
     );
 
     // Verify FOVb signature
@@ -5270,7 +5270,7 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
     metadata.insert(
         "File:FileType".to_string(),
-        TagValue::new_string(format!("{:?}", format)),
+        TagValue::new_string(format.file_type()),
     );
 
     // Verify MRM signature
@@ -5629,7 +5629,7 @@ fn parse_canon_crw(_data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
     metadata.insert(
         "File:FileType".to_string(),
-        TagValue::new_string(format!("{:?}", format)),
+        TagValue::new_string(format.file_type()),
     );
 
     // TODO: Implement CRW specific parsing
@@ -5748,7 +5748,7 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
     metadata.insert(
         "File:FileType".to_string(),
-        TagValue::new_string(format!("{:?}", format)),
+        TagValue::new_string(format.file_type()),
     );
 
     // Parse the RAF file's own proprietary header/directory structures

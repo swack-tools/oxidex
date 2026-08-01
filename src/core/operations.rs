@@ -99,9 +99,17 @@ pub(crate) fn is_unsupported(e: &ExifToolError) -> bool {
 /// Fill in `FileType`, `FileTypeExtension` and `MIMEType` from ExifTool's
 /// identification tables. Returns whether the file was recognised.
 ///
-/// Used when no parser matched. Identifying a file is independent of being able
-/// to read its contents, and these three tags are what ExifTool reports for a
-/// format it knows of but has nothing else to say about.
+/// Identifying a file is independent of being able to read its contents, so
+/// this runs on **every** read, not only when no parser matched. It used to be
+/// reachable only from the `UnsupportedFormat` arms below, which meant a format
+/// the dispatcher *does* recognise never got here -- and the optimistic values
+/// `extract_file_metadata` leaves behind come from a ~50-extension hand-written
+/// table. The result was 67 corpus files parsing their contents perfectly while
+/// reporting `FileType: Unknown` and `MIMEType: application/octet-stream`:
+/// ICC_Profile.icc (35 tags), Photoshop.psd (111 tags), Font.ttf (50 tags),
+/// every .xmp, .json, .csv and .plist in the corpus.
+///
+/// Only placeholders are overwritten, so a parser that knows better still wins.
 fn add_identity_tags(metadata: &mut MetadataMap, reader: &dyn FileReader, path: &Path) -> bool {
     // 1 KiB is what the magic-number patterns are written against.
     let want = reader.size().min(1024) as usize;
@@ -235,6 +243,22 @@ pub fn read_metadata_with_detector(
             }
         }
     }
+
+    // Step 3c: Establish identity from ExifTool's tables before parsing.
+    //
+    // This used to be reachable only from the two `UnsupportedFormat` arms, so
+    // a format the dispatcher *does* recognise never got here and kept whatever
+    // `extract_file_metadata` guessed from a ~50-extension hand-written table.
+    // 67 corpus files extracted their contents in full while reporting
+    // `FileType: Unknown` and `MIMEType: application/octet-stream` --
+    // ICC_Profile.icc (35 tags), Photoshop.psd (111), Font.ttf (50), and every
+    // .xmp, .json, .csv and .plist in the corpus.
+    //
+    // It runs *before* the parser rather than after, so that the merge below
+    // still lets a parser overrule it. A CR3 that is really a Canon RAW movie
+    // reports CRM/crm from its CNCV box, and running this afterwards would have
+    // overwritten that extension with the one its filename implies.
+    add_identity_tags(&mut metadata, &reader, path);
 
     // Step 4: Route to appropriate parser based on detected format and extract format-specific metadata
     //

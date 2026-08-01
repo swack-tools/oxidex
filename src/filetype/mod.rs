@@ -42,6 +42,11 @@ static COMPILED: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
 pub struct Identity {
     /// ExifTool's `FileType`, e.g. `"AIFF"`.
     pub file_type: &'static str,
+    /// The root format whose module reads this file, e.g. `"TIFF"` for `CR2`.
+    ///
+    /// Equal to `file_type` for a root format. [`tables::MAGIC`] is keyed on
+    /// the root, so this is the name a header match is compared against.
+    pub root_type: &'static str,
     /// ExifTool's `FileTypeExtension`, lowercase.
     pub extension: Cow<'static, str>,
     /// ExifTool's `MIMEType`, if it declares one.
@@ -74,11 +79,15 @@ fn extension_for(file_type: &str) -> Cow<'static, str> {
         )
 }
 
-fn identity(file_type: &'static str) -> Identity {
+fn identity(file_type: &'static str, root_type: &'static str) -> Identity {
     Identity {
         file_type,
+        root_type,
         extension: extension_for(file_type),
-        mime_type: mime_for(file_type),
+        // ExifTool falls back to the root's MIME type when the sub-type
+        // declares none: `$mimeType = $mimeType{$baseType} unless $mimeType`
+        // (ExifTool.pm, SetFileType).
+        mime_type: mime_for(file_type).or_else(|| mime_for(root_type)),
     }
 }
 
@@ -116,10 +125,14 @@ pub fn identify(header: &[u8], ext: Option<&str>) -> Option<Identity> {
     let from_ext = ext.and_then(identify_by_extension)?;
     match magic {
         // Header and extension agree: highest confidence.
-        Some(m) if m == from_ext.file_type => Some(from_ext),
+        //
+        // `%magicNumber` is keyed on root formats, so a sub-type corroborates
+        // through its root as well: a .cr2 header matches the TIFF pattern,
+        // and a .djvu header matches AIFF's `AT&TFORM` alternative.
+        Some(m) if m == from_ext.file_type || m == from_ext.root_type => Some(from_ext),
         // The extension names a type with no magic number of its own, so
         // nothing contradicts it.
-        None if !has_magic(from_ext.file_type) => Some(from_ext),
+        None if !has_magic(from_ext.file_type) && !has_magic(from_ext.root_type) => Some(from_ext),
         // They disagree, or the header matched something else. ExifTool would
         // settle this by parsing; we cannot, so we decline.
         _ => None,
@@ -135,9 +148,9 @@ fn has_magic(file_type: &str) -> bool {
 pub fn identify_by_extension(ext: &str) -> Option<Identity> {
     let lower = ext.to_ascii_lowercase();
     tables::EXT_TO_TYPE
-        .binary_search_by_key(&lower.as_str(), |(e, _)| e)
+        .binary_search_by_key(&lower.as_str(), |(e, _, _)| e)
         .ok()
-        .map(|i| identity(tables::EXT_TO_TYPE[i].1))
+        .map(|i| identity(tables::EXT_TO_TYPE[i].1, tables::EXT_TO_TYPE[i].2))
 }
 
 #[cfg(test)]
@@ -245,6 +258,98 @@ mod tests {
         assert_eq!(identify_by_extension("jpg").unwrap().file_type, "JPEG");
         assert_eq!(identify_by_extension("JPG").unwrap().file_type, "JPEG");
         assert!(identify_by_extension("nosuchext").is_none());
+    }
+
+    /// `%fileTypeLookup`'s first array element is the *root* format -- the
+    /// module that reads the file -- and the reported `FileType` is the key.
+    /// Recording the root instead mislabelled 162 of ExifTool 13.30's 350
+    /// extensions, turning a DjVu image into AIFF audio (`DJVU => ['AIFF']`)
+    /// and every TIFF-based raw into plain TIFF.
+    #[test]
+    fn sub_types_report_their_own_name_not_their_root() {
+        for (ext, want_type, want_root) in [
+            ("cr2", "CR2", "TIFF"),
+            ("nef", "NEF", "TIFF"),
+            ("djvu", "DJVU", "AIFF"),
+            ("ttf", "TTF", "Font"),
+            ("j2c", "J2C", "JP2"),
+            ("csv", "CSV", "TXT"),
+            ("wmv", "WMV", "ASF"),
+            // A root format is its own root.
+            ("jpg", "JPEG", "JPEG"),
+        ] {
+            let id = identify_by_extension(ext).unwrap();
+            assert_eq!(id.file_type, want_type, "FileType for .{ext}");
+            assert_eq!(id.root_type, want_root, "root for .{ext}");
+        }
+    }
+
+    /// An extension that reaches its entry through an alias only keeps the
+    /// landing key when that key is a real sub-type -- i.e. when its root is
+    /// itself a format in the table. `DCM => 'DICM'` and `DICM => ['DICOM']`
+    /// land on "DICM", which ExifTool never prints; the root DICOM is absent
+    /// from the table because it is a bare module name, and that is the answer.
+    #[test]
+    fn alias_hops_to_a_bare_module_name_report_the_module() {
+        assert_eq!(identify_by_extension("dcm").unwrap().file_type, "DICOM");
+        assert_eq!(identify_by_extension("dcm").unwrap().extension, "dcm");
+
+        // The hop still keeps a genuine sub-type: DJVU's root AIFF *is* a
+        // format in the table, so .djv stays DJVU rather than collapsing to
+        // AIFF -- as do .azw (MOBI), .j2k (J2C) and .3gp2 (3G2).
+        for (ext, want) in [
+            ("djv", "DJVU"),
+            ("azw", "MOBI"),
+            ("j2k", "J2C"),
+            ("3gp2", "3G2"),
+        ] {
+            assert_eq!(identify_by_extension(ext).unwrap().file_type, want);
+        }
+    }
+
+    /// An upper-cased spelling of the root is not a sub-type: every
+    /// `%fileTypeLookup` key is upper-case because they are extensions, and
+    /// `VCARD => ['VCard', ...]` is the same word twice. ExifTool reports its
+    /// own spelling.
+    #[test]
+    fn root_spelling_wins_over_the_upper_cased_extension_key() {
+        assert_eq!(identify_by_extension("vcf").unwrap().file_type, "VCard");
+        assert_eq!(
+            identify_by_extension("torrent").unwrap().file_type,
+            "Torrent"
+        );
+        assert_eq!(identify_by_extension("macos").unwrap().file_type, "MacOS");
+    }
+
+    /// A sub-type is corroborated through its root, because `%magicNumber` is
+    /// keyed on roots: a .cr2's header matches the TIFF pattern, and a .djvu's
+    /// matches AIFF's `AT&TFORM` alternative. Requiring the header to name the
+    /// sub-type itself would have declined every one of them.
+    #[test]
+    fn header_corroborates_a_sub_type_through_its_root() {
+        let djvu = identify(b"AT&TFORM\x00\x00\x03\x96DJVM", Some("djvu")).unwrap();
+        assert_eq!(djvu.file_type, "DJVU");
+        assert_eq!(djvu.mime_type, Some("image/vnd.djvu"));
+
+        let cr2 = identify(b"II\x2a\x00\x10\x00\x00\x00CR\x02\x00", Some("cr2")).unwrap();
+        assert_eq!(cr2.file_type, "CR2");
+        assert_eq!(cr2.mime_type, Some("image/x-canon-cr2"));
+
+        // A header that contradicts both the sub-type and its root is still
+        // refused rather than guessed.
+        assert!(identify(b"BM\x00\x00", Some("cr2")).is_none());
+    }
+
+    /// ExifTool falls back to the root's MIME type when the sub-type declares
+    /// none: `$mimeType = $mimeType{$baseType} unless $mimeType`.
+    #[test]
+    fn mime_type_falls_back_to_the_root() {
+        // PFB has no %mimeType entry of its own; Font does.
+        assert_eq!(mime_for("PFB"), None);
+        assert_eq!(
+            identify_by_extension("pfb").unwrap().mime_type,
+            mime_for("Font")
+        );
     }
 
     #[test]

@@ -51,11 +51,22 @@ my %lookup;
             # A plain string is an alias to another extension.
             $lookup{$k} = { alias => $v };
         } elsif (ref $v eq 'ARRAY') {
-            # [ file type(s), description ]; the type may itself be an array
-            # when one extension maps to several formats.
+            # [ root type(s), description ].
+            #
+            # The first element is the *root* format -- the one whose module
+            # reads the file -- not the FileType ExifTool reports. `CR2 =>
+            # ['TIFF', ...]` means "a .cr2 is read by the TIFF module", and
+            # ExifTool still reports `FileType: CR2`, because SetFileType()
+            # promotes the root back to the extension's own sub-type when the
+            # two share a root (ExifTool.pm, SetFileType: `$fileType = $ext if
+            # $$f[0] eq $fileType or not $fileTypeLookup{$$f[0]}`).
+            #
+            # 162 of ExifTool 13.30's 350 extensions are such sub-types, so
+            # recording only the root mislabels all of them -- a .djvu came out
+            # as AIFF (`DJVU => ['AIFF', ...]`) and a .ttf as Font.
             my ($type, $desc) = @$v;
             my @types = ref $type eq 'ARRAY' ? @$type : ($type);
-            $lookup{$k} = { types => \@types, desc => (defined $desc ? "$desc" : undef) };
+            $lookup{$k} = { roots => \@types, desc => (defined $desc ? "$desc" : undef) };
         }
     }
 }
