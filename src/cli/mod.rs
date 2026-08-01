@@ -9,3 +9,4 @@ pub mod args;
 pub mod batch_processor;
 pub mod output_formatter;
 pub mod rename;
+pub mod value_parser;
