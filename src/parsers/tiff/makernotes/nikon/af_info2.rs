@@ -9,8 +9,32 @@
 
 use std::collections::HashMap;
 
+use super::af_points::{self, AF_POINTS_39, AF_POINTS_51, AF_POINTS_153};
 use super::value_reader::{ascii_value, read_u16};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
+
+/// 11-point bit-number -> name, for the `AFPointsUsed`/`PrimaryAFPoint`
+/// pair at V0100/V0101 offset 8 / 0x44 (Nikon.pm:4258-4270, 4396-4408,
+/// 4505-4522). This is *not* `af_points::AF_POINTS_11`: that table was
+/// transcribed from the separate, legacy `%afPoints11` hash (Nikon.pm:1436,
+/// used by the older `Nikon::AFInfo` table's `AFPoint`/`AFPointsInFocus`),
+/// which orders bits 4-9 differently (`Mid-right` before `Upper-left`).
+/// The two hashes are easy to conflate -- ExifTool itself keeps them as
+/// separate literals rather than sharing one -- but mixing them up here
+/// would silently swap point names for any bit above 3.
+const AF_POINTS_11_OFFSET8: &[&str] = &[
+    "Center",
+    "Top",
+    "Bottom",
+    "Mid-left",
+    "Upper-left",
+    "Lower-left",
+    "Far Left",
+    "Mid-right",
+    "Upper-right",
+    "Lower-right",
+    "Far Right",
+];
 
 const AF_DETECTION_METHOD: &[(u8, &str)] =
     &[(0, "Phase Detect"), (1, "Contrast Detect"), (2, "Hybrid")];
@@ -99,13 +123,68 @@ fn lookup(table: &[(u8, &str)], value: u8) -> String {
     }
 }
 
+/// `PrimaryAFPoint`'s direct-lookup shape: raw byte 0 -> "(none)"; raw byte
+/// 1 (always the documented center bit-number in every one of these
+/// tables) -> "{center name} (Center)"; otherwise a plain table lookup.
+/// Ports the repeated `PrintConv => { 0 => '(none)', %afPointsNN, 1 =>
+/// 'XX (Center)' }` pattern (e.g. Nikon.pm:4181-4193).
+fn primary_af_point(raw: u8, table: &[(u8, &str)]) -> String {
+    if raw == 0 {
+        return "(none)".to_string();
+    }
+    match table.iter().find(|(n, _)| *n == raw) {
+        Some((1, name)) => format!("{name} (Center)"),
+        Some((_, name)) => (*name).to_string(),
+        None => format!("Unknown ({raw})"),
+    }
+}
+
+/// `AFPointsUsed`'s 11-point shape is a raw little-endian `int16u` BITMASK
+/// -- read as such regardless of the MakerNote's own byte order, per
+/// Nikon.pm's explicit "read as int16u in little-endian byte order"
+/// comment (Nikon.pm:4258-4270) -- not the byte-array bitmap
+/// `PrintAFPoints` walks.
+fn af_points_used_bitmask11(raw: u16) -> String {
+    if raw == 0 {
+        return "(none)".to_string();
+    }
+    if raw == 0x7ff {
+        return "All 11 Points".to_string();
+    }
+    let mut points = Vec::new();
+    for (bit, name) in AF_POINTS_11_OFFSET8.iter().enumerate() {
+        if raw & (1 << bit) != 0 {
+            points.push(*name);
+        }
+    }
+    points.join(",")
+}
+
+/// `PrimaryAFPoint`'s 11-point shape: direct 1-based lookup into
+/// `AF_POINTS_11_OFFSET8`, no "(Center)" suffix (Nikon.pm:4517-4528).
+fn primary_af_point_11(raw: u8) -> String {
+    if raw == 0 {
+        return "(none)".to_string();
+    }
+    match AF_POINTS_11_OFFSET8.get((raw - 1) as usize) {
+        Some(name) => (*name).to_string(),
+        None => format!("Unknown ({raw})"),
+    }
+}
+
 /// Walk `Nikon::Main` 0x00b7.
-pub fn parse_af_info2(data: &[u8], order: ByteOrder, tags: &mut HashMap<String, String>) {
+pub fn parse_af_info2(
+    data: &[u8],
+    order: ByteOrder,
+    model: Option<&str>,
+    tags: &mut HashMap<String, String>,
+) {
     if data.len() < 4 {
         return;
     }
     let version = ascii_value(&data[..4]);
     tags.insert("Nikon:AFInfo2Version".to_string(), version.clone());
+    let _ = model;
 
     let byte = |at: usize| data.get(at).copied();
     // Every geometry field except the two coordinate ones carries
@@ -146,6 +225,43 @@ pub fn parse_af_info2(data: &[u8], order: ByteOrder, tags: &mut HashMap<String, 
                     FOCUS_POINT_SCHEMA_V0101
                 };
                 tags.insert("Nikon:FocusPointSchema".to_string(), lookup(table, raw));
+            }
+            // PrimaryAFPoint's Condition checks only FocusPointSchema (Nikon.pm:4181-
+            // 4230, 4505-4551), never AFDetectionMethod -- `detection` (already bound
+            // above for AFAreaMode) is unrelated here.
+            let primary_at = if version == "0100" { 7 } else { 0x44 };
+            if let Some(raw) = byte(primary_at) {
+                let primary = match (version.as_str(), byte(6).unwrap_or(0)) {
+                    (_, 1) => primary_af_point(raw, AF_POINTS_51),
+                    (_, 2) => primary_af_point_11(raw),
+                    ("0100", 3) => primary_af_point(raw, AF_POINTS_39),
+                    ("0101", 7) => primary_af_point(raw, AF_POINTS_153),
+                    _ => "(none)".to_string(),
+                };
+                tags.insert("Nikon:PrimaryAFPoint".to_string(), primary);
+            }
+
+            let schema = byte(6).unwrap_or(0);
+            let used = match (version.as_str(), schema) {
+                (_, 1) => data
+                    .get(8..15)
+                    .map(|bits| af_points::print_af_points_lookup(bits, AF_POINTS_51)),
+                // Always little-endian per Nikon.pm's explicit comment,
+                // independent of the MakerNote's own `order`.
+                (_, 2) => {
+                    read_u16(data, 8, ByteOrder::LittleEndian).map(af_points_used_bitmask11)
+                }
+                ("0100", 3) => data
+                    .get(8..13)
+                    .map(|bits| af_points::print_af_points_lookup(bits, AF_POINTS_39)),
+                ("0101", 7) => data
+                    .get(8..28)
+                    .map(|bits| af_points::print_af_points_lookup(bits, AF_POINTS_153)),
+                (_, 0) => Some("(none)".to_string()),
+                _ => None,
+            };
+            if let Some(used) = used {
+                tags.insert("Nikon:AFPointsUsed".to_string(), used);
             }
             // The contrast-detect geometry block moves between the two
             // versions; it is only present at all for AFDetectionMethod 1.
@@ -270,13 +386,13 @@ mod tests {
         phase[4] = 0; // Phase Detect
         phase[5] = 1;
         let mut tags = HashMap::new();
-        parse_af_info2(&phase, ByteOrder::BigEndian, &mut tags);
+        parse_af_info2(&phase, ByteOrder::BigEndian, None, &mut tags);
         assert_eq!(tags["Nikon:AFAreaMode"], "Dynamic Area");
 
         let mut contrast = phase.clone();
         contrast[4] = 1; // Contrast Detect
         let mut tags = HashMap::new();
-        parse_af_info2(&contrast, ByteOrder::BigEndian, &mut tags);
+        parse_af_info2(&contrast, ByteOrder::BigEndian, None, &mut tags);
         assert_eq!(tags["Nikon:AFAreaMode"], "Contrast-detect (normal area)");
     }
 
@@ -287,7 +403,7 @@ mod tests {
         data[7] = 0; // AFCoordinatesAvailable = No
         data[42..44].copy_from_slice(&8256u16.to_be_bytes()); // AFImageWidth
         let mut tags = HashMap::new();
-        parse_af_info2(&data, ByteOrder::BigEndian, &mut tags);
+        parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
         assert_eq!(tags["Nikon:AFCoordinatesAvailable"], "No");
         // The geometry outside the coordinate pair is reported regardless.
         assert_eq!(tags["Nikon:AFImageWidth"], "8256");
@@ -300,7 +416,78 @@ mod tests {
     #[test]
     fn an_unclaimed_version_reports_only_itself() {
         let mut tags = HashMap::new();
-        parse_af_info2(b"0999\x01\x02\x03\x04", ByteOrder::BigEndian, &mut tags);
+        parse_af_info2(b"0999\x01\x02\x03\x04", ByteOrder::BigEndian, None, &mut tags);
         assert_eq!(tags.len(), 1);
+    }
+
+    #[test]
+    fn v0100_51point_reports_center_from_real_sample_shape() {
+        // NikonD3.jpg: AFPointsUsed=C6, PrimaryAFPoint=C6 (Center).
+        // FocusPointSchema=1 (51-point), AFPointsUsed bit-number 1 = byte0 bit0.
+        let mut data = vec![0u8; 16];
+        data[..4].copy_from_slice(b"0100");
+        data[6] = 1; // FocusPointSchema = 51-point
+        data[7] = 1; // PrimaryAFPoint raw = 1 (center)
+        data[8] = 0x01; // AFPointsUsed bitmap byte 0, bit 0 -> bit-number 1
+        let mut tags = HashMap::new();
+        parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
+        assert_eq!(tags["Nikon:AFPointsUsed"], "C6");
+        assert_eq!(tags["Nikon:PrimaryAFPoint"], "C6 (Center)");
+    }
+
+    #[test]
+    fn v0100_11point_uses_bitmask_not_lookup_table() {
+        // NikonD90.jpg: AFPointsUsed=Top, PrimaryAFPoint=Top.
+        // FocusPointSchema=2 (11-point). AFPointsUsed is little-endian int16u
+        // BITMASK: bit 1 = "Top" (Nikon.pm:1446). PrimaryAFPoint raw=2 -> "Top"
+        // (Nikon.pm:4204: 2 => 'Top', one-based).
+        let mut data = vec![0u8; 16];
+        data[..4].copy_from_slice(b"0100");
+        data[6] = 2; // FocusPointSchema = 11-point
+        data[7] = 2; // PrimaryAFPoint raw = 2 -> Top
+        data[8] = 0x02; // little-endian u16 = 2 -> bit 1 set -> "Top"
+        data[9] = 0x00;
+        let mut tags = HashMap::new();
+        parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
+        assert_eq!(tags["Nikon:AFPointsUsed"], "Top");
+        assert_eq!(tags["Nikon:PrimaryAFPoint"], "Top");
+    }
+
+    #[test]
+    fn v0100_11point_all_points_literal() {
+        let mut data = vec![0u8; 16];
+        data[..4].copy_from_slice(b"0100");
+        data[6] = 2;
+        data[7] = 0;
+        data[8] = 0xff; // 0x7ff little-endian
+        data[9] = 0x07;
+        let mut tags = HashMap::new();
+        parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
+        assert_eq!(tags["Nikon:AFPointsUsed"], "All 11 Points");
+    }
+
+    #[test]
+    fn v0100_schema_zero_reports_none_for_both_tags() {
+        let mut data = vec![0u8; 16];
+        data[..4].copy_from_slice(b"0100");
+        data[6] = 0; // FocusPointSchema = Off
+        let mut tags = HashMap::new();
+        parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
+        assert_eq!(tags["Nikon:AFPointsUsed"], "(none)");
+        assert_eq!(tags["Nikon:PrimaryAFPoint"], "(none)");
+    }
+
+    #[test]
+    fn v0101_153point_center_at_offset_0x44() {
+        // NikonD850.jpg: AFPointsUsed=E9, PrimaryAFPoint=E9 (Center).
+        let mut data = vec![0u8; 105];
+        data[..4].copy_from_slice(b"0101");
+        data[6] = 7; // FocusPointSchema = 153-point
+        data[8] = 0x01; // AFPointsUsed bit-number 1 -> "E9"
+        data[0x44] = 1; // PrimaryAFPoint raw = 1 -> center
+        let mut tags = HashMap::new();
+        parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
+        assert_eq!(tags["Nikon:AFPointsUsed"], "E9");
+        assert_eq!(tags["Nikon:PrimaryAFPoint"], "E9 (Center)");
     }
 }

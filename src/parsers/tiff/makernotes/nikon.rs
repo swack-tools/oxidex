@@ -1445,7 +1445,7 @@ impl MakerNoteParser for NikonParser {
                 // `Nikon::AFInfo2*`, selected by the block's own version.
                 NIKON_AF_INFO2 => {
                     if let Some(bytes) = bytes_of(entry) {
-                        af_info2::parse_af_info2(&bytes, order, tags);
+                        af_info2::parse_af_info2(&bytes, order, model, tags);
                     }
                 }
 
