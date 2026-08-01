@@ -29,15 +29,23 @@ itself on that before -- `pgrep -f` matches the asking shell's own argv, and
 `~/.oxidex/logs/fleet-up.state` went on reporting all fourteen mergers
 `running` for the next hour because the process that maintains it was dead.
 
-So liveness here is NOT pgrep and NOT the state file. It is the merger's own
-singleton lock (`<home>/logs/knowledge/merger-<squad>.lock`), which is:
+So liveness here is NOT pgrep and the state file is never trusted as a
+verdict. During a poll, the primary evidence is the merger's own singleton
+lock (`<home>/logs/knowledge/merger-<squad>.lock`), which is:
 
   * written only by the merger itself, at acquire and at every heartbeat;
-  * released in `run_locked`'s `finally`, so it survives a crash exit --
-    verified against the 2026-07-30 corpse: the three surviving mergers had
-    locks, the eleven dead ones had none;
+  * released in `run_locked`'s `finally` after EVERY poll, before the normal
+    60-second sleep -- so a missing lock alone is ambiguous, not proof of
+    death;
   * carrying a pid and a heartbeat timestamp, so a lock left by a
     SIGKILLed process is still detectable as stale rather than believed.
+
+Between polls, `fleet-up.state` supplies only a candidate PID. That PID must
+both exist and still have the exact squad merger command. The stale state
+from the 2026-07-30 outage therefore remains harmless (its dead/recycled
+PIDs fail validation), while a normally sleeping merger no longer looks
+dead. Looking up one recorded PID is also structurally incapable of the
+`pgrep -f` self-match that caused the earlier false healthy verdict.
 
 A squad also counts as not-owning when it is BLOCKED. A merger whose batch
 full-corpus check fails holds publication and retries on a cadence -- which
@@ -93,6 +101,32 @@ DEFAULT_STALE_SECONDS = 1800.0
 DEFAULT_BLOCKED_SECONDS = 3600.0
 
 
+def fleet_state_merger_pid(home, squad):
+    """Candidate merger PID from fleet-up.state, never a liveness verdict.
+
+    The supervisor writes tab-separated rows as
+    ``merger:<squad>  <pid>  running  <argv-pattern>``. A stale file is
+    expected after a supervisor crash, so callers MUST validate both PID
+    existence and argv before trusting the result.
+    """
+    path = Path(home) / "logs" / "fleet-up.state"
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return None
+    wanted = f"merger:{squad}"
+    for line in lines:
+        fields = line.split("\t", 3)
+        if len(fields) < 3 or fields[0] != wanted or fields[2] != "running":
+            continue
+        try:
+            pid = int(fields[1])
+        except ValueError:
+            return None
+        return pid if pid > 0 else None
+    return None
+
+
 def pid_alive(pid, kill_fn=os.kill):
     """True if `pid` exists. Deliberately NOT a pattern search: this is only
     ever asked about a pid a merger wrote into its own lock file, so there is
@@ -144,13 +178,11 @@ def merger_state(home, squad, *, now=None, stale_seconds=DEFAULT_STALE_SECONDS,
     """``{"squad", "alive", "stalled", "reason", "pid", "age"}`` for one
     squad's merger.
 
-    THE PID DECIDES, NOT THE HEARTBEAT. The three states that matter:
+    THE PID DECIDES, NOT THE HEARTBEAT. The states that matter:
 
-      no lock file            -> DOWN, definitively. `run_locked` releases the
-                                 lock in a `finally`, so it is removed even
-                                 when the poll raises -- confirmed against the
-                                 2026-07-30 corpse, where the 3 survivors had
-                                 locks and all 11 dead mergers had none.
+      no lock file            -> normal between polls. Read the supervisor's
+                                 candidate PID, then validate pid + exact argv.
+                                 No candidate or failed validation is DOWN.
       lock + pid gone/recycled-> DOWN. The SIGKILL corpse: nothing ran the
                                  `finally`, so the file outlived its writer.
       lock + pid still ours   -> ALIVE, whatever the heartbeat says. A stale
@@ -172,7 +204,25 @@ def merger_state(home, squad, *, now=None, stale_seconds=DEFAULT_STALE_SECONDS,
     try:
         raw = path.read_text()
     except FileNotFoundError:
-        return down("no lock file (merger not running)")
+        pid = fleet_state_merger_pid(home, squad)
+        if pid is None:
+            return down("no lock file and no running supervisor-state entry")
+        if not pid_alive(pid, kill_fn=kill_fn):
+            return down(f"supervisor state names pid {pid}, which is gone", pid=pid)
+        if not pid_is_merger_for(pid, squad, argv_fn=argv_fn):
+            return down(
+                f"supervisor state names pid {pid}, but that pid is now a different "
+                "program (recycled) -- merger not running",
+                pid=pid,
+            )
+        return {
+            "squad": squad,
+            "alive": True,
+            "stalled": False,
+            "pid": pid,
+            "age": None,
+            "reason": f"pid {pid} alive between polls (validated from supervisor state)",
+        }
     except OSError as exc:
         return down(f"lock unreadable: {exc}")
     try:
