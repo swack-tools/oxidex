@@ -701,7 +701,14 @@ salvage_worktree() {
 
 sync_worktrees() {
     # Salvage FIRST, then reset. Never the other way round.
-    local base=${1:-$FLEET_WORKTREE_BASE} stamp wt name branch synced=0 saved=0
+    #
+    # Periodic resync passes `preserve-work`: a dirty worktree or one with an
+    # unpublished commit belongs to an in-flight worker and must not be reset
+    # underneath that process. Startup keeps the default `reset-all` behavior,
+    # because no worker exists yet and leftovers from a previous crash need to
+    # be cleaned after they are salvaged.
+    local base=${1:-$FLEET_WORKTREE_BASE} mode=${2:-reset-all}
+    local stamp wt name branch synced=0 saved=0 preserved=0 had_work
     stamp=$(date +%Y%m%d-%H%M%S)
     [ -d "$base" ] || { log "fleet-up" "no worker worktrees under $base -- nothing to sync"; return 0; }
     for wt in "$base"/*; do
@@ -711,9 +718,16 @@ sync_worktrees() {
             log "sync" "SKIP $name: no resolvable HEAD (mid-rebase or freshly created?)"
             continue
         fi
+        had_work=0
         if branch=$(salvage_worktree "$wt" "$name" "$stamp"); then
             log "sync" "salvaged $name -> $branch"
             saved=$((saved + 1))
+            had_work=1
+        fi
+        if [ "$mode" = preserve-work ] && [ "$had_work" -eq 1 ]; then
+            log "sync" "PRESERVE $name: in-flight work left untouched during periodic resync"
+            preserved=$((preserved + 1))
+            continue
         fi
         # Moves the worktree's current branch to origin/main. Deliberately no
         # `git clean`: -fd would delete an untracked half-written parser, and
@@ -724,7 +738,7 @@ sync_worktrees() {
             log "sync" "WARNING $name: reset to origin/main failed; leaving it alone"
         fi
     done
-    log "fleet-up" "worktree sync: $synced reset to origin/main, $saved salvaged"
+    log "fleet-up" "worktree sync: $synced reset to origin/main, $saved salvaged, $preserved preserved"
 }
 
 # ---------------------------------------------------------------------------
@@ -977,7 +991,11 @@ supervise() {
         # with everything that landed since, and the fleet has no other path
         # that refreshes worker worktrees mid-run.
         if resync_due "$now" "$last_resync" "$FLEET_RESYNC_SECONDS"; then
-            sync_worktrees "$FLEET_WORKTREE_BASE"
+            # Do not invalidate a model call by resetting the files it is
+            # editing/building. Clean worktrees still advance immediately;
+            # in-flight work is already salvaged and catches up on a later
+            # round/startup sync.
+            sync_worktrees "$FLEET_WORKTREE_BASE" preserve-work
             last_resync=$now
         fi
         local live=0 failed=0
