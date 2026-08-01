@@ -17,7 +17,9 @@ concurrency:
 jobs:
   update-coverage:
     name: Generate Coverage Report
-    runs-on: ubuntu-latest
+    # 2x: the whole job is ~13 seconds -- one Python script under uv, then a
+    # git diff and possibly a PR. The smallest runner is the right one.
+    runs-on: warp-ubuntu-latest-x64-2x
     permissions:
       contents: write
       pull-requests: write

@@ -11,22 +11,43 @@ on:
       - '.github/workflows/deploy-docs.yml'
   workflow_dispatch:
 
+# This was one ~11-minute job that compiled Rust, ran benchmarks, built the
+# VitePress site and deployed to Pages on a single runner. It is now three
+# jobs, for three reasons:
+#
+#  1. The three phases have unrelated compute profiles. Generating the
+#     ExifTool comparison report is a cold Rust build (~3m47s, parallel);
+#     benchmarking is a single-threaded criterion measurement (~6m09s); the
+#     site build is ~45s of Node. Sizing one runner for all three means
+#     overpaying for two of them.
+#  2. `comparison-report` and `benchmarks` have no dependency on each other,
+#     so splitting lets them run concurrently: the serial ~11m15s becomes
+#     roughly the length of the longest branch.
+#
+#     Measured caveat: in the first real run the two were dispatched at the
+#     same instant, but `benchmarks` then sat in the GitHub-hosted runner
+#     queue for 8 minutes while the warp runner for `comparison-report`
+#     started in 5 seconds. Concurrency is structural here; the wall-clock
+#     win is not guaranteed, because the ubuntu-latest queue is outside our
+#     control. That queue is the standing cost of keeping benchmarks on
+#     GitHub-hosted hardware for measurement comparability -- a deliberate
+#     trade, recorded so it is not mistaken for a regression.
+#  3. `pages: write` and `id-token: write` now live only on `publish`, a job
+#     that runs no project code -- it downloads artifacts and builds the site.
+#     Previously the deploy credentials were present on a runner that had just
+#     executed a full Rust build and benchmark suite.
 jobs:
-  build-and-deploy:
-    runs-on: ubuntu-latest
+  comparison-report:
+    name: Generate ExifTool comparison report
+    # 8x: `just compare-exiftool-full-update` builds the tag-comparison binary
+    # from cold and then runs it across the downloaded ExifTool sample corpus.
+    runs-on: warp-ubuntu-latest-x64-8x
+    timeout-minutes: 30
     permissions:
       contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          fetch-depth: 2
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
@@ -38,7 +59,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-report-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install Perl (for ExifTool)
         run: sudo apt-get update -qq && sudo apt-get install -y perl
@@ -51,25 +72,124 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # docs/reference/comparison/ is gitignored and generated at deploy time,
+      # so it only exists inside this job. `publish` needs it to render the
+      # real comparison pages instead of the placeholder, so hand it over as
+      # an artifact. if-no-files-found: error keeps a silently empty report
+      # from reaching the site looking like a successful build.
+      - name: Upload generated comparison report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: comparison-report
+          path: docs/reference/comparison
+          if-no-files-found: error
+          retention-days: 1
+
+  benchmarks:
+    name: Run benchmarks
+    # DELIBERATELY still ubuntu-latest -- do not "fix" this to a warp runner
+    # for consistency with the other jobs here.
+    #
+    # These timings are published to the docs performance page, and ci.yml's
+    # Benchmarks job publishes the same measurements as a 90-day artifact.
+    # Benchmark numbers are only comparable against numbers measured on the
+    # same hardware, so changing the runner would break every historical
+    # comparison. There is little to gain in exchange: criterion's measurement
+    # loop is single-threaded, so extra cores would only shorten the build
+    # that precedes it.
+    #
+    # ci.yml's Benchmarks job stays on ubuntu-latest for the same reason. If
+    # these ever move, both must move together, in one commit, and the
+    # baseline discontinuity must be recorded in CHANGELOG.md.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      benchmarks_changed: ${{ steps.changes.outputs.benchmarks_changed }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # HEAD~1 must exist for the change detection below.
+          fetch-depth: 2
+
       - name: Check if benchmarks changed
         id: changes
         run: |
           if git diff --name-only HEAD~1 HEAD | grep -qE '^benches/|^src/'; then
-            echo "benchmarks_changed=true" >> $GITHUB_OUTPUT
+            echo "benchmarks_changed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "benchmarks_changed=false" >> $GITHUB_OUTPUT
+            echo "benchmarks_changed=false" >> "$GITHUB_OUTPUT"
           fi
           # Always run benchmarks on workflow_dispatch or workflow file changes
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "benchmarks_changed=true" >> $GITHUB_OUTPUT
+            echo "benchmarks_changed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Setup Rust toolchain
+        if: steps.changes.outputs.benchmarks_changed == 'true'
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache Rust dependencies
+        if: steps.changes.outputs.benchmarks_changed == 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run benchmarks
         if: steps.changes.outputs.benchmarks_changed == 'true'
         run: cargo bench --bench integration_benchmarks --bench parse_benchmarks -- --quick
 
-      - name: Update benchmark metadata in docs
+      - name: Upload criterion results
         if: steps.changes.outputs.benchmarks_changed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: criterion-results
+          path: target/criterion
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Build site and deploy to Pages
+    needs: [comparison-report, benchmarks]
+    # 2x: npm ci plus a VitePress build (~45s). This job compiles no Rust --
+    # it consumes what the two jobs above produced.
+    runs-on: warp-ubuntu-latest-x64-2x
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Download generated comparison report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: comparison-report
+          path: docs/reference/comparison
+
+      - name: Download criterion results
+        if: needs.benchmarks.outputs.benchmarks_changed == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: criterion-results
+          path: target/criterion
+
+      # Stamped here rather than in the benchmarks job so that job's only
+      # output is target/criterion. The commit is identical either way, and
+      # the timestamp differs only by the few minutes between the two jobs.
+      - name: Update benchmark metadata in docs
+        if: needs.benchmarks.outputs.benchmarks_changed == 'true'
         run: |
           DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
           COMMIT=$(git rev-parse --short HEAD)
@@ -92,7 +212,7 @@ jobs:
         working-directory: docs
 
       - name: Copy benchmark reports to site
-        if: steps.changes.outputs.benchmarks_changed == 'true'
+        if: needs.benchmarks.outputs.benchmarks_changed == 'true'
         run: |
           mkdir -p docs/.vitepress/dist/benchmarks
           cp -r target/criterion/* docs/.vitepress/dist/benchmarks/
