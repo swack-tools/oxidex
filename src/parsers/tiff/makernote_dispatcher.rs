@@ -246,7 +246,6 @@ pub fn dispatch_makernote_with_context_and_values(
         "flir" | "flir systems" => Some(Box::new(flir::FlirParser)),
         "gopro" => Some(Box::new(gopro::GoProParser)),
         "infiray" => Some(Box::new(infiray::InfiRayParser)),
-        "lytro" | "lytro, inc." => Some(Box::new(lytro::LytroParser)),
         "nintendo" => Some(Box::new(nintendo::NintendoParser)),
         "parrot" => Some(Box::new(parrot::ParrotParser)),
         "reconyx" => Some(Box::new(reconyx::ReconxyParser)),

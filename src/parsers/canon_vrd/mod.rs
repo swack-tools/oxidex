@@ -15,13 +15,14 @@
 //! CanonVRD.pm:2148). Between header and footer sit typed blocks, each an
 //! int32u type followed by an int32u length.
 //!
-//! Only the `EditData` block (0xffff00f4) is decoded here, and within it only
-//! the `VRD1` section -- the fixed 0x272-byte version 1 record whose 43 tags
-//! are `%CanonVRD::Ver1`. The blocks this module deliberately skips are:
+//! Two blocks are decoded here. The `EditData` block (0xffff00f4) yields the
+//! `VRD1` section -- the fixed 0x272-byte version 1 record whose 43 tags are
+//! `%CanonVRD::Ver1` -- and the `Edit4Data` block (0xffff00f7) is the DPP
+//! version 4 "DR4" directory, handled by [`dr4`]. The blocks this module
+//! deliberately skips are:
 //!
 //! * 0xffff00f5 `IHLData`   -- embedded TIFF/EXIF plus preview JPEGs
 //! * 0xffff00f6 `XMP`       -- an XMP packet
-//! * 0xffff00f7 `Edit4Data` -- DPP version 4 "DR4" data, a separate format
 //!
 //! and, inside `EditData`, the `VRDStampTool` and `VRD2` sections (DPP 2.0 and
 //! later). No file in the ExifTool sample corpus exercises those paths from a
@@ -36,6 +37,7 @@
 //! `ExifTool.jpg` the VRD trailer is not last -- PhotoMechanic, MIE, Samsung
 //! and Vivo trailers all follow it.
 
+pub mod dr4;
 mod ver1_table;
 
 use crate::core::formatters::numeric_precision::{perl_g, perl_number};
@@ -60,6 +62,9 @@ const FOOTER_SIZE_OFFSET: usize = 0x14;
 
 /// `%CanonVRD::Main` block holding the DPP 1.x-3.x edit record.
 const BLOCK_EDIT_DATA: u32 = 0xffff00f4;
+
+/// `%CanonVRD::Main` block holding the DPP 4.x record (CanonVRD.pm:94).
+const BLOCK_EDIT4_DATA: u32 = 0xffff00f7;
 
 /// `%CanonVRD::Edit` index 0: `VRD1`, `Size => 0x272`.
 const VRD1_SIZE: usize = 0x272;
@@ -155,8 +160,10 @@ pub fn parse_canon_vrd_trailer(file: &[u8]) -> MetadataMap {
         return metadata;
     };
     for (block_type, block) in blocks(trailer) {
-        if block_type == BLOCK_EDIT_DATA {
-            parse_edit_data(block, &mut metadata);
+        match block_type {
+            BLOCK_EDIT_DATA => parse_edit_data(block, &mut metadata),
+            BLOCK_EDIT4_DATA => metadata.merge(dr4::parse_dr4(block)),
+            _ => {}
         }
     }
     metadata
@@ -171,28 +178,58 @@ pub fn parse_canon_vrd_trailer(file: &[u8]) -> MetadataMap {
 /// header against the size the footer declares, which a file that *is* the
 /// record satisfies at offset 0.
 ///
-/// The `File:` identity tags come from `filetype`'s tables rather than literals
-/// so there is one source for them, and they are needed here because a format
-/// this dispatcher recognises never reaches `add_identity_tags`.
+/// The `File:` identity tags come from `filetype`'s tables rather than
+/// literals, so there is one source for them.
 pub fn parse_vrd_file(reader: &dyn FileReader) -> Result<MetadataMap> {
     let file = reader.read(0, reader.size() as usize)?;
     let mut metadata = parse_canon_vrd_trailer(file);
     if metadata.is_empty() {
         return Err(ExifToolError::parse_error("No valid CanonVRD record found"));
     }
-
-    if let Some(id) = crate::filetype::identify_by_extension("vrd") {
-        metadata.insert("File:FileType", TagValue::new_string(id.file_type));
-        metadata.insert(
-            "File:FileTypeExtension",
-            TagValue::new_string(id.extension.as_ref()),
-        );
-        if let Some(mime) = id.mime_type {
-            metadata.insert("File:MIMEType", TagValue::new_string(mime));
-        }
-    }
-
+    set_identity(&mut metadata, "vrd");
     Ok(metadata)
+}
+
+/// Reads a `.DR4` file: the DPP 4 directory with nothing wrapped around it.
+///
+/// `ProcessDR4` (CanonVRD.pm:1774-1783) reads the file whole once the magic
+/// number matches and hands the buffer to the same code that reads the
+/// `Edit4Data` block out of a trailer, so this is [`dr4::parse_dr4`] over the
+/// file.
+///
+/// # Errors
+///
+/// Returns `ParseError` when the header is present but the directory yields no
+/// tags -- the same "Invalid DR4 directory" condition ExifTool warns about.
+pub fn parse_dr4_file(reader: &dyn FileReader) -> Result<MetadataMap> {
+    let file = reader.read(0, reader.size() as usize)?;
+    let mut metadata = dr4::parse_dr4(file);
+    if metadata.is_empty() {
+        return Err(ExifToolError::parse_error("Invalid DR4 directory"));
+    }
+    set_identity(&mut metadata, "dr4");
+    Ok(metadata)
+}
+
+/// Stamps the `File:` identity tags from `filetype`'s tables.
+///
+/// `add_identity_tags` fills these in for every read, but only when the
+/// filename carries a recognised extension. These two formats are identified
+/// by signature, so a `.bin` copy would otherwise lose its type; naming it
+/// here keeps the answer tied to the bytes rather than the filename. The
+/// values still come from the generated tables so there is one source for them.
+fn set_identity(metadata: &mut MetadataMap, ext: &str) {
+    let Some(id) = crate::filetype::identify_by_extension(ext) else {
+        return;
+    };
+    metadata.insert("File:FileType", TagValue::new_string(id.file_type.as_ref()));
+    metadata.insert(
+        "File:FileTypeExtension",
+        TagValue::new_string(id.extension.as_ref()),
+    );
+    if let Some(mime) = id.mime_type {
+        metadata.insert("File:MIMEType", TagValue::new_string(mime));
+    }
 }
 
 /// Finds the outermost valid CanonVRD trailer, header through footer.

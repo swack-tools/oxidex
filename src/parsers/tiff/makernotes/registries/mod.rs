@@ -40,7 +40,6 @@ pub mod samsung; // Samsung migration complete (Batch 2, Task 2.2)
 pub mod dji; // DJI migration complete (Batch 3, Task 3.1)
 pub mod flir; // FLIR migration (Batch 3, Task 3.3)
 pub mod gopro; // GoPro migration (Batch 3, Task 3.2)
-pub mod lytro; // Lytro migration (Batch 3, Task 3.4)
 
 // Batch 5: Legacy and Niche Manufacturers
 // Sub-Batch 5.1: Traditional Camera Manufacturers
@@ -90,7 +89,6 @@ pub use samsung::samsung_registry;
 pub use dji::dji_registry;
 pub use flir::flir_registry;
 pub use gopro::gopro_registry;
-pub use lytro::lytro_registry;
 
 // Batch 5 Sub-Batch 5.1 exports
 pub use casio::casio_registry;

@@ -96,6 +96,19 @@ pub(crate) fn is_unsupported(e: &ExifToolError) -> bool {
     matches!(e, ExifToolError::UnsupportedFormat { .. })
 }
 
+/// Whether a `File:` identity value is `extract_file_metadata`'s optimistic
+/// placeholder rather than a real answer.
+///
+/// `extract_file_metadata` fills these in from a small extension table before
+/// the format is known, so a file it does not cover arrives here carrying
+/// "Unknown" and "application/octet-stream".
+fn is_placeholder(v: Option<&str>) -> bool {
+    matches!(
+        v,
+        None | Some("") | Some("Unknown") | Some("unknown") | Some("application/octet-stream")
+    )
+}
+
 /// Fill in `FileType`, `FileTypeExtension` and `MIMEType` from ExifTool's
 /// identification tables. Returns whether the file was recognised.
 ///
@@ -109,7 +122,11 @@ pub(crate) fn is_unsupported(e: &ExifToolError) -> bool {
 /// ICC_Profile.icc (35 tags), Photoshop.psd (111 tags), Font.ttf (50 tags),
 /// every .xmp, .json, .csv and .plist in the corpus.
 ///
-/// Only placeholders are overwritten, so a parser that knows better still wins.
+/// A real answer from a parser is never replaced. Only placeholders are
+/// filled, and the canonical extension is corrected only when the file type we
+/// resolved is the one being reported -- otherwise a parser that knows better
+/// than the extension (a `.m4a` that is really MOV) would get a contradictory
+/// pair.
 fn add_identity_tags(metadata: &mut MetadataMap, reader: &dyn FileReader, path: &Path) -> bool {
     // 1 KiB is what the magic-number patterns are written against.
     let want = reader.size().min(1024) as usize;
@@ -120,33 +137,30 @@ fn add_identity_tags(metadata: &mut MetadataMap, reader: &dyn FileReader, path: 
         return false;
     };
 
-    // Overwrite only what is absent or a placeholder. `extract_file_metadata`
-    // fills these in optimistically before the format is known -- "Unknown",
-    // "application/octet-stream", and the on-disk extension rather than
-    // ExifTool's canonical one (`aif` where ExifTool says `aiff`). A real
-    // answer from a parser is still never replaced.
-    fn is_placeholder(v: Option<&str>) -> bool {
-        matches!(
-            v,
-            None | Some("") | Some("Unknown") | Some("unknown") | Some("application/octet-stream")
-        )
+    let reported = metadata.get_string("File:FileType");
+    let ours_is_authoritative = is_placeholder(reported) || reported == Some(id.file_type.as_ref());
+    if is_placeholder(reported) {
+        metadata.insert("File:FileType", TagValue::new_string(id.file_type.as_ref()));
     }
 
-    for (key, value) in [
-        ("File:FileType", id.file_type),
-        ("File:FileTypeExtension", id.extension.as_ref()),
-    ] {
-        // The extension is only a placeholder when it disagrees with the
-        // canonical one, which is exactly when we should correct it.
-        let current = metadata.get_string(key);
-        if is_placeholder(current) || (key.ends_with("Extension") && current != Some(value)) {
-            metadata.insert(key, TagValue::new_string(value));
+    // The on-disk extension is a placeholder whenever it disagrees with
+    // ExifTool's canonical one (`aif` where ExifTool says `aiff`), which is
+    // exactly when it should be corrected.
+    if ours_is_authoritative {
+        let current = metadata.get_string("File:FileTypeExtension");
+        if is_placeholder(current) || current != Some(id.extension.as_ref()) {
+            metadata.insert(
+                "File:FileTypeExtension",
+                TagValue::new_string(id.extension.as_ref()),
+            );
         }
     }
-    if let Some(mime) = id.mime_type {
-        if is_placeholder(metadata.get_string("File:MIMEType")) {
-            metadata.insert("File:MIMEType", TagValue::new_string(mime));
-        }
+
+    if let Some(mime) = id.mime_type
+        && ours_is_authoritative
+        && is_placeholder(metadata.get_string("File:MIMEType"))
+    {
+        metadata.insert("File:MIMEType", TagValue::new_string(mime));
     }
     true
 }
@@ -244,22 +258,6 @@ pub fn read_metadata_with_detector(
         }
     }
 
-    // Step 3c: Establish identity from ExifTool's tables before parsing.
-    //
-    // This used to be reachable only from the two `UnsupportedFormat` arms, so
-    // a format the dispatcher *does* recognise never got here and kept whatever
-    // `extract_file_metadata` guessed from a ~50-extension hand-written table.
-    // 67 corpus files extracted their contents in full while reporting
-    // `FileType: Unknown` and `MIMEType: application/octet-stream` --
-    // ICC_Profile.icc (35 tags), Photoshop.psd (111), Font.ttf (50), and every
-    // .xmp, .json, .csv and .plist in the corpus.
-    //
-    // It runs *before* the parser rather than after, so that the merge below
-    // still lets a parser overrule it. A CR3 that is really a Canon RAW movie
-    // reports CRM/crm from its CNCV box, and running this afterwards would have
-    // overwritten that extension with the one its filename implies.
-    add_identity_tags(&mut metadata, &reader, path);
-
     // Step 4: Route to appropriate parser based on detected format and extract format-specific metadata
     //
     // Detection returning Unknown, or a parser refusing the file, still leaves
@@ -283,6 +281,14 @@ pub fn read_metadata_with_detector(
     // Use into_iter() to consume format_metadata and avoid cloning keys and values
     metadata.merge(format_metadata);
 
+    // Step 5a: Identity tags, from ExifTool's own tables.
+    //
+    // This used to run only when parsing failed, which made a working parser
+    // and a correct `File:FileType` mutually exclusive: LNK, EXR and ICC files
+    // parsed fine and still reported `FileType: Unknown`. Only placeholders are
+    // filled, so a parser that names the type itself still wins.
+    add_identity_tags(&mut metadata, &reader, path);
+
     // Step 5b: Backstop for ExifByteOrder on TIFF-based files.
     //
     // The JPEG path records this when it parses the APP1 TIFF header, but the
@@ -290,7 +296,11 @@ pub fn read_metadata_with_detector(
     // different entry points in the raw parsers. Every TIFF-based file starts
     // with the marker, so reading it here covers all of them at once instead
     // of threading the same insert through each parser.
-    if !metadata.contains_key("File:ExifByteOrder") {
+    //
+    // DR4 is excluded: its magic number *is* `IIII`, a Canon byte-order marker
+    // for the recipe directory rather than a TIFF header, and ExifTool reports
+    // no ExifByteOrder for it.
+    if !metadata.contains_key("File:ExifByteOrder") && format != FileFormat::DR4 {
         if let Ok(head) = reader.read(0, 2) {
             let order = match &head[..] {
                 b"II" => Some(ByteOrder::LittleEndian),
