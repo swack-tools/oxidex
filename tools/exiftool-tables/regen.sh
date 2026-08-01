@@ -51,11 +51,17 @@ echo ">> generating Composite definitions"
 python3 "$HERE/codegen_composite.py" "$JSON" -o "$ROOT/src/composite/tables.rs"
 
 echo
+echo ">> generating FITS keyword names"
+python3 "$HERE/codegen_fits.py" "$JSON" \
+    -o "$ROOT/src/parsers/specialized/fits/tables.rs"
+
+echo
 echo ">> formatting generated sources"
 # rustfmt is part of generation, not an afterthought: without it the committed
 # files (which do get formatted) differ from freshly generated ones on every
 # run, and a generator whose output churns cannot be reviewed in a diff.
 cargo fmt -- "$OUT" "$ROOT/src/composite/tables.rs" "$ROOT/src/filetype/tables.rs" \
+    "$ROOT/src/parsers/specialized/fits/tables.rs" \
     2>/dev/null || echo "   (rustfmt unavailable; output left unformatted)"
 
 echo
