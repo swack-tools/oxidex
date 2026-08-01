@@ -178,23 +178,7 @@ fn find_root_reference(xref_data: &[u8]) -> Result<u32> {
 
 /// Finds startxref offset from PDF tail
 fn find_xref_offset(tail_data: &[u8]) -> Result<u64> {
-    let tail_str = std::str::from_utf8(tail_data)
-        .map_err(|_| ExifToolError::parse_error("PDF tail contains invalid UTF-8"))?;
-
-    let startxref_pos = tail_str
-        .rfind("startxref")
-        .ok_or_else(|| ExifToolError::parse_error("startxref not found in PDF"))?;
-
-    let after_keyword = &tail_str[startxref_pos + 9..];
-    let num_str: String = after_keyword
-        .chars()
-        .skip_while(|c| c.is_whitespace())
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-
-    num_str
-        .parse::<u64>()
-        .map_err(|_| ExifToolError::parse_error("Invalid xref offset after startxref"))
+    crate::parsers::pdf::find_startxref_offset(tail_data)
 }
 
 /// Parses xref table and builds object offset map

@@ -68,6 +68,46 @@ use encryption_parser::parse_encryption_metadata;
 /// PDF signature/magic bytes
 const PDF_SIGNATURE: &[u8] = b"%PDF-";
 
+/// Finds the byte offset recorded after the final `startxref` marker.
+///
+/// PDF tails are not necessarily UTF-8: a short file may have binary stream
+/// data or the recommended binary comment within the final 1024-byte read.
+/// Only the marker and its following decimal number are textual, so scan and
+/// parse those bytes directly instead of decoding the entire tail.
+pub(crate) fn find_startxref_offset(tail_data: &[u8]) -> Result<u64> {
+    const MARKER: &[u8] = b"startxref";
+
+    let marker_pos = tail_data
+        .windows(MARKER.len())
+        .rposition(|window| window == MARKER)
+        .ok_or_else(|| ExifToolError::parse_error("startxref not found in PDF"))?;
+
+    let after_marker = &tail_data[marker_pos + MARKER.len()..];
+    let digits_start = after_marker
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace() && *byte != 0)
+        .unwrap_or(after_marker.len());
+    let digits = &after_marker[digits_start..];
+    let digits_end = digits
+        .iter()
+        .position(|byte| !byte.is_ascii_digit())
+        .unwrap_or(digits.len());
+
+    if digits_end == 0 {
+        return Err(ExifToolError::parse_error(
+            "Invalid xref offset after startxref",
+        ));
+    }
+
+    // `digits` is known to contain ASCII decimal bytes only.
+    let offset = std::str::from_utf8(&digits[..digits_end])
+        .expect("ASCII digits are valid UTF-8")
+        .parse::<u64>()
+        .map_err(|_| ExifToolError::parse_error("Invalid xref offset after startxref"))?;
+
+    Ok(offset)
+}
+
 /// The page tree root's `/Count`, which ExifTool reports as PageCount.
 ///
 /// Taken from the object that also declares `/Type /Pages`: a `/Count` alone

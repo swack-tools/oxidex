@@ -81,6 +81,16 @@ pub fn parse_info_dict(reader: &dyn FileReader) -> Result<MetadataMap> {
     // Load PDF navigation context (xref table and trailer)
     let context = PdfContext::load(reader)?;
 
+    // The Info dictionary is optional. Its absence is normal and should not
+    // surface as a parser warning for otherwise valid PDFs.
+    if !context
+        .xref_data
+        .windows(b"/Info".len())
+        .any(|window| window == b"/Info")
+    {
+        return Ok(MetadataMap::new());
+    }
+
     // Find and parse the Info dictionary
     let info_ref = find_dict_reference(&context.xref_data, "/Info")?;
     let info_offset = context.get_object_offset(info_ref.object_num, "Info")?;
@@ -448,26 +458,7 @@ fn parse_dict_reference<'a>(input: &'a [u8], key: &str) -> IResult<&'a [u8], Obj
 
 /// Finds the startxref offset from the PDF tail
 fn find_xref_offset(tail_data: &[u8]) -> Result<u64> {
-    let tail_str = str::from_utf8(tail_data)
-        .map_err(|_| ExifToolError::parse_error("PDF tail contains invalid UTF-8"))?;
-
-    let startxref_pos = tail_str
-        .rfind("startxref")
-        .ok_or_else(|| ExifToolError::parse_error("startxref not found in PDF"))?;
-
-    let after_start = startxref_pos
-        .checked_add(9) // "startxref".len()
-        .ok_or_else(|| ExifToolError::parse_error("Offset overflow after startxref"))?;
-
-    if after_start > tail_str.len() {
-        return Err(ExifToolError::parse_error("Invalid startxref position"));
-    }
-
-    let after_keyword = &tail_str[after_start..];
-    let (_, offset) = parse_number(after_keyword.as_bytes())
-        .map_err(|_| ExifToolError::parse_error("Invalid xref offset after startxref"))?;
-
-    Ok(offset)
+    super::find_startxref_offset(tail_data)
 }
 
 /// Parses the xref table and builds a map of object numbers to file offsets
@@ -944,6 +935,27 @@ mod tests {
         let result = find_xref_offset(tail);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 1234);
+    }
+
+    #[test]
+    fn test_info_dict_absence_with_binary_pdf_tail_is_not_an_error() {
+        use crate::test_support::TestReader;
+
+        let mut pdf = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%".to_vec();
+        pdf.extend_from_slice(&[0xff, 0xfe, 0xfd, 0xfc]);
+        pdf.push(b'\n');
+
+        let xref_offset = pdf.len();
+        pdf.extend_from_slice(
+            format!(
+                "xref\n0 2\n0000000000 65535 f\n0000000009 00000 n\n\
+                 trailer\n<< /Size 2 /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n"
+            )
+            .as_bytes(),
+        );
+
+        let metadata = parse_info_dict(&TestReader::new(pdf)).unwrap();
+        assert!(metadata.is_empty());
     }
 
     #[test]
