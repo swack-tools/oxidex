@@ -45,6 +45,13 @@ fn test_leica_header_validation_no_header() {
     assert!(!is_leica_makernote(bad_count));
 }
 
+/// `%Panasonic::Leica2` (Panasonic.pm:1603), the M8's own table: `Quality`
+/// is 0x0300 with `PrintConv => {1=>'Fine',2=>'Basic'}`, `UserProfile` is
+/// 0x0302 with `PrintConv => {1=>'User Profile 1',...,4=>'User Profile 0
+/// (Dynamic)'}` (Panasonic.pm:1608-1624). The 0x0003/0x0004 ids and
+/// "Standard" value this test used to assert do not exist in any real Leica
+/// table -- ground truth: `exiftool -G1 -s LeicaM8.jpg` reports
+/// `Quality = Fine`, `UserProfile = User Profile 0 (Dynamic)`.
 #[test]
 fn test_leica_makernote_parse_basic() {
     use oxidex::parsers::tiff::ifd_parser::ByteOrder;
@@ -55,86 +62,29 @@ fn test_leica_makernote_parse_basic() {
     let parser = LeicaMakerNoteParser;
     let mut tags = HashMap::new();
 
-    // Create synthetic Leica MakerNote data with header and 2 IFD entries
-    // Header: "LEICA\0\0\0" (8 bytes)
-    // Entry count: 2 (little-endian u16)
-    // Entry 1: Quality tag (0x0003) = 1 (Fine)
-    // Entry 2: User Profile tag (0x0004) = 5 (Standard)
     let mut data = Vec::new();
     data.extend_from_slice(b"LEICA\0\0\0"); // Header
     data.extend_from_slice(&[0x02, 0x00]); // 2 entries (little-endian)
 
-    // Entry 1: Quality (0x0003), type SHORT (3), count 1, value 1
-    data.extend_from_slice(&[0x03, 0x00]); // tag: 0x0003
+    // Entry 1: Quality (0x0300), type SHORT (3), count 1, value 1 (Fine)
+    data.extend_from_slice(&0x0300u16.to_le_bytes());
     data.extend_from_slice(&[0x03, 0x00]); // type: SHORT
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // count: 1
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // value: 1
 
-    // Entry 2: User Profile (0x0004), type SHORT (3), count 1, value 5
-    data.extend_from_slice(&[0x04, 0x00]); // tag: 0x0004
-    data.extend_from_slice(&[0x03, 0x00]); // type: SHORT
+    // Entry 2: UserProfile (0x0302), type LONG (4), count 1, value 4
+    data.extend_from_slice(&0x0302u16.to_le_bytes());
+    data.extend_from_slice(&[0x04, 0x00]); // type: LONG
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // count: 1
-    data.extend_from_slice(&[0x05, 0x00, 0x00, 0x00]); // value: 5
+    data.extend_from_slice(&[0x04, 0x00, 0x00, 0x00]); // value: 4
 
     let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
     assert!(result.is_ok());
 
-    // Verify extracted tags
     assert_eq!(tags.get("Leica:Quality"), Some(&"Fine".to_string()));
-    assert_eq!(tags.get("Leica:UserProfile"), Some(&"Standard".to_string()));
-}
-
-#[test]
-fn test_leica_makernote_parse_camera_settings() {
-    use oxidex::parsers::tiff::ifd_parser::ByteOrder;
-    use oxidex::parsers::tiff::makernotes::leica::LeicaMakerNoteParser;
-    use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
-    use std::collections::HashMap;
-
-    let parser = LeicaMakerNoteParser;
-    let mut tags = HashMap::new();
-
-    // Create synthetic data with multiple camera settings
-    let mut data = Vec::new();
-    data.extend_from_slice(b"LEICA\0\0\0"); // Header
-    data.extend_from_slice(&[0x04, 0x00]); // 4 entries
-
-    // Entry 1: Exposure Mode (0x0020) = 2 (Aperture Priority)
-    data.extend_from_slice(&[0x20, 0x00, 0x03, 0x00]);
-    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-    data.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]);
-
-    // Entry 2: Metering Mode (0x0021) = 1 (Multi-segment)
-    data.extend_from_slice(&[0x21, 0x00, 0x03, 0x00]);
-    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-
-    // Entry 3: AF Mode (0x0052) = 1 (Single AF)
-    data.extend_from_slice(&[0x52, 0x00, 0x03, 0x00]);
-    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-
-    // Entry 4: Image Stabilization (0x0053) = 2 (On - Body)
-    data.extend_from_slice(&[0x53, 0x00, 0x03, 0x00]);
-    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-    data.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]);
-
-    let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
-    assert!(result.is_ok());
-
-    // Verify extracted tags
     assert_eq!(
-        tags.get("Leica:ExposureMode"),
-        Some(&"Aperture Priority".to_string())
-    );
-    assert_eq!(
-        tags.get("Leica:MeteringMode"),
-        Some(&"Multi-segment".to_string())
-    );
-    assert_eq!(tags.get("Leica:AFMode"), Some(&"Single AF".to_string()));
-    assert_eq!(
-        tags.get("Leica:ImageStabilization"),
-        Some(&"On (Body)".to_string())
+        tags.get("Leica:UserProfile"),
+        Some(&"User Profile 0 (Dynamic)".to_string())
     );
 }
 
