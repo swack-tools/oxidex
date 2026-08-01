@@ -2930,8 +2930,8 @@ impl MakerNoteParser for CanonParser {
         }
     }
 
-    /// `%Canon::CameraInfo*` is selected from the EXIF `Model`, so Canon takes
-    /// the model when the dispatcher has it. Everything else is unchanged.
+    /// Canon's model-conditional tables are selected from the EXIF `Model`, so
+    /// Canon takes the model when the dispatcher has it.
     fn parse_with_model(
         &self,
         data: &[u8],
@@ -3016,7 +3016,7 @@ fn parse_canon_makernote_impl(
 /// Same as [`parse_canon_makernote_impl`], plus the EXIF `Model` the dispatcher
 /// resolved from IFD0.
 ///
-/// ExifTool selects the `%Canon::CameraInfo*` table from `$$self{Model}`, and
+/// ExifTool selects model-conditional tables from `$$self{Model}`, and
 /// nothing inside the MakerNote is a reliable stand-in: `CanonImageType` agrees
 /// with `Model` on 492 of the 493 ExifTool sample files that carry a CameraInfo
 /// record, but the Kiss X70 writes "Canon EOS X70" there and would dispatch
@@ -4382,7 +4382,7 @@ fn parse_canon_makernote_impl_with_model(
             // per entry after a leading byte-length word and splits it into
             // `tag = $val >> 8` / `value = $val & 0xff`.
             CANON_CUSTOM_FUNCTIONS => {
-                if is_350d_custom_functions(&model)
+                if is_350d_custom_functions(camera_info_model)
                     && let Some(array) =
                         extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
                     && array.first().map(|&len| len as u16 as usize) == Some(array.len() * 2)
@@ -5695,6 +5695,56 @@ mod tests {
         // The 400D redefines keys 0 and 1, and the 20D uses a different table entirely.
         assert!(!is_350d_custom_functions("Canon EOS 20D"));
         assert!(!is_350d_custom_functions("Canon EOS 400D DIGITAL"));
+    }
+
+    /// DNG files may carry the camera model only in IFD0, not in Canon's
+    /// `CanonImageType` MakerNote tag. ExifTool selects `Functions350D` from
+    /// the IFD0 Model, so the dispatcher-provided model must control this table.
+    #[test]
+    fn test_custom_functions_uses_external_model_when_image_type_is_absent() {
+        let record = [
+            0x14, 0x00, // record byte length
+            0x00, 0x00, // SetButtonCrossKeysFunc: Normal
+            0x00, 0x01, // LongExposureNoiseReduction: Off
+            0x00, 0x02, // FlashSyncSpeedAv: Auto
+            0x00, 0x03, // Shutter-AELock: AF/AE lock
+            0x00, 0x04, // AFAssistBeam: Emits
+            0x00, 0x05, // ExposureLevelIncrements: 1/3 Stop
+            0x00, 0x06, // MirrorLockup: Disable
+            0x00, 0x07, // ETTLII: Evaluative
+            0x00, 0x08, // ShutterCurtainSync: 1st-curtain sync
+        ];
+
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&CANON_CUSTOM_FUNCTIONS.to_le_bytes());
+        data.extend_from_slice(&7u16.to_le_bytes()); // UNDEFINED
+        data.extend_from_slice(&(record.len() as u32).to_le_bytes());
+        data.extend_from_slice(&18u32.to_le_bytes()); // packed value offset
+        data.extend_from_slice(&0u32.to_le_bytes()); // next IFD
+        data.extend_from_slice(&record);
+
+        let tags = parse_canon_makernote_impl_with_model(
+            &data,
+            ByteOrder::LittleEndian,
+            Some("Canon EOS 350D DIGITAL"),
+        )
+        .unwrap();
+
+        for (name, expected) in [
+            ("AFAssistBeam", "Emits"),
+            ("ETTLII", "Evaluative"),
+            ("ExposureLevelIncrements", "1/3 Stop"),
+            ("FlashSyncSpeedAv", "Auto"),
+            ("LongExposureNoiseReduction", "Off"),
+            ("MirrorLockup", "Disable"),
+        ] {
+            assert_eq!(
+                tags.get(&format!("CanonCustom:{name}")).map(String::as_str),
+                Some(expected),
+                "{name}"
+            );
+        }
     }
 
     /// `has_word` stands in for Perl's `\b`, so a model token must not match inside a
