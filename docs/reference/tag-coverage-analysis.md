@@ -45,7 +45,7 @@ round-trips, regression-gated in CI) is available:
 ## MakerNote Status
 
 ::: tip ✅ MakerNote Parsers Active
-MakerNote parsers for 35+ camera manufacturers are **fully implemented and connected** to the TIFF parsing pipeline.
+MakerNote parsers for 34+ camera manufacturers are **fully implemented and connected** to the TIFF parsing pipeline.
 :::
 
 ### Supported Manufacturers
@@ -54,7 +54,7 @@ MakerNote parsers for 35+ camera manufacturers are **fully implemented and conne
 
 **Smartphones:** Apple, Google, Microsoft
 
-**Specialty Devices:** Dji, Flir, Gopro, Infiray, Lytro, Nintendo, Parrot, Reconyx, Red
+**Specialty Devices:** Dji, Flir, Gopro, Infiray, Nintendo, Parrot, Reconyx, Red
 
 **Legacy Cameras:** Casio, Ge, Hp, Jvc, Kodak, Motorola, Ricoh, Sanyo
 
