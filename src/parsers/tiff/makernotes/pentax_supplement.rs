@@ -111,26 +111,26 @@ static SUPPLEMENT: &[TagDef] = &[
     TagDef::typed_func(
         0x0209,
         "AEMeteringSegments",
-        ftype::BYTE,
+        ftype::TIFF_BYTE,
         print_metering_segments,
     ),
     TagDef::typed_func(
         0x020A,
         "FlashMeteringSegments",
-        ftype::BYTE,
+        ftype::TIFF_BYTE,
         print_metering_segments,
     ),
     TagDef::typed_func(
         0x020B,
         "SlaveFlashMeteringSegments",
-        ftype::BYTE,
+        ftype::TIFF_BYTE,
         print_metering_segments,
     ),
     TagDef::raw(0x0211, "WB_RGGBLevelsFluorescentD"),
     TagDef::raw(0x0212, "WB_RGGBLevelsFluorescentN"),
     TagDef::raw(0x0213, "WB_RGGBLevelsFluorescentW"),
-    TagDef::typed(0x021C, "ColorMatrixA2", ftype::SSHORT),
-    TagDef::typed(0x021D, "ColorMatrixB2", ftype::SSHORT),
+    TagDef::typed(0x021C, "ColorMatrixA2", ftype::TIFF_SSHORT),
+    TagDef::typed(0x021D, "ColorMatrixB2", ftype::TIFF_SSHORT),
     TagDef::raw(0x0231, "ContrastDetectAFArea"),
 ];
 

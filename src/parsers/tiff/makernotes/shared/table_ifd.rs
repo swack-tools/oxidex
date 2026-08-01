@@ -22,29 +22,33 @@ use crate::parsers::tiff::ifd_parser::ByteOrder;
 use std::collections::HashMap;
 
 /// TIFF field types we decode. Anything else is ignored.
-pub mod ftype {
-    pub const BYTE: u16 = 1;
-    pub const ASCII: u16 = 2;
-    pub const SHORT: u16 = 3;
-    pub const LONG: u16 = 4;
-    pub const RATIONAL: u16 = 5;
-    pub const SBYTE: u16 = 6;
-    pub const UNDEF: u16 = 7;
-    pub const SSHORT: u16 = 8;
-    pub const SLONG: u16 = 9;
-    pub const SRATIONAL: u16 = 10;
-    pub const FLOAT: u16 = 11;
-    pub const DOUBLE: u16 = 12;
-    pub const IFD: u16 = 13;
+///
+/// The `TIFF_` prefix is load-bearing: cbindgen copies every `pub const` in
+/// the crate into `api/oxidex.h`, where bare `BYTE`/`SHORT`/`LONG`/`FLOAT`/
+/// `DOUBLE` would collide with common C macros.
+pub(crate) mod ftype {
+    pub const TIFF_BYTE: u16 = 1;
+    pub const TIFF_ASCII: u16 = 2;
+    pub const TIFF_SHORT: u16 = 3;
+    pub const TIFF_LONG: u16 = 4;
+    pub const TIFF_RATIONAL: u16 = 5;
+    pub const TIFF_SBYTE: u16 = 6;
+    pub const TIFF_UNDEF: u16 = 7;
+    pub const TIFF_SSHORT: u16 = 8;
+    pub const TIFF_SLONG: u16 = 9;
+    pub const TIFF_SRATIONAL: u16 = 10;
+    pub const TIFF_FLOAT: u16 = 11;
+    pub const TIFF_DOUBLE: u16 = 12;
+    pub const TIFF_IFD: u16 = 13;
 }
 
 /// Size in bytes of one element of each TIFF field type.
 pub fn type_size(t: u16) -> usize {
     match t {
-        ftype::BYTE | ftype::ASCII | ftype::SBYTE | ftype::UNDEF => 1,
-        ftype::SHORT | ftype::SSHORT => 2,
-        ftype::LONG | ftype::SLONG | ftype::FLOAT | ftype::IFD => 4,
-        ftype::RATIONAL | ftype::SRATIONAL | ftype::DOUBLE => 8,
+        ftype::TIFF_BYTE | ftype::TIFF_ASCII | ftype::TIFF_SBYTE | ftype::TIFF_UNDEF => 1,
+        ftype::TIFF_SHORT | ftype::TIFF_SSHORT => 2,
+        ftype::TIFF_LONG | ftype::TIFF_SLONG | ftype::TIFF_FLOAT | ftype::TIFF_IFD => 4,
+        ftype::TIFF_RATIONAL | ftype::TIFF_SRATIONAL | ftype::TIFF_DOUBLE => 8,
         _ => 0,
     }
 }
@@ -682,7 +686,7 @@ pub fn decode_bytes(bytes: &[u8], ft: u16, order: ByteOrder) -> Option<OlyVal> {
     if elem == 0 {
         return None;
     }
-    if ft == ftype::ASCII || ft == ftype::UNDEF {
+    if ft == ftype::TIFF_ASCII || ft == ftype::TIFF_UNDEF {
         return Some(OlyVal::Bytes(bytes.to_vec()));
     }
     let n = bytes.len() / elem;
@@ -702,25 +706,25 @@ pub fn decode_bytes(bytes: &[u8], ft: u16, order: ByteOrder) -> Option<OlyVal> {
         }
     };
     match ft {
-        ftype::BYTE => Some(OlyVal::Int(bytes.iter().map(|&b| b as i64).collect())),
-        ftype::SBYTE => Some(OlyVal::Int(bytes.iter().map(|&b| b as i8 as i64).collect())),
-        ftype::SHORT => Some(OlyVal::Int(
+        ftype::TIFF_BYTE => Some(OlyVal::Int(bytes.iter().map(|&b| b as i64).collect())),
+        ftype::TIFF_SBYTE => Some(OlyVal::Int(bytes.iter().map(|&b| b as i8 as i64).collect())),
+        ftype::TIFF_SHORT => Some(OlyVal::Int(
             (0..n).map(|i| rd16(&bytes[i * 2..]) as i64).collect(),
         )),
-        ftype::SSHORT => Some(OlyVal::Int(
+        ftype::TIFF_SSHORT => Some(OlyVal::Int(
             (0..n)
                 .map(|i| rd16(&bytes[i * 2..]) as i16 as i64)
                 .collect(),
         )),
-        ftype::LONG | ftype::IFD => Some(OlyVal::Int(
+        ftype::TIFF_LONG | ftype::TIFF_IFD => Some(OlyVal::Int(
             (0..n).map(|i| rd32(&bytes[i * 4..]) as i64).collect(),
         )),
-        ftype::SLONG => Some(OlyVal::Int(
+        ftype::TIFF_SLONG => Some(OlyVal::Int(
             (0..n)
                 .map(|i| rd32(&bytes[i * 4..]) as i32 as i64)
                 .collect(),
         )),
-        ftype::RATIONAL => Some(OlyVal::Rat(
+        ftype::TIFF_RATIONAL => Some(OlyVal::Rat(
             (0..n)
                 .map(|i| {
                     (
@@ -730,7 +734,7 @@ pub fn decode_bytes(bytes: &[u8], ft: u16, order: ByteOrder) -> Option<OlyVal> {
                 })
                 .collect(),
         )),
-        ftype::SRATIONAL => Some(OlyVal::Rat(
+        ftype::TIFF_SRATIONAL => Some(OlyVal::Rat(
             (0..n)
                 .map(|i| {
                     (
@@ -740,12 +744,12 @@ pub fn decode_bytes(bytes: &[u8], ft: u16, order: ByteOrder) -> Option<OlyVal> {
                 })
                 .collect(),
         )),
-        ftype::FLOAT => Some(OlyVal::Float(
+        ftype::TIFF_FLOAT => Some(OlyVal::Float(
             (0..n)
                 .map(|i| f32::from_bits(rd32(&bytes[i * 4..])) as f64)
                 .collect(),
         )),
-        ftype::DOUBLE => Some(OlyVal::Float(
+        ftype::TIFF_DOUBLE => Some(OlyVal::Float(
             (0..n)
                 .map(|i| {
                     let hi = rd32(&bytes[i * 8..]) as u64;
@@ -827,7 +831,7 @@ mod tests {
         data[21] = 0x00;
         let entry = RawEntry {
             tag_id: 0x0207,
-            field_type: ftype::SHORT,
+            field_type: ftype::TIFF_SHORT,
             count: 1,
             value_offset: 7,
             value_field_pos: 20,
@@ -842,7 +846,7 @@ mod tests {
         data[40..48].copy_from_slice(&[1, 0, 2, 0, 3, 0, 4, 0]);
         let entry = RawEntry {
             tag_id: 0x0100,
-            field_type: ftype::SHORT,
+            field_type: ftype::TIFF_SHORT,
             count: 4,
             value_offset: 40,
             value_field_pos: 8,

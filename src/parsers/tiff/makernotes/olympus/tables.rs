@@ -503,7 +503,7 @@ pub static MAIN: &[TagDef] = &[
         &[(0, "Normal"), (1, "Hard"), (2, "Soft")],
     ),
     TagDef::raw(0x1010, "FlashChargeLevel"),
-    TagDef::typed(0x1011, "ColorMatrix", ftype::SSHORT),
+    TagDef::typed(0x1011, "ColorMatrix", ftype::TIFF_SSHORT),
     TagDef::raw(0x1012, "BlackLevel"),
     TagDef::raw(0x1019, "ColorMatrixNumber"),
     TagDef::raw(0x1024, "InternalFlashTable"),
@@ -1342,7 +1342,7 @@ pub static IMAGE_PROCESSING: &[TagDef] = &[
     TagDef::raw(0x011D, "WB_GLevel6600K"),
     TagDef::raw(0x011E, "WB_GLevel7500K"),
     TagDef::raw(0x011F, "WB_GLevel"),
-    TagDef::typed(0x0200, "ColorMatrix", ftype::SSHORT),
+    TagDef::typed(0x0200, "ColorMatrix", ftype::TIFF_SSHORT),
     TagDef::raw(0x0300, "Enhancer"),
     TagDef::raw(0x0301, "EnhancerValues"),
     TagDef::raw(0x0310, "CoringFilter"),
@@ -1403,7 +1403,7 @@ pub static IMAGE_PROCESSING: &[TagDef] = &[
     TagDef::raw(0x1202, "MaxFaces"),
     TagDef::raw(0x1203, "FaceDetectFrameSize"),
     TagDef::raw(0x1207, "FaceDetectFrameCrop"),
-    TagDef::typed_func(0x1306, "CameraTemperature", ftype::SSHORT, |v| {
+    TagDef::typed_func(0x1306, "CameraTemperature", ftype::TIFF_SSHORT, |v| {
         match v.first_int() {
             Some(0) | None => None,
             Some(n) => Some(n.to_string()),
@@ -1477,7 +1477,7 @@ pub static RAW_INFO: &[TagDef] = &[
     TagDef::raw(0x0131, "WB_RBLevelsNeutralWhiteFluor"),
     TagDef::raw(0x0132, "WB_RBLevelsCoolWhiteFluor"),
     TagDef::raw(0x0133, "WB_RBLevelsWhiteFluorescent"),
-    TagDef::typed(0x0200, "ColorMatrix2", ftype::SSHORT),
+    TagDef::typed(0x0200, "ColorMatrix2", ftype::TIFF_SSHORT),
     TagDef::raw(0x0310, "CoringFilter"),
     TagDef::raw(0x0311, "CoringValues"),
     TagDef::raw(0x0600, "BlackLevel2"),

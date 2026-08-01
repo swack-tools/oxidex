@@ -179,7 +179,7 @@ fn parse_orientation_info(
         entry,
         Some(0),
         byte_order,
-        Some(table_ifd::ftype::SRATIONAL),
+        Some(table_ifd::ftype::TIFF_SRATIONAL),
     ) else {
         return;
     };
