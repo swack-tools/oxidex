@@ -102,8 +102,8 @@ def main():
 
             groups = tag.get("Groups") or {}
             g2 = groups.get("2", "") if isinstance(groups, dict) else ""
-            r = ", ".join(f'"{rust_str(d)}"' for _i, d in req)
-            s = ", ".join(f'"{rust_str(d)}"' for _i, d in des)
+            r = ", ".join(f'({i}, "{rust_str(d)}")' for i, d in req)
+            s = ", ".join(f'({i}, "{rust_str(d)}")' for i, d in des)
             rows.append(
                 f'    Composite {{ name: "{rust_str(name)}", module: "{rust_str(mod_name)}", '
                 f'group2: "{rust_str(g2)}", require: &[{r}], desire: &[{s}] }},'
@@ -128,10 +128,10 @@ pub struct Composite {{
     /// ExifTool module that defined it, kept for provenance.
     pub module: &'static str,
     pub group2: &'static str,
-    /// All of these must be present, in this order, or the tag does not fire.
-    pub require: &'static [&'static str],
-    /// Optional inputs; absent ones are passed through as `None`.
-    pub desire: &'static [&'static str],
+    /// All of these indexed inputs must be present or the tag does not fire.
+    pub require: &'static [(usize, &'static str)],
+    /// Indexed optional inputs; absent positions are passed through as `None`.
+    pub desire: &'static [(usize, &'static str)],
 }}
 
 /// Every Composite definition ExifTool declares ({len(rows)} total).

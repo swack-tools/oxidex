@@ -75,6 +75,125 @@ fn get<'a>(i: Inputs<'a>, n: usize) -> Option<&'a str> {
     i.get(n).copied().flatten()
 }
 
+/// ExifTool `Image::ExifTool::Exif::RedBlueBalance`.
+///
+/// Each row gives the R, G, G, B component indices for one of ExifTool's nine
+/// accepted white-balance layouts. `WB_RBLevels` uses the literal green level
+/// 256 unless a component below 4 signals Nikon's unit scaling convention.
+/// The source walks the layouts in order, averages the two green components,
+/// and falls back to the separately stored component/green pair only if no
+/// packed layout produced a value.
+fn red_blue_balance(i: Inputs<'_>, blue: bool) -> Option<f64> {
+    const LOOKUP: [[usize; 4]; 9] = [
+        [0, 1, 2, 3],
+        [0, 1, 3, 2],
+        [0, 2, 3, 1],
+        [1, 0, 3, 2],
+        [1, 0, 2, 3],
+        [2, 3, 0, 1],
+        [0, 1, 1, 2],
+        [1, 0, 0, 2],
+        [0, 256, 256, 1],
+    ];
+
+    for (input, lookup) in i.iter().take(9).zip(LOOKUP) {
+        let Some(levels) = input else { continue };
+        let Ok(levels) = levels
+            .split_whitespace()
+            .map(str::parse)
+            .collect::<Result<Vec<f64>, _>>()
+        else {
+            continue;
+        };
+        if levels.len() < 2 {
+            continue;
+        }
+
+        let component_index = lookup[usize::from(blue) * 3];
+        let component = *levels.get(component_index)?;
+        let green_index = lookup[1];
+        let green = if green_index < 4 {
+            if levels.len() < 3 {
+                continue;
+            }
+            let green = (levels[green_index] + levels[lookup[2]]) / 2.0;
+            if green == 0.0 {
+                continue;
+            }
+            green
+        } else if component < 4.0 {
+            1.0
+        } else {
+            green_index as f64
+        };
+        return Some(component / green);
+    }
+
+    let component = f(get(i, 9))?;
+    let green = f(get(i, 10))?;
+    if component == 0.0 || green == 0.0 {
+        None
+    } else {
+        Some(component / green)
+    }
+}
+
+/// ExifTool's shared `RawConv` for the three Composite SubSec timestamps:
+/// append the leading digits of `$val[1]` after the seconds, then append a
+/// normalized `[-+]HH:MM` from `$val[2]` only when the base has no sign.
+fn subsec_date_time(i: Inputs<'_>) -> Option<String> {
+    let date = get(i, 0)?;
+    let mut value = None;
+
+    if let Some(subsec) = get(i, 1) {
+        let digits: String = subsec.chars().take_while(char::is_ascii_digit).collect();
+        if !digits.is_empty() {
+            // EXIF permits no fraction in the base tag. ExifTool nevertheless
+            // checks before appending so a malformed pre-fractional value is
+            // refused rather than doubled.
+            if let Some(time_start) = date.rfind(' ')
+                && date[time_start + 1..].len() >= 8
+            {
+                let time_end = time_start + 9;
+                let time = &date[time_start + 1..time_end];
+                let valid_time = time.as_bytes().get(2) == Some(&b':')
+                    && time.as_bytes().get(5) == Some(&b':')
+                    && time
+                        .bytes()
+                        .enumerate()
+                        .all(|(n, b)| n == 2 || n == 5 || b.is_ascii_digit());
+                let already_fractional = date.as_bytes().get(time_end) == Some(&b'.');
+                if valid_time && !already_fractional {
+                    let mut composed = String::with_capacity(date.len() + digits.len() + 1);
+                    composed.push_str(&date[..time_end]);
+                    composed.push('.');
+                    composed.push_str(&digits);
+                    composed.push_str(&date[time_end..]);
+                    value = Some(composed);
+                }
+            }
+        }
+    }
+
+    if !date.contains(['-', '+'])
+        && let Some(offset) = get(i, 2)
+    {
+        let bytes = offset.as_bytes();
+        if matches!(bytes.first(), Some(b'+') | Some(b'-'))
+            && let Some(colon) = offset.find(':')
+            && (2..=3).contains(&colon)
+        {
+            let hours = offset[1..colon].parse::<u8>().ok()?;
+            let minutes = offset.get(colon + 1..colon + 3)?.parse::<u8>().ok()?;
+            let base = value.get_or_insert_with(|| date.to_string());
+            base.push(bytes[0] as char);
+            base.push_str(&format!("{hours:02}:{minutes:02}"));
+        }
+    }
+
+    value
+}
+
 /// ExifTool: `sprintf("%.*f", ($val >= 1 ? 1 : ($val >= 0.001 ? 3 : 6)), $val)`
 fn fmt_megapixels(v: f64) -> String {
     let p = if v >= 1.0 {
@@ -167,15 +286,15 @@ fn canon_sensor_diag(xres: Option<&str>, yres: Option<&str>) -> Option<f64> {
 /// The returned string is the print-formatted value, matching what ExifTool
 /// prints by default, because that is what the comparison harness diffs.
 #[must_use]
-pub fn compute(name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
-    match name {
+pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
+    match (module, name) {
         // require: ImageWidth, ImageHeight
         // desire:  ExifImageWidth, ExifImageHeight, RawImageCroppedSize
         // ValueConv picks Exif dimensions only for a few TIFF-based RAW types;
         // we do not track TIFF_TYPE, so we take the required pair, which is
         // what ExifTool does for every other format.
         // PrintConv: `$val =~ tr/ /x/`
-        "ImageSize" => {
+        ("Exif", "ImageSize") => {
             let (w, h) = (f(get(i, 0))?, f(get(i, 1))?);
             // ValueConv yields "W H"; PrintConv is `$val =~ tr/ /x/`.
             Computed::new(
@@ -186,7 +305,7 @@ pub fn compute(name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
 
         // require: ImageSize
         // ValueConv: `my @d = ($val =~ /\d+/g); $d[0] * $d[1] / 1000000`
-        "Megapixels" => {
+        ("Exif", "Megapixels") => {
             let s = get(i, 0)?;
             let mut nums = s
                 .split(|c: char| !c.is_ascii_digit())
@@ -200,7 +319,7 @@ pub fn compute(name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
         // desire: ExposureTime, ShutterSpeedValue, BulbDuration
         // ValueConv: `($val[2] and $val[2]>0) ? $val[2]
         //             : (defined($val[0]) ? $val[0] : $val[1])`
-        "ShutterSpeed" => {
+        ("Exif", "ShutterSpeed") => {
             let v = match f(get(i, 2)) {
                 Some(b) if b > 0.0 => b,
                 _ => f(get(i, 0)).or_else(|| f(get(i, 1)))?,
@@ -210,7 +329,7 @@ pub fn compute(name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
 
         // desire: FNumber, ApertureValue
         // ValueConv: `$val[0] || $val[1]`
-        "Aperture" => {
+        ("Exif", "Aperture") => {
             let v = f(get(i, 0))
                 .filter(|v| *v != 0.0)
                 .or_else(|| f(get(i, 1)))?;
@@ -220,7 +339,7 @@ pub fn compute(name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
         // require: FocalLength; desire: ScaleFactor35efl
         // ValueConv: `($val[0] || 0) * ($val[1] || 1)`
         // PrintConv: `$val[1] ? "%.1f mm (35 mm equivalent: %.1f mm)" : "%.1f mm"`
-        "FocalLength35efl" => {
+        ("Exif", "FocalLength35efl") => {
             let fl = f(get(i, 0))?;
             match f(get(i, 1)) {
                 Some(sf) if sf != 0.0 => Computed::new(
@@ -233,7 +352,7 @@ pub fn compute(name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
 
         // require: ScaleFactor35efl
         // ValueConv: `sqrt(24*24+36*36) / ($val * 1440)`
-        "CircleOfConfusion" => {
+        ("Exif", "CircleOfConfusion") => {
             let sf = f(get(i, 0))?;
             if sf == 0.0 {
                 return None;
@@ -245,7 +364,7 @@ pub fn compute(name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
         // require: FocalLength, Aperture, CircleOfConfusion
         // ValueConv: `return 'inf' unless $val[1] and $val[2];
         //             $val[0]*$val[0] / ($val[1] * $val[2] * 1000)`
-        "HyperfocalDistance" => {
+        ("Exif", "HyperfocalDistance") => {
             let fl = f(get(i, 0))?;
             let (ap, coc) = (f(get(i, 1))?, f(get(i, 2))?);
             if ap == 0.0 || coc == 0.0 {
@@ -280,7 +399,7 @@ pub fn compute(name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
         // Its PrintConv uses three decimals only for a positive DOF below
         // 0.02 m, and renders a zero far limit as infinity. Those boundaries
         // are compatibility behaviour, not presentation choices.
-        "DOF" => {
+        ("Exif", "DOF") => {
             let (fl, ap, coc) = (f(get(i, 0))?, f(get(i, 1))?, f(get(i, 2))?);
             if fl == 0.0 || coc == 0.0 {
                 return Computed::same("0");
@@ -321,7 +440,7 @@ pub fn compute(name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
         // require: Aperture, ShutterSpeed, ISO
         // Image::ExifTool::Exif::CalculateLV:
         //   `log($aperture**2 / $shutter * 100 / $iso) / log(2)`
-        "LightValue" => {
+        ("Exif", "LightValue") => {
             let (ap, ss, iso) = (f(get(i, 0))?, f(get(i, 1))?, f(get(i, 2))?);
             if ss <= 0.0 || iso <= 0.0 || ap <= 0.0 {
                 return None;
@@ -346,7 +465,7 @@ pub fn compute(name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
         // reproduced exactly: substituting the more accurate constant shifts
         // the result in the first decimal place, which is where the printed
         // value rounds, so "more correct" here would read as a mismatch.
-        "FOV" => {
+        ("Exif", "FOV") => {
             let (fl, sf) = (f(get(i, 0))?, f(get(i, 1))?);
             if fl == 0.0 || sf == 0.0 {
                 return None;
@@ -382,7 +501,7 @@ pub fn compute(name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
         // Port of Image::ExifTool::Exif::CalcScaleFactor35efl. Worth the care:
         // it gates FocalLength35efl, CircleOfConfusion, HyperfocalDistance, FOV
         // and DOF, so one function moves six tags on every camera file.
-        "ScaleFactor35efl" => {
+        ("Exif", "ScaleFactor35efl") => {
             // Easiest case: the camera reported both focal lengths.
             if let (Some(focal), Some(foc35)) = (f(get(i, 0)), f(get(i, 1))) {
                 if focal != 0.0 && foc35 != 0.0 {
@@ -474,6 +593,51 @@ pub fn compute(name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
             Computed::new(sf.to_string(), format!("{sf:.1}"))
         }
 
+        // Canon.pm Composite::WB_RGGBLevels:
+        //   `$val[1] ? $val[1] : $val[($val[0] || 0) + 2]`
+        // The required WhiteBalance reaches us in PrintConv form, so reverse
+        // the exact Canon enum before selecting its positional desired input.
+        ("Canon", "WB_RGGBLevels") => {
+            if let Some(as_shot) = get(i, 1).filter(|v| !v.is_empty() && *v != "0") {
+                return Computed::same(as_shot);
+            }
+            let white_balance = match get(i, 0)? {
+                "Auto" => 0,
+                "Daylight" => 1,
+                "Cloudy" => 2,
+                "Tungsten" => 3,
+                "Fluorescent" => 4,
+                "Flash" => 5,
+                "Custom" => 6,
+                "Black & White" => 7,
+                "Shade" => 8,
+                "Manual Temperature (Kelvin)" => 9,
+                _ => return None,
+            };
+            Computed::same(get(i, white_balance + 2)?)
+        }
+
+        // Exif.pm `RedBlueBalance`, followed by
+        // `int($val * 1e6 + 0.5) * 1e-6`.
+        ("Exif", "RedBalance" | "BlueBalance") => {
+            let value = red_blue_balance(i, name == "BlueBalance")?;
+            let millionths = (value * 1e6 + 0.5) as i64;
+            let absolute = millionths.unsigned_abs();
+            let sign = if millionths < 0 { "-" } else { "" };
+            let mut printed = format!("{sign}{}.{:06}", absolute / 1_000_000, absolute % 1_000_000);
+            while printed.ends_with('0') {
+                printed.pop();
+            }
+            if printed.ends_with('.') {
+                printed.pop();
+            }
+            Computed::new(value.to_string(), printed)
+        }
+
+        ("Exif", "SubSecCreateDate" | "SubSecDateTimeOriginal" | "SubSecModifyDate") => {
+            Computed::same(subsec_date_time(i)?)
+        }
+
         _ => None,
     }
 }
@@ -485,12 +649,12 @@ mod tests {
     /// Print form of a composite, which is what ExifTool displays and what
     /// the comparison harness diffs.
     fn c(name: &str, v: &[Option<&str>]) -> Option<String> {
-        compute(name, v, None).map(|c| c.print)
+        compute("Exif", name, v, None).map(|c| c.print)
     }
 
     /// Print form, with a manufacturer in scope.
     fn cm(name: &str, v: &[Option<&str>], make: &str) -> Option<String> {
-        compute(name, v, Some(make)).map(|c| c.print)
+        compute("Exif", name, v, Some(make)).map(|c| c.print)
     }
 
     #[test]
@@ -576,6 +740,112 @@ mod tests {
         assert_eq!(
             c("LightValue", &[Some("2.8"), Some("1/200"), Some("100")]).as_deref(),
             Some("10.6")
+        );
+    }
+
+    #[test]
+    fn white_balance_ratios_match_exiftool_layouts() {
+        // NikonD70.jpg: WB_RGBGLevels = 597 256 361 256.
+        let mut rgbg = vec![None; 11];
+        rgbg[1] = Some("597 256 361 256");
+        assert_eq!(c("RedBalance", &rgbg).as_deref(), Some("2.332031"));
+        assert_eq!(c("BlueBalance", &rgbg).as_deref(), Some("1.410156"));
+
+        // NikonD2Hs.jpg: WB_RGGBLevels = 562 256 256 537.
+        let mut rggb = vec![None; 11];
+        rggb[0] = Some("562 256 256 537");
+        assert_eq!(c("RedBalance", &rggb).as_deref(), Some("2.195313"));
+        assert_eq!(c("BlueBalance", &rggb).as_deref(), Some("2.097656"));
+
+        // OlympusE1.jpg supplies only WB_RBLevels; ExifTool uses a literal
+        // green level of 256 for this two-component layout.
+        let mut rb = vec![None; 11];
+        rb[8] = Some("412 290");
+        assert_eq!(c("RedBalance", &rb).as_deref(), Some("1.609375"));
+        assert_eq!(c("BlueBalance", &rb).as_deref(), Some("1.132813"));
+    }
+
+    #[test]
+    fn white_balance_falls_back_to_separate_component_levels() {
+        let mut inputs = vec![None; 11];
+        inputs[9] = Some("512");
+        inputs[10] = Some("256");
+        assert_eq!(c("RedBalance", &inputs).as_deref(), Some("2"));
+        assert_eq!(c("BlueBalance", &inputs).as_deref(), Some("2"));
+        inputs[10] = Some("0");
+        assert_eq!(c("RedBalance", &inputs), None);
+    }
+
+    #[test]
+    fn canon_white_balance_prefers_as_shot_then_selected_preset() {
+        let mut inputs = vec![None; 12];
+        inputs[0] = Some("Auto");
+        inputs[1] = Some("2275 1024 1024 1357");
+        inputs[2] = Some("unused auto preset");
+        assert_eq!(
+            compute("Canon", "WB_RGGBLevels", &inputs, Some("Canon"))
+                .map(|c| c.print)
+                .as_deref(),
+            Some("2275 1024 1024 1357")
+        );
+
+        inputs[1] = None;
+        inputs[0] = Some("Shade");
+        inputs[10] = Some("2433 1024 1024 1259");
+        assert_eq!(
+            compute("Canon", "WB_RGGBLevels", &inputs, Some("Canon"))
+                .map(|c| c.print)
+                .as_deref(),
+            Some("2433 1024 1024 1259")
+        );
+    }
+
+    #[test]
+    fn subsecond_timestamps_match_exiftool_rawconv() {
+        assert_eq!(
+            c(
+                "SubSecDateTimeOriginal",
+                &[Some("2005:01:14 08:57:59"), Some("20garbage"), None]
+            )
+            .as_deref(),
+            Some("2005:01:14 08:57:59.20")
+        );
+        assert_eq!(
+            c(
+                "SubSecCreateDate",
+                &[Some("2026:08:01 01:02:03"), Some("4"), Some("+9:30garbage")]
+            )
+            .as_deref(),
+            Some("2026:08:01 01:02:03.4+09:30")
+        );
+        // RawConv returns undef when neither optional input contributes.
+        assert_eq!(
+            c(
+                "SubSecModifyDate",
+                &[Some("2026:08:01 01:02:03"), None, None]
+            ),
+            None
+        );
+        // An existing fraction must not be doubled.
+        assert_eq!(
+            c(
+                "SubSecModifyDate",
+                &[Some("2026:08:01 01:02:03.5"), Some("7"), None]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn module_disambiguates_same_named_composites() {
+        assert_eq!(
+            compute(
+                "PostScript",
+                "ImageSize",
+                &[Some("4000"), Some("3000")],
+                None
+            ),
+            None
         );
     }
 
