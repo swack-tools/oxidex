@@ -101,18 +101,46 @@ pub fn raw_bytes_to_tag_value(
     heuristic_bytes_to_tag_value(bytes, byte_order)
 }
 
-/// Parses a string value to an appropriate TagValue.
+/// Parses a string value to a TagValue *without discarding the source text*.
 ///
-/// Attempts to parse as integer first, then float, otherwise returns as string.
-/// Used for XMP and IPTC metadata parsing.
+/// The text handed to this function is what a text-based container actually
+/// stores -- an IPTC IIM dataset, an XMP property -- and for those, the stored
+/// characters are what ExifTool prints. Written into a JPEG with
+/// `-IPTC:EnvelopeNumber=00000042 -IPTC:ProgramVersion=01.00`,
+/// `exiftool -G1 -s` reports:
+///
+/// ```text
+/// [IPTC]          EnvelopeNumber                  : 00000042
+/// [IPTC]          ProgramVersion                  : 01.00
+/// ```
+///
+/// IPTC.pm gives neither dataset a PrintConv, so ExifTool echoes the stored
+/// characters back. Parsing that text into a number throws the characters
+/// away, and nothing downstream can put them back:
+///
+/// - `TagValue::Float` has no single rendering in this crate. The CLI prints
+///   `f64::to_string` -- the shortest form that round-trips, so `01.00` comes
+///   back as `1` -- and the comparison harness prints `{:.5}` with trailing
+///   zeros trimmed, which also gives `1`. The digit count is simply not in the
+///   value any more, so no third renderer could recover it either. This
+///   function therefore never produces a `Float`.
+/// - `TagValue::Integer` is lossless only when the parse is reversible.
+///   `00000042` parses to 42 and prints back as `42`, and a digit string too
+///   wide for `i64` missed the integer branch entirely and came back from the
+///   `f64` branch as `12345678901234567000`.
+///
+/// So an integer literal is still parsed, but only when `i64::to_string`
+/// reproduces the input byte for byte. That keeps `TagValue::Integer` -- and
+/// with it the enum PrintConv lookups that match on it, `friendly_enum_name`
+/// in the CLI and `decode_enum` in the comparison harness -- working for every
+/// plain integer. Everything else keeps its text.
 pub fn parse_string_to_tag_value(value: &str) -> TagValue {
-    if let Ok(int_val) = value.parse::<i64>() {
-        TagValue::Integer(int_val)
-    } else if let Ok(float_val) = value.parse::<f64>() {
-        TagValue::Float(float_val)
-    } else {
-        TagValue::String(value.to_string())
+    if let Ok(int_val) = value.parse::<i64>()
+        && int_val.to_string() == value
+    {
+        return TagValue::Integer(int_val);
     }
+    TagValue::String(value.to_string())
 }
 
 // ============================================================================
@@ -663,6 +691,86 @@ mod tests {
             }
         }
         bytes
+    }
+
+    // ========================================================================
+    // parse_string_to_tag_value: the text is the value
+    // ========================================================================
+
+    #[test]
+    fn test_parse_string_keeps_text_a_number_cannot_carry() {
+        // Ground truth, from a JPEG written with
+        //   exiftool -IPTC:EnvelopeNumber=00000042 -IPTC:ProgramVersion=01.00
+        // then read back with `exiftool -G1 -s`:
+        //   [IPTC]  EnvelopeNumber : 00000042
+        //   [IPTC]  ProgramVersion : 01.00
+        // Parsing these as i64/f64 printed "42" and "1".
+        assert_eq!(
+            parse_string_to_tag_value("00000042"),
+            TagValue::String("00000042".to_string())
+        );
+        assert_eq!(
+            parse_string_to_tag_value("01.00"),
+            TagValue::String("01.00".to_string())
+        );
+
+        // A decimal literal is never re-rendered through f64. Leica's
+        // XMP-xmpDSA properties on LeicaQ3_43.jpg read, under `exiftool -G1 -s`:
+        //   FocalLength35mm     : 45.0000000000
+        //   ScalingFactorHeight : 0.9642280340
+        assert_eq!(
+            parse_string_to_tag_value("45.0000000000"),
+            TagValue::String("45.0000000000".to_string())
+        );
+        assert_eq!(
+            parse_string_to_tag_value("0.9642280340"),
+            TagValue::String("0.9642280340".to_string())
+        );
+
+        // Exponent form too -- f64 round-tripping rewrites it as a decimal
+        // ExifTool never emits.
+        assert_eq!(
+            parse_string_to_tag_value("2.269635e+03"),
+            TagValue::String("2.269635e+03".to_string())
+        );
+
+        // Wider than i64: this missed the integer branch and came back from
+        // the float branch as 12345678901234567000.
+        assert_eq!(
+            parse_string_to_tag_value("12345678901234567890"),
+            TagValue::String("12345678901234567890".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_string_still_yields_integer_when_reversible() {
+        // Plain integer literals keep TagValue::Integer, which is what the
+        // enum PrintConv lookups match on (friendly_enum_name in the CLI,
+        // decode_enum in the comparison harness) and what
+        // exiftool_compat's percentage rule reads via as_integer().
+        assert_eq!(parse_string_to_tag_value("4"), TagValue::Integer(4));
+        assert_eq!(parse_string_to_tag_value("0"), TagValue::Integer(0));
+        assert_eq!(parse_string_to_tag_value("-5"), TagValue::Integer(-5));
+
+        // Not reversible: i64::to_string drops the sign and the padding.
+        assert_eq!(
+            parse_string_to_tag_value("+5"),
+            TagValue::String("+5".to_string())
+        );
+        assert_eq!(
+            parse_string_to_tag_value("-0"),
+            TagValue::String("-0".to_string())
+        );
+
+        // Non-numeric text is unchanged, as before.
+        assert_eq!(
+            parse_string_to_tag_value("2.5.0"),
+            TagValue::String("2.5.0".to_string())
+        );
+        assert_eq!(
+            parse_string_to_tag_value("Phil Harvey"),
+            TagValue::String("Phil Harvey".to_string())
+        );
     }
 
     #[test]

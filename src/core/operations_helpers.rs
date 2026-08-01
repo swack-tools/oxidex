@@ -139,31 +139,11 @@ pub fn parse_exif_datetime(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
     ))
 }
 
-// ============================================================================
-// STRING PARSING UTILITIES
-// ============================================================================
-
-/// Parses a string value to an appropriate TagValue.
-///
-/// Attempts to parse as integer first, then float, otherwise returns as string.
-/// Used for XMP and IPTC metadata parsing.
-///
-/// # Arguments
-///
-/// * `value` - String value to parse
-///
-/// # Returns
-///
-/// A TagValue with the appropriate type
-pub fn parse_string_to_tag_value(value: &str) -> TagValue {
-    if let Ok(int_val) = value.parse::<i64>() {
-        TagValue::Integer(int_val)
-    } else if let Ok(float_val) = value.parse::<f64>() {
-        TagValue::Float(float_val)
-    } else {
-        TagValue::String(value.to_string())
-    }
-}
+// Note: `parse_string_to_tag_value` used to be duplicated here, byte for byte,
+// alongside the copy in `tag_conversion`. Nothing imported this one -- every
+// caller in the crate reaches for `crate::core::tag_conversion`'s -- so the
+// copy was a second, unreachable instance of the same text-destroying parse,
+// waiting for someone to import it. Deleted rather than fixed twice.
 
 // ============================================================================
 // MATHEMATICAL UTILITIES
@@ -425,18 +405,6 @@ mod tests {
 
         let result = parse_exif_datetime("invalid");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_string_to_tag_value() {
-        let value = parse_string_to_tag_value("123");
-        assert_eq!(value.as_integer(), Some(123));
-
-        let value = parse_string_to_tag_value("123.45");
-        assert_eq!(value.as_float(), Some(123.45));
-
-        let value = parse_string_to_tag_value("hello");
-        assert_eq!(value.as_string(), Some("hello"));
     }
 
     #[test]

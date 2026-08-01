@@ -52,16 +52,34 @@ pub fn process_jfif_segments(segments: &[Segment], metadata: &mut MetadataMap) {
             let x_density = reader.u16_at(8).unwrap_or(0);
             let y_density = reader.u16_at(10).unwrap_or(0);
 
-            // Add JFIF tags to metadata
-            let jfif_version = version_major as f64 + version_minor as f64 / 100.0;
+            // JFIFVersion is a printed string, not a quantity.
+            // `%Image::ExifTool::JFIF::Main` (ExifTool.pm) declares it
+            //
+            //     Name => 'JFIFVersion',
+            //     Format => 'int8u[2]',
+            //     PrintConv => 'sprintf("%d.%.2d", split(" ",$val))',
+            //
+            // so `exiftool -G1 -s` prints `1.00` for a 1.00 file. A f64 built
+            // as `major + minor/100` cannot carry that second digit: `1 + 0/100`
+            // is 1.0, and every renderer in this crate turns that back into "1"
+            // -- the CLI uses `f64::to_string` (shortest round-tripping form)
+            // and the comparison harness `{:.5}` with trailing zeros trimmed.
+            // `1.01` and `1.02` survived the round trip by luck, which is why
+            // only the 14 corpus files that are version 1.00 ever showed it.
+            //
+            // Store the same string that the `JPEG:` alias below already
+            // builds -- and that the two (dead) JFIF parsers in
+            // `parsers/jpeg/app_segments/app0.rs` and
+            // `parsers/jpeg/jfif_parser.rs` already assert in their tests.
+            let jfif_version = format!("{}.{:02}", version_major, version_minor);
             metadata.insert(
                 "JFIF:JFIFVersion".to_string(),
-                TagValue::Float(jfif_version),
+                TagValue::String(jfif_version.clone()),
             );
             // Also add JPEG: prefixed version for format-specific tagging
             metadata.insert(
                 "JPEG:JFIFVersion".to_string(),
-                TagValue::String(format!("{}.{:02}", version_major, version_minor)),
+                TagValue::String(jfif_version),
             );
 
             let unit_string = match units {
