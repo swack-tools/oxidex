@@ -362,26 +362,7 @@ fn find_acroform_reference(data: &[u8]) -> Result<ObjectRef> {
 
 /// Finds the startxref offset from the PDF tail
 fn find_xref_offset(tail_data: &[u8]) -> Result<u64> {
-    let tail_str = str::from_utf8(tail_data)
-        .map_err(|_| ExifToolError::parse_error("PDF tail contains invalid UTF-8"))?;
-
-    let startxref_pos = tail_str
-        .rfind("startxref")
-        .ok_or_else(|| ExifToolError::parse_error("startxref not found in PDF"))?;
-
-    let after_start = startxref_pos
-        .checked_add(9)
-        .ok_or_else(|| ExifToolError::parse_error("Offset overflow after startxref"))?;
-
-    if after_start > tail_str.len() {
-        return Err(ExifToolError::parse_error("Invalid startxref position"));
-    }
-
-    let after_keyword = &tail_str[after_start..];
-    let (_, offset) = parse_number(after_keyword.as_bytes())
-        .map_err(|_| ExifToolError::parse_error("Invalid xref offset after startxref"))?;
-
-    Ok(offset)
+    super::find_startxref_offset(tail_data)
 }
 
 /// Parses the xref table and builds a map of object numbers to file offsets
