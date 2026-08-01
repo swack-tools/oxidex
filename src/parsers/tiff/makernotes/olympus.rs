@@ -21,7 +21,6 @@
 #![allow(unused_imports)]
 
 // Submodules for extended tag parsing
-pub mod camera_settings;
 pub mod lookups;
 pub mod tables;
 

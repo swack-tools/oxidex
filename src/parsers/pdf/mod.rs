@@ -55,7 +55,6 @@ pub mod resources_parser;
 pub mod root_parser;
 pub mod shared;
 pub mod signature_parser;
-pub mod structure_parser;
 pub mod xmp_extractor;
 
 use crate::core::formatters::exif_print_conv::print_exposure_time;
@@ -64,7 +63,6 @@ use crate::error::{ExifToolError, Result};
 use crate::parsers::icc::extract_icc_profile;
 use encryption_parser::parse_encryption_metadata;
 // use root_parser::parse_root_metadata;
-// use structure_parser::parse_structure_metadata;
 
 /// PDF signature/magic bytes
 const PDF_SIGNATURE: &[u8] = b"%PDF-";
@@ -440,21 +438,6 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     //     Err(e) => {
     //         // Log warning but continue - Root metadata might not be parseable
     //         eprintln!("Warning: Failed to parse PDF Root metadata: {}", e);
-    //     }
-    // }
-
-    // Extract structure and features metadata
-    // TODO: Implement structure_parser
-    // match parse_structure_metadata(reader) {
-    //     Ok(structure_metadata) => {
-    //         // Merge structure tags into main metadata
-    //         for (key, value) in structure_metadata.iter() {
-    //             metadata.insert(key.clone(), value.clone());
-    //         }
-    //     }
-    //     Err(e) => {
-    //         // Log warning but continue - structure metadata might not be parseable
-    //         eprintln!("Warning: Failed to parse PDF structure metadata: {}", e);
     //     }
     // }
 
