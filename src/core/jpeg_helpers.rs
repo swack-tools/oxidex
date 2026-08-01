@@ -1119,11 +1119,37 @@ pub fn process_infiray_segments(segments: &[Segment], metadata: &mut MetadataMap
             if segment.data.len() < min_length {
                 continue;
             }
+            // ExifTool tests the Qualcomm signature before it reaches the
+            // `HasIJPEG` branch that selects InfiRay's APP7 (ExifTool.pm:8230
+            // vs 8238), so a Qualcomm segment is never read as an OpMode
+            // record even in a file that also carries an IJPEG header.
+            if marker == APP7_MARKER
+                && crate::parsers::jpeg::app_segments::qualcomm::is_qualcomm_app7(segment.data)
+            {
+                continue;
+            }
             merge(read_record(group, segment.data, table), metadata);
         }
     }
 
     process_infiray_imaging_data(segments, metadata);
+}
+
+/// Processes the Qualcomm "Camera Attributes" record carried in JPEG APP7
+/// (`Image::ExifTool::Qualcomm::Main`).
+///
+/// ExifTool selects this reader on the payload signature alone
+/// (ExifTool.pm:8230), so unlike the InfiRay records sharing this marker it
+/// needs no whole-file gate. Segments belonging to the other APP7 readers --
+/// Pentax, Ricoh, Huawei, DJI-DBG, InfiRay -- do not carry the signature and
+/// are left alone.
+pub fn process_qualcomm_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    for segment in segments.iter().filter(|s| s.marker == APP7_MARKER) {
+        merge(
+            crate::parsers::jpeg::app_segments::parse_qualcomm_app7(segment.data),
+            metadata,
+        );
+    }
 }
 
 /// Emits `APP3:ImagingData`, the InfiRay IR + thermal + visible payload.
