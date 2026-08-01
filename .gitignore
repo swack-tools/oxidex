@@ -42,9 +42,10 @@ Thumbs.db
 **/*.rs.bk
 *.pdb
 
-# Cargo lock files (excluded for library crates)
-Cargo.lock
+# Keep the workspace lockfile for reproducible CLI and container builds, but
+# continue excluding lockfiles created inside library/fuzz subcrates.
 **/Cargo.lock
+!Cargo.lock
 
 # Fuzzing artifacts (keep named corpus seed files like *.pdf, *.mp4, exclude fuzzer-generated hash files)
 fuzz/target/

@@ -1,0 +1,52 @@
+# Build output. This alone is ~3.5 GB and would otherwise be uploaded as
+# build context on every single build.
+target/
+**/target/
+
+# Git metadata and hooks are never build inputs.
+.git/
+.gitignore
+.gitattributes
+.githooks/
+
+# Not build inputs. Excluding these also stops docs-only and test-only
+# commits from invalidating the cached cargo build layer, because the
+# Dockerfile does `COPY . .`. packaging/ and CHANGELOG.md are included here
+# because both are touched on nearly every release yet never feed the build.
+docs/
+tests/
+scripts/
+tools/
+test_data/
+fuzz/
+dist/
+packaging/
+CHANGELOG.md
+.github/
+
+# JS package manifests and node_modules anywhere in the tree. The root
+# package.json/bun.lock/package-lock.json here are local agent tooling
+# (e.g. claude-flow), not the docs site -- the docs site's own package.json
+# lives under docs/ and is already excluded by the docs/ entry above.
+node_modules/
+**/node_modules/
+package.json
+package-lock.json
+bun.lock
+
+# Editor, OS, and agent scratch files. .superpowers/ is agent scratch state
+# from Claude Code sessions -- present only in local working copies, never
+# a build input.
+.claude/
+.superpowers/
+.vscode/
+.idea/
+.DS_Store
+
+# Docker's own files are not needed inside the build.
+Dockerfile
+.dockerignore
+
+# NOTE: benches/ is intentionally NOT ignored. Cargo.toml declares three
+# [[bench]] targets by name, and Cargo fails to parse the manifest if a
+# declared target's source file is absent.
