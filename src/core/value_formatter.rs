@@ -73,9 +73,16 @@ pub fn format_exif_datetime(dt: &chrono::DateTime<chrono::Utc>) -> String {
 /// assert_eq!(format_iptc_date("20020620"), "2002:06:20");
 /// assert_eq!(format_iptc_date("19991231"), "1999:12:31");
 /// assert_eq!(format_iptc_date("invalid"), "invalid"); // Preserves invalid input
+/// // Non-ASCII input of exactly 8 *bytes* is passed through, not sliced
+/// assert_eq!(format_iptc_date("日本ab"), "日本ab");
 /// ```
 pub fn format_iptc_date(raw: &str) -> String {
-    if raw.len() == 8 {
+    // `len()` is a byte count, so an 8-byte non-ASCII value ("日本ab" is 8
+    // bytes) reaches the slices below with index 4 landing inside a multi-byte
+    // sequence, and panics. A real IPTC date is ASCII digits, so anything else
+    // is invalid input and is passed through unchanged, exactly like the
+    // "invalid" case above.
+    if raw.len() == 8 && raw.is_ascii() {
         format!("{}:{}:{}", &raw[0..4], &raw[4..6], &raw[6..8])
     } else {
         raw.to_string()
@@ -96,9 +103,14 @@ pub fn format_iptc_date(raw: &str) -> String {
 /// assert_eq!(format_iptc_time("143000-0500"), "14:30:00-05:00");
 /// assert_eq!(format_iptc_time("120000"), "12:00:00"); // No timezone
 /// assert_eq!(format_iptc_time("bad"), "bad"); // Preserves invalid input
+/// // Non-ASCII input is passed through, not sliced by byte index
+/// assert_eq!(format_iptc_time("日本語"), "日本語");
 /// ```
 pub fn format_iptc_time(raw: &str) -> String {
-    if raw.len() >= 6 {
+    // See `format_iptc_date`: the length checks below are byte counts, so a
+    // non-ASCII value long enough to pass them would be sliced at 2/4/6/7/9/11
+    // and panic mid-character. Real IPTC times are ASCII.
+    if raw.len() >= 6 && raw.is_ascii() {
         let base = format!("{}:{}:{}", &raw[0..2], &raw[2..4], &raw[4..6]);
         if raw.len() >= 11 {
             // Format: HHMMSS±HHMM -> HH:MM:SS±HH:MM
@@ -307,11 +319,17 @@ pub fn format_date_exif_style(iso_date: &str, preserve_timezone: bool) -> String
     // - Position 4 and 7 should be '-'
     // - Position 10 should be 'T'
     // - Position 13 and 16 should be ':'
+    // - The whole date/time head must be ASCII, so that the byte indices used
+    //   below are all char boundaries. The separator checks alone are not
+    //   enough: they pin bytes 4/7/10/13/16, but `&iso_date[17..19]` and
+    //   `&iso_date[19..]` would still cut through a multi-byte character
+    //   starting at byte 17 (e.g. "0000-00-00T00:00:€") and panic.
     if bytes.get(4) != Some(&b'-')
         || bytes.get(7) != Some(&b'-')
         || bytes.get(10) != Some(&b'T')
         || bytes.get(13) != Some(&b':')
         || bytes.get(16) != Some(&b':')
+        || !bytes[..19].is_ascii()
     {
         return iso_date.to_string();
     }
@@ -814,6 +832,41 @@ mod tests {
         assert_eq!(format_iptc_time("12345"), "12345");
         assert_eq!(format_iptc_time("bad"), "bad");
         assert_eq!(format_iptc_time(""), "");
+    }
+
+    /// Regression: these three formatters index by *byte* behind *byte*-length
+    /// guards, so non-ASCII input long enough to pass the guard used to panic
+    /// with "byte index N is not a char boundary". Metadata text is routinely
+    /// non-ASCII (CJK filenames and descriptions, lossy-decoded MakerNotes), so
+    /// each case below uses genuinely multi-byte text -- an ASCII string of the
+    /// same length takes the identical path and cannot reproduce the bug.
+    #[test]
+    fn test_date_formatters_reject_non_ascii_instead_of_splitting_chars() {
+        // 8 bytes, but index 4 is inside the second 3-byte character.
+        let date = "日本ab";
+        assert_eq!(date.len(), 8);
+        assert!(!date.is_char_boundary(4));
+        assert_eq!(format_iptc_date(date), date);
+
+        // 9 bytes (passes `len() >= 6`), index 2 is inside the first character.
+        let time = "日本語";
+        assert!(time.len() >= 6);
+        assert!(!time.is_char_boundary(2));
+        assert_eq!(format_iptc_time(time), time);
+
+        // 11+ bytes so the timezone branch is reached too.
+        let time_tz = "日本語かなカナ";
+        assert!(time_tz.len() >= 11);
+        assert_eq!(format_iptc_time(time_tz), time_tz);
+
+        // Passes every ISO-8601 separator check (bytes 4/7/10/13/16), yet byte
+        // 19 is inside the 3-byte '€' that starts at byte 17.
+        let iso = "0000-00-00T00:00:\u{20ac}";
+        assert!(iso.len() >= 19);
+        assert_eq!(iso.as_bytes()[10], b'T');
+        assert!(!iso.is_char_boundary(19));
+        assert_eq!(format_date_exif_style(iso, false), iso);
+        assert_eq!(format_date_exif_style(iso, true), iso);
     }
 
     #[test]

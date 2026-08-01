@@ -458,25 +458,29 @@ impl OutputFormatter for ShortFormatter {
 
 /// Helper function to format a TagValue for short format display
 ///
-/// Similar to format_tag_value but truncates long strings for compact output.
+/// Similar to `format_tag_value`, but with the compact numeric/array rendering
+/// used by the `-s` output.
+///
+/// Values are deliberately **not** truncated. ExifTool's `-s` shortens tag
+/// *names* (it prints the tag name instead of the long description); it never
+/// shortens tag *values*. `exiftool -s` on the sample corpus prints values in
+/// full at any length -- e.g. the 290-character `JSONInfo` on ExifTool.jpg and
+/// the 196-character `AFAreaXPositions` on Canon1DmkIII.jpg both come out
+/// whole. Only binary blobs are summarised, and that is independent of `-s`.
+///
+/// The previous implementation cut strings at `&s[..47]`, which both diverged
+/// from ExifTool and panicked outright whenever byte 47 landed inside a
+/// multi-byte UTF-8 sequence. That is not a rare case: any lossy-decoded
+/// MakerNote/GPS text is full of 3-byte U+FFFD replacement characters, and 14
+/// files in the sample corpus (Samsung and Canon JPEGs, via
+/// `GPS:GPSProcessingMethod`) killed the whole `oxidex -e -s` invocation on it.
 fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String {
     if let Some(label) = friendly_enum_name(tag_name, value) {
-        // Truncate enum labels if too long
-        if label.len() > 50 {
-            return format!("{}...", &label[..47]);
-        }
         return label;
     }
 
     match value {
-        TagValue::String(s) => {
-            // Truncate long strings for short format
-            if s.len() > 50 {
-                format!("{}...", &s[..47])
-            } else {
-                s.clone()
-            }
-        }
+        TagValue::String(s) => s.clone(),
         TagValue::Integer(i) => i.to_string(),
         TagValue::Float(f) => format!("{:.2}", f), // Limit decimal places
         TagValue::Rational {
@@ -1144,5 +1148,70 @@ mod tests {
         // Check records
         let records: Vec<_> = rdr.records().map(|r| r.unwrap()).collect();
         assert_eq!(records.len(), 4);
+    }
+
+    /// Regression: `oxidex -e -s` used to abort the entire invocation with
+    /// "byte index 47 is not a char boundary" whenever a tag value ran past 50
+    /// bytes and byte 47 landed inside a multi-byte UTF-8 sequence.
+    ///
+    /// The value below is the real `GPS:GPSProcessingMethod` oxidex extracts
+    /// from `Samsung/SamsungL73.jpg`: undecodable bytes lossy-decoded into
+    /// 3-byte U+FFFD replacement characters, one of which spans bytes 45..48.
+    /// 14 files in the sample corpus produced values of this shape.
+    ///
+    /// Note this *must* use genuinely multi-byte text -- an ASCII string of the
+    /// same length takes the identical code path and never reproduces the bug.
+    #[test]
+    fn test_short_formatter_does_not_split_multibyte_values() {
+        // Verbatim payload of GPS tag 0x001b in Samsung/SamsungL73.jpg, after
+        // the 8-byte "JIS     " character-code prefix (`exiftool -v3`).
+        let raw: &[u8] = &[
+            0x00, 0x00, 0x00, 0x00, 0x32, 0x30, 0x30, 0x37, 0x3a, 0x30, 0x31, 0x3a, 0x30, 0x31,
+            0x00, 0x00, 0xd0, 0xff, 0xbd, 0x27, 0x24, 0x00, 0xb5, 0xaf, 0x19, 0x80, 0x15, 0x3c,
+            0x18, 0x00, 0xb2, 0xaf, 0x50, 0xd4, 0xa2, 0x8e, 0x2c, 0x00,
+        ];
+        let gps_processing_method = String::from_utf8_lossy(raw).into_owned();
+        // Guard the guard: if this ever stops straddling byte 47 the test has
+        // stopped covering the bug it was written for.
+        assert!(gps_processing_method.len() > 50);
+        assert!(!gps_processing_method.is_char_boundary(47));
+
+        let mut metadata = MetadataMap::new();
+        metadata.insert(
+            "GPS:GPSProcessingMethod",
+            TagValue::new_string(&gps_processing_method),
+        );
+        // CJK: the corpus carries Japanese/Korean/Chinese values too, and
+        // 3-byte CJK characters straddle byte 47 just as readily.
+        let cjk = "日本語のテキストです。これは五十バイトを超える長い値です。";
+        assert!(cjk.len() > 50);
+        assert!(!cjk.is_char_boundary(47));
+        metadata.insert("XMP:Description", TagValue::new_string(cjk));
+
+        let output = ShortFormatter.format(&metadata, None);
+
+        // Rendered whole, exactly as `exiftool -s` renders over-long values.
+        assert!(output.contains(&format!("GPSProcessingMethod: {}\n", gps_processing_method)));
+        assert!(output.contains(&format!("Description: {}\n", cjk)));
+        assert!(
+            !output.contains("..."),
+            "ExifTool's -s shortens tag names, never values: {output:?}"
+        );
+    }
+
+    /// The same hazard exists on the enum-label branch of the short formatter,
+    /// which also used to cut at byte 47.
+    #[test]
+    fn test_short_formatter_multibyte_value_via_enum_branch() {
+        let mut metadata = MetadataMap::new();
+        // GPSLatitudeRef resolves through `friendly_enum_name`; a non-ASCII
+        // value must fall through it and be emitted untouched, not sliced.
+        let value = "北緯です。これは五十バイトを超える非常に長い値になります。";
+        assert!(value.len() > 50);
+        assert!(!value.is_char_boundary(47));
+        metadata.insert("GPS:GPSLatitudeRef", TagValue::new_string(value));
+
+        let output = ShortFormatter.format(&metadata, None);
+        assert_eq!(output, format!("GPSLatitudeRef: {}\n", value));
     }
 }
