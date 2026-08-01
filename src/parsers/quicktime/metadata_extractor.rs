@@ -458,7 +458,12 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
             let mut compatible_brands = Vec::new();
             let mut offset = 8;
             while offset + 4 <= ftyp.data.len() {
-                if let Ok(brand) = std::str::from_utf8(&ftyp.data[offset..offset + 4]) {
+                let brand_bytes = &ftyp.data[offset..offset + 4];
+                // Jpeg2000.pm FileType tag 2: compatible brands containing a
+                // null byte are padding/invalid entries and must be ignored.
+                if !brand_bytes.contains(&0)
+                    && let Ok(brand) = std::str::from_utf8(brand_bytes)
+                {
                     compatible_brands.push(TagValue::String(brand.to_string()));
                 }
                 offset += 4;
