@@ -929,7 +929,6 @@ mod tests {
         assert_eq!(DECIMAL_RATIONAL_TAGS.len(), 15);
     }
 
-
     #[test]
     fn test_exif_date_formatting() {
         // Basic EXIF date (no timezone preserved)
