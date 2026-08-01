@@ -543,12 +543,15 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
     process_dqt_segments(&segments, &mut metadata);
     process_spiff_segments(&segments, &mut metadata);
 
-    // FotoStation writes its records after the JPEG's EOI, so it needs the
-    // whole file rather than the parsed segment list.
+    // Trailers sit after the JPEG's EOI, so they need the whole file rather
+    // than the parsed segment list, which stops at the EOI marker.
     if let Ok(file) = reader.read(0, reader.size() as usize) {
         for (key, value) in
             crate::parsers::jpeg::fotostation::parse_fotostation_trailer(file).iter()
         {
+            metadata.insert(key.clone(), value.clone());
+        }
+        for (key, value) in crate::parsers::canon_vrd::parse_canon_vrd_trailer(file).iter() {
             metadata.insert(key.clone(), value.clone());
         }
     }
