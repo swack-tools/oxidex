@@ -2915,11 +2915,235 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         // prints the quotient with Perl's default 15-significant-digit format.
         "FocalPlaneXResolution" | "FocalPlaneYResolution" => format_xmp_plain_rational(value),
 
+        // XMP.pm:2047-2051 -- FNumber is a rational whose PrintConv is
+        // Exif::PrintFNumber.
+        "FNumber" => format_xmp_fnumber(value),
+
+        // XMP.pm:2042-2046 -- ExposureTime is a rational whose PrintConv is
+        // Exif::PrintExposureTime.
+        "ExposureTime" => match parse_xmp_number(value) {
+            Some(seconds) => print_xmp_exposure_time(seconds),
+            None => value.to_string(),
+        },
+
         // Photoshop numeric tags
         "Quality" => format_photoshop_quality(value),
 
+        // PhotoMechanic.pm:113-116 -- ColorClass is an integer printed through
+        // %colorClasses; PhotoMechanic.pm:133 -- Tagged is an XMP boolean.
+        "ColorClass" => decode_photomechanic_color_class(value),
+        "Tagged" => decode_photomechanic_tagged(value),
+        // PhotoMechanic.pm:120-127 -- "0:6:5:003344" becomes
+        // "Tagged:0, ColorClass:6, Rating:5, FrameNum:003344".
+        "Prefs" => format_photomechanic_prefs(value),
+
+        // XMP.pm:1666-1677 -- crs:PerspectiveUpright names its own numbers.
+        "PerspectiveUpright" => decode_perspective_upright(value),
+
+        // XMP.pm:2110-2115 and XMP.pm:2342-2349 -- both are rationals whose
+        // PrintConv appends " m". oxidex already carries the unit, so only the
+        // rational in front of it still has to be evaluated.
+        "GPSAltitude" | "SubjectDistance" => format_xmp_rational_with_unit(value),
+
+        // XMP.pm:3678 -- ExifTool evaluates `numerator/denominator` for every
+        // property declared `Writable => 'rational'`, and (via XMPAutoConv) for
+        // every property it does not know at all. Applied after the arms above
+        // so a tag with its own PrintConv keeps it.
+        _ if parse_xmp_rational(value).is_some() => format_xmp_plain_rational(value),
+
+        // XMP date/time properties are ISO 8601 in the file; ExifTool's
+        // %dateTimeInfo PrintConv (ConvertDateTime) reports them EXIF-style and
+        // keeps the UTC offset.
+        _ if is_xmp_date_tag(local_name) => format_xmp_date_time(value),
+
         // Default: return original value unchanged
         _ => value.to_string(),
+    }
+}
+
+/// Evaluates the rational in a value that already carries a unit, e.g.
+/// `"40/1 m"` -> `"40 m"`.
+///
+/// Deliberately NOT a general "rational followed by anything" rule: XMP also
+/// stores space-separated rational LISTS -- `aux:LensInfo` is
+/// `"18/1 55/1 0/0 0/0"` -- and evaluating just the first element of one
+/// produces a value ExifTool never prints.
+fn format_xmp_rational_with_unit(value: &str) -> String {
+    let value = value.trim();
+    let Some((number, unit)) = value.split_once(' ') else {
+        return format_xmp_plain_rational(value);
+    };
+    if unit.is_empty() || !unit.chars().all(|c| c.is_ascii_alphabetic()) {
+        return value.to_string();
+    }
+    match parse_xmp_rational(number) {
+        Some(_) => format!("{} {}", format_xmp_plain_rational(number), unit),
+        None => value.to_string(),
+    }
+}
+
+/// `XMP.pm`'s `ConvertRational` (XMP.pm:3400-3412), whose regex is
+/// `^(-?\d+)/(-?\d+)$`: this is the test for "ExifTool would evaluate this",
+/// so unlike [`parse_xmp_number`] a bare decimal is *not* a rational.
+///
+/// Returns `None` for a zero denominator, which ExifTool reports as `inf` or
+/// `undef` rather than a quotient.
+fn parse_xmp_rational(value: &str) -> Option<f64> {
+    let (numerator, denominator) = value.trim().split_once('/')?;
+    let numerator: i64 = numerator.parse().ok()?;
+    let denominator: i64 = denominator.parse().ok()?;
+    if denominator == 0 {
+        return None;
+    }
+    Some(numerator as f64 / denominator as f64)
+}
+
+/// `Image::ExifTool::Exif::PrintFNumber` (`Exif.pm:5715-5723`), verbatim:
+///
+/// ```text
+/// if (Image::ExifTool::IsFloat($val) and $val > 0) {
+///     # round to 1 decimal place, or 2 for values < 1.0
+///     $val = sprintf(($val<1 ? "%.2f" : "%.1f"), $val);
+/// }
+/// ```
+///
+/// Note there is no trailing-zero trimming: ExifTool prints f/8 as `8.0`.
+fn format_xmp_fnumber(value: &str) -> String {
+    let Some(number) = parse_xmp_number(value) else {
+        return value.to_string();
+    };
+    if number <= 0.0 {
+        return value.to_string();
+    }
+    if number < 1.0 {
+        format!("{number:.2}")
+    } else {
+        format!("{number:.1}")
+    }
+}
+
+/// `PhotoMechanic.pm:23-33` (`%colorClasses`), verbatim:
+///
+/// ```text
+/// 0 => '0 (None)',        1 => '1 (Winner)',      2 => '2 (Winner alt)',
+/// 3 => '3 (Superior)',    4 => '4 (Superior alt)',5 => '5 (Typical)',
+/// 6 => '6 (Typical alt)', 7 => '7 (Extras)',      8 => '8 (Trash)',
+/// ```
+fn decode_photomechanic_color_class(value: &str) -> String {
+    match value.trim() {
+        "0" => "0 (None)",
+        "1" => "1 (Winner)",
+        "2" => "2 (Winner alt)",
+        "3" => "3 (Superior)",
+        "4" => "4 (Superior alt)",
+        "5" => "5 (Typical)",
+        "6" => "6 (Typical alt)",
+        "7" => "7 (Extras)",
+        "8" => "8 (Trash)",
+        _ => return value.to_string(),
+    }
+    .to_string()
+}
+
+/// `PhotoMechanic.pm:133` -- `Tagged => { Writable => 'boolean',
+/// PrintConv => { False => 'No', True => 'Yes' } }`.
+///
+/// The comparison is case-insensitive only because oxidex lower-cases XMP
+/// booleans upstream; the file itself spells them `True`/`False`, which is what
+/// ExifTool matches. No other spelling is converted -- ExifTool has no entry
+/// for `0`/`1` and would report `Unknown (0)`.
+fn decode_photomechanic_tagged(value: &str) -> String {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("false") {
+        "No".to_string()
+    } else if value.eq_ignore_ascii_case("true") {
+        "Yes".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+/// `PhotoMechanic.pm:120-127` -- the Prefs PrintConv, whose substitution is
+/// `s[\s*(\d+):\s*(\d+):\s*(\d+):\s*(\S*)][Tagged:$1, ColorClass:$2, Rating:$3, FrameNum:$4]`.
+fn format_photomechanic_prefs(value: &str) -> String {
+    let fields: Vec<&str> = value.trim().split(':').map(str::trim).collect();
+    let [tagged, color_class, rating, frame_num] = fields.as_slice() else {
+        return value.to_string();
+    };
+    // The first three captures are `\d+`, so each must be at least one digit.
+    let is_number = |field: &str| !field.is_empty() && field.bytes().all(|b| b.is_ascii_digit());
+    if !is_number(tagged) || !is_number(color_class) || !is_number(rating) {
+        return value.to_string();
+    }
+    format!("Tagged:{tagged}, ColorClass:{color_class}, Rating:{rating}, FrameNum:{frame_num}")
+}
+
+/// `XMP.pm:1666-1677` -- the crs:PerspectiveUpright PrintConv, verbatim:
+///
+/// ```text
+/// 0 => 'Off', 1 => 'Auto', 2 => 'Full',
+/// 3 => 'Level', 4 => 'Vertical', 5 => 'Guided',
+/// ```
+fn decode_perspective_upright(value: &str) -> String {
+    match value.trim() {
+        "0" => "Off",
+        "1" => "Auto",
+        "2" => "Full",
+        "3" => "Level",
+        "4" => "Vertical",
+        "5" => "Guided",
+        _ => return value.to_string(),
+    }
+    .to_string()
+}
+
+/// XMP properties ExifTool declares with `%dateTimeInfo` (XMP.pm:236-243),
+/// whose PrintConv is `ConvertDateTime`.
+///
+/// Each name is a real ExifTool XMP tag: CreateDate (XMP.pm:1053),
+/// CreationDate (XMP.pm:1226), DateAcquired (Microsoft.pm:241), DateCreated
+/// (XMP.pm:1296), DateTime (XMP.pm:1966), DateTimeDigitized (XMP.pm:2037),
+/// DateTimeOriginal (XMP.pm:2032), GPSDateTime (XMP.pm:2351), MetadataDate
+/// (XMP.pm:1057), ModDate (XMP.pm:1225), ModificationDate (XMP2.pl:899),
+/// ModifyDate (XMP.pm:1058) and the flattened HistoryWhen (XMP.pm:341).
+fn is_xmp_date_tag(local_name: &str) -> bool {
+    matches!(
+        local_name,
+        "CreateDate"
+            | "CreationDate"
+            | "DateAcquired"
+            | "DateCreated"
+            | "DateTime"
+            | "DateTimeDigitized"
+            | "DateTimeOriginal"
+            | "GPSDateTime"
+            | "MetadataDate"
+            | "ModDate"
+            | "ModificationDate"
+            | "ModifyDate"
+    ) || local_name.starts_with("HistoryWhen")
+}
+
+/// Rewrites an ISO 8601 XMP timestamp the way ExifTool prints one:
+/// `2021-10-01T14:18:11.534+01:00` -> `2021:10:01 14:18:11.534+01:00`.
+///
+/// Only the date's own separators change. The UTC offset (or trailing `Z`) is
+/// part of the value ExifTool reports and must survive.
+fn format_xmp_date_time(value: &str) -> String {
+    let value = value.trim();
+    let (date, rest) = match value.split_once('T') {
+        Some((date, rest)) => (date, Some(rest)),
+        None => (value, None),
+    };
+    // A date is YYYY-MM-DD, YYYY-MM or YYYY; anything else is not a timestamp.
+    let year = date.split('-').next().unwrap_or("");
+    if year.len() != 4 || !year.bytes().all(|b| b.is_ascii_digit()) {
+        return value.to_string();
+    }
+    let converted_date = date.replace('-', ":");
+    match rest {
+        Some(rest) => format!("{converted_date} {rest}"),
+        None => converted_date,
     }
 }
 
@@ -3171,9 +3395,10 @@ fn format_camera_raw_parameters(value: &str) -> String {
 /// - YResolution: Vertical resolution
 /// - ResolutionUnit: Unit (2 = inches, 3 = centimeters)
 fn format_tiff_resolution(value: &str) -> String {
-    // TIFF resolution values are rational numbers or decimals
-    // Try to format with appropriate precision
-    if let Ok(num) = value.trim().parse::<f64>() {
+    // XMP.pm:1950-1951 -- tiff:XResolution and tiff:YResolution are declared
+    // `Writable => 'rational'`, so the stored "1800000/10000" has to be
+    // evaluated before it is printed, not just decimals.
+    if let Some(num) = parse_xmp_number(value) {
         // Format with up to 6 decimal places, removing trailing zeros
         let formatted = format!("{:.6}", num);
         let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');
@@ -3466,6 +3691,147 @@ mod tests {
         assert_eq!(format_xmp_value("XMP-exif:Sharpness", "2"), "Hard");
         assert_eq!(format_xmp_value("XMP:Sharpness", "0"), "0");
         assert_eq!(format_xmp_value("XMP:Sharpness", "25"), "25");
+    }
+
+    // The expectations below are `exiftool -G1 -s` output for an XMP packet
+    // holding each raw value; see the ExifTool source lines quoted on each
+    // helper.
+
+    #[test]
+    fn fnumber_keeps_print_fnumbers_trailing_zero() {
+        // Exif.pm:5715 -- sprintf("%.1f"), which prints f/8 as "8.0".
+        assert_eq!(format_xmp_value("XMP-exif:FNumber", "80/10"), "8.0");
+        assert_eq!(format_xmp_value("XMP-exif:FNumber", "28/10"), "2.8");
+        assert_eq!(format_xmp_value("XMP-exif:FNumber", "59/10"), "5.9");
+        // Below f/1.0 the format is "%.2f".
+        assert_eq!(format_xmp_value("XMP-exif:FNumber", "95/100"), "0.95");
+        // Not a positive float -- PrintFNumber returns the value untouched.
+        assert_eq!(format_xmp_value("XMP-exif:FNumber", "0/1"), "0/1");
+        assert_eq!(format_xmp_value("XMP-exif:FNumber", "unknown"), "unknown");
+    }
+
+    #[test]
+    fn exposure_time_uses_print_exposure_time() {
+        assert_eq!(format_xmp_value("XMP-exif:ExposureTime", "1/125"), "1/125");
+        assert_eq!(format_xmp_value("XMP-exif:ExposureTime", "4/10"), "0.4");
+        assert_eq!(format_xmp_value("XMP-exif:ExposureTime", "30/1"), "30");
+    }
+
+    #[test]
+    fn photomechanic_color_class_names_its_numbers() {
+        // PhotoMechanic.pm:23-33 (%colorClasses).
+        assert_eq!(format_xmp_value("XMP:ColorClass", "0"), "0 (None)");
+        assert_eq!(format_xmp_value("XMP:ColorClass", "6"), "6 (Typical alt)");
+        assert_eq!(format_xmp_value("XMP:ColorClass", "8"), "8 (Trash)");
+        // Nothing is invented past the end of ExifTool's table.
+        assert_eq!(format_xmp_value("XMP:ColorClass", "9"), "9");
+    }
+
+    #[test]
+    fn photomechanic_tagged_is_the_xmp_boolean_only() {
+        // PhotoMechanic.pm:133 -- PrintConv => { False => 'No', True => 'Yes' }.
+        assert_eq!(format_xmp_value("XMP:Tagged", "True"), "Yes");
+        assert_eq!(format_xmp_value("XMP:Tagged", "False"), "No");
+        // ExifTool has no entry for 0/1, so neither do we.
+        assert_eq!(format_xmp_value("XMP:Tagged", "0"), "0");
+        assert_eq!(format_xmp_value("XMP:Tagged", "1"), "1");
+    }
+
+    #[test]
+    fn photomechanic_prefs_names_its_four_fields() {
+        // PhotoMechanic.pm:120-127.
+        assert_eq!(
+            format_xmp_value("XMP:Prefs", "0:6:5:003344"),
+            "Tagged:0, ColorClass:6, Rating:5, FrameNum:003344"
+        );
+        // The first three captures are `\d+`; anything else is left alone.
+        assert_eq!(format_xmp_value("XMP:Prefs", "0:6:5"), "0:6:5");
+        assert_eq!(format_xmp_value("XMP:Prefs", "a:b:c:d"), "a:b:c:d");
+    }
+
+    #[test]
+    fn perspective_upright_names_its_numbers() {
+        // XMP.pm:1666-1677.
+        assert_eq!(format_xmp_value("XMP-crs:PerspectiveUpright", "0"), "Off");
+        assert_eq!(format_xmp_value("XMP-crs:PerspectiveUpright", "2"), "Full");
+        assert_eq!(
+            format_xmp_value("XMP-crs:PerspectiveUpright", "5"),
+            "Guided"
+        );
+        assert_eq!(format_xmp_value("XMP-crs:PerspectiveUpright", "6"), "6");
+    }
+
+    #[test]
+    fn rationals_carrying_a_unit_keep_it() {
+        // XMP.pm:2110-2115 / XMP.pm:2342-2349 -- PrintConv appends " m".
+        assert_eq!(format_xmp_value("XMP-exif:GPSAltitude", "40/1 m"), "40 m");
+        assert_eq!(
+            format_xmp_value("XMP-exif:SubjectDistance", "501/100 m"),
+            "5.01 m"
+        );
+        // A rational LIST must never be read as "first element plus a unit".
+        assert_eq!(
+            format_xmp_rational_with_unit("18/1 55/1 0/0 0/0"),
+            "18/1 55/1 0/0 0/0"
+        );
+    }
+
+    #[test]
+    fn bare_rationals_are_evaluated_like_convert_rational() {
+        // XMP.pm:3400 -- `^(-?\d+)/(-?\d+)$`, applied to every rational-typed
+        // and every unknown XMP property.
+        assert_eq!(
+            format_xmp_value("XMP-exif:CompressedBitsPerPixel", "3/1"),
+            "3"
+        );
+        assert_eq!(
+            format_xmp_value("XMP-exif:DigitalZoomRatio", "2272/2272"),
+            "1"
+        );
+        assert_eq!(
+            format_xmp_value("XMP-tiff:XResolution", "1800000/10000"),
+            "180"
+        );
+        // A zero denominator is `inf`/`undef` to ExifTool, never a quotient.
+        assert_eq!(format_xmp_value("XMP-exif:FlashEnergy", "1/0"), "1/0");
+        // Not the rational shape at all.
+        assert_eq!(
+            format_xmp_value("XMP-dc:Format", "image/jpeg"),
+            "image/jpeg"
+        );
+        assert_eq!(format_xmp_value("XMP-crs:Version", "1.5/2"), "1.5/2");
+    }
+
+    #[test]
+    fn date_tags_print_exif_style_and_keep_the_offset() {
+        // XMP.pm:236-243 (%dateTimeInfo) -> ConvertDateTime.
+        assert_eq!(
+            format_xmp_value("XMP-xmp:CreateDate", "2021-10-01T14:18:11.534+01:00"),
+            "2021:10:01 14:18:11.534+01:00"
+        );
+        assert_eq!(
+            format_xmp_value("XMP-xmp:ModifyDate", "2021-10-01T14:18:11Z"),
+            "2021:10:01 14:18:11Z"
+        );
+        assert_eq!(
+            format_xmp_value("XMP-photoshop:DateCreated", "2004-02-26"),
+            "2004:02:26"
+        );
+        assert_eq!(
+            format_xmp_value("XMP-tiff:DateTime", "2005-08-03T18:59:18-04:00"),
+            "2005:08:03 18:59:18-04:00"
+        );
+        // Already EXIF-style, and non-dates, pass through untouched.
+        assert_eq!(
+            format_xmp_value("XMP-xmp:ModifyDate", "2005:06:09 20:09:27+02:00"),
+            "2005:06:09 20:09:27+02:00"
+        );
+        assert_eq!(format_xmp_value("XMP-xmp:CreateDate", ""), "");
+        // A tag that is not one of ExifTool's date properties is left alone.
+        assert_eq!(
+            format_xmp_value("XMP-dc:Description", "2021-10-01T14:18:11Z"),
+            "2021-10-01T14:18:11Z"
+        );
     }
 
     #[test]
@@ -3816,7 +4182,11 @@ mod tests {
             .iter()
             .find(|(name, _)| name == "XMP:CreateDate")
             .map(|(_, v)| v.as_str());
-        assert_eq!(create_date, Some("2023-01-15T10:30:00"));
+        // `exiftool -G1 -s` on this packet:
+        //   [XMP-xmp] CreateDate : 2023:01:15 10:30:00
+        // The ISO 8601 form the attribute is written in is the raw value, not
+        // the one ExifTool reports (XMP.pm:236-243, %dateTimeInfo).
+        assert_eq!(create_date, Some("2023:01:15 10:30:00"));
     }
 
     #[test]
