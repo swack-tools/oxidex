@@ -31,6 +31,7 @@
 
 #![allow(dead_code)]
 
+use crate::core::formatters::picture_type_name;
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
@@ -533,36 +534,6 @@ fn parse_picture_block(data: &[u8], metadata: &mut MetadataMap) {
             TagValue::Binary(data[pos..end].to_vec()),
         );
     }
-}
-
-/// ExifTool's shared picture-type PrintConv (ID3, ASF and FLAC all use it).
-fn picture_type_name(code: u32) -> String {
-    match code {
-        0 => "Other",
-        1 => "32x32 PNG Icon",
-        2 => "Other Icon",
-        3 => "Front Cover",
-        4 => "Back Cover",
-        5 => "Leaflet",
-        6 => "Media",
-        7 => "Lead Artist",
-        8 => "Artist",
-        9 => "Conductor",
-        10 => "Band",
-        11 => "Composer",
-        12 => "Lyricist",
-        13 => "Recording Studio or Location",
-        14 => "Recording Session",
-        15 => "Performance",
-        16 => "Capture from Movie or Video",
-        17 => "Bright(ly) Colored Fish",
-        18 => "Illustration",
-        19 => "Band Logo",
-        20 => "Publisher Logo",
-        // Unknown codes report themselves rather than borrowing a label.
-        other => return format!("Unknown ({})", other),
-    }
-    .to_string()
 }
 
 /// Simple base64 decoder for embedded binary data

@@ -30,6 +30,7 @@
 
 #![allow(dead_code)]
 
+use crate::core::formatters::picture_type_name;
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
@@ -1044,30 +1045,11 @@ fn parse_wm_picture(data: &[u8], metadata: &mut MetadataMap) {
 
     // Picture type (1 byte)
     let picture_type = data[0];
-    let picture_type_str = match picture_type {
-        0 => "Other",
-        1 => "32x32 File Icon",
-        2 => "Other File Icon",
-        3 => "Front Cover",
-        4 => "Back Cover",
-        5 => "Leaflet Page",
-        6 => "Media",
-        7 => "Lead Artist",
-        8 => "Artist",
-        9 => "Conductor",
-        10 => "Band",
-        11 => "Composer",
-        12 => "Lyricist",
-        13 => "Recording Location",
-        14 => "During Recording",
-        15 => "During Performance",
-        16 => "Video Capture",
-        17 => "A Bright Coloured Fish",
-        18 => "Illustration",
-        19 => "Band Logotype",
-        20 => "Publisher Logotype",
-        _ => "Unknown",
-    };
+    // ExifTool's `%ASF::Picture{0}` PrintConv; see
+    // `core::formatters::picture_type`. The table this file used to carry
+    // disagreed with it on ten labels and dropped the code from its unknown
+    // case.
+    let picture_type_str = picture_type_name(u32::from(picture_type));
     metadata.insert(
         "ASF:PictureType".to_string(),
         TagValue::new_string(picture_type_str),
