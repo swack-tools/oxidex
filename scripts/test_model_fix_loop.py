@@ -413,6 +413,79 @@ class ClearBlacklistKeepingHistoryTests(unittest.TestCase):
         self.assertFalse(state["K"]["blacklisted"])
 
 
+class WorkerClaimLifecycleTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state_path = Path(self.tmp.name) / "tag-state.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_release_worker_claims_is_owner_scoped_and_keeps_history(self):
+        state = {
+            "NEF:EXIF:LensModel": {
+                "claimed_by": "worker-a", "claimed_at": 10,
+                "fails": 2, "attempts": [{"reason": "still open"}],
+            },
+            "NEF:EXIF:ISO": {
+                "claimed_by": "worker-b", "claimed_at": 11,
+                "fails": 0, "attempts": [],
+            },
+            "unclaimed": {"fails": 1, "attempts": []},
+        }
+        save_tag_state(self.state_path, state)
+
+        released = model_fix_loop.release_worker_claims(self.state_path, "worker-a")
+
+        self.assertEqual(released, 1)
+        after = load_tag_state(self.state_path)
+        self.assertNotIn("claimed_by", after["NEF:EXIF:LensModel"])
+        self.assertNotIn("claimed_at", after["NEF:EXIF:LensModel"])
+        self.assertEqual(after["NEF:EXIF:LensModel"]["fails"], 2)
+        self.assertEqual(after["NEF:EXIF:LensModel"]["attempts"], [{"reason": "still open"}])
+        self.assertEqual(after["NEF:EXIF:ISO"]["claimed_by"], "worker-b")
+
+    def test_sigterm_unwinds_through_cleanup_and_restores_handler(self):
+        save_tag_state(self.state_path, {
+            "CR2:MakerNotes:AFPointsSelected": {
+                "claimed_by": "canon-1", "claimed_at": 10,
+                "fails": 0, "attempts": [],
+            },
+        })
+
+        class FakeSignal:
+            SIGTERM = 15
+
+            def __init__(self):
+                self.previous = object()
+                self.current = self.previous
+
+            def getsignal(self, signum):
+                self.assert_sigterm(signum)
+                return self.current
+
+            def signal(self, signum, handler):
+                self.assert_sigterm(signum)
+                self.current = handler
+
+            def assert_sigterm(self, signum):
+                if signum != self.SIGTERM:
+                    raise AssertionError(f"unexpected signal {signum}")
+
+        fake_signal = FakeSignal()
+        with self.assertRaises(SystemExit) as raised:
+            with model_fix_loop.worker_claim_lifecycle(
+                self.state_path, "canon-1", signal_module=fake_signal,
+            ):
+                fake_signal.current(fake_signal.SIGTERM, None)
+
+        self.assertEqual(raised.exception.code, 143)
+        self.assertIs(fake_signal.current, fake_signal.previous)
+        after = load_tag_state(self.state_path)
+        self.assertNotIn("claimed_by", after["CR2:MakerNotes:AFPointsSelected"])
+        self.assertNotIn("claimed_at", after["CR2:MakerNotes:AFPointsSelected"])
+
+
 class SynthesizeGitHeadersTests(unittest.TestCase):
     """synthesize_git_headers is the fix for the fleet's largest
     patch-rejection cause -- see the function docstring for the measurement.
