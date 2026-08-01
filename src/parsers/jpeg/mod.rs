@@ -4,6 +4,7 @@
 
 #![allow(dead_code)]
 
+pub mod afcp;
 pub mod app_parsers;
 pub mod app_segments;
 pub mod exif_parser;
