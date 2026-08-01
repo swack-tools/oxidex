@@ -897,6 +897,20 @@ impl OxiDexExtractor {
         tag_map.insert(normalized_key, value);
     }
 
+    /// ExifTool's family-0 XMP group intentionally collapses some properties
+    /// from distinct family-1 schemas onto the same displayed key. For
+    /// example, one packet may legally contain both `XMP-crs:Sharpness` and
+    /// `XMP-exif:Sharpness`; `exiftool -G0 -a` prints both as
+    /// `XMP:Sharpness`, and `-json -G` keeps one deterministic value. Those
+    /// are namespace peers, not OxiDex emitting one conceptual tag twice, so
+    /// they must not trip the duplicate-emission gate used by squad batches.
+    fn is_exiftool_family0_xmp_overlap(normalized_key: &str) -> bool {
+        matches!(
+            normalized_key,
+            "XMP:NativeDigest" | "XMP:Sharpness" | "XMP:WhiteBalance"
+        )
+    }
+
     /// Flatten MetadataMap into TagInfo vector
     ///
     /// Returns the flattened tags plus, for every displayed `family:name`
@@ -998,7 +1012,14 @@ impl OxiDexExtractor {
 
             // Format the value
             let value_str = self.format_value(&normalized_key, &name, value);
-            Self::record_write(&mut tag_map, &mut collisions, normalized_key, value_str);
+            if Self::is_exiftool_family0_xmp_overlap(&normalized_key) {
+                // Preserve the existing sorted, last-write-wins behavior so
+                // our family-0 JSON view chooses the same schema value as
+                // ExifTool. Only the false duplicate evidence is suppressed.
+                tag_map.insert(normalized_key, value_str);
+            } else {
+                Self::record_write(&mut tag_map, &mut collisions, normalized_key, value_str);
+            }
         }
 
         // Add composite tags
@@ -1273,6 +1294,58 @@ mod tests {
         let (tags, collisions) = extractor.flatten_metadata(&metadata, None);
         assert_eq!(tags.len(), 1);
         assert!(collisions.contains_key("MakerNotes:Sharpness"));
+    }
+
+    #[test]
+    fn test_exiftool_family0_xmp_namespace_overlaps_are_not_duplicates() {
+        let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
+        let mut metadata = oxidex::core::MetadataMap::new();
+        metadata.insert(
+            "XMP-exif:NativeDigest".to_string(),
+            TagValue::String("exif digest".to_string()),
+        );
+        metadata.insert(
+            "XMP-tiff:NativeDigest".to_string(),
+            TagValue::String("tiff digest".to_string()),
+        );
+        metadata.insert(
+            "XMP-exif:Sharpness".to_string(),
+            TagValue::String("Normal".to_string()),
+        );
+        metadata.insert(
+            "XMP:Sharpness".to_string(),
+            TagValue::String("25".to_string()),
+        );
+        metadata.insert(
+            "XMP-exif:WhiteBalance".to_string(),
+            TagValue::String("Manual".to_string()),
+        );
+        metadata.insert(
+            "XMP:WhiteBalance".to_string(),
+            TagValue::String("Custom".to_string()),
+        );
+
+        let (tags, collisions) = extractor.flatten_metadata(&metadata, Some("JPEG"));
+        assert_eq!(tags.len(), 3);
+        assert!(collisions.is_empty());
+        assert_eq!(
+            tags.iter()
+                .find(|tag| tag.key() == "XMP:NativeDigest")
+                .map(|tag| tag.value.as_str()),
+            Some("tiff digest")
+        );
+        assert_eq!(
+            tags.iter()
+                .find(|tag| tag.key() == "XMP:Sharpness")
+                .map(|tag| tag.value.as_str()),
+            Some("25")
+        );
+        assert_eq!(
+            tags.iter()
+                .find(|tag| tag.key() == "XMP:WhiteBalance")
+                .map(|tag| tag.value.as_str()),
+            Some("Custom")
+        );
     }
 
     /// Two unrelated tags that don't collide must never be flagged.

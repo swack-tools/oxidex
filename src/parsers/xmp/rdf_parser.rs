@@ -409,8 +409,15 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
     // PLUS Custom1 is a Bag whose entries are language alternatives. Preserve
     // the list independently for each language, including explicitly empty
     // entries (XMP9.xmp).
-    for (tag, value) in extract_custom1_language_values(xml_bytes)? {
-        results.retain(|(existing, _)| existing != &tag && existing != "XMP-plus:Custom1");
+    let custom1_language_values = extract_custom1_language_values(xml_bytes)?;
+    if !custom1_language_values.is_empty() {
+        // Remove the generic container once, before the x-default value is
+        // installed under this same family/name. Doing this inside the loop
+        // made the following language delete the freshly written default.
+        results.retain(|(existing, _)| existing != "XMP-plus:Custom1");
+    }
+    for (tag, value) in custom1_language_values {
+        results.retain(|(existing, _)| existing != &tag);
         results.push((tag, value));
     }
 
@@ -948,9 +955,9 @@ fn extract_custom1_language_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
         .into_iter()
         .map(|(language, language_values)| {
             let tag = if language == "x-default" {
-                "XMP:Custom1".to_string()
+                "XMP-plus:Custom1".to_string()
             } else {
-                format!("XMP:Custom1-{language}")
+                format!("XMP-plus:Custom1-{language}")
             };
             (tag, language_values.join(", "))
         })
@@ -2865,6 +2872,11 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         "GainControl" => decode_via_tiff_enum(0xA407, value),
         "LightSource" => decode_via_tiff_enum(0x9208, value),
         "SceneType" => decode_via_tiff_enum(0xA301, value),
+        // XMP-exif inherits the EXIF Sharpness PrintConv. Camera Raw also
+        // defines a numeric Sharpness property, so this must stay scoped to
+        // the EXIF schema rather than converting every XMP tag with the same
+        // local name (crs:Sharpness=0 is an adjustment amount, not Normal).
+        "Sharpness" if tag.starts_with("XMP-exif:") => decode_via_tiff_enum(0xA40A, value),
         "SubjectDistanceRange" => decode_via_tiff_enum(0xA40C, value),
         "SensingMethod" => decode_xmp_sensing_method(value),
         "WhiteBalance" => decode_xmp_white_balance(value),
@@ -3407,6 +3419,54 @@ fn format_photoshop_quality(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plus_custom1_language_lists_keep_the_plus_family_without_aliases() {
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description xmlns:plus="http://ns.useplus.org/ldf/xmp/1.0/">
+                <plus:Custom1>
+                  <rdf:Bag>
+                    <rdf:li><rdf:Alt>
+                      <rdf:li xml:lang="x-default">cu1</rdf:li>
+                      <rdf:li xml:lang="de">de1</rdf:li>
+                      <rdf:li xml:lang="fr">fr1</rdf:li>
+                    </rdf:Alt></rdf:li>
+                    <rdf:li><rdf:Alt>
+                      <rdf:li xml:lang="x-default">cu2</rdf:li>
+                      <rdf:li xml:lang="fr"/>
+                    </rdf:Alt></rdf:li>
+                    <rdf:li><rdf:Alt>
+                      <rdf:li xml:lang="x-default">cu3</rdf:li>
+                      <rdf:li xml:lang="de">de3</rdf:li>
+                      <rdf:li xml:lang="fr">fr3</rdf:li>
+                    </rdf:Alt></rdf:li>
+                  </rdf:Bag>
+                </plus:Custom1>
+              </rdf:Description>
+            </rdf:RDF>
+        "#;
+
+        let tags = parse_xmp(xml).unwrap();
+        let value = |name: &str| {
+            tags.iter()
+                .find(|(tag, _)| tag == name)
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(value("XMP-plus:Custom1"), Some("cu1, cu2, cu3"), "{tags:?}");
+        assert_eq!(value("XMP-plus:Custom1-de"), Some("de1, de3"));
+        assert_eq!(value("XMP-plus:Custom1-fr"), Some("fr1, , fr3"));
+        assert!(!tags.iter().any(|(name, _)| name.starts_with("XMP:Custom1")));
+    }
+
+    #[test]
+    fn sharpness_print_conversion_is_scoped_to_xmp_exif() {
+        assert_eq!(format_xmp_value("XMP-exif:Sharpness", "0"), "Normal");
+        assert_eq!(format_xmp_value("XMP-exif:Sharpness", "1"), "Soft");
+        assert_eq!(format_xmp_value("XMP-exif:Sharpness", "2"), "Hard");
+        assert_eq!(format_xmp_value("XMP:Sharpness", "0"), "0");
+        assert_eq!(format_xmp_value("XMP:Sharpness", "25"), "25");
+    }
 
     #[test]
     fn test_parse_simple_xmp() {
