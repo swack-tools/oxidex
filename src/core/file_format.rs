@@ -289,6 +289,9 @@ pub enum FileFormat {
     /// EPS (Encapsulated PostScript) (.eps, .epsf, .ps)
     EPS,
 
+    /// Canon DPP recipe, standalone rather than appended to an image (.vrd)
+    VRD,
+
     /// Unknown or unsupported format
     Unknown,
 }
@@ -385,6 +388,7 @@ impl FileFormat {
             FileFormat::ICC => "ICC",
             FileFormat::XMP => "XMP",
             FileFormat::EPS => "EPS",
+            FileFormat::VRD => "VRD",
             FileFormat::Unknown => "Unknown",
         }
     }
@@ -483,6 +487,7 @@ impl FileFormat {
             FileFormat::ICC => &["icc", "icm"],
             FileFormat::XMP => &["xmp"],
             FileFormat::EPS => &["eps", "epsf", "ps"],
+            FileFormat::VRD => &["vrd"],
             FileFormat::Unknown => &[],
         }
     }
