@@ -973,39 +973,71 @@ fn add_docx_tag_aliases(metadata: &mut MetadataMap) {
 /// Add the standard XML-group names emitted by ExifTool for DOCX properties.
 fn add_docx_xml_tags(metadata: &mut MetadataMap) {
     for (source, destination) in [
+        ("OOXML:Application", "XML:Application"),
+        ("OOXML:AppVersion", "XML:AppVersion"),
+        ("OOXML:Category", "XML:Category"),
+        ("OOXML:Characters", "XML:Characters"),
+        ("OOXML:CharactersWithSpaces", "XML:CharactersWithSpaces"),
+        ("OOXML:Company", "XML:Company"),
         ("OOXML:HyperlinkBase", "XML:HyperlinkBase"),
         ("OOXML:Keywords", "XML:Keywords"),
+        ("OOXML:LastModifiedBy", "XML:LastModifiedBy"),
+        ("OOXML:Lines", "XML:Lines"),
+        ("OOXML:Manager", "XML:Manager"),
         ("OOXML:Pages", "XML:Pages"),
         ("OOXML:Paragraphs", "XML:Paragraphs"),
+        ("OOXML:RevisionNumber", "XML:RevisionNumber"),
+        ("OOXML:Template", "XML:Template"),
+        ("OOXML:TotalEditTime", "XML:TotalEditTime"),
+        ("OOXML:Words", "XML:Words"),
     ] {
         if let Some(value) = metadata.get(source).cloned() {
             metadata.insert(destination.to_string(), value);
         }
     }
 
-    if let Some(modify_date) = metadata
-        .get("OOXML:ModifyDate")
-        .and_then(TagValue::as_string)
-    {
-        metadata.insert(
-            "XML:ModifyDate".to_string(),
-            TagValue::new_string(format_xml_date_for_exiftool(modify_date)),
-        );
+    for (source, destination) in [
+        ("OOXML:CreateDate", "XML:CreateDate"),
+        ("OOXML:ModifyDate", "XML:ModifyDate"),
+    ] {
+        if let Some(date) = metadata.get(source).and_then(TagValue::as_string) {
+            metadata.insert(
+                destination.to_string(),
+                TagValue::new_string(format_xml_date_for_exiftool(date)),
+            );
+        }
+    }
+
+    for (source, destination) in [
+        ("OOXML:HyperlinksChanged", "XML:HyperlinksChanged"),
+        ("OOXML:LinksUpToDate", "XML:LinksUpToDate"),
+        ("OOXML:ScaleCrop", "XML:ScaleCrop"),
+        ("OOXML:SharedDoc", "XML:SharedDoc"),
+    ] {
+        if let Some(value) = metadata.get(source).and_then(TagValue::as_string) {
+            metadata.insert(
+                destination.to_string(),
+                TagValue::new_string(format_xml_yes_no(value)),
+            );
+        }
     }
 
     if let Some(value) = metadata
-        .get("OOXML:HyperlinksChanged")
+        .get("OOXML:DocSecurity")
         .and_then(TagValue::as_string)
     {
-        let value = match value {
-            "true" | "1" => "Yes",
-            "false" | "0" => "No",
-            value => value,
-        };
         metadata.insert(
-            "XML:HyperlinksChanged".to_string(),
-            TagValue::new_string(value),
+            "XML:DocSecurity".to_string(),
+            TagValue::new_string(if value == "0" { "None" } else { value }),
         );
+    }
+}
+
+fn format_xml_yes_no(value: &str) -> &str {
+    match value {
+        "true" | "1" => "Yes",
+        "false" | "0" => "No",
+        value => value,
     }
 }
 
@@ -1354,6 +1386,34 @@ mod tests {
     #[test]
     fn test_docx_xml_standard_property_aliases() {
         let mut metadata = MetadataMap::new();
+        for (name, value) in [
+            ("Application", "Microsoft Macintosh Word"),
+            ("AppVersion", "12.0000"),
+            ("Category", "category goes here"),
+            ("Characters", "42"),
+            ("CharactersWithSpaces", "45"),
+            ("Company", "Company - ExifTool"),
+            ("DocSecurity", "0"),
+            ("LastModifiedBy", "Jeff"),
+            ("Lines", "7"),
+            ("LinksUpToDate", "false"),
+            ("Manager", "Manager: Self"),
+            ("RevisionNumber", "3"),
+            ("ScaleCrop", "false"),
+            ("SharedDoc", "false"),
+            ("Template", "Normal"),
+            ("TotalEditTime", "7 minutes"),
+            ("Words", "7"),
+        ] {
+            metadata.insert(
+                format!("OOXML:{name}"),
+                TagValue::new_string(value.to_string()),
+            );
+        }
+        metadata.insert(
+            "OOXML:CreateDate".to_string(),
+            TagValue::new_string("2009-10-24T01:41:00Z".to_string()),
+        );
         metadata.insert(
             "OOXML:ModifyDate".to_string(),
             TagValue::new_string("2009-10-24T01:48:00Z".to_string()),
@@ -1369,6 +1429,34 @@ mod tests {
 
         add_docx_xml_tags(&mut metadata);
 
+        for (name, expected) in [
+            ("Application", "Microsoft Macintosh Word"),
+            ("AppVersion", "12.0000"),
+            ("Category", "category goes here"),
+            ("Characters", "42"),
+            ("CharactersWithSpaces", "45"),
+            ("Company", "Company - ExifTool"),
+            ("CreateDate", "2009:10:24 01:41:00Z"),
+            ("DocSecurity", "None"),
+            ("LastModifiedBy", "Jeff"),
+            ("Lines", "7"),
+            ("LinksUpToDate", "No"),
+            ("Manager", "Manager: Self"),
+            ("RevisionNumber", "3"),
+            ("ScaleCrop", "No"),
+            ("SharedDoc", "No"),
+            ("Template", "Normal"),
+            ("TotalEditTime", "7 minutes"),
+            ("Words", "7"),
+        ] {
+            assert_eq!(
+                metadata
+                    .get(&format!("XML:{name}"))
+                    .and_then(TagValue::as_string),
+                Some(expected),
+                "XML:{name}"
+            );
+        }
         assert_eq!(
             metadata.get("XML:ModifyDate").and_then(TagValue::as_string),
             Some("2009:10:24 01:48:00Z")
