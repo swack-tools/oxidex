@@ -21,69 +21,45 @@
 
 #![allow(dead_code)]
 
-use crate::const_decoder;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
 use super::registries::motorola::motorola_registry;
 use super::shared::MakerNoteParser;
+use super::shared::array_extractors::extract_string;
 use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
 use super::shared::tag_registry::TagRegistry;
 
 // ============================================================================
-// Declarative Decoder Definitions
+// Decoders
 // ============================================================================
-
-// Camera Mode decoder - Different shooting modes
-const_decoder!(pub
-    CAMERA_MODE,
-    u16,
-    [
-        (0, "Auto"),
-        (1, "Photo"),
-        (2, "Video"),
-        (3, "Portrait"),
-        (4, "Night"),
-        (5, "Pro"),
-    ]
-);
-
-// Scene Mode decoder - Scene recognition modes
-const_decoder!(pub
-    SCENE_MODE,
-    u16,
-    [
-        (0, "None"),
-        (1, "Portrait"),
-        (2, "Landscape"),
-        (3, "Food"),
-        (4, "Night"),
-        (5, "Document"),
-        (6, "Pet"),
-    ]
-);
+//
+// ExifTool's Motorola::Main (Motorola.pm:20-127) names six tags and every one
+// of them is `Writable => 'string'` - there is no PrintConv anywhere in the
+// table, so this parser needs no value decoders.
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
 
-// Extracts u16 value from IFD entry
-// # Arguments
-// * `entry` - The IFD entry
-// * `_data` - The MakerNote data buffer (unused for inline values)
-// * `byte_order` - Byte order for value extraction
-// # Returns
-// The extracted u16 value, or None if extraction fails
-fn extract_u16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> Option<u16> {
-    if entry.value_count != 1 {
-        return None;
-    }
-    let value = match byte_order {
-        ByteOrder::LittleEndian => (entry.value_offset & 0xFFFF) as u16,
-        ByteOrder::BigEndian => ((entry.value_offset >> 16) & 0xFFFF) as u16,
+// Chooses the maker note's own byte order.
+//
+// ExifTool declares `ByteOrder => 'Unknown'` for Motorola (MakerNotes.pm:534),
+// meaning the order is detected rather than inherited. The IFD entry count at
+// offset 8 is the discriminator: a real count is small, and the byte-swapped
+// reading of a small count is enormous.
+fn detect_byte_order(data: &[u8], fallback: ByteOrder) -> ByteOrder {
+    let Some(bytes) = data.get(8..10) else {
+        return fallback;
     };
-    Some(value)
+    let be = u16::from_be_bytes([bytes[0], bytes[1]]);
+    let le = u16::from_le_bytes([bytes[0], bytes[1]]);
+    match (be <= 500, le <= 500) {
+        (true, false) => ByteOrder::BigEndian,
+        (false, true) => ByteOrder::LittleEndian,
+        _ => fallback,
+    }
 }
 
 // ============================================================================
@@ -121,35 +97,14 @@ impl MotorolaParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) {
-        let tag_id = entry.tag_id;
+        let tag_name = match TAG_REGISTRY.get_tag_name(entry.tag_id) {
+            Some(name) => name,
+            None => return,
+        };
 
-        if let Some(value) = extract_u16_value(entry, data, byte_order) {
-            let tag_name = match TAG_REGISTRY.get_tag_name(tag_id) {
-                Some(name) => name,
-                None => return,
-            };
-
-            // Try registry decoding first, fall back to hardcoded logic
-            let formatted_value = TAG_REGISTRY.decode_u16(tag_id, value);
-
-            // Fallback for tags without decoder in registry
-            let formatted_value = if formatted_value == value.to_string() {
-                match tag_id {
-                    0x0002 | 0x0003 | 0x0004 | 0x0006 | 0x0008 => {
-                        let mode = if value > 0 { "On" } else { "Off" };
-                        mode.to_string()
-                    }
-                    0x0007 => {
-                        let mode = if value == 0 { "Auto" } else { "Manual" };
-                        mode.to_string()
-                    }
-                    _ => formatted_value,
-                }
-            } else {
-                formatted_value
-            };
-
-            tags.insert(format!("Motorola:{}", tag_name), formatted_value);
+        // All six tags ExifTool names in Motorola::Main are strings.
+        if let Some(s) = extract_string(entry, data, byte_order) {
+            tags.insert(format!("Motorola:{}", tag_name), s);
         }
     }
 }
@@ -169,14 +124,32 @@ impl MakerNoteParser for MotorolaParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
+        // ExifTool MakerNotes.pm:528-536:
+        //     Name      => 'MakerNoteMotorola',
+        //     Condition => '$$valPt=~/^MOT\0/',
+        //     Start     => '$valuePtr + 8',
+        //     Base      => '$start - 8',
+        //     ByteOrder => 'Unknown',
+        // The IFD begins 8 bytes past the "MOT\0" signature, but `Base` puts
+        // value offsets back at the start of the maker note - so the callback
+        // below resolves them against `data`, not against the post-signature
+        // slice. Reading the entry count from offset 0 instead sees "MO"
+        // = 19791 entries, which is why this parser produced nothing at all on
+        // a real Moto file and its fabricated 0x0001-0x0008 table was never
+        // contradicted.
         let config = IfdParserConfig {
-            signature: None,
-            signature_offset: 0,
+            signature: Some(b"MOT\0"),
+            signature_offset: 8,
             max_entries: 500,
         };
 
-        parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
-            self.parse_entry(entry, parse_data, byte_order, tags);
+        // ByteOrder => 'Unknown': Motorola.jpg is big-endian throughout, but
+        // the maker note does not have to match its container, so pick the
+        // order that yields a plausible entry count.
+        let byte_order = detect_byte_order(data, byte_order);
+
+        parse_ifd_entries(data, byte_order, &config, |entry, _parse_data| {
+            self.parse_entry(entry, data, byte_order, tags);
         })?;
         Ok(())
     }
@@ -190,17 +163,36 @@ impl MakerNoteParser for MotorolaParser {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_camera_mode_decoder() {
-        assert_eq!(CAMERA_MODE.decode(0), "Auto");
-        assert_eq!(CAMERA_MODE.decode(3), "Portrait");
-        assert_eq!(CAMERA_MODE.decode(5), "Pro");
-    }
-
-    #[test]
-    fn test_scene_mode_decoder() {
-        assert_eq!(SCENE_MODE.decode(0), "None");
-        assert_eq!(SCENE_MODE.decode(3), "Food");
+    /// Builds a maker-note IFD in the requested byte order. Motorola's real
+    /// tags are all strings whose bytes are order-independent, but the *entry
+    /// headers* are not - a little-endian-only fixture cannot catch a swapped
+    /// tag-id read, which is exactly how a table can look correct and match
+    /// nothing.
+    /// Builds a Motorola maker note: "MOT\0" plus four filler bytes, then the
+    /// IFD. Value offsets are relative to byte 0 of the whole buffer.
+    /// Both byte orders are built because ExifTool declares
+    /// `ByteOrder => 'Unknown'` (MakerNotes.pm:534).
+    fn build_moto_makernote(
+        entries: &[(u16, u16, u32, u32)],
+        tail: &[u8],
+        order: ByteOrder,
+    ) -> Vec<u8> {
+        let (w16, w32): (fn(u16) -> [u8; 2], fn(u32) -> [u8; 4]) = match order {
+            ByteOrder::LittleEndian => (u16::to_le_bytes, u32::to_le_bytes),
+            ByteOrder::BigEndian => (u16::to_be_bytes, u32::to_be_bytes),
+        };
+        let mut data = Vec::new();
+        data.extend_from_slice(b"MOT\0\x01\x01\x01\x01");
+        data.extend_from_slice(&w16(entries.len() as u16));
+        for &(tag, typ, count, val) in entries {
+            data.extend_from_slice(&w16(tag));
+            data.extend_from_slice(&w16(typ));
+            data.extend_from_slice(&w32(count));
+            data.extend_from_slice(&w32(val));
+        }
+        data.extend_from_slice(&w32(0)); // next-IFD pointer
+        data.extend_from_slice(tail);
+        data
     }
 
     #[test]
@@ -210,44 +202,106 @@ mod tests {
         assert_eq!(parser.tag_prefix(), "Motorola:");
     }
 
+    /// Reproduces the maker note of the corpus file `Motorola.jpg` (XT1575):
+    /// the "MOT\0" signature, four filler bytes, then the IFD at offset 8 with
+    /// value offsets measured from the start of the maker note
+    /// (ExifTool MakerNotes.pm:532-533, `Start => '$valuePtr + 8'`,
+    /// `Base => '$start - 8'`).
+    ///
+    /// Ground truth, `exiftool -a -G1 -s Motorola.jpg`:
+    /// ```text
+    /// [Motorola]      BuildNumber                     : LPH23.116-18
+    /// [Motorola]      SerialNumber                    : NX0A3S0075
+    /// [Motorola]      Sensor                          : BACK,IMX230
+    /// [Motorola]      ManufactureDate                 : 03Jun2015
+    /// ```
     #[test]
-    fn test_parse_camera_mode() {
-        let parser = MotorolaParser::new();
-        let mut data = Vec::new();
-        data.extend_from_slice(&[0x01, 0x00]); // entry_count = 1
-        data.extend_from_slice(&[0x01, 0x00]); // tag = 0x0001 (MOTOROLA_CAMERA_MODE)
-        data.extend_from_slice(&[0x03, 0x00]); // field_type = 3
-        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // value_count = 1
-        data.extend_from_slice(&[0x03, 0x00, 0x00, 0x00]); // value_offset = 3
+    fn test_parse_matches_exiftool_on_moto_xt1575() {
+        for order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let strings: [&[u8]; 4] = [
+                b"LPH23.116-18\0",
+                b"NX0A3S0075\0",
+                b"BACK,IMX230\0",
+                b"03Jun2015\0",
+            ];
+            // 8 (header) + 2 (count) + 5*12 (entries) + 4 (next-IFD) = 74,
+            // measured from the start of the maker note because Base is
+            // $start - 8.
+            let mut off = 74u32;
+            let mut tail = Vec::new();
+            let mut offsets = Vec::new();
+            for s in strings {
+                offsets.push((off, s.len() as u32));
+                tail.extend_from_slice(s);
+                off += s.len() as u32;
+            }
 
-        let mut tags = HashMap::new();
-        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
-        assert!(result.is_ok());
-        assert_eq!(
-            tags.get("Motorola:CameraMode"),
-            Some(&"Portrait".to_string())
-        );
+            let data = build_moto_makernote(
+                &[
+                    (0x5500, 2, offsets[0].1, offsets[0].0), // BuildNumber
+                    (0x5501, 2, offsets[1].1, offsets[1].0), // SerialNumber
+                    // Motorola.pm lists 0x5502 as a comment only - must be dropped.
+                    (0x5502, 1, 1, 96),
+                    (0x665e, 2, offsets[2].1, offsets[2].0), // Sensor
+                    (0x6705, 2, offsets[3].1, offsets[3].0), // ManufactureDate
+                ],
+                &tail,
+                order,
+            );
+
+            let mut tags = HashMap::new();
+            MotorolaParser::new()
+                .parse(&data, order, &mut tags)
+                .expect("Motorola maker note should parse");
+
+            assert_eq!(
+                tags.get("Motorola:BuildNumber"),
+                Some(&"LPH23.116-18".to_string()),
+                "{order:?}"
+            );
+            assert_eq!(
+                tags.get("Motorola:SerialNumber"),
+                Some(&"NX0A3S0075".to_string()),
+                "{order:?}"
+            );
+            assert_eq!(
+                tags.get("Motorola:Sensor"),
+                Some(&"BACK,IMX230".to_string()),
+                "{order:?}"
+            );
+            assert_eq!(
+                tags.get("Motorola:ManufactureDate"),
+                Some(&"03Jun2015".to_string()),
+                "{order:?}"
+            );
+            // 0x5502 is unnamed in ExifTool and must not be emitted.
+            assert_eq!(tags.len(), 4, "{order:?}: {tags:?}");
+        }
     }
 
+    /// The IFD begins 8 bytes in. Reading the count from offset 0 instead sees
+    /// "MO" = 19791, which is what this parser used to do - it then failed the
+    /// entry-count check and emitted nothing, so its fabricated table was never
+    /// contradicted by a real Moto file.
     #[test]
-    fn test_parse_hdr_mode() {
-        let parser = MotorolaParser::new();
-        let mut data = Vec::new();
-        data.extend_from_slice(&[0x01, 0x00]); // entry_count = 1
-        data.extend_from_slice(&[0x02, 0x00]); // tag = 0x0002 (MOTOROLA_HDR_MODE)
-        data.extend_from_slice(&[0x03, 0x00]); // field_type = 3
-        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // value_count = 1
-        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // value_offset = 1
-
+    fn test_ifd_starts_after_the_mot_signature() {
+        // 8 (header) + 2 (count) + 1*12 (entry) + 4 (next-IFD) = 26
+        let data = build_moto_makernote(&[(0x5500, 2, 5, 26)], b"ABCD\0", ByteOrder::BigEndian);
+        assert_eq!(&data[0..4], b"MOT\0");
         let mut tags = HashMap::new();
-        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
-        assert!(result.is_ok());
-        assert_eq!(tags.get("Motorola:HDRMode"), Some(&"On".to_string()));
+        MotorolaParser::new()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Motorola maker note should parse");
+        assert_eq!(tags.get("Motorola:BuildNumber"), Some(&"ABCD".to_string()));
     }
 
     #[test]
     fn test_tag_registry() {
-        assert_eq!(TAG_REGISTRY.get_tag_name(0x0001), Some("CameraMode"));
-        assert!(TAG_REGISTRY.has_tag(0x0002));
+        // ExifTool Motorola.pm:27-28
+        assert_eq!(TAG_REGISTRY.get_tag_name(0x5500), Some("BuildNumber"));
+        assert_eq!(TAG_REGISTRY.get_tag_name(0x5501), Some("SerialNumber"));
+        // Fabricated IDs from the previous table.
+        assert!(!TAG_REGISTRY.has_tag(0x0001));
+        assert!(!TAG_REGISTRY.has_tag(0x0002));
     }
 }

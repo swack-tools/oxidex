@@ -191,6 +191,50 @@ impl RawFormat {
             Self::GenericREV => "REV",
         }
     }
+
+    /// ExifTool's `File:MIMEType` for this format, when `%mimeType` in
+    /// `Image/ExifTool.pm` defines one.
+    ///
+    /// `None` means ExifTool has no entry, and callers should leave whatever
+    /// the generic extension table produced rather than invent a value.
+    pub fn exiftool_mime_type(self) -> Option<&'static str> {
+        Some(match self {
+            RawFormat::CanonCR2 => "image/x-canon-cr2", // ExifTool.pm:634
+            RawFormat::CanonCR3 => "image/x-canon-cr3", // ExifTool.pm:637
+            RawFormat::CanonCRW => "image/x-canon-crw", // ExifTool.pm:639
+            RawFormat::NikonNEF => "image/x-nikon-nef",
+            RawFormat::NikonNRW => "image/x-nikon-nrw",
+            RawFormat::SonyARW => "image/x-sony-arw",
+            RawFormat::SonySR2 => "image/x-sony-sr2",
+            RawFormat::SonySRF => "image/x-sony-srf",
+            RawFormat::SonySRW => "image/x-samsung-srw",
+            RawFormat::FujifilmRAF => "image/x-fujifilm-raf",
+            RawFormat::OlympusORF | RawFormat::OlympusORI => "image/x-olympus-orf",
+            RawFormat::PentaxPEF => "image/x-pentax-pef",
+            RawFormat::PanasonicRW2 => "image/x-panasonic-rw2",
+            RawFormat::PanasonicRWL => "image/x-leica-rwl",
+            RawFormat::Hasselblad3FR => "image/x-hasselblad-3fr",
+            RawFormat::HasselbladFFF => "image/x-hasselblad-fff",
+            RawFormat::MamiyaMEF => "image/x-mamiya-mef",
+            RawFormat::KodakDCR => "image/x-kodak-dcr",
+            RawFormat::KodakKDC => "image/x-kodak-kdc",
+            RawFormat::MinoltaMRW => "image/x-minolta-mrw",
+            RawFormat::EpsonERF => "image/x-epson-erf",
+            RawFormat::SigmaX3F => "image/x-sigma-x3f",
+            RawFormat::GoProGPR => "image/x-gopro-gpr",
+            RawFormat::AdobeDNG => "image/x-adobe-dng",
+            RawFormat::LightLRI => "image/x-light-lri",
+            // ExifTool.pm maps IIQ, MOS and RAW to the generic raw MIME type.
+            RawFormat::PhaseOneIIQ | RawFormat::LeafMOS | RawFormat::GenericRAW => "image/x-raw",
+            RawFormat::SonyARQ
+            | RawFormat::SonyARI
+            | RawFormat::MinoltaMDC
+            | RawFormat::SinarSTI
+            | RawFormat::HEIFHIF
+            | RawFormat::GenericCAM
+            | RawFormat::GenericREV => return None,
+        })
+    }
 }
 
 /// Detect raw format from magic bytes and file extension
@@ -521,4 +565,117 @@ mod tests {
             "Should use extension when data is insufficient"
         );
     }
+}
+
+#[cfg(test)]
+mod exiftool_file_type_tests {
+    use super::*;
+
+    /// Every raw format must report an ExifTool file type, never the Rust
+    /// variant name. Before this mapping existed all ten raw formats in the
+    /// sample corpus were wrong:
+    ///
+    /// ```text
+    /// exiftool=MRW oxidex=MinoltaMRW     exiftool=X3F oxidex=SigmaX3F
+    /// exiftool=RAF oxidex=FujifilmRAF    exiftool=DNG oxidex=AdobeDNG
+    /// exiftool=IIQ oxidex=PhaseOneIIQ    exiftool=RW2 oxidex=PanasonicRW2
+    /// exiftool=NEF oxidex=NikonNEF       exiftool=CR2 oxidex=CanonCR2
+    /// exiftool=CRW oxidex=CanonCRW
+    /// ```
+    #[test]
+    fn file_type_is_never_the_rust_variant_name() {
+        for format in ALL_RAW_FORMATS {
+            let ft = format.file_type();
+            let debug = format!("{format:?}");
+            assert_ne!(
+                ft, debug,
+                "{debug} reports its Rust variant name as File:FileType"
+            );
+            assert!(
+                ft.len() <= 4
+                    && ft
+                        .chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()),
+                "{debug} -> {ft:?} is not an ExifTool file type code"
+            );
+        }
+    }
+
+    /// Spot-checks quoted from `%fileTypeLookup` in ExifTool 13.55's
+    /// `Image/ExifTool.pm`, each confirmed against `exiftool -s -S -FileType`
+    /// on the matching sample-corpus file.
+    #[test]
+    fn file_types_match_exiftool_lookup() {
+        assert_eq!(RawFormat::SigmaX3F.file_type(), "X3F");
+        assert_eq!(RawFormat::MinoltaMRW.file_type(), "MRW");
+        assert_eq!(RawFormat::FujifilmRAF.file_type(), "RAF");
+        assert_eq!(RawFormat::AdobeDNG.file_type(), "DNG");
+        assert_eq!(RawFormat::PhaseOneIIQ.file_type(), "IIQ");
+        assert_eq!(RawFormat::PanasonicRW2.file_type(), "RW2");
+        assert_eq!(RawFormat::NikonNEF.file_type(), "NEF");
+        assert_eq!(RawFormat::CanonCR2.file_type(), "CR2");
+        assert_eq!(RawFormat::CanonCRW.file_type(), "CRW");
+        assert_eq!(RawFormat::CanonCR3.file_type(), "CR3");
+        assert_eq!(RawFormat::Hasselblad3FR.file_type(), "3FR");
+        // ExifTool.pm:496 - RWL is Leica RAW, not Panasonic, despite the
+        // Rust variant being named PanasonicRWL.
+        assert_eq!(RawFormat::PanasonicRWL.file_type(), "RWL");
+        assert_eq!(
+            RawFormat::PanasonicRWL.exiftool_mime_type(),
+            Some("image/x-leica-rwl")
+        );
+        // ExifTool.pm:519 - SRW is Samsung RAW, again unlike the variant name.
+        assert_eq!(
+            RawFormat::SonySRW.exiftool_mime_type(),
+            Some("image/x-samsung-srw")
+        );
+    }
+
+    /// Formats ExifTool 13.55 has no `%mimeType` entry for must return `None`
+    /// rather than an invented MIME string.
+    #[test]
+    fn absent_mime_types_are_none() {
+        assert_eq!(RawFormat::SonyARI.exiftool_mime_type(), None);
+        assert_eq!(RawFormat::MinoltaMDC.exiftool_mime_type(), None);
+        assert_eq!(RawFormat::SinarSTI.exiftool_mime_type(), None);
+    }
+
+    const ALL_RAW_FORMATS: [RawFormat; 36] = [
+        RawFormat::CanonCR2,
+        RawFormat::CanonCR3,
+        RawFormat::CanonCRW,
+        RawFormat::NikonNEF,
+        RawFormat::NikonNRW,
+        RawFormat::SonyARW,
+        RawFormat::SonySR2,
+        RawFormat::SonySRF,
+        RawFormat::SonySRW,
+        RawFormat::SonyARQ,
+        RawFormat::SonyARI,
+        RawFormat::FujifilmRAF,
+        RawFormat::OlympusORF,
+        RawFormat::OlympusORI,
+        RawFormat::PentaxPEF,
+        RawFormat::PanasonicRW2,
+        RawFormat::PanasonicRWL,
+        RawFormat::Hasselblad3FR,
+        RawFormat::HasselbladFFF,
+        RawFormat::PhaseOneIIQ,
+        RawFormat::MamiyaMEF,
+        RawFormat::LeafMOS,
+        RawFormat::KodakDCR,
+        RawFormat::KodakKDC,
+        RawFormat::MinoltaMDC,
+        RawFormat::MinoltaMRW,
+        RawFormat::EpsonERF,
+        RawFormat::SigmaX3F,
+        RawFormat::GoProGPR,
+        RawFormat::AdobeDNG,
+        RawFormat::HEIFHIF,
+        RawFormat::LightLRI,
+        RawFormat::SinarSTI,
+        RawFormat::GenericRAW,
+        RawFormat::GenericCAM,
+        RawFormat::GenericREV,
+    ];
 }
