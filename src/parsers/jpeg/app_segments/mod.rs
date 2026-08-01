@@ -16,6 +16,8 @@ pub mod infiray_tables;
 pub mod jumbf;
 pub mod meta_app3;
 pub mod photoshop;
+pub mod qualcomm;
+pub mod qualcomm_tables;
 
 // Re-export main parsing functions
 pub use app6::{parse_app6, parse_app6_ijpeg};
@@ -28,6 +30,7 @@ pub use app14_adobe::parse_app14_adobe;
 pub use jumbf::parse_jumbf;
 pub use meta_app3::parse_meta_app3;
 pub use photoshop::parse_photoshop_irb;
+pub use qualcomm::parse_qualcomm_app7;
 
 /// Renders a number the way Perl stringifies an NV (`%.15g`), which is what
 /// every ExifTool value ultimately goes through.
