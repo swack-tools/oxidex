@@ -8,7 +8,7 @@ pub struct ComparisonEngine;
 
 /// Normalize a family name for comparison purposes
 /// Maps manufacturer-specific families to MakerNotes for matching
-fn normalize_family_for_comparison(family: &str) -> &str {
+pub(crate) fn normalize_family_for_comparison(family: &str) -> &str {
     match family {
         // Camera manufacturers -> MakerNotes
         //
