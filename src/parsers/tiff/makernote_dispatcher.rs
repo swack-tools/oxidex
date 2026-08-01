@@ -53,12 +53,31 @@ pub fn dispatch_makernote_with_model(
     byte_order: ByteOrder,
     tags: &mut HashMap<String, String>,
 ) -> Result<(), String> {
-    dispatch_makernote_with_context(
+    dispatch_makernote_with_model_and_values(
+        make,
+        model,
+        data,
+        byte_order,
+        tags,
+        &mut HashMap::new(),
+    )
+}
+
+pub fn dispatch_makernote_with_model_and_values(
+    make: &str,
+    model: Option<&str>,
+    data: &[u8],
+    byte_order: ByteOrder,
+    tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
+) -> Result<(), String> {
+    dispatch_makernote_with_context_and_values(
         make,
         model,
         &MakerNoteContext::detached(data),
         byte_order,
         tags,
+        value_forms,
     )
 }
 
@@ -89,6 +108,24 @@ pub fn dispatch_makernote_with_context(
     ctx: &MakerNoteContext<'_>,
     byte_order: ByteOrder,
     tags: &mut HashMap<String, String>,
+) -> Result<(), String> {
+    dispatch_makernote_with_context_and_values(
+        make,
+        model,
+        ctx,
+        byte_order,
+        tags,
+        &mut HashMap::new(),
+    )
+}
+
+pub fn dispatch_makernote_with_context_and_values(
+    make: &str,
+    model: Option<&str>,
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
 ) -> Result<(), String> {
     use crate::parsers::tiff::makernotes::shared::MakerNoteParser;
 
@@ -169,7 +206,7 @@ pub fn dispatch_makernote_with_context(
         // whether or not the decoder goes on to use the wider window.
         if parser.validate_header(data) {
             // Parse MakerNote data
-            parser.parse_with_context(ctx, byte_order, model, tags)?;
+            parser.parse_with_context_and_values(ctx, byte_order, model, tags, value_forms)?;
         }
     }
 

@@ -8,7 +8,7 @@ use crate::core::operations_helpers::read_u32;
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
 use crate::parsers::tiff::geotiff_parser;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, find_entry_position, parse_ifd};
-use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context;
+use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values;
 use crate::parsers::tiff::makernotes::makernote_context::{
     MakerNoteContext, value_overlaps_directory,
 };
@@ -1083,12 +1083,14 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
 
     // Parse MakerNote using the dispatcher
     let mut makernote_tags = HashMap::new();
-    if let Err(_e) = dispatch_makernote_with_context(
+    let mut value_forms = HashMap::new();
+    if let Err(_e) = dispatch_makernote_with_context_and_values(
         &make,
         model.as_deref(),
         ctx,
         byte_order,
         &mut makernote_tags,
+        &mut value_forms,
     ) {
         // Silently skip failed MakerNote parsing
         return;
@@ -1100,6 +1102,9 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
         // Convert string value to TagValue
         let tag_value = TagValue::String(tag_value_str);
         metadata.insert(tag_name, tag_value);
+    }
+    for (tag_name, value) in value_forms {
+        metadata.set_value_form(tag_name, value);
     }
 }
 

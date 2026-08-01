@@ -888,13 +888,15 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
                     // Use the MakerNote dispatcher to parse manufacturer-specific tags
                     let mut makernote_tags = std::collections::HashMap::new();
+                    let mut value_forms = std::collections::HashMap::new();
                     if let Err(e) =
-                        crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_model(
+                        crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_model_and_values(
                             make,
                             camera_model.as_deref(),
                             mn_data,
                             byte_order,
                             &mut makernote_tags,
+                            &mut value_forms,
                         )
                     {
                         eprintln!("Warning: Failed to parse MakerNote for {}: {}", make, e);
@@ -903,6 +905,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         // Tags already have proper prefixes (e.g., "Canon:MacroMode")
                         for (tag_name, tag_value) in makernote_tags {
                             metadata.insert(tag_name, TagValue::new_string(tag_value));
+                        }
+                        for (tag_name, value) in value_forms {
+                            metadata.set_value_form(tag_name, value);
                         }
                     }
                 }

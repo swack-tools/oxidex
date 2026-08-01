@@ -565,7 +565,7 @@ impl MakerNoteParser for NikonParser {
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_with_model(ctx.window(), byte_order, model, tags)
+        self.parse_with_context_and_values(ctx, byte_order, model, tags, &mut HashMap::new())
     }
 
     fn parse_with_model(
@@ -574,6 +574,28 @@ impl MakerNoteParser for NikonParser {
         byte_order: ByteOrder,
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        self.parse_with_model_and_values(data, byte_order, model, tags, &mut HashMap::new())
+    }
+
+    fn parse_with_context_and_values(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        self.parse_with_model_and_values(ctx.window(), byte_order, model, tags, value_forms)
+    }
+
+    fn parse_with_model_and_values(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
             return Ok(());
@@ -719,6 +741,7 @@ impl MakerNoteParser for NikonParser {
             count,
         });
         let mut ctx = binary_data::Ctx::new(model, None);
+        let mut parsed_value_forms = HashMap::new();
 
         // Parse IFD entries starting at the IFD location
         // Pass the full 'data' buffer so that offset calculations work correctly
@@ -860,7 +883,11 @@ impl MakerNoteParser for NikonParser {
                 // tables.
                 NIKON_LENS_DATA => {
                     if let Some(bytes) = bytes_of(entry) {
-                        lens_data::parse_lens_data(&bytes, tags);
+                        lens_data::parse_lens_data_with_values(
+                            &bytes,
+                            tags,
+                            &mut parsed_value_forms,
+                        );
                         encrypted::parse_lens_data(
                             &bytes,
                             entry.value_count as usize,
@@ -1641,6 +1668,9 @@ impl MakerNoteParser for NikonParser {
                 _ => {}
             }
         });
+
+        parsed_value_forms.extend(ctx.take_value_forms());
+        value_forms.extend(parsed_value_forms);
 
         Ok(())
     }

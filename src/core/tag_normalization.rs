@@ -133,7 +133,10 @@ pub fn normalize_metadata_map(map: &crate::core::MetadataMap) -> crate::core::Me
     let mut normalized = crate::core::MetadataMap::with_capacity(map.len());
     for (key, value) in map.iter() {
         let normalized_key = normalize_tag_family(key);
-        normalized.insert(normalized_key, value.clone());
+        normalized.insert(normalized_key.clone(), value.clone());
+        if let Some(value_form) = map.value_form(key) {
+            normalized.set_value_form(normalized_key, value_form);
+        }
     }
     normalized
 }
