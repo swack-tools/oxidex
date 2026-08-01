@@ -8,9 +8,9 @@
 //! for `EXIF:Flash` do not change just because the bytes arrived inside a
 //! BPG extension instead of an APP1 segment.
 
-use crate::core::MetadataMap;
-use crate::core::tag_conversion::{parse_string_to_tag_value, raw_bytes_to_tag_value};
+use crate::core::tag_conversion::raw_bytes_to_tag_value;
 use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd};
+use crate::core::{MetadataMap, TagValue};
 use crate::io::buffered_reader::BufferedReader;
 use crate::io::{ByteOrder as IoByteOrder, EndianReader};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
@@ -131,7 +131,7 @@ pub fn parse_embedded_xmp(xmp_data: &[u8], metadata: &mut MetadataMap) -> bool {
         Ok(tags) => {
             let found = !tags.is_empty();
             for (name, value) in tags {
-                metadata.insert(name, parse_string_to_tag_value(&value));
+                metadata.insert(name, TagValue::new_string(value));
             }
             found
         }

@@ -7,7 +7,6 @@
 
 #![allow(dead_code)]
 
-use crate::core::tag_conversion::parse_string_to_tag_value;
 use crate::core::value_formatter::{
     format_iptc_coded_charset, format_iptc_date, format_iptc_record_version, format_iptc_time,
     format_iptc_urgency,
@@ -431,7 +430,7 @@ impl EPSParser {
                                 (2, 25) => keywords.push(value),
                                 (2, 20) => supplemental_categories.push(value),
                                 _ => {
-                                    metadata.insert(tag_name, parse_string_to_tag_value(&value));
+                                    metadata.insert(tag_name, TagValue::new_string(value));
                                 }
                             }
                         }
