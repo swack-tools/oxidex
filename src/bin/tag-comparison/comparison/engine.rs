@@ -73,6 +73,16 @@ pub(crate) fn normalize_family_for_comparison(family: &str) -> &str {
         // ExifTool does use for GoPro MP4/GPMF tracks) still matches oxidex's
         // "GoPro:" tags.
         "GoPro" => "APP6",
+        // CanonDR4 -> CanonVRD. Same case as FLIR, AROT and SPIFF above:
+        // `%CanonVRD::DR4` declares GROUPS => { 1 => 'CanonDR4' } with no
+        // family-0 override, so ExifTool files a DPP 4 recipe tag under
+        // family-0 CanonVRD and family-1 CanonDR4:
+        //     exiftool -G0:1 -s combined-samples/CanonVRD.dr4
+        //         => [CanonVRD:CanonDR4] Rotation : 0
+        // oxidex emits the family-1 name, so without this the 93 tags of
+        // CanonVRD.dr4 counted as 93 missing on one side and 93 extra on the
+        // other despite being byte-identical.
+        "CanonDR4" => "CanonVRD",
         // Keep everything else as-is
         _ => family,
     }

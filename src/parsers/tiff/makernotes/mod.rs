@@ -55,7 +55,6 @@ pub mod dji; // DJI drones (Mavic, Phantom, Inspire)
 pub mod flir; // FLIR thermal imaging cameras
 pub mod gopro; // GoPro action cameras
 pub mod infiray; // InfiRay thermal cameras
-pub mod lytro; // Lytro light field cameras
 pub mod nintendo; // Nintendo 3DS cameras
 pub mod parrot; // Parrot drones (Anafi, Bebop)
 pub mod reconyx; // Reconyx wildlife/trail cameras

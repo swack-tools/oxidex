@@ -105,7 +105,7 @@ def main():
             continue
         rows.append(f'    ("{t}", "(?s-u)^{rust_bytes_literal(pat)}"),')
 
-    # Extension -> (file type, root type). Aliases are resolved here so the
+    # Extension -> (file type, processing formats). Aliases are resolved here so the
     # runtime does not have to chase them; a cycle would hang, so depth is
     # bounded.
     #
@@ -115,7 +115,9 @@ def main():
     # all 162 sub-types with their root -- .djvu as AIFF, .ttf as Font, .j2c as
     # JP2. The root is kept alongside because it is what `%magicNumber` is
     # keyed on: a .cr2's header matches the TIFF pattern, so corroborating the
-    # extension against the header needs both names.
+    # extension against the header needs both names. Keep every root, not only
+    # the first: several extensions may be processed by more than one format,
+    # and any one of those formats may provide the corroborating magic number.
     #
     # A table can only get this mostly right, because ExifTool's last word is
     # the format module, not the table: `ICS` and `VCF` share the root `VCard`
@@ -155,11 +157,12 @@ def main():
         # Lowercase the extension: ExifTool stores those uppercase, but every
         # lookup here comes from a filename, so normalising once at generation
         # time keeps the runtime a plain comparison.
-        ext_rows.append((ext.lower(), (file_type, root)))
+        ext_rows.append((ext.lower(), (file_type, tuple(roots))))
 
     # Sorted and deduplicated so the runtime can binary-search.
     ext_rows = [
-        f'    ("{e}", "{t}", "{r}"),' for e, (t, r) in sorted(dict(ext_rows).items())
+        f'    ("{e}", "{t}", &[{", ".join(chr(34) + f + chr(34) for f in fmts)}]),'
+        for e, (t, fmts) in sorted(dict(ext_rows).items())
     ]
 
     mime_rows = [
@@ -184,12 +187,12 @@ pub static MAGIC: &[(&str, &str)] = &[
 {chr(10).join(rows)}
 ];
 
-/// Lowercase extension -> (file type, root type). Aliases already resolved.
+/// Lowercase extension -> (`FileType`, formats that can process it).
 ///
-/// The root is the format whose module reads the file, which is what
-/// [`MAGIC`] is keyed on; the file type is what ExifTool reports. They differ
-/// for every sub-type -- `("cr2", "CR2", "TIFF")`, `("djvu", "DJVU", "AIFF")`.
-pub static EXT_TO_TYPE: &[(&str, &str, &str)] = &[
+/// Aliases are already resolved. The formats come from `%fileTypeLookup`'s
+/// arrayref and are what `MAGIC` is keyed by; the file type is the resolved
+/// key, which is what ExifTool reports.
+pub static EXT_TO_TYPE: &[(&str, &str, &[&str])] = &[
 {chr(10).join(ext_rows)}
 ];
 
