@@ -188,6 +188,10 @@ jobs:
         run: |
           set -euo pipefail
           ls -l
+          # Deliberately unquoted: each -t flag and each digest must reach
+          # imagetools create as a separate argument. Quoting would collapse
+          # them into one argument and break the manifest list.
+          # shellcheck disable=SC2046
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf "${IMAGE}@sha256:%s " *)
