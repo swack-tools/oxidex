@@ -117,27 +117,87 @@ pub fn format_iptc_time(raw: &str) -> String {
 
 /// Format IPTC urgency value with human-readable description.
 ///
-/// IPTC urgency is a single digit 1-8, where 1 is most urgent and 8 is least.
-/// ExifTool displays this with a parenthetical description for boundary values.
+/// IPTC urgency is a single digit 0-9, where 1 is most urgent and 8 is least.
+/// ExifTool annotates the reserved and boundary values and prints the rest bare.
+///
+/// Mirrors the `PrintConv` of Urgency (2:10) in
+/// `%Image::ExifTool::IPTC::ApplicationRecord`.
 ///
 /// # Examples
 ///
 /// ```
 /// use oxidex::core::value_formatter::format_iptc_urgency;
 ///
+/// assert_eq!(format_iptc_urgency("0"), "0 (reserved)");
 /// assert_eq!(format_iptc_urgency("1"), "1 (most urgent)");
-/// assert_eq!(format_iptc_urgency("5"), "5 (normal)");
+/// assert_eq!(format_iptc_urgency("5"), "5 (normal urgency)");
 /// assert_eq!(format_iptc_urgency("8"), "8 (least urgent)");
+/// assert_eq!(format_iptc_urgency("9"), "9 (user-defined priority)");
 /// assert_eq!(format_iptc_urgency("3"), "3");
 /// assert_eq!(format_iptc_urgency("invalid"), "invalid"); // Preserves invalid input
 /// ```
 pub fn format_iptc_urgency(raw: &str) -> String {
     match raw.trim() {
+        "0" => "0 (reserved)".to_string(),
         "1" => "1 (most urgent)".to_string(),
-        "5" => "5 (normal)".to_string(),
+        "5" => "5 (normal urgency)".to_string(),
         "8" => "8 (least urgent)".to_string(),
+        "9" => "9 (user-defined priority)".to_string(),
         _ => raw.to_string(),
     }
+}
+
+/// Format the IPTC Prefs (2:221) PhotoMechanic preference string.
+///
+/// The raw value is four colon-separated fields, `tagged:colorClass:rating:frameNum`.
+/// ExifTool rewrites it into labelled form; anything that does not match the
+/// four-field shape is passed through untouched.
+///
+/// Mirrors the `PrintConv` of Prefs (2:221) in
+/// `%Image::ExifTool::IPTC::ApplicationRecord`, whose substitution is
+/// `s[\s*(\d+):\s*(\d+):\s*(\d+):\s*(\S*)][Tagged:$1, ColorClass:$2, Rating:$3, FrameNum:$4]`.
+///
+/// # Examples
+///
+/// ```
+/// use oxidex::core::value_formatter::format_iptc_prefs;
+///
+/// assert_eq!(
+///     format_iptc_prefs("0:0:0:-00001"),
+///     "Tagged:0, ColorClass:0, Rating:0, FrameNum:-00001"
+/// );
+/// assert_eq!(
+///     format_iptc_prefs("0:0:5:003344"),
+///     "Tagged:0, ColorClass:0, Rating:5, FrameNum:003344"
+/// );
+/// assert_eq!(format_iptc_prefs("not prefs"), "not prefs"); // Preserves non-matching input
+/// ```
+pub fn format_iptc_prefs(raw: &str) -> String {
+    let fields: Vec<&str> = raw.trim().split(':').collect();
+    if fields.len() != 4 {
+        return raw.to_string();
+    }
+
+    // ExifTool's pattern requires digits for the first three fields and a
+    // non-empty run of non-space characters for the frame number.
+    let (tagged, color_class, rating, frame_num) = (fields[0], fields[1], fields[2], fields[3]);
+    let digits_only = |s: &str| !s.is_empty() && s.trim_start().chars().all(|c| c.is_ascii_digit());
+    if !digits_only(tagged)
+        || !digits_only(color_class)
+        || !digits_only(rating)
+        || frame_num.is_empty()
+        || frame_num.contains(char::is_whitespace)
+    {
+        return raw.to_string();
+    }
+
+    format!(
+        "Tagged:{}, ColorClass:{}, Rating:{}, FrameNum:{}",
+        tagged.trim_start(),
+        color_class.trim_start(),
+        rating.trim_start(),
+        frame_num
+    )
 }
 
 /// Format IPTC CodedCharacterSet from ISO 2022 escape sequence to human-readable.

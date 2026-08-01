@@ -4,8 +4,8 @@
 //! IPTC data is stored in Adobe Photoshop Image Resource Blocks (8BIM).
 
 use crate::core::value_formatter::{
-    format_iptc_coded_charset, format_iptc_date, format_iptc_record_version, format_iptc_time,
-    format_iptc_urgency,
+    format_iptc_coded_charset, format_iptc_date, format_iptc_prefs, format_iptc_record_version,
+    format_iptc_time, format_iptc_urgency,
 };
 use crate::error::Result;
 use crate::parsers::jpeg::segment_parser::Segment;
@@ -151,23 +151,32 @@ pub fn parse_all_iptc_records(input: &[u8]) -> Result<Vec<IptcRecord>> {
 
 /// Maps IPTC dataset numbers to tag names.
 ///
+/// Record 1 mirrors `%Image::ExifTool::IPTC::EnvelopeRecord` and record 2
+/// mirrors `%Image::ExifTool::IPTC::ApplicationRecord` (IPTC.pm). The names must
+/// match ExifTool's exactly, because a name that ExifTool never emits produces a
+/// key that can never be compared against it.
+///
+/// Datasets absent from those tables keep the `IPTC:Unknown-<rec>-<set>` form.
+/// ExifTool only reports such datasets under `-u`, as `IPTC_ApplicationRecord_<n>`.
+///
 /// # Parameters
 /// - `record_number`: The record number (usually 2 for Application Record)
 /// - `dataset_number`: The dataset number identifying the tag
 ///
 /// # Returns
-/// Maps IPTC dataset numbers to tag names.
-///
-/// Returns static string slices for known datasets to avoid allocations.
 /// Tag name in the format "IPTC:TagName"
 pub fn dataset_to_tag_name(record_number: u8, dataset_number: u8) -> String {
     // Handle Record 2 (Application Record)
     if record_number == 2 {
         let tag_name = match dataset_number {
             0 => "IPTC:ApplicationRecordVersion",
+            3 => "IPTC:ObjectTypeReference",
+            4 => "IPTC:ObjectAttributeReference",
             5 => "IPTC:ObjectName",
             7 => "IPTC:EditStatus",
+            8 => "IPTC:EditorialUpdate",
             10 => "IPTC:Urgency",
+            12 => "IPTC:SubjectReference",
             15 => "IPTC:Category",
             20 => "IPTC:SupplementalCategories",
             22 => "IPTC:FixtureIdentifier",
@@ -215,9 +224,21 @@ pub fn dataset_to_tag_name(record_number: u8, dataset_number: u8) -> String {
             152 => "IPTC:AudioSamplingResolution",
             153 => "IPTC:AudioDuration",
             154 => "IPTC:AudioOutcue",
+            184 => "IPTC:JobID",
+            185 => "IPTC:MasterDocumentID",
+            186 => "IPTC:ShortDocumentID",
+            187 => "IPTC:UniqueDocumentID",
+            188 => "IPTC:OwnerID",
             200 => "IPTC:ObjectPreviewFileFormat",
-            201 => "IPTC:ObjectPreviewFileFormatVer",
+            201 => "IPTC:ObjectPreviewFileVersion",
             202 => "IPTC:ObjectPreviewData",
+            221 => "IPTC:Prefs",
+            225 => "IPTC:ClassifyState",
+            228 => "IPTC:SimilarityIndex",
+            230 => "IPTC:DocumentNotes",
+            231 => "IPTC:DocumentHistory",
+            232 => "IPTC:ExifCameraInfo",
+            255 => "IPTC:CatalogSets",
             _ => return format!("IPTC:Unknown-{}-{}", record_number, dataset_number),
         };
         return tag_name.to_string();
@@ -370,6 +391,10 @@ pub fn extract_iptc_from_segments(segments: &[Segment]) -> Result<Vec<(String, S
                                                 // 35=ReleaseTime, 38=ExpirationTime, 60=TimeCreated
                                                 // 63=DigitalCreationTime
                                                 format_iptc_time(&decode_iptc_string(&record.data))
+                                            }
+                                            221 => {
+                                                // Prefs: tagged:colorClass:rating:frameNum
+                                                format_iptc_prefs(&decode_iptc_string(&record.data))
                                             }
                                             _ => decode_iptc_string(&record.data),
                                         }
@@ -528,9 +553,39 @@ mod tests {
         assert_eq!(dataset_to_tag_name(1, 0), "IPTC:EnvelopeRecordVersion");
         assert_eq!(dataset_to_tag_name(1, 90), "IPTC:CodedCharacterSet");
 
-        // Unknown dataset should return generic name
-        assert_eq!(dataset_to_tag_name(2, 255), "IPTC:Unknown-2-255");
+        // Datasets outside ExifTool's tables still return the generic name.
+        // 2:117 and 2:240 are seen in the wild but absent from %ApplicationRecord.
+        assert_eq!(dataset_to_tag_name(2, 117), "IPTC:Unknown-2-117");
         assert_eq!(dataset_to_tag_name(3, 5), "IPTC:Unknown-3-5");
+    }
+
+    /// Every dataset in ExifTool's `%Image::ExifTool::IPTC::ApplicationRecord`
+    /// must map to the name ExifTool itself prints, or the key can never match.
+    ///
+    /// Names verified against IPTC.pm (ApplicationRecord, lines 251-697) of the
+    /// pinned ExifTool checkout - not from memory.
+    #[test]
+    fn test_dataset_to_tag_name_matches_exiftool_application_record() {
+        // Datasets that were previously absent and fell through to Unknown-2-N.
+        assert_eq!(dataset_to_tag_name(2, 3), "IPTC:ObjectTypeReference");
+        assert_eq!(dataset_to_tag_name(2, 4), "IPTC:ObjectAttributeReference");
+        assert_eq!(dataset_to_tag_name(2, 8), "IPTC:EditorialUpdate");
+        assert_eq!(dataset_to_tag_name(2, 12), "IPTC:SubjectReference");
+        assert_eq!(dataset_to_tag_name(2, 184), "IPTC:JobID");
+        assert_eq!(dataset_to_tag_name(2, 185), "IPTC:MasterDocumentID");
+        assert_eq!(dataset_to_tag_name(2, 186), "IPTC:ShortDocumentID");
+        assert_eq!(dataset_to_tag_name(2, 187), "IPTC:UniqueDocumentID");
+        assert_eq!(dataset_to_tag_name(2, 188), "IPTC:OwnerID");
+        assert_eq!(dataset_to_tag_name(2, 221), "IPTC:Prefs");
+        assert_eq!(dataset_to_tag_name(2, 225), "IPTC:ClassifyState");
+        assert_eq!(dataset_to_tag_name(2, 228), "IPTC:SimilarityIndex");
+        assert_eq!(dataset_to_tag_name(2, 230), "IPTC:DocumentNotes");
+        assert_eq!(dataset_to_tag_name(2, 231), "IPTC:DocumentHistory");
+        assert_eq!(dataset_to_tag_name(2, 232), "IPTC:ExifCameraInfo");
+        assert_eq!(dataset_to_tag_name(2, 255), "IPTC:CatalogSets");
+
+        // 2:201 was present but misspelled as "ObjectPreviewFileFormatVer".
+        assert_eq!(dataset_to_tag_name(2, 201), "IPTC:ObjectPreviewFileVersion");
     }
 
     #[test]
