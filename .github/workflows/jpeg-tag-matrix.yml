@@ -34,6 +34,8 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: write
+      pull-requests: write
+      actions: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -100,17 +102,36 @@ jobs:
             docs/reference/jpeg-tag-matrix.md \
             docs/reference/jpeg-tag-baseline.json || echo "changed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Commit and push docs updates
+      # Opens an auto-merging PR rather than pushing straight to main. main now
+      # requires the "Lint & Audit"/"Build & Test" checks, which blocks direct
+      # pushes — including this bot's. Going through a PR keeps the automation
+      # working AND means these commits are verified; previously they carried
+      # "[skip ci]" and landed on main entirely unchecked.
+      - name: Open auto-merging PR for docs updates
         if: github.ref == 'refs/heads/main' && steps.changes.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SRC_SHA: ${{ github.sha }}
         run: |
+          set -euo pipefail
+          branch="bot/jpeg-tag-matrix-${SRC_SHA}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
           git add docs/reference/jpeg-tag-support.md \
             docs/reference/jpeg-tag-matrix.md \
             docs/reference/jpeg-tag-baseline.json
-          git commit -m "docs: auto-update JPEG tag matrix (exiftool ${EXIFTOOL_VERSION})
-
-          Generated from commit ${{ github.sha }}
-
-          [skip ci]"
-          git push
+          # NOTE: no "[skip ci]" — a required status check that never runs
+          # leaves the PR unmergeable forever.
+          git commit -m "docs: auto-update JPEG tag matrix (exiftool ${EXIFTOOL_VERSION})" \
+                     -m "Generated from commit ${SRC_SHA}"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "docs: auto-update JPEG tag matrix (exiftool ${EXIFTOOL_VERSION})" \
+            --body "Regenerated from ${SRC_SHA} by the JPEG Tag Matrix workflow."
+          # Events triggered by GITHUB_TOKEN do not start workflow runs, so
+          # this PR gets no `pull_request` CI run and its required checks would
+          # never report -- leaving it open forever. workflow_dispatch is the
+          # documented exception to that rule, so ask for the run explicitly.
+          gh workflow run ci.yml --ref "$branch"
+          gh pr merge "$branch" --squash --auto --delete-branch

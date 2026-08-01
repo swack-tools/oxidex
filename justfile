@@ -275,17 +275,24 @@ ci:
         cargo fmt --all -- --check 2>/dev/null || { echo "❌ Format check failed"; exit 1; }
     fi
 
-    # Step 2: Clippy (builds release artifacts that nextest will reuse)
+    # Step 2: C header freshness (cheap, and the check that broke main twice —
+    # #211 and #256 both added a public constant without regenerating
+    # api/oxidex.h while every one of the 3,830+ tests still passed).
+    echo ""
+    echo "📄 Checking C header is up-to-date..."
+    just cbindgen-check
+
+    # Step 3: Clippy (builds release artifacts that nextest will reuse)
     echo ""
     echo "🔍 Running clippy (release profile)..."
     cargo clippy --release --all-features -- -D warnings
 
-    # Step 3: Build all targets including test binaries
+    # Step 4: Build all targets including test binaries
     echo ""
     echo "🔨 Building all targets (release)..."
     cargo build --release --all-features --all-targets
 
-    # Step 4: Run nextest and doc tests in PARALLEL
+    # Step 5: Run nextest and doc tests in PARALLEL
     # Edition 2024 merges doctests into single binary (~36s vs ~3min in 2021)
     echo ""
     echo "🧪 Running tests (nextest + doc tests in parallel)..."
@@ -312,7 +319,7 @@ ci:
         exit 1
     fi
 
-    # Step 5: Run C FFI integration test
+    # Step 6: Run C FFI integration test
     echo ""
     echo "Running C FFI integration test..."
     cargo test --test ffi_c_integration -- --nocapture
@@ -323,22 +330,26 @@ ci:
     echo ""
     echo "✅ All CI checks passed in ${ELAPSED}s!"
     echo "   ✓ Format check"
+    echo "   ✓ C header up-to-date"
     echo "   ✓ Clippy (release profile)"
     echo "   ✓ Build (release with all features)"
     echo "   ✓ Tests (nextest + doc tests)"
     echo "   ✓ C FFI integration test"
 
 # Run CI without nextest (fallback if nextest not installed)
-ci-standard: fmt-check lint-release build-release test test-ffi-c
+ci-standard: fmt-check cbindgen-check lint-release build-release test test-ffi-c
     @echo "All CI checks passed!"
     @echo "✓ Format check"
+    @echo "✓ C header up-to-date"
     @echo "✓ Clippy (release profile)"
     @echo "✓ Build (release with all features)"
     @echo "✓ Tests (cargo test)"
     @echo "✓ C FFI integration test"
 
-# Pre-commit hook: format check, lint, test
-pre-commit: fmt-check lint test
+# Pre-commit hook: format check, header check, lint, test
+# cbindgen-check runs early because it is the cheapest of the four and is the
+# check that broke main twice (#211, #256) by being absent from this list.
+pre-commit: fmt-check cbindgen-check lint test
     @echo "Pre-commit checks passed!"
 
 # Install git hooks (absolute core.hooksPath so linked worktrees resolve the
@@ -347,8 +358,9 @@ pre-commit: fmt-check lint test
 install-hooks:
     @echo "Installing git hooks..."
     git config core.hooksPath "$(cd "$(git rev-parse --git-common-dir)/.." && pwd)/.githooks"
-    @echo "Git hooks installed! Pre-commit will run fmt-check, lint, and test."
-    @echo "Skip with OXIDEX_SKIP_HOOKS=1; linked worktrees are exempt."
+    @echo "Git hooks installed! Pre-commit will run fmt-check, cbindgen-check, lint, and test."
+    @echo "Skip with OXIDEX_SKIP_HOOKS=1; linked worktrees are exempt from"
+    @echo "everything except the (cheap) C header check."
 
 # Coverage report (requires cargo-tarpaulin)
 coverage:
@@ -468,14 +480,40 @@ release version: release-check
 # C FFI header generation
 # -----------------------
 
+# cbindgen version pinned by CI — .github/workflows/ci.yml installs
+# cbindgen@0.29.2. Newer cbindgen emits extra #define macros, so regenerating
+# with a mismatched local binary writes a header CI then rejects. Keep the two
+# in sync; changing this value means changing ci.yml too.
+cbindgen_version := "0.29.2"
+
+# Refuse to generate or verify with a cbindgen that disagrees with CI. Without
+# this, `just cbindgen` on a newer toolchain "fixes" the header locally and
+# breaks it in CI, which looks identical to the bug it was meant to fix.
+_cbindgen-version-guard:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v cbindgen >/dev/null 2>&1; then
+        echo "cbindgen is not installed. CI pins {{cbindgen_version}}:" >&2
+        echo "  cargo install cbindgen --version {{cbindgen_version}} --locked" >&2
+        exit 1
+    fi
+    have=$(cbindgen --version 2>/dev/null | awk '{print $2}')
+    if [ "$have" != "{{cbindgen_version}}" ]; then
+        echo "cbindgen $have is installed but CI pins {{cbindgen_version}}." >&2
+        echo "Different versions emit different headers, so this check cannot" >&2
+        echo "tell you what CI will see. Install the pinned version:" >&2
+        echo "  cargo install cbindgen --version {{cbindgen_version}} --locked --force" >&2
+        exit 1
+    fi
+
 # Regenerate C header file (requires cbindgen)
-cbindgen:
+cbindgen: _cbindgen-version-guard
     @echo "Regenerating C header..."
     cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h
     @echo "C header updated at api/oxidex.h"
 
 # Verify C header is up-to-date
-cbindgen-check:
+cbindgen-check: _cbindgen-version-guard
     @echo "Checking C header is up-to-date..."
     cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h.tmp
     diff -q api/oxidex.h api/oxidex.h.tmp || (rm api/oxidex.h.tmp && echo "C header out of date! Run 'just cbindgen'" && exit 1)
