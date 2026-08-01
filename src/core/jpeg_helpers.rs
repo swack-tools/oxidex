@@ -410,6 +410,7 @@ pub fn process_iptc_segments(segments: &[Segment], metadata: &mut MetadataMap) {
 pub fn process_photoshop_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     const APP13_MARKER: u16 = 0xFFED;
     const PHOTOSHOP_HEADER: &[u8] = b"Photoshop 3.0\0";
+    const ADOBE_CM_HEADER: &[u8] = b"Adobe_CM";
 
     // Join runs of consecutive Photoshop APP13 segments, dropping the
     // repeated header on every continuation segment.
@@ -432,6 +433,16 @@ pub fn process_photoshop_segments(segments: &[Segment], metadata: &mut MetadataM
     };
 
     for segment in segments.iter() {
+        if segment.marker == APP13_MARKER
+            && let Some(body) = segment.data.strip_prefix(ADOBE_CM_HEADER)
+            && let Some(value) = body.get(..2)
+        {
+            metadata.insert(
+                "APP13:AdobeCMType".to_string(),
+                TagValue::Integer(u16::from_be_bytes([value[0], value[1]]) as i64),
+            );
+        }
+
         let is_photoshop =
             segment.marker == APP13_MARKER && segment.data.starts_with(PHOTOSHOP_HEADER);
         if !is_photoshop {
@@ -1006,6 +1017,28 @@ mod tests {
             metadata.get("IPTC:ReferenceNumber"),
             Some(&TagValue::new_string("0042"))
         );
+    }
+
+    #[test]
+    fn process_photoshop_segments_extracts_adobe_cm_type() {
+        let data = b"Adobe_CM\x00\x03";
+        let segment = Segment::new(0xFFED, 0, data);
+        let mut metadata = MetadataMap::new();
+
+        process_photoshop_segments(&[segment], &mut metadata);
+
+        assert_eq!(metadata.get_integer("APP13:AdobeCMType"), Some(3));
+    }
+
+    #[test]
+    fn process_photoshop_segments_ignores_truncated_adobe_cm() {
+        let data = b"Adobe_CM\x00";
+        let segment = Segment::new(0xFFED, 0, data);
+        let mut metadata = MetadataMap::new();
+
+        process_photoshop_segments(&[segment], &mut metadata);
+
+        assert!(!metadata.contains_key("APP13:AdobeCMType"));
     }
 }
 
