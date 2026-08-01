@@ -169,37 +169,6 @@ pub fn gcd(a: u32, b: u32) -> u32 {
 // RATIONAL VALUE FORMATTING
 // ============================================================================
 
-/// Formats a GPS coordinate from 3 rational values (degrees, minutes, seconds).
-///
-/// GPS coordinates are stored as 3 rationals representing degrees, minutes, and seconds.
-/// This function converts them to a human-readable DMS (Degrees, Minutes, Seconds) format.
-///
-/// # Arguments
-///
-/// * `bytes` - Raw bytes containing 3 rationals (24 bytes total)
-/// * `byte_order` - Byte order for interpreting values
-///
-/// # Returns
-///
-/// Formatted GPS coordinate string (e.g., "37 deg 46' 33.24\"")
-pub fn format_gps_coordinate(bytes: &[u8], byte_order: ByteOrder) -> String {
-    let mut dms = Vec::new();
-    for i in 0..3 {
-        let offset = i * 8;
-        let numerator = read_u32(&bytes[offset..offset + 4], byte_order);
-        let denominator = read_u32(&bytes[offset + 4..offset + 8], byte_order);
-        if denominator != 0 {
-            dms.push(numerator as f64 / denominator as f64);
-        } else {
-            dms.push(numerator as f64);
-        }
-    }
-    // Format seconds with up to 9 decimal places, trim trailing zeros for ExifTool compat
-    let sec_str = format!("{:.9}", dms[2]);
-    let sec_trimmed = sec_str.trim_end_matches('0').trim_end_matches('.');
-    format!("{} deg {}' {}\"", dms[0] as i32, dms[1] as i32, sec_trimmed)
-}
-
 /// Parses an array of rational values into a space-separated string.
 ///
 /// # Arguments

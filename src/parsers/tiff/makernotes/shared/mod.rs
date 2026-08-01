@@ -48,7 +48,6 @@ pub mod table_ifd;
 
 pub mod tag_registry;
 /// Common value interpretation and decoding functions
-pub mod value_decoders;
 /// Common value extraction helpers (strings, integers)
 pub mod value_extractors;
 
