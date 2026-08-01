@@ -50,7 +50,7 @@ MakerNote parsers for 36+ camera manufacturers are **fully implemented and conne
 
 ### Supported Manufacturers
 
-**Traditional Cameras:** Canon, Nikon, Sony, Panasonic, Fujifilm, Leica, Phase One
+**Traditional Cameras:** Canon, Nikon, Sony, Panasonic, Fujifilm, Leica
 
 **Smartphones:** Apple, Google, Microsoft, Qualcomm
 
