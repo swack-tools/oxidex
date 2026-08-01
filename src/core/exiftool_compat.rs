@@ -52,7 +52,8 @@
 //! let formatted = format_for_exiftool(&metadata);
 //!
 //! assert_eq!(formatted.get_string("EXIF:GPSLatitudeRef"), Some("North"));
-//! assert_eq!(formatted.get_string("EXIF:FocalLength"), Some("50 mm"));
+//! // 0x920a forces one decimal: Exif.pm:2401 `sprintf("%.1f mm",$val)`
+//! assert_eq!(formatted.get_string("EXIF:FocalLength"), Some("50.0 mm"));
 //! ```
 
 use crate::core::binary_decoders::decode_user_comment;
