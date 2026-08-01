@@ -9,7 +9,9 @@
 
 use std::collections::HashMap;
 
-use super::af_points::{self, AF_POINTS_39, AF_POINTS_51, AF_POINTS_135, AF_POINTS_153};
+use super::af_points::{
+    self, AF_POINTS_39, AF_POINTS_51, AF_POINTS_81, AF_POINTS_105, AF_POINTS_135, AF_POINTS_153,
+};
 use super::value_reader::{ascii_value, read_u16};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
@@ -396,6 +398,35 @@ pub fn parse_af_info2(
                 "Nikon:AFCoordinatesAvailable".to_string(),
                 lookup(NO_YES, coords),
             );
+            if coords == 0 {
+                let schema = byte(6).unwrap_or(0);
+                let table = match schema {
+                    1 => Some(AF_POINTS_51),
+                    8 => Some(AF_POINTS_81),
+                    9 => Some(AF_POINTS_105),
+                    _ => None,
+                };
+                let bitmap_len = match schema {
+                    1 => 7,
+                    8 => 11,
+                    9 => 14,
+                    _ => 0,
+                };
+                if let Some(table) = table {
+                    if let Some(raw) = byte(0x38) {
+                        tags.insert(
+                            "Nikon:PrimaryAFPoint".to_string(),
+                            primary_af_point(raw, table),
+                        );
+                    }
+                    if let Some(bits) = data.get(0x0a..0x0a + bitmap_len) {
+                        tags.insert(
+                            "Nikon:AFPointsUsed".to_string(),
+                            af_points::print_af_points_lookup(bits, table),
+                        );
+                    }
+                }
+            }
             put_u16(42, "AFImageWidth", tags);
             put_u16(44, "AFImageHeight", tags);
             if coords == 1 {
@@ -585,6 +616,53 @@ mod tests {
         parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
         assert_eq!(tags["Nikon:AFPointsUsed"], "F8");
         assert_eq!(tags["Nikon:PrimaryAFPoint"], "F8 (Center)");
+    }
+
+    #[test]
+    fn v0300_81point_gated_on_coordinates_unavailable() {
+        // NikonZ50.jpg: AFPointsUsed includes C5,C6,D5,E5,E6, PrimaryAFPoint=D5.
+        // FocusPointSchema=8 (81-point). afPoints81 bit-number for 'E5' is 1
+        // (Nikon.pm:1616) -- use that as the minimal traceable case.
+        let mut data = vec![0u8; 60];
+        data[..4].copy_from_slice(b"0300");
+        data[6] = 8; // FocusPointSchema = 81-point
+        data[7] = 0; // AFCoordinatesAvailable = No
+        data[0x38] = 1; // PrimaryAFPoint raw = 1 -> center
+        data[0x0a] = 0x01; // AFPointsUsed bit-number 1 -> "E5"
+        let mut tags = HashMap::new();
+        parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
+        assert_eq!(tags["Nikon:AFPointsUsed"], "E5");
+        assert_eq!(tags["Nikon:PrimaryAFPoint"], "E5 (Center)");
+    }
+
+    #[test]
+    fn v0300_absent_when_coordinates_available() {
+        let mut data = vec![0u8; 60];
+        data[..4].copy_from_slice(b"0300");
+        data[6] = 8;
+        data[7] = 1; // AFCoordinatesAvailable = Yes -> neither tag exists
+        data[0x38] = 1;
+        data[0x0a] = 0x01;
+        let mut tags = HashMap::new();
+        parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
+        assert!(!tags.contains_key("Nikon:AFPointsUsed"));
+        assert!(!tags.contains_key("Nikon:PrimaryAFPoint"));
+    }
+
+    #[test]
+    fn v0300_105point_d6() {
+        // NikonD6.jpg-shaped: FocusPointSchema=9 (105-point), center bit-number
+        // 1 -> "D8" (Nikon.pm:1500).
+        let mut data = vec![0u8; 60];
+        data[..4].copy_from_slice(b"0300");
+        data[6] = 9;
+        data[7] = 0;
+        data[0x38] = 1;
+        data[0x0a] = 0x01;
+        let mut tags = HashMap::new();
+        parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
+        assert_eq!(tags["Nikon:AFPointsUsed"], "D8");
+        assert_eq!(tags["Nikon:PrimaryAFPoint"], "D8 (Center)");
     }
 
     #[test]
