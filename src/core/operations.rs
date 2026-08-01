@@ -662,6 +662,18 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
         }
     }
 
+    // AFCP (a trailer appended after the JPEG's EOI, and after any other
+    // trailer chained on since -- see afcp.rs) can also carry an IPTC block.
+    // ExifTool treats it as another non-standard location, same as
+    // FotoStation's, so it runs here too, before `process_iptc_segments`, and
+    // for the same reason: the APP13 Photoshop resource outranks it whenever
+    // a file has both.
+    if let Ok(file) = reader.read(0, reader.size() as usize) {
+        for (key, value) in crate::parsers::jpeg::afcp::parse_afcp_trailer(file).iter() {
+            metadata.insert(key.clone(), value.clone());
+        }
+    }
+
     process_iptc_segments(&segments, &mut metadata);
     process_photoshop_segments(&segments, &mut metadata);
     process_icc_segments(&segments, &mut metadata);
