@@ -174,7 +174,8 @@ pub fn parse_raf_makernote(
             0 => "Auto",
             1 => "On",
             2 => "Off",
-            3 => "Red-eye Reduction",
+            // FujiFilm.pm:285 spells this 'Red-eye reduction'.
+            3 => "Red-eye reduction",
             4 => "External",
             _ => "Unknown",
         };

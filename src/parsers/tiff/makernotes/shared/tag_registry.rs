@@ -593,6 +593,19 @@ impl TagRegistry {
 
     /// Decodes an i16 value for the given tag
     ///
+    /// A 32-bit decoder is accepted as well, with the value widened to reach
+    /// it. `register_enum_tag`/`register_enum_tag_required` store a
+    /// `SimpleI32` (their parameter type is `SimpleValueDecoder<i32>`), while
+    /// several parsers read their entries as i16 and call this -- so before
+    /// this arm existed, every one of those tags fell through to
+    /// `value.to_string()` and printed its raw number with the registered
+    /// PrintConv silently unused. Samsung is the whole registry: its parser
+    /// calls `decode_i16` for every entry, so `FaceDetect` on
+    /// Samsung/SamsungGT-I9295.jpg printed `0` where `exiftool -G1 -s` prints
+    /// `Off` (Samsung.pm:381-385, `PrintConv => { 0 => 'Off', 1 => 'On' }`).
+    /// Widening i16 to i32 is lossless, so a decoder keyed on the same numbers
+    /// matches exactly as it would have.
+    ///
     /// # Arguments
     /// * `tag_id` - The tag ID
     /// * `value` - The value to decode
@@ -604,6 +617,8 @@ impl TagRegistry {
             Some(tag) => match &tag.decoder {
                 Some(TagDecoder::I16(decoder)) => decoder(value),
                 Some(TagDecoder::SimpleI16(decoder)) => decoder.decode(value),
+                Some(TagDecoder::I32(decoder)) => decoder(i32::from(value)),
+                Some(TagDecoder::SimpleI32(decoder)) => decoder.decode(i32::from(value)),
                 _ => value.to_string(),
             },
             None => value.to_string(),

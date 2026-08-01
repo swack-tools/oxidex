@@ -24,6 +24,27 @@ const MM_SUFFIX_TAGS: &[&str] = &[
     "FocalLengthIn35mmFilm",
 ];
 
+/// Groups whose `FocalLength` is EXIF tag 0x920a, whose PrintConv is
+/// `sprintf("%.1f mm",$val)` (Exif.pm:2401) -- one forced decimal, always.
+///
+/// Deliberately an explicit allow-list of family-0/family-1 group names rather
+/// than a check on the bare tag name: the maker-note tables named
+/// `FocalLength` print a bare `"$val mm"` with no decimal forced (Canon.pm:3138
+/// and :3176, `[Canon] FocalLength : 34 mm`), so rounding every `FocalLength`
+/// would trade one wrong rendering for another. `ExifIFD` is the group oxidex
+/// emits, `EXIF` the family-0 name the comparison harness normalizes it to,
+/// and the remaining IFD names cover a 0x920a written outside the ExifIFD.
+const EXIF_FOCAL_LENGTH_GROUPS: &[&str] = &[
+    "EXIF",
+    "ExifIFD",
+    "IFD0",
+    "IFD1",
+    "IFD2",
+    "IFD3",
+    "SubIFD",
+    "InteropIFD",
+];
+
 /// Tags that require "m" (meter) suffix for distance/altitude measurements.
 ///
 /// These tags represent physical distances or altitudes in meters and should
@@ -73,7 +94,9 @@ const SECONDS_SUFFIX_TAGS: &[&str] = &["ExposureTime", "ShutterSpeedValue"];
 /// // Focal length tags get "mm" suffix
 /// assert_eq!(format_with_unit("FocalLength", "6.0"), "6.0 mm");
 /// assert_eq!(format_with_unit("FocalLengthIn35mmFormat", "31"), "31 mm");
-/// assert_eq!(format_with_unit("EXIF:FocalLength", "50"), "50 mm");
+///
+/// // ...but EXIF's own FocalLength (0x920a) forces one decimal place
+/// assert_eq!(format_with_unit("EXIF:FocalLength", "50"), "50.0 mm");
 ///
 /// // Distance tags get "m" suffix
 /// assert_eq!(format_with_unit("SubjectDistance", "2.5"), "2.5 m");
@@ -90,6 +113,14 @@ pub fn format_with_unit(tag_name: &str, value: &str) -> String {
     // Extract the base tag name by taking the part after the last colon.
     // This handles fully-qualified names like "EXIF:FocalLength" or "Composite:FocalLengthIn35mmFormat"
     let base_name = tag_name.rsplit(':').next().unwrap_or(tag_name);
+
+    // EXIF's own FocalLength (0x920a) forces exactly one decimal place --
+    // Exif.pm:2401 `PrintConv => 'sprintf("%.1f mm",$val)'`. That is what
+    // makes `exiftool -G1 -s` print `15.0 mm`, `70.0 mm` and `7.2 mm` where a
+    // plain "append mm" renders `15 mm`, `70 mm` and `7.203125 mm`.
+    if base_name == "FocalLength" && is_exif_focal_length_group(tag_name) {
+        return format_focal_length_mm(value);
+    }
 
     // Handle millimeter suffix for focal length tags
     if MM_SUFFIX_TAGS.contains(&base_name) {
@@ -132,6 +163,34 @@ fn format_with_mm_suffix(value: &str) -> String {
         return value.to_string();
     }
     format!("{} mm", value)
+}
+
+/// True when `tag_name`'s group is one whose `FocalLength` is EXIF 0x920a.
+///
+/// An unqualified `"FocalLength"` is NOT treated as EXIF's: the maker-note
+/// parsers hand their already-rendered `"34 mm"` through this same function,
+/// and there is nothing in a bare tag name to tell the two apart.
+fn is_exif_focal_length_group(tag_name: &str) -> bool {
+    match tag_name.rsplit_once(':') {
+        Some((group, _)) => EXIF_FOCAL_LENGTH_GROUPS.contains(&group),
+        None => false,
+    }
+}
+
+/// Renders EXIF 0x920a's `sprintf("%.1f mm",$val)` (Exif.pm:2401).
+///
+/// Idempotent: a value already carrying the suffix is left alone, so a
+/// maker-note-style `"34 mm"` that reaches here through some other path is not
+/// re-parsed. An unparseable value falls back to plain suffixing rather than
+/// being dropped or zeroed.
+fn format_focal_length_mm(value: &str) -> String {
+    if value.ends_with(" mm") {
+        return value.to_string();
+    }
+    match value.trim().parse::<f64>() {
+        Ok(v) => format!("{:.1} mm", v),
+        Err(_) => format_with_mm_suffix(value),
+    }
 }
 
 /// Format a value with " m" suffix if not already present.
@@ -294,8 +353,57 @@ mod tests {
         assert_eq!(format_with_unit("FocalLength", "24.5"), "24.5 mm");
     }
 
+    /// EXIF 0x920a forces one decimal: Exif.pm:2401
+    /// `PrintConv => 'sprintf("%.1f mm",$val)'`.
+    ///
+    /// Each pair below is a real corpus case where `exiftool -G1 -s` prints
+    /// the left value and oxidex printed the right one before this rule:
+    /// CanonRaw.cr3 15.0/15, DNG.dng 55.0/55, Nikon.nef 18.0/18,
+    /// FujiFilm.raf 70.0/70, Minolta.mrw 7.2/7.203125.
+    #[test]
+    fn test_exif_focal_length_forces_one_decimal() {
+        assert_eq!(format_with_unit("ExifIFD:FocalLength", "15"), "15.0 mm");
+        assert_eq!(format_with_unit("EXIF:FocalLength", "55"), "55.0 mm");
+        assert_eq!(format_with_unit("ExifIFD:FocalLength", "18"), "18.0 mm");
+        assert_eq!(format_with_unit("ExifIFD:FocalLength", "70"), "70.0 mm");
+        // sprintf rounds, it does not truncate
+        assert_eq!(
+            format_with_unit("ExifIFD:FocalLength", "7.203125"),
+            "7.2 mm"
+        );
+        assert_eq!(format_with_unit("ExifIFD:FocalLength", "10.093"), "10.1 mm");
+        assert_eq!(format_with_unit("ExifIFD:FocalLength", "1.48"), "1.5 mm");
+        // Already-correct renderings are unchanged
+        assert_eq!(format_with_unit("ExifIFD:FocalLength", "3.3"), "3.3 mm");
+        assert_eq!(format_with_unit("ExifIFD:FocalLength", "24.2"), "24.2 mm");
+    }
+
+    /// The maker-note tables named `FocalLength` print `"$val mm"` with no
+    /// forced decimal (Canon.pm:3138, Canon.pm:3176 --
+    /// `[Canon] FocalLength : 34 mm`), so the EXIF rule must not reach them.
+    #[test]
+    fn test_makernote_focal_length_keeps_bare_value() {
+        assert_eq!(format_with_unit("Canon:FocalLength", "34"), "34 mm");
+        assert_eq!(format_with_unit("MakerNotes:FocalLength", "55"), "55 mm");
+        assert_eq!(format_with_unit("Nikon:FocalLength", "18.3 mm"), "18.3 mm");
+        // A bare, group-less name cannot be identified as EXIF's, and the
+        // maker-note parsers are the ones that pass values that way.
+        assert_eq!(format_with_unit("FocalLength", "50"), "50 mm");
+    }
+
+    /// EXIF's FocalLengthIn35mmFormat is a DIFFERENT PrintConv --
+    /// Exif.pm:2842 `PrintConv => '"$val mm"'`, an int16u with no decimal
+    /// (`[ExifIFD] FocalLengthIn35mmFormat : 77 mm`). Only 0x920a rounds.
     #[test]
     fn test_focal_length_in_35mm_format() {
+        assert_eq!(
+            format_with_unit("ExifIFD:FocalLengthIn35mmFormat", "77"),
+            "77 mm"
+        );
+        assert_eq!(
+            format_with_unit("EXIF:FocalLengthIn35mmFormat", "105"),
+            "105 mm"
+        );
         // FocalLengthIn35mmFormat is the specific tag mentioned in the task
         assert_eq!(format_with_unit("FocalLengthIn35mmFormat", "31"), "31 mm");
         assert_eq!(format_with_unit("FocalLengthIn35mmFormat", "75"), "75 mm");
@@ -319,7 +427,7 @@ mod tests {
     #[test]
     fn test_focal_length_with_group_prefix() {
         // Fully-qualified tag names with group prefix should work
-        assert_eq!(format_with_unit("EXIF:FocalLength", "50"), "50 mm");
+        assert_eq!(format_with_unit("EXIF:FocalLength", "50"), "50.0 mm");
         assert_eq!(
             format_with_unit("Composite:FocalLengthIn35mmFormat", "35"),
             "35 mm"

@@ -62,16 +62,16 @@ use crate::core::formatters::gps_status::{
 };
 use crate::core::formatters::{
     decode_cfa_pattern, decode_gps_processing_method, decode_scene_type, decode_version_bytes,
-    format_color_space, format_components_configuration, format_compression, format_contrast,
-    format_custom_rendered, format_exposure_mode, format_exposure_program, format_file_source,
-    format_flash, format_gain_control, format_gps_altitude_ref, format_gps_direction_ref,
-    format_gps_lat_ref, format_gps_lon_ref, format_gps_speed_ref, format_icc_value,
-    format_integer_precision_values, format_interop_index, format_light_source,
-    format_metering_mode, format_orientation, format_resolution_unit, format_saturation,
-    format_scene_capture_type, format_sensing_method, format_sharpness,
+    exiftool_rational_number, format_color_space, format_components_configuration,
+    format_compression, format_contrast, format_custom_rendered, format_exposure_mode,
+    format_exposure_program, format_file_source, format_flash, format_gain_control,
+    format_gps_altitude_ref, format_gps_direction_ref, format_gps_lat_ref, format_gps_lon_ref,
+    format_gps_speed_ref, format_icc_value, format_integer_precision_values, format_interop_index,
+    format_light_source, format_metering_mode, format_orientation, format_resolution_unit,
+    format_saturation, format_scene_capture_type, format_sensing_method, format_sharpness,
     format_subject_distance_range, format_three_decimal_values, format_white_balance,
-    format_with_unit, format_ycbcr_positioning, is_icc_matrix_tag, is_integer_precision_tag,
-    is_three_decimal_tag,
+    format_with_unit, format_ycbcr_positioning, format_ycbcr_subsampling_string, is_icc_matrix_tag,
+    is_integer_precision_tag, is_three_decimal_tag,
 };
 use crate::core::{MetadataMap, TagValue};
 
@@ -481,6 +481,18 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
         return TagValue::String(format_ycbcr_positioning(i));
     }
 
+    // YCbCrSubSampling (Exif.pm:1417-1426,
+    // `PrintConv => \%Image::ExifTool::JPEG::yCbCrSubSampling`). The pair of
+    // int16u values arrives here as the space-separated string the SHORT-array
+    // reader produced, e.g. "2 1"; ExifTool prints `YCbCr4:2:2 (2 1)`. The
+    // formatter for it already existed but nothing called it, so
+    // AppleQT-200.jpg reported the bare `2 1`.
+    if base_name == "YCbCrSubSampling"
+        && let Some(s) = value.as_string()
+    {
+        return TagValue::String(format_ycbcr_subsampling_string(s));
+    }
+
     // CustomRendered enum (0-8)
     if base_name == "CustomRendered"
         && let Some(i) = value.as_integer()
@@ -653,6 +665,33 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     }
 
     // ---------------------------------------------------------------------
+    // Rule 16b: AmbientTemperature carries a unit, not a number format.
+    //
+    // Exif.pm:2532-2538 -- `0x9400 => { Name => 'AmbientTemperature',
+    // Writable => 'rational64s', PrintConv => '"$val C"' }`. The number is
+    // whatever GetRational64s rounded it to, so the sign of a negative zero
+    // survives: `exiftool -G1 -s` on Olympus/OlympusOM-1.jpg prints `-0 C`,
+    // and oxidex printed `-0` with the unit missing entirely.
+    //
+    // Only the EXIF tag is meant here. Several maker-note tables define their
+    // own temperature tags with different PrintConvs (Olympus's
+    // CameraTemperature among them), so this must not key on the bare name.
+    // ---------------------------------------------------------------------
+    if base_name == "AmbientTemperature"
+        && tag_name != base_name
+        && let TagValue::Rational {
+            numerator,
+            denominator,
+        } = value
+        && *denominator != 0
+    {
+        return TagValue::String(format!(
+            "{} C",
+            exiftool_rational_number(f64::from(*numerator) / f64::from(*denominator))
+        ));
+    }
+
+    // ---------------------------------------------------------------------
     // Rule 17: Special Values (infinity -> "undef", -0 -> "0")
     // Handle special float/rational values that result from invalid/undefined data.
     // GPS tags like GPSDestBearing/GPSDestDistance produce infinity when
@@ -720,7 +759,94 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     }
 
     // ---------------------------------------------------------------------
-    // Rule 20: Default - Return original value unchanged
+    // Rule 19b: APEX and exposure tags, which DO have a PrintConv and so must
+    // be resolved before the catch-all below turns them into plain numbers.
+    //
+    // ApertureValue (Exif.pm:2327-2335) and MaxApertureValue
+    // (Exif.pm:2350-2359) are both
+    //     ValueConv => '2 ** ($val / 2)', PrintConv => 'sprintf("%.1f",$val)'
+    // -- stored as an APEX value, displayed as an F number. The stored 3.625
+    // in CanonRaw.cr3 is `3.5`, not `3.625`.
+    // ---------------------------------------------------------------------
+    if matches!(base_name, "ApertureValue" | "MaxApertureValue")
+        && let TagValue::Rational {
+            numerator,
+            denominator,
+        } = value
+        && *denominator != 0
+    {
+        let apex = f64::from(*numerator) / f64::from(*denominator);
+        return TagValue::String(format!("{:.1}", 2f64.powf(apex / 2.0)));
+    }
+
+    // ---------------------------------------------------------------------
+    // Rule 19c: ShutterSpeedValue (Exif.pm:2317-2326)
+    //     ValueConv => 'IsFloat($val) && abs($val)<100 ? 2**(-$val) : 0'
+    //     PrintConv => 'Image::ExifTool::Exif::PrintExposureTime($val)'
+    // ---------------------------------------------------------------------
+    if base_name == "ShutterSpeedValue"
+        && let TagValue::Rational {
+            numerator,
+            denominator,
+        } = value
+        && *denominator != 0
+    {
+        let apex = f64::from(*numerator) / f64::from(*denominator);
+        let seconds = if apex.abs() < 100.0 {
+            2f64.powf(-apex)
+        } else {
+            0.0
+        };
+        return TagValue::String(print_exposure_time(seconds));
+    }
+
+    // ---------------------------------------------------------------------
+    // Rule 19d: ExposureTime (Exif.pm:1823-1828)
+    //     PrintConv => 'Image::ExifTool::Exif::PrintExposureTime($val)'
+    //
+    // Most parsers hand this over already rendered as a string; the rational
+    // form still reaches here from the RAW paths (FujiFilm.raf, CanonRaw.cr3).
+    // ---------------------------------------------------------------------
+    if base_name == "ExposureTime"
+        && let TagValue::Rational {
+            numerator,
+            denominator,
+        } = value
+        && *denominator != 0
+    {
+        return TagValue::String(print_exposure_time(
+            f64::from(*numerator) / f64::from(*denominator),
+        ));
+    }
+
+    // ---------------------------------------------------------------------
+    // Rule 20: PrintConv-less rationals
+    //
+    // A rational that reaches this point carries no PrintConv of its own, and
+    // ExifTool prints such a value as the quotient its rational reader already
+    // rounded: `RoundFloat($ratNumer / $ratDenom, 10)`, i.e. `%.10g`
+    // (ExifTool.pm:6081-6097 GetRational64s/GetRational64u, :5937-5941
+    // RoundFloat). Leaving the Rational intact instead let every downstream
+    // renderer invent its own precision -- nine decimal places in one place, a
+    // literal `num/den` in another -- so CanonRaw.cr3's FocalPlaneXResolution
+    // printed `6514.657980456` against ExifTool's `6514.65798`.
+    //
+    // A zero denominator is deliberately not handled here: Rule 17 above has
+    // already turned it into "undef".
+    // ---------------------------------------------------------------------
+    if let TagValue::Rational {
+        numerator,
+        denominator,
+    } = value
+        && *denominator != 0
+    {
+        return TagValue::String(exiftool_rational_number(
+            f64::from(*numerator) / f64::from(*denominator),
+        ));
+    }
+
+    // ---------------------------------------------------------------------
+    // Rule 21: Default - Return original value unchanged
     // ---------------------------------------------------------------------
     value.clone()
 }
@@ -728,6 +854,29 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
 // =============================================================================
 // HELPER FUNCTIONS - Special Value Formatting
 // =============================================================================
+
+/// ExifTool's `Exif::PrintExposureTime` (Exif.pm:5606-5616).
+///
+/// ```text
+/// if ($secs < 0.25001 and $secs > 0) {
+///     return sprintf("1/%d",int(0.5 + 1/$secs));
+/// }
+/// $_ = sprintf("%.1f",$secs);
+/// s/\.0$//;
+/// ```
+///
+/// Note the threshold is 0.25001 seconds, not one second, and that a whole
+/// number loses its `.0`: 1/80 s prints as `1/80`, 2 s as `2`.
+fn print_exposure_time(seconds: f64) -> String {
+    if seconds > 0.0 && seconds < 0.25001 {
+        return format!("1/{}", (0.5 + 1.0 / seconds).trunc() as i64);
+    }
+    let formatted = format!("{:.1}", seconds);
+    formatted
+        .strip_suffix(".0")
+        .map(str::to_string)
+        .unwrap_or(formatted)
+}
 
 /// Formats special float values (infinity, negative zero) to match ExifTool output.
 ///
@@ -908,7 +1057,11 @@ pub fn strip_family_prefix(tag_name: &str) -> &str {
 ///
 /// `true` if this tag should be formatted as a latitude reference
 pub fn is_gps_lat_ref(base_name: &str) -> bool {
-    base_name == "GPSLatitudeRef"
+    // GPSDestLatitudeRef (0x0013) shares GPSLatitudeRef's PrintConv table --
+    // both are `PrintConv => \%printConvLatRef` (GPS.pm:74 and GPS.pm:245), so
+    // both print `North`/`South`. Only the first was listed here, leaving
+    // SamsungL73.jpg's GPSDestLatitudeRef as the raw `N`.
+    matches!(base_name, "GPSLatitudeRef" | "GPSDestLatitudeRef")
 }
 
 /// Checks if the tag is a GPS longitude reference (GPSLongitudeRef).
@@ -921,7 +1074,10 @@ pub fn is_gps_lat_ref(base_name: &str) -> bool {
 ///
 /// `true` if this tag should be formatted as a longitude reference
 pub fn is_gps_lon_ref(base_name: &str) -> bool {
-    base_name == "GPSLongitudeRef"
+    // Same pairing as the latitude refs: GPSDestLongitudeRef (0x0015) uses
+    // `PrintConv => \%printConvLonRef` exactly as GPSLongitudeRef does
+    // (GPS.pm:91 and GPS.pm:258), printing `East`/`West`.
+    matches!(base_name, "GPSLongitudeRef" | "GPSDestLongitudeRef")
 }
 
 /// Checks if the tag is a GPS direction reference.
@@ -1676,11 +1832,14 @@ mod tests {
     // Unit Suffix tests
     // -------------------------------------------------------------------------
 
+    /// EXIF 0x920a forces one decimal (Exif.pm:2401
+    /// `sprintf("%.1f mm",$val)`); FocalLengthIn35mmFormat does not
+    /// (Exif.pm:2842 `"$val mm"`).
     #[test]
     fn test_focal_length_unit_suffix() {
         let value = TagValue::String("50".to_string());
         let formatted = format_tag_value("EXIF:FocalLength", &value);
-        assert_eq!(formatted.as_string(), Some("50 mm"));
+        assert_eq!(formatted.as_string(), Some("50.0 mm"));
 
         let value = TagValue::String("31".to_string());
         let formatted = format_tag_value("FocalLengthIn35mmFormat", &value);
@@ -1691,18 +1850,28 @@ mod tests {
     fn test_focal_length_from_integer() {
         let value = TagValue::Integer(50);
         let formatted = format_tag_value("EXIF:FocalLength", &value);
-        assert_eq!(formatted.as_string(), Some("50 mm"));
+        assert_eq!(formatted.as_string(), Some("50.0 mm"));
+
+        // A maker-note FocalLength keeps ExifTool's bare `"$val mm"`
+        // (Canon.pm:3138).
+        let formatted = format_tag_value("Canon:FocalLength", &TagValue::Integer(34));
+        assert_eq!(formatted.as_string(), Some("34 mm"));
     }
 
     #[test]
     fn test_focal_length_from_float() {
         let value = TagValue::Float(50.0);
         let formatted = format_tag_value("EXIF:FocalLength", &value);
-        assert_eq!(formatted.as_string(), Some("50 mm"));
+        assert_eq!(formatted.as_string(), Some("50.0 mm"));
 
         let value = TagValue::Float(35.5);
         let formatted = format_tag_value("FocalLength", &value);
         assert_eq!(formatted.as_string(), Some("35.5 mm"));
+
+        // Minolta.mrw's 7.203125 prints as `7.2 mm` under `exiftool -G1 -s`
+        let value = TagValue::Float(7.203125);
+        let formatted = format_tag_value("ExifIFD:FocalLength", &value);
+        assert_eq!(formatted.as_string(), Some("7.2 mm"));
     }
 
     #[test]
@@ -1712,7 +1881,7 @@ mod tests {
             denominator: 10,
         };
         let formatted = format_tag_value("EXIF:FocalLength", &value);
-        assert_eq!(formatted.as_string(), Some("50 mm"));
+        assert_eq!(formatted.as_string(), Some("50.0 mm"));
     }
 
     #[test]
@@ -1768,7 +1937,7 @@ mod tests {
         // GPSLatitudeRef should be formatted
         assert_eq!(formatted.get_string("GPS:GPSLatitudeRef"), Some("North"));
         // FocalLength should have unit suffix
-        assert_eq!(formatted.get_string("EXIF:FocalLength"), Some("50 mm"));
+        assert_eq!(formatted.get_string("EXIF:FocalLength"), Some("50.0 mm"));
     }
 
     #[test]

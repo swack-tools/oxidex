@@ -55,16 +55,24 @@
 /// assert_eq!(format_ycbcr_subsampling(4, 1), "YCbCr4:1:1 (4 1)");
 /// ```
 pub fn format_ycbcr_subsampling(h: i64, v: i64) -> String {
-    // Calculate the chroma subsampling notation
-    // The pattern is YCbCr4:X:Y where:
-    // - 4 represents the Y sample rate (always 4 in standard notation)
-    // - X represents horizontal chroma samples for 4 luma samples
-    // - Y represents vertical chroma samples (0 if v=2, equals X if v=1)
-
-    let x = 4 / h; // Horizontal chroma samples per 4 luma samples
-    let y = if v == 2 { 0 } else { x }; // Vertical: 0 if v=2, same as x if v=1
-
-    format!("YCbCr4:{}:{} ({} {})", x, y, h, v)
+    // `%Image::ExifTool::JPEG::yCbCrSubSampling` (ExifTool.pm:2137-2146),
+    // transcribed verbatim. It is a lookup, not a formula: the derivation
+    // this used to compute (`x = 4/h`, `y = 0 if v == 2 else x`) agrees for
+    // the six common pairs but disagrees for both `v == 4` rows -- it would
+    // print `1 4` as `YCbCr4:4:4` and `2 4` as `YCbCr4:2:2` where ExifTool
+    // prints `YCbCr4:4:1` and `YCbCr4:2:1`.
+    match (h, v) {
+        (1, 1) => "YCbCr4:4:4 (1 1)".to_string(),
+        (2, 1) => "YCbCr4:2:2 (2 1)".to_string(),
+        (2, 2) => "YCbCr4:2:0 (2 2)".to_string(),
+        (4, 1) => "YCbCr4:1:1 (4 1)".to_string(),
+        (4, 2) => "YCbCr4:1:0 (4 2)".to_string(),
+        (1, 2) => "YCbCr4:4:0 (1 2)".to_string(),
+        (1, 4) => "YCbCr4:4:1 (1 4)".to_string(),
+        (2, 4) => "YCbCr4:2:1 (2 4)".to_string(),
+        // ExifTool's fallback for a PrintConv hash miss.
+        _ => format!("Unknown ({} {})", h, v),
+    }
 }
 
 /// Parses a string containing two space-separated integers for YCbCr subsampling.

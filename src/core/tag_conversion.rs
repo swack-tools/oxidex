@@ -11,6 +11,7 @@
 //! - Utility functions for reading multi-byte values in different byte orders
 
 use crate::core::TagValue;
+use crate::core::formatters::exiftool_rational_number;
 use crate::core::operations_helpers::{
     gcd, is_datetime_string, is_printable_ascii, parse_exif_datetime, read_i32, read_u16, read_u32,
 };
@@ -154,6 +155,19 @@ fn handle_special_byte_tags(tag_id: u16, bytes: &[u8]) -> Option<TagValue> {
     const EXIF_VERSION: u16 = 0x9000;
     const COMPONENTS_CONFIGURATION: u16 = 0x9101;
 
+    // The Windows Explorer XP* tags (0x9c9b-0x9c9f). Each is declared
+    // `Format => 'undef', Writable => 'int8u'` with
+    // `ValueConv => '$self->Decode($val,"UCS2","II")'`
+    // (Exif.pm:2586 XPTitle, :2594 XPComment, :2602 XPAuthor,
+    //  :2610 XPKeywords, :2618 XPSubject) -- the bytes are UTF-16
+    // little-endian text, NUL-terminated.
+    const XP_TITLE: u16 = 0x9C9B;
+    const XP_SUBJECT: u16 = 0x9C9F;
+
+    if (XP_TITLE..=XP_SUBJECT).contains(&tag_id) {
+        return Some(TagValue::new_string(decode_utf16le_string(bytes)));
+    }
+
     match tag_id {
         // GPS Version ID (4 bytes: major.minor.rev.0)
         GPS_VERSION_ID if bytes.len() >= 4 => Some(TagValue::new_string(format!(
@@ -188,6 +202,29 @@ fn handle_special_byte_tags(tag_id: u16, bytes: &[u8]) -> Option<TagValue> {
 
         _ => None,
     }
+}
+
+/// Decodes a NUL-terminated UTF-16 little-endian byte string.
+///
+/// This is ExifTool's `Decode($val,"UCS2","II")` for the XP* tags: pairs of
+/// bytes, low byte first, stopping at the first NUL code unit (which is the
+/// terminator ExifTool's `ValueConvInv` writes back). An odd trailing byte is
+/// dropped rather than misread as half a code unit.
+///
+/// An empty value decodes to the empty string, which is what
+/// `exiftool -G1 -s` prints for `[IFD0] XPTitle` on
+/// Nikon/NikonCoolpixS9900.jpg. Before this, the two NUL bytes fell through
+/// to the generic heuristic and came back as the integer `0`.
+fn decode_utf16le_string(bytes: &[u8]) -> String {
+    let mut units = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.chunks_exact(2) {
+        let unit = u16::from_le_bytes([pair[0], pair[1]]);
+        if unit == 0 {
+            break;
+        }
+        units.push(unit);
+    }
+    String::from_utf16_lossy(&units)
 }
 
 // ============================================================================
@@ -252,14 +289,16 @@ fn handle_rational_type(
     let numerator = read_u32(&bytes[0..4], byte_order);
     let denominator = read_u32(&bytes[4..8], byte_order);
 
-    // Special handling for GPS Altitude
+    // Special handling for GPS Altitude.
+    //
+    // GPS.pm:124 -- `PrintConv => '$val =~ /^(inf|undef)$/ ? $val : "$val m"'`.
+    // The only transform is the unit; the number itself is whatever
+    // GetRational64u already rounded it to. Rounding to one decimal here
+    // printed `28.0 m` for Apple_iPhone13Pro.jpg where ExifTool prints
+    // `27.99831776 m`.
     if tag_id == GPS_ALTITUDE && denominator != 0 {
         let value = numerator as f64 / denominator as f64;
-        if value.fract() == 0.0 {
-            return TagValue::new_string(format!("{} m", value as i32));
-        } else {
-            return TagValue::new_string(format!("{:.1} m", value));
-        }
+        return TagValue::new_string(format!("{} m", exiftool_rational_number(value)));
     }
 
     // Special handling for GPS movement tags
@@ -319,6 +358,22 @@ fn handle_rational_type(
         }
     }
 
+    // TIFF RATIONAL (type 5) is UNSIGNED, but `TagValue::Rational` stores
+    // i32s, so a component above i32::MAX cannot be kept without flipping its
+    // sign. OlympusOM-1.jpg writes Acceleration (Exif.pm:2554, rational64u)
+    // and Pressure (Exif.pm:2544, rational64u) as 0/4294967295; stored as
+    // 0/-1 those divided to negative zero and printed `-0` where
+    // `exiftool -G1 -s` prints `0`. Render the quotient here instead, the same
+    // way GetRational64u does (ExifTool.pm:6091-6097).
+    // (A zero denominator keeps the existing Rational-with-zero path, which
+    // downstream turns into "undef"; only a representable-quotient overflow is
+    // intercepted here.)
+    if denominator != 0 && (numerator > i32::MAX as u32 || denominator > i32::MAX as u32) {
+        return TagValue::new_string(exiftool_rational_number(
+            numerator as f64 / denominator as f64,
+        ));
+    }
+
     TagValue::new_rational(numerator as i32, denominator as i32)
 }
 
@@ -335,11 +390,51 @@ fn format_gps_coordinate(bytes: &[u8], byte_order: ByteOrder) -> TagValue {
             dms.push(numerator as f64);
         }
     }
-    // Format seconds with up to 9 decimal places, trim trailing zeros for ExifTool compat
-    let sec_str = format!("{:.9}", dms[2]);
-    let sec_trimmed = sec_str.trim_end_matches('0').trim_end_matches('.');
-    let formatted = format!("{} deg {}' {}\"", dms[0] as i32, dms[1] as i32, sec_trimmed);
-    TagValue::new_string(formatted)
+
+    // GPS.pm's %coordConv (GPS.pm:16-20) is a ValueConv/PrintConv PAIR:
+    // `ToDegrees($val)` collapses the three stored components to one decimal
+    // degree value, and only then does `ToDMS($self, $val, 1)` split it back
+    // out. Printing the stored components directly is not the same operation
+    // whenever a camera writes fractional minutes: Apple_iPhone2.jpg stores
+    // GPSLatitude as `46/1 860/100 0/1`, so ExifTool prints
+    // `46 deg 8' 36.00"` (46 + 8.6/60 = 46.14333 deg) where reading the
+    // components off the wire gives `46 deg 8' 0"`.
+    let degrees_total = dms[0] + dms[1] / 60.0 + dms[2] / 3600.0;
+    TagValue::new_string(format_dms(degrees_total))
+}
+
+/// ExifTool's `ToDMS($self, $val, 1)` with the default CoordFormat.
+///
+/// The format string is `q{%d deg %d' %.2f"}` (GPS.pm:528) -- seconds always
+/// carry exactly two decimals, which is why `exiftool -G1 -s` prints
+/// `35 deg 48' 8.00"` and not `35 deg 48' 8"`.
+///
+/// The carry that follows it in ToDMS (GPS.pm:558-563) is reproduced too: the
+/// seconds are rounded FIRST, and if rounding pushes them to 60 they roll into
+/// the minutes, and a minute of 60 rolls into the degrees. Without it,
+/// 72.999999 deg would print as `72 deg 59' 60.00"`.
+///
+/// Called without a hemisphere reference, which is the `[GPS] GPSLatitude`
+/// case; ToDMS takes `$val = abs($val)` there (GPS.pm:521) and prints no sign.
+fn format_dms(degrees_total: f64) -> String {
+    let value = degrees_total.abs();
+    let mut degrees = value.trunc();
+    let mut minutes = ((value - degrees) * 60.0).trunc();
+    let seconds = (value - degrees - minutes / 60.0) * 3600.0;
+
+    // Round to the printed precision before testing for the carry, exactly as
+    // ToDMS does with `sprintf($fmt[-1], $c[-1])`.
+    let mut seconds: f64 = format!("{:.2}", seconds).parse().unwrap_or(seconds);
+    if seconds >= 60.0 {
+        seconds -= 60.0;
+        minutes += 1.0;
+        if minutes >= 60.0 {
+            minutes -= 60.0;
+            degrees += 1.0;
+        }
+    }
+
+    format!("{} deg {}' {:.2}\"", degrees, minutes, seconds)
 }
 
 /// Formats GPSTimeStamp from 3 rational values (hours, minutes, seconds).
@@ -477,9 +572,14 @@ fn parse_rational_array(bytes: &[u8], value_count: u32, byte_order: ByteOrder) -
             values.push(numerator as f64);
         }
     }
+    // Each element is a 64-bit rational in its own right, so each is rounded
+    // the way GetRational64u/GetRational64s round one (ExifTool.pm:6090-6097).
+    // A fixed ten decimal places instead printed AppleQT-200.jpg's WhitePoint
+    // as `0.3127000000 0.3290000000` where `exiftool -G1 -s` prints
+    // `0.3127 0.329`, and its PrimaryChromaticities likewise.
     let formatted = values
         .iter()
-        .map(|v| format!("{:.10}", v))
+        .map(|v| exiftool_rational_number(*v))
         .collect::<Vec<_>>()
         .join(" ");
     TagValue::new_string(formatted)
@@ -509,9 +609,14 @@ fn parse_srational_array(bytes: &[u8], value_count: u32, byte_order: ByteOrder) 
             values.push(numerator as f64);
         }
     }
+    // Each element is a 64-bit rational in its own right, so each is rounded
+    // the way GetRational64u/GetRational64s round one (ExifTool.pm:6090-6097).
+    // A fixed ten decimal places instead printed AppleQT-200.jpg's WhitePoint
+    // as `0.3127000000 0.3290000000` where `exiftool -G1 -s` prints
+    // `0.3127 0.329`, and its PrimaryChromaticities likewise.
     let formatted = values
         .iter()
-        .map(|v| format!("{:.10}", v))
+        .map(|v| exiftool_rational_number(*v))
         .collect::<Vec<_>>()
         .join(" ");
     TagValue::new_string(formatted)
@@ -653,23 +758,17 @@ fn heuristic_bytes_to_tag_value(bytes: &[u8], byte_order: ByteOrder) -> TagValue
 /// assert_eq!(format_gps_numeric_value(45.5), "45.5");
 /// assert_eq!(format_gps_numeric_value(123.456), "123.456");
 /// ```
+/// GPSSpeed, GPSTrack, GPSImgDirection, GPSDestBearing and GPSDestDistance are
+/// all declared in GPS.pm as bare `Writable => 'rational64u'` with no
+/// PrintConv (GPS.pm:207, :220, :233, :277, :291), so ExifTool prints exactly
+/// what `GetRational64u` gave it: `RoundFloat($num/$den, 10)`.
+///
+/// Nine decimal places is not the same rule, and the difference shows on real
+/// files: Apple_iPhone13Pro.jpg's GPSDestBearing is `358.8270572` under
+/// `exiftool -G1 -s` and was `358.827057183` here, its GPSSpeed
+/// `0.2700000107` against `0.270000011`.
 fn format_gps_numeric_value(value: f64) -> String {
-    // Use a small epsilon to detect near-integer values
-    // This handles floating-point representation issues
-    const EPSILON: f64 = 1e-9;
-
-    if (value.fract().abs()) < EPSILON {
-        // Whole number - format without decimals
-        format!("{:.0}", value)
-    } else {
-        // Fractional value - format with up to 9 decimal places and trim trailing zeros
-        // ExifTool uses 9+ decimal precision for GPS values
-        let formatted = format!("{:.9}", value);
-        formatted
-            .trim_end_matches('0')
-            .trim_end_matches('.')
-            .to_string()
-    }
+    exiftool_rational_number(value)
 }
 
 #[cfg(test)]
