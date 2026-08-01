@@ -1157,6 +1157,7 @@ dependencies = [
  "lexopt",
  "magika",
  "md5",
+ "memchr",
  "memmap2",
  "nom",
  "once_cell",
