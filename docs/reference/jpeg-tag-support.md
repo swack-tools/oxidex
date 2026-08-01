@@ -9,10 +9,10 @@ Empirical OxiDex ↔ ExifTool tag mapping for JPEG: for each tag, ExifTool write
 Only tags OxiDex can **read** from JPEG are listed here (including those whose value formatting differs from ExifTool). The full classification of all tested tags — including unsupported and broken ones — is in the [JPEG Tag Matrix](/reference/jpeg-tag-matrix). See also [ExifTool Coverage](/reference/tag-coverage-analysis) for the tag-database view and the [Compatibility overview](/reference/comparison/) for fixture-based comparisons across formats.
 
 
-**2679** ExifTool tags readable, **122** writable via the CLI (of 4812 ExifTool-writable JPEG tags tested).
+**2692** ExifTool tags readable, **122** writable via the CLI (of 4812 ExifTool-writable JPEG tags tested).
 
 
-## ExifIFD (90 readable tags)
+## ExifIFD (92 readable tags)
 
 | ExifTool tag | OxiDex key | OxiDex write | Example value |
 |---|---|---|---|
@@ -40,6 +40,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:ExposureProgram` | `ExifIFD:ExposureProgram` | — | `Not Defined` |
 | `ExifIFD:ExposureTime` | `ExifIFD:ExposureTime` | — | `1.5` |
 | `ExifIFD:FNumber` | `ExifIFD:FNumber` | — | `1.5` |
+| `ExifIFD:FileSource` | `ExifIFD:FileSource` * | — | `Film Scanner` |
 | `ExifIFD:Flash` | `ExifIFD:Flash` | — | `No Flash` |
 | `ExifIFD:FlashEnergy` | `ExifIFD:FlashEnergy` | — | `1.5` |
 | `ExifIFD:FlashpixVersion` | `ExifIFD:FlashpixVersion` | ⚠️ `-ExifIFD:FlashpixVersion=` | `0100` |
@@ -76,6 +77,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:OffsetTimeDigitized` | `ExifIFD:OffsetTimeDigitized` | ✅ `-ExifIFD:OffsetTimeDigitized=` | `+05:30` |
 | `ExifIFD:OffsetTimeOriginal` | `ExifIFD:OffsetTimeOriginal` | ✅ `-ExifIFD:OffsetTimeOriginal=` | `+05:30` |
 | `ExifIFD:OwnerName` | `ExifIFD:OwnerName` | ✅ `-ExifIFD:OwnerName=` | `OxTest` |
+| `ExifIFD:Padding` | `ExifIFD:Padding` | — | `OxTest` |
 | `ExifIFD:Photographer` | `ExifIFD:Photographer` | ✅ `-ExifIFD:Photographer=` | `OxTest` |
 | `ExifIFD:Pressure` | `ExifIFD:Pressure` | — | `1.5` |
 | `ExifIFD:RAWDevelopingSoftware` | `ExifIFD:RAWDevelopingSoftware` | ✅ `-ExifIFD:RAWDevelopingSoftware=` | `OxTest` |
@@ -113,12 +115,13 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 |---|---|---|---|
 | `File:Comment` | `File:Comment` | — | `OxTest` |
 
-## GPS (31 readable tags)
+## GPS (32 readable tags)
 
 | ExifTool tag | OxiDex key | OxiDex write | Example value |
 |---|---|---|---|
 | `GPS:GPSAltitude` | `GPS:GPSAltitude` | — | `10.5` |
 | `GPS:GPSAltitudeRef` | `GPS:GPSAltitudeRef` | — | `Above Sea Level` |
+| `GPS:GPSAreaInformation` | `GPS:GPSAreaInformation` * | — | `OxTest` |
 | `GPS:GPSDOP` | `GPS:GPSDOP` | — | `1.5` |
 | `GPS:GPSDateStamp` | `GPS:GPSDateStamp` | ⚠️ `-GPS:GPSDateStamp=` | `2024:01:15` |
 | `GPS:GPSDestBearing` | `GPS:GPSDestBearing` | — | `1.5` |
@@ -149,7 +152,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `GPS:GPSTrackRef` | `GPS:GPSTrackRef` | — | `Magnetic North` |
 | `GPS:GPSVersionID` | `GPS:GPSVersionID` | — | `2.3.0.0` |
 
-## IFD0 (136 readable tags)
+## IFD0 (146 readable tags)
 
 | ExifTool tag | OxiDex key | OxiDex write | Example value |
 |---|---|---|---|
@@ -205,8 +208,12 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:GrayResponseUnit` | `IFD0:GrayResponseUnit` * | — | `0.1` |
 | `IFD0:HalftoneHints` | `IFD0:HalftoneHints` | — | `3 3` |
 | `IFD0:HostComputer` | `IFD0:HostComputer` | ✅ `-IFD0:HostComputer=` | `OxTest` |
+| `IFD0:IlluminantData1` | `IFD0:IlluminantData1` * | ⚠️ `-IFD0:IlluminantData1=` | `OxTest` |
+| `IFD0:IlluminantData2` | `IFD0:IlluminantData2` * | ⚠️ `-IFD0:IlluminantData2=` | `OxTest` |
+| `IFD0:IlluminantData3` | `IFD0:IlluminantData3` * | ⚠️ `-IFD0:IlluminantData3=` | `OxTest` |
 | `IFD0:ImageDescription` | `IFD0:ImageDescription` | ✅ `-IFD0:ImageDescription=` | `OxTest` |
 | `IFD0:ImageHeight` | `IFD0:ImageHeight` | — | `3` |
+| `IFD0:ImageStats` | `IFD0:ImageStats` | — | `OxTest` |
 | `IFD0:ImageWidth` | `IFD0:ImageWidth` | — | `3` |
 | `IFD0:InkSet` | `IFD0:InkSet` * | — | `CMYK` |
 | `IFD0:IntergraphMatrix` | `IFD0:AnalogBalance` | — | `1.5` |
@@ -232,6 +239,8 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:OriginalRawFileName` | `IFD0:OriginalRawFileName` | ✅ `-IFD0:OriginalRawFileName=` | `OxTest` |
 | `IFD0:PageName` | `IFD0:PageName` | ✅ `-IFD0:PageName=` | `OxTest` |
 | `IFD0:PageNumber` | `IFD0:PageNumber` | — | `3 3` |
+| `IFD0:PanasonicTitle` | `IFD0:PanasonicTitle` * | ✅ `-IFD0:PanasonicTitle=` | `OxTest` |
+| `IFD0:PanasonicTitle2` | `IFD0:PanasonicTitle2` * | ✅ `-IFD0:PanasonicTitle2=` | `OxTest` |
 | `IFD0:PhotometricInterpretation` | `IFD0:PhotometricInterpretation` | — | `WhiteIsZero` |
 | `IFD0:PixelScale` | `IFD0:CalibrationIlluminant1` | — | `1.5 1.5 1.5` |
 | `IFD0:PlanarConfiguration` | `IFD0:PlanarConfiguration` | — | `Chunky` |
@@ -247,16 +256,19 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:ProfileCalibrationSig` | `IFD0:ProfileCalibrationSig` | ✅ `-IFD0:ProfileCalibrationSig=` | `OxTest` |
 | `IFD0:ProfileCopyright` | `IFD0:ProfileCopyright` | ✅ `-IFD0:ProfileCopyright=` | `OxTest` |
 | `IFD0:ProfileEmbedPolicy` | `IFD0:ProfileEmbedPolicy` * | — | `Allow Copying` |
+| `IFD0:ProfileGainTableMap2` | `IFD0:ProfileGainTableMap2` | — | `OxTest` |
 | `IFD0:ProfileGroupName` | `IFD0:ProfileGroupName` | ✅ `-IFD0:ProfileGroupName=` | `OxTest` |
 | `IFD0:ProfileHueSatMapDims` | `IFD0:ProfileHueSatMapDims` | ⚠️ `-IFD0:ProfileHueSatMapDims=` | `3 3 3` |
 | `IFD0:ProfileHueSatMapEncoding` | `IFD0:ProfileHueSatMapEncoding` * | — | `Linear` |
 | `IFD0:ProfileLookTableDims` | `IFD0:ProfileLookTableDims` | ⚠️ `-IFD0:ProfileLookTableDims=` | `3 3 3` |
 | `IFD0:ProfileLookTableEncoding` | `IFD0:ProfileLookTableEncoding` * | — | `Linear` |
 | `IFD0:ProfileName` | `IFD0:ProfileName` | ✅ `-IFD0:ProfileName=` | `OxTest` |
+| `IFD0:RGBTables` | `IFD0:RGBTables` | — | `OxTest` |
 | `IFD0:Rating` | `IFD0:Rating` | ✅ `-IFD0:Rating=` | `3` |
 | `IFD0:RatingPercent` | `IFD0:RatingPercent` | ✅ `-IFD0:RatingPercent=` | `3` |
 | `IFD0:RawDataUniqueID` | `IFD0:RawDataUniqueID` * | — | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
 | `IFD0:RawImageDigest` | `IFD0:RawImageDigest` * | — | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
+| `IFD0:RawToPreviewGain` | `IFD0:RawToPreviewGain` * | ⚠️ `-IFD0:RawToPreviewGain=` | `1.5` |
 | `IFD0:ReductionMatrix1` | `IFD0:ReductionMatrix1` | — | `1.5` |
 | `IFD0:ReductionMatrix2` | `IFD0:ReductionMatrix2` | — | `1.5` |
 | `IFD0:ReductionMatrix3` | `IFD0:ReductionMatrix3` | ⚠️ `-IFD0:ReductionMatrix3=` | `1.5` |
@@ -274,6 +286,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:Thresholding` | `IFD0:Thresholding` * | — | `No dithering or halftoning` |
 | `IFD0:TileLength` | `IFD0:TileLength` | — | `3` |
 | `IFD0:TileWidth` | `IFD0:TileWidth` | — | `3` |
+| `IFD0:TimeCodes` | `IFD0:TimeCodes` * | — | `3` |
 | `IFD0:TransferFunction` | `IFD0:0x012D` | — | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 ` |
 | `IFD0:UniqueCameraModel` | `IFD0:UniqueCameraModel` | ✅ `-IFD0:UniqueCameraModel=` | `OxTest` |
 | `IFD0:WhitePoint` | `IFD0:WhitePoint` | — | `1.5 1.5` |

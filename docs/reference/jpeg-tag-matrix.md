@@ -17,11 +17,11 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 |---|---|
 | 📖 Read only | 2350 |
 | ❌ Unsupported | 1886 |
-| 🐛 Read OK, write broken | 225 |
+| 🐛 Read OK, write broken | 232 |
 | ❔ Untestable | 219 |
-| ✅ Full (read + write) | 57 |
-| ⚠️ Full (write non-standard encoding) | 47 |
-| 🐛 Read broken | 28 |
+| ✅ Full (read + write) | 59 |
+| ⚠️ Full (write non-standard encoding) | 51 |
+| 🐛 Read broken | 15 |
 | 🚫 Not writable in ExifTool (no synthetic sample possible; untested) | 585 |
 
 ## Per-group breakdown
@@ -29,11 +29,11 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | Group | Full | Read-only | Write-broken | Read-broken | Write-only | Unsupported | Untestable | Total |
 |---|---|---|---|---|---|---|---|---|
 | All | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
-| ExifIFD | 26 | 0 | 56 | 8 | 0 | 0 | 98 | 196 |
+| ExifIFD | 26 | 0 | 58 | 6 | 0 | 0 | 98 | 196 |
 | File | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
-| GPS | 0 | 0 | 24 | 1 | 0 | 0 | 0 | 32 |
+| GPS | 0 | 0 | 25 | 0 | 0 | 0 | 0 | 32 |
 | GSpherical | 0 | 0 | 0 | 0 | 0 | 0 | 16 | 16 |
-| IFD0 | 31 | 0 | 73 | 16 | 0 | 0 | 17 | 169 |
+| IFD0 | 33 | 0 | 77 | 6 | 0 | 0 | 17 | 169 |
 | IFD1 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
 | IFD2 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
 | IPTC | 0 | 93 | 0 | 0 | 0 | 5 | 7 | 105 |
@@ -197,7 +197,7 @@ references are into this repo.
 | `ExposureProgram` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Not Defined` |
 | `ExposureTime` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
 | `FNumber` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
-| `FileSource` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | 🐛 broken: type-validation rejects CLI string values | `Film Scanner` |
+| `FileSource` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `Film Scanner` |
 | `Flash` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `No Flash` |
 | `FlashEnergy` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
 | `FlashpixVersion` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `0100` |
@@ -329,7 +329,7 @@ references are into this repo.
 | `OffsetTimeDigitized` | ✅ ok | ✅ ok | `+05:30` |
 | `OffsetTimeOriginal` | ✅ ok | ✅ ok | `+05:30` |
 | `OwnerName` | ✅ ok | ✅ ok | `OxTest` |
-| `Padding` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
+| `Padding` | ✅ ok | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
 | `Photographer` | ✅ ok | ✅ ok | `OxTest` |
 | `Pressure` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
 | `RAWDevelopingSoftware` | ✅ ok | ✅ ok | `OxTest` |
@@ -376,7 +376,7 @@ references are into this repo.
 |---|---|---|---|
 | `GPSAltitude` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `10.5` |
 | `GPSAltitudeRef` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Above Sea Level` |
-| `GPSAreaInformation` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | 🐛 broken: type-validation rejects CLI string values | `OxTest` |
+| `GPSAreaInformation` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `OxTest` |
 | `GPSDOP` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
 | `GPSDateStamp` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `2024:01:15` |
 | `GPSDestBearing` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
@@ -491,14 +491,14 @@ references are into this repo.
 | `HalftoneHints` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3 3` |
 | `HostComputer` | ✅ ok | ✅ ok | `OxTest` |
 | `IPTC-NAA` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `IlluminantData1` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
-| `IlluminantData2` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
-| `IlluminantData3` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
+| `IlluminantData1` | ✅ ok (formatting differs from exiftool) | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
+| `IlluminantData2` | ✅ ok (formatting differs from exiftool) | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
+| `IlluminantData3` | ✅ ok (formatting differs from exiftool) | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
 | `ImageDescription` | ✅ ok | ✅ ok | `OxTest` |
 | `ImageHeight` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `ImageSequenceInfo` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: junk written into subdirectory pointer tag | `OxTest` |
 | `ImageSourceData` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: type-validation rejects CLI string values | `OxTest` |
-| `ImageStats` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
+| `ImageStats` | ✅ ok | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
 | `ImageWidth` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `InkSet` | ✅ ok (formatting differs from exiftool) | 🐛 broken: type-validation rejects CLI string values | `CMYK` |
 | `IntergraphMatrix` | ✅ ok | 🐛 broken: error | `1.5` |
@@ -526,8 +526,8 @@ references are into this repo.
 | `OriginalRawFileName` | ✅ ok | ✅ ok | `OxTest` |
 | `PageName` | ✅ ok | ✅ ok | `OxTest` |
 | `PageNumber` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3 3` |
-| `PanasonicTitle` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | ✅ ok | `OxTest` |
-| `PanasonicTitle2` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | ✅ ok | `OxTest` |
+| `PanasonicTitle` | ✅ ok (formatting differs from exiftool) | ✅ ok | `OxTest` |
+| `PanasonicTitle2` | ✅ ok (formatting differs from exiftool) | ✅ ok | `OxTest` |
 | `PhotometricInterpretation` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `WhiteIsZero` |
 | `PixelScale` | ✅ ok | 🐛 broken: error | `1.5 1.5 1.5` |
 | `PlanarConfiguration` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `Chunky` |
@@ -547,7 +547,7 @@ references are into this repo.
 | `ProfileCopyright` | ✅ ok | ✅ ok | `OxTest` |
 | `ProfileDynamicRange` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: junk written into subdirectory pointer tag | `OxTest` |
 | `ProfileEmbedPolicy` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Allow Copying` |
-| `ProfileGainTableMap2` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
+| `ProfileGainTableMap2` | ✅ ok | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
 | `ProfileGroupName` | ✅ ok | ✅ ok | `OxTest` |
 | `ProfileHueSatMapData1` | 🐛 broken: float value shown as raw IEEE-754 bits | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `ProfileHueSatMapData2` | 🐛 broken: float value shown as raw IEEE-754 bits | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
@@ -559,12 +559,12 @@ references are into this repo.
 | `ProfileLookTableEncoding` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where SHORT/LONG expected | `Linear` |
 | `ProfileName` | ✅ ok | ✅ ok | `OxTest` |
 | `ProfileToneCurve` | 🐛 broken: float value shown as raw IEEE-754 bits | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
-| `RGBTables` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
+| `RGBTables` | ✅ ok | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
 | `Rating` | ✅ ok | ✅ ok | `3` |
 | `RatingPercent` | ✅ ok | ✅ ok | `3` |
 | `RawDataUniqueID` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
 | `RawImageDigest` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
-| `RawToPreviewGain` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `RawToPreviewGain` | ✅ ok (formatting differs from exiftool) | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `ReductionMatrix1` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
 | `ReductionMatrix2` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5` |
 | `ReductionMatrix3` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
@@ -585,7 +585,7 @@ references are into this repo.
 | `ThumbnailOffset` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `TileLength` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
 | `TileWidth` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3` |
-| `TimeCodes` | 🐛 broken: undef/binary value shown as opaque (Binary, N bytes) | 🐛 broken: written as ASCII where numeric/rational expected | `3` |
+| `TimeCodes` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `3` |
 | `TransferFunction` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 ` |
 | `UniqueCameraModel` | ✅ ok | ✅ ok | `OxTest` |
 | `WhitePoint` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `1.5 1.5` |
