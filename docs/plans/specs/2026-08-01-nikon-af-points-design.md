@@ -4,7 +4,7 @@
 
 Nikon `AFPointsUsed` and `PrimaryAFPoint` (`Nikon::Main` 0x00b7, the `AFInfo2`
 block) are deliberately not decoded in
-[af_info2.rs](../../../src/parsers/tiff/makernotes/nikon/af_info2.rs) — see
+`src/parsers/tiff/makernotes/nikon/af_info2.rs` — see
 the module header. Each is a bitmap or index whose meaning depends on a
 per-body point-name grid; picking the wrong grid would silently produce a
 confident, wrong list of focus points. 54 files under
