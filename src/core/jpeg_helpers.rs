@@ -498,7 +498,18 @@ pub fn process_mpf_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     for segment in segments.iter().filter(|s| s.marker == 0xFFE2) {
         // Check if this is an MPF segment (starts with "MPF\0")
         if segment.data.len() >= 4 && &segment.data[0..4] == b"MPF\0" {
-            match crate::parsers::jpeg::mpf_parser::parse_mpf_segment(segment.data, metadata) {
+            // MPImageStart is stored relative to the MPF TIFF header and
+            // ExifTool rebases it there (MPF.pm:148 `IsOffset => '$val'`,
+            // resolved against `$$dirInfo{Base}`, which ExifTool.pm:7958 sets
+            // to the APP2 segment's data position + 4). `Segment::offset` is
+            // the position of the 0xFFE2 marker, so the header sits 2 marker
+            // bytes + 2 length bytes + 4 identifier bytes further on.
+            let tiff_base = segment.offset + 8;
+            match crate::parsers::jpeg::mpf_parser::parse_mpf_segment(
+                segment.data,
+                tiff_base,
+                metadata,
+            ) {
                 Ok(()) => {
                     // Successfully parsed MPF data
                 }

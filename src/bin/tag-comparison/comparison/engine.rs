@@ -9,6 +9,22 @@ pub struct ComparisonEngine;
 /// Normalize a family name for comparison purposes
 /// Maps manufacturer-specific families to MakerNotes for matching
 pub(crate) fn normalize_family_for_comparison(family: &str) -> &str {
+    // MPF -> the three family-1 groups MPF.pm files its tags under. This
+    // harness asks ExifTool for family 0 (`-G`), where all of them are "MPF";
+    // oxidex emits the family-1 spelling `exiftool -G1 -s` prints. The MP
+    // Entry groups carry a 1-based image index (MPF.pm:247,
+    // `$$et{SET_GROUP1} = '+' . ($i + 1);`) so they cannot be match arms.
+    //
+    //   MPF.pm:24        GROUPS => { 0 => 'MPF', 1 => 'MPF0', 2 => 'Image'}
+    //   ExifTool.pm:7959 $dirInfo{Multi} = 1;  # the MP Attribute IFD will be MPF1
+    //   MPF.pm:96        GROUPS => { 0 => 'MPF', 1 => 'MPImage', 2 => 'Image'}
+    //
+    // Same case as FLIR/AROT/SPIFF/GoPro below: without this, oxidex's correct
+    // family-1 keys would count as oxidex-only extras on 737 files while
+    // ExifTool's byte-identical `MPF:*` keys counted as gaps.
+    if matches!(family, "MPF0" | "MPF1") || is_mp_image_group(family) {
+        return "MPF";
+    }
     match family {
         // Camera manufacturers -> MakerNotes
         //
@@ -60,6 +76,15 @@ pub(crate) fn normalize_family_for_comparison(family: &str) -> &str {
         // Keep everything else as-is
         _ => family,
     }
+}
+
+/// True for `MPImage1`, `MPImage2`, ... -- ExifTool's per-MP-Entry family-1
+/// groups. Not `MPImage` bare (no such group is ever emitted) and not
+/// `MPImageList` (a tag name in `MPF::Main`, never a group).
+fn is_mp_image_group(family: &str) -> bool {
+    family
+        .strip_prefix("MPImage")
+        .is_some_and(|idx| !idx.is_empty() && idx.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Normalize a tag name for comparison
