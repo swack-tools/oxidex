@@ -71,6 +71,11 @@ DEFAULT_BUILD_SEMAPHORE_STALE_SECONDS = 900  # a cargo build hung 15+ min is pre
 # under DEFAULT_BUILD_SEMAPHORE_STALE_SECONDS (15 beats before a live
 # holder could ever be mistaken for stale).
 DEFAULT_BUILD_SEMAPHORE_HEARTBEAT_SECONDS = 60
+# Waiters poll every two seconds, so a queue entry that has not been refreshed
+# for thirty seconds is no longer participating. Keeping this much shorter than
+# a held build's timeout prevents a paused thread in an otherwise-live process
+# from pinning the head of the FIFO for fifteen minutes.
+DEFAULT_BUILD_SEMAPHORE_WAITER_STALE_SECONDS = 30
 
 
 def _pid_is_alive(pid):
@@ -115,6 +120,7 @@ def _semaphore_locked(path, mutate_fn):
         except (OSError, ValueError, json.JSONDecodeError):
             state = {}
         state.setdefault("holders", {})
+        state.setdefault("waiters", {})
         new_state, result = mutate_fn(state)
         tmp = tempfile.NamedTemporaryFile(
             "w", dir=path.parent, prefix=path.name + ".", suffix=".tmp", delete=False,
@@ -130,7 +136,8 @@ def _try_acquire_build_slot(path, max_holders, stale_seconds, now_fn, holder_id)
     Live holders (heartbeat within stale_seconds) other than holder_id
     count against max_holders; a stale holder is dropped as part of the
     same locked read-modify-write, so eviction and (re-)acquisition can
-    never race each other."""
+    never race each other. Contended callers join a persistent FIFO so a
+    stream of newly polling workers cannot starve an older batch build."""
     def mutate(state):
         now = now_fn()
         live = {
@@ -138,15 +145,43 @@ def _try_acquire_build_slot(path, max_holders, stale_seconds, now_fn, holder_id)
             if (now - h.get("heartbeat", 0) < stale_seconds
                 and _pid_is_alive(h.get("pid")))
         }
+        waiter_stale_seconds = min(stale_seconds, DEFAULT_BUILD_SEMAPHORE_WAITER_STALE_SECONDS)
+        waiters = {
+            slot: waiter for slot, waiter in state["waiters"].items()
+            if (now - waiter.get("heartbeat", 0) < waiter_stale_seconds
+                and _pid_is_alive(waiter.get("pid"))
+                and slot not in live)
+        }
         if holder_id in live:
             live[holder_id]["heartbeat"] = now
             state["holders"] = live
+            waiters.pop(holder_id, None)
+            state["waiters"] = waiters
             return state, True
+
+        waiter = waiters.setdefault(holder_id, {
+            "pid": os.getpid(),
+            "enqueued_at": now,
+        })
+        waiter["heartbeat"] = now
         if len(live) >= max_holders:
             state["holders"] = live
+            state["waiters"] = waiters
             return state, False
+
+        queue_head = min(
+            waiters,
+            key=lambda slot: (waiters[slot].get("enqueued_at", now), slot),
+        )
+        if queue_head != holder_id:
+            state["holders"] = live
+            state["waiters"] = waiters
+            return state, False
+
         live[holder_id] = {"pid": os.getpid(), "heartbeat": now}
+        waiters.pop(holder_id, None)
         state["holders"] = live
+        state["waiters"] = waiters
         return state, True
     return _semaphore_locked(path, mutate)
 
@@ -154,6 +189,7 @@ def _try_acquire_build_slot(path, max_holders, stale_seconds, now_fn, holder_id)
 def _release_build_slot(path, holder_id):
     def mutate(state):
         state["holders"].pop(holder_id, None)
+        state["waiters"].pop(holder_id, None)
         return state, None
     _semaphore_locked(path, mutate)
 
