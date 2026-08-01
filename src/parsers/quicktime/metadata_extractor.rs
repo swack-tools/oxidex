@@ -10,6 +10,7 @@
 use super::atom_parser::Atom;
 use super::tag_mapping::atom_to_exiftool_tag;
 use crate::core::{FileReader, MetadataMap, TagValue};
+use crate::exiftool_tables::{DecodedValue, decode_binary_table, find_table};
 use crate::io::timestamp::mac_time_to_iso8601;
 use crate::io::{ByteOrder, EndianReader};
 use crate::parsers::tiff::ifd_parser::{ByteOrder as TiffByteOrder, parse_ifd};
@@ -3316,90 +3317,53 @@ fn extract_pentax_maker_notes(data: &[u8], metadata: &mut MetadataMap) -> Result
         return Ok(());
     }
 
-    // 0x00: Make, string[24]
-    if let Ok(make) = std::str::from_utf8(&data[0..24]) {
-        let make_trimmed = make.trim_end_matches('\0').trim();
-        if !make_trimmed.is_empty() {
-            metadata.insert(
-                "MakerNotes:Make".to_string(),
-                TagValue::new_string(make_trimmed.to_string()),
-            );
-        }
-    }
-
-    let r = EndianReader::little_endian(data);
-
-    // 0x26: ExposureTime, int32u; ValueConv: $val ? 10/$val : 0
-    if let Some(raw) = r.u32_at(0x26) {
-        if raw != 0 {
-            let secs = 10.0 / raw as f64;
-            metadata.insert(
-                "MakerNotes:ExposureTime".to_string(),
-                TagValue::new_string(format_exposure_time_seconds(secs)),
-            );
-        }
-    }
-
-    // 0x2a: FNumber, rational64u; PrintConv: sprintf("%.1f", $val)
-    if let Some((num, den)) = r.rational_at(0x2a) {
-        if den != 0 {
-            let fnumber = num as f64 / den as f64;
-            metadata.insert(
-                "MakerNotes:FNumber".to_string(),
-                TagValue::new_string(format!("{:.1}", fnumber)),
-            );
-        }
-    }
-
-    // 0x32: ExposureCompensation, rational64s; PrintConv: $val ? "+X.X" : 0
-    if let Some((num, den)) = r.srational_at(0x32) {
-        if den != 0 {
-            let val = num as f64 / den as f64;
-            let ec_str = if val != 0.0 {
-                format!("{:+.1}", val)
-            } else {
-                "0".to_string()
-            };
-            metadata.insert(
-                "MakerNotes:ExposureCompensation".to_string(),
-                TagValue::new_string(ec_str),
-            );
-        }
-    }
-
-    // 0x44: WhiteBalance, int16u
-    if let Some(wb) = r.u16_at(0x44) {
-        let wb_str = match wb {
-            0 => Some("Auto"),
-            1 => Some("Daylight"),
-            2 => Some("Shade"),
-            3 => Some("Fluorescent"),
-            4 => Some("Tungsten"),
-            5 => Some("Manual"),
-            _ => None,
+    let table = find_table("Pentax", "MOV")
+        .ok_or_else(|| "generated Pentax::MOV binary table is missing".to_string())?;
+    for decoded in decode_binary_table(table, data, ByteOrder::Little) {
+        let value = match decoded.field.name {
+            "Make" => match decoded.raw {
+                DecodedValue::String(value) => TagValue::new_string(value),
+                _ => continue,
+            },
+            // ExifTool Pentax.pm `%MOV` key 38 ValueConv:
+            // `$val ? 10 / $val : 0`, followed by PrintExposureTime.
+            "ExposureTime" => match decoded.raw {
+                DecodedValue::Integer(0) => TagValue::new_string("0"),
+                DecodedValue::Integer(raw) => {
+                    TagValue::new_string(format_exposure_time_seconds(10.0 / raw as f64))
+                }
+                _ => continue,
+            },
+            // Pentax::MOV has no ValueConv between these raw values and their
+            // generated PrintConv, so applying it explicitly is sound.
+            "FNumber" | "WhiteBalance" | "FocalLength" => {
+                let Some(printed) = decoded.apply_print_conv_to_raw() else {
+                    continue;
+                };
+                TagValue::new_string(printed)
+            }
+            // This PrintConv remains format-specific until its exact spelling
+            // is registered in the generated expression translator.
+            "ExposureCompensation" => match decoded.raw {
+                DecodedValue::SignedRational(numerator, denominator) if denominator != 0 => {
+                    let value = f64::from(numerator) / f64::from(denominator);
+                    TagValue::new_string(if value == 0.0 {
+                        "0".to_string()
+                    } else {
+                        format!("{value:+.1}")
+                    })
+                }
+                _ => continue,
+            },
+            "ISO" => match decoded.raw {
+                DecodedValue::Integer(value) => TagValue::Integer(value),
+                _ => continue,
+            },
+            // New generated fields require a source-level conversion audit
+            // before this parser begins emitting them.
+            _ => continue,
         };
-        if let Some(wb_str) = wb_str {
-            metadata.insert(
-                "MakerNotes:WhiteBalance".to_string(),
-                TagValue::new_string(wb_str.to_string()),
-            );
-        }
-    }
-
-    // 0x48: FocalLength, rational64u; PrintConv: sprintf("%.1f mm", $val)
-    if let Some((num, den)) = r.rational_at(0x48) {
-        if den != 0 {
-            let focal_length = num as f64 / den as f64;
-            metadata.insert(
-                "MakerNotes:FocalLength".to_string(),
-                TagValue::new_string(format!("{:.1} mm", focal_length)),
-            );
-        }
-    }
-
-    // 0xaf: ISO, int16u
-    if let Some(iso) = r.u16_at(0xaf) {
-        metadata.insert("MakerNotes:ISO".to_string(), TagValue::Integer(iso as i64));
+        metadata.insert(format!("MakerNotes:{}", decoded.field.name), value);
     }
 
     Ok(())
@@ -3440,6 +3404,47 @@ fn extract_xmp_from_atom(data: &[u8], metadata: &mut MetadataMap) -> Result<(), 
 mod tests {
     use super::*;
     use crate::parsers::quicktime::FourCC;
+
+    #[test]
+    fn pentax_mov_uses_the_generated_binary_layout() {
+        let mut data = vec![0; 177];
+        data[..22].copy_from_slice(b"PENTAX DIGITAL CAMERA\0");
+        data[38..42].copy_from_slice(&1000_u32.to_le_bytes());
+        data[42..46].copy_from_slice(&28_u32.to_le_bytes());
+        data[46..50].copy_from_slice(&10_u32.to_le_bytes());
+        data[50..54].copy_from_slice(&(-1_i32).to_le_bytes());
+        data[54..58].copy_from_slice(&3_i32.to_le_bytes());
+        data[68..70].copy_from_slice(&2_u16.to_le_bytes());
+        data[72..76].copy_from_slice(&71_u32.to_le_bytes());
+        data[76..80].copy_from_slice(&10_u32.to_le_bytes());
+        data[175..177].copy_from_slice(&200_u16.to_le_bytes());
+
+        let mut metadata = MetadataMap::new();
+        extract_pentax_maker_notes(&data, &mut metadata).unwrap();
+
+        assert_eq!(
+            metadata.get_string("MakerNotes:Make"),
+            Some("PENTAX DIGITAL CAMERA")
+        );
+        assert_eq!(
+            metadata.get_string("MakerNotes:ExposureTime"),
+            Some("1/100")
+        );
+        assert_eq!(metadata.get_string("MakerNotes:FNumber"), Some("2.8"));
+        assert_eq!(
+            metadata.get_string("MakerNotes:ExposureCompensation"),
+            Some("-0.3")
+        );
+        assert_eq!(
+            metadata.get_string("MakerNotes:WhiteBalance"),
+            Some("Shade")
+        );
+        assert_eq!(
+            metadata.get_string("MakerNotes:FocalLength"),
+            Some("7.1 mm")
+        );
+        assert_eq!(metadata.get_integer("MakerNotes:ISO"), Some(200));
+    }
 
     #[test]
     fn test_extract_string_value() {
