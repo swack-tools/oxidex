@@ -1616,6 +1616,69 @@ class ConsumeHandshakeWiringTests(unittest.TestCase):
         self.assertEqual(worker_id, "canon-1")
         self.assertEqual(result["status"], "worktree_failed")
 
+    @patch("parallel_model_fix_loop._branch_head_sha", side_effect=["before", "after"])
+    @patch(
+        "parallel_model_fix_loop.run_worker",
+        side_effect=subprocess.TimeoutExpired(cmd=["model_fix_loop.py"], timeout=10),
+    )
+    @patch("parallel_model_fix_loop.create_worktree")
+    def test_squad_timeout_after_commit_is_publishable(
+        self, mock_create, mock_run_worker, mock_branch_head,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            worker_id, result = process_squad_worker(
+                "canon", 4, "M4A", tmp, "squad/canon", tmp / "wt", tmp / "log",
+                "/cache", 10,
+            )
+
+        self.assertEqual(worker_id, "canon-4")
+        self.assertEqual(result["status"], "worker_done")
+        self.assertTrue(result["timed_out"])
+        self.assertTrue(result["commit_created"])
+        self.assertEqual(result["starting_head"], "before")
+        self.assertEqual(result["ending_head"], "after")
+
+    @patch("parallel_model_fix_loop._branch_head_sha", side_effect=["same", "same"])
+    @patch(
+        "parallel_model_fix_loop.run_worker",
+        side_effect=subprocess.TimeoutExpired(cmd=["model_fix_loop.py"], timeout=10),
+    )
+    @patch("parallel_model_fix_loop.create_worktree")
+    def test_squad_timeout_without_commit_remains_a_failure(
+        self, mock_create, mock_run_worker, mock_branch_head,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            _worker_id, result = process_squad_worker(
+                "canon", 4, "M4A", tmp, "squad/canon", tmp / "wt", tmp / "log",
+                "/cache", 10,
+            )
+
+        self.assertEqual(result["status"], "timeout")
+        self.assertTrue(result["timed_out"])
+        self.assertFalse(result["commit_created"])
+
+    @patch("parallel_model_fix_loop._branch_head_sha", side_effect=["before", "after"])
+    @patch(
+        "parallel_model_fix_loop.run_worker",
+        side_effect=subprocess.TimeoutExpired(cmd=["model_fix_loop.py"], timeout=10),
+    )
+    @patch("parallel_model_fix_loop.create_worktree")
+    def test_legacy_timeout_after_commit_enters_merge_phase(
+        self, mock_create, mock_run_worker, mock_branch_head,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            fmt, result = process_format(
+                "M4A", tmp, "main", tmp / "wt", tmp / "log", "/cache", 10,
+                config_path=tmp / "no-config",
+            )
+
+        self.assertEqual(fmt, "M4A")
+        self.assertEqual(result["status"], "worker_done")
+        self.assertTrue(result["commit_created"])
+
 
 # ---------------------------------------------------------------------------
 # run_squad_round dispatch
