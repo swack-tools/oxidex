@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use super::registries::ricoh::ricoh_registry;
 use super::shared::MakerNoteParser;
 use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
+use super::shared::print_im::decode_print_im_from_ifd;
 use super::shared::tag_registry::TagRegistry;
 
 // ============================================================================
@@ -137,6 +138,34 @@ impl MakerNoteParser for RicohParser {
 
     fn tag_prefix(&self) -> &'static str {
         "Ricoh:"
+    }
+
+    fn validate_header(&self, data: &[u8]) -> bool {
+        data.starts_with(b"RICOH\0") || data.len() >= 2
+    }
+
+    fn parse_with_context(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        _model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
+        let ifd_at = usize::from(ctx.payload().starts_with(b"RICOH\0")) * 8;
+        if let Some(version) = decode_print_im_from_ifd(ctx, ifd_at, byte_order) {
+            tags.insert("PrintIM:PrintIMVersion".to_string(), version);
+        }
+        let Some(ifd) = ctx.payload().get(ifd_at..) else {
+            return Ok(());
+        };
+        let config = IfdParserConfig {
+            signature: None,
+            signature_offset: 0,
+            max_entries: 500,
+        };
+        parse_ifd_entries(ifd, byte_order, &config, |entry, parse_data| {
+            self.parse_entry(entry, parse_data, byte_order, tags);
+        })
     }
 
     fn parse(
