@@ -13,7 +13,7 @@ This document is automatically updated on each push to `main`. Last updated: **2
 | Total Tags | 16,677 |
 | Tag Tables | 931 |
 | Domains | 6 |
-| Format Parsers | 37 |
+| Format Parsers | 38 |
 | ExifTool Parity | 58%* |
 
 *ExifTool officially documents ~28,853 unique tags. OxiDex defines 16,677 tags (including variant definitions).
@@ -123,6 +123,7 @@ MakerNote parsers for 38+ camera manufacturers are **fully implemented and conne
 
 | Format | Coverage | Priority |
 |--------|----------|----------|
+| CANON_VRD | 10% | Medium |
 
 ---
 
@@ -181,6 +182,10 @@ MakerNote parsers for 38+ camera manufacturers are **fully implemented and conne
 ---
 
 ## Recommendations
+
+### Formats Needing Enhancement
+
+- **CANON_VRD** (10% coverage)
 
 ---
 
