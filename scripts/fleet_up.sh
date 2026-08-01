@@ -47,6 +47,7 @@
 #   ./scripts/fleet_up.sh --status        # exactly what is alive, from the pidfile
 #   ./scripts/fleet_up.sh --down          # stop everything THIS launcher started
 #   ./scripts/fleet_up.sh --workers 24    # dispatcher --max-parallel
+#   ./scripts/fleet_up.sh --squad-mode     # allocate real per-squad worker slots
 #   ./scripts/fleet_up.sh --dry-run       # preflight + plan only; mutates nothing
 #   ./scripts/fleet_up.sh --no-judgment   # start WITHOUT the quarantine tier (see below)
 #
@@ -134,6 +135,7 @@ FLEET_DISPATCH_TIMEOUT="${FLEET_DISPATCH_TIMEOUT:-2400}"
 FLEET_PERL_LIB="${FLEET_PERL_LIB:-}"
 
 FLEET_WORKERS="${FLEET_WORKERS:-32}"
+FLEET_SQUAD_MODE="${FLEET_SQUAD_MODE:-0}"
 FLEET_CONFIG="${FLEET_CONFIG:-}"
 FLEET_REPO="${OXIDEX_FLEET_REPO:-}"
 
@@ -783,6 +785,10 @@ tier_start() {
             # explicitly anyway, because "auto-publish is on" is the entire
             # point of this launcher and it must not depend on a default that
             # a future refactor could flip.
+            local dispatcher_mode=()
+            if [ "$FLEET_SQUAD_MODE" -eq 1 ]; then
+                dispatcher_mode+=(--squad-mode)
+            fi
             spawn "${TIER_TAG[i]}" \
                 python3 -u "$PINNED_REPO/scripts/parallel_model_fix_loop.py" \
                 --config "$PINNED_CONFIG" \
@@ -790,6 +796,7 @@ tier_start() {
                 --timeout "$FLEET_DISPATCH_TIMEOUT" \
                 --cache-dir "$EXIFTOOL_CACHE_DIR" \
                 --home "$OXIDEX_HOME" \
+                "${dispatcher_mode[@]}" \
                 --infinite --round-delay 0 --auto-publish
             ;;
         merger)
@@ -1221,7 +1228,7 @@ cmd_up() {
     tier_add "dispatcher" dispatcher "" "parallel_model_fix_loop.py"
     if [ "$WITH_JUDGMENT" -eq 1 ]; then
         tier_add "judgment" judgment "" "judgment_queue_daemon.py"
-        log "fleet-up" "tiers: $n mergers + dispatcher(${FLEET_WORKERS} workers) + judgment queue"
+        log "fleet-up" "tiers: $n mergers + dispatcher(${FLEET_WORKERS} workers, squad_mode=${FLEET_SQUAD_MODE}) + judgment queue"
     else
         log "fleet-up" "tiers: $n mergers + dispatcher(${FLEET_WORKERS} workers)." \
             "WARNING: --no-judgment -- quarantined commits will accumulate in" \
@@ -1285,6 +1292,7 @@ main() {
             --down|--stop) action=down ;;
             --dry-run) DRY_RUN=1 ;;
             --no-judgment) WITH_JUDGMENT=0 ;;
+            --squad-mode) FLEET_SQUAD_MODE=1 ;;
             --workers) FLEET_WORKERS=${2:?--workers needs a number}; shift ;;
             --workers=*) FLEET_WORKERS=${1#*=} ;;
             --repo) FLEET_REPO=${2:?--repo needs a path}; shift ;;
@@ -1302,6 +1310,10 @@ main() {
         ''|*[!0-9]*) printf 'fleet_up.sh: --workers must be a positive integer\n' >&2; return 64 ;;
     esac
     [ "$FLEET_WORKERS" -gt 0 ] || { printf 'fleet_up.sh: --workers must be > 0\n' >&2; return 64; }
+    case "$FLEET_SQUAD_MODE" in
+        0|1) ;;
+        *) printf 'fleet_up.sh: FLEET_SQUAD_MODE must be 0 or 1\n' >&2; return 64 ;;
+    esac
     case "$action" in
         status) cmd_status ;;
         down)   cmd_down ;;
