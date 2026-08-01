@@ -173,6 +173,11 @@ pub fn read_metadata_with_detector(
         metadata.insert(key, value);
     }
 
+    // Step 6: Derive ExifTool's Composite tags (ImageSize, Megapixels,
+    // Aperture, ShutterSpeed, ...). These are computed from tags already
+    // extracted above, so this runs last and never overwrites a parsed value.
+    crate::composite::apply(&mut metadata);
+
     Ok(metadata)
 }
 
