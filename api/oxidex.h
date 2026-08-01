@@ -49,6 +49,22 @@
 #define EXIFTOOL_ERR_INTERNAL 99
 
 /*
+ Significant digits ExifTool keeps when it reads a 64-bit rational.
+
+ `GetRational64u`/`GetRational64s` (ExifTool.pm:6091-6097 and :6081-6090)
+ both end in `return RoundFloat($ratNumer / $ratDenom, 10)`, and
+ `RoundFloat` (ExifTool.pm:5937-5941) is nothing but
+ `sprintf("%.${sig}g", $val)`. So a rational that reaches ExifTool's output
+ without a PrintConv is printed as `%.10g` of its quotient -- which is why
+ `exiftool -G1 -s` prints `6514.65798` for 6000000/921 and `0.2700000107`
+ for GPSSpeed, rather than a full-precision expansion.
+
+ (The 32-bit rational readers use 7 instead; oxidex has no 32-bit rational
+ path, so only the 64-bit width is defined here.)
+ */
+#define EXIFTOOL_RATIONAL_SIG_DIGITS 10
+
+/*
  Magic number byte 0 (0x7F)
  */
 #define EI_MAG0 0
@@ -3610,6 +3626,100 @@
 
 #define TIFF_IFD 13
 
+#define AFINFO 0
+
+#define AFSTATUS15 1
+
+#define AFSTATUS19 2
+
+#define AFSTATUS79 3
+
+#define ISOINFO 4
+
+#define TAG2010A 5
+
+#define TAG2010B 6
+
+#define TAG2010C 7
+
+#define TAG2010D 8
+
+#define TAG2010E 9
+
+#define TAG2010F 10
+
+#define TAG2010G 11
+
+#define TAG2010H 12
+
+#define TAG2010I 13
+
+#define TAG202A 14
+
+#define TAG900B 15
+
+#define TAG9050A 16
+
+#define TAG9050B 17
+
+#define TAG9050C 18
+
+#define TAG9050D 19
+
+#define TAG9400A 20
+
+#define TAG9400B 21
+
+#define TAG9400C 22
+
+#define TAG9401 23
+
+#define TAG9402 24
+
+#define TAG9403 25
+
+#define TAG9404A 26
+
+#define TAG9404B 27
+
+#define TAG9404C 28
+
+#define TAG9405A 29
+
+#define TAG9405B 30
+
+#define TAG9406 31
+
+#define TAG9406B 32
+
+#define TAG940A 33
+
+#define TAG940C 34
+
+#define TAG940E 35
+
+#define TAG9416 36
+
+#define CAMERASETTINGS 0
+
+#define CAMERASETTINGS2 1
+
+#define CAMERASETTINGS3 2
+
+#define FACEINFO1 3
+
+#define FACEINFO2 4
+
+#define SHOTINFO 5
+
+#define CAMERAINFOA100 0
+
+#define CAMERASETTINGSA100 1
+
+#define ISINFOA100 2
+
+#define WBINFOA100 3
+
 /*
  GPS latitude (signed int, scale: 1e-7)
  */
@@ -4284,6 +4394,10 @@
 typedef struct ExifToolHandle {
     uint8_t _private[0];
 } ExifToolHandle;
+
+
+
+
 
 /*
  Retrieves the last error message.
