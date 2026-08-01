@@ -299,160 +299,6 @@ pub mod canon {
     }
 }
 
-/// Nikon lens database
-pub mod nikon {
-    use super::*;
-
-    /// Nikon lens database entries mapping lens ID to lens name
-    pub static NIKON_LENSES: [(u16, &str); 139] = [
-        (1, "Nikkor 50mm f/1.4"),
-        (2, "Nikkor 35mm f/2.8"),
-        (3, "Nikkor 135mm f/2.8"),
-        (4, "Nikkor 50mm f/1.8"),
-        (5, "Nikkor 28mm f/2.8"),
-        (6, "Nikkor 24mm f/2.8"),
-        (7, "Nikkor 180mm f/2.8 ED"),
-        (8, "Nikkor 200mm f/4"),
-        (9, "Nikkor 300mm f/4.5"),
-        (10, "Nikkor 35-70mm f/3.5"),
-        (11, "Nikkor AF 50mm f/1.4D"),
-        (12, "Nikkor AF 50mm f/1.8D"),
-        (13, "Nikkor AF 35mm f/2D"),
-        (14, "Nikkor AF 28mm f/2.8D"),
-        (15, "Nikkor AF 24mm f/2.8D"),
-        (16, "Nikkor AF 85mm f/1.4D"),
-        (17, "Nikkor AF 85mm f/1.8D"),
-        (18, "Nikkor AF 135mm f/2D DC"),
-        (19, "Nikkor AF 105mm f/2.8D Macro"),
-        (20, "Nikkor AF 60mm f/2.8D Micro"),
-        (21, "Nikkor AF 28-85mm f/3.5-4.5D"),
-        (22, "Nikkor AF 35-70mm f/2.8D"),
-        (23, "Nikkor AF 80-200mm f/2.8D ED"),
-        (24, "Nikkor AF 70-210mm f/4-5.6D"),
-        (25, "Nikkor AF 28-105mm f/3.5-4.5D"),
-        (26, "Nikkor AF 24-85mm f/2.8-4D"),
-        (27, "Nikkor AF 35-135mm f/3.5-4.5"),
-        (28, "Nikkor AF 70-300mm f/4-5.6D ED"),
-        (29, "Nikkor AF 28-200mm f/3.5-5.6D"),
-        (30, "Nikkor AF 75-300mm f/4.5-5.6"),
-        (31, "Nikkor AF 300mm f/2.8D ED"),
-        (32, "Nikkor AF 400mm f/2.8D ED"),
-        (33, "Nikkor AF 500mm f/4D ED"),
-        (34, "Nikkor AF 600mm f/4D ED"),
-        (35, "Nikkor AF 200mm f/2 VR"),
-        (36, "Nikkor AF 14mm f/2.8D ED"),
-        (37, "Nikkor AF 20mm f/2.8D"),
-        (38, "Nikkor AF 180mm f/2.8D ED"),
-        (39, "Nikkor AF Fisheye 16mm f/2.8D"),
-        (40, "Nikkor AF 17-35mm f/2.8D ED"),
-        (119, "Nikkor AF-S DX 18-55mm f/3.5-5.6G VR"),
-        (120, "Nikkor AF-S DX 18-55mm f/3.5-5.6G VR II"),
-        (121, "Nikkor AF-S DX 55-200mm f/4-5.6G ED VR"),
-        (122, "Nikkor AF-S DX 18-135mm f/3.5-5.6G ED VR"),
-        (123, "Nikkor AF-S DX 55-300mm f/4.5-5.6G ED VR"),
-        (124, "Nikkor AF-S DX 16-85mm f/3.5-5.6G ED VR"),
-        (125, "Nikkor AF-S DX 18-200mm f/3.5-5.6G ED VR"),
-        (126, "Nikkor AF-S DX 18-200mm f/3.5-5.6G ED VR II"),
-        (127, "Nikkor AF-S DX 18-105mm f/3.5-5.6G ED VR"),
-        (128, "Nikkor AF-S DX 10-24mm f/3.5-4.5G ED"),
-        (129, "Nikkor AF-S DX 35mm f/1.8G"),
-        (130, "Nikkor AF-S DX 40mm f/2.8G Micro"),
-        (131, "Nikkor AF-S DX 85mm f/3.5G ED VR Micro"),
-        (132, "Nikkor AF-S DX 12-24mm f/4G ED"),
-        (133, "Nikkor AF-S DX 17-55mm f/2.8G ED"),
-        (134, "Nikkor AF-S DX 18-70mm f/3.5-4.5G ED"),
-        (135, "Nikkor AF-S DX 18-140mm f/3.5-5.6G ED VR"),
-        (136, "Nikkor AF-S DX 16-80mm f/2.8-4E ED VR"),
-        (137, "Nikkor AF-S DX 10-18mm f/4.5-5.6G VR"),
-        (138, "Nikkor AF-S DX 55-300mm f/4.5-5.6G ED VR"),
-        (139, "Nikkor AF-S DX 18-300mm f/3.5-5.6G ED VR"),
-        (140, "Nikkor AF-S DX 18-300mm f/3.5-6.3G ED VR"),
-        (141, "Nikkor AF-S 14-24mm f/2.8G ED"),
-        (142, "Nikkor AF-S 24-70mm f/2.8G ED"),
-        (143, "Nikkor AF-S 24-120mm f/4G ED VR"),
-        (144, "Nikkor AF-S 28-300mm f/3.5-5.6G ED VR"),
-        (145, "Nikkor AF-S 16-35mm f/4G ED VR"),
-        (146, "Nikkor AF-S 70-200mm f/4G ED VR"),
-        (147, "Nikkor AF-S 24-70mm f/2.8G ED"),
-        (148, "Nikkor AF-S 24-120mm f/4G ED VR"),
-        (149, "Nikkor AF-S 80-400mm f/4.5-5.6G ED VR"),
-        (150, "Nikkor AF-S 200-500mm f/5.6E ED VR"),
-        (151, "Nikkor AF-S 70-200mm f/2.8G ED VR"),
-        (152, "Nikkor AF-S 70-200mm f/2.8G ED VR II"),
-        (153, "Nikkor AF-S 200-400mm f/4G ED VR"),
-        (154, "Nikkor AF-S 70-200mm f/2.8G ED VR II"),
-        (155, "Nikkor AF-S 300mm f/2.8G ED VR"),
-        (156, "Nikkor AF-S 400mm f/2.8G ED VR"),
-        (157, "Nikkor AF-S 500mm f/4G ED VR"),
-        (158, "Nikkor AF-S 600mm f/4G ED VR"),
-        (159, "Nikkor AF-S 800mm f/5.6E FL ED VR"),
-        (160, "Nikkor AF-S 200-400mm f/4G ED VR II"),
-        (161, "Nikkor AF-S 35mm f/1.8G"),
-        (162, "Nikkor AF-S 50mm f/1.8G"),
-        (163, "Nikkor AF-S 85mm f/1.8G"),
-        (164, "Nikkor AF-S 24mm f/1.4G ED"),
-        (165, "Nikkor AF-S 35mm f/1.4G"),
-        (166, "Nikkor AF-S 58mm f/1.4G"),
-        (167, "Nikkor AF-S 85mm f/1.4G"),
-        (168, "Nikkor AF-S 105mm f/1.4E ED"),
-        (169, "Nikkor AF-S 28mm f/1.8G"),
-        (170, "Nikkor AF-S 50mm f/1.4G"),
-        (171, "Nikkor AF-S VR Micro 105mm f/2.8G IF-ED"),
-        (172, "Nikkor AF-S VR Micro 60mm f/2.8G ED"),
-        (173, "Nikkor AF-S Micro 40mm f/2.8G"),
-        (174, "Nikkor Z 24-70mm f/4 S"),
-        (175, "Nikkor Z 14-30mm f/4 S"),
-        (176, "Nikkor Z 35mm f/1.8 S"),
-        (177, "Nikkor Z 50mm f/1.8 S"),
-        (178, "Nikkor Z 24-70mm f/2.8 S"),
-        (179, "Nikkor Z 70-200mm f/2.8 VR S"),
-        (180, "Nikkor Z 58mm f/0.95 S Noct"),
-        (181, "Nikkor Z 14-24mm f/2.8 S"),
-        (182, "Nikkor Z 20mm f/1.8 S"),
-        (183, "Nikkor Z 24mm f/1.8 S"),
-        (184, "Nikkor Z 50mm f/1.2 S"),
-        (185, "Nikkor Z 85mm f/1.8 S"),
-        (186, "Nikkor Z MC 105mm f/2.8 VR S"),
-        (187, "Nikkor Z MC 50mm f/2.8 Macro"),
-        (188, "Nikkor Z 40mm f/2"),
-        (189, "Nikkor Z 28mm f/2.8"),
-        (190, "Nikkor Z 24-50mm f/4-6.3"),
-        (191, "Nikkor Z 24-200mm f/4-6.3 VR"),
-        (192, "Nikkor Z 100-400mm f/4.5-5.6 VR S"),
-        (193, "Nikkor Z 800mm f/6.3 VR S"),
-        (194, "Nikkor Z 400mm f/2.8 TC VR S"),
-        (195, "Nikkor Z 400mm f/4.5 VR S"),
-        (196, "Nikkor Z 600mm f/4 TC VR S"),
-        (197, "Nikkor Z 800mm f/6.3 VR S"),
-        (198, "Nikkor Z 600mm f/6.3 VR S"),
-        (199, "Nikkor Z DX 16-50mm f/3.5-6.3 VR"),
-        (200, "Nikkor Z DX 50-250mm f/4.5-6.3 VR"),
-        (201, "Nikkor Z DX 18-140mm f/3.5-6.3 VR"),
-        (202, "Nikkor Z DX 24mm f/1.7"),
-        (203, "Nikkor Z DX 12-28mm f/3.5-5.6 PZ VR"),
-        (210, "Sigma 18-35mm f/1.8 DC HSM Art"),
-        (211, "Sigma 35mm f/1.4 DG HSM Art"),
-        (212, "Sigma 50mm f/1.4 DG HSM Art"),
-        (213, "Sigma 85mm f/1.4 DG HSM Art"),
-        (214, "Sigma 24-70mm f/2.8 DG OS HSM Art"),
-        (215, "Sigma 70-200mm f/2.8 DG OS HSM Sports"),
-        (216, "Sigma 150-600mm f/5-6.3 DG OS HSM Contemporary"),
-        (217, "Sigma 150-600mm f/5-6.3 DG OS HSM Sports"),
-        (218, "Tamron SP 24-70mm f/2.8 Di VC USD G2"),
-        (219, "Tamron SP 70-200mm f/2.8 Di VC USD G2"),
-        (220, "Tamron SP 150-600mm f/5-6.3 Di VC USD G2"),
-        (221, "Tamron SP 90mm f/2.8 Di VC USD Macro"),
-        (222, "Tokina 11-16mm f/2.8 AT-X Pro DX II"),
-        (223, "Tokina 11-20mm f/2.8 AT-X Pro DX"),
-    ];
-
-    pub static LENS_DB: StaticLensDb = StaticLensDb::new(&NIKON_LENSES);
-
-    pub fn lookup(lens_id: u16) -> Option<&'static str> {
-        LENS_DB.lookup(lens_id)
-    }
-}
-
 /// Sony lens database
 ///
 /// `%Image::ExifTool::Sony::sonyLensTypes`, the A-mount `LensType` table shared
@@ -765,264 +611,13 @@ pub mod sony {
     }
 }
 
-/// Olympus lens database
-pub mod olympus {
-    use super::*;
-
-    pub static OLYMPUS_LENSES: [(u16, &str); 95] = [
-        (0, "None"),
-        (1, "Olympus Zuiko Digital ED 50mm f/2.0 Macro"),
-        (2, "Olympus Zuiko Digital 40-150mm f/3.5-4.5"),
-        (3, "Olympus Zuiko Digital ED 300mm f/2.8"),
-        (4, "Olympus Zuiko Digital 14-54mm f/2.8-3.5"),
-        (5, "Olympus Zuiko Digital ED 50-200mm f/2.8-3.5"),
-        (6, "Olympus Zuiko Digital ED 7-14mm f/4.0"),
-        (7, "Olympus Zuiko Digital 11-22mm f/2.8-3.5"),
-        (8, "Olympus Zuiko Digital ED 50-200mm f/2.8-3.5 SWD"),
-        (9, "Olympus Zuiko Digital ED 12-60mm f/2.8-4.0 SWD"),
-        (10, "Olympus Zuiko Digital ED 14-35mm f/2.0 SWD"),
-        (11, "Olympus Zuiko Digital 25mm f/2.8"),
-        (12, "Olympus Zuiko Digital ED 9-18mm f/4.0-5.6"),
-        (13, "Olympus Zuiko Digital 14-45mm f/3.5-5.6"),
-        (14, "Olympus Zuiko Digital 35mm f/3.5 Macro"),
-        (15, "Olympus Zuiko Digital ED 14-42mm f/3.5-5.6"),
-        (16, "Olympus Zuiko Digital ED 40-150mm f/4.0-5.6"),
-        (17, "Olympus Zuiko Digital ED 70-300mm f/4.0-5.6"),
-        (18, "Olympus Zuiko Digital ED 18-180mm f/3.5-6.3"),
-        (19, "Olympus Zuiko Digital ED 100-400mm f/5.0-6.3"),
-        (32, "M.Zuiko Digital ED 14-42mm f/3.5-5.6 L"),
-        (33, "M.Zuiko Digital 17mm f/2.8 Pancake"),
-        (34, "M.Zuiko Digital ED 14-150mm f/4.0-5.6"),
-        (35, "M.Zuiko Digital ED 9-18mm f/4.0-5.6"),
-        (36, "M.Zuiko Digital ED 14-42mm f/3.5-5.6"),
-        (37, "M.Zuiko Digital ED 40-150mm f/4.0-5.6"),
-        (38, "M.Zuiko Digital ED 75-300mm f/4.8-6.7"),
-        (39, "M.Zuiko Digital 14-42mm f/3.5-5.6 II"),
-        (40, "M.Zuiko Digital ED 12-50mm f/3.5-6.3 EZ"),
-        (41, "M.Zuiko Digital 45mm f/1.8"),
-        (42, "M.Zuiko Digital ED 60mm f/2.8 Macro"),
-        (43, "M.Zuiko Digital ED 14-42mm f/3.5-5.6 IIR"),
-        (44, "M.Zuiko Digital ED 40-150mm f/4.0-5.6 R"),
-        (45, "M.Zuiko Digital ED 75mm f/1.8"),
-        (46, "M.Zuiko Digital 17mm f/1.8"),
-        (47, "M.Zuiko Digital 25mm f/1.8"),
-        (48, "M.Zuiko Digital ED 12-40mm f/2.8 PRO"),
-        (49, "M.Zuiko Digital ED 40-150mm f/2.8 PRO"),
-        (50, "M.Zuiko Digital ED 14-42mm f/3.5-5.6 EZ"),
-        (51, "M.Zuiko Digital ED 7-14mm f/2.8 PRO"),
-        (52, "M.Zuiko Digital ED 300mm f/4.0 IS PRO"),
-        (53, "M.Zuiko Digital ED 8mm f/1.8 Fisheye PRO"),
-        (54, "M.Zuiko Digital ED 12-50mm f/3.5-6.3 II EZ"),
-        (55, "M.Zuiko Digital ED 40-150mm f/4.0-5.6 R II"),
-        (56, "M.Zuiko Digital ED 14-150mm f/4.0-5.6 II"),
-        (57, "M.Zuiko Digital ED 12-200mm f/3.5-6.3"),
-        (58, "M.Zuiko Digital ED 75-300mm f/4.8-6.7 II"),
-        (64, "M.Zuiko Digital ED 12-100mm f/4.0 IS PRO"),
-        (65, "M.Zuiko Digital ED 25mm f/1.2 PRO"),
-        (66, "M.Zuiko Digital ED 17mm f/1.2 PRO"),
-        (67, "M.Zuiko Digital ED 45mm f/1.2 PRO"),
-        (68, "M.Zuiko Digital ED 100-400mm f/5.0-6.3 IS"),
-        (69, "M.Zuiko Digital ED 8-25mm f/4.0 PRO"),
-        (70, "M.Zuiko Digital ED 150-400mm f/4.5 TC1.25x IS PRO"),
-        (71, "M.Zuiko Digital ED 12-45mm f/4.0 PRO"),
-        (72, "M.Zuiko Digital ED 20mm f/1.4 PRO"),
-        (73, "M.Zuiko Digital ED 40-150mm f/4.0 PRO"),
-        (80, "M.Zuiko Digital ED 30mm f/3.5 Macro"),
-        (81, "M.Zuiko Digital 9mm f/8.0 Fisheye Body Cap Lens"),
-        (82, "M.Zuiko Digital 15mm f/8.0 Body Cap Lens"),
-        (83, "M.Zuiko Digital ED 12mm f/2.0"),
-        (84, "M.Zuiko Digital ED 30mm f/3.5 Macro ED"),
-        (0x0101, "M.Zuiko Digital 14-42mm f/3.5-5.6 II R"),
-        (0x0201, "M.Zuiko Digital ED 12-50mm f/3.5-6.3 EZ"),
-        (0x0202, "M.Zuiko Digital ED 40-150mm f/4.0-5.6 R"),
-        (0x0203, "M.Zuiko Digital ED 75mm f/1.8"),
-        (0x0204, "M.Zuiko Digital 17mm f/1.8"),
-        (0x0205, "M.Zuiko Digital 25mm f/1.8"),
-        (0x0206, "M.Zuiko Digital ED 12-40mm f/2.8 PRO"),
-        (0x0207, "M.Zuiko Digital ED 40-150mm f/2.8 PRO"),
-        (0x0208, "M.Zuiko Digital ED 14-42mm f/3.5-5.6 EZ"),
-        (0x0209, "M.Zuiko Digital ED 7-14mm f/2.8 PRO"),
-        (0x020A, "M.Zuiko Digital ED 300mm f/4.0 IS PRO"),
-        (0x020B, "M.Zuiko Digital ED 8mm f/1.8 Fisheye PRO"),
-        (0x020C, "M.Zuiko Digital ED 12-50mm f/3.5-6.3 II EZ"),
-        (0x020D, "M.Zuiko Digital ED 14-150mm f/4.0-5.6 II"),
-        (0x020E, "M.Zuiko Digital ED 12-200mm f/3.5-6.3"),
-        (0x020F, "M.Zuiko Digital ED 75-300mm f/4.8-6.7 II"),
-        (0x0210, "M.Zuiko Digital ED 12-100mm f/4.0 IS PRO"),
-        (0x0211, "M.Zuiko Digital ED 30mm f/3.5 Macro"),
-        (0x0212, "M.Zuiko Digital ED 25mm f/1.2 PRO"),
-        (0x0213, "M.Zuiko Digital ED 17mm f/1.2 PRO"),
-        (0x0214, "M.Zuiko Digital ED 45mm f/1.2 PRO"),
-        (0x0215, "M.Zuiko Digital ED 100-400mm f/5.0-6.3 IS"),
-        (0x0216, "M.Zuiko Digital ED 8-25mm f/4.0 PRO"),
-        (0x0217, "M.Zuiko Digital ED 150-400mm f/4.5 TC1.25x IS PRO"),
-        (0x0218, "M.Zuiko Digital ED 12-45mm f/4.0 PRO"),
-        (0x0219, "M.Zuiko Digital ED 20mm f/1.4 PRO"),
-        (0x021A, "M.Zuiko Digital ED 40-150mm f/4.0 PRO"),
-        (0x021B, "M.Zuiko Digital ED 90mm f/3.5 Macro IS PRO"),
-        (0x0301, "Sigma 30mm f/2.8 DN Art"),
-        (0x0302, "Sigma 19mm f/2.8 DN Art"),
-        (0x0303, "Sigma 60mm f/2.8 DN Art"),
-        (0x0304, "Panasonic Lumix G 20mm f/1.7 ASPH"),
-        (0x0305, "Panasonic Leica DG Summilux 15mm f/1.7 ASPH"),
-    ];
-
-    pub static LENS_DB: StaticLensDb = StaticLensDb::new(&OLYMPUS_LENSES);
-
-    pub fn lookup(lens_id: u16) -> Option<&'static str> {
-        LENS_DB.lookup(lens_id)
-    }
-
-    pub fn parse_hex_lens_id(hex_str: &str) -> Option<u16> {
-        if hex_str.starts_with("0x") || hex_str.starts_with("0X") {
-            u16::from_str_radix(&hex_str[2..], 16).ok()
-        } else {
-            hex_str.parse::<u16>().ok()
-        }
-    }
-}
-
 /// Pentax lens database
 pub mod pentax {
-    use super::*;
-
-    pub static PENTAX_LENSES: [(u16, &str); 120] = [
-        (1, "SMC Pentax-K 50mm f/1.2"),
-        (2, "SMC Pentax-K 50mm f/1.4"),
-        (3, "SMC Pentax-K 28mm f/2.8"),
-        (4, "SMC Pentax-K 35mm f/2.8"),
-        (5, "SMC Pentax-K 135mm f/2.5"),
-        (6, "SMC Pentax-M 50mm f/1.7"),
-        (7, "SMC Pentax-M 50mm f/1.4"),
-        (8, "SMC Pentax-M 50mm f/2.0"),
-        (9, "SMC Pentax-M 28mm f/2.8"),
-        (10, "SMC Pentax-M 35mm f/2.0"),
-        (11, "SMC Pentax-M 40mm f/2.8"),
-        (12, "SMC Pentax-M 100mm f/2.8"),
-        (13, "SMC Pentax-M 135mm f/3.5"),
-        (14, "SMC Pentax-M 200mm f/4.0"),
-        (20, "SMC Pentax-A 50mm f/1.4"),
-        (21, "SMC Pentax-A 50mm f/1.7"),
-        (22, "SMC Pentax-A 50mm f/2.0"),
-        (23, "SMC Pentax-A 28mm f/2.8"),
-        (24, "SMC Pentax-A 35mm f/2.0"),
-        (25, "SMC Pentax-A 85mm f/1.4"),
-        (26, "SMC Pentax-A 100mm f/2.8 Macro"),
-        (27, "SMC Pentax-A 135mm f/2.8"),
-        (28, "SMC Pentax-A 200mm f/2.8"),
-        (29, "SMC Pentax-A 200mm f/4.0"),
-        (30, "SMC Pentax-A 300mm f/4.0"),
-        (40, "SMC Pentax-F 50mm f/1.4"),
-        (41, "SMC Pentax-F 50mm f/1.7"),
-        (42, "SMC Pentax-F 35-70mm f/3.5-4.5"),
-        (43, "SMC Pentax-F 70-210mm f/4.0-5.6"),
-        (44, "SMC Pentax-F 100mm f/2.8 Macro"),
-        (45, "SMC Pentax-F 28-80mm f/3.5-4.5"),
-        (50, "SMC Pentax-FA 28mm f/2.8 AL"),
-        (51, "SMC Pentax-FA 31mm f/1.8 AL Limited"),
-        (52, "SMC Pentax-FA 35mm f/2.0 AL"),
-        (53, "SMC Pentax-FA 43mm f/1.9 Limited"),
-        (54, "SMC Pentax-FA 50mm f/1.4"),
-        (55, "SMC Pentax-FA 50mm f/1.7"),
-        (56, "SMC Pentax-FA 77mm f/1.8 Limited"),
-        (57, "SMC Pentax-FA 100mm f/2.8 Macro"),
-        (58, "SMC Pentax-FA 135mm f/2.8"),
-        (59, "SMC Pentax-FA 200mm f/2.8"),
-        (60, "SMC Pentax-FA 28-70mm f/4.0 AL"),
-        (61, "SMC Pentax-FA 28-105mm f/4.0-5.6"),
-        (62, "SMC Pentax-FA 35-80mm f/4.0-5.6"),
-        (63, "SMC Pentax-FA 70-200mm f/4.0-5.6"),
-        (64, "SMC Pentax-FA 80-200mm f/2.8 ED IF"),
-        (65, "SMC Pentax-FA 100-300mm f/4.5-5.6"),
-        (70, "HD Pentax-DA 15mm f/4.0 ED AL Limited"),
-        (71, "HD Pentax-DA 20-40mm f/2.8-4.0 ED Limited DC WR"),
-        (72, "HD Pentax-DA 21mm f/3.2 AL Limited"),
-        (73, "HD Pentax-DA 35mm f/2.8 Macro Limited"),
-        (74, "HD Pentax-DA 40mm f/2.8 Limited"),
-        (75, "HD Pentax-DA 55mm f/1.4 SDM"),
-        (76, "HD Pentax-DA 70mm f/2.4 Limited"),
-        (77, "HD Pentax-DA 16-85mm f/3.5-5.6 ED DC WR"),
-        (78, "HD Pentax-DA 560mm f/5.6 ED AW"),
-        (80, "SMC Pentax-DA 14mm f/2.8 ED IF"),
-        (81, "SMC Pentax-DA 15mm f/4.0 ED AL Limited"),
-        (82, "SMC Pentax-DA 18-55mm f/3.5-5.6 AL"),
-        (83, "SMC Pentax-DA 18-55mm f/3.5-5.6 AL II"),
-        (84, "SMC Pentax-DA 18-55mm f/3.5-5.6 AL WR"),
-        (85, "SMC Pentax-DA 18-135mm f/3.5-5.6 ED AL IF DC WR"),
-        (86, "SMC Pentax-DA 18-250mm f/3.5-6.3 ED AL IF"),
-        (87, "SMC Pentax-DA 21mm f/3.2 AL Limited"),
-        (88, "SMC Pentax-DA 35mm f/2.4 AL"),
-        (89, "SMC Pentax-DA 35mm f/2.8 Macro Limited"),
-        (90, "SMC Pentax-DA 40mm f/2.8 Limited"),
-        (91, "SMC Pentax-DA 40mm f/2.8 XS"),
-        (92, "SMC Pentax-DA 50mm f/1.8"),
-        (93, "SMC Pentax-DA 50-135mm f/2.8 ED IF SDM"),
-        (94, "SMC Pentax-DA 50-200mm f/4.0-5.6 ED"),
-        (95, "SMC Pentax-DA 50-200mm f/4.0-5.6 ED WR"),
-        (96, "SMC Pentax-DA 55mm f/1.4 SDM"),
-        (97, "SMC Pentax-DA 55-300mm f/4.0-5.8 ED"),
-        (98, "SMC Pentax-DA 55-300mm f/4.5-6.3 ED PLM WR RE"),
-        (99, "SMC Pentax-DA 60-250mm f/4.0 ED IF SDM"),
-        (100, "SMC Pentax-DA 70mm f/2.4 Limited"),
-        (101, "SMC Pentax-DA 300mm f/4.0 ED IF SDM"),
-        (110, "SMC Pentax-DA* 16-50mm f/2.8 ED AL IF SDM"),
-        (111, "SMC Pentax-DA* 50-135mm f/2.8 ED IF SDM"),
-        (112, "SMC Pentax-DA* 55mm f/1.4 SDM"),
-        (113, "SMC Pentax-DA* 200mm f/2.8 ED IF SDM"),
-        (114, "SMC Pentax-DA* 300mm f/4.0 ED IF SDM"),
-        (120, "HD Pentax-D FA 15-30mm f/2.8 ED SDM WR"),
-        (121, "HD Pentax-D FA 21mm f/2.4 ED Limited DC WR"),
-        (122, "HD Pentax-D FA 24-70mm f/2.8 ED SDM WR"),
-        (123, "HD Pentax-D FA 28-105mm f/3.5-5.6 ED DC WR"),
-        (124, "HD Pentax-D FA 35mm f/2.0 AL"),
-        (125, "HD Pentax-D FA 50mm f/1.4 SDM AW"),
-        (126, "HD Pentax-D FA 70-210mm f/4.0 ED SDM WR"),
-        (127, "HD Pentax-D FA 85mm f/1.4 ED SDM AW"),
-        (128, "HD Pentax-D FA 100mm f/2.8 Macro WR"),
-        (129, "HD Pentax-D FA 150-450mm f/4.5-5.6 ED DC AW"),
-        (130, "HD Pentax-D FA* 50mm f/1.4 SDM AW"),
-        (131, "HD Pentax-D FA* 70-200mm f/2.8 ED DC AW"),
-        (132, "HD Pentax-D FA* 85mm f/1.4 ED SDM AW"),
-        (140, "SMC Pentax-D FA Macro 50mm f/2.8"),
-        (141, "SMC Pentax-D FA Macro 100mm f/2.8 WR"),
-        (150, "SMC Pentax-DA Fish-Eye 10-17mm f/3.5-4.5 ED IF"),
-        (151, "HD Pentax-DA Fish-Eye 10-17mm f/3.5-4.5 ED"),
-        (152, "SMC Pentax-F Fish-Eye 17-28mm f/3.5-4.5"),
-        (153, "SMC Pentax Fish-Eye 10mm f/2.8"),
-        (200, "Sigma 10-20mm f/3.5 EX DC HSM (Pentax)"),
-        (201, "Sigma 17-50mm f/2.8 EX DC OS HSM (Pentax)"),
-        (202, "Sigma 17-70mm f/2.8-4 DC Macro OS HSM (Pentax)"),
-        (203, "Sigma 18-35mm f/1.8 DC HSM Art (Pentax)"),
-        (204, "Sigma 30mm f/1.4 DC HSM Art (Pentax)"),
-        (205, "Sigma 50mm f/1.4 DG HSM Art (Pentax)"),
-        (206, "Sigma 50-100mm f/1.8 DC HSM Art (Pentax)"),
-        (207, "Sigma 105mm f/2.8 EX DG OS HSM Macro (Pentax)"),
-        (
-            208,
-            "Sigma 150-600mm f/5.0-6.3 DG OS HSM Contemporary (Pentax)",
-        ),
-        (209, "Sigma 150-600mm f/5.0-6.3 DG OS HSM Sports (Pentax)"),
-        (210, "Tamron 10-24mm f/3.5-4.5 Di II LD (Pentax)"),
-        (211, "Tamron 16-300mm f/3.5-6.3 Di II VC PZD Macro (Pentax)"),
-        (212, "Tamron 17-50mm f/2.8 XR Di II LD (Pentax)"),
-        (213, "Tamron 70-200mm f/2.8 Di LD IF Macro (Pentax)"),
-        (214, "Tamron 90mm f/2.8 Di VC USD Macro (Pentax)"),
-        (215, "Tokina 11-16mm f/2.8 AT-X Pro DX II (Pentax)"),
-        (216, "Tokina 12-28mm f/4.0 AT-X Pro (Pentax)"),
-        (217, "Tokina 100mm f/2.8 AT-X Pro D Macro (Pentax)"),
-    ];
-
-    pub static LENS_DB: StaticLensDb = StaticLensDb::new(&PENTAX_LENSES);
-
-    pub fn lookup(lens_id: u16) -> Option<&'static str> {
-        LENS_DB.lookup(lens_id)
-    }
-
-    /// Composite (series, sub-id) lens type table, matching ExifTool's
-    /// `%pentaxLensTypes` hash (keyed there by the string "series sub_id").
-    /// This is the table used to decode the Pentax LensType tag (0x003f
-    /// LensRec, and the LensType field of LensInfo/LensInfo2/etc), which is
-    /// distinct from the single-number `PENTAX_LENSES` table above.
+    /// ExifTool's `%pentaxLensTypes` (Pentax.pm:75), keyed there by the string
+    /// `"series sub_id"` -- the two bytes the LensType tag holds (0x003f
+    /// LensRec, and the LensType field of LensInfo/LensInfo2/etc).  It is keyed
+    /// on that pair and nothing else; there is no single-number Pentax lens
+    /// table in ExifTool.
     /// Only the base (non fractional-disambiguated) entries are included;
     /// ExifTool uses extra heuristics (focal length, etc) to disambiguate a
     /// handful of ambiguous IDs which share the exact same (series, sub_id)
@@ -1353,297 +948,115 @@ pub mod pentax {
     }
 }
 
-/// Panasonic lens database
-pub mod panasonic {
-    use super::*;
-
-    pub static PANASONIC_LENSES: [(u16, &str); 80] = [
-        (1, "Lumix G Vario 14-42mm f/3.5-5.6 ASPH. MEGA O.I.S."),
-        (2, "Lumix G Vario 45-200mm f/4.0-5.6 MEGA O.I.S."),
-        (3, "Lumix G Vario 14-140mm f/4.0-5.8 ASPH. MEGA O.I.S."),
-        (4, "Lumix G Vario HD 14-140mm f/4.0-5.8 ASPH. MEGA O.I.S."),
-        (5, "Lumix G Vario 45-150mm f/4.0-5.6 ASPH. MEGA O.I.S."),
-        (6, "Lumix G Vario 12-32mm f/3.5-5.6 ASPH. MEGA O.I.S."),
-        (7, "Lumix G Vario 35-100mm f/4.0-5.6 ASPH. MEGA O.I.S."),
-        (8, "Lumix G X Vario 12-35mm f/2.8 ASPH. POWER O.I.S."),
-        (9, "Lumix G X Vario 35-100mm f/2.8 POWER O.I.S."),
-        (10, "Lumix G X Vario 12-35mm f/2.8 II ASPH. POWER O.I.S."),
-        (11, "Lumix G X Vario 35-100mm f/2.8 II POWER O.I.S."),
-        (12, "Lumix G Vario 14-42mm f/3.5-5.6 II ASPH. MEGA O.I.S."),
-        (13, "Lumix G Vario 100-300mm f/4.0-5.6 MEGA O.I.S."),
-        (14, "Lumix G Vario 45-200mm f/4.0-5.6 II POWER O.I.S."),
-        (
-            15,
-            "Lumix G X Vario 12-35mm f/2.8 ASPH. POWER O.I.S. (Mark II)",
-        ),
-        (20, "Lumix G 20mm f/1.7 ASPH."),
-        (21, "Lumix G 20mm f/1.7 II ASPH."),
-        (22, "Lumix G 14mm f/2.5 ASPH."),
-        (23, "Lumix G 25mm f/1.7 ASPH."),
-        (24, "Lumix G 42.5mm f/1.7 ASPH. POWER O.I.S."),
-        (25, "Lumix G 15mm f/1.7 ASPH."),
-        (26, "Lumix G 8mm f/3.5 Fisheye"),
-        (27, "Lumix G Macro 30mm f/2.8 ASPH. MEGA O.I.S."),
-        (28, "Lumix G 42.5mm f/1.2 ASPH. POWER O.I.S."),
-        (29, "Lumix G 25mm f/1.4 ASPH."),
-        (30, "Leica DG Summilux 15mm f/1.7 ASPH."),
-        (31, "Leica DG Summilux 25mm f/1.4 ASPH."),
-        (32, "Leica DG Nocticron 42.5mm f/1.2 ASPH. POWER O.I.S."),
-        (33, "Leica DG Vario-Elmarit 8-18mm f/2.8-4.0 ASPH."),
-        (
-            34,
-            "Leica DG Vario-Elmarit 12-60mm f/2.8-4.0 ASPH. POWER O.I.S.",
-        ),
-        (35, "Leica DG Elmarit 200mm f/2.8 POWER O.I.S."),
-        (
-            36,
-            "Leica DG Vario-Elmarit 100-400mm f/4.0-6.3 ASPH. POWER O.I.S.",
-        ),
-        (37, "Leica DG Summilux 10-25mm f/1.7 ASPH."),
-        (38, "Leica DG Vario-Summilux 10-25mm f/1.7 ASPH."),
-        (39, "Leica DG Vario-Summilux 25-50mm f/1.7 ASPH."),
-        (40, "Lumix G X Vario 12-35mm f/2.8 ASPH. POWER O.I.S. (Pro)"),
-        (
-            41,
-            "Lumix G X Vario 35-100mm f/2.8 ASPH. POWER O.I.S. (Pro)",
-        ),
-        (42, "Lumix G Vario 7-14mm f/4.0 ASPH."),
-        (43, "Lumix G Vario 100-300mm f/4.0-5.6 II POWER O.I.S."),
-        (44, "Lumix G 8-18mm f/2.8-4.0 ASPH."),
-        (45, "Lumix G Vario 14-140mm f/3.5-5.6 ASPH. POWER O.I.S."),
-        (100, "Lumix S 20-60mm f/3.5-5.6"),
-        (101, "Lumix S 24-105mm f/4 MACRO O.I.S."),
-        (102, "Lumix S Pro 16-35mm f/4"),
-        (103, "Lumix S Pro 24-70mm f/2.8"),
-        (104, "Lumix S Pro 70-200mm f/2.8 O.I.S."),
-        (105, "Lumix S Pro 70-200mm f/4 O.I.S."),
-        (106, "Lumix S 24-70mm f/2.8 (Mark II)"),
-        (107, "Lumix S 70-200mm f/2.8 (Mark II)"),
-        (108, "Lumix S 70-300mm f/4.5-5.6 MACRO O.I.S."),
-        (110, "Lumix S 14mm f/1.8"),
-        (111, "Lumix S 18mm f/1.8"),
-        (112, "Lumix S 20mm f/1.8"),
-        (113, "Lumix S 24mm f/1.8"),
-        (114, "Lumix S 35mm f/1.8"),
-        (115, "Lumix S 50mm f/1.8"),
-        (116, "Lumix S 85mm f/1.8"),
-        (117, "Lumix S Pro 50mm f/1.4"),
-        (118, "Lumix S 5mm f/1.8 (ultra-wide prime)"),
-        (120, "Lumix S 50mm f/2.8 Macro"),
-        (121, "Lumix S 100mm f/2.8 Macro"),
-        (
-            130,
-            "Lumix G Vario 14-42mm f/3.5-5.6 ASPH. POWER O.I.S. (Pancake)",
-        ),
-        (131, "Lumix G Vario 12-60mm f/3.5-5.6 ASPH. POWER O.I.S."),
-        (
-            132,
-            "Lumix G Vario 14-140mm f/3.5-5.6 II ASPH. POWER O.I.S.",
-        ),
-        (
-            133,
-            "Lumix G X Vario PZ 14-42mm f/3.5-5.6 ASPH. POWER O.I.S. (Power Zoom)",
-        ),
-        (
-            134,
-            "Lumix G X Vario PZ 45-175mm f/4.0-5.6 ASPH. POWER O.I.S. (Power Zoom)",
-        ),
-        (200, "Olympus M.Zuiko Digital ED 12-40mm f/2.8 PRO"),
-        (201, "Olympus M.Zuiko Digital ED 40-150mm f/2.8 PRO"),
-        (202, "Olympus M.Zuiko Digital ED 7-14mm f/2.8 PRO"),
-        (203, "Olympus M.Zuiko Digital ED 300mm f/4.0 IS PRO"),
-        (204, "Olympus M.Zuiko Digital 17mm f/1.8"),
-        (205, "Olympus M.Zuiko Digital 25mm f/1.8"),
-        (206, "Olympus M.Zuiko Digital 45mm f/1.8"),
-        (210, "Leica DG Summilux 9mm f/1.7 ASPH."),
-        (211, "Leica DG Summilux 12mm f/1.4 ASPH."),
-        (
-            212,
-            "Leica DG Vario-Elmarit 50-200mm f/2.8-4.0 ASPH. POWER O.I.S.",
-        ),
-        (220, "Lumix S 24mm f/1.8 (Cine)"),
-        (221, "Lumix S 35mm f/1.8 (Cine)"),
-        (222, "Lumix S 50mm f/1.8 (Cine)"),
-        (223, "Lumix S 85mm f/1.8 (Cine)"),
-    ];
-
-    pub static LENS_DB: StaticLensDb = StaticLensDb::new(&PANASONIC_LENSES);
-
-    pub fn lookup(lens_id: u16) -> Option<&'static str> {
-        LENS_DB.lookup(lens_id)
-    }
-}
-
-/// Fujifilm lens database
-pub mod fujifilm {
-    use super::*;
-
-    pub static FUJIFILM_LENSES: [(u16, &str); 60] = [
-        (1, "XF 18-55mm f/2.8-4 R LM OIS"),
-        (6, "XF 55-200mm f/3.5-4.8 R LM OIS"),
-        (11, "XC 16-50mm f/3.5-5.6 OIS"),
-        (12, "XC 50-230mm f/4.5-6.7 OIS"),
-        (17, "XF 10-24mm f/4 R OIS"),
-        (20, "XF 50-140mm f/2.8 R LM OIS WR"),
-        (23, "XF 14mm f/2.8 R"),
-        (26, "XF 18mm f/2 R"),
-        (27, "XF 27mm f/2.8"),
-        (29, "XF 16-55mm f/2.8 R LM WR"),
-        (33, "XF 16mm f/1.4 R WR"),
-        (35, "XF 35mm f/1.4 R"),
-        (45, "GF 45mm f/2.8 R WR"),
-        (60, "XF 60mm f/2.4 R Macro"),
-        (63, "GF 63mm f/2.8 R WR"),
-        (80, "XF 80mm f/2.8 R LM OIS WR Macro"),
-        (100, "GF 100-200mm f/5.6 R LM OIS WR"),
-        (110, "GF 110mm f/2 R LM WR"),
-        (147, "XF 23mm f/1.4 R"),
-        (148, "XF 56mm f/1.2 R"),
-        (163, "XF 35mm f/2 R WR"),
-        (189, "XF 50mm f/1.0 R WR"),
-        (235, "XF 56mm f/1.2 R APD"),
-        (250, "GF 250mm f/4 R LM OIS WR"),
-        (256, "XF 23mm f/1.4 R LM WR"),
-        (257, "XF 16mm f/2.8 R WR"),
-        (258, "XF 23mm f/2 R WR"),
-        (259, "XF 33mm f/1.4 R LM WR"),
-        (260, "XF 50mm f/2 R WR"),
-        (261, "XF 70-300mm f/4-5.6 R LM OIS WR"),
-        (269, "XF 27mm f/2.8 R WR"),
-        (270, "XF 90mm f/2 R LM WR"),
-        (271, "XF 16-80mm f/4 R OIS WR"),
-        (272, "XF 100-400mm f/4.5-5.6 R LM OIS WR"),
-        (273, "XF 150-600mm f/5.6-8 R LM OIS WR"),
-        (274, "XF 8-16mm f/2.8 R LM WR"),
-        (275, "XC 16-50mm f/3.5-5.6 OIS II"),
-        (276, "XC 50-230mm f/4.5-6.7 OIS II"),
-        (277, "XC 15-45mm f/3.5-5.6 OIS PZ"),
-        (278, "XC 35mm f/2"),
-        (279, "GF 23mm f/4 R LM WR"),
-        (280, "GF 32-64mm f/4 R LM WR"),
-        (281, "GF 50mm f/3.5 R LM WR"),
-        (282, "GF 120mm f/4 Macro R LM OIS WR"),
-        (283, "GF 20-35mm f/4 R WR"),
-        (284, "GF 35-70mm f/4.5-5.6 WR"),
-        (285, "GF 45-100mm f/4 R LM OIS WR"),
-        (286, "GF 1.4X TC WR"),
-        (287, "GF 2X TC WR"),
-        (288, "XF 1.4X TC WR"),
-        (289, "XF 2X TC WR"),
-        (290, "XF 18mm f/1.4 R LM WR"),
-        (291, "XF 33mm f/1.4 R LM WR"),
-        (292, "XF 30mm f/2.8 R LM WR Macro"),
-        (293, "GF 80mm f/1.7 R WR"),
-        (294, "GF 30mm f/3.5 R WR"),
-        (295, "GF 30mm f/5.6 T/S"),
-        (296, "XF 70-300mm f/4-5.6 R LM OIS WR"),
-        (297, "GF 55mm f/1.7 R WR"),
-        (4095, "XF 18-120mm f/4 R LM OIS WR"),
-    ];
-
-    pub static LENS_DB: StaticLensDb = StaticLensDb::new(&FUJIFILM_LENSES);
-
-    pub fn lookup(lens_id: u16) -> Option<&'static str> {
-        LENS_DB.lookup(lens_id)
-    }
-}
-
 /// Leica lens database
 pub mod leica {
-    use super::*;
+    //! ExifTool's `%Image::ExifTool::Panasonic::leicaLensTypes` (Panasonic.pm:46),
+    //! the `PrintConv` shared by every Leica `LensType` tag: `Leica2` 0x0310
+    //! (Panasonic.pm:1648), `Subdir` 0x3405 (Panasonic.pm:1894) and `Data1`
+    //! 0x0016 (Panasonic.pm:1977).
+    //!
+    //! TRANSCRIBED BY SCRIPT (`scripts/gen_leica_lens_types.pl`) from ExifTool's
+    //! own in-memory Perl hash, and every name is additionally traced back to a
+    //! literal `key => 'name',` line in Panasonic.pm -- quoted beside each entry
+    //! -- before it is emitted.  The generator hard-errors on anything it has
+    //! not seen (a value that is a reference rather than a scalar, a key that is
+    //! neither `N` nor `N M`, a half outside the range the reader can produce, or
+    //! a name with no source line) rather than dropping it silently.
+    //!
+    //! # Key shape
+    //!
+    //! The tag is an `int32u`, and ExifTool's `ValueConv` splits it into two
+    //! integers -- `($val >> 2) . " " . ($val & 0x3)`.  The second number is the
+    //! M8/M9 frame-selector position, and only a handful of lenses are
+    //! distinguished by it; ExifTool's `OTHER` handler strips it and retries with
+    //! the first number alone for everything else.  `Some(sub)` here is an entry
+    //! ExifTool files under the two-number key, `None` one it files under the
+    //! bare id.
 
-    pub static LEICA_LENSES: [(u16, &str); 50] = [
-        (1, "Leica Summilux-M 21mm f/1.4 ASPH"),
-        (2, "Leica Summilux-M 24mm f/1.4 ASPH"),
-        (3, "Leica Summilux-M 28mm f/1.4 ASPH"),
-        (4, "Leica Summilux-M 35mm f/1.4 ASPH"),
-        (5, "Leica Summilux-M 50mm f/1.4 ASPH"),
-        (6, "Leica Summilux-M 75mm f/1.4"),
-        (7, "Leica Summilux-M 90mm f/1.5 ASPH"),
-        (10, "Leica Noctilux-M 50mm f/0.95 ASPH"),
-        (11, "Leica Noctilux-M 50mm f/1.2 ASPH"),
-        (12, "Leica Noctilux-M 75mm f/1.25 ASPH"),
-        (20, "Leica APO-Summicron-M 35mm f/2.0 ASPH"),
-        (21, "Leica APO-Summicron-M 50mm f/2.0 ASPH"),
-        (22, "Leica APO-Summicron-M 75mm f/2.0 ASPH"),
-        (23, "Leica APO-Summicron-M 90mm f/2.0 ASPH"),
-        (30, "Leica Summicron-M 21mm f/2.0 ASPH"),
-        (31, "Leica Summicron-M 28mm f/2.0 ASPH"),
-        (32, "Leica Summicron-M 35mm f/2.0 ASPH"),
-        (33, "Leica Summicron-M 50mm f/2.0"),
-        (34, "Leica Summicron-M 90mm f/2.0"),
-        (40, "Leica Elmarit-M 21mm f/2.8 ASPH"),
-        (41, "Leica Elmarit-M 24mm f/2.8 ASPH"),
-        (42, "Leica Elmarit-M 28mm f/2.8 ASPH"),
-        (43, "Leica Elmarit-M 90mm f/2.8"),
-        (50, "Leica Macro-Elmar-M 90mm f/4.0"),
-        (100, "Leica APO-Summicron-SL 35mm f/2.0 ASPH"),
-        (101, "Leica APO-Summicron-SL 50mm f/2.0 ASPH"),
-        (102, "Leica APO-Summicron-SL 75mm f/2.0 ASPH"),
-        (103, "Leica APO-Summicron-SL 90mm f/2.0 ASPH"),
-        (110, "Leica Summilux-SL 50mm f/1.4 ASPH"),
-        (120, "Leica Vario-Elmarit-SL 24-70mm f/2.8 ASPH"),
-        (121, "Leica Vario-Elmarit-SL 24-90mm f/2.8-4.0 ASPH"),
-        (130, "Leica APO-Vario-Elmarit-SL 90-280mm f/2.8-4.0"),
-        (140, "Leica APO-Telyt-SL 400mm f/2.8"),
-        (200, "Leica APO-Summicron-TL 23mm f/2.0 ASPH"),
-        (201, "Leica APO-Summicron-TL 35mm f/2.0 ASPH"),
-        (210, "Leica Summicron-TL 23mm f/2.0 ASPH"),
-        (220, "Leica Elmarit-TL 18mm f/2.8 ASPH"),
-        (230, "Leica Vario-Elmar-TL 18-56mm f/3.5-5.6 ASPH"),
-        (231, "Leica APO-Vario-Elmar-TL 55-135mm f/3.5-4.5 ASPH"),
-        (300, "Leica Summilux-R 50mm f/1.4"),
-        (301, "Leica Summicron-R 50mm f/2.0"),
-        (302, "Leica Elmarit-R 28mm f/2.8"),
-        (303, "Leica Elmarit-R 35mm f/2.8"),
-        (304, "Leica APO-Telyt-R 180mm f/3.4"),
-        (400, "Sigma 35mm f/1.2 DG DN Art (L-mount)"),
-        (401, "Sigma 50mm f/1.4 DG DN Art (L-mount)"),
-        (402, "Sigma 85mm f/1.4 DG DN Art (L-mount)"),
-        (403, "Sigma 105mm f/2.8 DG DN Macro Art (L-mount)"),
-        (404, "Panasonic Lumix S Pro 50mm f/1.4 (L-mount)"),
-        (405, "Panasonic Lumix S Pro 70-200mm f/2.8 OIS (L-mount)"),
+    pub static LEICA_LENS_TYPES: [(u16, Option<u8>, &str); 58] = [
+        (0, Some(0), "Uncoded lens"),                   // Panasonic.pm:71
+        (1, None, "Elmarit-M 21mm f/2.8"),              // Panasonic.pm:76
+        (3, None, "Elmarit-M 28mm f/2.8 (III)"),        // Panasonic.pm:77
+        (4, None, "Tele-Elmarit-M 90mm f/2.8 (II)"),    // Panasonic.pm:78
+        (5, None, "Summilux-M 50mm f/1.4 (II)"),        // Panasonic.pm:79
+        (6, None, "Summicron-M 35mm f/2 (IV)"),         // Panasonic.pm:80
+        (6, Some(0), "Summilux-M 35mm f/1.4"),          // Panasonic.pm:81
+        (7, None, "Summicron-M 90mm f/2 (II)"),         // Panasonic.pm:82
+        (9, None, "Elmarit-M 135mm f/2.8 (I/II)"),      // Panasonic.pm:83
+        (9, Some(0), "Apo-Telyt-M 135mm f/3.4"),        // Panasonic.pm:84
+        (11, None, "Summaron-M 28mm f/5.6"),            // Panasonic.pm:85
+        (12, None, "Thambar-M 90mm f/2.2"),             // Panasonic.pm:86
+        (16, None, "Tri-Elmar-M 16-18-21mm f/4 ASPH."), // Panasonic.pm:87
+        (16, Some(1), "Tri-Elmar-M 16-18-21mm f/4 ASPH. (at 16mm)"), // Panasonic.pm:88
+        (16, Some(2), "Tri-Elmar-M 16-18-21mm f/4 ASPH. (at 18mm)"), // Panasonic.pm:89
+        (16, Some(3), "Tri-Elmar-M 16-18-21mm f/4 ASPH. (at 21mm)"), // Panasonic.pm:90
+        (23, None, "Summicron-M 50mm f/2 (III)"),       // Panasonic.pm:91
+        (24, None, "Elmarit-M 21mm f/2.8 ASPH."),       // Panasonic.pm:92
+        (25, None, "Elmarit-M 24mm f/2.8 ASPH."),       // Panasonic.pm:93
+        (26, None, "Summicron-M 28mm f/2 ASPH."),       // Panasonic.pm:94
+        (27, None, "Elmarit-M 28mm f/2.8 (IV)"),        // Panasonic.pm:95
+        (28, None, "Elmarit-M 28mm f/2.8 ASPH."),       // Panasonic.pm:96
+        (29, None, "Summilux-M 35mm f/1.4 ASPH."),      // Panasonic.pm:97
+        (29, Some(0), "Summilux-M 35mm f/1.4 ASPHERICAL"), // Panasonic.pm:98
+        (30, None, "Summicron-M 35mm f/2 ASPH."),       // Panasonic.pm:99
+        (31, None, "Noctilux-M 50mm f/1"),              // Panasonic.pm:100
+        (31, Some(0), "Noctilux-M 50mm f/1.2"),         // Panasonic.pm:101
+        (32, None, "Summilux-M 50mm f/1.4 ASPH."),      // Panasonic.pm:102
+        (33, None, "Summicron-M 50mm f/2 (IV, V)"),     // Panasonic.pm:103
+        (34, None, "Elmar-M 50mm f/2.8"),               // Panasonic.pm:104
+        (35, None, "Summilux-M 75mm f/1.4"),            // Panasonic.pm:105
+        (36, None, "Apo-Summicron-M 75mm f/2 ASPH."),   // Panasonic.pm:106
+        (37, None, "Apo-Summicron-M 90mm f/2 ASPH."),   // Panasonic.pm:107
+        (38, None, "Elmarit-M 90mm f/2.8"),             // Panasonic.pm:108
+        (39, None, "Macro-Elmar-M 90mm f/4"),           // Panasonic.pm:109
+        (39, Some(0), "Tele-Elmar-M 135mm f/4 (II)"),   // Panasonic.pm:110
+        (40, None, "Macro-Adapter M"),                  // Panasonic.pm:111
+        (41, None, "Apo-Summicron-M 50mm f/2 ASPH."),   // Panasonic.pm:112
+        (41, Some(3), "Apo-Summicron-M 50mm f/2 ASPH."), // Panasonic.pm:113
+        (42, None, "Tri-Elmar-M 28-35-50mm f/4 ASPH."), // Panasonic.pm:114
+        (42, Some(1), "Tri-Elmar-M 28-35-50mm f/4 ASPH. (at 28mm)"), // Panasonic.pm:115
+        (42, Some(2), "Tri-Elmar-M 28-35-50mm f/4 ASPH. (at 35mm)"), // Panasonic.pm:116
+        (42, Some(3), "Tri-Elmar-M 28-35-50mm f/4 ASPH. (at 50mm)"), // Panasonic.pm:117
+        (43, None, "Summarit-M 35mm f/2.5"),            // Panasonic.pm:118
+        (44, None, "Summarit-M 50mm f/2.5"),            // Panasonic.pm:119
+        (45, None, "Summarit-M 75mm f/2.5"),            // Panasonic.pm:120
+        (46, None, "Summarit-M 90mm f/2.5"),            // Panasonic.pm:121
+        (47, None, "Summilux-M 21mm f/1.4 ASPH."),      // Panasonic.pm:122
+        (48, None, "Summilux-M 24mm f/1.4 ASPH."),      // Panasonic.pm:123
+        (49, None, "Noctilux-M 50mm f/0.95 ASPH."),     // Panasonic.pm:124
+        (50, None, "Elmar-M 24mm f/3.8 ASPH."),         // Panasonic.pm:125
+        (51, None, "Super-Elmar-M 21mm f/3.4 Asph"),    // Panasonic.pm:126
+        (51, Some(2), "Super-Elmar-M 14mm f/3.8 Asph"), // Panasonic.pm:127
+        (52, None, "Apo-Telyt-M 18mm f/3.8 ASPH."),     // Panasonic.pm:128
+        (53, None, "Apo-Telyt-M 135mm f/3.4"),          // Panasonic.pm:129
+        (53, Some(2), "Apo-Telyt-M 135mm f/3.4"),       // Panasonic.pm:130
+        (53, Some(3), "Apo-Summicron-M 50mm f/2 (VI)"), // Panasonic.pm:131
+        (58, None, "Noctilux-M 75mm f/1.25 ASPH."),     // Panasonic.pm:132
     ];
 
-    pub static LENS_DB: StaticLensDb = StaticLensDb::new(&LEICA_LENSES);
-
-    pub fn lookup(lens_id: u16) -> Option<&'static str> {
-        LENS_DB.lookup(lens_id)
+    /// `%leicaLensTypes` lookup for a raw `LensType` int32u.
+    ///
+    /// Mirrors ExifTool exactly: the pair `(val >> 2, val & 3)` is tried first,
+    /// then the `OTHER` fallback (`return undef if ... not $val =~ s/ .*//;`)
+    /// drops the second number and retries with the first alone.
+    pub fn lookup(raw: u32) -> Option<&'static str> {
+        let id = raw >> 2;
+        let sub = (raw & 0x3) as u8;
+        LEICA_LENS_TYPES
+            .iter()
+            .find(|(i, s, _)| u32::from(*i) == id && *s == Some(sub))
+            .or_else(|| {
+                LEICA_LENS_TYPES
+                    .iter()
+                    .find(|(i, s, _)| u32::from(*i) == id && s.is_none())
+            })
+            .map(|(_, _, name)| *name)
     }
-}
 
-/// Leaf lens database
-pub mod leaf {
-    use super::*;
-
-    pub static LEAF_LENSES: [(u16, &str); 21] = [
-        (0x0100, "Mamiya AF 35mm f/3.5"),
-        (0x0101, "Mamiya AF 45mm f/2.8"),
-        (0x0102, "Mamiya AF 55mm f/2.8"),
-        (0x0103, "Mamiya AF 80mm f/2.8"),
-        (0x0104, "Mamiya AF 110mm f/2.8"),
-        (0x0105, "Mamiya AF 120mm f/4 Macro"),
-        (0x0106, "Mamiya AF 150mm f/2.8"),
-        (0x0107, "Mamiya AF 210mm f/4"),
-        (0x0108, "Mamiya AF 300mm f/2.8 APO"),
-        (0x0200, "Mamiya AF 35-70mm f/4.5"),
-        (0x0201, "Mamiya AF 55-110mm f/4.5"),
-        (0x0202, "Mamiya AF 70-210mm f/4.5"),
-        (0x0300, "Contax 645 35mm f/3.5"),
-        (0x0301, "Contax 645 45mm f/2.8"),
-        (0x0302, "Contax 645 80mm f/2.0"),
-        (0x0303, "Contax 645 120mm f/4 Macro"),
-        (0x0304, "Contax 645 140mm f/2.8"),
-        (0x0305, "Contax 645 210mm f/4"),
-        (0x0400, "Schneider 80mm f/2.8 LS"),
-        (0x0401, "Schneider 110mm f/2.8 LS"),
-        (0x0402, "Schneider 150mm f/2.8 LS"),
-    ];
-
-    pub static LENS_DB: StaticLensDb = StaticLensDb::new(&LEAF_LENSES);
-
-    pub fn lookup(lens_id: u16) -> Option<&'static str> {
-        LENS_DB.lookup(lens_id)
+    /// ExifTool's `ValueConv` string for a raw `LensType`, which is what it
+    /// prints inside `Unknown (...)` when the hash has no entry.
+    pub fn value_conv(raw: u32) -> String {
+        format!("{} {}", raw >> 2, raw & 0x3)
     }
 }
 
@@ -1864,59 +1277,6 @@ pub mod minolta {
     pub static LENS_DB: StaticLensDb = StaticLensDb::new(&MINOLTA_LENSES);
 
     /// Resolves a Minolta lens id, or `None` when ExifTool has no name for it.
-    pub fn lookup(lens_id: u16) -> Option<&'static str> {
-        LENS_DB.lookup(lens_id)
-    }
-}
-
-/// Phase One lens database
-pub mod phaseone {
-    use super::*;
-
-    pub static PHASEONE_LENSES: [(u16, &str); 39] = [
-        (1, "Schneider Kreuznach 28mm f/4.5 LS"),
-        (2, "Schneider Kreuznach 35mm f/3.5 LS"),
-        (3, "Schneider Kreuznach 40mm f/4.0 LS"),
-        (4, "Schneider Kreuznach 45mm f/3.5 LS"),
-        (10, "Schneider Kreuznach 55mm f/2.8 LS"),
-        (11, "Schneider Kreuznach 80mm f/2.8 LS"),
-        (12, "Schneider Kreuznach 110mm f/2.8 LS"),
-        (13, "Schneider Kreuznach 120mm f/4.0 Macro LS"),
-        (14, "Schneider Kreuznach 150mm f/2.8 LS"),
-        (15, "Schneider Kreuznach 150mm f/3.5 LS"),
-        (20, "Schneider Kreuznach 240mm f/4.5 LS"),
-        (30, "Mamiya Sekor 35mm f/3.5"),
-        (31, "Mamiya Sekor 45mm f/2.8"),
-        (32, "Mamiya Sekor 55mm f/2.8"),
-        (33, "Mamiya Sekor 80mm f/1.9"),
-        (34, "Mamiya Sekor 80mm f/2.8 LS D"),
-        (35, "Mamiya Sekor 110mm f/2.8"),
-        (36, "Mamiya Sekor 120mm f/4.0 Macro D"),
-        (37, "Mamiya Sekor 150mm f/2.8"),
-        (38, "Mamiya Sekor 210mm f/4.0"),
-        (39, "Mamiya Sekor 300mm f/2.8 APO"),
-        (45, "Mamiya Sekor 55-110mm f/4.5"),
-        (46, "Mamiya Sekor 75-150mm f/4.5"),
-        (50, "Rodenstock HR Digaron 23mm f/5.6"),
-        (51, "Rodenstock HR Digaron 32mm f/4.0"),
-        (52, "Rodenstock HR Digaron 40mm f/4.0"),
-        (53, "Rodenstock HR Digaron 50mm f/4.0"),
-        (54, "Rodenstock HR Digaron 60mm f/4.0"),
-        (55, "Rodenstock HR Digaron 70mm f/5.6"),
-        (60, "Phase One Blue Ring 23mm"),
-        (61, "Phase One Blue Ring 28mm"),
-        (62, "Phase One Blue Ring 35mm LS"),
-        (63, "Phase One Blue Ring 45mm"),
-        (64, "Phase One Blue Ring 55mm LS"),
-        (65, "Phase One Blue Ring 80mm LS"),
-        (66, "Phase One Blue Ring 110mm Macro LS"),
-        (67, "Phase One Blue Ring 150mm LS"),
-        (70, "Phase One 80mm f/2.8 AF LS"),
-        (71, "Phase One 110mm f/2.8 AF LS"),
-    ];
-
-    pub static LENS_DB: StaticLensDb = StaticLensDb::new(&PHASEONE_LENSES);
-
     pub fn lookup(lens_id: u16) -> Option<&'static str> {
         LENS_DB.lookup(lens_id)
     }

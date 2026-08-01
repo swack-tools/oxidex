@@ -35,7 +35,6 @@ use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
-use super::phaseone_lens_database::lookup_lens_name;
 use super::registries::phaseone::phaseone_registry;
 use super::shared::MakerNoteParser;
 use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
@@ -201,7 +200,6 @@ impl PhaseOneMakerNoteParser {
     /// # Special Handling
     ///
     /// Several tags require special formatting:
-    /// - Lens ID (0x0211): Lookup lens name from database
     /// - Dimensions (0x010E-0x0112): Format with "px" suffix
     /// - Focal length (0x0214): Divide by 10.0, format with "mm"
     /// - Aperture (0x0403): Divide by 10.0, format as "f/N.N"
@@ -223,17 +221,6 @@ impl PhaseOneMakerNoteParser {
 
         // Extract and format the value based on tag type
         let formatted_value = match entry.tag_id {
-            // Special handling for lens ID (0x0211) - use database lookup
-            // This tag stores a numeric ID that maps to a specific lens model
-            0x0211 => {
-                let lens_id = entry.value_offset as u16;
-                tags.insert(format!("PhaseOne:{}", tag_name), lens_id.to_string());
-                // Lookup friendly lens name from database and add as separate tag
-                if let Some(lens_name) = lookup_lens_name(lens_id) {
-                    tags.insert("PhaseOne:LensModel".to_string(), lens_name);
-                }
-                return;
-            }
             // Dimensions with pixel units (SensorWidth, SensorHeight, ImageWidth, ImageHeight)
             0x010E | 0x010F | 0x0111 | 0x0112 => format!("{} px", entry.value_offset),
 
@@ -288,10 +275,6 @@ impl MakerNoteParser for PhaseOneMakerNoteParser {
 
     fn validate_header(&self, data: &[u8]) -> bool {
         is_phaseone_makernote(data)
-    }
-
-    fn lookup_lens(&self, lens_id: u16) -> Option<String> {
-        lookup_lens_name(lens_id)
     }
 
     fn parse(

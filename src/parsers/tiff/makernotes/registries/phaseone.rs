@@ -33,12 +33,11 @@ pub fn phaseone_registry() -> TagRegistry {
         .register_raw(0x0110, "SensorBitDepth")
         .register_raw(0x0111, "ImageWidth")
         .register_raw(0x0112, "ImageHeight")
-        // Lens Information (mostly raw values)
-        .register_raw(0x0211, "LensID")
-        .register_raw(0x0212, "LensModel")
-        .register_raw(0x0213, "LensSerialNumber")
-        .register_raw(0x0214, "FocalLength")
-        .register_raw(0x0215, "FocusDistance")
+        // No lens tags.  ExifTool's %PhaseOne::Main carries exactly one
+        // lens tag -- 0x0412 LensModel, `Format => 'string'` (PhaseOne.pm:250)
+        // -- and nothing in the 0x0211..0x0215 range is lens-related: 0x0211 is
+        // SensorTemperature2 (PhaseOne.pm:123), 0x0212 is UnknownDate
+        // (PhaseOne.pm:129), and 0x0213/0x0214/0x0215 are not tags at all.
         // Exposure Settings (mostly raw, some with decoders)
         .register_raw(0x0401, "ISO")
         .register_raw(0x0402, "ShutterSpeed")

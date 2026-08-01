@@ -35,7 +35,7 @@ use nom::{
 };
 use std::collections::HashMap;
 
-use super::pentax_lens_database::{lookup_lens_name, lookup_lens_type_pair};
+use super::pentax_lens_database::lookup_lens_type_pair;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_u16_array, extract_u32_array};
 use super::shared::generic_decoders::ON_OFF;
@@ -593,10 +593,6 @@ impl MakerNoteParser for PentaxParser {
 
     fn validate_header(&self, data: &[u8]) -> bool {
         is_pentax_makernote(data)
-    }
-
-    fn lookup_lens(&self, lens_id: u16) -> Option<String> {
-        lookup_lens_name(lens_id)
     }
 
     fn parse(
@@ -2751,35 +2747,6 @@ mod tests {
 
         let valid_header = b"PENTAX \0more_data";
         assert!(parser.validate_header(valid_header));
-    }
-
-    #[test]
-    fn test_lens_lookup() {
-        let parser = PentaxParser;
-
-        // Test classic lens
-        assert!(parser.lookup_lens(2).is_some());
-        assert_eq!(
-            parser.lookup_lens(2),
-            Some("SMC Pentax-K 50mm f/1.4".to_string())
-        );
-
-        // Test Limited lens
-        assert!(parser.lookup_lens(56).is_some());
-        assert_eq!(
-            parser.lookup_lens(56),
-            Some("SMC Pentax-FA 77mm f/1.8 Limited".to_string())
-        );
-
-        // Test modern D FA lens
-        assert!(parser.lookup_lens(122).is_some());
-        assert_eq!(
-            parser.lookup_lens(122),
-            Some("HD Pentax-D FA 24-70mm f/2.8 ED SDM WR".to_string())
-        );
-
-        // Test unknown lens
-        assert_eq!(parser.lookup_lens(65000), None);
     }
 
     #[test]

@@ -21,7 +21,6 @@ use nom::{
 };
 use std::collections::HashMap;
 
-use super::fujifilm_lens_database::lookup_lens_name;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{
     extract_i16_array, extract_i32_array, extract_rational_array, extract_u16_array,
@@ -1225,10 +1224,6 @@ impl MakerNoteParser for FujifilmParser {
 
         Ok(())
     }
-
-    fn lookup_lens(&self, lens_id: u16) -> Option<String> {
-        lookup_lens_name(lens_id)
-    }
 }
 
 /// Maps Fujifilm MakerNote tag IDs to human-readable tag names
@@ -1637,24 +1632,6 @@ mod tests {
         let parser = FujifilmParser;
         assert_eq!(parser.manufacturer_name(), "Fujifilm");
         assert_eq!(parser.tag_prefix(), "Fujifilm:");
-    }
-
-    #[test]
-    fn test_lens_lookup() {
-        let parser = FujifilmParser;
-
-        // Test XF lens lookup
-        assert!(parser.lookup_lens(35).is_some());
-        assert_eq!(parser.lookup_lens(35), Some("XF 35mm f/1.4 R".to_string()));
-
-        // Test GF lens lookup
-        assert_eq!(
-            parser.lookup_lens(63),
-            Some("GF 63mm f/2.8 R WR".to_string())
-        );
-
-        // Test unknown lens
-        assert_eq!(parser.lookup_lens(65000), None);
     }
 
     #[test]

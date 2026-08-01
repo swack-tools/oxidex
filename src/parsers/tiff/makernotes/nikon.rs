@@ -45,7 +45,6 @@ use value_reader::{
     print_lens_info, rational_value, read_u16, value_bytes,
 };
 
-use super::nikon_lens_database::lookup_lens_name;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_u16_array, extract_u32_array};
 
@@ -1644,10 +1643,6 @@ impl MakerNoteParser for NikonParser {
 
         Ok(())
     }
-
-    fn lookup_lens(&self, lens_id: u16) -> Option<String> {
-        lookup_lens_name(lens_id)
-    }
 }
 
 /// Maps Nikon MakerNote tag IDs to human-readable tag names
@@ -1983,26 +1978,5 @@ mod tests {
         let parser = NikonParser;
         assert_eq!(parser.manufacturer_name(), "Nikon");
         assert_eq!(parser.tag_prefix(), "Nikon:");
-    }
-
-    #[test]
-    fn test_lens_lookup() {
-        let parser = NikonParser;
-
-        // Test F-mount lens lookup
-        assert!(parser.lookup_lens(147).is_some());
-        assert_eq!(
-            parser.lookup_lens(147),
-            Some("Nikkor AF-S 24-70mm f/2.8G ED".to_string())
-        );
-
-        // Test Z-mount lens lookup
-        assert_eq!(
-            parser.lookup_lens(177),
-            Some("Nikkor Z 50mm f/1.8 S".to_string())
-        );
-
-        // Test unknown lens
-        assert_eq!(parser.lookup_lens(65000), None);
     }
 }

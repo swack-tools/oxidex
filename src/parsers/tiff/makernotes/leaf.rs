@@ -32,7 +32,6 @@ use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use std::collections::HashMap;
 
-use super::leaf_lens_database::lookup_leaf_lens;
 use super::shared::MakerNoteParser;
 
 /// Extracts a 16-bit unsigned value from IFD entry
@@ -226,12 +225,13 @@ impl MakerNoteParser for LeafParser {
                     }
                 }
                 0x000A => {
-                    // Lens ID
+                    // Lens ID.  ExifTool's Leaf module has no lens tag of any
+                    // kind -- `/usr/bin/grep -an Lens Leaf.pm` returns nothing,
+                    // and %Leaf::Main is keyed by string names
+                    // (`back_serial_number`, ...) rather than numeric ids -- so
+                    // the raw value is reported and not resolved to a name.
                     if let Some(value) = extract_u16_value(&entry, data, byte_order) {
                         tags.insert("Leaf:LensID".to_string(), format!("0x{:04X}", value));
-                        if let Some(lens_name) = lookup_leaf_lens(value) {
-                            tags.insert("Leaf:LensType".to_string(), lens_name);
-                        }
                     }
                 }
                 0x000B => {
@@ -267,10 +267,6 @@ impl MakerNoteParser for LeafParser {
         }
 
         Ok(())
-    }
-
-    fn lookup_lens(&self, lens_id: u16) -> Option<String> {
-        lookup_leaf_lens(lens_id)
     }
 }
 
@@ -339,20 +335,6 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(tags.get("Leaf:BitDepth"), Some(&"16 bits".to_string()));
-    }
-
-    #[test]
-    fn test_lens_lookup() {
-        let parser = LeafParser::new();
-        assert_eq!(
-            parser.lookup_lens(0x0103),
-            Some("Mamiya AF 80mm f/2.8".to_string())
-        );
-        assert_eq!(
-            parser.lookup_lens(0x0302),
-            Some("Contax 645 80mm f/2.0".to_string())
-        );
-        assert_eq!(parser.lookup_lens(0xFFFF), None);
     }
 
     #[test]

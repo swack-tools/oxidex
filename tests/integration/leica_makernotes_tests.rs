@@ -7,253 +7,6 @@
 //! - Tag extraction from synthetic test data
 
 #[test]
-fn test_leica_lens_database_m_mount_summilux() {
-    use oxidex::parsers::tiff::makernotes::leica_lens_database::lookup_lens_name;
-
-    // Test Leica M-mount Summilux lenses (f/1.4 premium series)
-    assert_eq!(
-        lookup_lens_name(1),
-        Some("Leica Summilux-M 21mm f/1.4 ASPH".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(3),
-        Some("Leica Summilux-M 28mm f/1.4 ASPH".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(4),
-        Some("Leica Summilux-M 35mm f/1.4 ASPH".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(5),
-        Some("Leica Summilux-M 50mm f/1.4 ASPH".to_string())
-    );
-}
-
-#[test]
-fn test_leica_lens_database_m_mount_noctilux() {
-    use oxidex::parsers::tiff::makernotes::leica_lens_database::lookup_lens_name;
-
-    // Test legendary Noctilux ultra-fast lenses
-    assert_eq!(
-        lookup_lens_name(10),
-        Some("Leica Noctilux-M 50mm f/0.95 ASPH".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(11),
-        Some("Leica Noctilux-M 50mm f/1.2 ASPH".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(12),
-        Some("Leica Noctilux-M 75mm f/1.25 ASPH".to_string())
-    );
-}
-
-#[test]
-fn test_leica_lens_database_apo_summicron_m() {
-    use oxidex::parsers::tiff::makernotes::leica_lens_database::lookup_lens_name;
-
-    // Test APO-Summicron-M lenses (apochromatic f/2.0)
-    assert_eq!(
-        lookup_lens_name(20),
-        Some("Leica APO-Summicron-M 35mm f/2.0 ASPH".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(21),
-        Some("Leica APO-Summicron-M 50mm f/2.0 ASPH".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(22),
-        Some("Leica APO-Summicron-M 75mm f/2.0 ASPH".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(23),
-        Some("Leica APO-Summicron-M 90mm f/2.0 ASPH".to_string())
-    );
-}
-
-#[test]
-fn test_leica_lens_database_summicron_m() {
-    use oxidex::parsers::tiff::makernotes::leica_lens_database::lookup_lens_name;
-
-    // Test standard Summicron-M lenses (f/2.0)
-    assert_eq!(
-        lookup_lens_name(30),
-        Some("Leica Summicron-M 21mm f/2.0 ASPH".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(32),
-        Some("Leica Summicron-M 35mm f/2.0 ASPH".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(33),
-        Some("Leica Summicron-M 50mm f/2.0".to_string())
-    );
-}
-
-#[test]
-fn test_leica_lens_database_elmarit_m() {
-    use oxidex::parsers::tiff::makernotes::leica_lens_database::lookup_lens_name;
-
-    // Test Elmarit-M compact lenses (f/2.8)
-    assert_eq!(
-        lookup_lens_name(40),
-        Some("Leica Elmarit-M 21mm f/2.8 ASPH".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(41),
-        Some("Leica Elmarit-M 24mm f/2.8 ASPH".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(43),
-        Some("Leica Elmarit-M 90mm f/2.8".to_string())
-    );
-}
-
-#[test]
-fn test_leica_lens_database_sl_mount_apo() {
-    use oxidex::parsers::tiff::makernotes::leica_lens_database::lookup_lens_name;
-
-    // Test SL-mount APO-Summicron lenses (autofocus)
-    assert_eq!(
-        lookup_lens_name(100),
-        Some("Leica APO-Summicron-SL 35mm f/2.0 ASPH".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(101),
-        Some("Leica APO-Summicron-SL 50mm f/2.0 ASPH".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(102),
-        Some("Leica APO-Summicron-SL 75mm f/2.0 ASPH".to_string())
-    );
-}
-
-#[test]
-fn test_leica_lens_database_sl_zoom_lenses() {
-    use oxidex::parsers::tiff::makernotes::leica_lens_database::lookup_lens_name;
-
-    // Test SL-mount zoom lenses
-    assert_eq!(
-        lookup_lens_name(120),
-        Some("Leica Vario-Elmarit-SL 24-70mm f/2.8 ASPH".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(130),
-        Some("Leica APO-Vario-Elmarit-SL 90-280mm f/2.8-4.0".to_string())
-    );
-}
-
-#[test]
-fn test_leica_lens_database_tl_mount() {
-    use oxidex::parsers::tiff::makernotes::leica_lens_database::lookup_lens_name;
-
-    // Test TL/CL mount lenses (APS-C)
-    assert_eq!(
-        lookup_lens_name(200),
-        Some("Leica APO-Summicron-TL 23mm f/2.0 ASPH".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(220),
-        Some("Leica Elmarit-TL 18mm f/2.8 ASPH".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(230),
-        Some("Leica Vario-Elmar-TL 18-56mm f/3.5-5.6 ASPH".to_string())
-    );
-}
-
-#[test]
-fn test_leica_lens_database_r_mount_legacy() {
-    use oxidex::parsers::tiff::makernotes::leica_lens_database::lookup_lens_name;
-
-    // Test legacy R-mount SLR lenses
-    assert_eq!(
-        lookup_lens_name(300),
-        Some("Leica Summilux-R 50mm f/1.4".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(302),
-        Some("Leica Elmarit-R 28mm f/2.8".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(304),
-        Some("Leica APO-Telyt-R 180mm f/3.4".to_string())
-    );
-}
-
-#[test]
-fn test_leica_lens_database_l_mount_alliance() {
-    use oxidex::parsers::tiff::makernotes::leica_lens_database::lookup_lens_name;
-
-    // Test L-mount alliance lenses (Sigma, Panasonic compatible)
-    assert_eq!(
-        lookup_lens_name(400),
-        Some("Sigma 35mm f/1.2 DG DN Art (L-mount)".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(401),
-        Some("Sigma 50mm f/1.4 DG DN Art (L-mount)".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(404),
-        Some("Panasonic Lumix S Pro 50mm f/1.4 (L-mount)".to_string())
-    );
-}
-
-#[test]
-fn test_leica_lens_database_not_found() {
-    use oxidex::parsers::tiff::makernotes::leica_lens_database::lookup_lens_name;
-
-    // Test that unknown lens IDs return None
-    assert_eq!(lookup_lens_name(9999), None);
-    assert_eq!(lookup_lens_name(0), None);
-    assert_eq!(lookup_lens_name(500), None);
-}
-
-#[test]
-fn test_leica_makernote_parser_trait_implementation() {
-    use oxidex::parsers::tiff::makernotes::leica::LeicaMakerNoteParser;
-    use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
-
-    let parser = LeicaMakerNoteParser;
-
-    // Test manufacturer name
-    assert_eq!(parser.manufacturer_name(), "Leica");
-
-    // Test tag prefix
-    assert_eq!(parser.tag_prefix(), "Leica:");
-
-    // Test lens lookup via trait method
-    assert_eq!(
-        parser.lookup_lens(5),
-        Some("Leica Summilux-M 50mm f/1.4 ASPH".to_string())
-    );
-
-    assert_eq!(parser.lookup_lens(9999), None);
-}
-
-#[test]
 fn test_leica_header_validation_short() {
     use oxidex::parsers::tiff::makernotes::leica::is_leica_makernote;
 
@@ -329,38 +82,6 @@ fn test_leica_makernote_parse_basic() {
     // Verify extracted tags
     assert_eq!(tags.get("Leica:Quality"), Some(&"Fine".to_string()));
     assert_eq!(tags.get("Leica:UserProfile"), Some(&"Standard".to_string()));
-}
-
-#[test]
-fn test_leica_makernote_parse_lens_id() {
-    use oxidex::parsers::tiff::ifd_parser::ByteOrder;
-    use oxidex::parsers::tiff::makernotes::leica::LeicaMakerNoteParser;
-    use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
-    use std::collections::HashMap;
-
-    let parser = LeicaMakerNoteParser;
-    let mut tags = HashMap::new();
-
-    // Create synthetic data with Lens ID tag (0x0013) = 10 (Noctilux 50mm f/0.95)
-    let mut data = Vec::new();
-    data.extend_from_slice(b"LEICA\0\0\0"); // Header
-    data.extend_from_slice(&[0x01, 0x00]); // 1 entry
-
-    // Entry: Lens ID (0x0013), type SHORT (3), count 1, value 10
-    data.extend_from_slice(&[0x13, 0x00]); // tag: 0x0013
-    data.extend_from_slice(&[0x03, 0x00]); // type: SHORT
-    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // count: 1
-    data.extend_from_slice(&[0x0A, 0x00, 0x00, 0x00]); // value: 10
-
-    let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
-    assert!(result.is_ok());
-
-    // Verify lens ID and lens model are extracted
-    assert_eq!(tags.get("Leica:LensID"), Some(&"10".to_string()));
-    assert_eq!(
-        tags.get("Leica:LensModel"),
-        Some(&"Leica Noctilux-M 50mm f/0.95 ASPH".to_string())
-    );
 }
 
 #[test]
@@ -676,5 +397,83 @@ fn test_leica4_subdir3400_measured_lv() {
     assert_eq!(
         tags.get("Leica:ExternalSensorBrightnessValue"),
         Some(&"8.89".to_string())
+    );
+}
+
+#[test]
+fn test_leica_makernote_parser_trait_implementation() {
+    use oxidex::parsers::tiff::makernotes::leica::LeicaMakerNoteParser;
+    use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
+
+    let parser = LeicaMakerNoteParser;
+    assert_eq!(parser.manufacturer_name(), "Leica");
+    assert_eq!(parser.tag_prefix(), "Leica:");
+}
+
+/// `%Image::ExifTool::Panasonic::leicaLensTypes`, with the Panasonic.pm line
+/// quoted beside each expectation.  ExifTool splits the stored int32u with
+/// `ValueConv => '($val >> 2) . " " . ($val & 0x3)'` and looks the pair up,
+/// falling back through its `OTHER` handler to the first number alone.
+#[test]
+fn test_leica_lens_types_match_exiftool() {
+    use oxidex::parsers::tiff::makernotes::lens_data::leica;
+
+    // LeicaM8.jpg: Leica2 0x0310 holds 135 -> "33 3" -> falls back to 33.
+    // `33 => 'Summicron-M 50mm f/2 (IV, V)'` (Panasonic.pm:103)
+    assert_eq!(leica::lookup(135), Some("Summicron-M 50mm f/2 (IV, V)"));
+
+    // LeicaM9.jpg: Subdir 0x3405 holds 122 -> "30 2" -> falls back to 30.
+    // `30 => 'Summicron-M 35mm f/2 ASPH.'` (Panasonic.pm:99)
+    assert_eq!(leica::lookup(122), Some("Summicron-M 35mm f/2 ASPH."));
+
+    // The two-number keys win over the bare id when they exist.
+    // `'6 0' => 'Summilux-M 35mm f/1.4'` (Panasonic.pm:81) at raw 24 = "6 0",
+    // versus `6 => 'Summicron-M 35mm f/2 (IV)'` (Panasonic.pm:80) at raw 25.
+    assert_eq!(leica::lookup(24), Some("Summilux-M 35mm f/1.4"));
+    assert_eq!(leica::lookup(25), Some("Summicron-M 35mm f/2 (IV)"));
+
+    // `'0 0' => 'Uncoded lens'` (Panasonic.pm:71)
+    assert_eq!(leica::lookup(0), Some("Uncoded lens"));
+
+    // The invented ids the old fabricated table carried are absent: ExifTool
+    // files nothing under 405, and 100 is not a %leicaLensTypes key.
+    assert_eq!(leica::lookup(405 << 2), None);
+    assert_eq!(leica::lookup(100 << 2), None);
+
+    // ExifTool prints the ValueConv string inside "Unknown (...)".
+    assert_eq!(leica::value_conv(135), "33 3");
+    assert_eq!(leica::value_conv(122), "30 2");
+}
+
+/// `%Panasonic::Leica2` 0x0310 is the `LensType` tag (Panasonic.pm:1648); the
+/// 0x0013/0x0014/0x0015 ids the old reader watched are not Leica tags at all.
+#[test]
+fn test_leica_makernote_parse_lens_type() {
+    use oxidex::parsers::tiff::ifd_parser::ByteOrder;
+    use oxidex::parsers::tiff::makernotes::leica::LeicaMakerNoteParser;
+    use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
+    use std::collections::HashMap;
+
+    let parser = LeicaMakerNoteParser;
+    let mut tags = HashMap::new();
+
+    // LeicaM8.jpg stores 135 here; ExifTool prints
+    // "Summicron-M 50mm f/2 (IV, V)" (135 >> 2 == 33, Panasonic.pm:103).
+    let mut data = Vec::new();
+    data.extend_from_slice(b"LEICA\0\0\0"); // header
+    data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+    data.extend_from_slice(&[0x10, 0x03]); // tag: 0x0310
+    data.extend_from_slice(&[0x04, 0x00]); // type: LONG
+    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // count: 1
+    data.extend_from_slice(&[0x87, 0x00, 0x00, 0x00]); // value: 135
+
+    assert!(
+        parser
+            .parse(&data, ByteOrder::LittleEndian, &mut tags)
+            .is_ok()
+    );
+    assert_eq!(
+        tags.get("Leica:LensType"),
+        Some(&"Summicron-M 50mm f/2 (IV, V)".to_string())
     );
 }
