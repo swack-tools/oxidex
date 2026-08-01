@@ -20,6 +20,7 @@ use oxidex::core::value_formatter::{
     needs_unit_suffix,
 };
 use oxidex::parsers::tiff::tiff_enums::tiff_enum_to_string;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -74,7 +75,11 @@ impl OxiDexExtractor {
         }
 
         // Find files by extension recursively throughout the samples directory
-        let files: Vec<PathBuf> = self.find_files_by_extension(format)?;
+        let mut files: Vec<PathBuf> = self.find_files_by_extension(format)?;
+        // WalkDir order is filesystem-dependent. Sorting is both a cache
+        // stability requirement and the tie-breaker for the canonical value
+        // retained when several files emit the same displayed key.
+        files.sort();
 
         let files_processed = files.len();
 
@@ -135,36 +140,38 @@ impl OxiDexExtractor {
         let mut all_tags: HashMap<String, TagInfo> = HashMap::new();
         let mut duplicate_emissions: HashSet<String> = HashSet::new();
 
-        for file_path in &files {
-            match self.extract_tags_from_file(file_path) {
-                Ok((file_tags, collisions)) => {
-                    let source_file = file_path.display().to_string();
-                    // More than one DISTINCT value only. Two raw keys
-                    // colliding on one displayed key with an IDENTICAL
-                    // value is the ordinary IFD0/ExifIFD redundancy real
-                    // cameras write, and stays unreported -- the same
-                    // exemption compare()'s `values.len() > 1` encodes,
-                    // and the reason every squad's batch check stopped
-                    // false-failing.
-                    for (key, values) in &collisions {
-                        if values.len() > 1 {
-                            duplicate_emissions.insert(key.clone());
-                        }
-                    }
-                    for tag_info in file_tags {
-                        let key = format!("{}:{}", tag_info.family, tag_info.name);
-                        all_tags
-                            .entry(key)
-                            .or_insert_with(|| tag_info.with_source_file(source_file.clone()));
-                    }
-                }
+        // Parsing individual files is independent. Parallelize this expensive
+        // phase, then fold results in sorted path order so the report remains
+        // byte-for-byte reproducible. This avoids the usual parallel-parser
+        // trap where whichever worker finishes first wins a collision.
+        let mut extracted: Vec<(PathBuf, Vec<TagInfo>, CollisionMap)> = files
+            .par_iter()
+            .filter_map(|file_path| match self.extract_tags_from_file(file_path) {
+                Ok((file_tags, collisions)) => Some((file_path.clone(), file_tags, collisions)),
                 Err(e) => {
                     eprintln!(
                         "Warning: Failed to extract tags from {}: {}",
                         file_path.display(),
                         e
                     );
+                    None
                 }
+            })
+            .collect();
+        extracted.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (file_path, file_tags, collisions) in extracted {
+            let source_file = file_path.display().to_string();
+            for (key, values) in &collisions {
+                if values.len() > 1 {
+                    duplicate_emissions.insert(key.clone());
+                }
+            }
+            for tag_info in file_tags {
+                let key = format!("{}:{}", tag_info.family, tag_info.name);
+                all_tags
+                    .entry(key)
+                    .or_insert_with(|| tag_info.with_source_file(source_file.clone()));
             }
         }
 

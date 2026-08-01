@@ -65,6 +65,26 @@ fn generate_index(
          :::\n\n",
     );
 
+    if !report.gap_queue.is_empty() {
+        content.push_str("## Ranked Gap Queue\n\n");
+        content.push_str(
+            "Grouped missing/value/extra tags are ranked by cross-format reach, so shared fixes appear first.\n\n",
+        );
+        content.push_str("| Priority | Kind | Tag | Formats | Examples |\n");
+        content.push_str("|----------|------|-----|---------|----------|\n");
+        for item in &report.gap_queue {
+            content.push_str(&format!(
+                "| {} | `{}` | `{}` | {} | {} |\n",
+                item.priority,
+                item.kind,
+                item.tag_key,
+                item.formats.join(", "),
+                item.examples.join("<br>")
+            ));
+        }
+        content.push('\n');
+    }
+
     // Summary table for tested formats
     content.push_str("## Coverage by Format\n\n");
     content

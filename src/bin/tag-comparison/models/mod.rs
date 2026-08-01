@@ -1,7 +1,7 @@
 //! Data models for tag comparison and reporting
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Information about a single metadata tag
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -61,6 +61,28 @@ pub struct ValueDifference {
     pub oxidex_value: String,
     /// Source file where difference was found
     pub source_file: String,
+}
+
+/// One ranked, actionable item in the cross-format parity queue.
+///
+/// The comparison engine deliberately keeps per-format evidence intact. The
+/// queue groups the same missing/value-different key across formats so a
+/// shared parser or conversion fix rises above one-off residue.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GapQueueItem {
+    /// `missing`, `value`, or `extra`.
+    pub kind: String,
+    /// Normalized family:name key.
+    pub tag_key: String,
+    /// Formats in which this gap occurs, sorted and deduplicated.
+    pub formats: Vec<String>,
+    /// Number of format reports contributing evidence.
+    pub occurrences: usize,
+    /// Representative values from the oracle/OxiDex side.
+    #[serde(default)]
+    pub examples: Vec<String>,
+    /// Higher values should be investigated first.
+    pub priority: usize,
 }
 
 /// Comparison results for a single file format
@@ -143,13 +165,16 @@ pub struct ComparisonReport {
     /// OxiDex version used for comparison
     pub oxidex_version: String,
     /// Comparisons indexed by format name
-    pub by_format: HashMap<String, FormatComparison>,
+    pub by_format: BTreeMap<String, FormatComparison>,
     /// Overall coverage across all formats
     pub overall_coverage: f64,
     /// Total regressions across all formats
     pub total_regressions: usize,
     /// Summary text
     pub summary: String,
+    /// Cross-format ranked queue used to choose the next shared fix.
+    #[serde(default)]
+    pub gap_queue: Vec<GapQueueItem>,
 }
 
 impl ComparisonReport {
@@ -159,10 +184,11 @@ impl ComparisonReport {
             generated_at: chrono::Utc::now().to_rfc3339(),
             exiftool_version: String::new(),
             oxidex_version: String::new(),
-            by_format: HashMap::new(),
+            by_format: BTreeMap::new(),
             overall_coverage: 0.0,
             total_regressions: 0,
             summary: String::new(),
+            gap_queue: Vec::new(),
         }
     }
 
@@ -177,6 +203,7 @@ impl ComparisonReport {
             self.overall_coverage = 0.0;
             self.total_regressions = 0;
             self.summary = "No formats analyzed".to_string();
+            self.gap_queue.clear();
             return;
         }
 
@@ -197,6 +224,7 @@ impl ComparisonReport {
             "Analyzed {} formats: {}/{} tags ({:.1}% overall coverage)",
             format_count, total_matched, total_tags, self.overall_coverage
         );
+        self.gap_queue = build_gap_queue(&self.by_format);
     }
 
     /// Get format names in sorted order
@@ -206,6 +234,72 @@ impl ComparisonReport {
         names.sort();
         names
     }
+}
+
+fn build_gap_queue(comparisons: &BTreeMap<String, FormatComparison>) -> Vec<GapQueueItem> {
+    #[derive(Default)]
+    struct Accumulator {
+        formats: Vec<String>,
+        examples: Vec<String>,
+    }
+
+    let mut grouped: HashMap<(String, String), Accumulator> = HashMap::new();
+    for (format, comparison) in comparisons {
+        for tag in &comparison.missing_in_oxidex {
+            let key = tag.key();
+            let entry = grouped.entry(("missing".to_string(), key)).or_default();
+            entry.formats.push(format.clone());
+            entry.examples.push(format!("{}: {}", format, tag.value));
+        }
+        for difference in &comparison.value_differences {
+            let entry = grouped
+                .entry(("value".to_string(), difference.tag_key.clone()))
+                .or_default();
+            entry.formats.push(format.clone());
+            entry.examples.push(format!(
+                "{}: ExifTool={:?}; OxiDex={:?}",
+                format, difference.exiftool_value, difference.oxidex_value
+            ));
+        }
+        for tag in &comparison.extra_in_oxidex {
+            let key = tag.key();
+            let entry = grouped.entry(("extra".to_string(), key)).or_default();
+            entry.formats.push(format.clone());
+            entry.examples.push(format!("{}: {}", format, tag.value));
+        }
+    }
+
+    let mut queue: Vec<_> = grouped
+        .into_iter()
+        .map(|((kind, tag_key), mut accumulator)| {
+            accumulator.formats.sort();
+            accumulator.formats.dedup();
+            accumulator.examples.sort();
+            accumulator.examples.dedup();
+            accumulator.examples.truncate(3);
+            let occurrences = accumulator.formats.len();
+            let base = match kind.as_str() {
+                "missing" => 100,
+                "value" => 80,
+                _ => 20,
+            };
+            GapQueueItem {
+                kind,
+                tag_key,
+                formats: accumulator.formats,
+                occurrences,
+                examples: accumulator.examples,
+                priority: base + occurrences.saturating_mul(10),
+            }
+        })
+        .collect();
+    queue.sort_by(|a, b| {
+        b.priority
+            .cmp(&a.priority)
+            .then_with(|| a.kind.cmp(&b.kind))
+            .then_with(|| a.tag_key.cmp(&b.tag_key))
+    });
+    queue
 }
 
 impl Default for ComparisonReport {
@@ -377,6 +471,55 @@ mod tests {
         let mut report = ComparisonReport::new();
         report.calculate_overall_coverage();
         assert!(report.summary.contains("No formats"));
+    }
+
+    #[test]
+    fn ranked_gap_queue_groups_shared_gaps() {
+        let mut report = ComparisonReport::new();
+
+        let mut jpeg = FormatComparison::new("JPEG".to_string(), 1);
+        jpeg.missing_in_oxidex.push(TagInfo::new(
+            "LensModel".to_string(),
+            "EXIF".to_string(),
+            "EF 50mm".to_string(),
+        ));
+        jpeg.value_differences.push(ValueDifference {
+            tag_key: "EXIF:ISO".to_string(),
+            exiftool_value: "400".to_string(),
+            oxidex_value: "0400".to_string(),
+            source_file: "a.jpg".to_string(),
+        });
+
+        let mut tiff = FormatComparison::new("TIFF".to_string(), 1);
+        tiff.missing_in_oxidex.push(TagInfo::new(
+            "LensModel".to_string(),
+            "EXIF".to_string(),
+            "EF 50mm".to_string(),
+        ));
+        report.add_format("TIFF".to_string(), tiff);
+        report.add_format("JPEG".to_string(), jpeg);
+        report.calculate_overall_coverage();
+
+        assert_eq!(report.gap_queue[0].kind, "missing");
+        assert_eq!(report.gap_queue[0].tag_key, "EXIF:LensModel");
+        assert_eq!(report.gap_queue[0].formats, vec!["JPEG", "TIFF"]);
+        assert_eq!(report.gap_queue[0].occurrences, 2);
+        assert!(report.gap_queue[0].priority > report.gap_queue[1].priority);
+    }
+
+    #[test]
+    fn ranked_gap_queue_is_backward_compatible() {
+        let json = r#"{
+            "generated_at": "2026-08-01T00:00:00Z",
+            "exiftool_version": "13.30",
+            "oxidex_version": "0.1.0",
+            "by_format": {},
+            "overall_coverage": 0.0,
+            "total_regressions": 0,
+            "summary": "No formats analyzed"
+        }"#;
+        let report: ComparisonReport = serde_json::from_str(json).unwrap();
+        assert!(report.gap_queue.is_empty());
     }
 
     #[test]

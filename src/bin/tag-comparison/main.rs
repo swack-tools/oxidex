@@ -26,6 +26,23 @@ struct Args {
     #[arg(long)]
     format: Option<String>,
 
+    /// Comma-separated formats to process in one incremental run.
+    #[arg(long, value_delimiter = ',')]
+    formats: Option<Vec<String>>,
+
+    /// Reuse format results already present in `--output` while refreshing the
+    /// selected formats. This makes focused runs safe for a shared report.
+    #[arg(long)]
+    reuse_output: bool,
+
+    /// Maximum number of ranked gaps to print and include in markdown.
+    #[arg(long, default_value_t = 50)]
+    queue_limit: usize,
+
+    /// Skip markdown generation for a fast JSON-only fix loop.
+    #[arg(long)]
+    no_markdown: bool,
+
     /// Output file for JSON results
     #[arg(short, long, default_value = "comparison.json")]
     output: PathBuf,
@@ -98,17 +115,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Create report
-    let mut report = ComparisonReport::new();
+    // Create report. A focused run can retain untouched format results from a
+    // prior report; only explicitly selected formats are recomputed.
+    let mut report = if args.reuse_output && args.output.exists() {
+        let content = std::fs::read_to_string(&args.output)?;
+        serde_json::from_str(&content)?
+    } else {
+        ComparisonReport::new()
+    };
+    report.generated_at = chrono::Utc::now().to_rfc3339();
     report.exiftool_version = exiftool_version.clone();
     report.oxidex_version = oxidex_version.clone();
 
     // Auto-detect formats from samples directory
-    let formats = if let Some(format) = args.format {
+    let mut formats = if let Some(formats) = args.formats {
+        formats
+    } else if let Some(format) = args.format {
         vec![format]
     } else {
         detect_formats(&args.samples)?
     };
+    formats.sort();
+    formats.dedup();
 
     println!("Found {} formats to process\n", formats.len());
 
@@ -186,10 +214,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Calculate overall coverage
     report.calculate_overall_coverage();
+    report.gap_queue.truncate(args.queue_limit);
 
     println!("\n📊 Overall Results");
     println!("==================");
     println!("{}", report.summary);
+    if !report.gap_queue.is_empty() {
+        println!("\nTop ranked gap queue:");
+        for item in &report.gap_queue {
+            println!(
+                "  [{:>3}] {:<7} {:<42} {}",
+                item.priority,
+                item.kind,
+                item.tag_key,
+                item.formats.join(",")
+            );
+        }
+    }
 
     // Output results
     let t_json = std::time::Instant::now();
@@ -201,15 +242,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         t_json.elapsed().as_secs_f64()
     );
 
-    // Generate markdown reports
-    let t_md = std::time::Instant::now();
-    println!("\n📝 Generating markdown reports...");
-    generate_markdown_reports(&report, &args.markdown_dir)?;
-    println!(
-        "✅ Markdown reports saved to: {} [{:.2}s]",
-        args.markdown_dir.display(),
-        t_md.elapsed().as_secs_f64()
-    );
+    // Generate markdown reports unless a focused fix loop requested JSON only.
+    if !args.no_markdown {
+        let t_md = std::time::Instant::now();
+        println!("\n📝 Generating markdown reports...");
+        generate_markdown_reports(&report, &args.markdown_dir)?;
+        println!(
+            "✅ Markdown reports saved to: {} [{:.2}s]",
+            args.markdown_dir.display(),
+            t_md.elapsed().as_secs_f64()
+        );
+    }
 
     // Save updated baseline
     if let Some(baseline_path) = &args.baseline {

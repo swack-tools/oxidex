@@ -1030,3 +1030,13 @@ verify-tables version="13.30":
         src/exiftool_tables/binary_tables.rs \
         target/exiftool-src/exiftool-{{version}}/lib \
         --oracle tools/exiftool-tables/oracle.pl
+
+# Fast, cache-aware parity loop. Pass format/corpus options through to the
+# wrapper, for example: `just compare-exiftool-incremental -- --formats JPEG`.
+compare-exiftool-incremental *args:
+    bash scripts/compare_incremental.sh {{args}}
+
+# Local verification gate for the workflow itself; the corpus comparison is
+# skipped when no downloaded ExifTool corpus is present.
+verify-parity-fast:
+    bash scripts/verify_parity_fast.sh

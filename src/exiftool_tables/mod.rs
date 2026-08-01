@@ -52,6 +52,18 @@ pub fn find_table(module: &str, table: &str) -> Option<&'static BinaryTable> {
         .find(|t| t.module == module && t.table == table)
 }
 
+/// Iterate over every generated table for one ExifTool module.
+///
+/// Keeping module routing here lets format readers discover all available
+/// generated tables without duplicating registry scans or maintaining a
+/// second hand-written list.
+pub fn tables_for_module(module: &str) -> impl Iterator<Item = &'static BinaryTable> {
+    ALL_BINARY_TABLES
+        .iter()
+        .copied()
+        .filter(move |table| table.module == module)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,6 +75,17 @@ mod tests {
             "expected the generated table set, found {}",
             ALL_BINARY_TABLES.len()
         );
+    }
+
+    #[test]
+    fn module_lookup_is_sorted_and_reuses_registry() {
+        let tables: Vec<_> = tables_for_module("Canon").collect();
+        assert!(!tables.is_empty());
+        assert!(tables.windows(2).all(|pair| pair[0].table <= pair[1].table));
+        assert!(std::ptr::eq(
+            find_table("Canon", tables[0].table).expect("table from registry"),
+            tables[0]
+        ));
     }
 
     #[test]

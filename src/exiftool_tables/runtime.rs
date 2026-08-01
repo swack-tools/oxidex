@@ -5,6 +5,7 @@
 //! smaller than ExifTool's full `ProcessBinaryData`: bit fields and unsupported
 //! conversions are left for format-specific code instead of being guessed.
 
+use crate::core::TagValue;
 use crate::io::ByteOrder;
 
 use super::{BinaryTable, Field, Fmt, PrintConv};
@@ -21,6 +22,31 @@ pub enum DecodedValue {
 }
 
 impl DecodedValue {
+    /// Convert a raw generated value to OxiDex's common value type without
+    /// applying a display conversion.
+    ///
+    /// Unsigned rationals whose components do not fit `TagValue::Rational`'s
+    /// signed 32-bit representation return `None` rather than silently
+    /// truncating. Callers that need those values can retain `DecodedValue`
+    /// and choose a format-specific representation.
+    #[must_use]
+    pub fn to_tag_value(&self) -> Option<TagValue> {
+        Some(match self {
+            Self::Integer(value) => TagValue::Integer(*value),
+            Self::Float(value) => TagValue::Float(*value),
+            Self::UnsignedRational(numerator, denominator) => TagValue::Rational {
+                numerator: i32::try_from(*numerator).ok()?,
+                denominator: i32::try_from(*denominator).ok()?,
+            },
+            Self::SignedRational(numerator, denominator) => TagValue::Rational {
+                numerator: *numerator,
+                denominator: *denominator,
+            },
+            Self::String(value) => TagValue::String(value.clone()),
+            Self::Undefined(value) => TagValue::Binary(value.clone()),
+        })
+    }
+
     fn integer(&self) -> Option<i64> {
         match self {
             Self::Integer(value) => Some(*value),
@@ -59,6 +85,12 @@ pub struct DecodedField {
 }
 
 impl DecodedField {
+    /// Convert this field's raw value to the shared OxiDex value type.
+    #[must_use]
+    pub fn to_tag_value(&self) -> Option<TagValue> {
+        self.raw.to_tag_value()
+    }
+
     /// Apply this field's generated `PrintConv` directly to its raw value.
     ///
     /// This is deliberately explicit. The generated schema does not yet say
@@ -243,6 +275,17 @@ mod tests {
         assert_eq!(
             get("ISO").map(|decoded| &decoded.raw),
             Some(&DecodedValue::Integer(200))
+        );
+        assert_eq!(
+            get("ISO").and_then(DecodedField::to_tag_value),
+            Some(TagValue::Integer(200))
+        );
+        assert_eq!(
+            get("FNumber").and_then(DecodedField::to_tag_value),
+            Some(TagValue::Rational {
+                numerator: 28,
+                denominator: 10,
+            })
         );
     }
 

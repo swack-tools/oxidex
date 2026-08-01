@@ -5,6 +5,7 @@
 
 use super::ExtractionResult;
 use crate::models::TagInfo;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use std::collections::{BTreeMap, HashMap};
@@ -137,7 +138,8 @@ impl ExifToolExtractor {
         }
 
         // Find files by extension recursively throughout the samples directory
-        let files: Vec<PathBuf> = Self::find_files_by_extension(fixture_path, format)?;
+        let mut files: Vec<PathBuf> = Self::find_files_by_extension(fixture_path, format)?;
+        files.sort();
 
         let files_processed = files.len();
 
@@ -168,32 +170,31 @@ impl ExifToolExtractor {
         // This is MUCH faster than spawning exiftool for each file individually
         let mut all_tags: HashMap<String, (TagInfo, usize)> = HashMap::new();
 
-        // Process in batches
-        for batch in files.chunks(BATCH_SIZE) {
-            match self.run_exiftool_batch(batch) {
-                Ok(batch_results) => {
-                    for file_tags in batch_results {
-                        for tag_info in file_tags {
-                            all_tags
-                                .entry(format!("{}:{}", tag_info.family, tag_info.name))
-                                .and_modify(|(_info, count)| *count += 1)
-                                .or_insert((tag_info.clone(), 1));
-                        }
-                    }
-                }
+        // ExifTool invocations are independent. Run batches concurrently, but
+        // fold their results in input order so the first representative value
+        // remains deterministic. The disk cache still avoids this whole phase
+        // on subsequent runs.
+        let batches: Vec<&[PathBuf]> = files.chunks(BATCH_SIZE).collect();
+        let batch_results: Vec<Vec<Vec<TagInfo>>> = batches
+            .par_iter()
+            .map(|batch| match self.run_exiftool_batch(batch) {
+                Ok(results) => results,
                 Err(e) => {
                     eprintln!("Warning: Batch extraction failed: {}", e);
-                    // Fall back to individual file processing for this batch
-                    for file_path in batch {
-                        if let Ok(file_tags) = self.run_exiftool_on_file(file_path) {
-                            for tag_info in file_tags {
-                                all_tags
-                                    .entry(format!("{}:{}", tag_info.family, tag_info.name))
-                                    .and_modify(|(_info, count)| *count += 1)
-                                    .or_insert((tag_info.clone(), 1));
-                            }
-                        }
-                    }
+                    batch
+                        .iter()
+                        .filter_map(|file_path| self.run_exiftool_on_file(file_path).ok())
+                        .collect()
+                }
+            })
+            .collect();
+        for file_results in batch_results {
+            for file_tags in file_results {
+                for tag_info in file_tags {
+                    all_tags
+                        .entry(format!("{}:{}", tag_info.family, tag_info.name))
+                        .and_modify(|(_info, count)| *count += 1)
+                        .or_insert((tag_info.clone(), 1));
                 }
             }
         }

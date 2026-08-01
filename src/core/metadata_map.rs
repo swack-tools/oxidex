@@ -6,7 +6,7 @@
 
 use super::tag_value::TagValue;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// A collection of metadata tags extracted from a file.
 ///
@@ -19,7 +19,12 @@ use std::collections::HashMap;
 pub struct MetadataMap {
     /// Internal storage mapping tag names to their values
     #[serde(flatten)]
-    tags: HashMap<String, TagValue>,
+    /// A sorted map is intentional. Metadata is merged from several parser
+    /// paths, and downstream composite selection must never depend on
+    /// `HashMap`'s per-process random seed. Keeping the canonical store sorted
+    /// makes iteration, serialization, and last-writer selection reproducible
+    /// across runs without changing the public map API.
+    tags: BTreeMap<String, TagValue>,
 
     /// Full-precision `ValueConv` forms used by derived tags.
     ///
@@ -29,7 +34,7 @@ pub struct MetadataMap {
     /// This sidecar is deliberately private and skipped by serde: it augments
     /// an existing tag and is never itself an emitted metadata tag.
     #[serde(skip)]
-    value_forms: HashMap<String, String>,
+    value_forms: BTreeMap<String, String>,
 }
 
 impl MetadataMap {
@@ -45,19 +50,19 @@ impl MetadataMap {
     /// ```
     pub fn new() -> Self {
         Self {
-            tags: HashMap::new(),
-            value_forms: HashMap::new(),
+            tags: BTreeMap::new(),
+            value_forms: BTreeMap::new(),
         }
     }
 
-    /// Creates a new MetadataMap with the specified capacity
+    /// Creates a new MetadataMap with the specified capacity hint.
     ///
-    /// This pre-allocates space for at least `capacity` tags, which can
-    /// improve performance when the approximate number of tags is known.
-    pub fn with_capacity(capacity: usize) -> Self {
+    /// The sorted backing map does not pre-allocate, so this is retained as a
+    /// source-compatible constructor for callers that already estimate size.
+    pub fn with_capacity(_capacity: usize) -> Self {
         Self {
-            tags: HashMap::with_capacity(capacity),
-            value_forms: HashMap::new(),
+            tags: BTreeMap::new(),
+            value_forms: BTreeMap::new(),
         }
     }
 
@@ -208,8 +213,8 @@ impl Default for MetadataMap {
 impl FromIterator<(String, TagValue)> for MetadataMap {
     fn from_iter<T: IntoIterator<Item = (String, TagValue)>>(iter: T) -> Self {
         Self {
-            tags: HashMap::from_iter(iter),
-            value_forms: HashMap::new(),
+            tags: BTreeMap::from_iter(iter),
+            value_forms: BTreeMap::new(),
         }
     }
 }
@@ -243,7 +248,7 @@ impl FromIterator<(String, TagValue)> for MetadataMap {
 /// ```
 impl IntoIterator for MetadataMap {
     type Item = (String, TagValue);
-    type IntoIter = std::collections::hash_map::IntoIter<String, TagValue>;
+    type IntoIter = std::collections::btree_map::IntoIter<String, TagValue>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.tags.into_iter()
@@ -429,5 +434,20 @@ mod tests {
         let map: MetadataMap = tags.into_iter().collect();
         assert_eq!(map.len(), 2);
         assert_eq!(map.get_string("EXIF:Make"), Some("Canon"));
+    }
+
+    #[test]
+    fn iteration_is_deterministic_and_sorted() {
+        let mut map = MetadataMap::new();
+        map.insert("XMP:Title", TagValue::new_string("title"));
+        map.insert("EXIF:Model", TagValue::new_string("model"));
+        map.insert("EXIF:Make", TagValue::new_string("make"));
+
+        let keys: Vec<_> = map.keys().cloned().collect();
+        assert_eq!(keys, vec!["EXIF:Make", "EXIF:Model", "XMP:Title"]);
+
+        let json = serde_json::to_string(&map).unwrap();
+        assert!(json.find("EXIF:Make").unwrap() < json.find("EXIF:Model").unwrap());
+        assert!(json.find("EXIF:Model").unwrap() < json.find("XMP:Title").unwrap());
     }
 }
