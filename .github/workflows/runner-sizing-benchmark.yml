@@ -1,0 +1,127 @@
+name: Runner Sizing Benchmark
+
+# Measures how each real CI workload scales across WarpBuild runner sizes, so
+# `runs-on:` choices come from data instead of intuition. Re-run this when the
+# dependency graph or test suite grows enough that the current sizes might no
+# longer sit at the knee of the curve.
+#
+# Deliberately workflow_dispatch only: a 32x runner is 16x the cost of a 2x
+# one, and nothing here validates code. It must never fire automatically.
+#
+# Method:
+#   - every job runs the same commit with NO cargo cache, so each measurement
+#     is a cold build (which is what ci.yml actually does) and no job inherits
+#     another's warm target/
+#   - each phase is its own step, so per-phase seconds can be read back with
+#     `gh api repos/{owner}/{repo}/actions/runs/{id}/jobs`
+#   - `nproc` and memory are echoed to prove the runner really is the size its
+#     label claims
+
+on:
+  workflow_dispatch:
+    inputs:
+      workloads:
+        description: 'Which workloads to measure'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - ci-build-test
+          - tag-matrix
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The every-PR cost driver: `cargo build --release` + nextest, exactly as
+  # ci.yml's "Build & Test" runs them. Swept across the full size range
+  # because this job runs on every push and PR.
+  ci-build-test:
+    if: inputs.workloads == 'both' || inputs.workloads == 'ci-build-test'
+    name: CI workload (${{ matrix.size }})
+    runs-on: warp-ubuntu-latest-x64-${{ matrix.size }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        size: ['2x', '4x', '8x', '16x', '32x']
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
+        with:
+          tool: cargo-nextest
+
+      - name: Report runner capacity
+        run: |
+          echo "label=warp-ubuntu-latest-x64-${{ matrix.size }}"
+          echo "nproc=$(nproc)"
+          free -g | awk '/^Mem:/ {print "mem_gb=" $2}'
+          {
+            echo "### warp-ubuntu-latest-x64-${{ matrix.size }}"
+            echo "- nproc: \`$(nproc)\`"
+            echo "- mem: \`$(free -g | awk '/^Mem:/ {print $2}')\` GB"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Timed phases. Keep these as separate steps -- the per-step durations
+      # in the jobs API are the measurement.
+      - name: PHASE build release
+        run: cargo build --release --all-features --features tag-comparison-binary
+
+      - name: PHASE nextest
+        run: cargo nextest run --all-features --features tag-comparison-binary
+
+      - name: PHASE clippy
+        run: cargo clippy --all-features -- -D warnings
+
+  # The heavy workload. Started at 8x: the 2-core baseline is already known
+  # (~8m50s for the matrix run) and re-measuring 2x/4x would spend a lot of
+  # wall clock confirming something the production numbers already show.
+  tag-matrix:
+    if: inputs.workloads == 'both' || inputs.workloads == 'tag-matrix'
+    name: Tag matrix workload (${{ matrix.size }})
+    runs-on: warp-ubuntu-latest-x64-${{ matrix.size }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        size: ['8x', '16x', '32x']
+    env:
+      EXIFTOOL_VERSION: '13.55'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Set TAGMATRIX_WORK
+        run: echo "TAGMATRIX_WORK=$RUNNER_TEMP/oxidex-tagmap" >> "$GITHUB_ENV"
+
+      - name: Report runner capacity
+        run: |
+          echo "label=warp-ubuntu-latest-x64-${{ matrix.size }}"
+          echo "nproc=$(nproc)"
+          {
+            echo "### tag-matrix on warp-ubuntu-latest-x64-${{ matrix.size }}"
+            echo "- nproc: \`$(nproc)\`  (workers will match)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install pinned ExifTool
+        run: |
+          git clone -q --depth 1 --branch "${EXIFTOOL_VERSION}" \
+            https://github.com/exiftool/exiftool /tmp/exiftool
+          echo "/tmp/exiftool" >> "$GITHUB_PATH"
+          /tmp/exiftool/exiftool -ver
+
+      - name: PHASE build matrix binaries
+        run: |
+          cargo build --release --bin oxidex
+          cargo build --release --features jpeg-tag-matrix-binary --bin jpeg-tag-matrix
+
+      - name: PHASE generate manifest
+        run: ./target/release/jpeg-tag-matrix manifest --flag-noops
+
+      # Workers track nproc so each size is measured with the pool it would
+      # actually use in production, not a fixed count that under-uses the
+      # bigger runners and makes them look no faster.
+      - name: PHASE run matrix
+        run: ./target/release/jpeg-tag-matrix run --workers "$(nproc)"
