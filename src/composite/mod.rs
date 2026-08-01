@@ -50,11 +50,19 @@ fn value_string(v: &TagValue) -> Option<String> {
             numerator,
             denominator,
         } => Some(format!("{numerator}/{denominator}")),
-        // Binary, DateTime, Struct and Array are never composite inputs in the
-        // definitions we implement; treating them as absent is correct here and
-        // keeps a nonsensical coercion from reaching the arithmetic.
+        // EXIF date/time tags are stored as strings today, but retain support
+        // for a typed UTC value so the SubSec composites do not silently starve
+        // if a parser upgrades its representation.
+        TagValue::DateTime(dt) => Some(dt.format("%Y:%m:%d %H:%M:%S").to_string()),
+        // Binary, Struct and Array are not inputs to any implemented Composite.
         _ => None,
     }
+}
+
+fn lookup_key(map: &MetadataMap, key: &str) -> Option<String> {
+    map.value_form(key)
+        .map(str::to_string)
+        .or_else(|| map.get(key).and_then(value_string))
 }
 
 /// Look up a tag by bare name, ignoring any `Group:` prefix.
@@ -63,20 +71,40 @@ fn value_string(v: &TagValue) -> Option<String> {
 /// `EXIF:FocalLength` satisfies a dependency written as `FocalLength`. An exact
 /// match wins over a suffix match so an explicitly-grouped tag is preferred.
 fn lookup(map: &MetadataMap, name: &str) -> Option<String> {
-    if let Some(v) = map.value_form(name) {
-        return Some(v.to_string());
-    }
-    if let Some(v) = map.get(name).and_then(value_string) {
+    if let Some(v) = lookup_key(map, name) {
         return Some(v);
     }
+    // ExifTool's `EXIF:` dependency prefix is a family-0 group. OxiDex emits
+    // the family-1 IFD name (`ExifIFD:` or `IFD0:`), so bridge that one
+    // generated namespace deliberately. Other explicit groups remain exact:
+    // `GPS:GPSLatitude` must not silently bind an unrelated suffix match.
+    if let Some(bare) = name.strip_prefix("EXIF:") {
+        for family in ["ExifIFD", "IFD0", "EXIF"] {
+            let key = format!("{family}:{bare}");
+            if let Some(v) = lookup_key(map, &key) {
+                return Some(v);
+            }
+        }
+        return None;
+    }
+    if name.contains(':') {
+        return None;
+    }
+
+    // ExifTool's unqualified dependencies resolve standard EXIF tags ahead of
+    // same-named MakerNote values. This order also prevents two dependencies
+    // such as WBRedLevel/WBGreenLevel from being selected out of different
+    // groups according to the randomized iteration order of Rust's HashMap.
+    for family in ["ExifIFD", "IFD0", "EXIF", "GPS", "File"] {
+        let key = format!("{family}:{name}");
+        if let Some(v) = lookup_key(map, &key) {
+            return Some(v);
+        }
+    }
+
     let suffix = format!(":{name}");
-    map.iter()
-        .find(|(k, _)| k.ends_with(&suffix))
-        .and_then(|(k, v)| {
-            map.value_form(k)
-                .map(str::to_string)
-                .or_else(|| value_string(v))
-        })
+    let key = map.keys().filter(|key| key.ends_with(&suffix)).min()?;
+    lookup_key(map, key)
 }
 
 /// Resolve a composite input, preferring an already-computed unrounded value.
@@ -127,12 +155,18 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             // Required inputs must all be present; desired ones may be absent.
             // Both are passed positionally so indices line up with ExifTool's
             // $val[N].
-            let mut owned: Vec<Option<String>> =
-                Vec::with_capacity(comp.require.len() + comp.desire.len());
+            let input_len = comp
+                .require
+                .iter()
+                .chain(comp.desire.iter())
+                .map(|(index, _)| index + 1)
+                .max()
+                .unwrap_or(0);
+            let mut owned: Vec<Option<String>> = vec![None; input_len];
             let mut satisfied = true;
-            for dep in comp.require {
+            for &(index, dep) in comp.require {
                 match resolve(map, &values, dep) {
-                    Some(v) => owned.push(Some(v)),
+                    Some(v) => owned[index] = Some(v),
                     None => {
                         satisfied = false;
                         break;
@@ -142,8 +176,8 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             if !satisfied {
                 continue;
             }
-            for dep in comp.desire {
-                owned.push(resolve(map, &values, dep));
+            for &(index, dep) in comp.desire {
+                owned[index] = resolve(map, &values, dep);
             }
             // A composite with only optional inputs still needs at least one.
             if comp.require.is_empty() && owned.iter().all(Option::is_none) {
@@ -151,7 +185,7 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             }
 
             let inputs: Vec<Option<&str>> = owned.iter().map(|o| o.as_deref()).collect();
-            if let Some(c) = compute::compute(comp.name, &inputs, make.as_deref()) {
+            if let Some(c) = compute::compute(comp.module, comp.name, &inputs, make.as_deref()) {
                 // Count only genuine changes, so the fixpoint still terminates.
                 let changed = map.get_string(&key) != Some(c.print.as_str());
                 values.insert(comp.name, c.value);
@@ -207,6 +241,43 @@ mod tests {
         let mut m = map_of(&[("EXIF:FNumber", "2.8")]);
         apply(&mut m);
         assert_eq!(m.get_string("Composite:Aperture"), Some("2.8"));
+    }
+
+    #[test]
+    fn resolves_exif_family_dependencies_to_their_ifd_groups() {
+        let mut m = map_of(&[
+            ("ExifIFD:DateTimeOriginal", "2005:01:14 08:57:59"),
+            ("ExifIFD:SubSecTimeOriginal", "20"),
+        ]);
+        apply(&mut m);
+        assert_eq!(
+            m.get_string("Composite:SubSecDateTimeOriginal"),
+            Some("2005:01:14 08:57:59.20")
+        );
+    }
+
+    #[test]
+    fn preserves_generated_dependency_positions() {
+        let canon = COMPOSITES
+            .iter()
+            .find(|c| c.module == "Canon" && c.name == "WB_RGGBLevels")
+            .expect("generated Canon white-balance composite");
+        assert_eq!(canon.require, &[(0, "Canon:WhiteBalance")]);
+        assert!(canon.desire.contains(&(10, "WB_RGGBLevelsShade")));
+        assert!(canon.desire.contains(&(11, "WB_RGGBLevelsKelvin")));
+        assert!(!canon.desire.iter().any(|(index, _)| *index == 9));
+    }
+
+    #[test]
+    fn bare_dependencies_prefer_standard_exif_without_mixing_groups() {
+        let mut m = map_of(&[
+            ("Panasonic:WBRedLevel", "2283"),
+            ("Panasonic:WBGreenLevel", "1054"),
+            ("IFD0:WBRedLevel", "570"),
+            ("IFD0:WBGreenLevel", "263"),
+        ]);
+        apply(&mut m);
+        assert_eq!(m.get_string("Composite:RedBalance"), Some("2.1673"));
     }
 
     #[test]
