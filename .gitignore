@@ -39,6 +39,11 @@ Thumbs.db
 
 # Rust build artifacts
 /target/
+
+# Local parity-comparison captures. These contain machine-specific paths,
+# timestamps, and large corpus output; retain the reproducible tools, not a
+# generated run's results.
+/runs/
 **/*.rs.bk
 *.pdb
 
