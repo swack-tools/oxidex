@@ -9,9 +9,9 @@ use crate::core::format_dispatch::dispatch_format_parser;
 use crate::core::jpeg_helpers::{
     process_app3_segments, process_app6_segments, process_app10_segments, process_app11_segments,
     process_app12_segments, process_app14_segments, process_com_segments, process_dqt_segments,
-    process_exif_segments, process_icc_segments, process_iptc_segments, process_jfif_segments,
-    process_mpf_segments, process_photoshop_segments, process_sof_segments, process_spiff_segments,
-    process_xmp_segments,
+    process_exif_segments, process_icc_segments, process_infiray_segments, process_iptc_segments,
+    process_jfif_segments, process_mpf_segments, process_photoshop_segments, process_sof_segments,
+    process_spiff_segments, process_xmp_segments,
 };
 use crate::core::operations_helpers::{read_u16, read_u32};
 #[cfg(test)]
@@ -707,6 +707,9 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
 
     // Process HDR and manufacturer-specific APP segments
     process_app3_segments(&segments, &mut metadata);
+    // InfiRay IJPEG spreads its records over APP2-APP9; APP6 and APP8 are read
+    // by the two calls that already own those markers.
+    process_infiray_segments(&segments, &mut metadata);
     process_app6_segments(&segments, &mut metadata);
     process_app10_segments(&segments, &mut metadata);
     process_app11_segments(&segments, &mut metadata);
