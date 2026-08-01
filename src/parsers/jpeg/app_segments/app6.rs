@@ -50,8 +50,9 @@ use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_ver
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
 /// Minimum APP6 payload length before ExifTool will read it as an InfiRay
-/// MixMode record (ExifTool.pm:8162: `$$self{HasIJPEG} and $length >= 129`).
-const INFIRAY_MIXMODE_MIN_LENGTH: usize = 129;
+/// MixMode record (ExifTool.pm:8163 in 13.55, :8186 in 13.59:
+/// `$$self{HasIJPEG} and $length >= 129`).
+use super::infiray_tables::MIX_MODE_MIN_LENGTH as INFIRAY_MIXMODE_MIN_LENGTH;
 
 /// Parses APP6 segment data and extracts metadata.
 ///
@@ -844,47 +845,14 @@ fn parse_nitf(data: &[u8]) -> MetadataMap {
 
 /// Parses an InfiRay IJPEG visual/infrared mixing-mode record
 /// (`%Image::ExifTool::InfiRay::MixMode`), read little-endian
-/// (`SetByteOrder('II')`, ExifTool.pm:8164).
+/// (`SetByteOrder('II')`, ExifTool.pm:8164 in 13.55, :8187 in 13.59).
 ///
 /// The record carries no identifier; the caller decides whether the file is
-/// an IJPEG. Offsets are byte offsets: MixMode int8u at 0x00,
-/// FusionIntensity float at 0x01, OffsetAdjustment float at 0x05, and
-/// CorrectionAsix float[30] at 0x09.
+/// an IJPEG. The field list is generated from ExifTool's own hash into
+/// [`super::infiray_tables`]: MixMode int8u at 0x00, FusionIntensity float at
+/// 0x01, OffsetAdjustment float at 0x05, CorrectionAsix float[30] at 0x09.
 fn parse_infiray_mix_mode(data: &[u8]) -> MetadataMap {
-    let mut metadata = MetadataMap::new();
-    let le_f32 = |off: usize| -> Option<f32> {
-        data.get(off..off + 4)
-            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-    };
-
-    if let Some(&mode) = data.first() {
-        metadata.insert("APP6:MixMode".to_string(), TagValue::Integer(mode as i64));
-    }
-    // PrintConv => 'sprintf("%.1f %%", $val * 100)'
-    if let Some(intensity) = le_f32(0x01) {
-        metadata.insert(
-            "APP6:FusionIntensity".to_string(),
-            TagValue::String(format!("{:.1} %", intensity as f64 * 100.0)),
-        );
-    }
-    if let Some(offset) = le_f32(0x05) {
-        metadata.insert(
-            "APP6:OffsetAdjustment".to_string(),
-            TagValue::String(perl_number(offset as f64)),
-        );
-    }
-    // float[30]: ExifTool joins list elements with a single space.
-    let axis: Option<Vec<String>> = (0..30)
-        .map(|i| le_f32(0x09 + i * 4).map(|v| perl_number(v as f64)))
-        .collect();
-    if let Some(axis) = axis {
-        metadata.insert(
-            "APP6:CorrectionAsix".to_string(),
-            TagValue::String(axis.join(" ")),
-        );
-    }
-
-    metadata
+    super::infiray::read_record("APP6", data, super::infiray_tables::MIX_MODE)
 }
 
 #[cfg(test)]

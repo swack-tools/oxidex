@@ -10,6 +10,8 @@ use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd};
 use crate::io::EndianReader;
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::jpeg::app_segments::app8_isothermal::INFIRAY_ISOTHERMAL_MIN_LENGTH;
+use crate::parsers::jpeg::app_segments::infiray::{binary_data_placeholder, read_record};
+use crate::parsers::jpeg::app_segments::infiray_tables as infiray;
 use crate::parsers::jpeg::app_segments::{
     parse_app6_ijpeg, parse_app10_hdr, parse_app11_jpeg_hdr, parse_app12_olympus,
     parse_app12_picture_info, parse_app14_adobe, parse_infiray_isothermal, parse_jumbf,
@@ -971,11 +973,148 @@ pub fn process_spiff_segments(segments: &[Segment], metadata: &mut MetadataMap) 
 /// (ExifTool.pm:7968) and later uses it as the ONLY gate for the InfiRay
 /// APP6/APP7/APP8/APP9 records, which carry no identifier of their own.
 fn has_ijpeg_header(segments: &[Segment]) -> bool {
-    const APP2_MARKER: u16 = 0xFFE2;
     segments
         .iter()
         .filter(|s| s.marker == APP2_MARKER)
-        .any(|s| s.data.len() >= 10 && &s.data[4..10] == b"IJPEG\0")
+        .any(|s| is_ijpeg_version_header(s.data))
+}
+
+const APP2_MARKER: u16 = 0xFFE2;
+const APP3_MARKER: u16 = 0xFFE3;
+const APP4_MARKER: u16 = 0xFFE4;
+const APP5_MARKER: u16 = 0xFFE5;
+const APP7_MARKER: u16 = 0xFFE7;
+const APP9_MARKER: u16 = 0xFFE9;
+
+/// ExifTool's `/^....IJPEG\0/s`: four bytes of version, then the signature.
+///
+/// This is checked after ICC_PROFILE, FPXR and MPF in ExifTool's APP2 chain,
+/// but none of those three can also carry `IJPEG\0` at offset 4 -- their own
+/// identifiers occupy those bytes -- so the signature alone is exact.
+fn is_ijpeg_version_header(data: &[u8]) -> bool {
+    data.len() >= infiray::VERSION_MIN_LENGTH && &data[4..10] == b"IJPEG\0"
+}
+
+/// Processes the InfiRay IJPEG records carried in APP2, APP3, APP4, APP5,
+/// APP7 and APP9 (`Image::ExifTool::InfiRay`).
+///
+/// The sibling APP6 MixMode and APP8 Isothermal records are read by
+/// [`process_app6_segments`] and [`process_spiff_segments`], which already own
+/// those markers for other formats.
+///
+/// None of these records carries an identifier: ExifTool reads them only once
+/// an APP2 segment has set `$$self{HasIJPEG}`, and then only when the segment
+/// clears a per-marker minimum length. Both gates are generated into
+/// [`infiray`] from ExifTool's own source.
+pub fn process_infiray_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    if !has_ijpeg_header(segments) {
+        return;
+    }
+
+    // The APP2 version header is the one record with a signature of its own.
+    for segment in segments.iter().filter(|s| s.marker == APP2_MARKER) {
+        if !is_ijpeg_version_header(segment.data) {
+            continue;
+        }
+        merge(
+            read_record("APP2", segment.data, infiray::VERSION),
+            metadata,
+        );
+    }
+
+    // The identifier-less binary-data records, each gated on its own minimum
+    // segment length.
+    const RECORDS: [(u16, &str, &[infiray::Field], usize); 4] = [
+        (
+            APP4_MARKER,
+            "APP4",
+            infiray::FACTORY,
+            infiray::FACTORY_MIN_LENGTH,
+        ),
+        (
+            APP5_MARKER,
+            "APP5",
+            infiray::PICTURE,
+            infiray::PICTURE_MIN_LENGTH,
+        ),
+        (
+            APP7_MARKER,
+            "APP7",
+            infiray::OP_MODE,
+            infiray::OP_MODE_MIN_LENGTH,
+        ),
+        (
+            APP9_MARKER,
+            "APP9",
+            infiray::SENSOR,
+            infiray::SENSOR_MIN_LENGTH,
+        ),
+    ];
+    for (marker, group, table, min_length) in RECORDS {
+        for segment in segments.iter().filter(|s| s.marker == marker) {
+            if segment.data.len() < min_length {
+                continue;
+            }
+            merge(read_record(group, segment.data, table), metadata);
+        }
+    }
+
+    process_infiray_imaging_data(segments, metadata);
+}
+
+/// Emits `APP3:ImagingData`, the InfiRay IR + thermal + visible payload.
+///
+/// `JPEG::Main` declares it `Binary => 1` (JPEG.pm:119-123), so ExifTool
+/// prints a byte count rather than the bytes.
+///
+/// A record larger than one segment is split across consecutive APP3
+/// segments, which ExifTool concatenates in file order and processes once the
+/// run ends (`$nextMarker == $marker`, ExifTool.pm:8035). There is no chunk
+/// header and no index or checksum byte to misread -- unlike FLIR's APP1,
+/// whose reassembly was the subject of #321 -- the payloads simply abut.
+fn process_infiray_imaging_data(segments: &[Segment], metadata: &mut MetadataMap) {
+    // ExifTool tests the earlier APP3 identifiers first, and a payload that
+    // matches one of them takes that branch instead.
+    fn is_imaging_data(data: &[u8]) -> bool {
+        !(data.starts_with(b"Meta\0\0")
+            || data.starts_with(b"META\0\0")
+            || data.starts_with(b"Exif\0\0")
+            || data.starts_with(b"Stim\0")
+            || data.starts_with(b"_JPSJPS_"))
+    }
+
+    let mut run_len = 0usize;
+    let mut previous_index: Option<usize> = None;
+    for (index, segment) in segments.iter().enumerate() {
+        if segment.marker != APP3_MARKER || !is_imaging_data(segment.data) {
+            continue;
+        }
+        // A gap in segment indices ends the run and starts a new record.
+        if previous_index != Some(index.wrapping_sub(1)) {
+            run_len = 0;
+        }
+        run_len += segment.data.len();
+        previous_index = Some(index);
+
+        // Emit at the end of each run. Later runs overwrite earlier ones, as
+        // ExifTool's own tag store keeps one value per key.
+        let run_continues = segments
+            .get(index + 1)
+            .is_some_and(|next| next.marker == APP3_MARKER);
+        if !run_continues {
+            metadata.insert(
+                "APP3:ImagingData".to_string(),
+                binary_data_placeholder(run_len),
+            );
+        }
+    }
+}
+
+/// Copies every entry of `source` into `metadata`.
+fn merge(source: MetadataMap, metadata: &mut MetadataMap) {
+    for (key, value) in source.iter() {
+        metadata.insert(key.clone(), value.clone());
+    }
 }
 
 #[cfg(test)]

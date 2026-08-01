@@ -4,16 +4,24 @@
 //! marker for a four-float isothermal record with no identifier of its own:
 //! ExifTool only reads it once an APP2 segment matching `/^....IJPEG\0/` has
 //! set `$$self{HasIJPEG}`, and then only when the segment is at least 32
-//! bytes long (ExifTool.pm:8215).
+//! bytes long (ExifTool.pm:8228 in 13.55, :8251 in 13.59).
 //!
 //! Values are little-endian (`SetByteOrder('II')`) and the table's numeric
 //! keys are byte offsets, since `%InfiRay::Isothermal` declares no `FORMAT`.
+//! The field list itself lives in [`super::infiray_tables`], generated from
+//! ExifTool's own hash; this module is the APP8 entry point onto it.
 
-use super::perl_number;
-use crate::core::{MetadataMap, TagValue};
+use super::infiray::read_record;
+use super::infiray_tables::{ISOTHERMAL, ISOTHERMAL_MIN_LENGTH};
+use crate::core::MetadataMap;
 
+// Spelled as a literal rather than aliased to the generated constant because
+// cbindgen exports this one to `api/oxidex.h`, and the doc comment goes with
+// it -- editing either churns the header. The assertion below is what keeps
+// the literal equal to the generated value.
 /// Minimum APP8 payload length before ExifTool reads an isothermal record.
 pub const INFIRAY_ISOTHERMAL_MIN_LENGTH: usize = 32;
+const _: () = assert!(INFIRAY_ISOTHERMAL_MIN_LENGTH == ISOTHERMAL_MIN_LENGTH);
 
 /// Parses an InfiRay APP8 isothermal record.
 ///
@@ -26,29 +34,10 @@ pub const INFIRAY_ISOTHERMAL_MIN_LENGTH: usize = 32;
 /// A metadata map keyed `APP8:<Name>`; empty when the payload is shorter
 /// than ExifTool's 32-byte gate.
 pub fn parse_infiray_isothermal(data: &[u8]) -> MetadataMap {
-    let mut metadata = MetadataMap::new();
     if data.len() < INFIRAY_ISOTHERMAL_MIN_LENGTH {
-        return metadata;
+        return MetadataMap::new();
     }
-
-    const FIELDS: [(usize, &str); 4] = [
-        (0x00, "IsothermalMax"),
-        (0x04, "IsothermalMin"),
-        (0x08, "ChromaBarMax"),
-        (0x0c, "ChromaBarMin"),
-    ];
-    for (offset, name) in FIELDS {
-        let Some(bytes) = data.get(offset..offset + 4) else {
-            continue;
-        };
-        let value = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-        metadata.insert(
-            format!("APP8:{}", name),
-            TagValue::String(perl_number(value as f64)),
-        );
-    }
-
-    metadata
+    read_record("APP8", data, ISOTHERMAL)
 }
 
 #[cfg(test)]
