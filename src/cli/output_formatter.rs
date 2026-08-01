@@ -495,7 +495,11 @@ fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String {
                 format!("{}/{}", numerator, denominator)
             }
         }
-        TagValue::Binary(bytes) => format!("({} bytes)", bytes.len()),
+        // Same wording as the other three renderers. `-s` shortens tag *names*,
+        // not values, so there is no reason for it to describe a binary blob
+        // differently from `-e`, `-j` and `-csv` -- `ExifIFD:FileSource` came
+        // out as `(Binary, 1 bytes)` everywhere else and `(1 bytes)` here.
+        TagValue::Binary(bytes) => format!("(Binary, {} bytes)", bytes.len()),
         TagValue::DateTime(dt) => dt.format("%Y:%m:%d %H:%M:%S").to_string(),
         TagValue::Struct(_) => "(struct)".to_string(),
         TagValue::Array(values) => {
@@ -530,7 +534,15 @@ fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
             denominator,
         } => format!("{}/{}", numerator, denominator),
         TagValue::Binary(bytes) => format!("(Binary, {} bytes)", bytes.len()),
-        TagValue::DateTime(dt) => dt.to_rfc3339(),
+        // ExifTool's date form, which is what `-s` and `-j` already print and
+        // what ExifTool itself prints: `2005:11:07 11:06:52`. This renderer
+        // backs the default output *and* `-csv`, and it was emitting RFC 3339
+        // (`2005-11-07T11:06:52+00:00`) -- a shape ExifTool never produces --
+        // so `oxidex -e` and `oxidex -e -s` disagreed about the same tag in the
+        // same file, 1142 times across 546 corpus files. tag-comparison reads
+        // TagValue in-process and never reaches a formatter, so no coverage
+        // number moved.
+        TagValue::DateTime(dt) => dt.format("%Y:%m:%d %H:%M:%S").to_string(),
         TagValue::Struct(_) => "(Structured data)".to_string(),
         TagValue::Array(values) => {
             let formatted: Vec<String> = values
@@ -752,7 +764,9 @@ mod tests {
         assert!(output.contains("EXIF:FNumber: 2.8"));
         assert!(output.contains("EXIF:ExposureTime: 1/100"));
         assert!(output.contains("EXIF:ThumbnailData: (Binary, 4 bytes)"));
-        assert!(output.contains("EXIF:DateTime: 2023-06-15T12:30:00+00:00"));
+        // ExifTool's date form, matching `-s` and `-j`; this renderer used to
+        // print RFC 3339 here, which ExifTool never emits.
+        assert!(output.contains("EXIF:DateTime: 2023:06:15 12:30:00"));
     }
 
     #[test]
@@ -947,13 +961,44 @@ mod tests {
         );
     }
 
+    /// The default renderer used to print RFC 3339
+    /// (`2023-12-25T10:30:45+00:00`), a shape ExifTool never produces, while
+    /// `-s` and `-j` printed ExifTool's form for the same tag in the same file.
     #[test]
     fn test_format_tag_value_datetime() {
         let dt = Utc.with_ymd_and_hms(2023, 12, 25, 10, 30, 45).unwrap();
         let value = TagValue::new_datetime(dt);
         assert_eq!(
             format_tag_value("EXIF:DateTime", &value),
-            "2023-12-25T10:30:45+00:00"
+            "2023:12:25 10:30:45"
+        );
+    }
+
+    /// All four renderers describe the same value the same way. `-s` shortens
+    /// tag *names*, not values, so it has no reason to word a binary blob
+    /// differently -- `ExifIFD:FileSource` printed `(Binary, 1 bytes)` under
+    /// `-e`/`-j`/`-csv` and `(1 bytes)` under `-s`.
+    #[test]
+    fn every_renderer_agrees_on_datetime_and_binary() {
+        let dt = Utc.with_ymd_and_hms(2005, 11, 7, 11, 6, 52).unwrap();
+        let datetime = TagValue::new_datetime(dt);
+        assert_eq!(
+            format_tag_value("IFD0:ModifyDate", &datetime),
+            format_tag_value_short("IFD0:ModifyDate", &datetime)
+        );
+        assert_eq!(
+            tag_value_to_json(Some("IFD0:ModifyDate"), &datetime),
+            serde_json::Value::String("2005:11:07 11:06:52".to_string())
+        );
+
+        let binary = TagValue::Binary(vec![3]);
+        assert_eq!(
+            format_tag_value("ExifIFD:FileSource", &binary),
+            format_tag_value_short("ExifIFD:FileSource", &binary)
+        );
+        assert_eq!(
+            tag_value_to_json(Some("ExifIFD:FileSource"), &binary),
+            serde_json::Value::String("(Binary, 1 bytes)".to_string())
         );
     }
 
@@ -1058,7 +1103,9 @@ mod tests {
         assert!(output.contains("EXIF:FNumber,2.8"));
         assert!(output.contains("EXIF:ExposureTime,1/100"));
         assert!(output.contains("EXIF:ThumbnailData,\"(Binary, 4 bytes)\""));
-        assert!(output.contains("EXIF:DateTime,2023-06-15T12:30:00+00:00"));
+        // `-csv` shares the default renderer, so it inherited the same RFC 3339
+        // divergence from `-s` and `-j` and from ExifTool itself.
+        assert!(output.contains("EXIF:DateTime,2023:06:15 12:30:00"));
 
         // Verify it's valid parseable CSV
         let mut rdr = csv::Reader::from_reader(output.as_bytes());
