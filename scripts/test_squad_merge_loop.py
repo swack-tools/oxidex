@@ -640,6 +640,7 @@ class ProcessCommitTests(SquadProcessFixture):
 
         self.assertEqual(result["outcome"], "quarantined")
         self.assertEqual(len(comparison_calls), 1)  # only the pre-cherry-pick snapshot
+        self.assertEqual(comparison_calls[0][3], "squad-nikon-staging")
         self.assertEqual(git_out(repo, "rev-parse", "squad/nikon").strip(), pre_tip)
         symref = git(staging, "symbolic-ref", "-q", "HEAD", check=False)
         self.assertIn("squad/nikon", symref.stdout)
@@ -880,7 +881,10 @@ class CrossSquadDuplicateSkipTests(unittest.TestCase):
 
 class RunBatchCheckTests(unittest.TestCase):
     def test_passes_and_returns_fresh_baselines(self):
+        suffixes = []
+
         def comparison_fn(staging, cache, fmt, suffix):
+            suffixes.append(suffix)
             return {"duplicate_emissions": [], "extra_in_oxidex": [{"family": "NEF", "name": "X"}]}
 
         ok, problems, baselines = sml.run_batch_check(
@@ -890,6 +894,7 @@ class RunBatchCheckTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(problems, [])
         self.assertIn("NEF", baselines)
+        self.assertEqual(suffixes, ["squad-nikon-staging-batch"])
 
     def test_duplicate_emissions_fail_loudly_without_raising(self):
         logged = []

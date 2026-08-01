@@ -1043,7 +1043,11 @@ def process_commit(*, repo_root, staging_path, squad, squad_branch, sha, fmt, is
     # is never checked out directly onto the candidate -- only a
     # FULLY validated state ever gets fast-forwarded onto it.
     checkout_detached(staging_path, squad_branch)
-    pre = comparison_fn(staging_path, cache_dir, fmt, "squad-staging")
+    # Each squad merger is its own process and several routinely compare the
+    # same format at once. Include the squad in the suffix so their /tmp
+    # reports and markdown directories cannot overwrite one another.
+    comparison_suffix = f"squad-{squad}-staging"
+    pre = comparison_fn(staging_path, cache_dir, fmt, comparison_suffix)
 
     ok, message = cherry_pick(staging_path, sha)
     if not ok:
@@ -1055,7 +1059,7 @@ def process_commit(*, repo_root, staging_path, squad, squad_branch, sha, fmt, is
         checkout_branch(staging_path, squad_branch)
         return quarantine(f"cargo test --lib {fmt.lower()} failed", ["targeted-test-failed"])
 
-    post = comparison_fn(staging_path, cache_dir, fmt, "squad-staging")
+    post = comparison_fn(staging_path, cache_dir, fmt, comparison_suffix)
     # Both halves of this gate are now diffed against PRE. Reading
     # duplicate_emissions straight off POST held every format with a
     # pre-existing duplicate hostage -- see newly_duplicated_emissions.
@@ -1160,7 +1164,9 @@ def run_batch_check(*, staging_path, squad, formats, cache_dir, comparison_fn,
         # Treated as a check FAILURE (hold publication), which is the
         # existing, already-safe behavior for an unhealthy batch check.
         try:
-            report = comparison_fn(staging_path, cache_dir, fmt, "squad-staging-batch")
+            report = comparison_fn(
+                staging_path, cache_dir, fmt, f"squad-{squad}-staging-batch"
+            )
         except subprocess.CalledProcessError as exc:
             ok = False
             problems.append(f"{fmt}: comparison run failed ({exc})")
