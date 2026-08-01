@@ -451,3 +451,230 @@ fn test_leica_makernote_parse_error_invalid_entry_count() {
     let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
     assert!(result.is_err());
 }
+
+/// `MakerNoteLeica2` (M8), values immediately after the entry table.
+///
+/// Ground truth: `exiftool -G1 -s LeicaM8.jpg` reports
+/// `ExternalSensorBrightnessValue = 9.14` and `MeasuredLV = 7.54`
+/// (ExifTool Panasonic.pm:1656/1664, `Base => '$start'`).
+#[test]
+fn test_leica2_measured_lv_and_external_sensor_brightness() {
+    use oxidex::parsers::tiff::ifd_parser::ByteOrder;
+    use oxidex::parsers::tiff::makernotes::leica::LeicaMakerNoteParser;
+    use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
+    use std::collections::HashMap;
+
+    let parser = LeicaMakerNoteParser;
+    let mut tags = HashMap::new();
+
+    let mut data = Vec::new();
+    data.extend_from_slice(b"LEICA\0\0\0"); // 8-byte header; IFD starts here + 8
+    data.extend_from_slice(&2u16.to_le_bytes()); // 2 entries
+
+    // 0x0311 ExternalSensorBrightnessValue: rational64s at IFD-relative 26
+    data.extend_from_slice(&0x0311u16.to_le_bytes());
+    data.extend_from_slice(&5u16.to_le_bytes()); // type 5: RATIONAL
+    data.extend_from_slice(&1u32.to_le_bytes());
+    data.extend_from_slice(&26u32.to_le_bytes());
+
+    // 0x0312 MeasuredLV: rational64s at IFD-relative 34
+    data.extend_from_slice(&0x0312u16.to_le_bytes());
+    data.extend_from_slice(&5u16.to_le_bytes());
+    data.extend_from_slice(&1u32.to_le_bytes());
+    data.extend_from_slice(&34u32.to_le_bytes());
+
+    // Value block starts right after the 2-entry table (IFD-relative 26), so
+    // `leica2_base_shift` sees a gap of -2 and keeps the unshifted `$start` base.
+    data.extend_from_slice(&914i32.to_le_bytes());
+    data.extend_from_slice(&100i32.to_le_bytes());
+    data.extend_from_slice(&754i32.to_le_bytes());
+    data.extend_from_slice(&100i32.to_le_bytes());
+
+    let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
+    assert!(result.is_ok());
+    assert_eq!(
+        tags.get("Leica:ExternalSensorBrightnessValue"),
+        Some(&"9.14".to_string())
+    );
+    assert_eq!(tags.get("Leica:MeasuredLV"), Some(&"7.54".to_string()));
+}
+
+/// `MakerNoteLeica2` (M8), `FixLeicaBase` shift applied.
+///
+/// Some M8 files (`LeicaM8.2.jpg` in the ExifTool test corpus) write their
+/// value offsets relative to the payload's own start rather than the IFD --
+/// ExifTool detects this by the gap between the lowest value offset and the
+/// end of the entry list (`MakerNotes.pm:1669-1691`, `FixLeicaBase`). Ground
+/// truth: `ExternalSensorBrightnessValue = 0.90`, `MeasuredLV = -0.95`.
+#[test]
+fn test_leica2_fix_leica_base_shift() {
+    use oxidex::parsers::tiff::ifd_parser::ByteOrder;
+    use oxidex::parsers::tiff::makernotes::leica::LeicaMakerNoteParser;
+    use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
+    use std::collections::HashMap;
+
+    let parser = LeicaMakerNoteParser;
+    let mut tags = HashMap::new();
+
+    let mut data = vec![0u8; 56];
+    data[0..8].copy_from_slice(b"LEICA\0\0\0");
+    data[8..10].copy_from_slice(&2u16.to_le_bytes());
+
+    // Value offsets of 40 and 48 put the gap past the entry table
+    // (2 * 12 + 4 = 28) at more than 8 bytes, so FixLeicaBase shifts the base
+    // 8 bytes earlier -- to the payload's own start -- and these offsets
+    // resolve against `data[40..]` / `data[48..]` directly.
+    data[10..12].copy_from_slice(&0x0311u16.to_le_bytes());
+    data[12..14].copy_from_slice(&5u16.to_le_bytes());
+    data[14..18].copy_from_slice(&1u32.to_le_bytes());
+    data[18..22].copy_from_slice(&40u32.to_le_bytes());
+
+    data[22..24].copy_from_slice(&0x0312u16.to_le_bytes());
+    data[24..26].copy_from_slice(&5u16.to_le_bytes());
+    data[26..30].copy_from_slice(&1u32.to_le_bytes());
+    data[30..34].copy_from_slice(&48u32.to_le_bytes());
+
+    data[40..44].copy_from_slice(&90i32.to_le_bytes());
+    data[44..48].copy_from_slice(&100i32.to_le_bytes());
+    data[48..52].copy_from_slice(&(-95i32).to_le_bytes());
+    data[52..56].copy_from_slice(&100i32.to_le_bytes());
+
+    let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
+    assert!(result.is_ok());
+    assert_eq!(
+        tags.get("Leica:ExternalSensorBrightnessValue"),
+        Some(&"0.90".to_string())
+    );
+    assert_eq!(tags.get("Leica:MeasuredLV"), Some(&"-0.95".to_string()));
+}
+
+/// `MakerNoteLeica9` (M10/M11/S): `Base` is unset, so value offsets count
+/// from the enclosing TIFF header, not the payload. Only reachable through
+/// [`MakerNoteParser::parse_with_context`] with a located context.
+///
+/// Ground truth: `exiftool -G1 -s LeicaM10-R.jpg` reports
+/// `ExternalSensorBrightnessValue = 0.56`, `MeasuredLV = -19.93`.
+#[test]
+fn test_leica9_measured_lv_needs_tiff_relative_base() {
+    use oxidex::parsers::tiff::ifd_parser::ByteOrder;
+    use oxidex::parsers::tiff::makernotes::leica::LeicaMakerNoteParser;
+    use oxidex::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
+    use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
+    use std::collections::HashMap;
+
+    let parser = LeicaMakerNoteParser;
+    let mut tags = HashMap::new();
+
+    let mut tiff = vec![0u8; 80];
+    let payload_offset = 20usize;
+
+    tiff[payload_offset..payload_offset + 8].copy_from_slice(b"LEICA\0\x02\0");
+    tiff[payload_offset + 8..payload_offset + 10].copy_from_slice(&2u16.to_le_bytes());
+
+    // Value offsets are absolute TIFF offsets (60, 70) -- unreachable from the
+    // 34-byte payload alone, which is why this needs `parse_with_context`.
+    let e0 = payload_offset + 10;
+    tiff[e0..e0 + 2].copy_from_slice(&0x0311u16.to_le_bytes());
+    tiff[e0 + 2..e0 + 4].copy_from_slice(&10u16.to_le_bytes()); // type 10: SRATIONAL
+    tiff[e0 + 4..e0 + 8].copy_from_slice(&1u32.to_le_bytes());
+    tiff[e0 + 8..e0 + 12].copy_from_slice(&60u32.to_le_bytes());
+
+    let e1 = e0 + 12;
+    tiff[e1..e1 + 2].copy_from_slice(&0x0312u16.to_le_bytes());
+    tiff[e1 + 2..e1 + 4].copy_from_slice(&10u16.to_le_bytes());
+    tiff[e1 + 4..e1 + 8].copy_from_slice(&1u32.to_le_bytes());
+    tiff[e1 + 8..e1 + 12].copy_from_slice(&70u32.to_le_bytes());
+
+    tiff[60..64].copy_from_slice(&56i32.to_le_bytes());
+    tiff[64..68].copy_from_slice(&100i32.to_le_bytes());
+    tiff[70..74].copy_from_slice(&(-1993i32).to_le_bytes());
+    tiff[74..78].copy_from_slice(&100i32.to_le_bytes());
+
+    let payload_len = 34; // header(8) + count(2) + 2 entries * 12
+    let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 0);
+
+    let result = parser.parse_with_context(&ctx, ByteOrder::LittleEndian, None, &mut tags);
+    assert!(result.is_ok());
+    assert_eq!(
+        tags.get("Leica:ExternalSensorBrightnessValue"),
+        Some(&"0.56".to_string())
+    );
+    assert_eq!(tags.get("Leica:MeasuredLV"), Some(&"-19.93".to_string()));
+}
+
+/// `MakerNoteLeica9`, but parsed detached (no enclosing TIFF known): the two
+/// tags are skipped rather than resolved against a guessed base.
+#[test]
+fn test_leica9_measured_lv_absent_without_tiff_context() {
+    use oxidex::parsers::tiff::ifd_parser::ByteOrder;
+    use oxidex::parsers::tiff::makernotes::leica::LeicaMakerNoteParser;
+    use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
+    use std::collections::HashMap;
+
+    let parser = LeicaMakerNoteParser;
+    let mut tags = HashMap::new();
+
+    let mut data = vec![0u8; 34];
+    data[0..8].copy_from_slice(b"LEICA\0\x02\0");
+    data[8..10].copy_from_slice(&2u16.to_le_bytes());
+    data[10..12].copy_from_slice(&0x0311u16.to_le_bytes());
+    data[12..14].copy_from_slice(&10u16.to_le_bytes());
+    data[14..18].copy_from_slice(&1u32.to_le_bytes());
+    data[18..22].copy_from_slice(&60u32.to_le_bytes());
+    data[22..24].copy_from_slice(&0x0312u16.to_le_bytes());
+    data[24..26].copy_from_slice(&10u16.to_le_bytes());
+    data[26..30].copy_from_slice(&1u32.to_le_bytes());
+    data[30..34].copy_from_slice(&70u32.to_le_bytes());
+
+    let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
+    assert!(result.is_ok());
+    assert_eq!(tags.get("Leica:ExternalSensorBrightnessValue"), None);
+    assert_eq!(tags.get("Leica:MeasuredLV"), None);
+}
+
+/// `MakerNoteLeica4` (M9/M Monochrom): `MeasuredLV`/`ExternalSensorBrightnessValue`
+/// live in the `Subdir3400` subdirectory as `int32s` with `ValueConv $val/1e5`
+/// (ExifTool Panasonic.pm:1908/1917).
+///
+/// Ground truth: `exiftool -G1 -s LeicaM9.jpg` reports `MeasuredLV = 6.92`,
+/// `ExternalSensorBrightnessValue = 8.89`.
+#[test]
+fn test_leica4_subdir3400_measured_lv() {
+    use oxidex::parsers::tiff::ifd_parser::ByteOrder;
+    use oxidex::parsers::tiff::makernotes::leica::LeicaMakerNoteParser;
+    use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
+    use std::collections::HashMap;
+
+    let parser = LeicaMakerNoteParser;
+    let mut tags = HashMap::new();
+
+    let mut data = vec![0u8; 48];
+    data[0..8].copy_from_slice(b"LEICA0\x03\0");
+    data[8..10].copy_from_slice(&1u16.to_le_bytes()); // 1 top-level entry: Subdir3400
+
+    // Subdir3400 pointer: payload-relative offset 22, 26 bytes long.
+    data[10..12].copy_from_slice(&0x3400u16.to_le_bytes());
+    data[12..14].copy_from_slice(&7u16.to_le_bytes()); // type 7: UNDEFINED
+    data[14..18].copy_from_slice(&26u32.to_le_bytes());
+    data[18..22].copy_from_slice(&22u32.to_le_bytes());
+
+    // Subdirectory: 2 entries, values inline (int32s fits in 4 bytes).
+    data[22..24].copy_from_slice(&2u16.to_le_bytes());
+    data[24..26].copy_from_slice(&0x3407u16.to_le_bytes());
+    data[26..28].copy_from_slice(&9u16.to_le_bytes()); // type 9: SLONG
+    data[28..32].copy_from_slice(&1u32.to_le_bytes());
+    data[32..36].copy_from_slice(&691_968i32.to_le_bytes());
+
+    data[36..38].copy_from_slice(&0x3408u16.to_le_bytes());
+    data[38..40].copy_from_slice(&9u16.to_le_bytes());
+    data[40..44].copy_from_slice(&1u32.to_le_bytes());
+    data[44..48].copy_from_slice(&888_832i32.to_le_bytes());
+
+    let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
+    assert!(result.is_ok());
+    assert_eq!(tags.get("Leica:MeasuredLV"), Some(&"6.92".to_string()));
+    assert_eq!(
+        tags.get("Leica:ExternalSensorBrightnessValue"),
+        Some(&"8.89".to_string())
+    );
+}
