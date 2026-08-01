@@ -174,13 +174,17 @@ fn af_points_used_bitmask11(raw: u16) -> String {
     if raw == 0x7ff {
         return "All 11 Points".to_string();
     }
-    let mut points = Vec::new();
-    for (bit, name) in AF_POINTS_11_OFFSET8.iter().enumerate() {
-        if raw & (1 << bit) != 0 {
-            points.push(*name);
+    let mut points: Vec<String> = Vec::new();
+    for bit in 0..16u32 {
+        if raw & (1 << bit) == 0 {
+            continue;
+        }
+        match AF_POINTS_11_OFFSET8.get(bit as usize) {
+            Some(name) => points.push((*name).to_string()),
+            None => points.push(format!("[{bit}]")),
         }
     }
-    points.join(",")
+    points.join(", ")
 }
 
 /// `PrimaryAFPoint`'s 11-point shape: direct 1-based lookup into
@@ -201,9 +205,20 @@ fn primary_af_point_11(raw: u8) -> String {
 /// for three fixed alternatives.
 fn model_matches(model: &str, prefixes: &[&str]) -> bool {
     let model = model.to_ascii_uppercase();
-    prefixes
-        .iter()
-        .any(|p| model.starts_with(&p.to_ascii_uppercase()))
+    prefixes.iter().any(|p| {
+        let prefix = p.to_ascii_uppercase();
+        if !model.starts_with(&prefix) {
+            return false;
+        }
+        // Mirror ExifTool's trailing `\b`: the prefix must consume the
+        // whole string, or the next character must be a non-word boundary
+        // (not alphanumeric/underscore), so "NIKON Z fc" doesn't match
+        // prefix "NIKON Z f".
+        match model[prefix.len()..].chars().next() {
+            None => true,
+            Some(c) => !(c.is_ascii_alphanumeric() || c == '_'),
+        }
+    })
 }
 
 /// Walk `Nikon::Main` 0x00b7.
@@ -264,14 +279,17 @@ pub fn parse_af_info2(
             // above for AFAreaMode) is unrelated here.
             let primary_at = if version == "0100" { 7 } else { 0x44 };
             if let Some(raw) = byte(primary_at) {
-                let primary = match (version.as_str(), byte(6).unwrap_or(0)) {
-                    (_, 1) => primary_af_point(raw, AF_POINTS_51),
-                    (_, 2) => primary_af_point_11(raw),
-                    ("0100", 3) => primary_af_point(raw, AF_POINTS_39),
-                    ("0101", 7) => primary_af_point(raw, AF_POINTS_153),
-                    _ => "(none)".to_string(),
+                let primary: Option<String> = match (version.as_str(), byte(6).unwrap_or(0)) {
+                    (_, 1) => Some(primary_af_point(raw, AF_POINTS_51)),
+                    (_, 2) => Some(primary_af_point_11(raw)),
+                    ("0100", 3) => Some(primary_af_point(raw, AF_POINTS_39)),
+                    ("0101", 7) => Some(primary_af_point(raw, AF_POINTS_153)),
+                    (_, 0) => Some("(none)".to_string()),
+                    _ => None,
                 };
-                tags.insert("Nikon:PrimaryAFPoint".to_string(), primary);
+                if let Some(primary) = primary {
+                    tags.insert("Nikon:PrimaryAFPoint".to_string(), primary);
+                }
             }
 
             let schema = byte(6).unwrap_or(0);
@@ -409,19 +427,13 @@ pub fn parse_af_info2(
             );
             if coords == 0 {
                 let schema = byte(6).unwrap_or(0);
-                let table = match schema {
-                    1 => Some(AF_POINTS_51),
-                    8 => Some(AF_POINTS_81),
-                    9 => Some(AF_POINTS_105),
+                let table_and_len: Option<(&[(u8, &str)], usize)> = match schema {
+                    1 => Some((AF_POINTS_51, 7)),
+                    8 => Some((AF_POINTS_81, 11)),
+                    9 => Some((AF_POINTS_105, 14)),
                     _ => None,
                 };
-                let bitmap_len = match schema {
-                    1 => 7,
-                    8 => 11,
-                    9 => 14,
-                    _ => 0,
-                };
-                if let Some(table) = table {
+                if let Some((table, bitmap_len)) = table_and_len {
                     if let Some(raw) = byte(0x38) {
                         tags.insert(
                             "Nikon:PrimaryAFPoint".to_string(),
@@ -772,5 +784,49 @@ mod tests {
         let mut tags = HashMap::new();
         parse_af_info2(&data, ByteOrder::BigEndian, Some("NIKON D850"), &mut tags);
         assert!(!tags.contains_key("Nikon:AFPointsUsed"));
+    }
+
+    // -- Finding 1+2: af_points_used_bitmask11 separator + unmapped bits --
+
+    #[test]
+    fn bitmask11_joins_multiple_points_with_comma_space() {
+        // Bits 1 and 2 -> AF_POINTS_11_OFFSET8[1]="Top", [2]="Bottom".
+        assert_eq!(af_points_used_bitmask11(0x06), "Top, Bottom");
+    }
+
+    #[test]
+    fn bitmask11_renders_unmapped_bit_as_bracketed_index() {
+        // Bit 12 has no entry in AF_POINTS_11_OFFSET8 (only 11 entries, 0-10).
+        assert_eq!(af_points_used_bitmask11(0x1000), "[12]");
+    }
+
+    // -- Finding 4: unclaimed FocusPointSchema yields no PrimaryAFPoint tag --
+
+    #[test]
+    fn v0100_unrecognized_schema_reports_no_primary_af_point() {
+        let mut data = vec![0u8; 16];
+        data[..4].copy_from_slice(b"0100");
+        data[6] = 99; // FocusPointSchema not in {0,1,2,3} for V0100
+        let mut tags = HashMap::new();
+        parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
+        assert!(!tags.contains_key("Nikon:PrimaryAFPoint"));
+    }
+
+    #[test]
+    fn v0101_unrecognized_schema_reports_no_primary_af_point() {
+        let mut data = vec![0u8; 105];
+        data[..4].copy_from_slice(b"0101");
+        data[6] = 99; // FocusPointSchema not in {0,1,2,7} for V0101
+        let mut tags = HashMap::new();
+        parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
+        assert!(!tags.contains_key("Nikon:PrimaryAFPoint"));
+    }
+
+    // -- Finding 5: model_matches requires a word boundary after the prefix --
+
+    #[test]
+    fn model_matches_rejects_prefix_without_word_boundary() {
+        assert!(!model_matches("NIKON Z fc", &["NIKON Z f"]));
+        assert!(model_matches("NIKON Z f", &["NIKON Z f"]));
     }
 }

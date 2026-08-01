@@ -58,7 +58,7 @@ def main() -> None:
         hand_written = existing.split(MARKER, 1)[1]
 
     rs_path.write_text("".join(lines) + hand_written)
-    subprocess.run(["rustfmt", str(rs_path)], check=True)
+    subprocess.run(["rustfmt", "--edition", "2024", str(rs_path)], check=True)
     print(f"wrote {rs_path}")
 
 
