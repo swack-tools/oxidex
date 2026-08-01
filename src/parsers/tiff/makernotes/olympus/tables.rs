@@ -1403,12 +1403,15 @@ pub static IMAGE_PROCESSING: &[TagDef] = &[
     TagDef::raw(0x1202, "MaxFaces"),
     TagDef::raw(0x1203, "FaceDetectFrameSize"),
     TagDef::raw(0x1207, "FaceDetectFrameCrop"),
-    TagDef::typed_func(0x1306, "CameraTemperature", ftype::TIFF_SSHORT, |v| {
-        match v.first_int() {
+    TagDef::typed_func(
+        0x1306,
+        "CameraTemperature",
+        ftype::TIFF_SSHORT,
+        |v| match v.first_int() {
             Some(0) | None => None,
             Some(n) => Some(n.to_string()),
-        }
-    }),
+        },
+    ),
     TagDef::list_lookup(
         0x1900,
         "KeystoneCompensation",
