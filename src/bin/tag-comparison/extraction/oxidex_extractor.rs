@@ -11,6 +11,7 @@
 //! binary decoders, enum values, unit suffixes, and numeric precision.
 
 use super::ExtractionResult;
+use crate::comparison::engine::normalize_family_for_comparison;
 use crate::models::TagInfo;
 use oxidex::core::TagValue;
 use oxidex::core::exiftool_compat::format_for_exiftool;
@@ -828,17 +829,18 @@ impl OxiDexExtractor {
                 // and groups the thumbnail (IFD1) and Interoperability (InteropIFD)
                 // sub-IFDs under the same top-level "EXIF" family by default.
                 "ExifIFD" | "IFD0" | "IFD1" | "GPS" | "InteropIFD" => "EXIF",
-                // Manufacturer maker notes are output as MakerNotes in comparison reports
-                "Canon" | "Nikon" | "Sony" | "Fujifilm" | "Panasonic" | "Olympus" | "Pentax"
-                | "Samsung" => "MakerNotes",
                 // MP4/QuickTime: ItemList and UserData → QuickTime for comparison
                 "ItemList" | "UserData" => "QuickTime",
                 // WebP tags map to RIFF family in ExifTool
                 "WebP" => "RIFF",
                 // EXR tags map to OpenEXR family in ExifTool
                 "EXR" => "OpenEXR",
-                // Keep other families unchanged
-                _ => family,
+                // Keep the extractor and engine on one shared family-alias
+                // table. A shorter duplicate list here used to leave Leica
+                // tags uncollapsed while compare() folded them to MakerNotes;
+                // mixed-vendor corpus runs then retained both keys and
+                // reported the Leica spelling as a false oxidex-only tag.
+                _ => normalize_family_for_comparison(family),
             };
             format!("{}:{}", normalized_family, name)
         } else if let Some(fmt) = format {
@@ -1164,6 +1166,22 @@ mod tests {
         let (tags, collisions) = extractor.flatten_metadata(&metadata, None);
         assert_eq!(tags.len(), 0);
         assert!(collisions.is_empty());
+    }
+
+    #[test]
+    fn test_extractor_uses_shared_family_aliases() {
+        assert_eq!(
+            OxiDexExtractor::normalize_for_comparison("Leica:Contrast", Some("JPEG")),
+            "MakerNotes:Contrast"
+        );
+        assert_eq!(
+            OxiDexExtractor::normalize_for_comparison("PhaseOne:SensorWidth", Some("IIQ")),
+            "MakerNotes:SensorWidth"
+        );
+        assert_eq!(
+            OxiDexExtractor::normalize_for_comparison("GoPro:MetadataVersion", Some("JPEG")),
+            "APP6:MetadataVersion"
+        );
     }
 
     #[test]
