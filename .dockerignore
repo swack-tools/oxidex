@@ -11,7 +11,8 @@ target/
 
 # Not build inputs. Excluding these also stops docs-only and test-only
 # commits from invalidating the cached cargo build layer, because the
-# Dockerfile does `COPY . .`.
+# Dockerfile does `COPY . .`. packaging/ and CHANGELOG.md are included here
+# because both are touched on nearly every release yet never feed the build.
 docs/
 tests/
 scripts/
@@ -19,6 +20,8 @@ tools/
 test_data/
 fuzz/
 dist/
+packaging/
+CHANGELOG.md
 .github/
 
 # JS package manifests and node_modules anywhere in the tree. The root
@@ -31,8 +34,11 @@ package.json
 package-lock.json
 bun.lock
 
-# Editor, OS, and agent scratch files.
+# Editor, OS, and agent scratch files. .superpowers/ is agent scratch state
+# from Claude Code sessions -- present only in local working copies, never
+# a build input.
 .claude/
+.superpowers/
 .vscode/
 .idea/
 .DS_Store

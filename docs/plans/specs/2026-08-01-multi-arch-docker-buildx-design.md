@@ -1,7 +1,7 @@
 # Multi-arch Docker images via buildx — design
 
 **Date:** 2026-08-01
-**Status:** Approved, pending implementation
+**Status:** Implemented
 **Branch:** `claude/multi-arch-docker-buildx-535caa`
 
 ## Goal
@@ -111,8 +111,11 @@ change.
 Excludes `target/`, `.git/`, `docs/`, `test_data/`, `node_modules/`, and editor
 and CI cruft.
 
-Deliberately **keeps** `tests/` and `benches/`: Cargo errors on manifest-declared
-target paths that do not exist, and both are declared in `Cargo.toml`.
+Deliberately **keeps** `benches/` only — not `tests/`. `Cargo.toml` declares
+three `[[bench]]` targets by name, and Cargo fails at manifest-parse time if a
+declared target's source file is missing. There are no `[[test]]`
+declarations; those targets are auto-discovered, and auto-discovery tolerates
+`tests/` being absent, so excluding it is safe.
 
 ### Workflow — `.github/workflows/docker.yml`
 
@@ -141,9 +144,16 @@ do not cancel one another.
 | `linux/amd64` | `warp-ubuntu-latest-x64-8x` |
 | `linux/arm64` | `warp-ubuntu-latest-arm64-8x` |
 
-A job-level condition —
-`if: github.event_name != 'pull_request' || matrix.arch == 'amd64'` — skips the
-arm64 leg on pull requests without allocating a runner.
+The arm64 leg is skipped on pull requests via a **conditional matrix**, not a
+job-level `if`. `jobs.<job_id>.if` cannot reference `matrix` — only `github`,
+`needs`, `vars`, and `inputs` are available there — so
+`if: github.event_name != 'pull_request' || matrix.arch == 'amd64'` is not
+expressible and would fail to parse. Instead, `strategy.matrix.include` itself
+is built from `fromJSON()` over a ternary on `github.event_name`: pull
+requests evaluate to a one-entry JSON array (amd64 only), everything else to a
+two-entry array (amd64 and arm64). `jobs.<job_id>.strategy` *can* see
+`github`, so matrix membership varies by event even though no per-arch `if`
+exists anywhere in the job.
 
 Steps: checkout → `docker/setup-buildx-action` → `docker/login-action` (skipped
 on PRs) → `docker/build-push-action` → **smoke test** (see below) → export the
@@ -234,16 +244,24 @@ runs are unaffected because they never log in.
 
 ## Risks
 
-1. **`crate-type = ["lib", "staticlib", "cdylib"]`** (`Cargo.toml:33`) — a
-   cdylib against a static-musl target can fail to link. `cargo build --bin oxidex`
-   should build the library as an rlib dependency only, avoiding the cdylib
-   entirely. If it does not, the fallback is to build the binary from a context
-   that does not request the other crate types. This is the most likely
-   first-run failure and should be verified before anything else.
-2. **`zip = "8.6"` default features** may pull C-backed codecs (bzip2, zstd).
-   `build-base` in the builder stage covers this; if a specific `-sys` crate
-   needs more, the error will name it.
-3. **`lto = true` with `codegen-units = 1`** (`Cargo.toml:162`) — the fat-LTO
+1. **RETIRED — `crate-type = ["lib", "staticlib", "cdylib"]`** (`Cargo.toml:33`).
+   Originally flagged as the most likely first-run failure — whether a
+   `cdylib` target links against static musl — and to be verified before
+   anything else. Now verified empirically, with a known and benign outcome.
+   `cargo build --bin oxidex` does **not** avoid the `cdylib` crate-type:
+   `--bin` only selects which binary targets get built (here, skipping the
+   feature-gated `tag-comparison` and `jpeg-tag-matrix` binaries), and Cargo
+   still builds the library's full declared `crate-type` list regardless of
+   which `--bin` was requested. The build succeeds anyway because rustc
+   detects that `cdylib` is unsupported on a static-musl target and drops it
+   with a warning — `dropping unsupported crate type `cdylib` for target
+   aarch64-unknown-linux-musl` — instead of failing to link.
+2. **`zip = "8.6"` default features** may pull C-backed codecs. In practice
+   only `zstd` is: `zstd-sys` links a C library, while `bzip2 0.6.1` resolves
+   to `libbz2-rs-sys` (pure Rust), and `bzip2-sys` — the C-bundling crate — is
+   absent from `Cargo.lock` entirely. `build-base` in the builder stage covers
+   the zstd case; if a future `-sys` crate needs more, the error will name it.
+3. **`lto = true` with `codegen-units = 1`** (`Cargo.toml:164`) — the fat-LTO
    pass is largely single-threaded. This bounds the benefit of larger runners
    and is why 8x rather than 16x was chosen. Expect several minutes of
    effectively serial link time on a cold build.
@@ -251,6 +269,28 @@ runs are unaffected because they never log in.
    10 GB. Two architectures at `mode=max` may approach this and cause eviction
    of older entries. If churn becomes a problem, switch `cache-to` to a registry
    backend such as `swackhamer/oxidex:buildcache-<arch>`.
+
+## Known trade-offs
+
+These are decisions of record, made deliberately during design, not
+oversights to fix later.
+
+1. **The PR `paths:` filter is deliberately narrow.** It covers only
+   `Dockerfile`, `.dockerignore`, and `.github/workflows/docker.yml`. The
+   consequence: a change to `Cargo.toml`, `Cargo.lock`, or `src/**` can break
+   the image build and will not be caught until after merge, since this
+   workflow is not a required status check and its `paths:` filter never
+   triggers for those files.
+2. **A `v*` tag triggers two independent workflows.** `release.yml` builds
+   musl binaries for both architectures and `docker.yml` builds container
+   images for both architectures — four builds per release in total. The two
+   are genuinely independent (`docker.yml` consumes no artifacts from
+   `release.yml`), so neither blocks the other, but the duplication is real.
+   The workflows also diverge in toolchain selection: `release.yml` uses
+   `dtolnay/rust-toolchain@stable`, while the Dockerfile pins
+   `ARG RUST_VERSION=1.97` explicitly. A stable-channel bump therefore reaches
+   `release.yml` automatically but needs a one-line `Dockerfile` edit to reach
+   the Docker image.
 
 ## Out of scope
 

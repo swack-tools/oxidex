@@ -16,10 +16,16 @@ on:
   workflow_dispatch:
 
 concurrency:
-  # Same rationale as ci.yml: PR runs key by branch so a new push cancels the
-  # superseded run, while pushes to main key by SHA so one merge never cancels
-  # another merge's publish.
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.head_ref || github.ref }}
+  # Unlike ci.yml (which has no tag trigger), this workflow triggers on both
+  # branch and tag pushes. A tag push is still a `push` event, so keying on
+  # SHA alone would put pushing tag v1.2.1 at commit X in the same group as
+  # the earlier push of commit X to main -- with cancel-in-progress: true,
+  # the tag run would cancel the still-running main run, and :latest would
+  # never advance for that release commit. Folding the ref into the key
+  # keeps a tag push and a main push of the same commit in separate groups,
+  # while still deduping repeated pushes of the same ref. PR runs key by
+  # branch head, same as ci.yml, so a new push cancels the superseded run.
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && format('{0}@{1}', github.ref, github.sha) || github.head_ref || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -31,6 +37,13 @@ permissions:
 jobs:
   build:
     name: Build ${{ matrix.arch }}
+    # Fork PRs skip the Docker build entirely rather than run the fork's
+    # build.rs (via `COPY . .` + `cargo build`) on billed WarpBuild runners.
+    # No secrets are at risk either way -- the login step below is already
+    # gated on github.event_name != 'pull_request' -- so this is cost/abuse
+    # protection, not a security boundary. `github` is available in a
+    # job-level `if`; `matrix` is not, so this cannot be scoped by arch here.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -197,6 +210,8 @@ jobs:
             $(printf "${IMAGE}@sha256:%s " *)
 
       - name: Inspect published image
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
-          docker buildx imagetools inspect "${IMAGE}:${{ steps.meta.outputs.version }}"
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}"

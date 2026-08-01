@@ -64,7 +64,8 @@ target/
 
 # Not build inputs. Excluding these also stops docs-only and test-only
 # commits from invalidating the cached cargo build layer, because the
-# Dockerfile does `COPY . .`.
+# Dockerfile does `COPY . .`. packaging/ and CHANGELOG.md are included here
+# because both are touched on nearly every release yet never feed the build.
 docs/
 tests/
 scripts/
@@ -72,17 +73,25 @@ tools/
 test_data/
 fuzz/
 dist/
+packaging/
+CHANGELOG.md
 .github/
 
-# JavaScript tooling for the docs site.
+# JS package manifests and node_modules anywhere in the tree. The root
+# package.json/bun.lock/package-lock.json here are local agent tooling
+# (e.g. claude-flow), not the docs site -- the docs site's own package.json
+# lives under docs/ and is already excluded by the docs/ entry above.
 node_modules/
 **/node_modules/
 package.json
 package-lock.json
 bun.lock
 
-# Editor, OS, and agent scratch files.
+# Editor, OS, and agent scratch files. .superpowers/ is agent scratch state
+# from Claude Code sessions -- present only in local working copies, never
+# a build input.
 .claude/
+.superpowers/
 .vscode/
 .idea/
 .DS_Store
@@ -117,20 +126,30 @@ ARG ALPINE_VERSION=3.24
 # ---------------------------------------------------------------------------
 FROM rust:${RUST_VERSION}-alpine${ALPINE_VERSION} AS builder
 
-# build-base supplies gcc, musl-dev and binutils. The C-backed codecs behind
-# zip's default features need a C toolchain, and `strip` below comes from
-# binutils.
+# build-base supplies gcc, musl-dev and binutils -- the C toolchain that the
+# C-backed codec behind zip's default features (zstd) needs to
+# compile. `strip` below is redundant given Cargo.toml's
+# [profile.release] strip = true, which already ships a stripped binary; it
+# is kept anyway as an explicit, harmless safeguard in case that profile
+# setting ever changes.
 RUN apk add --no-cache build-base
 
 WORKDIR /src
 COPY . .
 
-# `--bin oxidex` restricts the build to the CLI. This skips the feature-gated
-# tag-comparison and jpeg-tag-matrix binaries, and keeps the library a plain
-# rlib dependency rather than also emitting the staticlib and cdylib
-# crate-types declared in Cargo.toml, which do not reliably link against
-# static musl.
-RUN cargo build --release --bin oxidex \
+# `--bin oxidex` restricts the build to the CLI, skipping the feature-gated
+# tag-comparison and jpeg-tag-matrix binaries -- that is all `--bin` does.
+# It does NOT stop Cargo from attempting the library's full declared
+# crate-type list (lib, staticlib, cdylib) from Cargo.toml; Cargo builds
+# that list regardless of which --bin was requested. The build succeeds
+# because rustc detects that cdylib is unsupported on this static-musl
+# target and drops it with a warning instead of failing to link.
+#
+# --locked pins the build to the committed Cargo.lock, which also arrives
+# via COPY . . above. Without it, a stale lockfile would be silently
+# updated inside the container, so the published image could ship a
+# dependency set nobody tested.
+RUN cargo build --release --locked --bin oxidex \
     && strip target/release/oxidex
 
 # ---------------------------------------------------------------------------
@@ -169,7 +188,7 @@ LABEL org.opencontainers.image.title="oxidex" \
 
 - [ ] **Step 3: Build the image locally and verify it compiles**
 
-This is the step that retires the plan's highest risk: whether `crate-type = ["lib", "staticlib", "cdylib"]` (`Cargo.toml:33`) links against static musl. Build for the host architecture — the cdylib question is target-agnostic, so one architecture proves it.
+This step originally targeted the plan's highest risk: whether `crate-type = ["lib", "staticlib", "cdylib"]` (`Cargo.toml:33`) links against static musl. **That risk is now RETIRED with a known outcome**, verified empirically during implementation: the build succeeds because rustc detects `cdylib` is unsupported on a static-musl target and drops it with a warning (`dropping unsupported crate type `cdylib` for target aarch64-unknown-linux-musl`) instead of failing to link. `--bin oxidex` does **not** prevent Cargo from attempting the library's full declared crate-type list — Cargo still builds that whole list regardless of which `--bin` was requested; `--bin` only restricts which binary targets get built, here skipping the feature-gated `tag-comparison` and `jpeg-tag-matrix` binaries. Build for the host architecture — the cdylib question is target-agnostic, so one architecture proves it.
 
 Run:
 
@@ -177,7 +196,7 @@ Run:
 docker buildx build --platform linux/arm64 --load -t oxidex:local .
 ```
 
-Expected: build succeeds. If it fails during linking with an error naming `cdylib`, `staticlib`, or `-lgcc_s`, that is the anticipated risk — report it rather than working around it silently, and note the exact error.
+Expected: build succeeds, printing the benign cdylib-drop warning described above. A link failure naming `cdylib`, `staticlib`, or `-lgcc_s` would be a regression from the verified-good outcome — report it rather than working around it silently, and note the exact error.
 
 On an amd64 host, substitute `--platform linux/amd64`. Do not use `--platform` values that require emulation; the point of this step is a fast native check.
 
@@ -453,7 +472,7 @@ jobs:
 
 - [ ] **Step 2: Lint the workflow**
 
-`actionlint` checks context availability, so it is a real gate on the `fromJSON` matrix decision described above — not a formality.
+`actionlint` is a real gate on **context availability** — it would catch a job-level `if` that referenced `matrix` (unavailable there), which is exactly the mistake the `fromJSON` matrix above exists to avoid. It is not, however, a gate on everything in this file: it validates neither the runner labels nor the `matrix.arch`/`platform`/`runner` keys, because all three live inside a `fromJSON` string literal it cannot parse as structured YAML. Confirmed by direct comparison: actionlint flags the Warp runner labels in `release.yml`, where they appear as plain YAML strings, but reports nothing here, where the same labels sit inside JSON text. A typo inside that JSON string fails only at runtime, on `main`.
 
 Run:
 
@@ -511,11 +530,17 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ## Post-implementation
 
-Neither task can verify end-to-end publishing, because that needs Docker Hub credentials that do not exist in the repository yet. Before the first push to `main` succeeds, the repository owner must add:
+Neither task can verify end-to-end publishing, because that needs Docker Hub credentials and account setup outside this repository. Before the first push to `main` runs for real, confirm each of the following:
 
-| Secret | Value |
-|---|---|
-| `DOCKERHUB_USERNAME` | Docker Hub account name |
-| `DOCKERHUB_TOKEN` | Docker Hub access token with Read/Write scope |
+- [x] **`DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets.** Now set, at the `swack-tools` GitHub org level, with **ALL** repository visibility.
 
-Pull-request runs work without these, because they never log in.
+  | Secret | Value |
+  |---|---|
+  | `DOCKERHUB_USERNAME` | Docker Hub account name |
+  | `DOCKERHUB_TOKEN` | Docker Hub access token with Read/Write scope |
+
+- [ ] **Create the `swackhamer/oxidex` repository on Docker Hub and choose its visibility explicitly.** Docker Hub normally auto-creates a repository on first push, but the first push this workflow makes is an untagged, by-digest manifest — a less-travelled path than a normal `docker push image:tag`. Creating the repository deliberately also forces a public/private decision up front, rather than silently inheriting whatever Docker Hub's default happens to be.
+
+- [ ] **Confirm the `warp-ubuntu-latest-x64-8x` and `warp-ubuntu-latest-arm64-8x` SKUs are enabled for the account.** An unrecognised runner label leaves the job queued rather than failing outright, and `timeout-minutes` does not bound queue time — only run time once a runner has picked the job up. A wrong or disabled label would therefore hang every push to `main`, not fail it visibly.
+
+Pull-request runs work without any of the above, because they never log in and never publish.

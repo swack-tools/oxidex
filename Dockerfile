@@ -17,7 +17,7 @@ ARG ALPINE_VERSION=3.24
 FROM rust:${RUST_VERSION}-alpine${ALPINE_VERSION} AS builder
 
 # build-base supplies gcc, musl-dev and binutils -- the C toolchain that the
-# C-backed codecs behind zip's default features (zstd, bzip2) need to
+# C-backed codec behind zip's default features (zstd) needs to
 # compile. `strip` below is redundant given Cargo.toml's
 # [profile.release] strip = true, which already ships a stripped binary; it
 # is kept anyway as an explicit, harmless safeguard in case that profile
@@ -34,7 +34,12 @@ COPY . .
 # that list regardless of which --bin was requested. The build succeeds
 # because rustc detects that cdylib is unsupported on this static-musl
 # target and drops it with a warning instead of failing to link.
-RUN cargo build --release --bin oxidex \
+#
+# --locked pins the build to the committed Cargo.lock, which also arrives
+# via COPY . . above. Without it, a stale lockfile would be silently
+# updated inside the container, so the published image could ship a
+# dependency set nobody tested.
+RUN cargo build --release --locked --bin oxidex \
     && strip target/release/oxidex
 
 # ---------------------------------------------------------------------------
