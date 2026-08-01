@@ -45,6 +45,7 @@ use crate::const_decoder;
 
 // Import registry
 use super::registries::pentax::pentax_registry;
+use crate::core::formatters::exif_print_conv::print_exposure_time;
 
 // Pentax MakerNote header signatures
 // Pentax typically uses "AOC\0" (4 bytes) or no header
@@ -2051,20 +2052,6 @@ fn pentax_ev(val: i32) -> f64 {
         }
     }
     v / 8.0
-}
-
-/// ExifTool's `PrintExposureTime()`.
-fn print_exposure_time(secs: f64) -> String {
-    if secs > 0.0 && secs < 0.25001 {
-        format!("1/{}", (0.5 + 1.0 / secs).floor() as i64)
-    } else {
-        let s = format!("{:.1}", secs);
-        if let Some(stripped) = s.strip_suffix(".0") {
-            stripped.to_string()
-        } else {
-            s
-        }
-    }
 }
 
 /// EV-based aperture formula shared by AEAperture/AEMaxAperture/AEMaxAperture2/

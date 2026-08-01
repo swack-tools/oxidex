@@ -36,6 +36,7 @@ use super::shared::array_extractors::extract_i16_array;
 use super::shared::value_extractors::{extract_inline_value, extract_integer_value};
 use crate::bitfield_decoder;
 use crate::const_decoder;
+pub(super) use crate::core::formatters::exif_print_conv::print_exposure_time;
 
 /// Canon-specific i16 array extractor that handles UNDEFINED (7) field type.
 /// Canon MakerNotes often store i16 arrays with field_type 7 (UNDEFINED) instead of 3 (SHORT).
@@ -2006,25 +2007,6 @@ fn format_g2(value: f64) -> String {
     } else {
         rendered
     }
-}
-
-/// Renders an exposure time the way ExifTool does.
-///
-/// ExifTool `Image::ExifTool::Exif::PrintExposureTime` (Exif.pm):
-///
-/// ```text
-///     if ($secs < 0.25001 and $secs > 0) {
-///         return sprintf("1/%d",int(0.5 + 1/$secs));
-///     }
-///     $_ = sprintf("%.1f",$secs);
-///     s/\.0$//;
-/// ```
-pub(super) fn print_exposure_time(seconds: f64) -> String {
-    if seconds > 0.0 && seconds < 0.250_01 {
-        return format!("1/{}", (0.5 + 1.0 / seconds) as i64);
-    }
-    let rendered = format!("{:.1}", seconds);
-    rendered.strip_suffix(".0").unwrap_or(&rendered).to_string()
 }
 
 /// Renders an EV offset the way ExifTool does.

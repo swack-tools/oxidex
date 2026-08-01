@@ -8,6 +8,7 @@
 //! table transcribed from `Sony.pm` keeps its original keys and needs no
 //! hand-computed byte offsets to drift out of sync.
 
+pub use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::io::EndianReader;
 use std::collections::HashMap;
 
@@ -238,19 +239,6 @@ pub fn print_float(value: f64) -> String {
         s.pop();
     }
     s
-}
-
-/// ExifTool's `Image::ExifTool::Exif::PrintExposureTime`.
-pub fn print_exposure_time(secs: f64) -> String {
-    if secs < 0.25001 && secs > 0.0 {
-        return format!("1/{}", (0.5 + 1.0 / secs) as i64);
-    }
-    let s = print_float(secs);
-    if secs == secs.trunc() {
-        format!("{}", s)
-    } else {
-        s
-    }
 }
 
 /// ExifTool's `Image::ExifTool::Exif::PrintFNumber`: one decimal place, or two

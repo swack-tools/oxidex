@@ -22,6 +22,7 @@
 //! - Sigma X3F (FOVb format)
 //! - Minolta MRW (MRM format)
 
+use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
@@ -2006,29 +2007,6 @@ fn read_tiff_i32(bytes: &[u8], byte_order: ByteOrder) -> Option<i32> {
         ByteOrder::LittleEndian => i32::from_le_bytes(bytes),
         ByteOrder::BigEndian => i32::from_be_bytes(bytes),
     })
-}
-
-/// Port of `Image::ExifTool::Exif::PrintExposureTime` (Exif.pm line 5606):
-///
-/// ```text
-///     my $secs = shift;
-///     return $secs unless Image::ExifTool::IsFloat($secs);
-///     if ($secs < 0.25001 and $secs > 0) {
-///         return sprintf("1/%d",int(0.5 + 1/$secs));
-///     }
-///     $_ = sprintf("%.1f",$secs);
-///     s/\.0$//;
-///     return $_;
-/// ```
-fn print_exposure_time(secs: f64) -> String {
-    if secs < 0.25001 && secs > 0.0 {
-        return format!("1/{}", (0.5 + 1.0 / secs) as i64);
-    }
-    let formatted = format!("{:.1}", secs);
-    formatted
-        .strip_suffix(".0")
-        .map(str::to_string)
-        .unwrap_or(formatted)
 }
 
 /// Port of `Image::ExifTool::Exif::PrintFNumber` (Exif.pm line 5620):

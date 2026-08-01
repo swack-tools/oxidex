@@ -38,6 +38,7 @@ use std::collections::HashMap;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
+use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
 // ===========================================================================
@@ -820,17 +821,6 @@ pub(super) fn apply_vc(vc: Vc, val: Scalar, raw: &[u8]) -> Option<Scalar> {
             None => return None,
         },
     })
-}
-
-/// `Image::ExifTool::Exif::PrintExposureTime`.
-fn print_exposure_time(seconds: f64) -> String {
-    if seconds > 0.0 && seconds < 0.25001 {
-        return format!("1/{}", (0.5 + 1.0 / seconds) as i64);
-    }
-    if seconds == seconds.trunc() {
-        return format!("{}", seconds as i64);
-    }
-    format!("{:.1}", seconds)
 }
 
 /// ExifTool's `RoundFloat`: keep `sig` significant digits.

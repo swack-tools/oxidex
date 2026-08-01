@@ -56,6 +56,7 @@
 //! ```
 
 use crate::core::binary_decoders::decode_user_comment;
+use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::core::formatters::gps_speed_ref::format_gps_dest_distance_ref;
 use crate::core::formatters::gps_status::{
     format_gps_differential, format_gps_measure_mode, format_gps_status,
@@ -863,29 +864,6 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
 // =============================================================================
 // HELPER FUNCTIONS - Special Value Formatting
 // =============================================================================
-
-/// ExifTool's `Exif::PrintExposureTime` (Exif.pm:5606-5616).
-///
-/// ```text
-/// if ($secs < 0.25001 and $secs > 0) {
-///     return sprintf("1/%d",int(0.5 + 1/$secs));
-/// }
-/// $_ = sprintf("%.1f",$secs);
-/// s/\.0$//;
-/// ```
-///
-/// Note the threshold is 0.25001 seconds, not one second, and that a whole
-/// number loses its `.0`: 1/80 s prints as `1/80`, 2 s as `2`.
-fn print_exposure_time(seconds: f64) -> String {
-    if seconds > 0.0 && seconds < 0.25001 {
-        return format!("1/{}", (0.5 + 1.0 / seconds).trunc() as i64);
-    }
-    let formatted = format!("{:.1}", seconds);
-    formatted
-        .strip_suffix(".0")
-        .map(str::to_string)
-        .unwrap_or(formatted)
-}
 
 /// Formats special float values (infinity, negative zero) to match ExifTool output.
 ///

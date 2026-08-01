@@ -37,6 +37,7 @@
 //! things either side of version 3 (the SD1 and the Merrill/Quattro bodies),
 //! and this module honours those conditions rather than guessing.
 
+use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::core::{MetadataMap, TagValue};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntries, parse_ifd};
 
@@ -450,17 +451,6 @@ fn signed_number(value: f64) -> String {
     } else {
         text
     }
-}
-
-/// `Image::ExifTool::Exif::PrintExposureTime`.
-fn print_exposure_time(seconds: f64) -> String {
-    if seconds > 0.0 && seconds < 0.25001 {
-        return format!("1/{}", (0.5 + 1.0 / seconds) as i64);
-    }
-    if seconds == seconds.trunc() {
-        return format!("{}", seconds as i64);
-    }
-    format!("{seconds:.1}")
 }
 
 /// `'$val =~ s/(\d)of(\d)/$1 of $2/'` for AutoBracket.

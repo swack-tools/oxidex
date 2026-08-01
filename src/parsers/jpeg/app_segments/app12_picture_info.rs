@@ -37,6 +37,7 @@
 
 use crate::core::MetadataMap;
 use crate::core::TagValue;
+use crate::core::formatters::exif_print_conv::print_exposure_time_micros_str as print_exposure_time;
 use crate::error::Result;
 use crate::io::timestamp::unix_to_iso8601;
 
@@ -324,23 +325,6 @@ fn convert_unix_time(value: &str) -> String {
         .replace('-', ":")
         .replace('T', " ")
         .replace('Z', "")
-}
-
-/// `ValueConv => '$val * 1e-6'` followed by
-/// `Image::ExifTool::Exif::PrintExposureTime`.
-fn print_exposure_time(value: &str) -> String {
-    let Ok(raw) = value.trim().parse::<f64>() else {
-        return value.to_string();
-    };
-    let secs = raw * 1e-6;
-    if secs > 0.0 && secs < 0.25001 {
-        return format!("1/{}", (0.5 + 1.0 / secs) as i64);
-    }
-    let formatted = format!("{:.1}", secs);
-    match formatted.strip_suffix(".0") {
-        Some(trimmed) => trimmed.to_string(),
-        None => formatted,
-    }
 }
 
 #[cfg(test)]

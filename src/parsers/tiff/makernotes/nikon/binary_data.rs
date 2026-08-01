@@ -27,6 +27,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 
 use super::encrypted_tables::TABLES;
+use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
 // ===========================================================================
@@ -737,19 +738,6 @@ fn apply_value_conv(vc: Vc, val: &Scalar, ctx: &Ctx, big: bool) -> Option<Scalar
             Scalar::Num(f64::from(u16::from_be_bytes([bytes[0], bytes[1]])))
         }
     })
-}
-
-/// `Image::ExifTool::Exif::PrintExposureTime`.
-fn print_exposure_time(secs: f64) -> String {
-    if secs < 0.25001 && secs > 0.0 {
-        let inv = (1.0 / secs).round();
-        return format!("1/{}", perl_num_to_string(inv));
-    }
-    let s = format!("{secs:.1}");
-    if let Some(stripped) = s.strip_suffix(".0") {
-        return stripped.to_string();
-    }
-    s
 }
 
 /// `Image::ExifTool::Exif::PrintFraction`.

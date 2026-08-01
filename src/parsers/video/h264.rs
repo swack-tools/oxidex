@@ -23,6 +23,7 @@
 //! - ITU-T Rec. H.264, section 7.3.2.1 (sequence parameter set)
 //! - ExifTool Source: `lib/Image/ExifTool/H264.pm`
 
+use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::core::{MetadataMap, TagValue};
 
 /// Parse an accumulated H.264 elementary stream payload.
@@ -605,18 +606,6 @@ fn decode_rec_info(value: &[u8; 4], metadata: &mut MetadataMap) {
         other => format!("Unknown ({})", other),
     };
     metadata.insert("H264:RecordingMode".to_string(), TagValue::new_string(text));
-}
-
-/// ExifTool's `Exif::PrintExposureTime`.
-fn print_exposure_time(seconds: f64) -> String {
-    if seconds > 0.0 && seconds < 0.25001 {
-        return format!("1/{}", (0.5 + 1.0 / seconds) as i64);
-    }
-    let rendered = format!("{:.1}", seconds);
-    rendered
-        .strip_suffix(".0")
-        .map(str::to_string)
-        .unwrap_or(rendered)
 }
 
 /// Perl prints a float with as few digits as round-trip requires; Rust's
