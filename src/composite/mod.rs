@@ -225,6 +225,20 @@ mod tests {
     }
 
     #[test]
+    fn derives_depth_of_field_through_the_generated_graph() {
+        let mut m = map_of(&[
+            ("EXIF:FocalLength", "34"),
+            ("EXIF:FNumber", "14"),
+            ("Composite:CircleOfConfusion", "0.018913043114871"),
+            ("MakerNotes:FocusDistanceLower", "5.46"),
+            ("MakerNotes:FocusDistanceUpper", "655.35"),
+        ]);
+        apply(&mut m);
+        assert_eq!(m.get_string("Composite:Aperture"), Some("14.0"));
+        assert_eq!(m.get_string("Composite:DOF"), Some("inf (4.31 m - inf)"));
+    }
+
+    #[test]
     fn upgrades_a_composite_once_a_derived_input_appears() {
         // FocalLength35efl can be computed from FocalLength alone, but gains
         // its 35 mm equivalent once ScaleFactor35efl is derived. Whichever

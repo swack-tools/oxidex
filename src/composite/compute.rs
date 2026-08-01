@@ -255,6 +255,69 @@ pub fn compute(name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
             Computed::new(hd.to_string(), format!("{hd:.2} m"))
         }
 
+        // require: FocalLength, Aperture, CircleOfConfusion
+        // desire:  FocusDistance, SubjectDistance, ObjectDistance,
+        //          ApproximateFocusDistance, FocusDistanceLower,
+        //          FocusDistanceUpper
+        //
+        // Source: ExifTool lib/Image/ExifTool/Exif.pm, Composite::DOF
+        // (13.30 lines 4761-4802):
+        //   my ($d, $f) = ($val[3], $val[0]);
+        //   if (defined $d) {
+        //       $d or $d = 1e10;    # (use large number for infinity)
+        //   } else {
+        //       $d = $val[4] || $val[5] || $val[6];
+        //       unless (defined $d) {
+        //           return undef unless defined $val[7] and defined $val[8];
+        //           $d = ($val[7] + $val[8]) / 2;
+        //       }
+        //   }
+        //   return 0 unless $f and $val[2];
+        //   my $t = $val[1] * $val[2] * ($d * 1000 - $f) / ($f * $f);
+        //   my @v = ($d / (1 + $t), $d / (1 - $t));
+        //   $v[1] < 0 and $v[1] = 0; # 0 means 'inf'
+        //
+        // Its PrintConv uses three decimals only for a positive DOF below
+        // 0.02 m, and renders a zero far limit as infinity. Those boundaries
+        // are compatibility behaviour, not presentation choices.
+        "DOF" => {
+            let (fl, ap, coc) = (f(get(i, 0))?, f(get(i, 1))?, f(get(i, 2))?);
+            if fl == 0.0 || coc == 0.0 {
+                return Computed::same("0");
+            }
+
+            let distance = match f(get(i, 3)) {
+                // ExifTool represents an explicitly reported zero focus
+                // distance as infinity for this calculation.
+                Some(0.0) => 1e10,
+                Some(d) => d,
+                None => f(get(i, 4))
+                    .filter(|d| *d != 0.0)
+                    .or_else(|| f(get(i, 5)).filter(|d| *d != 0.0))
+                    // The last `||` operand is returned even when it is zero.
+                    .or_else(|| f(get(i, 6)))
+                    .or_else(|| Some((f(get(i, 7))? + f(get(i, 8))?) / 2.0))?,
+            };
+
+            let t = ap * coc * (distance * 1000.0 - fl) / (fl * fl);
+            let near = distance / (1.0 + t);
+            let mut far = distance / (1.0 - t);
+            if far < 0.0 {
+                far = 0.0;
+            }
+            let value = format!("{near} {far}");
+            if far == 0.0 {
+                return Computed::new(value, format!("inf ({near:.2} m - inf)"));
+            }
+
+            let dof = far - near;
+            if dof > 0.0 && dof < 0.02 {
+                Computed::new(value, format!("{dof:.3} m ({near:.3} - {far:.3} m)"))
+            } else {
+                Computed::new(value, format!("{dof:.2} m ({near:.2} - {far:.2} m)"))
+            }
+        }
+
         // require: Aperture, ShutterSpeed, ISO
         // Image::ExifTool::Exif::CalculateLV:
         //   `log($aperture**2 / $shutter * 100 / $iso) / log(2)`
@@ -513,6 +576,112 @@ mod tests {
         assert_eq!(
             c("LightValue", &[Some("2.8"), Some("1/200"), Some("100")]).as_deref(),
             Some("10.6")
+        );
+    }
+
+    #[test]
+    fn depth_of_field_matches_exiftool_boundaries() {
+        // Canon.jpg has no single focus distance, so ExifTool averages the
+        // lower/upper bounds. Its far limit crosses infinity.
+        assert_eq!(
+            c(
+                "DOF",
+                &[
+                    Some("34"),
+                    Some("14"),
+                    Some("0.018913043114871"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("5.46"),
+                    Some("655.35"),
+                ],
+            )
+            .as_deref(),
+            Some("inf (4.31 m - inf)")
+        );
+
+        // A synthetic shallow positive range takes ExifTool's three-decimal
+        // formatting branch.
+        assert_eq!(
+            c(
+                "DOF",
+                &[
+                    Some("100"),
+                    Some("1"),
+                    Some("0.1"),
+                    Some("1"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ],
+            )
+            .as_deref(),
+            Some("0.018 m (0.991 - 1.009 m)")
+        );
+
+        // An explicitly reported zero FocusDistance means infinity, not a
+        // missing desired input.
+        assert!(
+            c(
+                "DOF",
+                &[
+                    Some("50"),
+                    Some("8"),
+                    Some("0.03"),
+                    Some("0"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ],
+            )
+            .is_some()
+        );
+
+        // ExifTool's `return 0 unless $f and $val[2]` happens after the
+        // required values were coerced. Aperture does not participate in this
+        // guard, so a zero aperture still produces the zero-width interval.
+        assert_eq!(
+            c(
+                "DOF",
+                &[
+                    Some("50"),
+                    Some("0"),
+                    Some("0.03"),
+                    Some("2"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ],
+            )
+            .as_deref(),
+            Some("0.00 m (2.00 - 2.00 m)")
+        );
+
+        // Missing every distance source refuses to emit a plausible result.
+        assert_eq!(
+            c(
+                "DOF",
+                &[
+                    Some("50"),
+                    Some("8"),
+                    Some("0.03"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ],
+            ),
+            None
         );
     }
 
