@@ -65,10 +65,16 @@ mod phase3_integration_tests {
         // Check essential workflow components
         assert!(content.contains("name:"), "workflow should have a name");
         assert!(content.contains("jobs:"), "workflow should have jobs");
-        assert!(
-            content.contains("build-and-deploy:"),
-            "workflow should have build-and-deploy job"
-        );
+
+        // The single `build-and-deploy` job was split into three so each stage
+        // could run on a runner sized to its own workload, and so the Pages
+        // credentials stopped sharing a runner with the Rust build. All three
+        // are asserted: dropping any one of them silently breaks the pipeline
+        // (no report, no benchmarks, or nothing deployed) while the remaining
+        // jobs still go green.
+        for job in ["comparison-report:", "benchmarks:", "publish:"] {
+            assert!(content.contains(job), "workflow should have {job} job");
+        }
 
         // Check triggers
         assert!(
