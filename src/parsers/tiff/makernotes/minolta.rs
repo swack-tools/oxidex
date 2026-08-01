@@ -1,219 +1,386 @@
 //! Minolta MakerNote parser
 //!
-//! Parses Minolta (and early Konica Minolta) camera-specific EXIF MakerNote tags.
-//! Minolta was a major camera manufacturer from 1985-2006, later merged with Konica
-//! to form Konica Minolta before Sony acquired the camera division in 2006.
+//! Parses Minolta (and early Konica Minolta) camera-specific EXIF MakerNote
+//! tags. Minolta was a major camera manufacturer from 1985-2006, later merged
+//! with Konica before Sony acquired the camera division in 2006 - which is why
+//! this table is reachable two ways: directly, from a Minolta body, and as a
+//! sub-directory of the Sony MakerNote on the DSLR-A100.
 //!
-//! ## Supported Cameras
-//! - Minolta Maxxum/Dynax series (film and early digital)
-//! - DiMAGE digital camera series
-//! - Early Konica Minolta models (7D, 5D)
-//!
-//! ## Supported Features
-//! - Camera model and firmware
-//! - Exposure settings and modes
-//! - Focus mode and AF points
-//! - Image quality and color settings
-//! - Flash settings
-//! - Lens information with database lookup
-//! - White balance and metering
-//!
-//! ## Tag Structure
-//! Minolta uses a standard IFD format with manufacturer-specific tag IDs.
-
-#![allow(dead_code)]
-#![allow(unused_imports)]
+//! Like Sony's, a Minolta MakerNote is an IFD whose entry offsets are relative
+//! to the TIFF header, so anything longer than four bytes needs `data_base` to
+//! be resolvable at all.
 
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
 use super::minolta_lens_database::lookup_minolta_lens;
-use super::registries::minolta::minolta_registry;
+use super::minolta_tables::CAMERA_SETTINGS;
 use super::shared::MakerNoteParser;
-use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
-use super::shared::tag_registry::TagRegistry;
-
-// ===== Minolta MakerNote Tag IDs =====
-// Tag definitions are now centralized in the registry.
-// See registries/minolta.rs for the complete tag registry.
-
-// Static registry instance for efficient tag lookup and decoding
-static TAG_REGISTRY: Lazy<TagRegistry> = Lazy::new(minolta_registry);
-
-/// Extracts a 16-bit unsigned value from IFD entry
-///
-/// # Arguments
-/// * `entry` - IFD entry containing the value
-/// * `_data` - Full MakerNote data buffer (unused for inline values)
-/// * `byte_order` - Byte order for parsing
-///
-/// # Returns
-/// Extracted value or None if invalid
-fn extract_u16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> Option<u16> {
-    if entry.value_count != 1 {
-        return None;
-    }
-
-    // For SHORT type (count=1), value is inline in value_offset field
-    let value = match byte_order {
-        ByteOrder::LittleEndian => (entry.value_offset & 0xFFFF) as u16,
-        ByteOrder::BigEndian => ((entry.value_offset >> 16) & 0xFFFF) as u16,
-    };
-
-    Some(value)
-}
-
-/// Extracts a signed 16-bit value from IFD entry
-///
-/// # Arguments
-/// * `entry` - IFD entry containing the value
-/// * `_data` - Full MakerNote data buffer
-/// * `byte_order` - Byte order for parsing
-///
-/// # Returns
-/// Extracted value or None if invalid
-fn extract_i16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> Option<i16> {
-    if entry.value_count != 1 {
-        return None;
-    }
-
-    let value = match byte_order {
-        ByteOrder::LittleEndian => (entry.value_offset & 0xFFFF) as i16,
-        ByteOrder::BigEndian => ((entry.value_offset >> 16) & 0xFFFF) as i16,
-    };
-
-    Some(value)
-}
-
-/// Extracts an ASCII string from IFD entry
-///
-/// # Arguments
-/// * `entry` - IFD entry containing the string
-/// * `data` - Full MakerNote data buffer
-/// * `byte_order` - Byte order for parsing
-///
-/// # Returns
-/// Extracted string or None if invalid
-fn extract_string(entry: &IfdEntry, data: &[u8], byte_order: ByteOrder) -> Option<String> {
-    if entry.value_count == 0 {
-        return None;
-    }
-
-    let value_bytes = if entry.value_count <= 4 {
-        // Inline string (stored in value_offset field)
-        let mut bytes = Vec::new();
-        for i in 0..entry.value_count as usize {
-            let byte = match byte_order {
-                ByteOrder::LittleEndian => ((entry.value_offset >> (i * 8)) & 0xFF) as u8,
-                ByteOrder::BigEndian => ((entry.value_offset >> (24 - i * 8)) & 0xFF) as u8,
-            };
-            if byte == 0 {
-                break;
-            }
-            bytes.push(byte);
-        }
-        bytes
-    } else {
-        // External string (offset points to data)
-        let offset = entry.value_offset as usize;
-        if offset >= data.len() {
-            return None;
-        }
-        let end = std::cmp::min(offset + entry.value_count as usize, data.len());
-        data[offset..end].to_vec()
-    };
-
-    if value_bytes.is_empty() {
-        return None;
-    }
-
-    let string = String::from_utf8_lossy(&value_bytes)
-        .trim_end_matches('\0')
-        .to_string();
-
-    if string.is_empty() {
-        None
-    } else {
-        Some(string)
-    }
-}
+use super::sony::binary::{lookup, print_float, unknown, unknown_hex};
+use super::sony::value::SonyValue;
 
 // ============================================================================
-// DECODERS - Minolta Value Decoders
+// Main table PrintConv hashes (Image::ExifTool::Minolta::Main)
 // ============================================================================
-// Minolta-specific value decoders for camera settings
 
-use crate::const_decoder;
-
-// Decoder for Minolta image quality settings
-// Maps image quality codes to quality level names:
-// - 0 = Standard quality (baseline compression)
-// - 1 = Super Fine quality (highest setting, minimal compression)
-// - 2 = Fine quality (medium-high setting, moderate compression)
-const_decoder!(pub DECODE_IMAGE_QUALITY, u16, [
-    (0, "Standard"),
-    (1, "Super Fine"),
-    (2, "Fine"),
-]);
-
-// Decoder for Minolta flash modes
-const_decoder!(pub DECODE_FLASH_MODE, u16, [
-    (0, "Off"),
-    (1, "Auto"),
-    (2, "On"),
-    (3, "Red-eye Reduction"),
-    (4, "Fill Flash"),
-]);
-
-// Decoder for Minolta white balance settings
-const_decoder!(pub DECODE_WHITE_BALANCE, u16, [
-    (0, "Auto"),
-    (1, "Daylight"),
-    (2, "Cloudy"),
-    (3, "Tungsten"),
-    (4, "Fluorescent"),
-    (5, "Flash"),
-    (6, "Custom"),
-]);
-
-// Decoder for Minolta focus modes
-const_decoder!(pub DECODE_FOCUS_MODE, u16, [
-    (0, "Single Shot"),
-    (1, "Continuous"),
-    (2, "Manual"),
-    (3, "AF-S"),
-    (4, "AF-C"),
-]);
-
-// Decoder for Minolta color modes
-const_decoder!(pub DECODE_COLOR_MODE, u16, [
-    (0, "Standard"),
-    (1, "Vivid"),
-    (2, "Neutral"),
-    (3, "B&W"),
-    (4, "Sepia"),
-]);
-
-// Decoder for Minolta exposure modes
-const_decoder!(pub DECODE_EXPOSURE_MODE, u16, [
-    (0, "Auto"),
-    (1, "Program"),
-    (2, "Aperture Priority"),
-    (3, "Shutter Priority"),
-    (4, "Manual"),
-]);
-
-// Decoder for Minolta scene modes
-const_decoder!(pub DECODE_SCENE_MODE, u16, [
+static SCENE_MODE: &[(i64, &str)] = &[
     (0, "Standard"),
     (1, "Portrait"),
-    (2, "Landscape"),
-    (3, "Macro"),
-    (4, "Sports"),
-    (5, "Sunset"),
-    (6, "Night"),
-]);
+    (2, "Text"),
+    (3, "Night Scene"),
+    (4, "Sunset"),
+    (5, "Sports"),
+    (6, "Landscape"),
+    (7, "Night Portrait"),
+    (8, "Macro"),
+    (9, "Super Macro"),
+    (16, "Auto"),
+    (17, "Night View/Portrait"),
+    (18, "Sweep Panorama"),
+    (19, "Handheld Night Shot"),
+    (20, "Anti Motion Blur"),
+    (21, "Cont. Priority AE"),
+    (22, "Auto+"),
+    (23, "3D Sweep Panorama"),
+    (24, "Superior Auto"),
+    (25, "High Sensitivity"),
+    (26, "Fireworks"),
+    (27, "Food"),
+    (28, "Pet"),
+    (33, "HDR"),
+    (65535, "n/a"),
+];
+
+/// `ColorMode` (0x0101) as read on a Minolta body. Sony bodies take a
+/// different list, but they reach this table only through the DSLR-A100's
+/// nested MakerNote, where 0x0101 is not written.
+static COLOR_MODE: &[(i64, &str)] = &[
+    (0, "Natural color"),
+    (1, "Black & White"),
+    (2, "Vivid color"),
+    (3, "Solarization"),
+    (4, "Adobe RGB"),
+    (5, "Sepia"),
+    (9, "Natural"),
+    (12, "Portrait"),
+    (13, "Natural sRGB"),
+    (14, "Natural+ sRGB"),
+    (15, "Landscape"),
+    (16, "Evening"),
+    (17, "Night Scene"),
+    (18, "Night Portrait"),
+    (132, "Embed Adobe RGB"),
+];
+
+static MINOLTA_QUALITY: &[(i64, &str)] = &[
+    (0, "Raw"),
+    (1, "Super Fine"),
+    (2, "Fine"),
+    (3, "Standard"),
+    (4, "Economy"),
+    (5, "Extra fine"),
+];
+
+static TELECONVERTER: &[(i64, &str)] = &[
+    (0, "None"),
+    (4, "Minolta/Sony AF 1.4x APO (D) (0x04)"),
+    (5, "Minolta/Sony AF 2x APO (D) (0x05)"),
+    (72, "Minolta/Sony AF 2x APO (D)"),
+    (80, "Minolta AF 2x APO II"),
+    (96, "Minolta AF 2x APO"),
+    (136, "Minolta/Sony AF 1.4x APO (D)"),
+    (144, "Minolta AF 1.4x APO II"),
+    (160, "Minolta AF 1.4x APO"),
+];
+
+static IMAGE_STABILIZATION_0107: &[(i64, &str)] = &[(1, "Off"), (5, "On")];
+
+static RAW_AND_JPG_RECORDING: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
+
+static ZONE_MATCHING: &[(i64, &str)] = &[(0, "ISO Setting Used"), (1, "High Key"), (2, "Low Key")];
+
+static IMAGE_STABILIZATION_A100: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
+
+static WHITE_BALANCE_0115: &[(i64, &str)] = &[
+    (0, "Auto"),
+    (1, "Color Temperature/Color Filter"),
+    (16, "Daylight"),
+    (32, "Cloudy"),
+    (48, "Shade"),
+    (64, "Tungsten"),
+    (80, "Flash"),
+    (96, "Fluorescent"),
+    (112, "Custom"),
+];
+
+// ============================================================================
+// Main table
+// ============================================================================
+
+/// How a Minolta `Main` entry prints.
+enum Print {
+    /// The integer itself.
+    Int,
+    /// `PrintConv` hash; misses print `Unknown (N)`.
+    Map(&'static [(i64, &'static str)]),
+    /// The same, `PrintHex`.
+    MapHex(&'static [(i64, &'static str)]),
+    /// A rational, printed as a plain number.
+    Rational,
+    /// An ASCII/undef string.
+    Text,
+    /// A 32-bit value reinterpreted as signed.
+    Signed32,
+    /// A lens id resolved through the shared Minolta/Sony lens table.
+    LensType,
+}
+
+struct MainTag {
+    id: u16,
+    name: &'static str,
+    print: Print,
+}
+
+/// `Image::ExifTool::Minolta::Main`, restricted to the scalar tags.
+///
+/// Deliberately absent:
+/// * 0x0081 `PreviewImage` and 0x0088 `PreviewImageStart` - the preview lives
+///   outside the MakerNote, and ExifTool absolutises the start offset by
+///   adding the TIFF header's file position, which a MakerNote parser cannot
+///   see. Reporting the stored 13030 where ExifTool reports 13042 would be a
+///   wrong value rather than a missing one.
+/// * 0x0103 `MinoltaQuality`/`MinoltaImageSize` - model-conditional in a way
+///   none of the corpus files exercise.
+/// * The sub-directory tags 0x0001/0x0003/0x0004 (`CameraSettings` variants),
+///   0x0010/0x0018/0x0020 (the A100 blocks) and 0x0114 - handled separately or
+///   not yet decoded.
+static MAIN_TABLE: &[MainTag] = &[
+    MainTag {
+        id: 0x0000,
+        name: "MakerNoteVersion",
+        print: Print::Text,
+    },
+    MainTag {
+        id: 0x0040,
+        name: "CompressedImageSize",
+        print: Print::Int,
+    },
+    MainTag {
+        id: 0x0089,
+        name: "PreviewImageLength",
+        print: Print::Int,
+    },
+    MainTag {
+        id: 0x0100,
+        name: "SceneMode",
+        print: Print::Map(SCENE_MODE),
+    },
+    MainTag {
+        id: 0x0101,
+        name: "ColorMode",
+        print: Print::Map(COLOR_MODE),
+    },
+    MainTag {
+        id: 0x0102,
+        name: "MinoltaQuality",
+        print: Print::Map(MINOLTA_QUALITY),
+    },
+    MainTag {
+        id: 0x0104,
+        name: "FlashExposureComp",
+        print: Print::Rational,
+    },
+    MainTag {
+        id: 0x0105,
+        name: "Teleconverter",
+        print: Print::MapHex(TELECONVERTER),
+    },
+    MainTag {
+        id: 0x0107,
+        name: "ImageStabilization",
+        print: Print::Map(IMAGE_STABILIZATION_0107),
+    },
+    MainTag {
+        id: 0x0109,
+        name: "RawAndJpgRecording",
+        print: Print::Map(RAW_AND_JPG_RECORDING),
+    },
+    MainTag {
+        id: 0x010a,
+        name: "ZoneMatching",
+        print: Print::Map(ZONE_MATCHING),
+    },
+    MainTag {
+        id: 0x010b,
+        name: "ColorTemperature",
+        print: Print::Int,
+    },
+    MainTag {
+        id: 0x010c,
+        name: "LensType",
+        print: Print::LensType,
+    },
+    MainTag {
+        id: 0x0111,
+        name: "ColorCompensationFilter",
+        print: Print::Int,
+    },
+    MainTag {
+        id: 0x0112,
+        name: "WhiteBalanceFineTune",
+        print: Print::Signed32,
+    },
+    MainTag {
+        id: 0x0113,
+        name: "ImageStabilization",
+        print: Print::Map(IMAGE_STABILIZATION_A100),
+    },
+    MainTag {
+        id: 0x0115,
+        name: "WhiteBalance",
+        print: Print::MapHex(WHITE_BALANCE_0115),
+    },
+];
+
+/// The two tag ids that carry a `CameraSettings` block.
+const TAG_CAMERA_SETTINGS_OLD: u16 = 0x0001;
+const TAG_CAMERA_SETTINGS: u16 = 0x0003;
+
+fn render(print: &Print, value: &SonyValue<'_>) -> Option<String> {
+    match print {
+        Print::Int => value.first_int().map(|v| v.to_string()),
+        Print::Map(m) => {
+            let raw = value.first_int()?;
+            Some(lookup(m, raw).unwrap_or_else(|| unknown(raw)))
+        }
+        Print::MapHex(m) => {
+            let raw = value.first_int()?;
+            Some(lookup(m, raw).unwrap_or_else(|| unknown_hex(raw)))
+        }
+        Print::Rational => value.rational(0).map(print_float),
+        Print::Text => value.string(),
+        Print::Signed32 => value.first_int_as::<i32>().map(|v| v.to_string()),
+        Print::LensType => {
+            let raw = value.first_int()?;
+            Some(lookup_minolta_lens(u16::try_from(raw).ok()?).unwrap_or_else(|| unknown(raw)))
+        }
+    }
+}
+
+/// Parses a Minolta MakerNote IFD found at `ifd_index` inside `data`.
+///
+/// `data_base` is the TIFF-relative offset of `data[0]`, the same convention
+/// [`MakerNoteParser::parse_with_context`] uses. Returns the tags in two
+/// tiers: the `Main` table's, which carry ExifTool's default priority, and the
+/// `CameraSettings` table's, which is `PRIORITY => 0`.
+///
+/// This is the shared entry point for a standalone Minolta MakerNote and for
+/// the one the Sony DSLR-A100 nests inside its own.
+pub fn parse_minolta_ifd(
+    data: &[u8],
+    ifd_index: usize,
+    byte_order: ByteOrder,
+    data_base: Option<u32>,
+    sony_host: bool,
+) -> (Vec<(String, String)>, Vec<(String, String)>) {
+    let mut main = Vec::new();
+    let mut sub_dir = Vec::new();
+
+    let Some(ifd) = data.get(ifd_index..) else {
+        return (main, sub_dir);
+    };
+    if ifd.len() < 2 {
+        return (main, sub_dir);
+    }
+    let reader = crate::io::EndianReader::new(ifd, byte_order.to_io_byte_order());
+    let Some(count) = reader.u16_at(0) else {
+        return (main, sub_dir);
+    };
+    if count == 0 || count > 200 {
+        return (main, sub_dir);
+    }
+
+    for i in 0..count as usize {
+        let base = 2 + i * 12;
+        let (Some(tag_id), Some(field_type), Some(value_count), Some(value_offset)) = (
+            reader.u16_at(base),
+            reader.u16_at(base + 2),
+            reader.u32_at(base + 4),
+            reader.u32_at(base + 8),
+        ) else {
+            break;
+        };
+        let entry = IfdEntry {
+            tag_id,
+            field_type,
+            value_count,
+            value_offset,
+        };
+        let Some(value) = resolve(data, &entry, byte_order, data_base) else {
+            continue;
+        };
+
+        if matches!(tag_id, TAG_CAMERA_SETTINGS_OLD | TAG_CAMERA_SETTINGS) {
+            let mut tags = HashMap::new();
+            CAMERA_SETTINGS.extract(value.bytes(), "Minolta", &mut tags);
+            sub_dir.extend(tags);
+            continue;
+        }
+
+        // ExifTool switches 0x0101's PrintConv on the *Make*: a Sony body
+        // reading this table through the DSLR-A100's nested MakerNote gets the
+        // Sony ColorMode list, not Minolta's. Sony's own 0xb029 supplies that
+        // value, so leave it to the host rather than print the wrong list.
+        if sony_host && tag_id == 0x0101 {
+            continue;
+        }
+
+        if let Some(tag) = MAIN_TABLE.iter().find(|t| t.id == tag_id)
+            && let Some(printed) = render(&tag.print, &value)
+        {
+            main.push((format!("Minolta:{}", tag.name), printed));
+        }
+    }
+
+    (main, sub_dir)
+}
+
+/// Resolves one IFD entry to its bytes, inline or via `data_base`.
+fn resolve<'a>(
+    data: &'a [u8],
+    entry: &IfdEntry,
+    byte_order: ByteOrder,
+    data_base: Option<u32>,
+) -> Option<SonyValue<'a>> {
+    let size = match entry.field_type {
+        1 | 2 | 6 | 7 => 1,
+        3 | 8 => 2,
+        4 | 9 | 11 => 4,
+        5 | 10 | 12 => 8,
+        _ => return None,
+    };
+    let total = size * entry.value_count as usize;
+    if total <= 4 {
+        let inline = match byte_order {
+            ByteOrder::LittleEndian => entry.value_offset.to_le_bytes(),
+            ByteOrder::BigEndian => entry.value_offset.to_be_bytes(),
+        };
+        return Some(SonyValue::new(
+            entry.field_type,
+            entry.value_count,
+            inline[..total].to_vec(),
+            byte_order,
+        ));
+    }
+    let index = entry.value_offset.checked_sub(data_base?)? as usize;
+    let bytes = data.get(index..index.checked_add(total)?)?;
+    Some(SonyValue::new(
+        entry.field_type,
+        entry.value_count,
+        bytes,
+        byte_order,
+    ))
+}
 
 /// Minolta MakerNote parser implementation
 pub struct MinoltaParser;
@@ -228,95 +395,6 @@ impl MinoltaParser {
     /// Creates a new Minolta parser instance
     pub fn new() -> Self {
         MinoltaParser
-    }
-
-    /// Parse a single IFD entry and extract tag value
-    ///
-    /// # Arguments
-    /// * `entry` - IFD entry to parse
-    /// * `data` - Full MakerNote data buffer
-    /// * `byte_order` - Byte order for multi-byte values
-    /// * `tags` - HashMap to insert extracted tags into
-    fn parse_entry(
-        &self,
-        entry: &IfdEntry,
-        data: &[u8],
-        byte_order: ByteOrder,
-        tags: &mut HashMap<String, String>,
-    ) {
-        // Get tag name from registry
-        let tag_name = match TAG_REGISTRY.get_tag_name(entry.tag_id) {
-            Some(name) => name,
-            None => return, // Unknown tag, skip it
-        };
-
-        // Extract value using helper functions and format based on tag type
-        let formatted_value = match entry.tag_id {
-            // Lens ID (0x0054) - use database lookup for lens name
-            0x0054 => {
-                let lens_id = extract_u16_value(entry, data, byte_order).unwrap_or(0);
-                tags.insert(
-                    format!("Minolta:{}", tag_name),
-                    format!("0x{:04X}", lens_id),
-                );
-                if let Some(lens_name) = lookup_minolta_lens(lens_id) {
-                    tags.insert("Minolta:LensType".to_string(), lens_name);
-                }
-                return;
-            }
-            // Flash Exposure Compensation (0x0043) - format as EV
-            0x0043 => {
-                let value = extract_i16_value(entry, data, byte_order).unwrap_or(0);
-                let ev = value as f32 / 10.0;
-                format!("{:.1} EV", ev)
-            }
-            // Min/Max focal length (0x0055, 0x0056) - format with "mm"
-            0x0055 | 0x0056 => {
-                let value = extract_u16_value(entry, data, byte_order).unwrap_or(0);
-                format!("{} mm", value)
-            }
-            // Image size (0x0040) - convert to readable format
-            0x0040 => {
-                let value = extract_u16_value(entry, data, byte_order).unwrap_or(0);
-                match value {
-                    0 => "Full".to_string(),
-                    1 => "Medium".to_string(),
-                    2 => "Small".to_string(),
-                    _ => "Unknown".to_string(),
-                }
-            }
-            // Teleconverter (0x0044) - convert to readable format
-            0x0044 => {
-                let value = extract_u16_value(entry, data, byte_order).unwrap_or(0);
-                match value {
-                    0 => "None".to_string(),
-                    1 => "1.4x".to_string(),
-                    2 => "2.0x".to_string(),
-                    _ => "Unknown".to_string(),
-                }
-            }
-            // Macro mode (0x004B) - binary on/off
-            0x004B => {
-                let value = extract_u16_value(entry, data, byte_order).unwrap_or(0);
-                if value > 0 {
-                    "On".to_string()
-                } else {
-                    "Off".to_string()
-                }
-            }
-            // Firmware version (0x0058) - extract as string
-            0x0058 => extract_string(entry, data, byte_order).unwrap_or_default(),
-            // All other tags use registry decoder if available
-            _ => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    TAG_REGISTRY.decode_u16(entry.tag_id, value)
-                } else {
-                    return;
-                }
-            }
-        };
-
-        tags.insert(format!("Minolta:{}", tag_name), formatted_value);
     }
 }
 
@@ -335,22 +413,29 @@ impl MakerNoteParser for MinoltaParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
+        self.parse_with_context(data, byte_order, None, None, tags)
+    }
+
+    fn parse_with_context(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        _model: Option<&str>,
+        data_base: Option<u32>,
+        tags: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
         if data.len() < 2 {
             return Err("Minolta MakerNote data too short".to_string());
         }
+        // A Minolta MakerNote has no header: the IFD starts at byte 0.
+        let (main, sub_dir) = parse_minolta_ifd(data, 0, byte_order, data_base, false);
 
-        // Minolta MakerNotes typically start immediately with IFD entries
-        // No header is used, so signature is None
-        let config = IfdParserConfig {
-            signature: None,
-            signature_offset: 0,
-            max_entries: 500,
-        };
-
-        // Parse IFD entries using the shared parser
-        parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
-            self.parse_entry(entry, parse_data, byte_order, tags);
-        })
+        // ExifTool prefers the higher-priority Main entry when both tables
+        // define a name, and the first-extracted copy among equals.
+        for (key, value) in sub_dir.into_iter().chain(main) {
+            tags.insert(key, value);
+        }
+        Ok(())
     }
 
     fn lookup_lens(&self, lens_id: u16) -> Option<String> {
@@ -370,37 +455,34 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_image_quality_tag() {
-        let parser = MinoltaParser::new();
+    fn maker_note_version_is_read_as_text() {
+        // Tag 0x0000 is undef[4] holding "MLT0".
         let mut data = Vec::new();
-
-        // Create minimal IFD with one entry
-        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
-
-        // Image quality tag entry (tag=0x0041, type=3 (SHORT), count=1, value=2 (Fine))
-        data.extend_from_slice(&[0x41, 0x00]); // Tag
-        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
-        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
-        data.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]); // Value: 2 (inline)
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&0x0000u16.to_le_bytes());
+        data.extend_from_slice(&7u16.to_le_bytes());
+        data.extend_from_slice(&4u32.to_le_bytes());
+        data.extend_from_slice(b"MLT0");
+        data.extend_from_slice(&0u32.to_le_bytes());
 
         let mut tags = HashMap::new();
-        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
-
-        assert!(result.is_ok());
-        assert_eq!(tags.get("Minolta:ImageQuality"), Some(&"Fine".to_string()));
+        MinoltaParser::new()
+            .parse(&data, ByteOrder::LittleEndian, &mut tags)
+            .unwrap();
+        assert_eq!(
+            tags.get("Minolta:MakerNoteVersion"),
+            Some(&"MLT0".to_string())
+        );
     }
 
     #[test]
     fn test_lens_lookup() {
         let parser = MinoltaParser::new();
+        // Ids come from %sonyLensTypes, which Minolta shares.
         assert_eq!(
-            parser.lookup_lens(0x0100),
-            Some("AF 50mm f/1.4".to_string())
+            parser.lookup_lens(1),
+            Some("Minolta AF 80-200mm F2.8 HS-APO G".to_string())
         );
-        assert_eq!(
-            parser.lookup_lens(0x0200),
-            Some("AF 28-70mm f/2.8 G".to_string())
-        );
-        assert_eq!(parser.lookup_lens(0xFFFF), None);
+        assert_eq!(parser.lookup_lens(64000), None);
     }
 }

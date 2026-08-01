@@ -303,6 +303,47 @@ pub fn parse_ifd(
     Ok(result)
 }
 
+/// Returns the raw 4-byte `value_offset` field of the first entry carrying
+/// `tag_id` in the IFD at `ifd_offset`.
+///
+/// [`parse_ifd`] resolves each entry to its bytes and then discards the offset
+/// those bytes came from. That offset is the only way to relate a blob back to
+/// its position in the TIFF, which MakerNote parsers need: a MakerNote is an
+/// IFD whose own entries store TIFF-relative offsets, so reading a value that
+/// does not fit in 4 bytes means converting a TIFF-relative offset into an
+/// index inside the MakerNote blob - `value_offset - makernote_value_offset`.
+///
+/// # Parameters
+/// - `reader`: reader whose offset 0 is the TIFF header
+/// - `ifd_offset`: TIFF-relative offset of the IFD to scan
+/// - `byte_order`: endianness of the TIFF
+/// - `tag_id`: tag to look for
+///
+/// # Returns
+/// The entry's `value_offset` field, or `None` when the IFD cannot be read or
+/// holds no such tag. The value is returned verbatim: for entries whose data is
+/// 4 bytes or shorter it is the inline data, not an offset, so callers that
+/// care must check the size themselves.
+pub fn find_entry_value_offset(
+    reader: &dyn FileReader,
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+    tag_id: u16,
+) -> Option<u32> {
+    let count_bytes = reader.read(ifd_offset, 2).ok()?;
+    let entry_count = EndianReader::new(count_bytes, byte_order.to_io_byte_order()).u16_at(0)?;
+
+    let entries_data = reader
+        .read(ifd_offset + 2, entry_count as usize * 12)
+        .ok()?;
+    let reader = EndianReader::new(entries_data, byte_order.to_io_byte_order());
+
+    (0..entry_count as usize).find_map(|i| {
+        let base = i * 12;
+        (reader.u16_at(base)? == tag_id).then(|| reader.u32_at(base + 8))?
+    })
+}
+
 /// Extracts an inline value from the 4-byte value_offset field.
 ///
 /// For values ≤4 bytes, TIFF stores them directly in the value_offset field.

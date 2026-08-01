@@ -52,6 +52,35 @@ pub trait MakerNoteParser {
         self.parse(data, byte_order, tags)
     }
 
+    /// Parse MakerNote data with everything the caller knows about where the
+    /// bytes came from.
+    ///
+    /// `data_base` is the TIFF-relative offset at which `data[0]` sits. A
+    /// MakerNote is usually an IFD whose entries store *TIFF-relative* offsets
+    /// even though the parser only receives the MakerNote blob, so any value
+    /// longer than 4 bytes - every string, every array, every binary
+    /// sub-directory - can only be located as `value_offset - data_base`.
+    /// Parsers that read nothing but inline values ignore it, which is what
+    /// this default does.
+    ///
+    /// # Arguments
+    /// * `data` - Raw MakerNote data bytes
+    /// * `byte_order` - Byte order for multi-byte values
+    /// * `model` - Camera model string (EXIF `Model`), if it was available
+    /// * `data_base` - TIFF-relative offset of `data[0]`, if the caller knew it
+    /// * `tags` - HashMap to insert extracted tags into
+    fn parse_with_context(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        data_base: Option<u32>,
+        tags: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
+        let _ = data_base;
+        self.parse_with_model(data, byte_order, model, tags)
+    }
+
     /// Optional: Validate that this data belongs to this manufacturer
     ///
     /// Some manufacturers have header signatures (e.g., "Nikon\0\0")

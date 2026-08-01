@@ -7,8 +7,8 @@ use super::{FileReader, MetadataMap, TagValue};
 use crate::core::operations_helpers::{read_u16, read_u32};
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
 use crate::parsers::tiff::geotiff_parser;
-use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
-use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_model;
+use crate::parsers::tiff::ifd_parser::{ByteOrder, find_entry_value_offset, parse_ifd};
+use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context;
 use crate::tag_db::lookup_tag_name;
 use std::collections::HashMap;
 
@@ -173,7 +173,8 @@ pub fn parse_ifd_chain(
 
         // Parse Canon MakerNote if present
         if let Some(makernote_bytes) = makernote_data {
-            parse_makernote_if_canon(makernote_bytes, byte_order, metadata);
+            let makernote_base = find_entry_value_offset(reader, ifd_offset, byte_order, MAKERNOTE);
+            parse_makernote_if_canon(makernote_bytes, byte_order, makernote_base, metadata);
         }
 
         // Read next IFD offset
@@ -490,7 +491,11 @@ pub fn parse_exif_subifd(
         if let Some(makernote_bytes) = exif_makernote_data
             && !parse_sigma_makernote_if_sigma(reader, offset, byte_order, tiff_base, metadata)
         {
-            parse_makernote_if_canon(makernote_bytes, byte_order, metadata);
+            // Where the blob sits in the TIFF. MakerNote IFD entries store
+            // TIFF-relative offsets, so without this a parser cannot resolve
+            // any value that does not fit in an entry's inline 4 bytes.
+            let makernote_base = find_entry_value_offset(reader, offset, byte_order, MAKERNOTE);
+            parse_makernote_if_canon(makernote_bytes, byte_order, makernote_base, metadata);
         }
 
         // Third pass: Parse Interoperability IFD if pointer was found
@@ -1039,6 +1044,7 @@ fn ifd_entry_value_offset(
 fn parse_makernote_if_canon(
     makernote_data: &[u8],
     byte_order: ByteOrder,
+    makernote_base: Option<u32>,
     metadata: &mut MetadataMap,
 ) {
     // Extract camera make from metadata to determine which parser to use
@@ -1050,11 +1056,12 @@ fn parse_makernote_if_canon(
     if !make.is_empty() {
         // Parse MakerNote using the dispatcher
         let mut makernote_tags = HashMap::new();
-        if let Err(_e) = dispatch_makernote_with_model(
+        if let Err(_e) = dispatch_makernote_with_context(
             make,
             model,
             makernote_data,
             byte_order,
+            makernote_base,
             &mut makernote_tags,
         ) {
             // Silently skip failed MakerNote parsing
