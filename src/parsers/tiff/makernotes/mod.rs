@@ -20,6 +20,7 @@ pub mod panasonic;
 pub mod panasonic_lens_database;
 pub mod pentax;
 pub mod pentax_lens_database;
+pub mod pentax_supplement;
 pub mod phaseone;
 pub mod phaseone_lens_database;
 pub mod registries;

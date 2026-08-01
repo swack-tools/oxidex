@@ -41,6 +41,9 @@ pub mod lens_database;
 /// Common trait definition for all MakerNotes parsers
 pub mod makernote_parser;
 /// Tag registry system for organizing and managing MakerNote tags
+/// Table-driven walker for plain TIFF-style MakerNote IFDs.
+pub mod table_ifd;
+
 pub mod tag_registry;
 /// Common value interpretation and decoding functions
 pub mod value_decoders;

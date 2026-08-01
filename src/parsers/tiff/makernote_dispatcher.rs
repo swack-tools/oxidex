@@ -62,6 +62,42 @@ pub fn dispatch_makernote_with_model(
     )
 }
 
+/// Pentax's own MakerNote signature, also used by the Pentax-built Samsung
+/// GX bodies (ExifTool dispatches Pentax MakerNotes on this signature, not on
+/// the Make string).
+const PENTAX_AOC_SIGNATURE: &[u8] = b"AOC\0";
+
+/// Match the vendors whose Make string varies too much for a literal list.
+///
+/// Returns `None` for everything else so the caller falls through to the
+/// exact-match table.
+fn parser_for_make_prefix(
+    make: &str,
+    data: &[u8],
+) -> Option<Box<dyn crate::parsers::tiff::makernotes::shared::MakerNoteParser>> {
+    use crate::parsers::tiff::makernotes::shared::MakerNoteParser;
+
+    if make.starts_with("olympus") || make.starts_with("om digital solutions") {
+        return Some(Box::new(olympus::OlympusParser) as Box<dyn MakerNoteParser>);
+    }
+    if make.starts_with("pentax") || make.starts_with("asahi optical") {
+        return Some(Box::new(pentax::PentaxParser) as Box<dyn MakerNoteParser>);
+    }
+    if make.starts_with("ricoh imaging") {
+        return Some(Box::new(pentax::PentaxParser) as Box<dyn MakerNoteParser>);
+    }
+    if make.starts_with("samsung") {
+        // The Samsung GX-1L/GX-1S/GX10/GX20 are rebadged Pentax bodies and
+        // write a Pentax "AOC\0" MakerNote; ExifTool files their tags under
+        // family-1 "Pentax". Every other Samsung goes to the Samsung parser.
+        if data.len() >= 4 && &data[0..4] == PENTAX_AOC_SIGNATURE {
+            return Some(Box::new(pentax::PentaxParser) as Box<dyn MakerNoteParser>);
+        }
+        return Some(Box::new(samsung::SamsungParser) as Box<dyn MakerNoteParser>);
+    }
+    None
+}
+
 /// Dispatches a MakerNote whose position inside its enclosing TIFF block is
 /// known.
 ///
@@ -97,18 +133,26 @@ pub fn dispatch_makernote_with_context(
     // Normalize make string (trim whitespace, case-insensitive matching)
     let make_normalized = make.trim().to_lowercase();
 
+    // Vendors that spell their own name several ways across model generations
+    // are matched by prefix rather than by an exhaustive literal list. Olympus
+    // alone writes six different strings across the sample corpus -- "OLYMPUS
+    // IMAGING CORP.", "OLYMPUS OPTICAL CO.,LTD", "OLYMPUS CORPORATION",
+    // "OLYMPUS CORP.", "OLYMPUS_IMAGING_CORP." and "OM Digital Solutions" --
+    // and only the first was recognised, so 102 of 315 Olympus JPEGs never
+    // reached a parser at all.
+    if let Some(parser) = parser_for_make_prefix(&make_normalized, data) {
+        if parser.validate_header(data) {
+            parser.parse_with_context(ctx, byte_order, model, tags)?;
+        }
+        return Ok(());
+    }
+
     // Dispatch to appropriate parser based on manufacturer
     let parser: Option<Box<dyn MakerNoteParser>> = match make_normalized.as_str() {
         "canon" => Some(Box::new(canon::CanonParser)),
         "nikon" | "nikon corporation" => Some(Box::new(nikon::NikonParser)),
         "sony" => Some(Box::new(sony::SonyParser)),
-        "olympus" | "olympus corporation" | "olympus imaging corp." => {
-            Some(Box::new(olympus::OlympusParser))
-        }
         "panasonic" => Some(Box::new(panasonic::PanasonicParser)),
-        "pentax" | "pentax corporation" | "ricoh imaging company, ltd." => {
-            Some(Box::new(pentax::PentaxParser))
-        }
         "fujifilm" | "fuji photo film co., ltd." => Some(Box::new(fujifilm::FujifilmParser)),
         "leica" | "leica camera ag" => Some(Box::new(leica::LeicaMakerNoteParser)),
         // Sigma is absent on purpose. Its MakerNote entries store value offsets
@@ -123,7 +167,6 @@ pub fn dispatch_makernote_with_context(
         // Smartphones
         "apple" => Some(Box::new(apple::AppleParser)),
         "google" => Some(Box::new(google::GoogleParser)),
-        "samsung" | "samsung electronics" => Some(Box::new(samsung::SamsungParser)),
         "microsoft" | "microsoft corporation" => Some(Box::new(microsoft::MicrosoftParser)),
         "qualcomm" => Some(Box::new(qualcomm::QualcommParser)),
 

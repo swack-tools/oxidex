@@ -3584,6 +3584,32 @@
  */
 #define SAMSUNG_ZOOM_LEVEL 4126
 
+#define TIFF_BYTE 1
+
+#define TIFF_ASCII 2
+
+#define TIFF_SHORT 3
+
+#define TIFF_LONG 4
+
+#define TIFF_RATIONAL 5
+
+#define TIFF_SBYTE 6
+
+#define TIFF_UNDEF 7
+
+#define TIFF_SSHORT 8
+
+#define TIFF_SLONG 9
+
+#define TIFF_SRATIONAL 10
+
+#define TIFF_FLOAT 11
+
+#define TIFF_DOUBLE 12
+
+#define TIFF_IFD 13
+
 /*
  GPS latitude (signed int, scale: 1e-7)
  */
