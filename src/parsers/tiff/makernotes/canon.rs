@@ -10,7 +10,9 @@
 pub mod af_info;
 pub mod binary_tables;
 pub mod camera_info;
+pub mod camera_info_tables;
 pub mod color_data;
+pub mod filter_info;
 pub mod lens_info;
 
 use crate::error::{ExifToolError, Result};
@@ -546,6 +548,10 @@ const CANON_THUMBNAIL_IMAGE_VALID_AREA: u16 = 0x0013;
 const CANON_ORIGINAL_DECISION_DATA_OFFSET: u16 = 0x0083;
 /// ExifTool Canon.pm:1972 — `0x4001 => [ ... ColorData1..ColorData12 ... ]`
 const CANON_COLOR_DATA: u16 = 0x4001;
+
+/// FilterInfo (MakerNote tag 0x4024). Not a plain BinaryData table -- it
+/// declares its own `PROCESS_PROC`; see [`filter_info`].
+const CANON_FILTER_INFO: u16 = 0x4024;
 /// ExifTool Canon.pm:1802 — `0x91 => { Name => 'PersonalFunctions', ... }`
 const CANON_PERSONAL_FUNCTIONS: u16 = 0x0091;
 /// ExifTool Canon.pm:1809 — `0x92 => { Name => 'PersonalFunctionValues', ... }`
@@ -3614,6 +3620,24 @@ impl MakerNoteParser for CanonParser {
         }
     }
 
+    /// `%Canon::CameraInfo*` is selected from the EXIF `Model`, so Canon takes
+    /// the model when the dispatcher has it. Everything else is unchanged.
+    fn parse_with_model(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        match parse_canon_makernote_impl_with_model(data, byte_order, model) {
+            Ok(parsed_tags) => {
+                tags.extend(parsed_tags);
+                Ok(())
+            }
+            Err(e) => Err(format!("Canon MakerNote parse error: {}", e)),
+        }
+    }
+
     fn lookup_lens(&self, lens_id: u16) -> Option<String> {
         lookup_lens_name(lens_id)
     }
@@ -3676,6 +3700,23 @@ fn parse_canon_makernote_impl(
     data: &[u8],
     byte_order: ByteOrder,
 ) -> Result<HashMap<String, String>> {
+    parse_canon_makernote_impl_with_model(data, byte_order, None)
+}
+
+/// Same as [`parse_canon_makernote_impl`], plus the EXIF `Model` the dispatcher
+/// resolved from IFD0.
+///
+/// ExifTool selects the `%Canon::CameraInfo*` table from `$$self{Model}`, and
+/// nothing inside the MakerNote is a reliable stand-in: `CanonImageType` agrees
+/// with `Model` on 492 of the 493 ExifTool sample files that carry a CameraInfo
+/// record, but the Kiss X70 writes "Canon EOS X70" there and would dispatch
+/// nowhere. `Model` is used when it is available and `CanonImageType` is the
+/// fallback for callers that do not have it.
+fn parse_canon_makernote_impl_with_model(
+    data: &[u8],
+    byte_order: ByteOrder,
+    exif_model: Option<&str>,
+) -> Result<HashMap<String, String>> {
     if data.is_empty() {
         return Ok(HashMap::new());
     }
@@ -3702,14 +3743,38 @@ fn parse_canon_makernote_impl(
     // (MakerNote tag 0x0006) carries the same body name, so resolve it up front rather
     // than relying on the order entries happen to arrive in.
     let mut model = String::new();
+    // `%Canon::CameraSettings` key 22 is ExifTool's `LensType` DATAMEMBER, which
+    // `%Canon::CameraInfo*` MacroMagnification conditions on. It is read in the
+    // same pre-pass so the CameraInfo record does not depend on IFD entry order.
+    let mut camera_settings_lens_type: Option<i64> = None;
     let _ = parse_ifd_entries(data, byte_order, &config, |entry, ifd_data| {
-        if entry.tag_id == CANON_IMAGE_TYPE
-            && let Some(value) = extract_canon_string_with_base(entry, ifd_data, byte_order, base)
-        {
-            model = value;
+        match entry.tag_id {
+            CANON_IMAGE_TYPE => {
+                if let Some(value) =
+                    extract_canon_string_with_base(entry, ifd_data, byte_order, base)
+                {
+                    model = value;
+                }
+            }
+            CANON_CAMERA_SETTINGS => {
+                if let Some(array) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                        .map(realign_length_prefixed_record)
+                    && let Some(&lens) = array.get(CAMERA_SETTINGS_LENS_TYPE)
+                {
+                    camera_settings_lens_type = Some(lens as i64);
+                }
+            }
+            _ => {}
         }
     });
     let model = model;
+    let camera_settings_lens_type = camera_settings_lens_type;
+    let camera_info_model = exif_model.filter(|m| !m.is_empty()).unwrap_or(&model);
+
+    // `%Canon::CameraInfo*` is PRIORITY => 0, so its values are collected apart
+    // and only fill names no other Canon table produced. See `merge_priority0`.
+    let mut camera_info_tags: HashMap<String, String> = HashMap::new();
 
     // FocalUnits (`%Canon::CameraSettings` key 25) divides `%Canon::FocalLength` key 1.
     let mut focal_units: i16 = 1;
@@ -4716,6 +4781,34 @@ fn parse_canon_makernote_impl(
                 }
             }
 
+            // CameraInfo (tag 0x000D). ExifTool models this tag as a list of 33
+            // alternatives (Canon.pm:1307), each naming a different
+            // `%Canon::CameraInfo*` table: the first 31 are selected by the camera
+            // model, the last four by the record's declared format and element count.
+            // The record carries no version word and no length prefix, so the body is
+            // the only thing that says what the bytes mean.
+            CANON_CAMERA_INFO => {
+                if let Some(record) = extract_canon_bytes_with_base(entry, ifd_data, base) {
+                    camera_info_tags = camera_info::parse_camera_info(
+                        record,
+                        entry.field_type,
+                        entry.value_count,
+                        byte_order,
+                        camera_info_model,
+                        camera_settings_lens_type,
+                    );
+                }
+            }
+
+            // FilterInfo (tag 0x4024). `%Canon::FilterInfo` declares
+            // `PROCESS_PROC => \&ProcessFilters` and its keys are parameter ids inside
+            // a self-describing record, so it is walked rather than indexed.
+            CANON_FILTER_INFO => {
+                if let Some(record) = extract_canon_bytes_with_base(entry, ifd_data, base) {
+                    filter_info::parse_filter_info(record, byte_order, &mut tags);
+                }
+            }
+
             // ColorData (tag 0x4001). ExifTool picks one of twelve %Canon::ColorData*
             // tables by the record's element count (Canon.pm:1972), then gates individual
             // fields on the ColorDataVersion at index 0. All twelve are in `color_data`.
@@ -5031,6 +5124,8 @@ fn parse_canon_makernote_impl(
             _ => {}
         }
     });
+
+    camera_info::merge_priority0(&mut tags, camera_info_tags);
 
     Ok(tags)
 }

@@ -1,1237 +1,1089 @@
-//! Canon CameraInfo tag parser
+//! Canon `CameraInfo` (MakerNote tag 0x000D) record walker.
 //!
-//! Parses Canon MakerNotes CameraInfo block (tag 0x000D) containing camera
-//! state information that varies significantly by camera model. This binary
-//! structure includes data about:
-//! - Camera and sensor temperature
-//! - Battery type and status
-//! - Firmware version details
-//! - Camera body type and capabilities
-//! - Exposure and shooting parameters
-//! - White balance and color temperature settings
-//! - Lens information
+//! The tables themselves live in [`super::camera_info_tables`], which is
+//! transcribed by script from ExifTool's own Perl hashes. This module is the
+//! interpreter for them: it reproduces `Image::ExifTool::ProcessBinaryData`
+//! closely enough that a table entry means here exactly what it means there.
 //!
-//! # Data Format
+//! What that requires, in the order the walk hits it:
 //!
-//! The CameraInfo data is a variable-length binary blob where:
-//! - Byte offsets and data types differ by camera model
-//! - Some cameras use little-endian while others use big-endian
-//! - Some values are int8, int16, or int32 depending on model
-//! - Field positions can change between firmware versions
-//!
-//! # Model-Specific Variations
-//!
-//! Canon stores different data at different offsets for each camera family:
-//! - **1D/1Ds series**: Original pro bodies with distinct layouts
-//! - **5D series**: Full-frame layouts that evolved over generations
-//! - **7D series**: APS-C pro body layouts
-//! - **xxD series** (40D, 50D, 60D, 70D, 80D): Enthusiast body layouts
-//! - **xxxD series** (450D, 500D, etc.): Entry-level body layouts
-//! - **PowerShot**: Compact camera layouts
-//!
-//! This parser implements a "best effort" approach that extracts common
-//! fields found across most models while gracefully handling model-specific
-//! variations and unknown formats.
-//!
-//! # Temperature Values
-//!
-//! Camera temperature values are typically stored as unsigned bytes with
-//! an offset of 128 degrees. To convert: `actual_temp = raw_value - 128`.
-//! For example, a raw value of 155 = 27 degrees Celsius.
-//!
-//! # References
-//!
-//! Based on ExifTool's Canon.pm CameraInfo tag definitions.
-//! See: https://exiftool.org/TagNames/Canon.html#CameraInfo
+//! 1. **Model dispatch.** ExifTool's tag 0x0D is a list of alternatives, each
+//!    with a `Condition` on `$$self{Model}`, falling through to four
+//!    format/count-selected tables at the end. There is no self-describing
+//!    header in the record, so a body we cannot name gets the fall-through
+//!    tables and nothing else -- never another body's field names.
+//! 2. **The `varSize` running offset.** Fields are visited in ascending index
+//!    order and read at `index * increment + varSize`. A field's `Hook` adjusts
+//!    `varSize` *after* its own offset is computed, shifting every later field.
+//! 3. **Firmware look-ahead.** The hooks are all conditioned on `CanonFirm`,
+//!    which a hidden field at index 0 sets by probing a few byte offsets for an
+//!    `N.N.N` version string. When none matches, ExifTool adds 0x10000, which
+//!    pushes the next field past the end of the record and ends the walk.
+//! 4. **`PRIORITY => 0`.** Every CameraInfo table is priority zero, so these
+//!    values never displace a tag another Canon table already produced.
 
-use crate::core::MetadataMap;
-use crate::core::TagValue;
-use crate::io::{ByteOrder, EndianReader};
+use std::collections::HashMap;
 
-// =============================================================================
-// CONSTANTS - Model Detection Signatures
-// =============================================================================
+use super::camera_info_tables::{
+    ALL_TABLES, Cmp, Cond, DISPATCH, F, Fmt, Pc, Rc, SubTable, TBL_POWERSHOT, TBL_POWERSHOT2,
+    TBL_UNKNOWN, TBL_UNKNOWN16, TBL_UNKNOWN32, Table, Vc, sub_table,
+};
+use crate::parsers::tiff::ifd_parser::ByteOrder;
 
-/// Minimum data length required for basic CameraInfo parsing.
-/// Shorter data blocks cannot contain meaningful information.
-const MIN_CAMERA_INFO_LENGTH: usize = 16;
+/// TIFF field types, as they appear in the MakerNote IFD entry for tag 0x0D.
+/// ExifTool turns these back into its own format names before testing
+/// `$format eq "int32u"` / `$format =~ /^int16/` in the dispatch conditions.
+const TYPE_BYTE: u16 = 1;
+const TYPE_SHORT: u16 = 3;
+const TYPE_LONG: u16 = 4;
+const TYPE_UNDEFINED: u16 = 7;
+const TYPE_SSHORT: u16 = 8;
+const TYPE_SLONG: u16 = 9;
 
-/// Maximum reasonable CameraInfo length to prevent excessive processing.
-/// Canon CameraInfo blocks are typically under 2KB.
-const MAX_CAMERA_INFO_LENGTH: usize = 4096;
-
-// =============================================================================
-// CONSTANTS - Common CameraInfo Byte Offsets
-// =============================================================================
-// Note: These offsets represent commonly found positions across multiple
-// Canon camera models. Specific models may use different offsets.
-// The parser attempts to validate values before accepting them.
-
-/// Offset for exposure time in many camera models (int8u at index 4)
-const OFFSET_EXPOSURE_TIME: usize = 4;
-
-/// Offset for focal length in 1DmkII-style layouts (int16u at index 9)
-const OFFSET_FOCAL_LENGTH_1D_MKII: usize = 9;
-
-/// Offset for focal length in 1D-style layouts (int16u at index 10)
-const OFFSET_FOCAL_LENGTH_1D: usize = 10;
-
-/// Offset for lens type in many models (int8u at index 13)
-const OFFSET_LENS_TYPE: usize = 13;
-
-/// Offset for short focal length in 1D (int16u at index 14)
-const OFFSET_SHORT_FOCAL_1D: usize = 14;
-
-/// Offset for long focal length in 1D (int16u at index 16)
-const OFFSET_LONG_FOCAL_1D: usize = 16;
-
-/// Offset for short focal length in 1DmkII (int16u at index 17)
-const OFFSET_SHORT_FOCAL_1D_MKII: usize = 17;
-
-/// Offset for long focal length in 1DmkII (int16u at index 19)
-const OFFSET_LONG_FOCAL_1D_MKII: usize = 19;
-
-/// Offset for focal type in 1DmkII (int8u at index 45)
-const OFFSET_FOCAL_TYPE_1D_MKII: usize = 45;
-
-/// Offset for white balance in 1DmkII (int8u at index 54)
-const OFFSET_WHITE_BALANCE_1D_MKII: usize = 54;
-
-/// Offset for color temperature in 1DmkII (int16u at index 55)
-const OFFSET_COLOR_TEMP_1D_MKII: usize = 55;
-
-// Common offsets for 5D-style layouts
-/// Offset for camera temperature in 5D-style (varies by model)
-const OFFSET_CAMERA_TEMP_5D: usize = 25;
-
-/// Offset for firmware version string (typically at fixed position in some models)
-const OFFSET_FIRMWARE_5D: usize = 28;
-
-// Common offsets for newer cameras (60D, 70D, 80D, etc.)
-/// Offset for camera temperature in newer bodies
-const OFFSET_CAMERA_TEMP_MODERN: usize = 23;
-
-// =============================================================================
-// BATTERY TYPE DEFINITIONS
-// =============================================================================
-
-/// Known Canon battery types extracted from EXIF data.
-///
-/// Canon stores battery type as a string in the BatteryType tag (0x0038),
-/// but CameraInfo may contain battery-related flags or status values.
-/// This enum provides string representations for display.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CanonBatteryType {
-    /// LP-E6 - Original 7.2V 1800mAh lithium-ion pack
-    LpE6,
-    /// LP-E6N - Updated version with 1865mAh capacity
-    LpE6N,
-    /// LP-E6NH - High-capacity 2130mAh version for R5/R6
-    LpE6Nh,
-    /// LP-E6P - 2130mAh with 6A continuous discharge for R5 Mark II
-    LpE6P,
-    /// LP-E4 - Pro battery for 1D series
-    LpE4,
-    /// LP-E4N - Updated 1D series battery
-    LpE4N,
-    /// LP-E5 - Entry-level DSLR battery (xxxD series)
-    LpE5,
-    /// LP-E8 - Battery for Rebel T2i/T3i/T4i/T5i
-    LpE8,
-    /// LP-E10 - Battery for Rebel T3/T5/T6/T7
-    LpE10,
-    /// LP-E12 - Compact mirrorless battery (EOS M series)
-    LpE12,
-    /// LP-E17 - Battery for 77D/800D/200D/RP
-    LpE17,
-    /// LP-E19 - High-capacity pro battery for 1DX series
-    LpE19,
-    /// Unknown battery type
-    Unknown,
+/// Everything the table conditions can ask about the file, gathered once.
+pub(crate) struct Ctx<'a> {
+    /// EXIF `Model` if the dispatcher supplied one, else Canon's own
+    /// `CanonImageType` (MakerNote tag 0x0006), which carries the same body
+    /// name on every body in the ExifTool sample corpus but one.
+    pub model: &'a str,
+    /// `$$self{CameraInfoCount}` -- the element count declared by the IFD entry.
+    pub count: u32,
+    /// `$$self{LensType}` -- `%Canon::CameraSettings` key 22, a DATAMEMBER.
+    pub lens_type: Option<i64>,
+    /// `$$self{CanonFirm}`, set by the firmware look-ahead field.
+    pub canon_firm: u8,
 }
 
-impl CanonBatteryType {
-    /// Returns the display name for this battery type.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::LpE6 => "LP-E6",
-            Self::LpE6N => "LP-E6N",
-            Self::LpE6Nh => "LP-E6NH",
-            Self::LpE6P => "LP-E6P",
-            Self::LpE4 => "LP-E4",
-            Self::LpE4N => "LP-E4N",
-            Self::LpE5 => "LP-E5",
-            Self::LpE8 => "LP-E8",
-            Self::LpE10 => "LP-E10",
-            Self::LpE12 => "LP-E12",
-            Self::LpE17 => "LP-E17",
-            Self::LpE19 => "LP-E19",
-            Self::Unknown => "Unknown",
+/// A value read out of the record, before conversion.
+enum Val {
+    Int(i64),
+    Str(String),
+    Bytes(Vec<u8>),
+}
+
+/// A value after `ValueConv`.
+pub(crate) enum Conv {
+    Int(i64),
+    Float(f64),
+    Str(String),
+    /// Raw bytes, kept undecoded until the conversion that consumes them. The
+    /// only `undef[N]` field that reaches a conversion is `LensSerialNumber`,
+    /// whose `unpack("H*",$val)` hexes the stored bytes -- decoding them as
+    /// text first would replace every byte above 0x7f with U+FFFD and hex that.
+    Bytes(Vec<u8>),
+}
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+/// Walks the `CameraInfo` record for one file and returns the tags it yields.
+///
+/// The result is deliberately returned rather than written straight into the
+/// caller's map: every CameraInfo table is `PRIORITY => 0` in ExifTool, so
+/// these values must not displace a tag some other Canon table produced. See
+/// [`merge_priority0`].
+pub(crate) fn parse_camera_info(
+    record: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+    model: &str,
+    lens_type: Option<i64>,
+) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let table = choose_table(model, field_type, value_count);
+    let mut ctx = Ctx {
+        model,
+        count: value_count,
+        lens_type,
+        canon_firm: 0,
+    };
+    walk(table, record, byte_order, &mut ctx, &mut out);
+    out
+}
+
+/// Folds CameraInfo output into the parser's tag map with ExifTool's
+/// `PRIORITY => 0` semantics: a name another Canon table already produced keeps
+/// that value, because a priority-0 tag never wins a name collision.
+pub(crate) fn merge_priority0(tags: &mut HashMap<String, String>, from: HashMap<String, String>) {
+    for (k, v) in from {
+        tags.entry(k).or_insert(v);
+    }
+}
+
+/// The `0xd => [...]` alternative list from `Canon.pm`, in ExifTool's order:
+/// model conditions first, then the format/count fall-throughs.
+fn choose_table(model: &str, field_type: u16, count: u32) -> &'static Table {
+    for (pattern, table) in DISPATCH {
+        if model_matches(model, pattern) {
+            return table;
         }
     }
+    // `$format eq "int32u" and ($count == 138 or $count == 148)`
+    let is_int32u = field_type == TYPE_LONG;
+    if is_int32u && (count == 138 || count == 148) {
+        return TBL_POWERSHOT;
+    }
+    if is_int32u && matches!(count, 156 | 162 | 167 | 171 | 264) {
+        return TBL_POWERSHOT2;
+    }
+    // `$format =~ /^int32/` then `$format =~ /^int16/`.
+    if field_type == TYPE_LONG || field_type == TYPE_SLONG {
+        return TBL_UNKNOWN32;
+    }
+    if field_type == TYPE_SHORT || field_type == TYPE_SSHORT {
+        return TBL_UNKNOWN16;
+    }
+    // `CanonCameraInfoUnknown` carries no Condition at all, so it is the
+    // unconditional last alternative -- every record that reaches it lands here,
+    // whatever its format.
+    TBL_UNKNOWN
+}
 
-    /// Attempts to parse a battery type from a string value.
-    ///
-    /// # Arguments
-    ///
-    /// * `s` - The string to parse (case-insensitive)
-    ///
-    /// # Returns
-    ///
-    /// The matching `CanonBatteryType` or `Unknown` if not recognized.
-    pub fn parse(s: &str) -> Self {
-        let upper = s.to_uppercase();
-        let normalized = upper.replace(['-', ' '], "");
+// ---------------------------------------------------------------------------
+// The walk
+// ---------------------------------------------------------------------------
 
-        match normalized.as_str() {
-            "LPE6" => Self::LpE6,
-            "LPE6N" => Self::LpE6N,
-            "LPE6NH" => Self::LpE6Nh,
-            "LPE6P" => Self::LpE6P,
-            "LPE4" => Self::LpE4,
-            "LPE4N" => Self::LpE4N,
-            "LPE5" => Self::LpE5,
-            "LPE8" => Self::LpE8,
-            "LPE10" => Self::LpE10,
-            "LPE12" => Self::LpE12,
-            "LPE17" => Self::LpE17,
-            "LPE19" => Self::LpE19,
-            _ => Self::Unknown,
+fn walk(
+    table: &'static Table,
+    data: &[u8],
+    byte_order: ByteOrder,
+    ctx: &mut Ctx<'_>,
+    out: &mut HashMap<String, String>,
+) {
+    let increment = table.default_fmt.size() as i64;
+    let size = data.len() as i64;
+    let mut var_size: i64 = 0;
+
+    let fields = table.fields;
+    let mut i = 0usize;
+    while i < fields.len() {
+        // ExifTool visits one table key at a time; a key whose value is an
+        // array is a list of alternatives and the first passing Condition wins.
+        let idx = fields[i].idx;
+        let mut j = i;
+        while j < fields.len() && fields[j].idx == idx {
+            j += 1;
+        }
+        let group = &fields[i..j];
+        i = j;
+
+        // A negative key counts elements back from the end of the record.
+        let mut entry = idx * increment + var_size;
+        if entry < 0 {
+            entry += size;
+            if entry < 0 {
+                continue;
+            }
+        }
+        let more = size - entry;
+        if more <= 0 {
+            // `last if $more <= 0` -- the rest of the table is out of range.
+            break;
+        }
+
+        let Some(field) = group
+            .iter()
+            .find(|f| condition_holds(f.cond, ctx, data, entry as usize))
+        else {
+            continue;
+        };
+
+        // `next if $$tagInfo{Unknown}` -- Unknown tags need -u, which we never set.
+        if field.unknown {
+            continue;
+        }
+
+        let fmt = field.fmt.unwrap_or(table.default_fmt);
+        let value = read_value(data, entry as usize, fmt, more as usize, byte_order);
+
+        // The Hook runs after this field's own offset is fixed, so it only
+        // moves the fields that come after it.
+        apply_hook(field, ctx, &mut var_size);
+
+        let Some(mut value) = value else {
+            continue;
+        };
+        if let (Some(mask), Val::Int(n)) = (field.mask, &value) {
+            // ExifTool derives BitShift from the mask's lowest set bit.
+            let shift = mask.trailing_zeros();
+            value = Val::Int((n & mask) >> shift);
+        }
+
+        if let Some(which) = field.sub {
+            walk(
+                sub_table(which),
+                &data[entry as usize..],
+                byte_order,
+                ctx,
+                out,
+            );
+            continue;
+        }
+
+        let Some(converted) = raw_conv(field.rc, value, ctx) else {
+            continue;
+        };
+        if field.hidden {
+            continue;
+        }
+        let converted = value_conv(field.vc, converted);
+        let printed = print_conv(field.pc, converted);
+        out.insert(format!("Canon:{}", field.name), printed);
+    }
+}
+
+fn apply_hook(field: &F, ctx: &Ctx<'_>, var_size: &mut i64) {
+    for rule in field.hook {
+        let holds = match rule.cmp {
+            Cmp::Lt => ctx.canon_firm < rule.firm,
+            Cmp::Gt => ctx.canon_firm > rule.firm,
+            Cmp::Eq => ctx.canon_firm == rule.firm,
+            Cmp::Ge => ctx.canon_firm >= rule.firm,
+            Cmp::Le => ctx.canon_firm <= rule.firm,
+        };
+        if holds {
+            // `($$self{CanonFirm} ? A : B)` -- B is the arm taken when no
+            // firmware string matched, and is normally 0x10000, which ends the
+            // walk on the next field rather than reading it at a wrong offset.
+            *var_size += if ctx.canon_firm == 0 {
+                rule.zero_delta
+            } else {
+                rule.delta
+            };
         }
     }
-
-    /// Attempts to identify battery type from a numeric code.
-    ///
-    /// Some Canon cameras store battery type as a numeric identifier.
-    /// These mappings are derived from observed EXIF data patterns.
-    ///
-    /// # Arguments
-    ///
-    /// * `code` - The numeric battery type code
-    ///
-    /// # Returns
-    ///
-    /// The matching `CanonBatteryType` or `Unknown` if not recognized.
-    pub fn from_code(code: u8) -> Self {
-        match code {
-            0x01 => Self::LpE6,
-            0x02 => Self::LpE6N,
-            0x03 => Self::LpE6Nh,
-            0x04 => Self::LpE6P,
-            0x10 => Self::LpE4,
-            0x11 => Self::LpE4N,
-            0x20 => Self::LpE5,
-            0x21 => Self::LpE8,
-            0x22 => Self::LpE10,
-            0x23 => Self::LpE12,
-            0x24 => Self::LpE17,
-            0x30 => Self::LpE19,
-            _ => Self::Unknown,
-        }
-    }
 }
 
-// =============================================================================
-// CAMERA TYPE DEFINITIONS
-// =============================================================================
+// ---------------------------------------------------------------------------
+// Reading
+// ---------------------------------------------------------------------------
 
-/// Decodes camera type from a numeric value.
-///
-/// This value represents the camera body classification stored in some
-/// CameraInfo blocks. Values are model-specific.
-///
-/// # Arguments
-///
-/// * `camera_type` - Raw camera type value from CameraInfo
-///
-/// # Returns
-///
-/// A human-readable string describing the camera type.
-fn decode_camera_type(camera_type: i16) -> &'static str {
-    match camera_type {
-        248 => "EOS High-End",
-        250 => "Compact",
-        252 => "EOS Mid-Range",
-        254 => "EOS Entry",
-        255 => "PowerShot",
-        _ => "Unknown",
-    }
-}
-
-// =============================================================================
-// WHITE BALANCE DECODER
-// =============================================================================
-
-/// Decodes white balance setting from CameraInfo.
-///
-/// # Arguments
-///
-/// * `wb` - Raw white balance value
-///
-/// # Returns
-///
-/// A human-readable white balance mode string.
-fn decode_white_balance(wb: u8) -> &'static str {
-    match wb {
-        0 => "Auto",
-        1 => "Daylight",
-        2 => "Cloudy",
-        3 => "Tungsten",
-        4 => "Fluorescent",
-        5 => "Flash",
-        6 => "Custom",
-        8 => "Shade",
-        9 => "Color Temperature",
-        12 => "Daylight Fluorescent",
-        14 => "Incandescent Fluorescent",
-        17 => "Auto (Warm)",
-        23 => "Auto (Cool)",
-        _ => "Unknown",
-    }
-}
-
-// =============================================================================
-// FOCAL TYPE DECODER
-// =============================================================================
-
-/// Decodes focal type (zoom vs prime) from CameraInfo.
-///
-/// # Arguments
-///
-/// * `focal_type` - Raw focal type value
-///
-/// # Returns
-///
-/// A string describing the lens focal type.
-fn decode_focal_type(focal_type: u8) -> &'static str {
-    match focal_type {
-        0 => "Unknown",
-        1 => "Fixed",
-        2 => "Zoom",
-        _ => "Unknown",
-    }
-}
-
-// =============================================================================
-// SHARPNESS FREQUENCY DECODER
-// =============================================================================
-
-/// Decodes sharpness frequency setting from CameraInfo.
-///
-/// Sharpness frequency affects how the camera applies sharpening
-/// - either to fine details, coarse textures, or balanced.
-///
-/// # Arguments
-///
-/// * `freq` - Raw sharpness frequency value
-///
-/// # Returns
-///
-/// A string describing the sharpness frequency setting.
-fn decode_sharpness_frequency(freq: u8) -> &'static str {
-    match freq {
-        0 => "n/a",
-        1 => "Lowest",
-        2 => "Low",
-        3 => "Standard",
-        4 => "High",
-        5 => "Highest",
-        _ => "Unknown",
-    }
-}
-
-// =============================================================================
-// PICTURE STYLE DECODER
-// =============================================================================
-
-/// Decodes picture style setting from CameraInfo.
-///
-/// # Arguments
-///
-/// * `style` - Raw picture style value
-///
-/// # Returns
-///
-/// A string describing the picture style.
-fn decode_picture_style(style: u8) -> &'static str {
-    match style {
-        0x00 => "None",
-        0x01 => "Standard",
-        0x02 => "Portrait",
-        0x03 => "Landscape",
-        0x04 => "Neutral",
-        0x05 => "Faithful",
-        0x06 => "Monochrome",
-        0x07 => "Auto",
-        0x08 => "Fine Detail",
-        0x21 => "User Def. 1",
-        0x22 => "User Def. 2",
-        0x23 => "User Def. 3",
-        0x41 => "PC 1",
-        0x42 => "PC 2",
-        0x43 => "PC 3",
-        0x81 => "Standard",
-        0x82 => "Portrait",
-        0x83 => "Landscape",
-        0x84 => "Neutral",
-        0x85 => "Faithful",
-        0x86 => "Monochrome",
-        0x87 => "Auto",
-        0x88 => "Fine Detail",
-        _ => "Unknown",
-    }
-}
-
-// =============================================================================
-// HELPER FUNCTIONS
-// =============================================================================
-
-/// Converts a raw temperature byte to Celsius.
-///
-/// Canon cameras store temperature as an unsigned byte with an offset of 128.
-/// The formula is: actual_celsius = raw_value - 128
-///
-/// # Arguments
-///
-/// * `raw_temp` - The raw temperature byte value
-///
-/// # Returns
-///
-/// Temperature in degrees Celsius as a signed integer.
-fn raw_temp_to_celsius(raw_temp: u8) -> i16 {
-    raw_temp as i16 - 128
-}
-
-/// Validates that a temperature reading is within reasonable bounds.
-///
-/// Canon cameras operate between approximately -10C and +50C internally,
-/// but sensor temperatures during operation typically range from 20C to 70C.
-///
-/// # Arguments
-///
-/// * `temp_celsius` - Temperature in degrees Celsius
-///
-/// # Returns
-///
-/// `true` if the temperature is within reasonable operating range.
-fn is_valid_temperature(temp_celsius: i16) -> bool {
-    (-40..=100).contains(&temp_celsius)
-}
-
-/// Attempts to extract a null-terminated ASCII string from a byte slice.
-///
-/// # Arguments
-///
-/// * `data` - The byte slice to extract from
-/// * `offset` - Starting offset within the data
-/// * `max_len` - Maximum length of the string
-///
-/// # Returns
-///
-/// The extracted string, or None if extraction fails.
-fn extract_string(data: &[u8], offset: usize, max_len: usize) -> Option<String> {
-    if offset >= data.len() {
+fn read_value(data: &[u8], at: usize, fmt: Fmt, more: usize, byte_order: ByteOrder) -> Option<Val> {
+    let need = fmt.size() as usize;
+    if need == 0 || more < need {
+        // `$count < 1 and return undef` -- not enough data left for one element.
         return None;
     }
+    let bytes = data.get(at..at + need)?;
+    let le = matches!(byte_order, ByteOrder::LittleEndian);
+    Some(match fmt {
+        Fmt::Int8u => Val::Int(bytes[0] as i64),
+        Fmt::Int8s => Val::Int(bytes[0] as i8 as i64),
+        Fmt::Int16u => Val::Int(u16_at(bytes, le) as i64),
+        Fmt::Int16s => Val::Int(u16_at(bytes, le) as i16 as i64),
+        // `int16uRev` is read with the byte order reversed relative to the rest
+        // of the record -- Canon really does mix endianness inside one table.
+        Fmt::Int16uRev => Val::Int(u16_at(bytes, !le) as i64),
+        Fmt::Int32u => Val::Int(u32_at(bytes, le) as i64),
+        Fmt::Int32s => Val::Int(u32_at(bytes, le) as i32 as i64),
+        Fmt::Str(_) => {
+            let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+            Val::Str(String::from_utf8_lossy(&bytes[..end]).into_owned())
+        }
+        Fmt::Undef(_) => Val::Bytes(bytes.to_vec()),
+    })
+}
 
-    let end = (offset + max_len).min(data.len());
-    let slice = &data[offset..end];
-
-    // Find null terminator or end of slice
-    let str_end = slice.iter().position(|&b| b == 0).unwrap_or(slice.len());
-
-    if str_end == 0 {
-        return None;
-    }
-
-    // Only accept printable ASCII
-    let bytes = &slice[..str_end];
-    if bytes.iter().all(|&b| (0x20..0x7F).contains(&b)) {
-        String::from_utf8(bytes.to_vec()).ok()
+fn u16_at(b: &[u8], le: bool) -> u16 {
+    if le {
+        u16::from_le_bytes([b[0], b[1]])
     } else {
-        None
+        u16::from_be_bytes([b[0], b[1]])
     }
 }
 
-/// Attempts to detect the camera model family from CameraInfo data.
-///
-/// Different Canon camera families have distinct CameraInfo layouts.
-/// This function uses heuristics to identify the likely format.
-///
-/// # Arguments
-///
-/// * `data` - The raw CameraInfo bytes
-/// * `data_len` - Length hint (some models have specific sizes)
-///
-/// # Returns
-///
-/// A string identifying the detected model family, or "Unknown".
-fn detect_camera_family(data: &[u8], _data_len: usize) -> &'static str {
-    // CameraInfo size can help identify the camera family:
-    // - 1D/1Ds: typically 156-168 bytes
-    // - 1DmkII/1DSmkII: typically 156 bytes
-    // - 5D: typically 132 bytes
-    // - 5DmkII: typically 171 bytes
-    // - 5DmkIII: typically 170 bytes
-    // - 40D: typically 154 bytes
-    // - 50D: typically 158 bytes
-    // - 60D: typically 167 bytes
-    // - 450D: typically 163 bytes
-    // - 1000D: typically 143 bytes
-    // - PowerShot: typically 138 bytes
-
-    let len = data.len();
-
-    // Size-based heuristics (approximate)
-    match len {
-        138..=145 => "PowerShot/Entry",
-        150..=160 => "1DmkII/40D/50D",
-        161..=175 => "5D/60D/450D",
-        _ => "Unknown",
-    }
-}
-
-// =============================================================================
-// MODEL-SPECIFIC PARSERS
-// =============================================================================
-
-/// Parses CameraInfo for 1D/1Ds style cameras.
-///
-/// Layout based on ExifTool CameraInfo1D table.
-fn parse_camera_info_1d(data: &[u8], reader: &EndianReader, metadata: &mut MetadataMap) {
-    // Index 4: ExposureTime (int8u)
-    if data.len() > OFFSET_EXPOSURE_TIME {
-        let exposure = data[OFFSET_EXPOSURE_TIME];
-        if exposure > 0 {
-            metadata.insert(
-                "Canon:ExposureTimeRaw",
-                TagValue::new_integer(exposure as i64),
-            );
-        }
-    }
-
-    // Index 10: FocalLength (int16u, units may vary)
-    if let Some(focal) = reader.u16_at(OFFSET_FOCAL_LENGTH_1D * 2)
-        && focal > 0
-        && focal < 2000
-    {
-        metadata.insert("Canon:FocalLengthRaw", TagValue::new_integer(focal as i64));
-    }
-
-    // Index 13: LensType (int8u)
-    if data.len() > OFFSET_LENS_TYPE {
-        let lens_type = data[OFFSET_LENS_TYPE];
-        if lens_type > 0 {
-            metadata.insert("Canon:LensTypeRaw", TagValue::new_integer(lens_type as i64));
-        }
-    }
-
-    // Index 14: ShortFocal (int16u) - minimum focal length
-    if let Some(short_focal) = reader.u16_at(OFFSET_SHORT_FOCAL_1D * 2)
-        && short_focal > 0
-        && short_focal < 2000
-    {
-        metadata.insert(
-            "Canon:MinFocalLength",
-            TagValue::new_string(format!("{} mm", short_focal)),
-        );
-    }
-
-    // Index 16: LongFocal (int16u) - maximum focal length
-    if let Some(long_focal) = reader.u16_at(OFFSET_LONG_FOCAL_1D * 2)
-        && long_focal > 0
-        && long_focal < 2000
-    {
-        metadata.insert(
-            "Canon:MaxFocalLength",
-            TagValue::new_string(format!("{} mm", long_focal)),
-        );
-    }
-
-    // Indices 65-81 contain various tags for 1D (if data is long enough)
-    // Index 65: SharpnessFrequency
-    if data.len() > 65 {
-        let sharpness_freq = data[65];
-        metadata.insert(
-            "Canon:SharpnessFrequency",
-            TagValue::new_string(decode_sharpness_frequency(sharpness_freq).to_string()),
-        );
-    }
-
-    // Index 67: Sharpness
-    if data.len() > 67 {
-        let sharpness = data[67] as i8;
-        metadata.insert("Canon:Sharpness", TagValue::new_integer(sharpness as i64));
-    }
-
-    // Index 68: WhiteBalance
-    if data.len() > 68 {
-        let wb = data[68];
-        metadata.insert(
-            "Canon:WhiteBalance",
-            TagValue::new_string(decode_white_balance(wb).to_string()),
-        );
-    }
-
-    // Index 69-70: ColorTemperature (int16u)
-    if let Some(color_temp) = reader.u16_at(69)
-        && (2500..=10000).contains(&color_temp)
-    {
-        metadata.insert(
-            "Canon:ColorTemperature",
-            TagValue::new_string(format!("{} K", color_temp)),
-        );
-    }
-
-    // Index 81: PictureStyle
-    if data.len() > 81 {
-        let style = data[81];
-        metadata.insert(
-            "Canon:PictureStyle",
-            TagValue::new_string(decode_picture_style(style).to_string()),
-        );
-    }
-}
-
-/// Parses CameraInfo for 1DmkII/1DSmkII style cameras.
-///
-/// Layout based on ExifTool CameraInfo1DmkII table.
-fn parse_camera_info_1d_mkii(data: &[u8], reader: &EndianReader, metadata: &mut MetadataMap) {
-    // Index 4: ExposureTime (int8u)
-    if data.len() > OFFSET_EXPOSURE_TIME {
-        let exposure = data[OFFSET_EXPOSURE_TIME];
-        if exposure > 0 {
-            metadata.insert(
-                "Canon:ExposureTimeRaw",
-                TagValue::new_integer(exposure as i64),
-            );
-        }
-    }
-
-    // Index 9: FocalLength (int16u)
-    if let Some(focal) = reader.u16_at(OFFSET_FOCAL_LENGTH_1D_MKII)
-        && focal > 0
-        && focal < 2000
-    {
-        metadata.insert("Canon:FocalLengthRaw", TagValue::new_integer(focal as i64));
-    }
-
-    // Index 13: LensType (int8u)
-    if data.len() > OFFSET_LENS_TYPE {
-        let lens_type = data[OFFSET_LENS_TYPE];
-        if lens_type > 0 {
-            metadata.insert("Canon:LensTypeRaw", TagValue::new_integer(lens_type as i64));
-        }
-    }
-
-    // Index 17: ShortFocal (int16u)
-    if let Some(short_focal) = reader.u16_at(OFFSET_SHORT_FOCAL_1D_MKII)
-        && short_focal > 0
-        && short_focal < 2000
-    {
-        metadata.insert(
-            "Canon:MinFocalLength",
-            TagValue::new_string(format!("{} mm", short_focal)),
-        );
-    }
-
-    // Index 19: LongFocal (int16u)
-    if let Some(long_focal) = reader.u16_at(OFFSET_LONG_FOCAL_1D_MKII)
-        && long_focal > 0
-        && long_focal < 2000
-    {
-        metadata.insert(
-            "Canon:MaxFocalLength",
-            TagValue::new_string(format!("{} mm", long_focal)),
-        );
-    }
-
-    // Index 45: FocalType (int8u)
-    if data.len() > OFFSET_FOCAL_TYPE_1D_MKII {
-        let focal_type = data[OFFSET_FOCAL_TYPE_1D_MKII];
-        metadata.insert(
-            "Canon:FocalType",
-            TagValue::new_string(decode_focal_type(focal_type).to_string()),
-        );
-    }
-
-    // Index 54: WhiteBalance (int8u)
-    if data.len() > OFFSET_WHITE_BALANCE_1D_MKII {
-        let wb = data[OFFSET_WHITE_BALANCE_1D_MKII];
-        metadata.insert(
-            "Canon:WhiteBalance",
-            TagValue::new_string(decode_white_balance(wb).to_string()),
-        );
-    }
-
-    // Index 55-56: ColorTemperature (int16u)
-    if let Some(color_temp) = reader.u16_at(OFFSET_COLOR_TEMP_1D_MKII)
-        && (2500..=10000).contains(&color_temp)
-    {
-        metadata.insert(
-            "Canon:ColorTemperature",
-            TagValue::new_string(format!("{} K", color_temp)),
-        );
-    }
-}
-
-/// Parses CameraInfo for 5D-style cameras (5D, 5DmkII, 5DmkIII, etc.).
-///
-/// Layout based on ExifTool CameraInfo5D tables.
-fn parse_camera_info_5d(data: &[u8], reader: &EndianReader, metadata: &mut MetadataMap) {
-    // Camera temperature is typically around index 25 for 5D series
-    if data.len() > OFFSET_CAMERA_TEMP_5D {
-        let raw_temp = data[OFFSET_CAMERA_TEMP_5D];
-        let temp_celsius = raw_temp_to_celsius(raw_temp);
-        if is_valid_temperature(temp_celsius) {
-            metadata.insert(
-                "Canon:CameraTemperature",
-                TagValue::new_string(format!("{} C", temp_celsius)),
-            );
-        }
-    }
-
-    // Try to extract firmware version string (typically at offset 28 for some models)
-    if let Some(firmware) = extract_string(data, OFFSET_FIRMWARE_5D, 32)
-        && firmware.len() >= 3
-        && firmware.chars().any(|c| c.is_ascii_digit())
-    {
-        metadata.insert(
-            "Canon:FirmwareVersionInternal",
-            TagValue::new_string(firmware),
-        );
-    }
-
-    // Extract lens information if present
-    // Index 15: LensType for 5D
-    if data.len() > 15 {
-        let lens_type = data[15];
-        if lens_type > 0 {
-            metadata.insert("Canon:LensTypeRaw", TagValue::new_integer(lens_type as i64));
-        }
-    }
-
-    // White balance and color temperature for 5D series
-    // Typically around index 36-38
-    if data.len() > 36 {
-        let wb = data[36];
-        if wb < 30 {
-            // Sanity check for valid WB values
-            metadata.insert(
-                "Canon:WhiteBalance",
-                TagValue::new_string(decode_white_balance(wb).to_string()),
-            );
-        }
-    }
-
-    if let Some(color_temp) = reader.u16_at(37)
-        && (2500..=10000).contains(&color_temp)
-    {
-        metadata.insert(
-            "Canon:ColorTemperature",
-            TagValue::new_string(format!("{} K", color_temp)),
-        );
-    }
-}
-
-/// Parses CameraInfo for modern xxD cameras (60D, 70D, 80D, etc.).
-fn parse_camera_info_modern(data: &[u8], reader: &EndianReader, metadata: &mut MetadataMap) {
-    // Camera temperature for modern bodies
-    if data.len() > OFFSET_CAMERA_TEMP_MODERN {
-        let raw_temp = data[OFFSET_CAMERA_TEMP_MODERN];
-        let temp_celsius = raw_temp_to_celsius(raw_temp);
-        if is_valid_temperature(temp_celsius) {
-            metadata.insert(
-                "Canon:CameraTemperature",
-                TagValue::new_string(format!("{} C", temp_celsius)),
-            );
-        }
-    }
-
-    // Additional fields for modern cameras
-    // Index 6: Sharpness
-    if data.len() > 6 {
-        let sharpness = data[6] as i8;
-        if (-4..=7).contains(&sharpness) {
-            metadata.insert("Canon:Sharpness", TagValue::new_integer(sharpness as i64));
-        }
-    }
-
-    // White balance and color temperature
-    if data.len() > 40 {
-        let wb = data[40];
-        if wb < 30 {
-            metadata.insert(
-                "Canon:WhiteBalance",
-                TagValue::new_string(decode_white_balance(wb).to_string()),
-            );
-        }
-    }
-
-    if let Some(color_temp) = reader.u16_at(41)
-        && (2500..=10000).contains(&color_temp)
-    {
-        metadata.insert(
-            "Canon:ColorTemperature",
-            TagValue::new_string(format!("{} K", color_temp)),
-        );
-    }
-
-    // Picture style
-    if data.len() > 45 {
-        let style = data[45];
-        if style > 0 {
-            metadata.insert(
-                "Canon:PictureStyle",
-                TagValue::new_string(decode_picture_style(style).to_string()),
-            );
-        }
-    }
-}
-
-// =============================================================================
-// PUBLIC API
-// =============================================================================
-
-/// Parses Canon CameraInfo data from raw bytes into a MetadataMap.
-///
-/// This function extracts camera state information from the Canon CameraInfo
-/// binary structure (MakerNote tag 0x000D). The data format varies significantly
-/// by camera model, so this parser uses heuristics to detect the layout and
-/// extract available fields.
-///
-/// # Arguments
-///
-/// * `data` - Raw bytes of the CameraInfo block
-/// * `byte_order` - Byte order for parsing: `true` for big-endian,
-///   `false` for little-endian
-///
-/// # Returns
-///
-/// A `MetadataMap` containing the parsed camera information with keys:
-/// - `Canon:CameraTemperature` - Sensor/body temperature in Celsius
-/// - `Canon:BatteryType` - Battery model if detected (e.g., "LP-E6N")
-/// - `Canon:FirmwareVersionInternal` - Internal firmware string if present
-/// - `Canon:CameraType` - Camera body classification
-/// - `Canon:WhiteBalance` - White balance mode
-/// - `Canon:ColorTemperature` - Color temperature in Kelvin
-/// - `Canon:FocalLengthRaw` - Focal length value (units vary by model)
-/// - `Canon:MinFocalLength` - Lens minimum focal length
-/// - `Canon:MaxFocalLength` - Lens maximum focal length
-/// - `Canon:LensTypeRaw` - Numeric lens type identifier
-/// - `Canon:FocalType` - "Fixed" or "Zoom"
-/// - `Canon:Sharpness` - Sharpness setting
-/// - `Canon:SharpnessFrequency` - Sharpness frequency setting
-/// - `Canon:PictureStyle` - Picture style mode
-/// - `Canon:ExposureTimeRaw` - Exposure time raw value
-///
-/// # Example
-///
-/// ```ignore
-/// use oxidex::parsers::tiff::makernotes::canon::camera_info::parse_canon_camera_info;
-///
-/// // Little-endian CameraInfo data from MakerNote tag 0x000D
-/// let data = [0x9B, 0x00, 0x04, 0x00, /* ... */];
-/// let metadata = parse_canon_camera_info(&data, false);
-///
-/// if let Some(temp) = metadata.get("Canon:CameraTemperature") {
-///     println!("Camera temperature: {:?}", temp);
-/// }
-/// ```
-///
-/// # Data Safety
-///
-/// This function performs bounds checking on all array accesses and
-/// validates values against reasonable ranges before including them
-/// in the output. Malformed or truncated data results in a partial
-/// result containing only successfully parsed fields.
-///
-/// # Model-Specific Behavior
-///
-/// The parser attempts to detect the camera family based on data size
-/// and content patterns. If detection fails, it falls back to extracting
-/// common fields that appear across multiple model families.
-pub fn parse_canon_camera_info(data: &[u8], byte_order: bool) -> MetadataMap {
-    let mut metadata = MetadataMap::new();
-
-    // Validate minimum data length
-    if data.len() < MIN_CAMERA_INFO_LENGTH {
-        return metadata;
-    }
-
-    // Clamp to maximum reasonable length
-    let data = if data.len() > MAX_CAMERA_INFO_LENGTH {
-        &data[..MAX_CAMERA_INFO_LENGTH]
+fn u32_at(b: &[u8], le: bool) -> u32 {
+    if le {
+        u32::from_le_bytes([b[0], b[1], b[2], b[3]])
     } else {
-        data
-    };
-
-    // Convert bool byte_order to our internal ByteOrder enum
-    // true = big-endian, false = little-endian
-    let order = if byte_order {
-        ByteOrder::Big
-    } else {
-        ByteOrder::Little
-    };
-
-    let reader = EndianReader::new(data, order);
-
-    // Record data size for diagnostics
-    metadata.insert(
-        "Canon:CameraInfoLength",
-        TagValue::new_integer(data.len() as i64),
-    );
-
-    // Detect camera family based on data size and content
-    let family = detect_camera_family(data, data.len());
-    if family != "Unknown" {
-        metadata.insert(
-            "Canon:DetectedCameraFamily",
-            TagValue::new_string(family.to_string()),
-        );
+        u32::from_be_bytes([b[0], b[1], b[2], b[3]])
     }
+}
 
-    // Apply model-specific parsing based on detected family
-    // Note: Size-based detection is imperfect, so we also try common
-    // offsets that work across multiple models
-    match family {
-        "1DmkII/40D/50D" => {
-            parse_camera_info_1d_mkii(data, &reader, &mut metadata);
-        }
-        "5D/60D/450D" => {
-            parse_camera_info_5d(data, &reader, &mut metadata);
-            parse_camera_info_modern(data, &reader, &mut metadata);
-        }
-        _ => {
-            // Unknown format - try multiple parsing strategies
-            parse_camera_info_1d(data, &reader, &mut metadata);
-            parse_camera_info_5d(data, &reader, &mut metadata);
-        }
+// ---------------------------------------------------------------------------
+// Conditions
+// ---------------------------------------------------------------------------
+
+fn is_word(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_'
+}
+
+/// `\b` before byte offset `at`.
+fn boundary_before(s: &[u8], at: usize) -> bool {
+    at == 0 || !is_word(s[at - 1])
+}
+
+/// `\b` at byte offset `at`.
+fn boundary_after(s: &[u8], at: usize) -> bool {
+    at >= s.len() || !is_word(s[at])
+}
+
+/// `/\bLIT$/`
+fn ends_with_word(model: &str, lit: &str) -> bool {
+    let (m, l) = (model.as_bytes(), lit.as_bytes());
+    m.len() >= l.len() && &m[m.len() - l.len()..] == l && boundary_before(m, m.len() - l.len())
+}
+
+/// `/LIT\b/` -- the leading `\b` in `/\b(A|B)\b/` is implied by the literals
+/// all starting with a word character, so only the trailing one is tested.
+fn contains_word(model: &str, lit: &str) -> bool {
+    let (m, l) = (model.as_bytes(), lit.as_bytes());
+    if l.is_empty() || m.len() < l.len() {
+        return false;
     }
+    (0..=m.len() - l.len())
+        .any(|i| &m[i..i + l.len()] == l && boundary_before(m, i) && boundary_after(m, i + l.len()))
+}
 
-    // Try to extract camera temperature from common positions if not already found
-    if !metadata.contains_key("Canon:CameraTemperature") {
-        // Try several common temperature offsets
-        for &offset in &[23, 25, 27, 30] {
-            if data.len() > offset {
-                let raw_temp = data[offset];
-                let temp_celsius = raw_temp_to_celsius(raw_temp);
-                if is_valid_temperature(temp_celsius) {
-                    metadata.insert(
-                        "Canon:CameraTemperature",
-                        TagValue::new_string(format!("{} C", temp_celsius)),
-                    );
-                    break;
+/// One element of a tag 0x0D model condition.
+///
+/// The `DISPATCH` patterns are ExifTool's Perl regexes copied verbatim, so they
+/// are matched rather than reshaped into string comparisons. Between them they
+/// use six constructs and no more; anything else is refused by `compile` and
+/// caught by `every_dispatch_pattern_compiles`, so an unsupported construct is
+/// a test failure rather than a body that silently dispatches nowhere.
+#[derive(Debug, PartialEq)]
+enum Node {
+    /// A literal character.
+    Lit(char),
+    /// `X?` -- an optional literal character, as in `\b1Ds? Mark III$`.
+    Opt(char),
+    /// `[abc]` -- one character from a set, as in `\bEOS R[56]$`.
+    Class(Vec<char>),
+    /// `(A|B|C)` -- alternation over plain literals.
+    Alt(Vec<String>),
+    /// `\b`
+    Boundary,
+    /// `$`
+    End,
+}
+
+/// Parses one of ExifTool's model-condition regexes. Returns `None` for any
+/// construct outside the six [`Node`] variants rather than approximating it.
+fn compile(pattern: &str) -> Option<Vec<Node>> {
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut nodes = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => {
+                if chars.get(i + 1) != Some(&'b') {
+                    return None;
+                }
+                nodes.push(Node::Boundary);
+                i += 2;
+            }
+            '$' => {
+                if i + 1 != chars.len() {
+                    return None;
+                }
+                nodes.push(Node::End);
+                i += 1;
+            }
+            '[' => {
+                let close = chars[i..].iter().position(|&c| c == ']')? + i;
+                let set: Vec<char> = chars[i + 1..close].to_vec();
+                if set.is_empty() || set.contains(&'^') || set.contains(&'-') {
+                    return None;
+                }
+                nodes.push(Node::Class(set));
+                i = close + 1;
+            }
+            '(' => {
+                let close = chars[i..].iter().position(|&c| c == ')')? + i;
+                let body: String = chars[i + 1..close].iter().collect();
+                if body.contains(['(', '[', '?', '\\', '.', '*', '+']) {
+                    return None;
+                }
+                nodes.push(Node::Alt(body.split('|').map(str::to_string).collect()));
+                i = close + 1;
+            }
+            // Regex metacharacters this matcher does not implement.
+            '.' | '*' | '+' | '^' | '|' | ')' | ']' | '{' | '}' => return None,
+            c => {
+                if chars.get(i + 1) == Some(&'?') {
+                    nodes.push(Node::Opt(c));
+                    i += 2;
+                } else {
+                    nodes.push(Node::Lit(c));
+                    i += 1;
                 }
             }
         }
     }
-
-    // Try to detect camera type value if present
-    // Often found at offsets that contain values like 248, 250, 252, 254, 255
-    for &offset in &[6, 7, 8] {
-        if data.len() > offset {
-            let camera_type = data[offset] as i16;
-            let decoded = decode_camera_type(camera_type);
-            if decoded != "Unknown" {
-                metadata.insert(
-                    "Canon:CameraType",
-                    TagValue::new_string(decoded.to_string()),
-                );
-                break;
-            }
-        }
-    }
-
-    metadata
+    Some(nodes)
 }
 
-// =============================================================================
-// UNIT TESTS
-// =============================================================================
+/// Matches `nodes[n..]` against `haystack[at..]`, backtracking through `Opt`
+/// and `Alt`. Byte indices are used so `\b` can look at the character on
+/// either side.
+fn match_here(nodes: &[Node], n: usize, haystack: &[u8], at: usize) -> bool {
+    let Some(node) = nodes.get(n) else {
+        return true;
+    };
+    match node {
+        Node::Boundary => {
+            let before = at > 0 && is_word(haystack[at - 1]);
+            let after = at < haystack.len() && is_word(haystack[at]);
+            before != after && match_here(nodes, n + 1, haystack, at)
+        }
+        Node::End => at == haystack.len(),
+        Node::Lit(c) => {
+            let mut buf = [0u8; 4];
+            let bytes = c.encode_utf8(&mut buf).as_bytes();
+            haystack[at..].starts_with(bytes)
+                && match_here(nodes, n + 1, haystack, at + bytes.len())
+        }
+        Node::Opt(c) => {
+            let mut buf = [0u8; 4];
+            let bytes = c.encode_utf8(&mut buf).as_bytes();
+            (haystack[at..].starts_with(bytes)
+                && match_here(nodes, n + 1, haystack, at + bytes.len()))
+                || match_here(nodes, n + 1, haystack, at)
+        }
+        Node::Class(set) => set.iter().any(|c| {
+            let mut buf = [0u8; 4];
+            let bytes = c.encode_utf8(&mut buf).as_bytes();
+            haystack[at..].starts_with(bytes)
+                && match_here(nodes, n + 1, haystack, at + bytes.len())
+        }),
+        Node::Alt(alts) => alts.iter().any(|a| {
+            haystack[at..].starts_with(a.as_bytes())
+                && match_here(nodes, n + 1, haystack, at + a.len())
+        }),
+    }
+}
+
+/// An unanchored search, which is what a Perl `=~` without `^` does.
+fn model_matches(model: &str, pattern: &str) -> bool {
+    let Some(nodes) = compile(pattern) else {
+        // Refusing to match beats matching by accident: a pattern this matcher
+        // cannot parse sends the body to the format-keyed fall-through tables
+        // rather than to a table whose offsets do not describe it.
+        return false;
+    };
+    let bytes = model.as_bytes();
+    (0..=bytes.len()).any(|start| match_here(&nodes, 0, bytes, start))
+}
+
+fn condition_holds(cond: Cond, ctx: &Ctx<'_>, data: &[u8], entry: usize) -> bool {
+    match cond {
+        Cond::Always => true,
+        Cond::ModelEndsWord(lit) => ends_with_word(ctx.model, lit),
+        Cond::ModelHasWord(alts) => alts.iter().any(|a| contains_word(ctx.model, a)),
+        Cond::ModelStartsWith(lit) => ctx.model.starts_with(lit),
+        Cond::LensTypeIs(n) => ctx.lens_type.is_some_and(|l| l != 0 && l == n),
+        Cond::CountEq(n) => ctx.count == n,
+        Cond::CountEither(a, b) => ctx.count == a || ctx.count == b,
+        Cond::CountGreater(n) => ctx.count > n,
+        // `$$valPt =~ /^\d\.\d\.\d\0/`
+        Cond::ValueLooksLikeVersion => data.get(entry..entry + 6).is_some_and(|v| {
+            v[0].is_ascii_digit()
+                && v[1] == b'.'
+                && v[2].is_ascii_digit()
+                && v[3] == b'.'
+                && v[4].is_ascii_digit()
+                && v[5] == 0
+        }),
+        // The MakerNote parser is handed the model but not the container file
+        // type, so `$$self{FileType} eq "JPEG"` cannot be evaluated. Emitting
+        // the field anyway would put a JPEG offset's bytes under a real tag
+        // name on a CR3, so it is not emitted at all.
+        Cond::FileTypeUnavailable => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Conversions
+// ---------------------------------------------------------------------------
+
+fn raw_conv(rc: Rc, val: Val, ctx: &mut Ctx<'_>) -> Option<Conv> {
+    match rc {
+        Rc::None => Some(match val {
+            Val::Int(n) => Conv::Int(n),
+            Val::Str(s) => Conv::Str(s),
+            Val::Bytes(b) => Conv::Bytes(b),
+        }),
+        // `$val ? $val : undef`
+        Rc::SkipZero => match val {
+            Val::Int(0) => None,
+            Val::Int(n) => Some(Conv::Int(n)),
+            Val::Str(s) if s.is_empty() || s == "0" => None,
+            Val::Str(s) => Some(Conv::Str(s)),
+            Val::Bytes(b) => Some(Conv::Bytes(b)),
+        },
+        // `$val =~ /^\d+\.\d+\.\d+\s*$/ ? $val : undef`
+        Rc::RequireVersionString => match val {
+            Val::Str(s) if looks_like_version(&s) => Some(Conv::Str(s)),
+            _ => None,
+        },
+        // The hidden `FirmwareVersionLookAhead`: probe each offset in turn for
+        // an `N.N.N` string and record which one matched. Never a real tag.
+        Rc::FirmwareProbe(probes) => {
+            let bytes = match &val {
+                Val::Bytes(b) => b.as_slice(),
+                Val::Str(s) => s.as_bytes(),
+                Val::Int(_) => &[],
+            };
+            ctx.canon_firm = 0;
+            for &(offset, firm) in probes {
+                let at = offset as usize;
+                if let Some(window) = bytes.get(at..at + 6)
+                    && starts_like_version(window)
+                {
+                    ctx.canon_firm = firm;
+                    break;
+                }
+            }
+            None
+        }
+    }
+}
+
+/// `/^\d+\.\d+\.\d+\s*$/`
+fn looks_like_version(s: &str) -> bool {
+    let t = s.trim_end_matches([' ', '\t', '\n', '\r', '\x0c']);
+    let mut parts = t.split('.');
+    let ok = (0..3).all(|_| {
+        parts
+            .next()
+            .is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+    });
+    ok && parts.next().is_none()
+}
+
+/// `/^\d+\.\d+\.\d+/` against a fixed six-byte window.
+fn starts_like_version(w: &[u8]) -> bool {
+    let mut i = 0;
+    for part in 0..3 {
+        if part > 0 {
+            if w.get(i) != Some(&b'.') {
+                return false;
+            }
+            i += 1;
+        }
+        let start = i;
+        while w.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+        if i == start {
+            return false;
+        }
+    }
+    true
+}
+
+fn value_conv(vc: Vc, val: Conv) -> Conv {
+    let n = match &val {
+        Conv::Int(n) => *n as f64,
+        Conv::Float(f) => *f,
+        // `unpack("H*",$val)` is the only conversion these tables apply to a
+        // non-numeric value; everything else passes strings and bytes through.
+        Conv::Str(_) | Conv::Bytes(_) => {
+            return match (vc, val) {
+                (Vc::HexBytes, Conv::Bytes(b)) => {
+                    Conv::Str(b.iter().map(|byte| format!("{:02x}", byte)).collect())
+                }
+                (Vc::HexBytes, Conv::Str(s)) => {
+                    Conv::Str(s.bytes().map(|byte| format!("{:02x}", byte)).collect())
+                }
+                (_, other) => other,
+            };
+        }
+    };
+    match vc {
+        Vc::None => val,
+        Vc::Div100 => Conv::Float(n / 100.0),
+        Vc::Plus1 => Conv::Int(n as i64 + 1),
+        Vc::Minus1 => Conv::Int(n as i64 - 1),
+        Vc::Minus128 => Conv::Int(n as i64 - 128),
+        Vc::Ev8Minus6 => Conv::Float(n / 8.0 - 6.0),
+        // `exp(4*log(2)*(1-CanonEv($val-24)))`
+        Vc::CanonExposureTime => {
+            Conv::Float((4.0 * std::f64::consts::LN_2 * (1.0 - canon_ev(n - 24.0))).exp())
+        }
+        // `exp(($val-8)/16*log(2))`
+        Vc::CanonFNumber => Conv::Float(((n - 8.0) / 16.0 * std::f64::consts::LN_2).exp()),
+        // `100*exp(($val/8-9)*log(2))`
+        Vc::CanonIso => Conv::Float(100.0 * ((n / 8.0 - 9.0) * std::f64::consts::LN_2).exp()),
+        // `exp((75-$val) * log(2) * 3 / 40)`
+        Vc::MacroMagnification => {
+            Conv::Float(((75.0 - n) * std::f64::consts::LN_2 * 3.0 / 40.0).exp())
+        }
+        Vc::UnixTime => Conv::Str(convert_unix_time(n as i64)),
+        Vc::HexBytes => val,
+        // `100*exp((($val-411)/96)*log(2))`
+        Vc::PowerShotIso => {
+            Conv::Float(100.0 * (((n - 411.0) / 96.0) * std::f64::consts::LN_2).exp())
+        }
+        // `exp($val/192*log(2))`
+        Vc::PowerShotFNumber => Conv::Float((n / 192.0 * std::f64::consts::LN_2).exp()),
+        // `exp(-$val/96*log(2))`
+        Vc::PowerShotExposureTime => Conv::Float((-n / 96.0 * std::f64::consts::LN_2).exp()),
+    }
+}
+
+/// `Image::ExifTool::Canon::CanonEv` (Canon.pm): Canon's 1/3-stop encoding,
+/// where the fractional part is 0x0c for a third and 0x14 for two thirds.
+fn canon_ev(val: f64) -> f64 {
+    let mut val = val as i64;
+    let sign = if val < 0 {
+        val = -val;
+        -1.0
+    } else {
+        1.0
+    };
+    let mut frac = (val & 0x1f) as f64;
+    let whole = (val - (val & 0x1f)) as f64;
+    if frac == 0x0c as f64 {
+        frac = 32.0 / 3.0;
+    } else if frac == 0x14 as f64 {
+        frac = 64.0 / 3.0;
+    }
+    sign * (whole + frac) / 32.0
+}
+
+pub(crate) fn print_conv(pc: Pc, val: Conv) -> String {
+    match pc {
+        Pc::None => render(&val),
+        Pc::Map(map, print_hex) => match &val {
+            Conv::Int(n) => lookup(map, *n)
+                .map(str::to_string)
+                .unwrap_or_else(|| unknown(*n, print_hex)),
+            _ => render(&val),
+        },
+        // `%psConv`'s `OTHER => sub { shift }` -- unmatched comes back unchanged.
+        Pc::MapOrRaw(map) => match &val {
+            Conv::Int(n) => lookup(map, *n)
+                .map(str::to_string)
+                .unwrap_or_else(|| render(&val)),
+            _ => render(&val),
+        },
+        // `%filterConv`'s `OTHER => sub { "On ($val)" }`.
+        Pc::MapOrOn(map) => match &val {
+            Conv::Int(n) => lookup(map, *n)
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("On ({})", n)),
+            _ => format!("On ({})", render(&val)),
+        },
+        // `%printParameter`'s OTHER is `Exif::PrintParameter`, which prints a
+        // positive adjustment with its sign and folds a value above 0xfff0 back
+        // to the negative it really is.
+        Pc::MapOrSigned(map) => match &val {
+            Conv::Int(n) => lookup(map, *n)
+                .map(str::to_string)
+                .unwrap_or_else(|| print_parameter(*n)),
+            _ => render(&val),
+        },
+        Pc::BitMask(map, bits) => match &val {
+            Conv::Int(n) => lookup(map, *n).map(str::to_string).unwrap_or_else(|| {
+                let set: Vec<&str> = bits
+                    .iter()
+                    .filter(|(bit, _)| n & (1 << bit) != 0)
+                    .map(|(_, name)| *name)
+                    .collect();
+                if set.is_empty() {
+                    format!("(none)")
+                } else {
+                    set.join(", ")
+                }
+            }),
+            _ => render(&val),
+        },
+        Pc::Mm => format!("{} mm", render(&val)),
+        // `$val > 655.345 ? "inf" : "$val m"`
+        Pc::FocusDistance => {
+            if as_f64(&val) > 655.345 {
+                "inf".to_string()
+            } else {
+                format!("{} m", render(&val))
+            }
+        }
+        Pc::Celsius => format!("{} C", render(&val)),
+        Pc::ExposureTime => print_exposure_time(as_f64(&val)),
+        Pc::Sprintf2G => sprintf_g(as_f64(&val), 2),
+        Pc::Sprintf0F => format!("{:.0}", as_f64(&val)),
+        Pc::Sprintf1Fx => format!("{:.1}x", as_f64(&val)),
+        // `$self->ConvertDateTime($val)` with no DateFormat option is identity.
+        Pc::DateTime => render(&val),
+    }
+}
+
+fn lookup(map: &[(i64, &'static str)], key: i64) -> Option<&'static str> {
+    map.binary_search_by_key(&key, |(k, _)| *k)
+        .ok()
+        .map(|i| map[i].1)
+}
+
+/// ExifTool's unmatched-PrintConv rendering. `PrintHex` switches it to hex, and
+/// Perl's `%x` on a negative integer prints the 64-bit two's complement.
+fn unknown(n: i64, print_hex: bool) -> String {
+    if print_hex {
+        format!("Unknown (0x{:x})", n as u64)
+    } else {
+        format!("Unknown ({})", n)
+    }
+}
+
+fn as_f64(v: &Conv) -> f64 {
+    match v {
+        Conv::Int(n) => *n as f64,
+        Conv::Float(f) => *f,
+        Conv::Str(s) => s.parse().unwrap_or(0.0),
+        Conv::Bytes(_) => 0.0,
+    }
+}
+
+fn render(v: &Conv) -> String {
+    match v {
+        Conv::Int(n) => n.to_string(),
+        Conv::Float(f) => format_perl_number(*f),
+        Conv::Str(s) => s.clone(),
+        Conv::Bytes(b) => String::from_utf8_lossy(b).into_owned(),
+    }
+}
+
+/// Perl interpolates a float with up to 15 significant digits and no trailing
+/// zeros; six decimals is enough for every value these tables produce.
+fn format_perl_number(value: f64) -> String {
+    let rendered = format!("{:.6}", value);
+    let trimmed = rendered.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() || trimmed == "-" {
+        "0".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// `Image::ExifTool::Exif::PrintParameter`.
+fn print_parameter(value: i64) -> String {
+    if value > 0 {
+        if value > 0xfff0 {
+            return (value - 0x10000).to_string();
+        }
+        return format!("+{}", value);
+    }
+    value.to_string()
+}
+
+/// `Image::ExifTool::Exif::PrintExposureTime`.
+fn print_exposure_time(seconds: f64) -> String {
+    if seconds > 0.0 && seconds < 0.25001 {
+        return format!("1/{}", (0.5 + 1.0 / seconds) as i64);
+    }
+    let rendered = format!("{:.1}", seconds);
+    rendered
+        .strip_suffix(".0")
+        .map(str::to_string)
+        .unwrap_or(rendered)
+}
+
+/// C's `%.<prec>g`, which is what Perl's `sprintf` gives these tags.
+fn sprintf_g(value: f64, precision: usize) -> String {
+    let p = precision.max(1);
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    let sci = format!("{:.*e}", p - 1, value);
+    let (mantissa, exponent) = match sci.split_once('e') {
+        Some(parts) => parts,
+        None => return sci,
+    };
+    let exp: i32 = exponent.parse().unwrap_or(0);
+    if exp < -4 || exp >= p as i32 {
+        let m = trim_fraction(mantissa);
+        format!("{}e{}{:02}", m, if exp < 0 { '-' } else { '+' }, exp.abs())
+    } else {
+        let decimals = (p as i32 - 1 - exp).max(0) as usize;
+        trim_fraction(&format!("{:.*}", decimals, value))
+    }
+}
+
+fn trim_fraction(s: &str) -> String {
+    if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+/// `Image::ExifTool::ConvertUnixTime($val)` -- UTC, `YYYY:MM:DD HH:MM:SS`.
+fn convert_unix_time(seconds: i64) -> String {
+    let days = seconds.div_euclid(86_400);
+    let secs_of_day = seconds.rem_euclid(86_400);
+    let (hour, minute, second) = (
+        secs_of_day / 3600,
+        (secs_of_day / 60) % 60,
+        secs_of_day % 60,
+    );
+
+    // Howard Hinnant's civil_from_days.
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+
+    format!(
+        "{:04}:{:02}:{:02} {:02}:{:02}:{:02}",
+        y, m, d, hour, minute, second
+    )
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Test helper to create test data with embedded temperature
-    fn make_test_data_with_temp(temp_offset: usize, raw_temp: u8) -> Vec<u8> {
-        let mut data = vec![0u8; 100];
-        if temp_offset < data.len() {
-            data[temp_offset] = raw_temp;
-        }
-        data
-    }
-
+    /// The transcribed tables must stay sorted by index within each table:
+    /// `ProcessBinaryData` walks keys in ascending numeric order, and `varSize`
+    /// accumulates along the way, so an out-of-order key would read every later
+    /// field at the wrong offset.
     #[test]
-    fn test_raw_temp_to_celsius() {
-        // Test standard temperature conversion
-        assert_eq!(raw_temp_to_celsius(128), 0); // 0 degrees
-        assert_eq!(raw_temp_to_celsius(155), 27); // 27 degrees (room temp)
-        assert_eq!(raw_temp_to_celsius(178), 50); // 50 degrees (warm camera)
-        assert_eq!(raw_temp_to_celsius(88), -40); // -40 degrees (cold)
-        assert_eq!(raw_temp_to_celsius(228), 100); // 100 degrees (very hot)
-    }
-
-    #[test]
-    fn test_is_valid_temperature() {
-        // Valid temperatures
-        assert!(is_valid_temperature(25)); // Room temperature
-        assert!(is_valid_temperature(0)); // Freezing
-        assert!(is_valid_temperature(50)); // Warm camera
-        assert!(is_valid_temperature(-40)); // Cold extreme
-        assert!(is_valid_temperature(100)); // Hot extreme
-
-        // Invalid temperatures
-        assert!(!is_valid_temperature(-50)); // Too cold
-        assert!(!is_valid_temperature(120)); // Too hot
-    }
-
-    #[test]
-    fn test_parse_empty_data() {
-        let metadata = parse_canon_camera_info(&[], false);
-        assert!(metadata.is_empty());
-    }
-
-    #[test]
-    fn test_parse_minimal_data() {
-        // Data too short for meaningful parsing
-        let data = vec![0u8; 10];
-        let metadata = parse_canon_camera_info(&data, false);
-        // Should be empty or have very few fields
-        assert!(metadata.len() <= 1);
-    }
-
-    #[test]
-    fn test_parse_temperature_extraction() {
-        // Create test data with temperature at offset 25 (5D-style)
-        let data = make_test_data_with_temp(25, 155); // 27 degrees Celsius
-
-        let metadata = parse_canon_camera_info(&data, false);
-
-        // Should extract temperature
-        if let Some(temp) = metadata.get("Canon:CameraTemperature") {
-            let temp_str = temp.as_string().unwrap();
-            assert!(temp_str.contains("27"));
-            assert!(temp_str.contains("C"));
+    fn tables_are_index_ordered() {
+        for table in ALL_TABLES {
+            let mut last: Option<i64> = None;
+            for field in table.fields {
+                // Negative keys sort after the positive ones, as in ExifTool's
+                // `$a < 0 ? $a + 1e9 : $a` comparison.
+                let key = if field.idx < 0 {
+                    field.idx + 1_000_000_000
+                } else {
+                    field.idx
+                };
+                if let Some(prev) = last {
+                    assert!(
+                        key >= prev,
+                        "{} field {} is out of index order",
+                        table.name,
+                        field.name
+                    );
+                }
+                last = Some(key);
+            }
         }
     }
 
+    /// Every dispatch pattern must be one the mini matcher can parse. A pattern
+    /// it cannot parse never matches, which would send that body silently to
+    /// the format-keyed fall-through tables -- exactly the failure that dropped
+    /// the whole 1D family before `Opt` was implemented (`\b1Ds? Mark III$`).
     #[test]
-    fn test_battery_type_parse() {
-        assert_eq!(CanonBatteryType::parse("LP-E6"), CanonBatteryType::LpE6);
-        assert_eq!(CanonBatteryType::parse("lp-e6n"), CanonBatteryType::LpE6N);
-        assert_eq!(CanonBatteryType::parse("LP-E6NH"), CanonBatteryType::LpE6Nh);
-        assert_eq!(CanonBatteryType::parse("LPE6P"), CanonBatteryType::LpE6P);
+    fn every_dispatch_pattern_compiles() {
+        for (pattern, table) in DISPATCH {
+            assert!(
+                compile(pattern).is_some(),
+                "{} pattern {:?} is not supported by the matcher",
+                table.name,
+                pattern
+            );
+        }
+    }
+
+    /// Every model condition in the dispatch list has to be matched by the
+    /// mini regex engine. A pattern it silently fails to recognise would send a
+    /// body to the wrong table.
+    #[test]
+    fn every_dispatch_pattern_matches_a_real_model() {
+        let samples: &[(&str, &str)] = &[
+            ("Canon EOS-1D", "CameraInfo1D"),
+            ("Canon EOS-1DS", "CameraInfo1D"),
+            ("Canon EOS-1D Mark II", "CameraInfo1DmkII"),
+            ("Canon EOS-1Ds Mark II", "CameraInfo1DmkII"),
+            ("Canon EOS-1D Mark II N", "CameraInfo1DmkIIN"),
+            ("Canon EOS-1D Mark III", "CameraInfo1DmkIII"),
+            ("Canon EOS-1Ds Mark III", "CameraInfo1DmkIII"),
+            ("Canon EOS-1D Mark IV", "CameraInfo1DmkIV"),
+            ("Canon EOS-1D X", "CameraInfo1DX"),
+            ("Canon EOS 5D", "CameraInfo5D"),
+            ("Canon EOS 5D Mark II", "CameraInfo5DmkII"),
+            ("Canon EOS 5D Mark III", "CameraInfo5DmkIII"),
+            ("Canon EOS 6D", "CameraInfo6D"),
+            ("Canon EOS 7D", "CameraInfo7D"),
+            ("Canon EOS 40D", "CameraInfo40D"),
+            ("Canon EOS 50D", "CameraInfo50D"),
+            ("Canon EOS 60D", "CameraInfo60D"),
+            ("Canon EOS 70D", "CameraInfo70D"),
+            ("Canon EOS 80D", "CameraInfo80D"),
+            ("Canon EOS 450D", "CameraInfo450D"),
+            ("Canon EOS DIGITAL REBEL XSi", "CameraInfo450D"),
+            ("Canon EOS Kiss X2", "CameraInfo450D"),
+            ("Canon EOS 500D", "CameraInfo500D"),
+            ("Canon EOS REBEL T1i", "CameraInfo500D"),
+            ("Canon EOS 550D", "CameraInfo550D"),
+            ("Canon EOS Kiss X4", "CameraInfo550D"),
+            ("Canon EOS 600D", "CameraInfo600D"),
+            ("Canon EOS REBEL T3i", "CameraInfo600D"),
+            ("Canon EOS 650D", "CameraInfo650D"),
+            ("Canon EOS 700D", "CameraInfo650D"),
+            ("Canon EOS REBEL T5i", "CameraInfo650D"),
+            ("Canon EOS 750D", "CameraInfo750D"),
+            ("Canon EOS 760D", "CameraInfo750D"),
+            ("Canon EOS 8000D", "CameraInfo750D"),
+            ("Canon EOS 1000D", "CameraInfo1000D"),
+            ("Canon EOS Kiss F", "CameraInfo1000D"),
+            ("Canon EOS 1100D", "CameraInfo600D"),
+            ("Canon EOS Kiss X50", "CameraInfo600D"),
+            ("Canon EOS 1200D", "CameraInfo60D"),
+            ("Canon EOS Kiss X70", "CameraInfo60D"),
+            ("Canon EOS R5", "CameraInfoR6"),
+            ("Canon EOS R6", "CameraInfoR6"),
+            ("Canon EOS R6m2", "CameraInfoR6m2"),
+            ("Canon EOS R8", "CameraInfoR6m2"),
+            ("Canon EOS R50", "CameraInfoR6m2"),
+            ("Canon EOS R6 Mark III", "CameraInfoR6m3"),
+            ("Canon PowerShot G5 X Mark II", "CameraInfoG5XII"),
+        ];
+        for (model, expected) in samples {
+            let table = choose_table(model, TYPE_UNDEFINED, 0);
+            assert_eq!(&table.name, expected, "wrong table for {}", model);
+        }
+    }
+
+    /// Bodies that share a name prefix with a table but are not that body must
+    /// not borrow its offsets. `EOS 5D$` must not swallow the 5D Mark II, and
+    /// `\b1D$` must not swallow the 1D X or the 1200D.
+    #[test]
+    fn model_conditions_do_not_over_match() {
+        assert!(!ends_with_word("Canon EOS 5D Mark II", "EOS 5D"));
+        assert!(!ends_with_word("Canon EOS-1D X", "1D"));
+        assert!(!ends_with_word("Canon EOS 1200D", "1D"));
+        assert!(!ends_with_word("Canon EOS-1DS", "1D"));
+        assert!(ends_with_word("Canon EOS-1D", "1D"));
+        assert!(ends_with_word("Canon EOS-1DS", "1DS"));
+        // `\bKiss X5\b` must not match "Kiss X50" -- the 1100D would then be
+        // read with the 600D's offsets.
+        assert!(!contains_word("Canon EOS Kiss X50", "Kiss X5"));
+        assert!(contains_word("Canon EOS Kiss X50", "Kiss X50"));
+        // A body with no CameraInfo table of its own falls through to the
+        // format-keyed tables rather than to a neighbouring model's.
         assert_eq!(
-            CanonBatteryType::parse("unknown"),
-            CanonBatteryType::Unknown
+            choose_table("Canon PowerShot S100", TYPE_UNDEFINED, 500).name,
+            "CameraInfoUnknown"
+        );
+        assert_eq!(
+            choose_table("Canon PowerShot A560", TYPE_LONG, 148).name,
+            "CameraInfoPowerShot"
+        );
+        assert_eq!(
+            choose_table("Canon PowerShot G10", TYPE_LONG, 162).name,
+            "CameraInfoPowerShot2"
+        );
+        assert_eq!(
+            choose_table("Canon PowerShot A410", TYPE_LONG, 93).name,
+            "CameraInfoUnknown32"
+        );
+        assert_eq!(
+            choose_table("Canon IXUS 160", TYPE_SHORT, 80).name,
+            "CameraInfoUnknown16"
         );
     }
 
+    /// The firmware look-ahead is what makes every later offset in nine tables
+    /// correct, so probe recognition is worth pinning: a `1.0.4` six-byte
+    /// window is a version, `\0\0\0\0\0\0` is not.
     #[test]
-    fn test_battery_type_as_str() {
-        assert_eq!(CanonBatteryType::LpE6.as_str(), "LP-E6");
-        assert_eq!(CanonBatteryType::LpE6N.as_str(), "LP-E6N");
-        assert_eq!(CanonBatteryType::LpE6Nh.as_str(), "LP-E6NH");
-        assert_eq!(CanonBatteryType::LpE6P.as_str(), "LP-E6P");
-        assert_eq!(CanonBatteryType::Unknown.as_str(), "Unknown");
+    fn firmware_probe_recognises_version_strings() {
+        assert!(starts_like_version(b"1.0.4\0"));
+        assert!(starts_like_version(b"4.2.1\0"));
+        assert!(starts_like_version(b"10.1.1"));
+        assert!(!starts_like_version(b"\0\0\0\0\0\0"));
+        assert!(!starts_like_version(b"1.0\0\0\0"));
+        assert!(!starts_like_version(b"Canon "));
+    }
+
+    /// An unmatched firmware string makes ExifTool add 0x10000 to `varSize`,
+    /// which is not an offset correction -- it is a deliberate way to end the
+    /// walk. Reproducing it is what keeps a wrong-firmware body silent instead
+    /// of emitting garbage under real tag names.
+    #[test]
+    fn unmatched_firmware_stops_the_walk() {
+        let table = choose_table("Canon EOS-1D Mark IV", TYPE_UNDEFINED, 0);
+        // A record long enough to reach the hooked field but with no version
+        // string anywhere, so `CanonFirm` stays 0.
+        let record = vec![0u8; 0x400];
+        let mut ctx = Ctx {
+            model: "Canon EOS-1D Mark IV",
+            count: 0x400,
+            lens_type: None,
+            canon_firm: 0,
+        };
+        let mut out = HashMap::new();
+        walk(table, &record, ByteOrder::LittleEndian, &mut ctx, &mut out);
+        assert_eq!(ctx.canon_firm, 0);
+        // 0x56 FocusDistanceLower carries the hook; nothing past it may appear.
+        assert!(!out.contains_key("Canon:WhiteBalance"), "{:?}", out);
+        assert!(!out.contains_key("Canon:LensType"), "{:?}", out);
+        assert!(!out.contains_key("Canon:FirmwareVersion"), "{:?}", out);
     }
 
     #[test]
-    fn test_battery_type_from_code() {
-        assert_eq!(CanonBatteryType::from_code(0x01), CanonBatteryType::LpE6);
-        assert_eq!(CanonBatteryType::from_code(0x02), CanonBatteryType::LpE6N);
-        assert_eq!(CanonBatteryType::from_code(0x30), CanonBatteryType::LpE19);
-        assert_eq!(CanonBatteryType::from_code(0xFF), CanonBatteryType::Unknown);
-    }
-
-    #[test]
-    fn test_decode_camera_type() {
-        assert_eq!(decode_camera_type(248), "EOS High-End");
-        assert_eq!(decode_camera_type(250), "Compact");
-        assert_eq!(decode_camera_type(252), "EOS Mid-Range");
-        assert_eq!(decode_camera_type(254), "EOS Entry");
-        assert_eq!(decode_camera_type(255), "PowerShot");
-        assert_eq!(decode_camera_type(0), "Unknown");
-    }
-
-    #[test]
-    fn test_decode_white_balance() {
-        assert_eq!(decode_white_balance(0), "Auto");
-        assert_eq!(decode_white_balance(1), "Daylight");
-        assert_eq!(decode_white_balance(2), "Cloudy");
-        assert_eq!(decode_white_balance(3), "Tungsten");
-        assert_eq!(decode_white_balance(4), "Fluorescent");
-        assert_eq!(decode_white_balance(5), "Flash");
-        assert_eq!(decode_white_balance(6), "Custom");
-        assert_eq!(decode_white_balance(255), "Unknown");
-    }
-
-    #[test]
-    fn test_decode_focal_type() {
-        assert_eq!(decode_focal_type(0), "Unknown");
-        assert_eq!(decode_focal_type(1), "Fixed");
-        assert_eq!(decode_focal_type(2), "Zoom");
-        assert_eq!(decode_focal_type(3), "Unknown");
-    }
-
-    #[test]
-    fn test_decode_picture_style() {
-        assert_eq!(decode_picture_style(0x01), "Standard");
-        assert_eq!(decode_picture_style(0x02), "Portrait");
-        assert_eq!(decode_picture_style(0x03), "Landscape");
-        assert_eq!(decode_picture_style(0x04), "Neutral");
-        assert_eq!(decode_picture_style(0x06), "Monochrome");
-        assert_eq!(decode_picture_style(0x21), "User Def. 1");
-        assert_eq!(decode_picture_style(0xFF), "Unknown");
-    }
-
-    #[test]
-    fn test_decode_sharpness_frequency() {
-        assert_eq!(decode_sharpness_frequency(0), "n/a");
-        assert_eq!(decode_sharpness_frequency(1), "Lowest");
-        assert_eq!(decode_sharpness_frequency(3), "Standard");
-        assert_eq!(decode_sharpness_frequency(5), "Highest");
-        assert_eq!(decode_sharpness_frequency(10), "Unknown");
-    }
-
-    #[test]
-    fn test_extract_string() {
-        let data = b"Hello\0World";
-        assert_eq!(extract_string(data, 0, 10), Some("Hello".to_string()));
-        assert_eq!(extract_string(data, 6, 10), Some("World".to_string()));
-
-        // Non-printable bytes should return None
-        let bad_data = [0x01, 0x02, 0x03, 0x00];
-        assert_eq!(extract_string(&bad_data, 0, 4), None);
-
-        // Empty string at start
-        let empty_start = [0x00, b'H', b'i'];
-        assert_eq!(extract_string(&empty_start, 0, 3), None);
-    }
-
-    #[test]
-    fn test_parse_with_focal_length() {
-        // Create test data simulating 1D-style layout
-        let mut data = vec![0u8; 100];
-
-        // Set focal length at index 10 (offset 20 bytes)
-        // Value 50mm in little-endian
-        data[20] = 50;
-        data[21] = 0;
-
-        let metadata = parse_canon_camera_info(&data, false);
-
-        // Should have CameraInfoLength at minimum
-        assert!(metadata.contains_key("Canon:CameraInfoLength"));
-    }
-
-    #[test]
-    fn test_parse_with_lens_type() {
-        let mut data = vec![0u8; 100];
-        data[OFFSET_LENS_TYPE] = 42; // Some lens type value
-
-        let metadata = parse_canon_camera_info(&data, false);
-
-        if let Some(lens_raw) = metadata.get("Canon:LensTypeRaw") {
-            assert_eq!(lens_raw.as_integer(), Some(42));
+    fn value_conversions_match_exiftool() {
+        // %ciCameraTemperature: 155 -> "27 C"
+        assert_eq!(
+            print_conv(Pc::Celsius, value_conv(Vc::Minus128, Conv::Int(155))),
+            "27 C"
+        );
+        // %focusDistanceByteSwap: 385 -> "3.85 m", 65535 -> "inf"
+        assert_eq!(
+            print_conv(Pc::FocusDistance, value_conv(Vc::Div100, Conv::Int(385))),
+            "3.85 m"
+        );
+        assert_eq!(
+            print_conv(Pc::FocusDistance, value_conv(Vc::Div100, Conv::Int(65535))),
+            "inf"
+        );
+        // %ciFNumber: raw 72 -> f/16
+        assert_eq!(
+            print_conv(Pc::Sprintf2G, value_conv(Vc::CanonFNumber, Conv::Int(72))),
+            "16"
+        );
+        // %ciISO: raw 72 -> ISO 100
+        assert_eq!(
+            print_conv(Pc::Sprintf0F, value_conv(Vc::CanonIso, Conv::Int(72))),
+            "100"
+        );
+        // %ciExposureTime, through CanonEv's thirds-of-a-stop encoding.
+        for (raw, expected) in [(96, "1/32"), (112, "1/128"), (160, "1/8192")] {
+            assert_eq!(
+                print_conv(
+                    Pc::ExposureTime,
+                    value_conv(Vc::CanonExposureTime, Conv::Int(raw))
+                ),
+                expected,
+                "ExposureTime raw {}",
+                raw
+            );
         }
+        // PowerShot conversions, which use a different encoding again.
+        assert_eq!(
+            print_conv(Pc::Sprintf0F, value_conv(Vc::PowerShotIso, Conv::Int(411))),
+            "100"
+        );
+        assert_eq!(
+            print_conv(
+                Pc::Sprintf2G,
+                value_conv(Vc::PowerShotFNumber, Conv::Int(192))
+            ),
+            "2"
+        );
+        // ConvertUnixTime, UTC
+        assert_eq!(convert_unix_time(0), "1970:01:01 00:00:00");
+        assert_eq!(convert_unix_time(1_234_567_890), "2009:02:13 23:31:30");
     }
 
     #[test]
-    fn test_parse_big_endian() {
-        let mut data = vec![0u8; 100];
-        // Set a 16-bit value at offset 20 in big-endian: 0x0032 = 50
-        data[20] = 0x00;
-        data[21] = 0x32;
-
-        let metadata = parse_canon_camera_info(&data, true); // Big endian
-
-        // Should parse without errors
-        assert!(metadata.contains_key("Canon:CameraInfoLength"));
-    }
-
-    #[test]
-    fn test_detect_camera_family() {
-        // Test size-based detection
-        let small_data = vec![0u8; 140]; // PowerShot-sized
-        let result = detect_camera_family(&small_data, small_data.len());
-        assert_eq!(result, "PowerShot/Entry");
-
-        let medium_data = vec![0u8; 155]; // 1DmkII-sized
-        let result = detect_camera_family(&medium_data, medium_data.len());
-        assert_eq!(result, "1DmkII/40D/50D");
-
-        let large_data = vec![0u8; 170]; // 5D-sized
-        let result = detect_camera_family(&large_data, large_data.len());
-        assert_eq!(result, "5D/60D/450D");
-
-        let unknown_data = vec![0u8; 300]; // Unknown size
-        let result = detect_camera_family(&unknown_data, unknown_data.len());
-        assert_eq!(result, "Unknown");
-    }
-
-    #[test]
-    fn test_parse_color_temperature() {
-        let mut data = vec![0u8; 100];
-
-        // Set color temperature 5500K at offset 55 (1DmkII style)
-        // Little-endian: 5500 = 0x157C
-        data[55] = 0x7C;
-        data[56] = 0x15;
-
-        let metadata = parse_canon_camera_info(&data, false);
-
-        // Check if color temperature was extracted
-        // Note: Extraction depends on detection heuristics
-        if let Some(temp) = metadata.get("Canon:ColorTemperature") {
-            let temp_str = temp.as_string().unwrap();
-            assert!(temp_str.contains("K"));
-        }
-    }
-
-    #[test]
-    fn test_max_data_length_clamping() {
-        // Create data larger than MAX_CAMERA_INFO_LENGTH
-        let large_data = vec![0u8; 10000];
-
-        let metadata = parse_canon_camera_info(&large_data, false);
-
-        // Should still parse but clamp to max length
-        if let Some(len) = metadata.get("Canon:CameraInfoLength") {
-            let reported_len = len.as_integer().unwrap() as usize;
-            assert!(reported_len <= MAX_CAMERA_INFO_LENGTH);
-        }
-    }
-
-    #[test]
-    fn test_camera_info_with_all_fields() {
-        // Comprehensive test with data mimicking a real CameraInfo block
-        let mut data = vec![0u8; 170];
-
-        // Set temperature at offset 25: 155 = 27 degrees
-        data[25] = 155;
-
-        // Set exposure time at offset 4
-        data[OFFSET_EXPOSURE_TIME] = 10;
-
-        // Set lens type at offset 13
-        data[OFFSET_LENS_TYPE] = 50;
-
-        // Set camera type at offset 7: 252 = EOS Mid-Range
-        data[7] = 252;
-
-        // Set white balance at offset 36: 1 = Daylight
-        data[36] = 1;
-
-        // Set sharpness at offset 6
-        data[6] = 3;
-
-        let metadata = parse_canon_camera_info(&data, false);
-
-        // Verify multiple fields were extracted
-        assert!(metadata.len() >= 3, "Expected at least 3 fields");
-        assert!(metadata.contains_key("Canon:CameraInfoLength"));
+    fn sprintf_g_matches_c() {
+        assert_eq!(sprintf_g(2.8284, 2), "2.8");
+        assert_eq!(sprintf_g(5.6568, 2), "5.7");
+        assert_eq!(sprintf_g(11.3137, 2), "11");
+        assert_eq!(sprintf_g(1.4142, 2), "1.4");
+        assert_eq!(sprintf_g(0.0, 2), "0");
     }
 }
