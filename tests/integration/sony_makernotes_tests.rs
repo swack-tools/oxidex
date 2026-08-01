@@ -6,6 +6,7 @@
 //! implementation would look exactly like one that matches the camera.
 
 use oxidex::parsers::tiff::ifd_parser::ByteOrder;
+use oxidex::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
 use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
 use oxidex::parsers::tiff::makernotes::sony::{SonyParser, parse_sony_makernote};
 use oxidex::parsers::tiff::makernotes::sony_lens_database::lookup_lens_name;
@@ -157,15 +158,16 @@ fn test_sony_out_of_line_values_need_the_tiff_base() {
 
     assert!(!parse(&data).contains_key("Sony:CreativeStyle"));
 
+    // The MakerNote sits 1000 bytes into its enclosing TIFF block, which is
+    // what its entries' offsets are measured from.
+    let mut tiff = vec![0u8; 1000];
+    let payload_len = data.len();
+    tiff.extend_from_slice(&data);
+    let ctx = MakerNoteContext::in_tiff(&tiff, 1000, payload_len, 0);
+
     let mut tags = HashMap::new();
     SonyParser
-        .parse_with_context(
-            &data,
-            ByteOrder::LittleEndian,
-            Some("SLT-A77"),
-            Some(1000),
-            &mut tags,
-        )
+        .parse_with_context(&ctx, ByteOrder::LittleEndian, Some("SLT-A77"), &mut tags)
         .unwrap();
     assert_eq!(
         tags.get("Sony:CreativeStyle"),

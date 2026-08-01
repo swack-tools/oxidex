@@ -86,8 +86,15 @@ pub fn parse_embedded_exif(tiff_data: &[u8], metadata: &mut MetadataMap) -> bool
         // The block is self-contained: its offsets are relative to its own
         // start and its absolute file position is unknown here, so the TIFF
         // base added to stored offsets (e.g. OtherImageStart) is 0, as for a
-        // standalone TIFF.
-        parse_exif_subifd(&reader, offset, byte_order, 0, metadata);
+        // standalone TIFF, and `tiff_data` itself is the enclosing block.
+        parse_exif_subifd(
+            &reader,
+            offset,
+            byte_order,
+            0,
+            tiff_data.len() as u64,
+            metadata,
+        );
     }
     if let Some(offset) = gps_ifd_offset {
         parse_gps_subifd(&reader, offset, byte_order, metadata);

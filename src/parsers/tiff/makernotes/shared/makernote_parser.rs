@@ -1,4 +1,5 @@
 use crate::parsers::tiff::ifd_parser::ByteOrder;
+use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
 use std::collections::HashMap;
 
 /// Common trait for all MakerNotes parsers
@@ -52,33 +53,42 @@ pub trait MakerNoteParser {
         self.parse(data, byte_order, tags)
     }
 
-    /// Parse MakerNote data with everything the caller knows about where the
-    /// bytes came from.
+    /// Parse a MakerNote whose position inside its enclosing TIFF block is
+    /// known.
     ///
-    /// `data_base` is the TIFF-relative offset at which `data[0]` sits. A
-    /// MakerNote is usually an IFD whose entries store *TIFF-relative* offsets
-    /// even though the parser only receives the MakerNote blob, so any value
-    /// longer than 4 bytes - every string, every array, every binary
-    /// sub-directory - can only be located as `value_offset - data_base`.
-    /// Parsers that read nothing but inline values ignore it, which is what
-    /// this default does.
+    /// A MakerNote's value offsets are measured from the enclosing TIFF header,
+    /// not from the MakerNote payload, and they routinely address bytes past
+    /// the payload's declared end -- `NEFBitDepth`'s eight bytes begin four
+    /// short of the end of `NikonCoolpixS8200.jpg`'s 2219-byte MakerNote, and a
+    /// Sigma value offset addresses the TIFF header outright. A decoder handed
+    /// only the payload cannot reach any of it, however correct the decoder is.
     ///
-    /// # Arguments
-    /// * `data` - Raw MakerNote data bytes
-    /// * `byte_order` - Byte order for multi-byte values
-    /// * `model` - Camera model string (EXIF `Model`), if it was available
-    /// * `data_base` - TIFF-relative offset of `data[0]`, if the caller knew it
-    /// * `tags` - HashMap to insert extracted tags into
+    /// [`MakerNoteContext`] carries the enclosing block, the payload's position
+    /// inside it, and the block's own file offset, so an implementor can decide
+    /// what it needs:
+    ///
+    /// * [`MakerNoteContext::payload`] -- the declared block, which is what
+    ///   this default passes on, so overriding nothing changes nothing;
+    /// * [`MakerNoteContext::window`] -- the same start extended to the end of
+    ///   the enclosing block, which resolves out-of-block values without
+    ///   touching a decoder's offset arithmetic; and
+    /// * [`MakerNoteContext::tiff`] with
+    ///   [`payload_offset`](MakerNoteContext::payload_offset) -- for offsets
+    ///   measured from the TIFF header rather than from the payload.
+    ///
+    /// Reads stay bounded either way: the context can only ever produce slices
+    /// inside the enclosing TIFF block, and
+    /// [`value_overlaps_directory`](crate::parsers::tiff::makernotes::makernote_context::value_overlaps_directory)
+    /// is ExifTool's test for the offsets that must be refused rather than
+    /// followed.
     fn parse_with_context(
         &self,
-        data: &[u8],
+        ctx: &MakerNoteContext<'_>,
         byte_order: ByteOrder,
         model: Option<&str>,
-        data_base: Option<u32>,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
-        let _ = data_base;
-        self.parse_with_model(data, byte_order, model, tags)
+        self.parse_with_model(ctx.payload(), byte_order, model, tags)
     }
 
     /// Optional: Validate that this data belongs to this manufacturer

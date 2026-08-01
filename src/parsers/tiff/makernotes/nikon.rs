@@ -540,6 +540,31 @@ impl MakerNoteParser for NikonParser {
         self.parse_with_model(data, byte_order, None, tags)
     }
 
+    /// Nikon resolves its entries against the *window*, not the declared block.
+    ///
+    /// Every offset in a Nikon MakerNote is measured from the embedded TIFF
+    /// header at payload+10, and the last of them routinely lands past the
+    /// declared end of the MakerNote value -- `NikonCoolpixS8200.jpg` declares
+    /// 2219 bytes and puts the final four bytes of `NEFBitDepth` outside them;
+    /// `NikonCOOLSCAN_VED.jpg`'s Scan IFD sits past the end of an 88-byte
+    /// value. ExifTool resolves those against the whole EXIF block and reports
+    /// the tags; a decoder handed the declared block alone cannot.
+    ///
+    /// `window()` starts at the same byte as `payload()`, so `tiff_start` and
+    /// every offset below mean exactly what they did -- only the reach changes,
+    /// and only as far as the enclosing TIFF block. The out-of-line offsets
+    /// that must still be refused are the ones ExifTool calls suspicious, which
+    /// `parse_with_model`'s `first_value_at` test rejects on both paths.
+    fn parse_with_context(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        self.parse_with_model(ctx.window(), byte_order, model, tags)
+    }
+
     fn parse_with_model(
         &self,
         data: &[u8],
