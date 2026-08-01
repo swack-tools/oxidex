@@ -54,7 +54,7 @@ use std::collections::HashMap;
 
 use super::shared::MakerNoteParser;
 use super::sony_lens_database::lookup_lens_name;
-use main_table::main_tag;
+use main_table::{MainCtx, main_tag};
 use value::SonyValue;
 
 // ============================================================================
@@ -86,6 +86,10 @@ const TAG_MINOLTA_MAKERNOTE: u16 = 0xb028;
 const TAG_PANORAMA: u16 = 0x1003;
 /// `ShotInfo`, which every DSC and camcorder writes and no DSLR does.
 const TAG_SHOT_INFO: u16 = 0x3000;
+/// `AFAreaModeSetting`. Beyond its own value it sets `$$self{AFAreaILCE}` or
+/// `$$self{AFAreaILCA}` (Sony.pm:1279, 1297), which four of `AFPointSelected`'s
+/// five arms are gated on.
+const TAG_AF_AREA_MODE_SETTING: u16 = 0x201c;
 
 /// The three `CameraSettings` layouts the A-mount bodies write into 0x0114,
 /// chosen by the entry's byte count exactly as ExifTool's Conditions do, with
@@ -356,6 +360,14 @@ fn parse_sony_makernote_impl(
     // has exactly the same dependence.
     let mut cipher_ctx = binary_data::Ctx::new(model, None);
     let mut panorama = false;
+    // `$$self{AFAreaILCE}` / `$$self{AFAreaILCA}`: the raw AFAreaModeSetting
+    // (0x201c) that AFPointSelected (0x201e) conditions on. Recorded as the walk
+    // passes it, so an IFD that writes 0x201e first sees `None` -- which is what
+    // ExifTool's `defined $$self{AFAreaILCA}` guard tests.
+    let mut main_ctx = MainCtx {
+        model,
+        af_area_mode_setting: None,
+    };
 
     for entry in &entries {
         let Some(value) = ifd.value(entry) else {
@@ -477,7 +489,10 @@ fn parse_sony_makernote_impl(
                 let Some(tag) = main_tag(entry.tag_id) else {
                     continue;
                 };
-                if let Some(printed) = tag.render(&value, model) {
+                if entry.tag_id == TAG_AF_AREA_MODE_SETTING {
+                    main_ctx.af_area_mode_setting = value.first_int();
+                }
+                if let Some(printed) = tag.render(&value, &main_ctx) {
                     found.push(Found::new(
                         format!("Sony:{}", tag.name),
                         printed,
