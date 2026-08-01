@@ -1493,13 +1493,13 @@ fn extract_rw2_embedded_exif_tags(
 
         if let Some(offset) = thumbnail_offset {
             metadata.insert(
-                lookup_tag_name(0x0201, "EXIF"),
+                "EXIF:ThumbnailOffset".to_string(),
                 TagValue::new_integer(i64::from(offset) + tiff_base_in_file as i64),
             );
         }
         if let Some(length) = thumbnail_length {
             metadata.insert(
-                lookup_tag_name(0x0202, "EXIF"),
+                "EXIF:ThumbnailLength".to_string(),
                 TagValue::new_integer(i64::from(length)),
             );
         }
@@ -3340,7 +3340,7 @@ mod panasonic_rw2_tests {
 
     #[test]
     fn extracts_standard_exif_tags_from_rw2_preview() {
-        let mut tiff = vec![0u8; 108];
+        let mut tiff = vec![0u8; 142];
         tiff[0..8].copy_from_slice(b"II\x2a\x00\x08\x00\x00\x00");
 
         // Embedded IFD0 points to an EXIF IFD at TIFF-relative offset 26.
@@ -3349,6 +3349,7 @@ mod panasonic_rw2_tests {
         tiff[12..14].copy_from_slice(&4u16.to_le_bytes());
         tiff[14..18].copy_from_slice(&1u32.to_le_bytes());
         tiff[18..22].copy_from_slice(&26u32.to_le_bytes());
+        tiff[22..26].copy_from_slice(&108u32.to_le_bytes());
 
         tiff[26..28].copy_from_slice(&5u16.to_le_bytes());
         let entries = [
@@ -3369,6 +3370,18 @@ mod panasonic_rw2_tests {
         tiff[96..100].copy_from_slice(&1u32.to_le_bytes());
         tiff[100..108].copy_from_slice(&[2, 0, 2, 0, 2, 1, 1, 0]);
 
+        // IFD1 carries a four-byte thumbnail at TIFF-relative offset 138.
+        tiff[108..110].copy_from_slice(&2u16.to_le_bytes());
+        tiff[110..112].copy_from_slice(&0x0201u16.to_le_bytes());
+        tiff[112..114].copy_from_slice(&4u16.to_le_bytes());
+        tiff[114..118].copy_from_slice(&1u32.to_le_bytes());
+        tiff[118..122].copy_from_slice(&138u32.to_le_bytes());
+        tiff[122..124].copy_from_slice(&0x0202u16.to_le_bytes());
+        tiff[124..126].copy_from_slice(&4u16.to_le_bytes());
+        tiff[126..130].copy_from_slice(&1u32.to_le_bytes());
+        tiff[130..134].copy_from_slice(&4u32.to_le_bytes());
+        tiff[138..142].copy_from_slice(&[0xff, 0xd8, 0xff, 0xd9]);
+
         let app1_length =
             u16::try_from(2 + 6 + tiff.len()).expect("synthetic APP1 segment length fits in u16");
         let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
@@ -3378,7 +3391,7 @@ mod panasonic_rw2_tests {
         jpeg.extend_from_slice(&[0xff, 0xd9]);
 
         let mut metadata = MetadataMap::new();
-        extract_rw2_embedded_exif_tags(&jpeg, 0, &mut metadata)
+        extract_rw2_embedded_exif_tags(&jpeg, 1000, &mut metadata)
             .expect("synthetic preview EXIF should parse");
 
         assert_eq!(
@@ -3401,6 +3414,20 @@ mod panasonic_rw2_tests {
             metadata.get("ExifIFD:Contrast"),
             Some(&TagValue::new_string("Normal".to_string()))
         );
+        assert_eq!(
+            metadata.get("EXIF:ThumbnailOffset"),
+            Some(&TagValue::new_integer(1150))
+        );
+        assert_eq!(
+            metadata.get("EXIF:ThumbnailLength"),
+            Some(&TagValue::new_integer(4))
+        );
+        assert_eq!(
+            metadata.get("EXIF:ThumbnailImage"),
+            Some(&TagValue::new_binary(vec![0xff, 0xd8, 0xff, 0xd9]))
+        );
+        assert!(!metadata.contains_key("EXIF:0x0201"));
+        assert!(!metadata.contains_key("EXIF:0x0202"));
     }
 }
 
