@@ -32,7 +32,8 @@ fn test_zip_forensic_metadata_extraction() {
     let mut buffer = std::io::Cursor::new(Vec::new());
     {
         let mut zip = ZipWriter::new(&mut buffer);
-        zip.set_comment("Evidence archive created 2024-03-15");
+        zip.set_comment("Evidence archive created 2024-03-15")
+            .unwrap();
 
         // Document file
         let options = SimpleFileOptions::default()

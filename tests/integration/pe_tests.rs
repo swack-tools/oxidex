@@ -343,7 +343,7 @@ fn test_pe_with_exports() {
     }
 
     // Section Table (1 section: .edata)
-    let section_offset = data.len();
+    let _section_offset = data.len();
     data.extend_from_slice(b".edata\0\0"); // Name (8 bytes)
     data.extend_from_slice(&0x1000u32.to_le_bytes()); // Virtual size
     data.extend_from_slice(&0x3000u32.to_le_bytes()); // Virtual address
@@ -359,7 +359,7 @@ fn test_pe_with_exports() {
     data.resize(0x400, 0x00);
 
     // Export Directory (at file offset 0x400, RVA 0x3000)
-    let export_dir_offset = data.len();
+    let _export_dir_offset = data.len();
     data.extend_from_slice(&0u32.to_le_bytes()); // Characteristics
     data.extend_from_slice(&1609459200u32.to_le_bytes()); // Timestamp
     data.extend_from_slice(&0u16.to_le_bytes()); // Major version

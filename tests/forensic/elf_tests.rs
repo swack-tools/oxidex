@@ -30,10 +30,15 @@ const EI_MAG1: usize = 1; // Magic number byte 1 ('E')
 const EI_MAG2: usize = 2; // Magic number byte 2 ('L')
 #[allow(dead_code)]
 const EI_MAG3: usize = 3; // Magic number byte 3 ('F')
+#[allow(dead_code)]
 const EI_CLASS: usize = 4; // File class (32-bit or 64-bit)
+#[allow(dead_code)]
 const EI_DATA: usize = 5; // Data encoding (little-endian or big-endian)
+#[allow(dead_code)]
 const EI_VERSION: usize = 6; // ELF version
+#[allow(dead_code)]
 const EI_OSABI: usize = 7; // OS/ABI identification
+#[allow(dead_code)]
 const EI_ABIVERSION: usize = 8; // ABI version
 
 /// ELF class values
