@@ -13,7 +13,10 @@ pub mod nikoncapture;
 
 // Batch 1: Traditional Camera Manufacturers
 pub mod fujifilm; // Fujifilm migration (Batch 1, Task 1.4)
-pub mod leica;
+// (no `leica` registry: it duplicated the Leica MakerNote parser's own tag
+// dispatch under fabricated, non-ExifTool tag ids, was never called from
+// anywhere but its own tests, and has been deleted -- see `makernotes::leica`
+// for the real per-table id mapping.)
 pub mod olympus; // Olympus migration (Batch 1, Task 1.1)
 pub mod panasonic; // Panasonic migration (Batch 1, Task 1.2)
 pub mod pentax; // Pentax migration (Batch 1, Task 1.3) // Leica migration (Batch 1, Task 1.5)
@@ -66,7 +69,6 @@ pub use canon::canon_registry;
 
 // Batch 1 exports
 pub use fujifilm::fujifilm_registry;
-pub use leica::leica_registry;
 pub use olympus::olympus_registry;
 pub use panasonic::panasonic_registry;
 pub use pentax::pentax_registry;

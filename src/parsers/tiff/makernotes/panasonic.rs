@@ -48,6 +48,25 @@ use super::registries::panasonic::panasonic_registry;
 // Panasonic uses "Panasonic\0\0\0" header (12 bytes)
 const PANASONIC_HEADER: &[u8] = b"Panasonic\0\0\0";
 
+/// The unnumbered `MakerNoteLeica` header (MakerNotes.pm:599-604): cameras
+/// whose `Make` is the bare string `"LEICA"` (not the `"Leica Camera AG"`
+/// prefix the `Leica2`..`Leica10` layouts key on) write "LEICA\0\0\0" and
+/// point ExifTool at `Panasonic::Main` -- the same table and tag group as a
+/// real Panasonic body -- with the IFD starting 8 bytes in, not 12.
+const LEICA_UNNUMBERED_HEADER: &[u8] = b"LEICA\0\0\0";
+
+/// Returns the byte offset of this payload's IFD, or `None` if neither the
+/// Panasonic nor the unnumbered-Leica header matches.
+fn panasonic_ifd_offset(data: &[u8]) -> Option<usize> {
+    if data.len() >= 12 && &data[0..12] == PANASONIC_HEADER {
+        Some(12)
+    } else if data.len() >= 8 && &data[0..8] == LEICA_UNNUMBERED_HEADER {
+        Some(8)
+    } else {
+        None
+    }
+}
+
 // ============================================================================
 // Declarative Decoder Definitions
 // ============================================================================
@@ -413,8 +432,10 @@ impl MakerNoteParser for PanasonicParser {
     }
 
     fn validate_header(&self, data: &[u8]) -> bool {
-        // Panasonic header: "Panasonic\0\0\0" (12 bytes)
-        data.len() >= 12 && &data[0..12] == PANASONIC_HEADER
+        // Panasonic header: "Panasonic\0\0\0" (12 bytes), or the unnumbered
+        // "LEICA\0\0\0" (8 bytes) a bare-Make "LEICA" body writes for the
+        // same Panasonic::Main table.
+        panasonic_ifd_offset(data).is_some()
     }
 
     fn parse(
@@ -477,12 +498,9 @@ impl PanasonicParser {
         }
 
         // Validate Panasonic header
-        if !self.validate_header(data) {
+        let Some(ifd_offset) = panasonic_ifd_offset(data) else {
             return Err("Invalid Panasonic MakerNote header".to_string());
-        }
-
-        // Skip 12-byte header to IFD
-        let ifd_offset = 12;
+        };
 
         if data.len() <= ifd_offset + 2 {
             return Ok(());

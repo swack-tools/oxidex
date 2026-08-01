@@ -154,7 +154,13 @@ pub fn dispatch_makernote_with_context(
         "sony" => Some(Box::new(sony::SonyParser)),
         "panasonic" => Some(Box::new(panasonic::PanasonicParser)),
         "fujifilm" | "fuji photo film co., ltd." => Some(Box::new(fujifilm::FujifilmParser)),
-        "leica" | "leica camera ag" => Some(Box::new(leica::LeicaMakerNoteParser)),
+        // The unnumbered `MakerNoteLeica` (bare `Make eq "LEICA"`, header
+        // "LEICA\0\0\0", MakerNotes.pm:599-604) shares Panasonic's own
+        // `Main` tag table and "Panasonic:" group -- it is not one of the
+        // `Leica2`..`Leica10` layouts, which key on the "Leica Camera AG"
+        // prefix instead (MakerNotes.pm:611 onward).
+        "leica" => Some(Box::new(panasonic::PanasonicParser)),
+        "leica camera ag" => Some(Box::new(leica::LeicaMakerNoteParser)),
         // Sigma is absent on purpose. Its MakerNote entries store value offsets
         // relative to the enclosing TIFF header, so nothing handed only the
         // payload can read their values; `core::tiff_helpers::parse_exif_subifd`
