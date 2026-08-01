@@ -36,7 +36,9 @@ pub mod casio; // Casio migration (Batch 5, Sub-Batch 5.1)
 pub mod kodak;
 pub mod minolta; // Minolta migration (Batch 5, Sub-Batch 5.1)
 pub mod ricoh; // Ricoh migration (Batch 5, Sub-Batch 5.1)
-pub mod sigma; // Sigma migration (Batch 5, Sub-Batch 5.1) // Kodak migration (Batch 5, Sub-Batch 5.1)
+// (no `sigma` registry: Sigma has one table, in `makernotes::sigma`, because a
+// Sigma MakerNote's value offsets address the enclosing TIFF and so cannot be
+// resolved from an id->name registry over the payload alone)
 
 // Sub-Batch 5.2: Medium Format and Specialty Manufacturers
 pub mod leaf; // Leaf migration (Batch 5, Sub-Batch 5.2)
@@ -89,7 +91,6 @@ pub use casio::casio_registry;
 pub use kodak::kodak_registry;
 pub use minolta::minolta_registry;
 pub use ricoh::ricoh_registry;
-pub use sigma::sigma_registry;
 
 // Batch 5 Sub-Batch 5.2 exports
 pub use leaf::leaf_registry;

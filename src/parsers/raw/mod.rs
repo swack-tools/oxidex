@@ -11,7 +11,6 @@ pub mod metadata;
 pub mod minolta_makernote;
 pub mod raf_parser;
 pub mod sigma_lens_types;
-pub mod sigma_makernote;
 
 // Re-export the public API
 pub use format_detection::{RawFormat, detect_raw_format};

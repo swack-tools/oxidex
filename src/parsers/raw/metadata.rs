@@ -4175,11 +4175,10 @@ fn parse_sigma_x3f(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 /// whitelists let 16 through, so 27 correctly-parsed tags were being discarded
 /// on the way out.
 ///
-/// The MakerNote (0x927C) is NOT routed through the shared MakerNote
-/// dispatcher: oxidex's `parsers::tiff::makernotes::sigma` registry disagrees
-/// with `Sigma.pm` on most tag IDs from 0x0018 up, so dispatching it here
-/// would trade missing tags for wrong ones. `raw::sigma_makernote`
-/// transcribes `Sigma.pm` directly instead.
+/// The MakerNote (0x927C) does not go through the payload-only MakerNote
+/// dispatcher, because a Sigma entry's value offset addresses the enclosing
+/// TIFF rather than the payload. It goes to `tiff::makernotes::sigma`, the one
+/// Sigma tag table, which a Sigma JPEG reaches by the same route.
 fn parse_x3f_embedded_jpeg_exif(
     jpeg_data: &[u8],
     jpeg_file_offset: usize,
@@ -4226,7 +4225,7 @@ fn parse_x3f_embedded_jpeg_exif(
         if let Some(makernote_offset) =
             ifd_entry_value_offset(tiff_data, offset, byte_order, 0x927C)
         {
-            crate::parsers::raw::sigma_makernote::parse_sigma_makernote(
+            crate::parsers::tiff::makernotes::sigma::parse_sigma_makernote(
                 tiff_data,
                 makernote_offset as usize,
                 (jpeg_file_offset + tiff_start_in_jpeg) as u64,
