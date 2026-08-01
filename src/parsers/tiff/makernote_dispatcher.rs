@@ -52,6 +52,37 @@ pub fn dispatch_makernote_with_model(
     byte_order: ByteOrder,
     tags: &mut HashMap<String, String>,
 ) -> Result<(), String> {
+    dispatch_makernote_with_context(make, model, data, byte_order, None, tags)
+}
+
+/// Dispatches MakerNote data to the appropriate manufacturer parser, passing
+/// along both the camera model and the TIFF-relative offset the bytes were
+/// read from.
+///
+/// A MakerNote is normally an IFD embedded in the ExifIFD, and its entries
+/// store offsets relative to the *TIFF header*, not to the MakerNote. A parser
+/// handed only the blob therefore cannot resolve any value longer than 4
+/// bytes. `data_base` - the TIFF-relative offset of `data[0]` - closes that
+/// gap: a value at TIFF offset `v` lives at `data[v - data_base..]`.
+///
+/// # Arguments
+/// * `make` - Camera manufacturer name (e.g., "Canon", "Nikon", "Sony")
+/// * `model` - Camera model name (EXIF `Model`), if known
+/// * `data` - Raw MakerNote data bytes
+/// * `byte_order` - Byte order for parsing
+/// * `data_base` - TIFF-relative offset of `data[0]`, if known
+/// * `tags` - HashMap to insert extracted tags into
+///
+/// # Returns
+/// Ok(()) on success, Err(message) on parse failure
+pub fn dispatch_makernote_with_context(
+    make: &str,
+    model: Option<&str>,
+    data: &[u8],
+    byte_order: ByteOrder,
+    data_base: Option<u32>,
+    tags: &mut HashMap<String, String>,
+) -> Result<(), String> {
     use crate::parsers::tiff::makernotes::shared::MakerNoteParser;
 
     // Normalize make string (trim whitespace, case-insensitive matching)
@@ -127,7 +158,7 @@ pub fn dispatch_makernote_with_model(
         // Validate header if parser provides validation
         if parser.validate_header(data) {
             // Parse MakerNote data
-            parser.parse_with_model(data, byte_order, model, tags)?;
+            parser.parse_with_context(data, byte_order, model, data_base, tags)?;
         }
     }
 

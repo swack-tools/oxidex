@@ -3060,6 +3060,11 @@
 #define IMAGE_DEBUG_TYPE_REPRO 16
 
 /*
+ Number of entries transcribed from `%sigmaLensTypes`.
+ */
+#define SIGMA_LENS_TYPE_COUNT 203
+
+/*
  GeoTiff tag ID for the GeoKeyDirectoryTag (34735)
  */
 #define GEOTIFF_DIRECTORY_TAG 34735
@@ -3078,116 +3083,6 @@
  TIFF tag ID for ModelTransformation (34264) - stores 4x4 transformation matrix
  */
 #define MODEL_TRANSFORMATION_TAG 34264
-
-/*
- Version string offset (4 bytes ASCII)
- */
-#define VERSION 0
-
-/*
- Exit pupil position offset
- */
-#define EXIT_PUPIL_POSITION 4
-
-/*
- AF aperture offset
- */
-#define AF_APERTURE 5
-
-/*
- Focus position offset
- */
-#define FOCUS_POSITION 8
-
-/*
- Focal length offset (encoded)
- */
-#define FOCAL_LENGTH 10
-
-/*
- Lens ID number offset
- */
-#define LENS_ID_NUMBER 11
-
-/*
- Lens F-stops offset (encoded as value / 12)
- */
-#define LENS_FSTOPS 12
-
-/*
- Minimum focal length offset (encoded)
- */
-#define MIN_FOCAL_LENGTH 13
-
-/*
- Maximum focal length offset (encoded)
- */
-#define MAX_FOCAL_LENGTH 14
-
-/*
- Maximum aperture at minimum focal length offset (encoded APEX value)
- */
-#define MAX_APERTURE_AT_MIN_FOCAL 15
-
-/*
- Maximum aperture at maximum focal length offset (encoded APEX value)
- */
-#define MAX_APERTURE_AT_MAX_FOCAL 16
-
-/*
- MCU (Micro Controller Unit) version offset
- */
-#define MCU_VERSION 17
-
-/*
- Minimum structure size for this version
- */
-#define MIN_SIZE 18
-
-/*
- Effective maximum aperture offset
- */
-#define EFFECTIVE_MAX_APERTURE 19
-
-/*
- Bit 0: MF (Manual Focus) lens - no AF motor
- */
-#define MF 1
-
-/*
- Bit 1: D lens - has distance encoder for 3D matrix metering
- */
-#define D 2
-
-/*
- Bit 2: G lens - no aperture ring (electronically controlled)
- */
-#define G 4
-
-/*
- Bit 3: VR (Vibration Reduction) lens - has optical stabilization
- */
-#define VR 8
-
-/*
- Bit 4: 1 (Nikon 1 mount lens)
- */
-#define NIKON_1 16
-
-/*
- Bit 5: FT-1 adapter (Nikon F to Nikon 1)
- */
-#define FT1 32
-
-/*
- Bit 6: E lens (electronic aperture, newer than G)
- */
-#define E 64
-
-/*
- Bit 7: AF-S lens (Silent Wave Motor for autofocus)
- */
-#define AF_S 128
 
 /*
  Rich Capture mode tag (Off/On/Auto)

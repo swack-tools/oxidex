@@ -43,6 +43,8 @@ pub mod leaf_lens_database;
 pub mod lens_data;
 pub mod minolta;
 pub mod minolta_lens_database;
+/// Minolta binary-data tables shared with the Sony DSLR-A100
+pub mod minolta_tables;
 pub mod motorola;
 pub mod ricoh;
 pub mod sanyo;

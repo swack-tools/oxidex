@@ -9,7 +9,6 @@ pub mod apple;
 pub mod canon;
 pub mod captureone; // Capture One migration complete (Batch 4, Task 4.2)
 pub mod nikoncapture;
-pub mod sony; // Sony migration complete (Task 6) // Nikon Capture migration complete (Batch 4, Task 4.3)
 // pub mod google;
 
 // Batch 1: Traditional Camera Manufacturers
@@ -34,7 +33,6 @@ pub mod lytro; // Lytro migration (Batch 3, Task 3.4)
 // Sub-Batch 5.1: Traditional Camera Manufacturers
 pub mod casio; // Casio migration (Batch 5, Sub-Batch 5.1)
 pub mod kodak;
-pub mod minolta; // Minolta migration (Batch 5, Sub-Batch 5.1)
 pub mod ricoh; // Ricoh migration (Batch 5, Sub-Batch 5.1)
 // (no `sigma` registry: Sigma has one table, in `makernotes::sigma`, because a
 // Sigma MakerNote's value offsets address the enclosing TIFF and so cannot be
@@ -65,7 +63,6 @@ pub mod scalado;
 
 pub use apple::apple_registry;
 pub use canon::canon_registry;
-pub use sony::sony_registry; // Sony migration complete (Task 6)
 // pub use google::google_registry;
 
 // Batch 1 exports
@@ -89,7 +86,6 @@ pub use lytro::lytro_registry;
 // Batch 5 Sub-Batch 5.1 exports
 pub use casio::casio_registry;
 pub use kodak::kodak_registry;
-pub use minolta::minolta_registry;
 pub use ricoh::ricoh_registry;
 
 // Batch 5 Sub-Batch 5.2 exports
