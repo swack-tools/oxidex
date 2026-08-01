@@ -90,6 +90,13 @@ impl<'a> SonyValue<'a> {
         })
     }
 
+    /// Reads an int16u straight out of the stored bytes, ignoring the entry's
+    /// declared type -- ExifTool's `Get16u($valPt, n)`, which some `Main`
+    /// Conditions use on a value whose type says otherwise.
+    pub fn u16_at_raw(&self, offset: usize) -> Option<u16> {
+        self.reader().u16_at(offset)
+    }
+
     /// Reads the first component as an integer.
     pub fn first_int(&self) -> Option<i64> {
         self.int_at(0)

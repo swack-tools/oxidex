@@ -63,7 +63,7 @@ pub enum Fmt {
 }
 
 impl Fmt {
-    const fn size(self) -> usize {
+    pub(super) const fn size(self) -> usize {
         match self {
             Fmt::U8 | Fmt::I8 | Fmt::Undef | Fmt::Default | Fmt::Str => 1,
             Fmt::U16 | Fmt::I16 | Fmt::U16Rev => 2,
@@ -87,6 +87,7 @@ pub enum Dm {
     LensMount,
     Locations,
     MetaVersion,
+    TagB042,
     TagVersion,
     TempTest1,
     TempTest2,
@@ -104,7 +105,7 @@ pub enum NumCmp {
 }
 
 impl NumCmp {
-    fn holds(self, a: f64, b: f64) -> bool {
+    pub(super) fn holds(self, a: f64, b: f64) -> bool {
         match self {
             NumCmp::Eq => a == b,
             NumCmp::Ne => a != b,
@@ -156,6 +157,8 @@ pub enum Raw {
     /// `$$self{X} < n ? undef : $val` -- the Nth face is only present when the
     /// body says it detected at least N.
     DropIfDmLess(Dm, f64),
+    /// `$val == n ? undef : $val` -- ExifTool's "not recorded" sentinel.
+    DropIfEq(f64),
 }
 
 /// `ValueConv`.
@@ -203,6 +206,9 @@ pub enum Vc {
     IsoExp,
     /// `($val and $val < 254) ? exp(($val/8-6)*log(2))*100 : $val`
     IsoExpBelow254,
+    /// `s/(\d{2})(\d{2})(\d{2})(\d{2})/$4$3$2$1/` then `s/^0//` -- Sony
+    /// stores its `SerialNumber` digit-pairs back to front.
+    SerialNumberSwap,
     /// A `ValueConv` written as a lookup hash (Sony's ISO ladders).
     Map(&'static [(&'static str, &'static str)]),
 }
@@ -287,6 +293,10 @@ pub enum Pc {
     InfAboveOrMeters(f64),
     /// `Sony::PrintLensSpec`-style feature decoding of `LensSpecFeatures`.
     LensSpecFeatures,
+    /// `my @v=split(" ",$val); $_/=1000 foreach @v; sprintf("%.2f %.2f",...)`
+    WbShiftPrecise,
+    /// `$a[2] ? sprintf('%3dx%3d', $a[0], $a[1]) : 'n/a'`
+    FocusFrameSize,
 }
 
 /// A `Hook`, which shifts every *later* tag in the table.
@@ -349,7 +359,7 @@ impl Scalar {
     }
 
     /// Perl truth: `0`, `"0"` and `""` are false, everything else is true.
-    fn truthy(&self) -> bool {
+    pub(super) fn truthy(&self) -> bool {
         match self {
             Scalar::Num(n) => *n != 0.0,
             Scalar::Text(s) => !s.is_empty() && s != "0",
@@ -358,7 +368,7 @@ impl Scalar {
 }
 
 /// Perl's leading-numeric conversion (`"12abc"` is 12, `"abc"` is 0).
-fn perl_numify(s: &str) -> f64 {
+pub(super) fn perl_numify(s: &str) -> f64 {
     let t = s.trim_start();
     let bytes = t.as_bytes();
     let mut end = 0;
@@ -450,7 +460,7 @@ fn regex_for(pattern: &'static str) -> Option<&'static Regex> {
     })
 }
 
-fn re_matches(pattern: &'static str, subject: &str) -> bool {
+pub(super) fn re_matches(pattern: &'static str, subject: &str) -> bool {
     regex_for(pattern).is_some_and(|r| r.is_match(subject))
 }
 
@@ -495,6 +505,17 @@ impl Ctx {
 
     fn set(&mut self, dm: Dm, v: Scalar) {
         self.members.insert(dm, v);
+    }
+
+    /// Stores a data member from outside a binary table, for the `Sony::Main`
+    /// Conditions that assign as a side effect.
+    pub(super) fn set_member(&mut self, dm: Dm, v: Scalar) {
+        self.members.insert(dm, v);
+    }
+
+    /// A data member's current value, or Perl's `undef`.
+    pub(super) fn get(&self, dm: Dm) -> Option<&Scalar> {
+        self.members.get(&dm)
     }
 
     fn holds(&self, cond: &Cond) -> bool {
@@ -580,6 +601,18 @@ fn read_scalar(data: &[u8], off: usize, fmt: Fmt, order: ByteOrder) -> Option<Sc
     })
 }
 
+/// [`read_value`] without the raw bytes, for callers that already hold them.
+pub(super) fn read_values(
+    data: &[u8],
+    off: usize,
+    fmt: Fmt,
+    count: u32,
+    avail: usize,
+    order: ByteOrder,
+) -> Option<Scalar> {
+    read_value(data, off, fmt, count, avail, order).map(|(s, _)| s)
+}
+
 /// ExifTool's `ReadValue`: `count` values joined by spaces, the count shortened
 /// to whatever fits in `avail`, and nothing at all when not even one fits.
 fn read_value(
@@ -632,7 +665,7 @@ fn map_lookup(map: &'static [(&'static str, &'static str)], key: &str) -> Option
     map.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
 }
 
-fn apply_raw(raw: Raw, val: Scalar, ctx: &mut Ctx) -> Option<Scalar> {
+pub(super) fn apply_raw(raw: Raw, val: Scalar, ctx: &mut Ctx) -> Option<Scalar> {
     Some(match raw {
         Raw::None => val,
         Raw::Store(dm) => {
@@ -663,6 +696,12 @@ fn apply_raw(raw: Raw, val: Scalar, ctx: &mut Ctx) -> Option<Scalar> {
             }
             val
         }
+        Raw::DropIfEq(n) => {
+            if val.num() == n {
+                return None;
+            }
+            val
+        }
         Raw::DropIfDmLess(dm, n) => {
             if ctx.members.get(&dm).map_or(0.0, Scalar::num) < n {
                 return None;
@@ -680,7 +719,7 @@ fn apply_raw(raw: Raw, val: Scalar, ctx: &mut Ctx) -> Option<Scalar> {
     })
 }
 
-fn apply_vc(vc: Vc, val: Scalar, raw: &[u8]) -> Option<Scalar> {
+pub(super) fn apply_vc(vc: Vc, val: Scalar, raw: &[u8]) -> Option<Scalar> {
     let n = || val.num();
     Some(match vc {
         Vc::None => val,
@@ -757,6 +796,23 @@ fn apply_vc(vc: Vc, val: Scalar, raw: &[u8]) -> Option<Scalar> {
             } else {
                 v
             })
+        }
+        Vc::SerialNumberSwap => {
+            let t = val.text();
+            let d: Vec<char> = t.chars().collect();
+            let swapped = if d.len() >= 8 && d[..8].iter().all(char::is_ascii_digit) {
+                format!(
+                    "{}{}{}{}{}",
+                    d[6..8].iter().collect::<String>(),
+                    d[4..6].iter().collect::<String>(),
+                    d[2..4].iter().collect::<String>(),
+                    d[0..2].iter().collect::<String>(),
+                    d[8..].iter().collect::<String>(),
+                )
+            } else {
+                t
+            };
+            Scalar::Text(swapped.strip_prefix('0').unwrap_or(&swapped).to_string())
         }
         Vc::Map(map) => match map_lookup(map, &val.text()) {
             Some(v) => Scalar::Text(v.to_string()),
@@ -922,7 +978,7 @@ fn apply_other(other: Other, val: &Scalar) -> Option<String> {
     }
 }
 
-fn apply_pc(pc: Pc, val: Scalar, print_hex: bool) -> String {
+pub(super) fn apply_pc(pc: Pc, val: Scalar, print_hex: bool) -> String {
     match pc {
         Pc::None => val.text(),
         Pc::Map(map, other) => match map_lookup(map, &val.text()) {
@@ -1014,6 +1070,26 @@ fn apply_pc(pc: Pc, val: Scalar, print_hex: bool) -> String {
                 "inf".to_string()
             } else {
                 format!("{:.2} m", val.num())
+            }
+        }
+        Pc::WbShiftPrecise => {
+            let v: Vec<f64> = val.text().split_whitespace().map(perl_numify).collect();
+            format!(
+                "{:.2} {:.2}",
+                v.first().copied().unwrap_or(0.0) / 1000.0,
+                v.get(1).copied().unwrap_or(0.0) / 1000.0
+            )
+        }
+        Pc::FocusFrameSize => {
+            let v: Vec<f64> = val.text().split_whitespace().map(perl_numify).collect();
+            if v.get(2).copied().unwrap_or(0.0) != 0.0 {
+                format!(
+                    "{:3}x{:3}",
+                    v.first().copied().unwrap_or(0.0) as i64,
+                    v.get(1).copied().unwrap_or(0.0) as i64
+                )
+            } else {
+                "n/a".to_string()
             }
         }
         Pc::LensSpecFeatures => print_lens_spec_features(&val.text()),

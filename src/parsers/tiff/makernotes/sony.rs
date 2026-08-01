@@ -41,6 +41,8 @@ pub mod binary_data;
 pub mod enciphered;
 pub mod enciphered_tables;
 pub mod lens_spec;
+pub mod main_extra;
+pub mod main_extra_tables;
 pub mod main_table;
 pub mod plain_tables;
 pub mod value;
@@ -449,6 +451,26 @@ fn parse_sony_makernote_impl(
                 }
             }
             _ => {
+                // `Sony::Main` entries main_table.rs does not hand-implement
+                // are read from the generated table instead. This runs only
+                // where nothing runs today, so it can add a tag but never
+                // change one that already reports.
+                if main_tag(entry.tag_id).is_none() && main_extra::has(entry.tag_id) {
+                    if let Some((name, printed, low)) =
+                        main_extra::render(entry.tag_id, &value, byte_order, &mut cipher_ctx)
+                    {
+                        found.push(Found::new(
+                            format!("Sony:{}", name),
+                            printed,
+                            if low {
+                                SUB_DIRECTORY_PRIORITY
+                            } else {
+                                DEFAULT_PRIORITY
+                            },
+                        ));
+                    }
+                    continue;
+                }
                 // Tags ExifTool has no name for are named `Sony_0xNNNN` and
                 // flagged Unknown, so they never appear in its output; emitting
                 // them here would only add keys no comparison can match.
