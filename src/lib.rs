@@ -31,6 +31,7 @@
 // Application Layer
 pub mod cli;
 pub mod ffi;
+pub mod filetype;
 
 // Domain Layer (Hexagonal Core)
 pub mod composite;
