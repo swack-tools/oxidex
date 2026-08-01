@@ -35,6 +35,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -128,4 +129,9 @@ jobs:
           gh pr create --base main --head "$branch" \
             --title "docs: auto-update JPEG tag matrix (exiftool ${EXIFTOOL_VERSION})" \
             --body "Regenerated from ${SRC_SHA} by the JPEG Tag Matrix workflow."
+          # Events triggered by GITHUB_TOKEN do not start workflow runs, so
+          # this PR gets no `pull_request` CI run and its required checks would
+          # never report -- leaving it open forever. workflow_dispatch is the
+          # documented exception to that rule, so ask for the run explicitly.
+          gh workflow run ci.yml --ref "$branch"
           gh pr merge "$branch" --squash --auto --delete-branch

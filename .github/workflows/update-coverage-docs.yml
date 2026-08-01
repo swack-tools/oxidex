@@ -21,6 +21,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -70,4 +71,9 @@ jobs:
           gh pr create --base main --head "$branch" \
             --title "docs: auto-update tag coverage analysis" \
             --body "Regenerated from ${SRC_SHA} by the Update Coverage Documentation workflow."
+          # Events triggered by GITHUB_TOKEN do not start workflow runs, so
+          # this PR gets no `pull_request` CI run and its required checks would
+          # never report -- leaving it open forever. workflow_dispatch is the
+          # documented exception to that rule, so ask for the run explicitly.
+          gh workflow run ci.yml --ref "$branch"
           gh pr merge "$branch" --squash --auto --delete-branch
