@@ -259,6 +259,8 @@ PRELUDE = '''//! ExifTool binary tag tables, generated from ExifTool's own Perl 
 
 #![allow(clippy::unreadable_literal, clippy::too_many_lines)]
 
+__VERSION_BLOCK__
+
 /// A binary-table field format.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Fmt {
@@ -464,8 +466,29 @@ def main():
         + "\n];\n"
     )
 
+    # Stamp the release these tables came from. ExifTool renames fields and
+    # inserts enum values between releases, so verifying against a different
+    # one reports hundreds of differences that read as generator bugs rather
+    # than as "wrong ExifTool". dump_tables.pl already recorded the version;
+    # carrying it into the artifact is what lets verify.py say which it is.
+    version = str(doc.get("exiftool_version") or "").strip()
+    if not version:
+        raise SystemExit(
+            "tables JSON has no exiftool_version -- regenerate it with "
+            "dump_tables.pl; an unstamped table set cannot be verified"
+        )
+    version_block = (
+        "/// The ExifTool release these tables were transcribed from.\n"
+        "///\n"
+        "/// `tools/exiftool-tables/verify.py` refuses to compare against any\n"
+        "/// other release. Field names and enum values move between versions,\n"
+        "/// so a skewed check produces spurious mismatches that look like\n"
+        "/// transcription errors. Regenerate with `just regen-tables <version>`.\n"
+        f'pub const EXIFTOOL_VERSION: &str = "{version}";'
+    )
+
     with open(args.out, "w", encoding="utf-8") as fh:
-        fh.write(PRELUDE)
+        fh.write(PRELUDE.replace("__VERSION_BLOCK__", version_block))
         fh.write(gen_expr_enum(used))
         fh.write(joined)
         fh.write(index)

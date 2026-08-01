@@ -50,6 +50,7 @@ FIELD_RE = re.compile(
     re.S,
 )
 FIELD_COUNT_RE = re.compile(r'Field\s*\{\s*index:')
+VERSION_RE = re.compile(r'pub const EXIFTOOL_VERSION: &str = "([^"]+)";')
 INT_ENUM_RE = re.compile(r'PrintConv::IntEnum\(&\[(.*)\]\)$', re.S)
 STR_ENUM_RE = re.compile(r'PrintConv::StrEnum\(&\[(.*)\]\)$', re.S)
 INT_PAIR_RE = re.compile(r'\(\s*(-?\d+),\s*"((?:[^"\\]|\\.)*)"\s*\)')
@@ -122,6 +123,42 @@ def load_oracle(lib, oracle_pl):
     return names, enums
 
 
+def oracle_version(lib):
+    """The ExifTool release living in `lib`, read the same way the oracle does."""
+    return subprocess.run(
+        ["perl", f"-I{lib}", "-e",
+         "require Image::ExifTool; print $Image::ExifTool::VERSION"],
+        capture_output=True, check=True, text=True, encoding="utf-8",
+    ).stdout.strip()
+
+
+def check_version(generated_rs, lib):
+    """Refuse to compare a table set against a different ExifTool release.
+
+    Without this the run still completes, but every field ExifTool has since
+    renamed and every enum value it has inserted counts as a mismatch. That
+    reads as "the transcription is wrong" when the real fault is "you pointed
+    it at the wrong ExifTool" -- a diagnosis that costs far more to reach from
+    a list of several hundred plausible-looking differences than from one line.
+    """
+    with open(generated_rs, encoding="utf-8") as fh:
+        m = VERSION_RE.search(fh.read())
+    if not m:
+        raise SystemExit(
+            f"{generated_rs} carries no EXIFTOOL_VERSION stamp -- regenerate it "
+            "with `just regen-tables`; an unstamped table set cannot be verified"
+        )
+    stamped, actual = m.group(1), oracle_version(lib)
+    if stamped != actual:
+        raise SystemExit(
+            f"ExifTool version skew: tables were generated from {stamped}, but "
+            f"{lib} is {actual}.\nVerify against the matching release "
+            f"(`just verify-tables {stamped}`) or regenerate the tables "
+            f"(`just regen-tables {actual}`)."
+        )
+    return stamped
+
+
 def norm_key(k):
     """ExifTool enum keys may be decimal or hex; compare numerically."""
     try:
@@ -138,6 +175,8 @@ def main():
     ap.add_argument("--show", type=int, default=10)
     args = ap.parse_args()
 
+    version = check_version(args.generated_rs, args.exiftool_lib)
+    print(f"ExifTool {version}")
     gen_fields, gen_enums = parse_rust(args.generated_rs)
     or_names, or_enums = load_oracle(args.exiftool_lib, args.oracle)
 

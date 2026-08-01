@@ -1025,8 +1025,32 @@ regen-tables version="13.30":
     tools/exiftool-tables/regen.sh {{version}}
 
 # Verify the committed generated tables still match ExifTool exactly.
-verify-tables version="13.30":
-    python3 tools/exiftool-tables/verify.py \
-        src/exiftool_tables/binary_tables.rs \
-        target/exiftool-src/exiftool-{{version}}/lib \
+# Defaults to the ExifTool release the tables were generated from, which is
+# recorded in the generated file itself -- a hardcoded default here would be a
+# fourth copy of the version to drift out of sync with the other three.
+verify-tables version="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    GENERATED="src/exiftool_tables/binary_tables.rs"
+    VERSION="{{version}}"
+    if [[ -z "$VERSION" ]]; then
+        VERSION=$(sed -n 's/^pub const EXIFTOOL_VERSION: &str = "\(.*\)";$/\1/p' "$GENERATED")
+        [[ -n "$VERSION" ]] || {
+            echo "❌ $GENERATED has no EXIFTOOL_VERSION stamp; run 'just regen-tables'" >&2
+            exit 1
+        }
+    fi
+
+    CACHE="${OXIDEX_ET_CACHE:-target/exiftool-src}"
+    LIB="$CACHE/exiftool-$VERSION/lib"
+    if [[ ! -d "$LIB" ]]; then
+        echo "📦 Fetching ExifTool $VERSION (not cached)"
+        mkdir -p "$CACHE"
+        curl -sSL -o "$CACHE/et-$VERSION.tar.gz" \
+            "https://github.com/exiftool/exiftool/archive/refs/tags/$VERSION.tar.gz"
+        tar xzf "$CACHE/et-$VERSION.tar.gz" -C "$CACHE"
+    fi
+
+    python3 tools/exiftool-tables/verify.py "$GENERATED" "$LIB" \
         --oracle tools/exiftool-tables/oracle.pl

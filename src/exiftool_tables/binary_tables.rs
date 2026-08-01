@@ -16,6 +16,14 @@
 
 #![allow(clippy::unreadable_literal, clippy::too_many_lines)]
 
+/// The ExifTool release these tables were transcribed from.
+///
+/// `tools/exiftool-tables/verify.py` refuses to compare against any
+/// other release. Field names and enum values move between versions,
+/// so a skewed check produces spurious mismatches that look like
+/// transcription errors. Regenerate with `just regen-tables <version>`.
+pub const EXIFTOOL_VERSION: &str = "13.30";
+
 /// A binary-table field format.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Fmt {

@@ -38,7 +38,9 @@
 
 pub mod binary_tables;
 
-pub use binary_tables::{ALL_BINARY_TABLES, BinaryTable, ExprId, Field, Fmt, PrintConv};
+pub use binary_tables::{
+    ALL_BINARY_TABLES, BinaryTable, EXIFTOOL_VERSION, ExprId, Field, Fmt, PrintConv,
+};
 
 /// Look up a generated table by ExifTool module and table name,
 /// e.g. `("Canon", "CameraSettings")`.
@@ -53,6 +55,20 @@ pub fn find_table(module: &str, table: &str) -> Option<&'static BinaryTable> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tables are only meaningful relative to a specific ExifTool release,
+    /// so the stamp has to survive regeneration. Without it `verify.py` cannot
+    /// tell a transcription error from a mismatched oracle, which is the one
+    /// failure mode that makes every other check in this module unreadable.
+    #[test]
+    fn tables_record_their_exiftool_release() {
+        assert!(
+            EXIFTOOL_VERSION
+                .split('.')
+                .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())),
+            "expected a dotted ExifTool version, found {EXIFTOOL_VERSION:?}"
+        );
+    }
 
     #[test]
     fn tables_are_present() {
