@@ -34,6 +34,11 @@ use super::registries::samsung::samsung_registry;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::extract_i16_value;
 use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
+use super::shared::table_ifd;
+
+// Type2 tables, ported from Image::ExifTool::Samsung::Type2.
+pub mod lookups;
+pub mod type2;
 
 // Samsung signature for validation
 const SAMSUNG_SIGNATURE: &[u8] = b"Samsung";
@@ -107,20 +112,27 @@ impl MakerNoteParser for SamsungParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
-        // Configure IFD parser with Samsung-specific settings
-        // Samsung signature is 7 bytes ("Samsung"), followed by 1 padding byte
-        let config = IfdParserConfig {
-            signature: Some(SAMSUNG_SIGNATURE),
-            signature_offset: 8, // Skip "Samsung" + padding byte to reach IFD
-            max_entries: 500,
+        // Samsung's "Type2" MakerNote (ExifTool's Image::ExifTool::Samsung::Type2)
+        // is a bare TIFF IFD at offset 0 whose value offsets are relative to the
+        // MakerNote itself. It carries no signature, so the older code -- which
+        // required a literal "Samsung" prefix and then read every entry as an
+        // i16 -- produced nothing at all for the NX bodies and Galaxy phones.
+        let ifd_start = if data.len() >= 8 && &data[0..7] == SAMSUNG_SIGNATURE {
+            8
+        } else {
+            0
         };
-
-        // Use shared IFD parser to eliminate boilerplate
-        // The callback receives each parsed IFD entry and the data buffer
-        parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
-            self.parse_entry(entry, parse_data, byte_order, tags);
-        })?;
-
+        table_ifd::walk_directory(
+            data,
+            ifd_start,
+            Some(0),
+            byte_order,
+            "Samsung",
+            type2::TYPE2,
+            tags,
+        );
+        parse_orientation_info(data, ifd_start, byte_order, tags);
+        parse_picture_wizard(data, ifd_start, byte_order, tags);
         Ok(())
     }
 
@@ -130,16 +142,92 @@ impl MakerNoteParser for SamsungParser {
             return true;
         }
 
-        // Also accept if it looks like valid IFD data
+        // Otherwise accept anything that looks like a bare IFD. The entry
+        // count has to be read in the container's byte order, which this trait
+        // method does not receive -- checking only little-endian rejected every
+        // big-endian Samsung (the NX bodies and most Galaxy phones), whose
+        // 41-entry directory reads as 10496 the wrong way round.
         if data.len() >= 2 {
-            let reader = EndianReader::little_endian(data);
-            let entry_count = reader.u16_at(0).unwrap_or(0);
-            if entry_count > 0 && entry_count < 500 {
+            let count_le = EndianReader::little_endian(data).u16_at(0).unwrap_or(0);
+            let count_be = EndianReader::big_endian(data).u16_at(0).unwrap_or(0);
+            if (1..500).contains(&count_le) || (1..500).contains(&count_be) {
                 return true;
             }
         }
 
         false
+    }
+}
+
+/// Expand `OrientationInfo` (0x0011), a three-element `rational64s` block
+/// written by the Gear 360. `YawAngle` is `Unknown => 1` in ExifTool and is
+/// therefore not printed.
+fn parse_orientation_info(
+    data: &[u8],
+    ifd_start: usize,
+    byte_order: ByteOrder,
+    tags: &mut HashMap<String, String>,
+) {
+    let Some(entries) = table_ifd::read_ifd(data, ifd_start, byte_order) else {
+        return;
+    };
+    let Some(entry) = entries.iter().find(|e| e.tag_id == 0x0011) else {
+        return;
+    };
+    let Some(val) = table_ifd::decode_entry(
+        data,
+        entry,
+        Some(0),
+        byte_order,
+        Some(table_ifd::ftype::SRATIONAL),
+    ) else {
+        return;
+    };
+    let table_ifd::OlyVal::Rat(r) = &val else {
+        return;
+    };
+    for (idx, name) in [(1usize, "PitchAngle"), (2, "RollAngle")] {
+        if let Some(&(n, d)) = r.get(idx) {
+            tags.insert(format!("Samsung:{}", name), table_ifd::print_rational(n, d));
+        }
+    }
+}
+
+/// Expand `PictureWizard` (0x0021), a five-element `int16u` block. ExifTool's
+/// ValueConv subtracts 4 from saturation, sharpness and contrast.
+fn parse_picture_wizard(
+    data: &[u8],
+    ifd_start: usize,
+    byte_order: ByteOrder,
+    tags: &mut HashMap<String, String>,
+) {
+    let Some(entries) = table_ifd::read_ifd(data, ifd_start, byte_order) else {
+        return;
+    };
+    let Some(entry) = entries.iter().find(|e| e.tag_id == 0x0021) else {
+        return;
+    };
+    let Some(val) = table_ifd::decode_entry(data, entry, Some(0), byte_order, None) else {
+        return;
+    };
+    let Some(v) = val.ints() else { return };
+    // ExifTool's PictureWizard table is exactly five int16u fields; on a block
+    // of any other size its ProcessBinaryData yields nothing and the raw tag is
+    // printed empty (SamsungEK-GN120.jpg).
+    if v.len() != 5 {
+        return;
+    }
+    tags.insert(
+        "Samsung:PictureWizardMode".to_string(),
+        table_ifd::lookup_or_unknown(type2::PICTURE_WIZARD_MODE, v[0]),
+    );
+    tags.insert("Samsung:PictureWizardColor".to_string(), v[1].to_string());
+    for (idx, name) in [
+        (2usize, "PictureWizardSaturation"),
+        (3, "PictureWizardSharpness"),
+        (4, "PictureWizardContrast"),
+    ] {
+        tags.insert(format!("Samsung:{}", name), (v[idx] - 4).to_string());
     }
 }
 

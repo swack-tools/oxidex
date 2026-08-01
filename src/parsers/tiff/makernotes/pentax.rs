@@ -605,6 +605,17 @@ impl MakerNoteParser for PentaxParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
+        self.parse_with_context(data, byte_order, None, None, tags)
+    }
+
+    fn parse_with_context(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        _model: Option<&str>,
+        data_base: Option<u32>,
+        tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
         if data.is_empty() {
             return Ok(());
         }
@@ -616,8 +627,23 @@ impl MakerNoteParser for PentaxParser {
         // MakerNotes.pm / Pentax::AVI). The marker may differ from the container's
         // overall byte order, so detect and use it here.
         let mut byte_order = byte_order;
+        // See `inline_or_offset_bytes`: only the "AOC\0" form measures its value
+        // offsets from the TIFF header.
+        let mut value_base: i64 = 0;
         let ifd_offset = if data.len() >= 4 && &data[0..4] == PENTAX_HEADER_AOC {
-            // AOC header: skip 6 bytes (AOC\0 + 2-byte offset)
+            value_base = data_base.map_or(0, |o| -(i64::from(o)));
+            // AOC header: "AOC\0" plus a 2-byte byte-order marker, IFD at 6.
+            // The marker can disagree with the container -- SamsungGX-1L.jpg
+            // and SamsungGX-1S.jpg are little-endian JPEGs carrying an "AOC\0MM"
+            // MakerNote -- and reading it in the container's order byte-swapped
+            // every value (ISO 200 came out as 589824).
+            if data.len() >= 6 {
+                if &data[4..6] == b"MM" {
+                    byte_order = ByteOrder::BigEndian;
+                } else if &data[4..6] == b"II" {
+                    byte_order = ByteOrder::LittleEndian;
+                }
+            }
             6
         } else if data.len() >= 8 && &data[0..8] == PENTAX_HEADER_PENTAX {
             // PENTAX header: skip 8 bytes for the header, plus a 2-byte byte-order
@@ -660,12 +686,30 @@ impl MakerNoteParser for PentaxParser {
             Err(_) => return Ok(()), // Return empty on parse failure
         };
 
+        // TIFF left-justifies a value that fits in the entry's 4-byte field, so
+        // in a big-endian directory a 2-byte SHORT occupies the HIGH half of
+        // that word. Reading the word as the value therefore returns the value
+        // shifted left by 16 -- Pentax645D.jpg reported ISO 200 as 589824
+        // (0x090000) and Tokyo's HometownCity code 0x38 as 3670016. Right-align
+        // every inline value once, here, so the ~100 places below that read
+        // `entry.value_offset` as a number see the number the camera wrote.
+        let entries: Vec<IfdEntry> = entries
+            .into_iter()
+            .map(|entry| right_align_inline_value(entry, byte_order))
+            .collect();
+
+        // Pentax::Main entries the match below never registered, added first so
+        // the hand-written arms keep ownership of anything they do produce.
+        super::pentax_supplement::add_supplemental_tags(
+            data, ifd_offset, value_base, byte_order, tags,
+        );
+
         // Extract tags from entries
         for entry in entries {
             match entry.tag_id {
                 // Simple string tags
                 PENTAX_VERSION => {
-                    let raw = inline_or_offset_bytes(&entry, data, ifd_offset, byte_order);
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if raw.len() == 4 {
                         tags.insert(
                             "Pentax:PentaxVersion".to_string(),
@@ -675,7 +719,7 @@ impl MakerNoteParser for PentaxParser {
                 }
 
                 PENTAX_DATE => {
-                    let raw = inline_or_offset_bytes(&entry, data, ifd_offset, byte_order);
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if raw.len() == 4 {
                         // Year is always stored big-endian regardless of the
                         // MakerNote's overall byte order.
@@ -688,7 +732,7 @@ impl MakerNoteParser for PentaxParser {
                 }
 
                 PENTAX_TIME => {
-                    let raw = inline_or_offset_bytes(&entry, data, ifd_offset, byte_order);
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if raw.len() >= 3 {
                         tags.insert(
                             "Pentax:Time".to_string(),
@@ -698,7 +742,7 @@ impl MakerNoteParser for PentaxParser {
                 }
 
                 PENTAX_LENS_MODEL => {
-                    if let Some(value) = extract_string_value(&entry, data, ifd_offset) {
+                    if let Some(value) = extract_string_value(&entry, data, value_base) {
                         tags.insert("Pentax:LensModel".to_string(), value);
                     }
                 }
@@ -764,7 +808,7 @@ impl MakerNoteParser for PentaxParser {
                 }
 
                 PENTAX_DRIVE_MODE => {
-                    let raw = inline_or_offset_bytes(&entry, data, ifd_offset, byte_order);
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if raw.len() >= 4 {
                         let parts = [
                             decode_drive_mode_byte0(raw[0]),
@@ -869,7 +913,7 @@ impl MakerNoteParser for PentaxParser {
                 // followed by one or two unknown bytes, then ExtenderStatus at
                 // offset 3 (see ExifTool Pentax::LensRec).
                 PENTAX_LENS_TYPE => {
-                    let raw = inline_or_offset_bytes(&entry, data, ifd_offset, byte_order);
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if raw.len() >= 2 {
                         let series = raw[0];
                         let sub_id = raw[1] as u16;
@@ -937,7 +981,7 @@ impl MakerNoteParser for PentaxParser {
                 // "PictureMode" (a 3-byte array); the unrelated "PictureMode2"
                 // tag comes from the CameraSettings (0x0205) binary subdirectory.
                 PENTAX_PICTURE_MODE2 => {
-                    let raw = inline_or_offset_bytes(&entry, data, ifd_offset, byte_order);
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if raw.len() >= 3 {
                         if let Some(value) = decode_picture_mode_0x0033(raw[0], raw[1], raw[2]) {
                             tags.insert("Pentax:PictureMode".to_string(), value);
@@ -994,13 +1038,13 @@ impl MakerNoteParser for PentaxParser {
                     );
                 }
                 PENTAX_DSP_FIRMWARE_VERSION => {
-                    let raw = inline_or_offset_bytes(&entry, data, ifd_offset, byte_order);
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if let Some(value) = decode_firmware_id(&raw) {
                         tags.insert("Pentax:DSPFirmwareVersion".to_string(), value);
                     }
                 }
                 PENTAX_CPU_FIRMWARE_VERSION => {
-                    let raw = inline_or_offset_bytes(&entry, data, ifd_offset, byte_order);
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if let Some(value) = decode_firmware_id(&raw) {
                         tags.insert("Pentax:CPUFirmwareVersion".to_string(), value);
                     }
@@ -1108,7 +1152,7 @@ impl MakerNoteParser for PentaxParser {
                 // 0x005c "ShakeReductionInfo" subdirectory (SRInfo table): only
                 // handle the 4-byte (count==4) form used by most DSLRs.
                 PENTAX_SHAKE_REDUCTION => {
-                    let raw = inline_or_offset_bytes(&entry, data, ifd_offset, byte_order);
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if raw.len() >= 4 {
                         tags.insert(
                             "Pentax:SRResult".to_string(),
@@ -1162,12 +1206,12 @@ impl MakerNoteParser for PentaxParser {
                     );
                 }
                 PENTAX_TIME_INFO => {
-                    if let Some(value) = extract_string_value(&entry, data, ifd_offset) {
+                    if let Some(value) = extract_string_value(&entry, data, value_base) {
                         tags.insert("Pentax:TimeInfo".to_string(), value);
                     }
                 }
                 PENTAX_HIGH_LOW_KEY_ADJ => {
-                    let raw = inline_or_offset_bytes(&entry, data, ifd_offset, byte_order);
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if raw.len() >= 4 {
                         let (b0, b1) = match byte_order {
                             ByteOrder::BigEndian => (
@@ -1350,7 +1394,7 @@ impl MakerNoteParser for PentaxParser {
                 // 0x0205 "CameraSettings" binary subdirectory. Only the
                 // count<25 (non-K-01) layout is currently decoded.
                 PENTAX_CAMERA_SETTINGS => {
-                    let raw = inline_or_offset_bytes(&entry, data, ifd_offset, byte_order);
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if raw.len() >= 11 && raw.len() < 25 {
                         tags.insert(
                             "Pentax:PictureMode2".to_string(),
@@ -1453,7 +1497,7 @@ impl MakerNoteParser for PentaxParser {
                 // shifted by 1 byte for models with a 24/25-byte record
                 // (matching ExifTool's AEFlags `Hook`).
                 PENTAX_AE_INFO => {
-                    let raw = inline_or_offset_bytes(&entry, data, ifd_offset, byte_order);
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if raw.len() <= 25 && raw.len() != 21 && raw.len() >= 7 {
                         let shift: usize = if raw.len() > 20 { 1 } else { 0 };
                         let exposure_time = |b: u8| {
@@ -1563,7 +1607,7 @@ impl MakerNoteParser for PentaxParser {
                 // subdirectories. Only the LensInfo2 (K10D/K20D-style, 17-byte
                 // LensData) layout used by most DSLRs is decoded.
                 PENTAX_LENS_INFO_207 => {
-                    let raw = inline_or_offset_bytes(&entry, data, ifd_offset, byte_order);
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if raw.len() >= 4 {
                         let series = raw[0] & 0x0f;
                         let sub_id = (raw[2] as u16) * 256 + raw[3] as u16;
@@ -1619,7 +1663,7 @@ impl MakerNoteParser for PentaxParser {
 
                 // 0x0215 "CameraInfo" binary subdirectory (all int32u fields).
                 PENTAX_CAMERA_INFO => {
-                    let raw = inline_or_offset_bytes(&entry, data, ifd_offset, byte_order);
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if raw.len() >= 20 {
                         let read_u32 = |b: &[u8]| -> u32 {
                             match byte_order {
@@ -1664,7 +1708,7 @@ impl MakerNoteParser for PentaxParser {
 
                 // 0x0222 "ColorInfo" binary subdirectory (all int8s fields).
                 PENTAX_COLOR_INFO => {
-                    let raw = inline_or_offset_bytes(&entry, data, ifd_offset, byte_order);
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if raw.len() >= 18 {
                         tags.insert("Pentax:WBShiftAB".to_string(), (raw[16] as i8).to_string());
                         tags.insert("Pentax:WBShiftGM".to_string(), (raw[17] as i8).to_string());
@@ -1673,28 +1717,28 @@ impl MakerNoteParser for PentaxParser {
 
                 PENTAX_SERIAL_NUMBER => {
                     if let Some(value) =
-                        extract_raw_string_preserve_spaces(&entry, data, ifd_offset, byte_order)
+                        extract_raw_string_preserve_spaces(&entry, data, value_base, byte_order)
                     {
                         tags.insert("Pentax:SerialNumber".to_string(), value);
                     }
                 }
                 PENTAX_ARTIST => {
                     if let Some(value) =
-                        extract_raw_string_preserve_spaces(&entry, data, ifd_offset, byte_order)
+                        extract_raw_string_preserve_spaces(&entry, data, value_base, byte_order)
                     {
                         tags.insert("Pentax:Artist".to_string(), value);
                     }
                 }
                 PENTAX_COPYRIGHT => {
                     if let Some(value) =
-                        extract_raw_string_preserve_spaces(&entry, data, ifd_offset, byte_order)
+                        extract_raw_string_preserve_spaces(&entry, data, value_base, byte_order)
                     {
                         tags.insert("Pentax:Copyright".to_string(), value);
                     }
                 }
                 PENTAX_FIRMWARE_VERSION_VIDEO => {
                     if let Some(value) =
-                        extract_raw_string_preserve_spaces(&entry, data, ifd_offset, byte_order)
+                        extract_raw_string_preserve_spaces(&entry, data, value_base, byte_order)
                     {
                         tags.insert("Pentax:FirmwareVersion".to_string(), value);
                     }
@@ -1809,7 +1853,7 @@ fn parse_ifd_entry_be(input: &[u8]) -> IResult<&[u8], IfdEntry> {
 /// Extracts string value from IFD entry
 ///
 /// Handles both inline strings (≤4 bytes) and offset-based strings
-fn extract_string_value(entry: &IfdEntry, full_data: &[u8], ifd_offset: usize) -> Option<String> {
+fn extract_string_value(entry: &IfdEntry, full_data: &[u8], value_base: i64) -> Option<String> {
     let byte_count = entry.value_count as usize;
 
     // For inline strings (≤4 bytes), value is in value_offset field
@@ -1824,7 +1868,13 @@ fn extract_string_value(entry: &IfdEntry, full_data: &[u8], ifd_offset: usize) -
 
     // For longer strings, read from offset
     let offset = entry.value_offset as usize;
-    let abs_offset = ifd_offset + offset;
+    let Some(abs_offset) = i64::from(offset as u32)
+        .checked_add(value_base)
+        .filter(|o| *o >= 0)
+        .map(|o| o as usize)
+    else {
+        return None;
+    };
 
     if abs_offset + byte_count <= full_data.len() {
         let bytes = &full_data[abs_offset..abs_offset + byte_count];
@@ -1854,10 +1904,30 @@ fn tiff_field_type_size(field_type: u16) -> usize {
 /// (≤4 bytes, in `value_offset`) or at an offset relative to `ifd_offset`
 /// within `full_data`. Returns an empty Vec if the offset-based value is out
 /// of bounds.
+/// Right-align an inline value inside the entry's 4-byte field.
+///
+/// A big-endian directory stores a value shorter than four bytes in the HIGH
+/// bytes of the field, so the parsed `u32` is the value shifted left. Shifting
+/// it back means every numeric read below is the camera's number, and
+/// [`inline_or_offset_bytes`] takes the matching low-end slice.
+fn right_align_inline_value(entry: IfdEntry, byte_order: ByteOrder) -> IfdEntry {
+    if byte_order != ByteOrder::BigEndian {
+        return entry;
+    }
+    let size = (entry.value_count as usize).saturating_mul(tiff_field_type_size(entry.field_type));
+    if size == 0 || size >= 4 {
+        return entry;
+    }
+    IfdEntry {
+        value_offset: entry.value_offset >> (8 * (4 - size)),
+        ..entry
+    }
+}
+
 fn inline_or_offset_bytes(
     entry: &IfdEntry,
     full_data: &[u8],
-    _ifd_offset: usize,
+    value_base: i64,
     byte_order: ByteOrder,
 ) -> Vec<u8> {
     let count = entry.value_count as usize * tiff_field_type_size(entry.field_type);
@@ -1865,19 +1935,27 @@ fn inline_or_offset_bytes(
         return Vec::new();
     }
     if count <= 4 {
-        let bytes = match byte_order {
-            ByteOrder::LittleEndian => entry.value_offset.to_le_bytes(),
-            ByteOrder::BigEndian => entry.value_offset.to_be_bytes(),
-        };
-        bytes[0..count].to_vec()
+        // `right_align_inline_value` has already moved a short big-endian value
+        // into the low bytes, so take it from that end.
+        match byte_order {
+            ByteOrder::LittleEndian => entry.value_offset.to_le_bytes()[0..count].to_vec(),
+            ByteOrder::BigEndian => entry.value_offset.to_be_bytes()[4 - count..4].to_vec(),
+        }
     } else {
-        // Offsets for values stored outside the IFD entry are relative to the
-        // start of the raw MakerNote data (i.e. the "PENTAX \0" header, before
-        // the 10-byte Start adjustment) -- this is ExifTool's "$start" prior
-        // to applying `Start`, used for both the `Base => '$start'` (AVI) and
-        // `Base => '$start - 10'` (JPEG MakerNotePentax5) conventions, which
-        // both resolve to the same absolute base (`full_data[0]`).
-        let abs_offset = entry.value_offset as usize;
+        // Where an out-of-line value offset points depends on the header:
+        // "PENTAX \0" MakerNotes declare `Base => '$start - 10'`, so offsets
+        // are relative to the MakerNote itself (`value_base` 0), while "AOC\0"
+        // MakerNotes have no Base override and measure from the TIFF header,
+        // so `value_base` is minus the block's own TIFF-relative offset. Using
+        // 0 for both put SamsungGX20.jpg's WhitePoint 672 bytes past its real
+        // position and printed neighbouring bytes as the value.
+        let Some(abs_offset) = i64::from(entry.value_offset)
+            .checked_add(value_base)
+            .filter(|o| *o >= 0)
+            .map(|o| o as usize)
+        else {
+            return Vec::new();
+        };
         if abs_offset + count <= full_data.len() {
             full_data[abs_offset..abs_offset + count].to_vec()
         } else {
@@ -1893,10 +1971,10 @@ fn inline_or_offset_bytes(
 fn extract_raw_string_preserve_spaces(
     entry: &IfdEntry,
     full_data: &[u8],
-    ifd_offset: usize,
+    value_base: i64,
     byte_order: ByteOrder,
 ) -> Option<String> {
-    let bytes = inline_or_offset_bytes(entry, full_data, ifd_offset, byte_order);
+    let bytes = inline_or_offset_bytes(entry, full_data, value_base, byte_order);
     if bytes.is_empty() {
         return None;
     }

@@ -22,6 +22,8 @@
 
 // Submodules for extended tag parsing
 pub mod camera_settings;
+pub mod lookups;
+pub mod tables;
 
 use crate::const_decoder;
 use crate::error::{ExifToolError, Result};
@@ -40,6 +42,7 @@ use super::registries::olympus::olympus_registry;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_i32_array, extract_u16_array};
 use super::shared::generic_decoders::ON_OFF;
+pub use super::shared::table_ifd as ifd;
 
 // ===== Olympus MakerNote Tag IDs =====
 // Based on ExifTool Olympus.pm tag definitions
@@ -74,9 +77,12 @@ const OLYMPUS_LENS_MODEL: u16 = 0x0206;
 // Type 2 (newer cameras): "OLYMPUS\0II" or "OLYMPUS\0MM" (10 bytes) followed by offset
 const OLYMPUS_HEADER: &[u8] = b"OLYMPUS\0II";
 const OLYMPUS_HEADER_BE: &[u8] = b"OLYMPUS\0MM";
-// Type 1 (older cameras): "OLYMP\x00\x01" or "OLYMP\x00\x02" (8 bytes)
-const OLYMPUS_HEADER_TYPE1_V1: &[u8] = b"OLYMP\x00\x01";
-const OLYMPUS_HEADER_TYPE1_V2: &[u8] = b"OLYMP\x00\x02";
+// Type 1 (older cameras): "OLYMP\0" followed by a two-byte version. ExifTool's
+// MakerNoteOlympus condition is just /^OLYMP\0/ -- the older constants here
+// spelled 8-byte headers as 7-byte literals ("OLYMP\x00\x01"), so the
+// `data[0..8] == LITERAL` comparison could never be true and every type-1
+// Olympus JPEG (163 of the 315 in the corpus) was rejected outright.
+const OLYMPUS_HEADER_TYPE1: &[u8] = b"OLYMP\x00";
 
 // Sub-IFD pointer tag IDs - these point to nested IFD structures
 const OLYMPUS_EQUIPMENT_SUBIFD: u16 = 0x2010;
@@ -364,10 +370,8 @@ impl MakerNoteParser for OlympusParser {
             return true;
         }
 
-        // Check for Type 1 headers (8 bytes): "OLYMP\x00\x01" or "OLYMP\x00\x02"
-        if data.len() >= 8
-            && (&data[0..8] == OLYMPUS_HEADER_TYPE1_V1 || &data[0..8] == OLYMPUS_HEADER_TYPE1_V2)
-        {
+        // Check for Type 1 headers: "OLYMP\0" plus a two-byte version.
+        if data.len() >= 8 && &data[0..6] == OLYMPUS_HEADER_TYPE1 {
             return true;
         }
 
@@ -384,6 +388,27 @@ impl MakerNoteParser for OlympusParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
+        self.parse_with_model(data, byte_order, None, tags)
+    }
+
+    fn parse_with_model(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        self.parse_with_context(data, byte_order, model, None, tags)
+    }
+
+    fn parse_with_context(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        data_base: Option<u32>,
+        tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
         if data.is_empty() {
             return Ok(());
         }
@@ -393,111 +418,139 @@ impl MakerNoteParser for OlympusParser {
             return Err("Invalid Olympus MakerNote header".to_string());
         }
 
-        // Detect header type and determine parsing parameters
-        let (ifd_start, base_offset, effective_byte_order) =
-            detect_header_type_and_offsets(data, byte_order)?;
+        let (ifd_start, effective_byte_order) = detect_header_type_and_offsets(data, byte_order)?;
 
-        if data.len() <= ifd_start + 2 {
+        let Some(entries) = ifd::read_ifd(data, ifd_start, effective_byte_order) else {
             return Ok(());
-        }
-
-        let ifd_data = &data[ifd_start..];
-
-        // Parse IFD entry count using EndianReader
-        let ifd_reader = EndianReader::new(ifd_data, effective_byte_order.to_io_byte_order());
-        let entry_count = ifd_reader.u16_at(0).unwrap_or(0);
-
-        // Sanity check on entry count
-        if entry_count > 500 || entry_count == 0 {
-            return Ok(());
-        }
-
-        // Parse IFD entries
-        let entries_start = &ifd_data[2..];
-        let entries = match parse_ifd_entries(entries_start, entry_count, effective_byte_order) {
-            Ok((_, entries)) => entries,
-            Err(_) => return Ok(()), // Return empty on parse failure
         };
 
-        // Get the Olympus registry for tag definitions and array schemas
-        let registry = olympus_registry();
+        // Type 2 ("OLYMPUS\0II") stores value offsets relative to the
+        // MakerNote itself (ExifTool: `Base => '$start - 12'`), so no
+        // correction is needed. Type 1 ("OLYMP\0") measures them from the TIFF
+        // header, so the correction is exactly minus the block's own
+        // TIFF-relative offset -- and when the caller could not supply it,
+        // out-of-line values stay unread. A structural guess is not safe here:
+        // OlympusFE100.jpg keeps its values inside the MakerNote (correction
+        // -1298) while OlympusD450Z.jpg keeps them outside it (real offset 892,
+        // values at 1440+ past the 406-byte block), and the two are
+        // indistinguishable from the slice alone.
+        let base: Option<i64> = if ifd_start == 8 {
+            data_base.map(|off| -(i64::from(off)))
+        } else {
+            Some(0)
+        };
 
-        // Extract tags from entries
-        for entry in entries {
-            match entry.tag_id {
-                // Camera Settings array (0x0003) - i32 array with 49 indices
-                OLYMPUS_CAMERA_SETTINGS => {
-                    if let Some(array) =
-                        extract_i32_array_with_base(&entry, data, effective_byte_order, base_offset)
-                    {
-                        registry.decode_array_i32(OLYMPUS_CAMERA_SETTINGS, &array, "Olympus", tags);
-                    }
-                }
+        ifd::walk_directory(
+            data,
+            ifd_start,
+            base,
+            effective_byte_order,
+            "Olympus",
+            tables::MAIN,
+            tags,
+        );
 
-                // Equipment array (0x0201) - byte array with complex internal structure
-                OLYMPUS_EQUIPMENT => {
-                    if let Some(array) = extract_u8_array(&entry, data, base_offset) {
-                        // Equipment array has complex byte-level parsing that requires special handling
-                        // beyond what the registry array schema provides. Use the specialized helper.
-                        use super::registries::olympus::process_equipment_with_lens;
-                        process_equipment_with_lens(
-                            &array,
-                            "Olympus",
-                            get_lens_database(),
-                            effective_byte_order,
-                            tags,
-                        );
-                    }
-                }
+        for entry in &entries {
+            let table: &[ifd::TagDef] = match entry.tag_id {
+                OLYMPUS_EQUIPMENT_SUBIFD => tables::EQUIPMENT,
+                OLYMPUS_CAMERA_SETTINGS_SUBIFD => tables::CAMERA_SETTINGS,
+                OLYMPUS_RAW_DEVELOPMENT_SUBIFD => tables::RAW_DEVELOPMENT,
+                OLYMPUS_RAW_DEV2_SUBIFD => tables::RAW_DEVELOPMENT2,
+                OLYMPUS_IMAGE_PROCESSING_SUBIFD => tables::IMAGE_PROCESSING,
+                OLYMPUS_FOCUS_INFO_SUBIFD => tables::FOCUS_INFO,
+                OLYMPUS_RAW_INFO_SUBIFD => tables::RAW_INFO,
+                _ => continue,
+            };
+            // Sub-IFD pointers are ordinary LONG/IFD values, so the pointer
+            // itself is subject to the same base correction as any other
+            // offset.
+            // A sub-IFD pointer is an ordinary LONG value and needs the same
+            // base correction as any other offset. Type-2 MakerNotes (the only
+            // ones with sub-IFDs) always resolve, so `base` is Some here.
+            let Some(start) = base
+                .and_then(|b| i64::from(entry.value_offset).checked_add(b))
+                .filter(|s| *s >= 0)
+                .map(|s| s as usize)
+            else {
+                continue;
+            };
+            ifd::walk_directory(
+                data,
+                start,
+                base,
+                effective_byte_order,
+                "Olympus",
+                table,
+                tags,
+            );
 
-                // Sub-IFD pointers - parse nested IFD structures
-                OLYMPUS_EQUIPMENT_SUBIFD
-                | OLYMPUS_CAMERA_SETTINGS_SUBIFD
-                | OLYMPUS_RAW_DEVELOPMENT_SUBIFD
-                | OLYMPUS_RAW_DEV2_SUBIFD
-                | OLYMPUS_IMAGE_PROCESSING_SUBIFD
-                | OLYMPUS_FOCUS_INFO_SUBIFD
-                | OLYMPUS_RAW_INFO_SUBIFD
-                | OLYMPUS_MAIN_INFO_SUBIFD => {
-                    // Parse sub-IFD at the offset specified by the entry
-                    let sub_ifd_offset = (entry.value_offset as usize) + base_offset;
-                    let sub_ifd_name = get_sub_ifd_name(entry.tag_id);
-                    parse_sub_ifd(
-                        data,
-                        sub_ifd_offset,
-                        base_offset,
-                        effective_byte_order,
-                        sub_ifd_name,
-                        tags,
-                    );
-                }
-
-                // All other registered tags - handled through the registry
-                _ => {
-                    if registry.has_tag(entry.tag_id) {
-                        // String-type tags (ASCII)
-                        if entry.field_type == 2 {
-                            // ASCII field type
-                            if let Some(value) = extract_string_value(&entry, data, base_offset)
-                                && let Some(tag_name) = registry.get_tag_name(entry.tag_id)
-                            {
-                                tags.insert(format!("Olympus:{}", tag_name), value);
-                            }
-                        } else {
-                            // Numeric tags that don't require special handling
-                            let value = entry.value_offset as i32;
-                            if let Some(tag_name) = registry.get_tag_name(entry.tag_id) {
-                                let decoded = registry.decode_i32(entry.tag_id, value);
-                                tags.insert(format!("Olympus:{}", tag_name), decoded);
-                            }
-                        }
-                    }
-                }
+            if entry.tag_id == OLYMPUS_FOCUS_INFO_SUBIFD {
+                parse_focus_info_sensor_temperature(
+                    data,
+                    start,
+                    base,
+                    effective_byte_order,
+                    model,
+                    tags,
+                );
             }
         }
 
         Ok(())
     }
+}
+
+/// Perl's `/<needle>\b/` against a model string: `needle` must appear and must
+/// not be followed by another word character. `E-1` therefore matches `E-1`
+/// but not `E-10` or `E-100RS`.
+fn model_word_matches(model: &str, needle: &str) -> bool {
+    let bytes = model.as_bytes();
+    let mut from = 0usize;
+    while let Some(rel) = model[from..].find(needle) {
+        let end = from + rel + needle.len();
+        let next_is_word = bytes
+            .get(end)
+            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_');
+        if !next_is_word {
+            return true;
+        }
+        from += rel + 1;
+    }
+    false
+}
+
+/// FocusInfo 0x1500 SensorTemperature has two ExifTool conversions selected by
+/// the camera model and the value count:
+/// the multi-value / E-1 / E-M5 form prints `"<vals> C"` with a trailing
+/// `" 0 0"` removed, everything else prints `sprintf("%.1f C", 84 - 3*$val/26)`.
+fn parse_focus_info_sensor_temperature(
+    data: &[u8],
+    ifd_start: usize,
+    base: Option<i64>,
+    order: ByteOrder,
+    model: Option<&str>,
+    tags: &mut HashMap<String, String>,
+) {
+    let Some(entries) = ifd::read_ifd(data, ifd_start, order) else {
+        return;
+    };
+    let Some(entry) = entries.iter().find(|e| e.tag_id == 0x1500) else {
+        return;
+    };
+    let Some(val) = ifd::decode_entry(data, entry, base, order, None) else {
+        return;
+    };
+    let model = model.unwrap_or("").trim();
+    let multi_form =
+        entry.count != 1 || model_word_matches(model, "E-1") || model_word_matches(model, "E-M5");
+    let printed = if multi_form {
+        let raw = val.print_raw();
+        format!("{} C", raw.strip_suffix(" 0 0").unwrap_or(&raw))
+    } else {
+        let Some(n) = val.first_int() else { return };
+        format!("{:.1} C", 84.0 - 3.0 * n as f64 / 26.0)
+    };
+    tags.insert("Olympus:SensorTemperature".to_string(), printed);
 }
 
 // ============================================================================
@@ -536,36 +589,31 @@ fn olympus_tag_to_name(tag_id: u16) -> String {
 /// * `default_byte_order` - Default byte order from TIFF header
 ///
 /// # Returns
-/// Tuple of (ifd_start_offset, base_offset_for_values, effective_byte_order)
+/// Tuple of (ifd_start_offset, effective_byte_order)
+///
+/// ExifTool's `MakerNoteOlympus2` uses `Start => '$valuePtr + 12'` -- the
+/// 12-byte header is `"OLYMPUS\0"` (8) + `"II"`/`"MM"` (2) + a version word
+/// (2). The version word is NOT an IFD offset: reading it as one landed the
+/// directory at byte 11, where the entry count decodes as 1792 and the whole
+/// MakerNote was discarded as implausible, which is why Olympus JPEGs used to
+/// yield no MakerNotes tags at all.
 fn detect_header_type_and_offsets(
     data: &[u8],
     default_byte_order: ByteOrder,
-) -> std::result::Result<(usize, usize, ByteOrder), String> {
+) -> std::result::Result<(usize, ByteOrder), String> {
     // Check Type 2 headers first (they're longer and more specific)
     if data.len() >= 12 {
         if &data[0..10] == OLYMPUS_HEADER {
-            // Type 2 Little Endian: Read IFD offset from bytes 10-11
-            let reader = EndianReader::new(data, crate::io::ByteOrder::Little);
-            let ifd_offset = reader.u16_at(10).unwrap_or(3) as usize;
-            // IFD offset is relative to position 8 (after "OLYMPUS\0")
-            return Ok((8 + ifd_offset, 8, ByteOrder::LittleEndian));
+            return Ok((12, ByteOrder::LittleEndian));
         }
         if &data[0..10] == OLYMPUS_HEADER_BE {
-            // Type 2 Big Endian: Read IFD offset from bytes 10-11
-            let reader = EndianReader::new(data, crate::io::ByteOrder::Big);
-            let ifd_offset = reader.u16_at(10).unwrap_or(3) as usize;
-            return Ok((8 + ifd_offset, 8, ByteOrder::BigEndian));
+            return Ok((12, ByteOrder::BigEndian));
         }
     }
 
-    // Check Type 1 headers
-    if data.len() >= 8
-        && (&data[0..8] == OLYMPUS_HEADER_TYPE1_V1 || &data[0..8] == OLYMPUS_HEADER_TYPE1_V2)
-    {
-        // Type 1: IFD starts immediately after 8-byte header
-        // Offsets are typically TIFF-relative, but we treat base_offset as 0
-        // since the data slice we receive starts at MakerNote position
-        return Ok((8, 0, default_byte_order));
+    // Check Type 1 headers: ExifTool's `Start => '$valuePtr + 8'`.
+    if data.len() >= 8 && &data[0..6] == OLYMPUS_HEADER_TYPE1 {
+        return Ok((8, default_byte_order));
     }
 
     Err("Invalid Olympus MakerNote header".to_string())
