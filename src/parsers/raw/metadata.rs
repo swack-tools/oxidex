@@ -2137,6 +2137,34 @@ fn format_exif_display_value(
                 Some(format!("{}", f64::from(numerator) / f64::from(denominator)))
             }
         }
+        // CR2CFAPattern, found in the CR2 IFD3 sensor directory. Exif.pm
+        // 0xc5e0 declares no Format, so the width is whatever the file wrote
+        // -- CanonRaw.cr2 stores it as int32u[1], not the int16u the rest of
+        // this table assumes -- and both are accepted here for that reason.
+        // The tag chains a ValueConv onto a PrintConv, so the printed string
+        // is the composition of the two, verbatim:
+        //     ValueConv => { 1 => '0 1 1 2', 2 => '2 1 1 0',
+        //                    3 => '1 2 0 1', 4 => '1 0 2 1' },
+        //     PrintConv => { '0 1 1 2' => '[Red,Green][Green,Blue]',
+        //                    '2 1 1 0' => '[Blue,Green][Green,Red]',
+        //                    '1 2 0 1' => '[Green,Blue][Red,Green]',
+        //                    '1 0 2 1' => '[Green,Red][Blue,Green]' },
+        // Values outside 1..=4 have no ValueConv entry, so ExifTool leaves
+        // them as the raw number -- returning None here does the same.
+        0xC5E0 if matches!(field_type, 3 | 4) && value_count >= 1 => {
+            let raw = if field_type == 3 {
+                u32::from(read_tiff_u16(bytes, byte_order)?)
+            } else {
+                read_tiff_u32(bytes.get(..4)?, byte_order)?
+            };
+            match raw {
+                1 => Some("[Red,Green][Green,Blue]".to_string()),
+                2 => Some("[Blue,Green][Green,Red]".to_string()),
+                3 => Some("[Green,Blue][Red,Green]".to_string()),
+                4 => Some("[Green,Red][Blue,Green]".to_string()),
+                _ => None,
+            }
+        }
         // ColorSpace: SHORT[1].
         // CalibrationIlluminant1/2: int16u, and ExifTool prints them through
         // the SAME %lightSource hash that LightSource (0x9208) uses --
