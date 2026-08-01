@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -44,15 +45,29 @@ jobs:
         run: |
           git diff --quiet docs/reference/tag-coverage-analysis.md || echo "changed=true" >> $GITHUB_OUTPUT
 
-      - name: Commit and push changes
+      # Opens an auto-merging PR rather than pushing straight to main. main now
+      # requires the "Lint & Audit"/"Build & Test" checks, which blocks direct
+      # pushes — including this bot's. Going through a PR keeps the automation
+      # working AND means these commits are verified; previously they carried
+      # "[skip ci]" and landed on main entirely unchecked.
+      - name: Open auto-merging PR
         if: steps.changes.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SRC_SHA: ${{ github.sha }}
         run: |
+          set -euo pipefail
+          branch="bot/coverage-docs-${SRC_SHA}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
           git add docs/reference/tag-coverage-analysis.md
-          git commit -m "docs: auto-update tag coverage analysis
-
-          Generated from commit ${{ github.sha }}
-
-          [skip ci]"
-          git push
+          # NOTE: no "[skip ci]" — a required status check that never runs
+          # leaves the PR unmergeable forever.
+          git commit -m "docs: auto-update tag coverage analysis" \
+                     -m "Generated from commit ${SRC_SHA}"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "docs: auto-update tag coverage analysis" \
+            --body "Regenerated from ${SRC_SHA} by the Update Coverage Documentation workflow."
+          gh pr merge "$branch" --squash --auto --delete-branch
