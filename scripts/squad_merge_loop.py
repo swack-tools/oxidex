@@ -1100,20 +1100,37 @@ def process_commit(*, repo_root, staging_path, squad, squad_branch, sha, fmt, is
 # Batch full-corpus check (spec M2 step 3b)
 # ---------------------------------------------------------------------------
 
+def empty_batch_state():
+    return {
+        "blocked": False,
+        "last_batch_ts": 0,
+        "commits_since": 0,
+        "baselines": {},
+        "baseline_head": None,
+        "staging_head": None,
+    }
+
+
 def load_batch_state(path):
     path = Path(path)
     if not path.exists():
-        return {"blocked": False, "last_batch_ts": 0, "commits_since": 0, "baselines": {}}
+        return empty_batch_state()
     try:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
-        return {"blocked": False, "last_batch_ts": 0, "commits_since": 0, "baselines": {}}
+        return empty_batch_state()
     if not isinstance(data, dict):
-        return {"blocked": False, "last_batch_ts": 0, "commits_since": 0, "baselines": {}}
+        return empty_batch_state()
     data.setdefault("blocked", False)
     data.setdefault("last_batch_ts", 0)
     data.setdefault("commits_since", 0)
     data.setdefault("baselines", {})
+    # Legacy state has neither head. Treating the absent staging_head as a
+    # mismatch makes the first poll after this upgrade establish a baseline
+    # from the tree it is actually running, rather than trusting a report
+    # whose lineage cannot be proved.
+    data.setdefault("baseline_head", None)
+    data.setdefault("staging_head", None)
     return data
 
 
@@ -1198,6 +1215,141 @@ def run_batch_check(*, staging_path, squad, formats, cache_dir, comparison_fn,
             "holding publication until the next successful batch check"
         )
     return ok, problems, new_baselines
+
+
+def capture_batch_baselines(*, staging_path, squad, formats, cache_dir,
+                            comparison_fn, log_fn=print):
+    """Capture the current reports without judging them as newly introduced.
+
+    This is used only when the staging tree moved outside the merger's
+    observed per-commit flow (normally a squad re-cut onto a newer main).
+    `run_batch_check(..., baselines={})` is not equivalent: it would blame
+    the squad for duplicate emissions already present on the new main.
+    """
+    ok = True
+    problems = []
+    baselines = {}
+    for fmt in formats:
+        try:
+            baselines[fmt] = comparison_fn(
+                staging_path, cache_dir, fmt, f"squad-{squad}-staging-batch"
+            )
+        except subprocess.CalledProcessError as exc:
+            ok = False
+            problems.append(f"{fmt}: comparison run failed ({exc})")
+            baselines[fmt] = None
+    if not ok:
+        log_fn(
+            f"ERROR: squad {squad!r} could not refresh its batch baseline: "
+            f"{'; '.join(problems)} -- holding publication until the next successful check"
+        )
+    return ok, problems, baselines
+
+
+def refresh_batch_state_for_head_change(*, repo_root, staging_path, squad,
+                                        squad_branch, origin_ref, formats,
+                                        cache_dir, comparison_fn, state,
+                                        now_fn=time.time, log_fn=print):
+    """Reconcile persisted batch lineage with the staging worktree's HEAD.
+
+    `staging_head` is updated whenever this merger intentionally consumes a
+    commit. A mismatch therefore means an external ref move or a re-cut. If
+    the moved tree is clean main, capture it as the new inherited baseline.
+    If it still carries squad commits, capture main while detached and then
+    validate the staging tip against that fresh baseline so the refresh can
+    never silently bless retained, not-yet-batch-checked work.
+
+    Returns (state, batch_result_or_none).
+    """
+    current_head = head_sha(staging_path)
+    has_persisted_check = bool(
+        state.get("baselines")
+        or state.get("blocked")
+        or (state.get("last_batch_ts") or 0)
+    )
+    if not has_persisted_check or state.get("staging_head") == current_head:
+        return state, None
+
+    previous_head = state.get("staging_head") or "unknown legacy head"
+    log_fn(
+        f"[{squad}] staging HEAD changed outside the recorded merger flow "
+        f"({previous_head} -> {current_head}); refreshing batch baseline"
+    )
+    origin_head = branch_head_sha(repo_root, origin_ref)
+    if not origin_head:
+        problems = [f"cannot resolve {origin_ref}"]
+        refreshed = {
+            "blocked": True,
+            "commits_since": state.get("commits_since", 0),
+            "last_batch_ts": now_fn(),
+            "baselines": state.get("baselines") or {},
+            "baseline_head": state.get("baseline_head"),
+            "staging_head": current_head,
+        }
+        log_fn(
+            f"ERROR: squad {squad!r} cannot refresh its batch baseline: "
+            f"cannot resolve {origin_ref} -- holding publication"
+        )
+        return refreshed, {"ran": True, "ok": False, "problems": problems,
+                           "reason": "staging_head_changed"}
+
+    if current_head == origin_head:
+        ok, problems, current_baselines = capture_batch_baselines(
+            staging_path=staging_path, squad=squad, formats=formats,
+            cache_dir=cache_dir, comparison_fn=comparison_fn, log_fn=log_fn,
+        )
+        refreshed = {
+            "blocked": not ok,
+            "commits_since": 0,
+            "last_batch_ts": now_fn(),
+            "baselines": current_baselines,
+            "baseline_head": current_head,
+            "staging_head": current_head,
+        }
+        return refreshed, {"ran": True, "ok": ok, "problems": problems,
+                           "reason": "staging_head_changed"}
+
+    # The re-cut retained squad commits. Establish their comparison parent
+    # from current main, then restore the squad branch before judging them.
+    checkout_detached(staging_path, origin_ref)
+    try:
+        base_ok, base_problems, base_baselines = capture_batch_baselines(
+            staging_path=staging_path, squad=squad, formats=formats,
+            cache_dir=cache_dir, comparison_fn=comparison_fn, log_fn=log_fn,
+        )
+    finally:
+        checkout_branch(staging_path, squad_branch)
+
+    if not base_ok:
+        refreshed = {
+            "blocked": True,
+            "commits_since": state.get("commits_since", 0),
+            "last_batch_ts": now_fn(),
+            "baselines": base_baselines,
+            "baseline_head": origin_head,
+            "staging_head": current_head,
+        }
+        return refreshed, {"ran": True, "ok": False, "problems": base_problems,
+                           "reason": "staging_head_changed"}
+
+    ok, problems, current_baselines = run_batch_check(
+        staging_path=staging_path, squad=squad, formats=formats,
+        cache_dir=cache_dir, comparison_fn=comparison_fn,
+        baselines=base_baselines, log_fn=log_fn,
+    )
+    refreshed = {
+        "blocked": not ok,
+        "commits_since": 0,
+        "last_batch_ts": now_fn(),
+        # A failed staged-tip check must keep the clean-main baseline so the
+        # same regression remains visible on every retry. Replacing it with
+        # the failing report would make an unchanged second run pass.
+        "baselines": current_baselines if ok else base_baselines,
+        "baseline_head": current_head if ok else origin_head,
+        "staging_head": current_head,
+    }
+    return refreshed, {"ran": True, "ok": ok, "problems": problems,
+                       "reason": "staging_head_changed"}
 
 
 # ---------------------------------------------------------------------------
@@ -1432,6 +1584,21 @@ def poll_once(*, repo_root, squad, home, staging_dir, squads_toml_path=DEFAULT_S
     batch_state = load_batch_state(batch_path)
     batch_result = None
 
+    batch_state, head_refresh = refresh_batch_state_for_head_change(
+        repo_root=repo_root, staging_path=staging_dir, squad=squad,
+        squad_branch=squad_branch_ref, origin_ref=origin_ref, formats=formats,
+        cache_dir=cache_dir, comparison_fn=comparison_fn, state=batch_state,
+        now_fn=now_fn, log_fn=log_fn,
+    )
+    if head_refresh is not None:
+        save_batch_state(batch_path, batch_state)
+        heartbeat_fn()
+        batch_result = head_refresh
+        if batch_state.get("blocked"):
+            return {"branch": squad_branch_ref, "processed": [],
+                    "batch_check": batch_result, "recut": recut_result,
+                    "blocked": True}
+
     if batch_state.get("blocked"):
         # A prior batch check failed -- publication stays held (spec:
         # "skip publishing further until the next successful batch
@@ -1449,8 +1616,15 @@ def poll_once(*, repo_root, squad, home, staging_dir, squads_toml_path=DEFAULT_S
             staging_path=staging_dir, squad=squad, formats=formats, cache_dir=cache_dir,
             comparison_fn=comparison_fn, baselines=batch_state.get("baselines") or {}, log_fn=log_fn,
         )
-        batch_state = {"blocked": not ok, "commits_since": 0, "last_batch_ts": now_fn(),
-                       "baselines": new_baselines}
+        current_head = head_sha(staging_dir)
+        batch_state = {
+            "blocked": not ok,
+            "commits_since": 0,
+            "last_batch_ts": now_fn(),
+            "baselines": new_baselines,
+            "baseline_head": current_head,
+            "staging_head": current_head,
+        }
         save_batch_state(batch_path, batch_state)
         batch_result = {"ran": True, "ok": ok, "problems": problems}
         if not ok:
@@ -1511,6 +1685,8 @@ def poll_once(*, repo_root, squad, home, staging_dir, squads_toml_path=DEFAULT_S
     consumed_with_work = sum(1 for r in processed if r["outcome"] == "consumed")
     batch_state["commits_since"] = batch_state.get("commits_since", 0) + consumed_with_work
     state_changed = consumed_with_work > 0
+    if state_changed:
+        batch_state["staging_head"] = head_sha(staging_dir)
     if batch_check_due(batch_state, batch_commits, batch_seconds, now_fn):
         ok, problems, new_baselines = run_batch_check(
             staging_path=staging_dir, squad=squad, formats=formats, cache_dir=cache_dir,
@@ -1521,6 +1697,9 @@ def poll_once(*, repo_root, squad, home, staging_dir, squads_toml_path=DEFAULT_S
         batch_state["commits_since"] = 0
         batch_state["last_batch_ts"] = now_fn()
         batch_state["baselines"] = new_baselines
+        current_head = head_sha(staging_dir)
+        batch_state["baseline_head"] = current_head
+        batch_state["staging_head"] = current_head
         batch_result = {"ran": True, "ok": ok, "problems": problems}
         heartbeat_fn()
         state_changed = True

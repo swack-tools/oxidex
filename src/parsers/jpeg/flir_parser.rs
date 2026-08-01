@@ -33,6 +33,7 @@
 //! }
 //! ```
 
+use crate::core::tag_conversion::format_dms_with_ref;
 use crate::core::{MetadataMap, TagValue};
 use crate::io::EndianReader;
 
@@ -57,6 +58,59 @@ const RECORD_TYPE_PALETTE_INFO: u16 = 0x0022;
 
 /// FLIR FFF record type for embedded image
 const RECORD_TYPE_EMBEDDED_IMAGE: u16 = 0x000E;
+
+/// FLIR FFF record type for GPS information.
+///
+/// `FLIR.pm` %Image::ExifTool::FLIR::Main entry 0x2b:
+/// ```text
+///     0x2b => {
+///         Name => 'GPSInfo',
+///         SubDirectory => {
+///             TagTable => 'Image::ExifTool::FLIR::GPSInfo',
+///             ByteOrder => 'LittleEndian',
+///         },
+///     },
+/// ```
+/// The SubDirectory pins the byte order to little-endian regardless of the
+/// enclosing FFF container's order, which is why `parse_gps_info_record` does
+/// not take a `FlirEndian` the way the raw-data and camera-info records do.
+const RECORD_TYPE_GPS_INFO: u16 = 0x002B;
+
+/// Field offsets within the GPSInfo record, from
+/// `%Image::ExifTool::FLIR::GPSInfo` (FLIR.pm). Offsets ExifTool marks as
+/// unknown (0x0c, 0x24-0x3f, 0x78, 0xa4, 0xb2) are deliberately absent.
+mod gps_info_offsets {
+    /// `int32u` GPSValid; also gates GPSLatitude/Longitude/Altitude.
+    pub const GPS_VALID: usize = 0x00;
+    /// `undef[4]` GPSVersionID, stored as four ASCII digits.
+    pub const GPS_VERSION_ID: usize = 0x04;
+    /// `string[2]` GPSLatitudeRef.
+    pub const GPS_LATITUDE_REF: usize = 0x08;
+    /// `string[2]` GPSLongitudeRef.
+    pub const GPS_LONGITUDE_REF: usize = 0x0A;
+    /// `double` signed GPSLatitude.
+    pub const GPS_LATITUDE: usize = 0x10;
+    /// `double` signed GPSLongitude.
+    pub const GPS_LONGITUDE: usize = 0x18;
+    /// `float` GPSAltitude.
+    pub const GPS_ALTITUDE: usize = 0x20;
+    /// `float` GPSDOP.
+    pub const GPS_DOP: usize = 0x40;
+    /// `string[2]` GPSSpeedRef.
+    pub const GPS_SPEED_REF: usize = 0x44;
+    /// `string[2]` GPSTrackRef.
+    pub const GPS_TRACK_REF: usize = 0x46;
+    /// `string[2]` GPSImgDirectionRef.
+    pub const GPS_IMG_DIRECTION_REF: usize = 0x48;
+    /// `float` GPSSpeed.
+    pub const GPS_SPEED: usize = 0x4C;
+    /// `float` GPSTrack.
+    pub const GPS_TRACK: usize = 0x50;
+    /// `float` GPSImgDirection.
+    pub const GPS_IMG_DIRECTION: usize = 0x54;
+    /// `string[16]` GPSMapDatum.
+    pub const GPS_MAP_DATUM: usize = 0x58;
+}
 
 /// FFF header: `string[16]` file creator (ExifTool `FLIR::Header` tag 4).
 const FFF_HEADER_CREATOR_SOFTWARE: usize = 0x04;
@@ -367,80 +421,101 @@ pub fn parse_flir_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<(),
         return Err("Not a FLIR segment".to_string());
     }
 
-    // Parse FLIR segment header
-    // Byte 5: Often 0x01 (segment marker/version)
-    // Byte 6: Segment index (0-based) for multi-segment data
-    // Byte 7: Reserved/checksum
+    // Parse the FLIR APP1 chunk header, per ExifTool.pm:7865-7871:
+    //
+    //     my $chunkNum  = Get8u($segDataPt, 6);
+    //     my $chunksTot = Get8u($segDataPt, 7) + 1; # (note the "+ 1"!)
+    //
+    // Byte 5 is a marker ExifTool does not read. Byte 7 is NOT reserved: it
+    // is the index of the LAST chunk, so the chunk count is that plus one.
     let _segment_marker = data[5];
-    let segment_index = data[6];
+    let chunk_number = usize::from(data[6]);
+    let chunk_total = usize::from(data[7]) + 1;
 
     // The FFF data starts after the 8-byte header
-    // Header: "FLIR\0" (5) + marker (1) + index (1) + reserved (1)
+    // Header: "FLIR\0" (5) + marker (1) + index (1) + last-chunk index (1)
     let payload = if data.len() > 8 {
         &data[8..]
     } else {
         return Ok(());
     };
 
-    // Check if this looks like multi-segment data (DJI style)
-    // First segment (index 0) contains "FFF\0" header
-    let is_multi_segment = segment_index > 0
-        || (payload.len() >= 4 && &payload[0..4] == b"FFF\0" && segment_index == 0);
+    if chunk_total <= 1 {
+        // A lone chunk is the whole FFF structure; nothing to accumulate.
+        return parse_fff_structure(payload, metadata);
+    }
 
-    if is_multi_segment && segment_index < 20 {
-        // Multi-segment data: reassemble all segments before parsing
-        use std::cell::RefCell;
-        thread_local! {
-            static FLIR_SEGMENTS: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    // Multi-chunk FLIR data (DJI style): concatenate every chunk in index
+    // order and parse once, exactly as ExifTool.pm:7880-7899 does.
+    //
+    // The previous completion test was `the next slot is empty`, evaluated
+    // against a fixed 20-slot vector. That is true the moment chunk 0 lands,
+    // so DJI_XT2.jpg -- 11 chunks whose record directory points past the end
+    // of chunk 0 -- was parsed from chunk 0 alone and the buffer cleared
+    // before chunk 1 arrived. Every record beyond the FFF header was then
+    // dropped by the `record_end > data.len()` bounds check in
+    // `parse_fff_structure`, leaving CreatorSoftware as the only FLIR tag.
+    use std::cell::RefCell;
+    thread_local! {
+        static FLIR_CHUNKS: RefCell<FlirChunkBuffer> =
+            const { RefCell::new(FlirChunkBuffer { total: 0, chunks: Vec::new() }) };
+    }
+
+    FLIR_CHUNKS.with(|buffer| {
+        let mut buffer = buffer.borrow_mut();
+
+        // ExifTool aborts the whole accumulation when a later chunk disagrees
+        // about the total (`undef $flirCount if $chunksTot != $flirTotal`).
+        // Restarting on a fresh total is the same recovery.
+        //
+        // Chunk 0 also restarts, which is what keeps this buffer per-FILE.
+        // ExifTool gets that for free -- `@flirChunk` lives on the ExifTool
+        // object, one per file -- but this is a thread_local reused for every
+        // file the thread parses. Without the chunk-0 reset, a truncated FLIR
+        // image would leave partial chunks behind and the next image with the
+        // same chunk count would append onto them through the duplicate-chunk
+        // branch below, silently splicing two files together. The corpus has
+        // no such pair today, so nothing catches this but the reset itself.
+        if buffer.total != chunk_total || chunk_number == 0 {
+            buffer.total = chunk_total;
+            buffer.chunks = vec![None; chunk_total];
         }
 
-        FLIR_SEGMENTS.with(|segments| {
-            let mut segs = segments.borrow_mut();
+        let Some(slot) = buffer.chunks.get_mut(chunk_number) else {
+            return Ok(());
+        };
+        // A duplicate chunk number is appended rather than replacing the
+        // first copy, matching ExifTool's 'Duplicate FLIR chunk number(s)'
+        // branch.
+        match slot {
+            Some(existing) => existing.extend_from_slice(payload),
+            None => *slot = Some(payload.to_vec()),
+        }
 
-            // First segment (index 0) initializes the collection
-            if segment_index == 0 {
-                segs.clear();
-                segs.resize(20, Vec::new()); // Max 20 segments
-            }
+        if buffer.chunks.iter().any(Option::is_none) {
+            // Still waiting for more chunks.
+            return Ok(());
+        }
 
-            // Store this segment's payload
-            let idx = segment_index as usize;
-            if idx < segs.len() {
-                segs[idx] = payload.to_vec();
-            }
+        let mut complete_data = Vec::new();
+        for chunk in buffer.chunks.iter().flatten() {
+            complete_data.extend_from_slice(chunk);
+        }
+        buffer.total = 0;
+        buffer.chunks = Vec::new();
 
-            // Check if we have all segments (contiguous non-empty segments)
-            let filled_count = segs.iter().take_while(|s| !s.is_empty()).count();
-            let is_complete =
-                filled_count > 0 && (filled_count >= segs.len() || segs[filled_count].is_empty());
+        parse_fff_structure(&complete_data, metadata)
+    })
+}
 
-            if is_complete {
-                // Reassemble the complete FFF data
-                let mut complete_data = Vec::new();
-                for seg in segs.iter() {
-                    if !seg.is_empty() {
-                        complete_data.extend_from_slice(seg);
-                    } else {
-                        break; // Stop at first empty segment
-                    }
-                }
-
-                // Parse the complete FFF structure
-                let result = parse_fff_structure(&complete_data, metadata);
-
-                // Clear segments after parsing
-                segs.clear();
-
-                result
-            } else {
-                // Still waiting for more segments
-                Ok(())
-            }
-        })
-    } else {
-        // Single-segment FLIR data - parse directly
-        parse_fff_structure(payload, metadata)
-    }
+/// Accumulator for the chunks of one multi-chunk FLIR APP1 payload.
+///
+/// `total` is `byte 7 + 1` from the chunk header and `chunks` is indexed by
+/// `byte 6`, so an out-of-order or missing chunk is detectable rather than
+/// silently truncating the reassembled FFF structure.
+struct FlirChunkBuffer {
+    total: usize,
+    chunks: Vec<Option<Vec<u8>>>,
 }
 
 /// Parse the FLIR FFF (FLIR File Format) structure.
@@ -557,6 +632,9 @@ fn parse_fff_with_index(
             }
             RECORD_TYPE_PALETTE_INFO => {
                 parse_palette_info_record(record_data, metadata);
+            }
+            RECORD_TYPE_GPS_INFO => {
+                parse_gps_info_record(record_data, metadata);
             }
             RECORD_TYPE_EMBEDDED_IMAGE => {
                 // Note presence of embedded image but don't extract binary data
@@ -1165,6 +1243,183 @@ fn parse_camera_info_record(data: &[u8], metadata: &mut MetadataMap, endian: Fli
     }
 }
 
+/// Parse the GPSInfo record (`%Image::ExifTool::FLIR::GPSInfo`, FLIR.pm:613).
+///
+/// This is a plain `ProcessBinaryData` table at fixed offsets, always
+/// little-endian per the SubDirectory declaration on record 0x2b. It is a
+/// separate GPS fix from the file's EXIF GPS IFD and ExifTool reports it under
+/// its own family-0 group (`APP1`), so the two coexist rather than one
+/// overwriting the other.
+///
+/// Several entries carry a `RawConv` that suppresses the tag rather than
+/// printing a placeholder; each is reproduced at its call site below, because
+/// emitting a tag ExifTool withholds is as much a parity failure as omitting
+/// one it emits.
+fn parse_gps_info_record(data: &[u8], metadata: &mut MetadataMap) {
+    let reader = EndianReader::little_endian(data);
+
+    // 0x00 GPSValid: int32u, PrintConv => { 0 => 'No', 1 => 'Yes' }. A value
+    // outside that pair has no PrintConv entry, so ExifTool falls back to
+    // "Unknown (n)".
+    let Some(gps_valid) = reader.u32_at(gps_info_offsets::GPS_VALID) else {
+        return;
+    };
+    metadata.insert(
+        "FLIR:GPSValid".to_string(),
+        TagValue::new_string(match gps_valid {
+            0 => "No".to_string(),
+            1 => "Yes".to_string(),
+            other => format!("Unknown ({other})"),
+        }),
+    );
+
+    // 0x04 GPSVersionID: undef[4] with `PrintConv => 'join ".", split //, $val'`
+    // -- the four bytes are ASCII digits, split into characters and rejoined
+    // with dots, so the bytes "2200" print as "2.2.0.0". `RawConv` drops an
+    // all-NUL value.
+    if let Some(version) = reader.bytes_at(gps_info_offsets::GPS_VERSION_ID, 4)
+        && version != [0, 0, 0, 0]
+    {
+        let text = version
+            .iter()
+            .map(|byte| (*byte as char).to_string())
+            .collect::<Vec<_>>()
+            .join(".");
+        metadata.insert("FLIR:GPSVersionID".to_string(), TagValue::new_string(text));
+    }
+
+    insert_flir_gps_ref(
+        &reader,
+        gps_info_offsets::GPS_LATITUDE_REF,
+        "FLIR:GPSLatitudeRef",
+        &[("N", "North"), ("S", "South")],
+        metadata,
+    );
+    insert_flir_gps_ref(
+        &reader,
+        gps_info_offsets::GPS_LONGITUDE_REF,
+        "FLIR:GPSLongitudeRef",
+        &[("E", "East"), ("W", "West")],
+        metadata,
+    );
+
+    // 0x10/0x18/0x20: latitude, longitude and altitude are each guarded by
+    // `Condition => '$$self{GPSValid}'`, so they exist only when GPSValid is
+    // truthy. Latitude and longitude are signed doubles printed through
+    // ToDMS with a hemisphere letter; altitude is a float printed as
+    // `sprintf("%.2f m", $val)`.
+    if gps_valid != 0 {
+        if let Some(latitude) = reader.f64_at(gps_info_offsets::GPS_LATITUDE) {
+            metadata.insert(
+                "FLIR:GPSLatitude".to_string(),
+                TagValue::new_string(format_dms_with_ref(latitude, 'N')),
+            );
+        }
+        if let Some(longitude) = reader.f64_at(gps_info_offsets::GPS_LONGITUDE) {
+            metadata.insert(
+                "FLIR:GPSLongitude".to_string(),
+                TagValue::new_string(format_dms_with_ref(longitude, 'E')),
+            );
+        }
+        if let Some(altitude) = reader.f32_at(gps_info_offsets::GPS_ALTITUDE) {
+            metadata.insert(
+                "FLIR:GPSAltitude".to_string(),
+                TagValue::new_string(format!("{:.2} m", altitude)),
+            );
+        }
+    }
+
+    // 0x40 GPSDOP: float, `RawConv => '$val > 0 ? $val : undef'` -- the note
+    // in FLIR.pm says 0 and 1 are both seen as junk, but only non-positive is
+    // actually filtered, so that is what this filters.
+    if let Some(dop) = reader.f32_at(gps_info_offsets::GPS_DOP)
+        && dop > 0.0
+    {
+        metadata.insert(
+            "FLIR:GPSDOP".to_string(),
+            TagValue::new_string(format!("{:.2}", dop)),
+        );
+    }
+
+    insert_flir_gps_ref(
+        &reader,
+        gps_info_offsets::GPS_SPEED_REF,
+        "FLIR:GPSSpeedRef",
+        &[("K", "km/h"), ("M", "mph"), ("N", "knots")],
+        metadata,
+    );
+    insert_flir_gps_ref(
+        &reader,
+        gps_info_offsets::GPS_TRACK_REF,
+        "FLIR:GPSTrackRef",
+        &[("M", "Magnetic North"), ("T", "True North")],
+        metadata,
+    );
+    insert_flir_gps_ref(
+        &reader,
+        gps_info_offsets::GPS_IMG_DIRECTION_REF,
+        "FLIR:GPSImgDirectionRef",
+        &[("M", "Magnetic North"), ("T", "True North")],
+        metadata,
+    );
+
+    // 0x4c/0x50/0x54: `%float2f` (FLIR.pm:48) is `Format => 'float'` plus
+    // `sprintf("%.2f",$val)`, and each carries `RawConv => '$val < 0 ? undef :
+    // $val'`. Zero is kept -- DJI_XT2.jpg stores 0 for all three and ExifTool
+    // prints "0.00".
+    for (offset, key) in [
+        (gps_info_offsets::GPS_SPEED, "FLIR:GPSSpeed"),
+        (gps_info_offsets::GPS_TRACK, "FLIR:GPSTrack"),
+        (gps_info_offsets::GPS_IMG_DIRECTION, "FLIR:GPSImgDirection"),
+    ] {
+        if let Some(value) = reader.f32_at(offset)
+            && value >= 0.0
+        {
+            metadata.insert(
+                key.to_string(),
+                TagValue::new_string(format!("{:.2}", value)),
+            );
+        }
+    }
+
+    // 0x58 GPSMapDatum: string[16], `RawConv => 'length($val) ? $val : undef'`.
+    if let Some(datum) = reader.cstr_at(gps_info_offsets::GPS_MAP_DATUM, 16)
+        && !datum.is_empty()
+    {
+        metadata.insert(
+            "FLIR:GPSMapDatum".to_string(),
+            TagValue::new_string(datum.to_string()),
+        );
+    }
+}
+
+/// Emit one of GPSInfo's `string[2]` reference tags.
+///
+/// Every such entry in `%Image::ExifTool::FLIR::GPSInfo` pairs
+/// `RawConv => 'length($val) ? $val : undef'` with a small PrintConv hash, so
+/// an empty field is skipped entirely and a letter outside the hash falls back
+/// to ExifTool's `Unknown (x)` rendering.
+fn insert_flir_gps_ref(
+    reader: &EndianReader<'_>,
+    offset: usize,
+    key: &str,
+    print_conv: &[(&str, &str)],
+    metadata: &mut MetadataMap,
+) {
+    let Some(raw) = reader.cstr_at(offset, 2) else {
+        return;
+    };
+    if raw.is_empty() {
+        return;
+    }
+    let value = print_conv
+        .iter()
+        .find(|(code, _)| *code == raw)
+        .map(|(_, text)| (*text).to_string())
+        .unwrap_or_else(|| format!("Unknown ({raw})"));
+    metadata.insert(key.to_string(), TagValue::new_string(value));
+}
+
 /// Parse PaletteInfo record containing color palette configuration.
 ///
 /// The palette record defines the color mapping used to visualize
@@ -1577,6 +1832,90 @@ mod tests {
 
         // Should succeed without errors
         assert!(result.is_ok());
+    }
+
+    /// A multi-chunk FLIR payload must not be parsed until every chunk has
+    /// arrived.
+    ///
+    /// This is the regression that hid 61 of DJI_XT2.jpg's 62 FLIR tags: the
+    /// old completion test fired on chunk 0, so the record directory was read
+    /// against a truncated buffer and every record whose extent fell past the
+    /// end of chunk 0 was dropped by the bounds check in
+    /// `parse_fff_structure`. The chunk total lives in byte 7 of the APP1
+    /// header as `last index`, hence ExifTool.pm:7870's `+ 1`.
+    #[test]
+    fn multi_chunk_flir_waits_for_every_chunk() {
+        /// One APP1 FLIR chunk: "FLIR\0", marker, chunk index, last index.
+        fn chunk(index: u8, last_index: u8, payload: &[u8]) -> Vec<u8> {
+            let mut data = Vec::from(b"FLIR\x00".as_slice());
+            data.extend_from_slice(&[0x01, index, last_index]);
+            data.extend_from_slice(payload);
+            data
+        }
+
+        // A three-chunk FFF whose record directory sits in the final chunk,
+        // so nothing can be decoded until all three have been seen.
+        let mut header = Vec::from(b"FFF\x00".as_slice());
+        header.resize(64, 0);
+
+        let mut metadata = MetadataMap::new();
+        assert!(parse_flir_segment(&chunk(0, 2, &header), &mut metadata).is_ok());
+        assert!(
+            metadata.is_empty(),
+            "chunk 0 of 3 must not be parsed on its own"
+        );
+        assert!(parse_flir_segment(&chunk(1, 2, &[0u8; 32]), &mut metadata).is_ok());
+        assert!(
+            metadata.is_empty(),
+            "chunk 1 of 3 must not be parsed on its own"
+        );
+
+        // The final chunk completes the buffer, so parsing runs exactly once.
+        assert!(parse_flir_segment(&chunk(2, 2, &[0u8; 32]), &mut metadata).is_ok());
+    }
+
+    /// A truncated image must not bleed into the next one.
+    ///
+    /// The chunk buffer is a `thread_local` reused across files, so chunk 0
+    /// restarts it. Without that, the leftover chunk 0 of an image whose
+    /// remaining chunks never arrived would be appended to -- not replaced by
+    /// -- the next image's chunk 0, splicing two files into one FFF buffer.
+    #[test]
+    fn chunk_zero_restarts_after_a_truncated_image() {
+        fn chunk(index: u8, last_index: u8, payload: &[u8]) -> Vec<u8> {
+            let mut data = Vec::from(b"FLIR\x00".as_slice());
+            data.extend_from_slice(&[0x01, index, last_index]);
+            data.extend_from_slice(payload);
+            data
+        }
+
+        let mut first = Vec::from(b"FFF\x00".as_slice());
+        first.resize(64, 0xAA);
+        let mut metadata = MetadataMap::new();
+
+        // An image that announces two chunks but only ever delivers chunk 0.
+        assert!(parse_flir_segment(&chunk(0, 1, &first), &mut metadata).is_ok());
+
+        // The next image reuses the same chunk count. Its chunk 0 must
+        // replace the stale one, so the completed buffer is exactly the
+        // second image's two chunks and not four chunks' worth of bytes.
+        let mut second = Vec::from(b"FFF\x00".as_slice());
+        second.resize(64, 0);
+        assert!(parse_flir_segment(&chunk(0, 1, &second), &mut metadata).is_ok());
+        assert!(parse_flir_segment(&chunk(1, 1, &[0u8; 32]), &mut metadata).is_ok());
+    }
+
+    /// Byte 7 is the LAST chunk index, so a lone chunk carries 0 there and is
+    /// parsed immediately rather than waiting for a chunk that never comes.
+    #[test]
+    fn single_chunk_flir_parses_immediately() {
+        let mut data = Vec::from(b"FLIR\x00".as_slice());
+        data.extend_from_slice(&[0x01, 0x00, 0x00]);
+        data.extend_from_slice(b"FFF\x00");
+        data.resize(8 + 64, 0);
+
+        let mut metadata = MetadataMap::new();
+        assert!(parse_flir_segment(&data, &mut metadata).is_ok());
     }
 
     /// Colour components are reported as decimal "Y Cr Cb", per FLIR.pm's

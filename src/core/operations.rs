@@ -9,9 +9,9 @@ use crate::core::format_dispatch::dispatch_format_parser;
 use crate::core::jpeg_helpers::{
     process_app3_segments, process_app6_segments, process_app10_segments, process_app11_segments,
     process_app12_segments, process_app14_segments, process_com_segments, process_dqt_segments,
-    process_exif_segments, process_icc_segments, process_iptc_segments, process_jfif_segments,
-    process_mpf_segments, process_photoshop_segments, process_sof_segments, process_spiff_segments,
-    process_xmp_segments,
+    process_exif_segments, process_icc_segments, process_infiray_segments, process_iptc_segments,
+    process_jfif_segments, process_mpf_segments, process_photoshop_segments, process_sof_segments,
+    process_spiff_segments, process_xmp_segments,
 };
 use crate::core::operations_helpers::{read_u16, read_u32};
 #[cfg(test)]
@@ -85,6 +85,64 @@ pub fn read_metadata(path: &Path) -> Result<MetadataMap> {
     read_metadata_with_detector(path, DetectorMode::Signature)
 }
 
+/// Whether a failed read should fall back to bare identification.
+///
+/// Only `UnsupportedFormat` qualifies: that means "no parser for this", and the
+/// file is still worth identifying. A `ParseError` means the file *is* a format
+/// we handle and is malformed, and must stay an error -- downgrading it to a
+/// successful read with three identity tags would report a corrupt document as
+/// fine, which is worse than failing.
+pub(crate) fn is_unsupported(e: &ExifToolError) -> bool {
+    matches!(e, ExifToolError::UnsupportedFormat { .. })
+}
+
+/// Fill in `FileType`, `FileTypeExtension` and `MIMEType` from ExifTool's
+/// identification tables. Returns whether the file was recognised.
+///
+/// Used when no parser matched. Identifying a file is independent of being able
+/// to read its contents, and these three tags are what ExifTool reports for a
+/// format it knows of but has nothing else to say about.
+fn add_identity_tags(metadata: &mut MetadataMap, reader: &dyn FileReader, path: &Path) -> bool {
+    // 1 KiB is what the magic-number patterns are written against.
+    let want = reader.size().min(1024) as usize;
+    let header = reader.read(0, want).unwrap_or_default();
+    let ext = path.extension().and_then(|e| e.to_str());
+
+    let Some(id) = crate::filetype::identify(&header, ext) else {
+        return false;
+    };
+
+    // Overwrite only what is absent or a placeholder. `extract_file_metadata`
+    // fills these in optimistically before the format is known -- "Unknown",
+    // "application/octet-stream", and the on-disk extension rather than
+    // ExifTool's canonical one (`aif` where ExifTool says `aiff`). A real
+    // answer from a parser is still never replaced.
+    fn is_placeholder(v: Option<&str>) -> bool {
+        matches!(
+            v,
+            None | Some("") | Some("Unknown") | Some("unknown") | Some("application/octet-stream")
+        )
+    }
+
+    for (key, value) in [
+        ("File:FileType", id.file_type),
+        ("File:FileTypeExtension", id.extension.as_ref()),
+    ] {
+        // The extension is only a placeholder when it disagrees with the
+        // canonical one, which is exactly when we should correct it.
+        let current = metadata.get_string(key);
+        if is_placeholder(current) || (key.ends_with("Extension") && current != Some(value)) {
+            metadata.insert(key, TagValue::new_string(value));
+        }
+    }
+    if let Some(mime) = id.mime_type {
+        if is_placeholder(metadata.get_string("File:MIMEType")) {
+            metadata.insert("File:MIMEType", TagValue::new_string(mime));
+        }
+    }
+    true
+}
+
 /// Detect file format using the specified detection mode.
 ///
 /// This helper function wraps format detection to support both signature-based
@@ -143,7 +201,22 @@ pub fn read_metadata_with_detector(
     let reader = MMapReader::new(path)?;
 
     // Step 3: Detect format using specified detector mode
-    let mut format = detect_format_with_mode(&reader, detector_mode)?;
+    //
+    // A format we cannot parse is not the same as a file we cannot recognise.
+    // ExifTool still reports FileType/FileTypeExtension/MIMEType for AIFF, DPX,
+    // SWF and ~40 other formats OxiDex has no parser for; returning Err here
+    // meant emitting nothing at all for those files, including the file-system
+    // metadata already gathered above. Identify what we can and return that.
+    let mut format = match detect_format_with_mode(&reader, detector_mode) {
+        Ok(f) => f,
+        Err(e) => {
+            if is_unsupported(&e) && add_identity_tags(&mut metadata, &reader, path) {
+                crate::composite::apply(&mut metadata);
+                return Ok(metadata);
+            }
+            return Err(e);
+        }
+    };
 
     // Step 3b: Check for camera raw formats using filename + magic bytes
     // Many raw formats are TIFF-based and need filename context for proper detection
@@ -164,14 +237,55 @@ pub fn read_metadata_with_detector(
     }
 
     // Step 4: Route to appropriate parser based on detected format and extract format-specific metadata
-    let format_metadata = dispatch_format_parser(&reader, format)?;
+    //
+    // Detection returning Unknown, or a parser refusing the file, still leaves
+    // it identifiable: ExifTool reports FileType/FileTypeExtension/MIMEType for
+    // ~40 formats OxiDex has no parser for. Failing the whole read there threw
+    // away the file-system metadata too, so those files produced no output at
+    // all rather than partial output.
+    let format_metadata = match dispatch_format_parser(&reader, format) {
+        Ok(m) => m,
+        Err(e) => {
+            if is_unsupported(&e) && add_identity_tags(&mut metadata, &reader, path) {
+                crate::composite::apply(&mut metadata);
+                return Ok(metadata);
+            }
+            return Err(e);
+        }
+    };
 
     // Step 5: Merge format-specific metadata into file metadata
     // Format-specific metadata takes precedence over file metadata in case of conflicts
     // Use into_iter() to consume format_metadata and avoid cloning keys and values
-    for (key, value) in format_metadata {
-        metadata.insert(key, value);
+    metadata.merge(format_metadata);
+
+    // Step 5b: Backstop for ExifByteOrder on TIFF-based files.
+    //
+    // The JPEG path records this when it parses the APP1 TIFF header, but the
+    // raw formats (CR2, DNG, NEF, ...) reach their IFDs through a dozen
+    // different entry points in the raw parsers. Every TIFF-based file starts
+    // with the marker, so reading it here covers all of them at once instead
+    // of threading the same insert through each parser.
+    if !metadata.contains_key("File:ExifByteOrder") {
+        if let Ok(head) = reader.read(0, 2) {
+            let order = match &head[..] {
+                b"II" => Some(ByteOrder::LittleEndian),
+                b"MM" => Some(ByteOrder::BigEndian),
+                _ => None,
+            };
+            if let Some(order) = order {
+                metadata.insert(
+                    "File:ExifByteOrder",
+                    TagValue::new_string(order.exif_byte_order_tag()),
+                );
+            }
+        }
     }
+
+    // Step 6: Derive ExifTool's Composite tags (ImageSize, Megapixels,
+    // Aperture, ShutterSpeed, ...). These are computed from tags already
+    // extracted above, so this runs last and never overwrites a parsed value.
+    crate::composite::apply(&mut metadata);
 
     Ok(metadata)
 }
@@ -535,12 +649,34 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
     process_exif_segments(&segments, reader, &mut metadata);
     process_xmp_segments(&segments, &mut metadata);
 
-    // FotoStation writes its records after the JPEG's EOI, so it needs the
-    // whole file rather than the parsed segment list. It runs before
-    // `process_iptc_segments` because its trailer can carry an IPTC block, and
-    // an APP13 Photoshop resource -- the MWG-standard location -- outranks it
-    // when a file has both.
+    // AFCP and FotoStation write their records after the JPEG's EOI, so they
+    // need the whole file rather than the parsed segment list. Both can carry
+    // an IPTC block, and ExifTool ranks the three possible sources like this:
+    //
+    // * `IPTC::ProcessIPTC` (IPTC.pm:1064-1102) checks each IPTC directory's
+    //   metadata path against `%isStandardIPTC` (IPTC.pm:38-54). Only
+    //   `JPEG-APP13-Photoshop-IPTC` is standard in a JPEG; a trailer's path is
+    //   not, so ExifTool sets `LOW_PRIORITY_DIR{IPTC}` for it and files it
+    //   under a numbered family-1 group (`IPTC2`, `IPTC3`, ...).
+    // * `FoundTag` (ExifTool.pm:9535-9543) turns that into priority 0 and
+    //   keeps the existing value unless `$priority >= $oldPriority`, so a
+    //   trailer never displaces the APP13 value -- it is only reachable with
+    //   `exiftool -a`.
+    // * Between two low-priority directories the *first* one processed wins:
+    //   FoundTag promotes an existing 0-priority tag to 1 before comparing
+    //   ("promote existing 0-priority tag so it takes precedence over a new
+    //   0-tag", ExifTool.pm:9518-9527). `ProcessTrailers` works inwards from
+    //   the end of the file, so the outermost trailer is the one processed
+    //   first. In `combined-samples/ExifTool.jpg` that is FotoStation, with
+    //   AFCP innermost.
+    //
+    // Inserting into a map keeps the *last* write, so the order below is the
+    // reverse of ExifTool's processing order: innermost trailer, outermost
+    // trailer, then the standard APP13 resource.
     if let Ok(file) = reader.read(0, reader.size() as usize) {
+        for (key, value) in crate::parsers::jpeg::afcp::parse_afcp_trailer(file).iter() {
+            metadata.insert(key.clone(), value.clone());
+        }
         for (key, value) in
             crate::parsers::jpeg::fotostation::parse_fotostation_trailer(file).iter()
         {
@@ -560,10 +696,9 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
     process_spiff_segments(&segments, &mut metadata);
 
     // Canon VRD sits after the JPEG's EOI, so it needs the whole file rather
-    // than the parsed segment list, which stops at the EOI marker. The
-    // FotoStation trailer is read further up, BEFORE process_iptc_segments, so
-    // that an APP13 Photoshop resource -- the MWG-standard location -- outranks
-    // it when a file carries both.
+    // than the parsed segment list, which stops at the EOI marker. It carries
+    // no IPTC, so unlike the AFCP and FotoStation trailers read further up it
+    // does not have to run before `process_iptc_segments`.
     if let Ok(file) = reader.read(0, reader.size() as usize) {
         for (key, value) in crate::parsers::canon_vrd::parse_canon_vrd_trailer(file).iter() {
             metadata.insert(key.clone(), value.clone());
@@ -572,6 +707,9 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
 
     // Process HDR and manufacturer-specific APP segments
     process_app3_segments(&segments, &mut metadata);
+    // InfiRay IJPEG spreads its records over APP2-APP9; APP6 and APP8 are read
+    // by the two calls that already own those markers.
+    process_infiray_segments(&segments, &mut metadata);
     process_app6_segments(&segments, &mut metadata);
     process_app10_segments(&segments, &mut metadata);
     process_app11_segments(&segments, &mut metadata);
@@ -630,6 +768,13 @@ pub(crate) fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap
 
     // Parse all IFDs in the chain (IFD0, IFD1, IFD2, ...)
     let mut metadata = MetadataMap::new();
+
+    // Endianness of the TIFF header, which is what ExifTool reports as
+    // ExifByteOrder for TIFF-based files (TIFF, DNG, CR2, NEF, ...).
+    metadata.insert(
+        "File:ExifByteOrder",
+        TagValue::new_string(byte_order.exif_byte_order_tag()),
+    );
     parse_ifd_chain(reader, first_ifd_offset, byte_order, &mut metadata)?;
 
     // Add TIFF: prefixed format-specific tags from standard EXIF tags

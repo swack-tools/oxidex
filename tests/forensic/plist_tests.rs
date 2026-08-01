@@ -12,6 +12,7 @@ use oxidex::core::TagValue;
 use oxidex::parsers::specialized::plist::{PlistParser, parse_plist_metadata};
 
 /// Binary plist magic bytes
+#[allow(dead_code)]
 const BPLIST_MAGIC: &[u8; 6] = b"bplist";
 
 /// Helper function to create XML plist with given content

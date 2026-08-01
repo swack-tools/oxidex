@@ -25,6 +25,7 @@
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
+use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::icc::parse_icc_profile_data as parse_icc;
 use crate::parsers::raw::{RawFormat, raf_parser};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
@@ -889,13 +890,15 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
                     // Use the MakerNote dispatcher to parse manufacturer-specific tags
                     let mut makernote_tags = std::collections::HashMap::new();
+                    let mut value_forms = std::collections::HashMap::new();
                     if let Err(e) =
-                        crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_model(
+                        crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_model_and_values(
                             make,
                             camera_model.as_deref(),
                             mn_data,
                             byte_order,
                             &mut makernote_tags,
+                            &mut value_forms,
                         )
                     {
                         eprintln!("Warning: Failed to parse MakerNote for {}: {}", make, e);
@@ -904,6 +907,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         // Tags already have proper prefixes (e.g., "Canon:MacroMode")
                         for (tag_name, tag_value) in makernote_tags {
                             metadata.insert(tag_name, TagValue::new_string(tag_value));
+                        }
+                        for (tag_name, value) in value_forms {
+                            metadata.set_value_form(tag_name, value);
                         }
                     }
                 }
@@ -1225,19 +1231,12 @@ fn extract_rw2_embedded_exif_tags(
         return Ok(());
     };
 
-    // PrintIM (0xC4A5). PrintIM.pm's ProcessPrintIM checks for a "PrintIM"
-    // signature and then reads PrintIMVersion as four bytes at offset 8:
-    //     $et->HandleTag($tagTablePtr, 'PrintIMVersion',
-    //                    substr($$dataPt, $offset + 8, 4), ...);
-    // Every other entry in that block is Unknown, so ExifTool reports exactly
-    // one PrintIM tag by default.
     for (tag_id, _field_type, _value_count, raw_bytes) in &ifd0_tags {
         let bytes = raw_bytes.as_ref();
-        if *tag_id == 0xC4A5 && bytes.len() >= 12 && bytes.starts_with(b"PrintIM") {
-            metadata.insert(
-                "PrintIM:PrintIMVersion".to_string(),
-                TagValue::new_string(String::from_utf8_lossy(&bytes[8..12]).to_string()),
-            );
+        if *tag_id == 0xC4A5
+            && let Some(version) = decode_print_im_version(bytes, byte_order)
+        {
+            metadata.insert(PRINT_IM_VERSION_TAG, TagValue::new_string(version));
         }
     }
 
@@ -2135,6 +2134,34 @@ fn format_exif_display_value(
                 Some((numerator / denominator).to_string())
             } else {
                 Some(format!("{}", f64::from(numerator) / f64::from(denominator)))
+            }
+        }
+        // CR2CFAPattern, found in the CR2 IFD3 sensor directory. Exif.pm
+        // 0xc5e0 declares no Format, so the width is whatever the file wrote
+        // -- CanonRaw.cr2 stores it as int32u[1], not the int16u the rest of
+        // this table assumes -- and both are accepted here for that reason.
+        // The tag chains a ValueConv onto a PrintConv, so the printed string
+        // is the composition of the two, verbatim:
+        //     ValueConv => { 1 => '0 1 1 2', 2 => '2 1 1 0',
+        //                    3 => '1 2 0 1', 4 => '1 0 2 1' },
+        //     PrintConv => { '0 1 1 2' => '[Red,Green][Green,Blue]',
+        //                    '2 1 1 0' => '[Blue,Green][Green,Red]',
+        //                    '1 2 0 1' => '[Green,Blue][Red,Green]',
+        //                    '1 0 2 1' => '[Green,Red][Blue,Green]' },
+        // Values outside 1..=4 have no ValueConv entry, so ExifTool leaves
+        // them as the raw number -- returning None here does the same.
+        0xC5E0 if matches!(field_type, 3 | 4) && value_count >= 1 => {
+            let raw = if field_type == 3 {
+                u32::from(read_tiff_u16(bytes, byte_order)?)
+            } else {
+                read_tiff_u32(bytes.get(..4)?, byte_order)?
+            };
+            match raw {
+                1 => Some("[Red,Green][Green,Blue]".to_string()),
+                2 => Some("[Blue,Green][Green,Red]".to_string()),
+                3 => Some("[Green,Blue][Red,Green]".to_string()),
+                4 => Some("[Green,Red][Blue,Green]".to_string()),
+                _ => None,
             }
         }
         // ColorSpace: SHORT[1].
@@ -5764,20 +5791,15 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                         continue;
                                     }
 
-                                    // PrintIM directory (tag 0xC4A5): a small proprietary
-                                    // sub-block starting with "PrintIM\0" followed by a
-                                    // 4-byte ASCII version string at offset 8. ExifTool
-                                    // reports this under its own "PrintIM" family.
-                                    if *tag_id == 0xC4A5
-                                        && bytes.len() >= 12
-                                        && &bytes[0..7] == b"PrintIM"
-                                    {
-                                        let version =
-                                            String::from_utf8_lossy(&bytes[8..12]).to_string();
-                                        metadata.insert(
-                                            "PrintIM:PrintIMVersion".to_string(),
-                                            TagValue::new_string(version),
-                                        );
+                                    if *tag_id == 0xC4A5 {
+                                        if let Some(version) =
+                                            decode_print_im_version(bytes, byte_order)
+                                        {
+                                            metadata.insert(
+                                                PRINT_IM_VERSION_TAG,
+                                                TagValue::new_string(version),
+                                            );
+                                        }
                                         continue;
                                     }
 

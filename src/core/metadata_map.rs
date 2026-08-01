@@ -20,6 +20,16 @@ pub struct MetadataMap {
     /// Internal storage mapping tag names to their values
     #[serde(flatten)]
     tags: HashMap<String, TagValue>,
+
+    /// Full-precision `ValueConv` forms used by derived tags.
+    ///
+    /// ExifTool keeps a tag's converted value separate from its `PrintConv`
+    /// display. Most OxiDex tags need only one form, but a rounded display such
+    /// as Nikon's `FocusDistance` must not be fed back into DOF arithmetic.
+    /// This sidecar is deliberately private and skipped by serde: it augments
+    /// an existing tag and is never itself an emitted metadata tag.
+    #[serde(skip)]
+    value_forms: HashMap<String, String>,
 }
 
 impl MetadataMap {
@@ -36,6 +46,7 @@ impl MetadataMap {
     pub fn new() -> Self {
         Self {
             tags: HashMap::new(),
+            value_forms: HashMap::new(),
         }
     }
 
@@ -46,6 +57,7 @@ impl MetadataMap {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             tags: HashMap::with_capacity(capacity),
+            value_forms: HashMap::new(),
         }
     }
 
@@ -63,7 +75,38 @@ impl MetadataMap {
     /// metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
     /// ```
     pub fn insert<K: Into<String>>(&mut self, key: K, value: TagValue) -> Option<TagValue> {
-        self.tags.insert(key.into(), value)
+        let key = key.into();
+        // Replacing the visible tag invalidates any ValueConv form belonging
+        // to its predecessor. Parsers attach a new form explicitly afterwards.
+        self.value_forms.remove(&key);
+        self.tags.insert(key, value)
+    }
+
+    /// Attaches a full-precision value form to an existing visible tag.
+    ///
+    /// The value is intentionally absent from iteration and serialization. It
+    /// is currently consumed only by the Composite layer.
+    pub(crate) fn set_value_form<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
+        let key = key.into();
+        if self.tags.contains_key(&key) {
+            self.value_forms.insert(key, value.into());
+        }
+    }
+
+    /// Returns the full-precision value form attached to `key`, if any.
+    pub(crate) fn value_form(&self, key: &str) -> Option<&str> {
+        self.value_forms.get(key).map(String::as_str)
+    }
+
+    /// Merges another map while retaining private value forms.
+    pub(crate) fn merge(&mut self, other: MetadataMap) {
+        let MetadataMap { tags, value_forms } = other;
+        for (key, value) in tags {
+            self.insert(key, value);
+        }
+        for (key, value) in value_forms {
+            self.set_value_form(key, value);
+        }
     }
 
     /// Retrieves a tag value by name
@@ -77,6 +120,9 @@ impl MetadataMap {
     ///
     /// Returns `None` if the tag doesn't exist.
     pub fn get_mut(&mut self, key: &str) -> Option<&mut TagValue> {
+        // A mutable reference can change the visible value without another
+        // call into this map, so its old ValueConv form is no longer sound.
+        self.value_forms.remove(key);
         self.tags.get_mut(key)
     }
 
@@ -84,6 +130,7 @@ impl MetadataMap {
     ///
     /// Returns the value if the tag existed, `None` otherwise.
     pub fn remove(&mut self, key: &str) -> Option<TagValue> {
+        self.value_forms.remove(key);
         self.tags.remove(key)
     }
 
@@ -105,6 +152,7 @@ impl MetadataMap {
     /// Clears all tags from the map
     pub fn clear(&mut self) {
         self.tags.clear();
+        self.value_forms.clear();
     }
 
     /// Returns an iterator over tag names and values
@@ -161,6 +209,7 @@ impl FromIterator<(String, TagValue)> for MetadataMap {
     fn from_iter<T: IntoIterator<Item = (String, TagValue)>>(iter: T) -> Self {
         Self {
             tags: HashMap::from_iter(iter),
+            value_forms: HashMap::new(),
         }
     }
 }
@@ -246,6 +295,38 @@ mod tests {
             Some("Canon".to_string())
         );
         assert_eq!(map.get_string("EXIF:Make"), Some("Sony"));
+    }
+
+    #[test]
+    fn replacing_or_mutating_a_tag_invalidates_its_value_form() {
+        let mut map = MetadataMap::new();
+        map.insert("Nikon:FocusDistance", TagValue::new_string("0.71 m"));
+        map.set_value_form("Nikon:FocusDistance", "0.707945784384138");
+
+        map.insert("Nikon:FocusDistance", TagValue::new_string("1.00 m"));
+        assert_eq!(map.value_form("Nikon:FocusDistance"), None);
+
+        map.set_value_form("Nikon:FocusDistance", "1");
+        assert!(map.get_mut("Nikon:FocusDistance").is_some());
+        assert_eq!(map.value_form("Nikon:FocusDistance"), None);
+    }
+
+    #[test]
+    fn merge_preserves_value_forms_without_serializing_them() {
+        let mut source = MetadataMap::new();
+        source.insert("Nikon:FocusDistance", TagValue::new_string("0.71 m"));
+        source.set_value_form("Nikon:FocusDistance", "0.707945784384138");
+
+        let mut target = MetadataMap::new();
+        target.merge(source);
+
+        assert_eq!(
+            target.value_form("Nikon:FocusDistance"),
+            Some("0.707945784384138")
+        );
+        let json = serde_json::to_string(&target).unwrap();
+        assert!(json.contains("0.71 m"));
+        assert!(!json.contains("0.707945784384138"));
     }
 
     #[test]

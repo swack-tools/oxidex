@@ -499,6 +499,7 @@ pub fn perl_num_to_string(v: f64) -> String {
 #[derive(Default)]
 pub struct Ctx {
     members: HashMap<Dm, Scalar>,
+    value_forms: HashMap<String, String>,
     pub model: Option<String>,
     /// `$$self{FILE_TYPE}` -- "JPEG" for JPEGs, "TIFF" for NEF and TIFF.
     ///
@@ -514,6 +515,7 @@ impl Ctx {
     pub fn new(model: Option<&str>, file_type: Option<&'static str>) -> Self {
         Ctx {
             members: HashMap::new(),
+            value_forms: HashMap::new(),
             model: model.map(str::to_string),
             file_type,
         }
@@ -525,6 +527,14 @@ impl Ctx {
 
     pub fn get(&self, dm: Dm) -> Option<&Scalar> {
         self.members.get(&dm)
+    }
+
+    pub fn set_value_form(&mut self, key: String, value: String) {
+        self.value_forms.insert(key, value);
+    }
+
+    pub fn take_value_forms(&mut self) -> HashMap<String, String> {
+        std::mem::take(&mut self.value_forms)
     }
 
     fn num(&self, dm: Dm) -> f64 {
@@ -1206,9 +1216,17 @@ pub fn process(
         // `NikonSettings`'. `Priority => 0` never displaces anything.
         let key = format!("Nikon:{}", tag.name);
         if tag.low_priority {
-            out.entry(key).or_insert(printed);
+            if let std::collections::hash_map::Entry::Vacant(entry) = out.entry(key.clone()) {
+                entry.insert(printed);
+                if tag.name == "FocusDistance" {
+                    ctx.set_value_form(key, converted.text());
+                }
+            }
         } else {
-            out.insert(key, printed);
+            out.insert(key.clone(), printed);
+            if tag.name == "FocusDistance" {
+                ctx.set_value_form(key, converted.text());
+            }
         }
     }
 }

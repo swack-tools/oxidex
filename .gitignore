@@ -12,6 +12,15 @@ node_modules
 
 # Driver B model config (holds API keys) -- see config.example.toml
 config.toml
+# ...and every hand-rolled backup of it. These hold the SAME live API keys as
+# config.toml itself, and the pattern above does not cover them. This is not a
+# hypothetical: commit 85a24f04390d ("fix(dng): wire 1 missing tags") swept
+# `config.toml.bak-pre-gpt55` -- 163 lines including two live wfr_* keys -- into
+# a worker branch, because the fleet's `git add -A` found an unignored file that
+# happened to be sitting in the worktree root. Any operator who backs up
+# config.toml before an edit creates one of these; the pattern has to catch them
+# all rather than depend on remembering to put each one somewhere safe.
+config.toml.bak*
 
 # Driver B parallel-run worker logs (default --log-dir)
 /logs/
@@ -61,6 +70,13 @@ benches/target/
 # ...except saved Workflow scripts, which are checked-in tooling, not local config
 !.claude/workflows/
 !.claude/workflows/**
+# ...and skills that are shared team tooling rather than local config. Skills are
+# allowlisted one at a time: un-ignore the directory so git descends into it,
+# re-ignore its direct entries, then negate each shared skill. To share another
+# skill, add one more "!.claude/skills/<name>/" line.
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/exiftool-parity/
 
 # Git worktrees
 .worktrees/

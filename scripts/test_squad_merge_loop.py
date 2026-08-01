@@ -1030,9 +1030,11 @@ class PollOnceBatchIntegrationTests(GitRepoTestCase):
     def test_blocked_publication_skips_processing_until_due(self):
         repo, sha = self._make_candidate()
         home = self.tmp / "home"
+        squad_head = git_out(repo, "rev-parse", "squad/nikon").strip()
         sml.save_batch_state(
             sml.batch_state_path(home, "nikon"),
-            {"blocked": True, "commits_since": 0, "last_batch_ts": 1000, "baselines": {}},
+            {"blocked": True, "commits_since": 0, "last_batch_ts": 1000,
+             "baselines": {}, "baseline_head": squad_head, "staging_head": squad_head},
         )
         result = sml.poll_once(
             repo_root=repo, squad="nikon", home=home, staging_dir=self.tmp / "staging-nikon",
@@ -1049,9 +1051,11 @@ class PollOnceBatchIntegrationTests(GitRepoTestCase):
     def test_blocked_publication_retries_and_clears_when_due_and_now_passing(self):
         repo, sha = self._make_candidate()
         home = self.tmp / "home"
+        squad_head = git_out(repo, "rev-parse", "squad/nikon").strip()
         sml.save_batch_state(
             sml.batch_state_path(home, "nikon"),
-            {"blocked": True, "commits_since": 0, "last_batch_ts": 0, "baselines": {}},
+            {"blocked": True, "commits_since": 0, "last_batch_ts": 0,
+             "baselines": {}, "baseline_head": squad_head, "staging_head": squad_head},
         )
         result = sml.poll_once(
             repo_root=repo, squad="nikon", home=home, staging_dir=self.tmp / "staging-nikon",
@@ -1078,9 +1082,11 @@ class PollOnceBatchIntegrationTests(GitRepoTestCase):
         # squad.
         repo = self.make_repo()  # no worker branches at all -> zero candidates
         home = self.tmp / "home"
+        main_head = git_out(repo, "rev-parse", "main").strip()
         sml.save_batch_state(
             sml.batch_state_path(home, "nikon"),
-            {"blocked": False, "commits_since": 0, "last_batch_ts": 0, "baselines": {}},
+            {"blocked": False, "commits_since": 0, "last_batch_ts": 0,
+             "baselines": {}, "baseline_head": main_head, "staging_head": main_head},
         )
         batch_check_calls = []
 
@@ -1105,9 +1111,11 @@ class PollOnceBatchIntegrationTests(GitRepoTestCase):
     def test_batch_check_not_due_yet_with_zero_commits_does_not_run(self):
         repo = self.make_repo()
         home = self.tmp / "home"
+        main_head = git_out(repo, "rev-parse", "main").strip()
         sml.save_batch_state(
             sml.batch_state_path(home, "nikon"),
-            {"blocked": False, "commits_since": 0, "last_batch_ts": 9_500, "baselines": {}},
+            {"blocked": False, "commits_since": 0, "last_batch_ts": 9_500,
+             "baselines": {}, "baseline_head": main_head, "staging_head": main_head},
         )
         result = sml.poll_once(
             repo_root=repo, squad="nikon", home=home, staging_dir=self.tmp / "staging-nikon",
@@ -1118,6 +1126,108 @@ class PollOnceBatchIntegrationTests(GitRepoTestCase):
         self.assertIsNone(result["batch_check"])
         state = sml.load_batch_state(sml.batch_state_path(home, "nikon"))
         self.assertEqual(state["last_batch_ts"], 9_500)  # untouched
+
+    def test_recut_to_new_main_replaces_stale_baseline_before_unblocking(self):
+        repo = self.make_repo()
+        old_head = git_out(repo, "rev-parse", "main").strip()
+        git(repo, "branch", "squad/nikon", old_head)
+        home = self.tmp / "home"
+        sml.save_batch_state(
+            sml.batch_state_path(home, "nikon"),
+            {
+                "blocked": True,
+                "commits_since": 0,
+                "last_batch_ts": 1000,
+                "baselines": {
+                    "NEF": {"duplicate_emissions": [], "extra_in_oxidex": []},
+                },
+                # Legacy state from before head lineage was persisted.
+            },
+        )
+
+        new_head = self.commit_file(repo, "global.rs", "new main output\n", "advance main")
+        git(repo, "branch", "-f", "squad/nikon", new_head)  # simulate a re-cut
+        compared_heads = []
+
+        def comparison_fn(staging, cache, fmt, suffix):
+            compared_heads.append(sml.head_sha(staging))
+            return {
+                "duplicate_emissions": [],
+                "extra_in_oxidex": [{"family": "Composite", "name": "InheritedFromMain"}],
+            }
+
+        result = sml.poll_once(
+            repo_root=repo, squad="nikon", home=home,
+            staging_dir=self.tmp / "staging-nikon",
+            squads_toml_path=self._squads_toml(), cache_dir="/unused",
+            origin_ref="main", batch_commits=10, batch_seconds=900,
+            now_fn=lambda: 1001, comparison_fn=comparison_fn,
+            check_recut=False, log_fn=lambda *a: None,
+        )
+
+        self.assertEqual(compared_heads, [new_head])
+        self.assertTrue(result["batch_check"]["ok"])
+        self.assertFalse(result.get("blocked", False))
+        state = sml.load_batch_state(sml.batch_state_path(home, "nikon"))
+        self.assertFalse(state["blocked"])
+        self.assertEqual(state["baseline_head"], new_head)
+        self.assertEqual(state["staging_head"], new_head)
+
+    def test_recut_with_retained_commits_validates_them_against_fresh_main(self):
+        repo = self.make_repo()
+        old_head = git_out(repo, "rev-parse", "main").strip()
+        git(repo, "branch", "squad/nikon", old_head)
+        home = self.tmp / "home"
+        sml.save_batch_state(
+            sml.batch_state_path(home, "nikon"),
+            {
+                "blocked": False,
+                "commits_since": 1,
+                "last_batch_ts": 1000,
+                "baselines": {
+                    "NEF": {"duplicate_emissions": [], "extra_in_oxidex": []},
+                },
+                "baseline_head": old_head,
+                "staging_head": old_head,
+            },
+        )
+
+        main_head = self.commit_file(repo, "global.rs", "new main output\n", "advance main")
+        git(repo, "branch", "-f", "squad/nikon", main_head)
+        git(repo, "checkout", "-q", "squad/nikon")
+        squad_head = self.commit_file(repo, "squad.rs", "bad output\n", "retained squad work")
+        git(repo, "checkout", "-q", "main")
+        compared_heads = []
+
+        def comparison_fn(staging, cache, fmt, suffix):
+            current = sml.head_sha(staging)
+            compared_heads.append(current)
+            extras = [{"family": "Composite", "name": "InheritedFromMain"}]
+            if current == squad_head:
+                extras.append({"family": "NEF", "name": "RegressionFromSquad"})
+            return {"duplicate_emissions": [], "extra_in_oxidex": extras}
+
+        result = sml.poll_once(
+            repo_root=repo, squad="nikon", home=home,
+            staging_dir=self.tmp / "staging-nikon",
+            squads_toml_path=self._squads_toml(), cache_dir="/unused",
+            origin_ref="main", batch_commits=10, batch_seconds=900,
+            now_fn=lambda: 1001, comparison_fn=comparison_fn,
+            check_recut=False, log_fn=lambda *a: None,
+        )
+
+        self.assertEqual(compared_heads, [main_head, squad_head])
+        self.assertFalse(result["batch_check"]["ok"])
+        self.assertTrue(result["blocked"])
+        self.assertTrue(any("RegressionFromSquad" in p
+                            for p in result["batch_check"]["problems"]))
+        state = sml.load_batch_state(sml.batch_state_path(home, "nikon"))
+        self.assertEqual(state["baseline_head"], main_head)
+        self.assertEqual(state["staging_head"], squad_head)
+        self.assertEqual(
+            state["baselines"]["NEF"]["extra_in_oxidex"],
+            [{"family": "Composite", "name": "InheritedFromMain"}],
+        )
 
 
 class PollOnceSquadSlotBranchIntegrationTests(GitRepoTestCase):

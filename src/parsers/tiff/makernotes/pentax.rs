@@ -2696,6 +2696,37 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_value_uses_right_aligned_inline_values() {
+        let entry = IfdEntry {
+            tag_id: PENTAX_QUALITY,
+            field_type: 1,
+            value_count: 1,
+            value_offset: 0x0300_0000,
+        };
+
+        let entry = right_align_inline_value(entry, ByteOrder::BigEndian);
+        assert_eq!(extract_value_as_i32(&entry, ByteOrder::BigEndian), 3);
+
+        let entry = IfdEntry {
+            tag_id: PENTAX_WHITE_BALANCE,
+            field_type: 3,
+            value_count: 1,
+            value_offset: 0x0009_0000,
+        };
+
+        let entry = right_align_inline_value(entry, ByteOrder::BigEndian);
+        assert_eq!(extract_value_as_i32(&entry, ByteOrder::BigEndian), 9);
+
+        let entry = IfdEntry {
+            tag_id: PENTAX_WHITE_BALANCE,
+            field_type: 3,
+            value_count: 1,
+            value_offset: 9,
+        };
+        assert_eq!(extract_value_as_i32(&entry, ByteOrder::LittleEndian), 9);
+    }
+
+    #[test]
     fn test_decode_drive_mode() {
         assert_eq!(DRIVE_MODE.decode(0), "Single-frame");
         assert_eq!(DRIVE_MODE.decode(1), "Continuous");
@@ -2773,18 +2804,16 @@ mod tests {
 // Value Extraction Helpers for Byte Order Handling
 // ============================================================================
 
-fn extract_u8_value(entry: &IfdEntry, byte_order: ByteOrder) -> u8 {
-    match byte_order {
-        ByteOrder::BigEndian => ((entry.value_offset >> 24) & 0xFF) as u8,
-        ByteOrder::LittleEndian => (entry.value_offset & 0xFF) as u8,
-    }
+fn extract_u8_value(entry: &IfdEntry, _byte_order: ByteOrder) -> u8 {
+    // `right_align_inline_value` normalizes both byte orders before tag
+    // dispatch, so inline BYTE values always occupy the low byte here.
+    (entry.value_offset & 0xFF) as u8
 }
 
-fn extract_u16_value(entry: &IfdEntry, byte_order: ByteOrder) -> u16 {
-    match byte_order {
-        ByteOrder::BigEndian => ((entry.value_offset >> 16) & 0xFFFF) as u16,
-        ByteOrder::LittleEndian => (entry.value_offset & 0xFFFF) as u16,
-    }
+fn extract_u16_value(entry: &IfdEntry, _byte_order: ByteOrder) -> u16 {
+    // `right_align_inline_value` normalizes both byte orders before tag
+    // dispatch, so inline SHORT values always occupy the low two bytes here.
+    (entry.value_offset & 0xFFFF) as u16
 }
 
 fn extract_value_as_i32(entry: &IfdEntry, byte_order: ByteOrder) -> i32 {

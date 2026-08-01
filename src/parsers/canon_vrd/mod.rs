@@ -30,15 +30,17 @@
 //!
 //! ExifTool reaches the trailer by peeling off whatever trailers follow it one
 //! at a time and passing the accumulated offset to `ProcessCanonVRD`. oxidex
-//! has no trailer chain, so this module scans backwards from the end of the
-//! file for a footer whose declared size lands exactly on a matching header.
-//! That two-point check matters: in `ExifTool.jpg` the VRD trailer is not last
-//! -- a FotoStation trailer and an Android one follow it.
+//! has no trailer chain -- see [`crate::parsers::trailer`] -- so this module
+//! scans backwards from the end of the file for a footer whose declared size
+//! lands exactly on a matching header. That two-point check matters: in
+//! `ExifTool.jpg` the VRD trailer is not last -- PhotoMechanic, MIE, Samsung
+//! and Vivo trailers all follow it.
 
 mod ver1_table;
 
 use crate::core::formatters::numeric_precision::{perl_g, perl_number};
-use crate::core::{MetadataMap, TagValue};
+use crate::core::{FileReader, MetadataMap, TagValue};
+use crate::error::{ExifToolError, Result};
 use ver1_table::VER1;
 
 /// Opens both the header and the footer (CanonVRD.pm:62-63).
@@ -160,19 +162,49 @@ pub fn parse_canon_vrd_trailer(file: &[u8]) -> MetadataMap {
     metadata
 }
 
+/// Reads a `.VRD` file, the standalone form of the same record.
+///
+/// DPP writes the identical `CANON OPTIONAL DATA\0` block either appended to an
+/// image or as a file of its own (`ExifTool.pm:1039` gives the magic number for
+/// the standalone form), so this is `parse_canon_vrd_trailer` over the whole
+/// file. `find_trailer` already searches from the end inwards and validates the
+/// header against the size the footer declares, which a file that *is* the
+/// record satisfies at offset 0.
+///
+/// The `File:` identity tags come from `filetype`'s tables rather than literals
+/// so there is one source for them, and they are needed here because a format
+/// this dispatcher recognises never reaches `add_identity_tags`.
+pub fn parse_vrd_file(reader: &dyn FileReader) -> Result<MetadataMap> {
+    let file = reader.read(0, reader.size() as usize)?;
+    let mut metadata = parse_canon_vrd_trailer(file);
+    if metadata.is_empty() {
+        return Err(ExifToolError::parse_error("No valid CanonVRD record found"));
+    }
+
+    if let Some(id) = crate::filetype::identify_by_extension("vrd") {
+        metadata.insert("File:FileType", TagValue::new_string(id.file_type));
+        metadata.insert(
+            "File:FileTypeExtension",
+            TagValue::new_string(id.extension.as_ref()),
+        );
+        if let Some(mime) = id.mime_type {
+            metadata.insert("File:MIMEType", TagValue::new_string(mime));
+        }
+    }
+
+    Ok(metadata)
+}
+
 /// Finds the outermost valid CanonVRD trailer, header through footer.
 ///
 /// Mirrors the validation in CanonVRD.pm:2038-2053: read the footer, take the
 /// size it declares, and require the header to sit exactly that far back and
 /// carry the same signature.
 fn find_trailer(file: &[u8]) -> Option<&[u8]> {
-    // A footer ending at `end` starts at end-0x40; scan from the end of the
-    // file inwards so the trailer found first is the last one written.
-    (OVERHEAD..=file.len()).rev().find_map(|end| {
+    // The footer opens with the signature and runs 0x40 bytes to the end of
+    // the trailer.
+    crate::parsers::trailer::find_last(file, OVERHEAD, SIGNATURE, FOOTER_LEN, |file, end| {
         let footer = &file[end - FOOTER_LEN..end];
-        if !footer.starts_with(SIGNATURE) {
-            return None;
-        }
         let size = be_u32(footer, FOOTER_SIZE_OFFSET)? as usize;
         // `$dirLen < 0x80000000 and $raf->Seek(-$dirLen, 1)`
         let dir_len = size.checked_add(OVERHEAD)?;
@@ -520,6 +552,55 @@ mod tests {
     fn test_file_without_trailer_yields_nothing() {
         assert!(parse_canon_vrd_trailer(b"\xff\xd8\xff\xd9 no trailer here").is_empty());
         assert!(parse_canon_vrd_trailer(b"").is_empty());
+    }
+
+    struct SliceReader(Vec<u8>);
+
+    impl FileReader for SliceReader {
+        fn read(&self, offset: u64, length: usize) -> std::io::Result<&[u8]> {
+            let start = offset as usize;
+            let end = start
+                .checked_add(length)
+                .filter(|e| *e <= self.0.len())
+                .ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "past end of file")
+                })?;
+            Ok(&self.0[start..end])
+        }
+
+        fn size(&self) -> u64 {
+            self.0.len() as u64
+        }
+    }
+
+    /// A `.VRD` file is the same record with nothing wrapped around it, so the
+    /// standalone entry point must read the same 43 tags the trailer form does
+    /// and label the file the way ExifTool's own tables do.
+    #[test]
+    fn test_standalone_vrd_file_reads_the_same_record() {
+        let reader = SliceReader(trailer(&edit_block(&exiftool_jpg_vrd1())));
+        let m = parse_vrd_file(&reader).expect("standalone VRD parses");
+
+        assert_eq!(m.get_string("CanonVRD:VRDVersion"), Some("1.0.0"));
+        assert_eq!(m.get_string("CanonVRD:WorkColorSpace"), Some("sRGB"));
+        assert_eq!(
+            m.get_string("CanonVRD:RGBCurvePoints"),
+            Some("(0,0) (255,255)")
+        );
+        assert_eq!(m.get_string("File:FileType"), Some("VRD"));
+        assert_eq!(m.get_string("File:FileTypeExtension"), Some("vrd"));
+        assert_eq!(
+            m.get_string("File:MIMEType"),
+            Some("application/octet-stream")
+        );
+        // 43 record tags plus the three File: identity tags.
+        assert_eq!(m.len(), 46);
+    }
+
+    #[test]
+    fn test_standalone_reader_without_a_record_is_an_error() {
+        let reader = SliceReader(b"CANON OPTIONAL DATA\0 but nothing valid after".to_vec());
+        assert!(parse_vrd_file(&reader).is_err());
     }
 
     #[test]

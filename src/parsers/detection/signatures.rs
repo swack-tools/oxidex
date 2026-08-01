@@ -121,6 +121,10 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     signature!(b"-----BEGIN CERTIFICATE-----", 0, FileFormat::X509),
     // ICC Profile (signature "acsp" at offset 36)
     signature!(b"acsp", 36, FileFormat::ICC),
+    // Canon DPP recipe written as its own file rather than appended to an
+    // image. ExifTool.pm:1039 gives the magic as `CANON OPTIONAL DATA\0`,
+    // which is the same header the trailer form carries.
+    signature!(b"CANON OPTIONAL DATA\0", 0, FileFormat::VRD),
     // XMP Sidecar (<?xpacket or <x:xmpmeta)
     signature!(b"<?xpacket", 0, FileFormat::XMP),
     signature!(b"<x:xmpmeta", 0, FileFormat::XMP),

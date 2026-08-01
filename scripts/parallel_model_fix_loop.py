@@ -942,6 +942,35 @@ def run_worker(fmt, worktree, cache_dir, log_path, timeout=None, worker_id=None)
     return returncode
 
 
+def worker_timeout_status(repo_root, branch, starting_head):
+    """Classify a timeout after the whole worker process group is gone.
+
+    model_fix_loop commits only after its build/recheck/reviewer gates pass,
+    but it may continue housekeeping until the wrapper timeout. In that
+    window a valid commit used to be reported as a plain timeout even though
+    the branch was ready for the merger. Compare against the head captured
+    immediately before launch so only work from this invocation counts; a
+    pre-existing unresolved commit does not turn a later no-op timeout into
+    a success.
+    """
+    ending_head = _branch_head_sha(repo_root, branch)
+    if starting_head and ending_head and ending_head != starting_head:
+        return {
+            "status": "worker_done",
+            "timed_out": True,
+            "commit_created": True,
+            "starting_head": starting_head,
+            "ending_head": ending_head,
+        }
+    return {
+        "status": "timeout",
+        "timed_out": True,
+        "commit_created": False,
+        "starting_head": starting_head,
+        "ending_head": ending_head,
+    }
+
+
 def process_format(fmt, repo_root, base_ref, worktree_base, log_base, cache_dir, timeout,
                     config_path=DEFAULT_CONFIG_PATH):
     """Create fmt's worktree, run its worker, report what happened. Never
@@ -955,10 +984,13 @@ def process_format(fmt, repo_root, base_ref, worktree_base, log_base, cache_dir,
     except subprocess.CalledProcessError as e:
         return fmt, {"status": "worktree_failed", "error": e.stderr}
 
+    starting_head = _branch_head_sha(repo_root, branch)
     try:
         returncode = run_worker(fmt, path, cache_dir, log_path, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return fmt, {"status": "timeout", "worktree": path, "branch": branch, "log": log_path}
+        result = worker_timeout_status(repo_root, branch, starting_head)
+        result.update({"worktree": path, "branch": branch, "log": log_path})
+        return fmt, result
 
     return fmt, {
         "status": "worker_done", "returncode": returncode,
@@ -1118,13 +1150,16 @@ def process_squad_worker(squad, n, fmt, repo_root, base_ref, worktree_base, log_
     except subprocess.CalledProcessError as e:
         return worker_id, {"status": "worktree_failed", "error": e.stderr, "squad": squad, "format": fmt}
 
+    starting_head = _branch_head_sha(repo_root, branch)
     try:
         returncode = run_worker(fmt, path, cache_dir, log_path, timeout=timeout, worker_id=worker_id)
     except subprocess.TimeoutExpired:
-        return worker_id, {
-            "status": "timeout", "worktree": path, "branch": branch, "log": log_path,
+        result = worker_timeout_status(repo_root, branch, starting_head)
+        result.update({
+            "worktree": path, "branch": branch, "log": log_path,
             "squad": squad, "format": fmt,
-        }
+        })
+        return worker_id, result
 
     return worker_id, {
         "status": "worker_done", "returncode": returncode,
@@ -1156,11 +1191,12 @@ def run_squad_round(args, config_path, build_attribution_fn=None, ensure_staging
     injectable for hermetic tests, same discipline as every other
     side-effectful entry point in this fleet.
 
-    Returns True iff no worktree_failed/timeout occurred across every
-    dispatched worker -- an allocation with nothing to dispatch (no
-    squad currently has open gaps, or attribution regeneration produced
-    nothing) is reported and treated as success, mirroring run_round's
-    "no formats with gaps" case.
+    Returns True iff no unresolved worktree_failed/timeout occurred across
+    every dispatched worker. A worker that timed out only after advancing
+    its branch has a consumable result and therefore is not unresolved. An
+    allocation with nothing to dispatch (no squad currently has open gaps,
+    or attribution regeneration produced nothing) is reported and treated
+    as success, mirroring run_round's "no formats with gaps" case.
     """
     build_attribution_fn = build_attribution_fn or (
         lambda cache_dir: real_build_attribution(cache_dir, args.squads_toml, args.gap_attribution_path)
@@ -1226,12 +1262,23 @@ def run_squad_round(args, config_path, build_attribution_fn=None, ensure_staging
         for future in concurrent.futures.as_completed(futures):
             worker_id, result = future.result()
             results[worker_id] = result
-            extra = f" (exit {result['returncode']})" if "returncode" in result else ""
+            if result.get("commit_created") and result.get("timed_out"):
+                extra = f" (timed out after commit {result['ending_head'][:12]})"
+            else:
+                extra = f" (exit {result['returncode']})" if "returncode" in result else ""
             print(f"[{worker_id}] {result['status']}{extra} "
                   f"(squad={result.get('squad')} format={result.get('format')})")
 
     failed = [(worker_id, r["status"]) for worker_id, r in results.items() if r["status"] != "worker_done"]
-    print(f"\nsquad round done: {len(results) - len(failed)}/{len(results)} worker(s) finished cleanly")
+    captured_timeouts = sum(
+        1 for r in results.values() if r.get("timed_out") and r.get("commit_created")
+    )
+    print(
+        f"\nsquad round done: {len(results) - len(failed)}/{len(results)} worker(s) "
+        "yielded a consumable result"
+    )
+    if captured_timeouts:
+        print(f"  {captured_timeouts} result(s) committed before their wrapper timeout")
     for worker_id, status in failed:
         print(f"  {worker_id}: {status}")
     print("(no merge phase in squad mode -- squad_merge_loop.py's per-squad mergers consume these branches)")
@@ -1706,7 +1753,10 @@ def run_round(args, config_path):
                 result = {"status": "crashed", "error": f"{type(exc).__name__}: {exc}"}
                 traceback.print_exc()
             results[fmt] = result
-            extra = f" (exit {result['returncode']})" if "returncode" in result else ""
+            if result.get("commit_created") and result.get("timed_out"):
+                extra = f" (timed out after commit {result['ending_head'][:12]})"
+            else:
+                extra = f" (exit {result['returncode']})" if "returncode" in result else ""
             if result["status"] == "crashed":
                 extra = f" ({result['error']})"
             print(f"[{fmt}] {result['status']}{extra}")

@@ -12,6 +12,8 @@ pub mod binary_tables;
 pub mod camera_info;
 pub mod camera_info_tables;
 pub mod color_data;
+mod custom_functions2;
+mod custom_functions2_tables;
 pub mod filter_info;
 
 use crate::error::{ExifToolError, Result};
@@ -660,730 +662,6 @@ const PERSONAL_FUNC_VALUES: &[(usize, &str)] = &[
     (23, "PF25ColorMatrix"),
     (24, "PF27Value"),
 ];
-
-/// `%CanonCustom::Functions2` (CanonCustom.pm:1198), transcribed from ExifTool.
-///
-/// One entry per custom-function tag id, holding one converter per value slot.
-/// Model-conditional entries (ExifTool `Condition`) are deliberately absent: their
-/// labels differ per body, and emitting one body's labels for another would be a
-/// fabricated value rather than a missing tag.
-/// One PrintConv slot of a `%CanonCustom::Functions2` entry.
-///
-/// ExifTool stores these as a Perl `PrintConv` that is either a lookup hash, a
-/// `BITMASK` hash, the literal `sprintf("Flags 0x%x",$val)`, or absent. A tag whose
-/// value has several slots carries one converter per slot (ExifTool's ARRAY form).
-#[derive(Clone, Copy)]
-enum CustomFunctionConv {
-    /// No `PrintConv`: ExifTool prints the signed value as-is.
-    Raw,
-    /// `sprintf("Flags 0x%x",$val)`.
-    Flags,
-    /// A lookup hash. An unlisted value prints as ExifTool's `Unknown (n)`.
-    Map(&'static [(i32, &'static str)]),
-    /// A `BITMASK` hash: set bit names joined with ", ", or "(none)" when no bit is set.
-    Bitmask(&'static [(i32, &'static str)]),
-}
-
-impl CustomFunctionConv {
-    /// Renders one value the way ExifTool's PrintConv would.
-    fn render(&self, value: i32) -> String {
-        match self {
-            CustomFunctionConv::Raw => value.to_string(),
-            CustomFunctionConv::Flags => format!("Flags 0x{:x}", value),
-            CustomFunctionConv::Map(table) => table
-                .iter()
-                .find(|(key, _)| *key == value)
-                .map(|(_, label)| (*label).to_string())
-                .unwrap_or_else(|| format!("Unknown ({})", value)),
-            CustomFunctionConv::Bitmask(table) => {
-                let names: Vec<&str> = table
-                    .iter()
-                    .filter(|(bit, _)| value & (1 << *bit) != 0)
-                    .map(|(_, label)| *label)
-                    .collect();
-                if names.is_empty() {
-                    "(none)".to_string()
-                } else {
-                    names.join(", ")
-                }
-            }
-        }
-    }
-}
-
-const CUSTOM_FUNCTIONS2: &[(u32, &str, &[CustomFunctionConv])] = &[
-    (
-        0x0102,
-        "ISOSpeedIncrements",
-        &[CustomFunctionConv::Map(&[(0, "1/3 Stop"), (1, "1 Stop")])],
-    ),
-    (
-        0x0104,
-        "AEBAutoCancel",
-        &[CustomFunctionConv::Map(&[(0, "On"), (1, "Off")])],
-    ),
-    (
-        0x0105,
-        "AEBSequence",
-        &[CustomFunctionConv::Map(&[
-            (0, "0,-,+"),
-            (1, "-,0,+"),
-            (2, "+,0,-"),
-        ])],
-    ),
-    (
-        0x0107,
-        "SpotMeterLinkToAFPoint",
-        &[CustomFunctionConv::Map(&[
-            (0, "Disable (use center AF point)"),
-            (1, "Enable (use active AF point)"),
-        ])],
-    ),
-    (
-        0x0108,
-        "SafetyShift",
-        &[CustomFunctionConv::Map(&[
-            (0, "Disable"),
-            (1, "Enable (Tv/Av)"),
-            (2, "Enable (ISO speed)"),
-        ])],
-    ),
-    (
-        0x010b,
-        "ExposureModeInManual",
-        &[CustomFunctionConv::Map(&[
-            (0, "Specified metering mode"),
-            (1, "Evaluative metering"),
-            (2, "Partial metering"),
-            (3, "Spot metering"),
-            (4, "Center-weighted average"),
-        ])],
-    ),
-    (
-        0x0113,
-        "ExposureCompAutoCancel",
-        &[CustomFunctionConv::Map(&[(0, "Enable"), (1, "Disable")])],
-    ),
-    (
-        0x0114,
-        "AELockMeterModeAfterFocus",
-        &[CustomFunctionConv::Bitmask(&[
-            (0, "Evaluative"),
-            (1, "Partial"),
-            (2, "Spot"),
-            (3, "Center-weighted"),
-        ])],
-    ),
-    (
-        0x0201,
-        "LongExposureNoiseReduction",
-        &[CustomFunctionConv::Map(&[
-            (0, "Off"),
-            (1, "Auto"),
-            (2, "On"),
-        ])],
-    ),
-    (
-        0x0203,
-        "HighlightTonePriority",
-        &[CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")])],
-    ),
-    (
-        0x0304,
-        "ETTLII",
-        &[CustomFunctionConv::Map(&[
-            (0, "Evaluative"),
-            (1, "Average"),
-        ])],
-    ),
-    (
-        0x0305,
-        "ShutterCurtainSync",
-        &[CustomFunctionConv::Map(&[
-            (0, "1st-curtain sync"),
-            (1, "2nd-curtain sync"),
-        ])],
-    ),
-    (
-        0x0306,
-        "FlashFiring",
-        &[CustomFunctionConv::Map(&[
-            (0, "Fires"),
-            (1, "Does not fire"),
-        ])],
-    ),
-    (
-        0x0407,
-        "ViewInfoDuringExposure",
-        &[CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")])],
-    ),
-    (
-        0x0408,
-        "LCDIlluminationDuringBulb",
-        &[CustomFunctionConv::Map(&[(0, "Off"), (1, "On")])],
-    ),
-    (
-        0x040a,
-        "ViewfinderWarnings",
-        &[CustomFunctionConv::Bitmask(&[
-            (0, "Monochrome"),
-            (1, "WB corrected"),
-            (2, "One-touch image quality"),
-            (3, "ISO expansion"),
-            (4, "Spot metering"),
-            (6, "Noise reduction"),
-            (7, "HDR"),
-        ])],
-    ),
-    (
-        0x040b,
-        "LVShootingAreaDisplay",
-        &[CustomFunctionConv::Map(&[(0, "Masked"), (1, "Outlined")])],
-    ),
-    (
-        0x040c,
-        "LVShootingAreaDisplay",
-        &[CustomFunctionConv::Map(&[(0, "Masked"), (1, "Outlined")])],
-    ),
-    // 0x0501 USMLensElectronicMF is deliberately absent. ExifTool defines the same tag
-    // name in %Canon::AFConfig key 7 (Canon.pm:9377) behind a `Condition` on EOS R
-    // bodies, with different labels ("One-Shot -> Enabled (magnify)" rather than
-    // "Enable after one-shot AF"), and that is the value it reports on those bodies.
-    // Emitting the Functions2 labels would collide with it under the same key.
-    (
-        0x0502,
-        "AIServoTrackingSensitivity",
-        &[CustomFunctionConv::Map(&[
-            (-2, "Slow"),
-            (-1, "Medium Slow"),
-            (0, "Standard"),
-            (1, "Medium Fast"),
-            (2, "Fast"),
-        ])],
-    ),
-    (
-        0x0503,
-        "AIServoImagePriority",
-        &[CustomFunctionConv::Map(&[
-            (0, "1: AF, 2: Tracking"),
-            (1, "1: AF, 2: Drive speed"),
-            (2, "1: Release, 2: Drive speed"),
-            (3, "1: Release, 2: Tracking"),
-        ])],
-    ),
-    (
-        0x0504,
-        "AIServoTrackingMethod",
-        &[CustomFunctionConv::Map(&[
-            (0, "Main focus point priority"),
-            (1, "Continuous AF track priority"),
-        ])],
-    ),
-    (
-        0x0505,
-        "LensDriveNoAF",
-        &[CustomFunctionConv::Map(&[
-            (0, "Focus search on"),
-            (1, "Focus search off"),
-        ])],
-    ),
-    (
-        0x0506,
-        "LensAFStopButton",
-        &[CustomFunctionConv::Map(&[
-            (0, "AF stop"),
-            (1, "AF start"),
-            (2, "AE lock"),
-            (3, "AF point: M->Auto/Auto->ctr"),
-            (4, "One Shot <-> AI servo"),
-            (5, "IS start"),
-            (6, "Switch to registered AF point"),
-            (7, "Spot AF"),
-        ])],
-    ),
-    (
-        0x050b,
-        "AFPointAutoSelection",
-        &[CustomFunctionConv::Map(&[
-            (0, "Control-direct:disable/Main:enable"),
-            (1, "Control-direct:disable/Main:disable"),
-            (2, "Control-direct:enable/Main:enable"),
-        ])],
-    ),
-    (
-        0x050d,
-        "AFPointBrightness",
-        &[CustomFunctionConv::Map(&[(0, "Normal"), (1, "Brighter")])],
-    ),
-    (
-        0x0512,
-        "SelectAFAreaSelectMode",
-        &[
-            CustomFunctionConv::Map(&[
-                (0, "Disable"),
-                (1, "Enable"),
-                (2, "Register"),
-                (3, "Select AF-modes"),
-            ]),
-            CustomFunctionConv::Flags,
-        ],
-    ),
-    (
-        0x0513,
-        "ManualAFPointSelectPattern",
-        &[CustomFunctionConv::Map(&[
-            (0, "Stops at AF area edges"),
-            (1, "Continuous"),
-        ])],
-    ),
-    (
-        0x0514,
-        "DisplayAllAFPoints",
-        &[CustomFunctionConv::Map(&[(0, "Enable"), (1, "Disable")])],
-    ),
-    (
-        0x0515,
-        "FocusDisplayAIServoAndMF",
-        &[CustomFunctionConv::Map(&[(0, "Enable"), (1, "Disable")])],
-    ),
-    (
-        0x0516,
-        "OrientationLinkedAFPoint",
-        &[CustomFunctionConv::Map(&[
-            (0, "Same for vertical and horizontal"),
-            (1, "Select different AF points"),
-        ])],
-    ),
-    (
-        0x0517,
-        "MultiControllerWhileMetering",
-        &[CustomFunctionConv::Map(&[
-            (0, "Off"),
-            (1, "AF point selection"),
-        ])],
-    ),
-    (0x0518, "AccelerationTracking", &[CustomFunctionConv::Raw]),
-    (
-        0x0519,
-        "AIServoFirstImagePriority",
-        &[CustomFunctionConv::Map(&[
-            (-1, "Release priority"),
-            (0, "Equal priority"),
-            (1, "Focus priority"),
-        ])],
-    ),
-    (
-        0x051a,
-        "AIServoSecondImagePriority",
-        &[CustomFunctionConv::Map(&[
-            (-1, "Shooting speed priority"),
-            (0, "Equal priority"),
-            (1, "Focus priority"),
-        ])],
-    ),
-    (
-        0x051b,
-        "AFAreaSelectMethod",
-        &[CustomFunctionConv::Map(&[
-            (0, "AF area selection button"),
-            (1, "Main dial"),
-        ])],
-    ),
-    (
-        0x051c,
-        "AutoAFPointColorTracking",
-        &[CustomFunctionConv::Map(&[
-            (0, "On-Shot AF only"),
-            (1, "Disable"),
-        ])],
-    ),
-    (
-        0x051d,
-        "VFDisplayIllumination",
-        &[
-            CustomFunctionConv::Map(&[(0, "Auto"), (1, "Enable"), (2, "Disable")]),
-            CustomFunctionConv::Map(&[(0, "Non-illuminated"), (1, "Illuminated")]),
-        ],
-    ),
-    (
-        0x051e,
-        "InitialAFPointAIServoAF",
-        &[CustomFunctionConv::Map(&[
-            (0, "Auto"),
-            (1, "Initial AF point selected"),
-            (2, "Manual AF point"),
-        ])],
-    ),
-    (
-        0x060f,
-        "MirrorLockup",
-        &[CustomFunctionConv::Map(&[
-            (0, "Disable"),
-            (1, "Enable"),
-            (2, "Enable: Down with Set"),
-        ])],
-    ),
-    (
-        0x0702,
-        "AFOnAELockButtonSwitch",
-        &[CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")])],
-    ),
-    (
-        0x0703,
-        "QuickControlDialInMeter",
-        &[CustomFunctionConv::Map(&[
-            (0, "Exposure comp/Aperture"),
-            (1, "AF point selection"),
-            (2, "ISO speed"),
-            (3, "AF point selection swapped with Exposure comp"),
-            (4, "ISO speed swapped with Exposure comp"),
-        ])],
-    ),
-    (
-        0x0705,
-        "ManualTv",
-        &[CustomFunctionConv::Map(&[
-            (0, "Tv=Main/Av=Control"),
-            (1, "Tv=Control/Av=Main"),
-        ])],
-    ),
-    (
-        0x0706,
-        "DialDirectionTvAv",
-        &[CustomFunctionConv::Map(&[(0, "Normal"), (1, "Reversed")])],
-    ),
-    (
-        0x0707,
-        "AvSettingWithoutLens",
-        &[CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")])],
-    ),
-    (
-        0x0708,
-        "WBMediaImageSizeSetting",
-        &[CustomFunctionConv::Map(&[
-            (0, "Rear LCD panel"),
-            (1, "LCD monitor"),
-            (2, "Off (disable button)"),
-        ])],
-    ),
-    (
-        0x0709,
-        "LockMicrophoneButton",
-        &[CustomFunctionConv::Map(&[
-            (0, "Protect (hold:record memo)"),
-            (1, "Record memo (protect:disable)"),
-            (2, "Play memo (hold:record memo)"),
-            (3, "Rating (protect/memo:disable)"),
-        ])],
-    ),
-    (
-        0x070a,
-        "ButtonFunctionControlOff",
-        &[CustomFunctionConv::Map(&[
-            (0, "Normal (enable)"),
-            (1, "Disable main, Control, Multi-control"),
-        ])],
-    ),
-    (
-        0x070b,
-        "AssignFuncButton",
-        &[CustomFunctionConv::Map(&[
-            (0, "LCD brightness"),
-            (1, "Image quality"),
-            (2, "Exposure comp./AEB setting"),
-            (3, "Image jump with main dial"),
-            (4, "Live view function settings"),
-        ])],
-    ),
-    (0x070c, "CustomControls", &[CustomFunctionConv::Raw]),
-    (
-        0x070d,
-        "StartMovieShooting",
-        &[CustomFunctionConv::Map(&[
-            (0, "Default (from LV)"),
-            (1, "Quick start (FEL button)"),
-        ])],
-    ),
-    (
-        0x070e,
-        "FlashButtonFunction",
-        &[CustomFunctionConv::Map(&[
-            (0, "Raise built-in flash"),
-            (1, "ISO speed"),
-        ])],
-    ),
-    (
-        0x070f,
-        "MultiFunctionLock",
-        &[
-            CustomFunctionConv::Map(&[
-                (0, "Off"),
-                (1, "On"),
-                (2, "On (quick control dial)"),
-                (3, "On (main dial and quick control dial)"),
-            ]),
-            CustomFunctionConv::Bitmask(&[
-                (0, "Main dial"),
-                (1, "Quick control dial"),
-                (2, "Multi-controller"),
-            ]),
-        ],
-    ),
-    (
-        0x0710,
-        "TrashButtonFunction",
-        &[CustomFunctionConv::Map(&[
-            (0, "Normal (set center AF point)"),
-            (1, "Depth-of-field preview"),
-        ])],
-    ),
-    (
-        0x0711,
-        "ShutterReleaseWithoutLens",
-        &[CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")])],
-    ),
-    (
-        0x0712,
-        "ControlRingRotation",
-        &[CustomFunctionConv::Map(&[(0, "Normal"), (1, "Reversed")])],
-    ),
-    (
-        0x0713,
-        "FocusRingRotation",
-        &[CustomFunctionConv::Map(&[(0, "Normal"), (1, "Reversed")])],
-    ),
-    (
-        0x0714,
-        "RFLensMFFocusRingSensitivity",
-        &[CustomFunctionConv::Map(&[
-            (0, "Varies With Rotation Speed"),
-            (1, "Linked To Rotation Angle"),
-        ])],
-    ),
-    (0x0715, "CustomizeDials", &[CustomFunctionConv::Raw]),
-    (
-        0x080d,
-        "ShortReleaseTimeLag",
-        &[CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")])],
-    ),
-    (
-        0x080e,
-        "AddAspectRatioInfo",
-        &[CustomFunctionConv::Map(&[
-            (0, "Off"),
-            (1, "6:6"),
-            (2, "3:4"),
-            (3, "4:5"),
-            (4, "6:7"),
-            (5, "10:12"),
-            (6, "5:7"),
-        ])],
-    ),
-    (
-        0x080f,
-        "AddOriginalDecisionData",
-        &[CustomFunctionConv::Map(&[(0, "Off"), (1, "On")])],
-    ),
-    (
-        0x0810,
-        "LiveViewExposureSimulation",
-        &[CustomFunctionConv::Map(&[
-            (0, "Disable (LCD auto adjust)"),
-            (1, "Enable (simulates exposure)"),
-        ])],
-    ),
-    (
-        0x0811,
-        "LCDDisplayAtPowerOn",
-        &[CustomFunctionConv::Map(&[
-            (0, "Display"),
-            (1, "Retain power off status"),
-        ])],
-    ),
-    (
-        0x0812,
-        "MemoAudioQuality",
-        &[CustomFunctionConv::Map(&[
-            (0, "High (48 kHz)"),
-            (1, "Low (8 kHz)"),
-        ])],
-    ),
-    (
-        0x0813,
-        "DefaultEraseOption",
-        &[CustomFunctionConv::Map(&[
-            (0, "Cancel selected"),
-            (1, "Erase selected"),
-            (2, "Erase RAW selected"),
-            (3, "Erase non-RAW selected"),
-        ])],
-    ),
-    (
-        0x0814,
-        "RetractLensOnPowerOff",
-        &[CustomFunctionConv::Map(&[(0, "Enable"), (1, "Disable")])],
-    ),
-    (
-        0x0815,
-        "AddIPTCInformation",
-        &[CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")])],
-    ),
-    (
-        0x0816,
-        "AudioCompression",
-        &[CustomFunctionConv::Map(&[(0, "Enable"), (1, "Disable")])],
-    ),
-];
-
-/// Decodes a `CustomFunctions2` record (MakerNote tag 0x0099) into tags.
-///
-/// The record is entirely self-describing, so no per-model offset table is involved --
-/// `CanonCustom::ProcessCanonCustom2` (CanonCustom.pm:2642) reads it as:
-///
-/// ```text
-///     int16u  len              # must equal the record size, and be >= 8
-///     ...
-///     int32u  groupCount       # at offset 4
-///     # then, from offset 8, a run of groups:
-///     int32u  recNum, recLen, recCount
-///     # then, within each group, a run of entries:
-///     int32u  tag, num
-///     int32s  value[num]
-/// ```
-///
-/// Only tags present in [`CUSTOM_FUNCTIONS2`] are emitted; the rest are stepped over,
-/// exactly as ExifTool does without `-U`.
-fn parse_custom_functions2(
-    bytes: &[u8],
-    byte_order: ByteOrder,
-    tags: &mut HashMap<String, String>,
-) {
-    let reader = EndianReader::new(bytes, byte_order.to_io_byte_order());
-    // "first entry in array must be the size"
-    if reader.u16_at(0).map(usize::from) != Some(bytes.len()) || bytes.len() < 8 {
-        return;
-    }
-
-    let mut pos = 8usize;
-    while pos + 12 <= bytes.len() {
-        let (Some(record_len), Some(_record_count)) =
-            (reader.u32_at(pos + 4), reader.u32_at(pos + 8))
-        else {
-            return;
-        };
-        // "must be at least 8 bytes for recNum and recLen"
-        let Some(payload_len) = (record_len as usize).checked_sub(8) else {
-            return;
-        };
-        pos += 12;
-        let Some(record_end) = pos.checked_add(payload_len) else {
-            return;
-        };
-        if record_end > bytes.len() {
-            return; // "Corrupted CanonCustom2 group"
-        }
-
-        let mut entry_pos = pos;
-        while entry_pos + 8 < record_end {
-            let (Some(tag_id), Some(count)) =
-                (reader.u32_at(entry_pos), reader.u32_at(entry_pos + 4))
-            else {
-                return;
-            };
-            let mut count = count as usize;
-            let Some(mut next_entry) = entry_pos
-                .checked_add(8)
-                .and_then(|p| count.checked_mul(4).and_then(|n| p.checked_add(n)))
-            else {
-                return;
-            };
-            if next_entry > record_end {
-                break;
-            }
-
-            // EOS-1DXmkIII firmware 1.0.0 writes tag 0x70c one element short, which
-            // shifts every entry after it in the group. ExifTool patches it at
-            // CanonCustom.pm:2690:
-            //
-            // ```text
-            //     if ($tag == 0x70c and $num == 0x66 and $nextRec + 8 < $recEnd) {
-            //         my $tmp = Get32u($dataPt, $nextRec + 4);
-            //         if ($tmp == 0x70f) {
-            //             ++$num; # (count should be one greater)
-            //         }
-            //     }
-            // ```
-            //
-            // Without it the 1DXmkIII reports `ShortReleaseTimeLag` "Disable" for
-            // "Enable" and a 102-element `CustomControls` for a 103-element one.
-            if tag_id == 0x70c
-                && count == 0x66
-                && next_entry + 8 < record_end
-                && reader.u32_at(next_entry + 4) == Some(0x70f)
-            {
-                count += 1;
-                next_entry += 4;
-            }
-            entry_pos += 8;
-
-            if let Some(&(_, name, convs)) =
-                CUSTOM_FUNCTIONS2.iter().find(|(id, _, _)| *id == tag_id)
-            {
-                let values: Vec<i32> = (0..count)
-                    .filter_map(|i| reader.i32_at(entry_pos + i * 4))
-                    .collect();
-                if values.len() == count
-                    && let Some(rendered) = render_custom_function2(convs, &values)
-                {
-                    tags.insert(format!("Canon:{}", name), rendered);
-                }
-            }
-
-            entry_pos = next_entry;
-        }
-        pos = record_end;
-    }
-}
-
-/// Applies a [`CUSTOM_FUNCTIONS2`] entry's converters to one decoded value list.
-///
-/// ExifTool pairs an ARRAY `PrintConv` slot-for-slot with the value list and joins the
-/// results with "; "; a tag with no `PrintConv` prints its values space-separated. When
-/// the slot counts disagree there is no defined pairing, so nothing is emitted rather
-/// than a guess.
-fn render_custom_function2(convs: &[CustomFunctionConv], values: &[i32]) -> Option<String> {
-    if values.is_empty() {
-        return None;
-    }
-    let all_raw = convs
-        .iter()
-        .all(|conv| matches!(conv, CustomFunctionConv::Raw));
-    if all_raw {
-        return Some(
-            values
-                .iter()
-                .map(i32::to_string)
-                .collect::<Vec<_>>()
-                .join(" "),
-        );
-    }
-    // ExifTool pairs an ARRAY PrintConv slot-for-slot with the value list. When the
-    // counts disagree there is no defined pairing -- a two-converter entry that arrives
-    // with one value could mean either converter -- so nothing is emitted rather than a
-    // guess. (`MultiFunctionLock` on the EOS-1DXmkIII is exactly this case, and running
-    // its first converter over the single value produced "Unknown (66)".)
-    if convs.len() != values.len() {
-        return None;
-    }
-    Some(
-        convs
-            .iter()
-            .zip(values)
-            .map(|(conv, &value)| conv.render(value))
-            .collect::<Vec<_>>()
-            .join("; "),
-    )
-}
 
 /// Renders a personal-function switch the way `CanonCustom::ConvertPfn` does
 /// (CanonCustom.pm:2624):
@@ -2741,7 +2019,7 @@ fn format_g2(value: f64) -> String {
 ///     $_ = sprintf("%.1f",$secs);
 ///     s/\.0$//;
 /// ```
-fn print_exposure_time(seconds: f64) -> String {
+pub(super) fn print_exposure_time(seconds: f64) -> String {
     if seconds > 0.0 && seconds < 0.250_01 {
         return format!("1/{}", (0.5 + 1.0 / seconds) as i64);
     }
@@ -5102,29 +4380,41 @@ fn parse_canon_makernote_impl_with_model(
                         let raw = word as u16;
                         let function = raw >> 8;
                         let value = (raw & 0xff) as i16;
+                        // `%CanonCustom::Functions350D` (CanonCustom.pm:809) has no
+                        // group-1 override, so its default family-1 group is the module
+                        // name, "CanonCustom" -- not "Canon".
                         let (name, rendered) = match function {
                             0 => (
-                                "Canon:SetButtonCrossKeysFunc",
+                                "CanonCustom:SetButtonCrossKeysFunc",
                                 CC350D_SET_BUTTON_CROSS_KEYS_FUNC.decode(value),
                             ),
                             1 => (
-                                "Canon:LongExposureNoiseReduction",
+                                "CanonCustom:LongExposureNoiseReduction",
                                 CC350D_LONG_EXPOSURE_NOISE_REDUCTION.decode(value),
                             ),
                             2 => (
-                                "Canon:FlashSyncSpeedAv",
+                                "CanonCustom:FlashSyncSpeedAv",
                                 CC350D_FLASH_SYNC_SPEED_AV.decode(value),
                             ),
-                            3 => ("Canon:Shutter-AELock", CC350D_SHUTTER_AE_LOCK.decode(value)),
-                            4 => ("Canon:AFAssistBeam", CC350D_AF_ASSIST_BEAM.decode(value)),
+                            3 => (
+                                "CanonCustom:Shutter-AELock",
+                                CC350D_SHUTTER_AE_LOCK.decode(value),
+                            ),
+                            4 => (
+                                "CanonCustom:AFAssistBeam",
+                                CC350D_AF_ASSIST_BEAM.decode(value),
+                            ),
                             5 => (
-                                "Canon:ExposureLevelIncrements",
+                                "CanonCustom:ExposureLevelIncrements",
                                 CC350D_EXPOSURE_LEVEL_INCREMENTS.decode(value),
                             ),
-                            6 => ("Canon:MirrorLockup", CC350D_MIRROR_LOCKUP.decode(value)),
-                            7 => ("Canon:ETTLII", CC350D_ETTL_II.decode(value)),
+                            6 => (
+                                "CanonCustom:MirrorLockup",
+                                CC350D_MIRROR_LOCKUP.decode(value),
+                            ),
+                            7 => ("CanonCustom:ETTLII", CC350D_ETTL_II.decode(value)),
                             8 => (
-                                "Canon:ShutterCurtainSync",
+                                "CanonCustom:ShutterCurtainSync",
                                 CC350D_SHUTTER_CURTAIN_SYNC.decode(value),
                             ),
                             _ => continue,
@@ -5138,7 +4428,12 @@ fn parse_canon_makernote_impl_with_model(
             // EOS-1D Mark III and every later body (ExifTool Canon.pm:1883).
             CANON_CUSTOM_FUNCTIONS2 => {
                 if let Some(bytes) = extract_canon_bytes_with_base(entry, ifd_data, base) {
-                    parse_custom_functions2(bytes, byte_order, &mut tags);
+                    custom_functions2::parse_custom_functions2(
+                        bytes,
+                        byte_order,
+                        camera_info_model,
+                        &mut tags,
+                    );
                 }
             }
 
@@ -5146,7 +4441,9 @@ fn parse_canon_makernote_impl_with_model(
             //
             // `%CanonCustom::PersonalFuncs` (CanonCustom.pm:1091) is an `int16u`
             // BinaryData table with `FIRST_ENTRY => 1`, so index 0 is the record's own
-            // byte count and every switch runs through `ConvertPfn`.
+            // byte count and every switch runs through `ConvertPfn`. The table has no
+            // group-1 override, so its default family-1 group is the module name,
+            // "CanonCustom" -- not "Canon".
             CANON_PERSONAL_FUNCTIONS => {
                 if let Some(array) =
                     extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
@@ -5155,7 +4452,7 @@ fn parse_canon_makernote_impl_with_model(
                     for &(index, name) in PERSONAL_FUNCS {
                         if let Some(&raw) = array.get(index) {
                             tags.insert(
-                                format!("Canon:{}", name),
+                                format!("CanonCustom:{}", name),
                                 convert_personal_function(raw as u16),
                             );
                         }
@@ -5167,7 +4464,8 @@ fn parse_canon_makernote_impl_with_model(
             //
             // `%CanonCustom::PersonalFuncValues` (CanonCustom.pm:1135), also `int16u`
             // with `FIRST_ENTRY => 1`. Most keys are reported verbatim; keys 4-7 carry
-            // Canon's EV encoding.
+            // Canon's EV encoding. Same as above: default family-1 group is
+            // "CanonCustom".
             CANON_PERSONAL_FUNCTION_VALUES => {
                 if let Some(array) =
                     extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
@@ -5175,7 +4473,7 @@ fn parse_canon_makernote_impl_with_model(
                 {
                     for &(index, name) in PERSONAL_FUNC_VALUES {
                         if let Some(&raw) = array.get(index) {
-                            tags.insert(format!("Canon:{}", name), (raw as u16).to_string());
+                            tags.insert(format!("CanonCustom:{}", name), (raw as u16).to_string());
                         }
                     }
 
@@ -5186,7 +4484,10 @@ fn parse_canon_makernote_impl_with_model(
                         if let Some(&raw) = array.get(index) {
                             let seconds =
                                 2.0_f64.powf(-canon_ev(raw as u16 as i32 * 4)) * 1000.0 / 8.0;
-                            tags.insert(format!("Canon:{}", name), print_exposure_time(seconds));
+                            tags.insert(
+                                format!("CanonCustom:{}", name),
+                                print_exposure_time(seconds),
+                            );
                         }
                     }
 
@@ -5196,7 +4497,7 @@ fn parse_canon_makernote_impl_with_model(
                     for &(index, name) in &[(6, "PF5ApertureMin"), (7, "PF5ApertureMax")] {
                         if let Some(&raw) = array.get(index) {
                             let f_number = 2.0_f64.powf(canon_ev(raw as u16 as i32 * 4 - 32) / 2.0);
-                            tags.insert(format!("Canon:{}", name), format_g2(f_number));
+                            tags.insert(format!("CanonCustom:{}", name), format_g2(f_number));
                         }
                     }
                 }
@@ -6645,18 +5946,23 @@ mod tests {
             (0x0518, &[0]),           // AccelerationTracking (no PrintConv)
         ]);
         let mut tags = HashMap::new();
-        parse_custom_functions2(&data, ByteOrder::LittleEndian, &mut tags);
+        custom_functions2::parse_custom_functions2(
+            &data,
+            ByteOrder::LittleEndian,
+            "Canon EOS 7D",
+            &mut tags,
+        );
 
         assert_eq!(
-            tags.get("Canon:ISOSpeedIncrements"),
+            tags.get("CanonCustom:ISOSpeedIncrements"),
             Some(&"1 Stop".to_string())
         );
         assert_eq!(
-            tags.get("Canon:ViewfinderWarnings"),
+            tags.get("CanonCustom:ViewfinderWarnings"),
             Some(&"Monochrome, WB corrected, One-touch image quality".to_string())
         );
         assert_eq!(
-            tags.get("Canon:AccelerationTracking"),
+            tags.get("CanonCustom:AccelerationTracking"),
             Some(&"0".to_string())
         );
     }
@@ -6665,9 +5971,14 @@ mod tests {
     fn test_custom_functions2_bitmask_with_no_bits_set() {
         let data = build_custom_functions2(&[(0x040a, &[0])]);
         let mut tags = HashMap::new();
-        parse_custom_functions2(&data, ByteOrder::LittleEndian, &mut tags);
+        custom_functions2::parse_custom_functions2(
+            &data,
+            ByteOrder::LittleEndian,
+            "Canon EOS 7D",
+            &mut tags,
+        );
         assert_eq!(
-            tags.get("Canon:ViewfinderWarnings"),
+            tags.get("CanonCustom:ViewfinderWarnings"),
             Some(&"(none)".to_string())
         );
     }
@@ -6679,18 +5990,33 @@ mod tests {
         let mut data = build_custom_functions2(&[(0x0102, &[1])]);
         data[0] = data[0].wrapping_add(4);
         let mut tags = HashMap::new();
-        parse_custom_functions2(&data, ByteOrder::LittleEndian, &mut tags);
+        custom_functions2::parse_custom_functions2(
+            &data,
+            ByteOrder::LittleEndian,
+            "Canon EOS 7D",
+            &mut tags,
+        );
         assert!(tags.is_empty());
     }
 
-    /// A two-converter entry that arrives with a single value has no defined pairing,
-    /// so it is dropped rather than run through the first converter.
+    /// A two-converter entry that arrives with a single value runs only the first
+    /// converter: ExifTool's loop ends when it runs out of *values*, not converters
+    /// (ExifTool.pm:3673). `MultiFunctionLock` on the EOS-1DXmkIII stores 66, and
+    /// `exiftool -a -G1 -s Canon1DXmkIII.jpg` prints exactly this.
     #[test]
-    fn test_custom_functions2_skips_ambiguous_converter_pairing() {
+    fn test_custom_functions2_single_value_uses_the_first_converter() {
         let data = build_custom_functions2(&[(0x070f, &[66])]); // MultiFunctionLock
         let mut tags = HashMap::new();
-        parse_custom_functions2(&data, ByteOrder::LittleEndian, &mut tags);
-        assert_eq!(tags.get("Canon:MultiFunctionLock"), None);
+        custom_functions2::parse_custom_functions2(
+            &data,
+            ByteOrder::LittleEndian,
+            "Canon EOS-1D X Mark III",
+            &mut tags,
+        );
+        assert_eq!(
+            tags.get("CanonCustom:MultiFunctionLock"),
+            Some(&"Unknown (66)".to_string())
+        );
     }
 
     // ========================================================================

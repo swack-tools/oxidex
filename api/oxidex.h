@@ -1350,6 +1350,81 @@
 #define INFIRAY_ISOTHERMAL_MIN_LENGTH 32
 
 /*
+ `int32u` GPSValid; also gates GPSLatitude/Longitude/Altitude.
+ */
+#define GPS_VALID 0
+
+/*
+ `undef[4]` GPSVersionID, stored as four ASCII digits.
+ */
+#define GPS_VERSION_ID 4
+
+/*
+ `string[2]` GPSLatitudeRef.
+ */
+#define GPS_LATITUDE_REF 8
+
+/*
+ `string[2]` GPSLongitudeRef.
+ */
+#define GPS_LONGITUDE_REF 10
+
+/*
+ `double` signed GPSLatitude.
+ */
+#define GPS_LATITUDE 16
+
+/*
+ `double` signed GPSLongitude.
+ */
+#define GPS_LONGITUDE 24
+
+/*
+ `float` GPSAltitude.
+ */
+#define GPS_ALTITUDE 32
+
+/*
+ `float` GPSDOP.
+ */
+#define GPS_DOP 64
+
+/*
+ `string[2]` GPSSpeedRef.
+ */
+#define GPS_SPEED_REF 68
+
+/*
+ `string[2]` GPSTrackRef.
+ */
+#define GPS_TRACK_REF 70
+
+/*
+ `string[2]` GPSImgDirectionRef.
+ */
+#define GPS_IMG_DIRECTION_REF 72
+
+/*
+ `float` GPSSpeed.
+ */
+#define GPS_SPEED 76
+
+/*
+ `float` GPSTrack.
+ */
+#define GPS_TRACK 80
+
+/*
+ `float` GPSImgDirection.
+ */
+#define GPS_IMG_DIRECTION 84
+
+/*
+ `string[16]` GPSMapDatum.
+ */
+#define GPS_MAP_DATUM 88
+
+/*
  Emissivity (f32) - thermal emissivity of the target object
  */
 #define EMISSIVITY 32

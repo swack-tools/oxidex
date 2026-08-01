@@ -39,6 +39,7 @@ needs a network or the live fleet.
 Run:
     cd scripts && python3 -m unittest test_fleet_up -q
 """
+import json
 import os
 import shutil
 import signal
@@ -277,6 +278,35 @@ class TestSyncWorktrees(GitRepoMixin, unittest.TestCase):
         rc, _, err = sh(f'sync_worktrees "{self.wtbase}"', env=self.env)
         self.assertEqual(rc, 0)
         self.assertIn("SKIP not-a-worktree", err)
+
+    def test_periodic_sync_preserves_in_flight_work(self):
+        dirty = self.add_worker("dirty", commits=0, dirty=True)
+        committed = self.add_worker("committed", commits=1)
+        committed_tip = git(committed, "rev-parse", "HEAD")
+        clean = self.add_worker("clean", commits=0)
+        new_main = self.advance_origin_main(2)
+
+        rc, _, err = sh(
+            f'sync_worktrees "{self.wtbase}" preserve-work', env=self.env)
+        self.assertEqual(rc, 0, err)
+
+        # A live edit and a just-committed worker result both remain exactly
+        # where the worker left them. Resetting either underneath the process
+        # invalidates the attempt even if a salvage branch technically keeps
+        # the bytes reachable.
+        self.assertEqual((dirty / "README.md").read_text(),
+                         "uncommitted worker edit\n")
+        self.assertEqual(git(committed, "rev-parse", "HEAD"), committed_tip)
+        self.assertIn("PRESERVE dirty", err)
+        self.assertIn("PRESERVE committed", err)
+
+        # Worktrees with no local work still catch up during the same pass.
+        self.assertEqual(git(clean, "rev-parse", "HEAD"), new_main)
+
+        salvaged = git(
+            self.repo, "branch", "--list", "salvage/*",
+            "--format=%(refname:short)").split()
+        self.assertEqual(len(salvaged), 2)
 
     def test_missing_base_directory_is_not_an_error(self):
         rc, _, err = sh(f'sync_worktrees "{self.tmp}/absent"', env=self.env)
@@ -746,10 +776,6 @@ class TestSupervisorIntegration(ShellHarnessMixin, unittest.TestCase):
         self.assertIn("GIVING UP on judgment", text)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestPeriodicResync(ShellHarnessMixin, unittest.TestCase):
     """sync_worktrees ran ONCE, immediately before supervise().
 
@@ -784,6 +810,40 @@ class TestPeriodicResync(ShellHarnessMixin, unittest.TestCase):
         # mid-round worker is a real hazard, so this is not forced on.
         self.assertEqual(self._due(999999, 0, 0), "NOT")
 
+    def test_live_dispatcher_worker_blocks_resync(self):
+        pgids = self.logdir / "dispatcher-pgids.json"
+        pgids.write_text(json.dumps({"pgids": [os.getpgrp()]}))
+        rc, out, _err = sh(
+            f'dispatcher_workers_active "{pgids}" && echo ACTIVE || echo IDLE',
+            env=self.env)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "ACTIVE")
+
+    def test_stale_dispatcher_state_does_not_block_resync(self):
+        pgids = self.logdir / "dispatcher-pgids.json"
+        pgids.write_text(json.dumps({"pgids": [99999999]}))
+        rc, out, _err = sh(
+            f'dispatcher_workers_active "{pgids}" && echo ACTIVE || echo IDLE',
+            env=self.env)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "IDLE")
+
+        pgids.write_text(json.dumps({"pgids": [10 ** 100]}))
+        rc, out, _err = sh(
+            f'dispatcher_workers_active "{pgids}" && echo ACTIVE || echo IDLE',
+            env=self.env)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "IDLE")
+
+    def test_torn_dispatcher_state_fails_closed(self):
+        pgids = self.logdir / "dispatcher-pgids.json"
+        pgids.write_text("{torn")
+        rc, out, _err = sh(
+            f'dispatcher_workers_active "{pgids}" && echo ACTIVE || echo IDLE',
+            env=self.env)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "ACTIVE")
+
     def test_the_supervise_loop_consults_it(self):
         # Structural, because the loop is not directly runnable here. Without
         # this the predicate could be perfect and never called -- the exact
@@ -791,4 +851,11 @@ class TestPeriodicResync(ShellHarnessMixin, unittest.TestCase):
         body = SCRIPT.read_text() if hasattr(SCRIPT, "read_text") else open(SCRIPT).read()
         loop = body[body.index("supervise() {"):]
         self.assertIn("resync_due", loop)
-        self.assertIn('sync_worktrees "$FLEET_WORKTREE_BASE"', loop)
+        self.assertIn("dispatcher_workers_active", loop)
+        self.assertIn("periodic worktree sync deferred", loop)
+        self.assertIn(
+            'sync_worktrees "$FLEET_WORKTREE_BASE" preserve-work', loop)
+
+
+if __name__ == "__main__":
+    unittest.main()

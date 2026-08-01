@@ -40,6 +40,7 @@ pub mod raw;
 pub mod specialized;
 pub mod text;
 pub mod tiff;
+pub mod trailer;
 pub mod video;
 pub mod xmp;
 

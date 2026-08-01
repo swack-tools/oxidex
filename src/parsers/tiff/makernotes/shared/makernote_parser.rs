@@ -53,6 +53,20 @@ pub trait MakerNoteParser {
         self.parse(data, byte_order, tags)
     }
 
+    /// Parses with a known model and returns private full-precision value
+    /// forms separately from the displayed tag strings.
+    fn parse_with_model_and_values(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
+        let _ = value_forms;
+        self.parse_with_model(data, byte_order, model, tags)
+    }
+
     /// Parse a MakerNote whose position inside its enclosing TIFF block is
     /// known.
     ///
@@ -89,6 +103,24 @@ pub trait MakerNoteParser {
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
         self.parse_with_model(ctx.payload(), byte_order, model, tags)
+    }
+
+    /// Parses while returning any full-precision `ValueConv` forms separately
+    /// from the displayed tag strings.
+    ///
+    /// Most MakerNote parsers need only their displayed strings and inherit
+    /// this default. The explicit output parameter avoids storing parse state
+    /// in otherwise stateless parser objects.
+    fn parse_with_context_and_values(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
+        let _ = value_forms;
+        self.parse_with_context(ctx, byte_order, model, tags)
     }
 
     /// Optional: Validate that this data belongs to this manufacturer

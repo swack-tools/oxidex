@@ -30,7 +30,38 @@ env:
 jobs:
   tag-matrix:
     name: ExifTool comparison matrix
-    runs-on: ubuntu-latest
+    # 8x -- the heaviest job in the repo, and it sits at the project's chosen
+    # ceiling rather than above it. This is roughly 2.5x faster than the
+    # 2-vCPU runner it replaces (~5m09 vs ~12m58), mostly because
+    # `run --workers N` builds a rayon pool of N threads
+    # (src/bin/jpeg-tag-matrix/matrix.rs), each spawning an exiftool process
+    # per tag -- and that pool used to run 4x oversubscribed on 2 cores.
+    #
+    # Measured across sizes on a throwaway benchmark workflow (removed once it
+    # had served its purpose; see PR #305). Seconds per phase, cold cache,
+    # mean of the runs taken:
+    #
+    #        build   manifest   run    total
+    #   4x     173       18     327      518
+    #   8x     131       15     163      309
+    #  16x     126       15      85      226
+    #  32x     150       15      33      198
+    #
+    # 8x is well clear of 4x (1.68x), so it earns the ceiling rather than
+    # merely sitting at it.
+    #
+    # 16x and 32x are genuinely faster here -- this is the one job in the repo
+    # where they would have bought something real. They are not used anyway:
+    # 8x is the standing ceiling for this repo, chosen so no single job can
+    # quietly become the dominant line on the CI bill. Note also that 32x is a
+    # poor deal even ignoring the ceiling, since its build phase is ~19%
+    # SLOWER than 16x; that is a property of the machine, not of cargo
+    # (capping CARGO_BUILD_JOBS to 16 and 8 reproduced it exactly), most
+    # likely a 32-vCPU VM spanning two NUMA nodes.
+    #
+    # Raising the ceiling is a cost decision, not a technical one. Re-run the
+    # benchmark before changing this; do not adjust it by intuition.
+    runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 90
     permissions:
       contents: write
@@ -75,8 +106,14 @@ jobs:
       - name: Generate ExifTool tag manifest
         run: ./target/release/jpeg-tag-matrix manifest --flag-noops
 
+      # Workers track the runner's vCPU count rather than a literal, so
+      # resizing the runner above cannot silently leave the box idle -- the
+      # old hardcoded `--workers 8` ran 4x oversubscribed on the 2-core
+      # runner, and a hardcoded 16 would under-use anything larger. Each
+      # worker alternates between Rust work and a blocking exiftool
+      # subprocess, so one worker per core is the right ratio.
       - name: Run tag matrix (read + write round-trips)
-        run: ./target/release/jpeg-tag-matrix run --workers 8
+        run: ./target/release/jpeg-tag-matrix run --workers "$(nproc)"
 
       - name: Generate reports and check baseline
         run: ./target/release/jpeg-tag-matrix report --check-baseline

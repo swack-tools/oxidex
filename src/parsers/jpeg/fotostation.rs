@@ -9,11 +9,11 @@
 //!
 //! ExifTool reaches the chain by peeling the trailers that follow it off the
 //! end of the file one at a time and passing the accumulated offset to
-//! `ProcessFotoStation`. oxidex has no trailer chain yet, so this module
-//! instead scans backwards from the end of the file for the outermost valid
-//! footer and then walks the chain from there. The signature, the record
-//! size and the tag id are all validated, so unrelated trailing data is not
-//! mistaken for a record.
+//! `ProcessFotoStation`. oxidex has no trailer chain -- see
+//! [`crate::parsers::trailer`] -- so this module instead scans backwards from
+//! the end of the file for the outermost valid footer and then walks the chain
+//! from there. The signature, the record size and the tag id are all
+//! validated, so unrelated trailing data is not mistaken for a record.
 //!
 //! Two records produce tags here: SoftEdit (tag 0x02) and IPTC (tag 0x01),
 //! whose payload is a plain IPTC IIM block that `%FotoStation::Main` routes to
@@ -78,17 +78,18 @@ pub fn parse_fotostation_trailer(file: &[u8]) -> MetadataMap {
 }
 
 /// Finds the end offset of the last (outermost) valid record footer.
-///
-/// Scanning backwards mirrors ExifTool, which always works inwards from the
-/// end of the file, so the record found first is the last one written.
 fn find_outermost_footer_end(file: &[u8]) -> Option<usize> {
-    if file.len() < FOOTER_LENGTH {
-        return None;
-    }
-    // A footer ending at `end` puts its signature at end-4..end.
-    (FOOTER_LENGTH..=file.len()).rev().find(|&end| {
-        file[end - 4..end] == FOTOSTATION_SIGNATURE && read_footer(file, end).is_some()
-    })
+    // The footer's signature is its last 4 bytes, so a match at `at` puts the
+    // record's end at `at + 4`. The size the footer declares must then land on
+    // a plausible record start, which is the second point of the check
+    // `trailer::find_last` requires.
+    crate::parsers::trailer::find_last(
+        file,
+        FOOTER_LENGTH,
+        &FOTOSTATION_SIGNATURE,
+        FOTOSTATION_SIGNATURE.len(),
+        |file, end| read_footer(file, end).map(|_| end),
+    )
 }
 
 /// Validates the footer ending at `end`, returning its tag id and the start

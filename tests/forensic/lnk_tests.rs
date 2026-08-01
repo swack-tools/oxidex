@@ -29,6 +29,7 @@ const LNK_GUID: [u8; 16] = [
 const LNK_HEADER_SIZE: usize = 76;
 
 /// Link flags
+#[allow(dead_code)]
 const FLAG_HAS_LINK_TARGET_ID_LIST: u32 = 0x0001;
 const FLAG_HAS_LINK_INFO: u32 = 0x0002;
 const FLAG_HAS_NAME: u32 = 0x0004;
