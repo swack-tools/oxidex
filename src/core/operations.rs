@@ -261,6 +261,29 @@ pub fn read_metadata_with_detector(
         metadata.insert(key, value);
     }
 
+    // Step 5b: Backstop for ExifByteOrder on TIFF-based files.
+    //
+    // The JPEG path records this when it parses the APP1 TIFF header, but the
+    // raw formats (CR2, DNG, NEF, ...) reach their IFDs through a dozen
+    // different entry points in the raw parsers. Every TIFF-based file starts
+    // with the marker, so reading it here covers all of them at once instead
+    // of threading the same insert through each parser.
+    if !metadata.contains_key("File:ExifByteOrder") {
+        if let Ok(head) = reader.read(0, 2) {
+            let order = match &head[..] {
+                b"II" => Some(ByteOrder::LittleEndian),
+                b"MM" => Some(ByteOrder::BigEndian),
+                _ => None,
+            };
+            if let Some(order) = order {
+                metadata.insert(
+                    "File:ExifByteOrder",
+                    TagValue::new_string(order.exif_byte_order_tag()),
+                );
+            }
+        }
+    }
+
     // Step 6: Derive ExifTool's Composite tags (ImageSize, Megapixels,
     // Aperture, ShutterSpeed, ...). These are computed from tags already
     // extracted above, so this runs last and never overwrites a parsed value.
@@ -724,6 +747,12 @@ pub(crate) fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap
     // Parse all IFDs in the chain (IFD0, IFD1, IFD2, ...)
     let mut metadata = MetadataMap::new();
 
+    // Endianness of the TIFF header, which is what ExifTool reports as
+    // ExifByteOrder for TIFF-based files (TIFF, DNG, CR2, NEF, ...).
+    metadata.insert(
+        "File:ExifByteOrder",
+        TagValue::new_string(byte_order.exif_byte_order_tag()),
+    );
     parse_ifd_chain(reader, first_ifd_offset, byte_order, &mut metadata)?;
 
     // Add TIFF: prefixed format-specific tags from standard EXIF tags
