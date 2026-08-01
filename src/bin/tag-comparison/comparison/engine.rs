@@ -25,11 +25,16 @@ pub(crate) fn normalize_family_for_comparison(family: &str) -> &str {
         | "XMP-GDepth" | "XMP-GCamera" | "XMP-Device" | "XMP-darktable" | "XMP-xmpDM" => "XMP",
         // FLIR -> APP1 (ExifTool convention)
         "FLIR" => "APP1",
-        // HDR -> APP11
-        "HDR" => "APP11",
+        // AROT is ExifTool's family-1 name for the HDR gain table stored in
+        // JPEG APP10 (JPEG.pm HDRGainInfo). The harness asks ExifTool for
+        // family 0 with `-G`, so reconcile OxiDex's canonical family-1 keys
+        // with ExifTool's APP10 keys. OxiDex also exposes legacy `HDR:*`
+        // aliases for this parser; the extractor deliberately excludes those
+        // redundant aliases instead of pretending they belong to APP11.
+        "AROT" => "APP10",
         // SPIFF -> APP8. SPIFF is ExifTool's own family-1 name for the
         // segment and is what oxidex emits; the harness asks exiftool for
-        // family 0, which calls it APP8. Same case as FLIR and HDR above --
+        // family 0, which calls it APP8. Same case as FLIR and AROT above --
         // eleven byte-identical values were being counted as a gap on one
         // side and an extra on the other purely over which family named them.
         "SPIFF" => "APP8",
@@ -833,6 +838,34 @@ mod tests {
         assert_eq!(
             result.matched_tags,
             vec!["APP6:MetadataVersion".to_string()]
+        );
+        assert!(result.missing_in_oxidex.is_empty());
+        assert!(result.extra_in_oxidex.is_empty());
+    }
+
+    #[test]
+    fn test_arot_family1_matches_exiftool_app10_family0() {
+        let oxidex_tags = vec![
+            TagInfo::new(
+                "HDRGainCurveSize".to_string(),
+                "AROT".to_string(),
+                "152".to_string(),
+            )
+            .with_source_file("Apple_iPadAir_3rd_generation.jpg".to_string()),
+        ];
+        let exiftool_tags = vec![
+            TagInfo::new(
+                "HDRGainCurveSize".to_string(),
+                "APP10".to_string(),
+                "152".to_string(),
+            )
+            .with_source_file("Apple_iPadAir_3rd_generation.jpg".to_string()),
+        ];
+
+        let result = ComparisonEngine::compare(oxidex_tags, exiftool_tags, "JPEG", 1, None);
+        assert_eq!(
+            result.matched_tags,
+            vec!["APP10:HDRGainCurveSize".to_string()]
         );
         assert!(result.missing_in_oxidex.is_empty());
         assert!(result.extra_in_oxidex.is_empty());

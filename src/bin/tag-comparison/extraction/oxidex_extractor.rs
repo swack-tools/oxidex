@@ -317,6 +317,16 @@ impl OxiDexExtractor {
     fn format_value(&self, key: &str, name: &str, value: &TagValue) -> String {
         match value {
             TagValue::String(s) => {
+                // ExifTool marks AROT's int32uRev gain-curve array as Binary
+                // and its ordinary output reports the rendered `-b` payload
+                // length. OxiDex retains that payload as the same
+                // space-separated decimal string, so its UTF-8 byte length is
+                // exactly the size ExifTool displays (1160 bytes for
+                // Apple_iPadAir_3rd_generation.jpg).
+                if key == "APP10:HDRGainCurve" {
+                    return format!("(Binary data {} bytes, use -b option to extract)", s.len());
+                }
+
                 // ColorMap is a large array of color values stored as space-separated string
                 // ExifTool shows it as "(Binary data N bytes, use -b option to extract)"
                 if name == "ColorMap" {
@@ -782,7 +792,15 @@ impl OxiDexExtractor {
     /// This normalizes families for the comparison tool documentation output
     /// Check if a tag family should be skipped (pseudo-tags, not actual metadata)
     fn should_skip_family(family: &str) -> bool {
-        matches!(family, "File" | "System" | "UNKNOWN")
+        matches!(
+            family,
+            "File" | "System" | "UNKNOWN"
+                // Compatibility-only aliases emitted alongside canonical
+                // APP10/AROT gain-curve keys. ExifTool has no HDR family-0
+                // group, and folding these aliases into APP11 manufactured
+                // three oxidex-only tags on every AROT sample.
+                | "HDR"
+        )
     }
 
     /// Capitalize the first letter of a string to match ExifTool naming conventions
@@ -1182,6 +1200,45 @@ mod tests {
             OxiDexExtractor::normalize_for_comparison("GoPro:MetadataVersion", Some("JPEG")),
             "APP6:MetadataVersion"
         );
+        assert_eq!(
+            OxiDexExtractor::normalize_for_comparison("AROT:HDRGainCurveSize", Some("JPEG")),
+            "APP10:HDRGainCurveSize"
+        );
+    }
+
+    #[test]
+    fn test_flatten_metadata_uses_arot_and_skips_hdr_compatibility_aliases() {
+        let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
+        let mut metadata = oxidex::core::MetadataMap::new();
+        let curve = "17707 36099 54906";
+        metadata.insert(
+            "AROT:HDRGainCurve".to_string(),
+            TagValue::String(curve.to_string()),
+        );
+        metadata.insert("AROT:HDRGainCurveSize".to_string(), TagValue::Integer(3));
+        metadata.insert(
+            "HDR:GainCurve".to_string(),
+            TagValue::String(curve.to_string()),
+        );
+        metadata.insert("HDR:GainCurveSize".to_string(), TagValue::Integer(3));
+        metadata.insert(
+            "HDR:Format".to_string(),
+            TagValue::String("AROT".to_string()),
+        );
+
+        let (tags, collisions) = extractor.flatten_metadata(&metadata, Some("JPEG"));
+        assert_eq!(tags.len(), 2);
+        assert_eq!(tags[0].key(), "APP10:HDRGainCurve");
+        assert_eq!(
+            tags[0].value,
+            format!(
+                "(Binary data {} bytes, use -b option to extract)",
+                curve.len()
+            )
+        );
+        assert_eq!(tags[1].key(), "APP10:HDRGainCurveSize");
+        assert_eq!(tags[1].value, "3");
+        assert!(collisions.is_empty());
     }
 
     #[test]
