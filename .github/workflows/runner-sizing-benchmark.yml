@@ -29,6 +29,13 @@ on:
           - both
           - ci-build-test
           - tag-matrix
+  # workflow_dispatch only works once a workflow is on the default branch, so
+  # without this the sizing could not be measured until after it was merged --
+  # exactly backwards. Scoped to an explicit branch prefix that nothing else
+  # uses, so no ordinary push can ever start a 32x job. Push a branch named
+  # `bench/runner-sizing-<n>` to take a measurement.
+  push:
+    branches: ['bench/runner-sizing-**']
 
 env:
   CARGO_TERM_COLOR: always
@@ -38,7 +45,10 @@ jobs:
   # ci.yml's "Build & Test" runs them. Swept across the full size range
   # because this job runs on every push and PR.
   ci-build-test:
-    if: inputs.workloads == 'both' || inputs.workloads == 'ci-build-test'
+    # `inputs` is empty on a push event, so without the event_name check every
+    # job here would silently skip and the run would look like a clean success
+    # that measured nothing.
+    if: github.event_name == 'push' || inputs.workloads == 'both' || inputs.workloads == 'ci-build-test'
     name: CI workload (${{ matrix.size }})
     runs-on: warp-ubuntu-latest-x64-${{ matrix.size }}
     timeout-minutes: 60
@@ -79,7 +89,8 @@ jobs:
   # (~8m50s for the matrix run) and re-measuring 2x/4x would spend a lot of
   # wall clock confirming something the production numbers already show.
   tag-matrix:
-    if: inputs.workloads == 'both' || inputs.workloads == 'tag-matrix'
+    # See the note on ci-build-test above.
+    if: github.event_name == 'push' || inputs.workloads == 'both' || inputs.workloads == 'tag-matrix'
     name: Tag matrix workload (${{ matrix.size }})
     runs-on: warp-ubuntu-latest-x64-${{ matrix.size }}
     timeout-minutes: 90
