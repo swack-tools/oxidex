@@ -24,6 +24,7 @@
 //! - ExifTool Source: `lib/Image/ExifTool/H264.pm`
 
 use crate::core::formatters::exif_print_conv::print_exposure_time;
+use crate::core::formatters::perl_number as format_perl_number;
 use crate::core::{MetadataMap, TagValue};
 
 /// Parse an accumulated H.264 elementary stream payload.
@@ -608,19 +609,31 @@ fn decode_rec_info(value: &[u8; 4], metadata: &mut MetadataMap) {
     metadata.insert("H264:RecordingMode".to_string(), TagValue::new_string(text));
 }
 
-/// Perl prints a float with as few digits as round-trip requires; Rust's
-/// default `{}` for f64 does the same, but renders whole values as "3" rather
-/// than "3.0" only after trimming.
-fn format_perl_number(value: f64) -> String {
-    let rendered = format!("{}", value);
-    rendered
-        .strip_suffix(".0")
-        .map(str::to_string)
-        .unwrap_or(rendered)
-}
-
 #[cfg(test)]
 mod tests {
+    /// H.264 MDPM focus distances are `($val & 0x7e) / 40` or `/ 400`, and
+    /// ExifTool interpolates the quotient with Perl's 15-significant-digit
+    /// stringification. Every value this file's own call site produces happens
+    /// to render the same under Rust's `{}`, but `{}` is the shortest
+    /// round-trip form, not `%.15g`, and the two part company as soon as a
+    /// quotient does not terminate.
+    ///
+    /// Expected strings come from the installed Perl 5.42:
+    /// `perl -e 'print 1/3'` => `0.333333333333333`, where `{}` gives
+    /// `0.3333333333333333`. The local copy this file used to carry was that
+    /// `{}`, so the first two assertions fail against it.
+    #[test]
+    fn test_format_perl_number_keeps_perl_significant_digits() {
+        use super::format_perl_number;
+
+        assert_eq!(format_perl_number(1.0 / 3.0), "0.333333333333333");
+        assert_eq!(format_perl_number(2.0 / 3.0), "0.666666666666667");
+        // The focus-distance quotients this file actually produces.
+        assert_eq!(format_perl_number(126.0 / 400.0), "0.315");
+        assert_eq!(format_perl_number(126.0 / 40.0), "3.15");
+        assert_eq!(format_perl_number(0.0), "0");
+    }
+
     use super::*;
 
     fn shown(metadata: &MetadataMap, key: &str) -> String {
