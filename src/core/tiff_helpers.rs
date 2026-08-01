@@ -5,7 +5,7 @@
 
 use super::{FileReader, MetadataMap, TagValue};
 use crate::core::operations_helpers::read_u32;
-use crate::core::tag_conversion::raw_bytes_to_tag_value;
+use crate::core::tag_conversion::{gps_coordinate_degrees, raw_bytes_to_tag_value};
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::tiff::geotiff_parser;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, find_entry_position, parse_ifd};
@@ -756,7 +756,14 @@ pub fn parse_gps_subifd(
                 tag_id,
                 byte_order,
             );
-            metadata.insert(tag_name, tag_value);
+            metadata.insert(&tag_name, tag_value);
+            if matches!(tag_id, 0x0002 | 0x0004 | 0x0014 | 0x0016)
+                && field_type == 5
+                && value_count == 3
+                && let Some(degrees) = gps_coordinate_degrees(raw_bytes.as_ref(), byte_order)
+            {
+                metadata.set_value_form(tag_name, degrees.to_string());
+            }
         }
     }
 }

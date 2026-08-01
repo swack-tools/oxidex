@@ -296,22 +296,58 @@ fn handle_rational_type(
 
 /// Formats a GPS coordinate from 3 rational values.
 fn format_gps_coordinate(bytes: &[u8], byte_order: ByteOrder) -> TagValue {
+    let Some(degrees) = gps_coordinate_degrees(bytes, byte_order) else {
+        return TagValue::new_string("");
+    };
+
+    let whole_degrees = degrees.floor();
+    let minutes_with_fraction = (degrees - whole_degrees) * 60.0;
+    let mut whole_minutes = minutes_with_fraction.floor();
+    let mut seconds = (minutes_with_fraction - whole_minutes) * 60.0;
+    seconds = (seconds * 100.0).round() / 100.0;
+    if seconds >= 60.0 {
+        seconds -= 60.0;
+        whole_minutes += 1.0;
+    }
+    let mut whole_degrees = whole_degrees;
+    if whole_minutes >= 60.0 {
+        whole_minutes -= 60.0;
+        whole_degrees += 1.0;
+    }
+    TagValue::new_string(format!(
+        "{} deg {}' {:.2}\"",
+        whole_degrees as u32, whole_minutes as u32, seconds
+    ))
+}
+
+/// Return the full-precision ValueConv form of a three-rational GPS coordinate.
+///
+/// The visible tag is rounded to hundredths of an arc-second, but Composite
+/// GPS tags consume decimal degrees before that PrintConv.  Keep this private
+/// form beside the visible DMS string so a derived position never reparses a
+/// rounded display value.
+pub(crate) fn gps_coordinate_degrees(bytes: &[u8], byte_order: ByteOrder) -> Option<f64> {
+    if bytes.len() < 24 {
+        return None;
+    }
     let mut dms = Vec::new();
     for i in 0..3 {
         let offset = i * 8;
         let numerator = read_u32(&bytes[offset..offset + 4], byte_order);
         let denominator = read_u32(&bytes[offset + 4..offset + 8], byte_order);
-        if denominator != 0 {
-            dms.push(numerator as f64 / denominator as f64);
-        } else {
-            dms.push(numerator as f64);
+        // ExifTool leaves a coordinate with an invalid rational empty. Turning
+        // 0/0 into zero would manufacture a real location at the equator.
+        if denominator == 0 {
+            return None;
         }
+        dms.push(numerator as f64 / denominator as f64);
     }
-    // Format seconds with up to 9 decimal places, trim trailing zeros for ExifTool compat
-    let sec_str = format!("{:.9}", dms[2]);
-    let sec_trimmed = sec_str.trim_end_matches('0').trim_end_matches('.');
-    let formatted = format!("{} deg {}' {}\"", dms[0] as i32, dms[1] as i32, sec_trimmed);
-    TagValue::new_string(formatted)
+
+    // EXIF permits fractional degrees or minutes as well as fractional
+    // seconds. ExifTool normalizes all three into DMS and its default
+    // CoordFormat prints seconds to two decimals. GPS.jpg, for example, stores
+    // `54 59.38 0` and therefore means 54 deg 59' 22.80", not 54 deg 59' 0".
+    Some(dms[0] + dms[1] / 60.0 + dms[2] / 3600.0)
 }
 
 /// Formats GPSTimeStamp from 3 rational values (hours, minutes, seconds).
@@ -663,6 +699,27 @@ mod tests {
             }
         }
         bytes
+    }
+
+    #[test]
+    fn gps_coordinate_normalizes_fractional_minutes_like_exiftool() {
+        // GPS.jpg stores 54 degrees, 59.38 minutes, zero seconds. Fractional
+        // minutes must be carried into seconds by the default DMS rendering.
+        let bytes =
+            make_rational_array_bytes(&[(54, 1), (5938, 100), (0, 1)], ByteOrder::LittleEndian);
+        assert_eq!(
+            raw_bytes_to_tag_value(&bytes, 5, 3, 0x0002, ByteOrder::LittleEndian).as_string(),
+            Some("54 deg 59' 22.80\"")
+        );
+    }
+
+    #[test]
+    fn gps_coordinate_refuses_invalid_rationals() {
+        let bytes = make_rational_array_bytes(&[(0, 0), (0, 0), (0, 0)], ByteOrder::LittleEndian);
+        assert_eq!(
+            raw_bytes_to_tag_value(&bytes, 5, 3, 0x0002, ByteOrder::LittleEndian).as_string(),
+            Some("")
+        );
     }
 
     #[test]

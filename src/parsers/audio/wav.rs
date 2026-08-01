@@ -243,6 +243,14 @@ pub(crate) fn parse_info_chunk(
         // Decode as Windows-1252 (null-terminated)
         let (tag_value, _, _) = WINDOWS_1252.decode(tag_value_bytes);
         let tag_value = tag_value.trim_end_matches('\0').trim();
+        // RIFF.pm ICRD ValueConv normalizes every hyphen to a colon. Preserve
+        // that source representation so composites consume the same value
+        // ExifTool does instead of propagating a known-wrong display form.
+        let tag_value = if tag_id == b"ICRD" {
+            tag_value.replace('-', ":")
+        } else {
+            tag_value.to_string()
+        };
 
         if !tag_value.is_empty() {
             // Map INFO tag IDs to readable names (comprehensive RIFF INFO tags)
@@ -317,10 +325,7 @@ pub(crate) fn parse_info_chunk(
                 }
             };
 
-            metadata.insert(
-                tag_name.to_string(),
-                TagValue::new_string(tag_value.to_string()),
-            );
+            metadata.insert(tag_name.to_string(), TagValue::new_string(tag_value));
         }
 
         // Move to next tag (align to even byte boundary)
@@ -461,5 +466,20 @@ mod tests {
         let parser = WavParser;
         let result = parser.parse(&reader);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn riff_creation_date_uses_exiftool_value_conversion() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"ICRD");
+        data.extend_from_slice(&11u32.to_le_bytes());
+        data.extend_from_slice(b"2005-08-08\0");
+        data.push(0); // RIFF subchunks are word-aligned.
+
+        let reader = TestReader::from_slice(&data);
+        let mut metadata = MetadataMap::new();
+        parse_info_chunk(&reader, 0, data.len() as u64, &mut metadata).unwrap();
+
+        assert_eq!(metadata.get_string("RIFF:DateCreated"), Some("2005:08:08"));
     }
 }

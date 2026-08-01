@@ -75,6 +75,191 @@ fn get<'a>(i: Inputs<'a>, n: usize) -> Option<&'a str> {
     i.get(n).copied().flatten()
 }
 
+fn perl_truthy(value: Option<&str>) -> bool {
+    matches!(value.map(str::trim), Some(value) if !value.is_empty() && value != "0")
+}
+
+fn printed_integer(value: &str) -> Option<i64> {
+    value.trim().parse().ok().or_else(|| {
+        value
+            .trim()
+            .strip_prefix("Unknown (")?
+            .strip_suffix(')')?
+            .parse()
+            .ok()
+    })
+}
+
+fn canon_exposure_mode(value: &str) -> Option<i64> {
+    Some(match value {
+        "Easy" => 0,
+        "Program AE" => 1,
+        "Shutter speed priority AE" => 2,
+        "Aperture-priority AE" => 3,
+        "Manual" => 4,
+        "Depth-of-field AE" => 5,
+        "M-Dep" => 6,
+        "Bulb" => 7,
+        "Flexible-priority AE" => 8,
+        _ => printed_integer(value)?,
+    })
+}
+
+fn canon_easy_mode(value: &str) -> Option<i64> {
+    // Only values whose reverse mapping is unambiguous are accepted. Unknown
+    // labels are refused rather than assigned a plausible scene-mode number.
+    Some(match value {
+        "Full auto" => 0,
+        "Manual" => 1,
+        "Landscape" => 2,
+        "Fast shutter" => 3,
+        "Slow shutter" => 4,
+        "Night" => 5,
+        "Gray Scale" => 6,
+        "Sepia" => 7,
+        "Portrait" => 8,
+        "Sports" => 9,
+        "Macro" => 10,
+        "Black & White" => 11,
+        "Pan focus" => 12,
+        "Vivid" => 13,
+        "Neutral" => 14,
+        "Flash Off" => 15,
+        "Long Shutter" => 16,
+        "Super Macro" => 17,
+        "Foliage" => 18,
+        "Indoor" => 19,
+        "Fireworks" => 20,
+        "Beach" => 21,
+        "Underwater" => 22,
+        "Snow" => 23,
+        "Kids & Pets" => 24,
+        "Night Snapshot" => 25,
+        "Digital Macro" => 26,
+        "My Colors" => 27,
+        "Movie Snap" => 28,
+        "Super Macro 2" => 29,
+        "Color Accent" => 30,
+        "Color Swap" => 31,
+        "Aquarium" => 32,
+        "ISO 3200" => 33,
+        "ISO 6400" => 34,
+        "Creative Light Effect" => 35,
+        "Easy" => 36,
+        "Quick Shot" => 37,
+        "Creative Auto" => 38,
+        "Zoom Blur" => 39,
+        "Low Light" => 40,
+        "Nostalgic" => 41,
+        "Super Vivid" => 42,
+        "Poster Effect" => 43,
+        "Face Self-timer" => 44,
+        "Smile" => 45,
+        "Wink Self-timer" => 46,
+        "Fisheye Effect" => 47,
+        "Miniature Effect" => 48,
+        "High-speed Burst" => 49,
+        "Best Image Selection" => 50,
+        "High Dynamic Range" => 51,
+        "Handheld Night Scene" => 52,
+        "Movie Digest" => 53,
+        "Live View Control" => 54,
+        "Discreet" => 55,
+        "Blur Reduction" => 56,
+        "Monochrome" => 57,
+        "Toy Camera Effect" => 58,
+        "Scene Intelligent Auto" => 59,
+        "High-speed Burst HQ" => 60,
+        "Smooth Skin" => 61,
+        "Soft Focus" => 62,
+        "Food" => 68,
+        "HDR Art Standard" => 84,
+        "HDR Art Vivid" => 85,
+        "HDR Art Bold" => 93,
+        "Spotlight" => 257,
+        "Night 2" => 258,
+        "Night+" => 259,
+        "Super Night" => 260,
+        "Sunset" => 261,
+        "Night Scene" => 263,
+        "Surface" => 264,
+        "Low Light 2" => 265,
+        _ => printed_integer(value)?,
+    })
+}
+
+fn canon_flash_mode(value: &str) -> Option<i64> {
+    Some(match value {
+        "n/a" => -1,
+        "Off" => 0,
+        "Auto" => 1,
+        "On" => 2,
+        "Red-eye reduction" => 3,
+        "Slow-sync" => 4,
+        "Red-eye reduction (Auto)" => 5,
+        "Red-eye reduction (On)" => 6,
+        "External flash" => 16,
+        _ => printed_integer(value)?,
+    })
+}
+
+fn focal_range(short: f64, long: f64, scale: f64) -> String {
+    if short == long {
+        format!("{:.1} mm", short * scale)
+    } else {
+        format!("{:.1} - {:.1} mm", short * scale, long * scale)
+    }
+}
+
+fn gps_degrees(value: &str) -> Option<f64> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Some(0.0);
+    }
+    let numbers: Vec<f64> = value
+        .split(|character: char| {
+            !(character.is_ascii_digit() || matches!(character, '.' | '-' | '+'))
+        })
+        .filter(|part| !part.is_empty())
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    let degrees = *numbers.first()?;
+    Some(
+        degrees
+            + numbers.get(1).copied().unwrap_or(0.0) / 60.0
+            + numbers.get(2).copied().unwrap_or(0.0) / 3600.0,
+    )
+}
+
+fn gps_print(mut degrees: f64, positive_reference: char) -> String {
+    let negative_reference = match positive_reference {
+        'N' => 'S',
+        'E' => 'W',
+        _ => unreachable!("GPS reference must be N or E"),
+    };
+    let reference = if degrees < 0.0 {
+        degrees = -degrees;
+        negative_reference
+    } else {
+        positive_reference
+    };
+    let mut whole_degrees = degrees.floor() as u32;
+    let minutes = (degrees - f64::from(whole_degrees)) * 60.0;
+    let mut whole_minutes = minutes.floor() as u32;
+    let mut seconds = (minutes - f64::from(whole_minutes)) * 60.0;
+    seconds = (seconds * 100.0).round() / 100.0;
+    if seconds >= 60.0 {
+        seconds -= 60.0;
+        whole_minutes += 1;
+    }
+    if whole_minutes >= 60 {
+        whole_minutes -= 60;
+        whole_degrees += 1;
+    }
+    format!("{whole_degrees} deg {whole_minutes}' {seconds:.2}\" {reference}")
+}
+
 /// ExifTool `Image::ExifTool::Exif::RedBlueBalance`.
 ///
 /// Each row gives the R, G, G, B component indices for one of ExifTool's nine
@@ -593,6 +778,160 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             Computed::new(sf.to_string(), format!("{sf:.1}"))
         }
 
+        // Canon.pm Composite::DriveMode:
+        //   `$val[0] ? 0 : ($val[1] ? 1 : 2)`
+        ("Canon", "DriveMode") => {
+            let continuous = !matches!(get(i, 0), Some("Single") | Some("0"));
+            let self_timer = !matches!(get(i, 1), Some("Off") | Some("0"));
+            let (value, print) = if continuous {
+                (0, "Continuous Shooting")
+            } else if self_timer {
+                (1, "Self-timer Operation")
+            } else {
+                (2, "Single-frame Shooting")
+            };
+            Computed::new(value.to_string(), print)
+        }
+
+        // Canon.pm Composite::Lens and `PrintFocalRange(@val)`.
+        ("Canon", "Lens") => {
+            let (short, long) = (f(get(i, 0))?, f(get(i, 1))?);
+            Computed::new(short.to_string(), focal_range(short, long, 1.0))
+        }
+
+        // Canon.pm Composite::Lens35efl. Reconstruct `$prt[3]` from the same
+        // focal-range inputs because Composite dependencies otherwise carry
+        // their full-precision ValueConv form.
+        ("Canon", "Lens35efl") => {
+            let (short, long) = (f(get(i, 0))?, f(get(i, 1))?);
+            let scale = f(get(i, 2)).filter(|scale| *scale != 0.0);
+            let value = short * scale.unwrap_or(1.0);
+            let mut print = focal_range(short, long, 1.0);
+            if let Some(scale) = scale {
+                print.push_str(" (35 mm equivalent: ");
+                print.push_str(&focal_range(short, long, scale));
+                print.push(')');
+            }
+            Computed::new(value.to_string(), print)
+        }
+
+        // Canon.pm Composite::ShootingMode:
+        //   `$val[0] ? (($val[0] eq "4" and $val[2]) ? 7 : $val[0])
+        //            : $val[1] + 10`
+        // and print Bulb specially, otherwise reuse the selected input's
+        // PrintConv form.
+        ("Canon", "ShootingMode") => {
+            let exposure_print = get(i, 0)?;
+            let exposure = canon_exposure_mode(exposure_print)?;
+            if exposure != 0 {
+                if exposure == 4 && perl_truthy(get(i, 2)) {
+                    Computed::new("7", "Bulb")
+                } else {
+                    Computed::new(exposure.to_string(), exposure_print)
+                }
+            } else {
+                let easy_print = get(i, 1)?;
+                let easy = canon_easy_mode(easy_print)?;
+                Computed::new((easy + 10).to_string(), easy_print)
+            }
+        }
+
+        // Canon.pm Composite::ISO: use numerical CameraISO, otherwise derive
+        // BaseISO * AutoISO / 100. PrintConv is `sprintf("%.0f",$val)`.
+        ("Canon", "ISO") => {
+            let value = match get(i, 0).map(str::trim) {
+                Some(camera_iso)
+                    if !camera_iso.is_empty()
+                        && camera_iso != "0"
+                        && camera_iso.bytes().all(|byte| byte.is_ascii_digit()) =>
+                {
+                    camera_iso.parse::<f64>().ok()?
+                }
+                _ => {
+                    let base = f(get(i, 1)).filter(|value| *value != 0.0)?;
+                    let auto = f(get(i, 2)).filter(|value| *value != 0.0)?;
+                    base * auto / 100.0
+                }
+            };
+            Computed::new(value.to_string(), format!("{value:.0}"))
+        }
+
+        // Canon.pm Composite::DigitalZoom. The raw mode must be `Other` (3),
+        // with both widths non-zero; the ratio is target/source.
+        ("Canon", "DigitalZoom") => {
+            if !matches!(get(i, 2), Some("Other") | Some("3")) {
+                return None;
+            }
+            let (source, target) = (f(get(i, 0))?, f(get(i, 1))?);
+            if source == 0.0 || target == 0.0 {
+                return None;
+            }
+            let value = target / source;
+            Computed::new(value.to_string(), format!("{value:.2}x"))
+        }
+
+        // Canon FlashBits has a bitmask PrintConv. Its visible labels retain
+        // exactly the facts these composites test: `(none)` is zero and an
+        // `External` item represents bit 14.
+        ("Canon", "FlashType") => {
+            let bits = get(i, 0)?;
+            if bits == "(none)" || bits == "0" {
+                return None;
+            }
+            let external = bits.split(',').any(|item| item.trim() == "External");
+            Computed::new(
+                if external { "1" } else { "0" },
+                if external {
+                    "External"
+                } else {
+                    "Built-In Flash"
+                },
+            )
+        }
+
+        ("Canon", "RedEyeReduction") => {
+            let bits = get(i, 1)?;
+            if bits == "(none)" || bits == "0" {
+                return None;
+            }
+            let enabled = matches!(canon_flash_mode(get(i, 0)?)?, 3 | 4 | 6);
+            Computed::new(
+                if enabled { "1" } else { "0" },
+                if enabled { "On" } else { "Off" },
+            )
+        }
+
+        ("Canon", "ConditionalFEC") => {
+            let bits = get(i, 1)?;
+            if bits == "(none)" || bits == "0" {
+                None
+            } else {
+                Computed::same(get(i, 0)?)
+            }
+        }
+
+        ("Canon", "ShutterCurtainHack") => {
+            let bits = get(i, 1)?;
+            if bits == "(none)" || bits == "0" {
+                return None;
+            }
+            match get(i, 0) {
+                Some("2nd-curtain sync") | Some("1") => Computed::new("1", "2nd-curtain sync"),
+                Some(_) | None => Computed::new("0", "1st-curtain sync"),
+            }
+        }
+
+        // Canon.pm Composite::FileNumber, including its 9999 wrap behavior.
+        ("Canon", "FileNumber") => {
+            let (mut directory, mut file) = (f(get(i, 0))? as i64, f(get(i, 1))? as i64);
+            if file == 10_000 {
+                file = 1;
+                directory += 1;
+            }
+            let value = format!("{directory:03}{file:04}");
+            Computed::new(value, format!("{directory:03}-{file:04}"))
+        }
+
         // Canon.pm Composite::WB_RGGBLevels:
         //   `$val[1] ? $val[1] : $val[($val[0] || 0) + 2]`
         // The required WhiteBalance reaches us in PrintConv form, so reverse
@@ -636,6 +975,92 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
 
         ("Exif", "SubSecCreateDate" | "SubSecDateTimeOriginal" | "SubSecModifyDate") => {
             Computed::same(subsec_date_time(i)?)
+        }
+
+        // GPS.pm Composite::GPSDateTime:
+        //   `"$val[0] $val[1]Z"`, followed by ConvertDateTime.
+        ("GPS", "GPSDateTime") => Computed::same(format!("{} {}Z", get(i, 0)?, get(i, 1)?)),
+
+        // GPS.pm signed-coordinate ValueConv and default ToDMS PrintConv.
+        ("GPS", "GPSLatitude" | "GPSLongitude") => {
+            let coordinate = get(i, 0)?;
+            if coordinate.is_empty() {
+                return Computed::same("");
+            }
+            let mut value = gps_degrees(coordinate)?;
+            let reference = get(i, 1)?.trim();
+            let negative = if name == "GPSLatitude" {
+                reference.starts_with(['S', 's'])
+            } else {
+                reference.starts_with(['W', 'w'])
+            };
+            if negative {
+                value = -value;
+            }
+            Computed::new(
+                value.to_string(),
+                gps_print(value, if name == "GPSLatitude" { 'N' } else { 'E' }),
+            )
+        }
+
+        // Exif.pm Composite::GPSPosition uses the ValueConv forms separated by
+        // a space and the coordinate PrintConv forms separated by `, `.
+        ("Exif", "GPSPosition") => {
+            let (latitude, longitude) = (f(get(i, 0))?, f(get(i, 1))?);
+            if get(i, 0)?.is_empty() && get(i, 1)?.is_empty() {
+                return None;
+            }
+            Computed::new(
+                format!("{latitude} {longitude}"),
+                format!(
+                    "{}, {}",
+                    gps_print(latitude, 'N'),
+                    gps_print(longitude, 'E')
+                ),
+            )
+        }
+
+        // IPTC.pm's two time composites both concatenate their required date
+        // and time, then pass the result through ConvertDateTime.
+        ("IPTC", "DateTimeCreated" | "DigitalCreationDateTime") => {
+            Computed::same(format!("{} {}", get(i, 0)?, get(i, 1)?))
+        }
+
+        // Exif.pm synthesizes DateTimeOriginal only when the independent date
+        // and time inputs exist; DateTimeCreated wins when it contains a time.
+        ("Exif", "DateTimeOriginal") => {
+            let (date, time) = (get(i, 1)?, get(i, 2)?);
+            let value = get(i, 0)
+                .filter(|value| value.contains(' '))
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("{date} {time}"));
+            Computed::same(value)
+        }
+
+        // ID3.pm Composite::DateTimeOriginal.
+        ("ID3", "DateTimeOriginal") => {
+            if let Some(recording) = get(i, 0).filter(|value| !value.is_empty()) {
+                return Computed::same(recording);
+            }
+            let mut value = get(i, 1)?.to_string();
+            let Some(date) = get(i, 2)
+                .filter(|date| date.len() == 4 && date.bytes().all(|byte| byte.is_ascii_digit()))
+            else {
+                return Computed::same(value);
+            };
+            value.push(':');
+            value.push_str(&date[..2]);
+            value.push(':');
+            value.push_str(&date[2..]);
+            if let Some(time) = get(i, 3)
+                .filter(|time| time.len() == 4 && time.bytes().all(|byte| byte.is_ascii_digit()))
+            {
+                value.push(' ');
+                value.push_str(&time[..2]);
+                value.push(':');
+                value.push_str(&time[2..]);
+            }
+            Computed::same(value)
         }
 
         _ => None,
@@ -1067,10 +1492,187 @@ mod tests {
     }
 
     #[test]
+    fn canon_scalar_composites_match_the_source_expressions() {
+        let canon = |name, inputs: &[Option<&str>]| {
+            compute("Canon", name, inputs, None).map(|computed| computed.print)
+        };
+
+        assert_eq!(
+            canon("DriveMode", &[Some("Single"), Some("Off")]).as_deref(),
+            Some("Single-frame Shooting")
+        );
+        assert_eq!(
+            canon("DriveMode", &[Some("Single"), Some("10 s")]).as_deref(),
+            Some("Self-timer Operation")
+        );
+        assert_eq!(
+            canon("Lens", &[Some("50 mm"), Some("50 mm")]).as_deref(),
+            Some("50.0 mm")
+        );
+        assert_eq!(
+            canon(
+                "Lens35efl",
+                &[Some("18 mm"), Some("55 mm"), Some("1.589"), Some("18")]
+            )
+            .as_deref(),
+            Some("18.0 - 55.0 mm (35 mm equivalent: 28.6 - 87.4 mm)")
+        );
+        assert_eq!(
+            canon("ShootingMode", &[Some("Manual"), Some("Manual"), Some("4")]).as_deref(),
+            Some("Bulb")
+        );
+        assert_eq!(
+            canon("ShootingMode", &[Some("Easy"), Some("Unknown (83)"), None]).as_deref(),
+            Some("Unknown (83)")
+        );
+        assert_eq!(
+            canon("ISO", &[Some("n/a"), Some("100"), Some("125")]).as_deref(),
+            Some("125")
+        );
+        assert_eq!(
+            canon("ISO", &[Some("0"), Some("100"), Some("200")]).as_deref(),
+            Some("200")
+        );
+        assert_eq!(canon("ISO", &[Some("0"), Some("0"), Some("200")]), None);
+        assert_eq!(
+            canon("DigitalZoom", &[Some("3072"), Some("4608"), Some("Other")]).as_deref(),
+            Some("1.50x")
+        );
+        assert_eq!(
+            canon("FileNumber", &[Some("118"), Some("1861")]).as_deref(),
+            Some("118-1861")
+        );
+        assert_eq!(
+            canon("FileNumber", &[Some("118"), Some("10000")]).as_deref(),
+            Some("119-0001")
+        );
+    }
+
+    #[test]
+    fn canon_flash_composites_preserve_flash_guards_and_print_forms() {
+        let canon = |name, inputs: &[Option<&str>]| {
+            compute("Canon", name, inputs, None).map(|computed| computed.print)
+        };
+
+        assert_eq!(canon("FlashType", &[Some("(none)")]), None);
+        assert_eq!(
+            canon("FlashType", &[Some("TTL, External")]).as_deref(),
+            Some("External")
+        );
+        assert_eq!(
+            canon("FlashType", &[Some("E-TTL, Built-in")]).as_deref(),
+            Some("Built-In Flash")
+        );
+        assert_eq!(
+            canon(
+                "RedEyeReduction",
+                &[Some("Red-eye reduction"), Some("E-TTL")]
+            )
+            .as_deref(),
+            Some("On")
+        );
+        assert_eq!(
+            canon("ConditionalFEC", &[Some("-1/3"), Some("TTL")]).as_deref(),
+            Some("-1/3")
+        );
+        assert_eq!(
+            canon("ShutterCurtainHack", &[None, Some("TTL")]).as_deref(),
+            Some("1st-curtain sync")
+        );
+        assert_eq!(
+            canon(
+                "ShutterCurtainHack",
+                &[Some("2nd-curtain sync"), Some("TTL")]
+            )
+            .as_deref(),
+            Some("2nd-curtain sync")
+        );
+    }
+
+    #[test]
+    fn gps_position_and_time_composites_match_exiftool_defaults() {
+        let gps = |name, inputs: &[Option<&str>]| {
+            compute("GPS", name, inputs, None).map(|computed| computed.print)
+        };
+
+        assert_eq!(
+            gps("GPSDateTime", &[Some("2026:08:01"), Some("12:34:56")]).as_deref(),
+            Some("2026:08:01 12:34:56Z")
+        );
+        assert_eq!(
+            gps("GPSLatitude", &[Some("54 deg 59' 22.80\""), Some("North")]).as_deref(),
+            Some("54 deg 59' 22.80\" N")
+        );
+        assert_eq!(
+            gps("GPSLongitude", &[Some("1 deg 54' 51.00\""), Some("west")]).as_deref(),
+            Some("1 deg 54' 51.00\" W")
+        );
+        assert_eq!(
+            c(
+                "GPSPosition",
+                &[Some("54.9896666667"), Some("-1.91416666667")]
+            )
+            .as_deref(),
+            Some("54 deg 59' 22.80\" N, 1 deg 54' 51.00\" W")
+        );
+    }
+
+    #[test]
+    fn iptc_exif_and_id3_time_joins_preserve_default_date_rendering() {
+        assert_eq!(
+            compute(
+                "IPTC",
+                "DateTimeCreated",
+                &[Some("2026:08:01"), Some("12:34:56+00:00")],
+                None
+            )
+            .map(|computed| computed.print)
+            .as_deref(),
+            Some("2026:08:01 12:34:56+00:00")
+        );
+        assert_eq!(
+            compute(
+                "Exif",
+                "DateTimeOriginal",
+                &[
+                    Some("2026:08:01 12:34:56"),
+                    Some("2026:08:01"),
+                    Some("01:02:03")
+                ],
+                None
+            )
+            .map(|computed| computed.print)
+            .as_deref(),
+            Some("2026:08:01 12:34:56")
+        );
+        assert_eq!(
+            compute(
+                "ID3",
+                "DateTimeOriginal",
+                &[Some("2026-08-01T12:34:56"), None, None, None],
+                None
+            )
+            .map(|computed| computed.print)
+            .as_deref(),
+            Some("2026-08-01T12:34:56")
+        );
+        assert_eq!(
+            compute(
+                "ID3",
+                "DateTimeOriginal",
+                &[None, Some("2005"), Some("0801"), Some("1234")],
+                None
+            )
+            .map(|computed| computed.print)
+            .as_deref(),
+            Some("2005:08:01 12:34")
+        );
+    }
+
+    #[test]
     fn unimplemented_composites_do_not_fire() {
         // The contract that keeps this honest: no implementation, no output.
         assert_eq!(c("LensID", &[Some("whatever")]), None);
-        assert_eq!(c("GPSPosition", &[Some("1"), Some("2")]), None);
     }
 
     #[test]

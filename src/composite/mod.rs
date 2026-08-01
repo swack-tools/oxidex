@@ -114,8 +114,19 @@ fn lookup(map: &MetadataMap, name: &str) -> Option<String> {
 /// a chain: `HyperfocalDistance` needs `CircleOfConfusion` to full precision,
 /// not the `0.019 mm` that gets printed.
 fn resolve(map: &MetadataMap, values: &HashMap<&str, String>, name: &str) -> Option<String> {
-    let bare = name.rsplit(':').next().unwrap_or(name);
-    if let Some(v) = values.get(bare) {
+    // An explicit group is a namespace constraint, not merely decoration.
+    // In particular, GPS::Composite requires `GPS:GPSLongitude`: after the
+    // first pass has produced Composite:GPSLongitude, rebinding that generated
+    // value here would feed the signed composite back into itself and flip a
+    // western longitude east on the next fixpoint pass.  The one explicit
+    // generated namespace is `Composite:` itself.
+    if let Some(bare) = name.strip_prefix("Composite:") {
+        return values.get(bare).cloned().or_else(|| lookup(map, name));
+    }
+    if name.contains(':') {
+        return lookup(map, name);
+    }
+    if let Some(v) = values.get(name) {
         return Some(v.clone());
     }
     lookup(map, name)
@@ -143,6 +154,17 @@ pub fn apply(map: &mut MetadataMap) -> usize {
         for comp in COMPOSITES {
             let key = format!("Composite:{}", comp.name);
             let already_ours = ours.contains(comp.name);
+            // Exif.pm guards this join with
+            // `not defined $$self{VALUE}{DateTimeOriginal}`. An extracted
+            // DateTimeOriginal in any source group wins over the synthesized
+            // date/time join even though its fully-qualified key differs from
+            // the Composite output key.
+            if comp.module == "Exif"
+                && comp.name == "DateTimeOriginal"
+                && lookup(map, "DateTimeOriginal").is_some()
+            {
+                continue;
+            }
             // A composite computed on an earlier pass is revisited, because a
             // `Desire` input may only have appeared since -- FocalLength35efl
             // needs ScaleFactor35efl, which is itself derived. Without this it
@@ -254,6 +276,36 @@ mod tests {
             m.get_string("Composite:SubSecDateTimeOriginal"),
             Some("2005:01:14 08:57:59.20")
         );
+    }
+
+    #[test]
+    fn explicit_gps_dependencies_do_not_rebind_to_generated_composites() {
+        let mut m = map_of(&[
+            ("GPS:GPSLatitude", "54 deg 59' 22.80\""),
+            ("GPS:GPSLatitudeRef", "North"),
+            ("GPS:GPSLongitude", "1 deg 54' 51.00\""),
+            ("GPS:GPSLongitudeRef", "West"),
+        ]);
+        apply(&mut m);
+        assert_eq!(
+            m.get_string("Composite:GPSLongitude"),
+            Some("1 deg 54' 51.00\" W")
+        );
+        assert_eq!(
+            m.get_string("Composite:GPSPosition"),
+            Some("54 deg 59' 22.80\" N, 1 deg 54' 51.00\" W")
+        );
+    }
+
+    #[test]
+    fn extracted_date_time_original_suppresses_the_synthesized_join() {
+        let mut m = map_of(&[
+            ("ExifIFD:DateTimeOriginal", "2001:01:01 01:11:11"),
+            ("IPTC:DateCreated", "1992:01:01"),
+            ("IPTC:TimeCreated", "02:11:11+01:00"),
+        ]);
+        apply(&mut m);
+        assert_eq!(m.get_string("Composite:DateTimeOriginal"), None);
     }
 
     #[test]
