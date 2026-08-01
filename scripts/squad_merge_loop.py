@@ -147,7 +147,12 @@ DEFAULT_RECUT_STALENESS_SECONDS = 3 * 24 * 3600
 #: the squad branches still carry in pre-merge form. A branch is stale the
 #: moment its content lands upstream by another route, which is a DISTANCE
 #: question, not an age one.
-DEFAULT_RECUT_BEHIND_COMMITS = 8
+# Let two ordinary main advances settle, then re-cut before a third independent
+# change can leave every active squad doing validation against stale code.
+# The re-cut path preserves every patch-id-novel consumed commit, so this
+# modestly lower gate trades a little more cheap Git work for avoiding a whole
+# fleet of stale merge bases.
+DEFAULT_RECUT_BEHIND_COMMITS = 2
 
 ORIGIN_MAIN = "origin/main"
 
