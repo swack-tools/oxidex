@@ -525,8 +525,17 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     // Rule 10: ICC_Profile Matrix Tags (5 decimal precision)
     // Format float values in ICC profile tags with up to 5 decimal places.
     // MeasurementFlare requires a "%" suffix after formatting.
-    // ---------------------------------------------------------------------
-    if is_icc_matrix_tag(base_name) {
+    //
+    // `is_icc_matrix_tag` matches on the bare tag name, but "ColorMatrix1"
+    // and "ColorMatrix2" also exist as `PhaseOne::Main` tags (0x0106/0x0226,
+    // PhaseOne.pm:51,159), which the makernote parser already formats with
+    // ExifTool's real PrintConv for that table -- a fixed `sprintf("%.3f")`
+    // that keeps trailing zeros, unlike this rule's 5-place-max/trimmed
+    // ICC/DNG formatting. Re-running an already-ExifTool-formatted PhaseOne
+    // string through this rule silently corrupted it ("1.280" -> "1.28").
+    // PhaseOne's own group prefix is the only thing that disambiguates the
+    // two, so check it before falling into the generic name-only rule.
+    if is_icc_matrix_tag(base_name) && !tag_name.starts_with("PhaseOne:") {
         // Handle string values that contain space-separated floats
         // (e.g., "0.1491851806640625 0.0632171630859375 0.74456787109375")
         if let Some(s) = value.as_string() {
