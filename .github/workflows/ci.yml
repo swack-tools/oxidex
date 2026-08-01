@@ -54,10 +54,12 @@ env:
 #  16x       91       94       16      200      1.16x           2x
 #  32x       96       80       12      187      1.07x           2x
 #
-# 8x is the knee. Each doubling past it costs 2x and returns well under
-# 1.2x, because `cargo build --release` saturates completely at 8 cores
-# (97 -> 91 -> 96s is flat within noise) and it is the largest single
-# component. Only nextest keeps scaling, and not enough to carry the total.
+# 8x is both the knee and this repo's ceiling. Each doubling past it costs
+# 2x and returns well under 1.2x, because `cargo build --release` saturates
+# completely at 8 cores (97 -> 91 -> 96s is flat within noise) and it is the
+# largest single component. Only nextest keeps scaling, and not enough to
+# carry the total. The 16x/32x rows are kept as the evidence for stopping,
+# not as options.
 #
 # Re-run the benchmark before changing these; do not adjust by intuition.
 #

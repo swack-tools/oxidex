@@ -30,29 +30,33 @@ env:
 jobs:
   tag-matrix:
     name: ExifTool comparison matrix
-    # 16x -- the heaviest job in the repo. Sizes measured by
-    # .github/workflows/runner-sizing-benchmark.yml; seconds per phase, cold
-    # cache, mean of the runs taken:
+    # 8x -- the heaviest job in the repo, and it sits at the project's chosen
+    # ceiling rather than above it. This is roughly 2.5x faster than the
+    # 2-vCPU runner it replaces (~5m09 vs ~12m58), mostly because
+    # `run --workers N` builds a rayon pool of N threads
+    # (src/bin/jpeg-tag-matrix/matrix.rs), each spawning an exiftool process
+    # per tag -- and that pool used to run 4x oversubscribed on 2 cores.
+    #
+    # Larger sizes were measured and rejected. Seconds per phase, cold cache,
+    # mean of two runs (.github/workflows/runner-sizing-benchmark.yml):
     #
     #        build   manifest   run    total
     #   8x     131       15     163      309
     #  16x     126       15      85      226
     #  32x     150       15      33      198
     #
-    # `run --workers N` builds a rayon pool of N threads
-    # (src/bin/jpeg-tag-matrix/matrix.rs), each spawning an exiftool process
-    # per tag, so that phase scales hard: 163s -> 33s from 8x to 32x.
+    # 16x and 32x are genuinely faster here -- this is the one job in the repo
+    # where they would have bought something real. They are not used anyway:
+    # 8x is the standing ceiling for this repo, chosen so no single job can
+    # quietly become the dominant line on the CI bill. Note also that 32x is a
+    # poor deal even ignoring the ceiling, since its build phase is ~19%
+    # SLOWER than 16x; that is a property of the machine, not of cargo
+    # (capping CARGO_BUILD_JOBS to 16 and 8 reproduced it exactly), most
+    # likely a 32-vCPU VM spanning two NUMA nodes.
     #
-    # 32x is nonetheless NOT worth it. Its build phase is consistently ~19%
-    # SLOWER than 16x (150s vs 126s), which eats most of the run-phase gain
-    # and leaves 32x only ~12% faster overall for twice the price -- 72% more
-    # core-seconds for 12% less wall clock. That slowdown is a property of the
-    # machine, not of cargo: capping CARGO_BUILD_JOBS to 16 and to 8 on a 32x
-    # runner reproduced it exactly (147s and 150s), so it is not
-    # oversubscription. Most likely a 32-vCPU VM spanning two NUMA nodes.
-    #
-    # Re-run the benchmark before changing this; do not adjust it by intuition.
-    runs-on: warp-ubuntu-latest-x64-16x
+    # Raising the ceiling is a cost decision, not a technical one. Re-run the
+    # benchmark before changing this; do not adjust it by intuition.
+    runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 90
     permissions:
       contents: write

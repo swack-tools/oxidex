@@ -6,6 +6,11 @@
 # Which size a given job should use is a separate judgement, argued at each
 # `runs-on:` -- see the comments there. WarpBuild x64 sizing is 2x=2vCPU/7GB,
 # 4x=4/16, 8x=8/32, 16x=16/64, 32x=32/128, all with a 150GB SSD.
+#
+# POLICY: 8x is this repo's ceiling, including for the heaviest job. The 16x
+# and 32x labels remain listed because they are real and would resolve, and
+# because an "unknown label" error would be a misleading way to express a cost
+# decision -- but adding one is a deliberate change, not a tuning knob.
 self-hosted-runner:
   labels:
     # WarpBuild Ubuntu x64

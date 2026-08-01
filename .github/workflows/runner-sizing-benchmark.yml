@@ -5,8 +5,12 @@ name: Runner Sizing Benchmark
 # dependency graph or test suite grows enough that the current sizes might no
 # longer sit at the knee of the curve.
 #
-# Deliberately workflow_dispatch only: a 32x runner is 16x the cost of a 2x
-# one, and nothing here validates code. It must never fire automatically.
+# Sweeps stop at 8x, the repo's standing runner ceiling. 16x and 32x were
+# measured once; the numbers live in ci.yml and jpeg-tag-matrix.yml next to the
+# sizes they justify, so re-running them would only re-buy a known answer.
+#
+# Deliberately manual: an 8x runner is 4x the cost of a 2x one and nothing here
+# validates code, so this must never fire automatically.
 #
 # Method:
 #   - every job runs the same commit with NO cargo cache, so each measurement
@@ -52,10 +56,14 @@ jobs:
     name: CI workload (${{ matrix.size }})
     runs-on: warp-ubuntu-latest-x64-${{ matrix.size }}
     timeout-minutes: 60
+    # Stops at 8x, the repo's standing ceiling. 16x and 32x were swept once
+    # and the results are recorded in ci.yml and jpeg-tag-matrix.yml; there is
+    # no reason to keep paying for them on every re-run. Add them back
+    # temporarily if the ceiling is ever revisited.
     strategy:
       fail-fast: false
       matrix:
-        size: ['2x', '4x', '8x', '16x', '32x']
+        size: ['2x', '4x', '8x']
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
@@ -85,9 +93,7 @@ jobs:
       - name: PHASE clippy
         run: cargo clippy --all-features -- -D warnings
 
-  # The heavy workload. Started at 8x: the 2-core baseline is already known
-  # (~8m50s for the matrix run) and re-measuring 2x/4x would spend a lot of
-  # wall clock confirming something the production numbers already show.
+  # The heavy workload, swept up to the repo's 8x ceiling.
   tag-matrix:
     # See the note on ci-build-test above.
     if: github.event_name == 'push' || inputs.workloads == 'both' || inputs.workloads == 'tag-matrix'
@@ -97,7 +103,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        size: ['8x', '16x', '32x']
+        size: ['4x', '8x']
     env:
       EXIFTOOL_VERSION: '13.55'
     steps:
@@ -134,55 +140,5 @@ jobs:
       # Workers track nproc so each size is measured with the pool it would
       # actually use in production, not a fixed count that under-uses the
       # bigger runners and makes them look no faster.
-      - name: PHASE run matrix
-        run: ./target/release/jpeg-tag-matrix run --workers "$(nproc)"
-
-  # The 32x sweep reproduced a real regression: the BUILD phase is ~19% slower
-  # at 32x than at 16x (147/150s vs 123/127s across two runs) while the matrix
-  # run gets 2.7x faster. The two phases want different parallelism on the same
-  # machine -- cargo -j32 oversubscribes, because each of the 32 rustc
-  # processes is itself internally threaded.
-  #
-  # This measures capping ONLY the build with CARGO_BUILD_JOBS while the matrix
-  # run still gets all 32 cores, which if it works beats every configuration
-  # measured so far without needing to split the job across two runners.
-  tag-matrix-tuned:
-    if: github.event_name == 'push' || inputs.workloads == 'both' || inputs.workloads == 'tag-matrix'
-    name: Tag matrix tuned (32x, build -j${{ matrix.build_jobs }})
-    runs-on: warp-ubuntu-latest-x64-32x
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        build_jobs: ['8', '16']
-    env:
-      EXIFTOOL_VERSION: '13.55'
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-
-      - name: Set TAGMATRIX_WORK
-        run: echo "TAGMATRIX_WORK=$RUNNER_TEMP/oxidex-tagmap" >> "$GITHUB_ENV"
-
-      - name: Install pinned ExifTool
-        run: |
-          git clone -q --depth 1 --branch "${EXIFTOOL_VERSION}" \
-            https://github.com/exiftool/exiftool /tmp/exiftool
-          echo "/tmp/exiftool" >> "$GITHUB_PATH"
-          /tmp/exiftool/exiftool -ver
-
-      - name: PHASE build matrix binaries
-        env:
-          CARGO_BUILD_JOBS: ${{ matrix.build_jobs }}
-        run: |
-          echo "nproc=$(nproc) CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"
-          cargo build --release --bin oxidex
-          cargo build --release --features jpeg-tag-matrix-binary --bin jpeg-tag-matrix
-
-      - name: PHASE generate manifest
-        run: ./target/release/jpeg-tag-matrix manifest --flag-noops
-
-      # Deliberately NOT capped -- the whole point is that this phase wants
-      # every core even though the build does not.
       - name: PHASE run matrix
         run: ./target/release/jpeg-tag-matrix run --workers "$(nproc)"
