@@ -1,0 +1,66 @@
+# syntax=docker/dockerfile:1
+
+# Both base image versions are ARGs so a bump is a one-line change.
+ARG RUST_VERSION=1.97
+ARG ALPINE_VERSION=3.24
+
+# ---------------------------------------------------------------------------
+# Builder
+#
+# rust:alpine is itself a musl image, so the host triple is already
+# x86_64-unknown-linux-musl or aarch64-unknown-linux-musl. A plain
+# `cargo build --release` therefore yields the fully static binary that
+# release.yml needs an explicit --target plus musl-tools to obtain. Each
+# architecture builds natively on its own runner, so there is no
+# cross-compilation anywhere in this file and no QEMU in the workflow.
+# ---------------------------------------------------------------------------
+FROM rust:${RUST_VERSION}-alpine${ALPINE_VERSION} AS builder
+
+# build-base supplies gcc, musl-dev and binutils. The C-backed codecs behind
+# zip's default features need a C toolchain, and `strip` below comes from
+# binutils.
+RUN apk add --no-cache build-base
+
+WORKDIR /src
+COPY . .
+
+# `--bin oxidex` restricts the build to the CLI. This skips the feature-gated
+# tag-comparison and jpeg-tag-matrix binaries, and keeps the library a plain
+# rlib dependency rather than also emitting the staticlib and cdylib
+# crate-types declared in Cargo.toml, which do not reliably link against
+# static musl.
+RUN cargo build --release --bin oxidex \
+    && strip target/release/oxidex
+
+# ---------------------------------------------------------------------------
+# Runtime
+# ---------------------------------------------------------------------------
+FROM alpine:${ALPINE_VERSION} AS runtime
+
+# Required, not cosmetic: oxidex fetches over HTTPS through ureq/rustls, which
+# carries no trust store of its own and fails with an unknown-issuer error on
+# an image that has no CA bundle.
+RUN apk add --no-cache ca-certificates
+
+COPY --from=builder /src/target/release/oxidex /usr/local/bin/oxidex
+
+# /data is where callers are expected to mount their files:
+#   docker run --rm -v "$PWD:/data" swackhamer/oxidex photo.jpg
+WORKDIR /data
+
+# Runs as root deliberately. oxidex writes and edits metadata in place, so a
+# non-root default would make an in-place edit against a bind-mounted host
+# directory fail with EACCES for most users. Callers who want to drop
+# privileges can pass `--user "$(id -u):$(id -g)"`.
+ENTRYPOINT ["/usr/local/bin/oxidex"]
+
+# Declared last so that changing them invalidates only this final layer,
+# leaving the expensive cargo build layer cached.
+ARG VERSION=dev
+ARG REVISION=unknown
+LABEL org.opencontainers.image.title="oxidex" \
+      org.opencontainers.image.description="High-performance Rust implementation of ExifTool for reading, writing and editing metadata in 300+ file formats" \
+      org.opencontainers.image.source="https://github.com/swack-tools/oxidex" \
+      org.opencontainers.image.licenses="GPL-3.0" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}"
