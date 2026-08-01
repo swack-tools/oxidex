@@ -551,6 +551,12 @@ const CANON_COLOR_DATA: u16 = 0x4001;
 /// FilterInfo (MakerNote tag 0x4024). Not a plain BinaryData table -- it
 /// declares its own `PROCESS_PROC`; see [`filter_info`].
 const CANON_FILTER_INFO: u16 = 0x4024;
+/// `%Canon::LensInfo` (MakerNote tag 0x4019, Canon.pm:9130). One field,
+/// `LensSerialNumber` (key 0, `undef[5]`), `Priority => 0`.
+const CANON_LENS_INFO: u16 = 0x4019;
+/// `%Canon::LevelInfo` (MakerNote tag 0x4059, Canon.pm:9583). `FORMAT =>
+/// 'int32s'`, `FIRST_ENTRY => 1`, ordinary (default) priority.
+const CANON_LEVEL_INFO: u16 = 0x4059;
 /// ExifTool Canon.pm:1802 — `0x91 => { Name => 'PersonalFunctions', ... }`
 const CANON_PERSONAL_FUNCTIONS: u16 = 0x0091;
 /// ExifTool Canon.pm:1809 — `0x92 => { Name => 'PersonalFunctionValues', ... }`
@@ -3782,6 +3788,13 @@ fn parse_canon_makernote_impl_with_model(
     // and only fill names no other Canon table produced. See `merge_priority0`.
     let mut camera_info_tags: HashMap<String, String> = HashMap::new();
 
+    // `%Canon::LensInfo` key 0 `LensSerialNumber` is `Priority => 0` too: some
+    // `%Canon::CameraInfo*` tables (CameraInfo1DX, CameraInfo5DmkIII) carry their
+    // own `LensSerialNumber` field, and ExifTool reads tag 0x000D before 0x4019,
+    // so a CameraInfo value must win that collision. Deferred and merged after
+    // `camera_info_tags` below for the same reason.
+    let mut lens_info_serial: Option<String> = None;
+
     // FocalUnits (`%Canon::CameraSettings` key 25) divides `%Canon::FocalLength` key 1.
     let mut focal_units: i16 = 1;
 
@@ -4814,6 +4827,76 @@ fn parse_canon_makernote_impl_with_model(
                 }
             }
 
+            // LensInfo (tag 0x4019). `%Canon::LensInfo` key 0 `LensSerialNumber`:
+            // `RawConv => '$val=~/^\0\0\0\0/ ? undef : $val'` drops it when the first
+            // four of its five raw bytes are all zero, `ValueConv =>
+            // 'unpack("H*", $val)'` hexes what remains. Verified against
+            // CanonEOS-1D_MarkIV.jpg: raw bytes `00 00 40 0e b1` -> "0000400eb1",
+            // matching ExifTool exactly (first four bytes aren't all zero, so kept).
+            CANON_LENS_INFO => {
+                if let Some(record) = extract_canon_bytes_with_base(entry, ifd_data, base)
+                    && record.len() >= 5
+                    && record[..4] != [0, 0, 0, 0]
+                {
+                    lens_info_serial =
+                        Some(record[..5].iter().map(|b| format!("{:02x}", b)).collect());
+                }
+            }
+
+            // LevelInfo (tag 0x4059). `%Canon::LevelInfo`: `FORMAT => 'int32s'`,
+            // `FIRST_ENTRY => 1`, so ExifTool's ProcessBinaryData puts key K at byte
+            // offset K*4 (`$entry = int($index) * $increment`, increment ==
+            // formatSize('int32s') == 4). Confirmed against CanonEOS_R5m2.jpg: key 4
+            // (RollAngle) sits at byte 16, key 7 (FocalLength) at byte 28. Ordinary
+            // (default) priority, and 0x4059 is read after CameraSettings' own
+            // FocalLength (tag 0x0001), so this unconditionally overwrites it --
+            // matching ExifTool's same-priority tie, where the later tag wins.
+            CANON_LEVEL_INFO => {
+                if let Some(record) = extract_canon_bytes_with_base(entry, ifd_data, base) {
+                    let read_i32 = |key: usize| -> Option<i32> {
+                        let at = key * 4;
+                        let bytes = record.get(at..at + 4)?;
+                        Some(match byte_order {
+                            ByteOrder::LittleEndian => {
+                                i32::from_le_bytes(bytes.try_into().unwrap())
+                            }
+                            ByteOrder::BigEndian => i32::from_be_bytes(bytes.try_into().unwrap()),
+                        })
+                    };
+                    // `$val > 1800 and $val -= 3600; -$val / 10` / `... ; $val / 10`.
+                    if let Some(mut roll) = read_i32(4) {
+                        if roll > 1800 {
+                            roll -= 3600;
+                        }
+                        tags.insert(
+                            "Canon:RollAngle".to_string(),
+                            format_perl_number(-(roll as f64) / 10.0),
+                        );
+                    }
+                    if let Some(mut pitch) = read_i32(5) {
+                        if pitch > 1800 {
+                            pitch -= 3600;
+                        }
+                        tags.insert(
+                            "Canon:PitchAngle".to_string(),
+                            format_perl_number(pitch as f64 / 10.0),
+                        );
+                    }
+                    for (key, name) in [
+                        (7, "Canon:FocalLength"),
+                        (8, "Canon:MinFocalLength2"),
+                        (9, "Canon:MaxFocalLength2"),
+                    ] {
+                        if let Some(val) = read_i32(key) {
+                            tags.insert(
+                                name.to_string(),
+                                format!("{} mm", format_perl_number(val as f64 / 10.0)),
+                            );
+                        }
+                    }
+                }
+            }
+
             // ColorData (tag 0x4001). ExifTool picks one of twelve %Canon::ColorData*
             // tables by the record's element count (Canon.pm:1972), then gates individual
             // fields on the ColorDataVersion at index 0. All twelve are in `color_data`.
@@ -5131,6 +5214,13 @@ fn parse_canon_makernote_impl_with_model(
     });
 
     camera_info::merge_priority0(&mut tags, camera_info_tags);
+
+    // See the comment on `lens_info_serial`'s declaration: this only fills a gap
+    // left by `camera_info_tags`, which is why it's merged after that call.
+    if let Some(serial) = lens_info_serial {
+        tags.entry("Canon:LensSerialNumber".to_string())
+            .or_insert(serial);
+    }
 
     Ok(tags)
 }
@@ -5643,6 +5733,138 @@ mod tests {
             result.get("Canon:LensModel"),
             Some(&"Canon EF 24-70mm f/2.8L II USM".to_string())
         );
+    }
+
+    // ========================================================================
+    // LensInfo (MakerNote tag 0x4019)
+    // ========================================================================
+
+    /// Byte-for-byte the LensInfo record of
+    /// `/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonEOS-1D_MarkIV.jpg`, as
+    /// dumped by `exiftool -v3`: raw bytes `00 00 40 0e b1`, and ExifTool prints
+    /// `[Canon] LensSerialNumber = 0000400eb1`. The first four bytes aren't all
+    /// zero, so `RawConv` keeps it and `ValueConv => 'unpack("H*", $val)'` hexes
+    /// all five.
+    #[test]
+    fn test_lens_info_serial_number() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"Canon");
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+
+        data.extend_from_slice(&CANON_LENS_INFO.to_le_bytes()); // Tag 0x4019
+        data.extend_from_slice(&[0x07, 0x00]); // Type: UNDEFINED
+        data.extend_from_slice(&[0x05, 0x00, 0x00, 0x00]); // Count: 5 bytes
+        data.extend_from_slice(&[0x17, 0x00, 0x00, 0x00]); // Offset: 23
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
+
+        data.extend_from_slice(&[0x00, 0x00, 0x40, 0x0e, 0xb1]);
+
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+        assert_eq!(
+            result.get("Canon:LensSerialNumber"),
+            Some(&"0000400eb1".to_string())
+        );
+    }
+
+    /// `RawConv => '$val=~/^\0\0\0\0/ ? undef : $val'`: when the first four bytes
+    /// are all zero the tag is dropped entirely rather than hexed to all zeros.
+    #[test]
+    fn test_lens_info_serial_number_dropped_when_leading_bytes_are_zero() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"Canon");
+        data.extend_from_slice(&[0x01, 0x00]);
+
+        data.extend_from_slice(&CANON_LENS_INFO.to_le_bytes());
+        data.extend_from_slice(&[0x07, 0x00]);
+        data.extend_from_slice(&[0x05, 0x00, 0x00, 0x00]);
+        data.extend_from_slice(&[0x17, 0x00, 0x00, 0x00]);
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x99]);
+
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+        assert!(!result.contains_key("Canon:LensSerialNumber"));
+    }
+
+    // ========================================================================
+    // LevelInfo (MakerNote tag 0x4059)
+    // ========================================================================
+
+    /// Byte-for-byte the LevelInfo record of
+    /// `/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonEOS_R5m2.jpg`, as
+    /// dumped by `exiftool -v3`. ExifTool prints RollAngle=0.3, PitchAngle=-11.1,
+    /// FocalLength="70 mm", MinFocalLength2="24 mm", MaxFocalLength2="70 mm" --
+    /// this pins the `key * 4` byte-offset math (see the comment on the
+    /// `CANON_LEVEL_INFO` match arm) against real camera data.
+    #[test]
+    fn test_level_info_matches_exiftool() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"Canon");
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+
+        data.extend_from_slice(&CANON_LEVEL_INFO.to_le_bytes()); // Tag 0x4059
+        data.extend_from_slice(&[0x07, 0x00]); // Type: UNDEFINED (declared int32u[10])
+        data.extend_from_slice(&[0x28, 0x00, 0x00, 0x00]); // Count: 40 bytes
+        data.extend_from_slice(&[0x17, 0x00, 0x00, 0x00]); // Offset: 23
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
+
+        #[rustfmt::skip]
+        let record: [u8; 40] = [
+            0x28, 0x00, 0x00, 0x00, 0x80, 0xff, 0xff, 0xff, 0x00, 0x00, 0x26, 0x02,
+            0x80, 0xd8, 0x6e, 0x01, 0x0d, 0x0e, 0x00, 0x00, 0xa1, 0x0d, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0xbc, 0x02, 0x00, 0x00, 0xf0, 0x00, 0x00, 0x00,
+            0xbc, 0x02, 0x00, 0x00,
+        ];
+        data.extend_from_slice(&record);
+
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+        assert_eq!(result.get("Canon:RollAngle"), Some(&"0.3".to_string()));
+        assert_eq!(result.get("Canon:PitchAngle"), Some(&"-11.1".to_string()));
+        assert_eq!(result.get("Canon:FocalLength"), Some(&"70 mm".to_string()));
+        assert_eq!(
+            result.get("Canon:MinFocalLength2"),
+            Some(&"24 mm".to_string())
+        );
+        assert_eq!(
+            result.get("Canon:MaxFocalLength2"),
+            Some(&"70 mm".to_string())
+        );
+    }
+
+    /// LevelInfo (tag 0x4059) is read after the standalone FocalLength tag
+    /// (0x0002) in file order, and both are ExifTool's default priority 1, so
+    /// LevelInfo's FocalLength must overwrite -- not lose to -- the earlier
+    /// value, matching ExifTool's same-priority tie (last value wins).
+    #[test]
+    fn test_level_info_focal_length_overwrites_earlier_tag() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"Canon");
+        data.extend_from_slice(&[0x02, 0x00]); // 2 entries
+
+        // FocalLength (tag 0x0002): FocalType=1, FocalLength=24, packed inline.
+        data.extend_from_slice(&CANON_FOCAL_LENGTH.to_le_bytes());
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]); // Count: 2
+        data.extend_from_slice(&[0x01, 0x00, 0x18, 0x00]); // Inline: [1, 24]
+
+        // LevelInfo (tag 0x4059).
+        data.extend_from_slice(&CANON_LEVEL_INFO.to_le_bytes());
+        data.extend_from_slice(&[0x07, 0x00]); // Type: UNDEFINED
+        data.extend_from_slice(&[0x28, 0x00, 0x00, 0x00]); // Count: 40 bytes
+        data.extend_from_slice(&[0x23, 0x00, 0x00, 0x00]); // Offset: 35 (5 sig + 2 count + 2*12 entries + 4 next-IFD)
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
+
+        #[rustfmt::skip]
+        let record: [u8; 40] = [
+            0x28, 0x00, 0x00, 0x00, 0x80, 0xff, 0xff, 0xff, 0x00, 0x00, 0x26, 0x02,
+            0x80, 0xd8, 0x6e, 0x01, 0x0d, 0x0e, 0x00, 0x00, 0xa1, 0x0d, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0xbc, 0x02, 0x00, 0x00, 0xf0, 0x00, 0x00, 0x00,
+            0xbc, 0x02, 0x00, 0x00,
+        ];
+        data.extend_from_slice(&record);
+
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+        assert_eq!(result.get("Canon:FocalLength"), Some(&"70 mm".to_string()));
     }
 
     /// Byte-for-byte the CanonFileInfo record of
