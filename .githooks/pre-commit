@@ -1,8 +1,9 @@
 #!/bin/sh
-# OxiDex pre-commit hook: runs `just pre-commit` (fmt-check, lint, test).
+# OxiDex pre-commit hook: verifies api/oxidex.h is current, then runs
+# `just pre-commit` (fmt-check, cbindgen-check, lint, test).
 # Installed via `just install-hooks` (sets core.hooksPath to .githooks).
 #
-# Escape hatch: OXIDEX_SKIP_HOOKS=1 skips the fmt/lint/test gate
+# Escape hatch: OXIDEX_SKIP_HOOKS=1 skips both gates
 # (the chained hooks below still run).
 
 # Chain the pre-commit hook this repo's hooksPath shadows (a global
@@ -22,10 +23,58 @@ fi
 
 [ "$OXIDEX_SKIP_HOOKS" = "1" ] && exit 0
 
+# --- C header freshness -------------------------------------------------
+# Deliberately placed ABOVE the linked-worktree exemption below. #211 and
+# #256 each committed a new public constant without regenerating
+# api/oxidex.h and turned main red while all 3,830+ tests passed. Unlike the
+# fmt+lint+test gate this costs ~2s and needs no compilation, so there is no
+# reason for the fleet worktrees to be exempt from it.
+#
+# Tooling problems warn and skip rather than blocking (matching the policy
+# below); CI's "Verify C header is up-to-date" step is the hard backstop.
+# Only a genuine stale-header diff fails the commit.
+header_relevant=0
+while IFS= read -r f; do
+    case "$f" in
+        *.rs|cbindgen.toml|api/oxidex.h) header_relevant=1 ;;
+    esac
+done <<EOF
+$(git diff --cached --name-only --diff-filter=ACMR)
+EOF
+
+if [ "$header_relevant" = "1" ]; then
+    pinned=$(just --evaluate cbindgen_version 2>/dev/null)
+    have=$(cbindgen --version 2>/dev/null | awk '{print $2}')
+    if [ -z "$have" ]; then
+        echo "warning: cbindgen not installed; skipping C header check" >&2
+    elif [ -z "$pinned" ]; then
+        echo "warning: cannot read pinned cbindgen version; skipping C header check" >&2
+    elif [ "$have" != "$pinned" ]; then
+        echo "warning: cbindgen $have installed but CI pins $pinned;" >&2
+        echo "         skipping C header check (it could not tell you what CI sees)" >&2
+    else
+        tmp=$(mktemp) || exit 1
+        if cbindgen --config cbindgen.toml --crate oxidex --output "$tmp" >/dev/null 2>&1; then
+            if ! diff -q api/oxidex.h "$tmp" >/dev/null 2>&1; then
+                rm -f "$tmp"
+                echo "error: api/oxidex.h is out of date for this commit." >&2
+                echo "       Run 'just cbindgen' and stage api/oxidex.h." >&2
+                echo "       This is the defect that broke main in #211 and #256." >&2
+                exit 1
+            fi
+        else
+            echo "warning: cbindgen failed to run; skipping C header check" >&2
+        fi
+        rm -f "$tmp"
+    fi
+fi
+
 # Skip in linked worktrees. RATIONALE: this repo runs automated fleet
 # agents in worktrees under .claude/worktrees/ that commit frequently;
 # the full fmt+lint+test gate would cripple them, and their changes get
-# re-verified on merge to main anyway.
+# re-verified on merge to main anyway. NOTE: the C header check above runs
+# in worktrees too — it is cheap, and "re-verified on merge" is exactly the
+# assumption that failed when main's CI runs were being cancelled.
 gd=$(git rev-parse --git-dir)
 gcd=$(git rev-parse --git-common-dir)
 if [ "$gd" != "$gcd" ]; then
