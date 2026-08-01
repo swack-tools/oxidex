@@ -900,6 +900,70 @@ pub fn process_app14_segments(segments: &[Segment], metadata: &mut MetadataMap) 
     }
 }
 
+/// Processes GraphicConverter APP15 segments.
+///
+/// GraphicConverter records the JPEG quality it saved with in APP15 as the
+/// four bytes `Q<space><digits>`. ExifTool reads it in the JPEG marker loop
+/// (ExifTool.pm:8423-8427):
+///
+/// ```text
+/// } elsif ($marker == 0xef) {         # APP15 (GraphicConverter)
+///     if ($$segDataPt =~ /^Q\s*(\d+)/ and $length == 4) {
+///         $dumpType = 'GraphicConverter';
+///         my $tagTablePtr = GetTagTable('Image::ExifTool::JPEG::GraphConv');
+///         $self->HandleTag($tagTablePtr, 'Q', $1);
+///     }
+/// }
+/// ```
+///
+/// `$length` is `length $$segDataPt` (ExifTool.pm:7697), the payload after the
+/// two length bytes -- the same bytes `Segment::data` holds -- so the exact
+/// four-byte test carries over unchanged. It is what keeps this off the other
+/// APP15 payload in the wild, the `TEXT\0` block Casio and FujiFilm write
+/// (JPEG.pm:310), which ExifTool deliberately leaves unread.
+///
+/// `%Image::ExifTool::JPEG::GraphConv` (JPEG.pm:665-670) is
+/// `GROUPS => { 0 => 'APP15', 1 => 'GraphConv', 2 => 'Image' }` with the
+/// single entry `'Q' => 'Quality'`, and declares no conversion, so the digits
+/// are reported verbatim.
+pub fn process_app15_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    // APP15 marker is 0xFFEF
+    const APP15_MARKER: u16 = 0xFFEF;
+    /// ExifTool's `$length == 4` guard on the payload.
+    const GRAPHIC_CONVERTER_LENGTH: usize = 4;
+
+    for segment in segments.iter().filter(|s| s.marker == APP15_MARKER) {
+        if segment.data.len() != GRAPHIC_CONVERTER_LENGTH {
+            continue;
+        }
+        // /^Q\s*(\d+)/ -- the leading Q, optional whitespace, then at least
+        // one digit. Perl's \s is [ \t\n\f\r\x0b]; Rust's
+        // `u8::is_ascii_whitespace` leaves out the vertical tab, so spell the
+        // class out rather than approximate it.
+        let is_perl_space = |b: u8| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0c | 0x0b);
+        let Some(rest) = segment.data.strip_prefix(b"Q") else {
+            continue;
+        };
+        let digits: &[u8] = rest
+            .iter()
+            .position(|b| !is_perl_space(*b))
+            .map_or(&[], |start| &rest[start..]);
+        let end = digits
+            .iter()
+            .position(|b| !b.is_ascii_digit())
+            .unwrap_or(digits.len());
+        if end == 0 {
+            continue;
+        }
+        // At most three digits survive the four-byte length test, so this
+        // cannot overflow.
+        let quality: i64 = digits[..end]
+            .iter()
+            .fold(0, |acc, b| acc * 10 + i64::from(b - b'0'));
+        metadata.insert("APP15:Quality".to_string(), TagValue::Integer(quality));
+    }
+}
+
 /// Processes JPEG COM (comment) segments.
 ///
 /// COM segments (marker 0xFFFE) carry free-form comment text. ExifTool exposes
@@ -1178,6 +1242,63 @@ mod tests {
         process_photoshop_segments(&[segment], &mut metadata);
 
         assert!(!metadata.contains_key("APP13:AdobeCMType"));
+    }
+
+    #[test]
+    fn process_app15_segments_extracts_graphic_converter_quality() {
+        // The APP15 payload of combined-samples/ExifTool.jpg, byte for byte;
+        // exiftool -G0 reports [APP15] Quality : 70 for it.
+        let segment = Segment::new(0xFFEF, 0, b"Q 70");
+        let mut metadata = MetadataMap::new();
+
+        process_app15_segments(&[segment], &mut metadata);
+
+        assert_eq!(metadata.get_integer("APP15:Quality"), Some(70));
+    }
+
+    #[test]
+    fn process_app15_segments_reads_quality_without_a_space() {
+        // /^Q\s*(\d+)/ makes the whitespace optional, so three digits fit.
+        let segment = Segment::new(0xFFEF, 0, b"Q100");
+        let mut metadata = MetadataMap::new();
+
+        process_app15_segments(&[segment], &mut metadata);
+
+        assert_eq!(metadata.get_integer("APP15:Quality"), Some(100));
+    }
+
+    #[test]
+    fn process_app15_segments_ignores_payloads_that_are_not_four_bytes() {
+        // ExifTool guards on `$length == 4`, so a longer payload that still
+        // matches the pattern is not GraphicConverter's and is left alone.
+        let segment = Segment::new(0xFFEF, 0, b"Q 70 extra");
+        let mut metadata = MetadataMap::new();
+
+        process_app15_segments(&[segment], &mut metadata);
+
+        assert!(!metadata.contains_key("APP15:Quality"));
+    }
+
+    #[test]
+    fn process_app15_segments_ignores_the_casio_text_payload() {
+        // JPEG.pm:310 notes the other APP15 payload in the wild, the "TEXT\0"
+        // block Casio and FujiFilm write, which ExifTool never reads.
+        let segment = Segment::new(0xFFEF, 0, b"TEXT");
+        let mut metadata = MetadataMap::new();
+
+        process_app15_segments(&[segment], &mut metadata);
+
+        assert!(!metadata.contains_key("APP15:Quality"));
+    }
+
+    #[test]
+    fn process_app15_segments_ignores_a_q_with_no_digits() {
+        let segment = Segment::new(0xFFEF, 0, b"Q  x");
+        let mut metadata = MetadataMap::new();
+
+        process_app15_segments(&[segment], &mut metadata);
+
+        assert!(!metadata.contains_key("APP15:Quality"));
     }
 }
 
