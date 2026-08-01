@@ -331,9 +331,9 @@ mod tests {
     #[test]
     fn print_af_points_lookup_multiple_bits_sorted() {
         // bit-numbers (1-based) for C1,C2,C3,C5,C6,C7,D2,D3,D5,E1,E2 in
-        // afPoints39 (Nikon.pm:1484-1495): C1=49,C2=44,C3=39,C5=11,C6=1,
-        // C7=6,D2=47,D3=33,D5=14,E1=15,E2=5.
-        let bit_numbers = [49u32, 44, 39, 11, 1, 6, 47, 33, 14, 15, 5];
+        // afPoints39 (Nikon.pm:1484-1495): C1=37,C2=34,C3=31,C5=11,C6=1,
+        // C7=6,D2=36,D3=33,D5=14,E1=15,E2=5.
+        let bit_numbers = [37u32, 34, 31, 11, 1, 6, 36, 33, 14, 15, 5];
         let mut bits = [0u8; 5];
         for n in bit_numbers {
             let i = (n - 1) / 8;
