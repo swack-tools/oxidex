@@ -57,18 +57,47 @@ fn value_string(v: &TagValue) -> Option<String> {
     }
 }
 
+/// Rank the groups that can supply an unqualified Composite dependency.
+///
+/// `MetadataMap` is backed by a randomized `HashMap`, so its iteration order
+/// must never decide which of several same-named tags wins. Structural/file
+/// groups precede embedded metadata, followed by EXIF directories, maker notes,
+/// and XMP.  The key itself is the final tie-breaker, making unknown groups
+/// deterministic too.
+fn lookup_rank(key: &str) -> (u8, &str) {
+    let group = key.split_once(':').map_or("", |(group, _)| group);
+    let rank = match group {
+        "Composite" => 0,
+        "File" => 1,
+        // Primary container/image groups. These provide the displayed file
+        // dimensions when a format parser does not also publish a bare key.
+        "JPEG" | "PNG" | "GIF" | "BMP" | "WebP" | "JXL" | "HEIF" | "QuickTime" | "RIFF" | "AVI"
+        | "Matroska" | "ASF" | "Flash" | "H264" | "Photoshop" | "PDF" | "SVG" | "EXR" | "BPG"
+        | "FLIF" | "FITS" => 2,
+        // Standard TIFF/EXIF directories.
+        "EXIF" | "IFD0" | "ExifIFD" | "InteropIFD" | "GPS" => 3,
+        group if group.starts_with("SubIFD") => 3,
+        "MakerNotes" => 4,
+        group if group.starts_with("XMP") => 5,
+        _ => 6,
+    };
+    (rank, key)
+}
+
 /// Look up a tag by bare name, ignoring any `Group:` prefix.
 ///
 /// ExifTool resolves composite inputs by name across all groups, so
 /// `EXIF:FocalLength` satisfies a dependency written as `FocalLength`. An exact
-/// match wins over a suffix match so an explicitly-grouped tag is preferred.
+/// match wins over a suffix match so an explicitly-grouped tag is preferred;
+/// otherwise [`lookup_rank`] supplies a stable group preference.
 fn lookup(map: &MetadataMap, name: &str) -> Option<String> {
     if let Some(v) = map.get(name).and_then(value_string) {
         return Some(v);
     }
     let suffix = format!(":{name}");
     map.iter()
-        .find(|(k, _)| k.ends_with(&suffix))
+        .filter(|(k, _)| k.ends_with(&suffix))
+        .min_by_key(|(k, _)| lookup_rank(k))
         .and_then(|(_, v)| value_string(v))
 }
 
@@ -200,6 +229,42 @@ mod tests {
         let mut m = map_of(&[("EXIF:FNumber", "2.8")]);
         apply(&mut m);
         assert_eq!(m.get_string("Composite:Aperture"), Some("2.8"));
+    }
+
+    #[test]
+    fn unqualified_lookup_has_deterministic_group_precedence() {
+        // Each MetadataMap gets an independently-randomized HashMap seed. A
+        // plain `.find()` therefore selected every one of these values across
+        // repeated runs, making ImageSize change nondeterministically.
+        for _ in 0..1_000 {
+            let mut m = map_of(&[
+                ("MakerNotes:ImageWidth", "1624"),
+                ("EXIF:ImageWidth", "6000"),
+                ("File:ImageWidth", "4000"),
+            ]);
+            assert_eq!(lookup(&m, "ImageWidth").as_deref(), Some("4000"));
+
+            // An actual unqualified key remains authoritative.
+            m.insert("ImageWidth", TagValue::new_string("8000"));
+            assert_eq!(lookup(&m, "ImageWidth").as_deref(), Some("8000"));
+        }
+
+        let mut m = map_of(&[
+            ("MakerNotes:ImageWidth", "1624"),
+            ("MakerNotes:ImageHeight", "1080"),
+            ("File:ImageWidth", "4000"),
+            ("File:ImageHeight", "3000"),
+        ]);
+        apply(&mut m);
+        assert_eq!(m.get_string("Composite:ImageSize"), Some("4000x3000"));
+    }
+
+    #[test]
+    fn unknown_groups_use_the_key_as_a_stable_tiebreaker() {
+        for _ in 0..1_000 {
+            let m = map_of(&[("Zulu:Thing", "last"), ("Alpha:Thing", "first")]);
+            assert_eq!(lookup(&m, "Thing").as_deref(), Some("first"));
+        }
     }
 
     #[test]
