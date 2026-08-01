@@ -6,3 +6,4 @@
 
 pub mod encoding;
 pub mod exif_types;
+pub mod print_im;

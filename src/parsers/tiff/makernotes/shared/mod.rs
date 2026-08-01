@@ -40,6 +40,8 @@ pub mod ifd_parser_base;
 pub mod lens_database;
 /// Common trait definition for all MakerNotes parsers
 pub mod makernote_parser;
+/// Shared PrintIM subdirectory dispatch for MakerNote IFDs
+pub mod print_im;
 /// Tag registry system for organizing and managing MakerNote tags
 /// Table-driven walker for plain TIFF-style MakerNote IFDs.
 pub mod table_ifd;
