@@ -742,15 +742,7 @@ fn apply_value_conv(vc: Vc, val: &Scalar, ctx: &Ctx, big: bool) -> Option<Scalar
 
 /// `Image::ExifTool::Exif::PrintFraction`.
 fn print_fraction(v: f64) -> String {
-    if v == 0.0 {
-        "0".to_string()
-    } else if (v * 2.0).fract() == 0.0 {
-        format!("{:+.0}/2", v * 2.0)
-    } else if (v * 3.0).fract() == 0.0 {
-        format!("{:+.0}/3", v * 3.0)
-    } else {
-        format!("{:+.3}", v)
-    }
+    crate::core::formatters::exif_print_conv::print_fraction(v)
 }
 
 fn decode_bits(value: f64, lookup: &[(u32, &str)]) -> String {

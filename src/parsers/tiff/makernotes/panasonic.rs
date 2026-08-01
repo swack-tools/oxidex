@@ -1023,21 +1023,7 @@ fn format_time_since_power_on(centiseconds: u32) -> String {
 /// ExifTool's Image::ExifTool::Exif::PrintFraction, used for FlashBias:
 /// prints a signed value in thirds ("0", "+1", "+1/3", "-2/3", ...)
 fn print_fraction(value: f64) -> String {
-    let val = value * 1.00001; // avoid round-off errors, as ExifTool does
-    if val == 0.0 {
-        return "0".to_string();
-    }
-    if val.trunc() / val > 0.999 {
-        return format!("{:+}", val.trunc() as i64);
-    }
-    if (val * 2.0).trunc() / (val * 2.0) > 0.999 {
-        return format!("{:+}/2", (val * 2.0).trunc() as i64);
-    }
-    if (val * 3.0).trunc() / (val * 3.0) > 0.999 {
-        return format!("{:+}/3", (val * 3.0).trunc() as i64);
-    }
-    // Unreachable for int16s/3 inputs; matches ExifTool's %+.3g fallback closely enough
-    format!("{:+}", val)
+    crate::core::formatters::exif_print_conv::print_fraction(value)
 }
 
 /// ExifTool's %Image::ExifTool::Exif::printParameter conversion, used for

@@ -1298,69 +1298,7 @@ fn read_signed_rational_value(
 /// body of PrintFraction over the 27 inputs asserted in
 /// `print_fraction_matches_exiftool_reference_outputs`.
 fn print_fraction(val: f64) -> String {
-    // ExifTool's own comment: "avoid round-off errors".
-    let val = val * 1.00001;
-    if val == 0.0 {
-        return "0".to_string();
-    }
-    // Perl's int() truncates toward zero, matching f64::trunc.
-    if val.trunc() / val > 0.999 {
-        return format!("{:+}", val.trunc() as i64);
-    }
-    if (val * 2.0).trunc() / (val * 2.0) > 0.999 {
-        return format!("{:+}/2", (val * 2.0).trunc() as i64);
-    }
-    if (val * 3.0).trunc() / (val * 3.0) > 0.999 {
-        return format!("{:+}/3", (val * 3.0).trunc() as i64);
-    }
-    format_signed_g3(val)
-}
-
-/// Reproduces Perl's `sprintf("%+.3g", $val)`: three significant digits, `%e`
-/// style when the decimal exponent falls outside `-4 <= exp < 3`, trailing
-/// zeros stripped, sign always present.
-fn format_signed_g3(val: f64) -> String {
-    const SIG_DIGITS: i32 = 3;
-
-    // Round to SIG_DIGITS first so the exponent is the post-rounding one, the
-    // way C's %g defines it (0.9999 -> 1.00e+00, exponent 0, not -1).
-    let sci = format!("{:.*e}", (SIG_DIGITS - 1) as usize, val);
-    let (mantissa, exp) = match sci.split_once('e') {
-        Some((m, e)) => (m, e.parse::<i32>().unwrap_or(0)),
-        None => (sci.as_str(), 0),
-    };
-
-    let body = if exp < -4 || exp >= SIG_DIGITS {
-        format!(
-            "{}e{}{:02}",
-            trim_zeros(mantissa),
-            sign_char(exp),
-            exp.abs()
-        )
-    } else {
-        let decimals = usize::try_from(SIG_DIGITS - 1 - exp).unwrap_or(0);
-        trim_zeros(&format!("{:.*}", decimals, val)).to_string()
-    };
-
-    if body.starts_with('-') {
-        body
-    } else {
-        format!("+{}", body)
-    }
-}
-
-fn sign_char(exp: i32) -> char {
-    if exp < 0 { '-' } else { '+' }
-}
-
-/// Strips the trailing zeros (and any orphaned decimal point) that C's `%g`
-/// removes but Rust's `{:.*}` keeps.
-fn trim_zeros(s: &str) -> &str {
-    if s.contains('.') {
-        s.trim_end_matches('0').trim_end_matches('.')
-    } else {
-        s
-    }
+    crate::core::formatters::exif_print_conv::print_fraction(val)
 }
 
 fn read_undefined_value(

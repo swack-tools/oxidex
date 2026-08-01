@@ -318,22 +318,7 @@ fn minolta_time(value: i64) -> Option<String> {
 
 /// `Image::ExifTool::Exif::PrintFraction`, used for the EV compensations.
 fn print_fraction(value: f64) -> String {
-    let value = value * 1.00001;
-    if value == 0.0 {
-        return "0".to_string();
-    }
-    for scale in [1.0f64, 2.0, 3.0] {
-        let scaled = value * scale;
-        let truncated = scaled.trunc();
-        if truncated != 0.0 && truncated / scaled > 0.999 {
-            return if scale == 1.0 {
-                format!("{:+}", truncated as i64)
-            } else {
-                format!("{:+}/{}", truncated as i64, scale as i64)
-            };
-        }
-    }
-    format!("{:+.3}", value)
+    crate::core::formatters::exif_print_conv::print_fraction(value)
 }
 
 /// `($val - 6) / 3` printed as a fraction.

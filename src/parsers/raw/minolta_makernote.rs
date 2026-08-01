@@ -218,18 +218,7 @@ fn trim_zeros(s: &str) -> String {
 
 /// ExifTool `Image::ExifTool::Exif::PrintFraction`.
 fn print_fraction(val: f64) -> String {
-    let v = val * 1.00001; // ExifTool's own round-off guard
-    if v == 0.0 {
-        return "0".to_string();
-    }
-    for (mult, suffix) in [(1.0, ""), (2.0, "/2"), (3.0, "/3")] {
-        let scaled = v * mult;
-        let whole = scaled.trunc();
-        if whole / scaled > 0.999 {
-            return format!("{:+}{}", whole as i64, suffix);
-        }
-    }
-    fmt_g(v, 3, true)
+    crate::core::formatters::exif_print_conv::print_fraction(val)
 }
 
 /// ExifTool `Image::ExifTool::Exif::PrintParameter`, wrapped by the
