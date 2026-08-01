@@ -14,11 +14,11 @@ pub(crate) fn normalize_family_for_comparison(family: &str) -> &str {
         //
         // NOTE: "GoPro" deliberately is NOT in this list -- see the GoPro arm
         // below. ExifTool never files a GoPro tag under family-0 MakerNotes.
-        "Canon" | "Nikon" | "Sony" | "Fujifilm" | "Panasonic" | "Olympus" | "Pentax"
-        | "Samsung" | "Leica" | "Casio" | "Minolta" | "Sigma" | "Ricoh" | "Kodak" | "Sanyo"
-        | "JVC" | "Motorola" | "HP" | "DJI" | "Apple" | "Google" | "Reconyx" | "Parrot"
-        | "Infiray" | "Lytro" | "PhaseOne" | "Leaf" | "Red" | "Qualcomm" | "Nintendo" | "GE"
-        | "LG" => "MakerNotes",
+        "Canon" | "CanonCustom" | "Nikon" | "Sony" | "Fujifilm" | "Panasonic" | "Olympus"
+        | "Pentax" | "Samsung" | "Leica" | "Casio" | "Minolta" | "Sigma" | "Ricoh" | "Kodak"
+        | "Sanyo" | "JVC" | "Motorola" | "HP" | "DJI" | "Apple" | "Google" | "Reconyx"
+        | "Parrot" | "Infiray" | "Lytro" | "PhaseOne" | "Leaf" | "Red" | "Qualcomm"
+        | "Nintendo" | "GE" | "LG" => "MakerNotes",
         // XMP namespace variants -> XMP (ExifTool often simplifies these)
         "XMP-exif" | "XMP-tiff" | "XMP-photoshop" | "XMP-iptcCore" | "XMP-iptcExt"
         | "XMP-xmpMM" | "XMP-xmpRights" | "XMP-dc" | "XMP-xmp" | "XMP-crs" | "XMP-plus"
@@ -755,6 +755,11 @@ mod tests {
             result.duplicate_emissions,
             vec!["MakerNotes:AELButton".to_string()]
         );
+    }
+
+    #[test]
+    fn test_canon_custom_family_normalizes_to_makernotes() {
+        assert_eq!(normalize_family_for_comparison("CanonCustom"), "MakerNotes");
     }
 
     #[test]
