@@ -142,7 +142,7 @@ pub fn dispatch_makernote_with_context(
     // reached a parser at all.
     if let Some(parser) = parser_for_make_prefix(&make_normalized, data) {
         if parser.validate_header(data) {
-            parser.parse_with_context(data, byte_order, model, data_base, tags)?;
+            parser.parse_with_context(ctx, byte_order, model, tags)?;
         }
         return Ok(());
     }

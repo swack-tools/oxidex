@@ -398,10 +398,32 @@ impl MakerNoteParser for OlympusParser {
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_with_context(data, byte_order, model, None, tags)
+        self.parse_located(data, byte_order, model, None, tags)
     }
 
     fn parse_with_context(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        // `window()` starts on the same byte as `payload()` but reaches to the
+        // end of the enclosing TIFF block, which is where the older `OLYMP\0`
+        // MakerNotes keep their values -- OlympusD450Z.jpg declares 406 bytes
+        // and addresses its CameraID a further kilobyte along.
+        self.parse_located(
+            ctx.window(),
+            byte_order,
+            model,
+            ctx.payload_tiff_offset(),
+            tags,
+        )
+    }
+}
+
+impl OlympusParser {
+    fn parse_located(
         &self,
         data: &[u8],
         byte_order: ByteOrder,

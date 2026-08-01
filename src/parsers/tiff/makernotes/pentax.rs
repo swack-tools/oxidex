@@ -605,14 +605,28 @@ impl MakerNoteParser for PentaxParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_with_context(data, byte_order, None, None, tags)
+        self.parse_located(data, byte_order, None, tags)
     }
 
     fn parse_with_context(
         &self,
-        data: &[u8],
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
         byte_order: ByteOrder,
         _model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        // "AOC\0" MakerNotes address their values from the TIFF header and can
+        // point past their own declared end, so decode over the enclosing
+        // block's window rather than the payload alone.
+        self.parse_located(ctx.window(), byte_order, ctx.payload_tiff_offset(), tags)
+    }
+}
+
+impl PentaxParser {
+    fn parse_located(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
         data_base: Option<u32>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
