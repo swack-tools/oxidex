@@ -149,6 +149,14 @@ pub fn process_exif_segments(
                 continue;
             };
 
+            // ExifTool reports the endianness of the EXIF block itself. It is
+            // known here and nowhere later, since everything downstream works
+            // through an already-configured reader.
+            metadata.insert(
+                "File:ExifByteOrder",
+                TagValue::new_string(byte_order.exif_byte_order_tag()),
+            );
+
             // Read IFD offset from bytes 4-7 (relative to TIFF data start)
             // Create EndianReader with appropriate byte order for the TIFF data
             let tiff_header_reader = match byte_order {

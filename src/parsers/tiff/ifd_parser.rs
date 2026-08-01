@@ -96,6 +96,22 @@ pub enum ByteOrder {
 }
 
 impl ByteOrder {
+    /// ExifTool's `ExifByteOrder` value, e.g. `Little-endian (Intel, II)`.
+    ///
+    /// ExifTool reports this for every file with a TIFF header, and it was the
+    /// single most-missed tag in the comparison corpus once the derived tags
+    /// were in place -- the information was always available at the point the
+    /// header is parsed, it was simply never recorded.
+    #[must_use]
+    pub const fn exif_byte_order_tag(self) -> &'static str {
+        match self {
+            ByteOrder::LittleEndian => "Little-endian (Intel, II)",
+            ByteOrder::BigEndian => "Big-endian (Motorola, MM)",
+        }
+    }
+}
+
+impl ByteOrder {
     /// Converts TIFF ByteOrder to the shared io::ByteOrder enum.
     ///
     /// This enables using EndianReader with TIFF byte order specification.
