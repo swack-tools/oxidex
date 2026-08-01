@@ -1,5 +1,9 @@
 //! MakerNote parsers for camera manufacturers
 
+/// Where a MakerNote sits in its enclosing TIFF block, and how far a decoder
+/// may read from it
+pub mod makernote_context;
+
 // Traditional camera manufacturers
 pub mod canon;
 pub mod canon_lens_database;

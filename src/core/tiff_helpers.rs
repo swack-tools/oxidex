@@ -4,11 +4,14 @@
 //! processing tags, and handling sub-IFDs (EXIF, GPS), MakerNotes, and GeoTiff.
 
 use super::{FileReader, MetadataMap, TagValue};
-use crate::core::operations_helpers::{read_u16, read_u32};
+use crate::core::operations_helpers::read_u32;
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
 use crate::parsers::tiff::geotiff_parser;
-use crate::parsers::tiff::ifd_parser::{ByteOrder, find_entry_value_offset, parse_ifd};
+use crate::parsers::tiff::ifd_parser::{ByteOrder, find_entry_position, parse_ifd};
 use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context;
+use crate::parsers::tiff::makernotes::makernote_context::{
+    MakerNoteContext, value_overlaps_directory,
+};
 use crate::tag_db::lookup_tag_name;
 use std::collections::HashMap;
 
@@ -161,9 +164,9 @@ pub fn parse_ifd_chain(
 
         // Parse EXIF Sub-IFD if present. A standalone TIFF's structure starts
         // at file offset 0, so the TIFF base ExifTool adds to stored offsets
-        // is 0 here.
+        // is 0 here, and the whole file is the enclosing TIFF block.
         if let Some(offset) = exif_offset {
-            parse_exif_subifd(reader, offset, byte_order, 0, metadata);
+            parse_exif_subifd(reader, offset, byte_order, 0, reader.size(), metadata);
         }
 
         // Parse GPS Sub-IFD if present
@@ -171,10 +174,19 @@ pub fn parse_ifd_chain(
             parse_gps_subifd(reader, offset, byte_order, metadata);
         }
 
-        // Parse Canon MakerNote if present
+        // Parse a MakerNote sitting directly in this IFD rather than in the
+        // EXIF sub-IFD. Its value offsets are measured from the file's own TIFF
+        // header, which is this reader's offset 0.
         if let Some(makernote_bytes) = makernote_data {
-            let makernote_base = find_entry_value_offset(reader, ifd_offset, byte_order, MAKERNOTE);
-            parse_makernote_if_canon(makernote_bytes, byte_order, makernote_base, metadata);
+            let ctx = makernote_context(
+                reader,
+                ifd_offset,
+                byte_order,
+                0,
+                reader.size(),
+                makernote_bytes,
+            );
+            parse_makernote(&ctx, byte_order, metadata);
         }
 
         // Read next IFD offset
@@ -448,12 +460,17 @@ fn process_tiff_ifd_tags<'a>(
 /// * `tiff_base` - Absolute file offset of the TIFF header (0 for a standalone
 ///   TIFF), added to stored offsets such as `OtherImageStart` the way ExifTool
 ///   absolutises them
+/// * `tiff_len` - Length of the enclosing TIFF block as measured from `reader`
+///   offset 0. This is ExifTool's `$dataLen`: the EXIF APP1 payload for a
+///   JPEG, the file for a standalone TIFF. It bounds how far a MakerNote
+///   decoder may resolve its own value offsets -- see [`makernote_context`].
 /// * `metadata` - MetadataMap to populate
 pub fn parse_exif_subifd(
     reader: &dyn FileReader,
     offset: u64,
     byte_order: ByteOrder,
     tiff_base: u64,
+    tiff_len: u64,
     metadata: &mut MetadataMap,
 ) {
     if let Ok(exif_tags) = parse_ifd(reader, offset, byte_order) {
@@ -487,15 +504,20 @@ pub fn parse_exif_subifd(
             metadata.insert(tag_name, tag_value);
         }
 
-        // Second pass: parse the MakerNote found in the EXIF IFD.
-        if let Some(makernote_bytes) = exif_makernote_data
-            && !parse_sigma_makernote_if_sigma(reader, offset, byte_order, tiff_base, metadata)
-        {
-            // Where the blob sits in the TIFF. MakerNote IFD entries store
-            // TIFF-relative offsets, so without this a parser cannot resolve
-            // any value that does not fit in an entry's inline 4 bytes.
-            let makernote_base = find_entry_value_offset(reader, offset, byte_order, MAKERNOTE);
-            parse_makernote_if_canon(makernote_bytes, byte_order, makernote_base, metadata);
+        // Second pass: parse the MakerNote found in the EXIF IFD. The decoder
+        // is given the enclosing TIFF block as well as the payload, because a
+        // MakerNote's value offsets are measured from the TIFF header and
+        // routinely address bytes past the payload's declared end.
+        if let Some(makernote_bytes) = exif_makernote_data {
+            let ctx = makernote_context(
+                reader,
+                offset,
+                byte_order,
+                tiff_base,
+                tiff_len,
+                makernote_bytes,
+            );
+            parse_makernote(&ctx, byte_order, metadata);
         }
 
         // Third pass: Parse Interoperability IFD if pointer was found
@@ -961,73 +983,72 @@ pub fn parse_ifd1_thumbnail(
     metadata.insert("IFD1:ThumbnailImage", TagValue::new_binary(bytes.to_vec()));
 }
 
-/// Decodes a Sigma/Foveon MakerNote, and reports whether it did.
+/// Locates a MakerNote inside its enclosing TIFF block.
 ///
-/// Every other make is decoded from the MakerNote payload alone, but a Sigma
-/// entry stores its value offset relative to the enclosing TIFF header, so a
-/// decoder holding only the payload cannot read any value longer than four
-/// bytes -- which on a real file is every one of them. `makernotes::sigma`
-/// therefore takes the TIFF block plus the payload's position inside it, the
-/// same pair the X3F preview path passes it.
+/// A MakerNote is one EXIF entry with a declared byte count, but the offsets
+/// inside it are measured from the enclosing TIFF header and routinely address
+/// bytes past that count -- `NikonCoolpixS8200.jpg` declares 2219 bytes and
+/// puts the last four bytes of `NEFBitDepth` outside them, and a Sigma value
+/// offset addresses the TIFF header outright. `parse_ifd` hands back a copy of
+/// the declared block, which loses both the position those offsets count from
+/// and the bytes past the end, so the entry is re-read here for its position.
 ///
-/// Returns `false` when the make is not Sigma, when the EXIF IFD carries no
-/// MakerNote entry, or when the TIFF block cannot be read whole, leaving the
-/// caller to fall back to the payload-only dispatcher.
-fn parse_sigma_makernote_if_sigma(
-    reader: &dyn FileReader,
-    exif_ifd_offset: u64,
-    byte_order: ByteOrder,
-    tiff_base: u64,
-    metadata: &mut MetadataMap,
-) -> bool {
-    let make = metadata.get_string("IFD0:Make").unwrap_or("");
-    if !matches!(
-        make.trim().to_ascii_lowercase().as_str(),
-        "sigma" | "sigma corporation" | "foveon"
-    ) {
-        return false;
-    }
-
-    let Some(value_offset) = ifd_entry_value_offset(reader, exif_ifd_offset, byte_order, MAKERNOTE)
-    else {
-        return false;
-    };
-    let Ok(size) = usize::try_from(reader.size()) else {
-        return false;
-    };
-    let Ok(tiff) = reader.read(0, size) else {
-        return false;
-    };
-
-    crate::parsers::tiff::makernotes::sigma::parse_sigma_makernote(
-        tiff,
-        value_offset as usize,
-        tiff_base,
-        metadata,
-    );
-    true
-}
-
-/// Reads one IFD entry's value offset without resolving the bytes behind it.
+/// The context is bounded three ways over. `tiff_len` (ExifTool's `$dataLen`,
+/// and never more than the reader holds) caps how far it can reach. The
+/// MakerNote's own value must not overlap the IFD that declared it, which is
+/// ExifTool's "Suspicious offset" test ([`value_overlaps_directory`]) and means
+/// the entry is not describing a real block. And the resulting `payload()` must
+/// be byte-identical to the block `parse_ifd` already resolved -- if it is not,
+/// the entry does not describe the bytes we hold and the widened window would
+/// be addressing something else entirely.
 ///
-/// [`parse_ifd`] hands back a copy of each value, which loses the position a
-/// MakerNote's own internal offsets are measured from.
-fn ifd_entry_value_offset(
-    reader: &dyn FileReader,
+/// Falls back to [`MakerNoteContext::detached`] -- the payload alone, exactly
+/// the reach decoders had before contexts existed -- whenever the enclosing
+/// block cannot be established this way.
+fn makernote_context<'a>(
+    reader: &'a dyn FileReader,
     ifd_offset: u64,
     byte_order: ByteOrder,
-    wanted_tag: u16,
-) -> Option<u32> {
-    let count = read_u16(reader.read(ifd_offset, 2).ok()?, byte_order);
-    for i in 0..u64::from(count) {
-        let entry = ifd_offset.checked_add(2)?.checked_add(i.checked_mul(12)?)?;
-        let bytes = reader.read(entry, 12).ok()?;
-        if read_u16(bytes, byte_order) != wanted_tag {
-            continue;
-        }
-        return Some(read_u32(&bytes[8..12], byte_order));
+    tiff_base: u64,
+    tiff_len: u64,
+    payload: &'a [u8],
+) -> MakerNoteContext<'a> {
+    let detached = MakerNoteContext::detached(payload);
+
+    let Some(entry) = find_entry_position(reader, ifd_offset, byte_order, MAKERNOTE) else {
+        return detached;
+    };
+    // A value of four bytes or fewer is stored in the entry's offset field
+    // itself, so there is no position in the block to widen from.
+    if entry.value_len <= 4 {
+        return detached;
     }
-    None
+
+    let block_len = tiff_len.min(reader.size());
+    let (Ok(block_len), Ok(value_offset), Ok(value_len), Ok(dir_start), Ok(dir_end)) = (
+        usize::try_from(block_len),
+        usize::try_from(entry.value_offset),
+        usize::try_from(entry.value_len),
+        usize::try_from(ifd_offset),
+        usize::try_from(entry.dir_end),
+    ) else {
+        return detached;
+    };
+    // A MakerNote whose value runs back over the entry list that declared it is
+    // what ExifTool warns about and drops, not a block to widen into.
+    if value_overlaps_directory(value_offset, value_len, dir_start, dir_end) {
+        return detached;
+    }
+    let Ok(tiff) = reader.read(0, block_len) else {
+        return detached;
+    };
+
+    let ctx = MakerNoteContext::in_tiff(tiff, value_offset, value_len, tiff_base);
+    if ctx.payload() == payload {
+        ctx
+    } else {
+        detached
+    }
 }
 
 /// Parses MakerNote data for any supported manufacturer.
@@ -1038,44 +1059,77 @@ fn ifd_entry_value_offset(
 ///
 /// # Arguments
 ///
-/// * `makernote_data` - Raw MakerNote bytes
+/// * `ctx` - Where the MakerNote sits, and how far its decoder may read
 /// * `byte_order` - Byte order for interpreting multi-byte values
 /// * `metadata` - MetadataMap to populate with manufacturer-specific tags
-fn parse_makernote_if_canon(
-    makernote_data: &[u8],
-    byte_order: ByteOrder,
-    makernote_base: Option<u32>,
-    metadata: &mut MetadataMap,
-) {
+fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: &mut MetadataMap) {
     // Extract camera make from metadata to determine which parser to use
-    let make = metadata.get_string("IFD0:Make").unwrap_or("");
+    let make = metadata.get_string("IFD0:Make").unwrap_or("").to_string();
     // A few MakerNote sub-structures are laid out per camera model rather than
     // self-describing (Nikon AFInfo's byte order, for one).
-    let model = metadata.get_string("IFD0:Model");
+    let model = metadata.get_string("IFD0:Model").map(str::to_string);
 
-    if !make.is_empty() {
-        // Parse MakerNote using the dispatcher
-        let mut makernote_tags = HashMap::new();
-        if let Err(_e) = dispatch_makernote_with_context(
-            make,
-            model,
-            makernote_data,
-            byte_order,
-            makernote_base,
-            &mut makernote_tags,
-        ) {
-            // Silently skip failed MakerNote parsing
-            return;
-        }
-
-        // Add manufacturer tags to metadata
-        // Note: tag names already include manufacturer prefix (e.g., "Canon:", "Nikon:")
-        for (tag_name, tag_value_str) in makernote_tags {
-            // Convert string value to TagValue
-            let tag_value = TagValue::String(tag_value_str);
-            metadata.insert(tag_name, tag_value);
-        }
+    if make.is_empty() {
+        return;
     }
+
+    // Sigma reads the same context, but writes `MetadataMap` rather than the
+    // `HashMap<String, String>` the dispatcher's trait returns: its
+    // `PreviewImage` is binary and its `PreviewImageStart` an integer, neither
+    // of which survives a string map. See `makernotes::sigma`.
+    if parse_sigma_makernote_if_sigma(&make, ctx, metadata) {
+        return;
+    }
+
+    // Parse MakerNote using the dispatcher
+    let mut makernote_tags = HashMap::new();
+    if let Err(_e) = dispatch_makernote_with_context(
+        &make,
+        model.as_deref(),
+        ctx,
+        byte_order,
+        &mut makernote_tags,
+    ) {
+        // Silently skip failed MakerNote parsing
+        return;
+    }
+
+    // Add manufacturer tags to metadata
+    // Note: tag names already include manufacturer prefix (e.g., "Canon:", "Nikon:")
+    for (tag_name, tag_value_str) in makernote_tags {
+        // Convert string value to TagValue
+        let tag_value = TagValue::String(tag_value_str);
+        metadata.insert(tag_name, tag_value);
+    }
+}
+
+/// Decodes a Sigma/Foveon MakerNote, and reports whether it did.
+///
+/// Sigma consumes the same [`MakerNoteContext`] every other make now gets; what
+/// keeps it out of the dispatcher is its *output*, not its input. `MakerNotes:
+/// PreviewImage` is binary and `PreviewImageStart` an integer, and the
+/// `MakerNoteParser` trait returns `HashMap<String, String>`.
+///
+/// Returns `false` for any other make, leaving the caller to dispatch normally.
+fn parse_sigma_makernote_if_sigma(
+    make: &str,
+    ctx: &MakerNoteContext<'_>,
+    metadata: &mut MetadataMap,
+) -> bool {
+    if !matches!(
+        make.trim().to_ascii_lowercase().as_str(),
+        "sigma" | "sigma corporation" | "foveon"
+    ) {
+        return false;
+    }
+
+    crate::parsers::tiff::makernotes::sigma::parse_sigma_makernote(
+        ctx.tiff(),
+        ctx.payload_offset(),
+        ctx.tiff_base(),
+        metadata,
+    );
+    true
 }
 
 #[cfg(test)]
@@ -1527,5 +1581,160 @@ mod interop_tests {
                 .and_then(|v| v.as_string()),
             Some("R98 - DCF basic file (sRGB)")
         );
+    }
+}
+
+#[cfg(test)]
+mod makernote_window_tests {
+    use super::*;
+    use crate::test_support::TestReader;
+
+    const UNDEFINED: u16 = 7;
+    const LONG: u16 = 4;
+
+    /// Builds a little-endian TIFF whose IFD at offset 8 holds a single entry
+    /// `(tag, type, count, value_offset)`, followed by `tail` bytes laid down
+    /// at `value_at`.
+    ///
+    /// The interesting shape is the real one: a MakerNote entry that declares
+    /// fewer bytes than the values behind it actually occupy, so the last of
+    /// them sits outside the declared block.
+    fn tiff_with_entry(
+        tag: u16,
+        field_type: u16,
+        count: u32,
+        value_offset: u32,
+        value_at: usize,
+        value: &[u8],
+        trailing: usize,
+    ) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II");
+        data.extend_from_slice(&42u16.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes());
+        data.extend_from_slice(&1u16.to_le_bytes()); // one entry
+        data.extend_from_slice(&tag.to_le_bytes());
+        data.extend_from_slice(&field_type.to_le_bytes());
+        data.extend_from_slice(&count.to_le_bytes());
+        data.extend_from_slice(&value_offset.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
+        data.resize(value_at, 0);
+        data.extend_from_slice(value);
+        data.resize(data.len() + trailing, 0xAB);
+        data
+    }
+
+    #[test]
+    fn the_window_reaches_past_the_declared_makernote_block() {
+        // A 16-byte MakerNote at offset 32, with 24 more bytes of file after
+        // it -- the NEFBitDepth shape, where the value the last entry points
+        // at runs off the end of the declared count.
+        let payload: Vec<u8> = (0u8..16).collect();
+        let data = tiff_with_entry(MAKERNOTE, UNDEFINED, 16, 32, 32, &payload, 24);
+        let reader = TestReader::new(data.clone());
+
+        let ctx = makernote_context(
+            &reader,
+            8,
+            ByteOrder::LittleEndian,
+            0,
+            data.len() as u64,
+            &payload,
+        );
+
+        assert_eq!(ctx.payload(), &payload[..], "declared block is unchanged");
+        assert!(ctx.is_widened());
+        assert_eq!(ctx.window().len(), data.len() - 32);
+        assert_eq!(ctx.window()[..16], payload[..], "window starts at payload");
+        assert_eq!(ctx.payload_offset(), 32);
+    }
+
+    #[test]
+    fn the_window_stops_at_the_declared_tiff_block_not_the_reader() {
+        // `tiff_len` is ExifTool's $dataLen: a JPEG's reader runs to the end of
+        // the file, but the EXIF block does not, and the MakerNote must not
+        // reach into the compressed scan data behind it.
+        let payload: Vec<u8> = (0u8..16).collect();
+        let data = tiff_with_entry(MAKERNOTE, UNDEFINED, 16, 32, 32, &payload, 4096);
+        let reader = TestReader::new(data);
+
+        let ctx = makernote_context(&reader, 8, ByteOrder::LittleEndian, 0, 64, &payload);
+
+        assert_eq!(ctx.window().len(), 64 - 32);
+    }
+
+    #[test]
+    fn a_payload_the_entry_does_not_describe_falls_back_to_detached() {
+        // The guard that keeps a widened window from addressing something else
+        // entirely: the context is only used when its own payload is byte-
+        // identical to the block `parse_ifd` already resolved.
+        let payload: Vec<u8> = (0u8..16).collect();
+        let data = tiff_with_entry(MAKERNOTE, UNDEFINED, 16, 32, 32, &payload, 24);
+        let reader = TestReader::new(data);
+
+        let someone_elses = vec![0xFFu8; 16];
+        let ctx = makernote_context(&reader, 8, ByteOrder::LittleEndian, 0, 64, &someone_elses);
+
+        assert!(!ctx.is_widened());
+        assert_eq!(ctx.payload(), &someone_elses[..]);
+    }
+
+    #[test]
+    fn an_inline_value_has_no_position_to_widen_from() {
+        // Four bytes or fewer live in the entry's offset field, so there is no
+        // offset into the block to extend.
+        let payload = vec![1u8, 2, 3, 4];
+        let data = tiff_with_entry(MAKERNOTE, UNDEFINED, 4, 0x04030201, 32, &payload, 24);
+        let reader = TestReader::new(data);
+
+        let ctx = makernote_context(&reader, 8, ByteOrder::LittleEndian, 0, 64, &payload);
+
+        assert!(!ctx.is_widened());
+        assert_eq!(ctx.payload(), &payload[..]);
+    }
+
+    #[test]
+    fn a_value_that_runs_back_over_the_entry_list_is_refused() {
+        // ExifTool's "Suspicious MakerNotes offset": a value overlapping the
+        // directory that declared it is not a block to widen into. The IFD here
+        // spans 8..26 (count + one 12-byte entry + next pointer), and the entry
+        // claims its value starts at 12 -- inside itself.
+        let payload: Vec<u8> = (0u8..16).collect();
+        let mut data = tiff_with_entry(MAKERNOTE, UNDEFINED, 16, 12, 32, &payload, 24);
+        // Make the claimed payload match what sits at offset 12 so that only
+        // the overlap test can reject it.
+        let claimed = data[12..28].to_vec();
+        data.resize(data.len(), 0);
+        let reader = TestReader::new(data);
+
+        let ctx = makernote_context(&reader, 8, ByteOrder::LittleEndian, 0, 64, &claimed);
+
+        assert!(!ctx.is_widened());
+        assert_eq!(ctx.payload(), &claimed[..]);
+    }
+
+    #[test]
+    fn an_ifd_without_a_makernote_entry_falls_back_to_detached() {
+        let payload: Vec<u8> = (0u8..16).collect();
+        let data = tiff_with_entry(0x0100, LONG, 1, 32, 32, &payload, 24);
+        let reader = TestReader::new(data);
+
+        let ctx = makernote_context(&reader, 8, ByteOrder::LittleEndian, 0, 64, &payload);
+
+        assert!(!ctx.is_widened());
+    }
+
+    #[test]
+    fn the_tiff_base_travels_with_the_context() {
+        // Sigma's PreviewImageStart is `IsOffset => 1`, so the block's own file
+        // position has to survive the trip.
+        let payload: Vec<u8> = (0u8..16).collect();
+        let data = tiff_with_entry(MAKERNOTE, UNDEFINED, 16, 32, 32, &payload, 24);
+        let reader = TestReader::new(data);
+
+        let ctx = makernote_context(&reader, 8, ByteOrder::LittleEndian, 292, 64, &payload);
+
+        assert_eq!(ctx.tiff_base(), 292);
+        assert_eq!(ctx.tiff()[0..2], *b"II", "index 0 is the TIFF header");
     }
 }

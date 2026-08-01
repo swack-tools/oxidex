@@ -330,18 +330,78 @@ pub fn find_entry_value_offset(
     byte_order: ByteOrder,
     tag_id: u16,
 ) -> Option<u32> {
+    find_entry_position(reader, ifd_offset, byte_order, tag_id).map(|entry| entry.value_offset)
+}
+
+/// Where one IFD entry's value sits, and where the entry list around it ends.
+///
+/// [`find_entry_value_offset`] is this without the extent. The extra two fields
+/// are what a caller needs to decide whether the offset can be *trusted*: the
+/// value's length, so it can be bounds-checked against the block it points
+/// into, and the declaring directory's end, so ExifTool's "Suspicious
+/// MakerNotes offset" test (`Exif.pm:6549`) can reject a value that runs back
+/// over the entry list.
+pub struct EntryPosition {
+    /// The entry's stored value offset, measured from the TIFF header.
+    pub value_offset: u32,
+    /// The value's length in bytes: `count * sizeof(type)`.
+    pub value_len: u64,
+    /// One past the last byte of the declaring IFD -- its count, its 12-byte
+    /// entries and its next-IFD pointer. ExifTool's `$dirEnd`.
+    pub dir_end: u64,
+}
+
+/// Locates the first entry carrying `tag_id` in the IFD at `ifd_offset`.
+///
+/// See [`EntryPosition`]. Returns `None` when the IFD cannot be read, holds no
+/// such tag, or describes a value whose length overflows.
+pub fn find_entry_position(
+    reader: &dyn FileReader,
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+    tag_id: u16,
+) -> Option<EntryPosition> {
+    let io_order = byte_order.to_io_byte_order();
     let count_bytes = reader.read(ifd_offset, 2).ok()?;
-    let entry_count = EndianReader::new(count_bytes, byte_order.to_io_byte_order()).u16_at(0)?;
+    let entry_count = EndianReader::new(count_bytes, io_order).u16_at(0)?;
+
+    // count + 12 bytes per entry + the next-IFD pointer.
+    let dir_end = ifd_offset
+        .checked_add(2)?
+        .checked_add(u64::from(entry_count).checked_mul(12)?)?
+        .checked_add(4)?;
 
     let entries_data = reader
         .read(ifd_offset + 2, entry_count as usize * 12)
         .ok()?;
-    let reader = EndianReader::new(entries_data, byte_order.to_io_byte_order());
+    let entries = EndianReader::new(entries_data, io_order);
 
     (0..entry_count as usize).find_map(|i| {
         let base = i * 12;
-        (reader.u16_at(base)? == tag_id).then(|| reader.u32_at(base + 8))?
+        if entries.u16_at(base)? != tag_id {
+            return None;
+        }
+        let field_type = entries.u16_at(base + 2)?;
+        let value_count = u64::from(entries.u32_at(base + 4)?);
+        Some(EntryPosition {
+            value_offset: entries.u32_at(base + 8)?,
+            value_len: value_count.checked_mul(tiff_type_size(field_type))?,
+            dir_end,
+        })
     })
+}
+
+/// Byte width of a TIFF field type, 0 for the codes TIFF does not define.
+///
+/// An unknown type yields a zero-length value rather than a guess.
+fn tiff_type_size(field_type: u16) -> u64 {
+    match field_type {
+        1 | 2 | 6 | 7 => 1, // BYTE, ASCII, SBYTE, UNDEFINED
+        3 | 8 => 2,         // SHORT, SSHORT
+        4 | 9 | 11 => 4,    // LONG, SLONG, FLOAT
+        5 | 10 | 12 => 8,   // RATIONAL, SRATIONAL, DOUBLE
+        _ => 0,
+    }
 }
 
 /// Extracts an inline value from the 4-byte value_offset field.

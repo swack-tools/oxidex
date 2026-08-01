@@ -171,8 +171,21 @@ pub fn process_exif_segments(
                 // Parse EXIF Sub-IFD if present. `tiff_offset` is the absolute
                 // file position of the TIFF header, which ExifTool adds to
                 // stored offsets (e.g. the Interop IFD's OtherImageStart).
+                // `tiff_data.len()` is the APP1 segment's EXIF payload -- what
+                // ExifTool calls `$dataLen` -- and bounds how far a MakerNote
+                // decoder may resolve its own value offsets. `tiff_reader`
+                // itself runs to the end of the file, so this is the tighter
+                // of the two limits and keeps a MakerNote out of the JPEG's
+                // compressed scan data.
                 if let Some(offset) = exif_ifd_offset {
-                    parse_exif_subifd(&tiff_reader, offset, byte_order, tiff_offset, metadata);
+                    parse_exif_subifd(
+                        &tiff_reader,
+                        offset,
+                        byte_order,
+                        tiff_offset,
+                        tiff_data.len() as u64,
+                        metadata,
+                    );
                 }
 
                 // Parse GPS Sub-IFD if present

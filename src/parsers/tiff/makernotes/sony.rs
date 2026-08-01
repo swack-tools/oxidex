@@ -90,18 +90,27 @@ impl MakerNoteParser for SonyParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_with_context(data, byte_order, None, None, tags)
+        self.parse_with_context(
+            &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext::detached(data),
+            byte_order,
+            None,
+            tags,
+        )
     }
 
     fn parse_with_context(
         &self,
-        data: &[u8],
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
         byte_order: ByteOrder,
         model: Option<&str>,
-        data_base: Option<u32>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        match parse_sony_makernote_impl(data, byte_order, model, data_base) {
+        // `payload_tiff_offset` is the `data_base` this decoder subtracts from a
+        // TIFF-relative value offset: `None` rather than 0 when the caller had
+        // no enclosing block, so the subtraction is skipped instead of landing
+        // somewhere plausible and wrong.
+        let data = ctx.payload();
+        match parse_sony_makernote_impl(data, byte_order, model, ctx.payload_tiff_offset()) {
             Ok(parsed_tags) => {
                 tags.extend(parsed_tags);
                 Ok(())
@@ -556,16 +565,22 @@ mod tests {
         data.resize(20, 0);
         data.extend_from_slice(b"Standard\0\0\0\0\0\0\0\0");
 
+        // The MakerNote sits 1000 bytes into its enclosing TIFF block, which is
+        // what its entries' offsets are measured from.
+        let mut tiff = vec![0u8; 1000];
+        let payload_len = data.len();
+        tiff.extend_from_slice(&data);
+        let ctx = crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext::in_tiff(
+            &tiff,
+            1000,
+            payload_len,
+            0,
+        );
+
         let mut tags = HashMap::new();
         let parser = SonyParser;
         parser
-            .parse_with_context(
-                &data,
-                ByteOrder::LittleEndian,
-                Some("SLT-A77"),
-                Some(1000),
-                &mut tags,
-            )
+            .parse_with_context(&ctx, ByteOrder::LittleEndian, Some("SLT-A77"), &mut tags)
             .unwrap();
         assert_eq!(
             tags.get("Sony:CreativeStyle"),

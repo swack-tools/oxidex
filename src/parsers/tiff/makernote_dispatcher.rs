@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 use crate::parsers::tiff::ifd_parser::ByteOrder;
+use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
 use crate::parsers::tiff::makernotes::*;
 use std::collections::HashMap;
 
@@ -52,25 +53,32 @@ pub fn dispatch_makernote_with_model(
     byte_order: ByteOrder,
     tags: &mut HashMap<String, String>,
 ) -> Result<(), String> {
-    dispatch_makernote_with_context(make, model, data, byte_order, None, tags)
+    dispatch_makernote_with_context(
+        make,
+        model,
+        &MakerNoteContext::detached(data),
+        byte_order,
+        tags,
+    )
 }
 
-/// Dispatches MakerNote data to the appropriate manufacturer parser, passing
-/// along both the camera model and the TIFF-relative offset the bytes were
-/// read from.
+/// Dispatches a MakerNote whose position inside its enclosing TIFF block is
+/// known.
 ///
-/// A MakerNote is normally an IFD embedded in the ExifIFD, and its entries
-/// store offsets relative to the *TIFF header*, not to the MakerNote. A parser
-/// handed only the blob therefore cannot resolve any value longer than 4
-/// bytes. `data_base` - the TIFF-relative offset of `data[0]` - closes that
-/// gap: a value at TIFF offset `v` lives at `data[v - data_base..]`.
+/// This is the entry point to prefer. MakerNote value offsets are measured from
+/// the enclosing TIFF header rather than from the MakerNote payload, and they
+/// routinely address bytes past the payload's declared end, so a decoder handed
+/// only the payload cannot resolve them -- see
+/// [`MakerNoteContext`](crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext).
+/// [`dispatch_makernote`] and [`dispatch_makernote_with_model`] are this call
+/// with a detached context, which reaches exactly as far as the declared block
+/// and so behaves as they always did.
 ///
 /// # Arguments
 /// * `make` - Camera manufacturer name (e.g., "Canon", "Nikon", "Sony")
 /// * `model` - Camera model name (EXIF `Model`), if known
-/// * `data` - Raw MakerNote data bytes
+/// * `ctx` - Where the MakerNote sits, and how far its decoder may read
 /// * `byte_order` - Byte order for parsing
-/// * `data_base` - TIFF-relative offset of `data[0]`, if known
 /// * `tags` - HashMap to insert extracted tags into
 ///
 /// # Returns
@@ -78,12 +86,13 @@ pub fn dispatch_makernote_with_model(
 pub fn dispatch_makernote_with_context(
     make: &str,
     model: Option<&str>,
-    data: &[u8],
+    ctx: &MakerNoteContext<'_>,
     byte_order: ByteOrder,
-    data_base: Option<u32>,
     tags: &mut HashMap<String, String>,
 ) -> Result<(), String> {
     use crate::parsers::tiff::makernotes::shared::MakerNoteParser;
+
+    let data = ctx.payload();
 
     // Normalize make string (trim whitespace, case-insensitive matching)
     let make_normalized = make.trim().to_lowercase();
@@ -155,10 +164,12 @@ pub fn dispatch_makernote_with_context(
 
     // If we have a parser, validate and parse
     if let Some(parser) = parser {
-        // Validate header if parser provides validation
+        // Validate header if parser provides validation. The signature lives at
+        // the start of the declared block either way, so this reads `payload`
+        // whether or not the decoder goes on to use the wider window.
         if parser.validate_header(data) {
             // Parse MakerNote data
-            parser.parse_with_context(data, byte_order, model, data_base, tags)?;
+            parser.parse_with_context(ctx, byte_order, model, tags)?;
         }
     }
 

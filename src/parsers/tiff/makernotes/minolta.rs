@@ -413,17 +413,26 @@ impl MakerNoteParser for MinoltaParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
-        self.parse_with_context(data, byte_order, None, None, tags)
+        self.parse_with_context(
+            &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext::detached(data),
+            byte_order,
+            None,
+            tags,
+        )
     }
 
     fn parse_with_context(
         &self,
-        data: &[u8],
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
         byte_order: ByteOrder,
         _model: Option<&str>,
-        data_base: Option<u32>,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
+        // See `SonyParser::parse_with_context`: `payload_tiff_offset` is the
+        // `data_base` an entry's TIFF-relative offset is measured against, and
+        // is `None` rather than 0 when there is no enclosing block.
+        let data = ctx.payload();
+        let data_base = ctx.payload_tiff_offset();
         if data.len() < 2 {
             return Err("Minolta MakerNote data too short".to_string());
         }
