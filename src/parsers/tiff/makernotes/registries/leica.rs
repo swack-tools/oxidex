@@ -61,8 +61,11 @@ pub fn leica_registry() -> TagRegistry {
         .register_enum_tag(0x0070, "MacroMode", None)
         .register_enum_tag_required(0x0071, "SceneMode", &DECODER_SCENE_MODE)
         // Simple integer/numeric tags
-        .register_integer_tag(0x0008, "ExternalSensorBrightnessValue", None)
-        .register_integer_tag(0x0009, "MeasuredLV", None)
+        //
+        // ExternalSensorBrightnessValue and MeasuredLV are absent on purpose:
+        // they are 0x311/0x312 rational64s (ExifTool Panasonic.pm:1656, 2152,
+        // 2202), not integers, and are decoded in `leica.rs` where the
+        // per-layout value-offset base is known.
         .register_integer_tag(0x000A, "ApproximateFNumber", None)
         .register_integer_tag(0x000B, "CameraTemperature", None)
         .register_integer_tag(0x000C, "ColorTemperature", None)

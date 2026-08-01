@@ -26,6 +26,7 @@ use nom::{
 use std::collections::HashMap;
 
 use super::leica_lens_database::lookup_lens_name;
+use super::makernote_context::MakerNoteContext;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_u16_array, extract_u32_array};
 use crate::const_decoder;
@@ -38,8 +39,6 @@ const LEICA_QUALITY: u16 = 0x0003;
 const LEICA_USER_PROFILE: u16 = 0x0004;
 const LEICA_SERIAL_NUMBER: u16 = 0x0005;
 const LEICA_WHITE_BALANCE: u16 = 0x0006;
-const LEICA_EXTERNAL_SENSOR_BRIGHTNESS_VALUE: u16 = 0x0008;
-const LEICA_MEASURED_LV: u16 = 0x0009;
 const LEICA_APPROXIMATE_F_NUMBER: u16 = 0x000A;
 const LEICA_CAMERA_TEMPERATURE: u16 = 0x000B;
 const LEICA_COLOR_TEMPERATURE: u16 = 0x000C;
@@ -98,6 +97,13 @@ const LEICA_CAMERA_ROLL_ANGLE: u16 = 0x0064;
 const LEICA_MACRO_MODE: u16 = 0x0070;
 const LEICA_SCENE_MODE: u16 = 0x0071;
 
+// Exposure measurements, shared by the Leica2 (M8), Leica6 and Leica9
+// (M10/M11/S) tables -- ExifTool Panasonic.pm:1656, 2152 and 2202. Both are
+// `Format => 'rational64s'` with `PrintConv => 'sprintf("%.2f", $val)'`; the
+// M8 stores them as rational64u in JPEG, which the forced format reads signed.
+const LEICA_EXTERNAL_SENSOR_BRIGHTNESS_VALUE: u16 = 0x0311;
+const LEICA_MEASURED_LV: u16 = 0x0312;
+
 // Leica 4 (M9) Subdirectories
 const L4_SUBDIR_3000: u16 = 0x3000;
 const L4_SUBDIR_3100: u16 = 0x3100;
@@ -110,8 +116,6 @@ const L4_USER_PROFILE: u16 = 0x0004;
 const L4_SERIAL_NUMBER: u16 = 0x0005;
 const L4_WHITE_BALANCE: u16 = 0x0006;
 const L4_FIRMWARE_VERSION: u16 = 0x0007;
-const L4_EXTERNAL_SENSOR_BRIGHTNESS: u16 = 0x0008;
-const L4_MEASURED_LV: u16 = 0x0009;
 const L4_APPROXIMATE_F_NUMBER: u16 = 0x000A;
 const L4_CAMERA_TEMPERATURE: u16 = 0x000B;
 const L4_WB_RGB_LEVELS: u16 = 0x000E;
@@ -124,6 +128,13 @@ const L4_BASE_ISO: u16 = 0x0030;
 const L4_SENSOR_WIDTH: u16 = 0x0031;
 const L4_SENSOR_HEIGHT: u16 = 0x0032;
 const L4_SENSOR_BIT_DEPTH: u16 = 0x0033;
+
+// ExifTool Panasonic.pm:1908 and 1917, in the `Subdir` table the M9's
+// Subdir3400 points at. Both are `int32s` with `ValueConv => '$val / 1e5'` and
+// `PrintConv => 'sprintf("%.2f", $val)'`. Subdir entries carry their full tag
+// ID, not one relative to the subdirectory.
+const L4_MEASURED_LV: u16 = 0x3407;
+const L4_EXTERNAL_SENSOR_BRIGHTNESS: u16 = 0x3408;
 
 // Leica 4 Decoders
 const_decoder!(
@@ -190,6 +201,167 @@ const_decoder!(
 // Leica typically uses "LEICA\0\0\0" or "LEICA CAMERA AG" headers
 const LEICA_HEADER_SHORT: &[u8] = b"LEICA\0\0\0";
 const LEICA_HEADER_LONG: &[u8] = b"LEICA CAMERA AG";
+/// `MakerNoteLeica4`'s signature: the M9 and M Monochrom write "LEICA0\x03\0"
+/// (ExifTool MakerNotes.pm:639-648, which matches on `^LEICA0`).
+const LEICA_HEADER_LEICA4: &[u8] = b"LEICA0";
+/// `MakerNoteLeica9`'s signature, written by the M10, M11 and S bodies
+/// (ExifTool MakerNotes.pm:714-722).
+const LEICA_HEADER_LEICA9: &[u8] = b"LEICA\0\x02\0";
+
+/// Which of ExifTool's Leica MakerNote layouts a payload is in.
+///
+/// `MakerNotes.pm` selects these by header signature and gives each its own IFD
+/// start and value-offset base, so the layout has to be settled before any
+/// entry can be resolved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LeicaLayout {
+    /// `MakerNoteLeica2`, written by the M8 (MakerNotes.pm:611-624).
+    Leica2,
+    /// `MakerNoteLeica3`, a bare IFD written by the R8/R9 digital backs
+    /// (MakerNotes.pm:625-637).
+    Leica3,
+    /// `MakerNoteLeica4`, written by the M9 and M Monochrom
+    /// (MakerNotes.pm:638-648).
+    Leica4,
+    /// `MakerNoteLeica9`, written by the M10, M11 and S bodies
+    /// (MakerNotes.pm:713-722).
+    Leica9,
+    /// The long "LEICA CAMERA AG" header this parser has always skipped 15
+    /// bytes of.
+    LongHeader,
+}
+
+impl LeicaLayout {
+    /// Distance from the payload's start to the first IFD byte.
+    ///
+    /// Every LEICA-signed layout puts its IFD at `$valuePtr + 8`; the bare
+    /// Leica3 IFD starts at the payload itself.
+    fn ifd_offset(self) -> usize {
+        match self {
+            LeicaLayout::Leica2 | LeicaLayout::Leica4 | LeicaLayout::Leica9 => 8,
+            LeicaLayout::Leica3 => 0,
+            LeicaLayout::LongHeader => 15,
+        }
+    }
+}
+
+/// Identifies a payload's layout from its header, or `None` if no Leica layout
+/// this parser handles claims it.
+///
+/// `MakerNoteLeica5` (X1/X2/X VARIO/T/X-U, "LEICA\0[\x01\x04\x05\x06\x07\x10\x1a]\0")
+/// is deliberately absent: it is a different tag table, and matching it here
+/// would decode its entries against Leica2's names.
+fn leica_layout(data: &[u8]) -> Option<LeicaLayout> {
+    if data.len() < 8 {
+        return None;
+    }
+    if data.starts_with(LEICA_HEADER_LEICA9) {
+        return Some(LeicaLayout::Leica9);
+    }
+    if &data[0..8] == LEICA_HEADER_SHORT {
+        return Some(LeicaLayout::Leica2);
+    }
+    if data.starts_with(LEICA_HEADER_LEICA4) {
+        return Some(LeicaLayout::Leica4);
+    }
+    if data.len() >= 15 && &data[0..15] == LEICA_HEADER_LONG {
+        return Some(LeicaLayout::LongHeader);
+    }
+    if data.starts_with(b"LEICA") {
+        // Some other LEICA-signed layout (Leica5, Leica10's variants). Reading
+        // its entries with these tag names would be a guess.
+        return None;
+    }
+    // No signature: a bare IFD, if the entry count is plausible.
+    let entry_count = EndianReader::little_endian(data).u16_at(0).unwrap_or(0);
+    (entry_count > 0 && entry_count < 150).then_some(LeicaLayout::Leica3)
+}
+
+/// Where a Leica MakerNote entry's out-of-line value lives.
+///
+/// A value longer than four bytes sits elsewhere and the entry holds an offset
+/// to it -- but the base that offset counts from is per-layout, and ExifTool
+/// spells each one out. `MakerNoteLeica2` declares `Base => '$start'`, the IFD
+/// at `$valuePtr + 8` (MakerNotes.pm:621); `MakerNoteLeica4` declares
+/// `Base => '$start - 8'`, the payload itself (MakerNotes.pm:645); and
+/// `MakerNoteLeica9` declares no `Base` at all, so it inherits the enclosing
+/// TIFF header (MakerNotes.pm:717-721).
+///
+/// The distinction is not cosmetic: resolving `LeicaM10-R.jpg`'s `MeasuredLV`
+/// against the payload reads 899785574/2936739356 = 0.31 where ExifTool reads
+/// -1993/100 = -19.93.
+#[derive(Clone, Copy)]
+struct LeicaValues<'a> {
+    /// The block an entry's value offset indexes into.
+    block: &'a [u8],
+    /// What that offset is measured from, as an index into `block`.
+    base: usize,
+}
+
+impl<'a> LeicaValues<'a> {
+    /// Reads `len` bytes of an entry's out-of-line value, or `None` when the
+    /// offset does not resolve inside the block.
+    fn read(&self, value_offset: u32, len: usize) -> Option<&'a [u8]> {
+        let start = self.base.checked_add(usize::try_from(value_offset).ok()?)?;
+        self.block.get(start..start.checked_add(len)?)
+    }
+}
+
+/// Reads a `rational64s` and renders it as ExifTool's `sprintf("%.2f", $val)`.
+///
+/// Returns `None` for a zero denominator, which ExifTool prints as `inf`
+/// rather than a number, and for a slice too short to hold the pair.
+fn leica_rational64s_2dp(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
+    let reader = EndianReader::new(bytes, byte_order.to_io_byte_order());
+    let numerator = reader.i32_at(0)?;
+    let denominator = reader.i32_at(4)?;
+    (denominator != 0).then(|| format!("{:.2}", f64::from(numerator) / f64::from(denominator)))
+}
+
+/// Byte length of one component of a TIFF field type, or `0` for a type this
+/// parser never reads (the entry is skipped either way).
+fn leica_type_size(field_type: u16) -> usize {
+    match field_type {
+        1 | 2 | 6 | 7 => 1,
+        3 | 8 => 2,
+        4 | 9 | 11 => 4,
+        5 | 10 | 12 => 8,
+        _ => 0,
+    }
+}
+
+/// Reproduces ExifTool's `FixLeicaBase` (MakerNotes.pm:1669-1691): the M8
+/// writes `MakerNoteLeica2` with the IFD's value offsets counting from the IFD
+/// itself in most files, but from 8 bytes earlier -- the payload's own start
+/// -- in others (`LeicaM8.2.jpg` among them). ExifTool detects which by
+/// comparing the lowest out-of-line value offset against where the entry list
+/// ends: a gap bigger than 8 bytes means the offsets were written relative to
+/// the payload start, not the IFD.
+///
+/// Returns the shift to apply to the IFD-relative base: `0` normally, `-8`
+/// when the fixup applies.
+fn leica2_base_shift(ifd_data: &[u8], entry_count: u16, byte_order: ByteOrder) -> i64 {
+    let reader = EndianReader::new(ifd_data, byte_order.to_io_byte_order());
+    let min_value_ptr = (0..entry_count)
+        .filter_map(|i| {
+            let entry_offset = 2 + usize::from(i) * 12;
+            let field_type = reader.u16_at(entry_offset + 2)?;
+            let count = reader.u32_at(entry_offset + 4)?;
+            let size = usize::try_from(count)
+                .ok()?
+                .checked_mul(leica_type_size(field_type))?;
+            // A value of 4 bytes or fewer lives in the entry itself, not
+            // out-of-line, so it says nothing about the base.
+            (size > 4).then(|| reader.u32_at(entry_offset + 8))?
+        })
+        .min();
+    match min_value_ptr {
+        Some(min_value_ptr) if i64::from(min_value_ptr) - (i64::from(entry_count) * 12 + 4) > 8 => {
+            -8
+        }
+        _ => 0,
+    }
+}
 
 /// Checks if the provided data has a valid Leica MakerNote header
 ///
@@ -200,32 +372,7 @@ const LEICA_HEADER_LONG: &[u8] = b"LEICA CAMERA AG";
 /// * `true` if data contains a valid Leica header
 /// * `false` otherwise
 pub fn is_leica_makernote(data: &[u8]) -> bool {
-    if data.len() < 8 {
-        return false;
-    }
-
-    // Check for short LEICA header (8 bytes)
-    if data.len() >= 8 && &data[0..8] == LEICA_HEADER_SHORT {
-        return true;
-    }
-
-    // Check for long LEICA CAMERA AG header (15 bytes)
-    if data.len() >= 15 && &data[0..15] == LEICA_HEADER_LONG {
-        return true;
-    }
-
-    // Some Leica cameras may have minimal or no header
-    // Check if first two bytes could be a valid IFD entry count
-    if data.len() >= 2 {
-        let reader = EndianReader::little_endian(data);
-        let entry_count = reader.u16_at(0).unwrap_or(0);
-        // Reasonable entry count: 1-150 entries
-        if entry_count > 0 && entry_count < 150 {
-            return true;
-        }
-    }
-
-    false
+    leica_layout(data).is_some()
 }
 
 // ============================================================================
@@ -394,19 +541,54 @@ impl MakerNoteParser for LeicaMakerNoteParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
+        // No enclosing block, so a Leica9 payload's TIFF-relative value offsets
+        // stay unresolvable and the two tags that need them are skipped rather
+        // than guessed. `parse_with_context` is the entry point that has them.
+        self.parse_payload(data, byte_order, None, tags)
+    }
+
+    /// Leica9's value offsets are measured from the enclosing TIFF header
+    /// rather than from the MakerNote, so `MeasuredLV` and
+    /// `ExternalSensorBrightnessValue` on an M10/M11/S are reachable only from
+    /// a located context.
+    fn parse_with_context(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        _model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        self.parse_payload(ctx.payload(), byte_order, Some(ctx), tags)
+    }
+}
+
+impl LeicaMakerNoteParser {
+    /// Routes a payload to the decoder for its layout.
+    ///
+    /// `ctx` is the enclosing TIFF block when the caller knows it; only Leica9
+    /// needs it, and only for its two rational exposure measurements.
+    fn parse_payload(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        ctx: Option<&MakerNoteContext<'_>>,
+        tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
         // Validate minimum data length
         if data.len() < 8 {
             return Err("Leica MakerNote data too short".to_string());
         }
 
-        // Skip header if present
-        let offset = if data.len() >= 8 && &data[0..8] == LEICA_HEADER_SHORT {
-            8 // Skip "LEICA\0\0\0"
-        } else if data.len() >= 15 && &data[0..15] == LEICA_HEADER_LONG {
-            15 // Skip "LEICA CAMERA AG"
-        } else {
-            0 // No header, start directly with IFD
+        let Some(layout) = leica_layout(data) else {
+            return Err("Unrecognised Leica MakerNote layout".to_string());
         };
+
+        // The M9's entries are subdirectory pointers, not tags.
+        if layout == LeicaLayout::Leica4 {
+            return self.parse_leica4(data, byte_order, tags);
+        }
+
+        let offset = layout.ifd_offset();
 
         // Ensure we have enough data after the header
         if offset >= data.len() {
@@ -428,6 +610,44 @@ impl MakerNoteParser for LeicaMakerNoteParser {
         if entry_count == 0 || entry_count > 200 {
             return Err(format!("Invalid Leica IFD entry count: {}", entry_count));
         }
+
+        // Where this layout's out-of-line values are measured from.
+        let values = match layout {
+            // No `Base`, so the enclosing TIFF header. Without a located
+            // context there is nothing to measure against.
+            LeicaLayout::Leica9 => ctx.filter(|ctx| ctx.is_located()).map(|ctx| LeicaValues {
+                block: ctx.tiff(),
+                base: 0,
+            }),
+            // `Base => '$start'`: the IFD -- except `FixLeicaBase` shifts it 8
+            // bytes earlier, to the payload's own start, on the files whose
+            // value offsets were written that way instead. Either base can
+            // land a value outside the declared payload (`LeicaM8.2.jpg`'s
+            // sit ~700 bytes past it), so this prefers the located context's
+            // wider window and only falls back to the bare payload -- which
+            // resolves an in-bounds value just as well -- when no context was
+            // given.
+            LeicaLayout::Leica2 => {
+                let shift = leica2_base_shift(ifd_data, entry_count, byte_order);
+                let located = ctx.filter(|ctx| ctx.is_located());
+                let base =
+                    i64::try_from(located.map_or(offset, |ctx| ctx.payload_offset() + offset))
+                        .ok()
+                        .and_then(|base| base.checked_add(shift))
+                        .and_then(|base| usize::try_from(base).ok());
+                base.map(|base| LeicaValues {
+                    block: located.map_or(data, |ctx| ctx.tiff()),
+                    base,
+                })
+            }
+            // Leica3 and the long-header layout have no rational entries this
+            // parser reads out-of-line, but resolving from the IFD matches
+            // what a `Base => '$start'`-style declaration would give.
+            _ => Some(LeicaValues {
+                block: ifd_data,
+                base: 0,
+            }),
+        };
 
         // Each IFD entry is 12 bytes: 2 (tag) + 2 (type) + 4 (count) + 4 (value/offset)
         let required_size = 2 + (entry_count as usize * 12);
@@ -692,10 +912,26 @@ impl MakerNoteParser for LeicaMakerNoteParser {
                     tags.insert("Leica:BaseISO".to_string(), value.to_string());
                 }
 
-                // Measured light value (EV)
+                // Imaging sensor or TTL exposure meter measurement. A
+                // rational64s, so its eight bytes sit outside the entry and the
+                // layout's base decides where.
                 LEICA_MEASURED_LV => {
-                    let value = entry.value_offset as f32 / 10.0;
-                    tags.insert("Leica:MeasuredLV".to_string(), format!("{:.1} EV", value));
+                    if let Some(lv) = values
+                        .and_then(|values| values.read(entry.value_offset, 8))
+                        .and_then(|bytes| leica_rational64s_2dp(bytes, byte_order))
+                    {
+                        tags.insert("Leica:MeasuredLV".to_string(), lv);
+                    }
+                }
+
+                // The "blue dot" measurement, likewise a rational64s.
+                LEICA_EXTERNAL_SENSOR_BRIGHTNESS_VALUE => {
+                    if let Some(ev) = values
+                        .and_then(|values| values.read(entry.value_offset, 8))
+                        .and_then(|bytes| leica_rational64s_2dp(bytes, byte_order))
+                    {
+                        tags.insert("Leica:ExternalSensorBrightnessValue".to_string(), ev);
+                    }
                 }
 
                 // Approximate F-number
@@ -804,15 +1040,6 @@ impl MakerNoteParser for LeicaMakerNoteParser {
                 LEICA_APEX_BRIGHTNESS => {
                     let value = entry.value_offset as f32 / 10.0;
                     tags.insert("Leica:APEXBrightness".to_string(), format!("{:.1}", value));
-                }
-
-                // External sensor brightness value
-                LEICA_EXTERNAL_SENSOR_BRIGHTNESS_VALUE => {
-                    let value = entry.value_offset as f32 / 10.0;
-                    tags.insert(
-                        "Leica:ExternalSensorBrightnessValue".to_string(),
-                        format!("{:.1} EV", value),
-                    );
                 }
 
                 _ => {
@@ -1116,16 +1343,15 @@ impl LeicaMakerNoteParser {
                         }
                     }
                 }
+                // int32s fitting in the entry's own four bytes, so no offset is
+                // involved. ValueConv `$val / 1e5`, PrintConv `sprintf("%.2f")`:
+                // LeicaM9.jpg stores 691968 and ExifTool prints 6.92.
                 L4_MEASURED_LV => {
-                    // Stored as int32s, divided by 100000 for actual LV
-                    let value = value_offset as i32;
-                    let lv = value as f64 / 100000.0;
+                    let lv = f64::from(value_offset as i32) / 1e5;
                     tags.insert("Leica:MeasuredLV".to_string(), format!("{:.2}", lv));
                 }
                 L4_EXTERNAL_SENSOR_BRIGHTNESS => {
-                    // Stored as int32s, divided by 100000 for actual EV
-                    let value = value_offset as i32;
-                    let ev = value as f64 / 100000.0;
+                    let ev = f64::from(value_offset as i32) / 1e5;
                     tags.insert(
                         "Leica:ExternalSensorBrightnessValue".to_string(),
                         format!("{:.2}", ev),
