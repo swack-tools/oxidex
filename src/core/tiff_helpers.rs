@@ -499,6 +499,20 @@ pub fn parse_exif_subifd(
             }
 
             let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
+            let base_name = tag_name
+                .split_once(':')
+                .map_or(tag_name.as_str(), |(_, name)| name);
+
+            // ExifTool's default duplicate-suppressed view gives IFD0
+            // priority when the same tag name also appears in the EXIF
+            // sub-IFD. Real files do this with Compression, Padding, and
+            // OffsetSchema; keeping both raw keys makes the family-normalized
+            // output nondeterministically clobber one value with the other.
+            // Match the precedence already applied to IFD1 and InteropIFD.
+            if metadata.get(&format!("IFD0:{base_name}")).is_some() {
+                continue;
+            }
+
             let tag_value =
                 raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order);
             metadata.insert(tag_name, tag_value);
@@ -1130,6 +1144,74 @@ fn parse_sigma_makernote_if_sigma(
         metadata,
     );
     true
+}
+
+#[cfg(test)]
+mod exif_subifd_tests {
+    use super::*;
+    use crate::test_support::TestReader;
+
+    const SHORT: u16 = 3;
+
+    fn one_entry_ifd(tag_id: u16, field_type: u16, value: u32) -> TestReader {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II");
+        data.extend_from_slice(&42u16.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes());
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&tag_id.to_le_bytes());
+        data.extend_from_slice(&field_type.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&value.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        TestReader::new(data)
+    }
+
+    #[test]
+    fn exif_subifd_duplicate_yields_to_ifd0() {
+        let reader = one_entry_ifd(TAG_COMPRESSION, SHORT, 0);
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:Compression", TagValue::new_integer(4));
+
+        parse_exif_subifd(
+            &reader,
+            8,
+            ByteOrder::LittleEndian,
+            0,
+            reader.size(),
+            &mut metadata,
+        );
+
+        assert_eq!(
+            metadata
+                .get("IFD0:Compression")
+                .and_then(TagValue::as_integer),
+            Some(4)
+        );
+        assert!(metadata.get("ExifIFD:Compression").is_none());
+    }
+
+    #[test]
+    fn exif_subifd_tag_emits_without_ifd0_twin() {
+        let reader = one_entry_ifd(TAG_COMPRESSION, SHORT, 0);
+        let mut metadata = MetadataMap::new();
+
+        parse_exif_subifd(
+            &reader,
+            8,
+            ByteOrder::LittleEndian,
+            0,
+            reader.size(),
+            &mut metadata,
+        );
+
+        assert_eq!(
+            metadata
+                .get("ExifIFD:Compression")
+                .and_then(TagValue::as_integer),
+            Some(0)
+        );
+    }
 }
 
 #[cfg(test)]
