@@ -89,7 +89,7 @@ pub use ricoh::ricoh_registry;
 
 // Batch 5 Sub-Batch 5.2 exports
 pub use parrot::parrot_registry;
-pub use phaseone::phaseone_registry;
+pub use phaseone::{phaseone_tag_name, sensor_calibration_tag_name};
 pub use red::red_registry;
 
 // Batch 5 Sub-Batch 5.3 exports

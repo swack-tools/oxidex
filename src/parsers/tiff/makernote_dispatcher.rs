@@ -133,6 +133,21 @@ pub fn dispatch_makernote_with_context(
     // Normalize make string (trim whitespace, case-insensitive matching)
     let make_normalized = make.trim().to_lowercase();
 
+    // Phase One's MakerNote is dispatched by ExifTool purely on its own
+    // signature (MakerNotes.pm's `MakerNotePhaseOne` Condition has no Make
+    // check at all), because the format is OEMed under multiple brand names.
+    // Leaf -- acquired by Phase One -- writes the identical directory shape
+    // under `Make: Leaf`; matching only "phase one"/"phase one a/s" left
+    // every Leaf-branded .IIQ unreachable (`Make=="Leaf"` matched nothing in
+    // the table below, so it silently produced zero PhaseOne: tags for real
+    // Leaf/Phase One IIQ files). Check the signature before the Make-keyed
+    // table so it wins regardless of brand.
+    if phaseone::is_phaseone_makernote(data) {
+        let parser = phaseone::PhaseOneMakerNoteParser;
+        parser.parse_with_context(ctx, byte_order, model, tags)?;
+        return Ok(());
+    }
+
     // Vendors that spell their own name several ways across model generations
     // are matched by prefix rather than by an exhaustive literal list. Olympus
     // alone writes six different strings across the sample corpus -- "OLYMPUS
@@ -159,7 +174,9 @@ pub fn dispatch_makernote_with_context(
         // relative to the enclosing TIFF header, so nothing handed only the
         // payload can read their values; `core::tiff_helpers::parse_exif_subifd`
         // routes Sigma to `makernotes::sigma` instead, which takes the TIFF.
-        "phase one" | "phase one a/s" => Some(Box::new(phaseone::PhaseOneMakerNoteParser)),
+        //
+        // Phase One is also absent here on purpose: it's dispatched by
+        // signature, above, before Make is ever consulted.
         "minolta" | "konica minolta" | "minolta co., ltd." => {
             Some(Box::new(minolta::MinoltaParser))
         }
