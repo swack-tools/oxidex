@@ -16,19 +16,24 @@ ARG ALPINE_VERSION=3.24
 # ---------------------------------------------------------------------------
 FROM rust:${RUST_VERSION}-alpine${ALPINE_VERSION} AS builder
 
-# build-base supplies gcc, musl-dev and binutils. The C-backed codecs behind
-# zip's default features need a C toolchain, and `strip` below comes from
-# binutils.
+# build-base supplies gcc, musl-dev and binutils -- the C toolchain that the
+# C-backed codecs behind zip's default features (zstd, bzip2) need to
+# compile. `strip` below is redundant given Cargo.toml's
+# [profile.release] strip = true, which already ships a stripped binary; it
+# is kept anyway as an explicit, harmless safeguard in case that profile
+# setting ever changes.
 RUN apk add --no-cache build-base
 
 WORKDIR /src
 COPY . .
 
-# `--bin oxidex` restricts the build to the CLI. This skips the feature-gated
-# tag-comparison and jpeg-tag-matrix binaries, and keeps the library a plain
-# rlib dependency rather than also emitting the staticlib and cdylib
-# crate-types declared in Cargo.toml, which do not reliably link against
-# static musl.
+# `--bin oxidex` restricts the build to the CLI, skipping the feature-gated
+# tag-comparison and jpeg-tag-matrix binaries -- that is all `--bin` does.
+# It does NOT stop Cargo from attempting the library's full declared
+# crate-type list (lib, staticlib, cdylib) from Cargo.toml; Cargo builds
+# that list regardless of which --bin was requested. The build succeeds
+# because rustc detects that cdylib is unsupported on this static-musl
+# target and drops it with a warning instead of failing to link.
 RUN cargo build --release --bin oxidex \
     && strip target/release/oxidex
 

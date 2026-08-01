@@ -21,7 +21,10 @@ fuzz/
 dist/
 .github/
 
-# JavaScript tooling for the docs site.
+# JS package manifests and node_modules anywhere in the tree. The root
+# package.json/bun.lock/package-lock.json here are local agent tooling
+# (e.g. claude-flow), not the docs site -- the docs site's own package.json
+# lives under docs/ and is already excluded by the docs/ entry above.
 node_modules/
 **/node_modules/
 package.json
