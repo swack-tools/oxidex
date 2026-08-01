@@ -177,6 +177,86 @@ impl<'a> MakerNoteContext<'a> {
     pub fn is_widened(&self) -> bool {
         self.window().len() > self.value_len
     }
+
+    /// Absolute file offset of the MakerNote payload's first byte.
+    ///
+    /// This is the base for a MakerNote whose `SubDirectory` re-bases onto its
+    /// own start rather than inheriting the enclosing TIFF header's -- see
+    /// [`absolutise_is_offset`] for which ones do.
+    pub fn payload_base(&self) -> u64 {
+        self.tiff_base + self.value_offset as u64
+    }
+}
+
+/// Adds `base` to the `IsOffset` MakerNote tags named in `keys`.
+///
+/// # What the base resolves against
+///
+/// A tag flagged `IsOffset` stores a number that is relative to whatever its
+/// directory was based on, and `ProcessBinaryData` absolutises it on the way
+/// out:
+///
+/// ```text
+/// Canon.pm:7397         Flags => 'IsOffset',            # %Canon::PreviewImageInfo tag 5
+/// ExifTool.pm:9855  sub ProcessBinaryData($$$)
+/// ExifTool.pm:9863      my $base = $$dirInfo{Base} || 0;
+/// ExifTool.pm:10130     if ($$tagInfo{IsOffset} and $$tagInfo{IsOffset} ne '3') {
+/// ExifTool.pm:10133         $val += $base + $$self{BASE} if eval $$tagInfo{IsOffset};
+/// ```
+///
+/// So the base is `$$dirInfo{Base}` -- the directory's own base, *not* a
+/// constant. For a MakerNote that inherits it (Canon's `PreviewImageInfo`
+/// SubDirectory at Canon.pm:1949 declares no `Base`, and Pentax's "AOC\0" form
+/// at MakerNotes.pm:769 declares none either) that is the enclosing TIFF
+/// header's file offset, [`MakerNoteContext::tiff_base`].
+///
+/// A MakerNote whose SubDirectory *does* re-base is different:
+///
+/// ```text
+/// MakerNotes.pm:818     Name => 'MakerNotePentax5',
+/// MakerNotes.pm:820     # used by cameras such as the Q, Optio S1, RS1500 and WG-1
+/// MakerNotes.pm:821     Condition => '$$valPt=~/^PENTAX \0/',
+/// MakerNotes.pm:824         Start => '$valuePtr + 10',
+/// MakerNotes.pm:825         Base => '$start - 10',
+/// ```
+///
+/// `Base => '$start - 10'` with `Start => '$valuePtr + 10'` is exactly
+/// `$valuePtr` -- the MakerNote's own first byte, i.e.
+/// [`MakerNoteContext::payload_base`]. `MakerNotePentax6` (MakerNotes.pm:830,
+/// the "S1\0..." form) does the same with 12.
+///
+/// # Verification
+///
+/// Across the 4,240-file sample corpus, 129 files emit a Canon or Pentax
+/// `PreviewImageStart` that oxidex got wrong, and the difference from
+/// ExifTool's value equals this base on all 129 -- with three distinct values
+/// so a single-file coincidence cannot explain it:
+///
+/// | file | ExifTool - oxidex | base |
+/// |---|---|---|
+/// | `Pentax/PentaxOptioRZ10.jpg` | 12 | TIFF header at file offset 12 |
+/// | `Canon/CanonEOS300D.jpg` | 30 | TIFF header at file offset 30 |
+/// | `Pentax/PentaxQ.jpg` | 1186 | `PENTAX \0` at file offset 1186 |
+///
+/// 109 of the 129 resolve against the enclosing TIFF header and 20 against the
+/// MakerNote's own start; using `tiff_base` for all of them would leave those
+/// 20 wrong, which is why the two cases are distinguished here rather than
+/// inferred from one file's arithmetic.
+pub fn absolutise_is_offset(
+    tags: &mut std::collections::HashMap<String, String>,
+    base: u64,
+    keys: &[&str],
+) {
+    if base == 0 {
+        return;
+    }
+    for key in keys {
+        if let Some(value) = tags.get_mut(*key)
+            && let Ok(raw) = value.parse::<u64>()
+        {
+            *value = (raw + base).to_string();
+        }
+    }
 }
 
 /// ExifTool's "Suspicious MakerNotes offset" test.
@@ -218,6 +298,43 @@ mod tests {
         assert_eq!(ctx.payload().len(), 16);
         assert_eq!(ctx.payload_offset(), 8);
         assert_eq!(ctx.tiff_base(), 100);
+    }
+
+    /// The two bases an `IsOffset` MakerNote tag can resolve against, and the
+    /// reason they must stay distinct: `tiff_base` alone is right for 109 of
+    /// the corpus's 129 Canon/Pentax `PreviewImageStart` files and wrong for
+    /// the other 20.
+    #[test]
+    fn payload_base_is_the_makernote_start_not_the_tiff_header() {
+        let tiff = block();
+        let ctx = MakerNoteContext::in_tiff(&tiff, 8, 16, 100);
+        assert_eq!(ctx.tiff_base(), 100);
+        assert_eq!(ctx.payload_base(), 108);
+    }
+
+    #[test]
+    fn absolutise_adds_the_base_only_to_the_named_keys() {
+        let mut tags = std::collections::HashMap::from([
+            ("Pentax:PreviewImageStart".to_string(), "3064".to_string()),
+            ("Pentax:PreviewImageLength".to_string(), "26".to_string()),
+        ]);
+        absolutise_is_offset(&mut tags, 1186, &["Pentax:PreviewImageStart"]);
+        // PentaxQ.jpg: raw 3064 + the "PENTAX \0" file offset 1186 = 4250,
+        // which is what ExifTool prints.
+        assert_eq!(tags["Pentax:PreviewImageStart"], "4250");
+        assert_eq!(tags["Pentax:PreviewImageLength"], "26");
+    }
+
+    /// A detached context has no known base, and adding 0 must not rewrite a
+    /// value into a differently-spelled version of itself.
+    #[test]
+    fn absolutise_is_a_no_op_without_a_base() {
+        let mut tags = std::collections::HashMap::from([(
+            "Canon:PreviewImageStart".to_string(),
+            "1".to_string(),
+        )]);
+        absolutise_is_offset(&mut tags, 0, &["Canon:PreviewImageStart"]);
+        assert_eq!(tags["Canon:PreviewImageStart"], "1");
     }
 
     #[test]

@@ -615,7 +615,25 @@ impl MakerNoteParser for PentaxParser {
         // "AOC\0" MakerNotes address their values from the TIFF header and can
         // point past their own declared end, so decode over the enclosing
         // block's window rather than the payload alone.
-        self.parse_located(ctx.window(), byte_order, ctx.payload_tiff_offset(), tags)
+        self.parse_located(ctx.window(), byte_order, ctx.payload_tiff_offset(), tags)?;
+
+        // 0x0004 PreviewImageStart is `IsOffset`, so it needs its directory's
+        // base added (ExifTool.pm:10133). Which base depends on the header:
+        // the "AOC\0" form (MakerNotes.pm:769) declares no `Base` and inherits
+        // the enclosing TIFF header's file offset, while the "PENTAX \0" form
+        // (MakerNotePentax5, MakerNotes.pm:825) re-bases onto its own first
+        // byte with `Base => '$start - 10'`. See `absolutise_is_offset`.
+        let base = if ctx.payload().starts_with(PENTAX_HEADER_PENTAX) {
+            ctx.payload_base()
+        } else {
+            ctx.tiff_base()
+        };
+        crate::parsers::tiff::makernotes::makernote_context::absolutise_is_offset(
+            tags,
+            base,
+            &["Pentax:PreviewImageStart"],
+        );
+        Ok(())
     }
 }
 

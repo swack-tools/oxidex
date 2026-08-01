@@ -3147,6 +3147,15 @@ impl MakerNoteParser for CanonParser {
         ) {
             Ok(parsed_tags) => {
                 tags.extend(parsed_tags);
+                // `%Canon::PreviewImageInfo` tag 5 is `Flags => 'IsOffset'`
+                // (Canon.pm:7397) and its SubDirectory (Canon.pm:1949) declares
+                // no `Base`, so it inherits the enclosing TIFF header's file
+                // offset. See `absolutise_is_offset`.
+                crate::parsers::tiff::makernotes::makernote_context::absolutise_is_offset(
+                    tags,
+                    ctx.tiff_base(),
+                    &["Canon:PreviewImageStart"],
+                );
                 Ok(())
             }
             Err(e) => Err(format!("Canon MakerNote parse error: {}", e)),
