@@ -911,6 +911,32 @@ impl OxiDexExtractor {
         )
     }
 
+    /// The seven MP Entry tag names repeat once per embedded image, each under
+    /// its own indexed family-1 group (`MPImage1:MPImageStart`,
+    /// `MPImage2:MPImageStart`, ... -- MPF.pm:247). ExifTool's own family-0
+    /// view collapses them exactly the same way: `exiftool -G0 -a` prints
+    /// `[MPF] MPImageStart` once per image and `-json -G` keeps one. They are
+    /// per-image peers, not OxiDex computing one conceptual tag twice, so --
+    /// like the XMP namespace peers above -- they must not trip the
+    /// duplicate-emission gate.
+    ///
+    /// Sorted-key order makes the surviving value the highest-numbered group,
+    /// which is the one ExifTool's family-0 JSON keeps, for up to nine images.
+    /// The sample corpus tops out at three MP Entries (737 MPF files: 48 with
+    /// one, 648 with two, 41 with three).
+    fn is_exiftool_family0_mp_image_peer(normalized_key: &str) -> bool {
+        matches!(
+            normalized_key,
+            "MPF:MPImageFlags"
+                | "MPF:MPImageFormat"
+                | "MPF:MPImageType"
+                | "MPF:MPImageLength"
+                | "MPF:MPImageStart"
+                | "MPF:DependentImage1EntryNumber"
+                | "MPF:DependentImage2EntryNumber"
+        )
+    }
+
     /// Flatten MetadataMap into TagInfo vector
     ///
     /// Returns the flattened tags plus, for every displayed `family:name`
@@ -1012,7 +1038,9 @@ impl OxiDexExtractor {
 
             // Format the value
             let value_str = self.format_value(&normalized_key, &name, value);
-            if Self::is_exiftool_family0_xmp_overlap(&normalized_key) {
+            if Self::is_exiftool_family0_xmp_overlap(&normalized_key)
+                || Self::is_exiftool_family0_mp_image_peer(&normalized_key)
+            {
                 // Preserve the existing sorted, last-write-wins behavior so
                 // our family-0 JSON view chooses the same schema value as
                 // ExifTool. Only the false duplicate evidence is suppressed.

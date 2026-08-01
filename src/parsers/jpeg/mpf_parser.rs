@@ -15,11 +15,36 @@
 //! MP Attribute IFD (per image) - contains positioning/3D metadata
 //! ```
 //!
+//! # Groups
+//!
+//! MPF.pm files its tags under three different family-1 groups, and the group
+//! -- not the tag name -- is what carries the image index:
+//!
+//! * `MPF0` -- the MP Index IFD (MPF.pm:24, `GROUPS => { 0 => 'MPF', 1 =>
+//!   'MPF0', 2 => 'Image'}`).
+//! * `MPF1` -- the MP Attribute IFD. ExifTool.pm:7959 sets `$dirInfo{Multi} =
+//!   1;  # the MP Attribute IFD will be MPF1` before handing the segment to
+//!   `ProcessTIFF`.
+//! * `MPImage1`, `MPImage2`, ... -- one group per MP Entry. MPF.pm:96 gives the
+//!   MPImage table group1 `MPImage`, and `ProcessMPImageList` appends the index
+//!   per record (MPF.pm:247, `$$et{SET_GROUP1} = '+' . ($i + 1);`).
+//!
+//! The seven per-entry tag NAMES repeat verbatim in every `MPImage#` group;
+//! they are never suffixed with the index. `exiftool -a -G1 -s` on
+//! `Apple/Apple_iPhone16Pro.jpg`:
+//!
+//! ```text
+//! [MPF0]     MPFVersion                 : 0100
+//! [MPImage1] MPImageStart               : 0
+//! [MPImage2] MPImageStart               : 4289837
+//! ```
+//!
 //! # References
 //!
 //! - CIPA DC-007-2009 Multi-Picture Format Specification
 
 use crate::core::{MetadataMap, TagValue};
+use crate::exiftool_tables::{PrintConv, find_table};
 use crate::io::EndianReader;
 
 // =============================================================================
@@ -91,6 +116,10 @@ enum MpfByteOrder {
 /// # Arguments
 ///
 /// * `data` - Raw APP2 segment data (should start with "MPF\x00")
+/// * `tiff_base` - Absolute file offset of the MPF TIFF header, i.e. of the
+///   byte immediately after the `MPF\0` identifier. `MPImageStart` is stored
+///   relative to it and ExifTool rebases against it; see
+///   [`parse_mp_entry_array`].
 /// * `metadata` - MetadataMap to populate with extracted MPF tags
 ///
 /// # Returns
@@ -105,9 +134,13 @@ enum MpfByteOrder {
 /// use oxidex::core::MetadataMap;
 ///
 /// let mut metadata = MetadataMap::new();
-/// parse_mpf_segment(app2_data, &mut metadata)?;
+/// parse_mpf_segment(app2_data, tiff_base, &mut metadata)?;
 /// ```
-pub fn parse_mpf_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
+pub fn parse_mpf_segment(
+    data: &[u8],
+    tiff_base: u64,
+    metadata: &mut MetadataMap,
+) -> Result<(), String> {
     // Minimum size: 4 (identifier) + 8 (TIFF header) = 12 bytes
     if data.len() < 12 {
         return Err("MPF segment too short".to_string());
@@ -143,7 +176,7 @@ pub fn parse_mpf_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<(), 
     let mp_index_ifd_offset = reader.u32_at(4).ok_or("Failed to read IFD offset")? as usize;
 
     // Parse MP Index IFD
-    parse_mp_index_ifd(&reader, mp_index_ifd_offset, metadata)?;
+    parse_mp_index_ifd(&reader, mp_index_ifd_offset, tiff_base, metadata)?;
 
     Ok(())
 }
@@ -184,6 +217,7 @@ fn detect_byte_order(marker: &[u8]) -> Result<MpfByteOrder, String> {
 fn parse_mp_index_ifd(
     reader: &EndianReader,
     offset: usize,
+    tiff_base: u64,
     metadata: &mut MetadataMap,
 ) -> Result<(), String> {
     // Read IFD entry count (2 bytes)
@@ -219,12 +253,12 @@ fn parse_mp_index_ifd(
                 // MPFVersion is typically 4 bytes representing "0100" (version 1.0)
                 let version =
                     parse_mpf_version(reader, entry_offset + 8, value_count, value_or_offset)?;
-                metadata.insert("MPF:MPFVersion".to_string(), TagValue::String(version));
+                metadata.insert("MPF0:MPFVersion".to_string(), TagValue::String(version));
             }
             NUMBER_OF_IMAGES => {
                 // NumberOfImages is a LONG (4 bytes)
                 metadata.insert(
-                    "MPF:NumberOfImages".to_string(),
+                    "MPF0:NumberOfImages".to_string(),
                     TagValue::Integer(value_or_offset as i64),
                 );
             }
@@ -245,7 +279,7 @@ fn parse_mp_index_ifd(
                 // ImageUIDList - 33 bytes per image (UNDEFINED type)
                 // Match ExifTool format exactly (no comma)
                 metadata.insert(
-                    "MPF:ImageUIDList".to_string(),
+                    "MPF0:ImageUIDList".to_string(),
                     TagValue::String(format!(
                         "(Binary data {} bytes, use -b option to extract)",
                         value_count
@@ -255,13 +289,13 @@ fn parse_mp_index_ifd(
             TOTAL_FRAMES => {
                 // TotalFrames - LONG
                 metadata.insert(
-                    "MPF:TotalFrames".to_string(),
+                    "MPF0:TotalFrames".to_string(),
                     TagValue::Integer(value_or_offset as i64),
                 );
             }
             _ => {
                 // Unknown tag in MP Index IFD
-                let tag_name = format!("MPF:0x{:04X}", tag_id);
+                let tag_name = format!("MPF0:0x{:04X}", tag_id);
                 let value =
                     parse_generic_ifd_value(reader, field_type, value_count, value_or_offset);
                 metadata.insert(tag_name, value);
@@ -271,7 +305,7 @@ fn parse_mp_index_ifd(
 
     // Process MP Entry array if present
     if let Some(entry_data) = mp_entry_data {
-        parse_mp_entry_array(&entry_data, mp_entry_count, reader, metadata)?;
+        parse_mp_entry_array(&entry_data, mp_entry_count, reader, tiff_base, metadata)?;
     }
 
     // Check for MP Attribute IFD offset (after IFD entries + next IFD pointer)
@@ -341,49 +375,82 @@ fn parse_mpf_version(
 
 /// Parses the MP Entry array containing individual image information.
 ///
-/// Each MP Entry is 16 bytes:
-/// - Bytes 0-3: Individual Image Attribute (flags, format, type)
-/// - Bytes 4-7: Individual Image Size
-/// - Bytes 8-11: Individual Image Data Offset
-/// - Bytes 12-13: Dependent Image 1 Entry Number
-/// - Bytes 14-15: Dependent Image 2 Entry Number
+/// Each MP Entry is 16 bytes; the layout is ExifTool's `MPF::MPImage` binary
+/// table (MPF.pm:91-158), and every offset, mask and label below is quoted
+/// from it:
 ///
-/// This function outputs both:
-/// 1. Numbered per-image tags (MPF:MPImage1Flags, MPF:MPImage2Flags, etc.)
-/// 2. Generic tags for the last non-primary image (MPF:MPImageFlags, etc.)
-///    which matches ExifTool's behavior for compatibility.
+/// | offset | tag | MPF.pm |
+/// |---|---|---|
+/// | `0` (masked) | `MPImageFlags` | 103-112 |
+/// | `0` (masked) | `MPImageFormat` | 113-120 |
+/// | `0` (masked) | `MPImageType` | 121-140 |
+/// | `4` | `MPImageLength` | 141-144 |
+/// | `8` | `MPImageStart` | 145-149 |
+/// | `12` | `DependentImage1EntryNumber` | 150-153 |
+/// | `14` | `DependentImage2EntryNumber` | 154-157 |
+///
+/// The record repeats, and ExifTool distinguishes the repeats **by family-1
+/// group, not by tag name**: `ProcessMPImageList` runs the same table once per
+/// 16-byte record with `$$et{SET_GROUP1} = '+' . ($i + 1);` (MPF.pm:247), which
+/// suffixes the table's group1 `MPImage` (MPF.pm:96) with the 1-based index.
+/// So entry 2's start offset is `MPImage2:MPImageStart`, never
+/// `MPF:MPImage2Offset`.
+///
+/// # `MPImageStart` is an absolute file offset
+///
+/// MPF.pm:148 declares `IsOffset => '$val'` on `MPImageStart`. ExifTool applies
+/// that in `ProcessBinaryData`:
+///
+/// ```text
+/// ExifTool.pm:10130  if ($$tagInfo{IsOffset} and $$tagInfo{IsOffset} ne '3') {
+/// ExifTool.pm:10133      $val += $base + $$self{BASE} if eval $$tagInfo{IsOffset};
+/// ```
+///
+/// `$base` is `$$dirInfo{Base}` (ExifTool.pm:9863). For MPF that is set once,
+/// where the APP2 segment is dispatched:
+///
+/// ```text
+/// ExifTool.pm:7956  } elsif ($$segDataPt =~ /^MPF\0/) {
+/// ExifTool.pm:7958      DirStart(\%dirInfo, 4, 4);
+/// ExifTool.pm:7238      $$dirInfo{Base} = $$dirInfo{DataPos} + $base;
+/// ```
+///
+/// `DataPos` is the absolute file position of the APP2 segment's data, so
+/// `Base` is that plus 4 -- the byte after the `MPF\0` identifier, i.e. the
+/// start of the MPF TIFF header. It is NOT the segment start, not the marker,
+/// and not the file start. `Exif.pm:6852` (`my $subdirBase = $base;`) carries
+/// it unchanged into the `MPImageList` subdirectory, and `$$self{BASE}` is 0
+/// for a top-level JPEG.
+///
+/// The `if eval $$tagInfo{IsOffset}` guard is load-bearing: `IsOffset` is the
+/// string `'$val'`, so a raw offset of 0 is false and is **not** rebased. That
+/// is why the primary image, which the CIPA spec stores as offset 0, prints as
+/// `0` rather than as the header position.
+///
+/// Verified on `Apple/Apple_iPhone12ProMax.jpg`: the `MPF\0` identifier starts
+/// at file offset 6265, so `tiff_base` is 6269; entry 2's raw offset is
+/// 5171952 and `exiftool -a -G1 -s` prints
+/// `[MPImage2] MPImageStart : 5178221` = 5171952 + 6269.
 ///
 /// # Arguments
 ///
 /// * `data` - Raw bytes of the MP Entry array
 /// * `count` - Number of entries in the array
 /// * `reader` - EndianReader for byte order handling
+/// * `tiff_base` - Absolute file offset of the MPF TIFF header
 /// * `metadata` - MetadataMap to populate with per-image tags
 fn parse_mp_entry_array(
     data: &[u8],
     count: usize,
     reader: &EndianReader,
+    tiff_base: u64,
     metadata: &mut MetadataMap,
 ) -> Result<(), String> {
     // Create reader with same byte order as the main data
     let entry_reader = EndianReader::new(data, reader.byte_order());
 
-    // Track the last non-primary image for generic tags (ExifTool compatibility)
-    let mut last_non_primary_idx: Option<usize> = None;
-
-    // First pass: identify the last non-primary image
-    for i in 0..count {
-        let entry_offset = i * 16;
-        if entry_offset + 16 > data.len() {
-            break;
-        }
-        let image_attr = entry_reader.u32_at(entry_offset).unwrap_or(0);
-        let image_type = image_attr & 0x00FFFFFF;
-        // Non-primary images are anything that's not 0x030000 (Baseline MP Primary Image)
-        if image_type != 0x030000 {
-            last_non_primary_idx = Some(i);
-        }
-    }
+    // MPF.pm:206 -- only the FIRST "Large Thumbnail" becomes PreviewImage.
+    let mut did_preview = false;
 
     for i in 0..count {
         let entry_offset = i * 16;
@@ -417,127 +484,83 @@ fn parse_mp_entry_array(
             .u16_at(entry_offset + 14)
             .ok_or("Failed to read dependent image 2")?;
 
-        // Parse image attribute bits
-        // Bits 31-30: Dependent Parent/Child Image Flag
-        // Bit 29: Representative Image Flag
-        // Bits 26-24: Image Data Format (0=JPEG)
-        // Bits 23-0: Type (defined by format)
-        let dep_flag = (image_attr >> 30) & 0x03;
-        let representative = (image_attr >> 29) & 0x01;
-        let data_format = (image_attr >> 24) & 0x07;
-        let image_type = image_attr & 0x00FFFFFF;
+        // Family-1 group carries the index; the tag names do not (MPF.pm:247).
+        let group = format!("MPImage{}", i + 1);
 
-        let entry_prefix = format!("MPF:MPImage{}", i + 1);
-
-        // Image Flags interpretation - numbered format
-        let dep_flag_str = match dep_flag {
-            0 => "Independent",
-            1 => "Dependent parent",
-            2 => "Dependent child",
-            3 => "Both dependent parent and child",
-            _ => "Unknown",
-        };
         metadata.insert(
-            format!("{}Flags", entry_prefix),
-            TagValue::String(dep_flag_str.to_string()),
+            format!("{}:MPImageFlags", group),
+            TagValue::String(decode_image_flags(image_attr)),
+        );
+        metadata.insert(
+            format!("{}:MPImageFormat", group),
+            TagValue::String(decode_image_format(image_attr)),
+        );
+        metadata.insert(
+            format!("{}:MPImageType", group),
+            TagValue::String(decode_image_type(image_attr)),
+        );
+        metadata.insert(
+            format!("{}:MPImageLength", group),
+            TagValue::Integer(i64::from(image_size)),
+        );
+        metadata.insert(
+            format!("{}:MPImageStart", group),
+            TagValue::Integer(rebase_mp_image_start(image_offset, tiff_base)),
+        );
+        // ExifTool emits both DependentImage#EntryNumber tags unconditionally,
+        // including the very common 0 (verified on every MPF sample in the
+        // corpus, e.g. `[MPImage1] DependentImage2EntryNumber : 0`).
+        metadata.insert(
+            format!("{}:DependentImage1EntryNumber", group),
+            TagValue::Integer(i64::from(dep_image1)),
+        );
+        metadata.insert(
+            format!("{}:DependentImage2EntryNumber", group),
+            TagValue::Integer(i64::from(dep_image2)),
         );
 
-        // Representative image
-        if representative == 1 {
+        // The embedded image itself, as a tag (MPF.pm:190-233 `ExtractMPImages`).
+        //
+        //   MPF.pm:202  if ($off and $len) {
+        //   MPF.pm:204      my $tag = "MPImage$i";
+        //   MPF.pm:206      if (not $didPreview and $type and ($type & 0x0f0000) == 0x010000) {
+        //   MPF.pm:207          $tag = 'PreviewImage';
+        //   MPF.pm:220      my $key = $et->FoundTag($tag, $val, $et->GetGroup("MPImageStart$xtra"));
+        //
+        // The `$off and $len` guard is why the primary image (stored offset 0)
+        // never produces one. The group is inherited from the entry's own
+        // `MPImageStart`, so the group index and the tag-name index always
+        // agree -- verified over all 732 instances ExifTool reports on the
+        // sample corpus (`MPImage1:MPImage1` x2, `MPImage2:MPImage2` x25,
+        // `MPImage2:PreviewImage` x664, `MPImage3:MPImage3` x41; zero
+        // mismatched pairs).
+        //
+        // No file access is needed for the printed value. `ExtractImage`
+        // (Exif.pm:6121) delegates to `ExtractBinary` (ExifTool.pm:9814), which
+        // returns the placeholder before it ever seeks:
+        //
+        //   ExifTool.pm:9828  if ((not $$options{Binary} or $$self{EXCL_TAG_LOOKUP}{$lcTag}) and
+        //   ExifTool.pm:9829       not $$options{Verbose} and not $$options{Validate} and
+        //   ExifTool.pm:9830       not $$self{REQ_TAG_LOOKUP}{$lcTag})
+        //   ExifTool.pm:9832      return "Binary data $length bytes";
+        //
+        // which is why ExifTool prints the full length even on the header-only
+        // sample files whose image payload was truncated away.
+        if image_offset != 0 && image_size != 0 {
+            let image_type = image_attr & 0x00ff_ffff;
+            let name =
+                if !did_preview && image_type != 0 && (image_type & 0x000f_0000) == 0x0001_0000 {
+                    did_preview = true;
+                    "PreviewImage".to_string()
+                } else {
+                    format!("MPImage{}", i + 1)
+                };
             metadata.insert(
-                format!("{}Representative", entry_prefix),
-                TagValue::String("Yes".to_string()),
-            );
-        }
-
-        // Image format
-        let format_str = match data_format {
-            0 => "JPEG",
-            _ => "Unknown",
-        };
-        metadata.insert(
-            format!("{}Format", entry_prefix),
-            TagValue::String(format_str.to_string()),
-        );
-
-        // Image type interpretation
-        let type_str = decode_image_type(image_type);
-        metadata.insert(
-            format!("{}Type", entry_prefix),
-            TagValue::String(type_str.clone()),
-        );
-
-        // Image size
-        metadata.insert(
-            format!("{}Size", entry_prefix),
-            TagValue::Integer(image_size as i64),
-        );
-
-        // Image offset (0 for first image = start of JPEG)
-        metadata.insert(
-            format!("{}Offset", entry_prefix),
-            TagValue::Integer(image_offset as i64),
-        );
-
-        // Dependent image entry numbers (0 = none)
-        if dep_image1 != 0 {
-            metadata.insert(
-                format!("{}DependentImage1", entry_prefix),
-                TagValue::Integer(dep_image1 as i64),
-            );
-        }
-        if dep_image2 != 0 {
-            metadata.insert(
-                format!("{}DependentImage2", entry_prefix),
-                TagValue::Integer(dep_image2 as i64),
-            );
-        }
-
-        // Output generic MPImage tags for the last non-primary image
-        // (ExifTool compatibility - it outputs these for the "current" image)
-        if Some(i) == last_non_primary_idx {
-            // Generic flags format uses "image" suffix like ExifTool
-            let generic_flag_str = match dep_flag {
-                0 => "(none)",
-                1 => "Dependent parent image",
-                2 => "Dependent child image",
-                3 => "Both dependent parent and child image",
-                _ => "Unknown",
-            };
-            metadata.insert(
-                "MPF:MPImageFlags".to_string(),
-                TagValue::String(generic_flag_str.to_string()),
-            );
-            metadata.insert(
-                "MPF:MPImageFormat".to_string(),
-                TagValue::String(format_str.to_string()),
-            );
-
-            // Generic type uses different format (VGA equivalent, full HD equivalent)
-            let generic_type_str = decode_image_type_generic(image_type);
-            metadata.insert(
-                "MPF:MPImageType".to_string(),
-                TagValue::String(generic_type_str),
-            );
-
-            // MPImageLength and MPImageStart match ExifTool naming
-            metadata.insert(
-                "MPF:MPImageLength".to_string(),
-                TagValue::Integer(image_size as i64),
-            );
-            metadata.insert(
-                "MPF:MPImageStart".to_string(),
-                TagValue::Integer(image_offset as i64),
-            );
-
-            // Always output DependentImageNEntryNumber for generic tags
-            metadata.insert(
-                "MPF:DependentImage1EntryNumber".to_string(),
-                TagValue::Integer(dep_image1 as i64),
-            );
-            metadata.insert(
-                "MPF:DependentImage2EntryNumber".to_string(),
-                TagValue::Integer(dep_image2 as i64),
+                format!("{}:{}", group, name),
+                TagValue::String(format!(
+                    "(Binary data {} bytes, use -b option to extract)",
+                    image_size
+                )),
             );
         }
     }
@@ -545,61 +568,110 @@ fn parse_mp_entry_array(
     Ok(())
 }
 
-/// Decodes the image type field into ExifTool's generic tag format.
+/// Rebases a raw `MPImageStart` onto the absolute file offset ExifTool reports.
 ///
-/// This uses the "VGA equivalent" / "full HD equivalent" format that ExifTool
-/// uses for generic MPImageType tags (as opposed to numbered MPImage1Type etc).
-///
-/// # Arguments
-///
-/// * `image_type` - 24-bit image type code
-fn decode_image_type_generic(image_type: u32) -> String {
-    match image_type {
-        0x000000 => "Undefined".to_string(),
-        0x010001 => "Large Thumbnail (VGA equivalent)".to_string(),
-        0x010002 => "Large Thumbnail (full HD equivalent)".to_string(),
-        0x020001 => "Multi-Frame Panorama".to_string(),
-        0x020002 => "Multi-Frame Disparity".to_string(),
-        0x020003 => "Multi-Angle".to_string(),
-        0x030000 => "Baseline MP Primary Image".to_string(),
-        _ => format!("Unknown (0x{:06X})", image_type),
+/// See [`parse_mp_entry_array`] for the derivation and the ExifTool source
+/// lines. A raw 0 is returned unchanged because `IsOffset => '$val'`
+/// (MPF.pm:148) is evaluated as a condition (ExifTool.pm:10133).
+fn rebase_mp_image_start(raw: u32, tiff_base: u64) -> i64 {
+    if raw == 0 {
+        return 0;
     }
+    (u64::from(raw) + tiff_base) as i64
 }
 
-/// Decodes the image type field from MP Entry into a human-readable string.
+/// Looks up one `MPF::MPImage` field's `PrintConv` in the generated tables.
 ///
-/// # Arguments
+/// The enum bodies are ExifTool's own, extracted from the Perl symbol table by
+/// `tools/exiftool-tables` -- not retyped here. `MPImageFlags` has no entry
+/// (its `PrintConv` is a `BITMASK`, which the generator declines to
+/// approximate), so [`decode_image_flags`] spells that one out against
+/// MPF.pm:107-111.
+fn mp_image_print_conv(name: &str) -> Option<PrintConv> {
+    find_table("MPF", "MPImage")?
+        .fields
+        .iter()
+        .find(|f| f.name == name)
+        .map(|f| f.print_conv)
+}
+
+/// Decodes `MPImageFlags` from the 32-bit Individual Image Attribute.
 ///
-/// * `image_type` - 24-bit image type code
+/// MPF.pm:103-112:
 ///
-/// # Returns
+/// ```text
+///     0.1 => {
+///         Name => 'MPImageFlags',
+///         Format => 'int32u',
+///         Mask => 0xf8000000,
+///         PrintConv => { BITMASK => {
+///             2 => 'Representative image',
+///             3 => 'Dependent child image',
+///             4 => 'Dependent parent image',
+///         }},
+///     },
+/// ```
 ///
-/// Human-readable image type description matching ExifTool format
-fn decode_image_type(image_type: u32) -> String {
-    // For JPEG format, type codes are defined as per CIPA DC-007-2009:
-    // 0x000000 = Undefined
-    // 0x010001 = Large thumbnail (VGA equivalent / class 1)
-    // 0x010002 = Large thumbnail (full HD equivalent / class 2)
-    // 0x020001 = Multi-frame panorama
-    // 0x020002 = Multi-frame disparity
-    // 0x020003 = Multi-angle
-    // 0x030000 = Baseline MP primary image
-    //
-    // Note: ExifTool outputs "Large Thumbnail (VGA equivalent)" for class 1
-    // and "Large Thumbnail (full HD equivalent)" for class 2 in generic
-    // MPImage tags, but uses "Large Thumbnail (Class 1)" and "Large Thumbnail
-    // (Class 2)" in numbered MPImageN tags. We use the Class format for
-    // consistency with numbered tags.
-    match image_type {
-        0x000000 => "Undefined".to_string(),
-        0x010001 => "Large Thumbnail (Class 1)".to_string(),
-        0x010002 => "Large Thumbnail (Class 2)".to_string(),
-        0x020001 => "Multi-Frame Panorama".to_string(),
-        0x020002 => "Multi-Frame Disparity".to_string(),
-        0x020003 => "Multi-Angle".to_string(),
-        0x030000 => "Baseline MP Primary Image".to_string(),
-        _ => format!("Unknown (0x{:06X})", image_type),
+/// ExifTool shifts a masked value down by the mask's lowest set bit
+/// (ExifTool.pm:5894-5897 computes `BitShift` from `Mask`; ExifTool.pm:10057
+/// applies `($val & $mask) >> $$tagInfo{BitShift}`), so the five flag bits
+/// become 0..4 and the table's keys are bit numbers within that. `DecodeBits`
+/// (ExifTool.pm:6362-6383) walks the bits in ascending order, joins with
+/// `", "`, renders an unlisted bit as `[n]`, and returns `(none)` when no bit
+/// is set.
+fn decode_image_flags(image_attr: u32) -> String {
+    const MASK: u32 = 0xf800_0000; // MPF.pm:106
+    const SHIFT: u32 = 27; // lowest set bit of 0xf8000000
+
+    let bits = (image_attr & MASK) >> SHIFT;
+    let mut set = Vec::new();
+    for bit in 0..5u32 {
+        if bits & (1 << bit) == 0 {
+            continue;
+        }
+        set.push(match bit {
+            // MPF.pm:108-110
+            2 => "Representative image".to_string(),
+            3 => "Dependent child image".to_string(),
+            4 => "Dependent parent image".to_string(),
+            other => format!("[{}]", other),
+        });
     }
+    if set.is_empty() {
+        // ExifTool.pm:6382: `return '(none)' unless @bitList;`
+        return "(none)".to_string();
+    }
+    set.join(", ")
+}
+
+/// Decodes `MPImageFormat` from the 32-bit Individual Image Attribute.
+///
+/// MPF.pm:113-120 -- `Mask => 0x07000000`, `PrintConv => { 0 => 'JPEG' }`.
+/// An unlisted value prints as `Unknown ($val)` (ExifTool.pm:3610), decimal
+/// because the tag has no `PrintHex`.
+fn decode_image_format(image_attr: u32) -> String {
+    const MASK: u32 = 0x0700_0000; // MPF.pm:116
+    const SHIFT: u32 = 24; // lowest set bit of 0x07000000
+
+    let val = i64::from((image_attr & MASK) >> SHIFT);
+    mp_image_print_conv("MPImageFormat")
+        .and_then(|pc| pc.apply(val))
+        .unwrap_or_else(|| format!("Unknown ({})", val))
+}
+
+/// Decodes `MPImageType` from the 32-bit Individual Image Attribute.
+///
+/// MPF.pm:121-140 -- `Mask => 0x00ffffff`, `PrintHex => 1`, and a twelve-entry
+/// `PrintConv` which is read out of the generated tables rather than retyped.
+/// An unlisted value prints as `Unknown (0x%x)` because `PrintHex` is set
+/// (ExifTool.pm:3608).
+fn decode_image_type(image_attr: u32) -> String {
+    const MASK: u32 = 0x00ff_ffff; // MPF.pm:124 (BitShift 0)
+
+    let val = i64::from(image_attr & MASK);
+    mp_image_print_conv("MPImageType")
+        .and_then(|pc| pc.apply(val))
+        .unwrap_or_else(|| format!("Unknown (0x{:x})", val))
 }
 
 /// Parses the MP Attribute IFD containing per-image positioning and 3D metadata.
@@ -634,21 +706,21 @@ fn parse_mp_attribute_ifd(
             .ok_or("Failed to read value/offset")?;
 
         let tag_name = match tag_id {
-            MP_INDIVIDUAL_NUM => "MPF:MPIndividualNum".to_string(),
-            PAN_ORIENTATION => "MPF:PanOrientation".to_string(),
-            PAN_OVERLAP_H => "MPF:PanOverlapH".to_string(),
-            PAN_OVERLAP_V => "MPF:PanOverlapV".to_string(),
-            BASE_VIEWPOINT_NUM => "MPF:BaseViewpointNum".to_string(),
-            CONVERGENCE_ANGLE => "MPF:ConvergenceAngle".to_string(),
-            BASELINE_LENGTH => "MPF:BaselineLength".to_string(),
-            VERTICAL_DIVERGENCE => "MPF:VerticalDivergence".to_string(),
-            AXIS_DISTANCE_X => "MPF:AxisDistanceX".to_string(),
-            AXIS_DISTANCE_Y => "MPF:AxisDistanceY".to_string(),
-            AXIS_DISTANCE_Z => "MPF:AxisDistanceZ".to_string(),
-            YAW_ANGLE => "MPF:YawAngle".to_string(),
-            PITCH_ANGLE => "MPF:PitchAngle".to_string(),
-            ROLL_ANGLE => "MPF:RollAngle".to_string(),
-            _ => format!("MPF:0x{:04X}", tag_id),
+            MP_INDIVIDUAL_NUM => "MPF1:MPIndividualNum".to_string(),
+            PAN_ORIENTATION => "MPF1:PanOrientation".to_string(),
+            PAN_OVERLAP_H => "MPF1:PanOverlapH".to_string(),
+            PAN_OVERLAP_V => "MPF1:PanOverlapV".to_string(),
+            BASE_VIEWPOINT_NUM => "MPF1:BaseViewpointNum".to_string(),
+            CONVERGENCE_ANGLE => "MPF1:ConvergenceAngle".to_string(),
+            BASELINE_LENGTH => "MPF1:BaselineLength".to_string(),
+            VERTICAL_DIVERGENCE => "MPF1:VerticalDivergence".to_string(),
+            AXIS_DISTANCE_X => "MPF1:AxisDistanceX".to_string(),
+            AXIS_DISTANCE_Y => "MPF1:AxisDistanceY".to_string(),
+            AXIS_DISTANCE_Z => "MPF1:AxisDistanceZ".to_string(),
+            YAW_ANGLE => "MPF1:YawAngle".to_string(),
+            PITCH_ANGLE => "MPF1:PitchAngle".to_string(),
+            ROLL_ANGLE => "MPF1:RollAngle".to_string(),
+            _ => format!("MPF1:0x{:04X}", tag_id),
         };
 
         let value = parse_generic_ifd_value(reader, field_type, value_count, value_or_offset);
@@ -897,11 +969,11 @@ mod tests {
         let data = create_minimal_mpf_segment_big_endian();
         let mut metadata = MetadataMap::new();
 
-        let result = parse_mpf_segment(&data, &mut metadata);
+        let result = parse_mpf_segment(&data, 0, &mut metadata);
         assert!(result.is_ok(), "Failed to parse: {:?}", result);
 
         assert_eq!(
-            metadata.get_string("MPF:MPFVersion"),
+            metadata.get_string("MPF0:MPFVersion"),
             Some("0100"),
             "MPFVersion must print the raw ASCII bytes; '0010' is the \
              reversal that comes from decoding them as an integer"
@@ -913,102 +985,202 @@ mod tests {
         let data = create_minimal_mpf_segment();
         let mut metadata = MetadataMap::new();
 
-        let result = parse_mpf_segment(&data, &mut metadata);
+        let result = parse_mpf_segment(&data, 0, &mut metadata);
         assert!(result.is_ok(), "Failed to parse: {:?}", result);
 
         // Check MPFVersion - should be raw "0100" format for ExifTool compatibility
         assert!(
-            metadata.contains_key("MPF:MPFVersion"),
+            metadata.contains_key("MPF0:MPFVersion"),
             "Missing MPFVersion"
         );
         assert_eq!(
-            metadata.get_string("MPF:MPFVersion"),
+            metadata.get_string("MPF0:MPFVersion"),
             Some("0100"),
             "MPFVersion should be raw '0100' format"
         );
 
         // Check NumberOfImages
         assert_eq!(
-            metadata.get_integer("MPF:NumberOfImages"),
+            metadata.get_integer("MPF0:NumberOfImages"),
             Some(2),
             "Wrong NumberOfImages"
         );
     }
 
+    /// The seven MP Entry tag names repeat once per image under an indexed
+    /// family-1 group; the name itself never carries the index. Ground truth,
+    /// `exiftool -a -G1 -s Apple/Apple_iPhone16Pro.jpg`:
+    ///
+    /// ```text
+    /// [MPImage1]      MPImageType                 : Baseline MP Primary Image
+    /// [MPImage1]      MPImageStart                : 0
+    /// [MPImage2]      MPImageType                 : Undefined
+    /// [MPImage2]      MPImageStart                : 4289837
+    /// ```
+    ///
+    /// The old flat spelling (`MPF:MPImage2Offset`, plus one collapsed
+    /// `MPF:MPImageStart` for whichever entry happened to be scanned last)
+    /// exists nowhere in ExifTool and matched nothing.
     #[test]
     fn test_parse_mpf_segment_with_entries() {
         let data = create_mpf_segment_with_entries();
         let mut metadata = MetadataMap::new();
 
-        let result = parse_mpf_segment(&data, &mut metadata);
+        // tiff_base 6269 is Apple_iPhone12ProMax.jpg's real MPF header offset.
+        let result = parse_mpf_segment(&data, 6269, &mut metadata);
         assert!(result.is_ok(), "Failed to parse: {:?}", result);
 
-        // Check that numbered MP entry tags were parsed
-        assert!(
-            metadata.contains_key("MPF:MPImage1Type"),
-            "Missing MPImage1Type"
-        );
-        assert!(
-            metadata.contains_key("MPF:MPImage2Type"),
-            "Missing MPImage2Type"
-        );
-
-        // Check image sizes (numbered tags)
+        // Per-image groups, one repeated name per group.
         assert_eq!(
-            metadata.get_integer("MPF:MPImage1Size"),
-            Some(100000),
-            "Wrong MPImage1Size"
+            metadata.get_string("MPImage1:MPImageType"),
+            Some("Baseline MP Primary Image"),
+            "entry 1 type"
         );
         assert_eq!(
-            metadata.get_integer("MPF:MPImage2Size"),
-            Some(50000),
-            "Wrong MPImage2Size"
-        );
-
-        // Check generic tags (ExifTool compatibility) - should be from last non-primary image
-        // Entry 2 is a Large Thumbnail (class 1), so generic tags should reflect that
-        assert!(
-            metadata.contains_key("MPF:MPImageFlags"),
-            "Missing generic MPImageFlags"
-        );
-        assert!(
-            metadata.contains_key("MPF:MPImageFormat"),
-            "Missing generic MPImageFormat"
-        );
-        assert!(
-            metadata.contains_key("MPF:MPImageType"),
-            "Missing generic MPImageType"
-        );
-        assert!(
-            metadata.contains_key("MPF:MPImageLength"),
-            "Missing generic MPImageLength"
-        );
-        assert!(
-            metadata.contains_key("MPF:MPImageStart"),
-            "Missing generic MPImageStart"
-        );
-
-        // Verify generic tag values match the second entry (thumbnail)
-        assert_eq!(
-            metadata.get_integer("MPF:MPImageLength"),
-            Some(50000),
-            "Wrong MPImageLength"
-        );
-        assert_eq!(
-            metadata.get_integer("MPF:MPImageStart"),
-            Some(100000),
-            "Wrong MPImageStart"
-        );
-        assert_eq!(
-            metadata.get_string("MPF:MPImageType"),
+            metadata.get_string("MPImage2:MPImageType"),
             Some("Large Thumbnail (VGA equivalent)"),
-            "Wrong MPImageType"
+            "entry 2 type"
         );
         assert_eq!(
-            metadata.get_string("MPF:MPImageFlags"),
-            Some("(none)"),
-            "Wrong MPImageFlags"
+            metadata.get_integer("MPImage1:MPImageLength"),
+            Some(100000),
+            "entry 1 length"
         );
+        assert_eq!(
+            metadata.get_integer("MPImage2:MPImageLength"),
+            Some(50000),
+            "entry 2 length"
+        );
+
+        // MPF.pm:148 `IsOffset => '$val'`: a raw 0 stays 0 (the eval is false),
+        // a nonzero raw offset is rebased onto the MPF TIFF header.
+        assert_eq!(
+            metadata.get_integer("MPImage1:MPImageStart"),
+            Some(0),
+            "the primary image's stored offset of 0 must not be rebased"
+        );
+        assert_eq!(
+            metadata.get_integer("MPImage2:MPImageStart"),
+            Some(100000 + 6269),
+            "nonzero MPImageStart must be rebased onto the MPF TIFF header"
+        );
+
+        // Entry 1 sets the representative bit (0x20000000).
+        assert_eq!(
+            metadata.get_string("MPImage1:MPImageFlags"),
+            Some("Representative image"),
+            "entry 1 flags"
+        );
+        assert_eq!(
+            metadata.get_string("MPImage2:MPImageFlags"),
+            Some("(none)"),
+            "entry 2 flags"
+        );
+        assert_eq!(
+            metadata.get_string("MPImage1:MPImageFormat"),
+            Some("JPEG"),
+            "entry 1 format"
+        );
+
+        // Both dependent-entry tags are always emitted, including the zeros.
+        assert_eq!(
+            metadata.get_integer("MPImage2:DependentImage1EntryNumber"),
+            Some(0)
+        );
+        assert_eq!(
+            metadata.get_integer("MPImage2:DependentImage2EntryNumber"),
+            Some(0)
+        );
+
+        // MPF.pm:190-233: the embedded image is itself a tag, in the same
+        // group as its MPImageStart, and the first Large Thumbnail takes the
+        // name PreviewImage. Entry 1 has a stored offset of 0 so it produces
+        // none.
+        assert_eq!(
+            metadata.get_string("MPImage2:PreviewImage"),
+            Some("(Binary data 50000 bytes, use -b option to extract)"),
+            "entry 2 is a Large Thumbnail, so its image tag is PreviewImage"
+        );
+        assert!(
+            !metadata.contains_key("MPImage1:MPImage1"),
+            "an MP entry stored at offset 0 has no image tag (MPF.pm:202)"
+        );
+
+        // The invented flat names are gone.
+        for gone in [
+            "MPF:MPImage1Type",
+            "MPF:MPImage2Type",
+            "MPF:MPImage1Size",
+            "MPF:MPImage2Offset",
+            "MPF:MPImageStart",
+            "MPF:MPImageFlags",
+        ] {
+            assert!(
+                !metadata.contains_key(gone),
+                "{} is not an ExifTool key and must not be emitted",
+                gone
+            );
+        }
+    }
+
+    /// MPF.pm:107-111 is a `BITMASK`, so several flags can be set at once and
+    /// ExifTool joins them with `", "` in ascending bit order
+    /// (ExifTool.pm:6362-6383). Ground truth,
+    /// `exiftool -a -G1 -s Leica/LeicaM11.jpg`:
+    ///
+    /// ```text
+    /// [MPImage1] MPImageFlags : Representative image, Dependent parent image
+    /// [MPImage2] MPImageFlags : Dependent child image
+    /// ```
+    ///
+    /// The previous decoder read bits 31-30 as a 2-bit enum and inverted the
+    /// parent/child sense, printing `Dependent parent image` where ExifTool
+    /// prints `(none)` on 663 corpus files.
+    #[test]
+    fn test_decode_image_flags_bitmask() {
+        // 0x20000000 = bit 2 after the >>27 shift.
+        assert_eq!(decode_image_flags(0x2000_0000), "Representative image");
+        // 0x40000000 = bit 3 => child, NOT parent.
+        assert_eq!(decode_image_flags(0x4000_0000), "Dependent child image");
+        // 0x80000000 = bit 4 => parent.
+        assert_eq!(decode_image_flags(0x8000_0000), "Dependent parent image");
+        assert_eq!(
+            decode_image_flags(0xA000_0000),
+            "Representative image, Dependent parent image"
+        );
+        assert_eq!(decode_image_flags(0x0003_0000), "(none)");
+        // Bits 0 and 1 of the masked field have no label in MPF.pm; ExifTool
+        // renders an unlisted bit as "[n]".
+        assert_eq!(decode_image_flags(0x0800_0000), "[0]");
+    }
+
+    /// Type and format come from the generated `MPF::MPImage` table, so the
+    /// enum bodies are ExifTool's. Unknown values follow ExifTool.pm:3604-3611:
+    /// hex for `MPImageType` (`PrintHex => 1`, MPF.pm:125), decimal for
+    /// `MPImageFormat`.
+    #[test]
+    fn test_decode_image_type_and_format() {
+        assert_eq!(decode_image_type(0x0003_0000), "Baseline MP Primary Image");
+        assert_eq!(
+            decode_image_type(0x0001_0001),
+            "Large Thumbnail (VGA equivalent)"
+        );
+        assert_eq!(
+            decode_image_type(0x0001_0002),
+            "Large Thumbnail (full HD equivalent)"
+        );
+        // Lower-case "frame"/"angle" -- MPF.pm:133-135.
+        assert_eq!(decode_image_type(0x0002_0001), "Multi-frame Panorama");
+        assert_eq!(decode_image_type(0x0002_0003), "Multi-angle");
+        assert_eq!(decode_image_type(0x0000_0000), "Undefined");
+        assert_eq!(decode_image_type(0x0005_0000), "Gain Map Image");
+        // The high flag/format bits must be masked off before the lookup.
+        assert_eq!(decode_image_type(0xE003_0000), "Baseline MP Primary Image");
+        assert_eq!(decode_image_type(0x00AB_CDEF), "Unknown (0xabcdef)");
+
+        assert_eq!(decode_image_format(0x0000_0000), "JPEG");
+        assert_eq!(decode_image_format(0xE003_0000), "JPEG");
+        assert_eq!(decode_image_format(0x0100_0000), "Unknown (1)");
     }
 
     #[test]
@@ -1016,7 +1188,7 @@ mod tests {
         let data = b"NOT_MPF\0II*\0\x08\0\0\0";
         let mut metadata = MetadataMap::new();
 
-        let result = parse_mpf_segment(data, &mut metadata);
+        let result = parse_mpf_segment(data, 0, &mut metadata);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Not an MPF segment"));
     }
@@ -1026,7 +1198,7 @@ mod tests {
         let data = b"MPF\0II*";
         let mut metadata = MetadataMap::new();
 
-        let result = parse_mpf_segment(data, &mut metadata);
+        let result = parse_mpf_segment(data, 0, &mut metadata);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("too short"));
     }
@@ -1039,7 +1211,7 @@ mod tests {
         data[5] = b'X';
 
         let mut metadata = MetadataMap::new();
-        let result = parse_mpf_segment(&data, &mut metadata);
+        let result = parse_mpf_segment(&data, 0, &mut metadata);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("byte order"));
     }
@@ -1069,19 +1241,10 @@ mod tests {
         data.extend_from_slice(&0u32.to_be_bytes());
 
         let mut metadata = MetadataMap::new();
-        let result = parse_mpf_segment(&data, &mut metadata);
+        let result = parse_mpf_segment(&data, 0, &mut metadata);
         assert!(result.is_ok());
 
-        assert_eq!(metadata.get_integer("MPF:NumberOfImages"), Some(3));
-    }
-
-    #[test]
-    fn test_decode_image_type() {
-        assert_eq!(decode_image_type(0x000000), "Undefined");
-        assert_eq!(decode_image_type(0x010001), "Large Thumbnail (Class 1)");
-        assert_eq!(decode_image_type(0x020001), "Multi-Frame Panorama");
-        assert_eq!(decode_image_type(0x030000), "Baseline MP Primary Image");
-        assert!(decode_image_type(0xFFFFFF).contains("Unknown"));
+        assert_eq!(metadata.get_integer("MPF0:NumberOfImages"), Some(3));
     }
 
     #[test]
