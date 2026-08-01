@@ -188,7 +188,7 @@ LABEL org.opencontainers.image.title="oxidex" \
 
 - [ ] **Step 3: Build the image locally and verify it compiles**
 
-This step originally targeted the plan's highest risk: whether `crate-type = ["lib", "staticlib", "cdylib"]` (`Cargo.toml:33`) links against static musl. **That risk is now RETIRED with a known outcome**, verified empirically during implementation: the build succeeds because rustc detects `cdylib` is unsupported on a static-musl target and drops it with a warning (`dropping unsupported crate type `cdylib` for target aarch64-unknown-linux-musl`) instead of failing to link. `--bin oxidex` does **not** prevent Cargo from attempting the library's full declared crate-type list — Cargo still builds that whole list regardless of which `--bin` was requested; `--bin` only restricts which binary targets get built, here skipping the feature-gated `tag-comparison` and `jpeg-tag-matrix` binaries. Build for the host architecture — the cdylib question is target-agnostic, so one architecture proves it.
+This step originally targeted the plan's highest risk: whether `crate-type = ["lib", "staticlib", "cdylib"]` (`Cargo.toml:33`) links against static musl. **That risk is now RETIRED with a known outcome**, verified empirically during implementation: the build succeeds because rustc detects `cdylib` is unsupported on a static-musl target and drops it with a warning (``dropping unsupported crate type `cdylib` for target aarch64-unknown-linux-musl``) instead of failing to link. `--bin oxidex` does **not** prevent Cargo from attempting the library's full declared crate-type list — Cargo still builds that whole list regardless of which `--bin` was requested; `--bin` only restricts which binary targets get built, here skipping the feature-gated `tag-comparison` and `jpeg-tag-matrix` binaries. Build for the host architecture — the cdylib question is target-agnostic, so one architecture proves it.
 
 Run:
 
@@ -288,10 +288,16 @@ on:
   workflow_dispatch:
 
 concurrency:
-  # Same rationale as ci.yml: PR runs key by branch so a new push cancels the
-  # superseded run, while pushes to main key by SHA so one merge never cancels
-  # another merge's publish.
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.head_ref || github.ref }}
+  # Unlike ci.yml (which has no tag trigger), this workflow triggers on both
+  # branch and tag pushes. A tag push is still a `push` event, so keying on
+  # SHA alone would put pushing tag v1.2.1 at commit X in the same group as
+  # the earlier push of commit X to main -- with cancel-in-progress: true,
+  # the tag run would cancel the still-running main run, and :latest would
+  # never advance for that release commit. Folding the ref into the key
+  # keeps a tag push and a main push of the same commit in separate groups,
+  # while still deduping repeated pushes of the same ref. PR runs key by
+  # branch head, same as ci.yml, so a new push cancels the superseded run.
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && format('{0}@{1}', github.ref, github.sha) || github.head_ref || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -303,6 +309,13 @@ permissions:
 jobs:
   build:
     name: Build ${{ matrix.arch }}
+    # Fork PRs skip the Docker build entirely rather than run the fork's
+    # build.rs (via `COPY . .` + `cargo build`) on billed WarpBuild runners.
+    # No secrets are at risk either way -- the login step below is already
+    # gated on github.event_name != 'pull_request' -- so this is cost/abuse
+    # protection, not a security boundary. `github` is available in a
+    # job-level `if`; `matrix` is not, so this cannot be scoped by arch here.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -460,14 +473,20 @@ jobs:
         run: |
           set -euo pipefail
           ls -l
+          # Deliberately unquoted: each -t flag and each digest must reach
+          # imagetools create as a separate argument. Quoting would collapse
+          # them into one argument and break the manifest list.
+          # shellcheck disable=SC2046
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf "${IMAGE}@sha256:%s " *)
 
       - name: Inspect published image
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
-          docker buildx imagetools inspect "${IMAGE}:${{ steps.meta.outputs.version }}"
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}"
 ```
 
 - [ ] **Step 2: Lint the workflow**
@@ -505,10 +524,12 @@ Expected: every line references a 40-character hex SHA followed by a `# vX.Y.Z` 
 Run:
 
 ```bash
-grep -c 'setup-qemu' .github/workflows/docker.yml || true
+grep -n 'uses:.*setup-qemu' .github/workflows/docker.yml
 ```
 
-Expected: `0`. Any occurrence means the build would silently emulate rather than build natively, defeating the purpose of the Warp arm64 runner.
+Expected: no matching lines. `grep` exits `1` (not `0`) when nothing matches — that nonzero exit is the passing outcome here, not a failure to investigate. Any matching line means the build would silently emulate rather than build natively, defeating the purpose of the Warp arm64 runner.
+
+Do not use a bare-substring form such as `grep -c 'setup-qemu' .github/workflows/docker.yml`. The workflow file itself contains an explanatory comment — "No setup-qemu-action anywhere: ..." — that contains the substring `setup-qemu`. `grep -c` counts matching *lines*, so it counts that comment and reports `1` even though no `setup-qemu-action` step is present: a false positive from the very comment that documents the absence. Anchoring on `uses:.*setup-qemu` matches only an actual step invocation, not prose describing its absence.
 
 - [ ] **Step 6: Commit**
 

@@ -254,8 +254,8 @@ runs are unaffected because they never log in.
    still builds the library's full declared `crate-type` list regardless of
    which `--bin` was requested. The build succeeds anyway because rustc
    detects that `cdylib` is unsupported on a static-musl target and drops it
-   with a warning — `dropping unsupported crate type `cdylib` for target
-   aarch64-unknown-linux-musl` — instead of failing to link.
+   with a warning — ``dropping unsupported crate type `cdylib` for target
+   aarch64-unknown-linux-musl`` — instead of failing to link.
 2. **`zip = "8.6"` default features** may pull C-backed codecs. In practice
    only `zstd` is: `zstd-sys` links a C library, while `bzip2 0.6.1` resolves
    to `libbz2-rs-sys` (pure Rust), and `bzip2-sys` — the C-bundling crate — is
