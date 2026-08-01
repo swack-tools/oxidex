@@ -11,6 +11,7 @@
 // Submodules for extended tag parsing
 pub mod af_info;
 pub mod af_info2;
+pub mod af_points;
 pub mod binary_data;
 pub mod encrypted;
 mod encrypted_tables;
@@ -1444,7 +1445,7 @@ impl MakerNoteParser for NikonParser {
                 // `Nikon::AFInfo2*`, selected by the block's own version.
                 NIKON_AF_INFO2 => {
                     if let Some(bytes) = bytes_of(entry) {
-                        af_info2::parse_af_info2(&bytes, order, tags);
+                        af_info2::parse_af_info2(&bytes, order, model, tags);
                     }
                 }
 
