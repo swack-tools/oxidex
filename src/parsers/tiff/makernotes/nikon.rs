@@ -10,10 +10,15 @@
 
 // Submodules for extended tag parsing
 pub mod af_info;
+pub mod af_info2;
 pub mod color_balance;
+pub mod flash_info;
 pub mod lens_data;
+pub mod settings;
+mod settings_tables;
 pub mod shot_info;
 pub mod sub_ifds;
+pub mod sub_tables;
 pub mod value_reader;
 
 use super::nikon_capture_data;
@@ -63,6 +68,50 @@ const NIKON_EXPOSURE_DIFF: u16 = 0x000E;
 const NIKON_ISO_SELECTION: u16 = 0x000F;
 /// Sub-IFD holding the JPEG preview (`Nikon::PreviewIFD`).
 const NIKON_PREVIEW_IFD: u16 = 0x0011;
+/// `NikonSettings`: the user-settings directory (`NikonSettings::Main`).
+const NIKON_SETTINGS: u16 = 0x004E;
+/// `Nikon::FaceDetect`.
+const NIKON_FACE_DETECT: u16 = 0x0021;
+/// `Nikon::DistortInfo`.
+const NIKON_DISTORT_INFO: u16 = 0x002B;
+/// `Nikon::Main` 0x0034 `ShutterMode`.
+const NIKON_SHUTTER_MODE: u16 = 0x0034;
+/// `Nikon::HDRInfo` / `HDRInfo2`.
+const NIKON_HDR_INFO: u16 = 0x0035;
+const NIKON_MECHANICAL_SHUTTER_COUNT: u16 = 0x0037;
+/// `Nikon::LocationInfo`.
+const NIKON_LOCATION_INFO: u16 = 0x0039;
+const NIKON_IMAGE_SIZE_RAW: u16 = 0x003E;
+const NIKON_JPG_COMPRESSION: u16 = 0x0044;
+const NIKON_DATA_DUMP: u16 = 0x0010;
+const NIKON_DATE_STAMP_MODE: u16 = 0x009D;
+const NIKON_HIGH_ISO_NR: u16 = 0x00B1;
+/// `Nikon::Main` 0x00b6 `PowerUpTime`.
+const NIKON_POWER_UP_TIME: u16 = 0x00B6;
+/// `Nikon::AFInfo2V0100` .. `AFInfo2V0400`.
+const NIKON_AF_INFO2: u16 = 0x00B7;
+/// `Nikon::FileInfo`.
+const NIKON_FILE_INFO: u16 = 0x00B8;
+/// `Nikon::AFTune`.
+const NIKON_AF_TUNE: u16 = 0x00B9;
+/// `Nikon::RetouchInfo`.
+const NIKON_RETOUCH_INFO: u16 = 0x00BB;
+/// `PictureControlData` again -- the P6000 writes the V1 structure here.
+const NIKON_PICTURE_CONTROL_DATA_ALT: u16 = 0x00BD;
+const NIKON_SILENT_PHOTOGRAPHY: u16 = 0x00BF;
+/// `Nikon::BarometerInfo`.
+const NIKON_BAROMETER_INFO: u16 = 0x00C3;
+const NIKON_CAPTURE_VERSION: u16 = 0x0E09;
+const NIKON_NEF_BIT_DEPTH: u16 = 0x0E22;
+/// `Nikon::Main` 0x00ac `ImageStabilization`, a string on the fixed-lens
+/// Coolpix bodies ("VR-On"/"VR-Off"), not the VRInfo enum.
+const NIKON_IMAGE_STABILIZATION: u16 = 0x00AC;
+const NIKON_AF_RESPONSE: u16 = 0x00AD;
+/// 0x00b3 `ToningEffect` is a *string* in `Nikon::Main`; the same tag name
+/// also comes out of PictureControl as an enum.
+const NIKON_TONING_EFFECT_STR: u16 = 0x00B3;
+/// `ColorTemperatureAuto`, int16u (`Nikon::Main` 0x004f, D850 and later).
+const NIKON_COLOR_TEMPERATURE_AUTO: u16 = 0x004F;
 /// Offsets recorded by Nikon Capture (`Nikon::CaptureOffsets`).
 const NIKON_CAPTURE_OFFSETS: u16 = 0x0E0E;
 /// Sub-IFD written by Nikon Scan (`Nikon::Scan`).
@@ -558,7 +607,22 @@ impl MakerNoteParser for NikonParser {
         // bytes or fewer live in the entry itself. The MakerNote's own byte
         // order (`tiff_byte_order`) governs, not the enclosing file's.
         let order = tiff_byte_order;
-        let bytes_of = |entry: &IfdEntry| value_bytes(entry, data, tiff_start, order);
+
+        // ExifTool refuses an out-of-line value whose offset lands in front of
+        // the directory it came from ("Suspicious MakerNotes offset for X") and
+        // reports no tag at all. Those offsets point at the MakerNote's own
+        // TIFF header or at unrelated bytes, so honouring them yields a
+        // confident wrong number -- NikonD3000's ExposureBracketValue reads
+        // back as 162111493.2 from the "MM\0*" header.
+        let entry_count = read_u16(data, ifd_absolute, order).unwrap_or(0) as usize;
+        let first_value_at = ifd_offset_in_tiff + 2 + entry_count * 12 + 4;
+        let bytes_of = |entry: &IfdEntry| {
+            let inline = value_reader::value_len(entry).is_some_and(|len| len <= 4);
+            if !inline && (entry.value_offset as usize) < first_value_at {
+                return None;
+            }
+            value_bytes(entry, data, tiff_start, order)
+        };
 
         // Read an entry that holds a single unsigned integer.
         let scalar_of = |entry: &IfdEntry| -> Option<u32> {
@@ -639,10 +703,15 @@ impl MakerNoteParser for NikonParser {
                 }
 
                 // int16u[2]: "0 200" for a plain ISO, "1 200" for a Hi mode.
-                // RawConv drops the all-zero form the D300 writes for LO ISO.
+                //
+                // RawConv is `$val eq "\0\0\0\0" ? undef : $val`, a test on the
+                // raw *bytes*. That only ever fires for the undef[4] form the
+                // D300 writes for LO ISO -- an int16u[2] of "0 0" is a real
+                // ISO 0 that ExifTool reports, so it must not be dropped here.
                 NIKON_ISO_SPEED => {
                     if let Some(list) = u16_list_of(entry)
-                        && list != "0 0"
+                        && !(entry.field_type == 7
+                            && bytes_of(entry).is_some_and(|b| *b == [0u8, 0, 0, 0]))
                     {
                         let printed = if let Some(rest) = list.strip_prefix("0 ") {
                             rest.to_string()
@@ -742,6 +811,20 @@ impl MakerNoteParser for NikonParser {
                     }
                 }
 
+                // NikonSettings (0x004e). A flat record list, not an IFD, and
+                // not encrypted -- see settings.rs for the layout.
+                NIKON_SETTINGS => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        settings::parse_nikon_settings(&bytes, order, model, tags);
+                    }
+                }
+
+                NIKON_COLOR_TEMPERATURE_AUTO => {
+                    if let Some(value) = scalar_of(entry) {
+                        tags.insert("Nikon:ColorTemperatureAuto".to_string(), value.to_string());
+                    }
+                }
+
                 NIKON_PREVIEW_IFD => {
                     sub_ifds::parse_preview_ifd(
                         data,
@@ -776,15 +859,8 @@ impl MakerNoteParser for NikonParser {
                 NIKON_COLOR_BALANCE_A => {
                     if let Some(bytes) = bytes_of(entry)
                         && bytes.len() >= 4
-                        && &bytes[..4] == b"0103"
                     {
-                        let levels: Vec<String> = (0..4)
-                            .filter_map(|i| read_u16(&bytes, 20 + i * 2, order))
-                            .map(|v| v.to_string())
-                            .collect();
-                        if levels.len() == 4 {
-                            tags.insert("Nikon:WB_RGBGLevels".to_string(), levels.join(" "));
-                        }
+                        sub_tables::parse_color_balance(&bytes, order, tags);
                     }
                 }
 
@@ -860,6 +936,10 @@ impl MakerNoteParser for NikonParser {
                 | NIKON_COLOR_HUE
                 | NIKON_IMAGE_PROCESSING
                 | NIKON_SCENE_ASSIST
+                | NIKON_IMAGE_ADJUSTMENT
+                | NIKON_AUX_LENS
+                | NIKON_IMAGE_STABILIZATION
+                | NIKON_AF_RESPONSE
                 | NIKON_FLASH_TYPE => {
                     if let Some(value) = string_of(entry) {
                         tags.insert(nikon_tag_to_name(entry.tag_id), value);
@@ -964,8 +1044,11 @@ impl MakerNoteParser for NikonParser {
                     }
                 }
 
-                // rational64s
-                NIKON_EXPOSURE_BRACKET_VALUE => {
+                // rational64s. Some bodies write four raw bytes here instead;
+                // reading those as a rational yields a nonsense number, and
+                // ExifTool -- which decodes by the entry's own format -- emits
+                // nothing, so neither does this.
+                NIKON_EXPOSURE_BRACKET_VALUE if matches!(entry.field_type, 5 | 10) => {
                     if let Some(bytes) = bytes_of(entry) {
                         let printed = match rational_value(&bytes, 0, order, true) {
                             Some(value) => print_fraction(value),
@@ -1044,13 +1127,8 @@ impl MakerNoteParser for NikonParser {
                 }
 
                 NIKON_FLASH_INFO => {
-                    if let Some(bytes) = bytes_of(entry)
-                        && bytes.len() >= 4
-                    {
-                        tags.insert(
-                            "Nikon:FlashInfoVersion".to_string(),
-                            ascii_value(&bytes[..4]),
-                        );
+                    if let Some(bytes) = bytes_of(entry) {
+                        flash_info::parse_flash_info(&bytes, tags);
                     }
                 }
 
@@ -1102,6 +1180,34 @@ impl MakerNoteParser for NikonParser {
                             };
                             tags.insert("Nikon:VibrationReduction".to_string(), printed);
                         }
+                        // Offset 6 has two tables: the Z bodies renamed 1 and 3.
+                        if let Some(&raw) = bytes.get(6) {
+                            let printed = if sub_tables::is_z_series(model) {
+                                match raw {
+                                    0 => "Off".to_string(),
+                                    1 => "Normal".to_string(),
+                                    3 => "Sport".to_string(),
+                                    other => format!("Unknown ({})", other),
+                                }
+                            } else {
+                                match raw {
+                                    0 => "Normal".to_string(),
+                                    1 => "On (1)".to_string(),
+                                    2 => "Active".to_string(),
+                                    3 => "Sport".to_string(),
+                                    other => format!("Unknown ({})", other),
+                                }
+                            };
+                            tags.insert("Nikon:VRMode".to_string(), printed);
+                        }
+                        if let Some(&raw) = bytes.get(8) {
+                            let printed = match raw {
+                                2 => "In-body".to_string(),
+                                3 => "In-body + Lens".to_string(),
+                                other => format!("Unknown ({})", other),
+                            };
+                            tags.insert("Nikon:VRType".to_string(), printed);
+                        }
                     }
                 }
 
@@ -1120,29 +1226,25 @@ impl MakerNoteParser for NikonParser {
                                 );
                             }
                         }
+                        // Offset 6: `100 * 2**($val/12-5)`, rounded. (Offset 0
+                        // holds the same figure under the name `ISO`, which
+                        // collides with the main table's own 0x0002 `ISO`;
+                        // ExifTool marks it Priority 0 and keeps the main one.)
+                        if let Some(&raw) = bytes.get(6) {
+                            let iso = 100.0 * ((raw as f64 / 12.0 - 5.0) * 2f64.ln()).exp();
+                            tags.insert(
+                                "Nikon:ISO2".to_string(),
+                                format!("{}", (iso + 0.5) as i64),
+                            );
+                        }
                     }
                 }
 
+                // `Nikon::MultiExposure` (0100/0101) or `MultiExposure2`
+                // (0102/0103); the version picks the table.
                 NIKON_MULTI_EXPOSURE => {
-                    if let Some(bytes) = bytes_of(entry)
-                        && bytes.len() >= 4
-                    {
-                        tags.insert(
-                            "Nikon:MultiExposureVersion".to_string(),
-                            ascii_value(&bytes[..4]),
-                        );
-                    }
-                    if let Some(bytes) = bytes_of(entry)
-                        && let Some(raw) = value_reader::read_u32(&bytes, 4, order)
-                    {
-                        let mode = match raw {
-                            0 => "Off".to_string(),
-                            1 => "Multiple Exposure".to_string(),
-                            2 => "Image Overlay".to_string(),
-                            3 => "HDR".to_string(),
-                            other => format!("Unknown ({})", other),
-                        };
-                        tags.insert("Nikon:MultiExposureMode".to_string(), mode);
+                    if let Some(bytes) = bytes_of(entry) {
+                        sub_tables::parse_multi_exposure(&bytes, order, tags);
                     }
                 }
 
@@ -1165,13 +1267,269 @@ impl MakerNoteParser for NikonParser {
                     }
                 }
 
-                NIKON_PICTURE_CONTROL_DATA => {
+                // `Nikon::PictureControl`, `PictureControl2` or
+                // `PictureControl3`, selected by the block's own version. The
+                // P6000 writes the same structure at 0x00bd.
+                NIKON_PICTURE_CONTROL_DATA | NIKON_PICTURE_CONTROL_DATA_ALT => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        sub_tables::parse_picture_control(&bytes, tags);
+                    }
+                }
+
+                // ShotInfo (0x0091). Everything from byte 4 on is encrypted
+                // with a key derived from SerialNumber and ShutterCount, and
+                // no attempt is made on it here. The version string at byte 0
+                // is outside every table's DecryptStart, so it is plaintext --
+                // and ExifTool's RawConv only keeps it when it is all digits,
+                // which is what rejects the D2Hs garbage that used to be
+                // reported as "19535".
+                // `Nikon::Main` 0x00b3 `ToningEffect` is a string, and shares
+                // its name with the PictureControl enum at 0x0023. ExifTool
+                // keeps whichever it reached first, and 0x0023 sorts earlier.
+                NIKON_TONING_EFFECT_STR => {
+                    if let Some(value) = string_of(entry) {
+                        sub_tables::prefer_existing(tags, "Nikon:ToningEffect", value);
+                    }
+                }
+
+                NIKON_SHOT_INFO => {
                     if let Some(bytes) = bytes_of(entry)
                         && bytes.len() >= 4
                     {
+                        let version = ascii_value(&bytes[..4]);
+                        if version.len() == 4 && version.chars().all(|c| c.is_ascii_digit()) {
+                            tags.insert("Nikon:ShotInfoVersion".to_string(), version);
+                        }
+                    }
+                }
+
+                // `Nikon::AFInfo2*`, selected by the block's own version.
+                NIKON_AF_INFO2 => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        af_info2::parse_af_info2(&bytes, order, tags);
+                    }
+                }
+
+                NIKON_FILE_INFO => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        sub_tables::parse_file_info(&bytes, order, model, tags);
+                    }
+                }
+
+                NIKON_AF_TUNE => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        sub_tables::parse_af_tune(&bytes, tags);
+                    }
+                }
+
+                NIKON_RETOUCH_INFO => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        sub_tables::parse_retouch_info(&bytes, tags);
+                    }
+                }
+
+                NIKON_HDR_INFO => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        sub_tables::parse_hdr_info(&bytes, tags);
+                    }
+                }
+
+                NIKON_LOCATION_INFO => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        sub_tables::parse_location_info(&bytes, tags);
+                    }
+                }
+
+                NIKON_BAROMETER_INFO => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        sub_tables::parse_barometer_info(&bytes, order, tags);
+                    }
+                }
+
+                NIKON_DISTORT_INFO => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        sub_tables::parse_distort_info(&bytes, tags);
+                    }
+                }
+
+                NIKON_FACE_DETECT => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        sub_tables::parse_face_detect(&bytes, order, tags);
+                    }
+                }
+
+                // int16u[10], trailing "None" elements trimmed.
+                //
+                // Some Coolpix bodies write this as undef[10] instead. ExifTool
+                // honours the entry's own format there, so the value never
+                // splits into elements and it reports the degenerate
+                // `Unknown ()`; decoding those bytes as int16u would produce a
+                // confident wrong answer, so they are left alone.
+                NIKON_RETOUCH_HISTORY if entry.field_type == 3 => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        let values: Vec<u16> = (0..bytes.len() / 2)
+                            .filter_map(|i| read_u16(&bytes, i * 2, order))
+                            .collect();
+                        if let Some(printed) = sub_tables::print_retouch_history(&values) {
+                            tags.insert("Nikon:RetouchHistory".to_string(), printed);
+                        }
+                    }
+                }
+
+                // undef: an int16u year in the MakerNote's order, then five
+                // single-byte fields.
+                NIKON_POWER_UP_TIME => {
+                    if let Some(bytes) = bytes_of(entry)
+                        && let Some(printed) = sub_tables::print_power_up_time(&bytes, order)
+                    {
+                        tags.insert("Nikon:PowerUpTime".to_string(), printed);
+                    }
+                }
+
+                // rational64u scalars.
+                NIKON_MANUAL_FOCUS_DIST | NIKON_DIGITAL_ZOOM => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        let name = if entry.tag_id == NIKON_DIGITAL_ZOOM {
+                            "Nikon:DigitalZoom"
+                        } else {
+                            "Nikon:ManualFocusDistance"
+                        };
+                        // 0/0 is what the fixed-lens Coolpix bodies write, and
+                        // ExifTool reports it as the literal "undef".
+                        let printed = match rational_value(&bytes, 0, order, false) {
+                            Some(value) => format_number(value),
+                            None => "undef".to_string(),
+                        };
+                        tags.insert(name.to_string(), printed);
+                    }
+                }
+
+                NIKON_DATE_STAMP_MODE => {
+                    if let Some(value) = scalar_of(entry) {
+                        let printed = match value {
+                            0 => "Off".to_string(),
+                            1 => "Date & Time".to_string(),
+                            2 => "Date".to_string(),
+                            3 => "Date Counter".to_string(),
+                            other => format!("Unknown ({})", other),
+                        };
+                        tags.insert("Nikon:DateStampMode".to_string(), printed);
+                    }
+                }
+
+                NIKON_IMAGE_SIZE_RAW => {
+                    if let Some(value) = scalar_of(entry) {
+                        let printed = match value {
+                            1 => "Large".to_string(),
+                            2 => "Medium".to_string(),
+                            3 => "Small".to_string(),
+                            other => format!("Unknown ({})", other),
+                        };
+                        tags.insert("Nikon:ImageSizeRAW".to_string(), printed);
+                    }
+                }
+
+                // RawConv drops zero, which is what raw files carry.
+                NIKON_JPG_COMPRESSION => {
+                    if let Some(value) = scalar_of(entry)
+                        && value != 0
+                    {
+                        let printed = match value {
+                            1 => "Size Priority".to_string(),
+                            3 => "Optimal Quality".to_string(),
+                            other => format!("Unknown ({})", other),
+                        };
+                        tags.insert("Nikon:JPGCompression".to_string(), printed);
+                    }
+                }
+
+                NIKON_HIGH_ISO_NR => {
+                    if let Some(value) = scalar_of(entry) {
+                        let printed = match value {
+                            0 => "Off".to_string(),
+                            1 => "Minimal".to_string(),
+                            2 => "Low".to_string(),
+                            3 => "Medium Low".to_string(),
+                            4 => "Normal".to_string(),
+                            5 => "Medium High".to_string(),
+                            6 => "High".to_string(),
+                            other => format!("Unknown ({})", other),
+                        };
+                        tags.insert("Nikon:HighISONoiseReduction".to_string(), printed);
+                    }
+                }
+
+                NIKON_SHUTTER_MODE => {
+                    if let Some(value) = scalar_of(entry) {
+                        let printed = match value {
+                            0 => "Mechanical".to_string(),
+                            16 => "Electronic".to_string(),
+                            48 => "Electronic Front Curtain".to_string(),
+                            64 => "Electronic (Movie)".to_string(),
+                            80 => "Auto (Mechanical)".to_string(),
+                            81 => "Auto (Electronic Front Curtain)".to_string(),
+                            96 => "Electronic (High Speed)".to_string(),
+                            other => format!("Unknown ({})", other),
+                        };
+                        tags.insert("Nikon:ShutterMode".to_string(), printed);
+                    }
+                }
+
+                NIKON_SILENT_PHOTOGRAPHY => {
+                    if let Some(value) = scalar_of(entry) {
+                        let printed = match value {
+                            0 => "Off".to_string(),
+                            1 => "On".to_string(),
+                            other => format!("Unknown ({})", other),
+                        };
+                        tags.insert("Nikon:SilentPhotography".to_string(), printed);
+                    }
+                }
+
+                NIKON_MECHANICAL_SHUTTER_COUNT => {
+                    if let Some(value) = scalar_of(entry) {
                         tags.insert(
-                            "Nikon:PictureControlVersion".to_string(),
-                            ascii_value(&bytes[..4]),
+                            "Nikon:MechanicalShutterCount".to_string(),
+                            value.to_string(),
+                        );
+                    }
+                }
+
+                // int16u[4], looked up as the whole space-joined value.
+                NIKON_NEF_BIT_DEPTH => {
+                    if let Some(list) = u16_list_of(entry) {
+                        let printed = match list.as_str() {
+                            "0 0 0 0" => "n/a (JPEG)".to_string(),
+                            "8 8 8 0" => "8 x 3".to_string(),
+                            "16 16 16 0" => "16 x 3".to_string(),
+                            "12 0 0 0" => "12".to_string(),
+                            "14 0 0 0" => "14".to_string(),
+                            other => format!("Unknown ({})", other),
+                        };
+                        tags.insert("Nikon:NEFBitDepth".to_string(), printed);
+                    }
+                }
+
+                // `PrintConv => undef` here too: the version string is
+                // reported exactly as written.
+                NIKON_CAPTURE_VERSION => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        tags.insert("Nikon:NikonCaptureVersion".to_string(), ascii_value(&bytes));
+                    }
+                }
+
+                // Binary blob, reported as a byte count unless -b is used.
+                // Resolve the bytes rather than trusting the declared count:
+                // some Coolpix bodies point this tag outside the MakerNote,
+                // and ExifTool drops it there ("Suspicious MakerNotes offset
+                // for DataDump") rather than reporting a length it cannot read.
+                NIKON_DATA_DUMP => {
+                    if let Some(bytes) = bytes_of(entry)
+                        && Some(bytes.len()) == value_reader::value_len(entry)
+                    {
+                        tags.insert(
+                            "Nikon:DataDump".to_string(),
+                            binary_placeholder(bytes.len()),
                         );
                     }
                 }
@@ -1266,6 +1624,9 @@ fn nikon_tag_to_name(tag_id: u16) -> String {
         NIKON_IMAGE_OPTIMIZATION => "ImageOptimization",
         NIKON_SATURATION_TEXT => "Saturation",
         NIKON_VARI_PROGRAM => "VariProgram",
+        NIKON_IMAGE_STABILIZATION => "ImageStabilization",
+        NIKON_AF_RESPONSE => "AFResponse",
+        NIKON_TONING_EFFECT_STR => "ToningEffect",
 
         // Advanced (0x00B0-0x00B8)
         NIKON_COLOR_SPACE => "ColorSpace",
