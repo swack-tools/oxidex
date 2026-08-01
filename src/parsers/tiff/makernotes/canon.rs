@@ -15,6 +15,7 @@ mod custom_functions2;
 mod custom_functions2_tables;
 pub mod filter_info;
 
+use crate::core::formatters::perl_number as format_perl_number;
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
@@ -2269,17 +2270,6 @@ fn format_canon_file_number(value: u32) -> String {
         format!("{}-{}", &digits[..split], &digits[split..])
     } else {
         digits
-    }
-}
-
-/// Renders a number the way Perl interpolates it into a string (no trailing zeros).
-fn format_perl_number(value: f64) -> String {
-    let rendered = format!("{:.6}", value);
-    let trimmed = rendered.trim_end_matches('0').trim_end_matches('.');
-    if trimmed.is_empty() || trimmed == "-" {
-        "0".to_string()
-    } else {
-        trimmed.to_string()
     }
 }
 
@@ -4845,6 +4835,26 @@ pub fn parse_canon_makernotes(
 /// in the value_offset field rather than at an external offset.
 #[cfg(test)]
 mod tests {
+    /// `format_focal_length` divides by `FocalUnits`, and ExifTool lets the
+    /// quotient reach the output as a bare Perl scalar -- so it is printed
+    /// with Perl's own 15-significant-digit stringification.
+    ///
+    /// Every expected string here is what the installed Perl 5.42 prints for
+    /// the same division (`perl -e 'print 100/3'` => `33.3333333333333`).
+    /// The local `format!("{:.6}", ..)` copy this file used to carry stops at
+    /// six decimals and answers `33.333333`, so this test fails against it.
+    #[test]
+    fn test_focal_length_quotient_keeps_perl_significant_digits() {
+        use super::format_focal_length;
+
+        assert_eq!(format_focal_length(100, 3), "33.3333333333333 mm");
+        assert_eq!(format_focal_length(5, 3), "1.66666666666667 mm");
+        assert_eq!(format_focal_length(2, 3), "0.666666666666667 mm");
+        // Exact quotients still lose the decimal point entirely.
+        assert_eq!(format_focal_length(50, 1), "50 mm");
+        assert_eq!(format_focal_length(259, 16), "16.1875 mm");
+    }
+
     use super::*;
 
     #[test]

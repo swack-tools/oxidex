@@ -29,6 +29,7 @@ use super::camera_info_tables::{
     TBL_UNKNOWN, TBL_UNKNOWN16, TBL_UNKNOWN32, Table, Vc, sub_table,
 };
 use crate::core::formatters::exif_print_conv::print_exposure_time;
+use crate::core::formatters::perl_number as format_perl_number;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
 /// TIFF field types, as they appear in the MakerNote IFD entry for tag 0x0D.
@@ -746,18 +747,6 @@ fn render(v: &Conv) -> String {
     }
 }
 
-/// Perl interpolates a float with up to 15 significant digits and no trailing
-/// zeros; six decimals is enough for every value these tables produce.
-fn format_perl_number(value: f64) -> String {
-    let rendered = format!("{:.6}", value);
-    let trimmed = rendered.trim_end_matches('0').trim_end_matches('.');
-    if trimmed.is_empty() || trimmed == "-" {
-        "0".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
 /// `Image::ExifTool::Exif::PrintParameter`.
 fn print_parameter(value: i64) -> String {
     if value > 0 {
@@ -828,6 +817,29 @@ fn convert_unix_time(seconds: i64) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// `%Canon::CameraInfo*` ValueConvs are exponentials -- `CanonFNumber` is
+    /// `exp(($val-8)/16*log(2))` -- so their results almost never terminate
+    /// within six decimals. ExifTool prints them by interpolating the scalar,
+    /// which is Perl's 15-significant-digit stringification.
+    ///
+    /// Expected strings come from the installed Perl 5.42:
+    /// `perl -e 'print exp((100-8)/16*log(2))'` => `53.8173705762377`.
+    /// The local `format!("{:.6}", ..)` copy this file used to carry answers
+    /// `53.817371`, so this test fails against it.
+    #[test]
+    fn test_render_float_keeps_perl_significant_digits() {
+        use super::{Conv, Vc, render, value_conv};
+
+        let f = value_conv(Vc::CanonFNumber, Conv::Int(100));
+        assert_eq!(render(&f), "53.8173705762377");
+
+        let iso = value_conv(Vc::CanonIso, Conv::Int(100));
+        assert_eq!(render(&iso), "1131.37084989848");
+
+        // A quotient that does terminate keeps its exact short form.
+        assert_eq!(render(&value_conv(Vc::Div100, Conv::Int(250))), "2.5");
+    }
+
     use super::*;
 
     /// The transcribed tables must stay sorted by index within each table:
