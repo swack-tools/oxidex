@@ -247,7 +247,13 @@ print <<"FIX";
 ///
 /// This is ExifTool's own output, not a transcription, and it exists so the
 /// Rust port of that function can be checked against all $N of them.
+///
+/// `rustfmt::skip` keeps one id per line. Without it rustfmt explodes the
+/// longer rows across four lines each, which would make the generated file and
+/// the formatted file differ and leave `cargo fmt --check` failing after every
+/// regeneration.
 #[cfg(test)]
+#[rustfmt::skip]
 pub(crate) const NAME_FIXTURE: [(&str, &str, &str); $N] = [
 FIX
 

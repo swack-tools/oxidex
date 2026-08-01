@@ -199,10 +199,7 @@ fn remove_if_prev(s: &str, keep: impl Fn(char, char) -> bool) -> String {
     let mut out: Vec<char> = Vec::with_capacity(c.len());
     let mut i = 0;
     while i < c.len() {
-        if c[i] == '_'
-            && i + 1 < c.len()
-            && out.last().is_some_and(|&p| keep(p, c[i + 1]))
-        {
+        if c[i] == '_' && i + 1 < c.len() && out.last().is_some_and(|&p| keep(p, c[i + 1])) {
             out.push(c[i + 1]);
             i += 2;
             continue;
@@ -215,7 +212,12 @@ fn remove_if_prev(s: &str, keep: impl Fn(char, char) -> bool) -> String {
 
 /// Reads one value the way ExifTool's `ReadValue` does with an undefined
 /// count: as many whole elements as `len` holds, joined by a space.
-fn read_value(data: &[u8], fmt: Fmt, len: usize) -> TagValue {
+///
+/// Returns `None` when not even one element fits. ExifTool's `ReadValue`
+/// computes `int($size/$formatSize)` and returns undef for a count of zero,
+/// and `HandleTag` does not store an undefined value -- so the tag is absent
+/// from its output rather than present with the raw bytes.
+fn read_value(data: &[u8], fmt: Fmt, len: usize) -> Option<TagValue> {
     let size = match fmt {
         Fmt::Int8u | Fmt::Int8s => 1,
         Fmt::Int16u | Fmt::Int16s => 2,
@@ -224,9 +226,7 @@ fn read_value(data: &[u8], fmt: Fmt, len: usize) -> TagValue {
     };
     let count = len / size;
     if count == 0 {
-        // ExifTool's ReadValue returns undef when not even one element fits,
-        // and an undefined value is not stored.
-        return TagValue::Binary(data.to_vec());
+        return None;
     }
 
     let mut ints: Vec<i64> = Vec::new();
@@ -249,25 +249,25 @@ fn read_value(data: &[u8], fmt: Fmt, len: usize) -> TagValue {
 
     if !floats.is_empty() {
         if floats.len() == 1 {
-            return TagValue::String(perl_number(floats[0]));
+            return Some(TagValue::String(perl_number(floats[0])));
         }
-        return TagValue::String(
+        return Some(TagValue::String(
             floats
                 .iter()
                 .map(|f| perl_number(*f))
                 .collect::<Vec<_>>()
                 .join(" "),
-        );
+        ));
     }
     if ints.len() == 1 {
-        return TagValue::Integer(ints[0]);
+        return Some(TagValue::Integer(ints[0]));
     }
-    TagValue::String(
+    Some(TagValue::String(
         ints.iter()
             .map(|i| i.to_string())
             .collect::<Vec<_>>()
             .join(" "),
-    )
+    ))
 }
 
 /// True when this APP7 payload is a Qualcomm Camera Attributes segment.
@@ -318,9 +318,12 @@ pub fn parse_qualcomm_app7(data: &[u8]) -> MetadataMap {
         let value = match qualcomm_tables::FORMATS.get(fmt_code) {
             Some(&fmt) => read_value(raw, fmt, val_len),
             // ExifTool keeps the raw bytes for an unknown format code.
-            None => TagValue::Binary(raw.to_vec()),
+            None => Some(TagValue::Binary(raw.to_vec())),
         };
-        out.insert(format!("{GROUP}:{name}"), value);
+        // A value ExifTool would have left undefined is not stored at all.
+        if let Some(value) = value {
+            out.insert(format!("{GROUP}:{name}"), value);
+        }
     }
     out
 }
@@ -431,7 +434,25 @@ mod tests {
         seg.extend_from_slice(&[1, 0, 1, 0]);
         seg.extend_from_slice(&[0xde, 0xad]);
         let m = parse_qualcomm_app7(&seg);
-        assert_eq!(m.get("Qualcomm:Abc"), Some(&TagValue::Binary(vec![0xde, 0xad])));
+        assert_eq!(
+            m.get("Qualcomm:Abc"),
+            Some(&TagValue::Binary(vec![0xde, 0xad]))
+        );
+    }
+
+    /// A value too short to hold even one element of its declared format is
+    /// dropped, not reported as raw bytes: ExifTool's `ReadValue` returns undef
+    /// for a count of zero and `HandleTag` does not store an undefined value.
+    #[test]
+    fn value_shorter_than_one_element_is_dropped() {
+        let mut seg = Vec::from(qualcomm_tables::SIGNATURE);
+        seg.extend_from_slice(&2u16.to_le_bytes()); // 2 bytes ...
+        seg.push(3);
+        seg.extend_from_slice(b"abc");
+        seg.push(7); // ... but the format is `double`, which needs 8
+        seg.extend_from_slice(&[1, 0, 1, 0]);
+        seg.extend_from_slice(&[0xde, 0xad]);
+        assert!(parse_qualcomm_app7(&seg).is_empty());
     }
 
     /// The prefix list is ordered, and `afr` must win over `af_`-style
@@ -447,7 +468,10 @@ mod tests {
     /// is dropped from the name.
     #[test]
     fn trailing_subscript_becomes_two_digits() {
-        assert_eq!(make_name("asf5_luma_filter[0]").unwrap(), "ASF5LumaFilter00");
+        assert_eq!(
+            make_name("asf5_luma_filter[0]").unwrap(),
+            "ASF5LumaFilter00"
+        );
     }
 }
 

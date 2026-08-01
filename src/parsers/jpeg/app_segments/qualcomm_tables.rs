@@ -76,7 +76,13 @@ pub(crate) const DIR_START: usize = 27;
 ///
 /// This is ExifTool's own output, not a transcription, and it exists so the
 /// Rust port of that function can be checked against all 1188 of them.
+///
+/// `rustfmt::skip` keeps one id per line. Without it rustfmt explodes the
+/// longer rows across four lines each, which would make the generated file and
+/// the formatted file differ and leave `cargo fmt --check` failing after every
+/// regeneration.
 #[cfg(test)]
+#[rustfmt::skip]
 pub(crate) const NAME_FIXTURE: [(&str, &str, &str); 1188] = [
     ("HJR_enable", "HJREnable", "HJR Enable"),
     ("HJR_max_num_frames", "HJRMaxNumFrames", "HJR Max Num Frames"),
