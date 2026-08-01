@@ -73,6 +73,27 @@ DEFAULT_BUILD_SEMAPHORE_STALE_SECONDS = 900  # a cargo build hung 15+ min is pre
 DEFAULT_BUILD_SEMAPHORE_HEARTBEAT_SECONDS = 60
 
 
+def _pid_is_alive(pid):
+    """Best-effort local-process liveness check for a semaphore holder.
+
+    Unknown or inaccessible PIDs stay live until the heartbeat timeout; only
+    an authoritative ProcessLookupError permits immediate eviction.
+    """
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return True
+    if pid <= 0:
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return True
+    return True
+
+
 def _semaphore_locked(path, mutate_fn):
     """Run mutate_fn(state) -> (new_state, result) under an exclusive
     flock on path's sibling .lock file -- the build-semaphore twin of
@@ -114,7 +135,8 @@ def _try_acquire_build_slot(path, max_holders, stale_seconds, now_fn, holder_id)
         now = now_fn()
         live = {
             slot: h for slot, h in state["holders"].items()
-            if now - h.get("heartbeat", 0) < stale_seconds
+            if (now - h.get("heartbeat", 0) < stale_seconds
+                and _pid_is_alive(h.get("pid")))
         }
         if holder_id in live:
             live[holder_id]["heartbeat"] = now

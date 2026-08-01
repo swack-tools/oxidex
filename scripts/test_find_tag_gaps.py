@@ -227,9 +227,10 @@ class BuildSemaphoreTests(unittest.TestCase):
             self.path.write_text(json.dumps(state))
 
         entered = []
-        with build_semaphore(self.path, max_holders=2, sleep_fn=fake_sleep,
-                             holder_id="h3", poll_seconds=0):
-            entered.append(1)
+        with patch("find_tag_gaps._pid_is_alive", return_value=True):
+            with build_semaphore(self.path, max_holders=2, sleep_fn=fake_sleep,
+                                 holder_id="h3", poll_seconds=0):
+                entered.append(1)
         self.assertEqual(entered, [1])
         self.assertGreaterEqual(len(waited), 1)
 
@@ -247,6 +248,17 @@ class BuildSemaphoreTests(unittest.TestCase):
         with build_semaphore(self.path, max_holders=1, stale_seconds=900, holder_id="h2"):
             entered.append(1)
         self.assertEqual(entered, [1])
+
+    def test_dead_holder_is_evicted_without_waiting_for_heartbeat_timeout(self):
+        self.path.write_text(json.dumps({
+            "holders": {"dead": {"pid": 999_999, "heartbeat": time.time()}},
+        }))
+
+        with patch("find_tag_gaps._pid_is_alive", return_value=False):
+            with build_semaphore(self.path, max_holders=1, stale_seconds=900, holder_id="replacement"):
+                state = json.loads(self.path.read_text())
+                self.assertNotIn("dead", state["holders"])
+                self.assertIn("replacement", state["holders"])
 
     def test_renewing_the_same_holder_id_never_blocks_itself(self):
         # A nested/re-entrant call with the SAME holder_id (e.g. a
