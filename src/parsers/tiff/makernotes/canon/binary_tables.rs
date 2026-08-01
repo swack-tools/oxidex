@@ -24,6 +24,16 @@ enum CanonBinaryFormat {
     Int32s,
 }
 
+impl CanonBinaryFormat {
+    /// Number of `i16` words occupied by one value in the table's declared format.
+    const fn words(self) -> usize {
+        match self {
+            Self::Int16s | Self::Int16u => 1,
+            Self::Int32u | Self::Int32s => 2,
+        }
+    }
+}
+
 /// The `PrintConv` ExifTool applies to a field.
 #[derive(Clone, Copy)]
 enum CanonBinaryConv {
@@ -31,7 +41,7 @@ enum CanonBinaryConv {
     Raw,
     /// A lookup hash. An unlisted value prints as ExifTool's `Unknown (n)`.
     Map(&'static [(i64, &'static str)]),
-    /// A `BITMASK` hash: set bit names joined with ", ", or "(none)" when no bit is set.
+    /// A `BITMASK` hash: set bit names (or `[n]` for unknown bits) joined with ", ".
     Bitmask(&'static [(i64, &'static str)]),
     /// ExifTool's shared `%printParameter`: 0 prints "Normal", positives carry a "+".
     PrintParameter,
@@ -188,84 +198,18 @@ const TABLE_AF_MICRO_ADJ_CONV10: &[(i64, &str)] = &[
     (1, "Adjust all by the same amount"),
     (2, "Adjust by lens"),
 ];
-const TABLE_VIGNETTING_CORR2_CONV11: &[(i64, &str)] = &[
-    (0, "People"),
-    (1, "sRGB"),
-    (2, "Adobe RGB"),
-    (3, "User 1"),
-    (4, "User 2"),
-    (5, "User 3"),
-    (6, "To Do"),
-    (65535, "n/a"),
-    (2415919104, "Format 1"),
-    (2684354560, "Format 2"),
-];
-const TABLE_VIGNETTING_CORR2_CONV12: &[(i64, &str)] = &[
-    (0, "People"),
-    (1, "sRGB"),
-    (2, "Adobe RGB"),
-    (3, "User 1"),
-    (4, "User 2"),
-    (5, "User 3"),
-    (6, "To Do"),
-    (65535, "n/a"),
-    (2415919104, "Format 1"),
-    (2684354560, "Format 2"),
-];
-const TABLE_VIGNETTING_CORR2_CONV13: &[(i64, &str)] = &[
-    (0, "People"),
-    (1, "sRGB"),
-    (2, "Adobe RGB"),
-    (3, "User 1"),
-    (4, "User 2"),
-    (5, "User 3"),
-    (6, "To Do"),
-    (65535, "n/a"),
-    (2415919104, "Format 1"),
-    (2684354560, "Format 2"),
-];
-const TABLE_VIGNETTING_CORR2_CONV14: &[(i64, &str)] = &[
-    (0, "People"),
-    (1, "sRGB"),
-    (2, "Adobe RGB"),
-    (3, "User 1"),
-    (4, "User 2"),
-    (5, "User 3"),
-    (6, "To Do"),
-    (65535, "n/a"),
-    (2415919104, "Format 1"),
-    (2684354560, "Format 2"),
-];
-const TABLE_LIGHTING_OPT_CONV15: &[(i64, &str)] = &[
-    (0, "People"),
-    (1, "sRGB"),
-    (2, "Adobe RGB"),
-    (3, "User 1"),
-    (4, "User 2"),
-    (5, "User 3"),
-    (6, "To Do"),
-    (65535, "n/a"),
-    (2415919104, "Format 1"),
-    (2684354560, "Format 2"),
-];
+const TABLE_VIGNETTING_CORR2_CONV11: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
+const TABLE_VIGNETTING_CORR2_CONV12: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
+const TABLE_VIGNETTING_CORR2_CONV13: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
+const TABLE_VIGNETTING_CORR2_CONV14: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
+const TABLE_LIGHTING_OPT_CONV15: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
 const TABLE_LIGHTING_OPT_CONV16: &[(i64, &str)] =
     &[(0, "Standard"), (1, "Low"), (2, "Strong"), (3, "Off")];
 const TABLE_LIGHTING_OPT_CONV17: &[(i64, &str)] = &[(0, "Off"), (1, "Auto"), (2, "On")];
 const TABLE_LIGHTING_OPT_CONV18: &[(i64, &str)] =
     &[(0, "Standard"), (1, "Low"), (2, "Strong"), (3, "Off")];
 const TABLE_LIGHTING_OPT_CONV19: &[(i64, &str)] = &[(0, "Off"), (1, "Standard"), (2, "High")];
-const TABLE_LIGHTING_OPT_CONV20: &[(i64, &str)] = &[
-    (0, "People"),
-    (1, "sRGB"),
-    (2, "Adobe RGB"),
-    (3, "User 1"),
-    (4, "User 2"),
-    (5, "User 3"),
-    (6, "To Do"),
-    (65535, "n/a"),
-    (2415919104, "Format 1"),
-    (2684354560, "Format 2"),
-];
+const TABLE_LIGHTING_OPT_CONV20: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
 const TABLE_MULTI_EXP_CONV21: &[(i64, &str)] = &[(0, "Off"), (1, "On"), (2, "On (RAW)")];
 const TABLE_MULTI_EXP_CONV22: &[(i64, &str)] = &[
     (0, "Additive"),
@@ -351,54 +295,10 @@ const TABLE_AF_CONFIG_CONV41: &[(i64, &str)] = &[
 const TABLE_AF_CONFIG_CONV42: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
 const TABLE_AF_CONFIG_CONV43: &[(i64, &str)] =
     &[(0, "Soccer"), (1, "Basketball"), (2, "Volleyball")];
-const TABLE_FOCUS_BRACKETING_INFO_CONV44: &[(i64, &str)] = &[
-    (0, "People"),
-    (1, "sRGB"),
-    (2, "Adobe RGB"),
-    (3, "User 1"),
-    (4, "User 2"),
-    (5, "User 3"),
-    (6, "To Do"),
-    (65535, "n/a"),
-    (2415919104, "Format 1"),
-    (2684354560, "Format 2"),
-];
-const TABLE_FOCUS_BRACKETING_INFO_CONV45: &[(i64, &str)] = &[
-    (0, "People"),
-    (1, "sRGB"),
-    (2, "Adobe RGB"),
-    (3, "User 1"),
-    (4, "User 2"),
-    (5, "User 3"),
-    (6, "To Do"),
-    (65535, "n/a"),
-    (2415919104, "Format 1"),
-    (2684354560, "Format 2"),
-];
-const TABLE_FOCUS_BRACKETING_INFO_CONV46: &[(i64, &str)] = &[
-    (0, "People"),
-    (1, "sRGB"),
-    (2, "Adobe RGB"),
-    (3, "User 1"),
-    (4, "User 2"),
-    (5, "User 3"),
-    (6, "To Do"),
-    (65535, "n/a"),
-    (2415919104, "Format 1"),
-    (2684354560, "Format 2"),
-];
-const TABLE_FOCUS_BRACKETING_INFO_CONV47: &[(i64, &str)] = &[
-    (0, "People"),
-    (1, "sRGB"),
-    (2, "Adobe RGB"),
-    (3, "User 1"),
-    (4, "User 2"),
-    (5, "User 3"),
-    (6, "To Do"),
-    (65535, "n/a"),
-    (2415919104, "Format 1"),
-    (2684354560, "Format 2"),
-];
+const TABLE_FOCUS_BRACKETING_INFO_CONV44: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
+const TABLE_FOCUS_BRACKETING_INFO_CONV45: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
+const TABLE_FOCUS_BRACKETING_INFO_CONV46: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
+const TABLE_FOCUS_BRACKETING_INFO_CONV47: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
 
 /// `%Canon::MyColors` (MakerNote tag 0x001d), transcribed from ExifTool.
 const TABLE_MY_COLORS: &[CanonBinaryField] = &[CanonBinaryField {
@@ -545,28 +445,28 @@ const TABLE_ASPECT_INFO: &[CanonBinaryField] = &[
     CanonBinaryField {
         index: 1,
         name: "CroppedImageWidth",
-        format: CanonBinaryFormat::Int16s,
+        format: CanonBinaryFormat::Int32u,
         count: 1,
         conv: CanonBinaryConv::Raw,
     },
     CanonBinaryField {
         index: 2,
         name: "CroppedImageHeight",
-        format: CanonBinaryFormat::Int16s,
+        format: CanonBinaryFormat::Int32u,
         count: 1,
         conv: CanonBinaryConv::Raw,
     },
     CanonBinaryField {
         index: 3,
         name: "CroppedImageLeft",
-        format: CanonBinaryFormat::Int16s,
+        format: CanonBinaryFormat::Int32u,
         count: 1,
         conv: CanonBinaryConv::Raw,
     },
     CanonBinaryField {
         index: 4,
         name: "CroppedImageTop",
-        format: CanonBinaryFormat::Int16s,
+        format: CanonBinaryFormat::Int32u,
         count: 1,
         conv: CanonBinaryConv::Raw,
     },
@@ -667,14 +567,14 @@ const TABLE_PREVIEW_IMAGE_INFO: &[CanonBinaryField] = &[
     CanonBinaryField {
         index: 3,
         name: "PreviewImageWidth",
-        format: CanonBinaryFormat::Int16s,
+        format: CanonBinaryFormat::Int32u,
         count: 1,
         conv: CanonBinaryConv::Raw,
     },
     CanonBinaryField {
         index: 4,
         name: "PreviewImageHeight",
-        format: CanonBinaryFormat::Int16s,
+        format: CanonBinaryFormat::Int32u,
         count: 1,
         conv: CanonBinaryConv::Raw,
     },
@@ -802,7 +702,7 @@ const TABLE_MULTI_EXP: &[CanonBinaryField] = &[
     CanonBinaryField {
         index: 3,
         name: "MultiExposureShots",
-        format: CanonBinaryFormat::Int16s,
+        format: CanonBinaryFormat::Int32s,
         count: 1,
         conv: CanonBinaryConv::Raw,
     },
@@ -975,14 +875,14 @@ const TABLE_FOCUS_BRACKETING_INFO: &[CanonBinaryField] = &[
     CanonBinaryField {
         index: 2,
         name: "FocusBracketingImageCount",
-        format: CanonBinaryFormat::Int16s,
+        format: CanonBinaryFormat::Int32s,
         count: 1,
         conv: CanonBinaryConv::Raw,
     },
     CanonBinaryField {
         index: 3,
         name: "FocusBracketingFocusIncrement",
-        format: CanonBinaryFormat::Int16s,
+        format: CanonBinaryFormat::Int32s,
         count: 1,
         conv: CanonBinaryConv::Raw,
     },
@@ -1010,7 +910,7 @@ const TABLE_FOCUS_BRACKETING_INFO: &[CanonBinaryField] = &[
     CanonBinaryField {
         index: 7,
         name: "FocusBracketingFlashInterval",
-        format: CanonBinaryFormat::Int16s,
+        format: CanonBinaryFormat::Int32s,
         count: 1,
         conv: CanonBinaryConv::Raw,
     },
@@ -1040,16 +940,24 @@ const CANON_BINARY_TABLES: &[(u16, &[CanonBinaryField], bool)] = &[
 /// Reads one field's values out of the record, or `None` if it runs past the end.
 fn read_field(record: &[i16], field: &CanonBinaryField, byte_order: ByteOrder) -> Option<Vec<i64>> {
     let mut values = Vec::with_capacity(field.count);
+    let words = field.format.words();
     for offset in 0..field.count {
+        // ExifTool keys are element indexes in the table's declared FORMAT, while
+        // `record` is always a 16-bit-word view of the MakerNote payload. An int32
+        // key therefore starts at `index * 2`, not `index`; the latter silently read
+        // the preceding field (or half of one) from every 32-bit Canon table.
+        let word = field
+            .index
+            .checked_mul(words)?
+            .checked_add(offset * words)?;
         match field.format {
             CanonBinaryFormat::Int16s => {
-                values.push(i64::from(*record.get(field.index + offset)?));
+                values.push(i64::from(*record.get(word)?));
             }
             CanonBinaryFormat::Int16u => {
-                values.push(i64::from(*record.get(field.index + offset)? as u16));
+                values.push(i64::from(*record.get(word)? as u16));
             }
             CanonBinaryFormat::Int32u | CanonBinaryFormat::Int32s => {
-                let word = field.index + offset * 2;
                 let low = u32::from(*record.get(word)? as u16);
                 let high = u32::from(*record.get(word + 1)? as u16);
                 // The words were decoded with the file's byte order, so recombining them
@@ -1094,10 +1002,19 @@ fn render_value(conv: CanonBinaryConv, value: i64) -> String {
             value.to_string()
         }
         CanonBinaryConv::Bitmask(table) => {
-            let names: Vec<&str> = table
-                .iter()
-                .filter(|(bit, _)| *bit < 63 && value & (1i64 << *bit) != 0)
-                .map(|(_, label)| *label)
+            // ExifTool's DecodeBits defaults to a 32-bit word and retains set bits
+            // missing from the lookup as `[n]`. Dropping those bits made Canon's
+            // SelectAFAreaSelectionMode disagree whenever a newer body populated
+            // reserved bits beyond the six names known to Canon.pm.
+            let bits = value as u32;
+            let names: Vec<String> = (0..u32::BITS)
+                .filter(|bit| bits & (1u32 << bit) != 0)
+                .map(|bit| {
+                    table
+                        .iter()
+                        .find(|(known_bit, _)| *known_bit == i64::from(bit))
+                        .map_or_else(|| format!("[{bit}]"), |(_, label)| (*label).to_string())
+                })
                 .collect();
             if names.is_empty() {
                 "(none)".to_string()
@@ -1194,6 +1111,121 @@ mod tests {
         assert!(table_is_length_prefixed(0x4028));
     }
 
+    /// `%Canon::TimeInfo` declares `FORMAT => 'int32s'`, so ExifTool key 2 starts at
+    /// i16 word 4 and key 3 at word 6. Reading keys as word indexes instead shifted every
+    /// field two slots early and returned plausible-but-wrong neighboring values.
+    #[test]
+    fn test_int32_table_keys_are_scaled_to_i16_words() {
+        let mut little_endian = vec![0i16; 8];
+        little_endian[4] = 20; // key 2: London
+        little_endian[6] = 60; // key 3: daylight savings on
+        let mut tags = HashMap::new();
+        assert!(parse_binary_table(
+            0x0035,
+            &little_endian,
+            ByteOrder::LittleEndian,
+            &mut tags,
+        ));
+        assert_eq!(tags.get("Canon:TimeZoneCity"), Some(&"London".to_string()));
+        assert_eq!(tags.get("Canon:DaylightSavings"), Some(&"On".to_string()));
+
+        let mut big_endian = vec![0i16; 8];
+        big_endian[5] = 20;
+        big_endian[7] = 60;
+        let mut tags = HashMap::new();
+        assert!(parse_binary_table(
+            0x0035,
+            &big_endian,
+            ByteOrder::BigEndian,
+            &mut tags,
+        ));
+        assert_eq!(tags.get("Canon:TimeZoneCity"), Some(&"London".to_string()));
+        assert_eq!(tags.get("Canon:DaylightSavings"), Some(&"On".to_string()));
+    }
+
+    /// Bare scalar entries inherit their table's `FORMAT`. AspectInfo is `int32u`, so
+    /// width/height must retain both words instead of being truncated to signed int16.
+    #[test]
+    fn test_bare_int32_fields_inherit_full_table_width() {
+        let mut record = vec![0i16; 10];
+        // key 1 = 70_000 (0x0001_1170), key 2 = 80_000 (0x0001_3880)
+        record[2] = 0x1170;
+        record[3] = 0x0001;
+        record[4] = 0x3880;
+        record[5] = 0x0001;
+        let mut tags = HashMap::new();
+        assert!(parse_binary_table(
+            0x009a,
+            &record,
+            ByteOrder::LittleEndian,
+            &mut tags,
+        ));
+        assert_eq!(
+            tags.get("Canon:CroppedImageWidth"),
+            Some(&"70000".to_string())
+        );
+        assert_eq!(
+            tags.get("Canon:CroppedImageHeight"),
+            Some(&"80000".to_string())
+        );
+    }
+
+    /// Array counts advance in declared-format units too: four int32 values consume
+    /// eight i16 words starting at the scaled key offset.
+    #[test]
+    fn test_int32_array_count_advances_by_two_words() {
+        let mut record = vec![0i16; 12];
+        for (offset, value) in [10i16, 20, 30, 40].into_iter().enumerate() {
+            record[4 + offset * 2] = value;
+        }
+        let mut tags = HashMap::new();
+        assert!(parse_binary_table(
+            0x0029,
+            &record,
+            ByteOrder::LittleEndian,
+            &mut tags,
+        ));
+        assert_eq!(
+            tags.get("Canon:WB_GRBGLevelsAuto"),
+            Some(&"10 20 30 40".to_string())
+        );
+    }
+
+    /// These fields splice ExifTool's shared `%offOn` hash. The original table
+    /// transcription accidentally copied an unrelated color-space map, yielding
+    /// values such as `People` and `sRGB` for boolean camera settings.
+    #[test]
+    fn test_shared_off_on_conversions_match_exiftool() {
+        let mut vignetting = vec![0i16; 20];
+        vignetting[10] = 1; // key 5
+        let mut tags = HashMap::new();
+        assert!(parse_binary_table(
+            0x4016,
+            &vignetting,
+            ByteOrder::LittleEndian,
+            &mut tags,
+        ));
+        assert_eq!(
+            tags.get("Canon:PeripheralLightingSetting"),
+            Some(&"On".to_string())
+        );
+
+        let mut focus = vec![0i16; 16];
+        focus[10] = 1; // key 5
+        let mut tags = HashMap::new();
+        assert!(parse_binary_table(
+            0x4053,
+            &focus,
+            ByteOrder::LittleEndian,
+            &mut tags,
+        ));
+        assert_eq!(tags.get("Canon:FocusBracketing"), Some(&"Off".to_string()));
+        assert_eq!(
+            tags.get("Canon:FocusBracketingDepthComposite"),
+            Some(&"On".to_string())
+        );
+    }
+
     /// `%Canon::ColorInfo` key 2 `ColorTone` carries ExifTool's shared `%printParameter`
     /// as a hash splice rather than a literal `PrintConv`, so 0 prints "Normal" and a
     /// positive value carries a "+". Emitting it raw reported "0" for "Normal".
@@ -1218,6 +1250,8 @@ mod tests {
         let bits = CanonBinaryConv::Bitmask(&[(0, "First"), (2, "Third")]);
         assert_eq!(render_value(bits, 0), "(none)");
         assert_eq!(render_value(bits, 0b101), "First, Third");
+        assert_eq!(render_value(bits, 0b1101), "First, Third, [3]");
+        assert_eq!(render_value(bits, i64::from(i32::MIN)), "[31]");
     }
 
     /// A record shorter than a field's index drops that field rather than panicking.
