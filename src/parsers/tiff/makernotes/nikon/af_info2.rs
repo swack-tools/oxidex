@@ -2,10 +2,11 @@
 //!
 //! Five layouts selected by the block's own version. Not encrypted.
 //!
-//! The AF *point* tags (`AFPointsUsed`, `AFPointsInFocus`, `AFPointsSelected`
-//! and `PrimaryAFPoint`) are deliberately not decoded: each is a bitmap whose
-//! meaning depends on a per-body point-name grid, and picking the wrong grid
-//! would produce a confident, wrong list of focus points rather than none.
+//! `AFPointsUsed` and `PrimaryAFPoint` are decoded via the point-name grids
+//! transcribed into `af_points.rs` from ExifTool's own `afPoints*` tables.
+//! `AFPointsInFocus` and `AFPointsSelected` remain deliberately undecoded:
+//! they share the same per-body grid dependency but weren't in scope for
+//! this pass (see docs/plans/specs/2026-08-01-nikon-af-points-design.md).
 
 use std::collections::HashMap;
 
