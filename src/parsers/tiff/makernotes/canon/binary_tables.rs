@@ -299,6 +299,8 @@ const TABLE_FOCUS_BRACKETING_INFO_CONV44: &[(i64, &str)] = &[(0, "Off"), (1, "On
 const TABLE_FOCUS_BRACKETING_INFO_CONV45: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
 const TABLE_FOCUS_BRACKETING_INFO_CONV46: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
 const TABLE_FOCUS_BRACKETING_INFO_CONV47: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
+// Canon.pm:9096 -- `PrintConv => { %offOn, 2 => 'Enhanced' }` (github339).
+const TABLE_LIGHTING_OPT_CONV48: &[(i64, &str)] = &[(0, "Off"), (1, "On"), (2, "Enhanced")];
 
 /// `%Canon::MyColors` (MakerNote tag 0x001d), transcribed from ExifTool.
 const TABLE_MY_COLORS: &[CanonBinaryField] = &[CanonBinaryField {
@@ -652,6 +654,13 @@ const TABLE_LIGHTING_OPT: &[CanonBinaryField] = &[
         format: CanonBinaryFormat::Int32s,
         count: 1,
         conv: CanonBinaryConv::Map(TABLE_LIGHTING_OPT_CONV16),
+    },
+    CanonBinaryField {
+        index: 3,
+        name: "HighlightTonePriority",
+        format: CanonBinaryFormat::Int32s,
+        count: 1,
+        conv: CanonBinaryConv::Map(TABLE_LIGHTING_OPT_CONV48),
     },
     CanonBinaryField {
         index: 4,

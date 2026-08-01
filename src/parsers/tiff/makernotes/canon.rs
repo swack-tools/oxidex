@@ -1335,7 +1335,10 @@ fn parse_custom_functions2(
                 if values.len() == count
                     && let Some(rendered) = render_custom_function2(convs, &values)
                 {
-                    tags.insert(format!("Canon:{}", name), rendered);
+                    // `%CanonCustom::Functions2` (CanonCustom.pm:1198) has no group-1
+                    // override, so its default family-1 group is the module name,
+                    // "CanonCustom" -- not "Canon".
+                    tags.insert(format!("CanonCustom:{}", name), rendered);
                 }
             }
 
@@ -5102,29 +5105,41 @@ fn parse_canon_makernote_impl_with_model(
                         let raw = word as u16;
                         let function = raw >> 8;
                         let value = (raw & 0xff) as i16;
+                        // `%CanonCustom::Functions350D` (CanonCustom.pm:809) has no
+                        // group-1 override, so its default family-1 group is the module
+                        // name, "CanonCustom" -- not "Canon".
                         let (name, rendered) = match function {
                             0 => (
-                                "Canon:SetButtonCrossKeysFunc",
+                                "CanonCustom:SetButtonCrossKeysFunc",
                                 CC350D_SET_BUTTON_CROSS_KEYS_FUNC.decode(value),
                             ),
                             1 => (
-                                "Canon:LongExposureNoiseReduction",
+                                "CanonCustom:LongExposureNoiseReduction",
                                 CC350D_LONG_EXPOSURE_NOISE_REDUCTION.decode(value),
                             ),
                             2 => (
-                                "Canon:FlashSyncSpeedAv",
+                                "CanonCustom:FlashSyncSpeedAv",
                                 CC350D_FLASH_SYNC_SPEED_AV.decode(value),
                             ),
-                            3 => ("Canon:Shutter-AELock", CC350D_SHUTTER_AE_LOCK.decode(value)),
-                            4 => ("Canon:AFAssistBeam", CC350D_AF_ASSIST_BEAM.decode(value)),
+                            3 => (
+                                "CanonCustom:Shutter-AELock",
+                                CC350D_SHUTTER_AE_LOCK.decode(value),
+                            ),
+                            4 => (
+                                "CanonCustom:AFAssistBeam",
+                                CC350D_AF_ASSIST_BEAM.decode(value),
+                            ),
                             5 => (
-                                "Canon:ExposureLevelIncrements",
+                                "CanonCustom:ExposureLevelIncrements",
                                 CC350D_EXPOSURE_LEVEL_INCREMENTS.decode(value),
                             ),
-                            6 => ("Canon:MirrorLockup", CC350D_MIRROR_LOCKUP.decode(value)),
-                            7 => ("Canon:ETTLII", CC350D_ETTL_II.decode(value)),
+                            6 => (
+                                "CanonCustom:MirrorLockup",
+                                CC350D_MIRROR_LOCKUP.decode(value),
+                            ),
+                            7 => ("CanonCustom:ETTLII", CC350D_ETTL_II.decode(value)),
                             8 => (
-                                "Canon:ShutterCurtainSync",
+                                "CanonCustom:ShutterCurtainSync",
                                 CC350D_SHUTTER_CURTAIN_SYNC.decode(value),
                             ),
                             _ => continue,
@@ -5146,7 +5161,9 @@ fn parse_canon_makernote_impl_with_model(
             //
             // `%CanonCustom::PersonalFuncs` (CanonCustom.pm:1091) is an `int16u`
             // BinaryData table with `FIRST_ENTRY => 1`, so index 0 is the record's own
-            // byte count and every switch runs through `ConvertPfn`.
+            // byte count and every switch runs through `ConvertPfn`. The table has no
+            // group-1 override, so its default family-1 group is the module name,
+            // "CanonCustom" -- not "Canon".
             CANON_PERSONAL_FUNCTIONS => {
                 if let Some(array) =
                     extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
@@ -5155,7 +5172,7 @@ fn parse_canon_makernote_impl_with_model(
                     for &(index, name) in PERSONAL_FUNCS {
                         if let Some(&raw) = array.get(index) {
                             tags.insert(
-                                format!("Canon:{}", name),
+                                format!("CanonCustom:{}", name),
                                 convert_personal_function(raw as u16),
                             );
                         }
@@ -5167,7 +5184,8 @@ fn parse_canon_makernote_impl_with_model(
             //
             // `%CanonCustom::PersonalFuncValues` (CanonCustom.pm:1135), also `int16u`
             // with `FIRST_ENTRY => 1`. Most keys are reported verbatim; keys 4-7 carry
-            // Canon's EV encoding.
+            // Canon's EV encoding. Same as above: default family-1 group is
+            // "CanonCustom".
             CANON_PERSONAL_FUNCTION_VALUES => {
                 if let Some(array) =
                     extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
@@ -5175,7 +5193,7 @@ fn parse_canon_makernote_impl_with_model(
                 {
                     for &(index, name) in PERSONAL_FUNC_VALUES {
                         if let Some(&raw) = array.get(index) {
-                            tags.insert(format!("Canon:{}", name), (raw as u16).to_string());
+                            tags.insert(format!("CanonCustom:{}", name), (raw as u16).to_string());
                         }
                     }
 
@@ -5186,7 +5204,10 @@ fn parse_canon_makernote_impl_with_model(
                         if let Some(&raw) = array.get(index) {
                             let seconds =
                                 2.0_f64.powf(-canon_ev(raw as u16 as i32 * 4)) * 1000.0 / 8.0;
-                            tags.insert(format!("Canon:{}", name), print_exposure_time(seconds));
+                            tags.insert(
+                                format!("CanonCustom:{}", name),
+                                print_exposure_time(seconds),
+                            );
                         }
                     }
 
@@ -5196,7 +5217,7 @@ fn parse_canon_makernote_impl_with_model(
                     for &(index, name) in &[(6, "PF5ApertureMin"), (7, "PF5ApertureMax")] {
                         if let Some(&raw) = array.get(index) {
                             let f_number = 2.0_f64.powf(canon_ev(raw as u16 as i32 * 4 - 32) / 2.0);
-                            tags.insert(format!("Canon:{}", name), format_g2(f_number));
+                            tags.insert(format!("CanonCustom:{}", name), format_g2(f_number));
                         }
                     }
                 }
@@ -6648,15 +6669,15 @@ mod tests {
         parse_custom_functions2(&data, ByteOrder::LittleEndian, &mut tags);
 
         assert_eq!(
-            tags.get("Canon:ISOSpeedIncrements"),
+            tags.get("CanonCustom:ISOSpeedIncrements"),
             Some(&"1 Stop".to_string())
         );
         assert_eq!(
-            tags.get("Canon:ViewfinderWarnings"),
+            tags.get("CanonCustom:ViewfinderWarnings"),
             Some(&"Monochrome, WB corrected, One-touch image quality".to_string())
         );
         assert_eq!(
-            tags.get("Canon:AccelerationTracking"),
+            tags.get("CanonCustom:AccelerationTracking"),
             Some(&"0".to_string())
         );
     }
@@ -6667,7 +6688,7 @@ mod tests {
         let mut tags = HashMap::new();
         parse_custom_functions2(&data, ByteOrder::LittleEndian, &mut tags);
         assert_eq!(
-            tags.get("Canon:ViewfinderWarnings"),
+            tags.get("CanonCustom:ViewfinderWarnings"),
             Some(&"(none)".to_string())
         );
     }
@@ -6690,7 +6711,7 @@ mod tests {
         let data = build_custom_functions2(&[(0x070f, &[66])]); // MultiFunctionLock
         let mut tags = HashMap::new();
         parse_custom_functions2(&data, ByteOrder::LittleEndian, &mut tags);
-        assert_eq!(tags.get("Canon:MultiFunctionLock"), None);
+        assert_eq!(tags.get("CanonCustom:MultiFunctionLock"), None);
     }
 
     // ========================================================================
