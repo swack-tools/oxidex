@@ -117,25 +117,31 @@ pub fn format_iptc_time(raw: &str) -> String {
 
 /// Format IPTC urgency value with human-readable description.
 ///
-/// IPTC urgency is a single digit 1-8, where 1 is most urgent and 8 is least.
-/// ExifTool displays this with a parenthetical description for boundary values.
+/// This is ExifTool's shared PrintConv table for `IPTC:Urgency` (2:10) and
+/// `IPTC:EnvelopePriority` (1:60) -- IPTC.pm gives both the identical hash, so
+/// both print the same way. Digits without a description print bare, and a
+/// value outside the table falls through unchanged.
 ///
 /// # Examples
 ///
 /// ```
 /// use oxidex::core::value_formatter::format_iptc_urgency;
 ///
+/// assert_eq!(format_iptc_urgency("0"), "0 (reserved)");
 /// assert_eq!(format_iptc_urgency("1"), "1 (most urgent)");
-/// assert_eq!(format_iptc_urgency("5"), "5 (normal)");
+/// assert_eq!(format_iptc_urgency("5"), "5 (normal urgency)");
 /// assert_eq!(format_iptc_urgency("8"), "8 (least urgent)");
+/// assert_eq!(format_iptc_urgency("9"), "9 (user-defined priority)");
 /// assert_eq!(format_iptc_urgency("3"), "3");
 /// assert_eq!(format_iptc_urgency("invalid"), "invalid"); // Preserves invalid input
 /// ```
 pub fn format_iptc_urgency(raw: &str) -> String {
     match raw.trim() {
+        "0" => "0 (reserved)".to_string(),
         "1" => "1 (most urgent)".to_string(),
-        "5" => "5 (normal)".to_string(),
+        "5" => "5 (normal urgency)".to_string(),
         "8" => "8 (least urgent)".to_string(),
+        "9" => "9 (user-defined priority)".to_string(),
         _ => raw.to_string(),
     }
 }
@@ -152,7 +158,13 @@ pub fn format_iptc_urgency(raw: &str) -> String {
 ///
 /// assert_eq!(format_iptc_coded_charset(&[0x1B, 0x25, 0x47]), "UTF8");
 /// assert_eq!(format_iptc_coded_charset(&[0x1B, 0x2E, 0x41]), "ISO-8859-1");
-/// assert_eq!(format_iptc_coded_charset(b"other"), "other");
+/// assert_eq!(format_iptc_coded_charset(b"other"), "o t h e r");
+/// // Unrecognised escape sequences are spelled out the way ExifTool's
+/// // PrintCodedCharset does (IPTC.pm:980-988).
+/// assert_eq!(
+///     format_iptc_coded_charset(&[0x1B, 0x28, 0x42, 0x1B, 0x26, 0x40]),
+///     "ESC ( B, ESC & @"
+/// );
 /// ```
 pub fn format_iptc_coded_charset(data: &[u8]) -> String {
     // ESC %G = UTF-8 (ISO 2022 escape sequence)
@@ -191,8 +203,25 @@ pub fn format_iptc_coded_charset(data: &[u8]) -> String {
     if data == [0x1B, 0x2E, 0x48] {
         return "ISO-8859-8".to_string();
     }
-    // Fallback: try to decode as string
-    String::from_utf8_lossy(data).trim().to_string()
+    // Fallback: ExifTool's PrintCodedCharset (IPTC.pm:980-988) spells the raw
+    // ISO 2022 sequence out rather than dropping it -- every byte gets a
+    // leading space, each ESC-introduced run becomes ", ESC", and the leading
+    // separator is trimmed. `1b 28 42 1b 26 40` therefore prints as
+    // "ESC ( B, ESC & @".
+    let mut spaced = String::with_capacity(data.len() * 2);
+    for &byte in data {
+        if byte == 0x1B {
+            spaced.push_str(", ESC");
+        } else {
+            spaced.push(' ');
+            spaced.push(byte as char);
+        }
+    }
+    spaced
+        .strip_prefix(", ")
+        .or_else(|| spaced.strip_prefix(' '))
+        .unwrap_or(&spaced)
+        .to_string()
 }
 
 /// Format IPTC record version from raw bytes.

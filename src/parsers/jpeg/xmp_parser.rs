@@ -33,11 +33,90 @@
 
 use crate::error::{ExifToolError, Result};
 use crate::parsers::jpeg::segment_parser::Segment;
-use crate::parsers::xmp::{parse_xmp, parse_xmp_history};
+use crate::parsers::xmp::parse_xmp_history;
+use crate::parsers::xmp::rdf_parser::{XmpValue, parse_xmp_typed};
 
 /// The XMP identifier string that appears at the start of XMP APP1 segments.
 /// This is a null-terminated string: "http://ns.adobe.com/xap/1.0/\0"
 const XMP_IDENTIFIER: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
+
+/// The ExtendedXMP identifier string that appears at the start of the APP1
+/// segments carrying an XMP packet too large for one 64 KB segment.
+///
+/// The XMP specification (part 3, "Extended XMP in JPEG") splits the overflow
+/// into any number of APP1 segments, each laid out as:
+///
+/// ```text
+/// "http://ns.adobe.com/xmp/extension/\0"   35 bytes  identifier
+/// <GUID>                                   32 bytes  ASCII MD5 of the full packet
+/// <full length>                             4 bytes  big-endian
+/// <chunk offset>                            4 bytes  big-endian
+/// <chunk>                                   rest of the segment
+/// ```
+///
+/// The main packet points at the right GUID through `xmpNote:HasExtendedXMP`,
+/// and the chunks reassemble by offset into one standalone XMP packet.
+const XMP_EXTENSION_IDENTIFIER: &[u8] = b"http://ns.adobe.com/xmp/extension/\0";
+
+/// Bytes of ExtendedXMP header that follow the identifier: GUID(32) + length(4)
+/// + offset(4).
+const XMP_EXTENSION_HEADER_LEN: usize = 32 + 4 + 4;
+
+/// Reassembles the ExtendedXMP chunks in `segments` into whole XMP packets,
+/// one per GUID, in the order the GUIDs are first seen.
+///
+/// A chunk whose declared offset or total length does not fit its own bytes is
+/// dropped rather than trusted: the offsets index into a buffer sized from the
+/// segment's own claim, so an inconsistent pair would otherwise be a way for a
+/// malformed file to steer a write.
+fn assemble_extended_xmp(segments: &[Segment]) -> Vec<Vec<u8>> {
+    // (guid, total_len, assembled bytes, byte-filled count) in first-seen order.
+    let mut packets: Vec<([u8; 32], usize, Vec<u8>, usize)> = Vec::new();
+
+    for segment in segments {
+        if !segment.is_app1() || !segment.data.starts_with(XMP_EXTENSION_IDENTIFIER) {
+            continue;
+        }
+        let body = &segment.data[XMP_EXTENSION_IDENTIFIER.len()..];
+        if body.len() <= XMP_EXTENSION_HEADER_LEN {
+            continue;
+        }
+        let mut guid = [0u8; 32];
+        guid.copy_from_slice(&body[..32]);
+        let total = u32::from_be_bytes([body[32], body[33], body[34], body[35]]) as usize;
+        let offset = u32::from_be_bytes([body[36], body[37], body[38], body[39]]) as usize;
+        let chunk = &body[XMP_EXTENSION_HEADER_LEN..];
+
+        // Reject a chunk that does not fit inside the packet it claims to
+        // belong to, and refuse absurd totals outright.
+        const MAX_EXTENDED_XMP: usize = 128 * 1024 * 1024;
+        if total == 0 || total > MAX_EXTENDED_XMP || offset > total || chunk.len() > total - offset
+        {
+            continue;
+        }
+
+        let slot = match packets.iter_mut().find(|(g, _, _, _)| *g == guid) {
+            Some(slot) => slot,
+            None => {
+                packets.push((guid, total, vec![0u8; total], 0));
+                packets
+                    .last_mut()
+                    .expect("just pushed a packet slot, so last_mut cannot be None")
+            }
+        };
+        if slot.1 != total {
+            continue; // conflicting length claims for the same GUID
+        }
+        slot.2[offset..offset + chunk.len()].copy_from_slice(chunk);
+        slot.3 += chunk.len();
+    }
+
+    packets
+        .into_iter()
+        .filter(|(_, total, _, filled)| filled >= total)
+        .map(|(_, _, buf, _)| buf)
+        .collect()
+}
 
 /// Extracts XMP metadata from JPEG segments.
 ///
@@ -126,7 +205,7 @@ fn xmp_payload_to_utf8(payload: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-pub fn extract_xmp_from_segments(segments: &[Segment]) -> Result<Vec<(String, String)>> {
+pub fn extract_xmp_from_segments(segments: &[Segment]) -> Result<Vec<(String, XmpValue)>> {
     let mut all_xmp_tags = Vec::new();
 
     // Iterate through all segments looking for XMP APP1 segments
@@ -149,7 +228,7 @@ pub fn extract_xmp_from_segments(segments: &[Segment]) -> Result<Vec<(String, St
         let xml_payload: &[u8] = converted.as_deref().unwrap_or(raw_payload);
 
         // Parse the XMP XML data for standard properties
-        let xmp_tags = parse_xmp(xml_payload).map_err(|e| {
+        let xmp_tags = parse_xmp_typed(xml_payload).map_err(|e| {
             ExifToolError::parse_error(format!("Failed to parse XMP segment: {}", e))
         })?;
 
@@ -158,7 +237,31 @@ pub fn extract_xmp_from_segments(segments: &[Segment]) -> Result<Vec<(String, St
         // Parse XMP history for forensic metadata
         let xml_str = std::str::from_utf8(xml_payload).unwrap_or("");
         if let Ok(history_tags) = parse_xmp_history(xml_str) {
-            all_xmp_tags.extend(history_tags);
+            all_xmp_tags.extend(
+                history_tags
+                    .into_iter()
+                    .map(|(tag, value)| (tag, XmpValue::Scalar(value))),
+            );
+        }
+    }
+
+    // ExtendedXMP: everything the writer could not fit in the 64 KB main
+    // packet. Google's depth-map Device/Container structures and Adobe's
+    // pdf:Producer/xmp:CreationDate on ExtendedXMP.jpg live here and nowhere
+    // else, so skipping these segments loses every tag they carry.
+    for packet in assemble_extended_xmp(segments) {
+        let converted = xmp_payload_to_utf8(&packet);
+        let xml_payload: &[u8] = converted.as_deref().unwrap_or(&packet);
+        if let Ok(xmp_tags) = parse_xmp_typed(xml_payload) {
+            all_xmp_tags.extend(xmp_tags);
+        }
+        let xml_str = std::str::from_utf8(xml_payload).unwrap_or("");
+        if let Ok(history_tags) = parse_xmp_history(xml_str) {
+            all_xmp_tags.extend(
+                history_tags
+                    .into_iter()
+                    .map(|(tag, value)| (tag, XmpValue::Scalar(value))),
+            );
         }
     }
 

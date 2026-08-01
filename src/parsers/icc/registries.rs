@@ -38,6 +38,21 @@ pub enum TagType {
     Measurement,
     /// 4-byte signature
     Signature,
+    /// s15Fixed16Array (`sf32`) - a run of signed 15.16 fixed-point values
+    S15Fixed16Array,
+    /// Payload ExifTool has no formatter for, reported as binary data
+    Binary,
+}
+
+impl TagType {
+    /// Whether ExifTool parses this tag through a `SubDirectory` table.
+    ///
+    /// `ProcessICC_Profile` gates its multiLocalizedUnicode shortcut on
+    /// `not $subdir`, so subdirectory tags keep their structured decoder even
+    /// when a profile writes an unexpected payload type.
+    pub fn is_subdirectory(self) -> bool {
+        matches!(self, TagType::ViewingConditions | TagType::Measurement)
+    }
 }
 
 /// Registry entry for an ICC tag
@@ -104,6 +119,14 @@ pub static TAG_REGISTRY: &[TagDef] = &[
         name: "ViewingCondDesc",
         tag_type: TagType::TextDescription,
     },
+    // ColorSync's localized description (ICC_Profile.pm: `dscm`). Always a
+    // multiLocalizedUnicode payload in practice, which `decode_tag` routes to
+    // the per-language decoder before this type is consulted.
+    TagDef {
+        signature: "dscm",
+        name: "ProfileDescriptionML",
+        tag_type: TagType::TextDescription,
+    },
     // XYZ coordinate tags
     TagDef {
         signature: "wtpt",
@@ -150,6 +173,31 @@ pub static TAG_REGISTRY: &[TagDef] = &[
         signature: "bTRC",
         name: "BlueToneReproductionCurve",
         tag_type: TagType::Curve,
+    },
+    // ExifTool names this one `GrayTRC` outright (the long form is only its
+    // Description), so it is emitted under that name directly rather than
+    // through the `*ToneReproductionCurve` aliases the other three carry.
+    TagDef {
+        signature: "kTRC",
+        name: "GrayTRC",
+        tag_type: TagType::Curve,
+    },
+    // Fixed-point array tags
+    TagDef {
+        signature: "chad",
+        name: "ChromaticAdaptation",
+        tag_type: TagType::S15Fixed16Array,
+    },
+    // ColorSync custom tags with payload types ExifTool has no formatter for
+    TagDef {
+        signature: "vcgt",
+        name: "VideoCardGamma",
+        tag_type: TagType::Binary,
+    },
+    TagDef {
+        signature: "ndin",
+        name: "NativeDisplayInfo",
+        tag_type: TagType::Binary,
     },
     // Structured data tags
     TagDef {

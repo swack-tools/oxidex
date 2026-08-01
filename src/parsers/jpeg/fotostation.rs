@@ -15,17 +15,24 @@
 //! size and the tag id are all validated, so unrelated trailing data is not
 //! mistaken for a record.
 //!
-//! Only the SoftEdit record (tag 0x02) produces tags here: tag 0x01 is IPTC,
-//! which the IPTC parser owns, and tags 0x03/0x04 are preview images.
+//! Two records produce tags here: SoftEdit (tag 0x02) and IPTC (tag 0x01),
+//! whose payload is a plain IPTC IIM block that `%FotoStation::Main` routes to
+//! `IPTC::Main`. Tags 0x03/0x04 are preview images.
 
+use crate::core::tag_conversion::parse_string_to_tag_value;
 use crate::core::{MetadataMap, TagValue};
 use crate::parsers::jpeg::app_segments::perl_number;
+use crate::parsers::jpeg::iptc_parser::extract_iptc_from_block;
 
 /// Constant that ends every FotoStation record footer.
 const FOTOSTATION_SIGNATURE: [u8; 4] = [0xa1, 0xb2, 0xc3, 0xd4];
 
 /// Bytes in a record footer: int16u tag, int32u size, int32u signature.
 const FOOTER_LENGTH: usize = 10;
+
+/// `FotoStation::Main` tag id for the IPTC record, a SubDirectory pointing at
+/// `Image::ExifTool::IPTC::Main`.
+const TAG_IPTC: u16 = 0x01;
 
 /// `FotoStation::Main` tag id for the SoftEdit (soft crop) record.
 const TAG_SOFT_EDIT: u16 = 0x02;
@@ -42,8 +49,9 @@ const MAX_TAG: u16 = 0x04;
 ///
 /// # Returns
 ///
-/// A metadata map keyed `FotoStation:<Name>`; empty when the file carries no
-/// FotoStation trailer.
+/// A metadata map keyed `FotoStation:<Name>` plus any `IPTC:<Name>` the
+/// trailer's IPTC record carries; empty when the file carries no FotoStation
+/// trailer.
 pub fn parse_fotostation_trailer(file: &[u8]) -> MetadataMap {
     let mut metadata = MetadataMap::new();
     let Some(mut end) = find_outermost_footer_end(file) else {
@@ -52,8 +60,17 @@ pub fn parse_fotostation_trailer(file: &[u8]) -> MetadataMap {
 
     // Walk the chain backwards; each record's start is the next footer's end.
     while let Some((tag, start)) = read_footer(file, end) {
-        if tag == TAG_SOFT_EDIT {
-            parse_soft_edit(&file[start..end - FOOTER_LENGTH], &mut metadata);
+        let record = &file[start..end - FOOTER_LENGTH];
+        match tag {
+            TAG_SOFT_EDIT => parse_soft_edit(record, &mut metadata),
+            // FotoStation.jpg keeps its whole IPTC block here rather than in an
+            // APP13 resource, so without this the file reports no IPTC at all.
+            TAG_IPTC => {
+                for (name, value) in extract_iptc_from_block(record) {
+                    metadata.insert(name, parse_string_to_tag_value(&value));
+                }
+            }
+            _ => {}
         }
         end = start;
     }

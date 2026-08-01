@@ -91,21 +91,102 @@ use quick_xml::events::{BytesStart, Event};
 /// assert_eq!(result[0], ("XMP:Creator".to_string(), "John Doe".to_string()));
 /// ```
 pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
+    Ok(parse_xmp_typed(xml_bytes)?
+        .into_iter()
+        .map(|(tag, value)| (tag, value.into_joined()))
+        .collect())
+}
+
+/// One XMP property value: a scalar, or a List whose elements ExifTool reports
+/// individually rather than as one joined string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum XmpValue {
+    /// A single value.
+    Scalar(String),
+    /// An `rdf:Bag`/`Seq` with more than one entry, or a struct field repeated
+    /// across the entries of one.
+    List(Vec<String>),
+}
+
+impl XmpValue {
+    /// The value as one string, joining a List the way ExifTool's plain text
+    /// output joins one.
+    pub fn into_joined(self) -> String {
+        match self {
+            XmpValue::Scalar(value) => value,
+            XmpValue::List(values) => values.join(", "),
+        }
+    }
+}
+
+impl std::fmt::Display for XmpValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            XmpValue::Scalar(value) => f.write_str(value),
+            XmpValue::List(values) => f.write_str(&values.join(", ")),
+        }
+    }
+}
+
+impl PartialEq<str> for XmpValue {
+    fn eq(&self, other: &str) -> bool {
+        match self {
+            XmpValue::Scalar(value) => value == other,
+            XmpValue::List(values) => values.join(", ") == other,
+        }
+    }
+}
+
+impl PartialEq<&str> for XmpValue {
+    fn eq(&self, other: &&str) -> bool {
+        self == *other
+    }
+}
+
+/// Parses an XMP packet, keeping List-valued properties as lists.
+///
+/// [`parse_xmp`] joins them, which is right for a text dump but wrong for
+/// structured output: `exiftool -json` reports `dc:subject` as
+/// `["ExifTool","Test","XMP"]`, and a caller that stores one joined string can
+/// never reproduce that. Callers that build a `TagValue` should use this.
+pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
     let mut reader = Reader::from_reader(xml_bytes);
     reader.config_mut().trim_text(true); // Trim whitespace from text nodes
 
     let mut resolver = NamespaceResolver::new();
-    let mut results = Vec::new();
+    let mut results: Vec<(String, String)> = Vec::new();
+    // Tags whose value came from a multi-entry Bag/Seq, with their elements
+    // kept apart. Recorded beside `results` rather than replacing it so that
+    // every focused pass below keeps working on plain strings.
+    let mut list_elements: Vec<(String, Vec<String>)> = Vec::new();
     let mut buf = Vec::new();
 
-    // State tracking
-    let mut inside_description = false;
+    // State tracking. `description_depth` is a COUNT, not a flag: RDF allows a
+    // struct to be written as a nested `rdf:Description` (XMP3.xmp writes
+    // `ph:supervisor` that way), and with a bool the inner element's `</...>`
+    // cleared the flag for the rest of the OUTER Description -- silently
+    // dropping every property written after it. On XMP3.xmp that was
+    // CountryCode, Scene and both pdfx custom properties.
+    let mut description_depth = 0usize;
     let mut current_property: Option<String> = None;
     let mut current_value = String::new();
     let mut depth = 0;
     let mut property_depth = 0;
     let mut inside_collection = false; // Are we in a Bag/Seq/Alt?
     let mut collection_values: Vec<String> = Vec::new(); // Collect rdf:li values
+    // `xml:lang` of each collected `rdf:li`, parallel to `collection_values`.
+    // A lang-alt is not one comma-joined value: ExifTool reports the
+    // x-default entry under the plain tag name and every other language under
+    // `Tag-<lang>` (XMP.pm, GetLangInfo), so joining them lost both.
+    let mut collection_langs: Vec<Option<String>> = Vec::new();
+    let mut pending_lang: Option<String> = None;
+    // Whether the current property is a STRUCTURE rather than a value: it has
+    // sub-property elements, a nested rdf:Description, or RDF shorthand
+    // attributes. ExifTool reports only the flattened fields of one, never the
+    // container -- reporting it produced tags like
+    // `XMP:Regions = "32642448pixel-1179414036..."`, every field's text run
+    // together, which no ExifTool output ever contains.
+    let mut property_is_struct = false;
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -123,17 +204,22 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
                 }
                 // Check if this is an rdf:Description element
                 else if is_rdf_description(&tag_name, &resolver) {
-                    inside_description = true;
+                    description_depth += 1;
+                    if current_property.is_some() {
+                        property_is_struct = true;
+                    }
                     // Extract rdf:about and property attributes from Description
                     extract_description_attributes(&e, &resolver, &mut results)?;
-                } else if inside_description && current_property.is_none() {
+                } else if description_depth > 0 && current_property.is_none() {
                     // This is a property element inside rdf:Description
                     // Check if it's a complex structure we should skip
                     if is_simple_property(&tag_name, &resolver) {
                         current_property = Some(tag_name.to_string());
                         current_value.clear();
                         collection_values.clear();
+                        collection_langs.clear();
                         inside_collection = false;
+                        property_is_struct = has_shorthand_fields(&e);
                         property_depth = depth;
                     }
                 } else if current_property.is_some() {
@@ -141,6 +227,11 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
                     if is_collection_container(&tag_name, &resolver) {
                         inside_collection = true;
                         collection_values.clear();
+                        collection_langs.clear();
+                    } else if inside_collection && is_rdf_li(&tag_name, &resolver) {
+                        pending_lang = xml_lang_attribute(&e);
+                    } else if !is_rdf_namespace(&tag_name, &resolver) {
+                        property_is_struct = true;
                     }
                 }
             }
@@ -149,12 +240,14 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
                 let tag_name = extract_tag_name_from_bytes(e.name().as_ref())?;
 
                 if is_rdf_description(&tag_name, &resolver) {
-                    inside_description = false;
+                    description_depth = description_depth.saturating_sub(1);
                 } else if is_rdf_li(&tag_name, &resolver) && inside_collection {
                     // End of rdf:li - save the collected value
                     if !current_value.trim().is_empty() {
                         collection_values.push(current_value.trim().to_string());
+                        collection_langs.push(pending_lang.take());
                     }
+                    pending_lang = None;
                     current_value.clear();
                 } else if is_collection_container(&tag_name, &resolver) {
                     inside_collection = false;
@@ -164,16 +257,54 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
                     // End of current property - extract tag name and value
                     let prefixed_name = format_tag_name(prop, &resolver);
 
-                    if !collection_values.is_empty() {
-                        // Output collection as comma-separated list
-                        results.push((prefixed_name, collection_values.join(", ")));
+                    if property_is_struct {
+                        // Reported only through its flattened fields.
+                    } else if !collection_values.is_empty() {
+                        if collection_langs.iter().any(Option::is_some) {
+                            // lang-alt: one tag per language, x-default (or the
+                            // first entry) keeping the plain name.
+                            let default_index = collection_langs
+                                .iter()
+                                .position(|l| l.as_deref() == Some("x-default"))
+                                .unwrap_or(0);
+                            for (index, value) in collection_values.iter().enumerate() {
+                                let tag = match collection_langs.get(index).and_then(Clone::clone) {
+                                    Some(lang) if index != default_index => {
+                                        format!("{prefixed_name}-{lang}")
+                                    }
+                                    _ if index == default_index => prefixed_name.clone(),
+                                    None => continue,
+                                    _ => continue,
+                                };
+                                if !results.iter().any(|(t, _)| *t == tag) {
+                                    results.push((tag, value.clone()));
+                                }
+                            }
+                        } else {
+                            // Output collection as comma-separated list
+                            if collection_values.len() > 1 {
+                                list_elements
+                                    .push((prefixed_name.clone(), collection_values.clone()));
+                            }
+                            results.push((prefixed_name, collection_values.join(", ")));
+                        }
                     } else if !current_value.trim().is_empty() {
                         results.push((prefixed_name, current_value.trim().to_string()));
+                    } else {
+                        // An empty property -- `<x:Tag></x:Tag>`, or one whose
+                        // only content is an empty Bag/Seq/Alt. ExifTool
+                        // reports it with an empty value (XMP.pm's ParseXMPElement
+                        // calls FoundXMP whenever `length $val or not $shorthand`),
+                        // so dropping it loses the tag outright.
+                        results.push((prefixed_name, String::new()));
                     }
                     current_property = None;
                     current_value.clear();
                     collection_values.clear();
+                    collection_langs.clear();
+                    pending_lang = None;
                     inside_collection = false;
+                    property_is_struct = false;
                 }
                 depth -= 1;
             }
@@ -336,16 +467,49 @@ pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
         }
     }
 
-    // Post-process results to apply formatting for specific tags
-    let results = results
-        .into_iter()
-        .map(|(tag, value)| {
-            let formatted = format_xmp_value(&tag, &value);
-            (tag, formatted)
-        })
-        .collect();
+    // Everything else: the generic walk of the RDF property path that mirrors
+    // XMP.pm's GetXMPTagID. Appended last so every focused pass above, each of
+    // which knows its own schema's FlatName overrides and value formatting,
+    // keeps precedence over this one's plain concatenation.
+    let flattened = super::struct_flatten::extract_flattened_struct_fields(xml_bytes)?;
+    for (tag, values) in flattened {
+        if results.iter().any(|(t, _)| *t == tag) {
+            continue;
+        }
+        if values.len() > 1 {
+            list_elements.push((tag.clone(), values.clone()));
+        }
+        results.push((tag, values.join(", ")));
+    }
 
-    Ok(results)
+    // RDF blank nodes (`rdf:nodeID`), which no tree walk can resolve on its own
+    // because the fields of one node are spread across several places in the
+    // document.
+    let blank_nodes = super::struct_flatten::extract_blank_node_fields(xml_bytes)?;
+    for (tag, value) in blank_nodes {
+        results.retain(|(existing, _)| *existing != tag);
+        results.push((tag, value));
+    }
+
+    // Post-process results to apply formatting for specific tags
+    Ok(results
+        .into_iter()
+        .map(
+            |(tag, value)| match list_elements.iter().find(|(t, _)| *t == tag) {
+                Some((_, elements)) => {
+                    let formatted = elements
+                        .iter()
+                        .map(|element| format_xmp_value(&tag, element))
+                        .collect();
+                    (tag, XmpValue::List(formatted))
+                }
+                None => {
+                    let formatted = format_xmp_value(&tag, &value);
+                    (tag, XmpValue::Scalar(formatted))
+                }
+            },
+        )
+        .collect())
 }
 
 /// Extracts flattened fields from the IPTC Extension AboutCvTerm structured bag.
@@ -1964,6 +2128,17 @@ const FLAT_NAME_SUPPRESSED: &[&str] = &[
 ];
 
 /// Reports whether a structure property's name is dropped from flattened IDs.
+/// Whether `element` carries RDF shorthand attributes -- namespaced attributes
+/// that are structure fields rather than XML bookkeeping.
+fn has_shorthand_fields(element: &BytesStart) -> bool {
+    element.attributes().flatten().any(|attr| {
+        std::str::from_utf8(attr.key.as_ref())
+            .ok()
+            .and_then(|key| key.split_once(':'))
+            .is_some_and(|(prefix, _)| !matches!(prefix, "rdf" | "xml" | "xmlns" | "x"))
+    })
+}
+
 fn is_flat_name_suppressed(local_name: &str) -> bool {
     FLAT_NAME_SUPPRESSED.contains(&local_name)
 }
@@ -2276,11 +2451,6 @@ fn extract_description_attributes(
             ExifToolError::parse_error(format!("Invalid UTF-8 in attribute value: {}", e))
         })?;
 
-        // Skip empty values
-        if value.trim().is_empty() {
-            continue;
-        }
-
         // Skip namespace declarations (xmlns:xxx)
         if key.starts_with("xmlns") {
             continue;
@@ -2295,7 +2465,11 @@ fn extract_description_attributes(
         // combined-samples/Photoshop.psd contains -- is the same property as
         // `rdf:about` and must produce the same About tag.
         if key == "rdf:about" || key == "about" {
-            results.push(("XMP:About".to_string(), value.trim().to_string()));
+            // An empty rdf:about is the "no subject URI" default every writer
+            // emits; ExifTool reports no About tag for it.
+            if !value.trim().is_empty() {
+                results.push(("XMP:About".to_string(), value.trim().to_string()));
+            }
             continue;
         }
 
@@ -2305,7 +2479,9 @@ fn extract_description_attributes(
         }
 
         // Handle XMP property shorthand (properties as attributes)
-        // These are namespace-prefixed attributes like xmp:Rating="5"
+        // These are namespace-prefixed attributes like xmp:Rating="5".
+        // An EMPTY one is still a property ExifTool reports (with an empty
+        // value) -- GCamera:GFileMetadata="" on GooglePixel10.jpg.
         if key.contains(':') {
             let prefixed_name = format_tag_name(key, resolver);
             results.push((prefixed_name, value.trim().to_string()));
@@ -2429,6 +2605,72 @@ const PROPERTY_RENAMES: &[(&str, &str, &str)] = &[
     ("XMP-exif", "PixelYDimension", "ExifImageHeight"),
     // XMP.pm:2096 -- `ExposureBiasValue => { Name => 'ExposureCompensation' }`.
     ("XMP-exif", "ExposureBiasValue", "ExposureCompensation"),
+    // XMP.pm:2068 -- `ISOSpeedRatings => { Name => 'ISO' }` (the property is
+    // deprecated in the XMP spec, but every camera that writes exif: XMP at
+    // all still writes this spelling).
+    ("XMP-exif", "ISOSpeedRatings", "ISO"),
+    // XMP.pm:2247 -- `FocalLengthIn35mmFilm => { Name => 'FocalLengthIn35mmFormat' }`.
+    (
+        "XMP-exif",
+        "FocalLengthIn35mmFilm",
+        "FocalLengthIn35mmFormat",
+    ),
+    // XMP.pm:2350 -- exif:GPSTimeStamp is a full date/time in XMP (unlike the
+    // time-only EXIF tag of the same name), so ExifTool renames it to keep the
+    // two from being copied into each other.
+    ("XMP-exif", "GPSTimeStamp", "GPSDateTime"),
+];
+
+/// Properties renamed by ExifTool in schemas that oxidex files under the plain
+/// `XMP` family, so [`PROPERTY_RENAMES`]'s family key cannot tell them apart.
+/// Keyed on the namespace URI instead.
+const NAMESPACE_PROPERTY_RENAMES: &[(&str, &str, &str)] = &[
+    // XMP.pm:1460 -- `Temperature => { Name => 'ColorTemperature' }`.
+    (
+        "http://ns.adobe.com/camera-raw-settings/1.0/",
+        "Temperature",
+        "ColorTemperature",
+    ),
+    // Microsoft.pm:248 -- MicrosoftPhoto's own Rating is a percentage, not the
+    // 0-5 star xmp:Rating, so ExifTool reports it under a distinct name.
+    (
+        "http://ns.microsoft.com/photo/1.0",
+        "Rating",
+        "RatingPercent",
+    ),
+    // Google.pm:117-122
+    (
+        "http://ns.google.com/photos/1.0/image/",
+        "Data",
+        "ImageData",
+    ),
+    (
+        "http://ns.google.com/photos/1.0/image/",
+        "Mime",
+        "ImageMimeType",
+    ),
+    // Google.pm:229
+    (
+        "http://ns.google.com/photos/1.0/depthmap/",
+        "Data",
+        "DepthImage",
+    ),
+    // Google.pm, %Image::ExifTool::Google::GCamera
+    (
+        "http://ns.google.com/photos/1.0/camera/",
+        "hdrp_makernote",
+        "HDRPMakerNote",
+    ),
+    (
+        "http://ns.google.com/photos/1.0/camera/",
+        "HdrPlusMakernote",
+        "HDRPlusMakerNote",
+    ),
+    (
+        "http://ns.google.com/photos/1.0/camera/",
+        "shot_log_data",
+        "ShotLogData",
+    ),
 ];
 
 /// Applies [`PROPERTY_RENAMES`], leaving anything unlisted untouched.
@@ -2438,6 +2680,48 @@ fn exiftool_property_name<'a>(family: &str, local: &'a str) -> &'a str {
         .find(|(f, l, _)| *f == family && *l == local)
         // The replacement is a 'static str, which outlives 'a.
         .map_or(local, |(_, _, renamed)| *renamed)
+}
+
+/// Applies [`NAMESPACE_PROPERTY_RENAMES`], keyed on the property's namespace
+/// URI. `local` is the raw local name, before the leading letter is capitalized
+/// -- Google writes `hdrp_makernote` and `shot_log_data` in lower case.
+fn exiftool_property_name_for_uri<'a>(uri: &str, local: &'a str) -> &'a str {
+    NAMESPACE_PROPERTY_RENAMES
+        .iter()
+        .find(|(u, l, _)| *u == uri && *l == local)
+        .map_or(local, |(_, _, renamed)| *renamed)
+}
+
+/// XMP properties ExifTool decodes from base64 before printing. Both are
+/// flagged `Binary => 1` on top of a `ValueConv => DecodeBase64`, so the
+/// reported length is the DECODED byte count (Google.pm, GImage/GDepth).
+const BASE64_DECODED_BINARY_TAGS: [&str; 2] = ["XMP:ImageData", "XMP:DepthImage"];
+
+/// XMP properties flagged `Binary => 1` with NO ValueConv: the value stays the
+/// base64 text and ExifTool prints the length of that text, not of the bytes it
+/// encodes. GooglePixel6a.jpg's `GCamera:hdrp_makernote` is 79648 characters
+/// long and ExifTool reports 79648 bytes, where the decoded payload is 59734.
+const RAW_BINARY_TAGS: [&str; 3] = [
+    "XMP:HDRPMakerNote",
+    "XMP:HDRPlusMakerNote",
+    "XMP:ShotLogData",
+];
+
+/// Renders a base64 XMP property the way ExifTool renders a binary tag.
+///
+/// Returns `None` when the payload is not valid base64, in which case the raw
+/// value is kept rather than a fabricated byte count reported.
+fn base64_binary_placeholder(value: &str) -> Option<String> {
+    use base64::Engine;
+    let compact: String = value.chars().filter(|c| !c.is_whitespace()).collect();
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(&compact)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(&compact))
+        .ok()?;
+    Some(format!(
+        "(Binary data {} bytes, use -b option to extract)",
+        decoded.len()
+    ))
 }
 
 /// Formats a tag name to match ExifTool's XMP output conventions.
@@ -2464,13 +2748,24 @@ fn format_tag_name(qname: &str, resolver: &NamespaceResolver) -> String {
     // Extract namespace prefix from the qualified name
     if let Some(prefix) = NamespaceResolver::extract_prefix(qname) {
         // Resolve the namespace URI from the prefix
-        let family_prefix = if let Some(namespace_uri) = resolver.resolve_prefix(prefix) {
+        let namespace_uri = resolver.resolve_prefix(prefix);
+        let family_prefix = if let Some(namespace_uri) = namespace_uri {
             // Use namespace mapping to get ExifTool family prefix
             namespace_to_family(namespace_uri).unwrap_or("XMP")
         } else {
             // Unknown namespace - use generic XMP prefix
             "XMP"
         };
+
+        // Schemas oxidex files under the plain XMP family need the rename
+        // applied on the raw local name, before capitalization: Google writes
+        // `hdrp_makernote`, not `Hdrp_makernote`.
+        if let Some(uri) = namespace_uri {
+            let renamed = exiftool_property_name_for_uri(uri, &local_name);
+            if renamed != local_name {
+                return format!("{}:{}", family_prefix, renamed);
+            }
+        }
 
         // XMP.pm reports exif:PixelYDimension as ExifImageHeight in the
         // generic XMP family rather than under XMP-exif (XMP.xmp).
@@ -2529,6 +2824,19 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
     // Extract local tag name (after colon)
     let local_name = tag.split(':').last().unwrap_or(tag);
 
+    // Binary properties print as a byte count, not the payload.
+    if RAW_BINARY_TAGS.contains(&tag) {
+        return format!(
+            "(Binary data {} bytes, use -b option to extract)",
+            value.len()
+        );
+    }
+    if BASE64_DECODED_BINARY_TAGS.contains(&tag)
+        && let Some(placeholder) = base64_binary_placeholder(value)
+    {
+        return placeholder;
+    }
+
     // PLUS controlled-vocabulary properties are URIs until both of `%plusVocab`'s
     // conversions have run; see `plus_vocab`.
     if let Some(converted) = super::plus_vocab::convert(local_name, value) {
@@ -2548,13 +2856,26 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         "MeteringMode" => decode_xmp_metering_mode(value),
         "Orientation" => decode_xmp_orientation(value),
         "SceneCaptureType" => decode_xmp_scene_capture_type(value),
+        // Enum properties the XMP schema stores as bare integers, which share
+        // the EXIF tag of the same name. Decoding them here rather than
+        // leaving the number is what ExifTool does (the XMP-exif table inherits
+        // the EXIF PrintConv), and is required now that XMP scalars keep their
+        // text form instead of being re-parsed as numbers downstream.
+        "ExposureProgram" => decode_via_tiff_enum(0x8822, value),
+        "GainControl" => decode_via_tiff_enum(0xA407, value),
+        "LightSource" => decode_via_tiff_enum(0x9208, value),
+        "SceneType" => decode_via_tiff_enum(0xA301, value),
+        "SubjectDistanceRange" => decode_via_tiff_enum(0xA40C, value),
         "SensingMethod" => decode_xmp_sensing_method(value),
         "WhiteBalance" => decode_xmp_white_balance(value),
         "YCbCrPositioning" => decode_xmp_ycbcr_positioning(value),
         "ColorMode" => decode_xmp_color_mode(value),
         "PhotometricInterpretation" => decode_xmp_photometric_interpretation(value),
-        "FlashMode" => decode_xmp_flash_mode(value),
-        "FlashReturn" => decode_xmp_flash_return(value),
+        // The exif:Flash struct keeps its PrintConvs wherever it is nested:
+        // inside mwg-rs Extensions the flattened name is
+        // RegionExtensionsFlashMode, not FlashMode (XMP5.xmp).
+        name if name.ends_with("FlashMode") => decode_xmp_flash_mode(value),
+        name if name.ends_with("FlashReturn") => decode_xmp_flash_return(value),
 
         // Camera Raw Settings - numeric parameters
         "ProcessingParameters" => format_camera_raw_parameters(value),
@@ -2600,6 +2921,17 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
 /// 2 => 'Off',
 /// 3 => 'Auto',
 /// ```
+/// Decodes an XMP property that shares an EXIF tag's PrintConv, keeping the
+/// original text when the value is not one of the numbers that table names.
+fn decode_via_tiff_enum(tag_id: u16, value: &str) -> String {
+    value
+        .trim()
+        .parse::<i64>()
+        .ok()
+        .and_then(|n| crate::parsers::tiff::tiff_enums::tiff_enum_to_string(tag_id, n))
+        .unwrap_or_else(|| value.to_string())
+}
+
 fn decode_xmp_flash_mode(value: &str) -> String {
     match value.trim() {
         "0" => "Unknown".to_string(),

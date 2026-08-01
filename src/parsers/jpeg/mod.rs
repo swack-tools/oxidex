@@ -7,6 +7,7 @@
 pub mod app_parsers;
 pub mod app_segments;
 pub mod exif_parser;
+pub mod flashpix;
 pub mod flir_parser;
 pub mod fotostation;
 pub mod icc_chunk_assembler;

@@ -3,7 +3,7 @@
 pub mod gz;
 pub mod iso;
 pub mod ole;
-mod ole_properties;
+pub(crate) mod ole_properties;
 pub mod rar;
 pub mod sevenz;
 pub mod tar;

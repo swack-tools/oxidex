@@ -10,7 +10,6 @@ use super::registries::{
 };
 use crate::core::TagValue;
 use crate::error::{ExifToolError, Result};
-use crate::io::EndianReader;
 use std::collections::HashMap;
 
 /// Parses ICC tags using the tag registry
@@ -53,37 +52,172 @@ pub fn parse_tags_registry(data: &[u8], metadata: &mut HashMap<String, TagValue>
 /// the appropriate decoder based on the tag type.
 fn decode_tag(signature: &str, data: &[u8], size: usize, metadata: &mut HashMap<String, TagValue>) {
     // Find tag in registry
-    let tag_def = TAG_REGISTRY.iter().find(|t| t.signature == signature);
+    let Some(def) = TAG_REGISTRY.iter().find(|t| t.signature == signature) else {
+        return;
+    };
 
-    if let Some(def) = tag_def {
-        // Decode based on tag type
-        let result = match def.tag_type {
-            TagType::TextDescription => parse_text_description_type(data)
-                .ok()
-                .map(TagValue::new_string),
-            TagType::Text => parse_text_type(data).ok().map(TagValue::new_string),
-            TagType::Xyz => parse_xyz_type(data)
-                .ok()
-                .map(|(x, y, z)| TagValue::new_string(format!("{} {} {}", x, y, z))),
-            TagType::Curve => Some(TagValue::new_string(format!(
-                "(Binary data {} bytes, use -b option to extract)",
-                size
-            ))),
-            TagType::ViewingConditions => parse_viewing_conditions(data)
-                .ok()
-                .and_then(|vc| decode_viewing_conditions(vc, metadata)),
-            TagType::Measurement => parse_measurement(data)
-                .ok()
-                .and_then(|m| decode_measurement(m, metadata)),
-            TagType::Signature => parse_signature_type(data).ok().map(|sig| {
-                let name = lookup_in_table(TECHNOLOGIES, &sig);
-                TagValue::new_string(name.to_string())
-            }),
+    // ExifTool checks the PAYLOAD type before the tag's own type: any
+    // non-subdirectory tag whose data starts with 'mluc' goes through the
+    // multiLocalizedUnicode branch of `ProcessICC_Profile`, which emits one
+    // entry per language record instead of a single value. That is how
+    // `desc`, `cprt` and `dscm` are read out of v4 / ColorSync profiles.
+    if !def.tag_type.is_subdirectory() && size > 4 && data.len() >= 4 && &data[0..4] == b"mluc" {
+        decode_multi_localized(def.name, data, size, metadata);
+        return;
+    }
+
+    // Decode based on tag type
+    let result = match def.tag_type {
+        TagType::TextDescription => parse_text_description_type(data)
+            .ok()
+            .map(TagValue::new_string),
+        TagType::Text => parse_text_type(data).ok().map(TagValue::new_string),
+        TagType::Xyz => parse_xyz_type(data)
+            .ok()
+            .map(|(x, y, z)| TagValue::new_string(format!("{} {} {}", x, y, z))),
+        TagType::Curve | TagType::Binary => Some(binary_placeholder(size)),
+        TagType::S15Fixed16Array => Some(
+            parse_s15fixed16_array(data)
+                .map(TagValue::new_string)
+                // FormatICCTag returns undef for a payload that is not really
+                // an 'sf32' array, and ExifTool then stores the raw bytes.
+                .unwrap_or_else(|_| binary_placeholder(size)),
+        ),
+        TagType::ViewingConditions => parse_viewing_conditions(data)
+            .ok()
+            .and_then(|vc| decode_viewing_conditions(vc, metadata)),
+        TagType::Measurement => parse_measurement(data)
+            .ok()
+            .and_then(|m| decode_measurement(m, metadata)),
+        TagType::Signature => parse_signature_type(data).ok().map(|sig| {
+            let name = lookup_in_table(TECHNOLOGIES, &sig);
+            TagValue::new_string(name.to_string())
+        }),
+    };
+
+    if let Some(value) = result {
+        metadata.insert(def.name.to_string(), value);
+    }
+}
+
+/// Renders ExifTool's placeholder for a payload it has no formatter for.
+///
+/// When `FormatICCTag` returns undef, `ProcessICC_Profile` stores the raw tag
+/// bytes and they print as `(Binary data N bytes, use -b option to extract)`,
+/// where N is the size the tag table declares - not the length of any decoded
+/// sub-structure.
+fn binary_placeholder(size: usize) -> TagValue {
+    TagValue::new_string(format!(
+        "(Binary data {} bytes, use -b option to extract)",
+        size
+    ))
+}
+
+/// Decodes an ICC multiLocalizedUnicodeType (`mluc`) payload into one metadata
+/// entry per language record.
+///
+/// Mirrors the `$fmt eq 'mluc'` branch of ExifTool's `ProcessICC_Profile`: a
+/// record whose language code is `en-US`, or is not a well-formed pair of
+/// two-letter codes at all, lands on the bare tag name; every other record gets
+/// a `-<lang>-<COUNTRY>` suffix. Records are applied in file order and a later
+/// one overwrites an earlier one on the same key, which is how ExifTool's
+/// duplicate-tag priority resolves two records that both map to the bare name.
+fn decode_multi_localized(
+    base_name: &str,
+    data: &[u8],
+    size: usize,
+    metadata: &mut HashMap<String, TagValue>,
+) {
+    // ExifTool: `next if $size < 28` - too small to hold a single record.
+    if size < 28 {
+        return;
+    }
+    let (Ok(count), Ok(record_len)) = (read_u32_be(data, 8), read_u32_be(data, 12)) else {
+        return;
+    };
+    // ExifTool: `next if $recLen < 12`.
+    if record_len < 12 {
+        return;
+    }
+    let record_len = record_len as usize;
+
+    for index in 0..count as usize {
+        // Record table starts 16 bytes into the payload.
+        let Some(record_pos) = index
+            .checked_mul(record_len)
+            .and_then(|offset| offset.checked_add(16))
+        else {
+            break;
         };
-
-        if let Some(value) = result {
-            metadata.insert(def.name.to_string(), value);
+        match record_pos.checked_add(record_len) {
+            Some(record_end) if record_end <= size && record_end <= data.len() => {}
+            _ => break,
         }
+
+        let (Ok(str_len), Ok(str_pos)) = (
+            read_u32_be(data, record_pos + 4),
+            read_u32_be(data, record_pos + 8),
+        ) else {
+            break;
+        };
+        // String offsets are relative to the start of the tag payload.
+        let (str_len, str_pos) = (str_len as usize, str_pos as usize);
+        let Some(str_end) = str_pos.checked_add(str_len) else {
+            break;
+        };
+        if str_end > size || str_end > data.len() {
+            break;
+        }
+
+        let name = match language_suffix(&data[record_pos..record_pos + 4]) {
+            Some(suffix) => format!("{}-{}", base_name, suffix),
+            None => base_name.to_string(),
+        };
+        metadata.insert(
+            name,
+            TagValue::new_string(decode_utf16_be(&data[str_pos..str_end])),
+        );
+    }
+}
+
+/// Builds ExifTool's language suffix from an `mluc` record's 4-byte code.
+///
+/// ExifTool applies `s/^([a-z]{2})([A-Z]{2})$/\L$1-\U$2/i` to the raw bytes, so
+/// the country code comes out of the file verbatim: ColorSync's misspelled
+/// `frFU` stays `fr-FU` and is not corrected to `fr-FR`. A code that is not four
+/// ASCII letters (Apple writes a bare `fr\0\0` in some profiles), or that
+/// normalizes to `en-US`, carries no suffix and lands on the bare tag name.
+fn language_suffix(code: &[u8]) -> Option<String> {
+    if code.len() != 4 || !code.iter().all(u8::is_ascii_alphabetic) {
+        return None;
+    }
+    let suffix = format!(
+        "{}-{}",
+        String::from_utf8_lossy(&code[0..2]).to_ascii_lowercase(),
+        String::from_utf8_lossy(&code[2..4]).to_ascii_uppercase()
+    );
+    if suffix == "en-US" {
+        None
+    } else {
+        Some(suffix)
+    }
+}
+
+/// Decodes big-endian UTF-16 the way ExifTool's `Decode($val, 'UTF16')` does.
+///
+/// ExifTool recomposes to UTF-8 through `Charset::Recompose`, which truncates at
+/// the first NUL (`$outVal =~ s/\0.*//s`). That is what drops the terminator
+/// ColorSync counts inside `strLen` on profiles such as Google's sRGB, where the
+/// record holds `"sRGB IEC61966-2.1\0"`.
+fn decode_utf16_be(bytes: &[u8]) -> String {
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+        .collect();
+    let text = String::from_utf16_lossy(&units);
+    match text.find('\0') {
+        Some(nul) => text[..nul].to_string(),
+        None => text,
     }
 }
 
@@ -173,44 +307,9 @@ fn parse_text_description_type(data: &[u8]) -> Result<String> {
                 .unwrap_or(text_bytes.len());
             return Ok(String::from_utf8_lossy(&text_bytes[..text_len]).to_string());
         }
-    } else if type_sig.trim() == "mluc" {
-        return parse_mluc_type(data);
     }
 
     Err(ExifToolError::parse_error("Invalid text description type"))
-}
-
-/// Parses ICC multiLocalizedUnicodeType (modern text format)
-fn parse_mluc_type(data: &[u8]) -> Result<String> {
-    if data.len() < 16 {
-        return Err(ExifToolError::parse_error("mluc type too small"));
-    }
-
-    let num_records = read_u32_be(data, 8)? as usize;
-    if num_records == 0 {
-        return Err(ExifToolError::parse_error("mluc has no records"));
-    }
-
-    if data.len() < 16 + 12 {
-        return Err(ExifToolError::parse_error("mluc record table too small"));
-    }
-
-    let str_length = read_u32_be(data, 16 + 8)? as usize;
-    let str_offset = read_u32_be(data, 16 + 12)? as usize;
-
-    if str_offset + str_length > data.len() {
-        return Err(ExifToolError::parse_error("mluc string out of bounds"));
-    }
-
-    let utf16_bytes = &data[str_offset..str_offset + str_length];
-    let reader = EndianReader::big_endian(utf16_bytes);
-    let u16_vec: Vec<u16> = (0..utf16_bytes.len())
-        .step_by(2)
-        .filter_map(|offset| reader.u16_at(offset))
-        .collect();
-
-    String::from_utf16(&u16_vec)
-        .map_err(|_| ExifToolError::parse_error("Invalid UTF-16 in mluc string"))
 }
 
 /// Parses ICC textType (simple text)
@@ -228,11 +327,32 @@ fn parse_text_type(data: &[u8]) -> Result<String> {
             .position(|&b| b == 0)
             .unwrap_or(text_bytes.len());
         return Ok(String::from_utf8_lossy(&text_bytes[..text_len]).to_string());
-    } else if type_sig.trim() == "mluc" {
-        return parse_mluc_type(data);
     }
 
     Err(ExifToolError::parse_error("Invalid text type"))
+}
+
+/// Parses ICC s15Fixed16ArrayType (`sf32`) into a space-separated value list.
+///
+/// ExifTool's `FormatICCTag` reads `($size - 8) / 4` `fixed32s` values and joins
+/// them with single spaces; the 5-decimal rounding ExifTool applies in
+/// `GetFixed32s` is done downstream by the ICC matrix-tag formatter, the same
+/// way `MediaWhitePoint` and the XYZ colorant tags are handled here.
+fn parse_s15fixed16_array(data: &[u8]) -> Result<String> {
+    if data.len() < 12 {
+        return Err(ExifToolError::parse_error("s15Fixed16Array too small"));
+    }
+    if read_signature(data, 0)? != "sf32" {
+        return Err(ExifToolError::parse_error("Not an s15Fixed16Array"));
+    }
+
+    let count = (data.len() - 8) / 4;
+    let mut values = Vec::with_capacity(count);
+    for index in 0..count {
+        values.push(read_s15fixed16(data, 8 + index * 4)?.to_string());
+    }
+
+    Ok(values.join(" "))
 }
 
 /// Parses ICC XYZType (XYZ color values)
@@ -341,4 +461,190 @@ fn parse_measurement(data: &[u8]) -> Result<HashMap<String, String>> {
     }
 
     Ok(result)
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a parseable ICC profile body: a zeroed 128-byte header, a tag
+    /// table, then the payloads laid out end to end.
+    fn build_profile(tags: &[(&str, Vec<u8>)]) -> Vec<u8> {
+        let mut profile = vec![0u8; 128];
+        profile.extend_from_slice(&(tags.len() as u32).to_be_bytes());
+
+        let mut offset = 132 + tags.len() * 12;
+        for (signature, payload) in tags {
+            profile.extend_from_slice(signature.as_bytes());
+            profile.extend_from_slice(&(offset as u32).to_be_bytes());
+            profile.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+            offset += payload.len();
+        }
+        for (_, payload) in tags {
+            profile.extend_from_slice(payload);
+        }
+        profile
+    }
+
+    /// Builds a multiLocalizedUnicode payload from (language code, text) pairs.
+    fn build_mluc(records: &[(&str, &str)]) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"mluc");
+        payload.extend_from_slice(&0u32.to_be_bytes());
+        payload.extend_from_slice(&(records.len() as u32).to_be_bytes());
+        payload.extend_from_slice(&12u32.to_be_bytes());
+
+        let strings: Vec<Vec<u8>> = records
+            .iter()
+            .map(|(_, text)| text.encode_utf16().flat_map(u16::to_be_bytes).collect())
+            .collect();
+
+        let mut string_offset = 16 + records.len() * 12;
+        for ((language, _), encoded) in records.iter().zip(&strings) {
+            payload.extend_from_slice(language.as_bytes());
+            payload.extend_from_slice(&(encoded.len() as u32).to_be_bytes());
+            payload.extend_from_slice(&(string_offset as u32).to_be_bytes());
+            string_offset += encoded.len();
+        }
+        for encoded in &strings {
+            payload.extend_from_slice(encoded);
+        }
+        payload
+    }
+
+    fn parse(profile: &[u8]) -> HashMap<String, TagValue> {
+        let mut metadata = HashMap::new();
+        parse_tags_registry(profile, &mut metadata).expect("tag table should parse");
+        metadata
+    }
+
+    fn value<'a>(metadata: &'a HashMap<String, TagValue>, name: &str) -> Option<&'a str> {
+        metadata.get(name).and_then(TagValue::as_string)
+    }
+
+    #[test]
+    fn mluc_records_are_split_across_language_suffixed_names() {
+        let metadata = parse(&build_profile(&[(
+            "dscm",
+            build_mluc(&[
+                ("enUS", "Camera RGB Profile"),
+                ("frFU", "Profil RVB de l'appareil-photo"),
+                ("zhCN", "\u{76f8}\u{673a} RGB"),
+            ]),
+        )]));
+
+        // en-US carries no suffix, so it lands on the bare tag name.
+        assert_eq!(
+            value(&metadata, "ProfileDescriptionML"),
+            Some("Camera RGB Profile")
+        );
+        // ExifTool takes the country code from the file verbatim: ColorSync's
+        // misspelled `frFU` stays `fr-FU` and is NOT corrected to `fr-FR`.
+        assert_eq!(
+            value(&metadata, "ProfileDescriptionML-fr-FU"),
+            Some("Profil RVB de l'appareil-photo")
+        );
+        assert_eq!(
+            value(&metadata, "ProfileDescriptionML-zh-CN"),
+            Some("\u{76f8}\u{673a} RGB")
+        );
+        assert!(!metadata.contains_key("ProfileDescriptionML-en-US"));
+    }
+
+    #[test]
+    fn mluc_record_with_a_malformed_language_code_takes_the_bare_name() {
+        // Apple's Generic RGB profile writes a bare `fr\0\0`. ExifTool's
+        // language regex rejects it, so the record lands on the bare tag name
+        // and - coming after the en-US record - is the value that survives.
+        let metadata = parse(&build_profile(&[(
+            "dscm",
+            build_mluc(&[
+                ("enUS", "Generic RGB Profile"),
+                ("fr\0\0", "Profil generique RVB"),
+            ]),
+        )]));
+
+        assert_eq!(
+            value(&metadata, "ProfileDescriptionML"),
+            Some("Profil generique RVB")
+        );
+    }
+
+    #[test]
+    fn mluc_text_is_truncated_at_the_first_nul() {
+        // ColorSync counts the terminator inside strLen; ExifTool's charset
+        // recomposition drops it.
+        let metadata = parse(&build_profile(&[(
+            "desc",
+            build_mluc(&[("enUS", "sRGB IEC61966-2.1\0")]),
+        )]));
+
+        assert_eq!(
+            value(&metadata, "ProfileDescription"),
+            Some("sRGB IEC61966-2.1")
+        );
+    }
+
+    #[test]
+    fn mluc_payload_too_short_for_a_record_emits_nothing() {
+        let mut short = Vec::new();
+        short.extend_from_slice(b"mluc");
+        short.extend_from_slice(&0u32.to_be_bytes());
+        short.extend_from_slice(&1u32.to_be_bytes());
+        short.extend_from_slice(&12u32.to_be_bytes());
+
+        let metadata = parse(&build_profile(&[("desc", short)]));
+        assert!(metadata.is_empty());
+    }
+
+    #[test]
+    fn chad_decodes_as_an_s15fixed16_array() {
+        let raw: [i32; 9] = [68690, 1502, -3290, 1939, 64912, -1118, -605, 988, 49258];
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"sf32");
+        payload.extend_from_slice(&0u32.to_be_bytes());
+        for value in raw {
+            payload.extend_from_slice(&value.to_be_bytes());
+        }
+
+        let metadata = parse(&build_profile(&[("chad", payload)]));
+        let decoded = value(&metadata, "ChromaticAdaptation").expect("chad should decode");
+
+        let numbers: Vec<f64> = decoded
+            .split(' ')
+            .map(|part| part.parse().expect("each element should be numeric"))
+            .collect();
+        assert_eq!(numbers.len(), 9);
+        for (decoded, expected) in numbers.iter().zip(raw) {
+            assert!((decoded - f64::from(expected) / 65536.0).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn opaque_payloads_report_the_size_from_the_tag_table() {
+        // kTRC/vcgt/ndin have no ExifTool formatter, so they print the tag's
+        // declared byte count rather than any decoded sub-structure.
+        let metadata = parse(&build_profile(&[
+            ("kTRC", vec![0u8; 14]),
+            ("vcgt", vec![0u8; 48]),
+            ("ndin", vec![0u8; 56]),
+        ]));
+
+        assert_eq!(
+            value(&metadata, "GrayTRC"),
+            Some("(Binary data 14 bytes, use -b option to extract)")
+        );
+        assert_eq!(
+            value(&metadata, "VideoCardGamma"),
+            Some("(Binary data 48 bytes, use -b option to extract)")
+        );
+        assert_eq!(
+            value(&metadata, "NativeDisplayInfo"),
+            Some("(Binary data 56 bytes, use -b option to extract)")
+        );
+    }
 }
