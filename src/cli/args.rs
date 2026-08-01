@@ -444,8 +444,15 @@ impl CliArgs {
     /// Removes surrounding quotes from a string if present
     fn unquote(s: &str) -> String {
         let trimmed = s.trim();
-        if (trimmed.starts_with('"') && trimmed.ends_with('"'))
-            || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
+        // A lone quote satisfies both `starts_with` and `ends_with` at once, so
+        // without the length check `oxidex '-EXIF:Artist="' file.jpg` sliced
+        // `[1..0]` and aborted the whole invocation with "byte range starts at
+        // 1 but ends at 0". Two quotes are needed before there is a pair to
+        // strip. (The indices themselves are char-boundary safe: both ends are
+        // pinned to a single-byte ASCII quote.)
+        if trimmed.len() >= 2
+            && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
+                || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
         {
             trimmed[1..trimmed.len() - 1].to_string()
         } else {
@@ -844,5 +851,30 @@ mod tests {
         assert!(is_lexopt_short_arg("-d%Y%m%d")); // attached strftime format
         assert!(is_lexopt_short_arg("-srd")); // cluster ending in -d
         assert!(is_lexopt_short_arg("-nd%H%M")); // cluster + attached format
+    }
+
+    /// Regression: `oxidex '-EXIF:Artist="' photo.jpg` aborted the whole
+    /// invocation with "byte range starts at 1 but ends at 0" -- a lone quote
+    /// satisfies `starts_with` and `ends_with` simultaneously, so `unquote`
+    /// sliced `[1..0]`.
+    #[test]
+    fn unquote_handles_a_lone_quote_without_panicking() {
+        assert_eq!(CliArgs::unquote("\""), "\"");
+        assert_eq!(CliArgs::unquote("'"), "'");
+        assert_eq!(CliArgs::unquote(" \" "), " \" ");
+        assert_eq!(
+            CliArgs::parse_modification("-EXIF:Artist=\""),
+            Some(("EXIF:Artist".to_string(), "\"".to_string()))
+        );
+
+        // Still strips real pairs, and leaves everything else alone.
+        assert_eq!(CliArgs::unquote("\"\""), "");
+        assert_eq!(CliArgs::unquote("\"Ansel Adams\""), "Ansel Adams");
+        assert_eq!(CliArgs::unquote("'Ansel Adams'"), "Ansel Adams");
+        assert_eq!(CliArgs::unquote("Ansel Adams"), "Ansel Adams");
+        // Non-ASCII values survive unquoting untouched: the slice indices are
+        // pinned to single-byte quotes, but assert it rather than assume it.
+        assert_eq!(CliArgs::unquote("\"日本語の写真家\""), "日本語の写真家");
+        assert_eq!(CliArgs::unquote("日本語の写真家"), "日本語の写真家");
     }
 }
