@@ -50,9 +50,11 @@ fn value_string(v: &TagValue) -> Option<String> {
             numerator,
             denominator,
         } => Some(format!("{numerator}/{denominator}")),
-        // Binary, DateTime, Struct and Array are never composite inputs in the
-        // definitions we implement; treating them as absent is correct here and
-        // keeps a nonsensical coercion from reaching the arithmetic.
+        // EXIF date/time tags are stored as strings today, but retain support
+        // for a typed UTC value so the SubSec composites do not silently starve
+        // if a parser upgrades its representation.
+        TagValue::DateTime(dt) => Some(dt.format("%Y:%m:%d %H:%M:%S").to_string()),
+        // Binary, Struct and Array are not inputs to any implemented Composite.
         _ => None,
     }
 }
@@ -84,6 +86,12 @@ fn lookup_rank(key: &str) -> (u8, &str) {
     (rank, key)
 }
 
+fn lookup_key(map: &MetadataMap, key: &str) -> Option<String> {
+    map.value_form(key)
+        .map(str::to_string)
+        .or_else(|| map.get(key).and_then(value_string))
+}
+
 /// Look up a tag by bare name, ignoring any `Group:` prefix.
 ///
 /// ExifTool resolves composite inputs by name across all groups, so
@@ -91,24 +99,40 @@ fn lookup_rank(key: &str) -> (u8, &str) {
 /// match wins over a suffix match so an explicitly-grouped tag is preferred;
 /// otherwise [`lookup_rank`] supplies a stable group preference.
 fn lookup(map: &MetadataMap, name: &str) -> Option<String> {
-    if let Some(v) = map.value_form(name) {
-        return Some(v.to_string());
-    }
-    if let Some(v) = map.get(name).and_then(value_string) {
+    if let Some(v) = lookup_key(map, name) {
         return Some(v);
     }
+    // ExifTool's `EXIF:` dependency prefix is a family-0 group. OxiDex emits
+    // the family-1 IFD name (`ExifIFD:` or `IFD0:`), so bridge that one
+    // generated namespace deliberately. Other explicit groups remain exact:
+    // `GPS:GPSLatitude` must not silently bind an unrelated suffix match.
+    if let Some(bare) = name.strip_prefix("EXIF:") {
+        for family in ["ExifIFD", "IFD0", "EXIF"] {
+            let key = format!("{family}:{bare}");
+            if let Some(v) = lookup_key(map, &key) {
+                return Some(v);
+            }
+        }
+        return None;
+    }
+    if name.contains(':') {
+        return None;
+    }
+
+    // Unqualified dependencies resolve through [`lookup_rank`] alone. An
+    // earlier hardcoded family list did the same job, but the two orders
+    // disagreed -- the list tried EXIF before File, while `lookup_rank` ranks
+    // File first so that a container's own dimensions win for ImageWidth. Two
+    // precedence tables that contradict each other cannot both be right, and
+    // the ranking is the one with a test pinning it, so it is the only one
+    // kept. It still resolves standard EXIF ahead of same-named MakerNote
+    // values, and still makes the choice independent of the randomized
+    // HashMap iteration order.
     let suffix = format!(":{name}");
     map.iter()
         .filter(|(k, _)| k.ends_with(&suffix))
         .min_by_key(|(k, _)| lookup_rank(k))
-        // Prefer the unrounded ValueConv form when a parser recorded one: the
-        // printed value is rounded for display, and re-parsing it compounds
-        // precision loss down a derivation chain (FocusDistance -> DOF).
-        .and_then(|(k, v)| {
-            map.value_form(k)
-                .map(str::to_string)
-                .or_else(|| value_string(v))
-        })
+        .and_then(|(k, _)| lookup_key(map, k))
 }
 
 /// Resolve a composite input, preferring an already-computed unrounded value.
@@ -159,12 +183,18 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             // Required inputs must all be present; desired ones may be absent.
             // Both are passed positionally so indices line up with ExifTool's
             // $val[N].
-            let mut owned: Vec<Option<String>> =
-                Vec::with_capacity(comp.require.len() + comp.desire.len());
+            let input_len = comp
+                .require
+                .iter()
+                .chain(comp.desire.iter())
+                .map(|(index, _)| index + 1)
+                .max()
+                .unwrap_or(0);
+            let mut owned: Vec<Option<String>> = vec![None; input_len];
             let mut satisfied = true;
-            for dep in comp.require {
+            for &(index, dep) in comp.require {
                 match resolve(map, &values, dep) {
-                    Some(v) => owned.push(Some(v)),
+                    Some(v) => owned[index] = Some(v),
                     None => {
                         satisfied = false;
                         break;
@@ -174,8 +204,8 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             if !satisfied {
                 continue;
             }
-            for dep in comp.desire {
-                owned.push(resolve(map, &values, dep));
+            for &(index, dep) in comp.desire {
+                owned[index] = resolve(map, &values, dep);
             }
             // A composite with only optional inputs still needs at least one.
             if comp.require.is_empty() && owned.iter().all(Option::is_none) {
@@ -183,7 +213,7 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             }
 
             let inputs: Vec<Option<&str>> = owned.iter().map(|o| o.as_deref()).collect();
-            if let Some(c) = compute::compute(comp.name, &inputs, make.as_deref()) {
+            if let Some(c) = compute::compute(comp.module, comp.name, &inputs, make.as_deref()) {
                 // Count only genuine changes, so the fixpoint still terminates.
                 let changed = map.get_string(&key) != Some(c.print.as_str());
                 values.insert(comp.name, c.value);
@@ -275,6 +305,43 @@ mod tests {
             let m = map_of(&[("Zulu:Thing", "last"), ("Alpha:Thing", "first")]);
             assert_eq!(lookup(&m, "Thing").as_deref(), Some("first"));
         }
+    }
+
+    #[test]
+    fn resolves_exif_family_dependencies_to_their_ifd_groups() {
+        let mut m = map_of(&[
+            ("ExifIFD:DateTimeOriginal", "2005:01:14 08:57:59"),
+            ("ExifIFD:SubSecTimeOriginal", "20"),
+        ]);
+        apply(&mut m);
+        assert_eq!(
+            m.get_string("Composite:SubSecDateTimeOriginal"),
+            Some("2005:01:14 08:57:59.20")
+        );
+    }
+
+    #[test]
+    fn preserves_generated_dependency_positions() {
+        let canon = COMPOSITES
+            .iter()
+            .find(|c| c.module == "Canon" && c.name == "WB_RGGBLevels")
+            .expect("generated Canon white-balance composite");
+        assert_eq!(canon.require, &[(0, "Canon:WhiteBalance")]);
+        assert!(canon.desire.contains(&(10, "WB_RGGBLevelsShade")));
+        assert!(canon.desire.contains(&(11, "WB_RGGBLevelsKelvin")));
+        assert!(!canon.desire.iter().any(|(index, _)| *index == 9));
+    }
+
+    #[test]
+    fn bare_dependencies_prefer_standard_exif_without_mixing_groups() {
+        let mut m = map_of(&[
+            ("Panasonic:WBRedLevel", "2283"),
+            ("Panasonic:WBGreenLevel", "1054"),
+            ("IFD0:WBRedLevel", "570"),
+            ("IFD0:WBGreenLevel", "263"),
+        ]);
+        apply(&mut m);
+        assert_eq!(m.get_string("Composite:RedBalance"), Some("2.1673"));
     }
 
     #[test]
