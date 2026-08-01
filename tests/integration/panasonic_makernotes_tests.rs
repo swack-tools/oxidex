@@ -7,145 +7,6 @@
 //! - Tag extraction from synthetic test data
 
 #[test]
-fn test_panasonic_lens_database_m43_standard_zoom() {
-    use oxidex::parsers::tiff::makernotes::panasonic_lens_database::lookup_lens_name;
-
-    // Test common M43 kit lens
-    assert_eq!(
-        lookup_lens_name(1),
-        Some("Lumix G Vario 14-42mm f/3.5-5.6 ASPH. MEGA O.I.S.".to_string())
-    );
-
-    // Test professional M43 zoom
-    assert_eq!(
-        lookup_lens_name(8),
-        Some("Lumix G X Vario 12-35mm f/2.8 ASPH. POWER O.I.S.".to_string())
-    );
-
-    // Test telephoto zoom
-    assert_eq!(
-        lookup_lens_name(13),
-        Some("Lumix G Vario 100-300mm f/4.0-5.6 MEGA O.I.S.".to_string())
-    );
-}
-
-#[test]
-fn test_panasonic_lens_database_m43_primes() {
-    use oxidex::parsers::tiff::makernotes::panasonic_lens_database::lookup_lens_name;
-
-    // Test popular Lumix G primes
-    assert_eq!(
-        lookup_lens_name(20),
-        Some("Lumix G 20mm f/1.7 ASPH.".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(23),
-        Some("Lumix G 25mm f/1.7 ASPH.".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(25),
-        Some("Lumix G 15mm f/1.7 ASPH.".to_string())
-    );
-}
-
-#[test]
-fn test_panasonic_lens_database_leica_dg() {
-    use oxidex::parsers::tiff::makernotes::panasonic_lens_database::lookup_lens_name;
-
-    // Test Leica DG Summilux lenses
-    assert_eq!(
-        lookup_lens_name(30),
-        Some("Leica DG Summilux 15mm f/1.7 ASPH.".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(31),
-        Some("Leica DG Summilux 25mm f/1.4 ASPH.".to_string())
-    );
-
-    // Test Leica DG Nocticron
-    assert_eq!(
-        lookup_lens_name(32),
-        Some("Leica DG Nocticron 42.5mm f/1.2 ASPH. POWER O.I.S.".to_string())
-    );
-
-    // Test Leica DG zoom
-    assert_eq!(
-        lookup_lens_name(37),
-        Some("Leica DG Summilux 10-25mm f/1.7 ASPH.".to_string())
-    );
-}
-
-#[test]
-fn test_panasonic_lens_database_l_mount_pro() {
-    use oxidex::parsers::tiff::makernotes::panasonic_lens_database::lookup_lens_name;
-
-    // Test Lumix S Pro lenses
-    assert_eq!(
-        lookup_lens_name(103),
-        Some("Lumix S Pro 24-70mm f/2.8".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(104),
-        Some("Lumix S Pro 70-200mm f/2.8 O.I.S.".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(102),
-        Some("Lumix S Pro 16-35mm f/4".to_string())
-    );
-}
-
-#[test]
-fn test_panasonic_lens_database_l_mount_primes() {
-    use oxidex::parsers::tiff::makernotes::panasonic_lens_database::lookup_lens_name;
-
-    // Test Lumix S prime lenses
-    assert_eq!(
-        lookup_lens_name(115),
-        Some("Lumix S 50mm f/1.8".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(116),
-        Some("Lumix S 85mm f/1.8".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(117),
-        Some("Lumix S Pro 50mm f/1.4".to_string())
-    );
-}
-
-#[test]
-fn test_panasonic_lens_database_olympus_compatibility() {
-    use oxidex::parsers::tiff::makernotes::panasonic_lens_database::lookup_lens_name;
-
-    // Test Olympus M.Zuiko lenses (compatible with Panasonic M43)
-    assert_eq!(
-        lookup_lens_name(200),
-        Some("Olympus M.Zuiko Digital ED 12-40mm f/2.8 PRO".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(201),
-        Some("Olympus M.Zuiko Digital ED 40-150mm f/2.8 PRO".to_string())
-    );
-}
-
-#[test]
-fn test_panasonic_lens_database_unknown() {
-    use oxidex::parsers::tiff::makernotes::panasonic_lens_database::lookup_lens_name;
-
-    // Unknown lens ID should return None
-    assert_eq!(lookup_lens_name(65000), None);
-    assert_eq!(lookup_lens_name(0), None);
-}
-
-#[test]
 fn test_panasonic_parser_trait() {
     use oxidex::parsers::tiff::makernotes::panasonic::PanasonicParser;
     use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
@@ -165,28 +26,6 @@ fn test_panasonic_parser_trait() {
 
     let too_short = b"Panasonic";
     assert!(!parser.validate_header(too_short));
-}
-
-#[test]
-fn test_panasonic_parser_lens_lookup() {
-    use oxidex::parsers::tiff::makernotes::panasonic::PanasonicParser;
-    use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
-
-    let parser = PanasonicParser;
-
-    // Test lens lookup through trait (M43)
-    assert_eq!(
-        parser.lookup_lens(32),
-        Some("Leica DG Nocticron 42.5mm f/1.2 ASPH. POWER O.I.S.".to_string())
-    );
-
-    // Test lens lookup through trait (L-mount)
-    assert_eq!(
-        parser.lookup_lens(103),
-        Some("Lumix S Pro 24-70mm f/2.8".to_string())
-    );
-
-    assert_eq!(parser.lookup_lens(65000), None);
 }
 
 #[test]
@@ -322,39 +161,6 @@ fn test_panasonic_parse_enumerated_values() {
 }
 
 #[test]
-fn test_panasonic_parse_lens_type() {
-    use oxidex::parsers::tiff::ifd_parser::ByteOrder;
-    use oxidex::parsers::tiff::makernotes::panasonic::parse_panasonic_makernotes;
-    use std::collections::HashMap;
-
-    let mut data = Vec::new();
-
-    // Panasonic header
-    data.extend_from_slice(b"Panasonic\0\0\0");
-
-    // IFD: 1 entry
-    data.extend_from_slice(&[0x01, 0x00]);
-
-    // Entry: Lens Type (tag 0x0051) = Leica DG Nocticron 42.5mm f/1.2 (ID 32)
-    data.extend_from_slice(&[0x51, 0x00]); // Tag
-    data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
-    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
-    data.extend_from_slice(&[0x20, 0x00, 0x00, 0x00]); // Value: 32
-
-    data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
-
-    let mut tags = HashMap::new();
-    parse_panasonic_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
-
-    // Verify lens lookup worked
-    assert!(tags.contains_key("Panasonic:LensType"));
-    assert_eq!(
-        tags.get("Panasonic:LensType"),
-        Some(&"Leica DG Nocticron 42.5mm f/1.2 ASPH. POWER O.I.S.".to_string())
-    );
-}
-
-#[test]
 fn test_panasonic_parse_photo_style() {
     use oxidex::parsers::tiff::ifd_parser::ByteOrder;
     use oxidex::parsers::tiff::makernotes::panasonic::parse_panasonic_makernotes;
@@ -442,26 +248,6 @@ fn test_panasonic_parser_big_endian() {
 }
 
 #[test]
-fn test_panasonic_lens_database_coverage() {
-    use oxidex::parsers::tiff::makernotes::panasonic_lens_database::lookup_lens_name;
-
-    // Count how many lenses we have in database
-    let mut count = 0;
-    for id in 1..=250 {
-        if lookup_lens_name(id).is_some() {
-            count += 1;
-        }
-    }
-
-    // Should have significant coverage (M43 + L-mount + Leica DG)
-    assert!(
-        count >= 50,
-        "Expected at least 50 lenses in database, found {}",
-        count
-    );
-}
-
-#[test]
 fn test_panasonic_intelligent_features() {
     use oxidex::parsers::tiff::ifd_parser::ByteOrder;
     use oxidex::parsers::tiff::makernotes::panasonic::parse_panasonic_makernotes;
@@ -512,5 +298,39 @@ fn test_panasonic_intelligent_features() {
     assert_eq!(
         tags.get("Panasonic:IntelligentD-Range"),
         Some(&"Low".to_string())
+    );
+}
+
+/// `%Panasonic::Main` 0x51 `LensType` is `Writable => 'string'`
+/// (Panasonic.pm:943): the tag holds the lens name itself, and ExifTool ends
+/// the string at its first NUL and then trims trailing spaces
+/// (`ValueConv => '$val=~s/ +$//'`).  There is no Panasonic lens-id table.
+#[test]
+fn test_panasonic_lens_type_is_a_string() {
+    use oxidex::parsers::tiff::ifd_parser::ByteOrder;
+    use oxidex::parsers::tiff::makernotes::panasonic::parse_panasonic_makernotes;
+    use std::collections::HashMap;
+
+    // "LEICA DG 12-60/F2.8-4.0" is what ExifTool prints for
+    // Panasonic/PanasonicDC-G9.jpg, padded here the way that file pads it.
+    let text: &[u8] = b"LEICA DG 12-60/F2.8-4.0 \0\0\0\0\0\0 \0\0";
+
+    let mut data = Vec::new();
+    data.extend_from_slice(b"Panasonic\0\0\0"); // header
+    data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+    data.extend_from_slice(&[0x51, 0x00]); // tag 0x0051
+    data.extend_from_slice(&[0x02, 0x00]); // type: ASCII
+    data.extend_from_slice(&(text.len() as u32).to_le_bytes()); // count
+    // value offset, measured from the IFD start: count(2) + entry(12) + next(4)
+    data.extend_from_slice(&[0x12, 0x00, 0x00, 0x00]);
+    data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // next IFD
+    data.extend_from_slice(text);
+
+    let mut tags = HashMap::new();
+    parse_panasonic_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
+
+    assert_eq!(
+        tags.get("Panasonic:LensType"),
+        Some(&"LEICA DG 12-60/F2.8-4.0".to_string())
     );
 }

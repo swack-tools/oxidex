@@ -25,7 +25,7 @@ use nom::{
 };
 use std::collections::HashMap;
 
-use super::leica_lens_database::lookup_lens_name;
+use super::lens_data::leica as leica_lenses;
 use super::makernote_context::MakerNoteContext;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_u16_array, extract_u32_array};
@@ -50,9 +50,9 @@ const LEICA_WB_BLUE_LEVEL: u16 = 0x000F;
 const LEICA_SHARPENING: u16 = 0x0010;
 const LEICA_CONTRAST: u16 = 0x0011;
 const LEICA_SATURATION: u16 = 0x0012;
-const LEICA_LENS_ID: u16 = 0x0013;
-const LEICA_LENS_TYPE: u16 = 0x0014;
-const LEICA_LENS_MODEL: u16 = 0x0015;
+/// `%Panasonic::Leica2` 0x0310 `LensType` (Panasonic.pm:1648), an `int32u`
+/// whose `PrintConv` is `%leicaLensTypes`.
+const LEICA_LENS_TYPE: u16 = 0x0310;
 
 // Camera Settings
 const LEICA_ORIGINAL_FILE_NAME: u16 = 0x001D;
@@ -119,7 +119,10 @@ const L4_FIRMWARE_VERSION: u16 = 0x0007;
 const L4_APPROXIMATE_F_NUMBER: u16 = 0x000A;
 const L4_CAMERA_TEMPERATURE: u16 = 0x000B;
 const L4_WB_RGB_LEVELS: u16 = 0x000E;
-const L4_LENS_TYPE: u16 = 0x0014;
+/// `%Panasonic::Subdir` 0x3405 `LensType` (Panasonic.pm:1894) -- the M9/M
+/// Monochrom path.  Same `int32u` and same `%leicaLensTypes` PrintConv as
+/// Leica2 0x0310.
+const L4_LENS_TYPE: u16 = 0x3405;
 const L4_CONTRAST: u16 = 0x002C;
 const L4_SATURATION: u16 = 0x002D;
 const L4_SHARPENING: u16 = 0x002E;
@@ -531,10 +534,6 @@ impl MakerNoteParser for LeicaMakerNoteParser {
         is_leica_makernote(data)
     }
 
-    fn lookup_lens(&self, lens_id: u16) -> Option<String> {
-        lookup_lens_name(lens_id)
-    }
-
     fn parse(
         &self,
         data: &[u8],
@@ -775,20 +774,16 @@ impl LeicaMakerNoteParser {
                     tags.insert("Leica:Saturation".to_string(), value.to_string());
                 }
 
-                // Lens information
-                LEICA_LENS_ID => {
-                    let lens_id = entry.value_offset as u16;
-                    tags.insert("Leica:LensID".to_string(), lens_id.to_string());
-
-                    // Look up lens name from database
-                    if let Some(lens_name) = lookup_lens_name(lens_id) {
-                        tags.insert("Leica:LensModel".to_string(), lens_name);
-                    }
-                }
-
+                // Lens information.  ExifTool splits the stored int32u into two
+                // integers -- `ValueConv => '($val >> 2) . " " . ($val & 0x3)'`
+                // -- and looks the pair up in %leicaLensTypes, falling back to
+                // the first number alone (Panasonic.pm:1648).
                 LEICA_LENS_TYPE => {
-                    let value = entry.value_offset;
-                    tags.insert("Leica:LensType".to_string(), value.to_string());
+                    let raw = entry.value_offset;
+                    let printed = leica_lenses::lookup(raw)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| format!("Unknown ({})", leica_lenses::value_conv(raw)));
+                    tags.insert("Leica:LensType".to_string(), printed);
                 }
 
                 // Exposure mode
@@ -1308,19 +1303,12 @@ impl LeicaMakerNoteParser {
                     );
                 }
                 L4_LENS_TYPE => {
-                    // Leica M9 lens type uses special encoding
-                    let lens_id = value_offset;
-                    let actual_lens_id = (lens_id >> 2) as u16;
-                    if let Some(lens_name) = lookup_lens_name(actual_lens_id) {
-                        tags.insert("Leica:LensType".to_string(), lens_name);
-                    } else if let Some(lens_name) = lookup_lens_name(lens_id as u16) {
-                        tags.insert("Leica:LensType".to_string(), lens_name);
-                    } else {
-                        tags.insert(
-                            "Leica:LensType".to_string(),
-                            format!("Unknown ({})", lens_id),
-                        );
-                    }
+                    let printed = leica_lenses::lookup(value_offset)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| {
+                            format!("Unknown ({})", leica_lenses::value_conv(value_offset))
+                        });
+                    tags.insert("Leica:LensType".to_string(), printed);
                 }
                 L4_APPROXIMATE_F_NUMBER => {
                     // Stored as rational64u
@@ -1387,9 +1375,7 @@ fn leica_tag_to_name(tag_id: u16) -> String {
         LEICA_SHARPENING => "Sharpening",
         LEICA_CONTRAST => "Contrast",
         LEICA_SATURATION => "Saturation",
-        LEICA_LENS_ID => "LensID",
         LEICA_LENS_TYPE => "LensType",
-        LEICA_LENS_MODEL => "LensModel",
         LEICA_ORIGINAL_FILE_NAME => "OriginalFileName",
         LEICA_ORIGINAL_DIRECTORY => "OriginalDirectory",
         LEICA_EXPOSURE_MODE => "ExposureMode",
@@ -1594,14 +1580,5 @@ mod tests {
         assert_eq!(leica_tag_to_name(LEICA_METERING_MODE), "MeteringMode");
         assert_eq!(leica_tag_to_name(LEICA_FLASH_MODE), "FlashMode");
         assert_eq!(leica_tag_to_name(0xFFFF), "Unknown-0xFFFF");
-    }
-
-    #[test]
-    fn test_lens_lookup() {
-        let parser = LeicaMakerNoteParser;
-        // Test known Leica lens
-        let result = parser.lookup_lens(1);
-        // Since we don't know the exact lens database, just verify it returns an Option
-        assert!(result.is_some() || result.is_none());
     }
 }

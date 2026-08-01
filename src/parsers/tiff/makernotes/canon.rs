@@ -13,7 +13,6 @@ pub mod camera_info;
 pub mod camera_info_tables;
 pub mod color_data;
 pub mod filter_info;
-pub mod lens_info;
 
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;

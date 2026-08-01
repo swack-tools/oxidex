@@ -8,117 +8,6 @@
 //! - Film simulation modes and dynamic range settings
 
 #[test]
-fn test_fujifilm_lens_database_xf_primes() {
-    use oxidex::parsers::tiff::makernotes::fujifilm_lens_database::lookup_lens_name;
-
-    // Test popular XF prime lenses
-    assert_eq!(lookup_lens_name(35), Some("XF 35mm f/1.4 R".to_string()));
-
-    assert_eq!(lookup_lens_name(148), Some("XF 56mm f/1.2 R".to_string()));
-
-    assert_eq!(
-        lookup_lens_name(270),
-        Some("XF 90mm f/2 R LM WR".to_string())
-    );
-
-    // Test wide angle prime
-    assert_eq!(lookup_lens_name(23), Some("XF 14mm f/2.8 R".to_string()));
-}
-
-#[test]
-fn test_fujifilm_lens_database_xf_zooms() {
-    use oxidex::parsers::tiff::makernotes::fujifilm_lens_database::lookup_lens_name;
-
-    // Test kit lens
-    assert_eq!(
-        lookup_lens_name(1),
-        Some("XF 18-55mm f/2.8-4 R LM OIS".to_string())
-    );
-
-    // Test professional zoom
-    assert_eq!(
-        lookup_lens_name(20),
-        Some("XF 50-140mm f/2.8 R LM OIS WR".to_string())
-    );
-
-    // Test telephoto zoom
-    assert_eq!(
-        lookup_lens_name(272),
-        Some("XF 100-400mm f/4.5-5.6 R LM OIS WR".to_string())
-    );
-
-    // Test ultra-wide zoom
-    assert_eq!(
-        lookup_lens_name(274),
-        Some("XF 8-16mm f/2.8 R LM WR".to_string())
-    );
-}
-
-#[test]
-fn test_fujifilm_lens_database_xc_budget() {
-    use oxidex::parsers::tiff::makernotes::fujifilm_lens_database::lookup_lens_name;
-
-    // Test budget XC lenses
-    assert_eq!(
-        lookup_lens_name(11),
-        Some("XC 16-50mm f/3.5-5.6 OIS".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(277),
-        Some("XC 15-45mm f/3.5-5.6 OIS PZ".to_string())
-    );
-
-    assert_eq!(lookup_lens_name(278), Some("XC 35mm f/2".to_string()));
-}
-
-#[test]
-fn test_fujifilm_lens_database_gfx_medium_format() {
-    use oxidex::parsers::tiff::makernotes::fujifilm_lens_database::lookup_lens_name;
-
-    // Test GFX medium format lenses
-    assert_eq!(lookup_lens_name(63), Some("GF 63mm f/2.8 R WR".to_string()));
-
-    assert_eq!(
-        lookup_lens_name(110),
-        Some("GF 110mm f/2 R LM WR".to_string())
-    );
-
-    assert_eq!(
-        lookup_lens_name(100),
-        Some("GF 100-200mm f/5.6 R LM OIS WR".to_string())
-    );
-
-    // Test ultra-fast GF prime
-    assert_eq!(
-        lookup_lens_name(293),
-        Some("GF 80mm f/1.7 R WR".to_string())
-    );
-}
-
-#[test]
-fn test_fujifilm_lens_database_teleconverters() {
-    use oxidex::parsers::tiff::makernotes::fujifilm_lens_database::lookup_lens_name;
-
-    // Test teleconverters
-    assert_eq!(lookup_lens_name(286), Some("GF 1.4X TC WR".to_string()));
-
-    assert_eq!(lookup_lens_name(288), Some("XF 1.4X TC WR".to_string()));
-
-    assert_eq!(lookup_lens_name(289), Some("XF 2X TC WR".to_string()));
-}
-
-#[test]
-fn test_fujifilm_lens_database_unknown() {
-    use oxidex::parsers::tiff::makernotes::fujifilm_lens_database::lookup_lens_name;
-
-    // Unknown lens IDs should return None
-    assert_eq!(lookup_lens_name(65000), None);
-    assert_eq!(lookup_lens_name(0), None);
-    assert_eq!(lookup_lens_name(9999), None);
-}
-
-#[test]
 fn test_fujifilm_parser_trait() {
     use oxidex::parsers::tiff::makernotes::fujifilm::FujifilmParser;
     use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
@@ -139,24 +28,6 @@ fn test_fujifilm_parser_trait() {
     // Too short
     let too_short = b"FUJIFILM\x0C";
     assert!(!parser.validate_header(too_short));
-}
-
-#[test]
-fn test_fujifilm_parser_lens_lookup() {
-    use oxidex::parsers::tiff::makernotes::fujifilm::FujifilmParser;
-    use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
-
-    let parser = FujifilmParser;
-
-    // Test lens lookup through trait
-    assert_eq!(parser.lookup_lens(35), Some("XF 35mm f/1.4 R".to_string()));
-
-    assert_eq!(
-        parser.lookup_lens(63),
-        Some("GF 63mm f/2.8 R WR".to_string())
-    );
-
-    assert_eq!(parser.lookup_lens(65000), None);
 }
 
 #[test]
@@ -373,27 +244,6 @@ fn test_fujifilm_parser_big_endian() {
     parse_fujifilm_makernotes(&data, ByteOrder::BigEndian, &mut tags);
 
     assert_eq!(tags.get("Fujifilm:Quality"), Some(&"FINE".to_string()));
-}
-
-#[test]
-fn test_fujifilm_lens_database_coverage() {
-    use oxidex::parsers::tiff::makernotes::fujifilm_lens_database::lookup_lens_name;
-
-    // Count how many lenses we have in database
-    let mut count = 0;
-    // Scan broader range to catch all lens IDs (some like 4095 are outside normal range)
-    for id in 1..=5000 {
-        if lookup_lens_name(id).is_some() {
-            count += 1;
-        }
-    }
-
-    // Should have at least 60 lenses as specified
-    assert!(
-        count >= 60,
-        "Expected at least 60 lenses in database, found {}",
-        count
-    );
 }
 
 #[test]

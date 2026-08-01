@@ -37,7 +37,6 @@ use nom::{
 };
 use std::collections::HashMap;
 
-use super::olympus_lens_database::{get_lens_database, lookup_lens_name};
 use super::registries::olympus::olympus_registry;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_i32_array, extract_u16_array};
@@ -376,10 +375,6 @@ impl MakerNoteParser for OlympusParser {
         }
 
         false
-    }
-
-    fn lookup_lens(&self, lens_id: u16) -> Option<String> {
-        lookup_lens_name(lens_id)
     }
 
     fn parse(
@@ -1010,14 +1005,5 @@ mod tests {
         assert_eq!(ART_FILTER_DECODER.decode(2), "Pop Art");
         assert_eq!(ART_FILTER_DECODER.decode(9), "Diorama");
         assert_eq!(ART_FILTER_DECODER.decode(24), "Watercolor");
-    }
-
-    #[test]
-    fn test_lens_lookup() {
-        let parser = OlympusParser;
-        assert_eq!(
-            parser.lookup_lens(48),
-            Some("M.Zuiko Digital ED 12-40mm f/2.8 PRO".to_string())
-        );
     }
 }

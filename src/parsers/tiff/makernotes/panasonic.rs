@@ -35,7 +35,7 @@ use nom::{
 };
 use std::collections::HashMap;
 
-use super::panasonic_lens_database::lookup_lens_name;
+use super::makernote_context::MakerNoteContext;
 use super::shared::MakerNoteParser;
 
 // Import declarative decoder macros
@@ -423,7 +423,7 @@ impl MakerNoteParser for PanasonicParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_impl(data, byte_order, None, tags)
+        self.parse_impl(data, byte_order, None, None, tags)
     }
 
     fn parse_with_model(
@@ -433,22 +433,43 @@ impl MakerNoteParser for PanasonicParser {
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_impl(data, byte_order, model, tags)
+        self.parse_impl(data, byte_order, model, None, tags)
     }
 
-    fn lookup_lens(&self, lens_id: u16) -> Option<String> {
-        lookup_lens_name(lens_id)
+    /// Panasonic's out-of-line value offsets are measured from the enclosing
+    /// TIFF header, not from the MakerNote payload -- `PanasonicDC-G9.jpg`
+    /// stores `LensType`'s 34 string bytes at TIFF offset 3414 while the
+    /// payload itself begins at TIFF offset 1314.  Resolving them needs the
+    /// enclosing block and the payload's position in it, which only
+    /// `parse_with_context` has; `parse`/`parse_with_model` keep the old
+    /// payload-relative arithmetic for a caller that holds no enclosing block.
+    fn parse_with_context(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        self.parse_impl(
+            ctx.window(),
+            byte_order,
+            model,
+            ctx.payload_tiff_offset(),
+            tags,
+        )
     }
 }
 
 impl PanasonicParser {
     /// Shared implementation behind [`MakerNoteParser::parse`] and
     /// [`MakerNoteParser::parse_with_model`].
+    #[allow(clippy::too_many_arguments)]
     fn parse_impl(
         &self,
         data: &[u8],
         byte_order: ByteOrder,
         model: Option<&str>,
+        data_base: Option<u32>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
@@ -485,7 +506,9 @@ impl PanasonicParser {
 
         // Extract tags from entries
         for entry in entries {
-            self.parse_entry(&entry, data, ifd_offset, byte_order, model, &registry, tags);
+            self.parse_entry(
+                &entry, data, ifd_offset, data_base, byte_order, model, &registry, tags,
+            );
         }
 
         Ok(())
@@ -501,6 +524,7 @@ impl PanasonicParser {
         entry: &IfdEntry,
         data: &[u8],
         ifd_offset: usize,
+        data_base: Option<u32>,
         byte_order: ByteOrder,
         model: Option<&str>,
         registry: &super::shared::tag_registry::TagRegistry,
@@ -511,13 +535,17 @@ impl PanasonicParser {
         // Special handling for string tags (must read from data buffer)
         // These tags contain text data that needs to be extracted from the makernote
         match tag_id {
-            // Basic info strings
-            0x0026 | 0x0052 | 0x0054 |
+            // Basic info strings.  0x0051 LensType, 0x0052 LensSerialNumber
+            // and 0x0053 AccessoryType are all `Writable => 'string'` in
+            // %Panasonic::Main (Panasonic.pm:943, :949 and :955) -- there is no
+            // Panasonic lens-id table in ExifTool, the tag holds the name
+            // itself.
+            0x0026 | 0x0051 | 0x0052 | 0x0053 | 0x0054 |
             // Supplementary info strings (Title, BabyName)
             0x0065 | 0x0066 |
             // Location-related strings
             0x0067 | 0x0069 | 0x006B | 0x006D | 0x006F | 0x0080 => {
-                if let Some(value) = extract_string_value(entry, data, ifd_offset)
+                if let Some(value) = extract_string_value(entry, data, ifd_offset, data_base)
                     && let Some(tag_name) = registry.get_tag_name(tag_id) {
                         tags.insert(format!("Panasonic:{}", tag_name), value);
                     }
@@ -525,7 +553,7 @@ impl PanasonicParser {
             }
             // BabyAge: ExifTool maps the "9999:99:99 00:00:00" sentinel to "(not set)"
             0x0033 => {
-                if let Some(value) = extract_string_value(entry, data, ifd_offset) {
+                if let Some(value) = extract_string_value(entry, data, ifd_offset, data_base) {
                     tags.insert("Panasonic:BabyAge".to_string(), format_baby_age(&value));
                 }
                 return;
@@ -535,7 +563,7 @@ impl PanasonicParser {
             // 16-byte field are often not valid UTF-8, which must not hide a
             // well-formed serial prefix.
             0x0025 => {
-                if let Some(bytes) = extract_raw_bytes(entry, data, ifd_offset, byte_order) {
+                if let Some(bytes) = extract_raw_bytes(entry, data, ifd_offset, data_base, byte_order) {
                     let prefix = String::from_utf8_lossy(&bytes);
                     let formatted = format_internal_serial_number(&prefix);
                     if formatted != prefix {
@@ -543,7 +571,7 @@ impl PanasonicParser {
                         return;
                     }
                 }
-                if let Some(value) = extract_string_value(entry, data, ifd_offset) {
+                if let Some(value) = extract_string_value(entry, data, ifd_offset, data_base) {
                     tags.insert(
                         "Panasonic:InternalSerialNumber".to_string(),
                         format_internal_serial_number(&value),
@@ -553,7 +581,7 @@ impl PanasonicParser {
             }
             // FirmwareVersion: undef; binary versions are rendered as dotted bytes
             0x0002 => {
-                if let Some(bytes) = extract_raw_bytes(entry, data, ifd_offset, byte_order) {
+                if let Some(bytes) = extract_raw_bytes(entry, data, ifd_offset, data_base, byte_order) {
                     tags.insert(
                         "Panasonic:FirmwareVersion".to_string(),
                         format_firmware_version(&bytes),
@@ -565,7 +593,7 @@ impl PanasonicParser {
             // or non-text values keep the raw number, as before this conversion existed
             0x8000 => {
                 let printed = if entry.value_count <= 4 {
-                    extract_raw_bytes(entry, data, ifd_offset, byte_order)
+                    extract_raw_bytes(entry, data, ifd_offset, data_base, byte_order)
                         .and_then(|bytes| undef_bytes_to_string(&bytes))
                 } else {
                     None
@@ -579,7 +607,7 @@ impl PanasonicParser {
             // AFAreaMode: an int8u pair decoded as "a b" (model-conditional for the DMC-FZ10)
             0x000F => {
                 let printed =
-                    match extract_component_values(entry, data, ifd_offset, byte_order) {
+                    match extract_component_values(entry, data, ifd_offset, data_base, byte_order) {
                         Some(values) => decode_af_area_mode(&values, model),
                         // Value unreachable (out-of-line offset outside this
                         // MakerNote slice): keep the raw field, as before
@@ -636,21 +664,6 @@ impl PanasonicParser {
                 return;
             }
             _ => {}
-        }
-
-        // Special case: Lens type requires database lookup
-        if tag_id == 0x0051 {
-            // PANA_LENS_TYPE
-            let lens_id = entry.value_offset as u16;
-            if let Some(lens_name) = lookup_lens_name(lens_id) {
-                tags.insert("Panasonic:LensType".to_string(), lens_name);
-            } else {
-                tags.insert(
-                    "Panasonic:LensType".to_string(),
-                    format!("Unknown ({})", lens_id),
-                );
-            }
-            return;
         }
 
         // Special case: Roll and Pitch angles require degree formatting
@@ -748,34 +761,65 @@ fn parse_ifd_entry_be(input: &[u8]) -> IResult<&[u8], IfdEntry> {
     .parse(input)
 }
 
+/// Index into the parser's data slice for an out-of-line value.
+///
+/// ExifTool resolves a MakerNote value offset against the enclosing TIFF block
+/// (`Exif.pm`'s `$base + $valuePtr`), and Panasonic's offsets are measured from
+/// the TIFF header: `PanasonicDC-G9.jpg` puts `LensType`'s 34 string bytes at
+/// TIFF offset 3414 while the MakerNote payload starts at 1314.  When
+/// `data_base` is known, `full_data` is the payload-onwards window and the
+/// value sits `value_offset - data_base` bytes into it.
+///
+/// Without an enclosing block there is nothing to measure from, so the old
+/// payload-relative arithmetic is kept rather than guessing a base: see
+/// [`MakerNoteContext::payload_tiff_offset`].
+fn resolve_value_offset(
+    entry: &IfdEntry,
+    ifd_offset: usize,
+    data_base: Option<u32>,
+) -> Option<usize> {
+    match data_base {
+        Some(base) => entry.value_offset.checked_sub(base).map(|v| v as usize),
+        None => ifd_offset.checked_add(entry.value_offset as usize),
+    }
+}
+
+/// A `string` value the way ExifTool reads one.
+///
+/// `Exif.pm` ends a string at its first NUL, and every Panasonic string tag
+/// then carries `ValueConv => '$val=~s/ +$//'` -- trailing *spaces* only, and
+/// only after the NUL cut.  `PanasonicDMC-G80.jpg`'s `LensType` field is
+/// `"LUMIX G VARIO 12-35/F2.8 \0\0\0\0\0\0 \0\0"`: a space follows the NUL run,
+/// so trimming NULs from the end and whitespace after that leaves the six NULs
+/// embedded in the middle of the value.
+fn exiftool_string(bytes: &[u8]) -> Option<String> {
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    let s = std::str::from_utf8(&bytes[..end]).ok()?;
+    Some(s.trim_end_matches(' ').to_string())
+}
+
 /// Extracts string value from IFD entry
 ///
 /// Handles both inline strings (≤4 bytes) and offset-based strings
-fn extract_string_value(entry: &IfdEntry, full_data: &[u8], ifd_offset: usize) -> Option<String> {
+fn extract_string_value(
+    entry: &IfdEntry,
+    full_data: &[u8],
+    ifd_offset: usize,
+    data_base: Option<u32>,
+) -> Option<String> {
     let byte_count = entry.value_count as usize;
 
     // For inline strings (≤4 bytes), value is in value_offset field
     if byte_count <= 4 {
         let bytes = entry.value_offset.to_le_bytes();
-        let s = std::str::from_utf8(&bytes[0..byte_count])
-            .ok()?
-            .trim_end_matches('\0')
-            .trim();
-        return Some(s.to_string());
+        return exiftool_string(&bytes[0..byte_count]);
     }
 
     // For longer strings, read from offset
-    // Panasonic offsets are relative to IFD start (after header)
-    let offset = entry.value_offset as usize;
-    let abs_offset = ifd_offset + offset;
+    let abs_offset = resolve_value_offset(entry, ifd_offset, data_base)?;
 
     if abs_offset + byte_count <= full_data.len() {
-        let bytes = &full_data[abs_offset..abs_offset + byte_count];
-        let s = std::str::from_utf8(bytes)
-            .ok()?
-            .trim_end_matches('\0')
-            .trim();
-        return Some(s.to_string());
+        return exiftool_string(&full_data[abs_offset..abs_offset + byte_count]);
     }
 
     None
@@ -790,6 +834,7 @@ fn extract_raw_bytes(
     entry: &IfdEntry,
     full_data: &[u8],
     ifd_offset: usize,
+    data_base: Option<u32>,
     byte_order: ByteOrder,
 ) -> Option<Vec<u8>> {
     let byte_count = entry.value_count as usize;
@@ -804,7 +849,7 @@ fn extract_raw_bytes(
 
     // For longer values, read from offset (relative to IFD start, as in
     // extract_string_value)
-    let abs_offset = ifd_offset + entry.value_offset as usize;
+    let abs_offset = resolve_value_offset(entry, ifd_offset, data_base)?;
     full_data
         .get(abs_offset..abs_offset + byte_count)
         .map(|b| b.to_vec())
@@ -835,12 +880,13 @@ fn extract_component_values(
     entry: &IfdEntry,
     full_data: &[u8],
     ifd_offset: usize,
+    data_base: Option<u32>,
     byte_order: ByteOrder,
 ) -> Option<Vec<u32>> {
     let count = entry.value_count as usize;
     match entry.field_type {
         // BYTE / UNDEF: one byte per component
-        1 | 7 => extract_raw_bytes(entry, full_data, ifd_offset, byte_order)
+        1 | 7 => extract_raw_bytes(entry, full_data, ifd_offset, data_base, byte_order)
             .map(|bytes| bytes.iter().map(|&b| u32::from(b)).collect()),
         // SHORT: two bytes per component
         3 => {
@@ -852,7 +898,7 @@ fn extract_component_values(
                 };
                 field[0..byte_len].to_vec()
             } else {
-                let abs_offset = ifd_offset + entry.value_offset as usize;
+                let abs_offset = resolve_value_offset(entry, ifd_offset, data_base)?;
                 full_data.get(abs_offset..abs_offset + byte_len)?.to_vec()
             };
             Some(
@@ -1301,28 +1347,6 @@ mod tests {
 
         let too_short = b"Panasonic";
         assert!(!parser.validate_header(too_short));
-    }
-
-    #[test]
-    fn test_lens_lookup() {
-        let parser = PanasonicParser;
-
-        // Test M43 lens lookup
-        assert!(parser.lookup_lens(32).is_some());
-        assert_eq!(
-            parser.lookup_lens(32),
-            Some("Leica DG Nocticron 42.5mm f/1.2 ASPH. POWER O.I.S.".to_string())
-        );
-
-        // Test L-mount lens lookup
-        assert!(parser.lookup_lens(103).is_some());
-        assert_eq!(
-            parser.lookup_lens(103),
-            Some("Lumix S Pro 24-70mm f/2.8".to_string())
-        );
-
-        // Test unknown lens
-        assert_eq!(parser.lookup_lens(65000), None);
     }
 
     #[test]
