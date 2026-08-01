@@ -270,21 +270,20 @@ fn record_endian(data: &[u8], outer: FlirEndian) -> FlirEndian {
     }
 }
 
-/// Render a fixed-precision decimal the way ExifTool's JSON output renders the
-/// result of a purely numeric PrintConv.
+/// Drop the trailing zeros (and a then-trailing decimal point) from a rendered
+/// decimal, the way C's — and therefore Perl's — `%g` conversion does.
 ///
-/// ExifTool emits `sprintf("%.6f", 0.01262)` as the JSON number `0.01262` and
-/// `sprintf("%.2f", 1.0)` as `1.0`, so trailing zeros are dropped but at least
-/// one decimal digit is kept.
-fn trim_decimal(formatted: String) -> String {
+/// This is *only* correct for `%g`. Perl's `%.Nf` keeps every digit it was
+/// asked for, so a fixed-precision PrintConv such as `sprintf("%.2f",0.8)`
+/// prints `0.80`, not `0.8`; running that through this helper is what used to
+/// make `Emissivity`, `IRWindowTransmission` and the `AtmosphericTrans*`
+/// coefficients disagree with `exiftool -G1 -s`.
+fn trim_g_zeros(formatted: String) -> String {
     if !formatted.contains('.') {
         return formatted;
     }
     let trimmed = formatted.trim_end_matches('0');
-    match trimmed.strip_suffix('.') {
-        Some(head) => format!("{head}.0"),
-        None => trimmed.to_string(),
-    }
+    trimmed.strip_suffix('.').unwrap_or(trimmed).to_string()
 }
 
 /// Format a float with `sig` significant digits, as Perl's `sprintf("%.*g")`.
@@ -299,14 +298,14 @@ fn sprintf_g(value: f64, sig: usize) -> String {
         return format!("{value}");
     }
     if value == 0.0 {
-        return "0.0".to_string();
+        return "0".to_string();
     }
     let exponent = value.abs().log10().floor() as i32;
     if exponent < -4 || exponent >= sig as i32 {
         return format!("{:.*e}", sig.saturating_sub(1), value);
     }
     let decimals = (sig as i32 - 1 - exponent).max(0) as usize;
-    trim_decimal(format!("{:.*}", decimals, value))
+    trim_g_zeros(format!("{:.*}", decimals, value))
 }
 
 /// Read a fixed-width, NUL-padded string field.
@@ -831,7 +830,7 @@ fn parse_camera_info_record(data: &[u8], metadata: &mut MetadataMap, endian: Fli
     if let Some(emissivity) = reader.f32_at(camera_info_offsets::EMISSIVITY) {
         metadata.insert(
             "FLIR:Emissivity".to_string(),
-            TagValue::String(trim_decimal(format!("{:.2}", emissivity))),
+            TagValue::String(format!("{:.2}", emissivity)),
         );
     }
 
@@ -868,7 +867,7 @@ fn parse_camera_info_record(data: &[u8], metadata: &mut MetadataMap, endian: Fli
     if let Some(transmission) = reader.f32_at(camera_info_offsets::IR_WINDOW_TRANSMISSION) {
         metadata.insert(
             "FLIR:IRWindowTransmission".to_string(),
-            TagValue::String(trim_decimal(format!("{:.2}", transmission))),
+            TagValue::String(format!("{:.2}", transmission)),
         );
     }
 
@@ -1347,7 +1346,7 @@ fn insert_float6f(
     if let Some(value) = reader.f32_at(offset) {
         metadata.insert(
             tag_name.to_string(),
-            TagValue::String(trim_decimal(format!("{:.6}", value))),
+            TagValue::String(format!("{:.6}", value)),
         );
     }
 }
@@ -1612,14 +1611,36 @@ mod tests {
         assert_eq!(sprintf_g(0.02224181778728962, 8), "0.022241818");
     }
 
-    /// ExifTool renders a purely numeric PrintConv as a JSON number, so
-    /// trailing zeros disappear but one decimal digit is kept.
+    /// `%g` drops trailing zeros and the decimal point they leave behind.
+    /// `%.Nf` does not — that distinction is checked by
+    /// [`test_fixed_precision_keeps_trailing_zeros`].
     #[test]
-    fn test_trim_decimal() {
-        assert_eq!(trim_decimal("0.012620".to_string()), "0.01262");
-        assert_eq!(trim_decimal("1.00".to_string()), "1.0");
-        assert_eq!(trim_decimal("0.80".to_string()), "0.8");
-        assert_eq!(trim_decimal("-0.006670".to_string()), "-0.00667");
+    fn test_trim_g_zeros() {
+        assert_eq!(trim_g_zeros("0.012620".to_string()), "0.01262");
+        assert_eq!(trim_g_zeros("1.00".to_string()), "1");
+        assert_eq!(trim_g_zeros("13799.2690".to_string()), "13799.269");
+        assert_eq!(trim_g_zeros("1374".to_string()), "1374");
+    }
+
+    /// `exiftool -G1 -s` prints the string a numeric PrintConv returned, so
+    /// FLIR's `%float2f`/`%float6f` tags keep every digit `sprintf` produced:
+    ///
+    /// ```text
+    /// my %float2f = ( Format => 'float', PrintConv => 'sprintf("%.2f",$val)' );
+    /// my %float6f = ( Format => 'float', PrintConv => 'sprintf("%.6f",$val)' );
+    /// ```
+    ///
+    /// Measured on ExifTool 13.55 against `t/images/FLIR.jpg`: `Emissivity`
+    /// is `0.80`, `IRWindowTransmission` is `1.00`,
+    /// `AtmosphericTransAlpha2` is `0.012620`, `AtmosphericTransBeta2` is
+    /// `-0.006670` and `AtmosphericTransX` is `1.900000`.
+    #[test]
+    fn test_fixed_precision_keeps_trailing_zeros() {
+        assert_eq!(format!("{:.2}", 0.8f32), "0.80");
+        assert_eq!(format!("{:.2}", 1.0f32), "1.00");
+        assert_eq!(format!("{:.6}", 0.01262f32), "0.012620");
+        assert_eq!(format!("{:.6}", -0.00667f32), "-0.006670");
+        assert_eq!(format!("{:.6}", 1.9f32), "1.900000");
     }
 
     /// The CameraInfo `DateTimeOriginal` field is a 10-byte binary record:
