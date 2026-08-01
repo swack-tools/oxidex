@@ -27,6 +27,8 @@
 pub mod array_extractors;
 /// Array schema system for declarative CameraSettings-style array parsing
 pub mod array_schemas;
+/// ExifTool's `ProcessBinaryData` for MakerNote binary sub-directories
+pub mod binary_subdir;
 /// Low-level byte parsing helper functions
 pub mod byte_utils;
 /// Declarative macros for creating decoders with minimal boilerplate

@@ -18,12 +18,12 @@ use super::super::shared::{generic_decoders::*, tag_registry::TagRegistry};
 // These decoders are defined using const_decoder! macros in the main parser
 use super::super::panasonic::{
     AF_ASSIST_LAMP, AUDIO, BRACKET_SETTINGS, BURST_MODE, BURST_SPEED, CLEAR_RETOUCH, COLOR_EFFECT,
-    COLOR_MODE, CONTRAST_MODE, CONVERSION_LENS, FACE_DETECTION, FILM_MODE, FLASH_CURTAIN,
-    FLASH_WARNING, FOCUS_MODE, HDR, IMAGE_QUALITY, IMAGE_STABILIZATION, INTELLIGENT_D_RANGE,
-    INTELLIGENT_EXPOSURE, INTELLIGENT_RESOLUTION, INTERNAL_ND_FILTER, LONG_EXPOSURE_NR, MACRO_MODE,
-    NOISE_REDUCTION, OPTICAL_ZOOM_MODE, PHOTO_STYLE, ROTATION, SELF_TIMER, SHADING_COMPENSATION,
-    SHOOTING_MODE, SHUTTER_TYPE, SWEEP_PANORAMA_DIRECTION, TEXT_STAMP, TIMER_RECORDING, TOUCH_AE,
-    WHITE_BALANCE, WORLD_TIME_LOCATION,
+    COLOR_MODE, CONTRAST_MODE, CONVERSION_LENS, FILM_MODE, FLASH_CURTAIN, FLASH_WARNING,
+    FOCUS_MODE, HDR, IMAGE_QUALITY, IMAGE_STABILIZATION, INTELLIGENT_D_RANGE, INTELLIGENT_EXPOSURE,
+    INTELLIGENT_RESOLUTION, INTERNAL_ND_FILTER, LONG_EXPOSURE_NR, MACRO_MODE, NOISE_REDUCTION,
+    OPTICAL_ZOOM_MODE, PHOTO_STYLE, ROTATION, SELF_TIMER, SHADING_COMPENSATION, SHOOTING_MODE,
+    SHUTTER_TYPE, SWEEP_PANORAMA_DIRECTION, TEXT_STAMP, TIMER_RECORDING, TOUCH_AE, WHITE_BALANCE,
+    WORLD_TIME_LOCATION,
 };
 
 // ============================================================================
@@ -107,13 +107,16 @@ pub fn panasonic_registry() -> TagRegistry {
         .register_integer_tag(0x004B, "PanasonicImageWidth", None)
         .register_integer_tag(0x004C, "PanasonicImageHeight", None)
         .register_raw(0x004D, "AFPointPosition")
-        .register_enum_tag_required(0x004E, "FaceDetection", &FACE_DETECTION)
+        // 0x004E and 0x0061 are `SubDirectory` tags in `%Panasonic::Main`
+        // (Panasonic.pm:935 FaceDetInfo, :1007 FaceRecInfo) -- ExifTool descends
+        // into the record and reports its fields, and reports no value for the
+        // pointer itself. They are handled by `panasonic_binary_subdir` and must
+        // not be registered as scalars here.
         .register_raw(0x0051, "LensType")
         .register_raw(0x0053, "AccessoryType")
         .register_raw(0x0059, "Transform")
         .register_enum_tag_required(0x005D, "IntelligentExposure", &INTELLIGENT_EXPOSURE)
         .register_integer_tag(0x0060, "LensFirmwareVersion", None)
-        .register_raw(0x0061, "FaceRecInfo")
         .register_enum_tag_required(0x0062, "FlashWarning", &FLASH_WARNING)
         .register_enum_tag_required(0x0070, "IntelligentResolution", &INTELLIGENT_RESOLUTION)
         .register_enum_tag_required(0x0077, "BurstSpeed", &BURST_SPEED)

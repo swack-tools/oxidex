@@ -44,12 +44,23 @@ loads each module and walks the symbol table, so what it reads is the real
 in-memory table. Full extraction of all 146 modules takes about 1.3 seconds.
 
 ```
-dump_tables.pl   Perl symbol table  ->  tables.json     (146 modules, 1,281 tables)
-analyze.py       tables.json        ->  coverage report (what is safe to emit)
-codegen.py       tables.json        ->  binary_tables.rs
-oracle.pl        Perl symbol table  ->  ground-truth TSV
-verify.py        Rust + TSV         ->  PASS / FAIL
+dump_tables.pl     Perl symbol table  ->  tables.json     (146 modules, 1,281 tables)
+analyze.py         tables.json        ->  coverage report (what is safe to emit)
+codegen.py         tables.json        ->  binary_tables.rs
+codegen_subdirs.py tables.json        ->  a vendor's MakerNote sub-tables
+oracle.pl          Perl symbol table  ->  ground-truth TSV
+verify.py          Rust + TSV         ->  PASS / FAIL
 ```
+
+`codegen_subdirs.py` is the narrow, strict sibling of `codegen.py`. It takes a
+named list of tables and emits them for the `ProcessBinaryData` interpreter in
+`src/parsers/tiff/makernotes/shared/binary_subdir.rs`, which the MakerNote
+parsers use to descend into a `SubDirectory` tag instead of reading its pointer
+as a value. Where `codegen.py` counts what it skipped, this one **raises** on any
+construct it has not been taught and names the table, the tag and the construct;
+`--allow-skip` downgrades that to a logged line, and the log is the deliverable.
+The difference matters: these tables are wired into a parser one at a time, so an
+unhandled field has to stop the run rather than land in an aggregate statistic.
 
 `verify.py` parses the **generated Rust back out** and compares it against a
 fresh dump produced by `oracle.pl`, which shares no code with `dump_tables.pl`.
