@@ -43,9 +43,9 @@ env:
 # Sizes below were chosen from measured step timings, not job wall-clock --
 # a slow job is not necessarily a CPU-bound one. See the per-job notes.
 #
-# The Build & Test workload swept across sizes by
-# .github/workflows/runner-sizing-benchmark.yml; seconds, cold cache, mean of
-# two runs:
+# The Build & Test workload was swept across every size on a throwaway
+# benchmark workflow (removed once it had served its purpose; see PR #305 for
+# the harness). Seconds, cold cache, mean of the runs taken:
 #
 #         build   nextest   clippy   total   gain vs prev   cost vs prev
 #   2x      188      381       30      599        --             --
@@ -61,7 +61,10 @@ env:
 # carry the total. The 16x/32x rows are kept as the evidence for stopping,
 # not as options.
 #
-# Re-run the benchmark before changing these; do not adjust by intuition.
+# Measure before changing these; do not adjust by intuition. Reproducing the
+# harness is a few lines: a matrix over `runs-on:` labels running these same
+# commands with each phase as its own step, then read per-step seconds from
+# `gh api repos/{owner}/{repo}/actions/runs/{id}/jobs`.
 #
 # NOTE: "Lint & Audit" and "Build & Test" are required status checks. Changing
 # `runs-on` is safe because it does not change the check name; renaming or

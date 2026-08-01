@@ -21,8 +21,17 @@ on:
 #     site build is ~45s of Node. Sizing one runner for all three means
 #     overpaying for two of them.
 #  2. `comparison-report` and `benchmarks` have no dependency on each other,
-#     so splitting lets them run concurrently: ~11m15s of serial work becomes
-#     roughly the length of its longest branch.
+#     so splitting lets them run concurrently: the serial ~11m15s becomes
+#     roughly the length of the longest branch.
+#
+#     Measured caveat: in the first real run the two were dispatched at the
+#     same instant, but `benchmarks` then sat in the GitHub-hosted runner
+#     queue for 8 minutes while the warp runner for `comparison-report`
+#     started in 5 seconds. Concurrency is structural here; the wall-clock
+#     win is not guaranteed, because the ubuntu-latest queue is outside our
+#     control. That queue is the standing cost of keeping benchmarks on
+#     GitHub-hosted hardware for measurement comparability -- a deliberate
+#     trade, recorded so it is not mistaken for a regression.
 #  3. `pages: write` and `id-token: write` now live only on `publish`, a job
 #     that runs no project code -- it downloads artifacts and builds the site.
 #     Previously the deploy credentials were present on a runner that had just
