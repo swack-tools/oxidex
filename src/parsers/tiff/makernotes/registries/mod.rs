@@ -3,13 +3,17 @@
 //! This module contains TagRegistry definitions for each manufacturer,
 //! providing declarative tag and array schema definitions.
 
-// Temporarily commented out incomplete registries to allow incremental testing
-// TODO: Re-enable after Canon, Nikon, Google migrations are complete
+// (no `google` registry: its 15 tag ids were invented -- none of the names it
+// declared is a tag ExifTool reports for any Google file, and Google's own
+// MakerNote is not the numeric IFD that registry assumed. It was never
+// declared here, so it never compiled; see `makernotes::google` for the real
+// parser. Likewise no `nikon` registry: `makernotes::nikon` and its submodules
+// carry the real per-table id mapping, and the registry copy was never
+// declared either.)
 pub mod apple;
 pub mod canon;
 pub mod captureone; // Capture One migration complete (Batch 4, Task 4.2)
 pub mod nikoncapture;
-// pub mod google;
 
 // Batch 1: Traditional Camera Manufacturers
 pub mod fujifilm; // Fujifilm migration (Batch 1, Task 1.4)
@@ -65,7 +69,6 @@ pub mod scalado;
 
 pub use apple::apple_registry;
 pub use canon::canon_registry;
-// pub use google::google_registry;
 
 // Batch 1 exports
 pub use fujifilm::fujifilm_registry;

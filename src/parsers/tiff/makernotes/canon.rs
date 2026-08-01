@@ -7,7 +7,6 @@
 #![allow(unused_imports)]
 
 // Submodules for extended tag parsing
-pub mod af_info;
 pub mod binary_tables;
 pub mod camera_info;
 pub mod camera_info_tables;

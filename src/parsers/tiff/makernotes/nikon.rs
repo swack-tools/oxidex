@@ -12,14 +12,12 @@
 pub mod af_info;
 pub mod af_info2;
 pub mod binary_data;
-pub mod color_balance;
 pub mod encrypted;
 mod encrypted_tables;
 pub mod flash_info;
 pub mod lens_data;
 pub mod settings;
 mod settings_tables;
-pub mod shot_info;
 pub mod sub_ifds;
 pub mod sub_tables;
 pub mod value_reader;
