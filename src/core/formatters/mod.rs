@@ -44,5 +44,5 @@ pub use numeric_precision::{
     is_integer_precision_tag, is_three_decimal_tag, perl_number,
 };
 pub use scene_type::decode_scene_type;
-pub use unit_suffixes::format_with_unit;
+pub use unit_suffixes::{format_with_unit, needs_unit_suffix};
 pub use ycbcr_subsampling::{format_ycbcr_subsampling, format_ycbcr_subsampling_string};

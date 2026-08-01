@@ -15,10 +15,10 @@ use crate::comparison::engine::normalize_family_for_comparison;
 use crate::models::TagInfo;
 use oxidex::core::TagValue;
 use oxidex::core::exiftool_compat::format_for_exiftool;
+use oxidex::core::formatters::{format_with_unit, needs_unit_suffix};
 use oxidex::core::tag_normalization::normalize_tag_family;
 use oxidex::core::value_formatter::{
-    format_date_exif_style, format_rational_as_decimal, format_with_unit, is_decimal_rational_tag,
-    needs_unit_suffix,
+    format_date_exif_style, format_rational_as_decimal, is_decimal_rational_tag,
 };
 use oxidex::parsers::tiff::tiff_enums::tiff_enum_to_string;
 use serde::{Deserialize, Serialize};
