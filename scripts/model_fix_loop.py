@@ -197,6 +197,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
 import sys
 import tempfile
@@ -205,6 +206,7 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 from find_tag_gaps import (
@@ -6265,6 +6267,63 @@ def _state_locked(path, mutate_fn, load_state_fn=load_tag_state, save_state_fn=s
         return result
 
 
+def release_worker_claims(state_path, worker_id):
+    """Release every live tag/job claim still owned by ``worker_id``.
+
+    Workers normally release claims in run_tag_loop's result-recording step,
+    but a dispatcher shutdown can terminate a worker while its model/build
+    attempt is still in flight.  Keep the entry (including failure history and
+    tier attribution) and remove only the ownership fields, under the same
+    flock used by every other tag-state mutation.
+    """
+    if not worker_id:
+        return 0
+
+    def mutate(state):
+        released = 0
+        for entry in state.values():
+            if isinstance(entry, dict) and entry.get("claimed_by") == worker_id:
+                entry.pop("claimed_by", None)
+                entry.pop("claimed_at", None)
+                released += 1
+        return state, released
+
+    return _state_locked(state_path, mutate)
+
+
+@contextmanager
+def worker_claim_lifecycle(state_path, worker_id, signal_module=signal):
+    """Make SIGTERM unwind normally, then release this worker's claims.
+
+    Python's default SIGTERM action exits immediately and skips ``finally``
+    blocks.  The fleet sends SIGTERM to each worker process group during a
+    graceful restart, so translate it to ``SystemExit`` while the tag loop is
+    active.  That gives this context manager a chance to release only claims
+    that are still owned by this exact worker before preserving the standard
+    128+signal exit status.
+    """
+    previous_sigterm = None
+    installed_handler = False
+
+    if worker_id and threading.current_thread() is threading.main_thread():
+        previous_sigterm = signal_module.getsignal(signal_module.SIGTERM)
+
+        def handle_sigterm(signum, _frame):
+            raise SystemExit(128 + signum)
+
+        signal_module.signal(signal_module.SIGTERM, handle_sigterm)
+        installed_handler = True
+
+    try:
+        yield
+    finally:
+        try:
+            release_worker_claims(state_path, worker_id)
+        finally:
+            if installed_handler:
+                signal_module.signal(signal_module.SIGTERM, previous_sigterm)
+
+
 DEFAULT_MAX_TAG_FAILS = 10
 
 # A claim's staleness threshold and the heartbeat that keeps it fresh.
@@ -8350,24 +8409,25 @@ def main(argv=None):
     refresh_worktree_fn = (
         (lambda: refresh_worktree(REPO_ROOT, args.base_ref)) if args.base_ref else None
     )
-    summary = run_tag_loop(
-        config, find_gaps_fn, real_fix_tag, state_path=args.tag_state_path,
-        git_checkout_clean_fn=git_checkout_clean, repo_root=REPO_ROOT,
-        log_fn=timestamped_log, max_fails=args.max_tag_fails,
-        blacklist_full=args.blacklist_full, worker_id=args.worker_id,
-        max_distinct_tags=max_tags_per_process, refresh_worktree_fn=refresh_worktree_fn,
-        max_cluster_tags=config["max_cluster_tags"],
-        landed_tags_path=DEFAULT_LANDED_TAGS_PATH,
-        claim_stale_seconds=config["claim_stale_seconds"],
-        heartbeat_seconds=config["heartbeat_seconds"],
-        attribution=gap_attribution,
-        # Pre-dispatch reachability: one oxidex run per FORMAT (memoized),
-        # against that format's own sample, before any model call is spent
-        # on it. A format whose parser never executes -- ISO 9660 on
-        # 2026-07-30, whose signature sits at byte 32769 while detection
-        # buffers 1 KiB -- is skipped with a reason instead of retried.
-        reachability_fn=make_reachability_fn(REPO_ROOT, log_fn=timestamped_log),
-    )
+    with worker_claim_lifecycle(args.tag_state_path, args.worker_id):
+        summary = run_tag_loop(
+            config, find_gaps_fn, real_fix_tag, state_path=args.tag_state_path,
+            git_checkout_clean_fn=git_checkout_clean, repo_root=REPO_ROOT,
+            log_fn=timestamped_log, max_fails=args.max_tag_fails,
+            blacklist_full=args.blacklist_full, worker_id=args.worker_id,
+            max_distinct_tags=max_tags_per_process, refresh_worktree_fn=refresh_worktree_fn,
+            max_cluster_tags=config["max_cluster_tags"],
+            landed_tags_path=DEFAULT_LANDED_TAGS_PATH,
+            claim_stale_seconds=config["claim_stale_seconds"],
+            heartbeat_seconds=config["heartbeat_seconds"],
+            attribution=gap_attribution,
+            # Pre-dispatch reachability: one oxidex run per FORMAT (memoized),
+            # against that format's own sample, before any model call is spent
+            # on it. A format whose parser never executes -- ISO 9660 on
+            # 2026-07-30, whose signature sits at byte 32769 while detection
+            # buffers 1 KiB -- is skipped with a reason instead of retried.
+            reachability_fn=make_reachability_fn(REPO_ROOT, log_fn=timestamped_log),
+        )
     print(f"stopped after {summary['rounds']} rounds")
     print(f"  fixed:   {len(summary['fixed'])} tags")
     print(f"  failed:  {len(summary['failed'])} attempts")
