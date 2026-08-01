@@ -12,8 +12,6 @@ pub mod flir_parser;
 pub mod fotostation;
 pub mod icc_chunk_assembler;
 pub mod iptc_parser;
-pub mod iptc_record1;
-pub mod iptc_record2;
 pub mod jfif_parser;
 pub mod jpeg_hdr_parser;
 pub mod mpf_parser;
