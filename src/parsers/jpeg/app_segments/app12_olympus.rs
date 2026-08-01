@@ -27,6 +27,7 @@
 //! ID=N123456789
 //! ```
 
+use crate::core::formatters::exif_print_conv::print_exposure_time_micros_str as print_exposure_time;
 use crate::core::{MetadataMap, TagValue};
 use crate::error::Result;
 
@@ -533,34 +534,6 @@ fn convert_unix_time(value: &str) -> String {
         Some(timestamp) => timestamp.format("%Y:%m:%d %H:%M:%S").to_string(),
         None => value.to_string(),
     }
-}
-
-/// Port of `Image::ExifTool::Exif::PrintExposureTime` applied to the
-/// microsecond `Shutter`/`shtr` field.
-///
-/// ```text
-/// Exif.pm:5610     if ($secs < 0.25001 and $secs > 0) {
-/// Exif.pm:5611         return sprintf("1/%d",int(0.5 + 1/$secs));
-/// Exif.pm:5612     }
-/// Exif.pm:5613     $_ = sprintf("%.1f",$secs);
-/// Exif.pm:5614     s/\.0$//;
-/// ```
-fn print_exposure_time(value: &str) -> String {
-    // Exif.pm:5609 `return $secs unless Image::ExifTool::IsFloat($secs);`
-    let Ok(raw) = value.parse::<f64>() else {
-        return value.to_string();
-    };
-
-    let seconds = raw * 1e-6;
-    if seconds > 0.0 && seconds < 0.25001 {
-        return format!("1/{}", (0.5 + 1.0 / seconds) as i64);
-    }
-
-    let formatted = format!("{:.1}", seconds);
-    formatted
-        .strip_suffix(".0")
-        .map(str::to_string)
-        .unwrap_or(formatted)
 }
 
 #[cfg(test)]

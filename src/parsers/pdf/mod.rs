@@ -58,6 +58,7 @@ pub mod signature_parser;
 pub mod structure_parser;
 pub mod xmp_extractor;
 
+use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::core::{FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::icc::extract_icc_profile;
@@ -1330,22 +1331,6 @@ fn print_fraction(val: f64) -> String {
         return format!("{:+}/3", (val * 3.0).trunc() as i64);
     }
     format_signed_g3(val)
-}
-
-/// Port of `Image::ExifTool::Exif::PrintExposureTime` (ExifTool 13.55
-/// Exif.pm), which renders a shutter speed in seconds.
-///
-/// Anything shorter than about a quarter second becomes the reciprocal form
-/// photographers read ("1/64"); a whole number of seconds prints without a
-/// decimal point, and everything else to one decimal place.
-fn print_exposure_time(seconds: f64) -> String {
-    if seconds > 0.0 && seconds < 0.25001 {
-        return format!("1/{}", (0.5 + 1.0 / seconds) as i64);
-    }
-    if seconds == seconds.trunc() {
-        return format!("{}", seconds as i64);
-    }
-    format!("{:.1}", seconds)
 }
 
 /// Reproduces Perl's `sprintf("%+.3g", $val)`: three significant digits, `%e`

@@ -28,6 +28,7 @@ use super::camera_info_tables::{
     ALL_TABLES, Cmp, Cond, DISPATCH, F, Fmt, Pc, Rc, SubTable, TBL_POWERSHOT, TBL_POWERSHOT2,
     TBL_UNKNOWN, TBL_UNKNOWN16, TBL_UNKNOWN32, Table, Vc, sub_table,
 };
+use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
 /// TIFF field types, as they appear in the MakerNote IFD entry for tag 0x0D.
@@ -766,18 +767,6 @@ fn print_parameter(value: i64) -> String {
         return format!("+{}", value);
     }
     value.to_string()
-}
-
-/// `Image::ExifTool::Exif::PrintExposureTime`.
-fn print_exposure_time(seconds: f64) -> String {
-    if seconds > 0.0 && seconds < 0.25001 {
-        return format!("1/{}", (0.5 + 1.0 / seconds) as i64);
-    }
-    let rendered = format!("{:.1}", seconds);
-    rendered
-        .strip_suffix(".0")
-        .map(str::to_string)
-        .unwrap_or(rendered)
 }
 
 /// C's `%.<prec>g`, which is what Perl's `sprintf` gives these tags.
