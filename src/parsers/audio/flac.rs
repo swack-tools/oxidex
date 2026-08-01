@@ -436,39 +436,33 @@ fn parse_vorbis_comment_block(data: &[u8], metadata: &mut MetadataMap) -> Result
             let (family, tag_name) = map_vorbis_field_name(field_name);
             let full_tag = format!("{}:{}", family, tag_name);
 
-            // Format ReplayGain Peak values to match ExifTool (strip trailing zeros)
-            let formatted_value = if field_name.to_uppercase().contains("_PEAK") {
-                if let Ok(val) = field_value.parse::<f64>() {
-                    format_peak_value(val)
-                } else {
-                    field_value.to_string()
-                }
-            } else {
-                field_value.to_string()
-            };
-
-            metadata.insert(full_tag, crate::core::TagValue::new_string(formatted_value));
+            // The comment value is reported verbatim.
+            //
+            // ExifTool, Vorbis.pm, `%Image::ExifTool::Vorbis::Comments`:
+            //
+            // ```text
+            //     REPLAYGAIN_TRACK_PEAK => { Name => 'ReplayGainTrackPeak' },
+            //     REPLAYGAIN_TRACK_GAIN => { Name => 'ReplayGainTrackGain' },
+            //     REPLAYGAIN_ALBUM_PEAK => { Name => 'ReplayGainAlbumPeak' },
+            //     REPLAYGAIN_ALBUM_GAIN => { Name => 'ReplayGainAlbumGain' },
+            // ```
+            //
+            // None of these entries carries a `ValueConv` or a `PrintConv`, so
+            // ExifTool prints the raw comment text: a file holding
+            // `REPLAYGAIN_TRACK_PEAK=0.00000000` reports `0.00000000`, and one
+            // holding `REPLAYGAIN_TRACK_GAIN=-24601.00 dB` reports the trailing
+            // ` dB` too. Round-tripping the peaks through `f64` and re-rendering
+            // them destroyed exactly that digit count.
+            metadata.insert(
+                full_tag,
+                crate::core::TagValue::new_string(field_value.to_string()),
+            );
         }
 
         offset += comment_length;
     }
 
     Ok(())
-}
-
-/// Format ReplayGain peak value to match ExifTool output
-///
-/// ExifTool strips trailing zeros from peak values, so "0.00000000" becomes "0.0"
-fn format_peak_value(val: f64) -> String {
-    // Format with enough precision
-    let s = format!("{:.8}", val);
-    // Strip trailing zeros after decimal point, but keep at least one digit after decimal
-    let trimmed = s.trim_end_matches('0');
-    if trimmed.ends_with('.') {
-        format!("{}0", trimmed)
-    } else {
-        trimmed.to_string()
-    }
 }
 
 /// Parses PICTURE block
