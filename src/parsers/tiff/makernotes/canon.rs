@@ -19,7 +19,7 @@ use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use crate::parsers::tiff::makernotes::shared::ifd_parser_base::{
-    IfdParserConfig, parse_ifd_entries,
+    IfdParserConfig, parse_ifd_entries, resolve_makernote_byte_order,
 };
 use nom::{
     IResult,
@@ -116,6 +116,126 @@ fn extract_canon_i16_array_with_base(
     Some(result)
 }
 
+/// The base recorded in a Canon MakerNote's own TIFF footer, if it has one.
+///
+/// # What the footer is
+///
+/// Canon closes most of its MakerNotes with an 8-byte TIFF footer: a TIFF magic
+/// (`II\x2a\0` or `MM\0\x2a`) followed by the 32-bit offset the directory was
+/// written at. When an editor moves the EXIF block without rewriting the
+/// MakerNote's internal offsets -- which is what every one of the 38 corpus
+/// JPEGs ExifTool re-bases has had done to it -- that recorded offset is still
+/// the origin those offsets are measured from, and the footer hands it over
+/// exactly. ExifTool reads it first thing in `FixBase` (MakerNotes.pm:1306-1338):
+///
+/// ```text
+///     if ($$et{Make} =~ /^Canon/ and $$dirInfo{DirLen} > 8) {
+///         my $footerPos = $dirStart + $$dirInfo{DirLen} - 8;
+///         my $footer = substr($$dataPt, $footerPos, 8);
+///         if ($footer =~ /^(II\x2a\0|MM\0\x2a)/ and  # check for TIFF footer
+///             substr($footer,0,2) eq GetByteOrder()) # validate byte ordering
+///         {
+///             my $oldOffset = Get32u(\$footer, 4);
+///             my $newOffset = $dirStart + $dataPos;
+///             ...
+///             $fix = $newOffset - $oldOffset;
+///             ...
+///             $$dirInfo{Base} += $fix;
+///             $$dirInfo{DataPos} -= $fix;
+/// ```
+///
+/// `ProcessExif` resolves a value at `$valuePtr - $dataPos` (Exif.pm:6447), so
+/// shifting `DataPos` down by `$fix = dirStart - oldOffset` is exactly the same
+/// as subtracting `oldOffset` instead of `dirStart`. The footer's number *is*
+/// the base.
+///
+/// # Measured
+///
+/// 547 of the 670 Canon MakerNotes in the ExifTool sample corpus carry a valid
+/// footer, and the value it records reproduces every one of ExifTool's 38
+/// `Adjusted MakerNotes base by N` warnings to the byte -- `-294` on
+/// `CanonDC210.jpg`, `+2` on `CanonPowerShotSX130IS.jpg`, `+4214` on
+/// `CanonPowerShotSX600HS.jpg`.
+///
+/// The byte-order check is not decoration: the footer is read in the
+/// *MakerNote's* order, which on 24 of those 38 files is the opposite of the
+/// enclosing TIFF's.
+fn canon_footer_base(payload: &[u8], byte_order: ByteOrder) -> Option<u32> {
+    // ExifTool: `$$dirInfo{DirLen} > 8`
+    if payload.len() <= 8 {
+        return None;
+    }
+    let footer = &payload[payload.len() - 8..];
+    // ExifTool: `$footer =~ /^(II\x2a\0|MM\0\x2a)/ and substr($footer,0,2) eq GetByteOrder()`
+    // -- one test, since the magic and the order have to agree with each other
+    // and with the order the directory is being read in.
+    let expected: &[u8] = match byte_order {
+        ByteOrder::LittleEndian => b"II\x2a\x00",
+        ByteOrder::BigEndian => b"MM\x00\x2a",
+    };
+    if &footer[..4] != expected {
+        return None;
+    }
+    EndianReader::new(footer, byte_order.to_io_byte_order()).u32_at(4)
+}
+
+/// ExifTool's test for a Canon TIFF footer that lies.
+///
+/// Picasa and ACDSee update a MakerNote's value offsets without updating the
+/// footer, so ExifTool validates the footer against where the last value
+/// actually ends before trusting it (MakerNotes.pm:1319-1330):
+///
+/// ```text
+///     # Picasa and ACDSee have a bug where they update other offsets without
+///     # updating the TIFF footer (PH - 2009/02/25), so test for this case:
+///     # validate Canon maker note footer fix by checking offset of last value
+///     my $maxPt = $valPtrs[-1] + $$valBlock{$valPtrs[-1]};
+///     # compare to end of maker notes, taking 8-byte footer into account
+///     my $endDiff = $dirStart + $$dirInfo{DirLen} - ($maxPt - $dataPos) - 8;
+///     # ignore footer offset only if end difference is exactly correct
+///     # (allow for possible padding byte, although I have never seen this)
+///     if (not $endDiff or $endDiff == 1) {
+///         $et->Warn('Canon maker note footer may be invalid (ignored)',1);
+///         return 0;
+///     }
+/// ```
+///
+/// `$maxPt` is the end of the last value in the coordinates the entries were
+/// *written* in, and `$dirStart + $$dirInfo{DirLen}` the end of the directory
+/// where it sits *now*; the two agreeing means the offsets were rewritten for
+/// the new position and the footer was left behind. `$dataPos` is 0 for a
+/// MakerNote inside a loaded EXIF block, so this is
+/// `dir_tiff_offset + payload.len() - max_value_end - 8`.
+///
+/// `$valPtrs[-1]` is the *highest* value offset and `$$valBlock{...}` the longest
+/// block recorded at it, so this takes the size of the entry at the largest
+/// offset rather than the largest `offset + size`; the two differ when a long
+/// value starts below a short one.
+///
+/// Returns `true` when the footer must be ignored. Needs the directory's real
+/// position, so a caller holding a detached payload cannot run it -- see
+/// [`canon_makernote_base_located`].
+fn canon_footer_is_stale(
+    offset_entries: &[(u32, usize)],
+    dir_tiff_offset: u32,
+    dir_len: usize,
+) -> bool {
+    let Some(&last_offset) = offset_entries.iter().map(|(offset, _)| offset).max() else {
+        return false;
+    };
+    // ExifTool's %valBlock keeps the longest block at each offset:
+    // `unless (defined $valBlock{$valPtr} and $valBlock{$valPtr} > $size)`.
+    let last_size = offset_entries
+        .iter()
+        .filter(|&&(offset, _)| offset == last_offset)
+        .map(|&(_, size)| size)
+        .max()
+        .unwrap_or(0);
+    let max_pt = last_offset as i64 + last_size as i64;
+    let end_diff = dir_tiff_offset as i64 + dir_len as i64 - max_pt - 8;
+    end_diff == 0 || end_diff == 1
+}
+
 /// Widest gap, in bytes, between the end of the MakerNote IFD header and the
 /// first byte of value data that [`calculate_makernote_base`] will consider.
 ///
@@ -134,6 +254,73 @@ const MAKERNOTE_BASE_SEARCH_SPAN: u32 = 1024;
 /// corpus check below shows the true base typically collects 10-30 votes.
 const MAKERNOTE_BASE_MIN_VOTES: u32 = 2;
 
+/// Every IFD entry whose value lives outside the 4-byte inline slot, as
+/// `(value_offset, declared byte size)`, paired with the IFD header's size.
+///
+/// This is ExifTool's `GetValueBlocks` (MakerNotes.pm:1241-1275): the same
+/// `$size <= 4 -> next` skip and nothing else, over the same standard TIFF entry
+/// layout `[tag_id:2][field_type:2][value_count:4][value_offset:4]`. Callers
+/// that want only the entries which can anchor a base apply their own filter --
+/// [`calculate_makernote_base`] does, [`canon_footer_is_stale`] must not, since
+/// ExifTool's own staleness test runs over the unfiltered blocks.
+fn canon_offset_entries(data: &[u8], byte_order: ByteOrder) -> Option<(Vec<(u32, usize)>, usize)> {
+    if data.len() < 2 {
+        return None;
+    }
+
+    let reader = EndianReader::new(data, byte_order.to_io_byte_order());
+    let entry_count = reader.u16_at(0)? as usize;
+
+    if entry_count == 0 || entry_count > 100 {
+        return None;
+    }
+
+    // Calculate IFD header size: 2 bytes (entry count) + 12 bytes per entry + 4 bytes (next IFD pointer)
+    let header_size = 2 + entry_count * 12 + 4;
+
+    if header_size > data.len() {
+        return None;
+    }
+
+    let mut offset_entries: Vec<(u32, usize)> = Vec::new();
+    for i in 0..entry_count {
+        let entry_offset = 2 + i * 12;
+        if entry_offset + 12 > data.len() {
+            break;
+        }
+
+        let field_type = reader.u16_at(entry_offset + 2)?;
+        let value_count = reader.u32_at(entry_offset + 4)?;
+        let value_offset = reader.u32_at(entry_offset + 8)?;
+
+        // Reference: TIFF specification field types
+        let type_size = match field_type {
+            1 => 1,        // BYTE
+            2 => 1,        // ASCII
+            3 => 2,        // SHORT
+            4 => 4,        // LONG
+            5 => 8,        // RATIONAL
+            6 => 1,        // SBYTE
+            7 => 1,        // UNDEFINED
+            8 => 2,        // SSHORT
+            9 => 4,        // SLONG
+            10 => 8,       // SRATIONAL
+            11 => 4,       // FLOAT
+            12 => 8,       // DOUBLE
+            _ => continue, // Unknown type, skip
+        };
+
+        let total_size = type_size * value_count as usize;
+
+        // ExifTool: `next if $size <= 4;`
+        if total_size > 4 {
+            offset_entries.push((value_offset, total_size));
+        }
+    }
+
+    Some((offset_entries, header_size))
+}
+
 /// Calculates the MakerNote base offset by examining the IFD structure.
 /// The base offset is needed to convert TIFF-relative value_offsets to positions
 /// within the MakerNote data slice.
@@ -141,9 +328,14 @@ const MAKERNOTE_BASE_MIN_VOTES: u32 = 2;
 /// Canon MakerNotes use TIFF-relative offsets, meaning the value_offset field
 /// in each IFD entry contains an offset from the start of the entire TIFF file,
 /// not from the start of the MakerNote. To correctly extract values, we need
-/// to calculate: `position_in_slice = value_offset - base_offset`. The dispatcher
-/// hands this parser a detached MakerNote slice with no record of where it sat in
-/// the file, so the base has to be recovered from the MakerNote's own bytes.
+/// to calculate: `position_in_slice = value_offset - base_offset`.
+///
+/// This is the fallback for a caller that hands the parser a **detached**
+/// MakerNote slice with no record of where it sat in the file, so the base has
+/// to be recovered from the MakerNote's own bytes. A caller that knows the
+/// position goes through [`canon_makernote_base_located`] instead, which reads
+/// the base out of the file rather than inferring it and is right on the 31
+/// corpus files where this vote is not.
 ///
 /// # Why the packed-layout guess is not enough
 ///
@@ -186,61 +378,14 @@ const MAKERNOTE_BASE_MIN_VOTES: u32 = 2;
 /// outright. Corpus result: 544 -> 626 files given the right base, with no file
 /// moved off a base that was already right.
 fn calculate_makernote_base(data: &[u8], byte_order: ByteOrder) -> Option<u32> {
-    if data.len() < 2 {
-        return None;
-    }
-
     let reader = EndianReader::new(data, byte_order.to_io_byte_order());
-    let entry_count = reader.u16_at(0)? as usize;
-
-    if entry_count == 0 || entry_count > 100 {
-        return None;
-    }
-
-    // Calculate IFD header size: 2 bytes (entry count) + 12 bytes per entry + 4 bytes (next IFD pointer)
-    let header_size = 2 + entry_count * 12 + 4;
-
-    if header_size > data.len() {
-        return None;
-    }
-
-    // Collect every entry whose value lives outside the 4-byte inline slot, as
-    // (value_offset, declared byte size). Entry format is the standard TIFF
-    // [tag_id:2][field_type:2][value_count:4][value_offset:4].
-    let mut offset_entries: Vec<(u32, usize)> = Vec::new();
-    for i in 0..entry_count {
-        let entry_offset = 2 + i * 12;
-        if entry_offset + 12 > data.len() {
-            break;
-        }
-
-        let field_type = reader.u16_at(entry_offset + 2)?;
-        let value_count = reader.u32_at(entry_offset + 4)?;
-        let value_offset = reader.u32_at(entry_offset + 8)?;
-
-        // Reference: TIFF specification field types
-        let type_size = match field_type {
-            1 => 1,        // BYTE
-            2 => 1,        // ASCII
-            3 => 2,        // SHORT
-            4 => 4,        // LONG
-            5 => 8,        // RATIONAL
-            6 => 1,        // SBYTE
-            7 => 1,        // UNDEFINED
-            8 => 2,        // SSHORT
-            9 => 4,        // SLONG
-            10 => 8,       // SRATIONAL
-            11 => 4,       // FLOAT
-            12 => 8,       // DOUBLE
-            _ => continue, // Unknown type, skip
-        };
-
-        let total_size = type_size * value_count as usize;
-
-        if total_size > 4 && value_offset > 0 && value_offset as usize >= header_size {
-            offset_entries.push((value_offset, total_size));
-        }
-    }
+    let (all_entries, header_size) = canon_offset_entries(data, byte_order)?;
+    // Only an entry whose value sits past the IFD header can anchor a base; a
+    // zero or header-overlapping offset is a garbage pointer, not evidence.
+    let offset_entries: Vec<(u32, usize)> = all_entries
+        .into_iter()
+        .filter(|&(offset, _)| offset > 0 && offset as usize >= header_size)
+        .collect();
 
     // No offset-based entries: nothing to anchor a base on (callers fall back to 0).
     let lowest_value_offset = offset_entries.iter().map(|&(offset, _)| offset).min()?;
@@ -305,6 +450,58 @@ fn calculate_makernote_base(data: &[u8], byte_order: ByteOrder) -> Option<u32> {
     }
 }
 
+/// The base for a MakerNote whose position inside its TIFF block is known.
+///
+/// This is what ExifTool does, and it needs no guessing at all. A Canon
+/// MakerNote entry's value offset is measured from the TIFF header, and
+/// `ProcessExif` turns it into an index with `$valuePtr -= $dataPos`
+/// (Exif.pm:6447), so the number subtracted is the directory's own offset --
+/// `dir_tiff_offset` -- unless `FixBase` moved it. For Canon the only thing that
+/// moves it is the TIFF footer ([`canon_footer_base`]), which records the offset
+/// the directory's own offsets were written against.
+///
+/// So there are exactly two answers, and both are read out of the file rather
+/// than inferred:
+///
+/// * a valid, non-stale footer -> the offset it records;
+/// * otherwise -> where the directory actually sits.
+///
+/// # Why the vote is not used here
+///
+/// [`calculate_makernote_base`] recovers a base by majority vote among records
+/// that declare their own size, because a decoder handed a detached payload has
+/// nothing else to go on. Measured over the 670 Canon MakerNotes in the ExifTool
+/// sample corpus, the vote reaches the same answer as this function on 639 and
+/// differs on 31 -- and on all 31 it is the vote that is wrong:
+///
+/// * 25 camcorder samples (`CanonMVX*`, `CanonOPTURA*`, `CanonZR65MC`,
+///   `CanonIXY_DV*`) have no record that declares its own size, so the vote
+///   produces nothing and the caller falls back to a base of 0;
+/// * 5 (`CanonFV_M30`, `CanonMVX40`, `CanonMVX45i`, `CanonOPTURA50`,
+///   `CanonOPTURA60`) land 24 bytes high -- these are the bodies ExifTool
+///   singles out at MakerNotes.pm:1162-1164, "some Canon models (FV-M30,
+///   Optura50, Optura60) leave 24 unused bytes at the end of the IFD";
+/// * `CanonHG20.jpg` votes 605 where its own footer records 856.
+///
+/// The vote therefore stays as the fallback for a detached payload, and nothing
+/// more.
+fn canon_makernote_base_located(
+    data: &[u8],
+    declared: &[u8],
+    byte_order: ByteOrder,
+    dir_tiff_offset: u32,
+) -> u32 {
+    if let Some(footer_base) = canon_footer_base(declared, byte_order) {
+        let stale = canon_offset_entries(data, byte_order)
+            .map(|(entries, _)| canon_footer_is_stale(&entries, dir_tiff_offset, declared.len()))
+            .unwrap_or(false);
+        if !stale {
+            return footer_base;
+        }
+    }
+    dir_tiff_offset
+}
+
 /// Returns an IFD entry's value as raw bytes, resolved against the MakerNote base.
 ///
 /// [`extract_canon_i16_array_with_base`] reinterprets everything as `int16`, which is
@@ -366,12 +563,21 @@ fn extract_canon_binary_words_with_base(
 /// Resolves the MakerNote base once, on the same post-signature slice that
 /// [`parse_ifd_entries`] hands to its entry callbacks.
 ///
-/// [`calculate_makernote_base`] scans up to [`MAKERNOTE_BASE_SEARCH_SPAN`]
-/// candidate bases, so it is resolved once per MakerNote and threaded through the
-/// extractors rather than recomputed per entry. A MakerNote with no offset-based
-/// entry to anchor on keeps the historical fallback of treating value offsets as
-/// slice-relative.
-fn canon_makernote_base(data: &[u8], byte_order: ByteOrder, config: &IfdParserConfig) -> u32 {
+/// `dir_tiff_offset` is where that slice sits inside the enclosing TIFF block,
+/// when the caller knows -- then the base is read out of the file by
+/// [`canon_makernote_base_located`] rather than inferred. A caller holding a
+/// detached payload passes `None` and gets [`calculate_makernote_base`]'s vote,
+/// which scans up to [`MAKERNOTE_BASE_SEARCH_SPAN`] candidates and is therefore
+/// resolved once per MakerNote and threaded through the extractors rather than
+/// recomputed per entry. A MakerNote with no offset-based entry to anchor on
+/// keeps the historical fallback of treating value offsets as slice-relative.
+fn canon_makernote_base(
+    data: &[u8],
+    declared: &[u8],
+    byte_order: ByteOrder,
+    config: &IfdParserConfig,
+    dir_tiff_offset: Option<u32>,
+) -> u32 {
     let start_offset = match config.signature {
         Some(sig) if data.len() >= sig.len() && &data[..sig.len()] == sig => {
             config.signature_offset
@@ -381,7 +587,19 @@ fn canon_makernote_base(data: &[u8], byte_order: ByteOrder, config: &IfdParserCo
     if start_offset >= data.len() {
         return 0;
     }
-    calculate_makernote_base(&data[start_offset..], byte_order).unwrap_or(0)
+    match dir_tiff_offset {
+        // The IFD begins `start_offset` bytes into the payload, so that is where
+        // it sits in the block -- and what a TIFF-relative value offset has to
+        // be measured against. The footer is looked for in the *declared* block,
+        // since that is where its last eight bytes are.
+        Some(offset) => canon_makernote_base_located(
+            &data[start_offset..],
+            declared.get(start_offset..).unwrap_or(declared),
+            byte_order,
+            offset.saturating_add(start_offset as u32),
+        ),
+        None => calculate_makernote_base(&data[start_offset..], byte_order).unwrap_or(0),
+    }
 }
 
 /// Legacy wrapper for extract_canon_i16_array without base offset (for test compatibility)
@@ -2948,6 +3166,42 @@ impl MakerNoteParser for CanonParser {
         }
     }
 
+    /// Takes the MakerNote's position in its enclosing TIFF block, because that
+    /// position *is* the base its value offsets are measured from.
+    ///
+    /// `ProcessExif` resolves a value at `$valuePtr - $dataPos` (Exif.pm:6447),
+    /// and for a MakerNote inside a loaded EXIF block `$dataPos` is the
+    /// directory's own offset. Only Canon's TIFF footer moves it, which
+    /// [`canon_makernote_base_located`] reads. Without the position a decoder
+    /// has to recover the base from the record bytes, which is right on 639 of
+    /// the corpus's 670 Canon MakerNotes and wrong on 31.
+    ///
+    /// Both slices are handed over: values resolve against the window, because
+    /// `ProcessExif` resolves them against the whole loaded block rather than
+    /// the entry's declared extent, but the footer is looked for in the declared
+    /// block, whose last eight bytes it is.
+    fn parse_with_context(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        match parse_canon_makernote_impl_located(
+            ctx.window(),
+            ctx.payload(),
+            byte_order,
+            model,
+            ctx.payload_tiff_offset(),
+        ) {
+            Ok(parsed_tags) => {
+                tags.extend(parsed_tags);
+                Ok(())
+            }
+            Err(e) => Err(format!("Canon MakerNote parse error: {}", e)),
+        }
+    }
+
     fn lookup_lens(&self, lens_id: u16) -> Option<String> {
         lookup_lens_name(lens_id)
     }
@@ -3013,6 +3267,16 @@ fn parse_canon_makernote_impl(
     parse_canon_makernote_impl_with_model(data, byte_order, None)
 }
 
+/// [`parse_canon_makernote_impl_with_model`] for a caller that does not know
+/// where the MakerNote sits.
+fn parse_canon_makernote_impl_with_model(
+    data: &[u8],
+    byte_order: ByteOrder,
+    exif_model: Option<&str>,
+) -> Result<HashMap<String, String>> {
+    parse_canon_makernote_impl_located(data, data, byte_order, exif_model, None)
+}
+
 /// Same as [`parse_canon_makernote_impl`], plus the EXIF `Model` the dispatcher
 /// resolved from IFD0.
 ///
@@ -3022,10 +3286,23 @@ fn parse_canon_makernote_impl(
 /// record, but the Kiss X70 writes "Canon EOS X70" there and would dispatch
 /// nowhere. `Model` is used when it is available and `CanonImageType` is the
 /// fallback for callers that do not have it.
-fn parse_canon_makernote_impl_with_model(
+///
+/// `dir_tiff_offset` is the MakerNote's offset inside its enclosing TIFF block
+/// when the caller knows it, which is what makes the base a fact rather than an
+/// inference -- see [`canon_makernote_base_located`].
+///
+/// `data` is what entries and values are read from and `declared` the
+/// MakerNote's declared block. They differ when the caller can offer the wider
+/// window: `CanonMVX100i.jpg` declares 42 MakerNote bytes for an IFD whose five
+/// entries alone need 66, so `CanonImageType` and `OwnerName` sit past the
+/// declared end and only the window reaches them. The footer is still looked for
+/// in `declared`, because that is the block whose last eight bytes it is.
+fn parse_canon_makernote_impl_located(
     data: &[u8],
+    declared: &[u8],
     byte_order: ByteOrder,
     exif_model: Option<&str>,
+    dir_tiff_offset: Option<u32>,
 ) -> Result<HashMap<String, String>> {
     if data.is_empty() {
         return Ok(HashMap::new());
@@ -3039,12 +3316,17 @@ fn parse_canon_makernote_impl_with_model(
         max_entries: 200,
     };
 
+    // `MakerNoteCanon` declares `ByteOrder => 'Unknown'` (MakerNotes.pm:67), so
+    // the directory's endianness is its own, not the enclosing TIFF's, and has
+    // to be resolved from its entry count before anything else is read.
+    let byte_order = resolve_makernote_byte_order(data, &config, byte_order);
+
     // Canon value offsets are TIFF-relative but the dispatcher hands this parser a
     // detached slice, so the base has to be recovered from the MakerNote's own
     // bytes. Resolved once here and threaded through every extractor below --
     // see `calculate_makernote_base` for why the packed-layout guess is not enough
     // and how the records vote for the real base.
-    let base = canon_makernote_base(data, byte_order, &config);
+    let base = canon_makernote_base(data, declared, byte_order, &config, dir_tiff_offset);
 
     // Several `%Canon` keys are model-conditional (`%Canon::FileInfo` key 1,
     // `%Canon::ShotInfo` key 22, `%Canon::Processing` key 2, `%Canon::FocalLength` keys
@@ -5920,6 +6202,115 @@ mod tests {
             calculate_makernote_base(&data, ByteOrder::LittleEndian),
             Some(500)
         );
+    }
+
+    // ========================================================================
+    // Base recovery from the TIFF footer (ExifTool FixBase, MakerNotes.pm:1306)
+    // ========================================================================
+
+    /// [`build_makernote_with_gap`] plus Canon's 8-byte TIFF footer recording
+    /// `recorded_base` as the offset the directory was written at.
+    fn build_makernote_with_footer(
+        written_base: u32,
+        gap: usize,
+        elements: usize,
+        recorded_base: u32,
+        magic: &[u8; 4],
+    ) -> Vec<u8> {
+        let mut data = build_makernote_with_gap(written_base, gap, elements);
+        data.extend_from_slice(magic);
+        data.extend_from_slice(&recorded_base.to_le_bytes());
+        data
+    }
+
+    /// The whole point: a MakerNote that was relocated without its offsets being
+    /// rewritten. The records still address the old position, and the footer is
+    /// the only thing that still records it.
+    #[test]
+    fn footer_supplies_the_base_the_offsets_were_written_against() {
+        let data = build_makernote_with_footer(764, 0, 32, 764, b"II\x2a\x00");
+        // The directory now sits at 4978 -- ExifTool's "Adjusted MakerNotes base
+        // by 4214" on CanonPowerShotSX600HS.jpg.
+        assert_eq!(
+            canon_makernote_base_located(&data, &data, ByteOrder::LittleEndian, 4978),
+            764
+        );
+    }
+
+    /// Without a footer there is nothing to adjust, so the base is simply where
+    /// the directory sits -- which is what `$valuePtr -= $dataPos` amounts to.
+    #[test]
+    fn no_footer_means_the_base_is_where_the_directory_sits() {
+        let data = build_makernote_with_gap(852, 24, 32);
+        assert_eq!(
+            canon_makernote_base_located(&data, &data, ByteOrder::LittleEndian, 852),
+            852
+        );
+    }
+
+    /// ExifTool validates the footer's byte order against the directory's
+    /// (`substr($footer,0,2) eq GetByteOrder()`): an "MM" footer read
+    /// little-endian is not a footer.
+    #[test]
+    fn a_footer_in_the_other_byte_order_is_not_a_footer() {
+        let data = build_makernote_with_footer(764, 0, 32, 764, b"MM\x00\x2a");
+        assert_eq!(canon_footer_base(&data, ByteOrder::LittleEndian), None);
+        assert_eq!(
+            canon_makernote_base_located(&data, &data, ByteOrder::LittleEndian, 4978),
+            4978
+        );
+    }
+
+    /// A block too short to hold a footer must not have its last 8 bytes read as
+    /// one (`$$dirInfo{DirLen} > 8`).
+    #[test]
+    fn a_block_of_eight_bytes_or_fewer_has_no_footer() {
+        assert_eq!(
+            canon_footer_base(b"II\x2a\x00\x00\x03\x00\x00", ByteOrder::LittleEndian),
+            None
+        );
+    }
+
+    /// Picasa and ACDSee rewrite the offsets and leave the footer stale. ExifTool
+    /// detects that by the last value ending exactly where the directory does,
+    /// and ignores the footer.
+    #[test]
+    fn a_footer_left_behind_by_an_offset_rewrite_is_ignored() {
+        // Offsets rewritten for the directory's *current* position, so the last
+        // value ends exactly 8 bytes (the footer) before the block's end.
+        let gap = 0usize;
+        let elements = 32usize;
+        let dir_offset = 4978u32;
+        let data = build_makernote_with_footer(dir_offset, gap, elements, 764, b"II\x2a\x00");
+        let (entries, _) = canon_offset_entries(&data, ByteOrder::LittleEndian).unwrap();
+        assert!(canon_footer_is_stale(&entries, dir_offset, data.len()));
+        assert_eq!(
+            canon_makernote_base_located(&data, &data, ByteOrder::LittleEndian, dir_offset),
+            dir_offset,
+            "a stale footer must not move the base"
+        );
+    }
+
+    /// `GetValueBlocks` skips only values of four bytes or fewer -- an inline
+    /// value has no offset to record.
+    #[test]
+    fn inline_values_are_not_offset_entries() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&2u16.to_le_bytes());
+        // 0x0001: SHORT[1] = 2 bytes, inline
+        data.extend_from_slice(&0x0001u16.to_le_bytes());
+        data.extend_from_slice(&3u16.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&7u32.to_le_bytes());
+        // 0x0002: SHORT[8] = 16 bytes, offset-based
+        data.extend_from_slice(&0x0002u16.to_le_bytes());
+        data.extend_from_slice(&3u16.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes());
+        data.extend_from_slice(&100u32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.resize(64, 0);
+        let (entries, _) = canon_offset_entries(&data, ByteOrder::LittleEndian).unwrap();
+        assert_eq!(entries, vec![(100u32, 16usize)]);
     }
 
     // ========================================================================

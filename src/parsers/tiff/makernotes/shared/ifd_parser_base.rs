@@ -16,6 +16,94 @@ pub struct IfdParserConfig<'a> {
     pub max_entries: usize,
 }
 
+/// Where a MakerNote's own IFD begins inside the block handed to the parser.
+///
+/// This is ExifTool's `$subdirStart`: the signature, when the vendor writes
+/// one, is skipped and the IFD's 2-byte entry count follows. Returns `None`
+/// when the block is too short to hold an entry count at that position.
+pub fn ifd_start_offset(data: &[u8], config: &IfdParserConfig) -> Option<usize> {
+    let start_offset = match config.signature {
+        Some(sig) if data.len() >= sig.len() && &data[..sig.len()] == sig => {
+            config.signature_offset
+        }
+        _ => 0,
+    };
+    (start_offset + 2 <= data.len()).then_some(start_offset)
+}
+
+/// Resolves the byte order a MakerNote's own IFD is written in.
+///
+/// # Why a MakerNote's byte order is not the file's
+///
+/// 57 of the 94 MakerNote SubDirectories in ExifTool's `MakerNotes.pm` declare
+/// `ByteOrder => 'Unknown'` -- Canon, Nikon3, Sony, Olympus, Pentax, Panasonic,
+/// Leica, Casio, Minolta, DJI, Samsung2, Sigma and the rest -- because a
+/// MakerNote is a self-contained block that a camera may write in its own
+/// endianness regardless of the enclosing TIFF's. `MakerNoteCanon`
+/// (MakerNotes.pm:61-69) is one:
+///
+/// ```text
+///     Name => 'MakerNoteCanon',
+///     # (starts with an IFD)
+///     Condition => '$$self{Make} =~ /^Canon/',
+///     SubDirectory => {
+///         TagTable => 'Image::ExifTool::Canon::Main',
+///         ProcessProc => \&ProcessCanon,
+///         ByteOrder => 'Unknown',
+///     },
+/// ```
+///
+/// This is not a rare corner. Of the 38 corpus JPEGs whose MakerNote ExifTool
+/// re-bases, 24 carry a little-endian Canon MakerNote inside a big-endian
+/// ("MM") TIFF -- every EOS M50, PowerShot SX600HS, IXY 640 and so on. Read in
+/// the file's order their entry count of 31 comes back as 0x1F00 = 7936, which
+/// [`parse_ifd_entries`] rejects, so the whole directory yields nothing.
+///
+/// # The test
+///
+/// ExifTool resolves an `Unknown` order from the directory's own entry count
+/// (`Exif.pm:6886-6893`):
+///
+/// ```text
+///     # attempt to determine the byte ordering by checking
+///     # the number of directory entries.  This is an int16u
+///     # that should be a reasonable value.
+///     my $num = Get16u($subdirDataPt, $subdirStart);
+///     if ($num & 0xff00 and ($num>>8) > ($num&0xff)) {
+///         # This looks wrong, we shouldn't have this many entries
+///         my %otherOrder = ( II=>'MM', MM=>'II' );
+///         $newByteOrder = $otherOrder{$oldByteOrder};
+///     } else {
+///         $newByteOrder = $oldByteOrder;
+///     }
+/// ```
+///
+/// It is deliberately conservative: it only swaps when the high byte is set
+/// *and* exceeds the low byte, which is to say when the count read in the
+/// current order is not a plausible number of IFD entries. A directory that
+/// already reads sanely is never moved.
+pub fn resolve_makernote_byte_order(
+    data: &[u8],
+    config: &IfdParserConfig,
+    byte_order: ByteOrder,
+) -> ByteOrder {
+    let Some(start_offset) = ifd_start_offset(data, config) else {
+        return byte_order;
+    };
+    let reader = EndianReader::new(&data[start_offset..], byte_order.to_io_byte_order());
+    let Some(num) = reader.u16_at(0) else {
+        return byte_order;
+    };
+    if num & 0xff00 != 0 && (num >> 8) > (num & 0xff) {
+        match byte_order {
+            ByteOrder::LittleEndian => ByteOrder::BigEndian,
+            ByteOrder::BigEndian => ByteOrder::LittleEndian,
+        }
+    } else {
+        byte_order
+    }
+}
+
 /// Parse IFD entries from MakerNote data with a callback for each entry
 ///
 /// This function extracts the common IFD parsing boilerplate that was duplicated
@@ -164,6 +252,98 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn no_signature() -> IfdParserConfig<'static> {
+        IfdParserConfig {
+            signature: None,
+            signature_offset: 0,
+            max_entries: 100,
+        }
+    }
+
+    /// The corpus case: a 31-entry little-endian Canon MakerNote inside a
+    /// big-endian TIFF reads back as 0x1F00 = 7936 entries.
+    #[test]
+    fn an_impossible_entry_count_swaps_the_byte_order() {
+        let data = [0x1F, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(
+            resolve_makernote_byte_order(&data, &no_signature(), ByteOrder::BigEndian),
+            ByteOrder::LittleEndian
+        );
+    }
+
+    /// The same test, the other way round.
+    #[test]
+    fn the_swap_works_in_both_directions() {
+        let data = [0x00, 0x1F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(
+            resolve_makernote_byte_order(&data, &no_signature(), ByteOrder::LittleEndian),
+            ByteOrder::BigEndian
+        );
+    }
+
+    /// A directory that already reads sanely is never moved, whichever order it
+    /// is in -- the high byte is zero, so ExifTool's test cannot fire.
+    #[test]
+    fn a_plausible_entry_count_is_left_alone() {
+        for order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let data = match order {
+                ByteOrder::LittleEndian => [0x1F, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                ByteOrder::BigEndian => [0x00, 0x1F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            };
+            assert_eq!(
+                resolve_makernote_byte_order(&data, &no_signature(), order),
+                order
+            );
+        }
+    }
+
+    /// `($num>>8) > ($num&0xff)` -- a count whose high byte is set but does not
+    /// exceed the low byte is left alone, because swapping it would produce a
+    /// larger number, not a smaller one.
+    #[test]
+    fn a_high_byte_no_greater_than_the_low_byte_is_left_alone() {
+        // Read big-endian these bytes are 0x0102 = 258 entries: high 1, low 2.
+        // Swapping would give 0x0201 = 513, which is worse, so ExifTool keeps
+        // the order it has.
+        let data = [0x01, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(
+            resolve_makernote_byte_order(&data, &no_signature(), ByteOrder::BigEndian),
+            ByteOrder::BigEndian
+        );
+    }
+
+    /// The count is read at the IFD, not at the vendor signature in front of it.
+    #[test]
+    fn the_count_is_read_past_the_signature() {
+        let config = IfdParserConfig {
+            signature: Some(b"Nikon\0"),
+            signature_offset: 6,
+            max_entries: 100,
+        };
+        let mut data = b"Nikon\0".to_vec();
+        data.extend_from_slice(&[0x1F, 0x00]);
+        data.resize(24, 0);
+        assert_eq!(
+            resolve_makernote_byte_order(&data, &config, ByteOrder::BigEndian),
+            ByteOrder::LittleEndian
+        );
+        // Read at offset 0 instead, the bytes are "Ni" = 0x4E69: high 0x4E,
+        // low 0x69, so the test would not fire at all.
+        assert_eq!(
+            resolve_makernote_byte_order(&data, &no_signature(), ByteOrder::BigEndian),
+            ByteOrder::BigEndian
+        );
+    }
+
+    /// A block with no room for an entry count keeps the caller's order.
+    #[test]
+    fn a_block_too_short_to_hold_a_count_keeps_the_callers_order() {
+        assert_eq!(
+            resolve_makernote_byte_order(&[0x1F], &no_signature(), ByteOrder::BigEndian),
+            ByteOrder::BigEndian
+        );
+    }
 
     #[test]
     fn test_parse_ifd_entries_little_endian() {
