@@ -47,6 +47,8 @@ pub mod leaf;
 pub mod leaf_lens_database;
 pub mod lens_data;
 pub mod minolta;
+/// DSLR-A100 binary tables, generated from ExifTool's Minolta module
+pub mod minolta_a100_tables;
 pub mod minolta_lens_database;
 /// Minolta binary-data tables shared with the Sony DSLR-A100
 pub mod minolta_tables;
