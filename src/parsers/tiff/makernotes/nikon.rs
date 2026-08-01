@@ -11,6 +11,7 @@
 // Submodules for extended tag parsing
 pub mod af_info;
 pub mod af_info2;
+pub mod af_points;
 pub mod binary_data;
 pub mod encrypted;
 mod encrypted_tables;
