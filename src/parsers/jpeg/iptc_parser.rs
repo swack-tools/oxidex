@@ -1092,4 +1092,191 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 0);
     }
+
+    // -------------------------------------------------------------------------
+    // Dataset formatting via the live extraction path
+    //
+    // These cover the IIM value conversions (record versions, Urgency PrintConv,
+    // date/time reformatting, CodedCharacterSet) end-to-end through
+    // `extract_iptc_from_segments`, which is the only path any caller reaches.
+    //
+    // They replace the unit tests that lived in the removed `iptc_record1` /
+    // `iptc_record2` modules. Those modules were never called outside their own
+    // test code, and their expectations had drifted from ExifTool: they asserted
+    // CodedCharacterSet ESC %G renders as "UTF-8", where IPTC.pm's PrintConv --
+    // and this live path -- give "UTF8".
+    // -------------------------------------------------------------------------
+
+    /// Builds one IIM dataset: marker, record, dataset, 2-byte BE length, payload.
+    fn iim_dataset(record: u8, dataset: u8, payload: &[u8]) -> Vec<u8> {
+        let mut out = vec![IPTC_TAG_MARKER, record, dataset];
+        out.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+        out.extend_from_slice(payload);
+        out
+    }
+
+    /// Wraps the given datasets in an 8BIM IPTC resource block inside an APP13
+    /// segment, then runs the live extraction path over it.
+    fn extract_datasets(datasets: &[(u8, u8, &[u8])]) -> Vec<(String, String)> {
+        let mut iptc = Vec::new();
+        for (record, dataset, payload) in datasets {
+            iptc.extend(iim_dataset(*record, *dataset, payload));
+        }
+
+        let mut app13 = Vec::new();
+        app13.extend_from_slice(PHOTOSHOP_SIGNATURE);
+        app13.extend_from_slice(EIGHTBIM_SIGNATURE);
+        app13.extend_from_slice(&IPTC_RESOURCE_ID.to_be_bytes());
+        app13.push(0x00); // empty Pascal-string name
+        app13.push(0x00); // pad to even length
+        app13.extend_from_slice(&(iptc.len() as u32).to_be_bytes());
+        app13.extend_from_slice(&iptc);
+
+        let segments = vec![Segment::new(APP13_MARKER, 0, &app13)];
+        extract_iptc_from_segments(&segments).expect("extraction should succeed")
+    }
+
+    fn value_of<'a>(tags: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        tags.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn test_application_record_version_is_binary_u16() {
+        let tags = extract_datasets(&[(2, 0, &[0x00, 0x02])]);
+        assert_eq!(
+            value_of(&tags, "IPTC:ApplicationRecordVersion"),
+            Some("2"),
+            "dataset 2:0 is a binary int16u, not a string"
+        );
+    }
+
+    #[test]
+    fn test_envelope_record_version_is_binary_u16() {
+        let tags = extract_datasets(&[(1, 0, &[0x00, 0x04])]);
+        assert_eq!(value_of(&tags, "IPTC:EnvelopeRecordVersion"), Some("4"));
+    }
+
+    #[test]
+    fn test_urgency_print_conv() {
+        // ExifTool annotates only the boundary, midpoint and out-of-range values.
+        for (raw, expected) in [
+            (&b"1"[..], "1 (most urgent)"),
+            (&b"5"[..], "5 (normal urgency)"),
+            (&b"8"[..], "8 (least urgent)"),
+            (&b"3"[..], "3"),
+        ] {
+            let tags = extract_datasets(&[(2, 10, raw)]);
+            assert_eq!(
+                value_of(&tags, "IPTC:Urgency"),
+                Some(expected),
+                "Urgency {:?}",
+                raw
+            );
+        }
+    }
+
+    #[test]
+    fn test_record2_date_and_time_reformatting() {
+        let tags = extract_datasets(&[
+            (2, 55, b"20041225"),    // DateCreated
+            (2, 60, b"021111+0100"), // TimeCreated
+        ]);
+        assert_eq!(value_of(&tags, "IPTC:DateCreated"), Some("2004:12:25"));
+        assert_eq!(value_of(&tags, "IPTC:TimeCreated"), Some("02:11:11+01:00"));
+    }
+
+    #[test]
+    fn test_record1_date_and_time_reformatting() {
+        let tags = extract_datasets(&[
+            (1, 70, b"20041225"),    // DateSent
+            (1, 80, b"143000-0500"), // TimeSent
+        ]);
+        assert_eq!(value_of(&tags, "IPTC:DateSent"), Some("2004:12:25"));
+        assert_eq!(value_of(&tags, "IPTC:TimeSent"), Some("14:30:00-05:00"));
+    }
+
+    #[test]
+    fn test_time_without_timezone_is_preserved() {
+        let tags = extract_datasets(&[(2, 60, b"120000")]);
+        assert_eq!(value_of(&tags, "IPTC:TimeCreated"), Some("12:00:00"));
+    }
+
+    #[test]
+    fn test_coded_character_set_escape_sequences() {
+        // IPTC.pm PrintConv renders ESC % G as "UTF8" -- no hyphen.
+        let tags = extract_datasets(&[(1, 90, &[0x1B, 0x25, 0x47])]);
+        assert_eq!(value_of(&tags, "IPTC:CodedCharacterSet"), Some("UTF8"));
+
+        let tags = extract_datasets(&[(1, 90, &[0x1B, 0x2E, 0x41])]);
+        assert_eq!(
+            value_of(&tags, "IPTC:CodedCharacterSet"),
+            Some("ISO-8859-1")
+        );
+    }
+
+    #[test]
+    fn test_record2_string_datasets() {
+        let tags = extract_datasets(&[
+            (2, 5, b"Test Caption"),
+            (2, 80, b"John Smith"),
+            (2, 90, b"New York"),
+            (2, 105, b"Breaking News"),
+            (2, 116, b"Copyright 2024"),
+            (2, 120, b"A detailed caption"),
+        ]);
+        assert_eq!(value_of(&tags, "IPTC:ObjectName"), Some("Test Caption"));
+        assert_eq!(value_of(&tags, "IPTC:By-line"), Some("John Smith"));
+        assert_eq!(value_of(&tags, "IPTC:City"), Some("New York"));
+        assert_eq!(value_of(&tags, "IPTC:Headline"), Some("Breaking News"));
+        assert_eq!(
+            value_of(&tags, "IPTC:CopyrightNotice"),
+            Some("Copyright 2024")
+        );
+        assert_eq!(
+            value_of(&tags, "IPTC:Caption-Abstract"),
+            Some("A detailed caption")
+        );
+    }
+
+    #[test]
+    fn test_record1_string_datasets() {
+        let tags = extract_datasets(&[
+            (1, 30, b"ServiceId"),
+            (1, 50, b"ProductId"),
+            (1, 100, b"urn:newsml:example.com:20231215:news123"),
+        ]);
+        assert_eq!(value_of(&tags, "IPTC:ServiceIdentifier"), Some("ServiceId"));
+        assert_eq!(value_of(&tags, "IPTC:ProductID"), Some("ProductId"));
+        assert_eq!(
+            value_of(&tags, "IPTC:UniqueObjectName"),
+            Some("urn:newsml:example.com:20231215:news123")
+        );
+    }
+
+    #[test]
+    fn test_both_records_are_extracted_together() {
+        // The removed per-record parsers each discarded the other record's
+        // datasets. The live path keeps both, which is what ExifTool reports.
+        let tags = extract_datasets(&[(1, 0, &[0x00, 0x04]), (2, 5, b"Test")]);
+        assert_eq!(value_of(&tags, "IPTC:EnvelopeRecordVersion"), Some("4"));
+        assert_eq!(value_of(&tags, "IPTC:ObjectName"), Some("Test"));
+    }
+
+    #[test]
+    fn test_latin1_payload_decodes() {
+        // 0xE9 is 'é' in Latin-1 and invalid as standalone UTF-8.
+        let tags = extract_datasets(&[(2, 80, &[b'J', b'o', b's', 0xE9])]);
+        assert_eq!(value_of(&tags, "IPTC:By-line"), Some("José"));
+    }
+
+    #[test]
+    fn test_unknown_dataset_is_dropped_not_placeholder_named() {
+        // IPTC.pm registers unlisted datasets with Unknown => 1, which keeps
+        // them out of a default dump -- extract_iptc_from_segments matches
+        // that rather than inventing an "IPTC:Unknown-R-D" tag for them.
+        let tags = extract_datasets(&[(2, 254, b"mystery"), (2, 5, b"Known")]);
+        assert_eq!(tags.len(), 1);
+        assert_eq!(value_of(&tags, "IPTC:ObjectName"), Some("Known"));
+        assert!(tags.iter().all(|(k, _)| k != "IPTC:Unknown-2-254"));
+    }
 }
