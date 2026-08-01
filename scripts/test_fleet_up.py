@@ -525,6 +525,22 @@ class TestArgParsing(ShellHarnessMixin, unittest.TestCase):
         self.assertEqual(rc, 3)
         self.assertIn("no state file", out)
 
+    def test_squad_mode_is_forwarded_to_dispatcher(self):
+        snippet = textwrap.dedent("""\
+            FLEET_SQUAD_MODE=1
+            PINNED_REPO=/tmp/fleet-test-repo
+            PINNED_CONFIG=/tmp/fleet-test-config.toml
+            spawn() { printf '%s\\n' "$*"; SPAWNED_PID=123; }
+            log() { :; }
+            now_epoch() { printf '1\\n'; }
+            tier_add dispatcher dispatcher '' parallel_model_fix_loop.py
+            tier_start 0
+            """)
+        rc, out, _ = sh(snippet, env=self.env)
+        self.assertEqual(rc, 0)
+        self.assertIn("--max-parallel 32", out)
+        self.assertIn("--squad-mode", out)
+
 
 class TestSupervisorIntegration(ShellHarnessMixin, unittest.TestCase):
     """The only test that actually starts, restarts and stops tiers.
