@@ -60,6 +60,13 @@ benches/target/
 # ...except saved Workflow scripts, which are checked-in tooling, not local config
 !.claude/workflows/
 !.claude/workflows/**
+# ...and skills that are shared team tooling rather than local config. Skills are
+# allowlisted one at a time: un-ignore the directory so git descends into it,
+# re-ignore its direct entries, then negate each shared skill. To share another
+# skill, add one more "!.claude/skills/<name>/" line.
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/exiftool-parity/
 
 # Git worktrees
 .worktrees/
