@@ -22,16 +22,36 @@ const IPTC_RESOURCE_ID: u16 = 0x0404;
 const IPTC_TAG_MARKER: u8 = 0x1C;
 const APP13_MARKER: u16 = 0xFFED;
 
-/// Application-record datasets ExifTool reports as lists because the IIM spec
-/// marks them repeatable (`IPTC.pm`, `List => 1`): 20 = SupplementalCategories,
-/// 25 = Keywords. Every other dataset keeps last-wins semantics, which is what
-/// a single-valued map insert already does.
+/// Datasets ExifTool reports as lists because the IIM spec marks them
+/// repeatable.
+///
+/// In `IPTC.pm` these carry `Flags => 'List'`; only 2:255 CatalogSets spells
+/// the same flag `List => 1`, which is why grepping for the latter finds one
+/// dataset and misses the rest. The full set, by table and dataset number:
+///
+/// | Record | Datasets |
+/// |--------|----------|
+/// | 1 Envelope | 5 Destination, 50 ProductID |
+/// | 2 Application | 4 ObjectAttributeReference, 12 SubjectReference, 20 SupplementalCategories, 25 Keywords, 26 ContentLocationCode, 27 ContentLocationName, 45 ReferenceService, 47 ReferenceDate, 50 ReferenceNumber, 80 By-line, 85 By-lineTitle, 118 Contact, 122 Writer-Editor, 255 CatalogSets |
+///
+/// `%IPTC::ObjectData` marks 8:10 SubFile `List` too, but no record-8 dataset
+/// is decoded here, so no such entry can reach this predicate.
+///
+/// Every other dataset keeps last-wins semantics, which is what a
+/// single-valued map insert already does.
 ///
 /// This is the one place the rule lives -- `parsers::pdf::photoshop_resources`
 /// decodes the same 0x0404 resource out of a PDF and asks here rather than
 /// keeping a second copy that can drift.
 pub fn is_repeatable_iptc_dataset(record_number: u8, dataset_number: u8) -> bool {
-    record_number == 2 && matches!(dataset_number, 20 | 25)
+    match record_number {
+        1 => matches!(dataset_number, 5 | 50),
+        2 => matches!(
+            dataset_number,
+            4 | 12 | 20 | 25 | 26 | 27 | 45 | 47 | 50 | 80 | 85 | 118 | 122 | 255
+        ),
+        _ => false,
+    }
 }
 
 /// Represents an Adobe Photoshop Image Resource Block
@@ -801,6 +821,55 @@ fn iptc_entries_from_segments(segments: &[Segment]) -> Vec<(u8, u8, String, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two 2:80 By-line records collapse into a list, not into the last one.
+    ///
+    /// `combined-samples/MWG.jpg` carries exactly this: ExifTool reports
+    /// `By-line: WRONG1of2-IPTC-Creator, WRONG2of2-IPTC-Creator` where a
+    /// last-wins insert reported only `WRONG2of2-IPTC-Creator`.
+    #[test]
+    fn repeatable_byline_collapses_into_a_list() {
+        let collapsed = collapse_iptc_entries(vec![
+            (2, 80, "IPTC:By-line".to_string(), "first".to_string()),
+            (2, 80, "IPTC:By-line".to_string(), "second".to_string()),
+        ]);
+
+        assert_eq!(collapsed.len(), 1);
+        assert_eq!(collapsed[0].0, "IPTC:By-line");
+        assert_eq!(
+            collapsed[0].1,
+            TagValue::Array(vec![
+                TagValue::new_string("first".to_string()),
+                TagValue::new_string("second".to_string()),
+            ])
+        );
+    }
+
+    /// A dataset ExifTool does not flag `List` keeps last-wins semantics, and a
+    /// single record of a repeatable one still prints as a bare scalar.
+    #[test]
+    fn non_repeatable_and_single_valued_datasets_stay_scalars() {
+        // 2:105 Headline is not in ExifTool's List set.
+        let collapsed = collapse_iptc_entries(vec![
+            (2, 105, "IPTC:Headline".to_string(), "first".to_string()),
+            (2, 105, "IPTC:Headline".to_string(), "second".to_string()),
+            (2, 80, "IPTC:By-line".to_string(), "only".to_string()),
+        ]);
+
+        let headline = &collapsed
+            .iter()
+            .find(|(t, _)| t == "IPTC:Headline")
+            .unwrap()
+            .1;
+        assert_eq!(*headline, TagValue::new_string("second".to_string()));
+
+        let byline = &collapsed
+            .iter()
+            .find(|(t, _)| t == "IPTC:By-line")
+            .unwrap()
+            .1;
+        assert_eq!(*byline, TagValue::new_string("only".to_string()));
+    }
 
     #[test]
     fn test_photoshop_signature() {
