@@ -1,5 +1,21 @@
 //! ExifTool tag database sync: parses `exiftool -f -listx` XML output into
 //! `TagRecord`s and regenerates the `oxidex-tags-*` YAML tag databases.
+//!
+//! # `-listx` is the documentation view, not the reader's view
+//!
+//! `-listx` emits exactly these per-tag attributes: `count`, `encoding`, `id`,
+//! `index`, `lang`, `name`, `type`, `version`, `writable`. It carries no
+//! `SubDirectory`/`TagTable` edges, no `FORMAT`/`FIRST_ENTRY`, no per-field
+//! `Format`, `Mask`, `DataMember`, `Condition`, `ValueConv` or `RawConv`.
+//!
+//! Those omissions are the byte layout, so this module can tell you a tag
+//! *exists* but never how to *read* it. That asymmetry is why OxiDex's tag
+//! coverage has historically trailed its tag knowledge, and why a growing
+//! count here does not imply a growing number of extracted tags.
+//!
+//! When layout is what you need, use [`crate::exiftool_tables`], which reads
+//! ExifTool's real Perl structures out of the interpreter's symbol table
+//! instead of its generated documentation.
 
 use anyhow::{Context, Result};
 use quick_xml::Reader;
