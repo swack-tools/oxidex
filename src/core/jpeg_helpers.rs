@@ -669,22 +669,25 @@ pub fn process_app11_segments(segments: &[Segment], metadata: &mut MetadataMap) 
     // APP11 marker is 0xFFEB
     const APP11_MARKER: u16 = 0xFFEB;
 
-    // Known JPEG-HDR identifier prefixes
-    const HDR_RI_PREFIX: &[u8] = b"HDR_RI";
-    const JPEG_HDR_PREFIX: &[u8] = b"JPEG-HDR";
+    // JPEG-HDR identifier, including the trailing space.
+    //
+    // ExifTool, JPEG.pm splits APP11 two ways and has no third case:
+    //
+    //     APP11 => [{
+    //         Name => 'JPEG-HDR',
+    //         Condition => '$$valPt =~ /^HDR_RI /',
+    //         ...
+    //       }, {
+    //         Name => 'JUMBF',
+    //         Condition => '$$valPt =~ /^JP/',
+    //
+    // so anything that is not `HDR_RI ` belongs to the JUMBF collector.
+    const HDR_RI_PREFIX: &[u8] = b"HDR_RI ";
 
     let mut jumbf_payloads: Vec<&[u8]> = Vec::new();
 
     for segment in segments.iter().filter(|s| s.marker == APP11_MARKER) {
-        // Check if segment contains JPEG-HDR data by looking for known identifiers
-        let has_hdr_ri = segment.data.len() >= HDR_RI_PREFIX.len()
-            && &segment.data[..HDR_RI_PREFIX.len()] == HDR_RI_PREFIX;
-
-        let has_jpeg_hdr = segment.data.len() >= JPEG_HDR_PREFIX.len()
-            && &segment.data[..JPEG_HDR_PREFIX.len()] == JPEG_HDR_PREFIX;
-
-        // Only attempt parsing if this looks like a JPEG-HDR segment
-        if has_hdr_ri || has_jpeg_hdr {
+        if segment.data.starts_with(HDR_RI_PREFIX) {
             match parse_app11_jpeg_hdr(segment.data) {
                 Ok(hdr_metadata) => {
                     // Merge JPEG-HDR metadata into the main metadata map
