@@ -194,6 +194,17 @@ fn primary_af_point_11(raw: u8) -> String {
     }
 }
 
+/// Ports ExifTool's `$$self{Model} =~ /^NIKON (...)\b/i` model-prefix
+/// checks (Nikon.pm:4966,4975,4983) as a plain case-insensitive prefix
+/// match against each literal in `prefixes` -- no regex dependency needed
+/// for three fixed alternatives.
+fn model_matches(model: &str, prefixes: &[&str]) -> bool {
+    let model = model.to_ascii_uppercase();
+    prefixes
+        .iter()
+        .any(|p| model.starts_with(&p.to_ascii_uppercase()))
+}
+
 /// Walk `Nikon::Main` 0x00b7.
 pub fn parse_af_info2(
     data: &[u8],
@@ -206,7 +217,6 @@ pub fn parse_af_info2(
     }
     let version = ascii_value(&data[..4]);
     tags.insert("Nikon:AFInfo2Version".to_string(), version.clone());
-    let _ = model;
 
     let byte = |at: usize| data.get(at).copied();
     // Every geometry field except the two coordinate ones carries
@@ -455,6 +465,30 @@ pub fn parse_af_info2(
                 "Nikon:AFCoordinatesAvailable".to_string(),
                 lookup(NO_YES, coords),
             );
+
+            let area_mode_used = byte(5);
+            if matches!(area_mode_used, Some(197) | Some(207)) {
+                let m = model.unwrap_or("");
+                let table_and_len: Option<(&[&str], usize)> =
+                    if model_matches(m, &["NIKON Z 8", "NIKON Z 9"]) {
+                        Some((af_points::AF_POINTS_405, 51))
+                    } else if model_matches(m, &["NIKON Z6_3", "NIKON Z f", "NIKON Z5_2"]) {
+                        Some((af_points::AF_POINTS_299, 38))
+                    } else if model_matches(m, &["NIKON Z50_2"]) {
+                        Some((af_points::AF_POINTS_231, 29))
+                    } else {
+                        None
+                    };
+                if let Some((table, len)) = table_and_len
+                    && let Some(bits) = data.get(10..10 + len)
+                {
+                    tags.insert(
+                        "Nikon:AFPointsUsed".to_string(),
+                        af_points::print_af_points_array(bits, table),
+                    );
+                }
+            }
+
             put_u16(62, "AFImageWidth", tags);
             put_u16(64, "AFImageHeight", tags);
             if coords == 1 {
@@ -678,5 +712,70 @@ mod tests {
         parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
         assert_eq!(tags["Nikon:AFPointsUsed"], "F11");
         assert_eq!(tags["Nikon:PrimaryAFPoint"], "F11 (Center)");
+    }
+
+    #[test]
+    fn v0400_z8_z9_uses_405point_array() {
+        let mut data = vec![0u8; 70];
+        data[..4].copy_from_slice(b"0400");
+        data[5] = 197; // AFAreaModeUsed = Auto
+        data[7] = 0; // AFCoordinatesAvailable = No
+        data[10] = 0x01; // AFPointsUsed bit index 0 -> AF_POINTS_405[0]
+        let mut tags = HashMap::new();
+        parse_af_info2(&data, ByteOrder::BigEndian, Some("NIKON Z 9"), &mut tags);
+        assert_eq!(
+            tags["Nikon:AFPointsUsed"],
+            af_points::AF_POINTS_405[0]
+        );
+    }
+
+    #[test]
+    fn v0400_z8_z9_absent_for_other_area_modes() {
+        let mut data = vec![0u8; 70];
+        data[..4].copy_from_slice(b"0400");
+        data[5] = 193; // AFAreaModeUsed = Single, not Auto/3D-tracking
+        data[10] = 0x01;
+        let mut tags = HashMap::new();
+        parse_af_info2(&data, ByteOrder::BigEndian, Some("NIKON Z 9"), &mut tags);
+        assert!(!tags.contains_key("Nikon:AFPointsUsed"));
+    }
+
+    #[test]
+    fn v0401_zf_uses_299point_array() {
+        let mut data = vec![0u8; 60];
+        data[..4].copy_from_slice(b"0401");
+        data[5] = 207; // 3D-tracking
+        data[10] = 0x01;
+        let mut tags = HashMap::new();
+        parse_af_info2(&data, ByteOrder::BigEndian, Some("NIKON Z f"), &mut tags);
+        assert_eq!(
+            tags["Nikon:AFPointsUsed"],
+            af_points::AF_POINTS_299[0]
+        );
+    }
+
+    #[test]
+    fn v0402_z50ii_uses_231point_array() {
+        let mut data = vec![0u8; 50];
+        data[..4].copy_from_slice(b"0402");
+        data[5] = 197;
+        data[10] = 0x01;
+        let mut tags = HashMap::new();
+        parse_af_info2(&data, ByteOrder::BigEndian, Some("NIKON Z50_2"), &mut tags);
+        assert_eq!(
+            tags["Nikon:AFPointsUsed"],
+            af_points::AF_POINTS_231[0]
+        );
+    }
+
+    #[test]
+    fn v0400_unrecognized_model_reports_nothing() {
+        let mut data = vec![0u8; 60];
+        data[..4].copy_from_slice(b"0400");
+        data[5] = 197;
+        data[10] = 0x01;
+        let mut tags = HashMap::new();
+        parse_af_info2(&data, ByteOrder::BigEndian, Some("NIKON D850"), &mut tags);
+        assert!(!tags.contains_key("Nikon:AFPointsUsed"));
     }
 }
