@@ -15,8 +15,8 @@ fn test_fujifilm_parser_trait() {
     let parser = FujifilmParser;
 
     // Test trait methods
-    assert_eq!(parser.manufacturer_name(), "Fujifilm");
-    assert_eq!(parser.tag_prefix(), "Fujifilm:");
+    assert_eq!(parser.manufacturer_name(), "FujiFilm");
+    assert_eq!(parser.tag_prefix(), "FujiFilm:");
 
     // Test header validation
     let valid_header = b"FUJIFILM\x0C\x00\x00\x00extra data";
@@ -87,11 +87,11 @@ fn test_fujifilm_parse_basic_tags() {
     parse_fujifilm_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
 
     // Verify extracted tags
-    assert!(tags.contains_key("Fujifilm:Quality"));
-    assert_eq!(tags.get("Fujifilm:Quality"), Some(&"FINE".to_string()));
+    assert!(tags.contains_key("FujiFilm:Quality"));
+    assert_eq!(tags.get("FujiFilm:Quality"), Some(&"FINE".to_string()));
 
-    assert!(tags.contains_key("Fujifilm:SequenceNumber"));
-    assert_eq!(tags.get("Fujifilm:SequenceNumber"), Some(&"42".to_string()));
+    assert!(tags.contains_key("FujiFilm:SequenceNumber"));
+    assert_eq!(tags.get("FujiFilm:SequenceNumber"), Some(&"42".to_string()));
 }
 
 #[test]
@@ -134,11 +134,11 @@ fn test_fujifilm_parse_film_simulation() {
 
     // Verify decoded film simulation values
     assert_eq!(
-        tags.get("Fujifilm:FilmMode"),
+        tags.get("FujiFilm:FilmMode"),
         Some(&"Classic Chrome".to_string())
     );
-    assert_eq!(tags.get("Fujifilm:DynamicRange"), Some(&"Wide".to_string()));
-    assert_eq!(tags.get("Fujifilm:AutoBracketing"), Some(&"On".to_string()));
+    assert_eq!(tags.get("FujiFilm:DynamicRange"), Some(&"Wide".to_string()));
+    assert_eq!(tags.get("FujiFilm:AutoBracketing"), Some(&"On".to_string()));
 }
 
 #[test]
@@ -180,13 +180,13 @@ fn test_fujifilm_parse_focus_and_flash() {
     parse_fujifilm_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
 
     assert_eq!(
-        tags.get("Fujifilm:FocusMode"),
+        tags.get("FujiFilm:FocusMode"),
         Some(&"AF-C (Continuous)".to_string())
     );
     // ExifTool names this tag "FujiFlashMode", not "FlashMode".
-    assert_eq!(tags.get("Fujifilm:FujiFlashMode"), Some(&"On".to_string()));
+    assert_eq!(tags.get("FujiFilm:FujiFlashMode"), Some(&"On".to_string()));
     assert_eq!(
-        tags.get("Fujifilm:WhiteBalance"),
+        tags.get("FujiFilm:WhiteBalance"),
         Some(&"Daylight".to_string())
     );
 }
@@ -243,7 +243,7 @@ fn test_fujifilm_parser_big_endian() {
     // but the parser should still handle Fujifilm's little-endian format correctly
     parse_fujifilm_makernotes(&data, ByteOrder::BigEndian, &mut tags);
 
-    assert_eq!(tags.get("Fujifilm:Quality"), Some(&"FINE".to_string()));
+    assert_eq!(tags.get("FujiFilm:Quality"), Some(&"FINE".to_string()));
 }
 
 #[test]
@@ -292,8 +292,8 @@ fn test_fujifilm_parse_advanced_settings() {
     parse_fujifilm_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
 
     // Verify advanced settings
-    assert!(tags.contains_key("Fujifilm:ShadowTone"));
-    assert!(tags.contains_key("Fujifilm:HighlightTone"));
-    assert_eq!(tags.get("Fujifilm:FacesDetected"), Some(&"3".to_string()));
-    assert_eq!(tags.get("Fujifilm:SequenceNumber"), Some(&"2".to_string()));
+    assert!(tags.contains_key("FujiFilm:ShadowTone"));
+    assert!(tags.contains_key("FujiFilm:HighlightTone"));
+    assert_eq!(tags.get("FujiFilm:FacesDetected"), Some(&"3".to_string()));
+    assert_eq!(tags.get("FujiFilm:SequenceNumber"), Some(&"2".to_string()));
 }

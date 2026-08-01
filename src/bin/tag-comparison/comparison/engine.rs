@@ -30,7 +30,7 @@ pub(crate) fn normalize_family_for_comparison(family: &str) -> &str {
         //
         // NOTE: "GoPro" deliberately is NOT in this list -- see the GoPro arm
         // below. ExifTool never files a GoPro tag under family-0 MakerNotes.
-        "Canon" | "CanonCustom" | "Nikon" | "Sony" | "Fujifilm" | "Panasonic" | "Olympus"
+        "Canon" | "CanonCustom" | "Nikon" | "Sony" | "FujiFilm" | "Panasonic" | "Olympus"
         | "Pentax" | "Samsung" | "Leica" | "Casio" | "Minolta" | "Sigma" | "Ricoh" | "Kodak"
         | "Sanyo" | "JVC" | "Motorola" | "HP" | "DJI" | "Apple" | "Google" | "Reconyx"
         | "Parrot" | "Infiray" | "Lytro" | "PhaseOne" | "Leaf" | "Red" | "Qualcomm"

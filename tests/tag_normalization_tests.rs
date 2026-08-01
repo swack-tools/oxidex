@@ -67,10 +67,16 @@ fn test_makernotes_unchanged() {
     // Sony
     assert_eq!(normalize_tag_family("Sony:SonyModelID"), "Sony:SonyModelID");
 
-    // Fujifilm
+    // FujiFilm -- ExifTool capitalises both halves (MakerNotes.pm:121
+    // `MakerNoteFujiFilm`), so `-G1` prints `[FujiFilm]`. The old
+    // single-capital spelling folds onto it rather than passing through.
+    assert_eq!(
+        normalize_tag_family("FujiFilm:FilmMode"),
+        "FujiFilm:FilmMode"
+    );
     assert_eq!(
         normalize_tag_family("Fujifilm:FilmMode"),
-        "Fujifilm:FilmMode"
+        "FujiFilm:FilmMode"
     );
 
     // Panasonic
