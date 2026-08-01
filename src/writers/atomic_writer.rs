@@ -113,6 +113,15 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
     // sync_all() flushes both data and metadata.
     temp_file.as_file().sync_all()?;
 
+    // Carry the original file's permissions onto the replacement. Temp files
+    // are created 0600, so without this every metadata edit silently tightened
+    // a 0644 file to 0600 -- a change ExifTool reports as FilePermissions and
+    // one the caller never asked for. A file being created for the first time
+    // (no original to read) keeps the safe default.
+    if let Ok(original) = std::fs::metadata(path) {
+        let _ = temp_file.as_file().set_permissions(original.permissions());
+    }
+
     // Atomically rename the temporary file to the target path.
     // The persist() method handles the rename and returns PersistError on failure.
     // We convert PersistError to io::Error which then gets converted to ExifToolError.

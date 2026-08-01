@@ -1,16 +1,18 @@
 //! PDF Info dictionary writer
 //!
-//! This module handles writing PDF Info dictionaries with modified metadata.
-//! It reads an existing PDF, modifies the Info dictionary, recalculates the
-//! cross-reference (xref) table with correct byte offsets, and writes a valid PDF.
+//! This module writes PDF Info dictionary metadata as an **incremental
+//! update**: the original file is kept byte-for-byte and a new revision is
+//! appended after it. That is the mechanism PDF was designed with, and the
+//! same principle as the JPEG and TIFF writers -- never rebuild, only append
+//! and repoint.
 //!
 //! # PDF Writing Strategy
 //!
-//! 1. **Read Original PDF**: Parse structure to identify objects and Info dictionary
-//! 2. **Build Modified PDF**: Sequentially rebuild PDF in memory buffer
-//! 3. **Track Byte Offsets**: Record exact byte position of each object
-//! 4. **Serialize Info Dictionary**: Convert MetadataMap to PDF dictionary format
-//! 5. **Recalculate xref Table**: Write xref entries with correct byte offsets
+//! 1. **Locate the last revision**: `startxref` -> classic xref table -> trailer
+//! 2. **Copy the original verbatim**: every object, stream and comment survives
+//! 3. **Append a new Info object**: serialized from the MetadataMap
+//! 4. **Append a one-entry xref section**: listing only that object
+//! 5. **Append a trailer with /Prev**: chaining to the revision it updates
 //! 6. **Atomic Write**: Use temp-file-and-rename pattern for safety
 //!
 //! # Example
@@ -42,15 +44,16 @@ use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::writers::atomic_writer::write_atomic;
 use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, Timelike, Utc};
-use std::collections::{BTreeMap, HashMap, btree_map::Entry};
+use std::collections::{BTreeMap, btree_map::Entry};
 use std::path::Path;
 use std::str;
 
 /// Writes a complete PDF file with modified Info dictionary metadata.
 ///
-/// This is the main entry point for PDF file writing. It reads the original file,
-/// parses its structure, modifies the Info dictionary, recalculates the xref table,
-/// and writes a new PDF file atomically.
+/// This is the main entry point for PDF file writing. It copies the original
+/// file verbatim and appends a new revision holding the updated Info
+/// dictionary, its own xref section and a trailer chaining the previous
+/// revision via /Prev, then writes the result atomically.
 ///
 /// # Parameters
 ///
@@ -115,10 +118,9 @@ pub fn write_pdf_file(
 /// PDF structure information extracted from original file
 #[derive(Debug)]
 struct PdfStructure {
-    /// Byte offset of xref table start
+    /// Byte offset of the last xref table, which the appended revision chains
+    /// to via the trailer's /Prev key
     xref_offset: u64,
-    /// Map of object number to byte offset in original file
-    object_offsets: HashMap<u32, u64>,
     /// Object number of the Info dictionary
     info_object_num: u32,
     /// Generation number of Info object
@@ -179,38 +181,61 @@ fn parse_pdf_structure(reader: &dyn FileReader) -> Result<PdfStructure> {
     let tail_offset = file_size - tail_size as u64;
     let tail_data = reader.read(tail_offset, tail_size)?;
 
-    // Find startxref and get xref offset
-    let xref_offset = find_xref_offset(tail_data)?;
+    // Find startxref and get the declared xref offset
+    let declared = find_xref_offset(tail_data)?;
+
+    // The appended revision is a classic xref section whose /Prev chains to
+    // this one, so /Prev must be the offset of a real `xref` keyword. A stale
+    // startxref would produce a chain no reader could follow, so verify it and
+    // fall back to the last classic table actually present.
+    let whole = reader.read(0, file_size as usize)?;
+    let declared_lands_on_xref = usize::try_from(declared)
+        .ok()
+        .and_then(|at| whole.get(at..))
+        .is_some_and(|rest| rest.starts_with(b"xref"));
+    let xref_offset = if declared_lands_on_xref {
+        declared
+    } else {
+        // A PDF 1.5+ cross-reference *stream* has no classic table at all and
+        // cannot be chained this way; refuse rather than append a revision no
+        // conforming reader would follow.
+        let found = rfind(whole, b"\nxref").ok_or_else(|| {
+            ExifToolError::unsupported_format(
+                "PDF write operations are not yet supported for cross-reference \
+                 stream PDFs (PDF 1.5+ /Type /XRef)",
+            )
+        })?;
+        (found + 1) as u64
+    };
 
     // Read xref table and trailer region (up to 8KB should be enough)
     let xref_size = std::cmp::min(8192, (file_size - xref_offset) as usize);
     let xref_data = reader.read(xref_offset, xref_size)?;
 
-    // The writer only rebuilds a single classic xref section. An incremental
-    // update chains earlier revisions via the trailer's /Prev key, and the
-    // final section lists only the objects that revision changed; rewriting
-    // from it alone would drop the Catalog/Pages/Page objects and corrupt the
-    // document. Reject rather than silently destroy it.
-    if trailer_has_prev(xref_data) {
-        return Err(ExifToolError::unsupported_format(
-            "PDF write operations are not yet supported for incrementally-updated PDFs (trailer /Prev)",
-        ));
-    }
-
     // Parse trailer to find Info reference and Root reference
     let (info_ref, root_ref, size) = parse_trailer_refs(xref_data)?;
 
-    // Parse xref table to build object offset map
-    let object_offsets = parse_xref_table(xref_data)?;
+    // A PDF with no /Info gets one: the next free object number, which the
+    // appended trailer then declares.
+    let (info_object_num, info_generation) = match info_ref {
+        Some(r) => (r.object_num, r.generation),
+        None => (size, 0),
+    };
 
     Ok(PdfStructure {
         xref_offset,
-        object_offsets,
-        info_object_num: info_ref.object_num,
-        info_generation: info_ref.generation,
+        info_object_num,
+        info_generation,
         size,
         root_ref,
     })
+}
+
+/// Offset of the last occurrence of `needle` in `haystack`.
+fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .rposition(|window| window == needle)
 }
 
 /// Finds the startxref offset from the PDF tail
@@ -218,27 +243,16 @@ fn find_xref_offset(tail_data: &[u8]) -> Result<u64> {
     crate::parsers::pdf::find_startxref_offset(tail_data)
 }
 
-/// Reports whether the final trailer references an earlier revision via /Prev.
-///
-/// Such incrementally-updated PDFs cannot be safely rewritten from the final
-/// xref section alone (it lists only the last revision's objects).
-fn trailer_has_prev(xref_data: &[u8]) -> bool {
-    let Ok(xref_str) = str::from_utf8(xref_data) else {
-        // Non-UTF-8 xref region implies a cross-reference stream, which this
-        // writer also cannot rebuild; treat it as unsupported too.
-        return true;
+/// Parses trailer to extract Info reference (absent in PDFs with no Info
+/// dictionary), Root reference, and Size
+fn parse_trailer_refs(xref_data: &[u8]) -> Result<(Option<ObjectRef>, ObjectRef, u32)> {
+    // The xref region is ASCII up to the trailer; binary comments after %%EOF
+    // must not make the whole parse fail.
+    let xref_str = match str::from_utf8(xref_data) {
+        Ok(s) => s,
+        Err(e) => str::from_utf8(&xref_data[..e.valid_up_to()])
+            .map_err(|_| ExifToolError::parse_error("xref data contains invalid UTF-8"))?,
     };
-    let Some(trailer_pos) = xref_str.find("trailer") else {
-        // No classic trailer keyword: likely a cross-reference stream.
-        return true;
-    };
-    xref_str[trailer_pos..].contains("/Prev")
-}
-
-/// Parses trailer to extract Info reference, Root reference, and Size
-fn parse_trailer_refs(xref_data: &[u8]) -> Result<(ObjectRef, ObjectRef, u32)> {
-    let xref_str = str::from_utf8(xref_data)
-        .map_err(|_| ExifToolError::parse_error("xref data contains invalid UTF-8"))?;
 
     // Find trailer dictionary
     let trailer_pos = xref_str
@@ -257,9 +271,8 @@ fn parse_trailer_refs(xref_data: &[u8]) -> Result<(ObjectRef, ObjectRef, u32)> {
 
     let dict_content = &trailer_section[dict_start..dict_start + dict_end + 2];
 
-    // Parse /Info reference
-    let info_ref = parse_dict_object_ref(dict_content, "/Info")
-        .ok_or_else(|| ExifToolError::parse_error("/Info reference not found in trailer"))?;
+    // Parse /Info reference (optional: a PDF may have no Info dictionary)
+    let info_ref = parse_dict_object_ref(dict_content, "/Info");
 
     // Parse /Root reference
     let root_ref = parse_dict_object_ref(dict_content, "/Root")
@@ -273,6 +286,19 @@ fn parse_trailer_refs(xref_data: &[u8]) -> Result<(ObjectRef, ObjectRef, u32)> {
     Ok((info_ref, root_ref, size))
 }
 
+/// Splits a dictionary fragment into PDF tokens.
+///
+/// Whitespace alone is not enough: PDF permits compact dictionaries where a
+/// value abuts the next key, as in `<</Size 5/Root 1 0 R>>`. Splitting that on
+/// whitespace yields "5/Root", which does not parse as a number — so /Size
+/// silently resolved to the *next* integer in the dictionary and the appended
+/// trailer declared a wrong object count. Delimiters are token boundaries.
+fn pdf_tokens(fragment: &str) -> impl Iterator<Item = &str> {
+    fragment
+        .split(|c: char| c.is_whitespace() || "/<>[]()".contains(c))
+        .filter(|t| !t.is_empty())
+}
+
 /// Parses an object reference from a dictionary (e.g., "/Info 4 0 R")
 fn parse_dict_object_ref(dict_str: &str, key: &str) -> Option<ObjectRef> {
     let key_pos = dict_str.find(key)?;
@@ -280,12 +306,15 @@ fn parse_dict_object_ref(dict_str: &str, key: &str) -> Option<ObjectRef> {
 
     // Extract numbers before 'R'
     let mut nums = Vec::new();
-    for token in after_key.split_whitespace() {
+    for token in pdf_tokens(after_key) {
         if token == "R" {
             break;
         }
-        if let Ok(num) = token.parse::<u32>() {
-            nums.push(num);
+        match token.parse::<u32>() {
+            Ok(num) => nums.push(num),
+            // A non-numeric, non-"R" token means this key's value is not an
+            // indirect reference; stop rather than scavenge later keys.
+            Err(_) => break,
         }
     }
 
@@ -304,115 +333,72 @@ fn parse_dict_integer(dict_str: &str, key: &str) -> Option<u64> {
     let key_pos = dict_str.find(key)?;
     let after_key = &dict_str[key_pos + key.len()..];
 
-    // Find first number
-    for token in after_key.split_whitespace() {
-        if let Ok(num) = token.parse::<u64>() {
-            return Some(num);
-        }
-    }
-
-    None
+    // The value is the very next token, not the next token that happens to
+    // parse as a number — see `pdf_tokens`.
+    pdf_tokens(after_key).next()?.parse::<u64>().ok()
 }
 
-/// Parses the xref table and builds a map of object numbers to file offsets
-fn parse_xref_table(xref_data: &[u8]) -> Result<HashMap<u32, u64>> {
-    let xref_str = str::from_utf8(xref_data)
-        .map_err(|_| ExifToolError::parse_error("xref table contains invalid UTF-8"))?;
-
-    let xref_pos = xref_str
-        .find("xref")
-        .ok_or_else(|| ExifToolError::parse_error("xref table not found"))?;
-
-    let after_xref = &xref_str[xref_pos + 4..]; // "xref".len() = 4
-
-    let mut object_offsets = HashMap::new();
-    let mut lines = after_xref.lines();
-
-    // Parse xref subsections
-    while let Some(line) = lines.next() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if line.starts_with("trailer") {
-            break;
-        }
-
-        // Parse subsection header: "start_obj_num count"
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() == 2
-            && let (Ok(start_num), Ok(count)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>())
-        {
-            // Parse each entry in this subsection
-            for i in 0..count {
-                if let Some(entry_line) = lines.next() {
-                    let entry_parts: Vec<&str> = entry_line.split_whitespace().collect();
-                    if entry_parts.len() >= 3
-                        && let Ok(offset) = entry_parts[0].parse::<u64>()
-                    {
-                        let in_use = entry_parts[2];
-                        if in_use == "n" {
-                            object_offsets.insert(start_num + i, offset);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(object_offsets)
-}
-
-/// Builds a complete modified PDF file
+/// Builds the updated PDF as an **incremental update**: the original bytes
+/// verbatim, followed by a new revision containing just the Info dictionary.
+///
+/// This is the mechanism PDF was designed with, and the same principle the
+/// TIFF and JPEG writers use — never rebuild, only append and repoint. It
+/// replaced a whole-document rebuild that walked the final xref section and
+/// re-emitted the objects it found there: content streams it could not copy,
+/// objects absent from that section, and the original `%PDF-` version were
+/// all lost, which turned an 8.9 kB corpus PDF into a 384-byte stub with
+/// none of its 122 tags. Appending cannot lose what it never touches.
 fn build_modified_pdf(
     original_reader: &dyn FileReader,
     structure: &PdfStructure,
     modified_metadata: &MetadataMap,
 ) -> Result<Vec<u8>> {
-    let mut buffer = Vec::new();
-    let mut new_offsets: HashMap<u32, u64> = HashMap::new();
+    let size = original_reader.size() as usize;
+    let mut buffer = original_reader.read(0, size)?.to_vec();
 
-    // Write PDF header
-    buffer.extend_from_slice(b"%PDF-1.4\n");
-
-    // Read and copy all objects, modifying Info dictionary
-    for (&obj_num, &offset) in &structure.object_offsets {
-        // Record this object's offset in new file
-        new_offsets.insert(obj_num, buffer.len() as u64);
-
-        if obj_num == structure.info_object_num {
-            // Write modified Info dictionary
-            write_info_object(
-                &mut buffer,
-                obj_num,
-                structure.info_generation,
-                modified_metadata,
-            )?;
-        } else {
-            // Copy object from original file
-            copy_object(&mut buffer, original_reader, offset)?;
-        }
+    // A revision must start on its own line
+    if !buffer.ends_with(b"\n") {
+        buffer.push(b'\n');
     }
 
-    // Record xref table offset
-    let xref_start = buffer.len() as u64;
-
-    // Write xref table
-    write_xref_table(&mut buffer, &new_offsets, structure.size)?;
-
-    // Write trailer
-    write_trailer(
+    let info_offset = buffer.len() as u64;
+    write_info_object(
         &mut buffer,
-        structure.size,
-        structure.root_ref,
-        ObjectRef {
-            object_num: structure.info_object_num,
-            generation: structure.info_generation,
-        },
+        structure.info_object_num,
+        structure.info_generation,
+        modified_metadata,
     )?;
 
-    // Write startxref
-    buffer.extend_from_slice(b"startxref\n");
+    // New xref section: one subsection listing only the object this revision
+    // changed. Entries are exactly 20 bytes, as the spec requires.
+    let xref_start = buffer.len() as u64;
+    buffer.extend_from_slice(b"xref\n");
+    buffer.extend_from_slice(format!("{} 1\n", structure.info_object_num).as_bytes());
+    buffer.extend_from_slice(
+        format!("{:010} {:05} n \n", info_offset, structure.info_generation).as_bytes(),
+    );
+
+    // /Size must exceed the highest object number in use; /Prev chains to the
+    // revision this one updates, so every earlier object stays resolvable.
+    let new_size = structure.size.max(structure.info_object_num + 1);
+    buffer.extend_from_slice(b"trailer\n<<\n");
+    buffer.extend_from_slice(format!("/Size {}\n", new_size).as_bytes());
+    buffer.extend_from_slice(
+        format!(
+            "/Root {} {} R\n",
+            structure.root_ref.object_num, structure.root_ref.generation
+        )
+        .as_bytes(),
+    );
+    buffer.extend_from_slice(
+        format!(
+            "/Info {} {} R\n",
+            structure.info_object_num, structure.info_generation
+        )
+        .as_bytes(),
+    );
+    buffer.extend_from_slice(format!("/Prev {}\n", structure.xref_offset).as_bytes());
+    buffer.extend_from_slice(b">>\nstartxref\n");
     buffer.extend_from_slice(xref_start.to_string().as_bytes());
     buffer.extend_from_slice(b"\n%%EOF\n");
 
@@ -621,83 +607,6 @@ fn format_fixed_offset_pdf_date(dt: DateTime<FixedOffset>) -> String {
     )
 }
 
-/// Copies an object from the original file to the buffer
-fn copy_object(buffer: &mut Vec<u8>, reader: &dyn FileReader, offset: u64) -> Result<()> {
-    // Read a chunk starting at offset (4KB should be enough for most objects)
-    let chunk_size = 4096;
-    let file_size = reader.size();
-    let read_size = std::cmp::min(chunk_size, (file_size - offset) as usize);
-    let data = reader.read(offset, read_size)?;
-
-    // Find "endobj" to determine object end
-    let data_str = str::from_utf8(data)
-        .map_err(|_| ExifToolError::parse_error("Object contains invalid UTF-8"))?;
-
-    let endobj_pos = data_str
-        .find("endobj")
-        .ok_or_else(|| ExifToolError::parse_error("endobj not found in object"))?;
-
-    // Copy object including "endobj" and newline
-    let object_end = endobj_pos + 6; // "endobj".len() = 6
-    buffer.extend_from_slice(&data[..object_end]);
-    buffer.extend_from_slice(b"\n");
-
-    Ok(())
-}
-
-/// Writes the xref (cross-reference) table
-fn write_xref_table(buffer: &mut Vec<u8>, offsets: &HashMap<u32, u64>, size: u32) -> Result<()> {
-    buffer.extend_from_slice(b"xref\n");
-
-    // Write subsection header
-    buffer.extend_from_slice(b"0 ");
-    buffer.extend_from_slice(size.to_string().as_bytes());
-    buffer.extend_from_slice(b"\n");
-
-    // Write entries for all objects
-    for obj_num in 0..size {
-        if obj_num == 0 {
-            // First entry is always free object
-            buffer.extend_from_slice(b"0000000000 65535 f \n");
-        } else if let Some(&offset) = offsets.get(&obj_num) {
-            // In-use object - write offset
-            buffer.extend_from_slice(format!("{:010} 00000 n \n", offset).as_bytes());
-        } else {
-            // Object not in use
-            buffer.extend_from_slice(b"0000000000 00000 f \n");
-        }
-    }
-
-    Ok(())
-}
-
-/// Writes the trailer dictionary
-fn write_trailer(
-    buffer: &mut Vec<u8>,
-    size: u32,
-    root_ref: ObjectRef,
-    info_ref: ObjectRef,
-) -> Result<()> {
-    buffer.extend_from_slice(b"trailer\n");
-    buffer.extend_from_slice(b"<<\n");
-    buffer.extend_from_slice(b"/Size ");
-    buffer.extend_from_slice(size.to_string().as_bytes());
-    buffer.extend_from_slice(b"\n");
-    buffer.extend_from_slice(b"/Root ");
-    buffer.extend_from_slice(root_ref.object_num.to_string().as_bytes());
-    buffer.extend_from_slice(b" ");
-    buffer.extend_from_slice(root_ref.generation.to_string().as_bytes());
-    buffer.extend_from_slice(b" R\n");
-    buffer.extend_from_slice(b"/Info ");
-    buffer.extend_from_slice(info_ref.object_num.to_string().as_bytes());
-    buffer.extend_from_slice(b" ");
-    buffer.extend_from_slice(info_ref.generation.to_string().as_bytes());
-    buffer.extend_from_slice(b" R\n");
-    buffer.extend_from_slice(b">>\n");
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -710,18 +619,39 @@ mod tests {
         assert_eq!(result.unwrap(), 1234);
     }
 
+    /// An already-incrementally-updated PDF is now writable: appending yet
+    /// another revision on top is exactly what /Prev chaining is for. The
+    /// trailer's own /Prev must still parse, and /Info stays optional.
     #[test]
-    fn test_trailer_has_prev() {
-        // Incremental update: trailer references an earlier revision.
-        assert!(trailer_has_prev(
-            b"xref\n0 1\ntrailer<</Size 5/Root 1 0 R/Prev 116>>\nstartxref\n"
-        ));
-        // Classic single-revision trailer: safe to rebuild.
-        assert!(!trailer_has_prev(
-            b"xref\n0 5\ntrailer<</Size 5/Root 1 0 R/Info 4 0 R>>\nstartxref\n"
-        ));
-        // Cross-reference stream (no `trailer` keyword): also unsupported.
-        assert!(trailer_has_prev(b"5 0 obj<</Type/XRef/Size 6>>stream\n"));
+    fn test_parse_trailer_refs_accepts_prev_and_optional_info() {
+        let (info, root, size) =
+            parse_trailer_refs(b"xref\n0 1\ntrailer<</Size 5/Root 1 0 R/Prev 116>>\nstartxref\n")
+                .expect("an incremental-update trailer must parse");
+        assert!(info.is_none(), "no /Info key means no Info object yet");
+        assert_eq!(root.object_num, 1);
+        assert_eq!(size, 5);
+
+        let (info, _, _) =
+            parse_trailer_refs(b"xref\n0 5\ntrailer<</Size 5/Root 1 0 R/Info 4 0 R>>\nstartxref\n")
+                .expect("a classic trailer must parse");
+        assert_eq!(info.expect("has /Info").object_num, 4);
+    }
+
+    /// A compact dictionary (no space before the next key) must not make a
+    /// value scavenge the following key's number.
+    #[test]
+    fn test_parse_dict_handles_compact_dictionaries() {
+        let compact = "<</Size 5/Root 1 0 R/Prev 116>>";
+        assert_eq!(parse_dict_integer(compact, "/Size"), Some(5));
+        assert_eq!(parse_dict_integer(compact, "/Prev"), Some(116));
+        let root = parse_dict_object_ref(compact, "/Root").expect("has /Root");
+        assert_eq!((root.object_num, root.generation), (1, 0));
+        // /Type is a name, not a reference or an integer
+        assert_eq!(
+            parse_dict_integer("<</Type/Catalog/Size 9>>", "/Type"),
+            None
+        );
+        assert!(parse_dict_object_ref("<</Type/Catalog/Root 1 0 R>>", "/Type").is_none());
     }
 
     #[test]

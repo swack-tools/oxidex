@@ -10,6 +10,7 @@ pub mod exif_surgical;
 pub mod jpeg_writer;
 pub mod pdf_writer;
 pub mod png_writer;
+pub mod tiff_surgical;
 pub mod tiff_writer;
 
 #[cfg(test)]

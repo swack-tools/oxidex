@@ -154,7 +154,10 @@ pub struct WritePlan {
 /// Serializes a caller-supplied TagValue into (field_type, count, bytes).
 /// `hint` is the original entry's field type, used to keep BYTE vs UNDEFINED
 /// and SHORT vs LONG stable across an edit.
-fn tag_value_to_field(value: &TagValue, hint: Option<u16>) -> Result<(u16, u32, Vec<u8>)> {
+pub(crate) fn tag_value_to_field(
+    value: &TagValue,
+    hint: Option<u16>,
+) -> Result<(u16, u32, Vec<u8>)> {
     match value {
         TagValue::String(s) => {
             let mut bytes = s.as_bytes().to_vec();
@@ -449,7 +452,7 @@ pub fn plan_exif_write(
 
 /// Strict validation for values the caller changed or added — identical
 /// policy to write_metadata's PHASE 1 (reliable type match, else intrinsics).
-fn validate_changed(key: &str, value: &TagValue) -> Result<()> {
+pub(crate) fn validate_changed(key: &str, value: &TagValue) -> Result<()> {
     if let Some(descriptor) = get_tag_descriptor(key) {
         if has_reliable_value_type(key) {
             validate_tag_value_with_name(key, descriptor, value)?;
@@ -462,7 +465,7 @@ fn validate_changed(key: &str, value: &TagValue) -> Result<()> {
 
 /// Extracts the numeric tag id from a descriptor, mirroring
 /// `validate_tag_for_tiff` (`src/writers/tiff_writer/tiff/validator.rs:48-69`).
-fn descriptor_tag_id(descriptor: &crate::core::TagDescriptor) -> Option<u16> {
+pub(crate) fn descriptor_tag_id(descriptor: &crate::core::TagDescriptor) -> Option<u16> {
     match &descriptor.tag_id {
         crate::core::TagId::Numeric(id) => Some(*id),
         crate::core::TagId::Named(_) => None,
@@ -650,17 +653,24 @@ fn value_in_byte_order(entry: &OutEntry, bo: ByteOrder) -> Vec<u8> {
     if !entry.native_endian {
         return entry.value.clone();
     }
-    let elem = type_size(entry.field_type);
+    native_to_byte_order(entry.field_type, &entry.value, bo)
+}
+
+/// Re-encodes `tag_value_to_field`'s native-endian placeholder bytes into
+/// `bo`, per TIFF element. A no-op for 1-byte element types (ASCII, BYTE,
+/// UNDEFINED), which are endian-neutral.
+pub(crate) fn native_to_byte_order(field_type: u16, value: &[u8], bo: ByteOrder) -> Vec<u8> {
+    let elem = type_size(field_type);
     if elem == 1 {
-        return entry.value.clone();
+        return value.to_vec();
     }
     // Elements inside RATIONAL/SRATIONAL are two 4-byte halves
-    let unit = match entry.field_type {
+    let unit = match field_type {
         5 | 10 => 4,
         _ => elem,
     };
-    let mut out = Vec::with_capacity(entry.value.len());
-    for chunk in entry.value.chunks(unit) {
+    let mut out = Vec::with_capacity(value.len());
+    for chunk in value.chunks(unit) {
         let mut c = chunk.to_vec();
         let native_le = cfg!(target_endian = "little");
         let want_le = bo == ByteOrder::LittleEndian;

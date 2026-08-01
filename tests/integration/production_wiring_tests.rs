@@ -1,5 +1,5 @@
 use base64::Engine as _;
-use oxidex::core::operations::{read_metadata, write_metadata};
+use oxidex::core::operations::{modify_tag, read_metadata, write_metadata};
 use oxidex::core::{MetadataMap, TagValue};
 use oxidex::error::ExifToolError;
 use std::fs;
@@ -1642,10 +1642,13 @@ fn png_write_preserves_ztxt_on_unrelated_edit() {
 }
 
 #[test]
-fn write_metadata_rejects_incrementally_updated_pdf() {
+fn write_metadata_appends_a_revision_to_an_incrementally_updated_pdf() {
     // Build a minimal incremental PDF: a base revision plus an update whose
-    // trailer chains the base via /Prev. Rebuilding from the final xref alone
-    // would drop the Catalog/Pages/Page objects, so the writer must reject it.
+    // trailer chains the base via /Prev. The writer used to rebuild from the
+    // final xref alone, which dropped the Catalog/Pages/Page objects, so such
+    // files were refused outright. It now appends another revision instead --
+    // which is exactly what /Prev chaining is for -- so the write succeeds and
+    // every earlier byte survives.
     let base = b"%PDF-1.4\n\
 1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n\
 2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n\
@@ -1682,16 +1685,48 @@ trailer<</Size 5/Root 1 0 R/Info 4 0 R/Prev {base_xref_off}>>\nstartxref\n{upd_x
     let size_before = fs::metadata(temp.path()).expect("stat pdf").len();
 
     let mut metadata = MetadataMap::new();
-    metadata.insert("PDF:Author", TagValue::new_string("Attacker"));
-    let result = write_metadata(temp.path(), &metadata);
+    metadata.insert("PDF:Author", TagValue::new_string("Ansel"));
+    write_metadata(temp.path(), &metadata).expect("incremental PDF write must succeed");
+
+    let after = fs::read(temp.path()).expect("re-read pdf");
     assert!(
-        result.is_err(),
-        "incremental PDF writes must be rejected, not silently gut the document"
+        after.len() > size_before as usize,
+        "an incremental update only ever appends"
     );
     assert_eq!(
-        size_before,
-        fs::metadata(temp.path()).expect("stat pdf").len(),
-        "rejected PDF write must leave the file untouched"
+        &after[..size_before as usize],
+        &pdf[..],
+        "every original byte must survive verbatim"
+    );
+    // The Catalog/Pages/Page objects the old rebuild destroyed are still there,
+    // and both earlier revisions are still chained.
+    for object in [
+        &b"/Type/Catalog"[..],
+        b"/Type/Pages",
+        b"/Type/Page",
+        b"/Producer(orig)",
+        b"/Producer(updated)",
+    ] {
+        assert!(
+            after.windows(object.len()).any(|w| w == object),
+            "lost {:?}",
+            std::str::from_utf8(object).unwrap()
+        );
+    }
+    assert_eq!(
+        read_metadata(temp.path())
+            .expect("read updated pdf")
+            .get("PDF:Author"),
+        Some(&TagValue::String("Ansel".to_string())),
+        "the appended revision must be the one that resolves"
+    );
+    assert_eq!(
+        after
+            .windows(b"%%EOF".len())
+            .filter(|w| *w == b"%%EOF")
+            .count(),
+        3,
+        "three revisions: base, the fixture's update, and ours"
     );
 }
 
@@ -1951,4 +1986,157 @@ fn jpeg_incomplete_multichunk_icc_profile_degrades_gracefully() {
     assert!(metadata.get("ICC_Profile:ColorSpaceData").is_none());
     // File-level tags still parse; the read never hard-fails.
     assert_eq!(metadata.get_integer("File:ImageWidth"), Some(640));
+}
+
+// ---------------------------------------------------------------------------
+// Non-JPEG write path (issue #20)
+// ---------------------------------------------------------------------------
+
+/// Whole-map validation rejected every non-JPEG write because of a *carried
+/// over* value on a tag the caller never touched -- the reader emits display
+/// forms (`IFD0:BitsPerSample` as "8 8 8") that do not match the tag's declared
+/// TagValue type. Only 2 of 153 non-JPEG corpus files accepted any write.
+///
+/// A value equal to what the reader produced from this very file needs no
+/// re-validation, so only caller-changed values are checked now.
+#[test]
+fn non_jpeg_write_is_not_blocked_by_a_carried_over_value() {
+    for fixture in [
+        "tests/fixtures/tiff/sample.tif",
+        // Big-endian, so the appended value must be re-encoded, not memcpy'd
+        "tests/fixtures/tiff/complex/big_endian_001.tif",
+        // Compressed strips: a rebuild would drop them outright
+        "tests/fixtures/tiff/edge_cases/lzw_compressed.tif",
+        // A next-IFD chain the copied IFD0 table has to carry over
+        "tests/fixtures/tiff/complex/multipage.tif",
+    ] {
+        let suffix = &fixture[fixture.rfind('.').expect("fixture has an extension")..];
+        let temp = copy_fixture_to_temp(fixture, suffix);
+        let before = read_metadata(temp.path()).unwrap_or_else(|e| panic!("read {fixture}: {e:?}"));
+
+        // Exactly what `oxidex -EXIF:Artist=... file` does.
+        modify_tag(temp.path(), "EXIF:Artist", TagValue::new_string("Ansel"))
+            .unwrap_or_else(|e| panic!("write {fixture}: {e:?}"));
+
+        let after =
+            read_metadata(temp.path()).unwrap_or_else(|e| panic!("re-read {fixture}: {e:?}"));
+        assert_eq!(
+            after
+                .get("EXIF:Artist")
+                .or_else(|| after.get("IFD0:Artist")),
+            Some(&TagValue::String("Ansel".to_string())),
+            "{fixture}: the written tag must read back"
+        );
+
+        // Every other tag the reader saw before must still be there, unchanged.
+        // This is the failure mode a whole-file rebuild produces.
+        for (key, value) in before.iter() {
+            if key.starts_with("File:") || key == "EXIF:Artist" || key == "IFD0:Artist" {
+                continue; // filesystem-derived, or the tag under test
+            }
+            assert_eq!(
+                after.get(key),
+                Some(value),
+                "{fixture}: lost or changed untouched tag {key}"
+            );
+        }
+    }
+}
+
+/// A TIFF file *is* the TIFF structure, so a metadata-map rebuild throws away
+/// the image strips. The surgical writer must leave every byte it did not
+/// deliberately change exactly where it was.
+#[test]
+fn tiff_write_preserves_image_data_and_appends_rather_than_rebuilds() {
+    let temp = copy_fixture_to_temp("tests/fixtures/tiff/sample.tif", ".tif");
+    let original = fs::read(temp.path()).expect("read original tif");
+
+    modify_tag(temp.path(), "EXIF:Artist", TagValue::new_string("Ansel")).expect("write tif");
+
+    let after = fs::read(temp.path()).expect("read written tif");
+    assert!(
+        after.len() > original.len(),
+        "a new tag is appended, never spliced in"
+    );
+    // Only the 4-byte IFD0 pointer in the header may change below the append
+    // point; the image strips and every original record are untouched.
+    assert_eq!(&after[..4], &original[..4], "TIFF header magic preserved");
+    assert_eq!(
+        &after[8..original.len()],
+        &original[8..],
+        "every original byte past the IFD0 pointer survives verbatim"
+    );
+}
+
+/// Writing must not silently tighten a file's permissions: temp files are
+/// created 0600, and persisting one over a 0644 original used to carry that
+/// mode across on every format, JPEG included.
+#[test]
+fn write_preserves_file_permissions() {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = copy_fixture_to_temp("tests/fixtures/tiff/sample.tif", ".tif");
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o644))
+            .expect("set 0644 on fixture copy");
+
+        modify_tag(temp.path(), "EXIF:Artist", TagValue::new_string("Ansel")).expect("write tif");
+
+        let mode = fs::metadata(temp.path())
+            .expect("stat")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o644, "write must not change permissions");
+    }
+}
+
+/// The PNG writer strips text chunks and rebuilds them from `PNG:<type>:*`
+/// keys. An iTXt XMP packet is surfaced under `XMP:*` instead, so rebuilding
+/// silently deleted it -- while a `PNG:tEXt:*` chunk the caller dropped from
+/// the map must still be removed.
+#[test]
+fn png_write_carries_xmp_chunk_but_still_removes_dropped_text_chunks() {
+    let temp = copy_fixture_to_temp("tests/fixtures/png/sample.png", ".png");
+
+    let mut seed = read_metadata(temp.path()).expect("read png");
+    seed.insert("PNG:tEXt:Author", TagValue::new_string("OxiDex QA"));
+    seed.insert(
+        "PNG:iTXt:XML:com.adobe.xmp",
+        TagValue::new_string(
+            "<x:xmpmeta xmlns:x='adobe:ns:meta/'><rdf:RDF \
+             xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\
+             <rdf:Description xmlns:dc='http://purl.org/dc/elements/1.1/' \
+             dc:creator='Phil Harvey'/></rdf:RDF></x:xmpmeta>",
+        ),
+    );
+    write_metadata(temp.path(), &seed).expect("seed png chunks");
+
+    let after_seed = read_metadata(temp.path()).expect("re-read seeded png");
+    assert!(
+        after_seed.iter().any(|(k, _)| k.starts_with("XMP")),
+        "the seeded XMP packet must be parsed back out of the iTXt chunk"
+    );
+
+    // An unrelated edit must carry the XMP chunk (the reader files it under
+    // XMP:, so no PNG:iTXt: key exists to rebuild it from) ...
+    let mut edit = read_metadata(temp.path()).expect("read png for edit");
+    edit.insert("PNG:tEXt:Author", TagValue::new_string("Second Author"));
+    write_metadata(temp.path(), &edit).expect("unrelated png edit");
+    let after_edit = read_metadata(temp.path()).expect("re-read edited png");
+    assert!(
+        after_edit.iter().any(|(k, _)| k.starts_with("XMP")),
+        "an unrelated edit must not delete the XMP chunk"
+    );
+
+    // ... but dropping a key the reader *does* surface is still a removal.
+    let mut removal = read_metadata(temp.path()).expect("read png for removal");
+    removal.remove("PNG:tEXt:Author");
+    write_metadata(temp.path(), &removal).expect("png removal");
+    assert!(
+        read_metadata(temp.path())
+            .expect("re-read png")
+            .get("PNG:tEXt:Author")
+            .is_none(),
+        "removing a surfaced PNG: key must still drop its chunk"
+    );
 }

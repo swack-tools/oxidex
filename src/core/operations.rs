@@ -31,6 +31,7 @@ use crate::writers::atomic_writer::write_atomic;
 use crate::writers::jpeg_writer::write_exif_to_jpeg;
 use crate::writers::pdf_writer::write_pdf_file;
 use crate::writers::png_writer::write_png_metadata;
+use crate::writers::tiff_surgical::rewrite_tiff_file;
 use std::path::Path;
 
 // ============================================================================
@@ -385,31 +386,30 @@ pub fn read_metadata_with_detector(
 ///
 /// Tags not in the registry are skipped during validation (allows custom tags).
 pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
-    // PHASE 1: VALIDATION
-    // JPEG is validated inside the surgical writer, which distinguishes
-    // caller-changed values (strict validation) from unchanged originals
-    // (raw carry-over that never re-enters through TagValue). Whole-map
-    // validation here would wrongly reject unchanged display-form tags
-    // (issue #20). Other formats keep the original whole-map validation.
     let reader = MMapReader::new(path)?;
     let format = detect_format(&reader)?;
 
-    if format != FileFormat::JPEG {
-        for (tag_name, tag_value) in metadata.iter() {
-            // Look up tag descriptor in registry
-            if let Some(descriptor) = get_tag_descriptor(tag_name) {
-                if has_reliable_value_type(tag_name) {
-                    // Pass the original tag_name (e.g., "IFD0:Make") for error messages.
-                    validate_tag_value_with_name(tag_name, descriptor, tag_value)?;
-                } else {
-                    validate_tag_value_intrinsics(tag_name, tag_value)?;
-                }
-            }
-            // If tag is not in registry, skip validation (allows custom/rare tags)
-        }
+    // The caller-changed set, recovered the same way the JPEG surgical writer
+    // recovers it: by re-reading the file being written. See
+    // `validate_caller_changes` for why that is both sufficient and necessary.
+    let baseline = read_metadata(path).ok();
+
+    // PHASE 1: VALIDATION
+    // JPEG and the TIFF-structured formats validate inside their surgical
+    // writers, which already have the original bytes to diff against.
+    if !matches!(format, FileFormat::JPEG) && !is_surgical_tiff_target(format, &reader) {
+        validate_caller_changes(metadata, baseline.as_ref())?;
     }
 
     // PHASE 2: ROUTE TO APPROPRIATE WRITER
+    if is_surgical_tiff_target(format, &reader) {
+        let file_bytes = reader.read(0, reader.size() as usize)?;
+        let original = baseline.unwrap_or_default();
+        let out = rewrite_tiff_file(file_bytes, &original, metadata)?;
+        write_atomic(path, &out)?;
+        return Ok(());
+    }
+
     match format {
         FileFormat::JPEG => {
             // Use JPEG writer to serialize metadata
@@ -422,13 +422,15 @@ pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
         FileFormat::PDF => {
             write_pdf_file(path, &reader, metadata)?;
         }
-        FileFormat::TIFF => {
-            // The TIFF writer rebuilds the file from metadata alone and does not
-            // yet carry over image data (strips/tiles), so routing it here would
-            // replace the image with a metadata-only file.
-            return Err(ExifToolError::unsupported_format(
-                "TIFF write operations are not yet supported: the TIFF writer does not preserve image data",
-            ));
+        FileFormat::TIFF | FileFormat::CameraRaw(_) => {
+            // Reached only when the container is not actually walkable as a
+            // TIFF (BigTIFF, or a RAW wrapper like RAF/MRW/X3F/CR3 whose
+            // outer bytes are not a TIFF header).
+            return Err(ExifToolError::unsupported_format(format!(
+                "Write operations for format {:?} are not supported: its container \
+                 is not a walkable TIFF structure",
+                format
+            )));
         }
         _ => {
             return Err(ExifToolError::unsupported_format(format!(
@@ -438,6 +440,61 @@ pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Whether this file should go through the surgical whole-file TIFF writer.
+///
+/// Gated on the *bytes*, not the format label: `FileFormat::CameraRaw` covers
+/// both TIFF-structured RAWs (NEF, CR2, IIQ, RW2, ARW, ...) and proprietary
+/// wrappers that merely embed a TIFF somewhere inside (RAF, MRW, X3F, CR3).
+/// Only the former can be edited in place.
+fn is_surgical_tiff_target(format: FileFormat, reader: &dyn FileReader) -> bool {
+    if !matches!(format, FileFormat::TIFF | FileFormat::CameraRaw(_)) {
+        return false;
+    }
+    let header = reader.read(0, reader.size().min(8) as usize).unwrap_or(&[]);
+    crate::writers::tiff_surgical::is_walkable_tiff(header)
+}
+
+/// Validates the values the caller actually changed, and only those.
+///
+/// `baseline` is the map the reader produces from the file on disk right now.
+/// A value equal to its baseline is *carried over*, not authored: writing it
+/// back cannot introduce a value the file did not already contain, so
+/// re-validating it protects nothing — while rejecting it breaks writes
+/// outright, which is issue #20. The reader legitimately emits display forms
+/// that do not match a tag's declared `TagValue` type (`IFD0:BitsPerSample`
+/// as the string "8 8 8", `ExifIFD:DateTimeOriginal` as an unparsed string),
+/// so whole-map validation failed on tags the caller never touched and every
+/// non-JPEG write died on a tag it was not writing.
+///
+/// This is the same rule the JPEG surgical writer applies per entry
+/// (`exif_surgical::plan_exif_write`), hoisted to be format-agnostic. It needs
+/// no API change: the "was this changed?" question is answerable from the file
+/// itself, exactly as `rewrite_jpeg_exif` answers it.
+///
+/// With no readable baseline (`None`) every value is treated as changed, so
+/// the check degrades to the original whole-map validation rather than to
+/// no validation at all.
+fn validate_caller_changes(metadata: &MetadataMap, baseline: Option<&MetadataMap>) -> Result<()> {
+    for (tag_name, tag_value) in metadata.iter() {
+        if let Some(baseline) = baseline
+            && baseline.get(tag_name) == Some(tag_value)
+        {
+            continue; // carried over unchanged
+        }
+        // Look up tag descriptor in registry
+        if let Some(descriptor) = get_tag_descriptor(tag_name) {
+            if has_reliable_value_type(tag_name) {
+                // Pass the original tag_name (e.g., "IFD0:Make") for error messages.
+                validate_tag_value_with_name(tag_name, descriptor, tag_value)?;
+            } else {
+                validate_tag_value_intrinsics(tag_name, tag_value)?;
+            }
+        }
+        // If tag is not in registry, skip validation (allows custom/rare tags)
+    }
     Ok(())
 }
 
