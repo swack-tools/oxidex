@@ -330,6 +330,37 @@ fn extract_canon_bytes_with_base<'a>(
     data.get(relative_offset..relative_offset.checked_add(byte_count)?)
 }
 
+/// Returns a Canon BinaryData record as the 16-bit-word view used by
+/// [`binary_tables`].
+///
+/// The older array extractor deliberately accepts only TIFF SHORT and UNDEFINED.
+/// Canon's tables whose ExifTool `FORMAT` is `int32*` are stored as TIFF LONG/SLONG,
+/// though, and were therefore skipped before their format-aware decoder could run.
+/// Keep that broader interpretation local to the generic BinaryData path instead of
+/// changing every legacy i16-array caller's accepted TIFF types.
+fn extract_canon_binary_words_with_base(
+    entry: &IfdEntry,
+    data: &[u8],
+    byte_order: ByteOrder,
+    base_offset: u32,
+) -> Option<Vec<i16>> {
+    if matches!(entry.field_type, 3 | 7) {
+        return extract_canon_i16_array_with_base(entry, data, byte_order, base_offset);
+    }
+    if !matches!(entry.field_type, 4 | 9) {
+        return None;
+    }
+
+    let bytes = extract_canon_bytes_with_base(entry, data, base_offset)?;
+    if bytes.len() % 2 != 0 {
+        return None;
+    }
+    let reader = EndianReader::new(bytes, byte_order.to_io_byte_order());
+    (0..bytes.len() / 2)
+        .map(|index| reader.i16_at(index * 2))
+        .collect()
+}
+
 /// Resolves the MakerNote base once, on the same post-signature slice that
 /// [`parse_ifd_entries`] hands to its entry callbacks.
 ///
@@ -4785,7 +4816,7 @@ fn parse_canon_makernote_impl_with_model(
             // `binary_tables` for the transcription and what it deliberately omits.
             tag if binary_tables::handles_tag(tag) => {
                 if let Some(raw_record) =
-                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                    extract_canon_binary_words_with_base(entry, ifd_data, byte_order, base)
                 {
                     // `FIRST_ENTRY => 1` tables open with their own byte count, so they go
                     // through the same realignment guard as the other length-prefixed
@@ -5733,6 +5764,33 @@ mod tests {
             result.get("Canon:LensModel"),
             Some(&"Canon EF 24-70mm f/2.8L II USM".to_string())
         );
+    }
+
+    /// Canon's int32 BinaryData sub-tables arrive as TIFF LONG records. This is the
+    /// 16-byte layout of `%Canon::TimeInfo`: size, time-zone minutes, city, DST.
+    /// The old generic path accepted only SHORT/UNDEFINED and silently skipped it.
+    #[test]
+    fn test_parse_long_binary_table_record() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"Canon");
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+
+        data.extend_from_slice(&0x0035u16.to_le_bytes()); // TimeInfo
+        data.extend_from_slice(&[0x04, 0x00]); // Type: LONG
+        data.extend_from_slice(&[0x04, 0x00, 0x00, 0x00]); // Count: 4 int32 values
+        data.extend_from_slice(&[0x17, 0x00, 0x00, 0x00]); // Offset: 23
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
+
+        for value in [16i32, -420, 30, 60] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+        assert_eq!(
+            result.get("Canon:TimeZoneCity"),
+            Some(&"Los Angeles".to_string())
+        );
+        assert_eq!(result.get("Canon:DaylightSavings"), Some(&"On".to_string()));
     }
 
     // ========================================================================
