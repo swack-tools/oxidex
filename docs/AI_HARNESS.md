@@ -10,6 +10,18 @@ produced. Every number below is followed by the file it was counted from and the
 covers, so it can be reproduced. Where a figure cannot be derived from available records, it is
 labelled **not measured** rather than estimated.
 
+::: tip Reach for transcription first
+The harness is **not** the default route to coverage. Most of the remaining gap
+is data that already exists in machine-readable form in ExifTool's own tables,
+and generating from it is deterministic, verifiable, and roughly five orders of
+magnitude cheaper — 27,747 tag entries extracted in 1.3 seconds, against this
+harness's ~112 model calls per delivered tag.
+
+See [Transcription](./TRANSCRIPTION.md). Before starting harness work on a gap,
+confirm the knowledge is not already written down somewhere; if it is, that is
+transcription work and belongs there instead.
+:::
+
 ::: warning A note on numbers
 This project has a documented history of inflated claims. The README once advertised 32,677 tags
 and "complete parity" when the real figures were 16,677 and ~58%; that had to be corrected in

@@ -50,6 +50,7 @@ export default defineConfig({
         items: [
           { text: 'Changelog', link: '/changelog' },
           { text: 'Contributing', link: '/contributing/' },
+          { text: 'Transcription', link: '/TRANSCRIPTION' },
           { text: 'AI Harness', link: '/AI_HARNESS' }
         ]
       }
