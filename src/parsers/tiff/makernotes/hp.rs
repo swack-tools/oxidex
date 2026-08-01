@@ -20,7 +20,6 @@
 
 #![allow(dead_code)]
 
-use crate::const_decoder;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -30,19 +29,9 @@ use super::shared::MakerNoteParser;
 use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
 use super::shared::tag_registry::TagRegistry;
 
-// Decodes HP image quality
-const_decoder!(pub DECODE_QUALITY, u16, [
-    (1, "Normal"),
-    (2, "Fine"),
-    (3, "Superfine"),
-]);
-
-// Decodes HP color mode
-const_decoder!(pub DECODE_COLOR_MODE, u16, [
-    (0, "Color"),
-    (1, "Black & White"),
-    (2, "Sepia"),
-]);
+// ExifTool's HP::Main (HP.pm:21-38) contains only 0x0e00 PrintIM, which has no
+// PrintConv - so there is nothing here to decode. The Quality / ColorMode
+// decoders that used to live here were not traceable to HP.pm.
 
 // Lazy-initialized tag registry using centralized registry function
 static TAG_REGISTRY: Lazy<TagRegistry> = Lazy::new(hp_registry);
@@ -148,31 +137,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_decode_quality() {
-        assert_eq!(DECODE_QUALITY.decode(1), "Normal");
-        assert_eq!(DECODE_QUALITY.decode(3), "Superfine");
-    }
-
-    #[test]
     fn test_hp_parser_trait() {
         let parser = HpParser::new();
         assert_eq!(parser.manufacturer_name(), "HP");
         assert_eq!(parser.tag_prefix(), "HP:");
     }
 
+    /// The previous tests asserted `HP:Quality == "Fine"` for tag 0x0003 and a
+    /// `DECODE_QUALITY` table of Normal/Fine/Superfine. None of that is in
+    /// ExifTool's `HP.pm`: `HP::Main` holds only 0x0e00 PrintIM, and the
+    /// Type4/Type6 tables are binary-data offsets, not IFD tag IDs.
+    ///
+    /// Until a real HP table is implemented, the parser must emit nothing
+    /// rather than invented names.
     #[test]
-    fn test_parse_quality() {
+    fn test_emits_no_fabricated_tags() {
         let parser = HpParser::new();
         let mut data = Vec::new();
-        data.extend_from_slice(&[0x01, 0x00]);
-        data.extend_from_slice(&[0x03, 0x00]);
-        data.extend_from_slice(&[0x03, 0x00]);
-        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-        data.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]);
+        data.extend_from_slice(&[0x01, 0x00]); // entry_count = 1
+        data.extend_from_slice(&[0x03, 0x00]); // tag = 0x0003
+        data.extend_from_slice(&[0x03, 0x00]); // field_type = SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // value_count = 1
+        data.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]); // value = 2
 
         let mut tags = HashMap::new();
-        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
-        assert!(result.is_ok());
-        assert_eq!(tags.get("HP:Quality"), Some(&"Fine".to_string()));
+        parser
+            .parse(&data, ByteOrder::LittleEndian, &mut tags)
+            .expect("HP maker note should parse");
+        assert!(tags.is_empty(), "unexpected HP tags: {tags:?}");
     }
 }

@@ -424,6 +424,12 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         "File:FileType".to_string(),
         TagValue::new_string(format.file_type()),
     );
+    if let Some(mime) = format.exiftool_mime_type() {
+        metadata.insert(
+            "File:MIMEType".to_string(),
+            TagValue::new_string(mime.to_string()),
+        );
+    }
 
     // Walk the IFD chain (IFD0, IFD1, etc.)
     while ifd_offset != 0 && ifd_index < 10 {
@@ -4242,6 +4248,12 @@ fn parse_sigma_x3f(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         "File:FileType".to_string(),
         TagValue::new_string(format.file_type()),
     );
+    if let Some(mime) = format.exiftool_mime_type() {
+        metadata.insert(
+            "File:MIMEType".to_string(),
+            TagValue::new_string(mime.to_string()),
+        );
+    }
 
     // Verify FOVb signature
     if data.len() < 40 || &data[0..4] != b"FOVb" {
@@ -5256,6 +5268,12 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         "File:FileType".to_string(),
         TagValue::new_string(format.file_type()),
     );
+    if let Some(mime) = format.exiftool_mime_type() {
+        metadata.insert(
+            "File:MIMEType".to_string(),
+            TagValue::new_string(mime.to_string()),
+        );
+    }
 
     // Verify MRM signature
     if data.len() < 8 || &data[0..4] != b"\x00MRM" {
@@ -5615,6 +5633,12 @@ fn parse_canon_crw(_data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         "File:FileType".to_string(),
         TagValue::new_string(format.file_type()),
     );
+    if let Some(mime) = format.exiftool_mime_type() {
+        metadata.insert(
+            "File:MIMEType".to_string(),
+            TagValue::new_string(mime.to_string()),
+        );
+    }
 
     // TODO: Implement CRW specific parsing
     // CRW is Canon's older proprietary format
@@ -5734,6 +5758,12 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         "File:FileType".to_string(),
         TagValue::new_string(format.file_type()),
     );
+    if let Some(mime) = format.exiftool_mime_type() {
+        metadata.insert(
+            "File:MIMEType".to_string(),
+            TagValue::new_string(mime.to_string()),
+        );
+    }
 
     // Parse the RAF file's own proprietary header/directory structures
     // (FirmwareVersion, RAFCompression, RawImage* dimensions,

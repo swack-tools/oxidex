@@ -30,20 +30,11 @@ use super::shared::MakerNoteParser;
 use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
 use super::shared::tag_registry::TagRegistry;
 
-// Decodes GE image quality
-const_decoder!(pub DECODE_QUALITY, u16, [
-    (1, "Standard"),
-    (2, "Fine"),
-    (3, "Super Fine"),
-]);
-
-// Decodes GE scene mode
-const_decoder!(pub DECODE_SCENE_MODE, u16, [
-    (0, "Auto"),
-    (1, "Portrait"),
-    (2, "Landscape"),
-    (3, "Night"),
-    (4, "Sports"),
+// Decodes GE Macro.
+// ExifTool GE.pm:33-41 - 0x0202 => { Name => 'Macro', PrintConv => { 0 => 'Off', 1 => 'On' } }
+const_decoder!(pub DECODE_MACRO, u16, [
+    (0, "Off"),
+    (1, "On"),
 ]);
 
 // Lazy-initialized tag registry using centralized registry function
@@ -89,32 +80,32 @@ impl GeParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) {
+        let tag_name = match TAG_REGISTRY.get_tag_name(entry.tag_id) {
+            Some(name) => name,
+            None => return,
+        };
+
+        // GEModel (0x0207) and GEMake (0x0300) are `Format => 'string'`
+        // (GE.pm:42-49) and are longer than 4 bytes, so value_offset is a
+        // pointer rather than an inline value.
+        //
+        // GE's pointers are not relative to any base this parser can compute:
+        // on the sample file GE.jpg the entry says 170 while the string sits at
+        // maker-note offset 168. ExifTool handles that with
+        // `FixBase => 1, AutoFix => 1` (MakerNotes.pm:141-142) - a heuristic
+        // that infers the shift - and still emits
+        // "[minor] Suspicious MakerNotes offset for tag 0x0200".
+        //
+        // Until FixBase is implemented, resolving these pointers naively yields
+        // the wrong bytes (offset 170 reads "ITAL C", not "E1035"), so skip
+        // them. Emitting nothing is correct; emitting a mis-based string is the
+        // kind of confidently-wrong value this parser used to specialise in.
+        if matches!(entry.tag_id, 0x0207 | 0x0300) {
+            return;
+        }
+
         if let Some(value) = extract_u16_value(entry, data, byte_order) {
-            let tag_name = match TAG_REGISTRY.get_tag_name(entry.tag_id) {
-                Some(name) => name,
-                None => return,
-            };
-
-            // Try registry decoding first
             let formatted_value = TAG_REGISTRY.decode_u16(entry.tag_id, value);
-
-            // Fallback for tags without decoder in registry
-            let formatted_value = if formatted_value == value.to_string() {
-                match entry.tag_id {
-                    0x0002 => {
-                        let mode = if value == 0 { "Auto" } else { "Manual" };
-                        mode.to_string()
-                    }
-                    0x0003 => {
-                        let mode = if value > 0 { "On" } else { "Off" };
-                        mode.to_string()
-                    }
-                    _ => formatted_value,
-                }
-            } else {
-                formatted_value
-            };
-
             tags.insert(format!("GE:{}", tag_name), formatted_value);
         }
     }
@@ -135,10 +126,26 @@ impl MakerNoteParser for GeParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
+        // ExifTool MakerNotes.pm:136-144:
+        //     Name      => 'MakerNoteGE',
+        //     Condition => '$$valPt =~ /^GE(\0\0|NIC\0)/',
+        //     Start     => '$valuePtr + 18',
+        // The GE maker note opens with "GE\0\0\0\0\x01\0\0\0" followed by its
+        // own 8-byte TIFF header, so the IFD begins 18 bytes in. Reading the
+        // entry count from offset 0 instead yields "GE" = 18245 entries.
         let config = IfdParserConfig {
-            signature: None,
-            signature_offset: 0,
+            signature: Some(b"GE\0\0"),
+            signature_offset: 18,
             max_entries: 500,
+        };
+
+        // ByteOrder => 'Unknown' in the same SubDirectory: the maker note
+        // carries its own order marker at offset 10, which may differ from the
+        // enclosing file's.
+        let byte_order = match data.get(10..12) {
+            Some(b"II") => ByteOrder::LittleEndian,
+            Some(b"MM") => ByteOrder::BigEndian,
+            _ => byte_order,
         };
 
         parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
@@ -152,16 +159,36 @@ impl MakerNoteParser for GeParser {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_decode_quality() {
-        assert_eq!(DECODE_QUALITY.decode(1), "Standard");
-        assert_eq!(DECODE_QUALITY.decode(3), "Super Fine");
-    }
-
-    #[test]
-    fn test_decode_scene_mode() {
-        assert_eq!(DECODE_SCENE_MODE.decode(0), "Auto");
-        assert_eq!(DECODE_SCENE_MODE.decode(2), "Landscape");
+    /// Builds a GE maker note: the 10-byte "GE\0\0\0\0\x01\0\0\0" header, an
+    /// 8-byte TIFF header, then the IFD - matching the real layout of the
+    /// sample file GE.jpg. Both byte orders are exercised because the maker
+    /// note carries its own order marker at offset 10.
+    fn build_ge_makernote(entries: &[(u16, u16, u32, u32)], order: ByteOrder) -> Vec<u8> {
+        let (w16, w32): (fn(u16) -> [u8; 2], fn(u32) -> [u8; 4]) = match order {
+            ByteOrder::LittleEndian => (u16::to_le_bytes, u32::to_le_bytes),
+            ByteOrder::BigEndian => (u16::to_be_bytes, u32::to_be_bytes),
+        };
+        let mut data = Vec::new();
+        data.extend_from_slice(b"GE\0\0\0\0\x01\0\0\0");
+        data.extend_from_slice(match order {
+            ByteOrder::LittleEndian => b"II\x2a\0",
+            ByteOrder::BigEndian => b"MM\0\x2a",
+        });
+        data.extend_from_slice(&w32(8)); // IFD0 at +8 from the TIFF header
+        data.extend_from_slice(&w16(entries.len() as u16));
+        for &(tag, typ, count, val) in entries {
+            data.extend_from_slice(&w16(tag));
+            data.extend_from_slice(&w16(typ));
+            data.extend_from_slice(&w32(count));
+            // int16u values are left-justified inside value_offset when big-endian.
+            if typ == 3 && count == 1 && order == ByteOrder::BigEndian {
+                data.extend_from_slice(&w32(val << 16));
+            } else {
+                data.extend_from_slice(&w32(val));
+            }
+        }
+        data.extend_from_slice(&w32(0)); // next-IFD pointer
+        data
     }
 
     #[test]
@@ -171,35 +198,81 @@ mod tests {
         assert_eq!(parser.tag_prefix(), "GE:");
     }
 
+    /// ExifTool GE.pm:33-41 - Macro PrintConv is `{ 0 => 'Off', 1 => 'On' }`.
     #[test]
-    fn test_parse_quality() {
-        let parser = GeParser::new();
-        let mut data = Vec::new();
-        data.extend_from_slice(&[0x01, 0x00]);
-        data.extend_from_slice(&[0x01, 0x00]);
-        data.extend_from_slice(&[0x03, 0x00]);
-        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-        data.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]);
-
-        let mut tags = HashMap::new();
-        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
-        assert!(result.is_ok());
-        assert_eq!(tags.get("GE:Quality"), Some(&"Fine".to_string()));
+    fn test_decode_macro() {
+        assert_eq!(DECODE_MACRO.decode(0), "Off");
+        assert_eq!(DECODE_MACRO.decode(1), "On");
     }
 
+    /// Reproduces the eleven-entry maker note of the sample file GE.jpg
+    /// (GE E1035), whose IFD `exiftool -v3` renders as tags 0x0104, 0x0200,
+    /// 0x0202, 0x0203, 0x0204, 0x0205, 0x0206, 0x0207, 0x0300, 0x0500, 0x0600.
+    ///
+    /// `exiftool -a -G1 -s GE.jpg` prints `[GE] Macro : Off` for 0x0202.
+    /// Only unnamed IDs and the two offset-based strings surround it, so Macro
+    /// is the whole of what this parser should emit today.
     #[test]
-    fn test_parse_scene_mode() {
-        let parser = GeParser::new();
-        let mut data = Vec::new();
-        data.extend_from_slice(&[0x01, 0x00]);
-        data.extend_from_slice(&[0x04, 0x00]);
-        data.extend_from_slice(&[0x03, 0x00]);
-        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-        data.extend_from_slice(&[0x04, 0x00, 0x00, 0x00]);
+    fn test_parse_matches_exiftool_on_ge_e1035() {
+        for order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let data = build_ge_makernote(
+                &[
+                    (0x0104, 4, 1, 1694568960),
+                    (0x0200, 4, 3, 0),
+                    (0x0202, 3, 1, 0), // Macro = 0
+                    (0x0203, 3, 1, 0),
+                    (0x0206, 3, 6, 0),
+                    (0x0207, 2, 6, 170),  // GEModel - needs FixBase
+                    (0x0300, 7, 32, 176), // GEMake  - needs FixBase
+                    (0x0500, 3, 1, 0),
+                    (0x0600, 4, 1, 0),
+                ],
+                order,
+            );
+
+            let mut tags = HashMap::new();
+            GeParser::new()
+                .parse(&data, order, &mut tags)
+                .expect("GE maker note should parse");
+
+            assert_eq!(tags.get("GE:Macro"), Some(&"Off".to_string()), "{order:?}");
+            // Every other ID here is either unnamed by ExifTool or an
+            // offset-based string this parser deliberately skips.
+            assert_eq!(tags.len(), 1, "{order:?}: {tags:?}");
+        }
+    }
+
+    /// The IFD starts 18 bytes in (ExifTool MakerNotes.pm:140). Reading the
+    /// entry count from offset 0 instead sees "GE" = 18245, which is what the
+    /// parser used to do - it then bailed on the entry-count check and emitted
+    /// nothing, which is why the fabricated 0x0001-0x0005 table was never
+    /// contradicted by a real file.
+    #[test]
+    fn test_ifd_starts_after_the_ge_header() {
+        let data = build_ge_makernote(&[(0x0202, 3, 1, 1)], ByteOrder::BigEndian);
+        assert_eq!(&data[0..4], b"GE\0\0");
+        assert_eq!(&data[10..12], b"MM");
 
         let mut tags = HashMap::new();
-        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
-        assert!(result.is_ok());
-        assert_eq!(tags.get("GE:SceneMode"), Some(&"Sports".to_string()));
+        GeParser::new()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("GE maker note should parse");
+        assert_eq!(tags.get("GE:Macro"), Some(&"On".to_string()));
+    }
+
+    /// ExifTool leaves 0x0203-0x0206, 0x0500 and 0x0600 unnamed in `GE::Main`
+    /// (comments only). GE.jpg carries all of them and `exiftool -a -G1 -s`
+    /// prints none, so oxidex must not invent names for them.
+    #[test]
+    fn test_unnamed_ids_are_not_emitted() {
+        let data = build_ge_makernote(
+            &[(0x0203, 3, 1, 0), (0x0500, 3, 1, 0), (0x0600, 4, 1, 0)],
+            ByteOrder::LittleEndian,
+        );
+        let mut tags = HashMap::new();
+        GeParser::new()
+            .parse(&data, ByteOrder::LittleEndian, &mut tags)
+            .expect("GE maker note should parse");
+        assert!(tags.is_empty(), "unexpected GE tags: {tags:?}");
     }
 }

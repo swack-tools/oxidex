@@ -9,7 +9,6 @@
 //! - **array_extractors**: Array extraction utilities for IFD entries
 //! - **byte_utils**: Low-level byte parsing helper functions
 //! - **makernote_parser**: Common trait definition for all MakerNotes parsers
-//! - **value_decoders**: Common value interpretation and decoding functions
 //!
 //! ### Advanced Decoding Utilities (New)
 //! - **generic_decoders**: Reusable decoder types for common patterns (On/Off, Yes/No, etc.)
@@ -48,7 +47,6 @@ pub mod table_ifd;
 
 pub mod tag_registry;
 /// Common value interpretation and decoding functions
-pub mod value_decoders;
 /// Common value extraction helpers (strings, integers)
 pub mod value_extractors;
 

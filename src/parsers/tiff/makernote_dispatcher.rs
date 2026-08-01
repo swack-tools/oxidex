@@ -105,6 +105,14 @@ fn parser_for_make_prefix(
     if make.starts_with("ricoh imaging") {
         return Some(Box::new(pentax::PentaxParser) as Box<dyn MakerNoteParser>);
     }
+    // GE cameras are branded "General Imaging Co." in EXIF -- the literal
+    // table below only listed "ge" and "general electric", so the one GE file
+    // in the sample corpus never reached the GE parser. ExifTool keys off the
+    // maker note signature instead (MakerNotes.pm:137,
+    // `Condition => '$$valPt =~ /^GE(\0\0|NIC\0)/'`).
+    if make.starts_with("general imaging") {
+        return Some(Box::new(ge::GeParser) as Box<dyn MakerNoteParser>);
+    }
     if make.starts_with("samsung") {
         // The Samsung GX-1L/GX-1S/GX10/GX20 are rebadged Pentax bodies and
         // write a Pentax "AOC\0" MakerNote; ExifTool files their tags under

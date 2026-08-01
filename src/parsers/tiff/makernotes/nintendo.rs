@@ -24,15 +24,13 @@
 
 #![allow(dead_code)]
 
-use crate::const_decoder;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
 use super::registries::nintendo::nintendo_registry;
 use super::shared::MakerNoteParser;
-use super::shared::array_extractors::{extract_i16_array, extract_string};
-use super::shared::generic_decoders::ON_OFF;
+use super::shared::array_extractors::extract_string;
 use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
 use super::shared::tag_registry::TagRegistry;
 
@@ -40,77 +38,18 @@ use super::shared::tag_registry::TagRegistry;
 const NINTENDO_SIGNATURE: &[u8] = b"Nintendo";
 
 // ============================================================================
-// Declarative Decoder Definitions
+// Decoders
 // ============================================================================
-// These replace 7 repetitive decoder functions with compile-time const decoders,
-// reducing code duplication while maintaining all functionality.
-
-// Camera Mode decoder - 2D vs 3D photography mode
-const_decoder!(pub CAMERA_MODE, i16, [(0, "2D"), (1, "3D"),]);
-
-// Camera Selection decoder - Inner camera (facing user) vs outer stereoscopic cameras
-const_decoder!(pub
-    CAMERA_SELECTION,
-    i16,
-    [
-        (0, "Inner Camera"),
-        (1, "Outer Camera Left"),
-        (2, "Outer Camera Right"),
-    ]
-);
-
-// Photo Filter decoder - Built-in photo effects
-const_decoder!(pub
-    FILTER,
-    i16,
-    [
-        (0, "None"),
-        (1, "Sepia"),
-        (2, "Black & White"),
-        (3, "Negative"),
-        (4, "Toy Camera"),
-        (5, "Fisheye"),
-    ]
-);
-
-// ============================================================================
-// Custom Formatters
-// ============================================================================
-// Formatters for values that need unit conversion or special formatting logic.
-
-// Formats parallax value (stored as hundredths of millimeters)
-// # Arguments
-// * `value` - Parallax value in 1/100mm units
-// # Returns
-// Formatted string with mm units (e.g., "3.50 mm")
-fn format_parallax(value: i16) -> String {
-    format!("{:.2} mm", value as f64 / 100.0)
-}
-
-// Formats 3D effect depth percentage with validation
-// # Arguments
-// * `value` - 3D effect depth (0-100)
-// # Returns
-// Formatted percentage or "Invalid" if out of range
-fn format_3d_effect(value: i16) -> String {
-    if !(0..=100).contains(&value) {
-        return "Invalid".to_string();
-    }
-    format!("{}%", value)
-}
-
-// Formats boolean values as Yes/No strings
-// # Arguments
-// * `value` - Boolean value (0=No, non-zero=Yes)
-// # Returns
-// "Yes" or "No" string
-fn format_yes_no(value: i16) -> String {
-    if value != 0 {
-        "Yes".to_string()
-    } else {
-        "No".to_string()
-    }
-}
+//
+// ExifTool's Nintendo::Main (Nintendo.pm:19-34) names a single tag, 0x1101
+// CameraInfo, which is a SubDirectory. The CAMERA_MODE / CAMERA_SELECTION /
+// FILTER tables and the format_parallax / format_3d_effect / format_yes_no
+// helpers that used to live here decoded tag IDs 0x0100-0x0107, none of which
+// exist in Nintendo.pm - so they are gone.
+//
+// format_parallax additionally appended " mm", which ExifTool never does:
+// Nintendo.pm:71-76 defines 0x28 Parallax as `Format => 'float'` with
+// `PrintConv => 'sprintf("%.2f", $val)'`.
 
 // ============================================================================
 // Tag Registry
@@ -146,47 +85,15 @@ impl NintendoParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) {
-        let tag_id = entry.tag_id;
-
-        // Handle string tags (Model, SystemVersion, GameTitle)
-        match tag_id {
-            0x0001 | 0x0002 | 0x0107 => {
-                if let Some(s) = extract_string(entry, data, byte_order)
-                    && let Some(name) = TAG_REGISTRY.get_tag_name(tag_id)
-                {
-                    tags.insert(format!("Nintendo:{}", name), s);
-                }
-                return;
-            }
-            _ => {}
-        }
-
-        // Handle i16 array tags
-        if let Some(array) = extract_i16_array(entry, data, byte_order)
-            && let Some(&value) = array.first()
-        {
-            let tag_name = match TAG_REGISTRY.get_tag_name(tag_id) {
-                Some(name) => name,
-                None => return,
-            };
-
-            // Try registry decoders first for decoded tags
-            let formatted_value = TAG_REGISTRY.decode_i16(tag_id, value);
-
-            // Fallback to custom formatters for tags without registry decoders
-            let formatted_value = if formatted_value == value.to_string() {
-                match tag_id {
-                    0x0102 => format_parallax(value),
-                    0x0103 => format_3d_effect(value),
-                    0x0104 => ON_OFF.decode(value),
-                    0x0105 => format_yes_no(value),
-                    _ => return,
-                }
-            } else {
-                formatted_value
-            };
-
-            tags.insert(format!("Nintendo:{}", tag_name), formatted_value);
+        // ExifTool's Nintendo::Main names exactly one tag, 0x1101 CameraInfo,
+        // and it is a SubDirectory (Nintendo.pm:27-33) rather than a scalar.
+        // Until that binary CameraInfo block is implemented the registry is
+        // empty, so every entry falls through here without producing a tag.
+        let Some(tag_name) = TAG_REGISTRY.get_tag_name(entry.tag_id) else {
+            return;
+        };
+        if let Some(s) = extract_string(entry, data, byte_order) {
+            tags.insert(format!("Nintendo:{}", tag_name), s);
         }
     }
 }
@@ -262,55 +169,32 @@ mod tests {
         assert_eq!(parser.tag_prefix(), "Nintendo:");
     }
 
+    /// The removed tests asserted a fabricated table back at itself:
+    /// `TAG_REGISTRY.get_tag_name(0x0001) == Some("Model")`,
+    /// `CAMERA_MODE.decode(0) == "2D"`, `format_parallax(350) == "3.50 mm"`,
+    /// and so on. None of those IDs, names or strings occurs in ExifTool's
+    /// `Nintendo.pm`, and its Parallax PrintConv (Nintendo.pm:74) is
+    /// `sprintf("%.2f", $val)` with no " mm" suffix.
+    ///
+    /// A real 3DS maker note carries tag 0x1101; the fabricated table never
+    /// matched it, so this parser has always emitted nothing on real files.
     #[test]
-    fn test_camera_mode_decoder() {
-        assert_eq!(CAMERA_MODE.decode(0), "2D");
-        assert_eq!(CAMERA_MODE.decode(1), "3D");
-        assert_eq!(CAMERA_MODE.decode(99), "Unknown (99)");
-    }
+    fn test_emits_no_fabricated_tags() {
+        let parser = NintendoParser::new();
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0x02, 0x00]); // entry_count = 2
+        for tag in [0x0102u16, 0x1101] {
+            data.extend_from_slice(&tag.to_le_bytes());
+            data.extend_from_slice(&[0x03, 0x00]); // field_type = SHORT
+            data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // value_count
+            data.extend_from_slice(&[0x5E, 0x01, 0x00, 0x00]); // value = 350
+        }
 
-    #[test]
-    fn test_camera_selection_decoder() {
-        assert_eq!(CAMERA_SELECTION.decode(0), "Inner Camera");
-        assert_eq!(CAMERA_SELECTION.decode(1), "Outer Camera Left");
-        assert_eq!(CAMERA_SELECTION.decode(2), "Outer Camera Right");
-    }
-
-    #[test]
-    fn test_filter_decoder() {
-        assert_eq!(FILTER.decode(0), "None");
-        assert_eq!(FILTER.decode(4), "Toy Camera");
-        assert_eq!(FILTER.decode(5), "Fisheye");
-    }
-
-    #[test]
-    fn test_format_parallax() {
-        assert_eq!(format_parallax(350), "3.50 mm");
-        assert_eq!(format_parallax(0), "0.00 mm");
-        assert_eq!(format_parallax(-100), "-1.00 mm");
-    }
-
-    #[test]
-    fn test_format_3d_effect() {
-        assert_eq!(format_3d_effect(0), "0%");
-        assert_eq!(format_3d_effect(50), "50%");
-        assert_eq!(format_3d_effect(100), "100%");
-        assert_eq!(format_3d_effect(-1), "Invalid");
-        assert_eq!(format_3d_effect(101), "Invalid");
-    }
-
-    #[test]
-    fn test_format_yes_no() {
-        assert_eq!(format_yes_no(0), "No");
-        assert_eq!(format_yes_no(1), "Yes");
-        assert_eq!(format_yes_no(42), "Yes");
-    }
-
-    #[test]
-    fn test_tag_registry() {
-        assert_eq!(TAG_REGISTRY.get_tag_name(0x0001), Some("Model"));
-        assert_eq!(TAG_REGISTRY.get_tag_name(0x0100), Some("CameraMode"));
-        assert!(TAG_REGISTRY.has_tag(0x0102));
+        let mut tags = HashMap::new();
+        parser
+            .parse(&data, ByteOrder::LittleEndian, &mut tags)
+            .expect("Nintendo maker note should parse");
+        assert!(tags.is_empty(), "unexpected Nintendo tags: {tags:?}");
     }
 
     #[test]

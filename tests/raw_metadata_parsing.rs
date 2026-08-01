@@ -188,9 +188,16 @@ fn test_parse_x3f_stub() {
     assert!(result.is_ok(), "X3F stub should parse successfully");
     let metadata = result.unwrap();
 
-    assert!(
-        metadata.contains_key("File:FileType"),
-        "X3F should have File:FileType tag"
+    // This used to assert only `contains_key`, which is the same blind spot
+    // `test_parse_cr3_stub` had: it passed while the value was the Rust
+    // `RawFormat` variant name "SigmaX3F". ExifTool.pm:565 is
+    // `X3F => ['X3F', 'Sigma RAW format']` and ExifTool.pm:830 is
+    // `X3F => 'image/x-sigma-x3f'`; `exiftool -s -S -FileType Sigma.x3f`
+    // prints `X3F`.
+    assert_eq!(metadata.get_string("File:FileType"), Some("X3F"));
+    assert_eq!(
+        metadata.get_string("File:MIMEType"),
+        Some("image/x-sigma-x3f")
     );
 }
 
@@ -204,9 +211,14 @@ fn test_parse_mrw_stub() {
     assert!(result.is_ok(), "MRW stub should parse successfully");
     let metadata = result.unwrap();
 
-    assert!(
-        metadata.contains_key("File:FileType"),
-        "MRW should have File:FileType tag"
+    // Same blind spot as the X3F stub above: the value was "MinoltaMRW".
+    // ExifTool.pm:429 is `MRW => ['MRW', 'Minolta RAW format']` and
+    // ExifTool.pm:737 is `MRW => 'image/x-minolta-mrw'`;
+    // `exiftool -s -S -FileType Minolta.mrw` prints `MRW`.
+    assert_eq!(metadata.get_string("File:FileType"), Some("MRW"));
+    assert_eq!(
+        metadata.get_string("File:MIMEType"),
+        Some("image/x-minolta-mrw")
     );
 }
 
