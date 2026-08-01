@@ -22,16 +22,52 @@ const IPTC_RESOURCE_ID: u16 = 0x0404;
 const IPTC_TAG_MARKER: u8 = 0x1C;
 const APP13_MARKER: u16 = 0xFFED;
 
-/// Application-record datasets ExifTool reports as lists because the IIM spec
-/// marks them repeatable (`IPTC.pm`, `List => 1`): 20 = SupplementalCategories,
-/// 25 = Keywords. Every other dataset keeps last-wins semantics, which is what
-/// a single-valued map insert already does.
+/// Datasets ExifTool reports as lists because the IIM spec marks them
+/// repeatable. Every other dataset keeps last-wins semantics, which is what a
+/// single-valued map insert already does.
+///
+/// IPTC.pm spells the marker `Flags => 'List'`, not `List => 1`: grepping for
+/// the latter finds exactly one dataset (2:255 CatalogSets, IPTC.pm:691) and
+/// misses the other fifteen. The full set, from
+/// `%Image::ExifTool::IPTC::EnvelopeRecord` (record 1, IPTC.pm:142-248) and
+/// `%Image::ExifTool::IPTC::ApplicationRecord` (record 2, IPTC.pm:251-695):
+///
+/// | Dataset | Name                     | IPTC.pm |
+/// |---------|--------------------------|---------|
+/// | 1:5     | Destination              | 154     |
+/// | 1:50    | ProductID                | 179     |
+/// | 2:4     | ObjectAttributeReference | 267     |
+/// | 2:12    | SubjectReference         | 303     |
+/// | 2:20    | SupplementalCategories   | 312     |
+/// | 2:25    | Keywords                 | 321     |
+/// | 2:26    | ContentLocationCode      | 326     |
+/// | 2:27    | ContentLocationName      | 332     |
+/// | 2:45    | ReferenceService         | 389     |
+/// | 2:47    | ReferenceDate            | 395     |
+/// | 2:50    | ReferenceNumber          | 404     |
+/// | 2:80    | By-line                  | 466     |
+/// | 2:85    | By-lineTitle             | 472     |
+/// | 2:118   | Contact                  | 527     |
+/// | 2:122   | Writer-Editor            | 547     |
+/// | 2:255   | CatalogSets              | 691     |
+///
+/// The one remaining `Flags => 'List'` in IPTC.pm is 8:10 SubFile
+/// (`%Image::ExifTool::IPTC::ObjectData`, IPTC.pm:918). It is `Binary => 1`
+/// object payload rather than a named dataset, and record 8 is not part of a
+/// default dump, so it is deliberately absent here.
 ///
 /// This is the one place the rule lives -- `parsers::pdf::photoshop_resources`
 /// decodes the same 0x0404 resource out of a PDF and asks here rather than
 /// keeping a second copy that can drift.
 pub fn is_repeatable_iptc_dataset(record_number: u8, dataset_number: u8) -> bool {
-    record_number == 2 && matches!(dataset_number, 20 | 25)
+    match record_number {
+        1 => matches!(dataset_number, 5 | 50),
+        2 => matches!(
+            dataset_number,
+            4 | 12 | 20 | 25 | 26 | 27 | 45 | 47 | 50 | 80 | 85 | 118 | 122 | 255
+        ),
+        _ => false,
+    }
 }
 
 /// Represents an Adobe Photoshop Image Resource Block
@@ -1267,6 +1303,88 @@ mod tests {
         // 0xE9 is 'é' in Latin-1 and invalid as standalone UTF-8.
         let tags = extract_datasets(&[(2, 80, &[b'J', b'o', b's', 0xE9])]);
         assert_eq!(value_of(&tags, "IPTC:By-line"), Some("José"));
+    }
+
+    /// Every dataset IPTC.pm marks `Flags => 'List'` in records 1 and 2, with
+    /// the IPTC.pm line the marker sits on. Grepping for `List => 1` instead
+    /// finds only 2:255 and silently misses the other fifteen.
+    const EXIFTOOL_LIST_DATASETS: &[(u8, u8)] = &[
+        (1, 5),   // Destination, IPTC.pm:154
+        (1, 50),  // ProductID, IPTC.pm:179
+        (2, 4),   // ObjectAttributeReference, IPTC.pm:267
+        (2, 12),  // SubjectReference, IPTC.pm:303
+        (2, 20),  // SupplementalCategories, IPTC.pm:312
+        (2, 25),  // Keywords, IPTC.pm:321
+        (2, 26),  // ContentLocationCode, IPTC.pm:326
+        (2, 27),  // ContentLocationName, IPTC.pm:332
+        (2, 45),  // ReferenceService, IPTC.pm:389
+        (2, 47),  // ReferenceDate, IPTC.pm:395
+        (2, 50),  // ReferenceNumber, IPTC.pm:404
+        (2, 80),  // By-line, IPTC.pm:466
+        (2, 85),  // By-lineTitle, IPTC.pm:472
+        (2, 118), // Contact, IPTC.pm:527
+        (2, 122), // Writer-Editor, IPTC.pm:547
+        (2, 255), // CatalogSets, IPTC.pm:691
+    ];
+
+    #[test]
+    fn every_exiftool_list_dataset_is_repeatable() {
+        for &(record, dataset) in EXIFTOOL_LIST_DATASETS {
+            assert!(
+                is_repeatable_iptc_dataset(record, dataset),
+                "IPTC.pm marks {}:{} as Flags => 'List'",
+                record,
+                dataset
+            );
+        }
+        // Nothing outside the table is repeatable: 2:5 ObjectName and 2:105
+        // Headline are plain scalars, and record 3 has no List dataset at all.
+        for &(record, dataset) in &[(1u8, 0u8), (2, 5), (2, 105), (2, 120), (3, 5)] {
+            assert!(
+                !is_repeatable_iptc_dataset(record, dataset),
+                "IPTC.pm does not mark {}:{} as a List",
+                record,
+                dataset
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_by_line_keeps_both_values() {
+        // MWG.jpg writes 2:80 twice. ExifTool reports
+        // "WRONG1of2-IPTC-Creator, WRONG2of2-IPTC-Creator"; keeping only the
+        // last dropped the first half of a two-author credit.
+        let collapsed = collapse_iptc_entries(vec![
+            (2, 80, "IPTC:By-line".into(), "First Author".into()),
+            (2, 80, "IPTC:By-line".into(), "Second Author".into()),
+        ]);
+        assert_eq!(
+            collapsed,
+            vec![(
+                "IPTC:By-line".to_string(),
+                TagValue::Array(vec![
+                    TagValue::new_string("First Author".to_string()),
+                    TagValue::new_string("Second Author".to_string()),
+                ])
+            )]
+        );
+    }
+
+    #[test]
+    fn non_list_dataset_still_keeps_only_the_last_value() {
+        // 2:5 ObjectName is not a List, so a duplicate overwrites rather than
+        // accumulating -- ExifTool reports one value for it.
+        let collapsed = collapse_iptc_entries(vec![
+            (2, 5, "IPTC:ObjectName".into(), "First".into()),
+            (2, 5, "IPTC:ObjectName".into(), "Second".into()),
+        ]);
+        assert_eq!(
+            collapsed,
+            vec![(
+                "IPTC:ObjectName".to_string(),
+                TagValue::new_string("Second".to_string())
+            )]
+        );
     }
 
     #[test]
