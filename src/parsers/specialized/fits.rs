@@ -5,6 +5,10 @@
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 
+mod tables;
+
+use tables::FITS_TAG_NAMES;
+
 const FITS_SIGNATURE: &[u8] = b"SIMPLE";
 const FITS_RECORD_SIZE: usize = 80;
 const FITS_BLOCK_SIZE: usize = 2880;
@@ -31,32 +35,52 @@ impl FITSParser {
             return None;
         }
 
-        let record_str = String::from_utf8_lossy(record);
+        let keyword = String::from_utf8_lossy(&record[..8]).trim_end().to_string();
 
         // Check for END keyword
-        if record_str.starts_with("END ") || record_str.starts_with("END\0") {
+        if keyword == "END" {
             return Some(("END".to_string(), String::new(), None));
         }
 
         // Check for HISTORY or COMMENT records (no '=')
-        if let Some(rest) = record_str.strip_prefix("HISTORY ") {
-            let content = rest.trim().to_string();
-            return Some(("HISTORY".to_string(), content, None));
-        }
-        if let Some(rest) = record_str.strip_prefix("COMMENT ") {
-            let content = rest.trim().to_string();
-            return Some(("COMMENT".to_string(), content, None));
+        if keyword == "HISTORY" || keyword == "COMMENT" {
+            let content = String::from_utf8_lossy(&record[8..]).trim().to_string();
+            return Some((keyword, content, None));
         }
 
-        // Find '=' separator
-        let eq_pos = record_str.find('=')?;
-        let keyword = record_str[..eq_pos].trim().to_string();
+        // Like ExifTool's ProcessFITS, accept a value only when the equals sign
+        // occupies the standard columns. A slash begins a comment only outside
+        // quotes: dates and identifiers routinely contain literal slashes.
+        if &record[8..10] != b"= " {
+            return None;
+        }
+        let value_part = String::from_utf8_lossy(&record[10..]);
+        let value_part = value_part.as_ref();
+        if let Some(quoted) = value_part.strip_prefix('\'') {
+            let mut value = String::new();
+            let mut chars = quoted.chars().peekable();
+            let mut closed = false;
+            while let Some(ch) = chars.next() {
+                if ch == '\'' {
+                    if chars.peek() == Some(&'\'') {
+                        chars.next();
+                        value.push('\'');
+                    } else {
+                        closed = true;
+                        break;
+                    }
+                } else {
+                    value.push(ch);
+                }
+            }
+            if closed {
+                // FITS pads quoted strings on the right. Leading spaces are
+                // data (DATASUM in ExifTool's fixture relies on this).
+                return Some((keyword, value.trim_end().to_string(), None));
+            }
+        }
 
-        // Parse value and optional comment
-        let value_part = &record_str[eq_pos + 1..];
-
-        // Find comment separator '/'
-        let (value_str, comment) = if let Some(slash_pos) = value_part.find('/') {
+        let (value, comment) = if let Some(slash_pos) = value_part.find('/') {
             (
                 value_part[..slash_pos].trim(),
                 Some(value_part[slash_pos + 1..].trim().to_string()),
@@ -64,26 +88,56 @@ impl FITSParser {
         } else {
             (value_part.trim(), None)
         };
-
-        // Remove quotes if present
-        let value = if value_str.starts_with('\'') && value_str.ends_with('\'') {
-            value_str[1..value_str.len() - 1].trim().to_string()
+        if value.is_empty() {
+            None
         } else {
-            value_str.to_string()
-        };
-
-        Some((keyword, value, comment))
+            // FITS permits Fortran D exponents; ExifTool renders both D and E
+            // using an `e` before passing the value on.
+            let normalized_number = value.replace(['D', 'E'], "e");
+            let value = if normalized_number.parse::<f64>().is_ok() {
+                normalized_number
+            } else {
+                value.to_string()
+            };
+            Some((keyword, value, comment))
+        }
     }
 
-    /// Converts BITPIX value to friendly pixel format name
-    fn bitpix_to_format(bitpix: i32) -> String {
-        match bitpix {
-            8 => "8-bit unsigned integer".to_string(),
-            16 => "16-bit signed integer".to_string(),
-            32 => "32-bit signed integer".to_string(),
-            -32 => "32-bit floating point".to_string(),
-            -64 => "64-bit floating point".to_string(),
-            _ => format!("Unknown ({})", bitpix),
+    /// Resolve FITS keywords the same way ExifTool does.
+    ///
+    /// Standard names are generated from `Image::ExifTool::FITS::Main`. Any
+    /// other valid keyword is lowercased, title-cased, and has underscores
+    /// removed while capitalizing the following character.
+    fn tag_name(keyword: &str) -> String {
+        if let Some((_, name)) = FITS_TAG_NAMES
+            .iter()
+            .find(|(candidate, _)| *candidate == keyword)
+        {
+            return (*name).to_string();
+        }
+
+        let mut name = String::with_capacity(keyword.len());
+        let mut capitalize = true;
+        for ch in keyword.chars() {
+            if ch == '_' {
+                capitalize = true;
+            } else if capitalize {
+                name.push(ch.to_ascii_uppercase());
+                capitalize = false;
+            } else {
+                name.push(ch.to_ascii_lowercase());
+            }
+        }
+        name
+    }
+
+    fn tag_value(value: String) -> TagValue {
+        if let Ok(integer) = value.parse::<i64>() {
+            TagValue::Integer(integer)
+        } else if let Ok(float) = value.parse::<f64>() {
+            TagValue::Float(float)
+        } else {
+            TagValue::String(value)
         }
     }
 
@@ -92,8 +146,6 @@ impl FITSParser {
         let mut metadata = MetadataMap::new();
         let mut offset = 0usize;
         let mut naxis_values: Vec<i64> = Vec::new();
-        let mut history_entries: Vec<String> = Vec::new();
-        let mut comment_entries: Vec<String> = Vec::new();
 
         // Read header blocks until END keyword
         loop {
@@ -112,15 +164,9 @@ impl FITSParser {
                 }
 
                 if let Some((keyword, value, comment)) = Self::parse_record(chunk) {
-                    // Store comment if present
-                    if keyword != "HISTORY"
-                        && keyword != "COMMENT"
-                        && keyword != "END"
-                        && let Some(cmt) = comment
-                        && !cmt.is_empty()
-                    {
-                        metadata.insert(format!("{}Comment", keyword), TagValue::String(cmt));
-                    }
+                    // Comments after a card value describe that card; ExifTool
+                    // does not emit them as separate `KeywordComment` tags.
+                    let _ = comment;
 
                     match keyword.as_str() {
                         "END" => {
@@ -128,47 +174,24 @@ impl FITSParser {
                             Self::finalize_metadata(&mut metadata, &naxis_values);
                             return Ok(metadata);
                         }
-                        "HISTORY" => history_entries.push(value),
-                        "COMMENT" => comment_entries.push(value),
-                        "SIMPLE" => {
-                            metadata.insert(keyword, TagValue::String(value));
-                        }
-                        "BITPIX" => {
-                            if let Ok(bitpix) = value.parse::<i32>() {
-                                metadata
-                                    .insert("BITPIX".to_string(), TagValue::Integer(bitpix as i64));
-                                metadata.insert(
-                                    "PixelFormat".to_string(),
-                                    TagValue::String(Self::bitpix_to_format(bitpix)),
-                                );
-                            }
-                        }
-                        "NAXIS" => {
-                            if let Ok(naxis) = value.parse::<i64>() {
-                                metadata.insert(keyword, TagValue::Integer(naxis));
-                            }
+                        // ProcessFITS consumes SIMPLE while validating the
+                        // signature, so it is not reported as metadata.
+                        "SIMPLE" => {}
+                        "HISTORY" | "COMMENT" => {
+                            // MetadataMap represents one value per name, which
+                            // matches ExifTool without `-a`: the last wins.
+                            metadata.insert(Self::tag_name(&keyword), TagValue::String(value));
                         }
                         k if k.starts_with("NAXIS") && k.len() > 5 => {
                             if let Ok(axis_val) = value.parse::<i64>() {
-                                metadata.insert(keyword.to_string(), TagValue::Integer(axis_val));
+                                metadata
+                                    .insert(Self::tag_name(&keyword), TagValue::Integer(axis_val));
                                 naxis_values.push(axis_val);
                             }
                         }
-                        "BSCALE" | "BZERO" | "EXPTIME" => {
-                            if let Ok(float_val) = value.parse::<f64>() {
-                                metadata.insert(keyword, TagValue::Float(float_val));
-                            }
-                        }
-                        "TELESCOP" | "INSTRUME" | "OBJECT" | "OBSERVER" | "ORIGIN" | "AUTHOR"
-                        | "DATE-OBS" | "FILTER" => {
-                            if !value.is_empty() {
-                                metadata.insert(keyword, TagValue::String(value));
-                            }
-                        }
                         _ => {
-                            // Store other keywords as strings
                             if !value.is_empty() {
-                                metadata.insert(keyword, TagValue::String(value));
+                                metadata.insert(Self::tag_name(&keyword), Self::tag_value(value));
                             }
                         }
                     }
@@ -179,20 +202,6 @@ impl FITSParser {
             if offset >= reader.size() as usize {
                 break;
             }
-        }
-
-        // Store history and comments if present
-        if !history_entries.is_empty() {
-            metadata.insert(
-                "History".to_string(),
-                TagValue::Array(history_entries.into_iter().map(TagValue::String).collect()),
-            );
-        }
-        if !comment_entries.is_empty() {
-            metadata.insert(
-                "Comments".to_string(),
-                TagValue::Array(comment_entries.into_iter().map(TagValue::String).collect()),
-            );
         }
 
         Self::finalize_metadata(&mut metadata, &naxis_values);
@@ -226,7 +235,12 @@ impl FormatParser for FITSParser {
         let mut metadata = Self::parse_header(reader)?;
 
         // Add basic file info
-        metadata.insert("FileType".to_string(), TagValue::String("FITS".to_string()));
+        metadata.insert("File:FileType", TagValue::String("FITS".to_string()));
+        metadata.insert(
+            "File:FileTypeExtension",
+            TagValue::String("fits".to_string()),
+        );
+        metadata.insert("File:MIMEType", TagValue::String("image/fits".to_string()));
         metadata.insert(
             "FileSize".to_string(),
             TagValue::String(reader.size().to_string()),
@@ -246,4 +260,112 @@ impl FormatParser for FITSParser {
 pub fn parse_fits_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
     let parser = FITSParser;
     parser.parse(reader).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TestReader;
+
+    fn card(text: &str) -> [u8; FITS_RECORD_SIZE] {
+        assert!(text.len() <= FITS_RECORD_SIZE);
+        let mut card = [b' '; FITS_RECORD_SIZE];
+        card[..text.len()].copy_from_slice(text.as_bytes());
+        card
+    }
+
+    fn fits(cards: &[&str]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for text in cards {
+            bytes.extend_from_slice(&card(text));
+        }
+        bytes.resize(FITS_BLOCK_SIZE, b' ');
+        bytes
+    }
+
+    #[test]
+    fn canonical_names_cover_the_value_confirmed_fits_renames() {
+        let expected = [
+            ("BITPIX", "Bitpix"),
+            ("ORIGIN", "Origin"),
+            ("CREATOR", "Creator"),
+            ("TIME-OBS", "ObservationTime"),
+            ("TIME-END", "ObservationTimeEnd"),
+            ("TIMESYS", "Timesys"),
+            ("MJDREFI", "Mjdrefi"),
+            ("MJDREFF", "Mjdreff"),
+            ("TIMEZERO", "Timezero"),
+            ("TIMEUNIT", "Timeunit"),
+            ("TIMEREF", "Timeref"),
+            ("TASSIGN", "Tassign"),
+            ("TIERRELA", "Tierrela"),
+            ("TIERABSO", "Tierabso"),
+            ("OBJECT", "Object"),
+            ("RA_OBJ", "RaObj"),
+            ("DEC_OBJ", "DecObj"),
+            ("EQUINOX", "Equinox"),
+            ("RADECSYS", "Radecsys"),
+            ("OBSERVER", "Observer"),
+            ("OBS_ID", "ObsId"),
+            ("CHECKSUM", "Checksum"),
+        ];
+        for (keyword, name) in expected {
+            assert_eq!(FITSParser::tag_name(keyword), name);
+        }
+    }
+
+    #[test]
+    fn quoted_slashes_and_escaped_quotes_are_values_not_comments() {
+        assert_eq!(
+            FITSParser::parse_record(&card(
+                "TIMVERSN= 'XFF/95-004'         / XFF design document"
+            )),
+            Some(("TIMVERSN".into(), "XFF/95-004".into(), None))
+        );
+        assert_eq!(
+            FITSParser::parse_record(&card("OBJECT  = 'O''Brien / field'   / observer target")),
+            Some(("OBJECT".into(), "O'Brien / field".into(), None))
+        );
+        assert_eq!(
+            FITSParser::parse_record(&card("DATASUM = '         0'         / data unit checksum")),
+            Some(("DATASUM".into(), "         0".into(), None))
+        );
+    }
+
+    #[test]
+    fn unquoted_card_comments_are_separated_from_values() {
+        assert_eq!(
+            FITSParser::parse_record(&card(
+                "MJDREFF =   6.965740740000D-04 / fractional reference"
+            )),
+            Some((
+                "MJDREFF".into(),
+                "6.965740740000e-04".into(),
+                Some("fractional reference".into()),
+            ))
+        );
+    }
+
+    #[test]
+    fn parser_uses_exiftool_names_and_does_not_emit_card_comments() {
+        let reader = TestReader::new(fits(&[
+            "SIMPLE  =                    T / conforms to FITS",
+            "BITPIX  =                    8 / bits per pixel",
+            "NAXIS   =                    0 / axes",
+            "DATE    = '28/01/97'           / creation date",
+            "TIME-OBS= '11:56:26'           / start time",
+            "TIMVERSN= 'XFF/95-004'         / design document",
+            "DATASUM = '         0'         / data checksum",
+            "END",
+        ]));
+
+        let metadata = FITSParser.parse(&reader).unwrap();
+        assert_eq!(metadata.get_integer("Bitpix"), Some(8));
+        assert_eq!(metadata.get_integer("Naxis"), Some(0));
+        assert_eq!(metadata.get_string("CreateDate"), Some("28/01/97"));
+        assert_eq!(metadata.get_string("ObservationTime"), Some("11:56:26"));
+        assert_eq!(metadata.get_string("Timversn"), Some("XFF/95-004"));
+        assert_eq!(metadata.get_string("Datasum"), Some("         0"));
+        assert!(!metadata.keys().any(|name| name.ends_with("Comment")));
+    }
 }
