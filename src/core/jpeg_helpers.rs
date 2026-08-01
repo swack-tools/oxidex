@@ -11,8 +11,8 @@ use crate::io::EndianReader;
 use crate::parsers::jpeg::app_segments::app8_isothermal::INFIRAY_ISOTHERMAL_MIN_LENGTH;
 use crate::parsers::jpeg::app_segments::{
     parse_app6_ijpeg, parse_app10_hdr, parse_app11_jpeg_hdr, parse_app12_olympus,
-    parse_app12_picture_info, parse_app14_adobe, parse_infiray_isothermal, parse_meta_app3,
-    parse_photoshop_irb,
+    parse_app12_picture_info, parse_app14_adobe, parse_infiray_isothermal, parse_jumbf,
+    parse_meta_app3, parse_photoshop_irb,
 };
 use crate::parsers::jpeg::icc_chunk_assembler::IccChunkAssembler;
 use crate::parsers::jpeg::quality_estimate::estimate_quality_from_dqt_tables;
@@ -251,6 +251,28 @@ fn process_ifd0_tags(
             continue; // Don't add the pointer tag to metadata
         }
 
+        // Check for IPTC-NAA (tag 0x83BB = 33723).
+        //
+        // A JPEG may carry its IPTC IIM block inside IFD0 rather than in an
+        // APP13 Photoshop resource. ExifTool routes both to ProcessIPTC and
+        // prints the datasets under the same family-0 "IPTC" group, so a file
+        // like Canon/CanonEOS-1D.jpg -- which has no APP13 at all -- still
+        // reports a full Envelope and Application record.
+        //
+        // The raw block itself is not printed: ExifTool treats IPTC-NAA as a
+        // SubDirectory and omits it from a default dump.
+        //
+        // This runs before `process_iptc_segments`, so an APP13 resource (the
+        // MWG-standard location) still wins when a file carries both.
+        if *tag_id == 0x83BB && !bytes.is_empty() {
+            for (tag_name, value) in
+                crate::parsers::jpeg::iptc_parser::extract_iptc_from_block(bytes)
+            {
+                metadata.insert(tag_name, parse_string_to_tag_value(&value));
+            }
+            continue;
+        }
+
         // Convert tag ID to tag name (IFD0 for main JPEG EXIF)
         let tag_name = lookup_tag_name(*tag_id, "IFD0");
 
@@ -278,8 +300,21 @@ pub fn process_xmp_segments(segments: &[Segment], metadata: &mut MetadataMap) {
         Ok(xmp_tags) => {
             // Add all XMP tags to metadata
             for (tag_name, value) in xmp_tags {
-                // Try to parse as integer first, then as float, otherwise keep as string
-                let tag_value = parse_string_to_tag_value(&value);
+                // A List keeps its entries apart -- ExifTool reports
+                // dc:subject as a list, not one joined string.
+                let tag_value = match value {
+                    crate::parsers::xmp::rdf_parser::XmpValue::List(values) => {
+                        TagValue::Array(values.into_iter().map(TagValue::new_string).collect())
+                    }
+                    // XMP is a text format and ExifTool prints the property's
+                    // characters back verbatim: crs:ProcessVersion "11.0" is
+                    // "11.0", not 11, and Device:Camera's "0.321765" keeps all
+                    // six digits. Parsing to a number and re-formatting loses
+                    // exactly those.
+                    crate::parsers::xmp::rdf_parser::XmpValue::Scalar(value) => {
+                        TagValue::new_string(value)
+                    }
+                };
                 metadata.insert(tag_name, tag_value);
             }
         }
@@ -300,12 +335,17 @@ pub fn process_xmp_segments(segments: &[Segment], metadata: &mut MetadataMap) {
 /// * `segments` - Parsed JPEG segments
 /// * `metadata` - MetadataMap to populate with IPTC tags
 pub fn process_iptc_segments(segments: &[Segment], metadata: &mut MetadataMap) {
-    match crate::parsers::jpeg::iptc_parser::extract_iptc_from_segments(segments) {
+    match crate::parsers::jpeg::iptc_parser::extract_iptc_values_from_segments(segments) {
         Ok(iptc_tags) => {
-            // Add all IPTC tags to metadata
+            // Add all IPTC tags to metadata. Keywords and
+            // SupplementalCategories arrive as a TagValue::Array -- they are
+            // written as one IIM record per entry, and inserting them one at a
+            // time kept only the last.
             for (tag_name, value) in iptc_tags {
-                // Try to parse as integer first, then as float, otherwise keep as string
-                let tag_value = parse_string_to_tag_value(&value);
+                let tag_value = match value {
+                    TagValue::String(text) => parse_string_to_tag_value(&text),
+                    other => other,
+                };
                 metadata.insert(tag_name, tag_value);
             }
         }
@@ -575,21 +615,21 @@ pub fn process_app10_segments(segments: &[Segment], metadata: &mut MetadataMap) 
     }
 }
 
-/// Processes APP11 segments and extracts JPEG-HDR metadata.
+/// Processes APP11 segments and extracts JPEG-HDR and JUMBF metadata.
 ///
-/// APP11 segments (marker 0xFFEB) may contain JPEG-HDR (High Dynamic Range)
-/// metadata including tone mapping parameters, ratio image data, and HDR
-/// reconstruction coefficients.
+/// APP11 segments (marker 0xFFEB) carry two unrelated payloads, and ExifTool
+/// (ExifTool.pm, APP11 branch) splits them exactly two ways:
+///
+/// - a payload starting with "HDR_RI" is JPEG-HDR (High Dynamic Range) tone
+///   mapping data;
+/// - a payload matching `JP..` and at least 16 bytes long is a JUMBF chunk -
+///   the container C2PA / CAI provenance metadata and JPEG XT box metadata ride
+///   in.
 ///
 /// # Arguments
 ///
 /// * `segments` - Parsed JPEG segments
-/// * `metadata` - MetadataMap to populate with JPEG-HDR tags
-///
-/// # JPEG-HDR Identifiers
-///
-/// - "HDR_RI" - HDR Ratio Image segment containing reconstruction data
-/// - "JPEG-HDR" - Generic JPEG-HDR parameter segment
+/// * `metadata` - MetadataMap to populate
 ///
 /// # Extracted Tags
 ///
@@ -598,6 +638,13 @@ pub fn process_app10_segments(segments: &[Segment], metadata: &mut MetadataMap) 
 /// - JPEG-HDR:Ln0/Ln1 - Luminance bounds
 /// - JPEG-HDR:CorrectionMethod - HDR correction method
 /// - JPEG-HDR:RatioImageSize - Size of embedded ratio image
+/// - JUMBF:* - box descriptions plus the flattened JSON/CBOR payloads
+///
+/// # JUMBF chunking
+///
+/// A single JUMBF box is routinely split across several APP11 segments, so the
+/// chunks are collected for the whole file and handed to [`parse_jumbf`] in one
+/// go rather than parsed segment by segment.
 pub fn process_app11_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     // APP11 marker is 0xFFEB
     const APP11_MARKER: u16 = 0xFFEB;
@@ -605,6 +652,8 @@ pub fn process_app11_segments(segments: &[Segment], metadata: &mut MetadataMap) 
     // Known JPEG-HDR identifier prefixes
     const HDR_RI_PREFIX: &[u8] = b"HDR_RI";
     const JPEG_HDR_PREFIX: &[u8] = b"JPEG-HDR";
+
+    let mut jumbf_payloads: Vec<&[u8]> = Vec::new();
 
     for segment in segments.iter().filter(|s| s.marker == APP11_MARKER) {
         // Check if segment contains JPEG-HDR data by looking for known identifiers
@@ -629,6 +678,24 @@ pub fn process_app11_segments(segments: &[Segment], metadata: &mut MetadataMap) 
                     eprintln!("Warning: Failed to parse APP11 JPEG-HDR segment: {}", e);
                 }
             }
+        } else {
+            jumbf_payloads.push(segment.data);
+        }
+    }
+
+    if jumbf_payloads.is_empty() {
+        return;
+    }
+
+    match parse_jumbf(&jumbf_payloads) {
+        Ok(jumbf_metadata) => {
+            for (key, value) in jumbf_metadata.iter() {
+                metadata.insert(key.clone(), value.clone());
+            }
+        }
+        Err(e) => {
+            // JUMBF data is optional; a malformed box must not fail the file.
+            eprintln!("Warning: Failed to parse APP11 JUMBF segments: {}", e);
         }
     }
 }

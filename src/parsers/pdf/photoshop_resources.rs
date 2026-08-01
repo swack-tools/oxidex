@@ -50,13 +50,6 @@ const RES_EXIF: u16 = 0x0422;
 /// cannot ask for an unbounded allocation.
 const MAX_STREAM_BYTES: usize = 16 * 1024 * 1024;
 
-/// IPTC application-record datasets ExifTool reports as lists because the
-/// IIM spec marks them repeatable. Every other dataset keeps last-wins
-/// semantics, which is what a single-valued map insert already does.
-///
-/// 20 = SupplementalCategories, 25 = Keywords (IPTC.pm, `List => 1`).
-const REPEATABLE_IPTC_DATASETS: [u8; 2] = [20, 25];
-
 /// Extracts the Photoshop image-resource block a Photoshop-authored PDF
 /// stores in its page dictionary, and decodes the Photoshop, IPTC and EXIF
 /// tags it carries.
@@ -222,7 +215,12 @@ fn insert_iptc_tags(payload: &[u8], metadata: &mut MetadataMap) {
             _ => text,
         };
 
-        if record.record_number == 2 && REPEATABLE_IPTC_DATASETS.contains(&record.dataset_number) {
+        // Which datasets repeat is owned by the JPEG IPTC parser, which
+        // decodes the identical 0x0404 resource out of an APP13 segment.
+        if crate::parsers::jpeg::iptc_parser::is_repeatable_iptc_dataset(
+            record.record_number,
+            record.dataset_number,
+        ) {
             match lists.iter_mut().find(|(name, _)| *name == tag_name) {
                 Some((_, values)) => values.push(TagValue::String(text)),
                 None => lists.push((tag_name, vec![TagValue::String(text)])),

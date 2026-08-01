@@ -11,6 +11,7 @@ pub mod app12_picture_info;
 pub mod app14_adobe;
 pub mod app6;
 pub mod app8_isothermal;
+pub mod cbor;
 pub mod jumbf;
 pub mod meta_app3;
 pub mod photoshop;

@@ -36,6 +36,7 @@ pub mod namespace_mapping;
 pub mod namespace_resolver;
 pub mod plus_vocab;
 pub mod rdf_parser;
+pub mod struct_flatten;
 
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::Result;
@@ -56,12 +57,19 @@ pub fn parse_xmp_file(reader: &dyn FileReader) -> Result<MetadataMap> {
     let size = reader.size() as usize;
     let xmp_data = reader.read(0, size)?;
 
-    // Parse the XMP data
-    let xmp_tags = parse_xmp(xmp_data)?;
+    // Parse the XMP data, keeping List-valued properties as lists.
+    let xmp_tags = rdf_parser::parse_xmp_typed(xmp_data)?;
 
     // Add all XMP tags to metadata and enrich with core XMP tags for Worker 30
-    for (key, value) in xmp_tags {
-        metadata.insert(key.clone(), TagValue::new_string(value.clone()));
+    for (key, typed) in xmp_tags {
+        let value = typed.clone().into_joined();
+        let stored = match typed {
+            rdf_parser::XmpValue::List(values) => {
+                TagValue::Array(values.into_iter().map(TagValue::new_string).collect())
+            }
+            rdf_parser::XmpValue::Scalar(value) => TagValue::new_string(value),
+        };
+        metadata.insert(key.clone(), stored);
 
         // Add Worker 30 core XMP tags based on extracted values
         // These tags ensure consistent naming for core XMP properties

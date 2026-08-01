@@ -31,6 +31,12 @@ pub(crate) enum PropertySet {
     SummaryInfo,
     /// `\x05DocumentSummaryInformation` (two sections: standard + user-defined)
     DocumentInfo,
+    /// `\x05Extension List` (`%FlashPix::Extensions`). Its IDs carry an
+    /// extension number in the high bits, so they are matched under a mask.
+    Extensions,
+    /// `\x05Audio Info` (`%FlashPix::AudioInfo`). The table declares no IDs of
+    /// its own; only the universal `CodePage` / `LocaleIndicator` apply.
+    AudioInfo,
 }
 
 /// Byte-order marks that may open a property set (MS-OLEPS 2.20).
@@ -733,6 +739,15 @@ fn convert_value(name: &str, values: Vec<FpxValue>) -> Option<TagValue> {
             let v = values.first()?.as_int()?;
             Some(TagValue::String(security_print_conv(v)))
         }
+        "ExtensionPersistence" => {
+            let v = values.first()?.as_int()?;
+            Some(TagValue::String(match v {
+                0 => "Always Valid".to_string(),
+                1 => "Invalidated By Modification".to_string(),
+                2 => "Potentially Invalidated By Modification".to_string(),
+                other => format!("Unknown ({})", other),
+            }))
+        }
         "ScaleCrop" | "LinksUpToDate" | "SharedDoc" | "HyperlinksChanged" => {
             let v = values.first()?.as_int()?;
             Some(TagValue::String(yes_no(v)))
@@ -928,10 +943,65 @@ fn document_info_name(tag: u32) -> Option<&'static str> {
     })
 }
 
+/// `Image::ExifTool::FlashPix::Extensions` tag IDs.
+///
+/// Only the low bits identify the property; the rest is the 1-based extension
+/// number, so `\x05Extension List` stores `ExtensionName` for extension 2 as
+/// `0x00020001`. ExifTool masks with `0x0000ffff` for most IDs and
+/// `0x0000f00f` for the two that would otherwise collide.
+fn extensions_name(tag: u32) -> Option<&'static str> {
+    // Not an extension property: one list-wide value.
+    if tag == 0x1000_0000 {
+        return Some("UsedExtensionNumbers");
+    }
+    // An unmasked hit wins, exactly as it does in ExifTool.
+    if let Some(name) = extensions_id_name(tag) {
+        return Some(name);
+    }
+    let wide = tag & 0x0000_ffff;
+    if !is_narrow_masked_id(wide)
+        && let Some(name) = extensions_id_name(wide)
+    {
+        return Some(name);
+    }
+    let narrow = tag & 0x0000_f00f;
+    if is_narrow_masked_id(narrow) {
+        return extensions_id_name(narrow);
+    }
+    None
+}
+
+/// The two IDs ExifTool masks with `0x0000f00f` rather than `0x0000ffff`.
+fn is_narrow_masked_id(id: u32) -> bool {
+    matches!(id, 0x3001 | 0x3002)
+}
+
+fn extensions_id_name(id: u32) -> Option<&'static str> {
+    Some(match id {
+        0x0001 => "ExtensionName",
+        0x0002 => "ExtensionClassID",
+        0x0003 => "ExtensionPersistence",
+        0x0004 => "ExtensionCreateDate",
+        0x0005 => "ExtensionModifyDate",
+        0x0006 => "CreatingApplication",
+        0x0007 => "ExtensionDescription",
+        0x1000 => "Storage-StreamPathname",
+        0x2000 => "FlashPixStreamPathname",
+        0x2001 => "FlashPixStreamFieldOffset",
+        0x3000 => "PropertySetPathname",
+        0x3001 => "PropertySetIDCodes",
+        0x3002 => "PropertyVectorElements",
+        0x4000 => "SubimageResolutions",
+        _ => return None,
+    })
+}
+
 fn table_name_for_id(set: PropertySet, tag: u32) -> Option<&'static str> {
     match set {
         PropertySet::SummaryInfo => summary_info_name(tag),
         PropertySet::DocumentInfo => document_info_name(tag),
+        PropertySet::Extensions => extensions_name(tag),
+        PropertySet::AudioInfo => None,
     }
 }
 
@@ -1144,6 +1214,38 @@ mod tests {
         assert_eq!(summary_info_name(0x0000), None);
         // ...and must not collide with a real 16-bit tag either.
         assert_ne!(summary_info_name(0x0000), summary_info_name(0x8000_0000));
+    }
+
+    /// `\x05Extension List` repeats the same property IDs once per extension,
+    /// with the 1-based extension number in the high bits.
+    #[test]
+    fn extension_list_ids_resolve_under_their_mask() {
+        // Extension 1 and extension 2 name the same property.
+        assert_eq!(extensions_name(0x0001_0001), Some("ExtensionName"));
+        assert_eq!(extensions_name(0x0002_0001), Some("ExtensionName"));
+        assert_eq!(extensions_name(0x0001_1000), Some("Storage-StreamPathname"));
+        assert_eq!(extensions_name(0x0002_1000), Some("Storage-StreamPathname"));
+        // Unnumbered IDs still resolve.
+        assert_eq!(extensions_name(0x0003), Some("ExtensionPersistence"));
+        // The list-wide ID is not an extension property and must not be masked
+        // down to 0x0000 (which names nothing) or to a numbered property.
+        assert_eq!(extensions_name(0x1000_0000), Some("UsedExtensionNumbers"));
+        // These two use the narrower 0x0000f00f mask, so the bits between are
+        // part of the extension number rather than the property ID.
+        assert_eq!(extensions_name(0x0001_3001), Some("PropertySetIDCodes"));
+        assert_eq!(extensions_name(0x0012_3002), Some("PropertyVectorElements"));
+        // ...and must not be reachable through the wide mask.
+        assert_eq!(extensions_name(0x0001_3003), None);
+        // An ID belonging to no property stays unnamed rather than guessing.
+        assert_eq!(extensions_name(0x0001_0009), None);
+    }
+
+    #[test]
+    fn audio_info_declares_no_ids_of_its_own() {
+        // ExifTool's %FlashPix::AudioInfo is empty; only the universal
+        // CodePage/LocaleIndicator (handled before any table lookup) appear.
+        assert_eq!(table_name_for_id(PropertySet::AudioInfo, 0x0002), None);
+        assert_eq!(table_name_for_id(PropertySet::AudioInfo, 0x1000_0000), None);
     }
 
     #[test]

@@ -534,23 +534,37 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
     process_jfif_segments(&segments, &mut metadata);
     process_exif_segments(&segments, reader, &mut metadata);
     process_xmp_segments(&segments, &mut metadata);
-    process_iptc_segments(&segments, &mut metadata);
-    process_photoshop_segments(&segments, &mut metadata);
-    process_icc_segments(&segments, &mut metadata);
-    process_mpf_segments(&segments, &mut metadata);
-    process_sof_segments(&segments, &mut metadata);
-    process_com_segments(&segments, &mut metadata);
-    process_dqt_segments(&segments, &mut metadata);
-    process_spiff_segments(&segments, &mut metadata);
 
-    // Trailers sit after the JPEG's EOI, so they need the whole file rather
-    // than the parsed segment list, which stops at the EOI marker.
+    // FotoStation writes its records after the JPEG's EOI, so it needs the
+    // whole file rather than the parsed segment list. It runs before
+    // `process_iptc_segments` because its trailer can carry an IPTC block, and
+    // an APP13 Photoshop resource -- the MWG-standard location -- outranks it
+    // when a file has both.
     if let Ok(file) = reader.read(0, reader.size() as usize) {
         for (key, value) in
             crate::parsers::jpeg::fotostation::parse_fotostation_trailer(file).iter()
         {
             metadata.insert(key.clone(), value.clone());
         }
+    }
+
+    process_iptc_segments(&segments, &mut metadata);
+    process_photoshop_segments(&segments, &mut metadata);
+    process_icc_segments(&segments, &mut metadata);
+    process_mpf_segments(&segments, &mut metadata);
+    // APP2/APP4 FPXR: FlashPix streams split across application segments.
+    crate::parsers::jpeg::flashpix::process_fpxr_segments(&segments, &mut metadata);
+    process_sof_segments(&segments, &mut metadata);
+    process_com_segments(&segments, &mut metadata);
+    process_dqt_segments(&segments, &mut metadata);
+    process_spiff_segments(&segments, &mut metadata);
+
+    // Canon VRD sits after the JPEG's EOI, so it needs the whole file rather
+    // than the parsed segment list, which stops at the EOI marker. The
+    // FotoStation trailer is read further up, BEFORE process_iptc_segments, so
+    // that an APP13 Photoshop resource -- the MWG-standard location -- outranks
+    // it when a file carries both.
+    if let Ok(file) = reader.read(0, reader.size() as usize) {
         for (key, value) in crate::parsers::canon_vrd::parse_canon_vrd_trailer(file).iter() {
             metadata.insert(key.clone(), value.clone());
         }
