@@ -8,6 +8,7 @@
 
 // Submodules for extended tag parsing
 pub mod af_info;
+pub mod binary_tables;
 pub mod camera_info;
 pub mod color_data;
 pub mod lens_info;
@@ -1592,26 +1593,6 @@ const PROCESSING_INFO_WB_SHIFT_GM: usize = 13;
 // ```
 const MEASURED_COLOR_RGGB: usize = 1;
 
-// ColorData1 indices (tag 0x4001 with an element count of 582 — 20D and 350D)
-//
-// ExifTool `%Image::ExifTool::Canon::ColorData1` (Canon.pm:7435), `FORMAT => 'int16s'`,
-// `FIRST_ENTRY => 0`, so the raw int16 index equals the Perl key. Every `WB_RGGBLevels*`
-// key is `Format => 'int16s[4]'` and each is followed 4 slots later by its `ColorTemp*`.
-const COLOR_DATA1_ELEMENT_COUNT: usize = 582;
-/// `(WB_RGGBLevels* index, ColorTemp* index, suffix)` for each preset in ColorData1.
-const COLOR_DATA1_WB_PRESETS: &[(usize, usize, &str)] = &[
-    (0x19, 0x1d, "AsShot"),
-    (0x1e, 0x22, "Auto"),
-    (0x23, 0x27, "Daylight"),
-    (0x28, 0x2c, "Shade"),
-    (0x2d, 0x31, "Cloudy"),
-    (0x32, 0x36, "Tungsten"),
-    (0x37, 0x3b, "Fluorescent"),
-    (0x3c, 0x40, "Flash"),
-    (0x41, 0x45, "Custom1"),
-    (0x46, 0x4a, "Custom2"),
-];
-
 // ============================================================================
 // DECODERS - Canon Value Decoders
 // ============================================================================
@@ -2617,8 +2598,8 @@ pub fn apex_to_exposure_time(apex_value: i16) -> String {
 ///
 /// # Returns
 /// A formatted focal length string with "mm" suffix
-pub fn format_focal_length(raw_value: i16, focal_units: i16) -> String {
-    if focal_units == 0 || raw_value == 0 {
+pub fn format_focal_length(raw_value: u16, focal_units: i16) -> String {
+    if focal_units == 0 {
         return "n/a".to_string();
     }
 
@@ -3949,22 +3930,20 @@ fn parse_canon_makernote_impl(
                         );
                     }
 
-                    // Contrast (index 13) - Contrast adjustment value
-                    // Uses decoder to convert signed value to human-readable string
-                    if array.len() > CAMERA_SETTINGS_CONTRAST {
-                        tags.insert(
-                            "Canon:Contrast".to_string(),
-                            CONTRAST.decode(array[CAMERA_SETTINGS_CONTRAST]),
-                        );
+                    // Contrast (index 13) and Saturation (index 14). ExifTool
+                    // (Canon.pm:2384/2392) gives both `RawConv => '$val == 0x7fff ? undef
+                    // : $val'` and the shared `%printParameter`, so each is a signed
+                    // adjustment printed with its sign -- not a Low/Normal/High band.
+                    if let Some(&contrast) = array.get(CAMERA_SETTINGS_CONTRAST)
+                        && contrast != 0x7fff
+                    {
+                        tags.insert("Canon:Contrast".to_string(), print_parameter(contrast));
                     }
 
-                    // Saturation (index 14) - Saturation adjustment value
-                    // Uses decoder to convert signed value to human-readable string
-                    if array.len() > CAMERA_SETTINGS_SATURATION {
-                        tags.insert(
-                            "Canon:Saturation".to_string(),
-                            SATURATION.decode(array[CAMERA_SETTINGS_SATURATION]),
-                        );
+                    if let Some(&saturation) = array.get(CAMERA_SETTINGS_SATURATION)
+                        && saturation != 0x7fff
+                    {
+                        tags.insert("Canon:Saturation".to_string(), print_parameter(saturation));
                     }
 
                     // Sharpness (index 15). ExifTool `%Canon::CameraSettings` key 15
@@ -4063,7 +4042,7 @@ fn parse_canon_makernote_impl(
                         tags.insert(
                             "Canon:MaxFocalLength".to_string(),
                             format_focal_length(
-                                array[CAMERA_SETTINGS_MAX_FOCAL_LENGTH],
+                                array[CAMERA_SETTINGS_MAX_FOCAL_LENGTH] as u16,
                                 focal_units,
                             ),
                         );
@@ -4074,7 +4053,7 @@ fn parse_canon_makernote_impl(
                         tags.insert(
                             "Canon:MinFocalLength".to_string(),
                             format_focal_length(
-                                array[CAMERA_SETTINGS_MIN_FOCAL_LENGTH],
+                                array[CAMERA_SETTINGS_MIN_FOCAL_LENGTH] as u16,
                                 focal_units,
                             ),
                         );
@@ -4457,7 +4436,7 @@ fn parse_canon_makernote_impl(
                     {
                         tags.insert(
                             "Canon:FocalLength".to_string(),
-                            format_focal_length(focal_length, focal_units),
+                            format_focal_length(focal_length as u16, focal_units),
                         );
                     }
                     // FocalPlaneXSize / FocalPlaneYSize (keys 2 and 3), in 1/1000 inch.
@@ -4717,33 +4696,38 @@ fn parse_canon_makernote_impl(
                 }
             }
 
-            // ColorData (tag 0x4001) - only the 582-element ColorData1 layout (20D and
-            // 350D) is implemented; every other element count selects a different
-            // ExifTool table whose indices do not line up.
-            CANON_COLOR_DATA => {
+            // The plain %Canon binary sub-tables that hang off a MakerNote tag with no
+            // ExifTool Condition -- CropInfo, AspectInfo, ModifiedInfo, AFConfig,
+            // VignettingCorr2, LightingOpt, MultiExp, HDRInfo and the rest. See
+            // `binary_tables` for the transcription and what it deliberately omits.
+            tag if binary_tables::handles_tag(tag) => {
                 if let Some(raw_record) =
                     extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
                 {
-                    // ExifTool picks the ColorData table by the record's declared element
-                    // count, so that count is read before any realignment shortens it.
-                    let declared_elements = raw_record.len();
-                    let array = realign_length_prefixed_record(raw_record);
-                    if declared_elements == COLOR_DATA1_ELEMENT_COUNT {
-                        for &(levels_index, temp_index, suffix) in COLOR_DATA1_WB_PRESETS {
-                            if let Some(levels) = array.get(levels_index..levels_index + 4) {
-                                tags.insert(
-                                    format!("Canon:WB_RGGBLevels{}", suffix),
-                                    join_i16_slice(levels),
-                                );
-                            }
-                            if let Some(&temperature) = array.get(temp_index) {
-                                tags.insert(
-                                    format!("Canon:ColorTemp{}", suffix),
-                                    temperature.to_string(),
-                                );
-                            }
-                        }
-                    }
+                    // `FIRST_ENTRY => 1` tables open with their own byte count, so they go
+                    // through the same realignment guard as the other length-prefixed
+                    // records; `FIRST_ENTRY => 0` tables are indexed from 0 as stored.
+                    let record = if binary_tables::table_is_length_prefixed(tag) {
+                        realign_length_prefixed_record(raw_record)
+                    } else {
+                        raw_record
+                    };
+                    binary_tables::parse_binary_table(tag, &record, byte_order, &mut tags);
+                }
+            }
+
+            // ColorData (tag 0x4001). ExifTool picks one of twelve %Canon::ColorData*
+            // tables by the record's element count (Canon.pm:1972), then gates individual
+            // fields on the ColorDataVersion at index 0. All twelve are in `color_data`.
+            //
+            // The record is NOT length-prefixed -- index 0 is the version, not a size --
+            // so it is passed on raw rather than through
+            // `realign_length_prefixed_record`.
+            CANON_COLOR_DATA => {
+                if let Some(record) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                {
+                    color_data::parse_color_data(&record, byte_order, &mut tags);
                 }
             }
 
@@ -6346,7 +6330,12 @@ mod tests {
     fn test_format_focal_length_keeps_full_precision() {
         assert_eq!(format_focal_length(259, 16), "16.1875 mm");
         assert_eq!(format_focal_length(50, 1), "50 mm");
-        assert_eq!(format_focal_length(0, 1), "n/a");
+        // int16u (Canon.pm:2578/2586): reading it signed wraps every focal length past
+        // 32767 raw units negative -- an IXUS on 1000/mm units reported "-32.536 mm" for
+        // "33 mm", on 84 corpus samples.
+        assert_eq!(format_focal_length(33000, 1000), "33 mm");
+        // MinFocalLength has no RawConv dropping zero, so ExifTool prints "0 mm".
+        assert_eq!(format_focal_length(0, 1), "0 mm");
         assert_eq!(format_focal_length(10, 0), "n/a");
     }
 

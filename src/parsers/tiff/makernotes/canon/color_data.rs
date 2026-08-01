@@ -1,668 +1,3261 @@
-//! Canon ColorData tag parser
+//! Canon `ColorData` parser (MakerNote tag 0x4001).
 //!
-//! This module parses Canon-specific ColorData MakerNote tags containing
-//! white balance and color calibration information. ColorData is embedded
-//! within Canon MakerNotes and contains critical color temperature values
-//! used for accurate color reproduction.
+//! Canon writes white-balance, colour-temperature and sensor-level data as one large
+//! `int16` array whose layout changes with the camera generation. ExifTool models this as
+//! twelve separate tables, `%Canon::ColorData1` through `%Canon::ColorData12`, selected by
+//! the array's element count (Canon.pm:1972), with individual fields further gated on the
+//! `ColorDataVersion` stored at index 0.
 //!
-//! # Overview
+//! # What this replaces
 //!
-//! Canon cameras store color calibration data in a binary blob within the
-//! MakerNotes. This data includes:
+//! The previous version of this module was a hand-written guess: a dozen fixed byte
+//! offsets described as "common offsets found in many EOS cameras", validated by a
+//! 1000-15000 K range check. Those offsets correspond to no ExifTool `ColorData` version
+//! -- ExifTool's keys are `int16` *word* indices into the record, not byte offsets, and
+//! they move between versions. Nothing in the crate ever called it: `parse_canon_color_data`
+//! was reachable only from its own unit tests, which asserted the invented layout back to
+//! itself.
 //!
-//! - Color temperatures for various lighting conditions (AsShot, Daylight, Shade, etc.)
-//! - White balance shift values for amber-blue (AB) and green-magenta (GM) axes
-//!
-//! # Data Structure
-//!
-//! The ColorData structure varies by camera model, but typically contains:
-//! - Header bytes with version information
-//! - Array of signed 16-bit color temperature values
-//! - White balance shift parameters
-//!
-//! # Supported Tags
-//!
-//! | Offset | Tag Name | Description |
-//! |--------|----------|-------------|
-//! | 63-64 | ColorTempAsShot | Color temperature as shot |
-//! | 65-66 | ColorTempAuto | Auto white balance temperature |
-//! | 79-80 | ColorTempDaylight | Daylight preset temperature |
-//! | 83-84 | ColorTempShade | Shade preset temperature |
-//! | 87-88 | ColorTempCloudy | Cloudy preset temperature |
-//! | 91-92 | ColorTempTungsten | Tungsten preset temperature |
-//! | 95-96 | ColorTempFluorescent | Fluorescent preset temperature |
-//! | 99-100 | ColorTempFlash | Flash preset temperature |
-//! | 186-187 | WBShiftAB | White balance shift amber-blue |
-//! | 188-189 | WBShiftGM | White balance shift green-magenta |
-//!
-//! # Example
-//!
-//! ```ignore
-//! use oxidex::parsers::tiff::makernotes::canon::color_data::parse_canon_color_data;
-//!
-//! let color_data: &[u8] = /* ... */;
-//! let is_little_endian = true;
-//! let metadata = parse_canon_color_data(color_data, is_little_endian);
-//!
-//! if let Some(temp) = metadata.get_integer("Canon:ColorTempAsShot") {
-//!     println!("As-shot color temperature: {}K", temp);
-//! }
-//! ```
+//! The tables below are transcribed from `Canon.pm` by script rather than by hand.
+//! Fields ExifTool flags `Unknown` are omitted, since ExifTool itself hides them without
+//! `-U`.
 
-use crate::core::metadata_map::MetadataMap;
-use crate::core::tag_value::TagValue;
-use crate::io::{ByteOrder, EndianReader};
+use crate::parsers::tiff::ifd_parser::ByteOrder;
+use std::collections::HashMap;
 
-// ============================================================================
-// CONSTANTS - ColorData Byte Offsets
-// ============================================================================
+/// How a `ColorData` field's value is laid out in the record's `int16` array.
+#[derive(Clone, Copy)]
+enum ColorFieldFormat {
+    /// ExifTool `int16s` -- the table default.
+    Int16s,
+    /// ExifTool `int16u`.
+    Int16u,
+    /// ExifTool `int32u`, stored as two consecutive words.
+    Int32u,
+    /// ExifTool `int32s`, stored as two consecutive words.
+    Int32s,
+}
 
-/// Byte offset for ColorTempAsShot (as-shot color temperature in Kelvin)
-const OFFSET_COLOR_TEMP_AS_SHOT: usize = 63;
+/// One clause of an ExifTool `Condition` on `$$self{ColorDataVersion}`.
+#[derive(Clone, Copy)]
+enum ColorVersionTest {
+    Eq(i32),
+    Lt(i32),
+    Gt(i32),
+    Le(i32),
+    Ge(i32),
+}
 
-/// Byte offset for ColorTempAuto (auto white balance color temperature)
-const OFFSET_COLOR_TEMP_AUTO: usize = 65;
-
-/// Byte offset for ColorTempDaylight (~5200K daylight preset)
-const OFFSET_COLOR_TEMP_DAYLIGHT: usize = 79;
-
-/// Byte offset for ColorTempShade (~7000K shade preset)
-const OFFSET_COLOR_TEMP_SHADE: usize = 83;
-
-/// Byte offset for ColorTempCloudy (~6000K cloudy preset)
-const OFFSET_COLOR_TEMP_CLOUDY: usize = 87;
-
-/// Byte offset for ColorTempTungsten (~3200K tungsten preset)
-const OFFSET_COLOR_TEMP_TUNGSTEN: usize = 91;
-
-/// Byte offset for ColorTempFluorescent (~4000K fluorescent preset)
-const OFFSET_COLOR_TEMP_FLUORESCENT: usize = 95;
-
-/// Byte offset for ColorTempFlash (~6500K flash preset)
-const OFFSET_COLOR_TEMP_FLASH: usize = 99;
-
-/// Byte offset for WBShiftAB (white balance shift amber-blue axis)
-/// Positive values shift toward amber, negative toward blue
-const OFFSET_WB_SHIFT_AB: usize = 186;
-
-/// Byte offset for WBShiftGM (white balance shift green-magenta axis)
-/// Positive values shift toward green, negative toward magenta
-const OFFSET_WB_SHIFT_GM: usize = 188;
-
-/// Minimum data size required to parse color temperature values
-/// This covers at least through ColorTempFlash at offset 99 + 2 bytes
-const MIN_COLOR_TEMP_SIZE: usize = 102;
-
-/// Minimum data size required to parse WB shift values
-/// This covers through WBShiftGM at offset 188 + 2 bytes
-const MIN_WB_SHIFT_SIZE: usize = 190;
-
-// ============================================================================
-// TAG NAME CONSTANTS
-// ============================================================================
-
-/// Tag prefix for Canon MakerNote tags
-const TAG_PREFIX: &str = "Canon";
-
-/// Tag name for as-shot color temperature
-const TAG_COLOR_TEMP_AS_SHOT: &str = "ColorTempAsShot";
-
-/// Tag name for auto white balance color temperature
-const TAG_COLOR_TEMP_AUTO: &str = "ColorTempAuto";
-
-/// Tag name for daylight color temperature preset
-const TAG_COLOR_TEMP_DAYLIGHT: &str = "ColorTempDaylight";
-
-/// Tag name for shade color temperature preset
-const TAG_COLOR_TEMP_SHADE: &str = "ColorTempShade";
-
-/// Tag name for cloudy color temperature preset
-const TAG_COLOR_TEMP_CLOUDY: &str = "ColorTempCloudy";
-
-/// Tag name for tungsten color temperature preset
-const TAG_COLOR_TEMP_TUNGSTEN: &str = "ColorTempTungsten";
-
-/// Tag name for fluorescent color temperature preset
-const TAG_COLOR_TEMP_FLUORESCENT: &str = "ColorTempFluorescent";
-
-/// Tag name for flash color temperature preset
-const TAG_COLOR_TEMP_FLASH: &str = "ColorTempFlash";
-
-/// Tag name for white balance shift on amber-blue axis
-const TAG_WB_SHIFT_AB: &str = "WBShiftAB";
-
-/// Tag name for white balance shift on green-magenta axis
-const TAG_WB_SHIFT_GM: &str = "WBShiftGM";
-
-// ============================================================================
-// PUBLIC API
-// ============================================================================
-
-/// Parses Canon ColorData binary data and extracts white balance and color
-/// calibration metadata.
-///
-/// This function processes the binary ColorData blob found in Canon MakerNotes
-/// and extracts color temperature values for various lighting presets, as well
-/// as white balance shift adjustments.
-///
-/// # Arguments
-///
-/// * `data` - Raw byte slice containing the Canon ColorData structure.
-///   Must be at least 102 bytes for color temperatures, or 190 bytes
-///   to include WB shift values.
-/// * `byte_order` - Byte order flag: `true` for little-endian (Intel),
-///   `false` for big-endian (Motorola). Most Canon cameras
-///   use little-endian.
-///
-/// # Returns
-///
-/// A `MetadataMap` containing the parsed tags. Each tag is prefixed with
-/// "Canon:" and contains an integer value. Tags are only included if:
-/// - The data buffer is large enough to contain the value
-/// - The parsed value is within a valid range (color temps: 1000-15000K)
-///
-/// # Tag Format
-///
-/// All tags use the format `Canon:TagName` with integer values:
-/// - Color temperature tags: values in Kelvin (e.g., 5200)
-/// - WB shift tags: signed values typically in range -9 to +9
-///
-/// # Example
-///
-/// ```ignore
-/// use oxidex::parsers::tiff::makernotes::canon::color_data::parse_canon_color_data;
-///
-/// // Parse ColorData from a Canon image (little-endian)
-/// let metadata = parse_canon_color_data(&color_data_bytes, true);
-///
-/// // Access specific values
-/// if let Some(daylight) = metadata.get_integer("Canon:ColorTempDaylight") {
-///     assert!(daylight >= 5000 && daylight <= 5500);
-/// }
-/// ```
-///
-/// # Notes
-///
-/// - The exact byte offsets may vary between Canon camera models and firmware
-///   versions. This implementation uses common offsets found in many EOS cameras.
-/// - Invalid or out-of-range values are silently skipped rather than causing errors.
-/// - Color temperature values outside the 1000-15000K range are considered invalid
-///   and are not included in the output.
-pub fn parse_canon_color_data(data: &[u8], byte_order: bool) -> MetadataMap {
-    let mut metadata = MetadataMap::new();
-
-    // Early return if data is too small for any useful parsing
-    if data.len() < MIN_COLOR_TEMP_SIZE {
-        return metadata;
+impl ColorVersionTest {
+    fn matches(&self, version: i32) -> bool {
+        match *self {
+            ColorVersionTest::Eq(v) => version == v,
+            ColorVersionTest::Lt(v) => version < v,
+            ColorVersionTest::Gt(v) => version > v,
+            ColorVersionTest::Le(v) => version <= v,
+            ColorVersionTest::Ge(v) => version >= v,
+        }
     }
+}
 
-    // Convert boolean byte_order flag to EndianReader's ByteOrder enum
-    // true = little-endian (common for Canon), false = big-endian
-    let order = if byte_order {
-        ByteOrder::Little
-    } else {
-        ByteOrder::Big
+/// The conversion ExifTool applies to a `ColorData` field before printing it.
+#[derive(Clone, Copy)]
+enum ColorFieldConv {
+    /// Printed as the raw number(s).
+    None,
+    /// ExifTool `RawConv => '$val || undef'` -- a zero drops the tag.
+    DropZero,
+    /// `ColorDataVersion`'s own lookup, e.g. `7 (500D/550D/7D/1DmkIV)`.
+    VersionMap(&'static [(i32, &'static str)]),
+    /// ExifTool `\&SwapWords`: the 32-bit values are stored with big-endian word order,
+    /// opposite to their byte order, so the two halves swap after a normal read.
+    SwapWords,
+    /// `ValueConv => '$val >= 255 ? 255 : exp(($val-200)/16*log(2))'` then
+    /// `PrintConv => '$val == 255 ? "Strobe or Misfire" : sprintf("%.0f%%", $val * 100)'`.
+    FlashOutput,
+    /// `PrintConv => '$val ? sprintf("%.2fV", $val * 5 / 186) : "n/a"'`.
+    FlashBatteryLevel,
+}
+
+/// One field of a `%Canon::ColorData*` table, transcribed from ExifTool.
+///
+/// `offset` is an index into the record's `int16` array, matching ExifTool's own
+/// keys (the tables declare `FORMAT => 'int16s'`, so a key is a word index, not a
+/// byte offset). `versions` restricts a field to the `ColorDataVersion` values whose
+/// ExifTool `Condition` tests, OR-ed together; an empty slice means unconditional.
+struct ColorDataField {
+    offset: usize,
+    name: &'static str,
+    format: ColorFieldFormat,
+    count: usize,
+    conv: ColorFieldConv,
+    versions: &'static [ColorVersionTest],
+}
+
+const COLOR_DATA_VERSION_10: &[(i32, &str)] = &[(32, "32 (1DXmkIII)"), (33, "33 (R5/R6)")];
+const COLOR_DATA_VERSION_11: &[(i32, &str)] = &[(34, "34 (R3)"), (48, "48 (R7/R10/R50/R6mkII)")];
+const COLOR_DATA_VERSION_12: &[(i32, &str)] = &[(64, "64 (R1/R5mkII)"), (65, "65 (R50V)")];
+const COLOR_DATA_VERSION_3: &[(i32, &str)] = &[(1, "1 (1DmkIIN/5D/30D/400D)")];
+const COLOR_DATA_VERSION_4: &[(i32, &str)] = &[
+    (2, "2 (1DmkIII)"),
+    (3, "3 (40D)"),
+    (4, "4 (1DSmkIII)"),
+    (5, "5 (450D/1000D)"),
+    (6, "6 (50D/5DmkII)"),
+    (7, "7 (500D/550D/7D/1DmkIV)"),
+    (9, "9 (60D/1100D)"),
+];
+const COLOR_DATA_VERSION_5: &[(i32, &str)] = &[(-4, "-4 (M100/M5/M6)"), (-3, "-3 (M10/M3)")];
+const COLOR_DATA_VERSION_6: &[(i32, &str)] = &[(10, "10 (600D/1200D)")];
+const COLOR_DATA_VERSION_7: &[(i32, &str)] = &[
+    (10, "10 (1DX/5DmkIII/6D/70D/100D/650D/700D/M/M2)"),
+    (11, "11 (7DmkII/750D/760D/8000D)"),
+];
+const COLOR_DATA_VERSION_8: &[(i32, &str)] = &[
+    (12, "12 (1DXmkII/5DS/5DSR)"),
+    (13, "13 (80D/5DmkIV)"),
+    (14, "14 (1300D/2000D/4000D)"),
+    (15, "15 (6DmkII/77D/200D/800D,9000D)"),
+];
+const COLOR_DATA_VERSION_9: &[(i32, &str)] = &[
+    (16, "16 (M50)"),
+    (17, "17 (R)"),
+    (18, "18 (RP/250D)"),
+    (19, "19 (90D/850D/M6mkII/M200)"),
+];
+
+/// `%Canon::ColorData1` -- ExifTool selects it when tag 0x4001 has 582 elements.
+const COLOR_DATA_1: &[ColorDataField] = &[
+    ColorDataField {
+        offset: 0x19,
+        name: "WB_RGGBLevelsAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x1d,
+        name: "ColorTempAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x1e,
+        name: "WB_RGGBLevelsAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x22,
+        name: "ColorTempAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x23,
+        name: "WB_RGGBLevelsDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x27,
+        name: "ColorTempDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x28,
+        name: "WB_RGGBLevelsShade",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x2c,
+        name: "ColorTempShade",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x2d,
+        name: "WB_RGGBLevelsCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x31,
+        name: "ColorTempCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x32,
+        name: "WB_RGGBLevelsTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x36,
+        name: "ColorTempTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x37,
+        name: "WB_RGGBLevelsFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x3b,
+        name: "ColorTempFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x3c,
+        name: "WB_RGGBLevelsFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x40,
+        name: "ColorTempFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x41,
+        name: "WB_RGGBLevelsCustom1",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x45,
+        name: "ColorTempCustom1",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x46,
+        name: "WB_RGGBLevelsCustom2",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x4a,
+        name: "ColorTempCustom2",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+];
+
+/// `%Canon::ColorData2` -- ExifTool selects it when tag 0x4001 has 653 elements.
+const COLOR_DATA_2: &[ColorDataField] = &[
+    ColorDataField {
+        offset: 0x18,
+        name: "WB_RGGBLevelsAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x1c,
+        name: "ColorTempAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x22,
+        name: "WB_RGGBLevelsAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x26,
+        name: "ColorTempAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x27,
+        name: "WB_RGGBLevelsDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x2b,
+        name: "ColorTempDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x2c,
+        name: "WB_RGGBLevelsShade",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x30,
+        name: "ColorTempShade",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x31,
+        name: "WB_RGGBLevelsCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x35,
+        name: "ColorTempCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x36,
+        name: "WB_RGGBLevelsTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x3a,
+        name: "ColorTempTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x3b,
+        name: "WB_RGGBLevelsFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x3f,
+        name: "ColorTempFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x40,
+        name: "WB_RGGBLevelsKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x44,
+        name: "ColorTempKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x45,
+        name: "WB_RGGBLevelsFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x49,
+        name: "ColorTempFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x90,
+        name: "WB_RGGBLevelsPC1",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x94,
+        name: "ColorTempPC1",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x95,
+        name: "WB_RGGBLevelsPC2",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x99,
+        name: "ColorTempPC2",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x9a,
+        name: "WB_RGGBLevelsPC3",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x9e,
+        name: "ColorTempPC3",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x26a,
+        name: "RawMeasuredRGGB",
+        format: ColorFieldFormat::Int32u,
+        count: 4,
+        conv: ColorFieldConv::SwapWords,
+        versions: &[],
+    },
+];
+
+/// `%Canon::ColorData3` -- ExifTool selects it when tag 0x4001 has 796 elements.
+const COLOR_DATA_3: &[ColorDataField] = &[
+    ColorDataField {
+        offset: 0x0,
+        name: "ColorDataVersion",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::VersionMap(COLOR_DATA_VERSION_3),
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x3f,
+        name: "WB_RGGBLevelsAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x43,
+        name: "ColorTempAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x44,
+        name: "WB_RGGBLevelsAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x48,
+        name: "ColorTempAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x49,
+        name: "WB_RGGBLevelsMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x4d,
+        name: "ColorTempMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x4e,
+        name: "WB_RGGBLevelsDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x52,
+        name: "ColorTempDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x53,
+        name: "WB_RGGBLevelsShade",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x57,
+        name: "ColorTempShade",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x58,
+        name: "WB_RGGBLevelsCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x5c,
+        name: "ColorTempCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x5d,
+        name: "WB_RGGBLevelsTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x61,
+        name: "ColorTempTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x62,
+        name: "WB_RGGBLevelsFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x66,
+        name: "ColorTempFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x67,
+        name: "WB_RGGBLevelsKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x6b,
+        name: "ColorTempKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x6c,
+        name: "WB_RGGBLevelsFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x70,
+        name: "ColorTempFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x71,
+        name: "WB_RGGBLevelsPC1",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x75,
+        name: "ColorTempPC1",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x76,
+        name: "WB_RGGBLevelsPC2",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x7a,
+        name: "ColorTempPC2",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x7b,
+        name: "WB_RGGBLevelsPC3",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x7f,
+        name: "ColorTempPC3",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x80,
+        name: "WB_RGGBLevelsCustom",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x84,
+        name: "ColorTempCustom",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xc4,
+        name: "PerChannelBlackLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x248,
+        name: "FlashOutput",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::FlashOutput,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x249,
+        name: "FlashBatteryLevel",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::FlashBatteryLevel,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x24a,
+        name: "ColorTempFlashData",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x287,
+        name: "MeasuredRGGBData",
+        format: ColorFieldFormat::Int32u,
+        count: 4,
+        conv: ColorFieldConv::SwapWords,
+        versions: &[],
+    },
+];
+
+/// `%Canon::ColorData4` -- ExifTool selects it when tag 0x4001 has 692, 674, 702, 1227, 1250, 1251, 1337, 1338, 1346 elements.
+const COLOR_DATA_4: &[ColorDataField] = &[
+    ColorDataField {
+        offset: 0x0,
+        name: "ColorDataVersion",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::VersionMap(COLOR_DATA_VERSION_4),
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x3f,
+        name: "WB_RGGBLevelsAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x43,
+        name: "ColorTempAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x44,
+        name: "WB_RGGBLevelsAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x48,
+        name: "ColorTempAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x49,
+        name: "WB_RGGBLevelsMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x4d,
+        name: "ColorTempMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x53,
+        name: "WB_RGGBLevelsDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x57,
+        name: "ColorTempDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x58,
+        name: "WB_RGGBLevelsShade",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x5c,
+        name: "ColorTempShade",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x5d,
+        name: "WB_RGGBLevelsCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x61,
+        name: "ColorTempCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x62,
+        name: "WB_RGGBLevelsTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x66,
+        name: "ColorTempTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x67,
+        name: "WB_RGGBLevelsFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x6b,
+        name: "ColorTempFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x6c,
+        name: "WB_RGGBLevelsKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x70,
+        name: "ColorTempKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x71,
+        name: "WB_RGGBLevelsFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x75,
+        name: "ColorTempFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xe7,
+        name: "AverageBlackLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x26b,
+        name: "FlashOutput",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::FlashOutput,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x26c,
+        name: "FlashBatteryLevel",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::FlashBatteryLevel,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x280,
+        name: "RawMeasuredRGGB",
+        format: ColorFieldFormat::Int32u,
+        count: 4,
+        conv: ColorFieldConv::SwapWords,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x2b4,
+        name: "PerChannelBlackLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(4), ColorVersionTest::Eq(5)],
+    },
+    ColorDataField {
+        offset: 0x2b8,
+        name: "NormalWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::DropZero,
+        versions: &[ColorVersionTest::Eq(4), ColorVersionTest::Eq(5)],
+    },
+    ColorDataField {
+        offset: 0x2b9,
+        name: "SpecularWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(4), ColorVersionTest::Eq(5)],
+    },
+    ColorDataField {
+        offset: 0x2ba,
+        name: "LinearityUpperMargin",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(4), ColorVersionTest::Eq(5)],
+    },
+    ColorDataField {
+        offset: 0x2cb,
+        name: "PerChannelBlackLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(6), ColorVersionTest::Eq(7)],
+    },
+    ColorDataField {
+        offset: 0x2cf,
+        name: "NormalWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::DropZero,
+        versions: &[ColorVersionTest::Eq(6), ColorVersionTest::Eq(7)],
+    },
+    ColorDataField {
+        offset: 0x2cf,
+        name: "PerChannelBlackLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(9)],
+    },
+    ColorDataField {
+        offset: 0x2d0,
+        name: "SpecularWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(6), ColorVersionTest::Eq(7)],
+    },
+    ColorDataField {
+        offset: 0x2d1,
+        name: "LinearityUpperMargin",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(6), ColorVersionTest::Eq(7)],
+    },
+    ColorDataField {
+        offset: 0x2d3,
+        name: "NormalWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::DropZero,
+        versions: &[ColorVersionTest::Eq(9)],
+    },
+    ColorDataField {
+        offset: 0x2d4,
+        name: "SpecularWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(9)],
+    },
+    ColorDataField {
+        offset: 0x2d5,
+        name: "LinearityUpperMargin",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(9)],
+    },
+];
+
+/// `%Canon::ColorData5` -- ExifTool selects it when tag 0x4001 has 5120 elements.
+const COLOR_DATA_5: &[ColorDataField] = &[
+    ColorDataField {
+        offset: 0x0,
+        name: "ColorDataVersion",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::VersionMap(COLOR_DATA_VERSION_5),
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x47,
+        name: "WB_RGGBLevelsAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x47,
+        name: "WB_RGGBLevelsAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x4b,
+        name: "ColorTempAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x4c,
+        name: "WB_RGGBLevelsAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x4e,
+        name: "ColorTempAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x4f,
+        name: "WB_RGGBLevelsAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x50,
+        name: "ColorTempAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x51,
+        name: "WB_RGGBLevelsMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x55,
+        name: "ColorTempMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x56,
+        name: "ColorTempAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x57,
+        name: "WB_RGGBLevelsMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x5b,
+        name: "WB_RGGBLevelsDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x5e,
+        name: "ColorTempMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x5f,
+        name: "ColorTempDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x60,
+        name: "WB_RGGBLevelsShade",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x64,
+        name: "ColorTempShade",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x65,
+        name: "WB_RGGBLevelsCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x67,
+        name: "WB_RGGBLevelsDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x69,
+        name: "ColorTempCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x6a,
+        name: "WB_RGGBLevelsTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x6e,
+        name: "ColorTempDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x6e,
+        name: "ColorTempTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x6f,
+        name: "WB_RGGBLevelsFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x6f,
+        name: "WB_RGGBLevelsShade",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x73,
+        name: "ColorTempFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x74,
+        name: "WB_RGGBLevelsKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x76,
+        name: "ColorTempShade",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x77,
+        name: "WB_RGGBLevelsCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x78,
+        name: "ColorTempKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x79,
+        name: "WB_RGGBLevelsFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x7d,
+        name: "ColorTempFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x7e,
+        name: "ColorTempCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x7f,
+        name: "WB_RGGBLevelsTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x86,
+        name: "ColorTempTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x87,
+        name: "WB_RGGBLevelsFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x8e,
+        name: "ColorTempFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x8f,
+        name: "WB_RGGBLevelsKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x96,
+        name: "ColorTempKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x97,
+        name: "WB_RGGBLevelsFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x9e,
+        name: "ColorTempFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x108,
+        name: "PerChannelBlackLevel",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x14d,
+        name: "PerChannelBlackLevel",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x296,
+        name: "SpecularWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-3)],
+    },
+    ColorDataField {
+        offset: 0x569,
+        name: "NormalWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+    ColorDataField {
+        offset: 0x56a,
+        name: "SpecularWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(-4)],
+    },
+];
+
+/// `%Canon::ColorData6` -- ExifTool selects it when tag 0x4001 has 1273, 1275 elements.
+const COLOR_DATA_6: &[ColorDataField] = &[
+    ColorDataField {
+        offset: 0x0,
+        name: "ColorDataVersion",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::VersionMap(COLOR_DATA_VERSION_6),
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x3f,
+        name: "WB_RGGBLevelsAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x43,
+        name: "ColorTempAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x44,
+        name: "WB_RGGBLevelsAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x48,
+        name: "ColorTempAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x49,
+        name: "WB_RGGBLevelsMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x4d,
+        name: "ColorTempMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x67,
+        name: "WB_RGGBLevelsDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x6b,
+        name: "ColorTempDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x6c,
+        name: "WB_RGGBLevelsShade",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x70,
+        name: "ColorTempShade",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x71,
+        name: "WB_RGGBLevelsCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x75,
+        name: "ColorTempCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x76,
+        name: "WB_RGGBLevelsTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x7a,
+        name: "ColorTempTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x7b,
+        name: "WB_RGGBLevelsFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x7f,
+        name: "ColorTempFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x80,
+        name: "WB_RGGBLevelsKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x84,
+        name: "ColorTempKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x85,
+        name: "WB_RGGBLevelsFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x89,
+        name: "ColorTempFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xfb,
+        name: "AverageBlackLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x194,
+        name: "RawMeasuredRGGB",
+        format: ColorFieldFormat::Int32u,
+        count: 4,
+        conv: ColorFieldConv::SwapWords,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x1df,
+        name: "PerChannelBlackLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x1e3,
+        name: "NormalWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::DropZero,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x1e4,
+        name: "SpecularWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x1e5,
+        name: "LinearityUpperMargin",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+];
+
+/// `%Canon::ColorData7` -- ExifTool selects it when tag 0x4001 has 1312, 1313, 1316, 1506 elements.
+const COLOR_DATA_7: &[ColorDataField] = &[
+    ColorDataField {
+        offset: 0x0,
+        name: "ColorDataVersion",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::VersionMap(COLOR_DATA_VERSION_7),
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x3f,
+        name: "WB_RGGBLevelsAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x43,
+        name: "ColorTempAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x44,
+        name: "WB_RGGBLevelsAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x48,
+        name: "ColorTempAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x49,
+        name: "WB_RGGBLevelsMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x4d,
+        name: "ColorTempMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x80,
+        name: "WB_RGGBLevelsDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x84,
+        name: "ColorTempDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x85,
+        name: "WB_RGGBLevelsShade",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x89,
+        name: "ColorTempShade",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x8a,
+        name: "WB_RGGBLevelsCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x8e,
+        name: "ColorTempCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x8f,
+        name: "WB_RGGBLevelsTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x93,
+        name: "ColorTempTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x94,
+        name: "WB_RGGBLevelsFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x98,
+        name: "ColorTempFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x99,
+        name: "WB_RGGBLevelsKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x9d,
+        name: "ColorTempKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x9e,
+        name: "WB_RGGBLevelsFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xa2,
+        name: "ColorTempFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x114,
+        name: "AverageBlackLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x198,
+        name: "FlashOutput",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::FlashOutput,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x199,
+        name: "FlashBatteryLevel",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::FlashBatteryLevel,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x1ad,
+        name: "RawMeasuredRGGB",
+        format: ColorFieldFormat::Int32u,
+        count: 4,
+        conv: ColorFieldConv::SwapWords,
+        versions: &[ColorVersionTest::Eq(10)],
+    },
+    ColorDataField {
+        offset: 0x1f8,
+        name: "PerChannelBlackLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(10)],
+    },
+    ColorDataField {
+        offset: 0x1fc,
+        name: "NormalWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::DropZero,
+        versions: &[ColorVersionTest::Eq(10)],
+    },
+    ColorDataField {
+        offset: 0x1fd,
+        name: "SpecularWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(10)],
+    },
+    ColorDataField {
+        offset: 0x1fe,
+        name: "LinearityUpperMargin",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(10)],
+    },
+    ColorDataField {
+        offset: 0x26b,
+        name: "RawMeasuredRGGB",
+        format: ColorFieldFormat::Int32u,
+        count: 4,
+        conv: ColorFieldConv::SwapWords,
+        versions: &[ColorVersionTest::Eq(11)],
+    },
+    ColorDataField {
+        offset: 0x2d8,
+        name: "PerChannelBlackLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(11)],
+    },
+    ColorDataField {
+        offset: 0x2dc,
+        name: "NormalWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::DropZero,
+        versions: &[ColorVersionTest::Eq(11)],
+    },
+    ColorDataField {
+        offset: 0x2dd,
+        name: "SpecularWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(11)],
+    },
+    ColorDataField {
+        offset: 0x2de,
+        name: "LinearityUpperMargin",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(11)],
+    },
+];
+
+/// `%Canon::ColorData8` -- ExifTool selects it when tag 0x4001 has 1560, 1592, 1353, 1602 elements.
+const COLOR_DATA_8: &[ColorDataField] = &[
+    ColorDataField {
+        offset: 0x0,
+        name: "ColorDataVersion",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::VersionMap(COLOR_DATA_VERSION_8),
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x3f,
+        name: "WB_RGGBLevelsAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x43,
+        name: "ColorTempAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x44,
+        name: "WB_RGGBLevelsAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x48,
+        name: "ColorTempAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x49,
+        name: "WB_RGGBLevelsMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x4d,
+        name: "ColorTempMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x85,
+        name: "WB_RGGBLevelsDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x89,
+        name: "ColorTempDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x8a,
+        name: "WB_RGGBLevelsShade",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x8e,
+        name: "ColorTempShade",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x8f,
+        name: "WB_RGGBLevelsCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x93,
+        name: "ColorTempCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x94,
+        name: "WB_RGGBLevelsTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x98,
+        name: "ColorTempTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x99,
+        name: "WB_RGGBLevelsFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x9d,
+        name: "ColorTempFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x9e,
+        name: "WB_RGGBLevelsKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xa2,
+        name: "ColorTempKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xa3,
+        name: "WB_RGGBLevelsFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xa7,
+        name: "ColorTempFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x146,
+        name: "AverageBlackLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x22c,
+        name: "PerChannelBlackLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(14)],
+    },
+    ColorDataField {
+        offset: 0x230,
+        name: "NormalWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::DropZero,
+        versions: &[ColorVersionTest::Eq(14)],
+    },
+    ColorDataField {
+        offset: 0x231,
+        name: "SpecularWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(14)],
+    },
+    ColorDataField {
+        offset: 0x232,
+        name: "LinearityUpperMargin",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Eq(14)],
+    },
+    ColorDataField {
+        offset: 0x30a,
+        name: "PerChannelBlackLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Lt(14), ColorVersionTest::Eq(15)],
+    },
+    ColorDataField {
+        offset: 0x30e,
+        name: "NormalWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::DropZero,
+        versions: &[ColorVersionTest::Lt(14), ColorVersionTest::Eq(15)],
+    },
+    ColorDataField {
+        offset: 0x30f,
+        name: "SpecularWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Lt(14), ColorVersionTest::Eq(15)],
+    },
+    ColorDataField {
+        offset: 0x310,
+        name: "LinearityUpperMargin",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[ColorVersionTest::Lt(14), ColorVersionTest::Eq(15)],
+    },
+];
+
+/// `%Canon::ColorData9` -- ExifTool selects it when tag 0x4001 has 1816, 1820, 1824 elements.
+const COLOR_DATA_9: &[ColorDataField] = &[
+    ColorDataField {
+        offset: 0x0,
+        name: "ColorDataVersion",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::VersionMap(COLOR_DATA_VERSION_9),
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x47,
+        name: "WB_RGGBLevelsAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x4b,
+        name: "ColorTempAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x4c,
+        name: "WB_RGGBLevelsAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x50,
+        name: "ColorTempAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x51,
+        name: "WB_RGGBLevelsMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x55,
+        name: "ColorTempMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x88,
+        name: "WB_RGGBLevelsDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x8c,
+        name: "ColorTempDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x8d,
+        name: "WB_RGGBLevelsShade",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x91,
+        name: "ColorTempShade",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x92,
+        name: "WB_RGGBLevelsCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x96,
+        name: "ColorTempCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x97,
+        name: "WB_RGGBLevelsTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x9b,
+        name: "ColorTempTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x9c,
+        name: "WB_RGGBLevelsFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xa0,
+        name: "ColorTempFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xa1,
+        name: "WB_RGGBLevelsKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xa5,
+        name: "ColorTempKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xa6,
+        name: "WB_RGGBLevelsFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xaa,
+        name: "ColorTempFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x149,
+        name: "PerChannelBlackLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x31c,
+        name: "NormalWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::DropZero,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x31d,
+        name: "SpecularWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x31e,
+        name: "LinearityUpperMargin",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+];
+
+/// `%Canon::ColorData10` -- ExifTool selects it when tag 0x4001 has 2024, 3656 elements.
+const COLOR_DATA_10: &[ColorDataField] = &[
+    ColorDataField {
+        offset: 0x0,
+        name: "ColorDataVersion",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::VersionMap(COLOR_DATA_VERSION_10),
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x55,
+        name: "WB_RGGBLevelsAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x59,
+        name: "ColorTempAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x5a,
+        name: "WB_RGGBLevelsAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x5e,
+        name: "ColorTempAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x5f,
+        name: "WB_RGGBLevelsMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x63,
+        name: "ColorTempMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x96,
+        name: "WB_RGGBLevelsDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x9a,
+        name: "ColorTempDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x9b,
+        name: "WB_RGGBLevelsShade",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x9f,
+        name: "ColorTempShade",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xa0,
+        name: "WB_RGGBLevelsCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xa4,
+        name: "ColorTempCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xa5,
+        name: "WB_RGGBLevelsTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xa9,
+        name: "ColorTempTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xaa,
+        name: "WB_RGGBLevelsFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xae,
+        name: "ColorTempFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xaf,
+        name: "WB_RGGBLevelsKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xb3,
+        name: "ColorTempKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xb4,
+        name: "WB_RGGBLevelsFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xb8,
+        name: "ColorTempFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x157,
+        name: "PerChannelBlackLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x299,
+        name: "FlashOutput",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::FlashOutput,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x29a,
+        name: "FlashBatteryLevel",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::FlashBatteryLevel,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x32a,
+        name: "NormalWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::DropZero,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x32b,
+        name: "SpecularWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x32c,
+        name: "LinearityUpperMargin",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+];
+
+/// `%Canon::ColorData11` -- ExifTool selects it when tag 0x4001 has 3973 elements.
+const COLOR_DATA_11: &[ColorDataField] = &[
+    ColorDataField {
+        offset: 0x0,
+        name: "ColorDataVersion",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::VersionMap(COLOR_DATA_VERSION_11),
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x69,
+        name: "WB_RGGBLevelsAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x6d,
+        name: "ColorTempAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x6e,
+        name: "WB_RGGBLevelsAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x72,
+        name: "ColorTempAuto",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x73,
+        name: "WB_RGGBLevelsMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x77,
+        name: "ColorTempMeasured",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xcd,
+        name: "WB_RGGBLevelsDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xd1,
+        name: "ColorTempDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xd2,
+        name: "WB_RGGBLevelsShade",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xd6,
+        name: "ColorTempShade",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xd7,
+        name: "WB_RGGBLevelsCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xdb,
+        name: "ColorTempCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xdc,
+        name: "WB_RGGBLevelsTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xe0,
+        name: "ColorTempTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xe1,
+        name: "WB_RGGBLevelsFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xe5,
+        name: "ColorTempFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xe6,
+        name: "WB_RGGBLevelsKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xea,
+        name: "ColorTempKelvin",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xeb,
+        name: "WB_RGGBLevelsFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0xef,
+        name: "ColorTempFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x16b,
+        name: "PerChannelBlackLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x280,
+        name: "NormalWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::DropZero,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x281,
+        name: "SpecularWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x282,
+        name: "LinearityUpperMargin",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+];
+
+/// `%Canon::ColorData12` -- ExifTool selects it when tag 0x4001 has 4528, 3778 elements.
+const COLOR_DATA_12: &[ColorDataField] = &[
+    ColorDataField {
+        offset: 0x0,
+        name: "ColorDataVersion",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::VersionMap(COLOR_DATA_VERSION_12),
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x69,
+        name: "WB_RGGBLevelsAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x6d,
+        name: "ColorTempAsShot",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x6e,
+        name: "WB_RGGBLevelsDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x72,
+        name: "ColorTempDaylight",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x73,
+        name: "WB_RGGBLevelsShade",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x77,
+        name: "ColorTempShade",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x78,
+        name: "WB_RGGBLevelsCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x7c,
+        name: "ColorTempCloudy",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x7d,
+        name: "WB_RGGBLevelsTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x81,
+        name: "ColorTempTungsten",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x82,
+        name: "WB_RGGBLevelsFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x86,
+        name: "ColorTempFluorescent",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x87,
+        name: "WB_RGGBLevelsFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x8b,
+        name: "ColorTempFlash",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x17f,
+        name: "PerChannelBlackLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 4,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x203,
+        name: "FlashOutput",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::FlashOutput,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x204,
+        name: "FlashBatteryLevel",
+        format: ColorFieldFormat::Int16s,
+        count: 1,
+        conv: ColorFieldConv::FlashBatteryLevel,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x294,
+        name: "NormalWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::DropZero,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x295,
+        name: "SpecularWhiteLevel",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+    ColorDataField {
+        offset: 0x296,
+        name: "LinearityUpperMargin",
+        format: ColorFieldFormat::Int16u,
+        count: 1,
+        conv: ColorFieldConv::None,
+        versions: &[],
+    },
+];
+
+/// Chooses the `%Canon::ColorData*` table for a record, following Canon.pm:1972.
+///
+/// Selection is by element count, except that count 3778 is shared: ExifTool's
+/// `ColorData11` arm carries the extra guard `$$valPt !~ /^\x41\0/`, so a 3778-element
+/// record whose version word is 0x41 (65, the R50V) falls through to `ColorData12` while
+/// every other 3778-element record (R7/R10/R50/R6mkII, version 48) stays on `ColorData11`.
+fn select_color_data_table(
+    element_count: usize,
+    version: i32,
+) -> Option<&'static [ColorDataField]> {
+    let table = match element_count {
+        582 => COLOR_DATA_1,
+        653 => COLOR_DATA_2,
+        796 => COLOR_DATA_3,
+        692 | 674 | 702 | 1227 | 1250 | 1251 | 1337 | 1338 | 1346 => COLOR_DATA_4,
+        5120 => COLOR_DATA_5,
+        1273 | 1275 => COLOR_DATA_6,
+        1312 | 1313 | 1316 | 1506 => COLOR_DATA_7,
+        1560 | 1592 | 1353 | 1602 => COLOR_DATA_8,
+        1816 | 1820 | 1824 => COLOR_DATA_9,
+        2024 | 3656 => COLOR_DATA_10,
+        3973 => COLOR_DATA_11,
+        3778 if version != 0x41 => COLOR_DATA_11,
+        3778 | 4528 => COLOR_DATA_12,
+        // ExifTool's `ColorDataUnknown` arm: the record is real but its layout is not
+        // documented, and it defines no extractable tags.
+        _ => return None,
     };
-    let reader = EndianReader::new(data, order);
-
-    // Parse color temperature values
-    // These are signed 16-bit integers representing Kelvin values
-    parse_color_temp(
-        &reader,
-        OFFSET_COLOR_TEMP_AS_SHOT,
-        TAG_COLOR_TEMP_AS_SHOT,
-        &mut metadata,
-    );
-    parse_color_temp(
-        &reader,
-        OFFSET_COLOR_TEMP_AUTO,
-        TAG_COLOR_TEMP_AUTO,
-        &mut metadata,
-    );
-    parse_color_temp(
-        &reader,
-        OFFSET_COLOR_TEMP_DAYLIGHT,
-        TAG_COLOR_TEMP_DAYLIGHT,
-        &mut metadata,
-    );
-    parse_color_temp(
-        &reader,
-        OFFSET_COLOR_TEMP_SHADE,
-        TAG_COLOR_TEMP_SHADE,
-        &mut metadata,
-    );
-    parse_color_temp(
-        &reader,
-        OFFSET_COLOR_TEMP_CLOUDY,
-        TAG_COLOR_TEMP_CLOUDY,
-        &mut metadata,
-    );
-    parse_color_temp(
-        &reader,
-        OFFSET_COLOR_TEMP_TUNGSTEN,
-        TAG_COLOR_TEMP_TUNGSTEN,
-        &mut metadata,
-    );
-    parse_color_temp(
-        &reader,
-        OFFSET_COLOR_TEMP_FLUORESCENT,
-        TAG_COLOR_TEMP_FLUORESCENT,
-        &mut metadata,
-    );
-    parse_color_temp(
-        &reader,
-        OFFSET_COLOR_TEMP_FLASH,
-        TAG_COLOR_TEMP_FLASH,
-        &mut metadata,
-    );
-
-    // Parse WB shift values if data is large enough
-    // These are smaller signed values (-9 to +9 typical range)
-    if data.len() >= MIN_WB_SHIFT_SIZE {
-        parse_wb_shift(&reader, OFFSET_WB_SHIFT_AB, TAG_WB_SHIFT_AB, &mut metadata);
-        parse_wb_shift(&reader, OFFSET_WB_SHIFT_GM, TAG_WB_SHIFT_GM, &mut metadata);
-    }
-
-    metadata
+    Some(table)
 }
 
-// ============================================================================
-// PRIVATE HELPER FUNCTIONS
-// ============================================================================
+/// Reads one field's values out of the record, or `None` if it runs past the end.
+fn read_field(record: &[i16], field: &ColorDataField, byte_order: ByteOrder) -> Option<Vec<i64>> {
+    let mut values = Vec::with_capacity(field.count);
+    for index in 0..field.count {
+        match field.format {
+            ColorFieldFormat::Int16s => {
+                values.push(i64::from(*record.get(field.offset + index)?));
+            }
+            ColorFieldFormat::Int16u => {
+                values.push(i64::from(*record.get(field.offset + index)? as u16));
+            }
+            ColorFieldFormat::Int32u | ColorFieldFormat::Int32s => {
+                let word_index = field.offset + index * 2;
+                let low = u32::from(*record.get(word_index)? as u16);
+                let high = u32::from(*record.get(word_index + 1)? as u16);
+                // The words were decoded with the file's byte order, so recombining them
+                // has to follow that same order to rebuild the 32-bit value.
+                let combined = match byte_order {
+                    ByteOrder::LittleEndian => low | (high << 16),
+                    ByteOrder::BigEndian => (low << 16) | high,
+                };
+                values.push(match field.format {
+                    ColorFieldFormat::Int32s => i64::from(combined as i32),
+                    _ => i64::from(combined),
+                });
+            }
+        }
+    }
+    Some(values)
+}
 
-/// Parses a color temperature value at the given offset and inserts it into
-/// the metadata map if valid.
-///
-/// Color temperature values are validated to be within the range 1000-15000K,
-/// which covers the practical range from very warm (candlelight) to very cool
-/// (blue sky) lighting conditions.
-///
-/// # Arguments
-///
-/// * `reader` - EndianReader positioned on the ColorData buffer
-/// * `offset` - Byte offset of the i16 color temperature value
-/// * `tag_name` - Name of the tag (without prefix)
-/// * `metadata` - Mutable reference to the output MetadataMap
-fn parse_color_temp(
-    reader: &EndianReader,
-    offset: usize,
-    tag_name: &str,
-    metadata: &mut MetadataMap,
-) {
-    if let Some(value) = reader.i16_at(offset) {
-        // Validate color temperature range (1000K to 15000K)
-        // Values outside this range are likely invalid or uninitialized data
-        if (1000..=15000).contains(&value) {
-            let full_tag_name = format!("{}:{}", TAG_PREFIX, tag_name);
-            metadata.insert(full_tag_name, TagValue::new_integer(value as i64));
+/// Renders one field's values the way ExifTool's ValueConv/PrintConv pair does.
+fn render_field(field: &ColorDataField, values: &[i64]) -> Option<String> {
+    match field.conv {
+        ColorFieldConv::None => Some(join_values(values)),
+        ColorFieldConv::DropZero => {
+            if values.iter().all(|&value| value == 0) {
+                None
+            } else {
+                Some(join_values(values))
+            }
+        }
+        ColorFieldConv::VersionMap(table) => {
+            let value = i32::try_from(*values.first()?).ok()?;
+            Some(
+                table
+                    .iter()
+                    .find(|(key, _)| *key == value)
+                    .map(|(_, label)| (*label).to_string())
+                    .unwrap_or_else(|| format!("Unknown ({})", value)),
+            )
+        }
+        ColorFieldConv::SwapWords => Some(join_values(
+            &values
+                .iter()
+                .map(|&value| {
+                    let raw = value as u32;
+                    i64::from((raw >> 16) | (raw << 16))
+                })
+                .collect::<Vec<_>>(),
+        )),
+        ColorFieldConv::FlashOutput => {
+            let raw = *values.first()?;
+            if raw >= 255 {
+                return Some("Strobe or Misfire".to_string());
+            }
+            let output = 2.0_f64.powf((raw as f64 - 200.0) / 16.0);
+            Some(format!("{:.0}%", output * 100.0))
+        }
+        ColorFieldConv::FlashBatteryLevel => {
+            let raw = *values.first()?;
+            if raw == 0 {
+                return Some("n/a".to_string());
+            }
+            Some(format!("{:.2}V", raw as f64 * 5.0 / 186.0))
         }
     }
 }
 
-/// Parses a white balance shift value at the given offset and inserts it into
-/// the metadata map.
+fn join_values(values: &[i64]) -> String {
+    values
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Decodes a Canon `ColorData` record (MakerNote tag 0x4001) into `Canon:`-prefixed tags.
 ///
-/// WB shift values are signed integers that represent the user's manual
-/// adjustment of white balance on either the amber-blue (AB) or green-magenta
-/// (GM) axis. Typical values range from -9 to +9.
-///
-/// # Arguments
-///
-/// * `reader` - EndianReader positioned on the ColorData buffer
-/// * `offset` - Byte offset of the i16 WB shift value
-/// * `tag_name` - Name of the tag (without prefix)
-/// * `metadata` - Mutable reference to the output MetadataMap
-fn parse_wb_shift(
-    reader: &EndianReader,
-    offset: usize,
-    tag_name: &str,
-    metadata: &mut MetadataMap,
+/// `record` is the raw `int16` array exactly as stored -- ExifTool indexes it from 0 with
+/// no leading size word, so it must NOT be run through the length-prefixed realignment the
+/// `FIRST_ENTRY => 1` records need.
+pub(crate) fn parse_color_data(
+    record: &[i16],
+    byte_order: ByteOrder,
+    tags: &mut HashMap<String, String>,
 ) {
-    if let Some(value) = reader.i16_at(offset) {
-        // WB shift values are typically small (-9 to +9) but we allow
-        // the full i16 range since some cameras may use larger values
-        // for fine-tuning. We only reject clearly invalid values (e.g., 0x7FFF).
-        if value != i16::MAX && value != i16::MIN {
-            let full_tag_name = format!("{}:{}", TAG_PREFIX, tag_name);
-            metadata.insert(full_tag_name, TagValue::new_integer(value as i64));
+    let Some(&version_word) = record.first() else {
+        return;
+    };
+    let version = i32::from(version_word);
+    let Some(table) = select_color_data_table(record.len(), version) else {
+        return;
+    };
+
+    for field in table {
+        if !field.versions.is_empty() && !field.versions.iter().any(|test| test.matches(version)) {
+            continue;
+        }
+        let Some(values) = read_field(record, field, byte_order) else {
+            continue;
+        };
+        if let Some(rendered) = render_field(field, &values) {
+            tags.insert(format!("Canon:{}", field.name), rendered);
         }
     }
 }
-
-// ============================================================================
-// UNIT TESTS
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Creates test data with specified color temperature and WB shift values.
-    /// Returns a buffer large enough for all values (MIN_WB_SHIFT_SIZE bytes).
-    fn create_test_data(
-        color_temp_as_shot: i16,
-        color_temp_auto: i16,
-        color_temp_daylight: i16,
-        color_temp_shade: i16,
-        color_temp_cloudy: i16,
-        color_temp_tungsten: i16,
-        color_temp_fluorescent: i16,
-        color_temp_flash: i16,
-        wb_shift_ab: i16,
-        wb_shift_gm: i16,
-        little_endian: bool,
-    ) -> Vec<u8> {
-        let mut data = vec![0u8; MIN_WB_SHIFT_SIZE];
+    /// Builds a `ColorData` record of `elements` words with `version` at index 0.
+    fn record(elements: usize, version: i16) -> Vec<i16> {
+        let mut record = vec![0i16; elements];
+        record[0] = version;
+        record
+    }
 
-        // Helper to write i16 at offset with proper byte order
-        let write_i16 = |buf: &mut [u8], offset: usize, value: i16| {
-            let bytes = if little_endian {
-                value.to_le_bytes()
-            } else {
-                value.to_be_bytes()
-            };
-            buf[offset] = bytes[0];
-            buf[offset + 1] = bytes[1];
-        };
+    /// ExifTool selects the table by element count (Canon.pm:1972). A count it does not
+    /// list is `ColorDataUnknown`, which defines no extractable tags.
+    #[test]
+    fn test_table_selection_by_element_count() {
+        assert!(select_color_data_table(582, 0).is_some()); // ColorData1
+        assert!(select_color_data_table(796, 1).is_some()); // ColorData3
+        assert!(select_color_data_table(1251, 7).is_some()); // ColorData4
+        assert!(select_color_data_table(3656, 33).is_some()); // ColorData10
+        assert!(select_color_data_table(999, 0).is_none());
+    }
 
-        write_i16(&mut data, OFFSET_COLOR_TEMP_AS_SHOT, color_temp_as_shot);
-        write_i16(&mut data, OFFSET_COLOR_TEMP_AUTO, color_temp_auto);
-        write_i16(&mut data, OFFSET_COLOR_TEMP_DAYLIGHT, color_temp_daylight);
-        write_i16(&mut data, OFFSET_COLOR_TEMP_SHADE, color_temp_shade);
-        write_i16(&mut data, OFFSET_COLOR_TEMP_CLOUDY, color_temp_cloudy);
-        write_i16(&mut data, OFFSET_COLOR_TEMP_TUNGSTEN, color_temp_tungsten);
-        write_i16(
-            &mut data,
-            OFFSET_COLOR_TEMP_FLUORESCENT,
-            color_temp_fluorescent,
-        );
-        write_i16(&mut data, OFFSET_COLOR_TEMP_FLASH, color_temp_flash);
-        write_i16(&mut data, OFFSET_WB_SHIFT_AB, wb_shift_ab);
-        write_i16(&mut data, OFFSET_WB_SHIFT_GM, wb_shift_gm);
-
-        data
+    /// Count 3778 is shared. ExifTool's ColorData11 arm carries the extra guard
+    /// `$$valPt !~ /^\x41\0/`, so only a version word of 0x41 (65, the R50V) falls
+    /// through to ColorData12; version 48 (R7/R10/R50/R6mkII) stays on ColorData11.
+    #[test]
+    fn test_count_3778_splits_on_version_word() {
+        let eleven = select_color_data_table(3778, 48).expect("table for version 48");
+        let twelve = select_color_data_table(3778, 0x41).expect("table for version 65");
+        assert!(!std::ptr::eq(eleven, twelve));
+        assert!(std::ptr::eq(
+            twelve,
+            select_color_data_table(4528, 64).expect("4528 is ColorData12")
+        ));
+        assert!(std::ptr::eq(
+            eleven,
+            select_color_data_table(3973, 34).expect("3973 is ColorData11")
+        ));
     }
 
     #[test]
-    fn test_parse_valid_color_temperatures_little_endian() {
-        // Test with typical Canon color temperature values (little-endian)
-        let data = create_test_data(
-            5200, // AsShot
-            5200, // Auto
-            5200, // Daylight
-            7000, // Shade
-            6000, // Cloudy
-            3200, // Tungsten
-            4000, // Fluorescent
-            6500, // Flash
-            0,    // WBShiftAB
-            0,    // WBShiftGM
-            true, // little-endian
-        );
-
-        let metadata = parse_canon_color_data(&data, true);
-
-        assert_eq!(metadata.get_integer("Canon:ColorTempAsShot"), Some(5200));
-        assert_eq!(metadata.get_integer("Canon:ColorTempAuto"), Some(5200));
-        assert_eq!(metadata.get_integer("Canon:ColorTempDaylight"), Some(5200));
-        assert_eq!(metadata.get_integer("Canon:ColorTempShade"), Some(7000));
-        assert_eq!(metadata.get_integer("Canon:ColorTempCloudy"), Some(6000));
-        assert_eq!(metadata.get_integer("Canon:ColorTempTungsten"), Some(3200));
+    fn test_color_data_version_is_named() {
+        let mut tags = HashMap::new();
+        parse_color_data(&record(1251, 7), ByteOrder::LittleEndian, &mut tags);
         assert_eq!(
-            metadata.get_integer("Canon:ColorTempFluorescent"),
-            Some(4000)
+            tags.get("Canon:ColorDataVersion"),
+            Some(&"7 (500D/550D/7D/1DmkIV)".to_string())
         );
-        assert_eq!(metadata.get_integer("Canon:ColorTempFlash"), Some(6500));
     }
 
+    /// ColorData4 stores `SpecularWhiteLevel` at three different offsets depending on
+    /// the `ColorDataVersion`: 0x2b9 for versions 4-5, 0x2d0 for 6-7, 0x2d4 for 9. Each
+    /// is gated by its own ExifTool `Condition`, so exactly one applies to a given body
+    /// and reading the wrong one would report an unrelated word as a white level.
     #[test]
-    fn test_parse_valid_color_temperatures_big_endian() {
-        // Test with big-endian byte order
-        let data = create_test_data(
-            5500,  // AsShot
-            5500,  // Auto
-            5200,  // Daylight
-            7500,  // Shade
-            6500,  // Cloudy
-            3000,  // Tungsten
-            4500,  // Fluorescent
-            7000,  // Flash
-            0,     // WBShiftAB
-            0,     // WBShiftGM
-            false, // big-endian
-        );
-
-        let metadata = parse_canon_color_data(&data, false);
-
-        assert_eq!(metadata.get_integer("Canon:ColorTempAsShot"), Some(5500));
-        assert_eq!(metadata.get_integer("Canon:ColorTempDaylight"), Some(5200));
-        assert_eq!(metadata.get_integer("Canon:ColorTempShade"), Some(7500));
-        assert_eq!(metadata.get_integer("Canon:ColorTempTungsten"), Some(3000));
-    }
-
-    #[test]
-    fn test_parse_wb_shift_values() {
-        // Test WB shift parsing with various values
-        let data = create_test_data(
-            5200, // AsShot
-            5200, // Auto
-            5200, // Daylight
-            7000, // Shade
-            6000, // Cloudy
-            3200, // Tungsten
-            4000, // Fluorescent
-            6500, // Flash
-            3,    // WBShiftAB (shift toward amber)
-            -2,   // WBShiftGM (shift toward magenta)
-            true, // little-endian
-        );
-
-        let metadata = parse_canon_color_data(&data, true);
-
-        assert_eq!(metadata.get_integer("Canon:WBShiftAB"), Some(3));
-        assert_eq!(metadata.get_integer("Canon:WBShiftGM"), Some(-2));
-    }
-
-    #[test]
-    fn test_parse_extreme_wb_shift_values() {
-        // Test WB shift at boundary values
-        let data = create_test_data(
-            5200, 5200, 5200, 7000, 6000, 3200, 4000, 6500, 9,  // Maximum typical WBShiftAB
-            -9, // Minimum typical WBShiftGM
-            true,
-        );
-
-        let metadata = parse_canon_color_data(&data, true);
-
-        assert_eq!(metadata.get_integer("Canon:WBShiftAB"), Some(9));
-        assert_eq!(metadata.get_integer("Canon:WBShiftGM"), Some(-9));
-    }
-
-    #[test]
-    fn test_invalid_color_temp_too_low() {
-        // Color temperature below 1000K should be rejected
-        let data = create_test_data(
-            500, // Invalid - too low
-            5200, 5200, 7000, 6000, 3200, 4000, 6500, 0, 0, true,
-        );
-
-        let metadata = parse_canon_color_data(&data, true);
-
-        // AsShot should not be present due to invalid value
-        assert!(metadata.get_integer("Canon:ColorTempAsShot").is_none());
-        // Other valid values should still be parsed
-        assert_eq!(metadata.get_integer("Canon:ColorTempAuto"), Some(5200));
-    }
-
-    #[test]
-    fn test_invalid_color_temp_too_high() {
-        // Color temperature above 15000K should be rejected
-        let data = create_test_data(
-            20000, // Invalid - too high
-            5200, 5200, 7000, 6000, 3200, 4000, 6500, 0, 0, true,
-        );
-
-        let metadata = parse_canon_color_data(&data, true);
-
-        assert!(metadata.get_integer("Canon:ColorTempAsShot").is_none());
-        assert_eq!(metadata.get_integer("Canon:ColorTempAuto"), Some(5200));
-    }
-
-    #[test]
-    fn test_boundary_color_temp_values() {
-        // Test at exact boundary values (1000K and 15000K)
-        let data = create_test_data(
-            1000,  // Minimum valid
-            15000, // Maximum valid
-            5200, 7000, 6000, 3200, 4000, 6500, 0, 0, true,
-        );
-
-        let metadata = parse_canon_color_data(&data, true);
-
-        assert_eq!(metadata.get_integer("Canon:ColorTempAsShot"), Some(1000));
-        assert_eq!(metadata.get_integer("Canon:ColorTempAuto"), Some(15000));
-    }
-
-    #[test]
-    fn test_empty_data() {
-        // Empty data should return empty metadata
-        let data: Vec<u8> = vec![];
-        let metadata = parse_canon_color_data(&data, true);
-
-        assert!(metadata.is_empty());
-    }
-
-    #[test]
-    fn test_insufficient_data_for_color_temps() {
-        // Data too small for color temps should return empty metadata
-        let data = vec![0u8; 50]; // Less than MIN_COLOR_TEMP_SIZE
-        let metadata = parse_canon_color_data(&data, true);
-
-        assert!(metadata.is_empty());
-    }
-
-    #[test]
-    fn test_sufficient_data_for_color_temps_but_not_wb_shift() {
-        // Data large enough for color temps but not WB shift
-        let mut data = vec![0u8; MIN_COLOR_TEMP_SIZE];
-
-        // Write a valid color temperature at the AsShot offset (little-endian)
-        let value: i16 = 5200;
-        let bytes = value.to_le_bytes();
-        data[OFFSET_COLOR_TEMP_AS_SHOT] = bytes[0];
-        data[OFFSET_COLOR_TEMP_AS_SHOT + 1] = bytes[1];
-
-        let metadata = parse_canon_color_data(&data, true);
-
-        // Color temp should be parsed
-        assert_eq!(metadata.get_integer("Canon:ColorTempAsShot"), Some(5200));
-        // WB shift should not be present (data too small)
-        assert!(metadata.get_integer("Canon:WBShiftAB").is_none());
-        assert!(metadata.get_integer("Canon:WBShiftGM").is_none());
-    }
-
-    #[test]
-    fn test_zero_values() {
-        // Zero values for color temps are invalid (below 1000K threshold)
-        let data = create_test_data(
-            0, // Invalid
-            0, // Invalid
-            0, // Invalid
-            0, // Invalid
-            0, // Invalid
-            0, // Invalid
-            0, // Invalid
-            0, // Invalid
-            0, // Valid WB shift (no shift)
-            0, // Valid WB shift (no shift)
-            true,
-        );
-
-        let metadata = parse_canon_color_data(&data, true);
-
-        // All color temps should be absent
-        assert!(metadata.get_integer("Canon:ColorTempAsShot").is_none());
-        assert!(metadata.get_integer("Canon:ColorTempDaylight").is_none());
-
-        // Zero WB shift is valid (means no adjustment)
-        assert_eq!(metadata.get_integer("Canon:WBShiftAB"), Some(0));
-        assert_eq!(metadata.get_integer("Canon:WBShiftGM"), Some(0));
-    }
-
-    #[test]
-    fn test_negative_color_temp() {
-        // Negative color temperature is invalid
-        let data = create_test_data(
-            -5200, // Invalid
-            5200, 5200, 7000, 6000, 3200, 4000, 6500, 0, 0, true,
-        );
-
-        let metadata = parse_canon_color_data(&data, true);
-
-        assert!(metadata.get_integer("Canon:ColorTempAsShot").is_none());
-        assert_eq!(metadata.get_integer("Canon:ColorTempAuto"), Some(5200));
-    }
-
-    #[test]
-    fn test_tag_naming_format() {
-        // Verify correct tag name format
-        let data = create_test_data(5200, 5200, 5200, 7000, 6000, 3200, 4000, 6500, 1, 2, true);
-
-        let metadata = parse_canon_color_data(&data, true);
-
-        // Verify all expected tags are present with correct prefix format
-        assert!(metadata.contains_key("Canon:ColorTempAsShot"));
-        assert!(metadata.contains_key("Canon:ColorTempAuto"));
-        assert!(metadata.contains_key("Canon:ColorTempDaylight"));
-        assert!(metadata.contains_key("Canon:ColorTempShade"));
-        assert!(metadata.contains_key("Canon:ColorTempCloudy"));
-        assert!(metadata.contains_key("Canon:ColorTempTungsten"));
-        assert!(metadata.contains_key("Canon:ColorTempFluorescent"));
-        assert!(metadata.contains_key("Canon:ColorTempFlash"));
-        assert!(metadata.contains_key("Canon:WBShiftAB"));
-        assert!(metadata.contains_key("Canon:WBShiftGM"));
-    }
-
-    #[test]
-    fn test_i16_max_wb_shift_rejected() {
-        // i16::MAX as WB shift should be rejected (likely uninitialized data)
-        let data = create_test_data(
-            5200,
-            5200,
-            5200,
-            7000,
-            6000,
-            3200,
-            4000,
-            6500,
-            i16::MAX, // Should be rejected
-            i16::MIN, // Should be rejected
-            true,
-        );
-
-        let metadata = parse_canon_color_data(&data, true);
-
-        assert!(metadata.get_integer("Canon:WBShiftAB").is_none());
-        assert!(metadata.get_integer("Canon:WBShiftGM").is_none());
-    }
-
-    #[test]
-    fn test_metadata_map_iteration() {
-        // Verify that the metadata map can be iterated correctly
-        let data = create_test_data(5200, 5200, 5200, 7000, 6000, 3200, 4000, 6500, 3, -2, true);
-
-        let metadata = parse_canon_color_data(&data, true);
-
-        // Should have 10 tags total (8 color temps + 2 WB shifts)
-        assert_eq!(metadata.len(), 10);
-
-        // Verify iteration works
-        let mut count = 0;
-        for (key, value) in metadata.iter() {
-            assert!(key.starts_with("Canon:"));
-            assert!(value.is_integer());
-            count += 1;
+    fn test_version_gates_pick_one_offset_per_body() {
+        for (version, offset) in [(4usize, 0x2b9usize), (7, 0x2d0), (9, 0x2d4)] {
+            let mut raw = record(1251, version as i16);
+            // Fill all three candidate slots with distinguishable values.
+            raw[0x2b9] = 4004;
+            raw[0x2d0] = 7007;
+            raw[0x2d4] = 9009;
+            let expected = raw[offset].to_string();
+            let mut tags = HashMap::new();
+            parse_color_data(&raw, ByteOrder::LittleEndian, &mut tags);
+            assert_eq!(
+                tags.get("Canon:SpecularWhiteLevel"),
+                Some(&expected),
+                "ColorDataVersion {version} should read offset {offset:#x}"
+            );
         }
-        assert_eq!(count, 10);
+    }
+
+    /// `RawMeasuredRGGB` is `int32u[4]` written with big-endian word order opposite to
+    /// its byte order, so ExifTool swaps the halves (`\&SwapWords`). Words taken from
+    /// CanonEOS_REBEL_T1i.jpg, where ExifTool reports `78407 116200 113862 57296`.
+    #[test]
+    fn test_swap_words_matches_exiftool() {
+        let mut raw = record(1251, 7);
+        for (slot, word) in [1i16, 12871, 1, -14872, 1, -17210, 0, -8240]
+            .into_iter()
+            .enumerate()
+        {
+            raw[0x280 + slot] = word;
+        }
+        let mut tags = HashMap::new();
+        parse_color_data(&raw, ByteOrder::LittleEndian, &mut tags);
+        assert_eq!(
+            tags.get("Canon:RawMeasuredRGGB"),
+            Some(&"78407 116200 113862 57296".to_string())
+        );
+    }
+
+    /// `$val >= 255 ? 255 : exp(($val-200)/16*log(2))` then
+    /// `$val == 255 ? "Strobe or Misfire" : sprintf("%.0f%%", $val * 100)`.
+    #[test]
+    fn test_flash_output_and_battery_level() {
+        let mut raw = record(1251, 7);
+        raw[0x26b] = 0;
+        raw[0x26c] = 0;
+        let mut tags = HashMap::new();
+        parse_color_data(&raw, ByteOrder::LittleEndian, &mut tags);
+        assert_eq!(tags.get("Canon:FlashOutput"), Some(&"0%".to_string()));
+        assert_eq!(
+            tags.get("Canon:FlashBatteryLevel"),
+            Some(&"n/a".to_string())
+        );
+
+        raw[0x26b] = 255;
+        raw[0x26c] = 186;
+        let mut tags = HashMap::new();
+        parse_color_data(&raw, ByteOrder::LittleEndian, &mut tags);
+        assert_eq!(
+            tags.get("Canon:FlashOutput"),
+            Some(&"Strobe or Misfire".to_string())
+        );
+        assert_eq!(
+            tags.get("Canon:FlashBatteryLevel"),
+            Some(&"5.00V".to_string())
+        );
+    }
+
+    /// A record shorter than a field's offset must drop that field, not panic.
+    #[test]
+    fn test_short_record_is_safe() {
+        let mut tags = HashMap::new();
+        parse_color_data(&[7i16, 0, 0], ByteOrder::LittleEndian, &mut tags);
+        assert!(tags.is_empty());
     }
 }
