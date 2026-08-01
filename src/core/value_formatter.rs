@@ -11,15 +11,27 @@
 //! - Rational-to-decimal conversion for specific tags (ApertureValue, FocalLength, etc.)
 //! - Unit suffix formatting (mm for focal lengths, m for distances/altitudes)
 
-/// Format file size like ExifTool (e.g., "2.1 kB" not "2 kB")
+/// Format file size like ExifTool (e.g., "2.1 kB", "12 kB", "1500 bytes").
 ///
-/// ExifTool uses decimal (base-10) units, not binary (base-2) units.
-/// - 1 kB = 1000 bytes (not 1024)
-/// - 1 MB = 1,000,000 bytes
-/// - 1 GB = 1,000,000,000 bytes
+/// ExifTool uses decimal (base-10) units, not binary (base-2) units:
+/// 1 kB = 1000 bytes, 1 MB = 1,000,000 bytes, 1 GB = 1,000,000,000 bytes.
 ///
-/// Small files (< 1000 bytes) show exact byte count.
-/// Larger files show one decimal place.
+/// The unit does **not** change at each power of 1000. ExifTool holds each unit
+/// until the value reaches 2000 of it, and only prints a decimal place while the
+/// value is under 10 of that unit. So 1500 bytes stays "1500 bytes", 10,000
+/// bytes is "10 kB" (no decimal), and 1,000,000 bytes is "1000 kB" rather than
+/// "1.0 MB". Ported verbatim from the `ByteUnit ne 'Binary'` branch of
+/// `ConvertFileSize` in ExifTool.pm (lib/Image/ExifTool.pm:6863-6869):
+///
+/// ```text
+/// $val < 2000 and return "$val bytes";
+/// $val < 10000 and return sprintf('%.1f kB', $val / 1000);
+/// $val < 2000000 and return sprintf('%.0f kB', $val / 1000);
+/// $val < 10000000 and return sprintf('%.1f MB', $val / 1000000);
+/// $val < 2000000000 and return sprintf('%.0f MB', $val / 1000000);
+/// $val < 10000000000 and return sprintf('%.1f GB', $val / 1000000000);
+/// return sprintf('%.0f GB', $val / 1000000000);
+/// ```
 ///
 /// # Examples
 ///
@@ -27,19 +39,28 @@
 /// use oxidex::core::value_formatter::format_file_size;
 ///
 /// assert_eq!(format_file_size(500), "500 bytes");
+/// assert_eq!(format_file_size(1500), "1500 bytes");
 /// assert_eq!(format_file_size(2100), "2.1 kB");
-/// assert_eq!(format_file_size(1_500_000), "1.5 MB");
+/// assert_eq!(format_file_size(12_379), "12 kB");
+/// assert_eq!(format_file_size(1_500_000), "1500 kB");
 /// assert_eq!(format_file_size(2_500_000_000), "2.5 GB");
 /// ```
 pub fn format_file_size(bytes: u64) -> String {
-    if bytes < 1000 {
+    let v = bytes as f64;
+    if bytes < 2_000 {
         format!("{} bytes", bytes)
-    } else if bytes < 1_000_000 {
-        format!("{:.1} kB", bytes as f64 / 1000.0)
-    } else if bytes < 1_000_000_000 {
-        format!("{:.1} MB", bytes as f64 / 1_000_000.0)
+    } else if bytes < 10_000 {
+        format!("{:.1} kB", v / 1_000.0)
+    } else if bytes < 2_000_000 {
+        format!("{:.0} kB", v / 1_000.0)
+    } else if bytes < 10_000_000 {
+        format!("{:.1} MB", v / 1_000_000.0)
+    } else if bytes < 2_000_000_000 {
+        format!("{:.0} MB", v / 1_000_000.0)
+    } else if bytes < 10_000_000_000 {
+        format!("{:.1} GB", v / 1_000_000_000.0)
     } else {
-        format!("{:.1} GB", bytes as f64 / 1_000_000_000.0)
+        format!("{:.0} GB", v / 1_000_000_000.0)
     }
 }
 
@@ -778,29 +799,51 @@ pub fn is_gps_reference_tag(tag_name: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// Every expectation below was read back from `exiftool -s -FileSize` on a
+    /// file of exactly that byte length (ExifTool 13.55), not derived from the
+    /// Perl by hand. The interesting property is that the unit steps at 2000 of
+    /// the unit -- not at 1000 -- and drops the decimal place above 10 of it.
     #[test]
-    fn test_file_size_formatting() {
-        // Bytes (< 1000)
+    fn test_file_size_formatting_matches_exiftool() {
+        // Held as raw bytes right up to 2000 (ExifTool.pm:6863).
         assert_eq!(format_file_size(0), "0 bytes");
         assert_eq!(format_file_size(1), "1 bytes");
         assert_eq!(format_file_size(500), "500 bytes");
         assert_eq!(format_file_size(999), "999 bytes");
+        assert_eq!(format_file_size(1000), "1000 bytes");
+        assert_eq!(format_file_size(1500), "1500 bytes");
+        assert_eq!(format_file_size(1999), "1999 bytes");
 
-        // Kilobytes (1000 - 999,999)
-        assert_eq!(format_file_size(1000), "1.0 kB");
-        assert_eq!(format_file_size(1500), "1.5 kB");
+        // 2000..10000: one decimal place (ExifTool.pm:6864).
+        assert_eq!(format_file_size(2000), "2.0 kB");
         assert_eq!(format_file_size(2100), "2.1 kB");
-        assert_eq!(format_file_size(10_000), "10.0 kB");
-        assert_eq!(format_file_size(999_999), "1000.0 kB");
+        assert_eq!(format_file_size(9999), "10.0 kB");
 
-        // Megabytes (1,000,000 - 999,999,999)
-        assert_eq!(format_file_size(1_000_000), "1.0 MB");
-        assert_eq!(format_file_size(1_500_000), "1.5 MB");
-        assert_eq!(format_file_size(10_000_000), "10.0 MB");
+        // 10000..2e6: kB with no decimal place (ExifTool.pm:6865).
+        assert_eq!(format_file_size(10_000), "10 kB");
+        assert_eq!(format_file_size(12_379), "12 kB");
+        assert_eq!(format_file_size(999_999), "1000 kB");
+        assert_eq!(format_file_size(1_000_000), "1000 kB");
+        assert_eq!(format_file_size(1_999_999), "2000 kB");
 
-        // Gigabytes (>= 1,000,000,000)
-        assert_eq!(format_file_size(1_000_000_000), "1.0 GB");
+        // 2e6..1e7: MB with one decimal place (ExifTool.pm:6866).
+        assert_eq!(format_file_size(2_000_000), "2.0 MB");
+        assert_eq!(format_file_size(2_500_000), "2.5 MB");
+        assert_eq!(format_file_size(9_999_999), "10.0 MB");
+
+        // 1e7..2e9: MB with no decimal place (ExifTool.pm:6867).
+        assert_eq!(format_file_size(10_000_000), "10 MB");
+        assert_eq!(format_file_size(1_000_000_000), "1000 MB");
+        assert_eq!(format_file_size(1_999_999_999), "2000 MB");
+
+        // 2e9..1e10: GB with one decimal place (ExifTool.pm:6868).
+        assert_eq!(format_file_size(2_000_000_000), "2.0 GB");
         assert_eq!(format_file_size(2_500_000_000), "2.5 GB");
+        assert_eq!(format_file_size(9_999_999_999), "10.0 GB");
+
+        // >= 1e10: GB with no decimal place (ExifTool.pm:6869).
+        assert_eq!(format_file_size(10_000_000_000), "10 GB");
+        assert_eq!(format_file_size(12_500_000_000), "12 GB");
     }
 
     #[test]
