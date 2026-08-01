@@ -151,6 +151,17 @@ DEFAULT_RECUT_BEHIND_COMMITS = 8
 
 ORIGIN_MAIN = "origin/main"
 
+# Operational code is different from ordinary parser drift: workers execute
+# these files directly from their squad worktree.  Waiting for the generic
+# eight-commit/three-day re-cut cadence after one of them changes leaves a
+# running fleet on the old scheduler, governor, comparison harness, or build
+# policy even though the supervisor itself is already on the new main.  A
+# single upstream change here therefore forces the same loss-checked re-cut
+# used by the normal staleness policy.  Test modules do not affect a running
+# worker and are deliberately excluded below.
+IMMEDIATE_RECUT_PATHS = ("Cargo.toml", "Cargo.lock", "justfile", "Justfile")
+IMMEDIATE_RECUT_PREFIXES = ("scripts/", "src/bin/tag-comparison/")
+
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -1190,10 +1201,11 @@ def run_batch_check(*, staging_path, squad, formats, cache_dir, comparison_fn,
 def should_recut(repo_root, squad_branch, origin_ref=ORIGIN_MAIN,
                   staleness_seconds=DEFAULT_RECUT_STALENESS_SECONDS, now_fn=time.time,
                   behind_commits=DEFAULT_RECUT_BEHIND_COMMITS):
-    """True when squad/<squad> is stale by EITHER measure (spec M5 re-cut
-    trigger): its merge-base with origin_ref is older than
-    `staleness_seconds`, OR origin_ref has moved more than `behind_commits`
-    past that base.
+    """True when squad/<squad> is stale by any re-cut measure (spec M5
+    re-cut trigger): its merge-base with origin_ref is older than
+    `staleness_seconds`, origin_ref has moved more than `behind_commits`
+    past that base, OR origin_ref changed operational worker/harness code
+    since that base.
 
     The distance clause exists because the age clause alone cannot see the
     failure it is meant to prevent -- see DEFAULT_RECUT_BEHIND_COMMITS. False
@@ -1206,6 +1218,19 @@ def should_recut(repo_root, squad_branch, origin_ref=ORIGIN_MAIN,
     if merge_base.returncode != 0:
         return False
     sha = merge_base.stdout.strip()
+    operational = _git(
+        ["diff", "--name-only", f"{sha}..{origin_ref}", "--",
+         *IMMEDIATE_RECUT_PATHS, *IMMEDIATE_RECUT_PREFIXES],
+        repo_root, check=False,
+    )
+    if operational.returncode == 0:
+        for changed in operational.stdout.splitlines():
+            # Unit-test-only changes never alter a running worker.  Everything
+            # else below scripts/ is conservatively operational: the entry
+            # points import helper modules from the same directory.
+            if changed.startswith("scripts/") and Path(changed).name.startswith("test_"):
+                continue
+            return True
     if behind_commits:
         behind = _git(["rev-list", "--count", f"{sha}..{origin_ref}"], repo_root, check=False)
         if behind.returncode == 0 and behind.stdout.strip().isdigit():
