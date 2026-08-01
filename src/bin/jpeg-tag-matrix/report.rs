@@ -555,34 +555,7 @@ pub fn run(args: ReportArgs) -> anyhow::Result<()> {
             return Ok(());
         }
         let base: BaselineCounts = serde_json::from_str(&std::fs::read_to_string(&baseline_path)?)?;
-        let mut failures = Vec::new();
-        if counts.readable < base.readable {
-            failures.push(format!(
-                "readable regressed: {} -> {}",
-                base.readable, counts.readable
-            ));
-        }
-        if counts.writable_cli < base.writable_cli {
-            failures.push(format!(
-                "writable_cli regressed: {} -> {}",
-                base.writable_cli, counts.writable_cli
-            ));
-        }
-        if counts.full < base.full {
-            failures.push(format!("full regressed: {} -> {}", base.full, counts.full));
-        }
-        if counts.read_broken > base.read_broken {
-            failures.push(format!(
-                "read_broken regressed: {} -> {}",
-                base.read_broken, counts.read_broken
-            ));
-        }
-        if counts.write_broken > base.write_broken {
-            failures.push(format!(
-                "write_broken regressed: {} -> {}",
-                base.write_broken, counts.write_broken
-            ));
-        }
+        let failures = baseline_regressions(&base, &counts);
 
         print_deltas(&base, &counts);
 
@@ -599,6 +572,47 @@ pub fn run(args: ReportArgs) -> anyhow::Result<()> {
         println!("Baseline check passed");
     }
     Ok(())
+}
+
+/// Return regressions in the baseline's aggregate capability totals.
+///
+/// `write_broken` is a subset of `readable`, so newly readable tags can enter
+/// that bucket without any previously working write behavior regressing. Only
+/// treat growth beyond the net readable gain as a regression. This preserves
+/// the strongest inference a count-only baseline can make while avoiding the
+/// false positive that otherwise blocks read-support improvements.
+fn baseline_regressions(base: &BaselineCounts, counts: &BaselineCounts) -> Vec<String> {
+    let mut failures = Vec::new();
+    if counts.readable < base.readable {
+        failures.push(format!(
+            "readable regressed: {} -> {}",
+            base.readable, counts.readable
+        ));
+    }
+    if counts.writable_cli < base.writable_cli {
+        failures.push(format!(
+            "writable_cli regressed: {} -> {}",
+            base.writable_cli, counts.writable_cli
+        ));
+    }
+    if counts.full < base.full {
+        failures.push(format!("full regressed: {} -> {}", base.full, counts.full));
+    }
+    if counts.read_broken > base.read_broken {
+        failures.push(format!(
+            "read_broken regressed: {} -> {}",
+            base.read_broken, counts.read_broken
+        ));
+    }
+    let write_broken_growth = counts.write_broken.saturating_sub(base.write_broken);
+    let readable_growth = counts.readable.saturating_sub(base.readable);
+    if write_broken_growth > readable_growth {
+        failures.push(format!(
+            "write_broken regressed beyond newly readable growth: {} -> {} (readable {} -> {})",
+            base.write_broken, counts.write_broken, base.readable, counts.readable
+        ));
+    }
+    failures
 }
 
 fn print_deltas(base: &BaselineCounts, counts: &BaselineCounts) {
@@ -700,6 +714,73 @@ mod classify_tests {
 mod report_tests {
     use super::*;
     use std::collections::HashMap;
+
+    fn baseline_counts() -> BaselineCounts {
+        BaselineCounts {
+            total_tested: 100,
+            readable: 40,
+            writable_cli: 10,
+            full: 8,
+            full_nonstandard: 2,
+            read_only: 20,
+            read_broken: 5,
+            write_broken: 7,
+            unsupported: 58,
+            untestable: 2,
+        }
+    }
+
+    #[test]
+    fn newly_readable_write_broken_tags_are_not_regressions() {
+        let base = baseline_counts();
+        let counts = BaselineCounts {
+            total_tested: 100,
+            readable: 50,
+            read_only: 25,
+            write_broken: 9,
+            unsupported: 45,
+            ..baseline_counts()
+        };
+
+        assert!(baseline_regressions(&base, &counts).is_empty());
+    }
+
+    #[test]
+    fn losses_of_working_capabilities_are_regressions() {
+        let base = baseline_counts();
+        let counts = BaselineCounts {
+            readable: 39,
+            writable_cli: 9,
+            full: 7,
+            read_broken: 6,
+            ..baseline_counts()
+        };
+
+        assert_eq!(
+            baseline_regressions(&base, &counts),
+            [
+                "readable regressed: 40 -> 39",
+                "writable_cli regressed: 10 -> 9",
+                "full regressed: 8 -> 7",
+                "read_broken regressed: 5 -> 6",
+            ]
+        );
+    }
+
+    #[test]
+    fn write_broken_growth_beyond_readable_gain_is_a_regression() {
+        let base = baseline_counts();
+        let counts = BaselineCounts {
+            readable: 41,
+            write_broken: 9,
+            ..baseline_counts()
+        };
+
+        assert_eq!(
+            baseline_regressions(&base, &counts),
+            ["write_broken regressed beyond newly readable growth: 7 -> 9 (readable 40 -> 41)"]
+        );
+    }
 
     #[test]
     fn report_end_to_end_produces_matching_baseline_shape() {
