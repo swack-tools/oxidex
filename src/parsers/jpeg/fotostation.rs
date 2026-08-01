@@ -19,7 +19,6 @@
 //! whose payload is a plain IPTC IIM block that `%FotoStation::Main` routes to
 //! `IPTC::Main`. Tags 0x03/0x04 are preview images.
 
-use crate::core::tag_conversion::parse_string_to_tag_value;
 use crate::core::{MetadataMap, TagValue};
 use crate::parsers::jpeg::app_segments::perl_number;
 use crate::parsers::jpeg::iptc_parser::extract_iptc_from_block;
@@ -67,7 +66,7 @@ pub fn parse_fotostation_trailer(file: &[u8]) -> MetadataMap {
             // APP13 resource, so without this the file reports no IPTC at all.
             TAG_IPTC => {
                 for (name, value) in extract_iptc_from_block(record) {
-                    metadata.insert(name, parse_string_to_tag_value(&value));
+                    metadata.insert(name, TagValue::new_string(value));
                 }
             }
             _ => {}

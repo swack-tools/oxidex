@@ -5,7 +5,7 @@
 
 use super::{FileReader, MetadataMap, TagValue};
 use crate::core::operations_helpers::read_u32;
-use crate::core::tag_conversion::{parse_string_to_tag_value, raw_bytes_to_tag_value};
+use crate::core::tag_conversion::raw_bytes_to_tag_value;
 use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd};
 use crate::io::EndianReader;
 use crate::parsers::jpeg::app_segments::app8_isothermal::INFIRAY_ISOTHERMAL_MIN_LENGTH;
@@ -286,7 +286,7 @@ fn process_ifd0_tags(
             for (tag_name, value) in
                 crate::parsers::jpeg::iptc_parser::extract_iptc_from_block(bytes)
             {
-                metadata.insert(tag_name, parse_string_to_tag_value(&value));
+                metadata.insert(tag_name, TagValue::new_string(value));
             }
             continue;
         }
@@ -359,12 +359,14 @@ pub fn process_iptc_segments(segments: &[Segment], metadata: &mut MetadataMap) {
             // SupplementalCategories arrive as a TagValue::Array -- they are
             // written as one IIM record per entry, and inserting them one at a
             // time kept only the last.
+            //
+            // `extract_iptc_values_from_segments` already applied IPTC.pm's
+            // Format + PrintConv pipeline (dataset_value_to_string), so the
+            // string it returns is ExifTool's final printed value. Re-parsing
+            // it as int/float here would strip exactly what that pipeline
+            // produced -- e.g. a `digits[N]`-format field's leading zeros.
             for (tag_name, value) in iptc_tags {
-                let tag_value = match value {
-                    TagValue::String(text) => parse_string_to_tag_value(&text),
-                    other => other,
-                };
-                metadata.insert(tag_name, tag_value);
+                metadata.insert(tag_name, value);
             }
         }
         Err(e) => {
@@ -943,4 +945,46 @@ fn has_ijpeg_header(segments: &[Segment]) -> bool {
         .iter()
         .filter(|s| s.marker == APP2_MARKER)
         .any(|s| s.data.len() >= 10 && &s.data[4..10] == b"IJPEG\0")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `IPTC:ReferenceNumber` (record 2, dataset 50) is IPTC.pm's
+    /// `digits[8]` format: trailing-NUL-stripped text, kept as-is -- not
+    /// reformatted as a number. A leading zero in the payload must survive,
+    /// which only happens if the value is stored as `TagValue::String` and
+    /// never re-parsed through `parse_string_to_tag_value`.
+    #[test]
+    fn process_iptc_segments_keeps_digits_format_leading_zero() {
+        const APP13_MARKER: u16 = 0xFFED;
+        const PHOTOSHOP_SIGNATURE: &[u8] = b"Photoshop 3.0\0";
+
+        let mut app13_data = Vec::new();
+        app13_data.extend_from_slice(PHOTOSHOP_SIGNATURE);
+        app13_data.extend_from_slice(b"8BIM");
+        app13_data.extend_from_slice(&[0x04, 0x04]); // resource ID: IPTC
+        app13_data.push(0x00); // empty name
+        app13_data.push(0x00); // padding
+
+        let mut iptc_data = Vec::new();
+        iptc_data.push(0x1C); // tag marker
+        iptc_data.extend_from_slice(&[0x02, 0x32]); // record 2, dataset 50
+        iptc_data.extend_from_slice(&[0x00, 0x04]); // length 4
+        iptc_data.extend_from_slice(b"0042");
+
+        let iptc_size = iptc_data.len() as u32;
+        app13_data.extend_from_slice(&iptc_size.to_be_bytes());
+        app13_data.extend_from_slice(&iptc_data);
+
+        let segment = Segment::new(APP13_MARKER, 0, &app13_data);
+        let mut metadata = MetadataMap::new();
+        process_iptc_segments(&[segment], &mut metadata);
+
+        assert_eq!(
+            metadata.get("IPTC:ReferenceNumber"),
+            Some(&TagValue::new_string("0042"))
+        );
+    }
 }
