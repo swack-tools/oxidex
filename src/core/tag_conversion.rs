@@ -428,7 +428,8 @@ pub(crate) fn gps_coordinate_degrees(bytes: &[u8], byte_order: ByteOrder) -> Opt
 ///
 /// Called without a hemisphere reference, which is the `[GPS] GPSLatitude`
 /// case; ToDMS takes `$val = abs($val)` there (GPS.pm:521) and prints no sign.
-fn format_dms(degrees_total: f64) -> String {
+/// For the `$ref`-carrying call shape, see [`format_dms_with_ref`].
+pub(crate) fn format_dms(degrees_total: f64) -> String {
     let value = degrees_total.abs();
     let mut degrees = value.trunc();
     let mut minutes = ((value - degrees) * 60.0).trunc();
@@ -447,6 +448,31 @@ fn format_dms(degrees_total: f64) -> String {
     }
 
     format!("{} deg {}' {:.2}\"", degrees, minutes, seconds)
+}
+
+/// ExifTool's `ToDMS($self, $val, 1, $ref)` -- the same conversion as
+/// [`format_dms`], but for a signed coordinate that carries its hemisphere in
+/// the printed string rather than in a separate `*Ref` tag.
+///
+/// GPS.pm:505-515 is the whole difference: a negative value is negated, the
+/// reference letter flips through `{N => 'S', E => 'W'}`, and the letter is
+/// appended after a single space. `positive_ref` is the letter ExifTool passes
+/// for a non-negative value (`"N"` for latitude, `"E"` for longitude), so this
+/// takes the same argument the Perl call site does.
+///
+/// Used by FLIR's GPSInfo record, where `FLIR.pm` stores latitude and
+/// longitude as signed doubles with no companion Ref tag for the value.
+pub(crate) fn format_dms_with_ref(degrees_total: f64, positive_ref: char) -> String {
+    let reference = if degrees_total < 0.0 {
+        match positive_ref {
+            'N' => 'S',
+            'E' => 'W',
+            other => other,
+        }
+    } else {
+        positive_ref
+    };
+    format!("{} {}", format_dms(degrees_total), reference)
 }
 
 /// Formats GPSTimeStamp from 3 rational values (hours, minutes, seconds).
