@@ -667,3 +667,169 @@ pub const AF_POINTS_405: &[&str] = &[
 ];
 
 // --- hand-written below: do not edit above this line by hand ---
+
+/// Port of ExifTool's `PrintAFPoints` (Nikon.pm ~line 13307). Walks `bits`
+/// bit by bit; for each set bit, looks up bit-number+1 (1-based, matching
+/// ExifTool's `$i*8+$j+1`) in `table`. Unmatched bit numbers are silently
+/// skipped (as in ExifTool: `push @points, $point if defined $point`).
+/// Sort order matches ExifTool's numeric-aware comparator: same-length
+/// names sort lexically; a 2-char name (letter + single digit) sorts as if
+/// zero-padded, so "C1" precedes "C10".
+pub fn print_af_points_lookup(bits: &[u8], table: &[(u8, &str)]) -> String {
+    let mut points = Vec::new();
+    for (i, byte) in bits.iter().enumerate() {
+        if *byte == 0 {
+            continue;
+        }
+        for j in 0..8u32 {
+            if byte & (1 << j) == 0 {
+                continue;
+            }
+            let bit_number = (i as u32) * 8 + j + 1;
+            if let Ok(bit_number) = u8::try_from(bit_number)
+                && let Some((_, name)) = table.iter().find(|(n, _)| *n == bit_number)
+            {
+                points.push(*name);
+            }
+        }
+    }
+    if points.is_empty() {
+        return "(none)".to_string();
+    }
+    points.sort_by(|a, b| af_point_sort_key(a).cmp(&af_point_sort_key(b)));
+    points.join(",")
+}
+
+/// Same bitmap walk as `print_af_points_lookup`, but for the three tables
+/// ExifTool stores as plain positional arrays (`afPoints231/299/405`):
+/// `table[bit_index]`, 0-based, no +1 offset (ExifTool: `$$afPoints[$i*8+$j]`).
+pub fn print_af_points_array(bits: &[u8], table: &[&str]) -> String {
+    let mut points = Vec::new();
+    for (i, byte) in bits.iter().enumerate() {
+        if *byte == 0 {
+            continue;
+        }
+        for j in 0..8usize {
+            if byte & (1 << j) == 0 {
+                continue;
+            }
+            if let Some(name) = table.get(i * 8 + j) {
+                points.push(*name);
+            }
+        }
+    }
+    if points.is_empty() {
+        return "(none)".to_string();
+    }
+    points.sort_by(|a, b| af_point_sort_key(a).cmp(&af_point_sort_key(b)));
+    points.join(",")
+}
+
+/// Port of `PrintAFPointsGrid` + `GetAFPointGrid` (Nikon.pm ~13361, 13378):
+/// the point name is *computed* from (row, col) rather than looked up.
+/// `row = bit / ncols`, `col = bit - ncols*row + 1`, name = letter(65+row)
+/// followed by `col`. ExifTool's grid variant does not sort the output
+/// (`return join ',', @points`, no `sort`) -- points come out in bit order.
+pub fn print_af_points_grid(bits: &[u8], ncols: u16) -> String {
+    let mut points = Vec::new();
+    for (i, byte) in bits.iter().enumerate() {
+        if *byte == 0 {
+            continue;
+        }
+        for j in 0..8u32 {
+            if byte & (1 << j) == 0 {
+                continue;
+            }
+            let bit = (i as u32) * 8 + j;
+            let row = bit / (ncols as u32);
+            let col = bit - (ncols as u32) * row + 1;
+            let Some(letter) = char::from_u32(65 + row) else {
+                continue;
+            };
+            points.push(format!("{letter}{col}"));
+        }
+    }
+    if points.is_empty() {
+        return "(none)".to_string();
+    }
+    points.join(",")
+}
+
+/// ExifTool's point-name comparator (Nikon.pm PrintAFPoints):
+/// same-length names compare directly; a 2-char name (row letter + single
+/// digit column) is treated as zero-padded so "C1" < "C10".
+fn af_point_sort_key(name: &str) -> String {
+    if name.len() == 2 {
+        let mut chars = name.chars();
+        let letter = chars.next().unwrap_or(' ');
+        let digit = chars.next().unwrap_or(' ');
+        format!("{letter}0{digit}")
+    } else {
+        name.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // NikonD850.jpg (153-point, V0101): AFPointsUsed = E9. Bit 1 (bit-number
+    // 1, 1-based) is byte 0 bit 0.
+    #[test]
+    fn print_af_points_lookup_single_bit() {
+        let bits = [0x01u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(print_af_points_lookup(&bits, AF_POINTS_153), "E9");
+    }
+
+    // NikonD7000.jpg (39-point, V0100): AFPointsUsed =
+    // C1,C2,C3,C5,C6,C7,D2,D3,D5,E1,E2 -- several bits set across bytes,
+    // exercises the ExifTool sort order (numeric-aware: "C1" before "C10").
+    #[test]
+    fn print_af_points_lookup_multiple_bits_sorted() {
+        // bit-numbers (1-based) for C1,C2,C3,C5,C6,C7,D2,D3,D5,E1,E2 in
+        // afPoints39 (Nikon.pm:1484-1495): C1=37,C2=34,C3=31,C5=11,C6=1,
+        // C7=6,D2=36,D3=33,D5=14,E1=15,E2=5.
+        let bit_numbers = [37u32, 34, 31, 11, 1, 6, 36, 33, 14, 15, 5];
+        let mut bits = [0u8; 5];
+        for n in bit_numbers {
+            let i = (n - 1) / 8;
+            let j = (n - 1) % 8;
+            bits[i as usize] |= 1 << j;
+        }
+        assert_eq!(
+            print_af_points_lookup(&bits, AF_POINTS_39),
+            "C1,C2,C3,C5,C6,C7,D2,D3,D5,E1,E2"
+        );
+    }
+
+    #[test]
+    fn print_af_points_lookup_none_set() {
+        let bits = [0u8; 7];
+        assert_eq!(print_af_points_lookup(&bits, AF_POINTS_51), "(none)");
+    }
+
+    // GetAFPointGrid(val=82, ncol=15) = chr(65 + 82/15) + (82 - 15*5 + 1)
+    // = chr(65+5) + 8 = "F8" -- the Nikon 1 S2 165-point center point
+    // (Nikon.pm:4658).
+    #[test]
+    fn print_af_points_grid_center_point() {
+        // bit 82 is byte 10 (82/8=10), bit offset 2 (82%8=2).
+        let mut bits = [0u8; 21];
+        bits[10] = 1 << 2;
+        assert_eq!(print_af_points_grid(&bits, 15), "F8");
+    }
+
+    #[test]
+    fn print_af_points_grid_none_set() {
+        let bits = [0u8; 21];
+        assert_eq!(print_af_points_grid(&bits, 15), "(none)");
+    }
+
+    #[test]
+    fn print_af_points_array_positional() {
+        let table: &[&str] = &["A1", "A2", "A3"];
+        let mut bits = [0u8; 1];
+        bits[0] = 1 << 1; // bit index 1 -> "A2"
+        assert_eq!(print_af_points_array(&bits, table), "A2");
+    }
+}
