@@ -97,6 +97,22 @@ pub fn parse_quicktime_metadata(reader: &dyn FileReader) -> Result<MetadataMap, 
         .read(0, read_size)
         .map_err(|e| format!("Failed to read file: {}", e))?;
 
+    parse_quicktime_metadata_from_bytes(data)
+}
+
+/// Parse QuickTime/MP4 metadata from an in-memory ISO Base Media container.
+///
+/// Same box walk as [`parse_quicktime_metadata`], for callers that already hold
+/// the whole file. Canon CR3 is the reason this exists: it is an ISO Base Media
+/// container like MP4, but it reaches the parsers through
+/// [`crate::parsers::raw::parse_raw_metadata`], which is handed bytes rather
+/// than a [`FileReader`]. Without this entry point the CR3 path had no way to
+/// call the box walker, so every `ftyp`/`moov`/`trak` tag a CR3 shares with an
+/// MP4 -- 50 of them on `CanonRaw.cr3` -- was missing even though the code to
+/// read them was already here and already exercised by MP4 and M4A.
+///
+/// No signature check: the caller has already identified the container.
+pub fn parse_quicktime_metadata_from_bytes(data: &[u8]) -> Result<MetadataMap, String> {
     // Parse top-level atoms
     let atoms = atom_parser::parse_atoms(data)
         .map_err(|e| format!("Failed to parse atoms: {}", e))?

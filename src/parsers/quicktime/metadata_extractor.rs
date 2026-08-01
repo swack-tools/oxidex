@@ -424,6 +424,10 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
                 "hevs" => "High Efficiency Video Coding Scalable",
                 "avif" => "AV1 Image File Format (.AVIF)",
                 "avis" => "AV1 Image Sequence File Format",
+                // QuickTime.pm %ftypLookup:233. Canon's raw brand covers both
+                // CR3 stills and CRM movies; which one it is comes from the
+                // CNCV compressor version, not from this brand.
+                "crx " => "Canon Raw (.CRX)",
                 _ => brand,
             };
             metadata.insert(

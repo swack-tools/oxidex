@@ -137,19 +137,45 @@ fn test_parse_cr3_stub() {
     assert!(result.is_ok(), "CR3 stub should parse successfully");
     let metadata = result.unwrap();
 
-    assert!(
-        metadata.contains_key("File:FileType"),
-        "CR3 should have File:FileType tag"
+    // ExifTool's file type for this format is "CR3" (ExifTool.pm:272,
+    // `CR3 => ['MOV', 'Canon RAW 3 format']`), with `image/x-canon-cr3`
+    // (ExifTool.pm:637). This assertion used to require "CanonCR3", which is
+    // the Rust `RawFormat` variant name and not an ExifTool file type at all --
+    // the test was pinning the bug in place. The tag-comparison harness skips
+    // the File group, so nothing else was checking these three.
+    assert_eq!(metadata.get_string("File:FileType"), Some("CR3"));
+    assert_eq!(metadata.get_string("File:FileTypeExtension"), Some("cr3"));
+    assert_eq!(
+        metadata.get_string("File:MIMEType"),
+        Some("image/x-canon-cr3")
     );
+}
 
-    // Verify the file type is set correctly
-    if let Some(file_type) = metadata.get("File:FileType") {
-        let file_type_str = format!("{:?}", file_type);
-        assert!(
-            file_type_str.contains("CanonCR3"),
-            "FileType should indicate CR3 format"
-        );
-    }
+#[test]
+fn test_parse_cr3_compressor_version_selects_crm() {
+    // Canon.pm's %Canon::uuid CNCV entry is
+    //     RawConv => '$self->OverrideFileType($1) if $val =~ /^Canon(\w{3})/i'
+    // so the same `crx ` brand is a CR3 still or a CRM movie depending only on
+    // what the CNCV box says. Byte layout: [size: u32 BE][type][payload].
+    let mut data = Vec::from(*b"\x00\x00\x00\x18ftypcrx \x00\x00\x00\x00crx isom");
+    let cncv = b"CanonCRM_001/00.09.00/00.00.00";
+    data.extend_from_slice(&(8u32 + cncv.len() as u32).to_be_bytes());
+    data.extend_from_slice(b"CNCV");
+    data.extend_from_slice(cncv);
+
+    let metadata = parse_raw_metadata(&data, RawFormat::CanonCR3).expect("CRM should parse");
+
+    assert_eq!(metadata.get_string("File:FileType"), Some("CRM"));
+    assert_eq!(metadata.get_string("File:FileTypeExtension"), Some("crm"));
+    // ExifTool.pm:638, `CRM => 'video/x-canon-crm'`.
+    assert_eq!(
+        metadata.get_string("File:MIMEType"),
+        Some("video/x-canon-crm")
+    );
+    assert_eq!(
+        metadata.get_string("Canon:CompressorVersion"),
+        Some("CanonCRM_001/00.09.00/00.00.00")
+    );
 }
 
 #[test]

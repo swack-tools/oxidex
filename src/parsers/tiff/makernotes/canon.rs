@@ -1681,6 +1681,13 @@ const_decoder!(
         (5, "Continuous"),
         (6, "Manual Focus (6)"),
         (16, "Pan Focus"),
+        // Live View and movie focus modes, Canon.pm:2288-2292. A CR3 from an
+        // EOS M50 reports 256 here and was printing "Unknown (256)".
+        (256, "One-shot AF (Live View)"),
+        (257, "AI Servo AF (Live View)"),
+        (258, "AI Focus AF (Live View)"),
+        (512, "Movie Snap Focus"),
+        (519, "Movie Servo AF"),
     ]
 );
 
@@ -3963,11 +3970,14 @@ fn parse_canon_makernote_impl_with_model(
                         );
                     }
 
-                    // RecordMode (index 9) - Recording format
-                    if array.len() > CAMERA_SETTINGS_RECORD_MODE {
+                    // RecordMode (index 9). `RawConv => '$val==-1 ? undef : $val'`
+                    // (Canon.pm:2297).
+                    if let Some(&record_mode) = array.get(CAMERA_SETTINGS_RECORD_MODE)
+                        && record_mode != -1
+                    {
                         tags.insert(
                             "Canon:RecordMode".to_string(),
-                            RECORD_MODE.decode(array[CAMERA_SETTINGS_RECORD_MODE]),
+                            RECORD_MODE.decode(record_mode),
                         );
                     }
 
@@ -4153,11 +4163,17 @@ fn parse_canon_makernote_impl_with_model(
                         tags.insert("Canon:FlashBits".to_string(), decode_flash_bits(flash_bits));
                     }
 
-                    // FocusContinuous (index 32) - Continuous focus setting
-                    if array.len() > CAMERA_SETTINGS_FOCUS_CONTINUOUS {
+                    // FocusContinuous (index 32). `RawConv => '$val==-1 ? undef : $val'`
+                    // (Canon.pm:2580), the same guard AESetting and SpotMeteringMode
+                    // below already carry -- an absent setting must not surface as
+                    // "Unknown (-1)". The EOS M50's CR3 stores -1 here and ExifTool
+                    // reports no FocusContinuous at all for it.
+                    if let Some(&focus_continuous) = array.get(CAMERA_SETTINGS_FOCUS_CONTINUOUS)
+                        && focus_continuous != -1
+                    {
                         tags.insert(
                             "Canon:FocusContinuous".to_string(),
-                            FOCUS_CONTINUOUS.decode(array[CAMERA_SETTINGS_FOCUS_CONTINUOUS]),
+                            FOCUS_CONTINUOUS.decode(focus_continuous),
                         );
                     }
 
@@ -4527,38 +4543,22 @@ fn parse_canon_makernote_impl_with_model(
             }
 
             // LensModel tag (Phase 3) - ASCII string containing lens name
+            //
+            // This is the same TIFF-relative offset every other Canon string
+            // entry uses, so it goes through `extract_canon_string_with_base`
+            // like CanonImageType and OwnerName do. It used to index `data` with
+            // the raw `value_offset`, which is only correct when the base
+            // happens to be 0; on a CR3, whose MakerNote sits 8 bytes into the
+            // CMT3 TIFF, that read the string 8 bytes late and ran `value_count`
+            // bytes past its end -- "EF-M15-45mm f/3.5-6.3 IS STM" came out as
+            // "5mm f/3.5-6.3 IS STM" plus 46 NULs and the first 8 characters of
+            // the InternalSerialNumber that follows it.
             CANON_LENS_MODEL => {
-                // LensModel is an ASCII string tag
-                if entry.field_type == 2 {
-                    // ASCII type
-                    let value_bytes = if entry.value_count <= 4 {
-                        // Inline value
-                        extract_inline_value(
-                            entry.value_offset,
-                            entry.value_count as usize,
-                            byte_order,
-                        )
-                    } else {
-                        // External value
-                        if (entry.value_offset as usize) < data.len() {
-                            let end = std::cmp::min(
-                                (entry.value_offset as usize) + (entry.value_count as usize),
-                                data.len(),
-                            );
-                            data[entry.value_offset as usize..end].to_vec()
-                        } else {
-                            Vec::new()
-                        }
-                    };
-
-                    if !value_bytes.is_empty() {
-                        let lens_model = String::from_utf8_lossy(&value_bytes)
-                            .trim_end_matches('\0')
-                            .to_string();
-                        if !lens_model.is_empty() {
-                            tags.insert("Canon:LensModel".to_string(), lens_model);
-                        }
-                    }
+                if let Some(lens_model) =
+                    extract_canon_string_with_base(entry, ifd_data, byte_order, base)
+                    && !lens_model.is_empty()
+                {
+                    tags.insert("Canon:LensModel".to_string(), lens_model);
                 }
             }
 
