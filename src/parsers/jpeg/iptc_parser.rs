@@ -3,10 +3,11 @@
 //! This module handles parsing of IPTC data in JPEG APP13 segments.
 //! IPTC data is stored in Adobe Photoshop Image Resource Blocks (8BIM).
 
-use crate::core::TagValue;
+use crate::core::tag_conversion::parse_string_to_tag_value;
 use crate::core::value_formatter::{
     format_iptc_coded_charset, format_iptc_date, format_iptc_time, format_iptc_urgency,
 };
+use crate::core::{MetadataMap, TagValue};
 use crate::error::Result;
 use crate::parsers::jpeg::segment_parser::Segment;
 use nom::{
@@ -22,16 +23,48 @@ const IPTC_RESOURCE_ID: u16 = 0x0404;
 const IPTC_TAG_MARKER: u8 = 0x1C;
 const APP13_MARKER: u16 = 0xFFED;
 
-/// Application-record datasets ExifTool reports as lists because the IIM spec
-/// marks them repeatable (`IPTC.pm`, `List => 1`): 20 = SupplementalCategories,
-/// 25 = Keywords. Every other dataset keeps last-wins semantics, which is what
-/// a single-valued map insert already does.
+/// The `(record, dataset)` pairs `Image::ExifTool::IPTC` reports as lists.
+///
+/// IIM lets these repeat and ExifTool keeps every occurrence, so three `2:25`
+/// records yield `["ExifTool","Test","IPTC"]` rather than the last one. Every
+/// other dataset keeps last-wins semantics, which is what a single-valued map
+/// insert already does.
+///
+/// The set is every tag flagged `Flags => 'List'` in IPTC.pm, plus
+/// `CatalogSets`, which spells the same thing `List => 1`. Grepping only for
+/// `List => 1` finds that one tag and understates the set by sixteen -- among
+/// them `By-line`, `Writer-Editor` and `Contact`, which real photo-credit
+/// pipelines repeat.
+const LIST_DATASETS: &[(u8, u8)] = &[
+    // Record 1 -- EnvelopeRecord
+    (1, 5),  // Destination
+    (1, 50), // ProductID
+    // Record 2 -- ApplicationRecord
+    (2, 4),   // ObjectAttributeReference
+    (2, 12),  // SubjectReference
+    (2, 20),  // SupplementalCategories
+    (2, 25),  // Keywords
+    (2, 26),  // ContentLocationCode
+    (2, 27),  // ContentLocationName
+    (2, 45),  // ReferenceService
+    (2, 47),  // ReferenceDate
+    (2, 50),  // ReferenceNumber
+    (2, 80),  // By-line
+    (2, 85),  // By-lineTitle
+    (2, 118), // Contact
+    (2, 122), // Writer-Editor
+    (2, 255), // CatalogSets
+    // Record 8 -- ObjectData
+    (8, 10), // SubFile
+];
+
+/// True when ExifTool reports repeated occurrences of this dataset as a list.
 ///
 /// This is the one place the rule lives -- `parsers::pdf::photoshop_resources`
 /// decodes the same 0x0404 resource out of a PDF and asks here rather than
 /// keeping a second copy that can drift.
 pub fn is_repeatable_iptc_dataset(record_number: u8, dataset_number: u8) -> bool {
-    record_number == 2 && matches!(dataset_number, 20 | 25)
+    LIST_DATASETS.contains(&(record_number, dataset_number))
 }
 
 /// Represents an Adobe Photoshop Image Resource Block
@@ -721,6 +754,57 @@ pub fn extract_iptc_values_from_segments(segments: &[Segment]) -> Result<Vec<(St
     Ok(collapse_iptc_entries(iptc_entries_from_segments(segments)))
 }
 
+/// Decodes one 0x0404 IIM payload straight into `metadata`.
+///
+/// JPEG is not the only container for this resource: TIFF carries it in the
+/// IPTC-NAA tag, PSD and EPS in their own 8BIM runs, and a Photoshop-authored
+/// PDF in the image-resource stream of its page dictionary. Routing them all
+/// through the same walk means a file's IPTC reads identically whichever
+/// container holds it -- including the datasets ExifTool reports as lists,
+/// which each of those decoders previously got wrong in a different way.
+///
+/// Values already under a list key are kept and extended rather than replaced,
+/// so IPTC split across two 8BIM blocks (EPS writes the same records twice,
+/// raw-binary and hex-encoded) still collapses to one complete list.
+pub fn insert_iptc_records(payload: &[u8], metadata: &mut MetadataMap) {
+    let entries = extract_iptc_entries_from_block(payload);
+
+    // Seed the accumulator from the map so a second block extends a list
+    // instead of overwriting it. Only list datasets are seeded; every other
+    // dataset is meant to take the newest value.
+    let mut seeded: Vec<(u8, u8, String, String)> = Vec::new();
+    for (record_number, dataset_number, name, _) in &entries {
+        if !is_repeatable_iptc_dataset(*record_number, *dataset_number)
+            || seeded.iter().any(|(_, _, seen, _)| seen == name)
+        {
+            continue;
+        }
+        let existing = match metadata.get(name) {
+            Some(TagValue::Array(values)) => values
+                .iter()
+                .filter_map(|value| value.as_string().map(str::to_string))
+                .collect(),
+            Some(value) => value.as_string().map(str::to_string).into_iter().collect(),
+            None => Vec::new(),
+        };
+        for value in existing {
+            seeded.push((*record_number, *dataset_number, name.clone(), value));
+        }
+    }
+    seeded.extend(entries);
+
+    for (name, value) in collapse_iptc_entries(seeded) {
+        // Narrowed exactly as the JPEG path narrows it, so `IPTC:Category`
+        // prints as the bare 1 ExifTool reports no matter which container the
+        // records came out of.
+        let stored = match value {
+            TagValue::String(text) => parse_string_to_tag_value(&text),
+            other => other,
+        };
+        metadata.insert(name, stored);
+    }
+}
+
 /// Extracts IPTC metadata from JPEG segments.
 ///
 /// This function scans through all segments, identifies APP13 segments with
@@ -1091,5 +1175,121 @@ mod tests {
         let result = extract_iptc_from_segments(&segments);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 0);
+    }
+
+    /// Appends one IIM record to `out`.
+    fn push_record(out: &mut Vec<u8>, record: u8, dataset: u8, data: &[u8]) {
+        out.push(IPTC_TAG_MARKER);
+        out.push(record);
+        out.push(dataset);
+        out.extend_from_slice(&(data.len() as u16).to_be_bytes());
+        out.extend_from_slice(data);
+    }
+
+    /// Wraps IIM records in the APP13 -> "Photoshop 3.0\0" -> 8BIM 0x0404
+    /// envelope a real JPEG carries them in.
+    fn app13_segment(iptc: &[u8]) -> Vec<u8> {
+        let mut payload = PHOTOSHOP_SIGNATURE.to_vec();
+        payload.extend_from_slice(EIGHTBIM_SIGNATURE);
+        payload.extend_from_slice(&IPTC_RESOURCE_ID.to_be_bytes());
+        payload.extend_from_slice(&[0x00, 0x00]); // empty Pascal name, padded
+        payload.extend_from_slice(&(iptc.len() as u32).to_be_bytes());
+        payload.extend_from_slice(iptc);
+        payload
+    }
+
+    /// Runs the live JPEG path the CLI uses.
+    fn iptc_from_jpeg(iptc: &[u8]) -> MetadataMap {
+        let data = app13_segment(iptc);
+        let segments = vec![Segment::new(APP13_MARKER, 0, &data)];
+        let mut metadata = MetadataMap::new();
+        crate::core::jpeg_helpers::process_iptc_segments(&segments, &mut metadata);
+        metadata
+    }
+
+    /// The list set is every dataset IPTC.pm flags `List`, not just Keywords
+    /// and SupplementalCategories: By-line among them, which MWG.jpg repeats.
+    /// A dataset outside the set still takes the last value.
+    #[test]
+    fn list_datasets_beyond_keywords_accumulate() {
+        let mut iptc = Vec::new();
+        push_record(&mut iptc, 2, 80, b"First Creator"); // By-line, a list
+        push_record(&mut iptc, 2, 80, b"Second Creator");
+        push_record(&mut iptc, 2, 105, b"First Headline"); // Headline, not a list
+        push_record(&mut iptc, 2, 105, b"Second Headline");
+
+        let metadata = iptc_from_jpeg(&iptc);
+
+        assert_eq!(
+            metadata.get("IPTC:By-line"),
+            Some(&TagValue::Array(vec![
+                TagValue::String("First Creator".to_string()),
+                TagValue::String("Second Creator".to_string()),
+            ]))
+        );
+        assert_eq!(
+            metadata.get("IPTC:Headline"),
+            Some(&TagValue::String("Second Headline".to_string()))
+        );
+    }
+
+    /// ExifTool prints a one-element list as a bare scalar, not a 1-array.
+    #[test]
+    fn a_single_list_dataset_value_stays_scalar() {
+        let mut iptc = Vec::new();
+        push_record(&mut iptc, 2, 25, b"solo");
+
+        assert_eq!(
+            iptc_from_jpeg(&iptc).get("IPTC:Keywords"),
+            Some(&TagValue::String("solo".to_string()))
+        );
+    }
+
+    /// The containers that are not JPEG reach the same walk, so a raw 0x0404
+    /// payload decodes identically -- and a second block extends a list rather
+    /// than replacing it, which is how EPS carries the same records twice.
+    #[test]
+    fn a_second_block_extends_a_list_instead_of_replacing_it() {
+        let mut first = Vec::new();
+        push_record(&mut first, 2, 25, b"one");
+        push_record(&mut first, 2, 5, b"First Title");
+
+        let mut second = Vec::new();
+        push_record(&mut second, 2, 25, b"two");
+        push_record(&mut second, 2, 5, b"Second Title");
+
+        let mut metadata = MetadataMap::new();
+        insert_iptc_records(&first, &mut metadata);
+        insert_iptc_records(&second, &mut metadata);
+
+        assert_eq!(
+            metadata.get("IPTC:Keywords"),
+            Some(&TagValue::Array(vec![
+                TagValue::String("one".to_string()),
+                TagValue::String("two".to_string()),
+            ]))
+        );
+        // A non-list dataset still takes the newest value.
+        assert_eq!(
+            metadata.get("IPTC:ObjectName"),
+            Some(&TagValue::String("Second Title".to_string()))
+        );
+    }
+
+    /// `IPTC:Category` is text in the record but a number in ExifTool's output,
+    /// and the narrowing must not depend on which container the bytes came from.
+    #[test]
+    fn shared_walk_narrows_numeric_values_like_the_jpeg_path() {
+        let mut iptc = Vec::new();
+        push_record(&mut iptc, 2, 15, b"1");
+
+        let mut metadata = MetadataMap::new();
+        insert_iptc_records(&iptc, &mut metadata);
+
+        assert_eq!(metadata.get("IPTC:Category"), Some(&TagValue::Integer(1)));
+        assert_eq!(
+            iptc_from_jpeg(&iptc).get("IPTC:Category"),
+            Some(&TagValue::Integer(1))
+        );
     }
 }

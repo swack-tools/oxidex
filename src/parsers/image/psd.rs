@@ -14,9 +14,7 @@ use crate::error::{ExifToolError, Result};
 use crate::io::buffered_reader::BufferedReader;
 use crate::io::{ByteOrder as EndianByteOrder, EndianReader};
 use crate::parsers::icc::parse_icc_profile_data;
-use crate::parsers::jpeg::iptc_parser::{
-    dataset_to_tag_name, decode_iptc_string, parse_all_iptc_records,
-};
+use crate::parsers::jpeg::iptc_parser::{insert_iptc_records, parse_all_iptc_records};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
 use crate::parsers::xmp::rdf_parser::parse_xmp;
 use crate::tag_db::lookup_tag_name;
@@ -749,43 +747,14 @@ impl PSDParser {
     }
 
     /// Parse IPTC data from image resource block
+    ///
+    /// The shared IIM walk applies ExifTool's per-dataset Format and PrintConv
+    /// rules and keeps the list datasets as lists, so a PSD's IPTC reads the
+    /// same as the identical bytes in a JPEG or TIFF. This used to keep only
+    /// the last value of a repeated dataset, and labelled the envelope
+    /// record's version as ApplicationRecordVersion.
     fn parse_iptc_data(data: &[u8], metadata: &mut MetadataMap) {
-        if let Ok(records) = parse_all_iptc_records(data) {
-            for record in records {
-                // Only process Application Record (record 2)
-                if record.record_number == 2 {
-                    let tag_name = dataset_to_tag_name(record.record_number, record.dataset_number);
-
-                    // Use IPTC: prefix for tag names
-                    let full_name = if tag_name.starts_with("IPTC:") {
-                        tag_name
-                    } else {
-                        format!("IPTC:{}", tag_name)
-                    };
-
-                    // IPTC.pm gives dataset 2:0 Format => 'int16u'
-                    // (ApplicationRecordVersion), so its two bytes are a number,
-                    // not text. Decoding it as a string yielded the raw
-                    // "\0\x02" bytes where ExifTool reports "2".
-                    if record.dataset_number == 0 && record.data.len() >= 2 {
-                        let version = u16::from_be_bytes([record.data[0], record.data[1]]);
-                        metadata.insert(full_name, TagValue::Integer(version as i64));
-                    } else {
-                        let value = decode_iptc_string(&record.data);
-                        metadata.insert(full_name, TagValue::String(value));
-                    }
-                } else if record.record_number == 1 {
-                    // Record 1 is the envelope record - parse version
-                    if record.dataset_number == 0 && record.data.len() >= 2 {
-                        let version = u16::from_be_bytes([record.data[0], record.data[1]]);
-                        metadata.insert(
-                            "IPTC:ApplicationRecordVersion".to_string(),
-                            TagValue::Integer(version as i64),
-                        );
-                    }
-                }
-            }
-        }
+        insert_iptc_records(data, metadata);
     }
 }
 
