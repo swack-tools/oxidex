@@ -451,63 +451,6 @@ static EXPOSURE_LEVEL_INCREMENTS: &[(i64, &str)] = &[(33, "1/3 EV"), (50, "1/2 E
 ///   0x3c `ExposureProgram` - lose to the standard EXIF tags.
 /// * 0x06 `WhiteBalanceFineTune`, 0x0f `WhiteBalance`, 0x56 `Quality` - lose to
 ///   the Sony `Main` table entries 0x0112, 0x0115 and 0x0102.
-static CAMERA_SETTINGS_TAGS: &[BinTag] = &[
-    BinTag::map(0x02, "HighSpeedSync", HIGH_SPEED_SYNC),
-    BinTag::conv(0x03, "ExposureCompensationSet", exposure_compensation),
-    BinTag::map(0x04, "DriveMode", DRIVE_MODE)
-        .with_mask(0xff)
-        .hex(),
-    BinTag::map(0x05, "WhiteBalanceSetting", WHITE_BALANCE_SETTING),
-    BinTag::conv(0x07, "ColorTemperatureSet", color_temperature),
-    BinTag::conv(0x08, "ColorCompensationFilterSet", color_compensation),
-    BinTag::conv(0x0c, "ColorTemperatureCustom", color_temperature),
-    BinTag::conv(0x0d, "ColorCompensationFilterCustom", color_compensation),
-    BinTag::map(0x10, "FocusModeSetting", FOCUS_MODE_SETTING),
-    BinTag::map(0x11, "AFAreaMode", AF_AREA_MODE),
-    BinTag::map(0x12, "AFPointSetting", AF_POINT_SETTING),
-    BinTag::map(0x13, "FlashMode", FLASH_MODE),
-    BinTag::conv(0x14, "FlashExposureCompSet", exposure_compensation),
-    BinTag::conv(0x16, "ISOSetting", iso_setting),
-    BinTag::map(0x18, "DynamicRangeOptimizerMode", DRO_MODE),
-    BinTag::int(0x19, "DynamicRangeOptimizerLevel"),
-    BinTag::map(0x1a, "CreativeStyle", CREATIVE_STYLE_FOCUSINFO),
-    BinTag::conv(0x1f, "ZoneMatchingValue", offset_by_ten),
-    BinTag::conv(0x22, "Brightness", offset_by_ten),
-    BinTag::map(0x23, "FlashControl", FLASH_CONTROL),
-    BinTag::map(0x28, "PrioritySetupShutterRelease", PRIORITY_SETUP),
-    BinTag::map(0x29, "AFIlluminator", AF_ILLUMINATOR),
-    BinTag::map(0x2a, "AFWithShutter", AF_WITH_SHUTTER),
-    BinTag::map(0x2b, "LongExposureNoiseReduction", ON_OFF),
-    BinTag::map(0x2c, "HighISONoiseReduction", HIGH_ISO_NR_CS),
-    BinTag::map(0x2d, "ImageStyle", IMAGE_STYLE),
-    BinTag::map(0x2e, "FocusModeSwitch", FOCUS_MODE_SWITCH),
-    BinTag::conv(0x2f, "ShutterSpeedSetting", shutter_speed),
-    BinTag::conv(0x30, "ApertureSetting", aperture),
-    BinTag::map(0x3d, "ImageStabilizationSetting", ON_OFF),
-    BinTag::map(0x3e, "FlashAction", FLASH_ACTION),
-    BinTag::map(0x3f, "Rotation", ROTATION_CS),
-    BinTag::map(0x40, "AELock", AE_LOCK),
-    BinTag::map(0x4c, "FlashAction2", FLASH_ACTION2),
-    BinTag::map(0x4d, "FocusMode", FOCUS_MODE_SETTING),
-    BinTag::map(0x50, "BatteryState", BATTERY_STATE),
-    BinTag::conv(0x51, "BatteryLevel", percent),
-    BinTag::conv(0x53, "FocusStatus", focus_status),
-    BinTag::map(0x54, "SonyImageSize", SONY_IMAGE_SIZE),
-    BinTag::map(0x55, "AspectRatio", ASPECT_RATIO),
-    BinTag::map(0x58, "ExposureLevelIncrements", EXPOSURE_LEVEL_INCREMENTS),
-    BinTag::map(0x6a, "RedEyeReduction", ON_OFF),
-];
-
-static CAMERA_SETTINGS: BinTable = BinTable {
-    format: Fmt::U16,
-    big_endian: true,
-    tags: CAMERA_SETTINGS_TAGS,
-};
-
-/// Byte counts ExifTool uses to recognise a `CameraSettings` block:
-/// A200/A300/A350/A700 write 280, A850/A900 write 364.
-const CAMERA_SETTINGS_COUNTS: [usize; 2] = [280, 364];
-
 // ============================================================================
 // Entry points
 // ============================================================================
@@ -579,15 +522,6 @@ pub fn extract_focus_info(
     true
 }
 
-/// Decodes tag 0x0114 when it holds a `CameraSettings` block.
-pub fn extract_camera_settings(data: &[u8], tags: &mut HashMap<String, String>) -> bool {
-    if !CAMERA_SETTINGS_COUNTS.contains(&data.len()) {
-        return false;
-    }
-    CAMERA_SETTINGS.extract(data, "Sony", tags);
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,7 +567,6 @@ mod tests {
     fn wrong_sized_blocks_are_refused_rather_than_misread() {
         let mut tags = HashMap::new();
         assert!(!extract_camera_info2(&[0u8; 100], &mut tags));
-        assert!(!extract_camera_settings(&[0u8; 100], &mut tags));
         assert!(!extract_focus_info(&[0u8; 100], None, &mut tags));
         assert!(tags.is_empty());
     }

@@ -42,6 +42,7 @@ pub mod enciphered;
 pub mod enciphered_tables;
 pub mod lens_spec;
 pub mod main_table;
+pub mod plain_tables;
 pub mod value;
 
 use crate::error::Result;
@@ -81,6 +82,34 @@ const TAG_MINOLTA_MAKERNOTE: u16 = 0xb028;
 /// 0x1003's only job outside its own sub-directory is to set
 /// `$$self{Panorama}`, which two of the 0x2010 variants are gated on.
 const TAG_PANORAMA: u16 = 0x1003;
+/// `ShotInfo`, which every DSC and camcorder writes and no DSLR does.
+const TAG_SHOT_INFO: u16 = 0x3000;
+
+/// The three `CameraSettings` layouts the A-mount bodies write into 0x0114,
+/// chosen by the entry's byte count exactly as ExifTool's Conditions do, with
+/// the byte order each `SubDirectory` declares.
+///
+/// The counts are ExifTool's: 280/364 for the A200-A900 generation, 332 for
+/// the A230-A390, and 1536/2048 for the A450/A500/A550/A560/A580, SLT-A33/35/55
+/// and the first NEX bodies. A count ExifTool does not recognise reaches
+/// `CameraSettingsUnknown`, which extracts nothing.
+const CAMERA_SETTINGS_LAYOUTS: &[(&[usize], usize, ByteOrder)] = &[
+    (
+        &[280, 364],
+        plain_tables::idx::CAMERASETTINGS,
+        ByteOrder::BigEndian,
+    ),
+    (
+        &[332],
+        plain_tables::idx::CAMERASETTINGS2,
+        ByteOrder::BigEndian,
+    ),
+    (
+        &[1536, 2048],
+        plain_tables::idx::CAMERASETTINGS3,
+        ByteOrder::LittleEndian,
+    ),
+];
 
 /// Largest plausible entry count for a Sony MakerNote IFD.
 const MAX_ENTRIES: u16 = 200;
@@ -372,9 +401,25 @@ fn parse_sony_makernote_impl(
                 push_all(&mut found, tags, SUB_DIRECTORY_PRIORITY);
             }
             TAG_CAMERA_SETTINGS => {
-                let mut tags = HashMap::new();
-                amount::extract_camera_settings(value.bytes(), &mut tags);
-                push_all(&mut found, tags, SUB_DIRECTORY_PRIORITY);
+                let bytes = value.bytes();
+                if let Some((_, table, order)) = CAMERA_SETTINGS_LAYOUTS
+                    .iter()
+                    .find(|(counts, _, _)| counts.contains(&bytes.len()))
+                {
+                    push_plain(&mut found, *table, bytes, *order, &mut cipher_ctx);
+                }
+            }
+            TAG_SHOT_INFO => {
+                // ShotInfo declares "II" in its first two bytes, but ExifTool
+                // does not switch on it -- `ProcessBinaryData` uses whatever
+                // order is current -- so neither does this.
+                push_plain(
+                    &mut found,
+                    plain_tables::idx::SHOTINFO,
+                    value.bytes(),
+                    byte_order,
+                    &mut cipher_ctx,
+                );
             }
             TAG_MINOLTA_MAKERNOTE => {
                 let Some(start) = value.first_int().filter(|v| *v != 0) else {
@@ -453,6 +498,33 @@ impl Found {
     /// default output is concerned.
     fn name(&self) -> &str {
         self.key.split_once(':').map_or(&self.key, |(_, name)| name)
+    }
+}
+
+/// Runs one unenciphered `ProcessBinaryData` table and files what it yields.
+///
+/// The context is shared with the enciphered blocks because ExifTool's is:
+/// `ShotInfo` sets `FacesDetected`, `FaceInfoOffset` and `FaceInfoLength` for
+/// its own `FaceInfo` sub-directories, and `CameraSettings3` sets `LensMount`.
+fn push_plain(
+    found: &mut Vec<Found>,
+    table: usize,
+    bytes: &[u8],
+    order: ByteOrder,
+    ctx: &mut binary_data::Ctx,
+) {
+    let mut out = Vec::new();
+    binary_data::process(plain_tables::TABLES, table, bytes, order, ctx, &mut out);
+    for tag in out {
+        found.push(Found::new(
+            format!("Sony:{}", tag.name),
+            tag.value,
+            if tag.low_priority {
+                SUB_DIRECTORY_PRIORITY
+            } else {
+                DEFAULT_PRIORITY
+            },
+        ));
     }
 }
 

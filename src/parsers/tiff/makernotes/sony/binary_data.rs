@@ -80,9 +80,13 @@ pub enum Dm {
     Battery2,
     BatteryStatus1,
     BatteryStatus2,
+    FaceInfoLength,
+    FaceInfoOffset,
+    FacesDetected,
     FlashFired,
     LensMount,
     Locations,
+    MetaVersion,
     TagVersion,
     TempTest1,
     TempTest2,
@@ -149,6 +153,9 @@ pub enum Raw {
     NonZeroNot255,
     /// `(($$self{LensMount} != 0) or ($val > 0 and $val < 32784)) ? $val : undef`
     LensMountOrSmall,
+    /// `$$self{X} < n ? undef : $val` -- the Nth face is only present when the
+    /// body says it detected at least N.
+    DropIfDmLess(Dm, f64),
 }
 
 /// `ValueConv`.
@@ -190,6 +197,12 @@ pub enum Vc {
     DateTime20xx,
     /// `unpack('C*')` -> `"%.2d:%.2d"`
     MinSec,
+    /// `$val > 128 ? $val - 256 : $val` -- an int8u read as a signed offset
+    Signed8Above128,
+    /// `$val ? exp(($val/8-6)*log(2))*100 : $val`
+    IsoExp,
+    /// `($val and $val < 254) ? exp(($val/8-6)*log(2))*100 : $val`
+    IsoExpBelow254,
     /// A `ValueConv` written as a lookup hash (Sony's ISO ladders).
     Map(&'static [(&'static str, &'static str)]),
 }
@@ -209,6 +222,10 @@ pub enum Other {
     /// `Exif::PrintParameter`: a positive value prints `+n`, and an int16u
     /// above 0xfff0 is really a small negative.
     ExifParameter,
+    /// `int($val + 0.5)`
+    RoundHalfUp,
+    /// `sub { shift }` -- print the value unchanged.
+    Identity,
 }
 
 /// `PrintConv`.
@@ -232,6 +249,10 @@ pub enum Pc {
     Fixed(usize),
     /// `sprintf("%3d",$val)`
     Width3,
+    /// `sprintf("%.Nd",$val)` -- Perl pads an integer to N digits with zeros.
+    ZeroPad(usize),
+    /// `$val ? sprintf("%.0f",$val) : "Auto"`
+    Fixed0OrAuto,
     /// `$val ? sprintf("%.1f",$val) : $val`
     Fixed1OrVal,
     /// `$val ? sprintf("%+.1f",$val) : 0`
@@ -642,6 +663,12 @@ fn apply_raw(raw: Raw, val: Scalar, ctx: &mut Ctx) -> Option<Scalar> {
             }
             val
         }
+        Raw::DropIfDmLess(dm, n) => {
+            if ctx.members.get(&dm).map_or(0.0, Scalar::num) < n {
+                return None;
+            }
+            val
+        }
         Raw::LensMountOrSmall => {
             let mount = ctx.members.get(&Dm::LensMount).map_or(0.0, Scalar::num);
             let n = val.num();
@@ -711,6 +738,26 @@ fn apply_vc(vc: Vc, val: Scalar, raw: &[u8]) -> Option<Scalar> {
             }
             Scalar::Text(format!("{:02}:{:02}", raw[0], raw[1]))
         }
+        Vc::Signed8Above128 => {
+            let v = n();
+            Scalar::Num(if v > 128.0 { v - 256.0 } else { v })
+        }
+        Vc::IsoExp => {
+            let v = n();
+            Scalar::Num(if v != 0.0 {
+                ((v / 8.0 - 6.0) * std::f64::consts::LN_2).exp() * 100.0
+            } else {
+                v
+            })
+        }
+        Vc::IsoExpBelow254 => {
+            let v = n();
+            Scalar::Num(if v != 0.0 && v < 254.0 {
+                ((v / 8.0 - 6.0) * std::f64::consts::LN_2).exp() * 100.0
+            } else {
+                v
+            })
+        }
         Vc::Map(map) => match map_lookup(map, &val.text()) {
             Some(v) => Scalar::Text(v.to_string()),
             // A ValueConv hash with no entry yields undef, so the tag is dropped.
@@ -742,20 +789,14 @@ fn round_float(val: f64, sig: i32) -> f64 {
     sign * ((10f64.powi(-exp) * val + 0.5).trunc()) * 10f64.powi(exp)
 }
 
-/// `Image::ExifTool::Exif::PrintFNumber`.
+/// `Image::ExifTool::Exif::PrintFNumber` (Exif.pm), verbatim: one decimal
+/// place, two below f/1.0, and anything not a positive number untouched.
 fn print_f_number(v: f64) -> String {
     if v > 0.0 {
-        // "%.2g" for f/1.0 .. f/9.9, "%.3g" above.
         if v < 1.0 {
-            format!("{:.1}", v)
+            format!("{:.2}", v)
         } else {
-            let digits = if v < 10.0 { 2 } else { 3 };
-            let s = format!(
-                "{:.*}",
-                (digits as i32 - 1 - v.abs().log10().floor() as i32).max(0) as usize,
-                v
-            );
-            s.trim_end_matches('0').trim_end_matches('.').to_string()
+            format!("{:.1}", v)
         }
     } else {
         perl_num_to_string(v)
@@ -866,6 +907,8 @@ fn apply_other(other: Other, val: &Scalar) -> Option<String> {
         // to `Unknown (n)`.
         Other::MinoltaLens => None,
         Other::ShutterMechanical => Some(format!("Mechanical ({})", val.text())),
+        Other::RoundHalfUp => Some(perl_num_to_string((val.num() + 0.5).floor())),
+        Other::Identity => Some(val.text()),
         Other::ExifParameter => Some({
             let n = val.num();
             if n > 65520.0 {
@@ -895,6 +938,21 @@ fn apply_pc(pc: Pc, val: Scalar, print_hex: bool) -> String {
         Pc::MmFixed1 => format!("{:.1} mm", val.num()),
         Pc::Fixed(n) => format!("{:.*}", n, val.num()),
         Pc::Width3 => format!("{:3}", val.num() as i64),
+        Pc::ZeroPad(n) => {
+            let v = val.num() as i64;
+            if v < 0 {
+                format!("-{:0width$}", -v, width = n)
+            } else {
+                format!("{:0width$}", v, width = n)
+            }
+        }
+        Pc::Fixed0OrAuto => {
+            if val.truthy() {
+                format!("{:.0}", val.num())
+            } else {
+                "Auto".to_string()
+            }
+        }
         Pc::Fixed1OrVal => {
             if val.truthy() {
                 format!("{:.1}", val.num())
@@ -1059,7 +1117,10 @@ fn process_depth(
             continue;
         };
         if tag.mask != 0 {
-            val = Scalar::Num(((val.num() as i64) & tag.mask as i64) as f64);
+            // `($val & $mask) >> $BitShift`, where ExifTool derives BitShift as
+            // the index of the mask's lowest set bit (ExifTool.pm:5917).
+            let masked = (val.num() as i64) & tag.mask as i64;
+            val = Scalar::Num((masked >> tag.mask.trailing_zeros()) as f64);
         }
         // ExifTool's `Hidden` only suppresses verbose output, never
         // extraction, so it is not represented here: every hidden tag in these
