@@ -43,6 +43,24 @@ env:
 # Sizes below were chosen from measured step timings, not job wall-clock --
 # a slow job is not necessarily a CPU-bound one. See the per-job notes.
 #
+# The Build & Test workload swept across sizes by
+# .github/workflows/runner-sizing-benchmark.yml; seconds, cold cache, mean of
+# two runs:
+#
+#         build   nextest   clippy   total   gain vs prev   cost vs prev
+#   2x      188      381       30      599        --             --
+#   4x      118      202       20      339      1.77x           2x
+#   8x       97      122       14      233      1.46x           2x
+#  16x       91       94       16      200      1.16x           2x
+#  32x       96       80       12      187      1.07x           2x
+#
+# 8x is the knee. Each doubling past it costs 2x and returns well under
+# 1.2x, because `cargo build --release` saturates completely at 8 cores
+# (97 -> 91 -> 96s is flat within noise) and it is the largest single
+# component. Only nextest keeps scaling, and not enough to carry the total.
+#
+# Re-run the benchmark before changing these; do not adjust by intuition.
+#
 # NOTE: "Lint & Audit" and "Build & Test" are required status checks. Changing
 # `runs-on` is safe because it does not change the check name; renaming or
 # splitting these jobs is NOT safe -- a required check that never reports
