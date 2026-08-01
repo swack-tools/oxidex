@@ -165,6 +165,7 @@ fn validate_signature(reader: &dyn FileReader) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::TagValue;
     use crate::test_support::TestReader;
 
     /// Create a minimal QuickTime file structure with user data
@@ -336,6 +337,21 @@ mod tests {
         } else {
             panic!("Expected ItemList:Artist to be a string");
         }
+    }
+
+    #[test]
+    fn test_compatible_brands_ignore_null_padding() {
+        let data = create_test_itunes_file();
+        let reader = TestReader::new(data);
+
+        let metadata = parse_quicktime_metadata(&reader).unwrap();
+        assert_eq!(
+            metadata.get("QuickTime:CompatibleBrands"),
+            Some(&TagValue::Array(vec![
+                TagValue::String("M4A ".to_string()),
+                TagValue::String("mp42".to_string()),
+            ]))
+        );
     }
 
     #[test]
