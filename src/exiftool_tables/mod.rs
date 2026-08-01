@@ -37,10 +37,12 @@
 //! ```
 
 pub mod binary_tables;
+pub mod runtime;
 
 pub use binary_tables::{
     ALL_BINARY_TABLES, BinaryTable, EXIFTOOL_VERSION, ExprId, Field, Fmt, PrintConv,
 };
+pub use runtime::{DecodedField, DecodedValue, decode_binary_table};
 
 /// Look up a generated table by ExifTool module and table name,
 /// e.g. `("Canon", "CameraSettings")`.
