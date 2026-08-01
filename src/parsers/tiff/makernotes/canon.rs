@@ -879,6 +879,9 @@ const AF_INFO_VARIABLE_START: usize = 8;
 // ```
 const AF_INFO2_AF_AREA_MODE: usize = 1;
 const AF_INFO2_NUM_AF_POINTS: usize = 2;
+const AF_INFO2_VALID_AF_POINTS: usize = 3;
+const AF_INFO2_CANON_IMAGE_WIDTH: usize = 4;
+const AF_INFO2_CANON_IMAGE_HEIGHT: usize = 5;
 const AF_INFO2_AF_IMAGE_WIDTH: usize = 6;
 const AF_INFO2_AF_IMAGE_HEIGHT: usize = 7;
 /// First variable-length slot of `%Canon::AFInfo2` (Perl key 8, `AFAreaWidths`).
@@ -4207,9 +4210,14 @@ fn parse_canon_makernote_impl_with_model(
                 if let Some(array) =
                     extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
                 {
+                    // `ProcessSerialData` (Canon.pm:10518) walks the record slot by slot
+                    // and calls `FoundTag` for every slot that is present, gated only on
+                    // `last if $pos + $len > $size` -- it never inspects the value. A slot
+                    // that exists is reported whatever it holds, zero included, so the
+                    // only condition here is "is the slot inside the record".
                     let num_points = array.get(AF_INFO_NUM_AF_POINTS).copied().unwrap_or(0);
-                    if num_points > 0 {
-                        tags.insert("Canon:NumAFPoints".to_string(), num_points.to_string());
+                    if let Some(&points) = array.get(AF_INFO_NUM_AF_POINTS) {
+                        tags.insert("Canon:NumAFPoints".to_string(), points.to_string());
                     }
 
                     // ValidAFPoints (key 1), CanonImageWidth (key 2), CanonImageHeight
@@ -4224,14 +4232,10 @@ fn parse_canon_makernote_impl_with_model(
                         tags.insert("Canon:CanonImageHeight".to_string(), height.to_string());
                     }
 
-                    if let Some(&width) = array.get(AF_INFO_AF_IMAGE_WIDTH)
-                        && width > 0
-                    {
+                    if let Some(&width) = array.get(AF_INFO_AF_IMAGE_WIDTH) {
                         tags.insert("Canon:AFImageWidth".to_string(), width.to_string());
                     }
-                    if let Some(&height) = array.get(AF_INFO_AF_IMAGE_HEIGHT)
-                        && height > 0
-                    {
+                    if let Some(&height) = array.get(AF_INFO_AF_IMAGE_HEIGHT) {
                         tags.insert("Canon:AFImageHeight".to_string(), height.to_string());
                     }
                     if let Some(&area_width) = array.get(AF_INFO_AF_AREA_WIDTH) {
@@ -4281,19 +4285,31 @@ fn parse_canon_makernote_impl_with_model(
                         tags.insert("Canon:AFAreaMode".to_string(), AF_AREA_MODE.decode(mode));
                     }
 
+                    // Same `ProcessSerialData` rule as AFInfo above: present slots are
+                    // reported unconditionally. Keys 3/4/5 were transcribed into the
+                    // comment on the index constants but never read, so ValidAFPoints,
+                    // CanonImageWidth and CanonImageHeight went missing on every body
+                    // that writes AFInfo2 (e.g. the 1D Mk III, where ExifTool prints
+                    // `ValidAFPoints: 45`, `CanonImageWidth: 3888`,
+                    // `CanonImageHeight: 2592`).
                     let num_points = array.get(AF_INFO2_NUM_AF_POINTS).copied().unwrap_or(0);
-                    if num_points > 0 {
-                        tags.insert("Canon:NumAFPoints".to_string(), num_points.to_string());
+                    if let Some(&points) = array.get(AF_INFO2_NUM_AF_POINTS) {
+                        tags.insert("Canon:NumAFPoints".to_string(), points.to_string());
+                    }
+                    if let Some(&valid_points) = array.get(AF_INFO2_VALID_AF_POINTS) {
+                        tags.insert("Canon:ValidAFPoints".to_string(), valid_points.to_string());
+                    }
+                    if let Some(&width) = array.get(AF_INFO2_CANON_IMAGE_WIDTH) {
+                        tags.insert("Canon:CanonImageWidth".to_string(), width.to_string());
+                    }
+                    if let Some(&height) = array.get(AF_INFO2_CANON_IMAGE_HEIGHT) {
+                        tags.insert("Canon:CanonImageHeight".to_string(), height.to_string());
                     }
 
-                    if let Some(&width) = array.get(AF_INFO2_AF_IMAGE_WIDTH)
-                        && width > 0
-                    {
+                    if let Some(&width) = array.get(AF_INFO2_AF_IMAGE_WIDTH) {
                         tags.insert("Canon:AFImageWidth".to_string(), width.to_string());
                     }
-                    if let Some(&height) = array.get(AF_INFO2_AF_IMAGE_HEIGHT)
-                        && height > 0
-                    {
+                    if let Some(&height) = array.get(AF_INFO2_AF_IMAGE_HEIGHT) {
                         tags.insert("Canon:AFImageHeight".to_string(), height.to_string());
                     }
 

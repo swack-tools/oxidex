@@ -424,6 +424,44 @@ fn read_leica_string(values: LeicaValues<'_>, value_offset: u32, count: u32) -> 
     Some(String::from_utf8_lossy(text).trim_end().to_string())
 }
 
+/// Reads an ASCII entry of the `%Panasonic::Leica4` sub-directories.
+///
+/// The value field of a TIFF entry holds the bytes themselves whenever they fit
+/// in four (Exif.pm:6502 sets `$valuePtr = $entry + 8` and only follows the
+/// pointer `if ($size > 4)`). Treating the field as an offset regardless read
+/// the wrong bytes for every short string: on `LeicaM_Monochrom.jpg`,
+/// `SerialNumber` is `string[2]` = `35 00` stored inline, and following `0x35`
+/// as an offset produced no tag at all where ExifTool prints `5`; `UserProfile`
+/// is `string[1]` = `00`, an empty string ExifTool prints as `""`.
+fn l4_string(
+    format: u16,
+    count: u32,
+    value_offset: u32,
+    full_data: &[u8],
+    byte_order: ByteOrder,
+) -> Option<String> {
+    if format != 2 || count == 0 {
+        return None;
+    }
+    let len = count as usize;
+    let owned;
+    let bytes: &[u8] = if len <= 4 {
+        owned = match byte_order {
+            ByteOrder::LittleEndian => value_offset.to_le_bytes(),
+            ByteOrder::BigEndian => value_offset.to_be_bytes(),
+        };
+        &owned[..len]
+    } else {
+        let start = value_offset as usize;
+        full_data.get(start..start.checked_add(len)?)?
+    };
+    Some(
+        String::from_utf8_lossy(bytes)
+            .trim_end_matches('\0')
+            .to_string(),
+    )
+}
+
 /// Byte length of one component of a TIFF field type, or `0` for a type this
 /// parser never reads (the entry is skipped either way).
 fn leica_type_size(field_type: u16) -> usize {
@@ -1230,55 +1268,26 @@ impl LeicaMakerNoteParser {
                     }
                 }
                 l4_subdir::USER_PROFILE => {
-                    // String value
-                    if format == 2 && count > 0 {
-                        let str_offset = value_offset as usize;
-                        if str_offset + count as usize <= full_data.len() {
-                            if let Ok(s) = std::str::from_utf8(
-                                &full_data[str_offset..str_offset + count as usize],
-                            ) {
-                                tags.insert(
-                                    "Leica:UserProfile".to_string(),
-                                    s.trim_end_matches('\0').to_string(),
-                                );
-                            }
-                        }
+                    if let Some(s) = l4_string(format, count, value_offset, full_data, byte_order) {
+                        tags.insert("Leica:UserProfile".to_string(), s);
                     }
                 }
                 l4_subdir::SERIAL_NUMBER => {
-                    // String value
-                    if format == 2 && count > 0 {
-                        let str_offset = value_offset as usize;
-                        if str_offset + count as usize <= full_data.len() {
-                            if let Ok(s) = std::str::from_utf8(
-                                &full_data[str_offset..str_offset + count as usize],
-                            ) {
-                                // ExifTool masks serial numbers with asterisks
-                                let serial = s.trim_end_matches('\0');
-                                let masked = if serial.len() > 0 {
-                                    "*".repeat(serial.len().min(7))
-                                } else {
-                                    serial.to_string()
-                                };
-                                tags.insert("Leica:SerialNumber".to_string(), masked);
-                            }
-                        }
+                    // `%Panasonic::Leica4` 0x3103 (Panasonic.pm:1862) is
+                    // `Name => 'SerialNumber', Writable => 'string'` with no PrintConv,
+                    // so ExifTool prints the stored string verbatim. This used to
+                    // overwrite it with `"*".repeat(len.min(7))` under the comment
+                    // "ExifTool masks serial numbers with asterisks", which ExifTool
+                    // does not do anywhere. The claim looked true only because the one
+                    // M9 sample on hand has a serial that was redacted to "*******" in
+                    // the file itself; on LeicaM_Monochrom.jpg ExifTool prints `5`.
+                    if let Some(s) = l4_string(format, count, value_offset, full_data, byte_order) {
+                        tags.insert("Leica:SerialNumber".to_string(), s);
                     }
                 }
                 l4_subdir::FIRMWARE_VERSION => {
-                    // String value
-                    if format == 2 && count > 0 {
-                        let str_offset = value_offset as usize;
-                        if str_offset + count as usize <= full_data.len() {
-                            if let Ok(s) = std::str::from_utf8(
-                                &full_data[str_offset..str_offset + count as usize],
-                            ) {
-                                tags.insert(
-                                    "Leica:FirmwareVersion".to_string(),
-                                    s.trim_end_matches('\0').to_string(),
-                                );
-                            }
-                        }
+                    if let Some(s) = l4_string(format, count, value_offset, full_data, byte_order) {
+                        tags.insert("Leica:FirmwareVersion".to_string(), s);
                     }
                 }
                 l4_subdir::BASE_ISO => {
