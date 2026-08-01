@@ -4642,6 +4642,20 @@ fn convert_x3f_property_value(property: &str, value: &str) -> Option<String> {
         // SigmaRaw.pm:154  PrintConv => 'sprintf("%.1f",$val)'
         "APERTURE" => Some(format!("{:.1}", value.parse::<f64>().ok()?)),
 
+        // SigmaRaw.pm:202-205  FLENGTH => PrintConv => 'sprintf("%.1f mm",$val)'
+        // SigmaRaw.pm:206-209  FLEQ35MM => PrintConv => 'sprintf("%.1f mm",$val)'
+        //
+        // Note FLEQ35MM's PrintConv is NOT the EXIF FocalLengthIn35mmFormat's
+        // `"$val mm"` (Exif.pm:2842): SigmaRaw forces a decimal on both, which
+        // is why `exiftool -G1 -s Sigma.x3f` prints `30.0 mm` and `51.0 mm`
+        // where the values themselves are whole numbers.
+        "FLENGTH" | "FLEQ35MM" => Some(format!("{:.1} mm", value.parse::<f64>().ok()?)),
+
+        // SigmaRaw.pm:219-222  IMAGERTEMP => PrintConv => '"$val C"'
+        // (`[SigmaRaw] SensorTemperature : 20 C` on SigmaDP2.x3f, where
+        // oxidex emitted the bare `20`.)
+        "IMAGERTEMP" => Some(format!("{} C", value)),
+
         // SigmaRaw.pm:263  ValueConv => 'ConvertUnixTime($val)'
         "TIME" => format_unix_time_exiftool(value.parse::<i64>().ok()?),
 

@@ -52,21 +52,17 @@ pub fn parse_ducky_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<()
             }
             0x0002 => {
                 // Comment
-                if let Ok(comment) = std::str::from_utf8(value_data) {
-                    metadata.insert(
-                        "Ducky:Comment".to_string(),
-                        TagValue::String(comment.to_string()),
-                    );
-                }
+                metadata.insert(
+                    "Ducky:Comment".to_string(),
+                    TagValue::String(decode_ducky_text(value_data)),
+                );
             }
             0x0003 => {
                 // Copyright
-                if let Ok(copyright) = std::str::from_utf8(value_data) {
-                    metadata.insert(
-                        "Ducky:Copyright".to_string(),
-                        TagValue::String(copyright.to_string()),
-                    );
-                }
+                metadata.insert(
+                    "Ducky:Copyright".to_string(),
+                    TagValue::String(decode_ducky_text(value_data)),
+                );
             }
             _ => {
                 // Unknown tag
@@ -81,6 +77,36 @@ pub fn parse_ducky_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<()
     }
 
     Ok(())
+}
+
+/// Decodes a Ducky text value: a 4-byte character count followed by UTF-16
+/// big-endian text.
+///
+/// APP12.pm gives both text tags in the Ducky table the same ValueConv --
+/// `'$self->Decode(substr($val,4),"UTF16","MM")'` (APP12.pm:117 Comment,
+/// APP12.pm:126 Copyright), with the comment "(ignore 4-byte character count
+/// at start of value)". Reading the raw bytes as UTF-8 instead returned the
+/// count bytes and an interleaved NUL before every character, so
+/// `Ducky:Copyright` on ExifTool.jpg came out as
+/// `"\0\0\0\x1a\0C\0o\0p..."` where ExifTool prints
+/// `Copyright 2004 Phil Harvey`.
+///
+/// Falls back to a NUL-trimmed UTF-8 read for a value too short to carry the
+/// count, so a malformed segment degrades rather than vanishing.
+fn decode_ducky_text(value_data: &[u8]) -> String {
+    let Some(text_bytes) = value_data.get(4..) else {
+        return String::from_utf8_lossy(value_data)
+            .trim_end_matches('\0')
+            .to_string();
+    };
+
+    let units: Vec<u16> = text_bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+        .take_while(|&unit| unit != 0)
+        .collect();
+
+    String::from_utf16_lossy(&units)
 }
 
 /// Parse JPEG Comment segment (COM, marker 0xFFFE)

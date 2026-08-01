@@ -317,10 +317,16 @@ pub(crate) fn parse_info_chunk(
                 }
             };
 
-            metadata.insert(
-                tag_name.to_string(),
-                TagValue::new_string(tag_value.to_string()),
-            );
+            // RIFF.pm:850-855 gives ICRD a ValueConv of `$_=$val; s/-/:/g; $_`
+            // before ConvertDateTime, so a date written `2005-08-08` prints as
+            // `2005:08:08`. Without it RIFF.wav reported the ISO spelling.
+            let tag_value = if tag_id == b"ICRD" {
+                tag_value.replace('-', ":")
+            } else {
+                tag_value.to_string()
+            };
+
+            metadata.insert(tag_name.to_string(), TagValue::new_string(tag_value));
         }
 
         // Move to next tag (align to even byte boundary)

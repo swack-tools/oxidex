@@ -212,14 +212,47 @@ const_decoder!(pub
     ]
 );
 
-// Decodes Fujifilm flash mode to human-readable string
+// Decodes Fujifilm flash mode to human-readable string.
+//
+// FujiFilm.pm:277-307, `0x1010 => { Name => 'FujiFlashMode', PrintHex => 1,
+// PrintConv => { ... } }`, transcribed verbatim. Two things this table used to
+// get wrong:
+//
+//   * value 3 is spelled `'Red-eye reduction'` (FujiFilm.pm:285) with a
+//     lowercase "reduction". FujiFilm.jpg prints exactly that under
+//     `exiftool -G1 -s`; oxidex printed `Red-eye Reduction`. (Nikon.pm:7157
+//     is where the title-cased spelling lives, and it belongs to a different
+//     tag.)
+//   * everything above 4 was missing, so an X-T2/GFX-era body reported
+//     `Unknown (32768)` where ExifTool prints `Not Attached`
+//     (FujiFilm.pm:289, verified on FujiFilmGFX100II.jpg).
 const_decoder!(pub
     DECODE_FLASH_MODE, i32, [
         (0, "Auto"),
         (1, "On"),
         (2, "Off"),
-        (3, "Red-eye Reduction"),
+        (3, "Red-eye reduction"),
         (4, "External"),
+        (16, "Commander"),
+        (0x8000, "Not Attached"),
+        (0x8120, "TTL"),
+        (0x8320, "TTL Auto - Did not fire"),
+        (0x9840, "Manual"),
+        (0x9860, "Flash Commander"),
+        (0x9880, "Multi-flash"),
+        (0xa920, "1st Curtain (front)"),
+        (0xaa20, "TTL Slow - 1st Curtain (front)"),
+        (0xab20, "TTL Auto - 1st Curtain (front)"),
+        (0xad20, "TTL - Red-eye Flash - 1st Curtain (front)"),
+        (0xae20, "TTL Slow - Red-eye Flash - 1st Curtain (front)"),
+        (0xaf20, "TTL Auto - Red-eye Flash - 1st Curtain (front)"),
+        (0xc920, "2nd Curtain (rear)"),
+        (0xca20, "TTL Slow - 2nd Curtain (rear)"),
+        (0xcb20, "TTL Auto - 2nd Curtain (rear)"),
+        (0xcd20, "TTL - Red-eye Flash - 2nd Curtain (rear)"),
+        (0xce20, "TTL Slow - Red-eye Flash - 2nd Curtain (rear)"),
+        (0xcf20, "TTL Auto - Red-eye Flash - 2nd Curtain (rear)"),
+        (0xe920, "High Speed Sync (HSS)"),
     ]
 );
 
@@ -1024,12 +1057,16 @@ impl MakerNoteParser for FujifilmParser {
                 }
 
                 // Panorama tags
+                //
+                // FujiFilm.pm:637-640 declares 0x1153 as a bare
+                // `{ Name => 'PanoramaAngle', Writable => 'int16u' }` -- no
+                // PrintConv, so ExifTool prints the number and nothing else
+                // (`[FujiFilm] PanoramaAngle : 360` on
+                // FujiFilmFinePixS9200S9250S9150.jpg). The " deg" suffix was
+                // oxidex's own invention.
                 FUJI_PANORAMA_ANGLE => {
                     let value = entry.value_offset;
-                    tags.insert(
-                        "MakerNotes:PanoramaAngle".to_string(),
-                        format!("{} deg", value),
-                    );
+                    tags.insert("MakerNotes:PanoramaAngle".to_string(), value.to_string());
                 }
 
                 FUJI_PANORAMA_DIRECTION => {

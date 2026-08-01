@@ -148,7 +148,7 @@ pub fn panasonic_registry() -> TagRegistry {
         // Internal/diagnostic tags (0x8xxx range)
         // ====================================================================
         .register_integer_tag(0x8000, "MakerNoteVersion", None)
-        .register_integer_tag(0x8001, "SceneMode", None)
+        .register_i32(0x8001, "SceneMode", decode_scene_mode)
         .register_integer_tag(0x8004, "WBRedLevel", None)
         .register_integer_tag(0x8005, "WBGreenLevel", None)
         .register_integer_tag(0x8006, "WBBlueLevel", None)
@@ -157,6 +157,20 @@ pub fn panasonic_registry() -> TagRegistry {
         .register_enum_tag_required(0x8009, "TextStamp4", &TEXT_STAMP)
         .register_integer_tag(0x8010, "BabyAge2", None)
         .register_enum_tag_required(0x8012, "Transform2", &ON_OFF_I32)
+}
+
+/// Panasonic SceneMode (0x8001).
+///
+/// Panasonic.pm:1531-1539 declares it as
+/// `PrintConv => { 0 => 'Off', %shootingMode }` -- the same table
+/// `ShootingMode` (0x001F) uses, with a zero entry prepended. The tag was
+/// registered with no decoder at all, so `Panasonic.rw2` reported the raw `0`
+/// where `exiftool -G1 -s` prints `Off`.
+fn decode_scene_mode(value: i32) -> String {
+    if value == 0 {
+        return "Off".to_string();
+    }
+    SHOOTING_MODE.decode(value)
 }
 
 // ============================================================================

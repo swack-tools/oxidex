@@ -619,6 +619,52 @@ pub fn perl_g(v: f64, sig_digits: i32) -> String {
     trim_insignificant_zeros(&format!("{:.*}", decimals, v))
 }
 
+/// Significant digits ExifTool keeps when it reads a 64-bit rational.
+///
+/// `GetRational64u`/`GetRational64s` (ExifTool.pm:6091-6097 and :6081-6090)
+/// both end in `return RoundFloat($ratNumer / $ratDenom, 10)`, and
+/// `RoundFloat` (ExifTool.pm:5937-5941) is nothing but
+/// `sprintf("%.${sig}g", $val)`. So a rational that reaches ExifTool's output
+/// without a PrintConv is printed as `%.10g` of its quotient -- which is why
+/// `exiftool -G1 -s` prints `6514.65798` for 6000000/921 and `0.2700000107`
+/// for GPSSpeed, rather than a full-precision expansion.
+///
+/// (The 32-bit rational readers use 7 instead; oxidex has no 32-bit rational
+/// path, so only the 64-bit width is defined here.)
+pub const EXIFTOOL_RATIONAL_SIG_DIGITS: i32 = 10;
+
+/// Renders a 64-bit rational's quotient the way ExifTool does when the tag
+/// carries no PrintConv: `RoundFloat($val, 10)`.
+///
+/// The one place this departs from [`perl_g`] is the sign of zero. `perl_g`
+/// collapses `-0.0` to `"0"`, but C's -- and therefore Perl's -- `%g` keeps
+/// the sign, and ExifTool's output depends on it: OlympusOM-1.jpg stores
+/// `AmbientTemperature` as a signed rational that divides to negative zero and
+/// `exiftool -G1 -s` prints `-0 C`, while `Acceleration` on the same file is
+/// an UNSIGNED 0/4294967295 and prints `0`.
+///
+/// # Examples
+///
+/// ```
+/// use oxidex::core::formatters::numeric_precision::exiftool_rational_number;
+///
+/// // 6000000/921, CanonRaw.cr3's FocalPlaneXResolution
+/// assert_eq!(exiftool_rational_number(6000000.0 / 921.0), "6514.65798");
+/// // 0.2700000107..., Apple_iPhone13Pro.jpg's GPSSpeed
+/// assert_eq!(exiftool_rational_number(0.27000001072883606), "0.2700000107");
+/// // Trailing zeros are suppressed, so WhitePoint stays short
+/// assert_eq!(exiftool_rational_number(0.3127), "0.3127");
+/// // The sign of zero survives
+/// assert_eq!(exiftool_rational_number(0.0), "0");
+/// assert_eq!(exiftool_rational_number(-0.0), "-0");
+/// ```
+pub fn exiftool_rational_number(value: f64) -> String {
+    if value == 0.0 && value.is_sign_negative() {
+        return "-0".to_string();
+    }
+    perl_g(value, EXIFTOOL_RATIONAL_SIG_DIGITS)
+}
+
 /// Drops the trailing zeros `%g` suppresses, and the bare point left behind.
 fn trim_insignificant_zeros(s: &str) -> String {
     if !s.contains('.') {

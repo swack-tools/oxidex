@@ -9,6 +9,7 @@ use super::registries::{
     lookup_in_table,
 };
 use crate::core::TagValue;
+use crate::core::formatters::perl_number;
 use crate::error::{ExifToolError, Result};
 use std::collections::HashMap;
 
@@ -446,9 +447,19 @@ fn parse_measurement(data: &[u8]) -> Result<HashMap<String, String>> {
 
     if data.len() >= 32 {
         let flare = read_u16fixed16(data, 28)?;
-        // Store raw percentage value with 5 decimal places; % suffix is applied
-        // by exiftool_compat when output formatting is requested
-        result.insert("flare".to_string(), format!("{:.5}", flare * 100.0));
+        // ICC_Profile.pm:874-878 declares MeasurementFlare as
+        // `Format => 'fixed32u'` with `PrintConv => '$val*100 . "%"'`, and the
+        // fixed32u reader drops the insignificant digits before the PrintConv
+        // ever sees them: `int((Get32u(...) / 0x10000) * 1e5 + 0.5) / 1e5`
+        // (ExifTool.pm:6116-6121). ExifTool.tif stores 0x0000028f, so
+        // 655/65536 = 0.0099945068... rounds to 0.00999 and prints `0.999%`;
+        // carrying five decimals of the ALREADY-multiplied percentage instead
+        // printed `0.99945%`.
+        //
+        // Round at the fixed32u stage, then multiply, then let the number
+        // print as Perl would (trailing zeros suppressed).
+        let rounded = (flare * 1e5 + 0.5).floor() / 1e5;
+        result.insert("flare".to_string(), perl_number(rounded * 100.0));
     }
 
     if data.len() >= 36 {

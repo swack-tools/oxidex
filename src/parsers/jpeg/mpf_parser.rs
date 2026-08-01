@@ -217,7 +217,8 @@ fn parse_mp_index_ifd(
         match tag_id {
             MPF_VERSION => {
                 // MPFVersion is typically 4 bytes representing "0100" (version 1.0)
-                let version = parse_mpf_version(reader, value_count, value_or_offset)?;
+                let version =
+                    parse_mpf_version(reader, entry_offset + 8, value_count, value_or_offset)?;
                 metadata.insert("MPF:MPFVersion".to_string(), TagValue::String(version));
             }
             NUMBER_OF_IMAGES => {
@@ -292,22 +293,36 @@ fn parse_mp_index_ifd(
 /// The version is stored as 4 ASCII characters (e.g., "0100" for version 1.0).
 /// Per ExifTool compatibility, we output the raw 4-character string as-is.
 ///
+/// MPF.pm declares the tag with no format override and no PrintConv
+/// (`0xb000 => 'MPFVersion'`, MPF.pm:34), so ExifTool prints the four
+/// UNDEFINED bytes exactly as they sit in the file. Those bytes are
+/// characters, not an integer, and must never be run through the IFD's byte
+/// order: reading the value field as a `u32` and re-serializing it with
+/// `to_le_bytes()` reversed every big-endian ("MM") MPF segment, which is
+/// every real one -- `0100` came back as `0010`. Read the value field's raw
+/// bytes instead, which is byte-order independent by construction.
+///
 /// # Arguments
 ///
 /// * `reader` - EndianReader for accessing the data
+/// * `value_field_offset` - Offset of the IFD entry's 4-byte value/offset field
 /// * `value_count` - Number of bytes in the version field
 /// * `value_or_offset` - Either the inline value or offset to data
 fn parse_mpf_version(
     reader: &EndianReader,
+    value_field_offset: usize,
     value_count: usize,
     value_or_offset: u32,
 ) -> Result<String, String> {
     // Version is 4 ASCII bytes: "0100" = version 1.0
     // ExifTool outputs the raw format "0100", not "1.0"
     if value_count <= 4 {
-        // Value is inline in the 4-byte field
-        let bytes = value_or_offset.to_le_bytes();
-        if let Ok(s) = std::str::from_utf8(&bytes[..value_count]) {
+        // Value is stored inline, left-justified, in the entry's 4-byte
+        // value field -- read those bytes directly rather than decoding an
+        // integer and re-encoding it in some other order.
+        if let Some(bytes) = reader.bytes_at(value_field_offset, value_count)
+            && let Ok(s) = std::str::from_utf8(bytes)
+        {
             // Return raw version string (e.g., "0100") for ExifTool compatibility
             return Ok(s.trim_end_matches('\0').to_string());
         }
@@ -835,6 +850,62 @@ mod tests {
         data.extend_from_slice(&0u16.to_le_bytes());
 
         data
+    }
+
+    /// Same minimal segment as [`create_minimal_mpf_segment`] but with the
+    /// big-endian ("MM") TIFF header every real MPF segment actually uses
+    /// (verified on Apple iPhone 11/13/14/15 samples). The all-little-endian
+    /// fixture above could never catch a byte-order bug in the version field:
+    /// a `u32` read little-endian and re-serialized with `to_le_bytes()`
+    /// round-trips exactly, so the reversal only appeared under "MM".
+    fn create_minimal_mpf_segment_big_endian() -> Vec<u8> {
+        let mut data = Vec::new();
+
+        data.extend_from_slice(b"MPF\0");
+
+        data.extend_from_slice(b"MM"); // Big-endian byte order mark
+        data.extend_from_slice(&42u16.to_be_bytes());
+        data.extend_from_slice(&8u32.to_be_bytes()); // IFD offset
+
+        // MP Index IFD at offset 8: 2 entries
+        data.extend_from_slice(&2u16.to_be_bytes());
+
+        // Entry 1: MPFVersion (0xB000), UNDEFINED[4], inline "0100"
+        data.extend_from_slice(&MPF_VERSION.to_be_bytes());
+        data.extend_from_slice(&7u16.to_be_bytes()); // Type: UNDEFINED
+        data.extend_from_slice(&4u32.to_be_bytes()); // Count
+        data.extend_from_slice(b"0100"); // Value: "0100"
+
+        // Entry 2: NumberOfImages (0xB001), LONG
+        data.extend_from_slice(&NUMBER_OF_IMAGES.to_be_bytes());
+        data.extend_from_slice(&4u16.to_be_bytes());
+        data.extend_from_slice(&1u32.to_be_bytes());
+        data.extend_from_slice(&2u32.to_be_bytes());
+
+        // Next IFD offset (0 = no more IFDs)
+        data.extend_from_slice(&0u32.to_be_bytes());
+
+        data
+    }
+
+    /// `exiftool -G1 -s` on every MPF-bearing sample in the corpus prints
+    /// `[MPF0] MPFVersion : 0100`. MPF.pm:34 declares the tag as a bare
+    /// `0xb000 => 'MPFVersion'` -- no Format, no PrintConv -- so the four
+    /// UNDEFINED bytes print verbatim and must not be byte-swapped.
+    #[test]
+    fn test_mpf_version_not_byte_swapped_in_big_endian_segment() {
+        let data = create_minimal_mpf_segment_big_endian();
+        let mut metadata = MetadataMap::new();
+
+        let result = parse_mpf_segment(&data, &mut metadata);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result);
+
+        assert_eq!(
+            metadata.get_string("MPF:MPFVersion"),
+            Some("0100"),
+            "MPFVersion must print the raw ASCII bytes; '0010' is the \
+             reversal that comes from decoding them as an integer"
+        );
     }
 
     #[test]
