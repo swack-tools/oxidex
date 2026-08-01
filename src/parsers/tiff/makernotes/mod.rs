@@ -36,7 +36,6 @@ pub mod ge;
 pub mod hp;
 pub mod jvc;
 pub mod kodak;
-pub mod leaf;
 pub mod lens_data;
 pub mod minolta;
 /// DSLR-A100 binary tables, generated from ExifTool's Minolta module

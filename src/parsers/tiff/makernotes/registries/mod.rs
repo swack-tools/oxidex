@@ -39,7 +39,6 @@ pub mod ricoh; // Ricoh migration (Batch 5, Sub-Batch 5.1)
 // resolved from an id->name registry over the payload alone)
 
 // Sub-Batch 5.2: Medium Format and Specialty Manufacturers
-pub mod leaf; // Leaf migration (Batch 5, Sub-Batch 5.2)
 pub mod parrot;
 pub mod phaseone; // Phase One migration (Batch 5, Sub-Batch 5.2)
 pub mod red; // RED migration (Batch 5, Sub-Batch 5.2) // Parrot migration (Batch 5, Sub-Batch 5.2)
@@ -89,7 +88,6 @@ pub use kodak::kodak_registry;
 pub use ricoh::ricoh_registry;
 
 // Batch 5 Sub-Batch 5.2 exports
-pub use leaf::leaf_registry;
 pub use parrot::parrot_registry;
 pub use phaseone::phaseone_registry;
 pub use red::red_registry;
