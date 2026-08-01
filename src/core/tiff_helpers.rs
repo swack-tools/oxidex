@@ -4,7 +4,7 @@
 //! processing tags, and handling sub-IFDs (EXIF, GPS), MakerNotes, and GeoTiff.
 
 use super::{FileReader, MetadataMap, TagValue};
-use crate::core::operations_helpers::read_u32;
+use crate::core::operations_helpers::{read_u16, read_u32};
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
 use crate::parsers::tiff::geotiff_parser;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
@@ -39,6 +39,9 @@ const RELATED_IMAGE_HEIGHT: u16 = 0x1002;
 /// InteroperabilityIFDPointer (0xA005): Offset to the Interoperability IFD.
 /// Found in the EXIF IFD, points to a sub-IFD containing interop tags.
 const INTEROPERABILITY_IFD_POINTER: u16 = 0xA005;
+
+/// MakerNote (0x927C): the manufacturer's private block in the EXIF IFD.
+const MAKERNOTE: u16 = 0x927C;
 
 // Image-carrying tags some cameras (Samsung SPH-A800/A940, Canon XL H1) write
 // into the Interoperability IFD alongside - or instead of - the DCF tags.
@@ -463,7 +466,7 @@ pub fn parse_exif_subifd(
             let bytes = raw_bytes.as_ref();
 
             // Check for MakerNote in EXIF IFD (tag 0x927C)
-            if *tag_id == 0x927C {
+            if *tag_id == MAKERNOTE {
                 exif_makernote_data = Some(bytes);
             }
 
@@ -483,8 +486,10 @@ pub fn parse_exif_subifd(
             metadata.insert(tag_name, tag_value);
         }
 
-        // Second pass: Parse Canon MakerNote if found in EXIF IFD
-        if let Some(makernote_bytes) = exif_makernote_data {
+        // Second pass: parse the MakerNote found in the EXIF IFD.
+        if let Some(makernote_bytes) = exif_makernote_data
+            && !parse_sigma_makernote_if_sigma(reader, offset, byte_order, tiff_base, metadata)
+        {
             parse_makernote_if_canon(makernote_bytes, byte_order, metadata);
         }
 
@@ -949,6 +954,75 @@ pub fn parse_ifd1_thumbnail(
         return;
     }
     metadata.insert("IFD1:ThumbnailImage", TagValue::new_binary(bytes.to_vec()));
+}
+
+/// Decodes a Sigma/Foveon MakerNote, and reports whether it did.
+///
+/// Every other make is decoded from the MakerNote payload alone, but a Sigma
+/// entry stores its value offset relative to the enclosing TIFF header, so a
+/// decoder holding only the payload cannot read any value longer than four
+/// bytes -- which on a real file is every one of them. `makernotes::sigma`
+/// therefore takes the TIFF block plus the payload's position inside it, the
+/// same pair the X3F preview path passes it.
+///
+/// Returns `false` when the make is not Sigma, when the EXIF IFD carries no
+/// MakerNote entry, or when the TIFF block cannot be read whole, leaving the
+/// caller to fall back to the payload-only dispatcher.
+fn parse_sigma_makernote_if_sigma(
+    reader: &dyn FileReader,
+    exif_ifd_offset: u64,
+    byte_order: ByteOrder,
+    tiff_base: u64,
+    metadata: &mut MetadataMap,
+) -> bool {
+    let make = metadata.get_string("IFD0:Make").unwrap_or("");
+    if !matches!(
+        make.trim().to_ascii_lowercase().as_str(),
+        "sigma" | "sigma corporation" | "foveon"
+    ) {
+        return false;
+    }
+
+    let Some(value_offset) = ifd_entry_value_offset(reader, exif_ifd_offset, byte_order, MAKERNOTE)
+    else {
+        return false;
+    };
+    let Ok(size) = usize::try_from(reader.size()) else {
+        return false;
+    };
+    let Ok(tiff) = reader.read(0, size) else {
+        return false;
+    };
+
+    crate::parsers::tiff::makernotes::sigma::parse_sigma_makernote(
+        tiff,
+        value_offset as usize,
+        tiff_base,
+        metadata,
+    );
+    true
+}
+
+/// Reads one IFD entry's value offset without resolving the bytes behind it.
+///
+/// [`parse_ifd`] hands back a copy of each value, which loses the position a
+/// MakerNote's own internal offsets are measured from.
+fn ifd_entry_value_offset(
+    reader: &dyn FileReader,
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+    wanted_tag: u16,
+) -> Option<u32> {
+    let count = read_u16(reader.read(ifd_offset, 2).ok()?, byte_order);
+    for i in 0..u64::from(count) {
+        let entry = ifd_offset.checked_add(2)?.checked_add(i.checked_mul(12)?)?;
+        let bytes = reader.read(entry, 12).ok()?;
+        if read_u16(bytes, byte_order) != wanted_tag {
+            continue;
+        }
+        return Some(read_u32(&bytes[8..12], byte_order));
+    }
+    None
 }
 
 /// Parses MakerNote data for any supported manufacturer.

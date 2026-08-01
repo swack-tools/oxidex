@@ -71,7 +71,10 @@ pub fn dispatch_makernote_with_model(
         }
         "fujifilm" | "fuji photo film co., ltd." => Some(Box::new(fujifilm::FujifilmParser)),
         "leica" | "leica camera ag" => Some(Box::new(leica::LeicaMakerNoteParser)),
-        "sigma" | "sigma corporation" => Some(Box::new(sigma::SigmaMakerNoteParser)),
+        // Sigma is absent on purpose. Its MakerNote entries store value offsets
+        // relative to the enclosing TIFF header, so nothing handed only the
+        // payload can read their values; `core::tiff_helpers::parse_exif_subifd`
+        // routes Sigma to `makernotes::sigma` instead, which takes the TIFF.
         "phase one" | "phase one a/s" => Some(Box::new(phaseone::PhaseOneMakerNoteParser)),
         "minolta" | "konica minolta" | "minolta co., ltd." => {
             Some(Box::new(minolta::MinoltaParser))
