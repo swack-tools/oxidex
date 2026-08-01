@@ -149,78 +149,42 @@ pub fn decode_scene_type(data: &[u8]) -> Option<String> {
     }
 }
 
-/// Decode CFA Pattern tag (0xA302) to a human-readable string.
+/// Decodes CFAPattern (tag 0xA302).
 ///
-/// The Color Filter Array (CFA) pattern describes the layout of color filters
-/// on the image sensor. The format is:
-///
-/// - 2 bytes: Horizontal repeat count (big-endian)
-/// - 2 bytes: Vertical repeat count (big-endian)
-/// - H*V bytes: Color values for each position in the pattern
-///
-/// Color values are:
-/// - 0: Red
-/// - 1: Green
-/// - 2: Blue
-/// - 3: Cyan
-/// - 4: Magenta
-/// - 5: Yellow
-/// - 6: White
-///
-/// # Arguments
-///
-/// * `data` - Raw binary data containing the CFA pattern
+/// This module used to carry its own copy of the decoder. That copy read the
+/// two repeat counts big-endian only -- so every Nikon and Sony file, which
+/// writes them little-endian, came back malformed -- and it grouped the output
+/// by the *second* count, transposing every non-square pattern. Both are now
+/// handled in one place; see [`crate::core::formatters::cfa_pattern`].
 ///
 /// # Returns
 ///
-/// * `Some(String)` - Pattern like "[Green,Blue][Red,Green]" for a 2x2 GBRG pattern
-/// * `None` - If data is too short or malformed
+/// `Some(pattern)` for a well-formed value. A malformed value yields `None`
+/// here rather than ExifTool's `<...>` sentinel, because
+/// [`decode_binary_exif`] uses `None` to mean "no printable value".
 ///
 /// # Examples
 ///
 /// ```
 /// use oxidex::core::binary_decoders::decode_cfa_pattern;
 ///
-/// // 2x2 RGGB pattern (common Bayer pattern)
-/// let data = [0, 2, 0, 2, 0, 1, 1, 2]; // Red, Green / Green, Blue
+/// // 2x2 RGGB pattern with big-endian counts
+/// let data = [0, 2, 0, 2, 0, 1, 1, 2];
 /// assert_eq!(decode_cfa_pattern(&data), Some("[Red,Green][Green,Blue]".to_string()));
 ///
-/// // 2x2 GBRG pattern
-/// let data2 = [0, 2, 0, 2, 1, 2, 0, 1]; // Green, Blue / Red, Green
-/// assert_eq!(decode_cfa_pattern(&data2), Some("[Green,Blue][Red,Green]".to_string()));
+/// // ...and the little-endian spelling of the same pattern
+/// let data_le = [2, 0, 2, 0, 0, 1, 1, 2];
+/// assert_eq!(decode_cfa_pattern(&data_le), Some("[Red,Green][Green,Blue]".to_string()));
+///
+/// // Malformed data
+/// assert_eq!(decode_cfa_pattern(&[0, 2]), None);
 /// ```
 pub fn decode_cfa_pattern(data: &[u8]) -> Option<String> {
-    if data.len() < 4 {
+    let printed = crate::core::formatters::cfa_pattern::decode_cfa_pattern(data);
+    if printed.starts_with('<') {
         return None;
     }
-
-    // Parse horizontal and vertical repeat counts (big-endian)
-    let h_repeat = u16::from_be_bytes([data[0], data[1]]) as usize;
-    let v_repeat = u16::from_be_bytes([data[2], data[3]]) as usize;
-
-    // Validate we have enough data for the pattern
-    if data.len() < 4 + h_repeat * v_repeat {
-        return None;
-    }
-
-    // Color names as defined in EXIF specification
-    let colors = ["Red", "Green", "Blue", "Cyan", "Magenta", "Yellow", "White"];
-    let mut result = String::new();
-
-    // Build the pattern string row by row
-    for row in 0..v_repeat {
-        result.push('[');
-        for col in 0..h_repeat {
-            let idx = data[4 + row * h_repeat + col] as usize;
-            if col > 0 {
-                result.push(',');
-            }
-            result.push_str(colors.get(idx).unwrap_or(&"Unknown"));
-        }
-        result.push(']');
-    }
-
-    Some(result)
+    Some(printed)
 }
 
 /// Decode UserComment tag (0x9286) to a human-readable string.
@@ -558,23 +522,37 @@ mod tests {
         );
     }
 
+    /// `00 02 00 01` is two groups of one, not one group of two: the first
+    /// count is the group count. ExifTool 13.55 prints `[Cyan][Magenta]` for
+    /// these bytes. The transposed copy this module used to carry answered
+    /// `[Cyan,Magenta]`, and had a test asserting exactly that.
     #[test]
     fn test_cfa_pattern_with_other_colors() {
-        // Pattern with cyan, magenta, yellow
-        let data = [0, 2, 0, 1, 3, 4]; // 2x1: Cyan, Magenta
+        let data = [0, 2, 0, 1, 3, 4];
         assert_eq!(
             decode_cfa_pattern(&data),
-            Some("[Cyan,Magenta]".to_string())
+            Some("[Cyan][Magenta]".to_string())
         );
     }
 
     #[test]
     fn test_cfa_pattern_unknown_color() {
-        // Pattern with unknown color index
-        let data = [0, 2, 0, 1, 7, 8]; // 2x1: Unknown colors
+        // Colour indices above 6 have no name.
+        let data = [0, 2, 0, 1, 7, 8];
         assert_eq!(
             decode_cfa_pattern(&data),
-            Some("[Unknown,Unknown]".to_string())
+            Some("[Unknown][Unknown]".to_string())
+        );
+    }
+
+    /// Nikon and Sony write the repeat counts in the file's little-endian
+    /// order. The big-endian-only copy read those as 512x512 and returned
+    /// `None` for every such file.
+    #[test]
+    fn test_cfa_pattern_little_endian_counts() {
+        assert_eq!(
+            decode_cfa_pattern(&[2, 0, 2, 0, 0, 1, 1, 2]),
+            Some("[Red,Green][Green,Blue]".to_string())
         );
     }
 
