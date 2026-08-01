@@ -42,6 +42,7 @@ pub mod writers;
 
 // Supporting Modules
 pub mod error;
+pub mod exiftool_tables;
 pub mod tag_db;
 pub mod tag_sync;
 

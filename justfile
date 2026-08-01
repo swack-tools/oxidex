@@ -1018,3 +1018,15 @@ compare-exiftool-full-update:
 
     echo ""
     echo "✅ Comprehensive comparison complete! Docs updated in docs/reference/comparison/"
+
+# Regenerate ExifTool binary tag tables from ExifTool's Perl sources.
+# Extracts, generates Rust, and verifies the output against ExifTool itself.
+regen-tables version="13.30":
+    tools/exiftool-tables/regen.sh {{version}}
+
+# Verify the committed generated tables still match ExifTool exactly.
+verify-tables version="13.30":
+    python3 tools/exiftool-tables/verify.py \
+        src/exiftool_tables/binary_tables.rs \
+        target/exiftool-src/exiftool-{{version}}/lib \
+        --oracle tools/exiftool-tables/oracle.pl
