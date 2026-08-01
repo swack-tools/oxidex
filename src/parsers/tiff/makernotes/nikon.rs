@@ -11,7 +11,10 @@
 // Submodules for extended tag parsing
 pub mod af_info;
 pub mod af_info2;
+pub mod binary_data;
 pub mod color_balance;
+pub mod encrypted;
+mod encrypted_tables;
 pub mod flash_info;
 pub mod lens_data;
 pub mod settings;
@@ -687,6 +690,36 @@ impl MakerNoteParser for NikonParser {
             Some(format_string(&ascii_value(&bytes)))
         };
 
+        // ExifTool's `ProcessNikon` pre-scans this IFD for SerialNumber
+        // (0x001d) and ShutterCount (0x00a7) before walking it, because the
+        // shutter count sorts *after* every encrypted block but is half of the
+        // decryption key. `SerialKey` defaults an absent 0x001d to 0, but an
+        // absent or non-numeric 0x00a7 means no key at all and ExifTool
+        // extracts nothing from the encrypted directories.
+        let mut serial_raw: Option<String> = None;
+        let mut count_key: Option<u32> = None;
+        let _ = parse_ifd_entries(&data[ifd_absolute..], order, &config, |entry, _ifd_data| {
+            match entry.tag_id {
+                NIKON_SERIAL_NUMBER => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        serial_raw = Some(ascii_value(&bytes));
+                    }
+                }
+                NIKON_SHUTTER_COUNT => {
+                    // Only an integer format can produce a `/^\d+$/` count.
+                    if matches!(entry.field_type, 1 | 3 | 4 | 8 | 9) {
+                        count_key = scalar_of(entry);
+                    }
+                }
+                _ => {}
+            }
+        });
+        let keys = count_key.map(|count| encrypted::Keys {
+            serial: encrypted::serial_key(serial_raw.as_deref(), model),
+            count,
+        });
+        let mut ctx = binary_data::Ctx::new(model, None);
+
         // Parse IFD entries starting at the IFD location
         // Pass the full 'data' buffer so that offset calculations work correctly
         let _ = parse_ifd_entries(&data[ifd_absolute..], order, &config, |entry, _ifd_data| {
@@ -822,9 +855,20 @@ impl MakerNoteParser for NikonParser {
                 }
 
                 // Flat binary block; layout keys off its own version string.
+                // 0100/0101 are stored in the clear and handled by lens_data;
+                // 0201 onward are encrypted and go through the generated
+                // tables.
                 NIKON_LENS_DATA => {
                     if let Some(bytes) = bytes_of(entry) {
                         lens_data::parse_lens_data(&bytes, tags);
+                        encrypted::parse_lens_data(
+                            &bytes,
+                            entry.value_count as usize,
+                            keys,
+                            order,
+                            &mut ctx,
+                            tags,
+                        );
                     }
                 }
 
@@ -877,15 +921,22 @@ impl MakerNoteParser for NikonParser {
                 }
 
                 // ColorBalance (0x0097). The block's leading version string
-                // selects the layout; only 0103 (D70/D70s) is stored in the
-                // clear at a known offset. Every 02xx variant is encrypted with
-                // a SerialNumber/ShutterCount key, so nothing is emitted for
-                // them rather than a plausible-looking guess.
+                // selects the layout: 0100/0102/0103 are stored in the clear
+                // at a known offset, and every 02xx variant is encrypted with
+                // the SerialNumber/ShutterCount key.
                 NIKON_COLOR_BALANCE_A => {
                     if let Some(bytes) = bytes_of(entry)
                         && bytes.len() >= 4
                     {
                         sub_tables::parse_color_balance(&bytes, order, tags);
+                        encrypted::parse_color_balance(
+                            &bytes,
+                            entry.value_count as usize,
+                            keys,
+                            order,
+                            &mut ctx,
+                            tags,
+                        );
                     }
                 }
 
@@ -966,6 +1017,17 @@ impl MakerNoteParser for NikonParser {
                 | NIKON_IMAGE_STABILIZATION
                 | NIKON_AF_RESPONSE
                 | NIKON_FLASH_TYPE => {
+                    // `RawConv => '$$self{FocusMode} = $val'` stores the value
+                    // as read, before the table's FormatString PrintConv, so
+                    // LensData0800's `ne "Manual"` sees Nikon's own casing.
+                    if entry.tag_id == NIKON_FOCUS_MODE
+                        && let Some(bytes) = bytes_of(entry)
+                    {
+                        ctx.set(
+                            binary_data::Dm::FocusMode,
+                            binary_data::Scalar::Text(ascii_value(&bytes)),
+                        );
+                    }
                     if let Some(value) = string_of(entry) {
                         tags.insert(nikon_tag_to_name(entry.tag_id), value);
                     }
@@ -1325,6 +1387,14 @@ impl MakerNoteParser for NikonParser {
                         if version.len() == 4 && version.chars().all(|c| c.is_ascii_digit()) {
                             tags.insert("Nikon:ShotInfoVersion".to_string(), version);
                         }
+                        encrypted::parse_shot_info(
+                            &bytes,
+                            entry.value_count as usize,
+                            keys,
+                            order,
+                            &mut ctx,
+                            tags,
+                        );
                     }
                 }
 
@@ -1486,6 +1556,14 @@ impl MakerNoteParser for NikonParser {
 
                 NIKON_SHUTTER_MODE => {
                     if let Some(value) = scalar_of(entry) {
+                        // `RawConv => '$$self{ShutterMode} = $val'`. Several
+                        // ShotInfo tables gate whole sub-directories on this,
+                        // and 0x0034 sorts before 0x0091 so it is always set
+                        // by the time they are reached.
+                        ctx.set(
+                            binary_data::Dm::ShutterMode,
+                            binary_data::Scalar::Num(f64::from(value)),
+                        );
                         let printed = match value {
                             0 => "Mechanical".to_string(),
                             16 => "Electronic".to_string(),
