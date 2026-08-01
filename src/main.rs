@@ -8,12 +8,12 @@ use oxidex::cli::output_formatter::{
     CsvFormatter, HumanReadableFormatter, JsonFormatter, OutputFormatter, ShortFormatter,
 };
 use oxidex::cli::rename;
+use oxidex::cli::value_parser::parse_cli_tag_value;
 use oxidex::core::date_shift::{ShiftOperation, shift_metadata_dates};
 use oxidex::core::exiftool_compat::format_for_exiftool;
 use oxidex::core::operations::{
     clear_all_metadata, copy_metadata, modify_tag, read_metadata_with_detector, remove_tag,
 };
-use oxidex::core::tag_value::TagValue;
 use std::process;
 
 fn main() {
@@ -142,8 +142,16 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
                 process::exit(1);
             }
         } else {
-            // Non-empty value = modify tag
-            let tag_value = TagValue::new_string(value.clone());
+            // Non-empty value = modify tag, typed as the tag's registry entry
+            // declares. Wrapping every value as a String here is what made
+            // Integer/Rational/DateTime tags unsettable from the CLI.
+            let tag_value = match parse_cli_tag_value(tag_name, value) {
+                Ok(tag_value) => tag_value,
+                Err(e) => {
+                    eprintln!("Error: Invalid value for {}: {}", tag_name, e);
+                    process::exit(1);
+                }
+            };
 
             // Call modify_tag from core operations
             if let Err(e) = modify_tag(file, tag_name, tag_value) {
