@@ -15,7 +15,11 @@ tool's whole reason to exist is that every earlier liveness check lied:
     known pid and are structurally incapable of matching the asker;
   * the fleet-up state file kept saying `running` for an hour after the
     2026-07-30 ENOSPC mass death, because its maintainer died with the
-    mergers -- hence liveness comes from the merger's OWN lock file;
+    mergers -- hence it supplies only a candidate PID whose life and exact
+    argv must be validated;
+  * run_locked removes the merger's OWN lock during every normal between-poll
+    sleep -- hence a missing lock falls back to that validated candidate
+    rather than becoming a false outage;
   * a threshold-only heartbeat check called two provably-alive mergers
     dead during a long cargo build -- hence THE PID DECIDES, and a stale
     heartbeat on a live pid is `stalled` (advisory), never an outage.
@@ -78,6 +82,15 @@ class FleetHealthTestCase(unittest.TestCase):
             {"blocked": blocked, "last_batch_ts": NOW - age, "commits_since": 0}
         ))
 
+    def write_fleet_state(self, squad, pid=4242, status="running"):
+        path = self.home / "logs" / "fleet-up.state"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"supervisor\t111\trunning\tfleet_up.sh\n"
+            f"merger:{squad}\t{pid}\t{status}\tsquad_merge_loop.py --squad {squad} \n"
+        )
+        return path
+
 
 class PidAliveTests(unittest.TestCase):
     def test_own_pid_is_alive(self):
@@ -125,6 +138,32 @@ class MergerStateTests(FleetHealthTestCase):
         s = self.state()
         self.assertFalse(s["alive"])
         self.assertIn("no lock file", s["reason"])
+
+    def test_idle_between_polls_uses_validated_supervisor_pid(self):
+        self.write_fleet_state("canon", pid=4242)
+        argv = "python3 scripts/squad_merge_loop.py --squad canon --infinite"
+        s = self.state(argv_fn=lambda p: argv)
+        self.assertTrue(s["alive"])
+        self.assertFalse(s["stalled"])
+        self.assertEqual(s["pid"], 4242)
+        self.assertIn("between polls", s["reason"])
+
+    def test_stale_supervisor_state_with_dead_pid_is_down(self):
+        self.write_fleet_state("canon", pid=4242)
+        s = self.state(kill_fn=dead_kill)
+        self.assertFalse(s["alive"])
+        self.assertIn("gone", s["reason"])
+
+    def test_stale_supervisor_state_with_recycled_pid_is_down(self):
+        self.write_fleet_state("canon", pid=4242)
+        s = self.state(argv_fn=lambda p: "some-unrelated-daemon")
+        self.assertFalse(s["alive"])
+        self.assertIn("recycled", s["reason"])
+
+    def test_non_running_supervisor_entry_does_not_count(self):
+        self.write_fleet_state("canon", pid=4242, status="giving_up")
+        s = self.state()
+        self.assertFalse(s["alive"])
 
     def test_corrupt_lock_is_down(self):
         self.write_lock("canon", raw="not json{")
