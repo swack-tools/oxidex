@@ -94,6 +94,7 @@ FLEET_LOG="${FLEET_LOG:-$FLEET_LOG_DIR/fleet-up.log}"
 FLEET_PIDFILE="${FLEET_PIDFILE:-$FLEET_LOG_DIR/fleet-up.pid}"
 FLEET_STATEFILE="${FLEET_STATEFILE:-$FLEET_LOG_DIR/fleet-up.state}"
 FLEET_WORKTREE_BASE="${FLEET_WORKTREE_BASE:-$OXIDEX_HOME/worktrees/parallel-fix}"
+FLEET_DISPATCHER_PGIDS="${FLEET_DISPATCHER_PGIDS:-$FLEET_LOG_DIR/dispatcher-pgids.json}"
 
 # EXIFTOOL_CACHE_DIR is the --cache-dir default for BOTH tiers and is force-set
 # into every worker's env by model_fix_loop; pin it here so all three tiers and
@@ -981,8 +982,58 @@ resync_due() {
     [ $((now - last)) -ge "$interval" ]
 }
 
+dispatcher_workers_active() {
+    # parallel_model_fix_loop atomically persists every live worker process
+    # group here. A worktree can still be completely clean while its model is
+    # reading the old base or composing a patch; resetting that checkout is
+    # therefore unsafe even though preserve-work has nothing to salvage yet.
+    #
+    # Do not trust the file alone after a dispatcher crash: validate each
+    # recorded process group with killpg(0). A missing, torn, empty, or wholly
+    # stale file correctly means that no live worker blocks the resync.
+    local path=${1:-$FLEET_DISPATCHER_PGIDS}
+    [ -r "$path" ] || return 1
+    python3 - "$path" <<'PY'
+import json
+import os
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        pgids = json.load(f).get("pgids", [])
+except (OSError, ValueError, AttributeError):
+    # Fail closed. The dispatcher writes this file atomically, so malformed
+    # live state is exceptional; resetting worktrees on the optimistic guess
+    # that it means "idle" would recreate the destructive race this guard is
+    # here to prevent. A live dispatcher repairs the file on its next worker
+    # register/unregister, while a restarted one clears it during orphan reap.
+    raise SystemExit(0)
+
+if not isinstance(pgids, list):
+    raise SystemExit(0)
+
+for raw in pgids:
+    try:
+        pgid = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        continue
+    if pgid <= 1:
+        continue
+    try:
+        os.killpg(pgid, 0)
+    except (ProcessLookupError, OverflowError):
+        continue
+    except PermissionError:
+        # It exists even if this account cannot signal it.
+        raise SystemExit(0)
+    else:
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
 supervise() {
-    local i now uptime delay last_resync
+    local i now uptime delay last_resync resync_deferred=0
     last_resync=$(now_epoch)
     while [ "$SHUTTING_DOWN" -eq 0 ]; do
         now=$(now_epoch)
@@ -991,12 +1042,22 @@ supervise() {
         # with everything that landed since, and the fleet has no other path
         # that refreshes worker worktrees mid-run.
         if resync_due "$now" "$last_resync" "$FLEET_RESYNC_SECONDS"; then
-            # Do not invalidate a model call by resetting the files it is
-            # editing/building. Clean worktrees still advance immediately;
-            # in-flight work is already salvaged and catches up on a later
-            # round/startup sync.
-            sync_worktrees "$FLEET_WORKTREE_BASE" preserve-work
-            last_resync=$now
+            if dispatcher_workers_active; then
+                # Dirty/committed work is not the only in-flight state. A
+                # worker can be waiting on the provider with a clean checkout
+                # after its prompt captured the old files; moving HEAD then
+                # makes the returned patch target a different base. Leave the
+                # deadline due and retry on later ticks until the dispatcher
+                # reaches its comparison/between-round window.
+                if [ "$resync_deferred" -eq 0 ]; then
+                    log "fleet-up" "periodic worktree sync deferred: live worker process groups"
+                    resync_deferred=1
+                fi
+            else
+                sync_worktrees "$FLEET_WORKTREE_BASE" preserve-work
+                last_resync=$now
+                resync_deferred=0
+            fi
         fi
         local live=0 failed=0
         for i in "${!TIER_TAG[@]}"; do
