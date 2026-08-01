@@ -2983,9 +2983,12 @@ const COLOR_DATA_12: &[ColorDataField] = &[
 /// Chooses the `%Canon::ColorData*` table for a record, following Canon.pm:1972.
 ///
 /// Selection is by element count, except that count 3778 is shared: ExifTool's
-/// `ColorData11` arm carries the extra guard `$$valPt !~ /^\x41\0/`, so a 3778-element
-/// record whose version word is 0x41 (65, the R50V) falls through to `ColorData12` while
-/// every other 3778-element record (R7/R10/R50/R6mkII, version 48) stays on `ColorData11`.
+/// `ColorData11` arm carries the extra guard `$$valPt =~ /^[\0-\x40]/`, a regex on the
+/// raw byte string testing whether its first byte -- the version word's low byte -- falls
+/// in 0..=0x40 (0..=64). `ColorData12` has no such guard, so it is the fallthrough for
+/// every other 3778-element record. This is a `<=`, not a `!=`: a 3778-element record with
+/// version 48 (R7/R10/R50/R6mkII) stays on `ColorData11`, while version 65 (R50V) *or any
+/// higher, undocumented version* (e.g. 66, the R6mkIII) falls through to `ColorData12`.
 fn select_color_data_table(
     element_count: usize,
     version: i32,
@@ -3002,7 +3005,7 @@ fn select_color_data_table(
         1816 | 1820 | 1824 => COLOR_DATA_9,
         2024 | 3656 => COLOR_DATA_10,
         3973 => COLOR_DATA_11,
-        3778 if version != 0x41 => COLOR_DATA_11,
+        3778 if version <= 0x40 => COLOR_DATA_11,
         3778 | 4528 => COLOR_DATA_12,
         // ExifTool's `ColorDataUnknown` arm: the record is real but its layout is not
         // documented, and it defines no extractable tags.
@@ -3152,8 +3155,9 @@ mod tests {
     }
 
     /// Count 3778 is shared. ExifTool's ColorData11 arm carries the extra guard
-    /// `$$valPt !~ /^\x41\0/`, so only a version word of 0x41 (65, the R50V) falls
-    /// through to ColorData12; version 48 (R7/R10/R50/R6mkII) stays on ColorData11.
+    /// `$$valPt =~ /^[\0-\x40]/`, a byte-range test (0..=64), not an inequality against
+    /// 0x41 alone: version 48 (R7/R10/R50/R6mkII) stays on ColorData11, while version
+    /// 0x41 (65, R50V) falls through to ColorData12.
     #[test]
     fn test_count_3778_splits_on_version_word() {
         let eleven = select_color_data_table(3778, 48).expect("table for version 48");
@@ -3167,6 +3171,17 @@ mod tests {
             eleven,
             select_color_data_table(3973, 34).expect("3973 is ColorData11")
         ));
+    }
+
+    /// Regression for the R6mkIII (oxidex/goofy-hopper-712519): its ColorDataVersion is
+    /// 66, an undocumented value ExifTool's own PrintConv doesn't name either -- but
+    /// ExifTool's guard is `version <= 0x40`, not `version != 0x41`, so any *unseen*
+    /// version above 65 must still fall through to ColorData12, not stay on ColorData11.
+    #[test]
+    fn test_count_3778_undocumented_version_above_65_selects_color_data_12() {
+        let twelve = select_color_data_table(3778, 66).expect("table for version 66");
+        let expected = select_color_data_table(3778, 0x41).expect("table for version 65");
+        assert!(std::ptr::eq(twelve, expected));
     }
 
     #[test]
