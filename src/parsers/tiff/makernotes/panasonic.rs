@@ -23,6 +23,8 @@
 
 // Submodules for extended tag parsing
 pub mod extended;
+/// `%Panasonic` binary sub-tables, generated from ExifTool's own hashes.
+pub mod face_tables;
 
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
@@ -37,6 +39,8 @@ use std::collections::HashMap;
 
 use super::makernote_context::MakerNoteContext;
 use super::shared::MakerNoteParser;
+use super::shared::binary_subdir::{BinaryTable, decode_binary_subdir};
+use face_tables::{PANASONIC_FACEDETINFO, PANASONIC_FACERECINFO};
 
 // Import declarative decoder macros
 use crate::const_decoder;
@@ -321,8 +325,10 @@ const_decoder!(pub BURST_MODE,
     ]
 );
 
-// Face detection decoder - maps values to face detection on/off
-const_decoder!(pub FACE_DETECTION, i32, [(0, "Off"), (1, "On"),]);
+// `FaceDetection` was an invented name: `%Panasonic::Main` has no tag by that
+// name at any id, and the 0x004e it was bound to is the `FaceDetInfo`
+// sub-directory pointer, whose value is an offset -- so every file printed
+// `Unknown (<offset>)`. See `panasonic_binary_subdir`.
 
 // ============================================================================
 // Additional Decoders for Extended Tag Coverage
@@ -521,6 +527,7 @@ impl PanasonicParser {
 
         // Get registry for tag definitions
         let registry = panasonic_registry();
+        let data_base = value_base(data_base, model);
 
         // Extract tags from entries
         for entry in entries {
@@ -549,6 +556,19 @@ impl PanasonicParser {
         tags: &mut HashMap<String, String>,
     ) {
         let tag_id = entry.tag_id;
+
+        // Binary sub-directories. `%Panasonic::Main` gives 0x4e and 0x61 a
+        // `SubDirectory => { TagTable => ... }` (Panasonic.pm:935-940 and
+        // :1007-1011), so ExifTool descends and reports the record's fields --
+        // the pointer itself is never a value. Neither tag has a Start, Base or
+        // ByteOrder override, so the directory is exactly the tag's own bytes.
+        if let Some(table) = panasonic_binary_subdir(tag_id) {
+            if let Some(record) = extract_raw_bytes(entry, data, ifd_offset, data_base, byte_order)
+            {
+                decode_binary_subdir(table, &record, byte_order, "Panasonic", tags);
+            }
+            return;
+        }
 
         // Special handling for string tags (must read from data buffer)
         // These tags contain text data that needs to be extracted from the makernote
@@ -706,6 +726,21 @@ impl PanasonicParser {
     }
 }
 
+/// The `%Panasonic::Main` tags whose ExifTool entry is a `SubDirectory` over a
+/// `ProcessBinaryData` table, and the table each one selects.
+///
+/// Both were previously read as scalars: 0x004e under the name `FaceDetection`,
+/// which is not a tag `%Panasonic::Main` has at any id, and 0x0061 as a raw
+/// `FaceRecInfo` number, which is the offset of the record rather than anything
+/// in it. Descending replaces both with the fields ExifTool actually reports.
+const fn panasonic_binary_subdir(tag_id: u16) -> Option<&'static BinaryTable> {
+    match tag_id {
+        0x004E => Some(&PANASONIC_FACEDETINFO),
+        0x0061 => Some(&PANASONIC_FACERECINFO),
+        _ => None,
+    }
+}
+
 /// Public function to parse Panasonic MakerNotes
 pub fn parse_panasonic_makernotes(
     data: &[u8],
@@ -800,6 +835,30 @@ fn resolve_value_offset(
         Some(base) => entry.value_offset.checked_sub(base).map(|v| v as usize),
         None => ifd_offset.checked_add(entry.value_offset as usize),
     }
+}
+
+/// The TIFF-relative start this MakerNote's out-of-line value offsets are
+/// measured from.
+///
+/// One body needs its own number. `MakerNotes.pm` gives the DC-FT7 a dispatch
+/// entry of its own, `MakerNotePanasonic3` (MakerNotes.pm:751-761), identical to
+/// `MakerNotePanasonic` except for `Base => 12, # crazy!` -- and
+/// `MakerNotePanasonic` is written to exclude it explicitly
+/// (`$$self{Model} ne "DC-FT7"`, MakerNotes.pm:735). The body writes every
+/// out-of-line pointer 12 bytes short, so reading one at face value lands in the
+/// tail of the *previous* tag's data. That is not a value that looks wrong: the
+/// 42-byte `FaceDetInfo` record read 12 bytes early reports
+/// `NumFacePositions = 320`, a number no camera would print but nothing
+/// downstream can flag, in place of the 0 ExifTool reports.
+///
+/// The adjustment only applies to the TIFF-relative form. With no enclosing
+/// block `data_base` is `None` and the offsets are already payload-relative, so
+/// there is no base to correct.
+fn value_base(data_base: Option<u32>, model: Option<&str>) -> Option<u32> {
+    if model == Some("DC-FT7") {
+        return data_base.map(|base| base.saturating_sub(12));
+    }
+    data_base
 }
 
 /// A `string` value the way ExifTool reads one.
@@ -1360,5 +1419,106 @@ mod tests {
 
         let invalid_data = b"Nikon\0\0\0";
         assert!(!is_panasonic_makernote(invalid_data));
+    }
+
+    /// 0x004e and 0x0061 must select a table, and every other id must not --
+    /// binding one to a neighbour would report a real ExifTool name over the
+    /// wrong record.
+    #[test]
+    fn test_only_the_two_subdirectory_tags_select_a_table() {
+        assert!(panasonic_binary_subdir(0x004E).is_some());
+        assert!(panasonic_binary_subdir(0x0061).is_some());
+        for tag in [0x004Du16, 0x004F, 0x0060, 0x0062, 0x003F] {
+            assert!(
+                panasonic_binary_subdir(tag).is_none(),
+                "tag {tag:#06x} must not descend"
+            );
+        }
+    }
+
+    /// `MakerNotePanasonic3` applies to the DC-FT7 and to nothing else --
+    /// shifting any other body's base would move every out-of-line value.
+    #[test]
+    fn test_only_the_dc_ft7_shifts_its_value_base() {
+        assert_eq!(value_base(Some(1269), Some("DC-FT7")), Some(1257));
+        assert_eq!(value_base(Some(1368), Some("DC-S1")), Some(1368));
+        assert_eq!(value_base(Some(1368), None), Some(1368));
+        // With no enclosing block there is no TIFF-relative base to correct.
+        assert_eq!(value_base(None, Some("DC-FT7")), None);
+    }
+
+    /// `combined-samples/Panasonic/PanasonicDC-S1.jpg`, MakerNote tag 0x004e:
+    /// the exact 42 bytes `exiftool -v3` prints, and the exact values
+    /// `exiftool -a -G1 -s` reports for them.
+    #[test]
+    fn test_face_det_info_matches_exiftool_on_dc_s1_bytes() {
+        let record: [u8; 42] = [
+            0x02, 0x00, 0x2e, 0x00, 0x51, 0x00, 0x1b, 0x00, 0x1b, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        let mut tags = HashMap::new();
+        decode_binary_subdir(
+            &PANASONIC_FACEDETINFO,
+            &record,
+            ByteOrder::LittleEndian,
+            "Panasonic",
+            &mut tags,
+        );
+        assert_eq!(tags.get("Panasonic:NumFacePositions").unwrap(), "2");
+        assert_eq!(tags.get("Panasonic:Face1Position").unwrap(), "46 81 27 27");
+        assert_eq!(tags.get("Panasonic:Face2Position").unwrap(), "0 0 0 0");
+        // NumFacePositions is 2, so ExifTool's RawConv gate suppresses 3..5
+        // even though the record has room for them and they read as zeros.
+        assert!(!tags.contains_key("Panasonic:Face3Position"));
+        assert!(!tags.contains_key("Panasonic:Face4Position"));
+        assert!(!tags.contains_key("Panasonic:Face5Position"));
+    }
+
+    /// `combined-samples/Panasonic/PanasonicDMC-GF5.jpg`, MakerNote tag 0x0061:
+    /// the record's 148 real bytes. The body wrote a pointer into its PrintIM
+    /// block, so the "names" are junk -- but ExifTool reports exactly these
+    /// values, and matching it means matching them too. This is also the case
+    /// that proves the byte-indexed table: `FaceRecInfo` has no `FORMAT`, so
+    /// key 4 is byte 4 and key 24 is byte 24, not words.
+    #[test]
+    fn test_face_rec_info_matches_exiftool_on_gf5_bytes() {
+        let record: [u8; 148] = [
+            0x00, 0x04, 0x52, 0x39, 0x38, 0x00, 0x00, 0x02, 0x00, 0x07, 0x00, 0x00, 0x00, 0x04,
+            0x30, 0x31, 0x30, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x50, 0x72, 0x69, 0x6e, 0x74, 0x49, 0x4d, 0x00,
+            0x30, 0x32, 0x35, 0x30, 0x00, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x16, 0x00, 0x16, 0x00,
+            0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x64, 0x00, 0x00, 0x00, 0x07, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0b, 0x00, 0xac, 0x00, 0x00, 0x00,
+            0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0e, 0x00,
+            0xc4, 0x00, 0x00, 0x00, 0x00, 0x01, 0x05, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x00,
+            0x00, 0x00, 0x10, 0x01, 0x80, 0x00, 0x00, 0x00, 0x09, 0x11, 0x00, 0x00, 0x10, 0x27,
+            0x00, 0x00, 0x0b, 0x0f, 0x00, 0x00, 0x10, 0x27,
+        ];
+        let mut tags = HashMap::new();
+        decode_binary_subdir(
+            &PANASONIC_FACERECINFO,
+            &record,
+            ByteOrder::LittleEndian,
+            "Panasonic",
+            &mut tags,
+        );
+        assert_eq!(tags.get("Panasonic:FacesRecognized").unwrap(), "1024");
+        assert_eq!(tags.get("Panasonic:RecognizedFace1Name").unwrap(), "8");
+        assert_eq!(
+            tags.get("Panasonic:RecognizedFace1Position").unwrap(),
+            "0 0 0 2560"
+        );
+        assert_eq!(tags.get("Panasonic:RecognizedFace1Age").unwrap(), "");
+        assert_eq!(tags.get("Panasonic:RecognizedFace2Name").unwrap(), "\u{16}");
+        assert_eq!(
+            tags.get("Panasonic:RecognizedFace2Position").unwrap(),
+            "0 8 0 0"
+        );
+        assert_eq!(
+            tags.get("Panasonic:RecognizedFace3Position").unwrap(),
+            "0 257 1 0"
+        );
     }
 }
