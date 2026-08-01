@@ -33,6 +33,7 @@ pub mod cli;
 pub mod ffi;
 
 // Domain Layer (Hexagonal Core)
+pub mod composite;
 pub mod core;
 
 // Infrastructure Layer
