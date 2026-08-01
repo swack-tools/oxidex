@@ -88,32 +88,32 @@ MakerNote parsers for 36+ camera manufacturers are **fully implemented and conne
 | Opus | 100% | ✅ Complete |
 | OGG | 100% | ✅ Complete |
 | WAV | 100% | ✅ Complete |
-| ICC | 90% | ✅ Good |
-| TIFF | 90% | ✅ Good |
-| EXIF | 90% | ✅ Good |
-| TTF | 90% | ✅ Good |
-| OTF | 90% | ✅ Good |
-| SPECIALIZED | 90% | ✅ Good |
-| MKV | 90% | ✅ Good |
-| AVI | 90% | ✅ Good |
-| RIFF | 90% | ✅ Good |
-| DNG | 90% | ✅ Good |
-| CR2 | 90% | ✅ Good |
-| NEF | 90% | ✅ Good |
-| PE | 90% | ✅ Good |
-| QuickTime | 90% | ✅ Good |
-| MP4 | 90% | ✅ Good |
-| MOV | 90% | ✅ Good |
-| ZIP | 90% | ✅ Good |
-| PDF | 90% | ✅ Good |
 | BMP | 90% | ✅ Good |
 | GIF | 90% | ✅ Good |
 | WebP | 90% | ✅ Good |
+| ZIP | 90% | ✅ Good |
+| TTF | 90% | ✅ Good |
+| OTF | 90% | ✅ Good |
+| PE | 90% | ✅ Good |
+| TIFF | 90% | ✅ Good |
+| EXIF | 90% | ✅ Good |
+| DNG | 90% | ✅ Good |
+| CR2 | 90% | ✅ Good |
+| NEF | 90% | ✅ Good |
+| PDF | 90% | ✅ Good |
+| MKV | 90% | ✅ Good |
+| AVI | 90% | ✅ Good |
+| RIFF | 90% | ✅ Good |
+| QuickTime | 90% | ✅ Good |
+| MP4 | 90% | ✅ Good |
+| MOV | 90% | ✅ Good |
+| ICC | 90% | ✅ Good |
+| SPECIALIZED | 90% | ✅ Good |
 | Mach-O | 75% | ✅ Good |
-| TEXT | 75% | ✅ Good |
 | ELF | 75% | ✅ Good |
 | DOCX | 75% | ✅ Good |
 | XLSX | 75% | ✅ Good |
+| TEXT | 75% | ✅ Good |
 | JPEG | 60% | ✅ Good |
 | PNG | 60% | ✅ Good |
 | IPTC | 60% | ✅ Good |
@@ -123,7 +123,7 @@ MakerNote parsers for 36+ camera manufacturers are **fully implemented and conne
 
 | Format | Coverage | Priority |
 |--------|----------|----------|
-| CANON_VRD | 10% | Medium |
+| CANON_VRD | 20% | Medium |
 
 ---
 
@@ -185,7 +185,7 @@ MakerNote parsers for 36+ camera manufacturers are **fully implemented and conne
 
 ### Formats Needing Enhancement
 
-- **CANON_VRD** (10% coverage)
+- **CANON_VRD** (20% coverage)
 
 ---
 
