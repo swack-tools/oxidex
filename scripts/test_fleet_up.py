@@ -278,6 +278,35 @@ class TestSyncWorktrees(GitRepoMixin, unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("SKIP not-a-worktree", err)
 
+    def test_periodic_sync_preserves_in_flight_work(self):
+        dirty = self.add_worker("dirty", commits=0, dirty=True)
+        committed = self.add_worker("committed", commits=1)
+        committed_tip = git(committed, "rev-parse", "HEAD")
+        clean = self.add_worker("clean", commits=0)
+        new_main = self.advance_origin_main(2)
+
+        rc, _, err = sh(
+            f'sync_worktrees "{self.wtbase}" preserve-work', env=self.env)
+        self.assertEqual(rc, 0, err)
+
+        # A live edit and a just-committed worker result both remain exactly
+        # where the worker left them. Resetting either underneath the process
+        # invalidates the attempt even if a salvage branch technically keeps
+        # the bytes reachable.
+        self.assertEqual((dirty / "README.md").read_text(),
+                         "uncommitted worker edit\n")
+        self.assertEqual(git(committed, "rev-parse", "HEAD"), committed_tip)
+        self.assertIn("PRESERVE dirty", err)
+        self.assertIn("PRESERVE committed", err)
+
+        # Worktrees with no local work still catch up during the same pass.
+        self.assertEqual(git(clean, "rev-parse", "HEAD"), new_main)
+
+        salvaged = git(
+            self.repo, "branch", "--list", "salvage/*",
+            "--format=%(refname:short)").split()
+        self.assertEqual(len(salvaged), 2)
+
     def test_missing_base_directory_is_not_an_error(self):
         rc, _, err = sh(f'sync_worktrees "{self.tmp}/absent"', env=self.env)
         self.assertEqual(rc, 0)
@@ -791,4 +820,5 @@ class TestPeriodicResync(ShellHarnessMixin, unittest.TestCase):
         body = SCRIPT.read_text() if hasattr(SCRIPT, "read_text") else open(SCRIPT).read()
         loop = body[body.index("supervise() {"):]
         self.assertIn("resync_due", loop)
-        self.assertIn('sync_worktrees "$FLEET_WORKTREE_BASE"', loop)
+        self.assertIn(
+            'sync_worktrees "$FLEET_WORKTREE_BASE" preserve-work', loop)
