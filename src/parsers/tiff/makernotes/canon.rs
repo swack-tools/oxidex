@@ -112,6 +112,24 @@ fn extract_canon_i16_array_with_base(
     Some(result)
 }
 
+/// Widest gap, in bytes, between the end of the MakerNote IFD header and the
+/// first byte of value data that [`calculate_makernote_base`] will consider.
+///
+/// Measured over the 644 Canon JPEGs in the ExifTool sample corpus that carry a
+/// Canon MakerNote, the real gap is 0 on 544 files, 2 on 6, 12 on 64, 24 on 18,
+/// and never exceeds 350. 1024 covers every observed layout with room to spare
+/// while keeping the search to at most 1024 candidates evaluated once per file.
+const MAKERNOTE_BASE_SEARCH_SPAN: u32 = 1024;
+
+/// How many records must independently confirm a candidate base before it is
+/// preferred over the packed-layout assumption.
+///
+/// One agreement can happen by chance -- any 16-bit slot in the MakerNote could
+/// hold a value that happens to equal some record's byte count. Two independent
+/// records agreeing on the *same* base is already vanishingly unlikely, and the
+/// corpus check below shows the true base typically collects 10-30 votes.
+const MAKERNOTE_BASE_MIN_VOTES: u32 = 2;
+
 /// Calculates the MakerNote base offset by examining the IFD structure.
 /// The base offset is needed to convert TIFF-relative value_offsets to positions
 /// within the MakerNote data slice.
@@ -119,12 +137,50 @@ fn extract_canon_i16_array_with_base(
 /// Canon MakerNotes use TIFF-relative offsets, meaning the value_offset field
 /// in each IFD entry contains an offset from the start of the entire TIFF file,
 /// not from the start of the MakerNote. To correctly extract values, we need
-/// to calculate: position_in_slice = value_offset - base_offset
+/// to calculate: `position_in_slice = value_offset - base_offset`. The dispatcher
+/// hands this parser a detached MakerNote slice with no record of where it sat in
+/// the file, so the base has to be recovered from the MakerNote's own bytes.
 ///
-/// The algorithm works by:
-/// 1. Finding the first IFD entry with offset-based data (size > 4 bytes)
-/// 2. Knowing the data starts right after the IFD header in the slice
-/// 3. Calculating: base_offset = value_offset - expected_position_in_slice
+/// # Why the packed-layout guess is not enough
+///
+/// The obvious derivation -- assume the first value follows the IFD header with
+/// no gap, so `base = min(value_offset) - (2 + 12 * entries + 4)` -- is what this
+/// function used to do, and it is wrong whenever Canon leaves padding between the
+/// header and the value block. Measured across the 644 Canon JPEGs in the
+/// ExifTool sample corpus that carry a Canon MakerNote, it is wrong on 100 of
+/// them: 64 files off by 12 bytes, 18 by 24, 6 by 2, and 12 by larger amounts.
+///
+/// An off-by-N base shifts every offset-based record by N bytes, which is far
+/// worse than a missing tag because the tags still come out -- just wrong. On
+/// `CanonDIGITAL_IXUS100IS.jpg` (12 bytes low) the old code reported
+/// `OwnerName "sion 1.00"` for `""`, `FocalUnits "16390/mm"` for `1000/mm`,
+/// `AESetting "Unknown (256)"` for `Normal AE`, and a 100-digit `MinAperture`.
+///
+/// # How the base is recovered instead
+///
+/// Canon binary records are self-describing: every `%Canon` table with
+/// `FIRST_ENTRY => 1` opens with its own size in bytes, which ExifTool spells out
+/// at Canon.pm:7444 -- `# 0x00: size of record in bytes`. So for the correct base
+/// `B`, a record whose IFD entry declares `size` bytes at `value_offset` satisfies
+///
+/// ```text
+///     u16(data[value_offset - B]) == size
+/// ```
+///
+/// Each offset-based entry is therefore a vote for one candidate base, and the
+/// base the most records agree on is the base. Against the corpus this is not a
+/// marginal signal: it holds for 98-100% of the entries of tags 0x0001, 0x0004,
+/// 0x0026, 0x001D, 0x001F, 0x0022, 0x0023, 0x0035, 0x0093, 0x00A0, 0x00AA,
+/// 0x00E0, 0x0099 and the whole 0x40xx block. No table of "which tags are
+/// self-describing" is needed -- entries that are not simply never vote.
+///
+/// Candidates are bounded below by the requirement that the value block fit
+/// inside the slice, and above by the requirement that it not overlap the IFD
+/// header (`min(value_offset) - header_size`, i.e. the old guess). Ties keep the
+/// largest base, so a correctly packed MakerNote still resolves to the old answer,
+/// and a MakerNote with too little self-describing evidence falls back to it
+/// outright. Corpus result: 544 -> 626 files given the right base, with no file
+/// moved off a base that was already right.
 fn calculate_makernote_base(data: &[u8], byte_order: ByteOrder) -> Option<u32> {
     if data.len() < 2 {
         return None;
@@ -138,15 +194,16 @@ fn calculate_makernote_base(data: &[u8], byte_order: ByteOrder) -> Option<u32> {
     }
 
     // Calculate IFD header size: 2 bytes (entry count) + 12 bytes per entry + 4 bytes (next IFD pointer)
-    // Canon MakerNote data values start right after this header
     let header_size = 2 + entry_count * 12 + 4;
 
     if header_size > data.len() {
         return None;
     }
 
-    // Iterate through entries to find one with offset-based data
-    // Entry format: [tag_id:2][field_type:2][value_count:4][value_offset:4]
+    // Collect every entry whose value lives outside the 4-byte inline slot, as
+    // (value_offset, declared byte size). Entry format is the standard TIFF
+    // [tag_id:2][field_type:2][value_count:4][value_offset:4].
+    let mut offset_entries: Vec<(u32, usize)> = Vec::new();
     for i in 0..entry_count {
         let entry_offset = 2 + i * 12;
         if entry_offset + 12 > data.len() {
@@ -157,7 +214,6 @@ fn calculate_makernote_base(data: &[u8], byte_order: ByteOrder) -> Option<u32> {
         let value_count = reader.u32_at(entry_offset + 4)?;
         let value_offset = reader.u32_at(entry_offset + 8)?;
 
-        // Calculate byte size based on field type
         // Reference: TIFF specification field types
         let type_size = match field_type {
             1 => 1,        // BYTE
@@ -177,25 +233,120 @@ fn calculate_makernote_base(data: &[u8], byte_order: ByteOrder) -> Option<u32> {
 
         let total_size = type_size * value_count as usize;
 
-        // If data is offset-based (>4 bytes), use the value_offset to calculate base
-        if total_size > 4 && value_offset > 0 {
-            // The value_offset is TIFF-relative
-            // The data should be at position (header_size or later) in our slice
-            // base_offset = value_offset - position_in_slice
-            //
-            // We need to find where this entry's data actually is in the slice.
-            // Canon typically stores data sequentially after the IFD header.
-            // For the first offset-based entry, its data starts at header_size.
-            //
-            // So: base_offset = value_offset - header_size
-            if value_offset as usize >= header_size {
-                return Some(value_offset - header_size as u32);
-            }
+        if total_size > 4 && value_offset > 0 && value_offset as usize >= header_size {
+            offset_entries.push((value_offset, total_size));
         }
     }
 
-    // If no offset-based entries found, return None (fallback will use 0)
-    None
+    // No offset-based entries: nothing to anchor a base on (callers fall back to 0).
+    let lowest_value_offset = offset_entries.iter().map(|&(offset, _)| offset).min()?;
+
+    // Upper bound: any larger base would place the first value inside the IFD
+    // header. This is exactly the old packed-layout guess, and stays the answer
+    // whenever the records offer no better evidence.
+    let packed_base = lowest_value_offset - header_size as u32;
+
+    // Lower bound: any smaller base would run the last value past the end of the
+    // slice. Clamped to the search span so the scan is bounded regardless of what
+    // a corrupt entry claims.
+    let furthest_end = offset_entries
+        .iter()
+        .map(|&(offset, size)| offset as u64 + size as u64)
+        .max()
+        .unwrap_or(0);
+    let fits_in_slice = furthest_end.saturating_sub(data.len() as u64);
+    let lowest_base = u32::try_from(fits_in_slice)
+        .unwrap_or(u32::MAX)
+        .max(packed_base.saturating_sub(MAKERNOTE_BASE_SEARCH_SPAN))
+        .min(packed_base);
+
+    // Score each candidate by how many records validate their own declared size
+    // at it, walking down from the packed base so that ties keep the largest.
+    let mut best_votes = 0u32;
+    let mut best_base = packed_base;
+    let mut candidate = packed_base;
+    loop {
+        let mut votes = 0u32;
+        for &(value_offset, total_size) in &offset_entries {
+            // A record longer than u16::MAX cannot state its own size in the
+            // 16-bit leading slot, so it never votes.
+            let Ok(declared) = u16::try_from(total_size) else {
+                continue;
+            };
+            let Some(position) = value_offset.checked_sub(candidate) else {
+                continue;
+            };
+            let position = position as usize;
+            if position < header_size || position + 2 > data.len() {
+                continue;
+            }
+            if reader.u16_at(position) == Some(declared) {
+                votes += 1;
+            }
+        }
+        if votes > best_votes {
+            best_votes = votes;
+            best_base = candidate;
+        }
+        if candidate == lowest_base {
+            break;
+        }
+        candidate -= 1;
+    }
+
+    if best_votes >= MAKERNOTE_BASE_MIN_VOTES {
+        Some(best_base)
+    } else {
+        Some(packed_base)
+    }
+}
+
+/// Returns an IFD entry's value as raw bytes, resolved against the MakerNote base.
+///
+/// [`extract_canon_i16_array_with_base`] reinterprets everything as `int16`, which is
+/// wrong for the records ExifTool declares as `int32` (`CustomFunctions2` is stored as
+/// TIFF LONG). This hands back the untyped bytes so the caller can decode them with the
+/// width its own table specifies.
+fn extract_canon_bytes_with_base<'a>(
+    entry: &IfdEntry,
+    data: &'a [u8],
+    base_offset: u32,
+) -> Option<&'a [u8]> {
+    let type_size: usize = match entry.field_type {
+        1 | 2 | 6 | 7 => 1,
+        3 | 8 => 2,
+        4 | 9 | 11 => 4,
+        5 | 10 | 12 => 8,
+        _ => return None,
+    };
+    let byte_count = type_size.checked_mul(entry.value_count as usize)?;
+    if byte_count == 0 || byte_count <= 4 {
+        // Values of 4 bytes or fewer live inline in the offset slot, not in the data area.
+        return None;
+    }
+    let relative_offset = entry.value_offset.checked_sub(base_offset)? as usize;
+    data.get(relative_offset..relative_offset.checked_add(byte_count)?)
+}
+
+/// Resolves the MakerNote base once, on the same post-signature slice that
+/// [`parse_ifd_entries`] hands to its entry callbacks.
+///
+/// [`calculate_makernote_base`] scans up to [`MAKERNOTE_BASE_SEARCH_SPAN`]
+/// candidate bases, so it is resolved once per MakerNote and threaded through the
+/// extractors rather than recomputed per entry. A MakerNote with no offset-based
+/// entry to anchor on keeps the historical fallback of treating value offsets as
+/// slice-relative.
+fn canon_makernote_base(data: &[u8], byte_order: ByteOrder, config: &IfdParserConfig) -> u32 {
+    let start_offset = match config.signature {
+        Some(sig) if data.len() >= sig.len() && &data[..sig.len()] == sig => {
+            config.signature_offset
+        }
+        _ => 0,
+    };
+    if start_offset >= data.len() {
+        return 0;
+    }
+    calculate_makernote_base(&data[start_offset..], byte_order).unwrap_or(0)
 }
 
 /// Legacy wrapper for extract_canon_i16_array without base offset (for test compatibility)
@@ -250,11 +401,12 @@ fn extract_canon_string_with_base(
             ByteOrder::LittleEndian => entry.value_offset.to_le_bytes(),
             ByteOrder::BigEndian => entry.value_offset.to_be_bytes(),
         };
-        let s = String::from_utf8_lossy(&bytes[..byte_count])
-            .trim_end_matches('\0')
-            .trim()
-            .to_string();
-        return if s.is_empty() { None } else { Some(s) };
+        let inline = &bytes[..byte_count];
+        let terminated = match inline.iter().position(|&b| b == 0) {
+            Some(nul) => &inline[..nul],
+            None => inline,
+        };
+        return Some(String::from_utf8_lossy(terminated).to_string());
     }
 
     // For offset-based strings, adjust the offset using base_offset
@@ -278,9 +430,13 @@ fn extract_canon_string_with_base(
         Some(nul) => &bytes[..nul],
         None => bytes,
     };
-    let s = String::from_utf8_lossy(terminated).trim().to_string();
 
-    if s.is_empty() { None } else { Some(s) }
+    // No trimming, and an empty result is still a result. ExifTool prints the ASCII
+    // value exactly as stored once the NUL terminator is cut: `CanonImageType` keeps the
+    // space padding Canon writes ("IMG:ELURA60 JPEG" + 48 spaces), and an all-NUL
+    // `OwnerName` prints as the empty string rather than vanishing -- 545 of the 668
+    // Canon samples in the corpus carry an OwnerName, and most of them are empty.
+    Some(String::from_utf8_lossy(terminated).to_string())
 }
 
 /// Extracts a string value from a Canon MakerNote IFD entry.
@@ -389,6 +545,816 @@ const CANON_THUMBNAIL_IMAGE_VALID_AREA: u16 = 0x0013;
 const CANON_ORIGINAL_DECISION_DATA_OFFSET: u16 = 0x0083;
 /// ExifTool Canon.pm:1972 — `0x4001 => [ ... ColorData1..ColorData12 ... ]`
 const CANON_COLOR_DATA: u16 = 0x4001;
+/// ExifTool Canon.pm:1802 — `0x91 => { Name => 'PersonalFunctions', ... }`
+const CANON_PERSONAL_FUNCTIONS: u16 = 0x0091;
+/// ExifTool Canon.pm:1809 — `0x92 => { Name => 'PersonalFunctionValues', ... }`
+const CANON_PERSONAL_FUNCTION_VALUES: u16 = 0x0092;
+/// ExifTool Canon.pm:1883 — `0x99 => { Name => 'CustomFunctions2', ... }`
+const CANON_CUSTOM_FUNCTIONS2: u16 = 0x0099;
+
+/// `%CanonCustom::PersonalFuncs` (CanonCustom.pm:1091) — EOS-1D personal function
+/// switches, keyed by their `int16u` index in the record.
+///
+/// The table is `FIRST_ENTRY => 1` (index 0 is the record's own byte count) and
+/// indices 12, 13 and 23 are commented out in ExifTool as unused, so they are absent
+/// here too rather than emitted under a guessed name.
+const PERSONAL_FUNCS: &[(usize, &str)] = &[
+    (1, "PF0CustomFuncRegistration"),
+    (2, "PF1DisableShootingModes"),
+    (3, "PF2DisableMeteringModes"),
+    (4, "PF3ManualExposureMetering"),
+    (5, "PF4ExposureTimeLimits"),
+    (6, "PF5ApertureLimits"),
+    (7, "PF6PresetShootingModes"),
+    (8, "PF7BracketContinuousShoot"),
+    (9, "PF8SetBracketShots"),
+    (10, "PF9ChangeBracketSequence"),
+    (11, "PF10RetainProgramShift"),
+    (14, "PF13DrivePriority"),
+    (15, "PF14DisableFocusSearch"),
+    (16, "PF15DisableAFAssistBeam"),
+    (17, "PF16AutoFocusPointShoot"),
+    (18, "PF17DisableAFPointSel"),
+    (19, "PF18EnableAutoAFPointSel"),
+    (20, "PF19ContinuousShootSpeed"),
+    (21, "PF20LimitContinousShots"),
+    (22, "PF21EnableQuietOperation"),
+    (24, "PF23SetTimerLengths"),
+    (25, "PF24LightLCDDuringBulb"),
+    (26, "PF25DefaultClearSettings"),
+    (27, "PF26ShortenReleaseLag"),
+    (28, "PF27ReverseDialRotation"),
+    (29, "PF28NoQuickDialExpComp"),
+    (30, "PF29QuickDialSwitchOff"),
+    (31, "PF30EnlargementMode"),
+    (32, "PF31OriginalDecisionData"),
+];
+
+/// `%CanonCustom::PersonalFuncValues` (CanonCustom.pm:1135) entries that ExifTool
+/// reports verbatim, keyed by their `int16u` index in the record.
+///
+/// Indices 4-7 are excluded: they carry exposure-time and aperture encodings and are
+/// converted separately below.
+const PERSONAL_FUNC_VALUES: &[(usize, &str)] = &[
+    (1, "PF1Value"),
+    (2, "PF2Value"),
+    (3, "PF3Value"),
+    (8, "PF8BracketShots"),
+    (9, "PF19ShootingSpeedLow"),
+    (10, "PF19ShootingSpeedHigh"),
+    (11, "PF20MaxContinousShots"),
+    (12, "PF23ShutterButtonTime"),
+    (13, "PF23FELockTime"),
+    (14, "PF23PostReleaseTime"),
+    (15, "PF25AEMode"),
+    (16, "PF25MeteringMode"),
+    (17, "PF25DriveMode"),
+    (18, "PF25AFMode"),
+    (19, "PF25AFPointSel"),
+    (20, "PF25ImageSize"),
+    (21, "PF25WBMode"),
+    (22, "PF25Parameters"),
+    (23, "PF25ColorMatrix"),
+    (24, "PF27Value"),
+];
+
+/// `%CanonCustom::Functions2` (CanonCustom.pm:1198), transcribed from ExifTool.
+///
+/// One entry per custom-function tag id, holding one converter per value slot.
+/// Model-conditional entries (ExifTool `Condition`) are deliberately absent: their
+/// labels differ per body, and emitting one body's labels for another would be a
+/// fabricated value rather than a missing tag.
+/// One PrintConv slot of a `%CanonCustom::Functions2` entry.
+///
+/// ExifTool stores these as a Perl `PrintConv` that is either a lookup hash, a
+/// `BITMASK` hash, the literal `sprintf("Flags 0x%x",$val)`, or absent. A tag whose
+/// value has several slots carries one converter per slot (ExifTool's ARRAY form).
+#[derive(Clone, Copy)]
+enum CustomFunctionConv {
+    /// No `PrintConv`: ExifTool prints the signed value as-is.
+    Raw,
+    /// `sprintf("Flags 0x%x",$val)`.
+    Flags,
+    /// A lookup hash. An unlisted value prints as ExifTool's `Unknown (n)`.
+    Map(&'static [(i32, &'static str)]),
+    /// A `BITMASK` hash: set bit names joined with ", ", or "(none)" when no bit is set.
+    Bitmask(&'static [(i32, &'static str)]),
+}
+
+impl CustomFunctionConv {
+    /// Renders one value the way ExifTool's PrintConv would.
+    fn render(&self, value: i32) -> String {
+        match self {
+            CustomFunctionConv::Raw => value.to_string(),
+            CustomFunctionConv::Flags => format!("Flags 0x{:x}", value),
+            CustomFunctionConv::Map(table) => table
+                .iter()
+                .find(|(key, _)| *key == value)
+                .map(|(_, label)| (*label).to_string())
+                .unwrap_or_else(|| format!("Unknown ({})", value)),
+            CustomFunctionConv::Bitmask(table) => {
+                let names: Vec<&str> = table
+                    .iter()
+                    .filter(|(bit, _)| value & (1 << *bit) != 0)
+                    .map(|(_, label)| *label)
+                    .collect();
+                if names.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    names.join(", ")
+                }
+            }
+        }
+    }
+}
+
+const CUSTOM_FUNCTIONS2: &[(u32, &str, &[CustomFunctionConv])] = &[
+    (
+        0x0102,
+        "ISOSpeedIncrements",
+        &[CustomFunctionConv::Map(&[(0, "1/3 Stop"), (1, "1 Stop")])],
+    ),
+    (
+        0x0104,
+        "AEBAutoCancel",
+        &[CustomFunctionConv::Map(&[(0, "On"), (1, "Off")])],
+    ),
+    (
+        0x0105,
+        "AEBSequence",
+        &[CustomFunctionConv::Map(&[
+            (0, "0,-,+"),
+            (1, "-,0,+"),
+            (2, "+,0,-"),
+        ])],
+    ),
+    (
+        0x0107,
+        "SpotMeterLinkToAFPoint",
+        &[CustomFunctionConv::Map(&[
+            (0, "Disable (use center AF point)"),
+            (1, "Enable (use active AF point)"),
+        ])],
+    ),
+    (
+        0x0108,
+        "SafetyShift",
+        &[CustomFunctionConv::Map(&[
+            (0, "Disable"),
+            (1, "Enable (Tv/Av)"),
+            (2, "Enable (ISO speed)"),
+        ])],
+    ),
+    (
+        0x010b,
+        "ExposureModeInManual",
+        &[CustomFunctionConv::Map(&[
+            (0, "Specified metering mode"),
+            (1, "Evaluative metering"),
+            (2, "Partial metering"),
+            (3, "Spot metering"),
+            (4, "Center-weighted average"),
+        ])],
+    ),
+    (
+        0x0113,
+        "ExposureCompAutoCancel",
+        &[CustomFunctionConv::Map(&[(0, "Enable"), (1, "Disable")])],
+    ),
+    (
+        0x0114,
+        "AELockMeterModeAfterFocus",
+        &[CustomFunctionConv::Bitmask(&[
+            (0, "Evaluative"),
+            (1, "Partial"),
+            (2, "Spot"),
+            (3, "Center-weighted"),
+        ])],
+    ),
+    (
+        0x0201,
+        "LongExposureNoiseReduction",
+        &[CustomFunctionConv::Map(&[
+            (0, "Off"),
+            (1, "Auto"),
+            (2, "On"),
+        ])],
+    ),
+    (
+        0x0203,
+        "HighlightTonePriority",
+        &[CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")])],
+    ),
+    (
+        0x0304,
+        "ETTLII",
+        &[CustomFunctionConv::Map(&[
+            (0, "Evaluative"),
+            (1, "Average"),
+        ])],
+    ),
+    (
+        0x0305,
+        "ShutterCurtainSync",
+        &[CustomFunctionConv::Map(&[
+            (0, "1st-curtain sync"),
+            (1, "2nd-curtain sync"),
+        ])],
+    ),
+    (
+        0x0306,
+        "FlashFiring",
+        &[CustomFunctionConv::Map(&[
+            (0, "Fires"),
+            (1, "Does not fire"),
+        ])],
+    ),
+    (
+        0x0407,
+        "ViewInfoDuringExposure",
+        &[CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")])],
+    ),
+    (
+        0x0408,
+        "LCDIlluminationDuringBulb",
+        &[CustomFunctionConv::Map(&[(0, "Off"), (1, "On")])],
+    ),
+    (
+        0x040a,
+        "ViewfinderWarnings",
+        &[CustomFunctionConv::Bitmask(&[
+            (0, "Monochrome"),
+            (1, "WB corrected"),
+            (2, "One-touch image quality"),
+            (3, "ISO expansion"),
+            (4, "Spot metering"),
+            (6, "Noise reduction"),
+            (7, "HDR"),
+        ])],
+    ),
+    (
+        0x040b,
+        "LVShootingAreaDisplay",
+        &[CustomFunctionConv::Map(&[(0, "Masked"), (1, "Outlined")])],
+    ),
+    (
+        0x040c,
+        "LVShootingAreaDisplay",
+        &[CustomFunctionConv::Map(&[(0, "Masked"), (1, "Outlined")])],
+    ),
+    // 0x0501 USMLensElectronicMF is deliberately absent. ExifTool defines the same tag
+    // name in %Canon::AFConfig key 7 (Canon.pm:9377) behind a `Condition` on EOS R
+    // bodies, with different labels ("One-Shot -> Enabled (magnify)" rather than
+    // "Enable after one-shot AF"), and that is the value it reports on those bodies.
+    // Emitting the Functions2 labels would collide with it under the same key.
+    (
+        0x0502,
+        "AIServoTrackingSensitivity",
+        &[CustomFunctionConv::Map(&[
+            (-2, "Slow"),
+            (-1, "Medium Slow"),
+            (0, "Standard"),
+            (1, "Medium Fast"),
+            (2, "Fast"),
+        ])],
+    ),
+    (
+        0x0503,
+        "AIServoImagePriority",
+        &[CustomFunctionConv::Map(&[
+            (0, "1: AF, 2: Tracking"),
+            (1, "1: AF, 2: Drive speed"),
+            (2, "1: Release, 2: Drive speed"),
+            (3, "1: Release, 2: Tracking"),
+        ])],
+    ),
+    (
+        0x0504,
+        "AIServoTrackingMethod",
+        &[CustomFunctionConv::Map(&[
+            (0, "Main focus point priority"),
+            (1, "Continuous AF track priority"),
+        ])],
+    ),
+    (
+        0x0505,
+        "LensDriveNoAF",
+        &[CustomFunctionConv::Map(&[
+            (0, "Focus search on"),
+            (1, "Focus search off"),
+        ])],
+    ),
+    (
+        0x0506,
+        "LensAFStopButton",
+        &[CustomFunctionConv::Map(&[
+            (0, "AF stop"),
+            (1, "AF start"),
+            (2, "AE lock"),
+            (3, "AF point: M->Auto/Auto->ctr"),
+            (4, "One Shot <-> AI servo"),
+            (5, "IS start"),
+            (6, "Switch to registered AF point"),
+            (7, "Spot AF"),
+        ])],
+    ),
+    (
+        0x050b,
+        "AFPointAutoSelection",
+        &[CustomFunctionConv::Map(&[
+            (0, "Control-direct:disable/Main:enable"),
+            (1, "Control-direct:disable/Main:disable"),
+            (2, "Control-direct:enable/Main:enable"),
+        ])],
+    ),
+    (
+        0x050d,
+        "AFPointBrightness",
+        &[CustomFunctionConv::Map(&[(0, "Normal"), (1, "Brighter")])],
+    ),
+    (
+        0x0512,
+        "SelectAFAreaSelectMode",
+        &[
+            CustomFunctionConv::Map(&[
+                (0, "Disable"),
+                (1, "Enable"),
+                (2, "Register"),
+                (3, "Select AF-modes"),
+            ]),
+            CustomFunctionConv::Flags,
+        ],
+    ),
+    (
+        0x0513,
+        "ManualAFPointSelectPattern",
+        &[CustomFunctionConv::Map(&[
+            (0, "Stops at AF area edges"),
+            (1, "Continuous"),
+        ])],
+    ),
+    (
+        0x0514,
+        "DisplayAllAFPoints",
+        &[CustomFunctionConv::Map(&[(0, "Enable"), (1, "Disable")])],
+    ),
+    (
+        0x0515,
+        "FocusDisplayAIServoAndMF",
+        &[CustomFunctionConv::Map(&[(0, "Enable"), (1, "Disable")])],
+    ),
+    (
+        0x0516,
+        "OrientationLinkedAFPoint",
+        &[CustomFunctionConv::Map(&[
+            (0, "Same for vertical and horizontal"),
+            (1, "Select different AF points"),
+        ])],
+    ),
+    (
+        0x0517,
+        "MultiControllerWhileMetering",
+        &[CustomFunctionConv::Map(&[
+            (0, "Off"),
+            (1, "AF point selection"),
+        ])],
+    ),
+    (0x0518, "AccelerationTracking", &[CustomFunctionConv::Raw]),
+    (
+        0x0519,
+        "AIServoFirstImagePriority",
+        &[CustomFunctionConv::Map(&[
+            (-1, "Release priority"),
+            (0, "Equal priority"),
+            (1, "Focus priority"),
+        ])],
+    ),
+    (
+        0x051a,
+        "AIServoSecondImagePriority",
+        &[CustomFunctionConv::Map(&[
+            (-1, "Shooting speed priority"),
+            (0, "Equal priority"),
+            (1, "Focus priority"),
+        ])],
+    ),
+    (
+        0x051b,
+        "AFAreaSelectMethod",
+        &[CustomFunctionConv::Map(&[
+            (0, "AF area selection button"),
+            (1, "Main dial"),
+        ])],
+    ),
+    (
+        0x051c,
+        "AutoAFPointColorTracking",
+        &[CustomFunctionConv::Map(&[
+            (0, "On-Shot AF only"),
+            (1, "Disable"),
+        ])],
+    ),
+    (
+        0x051d,
+        "VFDisplayIllumination",
+        &[
+            CustomFunctionConv::Map(&[(0, "Auto"), (1, "Enable"), (2, "Disable")]),
+            CustomFunctionConv::Map(&[(0, "Non-illuminated"), (1, "Illuminated")]),
+        ],
+    ),
+    (
+        0x051e,
+        "InitialAFPointAIServoAF",
+        &[CustomFunctionConv::Map(&[
+            (0, "Auto"),
+            (1, "Initial AF point selected"),
+            (2, "Manual AF point"),
+        ])],
+    ),
+    (
+        0x060f,
+        "MirrorLockup",
+        &[CustomFunctionConv::Map(&[
+            (0, "Disable"),
+            (1, "Enable"),
+            (2, "Enable: Down with Set"),
+        ])],
+    ),
+    (
+        0x0702,
+        "AFOnAELockButtonSwitch",
+        &[CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")])],
+    ),
+    (
+        0x0703,
+        "QuickControlDialInMeter",
+        &[CustomFunctionConv::Map(&[
+            (0, "Exposure comp/Aperture"),
+            (1, "AF point selection"),
+            (2, "ISO speed"),
+            (3, "AF point selection swapped with Exposure comp"),
+            (4, "ISO speed swapped with Exposure comp"),
+        ])],
+    ),
+    (
+        0x0705,
+        "ManualTv",
+        &[CustomFunctionConv::Map(&[
+            (0, "Tv=Main/Av=Control"),
+            (1, "Tv=Control/Av=Main"),
+        ])],
+    ),
+    (
+        0x0706,
+        "DialDirectionTvAv",
+        &[CustomFunctionConv::Map(&[(0, "Normal"), (1, "Reversed")])],
+    ),
+    (
+        0x0707,
+        "AvSettingWithoutLens",
+        &[CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")])],
+    ),
+    (
+        0x0708,
+        "WBMediaImageSizeSetting",
+        &[CustomFunctionConv::Map(&[
+            (0, "Rear LCD panel"),
+            (1, "LCD monitor"),
+            (2, "Off (disable button)"),
+        ])],
+    ),
+    (
+        0x0709,
+        "LockMicrophoneButton",
+        &[CustomFunctionConv::Map(&[
+            (0, "Protect (hold:record memo)"),
+            (1, "Record memo (protect:disable)"),
+            (2, "Play memo (hold:record memo)"),
+            (3, "Rating (protect/memo:disable)"),
+        ])],
+    ),
+    (
+        0x070a,
+        "ButtonFunctionControlOff",
+        &[CustomFunctionConv::Map(&[
+            (0, "Normal (enable)"),
+            (1, "Disable main, Control, Multi-control"),
+        ])],
+    ),
+    (
+        0x070b,
+        "AssignFuncButton",
+        &[CustomFunctionConv::Map(&[
+            (0, "LCD brightness"),
+            (1, "Image quality"),
+            (2, "Exposure comp./AEB setting"),
+            (3, "Image jump with main dial"),
+            (4, "Live view function settings"),
+        ])],
+    ),
+    (0x070c, "CustomControls", &[CustomFunctionConv::Raw]),
+    (
+        0x070d,
+        "StartMovieShooting",
+        &[CustomFunctionConv::Map(&[
+            (0, "Default (from LV)"),
+            (1, "Quick start (FEL button)"),
+        ])],
+    ),
+    (
+        0x070e,
+        "FlashButtonFunction",
+        &[CustomFunctionConv::Map(&[
+            (0, "Raise built-in flash"),
+            (1, "ISO speed"),
+        ])],
+    ),
+    (
+        0x070f,
+        "MultiFunctionLock",
+        &[
+            CustomFunctionConv::Map(&[
+                (0, "Off"),
+                (1, "On"),
+                (2, "On (quick control dial)"),
+                (3, "On (main dial and quick control dial)"),
+            ]),
+            CustomFunctionConv::Bitmask(&[
+                (0, "Main dial"),
+                (1, "Quick control dial"),
+                (2, "Multi-controller"),
+            ]),
+        ],
+    ),
+    (
+        0x0710,
+        "TrashButtonFunction",
+        &[CustomFunctionConv::Map(&[
+            (0, "Normal (set center AF point)"),
+            (1, "Depth-of-field preview"),
+        ])],
+    ),
+    (
+        0x0711,
+        "ShutterReleaseWithoutLens",
+        &[CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")])],
+    ),
+    (
+        0x0712,
+        "ControlRingRotation",
+        &[CustomFunctionConv::Map(&[(0, "Normal"), (1, "Reversed")])],
+    ),
+    (
+        0x0713,
+        "FocusRingRotation",
+        &[CustomFunctionConv::Map(&[(0, "Normal"), (1, "Reversed")])],
+    ),
+    (
+        0x0714,
+        "RFLensMFFocusRingSensitivity",
+        &[CustomFunctionConv::Map(&[
+            (0, "Varies With Rotation Speed"),
+            (1, "Linked To Rotation Angle"),
+        ])],
+    ),
+    (0x0715, "CustomizeDials", &[CustomFunctionConv::Raw]),
+    (
+        0x080d,
+        "ShortReleaseTimeLag",
+        &[CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")])],
+    ),
+    (
+        0x080e,
+        "AddAspectRatioInfo",
+        &[CustomFunctionConv::Map(&[
+            (0, "Off"),
+            (1, "6:6"),
+            (2, "3:4"),
+            (3, "4:5"),
+            (4, "6:7"),
+            (5, "10:12"),
+            (6, "5:7"),
+        ])],
+    ),
+    (
+        0x080f,
+        "AddOriginalDecisionData",
+        &[CustomFunctionConv::Map(&[(0, "Off"), (1, "On")])],
+    ),
+    (
+        0x0810,
+        "LiveViewExposureSimulation",
+        &[CustomFunctionConv::Map(&[
+            (0, "Disable (LCD auto adjust)"),
+            (1, "Enable (simulates exposure)"),
+        ])],
+    ),
+    (
+        0x0811,
+        "LCDDisplayAtPowerOn",
+        &[CustomFunctionConv::Map(&[
+            (0, "Display"),
+            (1, "Retain power off status"),
+        ])],
+    ),
+    (
+        0x0812,
+        "MemoAudioQuality",
+        &[CustomFunctionConv::Map(&[
+            (0, "High (48 kHz)"),
+            (1, "Low (8 kHz)"),
+        ])],
+    ),
+    (
+        0x0813,
+        "DefaultEraseOption",
+        &[CustomFunctionConv::Map(&[
+            (0, "Cancel selected"),
+            (1, "Erase selected"),
+            (2, "Erase RAW selected"),
+            (3, "Erase non-RAW selected"),
+        ])],
+    ),
+    (
+        0x0814,
+        "RetractLensOnPowerOff",
+        &[CustomFunctionConv::Map(&[(0, "Enable"), (1, "Disable")])],
+    ),
+    (
+        0x0815,
+        "AddIPTCInformation",
+        &[CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")])],
+    ),
+    (
+        0x0816,
+        "AudioCompression",
+        &[CustomFunctionConv::Map(&[(0, "Enable"), (1, "Disable")])],
+    ),
+];
+
+/// Decodes a `CustomFunctions2` record (MakerNote tag 0x0099) into tags.
+///
+/// The record is entirely self-describing, so no per-model offset table is involved --
+/// `CanonCustom::ProcessCanonCustom2` (CanonCustom.pm:2642) reads it as:
+///
+/// ```text
+///     int16u  len              # must equal the record size, and be >= 8
+///     ...
+///     int32u  groupCount       # at offset 4
+///     # then, from offset 8, a run of groups:
+///     int32u  recNum, recLen, recCount
+///     # then, within each group, a run of entries:
+///     int32u  tag, num
+///     int32s  value[num]
+/// ```
+///
+/// Only tags present in [`CUSTOM_FUNCTIONS2`] are emitted; the rest are stepped over,
+/// exactly as ExifTool does without `-U`.
+fn parse_custom_functions2(
+    bytes: &[u8],
+    byte_order: ByteOrder,
+    tags: &mut HashMap<String, String>,
+) {
+    let reader = EndianReader::new(bytes, byte_order.to_io_byte_order());
+    // "first entry in array must be the size"
+    if reader.u16_at(0).map(usize::from) != Some(bytes.len()) || bytes.len() < 8 {
+        return;
+    }
+
+    let mut pos = 8usize;
+    while pos + 12 <= bytes.len() {
+        let (Some(record_len), Some(_record_count)) =
+            (reader.u32_at(pos + 4), reader.u32_at(pos + 8))
+        else {
+            return;
+        };
+        // "must be at least 8 bytes for recNum and recLen"
+        let Some(payload_len) = (record_len as usize).checked_sub(8) else {
+            return;
+        };
+        pos += 12;
+        let Some(record_end) = pos.checked_add(payload_len) else {
+            return;
+        };
+        if record_end > bytes.len() {
+            return; // "Corrupted CanonCustom2 group"
+        }
+
+        let mut entry_pos = pos;
+        while entry_pos + 8 < record_end {
+            let (Some(tag_id), Some(count)) =
+                (reader.u32_at(entry_pos), reader.u32_at(entry_pos + 4))
+            else {
+                return;
+            };
+            let mut count = count as usize;
+            let Some(mut next_entry) = entry_pos
+                .checked_add(8)
+                .and_then(|p| count.checked_mul(4).and_then(|n| p.checked_add(n)))
+            else {
+                return;
+            };
+            if next_entry > record_end {
+                break;
+            }
+
+            // EOS-1DXmkIII firmware 1.0.0 writes tag 0x70c one element short, which
+            // shifts every entry after it in the group. ExifTool patches it at
+            // CanonCustom.pm:2690:
+            //
+            // ```text
+            //     if ($tag == 0x70c and $num == 0x66 and $nextRec + 8 < $recEnd) {
+            //         my $tmp = Get32u($dataPt, $nextRec + 4);
+            //         if ($tmp == 0x70f) {
+            //             ++$num; # (count should be one greater)
+            //         }
+            //     }
+            // ```
+            //
+            // Without it the 1DXmkIII reports `ShortReleaseTimeLag` "Disable" for
+            // "Enable" and a 102-element `CustomControls` for a 103-element one.
+            if tag_id == 0x70c
+                && count == 0x66
+                && next_entry + 8 < record_end
+                && reader.u32_at(next_entry + 4) == Some(0x70f)
+            {
+                count += 1;
+                next_entry += 4;
+            }
+            entry_pos += 8;
+
+            if let Some(&(_, name, convs)) =
+                CUSTOM_FUNCTIONS2.iter().find(|(id, _, _)| *id == tag_id)
+            {
+                let values: Vec<i32> = (0..count)
+                    .filter_map(|i| reader.i32_at(entry_pos + i * 4))
+                    .collect();
+                if values.len() == count
+                    && let Some(rendered) = render_custom_function2(convs, &values)
+                {
+                    tags.insert(format!("Canon:{}", name), rendered);
+                }
+            }
+
+            entry_pos = next_entry;
+        }
+        pos = record_end;
+    }
+}
+
+/// Applies a [`CUSTOM_FUNCTIONS2`] entry's converters to one decoded value list.
+///
+/// ExifTool pairs an ARRAY `PrintConv` slot-for-slot with the value list and joins the
+/// results with "; "; a tag with no `PrintConv` prints its values space-separated. When
+/// the slot counts disagree there is no defined pairing, so nothing is emitted rather
+/// than a guess.
+fn render_custom_function2(convs: &[CustomFunctionConv], values: &[i32]) -> Option<String> {
+    if values.is_empty() {
+        return None;
+    }
+    let all_raw = convs
+        .iter()
+        .all(|conv| matches!(conv, CustomFunctionConv::Raw));
+    if all_raw {
+        return Some(
+            values
+                .iter()
+                .map(i32::to_string)
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+    }
+    // ExifTool pairs an ARRAY PrintConv slot-for-slot with the value list. When the
+    // counts disagree there is no defined pairing -- a two-converter entry that arrives
+    // with one value could mean either converter -- so nothing is emitted rather than a
+    // guess. (`MultiFunctionLock` on the EOS-1DXmkIII is exactly this case, and running
+    // its first converter over the single value produced "Unknown (66)".)
+    if convs.len() != values.len() {
+        return None;
+    }
+    Some(
+        convs
+            .iter()
+            .zip(values)
+            .map(|(conv, &value)| conv.render(value))
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
+}
+
+/// Renders a personal-function switch the way `CanonCustom::ConvertPfn` does
+/// (CanonCustom.pm:2624):
+///
+/// ```text
+///     return $val ? ($val==1 ? 'On' : "On ($val)") : "Off";
+/// ```
+fn convert_personal_function(value: u16) -> String {
+    match value {
+        0 => "Off".to_string(),
+        1 => "On".to_string(),
+        other => format!("On ({})", other),
+    }
+}
 
 // Canon signature (not always present)
 const CANON_SIGNATURE: &[u8] = b"Canon";
@@ -474,6 +1440,8 @@ const SHOT_INFO_EXPOSURE_TIME: usize = 22;
 /// ExifTool `%Canon::ShotInfo` key 23 (Canon.pm:3001) — `MeasuredEV2`.
 const SHOT_INFO_MEASURED_EV2: usize = 23;
 const SHOT_INFO_BULB_DURATION: usize = 24;
+/// ExifTool `%Canon::ShotInfo` key 26 — `Name => 'CameraType'` (Canon.pm:3011).
+const SHOT_INFO_CAMERA_TYPE: usize = 26;
 /// ExifTool `%Canon::ShotInfo` key 27 — `Name => 'AutoRotate'` (Canon.pm:3022).
 const SHOT_INFO_AUTO_ROTATE: usize = 27;
 /// ExifTool `%Canon::ShotInfo` key 28 (Canon.pm:3033) — `NDFilter`.
@@ -654,7 +1622,10 @@ const COLOR_DATA1_WB_PRESETS: &[(usize, usize, &str)] = &[
 // Reference: ExifTool Canon.pm MacroMode table
 // Value 0 = "Off" (no macro), 1 = "Macro" (macro mode active), 2 = "Normal"
 // Public to allow re-use in registry module
-const_decoder!(pub MACRO_MODE, i16, [(0, "Off"), (1, "Macro"), (2, "Normal"),]);
+const_decoder!(pub MACRO_MODE, i16, [
+    (1, "Macro"),
+    (2, "Normal"),
+]);
 
 // Canon quality setting decoder
 // Public to allow re-use in registry module
@@ -682,14 +1653,15 @@ const_decoder!(
     pub FLASH_MODE,
     i16,
     [
+        (-1, "n/a"),
         (0, "Off"),
         (1, "Auto"),
         (2, "On"),
-        (3, "Red-eye Reduction"),
-        (4, "Slow Sync"),
-        (5, "Auto + Red-eye Reduction"),
-        (6, "On + Red-eye Reduction"),
-        (16, "External Flash"),
+        (3, "Red-eye reduction"),
+        (4, "Slow-sync"),
+        (5, "Red-eye reduction (Auto)"),
+        (6, "Red-eye reduction (On)"),
+        (16, "External flash"),
     ]
 );
 
@@ -731,9 +1703,12 @@ const_decoder!(
     pub METERING_MODE,
     i16,
     [
+        (0, "Default"),
+        (1, "Spot"),
+        (2, "Average"),
         (3, "Evaluative"),
         (4, "Partial"),
-        (5, "Center-weighted Average"),
+        (5, "Center-weighted average"),
     ]
 );
 
@@ -875,11 +1850,11 @@ const_decoder!(
     pub EASY_MODE,
     i16,
     [
-        (0, "Full Auto"),
+        (0, "Full auto"),
         (1, "Manual"),
         (2, "Landscape"),
-        (3, "Fast Shutter"),
-        (4, "Slow Shutter"),
+        (3, "Fast shutter"),
+        (4, "Slow shutter"),
         (5, "Night"),
         (6, "Gray Scale"),
         (7, "Sepia"),
@@ -887,7 +1862,7 @@ const_decoder!(
         (9, "Sports"),
         (10, "Macro"),
         (11, "Black & White"),
-        (12, "Pan Focus"),
+        (12, "Pan focus"),
         (13, "Vivid"),
         (14, "Neutral"),
         (15, "Flash Off"),
@@ -938,6 +1913,10 @@ const_decoder!(
         (60, "High-speed Burst HQ"),
         (61, "Smooth Skin"),
         (62, "Soft Focus"),
+        (68, "Food"),
+        (84, "HDR Art Standard"),
+        (85, "HDR Art Vivid"),
+        (93, "HDR Art Bold"),
         (257, "Spotlight"),
         (258, "Night 2"),
         (259, "Night+"),
@@ -1039,23 +2018,37 @@ const_decoder!(
     ]
 );
 
-// Canon flash bits bitfield decoder
-// Used for FlashBits in CameraSettings (index 29)
-// Each bit represents a flash feature/state
-bitfield_decoder!(
-    pub FLASH_BITS,
-    [
-        (0x0001, "Manual"),
-        (0x0002, "TTL"),
-        (0x0004, "A-TTL"),
-        (0x0008, "E-TTL"),
-        (0x0010, "FP Sync"),
-        (0x0020, "2nd Curtain"),
-        (0x0040, "High-speed Sync"),
-        (0x0080, "Built-in"),
-        (0x0100, "External"),
-    ]
-);
+/// `%Canon::CameraSettings` key 29 `FlashBits` (Canon.pm:2686).
+///
+/// ExifTool renders it as `PrintConv => { 0 => '(none)', BITMASK => { ... } }`, i.e. the
+/// set bits' names joined with ", ", and the literal "(none)" when no bit is set. The
+/// bit NUMBERS below are ExifTool's own -- note the gaps at 5, 6, 8-10 and 12, which an
+/// evenly-spaced mask table silently mislabels.
+const FLASH_BITS: &[(u32, &str)] = &[
+    (0, "Manual"),
+    (1, "TTL"),
+    (2, "A-TTL"),
+    (3, "E-TTL"),
+    (4, "FP sync enabled"),
+    (7, "2nd-curtain sync used"),
+    (11, "FP sync used"),
+    (13, "Built-in"),
+    (14, "External"),
+];
+
+/// Renders `FlashBits` the way ExifTool's `BITMASK` PrintConv does.
+fn decode_flash_bits(value: u16) -> String {
+    let names: Vec<&str> = FLASH_BITS
+        .iter()
+        .filter(|(bit, _)| value & (1u16 << *bit) != 0)
+        .map(|(_, name)| *name)
+        .collect();
+    if names.is_empty() {
+        "(none)".to_string()
+    } else {
+        names.join(", ")
+    }
+}
 
 // Canon slow shutter decoder
 // Used for SlowShutter in ShotInfo (index 8)
@@ -1063,6 +2056,7 @@ const_decoder!(
     pub SLOW_SHUTTER,
     i16,
     [
+        (-1, "n/a"),
         (0, "Off"),
         (1, "Night Scene"),
         (2, "On"),
@@ -1539,36 +2533,35 @@ const_decoder!(
 // Canon stores aperture and shutter speed values in APEX format.
 // APEX (Additive System of Photographic Exposure) uses logarithmic scales.
 
-/// Converts a Canon APEX aperture value to an f-number string.
+/// Converts a Canon APEX aperture value the way every `%Canon` aperture key does.
 ///
-/// Canon stores aperture as raw value that needs conversion using the formula:
-/// f-number = sqrt(2) ^ (apex_value / 32)
+/// Shared verbatim by `MaxAperture` and `MinAperture` (`%Canon::CameraSettings` keys
+/// 26/27, Canon.pm:2617) and `TargetAperture` (`%Canon::ShotInfo` key 4, Canon.pm:2803):
 ///
-/// # Parameters
-/// - `apex_value`: The raw APEX aperture value from Canon MakerNote
+/// ```text
+///     RawConv   => '$val > 0 ? $val : undef',
+///     ValueConv => 'exp(Image::ExifTool::Canon::CanonEv($val)*log(2)/2)',
+///     PrintConv => 'sprintf("%.2g",$val)',
+/// ```
+///
+/// Two things this is easy to get wrong, and which the corpus punishes hard: the
+/// printed value carries **no** `f/` prefix (ExifTool prints `5.8`, not `f/5.8`), and
+/// the exponent must go through [`canon_ev`] rather than a plain `raw / 64` -- the two
+/// agree only when the value lands on a whole stop, and diverge on Canon's 1/3-stop
+/// codes 0x0c and 0x14.
 ///
 /// # Returns
-/// A formatted f-number string (e.g., "f/2.8", "f/5.6")
-///
-/// # Example
-/// ```ignore
-/// let aperture = apex_to_aperture(160); // Returns "f/5.6"
-/// ```
-pub fn apex_to_aperture(apex_value: i16) -> String {
-    if apex_value == 0 {
-        return "n/a".to_string();
+/// `None` when the raw value is not positive, matching ExifTool's `RawConv` dropping
+/// the tag entirely rather than reporting a placeholder.
+pub fn canon_aperture(raw_value: i16) -> Option<String> {
+    // `RawConv => '$val > 0 ? $val : undef'`
+    if raw_value <= 0 {
+        return None;
     }
-
-    // Canon formula: f-number = 2^(apex/64)
-    // Some cameras use apex/32, we'll use the most common: apex/64
-    let f_number = 2.0_f64.powf(apex_value as f64 / 64.0);
-
-    // Format with appropriate precision
-    if f_number < 10.0 {
-        format!("f/{:.1}", f_number)
-    } else {
-        format!("f/{:.0}", f_number)
-    }
+    // `ValueConv => 'exp(CanonEv($val)*log(2)/2)'` == 2 ** (CanonEv($val) / 2)
+    Some(format_g2(
+        2.0_f64.powf(canon_ev(i32::from(raw_value)) / 2.0),
+    ))
 }
 
 /// Converts a Canon APEX shutter speed value to an exposure time string.
@@ -1629,14 +2622,15 @@ pub fn format_focal_length(raw_value: i16, focal_units: i16) -> String {
         return "n/a".to_string();
     }
 
-    let focal_length_mm = raw_value as f64 / focal_units as f64;
-
-    // Format with appropriate precision
-    if focal_length_mm == focal_length_mm.round() {
-        format!("{} mm", focal_length_mm as i32)
-    } else {
-        format!("{:.1} mm", focal_length_mm)
-    }
+    // ExifTool `ValueConv => '$val / ($$self{FocalUnits} || 1)'` followed by
+    // `PrintConv => '"$val mm"'` interpolates whatever Perl's own stringification
+    // produces -- the full quotient, not a rounded one. A 1/16 mm unit body prints
+    // `16.1875 mm`; rounding that to one decimal (`16.2 mm`) is a value difference on
+    // every such sample.
+    format!(
+        "{} mm",
+        format_perl_number(f64::from(raw_value) / f64::from(focal_units))
+    )
 }
 
 /// Converts a Canon APEX-style value to an EV (exposure value) string.
@@ -1997,6 +2991,503 @@ fn decode_af_points_in_focus(value: i16) -> String {
 //
 // Reference: ExifTool Canon.pm CanonModelID table
 
+/// `%canonModelID` (Canon.pm:656), transcribed from ExifTool -- the PrintConv for
+/// MakerNote tag 0x0010 `CanonModelID`.
+///
+/// All 357 entries; an id absent from the table prints as ExifTool's
+/// `Unknown (n)`, which is exactly what ExifTool does for an unlisted key.
+const CANON_MODEL_IDS: &[(u32, &str)] = &[
+    (0x01010000, "PowerShot A30"),
+    (
+        0x01040000,
+        "PowerShot S300 / Digital IXUS 300 / IXY Digital 300",
+    ),
+    (0x01060000, "PowerShot A20"),
+    (0x01080000, "PowerShot A10"),
+    (
+        0x01090000,
+        "PowerShot S110 / Digital IXUS v / IXY Digital 200",
+    ),
+    (0x01100000, "PowerShot G2"),
+    (0x01110000, "PowerShot S40"),
+    (0x01120000, "PowerShot S30"),
+    (0x01130000, "PowerShot A40"),
+    (0x01140000, "EOS D30"),
+    (0x01150000, "PowerShot A100"),
+    (
+        0x01160000,
+        "PowerShot S200 / Digital IXUS v2 / IXY Digital 200a",
+    ),
+    (0x01170000, "PowerShot A200"),
+    (
+        0x01180000,
+        "PowerShot S330 / Digital IXUS 330 / IXY Digital 300a",
+    ),
+    (0x01190000, "PowerShot G3"),
+    (0x01210000, "PowerShot S45"),
+    (
+        0x01230000,
+        "PowerShot SD100 / Digital IXUS II / IXY Digital 30",
+    ),
+    (
+        0x01240000,
+        "PowerShot S230 / Digital IXUS v3 / IXY Digital 320",
+    ),
+    (0x01250000, "PowerShot A70"),
+    (0x01260000, "PowerShot A60"),
+    (
+        0x01270000,
+        "PowerShot S400 / Digital IXUS 400 / IXY Digital 400",
+    ),
+    (0x01290000, "PowerShot G5"),
+    (0x01300000, "PowerShot A300"),
+    (0x01310000, "PowerShot S50"),
+    (0x01340000, "PowerShot A80"),
+    (
+        0x01350000,
+        "PowerShot SD10 / Digital IXUS i / IXY Digital L",
+    ),
+    (0x01360000, "PowerShot S1 IS"),
+    (0x01370000, "PowerShot Pro1"),
+    (0x01380000, "PowerShot S70"),
+    (0x01390000, "PowerShot S60"),
+    (0x01400000, "PowerShot G6"),
+    (
+        0x01410000,
+        "PowerShot S500 / Digital IXUS 500 / IXY Digital 500",
+    ),
+    (0x01420000, "PowerShot A75"),
+    (
+        0x01440000,
+        "PowerShot SD110 / Digital IXUS IIs / IXY Digital 30a",
+    ),
+    (0x01450000, "PowerShot A400"),
+    (0x01470000, "PowerShot A310"),
+    (0x01490000, "PowerShot A85"),
+    (
+        0x01520000,
+        "PowerShot S410 / Digital IXUS 430 / IXY Digital 450",
+    ),
+    (0x01530000, "PowerShot A95"),
+    (
+        0x01540000,
+        "PowerShot SD300 / Digital IXUS 40 / IXY Digital 50",
+    ),
+    (
+        0x01550000,
+        "PowerShot SD200 / Digital IXUS 30 / IXY Digital 40",
+    ),
+    (0x01560000, "PowerShot A520"),
+    (0x01570000, "PowerShot A510"),
+    (
+        0x01590000,
+        "PowerShot SD20 / Digital IXUS i5 / IXY Digital L2",
+    ),
+    (0x01640000, "PowerShot S2 IS"),
+    (
+        0x01650000,
+        "PowerShot SD430 / Digital IXUS Wireless / IXY Digital Wireless",
+    ),
+    (
+        0x01660000,
+        "PowerShot SD500 / Digital IXUS 700 / IXY Digital 600",
+    ),
+    (0x01668000, "EOS D60"),
+    (
+        0x01700000,
+        "PowerShot SD30 / Digital IXUS i Zoom / IXY Digital L3",
+    ),
+    (0x01740000, "PowerShot A430"),
+    (0x01750000, "PowerShot A410"),
+    (0x01760000, "PowerShot S80"),
+    (0x01780000, "PowerShot A620"),
+    (0x01790000, "PowerShot A610"),
+    (
+        0x01800000,
+        "PowerShot SD630 / Digital IXUS 65 / IXY Digital 80",
+    ),
+    (
+        0x01810000,
+        "PowerShot SD450 / Digital IXUS 55 / IXY Digital 60",
+    ),
+    (0x01820000, "PowerShot TX1"),
+    (
+        0x01870000,
+        "PowerShot SD400 / Digital IXUS 50 / IXY Digital 55",
+    ),
+    (0x01880000, "PowerShot A420"),
+    (
+        0x01890000,
+        "PowerShot SD900 / Digital IXUS 900 Ti / IXY Digital 1000",
+    ),
+    (
+        0x01900000,
+        "PowerShot SD550 / Digital IXUS 750 / IXY Digital 700",
+    ),
+    (0x01920000, "PowerShot A700"),
+    (
+        0x01940000,
+        "PowerShot SD700 IS / Digital IXUS 800 IS / IXY Digital 800 IS",
+    ),
+    (0x01950000, "PowerShot S3 IS"),
+    (0x01960000, "PowerShot A540"),
+    (
+        0x01970000,
+        "PowerShot SD600 / Digital IXUS 60 / IXY Digital 70",
+    ),
+    (0x01980000, "PowerShot G7"),
+    (0x01990000, "PowerShot A530"),
+    (
+        0x02000000,
+        "PowerShot SD800 IS / Digital IXUS 850 IS / IXY Digital 900 IS",
+    ),
+    (
+        0x02010000,
+        "PowerShot SD40 / Digital IXUS i7 / IXY Digital L4",
+    ),
+    (0x02020000, "PowerShot A710 IS"),
+    (0x02030000, "PowerShot A640"),
+    (0x02040000, "PowerShot A630"),
+    (0x02090000, "PowerShot S5 IS"),
+    (0x02100000, "PowerShot A460"),
+    (
+        0x02120000,
+        "PowerShot SD850 IS / Digital IXUS 950 IS / IXY Digital 810 IS",
+    ),
+    (0x02130000, "PowerShot A570 IS"),
+    (0x02140000, "PowerShot A560"),
+    (
+        0x02150000,
+        "PowerShot SD750 / Digital IXUS 75 / IXY Digital 90",
+    ),
+    (
+        0x02160000,
+        "PowerShot SD1000 / Digital IXUS 70 / IXY Digital 10",
+    ),
+    (0x02180000, "PowerShot A550"),
+    (0x02190000, "PowerShot A450"),
+    (0x02230000, "PowerShot G9"),
+    (0x02240000, "PowerShot A650 IS"),
+    (0x02260000, "PowerShot A720 IS"),
+    (0x02290000, "PowerShot SX100 IS"),
+    (
+        0x02300000,
+        "PowerShot SD950 IS / Digital IXUS 960 IS / IXY Digital 2000 IS",
+    ),
+    (
+        0x02310000,
+        "PowerShot SD870 IS / Digital IXUS 860 IS / IXY Digital 910 IS",
+    ),
+    (
+        0x02320000,
+        "PowerShot SD890 IS / Digital IXUS 970 IS / IXY Digital 820 IS",
+    ),
+    (
+        0x02360000,
+        "PowerShot SD790 IS / Digital IXUS 90 IS / IXY Digital 95 IS",
+    ),
+    (
+        0x02370000,
+        "PowerShot SD770 IS / Digital IXUS 85 IS / IXY Digital 25 IS",
+    ),
+    (0x02380000, "PowerShot A590 IS"),
+    (0x02390000, "PowerShot A580"),
+    (0x02420000, "PowerShot A470"),
+    (
+        0x02430000,
+        "PowerShot SD1100 IS / Digital IXUS 80 IS / IXY Digital 20 IS",
+    ),
+    (0x02460000, "PowerShot SX1 IS"),
+    (0x02470000, "PowerShot SX10 IS"),
+    (0x02480000, "PowerShot A1000 IS"),
+    (0x02490000, "PowerShot G10"),
+    (0x02510000, "PowerShot A2000 IS"),
+    (0x02520000, "PowerShot SX110 IS"),
+    (
+        0x02530000,
+        "PowerShot SD990 IS / Digital IXUS 980 IS / IXY Digital 3000 IS",
+    ),
+    (
+        0x02540000,
+        "PowerShot SD880 IS / Digital IXUS 870 IS / IXY Digital 920 IS",
+    ),
+    (0x02550000, "PowerShot E1"),
+    (0x02560000, "PowerShot D10"),
+    (
+        0x02570000,
+        "PowerShot SD960 IS / Digital IXUS 110 IS / IXY Digital 510 IS",
+    ),
+    (0x02580000, "PowerShot A2100 IS"),
+    (0x02590000, "PowerShot A480"),
+    (0x02600000, "PowerShot SX200 IS"),
+    (
+        0x02610000,
+        "PowerShot SD970 IS / Digital IXUS 990 IS / IXY Digital 830 IS",
+    ),
+    (
+        0x02620000,
+        "PowerShot SD780 IS / Digital IXUS 100 IS / IXY Digital 210 IS",
+    ),
+    (0x02630000, "PowerShot A1100 IS"),
+    (
+        0x02640000,
+        "PowerShot SD1200 IS / Digital IXUS 95 IS / IXY Digital 110 IS",
+    ),
+    (0x02700000, "PowerShot G11"),
+    (0x02710000, "PowerShot SX120 IS"),
+    (0x02720000, "PowerShot S90"),
+    (0x02750000, "PowerShot SX20 IS"),
+    (
+        0x02760000,
+        "PowerShot SD980 IS / Digital IXUS 200 IS / IXY Digital 930 IS",
+    ),
+    (
+        0x02770000,
+        "PowerShot SD940 IS / Digital IXUS 120 IS / IXY Digital 220 IS",
+    ),
+    (0x02800000, "PowerShot A495"),
+    (0x02810000, "PowerShot A490"),
+    (0x02820000, "PowerShot A3100/A3150 IS"),
+    (0x02830000, "PowerShot A3000 IS"),
+    (0x02840000, "PowerShot SD1400 IS / IXUS 130 / IXY 400F"),
+    (0x02850000, "PowerShot SD1300 IS / IXUS 105 / IXY 200F"),
+    (0x02860000, "PowerShot SD3500 IS / IXUS 210 / IXY 10S"),
+    (0x02870000, "PowerShot SX210 IS"),
+    (0x02880000, "PowerShot SD4000 IS / IXUS 300 HS / IXY 30S"),
+    (0x02890000, "PowerShot SD4500 IS / IXUS 1000 HS / IXY 50S"),
+    (0x02920000, "PowerShot G12"),
+    (0x02930000, "PowerShot SX30 IS"),
+    (0x02940000, "PowerShot SX130 IS"),
+    (0x02950000, "PowerShot S95"),
+    (0x02980000, "PowerShot A3300 IS"),
+    (0x02990000, "PowerShot A3200 IS"),
+    (0x03000000, "PowerShot ELPH 500 HS / IXUS 310 HS / IXY 31S"),
+    (0x03010000, "PowerShot Pro90 IS"),
+    (0x03010001, "PowerShot A800"),
+    (0x03020000, "PowerShot ELPH 100 HS / IXUS 115 HS / IXY 210F"),
+    (0x03030000, "PowerShot SX230 HS"),
+    (0x03040000, "PowerShot ELPH 300 HS / IXUS 220 HS / IXY 410F"),
+    (0x03050000, "PowerShot A2200"),
+    (0x03060000, "PowerShot A1200"),
+    (0x03070000, "PowerShot SX220 HS"),
+    (0x03080000, "PowerShot G1 X"),
+    (0x03090000, "PowerShot SX150 IS"),
+    (0x03100000, "PowerShot ELPH 510 HS / IXUS 1100 HS / IXY 51S"),
+    (0x03110000, "PowerShot S100 (new)"),
+    (0x03130000, "PowerShot SX40 HS"),
+    (0x03120000, "PowerShot ELPH 310 HS / IXUS 230 HS / IXY 600F"),
+    (0x03140000, "IXY 32S"),
+    (0x03160000, "PowerShot A1300"),
+    (0x03170000, "PowerShot A810"),
+    (0x03180000, "PowerShot ELPH 320 HS / IXUS 240 HS / IXY 420F"),
+    (0x03190000, "PowerShot ELPH 110 HS / IXUS 125 HS / IXY 220F"),
+    (0x03200000, "PowerShot D20"),
+    (0x03210000, "PowerShot A4000 IS"),
+    (0x03220000, "PowerShot SX260 HS"),
+    (0x03230000, "PowerShot SX240 HS"),
+    (0x03240000, "PowerShot ELPH 530 HS / IXUS 510 HS / IXY 1"),
+    (0x03250000, "PowerShot ELPH 520 HS / IXUS 500 HS / IXY 3"),
+    (0x03260000, "PowerShot A3400 IS"),
+    (0x03270000, "PowerShot A2400 IS"),
+    (0x03280000, "PowerShot A2300"),
+    (0x03320000, "PowerShot S100V"),
+    (0x03330000, "PowerShot G15"),
+    (0x03340000, "PowerShot SX50 HS"),
+    (0x03350000, "PowerShot SX160 IS"),
+    (0x03360000, "PowerShot S110 (new)"),
+    (0x03370000, "PowerShot SX500 IS"),
+    (0x03380000, "PowerShot N"),
+    (0x03390000, "IXUS 245 HS / IXY 430F"),
+    (0x03400000, "PowerShot SX280 HS"),
+    (0x03410000, "PowerShot SX270 HS"),
+    (0x03420000, "PowerShot A3500 IS"),
+    (0x03430000, "PowerShot A2600"),
+    (0x03440000, "PowerShot SX275 HS"),
+    (0x03450000, "PowerShot A1400"),
+    (0x03460000, "PowerShot ELPH 130 IS / IXUS 140 / IXY 110F"),
+    (
+        0x03470000,
+        "PowerShot ELPH 115/120 IS / IXUS 132/135 / IXY 90F/100F",
+    ),
+    (0x03490000, "PowerShot ELPH 330 HS / IXUS 255 HS / IXY 610F"),
+    (0x03510000, "PowerShot A2500"),
+    (0x03540000, "PowerShot G16"),
+    (0x03550000, "PowerShot S120"),
+    (0x03560000, "PowerShot SX170 IS"),
+    (0x03580000, "PowerShot SX510 HS"),
+    (0x03590000, "PowerShot S200 (new)"),
+    (0x03600000, "IXY 620F"),
+    (0x03610000, "PowerShot N100"),
+    (0x03640000, "PowerShot G1 X Mark II"),
+    (0x03650000, "PowerShot D30"),
+    (0x03660000, "PowerShot SX700 HS"),
+    (0x03670000, "PowerShot SX600 HS"),
+    (0x03680000, "PowerShot ELPH 140 IS / IXUS 150 / IXY 130"),
+    (0x03690000, "PowerShot ELPH 135 / IXUS 145 / IXY 120"),
+    (0x03700000, "PowerShot ELPH 340 HS / IXUS 265 HS / IXY 630"),
+    (0x03710000, "PowerShot ELPH 150 IS / IXUS 155 / IXY 140"),
+    (0x03740000, "EOS M3"),
+    (0x03750000, "PowerShot SX60 HS"),
+    (0x03760000, "PowerShot SX520 HS"),
+    (0x03770000, "PowerShot SX400 IS"),
+    (0x03780000, "PowerShot G7 X"),
+    (0x03790000, "PowerShot N2"),
+    (0x03800000, "PowerShot SX530 HS"),
+    (0x03820000, "PowerShot SX710 HS"),
+    (0x03830000, "PowerShot SX610 HS"),
+    (0x03840000, "EOS M10"),
+    (0x03850000, "PowerShot G3 X"),
+    (0x03860000, "PowerShot ELPH 165 HS / IXUS 165 / IXY 160"),
+    (0x03870000, "PowerShot ELPH 160 / IXUS 160"),
+    (0x03880000, "PowerShot ELPH 350 HS / IXUS 275 HS / IXY 640"),
+    (0x03890000, "PowerShot ELPH 170 IS / IXUS 170"),
+    (0x03910000, "PowerShot SX410 IS"),
+    (0x03930000, "PowerShot G9 X"),
+    (0x03940000, "EOS M5"),
+    (0x03950000, "PowerShot G5 X"),
+    (0x03970000, "PowerShot G7 X Mark II"),
+    (0x03980000, "EOS M100"),
+    (0x03990000, "PowerShot ELPH 360 HS / IXUS 285 HS / IXY 650"),
+    (0x04010000, "PowerShot SX540 HS"),
+    (0x04020000, "PowerShot SX420 IS"),
+    (0x04030000, "PowerShot ELPH 190 IS / IXUS 180 / IXY 190"),
+    (0x04040000, "PowerShot G1"),
+    (0x04040001, "PowerShot ELPH 180 IS / IXUS 175 / IXY 180"),
+    (0x04050000, "PowerShot SX720 HS"),
+    (0x04060000, "PowerShot SX620 HS"),
+    (0x04070000, "EOS M6"),
+    (0x04100000, "PowerShot G9 X Mark II"),
+    (0x00000412, "EOS M50 / Kiss M"),
+    (0x04150000, "PowerShot ELPH 185 / IXUS 185 / IXY 200"),
+    (0x04160000, "PowerShot SX430 IS"),
+    (0x04170000, "PowerShot SX730 HS"),
+    (0x04180000, "PowerShot G1 X Mark III"),
+    (0x06040000, "PowerShot S100 / Digital IXUS / IXY Digital"),
+    (0x00000801, "PowerShot SX740 HS"),
+    (0x00000804, "PowerShot G5 X Mark II"),
+    (0x00000805, "PowerShot SX70 HS"),
+    (0x00000808, "PowerShot G7 X Mark III"),
+    (0x00000811, "EOS M6 Mark II"),
+    (0x00000812, "EOS M200"),
+    (0x40000227, "EOS C50"),
+    (0x4007d673, "DC19/DC21/DC22"),
+    (0x4007d674, "XH A1"),
+    (0x4007d675, "HV10"),
+    (0x4007d676, "MD130/MD140/MD150/MD160/ZR850"),
+    (0x4007d777, "DC50"),
+    (0x4007d778, "HV20"),
+    (0x4007d779, "DC211"),
+    (0x4007d77a, "HG10"),
+    (0x4007d77b, "HR10"),
+    (0x4007d77d, "MD255/ZR950"),
+    (0x4007d81c, "HF11"),
+    (0x4007d878, "HV30"),
+    (0x4007d87c, "XH A1S"),
+    (0x4007d87e, "DC301/DC310/DC311/DC320/DC330"),
+    (0x4007d87f, "FS100"),
+    (0x4007d880, "HF10"),
+    (0x4007d882, "HG20/HG21"),
+    (0x4007d925, "HF21"),
+    (0x4007d926, "HF S11"),
+    (0x4007d978, "HV40"),
+    (0x4007d987, "DC410/DC411/DC420"),
+    (0x4007d988, "FS19/FS20/FS21/FS22/FS200"),
+    (0x4007d989, "HF20/HF200"),
+    (0x4007d98a, "HF S10/S100"),
+    (0x4007da8e, "HF R10/R16/R17/R18/R100/R106"),
+    (0x4007da8f, "HF M30/M31/M36/M300/M306"),
+    (0x4007da90, "HF S20/S21/S200"),
+    (0x4007da92, "FS31/FS36/FS37/FS300/FS305/FS306/FS307"),
+    (0x4007dca0, "EOS C300"),
+    (0x4007dda9, "HF G25"),
+    (0x4007dfb4, "XC10"),
+    (0x4007e1c3, "EOS C200"),
+    (0x80000001, "EOS-1D"),
+    (0x80000167, "EOS-1DS"),
+    (0x80000168, "EOS 10D"),
+    (0x80000169, "EOS-1D Mark III"),
+    (0x80000170, "EOS Digital Rebel / 300D / Kiss Digital"),
+    (0x80000174, "EOS-1D Mark II"),
+    (0x80000175, "EOS 20D"),
+    (0x80000176, "EOS Digital Rebel XSi / 450D / Kiss X2"),
+    (0x80000188, "EOS-1Ds Mark II"),
+    (0x80000189, "EOS Digital Rebel XT / 350D / Kiss Digital N"),
+    (0x80000190, "EOS 40D"),
+    (0x80000213, "EOS 5D"),
+    (0x80000215, "EOS-1Ds Mark III"),
+    (0x80000218, "EOS 5D Mark II"),
+    (0x80000219, "WFT-E1"),
+    (0x80000232, "EOS-1D Mark II N"),
+    (0x80000234, "EOS 30D"),
+    (0x80000236, "EOS Digital Rebel XTi / 400D / Kiss Digital X"),
+    (0x80000241, "WFT-E2"),
+    (0x80000246, "WFT-E3"),
+    (0x80000250, "EOS 7D"),
+    (0x80000252, "EOS Rebel T1i / 500D / Kiss X3"),
+    (0x80000254, "EOS Rebel XS / 1000D / Kiss F"),
+    (0x80000261, "EOS 50D"),
+    (0x80000269, "EOS-1D X"),
+    (0x80000270, "EOS Rebel T2i / 550D / Kiss X4"),
+    (0x80000271, "WFT-E4"),
+    (0x80000273, "WFT-E5"),
+    (0x80000281, "EOS-1D Mark IV"),
+    (0x80000285, "EOS 5D Mark III"),
+    (0x80000286, "EOS Rebel T3i / 600D / Kiss X5"),
+    (0x80000287, "EOS 60D"),
+    (0x80000288, "EOS Rebel T3 / 1100D / Kiss X50"),
+    (0x80000289, "EOS 7D Mark II"),
+    (0x80000297, "WFT-E2 II"),
+    (0x80000298, "WFT-E4 II"),
+    (0x80000301, "EOS Rebel T4i / 650D / Kiss X6i"),
+    (0x80000302, "EOS 6D"),
+    (0x80000324, "EOS-1D C"),
+    (0x80000325, "EOS 70D"),
+    (0x80000326, "EOS Rebel T5i / 700D / Kiss X7i"),
+    (0x80000327, "EOS Rebel T5 / 1200D / Kiss X70 / Hi"),
+    (0x80000328, "EOS-1D X Mark II"),
+    (0x80000331, "EOS M"),
+    (0x80000350, "EOS 80D"),
+    (0x80000355, "EOS M2"),
+    (0x80000346, "EOS Rebel SL1 / 100D / Kiss X7"),
+    (0x80000347, "EOS Rebel T6s / 760D / 8000D"),
+    (0x80000349, "EOS 5D Mark IV"),
+    (0x80000382, "EOS 5DS"),
+    (0x80000393, "EOS Rebel T6i / 750D / Kiss X8i"),
+    (0x80000401, "EOS 5DS R"),
+    (0x80000404, "EOS Rebel T6 / 1300D / Kiss X80"),
+    (0x80000405, "EOS Rebel T7i / 800D / Kiss X9i"),
+    (0x80000406, "EOS 6D Mark II"),
+    (0x80000408, "EOS 77D / 9000D"),
+    (0x80000417, "EOS Rebel SL2 / 200D / Kiss X9"),
+    (0x80000421, "EOS R5"),
+    (0x80000422, "EOS Rebel T100 / 4000D / 3000D"),
+    (0x80000424, "EOS R"),
+    (0x80000428, "EOS-1D X Mark III"),
+    (0x80000432, "EOS Rebel T7 / 2000D / 1500D / Kiss X90"),
+    (0x80000433, "EOS RP"),
+    (0x80000435, "EOS Rebel T8i / 850D / X10i"),
+    (0x80000436, "EOS SL3 / 250D / Kiss X10"),
+    (0x80000437, "EOS 90D"),
+    (0x80000450, "EOS R3"),
+    (0x80000453, "EOS R6"),
+    (0x80000464, "EOS R7"),
+    (0x80000465, "EOS R10"),
+    (0x80000467, "PowerShot ZOOM"),
+    (0x80000468, "EOS M50 Mark II / Kiss M2"),
+    (0x80000480, "EOS R50"),
+    (0x80000481, "EOS R6 Mark II"),
+    (0x80000487, "EOS R8"),
+    (0x80000491, "PowerShot V10"),
+    (0x80000495, "EOS R1"),
+    (0x80000496, "EOS R5 Mark II"),
+    (0x80000497, "PowerShot V1"),
+    (0x80000498, "EOS R100"),
+    (0x80000516, "EOS R50 V"),
+    (0x80000518, "EOS R6 Mark III"),
+    (0x80000520, "EOS D2000C"),
+    (0x80000560, "EOS D6000C"),
+];
+
 /// Decodes a Canon Model ID to the corresponding camera model name.
 ///
 /// Canon cameras store a numeric model identifier in the MakerNotes which
@@ -2018,130 +3509,40 @@ fn decode_af_points_in_focus(value: i16) -> String {
 /// assert_eq!(decode_canon_model_id(0x1110000), "PowerShot S40");
 /// assert_eq!(decode_canon_model_id(17891328), "PowerShot S40");
 ///
-/// // EOS 5D Mark III
-/// assert_eq!(decode_canon_model_id(0x80000281), "EOS 5D Mark III");
+/// // 0x80000281 is the EOS-1D Mark IV -- the 5D Mark III is 0x80000285. The
+/// // hand-maintained table this replaced had these two swapped.
+/// assert_eq!(decode_canon_model_id(0x80000281), "EOS-1D Mark IV");
+/// assert_eq!(decode_canon_model_id(0x80000285), "EOS 5D Mark III");
 /// ```
 pub fn decode_canon_model_id(model_id: u32) -> String {
-    match model_id {
-        // ====================================================================
-        // PowerShot Series and Early Digital Cameras
-        // ====================================================================
-        // These cameras use model IDs in the 0x01XXXXXX range
-        0x1010000 => "PowerShot A30".to_string(),
-        0x1040000 => "PowerShot S300 / Digital IXUS 300 / IXY Digital 300".to_string(),
-        0x1060000 => "PowerShot A20".to_string(),
-        0x1080000 => "PowerShot A10".to_string(),
-        0x1090000 => "PowerShot S110 / Digital IXUS v / IXY Digital 200".to_string(),
-        0x1100000 => "PowerShot G2".to_string(),
-        0x1110000 => "PowerShot S40".to_string(), // 17891328 decimal
-        0x1120000 => "PowerShot S30".to_string(),
-        0x1130000 => "PowerShot A40".to_string(),
-        0x1140000 => "EOS D30".to_string(),
-        0x1150000 => "PowerShot A100".to_string(),
-        0x1160000 => "PowerShot S200 / Digital IXUS v2 / IXY Digital 200a".to_string(),
-        0x1170000 => "PowerShot A200".to_string(),
-        0x1180000 => "PowerShot S330 / Digital IXUS 330 / IXY Digital 300a".to_string(),
-        0x1190000 => "PowerShot G3".to_string(),
-        0x1210000 => "PowerShot S45".to_string(),
-        0x1230000 => "PowerShot SD100 / Digital IXUS II / IXY Digital 30".to_string(),
-
-        // Later PowerShot compact cameras (0x03XXXXXX range)
-        0x3160000 => "PowerShot A1300".to_string(), // 51773440 decimal
-
-        // ====================================================================
-        // EOS Series Digital SLR and Mirrorless Cameras
-        // ====================================================================
-        // Professional and consumer EOS cameras use model IDs in the 0x80XXXXXX range
-        0x80000001 => "EOS-1D".to_string(),
-        0x80000167 => "EOS-1DS".to_string(),
-        0x80000168 => "EOS 10D".to_string(),
-        0x80000169 => "EOS-1D Mark III".to_string(),
-        0x80000170 => "EOS Digital Rebel / 300D / Kiss Digital".to_string(),
-        0x80000174 => "EOS-1D Mark II".to_string(),
-        0x80000175 => "EOS 20D".to_string(),
-        0x80000176 => "EOS Digital Rebel XSi / 450D / Kiss X2".to_string(),
-        0x80000188 => "EOS-1Ds Mark II".to_string(),
-        0x80000189 => "EOS Digital Rebel XT / 350D / Kiss Digital N".to_string(),
-        0x80000190 => "EOS 40D".to_string(),
-        0x80000213 => "EOS 5D".to_string(),
-        0x80000215 => "EOS-1Ds Mark III".to_string(),
-        0x80000218 => "EOS 5D Mark II".to_string(),
-        0x80000250 => "EOS 7D".to_string(),
-        0x80000252 => "EOS 500D / Rebel T1i / Kiss X3".to_string(),
-        0x80000254 => "EOS 1000D / Rebel XS / Kiss F".to_string(),
-        0x80000261 => "EOS 50D".to_string(),
-        0x80000269 => "EOS-1D X".to_string(),
-        0x80000270 => "EOS 550D / Rebel T2i / Kiss X4".to_string(),
-        0x80000271 => "EOS-1D Mark IV".to_string(),
-        0x80000281 => "EOS 5D Mark III".to_string(),
-        0x80000285 => "EOS 600D / Rebel T3i / Kiss X5".to_string(),
-        0x80000286 => "EOS 60D".to_string(),
-        0x80000287 => "EOS 1100D / Rebel T3 / Kiss X50".to_string(),
-        0x80000288 => "EOS 650D / Rebel T4i / Kiss X6i".to_string(),
-        0x80000289 => "EOS 6D".to_string(),
-        0x80000301 => "EOS 700D / Rebel T5i / Kiss X7i".to_string(),
-        0x80000302 => "EOS 100D / Rebel SL1 / Kiss X7".to_string(),
-        0x80000324 => "EOS 70D".to_string(),
-        0x80000325 => "EOS 760D / Rebel T6s / 8000D".to_string(),
-        0x80000326 => "EOS 750D / Rebel T6i / Kiss X8i".to_string(),
-        0x80000327 => "EOS M3".to_string(),
-        0x80000328 => "EOS-1D C".to_string(),
-        0x80000331 => "EOS 80D".to_string(),
-        0x80000346 => "EOS 5D Mark IV".to_string(),
-        0x80000347 => "EOS-1D X Mark II".to_string(),
-        0x80000350 => "EOS 5DS".to_string(),
-        0x80000351 => "EOS 5DS R".to_string(),
-        0x80000393 => "EOS 6D Mark II".to_string(),
-        0x80000401 => "EOS 77D / 9000D".to_string(),
-        0x80000404 => "EOS R5".to_string(),
-        0x80000405 => "EOS R6".to_string(),
-        0x80000406 => "EOS-1D X Mark III".to_string(),
-
-        // Unknown model ID - return formatted string with the raw value
-        _ => format!("Unknown ({})", model_id),
-    }
+    CANON_MODEL_IDS
+        .iter()
+        .find(|(id, _)| *id == model_id)
+        .map(|(_, name)| (*name).to_string())
+        .unwrap_or_else(|| format!("Unknown ({})", model_id))
 }
 
-/// Decodes Canon model ID to camera type (Compact, EOS, etc.).
+/// Decodes `%Canon::ShotInfo` key 26 `CameraType` (Canon.pm:3011).
 ///
-/// # Parameters
-/// - `model_id`: The Canon model ID value from tag 0x0010
+/// ```text
+///     PrintConv => {
+///         0 => 'n/a',       248 => 'EOS High-end',   250 => 'Compact',
+///         252 => 'EOS Mid-range',                    255 => 'DV Camera',
+///     },
+/// ```
 ///
-/// # Returns
-/// Camera type as a string: "Compact", "EOS Mid-range", "EOS High-end", etc.
-pub fn decode_camera_type(model_id: u32) -> String {
-    // EOS cameras use model IDs starting with 0x80000000
-    // PowerShot and other compact cameras use model IDs in 0x01000000 range
-    if model_id >= 0x80000000 {
-        // EOS DSLR/Mirrorless cameras
-        match model_id {
-            // Professional 1-series bodies
-            0x80000001 | // EOS-1D
-            0x80000167 | // EOS-1Ds
-            0x80000168 | // EOS-1D Mark II
-            0x80000169 | // EOS-1Ds Mark II
-            0x80000170 | // EOS-1D Mark II N
-            0x80000174 | // EOS-1D Mark III
-            0x80000175 | // EOS-1Ds Mark III
-            0x80000269 | // EOS-1D Mark IV
-            0x80000281 | // EOS-1D X
-            0x80000285 | // EOS-1D X Mark II (duplicate ID handling)
-            0x80000302 | // EOS-1D C
-            0x80000324 | // EOS-1D C (duplicate)
-            0x80000328 | // EOS-1D C (duplicate)
-            0x80000347 | // EOS-1D X Mark II
-            0x80000406   // EOS-1D X Mark III
-            => "EOS High-end".to_string(),
-
-            // All other EOS models are mid-range or entry-level
-            _ => "EOS Mid-range".to_string(),
-        }
-    } else if (0x01000000..0x02000000).contains(&model_id) {
-        // PowerShot and compact cameras
-        "Compact".to_string()
-    } else {
-        // Unknown camera type
-        "Unknown".to_string()
+/// This tag is a ShotInfo slot, **not** a function of `CanonModelID`. Deriving it from
+/// the model id instead -- as this parser used to -- reported "Unknown" for all 406
+/// camcorder samples in the corpus, where the real value is the literal 255 written in
+/// the record.
+pub fn decode_camera_type(raw_value: i16) -> String {
+    match raw_value {
+        0 => "n/a".to_string(),
+        248 => "EOS High-end".to_string(),
+        250 => "Compact".to_string(),
+        252 => "EOS Mid-range".to_string(),
+        255 => "DV Camera".to_string(),
+        other => format!("Unknown ({})", other),
     }
 }
 
@@ -2306,6 +3707,13 @@ fn parse_canon_makernote_impl(
         max_entries: 200,
     };
 
+    // Canon value offsets are TIFF-relative but the dispatcher hands this parser a
+    // detached slice, so the base has to be recovered from the MakerNote's own
+    // bytes. Resolved once here and threaded through every extractor below --
+    // see `calculate_makernote_base` for why the packed-layout guess is not enough
+    // and how the records vote for the real base.
+    let base = canon_makernote_base(data, byte_order, &config);
+
     // Several `%Canon` keys are model-conditional (`%Canon::FileInfo` key 1,
     // `%Canon::ShotInfo` key 22, `%Canon::Processing` key 2, `%Canon::FocalLength` keys
     // 2-3, and the `CustomFunctions*` table selection). ExifTool reads `$$self{Model}`
@@ -2315,7 +3723,7 @@ fn parse_canon_makernote_impl(
     let mut model = String::new();
     let _ = parse_ifd_entries(data, byte_order, &config, |entry, ifd_data| {
         if entry.tag_id == CANON_IMAGE_TYPE
-            && let Some(value) = extract_canon_string(entry, ifd_data, byte_order)
+            && let Some(value) = extract_canon_string_with_base(entry, ifd_data, byte_order, base)
         {
             model = value;
         }
@@ -2333,21 +3741,23 @@ fn parse_canon_makernote_impl(
             // Simple string tags (Phase 1)
             // Canon MakerNotes use TIFF-relative offsets, so we use extract_canon_string
             // which properly calculates and applies the base offset
+            //
+            // The emitted names are ExifTool's own: tag 0x0006 is `CanonImageType` and
+            // 0x0007 is `CanonFirmwareVersion` (Canon.pm:1252/1256). The bare
+            // `FirmwareVersion` and `ImageType` aliases this used to add alongside them
+            // are not ExifTool names for these tags -- `FirmwareVersion` is a CameraInfo
+            // tag holding just "1.1.0", so aliasing 0x0007's "Firmware Version 1.1.0"
+            // onto it reported a wrong value on every body that has both.
             CANON_IMAGE_TYPE | CANON_FIRMWARE_VERSION | CANON_OWNER_NAME => {
-                if let Some(value) = extract_canon_string(entry, ifd_data, byte_order) {
-                    let tag_name = canon_tag_to_name(entry.tag_id);
-                    tags.insert(tag_name.clone(), value.clone());
-
-                    // Add ExifTool-compatible aliases for compatibility
-                    match entry.tag_id {
-                        CANON_FIRMWARE_VERSION => {
-                            tags.insert("Canon:CanonFirmwareVersion".to_string(), value);
-                        }
-                        CANON_IMAGE_TYPE => {
-                            tags.insert("Canon:CanonImageType".to_string(), value);
-                        }
-                        _ => {}
-                    }
+                if let Some(value) =
+                    extract_canon_string_with_base(entry, ifd_data, byte_order, base)
+                {
+                    let tag_name = match entry.tag_id {
+                        CANON_IMAGE_TYPE => "Canon:CanonImageType",
+                        CANON_FIRMWARE_VERSION => "Canon:CanonFirmwareVersion",
+                        _ => "Canon:OwnerName",
+                    };
+                    tags.insert(tag_name.to_string(), value);
                 }
             }
 
@@ -2383,7 +3793,8 @@ fn parse_canon_makernote_impl(
 
             // ThumbnailImageValidArea (tag 0x0013) - int16u[4] crop box
             CANON_THUMBNAIL_IMAGE_VALID_AREA => {
-                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order)
+                if let Some(array) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
                     && array.len() >= 4
                 {
                     tags.insert(
@@ -2415,10 +3826,6 @@ fn parse_canon_makernote_impl(
                 let model_id = entry.value_offset;
                 let model_name = decode_canon_model_id(model_id);
                 tags.insert("Canon:CanonModelID".to_string(), model_name);
-
-                // Also output CameraType based on model ID
-                let camera_type = decode_camera_type(model_id);
-                tags.insert("Canon:CameraType".to_string(), camera_type);
             }
 
             // FileNumber (tag 0x0008) - int32u, ExifTool Canon.pm:1260 renders it as
@@ -2433,8 +3840,9 @@ fn parse_canon_makernote_impl(
             // CameraSettings array (Phase 2)
             // Reference: ExifTool Canon.pm CameraSettings table
             CANON_CAMERA_SETTINGS => {
-                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order)
-                    .map(realign_length_prefixed_record)
+                if let Some(array) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                        .map(realign_length_prefixed_record)
                 {
                     // Extract specific settings from array using const decoders
                     // Note: All tag names use "Canon:" prefix for consistency
@@ -2447,19 +3855,34 @@ fn parse_canon_makernote_impl(
                         );
                     }
 
-                    // SelfTimer (index 2) - Self-timer delay in 1/10 seconds
-                    if array.len() > CAMERA_SETTINGS_SELF_TIMER {
-                        let self_timer = array[CAMERA_SETTINGS_SELF_TIMER];
-                        if self_timer > 0 {
-                            // Convert from 1/10 seconds to more readable format
-                            let seconds = self_timer as f64 / 10.0;
-                            tags.insert(
-                                "Canon:SelfTimer".to_string(),
-                                format!("{:.1} sec", seconds),
-                            );
+                    // SelfTimer (index 2). ExifTool `%Canon::CameraSettings` key 2
+                    // (Canon.pm:2229):
+                    //
+                    // ```text
+                    //     return 'Off' unless $val;
+                    //     return (($val&0xfff) / 10) . ' s' . ($val & 0x4000 ? ', Custom' : '');
+                    // ```
+                    //
+                    // The delay is the low 12 bits only, the unit is " s" (not " sec"),
+                    // and Perl's numeric stringification drops a trailing ".0", so 20
+                    // prints as "2 s" rather than "2.0 sec".
+                    if let Some(&raw_timer) = array.get(CAMERA_SETTINGS_SELF_TIMER) {
+                        let raw_timer = raw_timer as u16;
+                        let rendered = if raw_timer == 0 {
+                            "Off".to_string()
                         } else {
-                            tags.insert("Canon:SelfTimer".to_string(), "Off".to_string());
-                        }
+                            let custom = if raw_timer & 0x4000 != 0 {
+                                ", Custom"
+                            } else {
+                                ""
+                            };
+                            format!(
+                                "{} s{}",
+                                format_perl_number(f64::from(raw_timer & 0xfff) / 10.0),
+                                custom
+                            )
+                        };
+                        tags.insert("Canon:SelfTimer".to_string(), rendered);
                     }
 
                     // Quality (index 3) - Image quality setting
@@ -2544,13 +3967,19 @@ fn parse_canon_makernote_impl(
                         );
                     }
 
-                    // Sharpness (index 15) - Sharpness adjustment value
-                    // Output raw numeric value to match ExifTool
-                    if array.len() > CAMERA_SETTINGS_SHARPNESS {
-                        tags.insert(
-                            "Canon:Sharpness".to_string(),
-                            array[CAMERA_SETTINGS_SHARPNESS].to_string(),
-                        );
+                    // Sharpness (index 15). ExifTool `%Canon::CameraSettings` key 15
+                    // (Canon.pm:2404): `RawConv => '$val == 0x7fff ? undef : $val'`,
+                    // `PrintConv => '$val > 0 ? "+$val" : $val'` -- a positive value
+                    // carries an explicit plus sign, and the 0x7fff sentinel is dropped.
+                    if let Some(&sharpness) = array.get(CAMERA_SETTINGS_SHARPNESS)
+                        && sharpness != 0x7fff
+                    {
+                        let rendered = if sharpness > 0 {
+                            format!("+{}", sharpness)
+                        } else {
+                            sharpness.to_string()
+                        };
+                        tags.insert("Canon:Sharpness".to_string(), rendered);
                     }
 
                     // CameraISO (index 16). ExifTool's RawConv drops the 0x7fff
@@ -2652,19 +4081,17 @@ fn parse_canon_makernote_impl(
                     }
 
                     // MaxAperture (index 26) - Maximum aperture (APEX value)
-                    if array.len() > CAMERA_SETTINGS_MAX_APERTURE {
-                        tags.insert(
-                            "Canon:MaxAperture".to_string(),
-                            apex_to_aperture(array[CAMERA_SETTINGS_MAX_APERTURE]),
-                        );
+                    if let Some(&raw_aperture) = array.get(CAMERA_SETTINGS_MAX_APERTURE)
+                        && let Some(rendered) = canon_aperture(raw_aperture)
+                    {
+                        tags.insert("Canon:MaxAperture".to_string(), rendered);
                     }
 
                     // MinAperture (index 27) - Minimum aperture (APEX value)
-                    if array.len() > CAMERA_SETTINGS_MIN_APERTURE {
-                        tags.insert(
-                            "Canon:MinAperture".to_string(),
-                            apex_to_aperture(array[CAMERA_SETTINGS_MIN_APERTURE]),
-                        );
+                    if let Some(&raw_aperture) = array.get(CAMERA_SETTINGS_MIN_APERTURE)
+                        && let Some(rendered) = canon_aperture(raw_aperture)
+                    {
+                        tags.insert("Canon:MinAperture".to_string(), rendered);
                     }
 
                     // FlashModel (index 28). ExifTool masks with 0x7f and discards the
@@ -2678,8 +4105,8 @@ fn parse_canon_makernote_impl(
 
                     // FlashBits (index 29) - Flash features bitfield
                     if array.len() > CAMERA_SETTINGS_FLASH_BITS {
-                        let flash_bits = array[CAMERA_SETTINGS_FLASH_BITS] as u32;
-                        tags.insert("Canon:FlashBits".to_string(), FLASH_BITS.decode(flash_bits));
+                        let flash_bits = array[CAMERA_SETTINGS_FLASH_BITS] as u16;
+                        tags.insert("Canon:FlashBits".to_string(), decode_flash_bits(flash_bits));
                     }
 
                     // FocusContinuous (index 32) - Continuous focus setting
@@ -2761,8 +4188,9 @@ fn parse_canon_makernote_impl(
             // ShotInfo array (Phase 2) - Extended extraction
             // Extracts all available fields from the Canon ShotInfo array
             CANON_SHOT_INFO => {
-                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order)
-                    .map(realign_length_prefixed_record)
+                if let Some(array) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                        .map(realign_length_prefixed_record)
                 {
                     // AutoISO (index 1). ExifTool `%Canon::ShotInfo` key 1 (Canon.pm:2778):
                     // `ValueConv => 'exp($val/32*log(2))*100'`, `PrintConv => '%.0f'`.
@@ -2792,11 +4220,10 @@ fn parse_canon_makernote_impl(
                     }
 
                     // TargetAperture (index 4) - convert APEX to f-number
-                    if array.len() > SHOT_INFO_TARGET_APERTURE {
-                        tags.insert(
-                            "Canon:TargetAperture".to_string(),
-                            apex_to_aperture(array[SHOT_INFO_TARGET_APERTURE]),
-                        );
+                    if let Some(&raw_aperture) = array.get(SHOT_INFO_TARGET_APERTURE)
+                        && let Some(rendered) = canon_aperture(raw_aperture)
+                    {
+                        tags.insert("Canon:TargetAperture".to_string(), rendered);
                     }
 
                     // TargetExposureTime (index 5) - convert APEX to fractional time
@@ -2975,6 +4402,14 @@ fn parse_canon_makernote_impl(
                         );
                     }
 
+                    // CameraType (index 26) - ExifTool `%Canon::ShotInfo` key 26.
+                    if let Some(&camera_type) = array.get(SHOT_INFO_CAMERA_TYPE) {
+                        tags.insert(
+                            "Canon:CameraType".to_string(),
+                            decode_camera_type(camera_type),
+                        );
+                    }
+
                     // AutoRotate (index 27). ExifTool's RawConv drops negative values.
                     if let Some(&auto_rotate) = array.get(SHOT_INFO_AUTO_ROTATE)
                         && auto_rotate >= 0
@@ -3006,7 +4441,9 @@ fn parse_canon_makernote_impl(
             // FocalLength array (Phase 2)
             // Contains focal type, focal length and (on supported bodies) focal plane size
             CANON_FOCAL_LENGTH => {
-                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
+                if let Some(array) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                {
                     // FocalType (key 0). `RawConv => '$val ? $val : undef'`.
                     if let Some(&focal_type) = array.first()
                         && focal_type != 0
@@ -3084,8 +4521,9 @@ fn parse_canon_makernote_impl(
             // FileInfo array (Phase 3)
             CANON_FILE_INFO => {
                 // FileInfo is a SHORT array
-                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order)
-                    .map(realign_length_prefixed_record)
+                if let Some(array) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                        .map(realign_length_prefixed_record)
                 {
                     // FileNumber (Perl key 1) is an int32u spanning int16 slots 1-2 on the
                     // 20D/350D family, with the bit layout documented at Canon.pm:6862:
@@ -3196,8 +4634,9 @@ fn parse_canon_makernote_impl(
             // ProcessingInfo (tag 0x00A0) - ExifTool `%Image::ExifTool::Canon::Processing`
             // (Canon.pm:7201), `FORMAT => 'int16s'`, `FIRST_ENTRY => 1`.
             CANON_PROCESSING_INFO => {
-                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order)
-                    .map(realign_length_prefixed_record)
+                if let Some(array) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                        .map(realign_length_prefixed_record)
                 {
                     if let Some(&tone_curve) = array.get(PROCESSING_INFO_TONE_CURVE) {
                         tags.insert(
@@ -3262,8 +4701,9 @@ fn parse_canon_makernote_impl(
             // MeasuredColor (tag 0x00AA) - ExifTool `%Canon::MeasuredColor` key 1 is a
             // single `int16u[4]` value, not four scalars.
             CANON_MEASURED_COLOR => {
-                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order)
-                    .map(realign_length_prefixed_record)
+                if let Some(array) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                        .map(realign_length_prefixed_record)
                     && array.len() >= MEASURED_COLOR_RGGB + 4
                 {
                     tags.insert(
@@ -3281,7 +4721,9 @@ fn parse_canon_makernote_impl(
             // 350D) is implemented; every other element count selects a different
             // ExifTool table whose indices do not line up.
             CANON_COLOR_DATA => {
-                if let Some(raw_record) = extract_canon_i16_array(entry, ifd_data, byte_order) {
+                if let Some(raw_record) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                {
                     // ExifTool picks the ColorData table by the record's declared element
                     // count, so that count is read before any realignment shortens it.
                     let declared_elements = raw_record.len();
@@ -3307,7 +4749,9 @@ fn parse_canon_makernote_impl(
 
             // AFInfo (tag 0x0012) - autofocus information used by older Canon models
             CANON_AF_INFO => {
-                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
+                if let Some(array) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                {
                     let num_points = array.get(AF_INFO_NUM_AF_POINTS).copied().unwrap_or(0);
                     if num_points > 0 {
                         tags.insert("Canon:NumAFPoints".to_string(), num_points.to_string());
@@ -3375,7 +4819,9 @@ fn parse_canon_makernote_impl(
 
             // AFInfo2 (tag 0x0026) - autofocus information used by newer Canon models
             CANON_AF_INFO2 => {
-                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order) {
+                if let Some(array) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                {
                     if let Some(&mode) = array.get(AF_INFO2_AF_AREA_MODE) {
                         tags.insert("Canon:AFAreaMode".to_string(), AF_AREA_MODE.decode(mode));
                     }
@@ -3452,7 +4898,8 @@ fn parse_canon_makernote_impl(
             // `tag = $val >> 8` / `value = $val & 0xff`.
             CANON_CUSTOM_FUNCTIONS => {
                 if is_350d_custom_functions(&model)
-                    && let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order)
+                    && let Some(array) =
+                        extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
                     && array.first().map(|&len| len as u16 as usize) == Some(array.len() * 2)
                 {
                     for &word in &array[1..] {
@@ -3491,10 +4938,79 @@ fn parse_canon_makernote_impl(
                 }
             }
 
+            // CustomFunctions2 (tag 0x0099) - the custom-function block written by the
+            // EOS-1D Mark III and every later body (ExifTool Canon.pm:1883).
+            CANON_CUSTOM_FUNCTIONS2 => {
+                if let Some(bytes) = extract_canon_bytes_with_base(entry, ifd_data, base) {
+                    parse_custom_functions2(bytes, byte_order, &mut tags);
+                }
+            }
+
+            // PersonalFunctions (tag 0x0091) - EOS-1D personal function switches.
+            //
+            // `%CanonCustom::PersonalFuncs` (CanonCustom.pm:1091) is an `int16u`
+            // BinaryData table with `FIRST_ENTRY => 1`, so index 0 is the record's own
+            // byte count and every switch runs through `ConvertPfn`.
+            CANON_PERSONAL_FUNCTIONS => {
+                if let Some(array) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                        .map(realign_length_prefixed_record)
+                {
+                    for &(index, name) in PERSONAL_FUNCS {
+                        if let Some(&raw) = array.get(index) {
+                            tags.insert(
+                                format!("Canon:{}", name),
+                                convert_personal_function(raw as u16),
+                            );
+                        }
+                    }
+                }
+            }
+
+            // PersonalFunctionValues (tag 0x0092) - the values those switches carry.
+            //
+            // `%CanonCustom::PersonalFuncValues` (CanonCustom.pm:1135), also `int16u`
+            // with `FIRST_ENTRY => 1`. Most keys are reported verbatim; keys 4-7 carry
+            // Canon's EV encoding.
+            CANON_PERSONAL_FUNCTION_VALUES => {
+                if let Some(array) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                        .map(realign_length_prefixed_record)
+                {
+                    for &(index, name) in PERSONAL_FUNC_VALUES {
+                        if let Some(&raw) = array.get(index) {
+                            tags.insert(format!("Canon:{}", name), (raw as u16).to_string());
+                        }
+                    }
+
+                    // Keys 4/5 - PF4ExposureTimeMin/Max. CanonCustom.pm:1139:
+                    //     ValueConv => 'exp(-CanonEv($val*4)*log(2))*1000/8'
+                    //     PrintConv => 'Image::ExifTool::Exif::PrintExposureTime($val)'
+                    for &(index, name) in &[(4, "PF4ExposureTimeMin"), (5, "PF4ExposureTimeMax")] {
+                        if let Some(&raw) = array.get(index) {
+                            let seconds =
+                                2.0_f64.powf(-canon_ev(raw as u16 as i32 * 4)) * 1000.0 / 8.0;
+                            tags.insert(format!("Canon:{}", name), print_exposure_time(seconds));
+                        }
+                    }
+
+                    // Keys 6/7 - PF5ApertureMin/Max. CanonCustom.pm:1163:
+                    //     ValueConv => 'exp(CanonEv($val*4-32)*log(2)/2)'
+                    //     PrintConv => 'sprintf("%.2g",$val)'
+                    for &(index, name) in &[(6, "PF5ApertureMin"), (7, "PF5ApertureMax")] {
+                        if let Some(&raw) = array.get(index) {
+                            let f_number = 2.0_f64.powf(canon_ev(raw as u16 as i32 * 4 - 32) / 2.0);
+                            tags.insert(format!("Canon:{}", name), format_g2(f_number));
+                        }
+                    }
+                }
+            }
+
             // SensorInfo (tag 0x00E0) - sensor dimensions, image borders, black mask
             CANON_SENSOR_INFO => {
-                if let Some(array) = extract_canon_i16_array(entry, ifd_data, byte_order)
-                    .map(realign_length_prefixed_record)
+                if let Some(array) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                        .map(realign_length_prefixed_record)
                 {
                     for (index, name) in [
                         (SENSOR_INFO_SENSOR_WIDTH, "Canon:SensorWidth"),
@@ -3639,7 +5155,13 @@ mod tests {
 
         let tags = result.unwrap();
         assert!(!tags.is_empty());
-        assert_eq!(tags.get("Canon:ImageType"), Some(&"IMG:EOS R5".to_string()));
+        // ExifTool's name for MakerNote tag 0x0006 is `CanonImageType` (Canon.pm:1252);
+        // the bare `ImageType` alias this used to also emit is not an ExifTool tag.
+        assert_eq!(
+            tags.get("Canon:CanonImageType"),
+            Some(&"IMG:EOS R5".to_string())
+        );
+        assert_eq!(tags.get("Canon:ImageType"), None);
     }
 
     #[test]
@@ -3738,16 +5260,20 @@ mod tests {
         assert_eq!(QUALITY.decode(99), "Unknown (99)");
     }
 
+    /// Labels are ExifTool's verbatim (`%Canon::CameraSettings` key 4, Canon.pm:2243) --
+    /// lower-case "reduction", "Slow-sync" rather than "Slow Sync", and the parenthesised
+    /// "(Auto)"/"(On)" forms. Key -1 is `n/a`, which older Canon camcorders write.
     #[test]
     fn test_decode_flash_mode() {
+        assert_eq!(FLASH_MODE.decode(-1), "n/a");
         assert_eq!(FLASH_MODE.decode(0), "Off");
         assert_eq!(FLASH_MODE.decode(1), "Auto");
         assert_eq!(FLASH_MODE.decode(2), "On");
-        assert_eq!(FLASH_MODE.decode(3), "Red-eye Reduction");
-        assert_eq!(FLASH_MODE.decode(4), "Slow Sync");
-        assert_eq!(FLASH_MODE.decode(5), "Auto + Red-eye Reduction");
-        assert_eq!(FLASH_MODE.decode(6), "On + Red-eye Reduction");
-        assert_eq!(FLASH_MODE.decode(16), "External Flash");
+        assert_eq!(FLASH_MODE.decode(3), "Red-eye reduction");
+        assert_eq!(FLASH_MODE.decode(4), "Slow-sync");
+        assert_eq!(FLASH_MODE.decode(5), "Red-eye reduction (Auto)");
+        assert_eq!(FLASH_MODE.decode(6), "Red-eye reduction (On)");
+        assert_eq!(FLASH_MODE.decode(16), "External flash");
         assert_eq!(FLASH_MODE.decode(99), "Unknown (99)");
     }
 
@@ -3775,11 +5301,16 @@ mod tests {
         assert_eq!(FOCUS_MODE.decode(99), "Unknown (99)");
     }
 
+    /// `%Canon::CameraSettings` key 17 (Canon.pm:2434). Keys 0-2 exist and were missing
+    /// here, so every older IXUS reported `Unknown (0)` for `Default`.
     #[test]
     fn test_decode_metering_mode() {
+        assert_eq!(METERING_MODE.decode(0), "Default");
+        assert_eq!(METERING_MODE.decode(1), "Spot");
+        assert_eq!(METERING_MODE.decode(2), "Average");
         assert_eq!(METERING_MODE.decode(3), "Evaluative");
         assert_eq!(METERING_MODE.decode(4), "Partial");
-        assert_eq!(METERING_MODE.decode(5), "Center-weighted Average");
+        assert_eq!(METERING_MODE.decode(5), "Center-weighted average");
         assert_eq!(METERING_MODE.decode(99), "Unknown (99)");
     }
 
@@ -3935,10 +5466,9 @@ mod tests {
         assert_eq!(result.get("Canon:BaseISO"), Some(&"27".to_string()));
         // MeasuredEV carries ExifTool's empirical +5 offset (`$val / 32 + 5`).
         assert_eq!(result.get("Canon:MeasuredEV"), Some(&"9.00".to_string()));
-        assert_eq!(
-            result.get("Canon:TargetAperture"),
-            Some(&"f/5.7".to_string())
-        );
+        // `PrintConv => 'sprintf("%.2g",$val)'` (Canon.pm:2803) -- a bare number, with
+        // no "f/" prefix.
+        assert_eq!(result.get("Canon:TargetAperture"), Some(&"5.7".to_string()));
         assert_eq!(
             result.get("Canon:TargetExposureTime"),
             Some(&"1/8".to_string())
@@ -4615,4 +6145,228 @@ mod tests {
         assert_eq!(result.get("Canon:FlashThreshold"), Some(&"256".to_string()));
     }
     */
+
+    // ========================================================================
+    // MakerNote base recovery (see `calculate_makernote_base`)
+    // ========================================================================
+
+    /// Builds a little-endian Canon MakerNote whose value block starts `gap` bytes after
+    /// the IFD header, and whose value offsets are stated relative to `base`.
+    ///
+    /// The single offset-based entry is a `CameraSettings`-shaped record: an int16 array
+    /// whose first word is its own size in bytes, exactly as every `FIRST_ENTRY => 1`
+    /// `%Canon` table is laid out.
+    fn build_makernote_with_gap(base: u32, gap: usize, elements: usize) -> Vec<u8> {
+        // Two records, so a candidate base can collect the corroborating votes
+        // MAKERNOTE_BASE_MIN_VOTES requires -- a single agreement is treated as chance.
+        let entry_count = 2usize;
+        let header_size = 2 + entry_count * 12 + 4;
+        let first_start = header_size + gap;
+        let second_start = first_start + elements * 2;
+        let mut data = Vec::new();
+        data.extend_from_slice(&(entry_count as u16).to_le_bytes());
+        for (tag, start) in [(0x0001u16, first_start), (0x0004u16, second_start)] {
+            data.extend_from_slice(&tag.to_le_bytes());
+            data.extend_from_slice(&3u16.to_le_bytes()); // SHORT
+            data.extend_from_slice(&(elements as u32).to_le_bytes());
+            data.extend_from_slice(&(base + start as u32).to_le_bytes());
+        }
+        data.extend_from_slice(&0u32.to_le_bytes()); // next IFD
+        data.resize(first_start, 0);
+        for _ in 0..2 {
+            // record[0] is the record's own size in bytes
+            data.extend_from_slice(&((elements * 2) as u16).to_le_bytes());
+            for index in 1..elements {
+                data.extend_from_slice(&(index as i16).to_le_bytes());
+            }
+        }
+        data
+    }
+
+    #[test]
+    fn test_makernote_base_packed_layout_is_unchanged() {
+        let data = build_makernote_with_gap(1082, 0, 32);
+        assert_eq!(
+            calculate_makernote_base(&data, ByteOrder::LittleEndian),
+            Some(1082)
+        );
+    }
+
+    /// The regression this whole search exists for: Canon leaves a gap between the IFD
+    /// header and the value block on a large share of bodies. Assuming no gap puts the
+    /// base `gap` bytes too high, which shifts every record by `gap / 2` slots.
+    #[test]
+    fn test_makernote_base_recovers_padded_layout() {
+        for gap in [2usize, 12, 24] {
+            let data = build_makernote_with_gap(734, gap, 48);
+            assert_eq!(
+                calculate_makernote_base(&data, ByteOrder::LittleEndian),
+                Some(734),
+                "gap of {gap} bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn test_makernote_base_falls_back_without_evidence() {
+        // One offset-based entry that does NOT declare its own size: no record can vote,
+        // so the packed-layout guess stands.
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&0x0095u16.to_le_bytes()); // LensModel (a string, not a record)
+        data.extend_from_slice(&2u16.to_le_bytes()); // ASCII
+        data.extend_from_slice(&64u32.to_le_bytes());
+        data.extend_from_slice(&(500u32 + 18).to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.resize(18 + 64, b'x');
+        assert_eq!(
+            calculate_makernote_base(&data, ByteOrder::LittleEndian),
+            Some(500)
+        );
+    }
+
+    // ========================================================================
+    // CustomFunctions2 (MakerNote tag 0x0099)
+    // ========================================================================
+
+    /// Assembles one `CustomFunctions2` record holding a single group of entries.
+    fn build_custom_functions2(entries: &[(u32, &[i32])]) -> Vec<u8> {
+        let mut group = Vec::new();
+        for (tag, values) in entries {
+            group.extend_from_slice(&tag.to_le_bytes());
+            group.extend_from_slice(&(values.len() as u32).to_le_bytes());
+            for value in *values {
+                group.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        let mut data = Vec::new();
+        let total = 8 + 12 + group.len();
+        data.extend_from_slice(&(total as u16).to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes()); // one group
+        data.extend_from_slice(&1u32.to_le_bytes()); // group number
+        data.extend_from_slice(&((group.len() + 8) as u32).to_le_bytes());
+        data.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        data.extend_from_slice(&group);
+        assert_eq!(data.len(), total);
+        data
+    }
+
+    #[test]
+    fn test_custom_functions2_decodes_lookup_and_bitmask() {
+        let data = build_custom_functions2(&[
+            (0x0102, &[1]),           // ISOSpeedIncrements
+            (0x040a, &[0b0000_0111]), // ViewfinderWarnings (BITMASK)
+            (0x0518, &[0]),           // AccelerationTracking (no PrintConv)
+        ]);
+        let mut tags = HashMap::new();
+        parse_custom_functions2(&data, ByteOrder::LittleEndian, &mut tags);
+
+        assert_eq!(
+            tags.get("Canon:ISOSpeedIncrements"),
+            Some(&"1 Stop".to_string())
+        );
+        assert_eq!(
+            tags.get("Canon:ViewfinderWarnings"),
+            Some(&"Monochrome, WB corrected, One-touch image quality".to_string())
+        );
+        assert_eq!(
+            tags.get("Canon:AccelerationTracking"),
+            Some(&"0".to_string())
+        );
+    }
+
+    #[test]
+    fn test_custom_functions2_bitmask_with_no_bits_set() {
+        let data = build_custom_functions2(&[(0x040a, &[0])]);
+        let mut tags = HashMap::new();
+        parse_custom_functions2(&data, ByteOrder::LittleEndian, &mut tags);
+        assert_eq!(
+            tags.get("Canon:ViewfinderWarnings"),
+            Some(&"(none)".to_string())
+        );
+    }
+
+    /// A record whose leading length word disagrees with its actual size is rejected
+    /// outright, the same way ExifTool warns "Invalid CanonCustom2 data" and bails.
+    #[test]
+    fn test_custom_functions2_rejects_bad_length() {
+        let mut data = build_custom_functions2(&[(0x0102, &[1])]);
+        data[0] = data[0].wrapping_add(4);
+        let mut tags = HashMap::new();
+        parse_custom_functions2(&data, ByteOrder::LittleEndian, &mut tags);
+        assert!(tags.is_empty());
+    }
+
+    /// A two-converter entry that arrives with a single value has no defined pairing,
+    /// so it is dropped rather than run through the first converter.
+    #[test]
+    fn test_custom_functions2_skips_ambiguous_converter_pairing() {
+        let data = build_custom_functions2(&[(0x070f, &[66])]); // MultiFunctionLock
+        let mut tags = HashMap::new();
+        parse_custom_functions2(&data, ByteOrder::LittleEndian, &mut tags);
+        assert_eq!(tags.get("Canon:MultiFunctionLock"), None);
+    }
+
+    // ========================================================================
+    // PrintConv fidelity
+    // ========================================================================
+
+    #[test]
+    fn test_convert_personal_function() {
+        assert_eq!(convert_personal_function(0), "Off");
+        assert_eq!(convert_personal_function(1), "On");
+        assert_eq!(convert_personal_function(7), "On (7)");
+    }
+
+    /// `sprintf("%.2g",$val)` over `2 ** (CanonEv($val) / 2)` -- and no "f/" prefix.
+    #[test]
+    fn test_canon_aperture_matches_exiftool() {
+        assert_eq!(canon_aperture(0), None);
+        assert_eq!(canon_aperture(-32), None);
+        assert_eq!(canon_aperture(96).as_deref(), Some("2.8"));
+        assert_eq!(canon_aperture(160).as_deref(), Some("5.7"));
+        assert_eq!(canon_aperture(256).as_deref(), Some("16"));
+    }
+
+    /// ExifTool's bit NUMBERS, which are not evenly spaced: 4, then 7, 11, 13, 14.
+    #[test]
+    fn test_decode_flash_bits() {
+        assert_eq!(decode_flash_bits(0), "(none)");
+        assert_eq!(decode_flash_bits(0x0008), "E-TTL");
+        assert_eq!(decode_flash_bits(0x2000), "Built-in");
+        assert_eq!(decode_flash_bits(0x4000), "External");
+        assert_eq!(decode_flash_bits(0x0080), "2nd-curtain sync used");
+        assert_eq!(decode_flash_bits(0x2008), "E-TTL, Built-in");
+    }
+
+    /// `"$val mm"` interpolates Perl's own stringification of the quotient, so a body
+    /// with 1/16 mm focal units prints every sixteenth, not a rounded tenth.
+    #[test]
+    fn test_format_focal_length_keeps_full_precision() {
+        assert_eq!(format_focal_length(259, 16), "16.1875 mm");
+        assert_eq!(format_focal_length(50, 1), "50 mm");
+        assert_eq!(format_focal_length(0, 1), "n/a");
+        assert_eq!(format_focal_length(10, 0), "n/a");
+    }
+
+    /// CameraType is a ShotInfo slot, not a function of the model id.
+    #[test]
+    fn test_decode_camera_type() {
+        assert_eq!(decode_camera_type(0), "n/a");
+        assert_eq!(decode_camera_type(248), "EOS High-end");
+        assert_eq!(decode_camera_type(250), "Compact");
+        assert_eq!(decode_camera_type(252), "EOS Mid-range");
+        assert_eq!(decode_camera_type(255), "DV Camera");
+        assert_eq!(decode_camera_type(7), "Unknown (7)");
+    }
+
+    #[test]
+    fn test_decode_canon_model_id_covers_camcorders() {
+        // 0x4007d673 -- the id the DC19/DC21/DC22 camcorders write, previously unlisted
+        // by this parser's hand-maintained match arm and reported as "Unknown".
+        assert_eq!(decode_canon_model_id(0x4007d673), "DC19/DC21/DC22");
+        assert_eq!(decode_canon_model_id(0x80000285), "EOS 5D Mark III");
+        assert_eq!(decode_canon_model_id(0xdeadbeef), "Unknown (3735928559)");
+    }
 }
