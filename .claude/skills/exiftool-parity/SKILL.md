@@ -15,11 +15,31 @@ Parity = same `Group:TagName` keys and values as real ExifTool. `tag-comparison`
 - Verifying a parser change closed a tag gap; measuring coverage; before claiming parity in commits.
 - NOT for wiring a new tag (see the wire-tag skill) or unit tests that never touch exiftool.
 
+## Tag knowledge != tag coverage
+
+Two different ExifTool views feed this repo. Confusing them explains most "we already know this tag, why is it missing?" confusion:
+
+| Source | Gives you | Omits |
+|---|---|---|
+| `exiftool -f -listx` → `src/tag_sync` | `count encoding id index lang name type version writable` | **everything about layout** |
+| Perl symbol table → `src/exiftool_tables` | `FORMAT`, `FIRST_ENTRY`, per-field `Format`, `Mask`, `SubDirectory` edges, `Condition`, `ValueConv` | conversions it refuses to approximate (counted, not silent) |
+
+`-listx` is the *documentation* view: it can say a tag exists but never how to read one. Verified empirically against 13.30 — `-listx` output contains zero occurrences of `SubDirectory`, `FIRST_ENTRY`, `ValueConv`, `Condition`, or `DataMember`. So a rising `oxidex-tags-*` count is **not** evidence of rising extraction coverage; only a comparison run is.
+
+Corollary for gap work: before writing a parser, check whether `oxidex::exiftool_tables::find_table(module, table)` already carries the layout. Re-deriving by hand a binary record ExifTool already declares is the expensive way to close a gap. See `docs/TRANSCRIPTION.md`.
+
+## Measuring the gap by kind
+
+`tools/exiftool-tables/conformance.py <corpus> --exiftool-dir <src> --oxidex <bin>` classifies every difference as RENAME / MISSING / VALUE / EXTRA and prints a `ceiling` column — what each format would score if every rename were fixed. A large score-to-ceiling spread means free coverage (string edits), not parsing work. ExifTool's own `t/images` (~190 files) is a ready-made corpus and `perl -Ilib ./exiftool` runs straight from an unpacked tarball.
+
 ## Quick Reference
 
 | Task | Command |
 |---|---|
-| Version check | `exiftool -ver` vs `EXIFTOOL_VERSION` pin in `.github/workflows/jpeg-tag-matrix.yml` vs `/tmp/oxidex-exiftool-cache/.exiftool-version` |
+| Version check | `exiftool -ver` vs `EXIFTOOL_VERSION` pin in `.github/workflows/jpeg-tag-matrix.yml` vs `/tmp/oxidex-exiftool-cache/.exiftool-version` vs `EXIFTOOL_VERSION` in `src/exiftool_tables/binary_tables.rs` |
+| Verify generated tables | `just verify-tables` (reads its release from the stamp; fetches if uncached) |
+| Regenerate tables | `just regen-tables [version]` (extract → codegen → independent verify) |
+| Gap by kind (rename vs missing) | `python3 tools/exiftool-tables/conformance.py <corpus> --exiftool-dir <src> --oxidex <bin>` |
 | Build main harness | `cargo build --release --bin tag-comparison --features tag-comparison-binary` |
 | Fixloop rebuild | `--profile fixloop` instead of `--release` → `target/fixloop/tag-comparison` |
 | Full-corpus comparison | `just compare-exiftool-full` (persistent cache; writes `comparison.json`) |
