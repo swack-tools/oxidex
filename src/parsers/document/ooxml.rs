@@ -464,6 +464,8 @@ fn parse_app_properties(xml: &str, metadata: &mut MetadataMap) -> Result<()> {
     let mut current_element = String::new();
     let mut in_heading_pairs = false;
     let mut heading_pairs = Vec::new();
+    let mut in_titles_of_parts = false;
+    let mut titles_of_parts = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -472,6 +474,9 @@ fn parse_app_properties(xml: &str, metadata: &mut MetadataMap) -> Result<()> {
                 if current_element == "HeadingPairs" {
                     in_heading_pairs = true;
                     heading_pairs.clear();
+                } else if current_element == "TitlesOfParts" {
+                    in_titles_of_parts = true;
+                    titles_of_parts.clear();
                 }
             }
             Ok(Event::Text(e)) => {
@@ -492,6 +497,14 @@ fn parse_app_properties(xml: &str, metadata: &mut MetadataMap) -> Result<()> {
                             }
                         };
                         heading_pairs.push(value);
+                        buf.clear();
+                        continue;
+                    }
+
+                    if in_titles_of_parts {
+                        if matches!(current_element.as_str(), "lpstr" | "lpwstr" | "bstr") {
+                            titles_of_parts.push(TagValue::new_string(text.to_string()));
+                        }
                         buf.clear();
                         continue;
                     }
@@ -543,6 +556,19 @@ fn parse_app_properties(xml: &str, metadata: &mut MetadataMap) -> Result<()> {
                         metadata.insert(
                             "XML:HeadingPairs".to_string(),
                             TagValue::new_array(std::mem::take(&mut heading_pairs)),
+                        );
+                    }
+                } else if e.local_name().as_ref() == b"TitlesOfParts" {
+                    in_titles_of_parts = false;
+                    if titles_of_parts.len() == 1 {
+                        metadata.insert(
+                            "XML:TitlesOfParts".to_string(),
+                            titles_of_parts.pop().expect("length checked"),
+                        );
+                    } else if !titles_of_parts.is_empty() {
+                        metadata.insert(
+                            "XML:TitlesOfParts".to_string(),
+                            TagValue::new_array(std::mem::take(&mut titles_of_parts)),
                         );
                     }
                 }
@@ -788,21 +814,22 @@ fn parse_xlsx_specific<R: Read + std::io::Seek>(
     Ok(())
 }
 
-/// Extract the named DOCX custom properties that ExifTool reports in its XML
-/// group. Other custom properties are intentionally left to the generic OOXML
-/// parser instead of creating arbitrary `XML:` tag names.
+/// Extract DOCX custom properties under the normalized XML-group names used by
+/// ExifTool. Office permits arbitrary user-defined property names here.
 fn parse_docx_xml_custom_properties(xml: &str, metadata: &mut MetadataMap) -> Result<()> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
 
     let mut buf = Vec::new();
-    let mut current_tag: Option<&'static str> = None;
+    let mut current_tag: Option<String> = None;
+    let mut current_value_is_filetime = false;
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
                 if e.local_name().as_ref() == b"property" {
                     current_tag = None;
+                    current_value_is_filetime = false;
 
                     for attribute in e.attributes() {
                         let attribute = attribute.map_err(|e| {
@@ -825,35 +852,36 @@ fn parse_docx_xml_custom_properties(xml: &str, metadata: &mut MetadataMap) -> Re
                                     ))
                                 })?;
 
-                            current_tag = match name.as_ref() {
-                                "Forward to" => Some("XML:ForwardTo"),
-                                "Group" => Some("XML:Group"),
-                                "Matter" => Some("XML:Matter"),
-                                "Office" => Some("XML:Office"),
-                                "Owner" => Some("XML:Owner"),
-                                _ => None,
-                            };
+                            let normalized = normalize_xml_property_name(name.as_ref());
+                            if !normalized.is_empty() {
+                                current_tag = Some(format!("XML:{normalized}"));
+                            }
                         }
                     }
+                } else if current_tag.is_some() && e.local_name().as_ref() == b"filetime" {
+                    current_value_is_filetime = true;
                 }
             }
             Ok(Event::Text(e)) => {
-                if let Some(tag_name) = current_tag {
+                if let Some(tag_name) = current_tag.as_ref() {
                     let text = e.xml10_content().map_err(|e| {
                         ExifToolError::parse_error(format!("Invalid custom property value: {}", e))
                     })?;
 
                     if !text.is_empty() {
-                        metadata.insert(
-                            tag_name.to_string(),
-                            TagValue::new_string(text.into_owned()),
-                        );
+                        let value = if current_value_is_filetime {
+                            format_xml_date_for_exiftool(text.as_ref())
+                        } else {
+                            text.into_owned()
+                        };
+                        metadata.insert(tag_name.clone(), TagValue::new_string(value));
                     }
                 }
             }
             Ok(Event::End(e)) => {
                 if e.local_name().as_ref() == b"property" {
                     current_tag = None;
+                    current_value_is_filetime = false;
                 }
             }
             Ok(Event::Eof) => break,
@@ -869,6 +897,26 @@ fn parse_docx_xml_custom_properties(xml: &str, metadata: &mut MetadataMap) -> Re
     }
 
     Ok(())
+}
+
+fn normalize_xml_property_name(name: &str) -> String {
+    let mut normalized = String::with_capacity(name.len());
+    let mut capitalize_next = false;
+
+    for character in name.chars() {
+        if character.is_alphanumeric() {
+            if capitalize_next {
+                normalized.extend(character.to_uppercase());
+                capitalize_next = false;
+            } else {
+                normalized.push(character);
+            }
+        } else if !normalized.is_empty() {
+            capitalize_next = true;
+        }
+    }
+
+    normalized
 }
 
 /// Helper function to count occurrences of XML elements
@@ -954,6 +1002,10 @@ fn add_docx_tag_aliases(metadata: &mut MetadataMap) {
         ("OOXML:ModifyDate", "DOCX:Modified"),
         ("OOXML:Words", "DOCX:WordCount"),
         ("OOXML:Pages", "DOCX:PageCount"),
+        ("OOXML:Title", "XMP:Title"),
+        ("OOXML:Subject", "XMP:Subject"),
+        ("OOXML:Creator", "XMP:Creator"),
+        ("OOXML:Description", "XMP:Description"),
     ];
 
     // Clone existing tags and create aliases with DOCX prefix
@@ -1481,7 +1533,8 @@ mod tests {
     <property name="Owner"><vt:lpwstr>Owner</vt:lpwstr></property>
     <property name="Forward to"><vt:lpwstr>Forward to</vt:lpwstr></property>
     <property name="Group"><vt:lpwstr>Group</vt:lpwstr></property>
-    <property name="A Custom Field"><vt:lpwstr>Not an XML tag</vt:lpwstr></property>
+    <property name="A Custom Field"><vt:lpwstr>Custom value</vt:lpwstr></property>
+    <property name="Date completed"><vt:filetime>2009-10-23T07:00:00Z</vt:filetime></property>
 </Properties>"#;
 
         let mut metadata = MetadataMap::new();
@@ -1508,7 +1561,18 @@ mod tests {
             metadata.get("XML:Group").and_then(TagValue::as_string),
             Some("Group")
         );
-        assert!(!metadata.contains_key("XML:A Custom Field"));
+        assert_eq!(
+            metadata
+                .get("XML:ACustomField")
+                .and_then(TagValue::as_string),
+            Some("Custom value")
+        );
+        assert_eq!(
+            metadata
+                .get("XML:DateCompleted")
+                .and_then(TagValue::as_string),
+            Some("2009:10:23 07:00:00Z")
+        );
     }
 
     #[test]
@@ -1523,6 +1587,11 @@ mod tests {
             <vt:variant><vt:i4>1</vt:i4></vt:variant>
         </vt:vector>
     </HeadingPairs>
+    <TitlesOfParts>
+        <vt:vector size="1" baseType="lpstr">
+            <vt:lpstr>The document title</vt:lpstr>
+        </vt:vector>
+    </TitlesOfParts>
     <HyperlinkBase>https://example.test/</HyperlinkBase>
     <HyperlinksChanged>false</HyperlinksChanged>
 </Properties>"#;
@@ -1555,5 +1624,44 @@ mod tests {
                 TagValue::new_integer(1),
             ]))
         );
+        assert_eq!(
+            metadata
+                .get("XML:TitlesOfParts")
+                .and_then(TagValue::as_string),
+            Some("The document title")
+        );
+    }
+
+    #[test]
+    fn test_docx_core_properties_have_xmp_aliases() {
+        let mut metadata = MetadataMap::new();
+        for (name, value) in [
+            ("Title", "The document title"),
+            ("Subject", "the subject"),
+            ("Creator", "Author: Jeff"),
+            ("Description", "here are my comments"),
+        ] {
+            metadata.insert(
+                format!("OOXML:{name}"),
+                TagValue::new_string(value.to_string()),
+            );
+        }
+
+        add_docx_tag_aliases(&mut metadata);
+
+        for (name, expected) in [
+            ("Title", "The document title"),
+            ("Subject", "the subject"),
+            ("Creator", "Author: Jeff"),
+            ("Description", "here are my comments"),
+        ] {
+            assert_eq!(
+                metadata
+                    .get(&format!("XMP:{name}"))
+                    .and_then(TagValue::as_string),
+                Some(expected),
+                "XMP:{name}"
+            );
+        }
     }
 }
