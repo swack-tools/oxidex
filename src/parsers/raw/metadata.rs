@@ -28,6 +28,7 @@ use crate::io::EndianReader;
 use crate::parsers::icc::parse_icc_profile_data as parse_icc;
 use crate::parsers::raw::{RawFormat, raf_parser};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
+use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
 use crate::tag_db::lookup_tag_name;
 
 /// Resolve RAW-specific tags using the names and groups assigned by ExifTool.
@@ -3793,11 +3794,258 @@ fn find_cr3_box<'a>(data: &'a [u8], box_type: &[u8; 4]) -> Option<&'a [u8]> {
     None
 }
 
-fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
-    let mut metadata = MetadataMap::new();
+/// UUID of the top-level `uuid` box a CR3 keeps its XMP packet in.
+///
+/// From QuickTime.pm's UUID-XMP condition:
+/// `$$valPt=~/^\xbe\x7a\xcf\xcb\x97\xa9\x42\xe8\x9c\x71\x99\x94\x91\xe3\xaf\xac/`
+const UUID_XMP: [u8; 16] = [
+    0xbe, 0x7a, 0xcf, 0xcb, 0x97, 0xa9, 0x42, 0xe8, 0x9c, 0x71, 0x99, 0x94, 0x91, 0xe3, 0xaf, 0xac,
+];
+
+/// UUID of the top-level `uuid` box holding a CR3's embedded preview JPEG.
+///
+/// From QuickTime.pm's PreviewImage condition:
+/// `$$valPt=~/^\xea\xf4\x2b\x5e\x1c\x98\x4b\x88\xb9\xfb\xb7\xdc\x40\x6e\x4d\x16.{32}/s`
+const UUID_PREVIEW_IMAGE: [u8; 16] = [
+    0xea, 0xf4, 0x2b, 0x5e, 0x1c, 0x98, 0x4b, 0x88, 0xb9, 0xfb, 0xb7, 0xdc, 0x40, 0x6e, 0x4d, 0x16,
+];
+
+/// Offset of the preview JPEG inside the PreviewImage `uuid` box payload.
+///
+/// The same QuickTime.pm entry takes `RawConv => '$val = substr($val, 0x30)'`,
+/// but ExifTool's `$val` there starts at the UUID, while [`find_cr3_uuid_box`]
+/// hands back the bytes *after* it -- so 0x30 minus the 16-byte UUID. What
+/// remains is the 32-byte PRVW atom header that entry documents field by field
+/// (atom size, 'PRVW', width, height, preview length).
+const PREVIEW_IMAGE_DATA_OFFSET: usize = 0x30 - 16;
+
+/// Locate a `uuid` box carrying `uuid` and return its payload after the UUID.
+///
+/// An ISO Base Media `uuid` box is `[size][= "uuid"][uuid: 16 bytes][payload]`,
+/// so the interesting bytes start 16 past where [`find_cr3_box`] stops.
+fn find_cr3_uuid_box<'a>(data: &'a [u8], uuid: &[u8; 16]) -> Option<&'a [u8]> {
+    let mut cursor = 0;
+    while cursor + 8 <= data.len() {
+        let rel = data[cursor..].windows(4).position(|w| w == b"uuid")?;
+        let type_offset = cursor + rel;
+        cursor = type_offset + 4;
+        if type_offset < 4 {
+            continue;
+        }
+
+        let box_start = type_offset - 4;
+        let box_size = u32::from_be_bytes([
+            data[box_start],
+            data[box_start + 1],
+            data[box_start + 2],
+            data[box_start + 3],
+        ]) as usize;
+        let payload_start = type_offset + 4 + uuid.len();
+        let box_end = match box_start.checked_add(box_size) {
+            Some(end) if box_size >= 8 && end <= data.len() && end >= payload_start => end,
+            _ => continue,
+        };
+        if &data[type_offset + 4..payload_start] != uuid {
+            continue;
+        }
+
+        return Some(&data[payload_start..box_end]);
+    }
+    None
+}
+
+/// Map a CR3 `CNCV` compressor version string to its ExifTool file type.
+///
+/// Canon.pm %Canon::uuid CNCV:
+/// `$self->OverrideFileType($1) if $val =~ /^Canon(\w{3})/i`
+/// -- the three word characters after the literal "Canon" are the file type,
+/// "CR3" for a still and "CRM" for a Canon RAW movie. Anything that does not
+/// match the pattern returns None so the caller keeps its default.
+fn cr3_file_type_from_compressor_version(version: &str) -> Option<&'static str> {
+    let rest = version.strip_prefix("Canon").or_else(|| {
+        // The regex carries /i, so the "Canon" prefix is matched case-insensitively.
+        version
+            .get(..5)
+            .filter(|prefix| prefix.eq_ignore_ascii_case("Canon"))
+            .and_then(|_| version.get(5..))
+    })?;
+    let tag: String = rest.chars().take(3).collect();
+    if tag.len() != 3 || !tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    match tag.to_ascii_uppercase().as_str() {
+        "CR3" => Some("CR3"),
+        "CRM" => Some("CRM"),
+        _ => None,
+    }
+}
+
+/// MIME type for a CR3-family file type, from ExifTool.pm's `%mimeType`:
+/// `CR3 => 'image/x-canon-cr3'`, `CRM => 'video/x-canon-crm'`.
+fn cr3_mime_type(file_type: &str) -> &'static str {
+    match file_type {
+        "CRM" => "video/x-canon-crm",
+        _ => "image/x-canon-cr3",
+    }
+}
+
+/// Read one CR3 `CMTn` box as a standalone TIFF and file its IFD0 under `group`.
+///
+/// Every `CMTn` box is a complete TIFF -- 8-byte header, then an IFD whose
+/// value offsets are measured from the start of the box -- which is why
+/// ExifTool gives each of them `ProcessProc => \&Image::ExifTool::ProcessTIFF`
+/// rather than treating them as sub-IFDs of one another.
+fn parse_cr3_cmt_ifd(data: &[u8], box_type: &[u8; 4], group: &str, metadata: &mut MetadataMap) {
+    let Some(tiff) = find_cr3_box(data, box_type) else {
+        return;
+    };
+    if !(tiff.starts_with(b"II*\0") || tiff.starts_with(b"MM\x00*")) {
+        return;
+    }
+    let Ok(byte_order) = detect_byte_order(tiff) else {
+        return;
+    };
+    let first_ifd_offset = read_u32(&tiff[4..8], byte_order) as u64;
+    let reader = SliceReader::new(tiff);
+    let Ok(ifd_tags) = parse_ifd(&reader, first_ifd_offset, byte_order) else {
+        return;
+    };
+
+    for (tag_id, field_type, value_count, raw_bytes) in &ifd_tags {
+        let bytes = raw_bytes.as_ref();
+        let tag_name = lookup_tag_name(*tag_id, group);
+        // Same display-value treatment CMT1 already gets. Without it CMT2's
+        // LensInfo came out as the raw rational list "15 45 0 0" instead of
+        // ExifTool's "15-45mm f/0".
+        let tag_value = match format_exif_display_value(
+            *tag_id,
+            bytes,
+            *field_type,
+            *value_count,
+            byte_order,
+        ) {
+            Some(value) => TagValue::new_string(value),
+            None => raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order),
+        };
+        metadata.insert(tag_name, tag_value);
+    }
+}
+
+/// Read the CR3 `CMT3` box as the Canon MakerNote it is.
+///
+/// `CMT3` is a complete TIFF whose IFD0 *is* the Canon MakerNote directory
+/// (Canon.pm: `CMT3 => { Name => 'MakerNoteCanon', SubDirectory => { TagTable
+/// => 'Image::ExifTool::Canon::Main', ProcessProc => \&ProcessCMT3 } }`, and
+/// ProcessCMT3 ends in `$et->ProcessTIFF`).
+///
+/// The box is precisely the shape [`MakerNoteContext`] describes: a TIFF header
+/// at index 0, the MakerNote directory at the header's first-IFD offset, and
+/// value offsets measured from the header rather than from the directory. So it
+/// is handed over as a located context rather than as a bare slice -- the base
+/// is then a fact read out of the box's own header instead of something
+/// `canon_makernote_base` has to recover by voting, and the decoder can still
+/// reach values that sit past the end of the directory.
+fn parse_cr3_cmt3_makernotes(data: &[u8], metadata: &mut MetadataMap) {
+    let Some(tiff) = find_cr3_box(data, b"CMT3") else {
+        return;
+    };
+    if !(tiff.starts_with(b"II*\0") || tiff.starts_with(b"MM\x00*")) {
+        return;
+    }
+    let Ok(byte_order) = detect_byte_order(tiff) else {
+        return;
+    };
+    let first_ifd_offset = read_u32(&tiff[4..8], byte_order) as usize;
+    if first_ifd_offset >= tiff.len() {
+        return;
+    }
+
+    // The absolute file offset of the box payload, so `IsOffset` tags inside it
+    // resolve against the file rather than against the box.
+    let tiff_base = subslice_offset(data, tiff).unwrap_or(0) as u64;
+    let ctx = MakerNoteContext::in_tiff(
+        tiff,
+        first_ifd_offset,
+        tiff.len() - first_ifd_offset,
+        tiff_base,
+    );
+
+    let mut makernote_tags = std::collections::HashMap::new();
+    if let Err(e) = crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context(
+        "Canon",
+        None,
+        &ctx,
+        byte_order,
+        &mut makernote_tags,
+    ) {
+        eprintln!("Warning: Failed to parse CR3 CMT3 MakerNote: {}", e);
+        return;
+    }
+    for (tag_name, tag_value) in makernote_tags {
+        metadata.insert(tag_name, TagValue::new_string(tag_value));
+    }
+}
+
+/// Byte offset of `part` within `whole`, when `part` is a subslice of it.
+fn subslice_offset(whole: &[u8], part: &[u8]) -> Option<usize> {
+    let whole_start = whole.as_ptr() as usize;
+    let part_start = part.as_ptr() as usize;
+    let offset = part_start.checked_sub(whole_start)?;
+    (offset + part.len() <= whole.len()).then_some(offset)
+}
+
+/// `_format` is unused: a CR3 names its own file type in the CNCV box (CR3 vs
+/// CRM), which is more specific than the RawFormat variant that got us here.
+fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
+    // CR3 is an ISO Base Media container, so every `ftyp`/`moov`/`trak` box in
+    // it is the same box an MP4 carries. Walk it with the QuickTime box parser
+    // before touching the Canon boxes: this is the whole QuickTime tag group,
+    // and none of it needed new code.
+    let mut metadata = match crate::parsers::quicktime::parse_quicktime_metadata_from_bytes(data) {
+        Ok(map) => map,
+        // A CR3 whose box tree does not parse still has readable CMT boxes
+        // below (find_cr3_box scans rather than walks), so this is not fatal.
+        Err(_) => MetadataMap::new(),
+    };
+
+    // File type. ExifTool starts from the `ftyp` major brand `crx ` -- which on
+    // its own only says "Canon Raw", shared by CR3 and CRM -- and then lets the
+    // CNCV box override it: Canon.pm's %Canon::uuid CNCV entry is
+    //     RawConv => '$self->OverrideFileType($1) if $val =~ /^Canon(\w{3})/i; $val'
+    // so "CanonCR3_001/00.09.00/00.00.00" resolves to CR3 and a Canon RAW movie
+    // to CRM. oxidex used to report `format!("{:?}", format)` here, i.e. the
+    // Rust enum variant name "CanonCR3", which is not an ExifTool file type at
+    // all, and left MIMEType at the extension table's "application/octet-stream"
+    // fallback. The tag-comparison harness skips the File group entirely, so
+    // none of that was visible in coverage numbers.
+    let compressor_version = find_cr3_box(data, b"CNCV").and_then(|payload| {
+        let text = String::from_utf8_lossy(payload)
+            .trim_end_matches('\0')
+            .trim()
+            .to_string();
+        if text.is_empty() { None } else { Some(text) }
+    });
+    if let Some(version) = &compressor_version {
+        metadata.insert(
+            "Canon:CompressorVersion".to_string(),
+            TagValue::new_string(version.clone()),
+        );
+    }
+    let file_type = compressor_version
+        .as_deref()
+        .and_then(cr3_file_type_from_compressor_version)
+        .unwrap_or("CR3");
     metadata.insert(
         "File:FileType".to_string(),
-        TagValue::new_string(format!("{:?}", format)),
+        TagValue::new_string(file_type.to_string()),
+    );
+    metadata.insert(
+        "File:FileTypeExtension".to_string(),
+        TagValue::new_string(file_type.to_ascii_lowercase()),
+    );
+    metadata.insert(
+        "File:MIMEType".to_string(),
+        TagValue::new_string(cr3_mime_type(file_type).to_string()),
     );
 
     // Parse CMT1 box (standard TIFF IFD0 with optional EXIF IFD and MakerNote)
@@ -3904,46 +4152,53 @@ fn parse_cr3(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         }
     }
 
-    // Some CR3 files store additional EXIF metadata in a CMT2 box
-    // (e.g. LensModel, LensSerialNumber, OffsetTime, OwnerName).
-    // Parse it the same way as CMT1.
-    if let Some(tiff) = find_cr3_box(data, b"CMT2") {
-        if tiff.starts_with(b"II*\0") || tiff.starts_with(b"MM\x00*") {
-            if let Ok(byte_order) = detect_byte_order(tiff) {
-                let first_ifd_offset = read_u32(&tiff[4..8], byte_order) as u64;
-                let reader = SliceReader::new(tiff);
-                if let Ok(ifd0_tags) = parse_ifd(&reader, first_ifd_offset, byte_order) {
-                    for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
-                        let bytes = raw_bytes.as_ref();
-                        let tag_name = lookup_tag_name(*tag_id, "EXIF");
-                        let tag_value = raw_bytes_to_simple_tag_value(
-                            bytes,
-                            *field_type,
-                            *value_count,
-                            byte_order,
-                        );
-                        metadata.insert(tag_name, tag_value);
-                    }
-                }
-            }
+    // CMT2 is the ExifIFD (Canon.pm %Canon::uuid: CMT2 => Name => 'ExifIFD').
+    // It is a whole TIFF of its own, not a sub-IFD of CMT1, which is why a CR3
+    // has no 0x8769 pointer in CMT1 at all.
+    parse_cr3_cmt_ifd(data, b"CMT2", "EXIF", &mut metadata);
+
+    // CMT4 is the GPS IFD (Canon.pm %Canon::uuid: CMT4 => Name => 'GPSInfo',
+    // TagTable => GPS::Main). oxidex used to hand this box to the Canon
+    // MakerNote dispatcher on the theory that "some CR3 files store MakerNotes
+    // in CMT4"; no CR3 does. On CanonRaw.cr3 the box is a one-entry TIFF whose
+    // only tag is 0x0000 GPSVersionID, and reading it as a MakerNote produced
+    // nothing at all.
+    parse_cr3_cmt_ifd(data, b"CMT4", "GPS", &mut metadata);
+
+    // CMT3 is the Canon MakerNote (Canon.pm %Canon::uuid: CMT3 =>
+    // Name => 'MakerNoteCanon', TagTable => Canon::Main, ProcessProc =>
+    // ProcessCMT3, which is ProcessTIFF). The box payload is a complete TIFF
+    // whose IFD0 entries are Canon MakerNote tags, with value offsets measured
+    // from the start of the box. Nothing read this box before, which is the
+    // whole reason a CR3 reported zero MakerNotes tags.
+    parse_cr3_cmt3_makernotes(data, &mut metadata);
+
+    // XMP lives in a top-level `uuid` box (QuickTime.pm's UUID-XMP condition
+    // matches be7acfcb-97a9-42e8-9c71-999491e3afac), not in the Canon uuid box.
+    if let Some(payload) = find_cr3_uuid_box(data, &UUID_XMP)
+        && let Ok(xmp_tags) = crate::parsers::xmp::parse_xmp(payload)
+    {
+        for (tag_name, tag_value) in xmp_tags {
+            metadata.insert(tag_name, TagValue::new_string(tag_value));
         }
     }
 
-    // Some CR3 files store MakerNotes in CMT4 instead of CMT1 EXIF
-    if let Some(makernote_data) = find_cr3_box(data, b"CMT4") {
-        let mut makernote_tags = std::collections::HashMap::new();
-        if let Err(e) = crate::parsers::tiff::makernote_dispatcher::dispatch_makernote(
-            "Canon",
-            makernote_data,
-            ByteOrder::LittleEndian,
-            &mut makernote_tags,
-        ) {
-            eprintln!("Warning: Failed to parse CMT4 MakerNote: {}", e);
-        } else {
-            for (tag_name, tag_value) in makernote_tags {
-                metadata.insert(tag_name, TagValue::new_string(tag_value));
-            }
-        }
+    // PreviewImage is its own top-level `uuid` box. QuickTime.pm's PreviewImage
+    // entry matches uuid eaf42b5e-1c98-4b88-b9fb-b7dc406e4d16 and takes
+    // `RawConv => '$val = substr($val, 0x30)'` -- the JPEG starts 0x30 bytes
+    // past the start of the UUID, after a PRVW atom header the same entry
+    // documents byte by byte.
+    if let Some(payload) = find_cr3_uuid_box(data, &UUID_PREVIEW_IMAGE)
+        && let Some(image) = payload.get(PREVIEW_IMAGE_DATA_OFFSET..)
+        && !image.is_empty()
+    {
+        metadata.insert(
+            "QuickTime:PreviewImage".to_string(),
+            TagValue::new_string(format!(
+                "(Binary data {} bytes, use -b option to extract)",
+                image.len()
+            )),
+        );
     }
 
     Ok(metadata)

@@ -12,7 +12,7 @@ pub mod canon {
     use super::*;
 
     // Canon lens data as static array for zero-overhead lookup
-    pub static CANON_LENSES: [(u16, &str); 146] = [
+    pub static CANON_LENSES: [(u16, &str); 147] = [
         // Most common Canon EF lenses (sorted by ID)
         (1, "Canon EF 50mm f/1.8"),
         (2, "Canon EF 28mm f/2.8"),
@@ -183,6 +183,8 @@ pub mod canon {
         (4147, "Canon EF 16-35mm f/2.8L III USM"),
         (4150, "Canon EF 24-70mm f/2.8L III USM"),
         (4152, "Canon EF 100-400mm f/4.5-5.6L IS II USM"),
+        // Canon.pm:558 -- the kit lens of the EOS M50 whose CR3 is the sample.
+        (4153, "Canon EF-M 15-45mm f/3.5-6.3 IS STM"),
         (4156, "Canon EF 50mm f/1.8 STM"),
         (61182, "Canon RF 24-105mm f/4L IS USM"),
         (61183, "Canon RF 28-70mm f/2L USM"),
