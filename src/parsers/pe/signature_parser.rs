@@ -528,7 +528,13 @@ fn parse_asn1_time(time_bytes: &[u8], is_utc_time: bool) -> Option<String> {
 
     if is_utc_time {
         // UTCTime format: YYMMDDHHMMSSZ (13 chars)
-        if time_str.len() >= 13 {
+        //
+        // `time_str` is `from_utf8_lossy` over untrusted certificate bytes,
+        // so it can hold multi-byte characters; the length guard below is a
+        // *byte* count, not a char count, and the slices that follow assume
+        // single-byte ASCII digits. Reject non-ASCII input rather than
+        // risking a slice that lands mid-character.
+        if time_str.len() >= 13 && time_str.is_ascii() {
             let year = time_str[0..2].parse::<u32>().ok()?;
             // Y2K pivot: 50-99 = 1950-1999, 00-49 = 2000-2049
             let full_year = if year >= 50 { 1900 + year } else { 2000 + year };
@@ -544,7 +550,7 @@ fn parse_asn1_time(time_bytes: &[u8], is_utc_time: bool) -> Option<String> {
         }
     } else {
         // GeneralizedTime format: YYYYMMDDHHMMSSZ (15 chars)
-        if time_str.len() >= 15 {
+        if time_str.len() >= 15 && time_str.is_ascii() {
             let year = &time_str[0..4];
             let month = &time_str[4..6];
             let day = &time_str[6..8];
@@ -672,5 +678,19 @@ mod tests {
         // Test with future date
         let future_date = "2030-12-31T23:59:59Z";
         assert!(!is_certificate_expired(future_date));
+    }
+
+    #[test]
+    fn test_parse_asn1_time_rejects_non_ascii_without_panicking() {
+        // `time_bytes` comes straight from a certificate's ASN.1 content
+        // octets (untrusted file data), decoded with `from_utf8_lossy`.
+        // The length guards below are *byte* counts, so a 13/15-byte
+        // non-ASCII run can pass them and still panic on the fixed
+        // 2-byte-wide slices if a multi-byte char straddles one.
+        let utc_bytes = "在在在在在在在".as_bytes(); // 7 * 3 = 21 bytes, >= 13
+        assert_eq!(parse_asn1_time(utc_bytes, true), None);
+
+        let generalized_bytes = "在在在在在在在在".as_bytes(); // 8 * 3 = 24 bytes, >= 15
+        assert_eq!(parse_asn1_time(generalized_bytes, false), None);
     }
 }

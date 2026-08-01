@@ -275,8 +275,11 @@ pub fn format_pdf_date(pdf_date: &str) -> Option<String> {
     // Remove "D:" prefix if present
     let date_str = pdf_date.strip_prefix("D:").unwrap_or(pdf_date);
 
-    // Minimum: YYYYMMDD (8 chars)
-    if date_str.len() < 8 {
+    // Minimum: YYYYMMDD (8 chars). The fixed-index slices below assume
+    // single-byte ASCII digits, so a byte-length guard alone isn't enough --
+    // a short non-ASCII value can pass `len() >= 8` while its byte indices
+    // land mid-character (see `format_iptc_date` for the same class of bug).
+    if date_str.len() < 8 || !date_str.is_ascii() {
         return None;
     }
 
@@ -988,5 +991,15 @@ mod tests {
             metadata.get_string("PDF:SourceModified"),
             Some("2024:03:15 14:30:00Z")
         );
+    }
+
+    #[test]
+    fn test_format_pdf_date_rejects_non_ascii_without_panicking() {
+        // A byte-length guard on a multi-byte string is not a char-count
+        // guard: an 8-*byte* non-ASCII `/CreationDate` value can satisfy
+        // `date_str.len() < 8` while still panicking on the fixed-index
+        // slices `[0..4]`, `[4..6]`, `[6..8]` if any of those cut a
+        // multi-byte character in half. "日本ab" is 8 bytes / 5 chars.
+        assert_eq!(format_pdf_date("D:日本ab"), None);
     }
 }

@@ -72,16 +72,32 @@ const PDF_SIGNATURE: &[u8] = b"%PDF-";
 ///
 /// Taken from the object that also declares `/Type /Pages`: a `/Count` alone
 /// is ambiguous, since a PDF's outline and structure trees use the same key.
+/// Backs up from `index` to the nearest byte offset in `s` that falls on a
+/// UTF-8 character boundary, clamped to `s.len()`.
+///
+/// `text` here is `String::from_utf8_lossy(data)` over raw PDF bytes: once
+/// non-UTF8 bytes appear (binary streams, non-ASCII author names) the string
+/// is dense with 3-byte U+FFFD replacement characters, so an arbitrary
+/// `+/-400` byte offset is not guaranteed to land on a boundary.
+fn floor_char_boundary(s: &str, index: usize) -> usize {
+    let mut idx = index.min(s.len());
+    while idx > 0 && !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
 fn pdf_page_count(data: &[u8]) -> Option<u32> {
     let text = String::from_utf8_lossy(data);
     for (idx, _) in text.match_indices("/Type") {
-        let window = &text[idx..text.len().min(idx + 400)];
+        let end = floor_char_boundary(&text, idx.saturating_add(400));
+        let window = &text[idx..end];
         if !window.contains("/Pages") {
             continue;
         }
         // The dictionary may list /Count before or after /Type.
-        let start = idx.saturating_sub(400);
-        let around = &text[start..text.len().min(idx + 400)];
+        let start = floor_char_boundary(&text, idx.saturating_sub(400));
+        let around = &text[start..end];
         if let Some(cpos) = around.find("/Count") {
             let rest = &around[cpos + 6..];
             let digits: String = rest
@@ -116,6 +132,35 @@ fn pdf_media_box(data: &[u8]) -> Option<String> {
         return None;
     }
     Some(format!("[{}]", parts.join(",")))
+}
+
+#[cfg(test)]
+mod page_count_tests {
+    use super::pdf_page_count;
+
+    #[test]
+    fn matches_pages_dict_with_count() {
+        let data = b"1 0 obj\n<< /Type /Pages /Kids [2 0 R] /Count 3 >>\nendobj";
+        assert_eq!(pdf_page_count(data), Some(3));
+    }
+
+    #[test]
+    fn does_not_panic_on_multibyte_text_near_the_window_edge() {
+        // `from_utf8_lossy` over arbitrary PDF bytes is dense with 3-byte
+        // U+FFFD replacement characters once non-UTF8 bytes appear (raw
+        // stream data, CJK author names, etc). `idx + 400` and
+        // `idx.saturating_sub(400)` must not land mid-sequence.
+        let mut data = b"/Type".to_vec();
+        // Push enough invalid UTF-8 bytes that a 3-byte-per-char lossy
+        // decode straddles the +400 and -400 byte offsets used below.
+        data.extend(std::iter::repeat_n(0x80u8, 500));
+        data.extend_from_slice(b"/Pages");
+        data.extend_from_slice(b" /Count 7");
+
+        // Must not panic; the malformed run means we may or may not
+        // recover the count, but a crash here takes out the whole file.
+        let _ = pdf_page_count(&data);
+    }
 }
 
 /// Parses PDF file and extracts all metadata.
