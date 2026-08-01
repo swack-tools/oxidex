@@ -73,12 +73,18 @@ const MAX_CHUNKS: u8 = 255;
 /// - Chunk data is copied rather than referenced to allow flexible lifetimes
 #[derive(Debug)]
 pub struct IccChunkAssembler {
-    /// Storage for chunk data, keyed by 1-based chunk number.
+    /// Storage for chunk data, keyed by the header's chunk number.
     chunks: HashMap<u8, Vec<u8>>,
 
     /// Total number of chunks expected, recorded from the first chunk.
     /// None until the first chunk is added.
     total_chunks: Option<u8>,
+
+    /// Segments accepted so far. ExifTool's `$iccChunkCount` counts calls, not
+    /// distinct indices, and it is that count the completion test compares
+    /// against the declared total (`++$iccChunkCount >= $iccChunksTotal`,
+    /// ExifTool.pm:7951).
+    chunk_count: usize,
 }
 
 impl IccChunkAssembler {
@@ -101,6 +107,7 @@ impl IccChunkAssembler {
         Self {
             chunks: HashMap::new(),
             total_chunks: None,
+            chunk_count: 0,
         }
     }
 
@@ -161,35 +168,35 @@ impl IccChunkAssembler {
         }
 
         // Extract chunk number and total count
-        // Byte 12: current chunk number (1-based)
+        // Byte 12: current chunk number (1-based by the ICC spec, but see below)
         // Byte 13: total number of chunks
         let chunk_number = data[12];
         let total = data[13];
 
-        // Validate chunk number is within valid range (1 to total)
-        if chunk_number == 0 {
-            return Err(ExifToolError::parse_error(
-                "ICC profile chunk number cannot be 0 (must be 1-based)",
-            ));
-        }
+        // ExifTool (ExifTool.pm:7931-7952) validates exactly one thing here -- that
+        // `$chunksTot` agrees with the first segment's -- and treats the header
+        // numbers as array bookkeeping otherwise:
+        //
+        // ```text
+        //     $iccChunkCount = 0;
+        //     $iccChunksTotal = $chunksTot;
+        //     $self->Warn('ICC_Profile chunk count is zero') if !$chunksTot;
+        //     ...
+        //     if (defined $iccChunk[$chunkNum]) {
+        //         $self->Warn('Duplicate ICC_Profile chunk number(s)');
+        //         $iccChunk[$chunkNum] .= substr($$segDataPt, 14);
+        // ```
+        //
+        // A zero chunk number is a plain `@iccChunk` index, a zero total warns and
+        // then satisfies `++$iccChunkCount >= $iccChunksTotal` on the first segment
+        // ("handle the case where some software erroneously writes zeros for the
+        // chunk counts", ExifTool.pm:7932), and a repeated number is appended, not
+        // discarded. Rejecting any of those dropped the whole `ICC_Profile:*` group
+        // for files ExifTool reads fine.
 
-        if total == 0 {
-            return Err(ExifToolError::parse_error(
-                "ICC profile total chunk count cannot be 0",
-            ));
-        }
-
-        if chunk_number > total {
-            return Err(ExifToolError::parse_error(format!(
-                "ICC profile chunk number {} exceeds total count {}",
-                chunk_number, total
-            )));
-        }
-
-        // Note: total is u8, so it's already bounded by 255 (MAX_CHUNKS)
-        // No explicit check needed since u8 cannot exceed MAX_CHUNKS
-
-        // Check for consistency with previously recorded total
+        // Check for consistency with previously recorded total. This is ExifTool's
+        // `undef $iccChunkCount if $chunksTot != $iccChunksTotal` -- the one case
+        // where it does abandon the profile.
         if let Some(expected_total) = self.total_chunks {
             if total != expected_total {
                 return Err(ExifToolError::parse_error(format!(
@@ -202,17 +209,13 @@ impl IccChunkAssembler {
             self.total_chunks = Some(total);
         }
 
-        // Check for duplicate chunks
-        if self.chunks.contains_key(&chunk_number) {
-            return Err(ExifToolError::parse_error(format!(
-                "Duplicate ICC profile chunk number {}",
-                chunk_number
-            )));
-        }
-
-        // Extract and store the chunk data (everything after the 14-byte header)
-        let chunk_data = data[14..].to_vec();
-        self.chunks.insert(chunk_number, chunk_data);
+        // Extract and store the chunk data (everything after the 14-byte header).
+        // A repeated chunk number concatenates onto what is already there.
+        self.chunk_count += 1;
+        self.chunks
+            .entry(chunk_number)
+            .or_default()
+            .extend_from_slice(&data[14..]);
 
         Ok(())
     }
@@ -247,8 +250,11 @@ impl IccChunkAssembler {
     /// assert!(assembler.is_complete()); // All chunks received
     /// ```
     pub fn is_complete(&self) -> bool {
+        // `if (++$iccChunkCount >= $iccChunksTotal)` (ExifTool.pm:7951): `>=`, not
+        // `==`, which is what makes a zero declared total complete after one
+        // segment instead of never.
         match self.total_chunks {
-            Some(total) => self.chunks.len() == total as usize,
+            Some(total) => self.chunk_count >= total as usize,
             None => false,
         }
     }
@@ -287,29 +293,23 @@ impl IccChunkAssembler {
     /// assert_eq!(profile, b"icc_profile_data");
     /// ```
     pub fn assemble(&self) -> Result<Vec<u8>> {
-        let total = self.total_chunks.ok_or_else(|| {
-            ExifToolError::parse_error("Cannot assemble ICC profile: no chunks have been added")
-        })?;
-
-        // Verify all chunks are present and identify any missing ones
-        let missing: Vec<u8> = (1..=total)
-            .filter(|n| !self.chunks.contains_key(n))
-            .collect();
-
-        if !missing.is_empty() {
-            return Err(ExifToolError::parse_error(format!(
-                "Cannot assemble ICC profile: missing chunk(s): {:?}",
-                missing
-            )));
+        if self.total_chunks.is_none() {
+            return Err(ExifToolError::parse_error(
+                "Cannot assemble ICC profile: no chunks have been added",
+            ));
         }
 
-        // Calculate total size for pre-allocation
-        let total_size: usize = self.chunks.values().map(|c| c.len()).sum();
+        // `defined $_ and $icc_profile .= $_ foreach @iccChunk;` (ExifTool.pm:7954):
+        // the slots that exist are concatenated in index order and the gaps are
+        // simply skipped, so a profile with a hole still yields the bytes that did
+        // arrive. Index 0 is a real slot -- some writers are 0-based.
+        let total_size: usize = self.chunks.values().map(Vec::len).sum();
         let mut assembled = Vec::with_capacity(total_size);
 
-        // Concatenate chunks in order (1 to total)
-        for chunk_num in 1..=total {
-            if let Some(chunk_data) = self.chunks.get(&chunk_num) {
+        let mut nums: Vec<&u8> = self.chunks.keys().collect();
+        nums.sort_unstable();
+        for chunk_num in nums {
+            if let Some(chunk_data) = self.chunks.get(chunk_num) {
                 assembled.extend_from_slice(chunk_data);
             }
         }
@@ -341,7 +341,7 @@ impl IccChunkAssembler {
     /// assert_eq!(assembler.chunk_count(), 1);
     /// ```
     pub fn chunk_count(&self) -> usize {
-        self.chunks.len()
+        self.chunk_count
     }
 
     /// Returns the expected total number of chunks, if known.
@@ -400,6 +400,7 @@ impl IccChunkAssembler {
     pub fn clear(&mut self) {
         self.chunks.clear();
         self.total_chunks = None;
+        self.chunk_count = 0;
     }
 }
 
@@ -581,57 +582,49 @@ mod tests {
         }
     }
 
+    /// `$iccChunk[$chunkNum]` (ExifTool.pm:7946) is a plain array index, so a
+    /// zero chunk number is a slot like any other, not an error.
     #[test]
-    fn test_chunk_number_zero() {
+    fn test_chunk_number_zero_is_a_slot_not_an_error() {
         let mut assembler = IccChunkAssembler::new();
-        let chunk = create_chunk(0, 1, b"data"); // Invalid: chunk 0
+        let chunk = create_chunk(0, 1, b"data");
 
-        let result = assembler.add_chunk(&chunk);
+        assembler.add_chunk(&chunk).unwrap();
 
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ExifToolError::ParseError { message, .. } => {
-                assert!(message.contains("cannot be 0"));
-            }
-            _ => panic!("Expected ParseError"),
-        }
+        assert!(assembler.is_complete());
+        assert_eq!(assembler.assemble().unwrap(), b"data");
     }
 
+    /// "handle the case where some software erroneously writes zeros for the
+    /// chunk counts" (ExifTool.pm:7932): a zero total warns, and then
+    /// `++$iccChunkCount >= $iccChunksTotal` is satisfied by the first segment,
+    /// so the profile is processed rather than dropped.
     #[test]
-    fn test_total_zero() {
+    fn test_total_zero_completes_after_one_chunk() {
         let mut assembler = IccChunkAssembler::new();
 
-        // Manually create chunk with total = 0
         let mut chunk = ICC_PROFILE_IDENTIFIER.to_vec();
         chunk.push(1); // chunk 1
-        chunk.push(0); // total 0 - invalid
+        chunk.push(0); // total 0 - written by broken encoders
         chunk.extend_from_slice(b"data");
 
-        let result = assembler.add_chunk(&chunk);
+        assembler.add_chunk(&chunk).unwrap();
 
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ExifToolError::ParseError { message, .. } => {
-                assert!(message.contains("total chunk count cannot be 0"));
-            }
-            _ => panic!("Expected ParseError"),
-        }
+        assert!(assembler.is_complete());
+        assert_eq!(assembler.assemble().unwrap(), b"data");
     }
 
+    /// ExifTool never compares the chunk number against the total; only the
+    /// running count is compared, so "chunk 5 of 3" still contributes bytes.
     #[test]
-    fn test_chunk_number_exceeds_total() {
+    fn test_chunk_number_may_exceed_total() {
         let mut assembler = IccChunkAssembler::new();
-        let chunk = create_chunk(5, 3, b"data"); // chunk 5 of 3 - invalid
+        let chunk = create_chunk(5, 3, b"data");
 
-        let result = assembler.add_chunk(&chunk);
+        assembler.add_chunk(&chunk).unwrap();
 
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ExifToolError::ParseError { message, .. } => {
-                assert!(message.contains("exceeds total"));
-            }
-            _ => panic!("Expected ParseError"),
-        }
+        assert_eq!(assembler.chunk_count(), 1);
+        assert_eq!(assembler.assemble().unwrap(), b"data");
     }
 
     #[test]
@@ -652,22 +645,26 @@ mod tests {
         }
     }
 
+    /// ExifTool.pm:7946-7948 warns about a repeated chunk number and then
+    /// *appends* to the slot -- `$iccChunk[$chunkNum] .= substr($$segDataPt, 14)`
+    /// -- rather than discarding the segment or the whole profile.
     #[test]
-    fn test_duplicate_chunk() {
+    fn test_duplicate_chunk_appends() {
         let mut assembler = IccChunkAssembler::new();
         let chunk1a = create_chunk(1, 2, b"first version");
         let chunk1b = create_chunk(1, 2, b"second version");
 
-        assert!(assembler.add_chunk(&chunk1a).is_ok());
-        let result = assembler.add_chunk(&chunk1b);
+        assembler.add_chunk(&chunk1a).unwrap();
+        assembler.add_chunk(&chunk1b).unwrap();
 
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ExifToolError::ParseError { message, .. } => {
-                assert!(message.contains("Duplicate"));
-            }
-            _ => panic!("Expected ParseError"),
-        }
+        // Two segments accepted, so the count test is satisfied even though only
+        // one slot is occupied -- exactly what `$iccChunkCount` does.
+        assert_eq!(assembler.chunk_count(), 2);
+        assert!(assembler.is_complete());
+        assert_eq!(
+            assembler.assemble().unwrap(),
+            b"first versionsecond version"
+        );
     }
 
     // =========================================================================
@@ -688,27 +685,21 @@ mod tests {
         }
     }
 
+    /// `defined $_ and $icc_profile .= $_ foreach @iccChunk;` (ExifTool.pm:7954)
+    /// concatenates the slots that exist and steps over the gaps; the caller is
+    /// the one that decides whether to use the result (`is_complete`).
     #[test]
-    fn test_assemble_incomplete_profile() {
+    fn test_assemble_skips_missing_chunks() {
         let mut assembler = IccChunkAssembler::new();
         let chunk1 = create_chunk(1, 3, b"first");
         let chunk3 = create_chunk(3, 3, b"third");
 
         // Add chunks 1 and 3, missing chunk 2
-        assert!(assembler.add_chunk(&chunk1).is_ok());
-        assert!(assembler.add_chunk(&chunk3).is_ok());
+        assembler.add_chunk(&chunk1).unwrap();
+        assembler.add_chunk(&chunk3).unwrap();
         assert!(!assembler.is_complete());
 
-        let result = assembler.assemble();
-
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ExifToolError::ParseError { message, .. } => {
-                assert!(message.contains("missing"));
-                assert!(message.contains("2")); // chunk 2 is missing
-            }
-            _ => panic!("Expected ParseError"),
-        }
+        assert_eq!(assembler.assemble().unwrap(), b"firstthird");
     }
 
     // =========================================================================

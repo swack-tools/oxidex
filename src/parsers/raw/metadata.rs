@@ -4300,28 +4300,30 @@ fn parse_sigma_x3f(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     let columns = u32::from_le_bytes([data[28], data[29], data[30], data[31]]);
     let rows = u32::from_le_bytes([data[32], data[33], data[34], data[35]]);
 
-    if columns > 0 && rows > 0 {
-        metadata.insert(
-            "SigmaRaw:ImageWidth".to_string(),
-            // ExifTool files the X3F header's own dimensions under SigmaRaw,
-            // not EXIF -- `exiftool -G1` prints [SigmaRaw] ImageWidth. The
-            // values were already right; only the family was wrong.
-            TagValue::new_string(columns.to_string()),
-        );
-        metadata.insert(
-            "SigmaRaw:ImageHeight".to_string(),
-            TagValue::new_string(rows.to_string()),
-        );
-    }
+    // `%SigmaRaw::Header` entries 7/8/9 are the bare names `'ImageWidth'`,
+    // `'ImageHeight'` and `'Rotation'` (SigmaRaw.pm:85-88) and `ProcessX3FHeader`
+    // hands the block straight to `ProcessBinaryData` (SigmaRaw.pm:296), which
+    // has no `Condition` to apply. Zero is a reported value: `exiftool -G1`
+    // prints `[SigmaRaw] Rotation : 0` for combined-samples/SigmaDP2.x3f, which
+    // the `rotation > 0` gate below used to swallow.
+    metadata.insert(
+        "SigmaRaw:ImageWidth".to_string(),
+        // ExifTool files the X3F header's own dimensions under SigmaRaw,
+        // not EXIF -- `exiftool -G1` prints [SigmaRaw] ImageWidth. The
+        // values were already right; only the family was wrong.
+        TagValue::new_string(columns.to_string()),
+    );
+    metadata.insert(
+        "SigmaRaw:ImageHeight".to_string(),
+        TagValue::new_string(rows.to_string()),
+    );
 
     // Rotation at offset 36
     let rotation = u32::from_le_bytes([data[36], data[37], data[38], data[39]]);
-    if rotation > 0 {
-        metadata.insert(
-            "SigmaRaw:Rotation".to_string(),
-            TagValue::new_string(format!("{}", rotation)),
-        );
-    }
+    metadata.insert(
+        "SigmaRaw:Rotation".to_string(),
+        TagValue::new_string(format!("{}", rotation)),
+    );
 
     // White balance string (32 bytes at offset 40) - introduced in v2.1
     if version >= 0x00020001 && data.len() >= 72 {
