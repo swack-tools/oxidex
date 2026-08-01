@@ -45,12 +45,12 @@ round-trips, regression-gated in CI) is available:
 ## MakerNote Status
 
 ::: tip ✅ MakerNote Parsers Active
-MakerNote parsers for 39+ camera manufacturers are **fully implemented and connected** to the TIFF parsing pipeline.
+MakerNote parsers for 38+ camera manufacturers are **fully implemented and connected** to the TIFF parsing pipeline.
 :::
 
 ### Supported Manufacturers
 
-**Traditional Cameras:** Canon, Nikon, Sony, Panasonic, Fujifilm, Leica, Sigma, Phase One
+**Traditional Cameras:** Canon, Nikon, Sony, Panasonic, Fujifilm, Leica, Phase One
 
 **Smartphones:** Apple, Google, Samsung, Microsoft, Qualcomm
 
