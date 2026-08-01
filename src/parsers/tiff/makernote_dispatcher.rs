@@ -187,7 +187,16 @@ pub fn dispatch_makernote_with_context(
         "hp" | "hewlett-packard" => Some(Box::new(hp::HpParser)),
         "jvc" | "victor company of japan, limited" => Some(Box::new(jvc::JvcParser)),
         "kodak" | "eastman kodak company" => Some(Box::new(kodak::KodakParser)),
-        "leaf" => Some(Box::new(leaf::LeafParser)),
+        // Leaf is absent on purpose. ExifTool has no MakerNote parser for
+        // Make=="Leaf" at all -- %Image::ExifTool::Leaf::Main is reached
+        // exclusively via literal EXIF tag 0x8606 as a SubDirectory (a
+        // .MOS-specific, string-keyed PKTS chunk structure unrelated to the
+        // standard MakerNote tag 0x927C this dispatcher handles). A prior
+        // numeric-IFD Leaf tag map here was invented and had no basis in
+        // Leaf.pm; it misparsed real vendor MakerNote data on files that
+        // merely carry the legacy "Leaf" Make string (e.g. Phase One IIQ
+        // files from backs acquired from Leaf), producing spurious "Invalid
+        // entry count" warnings.
         "motorola" => Some(Box::new(motorola::MotorolaParser)),
         "ricoh" | "ricoh company, ltd." => Some(Box::new(ricoh::RicohParser)),
         "sanyo" | "sanyo electric co.,ltd." => Some(Box::new(sanyo::SanyoParser)),
