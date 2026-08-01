@@ -292,6 +292,9 @@ pub enum FileFormat {
     /// Canon DPP recipe, standalone rather than appended to an image (.vrd)
     VRD,
 
+    /// Canon DPP version 4 recipe, standalone rather than appended (.dr4)
+    DR4,
+
     /// Unknown or unsupported format
     Unknown,
 }
@@ -389,6 +392,7 @@ impl FileFormat {
             FileFormat::XMP => "XMP",
             FileFormat::EPS => "EPS",
             FileFormat::VRD => "VRD",
+            FileFormat::DR4 => "DR4",
             FileFormat::Unknown => "Unknown",
         }
     }
@@ -488,6 +492,7 @@ impl FileFormat {
             FileFormat::XMP => &["xmp"],
             FileFormat::EPS => &["eps", "epsf", "ps"],
             FileFormat::VRD => &["vrd"],
+            FileFormat::DR4 => &["dr4"],
             FileFormat::Unknown => &[],
         }
     }

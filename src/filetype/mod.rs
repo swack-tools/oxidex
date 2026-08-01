@@ -41,7 +41,11 @@ static COMPILED: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
     /// ExifTool's `FileType`, e.g. `"AIFF"`.
-    pub file_type: &'static str,
+    ///
+    /// A `Cow` because one format reports a subtype rather than a bare name:
+    /// AIFF.pm:206 appends `" (multi-page)"` for a DjVu whose top-level FORM
+    /// is `DJVM`.
+    pub file_type: Cow<'static, str>,
     /// The root format whose module reads this file, e.g. `"TIFF"` for `CR2`.
     ///
     /// Equal to `file_type` for a root format. [`tables::MAGIC`] is keyed on
@@ -81,7 +85,7 @@ fn extension_for(file_type: &str) -> Cow<'static, str> {
 
 fn identity(file_type: &'static str, root_type: &'static str) -> Identity {
     Identity {
-        file_type,
+        file_type: Cow::Borrowed(file_type),
         root_type,
         extension: extension_for(file_type),
         // ExifTool falls back to the root's MIME type when the sub-type
@@ -91,19 +95,57 @@ fn identity(file_type: &'static str, root_type: &'static str) -> Identity {
     }
 }
 
-/// First magic number matching this header, in ExifTool's test order.
+/// Whether the header satisfies the magic number of `file_type` or `root_type`.
 ///
-/// This is `%magicNumber` alone, and `%magicNumber` is a *pre-filter*: ExifTool
-/// follows a match by asking the format module to parse the file, and reports
-/// "Unknown file type" when that fails. Several patterns are correspondingly
-/// loose -- `Font` accepts any file starting `\0\x01` -- so this is not a
-/// safe answer on its own. Use [`identify`].
-fn magic_match(header: &[u8]) -> Option<&'static str> {
+/// `None` means the question does not arise: neither name declares a magic
+/// number, so nothing can contradict the extension.
+///
+/// This asks about *those two formats* rather than taking the first pattern in
+/// the table that matches, which is what ExifTool does: it puts the
+/// extension's own module at the head of the list it tries
+/// (`ExtractInfo`/`GetFileType`) instead of letting an earlier, looser pattern
+/// answer for it. Taking the first hit made identification order-dependent and
+/// silently wrong for any format whose header another pattern also accepts --
+/// `HTML.html` in the comparison corpus opens `<?xml`, which the `XMP` pattern
+/// matches 39 entries earlier, so an HTML file was never identified as HTML.
+///
+/// `%magicNumber` is keyed on root formats, so a sub-type corroborates through
+/// its root as well: a .cr2 header matches the TIFF pattern, and a .djvu
+/// header matches AIFF's `AT&TFORM` alternative.
+fn magic_accepts(file_type: &str, root_type: &str, header: &[u8]) -> Option<bool> {
     let head = &header[..header.len().min(HEADER_LEN)];
-    COMPILED
-        .iter()
-        .find(|(_, re)| re.is_match(head))
-        .map(|(t, _)| *t)
+    let mut declared = false;
+    for (format, re) in COMPILED.iter() {
+        if *format != file_type && *format != root_type {
+            continue;
+        }
+        declared = true;
+        if re.is_match(head) {
+            return Some(true);
+        }
+    }
+    declared.then_some(false)
+}
+
+/// `FileType` refinements a module makes after its magic number matches.
+///
+/// ExifTool's magic number is only a pre-filter; the module that accepts the
+/// file gets the last word on what to call it. DjVu is the one case where that
+/// changes the reported string rather than just confirming it:
+///
+/// ```text
+///     $et->SetFileType('DJVU');
+///     ...
+///     # modify FileType to indicate a multi-page document
+///     $$et{VALUE}{FileType} .= " (multi-page)" if $buf2 eq 'DJVM' ...
+/// ```
+///
+/// (AIFF.pm:202-206 -- DjVu files are recognised and walked by AIFF.pm.)
+fn refine(mut id: Identity, header: &[u8]) -> Identity {
+    if id.file_type == "DJVU" && header.get(12..16) == Some(b"DJVM") {
+        id.file_type = Cow::Owned(format!("{} (multi-page)", id.file_type));
+    }
+    id
 }
 
 /// Identify a file from its header and, when known, its filename extension.
@@ -120,27 +162,14 @@ fn magic_match(header: &[u8]) -> Option<&'static str> {
 /// mislabelling is not.
 #[must_use]
 pub fn identify(header: &[u8], ext: Option<&str>) -> Option<Identity> {
-    let magic = magic_match(header);
-
     let from_ext = ext.and_then(identify_by_extension)?;
-    match magic {
-        // Header and extension agree: highest confidence.
-        //
-        // `%magicNumber` is keyed on root formats, so a sub-type corroborates
-        // through its root as well: a .cr2 header matches the TIFF pattern,
-        // and a .djvu header matches AIFF's `AT&TFORM` alternative.
-        Some(m) if m == from_ext.file_type || m == from_ext.root_type => Some(from_ext),
-        // The extension names a type with no magic number of its own, so
-        // nothing contradicts it.
-        None if !has_magic(from_ext.file_type) && !has_magic(from_ext.root_type) => Some(from_ext),
-        // They disagree, or the header matched something else. ExifTool would
-        // settle this by parsing; we cannot, so we decline.
-        _ => None,
+    match magic_accepts(&from_ext.file_type, from_ext.root_type, header) {
+        // Header and extension agree, or nothing contradicts the extension.
+        Some(true) | None => Some(refine(from_ext, header)),
+        // The extension names a format whose magic number this header fails.
+        // ExifTool would settle it by parsing; we cannot, so we decline.
+        Some(false) => None,
     }
-}
-
-fn has_magic(file_type: &str) -> bool {
-    tables::MAGIC.iter().any(|(t, _)| *t == file_type)
 }
 
 /// Identify by filename extension, for formats with no distinctive header.
@@ -327,9 +356,17 @@ mod tests {
     /// sub-type itself would have declined every one of them.
     #[test]
     fn header_corroborates_a_sub_type_through_its_root() {
+        // DJVM is the multi-page form, and AIFF.pm:206 says so in the
+        // FileType; the single-page DJVU form keeps the bare name.
         let djvu = identify(b"AT&TFORM\x00\x00\x03\x96DJVM", Some("djvu")).unwrap();
-        assert_eq!(djvu.file_type, "DJVU");
+        assert_eq!(djvu.file_type, "DJVU (multi-page)");
         assert_eq!(djvu.mime_type, Some("image/vnd.djvu"));
+        assert_eq!(
+            identify(b"AT&TFORM\x00\x00\x03\x96DJVU", Some("djvu"))
+                .unwrap()
+                .file_type,
+            "DJVU"
+        );
 
         let cr2 = identify(b"II\x2a\x00\x10\x00\x00\x00CR\x02\x00", Some("cr2")).unwrap();
         assert_eq!(cr2.file_type, "CR2");
@@ -338,6 +375,32 @@ mod tests {
         // A header that contradicts both the sub-type and its root is still
         // refused rather than guessed.
         assert!(identify(b"BM\x00\x00", Some("cr2")).is_none());
+    }
+
+    /// Corroboration asks the extension's *own* formats, not whichever pattern
+    /// comes first in the table.
+    ///
+    /// `HTML.html` in the comparison corpus opens with an XML declaration. The
+    /// `XMP` magic number (`\s*<`) matches that and sits 39 entries ahead of
+    /// `HTML` in ExifTool's test order, so "first pattern that matches"
+    /// answered XMP, disagreed with the extension, and identified nothing at
+    /// all. ExifTool tries the extension's own module first.
+    #[test]
+    fn corroboration_asks_the_extensions_own_format_not_the_first_hit() {
+        let html = identify(
+            b"<?xml version=\"1.0\"?>\n<!DOCTYPE html PUBLIC",
+            Some("html"),
+        )
+        .expect("html is identified");
+        assert_eq!(html.file_type, "HTML");
+        assert_eq!(html.mime_type, Some("text/html"));
+        // A real XMP sidecar still identifies as XMP, not as HTML.
+        assert_eq!(
+            identify(b"<?xpacket begin=\"\"?><x:xmpmeta", Some("xmp"))
+                .unwrap()
+                .file_type,
+            "XMP"
+        );
     }
 
     /// ExifTool falls back to the root's MIME type when the sub-type declares

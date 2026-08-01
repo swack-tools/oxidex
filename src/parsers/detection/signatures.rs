@@ -125,6 +125,14 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     // image. ExifTool.pm:1039 gives the magic as `CANON OPTIONAL DATA\0`,
     // which is the same header the trailer form carries.
     signature!(b"CANON OPTIONAL DATA\0", 0, FileFormat::VRD),
+    // Canon DPP 4 recipe written as its own file. ExifTool.pm:946 gives the
+    // magic as `IIII[\x04|\x05]\0\x04\0`, which ProcessDR4 re-checks
+    // (CanonVRD.pm:1775) before reading the file. The `|` inside the Perl
+    // character class is a literal alternative rather than an operator, so
+    // ExifTool also accepts `IIII|\0\x04\0`; that is an upstream typo and is
+    // not reproduced here, where it would only widen false positives.
+    signature!(b"IIII\x04\x00\x04\x00", 0, FileFormat::DR4),
+    signature!(b"IIII\x05\x00\x04\x00", 0, FileFormat::DR4),
     // XMP Sidecar (<?xpacket or <x:xmpmeta)
     signature!(b"<?xpacket", 0, FileFormat::XMP),
     signature!(b"<x:xmpmeta", 0, FileFormat::XMP),

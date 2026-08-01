@@ -133,7 +133,7 @@ fn add_identity_tags(metadata: &mut MetadataMap, reader: &dyn FileReader, path: 
     }
 
     for (key, value) in [
-        ("File:FileType", id.file_type),
+        ("File:FileType", id.file_type.as_ref()),
         ("File:FileTypeExtension", id.extension.as_ref()),
     ] {
         // The extension is only a placeholder when it disagrees with the
@@ -290,7 +290,11 @@ pub fn read_metadata_with_detector(
     // different entry points in the raw parsers. Every TIFF-based file starts
     // with the marker, so reading it here covers all of them at once instead
     // of threading the same insert through each parser.
-    if !metadata.contains_key("File:ExifByteOrder") {
+    //
+    // DR4 is excluded: its magic number *is* `IIII`, a Canon byte-order marker
+    // for the recipe directory rather than a TIFF header, and ExifTool reports
+    // no ExifByteOrder for it.
+    if !metadata.contains_key("File:ExifByteOrder") && format != FileFormat::DR4 {
         if let Ok(head) = reader.read(0, 2) {
             let order = match &head[..] {
                 b"II" => Some(ByteOrder::LittleEndian),

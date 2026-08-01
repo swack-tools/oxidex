@@ -614,6 +614,15 @@ impl ExifToolExtractor {
             "TAR" => vec!["tar"],
             "ISO" => vec!["iso"],
             "OLE" => vec!["doc", "xls", "ppt", "msg", "vsd", "pub"],
+            // Formats that had no entry here at all, which is why the harness
+            // reported no row for them: an unnamed format finds no files, so
+            // "no gap" and "not looked at" were indistinguishable.
+            "DR4" => vec!["dr4"],
+            "VRD" => vec!["vrd"],
+            "LFP" => vec!["lfp", "lfr"],
+            "DJVU" => vec!["djvu", "djv"],
+            "HTML" => vec!["html", "htm"],
+            "LNK" => vec!["lnk"],
             _ => vec![],
         }
     }

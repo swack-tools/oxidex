@@ -355,6 +355,17 @@ fn extension_to_format(ext: &str) -> Option<&'static str> {
         "tar" => Some("TAR"),
         "iso" => Some("ISO"),
         "doc" | "xls" | "ppt" | "msg" | "vsd" | "pub" => Some("OLE"),
+        // Formats that had no bucket here at all, which is why nothing
+        // measured them: a format the harness cannot name produces no row in
+        // the report, so "no gap" and "not looked at" were indistinguishable.
+        // DR4 and VRD are parsed; the other four are identified but not yet
+        // parsed, and are listed so the gap is visible rather than invisible.
+        "dr4" => Some("DR4"),
+        "vrd" => Some("VRD"),
+        "lfp" | "lfr" => Some("LFP"),
+        "djvu" | "djv" => Some("DJVU"),
+        "html" | "htm" => Some("HTML"),
+        "lnk" => Some("LNK"),
         _ => None,
     }
 }
