@@ -257,9 +257,7 @@ pub fn read_metadata_with_detector(
     // Step 5: Merge format-specific metadata into file metadata
     // Format-specific metadata takes precedence over file metadata in case of conflicts
     // Use into_iter() to consume format_metadata and avoid cloning keys and values
-    for (key, value) in format_metadata {
-        metadata.insert(key, value);
-    }
+    metadata.merge(format_metadata);
 
     // Step 5b: Backstop for ExifByteOrder on TIFF-based files.
     //
