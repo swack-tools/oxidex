@@ -110,7 +110,7 @@ pub fn parse_raf_makernote(
             6 => "Normal+RAW",
             _ => "Unknown",
         };
-        tags.insert("Fujifilm:Quality".to_string(), quality_str.to_string());
+        tags.insert("FujiFilm:Quality".to_string(), quality_str.to_string());
     }
 
     // Tag 0x1001 - Sharpness
@@ -125,13 +125,13 @@ pub fn parse_raf_makernote(
             -2 => "Very Soft +",
             _ => "Unknown",
         };
-        tags.insert("Fujifilm:Sharpness".to_string(), sharpness_str.to_string());
+        tags.insert("FujiFilm:Sharpness".to_string(), sharpness_str.to_string());
     }
 
     // Tag 0x1002 - White Balance (critical for color reproduction)
     if let Some(wb) = extract_fujifilm_tag_i32(makernote_data, 0x1002, byte_order) {
         let wb_str = decode_white_balance(wb);
-        tags.insert("Fujifilm:WhiteBalance".to_string(), wb_str);
+        tags.insert("FujiFilm:WhiteBalance".to_string(), wb_str);
     }
 
     // Tag 0x1003 - Saturation
@@ -144,7 +144,7 @@ pub fn parse_raf_makernote(
             4 => "Very High",
             _ => "Unknown",
         };
-        tags.insert("Fujifilm:Saturation".to_string(), sat_str.to_string());
+        tags.insert("FujiFilm:Saturation".to_string(), sat_str.to_string());
     }
 
     // Tag 0x1004 - Contrast
@@ -157,13 +157,13 @@ pub fn parse_raf_makernote(
             4 => "Very High",
             _ => "Unknown",
         };
-        tags.insert("Fujifilm:Contrast".to_string(), contrast_str.to_string());
+        tags.insert("FujiFilm:Contrast".to_string(), contrast_str.to_string());
     }
 
     // Tag 0x1005 - Color Temperature (when using Kelvin white balance)
     if let Some(temp) = extract_fujifilm_tag_i32(makernote_data, 0x1005, byte_order) {
         tags.insert(
-            "Fujifilm:ColorTemperature".to_string(),
+            "FujiFilm:ColorTemperature".to_string(),
             format!("{}K", temp),
         );
     }
@@ -179,7 +179,7 @@ pub fn parse_raf_makernote(
             4 => "External",
             _ => "Unknown",
         };
-        tags.insert("Fujifilm:FlashMode".to_string(), flash_str.to_string());
+        tags.insert("FujiFilm:FlashMode".to_string(), flash_str.to_string());
     }
 
     // Tag 0x1020 - Macro Mode
@@ -189,19 +189,19 @@ pub fn parse_raf_makernote(
             1 => "On",
             _ => "Unknown",
         };
-        tags.insert("Fujifilm:Macro".to_string(), macro_str.to_string());
+        tags.insert("FujiFilm:Macro".to_string(), macro_str.to_string());
     }
 
     // Tag 0x1021 - Focus Mode (essential for AF tracking)
     if let Some(focus) = extract_fujifilm_tag_i32(makernote_data, 0x1021, byte_order) {
         let focus_str = decode_focus_mode(focus);
-        tags.insert("Fujifilm:FocusMode".to_string(), focus_str);
+        tags.insert("FujiFilm:FocusMode".to_string(), focus_str);
     }
 
     // Tag 0x1031 - Picture Mode (scene mode - critical for understanding shooting context)
     if let Some(pic_mode) = extract_fujifilm_tag_i32(makernote_data, 0x1031, byte_order) {
         let pic_str = decode_picture_mode(pic_mode);
-        tags.insert("Fujifilm:PictureMode".to_string(), pic_str);
+        tags.insert("FujiFilm:PictureMode".to_string(), pic_str);
     }
 
     // Tag 0x1039 - Drive Mode
@@ -216,7 +216,7 @@ pub fn parse_raf_makernote(
             6 => "Interval Timer",
             _ => "Unknown",
         };
-        tags.insert("Fujifilm:DriveMode".to_string(), drive_str.to_string());
+        tags.insert("FujiFilm:DriveMode".to_string(), drive_str.to_string());
     }
 
     // Tag 0x1100 - Shutter Type
@@ -228,7 +228,7 @@ pub fn parse_raf_makernote(
             3 => "Mechanical + Electronic",
             _ => "Unknown",
         };
-        tags.insert("Fujifilm:ShutterType".to_string(), shutter_str.to_string());
+        tags.insert("FujiFilm:ShutterType".to_string(), shutter_str.to_string());
     }
 
     // Tag 0x1101 - Burst Mode
@@ -239,13 +239,13 @@ pub fn parse_raf_makernote(
             2 => "On (High Speed)",
             _ => "Unknown",
         };
-        tags.insert("Fujifilm:BurstMode".to_string(), burst_str.to_string());
+        tags.insert("FujiFilm:BurstMode".to_string(), burst_str.to_string());
     }
 
     // Tag 0x1401 - Film Mode (Film simulation is crucial for Fujifilm's aesthetic)
     if let Some(film) = extract_fujifilm_tag_i32(makernote_data, 0x1401, byte_order) {
         let film_str = decode_film_mode(film);
-        tags.insert("Fujifilm:FilmMode".to_string(), film_str);
+        tags.insert("FujiFilm:FilmMode".to_string(), film_str);
     }
 
     // Tag 0x1402 - Dynamic Range
@@ -257,32 +257,32 @@ pub fn parse_raf_makernote(
             4 => "Auto",
             _ => "Unknown",
         };
-        tags.insert("Fujifilm:DynamicRange".to_string(), drange_str.to_string());
+        tags.insert("FujiFilm:DynamicRange".to_string(), drange_str.to_string());
     }
 
     // Additional derived tags from parsed values
     // Extract color space if present in basic EXIF
     tags.insert(
-        "Fujifilm:ColorSpace".to_string(),
+        "FujiFilm:ColorSpace".to_string(),
         "sRGB".to_string(), // Default for Fujifilm, may vary by model
     );
 
     // Extract internal serial number (often encoded in other tag offsets)
     tags.insert(
-        "Fujifilm:InternalSerialNumber".to_string(),
+        "FujiFilm:InternalSerialNumber".to_string(),
         extract_internal_serial_number(makernote_data, byte_order),
     );
 
     // Extract sensor info from header
     tags.insert(
-        "Fujifilm:SensorInfo".to_string(),
+        "FujiFilm:SensorInfo".to_string(),
         extract_sensor_info(makernote_data),
     );
 
     // Extract exposure compensation if available
     if let Some(exp_comp) = extract_fujifilm_tag_i32(makernote_data, 0x1006, byte_order) {
         tags.insert(
-            "Fujifilm:ExposureCompensation".to_string(),
+            "FujiFilm:ExposureCompensation".to_string(),
             format!("{:+.1}", exp_comp as f32 / 8.0),
         );
     }

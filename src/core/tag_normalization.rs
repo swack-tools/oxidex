@@ -9,6 +9,7 @@
 //! - `Profile:` -> `ICC_Profile:` (with name normalization for TRC tags)
 //! - `ExifIFD:`, `IFD0:`, `IFD1:`, `GPS:` remain unchanged (to match Perl ExifTool output)
 //! - Manufacturer names (`Canon:`, `Nikon:`, `Sony:`, etc.) remain unchanged
+//! - `Fujifilm:` -> `FujiFilm:` (ExifTool capitalises both halves)
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -29,7 +30,12 @@ static FAMILY_MAPPINGS: LazyLock<HashMap<&'static str, &'static str>> = LazyLock
     m.insert("Canon", "Canon");
     m.insert("Nikon", "Nikon");
     m.insert("Sony", "Sony");
-    m.insert("Fujifilm", "Fujifilm");
+    // ExifTool capitalises both halves: MakerNotes.pm:121 spells the tag
+    // `MakerNoteFujiFilm`, and family 1 is named after it, so `-G1` prints
+    // `[FujiFilm]`. Fold the old single-capital spelling onto it so any
+    // straggler path still lands on the ExifTool key.
+    m.insert("Fujifilm", "FujiFilm");
+    m.insert("FujiFilm", "FujiFilm");
     m.insert("Panasonic", "Panasonic");
     m.insert("Olympus", "Olympus");
     m.insert("Pentax", "Pentax");
