@@ -39,6 +39,39 @@ def rust_str(s):
              .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t"))
 
 
+def priority(tag):
+    """ExifTool's effective priority for a Composite tag, as FoundTag computes it.
+
+    ExifTool.pm:9347-9351 (line numbers throughout are ExifTool 13.30, the
+    release this generator reads):
+
+        my $priority = $$tagInfo{Priority};
+        unless (defined $priority) {
+            $priority = $$tbl{PRIORITY};
+            $priority = 0 if not defined $priority and $$tagInfo{Avoid};
+        }
+
+    `%Image::ExifTool::Composite` declares no table-level `PRIORITY`
+    (ExifTool.pm:2256-2262), so an undeclared Composite falls through to the
+    "normal default" of 1 at ExifTool.pm:9440. This is what decides whether the
+    Composite claims the *bare* tag key from a same-named extracted tag, and so
+    whether another Composite's unqualified dependency binds it.
+
+    `Priority` beats `Avoid` when both are present: GPS.pm:371-372 sets
+    `Avoid => 1, Priority => 1` on GPSLatitude precisely because "Avoid sets
+    default Priority to 0", and the explicit 1 is what takes effect.
+    """
+    p = tag.get("Priority")
+    if p is not None:
+        try:
+            return int(p)
+        except (TypeError, ValueError):
+            pass
+    elif tag.get("Avoid"):
+        return 0
+    return 1
+
+
 def dep_list(d):
     """ExifTool keys Require/Desire by position: {0 => 'ImageWidth', ...}.
 
@@ -106,7 +139,8 @@ def main():
             s = ", ".join(f'({i}, "{rust_str(d)}")' for i, d in des)
             rows.append(
                 f'    Composite {{ name: "{rust_str(name)}", module: "{rust_str(mod_name)}", '
-                f'group2: "{rust_str(g2)}", require: &[{r}], desire: &[{s}] }},'
+                f'group2: "{rust_str(g2)}", priority: {priority(tag)}, '
+                f"require: &[{r}], desire: &[{s}] }},"
             )
 
     body = "\n".join(rows)
@@ -128,6 +162,16 @@ pub struct Composite {{
     /// ExifTool module that defined it, kept for provenance.
     pub module: &'static str,
     pub group2: &'static str,
+    /// ExifTool's effective tag priority, which decides whether this Composite
+    /// claims the *bare* tag key from a same-named extracted tag.
+    ///
+    /// `FoundTag` keeps the higher-priority tag under the unsuffixed key and
+    /// pushes the loser to `Name (1)` (ExifTool.pm:9442-9464); an unqualified
+    /// `Require`/`Desire` reads only the bare key (ExifTool.pm:4008). An
+    /// ordinarily-extracted tag counts as 1, so a Composite left at the default
+    /// 1 wins the name and a `Priority => 0` Composite -- `Canon:ISO`'s "let
+    /// EXIF:ISO take priority" (Canon.pm:9781-9782) -- yields to it.
+    pub priority: i8,
     /// All of these indexed inputs must be present or the tag does not fire.
     pub require: &'static [(usize, &'static str)],
     /// Indexed optional inputs; absent positions are passed through as `None`.

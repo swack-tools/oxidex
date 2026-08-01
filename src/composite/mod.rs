@@ -99,6 +99,18 @@ fn lookup_key(map: &MetadataMap, key: &str) -> Option<String> {
 /// match wins over a suffix match so an explicitly-grouped tag is preferred;
 /// otherwise [`lookup_rank`] supplies a stable group preference.
 fn lookup(map: &MetadataMap, name: &str) -> Option<String> {
+    lookup_ranked(map, name, true)
+}
+
+/// [`lookup`] restricted to tags that were read from the file.
+///
+/// Used for the one case where ExifTool's priority rule says a derived value
+/// must not shadow an extracted one; see [`resolve`].
+fn lookup_extracted(map: &MetadataMap, name: &str) -> Option<String> {
+    lookup_ranked(map, name, false)
+}
+
+fn lookup_ranked(map: &MetadataMap, name: &str, composites: bool) -> Option<String> {
     if let Some(v) = lookup_key(map, name) {
         return Some(v);
     }
@@ -131,8 +143,18 @@ fn lookup(map: &MetadataMap, name: &str) -> Option<String> {
     let suffix = format!(":{name}");
     map.iter()
         .filter(|(k, _)| k.ends_with(&suffix))
+        .filter(|(k, _)| composites || !k.starts_with("Composite:"))
         .min_by_key(|(k, _)| lookup_rank(k))
         .and_then(|(k, _)| lookup_key(map, k))
+}
+
+/// A composite value produced by this run, with the priority of the definition
+/// that produced it.
+struct Derived {
+    /// The `ValueConv` form -- full precision, what dependents consume.
+    value: String,
+    /// See [`Composite::priority`].
+    priority: i8,
 }
 
 /// Resolve a composite input, preferring an already-computed unrounded value.
@@ -141,7 +163,44 @@ fn lookup(map: &MetadataMap, name: &str) -> Option<String> {
 /// run. Consulting it first is what stops precision loss from compounding down
 /// a chain: `HyperfocalDistance` needs `CircleOfConfusion` to full precision,
 /// not the `0.019 mm` that gets printed.
-fn resolve(map: &MetadataMap, values: &HashMap<&str, String>, name: &str) -> Option<String> {
+///
+/// An unqualified dependency is not a search across groups in ExifTool: it
+/// reads exactly one entry, the *bare* tag key. All line numbers below are
+/// ExifTool 13.30, the release these tables are generated from.
+///
+/// ```text
+/// ExifTool.pm:4008 (BuildCompositeTags)
+///     if (defined $$rawValue{$reqTag}) {
+/// ```
+///
+/// Which tag holds that key is decided by `FoundTag`'s priority arbitration,
+/// and a Composite competes for it like any other tag:
+///
+/// ```text
+/// ExifTool.pm:9442
+///     if ($priority >= $oldPriority and ...)
+///         # move existing tag out of the way since this tag is higher priority
+/// ```
+///
+/// `$oldPriority` defaults to 1 for an ordinarily-extracted main-document tag
+/// (ExifTool.pm:9422-9429), and a Composite defaults to 1 as well -- the
+/// `Composite` table declares no `PRIORITY` (ExifTool.pm:2256-2262), so an
+/// undeclared one falls through to "the normal default" at ExifTool.pm:9440.
+/// So a Composite normally *does* take the name: `Composite:LensID` and
+/// `Composite:GPSLatitude` really are what a bare `LensID` or `GPSLatitude`
+/// dependency binds, which the corpus confirms. The exception is a definition
+/// that demotes itself, and `Canon:ISO` is the one that matters here:
+///
+/// ```text
+/// Canon.pm:9781-9782
+///     ISO => {
+///         Priority => 0,  # let EXIF:ISO take priority
+/// ```
+///
+/// `0 >= 1` is false, so `EXIF:ISO` keeps the bare key and `Composite:LightValue`
+/// -- whose `Require` is the unqualified `ISO` (Exif.pm:4687-4691) -- is computed
+/// from the camera's recorded ISO, not from Canon's `BaseISO * AutoISO / 100`.
+fn resolve(map: &MetadataMap, values: &HashMap<&str, Derived>, name: &str) -> Option<String> {
     // An explicit group is a namespace constraint, not merely decoration.
     // In particular, GPS::Composite requires `GPS:GPSLongitude`: after the
     // first pass has produced Composite:GPSLongitude, rebinding that generated
@@ -149,15 +208,22 @@ fn resolve(map: &MetadataMap, values: &HashMap<&str, String>, name: &str) -> Opt
     // western longitude east on the next fixpoint pass.  The one explicit
     // generated namespace is `Composite:` itself.
     if let Some(bare) = name.strip_prefix("Composite:") {
-        return values.get(bare).cloned().or_else(|| lookup(map, name));
+        return values
+            .get(bare)
+            .map(|d| d.value.clone())
+            .or_else(|| lookup(map, name));
     }
     if name.contains(':') {
         return lookup(map, name);
     }
-    if let Some(v) = values.get(name) {
-        return Some(v.clone());
+    match values.get(name) {
+        // Priority >= 1: the composite would have claimed the bare key.
+        Some(d) if d.priority >= 1 => Some(d.value.clone()),
+        // Demoted: an extracted tag of this name keeps the bare key. With no
+        // such tag there is nothing to lose to, and the composite holds it.
+        Some(d) => lookup_extracted(map, name).or_else(|| Some(d.value.clone())),
+        None => lookup(map, name),
     }
-    lookup(map, name)
 }
 
 /// Compute every Composite tag whose inputs are available, and insert them.
@@ -170,7 +236,7 @@ pub fn apply(map: &mut MetadataMap) -> usize {
     // it once up front rather than per composite.
     let make = lookup(map, "Make");
     // ValueConv forms of composites computed so far, keyed by bare tag name.
-    let mut values: HashMap<&str, String> = HashMap::new();
+    let mut values: HashMap<&str, Derived> = HashMap::new();
     // Composites this run produced. They may be recomputed on a later pass
     // once more of their optional inputs exist; tags that came from the file
     // are never touched.
@@ -238,7 +304,13 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             if let Some(c) = compute::compute(comp.module, comp.name, &inputs, make.as_deref()) {
                 // Count only genuine changes, so the fixpoint still terminates.
                 let changed = map.get_string(&key) != Some(c.print.as_str());
-                values.insert(comp.name, c.value);
+                values.insert(
+                    comp.name,
+                    Derived {
+                        value: c.value,
+                        priority: comp.priority,
+                    },
+                );
                 map.insert(key, TagValue::new_string(c.print));
                 if !already_ours {
                     added += 1;
@@ -471,6 +543,70 @@ mod tests {
             m.get_string("Composite:FocalLength35efl"),
             Some("34.0 mm (35 mm equivalent: 54.0 mm)")
         );
+    }
+
+    #[test]
+    fn a_demoted_composite_does_not_shadow_the_extracted_tag_it_defers_to() {
+        // Canon's Composite:ISO carries `Priority => 0, # let EXIF:ISO take
+        // priority` (Canon.pm:9781), so EXIF:ISO keeps the bare `ISO` key and
+        // LightValue's unqualified `2 => 'ISO'` binds that, not the
+        // BaseISO * AutoISO / 100 estimate.
+        //
+        // These are the real tags of Canon/CanonDIGITAL_IXUS120IS.jpg, on which
+        // `exiftool -a -G1 -s` reports Composite:ISO 75 and LightValue 10.9 --
+        // 10.9 being the value computed from the extracted 80. Binding the
+        // composite's own 75 instead gives 11.0, which is what oxidex printed.
+        let mut m = map_of(&[
+            ("ExifIFD:ISO", "80"),
+            ("ExifIFD:FNumber", "2.8"),
+            ("ExifIFD:ExposureTime", "1/200"),
+            ("Canon:CameraISO", "Auto"),
+            ("Canon:BaseISO", "100"),
+            ("Canon:AutoISO", "75"),
+        ]);
+        apply(&mut m);
+        assert_eq!(m.get_string("Composite:ISO"), Some("75"));
+        assert_eq!(m.get_string("Composite:LightValue"), Some("10.9"));
+
+        // With no extracted ISO there is nothing for the demoted composite to
+        // lose the bare key to, so it supplies the dependency itself and the
+        // same file's numbers give 11.0.
+        let mut m = map_of(&[
+            ("ExifIFD:FNumber", "2.8"),
+            ("ExifIFD:ExposureTime", "1/200"),
+            ("Canon:CameraISO", "Auto"),
+            ("Canon:BaseISO", "100"),
+            ("Canon:AutoISO", "75"),
+        ]);
+        apply(&mut m);
+        assert_eq!(m.get_string("Composite:LightValue"), Some("11.0"));
+    }
+
+    #[test]
+    fn a_default_priority_composite_still_wins_the_bare_name() {
+        // Only a Composite that demotes itself yields. Every other one takes
+        // the bare tag key from a same-named extracted tag
+        // (ExifTool.pm:9542, `$priority >= $oldPriority`), which is why
+        // ExifTool reports Composite:GPSLatitude/GPSAltitude/LensID as the
+        // meaning of those names on the corpus.
+        assert!(
+            COMPOSITES.iter().all(|c| c.priority >= 1
+                || (c.module == "Canon" && c.name == "ISO")
+                || (c.module == "Exif" && c.name == "GPSPosition")
+                || (c.module == "ID3" && c.name == "DateTimeOriginal")
+                || (c.module == "MPEG" && c.name == "Duration")
+                || (c.module == "QuickTime"
+                    && matches!(c.name, "AvgBitrate" | "GPSAltitude" | "GPSAltitudeRef"))),
+            "an unreviewed Composite demoted itself; check its ExifTool Priority"
+        );
+
+        // GPS:GPSLatitude is `Priority => 1, Avoid => 1` (GPS.pm): the explicit
+        // Priority wins over Avoid, so it does claim the name.
+        let gps = COMPOSITES
+            .iter()
+            .find(|c| c.module == "GPS" && c.name == "GPSLatitude")
+            .expect("generated GPS latitude composite");
+        assert_eq!(gps.priority, 1);
     }
 
     #[test]
