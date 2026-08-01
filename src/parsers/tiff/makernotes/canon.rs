@@ -2021,46 +2021,7 @@ fn format_g2(value: f64) -> String {
 /// `%+d`, halves as `%+d/2`, thirds as `%+d/3`, anything else as `%+.3g`, and zero as a
 /// bare `0`.
 fn print_fraction(value: f64) -> String {
-    let value = value * 1.00001; // ExifTool's round-off guard
-    if value == 0.0 {
-        return "0".to_string();
-    }
-    let truncated = value.trunc();
-    if truncated != 0.0 && truncated / value > 0.999 {
-        return format!("{:+}", truncated as i64);
-    }
-    let halves = (value * 2.0).trunc();
-    if halves != 0.0 && halves / (value * 2.0) > 0.999 {
-        return format!("{:+}/2", halves as i64);
-    }
-    let thirds = (value * 3.0).trunc();
-    if thirds != 0.0 && thirds / (value * 3.0) > 0.999 {
-        return format!("{:+}/3", thirds as i64);
-    }
-    let magnitude = format_significant_3(value.abs());
-    if value < 0.0 {
-        format!("-{}", magnitude)
-    } else {
-        format!("+{}", magnitude)
-    }
-}
-
-/// Renders a positive number with 3 significant digits, `%g`-style (no trailing zeros).
-fn format_significant_3(value: f64) -> String {
-    if value == 0.0 || !value.is_finite() {
-        return "0".to_string();
-    }
-    let exponent = value.abs().log10().floor() as i32;
-    let decimals = (2 - exponent).max(0) as usize;
-    let rendered = format!("{:.*}", decimals, value);
-    if rendered.contains('.') {
-        rendered
-            .trim_end_matches('0')
-            .trim_end_matches('.')
-            .to_string()
-    } else {
-        rendered
-    }
+    crate::core::formatters::exif_print_conv::print_fraction(value)
 }
 
 /// Renders a Canon "parameter" value (Contrast/Saturation/ColorTone style).

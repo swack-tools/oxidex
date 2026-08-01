@@ -2048,23 +2048,7 @@ fn print_f_number(value: f64) -> String {
 ///     }
 /// ```
 fn print_fraction(value: f64) -> String {
-    let value = value * 1.00001;
-    if value == 0.0 {
-        return "0".to_string();
-    }
-    if value.trunc() / value > 0.999 {
-        return format!("{:+}", value.trunc() as i64);
-    }
-    let doubled = value * 2.0;
-    if doubled.trunc() / doubled > 0.999 {
-        return format!("{:+}/2", doubled.trunc() as i64);
-    }
-    let tripled = value * 3.0;
-    if tripled.trunc() / tripled > 0.999 {
-        return format!("{:+}/3", tripled.trunc() as i64);
-    }
-    // Perl's "%+.3g": three significant digits, sign always shown.
-    format!("{:+.3}", value)
+    crate::core::formatters::exif_print_conv::print_fraction(value)
 }
 
 /// Format EXIF values whose raw TIFF representation differs from ExifTool's

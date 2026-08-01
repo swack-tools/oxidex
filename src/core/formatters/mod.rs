@@ -29,7 +29,7 @@ pub use exif_enums::{
     format_scene_capture_type, format_sensing_method, format_sharpness,
     format_subject_distance_range, format_white_balance, format_ycbcr_positioning,
 };
-pub use exif_print_conv::{print_exposure_time, print_exposure_time_micros_str};
+pub use exif_print_conv::{print_exposure_time, print_exposure_time_micros_str, print_fraction};
 pub use exposure_program::format_exposure_program;
 pub use gps_altitude_ref::{format_gps_altitude_ref, format_gps_altitude_ref_byte};
 pub use gps_direction_ref::format_gps_direction_ref;
