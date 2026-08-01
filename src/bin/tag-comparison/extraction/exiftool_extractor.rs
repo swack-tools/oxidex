@@ -6,25 +6,94 @@
 use super::ExtractionResult;
 use crate::models::TagInfo;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde_json::value::RawValue;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use walkdir::WalkDir;
+
+/// One file's entry from `exiftool -json`, with every value left as the
+/// exact source text ExifTool wrote. `BTreeMap` matches the key ordering
+/// `serde_json::Map` gave before (serde_json's default Map is a BTreeMap),
+/// so nothing downstream sees a different iteration order.
+///
+/// The point of `RawValue` here is numbers -- see `exiftool_value_text`.
+type RawFileEntry = BTreeMap<String, Box<RawValue>>;
+
+/// Bumped whenever this extractor changes how it renders ExifTool's JSON
+/// into the comparison's value text. A cache written under an older
+/// revision holds strings this code would no longer produce (revision 1
+/// stored "0.0" where ExifTool printed "0.00"), and re-serving them would
+/// make a rendering fix look like it had no effect until someone
+/// remembered to `rm -rf` the cache directory by hand.
+const VALUE_RENDERING_REVISION: u32 = 2;
 
 /// On-disk cache entry for one format's ExifTool extraction. ExifTool's own
 /// output for a given sample corpus never changes round-to-round (only
 /// OxiDex's binary changes as fixes land), so this persists across process
 /// invocations -- unlike ExifToolExtractor's in-memory `cache` field, which
 /// is rebuilt from scratch every time main.rs constructs a fresh extractor
-/// (once per format, every single comparison run). Invalidated by either an
-/// ExifTool version change or the sample corpus itself changing (tracked
-/// via `signature`, a hash of every matched file's path/size/mtime).
+/// (once per format, every single comparison run). Invalidated by an
+/// ExifTool version change, the sample corpus itself changing (tracked via
+/// `signature`, a hash of every matched file's path/size/mtime), or a bump
+/// of `VALUE_RENDERING_REVISION`.
 #[derive(Debug, Serialize, Deserialize)]
 struct DiskCacheEntry {
     exiftool_version: String,
     signature: String,
+    /// Absent in caches written before this field existed, which
+    /// `#[serde(default)]` reads as 0 -- never equal to a real revision,
+    /// so those entries are correctly treated as stale.
+    #[serde(default)]
+    rendering_revision: u32,
     result: ExtractionResult,
+}
+
+/// Render one value from ExifTool's `-json` output as the text ExifTool
+/// itself printed for that tag.
+///
+/// The number branch is the entire reason this reads `RawValue` instead of
+/// `serde_json::Value`. ExifTool does not *serialize* numbers -- it emits
+/// the PrintConv result verbatim, unquoted, whenever that result happens to
+/// look like a JSON number. From the exiftool script's `EscapeJSON`
+/// (13.59, line 3810):
+///
+/// ```text
+/// return $str if $str =~ /^-?(\d|[1-9]\d{1,14})(\.\d{1,16})?(e[-+]?\d{1,3})?$/i;
+/// ```
+///
+/// So a PrintConv that deliberately produced `0.00` reaches us as the bare
+/// token `0.00`, and that token *is* ExifTool's human-readable output --
+/// `exiftool -G1 -s` prints exactly `RawBrightnessAdj : 0.00`. Parsing it
+/// through `f64` and re-rendering (what this extractor did through
+/// rendering revision 1) yielded "0.0", a string ExifTool never printed,
+/// and the harness then reported OxiDex's correct "0.00" as a value
+/// difference. Trailing zeros, exponent spelling and any precision past
+/// f64's shortest round-trip form were all destroyed the same way -- and
+/// in the other direction two genuinely different values could collapse
+/// onto one `f64` string and silently *match*.
+///
+/// Strings, booleans, nulls, arrays and objects keep byte-for-byte the
+/// rendering revision 1 produced, so this changes nothing except the one
+/// case that was wrong.
+fn exiftool_value_text(raw: &RawValue) -> String {
+    let text = raw.get().trim();
+    // JSON grammar: a value whose first byte is '-' or a digit can only be
+    // a number, so this needs no lookahead and cannot misfire on a string
+    // (a string always starts with '"').
+    if matches!(text.as_bytes().first(), Some(b'-' | b'0'..=b'9')) {
+        return text.to_string();
+    }
+    match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(serde_json::Value::String(s)) => s,
+        Ok(serde_json::Value::Bool(b)) => b.to_string(),
+        Ok(serde_json::Value::Null) => "null".to_string(),
+        // Arrays/objects: compact JSON, which is what
+        // `normalize_value_for_comparison`'s `["a","b"]` handling expects.
+        Ok(other) => other.to_string(),
+        Err(_) => text.to_string(),
+    }
 }
 
 /// Batch size for exiftool invocations
@@ -232,7 +301,10 @@ impl ExifToolExtractor {
         let path = Self::disk_cache_path(fixture_path, format);
         let content = std::fs::read_to_string(path).ok()?;
         let entry: DiskCacheEntry = serde_json::from_str(&content).ok()?;
-        if entry.exiftool_version == exiftool_version && entry.signature == signature {
+        if entry.exiftool_version == exiftool_version
+            && entry.signature == signature
+            && entry.rendering_revision == VALUE_RENDERING_REVISION
+        {
             Some(entry.result)
         } else {
             None
@@ -264,6 +336,7 @@ impl ExifToolExtractor {
         let entry = DiskCacheEntry {
             exiftool_version: exiftool_version.to_string(),
             signature: signature.to_string(),
+            rendering_revision: VALUE_RENDERING_REVISION,
             result: result.clone(),
         };
         if let Ok(json) = serde_json::to_string(&entry) {
@@ -318,10 +391,7 @@ impl ExifToolExtractor {
             return Ok(vec![]);
         }
 
-        let json: serde_json::Value = serde_json::from_str(&stdout)?;
-        let results = self.parse_exiftool_batch_json(&json);
-
-        Ok(results)
+        Ok(self.parse_exiftool_batch_json(&stdout)?)
     }
 
     /// Run exiftool on a single file and parse JSON output (fallback)
@@ -344,24 +414,21 @@ impl ExifToolExtractor {
         }
 
         let stdout = String::from_utf8(output.stdout)?;
-        let json: serde_json::Value = serde_json::from_str(&stdout)?;
-        let tags = self.parse_exiftool_json(&json);
+        let tags = self.parse_exiftool_json(&stdout)?;
 
         Ok(tags)
     }
 
     /// Parse batch JSON output from ExifTool (array of file results)
-    fn parse_exiftool_batch_json(&self, json: &serde_json::Value) -> Vec<Vec<TagInfo>> {
-        let mut results = Vec::new();
-
-        if let Some(array) = json.as_array() {
-            for file_data in array {
-                let tags = self.parse_single_file_json(file_data);
-                results.push(tags);
-            }
-        }
-
-        results
+    fn parse_exiftool_batch_json(
+        &self,
+        stdout: &str,
+    ) -> Result<Vec<Vec<TagInfo>>, serde_json::Error> {
+        let entries: Vec<RawFileEntry> = serde_json::from_str(stdout)?;
+        Ok(entries
+            .iter()
+            .map(|entry| self.parse_single_file_json(entry))
+            .collect())
     }
 
     /// Check if a tag family should be skipped in comparison
@@ -380,38 +447,27 @@ impl ExifToolExtractor {
     }
 
     /// Parse a single file's JSON data into TagInfo vector
-    fn parse_single_file_json(&self, file_data: &serde_json::Value) -> Vec<TagInfo> {
+    fn parse_single_file_json(&self, file_data: &RawFileEntry) -> Vec<TagInfo> {
         let mut tags = Vec::new();
 
-        if let Some(obj) = file_data.as_object() {
-            // ExifTool's own JSON always includes this per entry regardless
-            // of -G grouping -- reading it directly here is far more
-            // robust than trying to zip batch results back up against the
-            // input file list positionally (which breaks the moment
-            // ExifTool skips or reorders an entry for a failed file).
-            let source_file = obj
-                .get("SourceFile")
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
+        // ExifTool's own JSON always includes this per entry regardless
+        // of -G grouping -- reading it directly here is far more
+        // robust than trying to zip batch results back up against the
+        // input file list positionally (which breaks the moment
+        // ExifTool skips or reorders an entry for a failed file).
+        let source_file = file_data
+            .get("SourceFile")
+            .map(|raw| exiftool_value_text(raw));
 
-            for (key, value) in obj.iter() {
-                let (family, name) = self.parse_tag_name(key);
-                // Skip pseudo-tags and computed values
-                if family != "UNKNOWN" && !Self::should_skip_family(&family) {
-                    let value_str = match value {
-                        serde_json::Value::String(s) => s.clone(),
-                        serde_json::Value::Number(n) => n.to_string(),
-                        serde_json::Value::Bool(b) => b.to_string(),
-                        serde_json::Value::Array(_) => value.to_string(),
-                        serde_json::Value::Object(_) => value.to_string(),
-                        serde_json::Value::Null => "null".to_string(),
-                    };
-                    let mut tag_info = TagInfo::new(name, family, value_str);
-                    if let Some(sf) = &source_file {
-                        tag_info = tag_info.with_source_file(sf.clone());
-                    }
-                    tags.push(tag_info);
+        for (key, value) in file_data.iter() {
+            let (family, name) = self.parse_tag_name(key);
+            // Skip pseudo-tags and computed values
+            if family != "UNKNOWN" && !Self::should_skip_family(&family) {
+                let mut tag_info = TagInfo::new(name, family, exiftool_value_text(value));
+                if let Some(sf) = &source_file {
+                    tag_info = tag_info.with_source_file(sf.clone());
                 }
+                tags.push(tag_info);
             }
         }
 
@@ -419,15 +475,13 @@ impl ExifToolExtractor {
     }
 
     /// Parse ExifTool JSON output into TagInfo (for single-file output)
-    fn parse_exiftool_json(&self, json: &serde_json::Value) -> Vec<TagInfo> {
+    fn parse_exiftool_json(&self, stdout: &str) -> Result<Vec<TagInfo>, serde_json::Error> {
         // ExifTool returns an array of objects, one per file
-        if let Some(array) = json.as_array()
-            && let Some(file_data) = array.first()
-        {
-            return self.parse_single_file_json(file_data);
-        }
-
-        Vec::new()
+        let entries: Vec<RawFileEntry> = serde_json::from_str(stdout)?;
+        Ok(entries
+            .first()
+            .map(|entry| self.parse_single_file_json(entry))
+            .unwrap_or_default())
     }
 
     /// Parse tag name to extract family and tag name
@@ -599,23 +653,37 @@ mod tests {
         assert_eq!(name, "Creator");
     }
 
+    fn entry(json: &str) -> RawFileEntry {
+        serde_json::from_str(json).expect("test fixture must be valid JSON")
+    }
+
+    fn value_of(tags: &[TagInfo], name: &str) -> String {
+        tags.iter()
+            .find(|t| t.name == name)
+            .unwrap_or_else(|| panic!("tag {name} not extracted"))
+            .value
+            .clone()
+    }
+
     #[test]
     fn test_parse_exiftool_json_empty() {
         let extractor = ExifToolExtractor::new("exiftool".to_string());
-        let json = serde_json::json!([]);
-        let tags = extractor.parse_exiftool_json(&json);
+        let tags = extractor.parse_exiftool_json("[]").unwrap();
         assert_eq!(tags.len(), 0);
     }
 
     #[test]
     fn test_parse_exiftool_json_with_data() {
         let extractor = ExifToolExtractor::new("exiftool".to_string());
-        let json = serde_json::json!([{
-            "EXIF:Make": "Canon",
-            "EXIF:Model": "Canon EOS 5D",
-            "XMP:Creator": "John Doe"
-        }]);
-        let tags = extractor.parse_exiftool_json(&json);
+        let tags = extractor
+            .parse_exiftool_json(
+                r#"[{
+                    "EXIF:Make": "Canon",
+                    "EXIF:Model": "Canon EOS 5D",
+                    "XMP:Creator": "John Doe"
+                }]"#,
+            )
+            .unwrap();
         assert_eq!(tags.len(), 3);
         assert!(tags.iter().any(|t| t.name == "Make" && t.family == "EXIF"));
         assert!(
@@ -627,11 +695,12 @@ mod tests {
     #[test]
     fn test_parse_single_file_json_populates_source_file_from_exiftool_own_field() {
         let extractor = ExifToolExtractor::new("exiftool".to_string());
-        let json = serde_json::json!({
-            "SourceFile": "/samples/JPEG/Sony/camera.jpg",
-            "EXIF:Make": "Sony",
-        });
-        let tags = extractor.parse_single_file_json(&json);
+        let tags = extractor.parse_single_file_json(&entry(
+            r#"{
+                "SourceFile": "/samples/JPEG/Sony/camera.jpg",
+                "EXIF:Make": "Sony"
+            }"#,
+        ));
         assert_eq!(tags.len(), 1);
         assert_eq!(
             tags[0].source_file,
@@ -642,9 +711,94 @@ mod tests {
     #[test]
     fn test_parse_single_file_json_source_file_none_when_absent() {
         let extractor = ExifToolExtractor::new("exiftool".to_string());
-        let json = serde_json::json!({"EXIF:Make": "Sony"});
-        let tags = extractor.parse_single_file_json(&json);
+        let tags = extractor.parse_single_file_json(&entry(r#"{"EXIF:Make": "Sony"}"#));
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].source_file, None);
+    }
+
+    /// The defect this rendering revision exists to remove, reduced to the
+    /// tag it was proven on. `exiftool -G1 -s` prints
+    /// `RawBrightnessAdj : 0.00` and `-json` carries that text through as
+    /// the bare token `0.00`; going through `f64` turned it into "0.0",
+    /// and the harness then reported OxiDex's correct "0.00" as a value
+    /// difference against a string ExifTool never printed.
+    #[test]
+    fn test_number_keeps_exiftools_own_text_not_an_f64_round_trip() {
+        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let tags = extractor.parse_single_file_json(&entry(
+            r#"{
+                "MakerNotes:RawBrightnessAdj": 0.00,
+                "MakerNotes:TrailingZero": 1.50,
+                "MakerNotes:Exponent": 1e3,
+                "MakerNotes:LongPrecision": 1.100000000000000,
+                "MakerNotes:NegativeZero": -0,
+                "EXIF:PlainInteger": 400,
+                "EXIF:AlreadyShortest": 2.8
+            }"#,
+        ));
+        assert_eq!(value_of(&tags, "RawBrightnessAdj"), "0.00");
+        assert_eq!(value_of(&tags, "TrailingZero"), "1.50");
+        assert_eq!(value_of(&tags, "Exponent"), "1e3");
+        assert_eq!(value_of(&tags, "LongPrecision"), "1.100000000000000");
+        assert_eq!(value_of(&tags, "NegativeZero"), "-0");
+        // Unchanged cases must stay byte-identical to rendering revision 1.
+        assert_eq!(value_of(&tags, "PlainInteger"), "400");
+        assert_eq!(value_of(&tags, "AlreadyShortest"), "2.8");
+    }
+
+    /// A genuinely different value must still read as different: this is
+    /// not "make the numbers agree", it is "report the text ExifTool
+    /// actually printed". `0.00` and `0.000` are two distinct PrintConv
+    /// outputs and stay two distinct strings.
+    #[test]
+    fn test_distinct_number_texts_stay_distinct() {
+        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let tags = extractor.parse_single_file_json(&entry(
+            r#"{"MakerNotes:A": 0.00, "MakerNotes:B": 0.000, "MakerNotes:C": 0}"#,
+        ));
+        assert_eq!(value_of(&tags, "A"), "0.00");
+        assert_eq!(value_of(&tags, "B"), "0.000");
+        assert_eq!(value_of(&tags, "C"), "0");
+    }
+
+    /// Everything that is not a bare number keeps rendering revision 1's
+    /// output byte-for-byte -- strings unescaped, JSON booleans lowercase
+    /// (ExifTool's own `EscapeJSON` lowercased them), lists compact.
+    #[test]
+    fn test_non_numeric_rendering_is_unchanged() {
+        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let tags = extractor.parse_single_file_json(&entry(
+            r#"{
+                "EXIF:Make": "Canon",
+                "Photoshop:CopyrightFlag": false,
+                "XMP:Subject": [
+                    "a",
+                    "b"
+                ],
+                "XMP:Escaped": "line\none",
+                "XMP:Struct": {"k": "v"}
+            }"#,
+        ));
+        assert_eq!(value_of(&tags, "Make"), "Canon");
+        assert_eq!(value_of(&tags, "CopyrightFlag"), "false");
+        assert_eq!(value_of(&tags, "Subject"), r#"["a","b"]"#);
+        assert_eq!(value_of(&tags, "Escaped"), "line\none");
+        assert_eq!(value_of(&tags, "Struct"), r#"{"k":"v"}"#);
+    }
+
+    /// A cache written before this rendering revision holds strings this
+    /// code would no longer produce, so it must not be re-served. Without
+    /// this the fix appears to do nothing on any machine that has already
+    /// run the harness once.
+    #[test]
+    fn test_disk_cache_entry_without_revision_is_stale() {
+        let old = r#"{
+            "exiftool_version": "13.59",
+            "signature": "abc",
+            "result": {"tags": [], "files_processed": 0}
+        }"#;
+        let entry: DiskCacheEntry = serde_json::from_str(old).unwrap();
+        assert_eq!(entry.rendering_revision, 0);
+        assert_ne!(entry.rendering_revision, VALUE_RENDERING_REVISION);
     }
 }
