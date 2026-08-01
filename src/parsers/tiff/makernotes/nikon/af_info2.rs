@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use super::af_points::{self, AF_POINTS_39, AF_POINTS_51, AF_POINTS_153};
+use super::af_points::{self, AF_POINTS_39, AF_POINTS_51, AF_POINTS_135, AF_POINTS_153};
 use super::value_reader::{ascii_value, read_u16};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
@@ -135,6 +135,26 @@ fn primary_af_point(raw: u8, table: &[(u8, &str)]) -> String {
     match table.iter().find(|(n, _)| *n == raw) {
         Some((1, name)) => format!("{name} (Center)"),
         Some((_, name)) => (*name).to_string(),
+        None => format!("Unknown ({raw})"),
+    }
+}
+
+/// `PrimaryAFPoint`'s grid-computed shape (Nikon.pm ~4656, 4673): raw 0 ->
+/// "(none)"; the documented center bit -> "{center_name} (Center)"; else
+/// the name is computed the same way `print_af_points_grid` computes it
+/// per-bit (ExifTool's `GetAFPointGrid`, non-inverse direction).
+fn primary_af_point_grid(raw: u8, ncols: u16, center_bit: u32, center_name: &str) -> String {
+    if raw == 0 {
+        return "(none)".to_string();
+    }
+    let bit = raw as u32;
+    if bit == center_bit {
+        return format!("{center_name} (Center)");
+    }
+    let row = bit / (ncols as u32);
+    let col = bit - (ncols as u32) * row + 1;
+    match char::from_u32(65 + row) {
+        Some(letter) => format!("{letter}{col}"),
         None => format!("Unknown ({raw})"),
     }
 }
@@ -297,11 +317,57 @@ pub fn parse_af_info2(
                     lookup(AF_AREA_MODE_V0200, raw),
                 );
             }
-            if let Some(raw) = byte(6) {
+            let phase_detect = byte(6);
+            if let Some(raw) = phase_detect {
                 tags.insert(
                     "Nikon:PhaseDetectAF".to_string(),
                     lookup(PHASE_DETECT_AF, raw),
                 );
+            }
+            match phase_detect {
+                Some(4) => {
+                    if let Some(raw) = byte(7) {
+                        tags.insert(
+                            "Nikon:PrimaryAFPoint".to_string(),
+                            primary_af_point(raw, AF_POINTS_135),
+                        );
+                    }
+                    if let Some(bits) = data.get(8..25) {
+                        tags.insert(
+                            "Nikon:AFPointsUsed".to_string(),
+                            af_points::print_af_points_lookup(bits, AF_POINTS_135),
+                        );
+                    }
+                }
+                Some(5) => {
+                    if let Some(raw) = byte(7) {
+                        tags.insert(
+                            "Nikon:PrimaryAFPoint".to_string(),
+                            primary_af_point_grid(raw, 15, 82, "F8"),
+                        );
+                    }
+                    if let Some(bits) = data.get(8..29) {
+                        tags.insert(
+                            "Nikon:AFPointsUsed".to_string(),
+                            af_points::print_af_points_grid(bits, 15),
+                        );
+                    }
+                }
+                Some(6) => {
+                    if let Some(raw) = byte(7) {
+                        tags.insert(
+                            "Nikon:PrimaryAFPoint".to_string(),
+                            primary_af_point_grid(raw, 21, 115, "F11"),
+                        );
+                    }
+                    if let Some(bits) = data.get(8..37) {
+                        tags.insert(
+                            "Nikon:AFPointsUsed".to_string(),
+                            af_points::print_af_points_grid(bits, 21),
+                        );
+                    }
+                }
+                _ => {}
             }
         }
         // Expeed 6: D6, D780, Z5, Z6, Z7, Z30, Z50, Z6_2, Z7_2, Zfc.
@@ -489,5 +555,50 @@ mod tests {
         parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
         assert_eq!(tags["Nikon:AFPointsUsed"], "E9");
         assert_eq!(tags["Nikon:PrimaryAFPoint"], "E9 (Center)");
+    }
+
+    #[test]
+    fn v0200_135point_phase4_uses_lookup_table() {
+        // Nikon1J1.jpg: AFPointsUsed=B11, PhaseDetectAF=4.
+        // afPoints135 bit-number 13 = 'B9'... use a value traceable to the
+        // table directly: bit-number 1 = 'E8' (Nikon.pm:1534).
+        let mut data = vec![0u8; 30];
+        data[..4].copy_from_slice(b"0200");
+        data[6] = 4; // PhaseDetectAF = On (73-point)
+        data[7] = 1; // PrimaryAFPoint raw = 1 -> center
+        data[8] = 0x01; // AFPointsUsed bit-number 1 -> "E8"
+        let mut tags = HashMap::new();
+        parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
+        assert_eq!(tags["Nikon:AFPointsUsed"], "E8");
+        assert_eq!(tags["Nikon:PrimaryAFPoint"], "E8 (Center)");
+    }
+
+    #[test]
+    fn v0200_135point_phase5_uses_computed_grid() {
+        // PhaseDetectAF=5: grid-computed, ncols=15. Center is bit 82 -> "F8".
+        let mut data = vec![0u8; 35];
+        data[..4].copy_from_slice(b"0200");
+        data[6] = 5;
+        data[7] = 82; // PrimaryAFPoint raw = 82 -> literal "F8 (Center)" override
+        data[8 + 10] = 1 << 2; // AFPointsUsed bit 82 (byte 10, offset 2) -> "F8"
+        let mut tags = HashMap::new();
+        parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
+        assert_eq!(tags["Nikon:AFPointsUsed"], "F8");
+        assert_eq!(tags["Nikon:PrimaryAFPoint"], "F8 (Center)");
+    }
+
+    #[test]
+    fn v0200_171point_phase6_uses_computed_grid_21_cols() {
+        // Nikon1J4.jpg: AFPointsUsed=F11, PhaseDetectAF=6, ncols=21, center
+        // bit=115 -> "F11" (115/21=5->'F', 115-21*5+1=11).
+        let mut data = vec![0u8; 40];
+        data[..4].copy_from_slice(b"0200");
+        data[6] = 6;
+        data[7] = 115; // literal "F11 (Center)" override
+        data[8 + 14] = 1 << 3; // bit 115 = byte 14 (115/8=14), offset 3 (115%8=3)
+        let mut tags = HashMap::new();
+        parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
+        assert_eq!(tags["Nikon:AFPointsUsed"], "F11");
+        assert_eq!(tags["Nikon:PrimaryAFPoint"], "F11 (Center)");
     }
 }
