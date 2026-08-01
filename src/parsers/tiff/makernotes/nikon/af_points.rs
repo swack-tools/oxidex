@@ -777,7 +777,9 @@ mod tests {
     // 1, 1-based) is byte 0 bit 0.
     #[test]
     fn print_af_points_lookup_single_bit() {
-        let bits = [0x01u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let bits = [
+            0x01u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
         assert_eq!(print_af_points_lookup(&bits, AF_POINTS_153), "E9");
     }
 

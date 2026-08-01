@@ -281,9 +281,7 @@ pub fn parse_af_info2(
                     .map(|bits| af_points::print_af_points_lookup(bits, AF_POINTS_51)),
                 // Always little-endian per Nikon.pm's explicit comment,
                 // independent of the MakerNote's own `order`.
-                (_, 2) => {
-                    read_u16(data, 8, ByteOrder::LittleEndian).map(af_points_used_bitmask11)
-                }
+                (_, 2) => read_u16(data, 8, ByteOrder::LittleEndian).map(af_points_used_bitmask11),
                 ("0100", 3) => data
                     .get(8..13)
                     .map(|bits| af_points::print_af_points_lookup(bits, AF_POINTS_39)),
@@ -548,7 +546,12 @@ mod tests {
     #[test]
     fn an_unclaimed_version_reports_only_itself() {
         let mut tags = HashMap::new();
-        parse_af_info2(b"0999\x01\x02\x03\x04", ByteOrder::BigEndian, None, &mut tags);
+        parse_af_info2(
+            b"0999\x01\x02\x03\x04",
+            ByteOrder::BigEndian,
+            None,
+            &mut tags,
+        );
         assert_eq!(tags.len(), 1);
     }
 
@@ -724,10 +727,7 @@ mod tests {
         data[10] = 0x01; // AFPointsUsed bit index 0 -> AF_POINTS_405[0]
         let mut tags = HashMap::new();
         parse_af_info2(&data, ByteOrder::BigEndian, Some("NIKON Z 9"), &mut tags);
-        assert_eq!(
-            tags["Nikon:AFPointsUsed"],
-            af_points::AF_POINTS_405[0]
-        );
+        assert_eq!(tags["Nikon:AFPointsUsed"], af_points::AF_POINTS_405[0]);
     }
 
     #[test]
@@ -749,10 +749,7 @@ mod tests {
         data[10] = 0x01;
         let mut tags = HashMap::new();
         parse_af_info2(&data, ByteOrder::BigEndian, Some("NIKON Z f"), &mut tags);
-        assert_eq!(
-            tags["Nikon:AFPointsUsed"],
-            af_points::AF_POINTS_299[0]
-        );
+        assert_eq!(tags["Nikon:AFPointsUsed"], af_points::AF_POINTS_299[0]);
     }
 
     #[test]
@@ -763,10 +760,7 @@ mod tests {
         data[10] = 0x01;
         let mut tags = HashMap::new();
         parse_af_info2(&data, ByteOrder::BigEndian, Some("NIKON Z50_2"), &mut tags);
-        assert_eq!(
-            tags["Nikon:AFPointsUsed"],
-            af_points::AF_POINTS_231[0]
-        );
+        assert_eq!(tags["Nikon:AFPointsUsed"], af_points::AF_POINTS_231[0]);
     }
 
     #[test]
