@@ -71,7 +71,7 @@ pub fn parse_raf_makernote(
     // Fujifilm MakerNote starts with "FUJIFILM" signature followed by data
     if makernote_data.len() < 12 {
         return Err(ExifToolError::parse_error(
-            "Fujifilm MakerNote too small for header",
+            "FujiFilm MakerNote too small for header",
         ));
     }
 

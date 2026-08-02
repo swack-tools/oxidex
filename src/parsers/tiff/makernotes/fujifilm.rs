@@ -1575,7 +1575,7 @@ pub fn parse_fujifilm_makernotes(
 ) {
     let parser = FujifilmParser;
     if let Err(e) = parser.parse(data, byte_order, tags) {
-        eprintln!("Fujifilm MakerNotes parse error: {}", e);
+        eprintln!("FujiFilm MakerNotes parse error: {}", e);
     }
 }
 
