@@ -102,11 +102,7 @@ pub fn resolve_makernote_byte_order(
 /// the signature -- Panasonic writes a 12-byte "Panasonic\0\0\0", an 8-byte
 /// "LEICA\0\0\0" and an 18-byte "LEICA CAMERA AG\0" into the same table --
 /// cannot express that offset as a single fixed `signature_offset`.
-pub fn resolve_byte_order_at(
-    data: &[u8],
-    ifd_offset: usize,
-    byte_order: ByteOrder,
-) -> ByteOrder {
+pub fn resolve_byte_order_at(data: &[u8], ifd_offset: usize, byte_order: ByteOrder) -> ByteOrder {
     let Some(ifd) = data.get(ifd_offset..) else {
         return byte_order;
     };

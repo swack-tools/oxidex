@@ -531,7 +531,24 @@ impl PanasonicParser {
         let entries_start = &ifd_data[2..];
         let entries = match parse_ifd_entries(entries_start, entry_count, byte_order) {
             Ok((_, entries)) => entries,
-            Err(_) => return Ok(()), // Return empty on parse failure
+            // A directory that does not read is reported, not swallowed.
+            // ExifTool warns ("Bad MakerNotes directory") and carries on with
+            // the rest of the file, so this must stay non-fatal -- and every
+            // caller of the dispatcher treats an `Err` exactly that way,
+            // printing `Warning: Failed to parse MakerNote for <Make>` and
+            // continuing. Returning `Ok(())` instead made a failed directory
+            // indistinguishable from a file that simply has no MakerNote,
+            // which is why the byte-order class this function now resolves
+            // went unreported for its entire existence: a coverage report
+            // cannot count a difference that produces no output at all.
+            Err(_) => {
+                return Err(format!(
+                    "Panasonic MakerNote IFD at offset {ifd_offset} declares {entry_count} \
+                     entries ({} bytes) but only {} bytes follow",
+                    entry_count as usize * 12,
+                    entries_start.len(),
+                ));
+            }
         };
 
         // Get registry for tag definitions
@@ -1189,6 +1206,103 @@ fn is_dmc_fz10(model: Option<&str>) -> bool {
         start = end;
     }
     false
+}
+
+#[cfg(test)]
+mod byte_order_tests {
+    use super::*;
+
+    /// One-entry Panasonic MakerNote holding `ImageQuality = 2` ("High"),
+    /// written in `order`. The header is the 12-byte "Panasonic\0\0\0" the
+    /// real cameras write.
+    fn makernote(order: ByteOrder) -> Vec<u8> {
+        let mut d = b"Panasonic\0\0\0".to_vec();
+        let (u16b, u32b): (fn(u16) -> [u8; 2], fn(u32) -> [u8; 4]) = match order {
+            ByteOrder::LittleEndian => (u16::to_le_bytes, u32::to_le_bytes),
+            ByteOrder::BigEndian => (u16::to_be_bytes, u32::to_be_bytes),
+        };
+        d.extend_from_slice(&u16b(1)); // entry count
+        d.extend_from_slice(&u16b(0x0001)); // ImageQuality
+        d.extend_from_slice(&u16b(3)); // int16u
+        d.extend_from_slice(&u32b(1)); // count 1
+        // A count==1 SHORT lives in the first two bytes of the value field.
+        d.extend_from_slice(&u16b(2));
+        d.extend_from_slice(&[0, 0]);
+        d.extend_from_slice(&u32b(0)); // next-IFD pointer
+        d
+    }
+
+    fn parse(
+        data: &[u8],
+        outer: ByteOrder,
+    ) -> std::result::Result<HashMap<String, String>, String> {
+        let mut tags = HashMap::new();
+        PanasonicParser.parse(data, outer, &mut tags)?;
+        Ok(tags)
+    }
+
+    /// Control: when the MakerNote and the enclosing TIFF agree, nothing moves.
+    /// This is the case for the 300-odd Panasonic files that already worked,
+    /// and the conservative predicate must leave them exactly as they were.
+    #[test]
+    fn matching_byte_order_is_left_alone() {
+        for order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let tags = parse(&makernote(order), order).unwrap();
+            assert_eq!(
+                tags.get("Panasonic:ImageQuality").map(String::as_str),
+                Some("High"),
+                "control failed for {order:?}"
+            );
+        }
+    }
+
+    /// `MakerNotePanasonic` is `ByteOrder => 'Unknown'`, so the directory may be
+    /// written the other way round from the file that contains it. Ten of the
+    /// eleven affected corpus files are this case: a big-endian ("MM") TIFF
+    /// carrying a little-endian MakerNote.
+    #[test]
+    fn little_endian_makernote_in_big_endian_file_is_read() {
+        let tags = parse(&makernote(ByteOrder::LittleEndian), ByteOrder::BigEndian).unwrap();
+        assert_eq!(
+            tags.get("Panasonic:ImageQuality").map(String::as_str),
+            Some("High"),
+        );
+    }
+
+    /// The mirror case, which `PanasonicDMC-LC5.jpg` is: an "II" file carrying
+    /// a big-endian MakerNote. The resolved order has to reach the *values*
+    /// too, not just the entry layout -- ExifTool does this with `SetByteOrder`
+    /// (Exif.pm:7078) -- so a count==1 SHORT must still be read out of the high
+    /// half of its value field here.
+    #[test]
+    fn big_endian_makernote_in_little_endian_file_is_read() {
+        let tags = parse(&makernote(ByteOrder::BigEndian), ByteOrder::LittleEndian).unwrap();
+        assert_eq!(
+            tags.get("Panasonic:ImageQuality").map(String::as_str),
+            Some("High"),
+        );
+    }
+
+    /// A directory that cannot be read is reported. It must not be fatal --
+    /// ExifTool warns and reads the rest of the file -- but returning `Ok(())`
+    /// made it invisible, which is indistinguishable from a file that has no
+    /// MakerNote at all and is why this whole class went uncounted.
+    #[test]
+    fn unreadable_directory_is_reported_not_swallowed() {
+        let mut d = b"Panasonic\0\0\0".to_vec();
+        // 0x2020 = 8224: high byte equals the low byte, so ExifTool's predicate
+        // does NOT swap (it needs high > low). The count is simply wrong, and
+        // 8224 entries do not fit in the 24 bytes that follow.
+        d.extend_from_slice(&0x2020u16.to_le_bytes());
+        d.extend_from_slice(&[0u8; 24]);
+
+        let err = parse(&d, ByteOrder::LittleEndian).unwrap_err();
+        assert!(err.contains("8224"), "error must name the bad count: {err}");
+        assert!(
+            err.contains("Panasonic"),
+            "error must name the directory: {err}"
+        );
+    }
 }
 
 #[cfg(test)]
