@@ -160,10 +160,42 @@ failover: `call_model` retries the one model it was handed, and only when the wh
 spent does the attempt fail — at which point the next draw is a fresh uniform pick. As
 `config.toml` puts it, the pool *is* the retry.
 
-A fleet-wide rate governor sits inside the retry loop. A rate-limit response sets a **global**
-cooldown that pauses every worker, growing exponentially per consecutive limited outcome (30s,
-60s, 120s, 240s, capped at 300s). This is why `max_retries` is deliberately pinned at 1: at 3, a
-single 429 ladder fires four limited reports and parks the entire fleet near the cap.
+A fleet-wide rate governor sits inside the retry loop, but it is now only a steady-state rpm
+**budget**: a token bucket in one flock-guarded file, refilling at `governor_calls_per_minute`
+and capped at `governor_burst`. It shapes how fast the fleet is collectively allowed to go. It
+does not react to failure.
+
+**Superseded (2026-08-02).** It used to. A rate-limit response set a **global** cooldown that
+paused every worker, growing exponentially per consecutive limited outcome (30s, 60s, 120s,
+240s, capped at 300s). That was wrong in both directions:
+
+- Against an **rpm** limit it *phase-locked* the fleet. Every worker was released at the same
+  instant, emitted a synchronised burst, tripped the limit together and parked together —
+  exactly the shape a rate limiter is built to reject.
+- Against a **cost-window cap** it was futile. A 300s ceiling against a weekly cap meant the
+  fleet woke, was rejected and parked again, every five minutes, for days.
+
+What replaced it, all inside `call_model`:
+
+- **Classification first.** `classify_429` reads the gateway's `theclawbayError` discriminator
+  before deciding anything, yielding `rpm`, `window_cap` (`5h_cost_limit_reached`) or
+  `terminal_cap` (`weekly_cost_limit_reached`, `invalid_api_key`). Anything unparseable is
+  `rpm`, because wrongly retrying a permanent condition costs one park interval while wrongly
+  giving up on a transient one costs the work.
+- **A cost cap is never retried.** Retrying cannot make budget appear. The call raises
+  `ModelQuotaExhausted` immediately and parks *that endpoint* in *that process*
+  (`endpoint_park`), so the worker rides the window out and resumes unattended when it rolls
+  over, without touching any other worker.
+- **rpm rejections retry per-worker, with full jitter** (`delay + uniform(0, delay)`) and honour
+  `Retry-After` when present. The jitter is not rate shaping — it is what stops N workers
+  rejected in the same instant from retrying in the same instant.
+
+No code path pauses more than one worker. `max_retries` is consequently free: it stays at its
+configured 1000, riding out a genuine outage, because a long ladder can no longer park the fleet.
+
+Every attempt is also appended to `~/.oxidex/logs/model-calls.jsonl` with its role, model,
+endpoint, error class and latency — a structured superset of the `manifest.log` line, so the
+error-class breakdown below can be answered without parsing prose.
 
 ---
 
@@ -420,7 +452,7 @@ Totals: **67,296 terminal outcomes — 34,643 OK, 32,653 ERROR** — plus 9,613 
 
 | Failure | Count |
 | --- | ---: |
-| **429 rate limit** | 27,662 |
+| **429 rate limit** | 27,662 |*
 | 403 Forbidden | 4,504 |
 | Model returned an empty reply | 144 |
 | DNS resolution failure | 130 |
@@ -434,6 +466,13 @@ Totals: **67,296 terminal outcomes — 34,643 OK, 32,653 ERROR** — plus 9,613 
 | **`deadline_seconds` exceeded while streaming** | 3 |
 | 409 Conflict | 2 |
 | Other socket errors | 5 |
+
+\* **This number cannot be broken down further.** These 27,662 are an
+undifferentiated pile: the harness that produced them did not read the
+`theclawbayError` discriminator, so nothing recorded whether a given 429 was an rpm rejection or
+a spent cost budget — and those demand opposite responses. That is the baseline the 2026-08-02
+model-layer change is measured against, and `model-calls.jsonl` is what makes the successor
+number decomposable.
 
 ::: danger Do not read all-time per-model failure rates as model quality
 They are artifacts of two provider outage days, not model behaviour. Per day:

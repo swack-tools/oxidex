@@ -30,6 +30,10 @@ from model_fix_loop import (
     _is_rejection_entry,
     _normalize_model_config,
     _quota_exhausted_message,
+    classify_429,
+    RATE_LIMIT_RPM,
+    RATE_LIMIT_TERMINAL_CAP,
+    RATE_LIMIT_WINDOW_CAP,
     _retry_after_seconds,
     _select_tier,
     _state_locked,
@@ -117,8 +121,10 @@ from model_fix_loop import (
     git_checkout_clean,
     git_commit,
     render_request_budget_footer,
+    endpoint_park,
+    endpoint_park_clear,
+    endpoint_park_remaining,
     governor_acquire,
-    governor_report,
     load_landed_tags,
     load_recent_sweep_reviews,
     load_toml_config,
@@ -292,8 +298,10 @@ class NormalizeModelConfigTests(unittest.TestCase):
         config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
         self.assertEqual(config["governor_calls_per_minute"], 30)
         self.assertEqual(config["governor_burst"], 5)
-        self.assertEqual(config["governor_cooldown_seconds"], 30)
-        self.assertEqual(config["governor_max_cooldown_seconds"], 300)
+        # No cooldown knobs: the fleet-wide cooldown they configured is
+        # gone. Backoff is per-worker and lives on call_model.
+        self.assertNotIn("governor_cooldown_seconds", config)
+        self.assertNotIn("governor_max_cooldown_seconds", config)
 
     def test_throughput_knobs_have_defaults(self):
         config = _normalize_model_config({"base_url": "u", "api_key": "k", "models": ["m"]})
@@ -990,6 +998,14 @@ class CallModelCachingTests(unittest.TestCase):
 
 
 class CallModelRetryTests(unittest.TestCase):
+    def setUp(self):
+        # _ENDPOINT_PARKED_UNTIL is module-global by design (one process =
+        # one worker). Tests share a process, so a park set by one would
+        # otherwise leak into the next.
+        endpoint_park_clear()
+
+    tearDown = setUp
+
     def _http_error(self, code):
         return urllib.error.HTTPError(
             url="https://api.example/v1/chat/completions", code=code,
@@ -1010,11 +1026,11 @@ class CallModelRetryTests(unittest.TestCase):
             [{"role": "user", "content": "fix it"}],
             base_url="https://api.example/v1", api_key="k", model="m",
             max_tokens=100, reasoning_effort="max",
-            sleep_fn=sleeps.append,
+            sleep_fn=sleeps.append, jitter_fn=lambda: 0.0,
         )
         self.assertEqual(result, "the diff")
         self.assertEqual(mock_urlopen.call_count, 3)
-        # Exponential: 2s then 4s.
+        # Exponential: 2s then 4s (jitter_fn=0 isolates the curve).
         self.assertEqual(sleeps, [2, 4])
 
     @patch("model_fix_loop.urllib.request.urlopen")
@@ -1041,7 +1057,7 @@ class CallModelRetryTests(unittest.TestCase):
             [{"role": "user", "content": "fix it"}],
             base_url="https://api.example/v1", api_key="k", model="m",
             max_tokens=100, reasoning_effort="max",
-            sleep_fn=sleeps.append,
+            sleep_fn=sleeps.append, jitter_fn=lambda: 0.0,
         )
         self.assertEqual(result, "the diff")
         self.assertEqual(mock_urlopen.call_count, 3)
@@ -1141,11 +1157,30 @@ class CallModelRetryTests(unittest.TestCase):
                 base_url="https://api.example/v1", api_key="k", model="m",
                 max_tokens=100, reasoning_effort="max",
                 max_retries=5, retry_backoff_seconds=10, max_retry_backoff_seconds=25,
-                sleep_fn=sleeps.append,
+                sleep_fn=sleeps.append, jitter_fn=lambda: 0.0,
             )
         # 10, 20, capped at 25, 25, 25 -- never allowed to keep doubling
-        # past max_retry_backoff_seconds.
+        # past max_retry_backoff_seconds. jitter_fn=0 isolates the curve;
+        # the jitter riding on top of it is covered in RetryAfterTests.
         self.assertEqual(sleeps, [10, 20, 25, 25, 25])
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_the_cap_bounds_the_curve_not_the_jitter(self, mock_urlopen):
+        # Full jitter can push one wait past max_retry_backoff_seconds, and
+        # must: the cap exists to stop the curve exploding, not to
+        # re-synchronise workers onto a shared ceiling. Capping the jittered
+        # value would put every capped worker back in lockstep.
+        mock_urlopen.side_effect = self._http_error(500)
+        sleeps = []
+        with self.assertRaises(urllib.error.HTTPError):
+            call_model(
+                [{"role": "user", "content": "fix it"}],
+                base_url="https://api.example/v1", api_key="k", model="m",
+                max_tokens=100, reasoning_effort="max",
+                max_retries=3, retry_backoff_seconds=10, max_retry_backoff_seconds=25,
+                sleep_fn=sleeps.append, jitter_fn=lambda: 1.0,
+            )
+        self.assertEqual(sleeps, [20, 40, 50])
 
     @patch("model_fix_loop.urllib.request.urlopen")
     def test_max_retries_default_is_high_not_unlimited(self, mock_urlopen):
@@ -1189,7 +1224,7 @@ class CallModelRetryTests(unittest.TestCase):
         self.assertEqual(reply, "hi")
 
     @patch("model_fix_loop.urllib.request.urlopen")
-    def test_governor_is_acquired_per_attempt_and_reported(self, mock_urlopen):
+    def test_governor_slot_is_acquired_per_attempt(self, mock_urlopen):
         ok_body = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode()
         ok_cm = MagicMock()
         ok_cm.read.return_value = ok_body
@@ -1198,20 +1233,16 @@ class CallModelRetryTests(unittest.TestCase):
         mock_urlopen.side_effect = [self._http_error(429), ok_response]
         with tempfile.TemporaryDirectory() as tmpdir:
             gov = Path(tmpdir) / "gov.json"
-            # cooldown_seconds=0: the 429 must still be REPORTED (streak
-            # increments, then the success resets it) without creating a
-            # real-wall-clock cooldown this test would have to sit out --
-            # cooldown waiting itself is covered by RateGovernorTests with
-            # injected clocks.
             call_model(
                 [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "max",
                 sleep_fn=lambda s: None, governor_path=gov,
-                governor_cooldown_seconds=0, governor_max_cooldown_seconds=0,
             )
             state = json.loads(gov.read_text())
-        # limited once (the 429) then reset by the success
-        self.assertEqual(state["consecutive_limited"], 0)
-        self.assertLess(state["tokens"], DEFAULT_GOVERNOR_BURST)  # slots were spent
+        # Two attempts, two slots -- the rpm budget still counts every call.
+        self.assertLess(state["tokens"], DEFAULT_GOVERNOR_BURST)
+        # ...but nothing global was set as a REACTION to the 429.
+        self.assertNotIn("cooldown_until", state)
+        self.assertNotIn("consecutive_limited", state)
 
 
 class CallModelDeadlineTests(unittest.TestCase):
@@ -1223,6 +1254,14 @@ class CallModelDeadlineTests(unittest.TestCase):
     configured timeout=1200. deadline_seconds is the wall-clock bound that
     actually cuts that off.
     """
+    def setUp(self):
+        # _ENDPOINT_PARKED_UNTIL is module-global by design (one process =
+        # one worker). Tests share a process, so a park set by one would
+        # otherwise leak into the next.
+        endpoint_park_clear()
+
+    tearDown = setUp
+
 
     def _sse(self, *texts):
         return [
@@ -1260,10 +1299,10 @@ class CallModelDeadlineTests(unittest.TestCase):
         self.assertEqual(mock_urlopen.call_count, 2)
 
     @patch("model_fix_loop.urllib.request.urlopen")
-    def test_deadline_is_reported_to_governor_as_not_rate_limited(self, mock_urlopen):
-        # A slow provider is not a rate limit. Reporting it as one would
-        # put the whole fleet into a global cooldown over one sluggish
-        # call, which is the opposite of what should happen.
+    def test_deadline_is_not_treated_as_a_rate_limit(self, mock_urlopen):
+        # A slow provider is not a rate limit. Treating it as one would
+        # park the endpoint over one sluggish call, which is the opposite
+        # of what should happen.
         slow_cm = MagicMock()
         slow_cm.__iter__.return_value = iter(self._sse("a", "b", "c"))
         slow_ctx = MagicMock()
@@ -1285,9 +1324,7 @@ class CallModelDeadlineTests(unittest.TestCase):
                     stream=True, deadline_seconds=15, sleep_fn=lambda s: None,
                     governor_path=gov,
                 )
-            state = json.loads(gov.read_text())
-        self.assertEqual(state["consecutive_limited"], 0)
-        self.assertEqual(state["cooldown_until"], 0.0)
+        self.assertEqual(endpoint_park_remaining("https://u"), 0.0)
 
     @patch("model_fix_loop.urllib.request.urlopen")
     def test_gives_up_after_max_retries_on_persistent_slowness(self, mock_urlopen):
@@ -1375,6 +1412,14 @@ class CallModelDeadlineTests(unittest.TestCase):
 class RetryAfterTests(unittest.TestCase):
     """A 429's Retry-After is the server stating its own wait window --
     strictly better information than any backoff curve we can guess."""
+    def setUp(self):
+        # _ENDPOINT_PARKED_UNTIL is module-global by design (one process =
+        # one worker). Tests share a process, so a park set by one would
+        # otherwise leak into the next.
+        endpoint_park_clear()
+
+    tearDown = setUp
+
 
     def test_parses_delta_seconds(self):
         self.assertEqual(_retry_after_seconds({"Retry-After": "30"}), 30.0)
@@ -1400,60 +1445,226 @@ class RetryAfterTests(unittest.TestCase):
         )
         self.assertEqual(_retry_after_seconds({"Retry-After": past}), 0.0)
 
-    def test_retry_after_raises_the_cooldown_floor(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            gov = Path(tmpdir) / "gov.json"
-            # Exponential backoff would be 5s and the cap 10s; the server
-            # asked for 300s, which must win -- capping our own guessing
-            # is not a reason to ignore an explicit instruction.
-            governor_report(gov, limited=True, cooldown_seconds=5,
-                            max_cooldown_seconds=10, now_fn=lambda: 1000.0,
-                            retry_after_seconds=300)
-            state = json.loads(gov.read_text())
-        self.assertEqual(state["cooldown_until"], 1300.0)
+    def _429_with_retry_after(self, value):
+        return urllib.error.HTTPError(
+            url="https://api.example/v1/chat/completions", code=429,
+            msg="Too Many Requests", hdrs={"Retry-After": value},
+            fp=io.BytesIO(b'{"error": {"message": "Rate limit reached"}}'),
+        )
 
-    def test_smaller_retry_after_does_not_lower_the_cooldown(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            gov = Path(tmpdir) / "gov.json"
-            governor_report(gov, limited=True, cooldown_seconds=60,
-                            max_cooldown_seconds=300, now_fn=lambda: 1000.0,
-                            retry_after_seconds=5)
-            state = json.loads(gov.read_text())
-        self.assertEqual(state["cooldown_until"], 1060.0)
+    def _ok(self):
+        cm = MagicMock()
+        cm.read.return_value = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode()
+        ctx = MagicMock()
+        ctx.__enter__.return_value = cm
+        return ctx
 
     @patch("model_fix_loop.urllib.request.urlopen")
-    def test_429_retry_after_reaches_the_governor(self, mock_urlopen):
-        err = urllib.error.HTTPError(
-            url="https://api.example/v1/chat/completions", code=429,
-            msg="Too Many Requests", hdrs={"Retry-After": "240"}, fp=None,
+    def test_retry_after_raises_this_workers_next_delay(self, mock_urlopen):
+        # Exponential backoff would be 2s; the server asked for 240s, and
+        # its own statement beats any curve we could guess.
+        mock_urlopen.side_effect = [self._429_with_retry_after("240"), self._ok()]
+        sleeps = []
+        call_model(
+            [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "low",
+            sleep_fn=sleeps.append, jitter_fn=lambda: 0.0,
         )
-        ok_cm = MagicMock()
-        ok_cm.read.return_value = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode()
-        ok_ctx = MagicMock()
-        ok_ctx.__enter__.return_value = ok_cm
-        mock_urlopen.side_effect = [err, ok_ctx]
+        self.assertEqual(sleeps, [240.0])
 
-        seen = {}
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_smaller_retry_after_does_not_lower_the_backoff(self, mock_urlopen):
+        # Backoff at attempt 3 is 2*2**2 = 8s; a 5s Retry-After must not
+        # shorten it.
+        mock_urlopen.side_effect = [
+            self._429_with_retry_after("5"),
+            self._429_with_retry_after("5"),
+            self._429_with_retry_after("5"),
+            self._ok(),
+        ]
+        sleeps = []
+        call_model(
+            [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "low",
+            sleep_fn=sleeps.append, jitter_fn=lambda: 0.0,
+        )
+        self.assertEqual(sleeps, [5.0, 5.0, 8.0])
 
-        def fake_report(path, limited, cooldown_seconds=None, max_cooldown_seconds=None,
-                        now_fn=None, retry_after_seconds=None):
-            if limited:
-                seen["retry_after"] = retry_after_seconds
-
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_a_429_delay_is_local_and_never_touches_shared_state(self, mock_urlopen):
+        # §0.4 rule 4: one worker's rejection must not pause another. The
+        # only thing the shared file records is the rpm slot that was spent.
+        mock_urlopen.side_effect = [self._429_with_retry_after("240"), self._ok()]
         with tempfile.TemporaryDirectory() as tmpdir:
             gov = Path(tmpdir) / "gov.json"
-            with patch("model_fix_loop.governor_report", fake_report):
-                call_model(
-                    [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "low",
-                    sleep_fn=lambda s: None, governor_path=gov,
-                )
-        self.assertEqual(seen["retry_after"], 240.0)
+            call_model(
+                [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "low",
+                sleep_fn=lambda s: None, governor_path=gov, jitter_fn=lambda: 0.0,
+            )
+            state = json.loads(gov.read_text())
+        self.assertEqual(set(state), {"tokens", "last_refill"})
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_backoff_carries_full_jitter_so_workers_do_not_phase_lock(self, mock_urlopen):
+        # Without jitter, N workers rejected in the same instant compute the
+        # same delay and retry in the same instant -- a synchronised burst
+        # is exactly the shape a rate limiter rejects.
+        mock_urlopen.side_effect = [self._http_error(429), self._http_error(429), self._ok()]
+        sleeps = []
+        call_model(
+            [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "low",
+            sleep_fn=sleeps.append, jitter_fn=lambda: 1.0,
+        )
+        # base 2s and 4s, each doubled by a full-jitter draw of 1.0
+        self.assertEqual(sleeps, [4.0, 8.0])
+
+    def _http_error(self, code=429):
+        return urllib.error.HTTPError(
+            url="https://u", code=code, msg="Too Many Requests", hdrs=None,
+            fp=io.BytesIO(b'{"error": {"message": "Rate limit reached"}}'),
+        )
+
+
+class Classify429Tests(unittest.TestCase):
+    """Every branch of the discriminator that decides whether the fleet
+    stalls for a week. A fake response object and a table of payloads --
+    no network, no sleeping."""
+
+    def _err(self, code, body):
+        return urllib.error.HTTPError(
+            url="https://u", code=code, msg="Too Many Requests", hdrs=None,
+            fp=io.BytesIO(json.dumps(body).encode()),
+        )
+
+    def test_weekly_cap_is_terminal(self):
+        kind, msg = classify_429(self._err(429, {
+            "code": "weekly_cost_limit_reached",
+            "theclawbayError": {"category": "quota", "code": "weekly_cost_limit_reached",
+                                "retryable": False},
+        }))
+        self.assertEqual(kind, RATE_LIMIT_TERMINAL_CAP)
+        self.assertIn("weekly_cost_limit_reached", msg)
+
+    def test_5h_cap_is_a_window_cap_not_a_terminal_one(self):
+        kind, _ = classify_429(self._err(429, {
+            "code": "5h_cost_limit_reached",
+            "theclawbayError": {"category": "quota", "code": "5h_cost_limit_reached",
+                                "retryable": False},
+        }))
+        self.assertEqual(kind, RATE_LIMIT_WINDOW_CAP)
+
+    def test_invalid_api_key_is_terminal(self):
+        kind, _ = classify_429(self._err(429, {
+            "code": "invalid_api_key",
+            "theclawbayError": {"code": "invalid_api_key", "retryable": False},
+        }))
+        self.assertEqual(kind, RATE_LIMIT_TERMINAL_CAP)
+
+    def test_plain_rpm_rejection_is_rpm(self):
+        kind, msg = classify_429(self._err(429, {
+            "error": {"message": "Rate limit reached for gpt-5.5", "type": "rate_limit_error"},
+        }))
+        self.assertEqual(kind, RATE_LIMIT_RPM)
+        self.assertIsNone(msg)
+
+    def test_an_unparseable_body_is_rpm(self):
+        # Asymmetric on purpose: wrongly retrying a permanent condition
+        # costs one park interval; wrongly giving up on a transient one
+        # costs the work.
+        err = urllib.error.HTTPError(url="https://u", code=429, msg="x", hdrs=None,
+                                     fp=io.BytesIO(b"<html>nope</html>"))
+        self.assertEqual(classify_429(err)[0], RATE_LIMIT_RPM)
+
+    def test_a_non_list_non_dict_body_is_rpm(self):
+        self.assertEqual(classify_429(self._err(429, ["nope"]))[0], RATE_LIMIT_RPM)
+
+    def test_a_non_429_is_not_classified_here(self):
+        self.assertEqual(classify_429(self._err(500, {"code": "weekly_cost_limit_reached"})),
+                         (None, None))
+
+
+class ModelCallEventTests(unittest.TestCase):
+    """The structured emission the dashboard reads. One event per ATTEMPT,
+    carrying the error class -- 'how many of those were rpm and how many
+    were a spent budget' must be answerable without parsing prose."""
+
+    def setUp(self):
+        endpoint_park_clear()
+
+    tearDown = setUp
+
+    def _ok(self):
+        cm = MagicMock()
+        cm.read.return_value = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode()
+        ctx = MagicMock()
+        ctx.__enter__.return_value = cm
+        return ctx
+
+    def _err(self, code, body):
+        return urllib.error.HTTPError(
+            url="https://u", code=code, msg="x", hdrs=None,
+            fp=io.BytesIO(json.dumps(body).encode()),
+        )
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_every_attempt_is_emitted_with_role_model_endpoint_and_class(self, mock_urlopen):
+        mock_urlopen.side_effect = [
+            self._err(429, {"error": {"message": "Rate limit reached"}}),
+            self._ok(),
+        ]
+        events = []
+        call_model(
+            [{"role": "user", "content": "x"}], "https://gw", "k", "gpt-5.6-sol", 4096, "low",
+            sleep_fn=lambda s: None, role="reviewer", event_fn=events.append,
+        )
+        self.assertEqual([e["outcome"] for e in events], ["error", "ok"])
+        self.assertEqual(events[0]["error_class"], RATE_LIMIT_RPM)
+        self.assertIsNone(events[1]["error_class"])
+        for e in events:
+            self.assertEqual(e["role"], "reviewer")
+            self.assertEqual(e["model"], "gpt-5.6-sol")
+            self.assertEqual(e["endpoint"], "https://gw")
+            self.assertIsInstance(e["latency_s"], float)
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_a_cost_cap_is_emitted_with_its_own_class(self, mock_urlopen):
+        mock_urlopen.side_effect = self._err(429, {
+            "code": "weekly_cost_limit_reached",
+            "theclawbayError": {"category": "quota", "code": "weekly_cost_limit_reached",
+                                "retryable": False},
+        })
+        events = []
+        with self.assertRaises(ModelQuotaExhausted):
+            call_model(
+                [{"role": "user", "content": "x"}], "https://gw", "k", "m", 4096, "low",
+                sleep_fn=lambda s: None, role="fixer", event_fn=events.append,
+            )
+        self.assertEqual([e["error_class"] for e in events], [RATE_LIMIT_TERMINAL_CAP])
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_a_broken_sink_never_fails_the_call(self, mock_urlopen):
+        # Telemetry is not load-bearing. A call that succeeded must not be
+        # turned into a failure by the thing recording it.
+        mock_urlopen.side_effect = [self._ok()]
+        def explode(_event):
+            raise OSError("disk full")
+        reply = call_model(
+            [{"role": "user", "content": "x"}], "https://gw", "k", "m", 4096, "low",
+            sleep_fn=lambda s: None, event_fn=explode,
+        )
+        self.assertEqual(reply, "hi")
 
 
 class QuotaExhaustedTests(unittest.TestCase):
     """A 429 meaning "account out of budget" must fail fast, not ride the
     retry ladder. Providers overload 429 for both throttling and billing;
     only the first is worth waiting out."""
+    def setUp(self):
+        # _ENDPOINT_PARKED_UNTIL is module-global by design (one process =
+        # one worker). Tests share a process, so a park set by one would
+        # otherwise leak into the next.
+        endpoint_park_clear()
+
+    tearDown = setUp
+
 
     # Trimmed from a real theclawbay.com 429 captured 2026-07-25.
     REAL_BODY = {
@@ -1497,78 +1708,102 @@ class QuotaExhaustedTests(unittest.TestCase):
         self.assertIsNone(_quota_exhausted_message(self._http_error(500, self.REAL_BODY)))
 
     @patch("model_fix_loop.urllib.request.urlopen")
-    def test_quota_429_is_retried_like_any_other_429(self, mock_urlopen):
-        # Policy: ALL 429s retry, quota included. The token bucket's global
-        # cooldown is what paces the wait, so the fleet resumes by itself
-        # once the billing window rolls over.
+    def test_a_cost_cap_is_never_retried(self, mock_urlopen):
+        # THE policy. Retrying a spent budget cannot make budget appear:
+        # the window has to roll over. One call, then out.
+        mock_urlopen.side_effect = self._http_error(429, self.REAL_BODY)
+        with self.assertRaises(ModelQuotaExhausted):
+            call_model(
+                [{"role": "user", "content": "x"}], "https://u", "k", "gpt-5.5", 4096, "medium",
+                max_retries=1000, sleep_fn=lambda s: None,
+            )
+        self.assertEqual(mock_urlopen.call_count, 1)
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_a_weekly_cap_parks_only_that_endpoint_in_only_this_process(self, mock_urlopen):
+        # What replaces the global cooldown: the worker rides out the
+        # window on the offending endpoint alone. No other endpoint, and
+        # nothing outside this process, is affected.
+        mock_urlopen.side_effect = self._http_error(429, self.REAL_BODY)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gov = Path(tmpdir) / "gov.json"
+            with self.assertRaises(ModelQuotaExhausted):
+                call_model(
+                    [{"role": "user", "content": "x"}], "https://capped", "k", "m", 4096,
+                    "medium", sleep_fn=lambda s: None, governor_path=gov,
+                    terminal_cap_park_seconds=1800,
+                )
+            state = json.loads(gov.read_text())
+        self.assertAlmostEqual(endpoint_park_remaining("https://capped"), 1800, delta=5)
+        self.assertEqual(endpoint_park_remaining("https://other"), 0.0)
+        # Nothing fleet-wide was written.
+        self.assertEqual(set(state), {"tokens", "last_refill"})
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_a_5h_cap_parks_for_a_shorter_window_than_a_weekly_one(self, mock_urlopen):
+        body = {
+            "error": "5h cost limit reached for this account",
+            "code": "5h_cost_limit_reached",
+            "theclawbayError": {"category": "quota", "code": "5h_cost_limit_reached",
+                                "retryable": False},
+        }
+        mock_urlopen.side_effect = self._http_error(429, body)
+        with self.assertRaises(ModelQuotaExhausted) as ctx:
+            call_model(
+                [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "medium",
+                sleep_fn=lambda s: None,
+                window_cap_park_seconds=300, terminal_cap_park_seconds=3600,
+            )
+        self.assertEqual(ctx.exception.kind, RATE_LIMIT_WINDOW_CAP)
+        self.assertAlmostEqual(endpoint_park_remaining("https://u"), 300, delta=5)
+
+    @patch("model_fix_loop.urllib.request.urlopen")
+    def test_a_parked_endpoint_is_waited_out_not_hammered(self, mock_urlopen):
         ok_cm = MagicMock()
         ok_cm.read.return_value = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode()
         ok_ctx = MagicMock()
         ok_ctx.__enter__.return_value = ok_cm
-        mock_urlopen.side_effect = [
-            self._http_error(429, self.REAL_BODY),
-            self._http_error(429, self.REAL_BODY),
-            ok_ctx,
-        ]
+        mock_urlopen.side_effect = [ok_ctx]
+        endpoint_park("https://u", 900)
+        sleeps = []
         reply = call_model(
-            [{"role": "user", "content": "x"}], "https://u", "k", "gpt-5.5", 4096, "medium",
-            max_retries=10, sleep_fn=lambda s: None,
+            [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "medium",
+            sleep_fn=sleeps.append,
         )
         self.assertEqual(reply, "hi")
-        self.assertEqual(mock_urlopen.call_count, 3)
+        # It waited the park out once rather than calling straight through.
+        self.assertEqual(len(sleeps), 1)
+        self.assertAlmostEqual(sleeps[0], 900, delta=5)
 
     @patch("model_fix_loop.urllib.request.urlopen")
-    def test_quota_429_does_pace_the_fleet_via_the_token_bucket(self, mock_urlopen):
-        # Since we now wait rather than bail, the global cooldown must be
-        # set -- that is the whole mechanism keeping a quota-blocked fleet
-        # from hot-looping against the provider.
-        mock_urlopen.side_effect = self._http_error(429, self.REAL_BODY)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            gov = Path(tmpdir) / "gov.json"
-            # cooldown_seconds=0: the quota 429 must still be REPORTED as
-            # limited without this test sitting out a real cooldown --
-            # governor_acquire busy-waits against the wall clock when
-            # sleep_fn is a no-op. The cooldown arithmetic itself is
-            # covered directly in RetryAfterTests.
-            with self.assertRaises(ModelQuotaExhausted):
-                call_model(
-                    [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "medium",
-                    max_retries=2, sleep_fn=lambda s: None, governor_path=gov,
-                    governor_cooldown_seconds=0, governor_max_cooldown_seconds=0,
-                )
-            state = json.loads(gov.read_text())
-        # limited on every attempt -- this streak is what drives the
-        # exponential global cooldown in a real run.
-        self.assertEqual(state["consecutive_limited"], 3)
-
-    @patch("model_fix_loop.urllib.request.urlopen")
-    def test_names_billing_as_the_cause_once_retries_are_spent(self, mock_urlopen):
-        # A bare "HTTP Error 429" after a long ride-out sends an operator
-        # looking at rate limits when the answer is billing.
+    def test_names_billing_as_the_cause(self, mock_urlopen):
+        # A bare "HTTP Error 429" sends an operator looking at rate limits
+        # when the answer is billing.
         mock_urlopen.side_effect = self._http_error(429, self.REAL_BODY)
         with self.assertRaises(ModelQuotaExhausted) as ctx:
             call_model(
                 [{"role": "user", "content": "x"}], "https://u", "k", "gpt-5.5", 4096, "medium",
-                max_retries=3, sleep_fn=lambda s: None,
+                sleep_fn=lambda s: None,
             )
-        # Every retry was still made -- naming the cause is not a shortcut.
-        self.assertEqual(mock_urlopen.call_count, 4)
+        self.assertEqual(ctx.exception.kind, RATE_LIMIT_TERMINAL_CAP)
         self.assertIn("gpt-5.5", str(ctx.exception))
         self.assertIn("weekly", str(ctx.exception).lower())
 
     @patch("model_fix_loop.urllib.request.urlopen")
-    def test_quota_retry_is_logged_distinctly_from_throttling(self, mock_urlopen):
+    def test_quota_is_logged_distinctly_from_throttling(self, mock_urlopen):
         ok_cm = MagicMock()
         ok_cm.read.return_value = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode()
         ok_ctx = MagicMock()
         ok_ctx.__enter__.return_value = ok_cm
         mock_urlopen.side_effect = [self._http_error(429, self.REAL_BODY), ok_ctx]
         logged = []
-        call_model(
-            [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "medium",
-            sleep_fn=lambda s: None, log_fn=logged.append,
-        )
-        self.assertTrue(any("quota exhausted" in m for m in logged), logged)
+        with self.assertRaises(ModelQuotaExhausted):
+            call_model(
+                [{"role": "user", "content": "x"}], "https://u", "k", "m", 4096, "medium",
+                sleep_fn=lambda s: None, log_fn=logged.append,
+            )
+        self.assertTrue(any(RATE_LIMIT_TERMINAL_CAP in m for m in logged), logged)
+        self.assertTrue(any("not retrying" in m for m in logged), logged)
 
     @patch("model_fix_loop.urllib.request.urlopen")
     def test_plain_rate_limit_429_is_not_labelled_as_quota(self, mock_urlopen):
@@ -8216,7 +8451,6 @@ class RateGovernorTests(unittest.TestCase):
 
     def test_none_path_is_a_noop(self):
         governor_acquire(None)  # must not raise or sleep
-        governor_report(None, limited=True)
 
     def test_burst_tokens_allow_immediate_calls_then_throttle(self):
         clock = [1000.0]
@@ -8240,46 +8474,34 @@ class RateGovernorTests(unittest.TestCase):
         self.assertGreater(sleeps[0], 0)
         self.assertLess(sleeps[0], 2.5)
 
-    def test_report_limited_sets_global_cooldown_acquire_waits_it_out(self):
-        clock = [1000.0]
-        sleeps = []
-
-        def now():
-            return clock[0]
-
-        def sleep(s):
-            sleeps.append(s)
-            clock[0] += s
-
-        governor_report(self.path, limited=True, cooldown_seconds=30,
-                        max_cooldown_seconds=300, now_fn=now)
+    def test_the_shared_state_holds_no_cooldown_at_all(self):
+        # The governor is an rpm BUDGET, not a reaction to failure. If it
+        # can express "everyone stop", one worker's 429 can pause the fleet
+        # again -- which is the defect this phase exists to remove.
         governor_acquire(self.path, calls_per_minute=60, burst=5,
-                         now_fn=now, sleep_fn=sleep, jitter_fn=lambda: 0.5)
-        self.assertTrue(sleeps)
-        self.assertGreaterEqual(sum(sleeps), 30 * 0.8)  # jitter can shave 20%
-
-    def test_consecutive_limited_reports_grow_the_cooldown_capped(self):
-        now_fn = lambda: 1000.0
-        for _ in range(10):
-            governor_report(self.path, limited=True, cooldown_seconds=30,
-                            max_cooldown_seconds=120, now_fn=now_fn)
+                         now_fn=lambda: 1000.0, sleep_fn=lambda s: None,
+                         jitter_fn=lambda: 0.5)
         state = json.loads(self.path.read_text())
-        self.assertLessEqual(state["cooldown_until"], 1000.0 + 120)
-        self.assertGreaterEqual(state["consecutive_limited"], 10)
+        self.assertEqual(set(state), {"tokens", "last_refill"})
 
-    def test_success_resets_the_streak(self):
-        now_fn = lambda: 1000.0
-        governor_report(self.path, limited=True, now_fn=now_fn)
-        governor_report(self.path, limited=False, now_fn=now_fn)
-        state = json.loads(self.path.read_text())
-        self.assertEqual(state["consecutive_limited"], 0)
+    def test_a_stale_state_file_from_an_older_build_is_ignored_not_honoured(self):
+        # A cooldown_until left behind by the previous version must not
+        # keep parking this one.
+        self.path.write_text(json.dumps({
+            "tokens": 5.0, "last_refill": 1000.0,
+            "cooldown_until": 9_999_999_999.0, "consecutive_limited": 7,
+        }))
+        sleeps = []
+        governor_acquire(self.path, calls_per_minute=60, burst=5,
+                         now_fn=lambda: 1000.0, sleep_fn=sleeps.append,
+                         jitter_fn=lambda: 0.5)
+        self.assertEqual(sleeps, [])
 
     def test_corrupt_state_file_recovers_permissively(self):
         self.path.write_text("{not json")
         governor_acquire(self.path, calls_per_minute=60, burst=5,
                          now_fn=lambda: 1000.0, sleep_fn=lambda s: None,
                          jitter_fn=lambda: 0.5)  # must not raise
-        governor_report(self.path, limited=False, now_fn=lambda: 1000.0)
         json.loads(self.path.read_text())  # now valid again
 
 

@@ -58,10 +58,18 @@ compaction_keep_recent_turns = 10
 # payloads whose own estimated size exceeds this floor are stubbed (default
 # 3000); smaller turns are left intact.
 compaction_min_elide_tokens = 3000
+# The governor is a steady-state rpm BUDGET shared by the fleet through one
+# flock-guarded token bucket -- how fast everyone is collectively allowed to
+# go. It does not react to failure: the fleet-wide cooldown it used to
+# impose on a 429 (governor_cooldown_seconds / governor_max_cooldown_seconds)
+# is gone, because one worker's rejection pausing every worker phase-locks
+# the fleet into a synchronised burst -- exactly the shape a rate limiter
+# rejects. Rate-limit reactions are per-worker (jittered backoff, honouring
+# Retry-After) and per-endpoint (a process-local park on a spent cost
+# budget). Both live in call_model. Setting the two removed keys here is
+# harmless and has no effect.
 governor_calls_per_minute = 30
 governor_burst = 5
-governor_cooldown_seconds = 30
-governor_max_cooldown_seconds = 300
 max_cluster_tags = 6
 use_sccache = true
 # claim_stale_seconds: a tag claim in the shared tag-state older than this
