@@ -252,6 +252,9 @@ pub enum FileFormat {
     /// Windows shortcut (.lnk)
     LNK,
 
+    /// Lytro Light Field Picture (.lfp, .lfr)
+    LFP,
+
     /// SQLite database (.db, .sqlite, .sqlite3)
     SQLite,
 
@@ -378,6 +381,7 @@ impl FileFormat {
             FileFormat::ICS => "iCalendar",
             FileFormat::EML => "EML",
             FileFormat::TXT => "TXT",
+            FileFormat::LFP => "LFP",
             FileFormat::LNK => "Windows Shortcut",
             FileFormat::SQLite => "SQLite",
             FileFormat::Prefetch => "Windows Prefetch",
@@ -478,6 +482,7 @@ impl FileFormat {
             FileFormat::ICS => &["ics", "ical"],
             FileFormat::EML => &["eml", "email"],
             FileFormat::TXT => &["txt", "text"],
+            FileFormat::LFP => &["lfp", "lfr"],
             FileFormat::LNK => &["lnk"],
             FileFormat::SQLite => &["db", "sqlite", "sqlite3"],
             FileFormat::Prefetch => &["pf"],
