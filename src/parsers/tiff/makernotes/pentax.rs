@@ -277,27 +277,59 @@ const_decoder!(pub FLASH_MODE,
 );
 
 // Focus mode decoder - maps values to autofocus modes
+// FocusMode (0x000D), transcribed from Pentax.pm:1165-1206 (the non-Asahi
+// variant, which is every body in the corpus). ExifTool's table is PrintHex
+// and sparse -- 0..0x0c, then 0x10-0x12, 0x20-0x21, 0x110-0x120, and a
+// macro-flagged block at 0x8003-0x800b. The six dense entries that used to
+// live here shared their ids with ExifTool's but agreed with it on none of
+// them: id 2 was "Manual" here and "Infinity" in ExifTool, 3 was
+// "AF-S (Single)" here and "Manual" there.
 const_decoder!(pub FOCUS_MODE,
     i32,
     [
-        (0, "Normal (AF)"),
-        (1, "Macro (AF)"),
-        (2, "Manual"),
-        (3, "AF-S (Single)"),
-        (4, "AF-C (Continuous)"),
-        (5, "AF-A (Auto)"),
+        (0x0, "Normal"),
+        (0x1, "Macro"),
+        (0x2, "Infinity"),
+        (0x3, "Manual"),
+        (0x4, "Super Macro"),
+        (0x5, "Pan Focus"),
+        (0x6, "Auto-area"),
+        (0x7, "Zone Select"),
+        (0x8, "Select"),
+        (0x9, "Pinpoint"),
+        (0xa, "Tracking"),
+        (0xb, "Continuous"),
+        (0xc, "Snap"),
+        (0x10, "AF-S (Focus-priority)"),
+        (0x11, "AF-C (Focus-priority)"),
+        (0x12, "AF-A (Focus-priority)"),
+        (0x20, "Contrast-detect (Focus-priority)"),
+        (0x21, "Tracking Contrast-detect (Focus-priority)"),
+        (0x110, "AF-S (Release-priority)"),
+        (0x111, "AF-C (Release-priority)"),
+        (0x112, "AF-A (Release-priority)"),
+        (0x120, "Contrast-detect (Release-priority)"),
+        (0x8003, "Manual (Macro)"),
+        (0x8006, "Auto-area (Macro)"),
+        (0x8007, "Zone Select (Macro)"),
+        (0x8008, "Select (Macro)"),
+        (0x8009, "Pinpoint (Macro)"),
+        (0x800a, "Tracking (Macro)"),
+        (0x800b, "Continuous (Macro)"),
     ]
 );
 
 // Metering mode decoder - maps values to exposure metering modes
+// MeteringMode (0x0017), Pentax.pm:1364-1374. ExifTool spells value 1 with a
+// lower-case "average", and its fourth entry is Highlight at 6 -- there is
+// nothing at 3 or 4.
 const_decoder!(pub METERING_MODE,
     i32,
     [
         (0, "Multi-segment"),
-        (1, "Center-weighted Average"),
+        (1, "Center-weighted average"),
         (2, "Spot"),
-        (3, "Average"),
-        (4, "Highlight-weighted"),
+        (6, "Highlight"),
     ]
 );
 
@@ -327,6 +359,9 @@ const_decoder!(pub WHITE_BALANCE,
 );
 
 // White balance mode decoder - maps values to WB modes
+// WhiteBalanceMode (0x001A), Pentax.pm:1385-1400. Value 10 is Cloudy, not a
+// second Flash, and the two 0xfffe/0xffff sentinels were missing -- a
+// user-set white balance reported "Unknown (65535)".
 const_decoder!(pub WHITE_BALANCE_MODE,
     i32,
     [
@@ -337,7 +372,9 @@ const_decoder!(pub WHITE_BALANCE_MODE,
         (6, "Auto (Daylight Fluorescent)"),
         (7, "Auto (Day White Fluorescent)"),
         (8, "Auto (White Fluorescent)"),
-        (10, "Auto (Flash)"),
+        (10, "Auto (Cloudy)"),
+        (0xfffe, "Unknown"),
+        (0xffff, "User-Selected"),
     ]
 );
 
@@ -483,10 +520,8 @@ const_decoder!(pub IMAGE_TONE, i32, [
     (11, "Flat"), (12, "Auto"),
 ]);
 
-// Noise reduction decoder
-const_decoder!(pub NOISE_REDUCTION, i32, [
-    (0, "Off"), (1, "On (Weak)"), (2, "On"), (3, "On (Strong)"), (4, "Auto"),
-]);
+// NoiseReduction (0x0049), Pentax.pm:2183-2188: a plain Off/On.
+const_decoder!(pub NOISE_REDUCTION, i32, [(0, "Off"), (1, "On"),]);
 
 // High ISO noise reduction decoder
 const_decoder!(pub HIGH_ISO_NOISE_REDUCTION, i32, [
@@ -515,20 +550,40 @@ const_decoder!(pub SHADOW_CORRECTION, i32, [
 const_decoder!(pub FINE_SHARPNESS, i32, [(0, "Off"), (1, "On"),]);
 
 // Shutter type decoder
-const_decoder!(pub SHUTTER_TYPE, i32, [(0, "Mechanical"), (1, "Electronic"),]);
+// ShutterType (0x0087), Pentax.pm:2649-2655: value 0 is "Normal".
+const_decoder!(pub SHUTTER_TYPE, i32, [(0, "Normal"), (1, "Electronic"),]);
 
 // Neutral density filter decoder
 const_decoder!(pub NEUTRAL_DENSITY_FILTER, i32, [(0, "Off"), (1, "On"),]);
 
-// Monochrome filter effect decoder
+// MonochromeFilterEffect (0x0073), Pentax.pm:2456-2469. The old table was
+// off by one -- 1 was "Yellow" here and "Green" in ExifTool, and so on down
+// -- and "None" is 0xffff, not 0.
 const_decoder!(pub MONOCHROME_FILTER_EFFECT, i32, [
-    (0, "None"), (1, "Yellow"), (2, "Orange"), (3, "Red"), (4, "Magenta"),
-    (5, "Blue"), (6, "Cyan"), (7, "Green"), (8, "Yellow-green"), (9, "Infrared"),
+    (1, "Green"),
+    (2, "Yellow"),
+    (3, "Orange"),
+    (4, "Red"),
+    (5, "Magenta"),
+    (6, "Blue"),
+    (7, "Cyan"),
+    (8, "Infrared"),
+    (65535, "None"),
 ]);
 
-// Monochrome toning decoder
+// MonochromeToning (0x0074), Pentax.pm:2470-2484: a -4..+4 scale, not a set
+// of colour names.
 const_decoder!(pub MONOCHROME_TONING, i32, [
-    (0, "None"), (1, "Sepia"), (2, "Blue"), (3, "Purple"), (4, "Green"),
+    (0, "-4"),
+    (1, "-3"),
+    (2, "-2"),
+    (3, "-1"),
+    (4, "0"),
+    (5, "1"),
+    (6, "2"),
+    (7, "3"),
+    (8, "4"),
+    (65535, "None"),
 ]);
 
 // Face detect decoder
@@ -559,10 +614,29 @@ const_decoder!(pub BLEACH_BYPASS_TONING, i32, [
     (0, "Off"), (1, "Green"), (2, "Yellow"), (3, "Orange"),
 ]);
 
-// Raw development process decoder
+// RawDevelopmentProcess (0x0062), Pentax.pm:2251-2277. ExifTool names each
+// version after the bodies that use it, and there is no version 2.
 const_decoder!(pub RAW_DEVELOPMENT_PROCESS, i32, [
-    (1, "Ver. 1"), (2, "Ver. 2"), (3, "Ver. 3"), (4, "Ver. 4"),
-    (5, "Ver. 5"), (6, "Ver. 6"), (7, "Ver. 7"),
+    (1, "1 (K10D,K200D,K2000,K-m)"),
+    (3, "3 (K20D)"),
+    (4, "4 (K-7)"),
+    (5, "5 (K-x)"),
+    (6, "6 (645D)"),
+    (7, "7 (K-r)"),
+    (8, "8 (K-5,K-5II,K-5IIs)"),
+    (9, "9 (Q)"),
+    (10, "10 (K-01,K-30,K-50,K-500)"),
+    (11, "11 (Q10)"),
+    (12, "12 (MX-1,Q-S1,Q7)"),
+    (13, "13 (K-3,K-3II)"),
+    (14, "14 (645Z)"),
+    (15, "15 (K-S1,K-S2)"),
+    (16, "16 (K-1)"),
+    (17, "17 (K-70)"),
+    (18, "18 (KP)"),
+    (19, "19 (GR III)"),
+    (20, "20 (K-3III)"),
+    (21, "21 (K-3IIIMonochrome)"),
 ]);
 
 // Lens correction decoder
@@ -2874,11 +2948,102 @@ mod tests {
         assert_eq!(PICTURE_MODE.decode(5), "Landscape");
     }
 
+    // Every string asserted below was read out of ExifTool's own PrintConv
+    // hash, dumped from the Perl symbol table (ExifTool 13.59) -- not out of
+    // an earlier revision of this file. The ids are the ones oxidex and
+    // ExifTool used to disagree on, so restoring a table fails the test.
+
+    /// FocusMode (0x000D), Pentax.pm:1165-1206. Not a near-miss: the old
+    /// six-entry table shared ids 0..5 with ExifTool's and agreed on none of
+    /// them, and it had no entry at all for the 0x10/0x110 blocks that every
+    /// DSLR in the corpus actually writes.
     #[test]
     fn test_decode_focus_mode() {
-        assert_eq!(FOCUS_MODE.decode(2), "Manual");
-        assert_eq!(FOCUS_MODE.decode(3), "AF-S (Single)");
-        assert_eq!(FOCUS_MODE.decode(4), "AF-C (Continuous)");
+        assert_eq!(FOCUS_MODE.decode(0), "Normal");
+        assert_eq!(FOCUS_MODE.decode(1), "Macro");
+        assert_eq!(FOCUS_MODE.decode(2), "Infinity");
+        assert_eq!(FOCUS_MODE.decode(3), "Manual");
+        assert_eq!(FOCUS_MODE.decode(4), "Super Macro");
+        assert_eq!(FOCUS_MODE.decode(5), "Pan Focus");
+        assert_eq!(FOCUS_MODE.decode(0x10), "AF-S (Focus-priority)");
+        assert_eq!(FOCUS_MODE.decode(0x11), "AF-C (Focus-priority)");
+        assert_eq!(FOCUS_MODE.decode(0x110), "AF-S (Release-priority)");
+        assert_eq!(
+            FOCUS_MODE.decode(0x120),
+            "Contrast-detect (Release-priority)"
+        );
+        assert_eq!(FOCUS_MODE.decode(0x8003), "Manual (Macro)");
+        assert_eq!(FOCUS_MODE.decode(0x800b), "Continuous (Macro)");
+        // The invented labels this replaced appear nowhere in the table now.
+        for id in 0..=0x8100 {
+            let s = FOCUS_MODE.decode(id);
+            assert!(
+                !s.contains("(Single)") && !s.contains("(Continuous)"),
+                "{id:#x} -> {s}"
+            );
+        }
+    }
+
+    /// MeteringMode (0x0017), Pentax.pm:1364-1374: lower-case "average", and
+    /// Highlight sits at 6 with nothing at 3 or 4.
+    #[test]
+    fn test_decode_metering_mode() {
+        assert_eq!(METERING_MODE.decode(0), "Multi-segment");
+        assert_eq!(METERING_MODE.decode(1), "Center-weighted average");
+        assert_eq!(METERING_MODE.decode(2), "Spot");
+        assert_eq!(METERING_MODE.decode(6), "Highlight");
+        assert_eq!(METERING_MODE.decode(3), "Unknown (3)");
+        assert_eq!(METERING_MODE.decode(4), "Unknown (4)");
+    }
+
+    /// WhiteBalanceMode (0x001A), Pentax.pm:1385-1400.
+    #[test]
+    fn test_decode_white_balance_mode() {
+        assert_eq!(WHITE_BALANCE_MODE.decode(10), "Auto (Cloudy)");
+        assert_eq!(WHITE_BALANCE_MODE.decode(0xfffe), "Unknown");
+        assert_eq!(WHITE_BALANCE_MODE.decode(0xffff), "User-Selected");
+    }
+
+    /// RawDevelopmentProcess (0x0062), Pentax.pm:2251-2277: each version is
+    /// named after the bodies that use it, and there is no version 2.
+    #[test]
+    fn test_decode_raw_development_process() {
+        assert_eq!(
+            RAW_DEVELOPMENT_PROCESS.decode(1),
+            "1 (K10D,K200D,K2000,K-m)"
+        );
+        assert_eq!(RAW_DEVELOPMENT_PROCESS.decode(6), "6 (645D)");
+        assert_eq!(RAW_DEVELOPMENT_PROCESS.decode(16), "16 (K-1)");
+        assert_eq!(RAW_DEVELOPMENT_PROCESS.decode(21), "21 (K-3IIIMonochrome)");
+        assert_eq!(RAW_DEVELOPMENT_PROCESS.decode(2), "Unknown (2)");
+    }
+
+    /// ShutterType (0x0087) and NoiseReduction (0x0049): Pentax.pm:2649 and
+    /// :2183. Neither has the extra strength levels oxidex used to print.
+    #[test]
+    fn test_decode_shutter_type_and_noise_reduction() {
+        assert_eq!(SHUTTER_TYPE.decode(0), "Normal");
+        assert_eq!(SHUTTER_TYPE.decode(1), "Electronic");
+        assert_eq!(NOISE_REDUCTION.decode(0), "Off");
+        assert_eq!(NOISE_REDUCTION.decode(1), "On");
+        assert_eq!(NOISE_REDUCTION.decode(2), "Unknown (2)");
+    }
+
+    /// MonochromeFilterEffect (0x0073) and MonochromeToning (0x0074):
+    /// Pentax.pm:2456-2484. The filter table was off by one and "None" is
+    /// 0xffff; toning is a -4..+4 scale, not a set of colour names.
+    #[test]
+    fn test_decode_monochrome_tables() {
+        assert_eq!(MONOCHROME_FILTER_EFFECT.decode(1), "Green");
+        assert_eq!(MONOCHROME_FILTER_EFFECT.decode(2), "Yellow");
+        assert_eq!(MONOCHROME_FILTER_EFFECT.decode(8), "Infrared");
+        assert_eq!(MONOCHROME_FILTER_EFFECT.decode(0xffff), "None");
+        assert_eq!(MONOCHROME_FILTER_EFFECT.decode(0), "Unknown (0)");
+
+        assert_eq!(MONOCHROME_TONING.decode(0), "-4");
+        assert_eq!(MONOCHROME_TONING.decode(4), "0");
+        assert_eq!(MONOCHROME_TONING.decode(8), "4");
+        assert_eq!(MONOCHROME_TONING.decode(0xffff), "None");
     }
 
     #[test]
