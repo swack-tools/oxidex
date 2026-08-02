@@ -240,7 +240,7 @@ pub fn is_supported_file(path: &Path) -> bool {
 /// # Returns
 ///
 /// BatchStats with counts of successful reads and errors
-fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
+pub fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
     let file_count = files.len();
 
     // Create progress bar
@@ -308,7 +308,7 @@ fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
 /// # Returns
 ///
 /// BatchStats with counts of successful updates and errors
-fn batch_write(
+pub fn batch_write(
     files: Vec<PathBuf>,
     modifications: &[(String, String)],
     args: &CliArgs,
@@ -543,15 +543,128 @@ fn output_json_results(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    match serde_json::to_string_pretty(&json_array) {
-        Ok(json_str) => {
-            println!("{}", json_str);
-            Ok(())
+    // serde_json's Map is a plain BTreeMap here (this crate doesn't enable the
+    // "preserve_order" feature), so it always iterates keys alphabetically --
+    // inserting "SourceFile" cannot make it serialize first the way ExifTool's
+    // `-j` does. Render the array by hand so SourceFile leads each object.
+    print_json_array_with_source_file_first(&json_array);
+    Ok(())
+}
+
+/// Serializes `objects` as a pretty-printed JSON array, printing each
+/// object's `SourceFile` key first (as ExifTool's `-j` does) and every other
+/// key in its existing (alphabetical) order after it.
+fn print_json_array_with_source_file_first(objects: &[serde_json::Value]) {
+    let mut out = String::from("[\n");
+    for (i, obj) in objects.iter().enumerate() {
+        out.push_str("  ");
+        match obj.as_object() {
+            Some(map) => out.push_str(&ordered_object_to_json(map, 2)),
+            None => out.push_str(&obj.to_string()),
         }
-        Err(e) => Err(ExifToolError::parse_error(format!(
-            "Failed to serialize JSON: {}",
-            e
-        ))),
+        if i + 1 < objects.len() {
+            out.push(',');
+        }
+        out.push('\n');
+    }
+    out.push(']');
+    println!("{}", out);
+}
+
+/// Renders a JSON object with `SourceFile` (if present) as the first key,
+/// at the given indent level (spaces before each `"key": value` line).
+fn ordered_object_to_json(
+    map: &serde_json::Map<String, serde_json::Value>,
+    indent: usize,
+) -> String {
+    if map.is_empty() {
+        return "{}".to_string();
+    }
+
+    let inner_indent = indent + 2;
+    let inner_pad = " ".repeat(inner_indent);
+
+    let mut ordered: Vec<(&str, &serde_json::Value)> = Vec::with_capacity(map.len());
+    if let Some(v) = map.get("SourceFile") {
+        ordered.push(("SourceFile", v));
+    }
+    for (k, v) in map.iter() {
+        if k != "SourceFile" {
+            ordered.push((k.as_str(), v));
+        }
+    }
+
+    let mut out = String::from("{\n");
+    for (i, (key, value)) in ordered.iter().enumerate() {
+        out.push_str(&inner_pad);
+        out.push_str(&serde_json::to_string(key).unwrap_or_default());
+        out.push_str(": ");
+        out.push_str(&reindent_pretty_json(value, inner_indent));
+        if i + 1 < ordered.len() {
+            out.push(',');
+        }
+        out.push('\n');
+    }
+    out.push_str(&" ".repeat(indent));
+    out.push('}');
+    out
+}
+
+/// Pretty-prints a JSON value, shifting every line after the first over by
+/// `indent` spaces so a multi-line value (an array or nested object) lines
+/// up under the key that introduces it.
+fn reindent_pretty_json(value: &serde_json::Value, indent: usize) -> String {
+    let rendered = serde_json::to_string_pretty(value).unwrap_or_default();
+    let mut lines = rendered.lines();
+    let Some(first) = lines.next() else {
+        return rendered;
+    };
+    let pad = " ".repeat(indent);
+    let mut result = first.to_string();
+    for line in lines {
+        result.push('\n');
+        result.push_str(&pad);
+        result.push_str(line);
+    }
+    result
+}
+
+#[cfg(test)]
+mod json_ordering_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn source_file_is_always_first_key() {
+        let objects = vec![json!({
+            "Zebra": "z",
+            "Apple": "a",
+            "SourceFile": "photo.jpg",
+        })];
+
+        let map = objects[0].as_object().unwrap();
+        let rendered = ordered_object_to_json(map, 2);
+        let source_pos = rendered.find("\"SourceFile\"").unwrap();
+        let apple_pos = rendered.find("\"Apple\"").unwrap();
+        let zebra_pos = rendered.find("\"Zebra\"").unwrap();
+        assert!(source_pos < apple_pos);
+        assert!(source_pos < zebra_pos);
+    }
+
+    #[test]
+    fn reindented_array_value_parses_back_identically() {
+        let objects = vec![json!({
+            "SourceFile": "photo.jpg",
+            "IPTC:Keywords": ["ExifTool", "Test"],
+        })];
+
+        let mut out = String::from("[\n  ");
+        out.push_str(&ordered_object_to_json(objects[0].as_object().unwrap(), 2));
+        out.push_str("\n]");
+
+        let reparsed: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        assert_eq!(reparsed[0]["IPTC:Keywords"], json!(["ExifTool", "Test"]));
+        assert_eq!(reparsed[0]["SourceFile"], json!("photo.jpg"));
     }
 }
 

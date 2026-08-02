@@ -205,6 +205,121 @@ fn assignment_args_with_date_option_prefix_reach_the_write_path() {
 }
 
 #[test]
+fn multiple_explicit_files_json_produces_one_object_per_file() {
+    // Regression: `oxidex -j a.jpg b.jpg` used to print a single JSON
+    // document -- the *last* file's tags with no SourceFile key at all --
+    // because CliArgs::file() only ever looked at the final positional
+    // argument. Every earlier file was silently dropped.
+    let output = oxidex(&[
+        "-json",
+        "tests/fixtures/jpeg/sample_with_exif.jpg",
+        "tests/fixtures/jpeg/sample_with_exif_xmp.jpg",
+    ]);
+    assert!(
+        output.status.success(),
+        "expected multi-file -json to succeed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let values: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("multi-file JSON stdout must contain only parseable JSON");
+    let items = values
+        .as_array()
+        .expect("multi-file JSON output must be an array");
+    assert_eq!(items.len(), 2, "expected exactly one object per input file");
+
+    let source_files: Vec<&str> = items
+        .iter()
+        .map(|item| {
+            item.get("SourceFile")
+                .and_then(|v| v.as_str())
+                .expect("every object must carry SourceFile")
+        })
+        .collect();
+    assert!(source_files[0].ends_with("sample_with_exif.jpg"));
+    assert!(source_files[1].ends_with("sample_with_exif_xmp.jpg"));
+    assert_ne!(
+        source_files[0], source_files[1],
+        "each object must be attributed to a distinct file"
+    );
+
+    let tag_sets: Vec<std::collections::BTreeSet<&str>> = items
+        .iter()
+        .map(|item| {
+            item.as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect()
+        })
+        .collect();
+    assert_ne!(
+        tag_sets[0], tag_sets[1],
+        "the two files' tag sets must not collapse into an identical result"
+    );
+
+    // serde_json's Map has no insertion-order tracking here (this crate
+    // doesn't enable the "preserve_order" feature), so re-parsing into
+    // `serde_json::Value` and reading `.keys()` would re-sort alphabetically
+    // and could never observe emission order either way. Check the raw text
+    // instead: within each object, "SourceFile" must be the first key line.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for object_text in stdout.split("  {").skip(1) {
+        let first_key_line = object_text
+            .lines()
+            .find(|line| line.trim_start().starts_with('"'))
+            .expect("object must have at least one key line");
+        assert!(
+            first_key_line.contains("\"SourceFile\""),
+            "SourceFile must be the first key, matching ExifTool's -j ordering; got: {first_key_line}"
+        );
+    }
+}
+
+#[test]
+fn multiple_explicit_files_csv_has_one_row_group_per_file() {
+    let output = oxidex(&[
+        "-csv",
+        "tests/fixtures/jpeg/sample_with_exif.jpg",
+        "tests/fixtures/jpeg/sample_with_exif_xmp.jpg",
+    ]);
+    assert!(
+        output.status.success(),
+        "expected multi-file -csv to succeed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("tests/fixtures/jpeg/sample_with_exif.jpg,"))
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("tests/fixtures/jpeg/sample_with_exif_xmp.jpg,"))
+    );
+}
+
+#[test]
+fn multiple_explicit_files_human_readable_has_one_header_per_file() {
+    let output = oxidex(&[
+        "tests/fixtures/jpeg/sample_with_exif.jpg",
+        "tests/fixtures/jpeg/sample_with_exif_xmp.jpg",
+    ]);
+    assert!(
+        output.status.success(),
+        "expected multi-file human-readable read to succeed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("File: tests/fixtures/jpeg/sample_with_exif.jpg"));
+    assert!(stdout.contains("File: tests/fixtures/jpeg/sample_with_exif_xmp.jpg"));
+}
+
+#[test]
 fn bare_tag_filter_starting_with_d_is_not_swallowed_by_date_option() {
     // Regression: `-datetimeoriginal` (a lowercase tag filter) was parsed as
     // the `-d` date-format option with an attached value, dumping all tags.
