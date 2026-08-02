@@ -796,6 +796,18 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
         }
     }
 
+    // Photo Mechanic's trailer is format-agnostic (ExifTool reads it from
+    // ProcessTrailers, not a JPEG-specific proc), so like Canon VRD it needs
+    // the whole file rather than the parsed segment list. It carries no
+    // IPTC either, so it runs here rather than before `process_iptc_segments`.
+    if let Ok(file) = reader.read(0, reader.size() as usize) {
+        for (key, value) in
+            crate::parsers::photo_mechanic::parse_photo_mechanic_trailer(file).iter()
+        {
+            metadata.insert(key.clone(), value.clone());
+        }
+    }
+
     // Process HDR and manufacturer-specific APP segments
     process_app3_segments(&segments, &mut metadata);
     // InfiRay IJPEG spreads its records over APP2-APP9; APP6 and APP8 are read

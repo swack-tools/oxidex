@@ -44,13 +44,6 @@ const VERSION_INFO: u16 = 0x0421; // Version info
 const IPTC_DIGEST: u16 = 0x0425; // IPTC digest
 const PRINT_SCALE_INFO: u16 = 0x0426; // Print scale info
 
-/// Trailing signature of a Photo Mechanic trailer.
-///
-/// `Image::ExifTool::PhotoMechanic::ProcessPhotoMechanic` validates the last
-/// twelve bytes of the file as `pack('N', $size) . 'cbipcbbl'`, then reads the
-/// `$size` bytes immediately before them as an IPTC-format directory.
-const PHOTO_MECHANIC_SIGNATURE: &[u8] = b"cbipcbbl";
-
 /// Parser for Adobe Photoshop (PSD) document files
 ///
 /// Extracts metadata from PSD files including dimensions, color mode, channels,
@@ -425,59 +418,6 @@ impl PSDParser {
         Ok(())
     }
 
-    /// Parse a Photo Mechanic trailer, when the file carries one.
-    ///
-    /// `Image::ExifTool::PhotoMechanic::ProcessPhotoMechanic`
-    /// (PhotoMechanic.pm:150-192) validates the final twelve bytes as a 4-byte
-    /// big-endian size followed by the literal `cbipcbbl`, then parses the
-    /// `size` bytes before that footer as IPTC records. Record 2 is the
-    /// SoftEdit table (PhotoMechanic.pm:61-97).
-    fn parse_photo_mechanic_trailer(reader: &dyn FileReader, metadata: &mut MetadataMap) {
-        const FOOTER_LEN: u64 = 12;
-
-        let file_size = reader.size();
-        if file_size < FOOTER_LEN {
-            return;
-        }
-
-        let Ok(footer) = reader.read(file_size - FOOTER_LEN, FOOTER_LEN as usize) else {
-            return;
-        };
-        if &footer[4..] != PHOTO_MECHANIC_SIGNATURE {
-            return;
-        }
-
-        let Some(size) = EndianReader::big_endian(footer).u32_at(0) else {
-            return;
-        };
-        // PhotoMechanic.pm:167 rejects a size with the high bit set.
-        if size & 0x8000_0000 != 0 {
-            return;
-        }
-        let size = size as u64;
-        if size == 0 || file_size < FOOTER_LEN + size {
-            return;
-        }
-
-        let Ok(data) = reader.read(file_size - FOOTER_LEN - size, size as usize) else {
-            return;
-        };
-        let Ok(records) = parse_all_iptc_records(data) else {
-            return;
-        };
-
-        for record in records {
-            // Only record 2 carries soft-edit information.
-            if record.record_number != 2 {
-                continue;
-            }
-            let Some((name, value)) = soft_edit_tag(record.dataset_number, &record.data) else {
-                continue;
-            };
-            metadata.insert(format!("PhotoMechanic:{name}"), value);
-        }
-    }
-
     /// Parse resolution info resource (0x03ED)
     ///
     /// `Image::ExifTool::Photoshop::Resolution` (Photoshop.pm:437-473) is a
@@ -816,7 +756,13 @@ impl FormatParser for PSDParser {
 
         // ProcessPSD finishes by handing the tail of the file to the trailer
         // scanners (Photoshop.pm:1226-1227).
-        Self::parse_photo_mechanic_trailer(reader, &mut metadata);
+        if let Ok(file) = reader.read(0, reader.size() as usize) {
+            for (key, value) in
+                crate::parsers::photo_mechanic::parse_photo_mechanic_trailer(file).iter()
+            {
+                metadata.insert(key.clone(), value.clone());
+            }
+        }
 
         Ok(metadata)
     }
@@ -862,85 +808,6 @@ fn format_exiftool_float(value: f32) -> String {
     } else {
         format!("{value}")
     }
-}
-
-/// Maps a Photo Mechanic SoftEdit dataset number to its ExifTool tag name and
-/// converted value.
-///
-/// Table: `Image::ExifTool::PhotoMechanic::SoftEdit` (PhotoMechanic.pm:61-97),
-/// whose `FORMAT => 'int32s'` makes every value here a 4-byte signed integer.
-///
-/// The raw and preview crop coordinates share `%rawCropConv`
-/// (PhotoMechanic.pm:52-58), which is `ValueConv => '$val / 655.36'` printed by
-/// `PrintConv => 'sprintf("%.3f%%",$val)'`. The remaining datasets are named
-/// without a conversion in the table and print as plain integers.
-fn soft_edit_tag(dataset: u8, data: &[u8]) -> Option<(&'static str, TagValue)> {
-    if data.len() < 4 {
-        return None;
-    }
-    let value = i32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-
-    // `%rawCropConv`, PhotoMechanic.pm:52-58.
-    let crop_percent = |raw: i32| TagValue::String(format!("{:.3}%", f64::from(raw) / 655.36));
-
-    let tag = match dataset {
-        209 => ("RawCropLeft", crop_percent(value)),
-        210 => ("RawCropTop", crop_percent(value)),
-        211 => ("RawCropRight", crop_percent(value)),
-        212 => ("RawCropBottom", crop_percent(value)),
-        213 => ("ConstrainedCropWidth", TagValue::Integer(value as i64)),
-        214 => ("ConstrainedCropHeight", TagValue::Integer(value as i64)),
-        215 => ("FrameNum", TagValue::Integer(value as i64)),
-        216 => {
-            // PrintConv { 0 => '0', 1 => '90', 2 => '180', 3 => '270' }
-            let label = match value {
-                0 => "0".to_string(),
-                1 => "90".to_string(),
-                2 => "180".to_string(),
-                3 => "270".to_string(),
-                other => format!("Unknown ({other})"),
-            };
-            ("Rotation", TagValue::String(label))
-        }
-        217 => ("CropLeft", TagValue::Integer(value as i64)),
-        218 => ("CropTop", TagValue::Integer(value as i64)),
-        219 => ("CropRight", TagValue::Integer(value as i64)),
-        220 => ("CropBottom", TagValue::Integer(value as i64)),
-        221 => {
-            // PrintConv { 0 => 'No', 1 => 'Yes' }
-            let label = match value {
-                0 => "No".to_string(),
-                1 => "Yes".to_string(),
-                other => format!("Unknown ({other})"),
-            };
-            ("Tagged", TagValue::String(label))
-        }
-        222 => {
-            // %colorClasses, PhotoMechanic.pm:23-33 -- the printed value
-            // already carries the numeric prefix.
-            let label = match value {
-                0 => "0 (None)".to_string(),
-                1 => "1 (Winner)".to_string(),
-                2 => "2 (Winner alt)".to_string(),
-                3 => "3 (Superior)".to_string(),
-                4 => "4 (Superior alt)".to_string(),
-                5 => "5 (Typical)".to_string(),
-                6 => "6 (Typical alt)".to_string(),
-                7 => "7 (Extras)".to_string(),
-                8 => "8 (Trash)".to_string(),
-                other => format!("Unknown ({other})"),
-            };
-            ("ColorClass", TagValue::String(label))
-        }
-        223 => ("Rating", TagValue::Integer(value as i64)),
-        236 => ("PreviewCropLeft", crop_percent(value)),
-        237 => ("PreviewCropTop", crop_percent(value)),
-        238 => ("PreviewCropRight", crop_percent(value)),
-        239 => ("PreviewCropBottom", crop_percent(value)),
-        _ => return None,
-    };
-
-    Some(tag)
 }
 
 /// Returns the offset of the IFD linked after `ifd_offset`.
@@ -1240,81 +1107,6 @@ mod image_resource_tests {
     }
 
     #[test]
-    fn soft_edit_datasets_apply_their_print_conversions() {
-        // PhotoMechanic.pm:61-97 plus %colorClasses (lines 23-33). Rotation and
-        // ColorClass are enum-mapped; the crop coordinates are plain integers.
-        assert_eq!(
-            soft_edit_tag(216, &2i32.to_be_bytes()),
-            Some(("Rotation", TagValue::String("180".to_string())))
-        );
-        assert_eq!(
-            soft_edit_tag(221, &1i32.to_be_bytes()),
-            Some(("Tagged", TagValue::String("Yes".to_string())))
-        );
-        assert_eq!(
-            soft_edit_tag(222, &6i32.to_be_bytes()),
-            Some((
-                "ColorClass",
-                TagValue::String("6 (Typical alt)".to_string())
-            ))
-        );
-        assert_eq!(
-            soft_edit_tag(217, &438i32.to_be_bytes()),
-            Some(("CropLeft", TagValue::Integer(438)))
-        );
-        assert_eq!(
-            soft_edit_tag(220, &1072i32.to_be_bytes()),
-            Some(("CropBottom", TagValue::Integer(1072)))
-        );
-        // A dataset the table does not name stays unreported rather than
-        // being guessed at.
-        assert_eq!(soft_edit_tag(224, &1000i32.to_be_bytes()), None);
-    }
-
-    #[test]
-    fn raw_and_preview_crops_print_as_percentages() {
-        // `%rawCropConv` (PhotoMechanic.pm:52-58) divides by 655.36 and prints
-        // with `sprintf("%.3f%%")`, so 65536 is exactly 100.000%. Verified
-        // against `exiftool -a -G1 -s` 13.55 on a PSD carrying these datasets.
-        assert_eq!(
-            soft_edit_tag(209, &65536i32.to_be_bytes()),
-            Some(("RawCropLeft", TagValue::String("100.000%".to_string())))
-        );
-        assert_eq!(
-            soft_edit_tag(210, &32768i32.to_be_bytes()),
-            Some(("RawCropTop", TagValue::String("50.000%".to_string())))
-        );
-        assert_eq!(
-            soft_edit_tag(239, &65536i32.to_be_bytes()),
-            Some((
-                "PreviewCropBottom",
-                TagValue::String("100.000%".to_string())
-            ))
-        );
-        assert_eq!(
-            soft_edit_tag(237, &0i32.to_be_bytes()),
-            Some(("PreviewCropTop", TagValue::String("0.000%".to_string())))
-        );
-    }
-
-    #[test]
-    fn constrained_crop_and_frame_number_print_as_plain_integers() {
-        // PhotoMechanic.pm:72-74 names 213/214/215 with no conversion.
-        assert_eq!(
-            soft_edit_tag(213, &1600i32.to_be_bytes()),
-            Some(("ConstrainedCropWidth", TagValue::Integer(1600)))
-        );
-        assert_eq!(
-            soft_edit_tag(214, &1200i32.to_be_bytes()),
-            Some(("ConstrainedCropHeight", TagValue::Integer(1200)))
-        );
-        assert_eq!(
-            soft_edit_tag(215, &7i32.to_be_bytes()),
-            Some(("FrameNum", TagValue::Integer(7)))
-        );
-    }
-
-    #[test]
     fn layer_count_and_compression_come_from_their_own_sections() {
         // Photoshop.pm:746-798 and 689-702. Lay out a minimal tail: a
         // layer-and-mask section of 6 bytes (4-byte inner length + int16s
@@ -1363,8 +1155,10 @@ mod image_resource_tests {
     }
 
     #[test]
-    fn photo_mechanic_trailer_is_read_from_the_end_of_the_file() {
-        // PhotoMechanic.pm:150-192: [IPTC records][4-byte size]["cbipcbbl"].
+    fn parse_reports_a_photo_mechanic_trailer_appended_after_the_psd() {
+        // ProcessPSD hands the tail of the file to the trailer scanners
+        // (Photoshop.pm:1226-1227); this exercises that wiring end to end
+        // rather than re-testing photo_mechanic's own trailer parsing.
         let mut iptc = Vec::new();
         for (dataset, value) in [(221u8, 1i32), (222, 6), (216, 2)] {
             iptc.extend_from_slice(&[0x1c, 0x02, dataset]);
@@ -1372,14 +1166,13 @@ mod image_resource_tests {
             iptc.extend_from_slice(&value.to_be_bytes());
         }
 
-        let mut file = b"8BPS padding that is not a trailer".to_vec();
+        let mut file = psd_with_resources(&[]);
         file.extend_from_slice(&iptc);
         file.extend_from_slice(&(iptc.len() as u32).to_be_bytes());
-        file.extend_from_slice(PHOTO_MECHANIC_SIGNATURE);
+        file.extend_from_slice(b"cbipcbbl");
 
         let reader = BufferedReader::from_bytes(&file);
-        let mut metadata = MetadataMap::new();
-        PSDParser::parse_photo_mechanic_trailer(&reader, &mut metadata);
+        let metadata = PSDParser.parse(&reader).unwrap();
 
         assert_eq!(
             metadata.get("PhotoMechanic:Tagged"),
@@ -1392,23 +1185,6 @@ mod image_resource_tests {
         assert_eq!(
             metadata.get("PhotoMechanic:Rotation"),
             Some(&TagValue::String("180".to_string()))
-        );
-    }
-
-    #[test]
-    fn a_file_without_the_signature_gets_no_photo_mechanic_tags() {
-        // The footer check is the only thing standing between arbitrary file
-        // tails and a fabricated PhotoMechanic group.
-        let file = vec![0u8; 64];
-        let reader = BufferedReader::from_bytes(&file);
-        let mut metadata = MetadataMap::new();
-        PSDParser::parse_photo_mechanic_trailer(&reader, &mut metadata);
-
-        assert!(
-            metadata
-                .iter()
-                .all(|(name, _)| !name.starts_with("PhotoMechanic:")),
-            "no trailer signature means no trailer tags"
         );
     }
 
