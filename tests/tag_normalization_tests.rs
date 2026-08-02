@@ -69,8 +69,8 @@ fn test_makernotes_unchanged() {
 
     // Fujifilm
     assert_eq!(
-        normalize_tag_family("Fujifilm:FilmMode"),
-        "Fujifilm:FilmMode"
+        normalize_tag_family("FujiFilm:FilmMode"),
+        "FujiFilm:FilmMode"
     );
 
     // Panasonic

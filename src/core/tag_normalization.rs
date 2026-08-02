@@ -29,7 +29,11 @@ static FAMILY_MAPPINGS: LazyLock<HashMap<&'static str, &'static str>> = LazyLock
     m.insert("Canon", "Canon");
     m.insert("Nikon", "Nikon");
     m.insert("Sony", "Sony");
-    m.insert("Fujifilm", "Fujifilm");
+    // Fixes any lingering lowercase-f "Fujifilm" family into ExifTool's actual
+    // module-name casing "FujiFilm" (Image::ExifTool::FujiFilm). The fujifilm
+    // parser itself now emits "FujiFilm:" directly, so this is a defensive
+    // fallback for any other producer that still uses the old spelling.
+    m.insert("Fujifilm", "FujiFilm");
     m.insert("Panasonic", "Panasonic");
     m.insert("Olympus", "Olympus");
     m.insert("Pentax", "Pentax");
