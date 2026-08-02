@@ -35,6 +35,7 @@
 
 #![allow(dead_code)]
 
+use crate::core::formatters::picture_type_name;
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
@@ -887,30 +888,11 @@ fn parse_picture_frame(data: &[u8], version: u8, metadata: &mut MetadataMap) -> 
     let picture_type = data[pos];
     pos += 1;
 
-    let picture_type_str = match picture_type {
-        0 => "Other",
-        1 => "32x32 PNG Icon",
-        2 => "Other Icon",
-        3 => "Front Cover",
-        4 => "Back Cover",
-        5 => "Leaflet",
-        6 => "Media",
-        7 => "Lead Artist",
-        8 => "Artist",
-        9 => "Conductor",
-        10 => "Band",
-        11 => "Composer",
-        12 => "Lyricist",
-        13 => "Recording Location",
-        14 => "During Recording",
-        15 => "During Performance",
-        16 => "Video Capture",
-        17 => "A Bright Coloured Fish",
-        18 => "Illustration",
-        19 => "Band Logotype",
-        20 => "Publisher Logotype",
-        _ => "Other",
-    };
+    // ExifTool's `%ID3::v2_3{'APIC-2'}` PrintConv; see
+    // `core::formatters::picture_type`. The table this file used to carry
+    // disagreed with it on seven labels, and -- worse -- fell back to "Other"
+    // for anything above 20, which is itself a real label for code 0.
+    let picture_type_str = picture_type_name(u32::from(picture_type));
 
     // Description (null-terminated, encoding-dependent)
     let description_end = if encoding == 1 || encoding == 2 {
