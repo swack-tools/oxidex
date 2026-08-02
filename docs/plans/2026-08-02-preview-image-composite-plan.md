@@ -13,9 +13,9 @@
 - **Never approximate a conversion** (AGENTS.md): every task below starts with a verification step against real ExifTool 13.59 source and/or corpus files. If verification fails or is ambiguous for a sub-case, omit that sub-case rather than guess — do not extend the task to cover it speculatively.
 - Oracle: `/usr/bin/perl5.34 -I/tmp/oxidex-exiftool-cache/exiftool/lib /tmp/oxidex-exiftool-cache/exiftool/exiftool` (13.59, pinned per PR #410). A bare `perl`/`exiftool` on PATH may be a different version — do not use it.
 - Corpus: `/tmp/oxidex-exiftool-cache/combined-samples/` (read-only — copy any file before a write test).
-- **Verified default-output contract** (already confirmed against real ExifTool, do not re-derive): when the preview bytes are readable, ExifTool's default (non-`-b`) output is exactly `(Binary data N bytes, use -b option to extract)` where N is the *actual readable byte count*, matching oxidex's existing `binary_placeholder()` at `src/cli/output_formatter.rs:61`. When the bytes are NOT readable (offset+length exceeds file size, or the read otherwise fails), ExifTool's `PreviewImage` composite path (`RawConv` → `ExtractImage` → `undef`) **omits the tag entirely** — only a `[minor] Error reading PreviewImage from file` warning is emitted, no tag at all. Verified empirically on `/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungDV150F.jpg` and `SamsungDV300.jpg`. This is **not** the same behavior as `ThumbnailImage`, which shows the placeholder even when the range is out of bounds (`src/core/tiff_helpers.rs:1018-1065`, `read_or_placeholder`) — that shortcut is specific to `ExtractBinary`'s pre-seek return path and does not apply here. Every task below must implement omit-on-failure, not placeholder-on-failure. **Do not reuse `read_or_placeholder`** for any task in this plan.
+- **CORRECTED default-output contract** (superseding an earlier draft of this section — see `.superpowers/sdd/2026-08-02-preview-image-composite-plan/task-1-report.md` for the full forensic trail). The original draft claimed `PreviewImage` omits entirely when unreadable, based on running `exiftool -PreviewImage <file>` (explicitly *requesting* the tag by name). That was a testing artifact: explicitly requesting a tag sets `$$self{REQ_TAG_LOOKUP}}` for it, which disables `ExtractBinary`'s pre-seek placeholder shortcut (`ExifTool.pm` ~line 9836) and forces a real seek/read that then fails and omits. **That is not how the tag-comparison harness or `oxidex -j -e` query files** — they do a full default-mode dump, not a single explicit `-PreviewImage` request. Re-verified in full-dump mode (`exiftool -G1 -s -a -u <file>`, no explicit `-PreviewImage`) on two independently-sourced out-of-bounds files: `LeicaCL.jpg` (`IFD2:PreviewImageStart`=7064224 in a 50,939-byte file) and `SamsungDV150F.jpg` (MPImage2-embedded pair) — **both show the placeholder** `(Binary data N bytes, use -b option to extract)` with the *declared* length, not an omission, despite `-b` returning 0 bytes and `-validate` warning "past end of file" / "[minor] Error reading PreviewImage from file" for both. This is the **same** mechanism already implemented for `ThumbnailImage` in `read_or_placeholder` (`src/core/tiff_helpers.rs:1048-1065`): `ExtractBinary`'s shortcut returns the placeholder *before* ever seeking, in every default-dump case, so truncation/OOB is invisible to the tag's presence — only its correctness once someone passes `-b`. **Every task in this plan must therefore reuse (or exactly mirror) `read_or_placeholder`'s placeholder-on-failure behavior for the declared-length case, not the Sigma omit-on-OOB pattern.** The one exception: if a specific mechanism's *own* extraction code doesn't go through `Exif.pm`'s shared `ExtractImage`/`ExtractBinary` at all (e.g. a hand-written per-vendor Rust port of a custom `RawConv`), that mechanism's on-failure behavior must be independently verified with a full-dump command (not a single explicit `-TagName` request) before assuming either placeholder or omission — do not generalize Sigma's existing omit behavior to a new mechanism without that check.
 - `TagValue::new_binary(bytes)` stores real bytes; the CLI's existing `binary_placeholder()` formatting turns any `TagValue::Binary` into the correct default-mode string. Insert the real bytes (like `src/parsers/tiff/makernotes/sigma.rs:134-137` does), not a pre-rendered placeholder string — that keeps `-b` extraction correct too and is consistent with the rest of the codebase.
-- Every insert must be gated: omit entirely when the offset+length pair is absent, zero-length, or would read past the end of the available buffer/file. Model each gate on `src/parsers/tiff/makernotes/sigma.rs:129-138` (`tiff.get(start..start+length)` — `None` on OOB, tag skipped) or an equivalent bounds check against `reader.size()`.
+- Every insert must still be gated on the offset+length pair being present and non-zero-length (omit when either is absent or length is 0 — that part is unchanged and matches ExifTool's `return undef if not $len` in `ExtractImage`, `Exif.pm:6224`). What differs per mechanism is what happens when the pair IS present but the range is out-of-bounds: for any mechanism that routes through `Exif.pm`'s shared `ExtractImage`/`ExtractBinary` (Tasks 1 and 4), that's placeholder-on-failure — use `read_or_placeholder` (`src/core/tiff_helpers.rs:1048-1065`). For a mechanism with its own hand-written value transform that never does a file seek at all (Sigma's existing code, Task 3's Sony case), an unmatched/invalid value is a validation failure, not a read failure, and omission remains correct there — but this must be confirmed per mechanism with a full-dump (`-G1 -s -a -u`, not a single explicit `-TagName`) command against a real corpus file, not assumed by analogy.
 - Leave `src/composite/tables.rs:369` (the `PreviewImage` Composite table entry) untouched. It is inert by design — "a composite whose computation is not implemented simply never fires" is the documented contract in `src/composite/compute.rs:8`. No task in this plan should add a `("Exif", "PreviewImage")` arm to `compute()`; that arm can never be correct because `compute()` has no file access.
 - Measure every task with the exiftool-parity workflow: `just compare-exiftool-format <FORMAT>` (or `python3 tools/exiftool-tables/conformance.py <corpus> --exiftool-dir /tmp/oxidex-exiftool-cache/exiftool --oxidex target/release/oxidex`) before and after. Require `missing_in_oxidex` count strictly lower and `regressions` empty; quote the real `exiftool -G1 -s` value for at least one fixed file in the commit message.
 - `cargo fmt --all` and `cargo clippy` before each commit. Commit with `git -c commit.gpgsign=false commit --no-gpg-sign`. Never `git add -A`.
@@ -25,7 +25,7 @@
 
 ## Task 1: IFD2 PreviewImage (JPEG-embedded Leica-style preview)
 
-**Verification status:** VERIFIED. `Exif.pm:707-768` (tag `0x117`, paired with `0x111` via `OffsetPair`) shows the default `StripOffsets`/`StripByteCounts` condition explicitly excludes `$$self{TIFF_TYPE} eq 'APP1' and $$self{DIR_NAME} eq 'IFD2'` (comment: "APP1 IFD2 is for Leica JPEG preview"). That exclusion falls through to the next condition in the array, `$$self{DIR_NAME} ne 'SubIFD2'` (true for `IFD2`), which names the pair `PreviewImageStart`/`PreviewImageLength` with `DataTag => 'PreviewImage'`. So: **in a JPEG's embedded TIFF/EXIF structure, tag `0x0111`/`0x0117` inside the `IFD2` directory is `PreviewImageStart`/`PreviewImageLength`, not `StripOffsets`/`StripByteCounts`.**
+**Verification status:** VERIFIED. `Exif.pm:707-768` (tag `0x117`, paired with `0x111` via `OffsetPair`) shows the default `StripOffsets`/`StripByteCounts` condition explicitly excludes `$$self{TIFF_TYPE} eq 'APP1' and $$self{DIR_NAME} eq 'IFD2'` (comment: "APP1 IFD2 is for Leica JPEG preview"). That exclusion falls through to the next condition in the array, `$$self{DIR_NAME} ne 'SubIFD2'` (true for `IFD2`), which names the pair `PreviewImageStart`/`PreviewImageLength` with `DataTag => 'PreviewImage'`. So: **in a JPEG's embedded TIFF/EXIF structure, tag `0x0111`/`0x0117` inside the `IFD2` directory is `PreviewImageStart`/`PreviewImageLength`, not `StripOffsets`/`StripByteCounts`.** Ground-truth confirmed on `LeicaCL.jpg`: `IFD2:PreviewImageStart`=7064224, `IFD2:PreviewImageLength`=895146, `IFD2:PreviewImage`=`(Binary data 895146 bytes, use -b option to extract)` — even though 7064224 is past this 50,939-byte file's end (see Global Constraints' corrected default-output contract: this is the **placeholder-on-failure** case, not omission).
 
 **Files:**
 - Modify: `src/core/tiff_helpers.rs` — `process_tiff_ifd_tags` (starts line 282) and `parse_ifd_chain` (starts line 174)
@@ -63,15 +63,27 @@ fn ifd2_preview_image_start_length_pair_becomes_preview_image() {
 }
 
 #[test]
-fn ifd2_preview_image_omitted_when_out_of_bounds() {
+fn ifd2_preview_image_shows_placeholder_when_out_of_bounds() {
     // Same shape, but PreviewImageLength points past the end of the buffer.
-    let buffer = build_tiff_with_ifd2_preview_oob();
+    // Real ExifTool still reports the tag here (LeicaCL.jpg ground truth:
+    // IFD2:PreviewImageStart=7064224 in a 50,939-byte file, yet
+    // IFD2:PreviewImage is the placeholder, not omitted) because
+    // ExtractBinary's shortcut returns the declared-length placeholder
+    // before ever seeking. Mirror ThumbnailImage's `read_or_placeholder`.
+    let declared_length = 895146u64;
+    let buffer = build_tiff_with_ifd2_preview_oob(declared_length);
     let reader = crate::io::buffered_reader::BufferedReader::from_bytes(&buffer);
     let mut metadata = MetadataMap::new();
 
     parse_ifd_chain(&reader, TIFF_HEADER_SIZE, ByteOrder::LittleEndian, &mut metadata).unwrap();
 
-    assert!(metadata.get("IFD2:PreviewImage").is_none());
+    assert_eq!(
+        metadata.get("IFD2:PreviewImage"),
+        Some(&TagValue::new_string(format!(
+            "(Binary data {} bytes, use -b option to extract)",
+            declared_length
+        )))
+    );
 }
 ```
 
@@ -92,15 +104,12 @@ In `parse_ifd_chain`, after the existing `makernote_data` handling (after line 2
 if ifd_name == "IFD2"
     && let Some((start, length)) = preview_offset_length
     && length > 0
-    && let Some(end) = start.checked_add(length)
-    && end <= reader.size()
-    && let Ok(bytes) = reader.read(start, length as usize)
 {
-    metadata.insert("IFD2:PreviewImage", TagValue::new_binary(bytes.to_vec()));
+    metadata.insert("IFD2:PreviewImage", read_or_placeholder(reader, start, length));
 }
 ```
 
-(Destructure the fourth tuple element from `process_tiff_ifd_tags`'s return at line 191-192 as `preview_offset_length`.) This mirrors `src/parsers/tiff/makernotes/sigma.rs:129-138`'s omit-on-OOB gate, not `read_or_placeholder`'s placeholder-on-OOB behavior — per the Global Constraints, this tag omits rather than placeholders when unreadable.
+(Destructure the fourth tuple element from `process_tiff_ifd_tags`'s return at line 191-192 as `preview_offset_length`.) **Use the existing `read_or_placeholder` helper (`src/core/tiff_helpers.rs:1048-1065`) directly** — do not write a new bounds-check function and do not omit on failure. Per the corrected Global Constraints, `PreviewImage` shows the declared-length placeholder in the default dump even when the range is out of bounds, exactly like `ThumbnailImage` already does; `read_or_placeholder` already implements exactly this.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -114,14 +123,14 @@ cargo build --release --bin oxidex
 just compare-exiftool-format JPEG
 ```
 
-Cross-check at least one real IFD2-preview corpus file by hand:
+Cross-check against `LeicaCL.jpg`, which is the confirmed ground-truth fixture for this task (out-of-bounds, so it exercises the placeholder path, not just the happy path):
 
 ```bash
-/usr/bin/perl5.34 -I/tmp/oxidex-exiftool-cache/exiftool/lib /tmp/oxidex-exiftool-cache/exiftool/exiftool -G1 -s -PreviewImage <file>
-./target/release/oxidex -j -e <file> | grep -A1 PreviewImage
+/usr/bin/perl5.34 -I/tmp/oxidex-exiftool-cache/exiftool/lib /tmp/oxidex-exiftool-cache/exiftool/exiftool -G1 -s -a -u /tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaCL.jpg | grep -i preview
+./target/release/oxidex -j -e /tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaCL.jpg | grep -A1 PreviewImage
 ```
 
-Confirm `missing_in_oxidex` for JPEG dropped by the IFD2 count and `regressions` is empty.
+Expect both to show `IFD2:PreviewImage` (or `EXIF:PreviewImage` in oxidex's family-0 view) as `(Binary data 895146 bytes, use -b option to extract)`. Do NOT use a bare `-PreviewImage` explicit tag request for this check — it disables ExifTool's placeholder shortcut and gives a false omission read (this is exactly the mistake the plan's original draft made; see the corrected Global Constraints). Confirm `missing_in_oxidex` for JPEG dropped by the IFD2 count and `regressions` is empty.
 
 - [ ] **Step 6: Commit**
 
@@ -132,9 +141,12 @@ git -c commit.gpgsign=false commit --no-gpg-sign -m "fix(tiff): name IFD2 0x111/
 Exif.pm:707-768 excludes APP1's IFD2 (Leica JPEG preview) from the
 generic StripOffsets/StripByteCounts naming; the pair is
 PreviewImageStart/PreviewImageLength there instead, and DataTag
-PreviewImage reads the bytes they point at. Omits (not placeholders)
-when out of bounds, per PreviewImage's Composite/ExtractImage
-semantics, verified against SamsungDV150F.jpg and SamsungDV300.jpg."
+PreviewImage reads the bytes they point at. Uses read_or_placeholder
+(same as ThumbnailImage), showing the declared-length placeholder even
+out of bounds, per PreviewImage's ExtractImage/ExtractBinary
+semantics -- verified against LeicaCL.jpg, whose IFD2:PreviewImageStart
+(7064224) is past its 50,939-byte file end yet ExifTool still reports
+the placeholder in default-dump mode."
 ```
 
 ---
@@ -455,7 +467,7 @@ If no CR2 or DNG sample exists in the cache, do not guess the byte layout from s
 
 - [ ] **Step 3-7: TDD implementation, per whichever call path Step 1 identifies**
 
-Follow the same shape as Task 1 Steps 1-6 (failing test with a synthetic file → bounds-checked extraction → omit on OOB → real-corpus verification → commit), scoped separately to CR2 IFD0 and to DNG's non-`SubIFD2` directories per the two verified conditions above. Do not write this task's implementation code until Step 1's file-path investigation and Step 2's corpus check are both complete — filling in the file paths and byte layout from source reading alone would violate this plan's "never approximate" constraint, since oxidex's actual RAW-parser structure is the unverified part, not the ExifTool-side rule.
+Follow the same shape as Task 1 Steps 1-6 (failing test with a synthetic file → bounds-checked extraction using `read_or_placeholder`, placeholder-on-failure like Task 1, NOT omit-on-OOB — this is the same `Exif.pm` `ExtractImage`/`ExtractBinary` mechanism as Task 1, see the corrected Global Constraints → real-corpus verification → commit), scoped separately to CR2 IFD0 and to DNG's non-`SubIFD2` directories per the two verified conditions above. Do not write this task's implementation code until Step 1's file-path investigation and Step 2's corpus check are both complete — filling in the file paths and byte layout from source reading alone would violate this plan's "never approximate" constraint, since oxidex's actual RAW-parser structure is the unverified part, not the ExifTool-side rule.
 
 ---
 
@@ -490,6 +502,8 @@ Identify at least one real, non-truncated sample per vendor where ExifTool succe
 - [ ] **Step 3-7: TDD implementation, per vendor**
 
 Once Steps 1-2 produce concrete tag IDs and at least one verified sample per vendor, implement each following the same shape as Task 3 (Sony): a small binary-aware extraction function taking the raw MakerNote bytes and `&mut MetadataMap`, wired in outside the string-only `MakerNoteParser` dispatcher the same way Sigma and Sony are (`src/core/tiff_helpers.rs:1146-1163` is the wiring point — extend the `if parse_sigma_makernote_if_sigma(...) { return; }` chain with one check per additional vendor that needs binary output). Write the failing test first, using the byte layout Step 1 confirmed — do not write extraction code for any vendor whose tag definition Step 1 could not pin down precisely; split it into its own follow-up task instead of guessing.
+
+**On-failure behavior is not settled for this task and must come out of Step 1, not be assumed:** `%previewImageTagInfo` (`ExifTool.pm:1268-1280`) only supplies a generic `RawConv => ValidateImage(...)` — it does not by itself tell you whether Casio/Olympus/Minolta's `PreviewImage` is a directly-inlined MakerNote value (Sony/Sigma-shaped: no file seek, so omit-on-mismatch is right) or an `IsOffset`+separate-length pair that still routes through `Exif.pm`'s shared `ExtractImage`/`ExtractBinary` (Task 1/4-shaped: placeholder-on-failure is right). Step 1 must determine which for each vendor by reading whether their tag table entry carries `IsOffset`/`OffsetPair`, and Step 2 must confirm the actual on-failure behavior with a full-dump command on a real out-of-bounds sample if one exists in the corpus, the same way Task 1 did for `LeicaCL.jpg`.
 
 ---
 
