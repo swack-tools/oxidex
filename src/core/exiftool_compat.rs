@@ -57,7 +57,9 @@
 //! ```
 
 use crate::core::binary_decoders::decode_user_comment;
-use crate::core::formatters::exif_print_conv::{print_exposure_time, print_fraction};
+use crate::core::formatters::exif_print_conv::{
+    print_exposure_time, print_f_number, print_fraction,
+};
 use crate::core::formatters::gps_speed_ref::format_gps_dest_distance_ref;
 use crate::core::formatters::gps_status::{
     format_gps_differential, format_gps_measure_mode, format_gps_status,
@@ -833,6 +835,38 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     }
 
     // ---------------------------------------------------------------------
+    // Rule 19f: FNumber (Exif.pm:1853-1858)
+    //     0x829d => { Name => 'FNumber', Writable => 'rational64u',
+    //                 PrintConv => 'Image::ExifTool::Exif::PrintFNumber($val)',
+    //                 PrintConvInv => '$val' }
+    //
+    // 0x829d had no arm at all, so its rational fell through to Rule 20's
+    // `%.10g` quotient. That drops the decimal place ExifTool's `%.1f` keeps
+    // (`4` where ExifTool prints `4.0` -- 964 sample-corpus files) and prints
+    // the full stored expansion where ExifTool rounds (`2.638671875` for
+    // `2.6`, `0.640234375` for `0.64` -- another 71).
+    //
+    // This is a *display* conversion, and 0x829d has no ValueConv: the
+    // Composite `Aperture` (Exif.pm:4782, `ValueConv => '$val[0] || $val[1]'`)
+    // reads the raw quotient, not this string, and applies `PrintFNumber`
+    // itself. Composites are derived before `format_tag_value` runs at all --
+    // `composite::lookup_key` reads the stored `TagValue` -- so this arm
+    // cannot reach them, which the corpus run confirms: no `Composite:*` value
+    // changes.
+    // ---------------------------------------------------------------------
+    if base_name == "FNumber"
+        && let TagValue::Rational {
+            numerator,
+            denominator,
+        } = value
+        && *denominator != 0
+    {
+        return TagValue::String(print_f_number(
+            f64::from(*numerator) / f64::from(*denominator),
+        ));
+    }
+
+    // ---------------------------------------------------------------------
     // Rule 20: PrintConv-less rationals
     //
     // A rational that reaches this point carries no PrintConv of its own, and
@@ -1526,6 +1560,70 @@ mod tests {
             format_tag_value("ExifIFD:Flash", &TagValue::new_integer(0x38)),
             TagValue::String("Unknown (0x38)".to_string())
         );
+    }
+
+    /// The dispatch, not just the formatter.
+    ///
+    /// `print_f_number` being right proves nothing on its own: 0x829d had no
+    /// arm in this chain at all, so its rational reached Rule 20 and printed
+    /// the `%.10g` quotient. 1,035 sample-corpus files reported `4` where
+    /// ExifTool reports `4.0`, and `0.640234375` where it reports `0.64`.
+    #[test]
+    fn fnumber_reaches_print_fnumber_from_its_rational() {
+        let rational = |n: i32, d: i32| TagValue::Rational {
+            numerator: n,
+            denominator: d,
+        };
+        // The whole f-stops, which Rule 20 printed without a decimal place.
+        for (n, d, want) in [(4, 1, "4.0"), (8, 1, "8.0"), (2, 1, "2.0"), (11, 1, "11.0")] {
+            assert_eq!(
+                format_tag_value("ExifIFD:FNumber", &rational(n, d)),
+                TagValue::String(want.to_string()),
+                "FNumber {n}/{d} did not reach PrintFNumber"
+            );
+        }
+        // The rounding cases, which Rule 20 printed in full.
+        // FujiFilmFinePixA345.jpg stores 344/100.
+        assert_eq!(
+            format_tag_value("ExifIFD:FNumber", &rational(344, 100)),
+            TagValue::String("3.4".to_string())
+        );
+        // GPS.jpg stores 3277/5119 -- below 1.0, so two decimal places.
+        assert_eq!(
+            format_tag_value("ExifIFD:FNumber", &rational(3277, 5119)),
+            TagValue::String("0.64".to_string())
+        );
+        // A stored zero stays `0`; ExifTool never prints `0.0` for this tag.
+        assert_eq!(
+            format_tag_value("ExifIFD:FNumber", &rational(0, 10)),
+            TagValue::String("0".to_string())
+        );
+        // A zero denominator is Rule 17's, and still is.
+        assert_eq!(
+            format_tag_value("ExifIFD:FNumber", &rational(4, 0)),
+            TagValue::String("undef".to_string())
+        );
+    }
+
+    /// The Composite input is the raw quotient, not this display string.
+    ///
+    /// Exif.pm:4782's Composite `Aperture` is `ValueConv => '$val[0] || $val[1]'`
+    /// over `Desire => { 0 => 'FNumber', 1 => 'ApertureValue' }`, and applies
+    /// `PrintFNumber` itself. 0x829d has no ValueConv, so what the composite
+    /// must see is the unrounded rational -- which is why this conversion
+    /// belongs here, in the display layer, and not in the value the map holds.
+    /// `apex_value_conv` is the list of tags whose *stored* value is not what
+    /// a reader wants, and FNumber is deliberately not one of them.
+    #[test]
+    fn fnumber_has_no_value_conv_so_composites_keep_the_raw_quotient() {
+        let stored = TagValue::Rational {
+            numerator: 3277,
+            denominator: 5119,
+        };
+        assert_eq!(apex_value_conv("FNumber", &stored), None);
+        // ...unlike the APEX-stored aperture tags beside it.
+        assert!(apex_value_conv("ApertureValue", &stored).is_some());
+        assert!(apex_value_conv("MaxApertureValue", &stored).is_some());
     }
 
     // -------------------------------------------------------------------------
