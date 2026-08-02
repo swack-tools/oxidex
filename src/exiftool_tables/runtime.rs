@@ -18,6 +18,11 @@ pub enum DecodedValue {
     SignedRational(i32, i32),
     String(String),
     Undefined(Vec<u8>),
+    /// A repeated scalar field (`format[N]` in ExifTool's table schema).
+    ///
+    /// Scalar fields deliberately retain their existing variants so callers
+    /// do not need to unwrap a one-element array.
+    Array(Vec<DecodedValue>),
 }
 
 impl DecodedValue {
@@ -76,9 +81,10 @@ impl DecodedField {
 ///
 /// Out-of-range fields and fractional bit-field indices are refused. The
 /// latter need ExifTool's bit-mask semantics, which the generated schema does
-/// not yet carry. This function performs raw decoding only. Callers must opt
-/// into `PrintConv` with [`DecodedField::apply_print_conv_to_raw`] after
-/// checking whether an intervening `ValueConv` is required.
+/// not yet carry. Repeated scalar fields decode as [`DecodedValue::Array`].
+/// This function performs raw decoding only. Callers must opt into `PrintConv`
+/// with [`DecodedField::apply_print_conv_to_raw`] after checking whether an
+/// intervening `ValueConv` is required.
 #[must_use]
 pub fn decode_binary_table(
     table: &'static BinaryTable,
@@ -97,8 +103,17 @@ pub fn decode_binary_table(
             let offset = usize::try_from(table.byte_offset(field)).ok()?;
             let format = table.field_format(field);
             let width = usize::try_from(format.size()).ok()?;
-            let bytes = data.get(offset..offset.checked_add(width)?)?;
-            let raw = decode_value(bytes, format, byte_order)?;
+            let byte_count = width.checked_mul(field.count)?;
+            let bytes = data.get(offset..offset.checked_add(byte_count)?)?;
+            let raw = if field.count == 1 {
+                decode_value(bytes, format, byte_order)?
+            } else {
+                let values = bytes
+                    .chunks_exact(width)
+                    .map(|chunk| decode_value(chunk, format, byte_order))
+                    .collect::<Option<Vec<_>>>()?;
+                DecodedValue::Array(values)
+            };
             Some(DecodedField { field, raw })
         })
         .collect()
@@ -265,6 +280,14 @@ mod tests {
                 count: 1,
                 print_conv: PrintConv::Expr(ExprId::Sprintf0fValB74070),
             },
+            Field {
+                index: 4,
+                sub: None,
+                name: "ThreeValues",
+                format: Some(Fmt::Int16u),
+                count: 3,
+                print_conv: PrintConv::None,
+            },
         ];
         static TABLE: BinaryTable = BinaryTable {
             module: "Test",
@@ -276,8 +299,20 @@ mod tests {
             fields: FIELDS,
         };
 
-        let fields = decode_binary_table(&TABLE, &[0x12, 0x34, 0xff], ByteOrder::Big);
-        assert_eq!(fields.len(), 1);
+        let fields = decode_binary_table(
+            &TABLE,
+            &[0x12, 0x34, 0xff, 0, 0, 1, 0, 2, 0, 3],
+            ByteOrder::Big,
+        );
+        assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].raw, DecodedValue::Integer(0x3412));
+        assert_eq!(
+            fields[1].raw,
+            DecodedValue::Array(vec![
+                DecodedValue::Integer(1),
+                DecodedValue::Integer(2),
+                DecodedValue::Integer(3),
+            ]),
+        );
     }
 }

@@ -120,5 +120,8 @@ mod cli_batch_wiring_tests;
 #[path = "integration/cli_typed_value_tests.rs"]
 mod cli_typed_value_tests;
 
+#[path = "integration/exif_tag_id_collision_tests.rs"]
+mod exif_tag_id_collision_tests;
+
 #[path = "forensic/mod.rs"]
 mod forensic;
