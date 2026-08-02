@@ -499,6 +499,98 @@ pub fn process_app3_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     }
 }
 
+/// ExifTool.pm:7997-8127 — a preview JPEG embedded directly in APP2/APP3
+/// (optionally continued into APP4/APP5), found by byte-pattern rather than
+/// an offset/length pair. No IFD context means ExifTool's FoundTag defaults
+/// the displayed group to File.
+///
+/// - APP2: payload optionally prefixed by the literal bytes `QVGA\0` or
+///   `BGTH`, followed by `\xFF\xD8\xFF` and one of `\xDB`/`\xE0`/`\xE1`. The
+///   prefix (if any) is stripped before storing. Emitted immediately unless
+///   the next segment is also APP2, in which case consecutive APP2 payloads
+///   accumulate (Samsung/HP/BenQ APP2 preview).
+/// - APP3: payload starting `\xFF\xD8\xFF\xDB` (no prefix) is the preview in
+///   full. Continues into APP4 if the immediately following segment is APP4
+///   (Samsung S1060-style split preview).
+/// - APP4: only relevant as a continuation of an APP3 preview in progress;
+///   its payload is appended and the tag emitted unless the next segment is
+///   APP5.
+///
+/// # Arguments
+///
+/// * `segments` - Parsed JPEG segments
+/// * `metadata` - MetadataMap to populate with `File:PreviewImage`
+pub fn extract_direct_preview_image(segments: &[Segment], metadata: &mut MetadataMap) {
+    let mut preview: Option<Vec<u8>> = None;
+
+    for (index, segment) in segments.iter().enumerate() {
+        let next_marker = segments.get(index + 1).map(|s| s.marker);
+
+        match segment.marker {
+            APP2_MARKER => {
+                let mut matched_pattern = false;
+                for prefix in [&b""[..], b"QVGA\0", b"BGTH"] {
+                    if let Some(rest) = segment.data.strip_prefix(prefix) {
+                        if rest.starts_with(b"\xff\xd8\xff")
+                            && matches!(rest.get(3), Some(0xdb | 0xe0 | 0xe1))
+                        {
+                            preview = Some(rest.to_vec());
+                            matched_pattern = true;
+                            break;
+                        }
+                    }
+                }
+                // ExifTool.pm:7929-7997: APP2 also carries ICC_PROFILE, FPXR,
+                // MPF, InfiRay's IJPEG version header and an "urn:" (Apple
+                // HDR) payload, each handled by its own `elsif` branch ahead
+                // of the `elsif ($preview)` continuation fallback. None of
+                // those identifiers is preview continuation data, so a
+                // segment carrying one must not be appended to an
+                // in-progress preview even though it also fails the preview
+                // byte pattern above.
+                let is_other_app2_payload = !matched_pattern
+                    && (segment.data.starts_with(b"ICC_PROFILE\0")
+                        || segment.data.starts_with(b"FPXR\0")
+                        || segment.data.starts_with(b"MPF\0")
+                        || segment.data.get(4..10) == Some(b"IJPEG\0".as_slice())
+                        || segment.data.starts_with(b"urn:"));
+                if !matched_pattern && !is_other_app2_payload {
+                    if let Some(existing) = preview.as_mut() {
+                        existing.extend_from_slice(segment.data);
+                    }
+                }
+                if preview.is_some() && next_marker != Some(APP2_MARKER) {
+                    metadata.insert(
+                        "File:PreviewImage",
+                        TagValue::new_binary(preview.take().unwrap()),
+                    );
+                }
+            }
+            APP3_MARKER => {
+                if segment.data.starts_with(b"\xff\xd8\xff\xdb") {
+                    preview = Some(segment.data.to_vec());
+                }
+                if preview.is_some() && next_marker != Some(APP4_MARKER) {
+                    metadata.insert(
+                        "File:PreviewImage",
+                        TagValue::new_binary(preview.take().unwrap()),
+                    );
+                }
+            }
+            APP4_MARKER => {
+                if let Some(existing) = preview.as_mut() {
+                    existing.extend_from_slice(segment.data);
+                    metadata.insert(
+                        "File:PreviewImage",
+                        TagValue::new_binary(preview.take().unwrap()),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Processes MPF (Multi-Picture Format) APP2 segments.
 ///
 /// MPF is used in dual-camera phones and 3D cameras to store multiple images
@@ -1350,6 +1442,65 @@ mod tests {
         process_app15_segments(&[segment], &mut metadata);
 
         assert!(!metadata.contains_key("APP15:Quality"));
+    }
+
+    /// Mirrors `create_jpeg_with_multiple_segments` in
+    /// `segment_parser.rs` (SOI, marker bytes, big-endian u16 length
+    /// including the length field itself, payload, EOI).
+    fn build_jpeg_with_app3_preview(payload: &[u8]) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0xFF, 0xD8]); // SOI
+        data.extend_from_slice(&[0xFF, 0xE3]); // APP3
+        data.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+        data.extend_from_slice(payload);
+        data.extend_from_slice(&[0xFF, 0xD9]); // EOI
+        data
+    }
+
+    fn build_jpeg_with_app2_segment(payload: &[u8]) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0xFF, 0xD8]); // SOI
+        data.extend_from_slice(&[0xFF, 0xE2]); // APP2
+        data.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+        data.extend_from_slice(payload);
+        data.extend_from_slice(&[0xFF, 0xD9]); // EOI
+        data
+    }
+
+    #[test]
+    fn app3_preview_dump_is_extracted_as_file_preview_image() {
+        let preview_payload = b"\xff\xd8\xff\xdb\x00\x43FAKEDATA";
+        let jpeg = build_jpeg_with_app3_preview(preview_payload);
+        let reader = crate::io::buffered_reader::BufferedReader::from_bytes(&jpeg);
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader).unwrap();
+        let mut metadata = MetadataMap::new();
+
+        extract_direct_preview_image(&segments, &mut metadata);
+
+        assert_eq!(
+            metadata.get("File:PreviewImage"),
+            Some(&TagValue::new_binary(preview_payload.to_vec()))
+        );
+    }
+
+    #[test]
+    fn app2_preview_dump_strips_qvga_prefix() {
+        // Segment payload: "QVGA\0" + \xFF\xD8\xFF\xE0 + fake JPEG bytes.
+        // The QVGA\0 prefix must NOT be part of the stored PreviewImage.
+        let inner = b"\xff\xd8\xff\xe0FAKE2";
+        let mut payload = b"QVGA\0".to_vec();
+        payload.extend_from_slice(inner);
+        let jpeg = build_jpeg_with_app2_segment(&payload);
+        let reader = crate::io::buffered_reader::BufferedReader::from_bytes(&jpeg);
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader).unwrap();
+        let mut metadata = MetadataMap::new();
+
+        extract_direct_preview_image(&segments, &mut metadata);
+
+        assert_eq!(
+            metadata.get("File:PreviewImage"),
+            Some(&TagValue::new_binary(inner.to_vec()))
+        );
     }
 }
 
