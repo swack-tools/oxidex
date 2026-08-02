@@ -234,6 +234,20 @@ pub fn process_exif_segments(
                     tiff_offset,
                     metadata,
                 );
+
+                // Walk IFD1's next-IFD pointer to IFD2. Leica JPEGs carry a
+                // second, larger preview there under tag 0x0111/0x0117,
+                // named PreviewImageStart/PreviewImageLength (not
+                // StripOffsets/StripByteCounts - see Exif.pm:707-768).
+                // Offsets are TIFF-relative, so this uses `tiff_reader`
+                // directly, with no `tiff_base` to add.
+                crate::core::tiff_helpers::parse_ifd2_preview_image(
+                    &tiff_reader,
+                    ifd_offset,
+                    tags.len(),
+                    byte_order,
+                    metadata,
+                );
             }
         }
     }

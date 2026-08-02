@@ -188,7 +188,7 @@ pub fn parse_ifd_chain(
         let tags = parse_ifd(reader, ifd_offset, byte_order)?;
 
         // Process IFD tags and get sub-IFD information
-        let (exif_offset, gps_offset, makernote_data) =
+        let (exif_offset, gps_offset, makernote_data, preview_offset_length) =
             process_tiff_ifd_tags(&tags, ifd_name, byte_order, metadata);
 
         // Parse EXIF Sub-IFD if present. A standalone TIFF's structure starts
@@ -216,6 +216,25 @@ pub fn parse_ifd_chain(
                 makernote_bytes,
             );
             parse_makernote(&ctx, byte_order, metadata);
+        }
+
+        // IFD2's PreviewImageStart/PreviewImageLength pair (see the comment in
+        // `process_tiff_ifd_tags`) addresses the DataTag PreviewImage.
+        // ExifTool.pm's ExtractBinary returns the declared-length placeholder
+        // string without ever seeking when the tag wasn't explicitly
+        // requested with -b, so the default dump shows the placeholder even
+        // when the range is out of bounds (verified on LeicaCL.jpg, whose
+        // IFD2:PreviewImageStart is past its own file's end). Reuse
+        // `read_or_placeholder`, the same helper ThumbnailImage already uses
+        // for this exact behavior.
+        if ifd_name == "IFD2"
+            && let Some((start, length)) = preview_offset_length
+            && length > 0
+        {
+            metadata.insert(
+                "IFD2:PreviewImage",
+                read_or_placeholder(reader, start, length),
+            );
         }
 
         // Read next IFD offset
@@ -278,16 +297,23 @@ fn get_ifd_name(index: usize) -> &'static str {
 ///
 /// # Returns
 ///
-/// A tuple of (exif_offset, gps_offset, makernote_data)
+/// A tuple of (exif_offset, gps_offset, makernote_data, preview_offset_length)
 fn process_tiff_ifd_tags<'a>(
     tags: &'a [(u16, u16, u32, std::borrow::Cow<[u8]>)],
     ifd_name: &str,
     byte_order: ByteOrder,
     metadata: &mut MetadataMap,
-) -> (Option<u64>, Option<u64>, Option<&'a [u8]>) {
+) -> (
+    Option<u64>,
+    Option<u64>,
+    Option<&'a [u8]>,
+    Option<(u64, u64)>,
+) {
     let mut exif_ifd_offset = None;
     let mut gps_ifd_offset = None;
     let mut makernote_data: Option<&[u8]> = None;
+    let mut preview_start: Option<u64> = None;
+    let mut preview_length: Option<u64> = None;
 
     // GeoTiff tag data collectors
     let mut geotiff_directory: Option<&[u8]> = None;
@@ -312,6 +338,22 @@ fn process_tiff_ifd_tags<'a>(
             let offset = read_u32(bytes, byte_order);
             gps_ifd_offset = Some(offset as u64);
             continue; // Don't add the pointer tag to metadata
+        }
+
+        // Exif.pm:707-768: the default StripOffsets/StripByteCounts naming
+        // for 0x111/0x117 explicitly excludes APP1's IFD2 ("APP1 IFD2 is for
+        // Leica JPEG preview"), falling through to a condition that names the
+        // pair PreviewImageStart/PreviewImageLength with DataTag PreviewImage
+        // instead. Capture the raw offsets here and let `parse_ifd_chain` (which
+        // owns the reader) perform the bounds-checked read.
+        if ifd_name == "IFD2" && (*tag_id == 0x0111 || *tag_id == 0x0117) {
+            let value = read_unsigned_field(bytes, *field_type, *value_count, *tag_id, byte_order);
+            if *tag_id == 0x0111 {
+                preview_start = value;
+            } else {
+                preview_length = value;
+            }
+            continue; // Don't fall through to the generic StripOffsets/StripByteCounts naming
         }
 
         // Exif.pm 0xc4a5 declares a PrintIM SubDirectory. Keep the raw
@@ -480,7 +522,12 @@ fn process_tiff_ifd_tags<'a>(
         }
     }
 
-    (exif_ifd_offset, gps_ifd_offset, makernote_data)
+    (
+        exif_ifd_offset,
+        gps_ifd_offset,
+        makernote_data,
+        preview_start.zip(preview_length),
+    )
 }
 
 /// Parses an EXIF sub-IFD and extracts tags.
@@ -1018,6 +1065,84 @@ pub fn parse_ifd1_thumbnail(
     metadata.insert(
         "IFD1:ThumbnailImage",
         read_or_placeholder(reader, offset, length),
+    );
+}
+
+/// Parses the Leica-preview IFD (IFD2) that follows IFD1 and emits
+/// `PreviewImage`.
+///
+/// A JPEG's APP1 EXIF payload can chain IFD0 -> IFD1 -> IFD2; Leica JPEGs use
+/// IFD2 to carry a second, larger preview. `Exif.pm:707-768` excludes APP1's
+/// IFD2 from the generic `StripOffsets`/`StripByteCounts` naming for tags
+/// `0x0111`/`0x0117` (comment: "APP1 IFD2 is for Leica JPEG preview"),
+/// naming the pair `PreviewImageStart`/`PreviewImageLength` with
+/// `DataTag => 'PreviewImage'` instead.
+///
+/// `reader` must address the TIFF structure itself (offset 0 == TIFF
+/// header) - the same convention `parse_ifd1_thumbnail` uses - since the
+/// offsets stored in IFD2 are TIFF-relative and `read_or_placeholder` reads
+/// directly against `reader`.
+pub fn parse_ifd2_preview_image(
+    reader: &dyn FileReader,
+    ifd0_offset: u64,
+    ifd0_entry_count: usize,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    let Some(ifd1_offset) = next_ifd_offset(reader, ifd0_offset, ifd0_entry_count, byte_order)
+    else {
+        return;
+    };
+
+    let mut visited = visited_directory_offsets(reader, ifd0_offset, byte_order);
+    if visited.contains(&ifd1_offset) {
+        return;
+    }
+
+    let Ok(ifd1_entries) = parse_ifd(reader, ifd1_offset, byte_order) else {
+        return;
+    };
+
+    let Some(ifd2_offset) = next_ifd_offset(reader, ifd1_offset, ifd1_entries.len(), byte_order)
+    else {
+        return;
+    };
+
+    visited.push(ifd1_offset);
+    if visited.contains(&ifd2_offset) {
+        return;
+    }
+
+    let Ok(ifd2_entries) = parse_ifd(reader, ifd2_offset, byte_order) else {
+        return;
+    };
+
+    let mut preview_start: Option<u64> = None;
+    let mut preview_length: Option<u64> = None;
+    for (tag_id, field_type, value_count, raw_bytes) in &ifd2_entries {
+        match *tag_id {
+            0x0111 => {
+                preview_start =
+                    read_unsigned_field(raw_bytes, *field_type, *value_count, *tag_id, byte_order);
+            }
+            0x0117 => {
+                preview_length =
+                    read_unsigned_field(raw_bytes, *field_type, *value_count, *tag_id, byte_order);
+            }
+            _ => {}
+        }
+    }
+
+    let (Some(start), Some(length)) = (preview_start, preview_length) else {
+        return;
+    };
+    if length == 0 {
+        return;
+    }
+
+    metadata.insert(
+        "IFD2:PreviewImage",
+        read_or_placeholder(reader, start, length),
     );
 }
 
@@ -1952,5 +2077,124 @@ mod makernote_window_tests {
 
         assert_eq!(ctx.tiff_base(), 292);
         assert_eq!(ctx.tiff()[0..2], *b"II", "index 0 is the TIFF header");
+    }
+}
+
+#[cfg(test)]
+mod ifd2_preview_image_tests {
+    use super::*;
+
+    const LONG: u16 = 4;
+    /// Offset of IFD0 within the synthetic TIFF built below (right after the
+    /// 8-byte TIFF header).
+    const TIFF_HEADER_SIZE: u64 = 8;
+
+    /// Builds a little-endian TIFF: IFD0 (no entries) -> IFD1 (no entries) ->
+    /// IFD2 carrying `0x0111`=`preview_start` (LONG) and `0x0117`=`preview_length`
+    /// (LONG), followed by `trailing` bytes.
+    ///
+    /// Layout: header(8) | IFD0(6) @8 | IFD1(6) @14 | IFD2(30) @20 | trailing @50
+    /// so IFD2's declared entries always point at offset 50 regardless of the
+    /// `preview_length` value under test.
+    fn build_tiff_with_ifd2(preview_start: u32, preview_length: u32, trailing: &[u8]) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II");
+        data.extend_from_slice(&42u16.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes()); // IFD0 at 8
+
+        // IFD0: no entries, next -> IFD1 at 14
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&14u32.to_le_bytes());
+
+        // IFD1: no entries, next -> IFD2 at 20
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&20u32.to_le_bytes());
+
+        // IFD2: PreviewImageStart (0x0111) and PreviewImageLength (0x0117), no next IFD
+        data.extend_from_slice(&2u16.to_le_bytes());
+        data.extend_from_slice(&0x0111u16.to_le_bytes());
+        data.extend_from_slice(&LONG.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&preview_start.to_le_bytes());
+        data.extend_from_slice(&0x0117u16.to_le_bytes());
+        data.extend_from_slice(&LONG.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&preview_length.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes()); // no IFD3
+
+        assert_eq!(
+            data.len(),
+            50,
+            "IFD2 entries assume trailing data starts at 50"
+        );
+        data.extend_from_slice(trailing);
+        data
+    }
+
+    fn build_tiff_with_ifd2_preview(preview_bytes: &[u8]) -> Vec<u8> {
+        build_tiff_with_ifd2(50, preview_bytes.len() as u32, preview_bytes)
+    }
+
+    fn build_tiff_with_ifd2_preview_oob(declared_length: u32) -> Vec<u8> {
+        // PreviewImageLength points well past the end of the buffer.
+        build_tiff_with_ifd2(50, declared_length, &[])
+    }
+
+    #[test]
+    fn ifd2_preview_image_start_length_pair_becomes_preview_image() {
+        // Build a minimal TIFF: IFD0 (no entries of interest, next-IFD -> IFD1),
+        // IFD1 (no entries of interest, next-IFD -> IFD2),
+        // IFD2 with tag 0x0111 (PreviewImageStart) = some in-bounds offset and
+        // tag 0x0117 (PreviewImageLength) = a small length, followed by that many
+        // real bytes at that offset.
+        let preview_bytes = b"\xff\xd8\xff\xdbFAKEPREVIEWDATA";
+        let buffer = build_tiff_with_ifd2_preview(preview_bytes);
+        let reader = crate::io::buffered_reader::BufferedReader::from_bytes(&buffer);
+        let mut metadata = MetadataMap::new();
+
+        parse_ifd_chain(
+            &reader,
+            TIFF_HEADER_SIZE,
+            ByteOrder::LittleEndian,
+            &mut metadata,
+        )
+        .unwrap();
+
+        assert_eq!(
+            metadata.get("IFD2:PreviewImage"),
+            Some(&TagValue::new_binary(preview_bytes.to_vec()))
+        );
+        assert!(metadata.get("IFD2:StripOffsets").is_none());
+        assert!(metadata.get("IFD2:StripByteCounts").is_none());
+    }
+
+    #[test]
+    fn ifd2_preview_image_shows_placeholder_when_out_of_bounds() {
+        // Same shape, but PreviewImageLength points past the end of the buffer.
+        // Real ExifTool still reports the tag here (LeicaCL.jpg ground truth:
+        // IFD2:PreviewImageStart=7064224 in a 50,939-byte file, yet
+        // IFD2:PreviewImage is the placeholder, not omitted) because
+        // ExtractBinary's shortcut returns the declared-length placeholder
+        // before ever seeking. Mirror ThumbnailImage's `read_or_placeholder`.
+        let declared_length = 895146u64;
+        let buffer = build_tiff_with_ifd2_preview_oob(declared_length as u32);
+        let reader = crate::io::buffered_reader::BufferedReader::from_bytes(&buffer);
+        let mut metadata = MetadataMap::new();
+
+        parse_ifd_chain(
+            &reader,
+            TIFF_HEADER_SIZE,
+            ByteOrder::LittleEndian,
+            &mut metadata,
+        )
+        .unwrap();
+
+        assert_eq!(
+            metadata.get("IFD2:PreviewImage"),
+            Some(&TagValue::new_string(format!(
+                "(Binary data {} bytes, use -b option to extract)",
+                declared_length
+            )))
+        );
     }
 }
