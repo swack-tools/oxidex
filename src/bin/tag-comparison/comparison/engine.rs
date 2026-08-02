@@ -217,6 +217,33 @@ fn normalize_value_for_comparison(value: &str) -> String {
     normalized.to_string()
 }
 
+/// The first (deterministic: scanned in `ox_instances`' stored order) pair
+/// of per-file instances for `key` that share a `source_file` on both
+/// sides, or `None` if the key's oxidex and exiftool occurrences never
+/// land on the same file.
+fn find_same_file_pair<'a>(
+    key: &str,
+    oxidex_instances: &'a HashMap<String, Vec<TagInfo>>,
+    exiftool_instances: &'a HashMap<String, Vec<TagInfo>>,
+) -> Option<(&'a TagInfo, &'a TagInfo)> {
+    let ox_list = oxidex_instances.get(key)?;
+    let et_list = exiftool_instances.get(key)?;
+    let mut et_by_file: HashMap<&str, &TagInfo> = HashMap::new();
+    for t in et_list {
+        if let Some(sf) = t.source_file.as_deref() {
+            et_by_file.entry(sf).or_insert(t);
+        }
+    }
+    for ox in ox_list {
+        if let Some(sf) = ox.source_file.as_deref()
+            && let Some(et) = et_by_file.get(sf)
+        {
+            return Some((ox, et));
+        }
+    }
+    None
+}
+
 impl ComparisonEngine {
     /// Compare OxiDex and ExifTool tags for a format
     ///
@@ -229,12 +256,67 @@ impl ComparisonEngine {
     ///
     /// # Returns
     /// FormatComparison with matched/missing/extra/regression analysis
+    ///
+    /// Production code goes through [`Self::compare_with_instances`]; this
+    /// wrapper exists so the tests keep pinning the documented equivalence:
+    /// empty instance maps reproduce the old canonical-value comparison
+    /// exactly.
+    #[cfg(test)]
     pub fn compare(
         oxidex_tags: Vec<TagInfo>,
         exiftool_tags: Vec<TagInfo>,
         format: &str,
         files_tested: usize,
         previous: Option<&FormatComparison>,
+    ) -> FormatComparison {
+        let empty = HashMap::new();
+        Self::compare_with_instances(
+            oxidex_tags,
+            exiftool_tags,
+            format,
+            files_tested,
+            previous,
+            &empty,
+            &empty,
+        )
+    }
+
+    /// Same as [`Self::compare`], but additionally takes each side's
+    /// per-(file, value) instances (`ExtractionResult::all_instances`) so
+    /// `value_differences` can require both sides' values come from the
+    /// SAME source file.
+    ///
+    /// `oxidex_tags`/`exiftool_tags` are already collapsed to one
+    /// "canonical" `TagInfo` per `family:name` key across the whole
+    /// corpus (first file found, in whatever order the extractor visited
+    /// files) -- fine for `matched_tags`/`missing_in_oxidex`/
+    /// `extra_in_oxidex`, which only test key presence, but wrong for a
+    /// same-file value comparison whenever a tag name recurs across
+    /// different files with legitimately different values: the two
+    /// canonical `TagInfo`s can come from two DIFFERENT files (different
+    /// camera bodies, for a MakerNotes binary-data tag), so comparing
+    /// them reports two unrelated real values as one file's mismatch.
+    /// Concrete case that motivated this: Sony's `AFStatus*` tags
+    /// compared `SonyDSLR-A580.jpg`'s real ExifTool value against
+    /// `SonySLT-A65.jpg`'s real (and, for A65, itself correct) OxiDex
+    /// value, because A65 sorted before A580 in the corpus walk and won
+    /// the OxiDex-side "first file wins" slot for that key -- appearing
+    /// as if OxiDex fabricated a garbage value for A580 specifically,
+    /// batch-size dependent purely because a large-enough Sony sample set
+    /// was needed to include another camera with the same tag names.
+    ///
+    /// When the instance maps are empty (as `compare` passes), this is
+    /// exactly the old canonical-value comparison -- existing callers and
+    /// tests are unaffected.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compare_with_instances(
+        oxidex_tags: Vec<TagInfo>,
+        exiftool_tags: Vec<TagInfo>,
+        format: &str,
+        files_tested: usize,
+        previous: Option<&FormatComparison>,
+        oxidex_instances: &HashMap<String, Vec<TagInfo>>,
+        exiftool_instances: &HashMap<String, Vec<TagInfo>>,
     ) -> FormatComparison {
         let mut comparison = FormatComparison::new(format.to_string(), files_tested);
         comparison.total_exiftool_tags = exiftool_tags.len();
@@ -249,6 +331,8 @@ impl ComparisonEngine {
             oxidex_by_key.insert(key, tag);
             oxidex_by_normalized_key.insert(norm_key, tag);
         }
+
+        let have_instances = !oxidex_instances.is_empty() || !exiftool_instances.is_empty();
 
         // Track which OxiDex keys were matched (both original and normalized)
         let mut matched_oxidex_keys = HashSet::new();
@@ -269,9 +353,47 @@ impl ComparisonEngine {
                 matched_exiftool_keys.insert(key.clone());
                 matched_oxidex_keys.insert(ox_tag.key());
 
+                // Prefer values that both come from the SAME source file
+                // over the (possibly unrelated) corpus-wide canonical
+                // pair -- see the doc comment above.
+                let same_file_pair = if have_instances {
+                    find_same_file_pair(&key, oxidex_instances, exiftool_instances).or_else(|| {
+                        find_same_file_pair(&norm_key, oxidex_instances, exiftool_instances)
+                    })
+                } else {
+                    None
+                };
+
+                let (ox_value, et_value, diff_source) = match same_file_pair {
+                    Some((ox_inst, et_inst)) => (
+                        &ox_inst.value,
+                        &et_inst.value,
+                        et_inst.source_file.clone().unwrap_or_default(),
+                    ),
+                    None if have_instances => {
+                        // Both sides have this key SOMEWHERE in the
+                        // corpus, but never on the same file -- there is
+                        // no evidence a same-file mismatch exists, and
+                        // reporting the two (necessarily different)
+                        // files' canonical values as if they were one
+                        // file's before/after would be exactly the
+                        // fabrication AGENTS.md rules out. Count the key
+                        // as matched (unchanged from the presence-only
+                        // semantics `matched_tags` always used) and move
+                        // on without a value_differences entry.
+                        comparison.matched_tags.push(key);
+                        continue;
+                    }
+                    None => (
+                        &ox_tag.value,
+                        &et_tag.value,
+                        et_tag.source_file.clone().unwrap_or_default(),
+                    ),
+                };
+
                 // Normalize values for comparison to handle formatting differences
-                let norm_ox = normalize_value_for_comparison(&ox_tag.value);
-                let norm_et = normalize_value_for_comparison(&et_tag.value);
+                let norm_ox = normalize_value_for_comparison(ox_value);
+                let norm_et = normalize_value_for_comparison(et_value);
 
                 if norm_ox == norm_et {
                     // Values match after normalization
@@ -280,9 +402,9 @@ impl ComparisonEngine {
                     // Tag exists but values differ even after normalization
                     comparison.value_differences.push(ValueDifference {
                         tag_key: key,
-                        exiftool_value: et_tag.value.clone(),
-                        oxidex_value: ox_tag.value.clone(),
-                        source_file: et_tag.source_file.clone().unwrap_or_default(),
+                        exiftool_value: et_value.clone(),
+                        oxidex_value: ox_value.clone(),
+                        source_file: diff_source,
                     });
                 }
             } else {

@@ -101,6 +101,7 @@ impl OxiDexExtractor {
                 tags: Vec::new(),
                 files_processed: 0,
                 duplicate_emissions: Vec::new(),
+                all_instances: HashMap::new(),
             });
         }
 
@@ -151,6 +152,7 @@ impl OxiDexExtractor {
         // raf 5, bmp 4, psd 3, gif 2, mrw 2, mp3/nef/ttf 1) and every one
         // of them reported duplicate_emissions=0.
         let mut all_tags: HashMap<String, TagInfo> = HashMap::new();
+        let mut all_instances: HashMap<String, Vec<TagInfo>> = HashMap::new();
         let mut duplicate_emissions: HashSet<String> = HashSet::new();
 
         for file_path in &files {
@@ -171,9 +173,11 @@ impl OxiDexExtractor {
                     }
                     for tag_info in file_tags {
                         let key = format!("{}:{}", tag_info.family, tag_info.name);
+                        let stamped = tag_info.with_source_file(source_file.clone());
                         all_tags
-                            .entry(key)
-                            .or_insert_with(|| tag_info.with_source_file(source_file.clone()));
+                            .entry(key.clone())
+                            .or_insert_with(|| stamped.clone());
+                        all_instances.entry(key).or_default().push(stamped);
                     }
                 }
                 Err(e) => {
@@ -196,6 +200,7 @@ impl OxiDexExtractor {
             tags: tags.clone(),
             files_processed,
             duplicate_emissions,
+            all_instances,
         };
 
         self.cache.insert(format.to_string(), result.clone());
