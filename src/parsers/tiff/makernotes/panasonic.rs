@@ -139,16 +139,20 @@ const_decoder!(pub WHITE_BALANCE,
     ]
 );
 
-// Focus mode decoder - maps values to autofocus modes
+// FocusMode (tag 0x0007), transcribed from Panasonic.pm:290-302. The
+// AF-S/AF-C/AF-F labels live at 6/7/8; 4 and 5 are 'Auto, Focus button'
+// and 'Auto, Continuous'. oxidex used to put AF-S/AF-C/AF-F at 4/5/6 and
+// invent an entry at 16, so a G-series body reported the wrong AF mode.
 const_decoder!(pub FOCUS_MODE,
     i32,
     [
         (1, "Auto"),
         (2, "Manual"),
-        (4, "AF-S (Single)"),
-        (5, "AF-C (Continuous)"),
-        (6, "AF-F (Flexible)"),
-        (16, "MF (Manual Focus)"),
+        (4, "Auto, Focus button"),
+        (5, "Auto, Continuous"),
+        (6, "AF-S"),
+        (7, "AF-C"),
+        (8, "AF-F"),
     ]
 );
 
@@ -171,7 +175,11 @@ const_decoder!(pub IMAGE_STABILIZATION,
     ]
 );
 
-// Shooting mode decoder - maps values to shooting scene modes
+// ShootingMode (tag 0x001F) and, via decode_scene_mode, SceneMode
+// (0x8001). Panasonic.pm's %shootingMode runs to 92; the table here used
+// to stop at 20 and spell 18/19/20 as Panorama/Glass Through/HDR, which
+// ExifTool calls Fireworks/Party/Snow -- and Panorama/Glass Through/HDR
+// are really 62/63/64.
 const_decoder!(pub SHOOTING_MODE,
     i32,
     [
@@ -190,25 +198,91 @@ const_decoder!(pub SHOOTING_MODE,
         (13, "Panning"),
         (14, "Simple"),
         (15, "Color Effects"),
-        (18, "Panorama"),
-        (19, "Glass Through"),
-        (20, "HDR"),
+        (16, "Self Portrait"),
+        (17, "Economy"),
+        (18, "Fireworks"),
+        (19, "Party"),
+        (20, "Snow"),
+        (21, "Night Scenery"),
+        (22, "Food"),
+        (23, "Baby"),
+        (24, "Soft Skin"),
+        (25, "Candlelight"),
+        (26, "Starry Night"),
+        (27, "High Sensitivity"),
+        (28, "Panorama Assist"),
+        (29, "Underwater"),
+        (30, "Beach"),
+        (31, "Aerial Photo"),
+        (32, "Sunset"),
+        (33, "Pet"),
+        (34, "Intelligent ISO"),
+        (35, "Clipboard"),
+        (36, "High Speed Continuous Shooting"),
+        (37, "Intelligent Auto"),
+        (39, "Multi-aspect"),
+        (41, "Transform"),
+        (42, "Flash Burst"),
+        (43, "Pin Hole"),
+        (44, "Film Grain"),
+        (45, "My Color"),
+        (46, "Photo Frame"),
+        (48, "Movie"),
+        (51, "HDR"),
+        (52, "Peripheral Defocus"),
+        (55, "Handheld Night Shot"),
+        (57, "3D"),
+        (59, "Creative Control"),
+        (60, "Intelligent Auto Plus"),
+        (62, "Panorama"),
+        (63, "Glass Through"),
+        (64, "HDR"),
+        (66, "Digital Filter"),
+        (67, "Clear Portrait"),
+        (68, "Silky Skin"),
+        (69, "Backlit Softness"),
+        (70, "Clear in Backlight"),
+        (71, "Relaxing Tone"),
+        (72, "Sweet Child's Face"),
+        (73, "Distinct Scenery"),
+        (74, "Bright Blue Sky"),
+        (75, "Romantic Sunset Glow"),
+        (76, "Vivid Sunset Glow"),
+        (77, "Glistening Water"),
+        (78, "Clear Nightscape"),
+        (79, "Cool Night Sky"),
+        (80, "Warm Glowing Nightscape"),
+        (81, "Artistic Nightscape"),
+        (82, "Glittering Illuminations"),
+        (83, "Clear Night Portrait"),
+        (84, "Soft Image of a Flower"),
+        (85, "Appetizing Food"),
+        (86, "Cute Dessert"),
+        (87, "Freeze Animal Motion"),
+        (88, "Clear Sports Shot"),
+        (89, "Monochrome"),
+        (90, "Creative Control"),
+        (92, "Handheld Night Shot"),
     ]
 );
 
-// Contrast mode decoder - maps values to contrast settings
+// ContrastMode (tag 0x002C), the variant Panasonic.pm:411-431 applies to
+// everything but the FX10/G1/L1/L10/LC80/GF*/G2/TZ10/ZS7 and DC- bodies.
 const_decoder!(pub CONTRAST_MODE,
     i32,
     [
         (0, "Normal"),
         (1, "Low"),
         (2, "High"),
-        (3, "Medium Low"),
-        (4, "Medium High"),
-        (5, "High+"),
-        (7, "Lowest"),
+        (5, "Normal 2"),
+        (6, "Medium Low"),
+        (7, "Medium High"),
+        (13, "High Dynamic"),
+        (24, "Dynamic Range (film-like)"),
+        (46, "Match Filter Effects Toy"),
+        (55, "Match Photo Style L. Monochrome"),
         (256, "Low"),
-        (272, "Standard"),
+        (272, "Normal"),
         (288, "High"),
     ]
 );
@@ -257,39 +331,53 @@ const_decoder!(pub INTELLIGENT_AUTO,
     ]
 );
 
-// HDR mode decoder - maps values to HDR settings
+// HDR (tag 0x009E), Panasonic.pm:1611-1622: the EV steps are 100/200/300
+// and the Auto variants are 0x8064-based. The old 0/1/2/3/100 table
+// matched ExifTool on the single value 0.
 const_decoder!(pub HDR,
     i32,
     [
         (0, "Off"),
-        (1, "HDR (1 EV)"),
-        (2, "HDR (2 EV)"),
-        (3, "HDR (3 EV)"),
-        (100, "HDR Auto"),
+        (100, "1 EV"),
+        (200, "2 EV"),
+        (300, "3 EV"),
+        (32868, "1 EV (Auto)"),
+        (32968, "2 EV (Auto)"),
+        (33068, "3 EV (Auto)"),
     ]
 );
 
-// Photo style decoder - maps values to photo style presets
+// PhotoStyle (tag 0x0089), Panasonic.pm:1329-1345. The old table was
+// shifted a slot against ExifTool's at every id it shared -- 0 was
+// 'Standard' where ExifTool says 'Auto', 1 'Vivid' where ExifTool says
+// 'Standard or Custom' -- so it agreed with ExifTool on nothing.
 const_decoder!(pub PHOTO_STYLE,
     i32,
     [
-        (0, "Standard"),
-        (1, "Vivid"),
-        (2, "Natural"),
-        (3, "Monochrome"),
-        (4, "Scenery"),
-        (5, "Portrait"),
-        (6, "Custom"),
-        (7, "Cinelike D"),
-        (8, "Cinelike V"),
-        (9, "Like 709"),
-        (10, "V-Log"),
-        (11, "V-Log L"),
+        (0, "Auto"),
+        (1, "Standard or Custom"),
+        (2, "Vivid"),
+        (3, "Natural"),
+        (4, "Monochrome"),
+        (5, "Scenery"),
+        (6, "Portrait"),
+        (8, "Cinelike D"),
+        (9, "Cinelike V"),
+        (11, "L. Monochrome"),
+        (12, "Like709"),
+        (15, "L. Monochrome D"),
+        (17, "V-Log"),
+        (18, "Cinelike D2"),
     ]
 );
 
-// Macro mode decoder - maps values to macro mode settings
-const_decoder!(pub MACRO_MODE, i32, [(1, "On"), (2, "Off"),]);
+// MacroMode (tag 0x001C), Panasonic.pm:265-273.
+const_decoder!(pub MACRO_MODE, i32, [
+    (1, "On"),
+    (2, "Off"),
+    (257, "Tele-Macro"),
+    (513, "Macro Zoom"),
+]);
 
 // Rotation decoder (tag 0x0030) - ExifTool Panasonic.pm Rotation PrintConv
 const_decoder!(pub ROTATION,
@@ -337,16 +425,21 @@ const_decoder!(pub INTELLIGENT_D_RANGE,
 );
 
 // Long exposure noise reduction decoder
-const_decoder!(pub LONG_EXPOSURE_NR, i32, [(1, "On"), (2, "Off"),]);
+const_decoder!(pub LONG_EXPOSURE_NR, i32, [(1, "Off"), (2, "On"),]);
 
-// Burst mode decoder - maps values to burst shooting modes
+// BurstMode (tag 0x002A), Panasonic.pm:398-410. Value 1 is a plain 'On',
+// not 'Low/High Speed', and 2 is AEB rather than 'Infinite'.
 const_decoder!(pub BURST_MODE,
     i32,
     [
         (0, "Off"),
-        (1, "Low/High Speed"),
-        (2, "Infinite"),
+        (1, "On"),
+        (2, "Auto Exposure Bracketing (AEB)"),
+        (3, "Focus Bracketing"),
         (4, "Unlimited"),
+        (8, "White Balance Bracketing"),
+        (17, "On (with flash)"),
+        (18, "Aperture Bracketing"),
     ]
 );
 
@@ -1227,11 +1320,23 @@ mod tests {
         assert_eq!(WHITE_BALANCE.decode(13), "Kelvin");
     }
 
+    // Every string asserted below was read out of ExifTool's own PrintConv
+    // hash, dumped from the Perl symbol table (ExifTool 13.59). The ids are
+    // the ones oxidex and ExifTool used to disagree on, so reverting a table
+    // fails the test rather than passing it.
+
+    /// Panasonic.pm:290-302. The AF-x labels sit at 6/7/8, not 4/5/6, and 4
+    /// and 5 are the two "Auto," variants. There is no entry at 16 at all.
     #[test]
     fn test_decode_focus_mode() {
-        assert_eq!(FOCUS_MODE.decode(4), "AF-S (Single)");
-        assert_eq!(FOCUS_MODE.decode(5), "AF-C (Continuous)");
-        assert_eq!(FOCUS_MODE.decode(16), "MF (Manual Focus)");
+        assert_eq!(FOCUS_MODE.decode(1), "Auto");
+        assert_eq!(FOCUS_MODE.decode(2), "Manual");
+        assert_eq!(FOCUS_MODE.decode(4), "Auto, Focus button");
+        assert_eq!(FOCUS_MODE.decode(5), "Auto, Continuous");
+        assert_eq!(FOCUS_MODE.decode(6), "AF-S");
+        assert_eq!(FOCUS_MODE.decode(7), "AF-C");
+        assert_eq!(FOCUS_MODE.decode(8), "AF-F");
+        assert_eq!(FOCUS_MODE.decode(16), "Unknown (16)");
     }
 
     #[test]
@@ -1403,18 +1508,86 @@ mod tests {
         assert_eq!(undef_bytes_to_string(b"0131\0\0"), Some("0131".to_string()));
     }
 
+    /// Panasonic.pm %shootingMode. The table used to stop at 20 with three
+    /// invented labels there; ExifTool runs to 92 and calls 18/19/20
+    /// Fireworks/Party/Snow.
     #[test]
     fn test_decode_shooting_mode() {
         assert_eq!(SHOOTING_MODE.decode(6), "Program");
         assert_eq!(SHOOTING_MODE.decode(7), "Aperture Priority");
         assert_eq!(SHOOTING_MODE.decode(11), "Manual");
+        assert_eq!(SHOOTING_MODE.decode(18), "Fireworks");
+        assert_eq!(SHOOTING_MODE.decode(19), "Party");
+        assert_eq!(SHOOTING_MODE.decode(20), "Snow");
+        assert_eq!(SHOOTING_MODE.decode(37), "Intelligent Auto");
+        assert_eq!(SHOOTING_MODE.decode(60), "Intelligent Auto Plus");
+        assert_eq!(SHOOTING_MODE.decode(62), "Panorama");
+        assert_eq!(SHOOTING_MODE.decode(92), "Handheld Night Shot");
     }
 
+    /// Panasonic.pm:1611-1622: the EV steps are 100/200/300 and the Auto
+    /// variants are 0x8064-based, not 1/2/3/100.
     #[test]
     fn test_decode_hdr() {
         assert_eq!(HDR.decode(0), "Off");
-        assert_eq!(HDR.decode(1), "HDR (1 EV)");
-        assert_eq!(HDR.decode(100), "HDR Auto");
+        assert_eq!(HDR.decode(100), "1 EV");
+        assert_eq!(HDR.decode(200), "2 EV");
+        assert_eq!(HDR.decode(32968), "2 EV (Auto)");
+        assert_eq!(HDR.decode(1), "Unknown (1)");
+    }
+
+    /// Panasonic.pm:1329-1345. Every id shifted by one against ExifTool's --
+    /// oxidex called 0 "Standard" where ExifTool calls it "Auto", and so on
+    /// down the table, so a PhotoStyle was almost never reported correctly.
+    #[test]
+    fn test_decode_photo_style() {
+        assert_eq!(PHOTO_STYLE.decode(0), "Auto");
+        assert_eq!(PHOTO_STYLE.decode(1), "Standard or Custom");
+        assert_eq!(PHOTO_STYLE.decode(2), "Vivid");
+        assert_eq!(PHOTO_STYLE.decode(4), "Monochrome");
+        assert_eq!(PHOTO_STYLE.decode(11), "L. Monochrome");
+        assert_eq!(PHOTO_STYLE.decode(12), "Like709");
+        assert_eq!(PHOTO_STYLE.decode(17), "V-Log");
+        assert_eq!(PHOTO_STYLE.decode(7), "Unknown (7)");
+    }
+
+    /// Panasonic.pm:672-676 reads 1 => Off, 2 => On. The two labels used to
+    /// be the other way round, so every long exposure reported the opposite
+    /// of what the camera recorded.
+    #[test]
+    fn test_long_exposure_nr_is_not_inverted() {
+        assert_eq!(LONG_EXPOSURE_NR.decode(1), "Off");
+        assert_eq!(LONG_EXPOSURE_NR.decode(2), "On");
+    }
+
+    /// Panasonic.pm:411-431 (the non-GF/G2/TZ10 variant).
+    #[test]
+    fn test_decode_contrast_mode() {
+        assert_eq!(CONTRAST_MODE.decode(0), "Normal");
+        assert_eq!(CONTRAST_MODE.decode(5), "Normal 2");
+        assert_eq!(CONTRAST_MODE.decode(6), "Medium Low");
+        assert_eq!(CONTRAST_MODE.decode(7), "Medium High");
+        assert_eq!(CONTRAST_MODE.decode(272), "Normal");
+        assert_eq!(CONTRAST_MODE.decode(3), "Unknown (3)");
+    }
+
+    /// Panasonic.pm:398-410: 1 is a plain "On".
+    #[test]
+    fn test_decode_burst_mode() {
+        assert_eq!(BURST_MODE.decode(0), "Off");
+        assert_eq!(BURST_MODE.decode(1), "On");
+        assert_eq!(BURST_MODE.decode(2), "Auto Exposure Bracketing (AEB)");
+        assert_eq!(BURST_MODE.decode(3), "Focus Bracketing");
+        assert_eq!(BURST_MODE.decode(17), "On (with flash)");
+    }
+
+    /// Panasonic.pm:265-273 has the two zoom-macro values as well.
+    #[test]
+    fn test_decode_macro_mode() {
+        assert_eq!(MACRO_MODE.decode(1), "On");
+        assert_eq!(MACRO_MODE.decode(2), "Off");
+        assert_eq!(MACRO_MODE.decode(257), "Tele-Macro");
+        assert_eq!(MACRO_MODE.decode(513), "Macro Zoom");
     }
 
     #[test]
