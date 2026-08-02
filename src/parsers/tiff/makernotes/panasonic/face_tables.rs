@@ -32,6 +32,7 @@ pub(crate) static PANASONIC_FACEDETINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             key: "1",
@@ -45,6 +46,7 @@ pub(crate) static PANASONIC_FACEDETINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             key: "5",
@@ -58,6 +60,7 @@ pub(crate) static PANASONIC_FACEDETINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             key: "9",
@@ -71,6 +74,7 @@ pub(crate) static PANASONIC_FACEDETINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             key: "13",
@@ -84,6 +88,7 @@ pub(crate) static PANASONIC_FACEDETINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             key: "17",
@@ -97,6 +102,7 @@ pub(crate) static PANASONIC_FACEDETINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
     ],
 };
@@ -122,6 +128,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             key: "4",
@@ -135,6 +142,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             key: "24",
@@ -148,6 +156,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             key: "32",
@@ -161,6 +170,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             key: "52",
@@ -174,6 +184,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             key: "72",
@@ -187,6 +198,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             key: "80",
@@ -200,6 +212,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             key: "100",
@@ -213,6 +226,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             key: "120",
@@ -226,6 +240,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             key: "128",
@@ -239,6 +254,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
     ],
 };

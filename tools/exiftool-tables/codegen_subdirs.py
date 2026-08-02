@@ -278,6 +278,30 @@ def field_raw_conv(tag, table, key):
     raise Unsupported(table, key, f"RawConv expression not in the known vocabulary: {expr!r}")
 
 
+def field_priority(tag, table_priority, table, key):
+    """True when ExifTool would give this field priority 0.
+
+    `FoundTag` reads a tag's priority at ExifTool.pm:9469-9473 -- the tag's own
+    `Priority`, else the table's `PRIORITY`, else 0 when the tag is `Avoid` --
+    and a 0 there means the field never displaces a value already reported
+    under the same name (see `shared::tag_priority`). Dropping it silently
+    prints a sub-directory's copy of a tag over the `Main` table's copy.
+
+    Only 0 is modelled. ExifTool also uses -1, 1 and 2, but none of those
+    appears in a `ProcessBinaryData` table, and treating an unmodelled value as
+    "normal" would be a guess at which of two real values prints.
+    """
+    priority = tag.get("Priority")
+    if priority is None:
+        if table_priority is not None:
+            return table_priority == 0
+        return bool(tag.get("Avoid"))
+    priority = int(str(priority), 0)
+    if priority != 0:
+        raise Unsupported(table, key, f"Priority => {priority} is not modelled")
+    return True
+
+
 def normalize_deparse(text):
     """A Perl sub body reduced to a stable key.
 
@@ -494,16 +518,26 @@ class ConstPool:
         )
 
 
-# Keys that are documentation or writer-side only: present on a field without
-# changing what a reader produces.
-IGNORED_TAG_KEYS = {
-    "Name", "Format", "RawConv", "PrintConv", "ValueConv", "Mask", "Notes", "Description",
-    # Handled by `field_cond`, which refuses any test it cannot reproduce.
-    "Condition",
-    "DataMember", "Writable", "Groups", "PrintConvInv", "ValueConvInv",
-    "Protected", "Permanent", "SeparateTable", "PrintHex", "Priority",
-    "_shorthand", "_extra_keys", "Unknown", "Hidden", "Avoid", "Binary",
-    "RelatedTag", "Count", "Flags",
+# Every tag key this generator knows about. A key outside this set stops the
+# table rather than being skipped, so an ExifTool edit that adds one cannot pass
+# silently as "no change".
+#
+# The first group is read above -- `Name`, `Format`/`Count`, `RawConv`,
+# `PrintConv`, `ValueConv`, `Mask`, `Condition` (by `field_cond`, which refuses
+# any test it cannot reproduce), and `Priority`/`Avoid` (by `field_priority`)
+# all change what a reader produces. `Priority` in particular sat in the second
+# group until it was found printing a sub-directory's `LensType` over the one
+# `%Pentax::Main` reports; it is not documentation.
+#
+# The second group is documentation or writer-side only: present on a field
+# without changing what a reader produces.
+KNOWN_TAG_KEYS = {
+    "Name", "Format", "Count", "RawConv", "PrintConv", "ValueConv", "Mask",
+    "Condition", "Priority", "Avoid",
+    "Notes", "Description", "DataMember", "Writable", "Groups", "PrintConvInv",
+    "ValueConvInv", "Protected", "Permanent", "SeparateTable", "PrintHex",
+    "_shorthand", "_extra_keys", "Unknown", "Hidden", "Binary",
+    "RelatedTag", "Flags",
 }
 
 
@@ -523,6 +557,13 @@ def gen_table(module, tname, tbl, pool, skips, allow_skip, conv_prefix, vc_prefi
         raise Unsupported(tname, "-", f"table FORMAT {fmt_name!r} is not a scalar format")
     default_fmt, _ = SCALARS[fmt_name]
     first_entry = int(str(meta.get("FIRST_ENTRY", "0")), 0)
+    # The table's default priority, used for any tag without its own `Priority`
+    # (`$priority = $$tbl{PRIORITY}`, ExifTool.pm:9471). No `ProcessBinaryData`
+    # table declares one today, so this is here to keep a future one from
+    # arriving as a silent behaviour change.
+    table_priority = meta.get("PRIORITY")
+    if table_priority is not None:
+        table_priority = int(str(table_priority), 0)
 
     rows = []
     for key in sorted(tbl["tags"], key=lambda k: parse_index(k, tname)):
@@ -554,12 +595,13 @@ def gen_table(module, tname, tbl, pool, skips, allow_skip, conv_prefix, vc_prefi
                     refused = True
                     continue
                 for k in tag:
-                    if k not in IGNORED_TAG_KEYS:
+                    if k not in KNOWN_TAG_KEYS:
                         raise Unsupported(tname, key, f"unhandled tag key {k!r}")
                 idx = parse_index(key, tname)
                 cond = field_cond(tag, tname, key)
                 fmt, count = field_format(tag, tname, key)
                 member, gate = field_raw_conv(tag, tname, key)
+                low_priority = field_priority(tag, table_priority, tname, key)
                 pc = field_print_conv(tag, tname, key, pool, conv_prefix)
                 vc = field_value_conv(tag, tname, key, vc_prefix)
                 if vc != "ValueConv::None" and pc.startswith("PrintConv::Map"):
@@ -588,7 +630,8 @@ def gen_table(module, tname, tbl, pool, skips, allow_skip, conv_prefix, vc_prefi
                 f"format: {'None' if fmt is None else f'Some({fmt})'}, count: {count}, "
                 f"set_member: {'None' if member is None else f'Some(\"{member}\")'}, "
                 f"gate: {'None' if gate is None else f'Some((\"{gate[0]}\", {gate[1]}))'}, "
-                f"mask: {mask_s}, value_conv: {vc}, print_conv: {pc} }},"
+                f"mask: {mask_s}, value_conv: {vc}, print_conv: {pc}, "
+                f"low_priority: {'true' if low_priority else 'false'} }},"
             )
         if refused and len(variants) > 1:
             for text in group:
