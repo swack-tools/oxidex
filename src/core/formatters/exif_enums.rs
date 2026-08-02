@@ -65,16 +65,83 @@ pub fn format_light_source(value: i64) -> String {
     }
 }
 
-/// Format Flash enum value (complex bitfield)
+/// `%Image::ExifTool::Exif::flash` (Exif.pm:175), transcribed verbatim.
+///
+/// Flash is **not** a bitfield PrintConv. Exif.pm 0x9209 is
+/// `PrintConv => \%flash` -- a flat 27-key hash -- and `Flags => 'PrintHex'`,
+/// so a code the hash does not name prints as `Unknown (0x38)`. The bit layout
+/// (fired / strobe return / mode / function present / red-eye) explains how the
+/// 27 codes were *chosen*; it is not how ExifTool renders them, and 229 of the
+/// 256 byte values are simply not valid Flash codes.
+///
+/// `core::exif_enums::decode_flash` synthesised a label from those bit fields
+/// instead. Scored against the hash over all 256 inputs it was wrong on **236**:
+/// it named codes ExifTool leaves unknown (`0x02` -> `No Flash`, ExifTool
+/// `Unknown (0x2)`), and mis-worded ones it did know (`0x0d` -> `On, Fired,
+/// Return not detected`, ExifTool `On, Return not detected`). Two verbatim
+/// copies of the real table already existed, in `parsers::pdf` and
+/// `parsers::raw::metadata`; this is the one both now share.
+const FLASH: &[(i64, &str)] = &[
+    (0x00, "No Flash"),
+    (0x01, "Fired"),
+    (0x05, "Fired, Return not detected"),
+    (0x07, "Fired, Return detected"),
+    (0x08, "On, Did not fire"),
+    (0x09, "On, Fired"),
+    (0x0d, "On, Return not detected"),
+    (0x0f, "On, Return detected"),
+    (0x10, "Off, Did not fire"),
+    (0x14, "Off, Did not fire, Return not detected"),
+    (0x18, "Auto, Did not fire"),
+    (0x19, "Auto, Fired"),
+    (0x1d, "Auto, Fired, Return not detected"),
+    (0x1f, "Auto, Fired, Return detected"),
+    (0x20, "No flash function"),
+    (0x30, "Off, No flash function"),
+    (0x41, "Fired, Red-eye reduction"),
+    (0x45, "Fired, Red-eye reduction, Return not detected"),
+    (0x47, "Fired, Red-eye reduction, Return detected"),
+    (0x49, "On, Red-eye reduction"),
+    (0x4d, "On, Red-eye reduction, Return not detected"),
+    (0x4f, "On, Red-eye reduction, Return detected"),
+    (0x50, "Off, Red-eye reduction"),
+    (0x58, "Auto, Did not fire, Red-eye reduction"),
+    (0x59, "Auto, Fired, Red-eye reduction"),
+    (0x5d, "Auto, Fired, Red-eye reduction, Return not detected"),
+    (0x5f, "Auto, Fired, Red-eye reduction, Return detected"),
+];
+
+/// Looks up EXIF `Flash` (0x9209) in ExifTool's `%flash`.
+///
+/// Returns `None` for a code ExifTool does not name, so callers keep their own
+/// behaviour for it -- `format_flash` renders `Unknown (0x38)` the way
+/// `PrintHex` does, while the RAW and PDF paths leave the tag alone.
+///
+/// # Examples
+///
+/// ```
+/// use oxidex::core::formatters::exif_enums::flash_label;
+///
+/// assert_eq!(flash_label(0x0d), Some("On, Return not detected"));
+/// assert_eq!(flash_label(0x02), None);
+/// ```
+pub fn flash_label(value: i64) -> Option<&'static str> {
+    FLASH
+        .iter()
+        .find(|&&(id, _)| id == value)
+        .map(|&(_, label)| label)
+}
+
+/// Format Flash enum value
 /// EXIF tag 0x9209
 ///
-/// Delegates to [`crate::core::exif_enums::decode_flash`], which correctly
-/// orders the flash mode ("On"/"Off"/"Auto") before the fired status (e.g.
-/// "Off, Did not fire") to match ExifTool's output. A previous, independent
-/// implementation here produced the wrong word order (e.g. "No Flash, Off"
-/// instead of "Off, Did not fire") for compulsory-suppression mode.
+/// `Flags => 'PrintHex'` on Exif.pm 0x9209, so unnamed codes print their value
+/// in lowercase hex: `Unknown (0x38)`, not `Unknown (56)`.
 pub fn format_flash(value: i64) -> String {
-    crate::core::exif_enums::decode_flash(value.max(0) as u32)
+    match flash_label(value) {
+        Some(label) => label.to_string(),
+        None => format!("Unknown (0x{:x})", value),
+    }
 }
 
 /// Format ExposureMode enum value

@@ -1,9 +1,13 @@
-//! EXIF Flash (0x9209) bitmap decoding.
+//! EXIF Flash (0x9209) decoding.
 //!
-//! `Flash` is the one EXIF enum that is not a flat lookup: ExifTool renders it
-//! from five bit fields (fired / strobe return / mode / function present /
-//! red-eye), which is why it is written out longhand here rather than living in
-//! a table with the others.
+//! `Flash` reads like a bitfield -- five fields (fired / strobe return / mode /
+//! function present / red-eye) -- and this module used to render it that way.
+//! ExifTool does not: Exif.pm 0x9209 is `PrintConv => \%flash`, a flat 27-key
+//! hash, plus `Flags => 'PrintHex'`. The bits explain how those 27 codes were
+//! chosen; they are not how the tag is printed, and the other 229 byte values
+//! are not valid Flash codes. The table lives with the rest in
+//! `core::formatters::exif_enums`; this module is the alias the tag-comparison
+//! harness imports.
 //!
 //! The flat enums that used to sit alongside it -- ColorSpace, Contrast,
 //! CustomRendered, ExposureMode, GainControl, LightSource, MeteringMode,
@@ -17,21 +21,23 @@
 // Flash Bitmap Decoding
 // =============================================================================
 
-/// Decode Flash value (tag 0x9209) - bitmap decoding
+/// Decode Flash value (tag 0x9209).
 ///
-/// The Flash tag is a complex bitmap where different bits indicate different
-/// aspects of the flash status. This function decodes all bits and returns
-/// a human-readable string matching ExifTool's output format.
+/// Thin alias for [`crate::core::formatters::exif_enums::format_flash`], which
+/// is `%Image::ExifTool::Exif::flash` -- a flat 27-key hash with a `PrintHex`
+/// unknown form. Kept as a symbol because the tag-comparison harness calls it
+/// by this name.
 ///
-/// # Bitmap Structure
-///
-/// | Bits  | Description                                      |
-/// |-------|--------------------------------------------------|
-/// | 0     | Flash fired (0 = No, 1 = Yes)                    |
-/// | 1-2   | Return detection (0 = No strobe, 2 = Not detected, 3 = Detected) |
-/// | 3-4   | Flash mode (0 = Unknown, 1 = On, 2 = Off, 3 = Auto) |
-/// | 5     | Flash function (0 = Present, 1 = No flash function) |
-/// | 6     | Red-eye reduction (0 = No, 1 = Yes)              |
+/// This function used to build the label from the Flash byte's bit fields
+/// (fired / strobe return / mode / function present / red-eye). Those bits
+/// explain how ExifTool's 27 codes were chosen, but ExifTool renders the tag by
+/// hash lookup, and 229 of the 256 byte values are not valid Flash codes at
+/// all. Scored against `%flash` over every input in 0..=255 the bitwise version
+/// was wrong on 236: it invented `No Flash` for `0x02` (ExifTool:
+/// `Unknown (0x2)`), collapsed every `0x20`-family code to `No flash function`
+/// (so `0x38` printed a real label where ExifTool prints `Unknown (0x38)`), and
+/// wrote `On, Fired, Return not detected` for `0x0d` where ExifTool writes
+/// `On, Return not detected`.
 ///
 /// # Examples
 ///
@@ -40,77 +46,13 @@
 ///
 /// assert_eq!(decode_flash(0), "No Flash");
 /// assert_eq!(decode_flash(1), "Fired");
-/// assert_eq!(decode_flash(0x18), "Auto, Did not fire"); // auto mode, not fired
-/// assert_eq!(decode_flash(0x19), "Auto, Fired"); // auto mode, fired
+/// assert_eq!(decode_flash(0x18), "Auto, Did not fire");
+/// assert_eq!(decode_flash(0x19), "Auto, Fired");
+/// // Not a Flash code -- ExifTool prints the byte in hex, it does not guess
+/// assert_eq!(decode_flash(0x38), "Unknown (0x38)");
 /// ```
 pub fn decode_flash(value: u32) -> String {
-    // Extract individual bit fields from the flash bitmap
-    let fired = (value & 0x01) != 0; // Bit 0: flash fired
-    let return_val = (value >> 1) & 0x03; // Bits 1-2: strobe return detection
-    let mode = (value >> 3) & 0x03; // Bits 3-4: flash mode
-    let function = (value >> 5) & 0x01; // Bit 5: flash function present
-    let red_eye = (value >> 6) & 0x01; // Bit 6: red-eye reduction
-
-    // Special case: no flash function
-    if function == 1 {
-        return "No flash function".to_string();
-    }
-
-    let mut parts = Vec::new();
-
-    // Flash mode first (if known), then fired status
-    // This matches ExifTool's format: "Mode, Fired/Did not fire"
-    match mode {
-        1 => {
-            // Compulsory flash mode (On)
-            parts.push("On");
-            if fired {
-                parts.push("Fired");
-            } else {
-                parts.push("Did not fire");
-            }
-        }
-        2 => {
-            // Compulsory suppression mode (Off)
-            parts.push("Off");
-            if fired {
-                parts.push("Fired");
-            } else {
-                parts.push("Did not fire");
-            }
-        }
-        3 => {
-            // Auto mode
-            parts.push("Auto");
-            if fired {
-                parts.push("Fired");
-            } else {
-                parts.push("Did not fire");
-            }
-        }
-        _ => {
-            // Unknown mode (0) - just show fired status
-            if fired {
-                parts.push("Fired");
-            } else {
-                parts.push("No Flash");
-            }
-        }
-    }
-
-    // Red-eye reduction mode
-    if red_eye == 1 {
-        parts.push("Red-eye reduction");
-    }
-
-    // Strobe return detection status (only meaningful if flash was fired)
-    match return_val {
-        2 => parts.push("Return not detected"),
-        3 => parts.push("Return detected"),
-        _ => {} // 0 = no strobe return detection function, 1 = reserved
-    }
-
-    parts.join(", ")
+    crate::core::formatters::exif_enums::format_flash(i64::from(value))
 }
 
 // =============================================================================
@@ -125,56 +67,81 @@ pub fn decode_flash(value: u32) -> String {
 mod tests {
     use super::*;
 
+    /// Codes `%flash` names, asserted against the hash rather than against the
+    /// bit layout.
+    ///
+    /// The version of this test that shipped with the bitwise decoder asserted
+    /// `decode_flash(0x49) == "On, Fired, Red-eye reduction"` -- a value
+    /// ExifTool never prints; the hash says `On, Red-eye reduction`. It read as
+    /// a thorough test (13 assertions, each with a bit-layout comment) while
+    /// enshrining the defect, and 23 files in the sample corpus reported that
+    /// exact wrong string.
     #[test]
     fn test_flash_decoding() {
-        // Basic states (unknown mode)
-        assert_eq!(decode_flash(0), "No Flash");
-        assert_eq!(decode_flash(1), "Fired");
-
-        // Flash with auto mode (bits 3-4 = 0b11 = 3, shifted left 3 = 0x18)
-        // 0x18 = 0b00011000 = not fired + auto mode (bits 3-4)
-        assert_eq!(decode_flash(0x18), "Auto, Did not fire");
-        // 0x19 = 0b00011001 = fired (bit 0) + auto mode (bits 3-4)
-        assert_eq!(decode_flash(0x19), "Auto, Fired");
-
-        // Flash off mode (bits 3-4 = 0b10 = 2, shifted left 3 = 0x10)
-        // 0x10 = 0b00010000 = not fired + off mode
-        assert_eq!(decode_flash(0x10), "Off, Did not fire");
-        // 0x14 = 0b00010100 = not fired + off mode + return not detected
-        assert_eq!(decode_flash(0x14), "Off, Did not fire, Return not detected");
-
-        // Flash on mode (bits 3-4 = 0b01 = 1, shifted left 3 = 0x08)
-        // 0x08 = 0b00001000 = not fired + on mode
-        assert_eq!(decode_flash(0x08), "On, Did not fire");
-        // 0x09 = 0b00001001 = fired + on mode
-        assert_eq!(decode_flash(0x09), "On, Fired");
-
-        // Return detected (bits 1-2 = 0b11 = 3) - unknown mode
-        // 0x07 = 0b00000111 = fired + return detected
-        assert_eq!(decode_flash(0x07), "Fired, Return detected");
-
-        // Return not detected (bits 1-2 = 0b10 = 2) - unknown mode
-        // 0x05 = 0b00000101 = fired + return not detected
+        assert_eq!(decode_flash(0x00), "No Flash");
+        assert_eq!(decode_flash(0x01), "Fired");
         assert_eq!(decode_flash(0x05), "Fired, Return not detected");
-
-        // No flash function (bit 5)
-        // 0x20 = 0b00100000 = no flash function
+        assert_eq!(decode_flash(0x07), "Fired, Return detected");
+        assert_eq!(decode_flash(0x08), "On, Did not fire");
+        assert_eq!(decode_flash(0x09), "On, Fired");
+        assert_eq!(decode_flash(0x10), "Off, Did not fire");
+        assert_eq!(decode_flash(0x14), "Off, Did not fire, Return not detected");
+        assert_eq!(decode_flash(0x18), "Auto, Did not fire");
+        assert_eq!(decode_flash(0x19), "Auto, Fired");
+        assert_eq!(decode_flash(0x1f), "Auto, Fired, Return detected");
         assert_eq!(decode_flash(0x20), "No flash function");
-
-        // Red-eye reduction (bit 6) - unknown mode
-        // 0x41 = 0b01000001 = fired + red-eye reduction
         assert_eq!(decode_flash(0x41), "Fired, Red-eye reduction");
-
-        // Complex: auto + fired + red-eye
-        // 0x59 = 0b01011001 = fired + auto + red-eye
         assert_eq!(decode_flash(0x59), "Auto, Fired, Red-eye reduction");
+    }
 
-        // Complex: auto + fired + return detected
-        // 0x1F = 0b00011111 = fired + auto + return detected
-        assert_eq!(decode_flash(0x1F), "Auto, Fired, Return detected");
+    /// The six codes the bitwise decoder mis-worded.
+    ///
+    /// Each of these is a key `%flash` does hold, where bit synthesis inserted a
+    /// `Fired,` the hash does not carry.
+    #[test]
+    fn flash_codes_the_bitwise_decoder_misworded() {
+        // was "On, Fired, Return not detected"
+        assert_eq!(decode_flash(0x0d), "On, Return not detected");
+        // was "On, Fired, Return detected"
+        assert_eq!(decode_flash(0x0f), "On, Return detected");
+        // was "On, Fired, Red-eye reduction"
+        assert_eq!(decode_flash(0x49), "On, Red-eye reduction");
+        // was "On, Fired, Red-eye reduction, Return not detected"
+        assert_eq!(
+            decode_flash(0x4d),
+            "On, Red-eye reduction, Return not detected"
+        );
+        // was "On, Fired, Red-eye reduction, Return detected"
+        assert_eq!(decode_flash(0x4f), "On, Red-eye reduction, Return detected");
+        // was "Off, Did not fire, Red-eye reduction"
+        assert_eq!(decode_flash(0x50), "Off, Red-eye reduction");
+    }
 
-        // Complex: on + red-eye
-        // 0x49 = 0b01001001 = fired + on + red-eye
-        assert_eq!(decode_flash(0x49), "On, Fired, Red-eye reduction");
+    /// Codes `%flash` does not hold print in hex; they are not guessed at.
+    ///
+    /// The bitwise decoder answered every one of the 229 unnamed byte values
+    /// with a plausible label. `0x38` and `0x28` both came back
+    /// `No flash function` -- 60 files in the sample corpus, where ExifTool
+    /// prints `Unknown (0x38)` and `Unknown (0x28)`.
+    #[test]
+    fn flash_codes_exiftool_does_not_name_print_in_hex() {
+        assert_eq!(decode_flash(0x38), "Unknown (0x38)");
+        assert_eq!(decode_flash(0x28), "Unknown (0x28)");
+        assert_eq!(decode_flash(0x02), "Unknown (0x2)");
+        assert_eq!(decode_flash(0x03), "Unknown (0x3)");
+        assert_eq!(decode_flash(0x0a), "Unknown (0xa)");
+        assert_eq!(decode_flash(0x11), "Unknown (0x11)");
+        assert_eq!(decode_flash(0x21), "Unknown (0x21)");
+        assert_eq!(decode_flash(0x60), "Unknown (0x60)");
+        assert_eq!(decode_flash(0xff), "Unknown (0xff)");
+    }
+
+    /// Exactly 27 of the 256 byte values are Flash codes.
+    #[test]
+    fn flash_names_exactly_twenty_seven_of_two_hundred_fifty_six_bytes() {
+        let named = (0u32..=255)
+            .filter(|&v| !decode_flash(v).starts_with("Unknown ("))
+            .count();
+        assert_eq!(named, 27);
     }
 }

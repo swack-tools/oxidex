@@ -57,7 +57,7 @@ pub mod shared;
 pub mod signature_parser;
 pub mod xmp_extractor;
 
-use crate::core::formatters::exif_enums::compression_label;
+use crate::core::formatters::exif_enums::{compression_label, flash_label};
 use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::core::{FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
@@ -501,43 +501,6 @@ const TAG_EXIF_IMAGE_WIDTH: u16 = 0xA002;
 const TAG_EXIF_IMAGE_HEIGHT: u16 = 0xA003;
 const TAG_FOCAL_PLANE_RESOLUTION_UNIT: u16 = 0xA210;
 const TAG_FILE_SOURCE: u16 = 0xA300;
-
-/// `%flash` from ExifTool 13.55 Exif.pm, transcribed in full.
-///
-/// Three archived patches decoded this tag by OR-ing bit meanings together
-/// (`bit 3 => "Auto"`, and so on). That is not what ExifTool does: 0x08 is a
-/// single table entry meaning `'On, Did not fire'`, not "Auto". The bitwise
-/// spelling only agreed with ExifTool for the one value PDF.pdf stores (1),
-/// which is why it survived its recheck.
-const FLASH_LABELS: &[(u16, &str)] = &[
-    (0x00, "No Flash"),
-    (0x01, "Fired"),
-    (0x05, "Fired, Return not detected"),
-    (0x07, "Fired, Return detected"),
-    (0x08, "On, Did not fire"),
-    (0x09, "On, Fired"),
-    (0x0d, "On, Return not detected"),
-    (0x0f, "On, Return detected"),
-    (0x10, "Off, Did not fire"),
-    (0x14, "Off, Did not fire, Return not detected"),
-    (0x18, "Auto, Did not fire"),
-    (0x19, "Auto, Fired"),
-    (0x1d, "Auto, Fired, Return not detected"),
-    (0x1f, "Auto, Fired, Return detected"),
-    (0x20, "No flash function"),
-    (0x30, "Off, No flash function"),
-    (0x41, "Fired, Red-eye reduction"),
-    (0x45, "Fired, Red-eye reduction, Return not detected"),
-    (0x47, "Fired, Red-eye reduction, Return detected"),
-    (0x49, "On, Red-eye reduction"),
-    (0x4d, "On, Red-eye reduction, Return not detected"),
-    (0x4f, "On, Red-eye reduction, Return detected"),
-    (0x50, "Off, Red-eye reduction"),
-    (0x58, "Auto, Did not fire, Red-eye reduction"),
-    (0x59, "Auto, Fired, Red-eye reduction"),
-    (0x5d, "Auto, Fired, Red-eye reduction, Return not detected"),
-    (0x5f, "Auto, Fired, Red-eye reduction, Return detected"),
-];
 
 /// FocalPlaneResolutionUnit (0xa210) PrintConv, ExifTool 13.55 Exif.pm.
 /// Values 1, 4 and 5 are flagged there as non-standard EXIF but are still
@@ -997,7 +960,7 @@ fn parse_exif_ifd(
             // ExifTool 13.55 Exif.pm 0x9209: PrintConv => \%flash.
             TAG_FLASH if field_type == 3 => {
                 if let Some(raw) = read_short_value(data, base, byte_order) {
-                    if let Some(label) = lookup_label(FLASH_LABELS, raw) {
+                    if let Some(label) = flash_label(i64::from(raw)) {
                         let key = crate::tag_db::lookup_tag_name(TAG_FLASH, "ExifIFD");
                         metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
                     }
