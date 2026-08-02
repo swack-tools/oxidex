@@ -57,7 +57,9 @@ pub mod shared;
 pub mod signature_parser;
 pub mod xmp_extractor;
 
-use crate::core::formatters::exif_enums::{compression_label, flash_label};
+use crate::core::formatters::exif_enums::{
+    compression_label, flash_label, focal_plane_resolution_unit_label,
+};
 use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::core::{FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
@@ -501,12 +503,6 @@ const TAG_EXIF_IMAGE_WIDTH: u16 = 0xA002;
 const TAG_EXIF_IMAGE_HEIGHT: u16 = 0xA003;
 const TAG_FOCAL_PLANE_RESOLUTION_UNIT: u16 = 0xA210;
 const TAG_FILE_SOURCE: u16 = 0xA300;
-
-/// FocalPlaneResolutionUnit (0xa210) PrintConv, ExifTool 13.55 Exif.pm.
-/// Values 1, 4 and 5 are flagged there as non-standard EXIF but are still
-/// decoded, so all five are kept.
-const FOCAL_PLANE_RESOLUTION_UNIT_LABELS: &[(u16, &str)] =
-    &[(1, "None"), (2, "inches"), (3, "cm"), (4, "mm"), (5, "um")];
 
 /// FileSource (0xa300) PrintConv, ExifTool 13.55 Exif.pm.
 ///
@@ -969,7 +965,7 @@ fn parse_exif_ifd(
             // ExifTool 13.55 Exif.pm 0xa210 PrintConv.
             TAG_FOCAL_PLANE_RESOLUTION_UNIT if field_type == 3 => {
                 if let Some(raw) = read_short_value(data, base, byte_order) {
-                    if let Some(label) = lookup_label(FOCAL_PLANE_RESOLUTION_UNIT_LABELS, raw) {
+                    if let Some(label) = focal_plane_resolution_unit_label(i64::from(raw)) {
                         let key = crate::tag_db::lookup_tag_name(
                             TAG_FOCAL_PLANE_RESOLUTION_UNIT,
                             "ExifIFD",

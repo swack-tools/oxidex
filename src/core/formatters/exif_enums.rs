@@ -234,6 +234,62 @@ pub fn format_file_source(value: i64) -> String {
     }
 }
 
+/// `0xa210 FocalPlaneResolutionUnit`'s PrintConv (Exif.pm:2777), verbatim:
+///
+/// ```text
+///         PrintConv => {
+///             1 => 'None', # (not standard EXIF)
+///             2 => 'inches',
+///             3 => 'cm',
+///             4 => 'mm',   # (not standard EXIF)
+///             5 => 'um',   # (not standard EXIF)
+///         },
+/// ```
+///
+/// The tree already held this table -- in `parsers::pdf`, reachable only from a
+/// PDF's embedded TIFF thumbnail. The main EXIF path had no decoder at all and
+/// printed the raw code, so 1,098 files in the sample corpus reported `2` and
+/// `3` where ExifTool reports `inches` and `cm`.
+///
+/// `Notes => 'values 1, 4 and 5 are not standard EXIF'` is a note, not an
+/// exclusion: ExifTool decodes all five, and the corpus contains 4 files at `4`
+/// and 1 at `5`.
+const FOCAL_PLANE_RESOLUTION_UNIT: &[(i64, &str)] =
+    &[(1, "None"), (2, "inches"), (3, "cm"), (4, "mm"), (5, "um")];
+
+/// Looks up `FocalPlaneResolutionUnit` (0xa210).
+///
+/// `None` for a code ExifTool does not name, so the PDF path can keep leaving
+/// the tag alone while `format_focal_plane_resolution_unit` prints
+/// `Unknown (N)`.
+///
+/// # Examples
+///
+/// ```
+/// use oxidex::core::formatters::exif_enums::focal_plane_resolution_unit_label;
+///
+/// assert_eq!(focal_plane_resolution_unit_label(2), Some("inches"));
+/// assert_eq!(focal_plane_resolution_unit_label(5), Some("um"));
+/// assert_eq!(focal_plane_resolution_unit_label(0), None);
+/// ```
+pub fn focal_plane_resolution_unit_label(value: i64) -> Option<&'static str> {
+    FOCAL_PLANE_RESOLUTION_UNIT
+        .iter()
+        .find(|&&(id, _)| id == value)
+        .map(|&(_, label)| label)
+}
+
+/// Format FocalPlaneResolutionUnit enum value
+/// EXIF tag 0xA210
+///
+/// No `PrintHex` on 0xa210, so unnamed codes print in decimal: `Unknown (0)`.
+pub fn format_focal_plane_resolution_unit(value: i64) -> String {
+    match focal_plane_resolution_unit_label(value) {
+        Some(label) => label.to_string(),
+        None => format!("Unknown ({})", value),
+    }
+}
+
 /// Format SensingMethod enum value
 /// EXIF tag 0xA217
 pub fn format_sensing_method(value: i64) -> String {
@@ -513,6 +569,39 @@ mod tests {
         assert_eq!(format_compression(1), "Uncompressed");
         assert_eq!(format_compression(6), "JPEG (old-style)");
         assert_eq!(format_compression(7), "JPEG");
+    }
+
+    /// `FocalPlaneResolutionUnit` decodes; it does not print the raw code.
+    ///
+    /// The main EXIF path had no decoder for 0xa210 at all -- the only copy of
+    /// the table lived in `parsers::pdf`, reachable only from a PDF's embedded
+    /// TIFF thumbnail. 1,098 sample-corpus files reported the bare number.
+    #[test]
+    fn focal_plane_resolution_unit_decodes_all_five_codes() {
+        assert_eq!(format_focal_plane_resolution_unit(1), "None");
+        assert_eq!(format_focal_plane_resolution_unit(2), "inches");
+        assert_eq!(format_focal_plane_resolution_unit(3), "cm");
+        // `Notes => 'values 1, 4 and 5 are not standard EXIF'` is a note, not an
+        // exclusion -- the corpus has 4 files at 4 and 1 at 5.
+        assert_eq!(format_focal_plane_resolution_unit(4), "mm");
+        assert_eq!(format_focal_plane_resolution_unit(5), "um");
+        // None of them is the raw code
+        for code in 1..=5 {
+            assert_ne!(
+                format_focal_plane_resolution_unit(code),
+                code.to_string(),
+                "code {code} printed as a bare number"
+            );
+        }
+    }
+
+    /// 0xa210 carries no `PrintHex`, so unknown codes print in decimal.
+    #[test]
+    fn focal_plane_resolution_unit_unknown_codes_print_decimal() {
+        assert_eq!(format_focal_plane_resolution_unit(0), "Unknown (0)");
+        assert_eq!(format_focal_plane_resolution_unit(6), "Unknown (6)");
+        assert_eq!(focal_plane_resolution_unit_label(0), None);
+        assert_eq!(focal_plane_resolution_unit_label(6), None);
     }
 
     /// The ten codes the pre-consolidation table got wrong.

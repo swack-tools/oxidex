@@ -66,14 +66,15 @@ use crate::core::formatters::{
     decode_cfa_pattern, decode_gps_processing_method, decode_scene_type, decode_version_bytes,
     exiftool_rational_number, format_color_space, format_components_configuration,
     format_compression, format_contrast, format_custom_rendered, format_exposure_mode,
-    format_exposure_program, format_file_source, format_flash, format_gain_control,
-    format_gps_altitude_ref, format_gps_direction_ref, format_gps_lat_ref, format_gps_lon_ref,
-    format_gps_speed_ref, format_icc_value, format_integer_precision_values, format_interop_index,
-    format_light_source, format_metering_mode, format_orientation, format_resolution_unit,
-    format_saturation, format_scene_capture_type, format_sensing_method, format_sharpness,
-    format_subject_distance_range, format_three_decimal_values, format_white_balance,
-    format_with_unit, format_ycbcr_positioning, format_ycbcr_subsampling_string, is_icc_matrix_tag,
-    is_integer_precision_tag, is_three_decimal_tag,
+    format_exposure_program, format_file_source, format_flash, format_focal_plane_resolution_unit,
+    format_gain_control, format_gps_altitude_ref, format_gps_direction_ref, format_gps_lat_ref,
+    format_gps_lon_ref, format_gps_speed_ref, format_icc_value, format_integer_precision_values,
+    format_interop_index, format_light_source, format_metering_mode, format_orientation,
+    format_resolution_unit, format_saturation, format_scene_capture_type, format_sensing_method,
+    format_sharpness, format_subject_distance_range, format_three_decimal_values,
+    format_white_balance, format_with_unit, format_ycbcr_positioning,
+    format_ycbcr_subsampling_string, is_icc_matrix_tag, is_integer_precision_tag,
+    is_three_decimal_tag,
 };
 use crate::core::{MetadataMap, TagValue};
 
@@ -453,6 +454,16 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
         && let Some(i) = value.as_integer()
     {
         return TagValue::String(format_sensing_method(i));
+    }
+
+    // FocalPlaneResolutionUnit enum (1-5). Exif.pm 0xa210 declares a PrintConv;
+    // this path used to print the raw code, so 1,098 corpus files reported `2`
+    // and `3` instead of `inches` and `cm`. The composite ScaleFactor35efl
+    // already accepts either spelling (`Some("3") | Some("cm")`).
+    if base_name == "FocalPlaneResolutionUnit"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_focal_plane_resolution_unit(i));
     }
 
     // Compression enum (1-65535)
@@ -1465,6 +1476,47 @@ fn format_icc_string_values(value: &str, base_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The dispatch, not just the table.
+    ///
+    /// `format_focal_plane_resolution_unit` existing proves nothing on its own:
+    /// the table already existed in `parsers::pdf` while this chain had no
+    /// `FocalPlaneResolutionUnit` arm, so `format_tag_value` returned the raw
+    /// integer and 1,098 sample-corpus files reported `2` instead of `inches`.
+    /// This asserts the wiring.
+    #[test]
+    fn focal_plane_resolution_unit_reaches_the_print_conv() {
+        for (code, label) in [
+            (1i64, "None"),
+            (2, "inches"),
+            (3, "cm"),
+            (4, "mm"),
+            (5, "um"),
+        ] {
+            let got = format_tag_value(
+                "ExifIFD:FocalPlaneResolutionUnit",
+                &TagValue::new_integer(code),
+            );
+            assert_eq!(
+                got,
+                TagValue::String(label.to_string()),
+                "FocalPlaneResolutionUnit {code} did not reach the PrintConv"
+            );
+        }
+    }
+
+    /// Flash reaches the hash, and unnamed codes come back in hex.
+    #[test]
+    fn flash_reaches_the_print_conv_with_the_printhex_unknown_form() {
+        assert_eq!(
+            format_tag_value("ExifIFD:Flash", &TagValue::new_integer(0x49)),
+            TagValue::String("On, Red-eye reduction".to_string())
+        );
+        assert_eq!(
+            format_tag_value("ExifIFD:Flash", &TagValue::new_integer(0x38)),
+            TagValue::String("Unknown (0x38)".to_string())
+        );
+    }
 
     // -------------------------------------------------------------------------
     // strip_family_prefix tests
