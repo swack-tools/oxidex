@@ -90,7 +90,27 @@ pub fn resolve_makernote_byte_order(
     let Some(start_offset) = ifd_start_offset(data, config) else {
         return byte_order;
     };
-    let reader = EndianReader::new(&data[start_offset..], byte_order.to_io_byte_order());
+    resolve_byte_order_at(data, start_offset, byte_order)
+}
+
+/// [`resolve_makernote_byte_order`] for a parser that has already located its
+/// own IFD.
+///
+/// Same rule, same `Exif.pm:6886-6893` predicate; the only difference is that
+/// the caller passes `$subdirStart` directly instead of having it derived from
+/// an [`IfdParserConfig`] signature. Vendors whose header length varies with
+/// the signature -- Panasonic writes a 12-byte "Panasonic\0\0\0", an 8-byte
+/// "LEICA\0\0\0" and an 18-byte "LEICA CAMERA AG\0" into the same table --
+/// cannot express that offset as a single fixed `signature_offset`.
+pub fn resolve_byte_order_at(
+    data: &[u8],
+    ifd_offset: usize,
+    byte_order: ByteOrder,
+) -> ByteOrder {
+    let Some(ifd) = data.get(ifd_offset..) else {
+        return byte_order;
+    };
+    let reader = EndianReader::new(ifd, byte_order.to_io_byte_order());
     let Some(num) = reader.u16_at(0) else {
         return byte_order;
     };

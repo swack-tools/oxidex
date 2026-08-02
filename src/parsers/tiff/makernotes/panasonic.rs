@@ -40,6 +40,7 @@ use std::collections::HashMap;
 use super::makernote_context::MakerNoteContext;
 use super::shared::MakerNoteParser;
 use super::shared::binary_subdir::{BinaryTable, decode_binary_subdir};
+use super::shared::ifd_parser_base::resolve_byte_order_at;
 use face_tables::{PANASONIC_FACEDETINFO, PANASONIC_FACERECINFO};
 
 // Import declarative decoder macros
@@ -511,6 +512,14 @@ impl PanasonicParser {
         if data.len() <= ifd_offset + 2 {
             return Ok(());
         }
+
+        // `MakerNotePanasonic` declares `ByteOrder => 'Unknown'`
+        // (MakerNotes.pm:733-741), so the directory is written in the camera's
+        // own endianness and not necessarily the enclosing TIFF's. ExifTool
+        // resolves it from the entry count (Exif.pm:6886-6893) and applies the
+        // result to the entries *and* their values (`SetByteOrder`,
+        // Exif.pm:7078), so it has to be settled before anything is read.
+        let byte_order = resolve_byte_order_at(data, ifd_offset, byte_order);
 
         let ifd_data = &data[ifd_offset..];
 
