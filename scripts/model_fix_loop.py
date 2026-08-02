@@ -242,6 +242,13 @@ from distill_lessons import (
 # above; validate_fix_commit is stdlib-only and imports nothing from here.
 from validate_fix_commit import squad_from_worker
 
+# exiftool_oracle.py is the canonical owner of "which ExifTool do we grade
+# against". Never invoke a bare `exiftool`: PATH resolved to 13.55 while the
+# tables are transcribed from 13.59, and the two disagree about which
+# sub-table a given byte count selects. Same sibling-import shape as above.
+import exiftool_oracle
+from exiftool_oracle import shared as shared_exiftool_oracle
+
 # --- K1 lessons ledger (writer side; see distill_lessons.py for the ---------
 # --- canonical schema/fingerprint/append contract) --------------------------
 
@@ -1796,16 +1803,28 @@ def resolve_exiftool_perl_lib_dir():
     is the real CFAPattern2), because nothing had ever shown the fixer
     ExifTool's actual Exif.pm entries to compare its guess against.
 
-    The bare system perl doesn't have Image::ExifTool installed as a
-    regular module -- exiftool bundles its own copy and adds it to @INC
-    itself -- so this can't just `use Image::ExifTool` and read $INC.
-    Homebrew's exiftool formula patches the exact lib path directly into
-    the installed script instead (an `unshift @INC, "<path>/lib/perl5"`
-    line added to its BEGIN block), so this reads it straight from there:
-    works for whatever exiftool is actually on PATH, on whatever machine,
-    without hardcoding a version-specific Cellar path that breaks on the
-    next `brew upgrade`.
+    The pinned source tree comes first, and that ordering is the whole
+    point: this directory is the ExifTool Perl the fixer model *reads*
+    while writing transcriptions, so it must be the same release the
+    transcriptions are graded against. Scraping the PATH exiftool
+    resolved to Homebrew's 13.55 Cellar copy while the pin was 13.59 --
+    the model was shown one release's tables and scored against
+    another's, which is the same skew this module's oracle exists to
+    kill, just on the input side.
+
+    The PATH scrape survives as a fallback for a machine with no cached
+    checkout. The bare system perl doesn't have Image::ExifTool installed
+    as a regular module -- exiftool bundles its own copy and adds it to
+    @INC itself -- so this can't just `use Image::ExifTool` and read
+    $INC. Homebrew's formula patches the lib path directly into the
+    installed script (an `unshift @INC, "<path>/lib/perl5"` line in its
+    BEGIN block), so the fallback reads it straight from there rather
+    than hardcoding a version-specific Cellar path.
     """
+    pinned = exiftool_oracle.pinned_lib() / "Image" / "ExifTool"
+    if pinned.is_dir():
+        return pinned
+
     exe = shutil.which("exiftool")
     if not exe:
         return None
@@ -4969,9 +4988,9 @@ def _resolve_oxidex_binary(repo_root):
 
 
 def default_extract_live_evidence(repo_root, sample_path, tag_keys):
-    """K5 real default for fix_gap's extract_evidence_fn: shell out to
-    exiftool and this worktree's own oxidex binary for just the target
-    tags on one real sample file -- NOT the comparison JSON (whose
+    """K5 real default for fix_gap's extract_evidence_fn: shell out to the
+    pinned ExifTool oracle and this worktree's own oxidex binary for just
+    the target tags on one real sample file -- NOT the comparison JSON (whose
     matched_tags carries no values, the unimplementable-recheck-evidence
     critique this resolves). Renders "<tag>: exiftool=<v> oxidex=<v>
     (post-fix)" per tag found in either output.
@@ -4986,20 +5005,32 @@ def default_extract_live_evidence(repo_root, sample_path, tag_keys):
         return ""
     repo_root = Path(repo_root)
     binary = _resolve_oxidex_binary(repo_root)
-    if binary is None or not shutil.which("exiftool"):
+    if binary is None:
         return ""
     try:
+        # The pinned oracle, not `shutil.which("exiftool")`: a PATH exiftool is
+        # a different release from the one the tables were transcribed from, so
+        # the "exiftool=" half of this evidence could disagree with oxidex for
+        # reasons that have nothing to do with the fix under review. An
+        # unresolvable/skewed/degraded oracle raises OracleError (a RuntimeError)
+        # and lands in the same best-effort "" as a missing binary did before.
+        oracle = shared_exiftool_oracle()
         et_proc = subprocess.run(  # nosec B603
-            ["exiftool", "-j", "-G", str(sample_path)],
+            oracle.command(["-j", "-G", str(sample_path)]),
             capture_output=True, text=True, timeout=30,
         )
         ox_proc = subprocess.run(  # nosec B603
             [str(binary), "-j", "--exiftool-compat", str(sample_path)],
             capture_output=True, text=True, timeout=30,
         )
-        et_tags = json.loads(et_proc.stdout)[0] if et_proc.stdout.strip() else {}
-        ox_tags = json.loads(ox_proc.stdout)[0] if ox_proc.stdout.strip() else {}
-    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        # parse_float=str on BOTH sides. ExifTool's "1.80" becomes 1.8 under
+        # default float handling, and this renders the two values side by side
+        # with !r -- converting one side and not the other would print
+        # `exiftool='1.80' oxidex=1.8` for a byte-identical pair and invite the
+        # reviewer to reject a correct fix.
+        et_tags = json.loads(et_proc.stdout, parse_float=str)[0] if et_proc.stdout.strip() else {}
+        ox_tags = json.loads(ox_proc.stdout, parse_float=str)[0] if ox_proc.stdout.strip() else {}
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError, RuntimeError):
         return ""
 
     def lookup(tags, tag_key):

@@ -29,6 +29,13 @@ import os
 import subprocess
 import sys
 from collections import Counter, defaultdict
+from pathlib import Path
+
+# The single resolution point for "which ExifTool are we grading against".
+# Kept in scripts/ so the Rust harnesses, the fleet scripts and this tool all
+# answer that question the same way.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+import exiftool_oracle  # noqa: E402
 
 # Tags that describe the file on disk rather than its metadata. They differ by
 # construction (paths, timestamps, the tool's own version) and would swamp the
@@ -40,17 +47,19 @@ IGNORE = {
 }
 
 
-def run_exiftool(et_dir, path):
+def run_exiftool(oracle, path):
     out = subprocess.run(
-        ["perl", "-I" + os.path.join(et_dir, "lib"),
-         # No -n: ExifTool must apply PrintConv, because OxiDex applies its
-         # own. Comparing converted output against raw values would report
-         # every correctly-read tag as a value mismatch.
-         os.path.join(et_dir, "exiftool"), "-G", "-s", "-j", "-a", path],
+        # No -n: ExifTool must apply PrintConv, because OxiDex applies its
+        # own. Comparing converted output against raw values would report
+        # every correctly-read tag as a value mismatch.
+        oracle.command(["-G", "-s", "-j", "-a", path]),
         capture_output=True, text=True, errors="replace",
     ).stdout
     try:
-        return json.loads(out)[0]
+        # parse_float=str: the default turns ExifTool's "1.80" into 1.8, and
+        # the harness then reports a value difference against byte-identical
+        # OxiDex output. Rediscovered as a "bug" five separate times here.
+        return json.loads(out, parse_float=str)[0]
     except (json.JSONDecodeError, IndexError, KeyError):
         return {}
 
@@ -60,7 +69,9 @@ def run_oxidex(binary, path):
         [binary, "-j", path], capture_output=True, text=True, errors="replace",
     ).stdout
     try:
-        d = json.loads(out)
+        # Same parse_float reasoning as run_exiftool: both sides must round-trip
+        # their numbers identically or the comparison invents differences.
+        d = json.loads(out, parse_float=str)
     except json.JSONDecodeError:
         return {}
     if isinstance(d, list):
@@ -191,18 +202,42 @@ def compare(et, ox):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("corpus", help="directory of sample files")
-    ap.add_argument("--exiftool-dir", required=True)
+    ap.add_argument("--exiftool-dir",
+                    help="ExifTool checkout root; defaults to the pinned tree "
+                         "resolved by scripts/exiftool_oracle.py")
     ap.add_argument("--oxidex", default="./target/debug/oxidex")
     ap.add_argument("--only", help="substring filter on filename")
+    ap.add_argument("--recursive", action="store_true",
+                    help="walk the corpus recursively (most sample corpora are "
+                         "nested one directory per manufacturer)")
+    ap.add_argument("--min-files", type=int, default=1,
+                    help="fail if fewer files than this were scored")
+    ap.add_argument("--min-tags", type=int, default=1,
+                    help="fail if fewer ExifTool tags than this were seen")
     ap.add_argument("--show", type=int, default=0,
                     help="print per-file detail for the N worst files")
     ap.add_argument("--json-out")
     args = ap.parse_args()
 
+    # Resolve the oracle before reading a single file. A run that cannot say
+    # which ExifTool it graded against should not go on to report a number.
+    try:
+        oracle = (exiftool_oracle.resolve_tree(args.exiftool_dir)
+                  if args.exiftool_dir else exiftool_oracle.shared())
+    except exiftool_oracle.OracleError as exc:
+        sys.exit(f"❌ {exc}")
+    print(f"oracle: {oracle.provenance()}")
+    print(f"        {oracle.display()}\n")
+
+    if args.recursive:
+        walked = (os.path.join(root, f)
+                  for root, _dirs, fs in os.walk(args.corpus) for f in fs)
+    else:
+        walked = (os.path.join(args.corpus, f) for f in os.listdir(args.corpus))
     files = sorted(
-        os.path.join(args.corpus, f) for f in os.listdir(args.corpus)
-        if os.path.isfile(os.path.join(args.corpus, f))
-        and (not args.only or args.only.lower() in f.lower())
+        p for p in walked
+        if os.path.isfile(p)
+        and (not args.only or args.only.lower() in os.path.basename(p).lower())
     )
     if not files:
         sys.exit(f"no files in {args.corpus}")
@@ -212,10 +247,14 @@ def main():
     missing_votes = Counter()
     detail = []
 
+    scored_files = 0
+    et_tags_seen = 0
     for path in files:
-        et = run_exiftool(args.exiftool_dir, path)
+        et = run_exiftool(oracle, path)
         if not et:
             continue
+        scored_files += 1
+        et_tags_seen += len(et)
         ox = run_oxidex(args.oxidex, path)
         r = compare(et, ox)
         ext = (et.get("File:FileType") or et.get("FileType")
@@ -236,6 +275,21 @@ def main():
 
         total = c["matched"] + c["value_diff"] + c["missing"] + c["renames"]
         detail.append((len(r["missing"]) + len(r["renames"]), path, r))
+
+    # Refuse to print a number from a run that plainly did not happen. A
+    # degraded oracle does not crash: it reads a fraction of the corpus and
+    # reports a confident, precisely-formatted, completely wrong percentage.
+    # Measured once at 109,261 tags over 832 files where a working oracle got
+    # 507,295 over 4,230 -- nothing about the output looked wrong.
+    if scored_files < args.min_files or et_tags_seen < args.min_tags:
+        sys.exit(
+            f"❌ vacuous run: scored {scored_files} file(s) / {et_tags_seen} ExifTool tag(s), "
+            f"below the floor of {args.min_files}/{args.min_tags}.\n"
+            f"   {len(files)} file(s) were found in {args.corpus}"
+            f"{'' if args.recursive else ' (non-recursive; pass --recursive for a nested corpus)'}.\n"
+            f"   oracle: {oracle.provenance()}\n"
+            "   Check the oracle can actually read this corpus before trusting any score."
+        )
 
     print(f"{'format':<10}{'files':>6}{'match':>7}{'rename':>8}"
           f"{'value':>7}{'missing':>9}{'score':>8}{'ceiling':>9}")

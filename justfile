@@ -557,15 +557,19 @@ compare-exiftool:
     }
     trap cleanup EXIT
 
-    echo "📥 Fetching latest ExifTool version..."
-    # Try exiftool.org first with User-Agent, fall back to GitHub tags API
-    VERSION=$(curl -sA "OxiDex/1.0" https://exiftool.org/ver.txt 2>/dev/null | grep -E '^[0-9]+\.[0-9]+$' || \
-              curl -s https://api.github.com/repos/exiftool/exiftool/tags 2>/dev/null | grep -m1 '"name"' | sed 's/.*"name": *"\([^"]*\)".*/\1/')
+    # Pinned, not "latest". This used to ask exiftool.org for the newest
+    # release on every run, so the ExifTool the corpus was graded against
+    # changed whenever upstream published -- while the transcriptions in this
+    # repo stayed put. Different releases select different sub-tables for the
+    # same bytes, so that drift silently manufactures both regressions and
+    # fixes. .exiftool-version is the one source of truth, shared with the Rust
+    # and Python oracles and with CI.
+    VERSION=$(tr -d '[:space:]' < .exiftool-version)
     if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
-        echo "   ❌ Failed to fetch ExifTool version from exiftool.org and GitHub API"
+        echo "   ❌ .exiftool-version does not hold a numeric release: '$VERSION'"
         exit 1
     fi
-    echo "   Version: $VERSION"
+    echo "📌 Pinned ExifTool version: $VERSION"
 
     echo "📦 Downloading ExifTool $VERSION..."
     curl -L "https://github.com/exiftool/exiftool/archive/refs/tags/$VERSION.tar.gz" \
@@ -611,15 +615,19 @@ compare-exiftool-update:
     }
     trap cleanup EXIT
 
-    echo "📥 Fetching latest ExifTool version..."
-    # Try exiftool.org first with User-Agent, fall back to GitHub tags API
-    VERSION=$(curl -sA "OxiDex/1.0" https://exiftool.org/ver.txt 2>/dev/null | grep -E '^[0-9]+\.[0-9]+$' || \
-              curl -s https://api.github.com/repos/exiftool/exiftool/tags 2>/dev/null | grep -m1 '"name"' | sed 's/.*"name": *"\([^"]*\)".*/\1/')
+    # Pinned, not "latest". This used to ask exiftool.org for the newest
+    # release on every run, so the ExifTool the corpus was graded against
+    # changed whenever upstream published -- while the transcriptions in this
+    # repo stayed put. Different releases select different sub-tables for the
+    # same bytes, so that drift silently manufactures both regressions and
+    # fixes. .exiftool-version is the one source of truth, shared with the Rust
+    # and Python oracles and with CI.
+    VERSION=$(tr -d '[:space:]' < .exiftool-version)
     if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
-        echo "   ❌ Failed to fetch ExifTool version from exiftool.org and GitHub API"
+        echo "   ❌ .exiftool-version does not hold a numeric release: '$VERSION'"
         exit 1
     fi
-    echo "   Version: $VERSION"
+    echo "📌 Pinned ExifTool version: $VERSION"
 
     echo "📦 Downloading ExifTool $VERSION..."
     curl -L "https://github.com/exiftool/exiftool/archive/refs/tags/$VERSION.tar.gz" \
@@ -667,13 +675,15 @@ compare-exiftool-format format:
     }
     trap cleanup EXIT
 
-    # Try exiftool.org first with User-Agent, fall back to GitHub tags API
-    VERSION=$(curl -sA "OxiDex/1.0" https://exiftool.org/ver.txt 2>/dev/null | grep -E '^[0-9]+\.[0-9]+$' || \
-              curl -s https://api.github.com/repos/exiftool/exiftool/tags 2>/dev/null | grep -m1 '"name"' | sed 's/.*"name": *"\([^"]*\)".*/\1/')
+    # Pinned, not "latest" -- see .exiftool-version. Grading against whatever
+    # upstream published today, while the transcriptions stay put, silently
+    # manufactures both regressions and fixes.
+    VERSION=$(tr -d '[:space:]' < .exiftool-version)
     if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
-        echo "   ❌ Failed to fetch ExifTool version"
+        echo "   ❌ .exiftool-version does not hold a numeric release: '$VERSION'"
         exit 1
     fi
+    echo "📌 Pinned ExifTool version: $VERSION"
     echo "📦 Downloading ExifTool $VERSION..."
     curl -sL "https://github.com/exiftool/exiftool/archive/refs/tags/$VERSION.tar.gz" \
         -o "/tmp/exiftool-$VERSION.tar.gz"
@@ -713,15 +723,19 @@ compare-exiftool-samples:
     }
     trap cleanup EXIT
 
-    echo "📥 Fetching latest ExifTool version..."
-    # Try exiftool.org first with User-Agent, fall back to GitHub tags API
-    VERSION=$(curl -sA "OxiDex/1.0" https://exiftool.org/ver.txt 2>/dev/null | grep -E '^[0-9]+\.[0-9]+$' || \
-              curl -s https://api.github.com/repos/exiftool/exiftool/tags 2>/dev/null | grep -m1 '"name"' | sed 's/.*"name": *"\([^"]*\)".*/\1/')
+    # Pinned, not "latest". This used to ask exiftool.org for the newest
+    # release on every run, so the ExifTool the corpus was graded against
+    # changed whenever upstream published -- while the transcriptions in this
+    # repo stayed put. Different releases select different sub-tables for the
+    # same bytes, so that drift silently manufactures both regressions and
+    # fixes. .exiftool-version is the one source of truth, shared with the Rust
+    # and Python oracles and with CI.
+    VERSION=$(tr -d '[:space:]' < .exiftool-version)
     if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
-        echo "   ❌ Failed to fetch ExifTool version from exiftool.org and GitHub API"
+        echo "   ❌ .exiftool-version does not hold a numeric release: '$VERSION'"
         exit 1
     fi
-    echo "   Version: $VERSION"
+    echo "📌 Pinned ExifTool version: $VERSION"
 
     echo "📦 Downloading ExifTool $VERSION..."
     curl -L "https://github.com/exiftool/exiftool/archive/refs/tags/$VERSION.tar.gz" \
@@ -796,15 +810,19 @@ compare-exiftool-full:
 
     mkdir -p "$CACHE_DIR"
 
-    echo "📥 Fetching latest ExifTool version..."
-    # Try exiftool.org first with User-Agent, fall back to GitHub tags API
-    VERSION=$(curl -sA "OxiDex/1.0" https://exiftool.org/ver.txt 2>/dev/null | grep -E '^[0-9]+\.[0-9]+$' || \
-              curl -s https://api.github.com/repos/exiftool/exiftool/tags 2>/dev/null | grep -m1 '"name"' | sed 's/.*"name": *"\([^"]*\)".*/\1/')
+    # Pinned, not "latest". This used to ask exiftool.org for the newest
+    # release on every run, so the ExifTool the corpus was graded against
+    # changed whenever upstream published -- while the transcriptions in this
+    # repo stayed put. Different releases select different sub-tables for the
+    # same bytes, so that drift silently manufactures both regressions and
+    # fixes. .exiftool-version is the one source of truth, shared with the Rust
+    # and Python oracles and with CI.
+    VERSION=$(tr -d '[:space:]' < .exiftool-version)
     if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
-        echo "   ❌ Failed to fetch ExifTool version from exiftool.org and GitHub API"
+        echo "   ❌ .exiftool-version does not hold a numeric release: '$VERSION'"
         exit 1
     fi
-    echo "   Version: $VERSION"
+    echo "📌 Pinned ExifTool version: $VERSION"
 
     # Check if ExifTool is already cached
     if [[ -f "$EXIFTOOL_DIR/exiftool" && -f "$CACHE_DIR/.exiftool-version" ]]; then
@@ -928,36 +946,15 @@ compare-exiftool-full-update:
 
     mkdir -p "$CACHE_DIR"
 
-    echo "📥 Fetching latest ExifTool version..."
-    # Try multiple sources for version with explicit error handling
-    VERSION=""
-
-    # Try exiftool.org first
-    VERSION=$(curl -sA "OxiDex/1.0" --connect-timeout 10 --max-time 30 https://exiftool.org/ver.txt 2>/dev/null | grep -E '^[0-9]+\.[0-9]+$' || true)
-
-    # Fall back to GitHub tags API (ExifTool doesn't use GitHub releases)
-    if [[ -z "$VERSION" || ! "$VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
-        echo "   Trying GitHub tags API..."
-        if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-            VERSION=$(curl -sL --connect-timeout 10 --max-time 30 \
-                -H "Accept: application/vnd.github+json" \
-                -H "Authorization: Bearer $GITHUB_TOKEN" \
-                https://api.github.com/repos/exiftool/exiftool/tags 2>/dev/null | \
-                grep -m1 '"name"' | sed 's/.*"name"[^"]*"\([^"]*\)".*/\1/' || true)
-        else
-            VERSION=$(curl -sL --connect-timeout 10 --max-time 30 \
-                -H "Accept: application/vnd.github+json" \
-                https://api.github.com/repos/exiftool/exiftool/tags 2>/dev/null | \
-                grep -m1 '"name"' | sed 's/.*"name"[^"]*"\([^"]*\)".*/\1/' || true)
-        fi
-    fi
-
-    if [[ -z "$VERSION" || ! "$VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
-        echo "   ❌ Failed to fetch ExifTool version from all sources"
-        echo "   Tried: exiftool.org, GitHub tags API"
+    # Pinned, not "latest" -- see .exiftool-version. Grading against whatever
+    # upstream published today, while the transcriptions stay put, silently
+    # manufactures both regressions and fixes.
+    VERSION=$(tr -d '[:space:]' < .exiftool-version)
+    if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo "   ❌ .exiftool-version does not hold a numeric release: '$VERSION'"
         exit 1
     fi
-    echo "   Version: $VERSION"
+    echo "📌 Pinned ExifTool version: $VERSION"
 
     # Check if ExifTool is already cached
     if [[ -f "$EXIFTOOL_DIR/exiftool" && -f "$CACHE_DIR/.exiftool-version" ]]; then

@@ -128,25 +128,43 @@ jobs:
           cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h.tmp
           diff -q api/oxidex.h api/oxidex.h.tmp || (echo "C header out of date" && exit 1)
           rm api/oxidex.h.tmp
-      - name: Install ExifTool
+      # Pinned, not "newest". This step used to scrape the newest
+      # Image-ExifTool tarball off SourceForge's RSS feed, which meant the
+      # release CI graded against changed whenever upstream published -- while
+      # the transcriptions in this repo stayed put. Different releases select
+      # different sub-tables for the same bytes (13.59 vs 13.55 disagree on
+      # Canon::ColorData11's discriminator), so that drift manufactures
+      # regressions and fixes that have nothing to do with the diff under test.
+      # The version comes from .exiftool-version, the same file the Rust and
+      # Python oracles compile/read it from, so there is one source of truth.
+      - name: Install pinned ExifTool
         run: |
-          # "files/latest/download" now resolves to the Windows/default zip
-          # package rather than the Unix tarball, so find the newest
-          # Image-ExifTool-*.tar.gz entry from the project's RSS feed instead.
-          tarball_url=$(curl -sSL "https://sourceforge.net/projects/exiftool/rss?path=/" \
-            | grep -oE '<link>[^<]*Image-ExifTool-[0-9.]+\.tar\.gz/download</link>' \
-            | head -1 \
-            | sed -E 's#<link>(.*)</link>#\1#')
-          if [ -z "$tarball_url" ]; then
-            echo "Could not find an Image-ExifTool tarball URL" >&2
-            exit 1
-          fi
-          curl -sSL "$tarball_url" -o /tmp/exiftool.tar.gz
+          set -euo pipefail
+          V=$(tr -d '[:space:]' < .exiftool-version)
+          case "$V" in
+            *[!0-9.]* | "" | .* | *.)
+              echo "::error::refusing non-numeric ExifTool pin '$V'"; exit 1 ;;
+          esac
+          echo "Pinned ExifTool: $V"
+          curl -sSL "https://github.com/exiftool/exiftool/archive/refs/tags/$V.tar.gz" \
+            -o /tmp/exiftool.tar.gz
           mkdir -p /tmp/exiftool-src
           tar xzf /tmp/exiftool.tar.gz -C /tmp/exiftool-src --strip-components=1
+          # Archive::Zip gates every ZIP-container format. Without it a .docx
+          # reports FileType: ZIP and container coverage silently collapses,
+          # while -ver still prints the right release -- so install it and
+          # assert it, rather than trusting the version string alone.
+          sudo cpanm --notest Archive::Zip 2>/dev/null || sudo cpan -T Archive::Zip
+          perl -MArchive::Zip -e 1
           echo "/tmp/exiftool-src" >> "$GITHUB_PATH"
-          /tmp/exiftool-src/exiftool -ver
+          GOT=$(/tmp/exiftool-src/exiftool -ver)
+          [ "$GOT" = "$V" ] || { echo "::error::installed ExifTool $GOT, expected $V"; exit 1; }
       - name: Integration tests (ExifTool comparison)
+        # EXIFTOOL points the oracle at the pinned checkout explicitly rather
+        # than relying on PATH order, so a runner image that ships its own
+        # exiftool cannot quietly win the lookup.
+        env:
+          EXIFTOOL: /tmp/exiftool-src/exiftool
         run: cargo test --features exiftool-comparison
 
   # The generated ExifTool tables are 100k+ lines that no reviewer reads in a

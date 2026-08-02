@@ -1,30 +1,28 @@
 //! End-to-end smoke test for the exiftool-listx-based tag sync pipeline.
 //!
-//! Skipped (not failed) when `exiftool` isn't on PATH, matching how other
-//! exiftool-comparison tests in this repo handle the optional dependency.
+//! Skipped (not failed) when no usable ExifTool oracle resolves, matching how
+//! other exiftool-comparison tests in this repo handle the optional dependency.
 
+use oxidex::exiftool_oracle;
 use oxidex::tag_sync::{DOMAINS, generate_domain_yaml, parse_listx};
-use std::process::Command;
 
 fn exiftool_available() -> bool {
-    Command::new("exiftool")
-        .arg("-ver")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    exiftool_oracle::available()
 }
 
 #[test]
 fn real_exiftool_listx_parses_and_beats_the_current_type_coverage_baseline() {
     if !exiftool_available() {
-        eprintln!("skipping: exiftool not found on PATH");
+        eprintln!("skipping: no usable ExifTool oracle");
         return;
     }
 
-    let output = Command::new("exiftool")
+    let oracle = exiftool_oracle::shared().expect("oracle resolved by exiftool_available() above");
+    let output = oracle
+        .command()
         .args(["-f", "-listx"])
         .output()
-        .expect("failed to run exiftool -f -listx");
+        .unwrap_or_else(|e| panic!("failed to run `{} -f -listx`: {e}", oracle.display()));
     assert!(output.status.success(), "exiftool -f -listx must succeed");
 
     let xml = String::from_utf8(output.stdout).expect("exiftool output must be valid UTF-8");

@@ -71,6 +71,10 @@ from collections import defaultdict
 from typing import NamedTuple
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from exiftool_oracle import shared as shared_exiftool_oracle  # noqa: E402
+
 REPO = Path(__file__).resolve().parent.parent
 DOMAINS = ("core", "camera", "media", "image", "document", "specialty")
 
@@ -100,11 +104,18 @@ def _as_int(text: str) -> int | None:
 
 
 def exiftool_ground_truth(listx_path: str | None) -> GroundTruth:
+    """What ExifTool itself says, per table.
+
+    A live dump comes from the PINNED oracle, never a bare `exiftool`: this
+    decides which registry entries get PRUNED, and a tag missing only because
+    the PATH exiftool is an older release would be deleted as a fabrication.
+    """
     if listx_path:
         source = Path(listx_path).read_bytes()
     else:
-        source = subprocess.run(  # nosec B603,B607
-            ["exiftool", "-f", "-listx"], capture_output=True, check=True
+        source = subprocess.run(  # nosec B603
+            shared_exiftool_oracle().command(["-f", "-listx"]),
+            capture_output=True, check=True,
         ).stdout
 
     tags: dict[str, set[str]] = defaultdict(set)

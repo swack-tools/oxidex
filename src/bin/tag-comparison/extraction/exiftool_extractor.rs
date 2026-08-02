@@ -103,17 +103,35 @@ const BATCH_SIZE: usize = 100;
 
 /// Extract tags from ExifTool by running exiftool CLI
 pub struct ExifToolExtractor {
-    exiftool_path: String,
+    /// Argv prefix from `oxidex::exiftool_oracle`: program plus any leading
+    /// arguments. It is a vector, not a path, because the pinned oracle runs
+    /// as `<perl> -I<tree>/lib <tree>/exiftool` -- the tree's own
+    /// `#!/usr/bin/env perl` cannot be trusted to find a perl with
+    /// `Archive::Zip`, and without that module every ZIP-container format
+    /// silently degrades.
+    exiftool_argv: Vec<String>,
     cache: HashMap<String, ExtractionResult>,
 }
 
 impl ExifToolExtractor {
-    /// Create a new ExifTool extractor
-    pub fn new(exiftool_path: String) -> Self {
+    /// Create a new ExifTool extractor from an oracle argv prefix.
+    pub fn new(exiftool_argv: Vec<String>) -> Self {
         Self {
-            exiftool_path,
+            exiftool_argv,
             cache: HashMap::new(),
         }
+    }
+
+    /// A `Command` preloaded with the oracle's argv prefix.
+    fn command(&self) -> Command {
+        let mut cmd = Command::new(&self.exiftool_argv[0]);
+        cmd.args(&self.exiftool_argv[1..]);
+        cmd
+    }
+
+    /// The invocation as one string, for messages.
+    fn invocation(&self) -> String {
+        self.exiftool_argv.join(" ")
     }
 
     /// Extract tags from all fixtures of a specific format
@@ -268,7 +286,7 @@ impl ExifToolExtractor {
     /// any stale disk cache safely, since "unknown" simply never matches a
     /// real version string recorded by a prior successful run.
     fn get_exiftool_version(&self) -> String {
-        match Command::new(&self.exiftool_path).arg("-ver").output() {
+        match self.command().arg("-ver").output() {
             Ok(o) if o.status.success() => String::from_utf8(o.stdout)
                 .ok()
                 .map(|s| s.trim().to_string())
@@ -277,14 +295,15 @@ impl ExifToolExtractor {
             Ok(o) => {
                 eprintln!(
                     "Warning: `{} -ver` exited non-zero ({}); ExifTool disk cache disabled this run",
-                    self.exiftool_path, o.status
+                    self.invocation(),
+                    o.status
                 );
                 "unknown".to_string()
             }
             Err(e) => {
                 eprintln!(
                     "Warning: failed to run `{} -ver` ({e}); ExifTool disk cache disabled this run",
-                    self.exiftool_path
+                    self.invocation()
                 );
                 "unknown".to_string()
             }
@@ -355,7 +374,8 @@ impl ExifToolExtractor {
         }
 
         // Use -@ to read filenames from stdin (avoids command line length limits)
-        let mut child = Command::new(&self.exiftool_path)
+        let mut child = self
+            .command()
             .arg("-json")
             .arg("-G") // Include group name prefix (e.g., "EXIF:Make")
             .arg("-@")
@@ -399,7 +419,8 @@ impl ExifToolExtractor {
         &self,
         file_path: &Path,
     ) -> Result<Vec<TagInfo>, Box<dyn std::error::Error>> {
-        let output = Command::new(&self.exiftool_path)
+        let output = self
+            .command()
             .arg("-json")
             .arg("-G") // Include group name prefix (e.g., "EXIF:Make")
             .arg(file_path)
@@ -634,13 +655,13 @@ mod tests {
 
     #[test]
     fn test_exiftool_extractor_creation() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
-        assert_eq!(extractor.exiftool_path, "exiftool");
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
+        assert_eq!(extractor.exiftool_argv, vec!["exiftool".to_string()]);
     }
 
     #[test]
     fn test_parse_tag_name_with_colon() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let (family, name) = extractor.parse_tag_name("EXIF:Make");
         assert_eq!(family, "EXIF");
         assert_eq!(name, "Make");
@@ -648,7 +669,7 @@ mod tests {
 
     #[test]
     fn test_parse_tag_name_without_colon() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let (family, name) = extractor.parse_tag_name("SourceFile");
         assert_eq!(family, "UNKNOWN");
         assert_eq!(name, "SourceFile");
@@ -656,7 +677,7 @@ mod tests {
 
     #[test]
     fn test_parse_tag_name_xmp() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let (family, name) = extractor.parse_tag_name("XMP:Creator");
         assert_eq!(family, "XMP");
         assert_eq!(name, "Creator");
@@ -676,14 +697,14 @@ mod tests {
 
     #[test]
     fn test_parse_exiftool_json_empty() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let tags = extractor.parse_exiftool_json("[]").unwrap();
         assert_eq!(tags.len(), 0);
     }
 
     #[test]
     fn test_parse_exiftool_json_with_data() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let tags = extractor
             .parse_exiftool_json(
                 r#"[{
@@ -703,7 +724,7 @@ mod tests {
 
     #[test]
     fn test_parse_single_file_json_populates_source_file_from_exiftool_own_field() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let tags = extractor.parse_single_file_json(&entry(
             r#"{
                 "SourceFile": "/samples/JPEG/Sony/camera.jpg",
@@ -719,7 +740,7 @@ mod tests {
 
     #[test]
     fn test_parse_single_file_json_source_file_none_when_absent() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let tags = extractor.parse_single_file_json(&entry(r#"{"EXIF:Make": "Sony"}"#));
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].source_file, None);
@@ -733,7 +754,7 @@ mod tests {
     /// difference against a string ExifTool never printed.
     #[test]
     fn test_number_keeps_exiftools_own_text_not_an_f64_round_trip() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let tags = extractor.parse_single_file_json(&entry(
             r#"{
                 "MakerNotes:RawBrightnessAdj": 0.00,
@@ -761,7 +782,7 @@ mod tests {
     /// outputs and stay two distinct strings.
     #[test]
     fn test_distinct_number_texts_stay_distinct() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let tags = extractor.parse_single_file_json(&entry(
             r#"{"MakerNotes:A": 0.00, "MakerNotes:B": 0.000, "MakerNotes:C": 0}"#,
         ));
@@ -775,7 +796,7 @@ mod tests {
     /// (ExifTool's own `EscapeJSON` lowercased them), lists compact.
     #[test]
     fn test_non_numeric_rendering_is_unchanged() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let tags = extractor.parse_single_file_json(&entry(
             r#"{
                 "EXIF:Make": "Canon",
