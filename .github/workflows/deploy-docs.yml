@@ -61,8 +61,18 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-report-${{ hashFiles('**/Cargo.lock') }}
 
+      # Archive::Zip is not in core perl, and ExifTool needs it to look inside
+      # ZIP containers. Without it OOXML.docx reads as plain ZIP and every
+      # container format is silently misidentified -- a full-corpus sweep
+      # returns 109,261 tags over 832 files instead of 507,295 over 4,230,
+      # with no error and perfectly well-formed output.
+      #
+      # The pinned oracle refuses to report a number from an interpreter that
+      # cannot load it, so omitting this package fails the job outright rather
+      # than publishing degraded coverage figures. That refusal is what caught
+      # this: "Degraded ExifTool oracle: ... cannot load Archive::Zip".
       - name: Install Perl (for ExifTool)
-        run: sudo apt-get update -qq && sudo apt-get install -y perl
+        run: sudo apt-get update -qq && sudo apt-get install -y perl libarchive-zip-perl
 
       - name: Install just
         uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2.0.0
