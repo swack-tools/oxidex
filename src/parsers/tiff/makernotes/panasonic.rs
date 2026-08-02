@@ -59,13 +59,40 @@ const PANASONIC_HEADER: &[u8] = b"Panasonic\0\0\0";
 /// real Panasonic body -- with the IFD starting 8 bytes in, not 12.
 const LEICA_UNNUMBERED_HEADER: &[u8] = b"LEICA\0\0\0";
 
-/// Returns the byte offset of this payload's IFD, or `None` if neither the
-/// Panasonic nor the unnumbered-Leica header matches.
+/// The `MakerNoteLeica10` header (MakerNotes.pm:724-731). Leica's Panasonic-built
+/// compacts -- the D-Lux 7, D-Lux 8 and V-Lux 5 -- sign "LEICA CAMERA AG\0" and
+/// ExifTool points them at `Panasonic::Main`, the same table and "Panasonic:"
+/// group a real Panasonic body uses:
+///
+/// ```text
+///     Name      => 'MakerNoteLeica10', # used by the D-Lux7
+///     Condition => '$$valPt =~ /^LEICA CAMERA AG\0/',
+///     TagTable  => 'Image::ExifTool::Panasonic::Main',
+///     Start     => '$valuePtr + 18',
+/// ```
+///
+/// The signature is 16 bytes and the IFD begins at 18, so two pad bytes sit
+/// between them (`LeicaD-Lux7.jpg` reads `...41 47 00 00 00 9d 00` -- "AG\0",
+/// `00 00`, then the 157-entry count). `MakerNoteLeica10` declares no `Base`,
+/// so its out-of-line value offsets are measured from the enclosing TIFF header
+/// exactly as `MakerNotePanasonic`'s are and need no adjustment here.
+const LEICA10_HEADER: &[u8] = b"LEICA CAMERA AG\0";
+
+/// True for a `MakerNoteLeica10` payload -- the signature ExifTool routes to
+/// `Panasonic::Main` rather than to any of the `Leica2`..`Leica9` tables.
+pub fn is_leica10_makernote(data: &[u8]) -> bool {
+    data.len() >= LEICA10_HEADER.len() + 2 && data.starts_with(LEICA10_HEADER)
+}
+
+/// Returns the byte offset of this payload's IFD, or `None` if none of the
+/// Panasonic, unnumbered-Leica or Leica10 headers matches.
 fn panasonic_ifd_offset(data: &[u8]) -> Option<usize> {
     if data.len() >= 12 && &data[0..12] == PANASONIC_HEADER {
         Some(12)
     } else if data.len() >= 8 && &data[0..8] == LEICA_UNNUMBERED_HEADER {
         Some(8)
+    } else if is_leica10_makernote(data) {
+        Some(18)
     } else {
         None
     }

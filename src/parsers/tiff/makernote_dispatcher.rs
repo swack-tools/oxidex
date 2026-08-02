@@ -225,6 +225,15 @@ pub fn dispatch_makernote_with_context_and_values(
         // `Leica2`..`Leica10` layouts, which key on the "Leica Camera AG"
         // prefix instead (MakerNotes.pm:611 onward).
         "leica" => Some(Box::new(panasonic::PanasonicParser)),
+        // `MakerNoteLeica10` (MakerNotes.pm:724-731) is keyed on the signature
+        // alone -- `Condition => '$$valPt =~ /^LEICA CAMERA AG\0/'` -- and
+        // routes to `Panasonic::Main`, not to any `Leica2`..`Leica9` table, so
+        // it has to be separated from its Make-mates before they are. The
+        // D-Lux 7/D-Lux 8/V-Lux 5 are Panasonic-built and ExifTool prints
+        // their tags under "MakerNotes:Panasonic".
+        "leica camera ag" if panasonic::is_leica10_makernote(data) => {
+            Some(Box::new(panasonic::PanasonicParser))
+        }
         "leica camera ag" => Some(Box::new(leica::LeicaMakerNoteParser)),
         // Sigma is absent on purpose. Its MakerNote entries store value offsets
         // relative to the enclosing TIFF header, so nothing handed only the
