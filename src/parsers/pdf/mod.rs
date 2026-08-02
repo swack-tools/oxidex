@@ -57,6 +57,7 @@ pub mod shared;
 pub mod signature_parser;
 pub mod xmp_extractor;
 
+use crate::core::formatters::exif_enums::file_source_label_bytes;
 use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::core::{FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
@@ -610,18 +611,6 @@ const FLASH_LABELS: &[(u16, &str)] = &[
 const FOCAL_PLANE_RESOLUTION_UNIT_LABELS: &[(u16, &str)] =
     &[(1, "None"), (2, "inches"), (3, "cm"), (4, "mm"), (5, "um")];
 
-/// FileSource (0xa300) PrintConv, ExifTool 13.55 Exif.pm.
-///
-/// Two archived patches wrote `3 => "Digital Camera", _ => "Unknown"`. The
-/// "Unknown" fallback is invented - ExifTool prints the undecoded number - and
-/// dropping 1 and 2 would have re-created the `1 => 'Scanner'` class of bug,
-/// since 1 is `'Film Scanner'`, not a generic scanner.
-const FILE_SOURCE_LABELS: &[(u8, &str)] = &[
-    (1, "Film Scanner"),
-    (2, "Reflection Print Scanner"),
-    (3, "Digital Camera"),
-];
-
 /// ColorSpace (0xa001) PrintConv, ExifTool 13.55 Exif.pm. The inherited code
 /// carried only `1` and `0xffff`.
 const COLOR_SPACE_LABELS: &[(u16, &str)] = &[
@@ -1084,18 +1073,16 @@ fn parse_exif_ifd(
                     }
                 }
             }
-            // ExifTool 13.55 Exif.pm 0xa300: Writable => 'undef', PrintConv
-            // keyed on the single stored byte.
+            // Exif.pm 0xa300: Writable => 'undef'. `ProcessExif` reads a
+            // format-7 count-1 value as int8u (Exif.pm:6682) and looks that
+            // number up; a count of 4 stays `undef` and matches the raw-bytes
+            // key "\3\0\0\0". Both cases live in `file_source_label_bytes`.
             TAG_FILE_SOURCE if field_type == 7 => {
-                if let Some(bytes) = read_undefined_value(data, base, byte_order, count) {
-                    if let Some(label) = bytes
-                        .first()
-                        .copied()
-                        .and_then(|b| lookup_label(FILE_SOURCE_LABELS, b))
-                    {
-                        let key = crate::tag_db::lookup_tag_name(TAG_FILE_SOURCE, "ExifIFD");
-                        metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
-                    }
+                if let Some(bytes) = read_undefined_value(data, base, byte_order, count)
+                    && let Some(label) = file_source_label_bytes(&bytes)
+                {
+                    let key = crate::tag_db::lookup_tag_name(TAG_FILE_SOURCE, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
                 }
             }
             TAG_BRIGHTNESS_VALUE if field_type == 5 => {

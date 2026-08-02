@@ -21,6 +21,7 @@ use oxidex::core::tag_normalization::normalize_tag_family;
 // `core::formatters::unit_suffixes::format_with_unit`, so importing a
 // second implementation here would score oxidex against a formatter it does
 // not use.
+use oxidex::core::formatters::exif_enums::file_source_label_bytes;
 use oxidex::core::formatters::unit_suffixes::{format_with_unit, needs_unit_suffix};
 use oxidex::core::value_formatter::{
     format_date_exif_style, format_rational_as_decimal, is_decimal_rational_tag,
@@ -504,15 +505,16 @@ impl OxiDexExtractor {
                 }
             }
             TagValue::Binary(bytes) => {
-                // FileSource - single byte value indicating the source device
-                // Values: 1=Film Scanner, 2=Reflection Print Scanner, 3=Digital Camera
-                if name == "FileSource" && bytes.len() == 1 {
-                    return match bytes[0] {
-                        1 => "Film Scanner".to_string(),
-                        2 => "Reflection Print Scanner".to_string(),
-                        3 => "Digital Camera".to_string(),
-                        _ => format!("Unknown ({})", bytes[0]),
-                    };
+                // FileSource. This arm existed because the library handed the
+                // harness a 1-byte blob; it no longer does -- `ProcessExif`
+                // reads a format-7 count-1 value as int8u (Exif.pm:6682) and
+                // the Integer path above resolves it. What can still arrive as
+                // a blob is Sigma's four-byte form, so the lookup stays, now
+                // against the single copy of Exif.pm 0xa300's PrintConv.
+                if name == "FileSource"
+                    && let Some(label) = file_source_label_bytes(bytes)
+                {
+                    return label.to_string();
                 }
 
                 // FlashpixVersion - 4 ASCII bytes representing version (e.g., "0100")

@@ -24,7 +24,8 @@
 
 use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::core::formatters::{
-    format_color_space, format_contrast, format_custom_rendered, format_sharpness,
+    file_source_label_bytes, format_color_space, format_contrast, format_custom_rendered,
+    format_sharpness,
 };
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
@@ -2268,22 +2269,14 @@ fn format_exif_display_value(
             0x5f => Some("Auto, Fired, Red-eye reduction, Return detected".to_string()),
             _ => None,
         },
-        // FileSource: UNDEFINED. Exif.pm 0xa300 PrintConv, verbatim:
-        //     1 => 'Film Scanner',
-        //     2 => 'Reflection Print Scanner',
-        //     3 => 'Digital Camera',
-        //     # handle the case where Sigma incorrectly gives this tag a count of 4
-        //     "\3\0\0\0" => 'Sigma Digital Camera',
+        // FileSource: UNDEFINED. Exif.pm 0xa300's PrintConv now lives in one
+        // place, `core::formatters::exif_enums::file_source_label_bytes`; this
+        // arm keeps its own `None` for an unnamed code so the RAW path leaves
+        // such a tag alone instead of printing `Unknown (N)`.
         0xA300 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
             let source = bytes.get(..count)?;
-            match source {
-                b"\x03\x00\x00\x00" => Some("Sigma Digital Camera".to_string()),
-                [1] => Some("Film Scanner".to_string()),
-                [2] => Some("Reflection Print Scanner".to_string()),
-                [3] => Some("Digital Camera".to_string()),
-                _ => None,
-            }
+            file_source_label_bytes(source).map(str::to_string)
         }
         // CFAPattern: UNDEFINED with two endian-dependent u16 dimensions.
         0xA302 if field_type == 7 => decode_exif_cfa_pattern(bytes, byte_order),
