@@ -12,17 +12,17 @@
 //! - Lens and sensor data (LensType, ImageStabilization, AFAreaMode)
 //! - Supplementary information (Audio, TextStamp, Location, BabyAge)
 
-use super::super::shared::{generic_decoders::*, tag_registry::TagRegistry};
+use super::super::shared::tag_registry::TagRegistry;
 
 // Re-export decoders from panasonic.rs
 // These decoders are defined using const_decoder! macros in the main parser
 use super::super::panasonic::{
-    AF_ASSIST_LAMP, AUDIO, BRACKET_SETTINGS, BURST_MODE, BURST_SPEED, CLEAR_RETOUCH, COLOR_EFFECT,
-    COLOR_MODE, CONTRAST_MODE, CONVERSION_LENS, FILM_MODE, FLASH_CURTAIN, FLASH_WARNING,
-    FOCUS_MODE, HDR, IMAGE_QUALITY, IMAGE_STABILIZATION, INTELLIGENT_D_RANGE, INTELLIGENT_EXPOSURE,
-    INTELLIGENT_RESOLUTION, INTERNAL_ND_FILTER, LONG_EXPOSURE_NR, MACRO_MODE, NOISE_REDUCTION,
-    OPTICAL_ZOOM_MODE, PHOTO_STYLE, ROTATION, SELF_TIMER, SHADING_COMPENSATION, SHOOTING_MODE,
-    SHUTTER_TYPE, SWEEP_PANORAMA_DIRECTION, TEXT_STAMP, TIMER_RECORDING, TOUCH_AE, WHITE_BALANCE,
+    AF_ASSIST_LAMP, AUDIO, BRACKET_SETTINGS, BURST_MODE, CLEAR_RETOUCH, COLOR_EFFECT, COLOR_MODE,
+    CONTRAST_MODE, CONVERSION_LENS, FILM_MODE, FLASH_CURTAIN, FLASH_WARNING, FOCUS_MODE, HDR,
+    IMAGE_QUALITY, IMAGE_STABILIZATION, INTELLIGENT_D_RANGE, INTELLIGENT_EXPOSURE,
+    INTELLIGENT_RESOLUTION, LONG_EXPOSURE_NR, MACRO_MODE, NOISE_REDUCTION, OPTICAL_ZOOM_MODE,
+    PHOTO_STYLE, ROTATION, SELF_TIMER, SHADING_COMPENSATION, SHOOTING_MODE, SHUTTER_TYPE,
+    SWEEP_PANORAMA_DIRECTION, TEXT_STAMP, TIMER_RECORDING, TOUCH_AE, WHITE_BALANCE,
     WORLD_TIME_LOCATION,
 };
 
@@ -96,7 +96,7 @@ pub fn panasonic_registry() -> TagRegistry {
         .register_integer_tag(0x003C, "ProgramISO", None)
         // AdvancedSceneType has no PrintConv in ExifTool; it stays numeric
         .register_integer_tag(0x003D, "AdvancedSceneType", None)
-        .register_enum_tag_required(0x003E, "TextStamp2", &TEXT_STAMP)
+        .register_enum_tag_required(0x003E, "TextStamp", &TEXT_STAMP)
         .register_integer_tag(0x003F, "FacesDetected", None)
         .register_integer_tag(0x0044, "ColorTempKelvin", None)
         .register_enum_tag_required(0x0045, "BracketSettings", &BRACKET_SETTINGS)
@@ -119,7 +119,10 @@ pub fn panasonic_registry() -> TagRegistry {
         .register_integer_tag(0x0060, "LensFirmwareVersion", None)
         .register_enum_tag_required(0x0062, "FlashWarning", &FLASH_WARNING)
         .register_enum_tag_required(0x0070, "IntelligentResolution", &INTELLIGENT_RESOLUTION)
-        .register_enum_tag_required(0x0077, "BurstSpeed", &BURST_SPEED)
+        // BurstSpeed is a plain count, not an enum: Panasonic.pm:1094 declares
+        // `Writable => 'int16u', Notes => 'images per second'` and no PrintConv.
+        // A Low/Mid/High decoder printed "Low" where ExifTool prints "0".
+        .register_integer_tag(0x0077, "BurstSpeed", None)
         .register_enum_tag_required(0x0079, "IntelligentD-Range", &INTELLIGENT_D_RANGE)
         .register_enum_tag_required(0x007C, "ClearRetouch", &CLEAR_RETOUCH)
         .register_integer_tag(0x0086, "ManometerPressure", None)
@@ -134,7 +137,7 @@ pub fn panasonic_registry() -> TagRegistry {
         .register_enum_tag_required(0x0093, "SweepPanoramaDirection", &SWEEP_PANORAMA_DIRECTION)
         .register_integer_tag(0x0094, "SweepPanoramaFieldOfView", None)
         .register_enum_tag_required(0x0096, "TimerRecording", &TIMER_RECORDING)
-        .register_enum_tag_required(0x009D, "InternalNDFilter", &INTERNAL_ND_FILTER)
+        .register_raw(0x009D, "InternalNDFilter")
         .register_enum_tag_required(0x009E, "HDR", &HDR)
         .register_enum_tag_required(0x009F, "ShutterType", &SHUTTER_TYPE)
         .register_integer_tag(0x00A3, "ClearRetouchValue", None)
@@ -155,11 +158,25 @@ pub fn panasonic_registry() -> TagRegistry {
         .register_integer_tag(0x8004, "WBRedLevel", None)
         .register_integer_tag(0x8005, "WBGreenLevel", None)
         .register_integer_tag(0x8006, "WBBlueLevel", None)
-        .register_enum_tag_required(0x8007, "FlashFired", &ON_OFF_I32)
-        .register_enum_tag_required(0x8008, "TextStamp3", &TEXT_STAMP)
-        .register_enum_tag_required(0x8009, "TextStamp4", &TEXT_STAMP)
-        .register_integer_tag(0x8010, "BabyAge2", None)
-        .register_enum_tag_required(0x8012, "Transform2", &ON_OFF_I32)
+        // 0x8007 is not a tag. Panasonic.pm:1563-1567 carries it commented out:
+        // `#0x8007 => { #PH - questionable [disabled because it conflicts with
+        // EXIF in too many samples]`. ExifTool reports no `FlashFired` for any
+        // Panasonic file, so neither may we.
+        //
+        // 0x8008 and 0x8009 are both plain `TextStamp` in ExifTool
+        // (Panasonic.pm:1568, :1574), same PrintConv as 0x3b and 0x3e.
+        .register_enum_tag_required(0x8008, "TextStamp", &TEXT_STAMP)
+        .register_enum_tag_required(0x8009, "TextStamp", &TEXT_STAMP)
+    // 0x8010 is `BabyAge` (Panasonic.pm:1580), not `BabyAge2`: a `string`
+    // with `PrintConv => '$val eq "9999:99:99 00:00:00" ? "(not set)" : $val'`.
+    // It was registered as a bare integer, which cannot produce that value, and
+    // 0x0033 already delivers a matching `Panasonic:BabyAge`. Omitted rather
+    // than renamed, so no wrong value ships under the real name.
+    //
+    // 0x8012 is `Transform` (Panasonic.pm:1587), not `Transform2`: `int16s`
+    // `Count => 2` whose PrintConv keys are integer *pairs*
+    // ('0 0' => 'Off', '-3 2' => 'Slim High', ...). A one-value On/Off decoder
+    // cannot express that, so it is omitted too.
 }
 
 /// Panasonic SceneMode (0x8001).

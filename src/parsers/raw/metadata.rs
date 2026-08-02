@@ -22,9 +22,11 @@
 //! - Sigma X3F (FOVb format)
 //! - Minolta MRW (MRM format)
 
+use crate::core::formatters::exif_enums::flash_label;
 use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::core::formatters::{
-    format_color_space, format_contrast, format_custom_rendered, format_sharpness,
+    file_source_label_bytes, format_color_space, format_contrast, format_custom_rendered,
+    format_sharpness,
 };
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
@@ -2236,54 +2238,20 @@ fn format_exif_display_value(
         0x9208 if field_type == 3 && value_count >= 1 => {
             exif_light_source_label(read_tiff_u16(bytes, byte_order)?).map(str::to_string)
         }
-        // Flash: SHORT[1]. Exif.pm 0x9209 PrintConv => \%flash, whose full
-        // table (Exif.pm lines 172-199) is reproduced verbatim.
-        0x9209 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
-            0x00 => Some("No Flash".to_string()),
-            0x01 => Some("Fired".to_string()),
-            0x05 => Some("Fired, Return not detected".to_string()),
-            0x07 => Some("Fired, Return detected".to_string()),
-            0x08 => Some("On, Did not fire".to_string()),
-            0x09 => Some("On, Fired".to_string()),
-            0x0d => Some("On, Return not detected".to_string()),
-            0x0f => Some("On, Return detected".to_string()),
-            0x10 => Some("Off, Did not fire".to_string()),
-            0x14 => Some("Off, Did not fire, Return not detected".to_string()),
-            0x18 => Some("Auto, Did not fire".to_string()),
-            0x19 => Some("Auto, Fired".to_string()),
-            0x1d => Some("Auto, Fired, Return not detected".to_string()),
-            0x1f => Some("Auto, Fired, Return detected".to_string()),
-            0x20 => Some("No flash function".to_string()),
-            0x30 => Some("Off, No flash function".to_string()),
-            0x41 => Some("Fired, Red-eye reduction".to_string()),
-            0x45 => Some("Fired, Red-eye reduction, Return not detected".to_string()),
-            0x47 => Some("Fired, Red-eye reduction, Return detected".to_string()),
-            0x49 => Some("On, Red-eye reduction".to_string()),
-            0x4d => Some("On, Red-eye reduction, Return not detected".to_string()),
-            0x4f => Some("On, Red-eye reduction, Return detected".to_string()),
-            0x50 => Some("Off, Red-eye reduction".to_string()),
-            0x58 => Some("Auto, Did not fire, Red-eye reduction".to_string()),
-            0x59 => Some("Auto, Fired, Red-eye reduction".to_string()),
-            0x5d => Some("Auto, Fired, Red-eye reduction, Return not detected".to_string()),
-            0x5f => Some("Auto, Fired, Red-eye reduction, Return detected".to_string()),
-            _ => None,
-        },
-        // FileSource: UNDEFINED. Exif.pm 0xa300 PrintConv, verbatim:
-        //     1 => 'Film Scanner',
-        //     2 => 'Reflection Print Scanner',
-        //     3 => 'Digital Camera',
-        //     # handle the case where Sigma incorrectly gives this tag a count of 4
-        //     "\3\0\0\0" => 'Sigma Digital Camera',
+        // Flash: SHORT[1]. Exif.pm 0x9209 `PrintConv => \%flash`, held once in
+        // `core::formatters::exif_enums`. This file carried a verbatim second
+        // copy of the same 27 rows.
+        0x9209 if field_type == 3 && value_count >= 1 => {
+            flash_label(i64::from(read_tiff_u16(bytes, byte_order)?)).map(str::to_string)
+        }
+        // FileSource: UNDEFINED. Exif.pm 0xa300's PrintConv now lives in one
+        // place, `core::formatters::exif_enums::file_source_label_bytes`; this
+        // arm keeps its own `None` for an unnamed code so the RAW path leaves
+        // such a tag alone instead of printing `Unknown (N)`.
         0xA300 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
             let source = bytes.get(..count)?;
-            match source {
-                b"\x03\x00\x00\x00" => Some("Sigma Digital Camera".to_string()),
-                [1] => Some("Film Scanner".to_string()),
-                [2] => Some("Reflection Print Scanner".to_string()),
-                [3] => Some("Digital Camera".to_string()),
-                _ => None,
-            }
+            file_source_label_bytes(source).map(str::to_string)
         }
         // CFAPattern: UNDEFINED with two endian-dependent u16 dimensions.
         0xA302 if field_type == 7 => decode_exif_cfa_pattern(bytes, byte_order),

@@ -513,7 +513,13 @@ pub fn parse_exif_subifd(
 ) {
     if let Ok(exif_tags) = parse_ifd(reader, offset, byte_order) {
         // Track MakerNote and InteroperabilityIFD pointer in EXIF IFD
-        let mut exif_makernote_data: Option<&[u8]> = None;
+        // An EXIF IFD may declare 0x927C more than once -- an editor that
+        // appends its own private block leaves the camera's in place, and
+        // ExifTool processes each entry in turn. Keeping only the last one
+        // meant `Apple_iPhone6.jpg`, whose second 0x927C is a UTF-16 JSON blob
+        // written by an editing app, reached the Apple parser with the wrong
+        // 142 bytes and reported nothing at all.
+        let mut exif_makernote_data: Vec<&[u8]> = Vec::new();
         let mut interop_ifd_offset: Option<u64> = None;
 
         // First pass: convert tags and capture special pointers
@@ -523,7 +529,7 @@ pub fn parse_exif_subifd(
 
             // Check for MakerNote in EXIF IFD (tag 0x927C)
             if *tag_id == MAKERNOTE {
-                exif_makernote_data = Some(bytes);
+                exif_makernote_data.push(bytes);
             }
 
             // Check for InteroperabilityIFDPointer (tag 0xA005)
@@ -560,7 +566,7 @@ pub fn parse_exif_subifd(
         // is given the enclosing TIFF block as well as the payload, because a
         // MakerNote's value offsets are measured from the TIFF header and
         // routinely address bytes past the payload's declared end.
-        if let Some(makernote_bytes) = exif_makernote_data {
+        for makernote_bytes in exif_makernote_data {
             let ctx = makernote_context(
                 reader,
                 offset,
@@ -1165,7 +1171,7 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
     // Parse MakerNote using the dispatcher
     let mut makernote_tags = HashMap::new();
     let mut value_forms = HashMap::new();
-    if let Err(_e) = dispatch_makernote_with_context_and_values(
+    if let Err(e) = dispatch_makernote_with_context_and_values(
         &make,
         model.as_deref(),
         ctx,
@@ -1173,7 +1179,15 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
         &mut makernote_tags,
         &mut value_forms,
     ) {
-        // Silently skip failed MakerNote parsing
+        // A MakerNote that fails to parse must not fail the file -- ExifTool
+        // warns and goes on reading the rest of it -- but it must not be
+        // silent either. This is the JPEG/EXIF dispatch site, and it was the
+        // only one of the four that dropped the error: `file_parser.rs` and
+        // both `raw/metadata.rs` sites already print this exact line. Staying
+        // quiet here meant a whole class of MakerNote failure produced no
+        // output and no warning, so it looked identical to a file with no
+        // MakerNote at all and never appeared in any coverage report.
+        eprintln!("Warning: Failed to parse MakerNote for {}: {}", make, e);
         return;
     }
 

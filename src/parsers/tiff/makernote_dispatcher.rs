@@ -100,10 +100,15 @@ fn parser_for_make_prefix(
         return Some(Box::new(olympus::OlympusParser) as Box<dyn MakerNoteParser>);
     }
     if make.starts_with("pentax") || make.starts_with("asahi optical") {
-        return Some(Box::new(pentax::PentaxParser) as Box<dyn MakerNoteParser>);
+        return Some(Box::new(pentax::PentaxParser::default()) as Box<dyn MakerNoteParser>);
     }
+    // `make` reaches here already lowercased, so this is ExifTool's
+    // `$$self{Make} =~ /^RICOH/` (Pentax.pm:3032) -- which the modern
+    // "RICOH IMAGING COMPANY, LTD." Pentax bodies satisfy too.
     if make.starts_with("ricoh imaging") {
-        return Some(Box::new(pentax::PentaxParser) as Box<dyn MakerNoteParser>);
+        return Some(
+            Box::new(pentax::PentaxParser { ricoh_make: true }) as Box<dyn MakerNoteParser>
+        );
     }
     // GE cameras are branded "General Imaging Co." in EXIF -- the literal
     // table below only listed "ge" and "general electric", so the one GE file
@@ -118,7 +123,7 @@ fn parser_for_make_prefix(
         // write a Pentax "AOC\0" MakerNote; ExifTool files their tags under
         // family-1 "Pentax". Every other Samsung goes to the Samsung parser.
         if data.len() >= 4 && &data[0..4] == PENTAX_AOC_SIGNATURE {
-            return Some(Box::new(pentax::PentaxParser) as Box<dyn MakerNoteParser>);
+            return Some(Box::new(pentax::PentaxParser::default()) as Box<dyn MakerNoteParser>);
         }
         return Some(Box::new(samsung::SamsungParser) as Box<dyn MakerNoteParser>);
     }
@@ -220,6 +225,15 @@ pub fn dispatch_makernote_with_context_and_values(
         // `Leica2`..`Leica10` layouts, which key on the "Leica Camera AG"
         // prefix instead (MakerNotes.pm:611 onward).
         "leica" => Some(Box::new(panasonic::PanasonicParser)),
+        // `MakerNoteLeica10` (MakerNotes.pm:724-731) is keyed on the signature
+        // alone -- `Condition => '$$valPt =~ /^LEICA CAMERA AG\0/'` -- and
+        // routes to `Panasonic::Main`, not to any `Leica2`..`Leica9` table, so
+        // it has to be separated from its Make-mates before they are. The
+        // D-Lux 7/D-Lux 8/V-Lux 5 are Panasonic-built and ExifTool prints
+        // their tags under "MakerNotes:Panasonic".
+        "leica camera ag" if panasonic::is_leica10_makernote(data) => {
+            Some(Box::new(panasonic::PanasonicParser))
+        }
         "leica camera ag" => Some(Box::new(leica::LeicaMakerNoteParser)),
         // Sigma is absent on purpose. Its MakerNote entries store value offsets
         // relative to the enclosing TIFF header, so nothing handed only the
@@ -235,7 +249,11 @@ pub fn dispatch_makernote_with_context_and_values(
         // Smartphones
         "apple" => Some(Box::new(apple::AppleParser)),
         "google" => Some(Box::new(google::GoogleParser)),
-        "microsoft" | "microsoft corporation" => Some(Box::new(microsoft::MicrosoftParser)),
+        // "microsoft" | "microsoft corporation" is absent on purpose: there is
+        // no fabricated `microsoft` parser to dispatch to. MakerNotes.pm has
+        // no MakerNoteMicrosoft TIFF-IFD dispatch entry at all -- Microsoft's
+        // only MakerNotes-group table (Microsoft::Stitch) is binary data read
+        // from EXIF tag 0x4748, not a MakerNote IFD.
         // "qualcomm" is absent on purpose: there is no fabricated `qualcomm`
         // parser to dispatch to. ExifTool has no TIFF-IFD MakerNote table for
         // Qualcomm -- its two Qualcomm.pm tables are read from JPEG APP7/APP4

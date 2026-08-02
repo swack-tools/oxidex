@@ -30,6 +30,15 @@
 //!   does (ExifTool's `ReadValue`), so a truncated record degrades instead of
 //!   reporting garbage.
 //!
+//! * a field's `Condition`, and the arrayref of `Condition`-bearing alternatives
+//!   ExifTool writes when one offset means different things on different bodies.
+//!   ExifTool takes the *first* alternative whose condition holds and reports
+//!   nothing for that key when none does; a reader that ignores the condition
+//!   prints one body's meaning under another body's file. `%Pentax::BatteryInfo`
+//!   byte 2 alone is `BodyBatteryADNoLoad` on a K10D, an uncalibrated
+//!   `BodyBatteryADNoLoad` on a \*istD, half of `BodyBatteryVoltage1` on a K-5,
+//!   and `BodyBatteryState` on a K-3 III (Pentax.pm:4846-4935).
+//!
 //! `FIRST_ENTRY` is carried on the table but deliberately does not shift any
 //! index: in ExifTool it only bounds the synthetic tag range `-U` walks, and the
 //! keys of declared tags are absolute either way.
@@ -71,6 +80,81 @@ impl Fmt {
     }
 }
 
+/// One branch of an ExifTool model regex, expanded from the pattern text by
+/// `tools/exiftool-tables/codegen_subdirs.py`.
+///
+/// The alternations `%Pentax` writes are finite and literal once the groups and
+/// character classes are multiplied out (`/(645D|645Z|K-(1|01|...)|KP)\b/`), so
+/// the generator does the expansion and refuses any pattern it cannot expand.
+/// Carrying a regex engine here would mean the model test lived somewhere other
+/// than ExifTool's own text.
+pub(crate) struct ModelPat {
+    /// The literal this branch matches, searched for anywhere in the model.
+    pub(crate) text: &'static str,
+    /// The pattern ended in `\b`, so the character after the match must be a
+    /// non-word character or the end of the string. Without this, `/K-5\b/`
+    /// would also fire on a "K-5 II" -- which is a different body with a
+    /// different `BatteryInfo` layout.
+    pub(crate) word_end: bool,
+}
+
+/// An ExifTool `Condition` on a field, over `$$self{Model}`.
+#[derive(Clone, Copy)]
+pub(crate) enum Cond {
+    /// No `Condition`: the field always applies.
+    Always,
+    /// `$$self{Model} =~ /.../`, optionally with the `and $$self{Model} !~ /.../`
+    /// second clause `%Pentax::BatteryInfo` uses to exclude the K-3 Mark III
+    /// from a pattern that would otherwise catch it (Pentax.pm:4864, :4919).
+    ///
+    /// An empty `any_of` means the condition is a bare negation.
+    Model {
+        any_of: &'static [ModelPat],
+        none_of: &'static [ModelPat],
+    },
+    /// `$$self{Model} eq "..."` -- an equality, not a search.
+    ModelEq(&'static str),
+}
+
+impl Cond {
+    /// Whether this condition holds for a file whose `Model` is `model`.
+    ///
+    /// A condition that reads `$$self{Model}` cannot hold when the model is
+    /// unknown: ExifTool's `$$self{Model}` is then undef and neither `=~` nor
+    /// `eq` matches. Reporting the field anyway would be guessing at the body.
+    pub(crate) fn holds(self, model: Option<&str>) -> bool {
+        match self {
+            Cond::Always => true,
+            Cond::ModelEq(want) => model == Some(want),
+            Cond::Model { any_of, none_of } => {
+                let Some(model) = model else { return false };
+                (any_of.is_empty() || any_of.iter().any(|p| pat_matches(p, model)))
+                    && !none_of.iter().any(|p| pat_matches(p, model))
+            }
+        }
+    }
+}
+
+/// Perl's `\w`: the character class `\b` is defined against.
+const fn is_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// `$model =~ /<pat>/` for one expanded branch.
+fn pat_matches(pat: &ModelPat, model: &str) -> bool {
+    let (hay, needle) = (model.as_bytes(), pat.text.as_bytes());
+    if needle.is_empty() {
+        return true;
+    }
+    hay.windows(needle.len()).enumerate().any(|(at, window)| {
+        window == needle
+            && (!pat.word_end
+                || hay
+                    .get(at + needle.len())
+                    .is_none_or(|&next| !is_word_byte(next)))
+    })
+}
+
 /// The `PrintConv` ExifTool applies to a field.
 #[derive(Clone, Copy)]
 pub(crate) enum PrintConv {
@@ -84,6 +168,15 @@ pub(crate) enum PrintConv {
     /// binds it by that body's deparsed text -- an upstream edit stops the
     /// generator rather than leaving a stale conversion behind a real tag name.
     MapOr(&'static [(i64, &'static str)], fn(i64) -> String),
+    /// A `PrintConv` that is a Perl expression rather than a hash -- a
+    /// `sprintf` or a string interpolation. Like `ValueConv`, it is a
+    /// computation, so the vendor module carries a hand-written port and the
+    /// generator binds it by ExifTool's own expression text.
+    ///
+    /// It runs on the value *after* `ValueConv`, which is why it takes an `f64`:
+    /// `%Pentax::BatteryInfo` divides a raw 686 by 100 and then prints
+    /// `sprintf("%.2f V", $val)` (Pentax.pm:4866-4868).
+    Expr(fn(f64) -> String),
 }
 
 /// The `ValueConv` ExifTool applies before the `PrintConv`.
@@ -103,8 +196,18 @@ pub(crate) enum ValueConv {
 
 /// One field of a `ProcessBinaryData` table.
 pub(crate) struct Field {
+    /// ExifTool's own tag key verbatim, e.g. `"545.1"`.
+    ///
+    /// This is the identity of a *tag*, which `index` is not: `545`, `545.1` and
+    /// `545.2` are three masked tags at one offset, while two entries both keyed
+    /// `2` are two `Condition`-guarded readings of the same tag and at most one
+    /// of them may fire. Adjacent fields sharing a key are those alternatives,
+    /// in ExifTool's own order.
+    pub(crate) key: &'static str,
     /// ExifTool's own tag key: an index in units of the table's `FORMAT`.
     pub(crate) index: i64,
+    /// ExifTool's `Condition` on this alternative.
+    pub(crate) cond: Cond,
     pub(crate) name: &'static str,
     /// Overrides the table's `FORMAT` for reading, not for locating, this field.
     pub(crate) format: Option<Fmt>,
@@ -217,17 +320,21 @@ fn read_elem(record: &[u8], at: usize, fmt: Fmt, order: ByteOrder) -> Option<Ele
 fn render(elem: &Elem, conv: PrintConv) -> String {
     match elem {
         Elem::Text(s) => s.clone(),
-        Elem::Real(v) => {
+        Elem::Real(v) => match conv {
+            PrintConv::Expr(f) => f(*v),
             // ExifTool prints a float with %.6g-like trimming; the integral case
             // is by far the common one in these tables.
-            if v.fract() == 0.0 && v.abs() < 1e15 {
-                format!("{}", *v as i64)
-            } else {
-                format!("{v}")
+            _ => {
+                if v.fract() == 0.0 && v.abs() < 1e15 {
+                    format!("{}", *v as i64)
+                } else {
+                    format!("{v}")
+                }
             }
-        }
+        },
         Elem::Num(v) => match conv {
             PrintConv::None => v.to_string(),
+            PrintConv::Expr(f) => f(*v as f64),
             PrintConv::Map(table) => table.iter().find(|(key, _)| key == v).map_or_else(
                 || format!("Unknown ({v})"),
                 |(_, label)| (*label).to_string(),
@@ -253,7 +360,7 @@ pub(crate) fn decode_binary_subdir(
 ) {
     // A record whose gates only read members it sets itself needs no history.
     let mut members = Members::new();
-    decode_binary_subdir_with(table, record, order, prefix, &mut members, tags);
+    decode_binary_subdir_with(table, record, order, prefix, None, &mut members, tags);
 }
 
 /// ExifTool's `$$self{...}` slots, threaded across the sub-directories of one
@@ -273,6 +380,7 @@ pub(crate) fn decode_binary_subdir_with(
     record: &[u8],
     order: ByteOrder,
     prefix: &str,
+    model: Option<&str>,
     members: &mut Members,
     tags: &mut HashMap<String, String>,
 ) {
@@ -280,7 +388,20 @@ pub(crate) fn decode_binary_subdir_with(
 
     // Generated tables are already sorted by index; ExifTool visits them in
     // ascending order so a DataMember is set before any gate that reads it.
-    for field in table.fields {
+    //
+    // Fields sharing an ExifTool key are the `Condition`-guarded alternatives of
+    // one tag. ExifTool takes the first whose condition holds and reports
+    // nothing when none does, so the group is consumed as a unit rather than
+    // field by field -- otherwise a body matching the second alternative would
+    // also be offered the first one's reading of the same bytes.
+    let mut rest = table.fields;
+    while let Some((first, tail)) = rest.split_first() {
+        let group_len = 1 + tail.iter().take_while(|f| f.key == first.key).count();
+        let (group, tail) = rest.split_at(group_len);
+        rest = tail;
+        let Some(field) = group.iter().find(|f| f.cond.holds(model)) else {
+            continue;
+        };
         if let Some((member, minimum)) = field.gate {
             // A gate on a member no record set is not satisfied: ExifTool's
             // `$$self{X}` is then undef, and `undef < n` is true in numeric
@@ -328,23 +449,25 @@ pub(crate) fn decode_binary_subdir_with(
             continue;
         }
 
-        // ExifTool's order is RawConv, then ValueConv, then PrintConv. Nothing
-        // transcribed here carries both a ValueConv and a PrintConv -- the
-        // generator refuses that pairing -- so a converted value renders as the
-        // number it converted to.
+        // ExifTool's order is RawConv, then ValueConv, then PrintConv, and a
+        // `PrintConv` that is an expression sees the converted value: Pentax's
+        // `BodyBatteryVoltage1` divides the raw 686 by 100 and only then runs
+        // `sprintf("%.2f V", $val)`. The generator still refuses a `ValueConv`
+        // paired with a *hash* `PrintConv`, which would mean looking a computed
+        // number up in a table of raw ones.
         match field.value_conv {
             ValueConv::None => {}
             ValueConv::Each(f) => {
                 parts = numbers
                     .iter()
-                    .map(|&v| render(&Elem::Real(f(v as f64)), PrintConv::None))
+                    .map(|&v| render(&Elem::Real(f(v as f64)), field.print_conv))
                     .collect();
             }
             ValueConv::List(f) => {
                 let input: Vec<f64> = numbers.iter().map(|&v| v as f64).collect();
                 parts = f(&input)
                     .into_iter()
-                    .map(|v| render(&Elem::Real(v), PrintConv::None))
+                    .map(|v| render(&Elem::Real(v), field.print_conv))
                     .collect();
             }
         }
@@ -379,7 +502,9 @@ mod tests {
         first_entry: 0,
         fields: &[
             Field {
+                key: "0",
                 index: 0,
+                cond: Cond::Always,
                 name: "Count",
                 format: Some(Fmt::U16),
                 count: 1,
@@ -391,7 +516,9 @@ mod tests {
                 low_priority: false,
             },
             Field {
+                key: "1",
                 index: 1,
+                cond: Cond::Always,
                 name: "First",
                 format: Some(Fmt::U16),
                 count: 4,
@@ -403,7 +530,9 @@ mod tests {
                 low_priority: false,
             },
             Field {
+                key: "5",
                 index: 5,
+                cond: Cond::Always,
                 name: "Second",
                 format: Some(Fmt::U16),
                 count: 4,
@@ -480,7 +609,9 @@ mod tests {
             default_format: Fmt::U8,
             first_entry: 0,
             fields: &[Field {
+                key: "0",
                 index: 0,
+                cond: Cond::Always,
                 name: "Name",
                 format: Some(Fmt::Str(8)),
                 count: 1,
@@ -511,7 +642,9 @@ mod tests {
             first_entry: 0,
             fields: &[
                 Field {
+                    key: "0",
                     index: 0,
+                    cond: Cond::Always,
                     name: "Known",
                     format: None,
                     count: 1,
@@ -523,7 +656,9 @@ mod tests {
                     low_priority: false,
                 },
                 Field {
+                    key: "1",
                     index: 1,
+                    cond: Cond::Always,
                     name: "Other",
                     format: None,
                     count: 1,
@@ -553,7 +688,9 @@ mod tests {
             first_entry: 0,
             fields: &[
                 Field {
+                    key: "0",
                     index: 0,
+                    cond: Cond::Always,
                     name: "Low",
                     format: None,
                     count: 1,
@@ -565,7 +702,12 @@ mod tests {
                     low_priority: false,
                 },
                 Field {
+                    // ExifTool's own key for a second tag at one offset: `0.1`,
+                    // not a repeat of `0`. Two entries keyed `0` would be
+                    // `Condition` alternatives, of which only one may fire.
+                    key: "0.1",
                     index: 0,
+                    cond: Cond::Always,
                     name: "High",
                     format: None,
                     count: 1,
@@ -600,5 +742,198 @@ mod tests {
         let mut tags = HashMap::new();
         decode_binary_subdir(&T_TABLE, &swapped, ByteOrder::BigEndian, "X", &mut tags);
         assert_eq!(tags.get("X:First").map(String::as_str), Some("46 81 27 27"));
+    }
+
+    /// Perl's `\b` after an alternation, which is what separates a `K-5` body
+    /// from a `K-50` -- two different `%Pentax::BatteryInfo` layouts.
+    #[test]
+    fn word_boundary_is_the_difference_between_k5_and_k50() {
+        static K5: Cond = Cond::Model {
+            any_of: &[ModelPat {
+                text: "K-5",
+                word_end: true,
+            }],
+            none_of: &[],
+        };
+        assert!(K5.holds(Some("PENTAX K-5")));
+        assert!(K5.holds(Some("PENTAX K-5 II s")));
+        assert!(!K5.holds(Some("PENTAX K-50")));
+        assert!(!K5.holds(Some("PENTAX K-500")));
+        assert!(!K5.holds(None));
+
+        // Without the boundary the same literal is a plain substring search.
+        static ANY: Cond = Cond::Model {
+            any_of: &[ModelPat {
+                text: "K-5",
+                word_end: false,
+            }],
+            none_of: &[],
+        };
+        assert!(ANY.holds(Some("PENTAX K-500")));
+    }
+
+    /// `A and $$self{Model} !~ /B/`: `none_of` vetoes a model `any_of` accepts.
+    #[test]
+    fn negated_clause_vetoes_a_matching_alternation() {
+        static C: Cond = Cond::Model {
+            any_of: &[ModelPat {
+                text: "K-3",
+                word_end: true,
+            }],
+            none_of: &[ModelPat {
+                text: "III",
+                word_end: false,
+            }],
+        };
+        assert!(C.holds(Some("PENTAX K-3")));
+        assert!(!C.holds(Some("PENTAX K-3 Mark III")));
+        assert!(Cond::ModelEq("PENTAX K-3 II").holds(Some("PENTAX K-3 II")));
+        assert!(!Cond::ModelEq("PENTAX K-3 II").holds(Some("PENTAX K-3 II s")));
+    }
+
+    /// Three alternatives of one key: the first whose condition holds wins, the
+    /// rest are not offered, and a model matching none reports nothing for that
+    /// key at all.
+    #[test]
+    fn variants_take_the_first_match_in_exiftools_order() {
+        static V_TABLE: BinaryTable = BinaryTable {
+            name: "V",
+            default_format: Fmt::U8,
+            first_entry: 0,
+            fields: &[
+                Field {
+                    key: "0",
+                    index: 0,
+                    cond: Cond::Model {
+                        any_of: &[ModelPat {
+                            text: "Alpha",
+                            word_end: false,
+                        }],
+                        none_of: &[],
+                    },
+                    name: "First",
+                    format: None,
+                    count: 1,
+                    set_member: None,
+                    gate: None,
+                    mask: None,
+                    value_conv: ValueConv::None,
+                    print_conv: PrintConv::None,
+                    low_priority: false,
+                },
+                Field {
+                    key: "0",
+                    index: 0,
+                    cond: Cond::Model {
+                        any_of: &[
+                            ModelPat {
+                                text: "Alpha",
+                                word_end: false,
+                            },
+                            ModelPat {
+                                text: "Beta",
+                                word_end: false,
+                            },
+                        ],
+                        none_of: &[],
+                    },
+                    name: "Second",
+                    format: None,
+                    count: 1,
+                    set_member: None,
+                    gate: None,
+                    mask: None,
+                    value_conv: ValueConv::None,
+                    print_conv: PrintConv::None,
+                    low_priority: false,
+                },
+                // A different key at the same offset: a masked neighbour, not
+                // an alternative, so it is decoded independently.
+                Field {
+                    key: "0.1",
+                    index: 0,
+                    cond: Cond::Always,
+                    name: "Neighbour",
+                    format: None,
+                    count: 1,
+                    set_member: None,
+                    gate: None,
+                    mask: Some(0xf0),
+                    value_conv: ValueConv::None,
+                    print_conv: PrintConv::None,
+                    low_priority: false,
+                },
+            ],
+        };
+        let decode = |model| {
+            let mut tags = HashMap::new();
+            let mut members = Members::new();
+            decode_binary_subdir_with(
+                &V_TABLE,
+                &[0x42],
+                ByteOrder::BigEndian,
+                "X",
+                model,
+                &mut members,
+                &mut tags,
+            );
+            tags
+        };
+
+        let alpha = decode(Some("Alpha"));
+        assert_eq!(alpha.get("X:First").map(String::as_str), Some("66"));
+        assert!(!alpha.contains_key("X:Second"));
+
+        let beta = decode(Some("Beta"));
+        assert_eq!(beta.get("X:Second").map(String::as_str), Some("66"));
+        assert!(!beta.contains_key("X:First"));
+
+        // No alternative applies: the key produces nothing rather than the
+        // wrong body's reading. The neighbouring key still does.
+        let gamma = decode(Some("Gamma"));
+        assert!(!gamma.contains_key("X:First"));
+        assert!(!gamma.contains_key("X:Second"));
+        assert_eq!(gamma.get("X:Neighbour").map(String::as_str), Some("4"));
+    }
+
+    /// ExifTool runs `ValueConv` and then hands the result to `PrintConv`, so
+    /// an expression `PrintConv` must see the converted number: a raw 686 of
+    /// centivolts prints "6.86 V", not "686.00 V".
+    #[test]
+    fn expression_print_conv_runs_after_the_value_conv() {
+        fn div_100(v: f64) -> f64 {
+            v / 100.0
+        }
+        fn volts(v: f64) -> String {
+            format!("{v:.2} V")
+        }
+        static E_TABLE: BinaryTable = BinaryTable {
+            name: "E",
+            default_format: Fmt::U8,
+            first_entry: 0,
+            fields: &[Field {
+                key: "0",
+                index: 0,
+                cond: Cond::Always,
+                name: "Volts",
+                format: Some(Fmt::U16),
+                count: 1,
+                set_member: None,
+                gate: None,
+                mask: None,
+                value_conv: ValueConv::Each(div_100),
+                print_conv: PrintConv::Expr(volts),
+                low_priority: false,
+            }],
+        };
+        let mut tags = HashMap::new();
+        decode_binary_subdir(
+            &E_TABLE,
+            &[0x02, 0xae],
+            ByteOrder::BigEndian,
+            "X",
+            &mut tags,
+        );
+        assert_eq!(tags.get("X:Volts").map(String::as_str), Some("6.86 V"));
     }
 }

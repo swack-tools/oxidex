@@ -1,5 +1,5 @@
 use oxidex::core::MetadataMap;
-use std::process::Command;
+use oxidex::exiftool_oracle;
 use serde_json::Value;
 
 #[test]
@@ -14,11 +14,19 @@ fn test_mkv_metadata_parity_with_exiftool() {
     }
 
     // Run ExifTool
-    let exiftool_output = Command::new("exiftool")
+    let oracle =
+        exiftool_oracle::shared().unwrap_or_else(|e| panic!("No usable ExifTool oracle: {e}"));
+    let exiftool_output = oracle
+        .command()
         .arg("-json")
         .arg(test_file)
         .output()
-        .expect("Failed to run exiftool - is it installed?");
+        .unwrap_or_else(|e| {
+            panic!(
+                "Failed to run ExifTool at {} - is it installed? {e}",
+                oracle.display()
+            )
+        });
 
     assert!(exiftool_output.status.success(), "ExifTool failed");
 

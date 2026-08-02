@@ -57,6 +57,7 @@
 //! between OxiDex and Perl ExifTool (e.g., maker notes, TagValue enum
 //! serialization, floating-point tolerances)
 
+use oxidex::exiftool_oracle;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
@@ -98,13 +99,15 @@ struct TagMismatch {
     rust_value: String,
 }
 
-/// Checks if Perl ExifTool is available in the system PATH
+/// Checks if a usable Perl ExifTool oracle is available
 fn is_exiftool_available() -> bool {
-    Command::new("exiftool")
-        .arg("-ver")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    exiftool_oracle::available()
+}
+
+/// The resolved oracle, or a panic naming why there is none. Call sites that
+/// have already passed [`is_exiftool_available`] cannot hit the panic.
+fn oracle() -> &'static exiftool_oracle::Oracle {
+    exiftool_oracle::shared().unwrap_or_else(|e| panic!("No usable ExifTool oracle: {}", e))
 }
 
 /// Executes Perl ExifTool and captures JSON output
@@ -119,7 +122,8 @@ fn get_perl_exiftool_output(file_path: &Path) -> Result<String, String> {
         return Err(format!("Test fixture not found: {:?}", file_path));
     }
 
-    let output = Command::new("exiftool")
+    let output = oracle()
+        .command()
         .arg("-json")
         .arg("-a")
         .arg("-G1")
@@ -814,7 +818,8 @@ fn test_write_roundtrip_jpeg_artist() {
 
     // Step 1: Use Perl ExifTool to write modified Artist tag
     let test_artist = "Test Artist - Round Trip";
-    let write_status = Command::new("exiftool")
+    let write_status = oracle()
+        .command()
         .arg(format!("-Artist={}", test_artist))
         .arg("-overwrite_original")
         .arg(temp_path)
@@ -926,7 +931,8 @@ fn test_copy_metadata_jpeg_to_jpeg() {
     fs::copy(dest_file, temp_dest_path).expect("Failed to copy destination file");
 
     // Use Perl ExifTool to copy metadata
-    let copy_status = Command::new("exiftool")
+    let copy_status = oracle()
+        .command()
         .arg("-TagsFromFile")
         .arg(source_file)
         .arg("-all:all")
@@ -1047,7 +1053,8 @@ fn test_rename_file_pattern() {
 
     // Use Perl ExifTool to rename based on DateTimeOriginal
     // Pattern: YYYYMMDD_HHMMSS%%-.c.%%e (with counter for collision avoidance)
-    let rename_output = Command::new("exiftool")
+    let rename_output = oracle()
+        .command()
         .arg("-d")
         .arg("%Y%m%d_%H%M%S")
         .arg("-FileName<DateTimeOriginal")
@@ -1154,7 +1161,8 @@ fn test_date_shift_all_dates() {
     }
 
     // Use Perl ExifTool to shift all dates by +1 day, +2 hours
-    let shift_status = Command::new("exiftool")
+    let shift_status = oracle()
+        .command()
         .arg("-AllDates+=0:0:1 2:0:0") // Add 1 day and 2 hours
         .arg("-overwrite_original")
         .arg(temp_path)

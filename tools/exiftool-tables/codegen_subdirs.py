@@ -18,18 +18,24 @@ Supported per field:
 
   * `Format`: a scalar int/float format, `string[N]`, `undef[N]`, or an array
     `fmt[N]` of a scalar format.
-  * `PrintConv`: absent, or a pure enum map (every key/value a plain scalar).
+  * `PrintConv`: absent, a pure enum map (every key/value a plain scalar), or a
+    Perl expression registered verbatim in `EXPR_PRINT_CONVS`.
+  * `ValueConv`: absent, or an expression/sub body registered verbatim.
   * `RawConv`: absent, or one of ExifTool's two count-gate idioms --
     `$$self{X} = $val` (records a data member) and
     `$$self{X} < N ? undef : $val` (suppresses the tag below a count).
   * `Mask`.
+  * `Condition`: a test on `$$self{Model}` -- `=~`, `!~`, `eq`, and the
+    `A and B` conjunction of those -- whose regexes expand to a finite literal
+    alternation.  An arrayref of such `Condition`-guarded alternatives becomes
+    several `Field`s sharing one ExifTool key, in ExifTool's order.
 
-Anything else -- a `ValueConv`, a `Hook`, a `Condition`, a nested
-`SubDirectory`, a `PrintConv` with `BITMASK`/`OTHER`/code, an arrayref of
-model-conditional variants -- raises `Unsupported`, naming the table, the tag
-and the offending construct.  Run with `--allow-skip` to downgrade those to a
-machine-logged skip line and continue; the log is the deliverable, not a
-footnote.
+Anything else -- a `Hook`, a nested `SubDirectory`, a `PrintConv` with
+`BITMASK`/`OTHER`/code, a `Condition` on anything but the model, a regex with a
+construct the expander has not been taught -- raises `Unsupported`, naming the
+table, the tag and the offending construct.  Run with `--allow-skip` to
+downgrade those to a machine-logged skip line and continue; the log is the
+deliverable, not a footnote.
 
 usage:
   dump_tables.pl <exiftool-lib> Panasonic > tables.json
@@ -71,6 +77,138 @@ class Unsupported(Exception):
     def __init__(self, table, tag, reason):
         super().__init__(f"{table}[{tag}]: {reason}")
         self.table, self.tag, self.reason = table, tag, reason
+
+
+# --------------------------------------------------------------------------
+# `Condition`
+# --------------------------------------------------------------------------
+#
+# Every `Condition` on a field of a `ProcessBinaryData` table in `%Pentax` is a
+# test on the camera model, and every model regex is a finite alternation of
+# literals once its groups and character classes are multiplied out.  Expanding
+# them here rather than shipping a regex engine keeps the model test derived
+# from ExifTool's own pattern text: a pattern the expander has not been taught
+# stops the generator instead of silently matching nothing (or everything).
+
+# `$$self{Model} =~ /re/`, `!~`, or `eq "..."`; several joined by `and`.
+MODEL_RE = re.compile(r'^\$\$self\{Model\}\s*(=~|!~)\s*/(.*)/$')
+MODEL_EQ_RE = re.compile(r'^\$\$self\{Model\}\s*eq\s*"([^"]*)"$')
+
+
+def expand_regex(pattern, table, key):
+    """A Perl regex -> (list of literal alternatives, ends-with-`\\b`).
+
+    Handles exactly what `%Pentax` writes: literal text, `\\*` and `\\b`
+    escapes, `(a|b|c)` groups (nested), `[abc]` character sets, and `?` on a
+    group or a set.  Anything else -- a quantifier on a literal, an anchor, a
+    class shorthand -- raises rather than expanding to something that is merely
+    plausible.
+    """
+    pos = 0
+    word_end = False
+    if pattern.endswith(r"\b"):
+        pattern, word_end = pattern[:-2], True
+
+    def parse_alt():
+        """alternation := seq ('|' seq)*  ->  list of strings"""
+        nonlocal pos
+        out = parse_seq()
+        while pos < len(pattern) and pattern[pos] == "|":
+            pos += 1
+            out += parse_seq()
+        return out
+
+    def parse_seq():
+        """seq := atom*  ->  list of strings (the cross product of the atoms)"""
+        nonlocal pos
+        out = [""]
+        while pos < len(pattern) and pattern[pos] not in "|)":
+            choices = parse_atom()
+            out = [prefix + suffix for prefix in out for suffix in choices]
+        return out
+
+    def parse_atom():
+        nonlocal pos
+        ch = pattern[pos]
+        if ch == "(":
+            pos += 1
+            inner = parse_alt()
+            if pos >= len(pattern) or pattern[pos] != ")":
+                raise Unsupported(table, key, f"unbalanced group in regex /{pattern}/")
+            pos += 1
+        elif ch == "[":
+            end = pattern.find("]", pos)
+            if end < 0:
+                raise Unsupported(table, key, f"unterminated [...] in regex /{pattern}/")
+            body = pattern[pos + 1 : end]
+            if not body or not body.isalnum():
+                # A range, a negation or an escape inside the class: not taught.
+                raise Unsupported(
+                    table, key, f"character class [{body}] in regex /{pattern}/ is not a plain set"
+                )
+            inner, pos = list(body), end + 1
+        elif ch == "\\":
+            if pos + 1 >= len(pattern):
+                raise Unsupported(table, key, f"trailing backslash in regex /{pattern}/")
+            esc = pattern[pos + 1]
+            if esc.isalnum():
+                # `\b`, `\d`, `\w`, a backreference: all change what matches.
+                raise Unsupported(table, key, f"escape \\{esc} in regex /{pattern}/")
+            inner, pos = [esc], pos + 2
+        elif ch in "*+?^$.{":
+            raise Unsupported(table, key, f"metacharacter {ch!r} in regex /{pattern}/")
+        else:
+            inner, pos = [ch], pos + 1
+        if pos < len(pattern) and pattern[pos] == "?":
+            # `GX-1[LS]?` -- the atom is optional, so "" is an alternative.
+            pos += 1
+            inner = inner + [""]
+        return inner
+
+    alts = parse_alt()
+    if pos != len(pattern):
+        raise Unsupported(table, key, f"unconsumed {pattern[pos:]!r} in regex /{pattern}/")
+    if not alts or any(a == "" for a in alts):
+        # An empty alternative matches every model, which is never what a
+        # `Condition` means.
+        raise Unsupported(table, key, f"regex /{pattern}/ expands to an empty alternative")
+    return alts, word_end
+
+
+def field_cond(tag, table, key):
+    """A `Condition` as a Rust `Cond` expression."""
+    cond = tag.get("Condition")
+    if cond is None:
+        return "Cond::Always"
+    any_of, none_of = [], []
+    clauses = [c.strip() for c in re.split(r"\band\b", cond.strip())]
+    if len(clauses) == 1:
+        m = MODEL_EQ_RE.match(clauses[0])
+        if m:
+            return f'Cond::ModelEq("{rust_str(m.group(1))}")'
+    positives = 0
+    for clause in clauses:
+        m = MODEL_RE.match(clause)
+        if not m:
+            raise Unsupported(table, key, f"Condition clause not a Model test: {clause!r}")
+        alts, word_end = expand_regex(m.group(2), table, key)
+        pats = [f'ModelPat {{ text: "{rust_str(a)}", word_end: {str(word_end).lower()} }}'
+                for a in alts]
+        if m.group(1) == "=~":
+            # Two `=~` joined by `and` are an intersection; `Cond::Model` holds
+            # one alternation and would union them instead.
+            positives += 1
+            if positives > 1:
+                raise Unsupported(table, key, f"Condition has two `=~` clauses: {cond!r}")
+            any_of.extend(pats)
+        else:
+            none_of.extend(pats)
+    if len(any_of) == 0 and len(none_of) == 0:
+        raise Unsupported(table, key, f"Condition {cond!r} has no clauses")
+    return (
+        f"Cond::Model {{ any_of: &[{', '.join(any_of)}], "
+        f"none_of: &[{', '.join(none_of)}] }}"
+    )
 
 
 def rust_str(s):
@@ -222,6 +360,16 @@ SCALAR_VALUE_CONVS = {
     # Pentax.pm:5734, :5740, :5760 -- RollAngle, PitchAngle,
     # CompositionAdjustRotation: half-degree steps, opposite sense.
     "-$val / 2": "negate_half",
+    # Pentax.pm:4866, :4921, :4946, :4956 -- battery voltages, in centivolts.
+    "$val / 100": "div_100",
+    # Pentax.pm:4930, :4984 -- the K-3 III's two voltages, a raw ADC count.
+    "$val * 4e-8 + 0.27219": "k3_iii_voltage",
+    # Pentax.pm:6129, :6138, :6162 -- SensorTemperature, tenths of a degree.
+    "$val / 10": "div_10",
+    # Pentax.pm:5062 -- AFIntegrationTime, 2 ms per step.
+    "$val * 2": "times_2",
+    # Pentax.pm:6118 -- ShotNumber, counted from zero.
+    "$val+1": "plus_1",
 }
 LIST_VALUE_CONVS = {
     # Pentax.pm:837-840 -- `%kelvinWB`, shared by all 17 KelvinWB_* tags.
@@ -229,8 +377,31 @@ LIST_VALUE_CONVS = {
     ". ($a[2] / 8192) . ' ' . ($a[3] / 8192)); }": "kelvin_wb",
 }
 
+# Translations for a `PrintConv` that is a Perl expression rather than a hash.
+#
+# Same discipline as the `ValueConv` registries: keyed on ExifTool's own
+# expression text, so an upstream edit shows up as an unknown key rather than as
+# a stale conversion behind a real tag name.  The value is a Rust function of
+# the *post-`ValueConv`* number, which is what `$val` is at `PrintConv` time.
+EXPR_PRINT_CONVS = {
+    # Pentax.pm:4868, :4923, :4932, :4948, :4958, :4986 -- battery voltages.
+    'sprintf("%.2f V", $val)': "volts_2dp",
+    # Pentax.pm:4854 -- BodyBatteryADNoLoad on the K10D/K20D.
+    'sprintf("%d (%.1fV, %d%%)",$val,$val*8.18/186,($val-155)*100/35)': "ad_no_load",
+    # Pentax.pm:4898 -- BodyBatteryADLoad on the K10D/K20D.
+    'sprintf("%d (%.1fV, %d%%)",$val,$val*8.18/186,($val-152)*100/34)': "ad_load",
+    # Pentax.pm:5064 -- AFIntegrationTime, in ms after its ValueConv.
+    '"$val ms"': "millis",
+    # Pentax.pm:6147, :6154 -- CameraTemperature4/5 on the K-5.
+    '"$val C"': "celsius",
+    # Pentax.pm:6131, :6140, :6164 -- SensorTemperature, one decimal.
+    'sprintf("%.1f C", $val)': "celsius_1dp",
+    # Pentax.pm:5188 -- AFCSensitivity, counted the other way.
+    "5 - $val": "five_minus",
+}
 
-def field_value_conv(tag, table, key, conv_prefix):
+
+def field_value_conv(tag, table, key, vc_prefix):
     """A `ValueConv` as a Rust expression, or `ValueConv::None`."""
     vc = tag.get("ValueConv")
     if vc is None:
@@ -243,7 +414,7 @@ def field_value_conv(tag, table, key, conv_prefix):
         fn = SCALAR_VALUE_CONVS.get(expr)
         if fn is None:
             raise Unsupported(table, key, f"ValueConv expression not in SCALAR_VALUE_CONVS: {expr!r}")
-        return f"ValueConv::Each({conv_prefix}::{fn})"
+        return f"ValueConv::Each({vc_prefix}::{fn})"
     if kind == "code":
         source = vc.get("deparse")
         if not source:
@@ -253,7 +424,7 @@ def field_value_conv(tag, table, key, conv_prefix):
             raise Unsupported(
                 table, key, "ValueConv body is not in LIST_VALUE_CONVS: " + normalize_deparse(source)
             )
-        return f"ValueConv::List({conv_prefix}::{fn})"
+        return f"ValueConv::List({vc_prefix}::{fn})"
     raise Unsupported(table, key, f"ValueConv kind={kind!r} is neither an expression nor a sub")
 
 
@@ -278,6 +449,12 @@ def field_print_conv(tag, table, key, pool, conv_prefix):
         raise Unsupported(table, key, f"PrintConv has unexpected shape {type(pc).__name__}")
     kind = pc.get("kind")
     other = None
+    if kind == "expr":
+        expr = (pc.get("expr") or "").strip()
+        fn = EXPR_PRINT_CONVS.get(expr)
+        if fn is None:
+            raise Unsupported(table, key, f"PrintConv expression not in EXPR_PRINT_CONVS: {expr!r}")
+        return f"PrintConv::Expr({conv_prefix}::{fn})"
     if kind == "enum_partial":
         directives = pc.get("directives") or {}
         unknown = set(directives) - BENIGN_PC_DIRECTIVES - {"OTHER"}
@@ -300,7 +477,7 @@ def field_print_conv(tag, table, key, pool, conv_prefix):
                 )
             other = f"{conv_prefix}::{fn}"
     elif kind != "enum":
-        raise Unsupported(table, key, f"PrintConv kind={kind!r} is not a pure enum map")
+        raise Unsupported(table, key, f"PrintConv kind={kind!r} is not a pure enum map or expression")
     entries = []
     for k, v in pc.get("map", {}).items():
         try:
@@ -346,8 +523,9 @@ class ConstPool:
 # silently as "no change".
 #
 # The first group is read above -- `Name`, `Format`/`Count`, `RawConv`,
-# `PrintConv`, `ValueConv`, `Mask`, and `Priority`/`Avoid` (by `field_priority`)
-# all change what a reader produces. `Priority` in particular sat in the second
+# `PrintConv`, `ValueConv`, `Mask`, `Condition` (by `field_cond`, which refuses
+# any test it cannot reproduce) and `Priority`/`Avoid` (by `field_priority`) all
+# change what a reader produces. `Priority` in particular sat in the second
 # group until it was found printing a sub-directory's `LensType` over the one
 # `%Pentax::Main` reports; it is not documentation.
 #
@@ -355,7 +533,7 @@ class ConstPool:
 # without changing what a reader produces.
 KNOWN_TAG_KEYS = {
     "Name", "Format", "Count", "RawConv", "PrintConv", "ValueConv", "Mask",
-    "Priority", "Avoid",
+    "Condition", "Priority", "Avoid",
     "Notes", "Description", "DataMember", "Writable", "Groups", "PrintConvInv",
     "ValueConvInv", "Protected", "Permanent", "SeparateTable", "PrintHex",
     "_shorthand", "_extra_keys", "Unknown", "Hidden", "Binary",
@@ -363,7 +541,7 @@ KNOWN_TAG_KEYS = {
 }
 
 
-def gen_table(module, tname, tbl, pool, skips, allow_skip, conv_prefix):
+def gen_table(module, tname, tbl, pool, skips, allow_skip, conv_prefix, vc_prefix):
     meta = tbl.get("meta") or {}
     pp = meta.get("PROCESS_PROC")
     pp_name = pp.get("__name", "") if isinstance(pp, dict) else ""
@@ -389,51 +567,78 @@ def gen_table(module, tname, tbl, pool, skips, allow_skip, conv_prefix):
 
     rows = []
     for key in sorted(tbl["tags"], key=lambda k: parse_index(k, tname)):
-        tag = tbl["tags"][key]
-        try:
-            if "_variants" in tag:
-                raise Unsupported(tname, key, "arrayref of Condition variants")
-            name = tag.get("Name")
-            if not isinstance(name, str) or not name:
-                raise Unsupported(tname, key, "no Name")
-            if tag.get("Unknown"):
-                # ExifTool hides these without -U; emitting them would be a diff
-                # against the default output, not a gain.
-                skips.append((tname, key, name, "Unknown => 1 (ExifTool hides it without -U)"))
+        entry = tbl["tags"][key]
+        # An arrayref of alternatives is one tag with several
+        # `Condition`-guarded readings, in ExifTool's order. Each becomes a
+        # `Field` sharing this key; the decoder takes the first whose condition
+        # holds.
+        #
+        # Dropping one alternative out of the middle is not safe: ExifTool stops
+        # at the first match, so removing an earlier one lets a later, broader
+        # one answer for a body it was never meant to describe -- which is a
+        # wrong value under a real tag name, the one outcome worth more than a
+        # missing tag. So a key any of whose alternatives is refused is dropped
+        # whole, and every refusal is still logged.
+        variants = entry.get("_variants") or [entry]
+        group, refused = [], False
+        for tag in variants:
+            try:
+                name = tag.get("Name")
+                if not isinstance(name, str) or not name:
+                    raise Unsupported(tname, key, "no Name")
+                if tag.get("Unknown"):
+                    # ExifTool hides these without -U; emitting them would be a
+                    # diff against the default output, not a gain. It still
+                    # *matches*, so an alternative behind it must not take its
+                    # place -- hence refusing the key rather than the tag.
+                    skips.append((tname, key, name, "Unknown => 1 (ExifTool hides it without -U)"))
+                    refused = True
+                    continue
+                for k in tag:
+                    if k not in KNOWN_TAG_KEYS:
+                        raise Unsupported(tname, key, f"unhandled tag key {k!r}")
+                idx = parse_index(key, tname)
+                cond = field_cond(tag, tname, key)
+                fmt, count = field_format(tag, tname, key)
+                member, gate = field_raw_conv(tag, tname, key)
+                low_priority = field_priority(tag, table_priority, tname, key)
+                pc = field_print_conv(tag, tname, key, pool, conv_prefix)
+                vc = field_value_conv(tag, tname, key, vc_prefix)
+                if vc != "ValueConv::None" and pc.startswith("PrintConv::Map"):
+                    # ExifTool runs ValueConv then PrintConv, so a hash PrintConv
+                    # after one would be a lookup of a computed number in a table
+                    # of raw ones. An expression PrintConv is exactly that
+                    # composition and is allowed.
+                    raise Unsupported(tname, key, "ValueConv combined with a hash PrintConv")
+                if count > 1 and pc != "PrintConv::None":
+                    # ExifTool hands the *joined* array string to a hash
+                    # PrintConv, so an element-wise lookup would print something
+                    # ExifTool never does. Refuse rather than pick one of the two
+                    # readings.
+                    raise Unsupported(tname, key, "array Format with a hash PrintConv")
+                mask = tag.get("Mask")
+                mask_s = "None" if mask is None else f"Some({int(str(mask), 0)})"
+            except Unsupported as exc:
+                if not allow_skip:
+                    raise
+                skips.append((tname, key, tag.get("Name", "?"), exc.reason))
+                refused = True
                 continue
-            for k in tag:
-                if k not in KNOWN_TAG_KEYS:
-                    raise Unsupported(tname, key, f"unhandled tag key {k!r}")
-            idx = parse_index(key, tname)
-            fmt, count = field_format(tag, tname, key)
-            member, gate = field_raw_conv(tag, tname, key)
-            low_priority = field_priority(tag, table_priority, tname, key)
-            pc = field_print_conv(tag, tname, key, pool, conv_prefix)
-            vc = field_value_conv(tag, tname, key, conv_prefix)
-            if vc != "ValueConv::None" and pc != "PrintConv::None":
-                # ExifTool runs ValueConv then PrintConv; nothing here does both,
-                # and guessing the composition would be inventing an output.
-                raise Unsupported(tname, key, "ValueConv combined with a PrintConv")
-            if count > 1 and pc != "PrintConv::None":
-                # ExifTool hands the *joined* array string to a hash PrintConv,
-                # so an element-wise lookup would print something ExifTool never
-                # does. Refuse rather than pick one of the two readings.
-                raise Unsupported(tname, key, "array Format with a hash PrintConv")
-            mask = tag.get("Mask")
-            mask_s = "None" if mask is None else f"Some({int(str(mask), 0)})"
-        except Unsupported as exc:
-            if not allow_skip:
-                raise
-            skips.append((tname, key, tag.get("Name", "?"), exc.reason))
-            continue
-        rows.append(
-            f"    Field {{ index: {idx}, name: \"{rust_str(name)}\", "
-            f"format: {'None' if fmt is None else f'Some({fmt})'}, count: {count}, "
-            f"set_member: {'None' if member is None else f'Some(\"{member}\")'}, "
-            f"gate: {'None' if gate is None else f'Some((\"{gate[0]}\", {gate[1]}))'}, "
-            f"mask: {mask_s}, value_conv: {vc}, print_conv: {pc}, "
-            f"low_priority: {'true' if low_priority else 'false'} }},"
-        )
+            group.append(
+                f"    Field {{ key: \"{key}\", index: {idx}, cond: {cond}, "
+                f"name: \"{rust_str(name)}\", "
+                f"format: {'None' if fmt is None else f'Some({fmt})'}, count: {count}, "
+                f"set_member: {'None' if member is None else f'Some(\"{member}\")'}, "
+                f"gate: {'None' if gate is None else f'Some((\"{gate[0]}\", {gate[1]}))'}, "
+                f"mask: {mask_s}, value_conv: {vc}, print_conv: {pc}, "
+                f"low_priority: {'true' if low_priority else 'false'} }},"
+            )
+        if refused and len(variants) > 1:
+            for text in group:
+                skips.append((tname, key, text.split('name: "')[1].split('"')[0],
+                              "dropped with the rest of a partly-refused alternative list"))
+            group = []
+        rows.extend(group)
 
     ident = re.sub(r"[^A-Za-z0-9]", "_", f"{module}_{tname}").upper()
     body = "\n".join(rows)
@@ -460,7 +665,12 @@ def main():
     ap.add_argument(
         "--other-conv-mod",
         default="super::print_conv",
-        help="Rust path holding the hand-written OTHER PrintConv fallbacks",
+        help="Rust path holding the hand-written PrintConv ports",
+    )
+    ap.add_argument(
+        "--value-conv-mod",
+        default="super::value_conv",
+        help="Rust path holding the hand-written ValueConv ports",
     )
     ap.add_argument("--allow-skip", action="store_true")
     ap.add_argument("-o", "--output", required=True)
@@ -481,6 +691,7 @@ def main():
             skips,
             args.allow_skip,
             args.other_conv_mod,
+            args.value_conv_mod,
         )
         idents.append((tname, ident))
         chunks.append(text)
@@ -493,9 +704,16 @@ def main():
 //! The generator refuses any construct it has not been taught and names it, so
 //! a field that is here was reproduced exactly and a field that is missing was
 //! reported as missing -- neither is a guess.
-
+"""
+    # `ModelPat` only appears in a `Cond::Model`, so importing it
+    # unconditionally would leave an unused import in a table set that has no
+    # `Condition` at all.
+    imports = ["BinaryTable", "Cond", "Field", "Fmt", "PrintConv", "ValueConv"]
+    if any("ModelPat" in chunk for chunk in chunks):
+        imports.insert(4, "ModelPat")
+    header += f"""
 use crate::parsers::tiff::makernotes::shared::binary_subdir::{{
-    BinaryTable, Field, Fmt, PrintConv, ValueConv,
+    {", ".join(imports)},
 }};
 """
     out = "\n\n".join([header, pool.emit()] + chunks) + "\n"

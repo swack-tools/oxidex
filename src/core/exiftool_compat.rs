@@ -57,20 +57,23 @@
 //! ```
 
 use crate::core::binary_decoders::decode_user_comment;
-use crate::core::formatters::exif_print_conv::{print_exposure_time, print_fraction};
+use crate::core::formatters::exif_print_conv::{
+    print_exposure_time, print_f_number, print_fraction,
+};
 use crate::core::formatters::gps_speed_ref::format_gps_dest_distance_ref;
 use crate::core::formatters::gps_status::{
     format_gps_differential, format_gps_measure_mode, format_gps_status,
 };
 use crate::core::formatters::{
     decode_cfa_pattern, decode_gps_processing_method, decode_scene_type, decode_version_bytes,
-    exiftool_rational_number, format_color_space, format_components_configuration,
-    format_compression, format_contrast, format_custom_rendered, format_exposure_mode,
-    format_exposure_program, format_file_source, format_flash, format_gain_control,
-    format_gps_altitude_ref, format_gps_direction_ref, format_gps_lat_ref, format_gps_lon_ref,
-    format_gps_speed_ref, format_icc_value, format_integer_precision_values, format_interop_index,
-    format_light_source, format_metering_mode, format_orientation, format_resolution_unit,
-    format_saturation, format_scene_capture_type, format_sensing_method, format_sharpness,
+    exiftool_rational_number, file_source_label_bytes, format_color_space,
+    format_components_configuration, format_compression, format_contrast, format_custom_rendered,
+    format_exposure_mode, format_exposure_program, format_file_source, format_flash,
+    format_focal_plane_resolution_unit, format_gain_control, format_gps_altitude_ref,
+    format_gps_direction_ref, format_gps_lat_ref, format_gps_lon_ref, format_gps_speed_ref,
+    format_icc_value, format_integer_precision_values, format_interop_index, format_light_source,
+    format_metering_mode, format_orientation, format_resolution_unit, format_saturation,
+    format_scene_capture_type, format_sensing_method, format_sharpness,
     format_subject_distance_range, format_three_decimal_values, format_white_balance,
     format_with_unit, format_ycbcr_positioning, format_ycbcr_subsampling_string, is_icc_matrix_tag,
     is_integer_precision_tag, is_three_decimal_tag,
@@ -441,11 +444,38 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
         return TagValue::String(format_gain_control(i));
     }
 
-    // FileSource enum (1-3)
-    if base_name == "FileSource"
-        && let Some(i) = value.as_integer()
-    {
-        return TagValue::String(format_file_source(i));
+    // FileSource (Exif.pm:2811). `Writable => 'undef'`, so the TIFF reader
+    // hands this over as `TagValue::Binary`, not as a number -- and that is why
+    // the integer arm below, which has been correct for as long as it has
+    // existed, never ran: `as_integer()` is `None` for a blob. 2,874 corpus
+    // files printed `(Binary data 1 bytes, use -b option to extract)` past a
+    // working decoder, in every output mode.
+    //
+    // ExifTool resolves the same mismatch one layer earlier: `ProcessExif`
+    // rewrites the format of any one-element UNDEFINED value to `int8u`
+    // (Exif.pm:6682, "treat single unknown byte as int8u"), which is what lets
+    // a PrintConv hash keyed `1, 2, 3` match a stored `"\x03"` at all. The
+    // binary arm reproduces that lookup for this tag rather than changing how
+    // every UNDEFINED value in the tree is read.
+    if base_name == "FileSource" {
+        if let Some(i) = value.as_integer() {
+            return TagValue::String(format_file_source(i));
+        }
+        if let TagValue::Binary(data) = value {
+            // A count other than 1 stays `undef` in ExifTool too, and its hash
+            // holds exactly one such key -- "\3\0\0\0", the four-byte form
+            // Sigma writes, which is a *different* label from a bare `3`.
+            if let Some(label) = file_source_label_bytes(data) {
+                return TagValue::String(label.to_string());
+            }
+            // One byte the hash does not name still prints its number:
+            // `Unknown (0)` is what ExifTool reports for the four corpus files
+            // storing a zero here. A longer unnamed blob is left as a blob
+            // rather than given an invented label.
+            if let [byte] = data.as_slice() {
+                return TagValue::String(format_file_source(i64::from(*byte)));
+            }
+        }
     }
 
     // SensingMethod enum (1-8)
@@ -453,6 +483,16 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
         && let Some(i) = value.as_integer()
     {
         return TagValue::String(format_sensing_method(i));
+    }
+
+    // FocalPlaneResolutionUnit enum (1-5). Exif.pm 0xa210 declares a PrintConv;
+    // this path used to print the raw code, so 1,098 corpus files reported `2`
+    // and `3` instead of `inches` and `cm`. The composite ScaleFactor35efl
+    // already accepts either spelling (`Some("3") | Some("cm")`).
+    if base_name == "FocalPlaneResolutionUnit"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_focal_plane_resolution_unit(i));
     }
 
     // Compression enum (1-65535)
@@ -772,10 +812,10 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     // ---------------------------------------------------------------------
     // Rule 19b/19c: APEX-stored tags, which DO have a PrintConv and so must
     // be resolved before the catch-all below turns them into plain numbers.
-    // Shared with the Composite layer via [`apex_value_conv`] -- the
-    // Composite table (Exif.pm:4678) reads these ValueConv'd, not raw.
+    // Keep PrintConv here. The Composite layer consumes the raw ValueConv via
+    // [`apex_value_conv`] before this output-time rendering step.
     // ---------------------------------------------------------------------
-    if let Some(converted) = apex_value_conv(base_name, value) {
+    if let Some(converted) = apex_print_conv(base_name, value) {
         return converted;
     }
 
@@ -822,6 +862,38 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     }
 
     // ---------------------------------------------------------------------
+    // Rule 19f: FNumber (Exif.pm:1853-1858)
+    //     0x829d => { Name => 'FNumber', Writable => 'rational64u',
+    //                 PrintConv => 'Image::ExifTool::Exif::PrintFNumber($val)',
+    //                 PrintConvInv => '$val' }
+    //
+    // 0x829d had no arm at all, so its rational fell through to Rule 20's
+    // `%.10g` quotient. That drops the decimal place ExifTool's `%.1f` keeps
+    // (`4` where ExifTool prints `4.0` -- 964 sample-corpus files) and prints
+    // the full stored expansion where ExifTool rounds (`2.638671875` for
+    // `2.6`, `0.640234375` for `0.64` -- another 71).
+    //
+    // This is a *display* conversion, and 0x829d has no ValueConv: the
+    // Composite `Aperture` (Exif.pm:4782, `ValueConv => '$val[0] || $val[1]'`)
+    // reads the raw quotient, not this string, and applies `PrintFNumber`
+    // itself. Composites are derived before `format_tag_value` runs at all --
+    // `composite::lookup_key` reads the stored `TagValue` -- so this arm
+    // cannot reach them, which the corpus run confirms: no `Composite:*` value
+    // changes.
+    // ---------------------------------------------------------------------
+    if base_name == "FNumber"
+        && let TagValue::Rational {
+            numerator,
+            denominator,
+        } = value
+        && *denominator != 0
+    {
+        return TagValue::String(print_f_number(
+            f64::from(*numerator) / f64::from(*denominator),
+        ));
+    }
+
+    // ---------------------------------------------------------------------
     // Rule 20: PrintConv-less rationals
     //
     // A rational that reaches this point carries no PrintConv of its own, and
@@ -853,23 +925,20 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     value.clone()
 }
 
-/// Applies the ValueConv/PrintConv pair for the APEX-stored tags whose raw
-/// rational is not the value a reader wants.
+/// Applies ValueConv for an APEX-stored rational without applying PrintConv.
 ///
 /// ApertureValue (Exif.pm:2327-2335) and MaxApertureValue (Exif.pm:2350-2359)
 /// are both `ValueConv => '2 ** ($val / 2)', PrintConv => 'sprintf("%.1f",$val)'`
-/// -- stored as an APEX value, displayed as an F number. The stored 3.625 in
-/// CanonRaw.cr3 is `3.5`, not `3.625`.
+/// -- stored as an APEX value. The stored 3.625 in CanonRaw.cr3 converts to
+/// the f-number 3.5 before its one-decimal PrintConv is applied.
 ///
 /// ShutterSpeedValue (Exif.pm:2317-2326) is
 /// `ValueConv => 'IsFloat($val) && abs($val)<100 ? 2**(-$val) : 0'`,
 /// `PrintConv => 'Image::ExifTool::Exif::PrintExposureTime($val)'`.
 ///
-/// [`format_tag_value`] uses this for the emitted `Group:Name` value; the
-/// Composite layer (`src/composite/mod.rs`) uses the same function so its
-/// `Desire`d inputs see seconds and f-stops too, matching Exif.pm:4678's
-/// `$val[2]` reading ShutterSpeedValue post-ValueConv rather than the raw
-/// APEX exponent.
+/// The Composite layer (`src/composite/mod.rs`) consumes this raw numeric
+/// value. It must not receive a formatted reciprocal or rounded f-number:
+/// ExifTool's Composite table reads post-ValueConv values before PrintConv.
 pub(crate) fn apex_value_conv(base_name: &str, value: &TagValue) -> Option<TagValue> {
     let TagValue::Rational {
         numerator,
@@ -884,7 +953,7 @@ pub(crate) fn apex_value_conv(base_name: &str, value: &TagValue) -> Option<TagVa
     let apex = f64::from(*numerator) / f64::from(*denominator);
 
     if matches!(base_name, "ApertureValue" | "MaxApertureValue") {
-        return Some(TagValue::String(format!("{:.1}", 2f64.powf(apex / 2.0))));
+        return Some(TagValue::Float(2f64.powf(apex / 2.0)));
     }
 
     if base_name == "ShutterSpeedValue" {
@@ -893,10 +962,23 @@ pub(crate) fn apex_value_conv(base_name: &str, value: &TagValue) -> Option<TagVa
         } else {
             0.0
         };
-        return Some(TagValue::String(print_exposure_time(seconds)));
+        return Some(TagValue::Float(seconds));
     }
 
     None
+}
+
+/// Applies the APEX PrintConv after [`apex_value_conv`] has produced the raw
+/// value used by dependent Composite tags.
+fn apex_print_conv(base_name: &str, value: &TagValue) -> Option<TagValue> {
+    let TagValue::Float(converted) = apex_value_conv(base_name, value)? else {
+        return None;
+    };
+    match base_name {
+        "ApertureValue" | "MaxApertureValue" => Some(TagValue::String(format!("{converted:.1}"))),
+        "ShutterSpeedValue" => Some(TagValue::String(print_exposure_time(converted))),
+        _ => None,
+    }
 }
 
 // =============================================================================
@@ -1465,6 +1547,157 @@ fn format_icc_string_values(value: &str, base_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The dispatch, not just the table.
+    ///
+    /// `format_file_source` has existed for as long as this arm has, and the
+    /// arm has always been correct -- it simply never ran, because
+    /// `raw_bytes_to_tag_value` handed 0xa300 over as `TagValue::Binary` and
+    /// `as_integer()` is `None` for a blob. 2,836 corpus files printed
+    /// `(Binary data 1 bytes, use -b option to extract)` past a working
+    /// decoder. This asserts both shapes reach a label.
+    #[test]
+    fn file_source_reaches_the_print_conv_from_the_binary_form() {
+        // The shape the TIFF reader actually produces for `Writable => 'undef'`.
+        // This is the assertion that fails against the old code: the integer
+        // cases below passed before this change and prove nothing on their own.
+        for (byte, label) in [
+            (1u8, "Film Scanner"),
+            (2, "Reflection Print Scanner"),
+            (3, "Digital Camera"),
+        ] {
+            assert_eq!(
+                format_tag_value("ExifIFD:FileSource", &TagValue::Binary(vec![byte])),
+                TagValue::String(label.to_string()),
+                "FileSource {byte} did not reach the PrintConv from its binary form"
+            );
+        }
+        // Sigma writes the same code with a count of 4, and that is a separate
+        // PrintConv key -- a different label, not `Digital Camera`.
+        assert_eq!(
+            format_tag_value("ExifIFD:FileSource", &TagValue::Binary(vec![3, 0, 0, 0])),
+            TagValue::String("Sigma Digital Camera".to_string())
+        );
+        // One byte the hash does not name prints its number, the way ExifTool
+        // does for the four corpus files that store a zero here.
+        assert_eq!(
+            format_tag_value("ExifIFD:FileSource", &TagValue::Binary(vec![0])),
+            TagValue::String("Unknown (0)".to_string())
+        );
+        // A longer unnamed blob is left alone rather than given a label.
+        let blob = TagValue::Binary(vec![9, 9, 9, 9]);
+        assert_eq!(format_tag_value("ExifIFD:FileSource", &blob), blob);
+        // The pre-existing integer path is unchanged.
+        assert_eq!(
+            format_tag_value("ExifIFD:FileSource", &TagValue::new_integer(3)),
+            TagValue::String("Digital Camera".to_string())
+        );
+    }
+
+    /// The dispatch, not just the table.
+    ///
+    /// `format_focal_plane_resolution_unit` existing proves nothing on its own:
+    /// the table already existed in `parsers::pdf` while this chain had no
+    /// `FocalPlaneResolutionUnit` arm, so `format_tag_value` returned the raw
+    /// integer and 1,098 sample-corpus files reported `2` instead of `inches`.
+    /// This asserts the wiring.
+    #[test]
+    fn focal_plane_resolution_unit_reaches_the_print_conv() {
+        for (code, label) in [
+            (1i64, "None"),
+            (2, "inches"),
+            (3, "cm"),
+            (4, "mm"),
+            (5, "um"),
+        ] {
+            let got = format_tag_value(
+                "ExifIFD:FocalPlaneResolutionUnit",
+                &TagValue::new_integer(code),
+            );
+            assert_eq!(
+                got,
+                TagValue::String(label.to_string()),
+                "FocalPlaneResolutionUnit {code} did not reach the PrintConv"
+            );
+        }
+    }
+
+    /// Flash reaches the hash, and unnamed codes come back in hex.
+    #[test]
+    fn flash_reaches_the_print_conv_with_the_printhex_unknown_form() {
+        assert_eq!(
+            format_tag_value("ExifIFD:Flash", &TagValue::new_integer(0x49)),
+            TagValue::String("On, Red-eye reduction".to_string())
+        );
+        assert_eq!(
+            format_tag_value("ExifIFD:Flash", &TagValue::new_integer(0x38)),
+            TagValue::String("Unknown (0x38)".to_string())
+        );
+    }
+
+    /// The dispatch, not just the formatter.
+    ///
+    /// `print_f_number` being right proves nothing on its own: 0x829d had no
+    /// arm in this chain at all, so its rational reached Rule 20 and printed
+    /// the `%.10g` quotient. 1,035 sample-corpus files reported `4` where
+    /// ExifTool reports `4.0`, and `0.640234375` where it reports `0.64`.
+    #[test]
+    fn fnumber_reaches_print_fnumber_from_its_rational() {
+        let rational = |n: i32, d: i32| TagValue::Rational {
+            numerator: n,
+            denominator: d,
+        };
+        // The whole f-stops, which Rule 20 printed without a decimal place.
+        for (n, d, want) in [(4, 1, "4.0"), (8, 1, "8.0"), (2, 1, "2.0"), (11, 1, "11.0")] {
+            assert_eq!(
+                format_tag_value("ExifIFD:FNumber", &rational(n, d)),
+                TagValue::String(want.to_string()),
+                "FNumber {n}/{d} did not reach PrintFNumber"
+            );
+        }
+        // The rounding cases, which Rule 20 printed in full.
+        // FujiFilmFinePixA345.jpg stores 344/100.
+        assert_eq!(
+            format_tag_value("ExifIFD:FNumber", &rational(344, 100)),
+            TagValue::String("3.4".to_string())
+        );
+        // GPS.jpg stores 3277/5119 -- below 1.0, so two decimal places.
+        assert_eq!(
+            format_tag_value("ExifIFD:FNumber", &rational(3277, 5119)),
+            TagValue::String("0.64".to_string())
+        );
+        // A stored zero stays `0`; ExifTool never prints `0.0` for this tag.
+        assert_eq!(
+            format_tag_value("ExifIFD:FNumber", &rational(0, 10)),
+            TagValue::String("0".to_string())
+        );
+        // A zero denominator is Rule 17's, and still is.
+        assert_eq!(
+            format_tag_value("ExifIFD:FNumber", &rational(4, 0)),
+            TagValue::String("undef".to_string())
+        );
+    }
+
+    /// The Composite input is the raw quotient, not this display string.
+    ///
+    /// Exif.pm:4782's Composite `Aperture` is `ValueConv => '$val[0] || $val[1]'`
+    /// over `Desire => { 0 => 'FNumber', 1 => 'ApertureValue' }`, and applies
+    /// `PrintFNumber` itself. 0x829d has no ValueConv, so what the composite
+    /// must see is the unrounded rational -- which is why this conversion
+    /// belongs here, in the display layer, and not in the value the map holds.
+    /// `apex_value_conv` is the list of tags whose *stored* value is not what
+    /// a reader wants, and FNumber is deliberately not one of them.
+    #[test]
+    fn fnumber_has_no_value_conv_so_composites_keep_the_raw_quotient() {
+        let stored = TagValue::Rational {
+            numerator: 3277,
+            denominator: 5119,
+        };
+        assert_eq!(apex_value_conv("FNumber", &stored), None);
+        // ...unlike the APEX-stored aperture tags beside it.
+        assert!(apex_value_conv("ApertureValue", &stored).is_some());
+        assert!(apex_value_conv("MaxApertureValue", &stored).is_some());
+    }
 
     // -------------------------------------------------------------------------
     // strip_family_prefix tests

@@ -40,6 +40,11 @@ pub(crate) mod ftype {
     pub const TIFF_FLOAT: u16 = 11;
     pub const TIFF_DOUBLE: u16 = 12;
     pub const TIFF_IFD: u16 = 13;
+    /// `int64u`, format code 16 in ExifTool's `@formatName` (Exif.pm). Apple
+    /// stores `0x0017 LivePhotoVideoIndex` in it on newer iPhones.
+    pub const TIFF_LONG8: u16 = 16;
+    /// `int64s`, format code 17.
+    pub const TIFF_SLONG8: u16 = 17;
 }
 
 /// Size in bytes of one element of each TIFF field type.
@@ -48,7 +53,11 @@ pub fn type_size(t: u16) -> usize {
         ftype::TIFF_BYTE | ftype::TIFF_ASCII | ftype::TIFF_SBYTE | ftype::TIFF_UNDEF => 1,
         ftype::TIFF_SHORT | ftype::TIFF_SSHORT => 2,
         ftype::TIFF_LONG | ftype::TIFF_SLONG | ftype::TIFF_FLOAT | ftype::TIFF_IFD => 4,
-        ftype::TIFF_RATIONAL | ftype::TIFF_SRATIONAL | ftype::TIFF_DOUBLE => 8,
+        ftype::TIFF_RATIONAL
+        | ftype::TIFF_SRATIONAL
+        | ftype::TIFF_DOUBLE
+        | ftype::TIFF_LONG8
+        | ftype::TIFF_SLONG8 => 8,
         _ => 0,
     }
 }
@@ -163,7 +172,13 @@ pub fn decode_text(bytes: &[u8]) -> String {
 }
 
 /// ExifTool renders a rational as its quotient (`inf` / `undef` when the
-/// denominator is zero), then Perl stringifies that number with `%.15g`.
+/// denominator is zero), rounded to ten significant digits.
+///
+/// `GetRational64s`/`GetRational64u` (ExifTool.pm:6107-6120) both end in
+/// `RoundFloat($ratNumer / $ratDenom, 10)`, and `RoundFloat` (ExifTool.pm:5960)
+/// is `sprintf("%.${sig}g", $val)`. Printing the full `%.15g` expansion instead
+/// is a visible mismatch on any quotient that does not terminate: ExifTool
+/// prints `AccelerationVector` as `-0.9245480894`, not `-0.924548089390588`.
 pub fn print_rational(num: i64, den: i64) -> String {
     if den == 0 {
         return if num == 0 {
@@ -175,7 +190,7 @@ pub fn print_rational(num: i64, den: i64) -> String {
     if num % den == 0 {
         return (num / den).to_string();
     }
-    fmt_g15(num as f64 / den as f64)
+    crate::core::formatters::numeric_precision::exiftool_rational_number(num as f64 / den as f64)
 }
 
 /// Format a float the way Perl stringifies one: `%.15g`, trailing zeros gone.
@@ -718,6 +733,23 @@ pub fn decode_bytes(bytes: &[u8], ft: u16, order: ByteOrder) -> Option<OlyVal> {
                 })
                 .collect(),
         )),
+        ftype::TIFF_LONG8 | ftype::TIFF_SLONG8 => {
+            let mut out = Vec::with_capacity(n);
+            for i in 0..n {
+                let hi = rd32(&bytes[i * 8..]) as u64;
+                let lo = rd32(&bytes[i * 8 + 4..]) as u64;
+                let raw = if le { (lo << 32) | hi } else { (hi << 32) | lo };
+                if ft == ftype::TIFF_SLONG8 {
+                    out.push(raw as i64);
+                } else {
+                    // An int64u above i64::MAX has no representation here, and
+                    // printing it as a negative would be worse than omitting
+                    // it, so the whole value is dropped instead.
+                    out.push(i64::try_from(raw).ok()?);
+                }
+            }
+            Some(OlyVal::Int(out))
+        }
         _ => None,
     }
 }
@@ -763,7 +795,12 @@ mod tests {
         assert_eq!(print_rational(2160, 100), "21.6");
         assert_eq!(print_rational(203, 256), "0.79296875");
         assert_eq!(print_rational(0, 1), "0");
-        assert_eq!(print_rational(1, 3), "0.333333333333333");
+        // `RoundFloat($num/$den, 10)`, not the full `%.15g` expansion:
+        // `perl -e 'printf "%.10g", 1/3'` prints 0.3333333333.
+        assert_eq!(print_rational(1, 3), "0.3333333333");
+        // Apple_iPhone13Pro.jpg's AccelerationVector[0], -48487/52444, which
+        // `exiftool -a -G1 -s` prints as -0.9245480894.
+        assert_eq!(print_rational(-48487, 52444), "-0.9245480894");
         assert_eq!(print_rational(1, 0), "inf");
         assert_eq!(print_rational(0, 0), "undef");
     }

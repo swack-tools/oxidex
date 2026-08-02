@@ -26,6 +26,7 @@
 //! `1 => "Reduced-resolution image"` in src/parsers/tiff/tiff_enums.rs), not
 //! in the tag registry.
 
+use oxidex::exiftool_oracle;
 use oxidex::tag_sync::{
     DOMAINS, parse_listx, parse_listx_print_conv_keys, parse_listx_print_conv_values,
     parse_tag_id as parse_id,
@@ -33,7 +34,6 @@ use oxidex::tag_sync::{
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// One `(table, id, name)` row of a domain YAML.
 struct Entry {
@@ -78,7 +78,7 @@ fn entries(domain: &str) -> Vec<Entry> {
 }
 
 fn exiftool_listx() -> Option<String> {
-    let out = Command::new("exiftool")
+    let out = exiftool_oracle::shared_command()?
         .arg("-f")
         .arg("-listx")
         .output()
@@ -126,7 +126,7 @@ fn registry_tag_names_are_shaped_like_exiftool_tag_names() {
 #[test]
 fn registry_lists_no_print_conv_display_value_as_a_tag() {
     let Some(xml) = exiftool_listx() else {
-        eprintln!("skipping: exiftool not found on PATH");
+        eprintln!("skipping: no usable ExifTool oracle");
         return;
     };
 
@@ -186,7 +186,7 @@ fn registry_lists_no_print_conv_display_value_as_a_tag() {
 #[test]
 fn registry_tag_ids_are_not_print_conv_keys_in_disguise() {
     let Some(xml) = exiftool_listx() else {
-        eprintln!("skipping: exiftool not found on PATH");
+        eprintln!("skipping: no usable ExifTool oracle");
         return;
     };
 
