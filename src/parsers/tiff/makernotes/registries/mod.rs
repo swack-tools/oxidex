@@ -68,7 +68,6 @@ pub mod sanyo;
 pub mod fotostation;
 pub mod gimp;
 pub mod indesign;
-pub mod photomechanic;
 pub mod reconyx;
 pub mod scalado;
 
@@ -113,6 +112,5 @@ pub use sanyo::sanyo_registry;
 pub use fotostation::fotostation_registry;
 pub use gimp::gimp_registry;
 pub use indesign::indesign_registry;
-pub use photomechanic::photomechanic_registry;
 pub use reconyx::reconyx_registry;
 pub use scalado::scalado_registry;
