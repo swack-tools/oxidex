@@ -188,7 +188,7 @@ pub fn parse_ifd_chain(
         let tags = parse_ifd(reader, ifd_offset, byte_order)?;
 
         // Process IFD tags and get sub-IFD information
-        let (exif_offset, gps_offset, makernote_data, preview_offset_length) =
+        let (exif_offset, gps_offset, makernote_data) =
             process_tiff_ifd_tags(&tags, ifd_name, byte_order, metadata);
 
         // Parse EXIF Sub-IFD if present. A standalone TIFF's structure starts
@@ -216,25 +216,6 @@ pub fn parse_ifd_chain(
                 makernote_bytes,
             );
             parse_makernote(&ctx, byte_order, metadata);
-        }
-
-        // IFD2's PreviewImageStart/PreviewImageLength pair (see the comment in
-        // `process_tiff_ifd_tags`) addresses the DataTag PreviewImage.
-        // ExifTool.pm's ExtractBinary returns the declared-length placeholder
-        // string without ever seeking when the tag wasn't explicitly
-        // requested with -b, so the default dump shows the placeholder even
-        // when the range is out of bounds (verified on LeicaCL.jpg, whose
-        // IFD2:PreviewImageStart is past its own file's end). Reuse
-        // `read_or_placeholder`, the same helper ThumbnailImage already uses
-        // for this exact behavior.
-        if ifd_name == "IFD2"
-            && let Some((start, length)) = preview_offset_length
-            && length > 0
-        {
-            metadata.insert(
-                "IFD2:PreviewImage",
-                read_or_placeholder(reader, start, length),
-            );
         }
 
         // Read next IFD offset
@@ -297,23 +278,16 @@ fn get_ifd_name(index: usize) -> &'static str {
 ///
 /// # Returns
 ///
-/// A tuple of (exif_offset, gps_offset, makernote_data, preview_offset_length)
+/// A tuple of (exif_offset, gps_offset, makernote_data)
 fn process_tiff_ifd_tags<'a>(
     tags: &'a [(u16, u16, u32, std::borrow::Cow<[u8]>)],
     ifd_name: &str,
     byte_order: ByteOrder,
     metadata: &mut MetadataMap,
-) -> (
-    Option<u64>,
-    Option<u64>,
-    Option<&'a [u8]>,
-    Option<(u64, u64)>,
-) {
+) -> (Option<u64>, Option<u64>, Option<&'a [u8]>) {
     let mut exif_ifd_offset = None;
     let mut gps_ifd_offset = None;
     let mut makernote_data: Option<&[u8]> = None;
-    let mut preview_start: Option<u64> = None;
-    let mut preview_length: Option<u64> = None;
 
     // GeoTiff tag data collectors
     let mut geotiff_directory: Option<&[u8]> = None;
@@ -338,22 +312,6 @@ fn process_tiff_ifd_tags<'a>(
             let offset = read_u32(bytes, byte_order);
             gps_ifd_offset = Some(offset as u64);
             continue; // Don't add the pointer tag to metadata
-        }
-
-        // Exif.pm:707-768: the default StripOffsets/StripByteCounts naming
-        // for 0x111/0x117 explicitly excludes APP1's IFD2 ("APP1 IFD2 is for
-        // Leica JPEG preview"), falling through to a condition that names the
-        // pair PreviewImageStart/PreviewImageLength with DataTag PreviewImage
-        // instead. Capture the raw offsets here and let `parse_ifd_chain` (which
-        // owns the reader) perform the bounds-checked read.
-        if ifd_name == "IFD2" && (*tag_id == 0x0111 || *tag_id == 0x0117) {
-            let value = read_unsigned_field(bytes, *field_type, *value_count, *tag_id, byte_order);
-            if *tag_id == 0x0111 {
-                preview_start = value;
-            } else {
-                preview_length = value;
-            }
-            continue; // Don't fall through to the generic StripOffsets/StripByteCounts naming
         }
 
         // Exif.pm 0xc4a5 declares a PrintIM SubDirectory. Keep the raw
@@ -522,12 +480,7 @@ fn process_tiff_ifd_tags<'a>(
         }
     }
 
-    (
-        exif_ifd_offset,
-        gps_ifd_offset,
-        makernote_data,
-        preview_start.zip(preview_length),
-    )
+    (exif_ifd_offset, gps_ifd_offset, makernote_data)
 }
 
 /// Parses an EXIF sub-IFD and extracts tags.
@@ -2140,6 +2093,16 @@ mod ifd2_preview_image_tests {
         build_tiff_with_ifd2(50, declared_length, &[])
     }
 
+    // These tests call `parse_ifd2_preview_image` directly rather than
+    // `parse_ifd_chain`: the rename/extraction only belongs to the
+    // APP1/JPEG-embedded case (Exif.pm:707-768's "APP1 IFD2 is for Leica
+    // JPEG preview"), and `parse_ifd2_preview_image` -- called only from
+    // `jpeg_helpers.rs`'s JPEG-specific handler -- is the sole code path
+    // that implicitly gates on that. `parse_ifd_chain`/`process_tiff_ifd_tags`
+    // serve the standalone-TIFF/DNG/CR2/NEF path (`operations.rs`) and must
+    // keep naming 0x111/0x117 as StripOffsets/StripByteCounts unconditionally
+    // there -- a chained IFD2 in a real standalone TIFF is not a Leica
+    // preview and must not be mis-renamed.
     #[test]
     fn ifd2_preview_image_start_length_pair_becomes_preview_image() {
         // Build a minimal TIFF: IFD0 (no entries of interest, next-IFD -> IFD1),
@@ -2152,13 +2115,13 @@ mod ifd2_preview_image_tests {
         let reader = crate::io::buffered_reader::BufferedReader::from_bytes(&buffer);
         let mut metadata = MetadataMap::new();
 
-        parse_ifd_chain(
+        parse_ifd2_preview_image(
             &reader,
             TIFF_HEADER_SIZE,
+            0,
             ByteOrder::LittleEndian,
             &mut metadata,
-        )
-        .unwrap();
+        );
 
         assert_eq!(
             metadata.get("IFD2:PreviewImage"),
@@ -2181,13 +2144,13 @@ mod ifd2_preview_image_tests {
         let reader = crate::io::buffered_reader::BufferedReader::from_bytes(&buffer);
         let mut metadata = MetadataMap::new();
 
-        parse_ifd_chain(
+        parse_ifd2_preview_image(
             &reader,
             TIFF_HEADER_SIZE,
+            0,
             ByteOrder::LittleEndian,
             &mut metadata,
-        )
-        .unwrap();
+        );
 
         assert_eq!(
             metadata.get("IFD2:PreviewImage"),
