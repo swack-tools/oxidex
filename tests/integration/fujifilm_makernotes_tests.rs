@@ -297,3 +297,49 @@ fn test_fujifilm_parse_advanced_settings() {
     assert_eq!(tags.get("FujiFilm:FacesDetected"), Some(&"3".to_string()));
     assert_eq!(tags.get("FujiFilm:SequenceNumber"), Some(&"2".to_string()));
 }
+
+// ExifTool: FujiFilm.pm's Main table (GROUPS => { 0 => 'MakerNotes', 2 =>
+// 'Camera' }, no Group1 override) defaults family-1 to the module name for
+// every tag it declares -- `exiftool -G1 -s` shows `[FujiFilm]`, never
+// `[MakerNotes]`. CropMode (0x104d) and ColorMode (0x1210) were two of the
+// ~33 tags this parser filed under the literal group "MakerNotes" instead,
+// so they scored as MISSING against every real ExifTool run even though the
+// decoded values were correct. Pins the group prefix so a regression here
+// (not just a value regression) fails loudly.
+#[test]
+fn test_fujifilm_crop_and_color_mode_use_fujifilm_group() {
+    use oxidex::parsers::tiff::ifd_parser::ByteOrder;
+    use oxidex::parsers::tiff::makernotes::fujifilm::parse_fujifilm_makernotes;
+    use std::collections::HashMap;
+
+    let mut data = Vec::new();
+    data.extend_from_slice(b"FUJIFILM");
+    data.extend_from_slice(&[0x0C, 0x00, 0x00, 0x00]);
+
+    data.extend_from_slice(&[0x02, 0x00]); // 2 entries
+
+    // CropMode (tag 0x104d) = 1 -> "Full-frame on GFX"
+    data.extend_from_slice(&[0x4D, 0x10]);
+    data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
+    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
+
+    // ColorMode (tag 0x1210) = 0x10 -> "Chrome"
+    data.extend_from_slice(&[0x10, 0x12]);
+    data.extend_from_slice(&[0x03, 0x00]);
+    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
+    data.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]);
+
+    data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+
+    let mut tags = HashMap::new();
+    parse_fujifilm_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
+
+    assert_eq!(
+        tags.get("FujiFilm:CropMode"),
+        Some(&"Full-frame on GFX".to_string())
+    );
+    assert_eq!(tags.get("FujiFilm:ColorMode"), Some(&"Chrome".to_string()));
+    assert!(!tags.contains_key("MakerNotes:CropMode"));
+    assert!(!tags.contains_key("MakerNotes:ColorMode"));
+}

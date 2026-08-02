@@ -518,14 +518,20 @@ const_decoder!(pub
     ]
 );
 
-// Decodes high ISO noise reduction
+// Decodes tag 0x100e, which ExifTool also names NoiseReduction (FujiFilm.pm
+// declares both 0x100b and 0x100e with `Name => 'NoiseReduction'`). Values
+// per ExifTool's PrintConv, keyed on the raw int16u.
 const_decoder!(pub
-    DECODE_HIGH_ISO_NR, i32, [
-        (-2, "Very Weak"),
-        (-1, "Weak"),
-        (0, "Normal"),
-        (1, "Strong"),
-        (2, "Very Strong"),
+    DECODE_NOISE_REDUCTION_0X100E, i32, [
+        (0x000, "0 (normal)"),
+        (0x100, "+2 (strong)"),
+        (0x180, "+1 (medium strong)"),
+        (0x1c0, "+3 (very strong)"),
+        (0x1e0, "+4 (strongest)"),
+        (0x200, "-2 (weak)"),
+        (0x280, "-1 (medium weak)"),
+        (0x2c0, "-3 (very weak)"),
+        (0x2e0, "-4 (weakest)"),
     ]
 );
 
@@ -1060,7 +1066,7 @@ impl MakerNoteParser for FujifilmParser {
                         && array.len() >= 2
                     {
                         tags.insert(
-                            "MakerNotes:FocusPixel".to_string(),
+                            "FujiFilm:FocusPixel".to_string(),
                             format!("X:{} Y:{}", array[0], array[1]),
                         );
                     }
@@ -1072,7 +1078,7 @@ impl MakerNoteParser for FujifilmParser {
                         && !array.is_empty()
                     {
                         tags.insert(
-                            "MakerNotes:FacePositions".to_string(),
+                            "FujiFilm:FacePositions".to_string(),
                             format!("{} coordinates", array.len() / 4),
                         );
                     }
@@ -1084,7 +1090,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_AF_MODE => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:AFMode".to_string(),
+                        "FujiFilm:AFMode".to_string(),
                         DECODE_AF_MODE.decode(value).to_string(),
                     );
                 }
@@ -1093,16 +1099,19 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_NOISE_REDUCTION => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:NoiseReduction".to_string(),
+                        "FujiFilm:NoiseReduction".to_string(),
                         DECODE_NOISE_REDUCTION.decode(value).to_string(),
                     );
                 }
 
+                // ExifTool names 0x100e NoiseReduction too (a second,
+                // X100-era tag); it is NOT "HighISONoiseReduction", which
+                // FujiFilm.pm never defines.
                 FUJI_HIGH_ISO_NOISE_REDUCTION => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:HighISONoiseReduction".to_string(),
-                        DECODE_HIGH_ISO_NR.decode(value).to_string(),
+                        "FujiFilm:NoiseReduction".to_string(),
+                        DECODE_NOISE_REDUCTION_0X100E.decode(value).to_string(),
                     );
                 }
 
@@ -1114,7 +1123,7 @@ impl MakerNoteParser for FujifilmParser {
                         && values.len() >= 2
                     {
                         tags.insert(
-                            "MakerNotes:WhiteBalanceFineTune".to_string(),
+                            "FujiFilm:WhiteBalanceFineTune".to_string(),
                             format!("Red {:+}, Blue {:+}", values[0], values[1]),
                         );
                     }
@@ -1124,7 +1133,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_LENS_MODULATION_OPTIMIZER => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:LensModulationOptimizer".to_string(),
+                        "FujiFilm:LensModulationOptimizer".to_string(),
                         DECODE_OFF_ON.decode(value).to_string(),
                     );
                 }
@@ -1133,7 +1142,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_GRAIN_EFFECT_ROUGHNESS => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:GrainEffectRoughness".to_string(),
+                        "FujiFilm:GrainEffectRoughness".to_string(),
                         DECODE_EFFECT_STRENGTH.decode(value).to_string(),
                     );
                 }
@@ -1142,7 +1151,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_COLOR_CHROME_EFFECT => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:ColorChromeEffect".to_string(),
+                        "FujiFilm:ColorChromeEffect".to_string(),
                         DECODE_EFFECT_STRENGTH.decode(value).to_string(),
                     );
                 }
@@ -1150,17 +1159,14 @@ impl MakerNoteParser for FujifilmParser {
                 // B&W Adjustment
                 FUJI_BW_ADJUSTMENT => {
                     let value = entry.value_offset as i32;
-                    tags.insert(
-                        "MakerNotes:BWAdjustment".to_string(),
-                        format!("{:+}", value),
-                    );
+                    tags.insert("FujiFilm:BWAdjustment".to_string(), format!("{:+}", value));
                 }
 
                 // Crop Mode
                 FUJI_CROP_MODE => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:CropMode".to_string(),
+                        "FujiFilm:CropMode".to_string(),
                         DECODE_CROP_MODE.decode(value).to_string(),
                     );
                 }
@@ -1169,7 +1175,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_COLOR_CHROME_FX_BLUE => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:ColorChromeFXBlue".to_string(),
+                        "FujiFilm:ColorChromeFXBlue".to_string(),
                         DECODE_EFFECT_STRENGTH.decode(value).to_string(),
                     );
                 }
@@ -1177,7 +1183,7 @@ impl MakerNoteParser for FujifilmParser {
                 // Pixel Shift
                 FUJI_PIXEL_SHIFT_SHOTS => {
                     let value = entry.value_offset;
-                    tags.insert("MakerNotes:PixelShiftShots".to_string(), value.to_string());
+                    tags.insert("FujiFilm:PixelShiftShots".to_string(), value.to_string());
                 }
 
                 FUJI_PIXEL_SHIFT_OFFSET_NEW => {
@@ -1185,7 +1191,7 @@ impl MakerNoteParser for FujifilmParser {
                         && array.len() >= 2
                     {
                         tags.insert(
-                            "MakerNotes:PixelShiftOffset".to_string(),
+                            "FujiFilm:PixelShiftOffset".to_string(),
                             format!("X:{} Y:{}", array[0], array[1]),
                         );
                     }
@@ -1201,13 +1207,13 @@ impl MakerNoteParser for FujifilmParser {
                 // oxidex's own invention.
                 FUJI_PANORAMA_ANGLE => {
                     let value = entry.value_offset;
-                    tags.insert("MakerNotes:PanoramaAngle".to_string(), value.to_string());
+                    tags.insert("FujiFilm:PanoramaAngle".to_string(), value.to_string());
                 }
 
                 FUJI_PANORAMA_DIRECTION => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:PanoramaDirection".to_string(),
+                        "FujiFilm:PanoramaDirection".to_string(),
                         DECODE_PANORAMA_DIRECTION.decode(value).to_string(),
                     );
                 }
@@ -1216,7 +1222,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_ADVANCED_FILTER => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:AdvancedFilter".to_string(),
+                        "FujiFilm:AdvancedFilter".to_string(),
                         DECODE_ADVANCED_FILTER.decode(value).to_string(),
                     );
                 }
@@ -1225,7 +1231,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_COLOR_MODE => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:ColorMode".to_string(),
+                        "FujiFilm:ColorMode".to_string(),
                         DECODE_COLOR_MODE.decode(value).to_string(),
                     );
                 }
@@ -1234,7 +1240,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_IMAGE_STABILIZATION => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:ImageStabilization".to_string(),
+                        "FujiFilm:ImageStabilization".to_string(),
                         DECODE_IMAGE_STABILIZATION.decode(value).to_string(),
                     );
                 }
@@ -1243,7 +1249,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_SCENE_RECOGNITION => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:SceneRecognition".to_string(),
+                        "FujiFilm:SceneRecognition".to_string(),
                         DECODE_SCENE_RECOGNITION.decode(value).to_string(),
                     );
                 }
@@ -1252,7 +1258,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_DRANGE_PRIORITY => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:DRangePriority".to_string(),
+                        "FujiFilm:DRangePriority".to_string(),
                         DECODE_DRANGE_PRIORITY.decode(value).to_string(),
                     );
                 }
@@ -1260,7 +1266,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_DRANGE_PRIORITY_AUTO => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:DRangePriorityAuto".to_string(),
+                        "FujiFilm:DRangePriorityAuto".to_string(),
                         DECODE_DRANGE_PRIORITY_AUTO.decode(value).to_string(),
                     );
                 }
@@ -1268,7 +1274,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_DRANGE_PRIORITY_FIXED => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:DRangePriorityFixed".to_string(),
+                        "FujiFilm:DRangePriorityFixed".to_string(),
                         DECODE_DRANGE_PRIORITY_FIXED.decode(value).to_string(),
                     );
                 }
@@ -1277,7 +1283,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_VIDEO_RECORDING_MODE => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:VideoRecordingMode".to_string(),
+                        "FujiFilm:VideoRecordingMode".to_string(),
                         DECODE_VIDEO_RECORDING_MODE.decode(value).to_string(),
                     );
                 }
@@ -1285,7 +1291,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_PERIPHERAL_LIGHTING => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:PeripheralLighting".to_string(),
+                        "FujiFilm:PeripheralLighting".to_string(),
                         DECODE_OFF_ON.decode(value).to_string(),
                     );
                 }
@@ -1293,7 +1299,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_VIDEO_COMPRESSION => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "MakerNotes:VideoCompression".to_string(),
+                        "FujiFilm:VideoCompression".to_string(),
                         DECODE_VIDEO_COMPRESSION.decode(value).to_string(),
                     );
                 }
@@ -1301,36 +1307,33 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_FRAME_RATE => {
                     let value = entry.value_offset as f32 / 1000.0;
                     tags.insert(
-                        "MakerNotes:FrameRate".to_string(),
+                        "FujiFilm:FrameRate".to_string(),
                         format!("{:.3} fps", value),
                     );
                 }
 
                 FUJI_FRAME_WIDTH => {
                     let value = entry.value_offset;
-                    tags.insert("MakerNotes:FrameWidth".to_string(), format!("{} px", value));
+                    tags.insert("FujiFilm:FrameWidth".to_string(), format!("{} px", value));
                 }
 
                 FUJI_FRAME_HEIGHT => {
                     let value = entry.value_offset;
-                    tags.insert(
-                        "MakerNotes:FrameHeight".to_string(),
-                        format!("{} px", value),
-                    );
+                    tags.insert("FujiFilm:FrameHeight".to_string(), format!("{} px", value));
                 }
 
                 // Face element tags
                 FUJI_FACE_ELEMENT_SELECTED => {
                     let value = entry.value_offset;
                     tags.insert(
-                        "MakerNotes:FaceElementSelected".to_string(),
+                        "FujiFilm:FaceElementSelected".to_string(),
                         value.to_string(),
                     );
                 }
 
                 FUJI_NUM_FACE_ELEMENTS => {
                     let value = entry.value_offset;
-                    tags.insert("MakerNotes:NumFaceElements".to_string(), value.to_string());
+                    tags.insert("FujiFilm:NumFaceElements".to_string(), value.to_string());
                 }
 
                 FUJI_FACE_ELEMENT_TYPES => {
@@ -1338,7 +1341,7 @@ impl MakerNoteParser for FujifilmParser {
                         && !array.is_empty()
                     {
                         let types: Vec<String> = array.iter().map(|v| v.to_string()).collect();
-                        tags.insert("MakerNotes:FaceElementTypes".to_string(), types.join(", "));
+                        tags.insert("FujiFilm:FaceElementTypes".to_string(), types.join(", "));
                     }
                 }
 
@@ -1347,7 +1350,7 @@ impl MakerNoteParser for FujifilmParser {
                         && !array.is_empty()
                     {
                         tags.insert(
-                            "MakerNotes:FaceElementPositions".to_string(),
+                            "FujiFilm:FaceElementPositions".to_string(),
                             format!("{} coordinates", array.len() / 4),
                         );
                     }
