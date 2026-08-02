@@ -1246,6 +1246,14 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
         return;
     }
 
+    // Sony's own `PreviewImage` (0x2001) is deliberately absent from Sony's
+    // string-map `MAIN_TABLE`: its value routinely lives outside the
+    // MakerNote payload the dispatcher hands that table, so it needs the
+    // whole TIFF block the way Sigma's preview does. Unlike Sigma this is an
+    // addition alongside the normal dispatch below, not a replacement for
+    // it - every other Sony tag reaches metadata through the ordinary path.
+    parse_sony_preview_image_if_sony(&make, ctx, metadata);
+
     // Parse MakerNote using the dispatcher
     let mut makernote_tags = HashMap::new();
     let mut value_forms = HashMap::new();
@@ -1314,6 +1322,23 @@ fn parse_sigma_makernote_if_sigma(
         metadata,
     );
     true
+}
+
+/// Extracts Sony MakerNotes 0x2001 (`PreviewImage`) when `make` is Sony.
+///
+/// A no-op for any other make. See
+/// [`crate::parsers::tiff::makernotes::sony::parse_sony_preview_image_tag`]
+/// for why this needs the `MakerNoteContext`'s full TIFF block rather than
+/// the payload the string-map dispatcher's trait receives.
+fn parse_sony_preview_image_if_sony(
+    make: &str,
+    ctx: &MakerNoteContext<'_>,
+    metadata: &mut MetadataMap,
+) {
+    if make.trim().to_ascii_lowercase() != "sony" {
+        return;
+    }
+    crate::parsers::tiff::makernotes::sony::parse_sony_preview_image_tag(ctx, metadata);
 }
 
 #[cfg(test)]
