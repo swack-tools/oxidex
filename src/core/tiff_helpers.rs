@@ -1254,6 +1254,18 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
     // it - every other Sony tag reaches metadata through the ordinary path.
     parse_sony_preview_image_if_sony(&make, ctx, metadata);
 
+    // Casio Type2's `PreviewImage` (0x2000) and Olympus's (via
+    // `CameraSettings` 0x0100/0x0101/0x0102) and Minolta's (via 0x0081 or
+    // 0x0088/0x0089) are the same shape: a value the string-map dispatcher's
+    // `HashMap<String, String>` can't carry, needing `MetadataMap`/
+    // `TagValue::Binary` and (for Olympus/Minolta) the whole TIFF block the
+    // way Sigma's/Sony's do. All three are additions alongside the normal
+    // dispatch below, not a replacement for it - every other tag from these
+    // makes still reaches metadata through the ordinary path.
+    parse_casio_preview_image_if_casio(&make, ctx, byte_order, metadata);
+    parse_olympus_preview_image_if_olympus(&make, ctx, byte_order, metadata);
+    parse_minolta_preview_image_if_minolta(&make, ctx, byte_order, metadata);
+
     // Parse MakerNote using the dispatcher
     let mut makernote_tags = HashMap::new();
     let mut value_forms = HashMap::new();
@@ -1339,6 +1351,74 @@ fn parse_sony_preview_image_if_sony(
         return;
     }
     crate::parsers::tiff::makernotes::sony::parse_sony_preview_image_tag(ctx, metadata);
+}
+
+/// Extracts Casio Type2's `PreviewImage` (0x2000) when `make` is Casio.
+///
+/// A no-op for any other make, and for a Casio Type1 ("Main") payload, which
+/// has no 0x2000 tag. Matches by prefix rather than
+/// `makernote_dispatcher.rs`'s exact-match `"casio computer co.,ltd."` entry,
+/// which carries a trailing period the real `Make` string
+/// (`"CASIO COMPUTER CO.,LTD"`, verified on `Casio2.jpg`) does not have and
+/// so never matches -- a pre-existing dispatcher bug out of this task's
+/// scope to fix, but not one worth reproducing here.
+/// See [`crate::parsers::tiff::makernotes::casio::parse_casio_preview_image_tag`].
+fn parse_casio_preview_image_if_casio(
+    make: &str,
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    if !make.trim().to_ascii_lowercase().starts_with("casio") {
+        return;
+    }
+    crate::parsers::tiff::makernotes::casio::parse_casio_preview_image_tag(
+        ctx, byte_order, metadata,
+    );
+}
+
+/// Extracts Olympus's `PreviewImage` (`CameraSettings` 0x0100/0x0101/0x0102)
+/// when `make` starts with "olympus" or "om digital solutions" - the same
+/// prefix match `makernote_dispatcher.rs` uses to route to `OlympusParser`.
+///
+/// A no-op for any other make. See
+/// [`crate::parsers::tiff::makernotes::olympus::parse_olympus_preview_image_tag`].
+fn parse_olympus_preview_image_if_olympus(
+    make: &str,
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    let make = make.trim().to_ascii_lowercase();
+    if !(make.starts_with("olympus") || make.starts_with("om digital solutions")) {
+        return;
+    }
+    crate::parsers::tiff::makernotes::olympus::parse_olympus_preview_image_tag(
+        ctx, byte_order, metadata,
+    );
+}
+
+/// Extracts Minolta's `PreviewImage` (0x0081, or the 0x0088/0x0089 offset
+/// pair) when `make` is Minolta or Konica Minolta - the same match
+/// `makernote_dispatcher.rs` uses to route to `MinoltaParser`.
+///
+/// A no-op for any other make. See
+/// [`crate::parsers::tiff::makernotes::minolta::parse_minolta_preview_image_tag`].
+fn parse_minolta_preview_image_if_minolta(
+    make: &str,
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    if !matches!(
+        make.trim().to_ascii_lowercase().as_str(),
+        "minolta" | "konica minolta" | "minolta co., ltd."
+    ) {
+        return;
+    }
+    crate::parsers::tiff::makernotes::minolta::parse_minolta_preview_image_tag(
+        ctx, byte_order, metadata,
+    );
 }
 
 #[cfg(test)]
