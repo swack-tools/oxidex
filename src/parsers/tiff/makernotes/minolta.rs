@@ -754,9 +754,11 @@ mod minolta_preview_image_tests {
     #[test]
     fn offset_pair_out_of_bounds_shows_placeholder_not_omission() {
         let payload_offset = 20usize;
-        // Mirrors Minolta.jpg's real declared length (26) at an offset that
-        // runs past the end of this (deliberately short) synthetic buffer.
-        let tiff = build_tiff_with_minolta_offset_pair(payload_offset, 895146, 13030, None);
+        // Mirrors Minolta.jpg's real declared length (26) at an offset (13030)
+        // that runs past the end of this (deliberately short, ~50-byte)
+        // synthetic buffer -- the offset alone is what makes this genuinely
+        // out-of-bounds, independent of the length value.
+        let tiff = build_tiff_with_minolta_offset_pair(payload_offset, 26, 13030, None);
         let payload_len = tiff.len() - payload_offset;
         let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 12);
 
@@ -766,7 +768,7 @@ mod minolta_preview_image_tests {
         assert_eq!(
             metadata.get("MakerNotes:PreviewImage"),
             Some(&TagValue::new_string(
-                "(Binary data 895146 bytes, use -b option to extract)"
+                "(Binary data 26 bytes, use -b option to extract)"
             ))
         );
     }

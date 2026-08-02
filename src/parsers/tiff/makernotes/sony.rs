@@ -765,6 +765,26 @@ pub fn parse_sony_preview_image_tag(ctx: &MakerNoteContext<'_>, metadata: &mut M
 /// *raw, untransformed* declared byte count - RawConv never ran, so this is
 /// not the transformed length. Only when `raw` itself is empty is nothing
 /// inserted at all.
+///
+/// **Known divergence on the `matches_soi` success path (untested in the
+/// current corpus - every sampled Sony file hits the placeholder branch
+/// above instead, since all are truncated):** this function stores the
+/// *actual transformed* bytes (`raw.len() - 0x20 + 1` of them, after
+/// stripping the 32-byte header and reconstructing the SOI marker), so a
+/// future `-b`/binary-extraction feature reads correct preview bytes. But
+/// real ExifTool's default (non-`-b`) view would NOT show that count: the
+/// `ExtractBinary` pre-seek shortcut (see the correction note on Task 3 in
+/// `docs/plans/2026-08-02-preview-image-composite-plan.md`) prints the
+/// *entry's raw, untransformed* declared byte count in the placeholder
+/// string before RawConv ever runs - RawConv (this header-strip/SOI-fixup)
+/// only executes when a value is actually extracted (e.g. via `-b`), which
+/// the default dump path never triggers. So on this success path oxidex's
+/// default output is ~31 bytes lower than ExifTool's (`raw.len() - 0x1f`
+/// vs. `raw.len()`). This is a deliberate tradeoff, not a bug: storing the
+/// real transformed value keeps a future binary-extraction feature correct,
+/// at the cost of a byte-count mismatch in the default text view that no
+/// current corpus sample can exercise. Do not "fix" this by storing
+/// `raw.len()` instead - that would make `-b` extraction wrong instead.
 pub fn parse_sony_preview_image(raw: &[u8], metadata: &mut MetadataMap) {
     if raw.is_empty() {
         return;

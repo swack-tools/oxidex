@@ -1331,12 +1331,21 @@ mod olympus_preview_image_tests {
     /// (when `place_bytes` is `Some`) the real preview bytes at `raw_start`
     /// (window-relative, i.e. relative to the payload's own start, matching
     /// Type 2's `base = 0`).
+    ///
+    /// When `main_level` is `Some((raw_start, bytes))`, the Main IFD also
+    /// gets a real `PreviewImageValid`(0x1035)=1/`Start`(0x1036)/`Length`
+    /// (0x1037) trio -- distinct from the CameraSettings trio above -- with
+    /// `bytes` placed at `raw_start` (also window-relative). This lets a test
+    /// exercise the "both present" case: CameraSettings and Main each point
+    /// at their own, distinguishable preview bytes, so a test can tell which
+    /// one an implementation actually picked.
     fn build_tiff_with_olympus_camera_settings_preview(
         payload_offset: usize,
         valid: u32,
         length: u32,
         raw_start: u32,
         place_bytes: Option<&[u8]>,
+        main_level: Option<(u32, &[u8])>,
     ) -> Vec<u8> {
         let mut tiff = vec![0u8; payload_offset];
         tiff[0..2].copy_from_slice(b"II");
@@ -1345,19 +1354,41 @@ mod olympus_preview_image_tests {
         payload.extend_from_slice(b"OLYMPUS\0II"); // 10-byte Type 2 signature
         payload.extend_from_slice(&[0x03, 0x00]); // version word (ignored)
 
-        // Main IFD at payload offset 12: one entry, the CameraSettings
-        // sub-IFD pointer (0x2020), pointing at window offset 40.
-        const CS_START: u32 = 40;
-        payload.extend_from_slice(&1u16.to_le_bytes());
+        // Main IFD at payload offset 12: the CameraSettings sub-IFD pointer
+        // (0x2020, pointing at window offset 40), plus -- when `main_level`
+        // is `Some` -- a real Main-level Preview trio (0x1035/0x1036/0x1037)
+        // alongside it.
+        // With `main_level` present the Main IFD carries 4 entries instead of
+        // 1 (2-byte count + 4*12-byte entries + 4-byte next-IFD-offset = 54
+        // bytes, starting at payload offset 12 -> ends at 66), so CS_START
+        // must move out past that or the `payload.resize(CS_START, 0)` below
+        // would truncate (corrupt) the just-written Main-level entries.
+        let main_entry_count: u16 = if main_level.is_some() { 4 } else { 1 };
+        let cs_start: u32 = if main_level.is_some() { 80 } else { 40 };
+        payload.extend_from_slice(&main_entry_count.to_le_bytes());
         payload.extend_from_slice(&OLYMPUS_CAMERA_SETTINGS_SUBIFD.to_le_bytes());
         payload.extend_from_slice(&4u16.to_le_bytes()); // type: LONG
         payload.extend_from_slice(&1u32.to_le_bytes()); // count: 1
-        payload.extend_from_slice(&CS_START.to_le_bytes());
+        payload.extend_from_slice(&cs_start.to_le_bytes());
+        if let Some((main_raw_start, main_bytes)) = main_level {
+            payload.extend_from_slice(&OLYMPUS_MAIN_PREVIEW_VALID.to_le_bytes());
+            payload.extend_from_slice(&4u16.to_le_bytes());
+            payload.extend_from_slice(&1u32.to_le_bytes());
+            payload.extend_from_slice(&1u32.to_le_bytes()); // Valid = 1
+            payload.extend_from_slice(&OLYMPUS_MAIN_PREVIEW_START.to_le_bytes());
+            payload.extend_from_slice(&4u16.to_le_bytes());
+            payload.extend_from_slice(&1u32.to_le_bytes());
+            payload.extend_from_slice(&main_raw_start.to_le_bytes());
+            payload.extend_from_slice(&OLYMPUS_MAIN_PREVIEW_LENGTH.to_le_bytes());
+            payload.extend_from_slice(&4u16.to_le_bytes());
+            payload.extend_from_slice(&1u32.to_le_bytes());
+            payload.extend_from_slice(&(main_bytes.len() as u32).to_le_bytes());
+        }
         payload.extend_from_slice(&0u32.to_le_bytes()); // next IFD offset
 
-        payload.resize(CS_START as usize, 0);
+        payload.resize(cs_start as usize, 0);
 
-        // CameraSettings sub-IFD at window offset CS_START: 3 entries.
+        // CameraSettings sub-IFD at window offset cs_start: 3 entries.
         payload.extend_from_slice(&3u16.to_le_bytes());
         payload.extend_from_slice(&OLYMPUS_CS_PREVIEW_VALID.to_le_bytes());
         payload.extend_from_slice(&4u16.to_le_bytes());
@@ -1385,6 +1416,14 @@ mod olympus_preview_image_tests {
             }
             tiff[start..end].copy_from_slice(bytes);
         }
+        if let Some((main_raw_start, main_bytes)) = main_level {
+            let start = payload_offset + main_raw_start as usize;
+            let end = start + main_bytes.len();
+            if tiff.len() < end {
+                tiff.resize(end, 0);
+            }
+            tiff[start..end].copy_from_slice(main_bytes);
+        }
         tiff
     }
 
@@ -1398,6 +1437,7 @@ mod olympus_preview_image_tests {
             preview_bytes.len() as u32,
             200,
             Some(&preview_bytes),
+            None,
         );
         let payload_len = tiff.len() - payload_offset;
         let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 12);
@@ -1422,6 +1462,7 @@ mod olympus_preview_image_tests {
             64217,
             6_218_831,
             None,
+            None,
         );
         let payload_len = tiff.len() - payload_offset;
         let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 12);
@@ -1441,7 +1482,8 @@ mod olympus_preview_image_tests {
     fn camera_settings_preview_valid_false_is_omitted() {
         let payload_offset = 20usize;
         // Mirrors Olympus2.jpg / OlympusE-M1.jpg: PreviewImageValid = 0.
-        let tiff = build_tiff_with_olympus_camera_settings_preview(payload_offset, 0, 0, 960, None);
+        let tiff =
+            build_tiff_with_olympus_camera_settings_preview(payload_offset, 0, 0, 960, None, None);
         let payload_len = tiff.len() - payload_offset;
         let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 12);
 
@@ -1454,7 +1496,8 @@ mod olympus_preview_image_tests {
     #[test]
     fn camera_settings_zero_length_is_omitted() {
         let payload_offset = 20usize;
-        let tiff = build_tiff_with_olympus_camera_settings_preview(payload_offset, 1, 0, 200, None);
+        let tiff =
+            build_tiff_with_olympus_camera_settings_preview(payload_offset, 1, 0, 200, None, None);
         let payload_len = tiff.len() - payload_offset;
         let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 12);
 
@@ -1563,15 +1606,23 @@ mod olympus_preview_image_tests {
         // A body that *does* carry a CameraSettings sub-directory should use
         // its Preview trio, not Main's -- confirmed no real corpus file
         // exercises this ambiguity (a body either has CameraSettings or it
-        // doesn't), but the priority order matters if one ever does.
+        // doesn't), but the priority order matters if one ever does. Both
+        // trios are wired up here with distinct, distinguishable byte
+        // payloads (CameraSettings: 0..5, Main: 100..105) so the assertion
+        // below can actually tell which one an implementation picked --
+        // without a real Main-level fallback present, this test could not
+        // distinguish a correct priority-respecting implementation from one
+        // that always/only reads CameraSettings.
         let payload_offset = 20usize;
         let cs_bytes: Vec<u8> = (0..5u8).collect();
+        let main_bytes: Vec<u8> = (100..105u8).collect();
         let tiff = build_tiff_with_olympus_camera_settings_preview(
             payload_offset,
             1,
             cs_bytes.len() as u32,
             200,
             Some(&cs_bytes),
+            Some((300, &main_bytes)),
         );
         let payload_len = tiff.len() - payload_offset;
         let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 12);
