@@ -590,6 +590,12 @@ const CANON_LENS_INFO: u16 = 0x4019;
 /// `%Canon::LevelInfo` (MakerNote tag 0x4059, Canon.pm:9583). `FORMAT =>
 /// 'int32s'`, `FIRST_ENTRY => 1`, ordinary (default) priority.
 const CANON_LEVEL_INFO: u16 = 0x4059;
+/// ExifTool Canon.pm:1796 — `0x90 => { Name => 'CustomFunctions1D', ... }`, an
+/// unconditional (no `Condition`) entry distinct from the model-gated
+/// `CustomFunctions1D` alternative in the tag-0xf dispatch array (Canon.pm:1502).
+/// Real 1D/1Ds-series files carry `%CanonCustom::Functions1D` here, at 0x90 --
+/// tag 0xf's `EOS-1D` arm is effectively dead in every corpus file sampled.
+const CANON_CUSTOM_FUNCTIONS_1D: u16 = 0x0090;
 /// ExifTool Canon.pm:1802 — `0x91 => { Name => 'PersonalFunctions', ... }`
 const CANON_PERSONAL_FUNCTIONS: u16 = 0x0091;
 /// ExifTool Canon.pm:1809 — `0x92 => { Name => 'PersonalFunctionValues', ... }`
@@ -1629,6 +1635,954 @@ const_decoder!(
     [(0, "1st-curtain sync"), (1, "2nd-curtain sync"),]
 );
 
+// ----------------------------------------------------------------------------
+// CanonCustom::Functions1D (CanonCustom.pm:41)
+// ----------------------------------------------------------------------------
+// Selected by Canon.pm:1500 when `$$self{Model} =~ /EOS-1D/` (plain substring, no
+// word boundary -- matches every 1D-series body: 1D, 1Ds, 1D Mark II, 1DS Mark II,
+// 1D Mark IIN, etc, up to but not including the Mark III which moved to
+// CustomFunctions2).
+
+const_decoder!(
+    pub CC1D_FOCUSING_SCREEN,
+    i16,
+    [(0, "Ec-N, R"), (1, "Ec-A,B,C,CII,CIII,D,H,I,L"),]
+);
+
+const_decoder!(
+    pub CC1D_FINDER_DISPLAY_DURING_EXPOSURE,
+    i16,
+    [(0, "Off"), (1, "On"),]
+);
+
+const_decoder!(
+    pub CC1D_SHUTTER_RELEASE_NO_CF_CARD,
+    i16,
+    [(0, "Yes"), (1, "No"),]
+);
+
+const_decoder!(pub CC1D_ISO_SPEED_EXPANSION, i16, [(0, "No"), (1, "Yes"),]);
+
+const_decoder!(
+    pub CC1D_SHUTTER_AEL_BUTTON,
+    i16,
+    [
+        (0, "AF/AE lock stop"),
+        (1, "AE lock/AF"),
+        (2, "AF/AF lock, No AE lock"),
+        (3, "AE/AF, No AE lock"),
+    ]
+);
+
+const_decoder!(
+    pub CC1D_MANUAL_TV,
+    i16,
+    [
+        (0, "Tv=Main/Av=Control"),
+        (1, "Tv=Control/Av=Main"),
+        (2, "Tv=Main/Av=Main w/o lens"),
+        (3, "Tv=Control/Av=Main w/o lens"),
+    ]
+);
+
+const_decoder!(
+    pub CC1D_EXPOSURE_LEVEL_INCREMENTS,
+    i16,
+    [
+        (0, "1/3-stop set, 1/3-stop comp."),
+        (1, "1-stop set, 1/3-stop comp."),
+        (2, "1/2-stop set, 1/2-stop comp."),
+    ]
+);
+
+const_decoder!(
+    pub CC1D_USM_LENS_ELECTRONIC_MF,
+    i16,
+    [
+        (0, "Turns on after one-shot AF"),
+        (1, "Turns off after one-shot AF"),
+        (2, "Always turned off"),
+    ]
+);
+
+const_decoder!(
+    pub CC1D_LCD_PANELS,
+    i16,
+    [
+        (0, "Remain. shots/File no."),
+        (1, "ISO/Remain. shots"),
+        (2, "ISO/File no."),
+        (3, "Shots in folder/Remain. shots"),
+    ]
+);
+
+const_decoder!(
+    pub CC1D_AEB_SEQUENCE_AUTO_CANCEL,
+    i16,
+    [
+        (0, "0,-,+/Enabled"),
+        (1, "0,-,+/Disabled"),
+        (2, "-,0,+/Enabled"),
+        (3, "-,0,+/Disabled"),
+    ]
+);
+
+const_decoder!(
+    pub CC1D_AF_POINT_ILLUMINATION,
+    i16,
+    [
+        (0, "On"),
+        (1, "Off"),
+        (2, "On without dimming"),
+        (3, "Brighter"),
+    ]
+);
+
+const_decoder!(
+    pub CC1D_AF_POINT_SELECTION,
+    i16,
+    [
+        (0, "H=AF+Main/V=AF+Command"),
+        (1, "H=Comp+Main/V=Comp+Command"),
+        (2, "H=Command only/V=Assist+Main"),
+        (3, "H=FEL+Main/V=FEL+Command"),
+    ]
+);
+
+const_decoder!(pub CC1D_MIRROR_LOCKUP, i16, [(0, "Disable"), (1, "Enable"),]);
+
+const_decoder!(
+    pub CC1D_AF_POINT_SPOT_METERING,
+    i16,
+    [
+        (0, "45/Center AF point"),
+        (1, "11/Active AF point"),
+        (2, "11/Center AF point"),
+        (3, "9/Active AF point"),
+    ]
+);
+
+const_decoder!(
+    pub CC1D_FILL_FLASH_AUTO_REDUCTION,
+    i16,
+    [(0, "Enable"), (1, "Disable"),]
+);
+
+const_decoder!(
+    pub CC1D_SHUTTER_CURTAIN_SYNC,
+    i16,
+    [(0, "1st-curtain sync"), (1, "2nd-curtain sync"),]
+);
+
+const_decoder!(
+    pub CC1D_SAFETY_SHIFT_IN_AV_OR_TV,
+    i16,
+    [(0, "Disable"), (1, "Enable"),]
+);
+
+const_decoder!(
+    pub CC1D_AF_POINT_ACTIVATION_AREA,
+    i16,
+    [
+        (0, "Single AF point"),
+        (1, "Expanded (TTL. of 7 AF points)"),
+        (2, "Automatic expanded (max. 13)"),
+    ]
+);
+
+const_decoder!(
+    pub CC1D_SWITCH_TO_REGISTERED_AF_POINT,
+    i16,
+    [
+        (0, "Assist + AF"),
+        (1, "Assist"),
+        (2, "Only while pressing assist"),
+    ]
+);
+
+const_decoder!(
+    pub CC1D_LENS_AF_STOP_BUTTON,
+    i16,
+    [
+        (0, "AF stop"),
+        (1, "AF start"),
+        (2, "AE lock while metering"),
+        (3, "AF point: M -> Auto / Auto -> Ctr."),
+        (4, "AF mode: ONE SHOT <-> AI SERVO"),
+        (5, "IS start"),
+    ]
+);
+
+const_decoder!(
+    pub CC1D_AI_SERVO_TRACKING_SENSITIVITY,
+    i16,
+    [
+        (0, "Standard"),
+        (1, "Slow"),
+        (2, "Moderately slow"),
+        (3, "Moderately fast"),
+        (4, "Fast"),
+    ]
+);
+
+const_decoder!(
+    pub CC1D_AI_SERVO_CONTINUOUS_SHOOTING,
+    i16,
+    [
+        (0, "Shooting not possible without focus"),
+        (1, "Shooting possible without focus"),
+    ]
+);
+
+// ----------------------------------------------------------------------------
+// CanonCustom::Functions5D (CanonCustom.pm:228)
+// ----------------------------------------------------------------------------
+// Selected by Canon.pm:1500 when `$$self{Model} =~ /EOS 5D/` (plain substring).
+
+const_decoder!(
+    pub CC5D_FOCUSING_SCREEN,
+    i16,
+    [(0, "Ee-A"), (1, "Ee-D"), (2, "Ee-S"),]
+);
+
+const_decoder!(
+    pub CC5D_SET_FUNCTION_WHEN_SHOOTING,
+    i16,
+    [
+        (0, "Default (no function)"),
+        (1, "Change quality"),
+        (2, "Change Parameters"),
+        (3, "Menu display"),
+        (4, "Image replay"),
+    ]
+);
+
+const_decoder!(
+    pub CC5D_LONG_EXPOSURE_NOISE_REDUCTION,
+    i16,
+    [(0, "Off"), (1, "Auto"), (2, "On"),]
+);
+
+const_decoder!(
+    pub CC5D_FLASH_SYNC_SPEED_AV,
+    i16,
+    [(0, "Auto"), (1, "1/200 Fixed"),]
+);
+
+const_decoder!(
+    pub CC5D_SHUTTER_AE_LOCK,
+    i16,
+    [
+        (0, "AF/AE lock"),
+        (1, "AE lock/AF"),
+        (2, "AF/AF lock, No AE lock"),
+        (3, "AE/AF, No AE lock"),
+    ]
+);
+
+const_decoder!(pub CC5D_AF_ASSIST_BEAM, i16, [(0, "Emits"), (1, "Does not emit"),]);
+
+const_decoder!(
+    pub CC5D_EXPOSURE_LEVEL_INCREMENTS,
+    i16,
+    [(0, "1/3 Stop"), (1, "1/2 Stop"),]
+);
+
+const_decoder!(pub CC5D_FLASH_FIRING, i16, [(0, "Fires"), (1, "Does not fire"),]);
+
+const_decoder!(pub CC5D_ISO_EXPANSION, i16, [(0, "Off"), (1, "On"),]);
+
+const_decoder!(
+    pub CC5D_AEB_SEQUENCE_AUTO_CANCEL,
+    i16,
+    [
+        (0, "0,-,+/Enabled"),
+        (1, "0,-,+/Disabled"),
+        (2, "-,0,+/Enabled"),
+        (3, "-,0,+/Disabled"),
+    ]
+);
+
+const_decoder!(pub CC5D_SUPERIMPOSED_DISPLAY, i16, [(0, "On"), (1, "Off"),]);
+
+const_decoder!(
+    pub CC5D_MENU_BUTTON_DISPLAY_POSITION,
+    i16,
+    [
+        (0, "Previous (top if power off)"),
+        (1, "Previous"),
+        (2, "Top"),
+    ]
+);
+
+const_decoder!(pub CC5D_MIRROR_LOCKUP, i16, [(0, "Disable"), (1, "Enable"),]);
+
+const_decoder!(
+    pub CC5D_AF_POINT_SELECTION_METHOD,
+    i16,
+    [
+        (0, "Normal"),
+        (1, "Multi-controller direct"),
+        (2, "Quick Control Dial direct"),
+    ]
+);
+
+const_decoder!(pub CC5D_ETTL_II, i16, [(0, "Evaluative"), (1, "Average"),]);
+
+const_decoder!(
+    pub CC5D_SHUTTER_CURTAIN_SYNC,
+    i16,
+    [(0, "1st-curtain sync"), (1, "2nd-curtain sync"),]
+);
+
+const_decoder!(
+    pub CC5D_SAFETY_SHIFT_IN_AV_OR_TV,
+    i16,
+    [(0, "Disable"), (1, "Enable"),]
+);
+
+const_decoder!(
+    pub CC5D_AF_POINT_ACTIVATION_AREA,
+    i16,
+    [(0, "Standard"), (1, "Expanded"),]
+);
+
+const_decoder!(
+    pub CC5D_LCD_DISPLAY_RETURN_TO_SHOOT,
+    i16,
+    [(0, "With Shutter Button only"), (1, "Also with * etc."),]
+);
+
+const_decoder!(
+    pub CC5D_LENS_AF_STOP_BUTTON,
+    i16,
+    [
+        (0, "AF stop"),
+        (1, "AF start"),
+        (2, "AE lock while metering"),
+        (3, "AF point: M -> Auto / Auto -> Ctr."),
+        (4, "ONE SHOT <-> AI SERVO"),
+        (5, "IS start"),
+    ]
+);
+
+const_decoder!(
+    pub CC5D_ADD_ORIGINAL_DECISION_DATA,
+    i16,
+    [(0, "Off"), (1, "On"),]
+);
+
+// ----------------------------------------------------------------------------
+// CanonCustom::Functions10D (CanonCustom.pm:386)
+// ----------------------------------------------------------------------------
+// Selected by Canon.pm:1500 when `$$self{Model} =~ /EOS 10D/` (plain substring).
+
+const_decoder!(
+    pub CC10D_SET_BUTTON_WHEN_SHOOTING,
+    i16,
+    [
+        (0, "Normal (disabled)"),
+        (1, "Image quality"),
+        (2, "Change parameters"),
+        (3, "Menu display"),
+        (4, "Image playback"),
+    ]
+);
+
+const_decoder!(
+    pub CC10D_SHUTTER_RELEASE_NO_CF_CARD,
+    i16,
+    [(0, "Yes"), (1, "No"),]
+);
+
+const_decoder!(
+    pub CC10D_FLASH_SYNC_SPEED_AV,
+    i16,
+    [(0, "Auto"), (1, "1/200 Fixed"),]
+);
+
+const_decoder!(
+    pub CC10D_SHUTTER_AE_LOCK,
+    i16,
+    [
+        (0, "AF/AE lock"),
+        (1, "AE lock/AF"),
+        (2, "AF/AF lock, No AE lock"),
+        (3, "AE/AF, No AE lock"),
+    ]
+);
+
+const_decoder!(
+    pub CC10D_AF_ASSIST,
+    i16,
+    [
+        (0, "Emits/Fires"),
+        (1, "Does not emit/Fires"),
+        (2, "Only ext. flash emits/Fires"),
+        (3, "Emits/Does not fire"),
+    ]
+);
+
+const_decoder!(
+    pub CC10D_EXPOSURE_LEVEL_INCREMENTS,
+    i16,
+    [(0, "1/2 Stop"), (1, "1/3 Stop"),]
+);
+
+const_decoder!(
+    pub CC10D_AF_POINT_REGISTRATION,
+    i16,
+    [
+        (0, "Center"),
+        (1, "Bottom"),
+        (2, "Right"),
+        (3, "Extreme Right"),
+        (4, "Automatic"),
+        (5, "Extreme Left"),
+        (6, "Left"),
+        (7, "Top"),
+    ]
+);
+
+const_decoder!(
+    pub CC10D_RAW_AND_JPG_RECORDING,
+    i16,
+    [
+        (0, "RAW+Small/Normal"),
+        (1, "RAW+Small/Fine"),
+        (2, "RAW+Medium/Normal"),
+        (3, "RAW+Medium/Fine"),
+        (4, "RAW+Large/Normal"),
+        (5, "RAW+Large/Fine"),
+    ]
+);
+
+const_decoder!(
+    pub CC10D_AEB_SEQUENCE_AUTO_CANCEL,
+    i16,
+    [
+        (0, "0,-,+/Enabled"),
+        (1, "0,-,+/Disabled"),
+        (2, "-,0,+/Enabled"),
+        (3, "-,0,+/Disabled"),
+    ]
+);
+
+const_decoder!(pub CC10D_SUPERIMPOSED_DISPLAY, i16, [(0, "On"), (1, "Off"),]);
+
+const_decoder!(
+    pub CC10D_MENU_BUTTON_DISPLAY_POSITION,
+    i16,
+    [
+        (0, "Previous (top if power off)"),
+        (1, "Previous"),
+        (2, "Top"),
+    ]
+);
+
+const_decoder!(pub CC10D_MIRROR_LOCKUP, i16, [(0, "Disable"), (1, "Enable"),]);
+
+const_decoder!(
+    pub CC10D_ASSIST_BUTTON_FUNCTION,
+    i16,
+    [
+        (0, "Normal"),
+        (1, "Select Home Position"),
+        (2, "Select HP (while pressing)"),
+        (3, "Av+/- (AF point by QCD)"),
+        (4, "FE lock"),
+    ]
+);
+
+const_decoder!(
+    pub CC10D_FILL_FLASH_AUTO_REDUCTION,
+    i16,
+    [(0, "Enable"), (1, "Disable"),]
+);
+
+const_decoder!(
+    pub CC10D_SHUTTER_CURTAIN_SYNC,
+    i16,
+    [(0, "1st-curtain sync"), (1, "2nd-curtain sync"),]
+);
+
+const_decoder!(
+    pub CC10D_SAFETY_SHIFT_IN_AV_OR_TV,
+    i16,
+    [(0, "Disable"), (1, "Enable"),]
+);
+
+const_decoder!(
+    pub CC10D_LENS_AF_STOP_BUTTON,
+    i16,
+    [
+        (0, "AF stop"),
+        (1, "AF start"),
+        (2, "AE lock while metering"),
+        (3, "AF point: M->Auto/Auto->ctr"),
+        (4, "One Shot <-> AI servo"),
+        (5, "IS start"),
+    ]
+);
+
+// ----------------------------------------------------------------------------
+// CanonCustom::Functions20D (CanonCustom.pm:532)
+// ----------------------------------------------------------------------------
+// Selected by Canon.pm:1500 when `$$self{Model} =~ /EOS 20D/` (plain substring).
+
+const_decoder!(
+    pub CC20D_SET_FUNCTION_WHEN_SHOOTING,
+    i16,
+    [
+        (0, "Default (no function)"),
+        (1, "Change quality"),
+        (2, "Change Parameters"),
+        (3, "Menu display"),
+        (4, "Image replay"),
+    ]
+);
+
+const_decoder!(
+    pub CC20D_LONG_EXPOSURE_NOISE_REDUCTION,
+    i16,
+    [(0, "Off"), (1, "On"),]
+);
+
+const_decoder!(
+    pub CC20D_FLASH_SYNC_SPEED_AV,
+    i16,
+    [(0, "Auto"), (1, "1/250 Fixed"),]
+);
+
+const_decoder!(
+    pub CC20D_SHUTTER_AE_LOCK,
+    i16,
+    [
+        (0, "AF/AE lock"),
+        (1, "AE lock/AF"),
+        (2, "AF/AF lock, No AE lock"),
+        (3, "AE/AF, No AE lock"),
+    ]
+);
+
+const_decoder!(
+    pub CC20D_AF_ASSIST_BEAM,
+    i16,
+    [
+        (0, "Emits"),
+        (1, "Does not emit"),
+        (2, "Only ext. flash emits"),
+    ]
+);
+
+const_decoder!(
+    pub CC20D_EXPOSURE_LEVEL_INCREMENTS,
+    i16,
+    [(0, "1/3 Stop"), (1, "1/2 Stop"),]
+);
+
+const_decoder!(pub CC20D_FLASH_FIRING, i16, [(0, "Fires"), (1, "Does not fire"),]);
+
+const_decoder!(pub CC20D_ISO_EXPANSION, i16, [(0, "Off"), (1, "On"),]);
+
+const_decoder!(
+    pub CC20D_AEB_SEQUENCE_AUTO_CANCEL,
+    i16,
+    [
+        (0, "0,-,+/Enabled"),
+        (1, "0,-,+/Disabled"),
+        (2, "-,0,+/Enabled"),
+        (3, "-,0,+/Disabled"),
+    ]
+);
+
+const_decoder!(pub CC20D_SUPERIMPOSED_DISPLAY, i16, [(0, "On"), (1, "Off"),]);
+
+const_decoder!(
+    pub CC20D_MENU_BUTTON_DISPLAY_POSITION,
+    i16,
+    [
+        (0, "Previous (top if power off)"),
+        (1, "Previous"),
+        (2, "Top"),
+    ]
+);
+
+const_decoder!(pub CC20D_MIRROR_LOCKUP, i16, [(0, "Disable"), (1, "Enable"),]);
+
+const_decoder!(
+    pub CC20D_AF_POINT_SELECTION_METHOD,
+    i16,
+    [
+        (0, "Normal"),
+        (1, "Multi-controller direct"),
+        (2, "Quick Control Dial direct"),
+    ]
+);
+
+const_decoder!(pub CC20D_ETTL_II, i16, [(0, "Evaluative"), (1, "Average"),]);
+
+const_decoder!(
+    pub CC20D_SHUTTER_CURTAIN_SYNC,
+    i16,
+    [(0, "1st-curtain sync"), (1, "2nd-curtain sync"),]
+);
+
+const_decoder!(
+    pub CC20D_SAFETY_SHIFT_IN_AV_OR_TV,
+    i16,
+    [(0, "Disable"), (1, "Enable"),]
+);
+
+const_decoder!(
+    pub CC20D_LENS_AF_STOP_BUTTON,
+    i16,
+    [
+        (0, "AF stop"),
+        (1, "AF start"),
+        (2, "AE lock while metering"),
+        (3, "AF point: M -> Auto / Auto -> Ctr."),
+        (4, "ONE SHOT <-> AI SERVO"),
+        (5, "IS start"),
+    ]
+);
+
+const_decoder!(
+    pub CC20D_ADD_ORIGINAL_DECISION_DATA,
+    i16,
+    [(0, "Off"), (1, "On"),]
+);
+
+// ----------------------------------------------------------------------------
+// CanonCustom::Functions30D (CanonCustom.pm:665)
+// ----------------------------------------------------------------------------
+// Selected by Canon.pm:1500 when `$$self{Model} =~ /EOS 30D/` (plain substring).
+
+const_decoder!(
+    pub CC30D_SET_FUNCTION_WHEN_SHOOTING,
+    i16,
+    [
+        (0, "Default (no function)"),
+        (1, "Change quality"),
+        (2, "Change Picture Style"),
+        (3, "Menu display"),
+        (4, "Image replay"),
+    ]
+);
+
+const_decoder!(
+    pub CC30D_LONG_EXPOSURE_NOISE_REDUCTION,
+    i16,
+    [(0, "Off"), (1, "Auto"), (2, "On"),]
+);
+
+const_decoder!(
+    pub CC30D_FLASH_SYNC_SPEED_AV,
+    i16,
+    [(0, "Auto"), (1, "1/250 Fixed"),]
+);
+
+const_decoder!(
+    pub CC30D_SHUTTER_AE_LOCK,
+    i16,
+    [
+        (0, "AF/AE lock"),
+        (1, "AE lock/AF"),
+        (2, "AF/AF lock, No AE lock"),
+        (3, "AE/AF, No AE lock"),
+    ]
+);
+
+const_decoder!(
+    pub CC30D_AF_ASSIST_BEAM,
+    i16,
+    [
+        (0, "Emits"),
+        (1, "Does not emit"),
+        (2, "Only ext. flash emits"),
+    ]
+);
+
+const_decoder!(
+    pub CC30D_EXPOSURE_LEVEL_INCREMENTS,
+    i16,
+    [(0, "1/3 Stop"), (1, "1/2 Stop"),]
+);
+
+const_decoder!(pub CC30D_FLASH_FIRING, i16, [(0, "Fires"), (1, "Does not fire"),]);
+
+const_decoder!(pub CC30D_ISO_EXPANSION, i16, [(0, "Off"), (1, "On"),]);
+
+const_decoder!(
+    pub CC30D_AEB_SEQUENCE_AUTO_CANCEL,
+    i16,
+    [
+        (0, "0,-,+/Enabled"),
+        (1, "0,-,+/Disabled"),
+        (2, "-,0,+/Enabled"),
+        (3, "-,0,+/Disabled"),
+    ]
+);
+
+const_decoder!(pub CC30D_SUPERIMPOSED_DISPLAY, i16, [(0, "On"), (1, "Off"),]);
+
+const_decoder!(
+    pub CC30D_MENU_BUTTON_DISPLAY_POSITION,
+    i16,
+    [
+        (0, "Previous (top if power off)"),
+        (1, "Previous"),
+        (2, "Top"),
+    ]
+);
+
+const_decoder!(pub CC30D_MIRROR_LOCKUP, i16, [(0, "Disable"), (1, "Enable"),]);
+
+const_decoder!(
+    pub CC30D_AF_POINT_SELECTION_METHOD,
+    i16,
+    [
+        (0, "Normal"),
+        (1, "Multi-controller direct"),
+        (2, "Quick Control Dial direct"),
+    ]
+);
+
+const_decoder!(pub CC30D_ETTL_II, i16, [(0, "Evaluative"), (1, "Average"),]);
+
+const_decoder!(
+    pub CC30D_SHUTTER_CURTAIN_SYNC,
+    i16,
+    [(0, "1st-curtain sync"), (1, "2nd-curtain sync"),]
+);
+
+const_decoder!(
+    pub CC30D_SAFETY_SHIFT_IN_AV_OR_TV,
+    i16,
+    [(0, "Disable"), (1, "Enable"),]
+);
+
+const_decoder!(
+    pub CC30D_MAGNIFIED_VIEW,
+    i16,
+    [
+        (0, "Image playback only"),
+        (1, "Image review and playback"),
+    ]
+);
+
+const_decoder!(
+    pub CC30D_LENS_AF_STOP_BUTTON,
+    i16,
+    [
+        (0, "AF stop"),
+        (1, "AF start"),
+        (2, "AE lock while metering"),
+        (3, "AF point: M -> Auto / Auto -> Ctr."),
+        (4, "ONE SHOT <-> AI SERVO"),
+        (5, "IS start"),
+    ]
+);
+
+const_decoder!(
+    pub CC30D_ADD_ORIGINAL_DECISION_DATA,
+    i16,
+    [(0, "Off"), (1, "On"),]
+);
+
+// ----------------------------------------------------------------------------
+// CanonCustom::Functions400D (CanonCustom.pm:882)
+// ----------------------------------------------------------------------------
+// Selected by Canon.pm:1500 when `$$self{Model} =~ /\b(400D|REBEL XTi|Kiss Digital
+// X|K236)\b/`.
+
+const_decoder!(
+    pub CC400D_SET_BUTTON_CROSS_KEYS_FUNC,
+    i16,
+    [
+        (0, "Set: Picture Style"),
+        (1, "Set: Quality"),
+        (2, "Set: Flash Exposure Comp"),
+        (3, "Set: Playback"),
+        (4, "Cross keys: AF point select"),
+    ]
+);
+
+const_decoder!(
+    pub CC400D_LONG_EXPOSURE_NOISE_REDUCTION,
+    i16,
+    [(0, "Off"), (1, "Auto"), (2, "On"),]
+);
+
+const_decoder!(
+    pub CC400D_FLASH_SYNC_SPEED_AV,
+    i16,
+    [(0, "Auto"), (1, "1/200 Fixed"),]
+);
+
+const_decoder!(
+    pub CC400D_SHUTTER_AE_LOCK,
+    i16,
+    [
+        (0, "AF/AE lock"),
+        (1, "AE lock/AF"),
+        (2, "AF/AF lock, No AE lock"),
+        (3, "AE/AF, No AE lock"),
+    ]
+);
+
+const_decoder!(
+    pub CC400D_AF_ASSIST_BEAM,
+    i16,
+    [
+        (0, "Emits"),
+        (1, "Does not emit"),
+        (2, "Only ext. flash emits"),
+    ]
+);
+
+const_decoder!(
+    pub CC400D_EXPOSURE_LEVEL_INCREMENTS,
+    i16,
+    [(0, "1/3 Stop"), (1, "1/2 Stop"),]
+);
+
+const_decoder!(pub CC400D_MIRROR_LOCKUP, i16, [(0, "Disable"), (1, "Enable"),]);
+
+const_decoder!(pub CC400D_ETTL_II, i16, [(0, "Evaluative"), (1, "Average"),]);
+
+const_decoder!(
+    pub CC400D_SHUTTER_CURTAIN_SYNC,
+    i16,
+    [(0, "1st-curtain sync"), (1, "2nd-curtain sync"),]
+);
+
+const_decoder!(
+    pub CC400D_MAGNIFIED_VIEW,
+    i16,
+    [
+        (0, "Image playback only"),
+        (1, "Image review and playback"),
+    ]
+);
+
+const_decoder!(
+    pub CC400D_LCD_DISPLAY_AT_POWER_ON,
+    i16,
+    [(0, "Display"), (1, "Retain power off status"),]
+);
+
+// ----------------------------------------------------------------------------
+// CanonCustom::FunctionsD30 (CanonCustom.pm:973) -- shared by the D30 and D60
+// ----------------------------------------------------------------------------
+// Selected by Canon.pm:1500 when `$$self{Model} =~ /EOS D30\b/` or `/EOS D60\b/`
+// (D60 shares this exact table; only the `Validate` size offset differs, which
+// `ProcessCanonCustom` (CanonCustom.pm:2772) already accounts for via its
+// `$len+2 == $size` D60 special case -- the int16-packed entry format itself is
+// identical for every body dispatched through `ProcessCanonCustom`).
+
+const_decoder!(
+    pub CCD30_LONG_EXPOSURE_NOISE_REDUCTION,
+    i16,
+    [(0, "Off"), (1, "On"),]
+);
+
+const_decoder!(
+    pub CCD30_SHUTTER_AE_LOCK,
+    i16,
+    [
+        (0, "AF/AE lock"),
+        (1, "AE lock/AF"),
+        (2, "AF/AF lock"),
+        (3, "AE+release/AE+AF"),
+    ]
+);
+
+const_decoder!(pub CCD30_MIRROR_LOCKUP, i16, [(0, "Disable"), (1, "Enable"),]);
+
+const_decoder!(
+    pub CCD30_EXPOSURE_LEVEL_INCREMENTS,
+    i16,
+    [(0, "1/2 Stop"), (1, "1/3 Stop"),]
+);
+
+const_decoder!(
+    pub CCD30_AF_ASSIST,
+    i16,
+    [
+        (0, "Emits/Fires"),
+        (1, "Does not emit/Fires"),
+        (2, "Only ext. flash emits/Fires"),
+        (3, "Emits/Does not fire"),
+    ]
+);
+
+const_decoder!(
+    pub CCD30_FLASH_SYNC_SPEED_AV,
+    i16,
+    [(0, "Auto"), (1, "1/200 Fixed"),]
+);
+
+const_decoder!(
+    pub CCD30_AEB_SEQUENCE_AUTO_CANCEL,
+    i16,
+    [
+        (0, "0,-,+/Enabled"),
+        (1, "0,-,+/Disabled"),
+        (2, "-,0,+/Enabled"),
+        (3, "-,0,+/Disabled"),
+    ]
+);
+
+const_decoder!(
+    pub CCD30_SHUTTER_CURTAIN_SYNC,
+    i16,
+    [(0, "1st-curtain sync"), (1, "2nd-curtain sync"),]
+);
+
+const_decoder!(
+    pub CCD30_LENS_AF_STOP_BUTTON,
+    i16,
+    [
+        (0, "AF Stop"),
+        (1, "Operate AF"),
+        (2, "Lock AE and start timer"),
+    ]
+);
+
+const_decoder!(
+    pub CCD30_FILL_FLASH_AUTO_REDUCTION,
+    i16,
+    [(0, "Enable"), (1, "Disable"),]
+);
+
+const_decoder!(
+    pub CCD30_MENU_BUTTON_RETURN,
+    i16,
+    [(0, "Top"), (1, "Previous (volatile)"), (2, "Previous"),]
+);
+
+const_decoder!(
+    pub CCD30_SET_BUTTON_WHEN_SHOOTING,
+    i16,
+    [
+        (0, "Default (no function)"),
+        (1, "Image quality"),
+        (2, "Change ISO speed"),
+        (3, "Change parameters"),
+    ]
+);
+
+const_decoder!(pub CCD30_SENSOR_CLEANING, i16, [(0, "Disable"), (1, "Enable"),]);
+
+const_decoder!(pub CCD30_SUPERIMPOSED_DISPLAY, i16, [(0, "On"), (1, "Off"),]);
+
+const_decoder!(
+    pub CCD30_SHUTTER_RELEASE_NO_CF_CARD,
+    i16,
+    [(0, "Yes"), (1, "No"),]
+);
+
 // Canon AutoRotate decoder
 //
 // ExifTool `%Image::ExifTool::Canon::ShotInfo` key 27 (Canon.pm:3022):
@@ -2163,6 +3117,684 @@ fn is_350d_custom_functions(model: &str) -> bool {
     ["350D", "REBEL XT", "Kiss Digital N"]
         .iter()
         .any(|needle| has_word(model, needle))
+}
+
+/// True for the bodies that select `%CanonCustom::Functions400D`.
+///
+/// ExifTool Canon.pm:1500 -- `Condition => '$$self{Model} =~ /\b(400D|REBEL
+/// XTi|Kiss Digital X|K236)\b/'`.
+fn is_400d_custom_functions(model: &str) -> bool {
+    ["400D", "REBEL XTi", "Kiss Digital X", "K236"]
+        .iter()
+        .any(|needle| has_word(model, needle))
+}
+
+/// Perl `\bTEXT\b` containment where only the trailing boundary is anchored (the
+/// leading edge of `needle` is a literal prefix already fixed by the caller, e.g.
+/// `EOS D30` has no boundary requirement before "EOS").
+fn has_trailing_boundary(haystack: &str, needle: &str) -> bool {
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut start = 0;
+    while let Some(found) = haystack[start..].find(needle) {
+        let begin = start + found;
+        let end = begin + needle.len();
+        let after_ok = end == haystack.len() || !is_word(haystack[end..].chars().next().unwrap());
+        if after_ok {
+            return true;
+        }
+        start = begin + 1;
+        if start >= haystack.len() {
+            break;
+        }
+    }
+    false
+}
+
+/// Which per-body `%CanonCustom::FunctionsXXX` table decodes tag 0x000F
+/// (`CANON_CUSTOM_FUNCTIONS`) for a given model, mirroring the exact dispatch order
+/// of Canon.pm:1500's array of `{ Name, Condition, SubDirectory }` entries -- the
+/// first matching condition wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CanonCustomFunctionsTable {
+    OneD,
+    FiveD,
+    TenD,
+    TwentyD,
+    ThirtyD,
+    ThreeFiftyD,
+    FourHundredD,
+    D30,
+    /// `CustomFunctionsUnknown` -> `%CanonCustom::FuncsUnknown`, which declares no
+    /// fields, so nothing is decoded for these bodies (matches ExifTool with the
+    /// `Unknown` option off).
+    Unknown,
+}
+
+fn select_canon_custom_functions_table(model: &str) -> CanonCustomFunctionsTable {
+    use CanonCustomFunctionsTable::*;
+    if model.contains("EOS-1D") {
+        OneD
+    } else if model.contains("EOS 5D") {
+        FiveD
+    } else if model.contains("EOS 10D") {
+        TenD
+    } else if model.contains("EOS 20D") {
+        TwentyD
+    } else if model.contains("EOS 30D") {
+        ThirtyD
+    } else if is_350d_custom_functions(model) {
+        ThreeFiftyD
+    } else if is_400d_custom_functions(model) {
+        FourHundredD
+    } else if has_trailing_boundary(model, "EOS D30") || has_trailing_boundary(model, "EOS D60") {
+        D30
+    } else {
+        Unknown
+    }
+}
+
+/// Decodes one `%CanonCustom::Functions1D` entry (CanonCustom.pm:41).
+fn decode_1d_custom_function(function: u16, value: i16) -> Option<(&'static str, String)> {
+    Some(match function {
+        0 => (
+            "CanonCustom:FocusingScreen",
+            CC1D_FOCUSING_SCREEN.decode(value),
+        ),
+        1 => (
+            "CanonCustom:FinderDisplayDuringExposure",
+            CC1D_FINDER_DISPLAY_DURING_EXPOSURE.decode(value),
+        ),
+        2 => (
+            "CanonCustom:ShutterReleaseNoCFCard",
+            CC1D_SHUTTER_RELEASE_NO_CF_CARD.decode(value),
+        ),
+        3 => (
+            "CanonCustom:ISOSpeedExpansion",
+            CC1D_ISO_SPEED_EXPANSION.decode(value),
+        ),
+        4 => (
+            "CanonCustom:ShutterAELButton",
+            CC1D_SHUTTER_AEL_BUTTON.decode(value),
+        ),
+        5 => ("CanonCustom:ManualTv", CC1D_MANUAL_TV.decode(value)),
+        6 => (
+            "CanonCustom:ExposureLevelIncrements",
+            CC1D_EXPOSURE_LEVEL_INCREMENTS.decode(value),
+        ),
+        7 => (
+            "CanonCustom:USMLensElectronicMF",
+            CC1D_USM_LENS_ELECTRONIC_MF.decode(value),
+        ),
+        8 => ("CanonCustom:LCDPanels", CC1D_LCD_PANELS.decode(value)),
+        9 => (
+            "CanonCustom:AEBSequenceAutoCancel",
+            CC1D_AEB_SEQUENCE_AUTO_CANCEL.decode(value),
+        ),
+        10 => (
+            "CanonCustom:AFPointIllumination",
+            CC1D_AF_POINT_ILLUMINATION.decode(value),
+        ),
+        11 => (
+            "CanonCustom:AFPointSelection",
+            CC1D_AF_POINT_SELECTION.decode(value),
+        ),
+        12 => ("CanonCustom:MirrorLockup", CC1D_MIRROR_LOCKUP.decode(value)),
+        13 => (
+            "CanonCustom:AFPointSpotMetering",
+            CC1D_AF_POINT_SPOT_METERING.decode(value),
+        ),
+        14 => (
+            "CanonCustom:FillFlashAutoReduction",
+            CC1D_FILL_FLASH_AUTO_REDUCTION.decode(value),
+        ),
+        15 => (
+            "CanonCustom:ShutterCurtainSync",
+            CC1D_SHUTTER_CURTAIN_SYNC.decode(value),
+        ),
+        16 => (
+            "CanonCustom:SafetyShiftInAvOrTv",
+            CC1D_SAFETY_SHIFT_IN_AV_OR_TV.decode(value),
+        ),
+        17 => (
+            "CanonCustom:AFPointActivationArea",
+            CC1D_AF_POINT_ACTIVATION_AREA.decode(value),
+        ),
+        18 => (
+            "CanonCustom:SwitchToRegisteredAFPoint",
+            CC1D_SWITCH_TO_REGISTERED_AF_POINT.decode(value),
+        ),
+        19 => (
+            "CanonCustom:LensAFStopButton",
+            CC1D_LENS_AF_STOP_BUTTON.decode(value),
+        ),
+        20 => (
+            "CanonCustom:AIServoTrackingSensitivity",
+            CC1D_AI_SERVO_TRACKING_SENSITIVITY.decode(value),
+        ),
+        21 => (
+            "CanonCustom:AIServoContinuousShooting",
+            CC1D_AI_SERVO_CONTINUOUS_SHOOTING.decode(value),
+        ),
+        _ => return None,
+    })
+}
+
+/// Decodes one `%CanonCustom::Functions5D` entry (CanonCustom.pm:228).
+fn decode_5d_custom_function(function: u16, value: i16) -> Option<(&'static str, String)> {
+    Some(match function {
+        0 => (
+            "CanonCustom:FocusingScreen",
+            CC5D_FOCUSING_SCREEN.decode(value),
+        ),
+        1 => (
+            "CanonCustom:SetFunctionWhenShooting",
+            CC5D_SET_FUNCTION_WHEN_SHOOTING.decode(value),
+        ),
+        2 => (
+            "CanonCustom:LongExposureNoiseReduction",
+            CC5D_LONG_EXPOSURE_NOISE_REDUCTION.decode(value),
+        ),
+        3 => (
+            "CanonCustom:FlashSyncSpeedAv",
+            CC5D_FLASH_SYNC_SPEED_AV.decode(value),
+        ),
+        4 => (
+            "CanonCustom:Shutter-AELock",
+            CC5D_SHUTTER_AE_LOCK.decode(value),
+        ),
+        5 => (
+            "CanonCustom:AFAssistBeam",
+            CC5D_AF_ASSIST_BEAM.decode(value),
+        ),
+        6 => (
+            "CanonCustom:ExposureLevelIncrements",
+            CC5D_EXPOSURE_LEVEL_INCREMENTS.decode(value),
+        ),
+        7 => ("CanonCustom:FlashFiring", CC5D_FLASH_FIRING.decode(value)),
+        8 => ("CanonCustom:ISOExpansion", CC5D_ISO_EXPANSION.decode(value)),
+        9 => (
+            "CanonCustom:AEBSequenceAutoCancel",
+            CC5D_AEB_SEQUENCE_AUTO_CANCEL.decode(value),
+        ),
+        10 => (
+            "CanonCustom:SuperimposedDisplay",
+            CC5D_SUPERIMPOSED_DISPLAY.decode(value),
+        ),
+        11 => (
+            "CanonCustom:MenuButtonDisplayPosition",
+            CC5D_MENU_BUTTON_DISPLAY_POSITION.decode(value),
+        ),
+        12 => ("CanonCustom:MirrorLockup", CC5D_MIRROR_LOCKUP.decode(value)),
+        13 => (
+            "CanonCustom:AFPointSelectionMethod",
+            CC5D_AF_POINT_SELECTION_METHOD.decode(value),
+        ),
+        14 => ("CanonCustom:ETTLII", CC5D_ETTL_II.decode(value)),
+        15 => (
+            "CanonCustom:ShutterCurtainSync",
+            CC5D_SHUTTER_CURTAIN_SYNC.decode(value),
+        ),
+        16 => (
+            "CanonCustom:SafetyShiftInAvOrTv",
+            CC5D_SAFETY_SHIFT_IN_AV_OR_TV.decode(value),
+        ),
+        17 => (
+            "CanonCustom:AFPointActivationArea",
+            CC5D_AF_POINT_ACTIVATION_AREA.decode(value),
+        ),
+        18 => (
+            "CanonCustom:LCDDisplayReturnToShoot",
+            CC5D_LCD_DISPLAY_RETURN_TO_SHOOT.decode(value),
+        ),
+        19 => (
+            "CanonCustom:LensAFStopButton",
+            CC5D_LENS_AF_STOP_BUTTON.decode(value),
+        ),
+        20 => (
+            "CanonCustom:AddOriginalDecisionData",
+            CC5D_ADD_ORIGINAL_DECISION_DATA.decode(value),
+        ),
+        _ => return None,
+    })
+}
+
+/// Decodes one `%CanonCustom::Functions10D` entry (CanonCustom.pm:386).
+fn decode_10d_custom_function(function: u16, value: i16) -> Option<(&'static str, String)> {
+    Some(match function {
+        1 => (
+            "CanonCustom:SetButtonWhenShooting",
+            CC10D_SET_BUTTON_WHEN_SHOOTING.decode(value),
+        ),
+        2 => (
+            "CanonCustom:ShutterReleaseNoCFCard",
+            CC10D_SHUTTER_RELEASE_NO_CF_CARD.decode(value),
+        ),
+        3 => (
+            "CanonCustom:FlashSyncSpeedAv",
+            CC10D_FLASH_SYNC_SPEED_AV.decode(value),
+        ),
+        4 => (
+            "CanonCustom:Shutter-AELock",
+            CC10D_SHUTTER_AE_LOCK.decode(value),
+        ),
+        5 => ("CanonCustom:AFAssist", CC10D_AF_ASSIST.decode(value)),
+        6 => (
+            "CanonCustom:ExposureLevelIncrements",
+            CC10D_EXPOSURE_LEVEL_INCREMENTS.decode(value),
+        ),
+        7 => (
+            "CanonCustom:AFPointRegistration",
+            CC10D_AF_POINT_REGISTRATION.decode(value),
+        ),
+        8 => (
+            "CanonCustom:RawAndJpgRecording",
+            CC10D_RAW_AND_JPG_RECORDING.decode(value),
+        ),
+        9 => (
+            "CanonCustom:AEBSequenceAutoCancel",
+            CC10D_AEB_SEQUENCE_AUTO_CANCEL.decode(value),
+        ),
+        10 => (
+            "CanonCustom:SuperimposedDisplay",
+            CC10D_SUPERIMPOSED_DISPLAY.decode(value),
+        ),
+        11 => (
+            "CanonCustom:MenuButtonDisplayPosition",
+            CC10D_MENU_BUTTON_DISPLAY_POSITION.decode(value),
+        ),
+        12 => (
+            "CanonCustom:MirrorLockup",
+            CC10D_MIRROR_LOCKUP.decode(value),
+        ),
+        13 => (
+            "CanonCustom:AssistButtonFunction",
+            CC10D_ASSIST_BUTTON_FUNCTION.decode(value),
+        ),
+        14 => (
+            "CanonCustom:FillFlashAutoReduction",
+            CC10D_FILL_FLASH_AUTO_REDUCTION.decode(value),
+        ),
+        15 => (
+            "CanonCustom:ShutterCurtainSync",
+            CC10D_SHUTTER_CURTAIN_SYNC.decode(value),
+        ),
+        16 => (
+            "CanonCustom:SafetyShiftInAvOrTv",
+            CC10D_SAFETY_SHIFT_IN_AV_OR_TV.decode(value),
+        ),
+        17 => (
+            "CanonCustom:LensAFStopButton",
+            CC10D_LENS_AF_STOP_BUTTON.decode(value),
+        ),
+        _ => return None,
+    })
+}
+
+/// Decodes one `%CanonCustom::Functions20D` entry (CanonCustom.pm:532).
+fn decode_20d_custom_function(function: u16, value: i16) -> Option<(&'static str, String)> {
+    Some(match function {
+        0 => (
+            "CanonCustom:SetFunctionWhenShooting",
+            CC20D_SET_FUNCTION_WHEN_SHOOTING.decode(value),
+        ),
+        1 => (
+            "CanonCustom:LongExposureNoiseReduction",
+            CC20D_LONG_EXPOSURE_NOISE_REDUCTION.decode(value),
+        ),
+        2 => (
+            "CanonCustom:FlashSyncSpeedAv",
+            CC20D_FLASH_SYNC_SPEED_AV.decode(value),
+        ),
+        3 => (
+            "CanonCustom:Shutter-AELock",
+            CC20D_SHUTTER_AE_LOCK.decode(value),
+        ),
+        4 => (
+            "CanonCustom:AFAssistBeam",
+            CC20D_AF_ASSIST_BEAM.decode(value),
+        ),
+        5 => (
+            "CanonCustom:ExposureLevelIncrements",
+            CC20D_EXPOSURE_LEVEL_INCREMENTS.decode(value),
+        ),
+        6 => ("CanonCustom:FlashFiring", CC20D_FLASH_FIRING.decode(value)),
+        7 => (
+            "CanonCustom:ISOExpansion",
+            CC20D_ISO_EXPANSION.decode(value),
+        ),
+        8 => (
+            "CanonCustom:AEBSequenceAutoCancel",
+            CC20D_AEB_SEQUENCE_AUTO_CANCEL.decode(value),
+        ),
+        9 => (
+            "CanonCustom:SuperimposedDisplay",
+            CC20D_SUPERIMPOSED_DISPLAY.decode(value),
+        ),
+        10 => (
+            "CanonCustom:MenuButtonDisplayPosition",
+            CC20D_MENU_BUTTON_DISPLAY_POSITION.decode(value),
+        ),
+        11 => (
+            "CanonCustom:MirrorLockup",
+            CC20D_MIRROR_LOCKUP.decode(value),
+        ),
+        12 => (
+            "CanonCustom:AFPointSelectionMethod",
+            CC20D_AF_POINT_SELECTION_METHOD.decode(value),
+        ),
+        13 => ("CanonCustom:ETTLII", CC20D_ETTL_II.decode(value)),
+        14 => (
+            "CanonCustom:ShutterCurtainSync",
+            CC20D_SHUTTER_CURTAIN_SYNC.decode(value),
+        ),
+        15 => (
+            "CanonCustom:SafetyShiftInAvOrTv",
+            CC20D_SAFETY_SHIFT_IN_AV_OR_TV.decode(value),
+        ),
+        16 => (
+            "CanonCustom:LensAFStopButton",
+            CC20D_LENS_AF_STOP_BUTTON.decode(value),
+        ),
+        17 => (
+            "CanonCustom:AddOriginalDecisionData",
+            CC20D_ADD_ORIGINAL_DECISION_DATA.decode(value),
+        ),
+        _ => return None,
+    })
+}
+
+/// Decodes one `%CanonCustom::Functions30D` entry (CanonCustom.pm:665).
+fn decode_30d_custom_function(function: u16, value: i16) -> Option<(&'static str, String)> {
+    Some(match function {
+        1 => (
+            "CanonCustom:SetFunctionWhenShooting",
+            CC30D_SET_FUNCTION_WHEN_SHOOTING.decode(value),
+        ),
+        2 => (
+            "CanonCustom:LongExposureNoiseReduction",
+            CC30D_LONG_EXPOSURE_NOISE_REDUCTION.decode(value),
+        ),
+        3 => (
+            "CanonCustom:FlashSyncSpeedAv",
+            CC30D_FLASH_SYNC_SPEED_AV.decode(value),
+        ),
+        4 => (
+            "CanonCustom:Shutter-AELock",
+            CC30D_SHUTTER_AE_LOCK.decode(value),
+        ),
+        5 => (
+            "CanonCustom:AFAssistBeam",
+            CC30D_AF_ASSIST_BEAM.decode(value),
+        ),
+        6 => (
+            "CanonCustom:ExposureLevelIncrements",
+            CC30D_EXPOSURE_LEVEL_INCREMENTS.decode(value),
+        ),
+        7 => ("CanonCustom:FlashFiring", CC30D_FLASH_FIRING.decode(value)),
+        8 => (
+            "CanonCustom:ISOExpansion",
+            CC30D_ISO_EXPANSION.decode(value),
+        ),
+        9 => (
+            "CanonCustom:AEBSequenceAutoCancel",
+            CC30D_AEB_SEQUENCE_AUTO_CANCEL.decode(value),
+        ),
+        10 => (
+            "CanonCustom:SuperimposedDisplay",
+            CC30D_SUPERIMPOSED_DISPLAY.decode(value),
+        ),
+        11 => (
+            "CanonCustom:MenuButtonDisplayPosition",
+            CC30D_MENU_BUTTON_DISPLAY_POSITION.decode(value),
+        ),
+        12 => (
+            "CanonCustom:MirrorLockup",
+            CC30D_MIRROR_LOCKUP.decode(value),
+        ),
+        13 => (
+            "CanonCustom:AFPointSelectionMethod",
+            CC30D_AF_POINT_SELECTION_METHOD.decode(value),
+        ),
+        14 => ("CanonCustom:ETTLII", CC30D_ETTL_II.decode(value)),
+        15 => (
+            "CanonCustom:ShutterCurtainSync",
+            CC30D_SHUTTER_CURTAIN_SYNC.decode(value),
+        ),
+        16 => (
+            "CanonCustom:SafetyShiftInAvOrTv",
+            CC30D_SAFETY_SHIFT_IN_AV_OR_TV.decode(value),
+        ),
+        17 => (
+            "CanonCustom:MagnifiedView",
+            CC30D_MAGNIFIED_VIEW.decode(value),
+        ),
+        18 => (
+            "CanonCustom:LensAFStopButton",
+            CC30D_LENS_AF_STOP_BUTTON.decode(value),
+        ),
+        19 => (
+            "CanonCustom:AddOriginalDecisionData",
+            CC30D_ADD_ORIGINAL_DECISION_DATA.decode(value),
+        ),
+        _ => return None,
+    })
+}
+
+/// Decodes one `%CanonCustom::Functions400D` entry (CanonCustom.pm:882).
+fn decode_400d_custom_function(function: u16, value: i16) -> Option<(&'static str, String)> {
+    Some(match function {
+        0 => (
+            "CanonCustom:SetButtonCrossKeysFunc",
+            CC400D_SET_BUTTON_CROSS_KEYS_FUNC.decode(value),
+        ),
+        1 => (
+            "CanonCustom:LongExposureNoiseReduction",
+            CC400D_LONG_EXPOSURE_NOISE_REDUCTION.decode(value),
+        ),
+        2 => (
+            "CanonCustom:FlashSyncSpeedAv",
+            CC400D_FLASH_SYNC_SPEED_AV.decode(value),
+        ),
+        3 => (
+            "CanonCustom:Shutter-AELock",
+            CC400D_SHUTTER_AE_LOCK.decode(value),
+        ),
+        4 => (
+            "CanonCustom:AFAssistBeam",
+            CC400D_AF_ASSIST_BEAM.decode(value),
+        ),
+        5 => (
+            "CanonCustom:ExposureLevelIncrements",
+            CC400D_EXPOSURE_LEVEL_INCREMENTS.decode(value),
+        ),
+        6 => (
+            "CanonCustom:MirrorLockup",
+            CC400D_MIRROR_LOCKUP.decode(value),
+        ),
+        7 => ("CanonCustom:ETTLII", CC400D_ETTL_II.decode(value)),
+        8 => (
+            "CanonCustom:ShutterCurtainSync",
+            CC400D_SHUTTER_CURTAIN_SYNC.decode(value),
+        ),
+        9 => (
+            "CanonCustom:MagnifiedView",
+            CC400D_MAGNIFIED_VIEW.decode(value),
+        ),
+        10 => (
+            "CanonCustom:LCDDisplayAtPowerOn",
+            CC400D_LCD_DISPLAY_AT_POWER_ON.decode(value),
+        ),
+        _ => return None,
+    })
+}
+
+/// Decodes one `%CanonCustom::FunctionsD30` entry (CanonCustom.pm:973), shared by
+/// the D30 and D60.
+fn decode_d30_custom_function(function: u16, value: i16) -> Option<(&'static str, String)> {
+    Some(match function {
+        1 => (
+            "CanonCustom:LongExposureNoiseReduction",
+            CCD30_LONG_EXPOSURE_NOISE_REDUCTION.decode(value),
+        ),
+        2 => (
+            "CanonCustom:Shutter-AELock",
+            CCD30_SHUTTER_AE_LOCK.decode(value),
+        ),
+        3 => (
+            "CanonCustom:MirrorLockup",
+            CCD30_MIRROR_LOCKUP.decode(value),
+        ),
+        4 => (
+            "CanonCustom:ExposureLevelIncrements",
+            CCD30_EXPOSURE_LEVEL_INCREMENTS.decode(value),
+        ),
+        5 => ("CanonCustom:AFAssist", CCD30_AF_ASSIST.decode(value)),
+        6 => (
+            "CanonCustom:FlashSyncSpeedAv",
+            CCD30_FLASH_SYNC_SPEED_AV.decode(value),
+        ),
+        7 => (
+            "CanonCustom:AEBSequenceAutoCancel",
+            CCD30_AEB_SEQUENCE_AUTO_CANCEL.decode(value),
+        ),
+        8 => (
+            "CanonCustom:ShutterCurtainSync",
+            CCD30_SHUTTER_CURTAIN_SYNC.decode(value),
+        ),
+        9 => (
+            "CanonCustom:LensAFStopButton",
+            CCD30_LENS_AF_STOP_BUTTON.decode(value),
+        ),
+        10 => (
+            "CanonCustom:FillFlashAutoReduction",
+            CCD30_FILL_FLASH_AUTO_REDUCTION.decode(value),
+        ),
+        11 => (
+            "CanonCustom:MenuButtonReturn",
+            CCD30_MENU_BUTTON_RETURN.decode(value),
+        ),
+        12 => (
+            "CanonCustom:SetButtonWhenShooting",
+            CCD30_SET_BUTTON_WHEN_SHOOTING.decode(value),
+        ),
+        13 => (
+            "CanonCustom:SensorCleaning",
+            CCD30_SENSOR_CLEANING.decode(value),
+        ),
+        14 => (
+            "CanonCustom:SuperimposedDisplay",
+            CCD30_SUPERIMPOSED_DISPLAY.decode(value),
+        ),
+        15 => (
+            "CanonCustom:ShutterReleaseNoCFCard",
+            CCD30_SHUTTER_RELEASE_NO_CF_CARD.decode(value),
+        ),
+        _ => return None,
+    })
+}
+
+/// Decodes one entry for the model-selected `%CanonCustom::FunctionsXXX` table
+/// (Canon.pm:1500 dispatch). Returns `None` for both unmapped function indices
+/// within a known table and for `CanonCustomFunctionsTable::Unknown` bodies.
+fn decode_canon_custom_function(
+    table: CanonCustomFunctionsTable,
+    function: u16,
+    value: i16,
+) -> Option<(&'static str, String)> {
+    match table {
+        CanonCustomFunctionsTable::OneD => decode_1d_custom_function(function, value),
+        CanonCustomFunctionsTable::FiveD => decode_5d_custom_function(function, value),
+        CanonCustomFunctionsTable::TenD => decode_10d_custom_function(function, value),
+        CanonCustomFunctionsTable::TwentyD => decode_20d_custom_function(function, value),
+        CanonCustomFunctionsTable::ThirtyD => decode_30d_custom_function(function, value),
+        CanonCustomFunctionsTable::ThreeFiftyD => decode_350d_custom_function(function, value),
+        CanonCustomFunctionsTable::FourHundredD => decode_400d_custom_function(function, value),
+        CanonCustomFunctionsTable::D30 => decode_d30_custom_function(function, value),
+        CanonCustomFunctionsTable::Unknown => None,
+    }
+}
+
+/// Applies one length-prefixed `%CanonCustom::FunctionsXXX` record (`array[0]` is
+/// the record's own declared byte length, `array[1..]` is one packed
+/// `tag = raw >> 8` / `value = raw & 0xff` entry per int16 word) to `tags`.
+///
+/// Shared by both real wire locations for these tables: the model-gated tag 0xf
+/// dispatch (Canon.pm:1500) and the unconditional 1D-series tag 0x90
+/// (Canon.pm:1796, `CANON_CUSTOM_FUNCTIONS_1D`).
+fn apply_canon_custom_functions(
+    table: CanonCustomFunctionsTable,
+    array: &[i16],
+    model: &str,
+    tags: &mut HashMap<String, String>,
+) {
+    if table == CanonCustomFunctionsTable::Unknown {
+        return;
+    }
+    let Some(&declared_len) = array.first() else {
+        return;
+    };
+    let declared_len = declared_len as u16 as usize;
+    let actual_size = array.len() * 2;
+    // `ProcessCanonCustom` (CanonCustom.pm:2782) accepts either an exact match,
+    // or -- only for the D60 -- a declared length that is 2 bytes short of the
+    // actual size (`$$et{Model}=~/\bD60\b/ and $len+2 == $size`).
+    let size_is_valid =
+        declared_len == actual_size || (declared_len + 2 == actual_size && has_word(model, "D60"));
+    if !size_is_valid {
+        return;
+    }
+    for &word in &array[1..] {
+        let raw = word as u16;
+        let function = raw >> 8;
+        let value = (raw & 0xff) as i16;
+        // None of these tables define a group-1 override, so their default
+        // family-1 group is the module name, "CanonCustom" -- not "Canon".
+        if let Some((name, rendered)) = decode_canon_custom_function(table, function, value) {
+            tags.insert(name.to_string(), rendered);
+        }
+    }
+}
+
+/// Decodes one `%CanonCustom::Functions350D` entry (CanonCustom.pm:809). Split out
+/// of the match arm so it shares the `decode_canon_custom_function` dispatch
+/// surface with the other tables.
+fn decode_350d_custom_function(function: u16, value: i16) -> Option<(&'static str, String)> {
+    Some(match function {
+        0 => (
+            "CanonCustom:SetButtonCrossKeysFunc",
+            CC350D_SET_BUTTON_CROSS_KEYS_FUNC.decode(value),
+        ),
+        1 => (
+            "CanonCustom:LongExposureNoiseReduction",
+            CC350D_LONG_EXPOSURE_NOISE_REDUCTION.decode(value),
+        ),
+        2 => (
+            "CanonCustom:FlashSyncSpeedAv",
+            CC350D_FLASH_SYNC_SPEED_AV.decode(value),
+        ),
+        3 => (
+            "CanonCustom:Shutter-AELock",
+            CC350D_SHUTTER_AE_LOCK.decode(value),
+        ),
+        4 => (
+            "CanonCustom:AFAssistBeam",
+            CC350D_AF_ASSIST_BEAM.decode(value),
+        ),
+        5 => (
+            "CanonCustom:ExposureLevelIncrements",
+            CC350D_EXPOSURE_LEVEL_INCREMENTS.decode(value),
+        ),
+        6 => (
+            "CanonCustom:MirrorLockup",
+            CC350D_MIRROR_LOCKUP.decode(value),
+        ),
+        7 => ("CanonCustom:ETTLII", CC350D_ETTL_II.decode(value)),
+        8 => (
+            "CanonCustom:ShutterCurtainSync",
+            CC350D_SHUTTER_CURTAIN_SYNC.decode(value),
+        ),
+        _ => return None,
+    })
 }
 
 /// True for the bodies whose `%Canon::FocalLength` keys 2 and 3 hold real focal plane
@@ -4364,63 +5996,38 @@ fn parse_canon_makernote_impl_with_model(
 
             // CustomFunctions (tag 0x000F).
             //
-            // ExifTool Canon.pm:1500 picks a per-body table; only
-            // `%CanonCustom::Functions350D` (CanonCustom.pm:809) is implemented here, so
-            // the record is skipped on every other body rather than decoded with the
-            // wrong labels. `ProcessCanonCustom` (CanonCustom.pm:2772) reads one int16
-            // per entry after a leading byte-length word and splits it into
-            // `tag = $val >> 8` / `value = $val & 0xff`.
+            // ExifTool Canon.pm:1500 picks a per-body table (`%CanonCustom::FunctionsXXX`
+            // for 1D/5D/10D/20D/30D/350D/400D/D30, D60 sharing the D30 table); an
+            // unrecognized body falls to `CustomFunctionsUnknown`
+            // (`%CanonCustom::FuncsUnknown`, which declares no fields, so it decodes
+            // nothing -- matching this repo's "never approximate a conversion" rule).
+            // In practice every 1D/1Ds-series file samples its Functions1D data from
+            // tag 0x90 instead (`CANON_CUSTOM_FUNCTIONS_1D`, below) -- this arm's
+            // `EOS-1D` condition is Canon.pm:1502's alternative path, not the one real
+            // files use.
             CANON_CUSTOM_FUNCTIONS => {
-                if is_350d_custom_functions(&model)
-                    && let Some(array) =
-                        extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
-                    && array.first().map(|&len| len as u16 as usize) == Some(array.len() * 2)
+                let table = select_canon_custom_functions_table(&model);
+                if let Some(array) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
                 {
-                    for &word in &array[1..] {
-                        let raw = word as u16;
-                        let function = raw >> 8;
-                        let value = (raw & 0xff) as i16;
-                        // `%CanonCustom::Functions350D` (CanonCustom.pm:809) has no
-                        // group-1 override, so its default family-1 group is the module
-                        // name, "CanonCustom" -- not "Canon".
-                        let (name, rendered) = match function {
-                            0 => (
-                                "CanonCustom:SetButtonCrossKeysFunc",
-                                CC350D_SET_BUTTON_CROSS_KEYS_FUNC.decode(value),
-                            ),
-                            1 => (
-                                "CanonCustom:LongExposureNoiseReduction",
-                                CC350D_LONG_EXPOSURE_NOISE_REDUCTION.decode(value),
-                            ),
-                            2 => (
-                                "CanonCustom:FlashSyncSpeedAv",
-                                CC350D_FLASH_SYNC_SPEED_AV.decode(value),
-                            ),
-                            3 => (
-                                "CanonCustom:Shutter-AELock",
-                                CC350D_SHUTTER_AE_LOCK.decode(value),
-                            ),
-                            4 => (
-                                "CanonCustom:AFAssistBeam",
-                                CC350D_AF_ASSIST_BEAM.decode(value),
-                            ),
-                            5 => (
-                                "CanonCustom:ExposureLevelIncrements",
-                                CC350D_EXPOSURE_LEVEL_INCREMENTS.decode(value),
-                            ),
-                            6 => (
-                                "CanonCustom:MirrorLockup",
-                                CC350D_MIRROR_LOCKUP.decode(value),
-                            ),
-                            7 => ("CanonCustom:ETTLII", CC350D_ETTL_II.decode(value)),
-                            8 => (
-                                "CanonCustom:ShutterCurtainSync",
-                                CC350D_SHUTTER_CURTAIN_SYNC.decode(value),
-                            ),
-                            _ => continue,
-                        };
-                        tags.insert(name.to_string(), rendered);
-                    }
+                    apply_canon_custom_functions(table, &array, &model, &mut tags);
+                }
+            }
+
+            // CustomFunctions1D (tag 0x0090) -- ExifTool Canon.pm:1796, unconditional
+            // (no per-model `Condition`, unlike tag 0xf's dispatch array): "used by 1D
+            // and 1Ds". Every 1D/1Ds-series corpus file observed carries
+            // `%CanonCustom::Functions1D` here rather than under tag 0xf.
+            CANON_CUSTOM_FUNCTIONS_1D => {
+                if let Some(array) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                {
+                    apply_canon_custom_functions(
+                        CanonCustomFunctionsTable::OneD,
+                        &array,
+                        &model,
+                        &mut tags,
+                    );
                 }
             }
 
@@ -5694,6 +7301,248 @@ mod tests {
         assert!(has_word("Canon EOS 5D Mark III", "5D"));
         assert!(!has_word("Canon EOS 15D", "5D"));
         assert!(!has_word("Canon EOS 5DS", "5D"));
+    }
+
+    /// `select_canon_custom_functions_table` must replicate Canon.pm:1500's exact
+    /// dispatch order for tag 0x000F (`CANON_CUSTOM_FUNCTIONS`).
+    #[test]
+    fn test_select_canon_custom_functions_table() {
+        use CanonCustomFunctionsTable::*;
+
+        // `EOS-1D` is a plain substring match -- every 1D-series body up to (not
+        // including) the Mark III qualifies.
+        for model in [
+            "Canon EOS-1D",
+            "Canon EOS-1DS",
+            "Canon EOS-1D Mark II",
+            "Canon EOS-1Ds Mark II",
+            "Canon EOS-1D Mark II N",
+        ] {
+            assert_eq!(select_canon_custom_functions_table(model), OneD, "{model}");
+        }
+
+        assert_eq!(select_canon_custom_functions_table("Canon EOS 5D"), FiveD);
+        assert_eq!(select_canon_custom_functions_table("Canon EOS 10D"), TenD);
+        assert_eq!(
+            select_canon_custom_functions_table("Canon EOS 20D"),
+            TwentyD
+        );
+        assert_eq!(
+            select_canon_custom_functions_table("Canon EOS 30D"),
+            ThirtyD
+        );
+        assert_eq!(
+            select_canon_custom_functions_table("Canon EOS 350D DIGITAL"),
+            ThreeFiftyD
+        );
+        assert_eq!(
+            select_canon_custom_functions_table("Canon EOS DIGITAL REBEL XT"),
+            ThreeFiftyD
+        );
+        assert_eq!(
+            select_canon_custom_functions_table("Canon EOS 400D DIGITAL"),
+            FourHundredD
+        );
+        assert_eq!(
+            select_canon_custom_functions_table("Canon EOS DIGITAL REBEL XTi"),
+            FourHundredD
+        );
+        assert_eq!(
+            select_canon_custom_functions_table("Canon EOS Kiss Digital X"),
+            FourHundredD
+        );
+        assert_eq!(select_canon_custom_functions_table("Canon EOS D30"), D30);
+        assert_eq!(select_canon_custom_functions_table("Canon EOS D60"), D30);
+
+        // Unlisted or newer bodies get nothing (CustomFunctionsUnknown).
+        assert_eq!(
+            select_canon_custom_functions_table("Canon EOS 5D Mark II"),
+            FiveD,
+            "the literal Canon.pm regex is a substring match, so 5D Mark II also hits it"
+        );
+        assert_eq!(select_canon_custom_functions_table("Canon EOS R5"), Unknown);
+        assert_eq!(
+            select_canon_custom_functions_table("Canon PowerShot D30"),
+            Unknown,
+            "PowerShot D30 has no \"EOS\" prefix, so it must not match /EOS D30\\b/"
+        );
+    }
+
+    /// `has_trailing_boundary` must anchor only the trailing edge -- "EOS D30" is a
+    /// literal prefix fixed by the caller, but "EOS D30X" (a hypothetical future
+    /// body) must not match `/EOS D30\b/`.
+    #[test]
+    fn test_has_trailing_boundary() {
+        assert!(has_trailing_boundary("Canon EOS D30", "EOS D30"));
+        assert!(has_trailing_boundary("Canon EOS D60", "EOS D60"));
+        assert!(!has_trailing_boundary("Canon EOS D30X", "EOS D30"));
+        assert!(!has_trailing_boundary("Canon PowerShot D30", "EOS D30"));
+    }
+
+    /// `CanonEOS-1D.jpg` carries `%CanonCustom::Functions1D` under the
+    /// unconditional tag 0x90 (Canon.pm:1796), not the model-gated tag 0xf --
+    /// verified via `exiftool -v3`, which shows `- Tag 0x0090 (44 bytes, ...)`
+    /// under its `CustomFunctions1D (SubDirectory)` entry, and `exiftool -G1 -s`
+    /// reporting `[CanonCustom] FocusingScreen : Ec-A,B,C,CII,CIII,D,H,I,L` and
+    /// `[CanonCustom] MirrorLockup : Disable`. Every other real 1D/1Ds-series
+    /// corpus file (CanonEOS-1DS.jpg, CanonEOS-1DmkII.jpg, ...) is the same: tag
+    /// 0xf's `EOS-1D` dispatch arm is unused in practice.
+    #[test]
+    fn test_apply_canon_custom_functions_wires_1d_series_tag_0x90() {
+        // The declared-length word (44 = 0x2c) followed by the 21 packed
+        // `tag<<8 | value` int16 words from that file's raw record, byte-for-byte.
+        let array: Vec<i16> = [
+            0x002c_u16, 0x0001, 0x0100, 0x0200, 0x0301, 0x0400, 0x0500, 0x0600, 0x0702, 0x0800,
+            0x0900, 0x0a00, 0x0b00, 0x0c00, 0x0d00, 0x0e00, 0x0f00, 0x1000, 0x1100, 0x1200,
+            0x1300, 0x1400,
+        ]
+        .iter()
+        .map(|&w| w as i16)
+        .collect();
+
+        let mut tags = HashMap::new();
+        apply_canon_custom_functions(
+            CanonCustomFunctionsTable::OneD,
+            &array,
+            "Canon EOS-1D",
+            &mut tags,
+        );
+
+        assert_eq!(
+            tags.get("CanonCustom:FocusingScreen"),
+            Some(&"Ec-A,B,C,CII,CIII,D,H,I,L".to_string())
+        );
+        assert_eq!(
+            tags.get("CanonCustom:MirrorLockup"),
+            Some(&"Disable".to_string())
+        );
+        // The dispatch selects Unknown for a model that isn't 1D-series, and
+        // decodes nothing even given the same bytes.
+        let mut none_tags = HashMap::new();
+        apply_canon_custom_functions(
+            CanonCustomFunctionsTable::Unknown,
+            &array,
+            "Canon EOS R5",
+            &mut none_tags,
+        );
+        assert!(none_tags.is_empty());
+    }
+
+    /// Ground truth: `exiftool -G1 -s` on real corpus files
+    /// (`/tmp/oxidex-exiftool-cache/combined-samples/Canon/`).
+    #[test]
+    fn test_decode_canon_custom_function_ground_truth() {
+        // CanonEOS-1D.jpg: [CanonCustom] FocusingScreen : Ec-A,B,C,CII,CIII,D,H,I,L
+        assert_eq!(
+            decode_1d_custom_function(0, 1),
+            Some((
+                "CanonCustom:FocusingScreen",
+                "Ec-A,B,C,CII,CIII,D,H,I,L".to_string()
+            ))
+        );
+        // CanonEOS-1D.jpg: [CanonCustom] MirrorLockup : Disable
+        assert_eq!(
+            decode_1d_custom_function(12, 0),
+            Some(("CanonCustom:MirrorLockup", "Disable".to_string()))
+        );
+
+        // CanonEOS5D.jpg: [CanonCustom] SetFunctionWhenShooting : Change Parameters
+        assert_eq!(
+            decode_5d_custom_function(1, 2),
+            Some((
+                "CanonCustom:SetFunctionWhenShooting",
+                "Change Parameters".to_string()
+            ))
+        );
+        // CanonEOS5D.jpg: [CanonCustom] ISOExpansion : On
+        assert_eq!(
+            decode_5d_custom_function(8, 1),
+            Some(("CanonCustom:ISOExpansion", "On".to_string()))
+        );
+
+        // CanonEOS10D.jpg: [CanonCustom] SetButtonWhenShooting : Image quality
+        assert_eq!(
+            decode_10d_custom_function(1, 1),
+            Some((
+                "CanonCustom:SetButtonWhenShooting",
+                "Image quality".to_string()
+            ))
+        );
+        // CanonEOS10D.jpg: [CanonCustom] RawAndJpgRecording : RAW+Small/Normal
+        assert_eq!(
+            decode_10d_custom_function(8, 0),
+            Some((
+                "CanonCustom:RawAndJpgRecording",
+                "RAW+Small/Normal".to_string()
+            ))
+        );
+
+        // CanonEOS20D.jpg: [CanonCustom] LongExposureNoiseReduction : On
+        assert_eq!(
+            decode_20d_custom_function(1, 1),
+            Some(("CanonCustom:LongExposureNoiseReduction", "On".to_string()))
+        );
+        // CanonEOS20D.jpg: [CanonCustom] AddOriginalDecisionData : Off
+        assert_eq!(
+            decode_20d_custom_function(17, 0),
+            Some(("CanonCustom:AddOriginalDecisionData", "Off".to_string()))
+        );
+
+        // CanonEOS30D.jpg: [CanonCustom] LongExposureNoiseReduction : Auto
+        assert_eq!(
+            decode_30d_custom_function(2, 1),
+            Some(("CanonCustom:LongExposureNoiseReduction", "Auto".to_string()))
+        );
+        // CanonEOS30D.jpg: [CanonCustom] MagnifiedView : Image playback only
+        assert_eq!(
+            decode_30d_custom_function(17, 0),
+            Some((
+                "CanonCustom:MagnifiedView",
+                "Image playback only".to_string()
+            ))
+        );
+
+        // CanonEOS400D.jpg / CanonEOS_DIGITAL_REBEL_XTi.jpg / CanonEOS_KissDigitalX.jpg:
+        // [CanonCustom] SetButtonCrossKeysFunc : Set: Picture Style
+        assert_eq!(
+            decode_400d_custom_function(0, 0),
+            Some((
+                "CanonCustom:SetButtonCrossKeysFunc",
+                "Set: Picture Style".to_string()
+            ))
+        );
+        // Same files: [CanonCustom] LCDDisplayAtPowerOn : Display
+        assert_eq!(
+            decode_400d_custom_function(10, 0),
+            Some(("CanonCustom:LCDDisplayAtPowerOn", "Display".to_string()))
+        );
+
+        // CanonEOS_D30.jpg: [CanonCustom] MenuButtonReturn : Top
+        assert_eq!(
+            decode_d30_custom_function(11, 0),
+            Some(("CanonCustom:MenuButtonReturn", "Top".to_string()))
+        );
+        // CanonEOS_D60.jpg: [CanonCustom] SetButtonWhenShooting : Change ISO speed
+        assert_eq!(
+            decode_d30_custom_function(12, 2),
+            Some((
+                "CanonCustom:SetButtonWhenShooting",
+                "Change ISO speed".to_string()
+            ))
+        );
+        // CanonEOS_D60.jpg: [CanonCustom] ShutterReleaseNoCFCard : No
+        assert_eq!(
+            decode_d30_custom_function(15, 1),
+            Some(("CanonCustom:ShutterReleaseNoCFCard", "No".to_string()))
+        );
+
+        // An index unmapped by the table (e.g. the D30 table has no key 0) must be
+        // omitted rather than guessed.
+        assert_eq!(decode_d30_custom_function(0, 0), None);
+        assert_eq!(
+            decode_canon_custom_function(CanonCustomFunctionsTable::Unknown, 0, 0),
+            None
+        );
     }
 
     // TODO: Enable these tests once ProcessingInfo array parsing is implemented
