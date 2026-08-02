@@ -15,13 +15,13 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 
 | Classification | Tags |
 |---|---|
-| 📖 Read only | 2351 |
+| 📖 Read only | 2350 |
 | ❌ Unsupported | 1890 |
 | ❔ Untestable | 221 |
 | 🐛 Read OK, write broken | 177 |
-| ✅ Full (read + write) | 97 |
-| ⚠️ Full (write non-standard encoding) | 68 |
-| 🐛 Read broken | 15 |
+| ✅ Full (read + write) | 99 |
+| ⚠️ Full (write non-standard encoding) | 73 |
+| 🐛 Read broken | 9 |
 | 🚫 Not writable in ExifTool (no synthetic sample possible; untested) | 585 |
 
 ## Per-group breakdown
@@ -33,7 +33,7 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | File | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
 | GPS | 0 | 3 | 14 | 0 | 0 | 0 | 0 | 32 |
 | GSpherical | 0 | 0 | 0 | 0 | 0 | 0 | 16 | 16 |
-| IFD0 | 51 | 1 | 54 | 6 | 0 | 0 | 17 | 169 |
+| IFD0 | 53 | 0 | 54 | 0 | 0 | 0 | 17 | 169 |
 | IFD1 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
 | IFD2 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
 | IPTC | 0 | 92 | 1 | 0 | 0 | 5 | 7 | 105 |
@@ -510,7 +510,7 @@ references are into this repo.
 | `InkSet` | ✅ ok (formatting differs from exiftool) | 🐛 broken: error | `CMYK` |
 | `IntergraphMatrix` | ✅ ok | 🐛 broken: error | `1.5` |
 | `JXLDecodeSpeed` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
-| `JXLDistance` | 🐛 broken: float value shown as raw IEEE-754 bits | readback_broken | `1.5` |
+| `JXLDistance` | ✅ ok | ✅ ok | `1.5` |
 | `JXLEffort` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
 | `LinearResponseLimit` | ✅ ok | ✅ ok | `1.5` |
 | `LocalizedCameraModel` | ✅ ok | ✅ ok | `OxTest` |
@@ -556,22 +556,22 @@ references are into this repo.
 | `ProfileEmbedPolicy` | ✅ ok (formatting differs from exiftool) | 🐛 broken: error | `Allow Copying` |
 | `ProfileGainTableMap2` | ✅ ok | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
 | `ProfileGroupName` | ✅ ok | ✅ ok | `OxTest` |
-| `ProfileHueSatMapData1` | 🐛 broken: float value shown as raw IEEE-754 bits | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
-| `ProfileHueSatMapData2` | 🐛 broken: float value shown as raw IEEE-754 bits | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
-| `ProfileHueSatMapData3` | 🐛 broken: float value shown as raw IEEE-754 bits | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `ProfileHueSatMapData1` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `ProfileHueSatMapData2` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `ProfileHueSatMapData3` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `ProfileHueSatMapDims` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3 3 3` |
 | `ProfileHueSatMapEncoding` | ✅ ok (formatting differs from exiftool) | 🐛 broken: error | `Linear` |
-| `ProfileLookTableData` | 🐛 broken: float value shown as raw IEEE-754 bits | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `ProfileLookTableData` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `ProfileLookTableDims` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3 3 3` |
 | `ProfileLookTableEncoding` | ✅ ok (formatting differs from exiftool) | 🐛 broken: error | `Linear` |
 | `ProfileName` | ✅ ok | ✅ ok | `OxTest` |
-| `ProfileToneCurve` | 🐛 broken: float value shown as raw IEEE-754 bits | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `ProfileToneCurve` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `RGBTables` | ✅ ok | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
 | `Rating` | ✅ ok | ✅ ok | `3` |
 | `RatingPercent` | ✅ ok | ✅ ok | `3` |
 | `RawDataUniqueID` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
 | `RawImageDigest` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
-| `RawToPreviewGain` | ✅ ok (formatting differs from exiftool) | readback_broken | `1.5` |
+| `RawToPreviewGain` | ✅ ok | ✅ ok | `1.5` |
 | `ReductionMatrix1` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `ReductionMatrix2` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `ReductionMatrix3` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |

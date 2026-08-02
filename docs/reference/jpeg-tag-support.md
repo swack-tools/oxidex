@@ -9,7 +9,7 @@ Empirical OxiDex ↔ ExifTool tag mapping for JPEG: for each tag, ExifTool write
 Only tags OxiDex can **read** from JPEG are listed here (including those whose value formatting differs from ExifTool). The full classification of all tested tags — including unsupported and broken ones — is in the [JPEG Tag Matrix](/reference/jpeg-tag-matrix). See also [ExifTool Coverage](/reference/tag-coverage-analysis) for the tag-database view and the [Compatibility overview](/reference/comparison/) for fixture-based comparisons across formats.
 
 
-**2693** ExifTool tags readable, **176** writable via the CLI (of 4819 ExifTool-writable JPEG tags tested).
+**2699** ExifTool tags readable, **178** writable via the CLI (of 4819 ExifTool-writable JPEG tags tested).
 
 
 ## ExifIFD (93 readable tags)
@@ -153,7 +153,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `GPS:GPSTrackRef` | `GPS:GPSTrackRef` | — | `Magnetic North` |
 | `GPS:GPSVersionID` | `GPS:GPSVersionID` | — | `2.3.0.0` |
 
-## IFD0 (146 readable tags)
+## IFD0 (152 readable tags)
 
 | ExifTool tag | OxiDex key | OxiDex write | Example value |
 |---|---|---|---|
@@ -217,8 +217,9 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:ImageStats` | `IFD0:ImageStats` | — | `OxTest` |
 | `IFD0:ImageWidth` | `IFD0:ImageWidth` | ⚠️ `-IFD0:ImageWidth=` | `3` |
 | `IFD0:InkSet` | `IFD0:InkSet` * | — | `CMYK` |
-| `IFD0:IntergraphMatrix` | `IFD0:AnalogBalance` | — | `1.5` |
+| `IFD0:IntergraphMatrix` | `IFD0:0x8480` | — | `1.5` |
 | `IFD0:JXLDecodeSpeed` | `IFD0:JXLDecodeSpeed` | ⚠️ `-IFD0:JXLDecodeSpeed=` | `3` |
+| `IFD0:JXLDistance` | `IFD0:JXLDistance` | ✅ `-IFD0:JXLDistance=` | `1.5` |
 | `IFD0:JXLEffort` | `IFD0:JXLEffort` | ⚠️ `-IFD0:JXLEffort=` | `3` |
 | `IFD0:LinearResponseLimit` | `IFD0:LinearResponseLimit` | ✅ `-IFD0:LinearResponseLimit=` | `1.5` |
 | `IFD0:LocalizedCameraModel` | `IFD0:LocalizedCameraModel` | ✅ `-IFD0:LocalizedCameraModel=` | `OxTest` |
@@ -227,8 +228,8 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:MaxSampleValue` | `IFD0:MaxSampleValue` | ✅ `-IFD0:MaxSampleValue=` | `3` |
 | `IFD0:MinSampleValue` | `IFD0:MinSampleValue` | ✅ `-IFD0:MinSampleValue=` | `3` |
 | `IFD0:Model` | `IFD0:Model` | ✅ `-IFD0:Model=` | `OxTest` |
-| `IFD0:ModelTiePoint` | `IFD0:AnalogBalance` | — | `1.5` |
-| `IFD0:ModelTransform` | `IFD0:CalibrationIlluminant1` | — | `1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 ` |
+| `IFD0:ModelTiePoint` | `IFD0:0x8480` | — | `1.5` |
+| `IFD0:ModelTransform` | `IFD0:0x85D8` | — | `1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5 ` |
 | `IFD0:ModifyDate` | `IFD0:ModifyDate` | — | `2024:01:15 10:30:00` |
 | `IFD0:NewRawImageDigest` | `IFD0:NewRawImageDigest` * | — | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
 | `IFD0:OldSubfileType` | `IFD0:OldSubfileType` * | — | `Full-resolution image` |
@@ -243,7 +244,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:PanasonicTitle` | `IFD0:PanasonicTitle` * | ✅ `-IFD0:PanasonicTitle=` | `OxTest` |
 | `IFD0:PanasonicTitle2` | `IFD0:PanasonicTitle2` * | ✅ `-IFD0:PanasonicTitle2=` | `OxTest` |
 | `IFD0:PhotometricInterpretation` | `IFD0:PhotometricInterpretation` | — | `WhiteIsZero` |
-| `IFD0:PixelScale` | `IFD0:CalibrationIlluminant1` | — | `1.5 1.5 1.5` |
+| `IFD0:PixelScale` | `IFD0:0x830E` | — | `1.5 1.5 1.5` |
 | `IFD0:PlanarConfiguration` | `IFD0:PlanarConfiguration` | — | `Chunky` |
 | `IFD0:Predictor` | `IFD0:Predictor` * | — | `Horizontal differencing` |
 | `IFD0:PreviewApplicationName` | `IFD0:PreviewApplicationName` | ✅ `-IFD0:PreviewApplicationName=` | `OxTest` |
@@ -259,17 +260,22 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:ProfileEmbedPolicy` | `IFD0:ProfileEmbedPolicy` * | — | `Allow Copying` |
 | `IFD0:ProfileGainTableMap2` | `IFD0:ProfileGainTableMap2` | — | `OxTest` |
 | `IFD0:ProfileGroupName` | `IFD0:ProfileGroupName` | ✅ `-IFD0:ProfileGroupName=` | `OxTest` |
+| `IFD0:ProfileHueSatMapData1` | `IFD0:ProfileHueSatMapData1` | ⚠️ `-IFD0:ProfileHueSatMapData1=` | `1.5` |
+| `IFD0:ProfileHueSatMapData2` | `IFD0:ProfileHueSatMapData2` | ⚠️ `-IFD0:ProfileHueSatMapData2=` | `1.5` |
+| `IFD0:ProfileHueSatMapData3` | `IFD0:ProfileHueSatMapData3` | ⚠️ `-IFD0:ProfileHueSatMapData3=` | `1.5` |
 | `IFD0:ProfileHueSatMapDims` | `IFD0:ProfileHueSatMapDims` | ⚠️ `-IFD0:ProfileHueSatMapDims=` | `3 3 3` |
 | `IFD0:ProfileHueSatMapEncoding` | `IFD0:ProfileHueSatMapEncoding` * | — | `Linear` |
+| `IFD0:ProfileLookTableData` | `IFD0:ProfileLookTableData` | ⚠️ `-IFD0:ProfileLookTableData=` | `1.5` |
 | `IFD0:ProfileLookTableDims` | `IFD0:ProfileLookTableDims` | ⚠️ `-IFD0:ProfileLookTableDims=` | `3 3 3` |
 | `IFD0:ProfileLookTableEncoding` | `IFD0:ProfileLookTableEncoding` * | — | `Linear` |
 | `IFD0:ProfileName` | `IFD0:ProfileName` | ✅ `-IFD0:ProfileName=` | `OxTest` |
+| `IFD0:ProfileToneCurve` | `IFD0:ProfileToneCurve` | ⚠️ `-IFD0:ProfileToneCurve=` | `1.5` |
 | `IFD0:RGBTables` | `IFD0:RGBTables` | — | `OxTest` |
 | `IFD0:Rating` | `IFD0:Rating` | ✅ `-IFD0:Rating=` | `3` |
 | `IFD0:RatingPercent` | `IFD0:RatingPercent` | ✅ `-IFD0:RatingPercent=` | `3` |
 | `IFD0:RawDataUniqueID` | `IFD0:RawDataUniqueID` * | — | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
 | `IFD0:RawImageDigest` | `IFD0:RawImageDigest` * | — | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
-| `IFD0:RawToPreviewGain` | `IFD0:RawToPreviewGain` * | — | `1.5` |
+| `IFD0:RawToPreviewGain` | `IFD0:RawToPreviewGain` | ✅ `-IFD0:RawToPreviewGain=` | `1.5` |
 | `IFD0:ReductionMatrix1` | `IFD0:ReductionMatrix1` | ⚠️ `-IFD0:ReductionMatrix1=` | `1.5` |
 | `IFD0:ReductionMatrix2` | `IFD0:ReductionMatrix2` | ⚠️ `-IFD0:ReductionMatrix2=` | `1.5` |
 | `IFD0:ReductionMatrix3` | `IFD0:ReductionMatrix3` | ⚠️ `-IFD0:ReductionMatrix3=` | `1.5` |
