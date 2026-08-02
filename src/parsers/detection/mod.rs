@@ -266,6 +266,18 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         return Ok(FileFormat::Plist);
     }
 
+    // HTML and XHTML, using ExifTool's own gate from `HTML.pm`'s ProcessHTML.
+    // It runs after the SVG and plist roots because those three share the
+    // `<?xml` opening: ExifTool requires an actual HTML element in the first
+    // 256 bytes before it will accept an XML declaration as HTML, which is
+    // what keeps SVG, XMP sidecars and XML plists out. Before this existed
+    // every .html file fell through to the plain-text fallback and was parsed
+    // as TXT, reporting five TEXT:* statistics ExifTool never reports and none
+    // of the 57 HTML/Dublin-Core/Office tags it does.
+    if crate::parsers::text::html::looks_like_html(magic_bytes) {
+        return Ok(FileFormat::HTML);
+    }
+
     // Text-based formats need a wider bounded probe for long ICS bodies and EML header blocks.
     let text_probe_len = reader
         .size()
@@ -534,6 +546,57 @@ mod tests {
         data[0..5].copy_from_slice(b"CD001"); // right bytes, wrong offset
         let reader = TestReader::new(data);
         assert_ne!(detect_format(&reader).unwrap(), FileFormat::ISO);
+    }
+
+    /// HTML shares the `<?xml` opening with SVG, XMP and XML plists, so the
+    /// order of these four checks is load-bearing: every one of them must keep
+    /// resolving to its own format once HTML joins the list.
+    #[test]
+    fn test_xml_rooted_formats_keep_their_own_detection() {
+        let cases: &[(&[u8], FileFormat)] = &[
+            (
+                b"<?xml version=\"1.0\" encoding=\"iso-8859-1\"?>\n\
+                  <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\">\n\
+                  <html><head><title>t</title></head></html>\n",
+                FileFormat::HTML,
+            ),
+            (
+                b"<html>\n<head><meta name=\"author\" content=\"x\"></head>\n</html>\n",
+                FileFormat::HTML,
+            ),
+            (
+                b"<?xml version=\"1.0\" standalone=\"yes\"?>\n<svg width=\"4in\"></svg>\n",
+                FileFormat::SVG,
+            ),
+            (
+                b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                  <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"x\">\n\
+                  <plist version=\"1.0\"><dict/></plist>\n",
+                FileFormat::Plist,
+            ),
+            (
+                b"<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
+                  <x:xmpmeta xmlns:x=\"adobe:ns:meta/\"></x:xmpmeta>\n",
+                FileFormat::XMP,
+            ),
+            (
+                // A plain XML document names no HTML element, so it must stay
+                // on the plain-text path rather than being claimed as HTML.
+                b"<?xml version='1.0' encoding='UTF-8'?>\n\
+                  <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\n\
+                  </rdf:RDF>\n",
+                FileFormat::TXT,
+            ),
+        ];
+        for (data, expected) in cases {
+            let reader = TestReader::new(data.to_vec());
+            assert_eq!(
+                detect_format(&reader).unwrap(),
+                *expected,
+                "misdetected: {}",
+                String::from_utf8_lossy(&data[..data.len().min(60)])
+            );
+        }
     }
 
     #[test]
