@@ -109,6 +109,20 @@ fn is_flag_short_option(ch: char) -> bool {
     matches!(ch, 'h' | 'V' | 'j' | 's' | 'a' | 'r' | 'e' | 'n')
 }
 
+/// Matches ExifTool's group-display flags: `-G`, `-g`, optionally followed by
+/// digits and/or colon-separated family numbers (`-G1`, `-g0`, `-G1:2`). Real
+/// tag names starting with 'G' (e.g. `-GPSLatitude`) contain letters after
+/// the 'G' and so never match.
+fn is_group_display_flag(arg: &str) -> bool {
+    let Some(body) = arg.strip_prefix('-') else {
+        return false;
+    };
+    let Some(rest) = body.strip_prefix('G').or_else(|| body.strip_prefix('g')) else {
+        return false;
+    };
+    rest.chars().all(|c| c.is_ascii_digit() || c == ':')
+}
+
 fn is_lexopt_short_arg(arg: &str) -> bool {
     let Some(body) = arg.strip_prefix('-') else {
         return false;
@@ -205,6 +219,18 @@ impl CliArgs {
             }
 
             let arg = normalize_exiftool_option(raw_arg);
+
+            // ExifTool's group-display flags (-G, -G0..-G8, -g, -g0..-g8, and
+            // colon-separated family lists like -G1:2) are accepted as a
+            // no-op: oxidex already prints "Group:Tag" key names
+            // unconditionally. Without this, an unrecognized "-G1" fell
+            // through to the tag-modification/specific-tag branch below and
+            // was treated as a request for a tag literally named "G1" --
+            // matching nothing and silently emptying the entire tag set
+            // (`-j -G1 -a` returned `[{}]` instead of the full extraction).
+            if is_group_display_flag(&arg) {
+                continue;
+            }
 
             // Keep tag modifications, date shifts, and specific tag extraction out of lexopt.
             // Supported short options and clusters still flow through lexopt.
@@ -827,6 +853,27 @@ fn print_version() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_display_flags_are_recognized() {
+        assert!(is_group_display_flag("-G"));
+        assert!(is_group_display_flag("-g"));
+        assert!(is_group_display_flag("-G0"));
+        assert!(is_group_display_flag("-G1"));
+        assert!(is_group_display_flag("-g2"));
+        assert!(is_group_display_flag("-G1:2"));
+    }
+
+    #[test]
+    fn tag_names_starting_with_g_are_not_group_display_flags() {
+        // Regression: `-G1` fell through to the specific-tag branch and was
+        // treated as a request for a tag literally named "G1", matching
+        // nothing and silently emptying the whole extraction.
+        assert!(!is_group_display_flag("-GPSLatitude"));
+        assert!(!is_group_display_flag("-GPSLatitude=1"));
+        assert!(!is_group_display_flag("photo.jpg"));
+        assert!(!is_group_display_flag("--json"));
+    }
 
     #[test]
     fn short_option_clusters_are_lexopt_args() {
