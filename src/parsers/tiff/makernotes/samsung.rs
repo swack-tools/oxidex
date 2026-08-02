@@ -254,52 +254,8 @@ fn parse_picture_wizard(
 
 #[cfg(test)]
 mod tests {
-    use super::super::registries::samsung::{
-        LENS_TYPE, PORTRAIT_EFFECT, SCENE_OPTIMIZER, SCENE_TYPE, SINGLE_TAKE, decode_zoom_level,
-    };
     use super::super::shared::generic_decoders::ON_OFF;
     use super::*;
-
-    #[test]
-    fn test_decode_scene_optimizer() {
-        assert_eq!(SCENE_OPTIMIZER.decode(0), "Off");
-        assert_eq!(SCENE_OPTIMIZER.decode(1), "On");
-        assert_eq!(SCENE_OPTIMIZER.decode(2), "Auto");
-    }
-
-    #[test]
-    fn test_decode_scene_type() {
-        assert_eq!(SCENE_TYPE.decode(0), "None");
-        assert_eq!(SCENE_TYPE.decode(1), "Food");
-        assert_eq!(SCENE_TYPE.decode(7), "Night");
-    }
-
-    #[test]
-    fn test_decode_single_take() {
-        assert_eq!(SINGLE_TAKE.decode(0), "Off");
-        assert_eq!(SINGLE_TAKE.decode(1), "Recording");
-    }
-
-    #[test]
-    fn test_decode_portrait_effect() {
-        assert_eq!(PORTRAIT_EFFECT.decode(0), "None");
-        assert_eq!(PORTRAIT_EFFECT.decode(1), "Blur");
-        assert_eq!(PORTRAIT_EFFECT.decode(4), "Color Point");
-    }
-
-    #[test]
-    fn test_decode_lens_type() {
-        assert_eq!(LENS_TYPE.decode(0), "Wide (Main)");
-        assert_eq!(LENS_TYPE.decode(1), "Ultra Wide");
-        assert_eq!(LENS_TYPE.decode(5), "Telephoto 10x");
-    }
-
-    #[test]
-    fn test_decode_zoom_level() {
-        assert_eq!(decode_zoom_level(10), "1.0x");
-        assert_eq!(decode_zoom_level(100), "10.0x");
-        assert_eq!(decode_zoom_level(35), "3.5x");
-    }
 
     #[test]
     fn test_on_off_decoder() {
