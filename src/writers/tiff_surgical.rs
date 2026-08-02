@@ -43,7 +43,7 @@ use crate::core::operations_helpers::{read_u16, read_u32};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::tag_db::lookup_tag_name;
-use crate::tag_db::tag_registry::get_tag_descriptor;
+use crate::tag_db::tag_registry::{declared_ieee_field_type, get_tag_descriptor};
 use crate::writers::exif_surgical::{
     IfdKind, descriptor_tag_id, native_to_byte_order, tag_value_to_field, validate_changed,
 };
@@ -342,7 +342,9 @@ pub fn rewrite_tiff_file(
             ExifToolError::parse_error(format!("Tag '{}' has no numeric EXIF id", key))
         })?;
         validate_changed(key, value)?;
-        let (ft, count, native) = tag_value_to_field(value, None)?;
+        // As in the EXIF writer: a created tag has no existing entry to take
+        // an IEEE 754 width from, so the declared type has to supply it.
+        let (ft, count, native) = tag_value_to_field(value, declared_ieee_field_type(key))?;
         let bytes = native_to_byte_order(ft, &native, bo);
 
         let bucket = if key.starts_with("ExifIFD:") {

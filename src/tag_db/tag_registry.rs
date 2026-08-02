@@ -6862,6 +6862,11 @@ fn yaml_format_info(table_name: &str) -> Option<(FormatFamily, &str)> {
 struct YamlTagEntry {
     descriptor: TagDescriptor,
     reliable_value_type: bool,
+    /// The raw `type:` string from the YAML, kept because `ValueType` is
+    /// lossy where TIFF is not: `parse_yaml_value_type` folds `float`,
+    /// `double` and `real` into a single `ValueType::Float`, but TIFF numbers
+    /// them 11 and 12 and `exiftool -validate` rejects the wrong one.
+    type_name: Option<String>,
 }
 
 /// Lazy-loaded registry of TagDescriptors built from YAML tag databases.
@@ -6910,6 +6915,7 @@ static YAML_TAG_ENTRIES: LazyLock<HashMap<String, YamlTagEntry>> = LazyLock::new
                         YamlTagEntry {
                             descriptor,
                             reliable_value_type,
+                            type_name: tag.type_name.clone(),
                         },
                     );
                 }
@@ -7013,6 +7019,49 @@ pub(crate) fn has_reliable_value_type(name: &str) -> bool {
                 .get(normalized_name.as_str())
                 .is_some_and(|entry| entry.reliable_value_type)
     })
+}
+
+/// Returns the TIFF field type a tag declares for IEEE 754 values: 11 (FLOAT)
+/// or 12 (DOUBLE).
+///
+/// `ValueType::Float` cannot answer this. `parse_yaml_value_type` folds
+/// `float`, `double` and `real` into that one variant, so the writer, given
+/// only a `TagValue::Float`, used to emit type 12 for every one of them.
+/// ExifTool declares `JXLDistance` (0xCD49) `Writable => 'float'`, so a double
+/// there is a real defect: `exiftool -validate` reports
+/// "Non-standard format (double) for IFD0 0xcd49 JXLDistance".
+///
+/// Returns `None` for tags that declare no float-family type, leaving the
+/// writer's existing default in place.
+pub(crate) fn declared_ieee_field_type(name: &str) -> Option<u16> {
+    fn field_type_of(entry: &YamlTagEntry) -> Option<u16> {
+        match entry.type_name.as_deref()?.to_ascii_lowercase().as_str() {
+            "float" => Some(11),
+            "double" => Some(12),
+            // `real` is ExifTool's unsized spelling and names no width, so it
+            // cannot pick between the two.
+            _ => None,
+        }
+    }
+
+    if let Some(entry) = YAML_TAG_ENTRIES.get(name) {
+        return field_type_of(entry);
+    }
+
+    let normalized_name = if name.starts_with("IFD0:")
+        || name.starts_with("IFD1:")
+        || name.starts_with("ExifIFD:")
+        || name.starts_with("InteropIFD:")
+    {
+        name.find(':')
+            .map(|colon_pos| format!("EXIF:{}", &name[colon_pos + 1..]))
+    } else {
+        None
+    };
+
+    normalized_name
+        .and_then(|normalized_name| YAML_TAG_ENTRIES.get(normalized_name.as_str()))
+        .and_then(field_type_of)
 }
 
 /// Reports whether `descriptor`'s value type came from reliable metadata.
