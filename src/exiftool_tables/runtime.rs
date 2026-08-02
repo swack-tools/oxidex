@@ -254,6 +254,7 @@ mod tests {
                 sub: None,
                 name: "Reversed",
                 format: Some(Fmt::Int16uRev),
+                count: 1,
                 print_conv: PrintConv::None,
             },
             Field {
@@ -261,6 +262,7 @@ mod tests {
                 sub: Some(1),
                 name: "BitField",
                 format: None,
+                count: 1,
                 print_conv: PrintConv::Expr(ExprId::Sprintf0fValB74070),
             },
         ];
