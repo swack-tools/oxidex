@@ -63,7 +63,7 @@ const FUJI_EXR_MODE: u16 = 0x1034;
 const FUJI_SHADOW_TONE: u16 = 0x1040;
 const FUJI_HIGHLIGHT_TONE: u16 = 0x1041;
 const FUJI_DIGITAL_ZOOM: u16 = 0x1044;
-const FUJI_LENS_MODEL_NAME: u16 = 0x1050;
+const FUJI_SHUTTER_TYPE: u16 = 0x1050;
 
 // Film Simulation and Color Tags
 //
@@ -96,7 +96,6 @@ const FUJI_EXPOSURE_COUNT: u16 = 0x1032;
 const FUJI_BLUR_WARNING: u16 = 0x1300;
 const FUJI_FOCUS_WARNING: u16 = 0x1301;
 const FUJI_EXPOSURE_WARNING: u16 = 0x1302;
-const FUJI_DYNAMIC_RANGE_WARNING: u16 = 0x1304;
 
 // RAF (RAW) Image Tags
 const FUJI_RAW_IMAGE_FULL_SIZE: u16 = 0xF000;
@@ -195,8 +194,8 @@ const_decoder!(pub
 const_decoder!(pub
     DECODE_WHITE_BALANCE, i32, [
         (0x0000, "Auto"),
-        (0x0001, "Auto (White Priority)"),
-        (0x0002, "Auto (Ambience Priority)"),
+        (0x0001, "Auto (white priority)"),
+        (0x0002, "Auto (ambiance priority)"),
         (0x0100, "Daylight"),
         (0x0200, "Cloudy"),
         (0x0300, "Daylight Fluorescent"),
@@ -336,7 +335,7 @@ const_decoder!(pub
         (0x0000, "F0/Standard (Provia)"),
         (0x0100, "F1/Studio Portrait"),
         (0x0110, "F1a/Studio Portrait Enhanced Saturation"),
-        (0x0120, "F1b/Studio Portrait Smooth Skin Tone"),
+        (0x0120, "F1b/Studio Portrait Smooth Skin Tone (Astia)"),
         (0x0130, "F1c/Studio Portrait Increased Sharpness"),
         (0x0200, "F2/Fujichrome (Velvia)"),
         (0x0300, "F3/Studio Portrait Ex"),
@@ -347,8 +346,8 @@ const_decoder!(pub
         (0x0700, "Eterna"),
         (0x0800, "Classic Negative"),
         (0x0900, "Bleach Bypass"),
-        (0x0A00, "Nostalgic Neg."),
-        (0x0B00, "Eterna Bleach Bypass"),
+        (0x0A00, "Nostalgic Neg"),
+        (0x0B00, "Reala ACE"),
     ]
 );
 
@@ -379,8 +378,8 @@ const_decoder!(pub
     DECODE_SHUTTER_TYPE, i32, [
         (0, "Mechanical"),
         (1, "Electronic"),
-        (2, "Electronic (Silent)"),
-        (3, "Mechanical + Electronic"),
+        (2, "Electronic (long shutter speed)"),
+        (3, "Electronic Front Curtain"),
     ]
 );
 
@@ -442,8 +441,8 @@ const_decoder!(pub
 const_decoder!(pub
     DECODE_EXR_MODE, i32, [
         (256, "HR (High Resolution)"),
-        (512, "SN (Signal-to-Noise Priority)"),
-        (768, "DR (Dynamic Range Priority)"),
+        (512, "SN (Signal to Noise priority)"),
+        (768, "DR (Dynamic Range priority)"),
     ]
 );
 
@@ -452,6 +451,48 @@ const_decoder!(pub
     DECODE_OFF_ON, i32, [
         (0, "Off"),
         (1, "On"),
+    ]
+);
+
+// The three "warning" tags at 0x1300/0x1301/0x1302 are *not* one shared
+// on/off flag. FujiFilm.pm gives each its own two-entry PrintConv and only
+// BlurWarning uses the word "None" at all:
+//
+//     0x1300 BlurWarning     0 => 'None', 1 => 'Blur Warning'   (:688-695)
+//     0x1301 FocusWarning    0 => 'Good', 1 => 'Out of focus'   (:696-702)
+//     0x1302 ExposureWarning 0 => 'Good', 1 => 'Bad exposure'   (:703-709)
+//
+// oxidex used to print a single invented `None`/`Warning` pair for all three,
+// which disagreed with ExifTool on 777 corpus files -- every file carrying
+// 0x1301 or 0x1302 at all, plus the 60 that set BlurWarning.
+const_decoder!(pub
+    DECODE_BLUR_WARNING, i32, [
+        (0, "None"),
+        (1, "Blur Warning"),
+    ]
+);
+
+const_decoder!(pub
+    DECODE_FOCUS_WARNING, i32, [
+        (0, "Good"),
+        (1, "Out of focus"),
+    ]
+);
+
+const_decoder!(pub
+    DECODE_EXPOSURE_WARNING, i32, [
+        (0, "Good"),
+        (1, "Bad exposure"),
+    ]
+);
+
+// EXRAuto (0x1033) is not an off/on flag either: FujiFilm.pm:617-624 spells
+// it 0 => 'Auto', 1 => 'Manual'. Decoding it through DECODE_OFF_ON printed
+// "Off"/"On" on all 7 EXR-capable corpus files.
+const_decoder!(pub
+    DECODE_EXR_AUTO, i32, [
+        (0, "Auto"),
+        (1, "Manual"),
     ]
 );
 
@@ -500,11 +541,11 @@ const_decoder!(pub
 // Decodes crop mode
 const_decoder!(pub
     DECODE_CROP_MODE, i32, [
-        (0, "None"),
-        (1, "Sports Finder Mode"),
-        (2, "1.25x Crop"),
-        (4, "Digital Teleconverter x1.4"),
-        (8, "Digital Teleconverter x2.0"),
+        (0, "n/a"),
+        (1, "Full-frame on GFX"),
+        (2, "Sports Finder Mode"),
+        (4, "Electronic Shutter 1.25x Crop"),
+        (8, "Digital Tele-Conv"),
     ]
 );
 
@@ -524,39 +565,44 @@ const_decoder!(pub
 const_decoder!(pub
     DECODE_PANORAMA_DIRECTION, i32, [
         (1, "Right"),
-        (2, "Up"),
-        (3, "Left"),
+        (2, "Left"),
+        (3, "Up"),
         (4, "Down"),
     ]
 );
 
-// Decodes advanced filter
+// Decodes AdvancedFilter (tag 0x1201). FujiFilm.pm:651-675 keys this on the
+// *high* half of a 32-bit value (0x10000 .. 0x130002), not on 0..0x10; the
+// dense 0-based table that used to live here shared not one id with
+// ExifTool's, so every filtered frame printed a label ExifTool never emits.
 const_decoder!(pub
     DECODE_ADVANCED_FILTER, i32, [
-        (0x0000, "Off"),
-        (0x0001, "Toy Camera"),
-        (0x0002, "Miniature"),
-        (0x0003, "Pop Color"),
-        (0x0004, "High Key"),
-        (0x0005, "Low Key"),
-        (0x0006, "Dynamic Tone"),
-        (0x0007, "Soft Focus"),
-        (0x0008, "Partial Color (Red)"),
-        (0x0009, "Partial Color (Yellow)"),
-        (0x000A, "Partial Color (Green)"),
-        (0x000B, "Partial Color (Blue)"),
-        (0x000C, "Partial Color (Orange)"),
-        (0x000D, "Partial Color (Purple)"),
-        (0x0010, "Rich & Fine"),
+        (0x10000, "Pop Color"),
+        (0x20000, "Hi Key"),
+        (0x30000, "Toy Camera"),
+        (0x40000, "Miniature"),
+        (0x50000, "Dynamic Tone"),
+        (0x60001, "Partial Color Red"),
+        (0x60002, "Partial Color Yellow"),
+        (0x60003, "Partial Color Green"),
+        (0x60004, "Partial Color Blue"),
+        (0x60005, "Partial Color Orange"),
+        (0x60006, "Partial Color Purple"),
+        (0x70000, "Soft Focus"),
+        (0x90000, "Low Key"),
+        (0x100000, "Light Leak"),
+        (0x130000, "Expired Film Green"),
+        (0x130001, "Expired Film Red"),
+        (0x130002, "Expired Film Neutral"),
     ]
 );
 
 // Decodes color mode
 const_decoder!(pub
     DECODE_COLOR_MODE, i32, [
-        (0, "Standard"),
-        (16, "Chrome"),
-        (32, "B&W"),
+        (0x00, "Standard"),
+        (0x10, "Chrome"),
+        (0x30, "B & W"),
     ]
 );
 
@@ -576,19 +622,41 @@ const_decoder!(pub
 const_decoder!(pub
     DECODE_SCENE_RECOGNITION, i32, [
         (0, "Unrecognized"),
-        (0x100, "Portrait"),
+        (0x100, "Portrait Image"),
         (0x103, "Night Portrait"),
         (0x105, "Backlit Portrait"),
-        (0x200, "Landscape"),
+        (0x200, "Landscape Image"),
         (0x300, "Night Scene"),
         (0x400, "Macro"),
     ]
 );
 
-// Decodes D-Range priority
+// D-Range priority is three tags with three different tables, not one
+// (FujiFilm.pm:795-819):
+//
+//     0x1443 DRangePriority      0 => 'Auto',  1 => 'Fixed'
+//     0x1444 DRangePriorityAuto  1 => 'Weak',  2 => 'Strong', 3 => 'Plus'
+//     0x1445 DRangePriorityFixed 1 => 'Weak',  2 => 'Strong'
+//
+// Decoding all three through one Auto/Weak/Strong map printed "Weak" where
+// ExifTool prints "Fixed".
 const_decoder!(pub
     DECODE_DRANGE_PRIORITY, i32, [
         (0, "Auto"),
+        (1, "Fixed"),
+    ]
+);
+
+const_decoder!(pub
+    DECODE_DRANGE_PRIORITY_AUTO, i32, [
+        (1, "Weak"),
+        (2, "Strong"),
+        (3, "Plus"),
+    ]
+);
+
+const_decoder!(pub
+    DECODE_DRANGE_PRIORITY_FIXED, i32, [
         (1, "Weak"),
         (2, "Strong"),
     ]
@@ -597,18 +665,18 @@ const_decoder!(pub
 // Decodes video recording mode
 const_decoder!(pub
     DECODE_VIDEO_RECORDING_MODE, i32, [
-        (0, "Normal"),
-        (1, "F-Log"),
-        (2, "HLG"),
+        (0x00, "Normal"),
+        (0x10, "F-log"),
+        (0x20, "HLG"),
+        (0x30, "F-log2"),
     ]
 );
 
 // Decodes video compression
 const_decoder!(pub
     DECODE_VIDEO_COMPRESSION, i32, [
-        (1, "H.264"),
-        (2, "H.265"),
-        (3, "ProRes"),
+        (1, "Log GOP"),
+        (2, "All Intra"),
     ]
 );
 
@@ -700,7 +768,7 @@ impl MakerNoteParser for FujifilmParser {
 
             match entry.tag_id {
                 // String tags
-                FUJI_VERSION | FUJI_LENS_MODEL_NAME => {
+                FUJI_VERSION => {
                     if let Some(value) = extract_string_value(&entry, data) {
                         let tag_name = fujifilm_tag_to_name(entry.tag_id);
                         tags.insert(tag_name, value);
@@ -877,21 +945,57 @@ impl MakerNoteParser for FujifilmParser {
                 }
 
                 // Boolean/On-Off tags
-                FUJI_MACRO | FUJI_SLOW_SYNC | FUJI_EXR_AUTO | FUJI_AUTO_DYNAMIC_RANGE => {
+                FUJI_MACRO | FUJI_SLOW_SYNC | FUJI_AUTO_DYNAMIC_RANGE => {
                     let value = entry.value_offset as i32;
                     let tag_name = fujifilm_tag_to_name(entry.tag_id);
                     tags.insert(tag_name, DECODE_OFF_ON.decode(value).to_string());
                 }
 
-                // Warning flags
-                FUJI_BLUR_WARNING
-                | FUJI_FOCUS_WARNING
-                | FUJI_EXPOSURE_WARNING
-                | FUJI_DYNAMIC_RANGE_WARNING => {
+                FUJI_EXR_AUTO => {
                     let value = entry.value_offset as i32;
-                    let tag_name = fujifilm_tag_to_name(entry.tag_id);
-                    let warning = if value == 0 { "None" } else { "Warning" };
-                    tags.insert(tag_name, warning.to_string());
+                    tags.insert(
+                        "FujiFilm:EXRAuto".to_string(),
+                        DECODE_EXR_AUTO.decode(value).to_string(),
+                    );
+                }
+
+                // 0x1050 is ShutterType (FujiFilm.pm:553-562, `#forum6109`),
+                // an int16u with a four-entry PrintConv. oxidex used to read
+                // it as a string and print it under the name
+                // "LensModelName", which appears in no ExifTool source file;
+                // on the 43 corpus files that carry the tag ExifTool prints
+                // `FujiFilm:ShutterType`.
+                FUJI_SHUTTER_TYPE => {
+                    let value = entry.value_offset as i32;
+                    tags.insert(
+                        "FujiFilm:ShutterType".to_string(),
+                        DECODE_SHUTTER_TYPE.decode(value).to_string(),
+                    );
+                }
+
+                // Warning flags -- one table each, see the decoders above.
+                FUJI_BLUR_WARNING => {
+                    let value = entry.value_offset as i32;
+                    tags.insert(
+                        "FujiFilm:BlurWarning".to_string(),
+                        DECODE_BLUR_WARNING.decode(value).to_string(),
+                    );
+                }
+
+                FUJI_FOCUS_WARNING => {
+                    let value = entry.value_offset as i32;
+                    tags.insert(
+                        "FujiFilm:FocusWarning".to_string(),
+                        DECODE_FOCUS_WARNING.decode(value).to_string(),
+                    );
+                }
+
+                FUJI_EXPOSURE_WARNING => {
+                    let value = entry.value_offset as i32;
+                    tags.insert(
+                        "FujiFilm:ExposureWarning".to_string(),
+                        DECODE_EXPOSURE_WARNING.decode(value).to_string(),
+                    );
                 }
 
                 // Lens focal length information: stored as rational64s (8
@@ -1157,7 +1261,7 @@ impl MakerNoteParser for FujifilmParser {
                     let value = entry.value_offset as i32;
                     tags.insert(
                         "MakerNotes:DRangePriorityAuto".to_string(),
-                        DECODE_DRANGE_PRIORITY.decode(value).to_string(),
+                        DECODE_DRANGE_PRIORITY_AUTO.decode(value).to_string(),
                     );
                 }
 
@@ -1165,7 +1269,7 @@ impl MakerNoteParser for FujifilmParser {
                     let value = entry.value_offset as i32;
                     tags.insert(
                         "MakerNotes:DRangePriorityFixed".to_string(),
-                        DECODE_DRANGE_PRIORITY.decode(value).to_string(),
+                        DECODE_DRANGE_PRIORITY_FIXED.decode(value).to_string(),
                     );
                 }
 
@@ -1281,7 +1385,7 @@ fn fujifilm_tag_to_name(tag_id: u16) -> String {
         FUJI_SHADOW_TONE => "ShadowTone",
         FUJI_HIGHLIGHT_TONE => "HighlightTone",
         FUJI_DIGITAL_ZOOM => "DigitalZoom",
-        FUJI_LENS_MODEL_NAME => "LensModelName",
+        FUJI_SHUTTER_TYPE => "ShutterType",
         FUJI_FILM_MODE => "FilmMode",
         FUJI_DYNAMIC_RANGE => "DynamicRange",
         FUJI_DYNAMIC_RANGE_SETTING => "DynamicRangeSetting",
@@ -1298,7 +1402,6 @@ fn fujifilm_tag_to_name(tag_id: u16) -> String {
         FUJI_BLUR_WARNING => "BlurWarning",
         FUJI_FOCUS_WARNING => "FocusWarning",
         FUJI_EXPOSURE_WARNING => "ExposureWarning",
-        FUJI_DYNAMIC_RANGE_WARNING => "DynamicRangeWarning",
         FUJI_RAW_IMAGE_FULL_WIDTH => "RawImageFullWidth",
         FUJI_RAW_IMAGE_FULL_HEIGHT => "RawImageFullHeight",
         FUJI_FRAME_NUMBER => "FrameNumber",
@@ -1690,12 +1793,158 @@ mod tests {
         assert_eq!(DECODE_DYNAMIC_RANGE_SETTING.decode(0x201), "Wide2 (400%)");
     }
 
+    // Every string below was read out of ExifTool's own PrintConv hash
+    // (dumped from the Perl symbol table, ExifTool 13.59) -- not out of an
+    // earlier version of this file. The ids chosen are the ones the two
+    // tables used to disagree on, so a revert to the old labels fails here.
     #[test]
     fn test_decode_shutter_type() {
         assert_eq!(DECODE_SHUTTER_TYPE.decode(0), "Mechanical");
         assert_eq!(DECODE_SHUTTER_TYPE.decode(1), "Electronic");
-        assert_eq!(DECODE_SHUTTER_TYPE.decode(2), "Electronic (Silent)");
+        assert_eq!(
+            DECODE_SHUTTER_TYPE.decode(2),
+            "Electronic (long shutter speed)"
+        );
+        assert_eq!(DECODE_SHUTTER_TYPE.decode(3), "Electronic Front Curtain");
         assert_eq!(DECODE_SHUTTER_TYPE.decode(99), "Unknown (99)");
+    }
+
+    /// FujiFilm.pm:688-709. Three tags, three tables; only BlurWarning ever
+    /// prints the word "None", and neither of the other two prints
+    /// "Warning".
+    #[test]
+    fn test_warning_tags_do_not_share_one_table() {
+        assert_eq!(DECODE_BLUR_WARNING.decode(0), "None");
+        assert_eq!(DECODE_BLUR_WARNING.decode(1), "Blur Warning");
+
+        assert_eq!(DECODE_FOCUS_WARNING.decode(0), "Good");
+        assert_eq!(DECODE_FOCUS_WARNING.decode(1), "Out of focus");
+
+        assert_eq!(DECODE_EXPOSURE_WARNING.decode(0), "Good");
+        assert_eq!(DECODE_EXPOSURE_WARNING.decode(1), "Bad exposure");
+
+        // The invented pair this replaced.
+        for d in [
+            &DECODE_BLUR_WARNING,
+            &DECODE_FOCUS_WARNING,
+            &DECODE_EXPOSURE_WARNING,
+        ] {
+            assert_ne!(d.decode(1), "Warning");
+        }
+        assert_ne!(DECODE_FOCUS_WARNING.decode(0), "None");
+        assert_ne!(DECODE_EXPOSURE_WARNING.decode(0), "None");
+    }
+
+    /// 0x1033 is Auto/Manual (FujiFilm.pm:617-624), not an off/on flag.
+    #[test]
+    fn test_decode_exr_auto_is_not_off_on() {
+        assert_eq!(DECODE_EXR_AUTO.decode(0), "Auto");
+        assert_eq!(DECODE_EXR_AUTO.decode(1), "Manual");
+        assert_ne!(DECODE_EXR_AUTO.decode(0), DECODE_OFF_ON.decode(0));
+        assert_ne!(DECODE_EXR_AUTO.decode(1), DECODE_OFF_ON.decode(1));
+    }
+
+    /// FujiFilm.pm:543-552. Value 0 is "n/a" and 1 is a GFX-only full-frame
+    /// marker; the old table started the crop labels one slot early.
+    #[test]
+    fn test_decode_crop_mode() {
+        assert_eq!(DECODE_CROP_MODE.decode(0), "n/a");
+        assert_eq!(DECODE_CROP_MODE.decode(1), "Full-frame on GFX");
+        assert_eq!(DECODE_CROP_MODE.decode(2), "Sports Finder Mode");
+        assert_eq!(DECODE_CROP_MODE.decode(4), "Electronic Shutter 1.25x Crop");
+        assert_eq!(DECODE_CROP_MODE.decode(8), "Digital Tele-Conv");
+    }
+
+    /// FujiFilm.pm:641-650: 2 is Left and 3 is Up, not the other way round.
+    #[test]
+    fn test_decode_panorama_direction() {
+        assert_eq!(DECODE_PANORAMA_DIRECTION.decode(1), "Right");
+        assert_eq!(DECODE_PANORAMA_DIRECTION.decode(2), "Left");
+        assert_eq!(DECODE_PANORAMA_DIRECTION.decode(3), "Up");
+        assert_eq!(DECODE_PANORAMA_DIRECTION.decode(4), "Down");
+    }
+
+    /// FujiFilm.pm:651-675 keys AdvancedFilter on the high half of a 32-bit
+    /// value. The old 0..0x10 table shared no id with ExifTool's at all.
+    #[test]
+    fn test_decode_advanced_filter() {
+        assert_eq!(DECODE_ADVANCED_FILTER.decode(0x10000), "Pop Color");
+        assert_eq!(DECODE_ADVANCED_FILTER.decode(0x40000), "Miniature");
+        assert_eq!(
+            DECODE_ADVANCED_FILTER.decode(0x60003),
+            "Partial Color Green"
+        );
+        assert_eq!(
+            DECODE_ADVANCED_FILTER.decode(0x130002),
+            "Expired Film Neutral"
+        );
+        // Nothing lives at the low ids the old table used.
+        for id in 0..=0x10 {
+            assert!(DECODE_ADVANCED_FILTER.decode(id).starts_with("Unknown ("));
+        }
+    }
+
+    /// Three D-Range tags, three tables (FujiFilm.pm:795-819).
+    #[test]
+    fn test_drange_priority_tags_do_not_share_one_table() {
+        assert_eq!(DECODE_DRANGE_PRIORITY.decode(0), "Auto");
+        assert_eq!(DECODE_DRANGE_PRIORITY.decode(1), "Fixed");
+        assert_eq!(DECODE_DRANGE_PRIORITY_AUTO.decode(3), "Plus");
+        assert_eq!(DECODE_DRANGE_PRIORITY_FIXED.decode(2), "Strong");
+        assert_ne!(DECODE_DRANGE_PRIORITY.decode(1), "Weak");
+    }
+
+    /// FujiFilm.pm:820-838. VideoRecordingMode is PrintHex with a 0x10 step;
+    /// VideoCompression is Log GOP / All Intra, not a codec name.
+    #[test]
+    fn test_decode_video_tables() {
+        assert_eq!(DECODE_VIDEO_RECORDING_MODE.decode(0x00), "Normal");
+        assert_eq!(DECODE_VIDEO_RECORDING_MODE.decode(0x10), "F-log");
+        assert_eq!(DECODE_VIDEO_RECORDING_MODE.decode(0x20), "HLG");
+        assert_eq!(DECODE_VIDEO_RECORDING_MODE.decode(0x30), "F-log2");
+
+        assert_eq!(DECODE_VIDEO_COMPRESSION.decode(1), "Log GOP");
+        assert_eq!(DECODE_VIDEO_COMPRESSION.decode(2), "All Intra");
+        assert_eq!(DECODE_VIDEO_COMPRESSION.decode(3), "Unknown (3)");
+    }
+
+    /// FujiFilm.pm:676-687. B&W sits at 0x30 and ExifTool spells it with
+    /// spaces around the ampersand.
+    #[test]
+    fn test_decode_color_mode() {
+        assert_eq!(DECODE_COLOR_MODE.decode(0x00), "Standard");
+        assert_eq!(DECODE_COLOR_MODE.decode(0x10), "Chrome");
+        assert_eq!(DECODE_COLOR_MODE.decode(0x30), "B & W");
+        assert_eq!(DECODE_COLOR_MODE.decode(0x20), "Unknown (32)");
+    }
+
+    /// FujiFilm.pm:725-745 and :206-233 -- exact spellings ExifTool prints.
+    #[test]
+    fn test_spellings_match_exiftool_exactly() {
+        assert_eq!(DECODE_FILM_MODE.decode(0x0B00), "Reala ACE");
+        assert_eq!(DECODE_FILM_MODE.decode(0x0A00), "Nostalgic Neg");
+        assert_eq!(
+            DECODE_FILM_MODE.decode(0x0120),
+            "F1b/Studio Portrait Smooth Skin Tone (Astia)"
+        );
+        assert_eq!(DECODE_WHITE_BALANCE.decode(1), "Auto (white priority)");
+        assert_eq!(DECODE_WHITE_BALANCE.decode(2), "Auto (ambiance priority)");
+        assert_eq!(
+            DECODE_EXR_MODE.decode(0x200),
+            "SN (Signal to Noise priority)"
+        );
+        assert_eq!(DECODE_EXR_MODE.decode(0x300), "DR (Dynamic Range priority)");
+        assert_eq!(DECODE_SCENE_RECOGNITION.decode(0x100), "Portrait Image");
+        assert_eq!(DECODE_SCENE_RECOGNITION.decode(0x200), "Landscape Image");
+    }
+
+    /// 0x1050 is ShutterType, and 0x1304 is GEImageSize on GE bodies only --
+    /// neither is "LensModelName" or "DynamicRangeWarning", names that appear
+    /// in no ExifTool source file.
+    #[test]
+    fn test_fabricated_tag_names_are_gone() {
+        assert_eq!(fujifilm_tag_to_name(0x1050), "FujiFilm:ShutterType");
+        assert_eq!(fujifilm_tag_to_name(0x1304), "FujiFilm:Unknown-0x1304");
     }
 
     #[test]
@@ -1733,8 +1982,8 @@ mod tests {
     #[test]
     fn test_decode_exr_mode() {
         assert_eq!(DECODE_EXR_MODE.decode(256), "HR (High Resolution)");
-        assert_eq!(DECODE_EXR_MODE.decode(512), "SN (Signal-to-Noise Priority)");
-        assert_eq!(DECODE_EXR_MODE.decode(768), "DR (Dynamic Range Priority)");
+        assert_eq!(DECODE_EXR_MODE.decode(512), "SN (Signal to Noise priority)");
+        assert_eq!(DECODE_EXR_MODE.decode(768), "DR (Dynamic Range priority)");
     }
 
     /// Exactly the four tags with a `SubDirectory` select a table, and no
