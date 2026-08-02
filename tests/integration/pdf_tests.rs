@@ -130,16 +130,13 @@ startxref
 %%EOF
 ";
 
-    let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join("test_special_chars.pdf");
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let temp_path = temp_dir.path().join("test_special_chars.pdf");
     std::fs::write(&temp_path, pdf_content).expect("Failed to write temp PDF");
 
     // Parse and verify
     let reader = BufferedReader::new(&temp_path).expect("Failed to open temp PDF");
     let result = parse_pdf_metadata(&reader);
-
-    // Clean up
-    let _ = std::fs::remove_file(&temp_path);
 
     assert!(result.is_ok(), "Failed to parse PDF: {:?}", result.err());
     let metadata = result.unwrap();
@@ -176,14 +173,12 @@ startxref
 %%EOF
 ";
 
-    let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join("test_minimal.pdf");
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let temp_path = temp_dir.path().join("test_minimal.pdf");
     std::fs::write(&temp_path, pdf_content).expect("Failed to write temp PDF");
 
     let reader = BufferedReader::new(&temp_path).expect("Failed to open temp PDF");
     let result = parse_pdf_metadata(&reader);
-
-    let _ = std::fs::remove_file(&temp_path);
 
     assert!(result.is_ok());
     let metadata = result.unwrap();
@@ -197,14 +192,12 @@ fn test_parse_invalid_pdf() {
     // Create invalid PDF (no valid signature)
     let invalid_content = b"This is not a PDF file";
 
-    let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join("test_invalid.pdf");
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let temp_path = temp_dir.path().join("test_invalid.pdf");
     std::fs::write(&temp_path, invalid_content).expect("Failed to write temp file");
 
     let reader = BufferedReader::new(&temp_path).expect("Failed to open temp file");
     let result = parse_pdf_metadata(&reader);
-
-    let _ = std::fs::remove_file(&temp_path);
 
     assert!(result.is_err(), "Should fail on invalid PDF");
     assert!(
@@ -252,14 +245,12 @@ startxref
 500
 %%EOF";
 
-    let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join("test_xmp.pdf");
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let temp_path = temp_dir.path().join("test_xmp.pdf");
     std::fs::write(&temp_path, pdf_with_xmp).expect("Failed to write temp PDF");
 
     let reader = BufferedReader::new(&temp_path).expect("Failed to open temp PDF");
     let result = parse_pdf_metadata(&reader);
-
-    let _ = std::fs::remove_file(&temp_path);
 
     // Should succeed
     assert!(
