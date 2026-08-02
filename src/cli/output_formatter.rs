@@ -255,7 +255,7 @@ impl OutputFormatter for JsonFormatter {
 /// Converts a TagValue to a serde_json::Value for Perl ExifTool-compatible output
 ///
 /// This unwraps the TagValue enum and produces simple JSON values:
-/// - String → JSON string
+/// - String → JSON string (except literal "true"/"false", which become JSON booleans)
 /// - Integer → JSON number
 /// - Float → JSON number
 /// - Rational → JSON string "numerator/denominator"
@@ -270,7 +270,18 @@ fn tag_value_to_json(tag_name: Option<&str>, value: &TagValue) -> serde_json::Va
     }
 
     match value {
-        TagValue::String(s) => serde_json::Value::String(s.clone()),
+        TagValue::String(s) => {
+            // Mirror the `exiftool` script's JSON typing (around line 3807):
+            // `return lc($str) if $str =~ /^(true|false)$/i` emits a bare
+            // JSON boolean for these two literal strings, not a quoted one.
+            if s.eq_ignore_ascii_case("true") {
+                serde_json::Value::Bool(true)
+            } else if s.eq_ignore_ascii_case("false") {
+                serde_json::Value::Bool(false)
+            } else {
+                serde_json::Value::String(s.clone())
+            }
+        }
         TagValue::Integer(i) => serde_json::json!(*i),
         TagValue::Float(f) => serde_json::json!(*f),
         TagValue::Rational {
@@ -1041,6 +1052,31 @@ mod tests {
         assert_eq!(
             format_tag_value_short("ExifIFD:FileSource", &binary),
             "(Binary data 1 bytes, use -b option to extract)"
+        );
+    }
+
+    /// ExifTool's `exiftool` script emits a bare JSON boolean for a tag whose
+    /// text value is literally "true"/"false" (case-insensitive), while `-s`
+    /// and the human-readable/CSV renderers still print the plain string.
+    #[test]
+    fn test_tag_value_to_json_boolean_string() {
+        let value = TagValue::new_string("false");
+        assert_eq!(
+            tag_value_to_json(Some("MPEG:CopyrightFlag"), &value),
+            serde_json::Value::Bool(false)
+        );
+        assert_eq!(format_tag_value("MPEG:CopyrightFlag", &value), "false");
+
+        let value = TagValue::new_string("True");
+        assert_eq!(
+            tag_value_to_json(Some("MPEG:OriginalMedia"), &value),
+            serde_json::Value::Bool(true)
+        );
+
+        let value = TagValue::new_string("falsehood");
+        assert_eq!(
+            tag_value_to_json(Some("EXIF:Make"), &value),
+            serde_json::Value::String("falsehood".to_string())
         );
     }
 
