@@ -11,9 +11,9 @@
 //! - Utility functions for reading multi-byte values in different byte orders
 
 use crate::core::TagValue;
-use crate::core::formatters::exiftool_rational_number;
+use crate::core::formatters::{exiftool_rational_number, print_exposure_time};
 use crate::core::operations_helpers::{
-    gcd, is_datetime_string, is_printable_ascii, parse_exif_datetime, read_i32, read_u16, read_u32,
+    is_datetime_string, is_printable_ascii, parse_exif_datetime, read_i32, read_u16, read_u32,
 };
 use crate::parsers::common::exif_types::ExifType;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
@@ -335,27 +335,31 @@ fn handle_rational_type(
         }
     }
 
-    // Special handling for ExposureTime - format as fraction string
-    // Match ExifTool's behavior: 1/N format for exposures < 1 second, decimal for >= 1 second
+    // ExposureTime (Exif.pm:1824) carries
+    // `PrintConv => 'Image::ExifTool::Exif::PrintExposureTime($val)'`, whose
+    // breakpoint is a quarter of a second, not one second (Exif.pm:5606):
+    //
+    //     if ($secs < 0.25001 and $secs > 0) {
+    //         return sprintf("1/%d",int(0.5 + 1/$secs));
+    //     }
+    //     $_ = sprintf("%.1f",$secs);
+    //     s/\.0$//;
+    //
+    // The hand-written formatter that used to live here split at 1.0 instead,
+    // so every exposure in [0.25001, 1) printed as a fraction ExifTool never
+    // prints -- 5/9 s came out `1/2` where ExifTool says `0.6`, and 0.8 s came
+    // out `1/1` where ExifTool says `0.8`. Both readings are plausible shutter
+    // speeds, so nothing downstream could tell they were wrong. It also left
+    // the trailing `.0` that `s/\.0$//` removes (`4.0` for ExifTool's `4`) and
+    // divided by a zero `$secs`, printing `1/18446744073709551615`.
+    //
+    // `print_exposure_time` is the verified port of that subroutine; use it
+    // rather than keeping a seventeenth private copy. (#340 consolidated the
+    // other sixteen but did not reach this one, which is the copy that renders
+    // the EXIF ExposureTime tag itself.)
     if tag_id == EXPOSURE_TIME && denominator != 0 {
-        let val = numerator as f64 / denominator as f64;
-        if val >= 1.0 {
-            // Show as decimal for exposure >= 1 second (e.g., "2.0")
-            return TagValue::new_string(format!("{:.1}", val));
-        } else {
-            // For exposures < 1 second, try to simplify first
-            let gcd_value = gcd(numerator, denominator);
-            let simplified_num = numerator / gcd_value;
-            let simplified_den = denominator / gcd_value;
-            if simplified_num == 1 {
-                // Already in 1/N form after simplification
-                return TagValue::new_string(format!("1/{}", simplified_den));
-            } else {
-                // Approximate to 1/N form like ExifTool does
-                let approx_denom = (1.0 / val).round() as u64;
-                return TagValue::new_string(format!("1/{}", approx_denom));
-            }
-        }
+        let secs = numerator as f64 / denominator as f64;
+        return TagValue::new_string(print_exposure_time(secs));
     }
 
     // TIFF RATIONAL (type 5) is UNSIGNED, but `TagValue::Rational` stores
@@ -771,7 +775,7 @@ fn heuristic_bytes_to_tag_value(bytes: &[u8], byte_order: ByteOrder) -> TagValue
 // UTILITY FUNCTIONS
 // ============================================================================
 // Note: Utility functions (read_u16, read_u32, read_i32, is_datetime_string,
-// parse_exif_datetime, gcd) are imported from operations_helpers module
+// parse_exif_datetime) are imported from operations_helpers module
 // to avoid duplication.
 
 /// Formats a GPS numeric value for ExifTool compatibility.
