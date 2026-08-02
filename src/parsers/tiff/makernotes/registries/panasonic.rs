@@ -17,12 +17,12 @@ use super::super::shared::tag_registry::TagRegistry;
 // Re-export decoders from panasonic.rs
 // These decoders are defined using const_decoder! macros in the main parser
 use super::super::panasonic::{
-    AF_ASSIST_LAMP, AUDIO, BRACKET_SETTINGS, BURST_MODE, CLEAR_RETOUCH, COLOR_EFFECT, COLOR_MODE,
-    CONTRAST_MODE, CONVERSION_LENS, FILM_MODE, FLASH_CURTAIN, FLASH_WARNING, FOCUS_MODE, HDR,
-    IMAGE_QUALITY, IMAGE_STABILIZATION, INTELLIGENT_D_RANGE, INTELLIGENT_EXPOSURE,
-    INTELLIGENT_RESOLUTION, LONG_EXPOSURE_NR, MACRO_MODE, NOISE_REDUCTION, OPTICAL_ZOOM_MODE,
-    PHOTO_STYLE, ROTATION, SELF_TIMER, SHADING_COMPENSATION, SHOOTING_MODE, SHUTTER_TYPE,
-    SWEEP_PANORAMA_DIRECTION, TEXT_STAMP, TIMER_RECORDING, TOUCH_AE, WHITE_BALANCE,
+    AF_ASSIST_LAMP, AUDIO, BRACKET_SETTINGS, BURST_MODE, CAMERA_ORIENTATION, CLEAR_RETOUCH,
+    COLOR_EFFECT, COLOR_MODE, CONTRAST_MODE, CONVERSION_LENS, FILM_MODE, FLASH_CURTAIN,
+    FLASH_WARNING, FOCUS_MODE, HDR, IMAGE_QUALITY, IMAGE_STABILIZATION, INTELLIGENT_D_RANGE,
+    INTELLIGENT_EXPOSURE, INTELLIGENT_RESOLUTION, LONG_EXPOSURE_NR, MACRO_MODE, NOISE_REDUCTION,
+    OPTICAL_ZOOM_MODE, PHOTO_STYLE, ROTATION, SELF_TIMER, SHADING_COMPENSATION, SHOOTING_MODE,
+    SHUTTER_TYPE, SWEEP_PANORAMA_DIRECTION, TEXT_STAMP, TIMER_RECORDING, TOUCH_AE, WHITE_BALANCE,
     WORLD_TIME_LOCATION,
 };
 
@@ -128,19 +128,29 @@ pub fn panasonic_registry() -> TagRegistry {
         .register_integer_tag(0x0086, "ManometerPressure", None)
         .register_enum_tag_required(0x0089, "PhotoStyle", &PHOTO_STYLE)
         .register_enum_tag_required(0x008A, "ShadingCompensation", &SHADING_COMPENSATION)
-        .register_integer_tag(0x008C, "AccelerometerZ", None)
-        .register_integer_tag(0x008D, "AccelerometerX", None)
-        .register_integer_tag(0x008E, "AccelerometerY", None)
-        .register_integer_tag(0x008F, "CameraOrientation", None)
-        .register_integer_tag(0x0090, "RollAngle", None)
-        .register_integer_tag(0x0091, "PitchAngle", None)
+        // 0x008C-0x008E are int16u on the wire but `Format => 'int16s'`
+        // overrides the read (Panasonic.pm:1170-1187): a plain unsigned
+        // decode turned a negative reading like -3 into 65533. Signed
+        // reinterpretation happens in parse_entry; no decoder needed here.
+        .register_raw(0x008C, "AccelerometerZ")
+        .register_raw(0x008D, "AccelerometerX")
+        .register_raw(0x008E, "AccelerometerY")
+        .register_enum_tag_required(0x008F, "CameraOrientation", &CAMERA_ORIENTATION)
+        // 0x0090/0x0091 are also int16u-wire/int16s-Format, plus ValueConv
+        // '$val/10' and '-$val/10' (Panasonic.pm:1200-1215). Handled in
+        // parse_entry alongside the accelerometer axes.
+        .register_raw(0x0090, "RollAngle")
+        .register_raw(0x0091, "PitchAngle")
         .register_enum_tag_required(0x0093, "SweepPanoramaDirection", &SWEEP_PANORAMA_DIRECTION)
         .register_integer_tag(0x0094, "SweepPanoramaFieldOfView", None)
         .register_enum_tag_required(0x0096, "TimerRecording", &TIMER_RECORDING)
         .register_raw(0x009D, "InternalNDFilter")
         .register_enum_tag_required(0x009E, "HDR", &HDR)
         .register_enum_tag_required(0x009F, "ShutterType", &SHUTTER_TYPE)
-        .register_integer_tag(0x00A3, "ClearRetouchValue", None)
+        // rational64u with no ValueConv/PrintConv (Panasonic.pm:1305-1309);
+        // handled in parse_entry so 0/0 reads "undef" per GetRational64u
+        // instead of the wrong integer decode of the raw numerator bytes.
+        .register_raw(0x00A3, "ClearRetouchValue")
         .register_enum_tag_required(0x00AB, "TouchAE", &TOUCH_AE)
         // ====================================================================
         // Additional integer/numeric tags
