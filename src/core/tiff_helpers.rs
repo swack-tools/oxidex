@@ -1021,6 +1021,84 @@ pub fn parse_ifd1_thumbnail(
     );
 }
 
+/// Parses the Leica-preview IFD (IFD2) that follows IFD1 and emits
+/// `PreviewImage`.
+///
+/// A JPEG's APP1 EXIF payload can chain IFD0 -> IFD1 -> IFD2; Leica JPEGs use
+/// IFD2 to carry a second, larger preview. `Exif.pm:707-768` excludes APP1's
+/// IFD2 from the generic `StripOffsets`/`StripByteCounts` naming for tags
+/// `0x0111`/`0x0117` (comment: "APP1 IFD2 is for Leica JPEG preview"),
+/// naming the pair `PreviewImageStart`/`PreviewImageLength` with
+/// `DataTag => 'PreviewImage'` instead.
+///
+/// `reader` must address the TIFF structure itself (offset 0 == TIFF
+/// header) - the same convention `parse_ifd1_thumbnail` uses - since the
+/// offsets stored in IFD2 are TIFF-relative and `read_or_placeholder` reads
+/// directly against `reader`.
+pub fn parse_ifd2_preview_image(
+    reader: &dyn FileReader,
+    ifd0_offset: u64,
+    ifd0_entry_count: usize,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    let Some(ifd1_offset) = next_ifd_offset(reader, ifd0_offset, ifd0_entry_count, byte_order)
+    else {
+        return;
+    };
+
+    let mut visited = visited_directory_offsets(reader, ifd0_offset, byte_order);
+    if visited.contains(&ifd1_offset) {
+        return;
+    }
+
+    let Ok(ifd1_entries) = parse_ifd(reader, ifd1_offset, byte_order) else {
+        return;
+    };
+
+    let Some(ifd2_offset) = next_ifd_offset(reader, ifd1_offset, ifd1_entries.len(), byte_order)
+    else {
+        return;
+    };
+
+    visited.push(ifd1_offset);
+    if visited.contains(&ifd2_offset) {
+        return;
+    }
+
+    let Ok(ifd2_entries) = parse_ifd(reader, ifd2_offset, byte_order) else {
+        return;
+    };
+
+    let mut preview_start: Option<u64> = None;
+    let mut preview_length: Option<u64> = None;
+    for (tag_id, field_type, value_count, raw_bytes) in &ifd2_entries {
+        match *tag_id {
+            0x0111 => {
+                preview_start =
+                    read_unsigned_field(raw_bytes, *field_type, *value_count, *tag_id, byte_order);
+            }
+            0x0117 => {
+                preview_length =
+                    read_unsigned_field(raw_bytes, *field_type, *value_count, *tag_id, byte_order);
+            }
+            _ => {}
+        }
+    }
+
+    let (Some(start), Some(length)) = (preview_start, preview_length) else {
+        return;
+    };
+    if length == 0 {
+        return;
+    }
+
+    metadata.insert(
+        "IFD2:PreviewImage",
+        read_or_placeholder(reader, start, length),
+    );
+}
+
 /// The value ExifTool reports for a binary tag: the bytes when the range is
 /// readable, and the length-only placeholder when it is not.
 ///
@@ -1168,6 +1246,26 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
         return;
     }
 
+    // Sony's own `PreviewImage` (0x2001) is deliberately absent from Sony's
+    // string-map `MAIN_TABLE`: its value routinely lives outside the
+    // MakerNote payload the dispatcher hands that table, so it needs the
+    // whole TIFF block the way Sigma's preview does. Unlike Sigma this is an
+    // addition alongside the normal dispatch below, not a replacement for
+    // it - every other Sony tag reaches metadata through the ordinary path.
+    parse_sony_preview_image_if_sony(&make, ctx, metadata);
+
+    // Casio Type2's `PreviewImage` (0x2000) and Olympus's (via
+    // `CameraSettings` 0x0100/0x0101/0x0102) and Minolta's (via 0x0081 or
+    // 0x0088/0x0089) are the same shape: a value the string-map dispatcher's
+    // `HashMap<String, String>` can't carry, needing `MetadataMap`/
+    // `TagValue::Binary` and (for Olympus/Minolta) the whole TIFF block the
+    // way Sigma's/Sony's do. All three are additions alongside the normal
+    // dispatch below, not a replacement for it - every other tag from these
+    // makes still reaches metadata through the ordinary path.
+    parse_casio_preview_image_if_casio(&make, ctx, byte_order, metadata);
+    parse_olympus_preview_image_if_olympus(&make, ctx, byte_order, metadata);
+    parse_minolta_preview_image_if_minolta(&make, ctx, byte_order, metadata);
+
     // Parse MakerNote using the dispatcher
     let mut makernote_tags = HashMap::new();
     let mut value_forms = HashMap::new();
@@ -1236,6 +1334,91 @@ fn parse_sigma_makernote_if_sigma(
         metadata,
     );
     true
+}
+
+/// Extracts Sony MakerNotes 0x2001 (`PreviewImage`) when `make` is Sony.
+///
+/// A no-op for any other make. See
+/// [`crate::parsers::tiff::makernotes::sony::parse_sony_preview_image_tag`]
+/// for why this needs the `MakerNoteContext`'s full TIFF block rather than
+/// the payload the string-map dispatcher's trait receives.
+fn parse_sony_preview_image_if_sony(
+    make: &str,
+    ctx: &MakerNoteContext<'_>,
+    metadata: &mut MetadataMap,
+) {
+    if make.trim().to_ascii_lowercase() != "sony" {
+        return;
+    }
+    crate::parsers::tiff::makernotes::sony::parse_sony_preview_image_tag(ctx, metadata);
+}
+
+/// Extracts Casio Type2's `PreviewImage` (0x2000) when `make` is Casio.
+///
+/// A no-op for any other make, and for a Casio Type1 ("Main") payload, which
+/// has no 0x2000 tag. Matches by prefix rather than
+/// `makernote_dispatcher.rs`'s exact-match `"casio computer co.,ltd."` entry,
+/// which carries a trailing period the real `Make` string
+/// (`"CASIO COMPUTER CO.,LTD"`, verified on `Casio2.jpg`) does not have and
+/// so never matches -- a pre-existing dispatcher bug out of this task's
+/// scope to fix, but not one worth reproducing here.
+/// See [`crate::parsers::tiff::makernotes::casio::parse_casio_preview_image_tag`].
+fn parse_casio_preview_image_if_casio(
+    make: &str,
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    if !make.trim().to_ascii_lowercase().starts_with("casio") {
+        return;
+    }
+    crate::parsers::tiff::makernotes::casio::parse_casio_preview_image_tag(
+        ctx, byte_order, metadata,
+    );
+}
+
+/// Extracts Olympus's `PreviewImage` (`CameraSettings` 0x0100/0x0101/0x0102)
+/// when `make` starts with "olympus" or "om digital solutions" - the same
+/// prefix match `makernote_dispatcher.rs` uses to route to `OlympusParser`.
+///
+/// A no-op for any other make. See
+/// [`crate::parsers::tiff::makernotes::olympus::parse_olympus_preview_image_tag`].
+fn parse_olympus_preview_image_if_olympus(
+    make: &str,
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    let make = make.trim().to_ascii_lowercase();
+    if !(make.starts_with("olympus") || make.starts_with("om digital solutions")) {
+        return;
+    }
+    crate::parsers::tiff::makernotes::olympus::parse_olympus_preview_image_tag(
+        ctx, byte_order, metadata,
+    );
+}
+
+/// Extracts Minolta's `PreviewImage` (0x0081, or the 0x0088/0x0089 offset
+/// pair) when `make` is Minolta or Konica Minolta - the same match
+/// `makernote_dispatcher.rs` uses to route to `MinoltaParser`.
+///
+/// A no-op for any other make. See
+/// [`crate::parsers::tiff::makernotes::minolta::parse_minolta_preview_image_tag`].
+fn parse_minolta_preview_image_if_minolta(
+    make: &str,
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    if !matches!(
+        make.trim().to_ascii_lowercase().as_str(),
+        "minolta" | "konica minolta" | "minolta co., ltd."
+    ) {
+        return;
+    }
+    crate::parsers::tiff::makernotes::minolta::parse_minolta_preview_image_tag(
+        ctx, byte_order, metadata,
+    );
 }
 
 #[cfg(test)]
@@ -1952,5 +2135,134 @@ mod makernote_window_tests {
 
         assert_eq!(ctx.tiff_base(), 292);
         assert_eq!(ctx.tiff()[0..2], *b"II", "index 0 is the TIFF header");
+    }
+}
+
+#[cfg(test)]
+mod ifd2_preview_image_tests {
+    use super::*;
+
+    const LONG: u16 = 4;
+    /// Offset of IFD0 within the synthetic TIFF built below (right after the
+    /// 8-byte TIFF header).
+    const TIFF_HEADER_SIZE: u64 = 8;
+
+    /// Builds a little-endian TIFF: IFD0 (no entries) -> IFD1 (no entries) ->
+    /// IFD2 carrying `0x0111`=`preview_start` (LONG) and `0x0117`=`preview_length`
+    /// (LONG), followed by `trailing` bytes.
+    ///
+    /// Layout: header(8) | IFD0(6) @8 | IFD1(6) @14 | IFD2(30) @20 | trailing @50
+    /// so IFD2's declared entries always point at offset 50 regardless of the
+    /// `preview_length` value under test.
+    fn build_tiff_with_ifd2(preview_start: u32, preview_length: u32, trailing: &[u8]) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II");
+        data.extend_from_slice(&42u16.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes()); // IFD0 at 8
+
+        // IFD0: no entries, next -> IFD1 at 14
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&14u32.to_le_bytes());
+
+        // IFD1: no entries, next -> IFD2 at 20
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&20u32.to_le_bytes());
+
+        // IFD2: PreviewImageStart (0x0111) and PreviewImageLength (0x0117), no next IFD
+        data.extend_from_slice(&2u16.to_le_bytes());
+        data.extend_from_slice(&0x0111u16.to_le_bytes());
+        data.extend_from_slice(&LONG.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&preview_start.to_le_bytes());
+        data.extend_from_slice(&0x0117u16.to_le_bytes());
+        data.extend_from_slice(&LONG.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&preview_length.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes()); // no IFD3
+
+        assert_eq!(
+            data.len(),
+            50,
+            "IFD2 entries assume trailing data starts at 50"
+        );
+        data.extend_from_slice(trailing);
+        data
+    }
+
+    fn build_tiff_with_ifd2_preview(preview_bytes: &[u8]) -> Vec<u8> {
+        build_tiff_with_ifd2(50, preview_bytes.len() as u32, preview_bytes)
+    }
+
+    fn build_tiff_with_ifd2_preview_oob(declared_length: u32) -> Vec<u8> {
+        // PreviewImageLength points well past the end of the buffer.
+        build_tiff_with_ifd2(50, declared_length, &[])
+    }
+
+    // These tests call `parse_ifd2_preview_image` directly rather than
+    // `parse_ifd_chain`: the rename/extraction only belongs to the
+    // APP1/JPEG-embedded case (Exif.pm:707-768's "APP1 IFD2 is for Leica
+    // JPEG preview"), and `parse_ifd2_preview_image` -- called only from
+    // `jpeg_helpers.rs`'s JPEG-specific handler -- is the sole code path
+    // that implicitly gates on that. `parse_ifd_chain`/`process_tiff_ifd_tags`
+    // serve the standalone-TIFF/DNG/CR2/NEF path (`operations.rs`) and must
+    // keep naming 0x111/0x117 as StripOffsets/StripByteCounts unconditionally
+    // there -- a chained IFD2 in a real standalone TIFF is not a Leica
+    // preview and must not be mis-renamed.
+    #[test]
+    fn ifd2_preview_image_start_length_pair_becomes_preview_image() {
+        // Build a minimal TIFF: IFD0 (no entries of interest, next-IFD -> IFD1),
+        // IFD1 (no entries of interest, next-IFD -> IFD2),
+        // IFD2 with tag 0x0111 (PreviewImageStart) = some in-bounds offset and
+        // tag 0x0117 (PreviewImageLength) = a small length, followed by that many
+        // real bytes at that offset.
+        let preview_bytes = b"\xff\xd8\xff\xdbFAKEPREVIEWDATA";
+        let buffer = build_tiff_with_ifd2_preview(preview_bytes);
+        let reader = crate::io::buffered_reader::BufferedReader::from_bytes(&buffer);
+        let mut metadata = MetadataMap::new();
+
+        parse_ifd2_preview_image(
+            &reader,
+            TIFF_HEADER_SIZE,
+            0,
+            ByteOrder::LittleEndian,
+            &mut metadata,
+        );
+
+        assert_eq!(
+            metadata.get("IFD2:PreviewImage"),
+            Some(&TagValue::new_binary(preview_bytes.to_vec()))
+        );
+        assert!(metadata.get("IFD2:StripOffsets").is_none());
+        assert!(metadata.get("IFD2:StripByteCounts").is_none());
+    }
+
+    #[test]
+    fn ifd2_preview_image_shows_placeholder_when_out_of_bounds() {
+        // Same shape, but PreviewImageLength points past the end of the buffer.
+        // Real ExifTool still reports the tag here (LeicaCL.jpg ground truth:
+        // IFD2:PreviewImageStart=7064224 in a 50,939-byte file, yet
+        // IFD2:PreviewImage is the placeholder, not omitted) because
+        // ExtractBinary's shortcut returns the declared-length placeholder
+        // before ever seeking. Mirror ThumbnailImage's `read_or_placeholder`.
+        let declared_length = 895146u64;
+        let buffer = build_tiff_with_ifd2_preview_oob(declared_length as u32);
+        let reader = crate::io::buffered_reader::BufferedReader::from_bytes(&buffer);
+        let mut metadata = MetadataMap::new();
+
+        parse_ifd2_preview_image(
+            &reader,
+            TIFF_HEADER_SIZE,
+            0,
+            ByteOrder::LittleEndian,
+            &mut metadata,
+        );
+
+        assert_eq!(
+            metadata.get("IFD2:PreviewImage"),
+            Some(&TagValue::new_string(format!(
+                "(Binary data {} bytes, use -b option to extract)",
+                declared_length
+            )))
+        );
     }
 }

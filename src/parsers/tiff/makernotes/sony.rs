@@ -47,9 +47,11 @@ pub mod main_table;
 pub mod plain_tables;
 pub mod value;
 
+use crate::core::{MetadataMap, TagValue};
 use crate::error::Result;
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
+use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
 use std::collections::HashMap;
 
 use super::shared::MakerNoteParser;
@@ -90,6 +92,12 @@ const TAG_SHOT_INFO: u16 = 0x3000;
 /// `$$self{AFAreaILCA}` (Sony.pm:1279, 1297), which four of `AFPointSelected`'s
 /// five arms are gated on.
 const TAG_AF_AREA_MODE_SETTING: u16 = 0x201c;
+
+/// `PreviewImage` (Sony.pm:906-939). Deliberately absent from [`MAIN_TABLE`]
+/// - see [`parse_sony_preview_image_tag`] for why this tag needs the whole
+/// TIFF block rather than the MakerNote payload [`SonyIfd::value`] resolves
+/// against.
+const TAG_PREVIEW_IMAGE: u16 = 0x2001;
 
 /// The three `CameraSettings` layouts the A-mount bodies write into 0x0114,
 /// chosen by the entry's byte count exactly as ExifTool's Conditions do, with
@@ -647,6 +655,160 @@ pub fn parse_sony_makernote(
     }
 }
 
+/// Locates Sony MakerNotes 0x2001 (`PreviewImage`) in the IFD and, if its
+/// value follows the Sony.pm:906-939 header-strip/SOI-fixup shape, inserts
+/// `MakerNotes:PreviewImage` as binary data.
+///
+/// Every other Sony tag is read through [`SonyIfd::value`], which resolves an
+/// out-of-line value against the MakerNote *payload* alone (`data_base`
+/// converts a TIFF-relative offset into an index into that same payload).
+/// 0x2001 breaks that assumption: ExifTool's own comments (Sony.pm:918-927)
+/// and DSLR-A350.jpg/SLT-A77.jpg both show the preview living well outside
+/// the MakerNote block, at a TIFF-relative offset the payload slice cannot
+/// reach. So this walks the IFD the same way [`parse_sony_makernote_impl`]
+/// does, but resolves 0x2001's value against the whole TIFF block
+/// (`ctx.tiff()`, offset 0 == TIFF header, mirroring `sigma::parse_sigma_makernote`)
+/// instead.
+///
+/// Emits nothing when the tag is absent from the IFD or its declared value is
+/// four bytes or fewer (never a real preview). Otherwise, mirrors Task 1's
+/// `read_or_placeholder` split: real transformed bytes when the value can
+/// actually be read from `ctx.tiff()` (via [`parse_sony_preview_image`]), or
+/// - when it can't (offset out of bounds/truncated, as every sampled Sony
+/// corpus file in this cache is) - the placeholder string built from the
+/// entry's *declared* byte count. ExifTool's `ExtractBinary` shortcut reports
+/// that placeholder in default-dump mode without ever attempting the read
+/// (verified against `SonyDSLR-A700.jpg`: `exiftool -G1 -s -a -u` shows
+/// `[Sony] PreviewImage : (Binary data 696508 bytes, use -b option to
+/// extract)` even though `exiftool -b -Sony:PreviewImage` on the same file
+/// fails with `[minor] Error reading PreviewImage`), so omitting here would
+/// disagree with ExifTool's real default output.
+pub fn parse_sony_preview_image_tag(ctx: &MakerNoteContext<'_>, metadata: &mut MetadataMap) {
+    let data = ctx.payload();
+    if data.is_empty() {
+        return;
+    }
+
+    let header_skip =
+        if data.starts_with(SONY_DSC_SIGNATURE) || data.starts_with(SONY_CAM_SIGNATURE) {
+            SONY_HEADER_LEN
+        } else if data.starts_with(SONY_SIGNATURE) {
+            find_ifd_start(&data[SONY_SIGNATURE.len()..]) + SONY_SIGNATURE.len()
+        } else {
+            0
+        };
+    let ifd_start = if header_skip < data.len() {
+        header_skip
+    } else {
+        0
+    };
+    let ifd_data = &data[ifd_start..];
+    if ifd_data.len() < 2 {
+        return;
+    }
+
+    let entry_count_le = u16::from_le_bytes([ifd_data[0], ifd_data[1]]);
+    let entry_count_be = u16::from_be_bytes([ifd_data[0], ifd_data[1]]);
+    let is_reasonable = |count: u16| (1..=MAX_ENTRIES).contains(&count);
+    let (entry_count, byte_order) = if is_reasonable(entry_count_le) {
+        (entry_count_le, ByteOrder::LittleEndian)
+    } else if is_reasonable(entry_count_be) {
+        (entry_count_be, ByteOrder::BigEndian)
+    } else {
+        return;
+    };
+
+    let entries = read_entries(&ifd_data[2..], entry_count, byte_order);
+    let Some(entry) = entries.iter().find(|e| e.tag_id == TAG_PREVIEW_IMAGE) else {
+        return;
+    };
+    let Some(size) = type_size(entry.field_type) else {
+        return;
+    };
+    let Some(total) = size.checked_mul(entry.value_count as usize) else {
+        return;
+    };
+    // A value this small is stored inline in the entry, never a JPEG preview;
+    // ExifTool only ever addresses this tag out-of-line.
+    if total <= 4 {
+        return;
+    }
+
+    let tiff = ctx.tiff();
+    let offset = entry.value_offset as usize;
+    let raw = offset
+        .checked_add(total)
+        .and_then(|end| tiff.get(offset..end));
+
+    match raw {
+        Some(raw) => parse_sony_preview_image(raw, metadata),
+        None => {
+            metadata.insert(
+                "MakerNotes:PreviewImage",
+                TagValue::new_string(format!(
+                    "(Binary data {total} bytes, use -b option to extract)"
+                )),
+            );
+        }
+    }
+}
+
+/// Sony.pm:906-939 RawConv for MakerNotes 0x2001: strip a 32-byte proprietary
+/// header, then require the next byte to be arbitrary and the three after it
+/// to be `D8 FF DB` or `D8 FF E1` (a JPEG SOI missing its leading FF), and
+/// reconstruct that FF.
+///
+/// Mirrors Task 1's `read_or_placeholder` two-way split, per the corrected
+/// Global Constraints (verified against `SonyDSLR-A700.jpg`'s full-dump
+/// output): when the pattern doesn't match but `raw` bytes were actually
+/// read, ExifTool's default view still reports the placeholder built from the
+/// *raw, untransformed* declared byte count - RawConv never ran, so this is
+/// not the transformed length. Only when `raw` itself is empty is nothing
+/// inserted at all.
+///
+/// **Known divergence on the `matches_soi` success path (untested in the
+/// current corpus - every sampled Sony file hits the placeholder branch
+/// above instead, since all are truncated):** this function stores the
+/// *actual transformed* bytes (`raw.len() - 0x20 + 1` of them, after
+/// stripping the 32-byte header and reconstructing the SOI marker), so a
+/// future `-b`/binary-extraction feature reads correct preview bytes. But
+/// real ExifTool's default (non-`-b`) view would NOT show that count: the
+/// `ExtractBinary` pre-seek shortcut (see the correction note on Task 3 in
+/// `docs/plans/2026-08-02-preview-image-composite-plan.md`) prints the
+/// *entry's raw, untransformed* declared byte count in the placeholder
+/// string before RawConv ever runs - RawConv (this header-strip/SOI-fixup)
+/// only executes when a value is actually extracted (e.g. via `-b`), which
+/// the default dump path never triggers. So on this success path oxidex's
+/// default output is ~31 bytes lower than ExifTool's (`raw.len() - 0x1f`
+/// vs. `raw.len()`). This is a deliberate tradeoff, not a bug: storing the
+/// real transformed value keeps a future binary-extraction feature correct,
+/// at the cost of a byte-count mismatch in the default text view that no
+/// current corpus sample can exercise. Do not "fix" this by storing
+/// `raw.len()` instead - that would make `-b` extraction wrong instead.
+pub fn parse_sony_preview_image(raw: &[u8], metadata: &mut MetadataMap) {
+    if raw.is_empty() {
+        return;
+    }
+
+    let body = if raw.len() > 0x20 { &raw[0x20..] } else { raw };
+    let matches_soi =
+        body.len() >= 4 && body[1] == 0xd8 && body[2] == 0xff && matches!(body[3], 0xdb | 0xe1);
+
+    let value = if matches_soi {
+        let rest = &body[1..];
+        let mut fixed = Vec::with_capacity(rest.len() + 1);
+        fixed.push(0xff);
+        fixed.extend_from_slice(rest);
+        TagValue::new_binary(fixed)
+    } else {
+        TagValue::new_string(format!(
+            "(Binary data {} bytes, use -b option to extract)",
+            raw.len()
+        ))
+    };
+    metadata.insert("MakerNotes:PreviewImage", value);
+}
+
 // ============================================================================
 // Unit Tests
 // ============================================================================
@@ -762,6 +924,140 @@ mod tests {
         assert_eq!(
             tags.get("Sony:CreativeStyle"),
             Some(&"Standard".to_string())
+        );
+    }
+
+    #[test]
+    fn sony_0x2001_tag_is_extracted_from_outside_the_makernote_payload() {
+        // Mirrors `a_tiff_base_makes_out_of_line_values_readable`, but for
+        // 0x2001: the preview blob is placed well past the end of the
+        // MakerNote payload, which is exactly what DSLR-A350.jpg-style files
+        // look like (Sony.pm:918-927) and why `parse_sony_preview_image_tag`
+        // has to read `ctx.tiff()` rather than `SonyIfd::value`.
+        let mut preview = vec![0u8; 32]; // proprietary 32-byte header
+        preview.push(0x00); // arbitrary byte the RawConv regex discards
+        preview.extend_from_slice(b"\xd8\xff\xdbFAKEBODY");
+        let expected = {
+            let mut v = vec![0xff];
+            v.extend_from_slice(b"\xd8\xff\xdbFAKEBODY");
+            v
+        };
+
+        // The preview sits at TIFF-relative offset 2000, far past the
+        // MakerNote's own payload.
+        let data = build_makernote(&[(TAG_PREVIEW_IMAGE, 7, preview.len() as u32, 2000)]);
+
+        let mut tiff = vec![0u8; 1000];
+        let payload_len = data.len();
+        tiff.extend_from_slice(&data);
+        tiff.resize(2000, 0);
+        tiff.extend_from_slice(&preview);
+
+        let ctx = crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext::in_tiff(
+            &tiff,
+            1000,
+            payload_len,
+            0,
+        );
+
+        let mut metadata = crate::core::MetadataMap::new();
+        parse_sony_preview_image_tag(&ctx, &mut metadata);
+
+        assert_eq!(
+            metadata.get("MakerNotes:PreviewImage"),
+            Some(&crate::core::TagValue::new_binary(expected))
+        );
+    }
+
+    #[test]
+    fn sony_0x2001_strips_header_and_fixes_soi_marker() {
+        // 32-byte fake header, then a single garbage byte, then D8 FF DB + fake JPEG body.
+        let mut raw = vec![0u8; 32];
+        raw.push(0x00); // the arbitrary byte the RawConv regex discards
+        raw.extend_from_slice(b"\xd8\xff\xdbFAKEBODY");
+        let expected = {
+            let mut v = vec![0xff];
+            v.extend_from_slice(b"\xd8\xff\xdbFAKEBODY");
+            v
+        };
+
+        let mut metadata = crate::core::MetadataMap::new();
+        parse_sony_preview_image(&raw, &mut metadata);
+
+        assert_eq!(
+            metadata.get("MakerNotes:PreviewImage"),
+            Some(&crate::core::TagValue::new_binary(expected))
+        );
+    }
+
+    #[test]
+    fn sony_0x2001_shows_placeholder_with_raw_length_when_no_valid_soi() {
+        // Sony.pm:906-939's RawConv doesn't match here, but ExifTool's
+        // default-dump output still isn't an omission for a present, non-empty
+        // value - it's the placeholder built from the *raw* (pre-strip)
+        // declared byte count, exactly like `SonyDSLR-A700.jpg`'s real
+        // `[Sony] PreviewImage : (Binary data 696508 bytes, use -b option to
+        // extract)` output even though its RawConv also never resolves to
+        // real bytes (the file is truncated).
+        let mut raw = vec![0u8; 32];
+        raw.extend_from_slice(b"NOTAJPEGHEADERATALL");
+        let raw_len = raw.len();
+
+        let mut metadata = crate::core::MetadataMap::new();
+        parse_sony_preview_image(&raw, &mut metadata);
+
+        assert_eq!(
+            metadata.get("MakerNotes:PreviewImage"),
+            Some(&crate::core::TagValue::new_string(format!(
+                "(Binary data {raw_len} bytes, use -b option to extract)"
+            )))
+        );
+    }
+
+    #[test]
+    fn sony_0x2001_omits_when_raw_is_empty() {
+        // No declared value at all - nothing for ExifTool's DataTag/RawConv to
+        // report either, so this is the one case that stays an omission.
+        let raw: Vec<u8> = Vec::new();
+
+        let mut metadata = crate::core::MetadataMap::new();
+        parse_sony_preview_image(&raw, &mut metadata);
+
+        assert!(metadata.get("MakerNotes:PreviewImage").is_none());
+    }
+
+    #[test]
+    fn sony_0x2001_tag_shows_placeholder_when_value_is_out_of_bounds() {
+        // Mirrors the real corpus shape: `SonyDSLR-A700.jpg`'s 0x2001 entry
+        // declares a byte count and offset that run past what the file
+        // actually contains, and ExifTool's default-dump output is still the
+        // placeholder built from the *declared* byte count (696508 there),
+        // not an omission - the `ExtractBinary` shortcut never attempts the
+        // read in that mode.
+        let declared_len: u32 = 696_508;
+        // Offset points past the end of `tiff` entirely.
+        let data = build_makernote(&[(TAG_PREVIEW_IMAGE, 7, declared_len, 50_000)]);
+
+        let mut tiff = vec![0u8; 1000];
+        let payload_len = data.len();
+        tiff.extend_from_slice(&data);
+        // Deliberately do NOT extend `tiff` out to the declared offset+length.
+
+        let ctx = crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext::in_tiff(
+            &tiff,
+            1000,
+            payload_len,
+            0,
+        );
+
+        let mut metadata = crate::core::MetadataMap::new();
+        parse_sony_preview_image_tag(&ctx, &mut metadata);
+
+        assert_eq!(
+            metadata.get("MakerNotes:PreviewImage"),
+            Some(&crate::core::TagValue::new_string(format!(
+                "(Binary data {declared_len} bytes, use -b option to extract)"
+            )))
         );
     }
 }

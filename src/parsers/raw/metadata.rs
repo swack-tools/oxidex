@@ -6220,12 +6220,32 @@ fn extract_dng_subifd_preview(
         TagValue::new_integer(i64::from(length)),
     );
 
+    // ExifTool's ExtractBinary (ExifTool.pm:9832) returns the declared-length
+    // placeholder string without ever seeking when the tag wasn't explicitly
+    // requested with -b, so the default dump shows the placeholder even when
+    // the range is out of bounds -- it is never omitted. Same contract as
+    // `core::tiff_helpers::read_or_placeholder`, which this mirrors for a
+    // byte slice instead of a `FileReader`.
+    if length > 0 {
+        metadata.insert(
+            image_key.to_string(),
+            dng_binary_or_placeholder(data, offset, length),
+        );
+    }
+}
+
+/// Byte-slice counterpart to `core::tiff_helpers::read_or_placeholder`: reads
+/// `length` bytes at `offset` when the range is fully in bounds, otherwise
+/// falls back to ExifTool's declared-length placeholder string.
+fn dng_binary_or_placeholder(data: &[u8], offset: u32, length: u32) -> TagValue {
     let start = offset as usize;
     let end = start.saturating_add(length as usize);
-    if end <= data.len()
-        && let Some(image) = data.get(start..end)
-    {
-        metadata.insert(image_key.to_string(), TagValue::Binary(image.to_vec()));
+    match data.get(start..end) {
+        Some(bytes) => TagValue::Binary(bytes.to_vec()),
+        None => TagValue::new_string(format!(
+            "(Binary data {} bytes, use -b option to extract)",
+            length
+        )),
     }
 }
 
@@ -8098,10 +8118,15 @@ mod backlog_group_1_printconv_tests {
     }
 
     /// A strip range that runs past the end of the file must not panic and
-    /// must not emit a truncated image blob; the Start/Length pair still
-    /// reports what the IFD claims, exactly as ExifTool does.
+    /// must not emit a truncated image blob. ExifTool's `ExtractBinary`
+    /// (`ExifTool.pm:9832`) returns the declared-length placeholder string
+    /// *before ever seeking* when the tag was not explicitly requested with
+    /// `-b`, so the default dump still reports `JpgFromRaw`/`PreviewImage`
+    /// with the placeholder even when the range is out of bounds -- it is
+    /// never omitted. This mirrors the IFD2 `PreviewImage` fix verified on
+    /// `LeicaCL.jpg` (`src/core/tiff_helpers.rs::read_or_placeholder`).
     #[test]
-    fn dng_out_of_range_strip_emits_offsets_without_image() {
+    fn dng_out_of_range_strip_emits_placeholder_not_omission() {
         let data = vec![0u8; 16];
         let mut metadata = MetadataMap::new();
         extract_dng_subifd_preview(
@@ -8115,7 +8140,37 @@ mod backlog_group_1_printconv_tests {
             metadata.get("EXIF:JpgFromRawStart"),
             Some(&TagValue::new_integer(12))
         );
-        assert!(metadata.get("EXIF:JpgFromRaw").is_none());
+        assert_eq!(
+            metadata.get("EXIF:JpgFromRawLength"),
+            Some(&TagValue::new_integer(4096))
+        );
+        assert_eq!(
+            metadata.get("EXIF:JpgFromRaw"),
+            Some(&TagValue::new_string(
+                "(Binary data 4096 bytes, use -b option to extract)".to_string()
+            ))
+        );
+    }
+
+    /// When the strip range IS fully in bounds, the image key carries the
+    /// real bytes (not just the placeholder), matching
+    /// `read_or_placeholder`'s in-bounds behavior.
+    #[test]
+    fn dng_in_range_strip_emits_real_bytes() {
+        let mut data = vec![0u8; 32];
+        data[10..14].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        let mut metadata = MetadataMap::new();
+        extract_dng_subifd_preview(
+            &data,
+            &dng_sub_tags(7, 1, 10, 4),
+            1,
+            ByteOrder::BigEndian,
+            &mut metadata,
+        );
+        assert_eq!(
+            metadata.get("EXIF:PreviewImage"),
+            Some(&TagValue::Binary(vec![0xDE, 0xAD, 0xBE, 0xEF]))
+        );
     }
 }
 

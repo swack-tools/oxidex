@@ -15,7 +15,10 @@
 //! [`super::minolta_a100_tables`] and are read by the same binary-data
 //! interpreter Sony's enciphered blocks use.
 
+use crate::core::{MetadataMap, TagValue};
+use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
+use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
 use std::collections::HashMap;
 
 use super::minolta_a100_tables as a100;
@@ -501,6 +504,143 @@ impl MakerNoteParser for MinoltaParser {
     }
 }
 
+// ============================================================================
+// PreviewImage (0x0081 direct value, or 0x0088/0x0089 offset pair)
+// ============================================================================
+//
+// `Minolta::Main` (Minolta.pm:691-968) declares `PreviewImage` two ways,
+// and a real body writes at most one:
+//
+// * 0x0081 (Minolta.pm:765-770): `%Image::ExifTool::previewImageTagInfo`
+//   directly -- "JPEG preview found in DiMAGE 7 images", `Groups => { 2 =>
+//   'Preview' }`, `Permanent => 1`. A direct inline value, TIFF-relative like
+//   Sigma's/Casio's, no `IsOffset`/`OffsetPair`.
+// * 0x0088/0x0089 (Minolta.pm:771-789): plain `PreviewImageStart`
+//   (`IsOffset`, `OffsetPair => 0x0089`) / `PreviewImageLength`
+//   (`OffsetPair => 0x0088`), both `DataTag => 'PreviewImage'`. Neither tag
+//   is itself named `PreviewImage`; the value comes from `Exif.pm`'s generic
+//   `%Image::ExifTool::Exif::Composite::PreviewImage` (Exif.pm:5018-5057),
+//   which requires *any* `PreviewImageStart`+`PreviewImageLength` pair by
+//   name and calls `ExtractImage`. Verified against `Minolta.jpg`
+//   (`DiMAGE 7i`): its MakerNote carries 0x0088/0x0089 only (raw stored
+//   start 13030, `exiftool -v3` shows `Tag 0x0088`/`0x0089`), and the
+//   composite's absolutised display (13042) is `13030 + tiff_base(12)` --
+//   the same TIFF-relative addressing `MAIN_TABLE`'s doc comment already
+//   established for why 0x0088 stays out of the string-map dispatcher.
+//
+// Neither path has a `PreviewImageValid`-style gate the way Olympus's
+// `CameraSettings` composite does, so the only omission case is `raw`
+// (whichever path supplies it) being empty; an out-of-bounds declared range
+// shows `ExtractBinary`'s declared-length placeholder, per this plan's
+// established default-dump contract (Task 1/3/4).
+
+const MINOLTA_PREVIEW_IMAGE: u16 = 0x0081;
+const MINOLTA_PREVIEW_IMAGE_START: u16 = 0x0088;
+const MINOLTA_PREVIEW_IMAGE_LENGTH: u16 = 0x0089;
+
+fn minolta_type_size(field_type: u16) -> Option<usize> {
+    Some(match field_type {
+        1 | 2 | 6 | 7 => 1,
+        3 | 8 => 2,
+        4 | 9 | 11 => 4,
+        5 | 10 | 12 => 8,
+        _ => return None,
+    })
+}
+
+/// Finds one entry by tag id in the IFD at `ifd_offset` inside `data`.
+fn find_minolta_entry(
+    data: &[u8],
+    ifd_offset: usize,
+    byte_order: ByteOrder,
+    target: u16,
+) -> Option<IfdEntry> {
+    let count_bytes = data.get(ifd_offset..ifd_offset + 2)?;
+    let count = EndianReader::new(count_bytes, byte_order.to_io_byte_order()).u16_at(0)?;
+    let entries_start = ifd_offset + 2;
+    let entries = data.get(entries_start..entries_start + count as usize * 12)?;
+    let reader = EndianReader::new(entries, byte_order.to_io_byte_order());
+    (0..count as usize).find_map(|i| {
+        let base = i * 12;
+        let tag_id = reader.u16_at(base)?;
+        if tag_id != target {
+            return None;
+        }
+        Some(IfdEntry {
+            tag_id,
+            field_type: reader.u16_at(base + 2)?,
+            value_count: reader.u32_at(base + 4)?,
+            value_offset: reader.u32_at(base + 8)?,
+        })
+    })
+}
+
+fn insert_binary_or_placeholder(
+    tiff: &[u8],
+    offset: usize,
+    total: usize,
+    metadata: &mut MetadataMap,
+) {
+    match offset
+        .checked_add(total)
+        .and_then(|end| tiff.get(offset..end))
+    {
+        Some(bytes) => {
+            metadata.insert(
+                "MakerNotes:PreviewImage",
+                TagValue::new_binary(bytes.to_vec()),
+            );
+        }
+        None => {
+            metadata.insert(
+                "MakerNotes:PreviewImage",
+                TagValue::new_string(format!(
+                    "(Binary data {total} bytes, use -b option to extract)"
+                )),
+            );
+        }
+    }
+}
+
+/// Extracts Minolta's `PreviewImage` into `metadata`, from whichever of the
+/// two mechanisms `Minolta::Main` supplies. See the module section doc above.
+pub fn parse_minolta_preview_image_tag(
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    let payload = ctx.payload();
+    let tiff = ctx.tiff();
+
+    // 0x0081: a direct inline value, tried first since a real body writes at
+    // most one of the two mechanisms and this one is the tag actually named
+    // `PreviewImage`.
+    if let Some(entry) = find_minolta_entry(payload, 0, byte_order, MINOLTA_PREVIEW_IMAGE)
+        && let Some(elem_size) = minolta_type_size(entry.field_type)
+        && let Some(total) = elem_size.checked_mul(entry.value_count as usize)
+        && total > 4
+    {
+        insert_binary_or_placeholder(tiff, entry.value_offset as usize, total, metadata);
+        return;
+    }
+
+    // 0x0088/0x0089: the generic offset-pair composite.
+    let Some(start_entry) = find_minolta_entry(payload, 0, byte_order, MINOLTA_PREVIEW_IMAGE_START)
+    else {
+        return;
+    };
+    let Some(length_entry) =
+        find_minolta_entry(payload, 0, byte_order, MINOLTA_PREVIEW_IMAGE_LENGTH)
+    else {
+        return;
+    };
+    let total = length_entry.value_offset as usize;
+    if total == 0 {
+        return;
+    }
+    insert_binary_or_placeholder(tiff, start_entry.value_offset as usize, total, metadata);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -542,5 +682,140 @@ mod tests {
             Some("Minolta AF 80-200mm F2.8 HS-APO G".to_string())
         );
         assert_eq!(parser.lookup_lens(64000), None);
+    }
+}
+
+#[cfg(test)]
+mod minolta_preview_image_tests {
+    use super::*;
+    use crate::core::MetadataMap;
+
+    /// Builds a synthetic TIFF block holding a Minolta MakerNote at
+    /// `payload_offset` (no header, IFD at byte 0) with a single 0x0088/
+    /// 0x0089 offset-pair entry, and (when `place_bytes` is `Some`) the real
+    /// preview bytes at `value_offset` (TIFF-relative).
+    fn build_tiff_with_minolta_offset_pair(
+        payload_offset: usize,
+        length: u32,
+        value_offset: u32,
+        place_bytes: Option<&[u8]>,
+    ) -> Vec<u8> {
+        let mut tiff = vec![0u8; payload_offset];
+        tiff[0..2].copy_from_slice(b"II");
+
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&2u16.to_le_bytes()); // 2 entries
+        // 0x0088 PreviewImageStart
+        payload.extend_from_slice(&MINOLTA_PREVIEW_IMAGE_START.to_le_bytes());
+        payload.extend_from_slice(&4u16.to_le_bytes()); // type: LONG
+        payload.extend_from_slice(&1u32.to_le_bytes()); // count: 1
+        payload.extend_from_slice(&value_offset.to_le_bytes());
+        // 0x0089 PreviewImageLength
+        payload.extend_from_slice(&MINOLTA_PREVIEW_IMAGE_LENGTH.to_le_bytes());
+        payload.extend_from_slice(&4u16.to_le_bytes());
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.extend_from_slice(&length.to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes()); // next IFD offset
+
+        tiff.extend_from_slice(&payload);
+
+        if let Some(bytes) = place_bytes {
+            let end = value_offset as usize + bytes.len();
+            if tiff.len() < end {
+                tiff.resize(end, 0);
+            }
+            tiff[value_offset as usize..end].copy_from_slice(bytes);
+        }
+        tiff
+    }
+
+    #[test]
+    fn offset_pair_in_bounds_becomes_binary() {
+        let payload_offset = 20usize;
+        let preview_bytes: Vec<u8> = (0..26u8).collect();
+        let tiff = build_tiff_with_minolta_offset_pair(
+            payload_offset,
+            preview_bytes.len() as u32,
+            13030,
+            Some(&preview_bytes),
+        );
+        let payload_len = tiff.len() - payload_offset;
+        let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 12);
+
+        let mut metadata = MetadataMap::new();
+        parse_minolta_preview_image_tag(&ctx, ByteOrder::LittleEndian, &mut metadata);
+
+        assert_eq!(
+            metadata.get("MakerNotes:PreviewImage"),
+            Some(&TagValue::new_binary(preview_bytes))
+        );
+    }
+
+    #[test]
+    fn offset_pair_out_of_bounds_shows_placeholder_not_omission() {
+        let payload_offset = 20usize;
+        // Mirrors Minolta.jpg's real declared length (26) at an offset (13030)
+        // that runs past the end of this (deliberately short, ~50-byte)
+        // synthetic buffer -- the offset alone is what makes this genuinely
+        // out-of-bounds, independent of the length value.
+        let tiff = build_tiff_with_minolta_offset_pair(payload_offset, 26, 13030, None);
+        let payload_len = tiff.len() - payload_offset;
+        let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 12);
+
+        let mut metadata = MetadataMap::new();
+        parse_minolta_preview_image_tag(&ctx, ByteOrder::LittleEndian, &mut metadata);
+
+        assert_eq!(
+            metadata.get("MakerNotes:PreviewImage"),
+            Some(&TagValue::new_string(
+                "(Binary data 26 bytes, use -b option to extract)"
+            ))
+        );
+    }
+
+    #[test]
+    fn offset_pair_zero_length_is_omitted() {
+        let payload_offset = 20usize;
+        let tiff = build_tiff_with_minolta_offset_pair(payload_offset, 0, 13030, None);
+        let payload_len = tiff.len() - payload_offset;
+        let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 12);
+
+        let mut metadata = MetadataMap::new();
+        parse_minolta_preview_image_tag(&ctx, ByteOrder::LittleEndian, &mut metadata);
+
+        assert_eq!(metadata.get("MakerNotes:PreviewImage"), None);
+    }
+
+    #[test]
+    fn direct_0x0081_value_wins_over_offset_pair() {
+        let payload_offset = 20usize;
+        let preview_bytes: Vec<u8> = (0..10u8).collect();
+
+        let mut tiff = vec![0u8; payload_offset];
+        tiff[0..2].copy_from_slice(b"II");
+
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&1u16.to_le_bytes()); // 1 entry
+        payload.extend_from_slice(&MINOLTA_PREVIEW_IMAGE.to_le_bytes()); // 0x0081
+        payload.extend_from_slice(&7u16.to_le_bytes()); // type: undef
+        payload.extend_from_slice(&(preview_bytes.len() as u32).to_le_bytes());
+        payload.extend_from_slice(&200u32.to_le_bytes()); // value offset
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        tiff.extend_from_slice(&payload);
+
+        let end = 200 + preview_bytes.len();
+        tiff.resize(tiff.len().max(end), 0);
+        tiff[200..end].copy_from_slice(&preview_bytes);
+
+        let payload_len = tiff.len() - payload_offset;
+        let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 12);
+
+        let mut metadata = MetadataMap::new();
+        parse_minolta_preview_image_tag(&ctx, ByteOrder::LittleEndian, &mut metadata);
+
+        assert_eq!(
+            metadata.get("MakerNotes:PreviewImage"),
+            Some(&TagValue::new_binary(preview_bytes))
+        );
     }
 }

@@ -26,9 +26,11 @@ pub mod tables;
 pub mod text_info;
 
 use crate::const_decoder;
+use crate::core::{MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
+use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
 use nom::{
     IResult,
     combinator::map,
@@ -690,6 +692,224 @@ fn uses_sx_quality_table(camera_type: Option<&str>) -> bool {
     }
 }
 
+// ============================================================================
+// PreviewImage (CameraSettings 0x0100/0x0101/0x0102, or Main 0x1035/0x1036/0x1037)
+// ============================================================================
+//
+// Two mechanisms, tried in this order because that is the priority order a
+// real body's own directory establishes -- a camera with a `CameraSettings`
+// sub-directory writes its Preview trio there and not in `Main`:
+//
+// 1. `Olympus::CameraSettings` (Olympus.pm:1777-1809, the 0x2020
+//    sub-directory -- `OLYMPUS_CAMERA_SETTINGS_SUBIFD` above):
+//    `PreviewImageValid` (0x100, `int32u`, `PrintConv => {0 => 'No', 1 =>
+//    'Yes'}`), `PreviewImageStart` (0x101, `IsOffset`, `OffsetPair =>
+//    0x102`, `DataTag => 'PreviewImage'`), `PreviewImageLength` (0x102,
+//    `OffsetPair => 0x101`, `DataTag => 'PreviewImage'`). Verified against
+//    `OlympusFE47.jpg`/`OlympusE1.jpg`'s `exiftool -v3` dumps: both show
+//    `Tag 0x0100`/`0x0101`/`0x0102` inside the `[CameraSettings]`
+//    sub-directory the MakerNote's own 0x2020 entry points at.
+// 2. `Olympus::Main`'s own `PreviewImageValid`/`Start`/`Length` at
+//    0x1035/0x1036/0x1037 (Olympus.pm:1115-1138), read directly out of the
+//    top-level MakerNote IFD when there is no `CameraSettings`
+//    sub-directory at all. Verified against `OlympusE20.jpg` (an E-20, which
+//    predates the `CameraSettings` sub-directory): `exiftool -v3` shows
+//    `Tag 0x1035`/`0x1036`/`0x1037` directly in the MakerNote's own entry
+//    list, no 0x2020 present.
+//
+// `PreviewImage` itself comes from the same generic
+// `Exif::Composite::PreviewImage` (Exif.pm:5018-5057) Minolta's 0x0088/0x0089
+// use, but with one difference: its `Desire => { 2 => 'PreviewImageValid' }`
+// plus `return undef if defined $val[2] and not $val[2]` (Exif.pm:5054) means
+// an explicit `PreviewImageValid = 0` is a real, separate omission --
+// confirmed on `Olympus2.jpg` and `OlympusE-M1.jpg`, both `PreviewImageValid:
+// No` with no `PreviewImage` line in a full default dump. Absence of the
+// Valid tag does not block extraction (`Desire`, not `Require`).
+//
+// `PreviewImageStart`'s value needs the same `base` correction
+// `parse_located` computes for every other out-of-line Olympus value (Type 2
+// `"OLYMPUS\0"` measures from the MakerNote itself, `base = 0`; Type 1
+// `"OLYMP\0"` measures from the TIFF header, `base =
+// -payload_tiff_offset`) -- reusing `detect_header_type_and_offsets` and the
+// same formula `parse_located` uses (duplicated here as [`olympus_base`]
+// rather than threading a new parameter through `parse_located`, since this
+// is an independent read alongside the string-map dispatch, the same
+// relationship Sony's 0x2001 hook has to `SonyParser`). Verified on
+// `OlympusFE47.jpg` (Type 2, `base = 0`): raw stored start 6218831 + this
+// MakerNote's own file position (1334) = 6220165, `exiftool`'s displayed
+// absolute value; and on `OlympusE1.jpg`/`OlympusE20.jpg` (Type 1, `base =
+// -payload_tiff_offset`): `OlympusE1.jpg`'s raw stored start 2556 -
+// payload_tiff_offset(1002) = 1554, which lands exactly on the real preview
+// bytes within `window()`.
+//
+// Not handled: the "OM SYSTEM\0" header (`MakerNoteOlympus3`,
+// `MakerNotes.pm:589-597`, the OM-1/OM-3/OM-5 mirrorless bodies) --
+// `detect_header_type_and_offsets` doesn't recognise this third header at
+// all, a pre-existing gap in `OlympusParser` (every other Olympus tag is
+// equally unreachable on these files, not just `PreviewImage`) that is out
+// of this task's scope to fix. Confirmed via a full default dump that this
+// function correctly no-ops rather than fabricating a value on
+// `OlympusOM-1.jpg`.
+
+const OLYMPUS_CS_PREVIEW_VALID: u16 = 0x0100;
+const OLYMPUS_CS_PREVIEW_START: u16 = 0x0101;
+const OLYMPUS_CS_PREVIEW_LENGTH: u16 = 0x0102;
+const OLYMPUS_MAIN_PREVIEW_VALID: u16 = 0x1035;
+const OLYMPUS_MAIN_PREVIEW_START: u16 = 0x1036;
+const OLYMPUS_MAIN_PREVIEW_LENGTH: u16 = 0x1037;
+
+/// Same formula as `parse_located`'s `base` (see that function's comment):
+/// `None` when the correction cannot be established (a Type 1 MakerNote
+/// whose caller could not supply `data_base`).
+fn olympus_base(ifd_start: usize, data_base: Option<u32>) -> Option<i64> {
+    if ifd_start == 8 {
+        data_base.map(|off| -(i64::from(off)))
+    } else {
+        Some(0)
+    }
+}
+
+/// An IFD entry whose declared byte count is 4 or fewer stores its value
+/// directly in the value/offset field rather than pointing to it --
+/// `PreviewImageValid`/`Start`/`Length` are always a single `int32u`, so this
+/// is always true for them on a well-formed file. Returns `None` rather than
+/// trusting a malformed entry whose declared size doesn't fit.
+fn olympus_inline_u32(entry: &ifd::RawEntry) -> Option<u32> {
+    let size: usize = match entry.field_type {
+        1 | 2 | 6 | 7 => 1,
+        3 | 8 => 2,
+        4 | 9 | 11 => 4,
+        _ => return None,
+    };
+    if size.checked_mul(entry.count as usize)? > 4 {
+        return None;
+    }
+    Some(entry.value_offset)
+}
+
+/// Looks up `Valid`/`Start`/`Length` in `entries` (whichever id triplet the
+/// caller passes) and, on success, inserts `MakerNotes:PreviewImage` into
+/// `metadata`. Returns whether it found a `Start`+`Length` pair to act on at
+/// all, so the caller can fall back to the other id triplet when this
+/// directory doesn't carry the Preview trio (`OlympusE20.jpg`'s MakerNote has
+/// no `CameraSettings` sub-directory, only the `Main`-level ids).
+fn extract_olympus_preview_from(
+    entries: &[ifd::RawEntry],
+    ids: (u16, u16, u16),
+    data: &[u8],
+    base: Option<i64>,
+    metadata: &mut MetadataMap,
+) -> bool {
+    let (valid_id, start_id, length_id) = ids;
+    let Some(length_entry) = entries.iter().find(|e| e.tag_id == length_id) else {
+        return false;
+    };
+    let Some(start_entry) = entries.iter().find(|e| e.tag_id == start_id) else {
+        return false;
+    };
+
+    // A real, separate omission (not the OOB placeholder case): ExifTool's
+    // composite explicitly returns undef when PreviewImageValid is present
+    // and false. Its absence does not block extraction.
+    if let Some(valid_entry) = entries.iter().find(|e| e.tag_id == valid_id)
+        && olympus_inline_u32(valid_entry) == Some(0)
+    {
+        return true;
+    }
+
+    let Some(total) = olympus_inline_u32(length_entry).filter(|&n| n > 0) else {
+        return true;
+    };
+    let total = total as usize;
+    let Some(raw_start) = olympus_inline_u32(start_entry) else {
+        return true;
+    };
+
+    let index = base
+        .and_then(|b| i64::from(raw_start).checked_add(b))
+        .filter(|s| *s >= 0)
+        .map(|s| s as usize);
+
+    let bytes = index.and_then(|i| i.checked_add(total).map(|end| (i, end)));
+    match bytes.and_then(|(i, end)| data.get(i..end)) {
+        Some(bytes) => {
+            metadata.insert(
+                "MakerNotes:PreviewImage",
+                TagValue::new_binary(bytes.to_vec()),
+            );
+        }
+        None => {
+            metadata.insert(
+                "MakerNotes:PreviewImage",
+                TagValue::new_string(format!(
+                    "(Binary data {total} bytes, use -b option to extract)"
+                )),
+            );
+        }
+    }
+    true
+}
+
+/// Extracts Olympus's `PreviewImage` into `metadata`, from whichever of the
+/// two id triplets the MakerNote carries. See the module section doc above
+/// for the source citations and the verified corpus cases.
+pub fn parse_olympus_preview_image_tag(
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    let data = ctx.window();
+    let data_base = ctx.payload_tiff_offset();
+    if data.is_empty() {
+        return;
+    }
+    let Ok((ifd_start, order)) = detect_header_type_and_offsets(data, byte_order) else {
+        return;
+    };
+    let base = olympus_base(ifd_start, data_base);
+
+    let Some(entries) = ifd::read_ifd(data, ifd_start, order) else {
+        return;
+    };
+
+    // 1. CameraSettings (0x2020) sub-directory, when present.
+    if let Some(cs_entry) = entries
+        .iter()
+        .find(|e| e.tag_id == OLYMPUS_CAMERA_SETTINGS_SUBIFD)
+        && let Some(cs_start) = base
+            .and_then(|b| i64::from(cs_entry.value_offset).checked_add(b))
+            .filter(|s| *s >= 0)
+            .map(|s| s as usize)
+        && let Some(cs_entries) = ifd::read_ifd(data, cs_start, order)
+        && extract_olympus_preview_from(
+            &cs_entries,
+            (
+                OLYMPUS_CS_PREVIEW_VALID,
+                OLYMPUS_CS_PREVIEW_START,
+                OLYMPUS_CS_PREVIEW_LENGTH,
+            ),
+            data,
+            base,
+            metadata,
+        )
+    {
+        return;
+    }
+
+    // 2. Main's own ids, for a body with no CameraSettings sub-directory.
+    extract_olympus_preview_from(
+        &entries,
+        (
+            OLYMPUS_MAIN_PREVIEW_VALID,
+            OLYMPUS_MAIN_PREVIEW_START,
+            OLYMPUS_MAIN_PREVIEW_LENGTH,
+        ),
+        data,
+        base,
+        metadata,
+    );
+}
+
 /// Perl's `/<needle>\b/` against a model string: `needle` must appear and must
 /// not be followed by another word character. `E-1` therefore matches `E-1`
 /// but not `E-10` or `E-100RS`.
@@ -1099,6 +1319,323 @@ fn extract_u8_array(entry: &IfdEntry, full_data: &[u8], base_offset: usize) -> O
 // ============================================================================
 // Unit Tests
 // ============================================================================
+
+#[cfg(test)]
+mod olympus_preview_image_tests {
+    use super::*;
+    use crate::core::MetadataMap;
+
+    /// Builds a synthetic TIFF block holding an `"OLYMPUS\0II"` (Type 2)
+    /// MakerNote at `payload_offset`, a `CameraSettings` (0x2020) sub-IFD
+    /// with `PreviewImageValid`(0x100)/`Start`(0x101)/`Length`(0x102), and
+    /// (when `place_bytes` is `Some`) the real preview bytes at `raw_start`
+    /// (window-relative, i.e. relative to the payload's own start, matching
+    /// Type 2's `base = 0`).
+    ///
+    /// When `main_level` is `Some((raw_start, bytes))`, the Main IFD also
+    /// gets a real `PreviewImageValid`(0x1035)=1/`Start`(0x1036)/`Length`
+    /// (0x1037) trio -- distinct from the CameraSettings trio above -- with
+    /// `bytes` placed at `raw_start` (also window-relative). This lets a test
+    /// exercise the "both present" case: CameraSettings and Main each point
+    /// at their own, distinguishable preview bytes, so a test can tell which
+    /// one an implementation actually picked.
+    fn build_tiff_with_olympus_camera_settings_preview(
+        payload_offset: usize,
+        valid: u32,
+        length: u32,
+        raw_start: u32,
+        place_bytes: Option<&[u8]>,
+        main_level: Option<(u32, &[u8])>,
+    ) -> Vec<u8> {
+        let mut tiff = vec![0u8; payload_offset];
+        tiff[0..2].copy_from_slice(b"II");
+
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"OLYMPUS\0II"); // 10-byte Type 2 signature
+        payload.extend_from_slice(&[0x03, 0x00]); // version word (ignored)
+
+        // Main IFD at payload offset 12: the CameraSettings sub-IFD pointer
+        // (0x2020, pointing at window offset 40), plus -- when `main_level`
+        // is `Some` -- a real Main-level Preview trio (0x1035/0x1036/0x1037)
+        // alongside it.
+        // With `main_level` present the Main IFD carries 4 entries instead of
+        // 1 (2-byte count + 4*12-byte entries + 4-byte next-IFD-offset = 54
+        // bytes, starting at payload offset 12 -> ends at 66), so CS_START
+        // must move out past that or the `payload.resize(CS_START, 0)` below
+        // would truncate (corrupt) the just-written Main-level entries.
+        let main_entry_count: u16 = if main_level.is_some() { 4 } else { 1 };
+        let cs_start: u32 = if main_level.is_some() { 80 } else { 40 };
+        payload.extend_from_slice(&main_entry_count.to_le_bytes());
+        payload.extend_from_slice(&OLYMPUS_CAMERA_SETTINGS_SUBIFD.to_le_bytes());
+        payload.extend_from_slice(&4u16.to_le_bytes()); // type: LONG
+        payload.extend_from_slice(&1u32.to_le_bytes()); // count: 1
+        payload.extend_from_slice(&cs_start.to_le_bytes());
+        if let Some((main_raw_start, main_bytes)) = main_level {
+            payload.extend_from_slice(&OLYMPUS_MAIN_PREVIEW_VALID.to_le_bytes());
+            payload.extend_from_slice(&4u16.to_le_bytes());
+            payload.extend_from_slice(&1u32.to_le_bytes());
+            payload.extend_from_slice(&1u32.to_le_bytes()); // Valid = 1
+            payload.extend_from_slice(&OLYMPUS_MAIN_PREVIEW_START.to_le_bytes());
+            payload.extend_from_slice(&4u16.to_le_bytes());
+            payload.extend_from_slice(&1u32.to_le_bytes());
+            payload.extend_from_slice(&main_raw_start.to_le_bytes());
+            payload.extend_from_slice(&OLYMPUS_MAIN_PREVIEW_LENGTH.to_le_bytes());
+            payload.extend_from_slice(&4u16.to_le_bytes());
+            payload.extend_from_slice(&1u32.to_le_bytes());
+            payload.extend_from_slice(&(main_bytes.len() as u32).to_le_bytes());
+        }
+        payload.extend_from_slice(&0u32.to_le_bytes()); // next IFD offset
+
+        payload.resize(cs_start as usize, 0);
+
+        // CameraSettings sub-IFD at window offset cs_start: 3 entries.
+        payload.extend_from_slice(&3u16.to_le_bytes());
+        payload.extend_from_slice(&OLYMPUS_CS_PREVIEW_VALID.to_le_bytes());
+        payload.extend_from_slice(&4u16.to_le_bytes());
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.extend_from_slice(&valid.to_le_bytes());
+        payload.extend_from_slice(&OLYMPUS_CS_PREVIEW_START.to_le_bytes());
+        payload.extend_from_slice(&4u16.to_le_bytes());
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.extend_from_slice(&raw_start.to_le_bytes());
+        payload.extend_from_slice(&OLYMPUS_CS_PREVIEW_LENGTH.to_le_bytes());
+        payload.extend_from_slice(&4u16.to_le_bytes());
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.extend_from_slice(&length.to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes()); // next IFD offset
+
+        tiff.extend_from_slice(&payload);
+
+        if let Some(bytes) = place_bytes {
+            // Type 2's base is 0, so `raw_start` is window-relative, i.e.
+            // relative to the payload's own start (payload_offset in tiff).
+            let start = payload_offset + raw_start as usize;
+            let end = start + bytes.len();
+            if tiff.len() < end {
+                tiff.resize(end, 0);
+            }
+            tiff[start..end].copy_from_slice(bytes);
+        }
+        if let Some((main_raw_start, main_bytes)) = main_level {
+            let start = payload_offset + main_raw_start as usize;
+            let end = start + main_bytes.len();
+            if tiff.len() < end {
+                tiff.resize(end, 0);
+            }
+            tiff[start..end].copy_from_slice(main_bytes);
+        }
+        tiff
+    }
+
+    #[test]
+    fn camera_settings_preview_in_bounds_becomes_binary() {
+        let payload_offset = 20usize;
+        let preview_bytes: Vec<u8> = (0..26u8).collect();
+        let tiff = build_tiff_with_olympus_camera_settings_preview(
+            payload_offset,
+            1,
+            preview_bytes.len() as u32,
+            200,
+            Some(&preview_bytes),
+            None,
+        );
+        let payload_len = tiff.len() - payload_offset;
+        let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 12);
+
+        let mut metadata = MetadataMap::new();
+        parse_olympus_preview_image_tag(&ctx, ByteOrder::LittleEndian, &mut metadata);
+
+        assert_eq!(
+            metadata.get("MakerNotes:PreviewImage"),
+            Some(&TagValue::new_binary(preview_bytes))
+        );
+    }
+
+    #[test]
+    fn camera_settings_preview_out_of_bounds_shows_placeholder_not_omission() {
+        let payload_offset = 20usize;
+        // Mirrors OlympusFE47.jpg's real declared length (64217) at an
+        // offset the synthetic (deliberately short) buffer can't reach.
+        let tiff = build_tiff_with_olympus_camera_settings_preview(
+            payload_offset,
+            1,
+            64217,
+            6_218_831,
+            None,
+            None,
+        );
+        let payload_len = tiff.len() - payload_offset;
+        let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 12);
+
+        let mut metadata = MetadataMap::new();
+        parse_olympus_preview_image_tag(&ctx, ByteOrder::LittleEndian, &mut metadata);
+
+        assert_eq!(
+            metadata.get("MakerNotes:PreviewImage"),
+            Some(&TagValue::new_string(
+                "(Binary data 64217 bytes, use -b option to extract)"
+            ))
+        );
+    }
+
+    #[test]
+    fn camera_settings_preview_valid_false_is_omitted() {
+        let payload_offset = 20usize;
+        // Mirrors Olympus2.jpg / OlympusE-M1.jpg: PreviewImageValid = 0.
+        let tiff =
+            build_tiff_with_olympus_camera_settings_preview(payload_offset, 0, 0, 960, None, None);
+        let payload_len = tiff.len() - payload_offset;
+        let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 12);
+
+        let mut metadata = MetadataMap::new();
+        parse_olympus_preview_image_tag(&ctx, ByteOrder::LittleEndian, &mut metadata);
+
+        assert_eq!(metadata.get("MakerNotes:PreviewImage"), None);
+    }
+
+    #[test]
+    fn camera_settings_zero_length_is_omitted() {
+        let payload_offset = 20usize;
+        let tiff =
+            build_tiff_with_olympus_camera_settings_preview(payload_offset, 1, 0, 200, None, None);
+        let payload_len = tiff.len() - payload_offset;
+        let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 12);
+
+        let mut metadata = MetadataMap::new();
+        parse_olympus_preview_image_tag(&ctx, ByteOrder::LittleEndian, &mut metadata);
+
+        assert_eq!(metadata.get("MakerNotes:PreviewImage"), None);
+    }
+
+    /// Builds a synthetic TIFF block holding an `"OLYMP\0"` (Type 1)
+    /// MakerNote at `payload_offset`, with `PreviewImageValid`(0x1035)/
+    /// `Start`(0x1036)/`Length`(0x1037) directly in the top-level IFD (no
+    /// `CameraSettings` sub-directory) -- the shape `OlympusE20.jpg` (an
+    /// E-20, which predates `CameraSettings`) actually carries.
+    fn build_tiff_with_olympus_main_level_preview(
+        payload_offset: usize,
+        length: u32,
+        raw_start: u32,
+        place_bytes: Option<&[u8]>,
+    ) -> Vec<u8> {
+        let mut tiff = vec![0u8; payload_offset];
+        tiff[0..2].copy_from_slice(b"II");
+
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"OLYMP\0"); // 6-byte Type 1 signature
+        payload.extend_from_slice(&[0x01, 0x00]); // version word (ignored)
+
+        payload.extend_from_slice(&3u16.to_le_bytes());
+        payload.extend_from_slice(&OLYMPUS_MAIN_PREVIEW_VALID.to_le_bytes());
+        payload.extend_from_slice(&4u16.to_le_bytes());
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.extend_from_slice(&1u32.to_le_bytes()); // Valid = 1
+        payload.extend_from_slice(&OLYMPUS_MAIN_PREVIEW_START.to_le_bytes());
+        payload.extend_from_slice(&4u16.to_le_bytes());
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.extend_from_slice(&raw_start.to_le_bytes());
+        payload.extend_from_slice(&OLYMPUS_MAIN_PREVIEW_LENGTH.to_le_bytes());
+        payload.extend_from_slice(&4u16.to_le_bytes());
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.extend_from_slice(&length.to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes()); // next IFD offset
+
+        tiff.extend_from_slice(&payload);
+
+        if let Some(bytes) = place_bytes {
+            // Type 1's base is `-payload_tiff_offset`, and
+            // `payload_tiff_offset` is `payload_offset` itself in this
+            // synthetic buffer, so `index = raw_start - payload_offset` and
+            // the real tiff position is `payload_offset + index = raw_start`.
+            let start = raw_start as usize;
+            let end = start + bytes.len();
+            if tiff.len() < end {
+                tiff.resize(end, 0);
+            }
+            tiff[start..end].copy_from_slice(bytes);
+        }
+        tiff
+    }
+
+    #[test]
+    fn main_level_preview_in_bounds_becomes_binary() {
+        let payload_offset = 632usize;
+        let preview_bytes: Vec<u8> = (0..26u8).collect();
+        let raw_start = payload_offset as u32 + 100;
+        let tiff = build_tiff_with_olympus_main_level_preview(
+            payload_offset,
+            preview_bytes.len() as u32,
+            raw_start,
+            Some(&preview_bytes),
+        );
+        let payload_len = tiff.len() - payload_offset;
+        let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 12);
+
+        let mut metadata = MetadataMap::new();
+        parse_olympus_preview_image_tag(&ctx, ByteOrder::LittleEndian, &mut metadata);
+
+        assert_eq!(
+            metadata.get("MakerNotes:PreviewImage"),
+            Some(&TagValue::new_binary(preview_bytes))
+        );
+    }
+
+    #[test]
+    fn main_level_preview_out_of_bounds_shows_placeholder_not_omission() {
+        let payload_offset = 632usize;
+        // Mirrors OlympusE20.jpg's real declared length (160975) at an
+        // offset the synthetic (deliberately short) buffer can't reach.
+        let tiff =
+            build_tiff_with_olympus_main_level_preview(payload_offset, 160975, 3_457_382, None);
+        let payload_len = tiff.len() - payload_offset;
+        let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 12);
+
+        let mut metadata = MetadataMap::new();
+        parse_olympus_preview_image_tag(&ctx, ByteOrder::LittleEndian, &mut metadata);
+
+        assert_eq!(
+            metadata.get("MakerNotes:PreviewImage"),
+            Some(&TagValue::new_string(
+                "(Binary data 160975 bytes, use -b option to extract)"
+            ))
+        );
+    }
+
+    #[test]
+    fn camera_settings_wins_over_main_level_when_both_present() {
+        // A body that *does* carry a CameraSettings sub-directory should use
+        // its Preview trio, not Main's -- confirmed no real corpus file
+        // exercises this ambiguity (a body either has CameraSettings or it
+        // doesn't), but the priority order matters if one ever does. Both
+        // trios are wired up here with distinct, distinguishable byte
+        // payloads (CameraSettings: 0..5, Main: 100..105) so the assertion
+        // below can actually tell which one an implementation picked --
+        // without a real Main-level fallback present, this test could not
+        // distinguish a correct priority-respecting implementation from one
+        // that always/only reads CameraSettings.
+        let payload_offset = 20usize;
+        let cs_bytes: Vec<u8> = (0..5u8).collect();
+        let main_bytes: Vec<u8> = (100..105u8).collect();
+        let tiff = build_tiff_with_olympus_camera_settings_preview(
+            payload_offset,
+            1,
+            cs_bytes.len() as u32,
+            200,
+            Some(&cs_bytes),
+            Some((300, &main_bytes)),
+        );
+        let payload_len = tiff.len() - payload_offset;
+        let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 12);
+
+        let mut metadata = MetadataMap::new();
+        parse_olympus_preview_image_tag(&ctx, ByteOrder::LittleEndian, &mut metadata);
+
+        assert_eq!(
+            metadata.get("MakerNotes:PreviewImage"),
+            Some(&TagValue::new_binary(cs_bytes))
+        );
+    }
+}
 
 #[cfg(test)]
 mod tests {
