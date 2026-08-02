@@ -26,8 +26,18 @@ pub mod sony_lens_database;
 // Smartphone manufacturers (Phase 3)
 pub mod apple;
 pub mod google;
-pub mod microsoft;
 pub mod samsung;
+
+// (no `microsoft` parser: MakerNotes.pm has no MakerNoteMicrosoft TIFF-IFD
+// dispatch entry at all -- there is no TIFF-IFD MakerNote path for Microsoft
+// in ExifTool. Microsoft's only MakerNotes-group table, Microsoft::Stitch,
+// is binary data read from EXIF tag 0x4748, not a MakerNote IFD, and this
+// parser implemented none of its real tags (PanoramicStitchVersion,
+// PanoramicStitchCameraMotion, PanoramicStitchMapType). Instead it emitted
+// AutoHDR, CreativeEffect, DynamicFlash, LensType, OpticalStabilization,
+// PanoramaMode, PureViewMode, Refocus, RichCapture, RichCaptureMode,
+// RichRecordingAudio, Video4K under a fabricated numeric TIFF-IFD table --
+// zero ExifTool source matches. See `registries::mod` for the same finding.)
 
 // (no `qualcomm` parser: fabricated tag table with no ExifTool source --
 // see `registries::mod` for the finding. ExifTool's real Qualcomm.pm tables

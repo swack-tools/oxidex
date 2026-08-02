@@ -26,8 +26,16 @@ pub mod panasonic; // Panasonic migration (Batch 1, Task 1.2)
 pub mod pentax; // Pentax migration (Batch 1, Task 1.3) // Leica migration (Batch 1, Task 1.5)
 
 // Batch 2: Smartphone manufacturers
-pub mod microsoft; // Microsoft migration complete (Batch 2, Task 2.1)
 pub mod samsung; // Samsung migration complete (Batch 2, Task 2.2)
+
+// (no `microsoft` registry: MakerNotes.pm has no MakerNoteMicrosoft TIFF-IFD
+// dispatch entry -- ExifTool has no TIFF-IFD MakerNote path for Microsoft at
+// all. Microsoft's only MakerNotes-group table (Microsoft::Stitch) is binary
+// data read from EXIF tag 0x4748, not a MakerNote IFD. This registry's tag
+// ids and names (AutoHDR, CreativeEffect, DynamicFlash, LensType,
+// OpticalStabilization, PanoramaMode, PureViewMode, Refocus, RichCapture,
+// RichCaptureMode, RichRecordingAudio, Video4K) appear in zero ExifTool
+// source files -- see `makernotes::microsoft` deletion for the same finding.)
 
 // (no `qualcomm` registry: ExifTool's Qualcomm.pm has no TIFF-IFD MakerNote
 // table -- its two tables (`Main`, `DualCamera`) are string-id-keyed and
@@ -81,7 +89,6 @@ pub use panasonic::panasonic_registry;
 pub use pentax::pentax_registry;
 
 // Batch 2 exports
-pub use microsoft::microsoft_registry;
 pub use samsung::samsung_registry;
 
 // Batch 3 exports

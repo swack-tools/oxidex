@@ -235,7 +235,11 @@ pub fn dispatch_makernote_with_context_and_values(
         // Smartphones
         "apple" => Some(Box::new(apple::AppleParser)),
         "google" => Some(Box::new(google::GoogleParser)),
-        "microsoft" | "microsoft corporation" => Some(Box::new(microsoft::MicrosoftParser)),
+        // "microsoft" | "microsoft corporation" is absent on purpose: there is
+        // no fabricated `microsoft` parser to dispatch to. MakerNotes.pm has
+        // no MakerNoteMicrosoft TIFF-IFD dispatch entry at all -- Microsoft's
+        // only MakerNotes-group table (Microsoft::Stitch) is binary data read
+        // from EXIF tag 0x4748, not a MakerNote IFD.
         // "qualcomm" is absent on purpose: there is no fabricated `qualcomm`
         // parser to dispatch to. ExifTool has no TIFF-IFD MakerNote table for
         // Qualcomm -- its two Qualcomm.pm tables are read from JPEG APP7/APP4
