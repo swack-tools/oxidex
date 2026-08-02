@@ -3,6 +3,7 @@
 //! This module contains formatters that transform raw metadata values into
 //! human-readable strings matching ExifTool's output format.
 
+pub mod audio_encoding;
 pub mod cfa_pattern;
 pub mod exif_enums;
 pub mod exif_print_conv;
@@ -21,6 +22,7 @@ pub mod unit_suffixes;
 pub mod ycbcr_subsampling;
 
 // Re-export main formatting functions for convenience
+pub use audio_encoding::audio_encoding_name;
 pub use cfa_pattern::decode_cfa_pattern;
 pub use exif_enums::{
     format_color_space, format_components_configuration, format_compression, format_contrast,

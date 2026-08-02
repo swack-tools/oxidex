@@ -35,6 +35,7 @@
 
 #![allow(dead_code)]
 
+use crate::core::formatters::audio_encoding_name;
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
@@ -839,26 +840,15 @@ fn parse_audio_format(
         return Ok(());
     }
 
-    // Encoding - human-readable format name
-    let format_name = match format_tag {
-        0x0001 => "Microsoft PCM",
-        0x0002 => "Microsoft ADPCM",
-        0x0003 => "IEEE Float",
-        0x0006 => "ITU G.711 a-law",
-        0x0007 => "ITU G.711 mu-law",
-        0x0011 => "Intel DVI/IMA ADPCM",
-        0x0016 => "ITU G.723 ADPCM (Yamaha)",
-        0x0031 => "GSM 6.10",
-        0x0050 => "MPEG",
-        0x0055 => "MPEG Layer 3",
-        0x0161 => "WMA v1",
-        0x0162 => "WMA v2",
-        0xFFFE => "Extensible",
-        _ => "",
-    };
+    // Encoding: ExifTool's `%RIFF::audioEncoding`, shared with wav.rs. See
+    // `core::formatters::audio_encoding`. The table that used to be inline
+    // here disagreed with the one in wav.rs on the same code -- both emit
+    // `RIFF:Encoding`, so the same wFormatTag printed differently depending on
+    // which container carried it.
+    let format_name = audio_encoding_name(format_tag);
     metadata.insert(
         "RIFF:Encoding".to_string(),
-        TagValue::new_string(format_name.to_string()),
+        TagValue::new_string(format_name),
     );
 
     // NumChannels
