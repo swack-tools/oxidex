@@ -1,6 +1,22 @@
-use oxidex::core::MetadataMap;
-use std::process::Command;
+use oxidex::core::TagValue;
+use oxidex::io::buffered_reader::BufferedReader;
+use oxidex::parsers::audio::flac::parse_flac_metadata;
 use serde_json::Value;
+use std::path::Path;
+use std::process::Command;
+
+/// The value as it reaches output, for the variants these parsers emit.
+///
+/// Anything else is reported verbatim so a value stored in an unexpected shape
+/// fails the comparison instead of quietly reading as equal.
+fn printed(value: &TagValue) -> String {
+    match value {
+        TagValue::String(s) => s.clone(),
+        TagValue::Integer(n) => n.to_string(),
+        TagValue::Float(f) => f.to_string(),
+        other => format!("<unexpected TagValue variant: {:?}>", other),
+    }
+}
 
 #[test]
 #[ignore] // Requires ExifTool to be installed
@@ -14,7 +30,11 @@ fn test_flac_metadata_parity_with_exiftool() {
     }
 
     // Run ExifTool
+    // -G0 is required: the tags compared below are group-qualified
+    // ("FLAC:SampleRate"), and a plain `-json` emits bare tag names, so every
+    // lookup would miss and the comparison would silently pass on nothing.
     let exiftool_output = Command::new("exiftool")
+        .arg("-G0")
         .arg("-json")
         .arg(test_file)
         .output()
@@ -22,33 +42,25 @@ fn test_flac_metadata_parity_with_exiftool() {
 
     assert!(exiftool_output.status.success(), "ExifTool failed");
 
-    let exiftool_json: Vec<Value> = serde_json::from_slice(&exiftool_output.stdout)
-        .expect("Failed to parse ExifTool JSON");
+    let exiftool_json: Vec<Value> =
+        serde_json::from_slice(&exiftool_output.stdout).expect("Failed to parse ExifTool JSON");
 
     // Run OxiDex
-    let oxidex_metadata = MetadataMap::from_file(test_file)
-        .expect("Failed to parse FLAC file");
+    let reader = BufferedReader::new(Path::new(test_file)).expect("Failed to open FLAC file");
+    let oxidex_metadata = parse_flac_metadata(&reader).expect("Failed to parse FLAC file");
 
     // Compare key tags
-    let tags_to_compare = [
-        "FLAC:SampleRate",
-        "FLAC:Channels",
-        "FLAC:BitsPerSample",
-    ];
+    let tags_to_compare = ["FLAC:SampleRate", "FLAC:Channels", "FLAC:BitsPerSample"];
 
     for tag in &tags_to_compare {
         let exiftool_value = &exiftool_json[0][tag];
         let oxidex_value = oxidex_metadata.get(tag);
 
-        assert!(
-            oxidex_value.is_some(),
-            "OxiDex missing tag: {}",
-            tag
-        );
+        assert!(oxidex_value.is_some(), "OxiDex missing tag: {}", tag);
 
         // Compare values (convert to strings for comparison)
         let exiftool_str = exiftool_value.to_string().trim_matches('"').to_string();
-        let oxidex_str = oxidex_value.unwrap().to_string();
+        let oxidex_str = printed(oxidex_value.unwrap());
 
         assert_eq!(
             exiftool_str, oxidex_str,

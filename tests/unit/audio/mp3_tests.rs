@@ -1,6 +1,6 @@
-use oxidex::parsers::audio::mp3::Mp3Parser;
 use oxidex::core::FormatParser;
 use oxidex::io::BufferedReader;
+use oxidex::parsers::audio::mp3::Mp3Parser;
 
 #[test]
 fn test_mp3_id3v2_magic() {

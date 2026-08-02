@@ -120,5 +120,47 @@ mod cli_batch_wiring_tests;
 #[path = "integration/cli_typed_value_tests.rs"]
 mod cli_typed_value_tests;
 
+#[path = "integration/error_handling_tests.rs"]
+mod error_handling_tests;
+
+// Container / audio format integration tests. These were previously declared
+// only in tests/integration/mod.rs, which no Cargo test root ever included, so
+// they never compiled. Declare them here like every other integration module.
+#[path = "integration/mkv_integration_tests.rs"]
+mod mkv_integration_tests;
+
+#[path = "integration/webm_integration_tests.rs"]
+mod webm_integration_tests;
+
+#[path = "integration/flv_integration_tests.rs"]
+mod flv_integration_tests;
+
+#[path = "integration/avi_integration_tests.rs"]
+mod avi_integration_tests;
+
+#[path = "integration/mts_integration_tests.rs"]
+mod mts_integration_tests;
+
+#[path = "integration/mp3_integration_tests.rs"]
+mod mp3_integration_tests;
+
+#[path = "integration/flac_integration_tests.rs"]
+mod flac_integration_tests;
+
+#[path = "integration/aac_integration_tests.rs"]
+mod aac_integration_tests;
+
+#[path = "integration/wav_integration_tests.rs"]
+mod wav_integration_tests;
+
+#[path = "integration/ogg_integration_tests.rs"]
+mod ogg_integration_tests;
+
+#[path = "integration/opus_integration_tests.rs"]
+mod opus_integration_tests;
+
+#[path = "integration/ape_integration_tests.rs"]
+mod ape_integration_tests;
+
 #[path = "forensic/mod.rs"]
 mod forensic;
