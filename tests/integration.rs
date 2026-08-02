@@ -172,5 +172,11 @@ mod opus_integration_tests;
 #[path = "integration/ape_integration_tests.rs"]
 mod ape_integration_tests;
 
+// No qualcomm/google/microsoft MakerNote test modules: those three suites were
+// deleted rather than declared. Every tag name they asserted appears in zero
+// ExifTool 13.59 source files, so declaring them would have pinned invented
+// data as expected behaviour. See the commit that removed them for the
+// name-by-name evidence.
+
 #[path = "forensic/mod.rs"]
 mod forensic;
