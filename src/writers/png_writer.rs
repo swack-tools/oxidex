@@ -8,7 +8,9 @@
 use crate::core::FileReader;
 use crate::core::metadata_map::MetadataMap;
 use crate::error::{ExifToolError, Result};
-use crate::parsers::png::chunk_parser::{PNG_SIGNATURE, PngChunk, parse_chunk};
+use crate::parsers::png::chunk_parser::{
+    PNG_SIGNATURE, PngChunk, parse_chunk, parse_itxt_chunk, parse_text_chunk, parse_ztxt_chunk,
+};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::writers::atomic_writer::write_atomic;
 use crate::writers::tiff_writer::serialize_ifd;
@@ -17,6 +19,10 @@ use std::path::Path;
 
 /// CRC-32 instance for PNG chunk validation
 const PNG_CRC: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
+
+/// iTXt keyword under which PNG stores an XMP packet. `parse_png_metadata`
+/// routes this one into the `XMP:` namespace rather than `PNG:iTXt:`.
+const XMP_ITXT_KEYWORD: &str = "XML:com.adobe.xmp";
 
 /// Calculates CRC-32 checksum for a PNG chunk.
 ///
@@ -242,6 +248,42 @@ fn serialize_exif_chunk(metadata: &MetadataMap) -> Result<Vec<u8>> {
 /// write_png_metadata(path, &reader, &metadata)?;
 /// # Ok::<(), oxidex::error::ExifToolError>(())
 /// ```
+/// Whether the map is authoritative for this text chunk — i.e. whether
+/// rebuilding from the map reproduces it, so that its absence from the map is
+/// a genuine removal rather than an artifact of how the reader filed it.
+///
+/// True when the reader surfaces the chunk under a `PNG:<type>:<keyword>` key
+/// (the map then round-trips it, and dropping the key removes the chunk), or
+/// when the map already holds that key.
+///
+/// False for chunks the reader files elsewhere — notably an iTXt XMP packet,
+/// which `parse_png_metadata` parses into the `XMP:` namespace. Rebuilding
+/// from the map cannot reproduce those, so they are carried byte-for-byte,
+/// the same rule the EXIF surgical writer applies to entries the reader hides.
+fn map_owns_text_chunk(chunk: &PngChunk, metadata: &MetadataMap) -> bool {
+    let parsed = match &chunk.chunk_type {
+        b"tEXt" => parse_text_chunk(&chunk.data),
+        b"iTXt" => parse_itxt_chunk(&chunk.data),
+        b"zTXt" => parse_ztxt_chunk(&chunk.data),
+        _ => return false,
+    };
+    // A chunk the reader cannot parse is surfaced under no key at all, so the
+    // map can neither reproduce nor remove it: carry it.
+    let Ok((keyword, _)) = parsed else {
+        return false;
+    };
+    let Ok(chunk_type) = std::str::from_utf8(&chunk.chunk_type) else {
+        return false;
+    };
+    let png_key = format!("PNG:{}:{}", chunk_type, keyword);
+    if metadata.contains_key(&png_key) {
+        return true;
+    }
+    // XMP packets are the one text chunk the reader routes into another
+    // namespace (`XMP:*`), so no PNG: key is ever produced for them.
+    !(chunk.chunk_type == *b"iTXt" && keyword == XMP_ITXT_KEYWORD)
+}
+
 pub fn write_png_metadata(
     path: &Path,
     original_reader: &dyn FileReader,
@@ -286,8 +328,19 @@ pub fn write_png_metadata(
             b"IHDR" => ihdr_chunk = Some(chunk),
             b"IDAT" => idat_chunks.push(chunk),
             b"IEND" => iend_chunk = Some(chunk),
-            b"tEXt" | b"iTXt" | b"zTXt" | b"eXIf" => {
-                // Skip old metadata chunks - they'll be replaced
+            b"tEXt" | b"iTXt" | b"zTXt" => {
+                // Rebuilt below from the map's PNG:<type>:<keyword> keys — but
+                // only when the map actually has a key for this keyword. The
+                // reader parses some text chunks into a different namespace
+                // instead (an iTXt "XML:com.adobe.xmp" chunk surfaces as
+                // XMP:*), and dropping those would delete metadata the caller
+                // never saw and never asked to change.
+                if !map_owns_text_chunk(chunk, modified_metadata) {
+                    other_chunks.push(chunk);
+                }
+            }
+            b"eXIf" => {
+                // Skip old metadata chunk - it'll be replaced
             }
             _ => {
                 // Preserve other chunks (PLTE, tRNS, etc.)

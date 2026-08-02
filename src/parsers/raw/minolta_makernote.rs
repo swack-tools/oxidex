@@ -21,6 +21,7 @@
 //! tables -- are deliberately left undecoded rather than guessed at.
 
 use crate::core::TagValue;
+use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use std::collections::HashMap;
@@ -215,28 +216,9 @@ fn trim_zeros(s: &str) -> String {
     }
 }
 
-/// ExifTool `Image::ExifTool::Exif::PrintExposureTime`.
-fn print_exposure_time(secs: f64) -> String {
-    if secs < 0.25001 && secs > 0.0 {
-        return format!("1/{}", (0.5 + 1.0 / secs).trunc() as i64);
-    }
-    trim_zeros(&format!("{secs:.1}"))
-}
-
 /// ExifTool `Image::ExifTool::Exif::PrintFraction`.
 fn print_fraction(val: f64) -> String {
-    let v = val * 1.00001; // ExifTool's own round-off guard
-    if v == 0.0 {
-        return "0".to_string();
-    }
-    for (mult, suffix) in [(1.0, ""), (2.0, "/2"), (3.0, "/3")] {
-        let scaled = v * mult;
-        let whole = scaled.trunc();
-        if whole / scaled > 0.999 {
-            return format!("{:+}{}", whole as i64, suffix);
-        }
-    }
-    fmt_g(v, 3, true)
+    crate::core::formatters::exif_print_conv::print_fraction(val)
 }
 
 /// ExifTool `Image::ExifTool::Exif::PrintParameter`, wrapped by the

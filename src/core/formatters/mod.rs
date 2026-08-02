@@ -5,6 +5,7 @@
 
 pub mod cfa_pattern;
 pub mod exif_enums;
+pub mod exif_print_conv;
 pub mod exposure_program;
 pub mod gps_altitude_ref;
 pub mod gps_direction_ref;
@@ -14,6 +15,7 @@ pub mod gps_speed_ref;
 pub mod gps_status;
 pub mod interop_version;
 pub mod numeric_precision;
+pub mod picture_type;
 pub mod scene_type;
 pub mod unit_suffixes;
 pub mod ycbcr_subsampling;
@@ -28,6 +30,7 @@ pub use exif_enums::{
     format_scene_capture_type, format_sensing_method, format_sharpness,
     format_subject_distance_range, format_white_balance, format_ycbcr_positioning,
 };
+pub use exif_print_conv::{print_exposure_time, print_exposure_time_micros_str, print_fraction};
 pub use exposure_program::format_exposure_program;
 pub use gps_altitude_ref::{format_gps_altitude_ref, format_gps_altitude_ref_byte};
 pub use gps_direction_ref::format_gps_direction_ref;
@@ -41,6 +44,7 @@ pub use numeric_precision::{
     format_integer_precision_values, format_three_decimal_values, is_icc_matrix_tag,
     is_integer_precision_tag, is_three_decimal_tag, perl_number,
 };
+pub use picture_type::picture_type_name;
 pub use scene_type::decode_scene_type;
 pub use unit_suffixes::format_with_unit;
 pub use ycbcr_subsampling::{format_ycbcr_subsampling, format_ycbcr_subsampling_string};

@@ -16,9 +16,14 @@ use crate::models::TagInfo;
 use oxidex::core::TagValue;
 use oxidex::core::exiftool_compat::format_for_exiftool;
 use oxidex::core::tag_normalization::normalize_tag_family;
+// Unit suffixing must come from the same module the library itself ships --
+// `exiftool_compat::format_tag_value` calls
+// `core::formatters::unit_suffixes::format_with_unit`, so importing a
+// second implementation here would score oxidex against a formatter it does
+// not use.
+use oxidex::core::formatters::unit_suffixes::{format_with_unit, needs_unit_suffix};
 use oxidex::core::value_formatter::{
-    format_date_exif_style, format_rational_as_decimal, format_with_unit, is_decimal_rational_tag,
-    needs_unit_suffix,
+    format_date_exif_style, format_rational_as_decimal, is_decimal_rational_tag,
 };
 use oxidex::parsers::tiff::tiff_enums::tiff_enum_to_string;
 use serde::{Deserialize, Serialize};
@@ -475,9 +480,12 @@ impl OxiDexExtractor {
                 if is_decimal_rational_tag(key) || is_decimal_rational_tag(name) {
                     let decimal =
                         format_rational_as_decimal(*numerator as i64, *denominator as i64);
-                    // Add unit if needed
+                    // `key` and not `name`: EXIF 0x920a's `sprintf("%.1f mm")`
+                    // (Exif.pm:2401) applies to `ExifIFD:FocalLength` but not to
+                    // the maker-note tables that reuse the bare name, so the
+                    // group has to stay visible to the formatter.
                     if needs_unit_suffix(key) || needs_unit_suffix(name) {
-                        return format_with_unit(name, &decimal);
+                        return format_with_unit(key, &decimal);
                     }
                     return decimal;
                 }
@@ -488,9 +496,9 @@ impl OxiDexExtractor {
                 let formatted = format!("{:.9}", value);
                 let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');
 
-                // Add unit suffix if needed
+                // Add unit suffix if needed (group-qualified, as above)
                 if needs_unit_suffix(key) || needs_unit_suffix(name) {
-                    format_with_unit(name, trimmed)
+                    format_with_unit(key, trimmed)
                 } else {
                     trimmed.to_string()
                 }
@@ -911,6 +919,32 @@ impl OxiDexExtractor {
         )
     }
 
+    /// The seven MP Entry tag names repeat once per embedded image, each under
+    /// its own indexed family-1 group (`MPImage1:MPImageStart`,
+    /// `MPImage2:MPImageStart`, ... -- MPF.pm:247). ExifTool's own family-0
+    /// view collapses them exactly the same way: `exiftool -G0 -a` prints
+    /// `[MPF] MPImageStart` once per image and `-json -G` keeps one. They are
+    /// per-image peers, not OxiDex computing one conceptual tag twice, so --
+    /// like the XMP namespace peers above -- they must not trip the
+    /// duplicate-emission gate.
+    ///
+    /// Sorted-key order makes the surviving value the highest-numbered group,
+    /// which is the one ExifTool's family-0 JSON keeps, for up to nine images.
+    /// The sample corpus tops out at three MP Entries (737 MPF files: 48 with
+    /// one, 648 with two, 41 with three).
+    fn is_exiftool_family0_mp_image_peer(normalized_key: &str) -> bool {
+        matches!(
+            normalized_key,
+            "MPF:MPImageFlags"
+                | "MPF:MPImageFormat"
+                | "MPF:MPImageType"
+                | "MPF:MPImageLength"
+                | "MPF:MPImageStart"
+                | "MPF:DependentImage1EntryNumber"
+                | "MPF:DependentImage2EntryNumber"
+        )
+    }
+
     /// Flatten MetadataMap into TagInfo vector
     ///
     /// Returns the flattened tags plus, for every displayed `family:name`
@@ -1012,7 +1046,9 @@ impl OxiDexExtractor {
 
             // Format the value
             let value_str = self.format_value(&normalized_key, &name, value);
-            if Self::is_exiftool_family0_xmp_overlap(&normalized_key) {
+            if Self::is_exiftool_family0_xmp_overlap(&normalized_key)
+                || Self::is_exiftool_family0_mp_image_peer(&normalized_key)
+            {
                 // Preserve the existing sorted, last-write-wins behavior so
                 // our family-0 JSON view chooses the same schema value as
                 // ExifTool. Only the false duplicate evidence is suppressed.
@@ -1183,6 +1219,15 @@ impl OxiDexExtractor {
             "TAR" => vec!["tar"],
             "ISO" => vec!["iso"],
             "OLE" => vec!["doc", "xls", "ppt", "msg", "vsd", "pub"],
+            // Formats that had no entry here at all, which is why the harness
+            // reported no row for them: an unnamed format finds no files, and
+            // "no gap" and "not looked at" were indistinguishable.
+            "DR4" => vec!["dr4"],
+            "VRD" => vec!["vrd"],
+            "LFP" => vec!["lfp", "lfr"],
+            "DJVU" => vec!["djvu", "djv"],
+            "HTML" => vec!["html", "htm"],
+            "LNK" => vec!["lnk"],
             _ => vec![],
         }
     }

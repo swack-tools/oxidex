@@ -55,15 +55,14 @@ pub mod resources_parser;
 pub mod root_parser;
 pub mod shared;
 pub mod signature_parser;
-pub mod structure_parser;
 pub mod xmp_extractor;
 
+use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::core::{FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::icc::extract_icc_profile;
 use encryption_parser::parse_encryption_metadata;
 // use root_parser::parse_root_metadata;
-// use structure_parser::parse_structure_metadata;
 
 /// PDF signature/magic bytes
 const PDF_SIGNATURE: &[u8] = b"%PDF-";
@@ -439,21 +438,6 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     //     Err(e) => {
     //         // Log warning but continue - Root metadata might not be parseable
     //         eprintln!("Warning: Failed to parse PDF Root metadata: {}", e);
-    //     }
-    // }
-
-    // Extract structure and features metadata
-    // TODO: Implement structure_parser
-    // match parse_structure_metadata(reader) {
-    //     Ok(structure_metadata) => {
-    //         // Merge structure tags into main metadata
-    //         for (key, value) in structure_metadata.iter() {
-    //             metadata.insert(key.clone(), value.clone());
-    //         }
-    //     }
-    //     Err(e) => {
-    //         // Log warning but continue - structure metadata might not be parseable
-    //         eprintln!("Warning: Failed to parse PDF structure metadata: {}", e);
     //     }
     // }
 
@@ -1314,85 +1298,7 @@ fn read_signed_rational_value(
 /// body of PrintFraction over the 27 inputs asserted in
 /// `print_fraction_matches_exiftool_reference_outputs`.
 fn print_fraction(val: f64) -> String {
-    // ExifTool's own comment: "avoid round-off errors".
-    let val = val * 1.00001;
-    if val == 0.0 {
-        return "0".to_string();
-    }
-    // Perl's int() truncates toward zero, matching f64::trunc.
-    if val.trunc() / val > 0.999 {
-        return format!("{:+}", val.trunc() as i64);
-    }
-    if (val * 2.0).trunc() / (val * 2.0) > 0.999 {
-        return format!("{:+}/2", (val * 2.0).trunc() as i64);
-    }
-    if (val * 3.0).trunc() / (val * 3.0) > 0.999 {
-        return format!("{:+}/3", (val * 3.0).trunc() as i64);
-    }
-    format_signed_g3(val)
-}
-
-/// Port of `Image::ExifTool::Exif::PrintExposureTime` (ExifTool 13.55
-/// Exif.pm), which renders a shutter speed in seconds.
-///
-/// Anything shorter than about a quarter second becomes the reciprocal form
-/// photographers read ("1/64"); a whole number of seconds prints without a
-/// decimal point, and everything else to one decimal place.
-fn print_exposure_time(seconds: f64) -> String {
-    if seconds > 0.0 && seconds < 0.25001 {
-        return format!("1/{}", (0.5 + 1.0 / seconds) as i64);
-    }
-    if seconds == seconds.trunc() {
-        return format!("{}", seconds as i64);
-    }
-    format!("{:.1}", seconds)
-}
-
-/// Reproduces Perl's `sprintf("%+.3g", $val)`: three significant digits, `%e`
-/// style when the decimal exponent falls outside `-4 <= exp < 3`, trailing
-/// zeros stripped, sign always present.
-fn format_signed_g3(val: f64) -> String {
-    const SIG_DIGITS: i32 = 3;
-
-    // Round to SIG_DIGITS first so the exponent is the post-rounding one, the
-    // way C's %g defines it (0.9999 -> 1.00e+00, exponent 0, not -1).
-    let sci = format!("{:.*e}", (SIG_DIGITS - 1) as usize, val);
-    let (mantissa, exp) = match sci.split_once('e') {
-        Some((m, e)) => (m, e.parse::<i32>().unwrap_or(0)),
-        None => (sci.as_str(), 0),
-    };
-
-    let body = if exp < -4 || exp >= SIG_DIGITS {
-        format!(
-            "{}e{}{:02}",
-            trim_zeros(mantissa),
-            sign_char(exp),
-            exp.abs()
-        )
-    } else {
-        let decimals = usize::try_from(SIG_DIGITS - 1 - exp).unwrap_or(0);
-        trim_zeros(&format!("{:.*}", decimals, val)).to_string()
-    };
-
-    if body.starts_with('-') {
-        body
-    } else {
-        format!("+{}", body)
-    }
-}
-
-fn sign_char(exp: i32) -> char {
-    if exp < 0 { '-' } else { '+' }
-}
-
-/// Strips the trailing zeros (and any orphaned decimal point) that C's `%g`
-/// removes but Rust's `{:.*}` keeps.
-fn trim_zeros(s: &str) -> &str {
-    if s.contains('.') {
-        s.trim_end_matches('0').trim_end_matches('.')
-    } else {
-        s
-    }
+    crate::core::formatters::exif_print_conv::print_fraction(val)
 }
 
 fn read_undefined_value(

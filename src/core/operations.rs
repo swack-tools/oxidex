@@ -8,10 +8,10 @@ use super::{FileFormat, FileReader, MetadataMap, TagValue};
 use crate::core::format_dispatch::dispatch_format_parser;
 use crate::core::jpeg_helpers::{
     process_app3_segments, process_app6_segments, process_app10_segments, process_app11_segments,
-    process_app12_segments, process_app14_segments, process_com_segments, process_dqt_segments,
-    process_exif_segments, process_icc_segments, process_infiray_segments, process_iptc_segments,
-    process_jfif_segments, process_mpf_segments, process_photoshop_segments, process_sof_segments,
-    process_spiff_segments, process_xmp_segments,
+    process_app12_segments, process_app14_segments, process_app15_segments, process_com_segments,
+    process_dqt_segments, process_exif_segments, process_icc_segments, process_infiray_segments,
+    process_iptc_segments, process_jfif_segments, process_mpf_segments, process_photoshop_segments,
+    process_qualcomm_segments, process_sof_segments, process_spiff_segments, process_xmp_segments,
 };
 use crate::core::operations_helpers::{read_u16, read_u32};
 #[cfg(test)]
@@ -31,6 +31,7 @@ use crate::writers::atomic_writer::write_atomic;
 use crate::writers::jpeg_writer::write_exif_to_jpeg;
 use crate::writers::pdf_writer::write_pdf_file;
 use crate::writers::png_writer::write_png_metadata;
+use crate::writers::tiff_surgical::rewrite_tiff_file;
 use std::path::Path;
 
 // ============================================================================
@@ -96,12 +97,37 @@ pub(crate) fn is_unsupported(e: &ExifToolError) -> bool {
     matches!(e, ExifToolError::UnsupportedFormat { .. })
 }
 
+/// Whether a `File:` identity value is `extract_file_metadata`'s optimistic
+/// placeholder rather than a real answer.
+///
+/// `extract_file_metadata` fills these in from a small extension table before
+/// the format is known, so a file it does not cover arrives here carrying
+/// "Unknown" and "application/octet-stream".
+fn is_placeholder(v: Option<&str>) -> bool {
+    matches!(
+        v,
+        None | Some("") | Some("Unknown") | Some("unknown") | Some("application/octet-stream")
+    )
+}
+
 /// Fill in `FileType`, `FileTypeExtension` and `MIMEType` from ExifTool's
 /// identification tables. Returns whether the file was recognised.
 ///
-/// Used when no parser matched. Identifying a file is independent of being able
-/// to read its contents, and these three tags are what ExifTool reports for a
-/// format it knows of but has nothing else to say about.
+/// Identifying a file is independent of being able to read its contents, so
+/// this runs on **every** read, not only when no parser matched. It used to be
+/// reachable only from the `UnsupportedFormat` arms below, which meant a format
+/// the dispatcher *does* recognise never got here -- and the optimistic values
+/// `extract_file_metadata` leaves behind come from a ~50-extension hand-written
+/// table. The result was 67 corpus files parsing their contents perfectly while
+/// reporting `FileType: Unknown` and `MIMEType: application/octet-stream`:
+/// ICC_Profile.icc (35 tags), Photoshop.psd (111 tags), Font.ttf (50 tags),
+/// every .xmp, .json, .csv and .plist in the corpus.
+///
+/// A real answer from a parser is never replaced. Only placeholders are
+/// filled, and the canonical extension is corrected only when the file type we
+/// resolved is the one being reported -- otherwise a parser that knows better
+/// than the extension (a `.m4a` that is really MOV) would get a contradictory
+/// pair.
 fn add_identity_tags(metadata: &mut MetadataMap, reader: &dyn FileReader, path: &Path) -> bool {
     // 1 KiB is what the magic-number patterns are written against.
     let want = reader.size().min(1024) as usize;
@@ -112,33 +138,30 @@ fn add_identity_tags(metadata: &mut MetadataMap, reader: &dyn FileReader, path: 
         return false;
     };
 
-    // Overwrite only what is absent or a placeholder. `extract_file_metadata`
-    // fills these in optimistically before the format is known -- "Unknown",
-    // "application/octet-stream", and the on-disk extension rather than
-    // ExifTool's canonical one (`aif` where ExifTool says `aiff`). A real
-    // answer from a parser is still never replaced.
-    fn is_placeholder(v: Option<&str>) -> bool {
-        matches!(
-            v,
-            None | Some("") | Some("Unknown") | Some("unknown") | Some("application/octet-stream")
-        )
+    let reported = metadata.get_string("File:FileType");
+    let ours_is_authoritative = is_placeholder(reported) || reported == Some(id.file_type.as_ref());
+    if is_placeholder(reported) {
+        metadata.insert("File:FileType", TagValue::new_string(id.file_type.as_ref()));
     }
 
-    for (key, value) in [
-        ("File:FileType", id.file_type),
-        ("File:FileTypeExtension", id.extension.as_ref()),
-    ] {
-        // The extension is only a placeholder when it disagrees with the
-        // canonical one, which is exactly when we should correct it.
-        let current = metadata.get_string(key);
-        if is_placeholder(current) || (key.ends_with("Extension") && current != Some(value)) {
-            metadata.insert(key, TagValue::new_string(value));
+    // The on-disk extension is a placeholder whenever it disagrees with
+    // ExifTool's canonical one (`aif` where ExifTool says `aiff`), which is
+    // exactly when it should be corrected.
+    if ours_is_authoritative {
+        let current = metadata.get_string("File:FileTypeExtension");
+        if is_placeholder(current) || current != Some(id.extension.as_ref()) {
+            metadata.insert(
+                "File:FileTypeExtension",
+                TagValue::new_string(id.extension.as_ref()),
+            );
         }
     }
-    if let Some(mime) = id.mime_type {
-        if is_placeholder(metadata.get_string("File:MIMEType")) {
-            metadata.insert("File:MIMEType", TagValue::new_string(mime));
-        }
+
+    if let Some(mime) = id.mime_type
+        && ours_is_authoritative
+        && is_placeholder(metadata.get_string("File:MIMEType"))
+    {
+        metadata.insert("File:MIMEType", TagValue::new_string(mime));
     }
     true
 }
@@ -259,6 +282,14 @@ pub fn read_metadata_with_detector(
     // Use into_iter() to consume format_metadata and avoid cloning keys and values
     metadata.merge(format_metadata);
 
+    // Step 5a: Identity tags, from ExifTool's own tables.
+    //
+    // This used to run only when parsing failed, which made a working parser
+    // and a correct `File:FileType` mutually exclusive: LNK, EXR and ICC files
+    // parsed fine and still reported `FileType: Unknown`. Only placeholders are
+    // filled, so a parser that names the type itself still wins.
+    add_identity_tags(&mut metadata, &reader, path);
+
     // Step 5b: Backstop for ExifByteOrder on TIFF-based files.
     //
     // The JPEG path records this when it parses the APP1 TIFF header, but the
@@ -266,7 +297,11 @@ pub fn read_metadata_with_detector(
     // different entry points in the raw parsers. Every TIFF-based file starts
     // with the marker, so reading it here covers all of them at once instead
     // of threading the same insert through each parser.
-    if !metadata.contains_key("File:ExifByteOrder") {
+    //
+    // DR4 is excluded: its magic number *is* `IIII`, a Canon byte-order marker
+    // for the recipe directory rather than a TIFF header, and ExifTool reports
+    // no ExifByteOrder for it.
+    if !metadata.contains_key("File:ExifByteOrder") && format != FileFormat::DR4 {
         if let Ok(head) = reader.read(0, 2) {
             let order = match &head[..] {
                 b"II" => Some(ByteOrder::LittleEndian),
@@ -351,31 +386,30 @@ pub fn read_metadata_with_detector(
 ///
 /// Tags not in the registry are skipped during validation (allows custom tags).
 pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
-    // PHASE 1: VALIDATION
-    // JPEG is validated inside the surgical writer, which distinguishes
-    // caller-changed values (strict validation) from unchanged originals
-    // (raw carry-over that never re-enters through TagValue). Whole-map
-    // validation here would wrongly reject unchanged display-form tags
-    // (issue #20). Other formats keep the original whole-map validation.
     let reader = MMapReader::new(path)?;
     let format = detect_format(&reader)?;
 
-    if format != FileFormat::JPEG {
-        for (tag_name, tag_value) in metadata.iter() {
-            // Look up tag descriptor in registry
-            if let Some(descriptor) = get_tag_descriptor(tag_name) {
-                if has_reliable_value_type(tag_name) {
-                    // Pass the original tag_name (e.g., "IFD0:Make") for error messages.
-                    validate_tag_value_with_name(tag_name, descriptor, tag_value)?;
-                } else {
-                    validate_tag_value_intrinsics(tag_name, tag_value)?;
-                }
-            }
-            // If tag is not in registry, skip validation (allows custom/rare tags)
-        }
+    // The caller-changed set, recovered the same way the JPEG surgical writer
+    // recovers it: by re-reading the file being written. See
+    // `validate_caller_changes` for why that is both sufficient and necessary.
+    let baseline = read_metadata(path).ok();
+
+    // PHASE 1: VALIDATION
+    // JPEG and the TIFF-structured formats validate inside their surgical
+    // writers, which already have the original bytes to diff against.
+    if !matches!(format, FileFormat::JPEG) && !is_surgical_tiff_target(format, &reader) {
+        validate_caller_changes(metadata, baseline.as_ref())?;
     }
 
     // PHASE 2: ROUTE TO APPROPRIATE WRITER
+    if is_surgical_tiff_target(format, &reader) {
+        let file_bytes = reader.read(0, reader.size() as usize)?;
+        let original = baseline.unwrap_or_default();
+        let out = rewrite_tiff_file(file_bytes, &original, metadata)?;
+        write_atomic(path, &out)?;
+        return Ok(());
+    }
+
     match format {
         FileFormat::JPEG => {
             // Use JPEG writer to serialize metadata
@@ -388,13 +422,15 @@ pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
         FileFormat::PDF => {
             write_pdf_file(path, &reader, metadata)?;
         }
-        FileFormat::TIFF => {
-            // The TIFF writer rebuilds the file from metadata alone and does not
-            // yet carry over image data (strips/tiles), so routing it here would
-            // replace the image with a metadata-only file.
-            return Err(ExifToolError::unsupported_format(
-                "TIFF write operations are not yet supported: the TIFF writer does not preserve image data",
-            ));
+        FileFormat::TIFF | FileFormat::CameraRaw(_) => {
+            // Reached only when the container is not actually walkable as a
+            // TIFF (BigTIFF, or a RAW wrapper like RAF/MRW/X3F/CR3 whose
+            // outer bytes are not a TIFF header).
+            return Err(ExifToolError::unsupported_format(format!(
+                "Write operations for format {:?} are not supported: its container \
+                 is not a walkable TIFF structure",
+                format
+            )));
         }
         _ => {
             return Err(ExifToolError::unsupported_format(format!(
@@ -404,6 +440,61 @@ pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Whether this file should go through the surgical whole-file TIFF writer.
+///
+/// Gated on the *bytes*, not the format label: `FileFormat::CameraRaw` covers
+/// both TIFF-structured RAWs (NEF, CR2, IIQ, RW2, ARW, ...) and proprietary
+/// wrappers that merely embed a TIFF somewhere inside (RAF, MRW, X3F, CR3).
+/// Only the former can be edited in place.
+fn is_surgical_tiff_target(format: FileFormat, reader: &dyn FileReader) -> bool {
+    if !matches!(format, FileFormat::TIFF | FileFormat::CameraRaw(_)) {
+        return false;
+    }
+    let header = reader.read(0, reader.size().min(8) as usize).unwrap_or(&[]);
+    crate::writers::tiff_surgical::is_walkable_tiff(header)
+}
+
+/// Validates the values the caller actually changed, and only those.
+///
+/// `baseline` is the map the reader produces from the file on disk right now.
+/// A value equal to its baseline is *carried over*, not authored: writing it
+/// back cannot introduce a value the file did not already contain, so
+/// re-validating it protects nothing — while rejecting it breaks writes
+/// outright, which is issue #20. The reader legitimately emits display forms
+/// that do not match a tag's declared `TagValue` type (`IFD0:BitsPerSample`
+/// as the string "8 8 8", `ExifIFD:DateTimeOriginal` as an unparsed string),
+/// so whole-map validation failed on tags the caller never touched and every
+/// non-JPEG write died on a tag it was not writing.
+///
+/// This is the same rule the JPEG surgical writer applies per entry
+/// (`exif_surgical::plan_exif_write`), hoisted to be format-agnostic. It needs
+/// no API change: the "was this changed?" question is answerable from the file
+/// itself, exactly as `rewrite_jpeg_exif` answers it.
+///
+/// With no readable baseline (`None`) every value is treated as changed, so
+/// the check degrades to the original whole-map validation rather than to
+/// no validation at all.
+fn validate_caller_changes(metadata: &MetadataMap, baseline: Option<&MetadataMap>) -> Result<()> {
+    for (tag_name, tag_value) in metadata.iter() {
+        if let Some(baseline) = baseline
+            && baseline.get(tag_name) == Some(tag_value)
+        {
+            continue; // carried over unchanged
+        }
+        // Look up tag descriptor in registry
+        if let Some(descriptor) = get_tag_descriptor(tag_name) {
+            if has_reliable_value_type(tag_name) {
+                // Pass the original tag_name (e.g., "IFD0:Make") for error messages.
+                validate_tag_value_with_name(tag_name, descriptor, tag_value)?;
+            } else {
+                validate_tag_value_intrinsics(tag_name, tag_value)?;
+            }
+        }
+        // If tag is not in registry, skip validation (allows custom/rare tags)
+    }
     Ok(())
 }
 
@@ -710,11 +801,13 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
     // InfiRay IJPEG spreads its records over APP2-APP9; APP6 and APP8 are read
     // by the two calls that already own those markers.
     process_infiray_segments(&segments, &mut metadata);
+    process_qualcomm_segments(&segments, &mut metadata);
     process_app6_segments(&segments, &mut metadata);
     process_app10_segments(&segments, &mut metadata);
     process_app11_segments(&segments, &mut metadata);
     process_app12_segments(&segments, &mut metadata);
     process_app14_segments(&segments, &mut metadata);
+    process_app15_segments(&segments, &mut metadata);
 
     // Normalize tag families to match ExifTool conventions (ExifIFD: -> EXIF:)
     use crate::core::tag_normalization::normalize_metadata_map;

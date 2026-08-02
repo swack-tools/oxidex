@@ -184,36 +184,7 @@ pub fn nikon_focal_length(raw: u8) -> f64 {
 /// Renders a signed value as the nearest simple fraction, which is how Nikon's
 /// `ProgramShift`, `ExposureBracketValue` and the flash compensations print.
 pub fn print_fraction(value: f64) -> String {
-    let val = value * 1.00001; // ExifTool's round-off guard
-    if val == 0.0 {
-        return "0".to_string();
-    }
-    for denom in [1.0_f64, 2.0, 3.0] {
-        let scaled = val * denom;
-        let truncated = scaled.trunc();
-        if truncated != 0.0 && truncated / scaled > 0.999 {
-            let n = truncated as i64;
-            return if denom == 1.0 {
-                format!("{:+}", n)
-            } else {
-                format!("{:+}/{}", n, denom as i64)
-            };
-        }
-    }
-    format_g3(val) // sprintf("%+.3g", $val)
-}
-
-/// `sprintf("%+.3g", $val)`: three significant digits, always signed.
-fn format_g3(val: f64) -> String {
-    if val == 0.0 {
-        return "+0".to_string();
-    }
-    let body = format_significant(val, 3);
-    if val > 0.0 {
-        format!("+{}", body)
-    } else {
-        body
-    }
+    crate::core::formatters::exif_print_conv::print_fraction(value)
 }
 
 /// Drop the trailing zeros (and any bare decimal point) that `%g` suppresses.

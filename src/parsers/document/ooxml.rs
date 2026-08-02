@@ -2,8 +2,8 @@
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
-use quick_xml::Reader;
 use quick_xml::events::Event;
+use quick_xml::{Reader, XmlVersion};
 use std::io::{Cursor, Read};
 use zip::ZipArchive;
 
@@ -201,6 +201,7 @@ impl FormatParser for DocxParser {
             })?;
 
             parse_custom_properties(&xml_content, &mut metadata)?;
+            parse_docx_xml_custom_properties(&xml_content, &mut metadata)?;
         }
 
         // Parse [Content_Types].xml
@@ -220,6 +221,7 @@ impl FormatParser for DocxParser {
 
         // Add DOCX-specific tag aliases for Worker 20 requirements
         add_docx_tag_aliases(&mut metadata);
+        add_docx_xml_tags(&mut metadata);
 
         Ok(metadata)
     }
@@ -460,16 +462,53 @@ fn parse_app_properties(xml: &str, metadata: &mut MetadataMap) -> Result<()> {
 
     let mut buf = Vec::new();
     let mut current_element = String::new();
+    let mut in_heading_pairs = false;
+    let mut heading_pairs = Vec::new();
+    let mut in_titles_of_parts = false;
+    let mut titles_of_parts = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
                 current_element = String::from_utf8_lossy(e.local_name().as_ref()).to_string();
+                if current_element == "HeadingPairs" {
+                    in_heading_pairs = true;
+                    heading_pairs.clear();
+                } else if current_element == "TitlesOfParts" {
+                    in_titles_of_parts = true;
+                    titles_of_parts.clear();
+                }
             }
             Ok(Event::Text(e)) => {
                 if let Ok(text) = e.xml10_content()
                     && !text.is_empty()
                 {
+                    if in_heading_pairs {
+                        let value = match current_element.as_str() {
+                            "i1" | "i2" | "i4" | "i8" | "int" | "ui1" | "ui2" | "ui4" | "ui8"
+                            | "uint" => text
+                                .parse::<i64>()
+                                .map(TagValue::new_integer)
+                                .unwrap_or_else(|_| TagValue::new_string(text.to_string())),
+                            "lpstr" | "lpwstr" | "bstr" => TagValue::new_string(text.to_string()),
+                            _ => {
+                                buf.clear();
+                                continue;
+                            }
+                        };
+                        heading_pairs.push(value);
+                        buf.clear();
+                        continue;
+                    }
+
+                    if in_titles_of_parts {
+                        if matches!(current_element.as_str(), "lpstr" | "lpwstr" | "bstr") {
+                            titles_of_parts.push(TagValue::new_string(text.to_string()));
+                        }
+                        buf.clear();
+                        continue;
+                    }
+
                     let tag_name = match current_element.as_str() {
                         "Application" => "OOXML:Application",
                         "Pages" => "OOXML:Pages",
@@ -508,6 +547,30 @@ fn parse_app_properties(xml: &str, metadata: &mut MetadataMap) -> Result<()> {
                         }
                     };
                     metadata.insert(tag_name.to_string(), TagValue::new_string(text.to_string()));
+                }
+            }
+            Ok(Event::End(e)) => {
+                if e.local_name().as_ref() == b"HeadingPairs" {
+                    in_heading_pairs = false;
+                    if !heading_pairs.is_empty() {
+                        metadata.insert(
+                            "XML:HeadingPairs".to_string(),
+                            TagValue::new_array(std::mem::take(&mut heading_pairs)),
+                        );
+                    }
+                } else if e.local_name().as_ref() == b"TitlesOfParts" {
+                    in_titles_of_parts = false;
+                    if titles_of_parts.len() == 1 {
+                        metadata.insert(
+                            "XML:TitlesOfParts".to_string(),
+                            titles_of_parts.pop().expect("length checked"),
+                        );
+                    } else if !titles_of_parts.is_empty() {
+                        metadata.insert(
+                            "XML:TitlesOfParts".to_string(),
+                            TagValue::new_array(std::mem::take(&mut titles_of_parts)),
+                        );
+                    }
                 }
             }
             Ok(Event::Eof) => break,
@@ -751,6 +814,111 @@ fn parse_xlsx_specific<R: Read + std::io::Seek>(
     Ok(())
 }
 
+/// Extract DOCX custom properties under the normalized XML-group names used by
+/// ExifTool. Office permits arbitrary user-defined property names here.
+fn parse_docx_xml_custom_properties(xml: &str, metadata: &mut MetadataMap) -> Result<()> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+
+    let mut buf = Vec::new();
+    let mut current_tag: Option<String> = None;
+    let mut current_value_is_filetime = false;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                if e.local_name().as_ref() == b"property" {
+                    current_tag = None;
+                    current_value_is_filetime = false;
+
+                    for attribute in e.attributes() {
+                        let attribute = attribute.map_err(|e| {
+                            ExifToolError::parse_error(format!(
+                                "Invalid custom property attribute: {}",
+                                e
+                            ))
+                        })?;
+
+                        if attribute.key.as_ref() == b"name" {
+                            let name = attribute
+                                .decoded_and_normalized_value(
+                                    XmlVersion::Implicit1_0,
+                                    reader.decoder(),
+                                )
+                                .map_err(|e| {
+                                    ExifToolError::parse_error(format!(
+                                        "Invalid custom property name: {}",
+                                        e
+                                    ))
+                                })?;
+
+                            let normalized = normalize_xml_property_name(name.as_ref());
+                            if !normalized.is_empty() {
+                                current_tag = Some(format!("XML:{normalized}"));
+                            }
+                        }
+                    }
+                } else if current_tag.is_some() && e.local_name().as_ref() == b"filetime" {
+                    current_value_is_filetime = true;
+                }
+            }
+            Ok(Event::Text(e)) => {
+                if let Some(tag_name) = current_tag.as_ref() {
+                    let text = e.xml10_content().map_err(|e| {
+                        ExifToolError::parse_error(format!("Invalid custom property value: {}", e))
+                    })?;
+
+                    if !text.is_empty() {
+                        let value = if current_value_is_filetime {
+                            format_xml_date_for_exiftool(text.as_ref())
+                        } else {
+                            text.into_owned()
+                        };
+                        metadata.insert(tag_name.clone(), TagValue::new_string(value));
+                    }
+                }
+            }
+            Ok(Event::End(e)) => {
+                if e.local_name().as_ref() == b"property" {
+                    current_tag = None;
+                    current_value_is_filetime = false;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                return Err(ExifToolError::parse_error(format!(
+                    "XML custom properties parse error: {}",
+                    e
+                )));
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(())
+}
+
+fn normalize_xml_property_name(name: &str) -> String {
+    let mut normalized = String::with_capacity(name.len());
+    let mut capitalize_next = false;
+
+    for character in name.chars() {
+        if character.is_alphanumeric() {
+            if capitalize_next {
+                normalized.extend(character.to_uppercase());
+                capitalize_next = false;
+            } else {
+                normalized.push(character);
+            }
+        } else if !normalized.is_empty() {
+            capitalize_next = true;
+        }
+    }
+
+    normalized
+}
+
 /// Helper function to count occurrences of XML elements
 fn count_xml_elements(xml: &str, element_name: &str) -> usize {
     let mut reader = Reader::from_str(xml);
@@ -834,6 +1002,10 @@ fn add_docx_tag_aliases(metadata: &mut MetadataMap) {
         ("OOXML:ModifyDate", "DOCX:Modified"),
         ("OOXML:Words", "DOCX:WordCount"),
         ("OOXML:Pages", "DOCX:PageCount"),
+        ("OOXML:Title", "XMP:Title"),
+        ("OOXML:Subject", "XMP:Subject"),
+        ("OOXML:Creator", "XMP:Creator"),
+        ("OOXML:Description", "XMP:Description"),
     ];
 
     // Clone existing tags and create aliases with DOCX prefix
@@ -848,6 +1020,99 @@ fn add_docx_tag_aliases(metadata: &mut MetadataMap) {
     for (key, value) in docx_tags {
         metadata.insert(key, value);
     }
+}
+
+/// Add the standard XML-group names emitted by ExifTool for DOCX properties.
+fn add_docx_xml_tags(metadata: &mut MetadataMap) {
+    for (source, destination) in [
+        ("OOXML:Application", "XML:Application"),
+        ("OOXML:AppVersion", "XML:AppVersion"),
+        ("OOXML:Category", "XML:Category"),
+        ("OOXML:Characters", "XML:Characters"),
+        ("OOXML:CharactersWithSpaces", "XML:CharactersWithSpaces"),
+        ("OOXML:Company", "XML:Company"),
+        ("OOXML:HyperlinkBase", "XML:HyperlinkBase"),
+        ("OOXML:Keywords", "XML:Keywords"),
+        ("OOXML:LastModifiedBy", "XML:LastModifiedBy"),
+        ("OOXML:Lines", "XML:Lines"),
+        ("OOXML:Manager", "XML:Manager"),
+        ("OOXML:Pages", "XML:Pages"),
+        ("OOXML:Paragraphs", "XML:Paragraphs"),
+        ("OOXML:RevisionNumber", "XML:RevisionNumber"),
+        ("OOXML:Template", "XML:Template"),
+        ("OOXML:TotalEditTime", "XML:TotalEditTime"),
+        ("OOXML:Words", "XML:Words"),
+    ] {
+        if let Some(value) = metadata.get(source).cloned() {
+            metadata.insert(destination.to_string(), value);
+        }
+    }
+
+    for (source, destination) in [
+        ("OOXML:CreateDate", "XML:CreateDate"),
+        ("OOXML:ModifyDate", "XML:ModifyDate"),
+    ] {
+        if let Some(date) = metadata.get(source).and_then(TagValue::as_string) {
+            metadata.insert(
+                destination.to_string(),
+                TagValue::new_string(format_xml_date_for_exiftool(date)),
+            );
+        }
+    }
+
+    for (source, destination) in [
+        ("OOXML:HyperlinksChanged", "XML:HyperlinksChanged"),
+        ("OOXML:LinksUpToDate", "XML:LinksUpToDate"),
+        ("OOXML:ScaleCrop", "XML:ScaleCrop"),
+        ("OOXML:SharedDoc", "XML:SharedDoc"),
+    ] {
+        if let Some(value) = metadata.get(source).and_then(TagValue::as_string) {
+            metadata.insert(
+                destination.to_string(),
+                TagValue::new_string(format_xml_yes_no(value)),
+            );
+        }
+    }
+
+    if let Some(value) = metadata
+        .get("OOXML:DocSecurity")
+        .and_then(TagValue::as_string)
+    {
+        metadata.insert(
+            "XML:DocSecurity".to_string(),
+            TagValue::new_string(if value == "0" { "None" } else { value }),
+        );
+    }
+}
+
+fn format_xml_yes_no(value: &str) -> &str {
+    match value {
+        "true" | "1" => "Yes",
+        "false" | "0" => "No",
+        value => value,
+    }
+}
+
+/// Convert an ISO OOXML timestamp to ExifTool's default XML date rendering.
+///
+/// For example, `2009-10-24T01:48:00Z` becomes
+/// `2009:10:24 01:48:00Z`.
+fn format_xml_date_for_exiftool(value: &str) -> String {
+    let Some((date, time)) = value.split_once('T') else {
+        return value.to_string();
+    };
+
+    let mut date_parts = date.split('-');
+    let (Some(year), Some(month), Some(day), None) = (
+        date_parts.next(),
+        date_parts.next(),
+        date_parts.next(),
+        date_parts.next(),
+    ) else {
+        return value.to_string();
+    };
+
+    format!("{}:{}:{} {}", year, month, day, time)
 }
 
 #[cfg(test)]
@@ -1168,5 +1433,235 @@ mod tests {
         assert_eq!(count_xml_elements(xml, "item"), 3);
         assert_eq!(count_xml_elements(xml, "other"), 1);
         assert_eq!(count_xml_elements(xml, "nonexistent"), 0);
+    }
+
+    #[test]
+    fn test_docx_xml_standard_property_aliases() {
+        let mut metadata = MetadataMap::new();
+        for (name, value) in [
+            ("Application", "Microsoft Macintosh Word"),
+            ("AppVersion", "12.0000"),
+            ("Category", "category goes here"),
+            ("Characters", "42"),
+            ("CharactersWithSpaces", "45"),
+            ("Company", "Company - ExifTool"),
+            ("DocSecurity", "0"),
+            ("LastModifiedBy", "Jeff"),
+            ("Lines", "7"),
+            ("LinksUpToDate", "false"),
+            ("Manager", "Manager: Self"),
+            ("RevisionNumber", "3"),
+            ("ScaleCrop", "false"),
+            ("SharedDoc", "false"),
+            ("Template", "Normal"),
+            ("TotalEditTime", "7 minutes"),
+            ("Words", "7"),
+        ] {
+            metadata.insert(
+                format!("OOXML:{name}"),
+                TagValue::new_string(value.to_string()),
+            );
+        }
+        metadata.insert(
+            "OOXML:CreateDate".to_string(),
+            TagValue::new_string("2009-10-24T01:41:00Z".to_string()),
+        );
+        metadata.insert(
+            "OOXML:ModifyDate".to_string(),
+            TagValue::new_string("2009-10-24T01:48:00Z".to_string()),
+        );
+        metadata.insert(
+            "OOXML:Pages".to_string(),
+            TagValue::new_string("1".to_string()),
+        );
+        metadata.insert(
+            "OOXML:Paragraphs".to_string(),
+            TagValue::new_string("4".to_string()),
+        );
+
+        add_docx_xml_tags(&mut metadata);
+
+        for (name, expected) in [
+            ("Application", "Microsoft Macintosh Word"),
+            ("AppVersion", "12.0000"),
+            ("Category", "category goes here"),
+            ("Characters", "42"),
+            ("CharactersWithSpaces", "45"),
+            ("Company", "Company - ExifTool"),
+            ("CreateDate", "2009:10:24 01:41:00Z"),
+            ("DocSecurity", "None"),
+            ("LastModifiedBy", "Jeff"),
+            ("Lines", "7"),
+            ("LinksUpToDate", "No"),
+            ("Manager", "Manager: Self"),
+            ("RevisionNumber", "3"),
+            ("ScaleCrop", "No"),
+            ("SharedDoc", "No"),
+            ("Template", "Normal"),
+            ("TotalEditTime", "7 minutes"),
+            ("Words", "7"),
+        ] {
+            assert_eq!(
+                metadata
+                    .get(&format!("XML:{name}"))
+                    .and_then(TagValue::as_string),
+                Some(expected),
+                "XML:{name}"
+            );
+        }
+        assert_eq!(
+            metadata.get("XML:ModifyDate").and_then(TagValue::as_string),
+            Some("2009:10:24 01:48:00Z")
+        );
+        assert_eq!(
+            metadata.get("XML:Pages").and_then(TagValue::as_string),
+            Some("1")
+        );
+        assert_eq!(
+            metadata.get("XML:Paragraphs").and_then(TagValue::as_string),
+            Some("4")
+        );
+    }
+
+    #[test]
+    fn test_docx_xml_selected_custom_properties() {
+        let xml = r#"<?xml version="1.0"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"
+            xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+    <property name="Matter"><vt:lpwstr>Matter</vt:lpwstr></property>
+    <property name="Office"><vt:lpwstr>Office</vt:lpwstr></property>
+    <property name="Owner"><vt:lpwstr>Owner</vt:lpwstr></property>
+    <property name="Forward to"><vt:lpwstr>Forward to</vt:lpwstr></property>
+    <property name="Group"><vt:lpwstr>Group</vt:lpwstr></property>
+    <property name="A Custom Field"><vt:lpwstr>Custom value</vt:lpwstr></property>
+    <property name="Date completed"><vt:filetime>2009-10-23T07:00:00Z</vt:filetime></property>
+</Properties>"#;
+
+        let mut metadata = MetadataMap::new();
+        let result = parse_docx_xml_custom_properties(xml, &mut metadata);
+
+        assert!(result.is_ok());
+        assert_eq!(
+            metadata.get("XML:Matter").and_then(TagValue::as_string),
+            Some("Matter")
+        );
+        assert_eq!(
+            metadata.get("XML:Office").and_then(TagValue::as_string),
+            Some("Office")
+        );
+        assert_eq!(
+            metadata.get("XML:Owner").and_then(TagValue::as_string),
+            Some("Owner")
+        );
+        assert_eq!(
+            metadata.get("XML:ForwardTo").and_then(TagValue::as_string),
+            Some("Forward to")
+        );
+        assert_eq!(
+            metadata.get("XML:Group").and_then(TagValue::as_string),
+            Some("Group")
+        );
+        assert_eq!(
+            metadata
+                .get("XML:ACustomField")
+                .and_then(TagValue::as_string),
+            Some("Custom value")
+        );
+        assert_eq!(
+            metadata
+                .get("XML:DateCompleted")
+                .and_then(TagValue::as_string),
+            Some("2009:10:23 07:00:00Z")
+        );
+    }
+
+    #[test]
+    fn test_docx_xml_remaining_standard_properties() {
+        let core_xml =
+            r#"<cp:coreProperties><cp:keywords>one, two</cp:keywords></cp:coreProperties>"#;
+        let app_xml = r#"
+<Properties xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+    <HeadingPairs>
+        <vt:vector size="2" baseType="variant">
+            <vt:variant><vt:lpstr>Title</vt:lpstr></vt:variant>
+            <vt:variant><vt:i4>1</vt:i4></vt:variant>
+        </vt:vector>
+    </HeadingPairs>
+    <TitlesOfParts>
+        <vt:vector size="1" baseType="lpstr">
+            <vt:lpstr>The document title</vt:lpstr>
+        </vt:vector>
+    </TitlesOfParts>
+    <HyperlinkBase>https://example.test/</HyperlinkBase>
+    <HyperlinksChanged>false</HyperlinksChanged>
+</Properties>"#;
+        let mut metadata = MetadataMap::new();
+
+        parse_core_properties(core_xml, &mut metadata).unwrap();
+        parse_app_properties(app_xml, &mut metadata).unwrap();
+        add_docx_xml_tags(&mut metadata);
+
+        assert_eq!(
+            metadata.get("XML:Keywords").and_then(TagValue::as_string),
+            Some("one, two")
+        );
+        assert_eq!(
+            metadata
+                .get("XML:HyperlinkBase")
+                .and_then(TagValue::as_string),
+            Some("https://example.test/")
+        );
+        assert_eq!(
+            metadata
+                .get("XML:HyperlinksChanged")
+                .and_then(TagValue::as_string),
+            Some("No")
+        );
+        assert_eq!(
+            metadata.get("XML:HeadingPairs"),
+            Some(&TagValue::new_array(vec![
+                TagValue::new_string("Title"),
+                TagValue::new_integer(1),
+            ]))
+        );
+        assert_eq!(
+            metadata
+                .get("XML:TitlesOfParts")
+                .and_then(TagValue::as_string),
+            Some("The document title")
+        );
+    }
+
+    #[test]
+    fn test_docx_core_properties_have_xmp_aliases() {
+        let mut metadata = MetadataMap::new();
+        for (name, value) in [
+            ("Title", "The document title"),
+            ("Subject", "the subject"),
+            ("Creator", "Author: Jeff"),
+            ("Description", "here are my comments"),
+        ] {
+            metadata.insert(
+                format!("OOXML:{name}"),
+                TagValue::new_string(value.to_string()),
+            );
+        }
+
+        add_docx_tag_aliases(&mut metadata);
+
+        for (name, expected) in [
+            ("Title", "The document title"),
+            ("Subject", "the subject"),
+            ("Creator", "Author: Jeff"),
+            ("Description", "here are my comments"),
+        ] {
+            assert_eq!(
+                metadata
+                    .get(&format!("XMP:{name}"))
+                    .and_then(TagValue::as_string),
+                Some(expected),
+                "XMP:{name}"
+            );
+        }
     }
 }

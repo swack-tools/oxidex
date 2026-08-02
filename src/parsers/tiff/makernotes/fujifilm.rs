@@ -10,6 +10,11 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+/// The `OTHER` fallbacks of `%FujiFilm`'s settings tables, hand-written.
+mod print_conv;
+/// `%FujiFilm` binary sub-tables, generated from ExifTool's own hashes.
+pub mod settings_tables;
+
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
@@ -26,8 +31,12 @@ use super::shared::array_extractors::{
     extract_i16_array, extract_i32_array, extract_rational_array, extract_u16_array,
     extract_u32_array,
 };
+use super::shared::binary_subdir::{BinaryTable, decode_binary_subdir};
 use crate::const_decoder;
 use crate::core::value_formatter::format_rational_as_decimal;
+use settings_tables::{
+    FUJIFILM_AFCSETTINGS, FUJIFILM_DRIVESETTINGS, FUJIFILM_FOCUSSETTINGS, FUJIFILM_PRIORITYSETTINGS,
+};
 
 // ===== Fujifilm MakerNote Tag IDs =====
 // Based on ExifTool Fujifilm.pm tag definitions
@@ -122,7 +131,14 @@ const FUJI_BW_ADJUSTMENT: u16 = 0x1049;
 const FUJI_CROP_MODE: u16 = 0x104D;
 const FUJI_COLOR_CHROME_FX_BLUE: u16 = 0x104E;
 
+// Packed settings words, each a `SubDirectory` over a ProcessBinaryData table
+// in `%FujiFilm::Main` -- see `fujifilm_binary_subdir`.
+const FUJI_PRIORITY_SETTINGS: u16 = 0x102B; // FujiFilm.pm:341
+const FUJI_FOCUS_SETTINGS: u16 = 0x102D; // FujiFilm.pm:345
+const FUJI_AFC_SETTINGS: u16 = 0x102E; // FujiFilm.pm:349
+
 // Shooting Mode Tags
+const FUJI_DRIVE_SETTINGS: u16 = 0x1103; // FujiFilm.pm:609
 const FUJI_PIXEL_SHIFT_SHOTS: u16 = 0x1105;
 const FUJI_PIXEL_SHIFT_OFFSET_NEW: u16 = 0x1106;
 const FUJI_PANORAMA_ANGLE: u16 = 0x1153;
@@ -601,11 +617,15 @@ pub struct FujifilmParser;
 
 impl MakerNoteParser for FujifilmParser {
     fn manufacturer_name(&self) -> &'static str {
-        "Fujifilm"
+        // ExifTool spells the group with a capital F on both halves:
+        // MakerNotes.pm:121 `Name => 'MakerNoteFujiFilm'`, which is what the
+        // family-1 group is named after, and `exiftool -a -G1 -s` prints
+        // `[FujiFilm]` for every Fuji sample in the corpus.
+        "FujiFilm"
     }
 
     fn tag_prefix(&self) -> &'static str {
-        "Fujifilm:"
+        "FujiFilm:"
     }
 
     fn validate_header(&self, data: &[u8]) -> bool {
@@ -666,6 +686,18 @@ impl MakerNoteParser for FujifilmParser {
 
         // Extract tags from entries
         for entry in entries {
+            // Binary sub-directories. `%FujiFilm::Main` gives these four tags a
+            // `SubDirectory => { TagTable => ... }` with no Condition and no
+            // Start/Base/ByteOrder override (FujiFilm.pm:341, :345, :349, :609),
+            // so ExifTool descends into the record and reports its fields, and
+            // reports nothing for the tag itself.
+            if let Some(table) = fujifilm_binary_subdir(entry.tag_id) {
+                if let Some(record) = entry_bytes(&entry, data) {
+                    decode_binary_subdir(table, &record, fuji_byte_order, "FujiFilm", tags);
+                }
+                continue;
+            }
+
             match entry.tag_id {
                 // String tags
                 FUJI_VERSION | FUJI_LENS_MODEL_NAME => {
@@ -681,7 +713,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_SERIAL_NUMBER => {
                     if let Some(raw) = extract_string_value_raw(&entry, data) {
                         tags.insert(
-                            "Fujifilm:InternalSerialNumber".to_string(),
+                            "FujiFilm:InternalSerialNumber".to_string(),
                             decode_internal_serial_number(&raw),
                         );
                     }
@@ -700,14 +732,14 @@ impl MakerNoteParser for FujifilmParser {
                 // tags in this range, it has no numeric PrintConv table.
                 FUJI_QUALITY => {
                     if let Some(value) = extract_string_value_raw(&entry, data) {
-                        tags.insert("Fujifilm:Quality".to_string(), value);
+                        tags.insert("FujiFilm:Quality".to_string(), value);
                     }
                 }
 
                 FUJI_WHITE_BALANCE => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "Fujifilm:WhiteBalance".to_string(),
+                        "FujiFilm:WhiteBalance".to_string(),
                         DECODE_WHITE_BALANCE.decode(value).to_string(),
                     );
                 }
@@ -715,7 +747,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_FOCUS_MODE => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "Fujifilm:FocusMode".to_string(),
+                        "FujiFilm:FocusMode".to_string(),
                         DECODE_FOCUS_MODE.decode(value).to_string(),
                     );
                 }
@@ -724,7 +756,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_FLASH_MODE => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "Fujifilm:FujiFlashMode".to_string(),
+                        "FujiFilm:FujiFlashMode".to_string(),
                         DECODE_FLASH_MODE.decode(value).to_string(),
                     );
                 }
@@ -732,7 +764,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_FILM_MODE => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "Fujifilm:FilmMode".to_string(),
+                        "FujiFilm:FilmMode".to_string(),
                         DECODE_FILM_MODE.decode(value).to_string(),
                     );
                 }
@@ -743,7 +775,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_DYNAMIC_RANGE => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "Fujifilm:DynamicRange".to_string(),
+                        "FujiFilm:DynamicRange".to_string(),
                         DECODE_DYNAMIC_RANGE.decode(value).to_string(),
                     );
                 }
@@ -751,7 +783,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_DYNAMIC_RANGE_SETTING => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "Fujifilm:DynamicRangeSetting".to_string(),
+                        "FujiFilm:DynamicRangeSetting".to_string(),
                         DECODE_DYNAMIC_RANGE_SETTING.decode(value).to_string(),
                     );
                 }
@@ -759,7 +791,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_DEVELOPMENT_DYNAMIC_RANGE => {
                     let value = entry.value_offset;
                     tags.insert(
-                        "Fujifilm:DevelopmentDynamicRange".to_string(),
+                        "FujiFilm:DevelopmentDynamicRange".to_string(),
                         value.to_string(),
                     );
                 }
@@ -767,7 +799,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_AUTO_BRACKETING => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "Fujifilm:AutoBracketing".to_string(),
+                        "FujiFilm:AutoBracketing".to_string(),
                         DECODE_AUTO_BRACKETING.decode(value).to_string(),
                     );
                 }
@@ -775,7 +807,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_PICTURE_MODE => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "Fujifilm:PictureMode".to_string(),
+                        "FujiFilm:PictureMode".to_string(),
                         DECODE_PICTURE_MODE.decode(value).to_string(),
                     );
                 }
@@ -783,7 +815,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_DRIVE_MODE => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "Fujifilm:DriveMode".to_string(),
+                        "FujiFilm:DriveMode".to_string(),
                         DECODE_DRIVE_MODE.decode(value).to_string(),
                     );
                 }
@@ -791,7 +823,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_EXR_MODE => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "Fujifilm:EXRMode".to_string(),
+                        "FujiFilm:EXRMode".to_string(),
                         DECODE_EXR_MODE.decode(value).to_string(),
                     );
                 }
@@ -801,7 +833,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_SHARPNESS => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "Fujifilm:Sharpness".to_string(),
+                        "FujiFilm:Sharpness".to_string(),
                         DECODE_SHARPNESS.decode(value).to_string(),
                     );
                 }
@@ -809,7 +841,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_SATURATION => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "Fujifilm:Saturation".to_string(),
+                        "FujiFilm:Saturation".to_string(),
                         DECODE_SATURATION.decode(value).to_string(),
                     );
                 }
@@ -817,7 +849,7 @@ impl MakerNoteParser for FujifilmParser {
                 FUJI_CONTRAST => {
                     let value = entry.value_offset as i32;
                     tags.insert(
-                        "Fujifilm:Contrast".to_string(),
+                        "FujiFilm:Contrast".to_string(),
                         DECODE_CONTRAST.decode(value).to_string(),
                     );
                 }
@@ -833,7 +865,7 @@ impl MakerNoteParser for FujifilmParser {
                     let value = entry.value_offset;
                     if value > 0 {
                         tags.insert(
-                            "Fujifilm:ColorTemperature".to_string(),
+                            "FujiFilm:ColorTemperature".to_string(),
                             format!("{} K", value),
                         );
                     }
@@ -841,7 +873,7 @@ impl MakerNoteParser for FujifilmParser {
 
                 FUJI_FACES_DETECTED => {
                     let value = entry.value_offset;
-                    tags.insert("Fujifilm:FacesDetected".to_string(), value.to_string());
+                    tags.insert("FujiFilm:FacesDetected".to_string(), value.to_string());
                 }
 
                 // Boolean/On-Off tags
@@ -901,7 +933,7 @@ impl MakerNoteParser for FujifilmParser {
                 // Digital zoom
                 FUJI_DIGITAL_ZOOM => {
                     let value = entry.value_offset as f32 / 100.0; // Stored as percentage
-                    tags.insert("Fujifilm:DigitalZoom".to_string(), format!("{:.2}x", value));
+                    tags.insert("FujiFilm:DigitalZoom".to_string(), format!("{:.2}x", value));
                 }
 
                 // Flash exposure compensation: rational64s (8 bytes, read
@@ -912,7 +944,7 @@ impl MakerNoteParser for FujifilmParser {
                         && let Some(&(num, denom)) = rationals.first()
                     {
                         tags.insert(
-                            "Fujifilm:FlashExposureComp".to_string(),
+                            "FujiFilm:FlashExposureComp".to_string(),
                             format_rational_as_decimal(num as i32 as i64, denom as i32 as i64),
                         );
                     }
@@ -1273,10 +1305,10 @@ fn fujifilm_tag_to_name(tag_id: u16) -> String {
         FUJI_IMAGE_COUNT => "ImageCount",
         FUJI_DRIVE_MODE => "DriveMode",
         FUJI_RATING => "Rating",
-        _ => return format!("Fujifilm:Unknown-{:#06X}", tag_id),
+        _ => return format!("FujiFilm:Unknown-{:#06X}", tag_id),
     };
 
-    format!("Fujifilm:{}", tag_name)
+    format!("FujiFilm:{}", tag_name)
 }
 
 /// Parses IFD entries in the specified byte order
@@ -1487,6 +1519,55 @@ fn decode_internal_serial_number(raw: &str) -> String {
 /// - `data`: Raw MakerNote data (including Fujifilm header)
 /// - `byte_order`: Byte order for parsing multi-byte values
 /// - `tags`: HashMap to populate with extracted tags
+/// The `%FujiFilm::Main` tags whose ExifTool entry is a `SubDirectory` over a
+/// `ProcessBinaryData` table, and the table each one selects.
+///
+/// All four are packed settings words: one `int16u` or `int32u` holding several
+/// nibble-wide fields that ExifTool splits with `Mask`. Reading the word as a
+/// value would report a single meaningless number; not reading it at all, which
+/// is what happened before, reports nothing.
+const fn fujifilm_binary_subdir(tag_id: u16) -> Option<&'static BinaryTable> {
+    match tag_id {
+        FUJI_PRIORITY_SETTINGS => Some(&FUJIFILM_PRIORITYSETTINGS),
+        FUJI_FOCUS_SETTINGS => Some(&FUJIFILM_FOCUSSETTINGS),
+        FUJI_AFC_SETTINGS => Some(&FUJIFILM_AFCSETTINGS),
+        FUJI_DRIVE_SETTINGS => Some(&FUJIFILM_DRIVESETTINGS),
+        _ => None,
+    }
+}
+
+/// The raw bytes of an entry's value.
+///
+/// Same offset convention as [`extract_string_value`]: up to four bytes live in
+/// the entry's own value field, in the MakerNote's (always little-endian) byte
+/// order, and anything longer is at an offset measured from the MakerNote start.
+/// All four settings tags are a single `int16u`/`int32u` and so always inline,
+/// but a record read from an offset is the general shape of a sub-directory.
+fn entry_bytes(entry: &IfdEntry, full_data: &[u8]) -> Option<Vec<u8>> {
+    let byte_count = (entry.value_count as usize)
+        .checked_mul(ifd_type_size(entry.field_type))
+        .filter(|n| *n > 0)?;
+    if byte_count <= 4 {
+        return Some(entry.value_offset.to_le_bytes()[..byte_count].to_vec());
+    }
+    let offset = entry.value_offset as usize;
+    full_data
+        .get(offset..offset.checked_add(byte_count)?)
+        .map(<[u8]>::to_vec)
+}
+
+/// Bytes per element of a TIFF field type, or 0 for one this reader does not
+/// know -- the caller then produces nothing rather than a mis-sized record.
+const fn ifd_type_size(field_type: u16) -> usize {
+    match field_type {
+        1 | 2 | 6 | 7 => 1, // BYTE, ASCII, SBYTE, UNDEFINED
+        3 | 8 => 2,         // SHORT, SSHORT
+        4 | 9 | 11 => 4,    // LONG, SLONG, FLOAT
+        5 | 10 | 12 => 8,   // RATIONAL, SRATIONAL, DOUBLE
+        _ => 0,
+    }
+}
+
 pub fn parse_fujifilm_makernotes(
     data: &[u8],
     byte_order: ByteOrder,
@@ -1548,11 +1629,11 @@ mod tests {
 
     #[test]
     fn test_fujifilm_tag_to_name() {
-        assert_eq!(fujifilm_tag_to_name(0x0000), "Fujifilm:Version");
-        assert_eq!(fujifilm_tag_to_name(0x1000), "Fujifilm:Quality");
-        assert_eq!(fujifilm_tag_to_name(0x1002), "Fujifilm:WhiteBalance");
-        assert_eq!(fujifilm_tag_to_name(0x1401), "Fujifilm:FilmMode");
-        assert_eq!(fujifilm_tag_to_name(0xFFFF), "Fujifilm:Unknown-0xFFFF");
+        assert_eq!(fujifilm_tag_to_name(0x0000), "FujiFilm:Version");
+        assert_eq!(fujifilm_tag_to_name(0x1000), "FujiFilm:Quality");
+        assert_eq!(fujifilm_tag_to_name(0x1002), "FujiFilm:WhiteBalance");
+        assert_eq!(fujifilm_tag_to_name(0x1401), "FujiFilm:FilmMode");
+        assert_eq!(fujifilm_tag_to_name(0xFFFF), "FujiFilm:Unknown-0xFFFF");
     }
 
     #[test]
@@ -1630,8 +1711,8 @@ mod tests {
     #[test]
     fn test_parser_trait_implementation() {
         let parser = FujifilmParser;
-        assert_eq!(parser.manufacturer_name(), "Fujifilm");
-        assert_eq!(parser.tag_prefix(), "Fujifilm:");
+        assert_eq!(parser.manufacturer_name(), "FujiFilm");
+        assert_eq!(parser.tag_prefix(), "FujiFilm:");
     }
 
     #[test]
@@ -1654,5 +1735,83 @@ mod tests {
         assert_eq!(DECODE_EXR_MODE.decode(256), "HR (High Resolution)");
         assert_eq!(DECODE_EXR_MODE.decode(512), "SN (Signal-to-Noise Priority)");
         assert_eq!(DECODE_EXR_MODE.decode(768), "DR (Dynamic Range Priority)");
+    }
+
+    /// Exactly the four tags with a `SubDirectory` select a table, and no
+    /// neighbour does -- binding one to the wrong id would print a real
+    /// ExifTool name over an unrelated word.
+    #[test]
+    fn test_only_the_four_settings_tags_select_a_table() {
+        for tag in [0x102Bu16, 0x102D, 0x102E, 0x1103] {
+            assert!(fujifilm_binary_subdir(tag).is_some(), "{tag:#06x}");
+        }
+        for tag in [0x102Au16, 0x102C, 0x102F, 0x1102, 0x1104, 0x1105] {
+            assert!(fujifilm_binary_subdir(tag).is_none(), "{tag:#06x}");
+        }
+    }
+
+    fn decode_settings(table: &BinaryTable, record: &[u8]) -> HashMap<String, String> {
+        let mut tags = HashMap::new();
+        decode_binary_subdir(
+            table,
+            record,
+            ByteOrder::LittleEndian,
+            "FujiFilm",
+            &mut tags,
+        );
+        tags
+    }
+
+    /// `combined-samples/FujiFilm/FujiFilmX-S20.jpg`: the exact record bytes
+    /// `exiftool -v3` prints for tags 0x102b/0x102d/0x102e/0x1103, and the exact
+    /// values `exiftool -a -G1 -s` reports for them.
+    ///
+    /// This body is the one in the corpus that exercises `AFAreaZoneSize`'s
+    /// `OTHER` sub: 0x102d is `01 01 63 00`, whose 0xff0000 field is 0x63, and
+    /// ExifTool prints `3 x 3` -- `$val & 0x0f` and `$val >> 5`, which a `>> 4`
+    /// would render `3 x 6`.
+    #[test]
+    fn test_settings_match_exiftool_on_x_s20_bytes() {
+        let tags = decode_settings(&FUJIFILM_PRIORITYSETTINGS, &[0x12, 0x00]);
+        assert_eq!(tags["FujiFilm:AF-SPriority"], "Focus");
+        assert_eq!(tags["FujiFilm:AF-CPriority"], "Release");
+
+        let tags = decode_settings(&FUJIFILM_FOCUSSETTINGS, &[0x01, 0x01, 0x63, 0x00]);
+        assert_eq!(tags["FujiFilm:FocusMode2"], "AF-S");
+        assert_eq!(tags["FujiFilm:PreAF"], "Off");
+        assert_eq!(tags["FujiFilm:AFAreaMode"], "Zone");
+        assert_eq!(tags["FujiFilm:AFAreaPointSize"], "n/a");
+        assert_eq!(tags["FujiFilm:AFAreaZoneSize"], "3 x 3");
+
+        let tags = decode_settings(&FUJIFILM_AFCSETTINGS, &[0x02, 0x01, 0x00, 0x00]);
+        assert_eq!(tags["FujiFilm:AF-CSetting"], "Set 1 (multi-purpose)");
+        assert_eq!(tags["FujiFilm:AF-CTrackingSensitivity"], "2");
+        assert_eq!(tags["FujiFilm:AF-CSpeedTrackingSensitivity"], "0");
+        assert_eq!(tags["FujiFilm:AF-CZoneAreaSwitching"], "Auto");
+
+        let tags = decode_settings(&FUJIFILM_DRIVESETTINGS, &[0x00, 0x00, 0x00, 0x00]);
+        assert_eq!(tags["FujiFilm:DriveMode"], "Single");
+        assert_eq!(tags["FujiFilm:DriveSpeed"], "n/a");
+    }
+
+    /// `combined-samples/FujiFilm/FujiFilmGFX50S_II.jpg` tag 0x102d, the corpus
+    /// case for `AFAreaPointSize`'s `OTHER` sub: 0x40 in the 0xf000 field is 4,
+    /// not one of the hash's keys, so ExifTool prints the number itself.
+    #[test]
+    fn test_af_area_point_size_falls_through_to_the_number() {
+        let tags = decode_settings(&FUJIFILM_FOCUSSETTINGS, &[0x01, 0x40, 0x00, 0x00]);
+        assert_eq!(tags["FujiFilm:AFAreaPointSize"], "4");
+        assert_eq!(tags["FujiFilm:AFAreaMode"], "Single Point");
+        assert_eq!(tags["FujiFilm:AFAreaZoneSize"], "n/a");
+    }
+
+    /// `combined-samples/FujiFilm/FujiFilmX-H2S.jpg` tag 0x102d: the low nibble
+    /// is the whole of `FocusMode2`, so an unmasked read of the int32u would
+    /// report 514 instead of `AF-C`.
+    #[test]
+    fn test_masks_split_one_word_into_its_fields() {
+        let tags = decode_settings(&FUJIFILM_FOCUSSETTINGS, &[0x02, 0x02, 0x00, 0x00]);
+        assert_eq!(tags["FujiFilm:FocusMode2"], "AF-C");
+        assert_eq!(tags["FujiFilm:AFAreaMode"], "Wide/Tracking");
     }
 }

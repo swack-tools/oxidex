@@ -68,6 +68,7 @@ use std::collections::HashMap;
 
 use super::registries::phaseone::{phaseone_tag_name, sensor_calibration_tag_name};
 use super::shared::MakerNoteParser;
+use crate::core::formatters::exif_print_conv::print_exposure_time;
 
 /// `PrintConv` for `CameraOrientation` (0x0100, PhaseOne.pm:36).
 /// Raw value is masked with `0x03` before lookup.
@@ -109,27 +110,6 @@ fn decode_sequence_kind(val: i32) -> String {
         6 => "Focus Stacking".to_string(),
         other => other.to_string(),
     }
-}
-
-/// Port of `Image::ExifTool::Exif::PrintExposureTime` (used for
-/// `ShutterSpeedValue`'s `PrintConv` at PhaseOne.pm:220):
-///
-/// ```text
-/// if ($secs < 0.25001 and $secs > 0) {
-///     return sprintf("1/%d", int(0.5 + 1/$secs));
-/// }
-/// $_ = sprintf("%.1f", $secs);
-/// s/\.0$//;
-/// ```
-fn print_exposure_time(secs: f64) -> String {
-    if secs < 0.25001 && secs > 0.0 {
-        return format!("1/{}", (0.5 + 1.0 / secs) as i64);
-    }
-    let formatted = format!("{:.1}", secs);
-    formatted
-        .strip_suffix(".0")
-        .map(str::to_string)
-        .unwrap_or(formatted)
 }
 
 /// Shared `ValueConv`+`PrintConv` for `ApertureValue` (0x0401),

@@ -869,16 +869,28 @@ fn format_exiftool_float(value: f32) -> String {
 ///
 /// Table: `Image::ExifTool::PhotoMechanic::SoftEdit` (PhotoMechanic.pm:61-97),
 /// whose `FORMAT => 'int32s'` makes every value here a 4-byte signed integer.
-/// Only the datasets whose conversion is unambiguous from the bytes are
-/// reported; the raw/preview crop percentages and the plain counters are left
-/// to a later change rather than guessed at.
+///
+/// The raw and preview crop coordinates share `%rawCropConv`
+/// (PhotoMechanic.pm:52-58), which is `ValueConv => '$val / 655.36'` printed by
+/// `PrintConv => 'sprintf("%.3f%%",$val)'`. The remaining datasets are named
+/// without a conversion in the table and print as plain integers.
 fn soft_edit_tag(dataset: u8, data: &[u8]) -> Option<(&'static str, TagValue)> {
     if data.len() < 4 {
         return None;
     }
     let value = i32::from_be_bytes([data[0], data[1], data[2], data[3]]);
 
+    // `%rawCropConv`, PhotoMechanic.pm:52-58.
+    let crop_percent = |raw: i32| TagValue::String(format!("{:.3}%", f64::from(raw) / 655.36));
+
     let tag = match dataset {
+        209 => ("RawCropLeft", crop_percent(value)),
+        210 => ("RawCropTop", crop_percent(value)),
+        211 => ("RawCropRight", crop_percent(value)),
+        212 => ("RawCropBottom", crop_percent(value)),
+        213 => ("ConstrainedCropWidth", TagValue::Integer(value as i64)),
+        214 => ("ConstrainedCropHeight", TagValue::Integer(value as i64)),
+        215 => ("FrameNum", TagValue::Integer(value as i64)),
         216 => {
             // PrintConv { 0 => '0', 1 => '90', 2 => '180', 3 => '270' }
             let label = match value {
@@ -921,6 +933,10 @@ fn soft_edit_tag(dataset: u8, data: &[u8]) -> Option<(&'static str, TagValue)> {
             ("ColorClass", TagValue::String(label))
         }
         223 => ("Rating", TagValue::Integer(value as i64)),
+        236 => ("PreviewCropLeft", crop_percent(value)),
+        237 => ("PreviewCropTop", crop_percent(value)),
+        238 => ("PreviewCropRight", crop_percent(value)),
+        239 => ("PreviewCropBottom", crop_percent(value)),
         _ => return None,
     };
 
@@ -1250,9 +1266,52 @@ mod image_resource_tests {
             soft_edit_tag(220, &1072i32.to_be_bytes()),
             Some(("CropBottom", TagValue::Integer(1072)))
         );
-        // Datasets whose conversion has not been transcribed stay unreported
-        // rather than being guessed at: 209 is RawCropLeft, a percentage.
-        assert_eq!(soft_edit_tag(209, &1000i32.to_be_bytes()), None);
+        // A dataset the table does not name stays unreported rather than
+        // being guessed at.
+        assert_eq!(soft_edit_tag(224, &1000i32.to_be_bytes()), None);
+    }
+
+    #[test]
+    fn raw_and_preview_crops_print_as_percentages() {
+        // `%rawCropConv` (PhotoMechanic.pm:52-58) divides by 655.36 and prints
+        // with `sprintf("%.3f%%")`, so 65536 is exactly 100.000%. Verified
+        // against `exiftool -a -G1 -s` 13.55 on a PSD carrying these datasets.
+        assert_eq!(
+            soft_edit_tag(209, &65536i32.to_be_bytes()),
+            Some(("RawCropLeft", TagValue::String("100.000%".to_string())))
+        );
+        assert_eq!(
+            soft_edit_tag(210, &32768i32.to_be_bytes()),
+            Some(("RawCropTop", TagValue::String("50.000%".to_string())))
+        );
+        assert_eq!(
+            soft_edit_tag(239, &65536i32.to_be_bytes()),
+            Some((
+                "PreviewCropBottom",
+                TagValue::String("100.000%".to_string())
+            ))
+        );
+        assert_eq!(
+            soft_edit_tag(237, &0i32.to_be_bytes()),
+            Some(("PreviewCropTop", TagValue::String("0.000%".to_string())))
+        );
+    }
+
+    #[test]
+    fn constrained_crop_and_frame_number_print_as_plain_integers() {
+        // PhotoMechanic.pm:72-74 names 213/214/215 with no conversion.
+        assert_eq!(
+            soft_edit_tag(213, &1600i32.to_be_bytes()),
+            Some(("ConstrainedCropWidth", TagValue::Integer(1600)))
+        );
+        assert_eq!(
+            soft_edit_tag(214, &1200i32.to_be_bytes()),
+            Some(("ConstrainedCropHeight", TagValue::Integer(1200)))
+        );
+        assert_eq!(
+            soft_edit_tag(215, &7i32.to_be_bytes()),
+            Some(("FrameNum", TagValue::Integer(7)))
+        );
     }
 
     #[test]

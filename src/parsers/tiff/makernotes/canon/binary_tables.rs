@@ -16,8 +16,11 @@ use crate::parsers::tiff::ifd_parser::ByteOrder;
 use std::collections::HashMap;
 
 /// How a field's value is laid out in the record's `int16` array.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum CanonBinaryFormat {
+    /// A `Format => 'int8u'` override inside a table whose own `FORMAT` is 16-bit: the
+    /// key still steps two bytes, but only the first of them is the value.
+    Int8u,
     Int16s,
     Int16u,
     Int32u,
@@ -28,7 +31,7 @@ impl CanonBinaryFormat {
     /// Number of `i16` words occupied by one value in the table's declared format.
     const fn words(self) -> usize {
         match self {
-            Self::Int16s | Self::Int16u => 1,
+            Self::Int8u | Self::Int16s | Self::Int16u => 1,
             Self::Int32u | Self::Int32s => 2,
         }
     }
@@ -45,6 +48,10 @@ enum CanonBinaryConv {
     Bitmask(&'static [(i64, &'static str)]),
     /// ExifTool's shared `%printParameter`: 0 prints "Normal", positives carry a "+".
     PrintParameter,
+    /// `%Canon::ContrastInfo` key 4 (Canon.pm:6612). A three-entry hash plus an `OTHER`
+    /// sub that keeps the raw value visible:
+    /// `return sprintf("On (0x%.2x)",$val) if $val & 0x08; return sprintf("Off (0x%.2x)",$val);`
+    IntelligentContrast,
 }
 
 /// One field of a `%Canon` binary sub-table.
@@ -925,26 +932,353 @@ const TABLE_FOCUS_BRACKETING_INFO: &[CanonBinaryField] = &[
     },
 ];
 
-/// MakerNote tag -> the `%Canon` binary table ExifTool parses it with, and whether
-/// that table is `FIRST_ENTRY => 1` (index 0 holds the record's own byte count).
-const CANON_BINARY_TABLES: &[(u16, &[CanonBinaryField], bool)] = &[
-    (0x001d, TABLE_MY_COLORS, false),            // %Canon::MyColors
-    (0x0029, TABLE_WB_INFO, true),               // %Canon::WBInfo
-    (0x0035, TABLE_TIME_INFO, true),             // %Canon::TimeInfo
-    (0x0098, TABLE_CROP_INFO, false),            // %Canon::CropInfo
-    (0x009a, TABLE_ASPECT_INFO, false),          // %Canon::AspectInfo
-    (0x00b0, TABLE_FLAGS, true),                 // %Canon::Flags
-    (0x00b1, TABLE_MODIFIED_INFO, true),         // %Canon::ModifiedInfo
-    (0x00b6, TABLE_PREVIEW_IMAGE_INFO, true),    // %Canon::PreviewImageInfo
-    (0x4003, TABLE_COLOR_INFO, true),            // %Canon::ColorInfo
-    (0x4013, TABLE_AF_MICRO_ADJ, true),          // %Canon::AFMicroAdj
-    (0x4016, TABLE_VIGNETTING_CORR2, true),      // %Canon::VignettingCorr2
-    (0x4018, TABLE_LIGHTING_OPT, true),          // %Canon::LightingOpt
-    (0x4021, TABLE_MULTI_EXP, true),             // %Canon::MultiExp
-    (0x4025, TABLE_HDR_INFO, true),              // %Canon::HDRInfo
-    (0x4028, TABLE_AF_CONFIG, true),             // %Canon::AFConfig
-    (0x4053, TABLE_FOCUS_BRACKETING_INFO, true), // %Canon::FocusBracketingInfo
+/// `%Canon::ContrastInfo` (MakerNote tag 0x0027, Canon.pm:6607). `FORMAT => 'int16u'`
+/// with no `FIRST_ENTRY`, so key 4 is byte 8.
+const TABLE_CONTRAST_INFO: &[CanonBinaryField] = &[CanonBinaryField {
+    index: 4,
+    name: "IntelligentContrast",
+    format: CanonBinaryFormat::Int16u,
+    count: 1,
+    conv: CanonBinaryConv::IntelligentContrast,
+}];
+
+/// `%Canon::FaceDetect1` (MakerNote tag 0x0024, Canon.pm:6733). `FORMAT => 'int16u'`,
+/// `FIRST_ENTRY => 0`.
+///
+/// Keys 0x08..0x18 (`Face1Position`..`Face9Position`) carry
+/// `RawConv => '$$self{FacesDetected} < n ? undef : $val'`, so they are gated by
+/// [`FACE_DETECT1_GATE`] rather than emitted unconditionally.
+const TABLE_FACE_DETECT1: &[CanonBinaryField] = &[
+    CanonBinaryField {
+        index: 0x02,
+        name: "FacesDetected",
+        format: CanonBinaryFormat::Int16u,
+        count: 1,
+        conv: CanonBinaryConv::Raw,
+    },
+    CanonBinaryField {
+        index: 0x03,
+        name: "FaceDetectFrameSize",
+        format: CanonBinaryFormat::Int16u,
+        count: 2,
+        conv: CanonBinaryConv::Raw,
+    },
+    CanonBinaryField {
+        index: 0x08,
+        name: "Face1Position",
+        format: CanonBinaryFormat::Int16s,
+        count: 2,
+        conv: CanonBinaryConv::Raw,
+    },
+    CanonBinaryField {
+        index: 0x0a,
+        name: "Face2Position",
+        format: CanonBinaryFormat::Int16s,
+        count: 2,
+        conv: CanonBinaryConv::Raw,
+    },
+    CanonBinaryField {
+        index: 0x0c,
+        name: "Face3Position",
+        format: CanonBinaryFormat::Int16s,
+        count: 2,
+        conv: CanonBinaryConv::Raw,
+    },
+    CanonBinaryField {
+        index: 0x0e,
+        name: "Face4Position",
+        format: CanonBinaryFormat::Int16s,
+        count: 2,
+        conv: CanonBinaryConv::Raw,
+    },
+    CanonBinaryField {
+        index: 0x10,
+        name: "Face5Position",
+        format: CanonBinaryFormat::Int16s,
+        count: 2,
+        conv: CanonBinaryConv::Raw,
+    },
+    CanonBinaryField {
+        index: 0x12,
+        name: "Face6Position",
+        format: CanonBinaryFormat::Int16s,
+        count: 2,
+        conv: CanonBinaryConv::Raw,
+    },
+    CanonBinaryField {
+        index: 0x14,
+        name: "Face7Position",
+        format: CanonBinaryFormat::Int16s,
+        count: 2,
+        conv: CanonBinaryConv::Raw,
+    },
+    CanonBinaryField {
+        index: 0x16,
+        name: "Face8Position",
+        format: CanonBinaryFormat::Int16s,
+        count: 2,
+        conv: CanonBinaryConv::Raw,
+    },
+    CanonBinaryField {
+        index: 0x18,
+        name: "Face9Position",
+        format: CanonBinaryFormat::Int16s,
+        count: 2,
+        conv: CanonBinaryConv::Raw,
+    },
 ];
+
+/// `%Canon::FaceDetect3` (MakerNote tag 0x002f, Canon.pm:6830). `FORMAT => 'int16u'`,
+/// `FIRST_ENTRY => 1` -- key 0 is the record's own byte count.
+const TABLE_FACE_DETECT3: &[CanonBinaryField] = &[CanonBinaryField {
+    index: 3,
+    name: "FacesDetected",
+    format: CanonBinaryFormat::Int16u,
+    count: 1,
+    conv: CanonBinaryConv::Raw,
+}];
+
+/// `%Canon::Ambience` (MakerNote tag 0x4020, Canon.pm:9151). `FORMAT => 'int32s'`, so
+/// key 1 is byte 4.
+const TABLE_AMBIENCE: &[CanonBinaryField] = &[CanonBinaryField {
+    index: 1,
+    name: "AmbienceSelection",
+    format: CanonBinaryFormat::Int32s,
+    count: 1,
+    conv: CanonBinaryConv::Map(TABLE_AMBIENCE_CONV_SELECTION),
+}];
+
+const TABLE_AMBIENCE_CONV_SELECTION: &[(i64, &str)] = &[
+    (0, "Standard"),
+    (1, "Vivid"),
+    (2, "Warm"),
+    (3, "Soft"),
+    (4, "Cool"),
+    (5, "Intense"),
+    (6, "Brighter"),
+    (7, "Darker"),
+    (8, "Monochrome"),
+];
+
+/// `%Canon::VignettingCorr` (MakerNote tag 0x4015, Canon.pm:8999). `FORMAT => 'int16s'`,
+/// and `FIRST_ENTRY => 1` here does *not* mean a leading byte count: key 0 is
+/// `VignettingCorrVersion` and the size word sits at byte 2 (Canon.pm:2103 validates
+/// `$subdirStart+2`). The record therefore must not be realigned.
+///
+/// Keys 4 and 5 are both named `ChromaticAberrationCorr` in ExifTool; the later key wins
+/// in a name-keyed map, which matches what `exiftool -G1 -s` prints for the pair.
+const TABLE_VIGNETTING_CORR: &[CanonBinaryField] = &[
+    CanonBinaryField {
+        index: 0,
+        name: "VignettingCorrVersion",
+        format: CanonBinaryFormat::Int8u,
+        count: 1,
+        conv: CanonBinaryConv::Raw,
+    },
+    CanonBinaryField {
+        index: 2,
+        name: "PeripheralLighting",
+        format: CanonBinaryFormat::Int16s,
+        count: 1,
+        conv: CanonBinaryConv::Map(TABLE_VIGNETTING_CORR_CONV_OFF_ON),
+    },
+    CanonBinaryField {
+        index: 3,
+        name: "DistortionCorrection",
+        format: CanonBinaryFormat::Int16s,
+        count: 1,
+        conv: CanonBinaryConv::Map(TABLE_VIGNETTING_CORR_CONV_OFF_ON),
+    },
+    CanonBinaryField {
+        index: 4,
+        name: "ChromaticAberrationCorr",
+        format: CanonBinaryFormat::Int16s,
+        count: 1,
+        conv: CanonBinaryConv::Map(TABLE_VIGNETTING_CORR_CONV_OFF_ON),
+    },
+    CanonBinaryField {
+        index: 5,
+        name: "ChromaticAberrationCorr",
+        format: CanonBinaryFormat::Int16s,
+        count: 1,
+        conv: CanonBinaryConv::Map(TABLE_VIGNETTING_CORR_CONV_OFF_ON),
+    },
+    CanonBinaryField {
+        index: 6,
+        name: "PeripheralLightingValue",
+        format: CanonBinaryFormat::Int16s,
+        count: 1,
+        conv: CanonBinaryConv::Raw,
+    },
+    CanonBinaryField {
+        index: 9,
+        name: "DistortionCorrectionValue",
+        format: CanonBinaryFormat::Int16s,
+        count: 1,
+        conv: CanonBinaryConv::Raw,
+    },
+    CanonBinaryField {
+        index: 11,
+        name: "OriginalImageWidth",
+        format: CanonBinaryFormat::Int16s,
+        count: 1,
+        conv: CanonBinaryConv::Raw,
+    },
+    CanonBinaryField {
+        index: 12,
+        name: "OriginalImageHeight",
+        format: CanonBinaryFormat::Int16s,
+        count: 1,
+        conv: CanonBinaryConv::Raw,
+    },
+];
+
+/// `%offOn` (Canon.pm:1218).
+const TABLE_VIGNETTING_CORR_CONV_OFF_ON: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
+
+/// `%Canon::VignettingCorrUnknown` (Canon.pm:9036), the table behind tag 0x4015's second
+/// and third alternatives. Its only named field is the version byte; ExifTool marks the
+/// rest of the record `Unknown` and hides it without `-U`.
+const TABLE_VIGNETTING_CORR_UNKNOWN: &[CanonBinaryField] = &[CanonBinaryField {
+    index: 0,
+    name: "VignettingCorrVersion",
+    format: CanonBinaryFormat::Int8u,
+    count: 1,
+    conv: CanonBinaryConv::Raw,
+}];
+
+/// An ExifTool `RawConv => '$$self{<member>} < n ? undef : $val'` chain: the named fields
+/// are emitted only when the record's count field holds at least `n`.
+struct CountGate {
+    /// The `DataMember` key, in the same units as [`CanonBinaryField::index`].
+    index: usize,
+    /// `(field name, minimum count)`, in table order.
+    minimums: &'static [(&'static str, i64)],
+}
+
+/// `%Canon::FaceDetect1` (Canon.pm:6733) gates `FaceNPosition` on `FacesDetected`
+/// (key 0x02, its sole `DATAMEMBER`).
+const FACE_DETECT1_GATE: CountGate = CountGate {
+    index: 0x02,
+    minimums: &[
+        ("Face1Position", 1),
+        ("Face2Position", 2),
+        ("Face3Position", 3),
+        ("Face4Position", 4),
+        ("Face5Position", 5),
+        ("Face6Position", 6),
+        ("Face7Position", 7),
+        ("Face8Position", 8),
+        ("Face9Position", 9),
+    ],
+};
+
+/// One MakerNote tag's binary sub-table.
+struct CanonBinaryTable {
+    tag: u16,
+    fields: &'static [CanonBinaryField],
+    /// The table is `FIRST_ENTRY => 1` *and* its index 0 holds the record's own byte
+    /// count, so a record stored one word out of step can be realigned.
+    length_prefixed: bool,
+    /// ExifTool's `Condition` on the MakerNote tag, evaluated against the raw record
+    /// bytes exactly as `$$valPt` is. `None` when the tag names this table
+    /// unconditionally.
+    condition: Option<fn(&[u8]) -> bool>,
+    /// An ExifTool `DATAMEMBER` count that suppresses later fields.
+    gate: Option<&'static CountGate>,
+}
+
+/// `0x27 => { Condition => '$$valPt =~ /^\x0a\0/', ... }` (Canon.pm:1719).
+fn contrast_info_applies(raw: &[u8]) -> bool {
+    raw.starts_with(&[0x0a, 0x00])
+}
+
+/// `0x4015 => [{ Condition => '$$valPt =~ /^\0/ and $$valPt !~ /^(\0\0\0\0|\x00\x40\xdc\x05)/', ... }]`
+/// (Canon.pm:2100), the first of that tag's three alternatives and the only one with a
+/// fully named table.
+fn vignetting_corr_applies(raw: &[u8]) -> bool {
+    raw.first() == Some(&0)
+        && !raw.starts_with(&[0x00, 0x00, 0x00, 0x00])
+        && !raw.starts_with(&[0x00, 0x40, 0xdc, 0x05])
+}
+
+/// `Condition => '$$valPt =~ /^[\x01\x02\x10\x20]/ and $$valPt !~ /^(\0\0\0\0|\x02\x50\x7c\x04)/'`
+/// (Canon.pm:2108), tag 0x4015's second alternative.
+fn vignetting_corr_unknown1_applies(raw: &[u8]) -> bool {
+    matches!(raw.first(), Some(0x01 | 0x02 | 0x10 | 0x20))
+        && !raw.starts_with(&[0x02, 0x50, 0x7c, 0x04])
+}
+
+/// `Condition => '$$valPt !~ /^\0\0\0\0/'` (Canon.pm:2116), tag 0x4015's third and last
+/// alternative. Reached only when neither of the two above matched.
+fn vignetting_corr_unknown2_applies(raw: &[u8]) -> bool {
+    !raw.starts_with(&[0x00, 0x00, 0x00, 0x00])
+}
+
+/// `0x4020 => { Condition => '$$valPt !~ /^\0\0\0\0/', ... }` (Canon.pm:2144).
+fn ambience_applies(raw: &[u8]) -> bool {
+    !raw.starts_with(&[0x00, 0x00, 0x00, 0x00])
+}
+
+/// MakerNote tag -> the `%Canon` binary table ExifTool parses it with.
+///
+/// A tag whose ExifTool entry is a list of alternatives appears once per alternative, in
+/// ExifTool's own order; [`select_table`] takes the first whose `Condition` holds.
+const CANON_BINARY_TABLES: &[CanonBinaryTable] = &[
+    table(0x001d, TABLE_MY_COLORS, false), // %Canon::MyColors
+    table(0x0024, TABLE_FACE_DETECT1, false).gated(&FACE_DETECT1_GATE), // %Canon::FaceDetect1
+    table(0x0027, TABLE_CONTRAST_INFO, false).when(contrast_info_applies), // %Canon::ContrastInfo
+    table(0x0029, TABLE_WB_INFO, true),    // %Canon::WBInfo
+    table(0x002f, TABLE_FACE_DETECT3, true), // %Canon::FaceDetect3
+    table(0x0035, TABLE_TIME_INFO, true),  // %Canon::TimeInfo
+    table(0x0098, TABLE_CROP_INFO, false), // %Canon::CropInfo
+    table(0x009a, TABLE_ASPECT_INFO, false), // %Canon::AspectInfo
+    table(0x00b0, TABLE_FLAGS, true),      // %Canon::Flags
+    table(0x00b1, TABLE_MODIFIED_INFO, true), // %Canon::ModifiedInfo
+    table(0x00b6, TABLE_PREVIEW_IMAGE_INFO, true), // %Canon::PreviewImageInfo
+    table(0x4003, TABLE_COLOR_INFO, true), // %Canon::ColorInfo
+    table(0x4013, TABLE_AF_MICRO_ADJ, true), // %Canon::AFMicroAdj
+    table(0x4015, TABLE_VIGNETTING_CORR, false).when(vignetting_corr_applies), // %Canon::VignettingCorr
+    table(0x4015, TABLE_VIGNETTING_CORR_UNKNOWN, false).when(vignetting_corr_unknown1_applies),
+    table(0x4015, TABLE_VIGNETTING_CORR_UNKNOWN, false).when(vignetting_corr_unknown2_applies),
+    table(0x4016, TABLE_VIGNETTING_CORR2, true), // %Canon::VignettingCorr2
+    table(0x4018, TABLE_LIGHTING_OPT, true),     // %Canon::LightingOpt
+    table(0x4020, TABLE_AMBIENCE, true).when(ambience_applies), // %Canon::Ambience
+    table(0x4021, TABLE_MULTI_EXP, true),        // %Canon::MultiExp
+    table(0x4025, TABLE_HDR_INFO, true),         // %Canon::HDRInfo
+    table(0x4028, TABLE_AF_CONFIG, true),        // %Canon::AFConfig
+    table(0x4053, TABLE_FOCUS_BRACKETING_INFO, true), // %Canon::FocusBracketingInfo
+];
+
+const fn table(
+    tag: u16,
+    fields: &'static [CanonBinaryField],
+    length_prefixed: bool,
+) -> CanonBinaryTable {
+    CanonBinaryTable {
+        tag,
+        fields,
+        length_prefixed,
+        condition: None,
+        gate: None,
+    }
+}
+
+impl CanonBinaryTable {
+    const fn when(self, condition: fn(&[u8]) -> bool) -> Self {
+        Self {
+            condition: Some(condition),
+            ..self
+        }
+    }
+
+    const fn gated(self, gate: &'static CountGate) -> Self {
+        Self {
+            gate: Some(gate),
+            ..self
+        }
+    }
+}
 
 /// Reads one field's values out of the record, or `None` if it runs past the end.
 fn read_field(record: &[i16], field: &CanonBinaryField, byte_order: ByteOrder) -> Option<Vec<i64>> {
@@ -960,6 +1294,16 @@ fn read_field(record: &[i16], field: &CanonBinaryField, byte_order: ByteOrder) -
             .checked_mul(words)?
             .checked_add(offset * words)?;
         match field.format {
+            CanonBinaryFormat::Int8u => {
+                // The key still steps one 16-bit word, but the value is only the first
+                // stored byte of it -- the low half under little-endian, the high half
+                // under big-endian.
+                let raw = *record.get(word)? as u16;
+                values.push(i64::from(match byte_order {
+                    ByteOrder::LittleEndian => raw & 0x00ff,
+                    ByteOrder::BigEndian => raw >> 8,
+                }));
+            }
             CanonBinaryFormat::Int16s => {
                 values.push(i64::from(*record.get(word)?));
             }
@@ -1010,6 +1354,13 @@ fn render_value(conv: CanonBinaryConv, value: i64) -> String {
             }
             value.to_string()
         }
+        CanonBinaryConv::IntelligentContrast => match value {
+            0x00 => "Off".to_string(),
+            0x08 => "On".to_string(),
+            0xffff => "n/a".to_string(),
+            other if other & 0x08 != 0 => format!("On (0x{other:02x})"),
+            other => format!("Off (0x{other:02x})"),
+        },
         CanonBinaryConv::Bitmask(table) => {
             // ExifTool's DecodeBits defaults to a 32-bit word and retains set bits
             // missing from the lookup as `[n]`. Dropping those bits made Canon's
@@ -1034,24 +1385,66 @@ fn render_value(conv: CanonBinaryConv, value: i64) -> String {
     }
 }
 
+fn lookup(tag_id: u16) -> Option<&'static CanonBinaryTable> {
+    CANON_BINARY_TABLES.iter().find(|entry| entry.tag == tag_id)
+}
+
+/// The alternative ExifTool would pick for this record: the first whose `Condition`
+/// holds, with an unconditional entry always holding.
+///
+/// A conditioned table needs the untyped bytes ExifTool's `$$valPt` sees; when the record
+/// was short enough to live inline in the entry there are none to test, and no
+/// alternative is chosen rather than guessing one.
+fn select_table(tag_id: u16, raw: &[u8]) -> Option<&'static CanonBinaryTable> {
+    CANON_BINARY_TABLES
+        .iter()
+        .filter(|entry| entry.tag == tag_id)
+        .find(|entry| match entry.condition {
+            None => true,
+            Some(condition) => !raw.is_empty() && condition(raw),
+        })
+}
+
 /// Decodes a `%Canon` binary sub-table into `Canon:`-prefixed tags.
+///
+/// `raw` is the record exactly as stored, for the ExifTool `Condition` that some tags put
+/// on their sub-table; `record` is the same bytes as 16-bit words.
 ///
 /// Returns `false` when `tag_id` has no table here, so the caller can fall through to its
 /// own handling.
 pub(crate) fn parse_binary_table(
     tag_id: u16,
+    raw: &[u8],
     record: &[i16],
     byte_order: ByteOrder,
     tags: &mut HashMap<String, String>,
 ) -> bool {
-    let Some(&(_, fields, _)) = CANON_BINARY_TABLES
-        .iter()
-        .find(|(tag, _, _)| *tag == tag_id)
-    else {
+    if lookup(tag_id).is_none() {
         return false;
+    }
+    let Some(entry) = select_table(tag_id, raw) else {
+        // The record matches no alternative ExifTool declares for this tag, so emit
+        // nothing rather than the wrong names.
+        return true;
     };
 
-    for field in fields {
+    // A gated table's count field decides how many of the later fields exist at all.
+    let count = entry.gate.and_then(|gate| {
+        entry
+            .fields
+            .iter()
+            .find(|field| field.index == gate.index)
+            .and_then(|field| read_field(record, field, byte_order))
+            .and_then(|values| values.first().copied())
+    });
+
+    for field in entry.fields {
+        if let Some(gate) = entry.gate
+            && let Some((_, minimum)) = gate.minimums.iter().find(|(name, _)| *name == field.name)
+            && count.is_none_or(|detected| detected < *minimum)
+        {
+            continue;
+        }
         let Some(values) = read_field(record, field, byte_order) else {
             continue;
         };
@@ -1065,28 +1458,43 @@ pub(crate) fn parse_binary_table(
     true
 }
 
-/// Whether the table for `tag_id` is `FIRST_ENTRY => 1`, i.e. its index 0 holds the
-/// record's own byte count rather than a field.
+/// Whether the table for `tag_id` opens with the record's own byte count, so a record
+/// stored one word out of step can be realigned before its keys are applied.
 pub(crate) fn table_is_length_prefixed(tag_id: u16) -> bool {
-    CANON_BINARY_TABLES
-        .iter()
-        .find(|(tag, _, _)| *tag == tag_id)
-        .is_some_and(|(_, _, length_prefixed)| *length_prefixed)
+    lookup(tag_id).is_some_and(|entry| entry.length_prefixed)
 }
 
 /// Whether any table here handles `tag_id`.
 pub(crate) fn handles_tag(tag_id: u16) -> bool {
-    CANON_BINARY_TABLES.iter().any(|(tag, _, _)| *tag == tag_id)
+    lookup(tag_id).is_some()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The tests describe a record as the decoded words a caller would pass in. Only the
+    /// conditioned tags look at the untyped bytes, so re-encode them from those words.
+    fn parse(
+        tag: u16,
+        record: &[i16],
+        byte_order: ByteOrder,
+        tags: &mut HashMap<String, String>,
+    ) -> bool {
+        let raw: Vec<u8> = record
+            .iter()
+            .flat_map(|word| match byte_order {
+                ByteOrder::LittleEndian => (*word as u16).to_le_bytes(),
+                ByteOrder::BigEndian => (*word as u16).to_be_bytes(),
+            })
+            .collect();
+        parse_binary_table(tag, &raw, record, byte_order, tags)
+    }
+
     #[test]
     fn test_unhandled_tag_reports_false() {
         let mut tags = HashMap::new();
-        assert!(!parse_binary_table(
+        assert!(!parse(
             0x0001,
             &[0i16; 8],
             ByteOrder::LittleEndian,
@@ -1101,7 +1509,7 @@ mod tests {
     fn test_crop_info_is_indexed_from_zero() {
         assert!(!table_is_length_prefixed(0x0098));
         let mut tags = HashMap::new();
-        assert!(parse_binary_table(
+        assert!(parse(
             0x0098,
             &[11i16, 22, 33, 44],
             ByteOrder::LittleEndian,
@@ -1129,7 +1537,7 @@ mod tests {
         little_endian[4] = 20; // key 2: London
         little_endian[6] = 60; // key 3: daylight savings on
         let mut tags = HashMap::new();
-        assert!(parse_binary_table(
+        assert!(parse(
             0x0035,
             &little_endian,
             ByteOrder::LittleEndian,
@@ -1142,12 +1550,7 @@ mod tests {
         big_endian[5] = 20;
         big_endian[7] = 60;
         let mut tags = HashMap::new();
-        assert!(parse_binary_table(
-            0x0035,
-            &big_endian,
-            ByteOrder::BigEndian,
-            &mut tags,
-        ));
+        assert!(parse(0x0035, &big_endian, ByteOrder::BigEndian, &mut tags,));
         assert_eq!(tags.get("Canon:TimeZoneCity"), Some(&"London".to_string()));
         assert_eq!(tags.get("Canon:DaylightSavings"), Some(&"On".to_string()));
     }
@@ -1163,12 +1566,7 @@ mod tests {
         record[4] = 0x3880;
         record[5] = 0x0001;
         let mut tags = HashMap::new();
-        assert!(parse_binary_table(
-            0x009a,
-            &record,
-            ByteOrder::LittleEndian,
-            &mut tags,
-        ));
+        assert!(parse(0x009a, &record, ByteOrder::LittleEndian, &mut tags,));
         assert_eq!(
             tags.get("Canon:CroppedImageWidth"),
             Some(&"70000".to_string())
@@ -1188,12 +1586,7 @@ mod tests {
             record[4 + offset * 2] = value;
         }
         let mut tags = HashMap::new();
-        assert!(parse_binary_table(
-            0x0029,
-            &record,
-            ByteOrder::LittleEndian,
-            &mut tags,
-        ));
+        assert!(parse(0x0029, &record, ByteOrder::LittleEndian, &mut tags,));
         assert_eq!(
             tags.get("Canon:WB_GRBGLevelsAuto"),
             Some(&"10 20 30 40".to_string())
@@ -1208,7 +1601,7 @@ mod tests {
         let mut vignetting = vec![0i16; 20];
         vignetting[10] = 1; // key 5
         let mut tags = HashMap::new();
-        assert!(parse_binary_table(
+        assert!(parse(
             0x4016,
             &vignetting,
             ByteOrder::LittleEndian,
@@ -1222,12 +1615,7 @@ mod tests {
         let mut focus = vec![0i16; 16];
         focus[10] = 1; // key 5
         let mut tags = HashMap::new();
-        assert!(parse_binary_table(
-            0x4053,
-            &focus,
-            ByteOrder::LittleEndian,
-            &mut tags,
-        ));
+        assert!(parse(0x4053, &focus, ByteOrder::LittleEndian, &mut tags,));
         assert_eq!(tags.get("Canon:FocusBracketing"), Some(&"Off".to_string()));
         assert_eq!(
             tags.get("Canon:FocusBracketingDepthComposite"),
@@ -1263,16 +1651,240 @@ mod tests {
         assert_eq!(render_value(bits, i64::from(i32::MIN)), "[31]");
     }
 
+    /// Decodes a little-endian byte record exactly as the MakerNote walker does, so a
+    /// test can paste the bytes `exiftool -v3` printed for a real file.
+    fn words(bytes: &[u8]) -> Vec<i16> {
+        bytes
+            .chunks_exact(2)
+            .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
+            .collect()
+    }
+
+    fn parse_bytes(tag: u16, bytes: &[u8]) -> HashMap<String, String> {
+        let mut tags = HashMap::new();
+        assert!(parse_binary_table(
+            tag,
+            bytes,
+            &words(bytes),
+            ByteOrder::LittleEndian,
+            &mut tags,
+        ));
+        tags
+    }
+
+    /// Tag 0x0027 on CanonIXUS170.jpg. `exiftool -G1 -s` reports
+    /// `[Canon] IntelligentContrast : Off (0x10)`; `exiftool -v3` shows key 4 read from
+    /// byte 8 of the record. The `OTHER` sub keeps the raw value visible for anything
+    /// outside the three-entry hash.
+    #[test]
+    fn test_contrast_info_matches_exiftool() {
+        let record = [
+            0x0a, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0x10, 0x00, 0x2a, 0x00, 0x01, 0x00,
+        ];
+        assert_eq!(
+            parse_bytes(0x0027, &record).get("Canon:IntelligentContrast"),
+            Some(&"Off (0x10)".to_string())
+        );
+
+        assert_eq!(render_value(CanonBinaryConv::IntelligentContrast, 0), "Off");
+        assert_eq!(render_value(CanonBinaryConv::IntelligentContrast, 8), "On");
+        assert_eq!(
+            render_value(CanonBinaryConv::IntelligentContrast, 0xffff),
+            "n/a"
+        );
+        assert_eq!(
+            render_value(CanonBinaryConv::IntelligentContrast, 0x19),
+            "On (0x19)"
+        );
+    }
+
+    /// `0x27 => { Condition => '$$valPt =~ /^\x0a\0/' }` (Canon.pm:1719). Canon.pm's own
+    /// comment records other, undocumented versions of this record under the same tag, so
+    /// a record that fails the condition must produce nothing rather than the wrong name.
+    #[test]
+    fn test_contrast_info_condition_rejects_other_records() {
+        let record = [0x01, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x08, 0x00];
+        let mut tags = HashMap::new();
+        assert!(parse_binary_table(
+            0x0027,
+            &record,
+            &words(&record),
+            ByteOrder::LittleEndian,
+            &mut tags,
+        ));
+        assert!(tags.is_empty());
+    }
+
+    /// Tag 0x002f on CanonEOS_M10.jpg: `FIRST_ENTRY => 1`, key 0 is the 34-byte count and
+    /// key 3 is `FacesDetected`. `exiftool -G1 -s` reports `FacesDetected : 65535`, so the
+    /// field is int16u and must not come back as -1.
+    #[test]
+    fn test_face_detect3_reads_key_three_as_unsigned() {
+        let record = [
+            0x22, 0x00, 0x02, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        ];
+        assert_eq!(
+            parse_bytes(0x002f, &record).get("Canon:FacesDetected"),
+            Some(&"65535".to_string())
+        );
+    }
+
+    /// Tag 0x0024 on CanonDIGITAL_IXUS70.jpg. `exiftool -G1 -s` reports
+    /// `FacesDetected : 0` and `FaceDetectFrameSize : 320 240` and nothing else: every
+    /// `FaceNPosition` carries `RawConv => '$$self{FacesDetected} < n ? undef : $val'`.
+    #[test]
+    fn test_face_detect1_gates_positions_on_face_count() {
+        let record = [
+            0x9c, 0x00, 0x23, 0x00, 0x00, 0x00, 0x40, 0x01, 0xf0, 0x00, 0x01, 0x00, 0x01, 0x00,
+            0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        let tags = parse_bytes(0x0024, &record);
+        assert_eq!(tags.get("Canon:FacesDetected"), Some(&"0".to_string()));
+        assert_eq!(
+            tags.get("Canon:FaceDetectFrameSize"),
+            Some(&"320 240".to_string())
+        );
+        assert_eq!(tags.get("Canon:Face1Position"), None);
+
+        // With one face detected, key 0x08 becomes real: it is the signed int16 pair at
+        // bytes 16..20, and key 0x0a (bytes 20..24) stays suppressed.
+        let mut one_face = record;
+        one_face[4] = 0x01;
+        one_face[16] = 0x0a;
+        one_face[17] = 0x00;
+        one_face[18] = 0xf6;
+        one_face[19] = 0xff;
+        let tags = parse_bytes(0x0024, &one_face);
+        assert_eq!(tags.get("Canon:FacesDetected"), Some(&"1".to_string()));
+        assert_eq!(tags.get("Canon:Face1Position"), Some(&"10 -10".to_string()));
+        assert_eq!(tags.get("Canon:Face2Position"), None);
+    }
+
+    /// Tag 0x4015 on CanonEOS-1D_C.jpg. Its size word sits at byte 2, not byte 0, so the
+    /// record must not be realigned; keys 11 and 12 then land on the 5184x3456 that
+    /// `exiftool -G1 -s` reports for `OriginalImageWidth`/`OriginalImageHeight`.
+    #[test]
+    fn test_vignetting_corr_layout_matches_exiftool() {
+        let record = [
+            0x00, 0x21, 0xc8, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x26, 0x1b, 0x40, 0x14, 0x80, 0x0d,
+        ];
+        assert!(!table_is_length_prefixed(0x4015));
+        let tags = parse_bytes(0x4015, &record);
+        assert_eq!(
+            tags.get("Canon:VignettingCorrVersion"),
+            Some(&"0".to_string())
+        );
+        assert_eq!(
+            tags.get("Canon:PeripheralLighting"),
+            Some(&"Off".to_string())
+        );
+        assert_eq!(
+            tags.get("Canon:OriginalImageWidth"),
+            Some(&"5184".to_string())
+        );
+        assert_eq!(
+            tags.get("Canon:OriginalImageHeight"),
+            Some(&"3456".to_string())
+        );
+    }
+
+    /// `0x4015` is a three-alternative list. A record that fails the first condition falls
+    /// through to `%Canon::VignettingCorrUnknown`, which names only the version byte -- it
+    /// must never be read with `%Canon::VignettingCorr`'s field names.
+    #[test]
+    fn test_vignetting_corr_falls_through_to_unknown_variants() {
+        // Second alternative: first byte in [\x01\x02\x10\x20].
+        let record = [
+            0x02u8, 0x50, 0x7c, 0x00, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+            0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+        ];
+        let tags = parse_bytes(0x4015, &record);
+        assert_eq!(
+            tags.get("Canon:VignettingCorrVersion"),
+            Some(&"2".to_string())
+        );
+        assert_eq!(tags.get("Canon:OriginalImageWidth"), None);
+
+        // Third alternative: anything else that is not four leading zero bytes.
+        let record = [
+            0x03u8, 0x00, 0x7c, 0x00, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+            0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+        ];
+        let tags = parse_bytes(0x4015, &record);
+        assert_eq!(
+            tags.get("Canon:VignettingCorrVersion"),
+            Some(&"3".to_string())
+        );
+        assert_eq!(tags.get("Canon:PeripheralLighting"), None);
+
+        // All three conditions exclude an all-zero record.
+        let zeros = [0u8; 16];
+        let mut tags = HashMap::new();
+        assert!(parse_binary_table(
+            0x4015,
+            &zeros,
+            &words(&zeros),
+            ByteOrder::LittleEndian,
+            &mut tags,
+        ));
+        assert!(tags.is_empty());
+    }
+
+    /// Tag 0x4020 on CanonEOS-1D_XMarkIII.jpg. `FORMAT => 'int32s'`, so key 1 is byte 4,
+    /// and `exiftool -G1 -s` reports `AmbienceSelection : Standard`.
+    #[test]
+    fn test_ambience_reads_int32_key_one() {
+        let record = [
+            0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        assert_eq!(
+            parse_bytes(0x4020, &record).get("Canon:AmbienceSelection"),
+            Some(&"Standard".to_string())
+        );
+
+        // `Condition => '$$valPt !~ /^\0\0\0\0/'` (Canon.pm:2144): the 60D writes an
+        // all-zero record that ExifTool declines to decode.
+        let zeros = [0u8; 12];
+        let mut tags = HashMap::new();
+        assert!(parse_binary_table(
+            0x4020,
+            &zeros,
+            &words(&zeros),
+            ByteOrder::LittleEndian,
+            &mut tags,
+        ));
+        assert!(tags.is_empty());
+    }
+
+    /// A `Format => 'int8u'` override inside a 16-bit table reads the first stored byte of
+    /// the key's word under either byte order.
+    #[test]
+    fn test_int8u_field_reads_first_stored_byte() {
+        let field = CanonBinaryField {
+            index: 0,
+            name: "VignettingCorrVersion",
+            format: CanonBinaryFormat::Int8u,
+            count: 1,
+            conv: CanonBinaryConv::Raw,
+        };
+        // Bytes 03 21 on disk: little-endian decodes them to 0x2103, big-endian to 0x0321,
+        // and either way the value at byte 0 is 3.
+        assert_eq!(
+            read_field(&[0x2103], &field, ByteOrder::LittleEndian),
+            Some(vec![3])
+        );
+        assert_eq!(
+            read_field(&[0x0321], &field, ByteOrder::BigEndian),
+            Some(vec![3])
+        );
+    }
+
     /// A record shorter than a field's index drops that field rather than panicking.
     #[test]
     fn test_short_record_is_safe() {
         let mut tags = HashMap::new();
-        assert!(parse_binary_table(
-            0x0098,
-            &[11i16],
-            ByteOrder::LittleEndian,
-            &mut tags
-        ));
+        assert!(parse(0x0098, &[11i16], ByteOrder::LittleEndian, &mut tags));
         assert_eq!(tags.get("Canon:CropLeftMargin"), Some(&"11".to_string()));
         assert_eq!(tags.get("Canon:CropRightMargin"), None);
     }

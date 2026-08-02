@@ -52,10 +52,12 @@
 //! let formatted = format_for_exiftool(&metadata);
 //!
 //! assert_eq!(formatted.get_string("EXIF:GPSLatitudeRef"), Some("North"));
-//! assert_eq!(formatted.get_string("EXIF:FocalLength"), Some("50 mm"));
+//! // 0x920a forces one decimal: Exif.pm:2401 `sprintf("%.1f mm",$val)`
+//! assert_eq!(formatted.get_string("EXIF:FocalLength"), Some("50.0 mm"));
 //! ```
 
 use crate::core::binary_decoders::decode_user_comment;
+use crate::core::formatters::exif_print_conv::{print_exposure_time, print_fraction};
 use crate::core::formatters::gps_speed_ref::format_gps_dest_distance_ref;
 use crate::core::formatters::gps_status::{
     format_gps_differential, format_gps_measure_mode, format_gps_status,
@@ -829,6 +831,29 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     }
 
     // ---------------------------------------------------------------------
+    // Rule 19e: ExposureCompensation / ExposureBiasValue (Exif.pm:2342-2349)
+    //     PrintConv => 'Image::ExifTool::Exif::PrintFraction($val)'
+    //
+    // 0x9204 is `ExposureCompensation` to ExifTool and `ExposureBiasValue` to
+    // the EXIF spec (Exif.pm:2345 Notes), so both names route here. Without
+    // this the rational fell through to Rule 20's plain `%.10g` quotient and
+    // `exiftool -a -G1 -s` disagreed on the sign and the rounding alike:
+    // `1.326429536` where ExifTool prints `+1.33`, `0.0` where it prints `0`,
+    // and `1` where it prints `+1`.
+    // ---------------------------------------------------------------------
+    if matches!(base_name, "ExposureCompensation" | "ExposureBiasValue")
+        && let TagValue::Rational {
+            numerator,
+            denominator,
+        } = value
+        && *denominator != 0
+    {
+        return TagValue::String(print_fraction(
+            f64::from(*numerator) / f64::from(*denominator),
+        ));
+    }
+
+    // ---------------------------------------------------------------------
     // Rule 20: PrintConv-less rationals
     //
     // A rational that reaches this point carries no PrintConv of its own, and
@@ -863,29 +888,6 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
 // =============================================================================
 // HELPER FUNCTIONS - Special Value Formatting
 // =============================================================================
-
-/// ExifTool's `Exif::PrintExposureTime` (Exif.pm:5606-5616).
-///
-/// ```text
-/// if ($secs < 0.25001 and $secs > 0) {
-///     return sprintf("1/%d",int(0.5 + 1/$secs));
-/// }
-/// $_ = sprintf("%.1f",$secs);
-/// s/\.0$//;
-/// ```
-///
-/// Note the threshold is 0.25001 seconds, not one second, and that a whole
-/// number loses its `.0`: 1/80 s prints as `1/80`, 2 s as `2`.
-fn print_exposure_time(seconds: f64) -> String {
-    if seconds > 0.0 && seconds < 0.25001 {
-        return format!("1/{}", (0.5 + 1.0 / seconds).trunc() as i64);
-    }
-    let formatted = format!("{:.1}", seconds);
-    formatted
-        .strip_suffix(".0")
-        .map(str::to_string)
-        .unwrap_or(formatted)
-}
 
 /// Formats special float values (infinity, negative zero) to match ExifTool output.
 ///

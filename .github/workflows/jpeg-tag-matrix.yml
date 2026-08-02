@@ -63,15 +63,19 @@ jobs:
     # benchmark before changing this; do not adjust it by intuition.
     runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 90
+    # Only contents:write is needed now that this pushes to main directly.
+    # pull-requests:write and actions:write were for the PR/dispatch dance
+    # this no longer does.
     permissions:
       contents: write
-      pull-requests: write
-      actions: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # Full history: the push-retry below rebases onto origin/main, and a
+          # shallow clone has no common ancestor to rebase against.
+          fetch-depth: 0
 
       # The `runner` context (runner.temp) is only available inside a step,
       # not in any `env:` block (workflow- or job-level) -- referencing it
@@ -139,36 +143,47 @@ jobs:
             docs/reference/jpeg-tag-matrix.md \
             docs/reference/jpeg-tag-baseline.json || echo "changed=true" >> "$GITHUB_OUTPUT"
 
-      # Opens an auto-merging PR rather than pushing straight to main. main now
-      # requires the "Lint & Audit"/"Build & Test" checks, which blocks direct
-      # pushes — including this bot's. Going through a PR keeps the automation
-      # working AND means these commits are verified; previously they carried
-      # "[skip ci]" and landed on main entirely unchecked.
-      - name: Open auto-merging PR for docs updates
+      # Pushes straight to main. This used to open an auto-merging PR, because
+      # main required the "Lint & Audit"/"Build & Test" checks and a bot push
+      # could not satisfy them. That PR route then broke for a different
+      # reason: an ENTERPRISE policy forbids GitHub Actions from creating pull
+      # requests at all ("GitHub Actions is not permitted to create or approve
+      # pull requests"), which no repo or org setting can override. The
+      # required checks have since been removed from main, so the direct push
+      # works and the whole PR dance is unnecessary.
+      #
+      # Note this commit carries jpeg-tag-baseline.json, which is not a doc
+      # but the regression ratchet `report --check-baseline` reads on the next
+      # run. If this step stops landing, the gate silently stops tightening.
+      #
+      # No "[skip ci]": ci.yml runs on push to main, so these commits are
+      # still verified -- after landing rather than before, which is the
+      # trade that comes with dropping the required checks.
+      - name: Commit docs and baseline updates
         if: github.ref == 'refs/heads/main' && steps.changes.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SRC_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          branch="bot/jpeg-tag-matrix-${SRC_SHA}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$branch"
           git add docs/reference/jpeg-tag-support.md \
             docs/reference/jpeg-tag-matrix.md \
             docs/reference/jpeg-tag-baseline.json
-          # NOTE: no "[skip ci]" — a required status check that never runs
-          # leaves the PR unmergeable forever.
           git commit -m "docs: auto-update JPEG tag matrix (exiftool ${EXIFTOOL_VERSION})" \
                      -m "Generated from commit ${SRC_SHA}"
-          git push origin "$branch"
-          gh pr create --base main --head "$branch" \
-            --title "docs: auto-update JPEG tag matrix (exiftool ${EXIFTOOL_VERSION})" \
-            --body "Regenerated from ${SRC_SHA} by the JPEG Tag Matrix workflow."
-          # Events triggered by GITHUB_TOKEN do not start workflow runs, so
-          # this PR gets no `pull_request` CI run and its required checks would
-          # never report -- leaving it open forever. workflow_dispatch is the
-          # documented exception to that rule, so ask for the run explicitly.
-          gh workflow run ci.yml --ref "$branch"
-          gh pr merge "$branch" --squash --auto --delete-branch
+
+          # main moves fast here (the fix fleet merges frequently), so a plain
+          # push loses a race often enough to matter. Rebase onto whatever
+          # landed meanwhile and retry rather than failing the run.
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              echo "pushed on attempt $attempt"
+              exit 0
+            fi
+            echo "push rejected (main moved); rebasing and retrying"
+            git fetch origin main
+            git rebase origin/main
+          done
+          echo "::error::could not push after 3 attempts"
+          exit 1

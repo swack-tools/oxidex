@@ -51,11 +51,24 @@ const EXIF_FOCAL_LENGTH_GROUPS: &[&str] = &[
 /// be displayed with "m" suffix to match ExifTool's output format.
 const METER_SUFFIX_TAGS: &[&str] = &["SubjectDistance", "GPSAltitude", "HyperfocalDistance"];
 
-/// Tags that may require "s" (seconds) suffix for time measurements.
-///
-/// Note: ExifTool only adds "s" suffix for exposure times >= 1 second.
-/// Fractional exposure times (e.g., "1/125") are displayed without suffix.
-const SECONDS_SUFFIX_TAGS: &[&str] = &["ExposureTime", "ShutterSpeedValue"];
+// There is deliberately no seconds-suffix table here.
+//
+// Both EXIF time tags render through `PrintExposureTime`, not through a unit
+// suffix: `0x829a ExposureTime` (Exif.pm:1826) and `0x9201 ShutterSpeedValue`
+// (Exif.pm:2324) each carry
+// `PrintConv => 'Image::ExifTool::Exif::PrintExposureTime($val)'`, and that
+// sub (Exif.pm:5606) ends
+//
+// ```text
+//     $_ = sprintf("%.1f",$secs);
+//     s/\.0$//;
+//     return $_;
+// ```
+//
+// with no unit anywhere in it. Calling the installed 13.55 Perl confirms it:
+// `PrintExposureTime(2)` is `"2"`, `(1.5)` is `"1.5"`, `(30)` is `"30"` --
+// never `"2 s"`. An earlier table here appended `" s"` to every value >= 1
+// second and had unit tests asserting that invented output.
 
 // ============================================================================
 // MAIN FORMATTING FUNCTION
@@ -83,8 +96,8 @@ const SECONDS_SUFFIX_TAGS: &[&str] = &["ExposureTime", "ShutterSpeedValue"];
 ///
 /// The value with appropriate unit suffix, or unchanged if:
 /// - No suffix is needed for this tag
-/// - The value already has the correct suffix
-/// - The value format doesn't warrant a suffix (e.g., fractional exposure times)
+/// - The value already names its unit (`"50 mm"`, or a composite that renders
+///   its own, such as `"4.2 mm (35 mm equivalent: 26.0 mm)"`)
 ///
 /// # Examples
 ///
@@ -102,9 +115,15 @@ const SECONDS_SUFFIX_TAGS: &[&str] = &["ExposureTime", "ShutterSpeedValue"];
 /// assert_eq!(format_with_unit("SubjectDistance", "2.5"), "2.5 m");
 /// assert_eq!(format_with_unit("GPSAltitude", "117"), "117 m");
 ///
-/// // Exposure time only gets "s" suffix for values >= 1 second
-/// assert_eq!(format_with_unit("ExposureTime", "2"), "2 s");
-/// assert_eq!(format_with_unit("ExposureTime", "1/125"), "1/125"); // No suffix for fractions
+/// // Time tags never gain a unit -- PrintExposureTime emits none
+/// assert_eq!(format_with_unit("ExposureTime", "2"), "2");
+/// assert_eq!(format_with_unit("ExposureTime", "1/125"), "1/125");
+///
+/// // A value that already names its unit is left alone
+/// assert_eq!(
+///     format_with_unit("Composite:FocalLength35efl", "4.2 mm (35 mm equivalent: 26.0 mm)"),
+///     "4.2 mm (35 mm equivalent: 26.0 mm)"
+/// );
 ///
 /// // Other tags remain unchanged
 /// assert_eq!(format_with_unit("ISO", "400"), "400");
@@ -132,11 +151,6 @@ pub fn format_with_unit(tag_name: &str, value: &str) -> String {
         return format_with_meter_suffix(value);
     }
 
-    // Handle seconds suffix for exposure time tags (only for >= 1 second)
-    if SECONDS_SUFFIX_TAGS.contains(&base_name) {
-        return format_exposure_time_with_suffix(value);
-    }
-
     // No suffix needed for this tag - return value unchanged
     value.to_string()
 }
@@ -145,21 +159,32 @@ pub fn format_with_unit(tag_name: &str, value: &str) -> String {
 // SUFFIX-SPECIFIC FORMATTING FUNCTIONS
 // ============================================================================
 
-/// Format a value with " mm" suffix if not already present.
+/// Format a value with " mm" suffix if it does not already carry one.
 ///
-/// This function ensures idempotency by checking whether the value
-/// already ends with " mm" before appending the suffix.
+/// # Why this tests `contains` and not `ends_with`
 ///
-/// # Arguments
+/// `Composite:FocalLength35efl` arrives here already fully rendered. Its
+/// PrintConv (Exif.pm:4720) is
 ///
-/// * `value` - The numeric value string (e.g., "31", "6.0")
+/// ```text
+/// $val[1] ? sprintf("%.1f mm (35 mm equivalent: %.1f mm)", $val[0], $val)
+///         : sprintf("%.1f mm", $val)
+/// ```
 ///
-/// # Returns
+/// so the two-argument form ends in `")"`, not `" mm"`. An `ends_with(" mm")`
+/// guard therefore missed it and appended a second unit, and
+/// `exiftool -a -G1 -s` disagreed on 43 of the 148 files in the sample corpus:
 ///
-/// The value with " mm" suffix appended, or unchanged if already present.
+/// ```text
+/// exiftool: 4.2 mm (35 mm equivalent: 26.0 mm)
+/// oxidex:   4.2 mm (35 mm equivalent: 26.0 mm) mm
+/// ```
+///
+/// Any value that already names millimetres anywhere is already carrying its
+/// unit; a bare number ("31", "50-200") never contains `" mm"` and still gets
+/// one appended.
 fn format_with_mm_suffix(value: &str) -> String {
-    // Avoid duplicating suffix if already present
-    if value.ends_with(" mm") {
+    if value.contains(" mm") {
         return value.to_string();
     }
     format!("{} mm", value)
@@ -214,46 +239,6 @@ fn format_with_meter_suffix(value: &str) -> String {
     format!("{} m", value)
 }
 
-/// Format exposure time with " s" suffix only for values >= 1 second.
-///
-/// ExifTool's convention is to display:
-/// - Fractional exposure times (< 1 second) as fractions without suffix: "1/125"
-/// - Whole or decimal exposure times (>= 1 second) with "s" suffix: "2 s", "1.5 s"
-///
-/// This function parses the value to determine whether it represents a time
-/// >= 1 second and adds the suffix accordingly.
-///
-/// # Arguments
-///
-/// * `value` - The exposure time value string (e.g., "1/125", "2", "1.5")
-///
-/// # Returns
-///
-/// The value with " s" suffix if >= 1 second, or unchanged otherwise.
-fn format_exposure_time_with_suffix(value: &str) -> String {
-    // Avoid duplicating suffix if already present
-    if value.ends_with(" s") || value.ends_with(" sec") || value.ends_with("s") {
-        return value.to_string();
-    }
-
-    // Fractional values (containing "/") represent times < 1 second
-    // and should not get a suffix per ExifTool convention
-    if value.contains('/') {
-        return value.to_string();
-    }
-
-    // Try to parse as a numeric value to determine if >= 1 second
-    // Handle both integer ("2") and decimal ("1.5") formats
-    if let Ok(numeric_value) = value.parse::<f64>()
-        && numeric_value >= 1.0
-    {
-        return format!("{} s", value);
-    }
-
-    // Unable to parse or value < 1 second - return unchanged
-    value.to_string()
-}
-
 // ============================================================================
 // UTILITY FUNCTIONS
 // ============================================================================
@@ -269,7 +254,10 @@ fn format_exposure_time_with_suffix(value: &str) -> String {
 ///
 /// # Returns
 ///
-/// `true` if the tag should have a unit suffix (mm, m, or s), `false` otherwise.
+/// `true` if the tag should have a unit suffix (mm or m), `false` otherwise.
+///
+/// `ExposureTime` and `ShutterSpeedValue` are deliberately absent: they render
+/// through `PrintExposureTime`, which emits no unit at all.
 ///
 /// # Examples
 ///
@@ -280,20 +268,18 @@ fn format_exposure_time_with_suffix(value: &str) -> String {
 /// assert!(needs_unit_suffix("FocalLengthIn35mmFormat"));
 /// assert!(needs_unit_suffix("SubjectDistance"));
 /// assert!(needs_unit_suffix("GPSAltitude"));
-/// assert!(needs_unit_suffix("ExposureTime"));
 ///
 /// // With group prefix
 /// assert!(needs_unit_suffix("EXIF:FocalLength"));
 ///
 /// // Tags that don't need suffix
+/// assert!(!needs_unit_suffix("ExposureTime"));
 /// assert!(!needs_unit_suffix("ISO"));
 /// assert!(!needs_unit_suffix("Model"));
 /// ```
 pub fn needs_unit_suffix(tag_name: &str) -> bool {
     let base_name = tag_name.rsplit(':').next().unwrap_or(tag_name);
-    MM_SUFFIX_TAGS.contains(&base_name)
-        || METER_SUFFIX_TAGS.contains(&base_name)
-        || SECONDS_SUFFIX_TAGS.contains(&base_name)
+    MM_SUFFIX_TAGS.contains(&base_name) || METER_SUFFIX_TAGS.contains(&base_name)
 }
 
 /// Get the unit suffix string for a given tag, if applicable.
@@ -307,7 +293,7 @@ pub fn needs_unit_suffix(tag_name: &str) -> bool {
 ///
 /// # Returns
 ///
-/// The unit suffix ("mm", "m", or "s") or `None` if no suffix applies.
+/// The unit suffix ("mm" or "m") or `None` if no suffix applies.
 ///
 /// # Examples
 ///
@@ -316,7 +302,7 @@ pub fn needs_unit_suffix(tag_name: &str) -> bool {
 ///
 /// assert_eq!(get_unit_suffix("FocalLength"), Some("mm"));
 /// assert_eq!(get_unit_suffix("SubjectDistance"), Some("m"));
-/// assert_eq!(get_unit_suffix("ExposureTime"), Some("s"));
+/// assert_eq!(get_unit_suffix("ExposureTime"), None);
 /// assert_eq!(get_unit_suffix("ISO"), None);
 /// ```
 pub fn get_unit_suffix(tag_name: &str) -> Option<&'static str> {
@@ -326,8 +312,6 @@ pub fn get_unit_suffix(tag_name: &str) -> Option<&'static str> {
         Some("mm")
     } else if METER_SUFFIX_TAGS.contains(&base_name) {
         Some("m")
-    } else if SECONDS_SUFFIX_TAGS.contains(&base_name) {
-        Some("s")
     } else {
         None
     }
@@ -445,6 +429,33 @@ mod tests {
         );
     }
 
+    /// `Composite:FocalLength35efl`'s PrintConv (Exif.pm:4720) already renders
+    /// both millimetre figures itself, so the string it hands over ends in
+    /// `")"` rather than `" mm"`. Appending a second unit here is what made
+    /// `exiftool -a -G1 -s` disagree with oxidex on 43 of 148 sample files.
+    #[test]
+    fn composite_focal_length_35efl_keeps_its_own_units() {
+        assert_eq!(
+            format_with_unit(
+                "Composite:FocalLength35efl",
+                "4.2 mm (35 mm equivalent: 26.0 mm)"
+            ),
+            "4.2 mm (35 mm equivalent: 26.0 mm)"
+        );
+        assert_eq!(
+            format_with_unit("FocalLength35efl", "15.4 mm (35 mm equivalent: 75.1 mm)"),
+            "15.4 mm (35 mm equivalent: 75.1 mm)"
+        );
+        // The single-argument branch of the same PrintConv.
+        assert_eq!(
+            format_with_unit("Composite:FocalLength35efl", "50.0 mm"),
+            "50.0 mm"
+        );
+        // A bare number still gets its unit.
+        assert_eq!(format_with_unit("FocalLength35efl", "24"), "24 mm");
+        assert_eq!(format_with_unit("FocalLength", "50-200"), "50-200 mm");
+    }
+
     // ------------------------------------------------------------------------
     // Tests for SubjectDistance tag (m suffix)
     // ------------------------------------------------------------------------
@@ -489,47 +500,20 @@ mod tests {
     }
 
     // ------------------------------------------------------------------------
-    // Tests for ExposureTime tag (conditional s suffix)
+    // ExposureTime / ShutterSpeedValue carry no unit at all
     // ------------------------------------------------------------------------
 
+    /// `PrintExposureTime` (Exif.pm:5606) is the PrintConv for both 0x829a and
+    /// 0x9201 and it never emits a unit -- the installed 13.55 Perl returns
+    /// `"2"` for 2 seconds, not `"2 s"`. These values must pass through
+    /// untouched, whatever their magnitude.
     #[test]
-    fn test_exposure_time_one_second_or_more() {
-        // Values >= 1 second should get "s" suffix
-        assert_eq!(format_with_unit("ExposureTime", "1"), "1 s");
-        assert_eq!(format_with_unit("ExposureTime", "2"), "2 s");
-        assert_eq!(format_with_unit("ExposureTime", "1.5"), "1.5 s");
-        assert_eq!(format_with_unit("ExposureTime", "30"), "30 s");
-    }
-
-    #[test]
-    fn test_exposure_time_fractions() {
-        // Fractional exposure times (< 1 second) should NOT get suffix
-        assert_eq!(format_with_unit("ExposureTime", "1/125"), "1/125");
-        assert_eq!(format_with_unit("ExposureTime", "1/1000"), "1/1000");
-        assert_eq!(format_with_unit("ExposureTime", "1/60"), "1/60");
-        assert_eq!(format_with_unit("ExposureTime", "1/4"), "1/4");
-    }
-
-    #[test]
-    fn test_exposure_time_decimal_less_than_one() {
-        // Decimal values < 1 second should NOT get suffix
-        assert_eq!(format_with_unit("ExposureTime", "0.5"), "0.5");
-        assert_eq!(format_with_unit("ExposureTime", "0.25"), "0.25");
-        assert_eq!(format_with_unit("ExposureTime", "0.001"), "0.001");
-    }
-
-    #[test]
-    fn test_exposure_time_with_group_prefix() {
-        assert_eq!(format_with_unit("EXIF:ExposureTime", "2"), "2 s");
-        assert_eq!(format_with_unit("EXIF:ExposureTime", "1/250"), "1/250");
-    }
-
-    #[test]
-    fn test_exposure_time_already_has_suffix() {
-        // Should not duplicate suffix if already present
-        assert_eq!(format_with_unit("ExposureTime", "2 s"), "2 s");
-        assert_eq!(format_with_unit("ExposureTime", "1 sec"), "1 sec");
-        assert_eq!(format_with_unit("ExposureTime", "2s"), "2s");
+    fn exposure_time_never_gains_a_seconds_suffix() {
+        for v in ["1", "2", "1.5", "30", "1/125", "1/1000", "0.5", "0.001"] {
+            assert_eq!(format_with_unit("ExposureTime", v), v);
+            assert_eq!(format_with_unit("EXIF:ExposureTime", v), v);
+            assert_eq!(format_with_unit("ShutterSpeedValue", v), v);
+        }
     }
 
     // ------------------------------------------------------------------------
@@ -576,14 +560,11 @@ mod tests {
     }
 
     #[test]
-    fn test_needs_unit_suffix_seconds_tags() {
-        assert!(needs_unit_suffix("ExposureTime"));
-        assert!(needs_unit_suffix("ShutterSpeedValue"));
-        assert!(needs_unit_suffix("EXIF:ExposureTime"));
-    }
-
-    #[test]
     fn test_needs_unit_suffix_other_tags() {
+        // Time tags render through PrintExposureTime, which emits no unit.
+        assert!(!needs_unit_suffix("ExposureTime"));
+        assert!(!needs_unit_suffix("ShutterSpeedValue"));
+        assert!(!needs_unit_suffix("EXIF:ExposureTime"));
         assert!(!needs_unit_suffix("ISO"));
         assert!(!needs_unit_suffix("Model"));
         assert!(!needs_unit_suffix("FNumber"));
@@ -610,13 +591,9 @@ mod tests {
     }
 
     #[test]
-    fn test_get_unit_suffix_seconds() {
-        assert_eq!(get_unit_suffix("ExposureTime"), Some("s"));
-        assert_eq!(get_unit_suffix("ShutterSpeedValue"), Some("s"));
-    }
-
-    #[test]
     fn test_get_unit_suffix_none() {
+        assert_eq!(get_unit_suffix("ExposureTime"), None);
+        assert_eq!(get_unit_suffix("ShutterSpeedValue"), None);
         assert_eq!(get_unit_suffix("ISO"), None);
         assert_eq!(get_unit_suffix("Model"), None);
         assert_eq!(get_unit_suffix("FNumber"), None);

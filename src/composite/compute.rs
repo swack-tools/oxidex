@@ -11,6 +11,7 @@
 //!
 //! Adding one function here fixes that tag for *every* format at once, which is
 //! why this layer is worth building before chasing per-format gaps.
+use crate::core::formatters::exif_print_conv::print_exposure_time;
 
 /// Inputs to a composite: `require` values followed by `desire` values, in the
 /// order ExifTool declares them, so indices line up with its `$val[N]`.
@@ -389,25 +390,6 @@ fn fmt_megapixels(v: f64) -> String {
         6
     };
     format!("{v:.p$}", p = p)
-}
-
-/// ExifTool: `Image::ExifTool::Exif::PrintExposureTime`
-///
-/// ```text
-/// return $val unless Image::ExifTool::IsFloat($val);
-/// return sprintf("1/%d", int(1/$val + 0.5)) if $val < 0.25001 and $val > 0;
-/// $val = int($val * 10 + 0.5) / 10;   # (0.3 not 1/3)
-/// ```
-fn print_exposure_time(v: f64) -> String {
-    if v > 0.0 && v < 0.25001 {
-        return format!("1/{}", (1.0 / v + 0.5) as i64);
-    }
-    let r = (v * 10.0 + 0.5).floor() / 10.0;
-    if (r - r.round()).abs() < f64::EPSILON {
-        format!("{}", r as i64)
-    } else {
-        format!("{r}")
-    }
 }
 
 /// ExifTool: `Image::ExifTool::Exif::PrintFNumber`

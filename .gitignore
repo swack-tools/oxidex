@@ -39,12 +39,18 @@ Thumbs.db
 
 # Rust build artifacts
 /target/
+
+# Local parity-comparison captures. These contain machine-specific paths,
+# timestamps, and large corpus output; retain the reproducible tools, not a
+# generated run's results.
+/runs/
 **/*.rs.bk
 *.pdb
 
-# Cargo lock files (excluded for library crates)
-Cargo.lock
+# Keep the workspace lockfile for reproducible CLI and container builds, but
+# continue excluding lockfiles created inside library/fuzz subcrates.
 **/Cargo.lock
+!Cargo.lock
 
 # Fuzzing artifacts (keep named corpus seed files like *.pdf, *.mp4, exclude fuzzer-generated hash files)
 fuzz/target/

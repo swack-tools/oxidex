@@ -9,7 +9,6 @@
 //! - **array_extractors**: Array extraction utilities for IFD entries
 //! - **byte_utils**: Low-level byte parsing helper functions
 //! - **makernote_parser**: Common trait definition for all MakerNotes parsers
-//! - **value_decoders**: Common value interpretation and decoding functions
 //!
 //! ### Advanced Decoding Utilities (New)
 //! - **generic_decoders**: Reusable decoder types for common patterns (On/Off, Yes/No, etc.)
@@ -28,6 +27,8 @@
 pub mod array_extractors;
 /// Array schema system for declarative CameraSettings-style array parsing
 pub mod array_schemas;
+/// ExifTool's `ProcessBinaryData` for MakerNote binary sub-directories
+pub mod binary_subdir;
 /// Low-level byte parsing helper functions
 pub mod byte_utils;
 /// Declarative macros for creating decoders with minimal boilerplate
@@ -48,7 +49,6 @@ pub mod table_ifd;
 
 pub mod tag_registry;
 /// Common value interpretation and decoding functions
-pub mod value_decoders;
 /// Common value extraction helpers (strings, integers)
 pub mod value_extractors;
 

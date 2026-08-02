@@ -302,7 +302,7 @@ fn print_bitmask(table: &[(u8, &str)], value: u8) -> String {
 /// `Image::ExifTool::Exif::PrintFraction` -- the ±1/3 EV renderer the flash
 /// compensations use.
 fn print_fraction(value: f64) -> String {
-    super::value_reader::print_fraction(value)
+    crate::core::formatters::exif_print_conv::print_fraction(value)
 }
 
 /// `$val>0.99 ? "Full" : sprintf("%.0f%%",$val*100)` over `2 ** (-$val/6)`.

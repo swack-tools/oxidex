@@ -216,111 +216,53 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
 // File size formatting moved to core::value_formatter module
 // to ensure consistency with ExifTool (decimal units: 1 kB = 1000 bytes)
 
-/// Formats a SystemTime to ExifTool-compatible date format.
+/// Formats a `SystemTime` to ExifTool's local-time format.
 ///
-/// Format: YYYY:MM:DD HH:MM:SS+HH:MM
+/// Format: `YYYY:MM:DD HH:MM:SS±HH:MM`, e.g. `2025:10:17 16:07:59-05:00`.
 ///
-/// Example: 2025:10:17 16:07:59-05:00
+/// Both halves are *local*: the calendar/clock fields are the local civil time,
+/// and the suffix is the UTC offset in force **at that instant**, so a timestamp
+/// from January renders `-06:00` while one from July renders `-05:00` in a
+/// US-Central zone. ExifTool.pm `ConvertUnixTime` (lib/Image/ExifTool.pm:6804-6807):
+///
+/// ```text
+/// } else {
+///     @tm = localtime($itime);
+///     $tz = TimeZoneString(\@tm, $itime);
+/// }
+/// ```
+///
+/// `TimeZoneString` (lib/Image/ExifTool.pm:6764-6776) renders that offset as
+/// `sprintf('%s%.2d:%.2d', $sign, $h, $min - $h * 60)`, which is exactly
+/// chrono's `%:z`.
 fn format_system_time(time: SystemTime) -> String {
     use std::time::UNIX_EPOCH;
 
-    let duration = time.duration_since(UNIX_EPOCH).unwrap_or_default();
-    let secs = duration.as_secs();
-
-    // Convert to local time with timezone offset
-    // This is a simplified version - a full implementation would use chrono or time crate
-    let datetime = UNIX_EPOCH + std::time::Duration::from_secs(secs);
-
-    // For now, use a basic conversion
-    // In a production system, we'd use chrono or time crate for proper timezone handling
-    let _datetime = datetime; // Suppress unused variable warning
-    let epoch_secs = secs as i64;
-
-    // Calculate date/time components
-    const SECS_PER_DAY: i64 = 86400;
-    const DAYS_IN_YEAR: i64 = 365;
-    const DAYS_IN_4_YEARS: i64 = DAYS_IN_YEAR * 4 + 1;
-
-    let mut days = epoch_secs / SECS_PER_DAY;
-    let day_secs = epoch_secs % SECS_PER_DAY;
-
-    // Calculate year (simplified, starting from 1970)
-    let mut year = 1970;
-    while days >= DAYS_IN_4_YEARS {
-        days -= DAYS_IN_4_YEARS;
-        year += 4;
-    }
-    while days >= DAYS_IN_YEAR {
-        let leap = if year % 4 == 0 { 1 } else { 0 };
-        let year_days = DAYS_IN_YEAR + leap;
-        if days < year_days {
-            break;
-        }
-        days -= year_days;
-        year += 1;
-    }
-
-    // Calculate month and day (simplified)
-    const DAYS_IN_MONTH: [i64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let mut month = 1;
-    let leap = if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
-        1
-    } else {
-        0
+    // `duration_since` errors for pre-epoch times; recover the negative offset
+    // from the error rather than clamping such timestamps to 1970.
+    let secs = match time.duration_since(UNIX_EPOCH) {
+        Ok(d) => d.as_secs() as i64,
+        Err(e) => -(e.duration().as_secs() as i64),
     };
-
-    for (i, &days_in_month) in DAYS_IN_MONTH.iter().enumerate() {
-        let month_days = days_in_month + if i == 1 { leap } else { 0 };
-        if days < month_days {
-            month = i as i64 + 1;
-            break;
-        }
-        days -= month_days;
-    }
-    let day = days + 1;
-
-    // Calculate hours, minutes, seconds
-    let hours = day_secs / 3600;
-    let minutes = (day_secs % 3600) / 60;
-    let seconds = day_secs % 60;
-
-    // Get timezone offset (simplified - just use system's current offset)
-    // In production, we'd properly handle timezone using chrono or time crate
-    let tz_offset = get_timezone_offset();
-
-    format!(
-        "{}:{:02}:{:02} {:02}:{:02}:{:02}{}",
-        year, month, day, hours, minutes, seconds, tz_offset
-    )
+    format_unix_time_local(secs)
 }
 
-/// Gets the current system timezone offset as a string.
+/// Renders a Unix timestamp as ExifTool's local date/time string.
 ///
-/// Returns format: +HH:MM or -HH:MM
-///
-/// This is a simplified implementation. In production, use chrono or time crate.
-fn get_timezone_offset() -> String {
-    // Try to get system timezone offset
-    // This is a placeholder - proper implementation would use chrono or time crate
-    #[cfg(unix)]
-    {
-        use std::process::Command;
-        if let Ok(output) = Command::new("date").arg("+%z").output()
-            && let Ok(tz_str) = String::from_utf8(output.stdout)
-        {
-            let trimmed = tz_str.trim();
-            if trimmed.len() >= 5 {
-                // Format is +HHMM or -HHMM, convert to +HH:MM or -HH:MM
-                let sign = &trimmed[0..1];
-                let hours = &trimmed[1..3];
-                let mins = &trimmed[3..5];
-                return format!("{}{}:{}", sign, hours, mins);
-            }
-        }
+/// ExifTool.pm:6787 short-circuits the epoch itself:
+/// `return '0000:00:00 00:00:00' if $time == 0;`
+fn format_unix_time_local(secs: i64) -> String {
+    if secs == 0 {
+        return "0000:00:00 00:00:00".to_string();
     }
-
-    // Default to +00:00 if we can't determine timezone
-    "+00:00".to_string()
+    match chrono::DateTime::from_timestamp(secs, 0) {
+        Some(utc) => utc
+            .with_timezone(&chrono::Local)
+            .format("%Y:%m:%d %H:%M:%S%:z")
+            .to_string(),
+        // Only reachable for timestamps outside chrono's representable range.
+        None => "0000:00:00 00:00:00".to_string(),
+    }
 }
 
 /// Formats Unix file permissions to a string.
@@ -564,6 +506,67 @@ mod tests {
         assert_eq!(meta.get_string("File:FileType"), Some("M4A"));
         assert_eq!(meta.get_string("File:FileTypeExtension"), Some("m4a"));
         assert_eq!(meta.get_string("File:MIMEType"), Some("audio/mp4"));
+    }
+
+    /// Regression for the reported bug: `format_system_time` built its
+    /// calendar/clock fields straight from the *UTC* epoch seconds and then
+    /// appended the *local* UTC offset, so every File-group timestamp oxidex
+    /// printed was wrong by the local offset (5 hours in US-Central summer).
+    ///
+    /// Asserted zone-independently: re-parsing the rendered string must recover
+    /// the original instant. Under the old code it never could, because the
+    /// clock fields and the offset described two different moments.
+    #[test]
+    fn test_format_system_time_round_trips_to_the_original_instant() {
+        // 2026:07:15 14:30:00 UTC, and a winter instant on the other side of a
+        // US DST transition to catch an offset pinned to "now" instead of the
+        // timestamp.
+        for epoch in [1_784_125_800_i64, 1_768_476_600_i64] {
+            let rendered = format_unix_time_local(epoch);
+            let parsed = chrono::DateTime::parse_from_str(&rendered, "%Y:%m:%d %H:%M:%S%:z")
+                .unwrap_or_else(|e| panic!("{rendered:?} is not a valid date/time: {e}"));
+            assert_eq!(
+                parsed.timestamp(),
+                epoch,
+                "{rendered:?} decodes to a different instant than it was built from"
+            );
+        }
+    }
+
+    /// The offset must be the one in force at the timestamp, not the one in
+    /// force right now -- ExifTool derives it per instant via
+    /// `TimeZoneString(\@tm, $itime)` (lib/Image/ExifTool.pm:6806).
+    ///
+    /// Only meaningful where the local zone actually observes DST, so the two
+    /// instants are compared to each other rather than to a fixed string.
+    #[test]
+    fn test_format_system_time_offset_follows_the_timestamp() {
+        let summer = format_unix_time_local(1_784_125_800); // 2026-07-15 UTC
+        let winter = format_unix_time_local(1_768_476_600); // 2026-01-15 UTC
+        let off = |s: &str| s[s.len() - 6..].to_string();
+        let local_has_dst = off(&summer) != off(&winter);
+        if local_has_dst {
+            // Both render as local wall-clock 09:30:00 in US-Central.
+            assert_ne!(
+                off(&summer),
+                off(&winter),
+                "a DST-observing zone must not print the same offset year-round"
+            );
+        }
+        // Whatever the zone, the rendered offset must be a real ±HH:MM.
+        for s in [&summer, &winter] {
+            let o = off(s);
+            assert!(
+                (o.starts_with('+') || o.starts_with('-')) && o.as_bytes()[3] == b':',
+                "malformed offset in {s:?}"
+            );
+        }
+    }
+
+    /// ExifTool.pm:6787 -- `return '0000:00:00 00:00:00' if $time == 0;`
+    #[test]
+    fn test_format_system_time_epoch_zero_matches_exiftool() {
+        assert_eq!(format_unix_time_local(0), "0000:00:00 00:00:00");
     }
 
     #[cfg(unix)]

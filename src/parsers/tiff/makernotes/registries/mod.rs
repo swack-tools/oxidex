@@ -3,13 +3,17 @@
 //! This module contains TagRegistry definitions for each manufacturer,
 //! providing declarative tag and array schema definitions.
 
-// Temporarily commented out incomplete registries to allow incremental testing
-// TODO: Re-enable after Canon, Nikon, Google migrations are complete
+// (no `google` registry: its 15 tag ids were invented -- none of the names it
+// declared is a tag ExifTool reports for any Google file, and Google's own
+// MakerNote is not the numeric IFD that registry assumed. It was never
+// declared here, so it never compiled; see `makernotes::google` for the real
+// parser. Likewise no `nikon` registry: `makernotes::nikon` and its submodules
+// carry the real per-table id mapping, and the registry copy was never
+// declared either.)
 pub mod apple;
 pub mod canon;
 pub mod captureone; // Capture One migration complete (Batch 4, Task 4.2)
 pub mod nikoncapture;
-// pub mod google;
 
 // Batch 1: Traditional Camera Manufacturers
 pub mod fujifilm; // Fujifilm migration (Batch 1, Task 1.4)
@@ -23,14 +27,19 @@ pub mod pentax; // Pentax migration (Batch 1, Task 1.3) // Leica migration (Batc
 
 // Batch 2: Smartphone manufacturers
 pub mod microsoft; // Microsoft migration complete (Batch 2, Task 2.1)
-pub mod qualcomm;
-pub mod samsung; // Samsung migration complete (Batch 2, Task 2.2) // Qualcomm migration complete (Batch 2, Task 2.3)
+pub mod samsung; // Samsung migration complete (Batch 2, Task 2.2)
+
+// (no `qualcomm` registry: ExifTool's Qualcomm.pm has no TIFF-IFD MakerNote
+// table -- its two tables (`Main`, `DualCamera`) are string-id-keyed and
+// reached only from JPEG APP7/APP4 segments, never from a Make="Qualcomm"
+// MakerNote IFD. This registry's numeric ids and tag names (ClearSight,
+// ChromaFlash, OptiZoom, ...) appear in zero ExifTool source files -- see
+// `makernotes::qualcomm` deletion for the same finding.)
 
 // Batch 3: Specialty Device Manufacturers
 pub mod dji; // DJI migration complete (Batch 3, Task 3.1)
 pub mod flir; // FLIR migration (Batch 3, Task 3.3)
 pub mod gopro; // GoPro migration (Batch 3, Task 3.2)
-pub mod lytro; // Lytro migration (Batch 3, Task 3.4)
 
 // Batch 5: Legacy and Niche Manufacturers
 // Sub-Batch 5.1: Traditional Camera Manufacturers
@@ -65,7 +74,6 @@ pub mod scalado;
 
 pub use apple::apple_registry;
 pub use canon::canon_registry;
-// pub use google::google_registry;
 
 // Batch 1 exports
 pub use fujifilm::fujifilm_registry;
@@ -75,14 +83,12 @@ pub use pentax::pentax_registry;
 
 // Batch 2 exports
 pub use microsoft::microsoft_registry;
-pub use qualcomm::qualcomm_registry;
 pub use samsung::samsung_registry;
 
 // Batch 3 exports
 pub use dji::dji_registry;
 pub use flir::flir_registry;
 pub use gopro::gopro_registry;
-pub use lytro::lytro_registry;
 
 // Batch 5 Sub-Batch 5.1 exports
 pub use casio::casio_registry;

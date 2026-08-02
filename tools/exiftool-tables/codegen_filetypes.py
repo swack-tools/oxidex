@@ -105,26 +105,65 @@ def main():
             continue
         rows.append(f'    ("{t}", "(?s-u)^{rust_bytes_literal(pat)}"),')
 
-    # Extension -> file type. Aliases are resolved here so the runtime does not
-    # have to chase them; a cycle would hang, so depth is bounded.
+    # Extension -> (file type, processing formats). Aliases are resolved here so the
+    # runtime does not have to chase them; a cycle would hang, so depth is
+    # bounded.
+    #
+    # The reported FileType is the *resolved key*, not the root recorded in the
+    # entry: `CR2 => ['TIFF', ...]` names the module that reads a .cr2, and
+    # ExifTool still reports `FileType: CR2`. Emitting `types[0]` here labelled
+    # all 162 sub-types with their root -- .djvu as AIFF, .ttf as Font, .j2c as
+    # JP2. The root is kept alongside because it is what `%magicNumber` is
+    # keyed on: a .cr2's header matches the TIFF pattern, so corroborating the
+    # extension against the header needs both names. Keep every root, not only
+    # the first: several extensions may be processed by more than one format,
+    # and any one of those formats may provide the corroborating magic number.
+    #
+    # A table can only get this mostly right, because ExifTool's last word is
+    # the format module, not the table: `ICS` and `VCF` share the root `VCard`
+    # yet report `ICS` and `VCard` respectively, decided by whether VCard.pm
+    # reads `BEGIN:VCALENDAR` or `BEGIN:VCARD`. Taking the key is right for the
+    # large majority; the handful the module would have disambiguated stay
+    # wrong, which is still an improvement on labelling all 162 with their root.
     ext_rows = []
     for ext in sorted(lookup):
-        entry, hops = lookup[ext], 0
+        entry, key, hops = lookup[ext], ext, 0
         while "alias" in entry and hops < 8:
             nxt = lookup.get(entry["alias"])
             if not nxt:
                 break
-            entry, hops = nxt, hops + 1
-        types = entry.get("types") or []
-        if not types:
+            entry, key, hops = nxt, entry["alias"], hops + 1
+        roots = entry.get("roots") or []
+        if not roots:
             continue
-        # Lowercase the key: ExifTool stores extensions uppercase, but every
+        root = roots[0]
+        # A root that is itself a %fileTypeLookup key is a real format, so the
+        # key beside it is a genuine sub-type and is what ExifTool reports --
+        # this is SetFileType's promotion test, `ref $f eq 'ARRAY'`. A root that
+        # is absent is a bare module name (Font, DICOM, VCard, Torrent, MacOS),
+        # and then the key is only reliable when the extension named it
+        # directly: `TTF => ['Font', ...]` reports TTF, but `DCM => 'DICM'`
+        # hopped to another spelling of the same format and reports DICOM, not
+        # "DICM" -- a name ExifTool never prints.
+        root_is_a_format = "roots" in lookup.get(root, {})
+        file_type = key if root_is_a_format or not hops else root
+        # A key that is only the root's own name upper-cased is not a sub-type
+        # either -- `VCARD => ['VCard', ...]`, `TORRENT => ['Torrent', ...]`,
+        # `MACOS => ['MacOS', ...]`. Every %fileTypeLookup key is upper-cased
+        # because they are extensions; the root carries ExifTool's own spelling,
+        # and that spelling is what it reports.
+        if file_type.upper() == root.upper():
+            file_type = root
+        # Lowercase the extension: ExifTool stores those uppercase, but every
         # lookup here comes from a filename, so normalising once at generation
         # time keeps the runtime a plain comparison.
-        ext_rows.append((ext.lower(), types[0]))
+        ext_rows.append((ext.lower(), (file_type, tuple(roots))))
 
     # Sorted and deduplicated so the runtime can binary-search.
-    ext_rows = [f'    ("{e}", "{t}"),' for e, t in sorted(dict(ext_rows).items())]
+    ext_rows = [
+        f'    ("{e}", "{t}", &[{", ".join(chr(34) + f + chr(34) for f in fmts)}]),'
+        for e, (t, fmts) in sorted(dict(ext_rows).items())
+    ]
 
     mime_rows = [
         f'    ("{t}", "{mime[t]}"),' for t in sorted(mime) if mime[t]
@@ -148,8 +187,12 @@ pub static MAGIC: &[(&str, &str)] = &[
 {chr(10).join(rows)}
 ];
 
-/// Lowercase extension -> file type. Aliases already resolved.
-pub static EXT_TO_TYPE: &[(&str, &str)] = &[
+/// Lowercase extension -> (`FileType`, formats that can process it).
+///
+/// Aliases are already resolved. The formats come from `%fileTypeLookup`'s
+/// arrayref and are what `MAGIC` is keyed by; the file type is the resolved
+/// key, which is what ExifTool reports.
+pub static EXT_TO_TYPE: &[(&str, &str, &[&str])] = &[
 {chr(10).join(ext_rows)}
 ];
 

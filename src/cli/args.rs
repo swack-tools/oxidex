@@ -433,12 +433,22 @@ impl CliArgs {
         }
 
         // Extract tag name (remove leading '-')
-        let tag_name = parts[0].trim_start_matches('-').to_string();
+        let tag_name = parts[0].trim_start_matches('-').trim();
+
+        // An empty tag name is not a modification, and treating it as one was
+        // worse than the parse failure it looks like: `oxidex '-=' photo.jpg`
+        // and `oxidex '-  =  ' photo.jpg` produced a modification of tag ""
+        // with value "", which the writer accepted -- reporting "1 image files
+        // updated" and rewriting the file. ExifTool refuses ("Unknown option
+        // -=", "Invalid TAG name") and leaves the file untouched.
+        if tag_name.is_empty() {
+            return None;
+        }
 
         // Extract value and remove surrounding quotes if present
         let value = Self::unquote(parts[1]);
 
-        Some((tag_name, value))
+        Some((tag_name.to_string(), value))
     }
 
     /// Removes surrounding quotes from a string if present
@@ -638,15 +648,30 @@ impl CliArgs {
             return None;
         }
 
+        // Every branch below slices `arg[1..pos]` to drop the leading '-', so
+        // an operator found *at* index 0 asks for `[1..0]` and aborts the whole
+        // invocation. The leading '-' is itself the '-' of `-=`, so
+        // `oxidex '-=' photo.jpg` and `oxidex '-=1:0:0 0:0:0' photo.jpg` both
+        // died with "byte range starts at 1 but ends at 0" -- the same defect
+        // as the `unquote` panic (issue #261), in the other parser.
+        //
+        // `pos > 1` rather than `pos >= 1`: at index 1 the slice is legal but
+        // empty, which is the no-tag-name case `--=x` and no more meaningful
+        // than the panic was.
+        //
+        // (The indices are char-boundary safe: index 1 follows the ASCII '-',
+        // and `find` on an ASCII needle only reports boundaries.)
+        let tag_end = |pos: usize| (pos > 1).then_some(pos);
+
         // Check for += operator first (must check before single =)
-        if let Some(pos) = arg.find("+=") {
+        if let Some(pos) = arg.find("+=").and_then(tag_end) {
             let tag = arg[1..pos].to_string(); // Remove leading '-'
             let value = arg[pos + 2..].to_string();
             return Some((tag, "+=".to_string(), value));
         }
 
         // Check for -= operator
-        if let Some(pos) = arg.find("-=") {
+        if let Some(pos) = arg.find("-=").and_then(tag_end) {
             let tag = arg[1..pos].to_string();
             let value = arg[pos + 2..].to_string();
             return Some((tag, "-=".to_string(), value));
@@ -654,7 +679,7 @@ impl CliArgs {
 
         // Check for = operator (but not if it's part of += or -=)
         // Also need to distinguish from regular tag modifications
-        if let Some(pos) = arg.find('=') {
+        if let Some(pos) = arg.find('=').and_then(tag_end) {
             let tag = arg[1..pos].to_string();
             let value = arg[pos + 1..].to_string();
 
@@ -876,5 +901,72 @@ mod tests {
         // pinned to single-byte quotes, but assert it rather than assume it.
         assert_eq!(CliArgs::unquote("\"日本語の写真家\""), "日本語の写真家");
         assert_eq!(CliArgs::unquote("日本語の写真家"), "日本語の写真家");
+    }
+
+    /// Regression: an argument with no tag name before the `=` was parsed as a
+    /// modification of tag `""`, and the writer carried it out --
+    /// `oxidex '-=' photo.jpg` printed "1 image files updated" and rewrote the
+    /// file. ExifTool rejects these outright and leaves the file alone.
+    #[test]
+    fn empty_tag_name_is_not_a_modification() {
+        assert_eq!(CliArgs::parse_modification("-="), None);
+        assert_eq!(CliArgs::parse_modification("-=x"), None);
+        assert_eq!(CliArgs::parse_modification("-=\""), None);
+        assert_eq!(CliArgs::parse_modification("-  =  "), None);
+        assert_eq!(CliArgs::parse_modification("--="), None);
+
+        // Real modifications are unaffected.
+        assert_eq!(
+            CliArgs::parse_modification("-EXIF:Artist=Ansel Adams"),
+            Some(("EXIF:Artist".to_string(), "Ansel Adams".to_string()))
+        );
+        // Clearing a tag with an empty value is still a modification: the tag
+        // name is what has to be present, not the value.
+        assert_eq!(
+            CliArgs::parse_modification("-EXIF:Artist="),
+            Some(("EXIF:Artist".to_string(), String::new()))
+        );
+    }
+
+    /// Regression: the same `[1..0]` slice as above, in the *other* parser.
+    /// `oxidex '-=' photo.jpg` and `oxidex '-=1:0:0 0:0:0' photo.jpg` aborted
+    /// with "byte range starts at 1 but ends at 0" -- the leading '-' every
+    /// branch strips is itself the '-' of the `-=` operator, so the operator
+    /// sits at index 0 and there is no tag name to slice out.
+    #[test]
+    fn date_shift_operator_at_index_zero_does_not_panic() {
+        assert_eq!(CliArgs::parse_date_shift("-="), None);
+        assert_eq!(CliArgs::parse_date_shift("-=1:0:0 0:0:0"), None);
+        assert_eq!(CliArgs::parse_date_shift("-"), None);
+        // Legal slice, but an empty tag name -- no more meaningful than the
+        // panic it replaced.
+        assert_eq!(CliArgs::parse_date_shift("--=x"), None);
+        assert_eq!(CliArgs::parse_date_shift("-+=x"), None);
+
+        // Real date shifts still parse.
+        assert_eq!(
+            CliArgs::parse_date_shift("-AllDates+=1:0:0 0:0:0"),
+            Some((
+                "AllDates".to_string(),
+                "+=".to_string(),
+                "1:0:0 0:0:0".to_string()
+            ))
+        );
+        assert_eq!(
+            CliArgs::parse_date_shift("-EXIF:DateTime-=0:1:0 0:0:0"),
+            Some((
+                "EXIF:DateTime".to_string(),
+                "-=".to_string(),
+                "0:1:0 0:0:0".to_string()
+            ))
+        );
+        assert_eq!(
+            CliArgs::parse_date_shift("-EXIF:DateTime=2025:01:15 10:30:00"),
+            Some((
+                "EXIF:DateTime".to_string(),
+                "=".to_string(),
+                "2025:01:15 10:30:00".to_string()
+            ))
+        );
     }
 }

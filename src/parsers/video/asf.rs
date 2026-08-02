@@ -30,6 +30,7 @@
 
 #![allow(dead_code)]
 
+use crate::core::formatters::picture_type_name;
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
@@ -222,14 +223,17 @@ fn parse_file_properties(
     );
 
     // Creation date (8 bytes - FILETIME format: 100-nanosecond intervals since 1601-01-01)
+    // `%ASF::FileProperties` (ASF.pm:378) is a plain `ProcessBinaryData` table --
+    // every entry is `Format => 'int64u'` with a ValueConv and no `Condition`, so
+    // ExifTool emits these three whatever they hold. Zero is a value, not an
+    // absence: it prints as `1601:01:01 00:00:00Z` here and `0:00:00` for the two
+    // durations, which is what a live-captured or streamed WMV reports.
     let creation_time = r.u64_at(24).unwrap_or(0);
-    if creation_time > 0 {
-        let date_str = filetime_to_string(creation_time);
-        metadata.insert(
-            "ASF:CreationDate".to_string(),
-            TagValue::new_string(date_str),
-        );
-    }
+    let date_str = filetime_to_string(creation_time);
+    metadata.insert(
+        "ASF:CreationDate".to_string(),
+        TagValue::new_string(date_str),
+    );
 
     // Data packets count (8 bytes)
     let data_packets = r.u64_at(32).unwrap_or(0);
@@ -250,24 +254,18 @@ fn parse_file_properties(
     );
 
     // Duration - ExifTool uses play_duration directly (no preroll subtraction for display)
-    if play_duration > 0 {
-        let duration_secs = (play_duration as f64) / 10_000_000.0;
-        let duration_str = format_duration(duration_secs);
-        metadata.insert(
-            "ASF:Duration".to_string(),
-            TagValue::new_string(duration_str),
-        );
-    }
+    let duration_secs = (play_duration as f64) / 10_000_000.0;
+    metadata.insert(
+        "ASF:Duration".to_string(),
+        TagValue::new_string(format_duration(duration_secs)),
+    );
 
     // Send duration - separate field from play_duration
-    if send_duration > 0 {
-        let send_duration_secs = (send_duration as f64) / 10_000_000.0;
-        let send_duration_str = format_duration(send_duration_secs);
-        metadata.insert(
-            "ASF:SendDuration".to_string(),
-            TagValue::new_string(send_duration_str),
-        );
-    }
+    let send_duration_secs = (send_duration as f64) / 10_000_000.0;
+    metadata.insert(
+        "ASF:SendDuration".to_string(),
+        TagValue::new_string(format_duration(send_duration_secs)),
+    );
 
     // Flags (4 bytes at offset 64)
     let flags = r.u32_at(64).unwrap_or(0);
@@ -419,18 +417,20 @@ fn parse_stream_properties(
             let width = video_r.u32_at(0).unwrap_or(0);
             let height = video_r.u32_at(4).unwrap_or(0);
 
-            if width > 0 && width < 100000 {
-                metadata.insert(
-                    "ASF:ImageWidth".to_string(),
-                    TagValue::new_integer(width as i64),
-                );
-            }
-            if height > 0 && height < 100000 {
-                metadata.insert(
-                    "ASF:ImageHeight".to_string(),
-                    TagValue::new_integer(height as i64),
-                );
-            }
+            // `%ASF::StreamProperties` (ASF.pm:414) gates ImageWidth/ImageHeight on
+            // the stream type alone -- `Condition => '$self->{ASF_STREAM_TYPE} =~
+            // /^(Video|JFIF|Degradable JPEG)$/'` (ASF.pm:456) -- and reads them as
+            // bare `int32u`. The `< 100000` ceiling that used to sit here is not in
+            // ExifTool at all, and the `> 0` half dropped a dimension ExifTool
+            // prints as `0`.
+            metadata.insert(
+                "ASF:ImageWidth".to_string(),
+                TagValue::new_integer(width as i64),
+            );
+            metadata.insert(
+                "ASF:ImageHeight".to_string(),
+                TagValue::new_integer(height as i64),
+            );
         }
     }
 
@@ -1045,30 +1045,11 @@ fn parse_wm_picture(data: &[u8], metadata: &mut MetadataMap) {
 
     // Picture type (1 byte)
     let picture_type = data[0];
-    let picture_type_str = match picture_type {
-        0 => "Other",
-        1 => "32x32 File Icon",
-        2 => "Other File Icon",
-        3 => "Front Cover",
-        4 => "Back Cover",
-        5 => "Leaflet Page",
-        6 => "Media",
-        7 => "Lead Artist",
-        8 => "Artist",
-        9 => "Conductor",
-        10 => "Band",
-        11 => "Composer",
-        12 => "Lyricist",
-        13 => "Recording Location",
-        14 => "During Recording",
-        15 => "During Performance",
-        16 => "Video Capture",
-        17 => "A Bright Coloured Fish",
-        18 => "Illustration",
-        19 => "Band Logotype",
-        20 => "Publisher Logotype",
-        _ => "Unknown",
-    };
+    // ExifTool's `%ASF::Picture{0}` PrintConv; see
+    // `core::formatters::picture_type`. The table this file used to carry
+    // disagreed with it on ten labels and dropped the code from its unknown
+    // case.
+    let picture_type_str = picture_type_name(u32::from(picture_type));
     metadata.insert(
         "ASF:PictureType".to_string(),
         TagValue::new_string(picture_type_str),
@@ -1205,31 +1186,45 @@ fn read_utf16_string(data: &[u8]) -> String {
     String::from_utf16_lossy(&chars)
 }
 
-/// Convert FILETIME (100-nanosecond intervals since 1601-01-01) to string
+/// Convert FILETIME (100-nanosecond intervals since 1601-01-01) to string.
+///
+/// ExifTool's ValueConv for `CreationDate` (ASF.pm:384-387) is
+///
+/// ```text
+///     my $t = $val / 1e7 - (((1970-1601)*365+89)*24*3600);
+///     return Image::ExifTool::ConvertUnixTime($t) . 'Z';
+/// ```
+///
+/// so a FILETIME below the Unix epoch is an ordinary negative epoch second
+/// handed to `gmtime`, not an error. An all-zero FILETIME is
+/// `1601:01:01 00:00:00Z`; the placeholder `0000:00:00 00:00:00` belongs only
+/// to `$t == 0` exactly, i.e. 1970-01-01 (`ConvertUnixTime`, ExifTool.pm:6787).
+/// This used to return the placeholder for everything before 1970, and the
+/// caller then suppressed the tag outright rather than print it.
 fn filetime_to_string(filetime: u64) -> String {
-    // FILETIME epoch: 1601-01-01
-    // Unix epoch: 1970-01-01
+    // FILETIME epoch: 1601-01-01, Unix epoch: 1970-01-01.
     // Difference: 11644473600 seconds = 116444736000000000 * 100ns
-    const FILETIME_UNIX_DIFF: u64 = 116_444_736_000_000_000;
+    const FILETIME_UNIX_DIFF: i128 = 116_444_736_000_000_000;
 
-    if filetime < FILETIME_UNIX_DIFF {
+    // `int($time)` in ConvertUnixTime floors (ExifTool.pm:6791-6793 pushes a
+    // negative fraction back up a second), so use Euclidean division here.
+    let unix_secs = (i128::from(filetime) - FILETIME_UNIX_DIFF).div_euclid(10_000_000) as i64;
+
+    if unix_secs == 0 {
         return String::from("0000:00:00 00:00:00Z");
     }
 
-    let unix_100ns = filetime - FILETIME_UNIX_DIFF;
-    let unix_secs = unix_100ns / 10_000_000;
-
     // Calculate date/time components
-    let secs_per_day = 86400u64;
-    let days = unix_secs / secs_per_day;
-    let day_secs = unix_secs % secs_per_day;
+    let secs_per_day = 86_400i64;
+    let days = unix_secs.div_euclid(secs_per_day);
+    let day_secs = unix_secs.rem_euclid(secs_per_day);
 
     let hours = day_secs / 3600;
     let minutes = (day_secs % 3600) / 60;
     let seconds = day_secs % 60;
 
     // Calculate year/month/day
-    let (year, month, day) = days_to_ymd(days as i64);
+    let (year, month, day) = days_to_ymd(days);
 
     format!(
         "{:04}:{:02}:{:02} {:02}:{:02}:{:02}Z",
@@ -1241,6 +1236,13 @@ fn filetime_to_string(filetime: u64) -> String {
 fn days_to_ymd(days: i64) -> (i32, u32, u32) {
     let mut remaining = days;
     let mut year = 1970i32;
+
+    // Walk backwards for pre-1970 dates, which `gmtime` handles and this used
+    // to underflow past: an all-zero FILETIME is 134774 days before the epoch.
+    while remaining < 0 {
+        year -= 1;
+        remaining += if is_leap_year(year) { 366 } else { 365 };
+    }
 
     loop {
         let days_in_year = if is_leap_year(year) { 366 } else { 365 };
@@ -1320,5 +1322,35 @@ mod tests {
         ];
         let formatted = format_guid(&guid);
         assert_eq!(formatted, "5F69B0C4-04F7-4B21-9842-46CCA542D8D3");
+    }
+}
+
+#[cfg(test)]
+mod filetime_tests {
+    use super::filetime_to_string;
+
+    /// `perl -e '@t=gmtime(-11644473600); ...'` -> 1601:01:01 00:00:00, which is
+    /// what ExifTool's `ConvertUnixTime($val/1e7 - 11644473600) . "Z"` prints for
+    /// an all-zero FILETIME (ASF.pm:384-387).
+    #[test]
+    fn zero_filetime_is_the_filetime_epoch_not_a_placeholder() {
+        assert_eq!(filetime_to_string(0), "1601:01:01 00:00:00Z");
+    }
+
+    /// Exactly the Unix epoch is the one value `ConvertUnixTime` short-circuits:
+    /// `return '0000:00:00 00:00:00' if $time == 0;` (ExifTool.pm:6787).
+    #[test]
+    fn unix_epoch_keeps_exiftools_placeholder() {
+        assert_eq!(
+            filetime_to_string(116_444_736_000_000_000),
+            "0000:00:00 00:00:00Z"
+        );
+    }
+
+    #[test]
+    fn post_epoch_dates_are_unchanged() {
+        // 2000-01-01T00:00:00Z = 946684800 unix seconds
+        let ft = (946_684_800u64 + 11_644_473_600) * 10_000_000;
+        assert_eq!(filetime_to_string(ft), "2000:01:01 00:00:00Z");
     }
 }

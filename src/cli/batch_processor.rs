@@ -8,10 +8,10 @@ use crate::cli::args::CliArgs;
 use crate::cli::output_formatter::{
     CsvFormatter, HumanReadableFormatter, JsonFormatter, OutputFormatter, ShortFormatter,
 };
+use crate::cli::value_parser::parse_cli_tag_value;
 use crate::core::MetadataMap;
 use crate::core::exiftool_compat::format_for_exiftool;
 use crate::core::operations::{modify_tag, read_metadata_with_detector};
-use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
@@ -380,8 +380,9 @@ fn apply_modifications(
 
     // Apply all modifications
     for (tag_name, value_str) in modifications {
-        // Parse string value to TagValue
-        let tag_value = parse_tag_value(value_str);
+        // Parse the string into the type the tag declares, not into whatever
+        // type the value's own shape suggests.
+        let tag_value = parse_cli_tag_value(tag_name, value_str)?;
         modify_tag(path, tag_name, tag_value)?;
     }
 
@@ -397,27 +398,6 @@ fn apply_modifications(
     }
 
     Ok(())
-}
-
-/// Parses a string value into a TagValue.
-///
-/// Attempts to detect the appropriate type:
-/// - Integers (e.g., "100", "200")
-/// - Floats (e.g., "5.6", "3.14")
-/// - Strings (everything else)
-fn parse_tag_value(value: &str) -> TagValue {
-    // Try to parse as integer
-    if let Ok(int_val) = value.parse::<i64>() {
-        return TagValue::new_integer(int_val);
-    }
-
-    // Try to parse as float
-    if let Ok(float_val) = value.parse::<f64>() {
-        return TagValue::new_float(float_val);
-    }
-
-    // Default to string
-    TagValue::new_string(value.to_string())
 }
 
 /// Creates a progress bar for batch processing.

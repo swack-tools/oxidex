@@ -46,6 +46,23 @@ sub code_name {
     return $stash ? "${stash}::${name}" : $name;
 }
 
+# Recover the body of an anonymous sub as source text.
+#
+# A named sub is identified by its name; an anonymous one is not identified by
+# anything at all, and a PrintConv's `OTHER => sub {...}` is always anonymous.
+# Recording it as an opaque "CODE" leaves a downstream generator with no way to
+# tell `sub { return $_[0] }` from `sub { "$val fps" }` -- and something has to
+# tell them apart, because they are not the same tag value.  Deparsing turns the
+# closure back into text that a translation registry can be *keyed on*, so a
+# translation is bound to the exact code it was written against and an upstream
+# edit shows up as an unknown key rather than as a silently stale conversion.
+sub deparse {
+    my ($cv) = @_;
+    return undef unless eval { require B::Deparse; 1 };
+    my $text = eval { B::Deparse->new('-p', '-sC')->coderef2text($cv) };
+    return defined $text ? to_text($text) : undef;
+}
+
 # ExifTool's sources are a mix of ASCII, UTF-8 and Latin-1 (copyright signs in
 # Notes, accented names in manufacturer tables).  Perl hands us bytes; JSON must
 # be valid UTF-8.  Decode as UTF-8 where that succeeds and fall back to
@@ -96,7 +113,12 @@ sub scrub {
     }
     if ($r eq 'CODE')   {
         my $n = code_name($v);
-        return { __perl => 'CODE', __opaque => 1, defined $n ? (__name => $n) : () };
+        my $src = deparse($v);
+        return {
+            __perl => 'CODE', __opaque => 1,
+            defined $n   ? (__name => $n)      : (),
+            defined $src ? (__deparse => $src) : (),
+        };
     }
     if ($r eq 'SCALAR') { return scrub($$v, $depth + 1) }
     if ($r eq 'ARRAY')  { return [ map { scrub($_, $depth + 1) } @$v ] }
@@ -138,7 +160,7 @@ sub classify_conv {
             directives=> (%directive ? \%directive : undef),
         };
     }
-    if ($r eq 'CODE')  { return { kind => 'code', expr => undef } }
+    if ($r eq 'CODE')  { return { kind => 'code', expr => undef, deparse => deparse($v) } }
     if ($r eq 'ARRAY') { return { kind => 'list', items => scrub($v) } }
     if (!$r)           { return { kind => 'expr', expr => to_text($v) } }
     return { kind => 'other', dump => scrub($v) };

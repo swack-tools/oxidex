@@ -37,6 +37,8 @@
 //! things either side of version 3 (the SD1 and the Merrill/Quattro bodies),
 //! and this module honours those conditions rather than guessing.
 
+use crate::core::formatters::exif_print_conv::print_exposure_time;
+use crate::core::formatters::perl_number as format_number;
 use crate::core::{MetadataMap, TagValue};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntries, parse_ifd};
 
@@ -431,16 +433,6 @@ fn rational(bytes: &[u8], field_type: u16, order: ByteOrder) -> Option<f64> {
     Some(num / den)
 }
 
-/// Perl's default number stringification for the values these tags carry.
-fn format_number(value: f64) -> String {
-    if value == value.trunc() && value.abs() < 1e15 {
-        format!("{}", value as i64)
-    } else {
-        let text = format!("{value}");
-        text
-    }
-}
-
 /// `'$val and $val =~ s/^(\d)/\+$1/'` - a leading "+" on positive values only,
 /// and never on zero (Perl treats 0 as false).
 fn signed_number(value: f64) -> String {
@@ -450,17 +442,6 @@ fn signed_number(value: f64) -> String {
     } else {
         text
     }
-}
-
-/// `Image::ExifTool::Exif::PrintExposureTime`.
-fn print_exposure_time(seconds: f64) -> String {
-    if seconds > 0.0 && seconds < 0.25001 {
-        return format!("1/{}", (0.5 + 1.0 / seconds) as i64);
-    }
-    if seconds == seconds.trunc() {
-        return format!("{}", seconds as i64);
-    }
-    format!("{seconds:.1}")
 }
 
 /// `'$val =~ s/(\d)of(\d)/$1 of $2/'` for AutoBracket.
@@ -518,6 +499,27 @@ fn read_u32(bytes: &[u8], order: ByteOrder) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
+    /// Sigma tags are RATIONALs whose quotient ExifTool interpolates directly,
+    /// i.e. Perl's 15-significant-digit stringification. Rust's `{}` prints
+    /// the shortest round-trip form instead -- 16 or 17 digits -- so the two
+    /// disagree on any quotient that does not terminate.
+    ///
+    /// Expected strings come from the installed Perl 5.42:
+    /// `perl -e 'print 1/3'` => `0.333333333333333` (15 digits), where Rust's
+    /// `{}` gives `0.3333333333333333` (16). The local copy this file used to
+    /// carry was that `{}`, so this test fails against it.
+    #[test]
+    fn test_format_number_keeps_perl_significant_digits() {
+        use super::format_number;
+
+        assert_eq!(format_number(1.0 / 3.0), "0.333333333333333");
+        assert_eq!(format_number(2.0 / 3.0), "0.666666666666667");
+        assert_eq!(format_number(-1.0 / 3.0), "-0.333333333333333");
+        assert_eq!(format_number(1000000.0 / 3.0), "333333.333333333");
+        // Whole quotients still print without a decimal point.
+        assert_eq!(format_number(10.0 / 2.0), "5");
+    }
+
     use super::*;
 
     #[test]

@@ -148,38 +148,50 @@ pub fn parse_png_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                         TagValue::new_integer(bit_depth as i64),
                     );
 
-                    // Color type enum
+                    // `%PNG::ImageHeader` (PNG.pm:392-421) gives these four ordinary
+                    // hash PrintConvs. A hash miss in ExifTool is not a dropped tag
+                    // and not a bare "Unknown": ExifTool.pm:3633 substitutes
+                    // `"Unknown ($val)"`, keeping the raw number visible. The
+                    // `if compression == 0` / `if filter == 0` gates below removed
+                    // PNG:Compression and PNG:Filter outright for any other method
+                    // byte, and ColorType/Interlace lost the number.
                     let color_type_str = match color_type {
-                        0 => "Grayscale",
-                        2 => "RGB",
-                        3 => "Palette",
-                        4 => "Grayscale with Alpha",
-                        6 => "RGB with Alpha",
-                        _ => "Unknown",
+                        0 => "Grayscale".to_string(),
+                        2 => "RGB".to_string(),
+                        3 => "Palette".to_string(),
+                        4 => "Grayscale with Alpha".to_string(),
+                        6 => "RGB with Alpha".to_string(),
+                        other => format!("Unknown ({})", other),
                     };
                     metadata.insert(
                         "PNG:ColorType".to_string(),
                         TagValue::new_string(color_type_str),
                     );
 
-                    // Compression method (always 0 for PNG)
-                    if compression == 0 {
-                        metadata.insert(
-                            "PNG:Compression".to_string(),
-                            TagValue::new_string("Deflate/Inflate"),
-                        );
-                    }
+                    // Compression method: `PrintConv => { 0 => 'Deflate/Inflate' }`
+                    let compression_str = if compression == 0 {
+                        "Deflate/Inflate".to_string()
+                    } else {
+                        format!("Unknown ({})", compression)
+                    };
+                    metadata.insert(
+                        "PNG:Compression".to_string(),
+                        TagValue::new_string(compression_str),
+                    );
 
-                    // Filter method (always 0 for PNG)
-                    if filter == 0 {
-                        metadata.insert("PNG:Filter".to_string(), TagValue::new_string("Adaptive"));
-                    }
+                    // Filter method: `PrintConv => { 0 => 'Adaptive' }`
+                    let filter_str = if filter == 0 {
+                        "Adaptive".to_string()
+                    } else {
+                        format!("Unknown ({})", filter)
+                    };
+                    metadata.insert("PNG:Filter".to_string(), TagValue::new_string(filter_str));
 
                     // Interlace method
                     let interlace_str = match interlace {
-                        0 => "Noninterlaced",
-                        1 => "Adam7 Interlace",
-                        _ => "Unknown",
+                        0 => "Noninterlaced".to_string(),
+                        1 => "Adam7 Interlace".to_string(),
+                        other => format!("Unknown ({})", other),
                     };
                     metadata.insert(
                         "PNG:Interlace".to_string(),

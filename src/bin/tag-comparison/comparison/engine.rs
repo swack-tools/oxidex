@@ -9,16 +9,32 @@ pub struct ComparisonEngine;
 /// Normalize a family name for comparison purposes
 /// Maps manufacturer-specific families to MakerNotes for matching
 pub(crate) fn normalize_family_for_comparison(family: &str) -> &str {
+    // MPF -> the three family-1 groups MPF.pm files its tags under. This
+    // harness asks ExifTool for family 0 (`-G`), where all of them are "MPF";
+    // oxidex emits the family-1 spelling `exiftool -G1 -s` prints. The MP
+    // Entry groups carry a 1-based image index (MPF.pm:247,
+    // `$$et{SET_GROUP1} = '+' . ($i + 1);`) so they cannot be match arms.
+    //
+    //   MPF.pm:24        GROUPS => { 0 => 'MPF', 1 => 'MPF0', 2 => 'Image'}
+    //   ExifTool.pm:7959 $dirInfo{Multi} = 1;  # the MP Attribute IFD will be MPF1
+    //   MPF.pm:96        GROUPS => { 0 => 'MPF', 1 => 'MPImage', 2 => 'Image'}
+    //
+    // Same case as FLIR/AROT/SPIFF/GoPro below: without this, oxidex's correct
+    // family-1 keys would count as oxidex-only extras on 737 files while
+    // ExifTool's byte-identical `MPF:*` keys counted as gaps.
+    if matches!(family, "MPF0" | "MPF1") || is_mp_image_group(family) {
+        return "MPF";
+    }
     match family {
         // Camera manufacturers -> MakerNotes
         //
         // NOTE: "GoPro" deliberately is NOT in this list -- see the GoPro arm
         // below. ExifTool never files a GoPro tag under family-0 MakerNotes.
-        "Canon" | "Nikon" | "Sony" | "Fujifilm" | "Panasonic" | "Olympus" | "Pentax"
-        | "Samsung" | "Leica" | "Casio" | "Minolta" | "Sigma" | "Ricoh" | "Kodak" | "Sanyo"
-        | "JVC" | "Motorola" | "HP" | "DJI" | "Apple" | "Google" | "Reconyx" | "Parrot"
-        | "Infiray" | "Lytro" | "PhaseOne" | "Leaf" | "Red" | "Qualcomm" | "Nintendo" | "GE"
-        | "LG" => "MakerNotes",
+        "Canon" | "CanonCustom" | "Nikon" | "Sony" | "FujiFilm" | "Panasonic" | "Olympus"
+        | "Pentax" | "Samsung" | "Leica" | "Casio" | "Minolta" | "Sigma" | "Ricoh" | "Kodak"
+        | "Sanyo" | "JVC" | "Motorola" | "HP" | "DJI" | "Apple" | "Google" | "Reconyx"
+        | "Parrot" | "Infiray" | "Lytro" | "PhaseOne" | "Leaf" | "Red" | "Qualcomm"
+        | "Nintendo" | "GE" | "LG" => "MakerNotes",
         // XMP namespace variants -> XMP (ExifTool often simplifies these)
         "XMP-exif" | "XMP-tiff" | "XMP-photoshop" | "XMP-iptcCore" | "XMP-iptcExt"
         | "XMP-xmpMM" | "XMP-xmpRights" | "XMP-dc" | "XMP-xmp" | "XMP-crs" | "XMP-plus"
@@ -57,9 +73,28 @@ pub(crate) fn normalize_family_for_comparison(family: &str) -> &str {
         // ExifTool does use for GoPro MP4/GPMF tracks) still matches oxidex's
         // "GoPro:" tags.
         "GoPro" => "APP6",
+        // CanonDR4 -> CanonVRD. Same case as FLIR, AROT and SPIFF above:
+        // `%CanonVRD::DR4` declares GROUPS => { 1 => 'CanonDR4' } with no
+        // family-0 override, so ExifTool files a DPP 4 recipe tag under
+        // family-0 CanonVRD and family-1 CanonDR4:
+        //     exiftool -G0:1 -s combined-samples/CanonVRD.dr4
+        //         => [CanonVRD:CanonDR4] Rotation : 0
+        // oxidex emits the family-1 name, so without this the 93 tags of
+        // CanonVRD.dr4 counted as 93 missing on one side and 93 extra on the
+        // other despite being byte-identical.
+        "CanonDR4" => "CanonVRD",
         // Keep everything else as-is
         _ => family,
     }
+}
+
+/// True for `MPImage1`, `MPImage2`, ... -- ExifTool's per-MP-Entry family-1
+/// groups. Not `MPImage` bare (no such group is ever emitted) and not
+/// `MPImageList` (a tag name in `MPF::Main`, never a group).
+fn is_mp_image_group(family: &str) -> bool {
+    family
+        .strip_prefix("MPImage")
+        .is_some_and(|idx| !idx.is_empty() && idx.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Normalize a tag name for comparison
@@ -755,6 +790,11 @@ mod tests {
             result.duplicate_emissions,
             vec!["MakerNotes:AELButton".to_string()]
         );
+    }
+
+    #[test]
+    fn test_canon_custom_family_normalizes_to_makernotes() {
+        assert_eq!(normalize_family_for_comparison("CanonCustom"), "MakerNotes");
     }
 
     #[test]

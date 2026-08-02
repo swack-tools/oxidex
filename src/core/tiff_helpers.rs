@@ -717,29 +717,17 @@ fn parse_interop_subifd(
         TagValue::new_integer(length as i64),
     );
 
-    // OtherImage is the bytes the pair points at, emitted only when the range
-    // is actually readable - the same byte-range validation
-    // `parse_ifd1_thumbnail` applies to ThumbnailImage.
+    // OtherImage is the bytes the pair points at - the same byte-range handling
+    // `parse_ifd1_thumbnail` applies to ThumbnailImage, including the
+    // placeholder fallback ExifTool prints for an unreadable range (see
+    // `read_or_placeholder`). No corpus file currently exercises the fallback
+    // here; it is shared so the two paths cannot diverge.
     if length == 0 || length > MAX_THUMBNAIL_BYTES {
-        return;
-    }
-    let Some(end) = image_offset.checked_add(length) else {
-        return;
-    };
-    if end > reader.size() {
-        return;
-    }
-    let Ok(bytes) = reader.read(image_offset, length as usize) else {
-        return;
-    };
-    // A reader that clamps a short read instead of failing would otherwise make
-    // us report a byte count the file does not actually contain.
-    if bytes.len() as u64 != length {
         return;
     }
     metadata.insert(
         "InteropIFD:OtherImage",
-        TagValue::new_binary(bytes.to_vec()),
+        read_or_placeholder(reader, image_offset, length),
     );
 }
 
@@ -1015,31 +1003,65 @@ pub fn parse_ifd1_thumbnail(
     // non-JPEG payload when the tag was named on the command line, so a plain
     // extraction reports whatever is there.
     //
-    // We emit it only when the range is actually readable. ExifTool is looser:
-    // with the Binary option off, ExtractBinary returns the literal string
-    // "Binary data $length bytes" *without seeking*, so it prints a thumbnail
-    // for a range that runs past EOF (PanasonicDMC-LS60.jpg and
-    // SonyCLIE_PEG-NZ90.jpg in the corpus are both truncated this way). Since
-    // we report a real byte count from real bytes, an unreadable range gets no
-    // tag rather than an invented length.
+    // A zero length is not a thumbnail and ExifTool reports none either (four
+    // corpus files - ExifTool.jpg, XMP.jpg, PDF.pdf, SamsungSGH_G810.jpg -
+    // carry ThumbnailOffset/Length with Length 0 and no ThumbnailImage).
     if length == 0 || length > MAX_THUMBNAIL_BYTES {
         return;
     }
-    let Some(end) = offset.checked_add(length) else {
-        return;
-    };
-    if end > reader.size() {
-        return;
+    metadata.insert(
+        "IFD1:ThumbnailImage",
+        read_or_placeholder(reader, offset, length),
+    );
+}
+
+/// The value ExifTool reports for a binary tag: the bytes when the range is
+/// readable, and the length-only placeholder when it is not.
+///
+/// With the Binary option off, `ExtractBinary` returns its placeholder *before*
+/// it ever touches the file:
+///
+/// ```text
+/// ExifTool.pm:9828          if ((not $$options{Binary} or $$self{EXCL_TAG_LOOKUP}{$lcTag}) and
+/// ExifTool.pm:9829               not $$options{Verbose} and not $$options{Validate} and
+/// ExifTool.pm:9830               not $$self{REQ_TAG_LOOKUP}{$lcTag})
+/// ExifTool.pm:9831          {
+/// ExifTool.pm:9832              return "Binary data $length bytes";
+/// ExifTool.pm:9833          }
+/// ExifTool.pm:9835      unless ($$self{RAF}->Seek($offset,0)
+/// ExifTool.pm:9836          and $$self{RAF}->Read($buff, $length) == $length)
+/// ```
+///
+/// The seek that would fail is on line 9835, below the `return` on 9832, so a
+/// truncated file still reports the tag at its *declared* length. Two corpus
+/// files are truncated this way and oxidex used to drop the tag on both:
+///
+/// * `Panasonic/PanasonicDMC-LS60.jpg` - 8,210 bytes, thumbnail declared at
+///   offset 7,966 for 6,974 bytes, so the range ends at 14,940;
+/// * `Sony/SonyCLIE_PEG-NZ90.jpg` - 7,789 bytes, declared at 1,276 for 6,658,
+///   ending at 7,934.
+///
+/// Emitting the placeholder is not "inventing a length": the declared length is
+/// exactly what ExifTool prints, and it is reported as a pre-rendered string
+/// rather than a `TagValue::Binary` precisely because there are no bytes behind
+/// it -- nothing downstream can mistake it for readable data.
+fn read_or_placeholder(reader: &dyn FileReader, offset: u64, length: u64) -> TagValue {
+    let readable = offset
+        .checked_add(length)
+        .is_some_and(|end| end <= reader.size())
+        .then(|| reader.read(offset, length as usize).ok())
+        .flatten()
+        // A reader that clamps a short read instead of failing would otherwise
+        // make us report a byte count the file does not actually contain.
+        .filter(|bytes| bytes.len() as u64 == length);
+
+    match readable {
+        Some(bytes) => TagValue::new_binary(bytes.to_vec()),
+        None => TagValue::new_string(format!(
+            "(Binary data {} bytes, use -b option to extract)",
+            length
+        )),
     }
-    let Ok(bytes) = reader.read(offset, length as usize) else {
-        return;
-    };
-    // A reader that clamps a short read instead of failing would otherwise make
-    // us report a byte count the file does not actually contain.
-    if bytes.len() as u64 != length {
-        return;
-    }
-    metadata.insert("IFD1:ThumbnailImage", TagValue::new_binary(bytes.to_vec()));
 }
 
 /// Locates a MakerNote inside its enclosing TIFF block.
@@ -1449,6 +1471,35 @@ mod ifd1_tests {
         assert!(metadata.get("IFD1:ThumbnailImage").is_none());
     }
 
+    /// A thumbnail range that runs past EOF is still reported, at its declared
+    /// length. `ExtractBinary` returns the placeholder on ExifTool.pm:9832,
+    /// above the seek on :9835, so truncation never suppresses the tag --
+    /// PanasonicDMC-LS60.jpg (8,210 bytes, range ending at 14,940) and
+    /// SonyCLIE_PEG-NZ90.jpg (7,789 bytes, ending at 7,934) both print it.
+    #[test]
+    fn thumbnail_past_eof_reports_the_placeholder_not_nothing() {
+        let metadata = run(
+            &[
+                (TAG_THUMBNAIL_OFFSET, LONG, 100),
+                (TAG_THUMBNAIL_LENGTH, LONG, 6974),
+            ],
+            &[],
+            0,
+        );
+        assert_eq!(
+            metadata
+                .get("IFD1:ThumbnailLength")
+                .and_then(|v| v.as_integer()),
+            Some(6974)
+        );
+        assert_eq!(
+            metadata
+                .get("IFD1:ThumbnailImage")
+                .and_then(|v| v.as_string()),
+            Some("(Binary data 6974 bytes, use -b option to extract)")
+        );
+    }
+
     #[test]
     fn ifd1_compression_yields_to_ifd0() {
         // OlympusAIR-A01.jpg carries Compression in both IFDs; ExifTool's
@@ -1668,10 +1719,18 @@ mod interop_tests {
         );
     }
 
+    /// Mirror of the thumbnail rule, and for the same reason: `OtherImage` is
+    /// built by `ExtractImage`, which falls through to `ExtractBinary` for a
+    /// range outside the loaded EXIF block --
+    ///
+    /// ```text
+    /// Exif.pm:6136          $image = $et->ExtractBinary($offset, $len, $tag);
+    /// ```
+    ///
+    /// -- and that returns the length-only placeholder before seeking
+    /// (ExifTool.pm:9832). An unreadable range is reported, not dropped.
     #[test]
-    fn unreadable_other_image_range_keeps_pair_but_no_blob() {
-        // Mirror of the thumbnail rule: the offset/length pair reports the
-        // stored numbers, but a blob is only materialised from readable bytes.
+    fn unreadable_other_image_range_reports_the_placeholder() {
         let metadata = run(
             &[
                 (TAG_OTHER_IMAGE_START, LONG, 1, 4000),
@@ -1692,7 +1751,12 @@ mod interop_tests {
                 .and_then(|v| v.as_integer()),
             Some(100)
         );
-        assert!(metadata.get("InteropIFD:OtherImage").is_none());
+        assert_eq!(
+            metadata
+                .get("InteropIFD:OtherImage")
+                .and_then(|v| v.as_string()),
+            Some("(Binary data 100 bytes, use -b option to extract)")
+        );
     }
 
     #[test]

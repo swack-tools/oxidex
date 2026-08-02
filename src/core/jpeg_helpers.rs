@@ -498,7 +498,18 @@ pub fn process_mpf_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     for segment in segments.iter().filter(|s| s.marker == 0xFFE2) {
         // Check if this is an MPF segment (starts with "MPF\0")
         if segment.data.len() >= 4 && &segment.data[0..4] == b"MPF\0" {
-            match crate::parsers::jpeg::mpf_parser::parse_mpf_segment(segment.data, metadata) {
+            // MPImageStart is stored relative to the MPF TIFF header and
+            // ExifTool rebases it there (MPF.pm:148 `IsOffset => '$val'`,
+            // resolved against `$$dirInfo{Base}`, which ExifTool.pm:7958 sets
+            // to the APP2 segment's data position + 4). `Segment::offset` is
+            // the position of the 0xFFE2 marker, so the header sits 2 marker
+            // bytes + 2 length bytes + 4 identifier bytes further on.
+            let tiff_base = segment.offset + 8;
+            match crate::parsers::jpeg::mpf_parser::parse_mpf_segment(
+                segment.data,
+                tiff_base,
+                metadata,
+            ) {
                 Ok(()) => {
                     // Successfully parsed MPF data
                 }
@@ -900,6 +911,70 @@ pub fn process_app14_segments(segments: &[Segment], metadata: &mut MetadataMap) 
     }
 }
 
+/// Processes GraphicConverter APP15 segments.
+///
+/// GraphicConverter records the JPEG quality it saved with in APP15 as the
+/// four bytes `Q<space><digits>`. ExifTool reads it in the JPEG marker loop
+/// (ExifTool.pm:8423-8427):
+///
+/// ```text
+/// } elsif ($marker == 0xef) {         # APP15 (GraphicConverter)
+///     if ($$segDataPt =~ /^Q\s*(\d+)/ and $length == 4) {
+///         $dumpType = 'GraphicConverter';
+///         my $tagTablePtr = GetTagTable('Image::ExifTool::JPEG::GraphConv');
+///         $self->HandleTag($tagTablePtr, 'Q', $1);
+///     }
+/// }
+/// ```
+///
+/// `$length` is `length $$segDataPt` (ExifTool.pm:7697), the payload after the
+/// two length bytes -- the same bytes `Segment::data` holds -- so the exact
+/// four-byte test carries over unchanged. It is what keeps this off the other
+/// APP15 payload in the wild, the `TEXT\0` block Casio and FujiFilm write
+/// (JPEG.pm:310), which ExifTool deliberately leaves unread.
+///
+/// `%Image::ExifTool::JPEG::GraphConv` (JPEG.pm:665-670) is
+/// `GROUPS => { 0 => 'APP15', 1 => 'GraphConv', 2 => 'Image' }` with the
+/// single entry `'Q' => 'Quality'`, and declares no conversion, so the digits
+/// are reported verbatim.
+pub fn process_app15_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    // APP15 marker is 0xFFEF
+    const APP15_MARKER: u16 = 0xFFEF;
+    /// ExifTool's `$length == 4` guard on the payload.
+    const GRAPHIC_CONVERTER_LENGTH: usize = 4;
+
+    for segment in segments.iter().filter(|s| s.marker == APP15_MARKER) {
+        if segment.data.len() != GRAPHIC_CONVERTER_LENGTH {
+            continue;
+        }
+        // /^Q\s*(\d+)/ -- the leading Q, optional whitespace, then at least
+        // one digit. Perl's \s is [ \t\n\f\r\x0b]; Rust's
+        // `u8::is_ascii_whitespace` leaves out the vertical tab, so spell the
+        // class out rather than approximate it.
+        let is_perl_space = |b: u8| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0c | 0x0b);
+        let Some(rest) = segment.data.strip_prefix(b"Q") else {
+            continue;
+        };
+        let digits: &[u8] = rest
+            .iter()
+            .position(|b| !is_perl_space(*b))
+            .map_or(&[], |start| &rest[start..]);
+        let end = digits
+            .iter()
+            .position(|b| !b.is_ascii_digit())
+            .unwrap_or(digits.len());
+        if end == 0 {
+            continue;
+        }
+        // At most three digits survive the four-byte length test, so this
+        // cannot overflow.
+        let quality: i64 = digits[..end]
+            .iter()
+            .fold(0, |acc, b| acc * 10 + i64::from(b - b'0'));
+        metadata.insert("APP15:Quality".to_string(), TagValue::Integer(quality));
+    }
+}
+
 /// Processes JPEG COM (comment) segments.
 ///
 /// COM segments (marker 0xFFFE) carry free-form comment text. ExifTool exposes
@@ -1055,11 +1130,37 @@ pub fn process_infiray_segments(segments: &[Segment], metadata: &mut MetadataMap
             if segment.data.len() < min_length {
                 continue;
             }
+            // ExifTool tests the Qualcomm signature before it reaches the
+            // `HasIJPEG` branch that selects InfiRay's APP7 (ExifTool.pm:8230
+            // vs 8238), so a Qualcomm segment is never read as an OpMode
+            // record even in a file that also carries an IJPEG header.
+            if marker == APP7_MARKER
+                && crate::parsers::jpeg::app_segments::qualcomm::is_qualcomm_app7(segment.data)
+            {
+                continue;
+            }
             merge(read_record(group, segment.data, table), metadata);
         }
     }
 
     process_infiray_imaging_data(segments, metadata);
+}
+
+/// Processes the Qualcomm "Camera Attributes" record carried in JPEG APP7
+/// (`Image::ExifTool::Qualcomm::Main`).
+///
+/// ExifTool selects this reader on the payload signature alone
+/// (ExifTool.pm:8230), so unlike the InfiRay records sharing this marker it
+/// needs no whole-file gate. Segments belonging to the other APP7 readers --
+/// Pentax, Ricoh, Huawei, DJI-DBG, InfiRay -- do not carry the signature and
+/// are left alone.
+pub fn process_qualcomm_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    for segment in segments.iter().filter(|s| s.marker == APP7_MARKER) {
+        merge(
+            crate::parsers::jpeg::app_segments::parse_qualcomm_app7(segment.data),
+            metadata,
+        );
+    }
 }
 
 /// Emits `APP3:ImagingData`, the InfiRay IR + thermal + visible payload.
@@ -1178,6 +1279,63 @@ mod tests {
         process_photoshop_segments(&[segment], &mut metadata);
 
         assert!(!metadata.contains_key("APP13:AdobeCMType"));
+    }
+
+    #[test]
+    fn process_app15_segments_extracts_graphic_converter_quality() {
+        // The APP15 payload of combined-samples/ExifTool.jpg, byte for byte;
+        // exiftool -G0 reports [APP15] Quality : 70 for it.
+        let segment = Segment::new(0xFFEF, 0, b"Q 70");
+        let mut metadata = MetadataMap::new();
+
+        process_app15_segments(&[segment], &mut metadata);
+
+        assert_eq!(metadata.get_integer("APP15:Quality"), Some(70));
+    }
+
+    #[test]
+    fn process_app15_segments_reads_quality_without_a_space() {
+        // /^Q\s*(\d+)/ makes the whitespace optional, so three digits fit.
+        let segment = Segment::new(0xFFEF, 0, b"Q100");
+        let mut metadata = MetadataMap::new();
+
+        process_app15_segments(&[segment], &mut metadata);
+
+        assert_eq!(metadata.get_integer("APP15:Quality"), Some(100));
+    }
+
+    #[test]
+    fn process_app15_segments_ignores_payloads_that_are_not_four_bytes() {
+        // ExifTool guards on `$length == 4`, so a longer payload that still
+        // matches the pattern is not GraphicConverter's and is left alone.
+        let segment = Segment::new(0xFFEF, 0, b"Q 70 extra");
+        let mut metadata = MetadataMap::new();
+
+        process_app15_segments(&[segment], &mut metadata);
+
+        assert!(!metadata.contains_key("APP15:Quality"));
+    }
+
+    #[test]
+    fn process_app15_segments_ignores_the_casio_text_payload() {
+        // JPEG.pm:310 notes the other APP15 payload in the wild, the "TEXT\0"
+        // block Casio and FujiFilm write, which ExifTool never reads.
+        let segment = Segment::new(0xFFEF, 0, b"TEXT");
+        let mut metadata = MetadataMap::new();
+
+        process_app15_segments(&[segment], &mut metadata);
+
+        assert!(!metadata.contains_key("APP15:Quality"));
+    }
+
+    #[test]
+    fn process_app15_segments_ignores_a_q_with_no_digits() {
+        let segment = Segment::new(0xFFEF, 0, b"Q  x");
+        let mut metadata = MetadataMap::new();
+
+        process_app15_segments(&[segment], &mut metadata);
+
+        assert!(!metadata.contains_key("APP15:Quality"));
     }
 }
 

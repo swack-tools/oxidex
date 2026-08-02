@@ -11,15 +11,27 @@
 //! - Rational-to-decimal conversion for specific tags (ApertureValue, FocalLength, etc.)
 //! - Unit suffix formatting (mm for focal lengths, m for distances/altitudes)
 
-/// Format file size like ExifTool (e.g., "2.1 kB" not "2 kB")
+/// Format file size like ExifTool (e.g., "2.1 kB", "12 kB", "1500 bytes").
 ///
-/// ExifTool uses decimal (base-10) units, not binary (base-2) units.
-/// - 1 kB = 1000 bytes (not 1024)
-/// - 1 MB = 1,000,000 bytes
-/// - 1 GB = 1,000,000,000 bytes
+/// ExifTool uses decimal (base-10) units, not binary (base-2) units:
+/// 1 kB = 1000 bytes, 1 MB = 1,000,000 bytes, 1 GB = 1,000,000,000 bytes.
 ///
-/// Small files (< 1000 bytes) show exact byte count.
-/// Larger files show one decimal place.
+/// The unit does **not** change at each power of 1000. ExifTool holds each unit
+/// until the value reaches 2000 of it, and only prints a decimal place while the
+/// value is under 10 of that unit. So 1500 bytes stays "1500 bytes", 10,000
+/// bytes is "10 kB" (no decimal), and 1,000,000 bytes is "1000 kB" rather than
+/// "1.0 MB". Ported verbatim from the `ByteUnit ne 'Binary'` branch of
+/// `ConvertFileSize` in ExifTool.pm (lib/Image/ExifTool.pm:6863-6869):
+///
+/// ```text
+/// $val < 2000 and return "$val bytes";
+/// $val < 10000 and return sprintf('%.1f kB', $val / 1000);
+/// $val < 2000000 and return sprintf('%.0f kB', $val / 1000);
+/// $val < 10000000 and return sprintf('%.1f MB', $val / 1000000);
+/// $val < 2000000000 and return sprintf('%.0f MB', $val / 1000000);
+/// $val < 10000000000 and return sprintf('%.1f GB', $val / 1000000000);
+/// return sprintf('%.0f GB', $val / 1000000000);
+/// ```
 ///
 /// # Examples
 ///
@@ -27,19 +39,28 @@
 /// use oxidex::core::value_formatter::format_file_size;
 ///
 /// assert_eq!(format_file_size(500), "500 bytes");
+/// assert_eq!(format_file_size(1500), "1500 bytes");
 /// assert_eq!(format_file_size(2100), "2.1 kB");
-/// assert_eq!(format_file_size(1_500_000), "1.5 MB");
+/// assert_eq!(format_file_size(12_379), "12 kB");
+/// assert_eq!(format_file_size(1_500_000), "1500 kB");
 /// assert_eq!(format_file_size(2_500_000_000), "2.5 GB");
 /// ```
 pub fn format_file_size(bytes: u64) -> String {
-    if bytes < 1000 {
+    let v = bytes as f64;
+    if bytes < 2_000 {
         format!("{} bytes", bytes)
-    } else if bytes < 1_000_000 {
-        format!("{:.1} kB", bytes as f64 / 1000.0)
-    } else if bytes < 1_000_000_000 {
-        format!("{:.1} MB", bytes as f64 / 1_000_000.0)
+    } else if bytes < 10_000 {
+        format!("{:.1} kB", v / 1_000.0)
+    } else if bytes < 2_000_000 {
+        format!("{:.0} kB", v / 1_000.0)
+    } else if bytes < 10_000_000 {
+        format!("{:.1} MB", v / 1_000_000.0)
+    } else if bytes < 2_000_000_000 {
+        format!("{:.0} MB", v / 1_000_000.0)
+    } else if bytes < 10_000_000_000 {
+        format!("{:.1} GB", v / 1_000_000_000.0)
     } else {
-        format!("{:.1} GB", bytes as f64 / 1_000_000_000.0)
+        format!("{:.0} GB", v / 1_000_000_000.0)
     }
 }
 
@@ -577,106 +598,12 @@ pub fn is_decimal_rational_tag(tag_name: &str) -> bool {
     DECIMAL_RATIONAL_TAGS.contains(&tag_name)
 }
 
-/// Tags that need "mm" suffix (focal length related)
-///
-/// These tags represent focal lengths and should be displayed with "mm" suffix
-/// to match ExifTool's output format.
-pub const MM_SUFFIX_TAGS: &[&str] = &[
-    "FocalLength",
-    "FocalLengthIn35mmFormat",
-    "FocalLength35efl",
-    "FocalLengthIn35mmFilm",
-];
-
-/// Tags that need "m" suffix (distance/altitude measurements)
-///
-/// These tags represent distances or altitudes in meters and should be
-/// displayed with "m" suffix to match ExifTool's output format.
-pub const METER_SUFFIX_TAGS: &[&str] = &["SubjectDistance", "GPSAltitude", "HyperfocalDistance"];
-
-/// Tags that need "s" suffix (time measurements)
-///
-/// These tags represent time durations in seconds. Note that ExifTool
-/// doesn't always add "s" to ExposureTime, so we handle this carefully.
-pub const SECONDS_SUFFIX_TAGS: &[&str] = &["ExposureTime", "ShutterSpeedValue"];
-
-/// Format a value with the appropriate unit suffix based on tag name
-///
-/// This function examines the tag name and appends the correct unit suffix
-/// (mm, m, or s) to match ExifTool's output format. It handles fully-qualified
-/// tag names (e.g., "EXIF:FocalLength") by extracting the base name.
-///
-/// # Arguments
-///
-/// * `tag_name` - The tag name, optionally prefixed with group (e.g., "EXIF:FocalLength")
-/// * `value` - The formatted value string to append suffix to
-///
-/// # Returns
-///
-/// The value with appropriate unit suffix, or unchanged if no suffix is needed.
-///
-/// # Examples
-///
-/// ```
-/// use oxidex::core::value_formatter::format_with_unit;
-///
-/// assert_eq!(format_with_unit("FocalLength", "6.0"), "6.0 mm");
-/// assert_eq!(format_with_unit("SubjectDistance", "2.5"), "2.5 m");
-/// assert_eq!(format_with_unit("EXIF:FocalLength", "50"), "50 mm");
-/// assert_eq!(format_with_unit("SomeOtherTag", "123"), "123");
-/// ```
-pub fn format_with_unit(tag_name: &str, value: &str) -> String {
-    // Extract the base tag name (after the colon if present)
-    // This handles fully-qualified names like "EXIF:FocalLength"
-    let base_name = tag_name.split(':').next_back().unwrap_or(tag_name);
-
-    if MM_SUFFIX_TAGS.contains(&base_name) {
-        format!("{} mm", value)
-    } else if METER_SUFFIX_TAGS.contains(&base_name) {
-        format!("{} m", value)
-    } else if SECONDS_SUFFIX_TAGS.contains(&base_name) {
-        // ExifTool doesn't always add "s" to ExposureTime - it depends on context.
-        // Only add "s" if it's not already present.
-        if !value.ends_with('s') && !value.ends_with("sec") {
-            // Note: ExifTool typically shows exposure as "1/125" without suffix,
-            // but ShutterSpeedValue may include "s". For now, we don't add suffix
-            // automatically to match the most common ExifTool behavior.
-            value.to_string()
-        } else {
-            value.to_string()
-        }
-    } else {
-        value.to_string()
-    }
-}
-
-/// Check if a tag should have a unit suffix
-///
-/// This is useful for determining whether additional formatting is needed
-/// for a particular tag's value.
-///
-/// # Arguments
-///
-/// * `tag_name` - The tag name, optionally prefixed with group (e.g., "EXIF:FocalLength")
-///
-/// # Returns
-///
-/// `true` if the tag should have a unit suffix (mm or m), `false` otherwise.
-///
-/// # Examples
-///
-/// ```
-/// use oxidex::core::value_formatter::needs_unit_suffix;
-///
-/// assert!(needs_unit_suffix("FocalLength"));
-/// assert!(needs_unit_suffix("EXIF:SubjectDistance"));
-/// assert!(!needs_unit_suffix("ISO"));
-/// assert!(!needs_unit_suffix("Model"));
-/// ```
-pub fn needs_unit_suffix(tag_name: &str) -> bool {
-    let base_name = tag_name.split(':').next_back().unwrap_or(tag_name);
-    MM_SUFFIX_TAGS.contains(&base_name) || METER_SUFFIX_TAGS.contains(&base_name)
-}
+// `format_with_unit` / `needs_unit_suffix` and their MM/METER/SECONDS tables
+// used to live here as a second, divergent implementation. The shipped one is
+// `crate::core::formatters::unit_suffixes`, which `exiftool_compat` has always
+// called; this copy never applied EXIF 0x920a's `sprintf("%.1f mm")`
+// (Exif.pm:2401) and appended units unconditionally, so it doubled the suffix
+// on any value that already carried one. Its tests asserted that output.
 
 // ============================================================================
 // GPS REFERENCE VALUE FORMATTING
@@ -778,29 +705,51 @@ pub fn is_gps_reference_tag(tag_name: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// Every expectation below was read back from `exiftool -s -FileSize` on a
+    /// file of exactly that byte length (ExifTool 13.55), not derived from the
+    /// Perl by hand. The interesting property is that the unit steps at 2000 of
+    /// the unit -- not at 1000 -- and drops the decimal place above 10 of it.
     #[test]
-    fn test_file_size_formatting() {
-        // Bytes (< 1000)
+    fn test_file_size_formatting_matches_exiftool() {
+        // Held as raw bytes right up to 2000 (ExifTool.pm:6863).
         assert_eq!(format_file_size(0), "0 bytes");
         assert_eq!(format_file_size(1), "1 bytes");
         assert_eq!(format_file_size(500), "500 bytes");
         assert_eq!(format_file_size(999), "999 bytes");
+        assert_eq!(format_file_size(1000), "1000 bytes");
+        assert_eq!(format_file_size(1500), "1500 bytes");
+        assert_eq!(format_file_size(1999), "1999 bytes");
 
-        // Kilobytes (1000 - 999,999)
-        assert_eq!(format_file_size(1000), "1.0 kB");
-        assert_eq!(format_file_size(1500), "1.5 kB");
+        // 2000..10000: one decimal place (ExifTool.pm:6864).
+        assert_eq!(format_file_size(2000), "2.0 kB");
         assert_eq!(format_file_size(2100), "2.1 kB");
-        assert_eq!(format_file_size(10_000), "10.0 kB");
-        assert_eq!(format_file_size(999_999), "1000.0 kB");
+        assert_eq!(format_file_size(9999), "10.0 kB");
 
-        // Megabytes (1,000,000 - 999,999,999)
-        assert_eq!(format_file_size(1_000_000), "1.0 MB");
-        assert_eq!(format_file_size(1_500_000), "1.5 MB");
-        assert_eq!(format_file_size(10_000_000), "10.0 MB");
+        // 10000..2e6: kB with no decimal place (ExifTool.pm:6865).
+        assert_eq!(format_file_size(10_000), "10 kB");
+        assert_eq!(format_file_size(12_379), "12 kB");
+        assert_eq!(format_file_size(999_999), "1000 kB");
+        assert_eq!(format_file_size(1_000_000), "1000 kB");
+        assert_eq!(format_file_size(1_999_999), "2000 kB");
 
-        // Gigabytes (>= 1,000,000,000)
-        assert_eq!(format_file_size(1_000_000_000), "1.0 GB");
+        // 2e6..1e7: MB with one decimal place (ExifTool.pm:6866).
+        assert_eq!(format_file_size(2_000_000), "2.0 MB");
+        assert_eq!(format_file_size(2_500_000), "2.5 MB");
+        assert_eq!(format_file_size(9_999_999), "10.0 MB");
+
+        // 1e7..2e9: MB with no decimal place (ExifTool.pm:6867).
+        assert_eq!(format_file_size(10_000_000), "10 MB");
+        assert_eq!(format_file_size(1_000_000_000), "1000 MB");
+        assert_eq!(format_file_size(1_999_999_999), "2000 MB");
+
+        // 2e9..1e10: GB with one decimal place (ExifTool.pm:6868).
+        assert_eq!(format_file_size(2_000_000_000), "2.0 GB");
         assert_eq!(format_file_size(2_500_000_000), "2.5 GB");
+        assert_eq!(format_file_size(9_999_999_999), "10.0 GB");
+
+        // >= 1e10: GB with no decimal place (ExifTool.pm:6869).
+        assert_eq!(format_file_size(10_000_000_000), "10 GB");
+        assert_eq!(format_file_size(12_500_000_000), "12 GB");
     }
 
     #[test]
@@ -978,95 +927,6 @@ mod tests {
 
         // Verify expected count
         assert_eq!(DECIMAL_RATIONAL_TAGS.len(), 15);
-    }
-
-    #[test]
-    fn test_mm_suffix() {
-        // FocalLength tags should get "mm" suffix
-        assert_eq!(format_with_unit("FocalLength", "6.0"), "6.0 mm");
-        assert_eq!(format_with_unit("EXIF:FocalLength", "50"), "50 mm");
-        assert_eq!(format_with_unit("FocalLengthIn35mmFormat", "75"), "75 mm");
-        assert_eq!(format_with_unit("FocalLength35efl", "24"), "24 mm");
-        assert_eq!(format_with_unit("FocalLengthIn35mmFilm", "100"), "100 mm");
-
-        // With group prefix
-        assert_eq!(
-            format_with_unit("Composite:FocalLengthIn35mmFormat", "35"),
-            "35 mm"
-        );
-    }
-
-    #[test]
-    fn test_meter_suffix() {
-        // Distance/altitude tags should get "m" suffix
-        assert_eq!(format_with_unit("SubjectDistance", "2.5"), "2.5 m");
-        assert_eq!(format_with_unit("GPSAltitude", "117"), "117 m");
-        assert_eq!(format_with_unit("HyperfocalDistance", "5.2"), "5.2 m");
-
-        // With group prefix
-        assert_eq!(format_with_unit("EXIF:GPSAltitude", "0"), "0 m");
-        assert_eq!(format_with_unit("EXIF:SubjectDistance", "10"), "10 m");
-    }
-
-    #[test]
-    fn test_no_suffix_for_other_tags() {
-        // Tags that don't need any suffix should remain unchanged
-        assert_eq!(format_with_unit("ISO", "400"), "400");
-        assert_eq!(format_with_unit("ImageWidth", "1920"), "1920");
-        assert_eq!(format_with_unit("EXIF:Model", "Canon"), "Canon");
-        assert_eq!(format_with_unit("Make", "Nikon"), "Nikon");
-        assert_eq!(format_with_unit("Orientation", "1"), "1");
-
-        // ExposureTime doesn't add "s" in our current implementation
-        assert_eq!(format_with_unit("ExposureTime", "1/125"), "1/125");
-        assert_eq!(format_with_unit("ShutterSpeedValue", "1/250"), "1/250");
-    }
-
-    #[test]
-    fn test_needs_unit_suffix() {
-        // Focal length tags need suffix
-        assert!(needs_unit_suffix("FocalLength"));
-        assert!(needs_unit_suffix("FocalLengthIn35mmFormat"));
-        assert!(needs_unit_suffix("FocalLength35efl"));
-        assert!(needs_unit_suffix("FocalLengthIn35mmFilm"));
-
-        // Distance/altitude tags need suffix
-        assert!(needs_unit_suffix("SubjectDistance"));
-        assert!(needs_unit_suffix("GPSAltitude"));
-        assert!(needs_unit_suffix("HyperfocalDistance"));
-
-        // With group prefix - should still work
-        assert!(needs_unit_suffix("EXIF:FocalLength"));
-        assert!(needs_unit_suffix("EXIF:SubjectDistance"));
-        assert!(needs_unit_suffix("GPS:GPSAltitude"));
-
-        // Tags that don't need suffix
-        assert!(!needs_unit_suffix("ISO"));
-        assert!(!needs_unit_suffix("Model"));
-        assert!(!needs_unit_suffix("ImageWidth"));
-        assert!(!needs_unit_suffix("ExposureTime")); // Not in mm or m suffix list
-        assert!(!needs_unit_suffix(""));
-    }
-
-    #[test]
-    fn test_suffix_tags_lists() {
-        // Verify MM_SUFFIX_TAGS contains expected entries
-        assert!(MM_SUFFIX_TAGS.contains(&"FocalLength"));
-        assert!(MM_SUFFIX_TAGS.contains(&"FocalLengthIn35mmFormat"));
-        assert!(MM_SUFFIX_TAGS.contains(&"FocalLength35efl"));
-        assert!(MM_SUFFIX_TAGS.contains(&"FocalLengthIn35mmFilm"));
-        assert_eq!(MM_SUFFIX_TAGS.len(), 4);
-
-        // Verify METER_SUFFIX_TAGS contains expected entries
-        assert!(METER_SUFFIX_TAGS.contains(&"SubjectDistance"));
-        assert!(METER_SUFFIX_TAGS.contains(&"GPSAltitude"));
-        assert!(METER_SUFFIX_TAGS.contains(&"HyperfocalDistance"));
-        assert_eq!(METER_SUFFIX_TAGS.len(), 3);
-
-        // Verify SECONDS_SUFFIX_TAGS contains expected entries
-        assert!(SECONDS_SUFFIX_TAGS.contains(&"ExposureTime"));
-        assert!(SECONDS_SUFFIX_TAGS.contains(&"ShutterSpeedValue"));
-        assert_eq!(SECONDS_SUFFIX_TAGS.len(), 2);
     }
 
     #[test]
