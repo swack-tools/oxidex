@@ -15,7 +15,7 @@
 - Corpus: `/tmp/oxidex-exiftool-cache/combined-samples/` (read-only — copy any file before a write test).
 - **CORRECTED default-output contract** (superseding an earlier draft of this section — see `.superpowers/sdd/2026-08-02-preview-image-composite-plan/task-1-report.md` for the full forensic trail). The original draft claimed `PreviewImage` omits entirely when unreadable, based on running `exiftool -PreviewImage <file>` (explicitly *requesting* the tag by name). That was a testing artifact: explicitly requesting a tag sets `$$self{REQ_TAG_LOOKUP}}` for it, which disables `ExtractBinary`'s pre-seek placeholder shortcut (`ExifTool.pm` ~line 9836) and forces a real seek/read that then fails and omits. **That is not how the tag-comparison harness or `oxidex -j -e` query files** — they do a full default-mode dump, not a single explicit `-PreviewImage` request. Re-verified in full-dump mode (`exiftool -G1 -s -a -u <file>`, no explicit `-PreviewImage`) on two independently-sourced out-of-bounds files: `LeicaCL.jpg` (`IFD2:PreviewImageStart`=7064224 in a 50,939-byte file) and `SamsungDV150F.jpg` (MPImage2-embedded pair) — **both show the placeholder** `(Binary data N bytes, use -b option to extract)` with the *declared* length, not an omission, despite `-b` returning 0 bytes and `-validate` warning "past end of file" / "[minor] Error reading PreviewImage from file" for both. This is the **same** mechanism already implemented for `ThumbnailImage` in `read_or_placeholder` (`src/core/tiff_helpers.rs:1048-1065`): `ExtractBinary`'s shortcut returns the placeholder *before* ever seeking, in every default-dump case, so truncation/OOB is invisible to the tag's presence — only its correctness once someone passes `-b`. **Every task in this plan must therefore reuse (or exactly mirror) `read_or_placeholder`'s placeholder-on-failure behavior for the declared-length case, not the Sigma omit-on-OOB pattern.** The one exception: if a specific mechanism's *own* extraction code doesn't go through `Exif.pm`'s shared `ExtractImage`/`ExtractBinary` at all (e.g. a hand-written per-vendor Rust port of a custom `RawConv`), that mechanism's on-failure behavior must be independently verified with a full-dump command (not a single explicit `-TagName` request) before assuming either placeholder or omission — do not generalize Sigma's existing omit behavior to a new mechanism without that check.
 - `TagValue::new_binary(bytes)` stores real bytes; the CLI's existing `binary_placeholder()` formatting turns any `TagValue::Binary` into the correct default-mode string. Insert the real bytes (like `src/parsers/tiff/makernotes/sigma.rs:134-137` does), not a pre-rendered placeholder string — that keeps `-b` extraction correct too and is consistent with the rest of the codebase.
-- Every insert must still be gated on the offset+length pair being present and non-zero-length (omit when either is absent or length is 0 — that part is unchanged and matches ExifTool's `return undef if not $len` in `ExtractImage`, `Exif.pm:6224`). What differs per mechanism is what happens when the pair IS present but the range is out-of-bounds: for any mechanism that routes through `Exif.pm`'s shared `ExtractImage`/`ExtractBinary` (Tasks 1 and 4), that's placeholder-on-failure — use `read_or_placeholder` (`src/core/tiff_helpers.rs:1048-1065`). For a mechanism with its own hand-written value transform that never does a file seek at all (Sigma's existing code, Task 3's Sony case), an unmatched/invalid value is a validation failure, not a read failure, and omission remains correct there — but this must be confirmed per mechanism with a full-dump (`-G1 -s -a -u`, not a single explicit `-TagName`) command against a real corpus file, not assumed by analogy.
+- Every insert must still be gated on the underlying data being present at all (omit when absent — e.g. Task 2's byte pattern never matches, or a MakerNote tag ID is missing entirely). What differs per mechanism is what happens when data IS present but a downstream check (bounds, pattern match) fails: **placeholder-on-failure using the raw/declared length is the norm, not the exception** — confirmed for Task 1 (offset-pair OOB) AND Task 3 (Sony 0x2001's header-strip/SOI-fixup pattern mismatch, verified on `SonyDSLR-A700.jpg`: full-dump mode shows the placeholder with the *raw* untransformed byte count even though the pattern check fails). `Exif.pm`'s shared `ExtractBinary` pre-seek shortcut is broader than originally assumed — it applies not just to the generic offset-pair `ExtractImage` path (Tasks 1, 4) but apparently to any oversized MakerNote tag value extraction too. **Treat omission as the exception that needs its own positive evidence, not the default assumption** — Sigma's existing pre-plan code (which does omit on OOB) has NOT been re-verified against this corrected understanding and may itself need re-checking outside this plan's scope. For every remaining task (5), verify the actual on-failure behavior with a full-dump (`-G1 -s -a -u`, never a single explicit `-TagName`) command against a real corpus file before writing any omission logic — do not assume placeholder-vs-omit by analogy to either pattern.
 - Leave `src/composite/tables.rs:369` (the `PreviewImage` Composite table entry) untouched. It is inert by design — "a composite whose computation is not implemented simply never fires" is the documented contract in `src/composite/compute.rs:8`. No task in this plan should add a `("Exif", "PreviewImage")` arm to `compute()`; that arm can never be correct because `compute()` has no file access.
 - Measure every task with the exiftool-parity workflow: `just compare-exiftool-format <FORMAT>` (or `python3 tools/exiftool-tables/conformance.py <corpus> --exiftool-dir /tmp/oxidex-exiftool-cache/exiftool --oxidex target/release/oxidex`) before and after. Require `missing_in_oxidex` count strictly lower and `regressions` empty; quote the real `exiftool -G1 -s` value for at least one fixed file in the commit message.
 - `cargo fmt --all` and `cargo clippy` before each commit. Commit with `git -c commit.gpgsign=false commit --no-gpg-sign`. Never `git add -A`.
@@ -337,8 +337,13 @@ i.e.: strip the first 32 bytes (proprietary Sony header) if the value is longer 
 - Note: like Sigma, this needs `MetadataMap`/`TagValue::Binary` access, which the generic `MakerNoteParser` trait (`HashMap<String, String>`) cannot carry. Check first whether Sony is already special-cased outside the string-map dispatcher (grep `parse_sigma_makernote_if_sigma` in `src/core/tiff_helpers.rs:1146-1163` for the pattern, and check whether an equivalent `parse_sony_makernote_if_sony`-style hook already exists or needs adding).
 - Test: `src/parsers/tiff/makernotes/sony.rs` (or wherever Sony's existing MakerNotes tests live — check first)
 
+**CORRECTION (found during Task 3's own review, mirroring Task 1's earlier correction):** the "omits when the fixup doesn't match" claim below was wrong for the same reason Task 1's original "omits on OOB" claim was wrong. Verified with a full-dump command (`exiftool -G1 -s -a -u <file>`, NOT `-PreviewImage`) against real corpus files (`SonyDSLR-A700.jpg`, `SonyDSLR-A380.jpg`, `SonyILCE-6000.jpg`, all of which fail under an explicit `-PreviewImage`/`-b` request — "[minor] Error reading PreviewImage", 0 bytes): full-dump mode still shows `[Sony] PreviewImage : (Binary data 696508 bytes, use -b option to extract)` for `SonyDSLR-A700.jpg` — the placeholder, with the tag's *raw, untransformed* declared byte count, not an omission. This confirms the same `ExtractBinary` pre-seek shortcut from Task 1 also gates this tag: in default-dump mode, RawConv (the header-strip/SOI-fixup) never runs at all, because the shortcut returns a placeholder built from the entry's raw byte count before extraction/RawConv happens.
+
 **Interfaces:**
-- Produces: `MakerNotes:PreviewImage` as `TagValue::new_binary(...)` (post header-strip, post SOI-fixup), inserted only when the fixup regex matches; nothing inserted otherwise (mirrors `$$self{PreviewError} = 1` — ExifTool records an error flag but still emits no tag, matching this plan's omit-on-failure contract).
+- Produces `MakerNotes:PreviewImage` with a two-way result, mirroring Task 1's `read_or_placeholder` split (real bytes when verified-correct, a placeholder string otherwise — never omit when `raw` bytes are present at all):
+  - When the header-strip + SOI-fixup pattern **matches**: `TagValue::new_binary(transformed_bytes)` — real, correct bytes, right for both the default view and any future `-b` support.
+  - When it does **not** match (but `raw` is non-empty): `TagValue::new_string(format!("(Binary data {} bytes, use -b option to extract)", raw.len()))` — the placeholder, using the **raw, untransformed** length (matches the real corpus evidence above; this is not the transformed length, since RawConv never ran).
+  - Only when `raw` itself is empty/absent does nothing get inserted.
 
 - [ ] **Step 1: Investigate the current Sony MakerNotes dispatch**
 
@@ -373,13 +378,28 @@ fn sony_0x2001_strips_header_and_fixes_soi_marker() {
 }
 
 #[test]
-fn sony_0x2001_omits_when_no_valid_soi_after_header() {
+fn sony_0x2001_shows_placeholder_with_raw_length_when_no_valid_soi() {
+    // Real ExifTool (verified on SonyDSLR-A700.jpg, full-dump mode) still
+    // shows the placeholder here, using the RAW untransformed byte count --
+    // RawConv's header-strip/SOI-fixup never runs in default-dump mode.
     let mut raw = vec![0u8; 32];
-    raw.extend_from_slice(b"NOTAJPEGHEADERATALL");
+    raw.extend_from_slice(b"NOTAJPEGHEADERATALL"); // 20 bytes, total raw.len() == 52
 
     let mut metadata = MetadataMap::new();
     parse_sony_preview_image(&raw, &mut metadata);
 
+    assert_eq!(
+        metadata.get("MakerNotes:PreviewImage"),
+        Some(&TagValue::new_string(
+            "(Binary data 52 bytes, use -b option to extract)".to_string()
+        ))
+    );
+}
+
+#[test]
+fn sony_0x2001_omits_when_raw_is_empty() {
+    let mut metadata = MetadataMap::new();
+    parse_sony_preview_image(&[], &mut metadata);
     assert!(metadata.get("MakerNotes:PreviewImage").is_none());
 }
 ```
@@ -395,18 +415,37 @@ Expected: FAIL — `parse_sony_preview_image` does not exist yet.
 /// Sony.pm:906-939 RawConv for MakerNotes 0x2001: strip a 32-byte proprietary
 /// header, then require the next byte to be arbitrary and the three after it
 /// to be `D8 FF DB` or `D8 FF E1` (a JPEG SOI missing its leading FF), and
-/// reconstruct that FF. Omits the tag (matches ExifTool's `return undef`)
-/// when the pattern doesn't match, rather than emitting garbage bytes.
+/// reconstruct that FF.
+///
+/// In ExifTool's default (non-`-b`) dump mode, `ExtractBinary`'s pre-seek
+/// placeholder shortcut means RawConv never actually runs -- verified on
+/// SonyDSLR-A700.jpg: real ExifTool still shows the placeholder using the
+/// RAW, untransformed byte count even when the SOI pattern wouldn't match.
+/// So an unmatched pattern is NOT an omission -- it's a placeholder built
+/// from `raw.len()`, matching Task 1's `read_or_placeholder` split (real
+/// bytes when verified-correct, a placeholder string otherwise).
 pub fn parse_sony_preview_image(raw: &[u8], metadata: &mut MetadataMap) {
-    let body = if raw.len() > 0x20 { &raw[0x20..] } else { raw };
-    let Some(rest) = body.get(1..) else { return };
-    if rest.len() < 3 || rest[0] != 0xd8 || rest[1] != 0xff || !matches!(rest[2], 0xdb | 0xe1) {
+    if raw.is_empty() {
         return;
     }
-    let mut fixed = Vec::with_capacity(rest.len() + 1);
-    fixed.push(0xff);
-    fixed.extend_from_slice(rest);
-    metadata.insert("MakerNotes:PreviewImage", TagValue::new_binary(fixed));
+    let body = if raw.len() > 0x20 { &raw[0x20..] } else { raw };
+    let transformed = body.get(1..).and_then(|rest| {
+        (rest.len() >= 3 && rest[0] == 0xd8 && rest[1] == 0xff && matches!(rest[2], 0xdb | 0xe1))
+            .then(|| {
+                let mut fixed = Vec::with_capacity(rest.len() + 1);
+                fixed.push(0xff);
+                fixed.extend_from_slice(rest);
+                fixed
+            })
+    });
+    let value = match transformed {
+        Some(bytes) => TagValue::new_binary(bytes),
+        None => TagValue::new_string(format!(
+            "(Binary data {} bytes, use -b option to extract)",
+            raw.len()
+        )),
+    };
+    metadata.insert("MakerNotes:PreviewImage", value);
 }
 ```
 
@@ -419,7 +458,14 @@ Expected: PASS.
 
 - [ ] **Step 6: Verify against the real corpus**
 
-The stripped test corpus files under `/tmp/oxidex-exiftool-cache/combined-samples/Sony/` are truncated (all sampled files hit `[minor] Error reading PreviewImage` under real ExifTool — verified during investigation), so a full end-to-end corpus match may not be available in this cache. If `just compare-exiftool-full` (or a targeted `find /tmp/oxidex-exiftool-cache/combined-samples/Sony -name '*.ARW'` search for a non-truncated raw file) turns up a file where real ExifTool successfully emits `PreviewImage`, use it to verify byte-for-byte; otherwise rely on the unit tests above plus a manual hex-dump check that the header-strip offset (0x20) and SOI-fixup logic match `Sony.pm:906-939` exactly.
+Do NOT use an explicit `-PreviewImage`/`-b` request for this check — it disables ExifTool's placeholder shortcut and gives a false read (this is exactly the mistake this task's own verification note above corrects). Use a full-dump command instead:
+
+```bash
+/usr/bin/perl5.34 -I/tmp/oxidex-exiftool-cache/exiftool/lib /tmp/oxidex-exiftool-cache/exiftool/exiftool -G1 -s -a -u /tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSLR-A700.jpg | grep -i preview
+./target/release/oxidex -j -e /tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSLR-A700.jpg | grep -A1 -i preview
+```
+
+Expect both to show `Sony:PreviewImage` (or however oxidex's existing Sony MakerNotes tags are grouped — match whatever convention the other Sony tags in this file already use) as `(Binary data 696508 bytes, use -b option to extract)`. If the corpus turns up a file where the header-strip/SOI-fixup pattern genuinely succeeds, verify that one shows real matching bytes too (via a hex-dump or length comparison), but the primary parity target for this task is the placeholder-with-raw-length case, confirmed above as the common one in this corpus.
 
 - [ ] **Step 7: Commit**
 
@@ -429,8 +475,11 @@ git -c commit.gpgsign=false commit --no-gpg-sign -m "feat(makernotes): extract S
 
 Sony.pm:906-939's RawConv strips a 32-byte proprietary header then
 requires a D8 FF DB/E1 JPEG-SOI-minus-leading-FF pattern, reconstructing
-the FF. Omits the tag when the pattern doesn't match, matching
-ExifTool's PreviewError/return-undef behavior."
+the FF. In ExifTool's default dump mode this RawConv never actually
+runs (ExtractBinary's pre-seek shortcut), so an unmatched pattern shows
+the placeholder with the RAW untransformed byte count, not an omission
+-- verified against SonyDSLR-A700.jpg's real [Sony] PreviewImage
+output in full-dump mode."
 ```
 
 ---
