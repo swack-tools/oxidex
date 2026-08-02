@@ -11,9 +11,10 @@
 //! - Utility functions for reading multi-byte values in different byte orders
 
 use crate::core::TagValue;
-use crate::core::formatters::{exiftool_rational_number, print_exposure_time};
+use crate::core::formatters::{exiftool_rational_number, perl_number, print_exposure_time};
 use crate::core::operations_helpers::{
-    is_datetime_string, is_printable_ascii, parse_exif_datetime, read_i32, read_u16, read_u32,
+    is_datetime_string, is_printable_ascii, parse_exif_datetime, read_f32, read_f64, read_i32,
+    read_u16, read_u32,
 };
 use crate::parsers::common::exif_types::ExifType;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
@@ -76,6 +77,16 @@ pub fn raw_bytes_to_tag_value(
             // SLONG (type 9): signed 32-bit integers
             ExifType::SLong if bytes.len() >= 4 => {
                 return handle_slong_type(bytes, value_count, byte_order);
+            }
+
+            // FLOAT (type 11): IEEE 754 single precision
+            ExifType::Float if bytes.len() >= 4 => {
+                return handle_float_type(bytes, value_count, byte_order);
+            }
+
+            // DOUBLE (type 12): IEEE 754 double precision
+            ExifType::Double if bytes.len() >= 8 => {
+                return handle_double_type(bytes, value_count, byte_order);
             }
 
             // ASCII (type 2): null-terminated string
@@ -710,6 +721,60 @@ fn handle_slong_type(bytes: &[u8], value_count: u32, byte_order: ByteOrder) -> T
 
     let value = read_i32(&bytes[0..4], byte_order) as i64;
     TagValue::new_integer(value)
+}
+
+/// Handles FLOAT type fields (type 11) - IEEE 754 single precision.
+///
+/// ExifTool reads these with `GetFloat` (`ExifTool.pm:6085`), a bare
+/// `unpack 'f'` with none of the `RoundFloat($val, 7)` that
+/// `GetRational64u`/`GetRational64s` apply (`ExifTool.pm:6098`). The unpacked
+/// single widens to a Perl NV -- a double -- so the printed text is Perl's
+/// default numeric stringification of the *widened* value, `%.15g`. Written
+/// with `-IFD0:JXLDistance=0.1`, `exiftool -G1 -s` prints
+/// `0.100000001490116`, not `0.1`: those are the 15 significant digits of the
+/// nearest float to 0.1, and the extra digits are the widening made visible.
+///
+/// [`perl_number`] is that `%.15g`, so the value is rendered here rather than
+/// carried as [`TagValue::Float`]. That variant has no single rendering in
+/// this crate -- the CLI prints `f64::to_string` in one place and `{:.2}` in
+/// another -- and `f64::to_string` never emits exponent form at all, so a
+/// float holding 1e20 comes back as `100000002004088000000` where ExifTool
+/// prints `1.00000002004088e+20`. See this module's header for the same
+/// reasoning applied to text-sourced values.
+fn handle_float_type(bytes: &[u8], value_count: u32, byte_order: ByteOrder) -> TagValue {
+    if value_count > 1 && bytes.len() >= (value_count as usize * 4) {
+        let values: Vec<String> = (0..value_count as usize)
+            .map(|i| {
+                let offset = i * 4;
+                perl_number(read_f32(&bytes[offset..offset + 4], byte_order) as f64)
+            })
+            .collect();
+        return TagValue::new_string(values.join(" "));
+    }
+
+    TagValue::new_string(perl_number(read_f32(&bytes[0..4], byte_order) as f64))
+}
+
+/// Handles DOUBLE type fields (type 12) - IEEE 754 double precision.
+///
+/// `GetDouble` (`ExifTool.pm:6086`) is the 8-byte counterpart of `GetFloat`,
+/// and is likewise unrounded. No widening happens here -- the stored double
+/// *is* the Perl NV -- so `-IFD0:RawToPreviewGain=0.1` reads back as plain
+/// `0.1` where the single-precision `JXLDistance` on the same file reads back
+/// as `0.100000001490116`. Both go through the same `%.15g`; only the stored
+/// precision differs.
+fn handle_double_type(bytes: &[u8], value_count: u32, byte_order: ByteOrder) -> TagValue {
+    if value_count > 1 && bytes.len() >= (value_count as usize * 8) {
+        let values: Vec<String> = (0..value_count as usize)
+            .map(|i| {
+                let offset = i * 8;
+                perl_number(read_f64(&bytes[offset..offset + 8], byte_order))
+            })
+            .collect();
+        return TagValue::new_string(values.join(" "));
+    }
+
+    TagValue::new_string(perl_number(read_f64(&bytes[0..8], byte_order)))
 }
 
 /// Handles ASCII type fields (type 2).
@@ -1617,5 +1682,148 @@ mod tests {
         assert!(
             matches!(id_result, TagValue::String(ref s) if s == "ABCDEF0123456789FEDCBA9876543210")
         );
+    }
+
+    // ------------------------------------------------------------------------
+    // FLOAT (type 11) and DOUBLE (type 12)
+    // ------------------------------------------------------------------------
+
+    /// `0xCD49` JXLDistance, `Writable => 'float'` (Exif.pm).
+    const JXL_DISTANCE: u16 = 0xCD49;
+    /// `0xC7A8` RawToPreviewGain, `Writable => 'double'` (Exif.pm).
+    const RAW_TO_PREVIEW_GAIN: u16 = 0xC7A8;
+
+    fn float_bytes(v: f32, byte_order: ByteOrder) -> Vec<u8> {
+        match byte_order {
+            ByteOrder::LittleEndian => v.to_le_bytes().to_vec(),
+            ByteOrder::BigEndian => v.to_be_bytes().to_vec(),
+        }
+    }
+
+    fn double_bytes(v: f64, byte_order: ByteOrder) -> Vec<u8> {
+        match byte_order {
+            ByteOrder::LittleEndian => v.to_le_bytes().to_vec(),
+            ByteOrder::BigEndian => v.to_be_bytes().to_vec(),
+        }
+    }
+
+    fn as_str(v: TagValue) -> String {
+        match v {
+            TagValue::String(s) => s,
+            other => panic!("expected a string rendering, got {other:?}"),
+        }
+    }
+
+    /// Before FLOAT was decoded, these 4 bytes missed every arm of
+    /// `raw_bytes_to_tag_value` and reached `heuristic_bytes_to_tag_value`,
+    /// whose `bytes.len() == 4` branch read them as a u32: 1.5f32 is
+    /// 0x3FC00000, so `oxidex -j -e` printed 1069547520 under a real ExifTool
+    /// tag name while `exiftool -G1 -s` printed 1.5.
+    #[test]
+    fn test_float_is_not_read_as_raw_ieee754_bits() {
+        for order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let bytes = float_bytes(1.5, order);
+            let value = raw_bytes_to_tag_value(&bytes, 11, 1, JXL_DISTANCE, order);
+            assert_eq!(as_str(value), "1.5");
+            // The exact integer the heuristic used to produce.
+            assert_ne!(
+                as_str(raw_bytes_to_tag_value(&bytes, 11, 1, JXL_DISTANCE, order)),
+                "1069547520"
+            );
+        }
+    }
+
+    /// The DOUBLE counterpart: 8 bytes matched neither the 2- nor the 4-byte
+    /// heuristic branch and were not printable ASCII, so they fell through to
+    /// `TagValue::Binary` and printed as
+    /// "(Binary data 8 bytes, use -b option to extract)".
+    #[test]
+    fn test_double_is_not_read_as_binary_blob() {
+        for order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let bytes = double_bytes(1.5, order);
+            let value = raw_bytes_to_tag_value(&bytes, 12, 1, RAW_TO_PREVIEW_GAIN, order);
+            assert_eq!(as_str(value), "1.5");
+        }
+    }
+
+    /// Both values verified against ExifTool 13.59 (the `.exiftool-version`
+    /// pin) on a JPEG written with `-IFD0:JXLDistance=0.1
+    /// -IFD0:RawToPreviewGain=0.1`:
+    ///
+    /// ```text
+    /// [IFD0]  JXLDistance      : 0.100000001490116
+    /// [IFD0]  RawToPreviewGain : 0.1
+    /// ```
+    ///
+    /// The single widens to a double before Perl stringifies it, so the float
+    /// keeps 15 significant digits of 0.1's nearest float while the double
+    /// prints plain `0.1`. A shared `%.15g` produces both.
+    #[test]
+    fn test_float_and_double_match_exiftool_precision() {
+        let order = ByteOrder::LittleEndian;
+
+        let float_val =
+            raw_bytes_to_tag_value(&float_bytes(0.1, order), 11, 1, JXL_DISTANCE, order);
+        assert_eq!(as_str(float_val), "0.100000001490116");
+
+        let double_val =
+            raw_bytes_to_tag_value(&double_bytes(0.1, order), 12, 1, RAW_TO_PREVIEW_GAIN, order);
+        assert_eq!(as_str(double_val), "0.1");
+    }
+
+    /// `%g` switches to exponent form outside `-4 <= exp < 15`, and Perl signs
+    /// and 2-pads the exponent. `f64::to_string` never emits exponent form at
+    /// all -- it would render this as `100000002004088000000` -- which is why
+    /// these are rendered rather than carried as [`TagValue::Float`].
+    #[test]
+    fn test_float_and_double_use_exponent_form_like_perl() {
+        let order = ByteOrder::LittleEndian;
+
+        let big = raw_bytes_to_tag_value(&float_bytes(1e20, order), 11, 1, JXL_DISTANCE, order);
+        assert_eq!(as_str(big), "1.00000002004088e+20");
+
+        let small = raw_bytes_to_tag_value(&float_bytes(2.5e-8, order), 11, 1, JXL_DISTANCE, order);
+        assert_eq!(as_str(small), "2.50000002921524e-08");
+
+        let big_d = raw_bytes_to_tag_value(
+            &double_bytes(1e20, order),
+            12,
+            1,
+            RAW_TO_PREVIEW_GAIN,
+            order,
+        );
+        assert_eq!(as_str(big_d), "1e+20");
+    }
+
+    /// Multi-value FLOAT/DOUBLE join with a space, as the SHORT/LONG/SLONG
+    /// handlers already do for their arrays.
+    #[test]
+    fn test_float_and_double_arrays_join_with_spaces() {
+        let order = ByteOrder::LittleEndian;
+
+        let mut floats = float_bytes(1.5, order);
+        floats.extend(float_bytes(2.25, order));
+        floats.extend(float_bytes(-0.5, order));
+        let value = raw_bytes_to_tag_value(&floats, 11, 3, JXL_DISTANCE, order);
+        assert_eq!(as_str(value), "1.5 2.25 -0.5");
+
+        let mut doubles = double_bytes(1.5, order);
+        doubles.extend(double_bytes(2.25, order));
+        let value = raw_bytes_to_tag_value(&doubles, 12, 2, RAW_TO_PREVIEW_GAIN, order);
+        assert_eq!(as_str(value), "1.5 2.25");
+    }
+
+    /// A truncated entry must not panic on the fixed-width slice. Too-short
+    /// buffers miss the guarded arms and fall through to the heuristic, which
+    /// is what every other numeric type does with a short buffer.
+    #[test]
+    fn test_truncated_float_and_double_do_not_panic() {
+        let order = ByteOrder::LittleEndian;
+        for len in 0..4 {
+            let _ = raw_bytes_to_tag_value(&vec![0u8; len], 11, 1, JXL_DISTANCE, order);
+        }
+        for len in 0..8 {
+            let _ = raw_bytes_to_tag_value(&vec![0u8; len], 12, 1, RAW_TO_PREVIEW_GAIN, order);
+        }
     }
 }

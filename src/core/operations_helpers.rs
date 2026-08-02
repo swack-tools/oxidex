@@ -85,6 +85,42 @@ pub fn read_i32(bytes: &[u8], byte_order: ByteOrder) -> i32 {
     reader.i32_at(0).unwrap_or(0)
 }
 
+/// Reads an IEEE 754 single-precision float from bytes with the specified byte order.
+///
+/// Uses `EndianReader` for consistent byte order handling across the codebase.
+///
+/// # Arguments
+///
+/// * `bytes` - Byte slice (must be at least 4 bytes)
+/// * `byte_order` - Byte order for interpretation
+///
+/// # Returns
+///
+/// The f32 value (returns 0.0 if bytes are too short)
+#[inline]
+pub fn read_f32(bytes: &[u8], byte_order: ByteOrder) -> f32 {
+    let reader = EndianReader::new(bytes, to_io_byte_order(byte_order));
+    reader.f32_at(0).unwrap_or(0.0)
+}
+
+/// Reads an IEEE 754 double-precision float from bytes with the specified byte order.
+///
+/// Uses `EndianReader` for consistent byte order handling across the codebase.
+///
+/// # Arguments
+///
+/// * `bytes` - Byte slice (must be at least 8 bytes)
+/// * `byte_order` - Byte order for interpretation
+///
+/// # Returns
+///
+/// The f64 value (returns 0.0 if bytes are too short)
+#[inline]
+pub fn read_f64(bytes: &[u8], byte_order: ByteOrder) -> f64 {
+    let reader = EndianReader::new(bytes, to_io_byte_order(byte_order));
+    reader.f64_at(0).unwrap_or(0.0)
+}
+
 // ============================================================================
 // DATETIME UTILITIES
 // ============================================================================

@@ -20,7 +20,9 @@ use crate::error::{ExifToolError, Result};
 use crate::parsers::jpeg::parse_segments;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::tag_db::lookup_tag_name;
-use crate::tag_db::tag_registry::{get_tag_descriptor, has_reliable_value_type};
+use crate::tag_db::tag_registry::{
+    declared_ieee_field_type, get_tag_descriptor, has_reliable_value_type,
+};
 
 /// EXIF identifier at the start of an EXIF APP1 segment
 const EXIF_IDENTIFIER: &[u8] = b"Exif\0\0";
@@ -242,7 +244,16 @@ pub(crate) fn tag_value_to_field(
             bytes.push(0);
             Ok((2, bytes.len() as u32, bytes)) // always 20
         }
-        TagValue::Float(f) => Ok((12, 1, f.to_ne_bytes().to_vec())),
+        // TIFF has two IEEE 754 widths and `TagValue::Float` is an f64, so the
+        // width has to come from the hint: the entry's existing field type on
+        // an edit, or the tag's declared type when one is being created.
+        // Without it every float-declared tag was written as a double, which
+        // `exiftool -validate` reports as
+        // "Non-standard format (double) for IFD0 0xcd49 JXLDistance".
+        TagValue::Float(f) => match hint {
+            Some(11) => Ok((11, 1, (*f as f32).to_ne_bytes().to_vec())),
+            _ => Ok((12, 1, f.to_ne_bytes().to_vec())),
+        },
         TagValue::Array(_) | TagValue::Struct(_) => Err(ExifToolError::parse_error(
             "Array/Struct values are not supported for EXIF write",
         )),
@@ -462,7 +473,9 @@ pub fn plan_exif_write(
         let tag_id = descriptor_tag_id(descriptor).ok_or_else(|| {
             ExifToolError::parse_error(format!("Tag '{}' has no numeric EXIF id", key))
         })?;
-        let (ft, count, bytes) = tag_value_to_field(value, None)?;
+        // A tag being created has no existing entry to take a width from, so
+        // the declared type is the only thing that can tell FLOAT from DOUBLE.
+        let (ft, count, bytes) = tag_value_to_field(value, declared_ieee_field_type(&key))?;
         let out = OutEntry {
             tag_id,
             field_type: ft,
@@ -1578,6 +1591,45 @@ mod tests {
         let (field_type_none, _, _) = tag_value_to_field(&TagValue::new_integer(5), None).unwrap();
         assert_eq!(field_type_none, 3, "no hint: smallest-fit still applies");
         let _ = (scan, original); // silence unused if not otherwise referenced
+    }
+
+    /// `TagValue::Float` is an f64 and TIFF has two IEEE 754 widths, so the
+    /// hint is what picks between them. Type 12 for everything made
+    /// `exiftool -validate` report "Non-standard format (double) for IFD0
+    /// 0xcd49 JXLDistance", whose ExifTool declaration is `Writable =>
+    /// 'float'`.
+    #[test]
+    fn float_hint_selects_single_precision() {
+        let (ft, count, bytes) = tag_value_to_field(&TagValue::Float(1.5), Some(11)).unwrap();
+        assert_eq!(ft, 11, "a FLOAT-hinted value must be written FLOAT");
+        assert_eq!(count, 1);
+        assert_eq!(bytes.len(), 4, "FLOAT is 4 bytes");
+        assert_eq!(f32::from_ne_bytes(bytes.try_into().unwrap()), 1.5);
+
+        let (ft, count, bytes) = tag_value_to_field(&TagValue::Float(1.5), Some(12)).unwrap();
+        assert_eq!(ft, 12, "a DOUBLE-hinted value stays DOUBLE");
+        assert_eq!(count, 1);
+        assert_eq!(bytes.len(), 8, "DOUBLE is 8 bytes");
+        assert_eq!(f64::from_ne_bytes(bytes.try_into().unwrap()), 1.5);
+
+        // No declared type to consult: the pre-existing default is kept.
+        let (ft, _, bytes) = tag_value_to_field(&TagValue::Float(1.5), None).unwrap();
+        assert_eq!(ft, 12);
+        assert_eq!(bytes.len(), 8);
+    }
+
+    /// The hint the create path passes comes from the tag registry, so the
+    /// two tags that motivated this must resolve to different widths.
+    #[test]
+    fn declared_ieee_field_type_separates_float_from_double() {
+        // Exif.pm: 0xCD49 JXLDistance is `Writable => 'float'`.
+        assert_eq!(declared_ieee_field_type("IFD0:JXLDistance"), Some(11));
+        // Exif.pm: 0xC7A8 RawToPreviewGain is `Writable => 'double'`.
+        assert_eq!(declared_ieee_field_type("IFD0:RawToPreviewGain"), Some(12));
+        // The EXIF: spelling resolves identically to the IFD0: one.
+        assert_eq!(declared_ieee_field_type("EXIF:JXLDistance"), Some(11));
+        // A non-float tag declares no IEEE width and leaves the default alone.
+        assert_eq!(declared_ieee_field_type("IFD0:Orientation"), None);
     }
 
     /// The strongest possible property: serialize then rescan must reproduce
