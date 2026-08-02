@@ -308,11 +308,9 @@ const_decoder!(pub COLOR_MODE,
     [(0, "Normal"), (1, "Natural"), (2, "Vivid"),]
 );
 
-// Internal ND filter decoder - maps values to ND filter settings
-const_decoder!(pub INTERNAL_ND_FILTER,
-    i32,
-    [(0, "Off"), (1, "On"), (2, "Auto"),]
-);
+// InternalNDFilter (0x009D) has no PrintConv in ExifTool: Panasonic.pm:1247
+// declares only `Writable => 'rational64u'`, so the value is reported as-is.
+// The Off/On/Auto decoder that used to live here was invented.
 
 // Intelligent exposure decoder - maps values to iExposure modes
 const_decoder!(pub INTELLIGENT_EXPOSURE,
@@ -424,8 +422,9 @@ const_decoder!(pub FLASH_WARNING, i32,
     [(0, "No"), (1, "Yes (flash required but disabled)"),]
 );
 
-// Burst speed decoder (tag 0x0077)
-const_decoder!(pub BURST_SPEED, i32, [(0, "Low"), (1, "Mid"), (2, "High"),]);
+// BurstSpeed (0x0077) has no PrintConv in ExifTool: Panasonic.pm:1094 declares
+// `Writable => 'int16u'` with `Notes => 'images per second'`. The Low/Mid/High
+// decoder that used to live here was invented and printed "Low" for 0 fps.
 
 // Clear retouch decoder (tag 0x007C)
 const_decoder!(pub CLEAR_RETOUCH, i32, [(0, "Off"), (1, "On"),]);
