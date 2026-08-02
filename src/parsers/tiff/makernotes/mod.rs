@@ -25,8 +25,12 @@ pub mod sony_lens_database;
 
 // Smartphone manufacturers (Phase 3)
 pub mod apple;
-pub mod google;
 pub mod samsung;
+
+// (no `google` parser: fabricated tag table with no ExifTool source -- see
+// `registries::mod` for the finding. ExifTool's real Google MakerNote table
+// (Google::HDRPlusMakerNote) is string-id-keyed and reads an
+// encrypted/gzipped protobuf blob, not a numeric TIFF IFD.)
 
 // (no `microsoft` parser: MakerNotes.pm has no MakerNoteMicrosoft TIFF-IFD
 // dispatch entry at all -- there is no TIFF-IFD MakerNote path for Microsoft
