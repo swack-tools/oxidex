@@ -78,11 +78,22 @@ def rust_str(s):
 
 
 def parse_index(key, table):
-    """ExifTool tag key -> integer index. Bit-field keys (`12.1`) are refused."""
-    if "." in key:
-        raise Unsupported(table, key, "bit-field index (ExifTool's `n.m` notation)")
+    """ExifTool tag key -> integer index.
+
+    A key like `0.2` is not a fractional offset: `ProcessBinaryData` computes the
+    entry as `int($index) * $increment`, so the fraction only lets the hash hold
+    several tags at one offset. Which bits each of them takes is `Mask`, not the
+    fraction -- so a table with `0.1`/`0.2` and no masks would be two whole reads
+    of the same word, which is what ExifTool does.
+    """
+    text = str(key)
+    if "." in text:
+        whole, _, frac = text.partition(".")
+        if not frac.isdigit():
+            raise Unsupported(table, key, f"non-numeric bit-field key {key!r}")
+        text = whole
     try:
-        return int(str(key), 0)
+        return int(text, 0)
     except ValueError:
         raise Unsupported(table, key, f"non-numeric index {key!r}") from None
 
@@ -129,16 +140,90 @@ def field_raw_conv(tag, table, key):
     raise Unsupported(table, key, f"RawConv expression not in the known vocabulary: {expr!r}")
 
 
-def field_print_conv(tag, table, key, pool):
-    """A `PrintConv` as a Rust const name, or `PrintConv::None`."""
+def normalize_deparse(text):
+    """A Perl sub body reduced to a stable key.
+
+    `B::Deparse` prefixes every body with the package and pragma context, which
+    is noise for identification, and indents to taste. Everything else is kept:
+    the point of keying on the body is that an upstream edit changes the key and
+    the generator stops, instead of a stale translation living on under a real
+    tag name.
+    """
+    lines = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and not re.match(r"^\s*(package\s|use\s+strict|use\s+warnings|no\s+)", line)
+    ]
+    return " ".join(lines)
+
+
+# Translations for `PrintConv => { ..., OTHER => sub {...} }`, keyed on the
+# normalized body of the sub itself.
+#
+# `OTHER` is the fallback ExifTool runs for a value the hash does not list, and
+# it is an anonymous closure -- there is no name to look it up by and no
+# expression string to register, which is why `dump_tables.pl` deparses it. Each
+# entry below names a Rust function that reproduces that exact body, and the
+# generator refuses any `OTHER` it does not find here. The read direction only:
+# the `$inv` branch is ExifTool's writer.
+OTHER_CONVS = {
+    # FujiFilm.pm:1089 -- AFAreaPointSize: the number itself.
+    "{ (return $_[0]); }": "identity",
+    # FujiFilm.pm:1097-1108 -- AFAreaZoneSize: "<w> x <h>" out of one byte.
+    "{ (my($val, $inv) = @_); my($w, $h); if ($inv) { (my($w, $h) = ($val =~ /(\\d+)/g)); "
+    "(($w and $h) or (return 0)); (return ((($h << 5) & 240) | ($w & 15))); } "
+    '(($w, $h) = (($val & 15), ($val >> 5))); (return ("$w x $h")); }': "zone_size",
+    # FujiFilm.pm:1131-1135 -- AF-CSetting: a preset the table does not list.
+    "{ (my($val, $inv) = @_); ($inv and (return (($val =~ /(0x\\w+)/) ? hex($1) : (undef)))); "
+    "(return sprintf('Set 6 (custom 0x%.3x)', $val)); }": "custom_afc_set",
+    # FujiFilm.pm:1180-1186 -- DriveSpeed: frames per second.
+    '{ (my($val, $inv) = @_); ($inv or (return ("$val fps"))); ($val =~ s/ ?fps$//); '
+    "(return $val); }": "fps",
+}
+
+# `PrintConv` hash keys that direct ExifTool rather than naming a value, and
+# that a reader can carry without changing what it prints.
+BENIGN_PC_DIRECTIVES = {
+    # Documentation only: how `BuildTagLookup` renders the keys, and in what
+    # order. Neither reaches the value ExifTool reports for a file.
+    "PrintHex",
+    "PrintSort",
+    "Notes",
+    "SeparateTable",
+}
+
+
+def field_print_conv(tag, table, key, pool, conv_prefix):
+    """A `PrintConv` as a Rust expression, or `PrintConv::None`."""
     pc = tag.get("PrintConv")
     if pc is None:
         return "PrintConv::None"
     if not isinstance(pc, dict):
         raise Unsupported(table, key, f"PrintConv has unexpected shape {type(pc).__name__}")
     kind = pc.get("kind")
-    if kind != "enum":
-        # enum_partial carries BITMASK/OTHER/Notes directives; code/expr are Perl.
+    other = None
+    if kind == "enum_partial":
+        directives = pc.get("directives") or {}
+        unknown = set(directives) - BENIGN_PC_DIRECTIVES - {"OTHER"}
+        if unknown:
+            raise Unsupported(
+                table, key, f"PrintConv carries directive(s) {sorted(unknown)!r}"
+            )
+        if "OTHER" in directives:
+            spec = directives["OTHER"]
+            source = spec.get("__deparse") if isinstance(spec, dict) else None
+            if not source:
+                raise Unsupported(table, key, "PrintConv OTHER is a sub with no recoverable body")
+            fn = OTHER_CONVS.get(normalize_deparse(source))
+            if fn is None:
+                raise Unsupported(
+                    table,
+                    key,
+                    "PrintConv OTHER body is not in OTHER_CONVS: "
+                    + normalize_deparse(source),
+                )
+            other = f"{conv_prefix}::{fn}"
+    elif kind != "enum":
         raise Unsupported(table, key, f"PrintConv kind={kind!r} is not a pure enum map")
     entries = []
     for k, v in pc.get("map", {}).items():
@@ -154,6 +239,8 @@ def field_print_conv(tag, table, key, pool):
     entries.sort()
     body = ", ".join(f'({k}, "{rust_str(v)}")' for k, v in entries)
     name = pool.intern(body)
+    if other is not None:
+        return f"PrintConv::MapOr({name}, {other})"
     return f"PrintConv::Map({name})"
 
 
@@ -189,7 +276,7 @@ IGNORED_TAG_KEYS = {
 }
 
 
-def gen_table(module, tname, tbl, pool, skips, allow_skip):
+def gen_table(module, tname, tbl, pool, skips, allow_skip, conv_prefix):
     meta = tbl.get("meta") or {}
     pp = meta.get("PROCESS_PROC")
     pp_name = pp.get("__name", "") if isinstance(pp, dict) else ""
@@ -226,7 +313,7 @@ def gen_table(module, tname, tbl, pool, skips, allow_skip):
             idx = parse_index(key, tname)
             fmt, count = field_format(tag, tname, key)
             member, gate = field_raw_conv(tag, tname, key)
-            pc = field_print_conv(tag, tname, key, pool)
+            pc = field_print_conv(tag, tname, key, pool, conv_prefix)
             if count > 1 and pc != "PrintConv::None":
                 # ExifTool hands the *joined* array string to a hash PrintConv,
                 # so an element-wise lookup would print something ExifTool never
@@ -269,6 +356,11 @@ def main():
     ap.add_argument("--module", required=True)
     ap.add_argument("--table", action="append", required=True)
     ap.add_argument("--prefix", default=None, help="const-pool prefix (default: MODULE)")
+    ap.add_argument(
+        "--other-conv-mod",
+        default="super::print_conv",
+        help="Rust path holding the hand-written OTHER PrintConv fallbacks",
+    )
     ap.add_argument("--allow-skip", action="store_true")
     ap.add_argument("-o", "--output", required=True)
     args = ap.parse_args()
@@ -281,7 +373,13 @@ def main():
         if tname not in mod["tables"]:
             sys.exit(f"error: {args.module} has no table {tname!r}")
         ident, text = gen_table(
-            args.module, tname, mod["tables"][tname], pool, skips, args.allow_skip
+            args.module,
+            tname,
+            mod["tables"][tname],
+            pool,
+            skips,
+            args.allow_skip,
+            args.other_conv_mod,
         )
         idents.append((tname, ident))
         chunks.append(text)
