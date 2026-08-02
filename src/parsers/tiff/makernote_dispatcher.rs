@@ -100,10 +100,15 @@ fn parser_for_make_prefix(
         return Some(Box::new(olympus::OlympusParser) as Box<dyn MakerNoteParser>);
     }
     if make.starts_with("pentax") || make.starts_with("asahi optical") {
-        return Some(Box::new(pentax::PentaxParser) as Box<dyn MakerNoteParser>);
+        return Some(Box::new(pentax::PentaxParser::default()) as Box<dyn MakerNoteParser>);
     }
+    // `make` reaches here already lowercased, so this is ExifTool's
+    // `$$self{Make} =~ /^RICOH/` (Pentax.pm:3032) -- which the modern
+    // "RICOH IMAGING COMPANY, LTD." Pentax bodies satisfy too.
     if make.starts_with("ricoh imaging") {
-        return Some(Box::new(pentax::PentaxParser) as Box<dyn MakerNoteParser>);
+        return Some(
+            Box::new(pentax::PentaxParser { ricoh_make: true }) as Box<dyn MakerNoteParser>
+        );
     }
     // GE cameras are branded "General Imaging Co." in EXIF -- the literal
     // table below only listed "ge" and "general electric", so the one GE file
@@ -118,7 +123,7 @@ fn parser_for_make_prefix(
         // write a Pentax "AOC\0" MakerNote; ExifTool files their tags under
         // family-1 "Pentax". Every other Samsung goes to the Samsung parser.
         if data.len() >= 4 && &data[0..4] == PENTAX_AOC_SIGNATURE {
-            return Some(Box::new(pentax::PentaxParser) as Box<dyn MakerNoteParser>);
+            return Some(Box::new(pentax::PentaxParser::default()) as Box<dyn MakerNoteParser>);
         }
         return Some(Box::new(samsung::SamsungParser) as Box<dyn MakerNoteParser>);
     }

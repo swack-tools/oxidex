@@ -24,6 +24,8 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+/// The expression `PrintConv`s those tables need, hand-written.
+mod print_conv;
 /// `%Pentax` binary sub-tables, generated from ExifTool's own hashes.
 pub mod subdir_tables;
 /// The `ValueConv` computations those tables need, hand-written.
@@ -43,12 +45,13 @@ use std::collections::HashMap;
 use super::pentax_lens_database::lookup_lens_type_pair;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_u16_array, extract_u32_array};
-use super::shared::binary_subdir::{self, BinaryTable};
+use super::shared::binary_subdir::{self, BinaryTable, Cond, ModelPat};
 use super::shared::generic_decoders::ON_OFF;
 use subdir_tables::{
-    PENTAX_AWBINFO, PENTAX_EVSTEPINFO, PENTAX_FACEINFO, PENTAX_FACEPOS, PENTAX_FACESIZE,
-    PENTAX_FLASHINFO, PENTAX_KELVINWB, PENTAX_LENSCORR, PENTAX_LENSINFOQ, PENTAX_LEVELINFO,
-    PENTAX_SRINFO2, PENTAX_TIMEINFO, PENTAX_WBLEVELS,
+    PENTAX_AFINFO, PENTAX_AWBINFO, PENTAX_BATTERYINFO, PENTAX_EVSTEPINFO, PENTAX_FACEINFO,
+    PENTAX_FACEPOS, PENTAX_FACESIZE, PENTAX_FILTERINFO, PENTAX_FLASHINFO, PENTAX_KELVINWB,
+    PENTAX_LENSCORR, PENTAX_LENSINFOQ, PENTAX_LEVELINFO, PENTAX_SHOTINFO, PENTAX_SRINFO2,
+    PENTAX_TEMPINFO, PENTAX_TIMEINFO, PENTAX_WBLEVELS,
 };
 
 // Import declarative decoder macros
@@ -194,7 +197,12 @@ const PENTAX_CAMERA_SETTINGS: u16 = 0x0205;
 const PENTAX_AE_INFO: u16 = 0x0206;
 const PENTAX_LENS_INFO_207: u16 = 0x0207;
 const PENTAX_CAMERA_INFO: u16 = 0x0215;
+const PENTAX_BATTERY_INFO: u16 = 0x0216; // Pentax.pm:2945
+const PENTAX_AF_INFO_RECORD: u16 = 0x021F; // Pentax.pm:2980
 const PENTAX_COLOR_INFO: u16 = 0x0222;
+const PENTAX_SHOT_INFO: u16 = 0x0226; // Pentax.pm:3011
+const PENTAX_FILTER_INFO: u16 = 0x022A; // Pentax.pm:3030
+const PENTAX_TEMP_INFO: u16 = 0x03FF; // Pentax.pm:3126
 const PENTAX_SERIAL_NUMBER: u16 = 0x0229;
 const PENTAX_ARTIST: u16 = 0x022E;
 const PENTAX_COPYRIGHT: u16 = 0x022F;
@@ -603,7 +611,17 @@ pub fn is_pentax_makernote(data: &[u8]) -> bool {
 }
 
 /// Represents a Pentax MakerNote parser
-pub struct PentaxParser;
+///
+/// `ricoh_make` is ExifTool's `$$self{Make} =~ /^RICOH/` (Pentax.pm:3032), the
+/// test that picks `FilterInfo`'s byte order. It is a property of the file's
+/// IFD0, not of the MakerNote, so it is fixed when the dispatcher chooses this
+/// parser -- the same body writes the record the other way round under the
+/// other brand, and guessing from the model would be inventing the answer for
+/// every Ricoh-branded Pentax.
+#[derive(Default)]
+pub struct PentaxParser {
+    pub ricoh_make: bool,
+}
 
 impl MakerNoteParser for PentaxParser {
     fn manufacturer_name(&self) -> &'static str {
@@ -769,7 +787,8 @@ impl PentaxParser {
 
         // Extract tags from entries
         for entry in entries {
-            if let Some((table, order)) = pentax_binary_subdir(&entry, model, &members, byte_order)
+            if let Some((table, order)) =
+                pentax_binary_subdir(&entry, model, self.ricoh_make, &members, byte_order)
             {
                 let record = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                 if !record.is_empty() {
@@ -778,6 +797,7 @@ impl PentaxParser {
                         &record,
                         order,
                         "Pentax",
+                        model,
                         &mut members,
                         tags,
                     );
@@ -2015,6 +2035,7 @@ fn right_align_inline_value(entry: IfdEntry, byte_order: ByteOrder) -> IfdEntry 
 fn pentax_binary_subdir(
     entry: &IfdEntry,
     model: Option<&str>,
+    ricoh_make: bool,
     members: &binary_subdir::Members,
     byte_order: ByteOrder,
 ) -> Option<(&'static BinaryTable, ByteOrder)> {
@@ -2049,12 +2070,34 @@ fn pentax_binary_subdir(
         // `Condition => '$count == 100'` (Pentax.pm:3050).
         PENTAX_WB_LEVELS if count == 100 => &PENTAX_WBLEVELS,
         PENTAX_LENS_INFO_Q => &PENTAX_LENSINFOQ, // Pentax.pm:3095
+        PENTAX_SHOT_INFO => &PENTAX_SHOTINFO,    // Pentax.pm:3011
+        // 0x03ff is `TempInfo` on the listed bodies and `UnknownInfo` -- a table
+        // with no tags in it -- on every other (Pentax.pm:3126-3134).
+        PENTAX_TEMP_INFO if TEMP_INFO_MODELS.holds(model) => &PENTAX_TEMPINFO,
+        // These three declare `ByteOrder` on the SubDirectory, so they are read
+        // big-endian whatever the MakerNote's own order is. ExifTool's reason,
+        // at Pentax.pm:2983-2986: "Most of these subdirectories are 'undef'
+        // format, and as such the byte ordering is not changed when changed via
+        // the Pentax software (which will write a little-endian TIFF on an Intel
+        // system)." 0x0216 repeats the warning -- "have seen makernotes changed
+        // to little-endian in DNG!" (Pentax.pm:2949).
+        PENTAX_BATTERY_INFO => return Some((&PENTAX_BATTERYINFO, ByteOrder::BigEndian)),
+        PENTAX_AF_INFO_RECORD => return Some((&PENTAX_AFINFO, ByteOrder::BigEndian)),
+        // 0x022a is one table read either way round: `LittleEndian` when
+        // `$$self{Make} =~ /^RICOH/`, `BigEndian` otherwise
+        // (Pentax.pm:3030-3042). The brand, not the model, decides.
+        PENTAX_FILTER_INFO => {
+            let order = if ricoh_make {
+                ByteOrder::LittleEndian
+            } else {
+                ByteOrder::BigEndian
+            };
+            return Some((&PENTAX_FILTERINFO, order));
+        }
         _ => return None,
     };
-    // None of these `SubDirectory` entries carries a `ByteOrder` override, so
-    // each record is read in the MakerNote's own order. (`AFInfo`,
-    // `BatteryInfo`, `CameraSettings` and `FilterInfo` do carry one; none of
-    // them is transcribed here.)
+    // The remaining `SubDirectory` entries carry no `ByteOrder` override, so
+    // each record is read in the MakerNote's own order.
     Some((table, byte_order))
 }
 
@@ -2062,6 +2105,42 @@ fn pentax_binary_subdir(
 fn is_k3_mark_iii(model: Option<&str>) -> bool {
     model.is_some_and(|m| m.contains("K-3 Mark III"))
 }
+
+/// `Condition => '$$self{Model} =~ /K-(01|3|30|5|50|500)\b/'` on the 0x03ff
+/// `TempInfo` alternative (Pentax.pm:3129), expanded the same way
+/// `codegen_subdirs.py` expands the ones inside a table.
+///
+/// The `\b` is what keeps `K-5` off a `K-50`, and it is also why a K-3 Mark III
+/// *is* included: "K-3" there is followed by a space.
+static TEMP_INFO_MODELS: Cond = Cond::Model {
+    any_of: &[
+        ModelPat {
+            text: "K-01",
+            word_end: true,
+        },
+        ModelPat {
+            text: "K-3",
+            word_end: true,
+        },
+        ModelPat {
+            text: "K-30",
+            word_end: true,
+        },
+        ModelPat {
+            text: "K-5",
+            word_end: true,
+        },
+        ModelPat {
+            text: "K-50",
+            word_end: true,
+        },
+        ModelPat {
+            text: "K-500",
+            word_end: true,
+        },
+    ],
+    none_of: &[],
+};
 
 fn inline_or_offset_bytes(
     entry: &IfdEntry,
@@ -2871,14 +2950,14 @@ mod tests {
 
     #[test]
     fn test_parser_trait_implementation() {
-        let parser = PentaxParser;
+        let parser = PentaxParser::default();
         assert_eq!(parser.manufacturer_name(), "Pentax");
         assert_eq!(parser.tag_prefix(), "Pentax:");
     }
 
     #[test]
     fn test_validate_header_aoc() {
-        let parser = PentaxParser;
+        let parser = PentaxParser::default();
 
         let valid_header = b"AOC\0extra_data_here";
         assert!(parser.validate_header(valid_header));
@@ -2889,7 +2968,7 @@ mod tests {
 
     #[test]
     fn test_validate_header_pentax() {
-        let parser = PentaxParser;
+        let parser = PentaxParser::default();
 
         let valid_header = b"PENTAX \0more_data";
         assert!(parser.validate_header(valid_header));
@@ -2932,7 +3011,7 @@ mod tests {
         faces.insert("FacesDetected", 2);
         let le = ByteOrder::LittleEndian;
         let pick = |e: &IfdEntry, model, m: &binary_subdir::Members| {
-            pentax_binary_subdir(e, model, m, le).map(|(t, _)| t.name)
+            pentax_binary_subdir(e, model, false, m, le).map(|(t, _)| t.name)
         };
 
         // 0x005c: `$count == 4` is SRInfo, handled elsewhere; anything else SRInfo2.
@@ -2962,6 +3041,172 @@ mod tests {
         );
     }
 
+    /// Decodes `record` the way the dispatcher would, for a named model.
+    fn decode_for(table: &BinaryTable, record: &[u8], model: &str) -> HashMap<String, String> {
+        let mut tags = HashMap::new();
+        let mut members = binary_subdir::Members::new();
+        binary_subdir::decode_binary_subdir_with(
+            table,
+            record,
+            ByteOrder::BigEndian,
+            "Pentax",
+            Some(model),
+            &mut members,
+            &mut tags,
+        );
+        tags
+    }
+
+    /// `combined-samples/Pentax/PentaxK10D.jpg` tag 0x0216: the exact 6 record
+    /// bytes `exiftool -v3` prints, against the exact values `exiftool -a -G1
+    /// -s` reports for that file.
+    ///
+    /// Every alternative in `%Pentax::BatteryInfo` is `Condition`-guarded, so
+    /// this is the test that the model test picks ExifTool's branch: byte 2 is
+    /// `BodyBatteryADNoLoad` with the K10D's calibration `PrintConv` here, and
+    /// two bytes of `BodyBatteryVoltage1` on a K-5.
+    #[test]
+    fn test_battery_info_matches_exiftool_on_k10d_bytes() {
+        let tags = decode_for(
+            &PENTAX_BATTERYINFO,
+            &[0x02, 0x41, 0xa5, 0xa0, 0x05, 0x01],
+            "PENTAX K10D",
+        );
+        assert_eq!(tags["Pentax:PowerSource"], "Body Battery");
+        assert_eq!(tags["Pentax:BodyBatteryState"], "Full");
+        assert_eq!(tags["Pentax:GripBatteryState"], "Empty or Missing");
+        assert_eq!(tags["Pentax:BodyBatteryADNoLoad"], "165 (7.3V, 28%)");
+        assert_eq!(tags["Pentax:BodyBatteryADLoad"], "160 (7.0V, 23%)");
+        assert_eq!(tags["Pentax:GripBatteryADNoLoad"], "5");
+        assert_eq!(tags["Pentax:GripBatteryADLoad"], "1");
+        // The K10D has no voltage reading at all -- those alternatives belong
+        // to other bodies, and emitting one here would put a plausible number
+        // under a real tag name.
+        assert!(!tags.contains_key("Pentax:BodyBatteryVoltage1"));
+    }
+
+    /// The same table over `combined-samples/Pentax/PentaxK-5IIs.jpg`'s own
+    /// 0x0216 bytes: the *third* alternative of key 2 now applies, so bytes 2-3
+    /// are one `int16u` of centivolts rather than two independent A/D readings.
+    #[test]
+    fn test_battery_info_matches_exiftool_on_k5iis_bytes() {
+        let tags = decode_for(
+            &PENTAX_BATTERYINFO,
+            &[
+                0xf2, 0x50, 0x02, 0xae, 0x02, 0x8f, 0x02, 0xc4, 0x02, 0xa4, 0x00, 0x00,
+            ],
+            "PENTAX K-5 II s",
+        );
+        assert_eq!(tags["Pentax:PowerSource"], "Body Battery");
+        assert_eq!(tags["Pentax:BodyBatteryState"], "Full");
+        assert_eq!(tags["Pentax:BodyBatteryVoltage1"], "6.86 V");
+        assert_eq!(tags["Pentax:BodyBatteryVoltage2"], "6.55 V");
+        assert_eq!(tags["Pentax:BodyBatteryVoltage3"], "7.08 V");
+        assert_eq!(tags["Pentax:BodyBatteryVoltage4"], "6.76 V");
+        assert!(!tags.contains_key("Pentax:BodyBatteryADNoLoad"));
+        assert!(!tags.contains_key("Pentax:GripBatteryADNoLoad"));
+    }
+
+    /// `combined-samples/Pentax/PentaxK10D.jpg` tag 0x021f, all 12 bytes.
+    ///
+    /// `AFIntegrationTime` is the `ValueConv`-then-expression-`PrintConv` case:
+    /// the raw 0 doubles to 0 ms, and ExifTool prints the number bare rather
+    /// than as "0.0".
+    #[test]
+    fn test_af_info_matches_exiftool_on_k10d_bytes() {
+        let tags = decode_for(
+            &PENTAX_AFINFO,
+            &[
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x0f,
+            ],
+            "PENTAX K10D",
+        );
+        assert_eq!(tags["Pentax:AFPredictor"], "15");
+        assert_eq!(tags["Pentax:AFDefocus"], "10");
+        assert_eq!(tags["Pentax:AFIntegrationTime"], "0 ms");
+        assert_eq!(tags["Pentax:AFPointsInFocus"], "Lower-right, Mid-right");
+    }
+
+    /// `combined-samples/Pentax/PentaxK-5IIs.jpg` tags 0x03ff, 0x0226 and
+    /// 0x022a -- the first 24 bytes of the 256-byte `TempInfo` record, all 11
+    /// of `ShotInfo`, and the leading zeros of `FilterInfo`.
+    #[test]
+    fn test_temp_shot_and_filter_info_match_exiftool_on_k5iis_bytes() {
+        let temp = decode_for(
+            &PENTAX_TEMPINFO,
+            &[
+                0x00, 0x04, 0x00, 0x01, 0x82, 0x3f, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0xcd,
+                0x00, 0xcd, 0x00, 0x00, 0x00, 0xfa, 0x00, 0x14, 0x00, 0x14,
+            ],
+            "PENTAX K-5 II s",
+        );
+        assert_eq!(temp["Pentax:SensorTemperature"], "20.5 C");
+        assert_eq!(temp["Pentax:SensorTemperature2"], "20.5 C");
+        assert_eq!(temp["Pentax:CameraTemperature4"], "20 C");
+        assert_eq!(temp["Pentax:CameraTemperature5"], "20 C");
+
+        let shot = decode_for(
+            &PENTAX_SHOTINFO,
+            &[
+                0xf0, 0x10, 0x7b, 0xff, 0xaa, 0xfc, 0x0e, 0x06, 0x00, 0x00, 0x00,
+            ],
+            "PENTAX K-5 II s",
+        );
+        assert_eq!(shot["Pentax:CameraOrientation"], "Horizontal (normal)");
+
+        let filter = decode_for(&PENTAX_FILTERINFO, &[0x00; 8], "PENTAX K-5 II s");
+        assert_eq!(filter["Pentax:SourceDirectoryIndex"], "0");
+        assert_eq!(filter["Pentax:SourceFileIndex"], "0");
+    }
+
+    /// The 0x03ff alternative list: `TempInfo` only on the bodies ExifTool
+    /// names, and `\b` is what keeps a K-5 pattern off a K-50.
+    #[test]
+    fn test_temp_info_model_gate_respects_word_boundaries() {
+        let e = IfdEntry {
+            tag_id: PENTAX_TEMP_INFO,
+            field_type: 7,
+            value_count: 256,
+            value_offset: 0,
+        };
+        let none = binary_subdir::Members::new();
+        let pick = |model| {
+            pentax_binary_subdir(&e, model, false, &none, ByteOrder::BigEndian).map(|(t, _)| t.name)
+        };
+        assert_eq!(pick(Some("PENTAX K-5 II s")), Some("TempInfo"));
+        assert_eq!(pick(Some("PENTAX K-50")), Some("TempInfo"));
+        assert_eq!(pick(Some("PENTAX K-500")), Some("TempInfo"));
+        // Not in the list: 0x03ff is `UnknownInfo`, which declares no tags.
+        assert_eq!(pick(Some("PENTAX K-7")), None);
+        assert_eq!(pick(Some("PENTAX K10D")), None);
+        assert_eq!(pick(None), None);
+    }
+
+    /// 0x022a is one table read either way round, chosen by `$$self{Make}`
+    /// rather than the model (Pentax.pm:3030-3042).
+    #[test]
+    fn test_filter_info_byte_order_follows_the_brand() {
+        let e = IfdEntry {
+            tag_id: PENTAX_FILTER_INFO,
+            field_type: 7,
+            value_count: 345,
+            value_offset: 0,
+        };
+        let none = binary_subdir::Members::new();
+        let order = |ricoh| {
+            pentax_binary_subdir(
+                &e,
+                Some("PENTAX K-5 II s"),
+                ricoh,
+                &none,
+                ByteOrder::BigEndian,
+            )
+            .map(|(_, o)| o)
+        };
+        assert_eq!(order(false), Some(ByteOrder::BigEndian));
+        assert_eq!(order(true), Some(ByteOrder::LittleEndian));
+    }
+
     /// `combined-samples/Pentax/PentaxK-5.jpg` tag 0x022b: the exact 8 record
     /// bytes `exiftool -v3` prints, and the exact values `exiftool -a -G1 -s`
     /// reports. This is the `ValueConv` case -- `RollAngle` is an int8s of 1
@@ -2975,6 +3220,7 @@ mod tests {
             &[0x21, 0x01, 0xf6, 0x00, 0x12, 0xfc, 0x01, 0x00],
             ByteOrder::BigEndian,
             "Pentax",
+            None,
             &mut members,
             &mut tags,
         );
@@ -2999,6 +3245,7 @@ mod tests {
             &[0x00, 0x00, 0x0b, 0x0b],
             ByteOrder::BigEndian,
             "Pentax",
+            None,
             &mut members,
             &mut tags,
         );
