@@ -8,7 +8,7 @@
 //! ExifTool for the same seconds, and nine `print_fraction` functions of which
 //! four printed a different string than ExifTool for the same EV.
 
-use crate::core::formatters::numeric_precision::perl_g;
+use crate::core::formatters::numeric_precision::{exiftool_rational_number, perl_g};
 
 /// Port of `Image::ExifTool::Exif::PrintExposureTime` (Exif.pm:5606).
 ///
@@ -189,6 +189,68 @@ pub fn print_fraction(val: f64) -> String {
     }
 }
 
+/// Port of `Image::ExifTool::Exif::PrintFNumber` (Exif.pm:5715).
+///
+/// ```text
+/// sub PrintFNumber($)
+/// {
+///     my $val = shift;
+///     if (Image::ExifTool::IsFloat($val) and $val > 0) {
+///         # round to 1 decimal place, or 2 for values < 1.0
+///         $val = sprintf(($val<1 ? "%.2f" : "%.1f"), $val);
+///     }
+///     return $val;
+/// }
+/// ```
+///
+/// Referenced by `Exif.pm` 0x829d `FNumber`, by the Composite `Aperture`, and
+/// by twenty-odd MakerNote tables. Two details are load-bearing:
+///
+/// - **The decimal place is not optional.** `%.1f` prints `4.0` for a stored
+///   `4/1`, and 964 sample-corpus files reported a bare `4` because the tag
+///   had no PrintConv here at all and fell through to the generic
+///   PrintConv-less-rational rule -- `RoundFloat($val, 10)`, i.e. `%.10g`.
+/// - **Below 1.0 it is two places, not one.** `GPS.jpg` stores
+///   `0.640234375` and ExifTool prints `0.64`; a single `%.1f` would print
+///   `0.6`.
+///
+/// The `$val > 0` guard is equally load-bearing in the other direction:
+/// `CanonEOS20Da.jpg`, `NikonSUPER_COOLSCAN9000ED.jpg` and `SonyNEX-VG900.jpg`
+/// store a zero FNumber, and ExifTool prints `0`, not `0.0`. A value that
+/// fails the guard is returned as-is, which for a rational is the quotient
+/// `GetRational64u` already rounded -- `%.10g`, i.e.
+/// [`exiftool_rational_number`].
+///
+/// `IsFloat($val)` is not modelled: this takes an `f64`, so the string
+/// predicate is always true for the values that reach it. A zero denominator
+/// never gets here -- callers turn that into `undef` first.
+///
+/// # Examples
+///
+/// ```
+/// use oxidex::core::formatters::exif_print_conv::print_f_number;
+///
+/// assert_eq!(print_f_number(4.0), "4.0");
+/// assert_eq!(print_f_number(2.8), "2.8");
+/// // Rounds; it does not print the stored binary expansion
+/// assert_eq!(print_f_number(2.638671875), "2.6");
+/// // Below 1.0 gets a second decimal place
+/// assert_eq!(print_f_number(0.640234375), "0.64");
+/// // Not > 0: returned unchanged, so `0` and not `0.0`
+/// assert_eq!(print_f_number(0.0), "0");
+/// ```
+pub fn print_f_number(val: f64) -> String {
+    if val > 0.0 {
+        if val < 1.0 {
+            format!("{:.2}", val)
+        } else {
+            format!("{:.1}", val)
+        }
+    } else {
+        exiftool_rational_number(val)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,5 +312,53 @@ mod tests {
         assert_eq!(print_exposure_time_micros_str("6460"), "1/155");
         assert_eq!(print_exposure_time_micros_str("500000"), "0.5");
         assert_eq!(print_exposure_time_micros_str("2000000"), "2");
+    }
+
+    /// `sprintf("%.1f")` at or above 1.0 -- the decimal place is the point.
+    ///
+    /// Every one of these is a whole f-stop stored as `N/1`, and the generic
+    /// PrintConv-less-rational rule (`%.10g`) prints them without it. 964
+    /// sample-corpus files reported `4`, `8`, `5`, `2` and so on where
+    /// ExifTool reports `4.0`, `8.0`, `5.0`, `2.0`.
+    #[test]
+    fn whole_f_stops_keep_their_decimal_place() {
+        assert_eq!(print_f_number(1.0), "1.0");
+        assert_eq!(print_f_number(2.0), "2.0");
+        assert_eq!(print_f_number(4.0), "4.0");
+        assert_eq!(print_f_number(8.0), "8.0");
+        assert_eq!(print_f_number(11.0), "11.0");
+        assert_eq!(print_f_number(45.0), "45.0");
+    }
+
+    /// The rounding, at both precisions.
+    ///
+    /// These are the stored quotients of real corpus files, and each one is a
+    /// value `%.10g` prints in full: `Apple_iPhone15Pro.jpg` reported
+    /// `1.779999971`, `FujiFilmFinePixA345.jpg` reported `3.44`, and
+    /// `GPS.jpg` reported `0.640234375`.
+    #[test]
+    fn quotients_round_to_one_place_or_two_below_one() {
+        assert_eq!(print_f_number(1.779999971), "1.8");
+        assert_eq!(print_f_number(3.44), "3.4");
+        assert_eq!(print_f_number(2.638671875), "2.6");
+        assert_eq!(print_f_number(2.799804688), "2.8");
+        // The `$val < 1` branch: two places, not one.
+        assert_eq!(print_f_number(0.640234375), "0.64");
+        assert_eq!(print_f_number(0.95), "0.95");
+        // ...and 1.0 itself is on the `%.1f` side of that boundary.
+        assert_eq!(print_f_number(0.999), "1.00");
+        assert_eq!(print_f_number(1.0), "1.0");
+    }
+
+    /// `$val > 0` guards the sprintf, so a zero is returned unchanged.
+    ///
+    /// `CanonEOS20Da.jpg`, `NikonSUPER_COOLSCAN9000ED.jpg` and
+    /// `SonyNEX-VG900.jpg` all store a zero FNumber, and `exiftool -G1 -s`
+    /// prints `0` for each. Formatting unconditionally would print `0.0`,
+    /// which ExifTool never emits for this tag.
+    #[test]
+    fn non_positive_values_are_returned_unformatted() {
+        assert_eq!(print_f_number(0.0), "0");
+        assert_eq!(print_f_number(-2.8), "-2.8");
     }
 }
