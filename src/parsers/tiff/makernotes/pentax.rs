@@ -782,7 +782,8 @@ impl PentaxParser {
         // See `inline_or_offset_bytes`: only the "AOC\0" form measures its value
         // offsets from the TIFF header.
         let mut value_base: i64 = 0;
-        let ifd_offset = if data.len() >= 4 && &data[0..4] == PENTAX_HEADER_AOC {
+        let is_aoc_header = data.len() >= 4 && &data[0..4] == PENTAX_HEADER_AOC;
+        let ifd_offset = if is_aoc_header {
             value_base = data_base.map_or(0, |o| -(i64::from(o)));
             // AOC header: "AOC\0" plus a 2-byte byte-order marker, IFD at 6.
             // The marker can disagree with the container -- SamsungGX-1L.jpg
@@ -849,6 +850,15 @@ impl PentaxParser {
             .into_iter()
             .map(|entry| right_align_inline_value(entry, byte_order))
             .collect();
+
+        // "AOC\0" MakerNotes declare no Base of their own, so their offsets
+        // are read against the enclosing TIFF header -- but real files move
+        // the block during a re-save without correcting those offsets. Apply
+        // ExifTool's FixBase correction (see `pentax_fix_base`) before using
+        // `value_base` to resolve any out-of-line value below.
+        if is_aoc_header && let Some(data_pos) = data_base.map(i64::from) {
+            value_base += pentax_fix_base(&entries, ifd_offset, data_pos);
+        }
 
         // Pentax::Main entries the match below never registered, added first so
         // the hand-written arms keep ownership of anything they do produce.
@@ -2148,6 +2158,89 @@ static TEMP_INFO_MODELS: Cond = Cond::Model {
     none_of: &[],
 };
 
+/// ExifTool's `FixBase` (MakerNotes.pm:1282), restricted to the case that
+/// applies to Pentax's "AOC\0" MakerNote: not the Canon TIFF-footer variant,
+/// and not entry-based (Pentax forces absolute addressing regardless of what
+/// the entry-based heuristic below would otherwise conclude --
+/// `GetMakerNoteOffset`'s `$relative = 0`, MakerNotes.pm:1220).
+///
+/// A "AOC\0" MakerNote declares no `Base` of its own (MakerNotes.pm:769-779),
+/// so its value offsets are meant to be read relative to the enclosing TIFF
+/// header. Real files routinely move the MakerNote block during a re-save
+/// without correcting those offsets: `Pentax_istD.jpg`'s `0x0216` entry
+/// declares offset 2100, but the six bytes it names live at file offset
+/// 2114 -- the block's *true* base is 14 bytes from the TIFF header, not the
+/// 30 a literal read of the offset gives. ExifTool recovers the correction
+/// by comparing where the IFD's value block actually starts against where
+/// the entries say it should (MakerNotes.pm:1340-1381); this ports that.
+///
+/// `dir_start` is the IFD's offset within the payload/window (`ifd_offset`
+/// in [`PentaxParser::parse_located`], e.g. 6 for "AOC\0MM"); `data_pos` is
+/// the payload's distance from the TIFF header (`data_base` as `i64`).
+/// Returns the amount to add to `value_base`; 0 when the declared offsets
+/// already look right (the common case).
+fn pentax_fix_base(entries: &[IfdEntry], dir_start: usize, data_pos: i64) -> i64 {
+    // ExifTool's @formatSize (Exif.pm:82), indexed 1..13 -- the only formats
+    // GetValueBlocks considers (MakerNotes.pm:1249).
+    const FORMAT_SIZE: [u32; 14] = [0, 1, 1, 2, 4, 8, 1, 1, 2, 4, 8, 4, 8, 4];
+
+    // GetValueBlocks (MakerNotes.pm:1241): longest out-of-line value block at
+    // each distinct declared offset. Inline values (size <= 4) carry no
+    // offset information and are skipped, as ExifTool does.
+    let mut val_block: std::collections::BTreeMap<u32, u32> = std::collections::BTreeMap::new();
+    for entry in entries {
+        let format = entry.field_type;
+        if !(1..=13).contains(&format) {
+            break; // MakerNotes.pm:1249 stops scanning entirely, not just this entry.
+        }
+        let size = entry
+            .value_count
+            .saturating_mul(FORMAT_SIZE[format as usize]);
+        if size <= 4 {
+            continue;
+        }
+        let slot = val_block.entry(entry.value_offset).or_insert(0);
+        if size > *slot {
+            *slot = size;
+        }
+    }
+    let Some(&first) = val_block.keys().next() else {
+        return 0;
+    };
+
+    // Walk offsets in ascending order, finding the true minimum
+    // (MakerNotes.pm:1344-1381): a jump of a full IFD length or more that
+    // lands near the expected start overrides the running minimum, and any
+    // offset below 12 is treated as garbage rather than trusted.
+    let ifd_len = 2 + 12 * entries.len() as i64;
+    let ifd_end = dir_start as i64 + ifd_len;
+    let expected = data_pos + ifd_end + 4; // Pentax's normal offset, MakerNotes.pm:1216.
+
+    let mut min_pt = i64::from(first);
+    let mut last: Option<i64> = None;
+    for (&val_ptr, &size) in &val_block {
+        let val_ptr = i64::from(val_ptr);
+        if let Some(last_end) = last {
+            let gap = val_ptr - last_end;
+            if gap >= ifd_len && (val_ptr - expected).abs() <= 4 {
+                min_pt = val_ptr;
+            }
+            if min_pt < 12 {
+                min_pt = val_ptr;
+            }
+        }
+        last = Some(val_ptr + i64::from(size));
+    }
+
+    let diff = (min_pt - data_pos) - ifd_end;
+    // Pentax's only declared normal offset is 4 (MakerNotes.pm:1216); 0 is
+    // always allowed too (MakerNotes.pm:1444).
+    if diff == 0 || diff == 4 {
+        return 0;
+    }
+    4 - diff
+}
+
 fn inline_or_offset_bytes(
     entry: &IfdEntry,
     full_data: &[u8],
@@ -2920,6 +3013,468 @@ mod tests {
         assert_eq!(WHITE_BALANCE.decode(1), "Daylight");
         assert_eq!(WHITE_BALANCE.decode(5), "Manual");
         assert_eq!(WHITE_BALANCE.decode(9), "Flash");
+    }
+
+    /// `Pentax_istD.jpg`'s actual 73-entry "AOC\0" IFD (dumped verbatim from
+    /// the file's bytes). Its out-of-line entries are all wrong under a
+    /// literal TIFF-header-relative read -- ExifTool's `FixBase` finds the
+    /// block's true base is 14, not the 30 the TIFF header sits at. Verified
+    /// against `exiftool -v4`: LensInfo's (0x0207) 36 bytes live at file
+    /// offset 1918 (= 30 + 1904 - 16) and BatteryInfo's (0x0216) 6 bytes at
+    /// 2114 (= 30 + 2100 - 16); the byte ranges this test's corrected offsets
+    /// resolve to were diffed against ExifTool's raw dump and match exactly.
+    #[test]
+    fn test_pentax_fix_base_recovers_istd_offset() {
+        let entries = vec![
+            IfdEntry {
+                tag_id: 0x0001,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 0,
+            },
+            IfdEntry {
+                tag_id: 0x0002,
+                field_type: 3,
+                value_count: 2,
+                value_offset: 41943520,
+            },
+            IfdEntry {
+                tag_id: 0x0003,
+                field_type: 4,
+                value_count: 1,
+                value_offset: 40648,
+            },
+            IfdEntry {
+                tag_id: 0x0004,
+                field_type: 4,
+                value_count: 1,
+                value_offset: 6236,
+            },
+            IfdEntry {
+                tag_id: 0x0005,
+                field_type: 4,
+                value_count: 1,
+                value_offset: 76180,
+            },
+            IfdEntry {
+                tag_id: 0x0006,
+                field_type: 7,
+                value_count: 4,
+                value_offset: 131270929,
+            },
+            IfdEntry {
+                tag_id: 0x0007,
+                field_type: 7,
+                value_count: 3,
+                value_offset: 169878272,
+            },
+            IfdEntry {
+                tag_id: 0x0008,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 131072,
+            },
+            IfdEntry {
+                tag_id: 0x0009,
+                field_type: 3,
+                value_count: 2,
+                value_offset: 2359296,
+            },
+            IfdEntry {
+                tag_id: 0x000a,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 0,
+            },
+            IfdEntry {
+                tag_id: 0x000c,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 65536,
+            },
+            IfdEntry {
+                tag_id: 0x000d,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 1048576,
+            },
+            IfdEntry {
+                tag_id: 0x000e,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 4294836224,
+            },
+            IfdEntry {
+                tag_id: 0x0012,
+                field_type: 4,
+                value_count: 1,
+                value_offset: 1111,
+            },
+            IfdEntry {
+                tag_id: 0x0013,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 2949120,
+            },
+            IfdEntry {
+                tag_id: 0x0014,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 589824,
+            },
+            IfdEntry {
+                tag_id: 0x0016,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 3276800,
+            },
+            IfdEntry {
+                tag_id: 0x0017,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 0,
+            },
+            IfdEntry {
+                tag_id: 0x0018,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 0,
+            },
+            IfdEntry {
+                tag_id: 0x0019,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 0,
+            },
+            IfdEntry {
+                tag_id: 0x001a,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 65536,
+            },
+            IfdEntry {
+                tag_id: 0x001d,
+                field_type: 4,
+                value_count: 1,
+                value_offset: 2800,
+            },
+            IfdEntry {
+                tag_id: 0x001f,
+                field_type: 3,
+                value_count: 2,
+                value_offset: 65536,
+            },
+            IfdEntry {
+                tag_id: 0x0020,
+                field_type: 3,
+                value_count: 2,
+                value_offset: 65536,
+            },
+            IfdEntry {
+                tag_id: 0x0021,
+                field_type: 3,
+                value_count: 2,
+                value_offset: 65536,
+            },
+            IfdEntry {
+                tag_id: 0x0022,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 65536,
+            },
+            IfdEntry {
+                tag_id: 0x0023,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 1310720,
+            },
+            IfdEntry {
+                tag_id: 0x0024,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 3014656,
+            },
+            IfdEntry {
+                tag_id: 0x0025,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 65536,
+            },
+            IfdEntry {
+                tag_id: 0x0026,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 0,
+            },
+            IfdEntry {
+                tag_id: 0x0027,
+                field_type: 7,
+                value_count: 4,
+                value_offset: 4278190074,
+            },
+            IfdEntry {
+                tag_id: 0x0028,
+                field_type: 7,
+                value_count: 4,
+                value_offset: 4278190074,
+            },
+            IfdEntry {
+                tag_id: 0x0029,
+                field_type: 4,
+                value_count: 1,
+                value_offset: 464,
+            },
+            IfdEntry {
+                tag_id: 0x002b,
+                field_type: 4,
+                value_count: 1,
+                value_offset: 40960,
+            },
+            IfdEntry {
+                tag_id: 0x002c,
+                field_type: 4,
+                value_count: 1,
+                value_offset: 0,
+            },
+            IfdEntry {
+                tag_id: 0x002d,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 671088640,
+            },
+            IfdEntry {
+                tag_id: 0x0033,
+                field_type: 1,
+                value_count: 3,
+                value_offset: 33554432,
+            },
+            IfdEntry {
+                tag_id: 0x0034,
+                field_type: 1,
+                value_count: 4,
+                value_offset: 0,
+            },
+            IfdEntry {
+                tag_id: 0x0035,
+                field_type: 3,
+                value_count: 2,
+                value_offset: 787226451,
+            },
+            IfdEntry {
+                tag_id: 0x0036,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 8388608,
+            },
+            IfdEntry {
+                tag_id: 0x0037,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 0,
+            },
+            IfdEntry {
+                tag_id: 0x003a,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 1181089792,
+            },
+            IfdEntry {
+                tag_id: 0x003c,
+                field_type: 7,
+                value_count: 4,
+                value_offset: 2097184,
+            },
+            IfdEntry {
+                tag_id: 0x003d,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 536870912,
+            },
+            IfdEntry {
+                tag_id: 0x003e,
+                field_type: 1,
+                value_count: 4,
+                value_offset: 437911552,
+            },
+            IfdEntry {
+                tag_id: 0x003f,
+                field_type: 1,
+                value_count: 2,
+                value_offset: 69599232,
+            },
+            IfdEntry {
+                tag_id: 0x0047,
+                field_type: 6,
+                value_count: 1,
+                value_offset: 452984832,
+            },
+            IfdEntry {
+                tag_id: 0x0048,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 0,
+            },
+            IfdEntry {
+                tag_id: 0x0049,
+                field_type: 3,
+                value_count: 1,
+                value_offset: 0,
+            },
+            IfdEntry {
+                tag_id: 0x0200,
+                field_type: 3,
+                value_count: 4,
+                value_offset: 1808,
+            },
+            IfdEntry {
+                tag_id: 0x0201,
+                field_type: 3,
+                value_count: 4,
+                value_offset: 1816,
+            },
+            IfdEntry {
+                tag_id: 0x0202,
+                field_type: 3,
+                value_count: 4,
+                value_offset: 1824,
+            },
+            IfdEntry {
+                tag_id: 0x0203,
+                field_type: 8,
+                value_count: 9,
+                value_offset: 1832,
+            },
+            IfdEntry {
+                tag_id: 0x0204,
+                field_type: 8,
+                value_count: 9,
+                value_offset: 1852,
+            },
+            IfdEntry {
+                tag_id: 0x0205,
+                field_type: 7,
+                value_count: 16,
+                value_offset: 1872,
+            },
+            IfdEntry {
+                tag_id: 0x0206,
+                field_type: 7,
+                value_count: 14,
+                value_offset: 1888,
+            },
+            IfdEntry {
+                tag_id: 0x0207,
+                field_type: 7,
+                value_count: 36,
+                value_offset: 1904,
+            },
+            IfdEntry {
+                tag_id: 0x0208,
+                field_type: 7,
+                value_count: 28,
+                value_offset: 1940,
+            },
+            IfdEntry {
+                tag_id: 0x0209,
+                field_type: 7,
+                value_count: 16,
+                value_offset: 1968,
+            },
+            IfdEntry {
+                tag_id: 0x020a,
+                field_type: 7,
+                value_count: 16,
+                value_offset: 1984,
+            },
+            IfdEntry {
+                tag_id: 0x020b,
+                field_type: 7,
+                value_count: 16,
+                value_offset: 2000,
+            },
+            IfdEntry {
+                tag_id: 0x020d,
+                field_type: 3,
+                value_count: 4,
+                value_offset: 2016,
+            },
+            IfdEntry {
+                tag_id: 0x020e,
+                field_type: 3,
+                value_count: 4,
+                value_offset: 2024,
+            },
+            IfdEntry {
+                tag_id: 0x020f,
+                field_type: 3,
+                value_count: 4,
+                value_offset: 2032,
+            },
+            IfdEntry {
+                tag_id: 0x0210,
+                field_type: 3,
+                value_count: 4,
+                value_offset: 2040,
+            },
+            IfdEntry {
+                tag_id: 0x0211,
+                field_type: 3,
+                value_count: 4,
+                value_offset: 2048,
+            },
+            IfdEntry {
+                tag_id: 0x0212,
+                field_type: 3,
+                value_count: 4,
+                value_offset: 2056,
+            },
+            IfdEntry {
+                tag_id: 0x0213,
+                field_type: 3,
+                value_count: 4,
+                value_offset: 2064,
+            },
+            IfdEntry {
+                tag_id: 0x0214,
+                field_type: 3,
+                value_count: 4,
+                value_offset: 2072,
+            },
+            IfdEntry {
+                tag_id: 0x0215,
+                field_type: 4,
+                value_count: 5,
+                value_offset: 2080,
+            },
+            IfdEntry {
+                tag_id: 0x0216,
+                field_type: 7,
+                value_count: 6,
+                value_offset: 2100,
+            },
+            IfdEntry {
+                tag_id: 0x03ff,
+                field_type: 3,
+                value_count: 16,
+                value_offset: 2108,
+            },
+            IfdEntry {
+                tag_id: 0x0402,
+                field_type: 1,
+                value_count: 4096,
+                value_offset: 2140,
+            },
+        ];
+        assert_eq!(entries.len(), 73);
+
+        // dir_start = 6 ("AOC\0" + "MM"), data_pos = 934 - 30 = 904 (payload
+        // start minus TIFF header, both real file offsets in istD.jpg).
+        let fix = pentax_fix_base(&entries, 6, 904);
+        assert_eq!(fix, -16);
+
+        let value_base = -904 + fix;
+        assert_eq!(1904 + value_base, 1918 - 934); // LensInfo, window-relative
+        assert_eq!(2100 + value_base, 2114 - 934); // BatteryInfo, window-relative
     }
 
     #[test]
