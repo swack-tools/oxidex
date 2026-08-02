@@ -277,7 +277,6 @@ pub fn dispatch_makernote_with_context_and_values(
         "gimp" => Some(Box::new(gimp::GimpParser)),
         "adobe indesign" | "indesign" => Some(Box::new(indesign::InDesignParser)),
         "nikon capture" | "capture nx" => Some(Box::new(nikoncapture::NikonCaptureParser)),
-        "photo mechanic" => Some(Box::new(photomechanic::PhotoMechanicParser)),
         "photoshop" | "adobe photoshop" => Some(Box::new(photoshop::PhotoshopParser)),
         "scalado" => Some(Box::new(scalado::ScaladoParser)),
 

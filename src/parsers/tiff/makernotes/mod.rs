@@ -66,6 +66,5 @@ pub mod fotostation; // FotoStation/FotoWare - asset management, workflow
 pub mod gimp; // GIMP - layers, filters, adjustments
 pub mod indesign; // Adobe InDesign - document layout, embedded images
 pub mod nikoncapture; // Nikon Capture NX-D - Picture Control, Active D-Lighting
-pub mod photomechanic; // Photo Mechanic - IPTC workflow, keywords, ratings
 pub mod photoshop; // Adobe Photoshop - layers, adjustments, filters
 pub mod scalado; // Scalado - mobile photo editor, filters
