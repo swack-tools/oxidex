@@ -195,8 +195,7 @@ fn test_error_truncated_tiff() {
     let truncated_tiff = vec![
         b'I', b'I', // Little-endian byte order
         0x2A, 0x00, // Magic number
-        0x08, 0x00, 0x00,
-        0x00, // IFD offset: 8
+        0x08, 0x00, 0x00, 0x00, // IFD offset: 8
               // Truncated: missing IFD data
     ];
 

@@ -1,5 +1,6 @@
 use oxidex::core::TagValue;
 use oxidex::exiftool_oracle;
+use oxidex::io::buffered_reader::BufferedReader;
 use oxidex::parsers::audio::mp3::parse_mp3_metadata;
 use serde_json::Value;
 use std::path::Path;
