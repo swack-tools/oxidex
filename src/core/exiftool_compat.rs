@@ -770,45 +770,13 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     }
 
     // ---------------------------------------------------------------------
-    // Rule 19b: APEX and exposure tags, which DO have a PrintConv and so must
+    // Rule 19b/19c: APEX-stored tags, which DO have a PrintConv and so must
     // be resolved before the catch-all below turns them into plain numbers.
-    //
-    // ApertureValue (Exif.pm:2327-2335) and MaxApertureValue
-    // (Exif.pm:2350-2359) are both
-    //     ValueConv => '2 ** ($val / 2)', PrintConv => 'sprintf("%.1f",$val)'
-    // -- stored as an APEX value, displayed as an F number. The stored 3.625
-    // in CanonRaw.cr3 is `3.5`, not `3.625`.
+    // Shared with the Composite layer via [`apex_value_conv`] -- the
+    // Composite table (Exif.pm:4678) reads these ValueConv'd, not raw.
     // ---------------------------------------------------------------------
-    if matches!(base_name, "ApertureValue" | "MaxApertureValue")
-        && let TagValue::Rational {
-            numerator,
-            denominator,
-        } = value
-        && *denominator != 0
-    {
-        let apex = f64::from(*numerator) / f64::from(*denominator);
-        return TagValue::String(format!("{:.1}", 2f64.powf(apex / 2.0)));
-    }
-
-    // ---------------------------------------------------------------------
-    // Rule 19c: ShutterSpeedValue (Exif.pm:2317-2326)
-    //     ValueConv => 'IsFloat($val) && abs($val)<100 ? 2**(-$val) : 0'
-    //     PrintConv => 'Image::ExifTool::Exif::PrintExposureTime($val)'
-    // ---------------------------------------------------------------------
-    if base_name == "ShutterSpeedValue"
-        && let TagValue::Rational {
-            numerator,
-            denominator,
-        } = value
-        && *denominator != 0
-    {
-        let apex = f64::from(*numerator) / f64::from(*denominator);
-        let seconds = if apex.abs() < 100.0 {
-            2f64.powf(-apex)
-        } else {
-            0.0
-        };
-        return TagValue::String(print_exposure_time(seconds));
+    if let Some(converted) = apex_value_conv(base_name, value) {
+        return converted;
     }
 
     // ---------------------------------------------------------------------
@@ -883,6 +851,52 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     // Rule 21: Default - Return original value unchanged
     // ---------------------------------------------------------------------
     value.clone()
+}
+
+/// Applies the ValueConv/PrintConv pair for the APEX-stored tags whose raw
+/// rational is not the value a reader wants.
+///
+/// ApertureValue (Exif.pm:2327-2335) and MaxApertureValue (Exif.pm:2350-2359)
+/// are both `ValueConv => '2 ** ($val / 2)', PrintConv => 'sprintf("%.1f",$val)'`
+/// -- stored as an APEX value, displayed as an F number. The stored 3.625 in
+/// CanonRaw.cr3 is `3.5`, not `3.625`.
+///
+/// ShutterSpeedValue (Exif.pm:2317-2326) is
+/// `ValueConv => 'IsFloat($val) && abs($val)<100 ? 2**(-$val) : 0'`,
+/// `PrintConv => 'Image::ExifTool::Exif::PrintExposureTime($val)'`.
+///
+/// [`format_tag_value`] uses this for the emitted `Group:Name` value; the
+/// Composite layer (`src/composite/mod.rs`) uses the same function so its
+/// `Desire`d inputs see seconds and f-stops too, matching Exif.pm:4678's
+/// `$val[2]` reading ShutterSpeedValue post-ValueConv rather than the raw
+/// APEX exponent.
+pub(crate) fn apex_value_conv(base_name: &str, value: &TagValue) -> Option<TagValue> {
+    let TagValue::Rational {
+        numerator,
+        denominator,
+    } = value
+    else {
+        return None;
+    };
+    if *denominator == 0 {
+        return None;
+    }
+    let apex = f64::from(*numerator) / f64::from(*denominator);
+
+    if matches!(base_name, "ApertureValue" | "MaxApertureValue") {
+        return Some(TagValue::String(format!("{:.1}", 2f64.powf(apex / 2.0))));
+    }
+
+    if base_name == "ShutterSpeedValue" {
+        let seconds = if apex.abs() < 100.0 {
+            2f64.powf(-apex)
+        } else {
+            0.0
+        };
+        return Some(TagValue::String(print_exposure_time(seconds)));
+    }
+
+    None
 }
 
 // =============================================================================
