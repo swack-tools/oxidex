@@ -3266,6 +3266,11 @@
 #define SAMSUNG_MODEL_ID 3
 
 /*
+ Smart Album color tag
+ */
+#define SAMSUNG_SMART_ALBUM_COLOR 32
+
+/*
  Picture Wizard settings
  */
 #define SAMSUNG_PICTURE_WIZARD 33
@@ -3281,9 +3286,9 @@
 #define SAMSUNG_LOCATION_NAME 49
 
 /*
- Preview image data
+ Preview IFD (SubDirectory in ExifTool; exposed here as a raw blob)
  */
-#define SAMSUNG_PREVIEW 53
+#define SAMSUNG_PREVIEW_IFD 53
 
 /*
  RAW data byte order
@@ -3323,277 +3328,127 @@
 /*
  Firmware name string
  */
-#define SAMSUNG_FIRMWARE_NAME 513
+#define SAMSUNG_FIRMWARE_NAME 40961
 
 /*
  Sensor areas information
  */
-#define SAMSUNG_SENSOR_AREAS 528
+#define SAMSUNG_SENSOR_AREAS 40976
 
 /*
  Color space identifier
  */
-#define SAMSUNG_COLOR_SPACE 545
+#define SAMSUNG_COLOR_SPACE 40977
 
 /*
  Smart Range setting
  */
-#define SAMSUNG_SMART_RANGE 546
+#define SAMSUNG_SMART_RANGE 40978
 
 /*
  Exposure compensation value
  */
-#define SAMSUNG_EXPOSURE_COMPENSATION 547
+#define SAMSUNG_EXPOSURE_COMPENSATION 40979
 
 /*
  ISO speed value
  */
-#define SAMSUNG_ISO 548
+#define SAMSUNG_ISO 40980
 
 /*
  Exposure time
  */
-#define SAMSUNG_EXPOSURE_TIME 549
+#define SAMSUNG_EXPOSURE_TIME 40984
 
 /*
  F-Number (aperture)
  */
-#define SAMSUNG_FNUMBER 550
+#define SAMSUNG_FNUMBER 40985
 
 /*
  Focal length in 35mm format
  */
-#define SAMSUNG_FOCAL_LENGTH_35MM 551
+#define SAMSUNG_FOCAL_LENGTH_35MM 40986
 
 /*
  Encryption key for encrypted data
  */
-#define SAMSUNG_ENCRYPTION_KEY 560
+#define SAMSUNG_ENCRYPTION_KEY 40992
 
 /*
  WB RGGB levels (uncorrected)
  */
-#define SAMSUNG_WB_RGGB_LEVELS_UNCORRECTED 562
+#define SAMSUNG_WB_RGGB_LEVELS_UNCORRECTED 40993
 
 /*
  WB RGGB levels (auto)
  */
-#define SAMSUNG_WB_RGGB_LEVELS_AUTO 563
+#define SAMSUNG_WB_RGGB_LEVELS_AUTO 40994
 
 /*
  WB RGGB levels (illuminator 1)
  */
-#define SAMSUNG_WB_RGGB_LEVELS_ILLUMINATOR1 564
+#define SAMSUNG_WB_RGGB_LEVELS_ILLUMINATOR1 40995
 
 /*
  WB RGGB levels (illuminator 2)
  */
-#define SAMSUNG_WB_RGGB_LEVELS_ILLUMINATOR2 565
+#define SAMSUNG_WB_RGGB_LEVELS_ILLUMINATOR2 40996
 
 /*
  WB RGGB levels (black)
  */
-#define SAMSUNG_WB_RGGB_LEVELS_BLACK 566
+#define SAMSUNG_WB_RGGB_LEVELS_BLACK 41000
 
 /*
  Color matrix data
  */
-#define SAMSUNG_COLOR_MATRIX 576
+#define SAMSUNG_COLOR_MATRIX 41008
 
 /*
  Color matrix for sRGB
  */
-#define SAMSUNG_COLOR_MATRIX_SRGB 577
+#define SAMSUNG_COLOR_MATRIX_SRGB 41009
 
 /*
  Color matrix for Adobe RGB
  */
-#define SAMSUNG_COLOR_MATRIX_ADOBERGB 578
+#define SAMSUNG_COLOR_MATRIX_ADOBERGB 41010
 
 /*
- Tone curve 1 data
+ Default sRGB tone curve
  */
-#define SAMSUNG_TONE_CURVE_1 579
+#define SAMSUNG_TONE_CURVE_SRGB_DEFAULT 41024
 
 /*
- Tone curve 2 data
+ Default Adobe RGB tone curve
  */
-#define SAMSUNG_TONE_CURVE_2 580
+#define SAMSUNG_TONE_CURVE_ADOBERGB_DEFAULT 41025
 
 /*
- Tone curve 3 data
+ sRGB tone curve
  */
-#define SAMSUNG_TONE_CURVE_3 581
+#define SAMSUNG_TONE_CURVE_SRGB 41026
 
 /*
- Tone curve 4 data
+ Adobe RGB tone curve
  */
-#define SAMSUNG_TONE_CURVE_4 582
+#define SAMSUNG_TONE_CURVE_ADOBERGB 41027
 
 /*
- Lens type identifier (Type1)
+ Lens type identifier
  */
-#define SAMSUNG_LENS_TYPE_T1 2561
+#define SAMSUNG_LENS_TYPE 40963
 
 /*
  Lens firmware version
  */
-#define SAMSUNG_LENS_FIRMWARE 2562
+#define SAMSUNG_LENS_FIRMWARE 40964
 
 /*
  Internal lens serial number
  */
-#define SAMSUNG_INTERNAL_LENS_SERIAL_NUMBER 2563
-
-/*
- Favorite color setting (Type2)
- */
-#define SAMSUNG_FAVORITE_COLOR 4
-
-/*
- World time location (Type2)
- */
-#define SAMSUNG_WORLD_TIME_LOCATION 5
-
-/*
- High dynamic range mode (Type2)
- */
-#define SAMSUNG_HDR 10
-
-/*
- Mobile Country Code (Type2)
- */
-#define SAMSUNG_MCC 12
-
-/*
- Mobile Network Code (Type2)
- */
-#define SAMSUNG_MNC 13
-
-/*
- Leica Camera ID (Type2 - for Leica-Samsung partnership)
- */
-#define SAMSUNG_LEICA_CAMERA_ID 17
-
-/*
- Leica Lens ID (Type2 - for Leica-Samsung partnership)
- */
-#define SAMSUNG_LEICA_LENS_ID 18
-
-/*
- Contrast level (Type2)
- */
-#define SAMSUNG_CONTRAST_LEVEL 64
-
-/*
- Sharpness level (Type2)
- */
-#define SAMSUNG_SHARPNESS_LEVEL 65
-
-/*
- Saturation level (Type2)
- */
-#define SAMSUNG_SATURATION_LEVEL 80
-
-/*
- Smart Album Color (Type2)
- */
-#define SAMSUNG_SMART_ALBUM_COLOR 96
-
-/*
- Depth map width (Type2)
- */
-#define SAMSUNG_DEPTH_MAP_WIDTH 160
-
-/*
- Depth map height (Type2)
- */
-#define SAMSUNG_DEPTH_MAP_HEIGHT 161
-
-/*
- Depth map data (Type2)
- */
-#define SAMSUNG_DEPTH_MAP 162
-
-/*
- AI Scene Optimizer enabled (Galaxy)
- */
-#define SAMSUNG_SCENE_OPTIMIZER 4097
-
-/*
- Detected scene type (Galaxy)
- */
-#define SAMSUNG_SCENE_TYPE 4098
-
-/*
- Single Take mode enabled (Galaxy)
- */
-#define SAMSUNG_SINGLE_TAKE 4101
-
-/*
- Single Take frame number (Galaxy)
- */
-#define SAMSUNG_SINGLE_TAKE_FRAME 4102
-
-/*
- Expert RAW mode enabled (Galaxy)
- */
-#define SAMSUNG_EXPERT_RAW 4104
-
-/*
- Multi-frame noise reduction enabled (Galaxy)
- */
-#define SAMSUNG_MULTI_FRAME_NR 4106
-
-/*
- Director's View multi-camera mode (Galaxy)
- */
-#define SAMSUNG_DIRECTORS_VIEW 4108
-
-/*
- Pro mode manual controls enabled (Galaxy)
- */
-#define SAMSUNG_PRO_MODE 4110
-
-/*
- Object tracking autofocus enabled (Galaxy)
- */
-#define SAMSUNG_OBJECT_TRACKING 4112
-
-/*
- Night mode processing enabled (Galaxy)
- */
-#define SAMSUNG_NIGHT_MODE 4114
-
-/*
- Night Hyperlapse mode enabled (Galaxy)
- */
-#define SAMSUNG_NIGHT_HYPERLAPSE 4116
-
-/*
- Super Steady video stabilization (Galaxy)
- */
-#define SAMSUNG_SUPER_STEADY 4118
-
-/*
- Food photography mode enabled (Galaxy)
- */
-#define SAMSUNG_FOOD_MODE 4120
-
-/*
- Portrait Live Focus effect (Galaxy)
- */
-#define SAMSUNG_PORTRAIT_EFFECT 4122
-
-/*
- Active camera lens identifier (Galaxy)
- */
-#define SAMSUNG_LENS_TYPE 4124
-
-/*
- Digital zoom magnification level (Galaxy)
- */
-#define SAMSUNG_ZOOM_LEVEL 4126
+#define SAMSUNG_INTERNAL_LENS_SERIAL_NUMBER 40965
 
 #define TIFF_BYTE 1
 
