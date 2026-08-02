@@ -38,6 +38,9 @@ use super::shared::table_ifd;
 
 // Type2 tables, ported from Image::ExifTool::Samsung::Type2.
 pub mod lookups;
+// The flat "STMN" record written by the Digimax/KENOX/NV/L/PL/WB compacts,
+// which is not an IFD at all -- see the module docs.
+pub mod stmn;
 pub mod type2;
 
 // Samsung signature for validation
@@ -112,6 +115,15 @@ impl MakerNoteParser for SamsungParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
+        // The "STMN" record is not an IFD and must be recognised before any
+        // attempt to read an entry count out of it. ExifTool dispatches it on
+        // the signature alone (MakerNotes.pm:950-964) into a flat
+        // ProcessBinaryData table.
+        if stmn::is_stmn(data) {
+            stmn::parse(data, byte_order, tags);
+            return Ok(());
+        }
+
         // Samsung's "Type2" MakerNote (ExifTool's Image::ExifTool::Samsung::Type2)
         // is a bare TIFF IFD at offset 0 whose value offsets are relative to the
         // MakerNote itself. It carries no signature, so the older code -- which
@@ -137,6 +149,15 @@ impl MakerNoteParser for SamsungParser {
     }
 
     fn validate_header(&self, data: &[u8]) -> bool {
+        // "STMN" is a literal signature, not an entry count. The bare-IFD
+        // fallback below reads bytes 0..2 as a count -- "ST" is 21332 (or
+        // 21587 byte-swapped), outside the accepted range -- so without this
+        // arm every STMN compact was rejected here and its MakerNote skipped
+        // entirely.
+        if stmn::is_stmn(data) {
+            return true;
+        }
+
         // Accept data with or without Samsung signature
         if data.len() >= 7 && &data[0..7] == SAMSUNG_SIGNATURE {
             return true;

@@ -14,14 +14,17 @@ tables:
       - id: "0xC62D"
         name: "BayerGreenSplit"
         writable: false
+        type: int32u
         description: "Bayer green split"
       - id: "0xC632"
         name: "AntiAliasStrength"
         writable: false
+        type: rational64u
         description: "Anti-alias strength"
       - id: "0xC65C"
         name: "BestQualityScale"
         writable: false
+        type: rational64u
         description: "Best quality scale"
       - id: "0xC68D"
         name: "ActiveArea"
@@ -56,6 +59,7 @@ tables:
       - id: "0x0003"
         name: "ExifImageHeight"
         writable: false
+        type: int16u
         description: "ExifImageHeight tag"
       - id: "0x0001"
         name: "ShutterSpeedValue"
@@ -112,10 +116,12 @@ tables:
       - id: "0x000A"
         name: "ExifImageWidth"
         writable: false
+        type: int16u
         description: "ExifImageWidth tag"
       - id: "0x000B"
         name: "ExifImageHeight"
         writable: false
+        type: int16u
         description: "ExifImageHeight tag"
       - id: "0x000C"
         name: "CanonImageWidth"
@@ -398,6 +404,7 @@ tables:
       - id: "0x00FF"
         name: "OldSubfileType"
         writable: false
+        type: int16u
         description: "OldSubfileType tag"
       - id: "0x0100"
         name: "ImageWidth"
@@ -422,6 +429,7 @@ tables:
       - id: "0x0107"
         name: "Thresholding"
         writable: false
+        type: int16u
         description: "Thresholding tag"
       - id: "0x0108"
         name: "CellWidth"
@@ -542,6 +550,7 @@ tables:
       - id: "0x0132"
         name: "ModifyDate"
         writable: false
+        type: datetime
         description: "ModifyDate tag"
       - id: "0x013B"
         name: "Artist"
@@ -702,6 +711,7 @@ tables:
       - id: "0x4746"
         name: "Rating"
         writable: false
+        type: int16u
         description: "Rating tag"
       - id: "0x4747"
         name: "XP_DIP_XML"
@@ -714,6 +724,7 @@ tables:
       - id: "0x4749"
         name: "RatingPercent"
         writable: false
+        type: int16u
         description: "RatingPercent tag"
       - id: "0x5001"
         name: "ResolutionXUnit"
@@ -730,6 +741,7 @@ tables:
       - id: "0x7031"
         name: "VignettingCorrection"
         writable: false
+        type: int16s
         description: "VignettingCorrection tag"
       - id: "0x7032"
         name: "VignettingCorrParams"
@@ -738,6 +750,7 @@ tables:
       - id: "0x7034"
         name: "ChromaticAberrationCorrection"
         writable: false
+        type: int16s
         description: "ChromaticAberrationCorrection tag"
       - id: "0x7035"
         name: "ChromaticAberrationCorrParams"
@@ -746,6 +759,7 @@ tables:
       - id: "0x7036"
         name: "DistortionCorrection"
         writable: false
+        type: int16s
         description: "DistortionCorrection tag"
       - id: "0x7037"
         name: "DistortionCorrParams"
@@ -914,6 +928,7 @@ tables:
       - id: "0x9004"
         name: "CreateDate"
         writable: false
+        type: datetime
         description: "CreateDate tag"
       - id: "0x9009"
         name: "GooglePlusUploadCode"
@@ -938,6 +953,7 @@ tables:
       - id: "0x9102"
         name: "CompressedBitsPerPixel"
         writable: false
+        type: rational64u
         description: "CompressedBitsPerPixel tag"
       - id: "0x9201"
         name: "ShutterSpeedValue"
@@ -954,6 +970,7 @@ tables:
       - id: "0x9204"
         name: "ExposureCompensation"
         writable: false
+        type: rational64s
         description: "ExposureCompensation tag"
       - id: "0x9205"
         name: "MaxApertureValue"
@@ -1034,6 +1051,7 @@ tables:
       - id: "0x9400"
         name: "AmbientTemperature"
         writable: false
+        type: rational64s
         description: "AmbientTemperature tag"
       - id: "0x9401"
         name: "Humidity"
@@ -1094,10 +1112,12 @@ tables:
       - id: "0xA002"
         name: "ExifImageWidth"
         writable: false
+        type: int16u
         description: "ExifImageWidth tag"
       - id: "0xA003"
         name: "ExifImageHeight"
         writable: false
+        type: int16u
         description: "ExifImageHeight tag"
       - id: "0xA004"
         name: "RelatedSoundFile"
@@ -1481,22 +1501,27 @@ tables:
       - id: "0xC62A"
         name: "BaselineExposure"
         writable: false
+        type: rational64s
         description: "BaselineExposure tag"
       - id: "0xC62B"
         name: "BaselineNoise"
         writable: false
+        type: rational64u
         description: "BaselineNoise tag"
       - id: "0xC62C"
         name: "BaselineSharpness"
         writable: false
+        type: rational64u
         description: "BaselineSharpness tag"
       - id: "0xC62D"
         name: "BayerGreenSplit"
         writable: false
+        type: int32u
         description: "BayerGreenSplit tag"
       - id: "0xC62E"
         name: "LinearResponseLimit"
         writable: false
+        type: rational64u
         description: "LinearResponseLimit tag"
       - id: "0xC62F"
         name: "CameraSerialNumber"
@@ -1509,18 +1534,22 @@ tables:
       - id: "0xC631"
         name: "ChromaBlurRadius"
         writable: false
+        type: rational64u
         description: "ChromaBlurRadius tag"
       - id: "0xC632"
         name: "AntiAliasStrength"
         writable: false
+        type: rational64u
         description: "AntiAliasStrength tag"
       - id: "0xC633"
         name: "ShadowScale"
         writable: false
+        type: rational64u
         description: "ShadowScale tag"
       - id: "0xC635"
         name: "MakerNoteSafety"
         writable: false
+        type: int16u
         description: "MakerNoteSafety tag"
       - id: "0xC640"
         name: "RawImageSegmentation"
@@ -1529,14 +1558,17 @@ tables:
       - id: "0xC65A"
         name: "CalibrationIlluminant1"
         writable: false
+        type: int16u
         description: "CalibrationIlluminant1 tag"
       - id: "0xC65B"
         name: "CalibrationIlluminant2"
         writable: false
+        type: int16u
         description: "CalibrationIlluminant2 tag"
       - id: "0xC65C"
         name: "BestQualityScale"
         writable: false
+        type: rational64u
         description: "BestQualityScale tag"
       - id: "0xC65D"
         name: "RawDataUniqueID"
@@ -1581,6 +1613,7 @@ tables:
       - id: "0xC6BF"
         name: "ColorimetricReference"
         writable: false
+        type: int16u
         description: "ColorimetricReference tag"
       - id: "0xC6C5"
         name: "SRawType"
@@ -1613,6 +1646,7 @@ tables:
       - id: "0xC6F7"
         name: "NoiseReductionApplied"
         writable: false
+        type: rational64u
         description: "NoiseReductionApplied tag"
       - id: "0xC6F8"
         name: "ProfileName"
@@ -1637,6 +1671,7 @@ tables:
       - id: "0xC6FD"
         name: "ProfileEmbedPolicy"
         writable: false
+        type: int32u
         description: "ProfileEmbedPolicy tag"
       - id: "0xC6FE"
         name: "ProfileCopyright"
@@ -1669,6 +1704,7 @@ tables:
       - id: "0xC71A"
         name: "PreviewColorSpace"
         writable: false
+        type: int32u
         description: "PreviewColorSpace tag"
       - id: "0xC71B"
         name: "PreviewDateTime"
@@ -1721,6 +1757,7 @@ tables:
       - id: "0xC764"
         name: "FrameRate"
         writable: false
+        type: rational64s
         description: "FrameRate tag"
       - id: "0xC772"
         name: "TStop"
@@ -1749,18 +1786,22 @@ tables:
       - id: "0xC7A3"
         name: "ProfileHueSatMapEncoding"
         writable: false
+        type: int32u
         description: "ProfileHueSatMapEncoding tag"
       - id: "0xC7A4"
         name: "ProfileLookTableEncoding"
         writable: false
+        type: int32u
         description: "ProfileLookTableEncoding tag"
       - id: "0xC7A5"
         name: "BaselineExposureOffset"
         writable: false
+        type: rational64s
         description: "BaselineExposureOffset tag"
       - id: "0xC7A6"
         name: "DefaultBlackRender"
         writable: false
+        type: int32u
         description: "DefaultBlackRender tag"
       - id: "0xC7A7"
         name: "NewRawImageDigest"
@@ -1769,6 +1810,7 @@ tables:
       - id: "0xC7A8"
         name: "RawToPreviewGain"
         writable: false
+        type: double
         description: "RawToPreviewGain tag"
       - id: "0xC7AA"
         name: "CacheVersion"
@@ -1793,22 +1835,27 @@ tables:
       - id: "0xC7E9"
         name: "DepthFormat"
         writable: false
+        type: int16u
         description: "DepthFormat tag"
       - id: "0xC7EA"
         name: "DepthNear"
         writable: false
+        type: rational64u
         description: "DepthNear tag"
       - id: "0xC7EB"
         name: "DepthFar"
         writable: false
+        type: rational64u
         description: "DepthFar tag"
       - id: "0xC7EC"
         name: "DepthUnits"
         writable: false
+        type: int16u
         description: "DepthUnits tag"
       - id: "0xC7ED"
         name: "DepthMeasureType"
         writable: false
+        type: int16u
         description: "DepthMeasureType tag"
       - id: "0xC7EE"
         name: "EnhanceParams"
@@ -1829,6 +1876,7 @@ tables:
       - id: "0xCD31"
         name: "CalibrationIlluminant3"
         writable: false
+        type: int16u
         description: "CalibrationIlluminant3 tag"
       - id: "0xCD32"
         name: "CameraCalibration3"
@@ -1881,6 +1929,7 @@ tables:
       - id: "0xCD43"
         name: "ColumnInterleaveFactor"
         writable: false
+        type: int32u
         description: "ColumnInterleaveFactor tag"
       - id: "0xCD44"
         name: "ImageSequenceInfo"
@@ -1901,14 +1950,17 @@ tables:
       - id: "0xCD49"
         name: "JXLDistance"
         writable: false
+        type: float
         description: "JXLDistance tag"
       - id: "0xCD4A"
         name: "JXLEffort"
         writable: false
+        type: int32u
         description: "JXLEffort tag"
       - id: "0xCD4B"
         name: "JXLDecodeSpeed"
         writable: false
+        type: int32u
         description: "JXLDecodeSpeed tag"
       - id: "0xCEA1"
         name: "SEAL"
@@ -1921,6 +1973,7 @@ tables:
       - id: "0xEA1D"
         name: "OffsetSchema"
         writable: false
+        type: int32s
         description: "OffsetSchema tag"
       - id: "0xFDE8"
         name: "OwnerName"

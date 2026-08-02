@@ -86,8 +86,7 @@ fn lookup_rank(key: &str) -> (u8, &str) {
     (rank, key)
 }
 
-/// Look up one fully-qualified key, applying the same APEX ValueConv the EXIF
-/// emitter applies before printing.
+/// Look up one fully-qualified key, applying APEX ValueConv but not PrintConv.
 ///
 /// ExifTool's Composite table (Exif.pm:4678) reads `$val[N]` post-ValueConv:
 /// for ShutterSpeedValue/ApertureValue/MaxApertureValue that means seconds and
@@ -96,6 +95,8 @@ fn lookup_rank(key: &str) -> (u8, &str) {
 /// only runs at CLI output time, after composites have already been derived.
 /// Reusing [`crate::core::exiftool_compat::apex_value_conv`] here keeps the
 /// conversion in one place rather than re-deriving `2**(-$val)` a second time.
+/// The helper returns a raw numeric value, so downstream composites retain the
+/// precision that an emitted `1/152` or `4.7` PrintConv string would discard.
 fn lookup_key(map: &MetadataMap, key: &str) -> Option<String> {
     if let Some(v) = map.value_form(key) {
         return Some(v.to_string());
@@ -543,6 +544,11 @@ mod tests {
             },
         );
         m.insert("ExifIFD:ISO", TagValue::Integer(100));
+        let shutter_value_conv =
+            lookup_key(&m, "ExifIFD:ShutterSpeedValue").expect("APEX shutter ValueConv");
+        let shutter_seconds: f64 = shutter_value_conv.parse().expect("numeric ValueConv");
+        assert!((shutter_seconds - 2f64.powf(-7.25)).abs() < f64::EPSILON);
+        assert_ne!(shutter_value_conv, "1/152");
         apply(&mut m);
         assert_eq!(m.get_string("Composite:ShutterSpeed"), Some("1/152"));
         assert_eq!(m.get_string("Composite:Aperture"), Some("4.7"));

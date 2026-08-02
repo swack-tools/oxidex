@@ -24,8 +24,11 @@ concurrency:
   group: jpeg-tag-matrix
   cancel-in-progress: true
 
-env:
-  EXIFTOOL_VERSION: '13.55'
+# No EXIFTOOL_VERSION literal here. A pin in this file is a second source
+# of truth, and when it drifted from .exiftool-version the matrix would grade
+# against one release while the transcriptions came from another -- which is
+# how sixteen correct Canon tags got reported as regressions. Resolved from
+# .exiftool-version at run time instead.
 
 jobs:
   tag-matrix:
@@ -97,10 +100,22 @@ jobs:
 
       - name: Install pinned ExifTool
         run: |
-          git clone -q --depth 1 --branch "${EXIFTOOL_VERSION}" \
+          set -euo pipefail
+          V=$(tr -d '[:space:]' < .exiftool-version)
+          case "$V" in
+            *[!0-9.]* | "" | .* | *.)
+              echo "::error::refusing non-numeric ExifTool pin '$V'"; exit 1 ;;
+          esac
+          git clone -q --depth 1 --branch "$V" \
             https://github.com/exiftool/exiftool /tmp/exiftool
+          # Archive::Zip gates every ZIP-container format; without it a .docx
+          # reports FileType: ZIP while -ver still prints the right release.
+          sudo cpanm --notest Archive::Zip 2>/dev/null || sudo cpan -T Archive::Zip
+          perl -MArchive::Zip -e 1
           echo "/tmp/exiftool" >> "$GITHUB_PATH"
-          /tmp/exiftool/exiftool -ver
+          GOT=$(/tmp/exiftool/exiftool -ver)
+          [ "$GOT" = "$V" ] || { echo "::error::installed ExifTool $GOT, expected $V"; exit 1; }
+          echo "EXIFTOOL=/tmp/exiftool/exiftool" >> "$GITHUB_ENV"
 
       - name: Build oxidex and jpeg-tag-matrix (release)
         run: |
@@ -170,7 +185,8 @@ jobs:
           git add docs/reference/jpeg-tag-support.md \
             docs/reference/jpeg-tag-matrix.md \
             docs/reference/jpeg-tag-baseline.json
-          git commit -m "docs: auto-update JPEG tag matrix (exiftool ${EXIFTOOL_VERSION})" \
+          ET_VER=$(tr -d '[:space:]' < .exiftool-version)
+          git commit -m "docs: auto-update JPEG tag matrix (exiftool ${ET_VER})" \
                      -m "Generated from commit ${SRC_SHA}"
 
           # main moves fast here (the fix fleet merges frequently), so a plain

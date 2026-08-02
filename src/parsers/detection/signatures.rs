@@ -68,6 +68,11 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     signature!(b"\x76\x2F\x31\x01", 0, FileFormat::EXR),
     signature!(b"\x42\x50\x47\xFB", 0, FileFormat::BPG),
     signature!(b"\xFF\x0A", 0, FileFormat::JXL),
+    // Lytro Light Field Picture. ExifTool.pm gives the magic as
+    // `\x89LFP\x0d\x0a\x1a\x0a`, which Lytro.pm:142 re-checks before reading the
+    // container. `filetype::tables` already names the format; this entry is what
+    // routes the file to a parser.
+    signature!(b"\x89LFP\x0d\x0a\x1a\x0a", 0, FileFormat::LFP),
     // Audio/Video formats
     signature!(b"fLaC", 0, FileFormat::FLAC),
     signature!(b"ID3", 0, FileFormat::MP3),

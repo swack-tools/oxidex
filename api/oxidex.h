@@ -3621,6 +3621,17 @@
 
 #define TIFF_IFD 13
 
+/*
+ `int64u`, format code 16 in ExifTool's `@formatName` (Exif.pm). Apple
+ stores `0x0017 LivePhotoVideoIndex` in it on newer iPhones.
+ */
+#define TIFF_LONG8 16
+
+/*
+ `int64s`, format code 17.
+ */
+#define TIFF_SLONG8 17
+
 #define AFINFO 0
 
 #define AFSTATUS15 1
