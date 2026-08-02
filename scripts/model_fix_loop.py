@@ -595,12 +595,19 @@ def compact_messages(messages, trigger_tokens=DEFAULT_COMPACTION_TRIGGER_TOKENS,
 # RATE_LIMIT_* constants below. 5xx is always retryable.
 DEFAULT_RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
 
-# The three things a 429 can mean. They are not interchangeable, and
-# handling them identically is what produced 27,662 rate-limit errors over
-# 8 days with no way to tell which kind they were.
+# What a 429 can mean. They are not interchangeable, and handling them
+# identically is what produced 27,662 rate-limit errors over 8 days with no
+# way to tell which kind they were.
 RATE_LIMIT_RPM = "rpm"                  # going too fast. Retry, with jitter.
 RATE_LIMIT_WINDOW_CAP = "window_cap"    # 5h budget spent. Cannot clear for hours.
 RATE_LIMIT_TERMINAL_CAP = "terminal_cap"  # weekly budget spent / bad key. Days, or never.
+# The gateway says "do not retry" for reasons that are not a spent budget --
+# observed live on 2026-08-02: category="internal", code="upstream_rejected",
+# retryable=false. Retrying is pointless, but so is parking the endpoint for
+# an hour: nothing about the account is exhausted. Fail this call, keep the
+# endpoint. Treating this as a cap would idle a healthy worker for an hour
+# over one upstream hiccup.
+RATE_LIMIT_NON_RETRYABLE = "non_retryable"
 
 # How long this PROCESS parks the offending endpoint after a cap. Local to
 # one worker and keyed by base_url: parking Claw Bay must not park a direct
@@ -680,54 +687,98 @@ class ModelQuotaExhausted(Exception):
 
 
 def classify_429(err):
-    """Classify an HTTPError as (kind, message) where kind is one of the
-    RATE_LIMIT_* constants and message is a short human explanation (None
-    for an ordinary rpm rejection).
+    """Classify an HTTPError as (kind, message, retry_after) where kind is
+    one of the RATE_LIMIT_* constants, message is a short human explanation
+    (None for an ordinary rpm rejection) and retry_after is the gateway's own
+    `retryAfterSeconds` from the body, or None.
 
-    Reads `theclawbayError` before deciding anything. The gateway returns a
-    standard OpenAI error shape with an extra `theclawbayError` field
-    carrying `weekly_cost_limit_reached`, `5h_cost_limit_reached` or
-    `invalid_api_key`; ignoring it is what made a multi-day billing window
-    indistinguishable from a momentary throttle.
+    Reads `theclawbayError` before deciding anything. The real envelope,
+    captured live from the gateway on 2026-08-02:
 
-    Conservative by construction, and deliberately asymmetric: it only
-    declares a cap when the provider explicitly says the condition is not
-    retryable or names a quota/limit-reached code. Anything unparseable is
-    RATE_LIMIT_RPM, because wrongly retrying a permanent condition costs
-    one park interval, while wrongly giving up on a transient one costs the
-    work.
+        {"error": "invalid request", "code": "upstream_rejected",
+         "theclawbayError": {"requestId": "...", "category": "internal",
+                             "code": "upstream_rejected",
+                             "userMessage": "...", "retryable": false,
+                             "retryAfterSeconds": null, "nextAction": "..."}}
 
-    A non-429 is never classified here -- it returns (None, None).
+    Two things that envelope settles, both of which contradict a reasonable
+    first guess:
+
+    - `retryAfterSeconds` lives in the BODY. A gateway that states how long
+      to wait there rather than in a `Retry-After` header would be ignored
+      entirely if we only parsed headers, which is precisely the "honour the
+      server's own instruction" case that beats any backoff curve.
+    - `retryable: false` is NOT synonymous with a spent budget. The gateway
+      uses it for ordinary upstream failures too. Treating every
+      non-retryable 429 as a cost cap would park a healthy endpoint for an
+      hour over one upstream hiccup, so a cap must be QUOTA-shaped --
+      `category == "quota"`, or a `*_limit_reached` / cost / quota code.
+      Everything else that says "do not retry" becomes
+      RATE_LIMIT_NON_RETRYABLE: fail the call, keep the endpoint.
+
+    Conservative by construction and deliberately asymmetric: anything
+    unparseable is RATE_LIMIT_RPM, because wrongly retrying a permanent
+    condition costs one park interval while wrongly giving up on a transient
+    one costs the work.
+
+    A non-429 is never classified here -- it returns (None, None, None).
     """
     if getattr(err, "code", None) != 429:
-        return None, None
+        return None, None, None
     try:
         # HTTPError's fp is single-read; this is the only consumer, and the
         # body is only needed for classification. Capped so a misbehaving
         # provider can't stream an unbounded "error" at us.
         body = json.loads(err.read(65536))
     except Exception:  # nosec B110 -- unparseable body => treat as retryable
-        return RATE_LIMIT_RPM, None
+        return RATE_LIMIT_RPM, None, None
     if not isinstance(body, dict):
-        return RATE_LIMIT_RPM, None
+        return RATE_LIMIT_RPM, None, None
     vendor = body.get("theclawbayError")
     vendor = vendor if isinstance(vendor, dict) else {}
     retryable = vendor.get("retryable", body.get("retryable"))
     code = str(vendor.get("code") or body.get("code") or "")
     category = str(vendor.get("category") or "")
+    retry_after = _maybe_positive_float(
+        vendor.get("retryAfterSeconds", body.get("retryAfterSeconds"))
+    )
     looks_like_quota = (
         category == "quota"
         or code.endswith("_limit_reached")
         or "cost_limit" in code
         or "quota" in code
     )
-    if not (retryable is False or looks_like_quota):
-        return RATE_LIMIT_RPM, None
+    # A rejected key is terminal in the strongest sense: every subsequent
+    # call to this endpoint fails identically until a human replaces the
+    # credential. Retrying is pointless AND parking is right, which is what
+    # separates it from the ordinary non-retryable case below.
+    looks_like_bad_key = (
+        category == "auth" or "api_key" in code or "invalid_key" in code
+    )
+    if looks_like_bad_key:
+        detail = (
+            vendor.get("userMessage")
+            or body.get("error")
+            or code
+            or "provider rejected the API key"
+        )
+        return RATE_LIMIT_TERMINAL_CAP, f"{detail} (code={code or 'unknown'})", retry_after
+    if not looks_like_quota:
+        if retryable is False:
+            detail = (
+                vendor.get("userMessage")
+                or body.get("error")
+                or code
+                or "provider reported a non-retryable 429"
+            )
+            return (RATE_LIMIT_NON_RETRYABLE,
+                    f"{detail} (code={code or 'unknown'})", retry_after)
+        return RATE_LIMIT_RPM, None, retry_after
     detail = (
         vendor.get("userMessage")
         or body.get("error")
         or code
-        or "provider reported a non-retryable 429"
+        or "provider reported a quota 429"
     )
     # A 5h window rolls over on its own within the shift; a weekly one, or
     # a rejected key, does not. Both stop the retry ladder, but they park
@@ -738,13 +789,29 @@ def classify_429(err):
         if ("5h" in lowered or "hourly" in lowered)
         else RATE_LIMIT_TERMINAL_CAP
     )
-    return kind, f"{detail} (code={code or 'unknown'})"
+    return kind, f"{detail} (code={code or 'unknown'})", retry_after
+
+
+def _maybe_positive_float(value):
+    """A usable non-negative number, or None. `retryAfterSeconds` is
+    explicitly null in the common case, so this must not turn that into 0 --
+    a zero delay and an absent delay mean different things."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds >= 0 else None
 
 
 def _quota_exhausted_message(err):
     """Back-compat shim: the message half of classify_429, or None for an
     rpm rejection."""
     return classify_429(err)[1]
+
+
+CAP_KINDS = (RATE_LIMIT_WINDOW_CAP, RATE_LIMIT_TERMINAL_CAP)
 
 
 def _retry_after_seconds(headers, now_fn=time.time):
@@ -1018,8 +1085,19 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
             continue
         except urllib.error.HTTPError as e:
             retryable_status = e.code in DEFAULT_RETRYABLE_HTTP_STATUSES
-            kind, quota_message = classify_429(e) if e.code == 429 else (None, None)
-            if kind in (RATE_LIMIT_WINDOW_CAP, RATE_LIMIT_TERMINAL_CAP):
+            kind, quota_message, body_retry_after = (
+                classify_429(e) if e.code == 429 else (None, None, None)
+            )
+            if kind == RATE_LIMIT_NON_RETRYABLE:
+                # The gateway says not to retry, but nothing is exhausted --
+                # so fail this call and leave the endpoint alone. Parking it
+                # would idle a healthy worker over one upstream hiccup.
+                if log_fn:
+                    log_fn(f"429 {kind} ({quota_message}) -- not retrying; endpoint NOT parked")
+                _emit("error", error_class=kind, started=started, attempt=attempt,
+                      detail=quota_message)
+                raise
+            if kind in CAP_KINDS:
                 # A spent cost budget. Retrying cannot make budget appear,
                 # so the ladder stops here -- this is the §2.2(c) fix. The
                 # endpoint is parked in THIS process so the worker's next
@@ -1042,12 +1120,17 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
             if not retryable_status:
                 _emit("error", error_class=f"http_{e.code}", started=started, attempt=attempt)
                 raise
-            # An rpm rejection or a 5xx. Retry locally. A 429 usually
-            # carries Retry-After; the server's own statement of how long
-            # to wait beats any curve we could guess, so it raises this
-            # worker's next delay -- and only this worker's.
-            retry_after = (_retry_after_seconds(getattr(e, "headers", None))
-                           if e.code == 429 else None)
+            # An rpm rejection or a 5xx. Retry locally. A 429 usually states
+            # how long to wait -- in a Retry-After header, or in the
+            # gateway's own `retryAfterSeconds` body field (confirmed live
+            # 2026-08-02). The server's own statement beats any curve we
+            # could guess, so whichever is present raises this worker's next
+            # delay, and only this worker's. If both are present, the longer
+            # wins: undershooting just earns another 429.
+            header_retry_after = (_retry_after_seconds(getattr(e, "headers", None))
+                                  if e.code == 429 else None)
+            candidates = [v for v in (header_retry_after, body_retry_after) if v is not None]
+            retry_after = max(candidates) if candidates else None
             _emit("error", error_class=(RATE_LIMIT_RPM if e.code == 429 else f"http_{e.code}"),
                   started=started, attempt=attempt)
             last_error = e

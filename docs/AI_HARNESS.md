@@ -197,6 +197,47 @@ Every attempt is also appended to `~/.oxidex/logs/model-calls.jsonl` with its ro
 endpoint, error class and latency — a structured superset of the `manifest.log` line, so the
 error-class breakdown below can be answered without parsing prose.
 
+### What the gateway actually returns
+
+Probed live on 2026-08-02 against `api.theclawbay.com`. Re-derive rather than trust; the
+catalogue and the routes both move.
+
+- **`GET /v1/models`** — 42 models. The reasoning-capable OpenAI tier is `gpt-5.6`,
+  `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`.
+  Cross-vendor models reachable on the **same key and the same OpenAI-compatible route**
+  include `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5`,
+  `gemini-3.1-pro-preview`, `glm-5.2`, `kimi-k2.7-code`, `deepseek-v4-pro`. Reviewer
+  independence therefore costs no integration work at all — it is a model name.
+- **There is no `/quota` endpoint.** `/quota`, `/v1/quota` and `/api/quota` all 404.
+  `GET /v1/usage` exists and returns `{aggregation_timestamp, n_context_tokens_total,
+  n_generated_tokens_total}` — token counts, **not** cost windows and not remaining
+  headroom. Any design that assumes it can poll remaining 5-hour or weekly budget before
+  dispatching needs rethinking: today the only signal that a window is spent is the 429
+  itself, after the fact.
+- **The error envelope**, captured verbatim:
+
+  ```json
+  {"error": "invalid request", "code": "upstream_rejected",
+   "theclawbayError": {"requestId": "…", "category": "internal",
+                       "code": "upstream_rejected",
+                       "userMessage": "The upstream model provider rejected this request.",
+                       "retryable": false, "retryAfterSeconds": null,
+                       "nextAction": "Review the request and retry…"}}
+  ```
+
+  Two things in it contradict a reasonable first guess, and both were bugs in the
+  classifier until this response was actually looked at:
+
+  1. **`retryAfterSeconds` is in the body**, not a `Retry-After` header. A classifier that
+     parses only headers silently ignores the server's own instruction — the one case that
+     beats every backoff curve. `call_model` now takes the larger of the two when both are
+     present, because undershooting just earns another 429.
+  2. **`retryable: false` does not mean "budget spent."** The gateway uses it for ordinary
+     upstream failures, as above. Treating every non-retryable 429 as a cost cap would park
+     a perfectly healthy endpoint for an hour over one upstream hiccup. A cap must be
+     *quota-shaped*; a rejected key is terminal on its own evidence; everything else that
+     says "do not retry" fails the call and **leaves the endpoint alone**.
+
 ---
 
 ## Why the commit being last matters

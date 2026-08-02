@@ -31,6 +31,7 @@ from model_fix_loop import (
     _normalize_model_config,
     _quota_exhausted_message,
     classify_429,
+    RATE_LIMIT_NON_RETRYABLE,
     RATE_LIMIT_RPM,
     RATE_LIMIT_TERMINAL_CAP,
     RATE_LIMIT_WINDOW_CAP,
@@ -1535,7 +1536,7 @@ class Classify429Tests(unittest.TestCase):
         )
 
     def test_weekly_cap_is_terminal(self):
-        kind, msg = classify_429(self._err(429, {
+        kind, msg, _ = classify_429(self._err(429, {
             "code": "weekly_cost_limit_reached",
             "theclawbayError": {"category": "quota", "code": "weekly_cost_limit_reached",
                                 "retryable": False},
@@ -1544,7 +1545,7 @@ class Classify429Tests(unittest.TestCase):
         self.assertIn("weekly_cost_limit_reached", msg)
 
     def test_5h_cap_is_a_window_cap_not_a_terminal_one(self):
-        kind, _ = classify_429(self._err(429, {
+        kind, _, _ = classify_429(self._err(429, {
             "code": "5h_cost_limit_reached",
             "theclawbayError": {"category": "quota", "code": "5h_cost_limit_reached",
                                 "retryable": False},
@@ -1552,14 +1553,14 @@ class Classify429Tests(unittest.TestCase):
         self.assertEqual(kind, RATE_LIMIT_WINDOW_CAP)
 
     def test_invalid_api_key_is_terminal(self):
-        kind, _ = classify_429(self._err(429, {
+        kind, _, _ = classify_429(self._err(429, {
             "code": "invalid_api_key",
             "theclawbayError": {"code": "invalid_api_key", "retryable": False},
         }))
         self.assertEqual(kind, RATE_LIMIT_TERMINAL_CAP)
 
     def test_plain_rpm_rejection_is_rpm(self):
-        kind, msg = classify_429(self._err(429, {
+        kind, msg, _ = classify_429(self._err(429, {
             "error": {"message": "Rate limit reached for gpt-5.5", "type": "rate_limit_error"},
         }))
         self.assertEqual(kind, RATE_LIMIT_RPM)
@@ -1576,9 +1577,51 @@ class Classify429Tests(unittest.TestCase):
     def test_a_non_list_non_dict_body_is_rpm(self):
         self.assertEqual(classify_429(self._err(429, ["nope"]))[0], RATE_LIMIT_RPM)
 
+    # The real envelope, captured from the live gateway on 2026-08-02. Two
+    # things in it contradict a reasonable first guess, and both were bugs
+    # until this response was actually looked at.
+    LIVE_NON_QUOTA_BODY = {
+        "error": "invalid request",
+        "code": "upstream_rejected",
+        "theclawbayError": {
+            "requestId": "7b75cd73-6e1c-4265-98db-1f40bf75ca70",
+            "category": "internal",
+            "code": "upstream_rejected",
+            "userMessage": "The upstream model provider rejected this request.",
+            "retryable": False,
+            "retryAfterSeconds": None,
+            "nextAction": "Review the request and retry.",
+        },
+    }
+
+    def test_not_retryable_is_not_the_same_as_a_spent_budget(self):
+        # retryable=false is used for ordinary upstream failures too.
+        # Calling this a cap would park a healthy endpoint for an hour.
+        kind, msg, _ = classify_429(self._err(429, self.LIVE_NON_QUOTA_BODY))
+        self.assertEqual(kind, RATE_LIMIT_NON_RETRYABLE)
+        self.assertNotIn(kind, (RATE_LIMIT_WINDOW_CAP, RATE_LIMIT_TERMINAL_CAP))
+        self.assertIn("upstream_rejected", msg)
+
+    def test_retry_after_seconds_is_read_from_the_body(self):
+        # The gateway states the wait in the BODY, not a Retry-After header.
+        # Parsing only headers ignores the server's own instruction.
+        body = dict(self.LIVE_NON_QUOTA_BODY)
+        body["theclawbayError"] = {**body["theclawbayError"],
+                                   "retryable": True, "category": "rate",
+                                   "code": "rate_limited", "retryAfterSeconds": 42}
+        kind, _, retry_after = classify_429(self._err(429, body))
+        self.assertEqual(kind, RATE_LIMIT_RPM)
+        self.assertEqual(retry_after, 42.0)
+
+    def test_a_null_retry_after_is_absent_not_zero(self):
+        # "wait zero seconds" and "no instruction given" are different, and
+        # collapsing them would erase the backoff on every such response.
+        _, _, retry_after = classify_429(self._err(429, self.LIVE_NON_QUOTA_BODY))
+        self.assertIsNone(retry_after)
+
     def test_a_non_429_is_not_classified_here(self):
         self.assertEqual(classify_429(self._err(500, {"code": "weekly_cost_limit_reached"})),
-                         (None, None))
+                         (None, None, None))
 
 
 class ModelCallEventTests(unittest.TestCase):
