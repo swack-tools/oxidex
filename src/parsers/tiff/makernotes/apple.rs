@@ -122,131 +122,68 @@ const BPLIST_MAGIC: &[u8] = b"bplist";
 // Decoders for Apple MakerNote tag values. These convert numeric values to
 // human-readable strings based on ExifTool's Apple.pm definitions.
 
-// Decodes Apple HDR image type
-// Values observed from various iPhone models
+// Decodes Apple HDR image type (Apple.pm 0x000a HDRImageType).
+//
+// ExifTool 13.59 declares exactly two values here:
+//     3 => 'HDR Image'
+//     4 => 'Original Image'
+// (its `2` is commented out as unidentified, seen on iPad mini 2).
+//
+// This table previously carried nine invented entries -- 0 "Off", 1 "HDR",
+// 2 "HDR (Original)", 3 "Auto HDR", 4 "Smart HDR", 5-8 "Smart HDR 2".."5" --
+// so a real iPhone file printed "Auto HDR" where ExifTool prints "HDR Image",
+// and "Smart HDR" where ExifTool prints "Original Image". Wrong values under a
+// real tag name do not crash and nothing downstream can tell, which is why
+// AGENTS.md requires omitting rather than approximating. Unmapped values fall
+// through to "Unknown (N)", matching ExifTool.
 const_decoder! {
     pub DECODE_HDR_TYPE, i16, [
-        (0, "Off"),
-        (1, "HDR"),
-        (2, "HDR (Original)"),
-        (3, "Auto HDR"),
-        (4, "Smart HDR"),
-        (5, "Smart HDR 2"),
-        (6, "Smart HDR 3"),
-        (7, "Smart HDR 4"),
-        (8, "Smart HDR 5"),
+        (3, "HDR Image"),
+        (4, "Original Image"),
     ]
 }
 
-// Decodes Portrait Mode effect type (Depth Effect)
-const_decoder! {
-    pub DECODE_PORTRAIT_MODE, i16, [
-        (0, "Off"),
-        (1, "Natural Light"),
-        (2, "Studio Light"),
-        (3, "Contour Light"),
-        (4, "Stage Light"),
-        (5, "Stage Light Mono"),
-        (6, "High-Key Light Mono"),
-    ]
-}
-
-// Decodes scene detection type from AI analysis
-const_decoder! {
-    pub DECODE_SCENE_TYPE, i16, [
-        (0, "None"),
-        (1, "Sunset/Sunrise"),
-        (2, "Blue Sky"),
-        (3, "Snow"),
-        (4, "Foliage"),
-        (5, "Beach"),
-        (6, "Night"),
-        (7, "Fireworks"),
-        (8, "Food"),
-        (9, "Pet"),
-        (10, "Document"),
-        (11, "QR Code"),
-        (12, "Portrait"),
-    ]
-}
-
-// Decodes semantic style (Photographic Style - iOS 15+)
-const_decoder! {
-    pub DECODE_SEMANTIC_STYLE, i16, [
-        (0, "Standard"),
-        (1, "Rich Contrast"),
-        (2, "Vibrant"),
-        (3, "Warm"),
-        (4, "Cool"),
-    ]
-}
-
-// Decodes lens model for multi-camera iPhones
-const_decoder! {
-    pub DECODE_LENS_MODEL, i16, [
-        (0, "Wide (Main Camera)"),
-        (1, "Telephoto"),
-        (2, "Ultra Wide"),
-        (3, "Front Camera"),
-        (4, "Telephoto 2x"),
-        (5, "Telephoto 3x"),
-        (6, "Telephoto 5x"),
-    ]
-}
-
-// Decodes camera type identifier
+// Decodes camera type identifier (Apple.pm 0x002e CameraType).
+//
+// ExifTool 13.59 declares exactly three values:
+//     0 => 'Back Wide Angle'
+//     1 => 'Back Normal'
+//     6 => 'Front'
+//
+// This table previously omitted 0 entirely and invented 2 "Back Wide",
+// 3 "Back Ultra Wide", 4 "Back Telephoto", 5 "Back Telephoto 2x", and
+// 7 "Front TrueDepth" -- none of which appear in Apple.pm. Unmapped values
+// fall through to "Unknown (N)", matching ExifTool.
 const_decoder! {
     pub DECODE_CAMERA_TYPE, i16, [
+        (0, "Back Wide Angle"),
         (1, "Back Normal"),
-        (2, "Back Wide"),
-        (3, "Back Ultra Wide"),
-        (4, "Back Telephoto"),
-        (5, "Back Telephoto 2x"),
         (6, "Front"),
-        (7, "Front TrueDepth"),
     ]
 }
 
-// Decodes OIS (Optical Image Stabilization) mode
-const_decoder! {
-    pub DECODE_OIS_MODE, i16, [
-        (0, "Off"),
-        (1, "On"),
-        (2, "Cinematic Mode"),
-        (3, "Action Mode"),
-    ]
-}
-
-// Decodes image capture type
+// Decodes image capture type (Apple.pm 0x0014 ImageCaptureType).
+//
+// ExifTool 13.59 declares:
+//     1 => 'ProRAW'
+//     2 => 'Portrait'
+//     10 => 'Photo'
+//     11 => 'Manual Focus'
+//     12 => 'Scene'
+//
+// This table previously disagreed on every shared key -- 0 was decoded as
+// "Photo" instead of being unmapped, 1 as "Portrait" instead of "ProRAW", 2
+// as "Panorama" instead of "Portrait", and 10 (common on modern iPhones) as
+// "Screenshot" instead of "Photo" -- plus it invented 3 "Live Photo", 4
+// "Night Mode", 5 "ProRAW", and 6 "Cinematic", and omitted 11/12 entirely.
+// Unmapped values fall through to "Unknown (N)", matching ExifTool.
 const_decoder! {
     pub DECODE_IMAGE_CAPTURE_TYPE, i16, [
-        (0, "Photo"),
-        (1, "Portrait"),
-        (2, "Panorama"),
-        (3, "Live Photo"),
-        (4, "Night Mode"),
-        (5, "ProRAW"),
-        (6, "Cinematic"),
-        (10, "Screenshot"),
-    ]
-}
-
-// Decodes green ghost mitigation status
-const_decoder! {
-    pub DECODE_GREEN_GHOST_MITIGATION, i16, [
-        (0, "Off"),
-        (1, "Applied"),
-        (2, "Detected"),
-    ]
-}
-
-// Decodes signal-to-noise ratio measurement type
-const_decoder! {
-    pub DECODE_SNR_TYPE, i16, [
-        (0, "None"),
-        (1, "Luminance"),
-        (2, "Chrominance"),
-        (3, "Combined"),
+        (1, "ProRAW"),
+        (2, "Portrait"),
+        (10, "Photo"),
+        (11, "Manual Focus"),
+        (12, "Scene"),
     ]
 }
 
@@ -377,11 +314,12 @@ impl AppleParser {
                 }
             }
 
-            // OIS Mode
+            // OIS Mode: Apple.pm 0x000f declares no PrintConv (comment: "seen: 2,3,5"),
+            // so ExifTool prints the raw integer. This table previously invented
+            // 0 "Off", 1 "On", 2 "Cinematic Mode", 3 "Action Mode".
             APPLE_OIS_MODE => {
                 if let Some(value) = extract_i16_value(entry, data, byte_order) {
-                    let decoded = DECODE_OIS_MODE.decode(value);
-                    tags.insert("Apple:OISMode".to_string(), decoded.to_string());
+                    tags.insert("Apple:OISMode".to_string(), value.to_string());
                 }
             }
 
@@ -401,35 +339,29 @@ impl AppleParser {
                 }
             }
 
-            // Semantic style (Photographic Styles)
+            // Semantic style (Photographic Styles): Apple.pm 0x0040 has no simple
+            // int PrintConv at all -- ExifTool decodes it via ConvertPLIST (a
+            // binary plist keyed by "_1"/"_2"/"_3", not an integer enum). This
+            // table previously invented 0 "Standard", 1 "Rich Contrast",
+            // 2 "Vibrant", 3 "Warm", 4 "Cool" with no basis in Apple.pm, so print
+            // the raw extracted value instead of a fabricated label.
             APPLE_SEMANTIC_STYLE => {
                 if let Some(value) = extract_i16_value(entry, data, byte_order) {
-                    let decoded = DECODE_SEMANTIC_STYLE.decode(value);
-                    tags.insert("Apple:SemanticStyle".to_string(), decoded.to_string());
+                    tags.insert("Apple:SemanticStyle".to_string(), value.to_string());
                 }
             }
 
-            // Green ghost mitigation
-            APPLE_GREEN_GHOST_MITIGATION_STATUS => {
-                if let Some(value) = extract_i16_value(entry, data, byte_order) {
-                    let decoded = DECODE_GREEN_GHOST_MITIGATION.decode(value);
-                    tags.insert(
-                        "Apple:GreenGhostMitigationStatus".to_string(),
-                        decoded.to_string(),
-                    );
-                }
-            }
+            // Green ghost mitigation: Apple.pm 0x003F is `Unknown => 1`, so
+            // ExifTool omits it unless run with -u. Mirror that by not emitting
+            // the tag. This table also previously invented 0 "Off", 1 "Applied",
+            // 2 "Detected" -- Apple.pm declares no PrintConv here at all.
+            APPLE_GREEN_GHOST_MITIGATION_STATUS => {}
 
-            // SNR type
-            APPLE_SIGNAL_TO_NOISE_RATIO_TYPE => {
-                if let Some(value) = extract_i16_value(entry, data, byte_order) {
-                    let decoded = DECODE_SNR_TYPE.decode(value);
-                    tags.insert(
-                        "Apple:SignalToNoiseRatioType".to_string(),
-                        decoded.to_string(),
-                    );
-                }
-            }
+            // SNR type: Apple.pm 0x0026 is `Unknown => 1`, so ExifTool omits it
+            // unless run with -u. Mirror that by not emitting the tag. This table
+            // also previously invented 0 "None", 1 "Luminance", 2 "Chrominance",
+            // 3 "Combined" -- Apple.pm declares no PrintConv here at all.
+            APPLE_SIGNAL_TO_NOISE_RATIO_TYPE => {}
 
             // ================================================================
             // INTEGER TAGS (raw values)
@@ -811,59 +743,36 @@ mod tests {
 
     #[test]
     fn test_decode_hdr_type() {
-        assert_eq!(DECODE_HDR_TYPE.decode(0), "Off");
-        assert_eq!(DECODE_HDR_TYPE.decode(1), "HDR");
-        assert_eq!(DECODE_HDR_TYPE.decode(4), "Smart HDR");
-        assert_eq!(DECODE_HDR_TYPE.decode(8), "Smart HDR 5");
-    }
-
-    #[test]
-    fn test_decode_portrait_mode() {
-        assert_eq!(DECODE_PORTRAIT_MODE.decode(0), "Off");
-        assert_eq!(DECODE_PORTRAIT_MODE.decode(1), "Natural Light");
-        assert_eq!(DECODE_PORTRAIT_MODE.decode(4), "Stage Light");
-    }
-
-    #[test]
-    fn test_decode_scene_type() {
-        assert_eq!(DECODE_SCENE_TYPE.decode(0), "None");
-        assert_eq!(DECODE_SCENE_TYPE.decode(6), "Night");
-        assert_eq!(DECODE_SCENE_TYPE.decode(8), "Food");
-        assert_eq!(DECODE_SCENE_TYPE.decode(11), "QR Code");
-    }
-
-    #[test]
-    fn test_decode_semantic_style() {
-        assert_eq!(DECODE_SEMANTIC_STYLE.decode(0), "Standard");
-        assert_eq!(DECODE_SEMANTIC_STYLE.decode(2), "Vibrant");
-    }
-
-    #[test]
-    fn test_decode_lens_model() {
-        assert_eq!(DECODE_LENS_MODEL.decode(0), "Wide (Main Camera)");
-        assert_eq!(DECODE_LENS_MODEL.decode(1), "Telephoto");
-        assert_eq!(DECODE_LENS_MODEL.decode(2), "Ultra Wide");
-        assert_eq!(DECODE_LENS_MODEL.decode(6), "Telephoto 5x");
+        // ExifTool 13.59 Apple.pm 0x000a: the PrintConv has exactly these two.
+        assert_eq!(DECODE_HDR_TYPE.decode(3), "HDR Image");
+        assert_eq!(DECODE_HDR_TYPE.decode(4), "Original Image");
+        // Everything else is unmapped in ExifTool and must not be invented.
+        assert_eq!(DECODE_HDR_TYPE.decode(0), "Unknown (0)");
+        assert_eq!(DECODE_HDR_TYPE.decode(8), "Unknown (8)");
     }
 
     #[test]
     fn test_decode_camera_type() {
+        // ExifTool 13.59 Apple.pm 0x002e: the PrintConv has exactly these three.
+        assert_eq!(DECODE_CAMERA_TYPE.decode(0), "Back Wide Angle");
         assert_eq!(DECODE_CAMERA_TYPE.decode(1), "Back Normal");
         assert_eq!(DECODE_CAMERA_TYPE.decode(6), "Front");
-    }
-
-    #[test]
-    fn test_decode_ois_mode() {
-        assert_eq!(DECODE_OIS_MODE.decode(0), "Off");
-        assert_eq!(DECODE_OIS_MODE.decode(1), "On");
-        assert_eq!(DECODE_OIS_MODE.decode(3), "Action Mode");
+        // Everything else is unmapped in ExifTool and must not be invented.
+        assert_eq!(DECODE_CAMERA_TYPE.decode(2), "Unknown (2)");
+        assert_eq!(DECODE_CAMERA_TYPE.decode(7), "Unknown (7)");
     }
 
     #[test]
     fn test_decode_image_capture_type() {
-        assert_eq!(DECODE_IMAGE_CAPTURE_TYPE.decode(0), "Photo");
-        assert_eq!(DECODE_IMAGE_CAPTURE_TYPE.decode(1), "Portrait");
-        assert_eq!(DECODE_IMAGE_CAPTURE_TYPE.decode(4), "Night Mode");
+        // ExifTool 13.59 Apple.pm 0x0014: the PrintConv has exactly these five.
+        assert_eq!(DECODE_IMAGE_CAPTURE_TYPE.decode(1), "ProRAW");
+        assert_eq!(DECODE_IMAGE_CAPTURE_TYPE.decode(2), "Portrait");
+        assert_eq!(DECODE_IMAGE_CAPTURE_TYPE.decode(10), "Photo");
+        assert_eq!(DECODE_IMAGE_CAPTURE_TYPE.decode(11), "Manual Focus");
+        assert_eq!(DECODE_IMAGE_CAPTURE_TYPE.decode(12), "Scene");
+        // Everything else is unmapped in ExifTool and must not be invented.
+        assert_eq!(DECODE_IMAGE_CAPTURE_TYPE.decode(0), "Unknown (0)");
+        assert_eq!(DECODE_IMAGE_CAPTURE_TYPE.decode(3), "Unknown (3)");
     }
 
     #[test]
@@ -910,7 +819,7 @@ mod tests {
         // Create minimal IFD with one entry
         data.extend_from_slice(&[0x01, 0x00]); // 1 entry
 
-        // HDR tag entry (tag=0x000A, type=3 (SHORT), count=1, value=4 (Smart HDR))
+        // HDR tag entry (tag=0x000A, type=3 (SHORT), count=1, value=4)
         data.extend_from_slice(&[0x0A, 0x00]); // Tag
         data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
         data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
@@ -920,10 +829,84 @@ mod tests {
         let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
 
         assert!(result.is_ok());
+        // ExifTool 13.59 Apple.pm 0x000a: 4 => 'Original Image'.
         assert_eq!(
             tags.get("Apple:HDRImageType"),
-            Some(&"Smart HDR".to_string())
+            Some(&"Original Image".to_string())
         );
+    }
+
+    /// Builds a minimal single-entry Apple IFD (SHORT type, inline value).
+    fn single_short_entry_ifd(tag: u16, value: i16) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&tag.to_le_bytes());
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&(value as u16).to_le_bytes());
+        data.extend_from_slice(&[0x00, 0x00]); // pad inline value to 4 bytes
+        data
+    }
+
+    #[test]
+    fn test_parse_ois_mode_prints_raw_value() {
+        // Apple.pm 0x000f has no PrintConv, so ExifTool prints the raw integer.
+        let parser = AppleParser::new();
+        let data = single_short_entry_ifd(APPLE_OIS_MODE, 3);
+
+        let mut tags = HashMap::new();
+        assert!(
+            parser
+                .parse(&data, ByteOrder::LittleEndian, &mut tags)
+                .is_ok()
+        );
+        assert_eq!(tags.get("Apple:OISMode"), Some(&"3".to_string()));
+    }
+
+    #[test]
+    fn test_parse_semantic_style_prints_raw_value() {
+        // Apple.pm 0x0040 has no int PrintConv (ValueConv is ConvertPLIST), so
+        // no fabricated label should be printed.
+        let parser = AppleParser::new();
+        let data = single_short_entry_ifd(APPLE_SEMANTIC_STYLE, 2);
+
+        let mut tags = HashMap::new();
+        assert!(
+            parser
+                .parse(&data, ByteOrder::LittleEndian, &mut tags)
+                .is_ok()
+        );
+        assert_eq!(tags.get("Apple:SemanticStyle"), Some(&"2".to_string()));
+    }
+
+    #[test]
+    fn test_parse_green_ghost_mitigation_is_suppressed() {
+        // Apple.pm 0x003F is `Unknown => 1`; ExifTool omits it without -u.
+        let parser = AppleParser::new();
+        let data = single_short_entry_ifd(APPLE_GREEN_GHOST_MITIGATION_STATUS, 1);
+
+        let mut tags = HashMap::new();
+        assert!(
+            parser
+                .parse(&data, ByteOrder::LittleEndian, &mut tags)
+                .is_ok()
+        );
+        assert_eq!(tags.get("Apple:GreenGhostMitigationStatus"), None);
+    }
+
+    #[test]
+    fn test_parse_signal_to_noise_ratio_type_is_suppressed() {
+        // Apple.pm 0x0026 is `Unknown => 1`; ExifTool omits it without -u.
+        let parser = AppleParser::new();
+        let data = single_short_entry_ifd(APPLE_SIGNAL_TO_NOISE_RATIO_TYPE, 1);
+
+        let mut tags = HashMap::new();
+        assert!(
+            parser
+                .parse(&data, ByteOrder::LittleEndian, &mut tags)
+                .is_ok()
+        );
+        assert_eq!(tags.get("Apple:SignalToNoiseRatioType"), None);
     }
 
     #[test]

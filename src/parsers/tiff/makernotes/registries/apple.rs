@@ -18,10 +18,7 @@ use super::super::shared::tag_registry::TagRegistry;
 
 // Re-export existing decoders from apple.rs to avoid duplication
 // These decoders are already defined using const_decoder! macro
-use super::super::apple::{
-    DECODE_CAMERA_TYPE, DECODE_GREEN_GHOST_MITIGATION, DECODE_HDR_TYPE, DECODE_IMAGE_CAPTURE_TYPE,
-    DECODE_OIS_MODE, DECODE_SEMANTIC_STYLE, DECODE_SNR_TYPE,
-};
+use super::super::apple::{DECODE_CAMERA_TYPE, DECODE_HDR_TYPE, DECODE_IMAGE_CAPTURE_TYPE};
 
 // ============================================================================
 // APPLE MAKERNOTE TAG IDS
@@ -123,7 +120,7 @@ pub fn apple_registry() -> TagRegistry {
         .register_simple_i16(APPLE_HDR_IMAGE_TYPE, "HDRImageType", &DECODE_HDR_TYPE)
         .register_raw(APPLE_BURST_UUID, "BurstUUID")
         .register_raw(APPLE_FOCUS_DISTANCE_RANGE, "FocusDistanceRange")
-        .register_simple_i16(APPLE_OIS_MODE, "OISMode", &DECODE_OIS_MODE)
+        .register_raw(APPLE_OIS_MODE, "OISMode")
         // ================================================================
         // Content and image identification
         // ================================================================
@@ -155,11 +152,7 @@ pub fn apple_registry() -> TagRegistry {
         // Scene analysis
         // ================================================================
         .register_raw(APPLE_SCENE_FLAGS, "SceneFlags")
-        .register_simple_i16(
-            APPLE_SIGNAL_TO_NOISE_RATIO_TYPE,
-            "SignalToNoiseRatioType",
-            &DECODE_SNR_TYPE,
-        )
+        .register_raw(APPLE_SIGNAL_TO_NOISE_RATIO_TYPE, "SignalToNoiseRatioType")
         .register_raw(APPLE_SIGNAL_TO_NOISE_RATIO, "SignalToNoiseRatio")
         // ================================================================
         // Photo identifiers and camera info
@@ -179,19 +172,14 @@ pub fn apple_registry() -> TagRegistry {
         .register_raw(APPLE_AF_MEASURED_DEPTH, "AFMeasuredDepth")
         .register_raw(APPLE_AF_CONFIDENCE, "AFConfidence")
         .register_raw(APPLE_COLOR_CORRECTION_MATRIX, "ColorCorrectionMatrix")
-        .register_simple_i16(
+        .register_raw(
             APPLE_GREEN_GHOST_MITIGATION_STATUS,
             "GreenGhostMitigationStatus",
-            &DECODE_GREEN_GHOST_MITIGATION,
         )
         // ================================================================
         // Semantic Style tags (Photographic Styles)
         // ================================================================
-        .register_simple_i16(
-            APPLE_SEMANTIC_STYLE,
-            "SemanticStyle",
-            &DECODE_SEMANTIC_STYLE,
-        )
+        .register_raw(APPLE_SEMANTIC_STYLE, "SemanticStyle")
         .register_raw(
             APPLE_SEMANTIC_STYLE_RENDERING_VER,
             "SemanticStyleRenderingVer",
@@ -260,68 +248,80 @@ mod tests {
 
     #[test]
     fn test_hdr_type_decoding() {
+        // ExifTool 13.59 Apple.pm 0x000a: only 3/4 are mapped.
         let registry = apple_registry();
-        assert_eq!(registry.decode_i16(APPLE_HDR_IMAGE_TYPE, 0), "Off");
-        assert_eq!(registry.decode_i16(APPLE_HDR_IMAGE_TYPE, 4), "Smart HDR");
-        assert_eq!(registry.decode_i16(APPLE_HDR_IMAGE_TYPE, 8), "Smart HDR 5");
+        assert_eq!(registry.decode_i16(APPLE_HDR_IMAGE_TYPE, 3), "HDR Image");
+        assert_eq!(
+            registry.decode_i16(APPLE_HDR_IMAGE_TYPE, 4),
+            "Original Image"
+        );
+        assert_eq!(registry.decode_i16(APPLE_HDR_IMAGE_TYPE, 0), "Unknown (0)");
     }
 
     #[test]
     fn test_camera_type_decoding() {
+        // ExifTool 13.59 Apple.pm 0x002e: only 0/1/6 are mapped.
         let registry = apple_registry();
+        assert_eq!(registry.decode_i16(APPLE_CAMERA_TYPE, 0), "Back Wide Angle");
         assert_eq!(registry.decode_i16(APPLE_CAMERA_TYPE, 1), "Back Normal");
         assert_eq!(registry.decode_i16(APPLE_CAMERA_TYPE, 6), "Front");
+        assert_eq!(registry.decode_i16(APPLE_CAMERA_TYPE, 2), "Unknown (2)");
     }
 
     #[test]
-    fn test_ois_mode_decoding() {
+    fn test_ois_mode_decoding_is_raw() {
+        // Apple.pm 0x000f has no PrintConv; the registry has no decoder for it,
+        // so decode_i16 falls through to the raw value.
         let registry = apple_registry();
-        assert_eq!(registry.decode_i16(APPLE_OIS_MODE, 0), "Off");
-        assert_eq!(registry.decode_i16(APPLE_OIS_MODE, 1), "On");
-        assert_eq!(registry.decode_i16(APPLE_OIS_MODE, 3), "Action Mode");
+        assert_eq!(registry.decode_i16(APPLE_OIS_MODE, 3), "3");
     }
 
     #[test]
     fn test_image_capture_type_decoding() {
+        // ExifTool 13.59 Apple.pm 0x0014: only 1/2/10/11/12 are mapped.
         let registry = apple_registry();
-        assert_eq!(registry.decode_i16(APPLE_IMAGE_CAPTURE_TYPE, 0), "Photo");
-        assert_eq!(registry.decode_i16(APPLE_IMAGE_CAPTURE_TYPE, 1), "Portrait");
+        assert_eq!(registry.decode_i16(APPLE_IMAGE_CAPTURE_TYPE, 1), "ProRAW");
+        assert_eq!(registry.decode_i16(APPLE_IMAGE_CAPTURE_TYPE, 2), "Portrait");
+        assert_eq!(registry.decode_i16(APPLE_IMAGE_CAPTURE_TYPE, 10), "Photo");
         assert_eq!(
-            registry.decode_i16(APPLE_IMAGE_CAPTURE_TYPE, 4),
-            "Night Mode"
+            registry.decode_i16(APPLE_IMAGE_CAPTURE_TYPE, 11),
+            "Manual Focus"
+        );
+        assert_eq!(registry.decode_i16(APPLE_IMAGE_CAPTURE_TYPE, 12), "Scene");
+        assert_eq!(
+            registry.decode_i16(APPLE_IMAGE_CAPTURE_TYPE, 0),
+            "Unknown (0)"
         );
     }
 
     #[test]
-    fn test_semantic_style_decoding() {
+    fn test_semantic_style_decoding_is_raw() {
+        // Apple.pm 0x0040 has no int PrintConv (ValueConv is ConvertPLIST); the
+        // registry has no decoder for it, so decode_i16 falls through to the
+        // raw value instead of a fabricated label.
         let registry = apple_registry();
-        assert_eq!(registry.decode_i16(APPLE_SEMANTIC_STYLE, 0), "Standard");
-        assert_eq!(registry.decode_i16(APPLE_SEMANTIC_STYLE, 2), "Vibrant");
+        assert_eq!(registry.decode_i16(APPLE_SEMANTIC_STYLE, 2), "2");
     }
 
     #[test]
-    fn test_snr_type_decoding() {
+    fn test_snr_type_decoding_is_raw() {
+        // Apple.pm 0x0026 is `Unknown => 1` and has no PrintConv; the registry
+        // has no decoder for it, so decode_i16 falls through to the raw value.
         let registry = apple_registry();
-        assert_eq!(
-            registry.decode_i16(APPLE_SIGNAL_TO_NOISE_RATIO_TYPE, 0),
-            "None"
-        );
         assert_eq!(
             registry.decode_i16(APPLE_SIGNAL_TO_NOISE_RATIO_TYPE, 1),
-            "Luminance"
+            "1"
         );
     }
 
     #[test]
-    fn test_green_ghost_mitigation_decoding() {
+    fn test_green_ghost_mitigation_decoding_is_raw() {
+        // Apple.pm 0x003F is `Unknown => 1` and has no PrintConv; the registry
+        // has no decoder for it, so decode_i16 falls through to the raw value.
         let registry = apple_registry();
         assert_eq!(
-            registry.decode_i16(APPLE_GREEN_GHOST_MITIGATION_STATUS, 0),
-            "Off"
-        );
-        assert_eq!(
             registry.decode_i16(APPLE_GREEN_GHOST_MITIGATION_STATUS, 1),
-            "Applied"
+            "1"
         );
     }
 
