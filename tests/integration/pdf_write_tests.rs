@@ -77,8 +77,8 @@ fn test_write_and_read_modified_title() {
     metadata.insert("PDF:Producer", TagValue::new_string("Test Producer"));
 
     // Write to temp file
-    let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join("test_write_title.pdf");
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let temp_path = temp_dir.path().join("test_write_title.pdf");
     let result = write_pdf_file(&temp_path, &original_reader, &metadata);
 
     assert!(result.is_ok(), "Failed to write PDF: {:?}", result.err());
@@ -86,9 +86,6 @@ fn test_write_and_read_modified_title() {
     // Read back and verify
     let reader = BufferedReader::new(&temp_path).expect("Failed to open written PDF");
     let parsed = parse_pdf_metadata(&reader);
-
-    // Clean up
-    let _ = std::fs::remove_file(&temp_path);
 
     assert!(
         parsed.is_ok(),
@@ -126,8 +123,8 @@ fn test_write_multiple_field_modifications() {
     metadata.insert("PDF:Creator", TagValue::new_string("Modified Creator"));
     metadata.insert("PDF:Producer", TagValue::new_string("Modified Producer"));
 
-    let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join("test_write_multiple.pdf");
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let temp_path = temp_dir.path().join("test_write_multiple.pdf");
     let result = write_pdf_file(&temp_path, &original_reader, &metadata);
 
     assert!(result.is_ok());
@@ -135,8 +132,6 @@ fn test_write_multiple_field_modifications() {
     // Read back and verify all changes
     let reader = BufferedReader::new(&temp_path).expect("Failed to open written PDF");
     let parsed = parse_pdf_metadata(&reader).expect("Failed to parse written PDF");
-
-    let _ = std::fs::remove_file(&temp_path);
 
     assert_eq!(parsed.get_string("PDF:Title"), Some("New Title"));
     assert_eq!(parsed.get_string("PDF:Author"), Some("New Author"));
@@ -168,8 +163,8 @@ fn test_write_with_special_characters() {
     metadata.insert("PDF:Creator", TagValue::new_string("Test Creator"));
     metadata.insert("PDF:Producer", TagValue::new_string("Test Producer"));
 
-    let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join("test_write_special.pdf");
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let temp_path = temp_dir.path().join("test_write_special.pdf");
     let result = write_pdf_file(&temp_path, &original_reader, &metadata);
 
     assert!(result.is_ok());
@@ -177,8 +172,6 @@ fn test_write_with_special_characters() {
     // Read back and verify
     let reader = BufferedReader::new(&temp_path).expect("Failed to open written PDF");
     let parsed = parse_pdf_metadata(&reader).expect("Failed to parse written PDF");
-
-    let _ = std::fs::remove_file(&temp_path);
 
     // Verify special characters were preserved
     assert_eq!(
@@ -202,8 +195,8 @@ fn test_write_with_empty_fields() {
     metadata.insert("PDF:Creator", TagValue::new_string("Creator"));
     metadata.insert("PDF:Producer", TagValue::new_string("Producer"));
 
-    let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join("test_write_empty.pdf");
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let temp_path = temp_dir.path().join("test_write_empty.pdf");
     let result = write_pdf_file(&temp_path, &original_reader, &metadata);
 
     assert!(result.is_ok());
@@ -211,8 +204,6 @@ fn test_write_with_empty_fields() {
     // Read back - empty fields should work
     let reader = BufferedReader::new(&temp_path).expect("Failed to open written PDF");
     let parsed = parse_pdf_metadata(&reader);
-
-    let _ = std::fs::remove_file(&temp_path);
 
     assert!(parsed.is_ok());
 }
@@ -231,13 +222,12 @@ fn test_write_preserves_pdf_structure() {
     metadata.insert("PDF:Creator", TagValue::new_string("Creator"));
     metadata.insert("PDF:Producer", TagValue::new_string("Producer"));
 
-    let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join("test_write_structure.pdf");
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let temp_path = temp_dir.path().join("test_write_structure.pdf");
     write_pdf_file(&temp_path, &original_reader, &metadata).expect("Failed to write PDF");
 
     // Read the written file
     let written_data = std::fs::read(&temp_path).expect("Failed to read written PDF");
-    let _ = std::fs::remove_file(&temp_path);
 
     // Verify PDF structure
     let written_str = String::from_utf8_lossy(&written_data);
@@ -283,8 +273,8 @@ fn test_write_with_long_values() {
     metadata.insert("PDF:Creator", TagValue::new_string("Creator"));
     metadata.insert("PDF:Producer", TagValue::new_string("Producer"));
 
-    let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join("test_write_long.pdf");
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let temp_path = temp_dir.path().join("test_write_long.pdf");
     let result = write_pdf_file(&temp_path, &original_reader, &metadata);
 
     assert!(result.is_ok());
@@ -292,8 +282,6 @@ fn test_write_with_long_values() {
     // Read back and verify long values
     let reader = BufferedReader::new(&temp_path).expect("Failed to open written PDF");
     let parsed = parse_pdf_metadata(&reader).expect("Failed to parse written PDF");
-
-    let _ = std::fs::remove_file(&temp_path);
 
     assert_eq!(parsed.get_string("PDF:Title"), Some(long_title.as_str()));
     if let Some(TagValue::Array(values)) = parsed.get("PDF:Keywords") {
@@ -328,8 +316,8 @@ fn test_write_to_sample_fixture() {
     modified_metadata.insert("PDF:Title", TagValue::new_string("Modified Sample Title"));
 
     // Write to temp file
-    let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join("test_write_sample.pdf");
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let temp_path = temp_dir.path().join("test_write_sample.pdf");
     let result = write_pdf_file(&temp_path, &reader, &modified_metadata);
 
     assert!(result.is_ok(), "Failed to write modified sample.pdf");
@@ -337,8 +325,6 @@ fn test_write_to_sample_fixture() {
     // Read back and verify
     let written_reader = BufferedReader::new(&temp_path).expect("Failed to open written PDF");
     let parsed = parse_pdf_metadata(&written_reader).expect("Failed to parse written PDF");
-
-    let _ = std::fs::remove_file(&temp_path);
 
     // Verify Title was modified
     assert_eq!(
@@ -365,12 +351,11 @@ fn test_xref_table_correctness() {
     metadata.insert("PDF:Creator", TagValue::new_string("Test"));
     metadata.insert("PDF:Producer", TagValue::new_string("Test"));
 
-    let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join("test_xref.pdf");
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let temp_path = temp_dir.path().join("test_xref.pdf");
     write_pdf_file(&temp_path, &original_reader, &metadata).expect("Failed to write PDF");
 
     let written_data = std::fs::read(&temp_path).expect("Failed to read written PDF");
-    let _ = std::fs::remove_file(&temp_path);
 
     let written_str = String::from_utf8_lossy(&written_data);
 
@@ -418,15 +403,13 @@ fn test_output_pdf_is_valid() {
     metadata.insert("PDF:Creator", TagValue::new_string("Test"));
     metadata.insert("PDF:Producer", TagValue::new_string("Test"));
 
-    let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join("test_valid.pdf");
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let temp_path = temp_dir.path().join("test_valid.pdf");
     write_pdf_file(&temp_path, &original_reader, &metadata).expect("Failed to write PDF");
 
     // The ultimate test: can we parse it back without errors?
     let reader = BufferedReader::new(&temp_path).expect("Failed to open written PDF");
     let result = parse_pdf_metadata(&reader);
-
-    let _ = std::fs::remove_file(&temp_path);
 
     assert!(
         result.is_ok(),

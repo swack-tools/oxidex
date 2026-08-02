@@ -36,7 +36,7 @@ SCALAR_FORMATS = {
     "rational64s": ("Rational64s", 8),
 }
 
-SIZED_RE = re.compile(r"^(string|undef|int8u|int8s|int16u|int32u)\[(\d+)\]$")
+SIZED_RE = re.compile(r"^(\w+)\[(\d+)\]$")
 
 
 def rust_str(s):
@@ -185,17 +185,25 @@ def gen_table(mod_name, tbl_name, tbl, stats):
             stats["tag_unknown_skipped"] += 1
             continue
 
-        # A per-field Format overrides the table FORMAT.
+        # A per-field Format overrides the table FORMAT. `count` is the number
+        # of repetitions of that format (ExifTool's `format[N]` array syntax);
+        # 1 for every scalar field.
         f = tag.get("Format")
         fmt_expr = "None"
+        count = 1
         if isinstance(f, str):
             m = SIZED_RE.match(f)
             if m:
-                base, count = m.group(1), int(m.group(2))
-                variant = "Str" if base == "string" else (
-                    "Undef" if base == "undef" else None)
-                if variant:
-                    fmt_expr = f"Some(Fmt::{variant}({count}))"
+                base, n = m.group(1), int(m.group(2))
+                if base == "string":
+                    fmt_expr = f"Some(Fmt::Str({n}))"
+                elif base == "undef":
+                    fmt_expr = f"Some(Fmt::Undef({n}))"
+                elif base in SCALAR_FORMATS:
+                    # An array of a scalar format, e.g. `int16u[4]`: n repeats
+                    # of the element format, not n bytes.
+                    fmt_expr = f"Some(Fmt::{SCALAR_FORMATS[base][0]})"
+                    count = n
                 else:
                     stats["tag_fmt_unsupported"] += 1
                     continue
@@ -210,7 +218,7 @@ def gen_table(mod_name, tbl_name, tbl, stats):
         sub_s = "None" if sub is None else f"Some({sub})"
         rows.append(
             f'    Field {{ index: {idx}, sub: {sub_s}, name: "{rust_str(name)}", '
-            f"format: {fmt_expr}, print_conv: {pc} }},"
+            f"format: {fmt_expr}, count: {count}, print_conv: {pc} }},"
         )
         stats["tag_emitted"] += 1
 
@@ -319,6 +327,9 @@ pub struct Field {
     pub name: &'static str,
     /// Overrides the table default when present.
     pub format: Option<Fmt>,
+    /// Number of repetitions of `format` (ExifTool's `format[N]` array
+    /// syntax), e.g. 4 for `int16u[4]`. 1 for scalar fields.
+    pub count: usize,
     pub print_conv: PrintConv,
 }
 

@@ -86,10 +86,26 @@ fn lookup_rank(key: &str) -> (u8, &str) {
     (rank, key)
 }
 
+/// Look up one fully-qualified key, applying the same APEX ValueConv the EXIF
+/// emitter applies before printing.
+///
+/// ExifTool's Composite table (Exif.pm:4678) reads `$val[N]` post-ValueConv:
+/// for ShutterSpeedValue/ApertureValue/MaxApertureValue that means seconds and
+/// f-stops, not the raw APEX-encoded rational still sitting in the map at
+/// this point in the pipeline -- [`crate::core::exiftool_compat::format_tag_value`]
+/// only runs at CLI output time, after composites have already been derived.
+/// Reusing [`crate::core::exiftool_compat::apex_value_conv`] here keeps the
+/// conversion in one place rather than re-deriving `2**(-$val)` a second time.
 fn lookup_key(map: &MetadataMap, key: &str) -> Option<String> {
-    map.value_form(key)
-        .map(str::to_string)
-        .or_else(|| map.get(key).and_then(value_string))
+    if let Some(v) = map.value_form(key) {
+        return Some(v.to_string());
+    }
+    let raw = map.get(key)?;
+    let base_name = crate::core::exiftool_compat::strip_family_prefix(key);
+    if let Some(converted) = crate::core::exiftool_compat::apex_value_conv(base_name, raw) {
+        return value_string(&converted);
+    }
+    value_string(raw)
 }
 
 /// Look up a tag by bare name, ignoring any `Group:` prefix.
@@ -502,6 +518,35 @@ mod tests {
         apply(&mut m);
         assert_eq!(m.get_string("Composite:Aperture"), Some("14.0"));
         assert_eq!(m.get_string("Composite:DOF"), Some("inf (4.31 m - inf)"));
+    }
+
+    #[test]
+    fn shutter_and_aperture_composites_read_apex_values_value_conv_not_raw() {
+        // SamsungDigimax340.jpg: ShutterSpeedValue = 58/8 (APEX 7.25),
+        // ApertureValue = 44658/10000 (APEX 4.4658). Composite inputs must see
+        // ExifTool's ValueConv (seconds / f-stop), not the raw APEX rational,
+        // or ShutterSpeed prints "7.2" and Aperture prints "4.5" instead of
+        // matching ExifTool's "1/152" and "4.7".
+        let mut m = MetadataMap::new();
+        m.insert(
+            "ExifIFD:ShutterSpeedValue",
+            TagValue::Rational {
+                numerator: 58,
+                denominator: 8,
+            },
+        );
+        m.insert(
+            "ExifIFD:ApertureValue",
+            TagValue::Rational {
+                numerator: 44658,
+                denominator: 10000,
+            },
+        );
+        m.insert("ExifIFD:ISO", TagValue::Integer(100));
+        apply(&mut m);
+        assert_eq!(m.get_string("Composite:ShutterSpeed"), Some("1/152"));
+        assert_eq!(m.get_string("Composite:Aperture"), Some("4.7"));
+        assert_eq!(m.get_string("Composite:LightValue"), Some("11.7"));
     }
 
     #[test]

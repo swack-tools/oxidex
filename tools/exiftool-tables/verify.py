@@ -43,6 +43,7 @@ FIELD_RE = re.compile(
     r'sub:\s*(?P<sub>None|Some\(\d+\)),\s*'
     r'name:\s*"(?P<name>(?:[^"\\]|\\.)*)",\s*'
     r'format:\s*(?P<fmt>None|Some\(Fmt::\w+(?:\(\d+\))?\)),\s*'
+    r'count:\s*(?P<count>\d+),\s*'
     r'print_conv:\s*(?P<pc>PrintConv::(?:None'
     r'|Expr\(ExprId::\w+\)'
     r'|IntEnum\(&\[.*?\]\)'
