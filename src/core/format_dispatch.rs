@@ -59,6 +59,7 @@ use crate::parsers::specialized::fits::parse_fits_metadata;
 use crate::parsers::specialized::gltf::parse_gltf_metadata;
 use crate::parsers::specialized::hdf5::parse_hdf5_metadata;
 use crate::parsers::specialized::lnk::parse_lnk_metadata;
+use crate::parsers::specialized::lytro::parse_lytro_metadata;
 use crate::parsers::specialized::obj::parse_obj_metadata;
 use crate::parsers::specialized::pcap::parse_pcap_metadata;
 use crate::parsers::specialized::plist::parse_plist_metadata;
@@ -171,6 +172,7 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::VCF => convert_string_error(parse_vcf_metadata(reader), "VCF"),
         FileFormat::TXT => convert_string_error(parse_txt_metadata(reader), "TXT"),
         FileFormat::LNK => convert_string_error(parse_lnk_metadata(reader), "LNK"),
+        FileFormat::LFP => convert_string_error(parse_lytro_metadata(reader), "LFP"),
         FileFormat::SQLite => convert_string_error(parse_sqlite_metadata(reader), "SQLite"),
         FileFormat::ICS => convert_string_error(parse_ics_metadata(reader), "ICS"),
         FileFormat::EML => convert_string_error(parse_eml_metadata(reader), "EML"),
