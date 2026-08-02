@@ -49,10 +49,10 @@ use super::shared::binary_subdir::{self, BinaryTable, Cond, ModelPat};
 use super::shared::generic_decoders::ON_OFF;
 use super::shared::tag_priority::insert_low_priority;
 use subdir_tables::{
-    PENTAX_AFINFO, PENTAX_AWBINFO, PENTAX_BATTERYINFO, PENTAX_EVSTEPINFO, PENTAX_FACEINFO,
-    PENTAX_FACEPOS, PENTAX_FACESIZE, PENTAX_FILTERINFO, PENTAX_FLASHINFO, PENTAX_KELVINWB,
-    PENTAX_LENSCORR, PENTAX_LENSINFOQ, PENTAX_LEVELINFO, PENTAX_SHOTINFO, PENTAX_SRINFO2,
-    PENTAX_TEMPINFO, PENTAX_TIMEINFO, PENTAX_WBLEVELS,
+    PENTAX_AFINFO, PENTAX_AWBINFO, PENTAX_BATTERYINFO, PENTAX_CAMERASETTINGS, PENTAX_EVSTEPINFO,
+    PENTAX_FACEINFO, PENTAX_FACEPOS, PENTAX_FACESIZE, PENTAX_FILTERINFO, PENTAX_FLASHINFO,
+    PENTAX_KELVINWB, PENTAX_LENSCORR, PENTAX_LENSINFOQ, PENTAX_LEVELINFO, PENTAX_SHOTINFO,
+    PENTAX_SRINFO2, PENTAX_TEMPINFO, PENTAX_TIMEINFO, PENTAX_WBLEVELS,
 };
 
 // Import declarative decoder macros
@@ -1569,107 +1569,6 @@ impl PentaxParser {
                     );
                 }
 
-                // 0x0205 "CameraSettings" binary subdirectory. Only the
-                // count<25 (non-K-01) layout is currently decoded.
-                PENTAX_CAMERA_SETTINGS => {
-                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
-                    if raw.len() >= 11 && raw.len() < 25 {
-                        tags.insert(
-                            "Pentax:PictureMode2".to_string(),
-                            decode_picture_mode2(raw[0]),
-                        );
-                        tags.insert(
-                            "Pentax:ProgramLine".to_string(),
-                            decode_program_line(raw[1] & 0x03),
-                        );
-                        tags.insert(
-                            "Pentax:EVSteps".to_string(),
-                            if raw[1] & 0x20 != 0 {
-                                "1/3 EV Steps"
-                            } else {
-                                "1/2 EV Steps"
-                            }
-                            .to_string(),
-                        );
-                        tags.insert(
-                            "Pentax:E-DialInProgram".to_string(),
-                            if raw[1] & 0x40 != 0 {
-                                "P Shift"
-                            } else {
-                                "Tv or Av"
-                            }
-                            .to_string(),
-                        );
-                        tags.insert(
-                            "Pentax:ApertureRingUse".to_string(),
-                            if raw[1] & 0x80 != 0 {
-                                "Permitted"
-                            } else {
-                                "Prohibited"
-                            }
-                            .to_string(),
-                        );
-                        tags.insert(
-                            "Pentax:FlashOptions".to_string(),
-                            decode_flash_options((raw[2] & 0xf0) >> 4),
-                        );
-                        tags.insert(
-                            "Pentax:MeteringMode2".to_string(),
-                            decode_metering_mode2_bitmask(raw[2] & 0x0f),
-                        );
-                        tags.insert(
-                            "Pentax:AFPointMode".to_string(),
-                            decode_af_point_mode_bitmask((raw[3] & 0xf0) >> 4),
-                        );
-                        tags.insert(
-                            "Pentax:FocusMode2".to_string(),
-                            decode_focus_mode2(raw[3] & 0x0f),
-                        );
-                        if raw.len() >= 6 {
-                            let sel = match byte_order {
-                                ByteOrder::BigEndian => u16::from_be_bytes([raw[4], raw[5]]),
-                                ByteOrder::LittleEndian => u16::from_le_bytes([raw[4], raw[5]]),
-                            };
-                            tags.insert(
-                                "Pentax:AFPointSelected2".to_string(),
-                                decode_af_point_selected2_bitmask(sel),
-                            );
-                        }
-                        if raw.len() >= 7 {
-                            let ev = pentax_ev(raw[6] as i32 - 32);
-                            let iso_floor =
-                                (100.0 * (ev * std::f64::consts::LN_2).exp() + 0.5) as i64;
-                            tags.insert("Pentax:ISOFloor".to_string(), iso_floor.to_string());
-                        }
-                        if raw.len() >= 8 {
-                            tags.insert(
-                                "Pentax:DriveMode2".to_string(),
-                                decode_drive_mode2_bitmask(raw[7]),
-                            );
-                        }
-                        if raw.len() >= 9 {
-                            tags.insert(
-                                "Pentax:ExposureBracketStepSize".to_string(),
-                                decode_exposure_bracket_step_size(raw[8]),
-                            );
-                        }
-                        if raw.len() >= 10 {
-                            tags.insert(
-                                "Pentax:BracketShotNumber".to_string(),
-                                decode_bracket_shot_number(raw[9]),
-                            );
-                        }
-                        tags.insert(
-                            "Pentax:WhiteBalanceSet".to_string(),
-                            decode_white_balance_set((raw[10] & 0xf0) >> 4),
-                        );
-                        tags.insert(
-                            "Pentax:MultipleExposureSet".to_string(),
-                            if raw[10] & 0x0f != 0 { "On" } else { "Off" }.to_string(),
-                        );
-                    }
-                }
-
                 // 0x0206 "AEInfo" binary subdirectory (auto-exposure info for
                 // most Pentax DSLR models). Field offsets from 8 onward are
                 // shifted by 1 byte for models with a 24/25-byte record
@@ -1759,7 +1658,7 @@ impl PentaxParser {
                             );
                         }
                         if raw.len() > idx(14) {
-                            let ev = pentax_ev(raw[idx(14)] as i8 as i32);
+                            let ev = value_conv::pentax_ev(raw[idx(14)] as i8 as i32);
                             let formatted = if ev == 0.0 {
                                 "0".to_string()
                             } else {
@@ -2168,6 +2067,16 @@ fn pentax_binary_subdir(
         PENTAX_WB_LEVELS if count == 100 => &PENTAX_WBLEVELS,
         PENTAX_LENS_INFO_Q => &PENTAX_LENSINFOQ, // Pentax.pm:3095
         PENTAX_SHOT_INFO => &PENTAX_SHOTINFO,    // Pentax.pm:3011
+        // 0x0205 is `[{ Condition => '$count < 25' => CameraSettings }, {
+        // CameraSettingsUnknown }]` (Pentax.pm:2784-2797); `CameraSettingsUnknown`
+        // is not transcribed (ExifTool reports no named tags from it either, even
+        // on the K-01 it exists for), so a record at or above 25 bytes produces
+        // nothing here, matching ExifTool. `CameraSettings` also carries a
+        // `ByteOrder => 'BigEndian'` override (Pentax.pm:2791), independent of the
+        // MakerNote's own order -- handled below with `BATTERY_INFO`/`AF_INFO`.
+        PENTAX_CAMERA_SETTINGS if count < 25 => {
+            return Some((&PENTAX_CAMERASETTINGS, ByteOrder::BigEndian));
+        }
         // 0x03ff is `TempInfo` on the listed bodies and `UnknownInfo` -- a table
         // with no tags in it -- on every other (Pentax.pm:3126-3134).
         PENTAX_TEMP_INFO if TEMP_INFO_MODELS.holds(model) => &PENTAX_TEMPINFO,
@@ -2341,23 +2250,6 @@ fn format_pentax_float(v: f64) -> String {
     }
 }
 
-/// ExifTool's `PentaxEv()`: converts a raw hex-based EV code (modulo 8) into
-/// an EV value, correcting for the fact that 1/3-stop increments don't divide
-/// evenly by 8.
-fn pentax_ev(val: i32) -> f64 {
-    let mut v = val as f64;
-    if val & 1 != 0 {
-        let sign: f64 = if val < 0 { -1.0 } else { 1.0 };
-        let frac = ((val as f64) * sign) as i64 & 0x07;
-        if frac == 3 {
-            v += sign * (8.0 / 3.0 - frac as f64);
-        } else if frac == 5 {
-            v += sign * (16.0 / 3.0 - frac as f64);
-        }
-    }
-    v / 8.0
-}
-
 /// EV-based aperture formula shared by AEAperture/AEMaxAperture/AEMaxAperture2/
 /// AEMinAperture: `2**((raw-68)/16)`.
 fn ae_aperture_from_raw(raw: i32) -> f64 {
@@ -2514,55 +2406,13 @@ fn decode_drive_mode_byte3(b: u8) -> String {
 }
 
 // ----------------------------------------------------------------------------
-// CameraSettings (0x0205) sub-fields
+// AEInfo (0x0206) sub-fields
+//
+// (CameraSettings, 0x0205, is now the generated `subdir_tables::PENTAX_CAMERASETTINGS`
+// table; `decode_metering_mode2_bitmask` below is the one CameraSettings helper
+// AEInfo's `AEMeteringMode2` also calls, so it stayed hand-written rather than
+// moving into the generator's registries.)
 // ----------------------------------------------------------------------------
-
-fn decode_picture_mode2(b: u8) -> String {
-    match b {
-        0 => "Scene Mode".to_string(),
-        1 => "Auto PICT".to_string(),
-        2 => "Program AE".to_string(),
-        3 => "Green Mode".to_string(),
-        4 => "Shutter Speed Priority".to_string(),
-        5 => "Aperture Priority".to_string(),
-        6 => "Program Tv Shift".to_string(),
-        7 => "Program Av Shift".to_string(),
-        8 => "Manual".to_string(),
-        9 => "Bulb".to_string(),
-        10 => "Aperture Priority, Off-Auto-Aperture".to_string(),
-        11 => "Manual, Off-Auto-Aperture".to_string(),
-        12 => "Bulb, Off-Auto-Aperture".to_string(),
-        13 => "Shutter & Aperture Priority AE".to_string(),
-        15 => "Sensitivity Priority AE".to_string(),
-        16 => "Flash X-Sync Speed AE".to_string(),
-        other => other.to_string(),
-    }
-}
-
-fn decode_program_line(b: u8) -> String {
-    match b {
-        0 => "Normal".to_string(),
-        1 => "Hi Speed".to_string(),
-        2 => "Depth".to_string(),
-        3 => "MTF".to_string(),
-        other => other.to_string(),
-    }
-}
-
-fn decode_flash_options(b: u8) -> String {
-    match b {
-        0 => "Normal".to_string(),
-        1 => "Red-eye reduction".to_string(),
-        2 => "Auto".to_string(),
-        3 => "Auto, Red-eye reduction".to_string(),
-        5 => "Wireless (Master)".to_string(),
-        6 => "Wireless (Control)".to_string(),
-        8 => "Slow-sync".to_string(),
-        9 => "Slow-sync, Red-eye reduction".to_string(),
-        10 => "Trailing-curtain Sync".to_string(),
-        other => other.to_string(),
-    }
-}
 
 fn decode_metering_mode2_bitmask(b: u8) -> String {
     format_bitmask(
@@ -2571,115 +2421,6 @@ fn decode_metering_mode2_bitmask(b: u8) -> String {
         &[(0, "Center-weighted average"), (1, "Spot")],
     )
 }
-
-fn decode_af_point_mode_bitmask(b: u8) -> String {
-    format_bitmask(
-        b as u32,
-        Some("Auto"),
-        &[(0, "Select"), (1, "Fixed Center")],
-    )
-}
-
-fn decode_focus_mode2(b: u8) -> String {
-    match b {
-        0 => "Manual".to_string(),
-        1 => "AF-S".to_string(),
-        2 => "AF-C".to_string(),
-        3 => "AF-A".to_string(),
-        other => other.to_string(),
-    }
-}
-
-fn decode_af_point_selected2_bitmask(v: u16) -> String {
-    format_bitmask(
-        v as u32,
-        Some("Auto"),
-        &[
-            (0, "Upper-left"),
-            (1, "Top"),
-            (2, "Upper-right"),
-            (3, "Left"),
-            (4, "Mid-left"),
-            (5, "Center"),
-            (6, "Mid-right"),
-            (7, "Right"),
-            (8, "Lower-left"),
-            (9, "Bottom"),
-            (10, "Lower-right"),
-        ],
-    )
-}
-
-fn decode_drive_mode2_bitmask(b: u8) -> String {
-    format_bitmask(
-        b as u32,
-        Some("Single-frame"),
-        &[
-            (0, "Continuous"),
-            (1, "Continuous (Lo)"),
-            (2, "Self-timer (12 s)"),
-            (3, "Self-timer (2 s)"),
-            (4, "Remote Control (3 s delay)"),
-            (5, "Remote Control"),
-            (6, "Exposure Bracket"),
-            (7, "Multiple Exposure"),
-        ],
-    )
-}
-
-fn decode_exposure_bracket_step_size(b: u8) -> String {
-    match b {
-        3 => "0.3".to_string(),
-        4 => "0.5".to_string(),
-        5 => "0.7".to_string(),
-        8 => "1.0".to_string(),
-        11 => "1.3".to_string(),
-        12 => "1.5".to_string(),
-        13 => "1.7".to_string(),
-        16 => "2.0".to_string(),
-        other => other.to_string(),
-    }
-}
-
-fn decode_bracket_shot_number(b: u8) -> String {
-    match b {
-        0 => "n/a".to_string(),
-        0x02 => "1 of 2".to_string(),
-        0x12 => "2 of 2".to_string(),
-        0x03 => "1 of 3".to_string(),
-        0x13 => "2 of 3".to_string(),
-        0x23 => "3 of 3".to_string(),
-        0x05 => "1 of 5".to_string(),
-        0x15 => "2 of 5".to_string(),
-        0x25 => "3 of 5".to_string(),
-        0x35 => "4 of 5".to_string(),
-        0x45 => "5 of 5".to_string(),
-        other => format!("0x{:02x}", other),
-    }
-}
-
-fn decode_white_balance_set(b: u8) -> String {
-    match b {
-        0 => "Auto".to_string(),
-        1 => "Daylight".to_string(),
-        2 => "Shade".to_string(),
-        3 => "Cloudy".to_string(),
-        4 => "Daylight Fluorescent".to_string(),
-        5 => "Day White Fluorescent".to_string(),
-        6 => "White Fluorescent".to_string(),
-        7 => "Tungsten".to_string(),
-        8 => "Flash".to_string(),
-        9 => "Manual".to_string(),
-        12 => "Set Color Temperature 1".to_string(),
-        13 => "Set Color Temperature 2".to_string(),
-        14 => "Set Color Temperature 3".to_string(),
-        other => other.to_string(),
-    }
-}
-
-// ----------------------------------------------------------------------------
-// AEInfo (0x0206) sub-fields
-// ----------------------------------------------------------------------------
 
 fn decode_ae_program_mode(b: u8) -> String {
     match b {

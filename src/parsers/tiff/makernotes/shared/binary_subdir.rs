@@ -177,6 +177,42 @@ pub(crate) enum PrintConv {
     /// `%Pentax::BatteryInfo` divides a raw 686 by 100 and then prints
     /// `sprintf("%.2f V", $val)` (Pentax.pm:4866-4868).
     Expr(fn(f64) -> String),
+    /// A hash `PrintConv` carrying a `BITMASK` sub-hash, e.g.
+    /// `{ 0 => 'Auto', BITMASK => { 0 => 'Select', 1 => 'Fixed Center' } }`
+    /// (`%Pentax::CameraSettings`'s `AFPointMode`, Pentax.pm:3454-3465).
+    ///
+    /// ExifTool's dispatch (`ExifTool.pm:3614-3618`) tries an exact match
+    /// against `direct` first; only when that misses does it decode the value
+    /// bit by bit against `bits` (`DecodeBits`, `ExifTool.pm:6385`). This is
+    /// not a variant of `Map`/`MapOr`: those never fall through to a bitwise
+    /// reading, and a hash with `BITMASK` never falls through to
+    /// `Unknown (n)`.
+    Bitmask(
+        &'static [(i64, &'static str)],
+        &'static [(i64, &'static str)],
+    ),
+}
+
+/// ExifTool's `DecodeBits` (`ExifTool.pm:6385`), for a `PrintConv` hash's
+/// `BITMASK` sub-hash: each set bit of `val` becomes its label, joined by
+/// `", "`; a set bit `BITMASK` does not name prints as `[n]`; no bits set
+/// prints `(none)`.
+fn decode_bits(val: i64, bits: &[(i64, &str)]) -> String {
+    let mut out = Vec::new();
+    for bit in 0..32i64 {
+        if val & (1 << bit) == 0 {
+            continue;
+        }
+        match bits.iter().find(|(b, _)| *b == bit) {
+            Some((_, label)) => out.push((*label).to_string()),
+            None => out.push(format!("[{bit}]")),
+        }
+    }
+    if out.is_empty() {
+        "(none)".to_string()
+    } else {
+        out.join(", ")
+    }
 }
 
 /// The `ValueConv` ExifTool applies before the `PrintConv`.
@@ -343,6 +379,10 @@ fn render(elem: &Elem, conv: PrintConv) -> String {
                 .iter()
                 .find(|(key, _)| key == v)
                 .map_or_else(|| other(*v), |(_, label)| (*label).to_string()),
+            PrintConv::Bitmask(direct, bits) => direct
+                .iter()
+                .find(|(key, _)| key == v)
+                .map_or_else(|| decode_bits(*v, bits), |(_, label)| (*label).to_string()),
         },
     }
 }
@@ -935,5 +975,50 @@ mod tests {
             &mut tags,
         );
         assert_eq!(tags.get("X:Volts").map(String::as_str), Some("6.86 V"));
+    }
+
+    /// `%Pentax::CameraSettings`'s `AFPointMode` (Pentax.pm:3454-3465): value 0
+    /// is the direct-hit override `"Auto"`, not "(none)" from `DecodeBits`.
+    #[test]
+    fn bitmask_direct_hit_wins_over_decoding() {
+        const DIRECT: &[(i64, &str)] = &[(0, "Auto")];
+        const BITS: &[(i64, &str)] = &[(0, "Select"), (1, "Fixed Center")];
+        assert_eq!(decode_bits_via_render(0, DIRECT, BITS), "Auto");
+    }
+
+    /// Two bits set decode to both labels, joined by `", "`.
+    #[test]
+    fn bitmask_joins_multiple_set_bits() {
+        const DIRECT: &[(i64, &str)] = &[(0, "Single-frame")];
+        const BITS: &[(i64, &str)] = &[(0, "Continuous"), (1, "Continuous (Lo)")];
+        assert_eq!(
+            decode_bits_via_render(3, DIRECT, BITS),
+            "Continuous, Continuous (Lo)"
+        );
+    }
+
+    /// A set bit `BITMASK` doesn't name (Pentax.pm:3462: "have seen bit 2 set
+    /// in pre-production images") still gets reported, as `[n]`.
+    #[test]
+    fn bitmask_unlisted_bit_renders_bracketed() {
+        const DIRECT: &[(i64, &str)] = &[(0, "Auto")];
+        const BITS: &[(i64, &str)] = &[(0, "Select"), (1, "Fixed Center")];
+        assert_eq!(decode_bits_via_render(4, DIRECT, BITS), "[2]");
+    }
+
+    /// A value with no bits set at all -- not reachable from a real `%Pentax`
+    /// table today (0 is always the direct hit there), but `DecodeBits` itself
+    /// returns `(none)` here rather than an empty string.
+    #[test]
+    fn bitmask_zero_bits_is_none() {
+        assert_eq!(decode_bits(0, &[(1, "x")]), "(none)");
+    }
+
+    fn decode_bits_via_render(
+        val: i64,
+        direct: &'static [(i64, &str)],
+        bits: &'static [(i64, &str)],
+    ) -> String {
+        render(&Elem::Num(val), PrintConv::Bitmask(direct, bits))
     }
 }
