@@ -115,12 +115,14 @@ fn test_panasonic_parse_enumerated_values() {
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
     data.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]); // Value: 2 (Daylight)
 
-    // Entry 2: FocusMode (tag 0x0007) = AF-S (value 4)
-    // Registry: 0x0007 = FocusMode, FOCUS_MODE decoder: 4 = "AF-S (Single)"
+    // Entry 2: FocusMode (tag 0x0007) = 4.
+    // Panasonic.pm:329 declares `4 => 'Auto, Focus button'`. The label this
+    // once asserted, "AF-S (Single)", appears in no ExifTool source file --
+    // and ExifTool's plain `AF-S` is id 6, not 4, so it was wrong twice over.
     data.extend_from_slice(&[0x07, 0x00]); // Tag ID = 0x0007
     data.extend_from_slice(&[0x03, 0x00]);
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-    data.extend_from_slice(&[0x04, 0x00, 0x00, 0x00]); // AF-S
+    data.extend_from_slice(&[0x04, 0x00, 0x00, 0x00]); // 4 = Auto, Focus button
 
     // Entry 3: ShootingMode (tag 0x001F) = Aperture Priority (value 7)
     // Registry: 0x001F = ShootingMode
@@ -148,7 +150,7 @@ fn test_panasonic_parse_enumerated_values() {
     );
     assert_eq!(
         tags.get("Panasonic:FocusMode"),
-        Some(&"AF-S (Single)".to_string())
+        Some(&"Auto, Focus button".to_string())
     );
     assert_eq!(
         tags.get("Panasonic:ShootingMode"),
@@ -174,19 +176,23 @@ fn test_panasonic_parse_photo_style() {
     // IFD: 2 entries
     data.extend_from_slice(&[0x02, 0x00]);
 
-    // Entry 1: PhotoStyle (tag 0x0089) = V-Log (value 10)
-    // Registry: 0x0089 = PhotoStyle with PHOTO_STYLE decoder
+    // Entry 1: PhotoStyle (tag 0x0089) = 17.
+    // Panasonic.pm:1152 declares `17 => 'V-Log'`. This once fed 10 and
+    // expected V-Log, which encoded the pre-transcription table that was
+    // shifted at every shared id; ExifTool declares nothing at 10.
     data.extend_from_slice(&[0x89, 0x00]); // Tag ID = 0x0089
     data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-    data.extend_from_slice(&[0x0A, 0x00, 0x00, 0x00]); // 10 (V-Log)
+    data.extend_from_slice(&[0x11, 0x00, 0x00, 0x00]); // 17 = V-Log
 
-    // Entry 2: HDR (tag 0x009E) = HDR Auto (value 100)
-    // Registry: 0x009E = HDR with HDR decoder
+    // Entry 2: HDR (tag 0x009E) = 100.
+    // Panasonic.pm:1251 declares `100 => '1 EV'`. The label this once
+    // asserted, "HDR Auto", is Sony's (Sony.pm:6310, value 1) -- it appears
+    // nowhere in Panasonic.pm.
     data.extend_from_slice(&[0x9E, 0x00]); // Tag ID = 0x009E
     data.extend_from_slice(&[0x03, 0x00]);
     data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-    data.extend_from_slice(&[0x64, 0x00, 0x00, 0x00]); // 100 (HDR Auto)
+    data.extend_from_slice(&[0x64, 0x00, 0x00, 0x00]); // 100 = 1 EV
 
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
 
@@ -194,7 +200,7 @@ fn test_panasonic_parse_photo_style() {
     parse_panasonic_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
 
     assert_eq!(tags.get("Panasonic:PhotoStyle"), Some(&"V-Log".to_string()));
-    assert_eq!(tags.get("Panasonic:HDR"), Some(&"HDR Auto".to_string()));
+    assert_eq!(tags.get("Panasonic:HDR"), Some(&"1 EV".to_string()));
 }
 
 #[test]
