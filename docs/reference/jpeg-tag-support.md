@@ -41,7 +41,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:ExposureProgram` | `ExifIFD:ExposureProgram` | — | `Not Defined` |
 | `ExifIFD:ExposureTime` | `ExifIFD:ExposureTime` | ✅ `-ExifIFD:ExposureTime=` | `1.5` |
 | `ExifIFD:FNumber` | `ExifIFD:FNumber` | ✅ `-ExifIFD:FNumber=` | `1.5` |
-| `ExifIFD:FileSource` | `ExifIFD:FileSource` * | — | `Film Scanner` |
+| `ExifIFD:FileSource` | `ExifIFD:FileSource` | — | `Film Scanner` |
 | `ExifIFD:Flash` | `ExifIFD:Flash` | — | `No Flash` |
 | `ExifIFD:FlashEnergy` | `ExifIFD:FlashEnergy` | ✅ `-ExifIFD:FlashEnergy=` | `1.5` |
 | `ExifIFD:FlashpixVersion` | `ExifIFD:FlashpixVersion` | ⚠️ `-ExifIFD:FlashpixVersion=` | `0100` |

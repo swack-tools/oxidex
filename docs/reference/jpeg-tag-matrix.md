@@ -201,7 +201,7 @@ references are into this repo.
 | `ExposureProgram` | ✅ ok | 🐛 broken: error | `Not Defined` |
 | `ExposureTime` | ✅ ok | ✅ ok | `1.5` |
 | `FNumber` | ✅ ok | ✅ ok | `1.5` |
-| `FileSource` | ✅ ok (formatting differs from exiftool) | 🐛 broken: error | `Film Scanner` |
+| `FileSource` | ✅ ok | 🐛 broken: error | `Film Scanner` |
 | `Flash` | ✅ ok | 🐛 broken: error | `No Flash` |
 | `FlashEnergy` | ✅ ok | ✅ ok | `1.5` |
 | `FlashpixVersion` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `0100` |
@@ -768,9 +768,9 @@ references are into this repo.
 | `GlobalAltitude` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `GlobalAngle` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `IPTCDigest` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `new` |
-| `PhotoshopBGRThumbnail` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `/Users/allen/git/oxidex/.claude/worktrees/agent-a3490dbaa9e8` |
+| `PhotoshopBGRThumbnail` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `/home/runner/work/oxidex/oxidex/tests/fixtures/jpeg/tag_matr` |
 | `PhotoshopQuality` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
-| `PhotoshopThumbnail` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `/Users/allen/git/oxidex/.claude/worktrees/agent-a3490dbaa9e8` |
+| `PhotoshopThumbnail` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `/home/runner/work/oxidex/oxidex/tests/fixtures/jpeg/tag_matr` |
 | `URL` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `XResolution` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `YResolution` | ✅ ok | — unsupported (silent no-op) | `3` |
