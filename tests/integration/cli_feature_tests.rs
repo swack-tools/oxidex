@@ -138,3 +138,48 @@ fn test_cli_short_format_output() {
     assert!(!stdout.contains("IFD0:")); // No family prefix
     assert!(!stdout.contains("Found metadata tag(s):")); // No header
 }
+
+#[test]
+/// Regression: `oxidex -j -G1 -a photo.jpg` returned `[{}]` (an empty tag
+/// object) while `oxidex -j photo.jpg` on the same file extracted its full
+/// tag set. `-G1` (ExifTool's group-display flag) wasn't recognized by the
+/// arg parser, so it fell through to the specific-tag filter as a request
+/// for a tag literally named "G1" -- matching nothing and silently emptying
+/// the whole extraction. Real ExifTool accepts `-G1`, so any harness mirroring
+/// its flags would otherwise get zero tags from oxidex without any error.
+fn test_cli_group_display_flag_does_not_empty_output() {
+    let temp_dir = tempdir().expect("Failed to create temporary directory");
+    let test_file = temp_dir.path().join("sample_with_exif.jpg");
+    fs::copy("tests/fixtures/jpeg/sample_with_exif.jpg", &test_file)
+        .expect("Failed to copy test file");
+
+    let plain = read_metadata_json(&test_file);
+    let plain_tags = plain.as_object().expect("plain -j output is an object");
+    assert!(
+        !plain_tags.is_empty(),
+        "sanity check: plain -j should extract tags from this fixture"
+    );
+
+    let (stdout, stderr, exit_code) =
+        run_oxidex_command(&["-j", "-G1", "-a"], &test_file);
+    assert_eq!(exit_code, 0, "stdout: {}\nstderr: {}", stdout, stderr);
+
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("Failed to parse JSON output");
+    let array = json.as_array().expect("-j output is a JSON array");
+    let tags = array
+        .first()
+        .and_then(|v| v.as_object())
+        .expect("-j output's first element is an object");
+
+    assert!(
+        !tags.is_empty(),
+        "`-j -G1 -a` returned an empty tag object; stdout: {}",
+        stdout
+    );
+    assert_eq!(
+        tags.len(),
+        plain_tags.len(),
+        "`-j -G1 -a` should extract the same tag set as plain `-j`"
+    );
+}
