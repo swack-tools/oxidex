@@ -66,17 +66,17 @@ use crate::core::formatters::gps_status::{
 };
 use crate::core::formatters::{
     decode_cfa_pattern, decode_gps_processing_method, decode_scene_type, decode_version_bytes,
-    exiftool_rational_number, format_color_space, format_components_configuration,
-    format_compression, format_contrast, format_custom_rendered, format_exposure_mode,
-    format_exposure_program, format_file_source, format_flash, format_focal_plane_resolution_unit,
-    format_gain_control, format_gps_altitude_ref, format_gps_direction_ref, format_gps_lat_ref,
-    format_gps_lon_ref, format_gps_speed_ref, format_icc_value, format_integer_precision_values,
-    format_interop_index, format_light_source, format_metering_mode, format_orientation,
-    format_resolution_unit, format_saturation, format_scene_capture_type, format_sensing_method,
-    format_sharpness, format_subject_distance_range, format_three_decimal_values,
-    format_white_balance, format_with_unit, format_ycbcr_positioning,
-    format_ycbcr_subsampling_string, is_icc_matrix_tag, is_integer_precision_tag,
-    is_three_decimal_tag,
+    exiftool_rational_number, file_source_label_bytes, format_color_space,
+    format_components_configuration, format_compression, format_contrast, format_custom_rendered,
+    format_exposure_mode, format_exposure_program, format_file_source, format_flash,
+    format_focal_plane_resolution_unit, format_gain_control, format_gps_altitude_ref,
+    format_gps_direction_ref, format_gps_lat_ref, format_gps_lon_ref, format_gps_speed_ref,
+    format_icc_value, format_integer_precision_values, format_interop_index, format_light_source,
+    format_metering_mode, format_orientation, format_resolution_unit, format_saturation,
+    format_scene_capture_type, format_sensing_method, format_sharpness,
+    format_subject_distance_range, format_three_decimal_values, format_white_balance,
+    format_with_unit, format_ycbcr_positioning, format_ycbcr_subsampling_string, is_icc_matrix_tag,
+    is_integer_precision_tag, is_three_decimal_tag,
 };
 use crate::core::{MetadataMap, TagValue};
 
@@ -444,11 +444,38 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
         return TagValue::String(format_gain_control(i));
     }
 
-    // FileSource enum (1-3)
-    if base_name == "FileSource"
-        && let Some(i) = value.as_integer()
-    {
-        return TagValue::String(format_file_source(i));
+    // FileSource (Exif.pm:2811). `Writable => 'undef'`, so the TIFF reader
+    // hands this over as `TagValue::Binary`, not as a number -- and that is why
+    // the integer arm below, which has been correct for as long as it has
+    // existed, never ran: `as_integer()` is `None` for a blob. 2,874 corpus
+    // files printed `(Binary data 1 bytes, use -b option to extract)` past a
+    // working decoder, in every output mode.
+    //
+    // ExifTool resolves the same mismatch one layer earlier: `ProcessExif`
+    // rewrites the format of any one-element UNDEFINED value to `int8u`
+    // (Exif.pm:6682, "treat single unknown byte as int8u"), which is what lets
+    // a PrintConv hash keyed `1, 2, 3` match a stored `"\x03"` at all. The
+    // binary arm reproduces that lookup for this tag rather than changing how
+    // every UNDEFINED value in the tree is read.
+    if base_name == "FileSource" {
+        if let Some(i) = value.as_integer() {
+            return TagValue::String(format_file_source(i));
+        }
+        if let TagValue::Binary(data) = value {
+            // A count other than 1 stays `undef` in ExifTool too, and its hash
+            // holds exactly one such key -- "\3\0\0\0", the four-byte form
+            // Sigma writes, which is a *different* label from a bare `3`.
+            if let Some(label) = file_source_label_bytes(data) {
+                return TagValue::String(label.to_string());
+            }
+            // One byte the hash does not name still prints its number:
+            // `Unknown (0)` is what ExifTool reports for the four corpus files
+            // storing a zero here. A longer unnamed blob is left as a blob
+            // rather than given an invented label.
+            if let [byte] = data.as_slice() {
+                return TagValue::String(format_file_source(i64::from(*byte)));
+            }
+        }
     }
 
     // SensingMethod enum (1-8)
@@ -1520,6 +1547,52 @@ fn format_icc_string_values(value: &str, base_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The dispatch, not just the table.
+    ///
+    /// `format_file_source` has existed for as long as this arm has, and the
+    /// arm has always been correct -- it simply never ran, because
+    /// `raw_bytes_to_tag_value` handed 0xa300 over as `TagValue::Binary` and
+    /// `as_integer()` is `None` for a blob. 2,836 corpus files printed
+    /// `(Binary data 1 bytes, use -b option to extract)` past a working
+    /// decoder. This asserts both shapes reach a label.
+    #[test]
+    fn file_source_reaches_the_print_conv_from_the_binary_form() {
+        // The shape the TIFF reader actually produces for `Writable => 'undef'`.
+        // This is the assertion that fails against the old code: the integer
+        // cases below passed before this change and prove nothing on their own.
+        for (byte, label) in [
+            (1u8, "Film Scanner"),
+            (2, "Reflection Print Scanner"),
+            (3, "Digital Camera"),
+        ] {
+            assert_eq!(
+                format_tag_value("ExifIFD:FileSource", &TagValue::Binary(vec![byte])),
+                TagValue::String(label.to_string()),
+                "FileSource {byte} did not reach the PrintConv from its binary form"
+            );
+        }
+        // Sigma writes the same code with a count of 4, and that is a separate
+        // PrintConv key -- a different label, not `Digital Camera`.
+        assert_eq!(
+            format_tag_value("ExifIFD:FileSource", &TagValue::Binary(vec![3, 0, 0, 0])),
+            TagValue::String("Sigma Digital Camera".to_string())
+        );
+        // One byte the hash does not name prints its number, the way ExifTool
+        // does for the four corpus files that store a zero here.
+        assert_eq!(
+            format_tag_value("ExifIFD:FileSource", &TagValue::Binary(vec![0])),
+            TagValue::String("Unknown (0)".to_string())
+        );
+        // A longer unnamed blob is left alone rather than given a label.
+        let blob = TagValue::Binary(vec![9, 9, 9, 9]);
+        assert_eq!(format_tag_value("ExifIFD:FileSource", &blob), blob);
+        // The pre-existing integer path is unchanged.
+        assert_eq!(
+            format_tag_value("ExifIFD:FileSource", &TagValue::new_integer(3)),
+            TagValue::String("Digital Camera".to_string())
+        );
+    }
 
     /// The dispatch, not just the table.
     ///

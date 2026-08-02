@@ -27,9 +27,10 @@ pub use audio_encoding::audio_encoding_name;
 pub use cfa_pattern::decode_cfa_pattern;
 pub use duration::convert_duration;
 pub use exif_enums::{
-    format_color_space, format_components_configuration, format_compression, format_contrast,
-    format_custom_rendered, format_digital_zoom_ratio, format_exposure_mode, format_file_source,
-    format_flash, format_focal_plane_resolution_unit, format_gain_control, format_interop_index,
+    file_source_label, file_source_label_bytes, format_color_space,
+    format_components_configuration, format_compression, format_contrast, format_custom_rendered,
+    format_digital_zoom_ratio, format_exposure_mode, format_file_source, format_flash,
+    format_focal_plane_resolution_unit, format_gain_control, format_interop_index,
     format_light_source, format_metering_mode, format_orientation, format_resolution_unit,
     format_saturation, format_scene_capture_type, format_sensing_method, format_sharpness,
     format_subject_distance_range, format_white_balance, format_ycbcr_positioning,

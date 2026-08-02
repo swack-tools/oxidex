@@ -16,6 +16,8 @@
 //! | 0xA301 | SceneType             | 1 byte enum            | "Directly photographed"   |
 //! | 0xA302 | CFAPattern            | H*V color array        | "[Green,Blue][Red,Green]" |
 
+use crate::core::formatters::exif_enums::file_source_label_bytes;
+
 /// Decode EXIF version bytes to a human-readable string.
 ///
 /// The EXIF version is stored as 4 ASCII bytes representing the version number.
@@ -75,21 +77,15 @@ pub fn decode_flashpix_version(data: &[u8]) -> Option<String> {
 
 /// Decode FileSource tag (0xA300) to a human-readable string.
 ///
-/// The FileSource tag indicates how the image was captured. It's stored as
-/// a single byte with the following meanings:
+/// Thin wrapper over
+/// [`crate::core::formatters::exif_enums::file_source_label_bytes`], which is
+/// `%{Exif::Main{0xa300}}{PrintConv}` -- the one copy of that hash.
 ///
-/// - 1: Film Scanner
-/// - 2: Reflection Print Scanner
-/// - 3: Digital Camera
-///
-/// # Arguments
-///
-/// * `data` - Raw binary data containing the file source byte
-///
-/// # Returns
-///
-/// * `Some(String)` - The human-readable source description
-/// * `None` - If data is empty
+/// This function used to carry its own transcription, and that copy read only
+/// `data[0]`: it answered `Digital Camera` for the four-byte `"\3\0\0\0"` that
+/// Sigma writes, where ExifTool answers `Sigma Digital Camera`. Its unknown
+/// form is kept -- a single byte the hash does not name prints `Unknown (N)`,
+/// which is what ExifTool reports for the four corpus files storing a zero.
 ///
 /// # Examples
 ///
@@ -100,17 +96,20 @@ pub fn decode_flashpix_version(data: &[u8]) -> Option<String> {
 /// assert_eq!(decode_file_source(&[1]), Some("Film Scanner".to_string()));
 /// assert_eq!(decode_file_source(&[2]), Some("Reflection Print Scanner".to_string()));
 /// assert_eq!(decode_file_source(&[5]), Some("Unknown (5)".to_string()));
+/// // Sigma's four-byte form is a separate key in the hash, not a stray `03`
+/// assert_eq!(
+///     decode_file_source(&[3, 0, 0, 0]),
+///     Some("Sigma Digital Camera".to_string())
+/// );
 /// assert_eq!(decode_file_source(&[]), None);
 /// ```
 pub fn decode_file_source(data: &[u8]) -> Option<String> {
-    if data.is_empty() {
-        return None;
+    if let Some(label) = file_source_label_bytes(data) {
+        return Some(label.to_string());
     }
-    match data[0] {
-        1 => Some("Film Scanner".to_string()),
-        2 => Some("Reflection Print Scanner".to_string()),
-        3 => Some("Digital Camera".to_string()),
-        other => Some(format!("Unknown ({})", other)),
+    match data {
+        [byte] => Some(format!("Unknown ({})", byte)),
+        _ => None,
     }
 }
 
@@ -450,13 +449,25 @@ mod tests {
         assert_eq!(decode_file_source(&[]), None);
     }
 
+    /// The four-byte form is its own PrintConv key, not a `3` with padding.
+    ///
+    /// This test used to assert `Some("Digital Camera")` under the comment
+    /// "Extra bytes should be ignored", which is what the implementation did
+    /// and not what ExifTool does. `%{Exif::Main{0xa300}}{PrintConv}` holds
+    /// `"\3\0\0\0" => 'Sigma Digital Camera'` as a separate key, dumped
+    /// straight from the loaded Perl symbol table, and `exiftool -G1 -s` on
+    /// `Sigma.jpg` (whose 0xa300 is `undef[4]` = `03 00 00 00`) prints
+    /// `Sigma Digital Camera`. The old assertion is the mirror-test pattern:
+    /// it restated the bug and passed.
     #[test]
-    fn test_file_source_extra_data() {
-        // Extra bytes should be ignored
+    fn test_file_source_sigma_four_byte_form() {
         assert_eq!(
             decode_file_source(&[3, 0, 0, 0]),
-            Some("Digital Camera".to_string())
+            Some("Sigma Digital Camera".to_string())
         );
+        // Not every four-byte value is the Sigma key.
+        assert_eq!(decode_file_source(&[1, 0, 0, 0]), None);
+        assert_eq!(decode_file_source(&[3, 0, 0]), None);
     }
 
     // ==================== SceneType Tests ====================
