@@ -160,12 +160,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let t_compare = std::time::Instant::now();
                         let previous = baseline.as_ref().and_then(|b| b.by_format.get(&format));
                         let extractor_duplicates = oxidex_result.duplicate_emissions.clone();
-                        let mut comparison = ComparisonEngine::compare(
+                        let mut comparison = ComparisonEngine::compare_with_instances(
                             oxidex_result.tags,
                             exiftool_result.tags,
                             &format,
                             files_tested,
                             previous,
+                            &oxidex_result.all_instances,
+                            &exiftool_result.all_instances,
                         );
                         // Union, not assignment. `compare` keeps its own
                         // per-(source_file, key) distinct-value check for

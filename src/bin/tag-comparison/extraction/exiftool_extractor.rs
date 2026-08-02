@@ -177,6 +177,7 @@ impl ExifToolExtractor {
                 // ExifTool is the reference implementation; a duplicate
                 // emission is only ever an oxidex-side defect.
                 duplicate_emissions: Vec::new(),
+                all_instances: HashMap::new(),
             });
         }
 
@@ -196,6 +197,7 @@ impl ExifToolExtractor {
         // OPTIMIZATION: Process files in batches using exiftool's batch mode
         // This is MUCH faster than spawning exiftool for each file individually
         let mut all_tags: HashMap<String, (TagInfo, usize)> = HashMap::new();
+        let mut all_instances: HashMap<String, Vec<TagInfo>> = HashMap::new();
 
         // Process in batches
         for batch in files.chunks(BATCH_SIZE) {
@@ -203,10 +205,12 @@ impl ExifToolExtractor {
                 Ok(batch_results) => {
                     for file_tags in batch_results {
                         for tag_info in file_tags {
+                            let key = format!("{}:{}", tag_info.family, tag_info.name);
                             all_tags
-                                .entry(format!("{}:{}", tag_info.family, tag_info.name))
+                                .entry(key.clone())
                                 .and_modify(|(_info, count)| *count += 1)
-                                .or_insert((tag_info.clone(), 1));
+                                .or_insert_with(|| (tag_info.clone(), 1));
+                            all_instances.entry(key).or_default().push(tag_info);
                         }
                     }
                 }
@@ -216,10 +220,12 @@ impl ExifToolExtractor {
                     for file_path in batch {
                         if let Ok(file_tags) = self.run_exiftool_on_file(file_path) {
                             for tag_info in file_tags {
+                                let key = format!("{}:{}", tag_info.family, tag_info.name);
                                 all_tags
-                                    .entry(format!("{}:{}", tag_info.family, tag_info.name))
+                                    .entry(key.clone())
                                     .and_modify(|(_info, count)| *count += 1)
-                                    .or_insert((tag_info.clone(), 1));
+                                    .or_insert_with(|| (tag_info.clone(), 1));
+                                all_instances.entry(key).or_default().push(tag_info);
                             }
                         }
                     }
@@ -242,6 +248,7 @@ impl ExifToolExtractor {
             // ExifTool is the reference implementation; a duplicate
             // emission is only ever an oxidex-side defect.
             duplicate_emissions: Vec::new(),
+            all_instances,
         };
 
         // Cache the result in memory and on disk
