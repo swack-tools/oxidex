@@ -23,6 +23,7 @@
 // Submodules for extended tag parsing
 pub mod lookups;
 pub mod tables;
+pub mod text_info;
 
 use crate::const_decoder;
 use crate::error::{ExifToolError, Result};
@@ -71,6 +72,13 @@ const OLYMPUS_THUMBNAIL_IMAGE: u16 = 0x0104;
 const OLYMPUS_BODY_FIRMWARE_VERSION: u16 = 0x0404;
 const OLYMPUS_LENS_MODEL: u16 = 0x0206;
 
+// `Olympus::Main` tags whose conversions depend on each other, so the plain
+// table walk cannot carry them. (The block above numbers the same directory
+// from a different origin and must not be reused for these.)
+const MAIN_QUALITY: u16 = 0x0201;
+const MAIN_CAMERA_TYPE: u16 = 0x0207;
+const MAIN_TEXT_INFO: u16 = 0x0208;
+
 // Olympus MakerNote header signatures
 // Type 2 (newer cameras): "OLYMPUS\0II" or "OLYMPUS\0MM" (10 bytes) followed by offset
 const OLYMPUS_HEADER: &[u8] = b"OLYMPUS\0II";
@@ -81,6 +89,21 @@ const OLYMPUS_HEADER_BE: &[u8] = b"OLYMPUS\0MM";
 // `data[0..8] == LITERAL` comparison could never be true and every type-1
 // Olympus JPEG (163 of the 315 in the corpus) was rejected outright.
 const OLYMPUS_HEADER_TYPE1: &[u8] = b"OLYMP\x00";
+// Type 3 (OM System bodies -- OM-1, OM-3, OM-5, OM-1 Mark II, TG-7). The
+// header is "OM SYSTEM\0" padded to 12 bytes, then "II"/"MM" and a version
+// word, so the directory starts 16 bytes in:
+//
+// ```text
+// MakerNotes.pm:589     Name => 'MakerNoteOlympus3',
+// MakerNotes.pm:591     Condition => '$$valPt =~ /^OM SYSTEM\0/',
+// MakerNotes.pm:594         Start => '$valuePtr + 16',
+// MakerNotes.pm:595         Base => '$start - 16',
+// ```
+//
+// These bodies report `Make` as "OM Digital Solutions", which the dispatcher
+// already routes here; only the signature check rejected them, so every OM
+// System JPEG yielded no Olympus tags at all.
+const OLYMPUS_HEADER_TYPE3: &[u8] = b"OM SYSTEM\x00";
 
 // Sub-IFD pointer tag IDs - these point to nested IFD structures
 const OLYMPUS_EQUIPMENT_SUBIFD: u16 = 0x2010;
@@ -373,6 +396,12 @@ impl MakerNoteParser for OlympusParser {
             return true;
         }
 
+        // Check for Type 3 headers: "OM SYSTEM\0" plus padding, byte order and
+        // a version word.
+        if data.len() >= 16 && data.starts_with(OLYMPUS_HEADER_TYPE3) {
+            return true;
+        }
+
         false
     }
 
@@ -440,9 +469,10 @@ impl OlympusParser {
             return Ok(());
         };
 
-        // Type 2 ("OLYMPUS\0II") stores value offsets relative to the
-        // MakerNote itself (ExifTool: `Base => '$start - 12'`), so no
-        // correction is needed. Type 1 ("OLYMP\0") measures them from the TIFF
+        // Type 2 ("OLYMPUS\0II") and type 3 ("OM SYSTEM\0") store value offsets
+        // relative to the MakerNote itself (ExifTool: `Base => '$start - 12'`
+        // and `'$start - 16'`), so no correction is needed. Type 1
+        // ("OLYMP\0") measures them from the TIFF
         // header, so the correction is exactly minus the block's own
         // TIFF-relative offset -- and when the caller could not supply it,
         // out-of-line values stay unread. A structural guess is not safe here:
@@ -512,7 +542,151 @@ impl OlympusParser {
             }
         }
 
+        parse_camera_type_and_quality(data, ifd_start, &entries, base, effective_byte_order, tags);
+
         Ok(())
+    }
+}
+
+/// `Olympus::Main` 0x0201 `Quality`, 0x0207 `CameraType` and the 0x0208
+/// `TextInfo` sub-directory, which the plain table walk cannot express.
+///
+/// The three are entangled: `CameraType` is a `DataMember` that `Quality`'s
+/// `PrintConv` consults, and `TextInfo` carries a second `CameraType` that
+/// overwrites the first.
+///
+/// ```text
+/// Olympus.pm:762   0x0207 => { #PH (was incorrectly FirmwareVersion, ref 1/3)
+/// Olympus.pm:763       Name => 'CameraType',
+/// Olympus.pm:764       Condition => '$$valPt ne "NORMAL"', # FE240, SP510, u730 and u1000 write this
+/// Olympus.pm:766       DataMember => 'CameraType',
+/// Olympus.pm:767       RawConv => '$self->{CameraType} = $val',
+/// Olympus.pm:769       ValueConv => '$val =~ s/\s+$//; $val',  # ("SX151 " has trailing space)
+/// Olympus.pm:771       PrintConv => \%olympusCameraTypes,
+/// Olympus.pm:775   0x0208 => {
+/// Olympus.pm:776       Name => 'TextInfo',
+/// Olympus.pm:778           TagTable => 'Image::ExifTool::Olympus::TextInfo',
+/// ```
+///
+/// The FE240/SP510UZ/u730/u1000 bodies pad their placeholder to `"NORMAL  "`,
+/// which is *not* `eq "NORMAL"` -- so ExifTool does extract it, prints
+/// `Unknown (NORMAL)`, and then `TextInfo` overwrites both the tag and the
+/// data member with the real body code.
+fn parse_camera_type_and_quality(
+    data: &[u8],
+    ifd_start: usize,
+    entries: &[ifd::RawEntry],
+    base: Option<i64>,
+    order: ByteOrder,
+    tags: &mut HashMap<String, String>,
+) {
+    let floor = ifd_start + 2 + entries.len() * 12 + 4;
+    // ExifTool's `$$self{CameraType}`, tracked in extraction order.
+    let mut camera_type: Option<String> = None;
+    let mut quality: Option<i64> = None;
+
+    for entry in entries {
+        let decode = || ifd::decode_entry_with_floor(data, entry, base, order, None, floor);
+        match entry.tag_id {
+            MAIN_QUALITY => {
+                quality = decode().and_then(|v| v.ints().and_then(|n| n.first().copied()));
+            }
+            MAIN_CAMERA_TYPE => {
+                let Some(val) = decode() else { continue };
+                let ifd::OlyVal::Bytes(raw) = &val else {
+                    continue;
+                };
+                // `Condition => '$$valPt ne "NORMAL"'` tests the raw value.
+                if raw.as_slice() == b"NORMAL" {
+                    continue;
+                }
+                let Some(text) = val.as_string() else {
+                    continue;
+                };
+                // RawConv runs before ValueConv, so the data member keeps the
+                // trailing padding that ValueConv strips for display.
+                camera_type = Some(text.clone());
+                tags.insert(
+                    "Olympus:CameraType".to_string(),
+                    ifd::list_lookup_or_unknown(lookups::CAMERA_TYPE2, text.trim_end()),
+                );
+            }
+            MAIN_TEXT_INFO => {
+                let Some(val) = decode() else { continue };
+                let ifd::OlyVal::Bytes(raw) = &val else {
+                    continue;
+                };
+                if let Some(found) = text_info::parse(raw, tags) {
+                    camera_type = Some(found);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(quality) = quality {
+        tags.insert(
+            "Olympus:Quality".to_string(),
+            print_quality(quality, camera_type.as_deref()),
+        );
+    }
+}
+
+/// `Olympus::Main` 0x0201 `Quality`.
+///
+/// ```text
+/// Olympus.pm:708       PrintConv => sub {
+/// Olympus.pm:709           my ($val, $self) = @_;
+/// Olympus.pm:710           my %t1 = ( # all SX camera types except SX151
+/// Olympus.pm:716           my %t2 = ( # all other types (except D4322, ref 22)
+/// Olympus.pm:725           my $conv = $self->{CameraType} =~ /^(SX(?!151\b)|D4322)/ ? \%t1 : \%t2;
+/// Olympus.pm:726           return $$conv{$val} ? $$conv{$val} : "Unknown ($val)";
+/// ```
+fn print_quality(value: i64, camera_type: Option<&str>) -> String {
+    const SX: &[(i64, &str)] = &[
+        (0, "SQ (Low)"),
+        (1, "HQ (Normal)"),
+        (2, "SHQ (Fine)"),
+        (6, "RAW"),
+    ];
+    const OTHER: &[(i64, &str)] = &[
+        (1, "SQ (Low)"),
+        (2, "HQ (Normal)"),
+        (3, "SHQ (Fine)"),
+        (4, "RAW"),
+        (5, "Medium-Fine"),
+        (6, "Small-Fine"),
+        (33, "Uncompressed"),
+    ];
+    let map = if uses_sx_quality_table(camera_type) {
+        SX
+    } else {
+        OTHER
+    };
+    ifd::lookup_or_unknown(map, value)
+}
+
+/// Perl's `$self->{CameraType} =~ /^(SX(?!151\b)|D4322)/`.
+///
+/// An unset data member never matches, which is the `%t2` branch.
+fn uses_sx_quality_table(camera_type: Option<&str>) -> bool {
+    let Some(camera_type) = camera_type else {
+        return false;
+    };
+    if camera_type.starts_with("D4322") {
+        return true;
+    }
+    let Some(rest) = camera_type.strip_prefix("SX") else {
+        return false;
+    };
+    // `(?!151\b)`: "SX151" is excluded only when a word boundary follows the
+    // digits, so the padded "SX151 " is excluded but "SX1518" would not be.
+    match rest.strip_prefix("151") {
+        Some(after) => after
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_'),
+        None => true,
     }
 }
 
@@ -625,6 +799,17 @@ fn detect_header_type_and_offsets(
         if &data[0..10] == OLYMPUS_HEADER_BE {
             return Ok((12, ByteOrder::BigEndian));
         }
+    }
+
+    // Check Type 3 headers: ExifTool's `Start => '$valuePtr + 16'`. The byte
+    // order marker sits at offset 12, after the NUL-padded signature.
+    if data.len() >= 16 && data.starts_with(OLYMPUS_HEADER_TYPE3) {
+        let order = match &data[12..14] {
+            b"II" => ByteOrder::LittleEndian,
+            b"MM" => ByteOrder::BigEndian,
+            _ => default_byte_order,
+        };
+        return Ok((16, order));
     }
 
     // Check Type 1 headers: ExifTool's `Start => '$valuePtr + 8'`.
