@@ -91,6 +91,13 @@ mod sigma_makernotes_tests;
 #[path = "integration/phaseone_makernotes_tests.rs"]
 mod phaseone_makernotes_tests;
 
+// This one was never declared, so `tests/integration/apple_makernotes_tests.rs`
+// never compiled and never ran -- which is how it kept asserting an
+// `Apple:PortraitMode` at 0x0020, an `Apple:LensModel` at 0x0035 and an
+// `Apple:FacingCamera` at 0x0032, none of which is a tag `%Apple::Main` has.
+#[path = "integration/apple_makernotes_tests.rs"]
+mod apple_makernotes_tests;
+
 #[path = "integration/format_detection.rs"]
 mod format_detection;
 

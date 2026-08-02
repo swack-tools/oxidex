@@ -513,7 +513,13 @@ pub fn parse_exif_subifd(
 ) {
     if let Ok(exif_tags) = parse_ifd(reader, offset, byte_order) {
         // Track MakerNote and InteroperabilityIFD pointer in EXIF IFD
-        let mut exif_makernote_data: Option<&[u8]> = None;
+        // An EXIF IFD may declare 0x927C more than once -- an editor that
+        // appends its own private block leaves the camera's in place, and
+        // ExifTool processes each entry in turn. Keeping only the last one
+        // meant `Apple_iPhone6.jpg`, whose second 0x927C is a UTF-16 JSON blob
+        // written by an editing app, reached the Apple parser with the wrong
+        // 142 bytes and reported nothing at all.
+        let mut exif_makernote_data: Vec<&[u8]> = Vec::new();
         let mut interop_ifd_offset: Option<u64> = None;
 
         // First pass: convert tags and capture special pointers
@@ -523,7 +529,7 @@ pub fn parse_exif_subifd(
 
             // Check for MakerNote in EXIF IFD (tag 0x927C)
             if *tag_id == MAKERNOTE {
-                exif_makernote_data = Some(bytes);
+                exif_makernote_data.push(bytes);
             }
 
             // Check for InteroperabilityIFDPointer (tag 0xA005)
@@ -560,7 +566,7 @@ pub fn parse_exif_subifd(
         // is given the enclosing TIFF block as well as the payload, because a
         // MakerNote's value offsets are measured from the TIFF header and
         // routinely address bytes past the payload's declared end.
-        if let Some(makernote_bytes) = exif_makernote_data {
+        for makernote_bytes in exif_makernote_data {
             let ctx = makernote_context(
                 reader,
                 offset,
