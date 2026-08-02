@@ -401,6 +401,21 @@ const_decoder!(pub COLOR_MODE,
 // declares only `Writable => 'rational64u'`, so the value is reported as-is.
 // The Off/On/Auto decoder that used to live here was invented.
 
+// CameraOrientation decoder (tag 0x008F), Panasonic.pm:1188-1199. Registered
+// with no decoder at all, so oxidex printed the raw int8u ("0") where
+// ExifTool prints "Normal".
+const_decoder!(pub CAMERA_ORIENTATION,
+    i32,
+    [
+        (0, "Normal"),
+        (1, "Rotate CW"),
+        (2, "Rotate 180"),
+        (3, "Rotate CCW"),
+        (4, "Tilt Upwards"),
+        (5, "Tilt Downwards"),
+    ]
+);
+
 // Intelligent exposure decoder - maps values to iExposure modes
 const_decoder!(pub INTELLIGENT_EXPOSURE,
     i32,
@@ -846,18 +861,51 @@ impl PanasonicParser {
                 );
                 return;
             }
+            // AFPointPosition: two rational64u values (X, Y AF-area center)
+            0x004D => {
+                let printed = extract_rational_values(entry, data, ifd_offset, data_base, byte_order)
+                    .and_then(|pairs| decode_af_point_position(&pairs));
+                if let Some(printed) = printed {
+                    tags.insert("Panasonic:AFPointPosition".to_string(), printed);
+                }
+                return;
+            }
+            // ClearRetouchValue: plain rational64u, no ValueConv/PrintConv
+            0x00A3 => {
+                let printed = extract_rational_values(entry, data, ifd_offset, data_base, byte_order)
+                    .and_then(|pairs| pairs.first().copied())
+                    .and_then(|(num, den)| format_rational64u(num, den));
+                if let Some(printed) = printed {
+                    tags.insert("Panasonic:ClearRetouchValue".to_string(), printed);
+                }
+                return;
+            }
             _ => {}
         }
 
-        // Special case: Roll and Pitch angles require degree formatting
-        if tag_id == 0x008D || tag_id == 0x008E {
-            // PANA_ROLL_ANGLE, PANA_PITCH_ANGLE
-            let value = entry.value_offset as i32;
+        // Accelerometer axes: int16u on the wire, but Format => int16s
+        // overrides how the SHORT is interpreted (Panasonic.pm:1170-1187).
+        // No ValueConv/PrintConv -- the signed value prints as-is.
+        if matches!(tag_id, 0x008C | 0x008D | 0x008E) {
+            let value = inline_u16_value(entry, byte_order) as i16;
             if let Some(tag_name) = registry.get_tag_name(tag_id) {
-                tags.insert(
-                    format!("Panasonic:{}", tag_name),
-                    format!("{:.1}°", value as f32 / 10.0),
-                );
+                tags.insert(format!("Panasonic:{}", tag_name), value.to_string());
+            }
+            return;
+        }
+
+        // RollAngle / PitchAngle: same int16u-wire/int16s-Format override,
+        // plus ValueConv '$val/10' (RollAngle, Panasonic.pm:1200-1207) and
+        // '-$val/10' (PitchAngle, Panasonic.pm:1208-1215). The negation is
+        // done on the integer before dividing so a zero reading prints "0",
+        // not "-0".
+        if tag_id == 0x0090 || tag_id == 0x0091 {
+            let raw = i32::from(inline_u16_value(entry, byte_order) as i16);
+            let value = if tag_id == 0x0091 { -raw } else { raw };
+            if let Some(tag_name) = registry.get_tag_name(tag_id)
+                && let Some(printed) = sprintf_g(f64::from(value) / 10.0, 10)
+            {
+                tags.insert(format!("Panasonic:{}", tag_name), printed);
             }
             return;
         }
@@ -1135,6 +1183,134 @@ fn extract_component_values(
         }
         _ => None,
     }
+}
+
+/// Extracts a `rational64u[count]` entry as `(numerator, denominator)` pairs,
+/// honoring byte order. Always out-of-line: 8 bytes per component is never
+/// ≤4, so this never hits the inline-value path `extract_raw_bytes` has for
+/// smaller types.
+fn extract_rational_values(
+    entry: &IfdEntry,
+    full_data: &[u8],
+    ifd_offset: usize,
+    data_base: Option<u32>,
+    byte_order: ByteOrder,
+) -> Option<Vec<(u32, u32)>> {
+    let count = entry.value_count as usize;
+    let byte_len = count.checked_mul(8)?;
+    let abs_offset = resolve_value_offset(entry, ifd_offset, data_base)?;
+    let bytes = full_data.get(abs_offset..abs_offset + byte_len)?;
+    Some(
+        bytes
+            .chunks_exact(8)
+            .map(|c| match byte_order {
+                ByteOrder::LittleEndian => (
+                    u32::from_le_bytes([c[0], c[1], c[2], c[3]]),
+                    u32::from_le_bytes([c[4], c[5], c[6], c[7]]),
+                ),
+                ByteOrder::BigEndian => (
+                    u32::from_be_bytes([c[0], c[1], c[2], c[3]]),
+                    u32::from_be_bytes([c[4], c[5], c[6], c[7]]),
+                ),
+            })
+            .collect(),
+    )
+}
+
+/// `sprintf("%.*g", precision, value)`, ExifTool's `RoundFloat` (ExifTool.pm:5960-5964
+/// is exactly this call with precision 10) and the literal `%.2g` in
+/// AFPointPosition's PrintConv (Panasonic.pm:924-929). `PanasonicDMC-LX7.jpg`'s
+/// AFPointPosition reads out-of-range (its second rational runs into the next
+/// tag's bytes) and ExifTool's own %.2g still renders it in scientific
+/// notation ("3.7e+02"), so that branch is real, not a theoretical corner.
+fn sprintf_g(value: f64, precision: usize) -> Option<String> {
+    if !value.is_finite() {
+        return None;
+    }
+    if value == 0.0 {
+        return Some("0".to_string());
+    }
+    let precision = precision.max(1);
+    let neg = value.is_sign_negative();
+    let magnitude = value.abs();
+
+    let sci = format!("{:.*e}", precision - 1, magnitude);
+    let (mantissa_str, exp_str) = sci.split_once('e')?;
+    let exponent: i32 = exp_str.parse().ok()?;
+
+    let sign = if neg { "-" } else { "" };
+    if exponent < -4 || exponent >= precision as i32 {
+        let mantissa = trim_trailing_zeros(mantissa_str);
+        let exp_sign = if exponent < 0 { '-' } else { '+' };
+        return Some(format!("{sign}{mantissa}e{exp_sign}{:02}", exponent.abs()));
+    }
+
+    let decimals = (precision as i32 - 1 - exponent).max(0) as usize;
+    let fixed = format!("{:.*}", decimals, magnitude);
+    let trimmed = trim_trailing_zeros(&fixed);
+    Some(format!("{sign}{trimmed}"))
+}
+
+/// Strips a trailing `.` and any trailing zeros after it, the `%g` rule that
+/// distinguishes it from `%f` (`sprintf_g`'s only caller of this helper cares
+/// about the digits, not the string boundaries -- no `#` flag support needed).
+fn trim_trailing_zeros(s: &str) -> &str {
+    if !s.contains('.') {
+        return s;
+    }
+    s.trim_end_matches('0').trim_end_matches('.')
+}
+
+/// `GetRational64u` (ExifTool.pm:6114-6120): `$denom or return $numer ? 'inf' : 'undef'`,
+/// otherwise `RoundFloat($numer/$denom, 10)`.
+fn format_rational64u(numerator: u32, denominator: u32) -> Option<String> {
+    if denominator == 0 {
+        return Some(if numerator != 0 { "inf" } else { "undef" }.to_string());
+    }
+    sprintf_g(f64::from(numerator) / f64::from(denominator), 10)
+}
+
+/// AFPointPosition (tag 0x004D), Panasonic.pm:916-935: two `rational64u`
+/// values (X, Y AF-area center, each 0.0-1.0), formatted through
+/// ```perl
+/// return 'none' if $val eq '16777216 16777216';
+/// return 'n/a' if $val =~ /^4194303\.9/;
+/// my @a = split ' ', $val;
+/// sprintf("%.2g %.2g", @a);
+/// ```
+/// where `$val` is the two `GetRational64u` results joined by a space.
+fn decode_af_point_position(pairs: &[(u32, u32)]) -> Option<String> {
+    let [(nx, dx), (ny, dy)] = pairs else {
+        return None;
+    };
+    let sx = format_rational64u(*nx, *dx)?;
+    let sy = format_rational64u(*ny, *dy)?;
+    let joined = format!("{sx} {sy}");
+    if joined == "16777216 16777216" {
+        return Some("none".to_string());
+    }
+    if joined.starts_with("4194303.9") {
+        return Some("n/a".to_string());
+    }
+    let gx = af_point_component_g(*nx, *dx)?;
+    let gy = af_point_component_g(*ny, *dy)?;
+    Some(format!("{gx} {gy}"))
+}
+
+/// One AFPointPosition component through the `%.2g` reformat
+/// (Panasonic.pm:924-929's `sprintf("%.2g %.2g", @a)`). Perl's `sprintf`
+/// coerces a non-numeric string argument to a number: `"undef"` (this tag's
+/// `GetRational64u` zero-denominator, zero-numerator case --
+/// `PanasonicDMC-GH3.jpg`'s raw `0/0 0/0`) numifies to 0 with exactly the
+/// warning ExifTool emits (`Argument "undef" isn't numeric in sprintf`), and
+/// `"inf"` is Perl's own stringification of the special float Infinity,
+/// unaffected by `%g`'s precision and rendered `"Inf"`
+/// (`PanasonicDMC-FZ200.jpg`'s `8388608/0 0/4294901760` -> `"Inf 0"`).
+fn af_point_component_g(numerator: u32, denominator: u32) -> Option<String> {
+    if denominator == 0 {
+        return Some(if numerator != 0 { "Inf" } else { "0" }.to_string());
+    }
+    sprintf_g(f64::from(numerator) / f64::from(denominator), 2)
 }
 
 /// Renders undef bytes as text, trimming trailing NULs (e.g. MakerNoteVersion "0130")
@@ -1767,6 +1943,153 @@ mod tests {
         assert_eq!(value_base(Some(1368), None), Some(1368));
         // With no enclosing block there is no TIFF-relative base to correct.
         assert_eq!(value_base(None, Some("DC-FT7")), None);
+    }
+
+    /// `sprintf("%.*g", precision, value)` (`RoundFloat` and AFPointPosition's
+    /// PrintConv both call this). Panasonic.pm:1200-1215 / :924-929.
+    #[test]
+    fn test_sprintf_g() {
+        assert_eq!(sprintf_g(0.0, 10).unwrap(), "0");
+        assert_eq!(sprintf_g(-1.0, 10).unwrap(), "-1");
+        assert_eq!(sprintf_g(44.1, 10).unwrap(), "44.1");
+        assert_eq!(sprintf_g(16777216.0, 10).unwrap(), "16777216");
+        // 4294967295/1024, RoundFloat'd to 10 sig figs -- the AFPointPosition
+        // "n/a" sentinel is a prefix match on exactly this string.
+        assert_eq!(sprintf_g(4294967295.0 / 1024.0, 10).unwrap(), "4194303.999");
+        assert_eq!(sprintf_g(0.5, 2).unwrap(), "0.5");
+        // Scientific-notation branch (exponent >= precision or < -4):
+        // combined-samples/Panasonic/PanasonicDMC-LX7.jpg's AFPointPosition
+        // reads out of the documented 0.0-1.0 range (its second rational
+        // runs into the next tag's bytes), and ExifTool's own %.2g still
+        // renders that in scientific notation.
+        assert_eq!(sprintf_g(130.0, 2).unwrap(), "1.3e+02");
+        assert_eq!(sprintf_g(365.7209298, 2).unwrap(), "3.7e+02");
+        assert_eq!(sprintf_g(0.000_012_34, 2).unwrap(), "1.2e-05");
+        assert_eq!(sprintf_g(-0.000_012_34, 2).unwrap(), "-1.2e-05");
+    }
+
+    /// `GetRational64u` (ExifTool.pm:6114-6120): a zero denominator is
+    /// "inf" if the numerator is nonzero, "undef" if it's also zero.
+    #[test]
+    fn test_format_rational64u() {
+        assert_eq!(format_rational64u(0, 0).unwrap(), "undef");
+        assert_eq!(format_rational64u(5, 0).unwrap(), "inf");
+        assert_eq!(format_rational64u(128, 256).unwrap(), "0.5");
+        assert_eq!(format_rational64u(0, 1).unwrap(), "0");
+    }
+
+    /// AFPointPosition (Panasonic.pm:916-935): the two sentinel raw values
+    /// and the ordinary %.2g-formatted case, all keyed on the exact
+    /// `GetRational64u`-rounded string the real PrintConv branches on.
+    #[test]
+    fn test_decode_af_point_position() {
+        // combined-samples/Leica/LeicaD-Lux7.jpg: 128/256 128/256 -> "0.5 0.5"
+        assert_eq!(
+            decode_af_point_position(&[(128, 256), (128, 256)]).unwrap(),
+            "0.5 0.5"
+        );
+        // 16777216/1 both components is the documented "none" sentinel.
+        assert_eq!(
+            decode_af_point_position(&[(16_777_216, 1), (16_777_216, 1)]).unwrap(),
+            "none"
+        );
+        // 4294967295/1024 is the documented "n/a" sentinel (rounds to a
+        // string starting "4194303.9").
+        assert_eq!(
+            decode_af_point_position(&[(4_294_967_295, 1024), (4_294_967_295, 1024)]).unwrap(),
+            "n/a"
+        );
+        // combined-samples/Panasonic/PanasonicDMC-GH3.jpg: raw 0/0 0/0.
+        // Neither component is a defined sentinel, so the %.2g reformat
+        // runs on two GetRational64u "undef" strings, which Perl's sprintf
+        // numifies to 0.
+        assert_eq!(decode_af_point_position(&[(0, 0), (0, 0)]).unwrap(), "0 0");
+        // combined-samples/Panasonic/PanasonicDMC-FZ200.jpg: 8388608/0 0/4294901760.
+        // The first component is "inf" (nonzero numerator, zero
+        // denominator), which Perl's sprintf renders "Inf" regardless of
+        // the %.2g precision; the second is the "undef" case above.
+        assert_eq!(
+            decode_af_point_position(&[(8_388_608, 0), (0, 4_294_901_760)]).unwrap(),
+            "Inf 0"
+        );
+    }
+
+    /// `combined-samples/Leica/LeicaD-Lux7.jpg`'s MakerNote, byte-for-byte:
+    /// AFPointPosition's 16 bytes from `exiftool -v3`, ClearRetouchValue's
+    /// 0/0, and the accelerometer/orientation/angle SHORTs/BYTE built from
+    /// the signed values `exiftool -G1 -s` reports for the same file.
+    #[test]
+    fn test_matches_exiftool_on_leica_d_lux7_bytes() {
+        let mut data = Vec::new();
+        data.extend_from_slice(PANASONIC_HEADER); // 12 bytes, ifd_offset == 12
+        data.extend_from_slice(&8u16.to_le_bytes()); // entry_count
+
+        // Each entry: tag_id, field_type, value_count, value_offset (all LE).
+        // Out-of-line offsets are relative to ifd_offset (12), per
+        // resolve_value_offset's data_base=None branch.
+        let entries_start = 14usize; // ifd_offset(12) + entry_count field(2)
+        let entry_bytes = 8 * 12;
+        let af_point_offset = entries_start + entry_bytes; // absolute
+        let clear_retouch_offset = af_point_offset + 16; // absolute
+
+        let mut push_entry = |tag_id: u16, field_type: u16, count: u32, value: u32| {
+            data.extend_from_slice(&tag_id.to_le_bytes());
+            data.extend_from_slice(&field_type.to_le_bytes());
+            data.extend_from_slice(&count.to_le_bytes());
+            data.extend_from_slice(&value.to_le_bytes());
+        };
+        push_entry(0x004D, 5, 2, (af_point_offset - 12) as u32); // AFPointPosition
+        push_entry(0x008D, 3, 1, 0xFFFD); // AccelerometerX: -3
+        push_entry(0x008E, 3, 1, 0xFF4E); // AccelerometerY: -178
+        push_entry(0x008C, 3, 1, 183); // AccelerometerZ: 183
+        push_entry(0x008F, 1, 1, 0); // CameraOrientation: Normal
+        push_entry(0x0090, 3, 1, 0xFFF6); // RollAngle: raw -10 -> -1
+        push_entry(0x0091, 3, 1, 0xFE47); // PitchAngle: raw -441 -> 44.1
+        push_entry(0x00A3, 5, 1, (clear_retouch_offset - 12) as u32); // ClearRetouchValue
+
+        // AFPointPosition's rational64u[2]: 128/256, 128/256 (0.5, 0.5).
+        data.extend_from_slice(&[
+            0x80, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x01,
+            0x00, 0x00,
+        ]);
+        // ClearRetouchValue's rational64u: 0/0 -> "undef".
+        data.extend_from_slice(&[0u8; 8]);
+
+        let mut tags = HashMap::new();
+        parse_panasonic_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
+
+        assert_eq!(tags.get("Panasonic:AFPointPosition").unwrap(), "0.5 0.5");
+        assert_eq!(tags.get("Panasonic:AccelerometerX").unwrap(), "-3");
+        assert_eq!(tags.get("Panasonic:AccelerometerY").unwrap(), "-178");
+        assert_eq!(tags.get("Panasonic:AccelerometerZ").unwrap(), "183");
+        assert_eq!(tags.get("Panasonic:CameraOrientation").unwrap(), "Normal");
+        assert_eq!(tags.get("Panasonic:RollAngle").unwrap(), "-1");
+        assert_eq!(tags.get("Panasonic:PitchAngle").unwrap(), "44.1");
+        assert_eq!(tags.get("Panasonic:ClearRetouchValue").unwrap(), "undef");
+    }
+
+    /// `combined-samples/Panasonic/PanasonicDC-FZ80.jpg`'s MakerNote: every
+    /// value in this group is zero/Off/Normal, exercising the non-negative,
+    /// non-sentinel path the Leica fixture above doesn't.
+    #[test]
+    fn test_matches_exiftool_on_panasonic_fz80_zero_values() {
+        assert_eq!(decode_af_point_position(&[(0, 1), (0, 1)]).unwrap(), "0 0");
+        assert_eq!(format_rational64u(0, 1).unwrap(), "0");
+        // PitchAngle's negation must not turn a zero reading into "-0".
+        let raw = 0i32;
+        assert_eq!(sprintf_g(f64::from(-raw) / 10.0, 10).unwrap(), "0");
+    }
+
+    /// `4294967295/1024` is only a sentinel inside AFPointPosition's own
+    /// PrintConv (Panasonic.pm:924-929) -- `format_rational64u` on its own,
+    /// as `ClearRetouchValue` and every other bare rational64u tag use it,
+    /// must still report the real quotient rather than special-casing it.
+    #[test]
+    fn test_format_rational64u_does_not_apply_af_point_position_sentinels() {
+        assert_eq!(
+            format_rational64u(4_294_967_295, 1024).unwrap(),
+            "4194303.999"
+        );
     }
 
     /// `combined-samples/Panasonic/PanasonicDC-S1.jpg`, MakerNote tag 0x004e:
