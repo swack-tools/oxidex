@@ -334,3 +334,61 @@ fn test_panasonic_lens_type_is_a_string() {
         Some(&"LEICA DG 12-60/F2.8-4.0".to_string())
     );
 }
+
+/// `MakerNoteLeica10` (MakerNotes.pm:724-731) is dispatched on its signature
+/// alone -- `Condition => '$$valPt =~ /^LEICA CAMERA AG\0/'` -- and routes to
+/// `Image::ExifTool::Panasonic::Main` with `Start => '$valuePtr + 18'`, not to
+/// any `Leica2`..`Leica9` table. It is what Leica's Panasonic-built compacts
+/// write: the D-Lux 7, D-Lux 8 and V-Lux 5.
+///
+/// The signature is 16 bytes and the IFD begins at 18, so two pad bytes sit
+/// between them. `LeicaD-Lux7.jpg`'s MakerNote opens
+/// `4c 45 49 43 41 20 43 41 4d 45 52 41 20 41 47 00  00 00  9d 00  01 00 03 00`
+/// -- "LEICA CAMERA AG\0", two NULs, a 157-entry count, then tag 0x0001 as a
+/// SHORT. Before this was recognised, the Leica parser claimed the header,
+/// skipped 15 bytes of it and decoded nothing, so all three bodies reported
+/// zero MakerNote tags where ExifTool reports ~100.
+#[test]
+fn test_leica10_header_routes_to_panasonic_main() {
+    use oxidex::parsers::tiff::ifd_parser::ByteOrder;
+    use oxidex::parsers::tiff::makernotes::panasonic::{
+        PanasonicParser, is_leica10_makernote, parse_panasonic_makernotes,
+    };
+    use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
+    use std::collections::HashMap;
+
+    let mut data = Vec::new();
+    data.extend_from_slice(b"LEICA CAMERA AG\0"); // 16-byte signature
+    data.extend_from_slice(&[0x00, 0x00]); // two pad bytes -> IFD at +18
+    data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+    data.extend_from_slice(&[0x01, 0x00]); // tag 0x0001 ImageQuality
+    data.extend_from_slice(&[0x03, 0x00]); // type: SHORT
+    data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // count 1
+    data.extend_from_slice(&[0x07, 0x00, 0x00, 0x00]); // inline value 7 = RAW
+    data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // next IFD
+
+    assert!(is_leica10_makernote(&data));
+    assert!(PanasonicParser.validate_header(&data));
+
+    let mut tags = HashMap::new();
+    parse_panasonic_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
+
+    // ExifTool prints `[Panasonic] ImageQuality : RAW` for LeicaD-Lux7.jpg.
+    assert_eq!(
+        tags.get("Panasonic:ImageQuality"),
+        Some(&"RAW".to_string()),
+        "Leica10 payload must decode against Panasonic::Main"
+    );
+}
+
+/// The Leica10 signature requires its terminating NUL. ExifTool's Condition is
+/// `/^LEICA CAMERA AG\0/`, so a payload that merely begins with the words is
+/// not a Leica10 MakerNote and must not be given the +18 IFD offset.
+#[test]
+fn test_leica10_requires_terminating_nul() {
+    use oxidex::parsers::tiff::makernotes::panasonic::is_leica10_makernote;
+
+    assert!(!is_leica10_makernote(b"LEICA CAMERA AG extra data"));
+    // ...and the bare signature with no room for an IFD is not one either.
+    assert!(!is_leica10_makernote(b"LEICA CAMERA AG\0"));
+}
