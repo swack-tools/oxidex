@@ -3,6 +3,8 @@
 //! This module provides mappings from numeric TIFF tag values to their
 //! human-readable string representations, matching Perl ExifTool output.
 
+use crate::core::formatters::exif_enums::compression_label;
+
 /// Maps TIFF tag enum values to their string representations.
 ///
 /// Returns the human-readable string for the given tag ID and value,
@@ -22,52 +24,14 @@ pub fn tiff_enum_to_string(tag_id: u16, value: i64) -> Option<String> {
             _ => None,
         },
 
-        // Compression (tag 0x0103)
-        0x0103 => match value {
-            1 => Some("Uncompressed".to_string()),
-            2 => Some("CCITT 1D".to_string()),
-            3 => Some("T4/Group 3 Fax".to_string()),
-            4 => Some("T6/Group 4 Fax".to_string()),
-            5 => Some("LZW".to_string()),
-            6 => Some("JPEG (old-style)".to_string()),
-            7 => Some("JPEG".to_string()),
-            8 => Some("Adobe Deflate".to_string()),
-            9 => Some("JBIG B&W".to_string()),
-            10 => Some("JBIG Color".to_string()),
-            99 => Some("JPEG".to_string()),
-            262 => Some("Kodak 262".to_string()),
-            32766 => Some("Next".to_string()),
-            32767 => Some("Sony ARW Compressed".to_string()),
-            32769 => Some("Packed RAW".to_string()),
-            32770 => Some("Samsung SRW Compressed".to_string()),
-            32771 => Some("CCIRLEW".to_string()),
-            32773 => Some("PackBits".to_string()),
-            32809 => Some("Thunderscan".to_string()),
-            32867 => Some("Kodak KDC Compressed".to_string()),
-            32895 => Some("IT8CTPAD".to_string()),
-            32896 => Some("IT8LW".to_string()),
-            32897 => Some("IT8MP".to_string()),
-            32898 => Some("IT8BL".to_string()),
-            32908 => Some("PixarFilm".to_string()),
-            32909 => Some("PixarLog".to_string()),
-            32946 => Some("Deflate".to_string()),
-            32947 => Some("DCS".to_string()),
-            34661 => Some("JBIG".to_string()),
-            34676 => Some("SGILog".to_string()),
-            34677 => Some("SGILog24".to_string()),
-            34712 => Some("JPEG 2000".to_string()),
-            34713 => Some("Nikon NEF Compressed".to_string()),
-            34715 => Some("JBIG2 TIFF FX".to_string()),
-            34718 => Some("Microsoft Document Imaging (MDI) Binary Level Codec".to_string()),
-            34719 => {
-                Some("Microsoft Document Imaging (MDI) Progressive Transform Codec".to_string())
-            }
-            34720 => Some("Microsoft Document Imaging (MDI) Vector".to_string()),
-            34892 => Some("Lossy JPEG".to_string()),
-            65000 => Some("Kodak DCR Compressed".to_string()),
-            65535 => Some("Pentax PEF Compressed".to_string()),
-            _ => None,
-        },
+        // Compression (tag 0x0103): `%Image::ExifTool::Exif::compression`, held
+        // once in `core::formatters::exif_enums`. The 40-id excerpt this file
+        // used to carry stopped at `34892 => 'Lossy JPEG'`, so a Samsung NX3000
+        // (32772), an Aperio slide (33003/33005) or any LibTiff 4.7 codec
+        // (50000/50001/50002, 52546) fell through to `None` and printed as a
+        // bare number, and 32766 printed `Next` where ExifTool prints
+        // `NeXt or Sony ARW Compressed 2`.
+        0x0103 => compression_label(value).map(str::to_string),
 
         // PhotometricInterpretation (tag 0x0106)
         0x0106 => match value {
@@ -376,5 +340,82 @@ pub fn tiff_enum_to_string(tag_id: u16, value: i64) -> Option<String> {
         },
 
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tiff_enum_to_string;
+
+    /// Compression (0x0103) now resolves through the one
+    /// `%Image::ExifTool::Exif::compression` table.
+    ///
+    /// The 40-id excerpt this file used to carry returned `None` for every code
+    /// below, so the tag printed as a bare number, and named 32766 `Next`.
+    /// This file had no test module at all, so nothing caught it.
+    #[test]
+    fn compression_codes_the_old_excerpt_dropped() {
+        for (code, label) in [
+            (32772i64, "Samsung SRW Compressed 2"),
+            (33003, "Aperio JPEG 2000 YCbCr"),
+            (33005, "Aperio JPEG 2000 RGB"),
+            (34887, "ESRI Lerc"),
+            (34925, "LZMA2"),
+            (34926, "Zstd (old)"),
+            (34927, "WebP (old)"),
+            (34933, "PNG"),
+            (34934, "JPEG XR"),
+            (50000, "Zstd"),
+            (50001, "WebP"),
+            (50002, "JPEG XL (old)"),
+            (52546, "JPEG XL"),
+        ] {
+            assert_eq!(
+                tiff_enum_to_string(0x0103, code).as_deref(),
+                Some(label),
+                "Compression {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn compression_codes_the_old_excerpt_misspelled() {
+        assert_eq!(
+            tiff_enum_to_string(0x0103, 32766).as_deref(),
+            Some("NeXt or Sony ARW Compressed 2")
+        );
+        assert_eq!(
+            tiff_enum_to_string(0x0103, 9).as_deref(),
+            Some("JBIG B&W or VC-5")
+        );
+    }
+
+    /// Unknown codes still yield `None` -- consolidation must not start
+    /// inventing labels ExifTool never prints.
+    #[test]
+    fn compression_unknown_codes_still_yield_none() {
+        assert_eq!(tiff_enum_to_string(0x0103, 33004), None);
+        assert_eq!(tiff_enum_to_string(0x0103, 0), None);
+        assert_eq!(tiff_enum_to_string(0x0103, 1536), None);
+        assert_eq!(tiff_enum_to_string(0x0103, 34316), None);
+    }
+
+    /// Codes the excerpt already had keep their exact former spelling.
+    #[test]
+    fn compression_codes_the_old_excerpt_had_are_unchanged() {
+        for (code, label) in [
+            (1i64, "Uncompressed"),
+            (6, "JPEG (old-style)"),
+            (7, "JPEG"),
+            (32767, "Sony ARW Compressed"),
+            (34713, "Nikon NEF Compressed"),
+            (65535, "Pentax PEF Compressed"),
+        ] {
+            assert_eq!(
+                tiff_enum_to_string(0x0103, code).as_deref(),
+                Some(label),
+                "Compression {code}"
+            );
+        }
     }
 }
