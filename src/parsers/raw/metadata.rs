@@ -23,6 +23,9 @@
 //! - Minolta MRW (MRM format)
 
 use crate::core::formatters::exif_print_conv::print_exposure_time;
+use crate::core::formatters::{
+    format_color_space, format_contrast, format_custom_rendered, format_sharpness,
+};
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
@@ -2145,11 +2148,12 @@ fn format_exif_display_value(
                 i64::from(read_tiff_u16(bytes, byte_order)?),
             )
         }
-        0xA001 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
-            1 => Some("sRGB".to_string()),
-            0xffff => Some("Uncalibrated".to_string()),
-            _ => None,
-        },
+        // ColorSpace: SHORT[1]. The table is `core::formatters::format_color_space`;
+        // the copy that used to live here knew only sRGB and Uncalibrated, so
+        // an Adobe RGB raw file lost the tag entirely.
+        0xA001 if field_type == 3 && value_count >= 1 => Some(format_color_space(i64::from(
+            read_tiff_u16(bytes, byte_order)?,
+        ))),
         // ExposureTime: RATIONAL[1]. Exif.pm 0x829a PrintConv is
         // Image::ExifTool::Exif::PrintExposureTime.
         0x829A if field_type == 5 && value_count >= 1 => {
@@ -2307,11 +2311,9 @@ fn format_exif_display_value(
             _ => None,
         },
         // CustomRendered: SHORT[1].
-        0xA401 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
-            0 => Some("Normal".to_string()),
-            1 => Some("Custom".to_string()),
-            _ => None,
-        },
+        0xA401 if field_type == 3 && value_count >= 1 => Some(format_custom_rendered(i64::from(
+            read_tiff_u16(bytes, byte_order)?,
+        ))),
         // ExposureMode: SHORT[1].
         0xA402 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
             0 => Some("Auto".to_string()),
@@ -2324,13 +2326,12 @@ fn format_exif_display_value(
             // Reuse the same rational formatting as CompressedBitsPerPixel (0x9102).
             format_rational_as_string(bytes, byte_order)
         }
-        // Contrast: SHORT[1].
-        0xA408 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
-            0 => Some("Normal".to_string()),
-            1 => Some("Soft".to_string()),
-            2 => Some("Hard".to_string()),
-            _ => None,
-        },
+        // Contrast: SHORT[1]. `0xa408` is Normal/Low/High -- the Soft/Hard
+        // spelling that used to be here is Sharpness's table (`0xa40a`), which
+        // is why the two arms were byte-identical.
+        0xA408 if field_type == 3 && value_count >= 1 => Some(format_contrast(i64::from(
+            read_tiff_u16(bytes, byte_order)?,
+        ))),
         // Saturation: SHORT[1]. Exif.pm tag 0xA409 PrintConv:
         // 0 => 'Normal', 1 => 'Low', 2 => 'High'.
         0xA409 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
@@ -2380,14 +2381,11 @@ fn format_exif_display_value(
             _ => None,
         },
 
-        // Sharpness (Exif.pm 0xa40a) -- same conversion as Contrast (0xa408),
-        // NOT the same as Saturation (0xa409), whose 1/2 are Low/High.
-        0xA40A if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
-            0 => Some("Normal".to_string()),
-            1 => Some("Soft".to_string()),
-            2 => Some("Hard".to_string()),
-            _ => None,
-        },
+        // Sharpness (Exif.pm 0xa40a): Normal/Soft/Hard. Distinct from both
+        // Contrast (0xa408) and Saturation (0xa409), whose 1/2 are Low/High.
+        0xA40A if field_type == 3 && value_count >= 1 => Some(format_sharpness(i64::from(
+            read_tiff_u16(bytes, byte_order)?,
+        ))),
         _ => None,
     }
 }
@@ -7240,20 +7238,119 @@ mod rw2_embedded_exif_printconv_tests {
         );
     }
 
-    /// The RAR5-class guard. ExifTool's 0xa401 PrintConv does define
-    /// `2 => 'HDR (no original saved)'` (Exif.pm:2853, non-standard Apple iOS),
-    /// which oxidex has not wired yet — that is a coverage gap. What this test
-    /// pins is that the gap degrades to the raw number, which is exactly what
-    /// ExifTool prints when no PrintConv key matches, instead of substituting a
-    /// stand-in label. The rejected RAR5 commit failed precisely here: its
-    /// catch-all emitted "Unknown" and overwrote real data.
+    /// `2 => 'HDR (no original saved)'` is a real entry in ExifTool's 0xa401
+    /// PrintConv (non-standard, Apple iOS), and the corpus contains files that
+    /// use it -- plus `HDR (original saved)`, `Original (for HDR)` and
+    /// `Portrait HDR`. The table here used to stop at 0/1, so all of those
+    /// degraded to a bare number.
+    ///
+    /// This test used to assert that degradation, on the stated grounds that
+    /// "the raw number is exactly what ExifTool prints when no PrintConv key
+    /// matches". That is not what ExifTool prints. Writing an out-of-table
+    /// value into a real file and reading it back with ExifTool 13.55 gives:
+    ///
+    /// ```text
+    /// $ exiftool -n -CustomRendered=99 probe.jpg && exiftool -G1 -s probe.jpg
+    /// [ExifIFD]  CustomRendered  : Unknown (99)
+    /// ```
     #[test]
-    fn out_of_table_custom_rendered_falls_back_to_raw_number() {
+    fn custom_rendered_two_is_the_hdr_entry() {
         let payload = short(2, false);
         let metadata = extract(&[(0xA401, 3, 1, &payload)], false);
         assert_eq!(
             metadata.get("ExifIFD:CustomRendered"),
-            Some(&TagValue::new_integer(2))
+            Some(&TagValue::new_string("HDR (no original saved)"))
+        );
+    }
+
+    /// The rest of ExifTool's 0xa401 table, none of which this arm reached.
+    #[test]
+    fn custom_rendered_covers_the_whole_exiftool_table() {
+        for (code, name) in [
+            (0u16, "Normal"),
+            (1, "Custom"),
+            (2, "HDR (no original saved)"),
+            (3, "HDR (original saved)"),
+            (4, "Original (for HDR)"),
+            (6, "Panorama"),
+            (7, "Portrait HDR"),
+            (8, "Portrait"),
+        ] {
+            let payload = short(code, false);
+            let metadata = extract(&[(0xA401, 3, 1, &payload)], false);
+            assert_eq!(
+                metadata.get("ExifIFD:CustomRendered"),
+                Some(&TagValue::new_string(name)),
+                "CustomRendered = {}",
+                code
+            );
+        }
+        // 5 is not in the table; ExifTool prints `Unknown (5)`, verified by
+        // writing the value into a real file and reading it back.
+        let payload = short(5, false);
+        let metadata = extract(&[(0xA401, 3, 1, &payload)], false);
+        assert_eq!(
+            metadata.get("ExifIFD:CustomRendered"),
+            Some(&TagValue::new_string("Unknown (5)"))
+        );
+    }
+
+    /// `0xa408` is Normal/Low/High. The arm here carried Normal/Soft/Hard --
+    /// ExifTool's *Sharpness* (`0xa40a`) table -- so every raw file shooting
+    /// low or high contrast reported the wrong word.
+    #[test]
+    fn contrast_uses_the_contrast_table_not_the_sharpness_one() {
+        for (code, name) in [(0u16, "Normal"), (1, "Low"), (2, "High")] {
+            let payload = short(code, false);
+            let metadata = extract(&[(0xA408, 3, 1, &payload)], false);
+            assert_eq!(
+                metadata.get("ExifIFD:Contrast"),
+                Some(&TagValue::new_string(name)),
+                "Contrast = {}",
+                code
+            );
+        }
+        // Sharpness keeps Soft/Hard -- the two tables are genuinely different,
+        // which is what made the byte-identical arms look plausible.
+        for (code, name) in [(0u16, "Normal"), (1, "Soft"), (2, "Hard")] {
+            let payload = short(code, false);
+            let metadata = extract(&[(0xA40A, 3, 1, &payload)], false);
+            assert_eq!(
+                metadata.get("ExifIFD:Sharpness"),
+                Some(&TagValue::new_string(name)),
+                "Sharpness = {}",
+                code
+            );
+        }
+    }
+
+    /// `2 => Adobe RGB` was missing, so an Adobe RGB raw file lost the tag
+    /// outright. ExifTool's 0xa001 also carries `PrintHex => 1`, so an
+    /// unnamed code prints in hex -- `exiftool -n -ColorSpace=7` reads back as
+    /// `Unknown (0x7)`, not `Unknown (7)`.
+    #[test]
+    fn color_space_covers_adobe_rgb_and_prints_unknowns_in_hex() {
+        for (code, name) in [
+            (1u16, "sRGB"),
+            (2, "Adobe RGB"),
+            (0xfffd, "Wide Gamut RGB"),
+            (0xfffe, "ICC Profile"),
+            (0xffff, "Uncalibrated"),
+        ] {
+            let payload = short(code, false);
+            let metadata = extract(&[(0xA001, 3, 1, &payload)], false);
+            assert_eq!(
+                metadata.get("ExifIFD:ColorSpace"),
+                Some(&TagValue::new_string(name)),
+                "ColorSpace = {}",
+                code
+            );
+        }
+        let payload = short(7, false);
+        let metadata = extract(&[(0xA001, 3, 1, &payload)], false);
+        assert_eq!(
+            metadata.get("ExifIFD:ColorSpace"),
+            Some(&TagValue::new_string("Unknown (0x7)"))
         );
     }
 

@@ -3,14 +3,19 @@
 //! This module contains formatters for common EXIF enum tags that convert
 //! integer values to human-readable strings matching ExifTool's output.
 
-/// Format ColorSpace enum value
-/// EXIF tag 0xA001
+/// Formats ColorSpace (EXIF tag 0xA001).
+///
+/// ExifTool's `%Exif::Main{0xa001}` carries `PrintHex => 1`, so a value the
+/// table does not name prints its code in hex -- `Unknown (0x0)`, not
+/// `Unknown (0)`. Thirteen files in the sample corpus report exactly that.
 pub fn format_color_space(value: i64) -> String {
     match value {
         1 => "sRGB".to_string(),
         2 => "Adobe RGB".to_string(),
+        65533 => "Wide Gamut RGB".to_string(),
+        65534 => "ICC Profile".to_string(),
         65535 => "Uncalibrated".to_string(),
-        _ => format!("Unknown ({})", value),
+        _ => format!("Unknown (0x{:x})", value),
     }
 }
 
