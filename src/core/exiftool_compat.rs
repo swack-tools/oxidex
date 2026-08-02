@@ -772,10 +772,10 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     // ---------------------------------------------------------------------
     // Rule 19b/19c: APEX-stored tags, which DO have a PrintConv and so must
     // be resolved before the catch-all below turns them into plain numbers.
-    // Shared with the Composite layer via [`apex_value_conv`] -- the
-    // Composite table (Exif.pm:4678) reads these ValueConv'd, not raw.
+    // Keep PrintConv here. The Composite layer consumes the raw ValueConv via
+    // [`apex_value_conv`] before this output-time rendering step.
     // ---------------------------------------------------------------------
-    if let Some(converted) = apex_value_conv(base_name, value) {
+    if let Some(converted) = apex_print_conv(base_name, value) {
         return converted;
     }
 
@@ -853,23 +853,20 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     value.clone()
 }
 
-/// Applies the ValueConv/PrintConv pair for the APEX-stored tags whose raw
-/// rational is not the value a reader wants.
+/// Applies ValueConv for an APEX-stored rational without applying PrintConv.
 ///
 /// ApertureValue (Exif.pm:2327-2335) and MaxApertureValue (Exif.pm:2350-2359)
 /// are both `ValueConv => '2 ** ($val / 2)', PrintConv => 'sprintf("%.1f",$val)'`
-/// -- stored as an APEX value, displayed as an F number. The stored 3.625 in
-/// CanonRaw.cr3 is `3.5`, not `3.625`.
+/// -- stored as an APEX value. The stored 3.625 in CanonRaw.cr3 converts to
+/// the f-number 3.5 before its one-decimal PrintConv is applied.
 ///
 /// ShutterSpeedValue (Exif.pm:2317-2326) is
 /// `ValueConv => 'IsFloat($val) && abs($val)<100 ? 2**(-$val) : 0'`,
 /// `PrintConv => 'Image::ExifTool::Exif::PrintExposureTime($val)'`.
 ///
-/// [`format_tag_value`] uses this for the emitted `Group:Name` value; the
-/// Composite layer (`src/composite/mod.rs`) uses the same function so its
-/// `Desire`d inputs see seconds and f-stops too, matching Exif.pm:4678's
-/// `$val[2]` reading ShutterSpeedValue post-ValueConv rather than the raw
-/// APEX exponent.
+/// The Composite layer (`src/composite/mod.rs`) consumes this raw numeric
+/// value. It must not receive a formatted reciprocal or rounded f-number:
+/// ExifTool's Composite table reads post-ValueConv values before PrintConv.
 pub(crate) fn apex_value_conv(base_name: &str, value: &TagValue) -> Option<TagValue> {
     let TagValue::Rational {
         numerator,
@@ -884,7 +881,7 @@ pub(crate) fn apex_value_conv(base_name: &str, value: &TagValue) -> Option<TagVa
     let apex = f64::from(*numerator) / f64::from(*denominator);
 
     if matches!(base_name, "ApertureValue" | "MaxApertureValue") {
-        return Some(TagValue::String(format!("{:.1}", 2f64.powf(apex / 2.0))));
+        return Some(TagValue::Float(2f64.powf(apex / 2.0)));
     }
 
     if base_name == "ShutterSpeedValue" {
@@ -893,10 +890,23 @@ pub(crate) fn apex_value_conv(base_name: &str, value: &TagValue) -> Option<TagVa
         } else {
             0.0
         };
-        return Some(TagValue::String(print_exposure_time(seconds)));
+        return Some(TagValue::Float(seconds));
     }
 
     None
+}
+
+/// Applies the APEX PrintConv after [`apex_value_conv`] has produced the raw
+/// value used by dependent Composite tags.
+fn apex_print_conv(base_name: &str, value: &TagValue) -> Option<TagValue> {
+    let TagValue::Float(converted) = apex_value_conv(base_name, value)? else {
+        return None;
+    };
+    match base_name {
+        "ApertureValue" | "MaxApertureValue" => Some(TagValue::String(format!("{converted:.1}"))),
+        "ShutterSpeedValue" => Some(TagValue::String(print_exposure_time(converted))),
+        _ => None,
+    }
 }
 
 // =============================================================================
