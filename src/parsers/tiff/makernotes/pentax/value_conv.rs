@@ -7,6 +7,55 @@
 //! upstream the generator stops rather than leaving one of these behind a real
 //! tag name.
 
+/// ExifTool's `PentaxEv()` (Pentax.pm:6822): converts a raw hex-based EV code
+/// (modulo 8) into an EV value, correcting for the fact that 1/3-stop
+/// increments don't divide evenly by 8.
+///
+/// Shared by the four `ValueConv`s below and by `%Pentax::AEInfo`'s
+/// `FlashExposureCompSet`, which is still hand-written in `pentax.rs`.
+pub(super) fn pentax_ev(val: i32) -> f64 {
+    let mut v = val as f64;
+    if val & 1 != 0 {
+        let sign: f64 = if val < 0 { -1.0 } else { 1.0 };
+        let frac = ((val as f64) * sign) as i64 & 0x07;
+        if frac == 3 {
+            v += sign * (8.0 / 3.0 - frac as f64);
+        } else if frac == 5 {
+            v += sign * (16.0 / 3.0 - frac as f64);
+        }
+    }
+    v / 8.0
+}
+
+/// `ValueConv => 'int(100*exp(Image::ExifTool::Pentax::PentaxEv($val-32)*log(2))+0.5)'`
+/// (Pentax.pm:3499 `ISOFloor`, :3756 `SvISOSetting`).
+///
+/// Perl's `int()` truncates toward zero; the result is always positive here,
+/// so `.trunc()` matches it and leaves the shared `render()` float path's
+/// `fract() == 0.0` check true, printing a plain integer rather than a
+/// long decimal.
+pub(super) fn iso_from_pentax_ev(value: f64) -> f64 {
+    (100.0 * (pentax_ev(value as i32 - 32) * std::f64::consts::LN_2).exp() + 0.5).trunc()
+}
+
+/// `ValueConv => 'exp(-Image::ExifTool::Pentax::PentaxEv($val-68)*log(2))'`
+/// (Pentax.pm:3732 `TvExposureTimeSetting`), an exposure time in seconds.
+pub(super) fn tv_from_pentax_ev(value: f64) -> f64 {
+    (-pentax_ev(value as i32 - 68) * std::f64::consts::LN_2).exp()
+}
+
+/// `ValueConv => 'exp(Image::ExifTool::Pentax::PentaxEv($val-68)*log(2)/2)'`
+/// (Pentax.pm:3741 `AvApertureSetting`), an f-number.
+pub(super) fn av_from_pentax_ev(value: f64) -> f64 {
+    (pentax_ev(value as i32 - 68) * std::f64::consts::LN_2 / 2.0).exp()
+}
+
+/// `ValueConv => 'Image::ExifTool::Pentax::PentaxEv(64-$val)'` (Pentax.pm:3763
+/// `BaseExposureCompensation`).
+pub(super) fn base_exposure_comp_from_pentax_ev(value: f64) -> f64 {
+    pentax_ev(64 - value as i32)
+}
+
 /// `ValueConv => '-$val'` (Pentax.pm:5744 `CompositionAdjustX`, :5750
 /// `CompositionAdjustY`).
 ///
@@ -115,5 +164,30 @@ mod tests {
     #[test]
     fn kelvin_wb_refuses_a_short_record() {
         assert!(kelvin_wb(&[1.0, 2.0, 3.0]).is_empty());
+    }
+
+    /// A raw byte of 32 is `PentaxEv(0)`, exactly 0 EV, so `exp(0)` collapses
+    /// the whole formula to `100 + 0.5` truncated -- the one input where the
+    /// odd/even correction inside `PentaxEv` cannot matter.
+    #[test]
+    fn iso_from_pentax_ev_matches_the_zero_ev_point() {
+        assert_eq!(iso_from_pentax_ev(32.0), 100.0);
+        // 40 - 32 = 8, an even code: no 1/3-stop correction, EV = 1 exactly.
+        assert_eq!(iso_from_pentax_ev(40.0), 200.0);
+    }
+
+    /// A raw byte of 68 is `PentaxEv(0)` for both formulas, so each collapses
+    /// to `exp(0)` -- 1 second and f/1.0 respectively.
+    #[test]
+    fn tv_and_av_from_pentax_ev_match_the_zero_ev_point() {
+        assert_eq!(tv_from_pentax_ev(68.0), 1.0);
+        assert_eq!(av_from_pentax_ev(68.0), 1.0);
+    }
+
+    #[test]
+    fn base_exposure_comp_from_pentax_ev_matches_the_zero_ev_point() {
+        assert_eq!(base_exposure_comp_from_pentax_ev(64.0), 0.0);
+        // 64 - 72 = -8, an even code: EV = -1 exactly.
+        assert_eq!(base_exposure_comp_from_pentax_ev(72.0), -1.0);
     }
 }

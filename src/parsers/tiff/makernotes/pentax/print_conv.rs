@@ -11,6 +11,37 @@
 
 use crate::core::formatters::numeric_precision::perl_number;
 
+/// `PrintConv => 'Image::ExifTool::Exif::PrintExposureTime($val)'`
+/// (Pentax.pm:3734 `TvExposureTimeSetting`).
+///
+/// A thin re-export: `Image::ExifTool::Exif::PrintExposureTime` is one of
+/// ExifTool's shared cross-module subs, already ported once as
+/// [`crate::core::formatters::exif_print_conv::print_exposure_time`]. Porting
+/// it a second time here would be exactly the copy-drift that shared module's
+/// own doc comment warns about.
+pub(super) fn print_exposure_time(value: f64) -> String {
+    crate::core::formatters::exif_print_conv::print_exposure_time(value)
+}
+
+/// `PrintConv => 'sprintf("%.1f",$val)'` (Pentax.pm:3743 `AvApertureSetting`).
+pub(super) fn one_dp(value: f64) -> String {
+    format!("{value:.1}")
+}
+
+/// `PrintConv => '$val ? sprintf("%+.1f", $val) : 0'` (Pentax.pm:3765
+/// `BaseExposureCompensation`).
+///
+/// Perl's `?:` picks the literal `0` (not `$val`) when `$val` is falsy, and
+/// `0.0` is the only falsy float, so an exact-zero exposure compensation
+/// prints bare `"0"` while every other value gets an explicit sign.
+pub(super) fn signed_1dp_or_zero(value: f64) -> String {
+    if value == 0.0 {
+        "0".to_string()
+    } else {
+        format!("{value:+.1}")
+    }
+}
+
 /// `PrintConv => 'sprintf("%.2f V", $val)'` (Pentax.pm:4868, :4923, :4932,
 /// :4948, :4958, :4986 -- every `BodyBattery*`/`GripBatteryVoltage`).
 pub(super) fn volts_2dp(value: f64) -> String {
@@ -115,5 +146,26 @@ mod tests {
     fn af_c_sensitivity_counts_down_from_five() {
         assert_eq!(five_minus(0.0), "5");
         assert_eq!(five_minus(4.0), "1");
+    }
+
+    #[test]
+    fn print_exposure_time_reexports_the_shared_port() {
+        assert_eq!(print_exposure_time(1.0 / 250.0), "1/250");
+        assert_eq!(print_exposure_time(2.0), "2");
+    }
+
+    #[test]
+    fn one_dp_keeps_a_single_decimal() {
+        assert_eq!(one_dp(2.5198), "2.5");
+        assert_eq!(one_dp(4.0), "4.0");
+    }
+
+    /// `$val ? sprintf("%+.1f", $val) : 0`: exact zero prints bare `"0"`, not
+    /// `"0.0"` or `"+0.0"`.
+    #[test]
+    fn signed_1dp_or_zero_prints_bare_zero_and_signed_otherwise() {
+        assert_eq!(signed_1dp_or_zero(0.0), "0");
+        assert_eq!(signed_1dp_or_zero(1.5), "+1.5");
+        assert_eq!(signed_1dp_or_zero(-0.3), "-0.3");
     }
 }

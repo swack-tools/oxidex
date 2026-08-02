@@ -18,8 +18,10 @@ Supported per field:
 
   * `Format`: a scalar int/float format, `string[N]`, `undef[N]`, or an array
     `fmt[N]` of a scalar format.
-  * `PrintConv`: absent, a pure enum map (every key/value a plain scalar), or a
-    Perl expression registered verbatim in `EXPR_PRINT_CONVS`.
+  * `PrintConv`: absent, a pure enum map (every key/value a plain scalar), a
+    Perl expression registered verbatim in `EXPR_PRINT_CONVS`, or a hash
+    carrying a `BITMASK` sub-hash (an exact-value override checked first, a
+    bit-by-bit decode of the rest).
   * `ValueConv`: absent, or an expression/sub body registered verbatim.
   * `RawConv`: absent, or one of ExifTool's two count-gate idioms --
     `$$self{X} = $val` (records a data member) and
@@ -30,12 +32,12 @@ Supported per field:
     alternation.  An arrayref of such `Condition`-guarded alternatives becomes
     several `Field`s sharing one ExifTool key, in ExifTool's order.
 
-Anything else -- a `Hook`, a nested `SubDirectory`, a `PrintConv` with
-`BITMASK`/`OTHER`/code, a `Condition` on anything but the model, a regex with a
-construct the expander has not been taught -- raises `Unsupported`, naming the
-table, the tag and the offending construct.  Run with `--allow-skip` to
-downgrade those to a machine-logged skip line and continue; the log is the
-deliverable, not a footnote.
+Anything else -- a `Hook`, a nested `SubDirectory`, a `PrintConv` with `OTHER`
+and `BITMASK` both present, or code, a `Condition` on anything but the model, a
+regex with a construct the expander has not been taught -- raises
+`Unsupported`, naming the table, the tag and the offending construct.  Run
+with `--allow-skip` to downgrade those to a machine-logged skip line and
+continue; the log is the deliverable, not a footnote.
 
 usage:
   dump_tables.pl <exiftool-lib> Panasonic > tables.json
@@ -370,6 +372,14 @@ SCALAR_VALUE_CONVS = {
     "$val * 2": "times_2",
     # Pentax.pm:6118 -- ShotNumber, counted from zero.
     "$val+1": "plus_1",
+    # Pentax.pm:3499, :3756 -- ISOFloor, SvISOSetting.
+    "int(100*exp(Image::ExifTool::Pentax::PentaxEv($val-32)*log(2))+0.5)": "iso_from_pentax_ev",
+    # Pentax.pm:3732 -- TvExposureTimeSetting, an exposure time in seconds.
+    "exp(-Image::ExifTool::Pentax::PentaxEv($val-68)*log(2))": "tv_from_pentax_ev",
+    # Pentax.pm:3741 -- AvApertureSetting, an f-number.
+    "exp(Image::ExifTool::Pentax::PentaxEv($val-68)*log(2)/2)": "av_from_pentax_ev",
+    # Pentax.pm:3763 -- BaseExposureCompensation.
+    "Image::ExifTool::Pentax::PentaxEv(64-$val)": "base_exposure_comp_from_pentax_ev",
 }
 LIST_VALUE_CONVS = {
     # Pentax.pm:837-840 -- `%kelvinWB`, shared by all 17 KelvinWB_* tags.
@@ -398,6 +408,12 @@ EXPR_PRINT_CONVS = {
     'sprintf("%.1f C", $val)': "celsius_1dp",
     # Pentax.pm:5188 -- AFCSensitivity, counted the other way.
     "5 - $val": "five_minus",
+    # Pentax.pm:3734 -- TvExposureTimeSetting, after its ValueConv.
+    "Image::ExifTool::Exif::PrintExposureTime($val)": "print_exposure_time",
+    # Pentax.pm:3743 -- AvApertureSetting, after its ValueConv.
+    'sprintf("%.1f",$val)': "one_dp",
+    # Pentax.pm:3765 -- BaseExposureCompensation, after its ValueConv.
+    '$val ? sprintf("%+.1f", $val) : 0': "signed_1dp_or_zero",
 }
 
 
@@ -440,6 +456,39 @@ BENIGN_PC_DIRECTIVES = {
 }
 
 
+def field_print_conv_bitmask(table, key, pool, pc, bitmask):
+    """`PrintConv => { N => '...', BITMASK => {...} }` as `PrintConv::Bitmask`.
+
+    ExifTool's dispatch for a hash carrying `BITMASK` (`ExifTool.pm:3614-3618`)
+    tries an exact match against the plain (non-`BITMASK`) keys first, and
+    only decodes the value bit by bit (`DecodeBits`, `ExifTool.pm:6385`) when
+    that misses -- so this is two separate lookup tables, not one.
+    """
+    if not isinstance(bitmask, dict):
+        raise Unsupported(table, key, f"BITMASK is not a plain hash: {bitmask!r}")
+
+    def entries(items, label):
+        out = []
+        for k, v in items:
+            try:
+                ik = int(str(k), 0)
+            except ValueError:
+                raise Unsupported(table, key, f"{label} key {k!r} is not an integer") from None
+            if not isinstance(v, str):
+                raise Unsupported(table, key, f"{label} value for {k!r} is not a string")
+            out.append((ik, v))
+        out.sort()
+        return out
+
+    direct = entries(pc.get("map", {}).items(), "PrintConv")
+    bits = entries(bitmask.items(), "BITMASK")
+    if not bits:
+        raise Unsupported(table, key, "BITMASK is an empty map")
+    direct_name = pool.intern(", ".join(f'({k}, "{rust_str(v)}")' for k, v in direct))
+    bits_name = pool.intern(", ".join(f'({k}, "{rust_str(v)}")' for k, v in bits))
+    return f"PrintConv::Bitmask({direct_name}, {bits_name})"
+
+
 def field_print_conv(tag, table, key, pool, conv_prefix):
     """A `PrintConv` as a Rust expression, or `PrintConv::None`."""
     pc = tag.get("PrintConv")
@@ -457,11 +506,15 @@ def field_print_conv(tag, table, key, pool, conv_prefix):
         return f"PrintConv::Expr({conv_prefix}::{fn})"
     if kind == "enum_partial":
         directives = pc.get("directives") or {}
-        unknown = set(directives) - BENIGN_PC_DIRECTIVES - {"OTHER"}
+        unknown = set(directives) - BENIGN_PC_DIRECTIVES - {"OTHER", "BITMASK"}
         if unknown:
             raise Unsupported(
                 table, key, f"PrintConv carries directive(s) {sorted(unknown)!r}"
             )
+        if "BITMASK" in directives:
+            if "OTHER" in directives:
+                raise Unsupported(table, key, "PrintConv carries both BITMASK and OTHER")
+            return field_print_conv_bitmask(table, key, pool, pc, directives["BITMASK"])
         if "OTHER" in directives:
             spec = directives["OTHER"]
             source = spec.get("__deparse") if isinstance(spec, dict) else None
@@ -604,11 +657,14 @@ def gen_table(module, tname, tbl, pool, skips, allow_skip, conv_prefix, vc_prefi
                 low_priority = field_priority(tag, table_priority, tname, key)
                 pc = field_print_conv(tag, tname, key, pool, conv_prefix)
                 vc = field_value_conv(tag, tname, key, vc_prefix)
-                if vc != "ValueConv::None" and pc.startswith("PrintConv::Map"):
+                if vc != "ValueConv::None" and (
+                    pc.startswith("PrintConv::Map") or pc.startswith("PrintConv::Bitmask")
+                ):
                     # ExifTool runs ValueConv then PrintConv, so a hash PrintConv
-                    # after one would be a lookup of a computed number in a table
-                    # of raw ones. An expression PrintConv is exactly that
-                    # composition and is allowed.
+                    # (or a BITMASK decode, which is also a lookup) after one
+                    # would be looking a computed number up in a table of raw
+                    # ones. An expression PrintConv is exactly that composition
+                    # and is allowed.
                     raise Unsupported(tname, key, "ValueConv combined with a hash PrintConv")
                 if count > 1 and pc != "PrintConv::None":
                     # ExifTool hands the *joined* array string to a hash
