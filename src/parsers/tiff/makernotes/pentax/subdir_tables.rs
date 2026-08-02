@@ -209,6 +209,7 @@ pub(crate) static PENTAX_SRINFO2: BinaryTable = BinaryTable {
         mask: None,
         value_conv: ValueConv::None,
         print_conv: PrintConv::Map(PENTAX_CONV1),
+        low_priority: false,
     }],
 };
 
@@ -231,6 +232,7 @@ pub(crate) static PENTAX_FACEINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 2,
@@ -242,6 +244,7 @@ pub(crate) static PENTAX_FACEINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
     ],
 };
@@ -265,6 +268,7 @@ pub(crate) static PENTAX_AWBINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV2),
+            low_priority: false,
         },
         Field {
             index: 1,
@@ -276,6 +280,7 @@ pub(crate) static PENTAX_AWBINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV3),
+            low_priority: false,
         },
     ],
 };
@@ -299,6 +304,7 @@ pub(crate) static PENTAX_TIMEINFO: BinaryTable = BinaryTable {
             mask: Some(1),
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV4),
+            low_priority: false,
         },
         Field {
             index: 0,
@@ -310,6 +316,7 @@ pub(crate) static PENTAX_TIMEINFO: BinaryTable = BinaryTable {
             mask: Some(2),
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV5),
+            low_priority: false,
         },
         Field {
             index: 0,
@@ -321,6 +328,7 @@ pub(crate) static PENTAX_TIMEINFO: BinaryTable = BinaryTable {
             mask: Some(4),
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV5),
+            low_priority: false,
         },
         Field {
             index: 2,
@@ -332,6 +340,7 @@ pub(crate) static PENTAX_TIMEINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV6),
+            low_priority: false,
         },
         Field {
             index: 3,
@@ -343,6 +352,7 @@ pub(crate) static PENTAX_TIMEINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV6),
+            low_priority: false,
         },
     ],
 };
@@ -366,6 +376,7 @@ pub(crate) static PENTAX_LENSCORR: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV2),
+            low_priority: false,
         },
         Field {
             index: 1,
@@ -377,6 +388,7 @@ pub(crate) static PENTAX_LENSCORR: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV2),
+            low_priority: false,
         },
         Field {
             index: 2,
@@ -388,6 +400,7 @@ pub(crate) static PENTAX_LENSCORR: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV2),
+            low_priority: false,
         },
         Field {
             index: 3,
@@ -399,6 +412,7 @@ pub(crate) static PENTAX_LENSCORR: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV7),
+            low_priority: false,
         },
     ],
 };
@@ -422,6 +436,7 @@ pub(crate) static PENTAX_FLASHINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV8),
+            low_priority: false,
         },
         Field {
             index: 1,
@@ -433,6 +448,7 @@ pub(crate) static PENTAX_FLASHINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV9),
+            low_priority: false,
         },
         Field {
             index: 2,
@@ -444,6 +460,7 @@ pub(crate) static PENTAX_FLASHINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV10),
+            low_priority: false,
         },
         Field {
             index: 3,
@@ -455,6 +472,7 @@ pub(crate) static PENTAX_FLASHINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 4,
@@ -466,6 +484,7 @@ pub(crate) static PENTAX_FLASHINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 5,
@@ -477,6 +496,7 @@ pub(crate) static PENTAX_FLASHINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 6,
@@ -488,6 +508,7 @@ pub(crate) static PENTAX_FLASHINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 7,
@@ -499,6 +520,7 @@ pub(crate) static PENTAX_FLASHINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 25,
@@ -510,6 +532,7 @@ pub(crate) static PENTAX_FLASHINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV11),
+            low_priority: false,
         },
         Field {
             index: 26,
@@ -521,6 +544,7 @@ pub(crate) static PENTAX_FLASHINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV12),
+            low_priority: false,
         },
     ],
 };
@@ -544,6 +568,7 @@ pub(crate) static PENTAX_KELVINWB: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::List(super::value_conv::kelvin_wb),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 5,
@@ -555,6 +580,7 @@ pub(crate) static PENTAX_KELVINWB: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::List(super::value_conv::kelvin_wb),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 9,
@@ -566,6 +592,7 @@ pub(crate) static PENTAX_KELVINWB: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::List(super::value_conv::kelvin_wb),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 13,
@@ -577,6 +604,7 @@ pub(crate) static PENTAX_KELVINWB: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::List(super::value_conv::kelvin_wb),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 17,
@@ -588,6 +616,7 @@ pub(crate) static PENTAX_KELVINWB: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::List(super::value_conv::kelvin_wb),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 21,
@@ -599,6 +628,7 @@ pub(crate) static PENTAX_KELVINWB: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::List(super::value_conv::kelvin_wb),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 25,
@@ -610,6 +640,7 @@ pub(crate) static PENTAX_KELVINWB: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::List(super::value_conv::kelvin_wb),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 29,
@@ -621,6 +652,7 @@ pub(crate) static PENTAX_KELVINWB: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::List(super::value_conv::kelvin_wb),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 33,
@@ -632,6 +664,7 @@ pub(crate) static PENTAX_KELVINWB: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::List(super::value_conv::kelvin_wb),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 37,
@@ -643,6 +676,7 @@ pub(crate) static PENTAX_KELVINWB: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::List(super::value_conv::kelvin_wb),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 41,
@@ -654,6 +688,7 @@ pub(crate) static PENTAX_KELVINWB: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::List(super::value_conv::kelvin_wb),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 45,
@@ -665,6 +700,7 @@ pub(crate) static PENTAX_KELVINWB: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::List(super::value_conv::kelvin_wb),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 49,
@@ -676,6 +712,7 @@ pub(crate) static PENTAX_KELVINWB: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::List(super::value_conv::kelvin_wb),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 53,
@@ -687,6 +724,7 @@ pub(crate) static PENTAX_KELVINWB: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::List(super::value_conv::kelvin_wb),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 57,
@@ -698,6 +736,7 @@ pub(crate) static PENTAX_KELVINWB: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::List(super::value_conv::kelvin_wb),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 61,
@@ -709,6 +748,7 @@ pub(crate) static PENTAX_KELVINWB: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::List(super::value_conv::kelvin_wb),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 65,
@@ -720,6 +760,7 @@ pub(crate) static PENTAX_KELVINWB: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::List(super::value_conv::kelvin_wb),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
     ],
 };
@@ -743,6 +784,7 @@ pub(crate) static PENTAX_EVSTEPINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV13),
+            low_priority: false,
         },
         Field {
             index: 1,
@@ -754,6 +796,7 @@ pub(crate) static PENTAX_EVSTEPINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV14),
+            low_priority: false,
         },
         Field {
             index: 3,
@@ -765,6 +808,7 @@ pub(crate) static PENTAX_EVSTEPINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV2),
+            low_priority: false,
         },
     ],
 };
@@ -788,6 +832,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 2,
@@ -799,6 +844,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 4,
@@ -810,6 +856,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 6,
@@ -821,6 +868,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 8,
@@ -832,6 +880,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 10,
@@ -843,6 +892,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 12,
@@ -854,6 +904,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 14,
@@ -865,6 +916,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 16,
@@ -876,6 +928,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 18,
@@ -887,6 +940,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 20,
@@ -898,6 +952,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 22,
@@ -909,6 +964,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 24,
@@ -920,6 +976,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 26,
@@ -931,6 +988,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 28,
@@ -942,6 +1000,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 30,
@@ -953,6 +1012,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 32,
@@ -964,6 +1024,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 34,
@@ -975,6 +1036,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 36,
@@ -986,6 +1048,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 38,
@@ -997,6 +1060,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 40,
@@ -1008,6 +1072,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 42,
@@ -1019,6 +1084,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 44,
@@ -1030,6 +1096,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 46,
@@ -1041,6 +1108,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 48,
@@ -1052,6 +1120,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 50,
@@ -1063,6 +1132,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 52,
@@ -1074,6 +1144,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 54,
@@ -1085,6 +1156,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 56,
@@ -1096,6 +1168,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 58,
@@ -1107,6 +1180,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 60,
@@ -1118,6 +1192,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 62,
@@ -1129,6 +1204,7 @@ pub(crate) static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
     ],
 };
@@ -1152,6 +1228,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 2,
@@ -1163,6 +1240,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 4,
@@ -1174,6 +1252,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 6,
@@ -1185,6 +1264,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 8,
@@ -1196,6 +1276,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 10,
@@ -1207,6 +1288,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 12,
@@ -1218,6 +1300,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 14,
@@ -1229,6 +1312,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 16,
@@ -1240,6 +1324,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 18,
@@ -1251,6 +1336,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 20,
@@ -1262,6 +1348,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 22,
@@ -1273,6 +1360,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 24,
@@ -1284,6 +1372,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 26,
@@ -1295,6 +1384,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 28,
@@ -1306,6 +1396,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 30,
@@ -1317,6 +1408,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 32,
@@ -1328,6 +1420,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 34,
@@ -1339,6 +1432,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 36,
@@ -1350,6 +1444,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 38,
@@ -1361,6 +1456,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 40,
@@ -1372,6 +1468,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 42,
@@ -1383,6 +1480,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 44,
@@ -1394,6 +1492,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 46,
@@ -1405,6 +1504,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 48,
@@ -1416,6 +1516,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 50,
@@ -1427,6 +1528,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 52,
@@ -1438,6 +1540,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 54,
@@ -1449,6 +1552,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 56,
@@ -1460,6 +1564,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 58,
@@ -1471,6 +1576,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 60,
@@ -1482,6 +1588,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 62,
@@ -1493,6 +1600,7 @@ pub(crate) static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
     ],
 };
@@ -1516,6 +1624,7 @@ pub(crate) static PENTAX_LEVELINFO: BinaryTable = BinaryTable {
             mask: Some(15),
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV15),
+            low_priority: false,
         },
         Field {
             index: 0,
@@ -1527,6 +1636,7 @@ pub(crate) static PENTAX_LEVELINFO: BinaryTable = BinaryTable {
             mask: Some(240),
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(PENTAX_CONV16),
+            low_priority: false,
         },
         Field {
             index: 1,
@@ -1538,6 +1648,7 @@ pub(crate) static PENTAX_LEVELINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::Each(super::value_conv::negate_half),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 2,
@@ -1549,6 +1660,7 @@ pub(crate) static PENTAX_LEVELINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::Each(super::value_conv::negate_half),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 5,
@@ -1560,6 +1672,7 @@ pub(crate) static PENTAX_LEVELINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::Each(super::value_conv::negate),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 6,
@@ -1571,6 +1684,7 @@ pub(crate) static PENTAX_LEVELINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::Each(super::value_conv::negate),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 7,
@@ -1582,6 +1696,7 @@ pub(crate) static PENTAX_LEVELINFO: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::Each(super::value_conv::negate_half),
             print_conv: PrintConv::None,
+            low_priority: false,
         },
     ],
 };
@@ -1605,6 +1720,7 @@ pub(crate) static PENTAX_WBLEVELS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 11,
@@ -1616,6 +1732,7 @@ pub(crate) static PENTAX_WBLEVELS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 20,
@@ -1627,6 +1744,7 @@ pub(crate) static PENTAX_WBLEVELS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 29,
@@ -1638,6 +1756,7 @@ pub(crate) static PENTAX_WBLEVELS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 38,
@@ -1649,6 +1768,7 @@ pub(crate) static PENTAX_WBLEVELS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 47,
@@ -1660,6 +1780,7 @@ pub(crate) static PENTAX_WBLEVELS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 56,
@@ -1671,6 +1792,7 @@ pub(crate) static PENTAX_WBLEVELS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 65,
@@ -1682,6 +1804,7 @@ pub(crate) static PENTAX_WBLEVELS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 74,
@@ -1693,6 +1816,7 @@ pub(crate) static PENTAX_WBLEVELS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 92,
@@ -1704,6 +1828,7 @@ pub(crate) static PENTAX_WBLEVELS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
     ],
 };
@@ -1726,5 +1851,6 @@ pub(crate) static PENTAX_LENSINFOQ: BinaryTable = BinaryTable {
         mask: None,
         value_conv: ValueConv::None,
         print_conv: PrintConv::None,
+        low_priority: false,
     }],
 };

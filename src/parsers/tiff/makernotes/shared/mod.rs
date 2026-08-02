@@ -47,6 +47,8 @@ pub mod print_im;
 /// Table-driven walker for plain TIFF-style MakerNote IFDs.
 pub mod table_ifd;
 
+/// ExifTool's `Priority`, for a tag one file reports more than once
+pub mod tag_priority;
 pub mod tag_registry;
 /// Common value interpretation and decoding functions
 /// Common value extraction helpers (strings, integers)

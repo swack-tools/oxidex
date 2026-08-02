@@ -46,6 +46,7 @@ pub(crate) static FUJIFILM_PRIORITYSETTINGS: BinaryTable = BinaryTable {
             mask: Some(15),
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(FUJIFILM_CONV1),
+            low_priority: false,
         },
         Field {
             index: 0,
@@ -57,6 +58,7 @@ pub(crate) static FUJIFILM_PRIORITYSETTINGS: BinaryTable = BinaryTable {
             mask: Some(240),
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(FUJIFILM_CONV1),
+            low_priority: false,
         },
     ],
 };
@@ -80,6 +82,7 @@ pub(crate) static FUJIFILM_FOCUSSETTINGS: BinaryTable = BinaryTable {
             mask: Some(15),
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(FUJIFILM_CONV2),
+            low_priority: false,
         },
         Field {
             index: 0,
@@ -91,6 +94,7 @@ pub(crate) static FUJIFILM_FOCUSSETTINGS: BinaryTable = BinaryTable {
             mask: Some(240),
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(FUJIFILM_CONV3),
+            low_priority: false,
         },
         Field {
             index: 0,
@@ -102,6 +106,7 @@ pub(crate) static FUJIFILM_FOCUSSETTINGS: BinaryTable = BinaryTable {
             mask: Some(3840),
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(FUJIFILM_CONV4),
+            low_priority: false,
         },
         Field {
             index: 0,
@@ -113,6 +118,7 @@ pub(crate) static FUJIFILM_FOCUSSETTINGS: BinaryTable = BinaryTable {
             mask: Some(61440),
             value_conv: ValueConv::None,
             print_conv: PrintConv::MapOr(FUJIFILM_CONV5, super::print_conv::identity),
+            low_priority: false,
         },
         Field {
             index: 0,
@@ -124,6 +130,7 @@ pub(crate) static FUJIFILM_FOCUSSETTINGS: BinaryTable = BinaryTable {
             mask: Some(16711680),
             value_conv: ValueConv::None,
             print_conv: PrintConv::MapOr(FUJIFILM_CONV5, super::print_conv::zone_size),
+            low_priority: false,
         },
     ],
 };
@@ -147,6 +154,7 @@ pub(crate) static FUJIFILM_AFCSETTINGS: BinaryTable = BinaryTable {
             mask: None,
             value_conv: ValueConv::None,
             print_conv: PrintConv::MapOr(FUJIFILM_CONV6, super::print_conv::custom_afc_set),
+            low_priority: false,
         },
         Field {
             index: 0,
@@ -158,6 +166,7 @@ pub(crate) static FUJIFILM_AFCSETTINGS: BinaryTable = BinaryTable {
             mask: Some(15),
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 0,
@@ -169,6 +178,7 @@ pub(crate) static FUJIFILM_AFCSETTINGS: BinaryTable = BinaryTable {
             mask: Some(240),
             value_conv: ValueConv::None,
             print_conv: PrintConv::None,
+            low_priority: false,
         },
         Field {
             index: 0,
@@ -180,6 +190,7 @@ pub(crate) static FUJIFILM_AFCSETTINGS: BinaryTable = BinaryTable {
             mask: Some(3840),
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(FUJIFILM_CONV7),
+            low_priority: false,
         },
     ],
 };
@@ -203,6 +214,7 @@ pub(crate) static FUJIFILM_DRIVESETTINGS: BinaryTable = BinaryTable {
             mask: Some(255),
             value_conv: ValueConv::None,
             print_conv: PrintConv::Map(FUJIFILM_CONV8),
+            low_priority: false,
         },
         Field {
             index: 0,
@@ -214,6 +226,7 @@ pub(crate) static FUJIFILM_DRIVESETTINGS: BinaryTable = BinaryTable {
             mask: Some(4278190080),
             value_conv: ValueConv::None,
             print_conv: PrintConv::MapOr(FUJIFILM_CONV5, super::print_conv::fps),
+            low_priority: false,
         },
     ],
 };

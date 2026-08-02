@@ -45,6 +45,7 @@ use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_u16_array, extract_u32_array};
 use super::shared::binary_subdir::{self, BinaryTable};
 use super::shared::generic_decoders::ON_OFF;
+use super::shared::tag_priority::insert_low_priority;
 use subdir_tables::{
     PENTAX_AWBINFO, PENTAX_EVSTEPINFO, PENTAX_FACEINFO, PENTAX_FACEPOS, PENTAX_FACESIZE,
     PENTAX_FLASHINFO, PENTAX_KELVINWB, PENTAX_LENSCORR, PENTAX_LENSINFOQ, PENTAX_LEVELINFO,
@@ -998,7 +999,11 @@ impl PentaxParser {
                         let sub_id = raw[1] as u16;
                         let name = lookup_lens_type_pair(series, sub_id)
                             .unwrap_or_else(|| format!("Unknown ({} {})", series, sub_id));
-                        tags.insert("Pentax:LensType".to_string(), name);
+                        // `%Pentax::LensRec` key 0 is `Priority => 0`
+                        // (Pentax.pm:4202), as is the 0x0207 copy below. Between
+                        // two 0-priority instances ExifTool keeps the first
+                        // (ExifTool.pm:9541-9551), and 0x003f is read first.
+                        insert_low_priority(tags, "Pentax:LensType".to_string(), name);
                     }
                     if raw.len() >= 4 {
                         let extender = if raw[3] == 0 {
@@ -1691,7 +1696,13 @@ impl PentaxParser {
                         let series = raw[0] & 0x0f;
                         let sub_id = (raw[2] as u16) * 256 + raw[3] as u16;
                         if let Some(name) = lookup_lens_type_pair(series, sub_id) {
-                            tags.insert("Pentax:LensType".to_string(), name);
+                            // `Priority => 0` in every `%Pentax::LensInfo*`
+                            // (Pentax.pm:4226, :4248, :4284, :4320, :4357): the
+                            // 0x003f copy read earlier is the one that prints.
+                            // PentaxK100D.jpg carries `0 0 0 0` here, which
+                            // decodes to a real lens name ("M-42 or No Lens")
+                            // and so overwrote the correct one silently.
+                            insert_low_priority(tags, "Pentax:LensType".to_string(), name);
                         }
                     }
                     if raw.len() >= 4 + 17 {
@@ -1718,7 +1729,10 @@ impl PentaxParser {
                         let focal_raw = ld[9] as i32;
                         let focal =
                             10.0 * (focal_raw >> 2) as f64 * 4f64.powi((focal_raw & 0x03) - 2);
-                        tags.insert(
+                        // `%Pentax::LensData` key 9 is `Priority => 0`
+                        // (Pentax.pm:4506).
+                        insert_low_priority(
+                            tags,
                             "Pentax:LensFocalLength".to_string(),
                             format!("{:.1} mm", focal),
                         );
@@ -1756,7 +1770,16 @@ impl PentaxParser {
                         };
                         let model_id = read_u32(&raw[0..4]);
                         if let Some(name) = pentax_model_id_name(model_id) {
-                            tags.insert("Pentax:PentaxModelID".to_string(), name.to_string());
+                            // `%Pentax::CameraInfo` key 0 is `Priority => 0`,
+                            // with ExifTool's own reason on the line:
+                            // "(Optio SVi uses incorrect Optio SV ID here)"
+                            // (Pentax.pm:4723). The 0x0005 copy read earlier is
+                            // the one that prints.
+                            insert_low_priority(
+                                tags,
+                                "Pentax:PentaxModelID".to_string(),
+                                name.to_string(),
+                            );
                         }
                         let manufacture_date = read_u32(&raw[4..8]);
                         let date_str = manufacture_date.to_string();
@@ -2779,6 +2802,110 @@ fn pentax_model_id_name(id: u32) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A "PENTAX \0" MakerNote block carrying `entries` (tag, type, count,
+    /// value-or-offset) big-endian, plus `trailer` laid down at offset 64.
+    ///
+    /// Offsets in a "PENTAX \0" MakerNote are measured from the block itself
+    /// (`Base => '$start - 10'`), so a value at index 64 of the returned buffer
+    /// is addressed as 64.
+    #[cfg(test)]
+    fn pentax_block(entries: &[(u16, u16, u32, u32)], trailer: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(PENTAX_HEADER_PENTAX); // 0..8
+        out.extend_from_slice(b"MM"); // 8..10
+        out.extend_from_slice(&(entries.len() as u16).to_be_bytes()); // 10..12
+        for &(tag, ftype, count, value) in entries {
+            out.extend_from_slice(&tag.to_be_bytes());
+            out.extend_from_slice(&ftype.to_be_bytes());
+            out.extend_from_slice(&count.to_be_bytes());
+            out.extend_from_slice(&value.to_be_bytes());
+        }
+        out.extend_from_slice(&0u32.to_be_bytes()); // next-IFD pointer
+        out.resize(64, 0);
+        out.extend_from_slice(trailer);
+        out
+    }
+
+    /// ExifTool's `Priority => 0`, end to end through the parse loop.
+    ///
+    /// Both of these ids are read by the same walk, in ascending order, and
+    /// both write a tag the `Main` table already reported. Before the priority
+    /// rule was applied they simply overwrote it, which is not a missing tag
+    /// or a crash -- it is a real ExifTool tag name carrying the wrong value.
+    ///
+    /// The bytes are the ones `exiftool -v3` prints for two corpus files:
+    ///
+    /// * `Pentax/PentaxK100D.jpg` -- `LensRec` (0x003f) holds `7 244` and
+    ///   `LensInfo` (0x0207) holds `0 0 0 0`. Both tables are `Priority => 0`
+    ///   (Pentax.pm:4202, :4248), so ExifTool keeps the first (ExifTool.pm:9541-9551)
+    ///   and reports `smc PENTAX-DA 21mm F3.2 AL Limited`. `0 0` is a real lens
+    ///   id, not a null -- it decodes to `M-42 or No Lens`.
+    /// * `Pentax/PentaxOptioSVi.jpg` -- `Main` 0x0005 holds 76405 and
+    ///   `CameraInfo` (0x0215) holds 76400. ExifTool marks only the latter
+    ///   `Priority => 0`, with its reason on the line: "(Optio SVi uses
+    ///   incorrect Optio SV ID here)" (Pentax.pm:4723). ExifTool reports
+    ///   `Optio SVi`.
+    #[test]
+    fn low_priority_subdirectory_does_not_overwrite_the_main_table() {
+        let mut camera_info = Vec::new();
+        camera_info.extend_from_slice(&76_400u32.to_be_bytes()); // PentaxModelID
+        camera_info.extend_from_slice(&20_040_101u32.to_be_bytes()); // ManufactureDate
+        camera_info.extend_from_slice(&1u32.to_be_bytes()); // ProductionCode major
+        camera_info.extend_from_slice(&0u32.to_be_bytes()); // ProductionCode minor
+        camera_info.extend_from_slice(&7u32.to_be_bytes()); // InternalSerialNumber
+
+        let data = pentax_block(
+            &[
+                // 0x0005 PentaxModelID, LONG: 76405 -> "Optio SVi"
+                (0x0005, 4, 1, 76_405),
+                // 0x003f LensRec, 4 BYTEs `07 f4 00 00` -> LensType "7 244"
+                (0x003F, 1, 4, 0x07F4_0000),
+                // 0x0207 LensInfo, 4 BYTEs `00 00 00 00` -> LensType "0 0"
+                (0x0207, 1, 4, 0x0000_0000),
+                // 0x0215 CameraInfo, 5 LONGs at offset 64
+                (0x0215, 4, 5, 64),
+            ],
+            &camera_info,
+        );
+
+        let mut tags = HashMap::new();
+        PentaxParser
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+
+        assert_eq!(
+            tags.get("Pentax:LensType").map(String::as_str),
+            Some("smc PENTAX-DA 21mm F3.2 AL Limited"),
+            "0x0207 LensInfo is Priority => 0 and must not overwrite 0x003f LensRec"
+        );
+        assert_eq!(
+            tags.get("Pentax:PentaxModelID").map(String::as_str),
+            Some("Optio SVi"),
+            "0x0215 CameraInfo is Priority => 0 and must not overwrite Main 0x0005"
+        );
+    }
+
+    /// The rule suppresses a clobber, not the tag: with no `Main` copy present,
+    /// the `Priority => 0` sub-directory value is still the one reported.
+    #[test]
+    fn low_priority_subdirectory_still_reports_when_it_is_the_only_source() {
+        let mut camera_info = Vec::new();
+        camera_info.extend_from_slice(&76_400u32.to_be_bytes());
+        camera_info.resize(20, 0);
+
+        let data = pentax_block(&[(0x0215, 4, 5, 64)], &camera_info);
+
+        let mut tags = HashMap::new();
+        PentaxParser
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+
+        assert_eq!(
+            tags.get("Pentax:PentaxModelID").map(String::as_str),
+            Some("Optio SV"),
+        );
+    }
 
     #[test]
     fn test_decode_quality() {

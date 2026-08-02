@@ -36,6 +36,7 @@
 
 use std::collections::HashMap;
 
+use super::tag_priority;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
 /// How the bytes at a field's offset are read.
@@ -122,6 +123,13 @@ pub(crate) struct Field {
     /// Runs after `Mask` and before `print_conv`, as in ExifTool.
     pub(crate) value_conv: ValueConv,
     pub(crate) print_conv: PrintConv,
+    /// ExifTool's `Priority => 0` (or `Avoid => 1`, which implies it at
+    /// `ExifTool.pm:9472`): this field never displaces a value already reported
+    /// under the same name. A sub-directory copy of a tag the vendor's `Main`
+    /// table also carries is normally marked this way, so that the `Main` copy
+    /// is the one that prints. See
+    /// [`shared::tag_priority`](super::tag_priority).
+    pub(crate) low_priority: bool,
 }
 
 /// A `ProcessBinaryData` table.
@@ -347,7 +355,15 @@ pub(crate) fn decode_binary_subdir_with(
         if let (Some(member), Some(value)) = (field.set_member, first_num) {
             members.insert(member, value);
         }
-        tags.insert(format!("{prefix}:{}", field.name), parts.join(" "));
+        let key = format!("{prefix}:{}", field.name);
+        let value = parts.join(" ");
+        if field.low_priority {
+            // ExifTool's `Priority => 0`: a sub-directory copy of a tag the
+            // `Main` table also reports must not overwrite it.
+            tag_priority::insert_low_priority(tags, key, value);
+        } else {
+            tags.insert(key, value);
+        }
     }
 }
 
@@ -372,6 +388,7 @@ mod tests {
                 mask: None,
                 value_conv: ValueConv::None,
                 print_conv: PrintConv::None,
+                low_priority: false,
             },
             Field {
                 index: 1,
@@ -383,6 +400,7 @@ mod tests {
                 mask: None,
                 value_conv: ValueConv::None,
                 print_conv: PrintConv::None,
+                low_priority: false,
             },
             Field {
                 index: 5,
@@ -394,6 +412,7 @@ mod tests {
                 mask: None,
                 value_conv: ValueConv::None,
                 print_conv: PrintConv::None,
+                low_priority: false,
             },
         ],
     };
@@ -470,6 +489,7 @@ mod tests {
                 mask: None,
                 value_conv: ValueConv::None,
                 print_conv: PrintConv::None,
+                low_priority: false,
             }],
         };
         let mut tags = HashMap::new();
@@ -500,6 +520,7 @@ mod tests {
                     mask: None,
                     value_conv: ValueConv::None,
                     print_conv: PrintConv::Map(T_CONV),
+                    low_priority: false,
                 },
                 Field {
                     index: 1,
@@ -511,6 +532,7 @@ mod tests {
                     mask: None,
                     value_conv: ValueConv::None,
                     print_conv: PrintConv::Map(T_CONV),
+                    low_priority: false,
                 },
             ],
         };
@@ -540,6 +562,7 @@ mod tests {
                     mask: Some(0x000f),
                     value_conv: ValueConv::None,
                     print_conv: PrintConv::None,
+                    low_priority: false,
                 },
                 Field {
                     index: 0,
@@ -551,6 +574,7 @@ mod tests {
                     mask: Some(0xf000),
                     value_conv: ValueConv::None,
                     print_conv: PrintConv::None,
+                    low_priority: false,
                 },
             ],
         };
