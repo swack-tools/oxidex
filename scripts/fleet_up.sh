@@ -514,22 +514,26 @@ preflight_perl_lib() {
     if [ -z "$FLEET_PERL_LIB" ]; then
         # Same resolution the rest of the fleet uses, but resolved HERE so the
         # failure is one line in preflight instead of 14 mergers each silently
-        # flagging every commit unverifiable. Glob-iterated rather than
-        # `ls | tail -1` so an unmatched glob stays literal-and-skipped instead
-        # of becoming an empty-but-successful answer.
-        local cand
-        for cand in /opt/homebrew/Cellar/exiftool/*/libexec/lib/perl5 \
-                    /usr/local/Cellar/exiftool/*/libexec/lib/perl5; do
-            [ -d "$cand" ] && FLEET_PERL_LIB=$cand
-        done
+        # flagging every commit unverifiable.
+        #
+        # The PINNED tree, not a Cellar glob. The glob took whatever brew last
+        # installed -- 13.55 on 2026-08-01 -- while src/exiftool_tables is
+        # transcribed from the 13.59 checkout in $EXIFTOOL_CACHE_DIR. Different
+        # releases spell different PrintConv maps, so a correct transcription
+        # reads as a fabricated pair and a fabricated one can read as correct.
+        # There is no "close enough" version here, which is why the fallback
+        # is gone rather than demoted.
+        FLEET_PERL_LIB=$EXIFTOOL_CACHE_DIR/exiftool/lib
     fi
     if [ -z "$FLEET_PERL_LIB" ] || [ ! -d "$FLEET_PERL_LIB" ]; then
-        preflight_fail "no ExifTool Perl lib found (tried FLEET_PERL_LIB and
-  /opt/homebrew/Cellar/exiftool/*/libexec/lib/perl5).
+        preflight_fail "no ExifTool Perl lib at $FLEET_PERL_LIB (the pinned tree
+  \$EXIFTOOL_CACHE_DIR/exiftool/lib, overridable with --perl-lib or FLEET_PERL_LIB).
   Without it validate_fix_commit.check_printconv abstains and EVERY commit that adds a
   lookup value is quarantined as printconv-unverifiable -- 36 of the 80 flags in the
   ledger on 2026-07-26 were exactly this, caused by mergers launched without --perl-lib.
-  remedy: brew install exiftool, or FLEET_PERL_LIB=/path/to/lib/perl5 $0"
+  remedy: populate the pinned cache (\`just compare-exiftool\` once), or point
+  FLEET_PERL_LIB at a checkout of the SAME release the tables were transcribed from.
+  A brew Cellar lib is NOT interchangeable unless its version matches."
     fi
 }
 

@@ -39,8 +39,20 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from exiftool_oracle import (  # noqa: E402
+    cache_dir as exiftool_cache_dir,
+    shared as shared_exiftool_oracle,
+)
+
 FLEET_LOG = Path.home() / ".oxidex" / "logs" / "fleet-up.log"
-DEFAULT_PERL = Path("/opt/homebrew/Cellar/exiftool/13.55/libexec/lib/perl5/Image/ExifTool")
+# The PINNED tree, not a Cellar path. A hardcoded /opt/homebrew/.../13.55/...
+# meant this checker re-derived every rejection from a release the tables were
+# never transcribed from (13.59) -- so it could "independently confirm" a
+# rejection that the correct source disagrees with, and the confirmation is
+# what makes the rejection irreversible.
+DEFAULT_PERL = exiftool_cache_dir() / "exiftool" / "lib" / "Image" / "ExifTool"
 DEFAULT_OUT = Path.home() / ".oxidex" / "patch-archive" / "verification-log.jsonl"
 STATE = Path.home() / ".oxidex" / "logs" / "verify-fleet-decisions.state"
 
@@ -134,7 +146,11 @@ def check_promotion(entry, samples_root):
     #     and cried fabrication on correct evidence.
     #   * without -a, a tag present only in a non-primary group (that one is
     #     in IFD0) does not print at all, which reads as "absent".
-    dump = run("exiftool", "-a", "-G1", "-s", sample).stdout
+    # The binary is the pinned oracle, never a bare `exiftool`: PATH here
+    # resolved to 13.55 while the trailers being re-measured were derived from
+    # 13.59, so a correct Exiftool-Value could be branded FABRICATED by a
+    # checker whose entire job is to be the independent one.
+    dump = run(*shared_exiftool_oracle().command(["-a", "-G1", "-s", sample])).stdout
     found = []
     for line in dump.splitlines():
         m = re.match(r"^\[[^\]]+\]\s+(\S+)\s+:\s*(.*)$", line)

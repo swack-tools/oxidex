@@ -25,7 +25,11 @@ set -uo pipefail
 REPO="${REPO:-$HOME/.oxidex/worktrees/fleet-ops}"
 LOGDIR="${LOGDIR:-$HOME/.oxidex/logs}"
 POLL="${POLL:-30}"
-PERL_LIB="${PERL_LIB:-/opt/homebrew/Cellar/exiftool/13.55/libexec/lib/perl5}"
+# The PINNED ExifTool tree, not whatever brew last installed. A hardcoded
+# Cellar path pointed at 13.55 while the transcriptions came from 13.59, so
+# check_printconv graded every commit against a release the tables were never
+# derived from -- different releases spell different PrintConv maps.
+PERL_LIB="${PERL_LIB:-${EXIFTOOL_CACHE_DIR:-/tmp/oxidex-exiftool-cache}/exiftool/lib}"
 
 SQUADS=(canon nikon sony-minolta xmp exif-core olympus pentax-samsung
         panasonic-leica mobile thermal sigma-c2pa ps-docs standards-appn tail)
