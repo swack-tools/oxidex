@@ -9,9 +9,10 @@ use super::super::shared::tag_registry::TagRegistry;
 // Re-export decoders from fujifilm.rs
 // These decoders are defined using const_decoder! macros in the main parser
 use super::super::fujifilm::{
-    DECODE_DRIVE_MODE, DECODE_DYNAMIC_RANGE, DECODE_DYNAMIC_RANGE_SETTING, DECODE_EXR_MODE,
-    DECODE_FILM_MODE, DECODE_FLASH_MODE, DECODE_FOCUS_MODE, DECODE_OFF_ON, DECODE_PICTURE_MODE,
-    DECODE_QUALITY, DECODE_WHITE_BALANCE,
+    DECODE_BLUR_WARNING, DECODE_DRIVE_MODE, DECODE_DYNAMIC_RANGE, DECODE_DYNAMIC_RANGE_SETTING,
+    DECODE_EXPOSURE_WARNING, DECODE_EXR_AUTO, DECODE_EXR_MODE, DECODE_FILM_MODE, DECODE_FLASH_MODE,
+    DECODE_FOCUS_MODE, DECODE_FOCUS_WARNING, DECODE_OFF_ON, DECODE_PICTURE_MODE, DECODE_QUALITY,
+    DECODE_SHUTTER_TYPE, DECODE_WHITE_BALANCE,
 };
 
 // ============================================================================
@@ -33,7 +34,6 @@ pub fn fujifilm_registry() -> TagRegistry {
         // String tags
         .register_string_tag(0x0000, "Version")
         .register_string_tag(0x0010, "SerialNumber")
-        .register_string_tag(0x1050, "LensModelName")
         // Enumerated tags with decoders
         .register_enum_tag_required(0x1000, "Quality", &DECODE_QUALITY)
         .register_enum_tag(0x1001, "Sharpness", None)
@@ -45,13 +45,13 @@ pub fn fujifilm_registry() -> TagRegistry {
         .register_enum_tag_required(0x1021, "FocusMode", &DECODE_FOCUS_MODE)
         .register_enum_tag_required(0x1030, "SlowSync", &DECODE_OFF_ON)
         .register_enum_tag_required(0x1031, "PictureMode", &DECODE_PICTURE_MODE)
-        .register_enum_tag(0x1033, "EXRAuto", None)
+        .register_enum_tag_required(0x1033, "EXRAuto", &DECODE_EXR_AUTO)
         .register_enum_tag_required(0x1034, "EXRMode", &DECODE_EXR_MODE)
         .register_enum_tag_required(0x1039, "DriveMode", &DECODE_DRIVE_MODE)
-        .register_enum_tag(0x1300, "BlurWarning", None)
-        .register_enum_tag(0x1301, "FocusWarning", None)
-        .register_enum_tag(0x1302, "ExposureWarning", None)
-        .register_enum_tag(0x1304, "DynamicRangeWarning", None)
+        .register_enum_tag_required(0x1050, "ShutterType", &DECODE_SHUTTER_TYPE)
+        .register_enum_tag_required(0x1300, "BlurWarning", &DECODE_BLUR_WARNING)
+        .register_enum_tag_required(0x1301, "FocusWarning", &DECODE_FOCUS_WARNING)
+        .register_enum_tag_required(0x1302, "ExposureWarning", &DECODE_EXPOSURE_WARNING)
         .register_enum_tag_required(0x1401, "FilmMode", &DECODE_FILM_MODE)
         .register_enum_tag_required(0x1400, "DynamicRange", &DECODE_DYNAMIC_RANGE)
         .register_enum_tag_required(0x1402, "DynamicRangeSetting", &DECODE_DYNAMIC_RANGE_SETTING)
