@@ -34,6 +34,7 @@ pub mod jpeg;
 pub mod macho;
 pub mod pdf;
 pub mod pe;
+pub mod photo_mechanic;
 pub mod png;
 pub mod quicktime;
 pub mod raw;
