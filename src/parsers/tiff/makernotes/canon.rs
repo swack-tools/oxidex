@@ -26,6 +26,8 @@ use nom::{
     multi::count,
     number::complete::{be_u16, be_u32, le_u16, le_u32},
 };
+use once_cell::sync::Lazy;
+use regex::Regex;
 use std::collections::HashMap;
 
 use super::canon_lens_database::lookup_lens_name;
@@ -664,14 +666,19 @@ const PERSONAL_FUNC_VALUES: &[(usize, &str)] = &[
 /// `%CanonCustom::Functions2` (CanonCustom.pm:1198), transcribed from ExifTool.
 ///
 /// One entry per custom-function tag id, holding one converter per value slot.
-/// Model-conditional entries (ExifTool `Condition`) are deliberately absent: their
-/// labels differ per body, and emitting one body's labels for another would be a
-/// fabricated value rather than a missing tag.
+/// Model-conditional entries (ExifTool `Condition`) are handled by
+/// [`CUSTOM_FUNCTIONS2_ARMS`] below, which dispatches on ExifTool's full
+/// `Condition` chain the same way `Sony::Main` 0x201c/0x201e does (PR #319) --
+/// this table holds only the ids with a single, unconditioned entry.
 /// One PrintConv slot of a `%CanonCustom::Functions2` entry.
 ///
 /// ExifTool stores these as a Perl `PrintConv` that is either a lookup hash, a
-/// `BITMASK` hash, the literal `sprintf("Flags 0x%x",$val)`, or absent. A tag whose
-/// value has several slots carries one converter per slot (ExifTool's ARRAY form).
+/// `BITMASK` hash, the literal `sprintf("Flags 0x%x",$val)`, a `"prefix" . $val
+/// . "suffix"`-style template, or absent. A tag whose value has several slots
+/// carries one converter per slot (ExifTool's ARRAY form); a slot beyond the end
+/// of that array has no conversion in ExifTool (`ConvertValue`'s `$nextConv`
+/// falls off the end to `undef`), so it is transcribed here as an explicit
+/// trailing [`CustomFunctionConv::Raw`] rather than inferred.
 #[derive(Clone, Copy)]
 enum CustomFunctionConv {
     /// No `PrintConv`: ExifTool prints the signed value as-is.
@@ -682,6 +689,9 @@ enum CustomFunctionConv {
     Map(&'static [(i32, &'static str)]),
     /// A `BITMASK` hash: set bit names joined with ", ", or "(none)" when no bit is set.
     Bitmask(&'static [(i32, &'static str)]),
+    /// `"prefix$val"` / `"$valsuffix"` string-concatenation PrintConv, e.g.
+    /// `'"Hi $val"'` (CanonCustom.pm:2097) or `'"$val shots"'` (CanonCustom.pm:2148).
+    Template(&'static str, &'static str),
 }
 
 impl CustomFunctionConv {
@@ -707,9 +717,862 @@ impl CustomFunctionConv {
                     names.join(", ")
                 }
             }
+            CustomFunctionConv::Template(prefix, suffix) => format!("{prefix}{value}{suffix}"),
         }
     }
 }
+
+/// One `Condition`-gated arm of a `%CanonCustom::Functions2` entry that ExifTool
+/// dispatches on `$$self{Model}` and/or `$count` (the number of int32 values the
+/// record stores for this tag). ExifTool tries an entry's arms top to bottom and
+/// uses the first whose `Condition` is true, or that has none -- the same
+/// mechanism `Sony::Main` 0x201c/0x201e uses (PR #319), and for the same reason:
+/// the arms are not independent alternatives, they are what the value *means*,
+/// so guessing the wrong one is worse than omitting the tag.
+struct FunctionArm {
+    /// `$$self{Model} =~ <regex>` (or `!~` when `negate` is set). `None` when the
+    /// arm has no model `Condition` -- ExifTool's catch-all arm is always last.
+    model: Option<(&'static Lazy<Regex>, bool)>,
+    /// `$count == n`. `None` when the arm has no count `Condition`.
+    count: Option<usize>,
+    name: &'static str,
+    convs: &'static [CustomFunctionConv],
+}
+
+impl FunctionArm {
+    fn matches(&self, model: &str, value_count: usize) -> bool {
+        if let Some(n) = self.count {
+            if n != value_count {
+                return false;
+            }
+        }
+        if let Some((re, negate)) = self.model {
+            if re.is_match(model) == negate {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Finds the first arm of `tag_id` in [`CUSTOM_FUNCTIONS2_ARMS`] whose
+/// `Condition` is satisfied for `model` and `value_count`, mirroring
+/// `Image::ExifTool::GetTagInfo`'s top-to-bottom, first-match evaluation.
+fn match_custom_function_arm(
+    tag_id: u32,
+    model: &str,
+    value_count: usize,
+) -> Option<(&'static str, &'static [CustomFunctionConv])> {
+    let (_, arms) = CUSTOM_FUNCTIONS2_ARMS
+        .iter()
+        .find(|(id, _)| *id == tag_id)?;
+    arms.iter()
+        .find(|arm| arm.matches(model, value_count))
+        .map(|arm| (arm.name, arm.convs))
+}
+
+// Model regexes for `CUSTOM_FUNCTIONS2_ARMS`, named for the tag id and arm they
+// gate. Patterns are copied verbatim from ExifTool's `Condition` strings,
+// including `\b1D` at 0x0103 with no closing `\b` (matches any 1D-prefixed
+// model: `1D`, `1Ds`, `1D X`, `1D Mark IV`, ...) and the merged two-line `or`
+// at 0x0202/0x0701, which is one alternation since both halves share the same
+// `\b...\b` anchoring.
+static RE_0101_1D: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b1Ds?\b").expect("static regex"));
+static RE_0103_1D: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b1D").expect("static regex"));
+static RE_0106_90D: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b90D\b").expect("static regex"));
+static RE_010F_40D_1DS3: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b(40D|1Ds Mark III)\b").expect("static regex"));
+static RE_010F_50D_60D_7D: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b(50D|60D|7D)\b").expect("static regex"));
+static RE_010F_450D_1000D: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b(450D|XSi|Kiss X2|1000D|XS|Kiss F)\b").expect("static regex"));
+static RE_010F_1DS3_MARK: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\bEOS-1Ds? Mark III\b").expect("static regex"));
+static RE_010F_1D4_MARK: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\bEOS-1D Mark IV\b").expect("static regex"));
+static RE_0202_HIGH_ISO_NR: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"\b(50D|60D|5D Mark II|7D|500D|T1i|Kiss X3|550D|T2i|Kiss X4|600D|T3i|Kiss X5|1100D|T3|Kiss X50)\b",
+    )
+    .expect("static regex")
+});
+static RE_0204_ALO: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\b(50D|5D Mark II|500D|T1i|Kiss X3|1D Mark IV)\b").expect("static regex")
+});
+static RE_0409_1D3: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b1Ds? Mark III\b").expect("static regex"));
+static RE_0508_5D2: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b5D Mark II\b").expect("static regex"));
+static RE_0508_1DS3: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b1Ds Mark III\b").expect("static regex"));
+static RE_1D_MARK_IV: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b1D Mark IV\b").expect("static regex"));
+static RE_050C_1D: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b1D\b").expect("static regex"));
+static RE_050E_1D4_6D: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b(1D Mark IV|6D)\b").expect("static regex"));
+static RE_60D: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b60D\b").expect("static regex"));
+static RE_0510_7D: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b7D\b").expect("static regex"));
+static RE_0511_40D: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b40D\b").expect("static regex"));
+static RE_0701_A: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"\b(1000D|XS|Kiss F|500D|T1i|Kiss X3|550D|T2i|Kiss X4|600D|T3i|Kiss X5|1100D|T3|Kiss X50)\b",
+    )
+    .expect("static regex")
+});
+static RE_0704_A: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b(40D|50D|5D Mark II)\b").expect("static regex"));
+static RE_0704_C: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\b(450D|XSi|Kiss X2|550D|T2i|Kiss X4|600D|T3i|Kiss X5)\b").expect("static regex")
+});
+static RE_0704_D: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b(1100D|T3|Kiss X50)\b").expect("static regex"));
+static RE_0704_E: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b(1000D|XS|Kiss F)\b").expect("static regex"));
+static RE_0704_F: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b(500D|T1i|Kiss X3)\b").expect("static regex"));
+static RE_080B_40D_50D_60D: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b(40D|50D|60D)\b").expect("static regex"));
+static RE_080B_6D: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b6D\b").expect("static regex"));
+static RE_080B_7D2: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b7D Mark II\b").expect("static regex"));
+static RE_080B_1DX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b1D X\b").expect("static regex"));
+
+/// `Condition`-gated `%CanonCustom::Functions2` entries, transcribed arm by arm
+/// from ExifTool's `CanonCustom.pm` in ExifTool's own order. Each id's arms are
+/// tried top to bottom by [`match_custom_function_arm`]; the last arm of every
+/// id here has no `Condition` and is ExifTool's catch-all.
+///
+/// Arms genuinely needing a `ValueConv` translation -- the 1D-model arm of
+/// `ISOSpeedRange` (0x0103), and `ShutterSpeedRange`/`ApertureRange` (0x010c,
+/// 0x010d) in full -- are real porting work, not transcription, and are left
+/// unimplemented rather than guessed; so are the two arms keyed on a
+/// space-joined multi-value string (`AEBShotCount`'s 2-value arm at 0x0106 and
+/// `Shutter-AELock`'s 250D arm at 0x0701), which need a different lookup
+/// mechanism this table doesn't yet have. Every other case where an earlier arm
+/// is skipped falls safely on the surviving arms' own arity check: a skipped
+/// arm's value count won't match a later arm's `convs.len()`, so the tag is
+/// omitted rather than mislabeled.
+const CUSTOM_FUNCTIONS2_ARMS: &[(u32, &[FunctionArm])] = &[
+    (
+        0x0101,
+        &[
+            FunctionArm {
+                model: Some((&RE_0101_1D, false)),
+                count: None,
+                name: "ExposureLevelIncrements",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "1/3-stop set, 1/3-stop comp."),
+                    (1, "1-stop set, 1/3-stop comp."),
+                    (2, "1/2-stop set, 1/2-stop comp."),
+                ])],
+            },
+            FunctionArm {
+                model: None,
+                count: None,
+                name: "ExposureLevelIncrements",
+                convs: &[CustomFunctionConv::Map(&[(0, "1/3 Stop"), (1, "1/2 Stop")])],
+            },
+        ],
+    ),
+    (
+        0x0103,
+        &[
+            // ISOSpeedRange's 1D-model arm (ValueConv-heavy) is not transcribed;
+            // ISOExpansion's fallback arm is negated on the same model regex so it
+            // doesn't fire where ExifTool would have used the other arm instead.
+            FunctionArm {
+                model: Some((&RE_0103_1D, true)),
+                count: None,
+                name: "ISOExpansion",
+                convs: &[CustomFunctionConv::Map(&[(0, "Off"), (1, "On")])],
+            },
+        ],
+    ),
+    (
+        0x0106,
+        &[
+            FunctionArm {
+                model: Some((&RE_0106_90D, false)),
+                count: None,
+                name: "AEBShotCount",
+                convs: &[CustomFunctionConv::Map(&[
+                    (2, "2 shots"),
+                    (3, "3 shots"),
+                    (5, "5 shots"),
+                    (7, "7 shots"),
+                ])],
+            },
+            FunctionArm {
+                model: None,
+                count: Some(1),
+                name: "AEBShotCount",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "3 shots"),
+                    (1, "2 shots"),
+                    (2, "5 shots"),
+                    (3, "7 shots"),
+                ])],
+            },
+        ],
+    ),
+    (
+        0x0109,
+        &[
+            FunctionArm {
+                model: None,
+                count: Some(1),
+                name: "UsableShootingModes",
+                convs: &[CustomFunctionConv::Flags],
+            },
+            FunctionArm {
+                model: None,
+                count: Some(2),
+                name: "UsableShootingModes",
+                convs: &[
+                    CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")]),
+                    CustomFunctionConv::Flags,
+                ],
+            },
+        ],
+    ),
+    (
+        0x010a,
+        &[
+            FunctionArm {
+                model: None,
+                count: Some(1),
+                name: "UsableMeteringModes",
+                convs: &[CustomFunctionConv::Flags],
+            },
+            FunctionArm {
+                model: None,
+                count: Some(2),
+                name: "UsableMeteringModes",
+                convs: &[
+                    CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")]),
+                    CustomFunctionConv::Flags,
+                ],
+            },
+        ],
+    ),
+    (
+        0x010f,
+        &[
+            FunctionArm {
+                model: Some((&RE_010F_40D_1DS3, false)),
+                count: None,
+                name: "FlashSyncSpeedAv",
+                convs: &[CustomFunctionConv::Map(&[(0, "Auto"), (1, "1/250 Fixed")])],
+            },
+            FunctionArm {
+                model: Some((&RE_010F_50D_60D_7D, false)),
+                count: None,
+                name: "FlashSyncSpeedAv",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Auto"),
+                    (1, "1/250-1/60 Auto"),
+                    (2, "1/250 Fixed"),
+                ])],
+            },
+            FunctionArm {
+                model: Some((&RE_010F_450D_1000D, false)),
+                count: None,
+                name: "FlashSyncSpeedAv",
+                convs: &[CustomFunctionConv::Map(&[(0, "Auto"), (1, "1/200 Fixed")])],
+            },
+            FunctionArm {
+                model: Some((&RE_010F_1DS3_MARK, false)),
+                count: None,
+                name: "FlashSyncSpeedAv",
+                convs: &[CustomFunctionConv::Map(&[(0, "Auto"), (1, "1/300 Fixed")])],
+            },
+            FunctionArm {
+                model: Some((&RE_010F_1D4_MARK, false)),
+                count: None,
+                name: "FlashSyncSpeedAv",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Auto"),
+                    (1, "1/300-1/60 Auto"),
+                    (2, "1/300 Fixed"),
+                ])],
+            },
+            FunctionArm {
+                model: None,
+                count: None,
+                name: "FlashSyncSpeedAv",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Auto"),
+                    (1, "1/200-1/60 Auto"),
+                    (2, "1/200 Fixed"),
+                ])],
+            },
+        ],
+    ),
+    (
+        0x0202,
+        &[
+            FunctionArm {
+                model: Some((&RE_0202_HIGH_ISO_NR, false)),
+                count: None,
+                name: "HighISONoiseReduction",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Standard"),
+                    (1, "Low"),
+                    (2, "Strong"),
+                    (3, "Off"),
+                ])],
+            },
+            FunctionArm {
+                model: None,
+                count: None,
+                name: "HighISONoiseReduction",
+                convs: &[CustomFunctionConv::Map(&[(0, "Off"), (1, "On")])],
+            },
+        ],
+    ),
+    (
+        0x0204,
+        &[
+            FunctionArm {
+                model: Some((&RE_0204_ALO, false)),
+                count: None,
+                name: "AutoLightingOptimizer",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Standard"),
+                    (1, "Low"),
+                    (2, "Strong"),
+                    (3, "Disable"),
+                ])],
+            },
+            FunctionArm {
+                model: None,
+                count: None,
+                name: "AutoLightingOptimizer",
+                convs: &[CustomFunctionConv::Map(&[(0, "Enable"), (1, "Disable")])],
+            },
+        ],
+    ),
+    (
+        0x0409,
+        &[
+            FunctionArm {
+                model: Some((&RE_0409_1D3, false)),
+                count: None,
+                name: "InfoButtonWhenShooting",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Displays camera settings"),
+                    (1, "Displays shooting functions"),
+                ])],
+            },
+            FunctionArm {
+                model: None,
+                count: None,
+                name: "InfoButtonWhenShooting",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Displays shooting functions"),
+                    (1, "Displays camera settings"),
+                ])],
+            },
+        ],
+    ),
+    (
+        0x0508,
+        &[
+            FunctionArm {
+                model: Some((&RE_0508_5D2, false)),
+                count: None,
+                name: "AFPointAreaExpansion",
+                convs: &[CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")])],
+            },
+            FunctionArm {
+                model: Some((&RE_0508_1DS3, false)),
+                count: None,
+                name: "AFPointAreaExpansion",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Disable"),
+                    (1, "Enable (left/right Assist AF points)"),
+                    (2, "Enable (surrounding Assist AF points)"),
+                ])],
+            },
+            FunctionArm {
+                model: None,
+                count: None,
+                name: "AFPointAreaExpansion",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Disable"),
+                    (1, "Left/right AF points"),
+                    (2, "Surrounding AF points"),
+                    (3, "All 45 points area"),
+                ])],
+            },
+        ],
+    ),
+    (
+        0x0509,
+        &[
+            FunctionArm {
+                model: Some((&RE_1D_MARK_IV, false)),
+                count: None,
+                name: "SelectableAFPoint",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "45 points"),
+                    (1, "19 points"),
+                    (2, "11 points"),
+                    (3, "Inner 9 points"),
+                    (4, "Outer 9 points"),
+                ])],
+            },
+            FunctionArm {
+                model: None,
+                count: None,
+                name: "SelectableAFPoint",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "19 points"),
+                    (1, "Inner 9 points"),
+                    (2, "Outer 9 points"),
+                    (3, "19 Points, Multi-controller selectable"),
+                    (4, "Inner 9 Points, Multi-controller selectable"),
+                    (5, "Outer 9 Points, Multi-controller selectable"),
+                ])],
+            },
+        ],
+    ),
+    (
+        0x050a,
+        &[
+            FunctionArm {
+                model: Some((&RE_1D_MARK_IV, false)),
+                count: None,
+                name: "SwitchToRegisteredAFPoint",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Disable"),
+                    (1, "Switch with multi-controller"),
+                    (2, "Only while AEL is pressed"),
+                ])],
+            },
+            FunctionArm {
+                model: None,
+                count: None,
+                name: "SwitchToRegisteredAFPoint",
+                convs: &[CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")])],
+            },
+        ],
+    ),
+    (
+        0x050c,
+        &[
+            FunctionArm {
+                model: Some((&RE_050C_1D, false)),
+                count: None,
+                name: "AFPointDisplayDuringFocus",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "On"),
+                    (1, "Off"),
+                    (2, "On (when focus achieved)"),
+                ])],
+            },
+            FunctionArm {
+                model: None,
+                count: None,
+                name: "AFPointDisplayDuringFocus",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Selected (constant)"),
+                    (1, "All (constant)"),
+                    (2, "Selected (pre-AF, focused)"),
+                    (3, "Selected (focused)"),
+                    (4, "Disable display"),
+                ])],
+            },
+        ],
+    ),
+    (
+        0x050e,
+        &[
+            FunctionArm {
+                model: Some((&RE_050E_1D4_6D, false)),
+                count: None,
+                name: "AFAssistBeam",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Emits"),
+                    (1, "Does not emit"),
+                    (2, "IR AF assist beam only"),
+                ])],
+            },
+            FunctionArm {
+                model: None,
+                count: None,
+                name: "AFAssistBeam",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Emits"),
+                    (1, "Does not emit"),
+                    (2, "Only ext. flash emits"),
+                    (3, "IR AF assist beam only"),
+                ])],
+            },
+        ],
+    ),
+    (
+        0x050f,
+        &[
+            FunctionArm {
+                model: Some((&RE_60D, true)),
+                count: None,
+                name: "AFPointSelectionMethod",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Normal"),
+                    (1, "Multi-controller direct"),
+                    (2, "Quick Control Dial direct"),
+                ])],
+            },
+            FunctionArm {
+                model: None,
+                count: None,
+                name: "AFPointSelectionMethod",
+                convs: &[CustomFunctionConv::Map(&[
+                    (
+                        0,
+                        "AF point button: Activate AF Sel; Rear dial: Select AF points",
+                    ),
+                    (
+                        1,
+                        "AF point button: Auto selection; Rear dial: Manual selection",
+                    ),
+                ])],
+            },
+        ],
+    ),
+    (
+        0x0510,
+        &[
+            FunctionArm {
+                model: Some((&RE_0510_7D, false)),
+                count: None,
+                name: "VFDisplayIllumination",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Auto"),
+                    (1, "Enable"),
+                    (2, "Disable"),
+                ])],
+            },
+            FunctionArm {
+                model: None,
+                count: None,
+                name: "SuperimposedDisplay",
+                convs: &[CustomFunctionConv::Map(&[(0, "On"), (1, "Off")])],
+            },
+        ],
+    ),
+    (
+        0x0511,
+        &[
+            FunctionArm {
+                model: Some((&RE_0511_40D, false)),
+                count: None,
+                name: "AFDuringLiveView",
+                convs: &[CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")])],
+            },
+            FunctionArm {
+                model: None,
+                count: None,
+                name: "AFDuringLiveView",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Disable"),
+                    (1, "Quick mode"),
+                    (2, "Live mode"),
+                ])],
+            },
+        ],
+    ),
+    (
+        0x0610,
+        &[
+            FunctionArm {
+                model: None,
+                count: Some(6),
+                name: "ContinuousShootingSpeed",
+                convs: &[
+                    CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")]),
+                    CustomFunctionConv::Template("Hi ", ""),
+                    CustomFunctionConv::Template("Cont ", ""),
+                    CustomFunctionConv::Template("Lo ", ""),
+                    CustomFunctionConv::Template("Soft ", ""),
+                    CustomFunctionConv::Template("Soft LS ", ""),
+                ],
+            },
+            FunctionArm {
+                model: None,
+                count: Some(5),
+                name: "ContinuousShootingSpeed",
+                convs: &[
+                    CustomFunctionConv::Template("Hi ", ""),
+                    CustomFunctionConv::Template("Cont ", ""),
+                    CustomFunctionConv::Template("Lo ", ""),
+                    CustomFunctionConv::Template("Soft ", ""),
+                    CustomFunctionConv::Template("Soft LS ", ""),
+                ],
+            },
+            FunctionArm {
+                model: None,
+                count: Some(3),
+                name: "ContinuousShootingSpeed",
+                convs: &[
+                    CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")]),
+                    CustomFunctionConv::Template("Hi ", ""),
+                    CustomFunctionConv::Template("Lo ", ""),
+                ],
+            },
+        ],
+    ),
+    (
+        0x0612,
+        &[
+            FunctionArm {
+                model: None,
+                count: Some(1),
+                name: "RestrictDriveModes",
+                convs: &[CustomFunctionConv::Flags],
+            },
+            FunctionArm {
+                model: None,
+                count: Some(2),
+                name: "RestrictDriveModes",
+                convs: &[
+                    CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")]),
+                    CustomFunctionConv::Flags,
+                ],
+            },
+        ],
+    ),
+    (
+        0x0701,
+        &[
+            FunctionArm {
+                model: Some((&RE_0701_A, false)),
+                count: None,
+                name: "Shutter-AELock",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "AF/AE lock"),
+                    (1, "AE lock/AF"),
+                    (2, "AF/AF lock, No AE lock"),
+                    (3, "AE/AF, No AE lock"),
+                ])],
+            },
+            // The 250D's `$count == 2` arm (a space-joined-value hash) is not
+            // transcribed; see the module doc comment above this table.
+            FunctionArm {
+                model: Some((&RE_60D, false)),
+                count: None,
+                name: "AFAndMeteringButtons",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Metering start"),
+                    (1, "Metering + AF start"),
+                    (2, "AE lock"),
+                    (3, "AF stop"),
+                    (4, "No function"),
+                ])],
+            },
+            FunctionArm {
+                model: None,
+                count: None,
+                name: "ShutterButtonAFOnButton",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Metering + AF start"),
+                    (1, "Metering + AF start/AF stop"),
+                    (2, "Metering start/Meter + AF start"),
+                    (3, "AE lock/Metering + AF start"),
+                    (4, "Metering + AF start/disable"),
+                ])],
+            },
+        ],
+    ),
+    (
+        0x0704,
+        &[
+            FunctionArm {
+                model: Some((&RE_0704_A, false)),
+                count: None,
+                name: "SetButtonWhenShooting",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Normal (disabled)"),
+                    (1, "Image quality"),
+                    (2, "Picture style"),
+                    (3, "Menu display"),
+                    (4, "Image playback"),
+                    (5, "Quick control screen"),
+                    (6, "Record movie (Live View)"),
+                ])],
+            },
+            FunctionArm {
+                model: Some((&RE_60D, false)),
+                count: None,
+                name: "SetButtonWhenShooting",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Normal (disabled)"),
+                    (1, "Image quality"),
+                    (2, "Picture style"),
+                    (3, "White balance"),
+                    (4, "Flash exposure compensation"),
+                    (5, "Viewfinder leveling gauge"),
+                ])],
+            },
+            FunctionArm {
+                model: Some((&RE_0704_C, false)),
+                count: None,
+                name: "SetButtonWhenShooting",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Normal (disabled)"),
+                    (1, "Image quality"),
+                    (2, "Flash exposure compensation"),
+                    (3, "LCD monitor On/Off"),
+                    (4, "Menu display"),
+                    (5, "ISO speed"),
+                ])],
+            },
+            FunctionArm {
+                model: Some((&RE_0704_D, false)),
+                count: None,
+                name: "SetButtonWhenShooting",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Normal (disabled)"),
+                    (1, "Image quality"),
+                    (2, "Flash exposure compensation"),
+                    (3, "LCD monitor On/Off"),
+                    (4, "Menu display"),
+                    (5, "Depth-of-field preview"),
+                ])],
+            },
+            FunctionArm {
+                model: Some((&RE_0704_E, false)),
+                count: None,
+                name: "SetButtonWhenShooting",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "LCD monitor On/Off"),
+                    (1, "Image quality"),
+                    (2, "Flash exposure compensation"),
+                    (3, "Menu display"),
+                    (4, "Disabled"),
+                ])],
+            },
+            FunctionArm {
+                model: Some((&RE_0704_F, false)),
+                count: None,
+                name: "SetButtonWhenShooting",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Quick control screen"),
+                    (1, "Image quality"),
+                    (2, "Flash exposure compensation"),
+                    (3, "LCD monitor On/Off"),
+                    (4, "Menu display"),
+                    (5, "Disabled"),
+                ])],
+            },
+            // The 250D's `$count == 2` arm (`PrintConv => {}`, always "Unknown")
+            // is not transcribed; see the module doc comment above this table.
+            FunctionArm {
+                model: None,
+                count: None,
+                name: "SetButtonWhenShooting",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Normal (disabled)"),
+                    (1, "White balance"),
+                    (2, "Image size"),
+                    (3, "ISO speed"),
+                    (4, "Picture style"),
+                    (5, "Record func. + media/folder"),
+                    (6, "Menu display"),
+                    (7, "Image playback"),
+                ])],
+            },
+        ],
+    ),
+    (
+        0x080b,
+        &[
+            FunctionArm {
+                model: Some((&RE_080B_40D_50D_60D, false)),
+                count: None,
+                name: "FocusingScreen",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Ef-A"),
+                    (1, "Ef-D"),
+                    (2, "Ef-S"),
+                ])],
+            },
+            FunctionArm {
+                model: Some((&RE_0508_5D2, false)),
+                count: None,
+                name: "FocusingScreen",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Eg-A"),
+                    (1, "Eg-D"),
+                    (2, "Eg-S"),
+                ])],
+            },
+            FunctionArm {
+                model: Some((&RE_080B_6D, false)),
+                count: None,
+                name: "FocusingScreen",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Eg-A II"),
+                    (1, "Eg-D"),
+                    (2, "Eg-S"),
+                ])],
+            },
+            FunctionArm {
+                model: Some((&RE_080B_7D2, false)),
+                count: None,
+                name: "FocusingScreen",
+                convs: &[CustomFunctionConv::Map(&[(0, "Eh-A"), (1, "Eh-S")])],
+            },
+            FunctionArm {
+                model: Some((&RE_080B_1DX, false)),
+                count: None,
+                name: "FocusingScreen",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Ec-CV"),
+                    (1, "Ec-A,B,D,H,I,L"),
+                ])],
+            },
+            FunctionArm {
+                model: None,
+                count: None,
+                name: "FocusingScreen",
+                convs: &[CustomFunctionConv::Map(&[
+                    (0, "Ec-CIV"),
+                    (1, "Ec-A,B,C,CII,CIII,D,H,I,L"),
+                    (2, "Ec-S"),
+                    (3, "Ec-N,R"),
+                ])],
+            },
+        ],
+    ),
+    (
+        0x080c,
+        &[
+            FunctionArm {
+                model: None,
+                count: Some(3),
+                name: "TimerLength",
+                convs: &[
+                    CustomFunctionConv::Template("6 s: ", ""),
+                    CustomFunctionConv::Template("16 s: ", ""),
+                    CustomFunctionConv::Template("After release: ", ""),
+                ],
+            },
+            FunctionArm {
+                model: None,
+                count: Some(4),
+                name: "TimerLength",
+                convs: &[
+                    CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")]),
+                    CustomFunctionConv::Template("6 s: ", ""),
+                    CustomFunctionConv::Template("16 s: ", ""),
+                    CustomFunctionConv::Template("After release: ", ""),
+                ],
+            },
+        ],
+    ),
+];
 
 const CUSTOM_FUNCTIONS2: &[(u32, &str, &[CustomFunctionConv])] = &[
     (
@@ -721,6 +1584,57 @@ const CUSTOM_FUNCTIONS2: &[(u32, &str, &[CustomFunctionConv])] = &[
         0x0104,
         "AEBAutoCancel",
         &[CustomFunctionConv::Map(&[(0, "On"), (1, "Off")])],
+    ),
+    // CanonCustom.pm:1491 -- `Count => 8`, `PrintConv => [ \%disableEnable ]`. The
+    // converter array has one element for eight int32 slots; slots 1-7 have no
+    // ExifTool PrintConv (`ConvertValue`'s `$nextConv` runs off the array's end),
+    // so they are transcribed as explicit trailing `Raw`.
+    (
+        0x010e,
+        "ApplyShootingMeteringMode",
+        &[
+            CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")]),
+            CustomFunctionConv::Raw,
+            CustomFunctionConv::Raw,
+            CustomFunctionConv::Raw,
+            CustomFunctionConv::Raw,
+            CustomFunctionConv::Raw,
+            CustomFunctionConv::Raw,
+            CustomFunctionConv::Raw,
+        ],
+    ),
+    // CanonCustom.pm:1554 -- `Count => 3`, `PrintConv => [ \%disableEnable ]`;
+    // same one-converter/many-slots shape as 0x010e above.
+    (
+        0x0110,
+        "AEMicroadjustment",
+        &[
+            CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")]),
+            CustomFunctionConv::Raw,
+            CustomFunctionConv::Raw,
+        ],
+    ),
+    // CanonCustom.pm:1559 -- `Count => 3`, `PrintConv => [ \%disableEnable ]`.
+    (
+        0x0111,
+        "FEMicroadjustment",
+        &[
+            CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")]),
+            CustomFunctionConv::Raw,
+            CustomFunctionConv::Raw,
+        ],
+    ),
+    // CanonCustom.pm:1564 -- both array entries are unconditioned, so
+    // `GetTagInfo`'s first-match rule always returns the first ("EOS R" is
+    // ExifTool's own dead second arm; reproduced faithfully, not "corrected").
+    (
+        0x0112,
+        "SameExposureForNewAperture",
+        &[CustomFunctionConv::Map(&[
+            (0, "Disable"),
+            (1, "ISO Speed"),
+            (2, "Shutter Speed"),
+        ])],
     ),
     (
         0x0105,
@@ -1233,6 +2147,33 @@ const CUSTOM_FUNCTIONS2: &[(u32, &str, &[CustomFunctionConv])] = &[
         "AudioCompression",
         &[CustomFunctionConv::Map(&[(0, "Enable"), (1, "Disable")])],
     ),
+    // CanonCustom.pm:1782 -- `Count => 5`, one converter for five int32 slots;
+    // same shape as 0x010e/0x0110/0x0111 above.
+    (
+        0x0507,
+        "AFMicroadjustment",
+        &[
+            CustomFunctionConv::Map(&[
+                (0, "Disable"),
+                (1, "Adjust all by same amount"),
+                (2, "Adjust by lens"),
+            ]),
+            CustomFunctionConv::Raw,
+            CustomFunctionConv::Raw,
+            CustomFunctionConv::Raw,
+            CustomFunctionConv::Raw,
+        ],
+    ),
+    // CanonCustom.pm:2143 -- `Count => 2`, `PrintConv => [ \%disableEnable,
+    // '"$val shots"' ]`.
+    (
+        0x0611,
+        "ContinuousShotLimit",
+        &[
+            CustomFunctionConv::Map(&[(0, "Disable"), (1, "Enable")]),
+            CustomFunctionConv::Template("", " shots"),
+        ],
+    ),
 ];
 
 /// Decodes a `CustomFunctions2` record (MakerNote tag 0x0099) into tags.
@@ -1256,6 +2197,7 @@ const CUSTOM_FUNCTIONS2: &[(u32, &str, &[CustomFunctionConv])] = &[
 fn parse_custom_functions2(
     bytes: &[u8],
     byte_order: ByteOrder,
+    model: &str,
     tags: &mut HashMap<String, String>,
 ) {
     let reader = EndianReader::new(bytes, byte_order.to_io_byte_order());
@@ -1326,13 +2268,21 @@ fn parse_custom_functions2(
             }
             entry_pos += 8;
 
-            if let Some(&(_, name, convs)) =
-                CUSTOM_FUNCTIONS2.iter().find(|(id, _, _)| *id == tag_id)
-            {
-                let values: Vec<i32> = (0..count)
-                    .filter_map(|i| reader.i32_at(entry_pos + i * 4))
-                    .collect();
-                if values.len() == count
+            let values: Vec<i32> = (0..count)
+                .filter_map(|i| reader.i32_at(entry_pos + i * 4))
+                .collect();
+            if values.len() == count {
+                // `Condition`-gated arms take priority: they exist exactly where
+                // ExifTool's table has more than one entry for this tag id, and
+                // `match_custom_function_arm` already replicates its first-match
+                // order (see `CUSTOM_FUNCTIONS2_ARMS`'s doc comment).
+                let found = match_custom_function_arm(tag_id, model, values.len()).or_else(|| {
+                    CUSTOM_FUNCTIONS2
+                        .iter()
+                        .find(|(id, _, _)| *id == tag_id)
+                        .map(|&(_, name, convs)| (name, convs))
+                });
+                if let Some((name, convs)) = found
                     && let Some(rendered) = render_custom_function2(convs, &values)
                 {
                     tags.insert(format!("Canon:{}", name), rendered);
@@ -1349,8 +2299,14 @@ fn parse_custom_functions2(
 ///
 /// ExifTool pairs an ARRAY `PrintConv` slot-for-slot with the value list and joins the
 /// results with "; "; a tag with no `PrintConv` prints its values space-separated. When
-/// the slot counts disagree there is no defined pairing, so nothing is emitted rather
-/// than a guess.
+/// there are more values than converters, the trailing values print raw -- e.g. the
+/// EOS-1D X Mark III writes `AEMicroadjustment` (0x0110) as 4 values against a
+/// single-converter, `Count => 3`-declared table entry, and real ExifTool renders
+/// "Disable; 0; 8; 0" (map applied to slot 0, 0/8/0 raw). But when there are FEWER
+/// values than converters there is no defined pairing -- a two-converter entry that
+/// arrives with one value could mean either converter -- so nothing is emitted rather
+/// than a guess. (`MultiFunctionLock` on the EOS-1DXmkIII is exactly this case, and
+/// running its first converter over the single value produced "Unknown (66)".)
 fn render_custom_function2(convs: &[CustomFunctionConv], values: &[i32]) -> Option<String> {
     if values.is_empty() {
         return None;
@@ -1367,19 +2323,17 @@ fn render_custom_function2(convs: &[CustomFunctionConv], values: &[i32]) -> Opti
                 .join(" "),
         );
     }
-    // ExifTool pairs an ARRAY PrintConv slot-for-slot with the value list. When the
-    // counts disagree there is no defined pairing -- a two-converter entry that arrives
-    // with one value could mean either converter -- so nothing is emitted rather than a
-    // guess. (`MultiFunctionLock` on the EOS-1DXmkIII is exactly this case, and running
-    // its first converter over the single value produced "Unknown (66)".)
-    if convs.len() != values.len() {
+    if convs.len() > values.len() {
         return None;
     }
     Some(
-        convs
+        values
             .iter()
-            .zip(values)
-            .map(|(conv, &value)| conv.render(value))
+            .enumerate()
+            .map(|(i, &value)| match convs.get(i) {
+                Some(conv) => conv.render(value),
+                None => value.to_string(),
+            })
             .collect::<Vec<_>>()
             .join("; "),
     )
@@ -5138,7 +6092,7 @@ fn parse_canon_makernote_impl_with_model(
             // EOS-1D Mark III and every later body (ExifTool Canon.pm:1883).
             CANON_CUSTOM_FUNCTIONS2 => {
                 if let Some(bytes) = extract_canon_bytes_with_base(entry, ifd_data, base) {
-                    parse_custom_functions2(bytes, byte_order, &mut tags);
+                    parse_custom_functions2(bytes, byte_order, &model, &mut tags);
                 }
             }
 
@@ -6645,7 +7599,7 @@ mod tests {
             (0x0518, &[0]),           // AccelerationTracking (no PrintConv)
         ]);
         let mut tags = HashMap::new();
-        parse_custom_functions2(&data, ByteOrder::LittleEndian, &mut tags);
+        parse_custom_functions2(&data, ByteOrder::LittleEndian, "", &mut tags);
 
         assert_eq!(
             tags.get("Canon:ISOSpeedIncrements"),
@@ -6665,7 +7619,7 @@ mod tests {
     fn test_custom_functions2_bitmask_with_no_bits_set() {
         let data = build_custom_functions2(&[(0x040a, &[0])]);
         let mut tags = HashMap::new();
-        parse_custom_functions2(&data, ByteOrder::LittleEndian, &mut tags);
+        parse_custom_functions2(&data, ByteOrder::LittleEndian, "", &mut tags);
         assert_eq!(
             tags.get("Canon:ViewfinderWarnings"),
             Some(&"(none)".to_string())
@@ -6679,7 +7633,7 @@ mod tests {
         let mut data = build_custom_functions2(&[(0x0102, &[1])]);
         data[0] = data[0].wrapping_add(4);
         let mut tags = HashMap::new();
-        parse_custom_functions2(&data, ByteOrder::LittleEndian, &mut tags);
+        parse_custom_functions2(&data, ByteOrder::LittleEndian, "", &mut tags);
         assert!(tags.is_empty());
     }
 
@@ -6689,8 +7643,150 @@ mod tests {
     fn test_custom_functions2_skips_ambiguous_converter_pairing() {
         let data = build_custom_functions2(&[(0x070f, &[66])]); // MultiFunctionLock
         let mut tags = HashMap::new();
-        parse_custom_functions2(&data, ByteOrder::LittleEndian, &mut tags);
+        parse_custom_functions2(&data, ByteOrder::LittleEndian, "", &mut tags);
         assert_eq!(tags.get("Canon:MultiFunctionLock"), None);
+    }
+
+    /// `%CanonCustom::Functions2` 0x0101 (CanonCustom.pm:1216): the 1Ds arm and
+    /// the unconditioned "other models" arm store the same first value under
+    /// different label sets, so the model has to gate which one fires.
+    #[test]
+    fn test_custom_function_arm_dispatches_on_model() {
+        let data = build_custom_functions2(&[(0x0101, &[0])]);
+
+        let mut tags_1ds = HashMap::new();
+        parse_custom_functions2(
+            &data,
+            ByteOrder::LittleEndian,
+            "EOS-1Ds Mark III",
+            &mut tags_1ds,
+        );
+        assert_eq!(
+            tags_1ds.get("Canon:ExposureLevelIncrements"),
+            Some(&"1/3-stop set, 1/3-stop comp.".to_string())
+        );
+
+        let mut tags_other = HashMap::new();
+        parse_custom_functions2(
+            &data,
+            ByteOrder::LittleEndian,
+            "Canon EOS 5D Mark II",
+            &mut tags_other,
+        );
+        assert_eq!(
+            tags_other.get("Canon:ExposureLevelIncrements"),
+            Some(&"1/3 Stop".to_string())
+        );
+    }
+
+    /// 0x0103's fallback arm (`ISOExpansion`) must not fire on the 1D-model arm
+    /// it stands in for (CanonCustom.pm:1243) -- that arm's real conversion is
+    /// `ISOSpeedRange`, a different tag with different semantics, and is not
+    /// transcribed. Emitting `ISOExpansion` there would mislabel it.
+    #[test]
+    fn test_iso_expansion_excludes_1d_models() {
+        let data = build_custom_functions2(&[(0x0103, &[1])]);
+
+        let mut tags_1d = HashMap::new();
+        parse_custom_functions2(
+            &data,
+            ByteOrder::LittleEndian,
+            "Canon EOS-1D X",
+            &mut tags_1d,
+        );
+        assert_eq!(tags_1d.get("Canon:ISOExpansion"), None);
+
+        let mut tags_other = HashMap::new();
+        parse_custom_functions2(
+            &data,
+            ByteOrder::LittleEndian,
+            "Canon EOS 60D",
+            &mut tags_other,
+        );
+        assert_eq!(
+            tags_other.get("Canon:ISOExpansion"),
+            Some(&"On".to_string())
+        );
+    }
+
+    /// 0x050f (CanonCustom.pm:1928) is ExifTool's one `!~` (negated) Condition
+    /// among these ids: the first arm applies to everything except the 60D.
+    #[test]
+    fn test_af_point_selection_method_negated_model_condition() {
+        let data = build_custom_functions2(&[(0x050f, &[0])]);
+
+        let mut tags_60d = HashMap::new();
+        parse_custom_functions2(
+            &data,
+            ByteOrder::LittleEndian,
+            "Canon EOS 60D",
+            &mut tags_60d,
+        );
+        assert_eq!(
+            tags_60d.get("Canon:AFPointSelectionMethod"),
+            Some(&"AF point button: Activate AF Sel; Rear dial: Select AF points".to_string())
+        );
+
+        let mut tags_other = HashMap::new();
+        parse_custom_functions2(
+            &data,
+            ByteOrder::LittleEndian,
+            "Canon EOS 50D",
+            &mut tags_other,
+        );
+        assert_eq!(
+            tags_other.get("Canon:AFPointSelectionMethod"),
+            Some(&"Normal".to_string())
+        );
+    }
+
+    /// 0x0610 (CanonCustom.pm:2091) picks its whole arm -- names and label count
+    /// -- by how many int32 values the record actually stores, independent of
+    /// model.
+    #[test]
+    fn test_continuous_shooting_speed_dispatches_on_count() {
+        let data6 = build_custom_functions2(&[(0x0610, &[1, 10, 8, 6, 3, 2])]);
+        let mut tags6 = HashMap::new();
+        parse_custom_functions2(&data6, ByteOrder::LittleEndian, "", &mut tags6);
+        assert_eq!(
+            tags6.get("Canon:ContinuousShootingSpeed"),
+            Some(&"Enable; Hi 10; Cont 8; Lo 6; Soft 3; Soft LS 2".to_string())
+        );
+
+        let data3 = build_custom_functions2(&[(0x0610, &[1, 10, 6])]);
+        let mut tags3 = HashMap::new();
+        parse_custom_functions2(&data3, ByteOrder::LittleEndian, "", &mut tags3);
+        assert_eq!(
+            tags3.get("Canon:ContinuousShootingSpeed"),
+            Some(&"Enable; Hi 10; Lo 6".to_string())
+        );
+    }
+
+    /// 0x010e (CanonCustom.pm:1491): ExifTool's `PrintConv => [ \%disableEnable ]`
+    /// has one converter for eight slots, so slots 1-7 have no conversion in
+    /// ExifTool and print as the raw signed value.
+    #[test]
+    fn test_apply_shooting_metering_mode_raw_tail() {
+        let data = build_custom_functions2(&[(0x010e, &[0, 0, 0, 3, 112, 48, 0, 0])]);
+        let mut tags = HashMap::new();
+        parse_custom_functions2(&data, ByteOrder::LittleEndian, "", &mut tags);
+        assert_eq!(
+            tags.get("Canon:ApplyShootingMeteringMode"),
+            Some(&"Disable; 0; 0; 3; 112; 48; 0; 0".to_string())
+        );
+    }
+
+    /// 0x0611 (CanonCustom.pm:2143): `PrintConv => [ \%disableEnable, '"$val
+    /// shots"' ]`.
+    #[test]
+    fn test_continuous_shot_limit_template_conv() {
+        let data = build_custom_functions2(&[(0x0611, &[0, 99])]);
+        let mut tags = HashMap::new();
+        parse_custom_functions2(&data, ByteOrder::LittleEndian, "", &mut tags);
+        assert_eq!(
+            tags.get("Canon:ContinuousShotLimit"),
+            Some(&"Disable; 99 shots".to_string())
+        );
     }
 
     // ========================================================================
