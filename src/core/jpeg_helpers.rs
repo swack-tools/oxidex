@@ -514,7 +514,11 @@ pub fn process_app3_segments(segments: &[Segment], metadata: &mut MetadataMap) {
 ///   (Samsung S1060-style split preview).
 /// - APP4: only relevant as a continuation of an APP3 preview in progress;
 ///   its payload is appended and the tag emitted unless the next segment is
-///   APP5.
+///   APP5, in which case the preview continues accumulating there.
+/// - APP5: only relevant as a further continuation of an APP3/APP4 preview
+///   in progress (BenQ DC E1050); its payload is appended and the tag is
+///   always emitted immediately -- there is no further continuation marker
+///   past APP5.
 ///
 /// # Arguments
 ///
@@ -578,12 +582,30 @@ pub fn extract_direct_preview_image(segments: &[Segment], metadata: &mut Metadat
                 }
             }
             APP4_MARKER => {
+                // ExifTool.pm:8116-8127: "continued Samsung S1060 preview
+                // from APP3" -- appended unconditionally, but only emitted
+                // if the *next* segment isn't APP5 ("BenQ DC E1050 continues
+                // preview in APP5").
                 if let Some(existing) = preview.as_mut() {
                     existing.extend_from_slice(segment.data);
+                }
+                if preview.is_some() && next_marker != Some(APP5_MARKER) {
                     metadata.insert(
                         "File:PreviewImage",
                         TagValue::new_binary(preview.take().unwrap()),
                     );
+                }
+            }
+            APP5_MARKER => {
+                // ExifTool.pm:8146-8151 (BenQ DC E1050 continuing a preview
+                // from APP4 into APP5): appends and emits unconditionally in
+                // the same statement -- unlike APP2/APP3/APP4, there is no
+                // further "does the run continue" check; APP5 is always the
+                // last segment of this preview mechanism. Only relevant as a
+                // continuation of an already-in-progress preview.
+                if let Some(mut existing) = preview.take() {
+                    existing.extend_from_slice(segment.data);
+                    metadata.insert("File:PreviewImage", TagValue::new_binary(existing));
                 }
             }
             _ => {}
@@ -1500,6 +1522,126 @@ mod tests {
         assert_eq!(
             metadata.get("File:PreviewImage"),
             Some(&TagValue::new_binary(inner.to_vec()))
+        );
+    }
+
+    /// General-purpose multi-segment JPEG builder: `(marker byte, payload)`
+    /// pairs, SOI-prefixed and EOI-terminated, following the same
+    /// length-field convention as `build_jpeg_with_app3_preview` above and
+    /// `create_jpeg_with_multiple_segments` in `segment_parser.rs`.
+    fn build_jpeg_with_segments(segments: &[(u8, &[u8])]) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0xFF, 0xD8]); // SOI
+        for (marker, payload) in segments {
+            data.extend_from_slice(&[0xFF, *marker]);
+            data.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+            data.extend_from_slice(payload);
+        }
+        data.extend_from_slice(&[0xFF, 0xD9]); // EOI
+        data
+    }
+
+    /// ExifTool.pm:7997-8010's `elsif ($preview) { $preview .= $segDataPt }`
+    /// fallback: an APP2 preview run isn't limited to one segment. This is a
+    /// regression test for a bug found during corpus verification, where an
+    /// earlier version of this function only ever kept the first matching
+    /// APP2 segment and dropped every continuation segment, truncating
+    /// multi-segment previews (observed for real on GoProHERO.jpg, whose
+    /// true 340142-byte preview was cut to the first segment's 65533 bytes).
+    #[test]
+    fn app2_preview_dump_accumulates_across_consecutive_segments() {
+        let first = b"\xff\xd8\xff\xdb\x00\x43CHUNKONE";
+        let second = b"CHUNKTWO-CONTINUATION";
+        let jpeg = build_jpeg_with_segments(&[(0xE2, first), (0xE2, second)]);
+        let reader = crate::io::buffered_reader::BufferedReader::from_bytes(&jpeg);
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader).unwrap();
+        let mut metadata = MetadataMap::new();
+
+        extract_direct_preview_image(&segments, &mut metadata);
+
+        let mut expected = first.to_vec();
+        expected.extend_from_slice(second);
+        assert_eq!(
+            metadata.get("File:PreviewImage"),
+            Some(&TagValue::new_binary(expected))
+        );
+    }
+
+    /// A segment carrying one of APP2's other known identifiers
+    /// (ICC_PROFILE\0/FPXR\0/MPF\0/`....IJPEG\0`/urn:) must not be folded
+    /// into an in-progress preview even though it also fails the preview
+    /// byte pattern -- ExifTool's `elsif` chain routes it to that
+    /// identifier's own branch instead of the `elsif ($preview)`
+    /// continuation fallback (ExifTool.pm:7929-7997).
+    #[test]
+    fn app2_preview_dump_does_not_absorb_mpf_segment() {
+        let preview_start = b"\xff\xd8\xff\xdb\x00\x43ONLYCHUNK";
+        let mpf_payload = b"MPF\0NOTPREVIEWDATA";
+        let jpeg = build_jpeg_with_segments(&[(0xE2, preview_start), (0xE2, mpf_payload)]);
+        let reader = crate::io::buffered_reader::BufferedReader::from_bytes(&jpeg);
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader).unwrap();
+        let mut metadata = MetadataMap::new();
+
+        extract_direct_preview_image(&segments, &mut metadata);
+
+        // The MPF segment ends the APP2 run without being appended: the
+        // stored preview is exactly the first segment's bytes.
+        assert_eq!(
+            metadata.get("File:PreviewImage"),
+            Some(&TagValue::new_binary(preview_start.to_vec()))
+        );
+    }
+
+    /// ExifTool.pm:8116-8127 (Samsung S1060): a preview started in APP3
+    /// continues into APP4, and is only emitted once the segment after APP4
+    /// is not itself APP5.
+    #[test]
+    fn app3_preview_dump_continues_into_app4() {
+        let app3_payload = b"\xff\xd8\xff\xdbAPP3PART";
+        let app4_payload = b"APP4CONTINUATION";
+        let jpeg = build_jpeg_with_segments(&[(0xE3, app3_payload), (0xE4, app4_payload)]);
+        let reader = crate::io::buffered_reader::BufferedReader::from_bytes(&jpeg);
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader).unwrap();
+        let mut metadata = MetadataMap::new();
+
+        extract_direct_preview_image(&segments, &mut metadata);
+
+        let mut expected = app3_payload.to_vec();
+        expected.extend_from_slice(app4_payload);
+        assert_eq!(
+            metadata.get("File:PreviewImage"),
+            Some(&TagValue::new_binary(expected))
+        );
+    }
+
+    /// ExifTool.pm:8116-8151 (BenQ DC E1050): APP3 -> APP4 -> APP5, where
+    /// APP4 must NOT emit early because the next segment is APP5, and APP5
+    /// appends its payload and emits unconditionally. This is the
+    /// regression test for the APP4/APP5 gating bug: an earlier version of
+    /// this function emitted (and truncated) the preview at APP4 because it
+    /// never checked whether APP5 followed.
+    #[test]
+    fn app3_preview_dump_continues_through_app4_into_app5() {
+        let app3_payload = b"\xff\xd8\xff\xdbAPP3PART";
+        let app4_payload = b"APP4PART";
+        let app5_payload = b"APP5PART-FINAL";
+        let jpeg = build_jpeg_with_segments(&[
+            (0xE3, app3_payload),
+            (0xE4, app4_payload),
+            (0xE5, app5_payload),
+        ]);
+        let reader = crate::io::buffered_reader::BufferedReader::from_bytes(&jpeg);
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader).unwrap();
+        let mut metadata = MetadataMap::new();
+
+        extract_direct_preview_image(&segments, &mut metadata);
+
+        let mut expected = app3_payload.to_vec();
+        expected.extend_from_slice(app4_payload);
+        expected.extend_from_slice(app5_payload);
+        assert_eq!(
+            metadata.get("File:PreviewImage"),
+            Some(&TagValue::new_binary(expected))
         );
     }
 }
