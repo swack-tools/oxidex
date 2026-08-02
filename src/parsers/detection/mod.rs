@@ -266,6 +266,18 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         return Ok(FileFormat::Plist);
     }
 
+    // HTML and XHTML, using ExifTool's own gate from `HTML.pm`'s ProcessHTML.
+    // It runs after the SVG and plist roots because those three share the
+    // `<?xml` opening: ExifTool requires an actual HTML element in the first
+    // 256 bytes before it will accept an XML declaration as HTML, which is
+    // what keeps SVG, XMP sidecars and XML plists out. Before this existed
+    // every .html file fell through to the plain-text fallback and was parsed
+    // as TXT, reporting five TEXT:* statistics ExifTool never reports and none
+    // of the 57 HTML/Dublin-Core/Office tags it does.
+    if crate::parsers::text::html::looks_like_html(magic_bytes) {
+        return Ok(FileFormat::HTML);
+    }
+
     // Text-based formats need a wider bounded probe for long ICS bodies and EML header blocks.
     let text_probe_len = reader
         .size()

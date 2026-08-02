@@ -249,6 +249,9 @@ pub enum FileFormat {
     /// Plain text format (.txt)
     TXT,
 
+    /// HTML / XHTML document (.htm, .html, .xhtml)
+    HTML,
+
     /// Windows shortcut (.lnk)
     LNK,
 
@@ -378,6 +381,7 @@ impl FileFormat {
             FileFormat::ICS => "iCalendar",
             FileFormat::EML => "EML",
             FileFormat::TXT => "TXT",
+            FileFormat::HTML => "HTML",
             FileFormat::LNK => "Windows Shortcut",
             FileFormat::SQLite => "SQLite",
             FileFormat::Prefetch => "Windows Prefetch",
@@ -478,6 +482,7 @@ impl FileFormat {
             FileFormat::ICS => &["ics", "ical"],
             FileFormat::EML => &["eml", "email"],
             FileFormat::TXT => &["txt", "text"],
+            FileFormat::HTML => &["htm", "html", "xhtml"],
             FileFormat::LNK => &["lnk"],
             FileFormat::SQLite => &["db", "sqlite", "sqlite3"],
             FileFormat::Prefetch => &["pf"],
