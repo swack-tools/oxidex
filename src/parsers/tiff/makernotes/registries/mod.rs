@@ -6,10 +6,12 @@
 // (no `google` registry: its 15 tag ids were invented -- none of the names it
 // declared is a tag ExifTool reports for any Google file, and Google's own
 // MakerNote is not the numeric IFD that registry assumed. It was never
-// declared here, so it never compiled; see `makernotes::google` for the real
-// parser. Likewise no `nikon` registry: `makernotes::nikon` and its submodules
-// carry the real per-table id mapping, and the registry copy was never
-// declared either.)
+// declared here, so it never compiled. The `makernotes::google` parser built
+// on the same invented ids has since been deleted too -- ExifTool's real
+// Google MakerNote table (Google::HDRPlusMakerNote) is string-id-keyed and
+// reads an encrypted/gzipped protobuf blob, not a numeric TIFF IFD. Likewise
+// no `nikon` registry: `makernotes::nikon` and its submodules carry the real
+// per-table id mapping, and the registry copy was never declared either.)
 pub mod apple;
 pub mod canon;
 pub mod captureone; // Capture One migration complete (Batch 4, Task 4.2)

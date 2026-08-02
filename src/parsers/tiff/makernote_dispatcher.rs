@@ -234,7 +234,11 @@ pub fn dispatch_makernote_with_context_and_values(
 
         // Smartphones
         "apple" => Some(Box::new(apple::AppleParser)),
-        "google" => Some(Box::new(google::GoogleParser)),
+        // "google" is absent on purpose: there is no fabricated `google`
+        // parser to dispatch to. ExifTool's real Google MakerNote table
+        // (Google::HDRPlusMakerNote) is string-id-keyed and reads an
+        // encrypted/gzipped protobuf blob, not a numeric TIFF IFD, so it
+        // can't be reached through this Make-keyed dispatch at all.
         "microsoft" | "microsoft corporation" => Some(Box::new(microsoft::MicrosoftParser)),
         // "qualcomm" is absent on purpose: there is no fabricated `qualcomm`
         // parser to dispatch to. ExifTool has no TIFF-IFD MakerNote table for
