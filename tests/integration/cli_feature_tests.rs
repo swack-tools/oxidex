@@ -160,8 +160,7 @@ fn test_cli_group_display_flag_does_not_empty_output() {
         "sanity check: plain -j should extract tags from this fixture"
     );
 
-    let (stdout, stderr, exit_code) =
-        run_oxidex_command(&["-j", "-G1", "-a"], &test_file);
+    let (stdout, stderr, exit_code) = run_oxidex_command(&["-j", "-G1", "-a"], &test_file);
     assert_eq!(exit_code, 0, "stdout: {}\nstderr: {}", stdout, stderr);
 
     let json: serde_json::Value =
