@@ -160,7 +160,7 @@ sub classify_conv {
             directives=> (%directive ? \%directive : undef),
         };
     }
-    if ($r eq 'CODE')  { return { kind => 'code', expr => undef } }
+    if ($r eq 'CODE')  { return { kind => 'code', expr => undef, deparse => deparse($v) } }
     if ($r eq 'ARRAY') { return { kind => 'list', items => scrub($v) } }
     if (!$r)           { return { kind => 'expr', expr => to_text($v) } }
     return { kind => 'other', dump => scrub($v) };

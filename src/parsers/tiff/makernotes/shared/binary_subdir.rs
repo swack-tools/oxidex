@@ -85,6 +85,21 @@ pub(crate) enum PrintConv {
     MapOr(&'static [(i64, &'static str)], fn(i64) -> String),
 }
 
+/// The `ValueConv` ExifTool applies before the `PrintConv`.
+///
+/// A `ValueConv` is a computation, not a lookup, so it cannot be carried as
+/// data: the vendor module holds a hand-written port and the generator binds it
+/// by ExifTool's own text for the conversion.
+#[derive(Clone, Copy)]
+pub(crate) enum ValueConv {
+    None,
+    /// A scalar expression, applied to each element in turn.
+    Each(fn(f64) -> f64),
+    /// A conversion over the whole element list -- the only shape that can
+    /// express one that treats each slot of an array differently.
+    List(fn(&[f64]) -> Vec<f64>),
+}
+
 /// One field of a `ProcessBinaryData` table.
 pub(crate) struct Field {
     /// ExifTool's own tag key: an index in units of the table's `FORMAT`.
@@ -104,6 +119,8 @@ pub(crate) struct Field {
     /// without the shift would leave the field's value multiplied by its own
     /// low bit and quietly disagree on every packed field.
     pub(crate) mask: Option<i64>,
+    /// Runs after `Mask` and before `print_conv`, as in ExifTool.
+    pub(crate) value_conv: ValueConv,
     pub(crate) print_conv: PrintConv,
 }
 
@@ -226,10 +243,32 @@ pub(crate) fn decode_binary_subdir(
     prefix: &str,
     tags: &mut HashMap<String, String>,
 ) {
+    // A record whose gates only read members it sets itself needs no history.
+    let mut members = Members::new();
+    decode_binary_subdir_with(table, record, order, prefix, &mut members, tags);
+}
+
+/// ExifTool's `$$self{...}` slots, threaded across the sub-directories of one
+/// file.
+///
+/// A `RawConv` data member is set on the ExifTool object, not on the record, so
+/// a later directory can read one an earlier directory wrote. `%Pentax` relies
+/// on exactly that: `FaceInfo` (tag 0x0060) sets `FacesDetected`, and every
+/// field of `FacePos` and `FaceSize` (0x0227, 0x0228) is gated on it. Give each
+/// of those its own empty map and they report nothing at all.
+pub(crate) type Members = HashMap<&'static str, i64>;
+
+/// As [`decode_binary_subdir`], but over data members shared with the other
+/// directories of the same file.
+pub(crate) fn decode_binary_subdir_with(
+    table: &BinaryTable,
+    record: &[u8],
+    order: ByteOrder,
+    prefix: &str,
+    members: &mut Members,
+    tags: &mut HashMap<String, String>,
+) {
     let unit = table.default_format.size();
-    // ExifTool's data members for this record. Sub-tables here only ever read
-    // members their own record set, so the map is per call rather than per file.
-    let mut members: HashMap<&'static str, i64> = HashMap::new();
 
     // Generated tables are already sorted by index; ExifTool visits them in
     // ascending order so a DataMember is set before any gate that reads it.
@@ -252,6 +291,7 @@ pub(crate) fn decode_binary_subdir(
         };
 
         let mut parts = Vec::with_capacity(field.count);
+        let mut numbers: Vec<i64> = Vec::with_capacity(field.count);
         let mut first_num: Option<i64> = None;
         for element in 0..field.count {
             let Some(at) = element
@@ -270,9 +310,34 @@ pub(crate) fn decode_binary_subdir(
                 if first_num.is_none() {
                     first_num = Some(v);
                 }
+                numbers.push(v);
                 parts.push(render(&Elem::Num(v), field.print_conv));
             } else {
                 parts.push(render(&elem, field.print_conv));
+            }
+        }
+        if parts.is_empty() {
+            continue;
+        }
+
+        // ExifTool's order is RawConv, then ValueConv, then PrintConv. Nothing
+        // transcribed here carries both a ValueConv and a PrintConv -- the
+        // generator refuses that pairing -- so a converted value renders as the
+        // number it converted to.
+        match field.value_conv {
+            ValueConv::None => {}
+            ValueConv::Each(f) => {
+                parts = numbers
+                    .iter()
+                    .map(|&v| render(&Elem::Real(f(v as f64)), PrintConv::None))
+                    .collect();
+            }
+            ValueConv::List(f) => {
+                let input: Vec<f64> = numbers.iter().map(|&v| v as f64).collect();
+                parts = f(&input)
+                    .into_iter()
+                    .map(|v| render(&Elem::Real(v), PrintConv::None))
+                    .collect();
             }
         }
         if parts.is_empty() {
@@ -305,6 +370,7 @@ mod tests {
                 set_member: Some("Count"),
                 gate: None,
                 mask: None,
+                value_conv: ValueConv::None,
                 print_conv: PrintConv::None,
             },
             Field {
@@ -315,6 +381,7 @@ mod tests {
                 set_member: None,
                 gate: Some(("Count", 1)),
                 mask: None,
+                value_conv: ValueConv::None,
                 print_conv: PrintConv::None,
             },
             Field {
@@ -325,6 +392,7 @@ mod tests {
                 set_member: None,
                 gate: Some(("Count", 2)),
                 mask: None,
+                value_conv: ValueConv::None,
                 print_conv: PrintConv::None,
             },
         ],
@@ -400,6 +468,7 @@ mod tests {
                 set_member: None,
                 gate: None,
                 mask: None,
+                value_conv: ValueConv::None,
                 print_conv: PrintConv::None,
             }],
         };
@@ -429,6 +498,7 @@ mod tests {
                     set_member: None,
                     gate: None,
                     mask: None,
+                    value_conv: ValueConv::None,
                     print_conv: PrintConv::Map(T_CONV),
                 },
                 Field {
@@ -439,6 +509,7 @@ mod tests {
                     set_member: None,
                     gate: None,
                     mask: None,
+                    value_conv: ValueConv::None,
                     print_conv: PrintConv::Map(T_CONV),
                 },
             ],
@@ -467,6 +538,7 @@ mod tests {
                     set_member: None,
                     gate: None,
                     mask: Some(0x000f),
+                    value_conv: ValueConv::None,
                     print_conv: PrintConv::None,
                 },
                 Field {
@@ -477,6 +549,7 @@ mod tests {
                     set_member: None,
                     gate: None,
                     mask: Some(0xf000),
+                    value_conv: ValueConv::None,
                     print_conv: PrintConv::None,
                 },
             ],

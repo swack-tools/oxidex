@@ -7,7 +7,9 @@
 //! a field that is here was reproduced exactly and a field that is missing was
 //! reported as missing -- neither is a guess.
 
-use crate::parsers::tiff::makernotes::shared::binary_subdir::{BinaryTable, Field, Fmt, PrintConv};
+use crate::parsers::tiff::makernotes::shared::binary_subdir::{
+    BinaryTable, Field, Fmt, PrintConv, ValueConv,
+};
 
 /// `Image::ExifTool::Panasonic::FaceDetInfo` -- 6 fields, FORMAT `int16u`.
 ///
@@ -26,6 +28,7 @@ pub(crate) static PANASONIC_FACEDETINFO: BinaryTable = BinaryTable {
             set_member: Some("NumFacePositions"),
             gate: None,
             mask: None,
+            value_conv: ValueConv::None,
             print_conv: PrintConv::None,
         },
         Field {
@@ -36,6 +39,7 @@ pub(crate) static PANASONIC_FACEDETINFO: BinaryTable = BinaryTable {
             set_member: None,
             gate: Some(("NumFacePositions", 1)),
             mask: None,
+            value_conv: ValueConv::None,
             print_conv: PrintConv::None,
         },
         Field {
@@ -46,6 +50,7 @@ pub(crate) static PANASONIC_FACEDETINFO: BinaryTable = BinaryTable {
             set_member: None,
             gate: Some(("NumFacePositions", 2)),
             mask: None,
+            value_conv: ValueConv::None,
             print_conv: PrintConv::None,
         },
         Field {
@@ -56,6 +61,7 @@ pub(crate) static PANASONIC_FACEDETINFO: BinaryTable = BinaryTable {
             set_member: None,
             gate: Some(("NumFacePositions", 3)),
             mask: None,
+            value_conv: ValueConv::None,
             print_conv: PrintConv::None,
         },
         Field {
@@ -66,6 +72,7 @@ pub(crate) static PANASONIC_FACEDETINFO: BinaryTable = BinaryTable {
             set_member: None,
             gate: Some(("NumFacePositions", 4)),
             mask: None,
+            value_conv: ValueConv::None,
             print_conv: PrintConv::None,
         },
         Field {
@@ -76,6 +83,7 @@ pub(crate) static PANASONIC_FACEDETINFO: BinaryTable = BinaryTable {
             set_member: None,
             gate: Some(("NumFacePositions", 5)),
             mask: None,
+            value_conv: ValueConv::None,
             print_conv: PrintConv::None,
         },
     ],
@@ -98,6 +106,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             set_member: Some("FacesRecognized"),
             gate: None,
             mask: None,
+            value_conv: ValueConv::None,
             print_conv: PrintConv::None,
         },
         Field {
@@ -108,6 +117,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             set_member: None,
             gate: Some(("FacesRecognized", 1)),
             mask: None,
+            value_conv: ValueConv::None,
             print_conv: PrintConv::None,
         },
         Field {
@@ -118,6 +128,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             set_member: None,
             gate: Some(("FacesRecognized", 1)),
             mask: None,
+            value_conv: ValueConv::None,
             print_conv: PrintConv::None,
         },
         Field {
@@ -128,6 +139,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             set_member: None,
             gate: Some(("FacesRecognized", 1)),
             mask: None,
+            value_conv: ValueConv::None,
             print_conv: PrintConv::None,
         },
         Field {
@@ -138,6 +150,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             set_member: None,
             gate: Some(("FacesRecognized", 2)),
             mask: None,
+            value_conv: ValueConv::None,
             print_conv: PrintConv::None,
         },
         Field {
@@ -148,6 +161,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             set_member: None,
             gate: Some(("FacesRecognized", 2)),
             mask: None,
+            value_conv: ValueConv::None,
             print_conv: PrintConv::None,
         },
         Field {
@@ -158,6 +172,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             set_member: None,
             gate: Some(("FacesRecognized", 2)),
             mask: None,
+            value_conv: ValueConv::None,
             print_conv: PrintConv::None,
         },
         Field {
@@ -168,6 +183,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             set_member: None,
             gate: Some(("FacesRecognized", 3)),
             mask: None,
+            value_conv: ValueConv::None,
             print_conv: PrintConv::None,
         },
         Field {
@@ -178,6 +194,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             set_member: None,
             gate: Some(("FacesRecognized", 3)),
             mask: None,
+            value_conv: ValueConv::None,
             print_conv: PrintConv::None,
         },
         Field {
@@ -188,6 +205,7 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             set_member: None,
             gate: Some(("FacesRecognized", 3)),
             mask: None,
+            value_conv: ValueConv::None,
             print_conv: PrintConv::None,
         },
     ],

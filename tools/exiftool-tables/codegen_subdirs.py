@@ -181,6 +181,58 @@ OTHER_CONVS = {
     "(return $val); }": "fps",
 }
 
+# Translations for `ValueConv`, in the two shapes ExifTool writes it.
+#
+# A `ValueConv` is a real computation, not a lookup, so there is no way to carry
+# it as data: it has to be ported. Both registries key on ExifTool's own text --
+# an expression verbatim, a code ref by its deparsed body -- so a translation is
+# bound to the exact source it was written against and an upstream edit stops the
+# generator instead of leaving a stale number behind a real tag name.
+#
+# Scalar expressions apply per element. A list conversion sees the whole element
+# list, which is the only way to express a conversion that treats each slot of an
+# array differently.
+SCALAR_VALUE_CONVS = {
+    # Pentax.pm:5744, :5750 -- CompositionAdjustX/Y, steps in the opposite sense.
+    "-$val": "negate",
+    # Pentax.pm:5734, :5740, :5760 -- RollAngle, PitchAngle,
+    # CompositionAdjustRotation: half-degree steps, opposite sense.
+    "-$val / 2": "negate_half",
+}
+LIST_VALUE_CONVS = {
+    # Pentax.pm:837-840 -- `%kelvinWB`, shared by all 17 KelvinWB_* tags.
+    "{ (my @a = split(' ', (shift()), 0)); ((53190 - $a[0]) . ' ' . $a[1] . ' ' "
+    ". ($a[2] / 8192) . ' ' . ($a[3] / 8192)); }": "kelvin_wb",
+}
+
+
+def field_value_conv(tag, table, key, conv_prefix):
+    """A `ValueConv` as a Rust expression, or `ValueConv::None`."""
+    vc = tag.get("ValueConv")
+    if vc is None:
+        return "ValueConv::None"
+    if not isinstance(vc, dict):
+        raise Unsupported(table, key, f"ValueConv has unexpected shape {type(vc).__name__}")
+    kind = vc.get("kind")
+    if kind == "expr":
+        expr = (vc.get("expr") or "").strip()
+        fn = SCALAR_VALUE_CONVS.get(expr)
+        if fn is None:
+            raise Unsupported(table, key, f"ValueConv expression not in SCALAR_VALUE_CONVS: {expr!r}")
+        return f"ValueConv::Each({conv_prefix}::{fn})"
+    if kind == "code":
+        source = vc.get("deparse")
+        if not source:
+            raise Unsupported(table, key, "ValueConv is a sub with no recoverable body")
+        fn = LIST_VALUE_CONVS.get(normalize_deparse(source))
+        if fn is None:
+            raise Unsupported(
+                table, key, "ValueConv body is not in LIST_VALUE_CONVS: " + normalize_deparse(source)
+            )
+        return f"ValueConv::List({conv_prefix}::{fn})"
+    raise Unsupported(table, key, f"ValueConv kind={kind!r} is neither an expression nor a sub")
+
+
 # `PrintConv` hash keys that direct ExifTool rather than naming a value, and
 # that a reader can carry without changing what it prints.
 BENIGN_PC_DIRECTIVES = {
@@ -268,7 +320,7 @@ class ConstPool:
 # Keys that are documentation or writer-side only: present on a field without
 # changing what a reader produces.
 IGNORED_TAG_KEYS = {
-    "Name", "Format", "RawConv", "PrintConv", "Mask", "Notes", "Description",
+    "Name", "Format", "RawConv", "PrintConv", "ValueConv", "Mask", "Notes", "Description",
     "DataMember", "Writable", "Groups", "PrintConvInv", "ValueConvInv",
     "Protected", "Permanent", "SeparateTable", "PrintHex", "Priority",
     "_shorthand", "_extra_keys", "Unknown", "Hidden", "Avoid", "Binary",
@@ -314,6 +366,11 @@ def gen_table(module, tname, tbl, pool, skips, allow_skip, conv_prefix):
             fmt, count = field_format(tag, tname, key)
             member, gate = field_raw_conv(tag, tname, key)
             pc = field_print_conv(tag, tname, key, pool, conv_prefix)
+            vc = field_value_conv(tag, tname, key, conv_prefix)
+            if vc != "ValueConv::None" and pc != "PrintConv::None":
+                # ExifTool runs ValueConv then PrintConv; nothing here does both,
+                # and guessing the composition would be inventing an output.
+                raise Unsupported(tname, key, "ValueConv combined with a PrintConv")
             if count > 1 and pc != "PrintConv::None":
                 # ExifTool hands the *joined* array string to a hash PrintConv,
                 # so an element-wise lookup would print something ExifTool never
@@ -331,7 +388,7 @@ def gen_table(module, tname, tbl, pool, skips, allow_skip, conv_prefix):
             f"format: {'None' if fmt is None else f'Some({fmt})'}, count: {count}, "
             f"set_member: {'None' if member is None else f'Some(\"{member}\")'}, "
             f"gate: {'None' if gate is None else f'Some((\"{gate[0]}\", {gate[1]}))'}, "
-            f"mask: {mask_s}, print_conv: {pc} }},"
+            f"mask: {mask_s}, value_conv: {vc}, print_conv: {pc} }},"
         )
 
     ident = re.sub(r"[^A-Za-z0-9]", "_", f"{module}_{tname}").upper()
@@ -394,7 +451,7 @@ def main():
 //! reported as missing -- neither is a guess.
 
 use crate::parsers::tiff::makernotes::shared::binary_subdir::{{
-    BinaryTable, Field, Fmt, PrintConv,
+    BinaryTable, Field, Fmt, PrintConv, ValueConv,
 }};
 """
     out = "\n\n".join([header, pool.emit()] + chunks) + "\n"
