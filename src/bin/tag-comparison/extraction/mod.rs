@@ -1,5 +1,6 @@
 //! Tag extraction modules for both OxiDex and ExifTool
 
+pub mod cache_dir;
 pub mod exiftool_extractor;
 pub mod oxidex_extractor;
 

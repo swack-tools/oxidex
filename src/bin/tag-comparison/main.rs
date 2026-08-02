@@ -53,6 +53,15 @@ struct Args {
     /// binary's own Cargo package version when omitted
     #[arg(long)]
     oxidex_version: Option<String>,
+
+    /// Directory the on-disk tag caches (oxidex-tag-cache/,
+    /// exiftool-tag-cache/) are written under. Overrides the
+    /// OXIDEX_TAG_CACHE_DIR env var. When neither is set, the cache lands
+    /// under the system temp dir, keyed by a hash of `samples` -- never
+    /// under `samples` itself or its parent, since `samples` may be a
+    /// subdirectory of a read-only sample corpus.
+    #[arg(long)]
+    tag_cache_dir: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -112,6 +121,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Extract OxiDex tags
         let t_oxidex = std::time::Instant::now();
         let mut oxidex_extractor = OxiDexExtractor::new(args.samples.clone());
+        if let Some(dir) = &args.tag_cache_dir {
+            oxidex_extractor = oxidex_extractor.with_cache_dir_override(dir.clone());
+        }
         match oxidex_extractor.extract_format_tags(&format).await {
             Ok(oxidex_result) => {
                 println!(
@@ -124,6 +136,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Extract ExifTool tags
                 let t_exiftool = std::time::Instant::now();
                 let mut exiftool_extractor = ExifToolExtractor::new(exiftool_argv.clone());
+                if let Some(dir) = &args.tag_cache_dir {
+                    exiftool_extractor = exiftool_extractor.with_cache_dir_override(dir.clone());
+                }
                 match exiftool_extractor
                     .extract_format_tags(&format, &args.samples)
                     .await
