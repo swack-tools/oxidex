@@ -57,6 +57,7 @@ pub mod shared;
 pub mod signature_parser;
 pub mod xmp_extractor;
 
+use crate::core::formatters::exif_enums::compression_label;
 use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::core::{FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
@@ -501,72 +502,6 @@ const TAG_EXIF_IMAGE_HEIGHT: u16 = 0xA003;
 const TAG_FOCAL_PLANE_RESOLUTION_UNIT: u16 = 0xA210;
 const TAG_FILE_SOURCE: u16 = 0xA300;
 
-/// `%compression` from ExifTool 13.55 Exif.pm, transcribed in full.
-///
-/// The archived patches this parser grew from carried a nine-entry excerpt
-/// ending at `32773 => 'PackBits'`. A truncated PrintConv table is the exact
-/// shape that shipped `32767 => "Sony RAW"` instead of
-/// `'Sony ARW Compressed'` elsewhere in this codebase, so the whole table is
-/// reproduced here rather than the handful of values PDF.pdf happens to hit.
-const COMPRESSION_LABELS: &[(u16, &str)] = &[
-    (1, "Uncompressed"),
-    (2, "CCITT 1D"),
-    (3, "T4/Group 3 Fax"),
-    (4, "T6/Group 4 Fax"),
-    (5, "LZW"),
-    (6, "JPEG (old-style)"),
-    (7, "JPEG"),
-    (8, "Adobe Deflate"),
-    (9, "JBIG B&W"),
-    (10, "JBIG Color"),
-    (99, "JPEG"),
-    (262, "Kodak 262"),
-    (32766, "NeXt or Sony ARW Compressed 2"),
-    (32767, "Sony ARW Compressed"),
-    (32769, "Packed RAW"),
-    (32770, "Samsung SRW Compressed"),
-    (32771, "CCIRLEW"),
-    (32772, "Samsung SRW Compressed 2"),
-    (32773, "PackBits"),
-    (32809, "Thunderscan"),
-    (32867, "Kodak KDC Compressed"),
-    (32895, "IT8CTPAD"),
-    (32896, "IT8LW"),
-    (32897, "IT8MP"),
-    (32898, "IT8BL"),
-    (32908, "PixarFilm"),
-    (32909, "PixarLog"),
-    (32946, "Deflate"),
-    (32947, "DCS"),
-    (33003, "Aperio JPEG 2000 YCbCr"),
-    (33005, "Aperio JPEG 2000 RGB"),
-    (34661, "JBIG"),
-    (34676, "SGILog"),
-    (34677, "SGILog24"),
-    (34712, "JPEG 2000"),
-    (34713, "Nikon NEF Compressed"),
-    (34715, "JBIG2 TIFF FX"),
-    (34718, "Microsoft Document Imaging (MDI) Binary Level Codec"),
-    (
-        34719,
-        "Microsoft Document Imaging (MDI) Progressive Transform Codec",
-    ),
-    (34720, "Microsoft Document Imaging (MDI) Vector"),
-    (34887, "ESRI Lerc"),
-    (34892, "Lossy JPEG"),
-    (34925, "LZMA2"),
-    (34926, "Zstd (old)"),
-    (34927, "WebP (old)"),
-    (34933, "PNG"),
-    (34934, "JPEG XR"),
-    (50000, "Zstd"),
-    (50001, "WebP"),
-    (50002, "JPEG XL (old)"),
-    (52546, "JPEG XL"),
-    (65000, "Kodak DCR Compressed"),
-    (65535, "Pentax PEF Compressed"),
-];
-
 /// `%flash` from ExifTool 13.55 Exif.pm, transcribed in full.
 ///
 /// Three archived patches decoded this tag by OR-ing bit meanings together
@@ -738,11 +673,7 @@ fn parse_embedded_tiff_ifds(data: &[u8]) -> Option<MetadataMap> {
             }
             TAG_COMPRESSION if field_type == 3 => {
                 if let Some(raw) = read_short_value(data, base, byte_order) {
-                    if let Some(label) = COMPRESSION_LABELS
-                        .iter()
-                        .find(|&&(id, _)| id == raw)
-                        .map(|&(_, s)| s)
-                    {
+                    if let Some(label) = compression_label(i64::from(raw)) {
                         let key = crate::tag_db::lookup_tag_name(TAG_COMPRESSION, "IFD0");
                         metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
                     }
@@ -844,7 +775,7 @@ fn parse_ifd1(
 
         if tag == TAG_COMPRESSION && field_type == 3 {
             if let Some(raw) = read_short_value(data, base, byte_order) {
-                if let Some(label) = lookup_label(COMPRESSION_LABELS, raw) {
+                if let Some(label) = compression_label(i64::from(raw)) {
                     let key = crate::tag_db::lookup_tag_name(TAG_COMPRESSION, "IFD1");
                     metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
                 }
