@@ -168,5 +168,11 @@ mod ape_integration_tests;
 // data as expected behaviour. See the commit that removed them for the
 // name-by-name evidence.
 
+#[path = "integration/apple_makernotes_tests.rs"]
+mod apple_makernotes_tests;
+
+#[path = "integration/samsung_makernotes_tests.rs"]
+mod samsung_makernotes_tests;
+
 #[path = "forensic/mod.rs"]
 mod forensic;

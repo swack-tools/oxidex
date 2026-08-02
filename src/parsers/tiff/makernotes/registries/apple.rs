@@ -102,7 +102,7 @@ const APPLE_SEMANTIC_STYLE_PRESET: u16 = 0x0042;
 /// # Example
 /// ```ignore
 /// let registry = apple_registry();
-/// let hdr_type = registry.decode_i16(0x000A, 4); // "Smart HDR"
+/// let hdr_type = registry.decode_i16(0x000A, 4); // "Original Image"
 /// ```
 pub fn apple_registry() -> TagRegistry {
     TagRegistry::new()
@@ -260,10 +260,14 @@ mod tests {
 
     #[test]
     fn test_hdr_type_decoding() {
+        // ExifTool 13.59 Apple.pm 0x000a HDRImageType PrintConv: 3 and 4 only.
         let registry = apple_registry();
-        assert_eq!(registry.decode_i16(APPLE_HDR_IMAGE_TYPE, 0), "Off");
-        assert_eq!(registry.decode_i16(APPLE_HDR_IMAGE_TYPE, 4), "Smart HDR");
-        assert_eq!(registry.decode_i16(APPLE_HDR_IMAGE_TYPE, 8), "Smart HDR 5");
+        assert_eq!(registry.decode_i16(APPLE_HDR_IMAGE_TYPE, 3), "HDR Image");
+        assert_eq!(
+            registry.decode_i16(APPLE_HDR_IMAGE_TYPE, 4),
+            "Original Image"
+        );
+        assert_eq!(registry.decode_i16(APPLE_HDR_IMAGE_TYPE, 0), "Unknown (0)");
     }
 
     #[test]

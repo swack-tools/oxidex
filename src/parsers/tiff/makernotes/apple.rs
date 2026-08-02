@@ -122,19 +122,24 @@ const BPLIST_MAGIC: &[u8] = b"bplist";
 // Decoders for Apple MakerNote tag values. These convert numeric values to
 // human-readable strings based on ExifTool's Apple.pm definitions.
 
-// Decodes Apple HDR image type
-// Values observed from various iPhone models
+// Decodes Apple HDR image type (Apple.pm 0x000a HDRImageType).
+//
+// ExifTool 13.59 declares exactly two values here:
+//     3 => 'HDR Image'
+//     4 => 'Original Image'
+// (its `2` is commented out as unidentified, seen on iPad mini 2).
+//
+// This table previously carried nine invented entries -- 0 "Off", 1 "HDR",
+// 2 "HDR (Original)", 3 "Auto HDR", 4 "Smart HDR", 5-8 "Smart HDR 2".."5" --
+// so a real iPhone file printed "Auto HDR" where ExifTool prints "HDR Image",
+// and "Smart HDR" where ExifTool prints "Original Image". Wrong values under a
+// real tag name do not crash and nothing downstream can tell, which is why
+// AGENTS.md requires omitting rather than approximating. Unmapped values fall
+// through to "Unknown (N)", matching ExifTool.
 const_decoder! {
     pub DECODE_HDR_TYPE, i16, [
-        (0, "Off"),
-        (1, "HDR"),
-        (2, "HDR (Original)"),
-        (3, "Auto HDR"),
-        (4, "Smart HDR"),
-        (5, "Smart HDR 2"),
-        (6, "Smart HDR 3"),
-        (7, "Smart HDR 4"),
-        (8, "Smart HDR 5"),
+        (3, "HDR Image"),
+        (4, "Original Image"),
     ]
 }
 
@@ -811,10 +816,12 @@ mod tests {
 
     #[test]
     fn test_decode_hdr_type() {
-        assert_eq!(DECODE_HDR_TYPE.decode(0), "Off");
-        assert_eq!(DECODE_HDR_TYPE.decode(1), "HDR");
-        assert_eq!(DECODE_HDR_TYPE.decode(4), "Smart HDR");
-        assert_eq!(DECODE_HDR_TYPE.decode(8), "Smart HDR 5");
+        // ExifTool 13.59 Apple.pm 0x000a: the PrintConv has exactly these two.
+        assert_eq!(DECODE_HDR_TYPE.decode(3), "HDR Image");
+        assert_eq!(DECODE_HDR_TYPE.decode(4), "Original Image");
+        // Everything else is unmapped in ExifTool and must not be invented.
+        assert_eq!(DECODE_HDR_TYPE.decode(0), "Unknown (0)");
+        assert_eq!(DECODE_HDR_TYPE.decode(8), "Unknown (8)");
     }
 
     #[test]
@@ -910,7 +917,7 @@ mod tests {
         // Create minimal IFD with one entry
         data.extend_from_slice(&[0x01, 0x00]); // 1 entry
 
-        // HDR tag entry (tag=0x000A, type=3 (SHORT), count=1, value=4 (Smart HDR))
+        // HDR tag entry (tag=0x000A, type=3 (SHORT), count=1, value=4)
         data.extend_from_slice(&[0x0A, 0x00]); // Tag
         data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
         data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
@@ -920,9 +927,10 @@ mod tests {
         let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
 
         assert!(result.is_ok());
+        // ExifTool 13.59 Apple.pm 0x000a: 4 => 'Original Image'.
         assert_eq!(
             tags.get("Apple:HDRImageType"),
-            Some(&"Smart HDR".to_string())
+            Some(&"Original Image".to_string())
         );
     }
 
