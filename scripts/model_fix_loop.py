@@ -138,12 +138,13 @@ variables. Each of the [worker] and [reviewer] tables takes:
     governor_burst         default 5 (bucket capacity -- calls that may
                           go out back-to-back before the per-minute
                           refill rate throttles the rest)
-    governor_cooldown_seconds default 30 (base GLOBAL cooldown one
-                          rate-limited call (429/5xx) imposes on the
-                          whole fleet via governor_report; doubles per
-                          consecutive limited outcome)
-    governor_max_cooldown_seconds default 300 (cap on that exponential
-                          cooldown growth)
+                          (governor_cooldown_seconds and
+                          governor_max_cooldown_seconds are gone: the
+                          fleet-wide cooldown they configured pauses every
+                          worker over one worker's 429, and is replaced by
+                          per-worker jittered retry plus a process-local
+                          per-endpoint park -- see call_model. A config
+                          still setting them is simply not read.)
     max_cluster_tags       default 6 (worker only; sibling-tag
                           clustering -- the selected tag pulls up to
                           max_cluster_tags - 1 still-active sibling tags
@@ -596,10 +597,32 @@ def compact_messages(messages, trigger_tokens=DEFAULT_COMPACTION_TRIGGER_TOKENS,
     return compacted
 
 
-# 429 is retryable now that the governor paces retries fleet-wide (see
-# governor_acquire/governor_report) instead of each process backing off
-# independently against the shared account limit.
+# A 429 is retryable only when it is an rpm rejection. A cost-window cap
+# wearing the same status code is NOT -- see classify_429 and the
+# RATE_LIMIT_* constants below. 5xx is always retryable.
 DEFAULT_RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
+
+# What a 429 can mean. They are not interchangeable, and handling them
+# identically is what produced 27,662 rate-limit errors over 8 days with no
+# way to tell which kind they were.
+RATE_LIMIT_RPM = "rpm"                  # going too fast. Retry, with jitter.
+RATE_LIMIT_WINDOW_CAP = "window_cap"    # 5h budget spent. Cannot clear for hours.
+RATE_LIMIT_TERMINAL_CAP = "terminal_cap"  # weekly budget spent / bad key. Days, or never.
+# The gateway says "do not retry" for reasons that are not a spent budget --
+# observed live on 2026-08-02: category="internal", code="upstream_rejected",
+# retryable=false. Retrying is pointless, but so is parking the endpoint for
+# an hour: nothing about the account is exhausted. Fail this call, keep the
+# endpoint. Treating this as a cap would idle a healthy worker for an hour
+# over one upstream hiccup.
+RATE_LIMIT_NON_RETRYABLE = "non_retryable"
+
+# How long this PROCESS parks the offending endpoint after a cap. Local to
+# one worker and keyed by base_url: parking Claw Bay must not park a direct
+# account, and one worker discovering a spent budget must not pause the
+# other N-1 (§0.4 rule 4). A parked endpoint costs one poll per park
+# interval, which is cheap enough to sit out a multi-day window unattended.
+DEFAULT_WINDOW_CAP_PARK_SECONDS = 300
+DEFAULT_TERMINAL_CAP_PARK_SECONDS = 3600
 DEFAULT_MAX_RETRIES = 1000
 DEFAULT_RETRY_BACKOFF_SECONDS = 2
 DEFAULT_MAX_RETRY_BACKOFF_SECONDS = 120  # cap growth -- 2**1000 would otherwise be absurd
@@ -634,27 +657,30 @@ class ModelCallDeadlineExceeded(Exception):
 
 
 class ModelQuotaExhausted(Exception):
-    """Raised after the retry ladder is spent and every attempt came back
-    as an account/billing-quota 429.
+    """Raised the moment a 429 is identified as a spent cost budget rather
+    than an rpm rejection. No retry is attempted.
 
     NOT fatal to a worker. attempt_build/review_verdict catch it with the
     rest of the continue-on class (empty 200s, 429s, connection errors);
     it becomes an INFRA_FAILURE_PREFIX reason, which run_tag_loop charges
     nothing for -- no fail increment, no attempt history, no blacklist.
-    It exists so the reason string names billing rather than showing an
-    opaque 429.
 
-    Policy: all 429s are retried, quota ones included -- the shared token
-    bucket's global cooldown paces them, so a fleet waiting out even a
-    multi-day billing window settles into one poll per cooldown cap and
-    resumes on its own the moment the window rolls over. Nothing here
-    shortcuts a retry.
+    Policy: a cost cap is TERMINAL for the retry loop. Retrying it cannot
+    make budget appear -- the window has to roll over, which takes hours
+    (5h) or days (weekly). The old behaviour retried these on the same
+    ladder as a momentary rpm rejection and relied on a fleet-wide cooldown
+    to pace the resulting hot loop; that cooldown capped at 300s, so a
+    weekly cap meant the entire fleet woke, was rejected, and parked again
+    every five minutes for days.
 
-    This exists purely so the final error names the real cause. Providers
-    overload 429 for "you are going too fast" and "your account is out of
-    budget", and those demand completely different responses from a human;
-    a bare "HTTP Error 429" after a long ride-out points at rate limits
-    when the answer is billing.
+    What paces it now is call_model parking the offending ENDPOINT in this
+    process (see endpoint_park / DEFAULT_*_CAP_PARK_SECONDS) -- so the
+    fleet still resumes unattended the moment the window rolls over, but
+    one worker's spent budget no longer pauses any other worker.
+
+    .kind is RATE_LIMIT_WINDOW_CAP or RATE_LIMIT_TERMINAL_CAP, so callers
+    and the event stream can distinguish "back in a few hours" from "not
+    this week".
 
     Observed on theclawbay.com, which is explicit about the difference:
         {"error": "weekly cost limit reached for this account",
@@ -662,52 +688,137 @@ class ModelQuotaExhausted(Exception):
          "theclawbayError": {"category": "quota", "retryable": false}}
     """
 
+    def __init__(self, message, kind=RATE_LIMIT_TERMINAL_CAP):
+        super().__init__(message)
+        self.kind = kind
 
-def _quota_exhausted_message(err):
-    """If an HTTPError is a non-retryable quota/billing 429, return a short
-    human message; otherwise None (meaning: treat as an ordinary retryable
-    rate limit).
 
-    Conservative by construction -- it only opts OUT of retrying when the
-    provider explicitly says the condition is not retryable, or names a
-    quota/limit-reached code. Anything unparseable is simply not labelled.
+def classify_429(err):
+    """Classify an HTTPError as (kind, message, retry_after) where kind is
+    one of the RATE_LIMIT_* constants, message is a short human explanation
+    (None for an ordinary rpm rejection) and retry_after is the gateway's own
+    `retryAfterSeconds` from the body, or None.
 
-    This is a LABEL, not a control-flow decision -- every 429 is retried
-    either way (see call_model). It only determines whether the log says
-    "waiting on a spent budget" or "being throttled", and which cause the
-    final exception names once the retry ladder is fully spent.
+    Reads `theclawbayError` before deciding anything. The real envelope,
+    captured live from the gateway on 2026-08-02:
+
+        {"error": "invalid request", "code": "upstream_rejected",
+         "theclawbayError": {"requestId": "...", "category": "internal",
+                             "code": "upstream_rejected",
+                             "userMessage": "...", "retryable": false,
+                             "retryAfterSeconds": null, "nextAction": "..."}}
+
+    Two things that envelope settles, both of which contradict a reasonable
+    first guess:
+
+    - `retryAfterSeconds` lives in the BODY. A gateway that states how long
+      to wait there rather than in a `Retry-After` header would be ignored
+      entirely if we only parsed headers, which is precisely the "honour the
+      server's own instruction" case that beats any backoff curve.
+    - `retryable: false` is NOT synonymous with a spent budget. The gateway
+      uses it for ordinary upstream failures too. Treating every
+      non-retryable 429 as a cost cap would park a healthy endpoint for an
+      hour over one upstream hiccup, so a cap must be QUOTA-shaped --
+      `category == "quota"`, or a `*_limit_reached` / cost / quota code.
+      Everything else that says "do not retry" becomes
+      RATE_LIMIT_NON_RETRYABLE: fail the call, keep the endpoint.
+
+    Conservative by construction and deliberately asymmetric: anything
+    unparseable is RATE_LIMIT_RPM, because wrongly retrying a permanent
+    condition costs one park interval while wrongly giving up on a transient
+    one costs the work.
+
+    A non-429 is never classified here -- it returns (None, None, None).
     """
     if getattr(err, "code", None) != 429:
-        return None
+        return None, None, None
     try:
         # HTTPError's fp is single-read; this is the only consumer, and the
         # body is only needed for classification. Capped so a misbehaving
         # provider can't stream an unbounded "error" at us.
         body = json.loads(err.read(65536))
     except Exception:  # nosec B110 -- unparseable body => treat as retryable
-        return None
+        return RATE_LIMIT_RPM, None, None
     if not isinstance(body, dict):
-        return None
+        return RATE_LIMIT_RPM, None, None
     vendor = body.get("theclawbayError")
     vendor = vendor if isinstance(vendor, dict) else {}
     retryable = vendor.get("retryable", body.get("retryable"))
     code = str(vendor.get("code") or body.get("code") or "")
     category = str(vendor.get("category") or "")
+    retry_after = _maybe_positive_float(
+        vendor.get("retryAfterSeconds", body.get("retryAfterSeconds"))
+    )
     looks_like_quota = (
         category == "quota"
         or code.endswith("_limit_reached")
         or "cost_limit" in code
         or "quota" in code
     )
-    if retryable is False or looks_like_quota:
+    # A rejected key is terminal in the strongest sense: every subsequent
+    # call to this endpoint fails identically until a human replaces the
+    # credential. Retrying is pointless AND parking is right, which is what
+    # separates it from the ordinary non-retryable case below.
+    looks_like_bad_key = (
+        category == "auth" or "api_key" in code or "invalid_key" in code
+    )
+    if looks_like_bad_key:
         detail = (
             vendor.get("userMessage")
             or body.get("error")
             or code
-            or "provider reported a non-retryable 429"
+            or "provider rejected the API key"
         )
-        return f"{detail} (code={code or 'unknown'})"
-    return None
+        return RATE_LIMIT_TERMINAL_CAP, f"{detail} (code={code or 'unknown'})", retry_after
+    if not looks_like_quota:
+        if retryable is False:
+            detail = (
+                vendor.get("userMessage")
+                or body.get("error")
+                or code
+                or "provider reported a non-retryable 429"
+            )
+            return (RATE_LIMIT_NON_RETRYABLE,
+                    f"{detail} (code={code or 'unknown'})", retry_after)
+        return RATE_LIMIT_RPM, None, retry_after
+    detail = (
+        vendor.get("userMessage")
+        or body.get("error")
+        or code
+        or "provider reported a quota 429"
+    )
+    # A 5h window rolls over on its own within the shift; a weekly one, or
+    # a rejected key, does not. Both stop the retry ladder, but they park
+    # the endpoint for very different lengths of time.
+    lowered = f"{code} {detail}".lower()
+    kind = (
+        RATE_LIMIT_WINDOW_CAP
+        if ("5h" in lowered or "hourly" in lowered)
+        else RATE_LIMIT_TERMINAL_CAP
+    )
+    return kind, f"{detail} (code={code or 'unknown'})", retry_after
+
+
+def _maybe_positive_float(value):
+    """A usable non-negative number, or None. `retryAfterSeconds` is
+    explicitly null in the common case, so this must not turn that into 0 --
+    a zero delay and an absent delay mean different things."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds >= 0 else None
+
+
+def _quota_exhausted_message(err):
+    """Back-compat shim: the message half of classify_429, or None for an
+    rpm rejection."""
+    return classify_429(err)[1]
+
+
+CAP_KINDS = (RATE_LIMIT_WINDOW_CAP, RATE_LIMIT_TERMINAL_CAP)
 
 
 def _retry_after_seconds(headers, now_fn=time.time):
@@ -810,8 +921,10 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
                 max_retry_backoff_seconds=DEFAULT_MAX_RETRY_BACKOFF_SECONDS, sleep_fn=time.sleep,
                 log_fn=None, usage_fn=None, prompt_cache="auto",
                 governor_path=None, governor_calls_per_minute=None, governor_burst=None,
-                governor_cooldown_seconds=None, governor_max_cooldown_seconds=None,
-                deadline_seconds=DEFAULT_DEADLINE_SECONDS):
+                deadline_seconds=DEFAULT_DEADLINE_SECONDS,
+                role=None, event_fn=None, jitter_fn=random.random, now_fn=time.time,
+                window_cap_park_seconds=DEFAULT_WINDOW_CAP_PARK_SECONDS,
+                terminal_cap_park_seconds=DEFAULT_TERMINAL_CAP_PARK_SECONDS):
     """POST a chat-completions request, retrying on transient upstream
     failures, and return the assistant's reply text.
 
@@ -836,17 +949,42 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
     to ride out a long transient outage rather than give up and blacklist
     a tag over infrastructure, not the tag itself, being the problem.
 
+    A 429 is NOT one thing. classify_429 reads the provider's
+    `theclawbayError` discriminator first:
+
+      - RATE_LIMIT_RPM -- going too fast. Retried on this call's own
+        ladder, with full jitter on top of the delay and Retry-After
+        honoured when present.
+      - RATE_LIMIT_WINDOW_CAP / RATE_LIMIT_TERMINAL_CAP -- the cost budget
+        for the 5-hour or weekly window is spent. Retrying cannot make
+        budget appear, so it is NOT retried: the endpoint is parked in this
+        process (window_cap_park_seconds / terminal_cap_park_seconds) and
+        ModelQuotaExhausted is raised immediately.
+
+    Backoff carries FULL jitter (delay + uniform(0, delay), via jitter_fn)
+    rather than a bare exponential. This is not rate shaping. N workers
+    rejected by the same limit at the same instant compute the same
+    exponential delay and retry in the same instant; jitter is what breaks
+    that phase-lock. Without it the fleet emits a synchronised burst,
+    trips the limit together, and parks together, indefinitely.
+
+    Nothing in this path is shared between workers. One worker's rejection
+    never pauses another (§0.4 rule 4) -- the only cross-process state left
+    is governor_acquire's steady-state token bucket, which is an rpm budget
+    rather than a reaction to failure.
+
     governor_path (None disables, keeping every old caller byte-identical
     in behavior) points at the cross-process rate-governor state file (see
-    governor_acquire/governor_report): every attempt first acquires one
-    governor slot (waiting out the shared token bucket and any fleet-wide
-    cooldown, reusing this call's sleep_fn), and every outcome is reported
-    back -- limited=True for a retryable HTTPError (429/5xx, which
-    sets/extends the GLOBAL cooldown so one limited worker pauses the
-    whole fleet), limited=False for a success or a connection-level
-    URLError (infrastructure being unreachable is not rate limiting). The
+    governor_acquire): every attempt first acquires one governor slot,
+    waiting out the shared token bucket, reusing this call's sleep_fn. The
     governor_* knobs default to None, resolved to the DEFAULT_GOVERNOR_*
     values at call time (they are defined later in this module).
+
+    role (e.g. "fixer", "reviewer") and event_fn, if given, are the
+    structured emission the dashboard reads: event_fn is called once per
+    attempt outcome with a dict carrying role, model, endpoint, outcome,
+    error_class, attempt and latency_s. It is best-effort by contract --
+    see _emit -- because telemetry must never be able to fail a model call.
 
     When stream is True, the response arrives as OpenAI-compatible SSE
     ("data: {...}" lines terminated by "data: [DONE]") -- each chunk's
@@ -890,27 +1028,54 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
         else governor_calls_per_minute
     )
     governor_burst = DEFAULT_GOVERNOR_BURST if governor_burst is None else governor_burst
-    governor_cooldown_seconds = (
-        DEFAULT_GOVERNOR_COOLDOWN_SECONDS if governor_cooldown_seconds is None
-        else governor_cooldown_seconds
-    )
-    governor_max_cooldown_seconds = (
-        DEFAULT_GOVERNOR_MAX_COOLDOWN_SECONDS if governor_max_cooldown_seconds is None
-        else governor_max_cooldown_seconds
-    )
+
+    def _emit(outcome, error_class=None, started=None, attempt=None, detail=None):
+        """Append one structured outcome. Best-effort: a broken sink must
+        never fail a model call that otherwise succeeded."""
+        if event_fn is None:
+            return
+        try:
+            event_fn({
+                "ts": now_fn(),
+                "role": role,
+                "model": model,
+                "endpoint": base_url,
+                "outcome": outcome,
+                "error_class": error_class,
+                "attempt": attempt,
+                "latency_s": None if started is None else round(now_fn() - started, 3),
+                "detail": detail,
+            })
+        except Exception:  # nosec B110 -- telemetry is never load-bearing
+            pass
+
     last_error = None
-    last_quota_message = None
+    retry_after = None  # the server's own Retry-After from the previous attempt
     for attempt in range(max_retries + 1):
         if attempt > 0:
-            delay = min(retry_backoff_seconds * (2 ** (attempt - 1)), max_retry_backoff_seconds)
+            base_delay = min(retry_backoff_seconds * (2 ** (attempt - 1)),
+                             max_retry_backoff_seconds)
+            if retry_after is not None:
+                base_delay = max(base_delay, retry_after)
+            # Full jitter on top of the delay: N workers rejected together
+            # otherwise compute the same delay and retry together.
+            delay = base_delay + base_delay * jitter_fn()
             if log_fn:
                 log_fn(
                     f"model call retry {attempt}/{max_retries} after {last_error!r}, "
-                    f"waiting {delay}s"
+                    f"waiting {delay:.1f}s"
                 )
             sleep_fn(delay)
+        retry_after = None
+        # This process's own park on this endpoint, from an earlier cap.
+        parked = endpoint_park_remaining(base_url, now_fn=now_fn)
+        if parked > 0:
+            if log_fn:
+                log_fn(f"{base_url} is parked for another {parked:.0f}s (cost cap); waiting")
+            sleep_fn(parked)
         governor_acquire(governor_path, governor_calls_per_minute, governor_burst,
                          sleep_fn=sleep_fn)
+        started = now_fn()
         try:
             reply, usage = _call_model_once(
                 messages, base_url, api_key, model, max_tokens, reasoning_effort,
@@ -921,50 +1086,60 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
             # The provider was reachable and answering, just far too slowly
             # to be worth waiting on -- the connection has already been
             # closed by leaving _call_model_once's `with` block. Replay it.
-            # limited=False on purpose: a slow response is not a rate
-            # limit, and reporting it as one would put the entire fleet
-            # into cooldown over one sluggish call.
-            governor_report(governor_path, limited=False,
-                            cooldown_seconds=governor_cooldown_seconds,
-                            max_cooldown_seconds=governor_max_cooldown_seconds)
+            # Not a rate limit: a sluggish call must not park an endpoint.
+            _emit("error", error_class="deadline", started=started, attempt=attempt)
             last_error = e
             continue
         except urllib.error.HTTPError as e:
-            limited = e.code in DEFAULT_RETRYABLE_HTTP_STATUSES
-            # EVERY 429 is retried, including an account/billing quota
-            # ("weekly cost limit reached"), and the shared token bucket's
-            # global cooldown is what paces it. That cooldown grows
-            # exponentially per consecutive limited outcome and caps at
-            # governor_max_cooldown_seconds, so waiting out a multi-day
-            # quota window settles into one poll per cap interval per
-            # fleet rather than a hot retry loop -- cheap enough to simply
-            # sit there until the window rolls over, with no operator
-            # action needed to resume.
-            #
-            # The quota case is still CLASSIFIED, purely so the log says
-            # "waiting on a spent budget" instead of "being throttled":
-            # those need very different responses from a human, and the
-            # raw 429 alone cannot tell them apart.
-            quota_message = _quota_exhausted_message(e) if limited else None
-            if quota_message is not None:
-                last_quota_message = quota_message
+            retryable_status = e.code in DEFAULT_RETRYABLE_HTTP_STATUSES
+            kind, quota_message, body_retry_after = (
+                classify_429(e) if e.code == 429 else (None, None, None)
+            )
+            if kind == RATE_LIMIT_NON_RETRYABLE:
+                # The gateway says not to retry, but nothing is exhausted --
+                # so fail this call and leave the endpoint alone. Parking it
+                # would idle a healthy worker over one upstream hiccup.
+                if log_fn:
+                    log_fn(f"429 {kind} ({quota_message}) -- not retrying; endpoint NOT parked")
+                _emit("error", error_class=kind, started=started, attempt=attempt,
+                      detail=quota_message)
+                raise
+            if kind in CAP_KINDS:
+                # A spent cost budget. Retrying cannot make budget appear,
+                # so the ladder stops here -- this is the §2.2(c) fix. The
+                # endpoint is parked in THIS process so the worker's next
+                # call rides out the window instead of hot-looping, and so
+                # that the fleet still resumes unattended when it rolls
+                # over. No other worker is affected.
+                park = (window_cap_park_seconds if kind == RATE_LIMIT_WINDOW_CAP
+                        else terminal_cap_park_seconds)
+                endpoint_park(base_url, park, now_fn=now_fn)
                 if log_fn:
                     log_fn(
-                        f"429 quota exhausted ({quota_message}) -- retrying; "
-                        f"the governor cooldown paces this until the window resets"
+                        f"429 {kind} ({quota_message}) -- not retrying; "
+                        f"parking {base_url} for {park}s until the window rolls over"
                     )
-            # A 429 usually carries Retry-After; honoring it beats guessing
-            # with an exponential curve, and it feeds the GLOBAL cooldown
-            # so the whole fleet waits out the window the server named.
-            governor_report(governor_path, limited=limited,
-                            cooldown_seconds=governor_cooldown_seconds,
-                            max_cooldown_seconds=governor_max_cooldown_seconds,
-                            retry_after_seconds=(
-                                _retry_after_seconds(getattr(e, "headers", None))
-                                if limited else None
-                            ))
-            if not limited:
+                _emit("error", error_class=kind, started=started, attempt=attempt,
+                      detail=quota_message)
+                raise ModelQuotaExhausted(
+                    f"{model} via {base_url}: {quota_message}", kind=kind
+                ) from e
+            if not retryable_status:
+                _emit("error", error_class=f"http_{e.code}", started=started, attempt=attempt)
                 raise
+            # An rpm rejection or a 5xx. Retry locally. A 429 usually states
+            # how long to wait -- in a Retry-After header, or in the
+            # gateway's own `retryAfterSeconds` body field (confirmed live
+            # 2026-08-02). The server's own statement beats any curve we
+            # could guess, so whichever is present raises this worker's next
+            # delay, and only this worker's. If both are present, the longer
+            # wins: undershooting just earns another 429.
+            header_retry_after = (_retry_after_seconds(getattr(e, "headers", None))
+                                  if e.code == 429 else None)
+            candidates = [v for v in (header_retry_after, body_retry_after) if v is not None]
+            retry_after = max(candidates) if candidates else None
+            _emit("error", error_class=(RATE_LIMIT_RPM if e.code == 429 else f"http_{e.code}"),
+                  started=started, attempt=attempt)
             last_error = e
             continue
         except urllib.error.URLError as e:
@@ -979,31 +1154,20 @@ def call_model(messages, base_url, api_key, model, max_tokens, reasoning_effort,
             # attempts and got it blacklisted without the model ever
             # actually being asked -- see urlopen error "nodename nor
             # servname provided" in a real run's attempt history.
-            # Connection failures aren't rate limiting: limited=False.
-            governor_report(governor_path, limited=False,
-                            cooldown_seconds=governor_cooldown_seconds,
-                            max_cooldown_seconds=governor_max_cooldown_seconds)
+            # Connection failures aren't rate limiting: no park.
+            _emit("error", error_class="connection", started=started, attempt=attempt)
             last_error = e
             continue
         if not reply:
+            _emit("error", error_class="empty_reply", started=started, attempt=attempt)
             last_error = last_error or RuntimeError("model returned an empty reply")
             continue
         if usage_fn is not None:
             usage_fn(usage)
-        governor_report(governor_path, limited=False,
-                        cooldown_seconds=governor_cooldown_seconds,
-                        max_cooldown_seconds=governor_max_cooldown_seconds)
+        _emit("ok", started=started, attempt=attempt)
         return reply
-    # Only reached once the ENTIRE retry ladder is spent. If the thing we
-    # kept retrying was a spent budget, say so: a bare "HTTP Error 429" at
-    # this point reads as throttling and sends an operator looking at rate
-    # limits instead of at billing. This does not shortcut any retry --
-    # every attempt was still made.
-    if last_quota_message is not None:
-        raise ModelQuotaExhausted(
-            f"{model} via {base_url}: {last_quota_message} "
-            f"(still 429ing after {max_retries} retries)"
-        ) from last_error
+    # Only reached once the ENTIRE retry ladder is spent. A cost cap never
+    # gets here -- it raises ModelQuotaExhausted on the attempt that saw it.
     # last_error is only None if max_retries < 0 (range(max_retries + 1) never
     # iterates) -- guard against `raise None`, which would raise a confusing
     # TypeError instead of surfacing the actual misconfiguration.
@@ -1455,8 +1619,41 @@ def cargo_env():
 DEFAULT_GOVERNOR_PATH = OXIDEX_HOME / "logs" / "rate-governor.json"
 DEFAULT_GOVERNOR_CALLS_PER_MINUTE = 30
 DEFAULT_GOVERNOR_BURST = 5
-DEFAULT_GOVERNOR_COOLDOWN_SECONDS = 30
-DEFAULT_GOVERNOR_MAX_COOLDOWN_SECONDS = 300
+
+
+# Per-endpoint park state, PROCESS-LOCAL by construction: a plain dict, not
+# a file, not a lock. base_url -> unix time until which this worker will not
+# call that endpoint.
+#
+# This replaces the fleet-wide cooldown that governor_report used to set.
+# That cooldown was global, so a single worker's 429 paused every worker;
+# against an rpm limit it phase-locked the fleet (all workers released at
+# the same instant, synchronised burst, limited together, parked together --
+# exactly the shape a rate limiter is built to reject), and against a cost
+# cap its 300s ceiling was futile.
+_ENDPOINT_PARKED_UNTIL = {}
+
+
+def endpoint_park(base_url, seconds, now_fn=time.time):
+    """Park base_url for `seconds` in THIS process. Extends an existing
+    park, never shortens it."""
+    until = now_fn() + seconds
+    _ENDPOINT_PARKED_UNTIL[base_url] = max(_ENDPOINT_PARKED_UNTIL.get(base_url, 0.0), until)
+    return _ENDPOINT_PARKED_UNTIL[base_url]
+
+
+def endpoint_park_remaining(base_url, now_fn=time.time):
+    """Seconds left on this process's park of base_url; 0.0 if free."""
+    return max(0.0, _ENDPOINT_PARKED_UNTIL.get(base_url, 0.0) - now_fn())
+
+
+def endpoint_park_clear(base_url=None):
+    """Clear one endpoint's park, or all of them. For tests and for a
+    caller that has independent evidence the window rolled over."""
+    if base_url is None:
+        _ENDPOINT_PARKED_UNTIL.clear()
+    else:
+        _ENDPOINT_PARKED_UNTIL.pop(base_url, None)
 
 
 def _governor_locked(path, mutate_fn, now_fn):
@@ -1478,8 +1675,10 @@ def _governor_locked(path, mutate_fn, now_fn):
             state = {}
         state.setdefault("tokens", float(DEFAULT_GOVERNOR_BURST))
         state.setdefault("last_refill", now_fn())
-        state.setdefault("cooldown_until", 0.0)
-        state.setdefault("consecutive_limited", 0)
+        # cooldown_until/consecutive_limited are deliberately absent: the
+        # fleet-wide cooldown they drove is gone (see _ENDPOINT_PARKED_UNTIL).
+        # A state file left over from an older build simply carries two keys
+        # nothing reads.
         new_state, result = mutate_fn(state)
         path.write_text(json.dumps(new_state))
         return result
@@ -1490,15 +1689,18 @@ def governor_acquire(path, calls_per_minute=DEFAULT_GOVERNOR_CALLS_PER_MINUTE,
                      sleep_fn=time.sleep, jitter_fn=random.random):
     """Block until this process may make one model API call.
 
-    Cross-process token bucket + global cooldown, shared by every worker
-    through one flock-guarded JSON file: refill at calls_per_minute/60
-    tokens/sec (capped at burst), spend one per call, and honor
-    cooldown_until -- which governor_report sets GLOBALLY on a 429/5xx,
-    so one worker being limited pauses the whole fleet instead of the
-    other N-1 continuing to hammer the shared account limit (measured
-    today: 20 independent backoffs -> 13k 429s and zero successes in an
-    hour). Waits carry +/-20% jitter so workers don't all wake at the
-    same instant. path=None disables (old callers, tests).
+    Cross-process token bucket, shared by every worker through one
+    flock-guarded JSON file: refill at calls_per_minute/60 tokens/sec
+    (capped at burst), spend one per call. Waits carry +/-20% jitter so
+    workers don't all wake at the same instant. path=None disables (old
+    callers, tests).
+
+    This is a steady-state rpm BUDGET, not a reaction to failure. It shapes
+    how fast the fleet is allowed to go; it never parks anyone because
+    someone else was rejected. The fleet-wide cooldown that used to live
+    here -- one worker's 429 pausing every worker on a 30/60/120/240/300
+    ladder -- is gone. Rate-limit reactions are per-worker and per-endpoint
+    now (see call_model and _ENDPOINT_PARKED_UNTIL).
     """
     if path is None:
         return
@@ -1509,8 +1711,6 @@ def governor_acquire(path, calls_per_minute=DEFAULT_GOVERNOR_CALLS_PER_MINUTE,
             elapsed = max(0.0, now - state["last_refill"])
             state["tokens"] = min(float(burst), state["tokens"] + elapsed * rate)
             state["last_refill"] = now
-            if now < state["cooldown_until"]:
-                return state, state["cooldown_until"] - now
             if state["tokens"] < 1.0:
                 return state, (1.0 - state["tokens"]) / rate
             state["tokens"] -= 1.0
@@ -1520,39 +1720,6 @@ def governor_acquire(path, calls_per_minute=DEFAULT_GOVERNOR_CALLS_PER_MINUTE,
         if wait is None:
             return
         sleep_fn(wait * (0.8 + 0.4 * jitter_fn()))
-
-
-def governor_report(path, limited, cooldown_seconds=DEFAULT_GOVERNOR_COOLDOWN_SECONDS,
-                    max_cooldown_seconds=DEFAULT_GOVERNOR_MAX_COOLDOWN_SECONDS,
-                    now_fn=time.time, retry_after_seconds=None):
-    """Record one call outcome. limited=True (429 or 5xx) sets/extends
-    the GLOBAL cooldown with exponential growth per consecutive limited
-    outcome, capped; limited=False resets the streak (the next limited
-    outcome starts from the base cooldown again). path=None disables.
-
-    retry_after_seconds, when the response carried a Retry-After header,
-    is the server's own statement of how long to wait. It raises the
-    cooldown floor: the effective wait becomes max(exponential backoff,
-    Retry-After). It deliberately bypasses max_cooldown_seconds, which
-    exists to cap our *guessing* -- ignoring an explicit instruction to
-    wait longer just earns another 429 the moment the cap expires.
-    """
-    if path is None:
-        return
-    def mutate(state):
-        if limited:
-            state["consecutive_limited"] += 1
-            backoff = min(
-                cooldown_seconds * (2 ** (state["consecutive_limited"] - 1)),
-                max_cooldown_seconds,
-            )
-            if retry_after_seconds is not None:
-                backoff = max(backoff, retry_after_seconds)
-            state["cooldown_until"] = max(state["cooldown_until"], now_fn() + backoff)
-        else:
-            state["consecutive_limited"] = 0
-        return state, None
-    _governor_locked(path, mutate, now_fn)
 
 
 def cargo_build(repo_root, semaphore_path=None, semaphore_max_holders=DEFAULT_BUILD_SEMAPHORE_MAX_HOLDERS):
@@ -7863,8 +8030,6 @@ def _normalize_model_config(table):
         "max_retry_backoff_seconds": table.get("max_retry_backoff_seconds", DEFAULT_MAX_RETRY_BACKOFF_SECONDS),
         "governor_calls_per_minute": table.get("governor_calls_per_minute", DEFAULT_GOVERNOR_CALLS_PER_MINUTE),
         "governor_burst": table.get("governor_burst", DEFAULT_GOVERNOR_BURST),
-        "governor_cooldown_seconds": table.get("governor_cooldown_seconds", DEFAULT_GOVERNOR_COOLDOWN_SECONDS),
-        "governor_max_cooldown_seconds": table.get("governor_max_cooldown_seconds", DEFAULT_GOVERNOR_MAX_COOLDOWN_SECONDS),
         "max_cluster_tags": table.get("max_cluster_tags", DEFAULT_MAX_CLUSTER_TAGS),
         "use_sccache": table.get("use_sccache", True),
         "claim_stale_seconds": table.get("claim_stale_seconds", DEFAULT_CLAIM_STALE_SECONDS),
@@ -8138,6 +8303,18 @@ def main(argv=None):
     req_log_dir.mkdir(parents=True, exist_ok=True)
     req_manifest_path = req_log_dir / "manifest.log"
     cache_stats_path = req_log_dir / "cache-stats.log"
+    # Structured, machine-readable superset of the manifest line: one JSON
+    # object per ATTEMPT (not per call), carrying the error class a
+    # dashboard needs to answer "how many of those 429s were rpm and how
+    # many were a spent budget?" without parsing prose. manifest.log stays
+    # exactly as it is -- watch_parallel_fix.py and the existing tooling
+    # parse it, and this must not disturb them.
+    call_events_path = OXIDEX_HOME / "logs" / "model-calls.jsonl"
+
+    def append_call_event(event):
+        event["worker"] = worker_label
+        with call_events_path.open("a") as f:
+            f.write(json.dumps(event) + "\n")
 
     def make_logging_call_model(phase, tier="T1"):
         """Build a call_model_fn wrapper tagged with phase ("fixer" or
@@ -8220,9 +8397,9 @@ def main(argv=None):
                     governor_path=DEFAULT_GOVERNOR_PATH,
                     governor_calls_per_minute=config["governor_calls_per_minute"],
                     governor_burst=config["governor_burst"],
-                    governor_cooldown_seconds=config["governor_cooldown_seconds"],
-                    governor_max_cooldown_seconds=config["governor_max_cooldown_seconds"],
                     deadline_seconds=config.get("deadline_seconds", DEFAULT_DEADLINE_SECONDS),
+                    role=phase,
+                    event_fn=append_call_event,
                 )
             except Exception as e:
                 elapsed = time.time() - t0

@@ -58,10 +58,18 @@ compaction_keep_recent_turns = 10
 # payloads whose own estimated size exceeds this floor are stubbed (default
 # 3000); smaller turns are left intact.
 compaction_min_elide_tokens = 3000
+# The governor is a steady-state rpm BUDGET shared by the fleet through one
+# flock-guarded token bucket -- how fast everyone is collectively allowed to
+# go. It does not react to failure: the fleet-wide cooldown it used to
+# impose on a 429 (governor_cooldown_seconds / governor_max_cooldown_seconds)
+# is gone, because one worker's rejection pausing every worker phase-locks
+# the fleet into a synchronised burst -- exactly the shape a rate limiter
+# rejects. Rate-limit reactions are per-worker (jittered backoff, honouring
+# Retry-After) and per-endpoint (a process-local park on a spent cost
+# budget). Both live in call_model. Setting the two removed keys here is
+# harmless and has no effect.
 governor_calls_per_minute = 30
 governor_burst = 5
-governor_cooldown_seconds = 30
-governor_max_cooldown_seconds = 300
 max_cluster_tags = 6
 use_sccache = true
 # claim_stale_seconds: a tag claim in the shared tag-state older than this
@@ -101,6 +109,16 @@ lessons_tail_kb = 256
 # round-trips) use the cheap fast model; patch-phase turns (final diffs,
 # repairs, retries) use the strongest model. Omit "phase" on an entry to
 # use it for both.
+#
+# Model ids below were verified against a live GET /v1/models on
+# api.theclawbay.com on 2026-08-02 (42 models). Do NOT hardcode availability
+# from memory or from this file -- re-enumerate before pinning, because the
+# gateway's catalogue moves. Reasoning-capable OpenAI tier as of that date:
+# gpt-5.6, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.4,
+# gpt-5.4-mini. Cross-vendor options for reviewer independence on the SAME
+# key and the SAME OpenAI-compatible route: claude-opus-4-8,
+# claude-sonnet-4-6, claude-haiku-4-5, gemini-3.1-pro-preview,
+# gemini-3-flash-preview, glm-5.2, kimi-k2.7-code, deepseek-v4-pro.
 [[worker.models]]
 name = "gpt-5.6-terra"
 phase = "explore"
@@ -121,6 +139,14 @@ reasoning_effort = "max"
 # Optional: omit this table entirely to have the reviewer reuse [worker]'s
 # pool/config exactly. Add it to review with a different model pool and/or
 # provider than the fixer.
+#
+# Reviewer INDEPENDENCE is the point (see docs/AI_HARNESS.md): a reviewer
+# drawn from the same pool as the fixer can end up grading its own patch.
+# The example below points at a second provider, so its model names are that
+# provider's, not the Claw Bay catalogue's -- they will NOT resolve against
+# api.theclawbay.com. If you route the reviewer through Claw Bay instead,
+# use a cross-vendor id from the list above (e.g. claude-sonnet-4-6) so the
+# reviewer is still a different vendor from the fixer on the same key.
 [reviewer]
 base_url = "https://pass.wafer.ai/v1"
 api_key = "your-api-key-here"
