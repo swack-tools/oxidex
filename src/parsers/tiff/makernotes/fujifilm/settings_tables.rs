@@ -7,7 +7,9 @@
 //! a field that is here was reproduced exactly and a field that is missing was
 //! reported as missing -- neither is a guess.
 
-use crate::parsers::tiff::makernotes::shared::binary_subdir::{BinaryTable, Field, Fmt, PrintConv};
+use crate::parsers::tiff::makernotes::shared::binary_subdir::{
+    BinaryTable, Field, Fmt, PrintConv, ValueConv,
+};
 
 const FUJIFILM_CONV1: &[(i64, &str)] = &[(1, "Release"), (2, "Focus")];
 const FUJIFILM_CONV2: &[(i64, &str)] = &[(0, "AF-M"), (1, "AF-S"), (2, "AF-C")];
@@ -42,6 +44,7 @@ pub(crate) static FUJIFILM_PRIORITYSETTINGS: BinaryTable = BinaryTable {
             set_member: None,
             gate: None,
             mask: Some(15),
+            value_conv: ValueConv::None,
             print_conv: PrintConv::Map(FUJIFILM_CONV1),
         },
         Field {
@@ -52,6 +55,7 @@ pub(crate) static FUJIFILM_PRIORITYSETTINGS: BinaryTable = BinaryTable {
             set_member: None,
             gate: None,
             mask: Some(240),
+            value_conv: ValueConv::None,
             print_conv: PrintConv::Map(FUJIFILM_CONV1),
         },
     ],
@@ -74,6 +78,7 @@ pub(crate) static FUJIFILM_FOCUSSETTINGS: BinaryTable = BinaryTable {
             set_member: None,
             gate: None,
             mask: Some(15),
+            value_conv: ValueConv::None,
             print_conv: PrintConv::Map(FUJIFILM_CONV2),
         },
         Field {
@@ -84,6 +89,7 @@ pub(crate) static FUJIFILM_FOCUSSETTINGS: BinaryTable = BinaryTable {
             set_member: None,
             gate: None,
             mask: Some(240),
+            value_conv: ValueConv::None,
             print_conv: PrintConv::Map(FUJIFILM_CONV3),
         },
         Field {
@@ -94,6 +100,7 @@ pub(crate) static FUJIFILM_FOCUSSETTINGS: BinaryTable = BinaryTable {
             set_member: None,
             gate: None,
             mask: Some(3840),
+            value_conv: ValueConv::None,
             print_conv: PrintConv::Map(FUJIFILM_CONV4),
         },
         Field {
@@ -104,6 +111,7 @@ pub(crate) static FUJIFILM_FOCUSSETTINGS: BinaryTable = BinaryTable {
             set_member: None,
             gate: None,
             mask: Some(61440),
+            value_conv: ValueConv::None,
             print_conv: PrintConv::MapOr(FUJIFILM_CONV5, super::print_conv::identity),
         },
         Field {
@@ -114,6 +122,7 @@ pub(crate) static FUJIFILM_FOCUSSETTINGS: BinaryTable = BinaryTable {
             set_member: None,
             gate: None,
             mask: Some(16711680),
+            value_conv: ValueConv::None,
             print_conv: PrintConv::MapOr(FUJIFILM_CONV5, super::print_conv::zone_size),
         },
     ],
@@ -136,6 +145,7 @@ pub(crate) static FUJIFILM_AFCSETTINGS: BinaryTable = BinaryTable {
             set_member: None,
             gate: None,
             mask: None,
+            value_conv: ValueConv::None,
             print_conv: PrintConv::MapOr(FUJIFILM_CONV6, super::print_conv::custom_afc_set),
         },
         Field {
@@ -146,6 +156,7 @@ pub(crate) static FUJIFILM_AFCSETTINGS: BinaryTable = BinaryTable {
             set_member: None,
             gate: None,
             mask: Some(15),
+            value_conv: ValueConv::None,
             print_conv: PrintConv::None,
         },
         Field {
@@ -156,6 +167,7 @@ pub(crate) static FUJIFILM_AFCSETTINGS: BinaryTable = BinaryTable {
             set_member: None,
             gate: None,
             mask: Some(240),
+            value_conv: ValueConv::None,
             print_conv: PrintConv::None,
         },
         Field {
@@ -166,6 +178,7 @@ pub(crate) static FUJIFILM_AFCSETTINGS: BinaryTable = BinaryTable {
             set_member: None,
             gate: None,
             mask: Some(3840),
+            value_conv: ValueConv::None,
             print_conv: PrintConv::Map(FUJIFILM_CONV7),
         },
     ],
@@ -188,6 +201,7 @@ pub(crate) static FUJIFILM_DRIVESETTINGS: BinaryTable = BinaryTable {
             set_member: None,
             gate: None,
             mask: Some(255),
+            value_conv: ValueConv::None,
             print_conv: PrintConv::Map(FUJIFILM_CONV8),
         },
         Field {
@@ -198,6 +212,7 @@ pub(crate) static FUJIFILM_DRIVESETTINGS: BinaryTable = BinaryTable {
             set_member: None,
             gate: None,
             mask: Some(4278190080),
+            value_conv: ValueConv::None,
             print_conv: PrintConv::MapOr(FUJIFILM_CONV5, super::print_conv::fps),
         },
     ],

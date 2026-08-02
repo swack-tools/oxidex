@@ -24,6 +24,11 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+/// `%Pentax` binary sub-tables, generated from ExifTool's own hashes.
+pub mod subdir_tables;
+/// The `ValueConv` computations those tables need, hand-written.
+mod value_conv;
+
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
@@ -38,7 +43,13 @@ use std::collections::HashMap;
 use super::pentax_lens_database::lookup_lens_type_pair;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_u16_array, extract_u32_array};
+use super::shared::binary_subdir::{self, BinaryTable};
 use super::shared::generic_decoders::ON_OFF;
+use subdir_tables::{
+    PENTAX_AWBINFO, PENTAX_EVSTEPINFO, PENTAX_FACEINFO, PENTAX_FACEPOS, PENTAX_FACESIZE,
+    PENTAX_FLASHINFO, PENTAX_KELVINWB, PENTAX_LENSCORR, PENTAX_LENSINFOQ, PENTAX_LEVELINFO,
+    PENTAX_SRINFO2, PENTAX_TIMEINFO, PENTAX_WBLEVELS,
+};
 
 // Import declarative decoder macros
 use crate::const_decoder;
@@ -153,6 +164,17 @@ const PENTAX_SHADOW_CORRECTION: u16 = 0x0079;
 const PENTAX_ISO_AUTO_PARAMETERS: u16 = 0x007A;
 const PENTAX_CROSS_PROCESS: u16 = 0x007B;
 const PENTAX_LENS_CORR: u16 = 0x007D;
+
+// `%Pentax::Main` ids whose entry is a `SubDirectory` over a
+// ProcessBinaryData table -- see `pentax_binary_subdir`.
+const PENTAX_FLASH_INFO: u16 = 0x0208; // Pentax.pm:2847
+const PENTAX_KELVIN_WB: u16 = 0x0221; // Pentax.pm:2992
+const PENTAX_EV_STEP_INFO: u16 = 0x0224; // Pentax.pm:3001
+const PENTAX_FACE_POS: u16 = 0x0227; // Pentax.pm:3010
+const PENTAX_FACE_SIZE: u16 = 0x0228; // Pentax.pm:3015
+const PENTAX_LEVEL_INFO: u16 = 0x022B; // Pentax.pm:3044
+const PENTAX_WB_LEVELS: u16 = 0x022D; // Pentax.pm:3048
+const PENTAX_LENS_INFO_Q: u16 = 0x0239; // Pentax.pm:3095
 const PENTAX_WHITE_LEVEL: u16 = 0x007E;
 const PENTAX_LENS_INFO: u16 = 0x007F;
 const PENTAX_AF_INFO: u16 = 0x0080;
@@ -602,20 +624,26 @@ impl MakerNoteParser for PentaxParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_located(data, byte_order, None, tags)
+        self.parse_located(data, byte_order, None, None, tags)
     }
 
     fn parse_with_context(
         &self,
         ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
         byte_order: ByteOrder,
-        _model: Option<&str>,
+        model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
         // "AOC\0" MakerNotes address their values from the TIFF header and can
         // point past their own declared end, so decode over the enclosing
         // block's window rather than the payload alone.
-        self.parse_located(ctx.window(), byte_order, ctx.payload_tiff_offset(), tags)?;
+        self.parse_located(
+            ctx.window(),
+            byte_order,
+            ctx.payload_tiff_offset(),
+            model,
+            tags,
+        )?;
 
         // 0x0004 PreviewImageStart is `IsOffset`, so it needs its directory's
         // base added (ExifTool.pm:10133). Which base depends on the header:
@@ -638,11 +666,13 @@ impl MakerNoteParser for PentaxParser {
 }
 
 impl PentaxParser {
+    #[allow(clippy::too_many_lines)]
     fn parse_located(
         &self,
         data: &[u8],
         byte_order: ByteOrder,
         data_base: Option<u32>,
+        model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
@@ -733,8 +763,28 @@ impl PentaxParser {
             data, ifd_offset, value_base, byte_order, tags,
         );
 
+        // ExifTool's `$$self{...}` slots, shared across this file's directories:
+        // `FaceInfo` sets `FacesDetected` and `FacePos`/`FaceSize` are gated on it.
+        let mut members = binary_subdir::Members::new();
+
         // Extract tags from entries
         for entry in entries {
+            if let Some((table, order)) = pentax_binary_subdir(&entry, model, &members, byte_order)
+            {
+                let record = inline_or_offset_bytes(&entry, data, value_base, byte_order);
+                if !record.is_empty() {
+                    binary_subdir::decode_binary_subdir_with(
+                        table,
+                        &record,
+                        order,
+                        "Pentax",
+                        &mut members,
+                        tags,
+                    );
+                }
+                continue;
+            }
+
             match entry.tag_id {
                 // Simple string tags
                 PENTAX_VERSION => {
@@ -1953,6 +2003,66 @@ fn right_align_inline_value(entry: IfdEntry, byte_order: ByteOrder) -> IfdEntry 
     }
 }
 
+/// The `%Pentax::Main` tags whose ExifTool entry is a `SubDirectory` over a
+/// `ProcessBinaryData` table this reader can transcribe, the table each one
+/// selects, and the byte order to read the record in.
+///
+/// Several ids are a list of alternatives rather than one entry, and ExifTool
+/// takes the first whose `Condition` holds. A record that matches none of them
+/// produces nothing here rather than a guess -- `%Pentax` has an
+/// `...Unknown` companion table for exactly those, and ExifTool reports no
+/// named tags from it either.
+fn pentax_binary_subdir(
+    entry: &IfdEntry,
+    model: Option<&str>,
+    members: &binary_subdir::Members,
+    byte_order: ByteOrder,
+) -> Option<(&'static BinaryTable, ByteOrder)> {
+    let count = entry.value_count;
+    // `$$self{FacesDetected}`, set by `%Pentax::FaceInfo` field 0
+    // (Pentax.pm:3265) and read by 0x0227 and 0x0228.
+    let faces_detected = members.get("FacesDetected").copied().unwrap_or(0);
+    let table = match entry.tag_id {
+        // 0x005c is `[{ Condition => '$count == 4' => SRInfo }, { SRInfo2 }]`
+        // (Pentax.pm:2258-2267). The count==4 branch is decoded by the
+        // hand-written arm below, which predates this table.
+        PENTAX_SHAKE_REDUCTION if count != 4 => &PENTAX_SRINFO2,
+        PENTAX_FACE_INFO => &PENTAX_FACEINFO, // Pentax.pm:2293
+        PENTAX_AWB_INFO => &PENTAX_AWBINFO,   // Pentax.pm:2343
+        PENTAX_TIME_INFO => &PENTAX_TIMEINFO, // Pentax.pm:2366
+        PENTAX_LENS_CORR => &PENTAX_LENSCORR, // Pentax.pm:2580
+        // `Condition => '$count == 27'`, else `FlashInfoUnknown` (Pentax.pm:2847-2856).
+        PENTAX_FLASH_INFO if count == 27 => &PENTAX_FLASHINFO,
+        PENTAX_KELVIN_WB => &PENTAX_KELVINWB, // Pentax.pm:2992
+        // `Drop => 200`: ExifTool discards the tag entirely above 200 bytes
+        // (40 kB in the Pentax Q), so there is nothing to descend into.
+        PENTAX_EV_STEP_INFO if count <= 200 => &PENTAX_EVSTEPINFO,
+        // `Condition => '$$self{FacesDetected}'` -- "ignore if no faces to
+        // decode" (Pentax.pm:3012, :3017).
+        PENTAX_FACE_POS if faces_detected != 0 => &PENTAX_FACEPOS,
+        PENTAX_FACE_SIZE if faces_detected != 0 => &PENTAX_FACESIZE,
+        // 0x022b is `LevelInfoK3III` when the model matches, else `LevelInfo`
+        // (Pentax.pm:3039-3046). `LevelInfoK3III` is a different layout, not
+        // transcribed here, so that body descends into nothing rather than into
+        // the wrong table.
+        PENTAX_LEVEL_INFO if !is_k3_mark_iii(model) => &PENTAX_LEVELINFO,
+        // `Condition => '$count == 100'` (Pentax.pm:3050).
+        PENTAX_WB_LEVELS if count == 100 => &PENTAX_WBLEVELS,
+        PENTAX_LENS_INFO_Q => &PENTAX_LENSINFOQ, // Pentax.pm:3095
+        _ => return None,
+    };
+    // None of these `SubDirectory` entries carries a `ByteOrder` override, so
+    // each record is read in the MakerNote's own order. (`AFInfo`,
+    // `BatteryInfo`, `CameraSettings` and `FilterInfo` do carry one; none of
+    // them is transcribed here.)
+    Some((table, byte_order))
+}
+
+/// ExifTool's `$$self{Model} =~ /K-3 Mark III/` (Pentax.pm:3041).
+fn is_k3_mark_iii(model: Option<&str>) -> bool {
+    model.is_some_and(|m| m.contains("K-3 Mark III"))
+}
+
 fn inline_or_offset_bytes(
     entry: &IfdEntry,
     full_data: &[u8],
@@ -2802,6 +2912,101 @@ mod tests {
 
         let invalid_data = b"Nikon\0\0\0";
         assert!(!is_pentax_makernote(invalid_data));
+    }
+
+    /// The `%Pentax::Main` `Condition`s that pick a table, exactly as
+    /// ExifTool writes them -- a record that matches none must descend into
+    /// nothing rather than into a neighbour's layout.
+    #[test]
+    fn test_subdir_conditions_match_exiftool() {
+        fn entry(tag_id: u16, value_count: u32) -> IfdEntry {
+            IfdEntry {
+                tag_id,
+                field_type: 7,
+                value_count,
+                value_offset: 0,
+            }
+        }
+        let none = binary_subdir::Members::new();
+        let mut faces = binary_subdir::Members::new();
+        faces.insert("FacesDetected", 2);
+        let le = ByteOrder::LittleEndian;
+        let pick = |e: &IfdEntry, model, m: &binary_subdir::Members| {
+            pentax_binary_subdir(e, model, m, le).map(|(t, _)| t.name)
+        };
+
+        // 0x005c: `$count == 4` is SRInfo, handled elsewhere; anything else SRInfo2.
+        assert_eq!(pick(&entry(0x005C, 4), None, &none), None);
+        assert_eq!(pick(&entry(0x005C, 2), None, &none), Some("SRInfo2"));
+        // 0x0208: `$count == 27`, else FlashInfoUnknown (no named tags).
+        assert_eq!(pick(&entry(0x0208, 27), None, &none), Some("FlashInfo"));
+        assert_eq!(pick(&entry(0x0208, 26), None, &none), None);
+        // 0x022d: `$count == 100`.
+        assert_eq!(pick(&entry(0x022D, 100), None, &none), Some("WBLevels"));
+        assert_eq!(pick(&entry(0x022D, 96), None, &none), None);
+        // 0x0224: `Drop => 200` discards the tag above 200 bytes.
+        assert_eq!(pick(&entry(0x0224, 200), None, &none), Some("EVStepInfo"));
+        assert_eq!(pick(&entry(0x0224, 40000), None, &none), None);
+        // 0x0227/0x0228: `$$self{FacesDetected}`, set by 0x0060.
+        assert_eq!(pick(&entry(0x0227, 32), None, &none), None);
+        assert_eq!(pick(&entry(0x0227, 32), None, &faces), Some("FacePos"));
+        assert_eq!(pick(&entry(0x0228, 32), None, &faces), Some("FaceSize"));
+        // 0x022b: the K-3 Mark III has a different layout, not transcribed.
+        assert_eq!(
+            pick(&entry(0x022B, 8), Some("K-5"), &none),
+            Some("LevelInfo")
+        );
+        assert_eq!(
+            pick(&entry(0x022B, 8), Some("PENTAX K-3 Mark III"), &none),
+            None
+        );
+    }
+
+    /// `combined-samples/Pentax/PentaxK-5.jpg` tag 0x022b: the exact 8 record
+    /// bytes `exiftool -v3` prints, and the exact values `exiftool -a -G1 -s`
+    /// reports. This is the `ValueConv` case -- `RollAngle` is an int8s of 1
+    /// and prints -0.5, not 1.
+    #[test]
+    fn test_level_info_matches_exiftool_on_k5_bytes() {
+        let mut tags = HashMap::new();
+        let mut members = binary_subdir::Members::new();
+        binary_subdir::decode_binary_subdir_with(
+            &PENTAX_LEVELINFO,
+            &[0x21, 0x01, 0xf6, 0x00, 0x12, 0xfc, 0x01, 0x00],
+            ByteOrder::BigEndian,
+            "Pentax",
+            &mut members,
+            &mut tags,
+        );
+        assert_eq!(tags["Pentax:LevelOrientation"], "Horizontal (normal)");
+        assert_eq!(tags["Pentax:CompositionAdjust"], "Composition Adjust");
+        assert_eq!(tags["Pentax:RollAngle"], "-0.5");
+        assert_eq!(tags["Pentax:PitchAngle"], "5");
+        assert_eq!(tags["Pentax:CompositionAdjustX"], "4");
+        assert_eq!(tags["Pentax:CompositionAdjustY"], "-1");
+        assert_eq!(tags["Pentax:CompositionAdjustRotation"], "0");
+    }
+
+    /// `combined-samples/Pentax/PentaxK-5.jpg` tag 0x006b, 4 bytes: `TimeInfo`
+    /// packs four fields into two bytes with `Mask`, so an unmasked read would
+    /// report one number where ExifTool reports four tags.
+    #[test]
+    fn test_time_info_masks_match_exiftool_on_k5_bytes() {
+        let mut tags = HashMap::new();
+        let mut members = binary_subdir::Members::new();
+        binary_subdir::decode_binary_subdir_with(
+            &PENTAX_TIMEINFO,
+            &[0x00, 0x00, 0x0b, 0x0b],
+            ByteOrder::BigEndian,
+            "Pentax",
+            &mut members,
+            &mut tags,
+        );
+        assert_eq!(tags["Pentax:WorldTimeLocation"], "Hometown");
+        assert_eq!(tags["Pentax:HometownDST"], "No");
+        assert_eq!(tags["Pentax:DestinationDST"], "No");
+        assert_eq!(tags["Pentax:HometownCity"], "Toronto");
+        assert_eq!(tags["Pentax:DestinationCity"], "Toronto");
     }
 }
 
