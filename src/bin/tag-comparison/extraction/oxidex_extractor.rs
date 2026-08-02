@@ -867,11 +867,13 @@ impl OxiDexExtractor {
 
         if let Some((family, name)) = tag_key.split_once(':') {
             let normalized_family = match family {
-                // ExifIFD, IFD0, IFD1, GPS, and InteropIFD tags are output as EXIF in
-                // comparison reports. Perl ExifTool outputs GPS tags as EXIF:GPSxxx,
-                // and groups the thumbnail (IFD1) and Interoperability (InteropIFD)
-                // sub-IFDs under the same top-level "EXIF" family by default.
-                "ExifIFD" | "IFD0" | "IFD1" | "GPS" | "InteropIFD" => "EXIF",
+                // ExifIFD, IFD0, IFD1, IFD2, GPS, and InteropIFD tags are output as
+                // EXIF in comparison reports. Perl ExifTool outputs GPS tags as
+                // EXIF:GPSxxx, and groups the thumbnail (IFD1), the Leica-preview
+                // directory (IFD2 -- see tiff_helpers.rs's parse_ifd2_preview_image),
+                // and Interoperability (InteropIFD) sub-IFDs under the same
+                // top-level "EXIF" family by default.
+                "ExifIFD" | "IFD0" | "IFD1" | "IFD2" | "GPS" | "InteropIFD" => "EXIF",
                 // MP4/QuickTime: ItemList and UserData → QuickTime for comparison
                 "ItemList" | "UserData" => "QuickTime",
                 // WebP tags map to RIFF family in ExifTool
