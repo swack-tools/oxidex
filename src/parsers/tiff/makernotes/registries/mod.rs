@@ -9,8 +9,14 @@
 // declared here, so it never compiled; see `makernotes::google` for the real
 // parser. Likewise no `nikon` registry: `makernotes::nikon` and its submodules
 // carry the real per-table id mapping, and the registry copy was never
-// declared either.)
-pub mod apple;
+// declared either.
+//
+// No `apple` registry either. It carried a `FrontFacingCamera` at 0x0032 and a
+// `PortraitMode` at 0x0020 -- `%Apple::Main` has no tag at 0x0032 at all, and
+// 0x0020 is `ImageCaptureRequestID` -- plus enum decoders for `OISMode`,
+// `SemanticStyle`, `SignalToNoiseRatioType` and `GreenGhostMitigationStatus`,
+// none of which has a `PrintConv` in Apple.pm. `makernotes::apple` now carries
+// the table transcribed from `%Apple::Main` itself.)
 pub mod canon;
 pub mod captureone; // Capture One migration complete (Batch 4, Task 4.2)
 pub mod nikoncapture;
@@ -71,7 +77,6 @@ pub mod indesign;
 pub mod reconyx;
 pub mod scalado;
 
-pub use apple::apple_registry;
 pub use canon::canon_registry;
 
 // Batch 1 exports

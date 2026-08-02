@@ -47,6 +47,7 @@
 use std::collections::HashMap;
 
 use super::h264;
+use crate::core::formatters::duration::convert_duration;
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 
@@ -869,34 +870,6 @@ fn format_significant_3(value: f64) -> String {
     } else {
         rendered
     }
-}
-
-/// ExifTool's `ConvertDuration`.
-fn convert_duration(seconds: f64) -> String {
-    if seconds == 0.0 {
-        return "0 s".to_string();
-    }
-    let (sign, mut time) = if seconds > 0.0 {
-        ("", seconds)
-    } else {
-        ("-", -seconds)
-    };
-    if time < 30.0 {
-        return format!("{}{:.2} s", sign, time);
-    }
-    time += 0.5; // round off to the nearest second
-    let mut hours = (time / 3600.0) as i64;
-    time -= hours as f64 * 3600.0;
-    let minutes = (time / 60.0) as i64;
-    time -= minutes as f64 * 60.0;
-
-    let mut prefix = sign.to_string();
-    if hours > 24 {
-        let days = hours / 24;
-        hours -= days * 24;
-        prefix = format!("{}{} days ", sign, days);
-    }
-    format!("{}{}:{:02}:{:02}", prefix, hours, minutes, time as i64)
 }
 
 #[cfg(test)]

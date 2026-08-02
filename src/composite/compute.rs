@@ -11,6 +11,7 @@
 //!
 //! Adding one function here fixes that tag for *every* format at once, which is
 //! why this layer is worth building before chasing per-format gaps.
+use crate::core::formatters::duration::convert_duration;
 use crate::core::formatters::exif_print_conv::print_exposure_time;
 
 /// Inputs to a composite: `require` values followed by `desire` values, in the
@@ -758,6 +759,19 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             let diag = diag.filter(|d| *d > 0.0)?;
             let sf = (36.0f64 * 36.0 + 24.0 * 24.0).sqrt() * digz / diag;
             Computed::new(sf.to_string(), format!("{sf:.1}"))
+        }
+
+        // Apple.pm Composite::RunTimeSincePowerUp (Apple.pm:348-357):
+        //   require:   0) Apple:RunTimeValue, 1) Apple:RunTimeScale
+        //   ValueConv: `$val[1] ? $val[0] / $val[1] : undef`
+        //   PrintConv: `ConvertDuration($val)`
+        ("Apple", "RunTimeSincePowerUp") => {
+            let (value, scale) = (f(get(i, 0))?, f(get(i, 1))?);
+            if scale == 0.0 {
+                return None;
+            }
+            let seconds = value / scale;
+            Computed::new(seconds.to_string(), convert_duration(seconds))
         }
 
         // Canon.pm Composite::DriveMode:

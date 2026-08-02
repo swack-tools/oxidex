@@ -5,6 +5,7 @@
 
 pub mod audio_encoding;
 pub mod cfa_pattern;
+pub mod duration;
 pub mod exif_enums;
 pub mod exif_print_conv;
 pub mod exposure_program;
@@ -24,6 +25,7 @@ pub mod ycbcr_subsampling;
 // Re-export main formatting functions for convenience
 pub use audio_encoding::audio_encoding_name;
 pub use cfa_pattern::decode_cfa_pattern;
+pub use duration::convert_duration;
 pub use exif_enums::{
     format_color_space, format_components_configuration, format_compression, format_contrast,
     format_custom_rendered, format_digital_zoom_ratio, format_exposure_mode, format_file_source,

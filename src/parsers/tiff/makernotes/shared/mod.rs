@@ -27,6 +27,8 @@
 pub mod array_extractors;
 /// Array schema system for declarative CameraSettings-style array parsing
 pub mod array_schemas;
+/// ExifTool's `Image::ExifTool::PLIST` for MakerNote tags holding a `bplist00`
+pub mod binary_plist;
 /// ExifTool's `ProcessBinaryData` for MakerNote binary sub-directories
 pub mod binary_subdir;
 /// Low-level byte parsing helper functions
