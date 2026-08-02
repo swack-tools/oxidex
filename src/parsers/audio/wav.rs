@@ -32,6 +32,7 @@
 
 #![allow(dead_code)]
 
+use crate::core::formatters::audio_encoding_name;
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
@@ -159,25 +160,6 @@ pub(crate) fn parse_riff_chunks(
     Ok(())
 }
 
-/// Decode audio format code to human-readable encoding name
-fn decode_audio_format(format: u16) -> &'static str {
-    match format {
-        0x0001 => "Microsoft PCM",
-        0x0002 => "Microsoft ADPCM",
-        0x0003 => "IEEE Float",
-        0x0006 => "ITU G.711 a-law",
-        0x0007 => "ITU G.711 mu-law",
-        0x0011 => "Intel DVI/IMA ADPCM",
-        0x0016 => "ITU G.723 ADPCM (Yamaha)",
-        0x0031 => "GSM 6.10",
-        0x0040 => "ITU G.721 ADPCM",
-        0x0055 => "MPEG",
-        0x0069 => "MPEG Layer 3",
-        0xFFFE => "Extensible",
-        _ => "Unknown",
-    }
-}
-
 /// Parse fmt chunk (format information)
 fn parse_fmt_chunk(reader: &dyn FileReader, offset: u64, metadata: &mut MetadataMap) -> Result<()> {
     let fmt_data = reader.read(offset, 16)?;
@@ -192,7 +174,7 @@ fn parse_fmt_chunk(reader: &dyn FileReader, offset: u64, metadata: &mut Metadata
     // Encoding - human-readable format name
     metadata.insert(
         "RIFF:Encoding".to_string(),
-        TagValue::new_string(decode_audio_format(audio_format).to_string()),
+        TagValue::new_string(audio_encoding_name(audio_format)),
     );
     metadata.insert(
         "RIFF:NumChannels".to_string(),
