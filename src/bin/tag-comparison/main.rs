@@ -3,8 +3,8 @@
 //! Command-line tool to compare tags extracted by OxiDex vs ExifTool
 
 use clap::Parser;
+use oxidex::exiftool_oracle;
 use std::path::PathBuf;
-use std::process::Command;
 
 mod comparison;
 mod extraction;
@@ -34,9 +34,11 @@ struct Args {
     #[arg(long)]
     baseline: Option<PathBuf>,
 
-    /// Path to exiftool executable
-    #[arg(long, default_value = "exiftool")]
-    exiftool: String,
+    /// Path to exiftool executable. Defaults to the pinned source tree the
+    /// transcriptions come from (see `oxidex::exiftool_oracle`); an explicit
+    /// path here is still version-checked against that tree.
+    #[arg(long)]
+    exiftool: Option<String>,
 
     /// Output directory for markdown reports
     #[arg(long, default_value = "docs/reference/comparison")]
@@ -51,30 +53,30 @@ struct Args {
     /// binary's own Cargo package version when omitted
     #[arg(long)]
     oxidex_version: Option<String>,
-}
 
-/// Runs `<exiftool> -ver` and returns its trimmed stdout, or "unknown" if
-/// the binary can't be found or fails.
-fn detect_exiftool_version(exiftool: &str) -> String {
-    Command::new(exiftool)
-        .arg("-ver")
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".to_string())
+    /// Directory the on-disk tag caches (oxidex-tag-cache/,
+    /// exiftool-tag-cache/) are written under. Overrides the
+    /// OXIDEX_TAG_CACHE_DIR env var. When neither is set, the cache lands
+    /// under the system temp dir, keyed by a hash of `samples` -- never
+    /// under `samples` itself or its parent, since `samples` may be a
+    /// subdirectory of a read-only sample corpus.
+    #[arg(long)]
+    tag_cache_dir: Option<PathBuf>,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
+    // Resolve *before* anything else: a run graded by the wrong ExifTool
+    // produces phantom regressions and phantom fixes in equal measure, and
+    // neither is distinguishable from the real thing afterwards.
+    let oracle = exiftool_oracle::resolve_or_exit_with(args.exiftool.as_deref());
+    let exiftool_argv = oracle.argv.clone();
     let exiftool_version = args
         .exiftool_version
         .clone()
-        .unwrap_or_else(|| detect_exiftool_version(&args.exiftool));
+        .unwrap_or_else(|| oracle.version.clone());
     let oxidex_version = args
         .oxidex_version
         .clone()
@@ -82,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("🏷️  Tag Comparison Tool");
     println!("=======================\n");
-    println!("ExifTool: v{}", exiftool_version);
+    println!("ExifTool: v{} [{}]", exiftool_version, oracle.provenance());
     println!("OxiDex: v{}", oxidex_version);
     println!("Samples: {}", args.samples.display());
     println!();
@@ -119,6 +121,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Extract OxiDex tags
         let t_oxidex = std::time::Instant::now();
         let mut oxidex_extractor = OxiDexExtractor::new(args.samples.clone());
+        if let Some(dir) = &args.tag_cache_dir {
+            oxidex_extractor = oxidex_extractor.with_cache_dir_override(dir.clone());
+        }
         match oxidex_extractor.extract_format_tags(&format).await {
             Ok(oxidex_result) => {
                 println!(
@@ -130,7 +135,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Extract ExifTool tags
                 let t_exiftool = std::time::Instant::now();
-                let mut exiftool_extractor = ExifToolExtractor::new(args.exiftool.clone());
+                let mut exiftool_extractor = ExifToolExtractor::new(exiftool_argv.clone());
+                if let Some(dir) = &args.tag_cache_dir {
+                    exiftool_extractor = exiftool_extractor.with_cache_dir_override(dir.clone());
+                }
                 match exiftool_extractor
                     .extract_format_tags(&format, &args.samples)
                     .await

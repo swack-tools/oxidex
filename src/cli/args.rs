@@ -402,6 +402,34 @@ impl CliArgs {
         self.args.last().map(PathBuf::from)
     }
 
+    /// Extracts every file/directory path from the arguments, preserving
+    /// input order.
+    ///
+    /// Every other accessor on this struct (`tag_modifications`,
+    /// `date_shift_operations`, `specific_tags`, ...) already treats any
+    /// argument starting with '-' as an option rather than a path, so the
+    /// same rule is used here: a plain positional argument is a path,
+    /// everything else is not. This is what lets `oxidex -j a.jpg b.jpg`
+    /// see both files instead of only the last positional argument.
+    ///
+    /// Falls back to `file()` when the filter finds nothing, so an edge
+    /// case like a single dash-prefixed filename still resolves the same
+    /// way it did before this method existed.
+    pub fn files(&self) -> Vec<PathBuf> {
+        let files: Vec<PathBuf> = self
+            .args
+            .iter()
+            .filter(|arg| !arg.starts_with('-'))
+            .map(PathBuf::from)
+            .collect();
+
+        if files.is_empty() {
+            self.file().into_iter().collect()
+        } else {
+            files
+        }
+    }
+
     /// Parses tag modification arguments (all args except the last one)
     /// Returns a vector of (tag_name, value) tuples
     pub fn tag_modifications(&self) -> Vec<(String, String)> {

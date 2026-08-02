@@ -137,6 +137,31 @@ pub struct OutEntry {
     native_endian: bool,
 }
 
+/// One entry already placed in the plan, remembered so the Added loop can
+/// judge a numeric tag-id collision instead of dropping it.
+///
+/// Two distinct `MetadataMap` keys can resolve to the same numeric EXIF tag id
+/// (`"IFD0:Make"` and `"EXIF:Make"`; `"ExifIFD:ExposureCompensation"` and
+/// `"ExifIFD:ExposureBiasValue"`, both 0x9204). Only one IFD record may carry a
+/// given tag id, so the second one cannot be emitted -- but whether discarding
+/// it *loses* anything depends entirely on the value:
+///
+///   - identical to what is already planned -> nothing is lost, skip silently;
+///   - different -> the caller's edit would vanish while the CLI still reports
+///     success, so it must be refused loudly instead.
+///
+/// `value` is the effective desired value for the placed entry, or `None` when
+/// the entry is raw-carried from bytes the reader never surfaced (an unsurfaced
+/// IFD class, or a tag with no reader key). `None` never compares equal, so
+/// those collisions are always refused.
+#[derive(Debug, Clone)]
+struct PlacedEntry {
+    ifd: IfdKind,
+    tag_id: u16,
+    key: Option<String>,
+    value: Option<TagValue>,
+}
+
 /// A fully diffed EXIF write: per-IFD entries plus preserved blobs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WritePlan {
@@ -303,6 +328,9 @@ pub fn plan_exif_write(
     // Reader keys that map back to an always-carried entry (Interop/IFD1/
     // MakerNote); see `carried_class_reader_keys`.
     let mut carried_reader_keys: Vec<String> = Vec::new();
+    // Every entry placed into the plan, with the value it stands for, so the
+    // Added loop can tell a redundant duplicate from a dropped edit.
+    let mut placed: Vec<PlacedEntry> = Vec::new();
 
     for entry in &scan.entries {
         let bucket = |plan: &mut WritePlan, e: OutEntry| match entry.ifd {
@@ -342,6 +370,12 @@ pub fn plan_exif_write(
                 }
             }
             carried_reader_keys.extend(reader_keys);
+            placed.push(PlacedEntry {
+                ifd: entry.ifd,
+                tag_id: entry.tag_id,
+                key: None,
+                value: None,
+            });
             bucket(&mut plan, carry);
             continue;
         }
@@ -349,6 +383,12 @@ pub fn plan_exif_write(
         let key = lookup_tag_name(entry.tag_id, entry.ifd.prefix());
         let Some(original_value) = original_map.get(&key) else {
             // Reader didn't surface this entry: never drop what it hides
+            placed.push(PlacedEntry {
+                ifd: entry.ifd,
+                tag_id: entry.tag_id,
+                key: None,
+                value: None,
+            });
             bucket(&mut plan, carry);
             continue;
         };
@@ -356,6 +396,12 @@ pub fn plan_exif_write(
             continue; // removal by absence
         };
         consumed_keys.push(key.clone());
+        placed.push(PlacedEntry {
+            ifd: entry.ifd,
+            tag_id: entry.tag_id,
+            key: Some(key.clone()),
+            value: Some(desired_value.clone()),
+        });
         if desired_value == original_value {
             bucket(&mut plan, carry);
             continue;
@@ -429,21 +475,60 @@ pub fn plan_exif_write(
         // "EXIF:Make") resolve to the same numeric tag id via get_tag_descriptor's
         // prefix normalization but are distinct MetadataMap keys, so consumed_keys
         // (tracked by literal key string) cannot catch the collision.
-        if key.starts_with("ExifIFD:") {
-            if plan.exif_ifd.iter().any(|e| e.tag_id == tag_id) {
-                continue;
-            }
-            plan.exif_ifd.push(out);
+        //
+        // A duplicate cannot be emitted -- one IFD record per tag id -- but it
+        // must not be discarded in silence either, which is what this guard used
+        // to do: `oxidex -ExifIFD:ExposureBiasValue=-0.5` (0x9204, which the
+        // reader surfaces as ExposureCompensation) reported "1 image files
+        // updated" and left the tag untouched. Skip only when the value already
+        // planned for that id is the same one; otherwise the caller's edit is
+        // being dropped, so refuse.
+        //
+        // An "EXIF:"-prefixed key names the tag *family*, not a physical IFD, so
+        // its entry may already have been placed in any of the three writable
+        // IFDs -- typically by the alias fold above, which routes the edit to the
+        // native key. Restricting the collision search to IFD0 (the fallback this
+        // key routes to) missed exactly that case and appended a second record
+        // for the same tag id in a different IFD: on main,
+        // `-EXIF:ExposureTime=1/250` left 0x829A in both IFD0 and ExifIFD, and
+        // ExifTool then reports the file as carrying two ExposureTime tags.
+        let target = if key.starts_with("ExifIFD:") {
+            IfdKind::ExifIfd
         } else if key.starts_with("GPS:") {
-            if plan.gps.iter().any(|e| e.tag_id == tag_id) {
-                continue;
-            }
-            plan.gps.push(out);
+            IfdKind::Gps
         } else {
-            if plan.ifd0.iter().any(|e| e.tag_id == tag_id) {
-                continue;
+            IfdKind::Ifd0
+        };
+        let family_alias = key.starts_with("EXIF:");
+        if let Some(dup) = placed.iter().find(|p| {
+            p.tag_id == tag_id
+                && (p.ifd == target
+                    || (family_alias
+                        && matches!(p.ifd, IfdKind::Ifd0 | IfdKind::ExifIfd | IfdKind::Gps)))
+        }) {
+            if dup.value.as_ref() == Some(value) {
+                continue; // same value already planned under another spelling
             }
-            plan.ifd0.push(out);
+            return Err(ExifToolError::unsupported_format(format!(
+                "Cannot write tag '{}': it resolves to {} tag 0x{:04X}, which is \
+                 already being written as '{}'. Two names for one tag id cannot \
+                 both be stored; write the tag under a single name.",
+                key,
+                dup.ifd.prefix(),
+                tag_id,
+                dup.key.as_deref().unwrap_or("an entry already in the file"),
+            )));
+        }
+        placed.push(PlacedEntry {
+            ifd: target,
+            tag_id,
+            key: Some(key.clone()),
+            value: Some(value.clone()),
+        });
+        match target {
+            IfdKind::ExifIfd => plan.exif_ifd.push(out),
+            IfdKind::Gps => plan.gps.push(out),
+            _ => plan.ifd0.push(out),
         }
     }
 

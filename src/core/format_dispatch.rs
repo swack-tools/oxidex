@@ -59,6 +59,7 @@ use crate::parsers::specialized::fits::parse_fits_metadata;
 use crate::parsers::specialized::gltf::parse_gltf_metadata;
 use crate::parsers::specialized::hdf5::parse_hdf5_metadata;
 use crate::parsers::specialized::lnk::parse_lnk_metadata;
+use crate::parsers::specialized::lytro::parse_lytro_metadata;
 use crate::parsers::specialized::obj::parse_obj_metadata;
 use crate::parsers::specialized::pcap::parse_pcap_metadata;
 use crate::parsers::specialized::plist::parse_plist_metadata;
@@ -68,6 +69,7 @@ use crate::parsers::specialized::sqlite::parse_sqlite_metadata;
 use crate::parsers::specialized::stl::parse_stl_metadata;
 use crate::parsers::specialized::x509::parse_x509_metadata;
 use crate::parsers::text::eps::parse_eps_metadata;
+use crate::parsers::text::html::parse_html_metadata;
 use crate::parsers::text::txt::parse_txt_metadata;
 use crate::parsers::text::vcf::parse_vcf_metadata;
 use crate::parsers::video::asf::parse_asf_metadata;
@@ -170,7 +172,9 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::HDF5 => convert_string_error(parse_hdf5_metadata(reader), "HDF5"),
         FileFormat::VCF => convert_string_error(parse_vcf_metadata(reader), "VCF"),
         FileFormat::TXT => convert_string_error(parse_txt_metadata(reader), "TXT"),
+        FileFormat::HTML => convert_string_error(parse_html_metadata(reader), "HTML"),
         FileFormat::LNK => convert_string_error(parse_lnk_metadata(reader), "LNK"),
+        FileFormat::LFP => convert_string_error(parse_lytro_metadata(reader), "LFP"),
         FileFormat::SQLite => convert_string_error(parse_sqlite_metadata(reader), "SQLite"),
         FileFormat::ICS => convert_string_error(parse_ics_metadata(reader), "ICS"),
         FileFormat::EML => convert_string_error(parse_eml_metadata(reader), "EML"),

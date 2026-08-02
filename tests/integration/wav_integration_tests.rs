@@ -1,6 +1,22 @@
-use oxidex::core::MetadataMap;
-use std::process::Command;
+use oxidex::core::TagValue;
+use oxidex::exiftool_oracle;
+use oxidex::io::buffered_reader::BufferedReader;
+use oxidex::parsers::audio::wav::parse_wav_metadata;
 use serde_json::Value;
+use std::path::Path;
+
+/// The value as it reaches output, for the variants these parsers emit.
+///
+/// Anything else is reported verbatim so a value stored in an unexpected shape
+/// fails the comparison instead of quietly reading as equal.
+fn printed(value: &TagValue) -> String {
+    match value {
+        TagValue::String(s) => s.clone(),
+        TagValue::Integer(n) => n.to_string(),
+        TagValue::Float(f) => f.to_string(),
+        other => format!("<unexpected TagValue variant: {:?}>", other),
+    }
+}
 
 #[test]
 #[ignore] // Requires ExifTool to be installed
@@ -14,27 +30,35 @@ fn test_wav_metadata_parity_with_exiftool() {
     }
 
     // Run ExifTool
-    let exiftool_output = Command::new("exiftool")
+    // -G0 is required: the tags compared below are group-qualified
+    // ("RIFF:NumChannels"), and a plain `-json` emits bare tag names, so every
+    // lookup would miss and the comparison would silently pass on nothing.
+    let oracle =
+        exiftool_oracle::shared().unwrap_or_else(|e| panic!("No usable ExifTool oracle: {e}"));
+    let exiftool_output = oracle
+        .command()
+        .arg("-G0")
         .arg("-json")
         .arg(test_file)
         .output()
-        .expect("Failed to run exiftool - is it installed?");
+        .unwrap_or_else(|e| {
+            panic!(
+                "Failed to run ExifTool at {} - is it installed? {e}",
+                oracle.display()
+            )
+        });
 
     assert!(exiftool_output.status.success(), "ExifTool failed");
 
-    let exiftool_json: Vec<Value> = serde_json::from_slice(&exiftool_output.stdout)
-        .expect("Failed to parse ExifTool JSON");
+    let exiftool_json: Vec<Value> =
+        serde_json::from_slice(&exiftool_output.stdout).expect("Failed to parse ExifTool JSON");
 
     // Run OxiDex
-    let oxidex_metadata = MetadataMap::from_file(test_file)
-        .expect("Failed to parse WAV file");
+    let reader = BufferedReader::new(Path::new(test_file)).expect("Failed to open WAV file");
+    let oxidex_metadata = parse_wav_metadata(&reader).expect("Failed to parse WAV file");
 
     // Compare key tags
-    let tags_to_compare = [
-        "RIFF:NumChannels",
-        "RIFF:SampleRate",
-        "RIFF:BitsPerSample",
-    ];
+    let tags_to_compare = ["RIFF:NumChannels", "RIFF:SampleRate", "RIFF:BitsPerSample"];
 
     for tag in &tags_to_compare {
         let exiftool_value = &exiftool_json[0][tag];
@@ -44,15 +68,11 @@ fn test_wav_metadata_parity_with_exiftool() {
 
         let oxidex_value = oxidex_metadata.get(tag);
 
-        assert!(
-            oxidex_value.is_some(),
-            "OxiDex missing tag: {}",
-            tag
-        );
+        assert!(oxidex_value.is_some(), "OxiDex missing tag: {}", tag);
 
         // Compare values (convert to strings for comparison)
         let exiftool_str = exiftool_value.to_string().trim_matches('"').to_string();
-        let oxidex_str = oxidex_value.unwrap().to_string();
+        let oxidex_str = printed(oxidex_value.unwrap());
 
         assert_eq!(
             exiftool_str, oxidex_str,

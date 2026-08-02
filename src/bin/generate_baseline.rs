@@ -20,6 +20,7 @@
 //! ```
 
 use lexopt::prelude::*;
+use oxidex::exiftool_oracle;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -151,39 +152,32 @@ struct Discrepancy {
 
 /// Checks if Perl ExifTool is available
 fn is_exiftool_available() -> bool {
-    Command::new("exiftool")
-        .arg("-ver")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    exiftool_oracle::available()
 }
 
 /// Gets Perl ExifTool version
 fn get_exiftool_version() -> Result<String, String> {
-    let output = Command::new("exiftool")
-        .arg("-ver")
-        .output()
-        .map_err(|e| format!("Failed to get ExifTool version: {}", e))?;
-
-    if !output.status.success() {
-        return Err("ExifTool -ver command failed".to_string());
-    }
-
-    String::from_utf8(output.stdout)
-        .map(|s| s.trim().to_string())
-        .map_err(|e| format!("Invalid UTF-8 in ExifTool version: {}", e))
+    Ok(exiftool_oracle::shared()?.version.clone())
 }
 
 /// Executes Perl ExifTool and captures JSON output
 fn get_perl_exiftool_output(file_path: &Path) -> Result<String, String> {
-    let output = Command::new("exiftool")
+    let oracle = exiftool_oracle::shared()?;
+    let output = oracle
+        .command()
         .arg("-json")
         .arg("-a")
         .arg("-G1")
         .arg("-struct")
         .arg(file_path)
         .output()
-        .map_err(|e| format!("Failed to execute Perl ExifTool: {}", e))?;
+        .map_err(|e| {
+            format!(
+                "Failed to execute Perl ExifTool ({}): {}",
+                oracle.display(),
+                e
+            )
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

@@ -53,6 +53,25 @@ classifies each difference as RENAME / MISSING / VALUE / EXTRA and prints a
 `ceiling` column. A wide score-to-ceiling spread means free coverage (renames),
 not parsing work.
 
+**Never grade against an unpinned ExifTool.** `.exiftool-version` at the repo
+root names the release the transcriptions come from, and it is the only source
+of truth — the Rust oracle (`src/exiftool_oracle.rs`) compiles it in, the Python
+one (`scripts/exiftool_oracle.py`) reads it, and CI and the justfile both fetch
+that exact tag. Never invoke a bare `exiftool`: `PATH` resolved to 13.55 while
+the tables were transcribed from 13.59, and the two disagree about which
+sub-table a given byte count selects, so sixteen correct Canon R6 Mark III tags
+were reported as regressions. The failure is symmetric — the same skew
+manufactures phantom *fixes* — and neither is distinguishable from the real
+thing afterwards.
+
+**A matching `-ver` is not a working oracle.** The pinned tree's `exiftool`
+starts `#!/usr/bin/env perl`, which finds a Homebrew perl with no
+`Archive::Zip`; ExifTool then reports `FileType: ZIP` for a `.docx` and every
+container format degrades at once, *while `-ver` still prints the right
+release*. The oracle therefore also probes capability, and any corpus sweep
+should assert a file-count and tag-count floor — a degraded run does not crash,
+it reports a confident, precisely-formatted, completely wrong number.
+
 **Never approximate a conversion.** A plausible-but-wrong value under a real
 ExifTool tag name is worse than an absent tag: it does not crash, and nothing
 downstream can tell. Omit and count it instead — that is the rule the generator

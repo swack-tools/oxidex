@@ -45,6 +45,7 @@ from parallel_model_fix_loop import (
     novel_commits,
     parse_worktree_list,
     pr_checks_state,
+    pr_review_state,
     pr_ref_from_result,
     process_format,
     process_squad_worker,
@@ -2862,6 +2863,8 @@ class AdoptOpenSweepPrsTests(unittest.TestCase):
             if args[:2] == ["pr", "checks"]:
                 return 0, checks_by_ref[args[2]], ""
             if args[:2] == ["pr", "view"]:
+                if "headRefOid,reviews" in args:
+                    return 0, self.APPROVED_REVIEW, ""
                 return 0, json.dumps({"state": "OPEN"}), ""
             return merge_rc, "Merged\n", "" if merge_rc == 0 else "not mergeable"
         return run_gh, calls
@@ -2869,6 +2872,11 @@ class AdoptOpenSweepPrsTests(unittest.TestCase):
     GREEN = json.dumps([{"name": "Build & Test", "state": "SUCCESS", "bucket": "pass"}])
     RED = json.dumps([{"name": "Lint & Audit", "state": "FAILURE", "bucket": "fail"}])
     PENDING = json.dumps([{"name": "Build & Test", "state": "IN_PROGRESS", "bucket": "pending"}])
+    APPROVED_REVIEW = json.dumps({
+        "headRefOid": "a" * 40,
+        "reviews": [{"state": "APPROVED", "submittedAt": "2026-08-02T00:00:00Z",
+                     "author": {"login": "reviewer"}, "commit": {"oid": "a" * 40}}],
+    })
 
     def test_a_since_green_abandoned_pr_is_merged(self):
         url = "https://github.com/o/r/pull/126"
@@ -2892,6 +2900,22 @@ class AdoptOpenSweepPrsTests(unittest.TestCase):
         run_gh, calls = self._run_gh(_gh_pr_list((126, "sweep/tags-2026-07-25-2")), {url: self.PENDING})
         adopt_open_sweep_prs(repo_root="/repo", run_gh=run_gh, log_fn=lambda *a: None)
         self.assertEqual(sum(1 for a in calls if a[:2] == ["pr", "checks"]), 1)
+        self.assertFalse(any(a[:2] == ["pr", "merge"] for a in calls))
+
+    def test_a_green_pr_without_a_current_head_approval_is_left_open(self):
+        url = "https://github.com/o/r/pull/126"
+        run_gh, calls = self._run_gh(
+            _gh_pr_list((126, "sweep/tags-2026-07-25-2")), {url: self.GREEN},
+        )
+
+        def no_approval(args, repo_root):
+            if args[:2] == ["pr", "view"] and "headRefOid,reviews" in args:
+                return 0, json.dumps({"headRefOid": "a" * 40, "reviews": []}), ""
+            return run_gh(args, repo_root)
+
+        adopted = adopt_open_sweep_prs(repo_root="/repo", run_gh=no_approval, log_fn=lambda *a: None)
+        self.assertEqual(adopted[0]["action"], "left_open")
+        self.assertEqual(adopted[0]["reviews"], "pending")
         self.assertFalse(any(a[:2] == ["pr", "merge"] for a in calls))
 
     def test_no_open_sweep_prs_is_no_gh_merge_traffic_at_all(self):
@@ -2932,6 +2956,43 @@ class AdoptOpenSweepPrsTests(unittest.TestCase):
         self.assertNotEqual(actions["11"], "merged")
         self.assertNotIn(["pr", "merge", "https://github.com/o/r/pull/11", "--squash",
                           "--delete-branch"], calls)
+
+
+class PrReviewStateTests(unittest.TestCase):
+    def _payload(self, reviews):
+        return json.dumps({"headRefOid": "a" * 40, "reviews": reviews})
+
+    def test_current_approval_overrides_same_reviewers_old_request_for_changes(self):
+        reviews = [
+            {"state": "CHANGES_REQUESTED", "submittedAt": "2026-08-01T00:00:00Z",
+             "author": {"login": "reviewer"}, "commit": {"oid": "a" * 40}},
+            {"state": "APPROVED", "submittedAt": "2026-08-02T00:00:00Z",
+             "author": {"login": "reviewer"}, "commit": {"oid": "a" * 40}},
+        ]
+        state, _detail = pr_review_state(
+            "126", "/repo", lambda args, repo: (0, self._payload(reviews), ""),
+        )
+        self.assertEqual(state, "approved")
+
+    def test_any_current_request_for_changes_blocks_merge(self):
+        reviews = [
+            {"state": "APPROVED", "submittedAt": "2026-08-02T00:00:00Z",
+             "author": {"login": "one"}, "commit": {"oid": "a" * 40}},
+            {"state": "CHANGES_REQUESTED", "submittedAt": "2026-08-02T00:01:00Z",
+             "author": {"login": "two"}, "commit": {"oid": "a" * 40}},
+        ]
+        state, _detail = pr_review_state(
+            "126", "/repo", lambda args, repo: (0, self._payload(reviews), ""),
+        )
+        self.assertEqual(state, "changes_requested")
+
+    def test_an_approval_for_an_old_head_does_not_authorize_new_code(self):
+        reviews = [{"state": "APPROVED", "submittedAt": "2026-08-02T00:00:00Z",
+                    "author": {"login": "reviewer"}, "commit": {"oid": "b" * 40}}]
+        state, _detail = pr_review_state(
+            "126", "/repo", lambda args, repo: (0, self._payload(reviews), ""),
+        )
+        self.assertEqual(state, "pending")
 
 
 class DefaultRunGhNeverRaisesTests(unittest.TestCase):
@@ -3071,6 +3132,8 @@ class AutoPublishRoundTests(unittest.TestCase):
                 return 0, list_payload, ""
             if args[:2] == ["pr", "checks"]:
                 return 0, checks_payload, ""
+            if args[:2] == ["pr", "view"] and "headRefOid,reviews" in args:
+                return 0, self.APPROVED_REVIEW, ""
             return merge_rc, "Merged\n", "" if merge_rc == 0 else "not mergeable"
         return run_gh
 
@@ -3091,6 +3154,11 @@ class AutoPublishRoundTests(unittest.TestCase):
     RED = json.dumps([{"name": "Build & Test", "state": "SUCCESS", "bucket": "pass"},
                       {"name": "Lint & Audit", "state": "FAILURE", "bucket": "fail"}])
     PENDING = json.dumps([{"name": "Build & Test", "state": "IN_PROGRESS", "bucket": "pending"}])
+    APPROVED_REVIEW = json.dumps({
+        "headRefOid": "a" * 40,
+        "reviews": [{"state": "APPROVED", "submittedAt": "2026-08-02T00:00:00Z",
+                     "author": {"login": "reviewer"}, "commit": {"oid": "a" * 40}}],
+    })
 
     def test_all_green_squash_merges_and_then_syncs_worktrees(self):
         result = self._publish(self.OK_SWEEP, self._run_gh(self.GREEN))
@@ -3137,10 +3205,28 @@ class AutoPublishRoundTests(unittest.TestCase):
                 return 0, "[]", ""
             if args[:2] == ["pr", "checks"]:
                 return 0, next(answers), ""
+            if args[:2] == ["pr", "view"] and "headRefOid,reviews" in args:
+                return 0, self.APPROVED_REVIEW, ""
             return 0, "Merged\n", ""
 
         result = self._publish(self.OK_SWEEP, run_gh)
         self.assertEqual(result["status"], "checks_red")
+        self.assertFalse(any(args[:2] == ["pr", "merge"] for args in self.gh_calls))
+        self.assertEqual(self.sync_calls, [])
+
+    def test_green_checks_without_review_leave_the_round_pr_open(self):
+        def no_review(args, repo_root):
+            self.gh_calls.append(args)
+            if args[:2] == ["pr", "list"]:
+                return 0, "[]", ""
+            if args[:2] == ["pr", "checks"]:
+                return 0, self.GREEN, ""
+            if args[:2] == ["pr", "view"] and "headRefOid,reviews" in args:
+                return 0, json.dumps({"headRefOid": "a" * 40, "reviews": []}), ""
+            return 1, "", "unexpected gh call"
+
+        result = self._publish(self.OK_SWEEP, no_review)
+        self.assertEqual(result["status"], "reviews_pending")
         self.assertFalse(any(args[:2] == ["pr", "merge"] for args in self.gh_calls))
         self.assertEqual(self.sync_calls, [])
 
@@ -3388,6 +3474,12 @@ class AutoPublishEndToEndTests(GitRepoTestCase):
                                       {"name": "Lint & Audit", "state": "SUCCESS", "bucket": "pass"},
                                       {"name": "Multi-platform Build", "state": "SKIPPED",
                                        "bucket": "skipping"}]), ""
+            if args[:2] == ["pr", "view"] and "headRefOid,reviews" in args:
+                return 0, json.dumps({
+                    "headRefOid": "a" * 40,
+                    "reviews": [{"state": "APPROVED", "submittedAt": "2026-08-02T00:00:00Z",
+                                 "author": {"login": "reviewer"}, "commit": {"oid": "a" * 40}}],
+                }), ""
             if args[:2] == ["pr", "merge"]:
                 # Stand in for GitHub's squash-merge, FAITHFULLY: GitHub
                 # merges the REMOTE head branch of the PR -- whatever

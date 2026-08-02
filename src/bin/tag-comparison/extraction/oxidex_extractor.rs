@@ -21,6 +21,7 @@ use oxidex::core::tag_normalization::normalize_tag_family;
 // `core::formatters::unit_suffixes::format_with_unit`, so importing a
 // second implementation here would score oxidex against a formatter it does
 // not use.
+use oxidex::core::formatters::exif_enums::file_source_label_bytes;
 use oxidex::core::formatters::unit_suffixes::{format_with_unit, needs_unit_suffix};
 use oxidex::core::value_formatter::{
     format_date_exif_style, format_rational_as_decimal, is_decimal_rational_tag,
@@ -58,6 +59,7 @@ type CollisionMap = HashMap<String, Vec<String>>;
 pub struct OxiDexExtractor {
     fixture_path: PathBuf,
     cache: HashMap<String, ExtractionResult>,
+    cache_dir_override: Option<PathBuf>,
 }
 
 impl OxiDexExtractor {
@@ -66,7 +68,17 @@ impl OxiDexExtractor {
         Self {
             fixture_path,
             cache: HashMap::new(),
+            cache_dir_override: None,
         }
+    }
+
+    /// Pin the on-disk cache directory explicitly (wired from the
+    /// `--tag-cache-dir` CLI flag), overriding the `OXIDEX_TAG_CACHE_DIR`
+    /// env var and the fixture-hash-keyed temp dir default. See
+    /// `cache_dir::resolve_cache_dir`.
+    pub fn with_cache_dir_override(mut self, dir: PathBuf) -> Self {
+        self.cache_dir_override = Some(dir);
+        self
     }
 
     /// Extract tags from all fixtures of a specific format
@@ -129,9 +141,9 @@ impl OxiDexExtractor {
         // specifically to catch double-emission was structurally
         // incapable of catching double-emission.
         //
-        // Measured against the live shared cache that day:
-        // /tmp/oxidex-exiftool-cache/oxidex-tag-cache/gif.json held
-        // exactly 3 `GIF:BackgroundColor` TagInfo entries (1 canonical +
+        // Measured against the live shared cache that day: the disk
+        // cache's gif.json entry held exactly 3 `GIF:BackgroundColor`
+        // TagInfo entries (1 canonical +
         // the 2 clones) whose value set was the singleton {'0'} or
         // {'#00'} -- never both -- while GIF.gif genuinely emits
         // BackgroundColor twice with two different values. Ten formats in
@@ -194,14 +206,18 @@ impl OxiDexExtractor {
         Ok(result)
     }
 
-    /// Directory the on-disk cache lives in: a sibling of the samples dir
-    /// itself, keeping it alongside ExifTool's own disk cache dir rather
-    /// than inside the samples tree.
+    /// Directory the on-disk cache lives in. See
+    /// `cache_dir::resolve_cache_dir` -- this is deliberately independent of
+    /// `fixture_path`'s parent, which used to be the samples corpus itself
+    /// whenever `fixture_path` was pointed at a vendor subdirectory (e.g.
+    /// `combined-samples/Olympus`), writing the cache inside the read-only
+    /// corpus.
     fn disk_cache_dir(&self) -> PathBuf {
-        self.fixture_path
-            .parent()
-            .map(|p| p.join("oxidex-tag-cache"))
-            .unwrap_or_else(|| self.fixture_path.join(".oxidex-tag-cache"))
+        super::cache_dir::resolve_cache_dir(
+            &self.fixture_path,
+            "oxidex-tag-cache",
+            self.cache_dir_override.as_deref(),
+        )
     }
 
     fn disk_cache_path(&self, format: &str) -> PathBuf {
@@ -504,15 +520,16 @@ impl OxiDexExtractor {
                 }
             }
             TagValue::Binary(bytes) => {
-                // FileSource - single byte value indicating the source device
-                // Values: 1=Film Scanner, 2=Reflection Print Scanner, 3=Digital Camera
-                if name == "FileSource" && bytes.len() == 1 {
-                    return match bytes[0] {
-                        1 => "Film Scanner".to_string(),
-                        2 => "Reflection Print Scanner".to_string(),
-                        3 => "Digital Camera".to_string(),
-                        _ => format!("Unknown ({})", bytes[0]),
-                    };
+                // FileSource. This arm existed because the library handed the
+                // harness a 1-byte blob; it no longer does -- `ProcessExif`
+                // reads a format-7 count-1 value as int8u (Exif.pm:6682) and
+                // the Integer path above resolves it. What can still arrive as
+                // a blob is Sigma's four-byte form, so the lookup stays, now
+                // against the single copy of Exif.pm 0xa300's PrintConv.
+                if name == "FileSource"
+                    && let Some(label) = file_source_label_bytes(bytes)
+                {
+                    return label.to_string();
                 }
 
                 // FlashpixVersion - 4 ASCII bytes representing version (e.g., "0100")
@@ -1241,6 +1258,33 @@ mod tests {
     fn test_oxidex_extractor_creation() {
         let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures/jpeg"));
         assert_eq!(extractor.fixture_path, PathBuf::from("tests/fixtures/jpeg"));
+    }
+
+    /// Regression test for the corpus-pollution bug: pointing the extractor
+    /// at a vendor subdirectory of a corpus (mirroring
+    /// `combined-samples/Olympus`) must never write the on-disk cache
+    /// anywhere under that corpus's observable parent
+    /// (`combined-samples`), which is exactly what `fixture_path.parent()`
+    /// used to resolve to.
+    #[test]
+    fn test_disk_cache_dir_never_lands_inside_fixture_parent() {
+        unsafe {
+            std::env::remove_var(super::super::cache_dir::OXIDEX_TAG_CACHE_DIR_ENV);
+        }
+        let corpus_root = tempfile::tempdir().unwrap();
+        let observable_parent = corpus_root.path().join("combined-samples");
+        let vendor_subdir = observable_parent.join("Olympus");
+        std::fs::create_dir_all(&vendor_subdir).unwrap();
+
+        let extractor = OxiDexExtractor::new(vendor_subdir);
+        let cache_dir = extractor.disk_cache_dir();
+
+        assert!(
+            !cache_dir.starts_with(&observable_parent),
+            "cache dir {} must not be written inside the corpus at {}",
+            cache_dir.display(),
+            observable_parent.display()
+        );
     }
 
     #[test]

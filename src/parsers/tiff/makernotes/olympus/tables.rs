@@ -783,6 +783,46 @@ static CS_GRADATION_HEAD: &[(&str, &str)] = &[
 
 static CS_ART_FILTER_LIST: &[ElemConv] = &[ElemConv::Map(FILTERS)];
 
+/// `CameraSettings` 0x0821 `ISOAutoSettings` -- "2 numbers: 1. Default
+/// sensitivty, 2. Maximum sensitivity", each converted through the same
+/// sensitivity hash (`Olympus.pm:2683` declares it twice, once per element).
+static CS_ISO_AUTO_SENSITIVITY: &[(i64, &str)] = &[
+    (0x0000, "n/a"),
+    (0x0600, "200"),
+    (0x0655, "250"),
+    (0x06aa, "320"),
+    (0x0700, "400"),
+    (0x0755, "500"),
+    (0x07aa, "640"),
+    (0x0800, "800"),
+    (0x0855, "1000"),
+    (0x08aa, "1250"),
+    (0x0900, "1600"),
+    (0x0955, "2000"),
+    (0x09aa, "2500"),
+    (0x0a00, "3200"),
+    (0x0a55, "4000"),
+    (0x0aaa, "5000"),
+    (0x0b00, "6400"),
+    (0x0b55, "8000"),
+    (0x0baa, "10000"),
+    (0x0c00, "12800"),
+    (0x0c55, "16000"),
+    (0x0caa, "20000"),
+    (0x0d00, "25600"),
+    (0x0d55, "32000"),
+    (0x0daa, "40000"),
+    (0x0e00, "51200"),
+    (0x0e55, "64000"),
+    (0x0eaa, "80000"),
+    (0x0f00, "102400"),
+];
+
+static CS_ISO_AUTO_SETTINGS_LIST: &[ElemConv] = &[
+    ElemConv::Map(CS_ISO_AUTO_SENSITIVITY),
+    ElemConv::Map(CS_ISO_AUTO_SENSITIVITY),
+];
+
 static CS_ART_FILTER_EFFECT_LIST: &[ElemConv] = &[
     ElemConv::Map(FILTERS),
     ElemConv::Raw,
@@ -1147,7 +1187,12 @@ pub static CAMERA_SETTINGS: &[TagDef] = &[
             (4, "On, S-IS Auto"),
         ],
     ),
-    TagDef::raw(0x0821, "ISOAutoSettings"),
+    TagDef {
+        id: 0x0821,
+        name: "ISOAutoSettings",
+        force_type: None,
+        conv: Conv::List(CS_ISO_AUTO_SETTINGS_LIST),
+    },
     TagDef::func(0x0900, "ManometerPressure", print_manometer_pressure),
     TagDef::func(0x0901, "ManometerReading", print_manometer_reading),
     TagDef::lookup(0x0902, "ExtendedWBDetect", OFF_ON),

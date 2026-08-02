@@ -195,7 +195,7 @@ impl TTFParser {
     }
 
     /// Decodes a string using the Macintosh Roman encoding.
-    fn decode_mac_roman(data: &[u8]) -> String {
+    pub(crate) fn decode_mac_roman(data: &[u8]) -> String {
         const MAC_ROMAN_HIGH: [char; 128] = [
             'Ä', 'Å', 'Ç', 'É', 'Ñ', 'Ö', 'Ü', 'á', 'à', 'â', 'ä', 'ã', 'å', 'ç', 'é', 'è', 'ê',
             'ë', 'í', 'ì', 'î', 'ï', 'ñ', 'ó', 'ò', 'ô', 'ö', 'õ', 'ú', 'ù', 'û', 'ü', '†', '°',

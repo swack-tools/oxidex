@@ -15,19 +15,16 @@
 //! CanonVRD.pm:2148). Between header and footer sit typed blocks, each an
 //! int32u type followed by an int32u length.
 //!
-//! Two blocks are decoded here. The `EditData` block (0xffff00f4) yields the
-//! `VRD1` section -- the fixed 0x272-byte version 1 record whose 43 tags are
-//! `%CanonVRD::Ver1` -- and the `Edit4Data` block (0xffff00f7) is the DPP
-//! version 4 "DR4" directory, handled by [`dr4`]. The blocks this module
-//! deliberately skips are:
+//! Two blocks are decoded here. The `EditData` block (0xffff00f4) carries the
+//! sections of `%CanonVRD::Edit`: the fixed 0x272-byte `VRD1` record whose 43
+//! tags are `%CanonVRD::Ver1` ([`ver1_table`]), and the `VRD2` record that DPP
+//! 2.0 and later append, whose picture-style tags are `%CanonVRD::Ver2`
+//! ([`ver2`]). The `Edit4Data` block (0xffff00f7) is the DPP version 4 "DR4"
+//! directory, handled by [`dr4`]. The blocks this module deliberately skips
+//! are:
 //!
 //! * 0xffff00f5 `IHLData`   -- embedded TIFF/EXIF plus preview JPEGs
 //! * 0xffff00f6 `XMP`       -- an XMP packet
-//!
-//! and, inside `EditData`, the `VRDStampTool` and `VRD2` sections (DPP 2.0 and
-//! later). No file in the ExifTool sample corpus exercises those paths from a
-//! JPEG, so decoding them here could not be verified against ExifTool and is
-//! left undone rather than guessed.
 //!
 //! ExifTool reaches the trailer by peeling off whatever trailers follow it one
 //! at a time and passing the accumulated offset to `ProcessCanonVRD`. oxidex
@@ -39,6 +36,7 @@
 
 pub mod dr4;
 mod ver1_table;
+mod ver2;
 
 use crate::core::formatters::numeric_precision::{perl_g, perl_number};
 use crate::core::{FileReader, MetadataMap, TagValue};
@@ -281,8 +279,19 @@ fn blocks(trailer: &[u8]) -> Vec<(u32, &[u8])> {
 ///
 /// The edit data is a sequence of length-prefixed records, but only record 0
 /// carries tags (`next if $recNum`, CanonVRD.pm:1579), so the later records are
-/// not walked. Record 0 is then divided into the sections of `%CanonVRD::Edit`,
-/// of which the first is the fixed-size `VRD1`.
+/// not walked. Record 0 is then divided into the three sections of
+/// `%CanonVRD::Edit` (CanonVRD.pm:101-122), each sized a different way:
+///
+/// | Index | Name           | `Size`      | How long it is                  |
+/// |-------|----------------|-------------|---------------------------------|
+/// | 0     | `VRD1`         | `0x272`     | the constant                    |
+/// | 1     | `VRDStampTool` | `0`         | an int32u at the section start  |
+/// | 2     | `VRD2`         | `undef`     | whatever is left of the record  |
+///
+/// The walk has to be exact even for the section this module does not decode:
+/// `VRDStampTool` is what puts `VRD2` at its true offset, and it is empty far
+/// more often than not (its length word reads 0 in combined-samples/
+/// CanonVRD.vrd, which is why `VRD2` starts 4 bytes after `VRD1` ends).
 fn parse_edit_data(block: &[u8], metadata: &mut MetadataMap) {
     let Some(rec_len) = be_u32(block, 0).map(|n| n as usize) else {
         return;
@@ -290,10 +299,33 @@ fn parse_edit_data(block: &[u8], metadata: &mut MetadataMap) {
     let Some(record) = block.get(4..4 + rec_len) else {
         return;
     };
-    // `%CanonVRD::Edit` index 0: VRD1, Size => 0x272. `$subLen > $maxLen and
-    // $subLen = $maxLen` truncates it against a short record.
-    let vrd1 = &record[..VRD1_SIZE.min(record.len())];
-    parse_ver1(vrd1, metadata);
+
+    // Index 0, `Size => 0x272`. `$subLen > $maxLen and $subLen = $maxLen`
+    // truncates every section against a short record.
+    let vrd1_len = VRD1_SIZE.min(record.len());
+    parse_ver1(&record[..vrd1_len], metadata);
+    let mut sub_start = vrd1_len;
+
+    // Index 1, `Size => 0`: defined but false, so the length is an int32u at
+    // the section start and the section body follows the length word. ExifTool
+    // stops the walk outright when that word does not fit
+    // (`last unless $subStart + 4 <= $recLen`).
+    let Some(stamp_len) = be_u32(record, sub_start).map(|n| n as usize) else {
+        return;
+    };
+    // `$maxLen` is taken before the length word is skipped.
+    let stamp_len = stamp_len.min(record.len() - sub_start);
+    sub_start += 4;
+    // The StampTool section itself is not decoded -- `%CanonVRD::StampTool`
+    // holds one tag, `StampToolCount`, and no file in the sample corpus carries
+    // a non-empty section to check it against.
+    sub_start += stamp_len;
+
+    // Index 2, `Size => undef`: the rest of the record.
+    let Some(vrd2) = record.get(sub_start..) else {
+        return;
+    };
+    ver2::parse_ver2(vrd2, metadata);
 }
 
 /// `%CanonVRD::Ver1` read as `ProcessBinaryData` would (big-endian).
@@ -725,6 +757,64 @@ mod tests {
         let m = parse_canon_vrd_trailer(&file);
         assert_eq!(m.get_string("CanonVRD:VRDVersion"), Some("1.0.0"));
         assert!(m.get("CanonVRD:WorkColorSpace").is_none());
+    }
+
+    /// The whole point of walking `VRDStampTool` is to land `VRD2` on the right
+    /// byte, so build the record combined-samples/CanonVRD.vrd actually has --
+    /// `VRD1`, an empty stamp section, then the real 178-byte `VRD2` -- and
+    /// check both sections come out at once.
+    #[test]
+    fn test_edit_record_reaches_ver2_past_the_stamp_section() {
+        let mut record = exiftool_jpg_vrd1();
+        // %CanonVRD::Edit index 1: the length word, reading 0 as it does in
+        // that file, and no body.
+        record.extend_from_slice(&0u32.to_be_bytes());
+        record.extend_from_slice(&ver2::CANONVRD_VRD_VER2);
+
+        let mut file = b"\xff\xd8\xff\xd9".to_vec();
+        file.extend_from_slice(&trailer(&edit_block(&record)));
+        let m = parse_canon_vrd_trailer(&file);
+
+        // The 43 VRD1 tags are untouched...
+        assert_eq!(m.get_string("CanonVRD:VRDVersion"), Some("1.0.0"));
+        assert_eq!(m.get_string("CanonVRD:WorkColorSpace"), Some("sRGB"));
+        // ...and the 65 VRD2 tags now land alongside them.
+        assert_eq!(m.get_string("CanonVRD:PictureStyle"), Some("Standard"));
+        assert_eq!(m.get_integer("CanonVRD:StandardRawColorTone"), Some(-4));
+        assert_eq!(m.get_integer("CanonVRD:CustomOutputShadowPoint"), Some(0));
+        assert_eq!(m.len(), 43 + 65);
+    }
+
+    /// A non-empty stamp section pushes `VRD2` along by its own length as well
+    /// as by the length word, which is the arithmetic a fixed offset would get
+    /// wrong.
+    #[test]
+    fn test_a_non_empty_stamp_section_shifts_ver2() {
+        let mut record = exiftool_jpg_vrd1();
+        let stamp = [0xabu8; 12];
+        record.extend_from_slice(&(stamp.len() as u32).to_be_bytes());
+        record.extend_from_slice(&stamp);
+        record.extend_from_slice(&ver2::CANONVRD_VRD_VER2);
+
+        let mut file = b"\xff\xd8\xff\xd9".to_vec();
+        file.extend_from_slice(&trailer(&edit_block(&record)));
+        let m = parse_canon_vrd_trailer(&file);
+
+        assert_eq!(m.get_string("CanonVRD:PictureStyle"), Some("Standard"));
+        assert_eq!(m.get_integer("CanonVRD:StandardRawColorTone"), Some(-4));
+        assert_eq!(m.len(), 43 + 65);
+    }
+
+    /// A record that stops at the end of `VRD1` has no stamp length word at
+    /// all, which is where ExifTool abandons the section walk rather than
+    /// reading past the record.
+    #[test]
+    fn test_record_ending_at_ver1_yields_no_ver2_tags() {
+        let mut file = b"\xff\xd8\xff\xd9".to_vec();
+        file.extend_from_slice(&trailer(&edit_block(&exiftool_jpg_vrd1())));
+        let m = parse_canon_vrd_trailer(&file);
+        assert_eq!(m.len(), 43);
+        assert!(m.get("CanonVRD:PictureStyle").is_none());
     }
 
     #[test]

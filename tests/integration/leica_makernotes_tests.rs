@@ -24,12 +24,21 @@ fn test_leica_header_validation_short() {
 }
 
 #[test]
-fn test_leica_header_validation_long() {
+fn test_leica_camera_ag_is_not_claimed_by_this_parser() {
     use oxidex::parsers::tiff::makernotes::leica::is_leica_makernote;
 
-    // Test valid long "LEICA CAMERA AG" header
-    let valid_header = b"LEICA CAMERA AG\x00\x00\x10";
-    assert!(is_leica_makernote(valid_header));
+    // "LEICA CAMERA AG\0" belongs to ExifTool's `MakerNoteLeica10`
+    // (MakerNotes.pm:724-731), which is keyed on the signature alone --
+    // `Condition => '$$valPt =~ /^LEICA CAMERA AG\0/'` -- and routes to
+    // `Panasonic::Main` at `Start => '$valuePtr + 18'`, not to any
+    // `Leica2`..`Leica9` table. So this parser must decline it.
+    let leica10 = b"LEICA CAMERA AG\x00\x00\x10";
+    assert!(!is_leica_makernote(leica10));
+
+    // Without the terminating NUL it is not a Leica10 header either, and it is
+    // still not one of this parser's layouts.
+    let not_leica10 = b"LEICA CAMERA AG extra data";
+    assert!(!is_leica_makernote(not_leica10));
 }
 
 #[test]

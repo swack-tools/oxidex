@@ -11,8 +11,14 @@
 // Google MakerNote table (Google::HDRPlusMakerNote) is string-id-keyed and
 // reads an encrypted/gzipped protobuf blob, not a numeric TIFF IFD. Likewise
 // no `nikon` registry: `makernotes::nikon` and its submodules carry the real
-// per-table id mapping, and the registry copy was never declared either.)
-pub mod apple;
+// per-table id mapping, and the registry copy was never declared either.
+//
+// No `apple` registry either. It carried a `FrontFacingCamera` at 0x0032 and a
+// `PortraitMode` at 0x0020 -- `%Apple::Main` has no tag at 0x0032 at all, and
+// 0x0020 is `ImageCaptureRequestID` -- plus enum decoders for `OISMode`,
+// `SemanticStyle`, `SignalToNoiseRatioType` and `GreenGhostMitigationStatus`,
+// none of which has a `PrintConv` in Apple.pm. `makernotes::apple` now carries
+// the table transcribed from `%Apple::Main` itself.)
 pub mod canon;
 pub mod captureone; // Capture One migration complete (Batch 4, Task 4.2)
 pub mod nikoncapture;
@@ -28,8 +34,16 @@ pub mod panasonic; // Panasonic migration (Batch 1, Task 1.2)
 pub mod pentax; // Pentax migration (Batch 1, Task 1.3) // Leica migration (Batch 1, Task 1.5)
 
 // Batch 2: Smartphone manufacturers
-pub mod microsoft; // Microsoft migration complete (Batch 2, Task 2.1)
 pub mod samsung; // Samsung migration complete (Batch 2, Task 2.2)
+
+// (no `microsoft` registry: MakerNotes.pm has no MakerNoteMicrosoft TIFF-IFD
+// dispatch entry -- ExifTool has no TIFF-IFD MakerNote path for Microsoft at
+// all. Microsoft's only MakerNotes-group table (Microsoft::Stitch) is binary
+// data read from EXIF tag 0x4748, not a MakerNote IFD. This registry's tag
+// ids and names (AutoHDR, CreativeEffect, DynamicFlash, LensType,
+// OpticalStabilization, PanoramaMode, PureViewMode, Refocus, RichCapture,
+// RichCaptureMode, RichRecordingAudio, Video4K) appear in zero ExifTool
+// source files -- see `makernotes::microsoft` deletion for the same finding.)
 
 // (no `qualcomm` registry: ExifTool's Qualcomm.pm has no TIFF-IFD MakerNote
 // table -- its two tables (`Main`, `DualCamera`) are string-id-keyed and
@@ -73,7 +87,6 @@ pub mod indesign;
 pub mod reconyx;
 pub mod scalado;
 
-pub use apple::apple_registry;
 pub use canon::canon_registry;
 
 // Batch 1 exports
@@ -83,7 +96,6 @@ pub use panasonic::panasonic_registry;
 pub use pentax::pentax_registry;
 
 // Batch 2 exports
-pub use microsoft::microsoft_registry;
 pub use samsung::samsung_registry;
 
 // Batch 3 exports

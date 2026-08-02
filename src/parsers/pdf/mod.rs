@@ -57,6 +57,9 @@ pub mod shared;
 pub mod signature_parser;
 pub mod xmp_extractor;
 
+use crate::core::formatters::exif_enums::{
+    compression_label, file_source_label_bytes, flash_label, focal_plane_resolution_unit_label,
+};
 use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::core::{FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
@@ -501,127 +504,6 @@ const TAG_EXIF_IMAGE_HEIGHT: u16 = 0xA003;
 const TAG_FOCAL_PLANE_RESOLUTION_UNIT: u16 = 0xA210;
 const TAG_FILE_SOURCE: u16 = 0xA300;
 
-/// `%compression` from ExifTool 13.55 Exif.pm, transcribed in full.
-///
-/// The archived patches this parser grew from carried a nine-entry excerpt
-/// ending at `32773 => 'PackBits'`. A truncated PrintConv table is the exact
-/// shape that shipped `32767 => "Sony RAW"` instead of
-/// `'Sony ARW Compressed'` elsewhere in this codebase, so the whole table is
-/// reproduced here rather than the handful of values PDF.pdf happens to hit.
-const COMPRESSION_LABELS: &[(u16, &str)] = &[
-    (1, "Uncompressed"),
-    (2, "CCITT 1D"),
-    (3, "T4/Group 3 Fax"),
-    (4, "T6/Group 4 Fax"),
-    (5, "LZW"),
-    (6, "JPEG (old-style)"),
-    (7, "JPEG"),
-    (8, "Adobe Deflate"),
-    (9, "JBIG B&W"),
-    (10, "JBIG Color"),
-    (99, "JPEG"),
-    (262, "Kodak 262"),
-    (32766, "NeXt or Sony ARW Compressed 2"),
-    (32767, "Sony ARW Compressed"),
-    (32769, "Packed RAW"),
-    (32770, "Samsung SRW Compressed"),
-    (32771, "CCIRLEW"),
-    (32772, "Samsung SRW Compressed 2"),
-    (32773, "PackBits"),
-    (32809, "Thunderscan"),
-    (32867, "Kodak KDC Compressed"),
-    (32895, "IT8CTPAD"),
-    (32896, "IT8LW"),
-    (32897, "IT8MP"),
-    (32898, "IT8BL"),
-    (32908, "PixarFilm"),
-    (32909, "PixarLog"),
-    (32946, "Deflate"),
-    (32947, "DCS"),
-    (33003, "Aperio JPEG 2000 YCbCr"),
-    (33005, "Aperio JPEG 2000 RGB"),
-    (34661, "JBIG"),
-    (34676, "SGILog"),
-    (34677, "SGILog24"),
-    (34712, "JPEG 2000"),
-    (34713, "Nikon NEF Compressed"),
-    (34715, "JBIG2 TIFF FX"),
-    (34718, "Microsoft Document Imaging (MDI) Binary Level Codec"),
-    (
-        34719,
-        "Microsoft Document Imaging (MDI) Progressive Transform Codec",
-    ),
-    (34720, "Microsoft Document Imaging (MDI) Vector"),
-    (34887, "ESRI Lerc"),
-    (34892, "Lossy JPEG"),
-    (34925, "LZMA2"),
-    (34926, "Zstd (old)"),
-    (34927, "WebP (old)"),
-    (34933, "PNG"),
-    (34934, "JPEG XR"),
-    (50000, "Zstd"),
-    (50001, "WebP"),
-    (50002, "JPEG XL (old)"),
-    (52546, "JPEG XL"),
-    (65000, "Kodak DCR Compressed"),
-    (65535, "Pentax PEF Compressed"),
-];
-
-/// `%flash` from ExifTool 13.55 Exif.pm, transcribed in full.
-///
-/// Three archived patches decoded this tag by OR-ing bit meanings together
-/// (`bit 3 => "Auto"`, and so on). That is not what ExifTool does: 0x08 is a
-/// single table entry meaning `'On, Did not fire'`, not "Auto". The bitwise
-/// spelling only agreed with ExifTool for the one value PDF.pdf stores (1),
-/// which is why it survived its recheck.
-const FLASH_LABELS: &[(u16, &str)] = &[
-    (0x00, "No Flash"),
-    (0x01, "Fired"),
-    (0x05, "Fired, Return not detected"),
-    (0x07, "Fired, Return detected"),
-    (0x08, "On, Did not fire"),
-    (0x09, "On, Fired"),
-    (0x0d, "On, Return not detected"),
-    (0x0f, "On, Return detected"),
-    (0x10, "Off, Did not fire"),
-    (0x14, "Off, Did not fire, Return not detected"),
-    (0x18, "Auto, Did not fire"),
-    (0x19, "Auto, Fired"),
-    (0x1d, "Auto, Fired, Return not detected"),
-    (0x1f, "Auto, Fired, Return detected"),
-    (0x20, "No flash function"),
-    (0x30, "Off, No flash function"),
-    (0x41, "Fired, Red-eye reduction"),
-    (0x45, "Fired, Red-eye reduction, Return not detected"),
-    (0x47, "Fired, Red-eye reduction, Return detected"),
-    (0x49, "On, Red-eye reduction"),
-    (0x4d, "On, Red-eye reduction, Return not detected"),
-    (0x4f, "On, Red-eye reduction, Return detected"),
-    (0x50, "Off, Red-eye reduction"),
-    (0x58, "Auto, Did not fire, Red-eye reduction"),
-    (0x59, "Auto, Fired, Red-eye reduction"),
-    (0x5d, "Auto, Fired, Red-eye reduction, Return not detected"),
-    (0x5f, "Auto, Fired, Red-eye reduction, Return detected"),
-];
-
-/// FocalPlaneResolutionUnit (0xa210) PrintConv, ExifTool 13.55 Exif.pm.
-/// Values 1, 4 and 5 are flagged there as non-standard EXIF but are still
-/// decoded, so all five are kept.
-const FOCAL_PLANE_RESOLUTION_UNIT_LABELS: &[(u16, &str)] =
-    &[(1, "None"), (2, "inches"), (3, "cm"), (4, "mm"), (5, "um")];
-
-/// FileSource (0xa300) PrintConv, ExifTool 13.55 Exif.pm.
-///
-/// Two archived patches wrote `3 => "Digital Camera", _ => "Unknown"`. The
-/// "Unknown" fallback is invented - ExifTool prints the undecoded number - and
-/// dropping 1 and 2 would have re-created the `1 => 'Scanner'` class of bug,
-/// since 1 is `'Film Scanner'`, not a generic scanner.
-const FILE_SOURCE_LABELS: &[(u8, &str)] = &[
-    (1, "Film Scanner"),
-    (2, "Reflection Print Scanner"),
-    (3, "Digital Camera"),
-];
-
 /// ColorSpace (0xa001) PrintConv, ExifTool 13.55 Exif.pm. The inherited code
 /// carried only `1` and `0xffff`.
 const COLOR_SPACE_LABELS: &[(u16, &str)] = &[
@@ -738,11 +620,7 @@ fn parse_embedded_tiff_ifds(data: &[u8]) -> Option<MetadataMap> {
             }
             TAG_COMPRESSION if field_type == 3 => {
                 if let Some(raw) = read_short_value(data, base, byte_order) {
-                    if let Some(label) = COMPRESSION_LABELS
-                        .iter()
-                        .find(|&&(id, _)| id == raw)
-                        .map(|&(_, s)| s)
-                    {
+                    if let Some(label) = compression_label(i64::from(raw)) {
                         let key = crate::tag_db::lookup_tag_name(TAG_COMPRESSION, "IFD0");
                         metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
                     }
@@ -844,7 +722,7 @@ fn parse_ifd1(
 
         if tag == TAG_COMPRESSION && field_type == 3 {
             if let Some(raw) = read_short_value(data, base, byte_order) {
-                if let Some(label) = lookup_label(COMPRESSION_LABELS, raw) {
+                if let Some(label) = compression_label(i64::from(raw)) {
                     let key = crate::tag_db::lookup_tag_name(TAG_COMPRESSION, "IFD1");
                     metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
                 }
@@ -1066,7 +944,7 @@ fn parse_exif_ifd(
             // ExifTool 13.55 Exif.pm 0x9209: PrintConv => \%flash.
             TAG_FLASH if field_type == 3 => {
                 if let Some(raw) = read_short_value(data, base, byte_order) {
-                    if let Some(label) = lookup_label(FLASH_LABELS, raw) {
+                    if let Some(label) = flash_label(i64::from(raw)) {
                         let key = crate::tag_db::lookup_tag_name(TAG_FLASH, "ExifIFD");
                         metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
                     }
@@ -1075,7 +953,7 @@ fn parse_exif_ifd(
             // ExifTool 13.55 Exif.pm 0xa210 PrintConv.
             TAG_FOCAL_PLANE_RESOLUTION_UNIT if field_type == 3 => {
                 if let Some(raw) = read_short_value(data, base, byte_order) {
-                    if let Some(label) = lookup_label(FOCAL_PLANE_RESOLUTION_UNIT_LABELS, raw) {
+                    if let Some(label) = focal_plane_resolution_unit_label(i64::from(raw)) {
                         let key = crate::tag_db::lookup_tag_name(
                             TAG_FOCAL_PLANE_RESOLUTION_UNIT,
                             "ExifIFD",
@@ -1084,18 +962,16 @@ fn parse_exif_ifd(
                     }
                 }
             }
-            // ExifTool 13.55 Exif.pm 0xa300: Writable => 'undef', PrintConv
-            // keyed on the single stored byte.
+            // Exif.pm 0xa300: Writable => 'undef'. `ProcessExif` reads a
+            // format-7 count-1 value as int8u (Exif.pm:6682) and looks that
+            // number up; a count of 4 stays `undef` and matches the raw-bytes
+            // key "\3\0\0\0". Both cases live in `file_source_label_bytes`.
             TAG_FILE_SOURCE if field_type == 7 => {
-                if let Some(bytes) = read_undefined_value(data, base, byte_order, count) {
-                    if let Some(label) = bytes
-                        .first()
-                        .copied()
-                        .and_then(|b| lookup_label(FILE_SOURCE_LABELS, b))
-                    {
-                        let key = crate::tag_db::lookup_tag_name(TAG_FILE_SOURCE, "ExifIFD");
-                        metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
-                    }
+                if let Some(bytes) = read_undefined_value(data, base, byte_order, count)
+                    && let Some(label) = file_source_label_bytes(&bytes)
+                {
+                    let key = crate::tag_db::lookup_tag_name(TAG_FILE_SOURCE, "ExifIFD");
+                    metadata.insert(key, crate::core::TagValue::new_string(label.to_string()));
                 }
             }
             TAG_BRIGHTNESS_VALUE if field_type == 5 => {

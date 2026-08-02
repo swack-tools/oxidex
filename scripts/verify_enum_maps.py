@@ -71,8 +71,11 @@ the exact record shapes, which are NamedTuples so `p.key` and `p[0]` both work):
   parse_perl_table(pm_path, table_hint) -> dict[str, str] | None
   verify(diff_text, pm_path, table_hint, ...) -> Verdict
 
-Perl sources are the ExifTool checkout under --perl-lib, by default
-/private/tmp/oxidex-exiftool-cache/exiftool/lib/Image/ExifTool.
+Perl sources are the ExifTool checkout under --perl-lib, by default the PINNED
+tree exiftool_oracle resolves -- $EXIFTOOL_CACHE_DIR/exiftool/lib/Image/ExifTool,
+falling back to /tmp/oxidex-exiftool-cache. It must be the same release the
+tables were transcribed from: a different one spells different PrintConv maps,
+so a correct transcription reads as a fabricated pair and vice versa.
 
 Everything here is a pure function over text. There is no git, no subprocess and
 no network in the verification path; `main()` shells out to git only to fetch a
@@ -89,13 +92,21 @@ import sys
 from pathlib import Path
 from typing import NamedTuple, Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from exiftool_oracle import cache_dir as exiftool_cache_dir  # noqa: E402
+
 # Bumped whenever the extraction or comparison rules change, so a daemon can
 # tell which ruleset produced a stored verdict (same contract as
 # validate_fix_commit.POLICY_VERSION, deliberately a separate counter because
 # this tier's rules move independently of that one's).
 VERIFIER_VERSION = 1
 
-DEFAULT_PERL_LIB = Path("/private/tmp/oxidex-exiftool-cache/exiftool/lib/Image/ExifTool")
+# The PINNED tree, not a hardcoded path: exiftool_oracle.cache_dir() honours
+# $EXIFTOOL_CACHE_DIR, so this always reads the same release the transcriptions
+# under src/exiftool_tables came from. Hardcoding it meant a cache moved by the
+# env var was silently ignored and the old tree graded every commit.
+DEFAULT_PERL_LIB = exiftool_cache_dir() / "exiftool" / "lib" / "Image" / "ExifTool"
 
 # Keys that appear inside a PrintConv hash but are NOT value pairs.
 #   Notes    -- EXE.pm:55 puts a multi-line q{} POD block inside %languageCode.

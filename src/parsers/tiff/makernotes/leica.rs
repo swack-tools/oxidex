@@ -217,9 +217,14 @@ const_decoder!(
 const_decoder!(L4_DECODE_JPEG_QUALITY, i32, [(94, "Basic"), (97, "Fine"),]);
 
 // Leica MakerNote header signature
-// Leica typically uses "LEICA\0\0\0" or "LEICA CAMERA AG" headers
+// Leica typically uses "LEICA\0\0\0" headers.
+//
+// The other long-form signature a Leica body writes, "LEICA CAMERA AG\0", is
+// deliberately absent: ExifTool's `MakerNoteLeica10` routes it to
+// `Panasonic::Main`, not to any Leica table, so it is recognised by
+// `makernotes::panasonic::is_leica10_makernote` and decoded by the Panasonic
+// parser. Claiming it here decoded nothing and shadowed the parser that can.
 const LEICA_HEADER_SHORT: &[u8] = b"LEICA\0\0\0";
-const LEICA_HEADER_LONG: &[u8] = b"LEICA CAMERA AG";
 /// `MakerNoteLeica4`'s signature: the M9 and M Monochrom write "LEICA0\x03\0"
 /// (ExifTool MakerNotes.pm:639-648, which matches on `^LEICA0`).
 const LEICA_HEADER_LEICA4: &[u8] = b"LEICA0";
@@ -263,10 +268,6 @@ enum LeicaLayout {
     /// `MakerNoteLeica9`, written by the M10, M11 and S bodies
     /// (MakerNotes.pm:713-722).
     Leica9,
-    /// The long "LEICA CAMERA AG" header this parser has always skipped 15
-    /// bytes of. No corresponding ExifTool table has been identified; no
-    /// tags are decoded for this layout.
-    LongHeader,
 }
 
 impl LeicaLayout {
@@ -282,7 +283,6 @@ impl LeicaLayout {
             | LeicaLayout::Leica6
             | LeicaLayout::Leica9 => 8,
             LeicaLayout::Leica3 => 0,
-            LeicaLayout::LongHeader => 15,
         }
     }
 }
@@ -304,9 +304,6 @@ fn leica_layout(data: &[u8]) -> Option<LeicaLayout> {
     }
     if data.starts_with(LEICA_HEADER_LEICA4) {
         return Some(LeicaLayout::Leica4);
-    }
-    if data.len() >= 15 && &data[0..15] == LEICA_HEADER_LONG {
-        return Some(LeicaLayout::LongHeader);
     }
     if data.len() >= 8
         && data[0..5] == *b"LEICA"
@@ -761,7 +758,7 @@ impl LeicaMakerNoteParser {
                 LeicaLayout::Leica9 => self.decode_leica9_entry(&entry, values, byte_order, tags),
                 // No ExifTool table is known to correspond to this header;
                 // decoding tag ids against it would be a guess.
-                LeicaLayout::Leica4 | LeicaLayout::LongHeader => {}
+                LeicaLayout::Leica4 => {}
             }
         }
 
@@ -1376,9 +1373,19 @@ mod tests {
         let valid_short = b"LEICA\0\0\0extra data";
         assert!(is_leica_makernote(valid_short));
 
-        // Valid long LEICA CAMERA AG header
-        let valid_long = b"LEICA CAMERA AG extra data";
-        assert!(is_leica_makernote(valid_long));
+        // "LEICA CAMERA AG" is NOT this parser's to claim. ExifTool's
+        // `MakerNoteLeica10` matches `^LEICA CAMERA AG\0` and routes it to
+        // `Panasonic::Main` (MakerNotes.pm:724-731), so the Panasonic parser
+        // decodes it and this one must decline -- it has no table for those
+        // tag ids and previously returned true only to emit nothing.
+        let leica10 = b"LEICA CAMERA AG\0\0\0\x9d\0\x01\0\x03\0";
+        assert!(!is_leica_makernote(leica10));
+        assert!(crate::parsers::tiff::makernotes::panasonic::is_leica10_makernote(leica10));
+
+        // The bare prefix without the terminating NUL is not a Leica10 header
+        // either, and is still not a Leica layout.
+        let not_leica10 = b"LEICA CAMERA AG extra data";
+        assert!(!is_leica_makernote(not_leica10));
 
         // Invalid header
         let invalid = b"CANON\0\x00\x00\x00\x00\x00\x00";

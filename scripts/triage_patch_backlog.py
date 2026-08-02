@@ -43,6 +43,11 @@ import subprocess  # nosec B404 -- list-argv only, no shell=True
 import sys
 import xml.etree.ElementTree as ET  # nosec B405 -- parses local exiftool output
 from collections import defaultdict
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from exiftool_oracle import shared as shared_exiftool_oracle  # noqa: E402
 
 SUBJECT_RE = re.compile(r"^Subject: (?:\[PATCH[^\]]*\] )?(\w+)\(([^)]+)\)", re.M)
 TAG_RE = re.compile(r"^Tag:\s*(.+)$", re.M)
@@ -66,12 +71,17 @@ def exiftool_ground_truth(listx_path=None):
     APP12 port emits (see the port landed in #164). Only a name that is a
     tag nowhere AND is a display string ExifTool prints for some numeric key
     is a harvested display value.
+
+    Live dumps come from the PINNED oracle, never a bare `exiftool`: a name
+    this triage would convict as "a tag nowhere" may simply be a tag the
+    PATH exiftool's release does not have yet.
     """
     if listx_path:
         blob = open(listx_path, "rb").read()
     else:
-        blob = subprocess.run(  # nosec B603,B607
-            ["exiftool", "-f", "-listx"], capture_output=True, check=True
+        blob = subprocess.run(  # nosec B603
+            shared_exiftool_oracle().command(["-f", "-listx"]),
+            capture_output=True, check=True,
         ).stdout
     names, values = set(), set()
     for table in ET.fromstring(blob).iter("table"):  # nosec B314

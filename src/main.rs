@@ -57,15 +57,60 @@ fn main() {
         // Batch processing mode (directory)
         handle_batch_processing(&file, &args);
     } else {
-        // Single file processing mode
-        let modifications = args.tag_modifications();
+        // args.file() only ever returns the *last* positional argument, so a
+        // plain-read invocation with more than one path -- `oxidex -j a.jpg
+        // b.jpg` -- fell through this whole dispatch chain looking at "b.jpg"
+        // alone: "a.jpg" was silently dropped, and every output formatter
+        // (JSON/CSV/human) emitted a single result with no SourceFile,
+        // rather than one result per input file. Route explicit multi-file
+        // invocations through the same batch machinery a directory uses,
+        // which already emits one tagged result per file.
+        let files = args.files();
 
-        if !modifications.is_empty() {
-            // Write mode: modify tags
-            handle_write_operation(&file, &args);
+        if files.len() > 1 {
+            handle_multi_file_processing(&files, &args);
         } else {
-            // Read mode: display metadata
-            handle_read_operation(&file, &args);
+            // Single file processing mode
+            let modifications = args.tag_modifications();
+
+            if !modifications.is_empty() {
+                // Write mode: modify tags
+                handle_write_operation(&file, &args);
+            } else {
+                // Read mode: display metadata
+                handle_read_operation(&file, &args);
+            }
+        }
+    }
+}
+
+/// Handles multiple explicit file arguments (e.g. `oxidex -j a.jpg b.jpg`).
+///
+/// Unlike `handle_batch_processing`, this does not walk a directory or
+/// filter by extension -- the files were named explicitly on the command
+/// line, so every one of them is processed as given.
+fn handle_multi_file_processing(files: &[std::path::PathBuf], args: &CliArgs) {
+    let modifications = args.tag_modifications();
+    let result = if !modifications.is_empty() {
+        batch_processor::batch_write(files.to_vec(), &modifications, args)
+    } else {
+        batch_processor::batch_read(files.to_vec(), args)
+    };
+
+    match result {
+        Ok(stats) => {
+            let is_read_mode = modifications.is_empty();
+            if !(is_read_mode && (args.json || args.csv || args.short_format)) {
+                stats.print();
+            }
+
+            if stats.errors > 0 {
+                process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: Batch processing failed: {}", e);
+            process::exit(1);
         }
     }
 }

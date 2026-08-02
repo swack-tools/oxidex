@@ -25,6 +25,44 @@ pub(super) fn negate_half(value: f64) -> f64 {
     -value / 2.0
 }
 
+/// `ValueConv => '$val / 100'` (Pentax.pm:4866 `BodyBatteryVoltage1`, :4921
+/// `BodyBatteryVoltage2`, :4946 `BodyBatteryVoltage3`, :4956
+/// `BodyBatteryVoltage4`).
+///
+/// The record holds centivolts, so a raw 686 is 6.86 V.
+pub(super) fn div_100(value: f64) -> f64 {
+    value / 100.0
+}
+
+/// `ValueConv => '$val * 4e-8 + 0.27219'` (Pentax.pm:4930
+/// `BodyBatteryVoltage`, :4984 `GripBatteryVoltage`).
+///
+/// The K-3 Mark III reports a raw 32-bit ADC count rather than centivolts.
+pub(super) fn k3_iii_voltage(value: f64) -> f64 {
+    value * 4e-8 + 0.27219
+}
+
+/// `ValueConv => '$val / 10'` (Pentax.pm:6129 `SensorTemperature`, :6138
+/// `SensorTemperature2`, :6162 the K-3 III's `SensorTemperature`).
+pub(super) fn div_10(value: f64) -> f64 {
+    value / 10.0
+}
+
+/// `ValueConv => '$val * 2'` (Pentax.pm:5062 `AFIntegrationTime`).
+///
+/// "effective exposure time for AF sensors in 2 ms increments"
+/// (Pentax.pm:5059), which is why a sub-2 ms exposure reports 0.
+pub(super) fn times_2(value: f64) -> f64 {
+    value * 2.0
+}
+
+/// `ValueConv => '$val+1'` (Pentax.pm:6118 `ShotNumber`).
+///
+/// "Internal representation starts at 0 for the 1st shot" (Pentax.pm:6117).
+pub(super) fn plus_1(value: f64) -> f64 {
+    value + 1.0
+}
+
 /// `%kelvinWB`'s `ValueConv` (Pentax.pm:837-840), shared by all 17
 /// `KelvinWB_*` tags:
 ///

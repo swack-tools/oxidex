@@ -91,6 +91,13 @@ mod sigma_makernotes_tests;
 #[path = "integration/phaseone_makernotes_tests.rs"]
 mod phaseone_makernotes_tests;
 
+// This one was never declared, so `tests/integration/apple_makernotes_tests.rs`
+// never compiled and never ran -- which is how it kept asserting an
+// `Apple:PortraitMode` at 0x0020, an `Apple:LensModel` at 0x0035 and an
+// `Apple:FacingCamera` at 0x0032, none of which is a tag `%Apple::Main` has.
+#[path = "integration/apple_makernotes_tests.rs"]
+mod apple_makernotes_tests;
+
 #[path = "integration/format_detection.rs"]
 mod format_detection;
 
@@ -119,6 +126,57 @@ mod cli_batch_wiring_tests;
 
 #[path = "integration/cli_typed_value_tests.rs"]
 mod cli_typed_value_tests;
+
+#[path = "integration/exif_tag_id_collision_tests.rs"]
+mod exif_tag_id_collision_tests;
+
+#[path = "integration/error_handling_tests.rs"]
+mod error_handling_tests;
+
+// Container / audio format integration tests. These were previously declared
+// only in tests/integration/mod.rs, which no Cargo test root ever included, so
+// they never compiled. Declare them here like every other integration module.
+#[path = "integration/mkv_integration_tests.rs"]
+mod mkv_integration_tests;
+
+#[path = "integration/webm_integration_tests.rs"]
+mod webm_integration_tests;
+
+#[path = "integration/flv_integration_tests.rs"]
+mod flv_integration_tests;
+
+#[path = "integration/avi_integration_tests.rs"]
+mod avi_integration_tests;
+
+#[path = "integration/mts_integration_tests.rs"]
+mod mts_integration_tests;
+
+#[path = "integration/mp3_integration_tests.rs"]
+mod mp3_integration_tests;
+
+#[path = "integration/flac_integration_tests.rs"]
+mod flac_integration_tests;
+
+#[path = "integration/aac_integration_tests.rs"]
+mod aac_integration_tests;
+
+#[path = "integration/wav_integration_tests.rs"]
+mod wav_integration_tests;
+
+#[path = "integration/ogg_integration_tests.rs"]
+mod ogg_integration_tests;
+
+#[path = "integration/opus_integration_tests.rs"]
+mod opus_integration_tests;
+
+#[path = "integration/ape_integration_tests.rs"]
+mod ape_integration_tests;
+
+// No qualcomm/google/microsoft MakerNote test modules: those three suites were
+// deleted rather than declared. Every tag name they asserted appears in zero
+// ExifTool 13.59 source files, so declaring them would have pinned invented
+// data as expected behaviour. See the commit that removed them for the
+// name-by-name evidence.
 
 #[path = "forensic/mod.rs"]
 mod forensic;

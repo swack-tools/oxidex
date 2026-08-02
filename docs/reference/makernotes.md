@@ -14,7 +14,7 @@ OxiDex supports extracting manufacturer-specific metadata (MakerNotes) from JPEG
 | Olympus | OM-D, PEN, Tough series |
 | Panasonic | Lumix series |
 | Pentax | K-series, Q-series |
-| Fujifilm | X-series, GFX, FinePix |
+| FujiFilm | X-series, GFX, FinePix |
 | Leica | M-series, Q-series, SL-series |
 | Sigma | fp series, Foveon cameras |
 | Phase One | Medium format backs |

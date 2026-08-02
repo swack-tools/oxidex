@@ -2187,6 +2187,66 @@ def pr_checks_state(pr_ref, repo_root, run_gh=default_run_gh):
     return "green", detail
 
 
+def pr_review_state(pr_ref, repo_root, run_gh=default_run_gh):
+    """("approved"|"changes_requested"|"pending"|"unknown", detail).
+
+    A green CI result says the PR's current code was tested; it does not say
+    that anybody reviewed it.  The fleet publishes unattended, so treat an
+    unavailable, stale, or absent review as a hard stop rather than merging
+    on an assumption.  Only reviews attached to the PR's current head count:
+    a review before a subsequent push must not authorize new code, and an old
+    request for changes must not permanently block a reviewer who approved a
+    later revision.
+    """
+    rc, out, err = run_gh(
+        ["pr", "view", pr_ref, "--json", "headRefOid,reviews"], repo_root,
+    )
+    if rc != 0:
+        return "unknown", (err or out).strip() or f"gh pr view exited {rc}"
+    try:
+        payload = json.loads(out)
+    except ValueError:
+        return "unknown", "gh pr view returned invalid JSON"
+    if not isinstance(payload, dict):
+        return "unknown", f"gh pr view returned {type(payload).__name__}, expected an object"
+    head = payload.get("headRefOid")
+    reviews = payload.get("reviews")
+    if not isinstance(head, str) or not head:
+        return "unknown", "gh pr view did not report a head SHA"
+    if not isinstance(reviews, list):
+        return "unknown", "gh pr view did not report a review list"
+
+    # GitHub returns the full review history.  Collapse it to each reviewer's
+    # latest review on this head, so a later approval supersedes that same
+    # reviewer's earlier request-for-changes (and vice versa).
+    latest = {}
+    for index, review in enumerate(reviews):
+        if not isinstance(review, dict):
+            continue
+        commit = review.get("commit")
+        if not isinstance(commit, dict) or commit.get("oid") != head:
+            continue
+        state = str(review.get("state") or "").upper()
+        if state not in {"APPROVED", "CHANGES_REQUESTED"}:
+            continue
+        author = review.get("author")
+        login = author.get("login") if isinstance(author, dict) else None
+        # A missing author must not make two anonymous reviews overwrite one
+        # another; it also cannot manufacture an approval for a known actor.
+        reviewer = str(login) if login else f"anonymous-{index}"
+        ordering = (str(review.get("submittedAt") or ""), index)
+        prior = latest.get(reviewer)
+        if prior is None or ordering > prior[0]:
+            latest[reviewer] = (ordering, state)
+
+    states = [entry[1] for entry in latest.values()]
+    if "CHANGES_REQUESTED" in states:
+        return "changes_requested", f"current head {head[:12]} has requested changes"
+    if "APPROVED" in states:
+        return "approved", f"current head {head[:12]} has an approval"
+    return "pending", f"current head {head[:12]} has no approval"
+
+
 def wait_for_pr_checks(pr_ref, repo_root, run_gh=default_run_gh, sleep_fn=time.sleep,
                        now_fn=time.monotonic, timeout_seconds=DEFAULT_PR_CHECKS_TIMEOUT_SECONDS,
                        interval_seconds=DEFAULT_PR_CHECKS_INTERVAL_SECONDS, max_unknown_polls=3,
@@ -2369,7 +2429,7 @@ def list_open_sweep_prs(repo_root, run_gh=default_run_gh, base_ref="main"):
 
 
 def adopt_open_sweep_prs(*, repo_root, run_gh=default_run_gh, log_fn=print):
-    """Merge any ALREADY-OPEN sweep PR whose checks are green right now.
+    """Merge any ALREADY-OPEN sweep PR that is green and reviewed now.
     Returns one dict per open sweep PR:
     {"pr", "branch", "checks", "action": "merged"|"left_open"|"merge_failed",
      "message"}.
@@ -2426,8 +2486,15 @@ def adopt_open_sweep_prs(*, repo_root, run_gh=default_run_gh, log_fn=print):
             adopted.append({"pr": ref, "branch": branch, "checks": state, "action": "left_open",
                             "message": detail})
             continue
+        review_state, review_detail = pr_review_state(ref, repo_root, run_gh)
+        if review_state != "approved":
+            log_fn(f"auto-publish: adopting {ref} ({branch}) -- checks are green but reviews are "
+                   f"{review_state} ({review_detail}); leaving it open")
+            adopted.append({"pr": ref, "branch": branch, "checks": state, "reviews": review_state,
+                            "action": "left_open", "message": review_detail})
+            continue
         log_fn(f"auto-publish: adopting {ref} ({branch}) from an earlier round -- checks are green, "
-               "merging it now")
+               "and it is approved, merging it now")
         try:
             merged, message = merge_pr(ref, repo_root, run_gh=run_gh)
         except OSError as e:
@@ -2689,6 +2756,13 @@ def auto_publish_round(*, repo_root=REPO_ROOT, cache_dir, home=None, squads_toml
         log_fn(f"AUTO-PUBLISH: checks for {pr_ref} are {state.upper()} ({detail}) -- leaving the PR "
                "OPEN for a human and continuing the loop; nothing is merged on anything but green")
         return {"status": f"checks_{state}", "pr_ref": pr_ref, "checks": detail, **common}
+
+    review_state, review_detail = pr_review_state(pr_ref, sweep_repo, run_gh=run_gh)
+    if review_state != "approved":
+        log_fn(f"AUTO-PUBLISH: reviews for {pr_ref} are {review_state.upper()} ({review_detail}) -- "
+               "leaving the PR OPEN for a human; nothing is merged without current-head approval")
+        return {"status": f"reviews_{review_state}", "pr_ref": pr_ref,
+                "reviews": review_detail, **common}
 
     merged, merge_message = merge_pr(pr_ref, sweep_repo, run_gh=run_gh)
     if not merged:

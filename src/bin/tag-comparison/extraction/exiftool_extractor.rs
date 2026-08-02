@@ -103,17 +103,46 @@ const BATCH_SIZE: usize = 100;
 
 /// Extract tags from ExifTool by running exiftool CLI
 pub struct ExifToolExtractor {
-    exiftool_path: String,
+    /// Argv prefix from `oxidex::exiftool_oracle`: program plus any leading
+    /// arguments. It is a vector, not a path, because the pinned oracle runs
+    /// as `<perl> -I<tree>/lib <tree>/exiftool` -- the tree's own
+    /// `#!/usr/bin/env perl` cannot be trusted to find a perl with
+    /// `Archive::Zip`, and without that module every ZIP-container format
+    /// silently degrades.
+    exiftool_argv: Vec<String>,
     cache: HashMap<String, ExtractionResult>,
+    cache_dir_override: Option<PathBuf>,
 }
 
 impl ExifToolExtractor {
-    /// Create a new ExifTool extractor
-    pub fn new(exiftool_path: String) -> Self {
+    /// Create a new ExifTool extractor from an oracle argv prefix.
+    pub fn new(exiftool_argv: Vec<String>) -> Self {
         Self {
-            exiftool_path,
+            exiftool_argv,
             cache: HashMap::new(),
+            cache_dir_override: None,
         }
+    }
+
+    /// A `Command` preloaded with the oracle's argv prefix.
+    fn command(&self) -> Command {
+        let mut cmd = Command::new(&self.exiftool_argv[0]);
+        cmd.args(&self.exiftool_argv[1..]);
+        cmd
+    }
+
+    /// The invocation as one string, for messages.
+    fn invocation(&self) -> String {
+        self.exiftool_argv.join(" ")
+    }
+
+    /// Pin the on-disk cache directory explicitly (wired from the
+    /// `--tag-cache-dir` CLI flag), overriding the `OXIDEX_TAG_CACHE_DIR`
+    /// env var and the fixture-hash-keyed temp dir default. See
+    /// `cache_dir::resolve_cache_dir`.
+    pub fn with_cache_dir_override(mut self, dir: PathBuf) -> Self {
+        self.cache_dir_override = Some(dir);
+        self
     }
 
     /// Extract tags from all fixtures of a specific format
@@ -222,20 +251,23 @@ impl ExifToolExtractor {
         Ok(result)
     }
 
-    /// Directory the on-disk cache lives in: a sibling of the samples dir
-    /// itself (fixture_path is e.g. `<cache_dir>/combined-samples`, so this
-    /// resolves to `<cache_dir>/exiftool-tag-cache`), keeping it alongside
-    /// the rest of the ExifTool cache machinery rather than inside the
-    /// samples tree.
-    fn disk_cache_dir(fixture_path: &Path) -> PathBuf {
-        fixture_path
-            .parent()
-            .map(|p| p.join("exiftool-tag-cache"))
-            .unwrap_or_else(|| fixture_path.join(".exiftool-tag-cache"))
+    /// Directory the on-disk cache lives in. See
+    /// `cache_dir::resolve_cache_dir` -- this is deliberately independent of
+    /// `fixture_path`'s parent, which used to be the samples corpus itself
+    /// whenever `fixture_path` was pointed at a vendor subdirectory (e.g.
+    /// `combined-samples/Olympus`), writing the cache inside the read-only
+    /// corpus.
+    fn disk_cache_dir(&self, fixture_path: &Path) -> PathBuf {
+        super::cache_dir::resolve_cache_dir(
+            fixture_path,
+            "exiftool-tag-cache",
+            self.cache_dir_override.as_deref(),
+        )
     }
 
-    fn disk_cache_path(fixture_path: &Path, format: &str) -> PathBuf {
-        Self::disk_cache_dir(fixture_path).join(format!("{}.json", format.to_lowercase()))
+    fn disk_cache_path(&self, fixture_path: &Path, format: &str) -> PathBuf {
+        self.disk_cache_dir(fixture_path)
+            .join(format!("{}.json", format.to_lowercase()))
     }
 
     /// Cheap signature of the exact sample set this format's cache entry
@@ -268,7 +300,7 @@ impl ExifToolExtractor {
     /// any stale disk cache safely, since "unknown" simply never matches a
     /// real version string recorded by a prior successful run.
     fn get_exiftool_version(&self) -> String {
-        match Command::new(&self.exiftool_path).arg("-ver").output() {
+        match self.command().arg("-ver").output() {
             Ok(o) if o.status.success() => String::from_utf8(o.stdout)
                 .ok()
                 .map(|s| s.trim().to_string())
@@ -277,14 +309,15 @@ impl ExifToolExtractor {
             Ok(o) => {
                 eprintln!(
                     "Warning: `{} -ver` exited non-zero ({}); ExifTool disk cache disabled this run",
-                    self.exiftool_path, o.status
+                    self.invocation(),
+                    o.status
                 );
                 "unknown".to_string()
             }
             Err(e) => {
                 eprintln!(
                     "Warning: failed to run `{} -ver` ({e}); ExifTool disk cache disabled this run",
-                    self.exiftool_path
+                    self.invocation()
                 );
                 "unknown".to_string()
             }
@@ -298,7 +331,7 @@ impl ExifToolExtractor {
         exiftool_version: &str,
         signature: &str,
     ) -> Option<ExtractionResult> {
-        let path = Self::disk_cache_path(fixture_path, format);
+        let path = self.disk_cache_path(fixture_path, format);
         let content = std::fs::read_to_string(path).ok()?;
         let entry: DiskCacheEntry = serde_json::from_str(&content).ok()?;
         if entry.exiftool_version == exiftool_version
@@ -329,7 +362,7 @@ impl ExifToolExtractor {
         if exiftool_version == "unknown" {
             return;
         }
-        let dir = Self::disk_cache_dir(fixture_path);
+        let dir = self.disk_cache_dir(fixture_path);
         if std::fs::create_dir_all(&dir).is_err() {
             return;
         }
@@ -340,7 +373,7 @@ impl ExifToolExtractor {
             result: result.clone(),
         };
         if let Ok(json) = serde_json::to_string(&entry) {
-            let _ = std::fs::write(Self::disk_cache_path(fixture_path, format), json);
+            let _ = std::fs::write(self.disk_cache_path(fixture_path, format), json);
         }
     }
 
@@ -355,7 +388,8 @@ impl ExifToolExtractor {
         }
 
         // Use -@ to read filenames from stdin (avoids command line length limits)
-        let mut child = Command::new(&self.exiftool_path)
+        let mut child = self
+            .command()
             .arg("-json")
             .arg("-G") // Include group name prefix (e.g., "EXIF:Make")
             .arg("-@")
@@ -399,7 +433,8 @@ impl ExifToolExtractor {
         &self,
         file_path: &Path,
     ) -> Result<Vec<TagInfo>, Box<dyn std::error::Error>> {
-        let output = Command::new(&self.exiftool_path)
+        let output = self
+            .command()
             .arg("-json")
             .arg("-G") // Include group name prefix (e.g., "EXIF:Make")
             .arg(file_path)
@@ -632,15 +667,42 @@ impl ExifToolExtractor {
 mod tests {
     use super::*;
 
+    /// Regression test for the corpus-pollution bug: pointing the extractor
+    /// at a vendor subdirectory of a corpus (mirroring
+    /// `combined-samples/Olympus`) must never write the on-disk cache
+    /// anywhere under that corpus's observable parent
+    /// (`combined-samples`), which is exactly what `fixture_path.parent()`
+    /// used to resolve to.
+    #[test]
+    fn test_disk_cache_dir_never_lands_inside_fixture_parent() {
+        unsafe {
+            std::env::remove_var(super::super::cache_dir::OXIDEX_TAG_CACHE_DIR_ENV);
+        }
+        let corpus_root = tempfile::tempdir().unwrap();
+        let observable_parent = corpus_root.path().join("combined-samples");
+        let vendor_subdir = observable_parent.join("Olympus");
+        std::fs::create_dir_all(&vendor_subdir).unwrap();
+
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
+        let cache_dir = extractor.disk_cache_dir(&vendor_subdir);
+
+        assert!(
+            !cache_dir.starts_with(&observable_parent),
+            "cache dir {} must not be written inside the corpus at {}",
+            cache_dir.display(),
+            observable_parent.display()
+        );
+    }
+
     #[test]
     fn test_exiftool_extractor_creation() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
-        assert_eq!(extractor.exiftool_path, "exiftool");
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
+        assert_eq!(extractor.exiftool_argv, vec!["exiftool".to_string()]);
     }
 
     #[test]
     fn test_parse_tag_name_with_colon() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let (family, name) = extractor.parse_tag_name("EXIF:Make");
         assert_eq!(family, "EXIF");
         assert_eq!(name, "Make");
@@ -648,7 +710,7 @@ mod tests {
 
     #[test]
     fn test_parse_tag_name_without_colon() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let (family, name) = extractor.parse_tag_name("SourceFile");
         assert_eq!(family, "UNKNOWN");
         assert_eq!(name, "SourceFile");
@@ -656,7 +718,7 @@ mod tests {
 
     #[test]
     fn test_parse_tag_name_xmp() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let (family, name) = extractor.parse_tag_name("XMP:Creator");
         assert_eq!(family, "XMP");
         assert_eq!(name, "Creator");
@@ -676,14 +738,14 @@ mod tests {
 
     #[test]
     fn test_parse_exiftool_json_empty() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let tags = extractor.parse_exiftool_json("[]").unwrap();
         assert_eq!(tags.len(), 0);
     }
 
     #[test]
     fn test_parse_exiftool_json_with_data() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let tags = extractor
             .parse_exiftool_json(
                 r#"[{
@@ -703,7 +765,7 @@ mod tests {
 
     #[test]
     fn test_parse_single_file_json_populates_source_file_from_exiftool_own_field() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let tags = extractor.parse_single_file_json(&entry(
             r#"{
                 "SourceFile": "/samples/JPEG/Sony/camera.jpg",
@@ -719,7 +781,7 @@ mod tests {
 
     #[test]
     fn test_parse_single_file_json_source_file_none_when_absent() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let tags = extractor.parse_single_file_json(&entry(r#"{"EXIF:Make": "Sony"}"#));
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].source_file, None);
@@ -733,7 +795,7 @@ mod tests {
     /// difference against a string ExifTool never printed.
     #[test]
     fn test_number_keeps_exiftools_own_text_not_an_f64_round_trip() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let tags = extractor.parse_single_file_json(&entry(
             r#"{
                 "MakerNotes:RawBrightnessAdj": 0.00,
@@ -761,7 +823,7 @@ mod tests {
     /// outputs and stay two distinct strings.
     #[test]
     fn test_distinct_number_texts_stay_distinct() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let tags = extractor.parse_single_file_json(&entry(
             r#"{"MakerNotes:A": 0.00, "MakerNotes:B": 0.000, "MakerNotes:C": 0}"#,
         ));
@@ -775,7 +837,7 @@ mod tests {
     /// (ExifTool's own `EscapeJSON` lowercased them), lists compact.
     #[test]
     fn test_non_numeric_rendering_is_unchanged() {
-        let extractor = ExifToolExtractor::new("exiftool".to_string());
+        let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         let tags = extractor.parse_single_file_json(&entry(
             r#"{
                 "EXIF:Make": "Canon",

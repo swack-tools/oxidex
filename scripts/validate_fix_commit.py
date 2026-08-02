@@ -109,6 +109,10 @@ import sys
 import tomllib
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from exiftool_oracle import shared as shared_exiftool_oracle  # noqa: E402
+
 # Trailer keys per spec M1 (shared convention across the fleet scripts:
 # git_commit writes them, this script and overlord_sweep read them).
 #
@@ -889,19 +893,27 @@ def _exiftool_tag_names():
     Cached for the process: the dump is ~18 MB and the merger calls this per
     commit. `None` (no exiftool, or a parse failure) means the caller must not
     accuse -- same conservative direction as the rest of this module.
+
+    The dump comes from the PINNED oracle rather than a bare `exiftool`. A tag
+    added in the release the tables were transcribed from is absent from an
+    older PATH exiftool's -listx, and "absent from -listx" is precisely what
+    this function's callers read as evidence of a fabricated name. An
+    unresolvable/skewed/degraded oracle raises OracleError (a RuntimeError),
+    which lands in the same conservative `None` as a missing binary.
     """
     global _LISTX_TAG_NAMES
     if _LISTX_TAG_NAMES is None:
         names = set()
         try:
-            blob = subprocess.run(  # nosec B603,B607
-                ["exiftool", "-f", "-listx"], capture_output=True, check=True
+            blob = subprocess.run(  # nosec B603
+                shared_exiftool_oracle().command(["-f", "-listx"]),
+                capture_output=True, check=True,
             ).stdout
             root = ET.fromstring(blob)  # nosec B314 -- local trusted binary
             for table in root.iter("table"):
                 for tag in table.findall("tag"):
                     names.add(tag.get("name", ""))
-        except (OSError, subprocess.SubprocessError, ET.ParseError):
+        except (OSError, subprocess.SubprocessError, ET.ParseError, RuntimeError):
             names = set()
         _LISTX_TAG_NAMES = names
     return _LISTX_TAG_NAMES or None

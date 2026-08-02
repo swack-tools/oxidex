@@ -11,7 +11,7 @@ fn test_pentax_parser_trait_implementation() {
     use oxidex::parsers::tiff::makernotes::pentax::PentaxParser;
     use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
 
-    let parser = PentaxParser;
+    let parser = PentaxParser::default();
     assert_eq!(parser.manufacturer_name(), "Pentax");
     assert_eq!(parser.tag_prefix(), "Pentax:");
 }
@@ -21,7 +21,7 @@ fn test_pentax_validate_header_aoc() {
     use oxidex::parsers::tiff::makernotes::pentax::PentaxParser;
     use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
 
-    let parser = PentaxParser;
+    let parser = PentaxParser::default();
 
     // Valid AOC header
     let valid_header = b"AOC\0\x00\x00extra_data_here";
@@ -41,7 +41,7 @@ fn test_pentax_validate_header_pentax() {
     use oxidex::parsers::tiff::makernotes::pentax::PentaxParser;
     use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
 
-    let parser = PentaxParser;
+    let parser = PentaxParser::default();
 
     // Valid PENTAX header
     let valid_header = b"PENTAX \0more_data_follows";
@@ -55,7 +55,7 @@ fn test_pentax_parser_empty_data() {
     use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
     use std::collections::HashMap;
 
-    let parser = PentaxParser;
+    let parser = PentaxParser::default();
     let mut tags = HashMap::new();
 
     // Empty data should not cause errors
@@ -71,7 +71,7 @@ fn test_pentax_parser_invalid_header() {
     use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
     use std::collections::HashMap;
 
-    let parser = PentaxParser;
+    let parser = PentaxParser::default();
     let mut tags = HashMap::new();
 
     // Invalid header should return error
@@ -89,7 +89,7 @@ fn test_pentax_decode_quality() {
 
     // This test verifies that the quality decoder functions work correctly
     // through the parser implementation
-    let parser = PentaxParser;
+    let parser = PentaxParser::default();
     assert_eq!(parser.manufacturer_name(), "Pentax");
 }
 
@@ -99,6 +99,6 @@ fn test_pentax_decode_picture_modes() {
     use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
 
     // Verify parser is correctly instantiated for picture mode decoding
-    let parser = PentaxParser;
+    let parser = PentaxParser::default();
     assert_eq!(parser.tag_prefix(), "Pentax:");
 }
