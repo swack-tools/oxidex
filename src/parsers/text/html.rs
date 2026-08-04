@@ -1128,6 +1128,18 @@ impl Walker {
             }
         };
         if let Some(converted) = converted {
+            // ExifTool assigns namespaced HTML tables (for example `dc` and
+            // `ncc`) to family-1 groups such as HTML-dc and HTML-ncc, while
+            // their family-0 group remains HTML. Keep the more specific key
+            // used by this parser and also expose the family-0 key expected
+            // when metadata is requested by format group.
+            if group.starts_with("HTML-") {
+                self.out.add(
+                    format!("HTML:{}", definition.name),
+                    converted.clone(),
+                    definition.list,
+                );
+            }
             self.out.add(
                 format!("{}:{}", group, definition.name),
                 converted,
