@@ -158,32 +158,73 @@ def infer_renames(missing, extra):
     return renames
 
 
+def tags_by_name(tags):
+    """Collect every occurrence of a tag name, retaining its group and value.
+
+    Group names normally should not affect a comparison: OxiDex deliberately
+    normalises a number of ExifTool groups.  But names such as ``CreateDate``
+    and ``XResolution`` can occur in more than one group in one file.  Keeping
+    every occurrence lets ``compare`` match their values before deciding that
+    a pair is a value difference.
+    """
+    by_name = defaultdict(list)
+    for k, v in tags.items():
+        g, n = split_key(k)
+        if n in IGNORE:
+            continue
+        by_name[n].append((g, v))
+    return by_name
+
+
+def occurrence_name(group, name, duplicate):
+    """Keep unmatched duplicate names distinct in the report."""
+    return f"{group}:{name}" if duplicate else name
+
+
 def compare(et, ox):
-    et_by_name = {}
-    for k, v in et.items():
-        g, n = split_key(k)
-        if n in IGNORE:
-            continue
-        et_by_name.setdefault(n, (g, v))
-    ox_by_name = {}
-    for k, v in ox.items():
-        g, n = split_key(k)
-        if n in IGNORE:
-            continue
-        ox_by_name.setdefault(n, (g, v))
+    et_by_name = tags_by_name(et)
+    ox_by_name = tags_by_name(ox)
 
     matched, value_diff = [], []
-    missing = dict(et_by_name)
-    extra = dict(ox_by_name)
+    missing, extra = {}, {}
 
-    for n, (g, v) in et_by_name.items():
-        if n in ox_by_name:
-            missing.pop(n, None)
-            extra.pop(n, None)
-            if norm_value(v) == norm_value(ox_by_name[n][1]):
+    for n in et_by_name.keys() | ox_by_name.keys():
+        expected = et_by_name.get(n, [])
+        actual = list(ox_by_name.get(n, []))
+        duplicate = len(expected) > 1 or len(actual) > 1
+
+        for g, v in expected:
+            # The old one-entry map compared the first same-named tag from
+            # each side.  In a PDF, that could compare PDF:CreateDate against
+            # EXIF:CreateDate despite an equal PDF:CreateDate being present.
+            # Prefer an equal value, regardless of a harmless group alias.
+            equal = next(
+                (i for i, (_og, ov) in enumerate(actual)
+                 if norm_value(v) == norm_value(ov)),
+                None,
+            )
+            if equal is not None:
+                actual.pop(equal)
                 matched.append(n)
-            else:
-                value_diff.append((n, v, ox_by_name[n][1]))
+                continue
+
+            # When no values match, an exact group is the strongest evidence
+            # that this is a real PrintConv/value discrepancy.  Retain the
+            # historical group-agnostic fallback for names that occur once.
+            same_group = next(
+                (i for i, (og, _ov) in enumerate(actual) if og == g),
+                None,
+            )
+            candidate = same_group if same_group is not None else (0 if actual else None)
+            if candidate is None:
+                missing[occurrence_name(g, n, duplicate)] = (g, v)
+                continue
+
+            _og, ov = actual.pop(candidate)
+            value_diff.append((n, v, ov))
+
+        for g, v in actual:
+            extra[occurrence_name(g, n, duplicate)] = (g, v)
 
     renames = infer_renames(missing, extra)
     for on, en, _v in renames:
