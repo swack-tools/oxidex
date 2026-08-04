@@ -226,6 +226,17 @@ fn parse_jfxx_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<(), Str
         _ => "Unknown",
     };
 
+    // JFXX extension 0x10 stores the thumbnail as an embedded JPEG
+    // immediately after the extension code. ExifTool exposes these bytes as
+    // JFIF:ThumbnailImage, allowing the normal binary-value formatter to
+    // report "(Binary data ... bytes, use -b option to extract)".
+    if extension_code == 0x10 && data.len() > 1 {
+        metadata.insert(
+            "JFIF:ThumbnailImage".to_string(),
+            TagValue::Binary(data[1..].to_vec()),
+        );
+    }
+
     metadata.insert(
         "JFIF:ThumbnailType".to_string(),
         TagValue::String(ext_type.to_string()),
