@@ -184,8 +184,13 @@ renames — the cheapest class there is. `tools/exiftool-tables/conformance.py`
 separates them for every format at once:
 
 ```sh
-python3 tools/exiftool-tables/conformance.py <corpus> --exiftool-dir <exiftool-src>
+python3 tools/exiftool-tables/conformance.py <corpus> --recursive --exiftool-dir <exiftool-src>
 ```
+
+Pass `--recursive` when `<corpus>` is a corpus root: without it only files at
+that exact path are scored, while the shared `combined-samples` corpus stores
+samples in manufacturer subdirectories. The flag is also safe for a flat
+directory.
 
 **BMP's 0% was entirely renames.** OxiDex parses BMP fine and calls the tags
 `Width`/`Height` where ExifTool says `ImageWidth`/`ImageHeight`. No parsing work
@@ -383,7 +388,7 @@ soundness and completeness separately.
 just regen-tables            # fetch ExifTool, extract, generate, format, verify
 just verify-tables           # re-check committed output against ExifTool
 python3 tools/exiftool-tables/analyze.py <tables.json>
-python3 tools/exiftool-tables/conformance.py <corpus> --exiftool-dir <src>
+python3 tools/exiftool-tables/conformance.py <corpus> --recursive --exiftool-dir <src>
 ```
 
 | file                    | role                                          |

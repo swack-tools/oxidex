@@ -1,8 +1,12 @@
 # conformance.py — measuring the ExifTool gap by *kind*, not just size
 
 ```sh
-python3 tools/exiftool-tables/conformance.py <corpus> --exiftool-dir <exiftool-src>
+python3 tools/exiftool-tables/conformance.py <corpus> --recursive --exiftool-dir <exiftool-src>
 ```
+
+Use `--recursive` for a corpus root. It is harmless for a flat directory, and
+without it the command scores only files directly below `<corpus>`; the shared
+`combined-samples` corpus is organized into manufacturer subdirectories.
 
 `--exiftool-dir` is an unpacked ExifTool source tree. No installation is needed:
 `perl -Ilib ./exiftool` runs straight from the tarball, and ExifTool ships ~190
