@@ -26,7 +26,8 @@
 
 use crate::core::{FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
-use crate::parsers::xmp::{parse_xmp, parse_xmp_history};
+use crate::parsers::xmp::parse_xmp_history;
+use crate::parsers::xmp::rdf_parser::{XmpValue, parse_xmp_typed};
 
 /// Searches for and extracts XMP metadata packets from a PDF file.
 ///
@@ -63,8 +64,9 @@ pub fn extract_xmp_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     // Search for XMP packet markers
     match find_xmp_packet(search_data) {
         Some(xmp_xml) => {
-            // Parse XMP using existing XMP parser
-            let xmp_tags = parse_xmp(xmp_xml)
+            // Preserve RDF bags and sequences as lists. Joining them here
+            // loses the structured representation expected by MetadataMap.
+            let xmp_tags = parse_xmp_typed(xmp_xml)
                 .map_err(|e| ExifToolError::parse_error(format!("XMP parsing failed: {}", e)))?;
 
             // Parse XMP history for forensic metadata
@@ -75,8 +77,17 @@ pub fn extract_xmp_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
             let total_tags = xmp_tags.len() + history_tags.len();
             let mut metadata = MetadataMap::with_capacity(total_tags);
 
-            for (key, value) in xmp_tags {
-                metadata.insert(key, crate::core::TagValue::new_string(value));
+            for (key, typed) in xmp_tags {
+                let value = match typed {
+                    XmpValue::List(values) => crate::core::TagValue::Array(
+                        values
+                            .into_iter()
+                            .map(crate::core::TagValue::new_string)
+                            .collect(),
+                    ),
+                    XmpValue::Scalar(value) => crate::core::TagValue::new_string(value),
+                };
+                metadata.insert(key, value);
             }
 
             for (key, value) in history_tags {
