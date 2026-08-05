@@ -1134,6 +1134,8 @@ const PROCESSING_INFO_PICTURE_STYLE: usize = 10;
 const PROCESSING_INFO_DIGITAL_GAIN: usize = 11;
 const PROCESSING_INFO_WB_SHIFT_AB: usize = 12;
 const PROCESSING_INFO_WB_SHIFT_GM: usize = 13;
+const PROCESSING_INFO_UNSHARP_MASK_FINENESS: usize = 14;
+const PROCESSING_INFO_UNSHARP_MASK_THRESHOLD: usize = 15;
 
 // MeasuredColor array indices (tag 0x00AA)
 //
@@ -5929,6 +5931,23 @@ fn parse_canon_makernote_impl_located(
                             "Canon:DigitalGain".to_string(),
                             format_perl_number(digital_gain as f64 / 10.0),
                         );
+                    }
+
+                    // UnsharpMaskFineness (key 14) / UnsharpMaskThreshold (key 15).
+                    // Canon.pm:7264-7265 -- plain scalars, no ValueConv/PrintConv.
+                    for (index, name) in [
+                        (
+                            PROCESSING_INFO_UNSHARP_MASK_FINENESS,
+                            "Canon:UnsharpMaskFineness",
+                        ),
+                        (
+                            PROCESSING_INFO_UNSHARP_MASK_THRESHOLD,
+                            "Canon:UnsharpMaskThreshold",
+                        ),
+                    ] {
+                        if let Some(&value) = array.get(index) {
+                            tags.insert(name.to_string(), value.to_string());
+                        }
                     }
                 }
             }
