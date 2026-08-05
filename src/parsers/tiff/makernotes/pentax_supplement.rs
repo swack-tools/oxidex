@@ -27,6 +27,76 @@ fn print_metering_segments(val: &OlyVal) -> Option<String> {
     )
 }
 
+/// `Image::ExifTool::Pentax::PentaxEv` (Pentax.pm:6822-6835): Pentax's
+/// hex-based EV encoding, modulo 8. Odd raw values land on a 1/3-stop
+/// boundary that a plain `/8` misrepresents, so the two special-cased
+/// fractions (`3/8` and `5/8` of a stop) get nudged to the nearest 1/3 stop
+/// before the final division.
+fn pentax_ev(val: i64) -> f64 {
+    let mut v = val as f64;
+    if val & 1 != 0 {
+        let sign: i64 = if val < 0 { -1 } else { 1 };
+        let frac = (val * sign) & 0x07;
+        if frac == 3 {
+            v += sign as f64 * (8.0 / 3.0 - frac as f64);
+        } else if frac == 5 {
+            v += sign as f64 * (16.0 / 3.0 - frac as f64);
+        }
+    }
+    v / 8.0
+}
+
+/// `ISOAutoMinSpeed` (Pentax.pm:2547-2561): `Count => 2`. Index 0 is a mode
+/// byte with its own `PrintConv` hash; index 1's `ValueConv` is `$val ? exp(
+/// -PentaxEv($val-68)*log(2)) : 0` -- `exp(x*ln2)` is `2**x`, so this is
+/// `2**-PentaxEv($val-68)`, or the literal digit `0` when the raw byte is 0.
+/// Only the `0` branch has a real sample to check byte-for-byte (every
+/// corpus file with this tag carries index 1 == 0); the nonzero branch is a
+/// direct port of the formula above with no sample to confirm ExifTool's
+/// default number formatting against.
+fn print_iso_auto_min_speed(val: &OlyVal) -> Option<String> {
+    let v = val.ints()?;
+    let mode = match v.first()? {
+        1 => "Shutter Speed Control".to_string(),
+        2 => "Auto Slow".to_string(),
+        3 => "Auto Standard".to_string(),
+        4 => "Auto Fast".to_string(),
+        other => format!("Unknown ({})", other),
+    };
+    let Some(&raw1) = v.get(1) else {
+        return Some(mode);
+    };
+    let speed = if raw1 == 0 {
+        "0".to_string()
+    } else {
+        2f64.powf(-pentax_ev(raw1 - 68)).to_string()
+    };
+    Some(format!("{}; {}", mode, speed))
+}
+
+/// `BlurControl` (Pentax.pm:2618-2633): `Count => 4`, `PrintConv` names only
+/// index 0; indices 1-3 are `undef` (no conversion, passed through as their
+/// raw number).
+fn print_blur_control(val: &OlyVal) -> Option<String> {
+    let v = val.ints()?;
+    if v.is_empty() {
+        return None;
+    }
+    let parts: Vec<String> = v
+        .iter()
+        .enumerate()
+        .map(|(i, &n)| match (i, n) {
+            (0, 0) => "Off".to_string(),
+            (0, 1) => "Low".to_string(),
+            (0, 2) => "Medium".to_string(),
+            (0, 3) => "High".to_string(),
+            (0, other) => format!("Unknown ({})", other),
+            (_, other) => other.to_string(),
+        })
+        .collect();
+    Some(parts.join("; "))
+}
+
 /// `ColorMatrixA`/`ColorMatrixB`: `$_/8192` then `sprintf("%.5f")`.
 fn print_color_matrix_scaled(val: &OlyVal) -> Option<String> {
     let v = val.ints()?;
@@ -101,9 +171,9 @@ static BLEACH_BYPASS_TONING: &[(i64, &str)] = &[
 static SUPPLEMENT: &[TagDef] = &[
     TagDef::list_lookup(0x0009, "PentaxImageSize", PENTAX_IMAGE_SIZE),
     TagDef::list_lookup(0x0032, "ImageEditing", IMAGE_EDITING),
-    TagDef::raw(0x007A, "ISOAutoMinSpeed"),
+    TagDef::func(0x007A, "ISOAutoMinSpeed", print_iso_auto_min_speed),
     TagDef::lookup(0x007F, "BleachBypassToning", BLEACH_BYPASS_TONING),
-    TagDef::raw(0x0082, "BlurControl"),
+    TagDef::func(0x0082, "BlurControl", print_blur_control),
     TagDef::raw(0x0200, "BlackPoint"),
     TagDef::raw(0x0201, "WhitePoint"),
     TagDef::func(0x0203, "ColorMatrixA", print_color_matrix_scaled),
