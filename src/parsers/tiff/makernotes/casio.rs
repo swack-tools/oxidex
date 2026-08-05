@@ -354,6 +354,11 @@ const CASIO_TYPE2_PREVIEW_IMAGE_SIZE: u16 = 0x0002;
 const CASIO_TYPE2_FIRMWARE_DATE: u16 = 0x2001;
 const CASIO_TYPE2_FLASH_DISTANCE: u16 = 0x2034;
 const CASIO_TYPE2_HOMETOWN_CITY: u16 = 0x3006;
+/// Casio.pm:1619-1629 (Type2::0x3016) -- a *different* `Enhancement` tag
+/// from Main::0x0016 (Casio.pm:202-211): same name, disjoint PrintConv, only
+/// one of which a given payload can ever carry (Type1 XOR Type2). This is
+/// the one `Casio2.jpg` (a Type2 payload) actually exercises.
+const CASIO_TYPE2_ENHANCEMENT: u16 = 0x3016;
 
 /// Unpacks the two `int16u` values `PreviewImageSize` (`Casio.pm:280-286`)
 /// packs into one 4-byte inline entry, in the entry's own byte order.
@@ -443,6 +448,21 @@ pub fn parse_casio_type2_extra_tags(
         && let Some(value) = extract_u16_value(&entry, &[], byte_order)
     {
         metadata.insert("Casio:FlashDistance", TagValue::new_string(value.to_string()));
+    }
+
+    if let Some(entry) =
+        find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_ENHANCEMENT)
+        && let Some(value) = extract_u16_value(&entry, &[], byte_order)
+    {
+        let text = match value {
+            0 => "Off".to_string(),
+            1 => "Scenery".to_string(),
+            3 => "Green".to_string(),
+            5 => "Underwater".to_string(),
+            9 => "Flesh Tones".to_string(),
+            other => format!("Unknown ({other})"),
+        };
+        metadata.insert("Casio:Enhancement", TagValue::new_string(text));
     }
 
     if let Some(entry) =
