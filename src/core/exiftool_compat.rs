@@ -1032,6 +1032,32 @@ fn format_special_float_values(value: f64) -> Option<String> {
     None
 }
 
+/// Perl's default number-to-string stringification for a floating-point
+/// value (an NV): the C library's `%.15g` -- 15 significant digits, fixed
+/// notation for the magnitudes this module deals with (focal lengths and
+/// f-numbers never approach `%g`'s scientific-notation cutoffs), with
+/// trailing fractional zeros (and a bare trailing '.') trimmed.
+///
+/// `ConvertRational` (XMP.pm:3400-3412) computes `$1/$2` as a plain Perl
+/// division with no `sprintf` in the pipeline before `PrintLensInfo`
+/// concatenates it into the display string, so whatever Perl's own NV
+/// stringification produces *is* the printed value -- e.g. `807365/524263`
+/// (a real Pixel `aux:LensInfo` numerator/denominator pair) becomes
+/// `1.53999996185121`, not a value rounded to one or two decimals.
+fn format_perl_number(v: f64) -> String {
+    if v == 0.0 {
+        return "0".to_string();
+    }
+    let magnitude = v.abs().log10().floor() as i32;
+    let decimals = (14 - magnitude).clamp(0, 17) as usize;
+    let s = format!("{v:.decimals$}");
+    if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        s
+    }
+}
+
 /// Formats XMP LensInfo from rational string to human-readable format.
 ///
 /// XMP stores LensInfo as space-separated rationals like "4500/100 10000/100 400/100 400/100"
@@ -1057,19 +1083,20 @@ fn format_xmp_lens_info(value: &str) -> Option<String> {
         return None;
     }
 
-    // Parse each rational (numerator/denominator)
-    // Returns Some(value) for valid rationals, None for 0/0 (unknown)
+    // XMP.pm:3400-3412 `ConvertRational`: `$1/$2` for a nonzero denominator,
+    // `'inf'` for N/0, `'undef'` for 0/0. `Exif.pm:5800-5818` `PrintLensInfo`
+    // then maps both `inf` and `undef` to `'?'`.
+    //
+    // Returns `Some(quotient)` for a valid division, or `None` for the two
+    // sentinel cases (0/0 "undef" and N/0 "inf") -- both print as `?`, so
+    // this function doesn't need to tell them apart.
     let parse_rational = |s: &str| -> Option<f64> {
         let r: Vec<&str> = s.split('/').collect();
         if r.len() == 2 {
             let num: f64 = r[0].parse().ok()?;
             let den: f64 = r[1].parse().ok()?;
-            if den > 0.0 {
+            if den != 0.0 {
                 return Some(num / den);
-            }
-            // 0/0 means unknown/unspecified
-            if num == 0.0 && den == 0.0 {
-                return None;
             }
         }
         None
@@ -1077,45 +1104,38 @@ fn format_xmp_lens_info(value: &str) -> Option<String> {
 
     let min_focal = parse_rational(parts[0])?;
     let max_focal = parse_rational(parts[1])?;
-    // Apertures can be 0/0 (unknown)
+    // Apertures can be 0/0 (unknown) or N/0 (inf); both print as "?".
     let f_at_min = parse_rational(parts[2]);
     let f_at_max = parse_rational(parts[3]);
 
-    // Format focal length (integer if whole number, else one decimal)
-    let format_focal = |f: f64| -> String {
-        if (f.fract()).abs() < 0.01 {
-            format!("{:.0}", f)
-        } else {
-            format!("{:.1}", f)
-        }
-    };
+    // `Exif.pm:5800-5818` `PrintLensInfo` does no rounding at all: it prints
+    // whatever `ConvertRational`'s `$1/$2` division produced, which is Perl's
+    // default number-to-string stringification (%.15g -- e.g. a Pixel's
+    // `807365/524263` prints as `1.53999996185121`, not a rounded `1.5`).
+    let focal_min_s = format_perl_number(min_focal);
+    let focal_max_s = format_perl_number(max_focal);
 
-    // Format f-number
-    let format_f = |f: f64| -> String {
-        if (f.fract()).abs() < 0.01 {
-            format!("{:.0}", f)
-        } else {
-            format!("{:.1}", f)
-        }
-    };
-
-    // Build result
-    let focal_str = if (min_focal - max_focal).abs() < 0.1 {
-        // Prime lens
-        format_focal(min_focal)
+    // Build result. `$val .= "-$vals[1]" if $vals[1] and $vals[1] ne $vals[0]`:
+    // Perl's `$vals[1]` truth test is false for the strings "0" and "" (the
+    // comment above the Perl source notes the Pentax Q writes zero for the
+    // upper bound of a fixed-focal-length lens), and `ne` is a *string*
+    // comparison against the already-stringified value, not a numeric one.
+    let focal_str = if focal_max_s == "0" || focal_max_s == focal_min_s {
+        focal_min_s
     } else {
-        // Zoom lens
-        format!("{}-{}", format_focal(min_focal), format_focal(max_focal))
+        format!("{focal_min_s}-{focal_max_s}")
     };
 
-    // Handle unknown apertures (0/0 -> "?")
+    // Handle unknown apertures (0/0 "undef" or N/0 "inf" -> "?")
     let f_str = match (f_at_min, f_at_max) {
         (None, _) | (_, None) => "?".to_string(),
         (Some(f_min), Some(f_max)) => {
-            if (f_min - f_max).abs() < 0.01 {
-                format_f(f_min)
+            let f_min_s = format_perl_number(f_min);
+            let f_max_s = format_perl_number(f_max);
+            if f_max_s == "0" || f_max_s == f_min_s {
+                f_min_s
             } else {
-                format!("{}-{}", format_f(f_min), format_f(f_max))
+                format!("{f_min_s}-{f_max_s}")
             }
         }
     };
