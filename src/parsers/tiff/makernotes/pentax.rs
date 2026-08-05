@@ -1572,11 +1572,15 @@ impl PentaxParser {
                         (entry.value_offset as i32).to_string(),
                     );
                 }
+                // Pentax.pm:2419-2426: `int8u`, `PrintConv => {0=>'Off',1=>'On'}`.
                 PENTAX_CONTRAST_HIGHLIGHT_SHADOW_ADJ => {
-                    tags.insert(
-                        "Pentax:ContrastHighlightShadowAdj".to_string(),
-                        (entry.value_offset as i32).to_string(),
-                    );
+                    let value = extract_value_as_i32(&entry, byte_order);
+                    let name = match value {
+                        0 => "Off".to_string(),
+                        1 => "On".to_string(),
+                        other => format!("Unknown ({})", other),
+                    };
+                    tags.insert("Pentax:ContrastHighlightShadowAdj".to_string(), name);
                 }
 
                 // Advanced Features
