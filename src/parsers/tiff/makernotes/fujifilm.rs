@@ -33,6 +33,7 @@ use super::shared::array_extractors::{
 };
 use super::shared::binary_subdir::{BinaryTable, decode_binary_subdir};
 use crate::const_decoder;
+use crate::core::formatters::numeric_precision::perl_number;
 use crate::core::value_formatter::format_rational_as_decimal;
 use settings_tables::{
     FUJIFILM_AFCSETTINGS, FUJIFILM_DRIVESETTINGS, FUJIFILM_FOCUSSETTINGS, FUJIFILM_PRIORITYSETTINGS,
@@ -110,7 +111,16 @@ const FUJI_FRAME_NUMBER: u16 = 0x8003;
 const FUJI_PARALLAX: u16 = 0xB211;
 
 // Advanced Features
-const FUJI_IMAGE_GENERATION: u16 = 0x1047;
+//
+// FujiFilm.pm:828 (`0x1436 => { Name => 'ImageGeneration', ...}`) -- this was
+// previously 0x1047, which is GrainEffectRoughness's real tag ID (see the note
+// on FUJI_GRAIN_EFFECT_ROUGHNESS below); the swap meant ImageGeneration was
+// never matched in the parse loop at all (0x1047's real bytes were read only
+// under GrainEffectRoughness's wrong ID, 0x1046), and GrainEffectRoughness's
+// real bytes at 0x1047 were never read under any name. Verified against
+// combined-samples/FujiFilm/FujiFilmGFX100II.jpg: exiftool -G1 -s -a reports
+// `[FujiFilm] ImageGeneration : Re-developed from RAW`.
+const FUJI_IMAGE_GENERATION: u16 = 0x1436;
 const FUJI_RATING: u16 = 0x1431;
 const FUJI_IMAGE_COUNT: u16 = 0x1438;
 const FUJI_DRIVE_MODE: u16 = 0x1039;
@@ -124,11 +134,26 @@ const FUJI_HIGH_ISO_NOISE_REDUCTION: u16 = 0x100E;
 const FUJI_AF_MODE: u16 = 0x1022;
 const FUJI_EXR_MODE_SETTING: u16 = 0x1034; // Note: maps to 0x1034 (EXR_MODE is 0x1034 in original)
 const FUJI_LENS_MODULATION_OPTIMIZER: u16 = 0x1045;
-const FUJI_GRAIN_EFFECT_ROUGHNESS: u16 = 0x1046; // Note: different from IMAGE_GENERATION at 0x1047
+// FujiFilm.pm:492 (`0x1047 => { Name => 'GrainEffectRoughness', ...}`) -- was
+// 0x1046 (an ID FujiFilm.pm has no entry for at all), which read one byte
+// short of the real field and produced garbage (verified: oxidex printed
+// "Unknown (1)" against GFX100II.jpg where exiftool reports "Off"). See the
+// FUJI_IMAGE_GENERATION note above for the other half of this swap.
+const FUJI_GRAIN_EFFECT_ROUGHNESS: u16 = 0x1047;
 const FUJI_COLOR_CHROME_EFFECT: u16 = 0x1048;
 const FUJI_BW_ADJUSTMENT: u16 = 0x1049;
+/// FujiFilm.pm:524-532 (`0x104c => { Name => "GrainEffectSize", ...}`, its own
+/// distinct `PrintConv` -- 0/16/32, not GrainEffectRoughness's 0/32/64).
+const FUJI_GRAIN_EFFECT_SIZE: u16 = 0x104C;
 const FUJI_CROP_MODE: u16 = 0x104D;
 const FUJI_COLOR_CHROME_FX_BLUE: u16 = 0x104E;
+/// FujiFilm.pm:871-872, :876-878. Found on newer bodies (GFX100 II, X-M5,
+/// X-E5, ...); absent from older MakerNotes entirely.
+const FUJI_FUJI_MODEL: u16 = 0x1447;
+const FUJI_FUJI_MODEL2: u16 = 0x1448;
+const FUJI_WB_RED: u16 = 0x144A;
+const FUJI_WB_GREEN: u16 = 0x144B;
+const FUJI_WB_BLUE: u16 = 0x144C;
 
 // Packed settings words, each a `SubDirectory` over a ProcessBinaryData table
 // in `%FujiFilm::Main` -- see `fujifilm_binary_subdir`.
@@ -544,6 +569,24 @@ const_decoder!(pub
     ]
 );
 
+// Decodes GrainEffectSize (tag 0x104c). FujiFilm.pm:527-531 -- a different
+// value set from DECODE_EFFECT_STRENGTH above.
+const_decoder!(pub
+    DECODE_GRAIN_EFFECT_SIZE, i32, [
+        (0, "Off"),
+        (16, "Small"),
+        (32, "Large"),
+    ]
+);
+
+// Decodes ImageGeneration (tag 0x1436). FujiFilm.pm:824-831.
+const_decoder!(pub
+    DECODE_IMAGE_GENERATION, i32, [
+        (0, "Original Image"),
+        (1, "Re-developed from RAW"),
+    ]
+);
+
 // Decodes crop mode
 const_decoder!(pub
     DECODE_CROP_MODE, i32, [
@@ -928,11 +971,17 @@ impl MakerNoteParser for FujifilmParser {
                     );
                 }
 
+                // ShadowTone/HighlightTone (tags 0x1040/0x1041):
+                // FujiFilm.pm:439-480 -- a hash PrintConv with named
+                // breakpoints at every multiple of 16 cameras actually write,
+                // plus an `OTHER` fallback (`-$val/16`) for anything else.
+                // This printed the bare signed raw value (e.g. "+0") instead
+                // of ExifTool's named strings (e.g. "0 (normal)") -- verified
+                // wrong against FujiFilmGFX100II.jpg.
                 FUJI_SHADOW_TONE | FUJI_HIGHLIGHT_TONE => {
                     let value = entry.value_offset as i32;
                     let tag_name = fujifilm_tag_to_name(entry.tag_id);
-                    // Shadow/Highlight tone: -64 to +64 (0 = standard)
-                    tags.insert(tag_name, format!("{:+}", value));
+                    tags.insert(tag_name, decode_fuji_tone(value));
                 }
 
                 FUJI_COLOR_TEMPERATURE => {
@@ -951,10 +1000,23 @@ impl MakerNoteParser for FujifilmParser {
                 }
 
                 // Boolean/On-Off tags
-                FUJI_MACRO | FUJI_SLOW_SYNC | FUJI_AUTO_DYNAMIC_RANGE => {
+                FUJI_MACRO | FUJI_SLOW_SYNC => {
                     let value = entry.value_offset as i32;
                     let tag_name = fujifilm_tag_to_name(entry.tag_id);
                     tags.insert(tag_name, DECODE_OFF_ON.decode(value).to_string());
+                }
+
+                // AutoDynamicRange (tag 0x140b): FujiFilm.pm:785-790 --
+                // `PrintConv => '"$val%"'`, not an Off/On enum (it was
+                // previously grouped with FUJI_MACRO/FUJI_SLOW_SYNC above and
+                // decoded through DECODE_OFF_ON, which is a different tag's
+                // conversion entirely -- verified wrong against
+                // FujiFilmFinePixF300EXR.jpg, where exiftool prints
+                // `AutoDynamicRange : 200%` and oxidex printed `Unknown
+                // (200)`).
+                FUJI_AUTO_DYNAMIC_RANGE => {
+                    let value = entry.value_offset as i32;
+                    tags.insert("FujiFilm:AutoDynamicRange".to_string(), format!("{value}%"));
                 }
 
                 FUJI_EXR_AUTO => {
@@ -1061,25 +1123,47 @@ impl MakerNoteParser for FujifilmParser {
                 }
 
                 // Focus pixel coordinates (array)
+                // FocusPixel (tag 0x1023): FujiFilm.pm:353-357 -- `Count =>
+                // 2`, no PrintConv, so ExifTool's default array rendering is
+                // the two numbers space-joined ("2597 1159"). 2 * int16u is
+                // exactly 4 bytes, so this is always inline in the entry's
+                // own `value_offset` field, never out-of-line --
+                // `extract_u16_array` (== `extract_array::<u16>`)
+                // unconditionally treats `value_offset` as an offset *into*
+                // `data`, which is wrong for an inline value and silently
+                // drops the tag (verified: absent from oxidex's output for
+                // FujiFilmA100.jpg, where exiftool prints `FocusPixel : 1824
+                // 1368`). Read the two halves directly instead, the same way
+                // Casio's `extract_u16_value` does for its own inline pairs.
                 FUJI_FOCUS_PIXEL => {
-                    if let Some(array) = extract_u16_array(&entry, data, fuji_byte_order)
-                        && array.len() >= 2
-                    {
-                        tags.insert(
-                            "FujiFilm:FocusPixel".to_string(),
-                            format!("X:{} Y:{}", array[0], array[1]),
-                        );
+                    let bytes = match fuji_byte_order {
+                        ByteOrder::LittleEndian => entry.value_offset.to_le_bytes(),
+                        ByteOrder::BigEndian => entry.value_offset.to_be_bytes(),
+                    };
+                    let reader = EndianReader::new(&bytes, fuji_byte_order.to_io_byte_order());
+                    if let (Some(x), Some(y)) = (reader.u16_at(0), reader.u16_at(2)) {
+                        tags.insert("FujiFilm:FocusPixel".to_string(), format!("{x} {y}"));
                     }
                 }
 
-                // Face positions (array) - complex structure, basic extraction
+                // FacePositions (tag 0x4103): FujiFilm.pm:941-953 -- `Count
+                // => -1`, no PrintConv. ExifTool's default array rendering is
+                // every left/top/right/bottom coordinate (across however many
+                // faces) space-joined, e.g. "643 482 1393 1232" for one face.
+                // Verified against combined-samples/FujiFilm's samples with
+                // face detection active.
                 FUJI_FACE_POSITIONS => {
                     if let Some(array) = extract_u16_array(&entry, data, fuji_byte_order)
                         && !array.is_empty()
                     {
+                        let joined = array
+                            .iter()
+                            .map(u16::to_string)
+                            .collect::<Vec<_>>()
+                            .join(" ");
                         tags.insert(
                             "FujiFilm:FacePositions".to_string(),
-                            format!("{} coordinates", array.len() / 4),
+                            joined,
                         );
                     }
                 }
@@ -1144,6 +1228,65 @@ impl MakerNoteParser for FujifilmParser {
                     tags.insert(
                         "FujiFilm:GrainEffectRoughness".to_string(),
                         DECODE_EFFECT_STRENGTH.decode(value).to_string(),
+                    );
+                }
+
+                // Grain Effect Size (tag 0x104c): FujiFilm.pm:524-532.
+                FUJI_GRAIN_EFFECT_SIZE => {
+                    let value = entry.value_offset as i32;
+                    tags.insert(
+                        "FujiFilm:GrainEffectSize".to_string(),
+                        DECODE_GRAIN_EFFECT_SIZE.decode(value).to_string(),
+                    );
+                }
+
+                // Image Generation (tag 0x1436): FujiFilm.pm:824-831.
+                FUJI_IMAGE_GENERATION => {
+                    let value = entry.value_offset as i32;
+                    tags.insert(
+                        "FujiFilm:ImageGeneration".to_string(),
+                        DECODE_IMAGE_GENERATION.decode(value).to_string(),
+                    );
+                }
+
+                // FujiModel/FujiModel2 (tags 0x1447/0x1448): FujiFilm.pm:871-872
+                // -- plain strings, no PrintConv. ExifTool's ReadValue only
+                // truncates a `string[n]` at the first NUL (never trims
+                // whitespace), so this uses the raw extractor the same way
+                // FUJI_QUALITY does above.
+                FUJI_FUJI_MODEL | FUJI_FUJI_MODEL2 => {
+                    if let Some(value) = extract_string_value_raw(&entry, data) {
+                        let tag_name = fujifilm_tag_to_name(entry.tag_id);
+                        tags.insert(tag_name, value);
+                    }
+                }
+
+                // WBRed/WBGreen/WBBlue (tags 0x144a/0x144b/0x144c):
+                // FujiFilm.pm:876-878 -- plain int16u, no PrintConv.
+                FUJI_WB_RED | FUJI_WB_GREEN | FUJI_WB_BLUE => {
+                    let value = entry.value_offset as i32;
+                    let tag_name = fujifilm_tag_to_name(entry.tag_id);
+                    tags.insert(tag_name, value.to_string());
+                }
+
+                // FileSource (tag 0x8000): FujiFilm.pm:1003-1006 -- a plain
+                // string (e.g. "135_C", "APS_H"), unrelated to the
+                // standard-EXIF FileSource byte tag ExifTool prints under
+                // group ExifIFD. Verified against
+                // combined-samples/FujiFilm/FujiFilmSP-2000.jpg: exiftool
+                // -G1 -s -a reports `[FujiFilm] FileSource : 135_C`.
+                FUJI_FILE_SOURCE => {
+                    if let Some(value) = extract_string_value_raw(&entry, data) {
+                        tags.insert("FujiFilm:FileSource".to_string(), value);
+                    }
+                }
+
+                // OrderNumber (tag 0x8002): FujiFilm.pm:1007-1010 -- plain
+                // int32u, no PrintConv.
+                FUJI_ORDER_NUMBER => {
+                    tags.insert(
+                        "FujiFilm:OrderNumber".to_string(),
+                        entry.value_offset.to_string(),
                     );
                 }
 
@@ -1322,13 +1465,24 @@ impl MakerNoteParser for FujifilmParser {
                     tags.insert("FujiFilm:FrameHeight".to_string(), format!("{} px", value));
                 }
 
-                // Face element tags
+                // FaceElementSelected (tag 0x4005): FujiFilm.pm:931-935 --
+                // `Count => 4`, int16u, no PrintConv. 4 * 2 = 8 bytes, always
+                // out-of-line (never fits the entry's own 4-byte field), so
+                // `extract_u16_array`'s offset-only read is correct here
+                // (unlike FocusPixel above, which is inline). Verified
+                // against FujiFilmA220A230.jpg: exiftool prints
+                // "1633 1125 2516 2012".
                 FUJI_FACE_ELEMENT_SELECTED => {
-                    let value = entry.value_offset;
-                    tags.insert(
-                        "FujiFilm:FaceElementSelected".to_string(),
-                        value.to_string(),
-                    );
+                    if let Some(array) = extract_u16_array(&entry, data, fuji_byte_order)
+                        && !array.is_empty()
+                    {
+                        let joined = array
+                            .iter()
+                            .map(u16::to_string)
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        tags.insert("FujiFilm:FaceElementSelected".to_string(), joined);
+                    }
                 }
 
                 FUJI_NUM_FACE_ELEMENTS => {
@@ -1336,23 +1490,44 @@ impl MakerNoteParser for FujifilmParser {
                     tags.insert("FujiFilm:NumFaceElements".to_string(), value.to_string());
                 }
 
+                // FaceElementTypes (tag 0x4201): FujiFilm.pm:954-981 --
+                // `Writable => 'int8u'`, but this is a genuine per-entry TIFF
+                // IFD (not a ProcessBinaryData record), so what actually gets
+                // read is whatever type+count the file's own IFD entry
+                // declares -- verified on FujiFilmFinePixZ900EXR.jpg, whose
+                // entry is `int16u[1]` (field_type SHORT), not `int8u`.
+                // `extract_uint_array` below reads either width; each value
+                // (regardless of width) is looked up in the same PrintConv
+                // map, joined by ", " ('REPEAT' PrintConv over an array).
                 FUJI_FACE_ELEMENT_TYPES => {
-                    if let Some(array) = extract_u16_array(&entry, data, fuji_byte_order)
-                        && !array.is_empty()
+                    let width = match entry.field_type {
+                        1 => Some(1usize), // BYTE
+                        3 => Some(2usize), // SHORT
+                        _ => None,
+                    };
+                    if let Some(width) = width
+                        && let Some(values) = extract_uint_array(&entry, data, fuji_byte_order, width)
+                        && !values.is_empty()
                     {
-                        let types: Vec<String> = array.iter().map(|v| v.to_string()).collect();
+                        let types: Vec<String> =
+                            values.iter().map(|&v| decode_face_element_type(v)).collect();
                         tags.insert("FujiFilm:FaceElementTypes".to_string(), types.join(", "));
                     }
                 }
 
+                // FaceElementPositions (tag 0x4203): FujiFilm.pm:988-994 --
+                // same shape as FacePositions above (`Count => -1`, no
+                // PrintConv, space-joined coordinates).
                 FUJI_FACE_ELEMENT_POSITIONS => {
                     if let Some(array) = extract_u16_array(&entry, data, fuji_byte_order)
                         && !array.is_empty()
                     {
-                        tags.insert(
-                            "FujiFilm:FaceElementPositions".to_string(),
-                            format!("{} coordinates", array.len() / 4),
-                        );
+                        let joined = array
+                            .iter()
+                            .map(u16::to_string)
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        tags.insert("FujiFilm:FaceElementPositions".to_string(), joined);
                     }
                 }
 
@@ -1411,6 +1586,11 @@ fn fujifilm_tag_to_name(tag_id: u16) -> String {
         FUJI_IMAGE_COUNT => "ImageCount",
         FUJI_DRIVE_MODE => "DriveMode",
         FUJI_RATING => "Rating",
+        FUJI_FUJI_MODEL => "FujiModel",
+        FUJI_FUJI_MODEL2 => "FujiModel2",
+        FUJI_WB_RED => "WBRed",
+        FUJI_WB_GREEN => "WBGreen",
+        FUJI_WB_BLUE => "WBBlue",
         _ => return format!("FujiFilm:Unknown-{:#06X}", tag_id),
     };
 
@@ -1530,6 +1710,98 @@ fn extract_string_value_raw(entry: &IfdEntry, full_data: &[u8]) -> Option<String
     }
 
     None
+}
+
+/// Reads `count` (`entry.value_count`) unsigned integers of `width` bytes (1
+/// or 2) from an IFD entry, handling both the inline case (the whole array
+/// fits in the entry's own 4-byte `value_offset` field) and the out-of-line
+/// case, widened to `u32`.
+///
+/// The generic `extract_array`/`extract_u16_array` this file otherwise uses
+/// only handles the out-of-line case -- correct for an array that is always
+/// larger than 4 bytes (`FacePositions`, `Count => -1`), wrong for one that
+/// can be small enough to be inline (`FaceElementTypes` at `Count => 1`,
+/// verified against `FujiFilmFinePixZ900EXR.jpg`).
+fn extract_uint_array(
+    entry: &IfdEntry,
+    data: &[u8],
+    byte_order: ByteOrder,
+    width: usize,
+) -> Option<Vec<u32>> {
+    let count = entry.value_count as usize;
+    if count == 0 || width == 0 {
+        return None;
+    }
+    let total = count.checked_mul(width)?;
+    let src: std::borrow::Cow<'_, [u8]> = if total <= 4 {
+        let bytes = match byte_order {
+            ByteOrder::LittleEndian => entry.value_offset.to_le_bytes(),
+            ByteOrder::BigEndian => entry.value_offset.to_be_bytes(),
+        };
+        std::borrow::Cow::Owned(bytes[..total].to_vec())
+    } else {
+        let offset = entry.value_offset as usize;
+        std::borrow::Cow::Borrowed(data.get(offset..offset.checked_add(total)?)?)
+    };
+    let reader = EndianReader::new(&src, byte_order.to_io_byte_order());
+    (0..count)
+        .map(|i| match width {
+            1 => src.get(i).map(|&b| u32::from(b)),
+            2 => reader.u16_at(i * 2).map(u32::from),
+            _ => None,
+        })
+        .collect()
+}
+
+/// FujiFilm.pm:439-480 (`ShadowTone`/`HighlightTone`'s shared `PrintConv`
+/// shape -- two separate hashes with identical keys/values). The named
+/// breakpoints take priority; `OTHER` (`-$val/16`) covers anything else a
+/// camera might write outside them.
+fn decode_fuji_tone(value: i32) -> String {
+    match value {
+        -64 => "+4 (hardest)".to_string(),
+        -48 => "+3 (very hard)".to_string(),
+        -32 => "+2 (hard)".to_string(),
+        -16 => "+1 (medium hard)".to_string(),
+        0 => "0 (normal)".to_string(),
+        16 => "-1 (medium soft)".to_string(),
+        32 => "-2 (soft)".to_string(),
+        other => perl_number(f64::from(-other) / 16.0),
+    }
+}
+
+/// FujiFilm.pm:954-981 (`FaceElementTypes`'s `PrintConv`, `'REPEAT'`'d over
+/// the array). An unlisted value prints ExifTool's default `Unknown (n)`
+/// (`ExifTool.pm:3633`), the same fallback `exiftool_tables::PrintConv`
+/// documents.
+fn decode_face_element_type(value: u32) -> String {
+    match value {
+        1 => "Face".to_string(),
+        2 => "Left Eye".to_string(),
+        3 => "Right Eye".to_string(),
+        7 => "Body".to_string(),
+        8 => "Head".to_string(),
+        9 => "Both Eyes".to_string(),
+        11 => "Bike".to_string(),
+        12 => "Body of Car".to_string(),
+        13 => "Front of Car".to_string(),
+        14 => "Animal Body".to_string(),
+        15 => "Animal Head".to_string(),
+        16 => "Animal Face".to_string(),
+        17 => "Animal Left Eye".to_string(),
+        18 => "Animal Right Eye".to_string(),
+        19 => "Bird Body".to_string(),
+        20 => "Bird Head".to_string(),
+        21 => "Bird Left Eye".to_string(),
+        22 => "Bird Right Eye".to_string(),
+        23 => "Aircraft Body".to_string(),
+        25 => "Aircraft Cockpit".to_string(),
+        26 => "Train Front".to_string(),
+        27 => "Train Cockpit".to_string(),
+        28 => "Animal Head (28)".to_string(),
+        29 => "Animal Body (29)".to_string(),
+        other => format!("Unknown ({other})"),
+    }
 }
 
 /// Decodes Fujifilm's InternalSerialNumber (tag 0x0010) using the same
