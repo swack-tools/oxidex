@@ -178,6 +178,7 @@ const PENTAX_FACE_POS: u16 = 0x0227; // Pentax.pm:3010
 const PENTAX_FACE_SIZE: u16 = 0x0228; // Pentax.pm:3015
 const PENTAX_LEVEL_INFO: u16 = 0x022B; // Pentax.pm:3044
 const PENTAX_WB_LEVELS: u16 = 0x022D; // Pentax.pm:3048
+const PENTAX_CAF_POINT_INFO: u16 = 0x0238; // Pentax.pm:3096-3099
 const PENTAX_LENS_INFO_Q: u16 = 0x0239; // Pentax.pm:3095
 const PENTAX_WHITE_LEVEL: u16 = 0x007E;
 const PENTAX_LENS_INFO: u16 = 0x007F;
@@ -1496,6 +1497,23 @@ impl PentaxParser {
                 }
                 PENTAX_AWB_INFO => {
                     tags.insert("Pentax:AWBInfo".to_string(), entry.value_offset.to_string());
+                }
+                // Pentax.pm:3096-3099 `CAFPointInfo` (0x0238) SubDirectory,
+                // Pentax.pm:5202-5227's `%Pentax::CAFPointInfo` table, byte 1
+                // (`FIRST_ENTRY => 0`). `NumCAFPoints`'s `RawConv` packs the
+                // AF grid's width and height into one byte's nibbles and
+                // multiplies them: `($val & 0x0f) * ($val >> 4)`. Only this
+                // one field is decoded here -- `CAFPointsInFocus`/
+                // `CAFPointsSelected` need `DecodeAFPoints`, a bitmask walk
+                // over a grid whose size this byte determines, and neither is
+                // in the assigned tag set.
+                PENTAX_CAF_POINT_INFO => {
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
+                    if raw.len() >= 2 {
+                        let b = raw[1];
+                        let n = (b & 0x0f) as u32 * (b >> 4) as u32;
+                        tags.insert("Pentax:NumCAFPoints".to_string(), n.to_string());
+                    }
                 }
                 // Pentax.pm:2347-2364: `undef`/`int8u`, declared `Count => 4`
                 // but ExifTool -- and this reader, via `inline_or_offset_bytes`
