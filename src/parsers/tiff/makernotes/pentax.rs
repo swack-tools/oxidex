@@ -1497,11 +1497,42 @@ impl PentaxParser {
                 PENTAX_AWB_INFO => {
                     tags.insert("Pentax:AWBInfo".to_string(), entry.value_offset.to_string());
                 }
+                // Pentax.pm:2347-2364: `undef`/`int8u`, declared `Count => 4`
+                // but ExifTool -- and this reader, via `inline_or_offset_bytes`
+                // sizing from the entry's own `value_count` -- decodes exactly
+                // as many bytes as the entry actually declares, which is 1 on
+                // the X-5, 2 on the WG-3, 4 on the K20D. `PrintConv => [{0
+                // =>'Off',1=>'On'},{0=>0,1=>'Enabled',2=>'Auto'}]` names only
+                // the first two positions; any further bytes print as their
+                // raw number. A multi-index `PrintConv` array joins whatever
+                // positions are present with "; " (a single byte prints with
+                // no separator at all -- X-5's `DynamicRangeExpansion = On`).
                 PENTAX_DYNAMIC_RANGE_EXPANSION => {
-                    tags.insert(
-                        "Pentax:DynamicRangeExpansion".to_string(),
-                        DYNAMIC_RANGE_EXPANSION.decode(entry.value_offset as i32),
-                    );
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
+                    if !raw.is_empty() {
+                        let parts: Vec<String> = raw
+                            .iter()
+                            .enumerate()
+                            .map(|(i, &b)| match (i, b) {
+                                (0, 0) => "Off".to_string(),
+                                (0, 1) => "On".to_string(),
+                                // A hash miss on a named index is ExifTool's
+                                // "Unknown ($val)" default; an index past the
+                                // array (2, 3) has no `PrintConv` slot at all,
+                                // which ExifTool passes through unconverted.
+                                (0, other) => format!("Unknown ({})", other),
+                                (1, 0) => "0".to_string(),
+                                (1, 1) => "Enabled".to_string(),
+                                (1, 2) => "Auto".to_string(),
+                                (1, other) => format!("Unknown ({})", other),
+                                (_, other) => other.to_string(),
+                            })
+                            .collect();
+                        tags.insert(
+                            "Pentax:DynamicRangeExpansion".to_string(),
+                            parts.join("; "),
+                        );
+                    }
                 }
                 PENTAX_TIME_INFO => {
                     if let Some(value) = extract_string_value(&entry, data, value_base) {
