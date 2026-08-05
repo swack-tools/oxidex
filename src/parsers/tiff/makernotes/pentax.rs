@@ -121,7 +121,7 @@ const PENTAX_FRAME_NUMBER: u16 = 0x0029;
 const PENTAX_EFFECTIVE_LV: u16 = 0x002D;
 
 // Camera Settings (0x0030-0x004F)
-const PENTAX_IMAGE_PROCESSING: u16 = 0x0032;
+const PENTAX_IMAGE_EDITING: u16 = 0x0032;
 const PENTAX_PICTURE_MODE2: u16 = 0x0033;
 const PENTAX_DRIVE_MODE: u16 = 0x0034;
 const PENTAX_SENSOR_SIZE: u16 = 0x0035;
@@ -1265,20 +1265,64 @@ impl PentaxParser {
                         entry.value_offset.to_string(),
                     );
                 }
+                // Pentax.pm:2882-2899: `Format => 'int16s'` (or `int32s` for
+                // the rarer `int32u`-declared variant) overrides the IFD's own
+                // declared type -- "negative values are valid even though
+                // Pentax writes int16u" -- then `ValueConv => '$val/1024'`,
+                // `PrintConv => 'sprintf("%.1f",$val)'`.
                 PENTAX_EFFECTIVE_LV => {
-                    let value = extract_value_as_i32(&entry, byte_order);
+                    let raw = extract_value_as_i32(&entry, byte_order);
+                    let signed = if entry.field_type == 3 {
+                        raw as i16 as i32
+                    } else {
+                        raw
+                    };
                     tags.insert(
                         "Pentax:EffectiveLV".to_string(),
-                        format!("{:.1}", value as f32 / 10.0),
+                        format!("{:.1}", signed as f64 / 1024.0),
                     );
                 }
 
                 // Camera Settings
-                PENTAX_IMAGE_PROCESSING => {
-                    tags.insert(
-                        "Pentax:ImageProcessing".to_string(),
-                        entry.value_offset.to_string(),
-                    );
+                //
+                // ExifTool names 0x0032 `ImageEditing`, not `ImageProcessing`
+                // (no tag by that name exists in Pentax.pm at all -- this
+                // constant/insert previously reported both the wrong tag name
+                // and the wrong value, a bare `entry.value_offset` where
+                // ExifTool reads 4 `int8u` bytes and looks up the joined
+                // string, e.g. `'4 0 0 0' => 'Digital Filter 4'`
+                // (Pentax.pm:1905-1919). An unrecognized tuple falls through
+                // to the raw space-joined bytes, matching ExifTool's default
+                // behavior for a hash `PrintConv` with no match.
+                PENTAX_IMAGE_EDITING => {
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
+                    if !raw.is_empty() {
+                        let key = raw
+                            .iter()
+                            .map(u8::to_string)
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        // `Format => 'int8u'` overrides whatever the entry's
+                        // own declared type is, so the actual byte count seen
+                        // here varies by camera: PentaxOptio30.jpg's 0x0032
+                        // entry is `int16u[1]` (2 bytes), matching the `'0 0'`
+                        // key; the K20D-style 4-byte form matches the rest.
+                        // ExifTool's default for a hash `PrintConv` miss is
+                        // `"Unknown ($val)"` (ExifTool.pm:3627-3633), not the
+                        // bare joined value.
+                        let value = match key.as_str() {
+                            "0 0" | "0 0 0 0" => "None".to_string(),
+                            "0 0 0 4" => "Digital Filter".to_string(),
+                            "1 0 0 0" => "Resized".to_string(),
+                            "2 0 0 0" => "Cropped".to_string(),
+                            "4 0 0 0" => "Digital Filter 4".to_string(),
+                            "6 0 0 0" => "Digital Filter 6".to_string(),
+                            "8 0 0 0" => "Red-eye Correction".to_string(),
+                            "16 0 0 0" => "Frame Synthesis?".to_string(),
+                            _ => format!("Unknown ({})", key),
+                        };
+                        tags.insert("Pentax:ImageEditing".to_string(), value);
+                    }
                 }
                 PENTAX_SENSOR_SIZE => {
                     tags.insert(
