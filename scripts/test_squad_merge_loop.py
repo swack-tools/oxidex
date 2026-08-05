@@ -1230,6 +1230,50 @@ class PollOnceBatchIntegrationTests(GitRepoTestCase):
         )
 
 
+class PollOnceMissingStagingWorktreeTests(GitRepoTestCase):
+    """The recut path must not assume the staging worktree already exists.
+
+    poll_once runs its staleness check BEFORE ensure_staging_worktree, and
+    recut_squad_branch's first act is checkout_detached(staging_path, ...),
+    which passes staging_path as subprocess cwd. On a host where
+    ~/.oxidex/worktrees/squad-staging/<squad> is absent -- a fresh machine,
+    or after stop_parallel_fix.py reaped the worktrees -- that raises
+    FileNotFoundError before the function that would have CREATED it ever
+    runs. Measured 2026-08-04: all 14 mergers died within one second of
+    launch for exactly this reason, because every squad branch was stale
+    against a main that had moved 249 commits, so the recut clause fired
+    for all of them at once.
+
+    Every other poll_once test passes check_recut=False, which is why this
+    ordering survived: the crashing path was never exercised.
+    """
+
+    def _squads_toml(self):
+        path = self.tmp / "squads.toml"
+        path.write_text('[squads.nikon]\nformats = ["NEF"]\n')
+        return path
+
+    def test_recut_creates_the_staging_worktree_instead_of_crashing(self):
+        repo = self.make_repo()
+        git(repo, "branch", "squad/nikon")
+        base_sha = git_out(repo, "rev-parse", "main").strip()
+        commit_ts = int(git_out(repo, "log", "-1", "--format=%ct", base_sha).strip())
+        home = self.tmp / "home"
+        staging = self.tmp / "staging-nikon"
+        self.assertFalse(staging.exists(), "precondition: staging worktree is absent")
+
+        sml.poll_once(
+            repo_root=repo, squad="nikon", home=home, staging_dir=staging,
+            squads_toml_path=self._squads_toml(), cache_dir="/unused", origin_ref="main",
+            batch_commits=10, batch_seconds=900,
+            now_fn=lambda: commit_ts + 10_000,
+            recut_staleness_seconds=10, check_recut=True,
+            log_fn=lambda *a: None,
+        )
+
+        self.assertTrue(staging.is_dir(), "poll_once must have created the staging worktree")
+
+
 class PollOnceSquadSlotBranchIntegrationTests(GitRepoTestCase):
     """Squad-mode dispatch (spec S2) creates model-fix-parallel-<squad>-<n>
     branches, not the legacy model-fix-parallel-<fmt> naming

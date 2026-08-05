@@ -1559,6 +1559,20 @@ def poll_once(*, repo_root, squad, home, staging_dir, squads_toml_path=DEFAULT_S
     """
     heartbeat_fn = heartbeat_fn or (lambda: None)
     squad_branch_ref = staging_branch(squad)
+
+    # BEFORE the recut check, not after: recut_squad_branch's very first act is
+    # checkout_detached(staging_path, ...), which hands staging_path to
+    # subprocess as cwd. If the staging worktree does not exist yet -- a fresh
+    # host, or after stop_parallel_fix.py reaped the worktrees -- that raises
+    # FileNotFoundError from inside the recut, killing the merger before the
+    # one function that would have CREATED the worktree ever ran. Measured
+    # 2026-08-04: all 14 mergers died within a second of launch, because every
+    # squad branch was stale against a main that had moved 249 commits, so the
+    # recut clause fired for all of them simultaneously. ensure_staging_worktree
+    # is idempotent (reuse-in-place on an existing dir), so hoisting it costs a
+    # cheap reset/checkout and makes the recut path survive a cold start.
+    ensure_staging_worktree(repo_root, staging_dir, squad, origin_ref=origin_ref, log_fn=log_fn)
+
     if check_recut and should_recut(repo_root, squad_branch_ref, origin_ref,
                                      recut_staleness_seconds, now_fn):
         log_fn(f"[{squad}] squad/{squad} is stale vs {origin_ref} -- re-cutting before this poll")
@@ -1568,8 +1582,6 @@ def poll_once(*, repo_root, squad, home, staging_dir, squads_toml_path=DEFAULT_S
         )
     else:
         recut_result = None
-
-    ensure_staging_worktree(repo_root, staging_dir, squad, origin_ref=origin_ref, log_fn=log_fn)
 
     status_path = squad_status_file(home, squad)
     quarantine_entries = load_quarantine(quarantine_ledger_path(home))
