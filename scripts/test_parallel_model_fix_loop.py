@@ -3835,3 +3835,170 @@ class IdleRoundMustBackOffTests(unittest.TestCase):
         import parallel_model_fix_loop as p
         for status in ("lint_failed", "sweep_aborted", "merged"):
             self.assertNotIn(status, p.IDLE_STATUSES)
+
+
+class PublishIdentityTests(unittest.TestCase):
+    """[publish].github_user -- pinning who the auto-publisher pushes as.
+
+    Regression cover for 2026-08-04, when `git push` authenticated as
+    whichever account `gh auth switch` had last made active. That account
+    was read-only, so two consecutive sweeps built a branch and then died
+    on 403 at the push, while every prior round had logged the
+    indistinguishable 'no_news'.
+    """
+
+    @staticmethod
+    def _gh(returncode=0, stdout="", stderr=""):
+        """A subprocess.run stand-in recording the argv it was handed."""
+        calls = []
+
+        def run_fn(argv, **kwargs):
+            calls.append(argv)
+            return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+        return run_fn, calls
+
+    def test_no_user_configured_keeps_the_ambient_runners(self):
+        # Omitting the table must be a true no-op, not a silent behaviour
+        # change for every host that never sets it.
+        import parallel_model_fix_loop as p
+        run_fn, calls = self._gh(stdout="tok")
+        self.assertIsNone(p.resolve_publish_token(None, run_fn=run_fn))
+        self.assertIsNone(p.resolve_publish_token("", run_fn=run_fn))
+        self.assertEqual(calls, [], "gh must not be consulted when no user is configured")
+        self.assertIsNone(p.publish_identity(None, run_fn=run_fn),
+                          "no configured user must mean no identity, not a bound one")
+
+    def test_token_is_resolved_for_the_named_account(self):
+        import parallel_model_fix_loop as p
+        run_fn, calls = self._gh(stdout="ghs_secret\n")
+        self.assertEqual(p.resolve_publish_token("swackhamer", run_fn=run_fn), "ghs_secret")
+        self.assertEqual(calls, [["gh", "auth", "token", "--user", "swackhamer"]])
+
+    def test_unknown_account_raises_rather_than_falling_back(self):
+        # The whole point: an unusable identity must fail loudly at
+        # startup, never silently degrade to the ambient account.
+        import parallel_model_fix_loop as p
+        run_fn, _ = self._gh(returncode=1, stderr="no accounts")
+        with self.assertRaises(p.PublishIdentityError) as ctx:
+            p.resolve_publish_token("ghost", run_fn=run_fn)
+        self.assertIn("ghost", str(ctx.exception))
+        self.assertIn("gh auth login", str(ctx.exception),
+                      "the error must carry the remedy, not just the symptom")
+
+    def test_empty_token_is_an_error(self):
+        import parallel_model_fix_loop as p
+        run_fn, _ = self._gh(returncode=0, stdout="   \n")
+        with self.assertRaises(p.PublishIdentityError):
+            p.resolve_publish_token("swackhamer", run_fn=run_fn)
+
+    def test_missing_gh_binary_raises_publish_identity_error(self):
+        import parallel_model_fix_loop as p
+
+        def run_fn(argv, **kwargs):
+            raise OSError("no gh")
+
+        with self.assertRaises(p.PublishIdentityError):
+            p.resolve_publish_token("swackhamer", run_fn=run_fn)
+
+    def test_every_bound_callable_puts_the_token_in_the_environment(self):
+        # git and gh disagreed only because each picked up the ambient
+        # account independently; one token in the env pins both. All four
+        # callables are checked because binding only run_git/run_gh would
+        # leave the actual `git push` and `gh pr create` -- the two that
+        # returned 403 -- still running as the ambient account.
+        import parallel_model_fix_loop as p
+        run_fn, _ = self._gh(stdout="ghs_secret")
+        ident = p.publish_identity("swackhamer", run_fn=run_fn)
+        seen = []
+
+        def fake_run(argv, **kwargs):
+            seen.append((argv, kwargs.get("env") or {}))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch.object(p.subprocess, "run", fake_run):
+            ident.run_git(["status"], "/repo")
+            ident.run_gh(["pr", "list"], "/repo")
+            ident.push_branch_fn("/repo", "sweep/x")
+            ident.create_pr_fn("t", "b", "sweep/x", "main", "/repo")
+        self.assertEqual(len(seen), 4)
+        for argv, env in seen:
+            self.assertEqual(env.get("GH_TOKEN"), "ghs_secret",
+                             f"{argv[:3]} must authenticate as the configured account")
+            self.assertEqual(env.get("GITHUB_TOKEN"), "ghs_secret")
+        # The two that actually failed in production, by exact argv.
+        self.assertIn(["git", "push", "-u", "origin", "sweep/x"], [a for a, _ in seen])
+        self.assertEqual([a for a, _ in seen][3][:3], ["gh", "pr", "create"])
+
+    def test_bound_push_and_pr_keep_their_return_shapes(self):
+        # run_sweep reads (ok, message) from push_branch_fn and a dict
+        # from create_pr_fn; a shape change here would surface as a
+        # confusing sweep failure rather than an auth one.
+        import parallel_model_fix_loop as p
+        run_fn, _ = self._gh(stdout="ghs_secret")
+        ident = p.publish_identity("swackhamer", run_fn=run_fn)
+
+        def fake_run(argv, **kwargs):
+            return SimpleNamespace(returncode=1, stdout="out", stderr="403")
+
+        with patch.object(p.subprocess, "run", fake_run):
+            ok, msg = ident.push_branch_fn("/repo", "sweep/x")
+            pr = ident.create_pr_fn("t", "b", "sweep/x")
+        self.assertFalse(ok)
+        self.assertIn("403", msg)
+        self.assertEqual(pr, {"ok": False, "stdout": "out", "stderr": "403"})
+
+    def test_auto_publish_round_threads_the_bound_callables_into_the_sweep(self):
+        # The regression that binding-only-the-runners would have left:
+        # push_branch_fn/create_pr_fn must reach run_sweep, or the sweep
+        # silently falls back to overlord_sweep's unbound versions.
+        import parallel_model_fix_loop as p
+        captured = {}
+
+        def fake_sweep(**kwargs):
+            captured.update(kwargs)
+            return {"status": "no_news"}
+
+        sentinel_push, sentinel_pr = object(), object()
+        p.auto_publish_round(
+            repo_root="/repo", cache_dir="/cache", home=Path("/home"),
+            sweep_fn=fake_sweep, ensure_worktree_fn=lambda *a, **k: ("/sweep-repo", ""),
+            sync_fn=lambda *a, **k: None, fmt_fn=lambda *a, **k: (True, ""),
+            push_branch_fn=sentinel_push, create_pr_fn=sentinel_pr,
+            run_gh=lambda *a, **k: (0, "[]", ""), log_fn=lambda *a, **k: None,
+        )
+        self.assertIs(captured.get("push_branch_fn"), sentinel_push)
+        self.assertIs(captured.get("create_pr_fn"), sentinel_pr)
+
+    def test_sweep_callables_are_omitted_when_no_identity_is_configured(self):
+        # None must not be forwarded -- run_sweep's own defaults have to win.
+        import parallel_model_fix_loop as p
+        captured = {}
+
+        def fake_sweep(**kwargs):
+            captured.update(kwargs)
+            return {"status": "no_news"}
+
+        p.auto_publish_round(
+            repo_root="/repo", cache_dir="/cache", home=Path("/home"),
+            sweep_fn=fake_sweep, ensure_worktree_fn=lambda *a, **k: ("/sweep-repo", ""),
+            sync_fn=lambda *a, **k: None, fmt_fn=lambda *a, **k: (True, ""),
+            run_gh=lambda *a, **k: (0, "[]", ""), log_fn=lambda *a, **k: None,
+        )
+        self.assertNotIn("push_branch_fn", captured)
+        self.assertNotIn("create_pr_fn", captured)
+
+    def test_bound_gh_runner_keeps_the_no_raise_contract(self):
+        # default_run_gh deliberately cannot raise; the bound variant is
+        # substituted for it and must not reintroduce an exception path.
+        import parallel_model_fix_loop as p
+        run_fn, _ = self._gh(stdout="ghs_secret")
+        run_gh = p.publish_identity("swackhamer", run_fn=run_fn).run_gh
+
+        def boom(argv, **kwargs):
+            raise OSError("fork failed")
+
+        with patch.object(p.subprocess, "run", boom):
+            rc, out, err = run_gh(["pr", "list"], "/repo")
+        self.assertEqual((rc, out), (127, ""))
+        self.assertIn("could not run gh", err)

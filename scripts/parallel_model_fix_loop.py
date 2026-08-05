@@ -56,9 +56,15 @@ import threading
 import time
 import traceback
 from pathlib import Path
+from types import SimpleNamespace
 
 from find_tag_gaps import OXIDEX_HOME, REPO_ROOT, group_gaps_by_format, load_comparison_report, run_full_comparison
-from model_fix_loop import DEFAULT_CONFIG_PATH, DEFAULT_TAG_STATE_PATH, _state_locked
+from model_fix_loop import (
+    DEFAULT_CONFIG_PATH,
+    DEFAULT_TAG_STATE_PATH,
+    _state_locked,
+    load_toml_config,
+)
 # The fleet-wide (args, repo, input_text=None) -> (returncode, stdout,
 # stderr) git runner (overlord_sweep.default_run_git and every squad
 # merger use the identical shape) -- imported rather than re-implemented
@@ -1920,6 +1926,131 @@ def default_run_gh(args, repo_root):
     return result.returncode, result.stdout, result.stderr
 
 
+class PublishIdentityError(RuntimeError):
+    """config.toml named a [publish].github_user this host cannot push as.
+
+    Raised at startup, never mid-round. The failure this exists to
+    prevent is silent: `git push` and `gh` both authenticate as whichever
+    account `gh auth switch` last made active, which is account-global
+    machine state no config file records. On 2026-08-04 that account was
+    a read-only one, so two consecutive sweeps -- the first work the
+    fleet had actually produced in days -- died on
+    `403 ... skipping PR creation` after the branch was already built,
+    while every earlier round had logged the indistinguishable 'no_news'.
+    """
+
+
+def resolve_publish_token(github_user, run_fn=subprocess.run):
+    """The gh OAuth token for one NAMED account, or None when unset.
+
+    `gh` has no per-invocation account flag (there is no `gh pr create
+    --user`), so the only way to pin an identity is to hand the
+    subprocess a token via the environment. `gh auth token --user <name>`
+    reads that account's token straight out of the keyring, which is what
+    makes a username -- rather than a secret -- sufficient in config.toml.
+
+    Raises PublishIdentityError rather than returning a falsy token: a
+    publisher that silently falls back to the ambient account is exactly
+    the failure mode this function exists to remove.
+    """
+    if not github_user:
+        return None
+    try:
+        result = run_fn(
+            ["gh", "auth", "token", "--user", github_user],  # nosec B603
+            capture_output=True, text=True,
+        )
+    except OSError as e:
+        raise PublishIdentityError(
+            f"could not run gh to resolve a token for {github_user!r}: {e}"
+        ) from e
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise PublishIdentityError(
+            f"gh has no token for {github_user!r} ({detail}). Authenticate that account once "
+            f"with `gh auth login --user {github_user}`, or drop [publish].github_user from "
+            "config.toml to fall back to whichever account is active."
+        )
+    token = result.stdout.strip()
+    if not token:
+        raise PublishIdentityError(
+            f"gh returned an empty token for {github_user!r}"
+        )
+    return token
+
+
+def publish_identity(github_user, run_fn=subprocess.run):
+    """Every side-effecting publish callable, bound to `github_user`.
+
+    Returns None when github_user is unset, so a config.toml with no
+    [publish] table behaves exactly as before. Otherwise a
+    SimpleNamespace of run_git / run_gh / push_branch_fn / create_pr_fn,
+    each carrying GH_TOKEN in its environment: `gh` reads it directly,
+    and `git push` reaches it through the
+    `credential.https://github.com.helper = !gh auth git-credential`
+    helper this host already configures -- so one token pins BOTH halves
+    of publishing, which previously disagreed only under a
+    `gh auth switch` no one remembered making.
+
+    All FOUR matter, and the two easy to miss are the ones that actually
+    failed. auto_publish_round's run_git/run_gh cover PR adoption and
+    merging, but run_sweep defaults push_branch_fn/create_pr_fn to
+    overlord_sweep's real_push_branch/real_create_pr, which shell out on
+    their own -- and those are precisely `git push` and `gh pr create`,
+    the two commands that returned 403 on 2026-08-04. Binding the
+    runners alone would have looked correct and fixed nothing.
+
+    GITHUB_TOKEN is set alongside GH_TOKEN because the two are read by
+    different tools and gh prefers GH_TOKEN when both are present.
+    """
+    token = resolve_publish_token(github_user, run_fn=run_fn)
+    if token is None:
+        return None
+    env = {**os.environ, "GH_TOKEN": token, "GITHUB_TOKEN": token}
+
+    def run_git_as(args, repo, input_text=None):
+        result = subprocess.run(  # nosec B603
+            ["git", *args], cwd=repo, input=input_text,
+            capture_output=True, text=True, env=env,
+        )
+        return result.returncode, result.stdout, result.stderr
+
+    def run_gh_as(args, repo_root):
+        # Same no-raise contract as default_run_gh -- see its docstring.
+        try:
+            result = subprocess.run(  # nosec B603
+                ["gh", *args], cwd=repo_root, capture_output=True, text=True, env=env,
+            )
+        except OSError as e:
+            return 127, "", f"could not run gh: {e}"
+        return result.returncode, result.stdout, result.stderr
+
+    def push_branch_as(repo_root, branch):
+        # Signature and (ok, message) shape mirror
+        # overlord_sweep.real_push_branch exactly -- run_sweep calls this
+        # positionally.
+        result = subprocess.run(  # nosec B603
+            ["git", "push", "-u", "origin", branch], cwd=repo_root,
+            capture_output=True, text=True, env=env,
+        )
+        return result.returncode == 0, (result.stdout + result.stderr).strip()
+
+    def create_pr_as(title, body, branch, base="main", repo_root=REPO_ROOT):
+        # Mirrors overlord_sweep.real_create_pr, including its dict shape.
+        result = subprocess.run(  # nosec B603
+            ["gh", "pr", "create", "--title", title, "--body", body,
+             "--head", branch, "--base", base],
+            cwd=repo_root, capture_output=True, text=True, env=env,
+        )
+        return {"ok": result.returncode == 0,
+                "stdout": result.stdout.strip(), "stderr": result.stderr.strip()}
+
+    return SimpleNamespace(
+        github_user=github_user, run_git=run_git_as, run_gh=run_gh_as,
+        push_branch_fn=push_branch_as, create_pr_fn=create_pr_as,
+    )
+
+
 def _is_git_worktree(path, run_git):
     """True only when `path` is the top level of a real git working
     tree. Deliberately compares `rev-parse --show-toplevel` against the
@@ -2613,6 +2744,7 @@ def sync_worktrees_to_origin_main(*, repo_root=REPO_ROOT, run_git=default_run_gi
 def auto_publish_round(*, repo_root=REPO_ROOT, cache_dir, home=None, squads_toml_path=None,
                        sweep_worktree_dir=None, sweep_fn=None, ensure_worktree_fn=None,
                        sync_fn=None, fmt_fn=None, lint_fn=None,
+                       push_branch_fn=None, create_pr_fn=None,
                        run_git=default_run_git, run_gh=default_run_gh,
                        sleep_fn=time.sleep, now_fn=time.monotonic,
                        checks_timeout_seconds=DEFAULT_PR_CHECKS_TIMEOUT_SECONDS,
@@ -2690,6 +2822,13 @@ def auto_publish_round(*, repo_root=REPO_ROOT, cache_dir, home=None, squads_toml
     # default (real_cargo_lint), so production behaviour is unchanged.
     if lint_fn is not None:
         sweep_kwargs["lint_fn"] = lint_fn
+    # Same passthrough discipline as lint_fn: None keeps run_sweep's own
+    # real_push_branch/real_create_pr, so production behaviour is unchanged
+    # unless [publish].github_user pinned an identity to push as.
+    if push_branch_fn is not None:
+        sweep_kwargs["push_branch_fn"] = push_branch_fn
+    if create_pr_fn is not None:
+        sweep_kwargs["create_pr_fn"] = create_pr_fn
     if squads_toml_path:
         sweep_kwargs["squads_toml_path"] = squads_toml_path
     result = sweep_fn(**sweep_kwargs)
@@ -3011,6 +3150,28 @@ def main(argv=None, run_round_fn=run_round, run_squad_round_fn=run_squad_round, 
         "checks_timeout_seconds": args.pr_checks_timeout,
         "checks_interval_seconds": args.pr_checks_interval,
     }
+
+    # Resolve the publishing identity ONCE, here, and only when this
+    # process will actually publish. Doing it at startup converts a
+    # mis-set username into an immediate exit-1 with a remedy, instead of
+    # a 403 discovered hours later by a sweep that had already done all
+    # the work -- which is what happened on 2026-08-04. A round that
+    # never publishes must not require a pushable account at all, so
+    # workers and one-shot debugging rounds stay unaffected.
+    if auto_publish:
+        publish_user = (load_toml_config(config_path) or {}).get("publish", {}).get("github_user")
+        try:
+            identity = publish_identity(publish_user)
+        except PublishIdentityError as e:
+            print(f"auto-publish is on but the publishing identity is unusable: {e}",
+                  file=sys.stderr)
+            return 1
+        if identity is not None:
+            publish_kwargs["run_git"] = identity.run_git
+            publish_kwargs["run_gh"] = identity.run_gh
+            publish_kwargs["push_branch_fn"] = identity.push_branch_fn
+            publish_kwargs["create_pr_fn"] = identity.create_pr_fn
+            print(f"auto-publish: pushing and opening PRs as {publish_user}")
 
     try:
         round_num = 0
