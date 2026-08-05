@@ -1316,11 +1316,7 @@ impl PentaxParser {
                 PENTAX_IMAGE_EDITING => {
                     let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if !raw.is_empty() {
-                        let key = raw
-                            .iter()
-                            .map(u8::to_string)
-                            .collect::<Vec<_>>()
-                            .join(" ");
+                        let key = raw.iter().map(u8::to_string).collect::<Vec<_>>().join(" ");
                         // `Format => 'int8u'` overrides whatever the entry's
                         // own declared type is, so the actual byte count seen
                         // here varies by camera: PentaxOptio30.jpg's 0x0032
@@ -1398,12 +1394,12 @@ impl PentaxParser {
                                     (2, ByteOrder::LittleEndian) => {
                                         u16::from_le_bytes([chunk[0], chunk[1]]) as u32
                                     }
-                                    (4, ByteOrder::BigEndian) => u32::from_be_bytes([
-                                        chunk[0], chunk[1], chunk[2], chunk[3],
-                                    ]),
-                                    (4, ByteOrder::LittleEndian) => u32::from_le_bytes([
-                                        chunk[0], chunk[1], chunk[2], chunk[3],
-                                    ]),
+                                    (4, ByteOrder::BigEndian) => {
+                                        u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+                                    }
+                                    (4, ByteOrder::LittleEndian) => {
+                                        u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+                                    }
                                     _ => chunk[0] as u32,
                                 };
                                 n.to_string()
@@ -1564,10 +1560,7 @@ impl PentaxParser {
                                 (_, other) => other.to_string(),
                             })
                             .collect();
-                        tags.insert(
-                            "Pentax:DynamicRangeExpansion".to_string(),
-                            parts.join("; "),
-                        );
+                        tags.insert("Pentax:DynamicRangeExpansion".to_string(), parts.join("; "));
                     }
                 }
                 PENTAX_TIME_INFO => {
