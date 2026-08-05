@@ -1264,6 +1264,7 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
     // makes still reaches metadata through the ordinary path.
     parse_casio_preview_image_if_casio(&make, ctx, byte_order, metadata);
     parse_casio_type2_extra_tags_if_casio(&make, ctx, byte_order, metadata);
+    parse_ricoh_extra_tags_if_ricoh(&make, ctx, byte_order, model.as_deref(), metadata);
     parse_olympus_preview_image_if_olympus(&make, ctx, byte_order, metadata);
     parse_minolta_preview_image_if_minolta(&make, ctx, byte_order, metadata);
 
@@ -1395,6 +1396,25 @@ fn parse_casio_type2_extra_tags_if_casio(
     crate::parsers::tiff::makernotes::casio::parse_casio_type2_extra_tags(
         ctx, byte_order, metadata,
     );
+}
+
+/// Extracts Ricoh's `ImageInfo` (RicohImageWidth/RicohImageHeight/RicohDate)
+/// and `Subdir` (ManufactureDate1/ManufactureDate2) sub-directory tags when
+/// `make` is Ricoh.
+///
+/// A no-op for any other make. See
+/// [`crate::parsers::tiff::makernotes::ricoh::parse_ricoh_extra_tags`].
+fn parse_ricoh_extra_tags_if_ricoh(
+    make: &str,
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    model: Option<&str>,
+    metadata: &mut MetadataMap,
+) {
+    if !make.trim().to_ascii_lowercase().starts_with("ricoh") {
+        return;
+    }
+    crate::parsers::tiff::makernotes::ricoh::parse_ricoh_extra_tags(ctx, byte_order, model, metadata);
 }
 
 /// Extracts Olympus's `PreviewImage` (`CameraSettings` 0x0100/0x0101/0x0102)
