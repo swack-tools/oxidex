@@ -3498,6 +3498,36 @@
 
 #define SHOTINFO 5
 
+/*
+ Kodak.pm:52-55: `string[8]`.
+ */
+#define KODAK_MODEL 0
+
+/*
+ Kodak.pm:65-68: `int16u`.
+ */
+#define KODAK_IMAGE_WIDTH 12
+
+/*
+ Kodak.pm:69-72: `int16u`.
+ */
+#define KODAK_IMAGE_HEIGHT 14
+
+/*
+ Kodak.pm:73-77: `int16u`.
+ */
+#define YEAR_CREATED 16
+
+/*
+ Kodak.pm:78-84: `int8u[2]`.
+ */
+#define MONTH_DAY_CREATED 18
+
+/*
+ Kodak.pm:225-230: `int16u`, `ValueConv => '$val / 100'`.
+ */
+#define TOTAL_ZOOM 98
+
 #define CAMERAINFOA100 0
 
 #define CAMERASETTINGSA100 1
