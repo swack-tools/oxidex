@@ -49,10 +49,10 @@ use super::shared::binary_subdir::{self, BinaryTable, Cond, ModelPat};
 use super::shared::generic_decoders::ON_OFF;
 use super::shared::tag_priority::insert_low_priority;
 use subdir_tables::{
-    PENTAX_AFINFO, PENTAX_AWBINFO, PENTAX_BATTERYINFO, PENTAX_CAMERASETTINGS, PENTAX_EVSTEPINFO,
-    PENTAX_FACEINFO, PENTAX_FACEPOS, PENTAX_FACESIZE, PENTAX_FILTERINFO, PENTAX_FLASHINFO,
-    PENTAX_KELVINWB, PENTAX_LENSCORR, PENTAX_LENSINFOQ, PENTAX_LEVELINFO, PENTAX_SHOTINFO,
-    PENTAX_SRINFO2, PENTAX_TEMPINFO, PENTAX_TIMEINFO, PENTAX_WBLEVELS,
+    PENTAX_AFINFO, PENTAX_AWBINFO, PENTAX_BATTERYINFO, PENTAX_CAMERASETTINGS, PENTAX_CONV6,
+    PENTAX_EVSTEPINFO, PENTAX_FACEINFO, PENTAX_FACEPOS, PENTAX_FACESIZE, PENTAX_FILTERINFO,
+    PENTAX_FLASHINFO, PENTAX_KELVINWB, PENTAX_LENSCORR, PENTAX_LENSINFOQ, PENTAX_LEVELINFO,
+    PENTAX_SHOTINFO, PENTAX_SRINFO2, PENTAX_TEMPINFO, PENTAX_TIMEINFO, PENTAX_WBLEVELS,
 };
 
 // Import declarative decoder macros
@@ -1171,9 +1171,20 @@ impl PentaxParser {
                     tags.insert("Pentax:HometownCity".to_string(), value.to_string());
                 }
 
+                // `SeparateTable => 'City'`, `PrintConv => \%pentaxCities`
+                // (Pentax.pm:1844-1849) -- the same 75-entry lookup already
+                // transcribed as `PENTAX_CONV6` for `TimeInfo`'s embedded
+                // HometownCity/DestinationCity fields. An unrecognized code
+                // falls through to the raw number, matching ExifTool's
+                // default `PrintConv` behavior for a hash with no match.
                 PENTAX_DESTINATION_CITY => {
                     let value = entry.value_offset;
-                    tags.insert("Pentax:DestinationCity".to_string(), value.to_string());
+                    let name = PENTAX_CONV6
+                        .iter()
+                        .find(|(code, _)| *code == value as i64)
+                        .map(|(_, name)| (*name).to_string())
+                        .unwrap_or_else(|| value.to_string());
+                    tags.insert("Pentax:DestinationCity".to_string(), name);
                 }
 
                 // NOTE: despite the constant name, tag 0x0033 is ExifTool's
