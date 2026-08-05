@@ -3054,44 +3054,39 @@ pub fn canon_aperture(raw_value: i16) -> Option<String> {
 
 /// Converts a Canon APEX shutter speed value to an exposure time string.
 ///
-/// Canon stores shutter speed as raw value that needs conversion using the formula:
-/// exposure_time = 2 ^ (-apex_value / 32)
+/// ExifTool `%Canon::ShotInfo` key 5, `TargetExposureTime` (Canon.pm:2819):
+/// `ValueConv => 'exp(-Image::ExifTool::Canon::CanonEv($val)*log(2))'`, `PrintConv =>
+/// 'Image::ExifTool::Exif::PrintExposureTime($val)'`.
 ///
-/// # Parameters
-/// - `apex_value`: The raw APEX shutter speed value from Canon MakerNote
-///
-/// # Returns
-/// A formatted exposure time string (e.g., "1/250", "1/60", "2 sec")
+/// The raw code is *not* a plain `apex/32` division -- Canon encodes 1/3- and 2/3-stop
+/// increments with the special fractional codes `0x0c` and `0x14` inside each 0x20
+/// group, which [`canon_ev`] already decodes correctly (it backs `TargetAperture` and
+/// `FNumber` in this same table). A naive `2^(-apex/32)` is off by a few percent
+/// whenever the low 5 bits hit one of those codes -- e.g. raw 204 must print "1/81",
+/// not "1/83".
 ///
 /// # Example
 /// ```ignore
-/// let shutter = apex_to_exposure_time(256); // Returns "1/256" approximately
+/// let shutter = apex_to_exposure_time(96); // "1/8"
 /// ```
 pub fn apex_to_exposure_time(apex_value: i16) -> String {
-    if apex_value == 0 {
-        return "n/a".to_string();
-    }
+    let ev = canon_ev(i32::from(apex_value));
+    let exposure_time = (-ev * std::f64::consts::LN_2).exp();
+    print_exposure_time(exposure_time)
+}
 
-    // Canon formula: exposure = 2^(-apex/32)
-    let exposure_time = 2.0_f64.powf(-(apex_value as f64) / 32.0);
-
-    // Format based on the exposure time value
-    if exposure_time >= 1.0 {
-        // 1 second or longer
-        if exposure_time == exposure_time.round() {
-            format!("{} sec", exposure_time as i32)
-        } else {
-            format!("{:.1} sec", exposure_time)
-        }
-    } else if exposure_time >= 0.5 {
-        // Between 0.5 and 1 second - show as fraction
-        let denominator = (1.0 / exposure_time).round() as i32;
-        format!("1/{}", denominator)
-    } else {
-        // Faster than 0.5 second - calculate as 1/x
-        let denominator = (1.0 / exposure_time).round() as i32;
-        format!("1/{}", denominator)
-    }
+/// True for camera bodies ExifTool selects with the plain (unanchored) `Model =~
+/// /(EOS|PowerShot|IXUS|IXY)/` condition.
+///
+/// This gates `%Canon::ShotInfo` key 5's `TargetExposureTime` RawConv (Canon.pm:2822):
+/// `($val > -1000 and ($val or $$self{Model}=~/(EOS|PowerShot|IXUS|IXY)/))? $val :
+/// undef`. Note the Perl regex has no `\b` anchors, so this is a plain substring match,
+/// unlike the word-bounded helpers ([`is_20d_or_350d`] and friends) elsewhere in this
+/// file.
+fn is_eos_powershot_ixus_ixy(model: &str) -> bool {
+    ["EOS", "PowerShot", "IXUS", "IXY"]
+        .iter()
+        .any(|needle| model.contains(needle))
 }
 
 /// Formats a focal length value with units.
@@ -5476,11 +5471,17 @@ fn parse_canon_makernote_impl_located(
                         tags.insert("Canon:TargetAperture".to_string(), rendered);
                     }
 
-                    // TargetExposureTime (index 5) - convert APEX to fractional time
-                    if array.len() > SHOT_INFO_TARGET_EXPOSURE_TIME {
+                    // TargetExposureTime (index 5). ExifTool `RawConv => '($val > -1000
+                    // and ($val or $$self{Model}=~/(EOS|PowerShot|IXUS|IXY)/))? $val :
+                    // undef'` (Canon.pm:2822) -- omit for the sentinel < -1000, and for
+                    // a literal 0 unless the model is one that actually writes this key.
+                    if let Some(&target_shutter) = array.get(SHOT_INFO_TARGET_EXPOSURE_TIME)
+                        && target_shutter > -1000
+                        && (target_shutter != 0 || is_eos_powershot_ixus_ixy(&model))
+                    {
                         tags.insert(
                             "Canon:TargetExposureTime".to_string(),
-                            apex_to_exposure_time(array[SHOT_INFO_TARGET_EXPOSURE_TIME]),
+                            apex_to_exposure_time(target_shutter),
                         );
                     }
 
