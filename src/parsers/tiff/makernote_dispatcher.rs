@@ -274,7 +274,18 @@ pub fn dispatch_makernote_with_context_and_values(
         "red" | "red.com" | "red digital cinema" => Some(Box::new(red::RedParser)),
 
         // Legacy cameras
-        "casio" | "casio computer co.,ltd." => Some(Box::new(casio::CasioParser)),
+        //
+        // `Casio2.jpg`'s real `Make` is `"CASIO COMPUTER CO.,LTD "` (trailing
+        // space, no period) -- `make_normalized` above trims it to
+        // `"casio computer co.,ltd"`, which the former `"casio computer
+        // co.,ltd."` arm (trailing period, no trailing space trimmed to
+        // nothing) never matched. `MakerNotes.pm:75` only conditions on
+        // `$$self{Make}=~/^CASIO/`, so every Casio Make string reaches this
+        // parser in ExifTool; the exact-match arm here silently dropped every
+        // Type2 ("QVC\0"/"DCI\0"-signed) MakerNote's tags.
+        "casio" | "casio computer co.,ltd." | "casio computer co.,ltd" => {
+            Some(Box::new(casio::CasioParser))
+        }
         "ge" | "general electric" => Some(Box::new(ge::GeParser)),
         "hp" | "hewlett-packard" => Some(Box::new(hp::HpParser)),
         "jvc" | "victor company of japan, limited" => Some(Box::new(jvc::JvcParser)),

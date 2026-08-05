@@ -1,248 +1,67 @@
 //! Kodak MakerNote parser
 //!
 //! Parses Kodak digital camera-specific EXIF MakerNote tags.
-//! Kodak was a pioneer in digital photography, producing both consumer
-//! and professional digital cameras from the 1990s through the 2000s.
-//!
-//! ## Supported Cameras
-//! - EasyShare series (consumer point-and-shoot)
-//! - DCS series (professional digital SLRs)
-//! - Z-series (advanced zoom cameras)
-//! - P-series (point-and-shoot)
-//!
-//! ## Supported Features
-//! - Camera model and firmware
-//! - Exposure settings and modes
-//! - Focus mode and quality settings
-//! - Flash settings
-//! - White balance and color mode
-//! - Image processing settings
-//! - Scene capture modes
 //!
 //! ## Tag Structure
-//! Kodak uses a custom tag structure with manufacturer-specific IDs.
+//!
+//! `Kodak::Main` (`Kodak.pm:36-227`) is `PROCESS_PROC =>
+//! \&Image::ExifTool::ProcessBinaryData`, a fixed-offset byte record, *not*
+//! a TIFF IFD -- `MakerNotes.pm:254-272` even marks the tag itself
+//! `NotIFD => 1`. Two signed variants both route to it:
+//!
+//! * `MakerNoteKodak1a`: payload starts `"KDK INFO"`, `Start => '$valuePtr +
+//!   8'`, `ByteOrder => 'BigEndian'`.
+//! * `MakerNoteKodak1b`: payload starts `"KDK"` (but not `"KDK INFO"`),
+//!   same `Start`, `ByteOrder => 'LittleEndian'`.
+//!
+//! `exiftool_tables::find_table("Kodak","Main")` already carries this
+//! table's real field offsets (verified against `Kodak.pm` and against
+//! `combined-samples/Kodak.jpg`'s actual bytes), but its `FIRST_ENTRY => 8`
+//! is *not* a byte-offset shift -- `ExifTool.pm`'s only use of
+//! `FIRST_ENTRY` is to bound the synthetic-tag range `-U` walks
+//! (`ExifTool.pm:9901-9906`), and Kodak.pm's own tag keys (`0x00`, `0x09`,
+//! `0x0c`, ...) already equal the fields' byte offsets in the
+//! `Start`-shifted record directly (`KodakModel` at key `0x00` sits at file
+//! offset `$valuePtr+8+0`, verified against the sample's raw hex).
+//! `exiftool_tables::BinaryTable::byte_offset` computes `(index -
+//! first_entry) * format_size`, which would shift every field here by -8
+//! bytes -- untested by anything else in this crate, since every other
+//! transcribed table happens to have `first_entry: 0`. Rather than call it
+//! and risk that shift, this reads each field's offset directly from
+//! `field.index`, the same number `Kodak.pm` declares.
 
 #![allow(dead_code)]
-#![allow(unused_imports)]
 
-use crate::const_decoder;
-use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
-use once_cell::sync::Lazy;
+use crate::core::formatters::numeric_precision::perl_number;
+use crate::io::EndianReader;
+use crate::parsers::tiff::ifd_parser::ByteOrder;
 use std::collections::HashMap;
 
-use super::registries::kodak::kodak_registry;
 use super::shared::MakerNoteParser;
-use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
-use super::shared::tag_registry::TagRegistry;
 
-// Kodak MakerNote Tag IDs
-const KODAK_MODEL: u16 = 0x0001; // Camera model
-const KODAK_QUALITY: u16 = 0x0009; // Image quality
-const KODAK_BURST_MODE: u16 = 0x000A; // Burst mode setting
-const KODAK_SHUTTER_MODE: u16 = 0x000C; // Shutter mode
-const KODAK_FOCUS_MODE: u16 = 0x000D; // Focus mode
-const KODAK_WHITE_BALANCE: u16 = 0x000E; // White balance
-const KODAK_FLASH_MODE: u16 = 0x0010; // Flash mode
-const KODAK_FLASH_FIRED: u16 = 0x0011; // Flash fired status
-const KODAK_ISO_SETTING: u16 = 0x0014; // ISO sensitivity
-const KODAK_COLOR_MODE: u16 = 0x001A; // Color mode
-const KODAK_SHARPNESS: u16 = 0x001C; // Sharpness setting
-const KODAK_SATURATION: u16 = 0x001D; // Color saturation
-const KODAK_CONTRAST: u16 = 0x001E; // Contrast setting
-const KODAK_SCENE_MODE: u16 = 0x0020; // Scene capture mode
-const KODAK_EXPOSURE_BIAS: u16 = 0x0022; // Exposure compensation
-const KODAK_FIRMWARE: u16 = 0x0025; // Firmware version
-const KODAK_TIME_ZONE: u16 = 0x0029; // Time zone offset
+/// `MakerNotes.pm:255`, `:265`: both Kodak1a and Kodak1b `Start
+/// => '$valuePtr + 8'`, past the signature + 2-byte pad.
+const KODAK_MAIN_START: usize = 8;
 
-// Kodak signature for validation
-const KODAK_SIGNATURE: &[u8] = b"KDK";
-
-// Static registry instance for efficient tag lookup and decoding
-static TAG_REGISTRY: Lazy<TagRegistry> = Lazy::new(kodak_registry);
-
-// ============================================================================
-// DECODERS - Kodak Value Decoders
-// ============================================================================
-// Decoder definitions are centralized in registries/kodak.rs if needed.
-// For now, these decoders are kept here as they are used for value formatting.
-
-// Decodes Kodak image quality setting
-const_decoder! {
-    DECODE_QUALITY, u16, [
-        (1, "Fine"),
-        (2, "Normal"),
-        (3, "Economy"),
-        (4, "Best"),
-    ]
-}
-
-// Decodes Kodak burst mode
-const_decoder! {
-    DECODE_BURST_MODE, u16, [
-        (0, "Off"),
-        (1, "On"),
-        (2, "Continuous"),
-    ]
-}
-
-// Decodes Kodak focus mode
-const_decoder! {
-    DECODE_FOCUS_MODE, u16, [
-        (0, "Auto"),
-        (1, "Manual"),
-        (2, "Macro"),
-        (3, "Infinity"),
-        (4, "Multi-Zone"),
-        (5, "Center"),
-    ]
-}
-
-// Decodes Kodak white balance mode
-const_decoder! {
-    DECODE_WHITE_BALANCE, u16, [
-        (0, "Auto"),
-        (1, "Daylight"),
-        (2, "Tungsten"),
-        (3, "Fluorescent"),
-        (4, "Flash"),
-        (5, "Cloudy"),
-        (6, "Shade"),
-        (7, "Manual"),
-    ]
-}
-
-// Decodes Kodak flash mode
-const_decoder! {
-    DECODE_FLASH_MODE, u16, [
-        (0, "Auto"),
-        (1, "Fill Flash"),
-        (2, "Off"),
-        (3, "Red-eye Reduction"),
-        (4, "Slow Sync"),
-    ]
-}
-
-// Decodes Kodak color mode
-const_decoder! {
-    DECODE_COLOR_MODE, u16, [
-        (0, "Natural"),
-        (1, "Vivid"),
-        (2, "Black & White"),
-        (3, "Sepia"),
-        (4, "High Saturation"),
-        (5, "Low Saturation"),
-    ]
-}
-
-// Decodes Kodak scene mode
-const_decoder! {
-    DECODE_SCENE_MODE, u16, [
-        (0, "Auto"),
-        (1, "Portrait"),
-        (2, "Landscape"),
-        (3, "Sports"),
-        (4, "Night"),
-        (5, "Sunset"),
-        (6, "Snow"),
-        (7, "Beach"),
-        (8, "Fireworks"),
-        (9, "Text"),
-    ]
-}
-
-/// Extracts a 16-bit unsigned value from IFD entry
-///
-/// # Arguments
-/// * `entry` - IFD entry containing the value
-/// * `_data` - Full MakerNote data buffer
-/// * `byte_order` - Byte order for parsing
-///
-/// # Returns
-/// Extracted value or None if invalid
-fn extract_u16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> Option<u16> {
-    if entry.value_count != 1 {
-        return None;
-    }
-
-    let value = match byte_order {
-        ByteOrder::LittleEndian => (entry.value_offset & 0xFFFF) as u16,
-        ByteOrder::BigEndian => ((entry.value_offset >> 16) & 0xFFFF) as u16,
-    };
-
-    Some(value)
-}
-
-/// Extracts a signed 16-bit value from IFD entry
-///
-/// # Arguments
-/// * `entry` - IFD entry containing the value
-/// * `_data` - Full MakerNote data buffer
-/// * `byte_order` - Byte order for parsing
-///
-/// # Returns
-/// Extracted value or None if invalid
-fn extract_i16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> Option<i16> {
-    if entry.value_count != 1 {
-        return None;
-    }
-
-    let value = match byte_order {
-        ByteOrder::LittleEndian => (entry.value_offset & 0xFFFF) as i16,
-        ByteOrder::BigEndian => ((entry.value_offset >> 16) & 0xFFFF) as i16,
-    };
-
-    Some(value)
-}
-
-/// Extracts an ASCII string from IFD entry
-///
-/// # Arguments
-/// * `entry` - IFD entry containing the string
-/// * `data` - Full MakerNote data buffer
-/// * `byte_order` - Byte order for parsing
-///
-/// # Returns
-/// Extracted string or None if invalid
-fn extract_string(entry: &IfdEntry, data: &[u8], byte_order: ByteOrder) -> Option<String> {
-    if entry.value_count == 0 {
-        return None;
-    }
-
-    let value_bytes = if entry.value_count <= 4 {
-        let mut bytes = Vec::new();
-        for i in 0..entry.value_count as usize {
-            let byte = match byte_order {
-                ByteOrder::LittleEndian => ((entry.value_offset >> (i * 8)) & 0xFF) as u8,
-                ByteOrder::BigEndian => ((entry.value_offset >> (24 - i * 8)) & 0xFF) as u8,
-            };
-            if byte == 0 {
-                break;
-            }
-            bytes.push(byte);
-        }
-        bytes
-    } else {
-        let offset = entry.value_offset as usize;
-        if offset >= data.len() {
-            return None;
-        }
-        let end = std::cmp::min(offset + entry.value_count as usize, data.len());
-        data[offset..end].to_vec()
-    };
-
-    if value_bytes.is_empty() {
-        return None;
-    }
-
-    let string = String::from_utf8_lossy(&value_bytes)
-        .trim_end_matches('\0')
-        .to_string();
-
-    if string.is_empty() {
-        None
-    } else {
-        Some(string)
-    }
+/// Kodak.pm:1-227 field names this parser reads, each verified against
+/// `combined-samples/Kodak.jpg` (`exiftool -G1 -s -a`, 13.59 pinned oracle).
+/// Offsets are relative to the `Start`-shifted record (i.e. `field.index`
+/// straight from `exiftool_tables::find_table("Kodak","Main")` -- see the
+/// module doc comment for why this doesn't go through
+/// `BinaryTable::byte_offset`).
+mod field_offset {
+    /// Kodak.pm:52-55: `string[8]`.
+    pub const KODAK_MODEL: usize = 0x00;
+    /// Kodak.pm:65-68: `int16u`.
+    pub const KODAK_IMAGE_WIDTH: usize = 0x0c;
+    /// Kodak.pm:69-72: `int16u`.
+    pub const KODAK_IMAGE_HEIGHT: usize = 0x0e;
+    /// Kodak.pm:73-77: `int16u`.
+    pub const YEAR_CREATED: usize = 0x10;
+    /// Kodak.pm:78-84: `int8u[2]`.
+    pub const MONTH_DAY_CREATED: usize = 0x12;
+    /// Kodak.pm:225-230: `int16u`, `ValueConv => '$val / 100'`.
+    pub const TOTAL_ZOOM: usize = 0x62;
 }
 
 /// Kodak MakerNote parser implementation
@@ -260,114 +79,59 @@ impl KodakParser {
         KodakParser
     }
 
-    /// Parse a single IFD entry and extract tag value
-    ///
-    /// # Arguments
-    /// * `entry` - IFD entry to parse
-    /// * `data` - Full MakerNote data buffer
-    /// * `byte_order` - Byte order for multi-byte values
-    /// * `tags` - HashMap to insert extracted tags into
-    fn parse_entry(
+    /// Reads `Kodak::Main` (see the module doc comment) out of `record`,
+    /// the `Start`-shifted bytes (i.e. `payload[8..]`), in `order`.
+    fn parse_main_record(
         &self,
-        entry: &IfdEntry,
-        data: &[u8],
-        byte_order: ByteOrder,
+        record: &[u8],
+        order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) {
-        // Get tag name from registry
-        let tag_name = match TAG_REGISTRY.get_tag_name(entry.tag_id) {
-            Some(name) => name,
-            None => return, // Unknown tag, skip it
-        };
+        let reader = EndianReader::new(record, order.to_io_byte_order());
 
-        // Extract and format the value based on tag type
-        let formatted_value = match entry.tag_id {
-            // String tags
-            KODAK_MODEL | KODAK_FIRMWARE => {
-                extract_string(entry, data, byte_order).unwrap_or_default()
+        // KodakModel: string[8], truncated at the first NUL -- ExifTool's
+        // ReadValue behavior for a `string[n]` (does not trim whitespace,
+        // per binary_subdir.rs's note on the same rule).
+        if let Some(bytes) = record.get(field_offset::KODAK_MODEL..field_offset::KODAK_MODEL + 8) {
+            let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+            if end > 0 {
+                tags.insert(
+                    "Kodak:KodakModel".to_string(),
+                    String::from_utf8_lossy(&bytes[..end]).into_owned(),
+                );
             }
-            // Decoder-based tags
-            KODAK_QUALITY => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    DECODE_QUALITY.decode(value)
-                } else {
-                    return;
-                }
-            }
-            KODAK_BURST_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    DECODE_BURST_MODE.decode(value)
-                } else {
-                    return;
-                }
-            }
-            KODAK_FOCUS_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    DECODE_FOCUS_MODE.decode(value)
-                } else {
-                    return;
-                }
-            }
-            KODAK_WHITE_BALANCE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    DECODE_WHITE_BALANCE.decode(value)
-                } else {
-                    return;
-                }
-            }
-            KODAK_FLASH_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    DECODE_FLASH_MODE.decode(value)
-                } else {
-                    return;
-                }
-            }
-            KODAK_COLOR_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    DECODE_COLOR_MODE.decode(value)
-                } else {
-                    return;
-                }
-            }
-            KODAK_SCENE_MODE => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    DECODE_SCENE_MODE.decode(value)
-                } else {
-                    return;
-                }
-            }
-            // Binary tags
-            KODAK_FLASH_FIRED => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    if value > 0 {
-                        "Yes".to_string()
-                    } else {
-                        "No".to_string()
-                    }
-                } else {
-                    return;
-                }
-            }
-            // EV format tags
-            KODAK_EXPOSURE_BIAS => {
-                if let Some(value) = extract_i16_value(entry, data, byte_order) {
-                    let ev = value as f32 / 10.0;
-                    format!("{:.1} EV", ev)
-                } else {
-                    return;
-                }
-            }
-            // Raw numeric tags
-            _ => {
-                if let Some(value) = extract_u16_value(entry, data, byte_order) {
-                    value.to_string()
-                } else {
-                    return;
-                }
-            }
-        };
+        }
 
-        tags.insert(format!("Kodak:{}", tag_name), formatted_value);
+        if let Some(v) = reader.u16_at(field_offset::KODAK_IMAGE_WIDTH) {
+            tags.insert("Kodak:KodakImageWidth".to_string(), v.to_string());
+        }
+        if let Some(v) = reader.u16_at(field_offset::KODAK_IMAGE_HEIGHT) {
+            tags.insert("Kodak:KodakImageHeight".to_string(), v.to_string());
+        }
+        if let Some(v) = reader.u16_at(field_offset::YEAR_CREATED) {
+            tags.insert("Kodak:YearCreated".to_string(), v.to_string());
+        }
+
+        // MonthDayCreated: int8u[2], ValueConv 'sprintf("%.2d:%.2d",split(" ",
+        // $val))' -- month and day, zero-padded, colon-joined.
+        if let Some(bytes) =
+            record.get(field_offset::MONTH_DAY_CREATED..field_offset::MONTH_DAY_CREATED + 2)
+        {
+            tags.insert(
+                "Kodak:MonthDayCreated".to_string(),
+                format!("{:02}:{:02}", bytes[0], bytes[1]),
+            );
+        }
+
+        // TotalZoom: int16u, ValueConv '$val / 100' (no PrintConv, so the
+        // ValueConv'd number prints directly -- Perl's default number
+        // stringification, which perl_number reproduces).
+        if let Some(v) = reader.u16_at(field_offset::TOTAL_ZOOM) {
+            tags.insert(
+                "Kodak:TotalZoom".to_string(),
+                perl_number(f64::from(v) / 100.0),
+            );
+        }
     }
 }
 
@@ -383,26 +147,27 @@ impl MakerNoteParser for KodakParser {
     fn parse(
         &self,
         data: &[u8],
-        byte_order: ByteOrder,
+        _byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
-        // Kodak MakerNotes may start with "KDK" signature (8 bytes)
-        let signature = if data.len() >= 8 && &data[0..3] == KODAK_SIGNATURE {
-            Some(&data[0..8])
+        // Byte order is signature-determined for Kodak1a/1b (see the module
+        // doc comment), not inherited from the enclosing TIFF -- ignore the
+        // caller's `byte_order` the same way Casio Type2 and Sanyo resolve
+        // their own.
+        let order = if data.starts_with(b"KDK INFO") {
+            ByteOrder::BigEndian
+        } else if data.starts_with(b"KDK") {
+            ByteOrder::LittleEndian
         } else {
-            None
+            // Not a Kodak1a/1b payload (could be Type2/3/4/5/6 or another
+            // vendor's rebrand) -- none of those are implemented here.
+            return Ok(());
         };
-
-        let config = IfdParserConfig {
-            signature,
-            signature_offset: 0,
-            max_entries: 500,
+        let Some(record) = data.get(KODAK_MAIN_START..) else {
+            return Ok(());
         };
-
-        // Parse IFD entries using the shared parser
-        parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
-            self.parse_entry(entry, parse_data, byte_order, tags);
-        })
+        self.parse_main_record(record, order, tags);
+        Ok(())
     }
 }
 
@@ -417,79 +182,50 @@ mod tests {
         assert_eq!(parser.tag_prefix(), "Kodak:");
     }
 
+    /// Bytes and expected values transcribed from `exiftool -v3` /
+    /// `exiftool -G1 -s -a` on `combined-samples/Kodak.jpg`, whose
+    /// MakerNote is `"KDK INFO"`-signed (big-endian).
     #[test]
-    fn test_parse_quality_tag() {
+    fn test_parse_kdk_info_main_record() {
         let parser = KodakParser::new();
-        let mut data = Vec::new();
-
-        // Create minimal IFD with one entry
-        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
-        data.extend_from_slice(&[0x09, 0x00]); // Tag: KODAK_QUALITY (0x0009)
-        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
-        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
-        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Value: 1 (Fine)
+        let mut data = b"KDK INFO".to_vec();
+        let mut record = vec![0u8; 108];
+        record[0x00..0x08].copy_from_slice(b"DX4900  ");
+        record[0x0c..0x0e].copy_from_slice(&2448u16.to_be_bytes());
+        record[0x0e..0x10].copy_from_slice(&1632u16.to_be_bytes());
+        record[0x10..0x12].copy_from_slice(&2002u16.to_be_bytes());
+        record[0x12] = 5;
+        record[0x13] = 1;
+        record[0x62..0x64].copy_from_slice(&140u16.to_be_bytes());
+        data.extend_from_slice(&record);
 
         let mut tags = HashMap::new();
         let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
-
         assert!(result.is_ok());
-        assert_eq!(tags.get("Kodak:Quality"), Some(&"Fine".to_string()));
+        // Real ExifTool output keeps the trailing padding: "DX4900  " (two
+        // spaces), verified via `exiftool -j` on Kodak.jpg -- `string[n]`
+        // is only truncated at the first NUL, and there isn't one here.
+        assert_eq!(tags.get("Kodak:KodakModel"), Some(&"DX4900  ".to_string()));
+        assert_eq!(tags.get("Kodak:KodakImageWidth"), Some(&"2448".to_string()));
+        assert_eq!(
+            tags.get("Kodak:KodakImageHeight"),
+            Some(&"1632".to_string())
+        );
+        assert_eq!(tags.get("Kodak:YearCreated"), Some(&"2002".to_string()));
+        assert_eq!(
+            tags.get("Kodak:MonthDayCreated"),
+            Some(&"05:01".to_string())
+        );
+        assert_eq!(tags.get("Kodak:TotalZoom"), Some(&"1.4".to_string()));
     }
 
     #[test]
-    fn test_parse_focus_mode_tag() {
+    fn test_non_kodak1a1b_payload_is_a_no_op() {
         let parser = KodakParser::new();
-        let mut data = Vec::new();
-
-        // Create minimal IFD with one entry
-        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
-        data.extend_from_slice(&[0x0D, 0x00]); // Tag: KODAK_FOCUS_MODE (0x000D)
-        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
-        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
-        data.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]); // Value: 2 (Macro)
-
+        let data = vec![0u8; 32];
         let mut tags = HashMap::new();
         let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
-
         assert!(result.is_ok());
-        assert_eq!(tags.get("Kodak:FocusMode"), Some(&"Macro".to_string()));
-    }
-
-    #[test]
-    fn test_parse_scene_mode_tag() {
-        let parser = KodakParser::new();
-        let mut data = Vec::new();
-
-        // Create minimal IFD with one entry
-        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
-        data.extend_from_slice(&[0x20, 0x00]); // Tag: KODAK_SCENE_MODE (0x0020)
-        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
-        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
-        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Value: 1 (Portrait)
-
-        let mut tags = HashMap::new();
-        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
-
-        assert!(result.is_ok());
-        assert_eq!(tags.get("Kodak:SceneMode"), Some(&"Portrait".to_string()));
-    }
-
-    #[test]
-    fn test_parse_flash_fired_tag() {
-        let parser = KodakParser::new();
-        let mut data = Vec::new();
-
-        // Create minimal IFD with one entry
-        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
-        data.extend_from_slice(&[0x11, 0x00]); // Tag: KODAK_FLASH_FIRED (0x0011)
-        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
-        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
-        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Value: 1 (Yes)
-
-        let mut tags = HashMap::new();
-        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
-
-        assert!(result.is_ok());
-        assert_eq!(tags.get("Kodak:FlashFired"), Some(&"Yes".to_string()));
+        assert!(tags.is_empty());
     }
 }

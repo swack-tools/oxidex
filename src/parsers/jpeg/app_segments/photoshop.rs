@@ -56,6 +56,14 @@ const RES_URL_LIST: u16 = 0x041E;
 const RES_VERSION_INFO: u16 = 0x0421;
 const RES_IPTC_DIGEST: u16 = 0x0425;
 const RES_PRINT_SCALE_INFO: u16 = 0x0426;
+const RES_PIXEL_INFO: u16 = 0x0428;
+const RES_PHOTOSHOP_THUMBNAIL: u16 = 0x040C;
+/// `Start => '$valuePtr + 0x1c'`-equivalent: `%thumbnailInfo`'s `RawConv`
+/// (Photoshop.pm:68-81) is `my $img=substr($val,0x1c); ...` -- a fixed
+/// 28-byte thumbnail-resource header (format/width/height/rowbytes/size/
+/// compressedSize/bpp/planes, 6*int32u + 2*int16u) precedes the embedded
+/// JPEG bytes.
+const PHOTOSHOP_THUMBNAIL_HEADER_LEN: usize = 0x1c;
 
 /// Represents an Adobe Photoshop Image Resource Block
 #[derive(Debug, Clone, PartialEq)]
@@ -128,6 +136,12 @@ fn be_u32_at(data: &[u8], off: usize) -> Option<u32> {
 
 fn be_f32_at(data: &[u8], off: usize) -> Option<f32> {
     be_u32_at(data, off).map(f32::from_bits)
+}
+
+fn be_f64_at(data: &[u8], off: usize) -> Option<f64> {
+    Some(f64::from_bits(u64::from_be_bytes(
+        data.get(off..off + 8)?.try_into().ok()?,
+    )))
 }
 
 /// Formats a PrintConv hash miss the way ExifTool does, so an unrecognised
@@ -409,6 +423,35 @@ pub fn parse_photoshop_irb(data: &[u8]) -> Result<MetadataMap> {
                             .collect::<String>(),
                     ),
                 );
+            }
+            // PixelInfo (Photoshop.pm:513-522): ProcessBinaryData,
+            // FIRST_ENTRY 0, only field is index 4 `PixelAspectRatio`
+            // (`Format => 'double'`, no PrintConv -- the raw double prints
+            // via Perl's default number stringification).
+            RES_PIXEL_INFO => {
+                if let Some(ratio) = be_f64_at(block.data, 4) {
+                    metadata.insert(
+                        "Photoshop:PixelAspectRatio",
+                        TagValue::String(perl_number(ratio)),
+                    );
+                }
+            }
+            // PhotoshopThumbnail (Photoshop.pm:186-191, `%thumbnailInfo`):
+            // the embedded JPEG starts 28 bytes into the resource's own
+            // data (see PHOTOSHOP_THUMBNAIL_HEADER_LEN's doc comment).
+            // ValidateImage's magic-byte check only fires when the tag is
+            // specifically requested (ExifTool.pm:6425), which a default
+            // dump never does -- irrelevant here, matching the same
+            // decision already made for Casio's/Sony's preview tags.
+            RES_PHOTOSHOP_THUMBNAIL => {
+                if let Some(len) = block.data.len().checked_sub(PHOTOSHOP_THUMBNAIL_HEADER_LEN) {
+                    metadata.insert(
+                        "Photoshop:PhotoshopThumbnail",
+                        TagValue::String(format!(
+                            "(Binary data {len} bytes, use -b option to extract)"
+                        )),
+                    );
+                }
             }
             // Resource 0x0404 (IPTCData) is parsed by the IPTC parser, and
             // every other resource is either `Unknown => 1` in Photoshop.pm

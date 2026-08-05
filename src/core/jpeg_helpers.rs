@@ -150,6 +150,20 @@ pub fn process_exif_segments(
             continue;
         }
 
+        // Check if this is a Casio QVCI segment (starts with "QVCI\0")
+        //
+        // JPEG.pm:58-61: `Condition => '$$valPt =~ /^QVCI\0/'`, `SubDirectory
+        // => { TagTable => 'Image::ExifTool::Casio::QVCI' }` -- no `Start`
+        // override, so `Casio::QVCI`'s `FIRST_ENTRY => 0` counts from the
+        // segment's own first byte (the "QVCI\0" signature itself), not from
+        // after it. Verified against `combined-samples/CasioQVCI.jpg`:
+        // `ModelType` (table index 0x62=98) sits at file offset 0x18+98=0x7a,
+        // which is exactly where `exiftool -v3` shows "KX-778\0".
+        if segment.data.len() >= 5 && &segment.data[0..5] == b"QVCI\0" {
+            crate::parsers::jpeg::app_parsers::parse_casio_qvci_segment(segment.data, metadata);
+            continue;
+        }
+
         // Check if this is an EXIF segment (starts with "Exif\0\0")
         if segment.data.len() >= 6 && &segment.data[0..6] == b"Exif\0\0" {
             // Extract EXIF data starting after the 6-byte header

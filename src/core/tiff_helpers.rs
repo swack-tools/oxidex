@@ -1263,6 +1263,9 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
     // dispatch below, not a replacement for it - every other tag from these
     // makes still reaches metadata through the ordinary path.
     parse_casio_preview_image_if_casio(&make, ctx, byte_order, metadata);
+    parse_casio_type2_extra_tags_if_casio(&make, ctx, byte_order, metadata);
+    parse_ricoh_extra_tags_if_ricoh(&make, ctx, byte_order, model.as_deref(), metadata);
+    parse_ge_extra_tags_if_ge(&make, ctx, byte_order, metadata);
     parse_olympus_preview_image_if_olympus(&make, ctx, byte_order, metadata);
     parse_minolta_preview_image_if_minolta(&make, ctx, byte_order, metadata);
 
@@ -1375,6 +1378,68 @@ fn parse_casio_preview_image_if_casio(
     crate::parsers::tiff::makernotes::casio::parse_casio_preview_image_tag(
         ctx, byte_order, metadata,
     );
+}
+
+/// Extracts Casio Type2's `PreviewImageSize`, `FlashDistance`,
+/// `HometownCity` and `FirmwareDate` when `make` is Casio.
+///
+/// A no-op for any other make, and for a Casio Type1 ("Main") payload. See
+/// [`crate::parsers::tiff::makernotes::casio::parse_casio_type2_extra_tags`].
+fn parse_casio_type2_extra_tags_if_casio(
+    make: &str,
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    if !make.trim().to_ascii_lowercase().starts_with("casio") {
+        return;
+    }
+    crate::parsers::tiff::makernotes::casio::parse_casio_type2_extra_tags(
+        ctx, byte_order, metadata,
+    );
+}
+
+/// Extracts Ricoh's `ImageInfo` (RicohImageWidth/RicohImageHeight/RicohDate)
+/// and `Subdir` (ManufactureDate1/ManufactureDate2) sub-directory tags when
+/// `make` is Ricoh.
+///
+/// A no-op for any other make. See
+/// [`crate::parsers::tiff::makernotes::ricoh::parse_ricoh_extra_tags`].
+fn parse_ricoh_extra_tags_if_ricoh(
+    make: &str,
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    model: Option<&str>,
+    metadata: &mut MetadataMap,
+) {
+    if !make.trim().to_ascii_lowercase().starts_with("ricoh") {
+        return;
+    }
+    crate::parsers::tiff::makernotes::ricoh::parse_ricoh_extra_tags(
+        ctx, byte_order, model, metadata,
+    );
+}
+
+/// Extracts GE's `GEModel`/`GEMake` when `make` is General Imaging (branded
+/// "General Imaging Co." in EXIF, per `makernote_dispatcher.rs`'s
+/// `parser_for_make_prefix`).
+///
+/// A no-op for any other make. See
+/// [`crate::parsers::tiff::makernotes::ge::parse_ge_extra_tags`].
+fn parse_ge_extra_tags_if_ge(
+    make: &str,
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    if !make
+        .trim()
+        .to_ascii_lowercase()
+        .starts_with("general imaging")
+    {
+        return;
+    }
+    crate::parsers::tiff::makernotes::ge::parse_ge_extra_tags(ctx, byte_order, metadata);
 }
 
 /// Extracts Olympus's `PreviewImage` (`CameraSettings` 0x0100/0x0101/0x0102)

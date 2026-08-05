@@ -21,7 +21,10 @@
 #![allow(dead_code)]
 
 use crate::const_decoder;
+use crate::core::{MetadataMap, TagValue};
+use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
+use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
@@ -152,6 +155,110 @@ impl MakerNoteParser for GeParser {
             self.parse_entry(entry, parse_data, byte_order, tags);
         })?;
         Ok(())
+    }
+}
+
+// ===== GEModel/GEMake (0x0207/0x0300): GE's FixBase quirk =====
+//
+// MakerNotes.pm:136-144 declares `FixBase => 1, AutoFix => 1` for
+// `MakerNoteGE`: ExifTool's own reading of these two out-of-line string
+// values needs a base correction its ordinary offset math doesn't produce,
+// derived by `MakerNotes::FixBase` analysing the whole directory's value
+// offsets. That analysis isn't reproduced here; instead this hard-codes the
+// single shift verified against `combined-samples/GE.jpg`'s raw bytes.
+//
+// GEModel's IFD entry declares `value_offset = 170` (0xaa, read directly
+// from the file's tag-0x0207 entry). Interpreted as payload-relative (the
+// natural reading, matching every other out-of-line GE tag), that points to
+// absolute file offset `payload_start + 170` = 0x384 -- but the actual bytes
+// "E1035\0" sit two bytes earlier, at 0x382. `GE_0x0200`'s declared offset
+// (a tag this parser doesn't decode) resolves to a position *before* the
+// payload even starts even after this same -2 correction, which is exactly
+// the "[minor] Suspicious MakerNotes offset" warning real ExifTool prints
+// for it -- consistent with one shift applied uniformly across the
+// directory rather than per-tag guesswork.
+const GE_MODEL: u16 = 0x0207;
+const GE_MAKE: u16 = 0x0300;
+/// Verified against `GE.jpg`: declared 170, real payload-relative offset
+/// 168.
+const GE_FIXBASE_SHIFT: i64 = -2;
+
+/// Finds one entry by tag id in the 11-entry GE IFD at `ifd_offset` inside
+/// `tiff`. Same shape as Casio's `find_casio_entry`.
+fn find_ge_entry(
+    tiff: &[u8],
+    ifd_offset: usize,
+    byte_order: ByteOrder,
+    target: u16,
+) -> Option<IfdEntry> {
+    let count_bytes = tiff.get(ifd_offset..ifd_offset + 2)?;
+    let count = EndianReader::new(count_bytes, byte_order.to_io_byte_order()).u16_at(0)?;
+    let entries_start = ifd_offset + 2;
+    let entries = tiff.get(entries_start..entries_start + count as usize * 12)?;
+    let reader = EndianReader::new(entries, byte_order.to_io_byte_order());
+    (0..count as usize).find_map(|i| {
+        let base = i * 12;
+        let tag_id = reader.u16_at(base)?;
+        if tag_id != target {
+            return None;
+        }
+        Some(IfdEntry {
+            tag_id,
+            field_type: reader.u16_at(base + 2)?,
+            value_count: reader.u32_at(base + 4)?,
+            value_offset: reader.u32_at(base + 8)?,
+        })
+    })
+}
+
+/// Extracts `GEModel` and `GEMake` into `metadata`, applying the -2
+/// FixBase-equivalent shift documented above. A no-op when `ctx`'s payload
+/// isn't a recognised GE MakerNote.
+pub fn parse_ge_extra_tags(
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    let payload = ctx.payload();
+    if !(payload.starts_with(b"GE\0\0") || payload.starts_with(b"GENIC\0")) {
+        return;
+    }
+    let byte_order = match payload.get(10..12) {
+        Some(b"II") => ByteOrder::LittleEndian,
+        Some(b"MM") => ByteOrder::BigEndian,
+        _ => byte_order,
+    };
+    let payload_offset = ctx.payload_offset();
+    let ifd_offset = payload_offset + 18;
+    let tiff = ctx.tiff();
+    for (tag_id, name) in [(GE_MODEL, "GEModel"), (GE_MAKE, "GEMake")] {
+        let Some(entry) = find_ge_entry(tiff, ifd_offset, byte_order, tag_id) else {
+            continue;
+        };
+        let total = entry.value_count as usize;
+        // A value this small lives inline, never one of these two strings
+        // (6 and 32 bytes on the sample) -- and the FixBase shift only
+        // applies to out-of-line offsets.
+        if total <= 4 {
+            continue;
+        }
+        let Some(offset) = usize::try_from(
+            payload_offset as i64 + i64::from(entry.value_offset) + GE_FIXBASE_SHIFT,
+        )
+        .ok() else {
+            continue;
+        };
+        let Some(bytes) = offset
+            .checked_add(total)
+            .and_then(|end| tiff.get(offset..end))
+        else {
+            continue;
+        };
+        let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+        metadata.insert(
+            format!("GE:{name}"),
+            TagValue::new_string(String::from_utf8_lossy(&bytes[..end]).into_owned()),
+        );
     }
 }
 

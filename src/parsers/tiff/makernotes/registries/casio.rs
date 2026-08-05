@@ -27,6 +27,9 @@ pub fn casio_registry() -> TagRegistry {
         .register_raw(0x0003, "FocusMode")
         .register_raw(0x0004, "FlashMode")
         .register_raw(0x0005, "FlashIntensity")
+        // Casio.pm:98-105 (Main::0x0006) -- ValueConv '$val / 1000',
+        // PrintConv '"$val m"'.
+        .register_raw(0x0006, "ObjectDistance")
         // White Balance and Color
         .register_raw(0x0007, "WhiteBalance")
         .register_raw(0x0015, "ColorMode")
