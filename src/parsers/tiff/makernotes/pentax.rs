@@ -887,6 +887,24 @@ impl PentaxParser {
                         &mut members,
                         tags,
                     );
+                    // `LensInfoQ`'s `LensInfo` field (Pentax.pm:6048-6053,
+                    // offset 0x2a, `string[20]`) has a `ValueConv =>
+                    // '$val=~s/mm/mm /'` -- inserting a space after the
+                    // first "mm" -- that the transcribed `PENTAX_LENSINFOQ`
+                    // table (codegen_subdirs.py) omits because it can't
+                    // represent an arbitrary string substitution; only its
+                    // sibling `LensModel` field made it into the generated
+                    // table. Decoded here instead of re-deriving the whole
+                    // subdirectory by hand.
+                    if entry.tag_id == PENTAX_LENS_INFO_Q && record.len() > 0x2a {
+                        let end = (0x2a + 20).min(record.len());
+                        let raw = &record[0x2a..end];
+                        let nul = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+                        if let Ok(s) = std::str::from_utf8(&raw[..nul]) {
+                            let value = s.replacen("mm", "mm ", 1);
+                            tags.insert("Pentax:LensInfo".to_string(), value);
+                        }
+                    }
                 }
                 continue;
             }
