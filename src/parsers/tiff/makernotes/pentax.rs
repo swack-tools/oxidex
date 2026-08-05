@@ -1354,17 +1354,61 @@ impl PentaxParser {
                         entry.value_offset.to_string(),
                     );
                 }
+                // Pentax.pm:2141-2146: "top, bottom, left, right", no
+                // `PrintConv` -- space-joined raw values. `Writable =>
+                // 'int8u'` is only the *declared* type; the tag has no
+                // `Format` override, so ExifTool reads each value at
+                // whatever width the entry's own TIFF field type says
+                // (`ReadValue` uses `$format`, not the tag's `Writable`).
+                // PentaxK100D_Super.jpg writes this entry as `int16u[4]` (8
+                // bytes: `26 26 0 0`), not the usual `int8u[4]` -- reading it
+                // byte-wise instead of per the entry's declared width
+                // produced "0 26 0 26" for that file.
                 PENTAX_PREVIEW_IMAGE_BORDERS => {
-                    tags.insert(
-                        "Pentax:PreviewImageBorders".to_string(),
-                        entry.value_offset.to_string(),
-                    );
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
+                    let width = tiff_field_type_size(entry.field_type).max(1);
+                    if !raw.is_empty() && raw.len() % width == 0 {
+                        let values: Vec<String> = raw
+                            .chunks_exact(width)
+                            .map(|chunk| {
+                                let n: u32 = match (width, byte_order) {
+                                    (1, _) => chunk[0] as u32,
+                                    (2, ByteOrder::BigEndian) => {
+                                        u16::from_be_bytes([chunk[0], chunk[1]]) as u32
+                                    }
+                                    (2, ByteOrder::LittleEndian) => {
+                                        u16::from_le_bytes([chunk[0], chunk[1]]) as u32
+                                    }
+                                    (4, ByteOrder::BigEndian) => u32::from_be_bytes([
+                                        chunk[0], chunk[1], chunk[2], chunk[3],
+                                    ]),
+                                    (4, ByteOrder::LittleEndian) => u32::from_le_bytes([
+                                        chunk[0], chunk[1], chunk[2], chunk[3],
+                                    ]),
+                                    _ => chunk[0] as u32,
+                                };
+                                n.to_string()
+                            })
+                            .collect();
+                        tags.insert("Pentax:PreviewImageBorders".to_string(), values.join(" "));
+                    }
                 }
+                // Pentax.pm:2152-2159: `ValueConv => '($val - 50) / 10'`,
+                // `PrintConv => '$val ? sprintf("+%.1f", $val) : 0'` -- an
+                // adjustment of exactly 0 prints as the bare digit "0", not
+                // "+0.0".
                 PENTAX_SENSITIVITY_ADJUST => {
-                    tags.insert(
-                        "Pentax:SensitivityAdjust".to_string(),
-                        (entry.value_offset as i32).to_string(),
-                    );
+                    let raw = extract_value_as_i32(&entry, byte_order);
+                    let adjust = (raw - 50) as f64 / 10.0;
+                    // `$val` in the PrintConv is the *converted* value, so the
+                    // falsy check is against `adjust == 0` (raw == 50), not
+                    // against the raw byte.
+                    let value = if adjust == 0.0 {
+                        "0".to_string()
+                    } else {
+                        format!("{:+.1}", adjust)
+                    };
+                    tags.insert("Pentax:SensitivityAdjust".to_string(), value);
                 }
                 PENTAX_IMAGE_EDIT_COUNT => {
                     tags.insert(
