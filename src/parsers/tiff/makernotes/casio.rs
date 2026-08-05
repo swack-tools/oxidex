@@ -185,6 +185,21 @@ impl MakerNoteParser for CasioParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
+        // `MakerNoteCasio2` ("QVC\0"/"DCI\0"-signed, `Casio::Type2`) is a
+        // completely different tag table from `Casio::Main` (headerless
+        // "Type1") this registry/TAG_REGISTRY was built for -- its own 0x0002
+        // is `PreviewImageSize`, not Main's 0x0002 `Quality`, for one. Walking
+        // it here under Type1's tag names would print a real ExifTool tag
+        // name next to a value read under the wrong table's meaning, which is
+        // worse than omitting it. `parse_casio_type2_extra_tags`
+        // (`tiff_helpers.rs`) covers this table's tags this crate actually
+        // implements, reading against the full TIFF block Type2's
+        // out-of-line values need; nothing else in `Casio::Type2` is
+        // extracted yet.
+        if data.starts_with(b"QVC\0") || data.starts_with(b"DCI\0") {
+            return Ok(());
+        }
+
         // Casio MakerNotes typically start immediately with IFD entries
         // No header is used, so signature is None
         let config = IfdParserConfig {
@@ -318,6 +333,144 @@ pub fn parse_casio_preview_image_tag(
                 TagValue::new_string(format!(
                     "(Binary data {total} bytes, use -b option to extract)"
                 )),
+            );
+        }
+    }
+}
+
+// ===== Casio Type2 extra tags (PreviewImageSize, FlashDistance,
+// HometownCity, FirmwareDate) =====
+//
+// Like 0x2000 above, these need `ctx.tiff()` rather than the trait's
+// payload-only `parse()`: `FirmwareDate` (0x2001, `undef[18]`) and
+// `HometownCity` (0x3006, `string[24]`) are both stored out-of-line
+// (`Casio.pm:405-436,576-579`), and their value offsets are TIFF-relative
+// like `PreviewImage`'s (no `Base` override on `MakerNoteCasio2`). Folding
+// them into the ordinary IFD walk in `parse()` would only see the declared
+// MakerNote block, which -- per `MakerNoteContext`'s module doc -- routinely
+// doesn't reach an out-of-line value.
+
+const CASIO_TYPE2_PREVIEW_IMAGE_SIZE: u16 = 0x0002;
+const CASIO_TYPE2_FIRMWARE_DATE: u16 = 0x2001;
+const CASIO_TYPE2_FLASH_DISTANCE: u16 = 0x2034;
+const CASIO_TYPE2_HOMETOWN_CITY: u16 = 0x3006;
+
+/// Unpacks the two `int16u` values `PreviewImageSize` (`Casio.pm:280-286`)
+/// packs into one 4-byte inline entry, in the entry's own byte order.
+/// `extract_u16_value` (used by the Type1/Main path above) already does this
+/// for the first half; this is that plus the second.
+fn casio_u16_pair(entry: &IfdEntry, byte_order: ByteOrder) -> (u16, u16) {
+    match byte_order {
+        ByteOrder::LittleEndian => (
+            (entry.value_offset & 0xFFFF) as u16,
+            ((entry.value_offset >> 16) & 0xFFFF) as u16,
+        ),
+        ByteOrder::BigEndian => (
+            ((entry.value_offset >> 16) & 0xFFFF) as u16,
+            (entry.value_offset & 0xFFFF) as u16,
+        ),
+    }
+}
+
+/// `Casio.pm:411-436` (Type2::0x2001 `FirmwareDate`): an 18-byte fixed
+/// `YYMM\0\0DDHH\0\0mm\0\0\0\0` ASCII-digit layout (no seconds field --
+/// that's Main::0x0015's variant, one byte longer in its no-seconds-omitted
+/// form). Falls back to ExifTool's `Unknown (...)` form, nulls rendered as
+/// `.` with trailing dots stripped, when the bytes don't match.
+fn casio_firmware_date_type2(bytes: &[u8]) -> String {
+    fn digit2(b: &[u8]) -> Option<&str> {
+        if b.len() == 2 && b[0].is_ascii_digit() && b[1].is_ascii_digit() {
+            std::str::from_utf8(b).ok()
+        } else {
+            None
+        }
+    }
+    if bytes.len() == 18
+        && bytes[4] == 0
+        && bytes[5] == 0
+        && bytes[10] == 0
+        && bytes[11] == 0
+        && bytes[14..18] == [0, 0, 0, 0]
+        && let (Some(yy), Some(mo), Some(dd), Some(hh), Some(mi)) = (
+            digit2(&bytes[0..2]),
+            digit2(&bytes[2..4]),
+            digit2(&bytes[6..8]),
+            digit2(&bytes[8..10]),
+            digit2(&bytes[12..14]),
+        )
+    {
+        let yy_val: u32 = yy.parse().unwrap_or(0);
+        let year = if yy_val < 70 { 2000 + yy_val } else { 1900 + yy_val };
+        return format!("{year}:{mo}:{dd} {hh}:{mi}");
+    }
+    let mut unknown: String = bytes
+        .iter()
+        .map(|&b| if b == 0 { '.' } else { b as char })
+        .collect();
+    while unknown.ends_with('.') {
+        unknown.pop();
+    }
+    format!("Unknown ({unknown})")
+}
+
+/// Extracts Casio Type2's `PreviewImageSize`, `FlashDistance`,
+/// `HometownCity` and `FirmwareDate` into `metadata`, when `ctx` holds a
+/// "QVC\0"/"DCI\0"-signed payload. A no-op for a Type1 ("Main") payload or
+/// when a given tag is absent from this particular file's IFD.
+pub fn parse_casio_type2_extra_tags(
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    let payload = ctx.payload();
+    if !(payload.starts_with(b"QVC\0") || payload.starts_with(b"DCI\0")) {
+        return;
+    }
+
+    let ifd_offset = ctx.payload_offset() + CASIO_TYPE2_IFD_START;
+    let tiff = ctx.tiff();
+
+    if let Some(entry) =
+        find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_PREVIEW_IMAGE_SIZE)
+        && entry.value_count == 2
+    {
+        let (w, h) = casio_u16_pair(&entry, byte_order);
+        metadata.insert("Casio:PreviewImageSize", TagValue::new_string(format!("{w}x{h}")));
+    }
+
+    if let Some(entry) =
+        find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_FLASH_DISTANCE)
+        && let Some(value) = extract_u16_value(&entry, &[], byte_order)
+    {
+        metadata.insert("Casio:FlashDistance", TagValue::new_string(value.to_string()));
+    }
+
+    if let Some(entry) =
+        find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_HOMETOWN_CITY)
+    {
+        let total = entry.value_count as usize;
+        let offset = entry.value_offset as usize;
+        if let Some(bytes) = offset.checked_add(total).and_then(|end| tiff.get(offset..end)) {
+            let text = match bytes.iter().position(|&b| b == 0) {
+                Some(nul) => &bytes[..nul],
+                None => bytes,
+            };
+            metadata.insert(
+                "Casio:HometownCity",
+                TagValue::new_string(String::from_utf8_lossy(text).into_owned()),
+            );
+        }
+    }
+
+    if let Some(entry) =
+        find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_FIRMWARE_DATE)
+    {
+        let total = entry.value_count as usize;
+        let offset = entry.value_offset as usize;
+        if let Some(bytes) = offset.checked_add(total).and_then(|end| tiff.get(offset..end)) {
+            metadata.insert(
+                "Casio:FirmwareDate",
+                TagValue::new_string(casio_firmware_date_type2(bytes)),
             );
         }
     }

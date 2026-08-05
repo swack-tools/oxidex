@@ -1263,6 +1263,7 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
     // dispatch below, not a replacement for it - every other tag from these
     // makes still reaches metadata through the ordinary path.
     parse_casio_preview_image_if_casio(&make, ctx, byte_order, metadata);
+    parse_casio_type2_extra_tags_if_casio(&make, ctx, byte_order, metadata);
     parse_olympus_preview_image_if_olympus(&make, ctx, byte_order, metadata);
     parse_minolta_preview_image_if_minolta(&make, ctx, byte_order, metadata);
 
@@ -1373,6 +1374,25 @@ fn parse_casio_preview_image_if_casio(
         return;
     }
     crate::parsers::tiff::makernotes::casio::parse_casio_preview_image_tag(
+        ctx, byte_order, metadata,
+    );
+}
+
+/// Extracts Casio Type2's `PreviewImageSize`, `FlashDistance`,
+/// `HometownCity` and `FirmwareDate` when `make` is Casio.
+///
+/// A no-op for any other make, and for a Casio Type1 ("Main") payload. See
+/// [`crate::parsers::tiff::makernotes::casio::parse_casio_type2_extra_tags`].
+fn parse_casio_type2_extra_tags_if_casio(
+    make: &str,
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    if !make.trim().to_ascii_lowercase().starts_with("casio") {
+        return;
+    }
+    crate::parsers::tiff::makernotes::casio::parse_casio_type2_extra_tags(
         ctx, byte_order, metadata,
     );
 }

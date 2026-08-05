@@ -556,6 +556,37 @@ pub fn parse_jpeg_hdr_segment(data: &[u8], metadata: &mut MetadataMap) -> Result
     Ok(())
 }
 
+/// Parse a Casio QVCI segment (APP1, `"QVCI\0"`-signed, found in JPEGs from
+/// the Casio QV-7000SX).
+///
+/// `Casio.pm:1961-1998` (`%Image::ExifTool::Casio::QVCI`) is a plain
+/// `ProcessBinaryData` record with `FIRST_ENTRY => 0` counting from this
+/// segment's own first byte -- see the call site in `core::jpeg_helpers` for
+/// the file-offset arithmetic that confirms this. Only extracts the tags
+/// this crate carries a verified reading for: `ModelType`,
+/// `ManufactureIndex` and `ManufactureCode` are plain fixed-width strings
+/// with no `ValueConv`/`PrintConv`, so the generated table's raw
+/// `DecodedValue::String` is already ExifTool's printed value.
+/// `CasioQuality` (has an `IntEnum` `PrintConv`) and `DateTimeOriginal` (has
+/// a `ValueConv`+`PrintConv` this crate does not reproduce) are left out
+/// rather than guessed.
+pub fn parse_casio_qvci_segment(data: &[u8], metadata: &mut MetadataMap) {
+    let Some(table) = crate::exiftool_tables::find_table("Casio", "QVCI") else {
+        return;
+    };
+    // Byte order is irrelevant to every field this function reads (all
+    // fixed-width strings), so this is an arbitrary but harmless choice.
+    let fields = crate::exiftool_tables::decode_binary_table(table, data, crate::io::ByteOrder::Big);
+    for name in ["ModelType", "ManufactureIndex", "ManufactureCode"] {
+        let Some(decoded) = fields.iter().find(|f| f.field.name == name) else {
+            continue;
+        };
+        if let crate::exiftool_tables::DecodedValue::String(text) = &decoded.raw {
+            metadata.insert(format!("Casio:{name}"), TagValue::new_string(text.clone()));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
