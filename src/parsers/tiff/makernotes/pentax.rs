@@ -49,10 +49,10 @@ use super::shared::binary_subdir::{self, BinaryTable, Cond, ModelPat};
 use super::shared::generic_decoders::ON_OFF;
 use super::shared::tag_priority::insert_low_priority;
 use subdir_tables::{
-    PENTAX_AFINFO, PENTAX_AWBINFO, PENTAX_BATTERYINFO, PENTAX_CAMERASETTINGS, PENTAX_EVSTEPINFO,
-    PENTAX_FACEINFO, PENTAX_FACEPOS, PENTAX_FACESIZE, PENTAX_FILTERINFO, PENTAX_FLASHINFO,
-    PENTAX_KELVINWB, PENTAX_LENSCORR, PENTAX_LENSINFOQ, PENTAX_LEVELINFO, PENTAX_SHOTINFO,
-    PENTAX_SRINFO2, PENTAX_TEMPINFO, PENTAX_TIMEINFO, PENTAX_WBLEVELS,
+    PENTAX_AFINFO, PENTAX_AWBINFO, PENTAX_BATTERYINFO, PENTAX_CAMERASETTINGS, PENTAX_CONV6,
+    PENTAX_EVSTEPINFO, PENTAX_FACEINFO, PENTAX_FACEPOS, PENTAX_FACESIZE, PENTAX_FILTERINFO,
+    PENTAX_FLASHINFO, PENTAX_KELVINWB, PENTAX_LENSCORR, PENTAX_LENSINFOQ, PENTAX_LEVELINFO,
+    PENTAX_SHOTINFO, PENTAX_SRINFO2, PENTAX_TEMPINFO, PENTAX_TIMEINFO, PENTAX_WBLEVELS,
 };
 
 // Import declarative decoder macros
@@ -121,7 +121,7 @@ const PENTAX_FRAME_NUMBER: u16 = 0x0029;
 const PENTAX_EFFECTIVE_LV: u16 = 0x002D;
 
 // Camera Settings (0x0030-0x004F)
-const PENTAX_IMAGE_PROCESSING: u16 = 0x0032;
+const PENTAX_IMAGE_EDITING: u16 = 0x0032;
 const PENTAX_PICTURE_MODE2: u16 = 0x0033;
 const PENTAX_DRIVE_MODE: u16 = 0x0034;
 const PENTAX_SENSOR_SIZE: u16 = 0x0035;
@@ -178,6 +178,7 @@ const PENTAX_FACE_POS: u16 = 0x0227; // Pentax.pm:3010
 const PENTAX_FACE_SIZE: u16 = 0x0228; // Pentax.pm:3015
 const PENTAX_LEVEL_INFO: u16 = 0x022B; // Pentax.pm:3044
 const PENTAX_WB_LEVELS: u16 = 0x022D; // Pentax.pm:3048
+const PENTAX_CAF_POINT_INFO: u16 = 0x0238; // Pentax.pm:3096-3099
 const PENTAX_LENS_INFO_Q: u16 = 0x0239; // Pentax.pm:3095
 const PENTAX_WHITE_LEVEL: u16 = 0x007E;
 const PENTAX_LENS_INFO: u16 = 0x007F;
@@ -886,6 +887,24 @@ impl PentaxParser {
                         &mut members,
                         tags,
                     );
+                    // `LensInfoQ`'s `LensInfo` field (Pentax.pm:6048-6053,
+                    // offset 0x2a, `string[20]`) has a `ValueConv =>
+                    // '$val=~s/mm/mm /'` -- inserting a space after the
+                    // first "mm" -- that the transcribed `PENTAX_LENSINFOQ`
+                    // table (codegen_subdirs.py) omits because it can't
+                    // represent an arbitrary string substitution; only its
+                    // sibling `LensModel` field made it into the generated
+                    // table. Decoded here instead of re-deriving the whole
+                    // subdirectory by hand.
+                    if entry.tag_id == PENTAX_LENS_INFO_Q && record.len() > 0x2a {
+                        let end = (0x2a + 20).min(record.len());
+                        let raw = &record[0x2a..end];
+                        let nul = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+                        if let Ok(s) = std::str::from_utf8(&raw[..nul]) {
+                            let value = s.replacen("mm", "mm ", 1);
+                            tags.insert("Pentax:LensInfo".to_string(), value);
+                        }
+                    }
                 }
                 continue;
             }
@@ -1060,14 +1079,25 @@ impl PentaxParser {
                     tags.insert("Pentax:ISO".to_string(), value.to_string());
                 }
 
+                // `ValueConv => '$val / 256'` (Pentax.pm:1729). 256 is a power of
+                // two, so the division is exact in f64 and Rust's `Display`
+                // prints the same minimal decimal ExifTool's default number
+                // stringification does (e.g. raw 542 -> "2.1171875").
                 PENTAX_BLUE_BALANCE => {
                     let value = extract_value_as_i32(&entry, byte_order);
-                    tags.insert("Pentax:BlueBalance".to_string(), value.to_string());
+                    tags.insert(
+                        "Pentax:BlueBalance".to_string(),
+                        (value as f64 / 256.0).to_string(),
+                    );
                 }
 
+                // `ValueConv => '$val / 256'` (Pentax.pm:1736).
                 PENTAX_RED_BALANCE => {
                     let value = extract_value_as_i32(&entry, byte_order);
-                    tags.insert("Pentax:RedBalance".to_string(), value.to_string());
+                    tags.insert(
+                        "Pentax:RedBalance".to_string(),
+                        (value as f64 / 256.0).to_string(),
+                    );
                 }
 
                 PENTAX_FOCAL_LENGTH => {
@@ -1160,9 +1190,20 @@ impl PentaxParser {
                     tags.insert("Pentax:HometownCity".to_string(), value.to_string());
                 }
 
+                // `SeparateTable => 'City'`, `PrintConv => \%pentaxCities`
+                // (Pentax.pm:1844-1849) -- the same 75-entry lookup already
+                // transcribed as `PENTAX_CONV6` for `TimeInfo`'s embedded
+                // HometownCity/DestinationCity fields. An unrecognized code
+                // falls through to the raw number, matching ExifTool's
+                // default `PrintConv` behavior for a hash with no match.
                 PENTAX_DESTINATION_CITY => {
                     let value = entry.value_offset;
-                    tags.insert("Pentax:DestinationCity".to_string(), value.to_string());
+                    let name = PENTAX_CONV6
+                        .iter()
+                        .find(|(code, _)| *code == value as i64)
+                        .map(|(_, name)| (*name).to_string())
+                        .unwrap_or_else(|| value.to_string());
+                    tags.insert("Pentax:DestinationCity".to_string(), name);
                 }
 
                 // NOTE: despite the constant name, tag 0x0033 is ExifTool's
@@ -1243,20 +1284,60 @@ impl PentaxParser {
                         entry.value_offset.to_string(),
                     );
                 }
+                // Pentax.pm:2882-2899: `Format => 'int16s'` (or `int32s` for
+                // the rarer `int32u`-declared variant) overrides the IFD's own
+                // declared type -- "negative values are valid even though
+                // Pentax writes int16u" -- then `ValueConv => '$val/1024'`,
+                // `PrintConv => 'sprintf("%.1f",$val)'`.
                 PENTAX_EFFECTIVE_LV => {
-                    let value = extract_value_as_i32(&entry, byte_order);
+                    let raw = extract_value_as_i32(&entry, byte_order);
+                    let signed = if entry.field_type == 3 {
+                        raw as i16 as i32
+                    } else {
+                        raw
+                    };
                     tags.insert(
                         "Pentax:EffectiveLV".to_string(),
-                        format!("{:.1}", value as f32 / 10.0),
+                        format!("{:.1}", signed as f64 / 1024.0),
                     );
                 }
 
                 // Camera Settings
-                PENTAX_IMAGE_PROCESSING => {
-                    tags.insert(
-                        "Pentax:ImageProcessing".to_string(),
-                        entry.value_offset.to_string(),
-                    );
+                //
+                // ExifTool names 0x0032 `ImageEditing`, not `ImageProcessing`
+                // (no tag by that name exists in Pentax.pm at all -- this
+                // constant/insert previously reported both the wrong tag name
+                // and the wrong value, a bare `entry.value_offset` where
+                // ExifTool reads 4 `int8u` bytes and looks up the joined
+                // string, e.g. `'4 0 0 0' => 'Digital Filter 4'`
+                // (Pentax.pm:1905-1919). An unrecognized tuple falls through
+                // to the raw space-joined bytes, matching ExifTool's default
+                // behavior for a hash `PrintConv` with no match.
+                PENTAX_IMAGE_EDITING => {
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
+                    if !raw.is_empty() {
+                        let key = raw.iter().map(u8::to_string).collect::<Vec<_>>().join(" ");
+                        // `Format => 'int8u'` overrides whatever the entry's
+                        // own declared type is, so the actual byte count seen
+                        // here varies by camera: PentaxOptio30.jpg's 0x0032
+                        // entry is `int16u[1]` (2 bytes), matching the `'0 0'`
+                        // key; the K20D-style 4-byte form matches the rest.
+                        // ExifTool's default for a hash `PrintConv` miss is
+                        // `"Unknown ($val)"` (ExifTool.pm:3627-3633), not the
+                        // bare joined value.
+                        let value = match key.as_str() {
+                            "0 0" | "0 0 0 0" => "None".to_string(),
+                            "0 0 0 4" => "Digital Filter".to_string(),
+                            "1 0 0 0" => "Resized".to_string(),
+                            "2 0 0 0" => "Cropped".to_string(),
+                            "4 0 0 0" => "Digital Filter 4".to_string(),
+                            "6 0 0 0" => "Digital Filter 6".to_string(),
+                            "8 0 0 0" => "Red-eye Correction".to_string(),
+                            "16 0 0 0" => "Frame Synthesis?".to_string(),
+                            _ => format!("Unknown ({})", key),
+                        };
+                        tags.insert("Pentax:ImageEditing".to_string(), value);
+                    }
                 }
                 PENTAX_SENSOR_SIZE => {
                     tags.insert(
@@ -1288,17 +1369,61 @@ impl PentaxParser {
                         entry.value_offset.to_string(),
                     );
                 }
+                // Pentax.pm:2141-2146: "top, bottom, left, right", no
+                // `PrintConv` -- space-joined raw values. `Writable =>
+                // 'int8u'` is only the *declared* type; the tag has no
+                // `Format` override, so ExifTool reads each value at
+                // whatever width the entry's own TIFF field type says
+                // (`ReadValue` uses `$format`, not the tag's `Writable`).
+                // PentaxK100D_Super.jpg writes this entry as `int16u[4]` (8
+                // bytes: `26 26 0 0`), not the usual `int8u[4]` -- reading it
+                // byte-wise instead of per the entry's declared width
+                // produced "0 26 0 26" for that file.
                 PENTAX_PREVIEW_IMAGE_BORDERS => {
-                    tags.insert(
-                        "Pentax:PreviewImageBorders".to_string(),
-                        entry.value_offset.to_string(),
-                    );
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
+                    let width = tiff_field_type_size(entry.field_type).max(1);
+                    if !raw.is_empty() && raw.len() % width == 0 {
+                        let values: Vec<String> = raw
+                            .chunks_exact(width)
+                            .map(|chunk| {
+                                let n: u32 = match (width, byte_order) {
+                                    (1, _) => chunk[0] as u32,
+                                    (2, ByteOrder::BigEndian) => {
+                                        u16::from_be_bytes([chunk[0], chunk[1]]) as u32
+                                    }
+                                    (2, ByteOrder::LittleEndian) => {
+                                        u16::from_le_bytes([chunk[0], chunk[1]]) as u32
+                                    }
+                                    (4, ByteOrder::BigEndian) => {
+                                        u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+                                    }
+                                    (4, ByteOrder::LittleEndian) => {
+                                        u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+                                    }
+                                    _ => chunk[0] as u32,
+                                };
+                                n.to_string()
+                            })
+                            .collect();
+                        tags.insert("Pentax:PreviewImageBorders".to_string(), values.join(" "));
+                    }
                 }
+                // Pentax.pm:2152-2159: `ValueConv => '($val - 50) / 10'`,
+                // `PrintConv => '$val ? sprintf("+%.1f", $val) : 0'` -- an
+                // adjustment of exactly 0 prints as the bare digit "0", not
+                // "+0.0".
                 PENTAX_SENSITIVITY_ADJUST => {
-                    tags.insert(
-                        "Pentax:SensitivityAdjust".to_string(),
-                        (entry.value_offset as i32).to_string(),
-                    );
+                    let raw = extract_value_as_i32(&entry, byte_order);
+                    let adjust = (raw - 50) as f64 / 10.0;
+                    // `$val` in the PrintConv is the *converted* value, so the
+                    // falsy check is against `adjust == 0` (raw == 50), not
+                    // against the raw byte.
+                    let value = if adjust == 0.0 {
+                        "0".to_string()
+                    } else {
+                        format!("{:+.1}", adjust)
+                    };
+                    tags.insert("Pentax:SensitivityAdjust".to_string(), value);
                 }
                 PENTAX_IMAGE_EDIT_COUNT => {
                     tags.insert(
@@ -1387,11 +1512,56 @@ impl PentaxParser {
                 PENTAX_AWB_INFO => {
                     tags.insert("Pentax:AWBInfo".to_string(), entry.value_offset.to_string());
                 }
+                // Pentax.pm:3096-3099 `CAFPointInfo` (0x0238) SubDirectory,
+                // Pentax.pm:5202-5227's `%Pentax::CAFPointInfo` table, byte 1
+                // (`FIRST_ENTRY => 0`). `NumCAFPoints`'s `RawConv` packs the
+                // AF grid's width and height into one byte's nibbles and
+                // multiplies them: `($val & 0x0f) * ($val >> 4)`. Only this
+                // one field is decoded here -- `CAFPointsInFocus`/
+                // `CAFPointsSelected` need `DecodeAFPoints`, a bitmask walk
+                // over a grid whose size this byte determines, and neither is
+                // in the assigned tag set.
+                PENTAX_CAF_POINT_INFO => {
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
+                    if raw.len() >= 2 {
+                        let b = raw[1];
+                        let n = (b & 0x0f) as u32 * (b >> 4) as u32;
+                        tags.insert("Pentax:NumCAFPoints".to_string(), n.to_string());
+                    }
+                }
+                // Pentax.pm:2347-2364: `undef`/`int8u`, declared `Count => 4`
+                // but ExifTool -- and this reader, via `inline_or_offset_bytes`
+                // sizing from the entry's own `value_count` -- decodes exactly
+                // as many bytes as the entry actually declares, which is 1 on
+                // the X-5, 2 on the WG-3, 4 on the K20D. `PrintConv => [{0
+                // =>'Off',1=>'On'},{0=>0,1=>'Enabled',2=>'Auto'}]` names only
+                // the first two positions; any further bytes print as their
+                // raw number. A multi-index `PrintConv` array joins whatever
+                // positions are present with "; " (a single byte prints with
+                // no separator at all -- X-5's `DynamicRangeExpansion = On`).
                 PENTAX_DYNAMIC_RANGE_EXPANSION => {
-                    tags.insert(
-                        "Pentax:DynamicRangeExpansion".to_string(),
-                        DYNAMIC_RANGE_EXPANSION.decode(entry.value_offset as i32),
-                    );
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
+                    if !raw.is_empty() {
+                        let parts: Vec<String> = raw
+                            .iter()
+                            .enumerate()
+                            .map(|(i, &b)| match (i, b) {
+                                (0, 0) => "Off".to_string(),
+                                (0, 1) => "On".to_string(),
+                                // A hash miss on a named index is ExifTool's
+                                // "Unknown ($val)" default; an index past the
+                                // array (2, 3) has no `PrintConv` slot at all,
+                                // which ExifTool passes through unconverted.
+                                (0, other) => format!("Unknown ({})", other),
+                                (1, 0) => "0".to_string(),
+                                (1, 1) => "Enabled".to_string(),
+                                (1, 2) => "Auto".to_string(),
+                                (1, other) => format!("Unknown ({})", other),
+                                (_, other) => other.to_string(),
+                            })
+                            .collect();
+                        tags.insert("Pentax:DynamicRangeExpansion".to_string(), parts.join("; "));
+                    }
                 }
                 PENTAX_TIME_INFO => {
                     if let Some(value) = extract_string_value(&entry, data, value_base) {
@@ -1431,11 +1601,15 @@ impl PentaxParser {
                         (entry.value_offset as i32).to_string(),
                     );
                 }
+                // Pentax.pm:2419-2426: `int8u`, `PrintConv => {0=>'Off',1=>'On'}`.
                 PENTAX_CONTRAST_HIGHLIGHT_SHADOW_ADJ => {
-                    tags.insert(
-                        "Pentax:ContrastHighlightShadowAdj".to_string(),
-                        (entry.value_offset as i32).to_string(),
-                    );
+                    let value = extract_value_as_i32(&entry, byte_order);
+                    let name = match value {
+                        0 => "Off".to_string(),
+                        1 => "On".to_string(),
+                        other => format!("Unknown ({})", other),
+                    };
+                    tags.insert("Pentax:ContrastHighlightShadowAdj".to_string(), name);
                 }
 
                 // Advanced Features

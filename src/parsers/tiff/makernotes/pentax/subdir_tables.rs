@@ -29,7 +29,11 @@ const PENTAX_CONV2: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
 const PENTAX_CONV3: &[(i64, &str)] = &[(0, "Subtle Correction"), (1, "Strong Correction")];
 const PENTAX_CONV4: &[(i64, &str)] = &[(0, "Hometown"), (1, "Destination")];
 const PENTAX_CONV5: &[(i64, &str)] = &[(0, "No"), (1, "Yes")];
-const PENTAX_CONV6: &[(i64, &str)] = &[
+// Made `pub(crate)` (generator emits `const`) so `pentax.rs` can reuse this
+// exact transcription of `%pentaxCities` for the top-level 0x0023/0x0024
+// `HometownCity`/`DestinationCity` tags, which carry the same
+// `SeparateTable => 'City'` PrintConv as the `TimeInfo` sub-fields below.
+pub(crate) const PENTAX_CONV6: &[(i64, &str)] = &[
     (0, "Pago Pago"),
     (1, "Honolulu"),
     (2, "Anchorage"),
