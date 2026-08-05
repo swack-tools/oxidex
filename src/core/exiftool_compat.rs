@@ -810,6 +810,23 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     }
 
     // ---------------------------------------------------------------------
+    // Rule 19a: EXIF/TIFF LensInfo Formatting (Exif.pm:5800 `PrintLensInfo`)
+    // Renders the 4 space-separated rational64u values (min focal, max focal,
+    // min f-number, max f-number) as "12-20mm f/3.8-4.5" or "50mm f/1.4" for a
+    // prime lens. Unlike the XMP variant above, ExifTool's PrintLensInfo works
+    // on already-stringified tokens with plain string truthy/equality checks
+    // (0 is falsy; "45" ne "15" is a string compare) rather than 0/0-as-unknown
+    // rational parsing, so it needs its own implementation.
+    // ---------------------------------------------------------------------
+    if base_name == "LensInfo"
+        && !tag_name.starts_with("XMP")
+        && let Some(s) = value.as_string()
+        && let Some(formatted) = format_exif_lens_info(s)
+    {
+        return TagValue::String(formatted);
+    }
+
+    // ---------------------------------------------------------------------
     // Rule 19b/19c: APEX-stored tags, which DO have a PrintConv and so must
     // be resolved before the catch-all below turns them into plain numbers.
     // Keep PrintConv here. The Composite layer consumes the raw ValueConv via
@@ -1076,6 +1093,73 @@ fn format_perl_number(v: f64) -> String {
 ///
 /// * `Some(formatted)` - If parsing succeeds
 /// * `None` - If parsing fails (returns original value unchanged)
+/// Formats an already-stringified EXIF/TIFF `LensInfo` (tag 0xa432) value the way
+/// ExifTool's `Image::ExifTool::Exif::PrintLensInfo` does (Exif.pm:5800):
+///
+/// ```perl
+/// my @vals = split ' ', $val;
+/// return $val unless @vals == 4;
+/// my $c = 0;
+/// foreach (@vals) {
+///     Image::ExifTool::IsFloat($_) and ++$c, next;
+///     $_ eq 'inf' and $_ = '?', ++$c, next;
+///     $_ eq 'undef' and $_ = '?', ++$c, next;
+/// }
+/// return $val unless $c == 4;
+/// $val = $vals[0];
+/// $val .= "-$vals[1]" if $vals[1] and $vals[1] ne $vals[0];
+/// $val .= "mm f/$vals[2]";
+/// $val .= "-$vals[3]" if $vals[3] and $vals[3] ne $vals[2];
+/// return $val;
+/// ```
+///
+/// Note this is a *string* truthy/equality check on the original tokens (Perl's `0` is
+/// falsy, `ne` is a string compare), not a numeric-tolerance comparison -- distinct from
+/// [`format_xmp_lens_info`], which parses raw `num/den` rationals and treats `0/0` as an
+/// unknown aperture. `IsFloat` unmatched-but-not-`inf`/`undef` tokens fall through with
+/// `$c` unincremented, so `Some`/`None` here mirrors that "leave it alone" behavior.
+fn format_exif_lens_info(value: &str) -> Option<String> {
+    let vals: Vec<&str> = value.split_whitespace().collect();
+    if vals.len() != 4 {
+        return None;
+    }
+
+    let is_float = |s: &str| -> bool { s.parse::<f64>().is_ok() };
+
+    let mut tokens: Vec<String> = Vec::with_capacity(4);
+    let mut ok_count = 0;
+    for &v in &vals {
+        if is_float(v) {
+            tokens.push(v.to_string());
+            ok_count += 1;
+        } else if v == "inf" || v == "undef" {
+            tokens.push("?".to_string());
+            ok_count += 1;
+        } else {
+            tokens.push(v.to_string());
+        }
+    }
+    if ok_count != 4 {
+        return None;
+    }
+
+    // Perl truthy: only "" and "0" are false among numeric-looking strings.
+    let truthy = |s: &str| -> bool { s != "0" && !s.is_empty() };
+
+    let mut result = tokens[0].clone();
+    if truthy(&tokens[1]) && tokens[1] != tokens[0] {
+        result.push('-');
+        result.push_str(&tokens[1]);
+    }
+    result.push_str("mm f/");
+    result.push_str(&tokens[2]);
+    if truthy(&tokens[3]) && tokens[3] != tokens[2] {
+        result.push('-');
+        result.push_str(&tokens[3]);
+    }
+    Some(result)
+}
+
 fn format_xmp_lens_info(value: &str) -> Option<String> {
     // Parse space-separated rationals: "4500/100 10000/100 400/100 400/100"
     let parts: Vec<&str> = value.split_whitespace().collect();
