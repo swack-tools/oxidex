@@ -207,3 +207,19 @@ max_repair_rounds = 8
 # phase = "table" (alongside the existing "explore"/"patch" tags) rather
 # than repeating a model name here; attempt_table_port/
 # attempt_foundation_job select via models_for_phase(pool, "table").
+
+# Optional: which GitHub account the auto-publisher pushes and opens PRs
+# as. Omit the table entirely and publishing uses whichever account
+# `gh auth switch` last made active -- which is account-global machine
+# state that no config file records, and which nothing in a sweep's log
+# distinguishes from success until the push itself returns 403.
+#
+# This is a USERNAME, not a secret: the token is read from the keyring
+# via `gh auth token --user <name>` at dispatcher startup, so config.toml
+# never carries a second credential. Authenticate the account once with
+# `gh auth login --user <name>`.
+#
+# The name is resolved only when auto-publish is on, and a name gh has no
+# token for exits 1 at startup rather than failing mid-sweep.
+[publish]
+github_user = "your-github-username"
