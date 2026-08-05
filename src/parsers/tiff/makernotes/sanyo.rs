@@ -4,23 +4,19 @@
 //! Sanyo was known for the Xacti series of dual-camera/camcorder devices
 //! and waterproof/ruggedized cameras.
 //!
-//! ## Supported Cameras
-//! - Xacti series (dual photo/video cameras)
-//! - VPC series (digital cameras)
-//!
-//! ## Supported Features
-//! - Video/photo mode settings
-//! - Sequential shooting modes
-//! - Scene modes
-//! - Quality and color settings
-//! - Flash and focus modes
+//! Tag IDs, names and PrintConv maps are transcribed from ExifTool's
+//! `Sanyo.pm` `%Image::ExifTool::Sanyo::Main` (see `registries::sanyo` and
+//! the comments below), verified against the pinned 13.59 oracle on
+//! `combined-samples/Sanyo.jpg`.
 //!
 //! ## Tag Structure
-//! Sanyo uses a standard IFD format with manufacturer-specific tags.
+//! `MakerNoteSanyo` (`MakerNotes.pm:982-991`) is a standard TIFF IFD
+//! starting after an 8-byte `"SANYO\0"` + 2-byte pad header
+//! (`Start => '$valuePtr + 8'`), byte order resolved per-file
+//! (`ByteOrder => 'Unknown'`).
 
 #![allow(dead_code)]
 
-use crate::const_decoder;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -31,44 +27,8 @@ use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
 use super::shared::print_im::decode_print_im_from_ifd;
 use super::shared::tag_registry::TagRegistry;
 
-// ============================================================================
-// Declarative Decoder Definitions
-// ============================================================================
-
-const_decoder!(pub
-    QUALITY,
-    u16,
-    [(0, "Normal"), (1, "Fine"), (2, "Super Fine"),]
-);
-
-const_decoder!(pub FOCUS_MODE, u16, [(0, "Normal"), (1, "Macro"),]);
-
-const_decoder!(pub
-    SEQUENTIAL_MODE,
-    u16,
-    [
-        (0, "None"),
-        (1, "Standard"),
-        (2, "Best"),
-        (3, "Adjust Exposure"),
-    ]
-);
-
-const_decoder!(pub
-    SCENE_MODE,
-    u16,
-    [
-        (0, "Normal"),
-        (1, "Portrait"),
-        (2, "Scenery"),
-        (3, "Sports"),
-        (4, "Night"),
-        (5, "Beach"),
-        (6, "Snow"),
-    ]
-);
-
-const_decoder!(pub RECORD_MODE, u16, [(0, "Still Image"), (1, "Video"),]);
+const SANYO_MAKER_NOTE_OFFSET: u16 = 0x00FF;
+const SANYO_QUALITY: u16 = 0x0201;
 
 // ============================================================================
 // Helper Functions
@@ -83,6 +43,31 @@ fn extract_u16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> O
         ByteOrder::BigEndian => ((entry.value_offset >> 16) & 0xFFFF) as u16,
     };
     Some(value)
+}
+
+/// Sanyo.pm:46-77 (`SanyoQuality`, `Flags => 'PrintHex'`). The unmapped
+/// fallback is `ExifTool.pm`'s `Unknown (0x%x)` form (`ExifTool.pm:3631`) --
+/// the hex variant `PrintHex` selects, not the decimal `Unknown (n)` every
+/// other tag in this file falls back to.
+fn decode_sanyo_quality(value: u16) -> String {
+    let level = match value & 0xFF00 {
+        0x0000 => "Normal",
+        0x0100 => "Fine",
+        0x0200 => "Super Fine",
+        _ => return format!("Unknown (0x{value:x})"),
+    };
+    let detail = match value & 0x00FF {
+        0 => "Very Low",
+        1 => "Low",
+        2 => "Medium Low",
+        3 => "Medium",
+        4 => "Medium High",
+        5 => "High",
+        6 => "Very High",
+        7 => "Super High",
+        _ => return format!("Unknown (0x{value:x})"),
+    };
+    format!("{level}/{detail}")
 }
 
 // ============================================================================
@@ -118,31 +103,36 @@ impl SanyoParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) {
-        if let Some(value) = extract_u16_value(entry, data, byte_order) {
-            let tag_name = match TAG_REGISTRY.get_tag_name(entry.tag_id) {
-                Some(name) => name,
-                None => return,
-            };
-
-            // Try registry decoding first
-            let formatted_value = TAG_REGISTRY.decode_u16(entry.tag_id, value);
-
-            // Fallback for tags without decoder in registry
-            let formatted_value = if formatted_value == value.to_string() {
-                match entry.tag_id {
-                    0x0103 => {
-                        let mode = if value > 0 { "On" } else { "Off" };
-                        mode.to_string()
-                    }
-                    0x0107 => value.to_string(),
-                    _ => formatted_value,
-                }
-            } else {
-                formatted_value
-            };
-
-            tags.insert(format!("Sanyo:{}", tag_name), formatted_value);
+        // Sanyo.pm:29-33: `MakerNoteOffset` is `int32u`, not `int16u` --
+        // every other scalar tag this parser reads is a `u16` extracted via
+        // `extract_u16_value`, which would misread (or, for a genuinely
+        // 4-byte value, simply not apply since `value_count` stays 1 but the
+        // field is twice as wide) this one.
+        if entry.tag_id == SANYO_MAKER_NOTE_OFFSET && entry.value_count == 1 {
+            tags.insert(
+                "Sanyo:MakerNoteOffset".to_string(),
+                entry.value_offset.to_string(),
+            );
+            return;
         }
+
+        let Some(value) = extract_u16_value(entry, data, byte_order) else {
+            return;
+        };
+
+        if entry.tag_id == SANYO_QUALITY {
+            tags.insert(
+                "Sanyo:SanyoQuality".to_string(),
+                decode_sanyo_quality(value),
+            );
+            return;
+        }
+
+        let Some(tag_name) = TAG_REGISTRY.get_tag_name(entry.tag_id) else {
+            return;
+        };
+        let formatted_value = TAG_REGISTRY.decode_u16(entry.tag_id, value);
+        tags.insert(format!("Sanyo:{tag_name}"), formatted_value);
     }
 }
 
@@ -211,20 +201,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_quality_decoder() {
-        assert_eq!(QUALITY.decode(0), "Normal");
-        assert_eq!(QUALITY.decode(2), "Super Fine");
-    }
-
-    #[test]
-    fn test_sequential_mode_decoder() {
-        assert_eq!(SEQUENTIAL_MODE.decode(2), "Best");
-    }
-
-    #[test]
-    fn test_record_mode_decoder() {
-        assert_eq!(RECORD_MODE.decode(0), "Still Image");
-        assert_eq!(RECORD_MODE.decode(1), "Video");
+    fn test_sanyo_quality_decoder() {
+        assert_eq!(decode_sanyo_quality(0x0106), "Fine/Very High");
+        assert_eq!(decode_sanyo_quality(0x0000), "Normal/Very Low");
+        assert_eq!(decode_sanyo_quality(0x0207), "Super Fine/Super High");
+        assert_eq!(decode_sanyo_quality(0x0300), "Unknown (0x300)");
     }
 
     #[test]
@@ -235,24 +216,43 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_quality() {
+    fn test_parse_optical_zoom_on() {
         let parser = SanyoParser::new();
         let mut data = Vec::new();
-        data.extend_from_slice(&[0x01, 0x00]);
-        data.extend_from_slice(&[0x00, 0x01]);
-        data.extend_from_slice(&[0x03, 0x00]);
-        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&[0x19, 0x02]); // Tag 0x0219 OpticalZoomOn
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Value: 1 (On)
 
         let mut tags = HashMap::new();
         let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
         assert!(result.is_ok());
-        assert_eq!(tags.get("Sanyo:Quality"), Some(&"Fine".to_string()));
+        assert_eq!(tags.get("Sanyo:OpticalZoomOn"), Some(&"On".to_string()));
+    }
+
+    #[test]
+    fn test_parse_maker_note_offset() {
+        let parser = SanyoParser::new();
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&[0xFF, 0x00]); // Tag 0x00ff MakerNoteOffset
+        data.extend_from_slice(&[0x04, 0x00]); // Type: LONG
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&(1076u32).to_le_bytes()); // Value: 1076
+
+        let mut tags = HashMap::new();
+        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
+        assert!(result.is_ok());
+        assert_eq!(
+            tags.get("Sanyo:MakerNoteOffset"),
+            Some(&"1076".to_string())
+        );
     }
 
     #[test]
     fn test_tag_registry() {
-        assert_eq!(TAG_REGISTRY.get_tag_name(0x0100), Some("Quality"));
-        assert!(TAG_REGISTRY.has_tag(0x010A));
+        assert_eq!(TAG_REGISTRY.get_tag_name(0x0218), Some("FlickerReduce"));
+        assert!(TAG_REGISTRY.has_tag(0x021F));
     }
 }
