@@ -767,8 +767,14 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     // of a divide-by-zero: Minolta's FocusDistance has the PrintConv
     // `$val ? "$val m" : "inf"`, so a focus distance of zero means "focused at
     // infinity" and ExifTool reports exactly "inf". Rewriting those to "undef"
-    // would replace a real reading with an error marker.
-    const DELIBERATE_INFINITY: &[&str] = &["FocusDistance"];
+    // would replace a real reading with an error marker. Canon's
+    // `%focusDistanceByteSwap` (Canon.pm:1200, backing `%Canon::CameraInfo*`
+    // FocusDistanceUpper/Lower) has the same shape the other way around:
+    // `$val > 655.345 ? "inf" : "$val m"` -- the raw sentinel 0xffff (655.35 m
+    // after the ValueConv) means "not focused / infinity", and is exactly as
+    // deliberate as Minolta's zero.
+    const DELIBERATE_INFINITY: &[&str] =
+        &["FocusDistance", "FocusDistanceUpper", "FocusDistanceLower"];
     if let Some(s) = value.as_string() {
         if (s == "inf" || s == "-inf" || s == "Infinity" || s == "-Infinity")
             && !DELIBERATE_INFINITY.contains(&base_name)
