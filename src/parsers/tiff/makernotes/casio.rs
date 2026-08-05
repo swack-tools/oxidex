@@ -24,6 +24,7 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+use crate::core::formatters::numeric_precision::perl_number;
 use crate::core::{MetadataMap, TagValue};
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
@@ -51,6 +52,7 @@ const CASIO_DIGITAL_ZOOM: u16 = 0x000A;
 const CASIO_SHARPNESS: u16 = 0x000B;
 const CASIO_CONTRAST: u16 = 0x000C;
 const CASIO_SATURATION: u16 = 0x000D;
+const CASIO_OBJECT_DISTANCE: u16 = 0x0006;
 const CASIO_CCD_SENSITIVITY: u16 = 0x0014;
 const CASIO_COLOR_MODE: u16 = 0x0015;
 const CASIO_ENHANCEMENT: u16 = 0x0016;
@@ -123,6 +125,36 @@ impl CasioParser {
                 } else {
                     return;
                 }
+            }
+            // Casio.pm:32-46 (Main::0x0001) -- PrintConv map. #4-suffixed
+            // entries (7/10/15/16) are alternate raw values ExifTool folds
+            // into the same three names as the primary 2/3/4 entries.
+            CASIO_RECORDING_MODE => {
+                let Some(value) = extract_u16_value(entry, data, byte_order) else {
+                    return;
+                };
+                match value {
+                    1 => "Single Shutter".to_string(),
+                    2 => "Panorama".to_string(),
+                    3 => "Night Scene".to_string(),
+                    4 => "Portrait".to_string(),
+                    5 => "Landscape".to_string(),
+                    7 => "Panorama".to_string(),
+                    10 => "Night Scene".to_string(),
+                    15 => "Portrait".to_string(),
+                    16 => "Landscape".to_string(),
+                    other => other.to_string(),
+                }
+            }
+            // Casio.pm:98-105 (Main::0x0006) -- int32u, ValueConv '$val /
+            // 1000', PrintConv '"$val m"'. Count is 1 so the whole 4-byte
+            // value lives directly in `value_offset` (already read in this
+            // entry's byte order by the shared IFD-entry reader).
+            CASIO_OBJECT_DISTANCE => {
+                if entry.value_count != 1 {
+                    return;
+                }
+                format!("{} m", perl_number(entry.value_offset as f64 / 1000.0))
             }
             // All other tags use raw value as string
             _ => {
