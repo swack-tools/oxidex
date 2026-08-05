@@ -803,6 +803,9 @@ const CANON_THUMBNAIL_IMAGE_VALID_AREA: u16 = 0x0013;
 const CANON_ORIGINAL_DECISION_DATA_OFFSET: u16 = 0x0083;
 /// ExifTool Canon.pm:1972 — `0x4001 => [ ... ColorData1..ColorData12 ... ]`
 const CANON_COLOR_DATA: u16 = 0x4001;
+/// ExifTool Canon.pm:1750 — `0x35 => { Name => 'TimeInfo', SubDirectory => {
+/// TagTable => 'Image::ExifTool::Canon::TimeInfo' } }`.
+const CANON_TIME_INFO: u16 = 0x0035;
 
 /// FilterInfo (MakerNote tag 0x4024). Not a plain BinaryData table -- it
 /// declares its own `PROCESS_PROC`; see [`filter_info`].
@@ -1333,6 +1336,20 @@ const_decoder!(
         (2, "Custom"),
     ]
 );
+
+/// Renders a UTC offset in minutes as ExifTool's `Image::ExifTool::TimeZoneString`
+/// does (ExifTool.pm:6764): `sprintf('%s%.2d:%.2d', $sign, $h, $min - $h*60)`.
+///
+/// `%Canon::TimeInfo` key 1, `TimeZone` (Canon.pm:6641-6650), needs this: it is
+/// the one field in that table `binary_tables` leaves out, because its `PrintConv`
+/// is this function rather than a literal hash the transcription generator can
+/// reproduce. See the special case for [`CANON_TIME_INFO`] alongside the
+/// `binary_tables::handles_tag` dispatch below.
+fn canon_time_zone_string(minutes: i32) -> String {
+    let sign = if minutes < 0 { '-' } else { '+' };
+    let minutes = minutes.unsigned_abs();
+    format!("{}{:02}:{:02}", sign, minutes / 60, minutes % 60)
+}
 
 // Canon record mode decoder
 // Used for RecordMode in CameraSettings (index 9)
@@ -5993,6 +6010,27 @@ fn parse_canon_makernote_impl_located(
                     binary_tables::parse_binary_table(
                         tag, raw_bytes, &record, byte_order, &mut tags,
                     );
+
+                    // TimeZone (`%Canon::TimeInfo` key 1, Canon.pm:6641) is the one
+                    // TimeInfo field `binary_tables` leaves out -- its `PrintConv` is
+                    // `Image::ExifTool::TimeZoneString`, a function rather than a
+                    // literal hash, so the transcription generator omits it rather
+                    // than approximate. `FORMAT => 'int32s'`, so key 1 is word offset
+                    // 2 (`index * words()`, matching `binary_tables::read_field`).
+                    if tag == CANON_TIME_INFO
+                        && let (Some(&low), Some(&high)) = (record.get(2), record.get(3))
+                    {
+                        let low = u32::from(low as u16);
+                        let high = u32::from(high as u16);
+                        let combined = match byte_order {
+                            ByteOrder::LittleEndian => low | (high << 16),
+                            ByteOrder::BigEndian => (low << 16) | high,
+                        };
+                        tags.insert(
+                            "Canon:TimeZone".to_string(),
+                            canon_time_zone_string(combined as i32),
+                        );
+                    }
                 }
             }
 
