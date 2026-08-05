@@ -1060,14 +1060,25 @@ impl PentaxParser {
                     tags.insert("Pentax:ISO".to_string(), value.to_string());
                 }
 
+                // `ValueConv => '$val / 256'` (Pentax.pm:1729). 256 is a power of
+                // two, so the division is exact in f64 and Rust's `Display`
+                // prints the same minimal decimal ExifTool's default number
+                // stringification does (e.g. raw 542 -> "2.1171875").
                 PENTAX_BLUE_BALANCE => {
                     let value = extract_value_as_i32(&entry, byte_order);
-                    tags.insert("Pentax:BlueBalance".to_string(), value.to_string());
+                    tags.insert(
+                        "Pentax:BlueBalance".to_string(),
+                        (value as f64 / 256.0).to_string(),
+                    );
                 }
 
+                // `ValueConv => '$val / 256'` (Pentax.pm:1736).
                 PENTAX_RED_BALANCE => {
                     let value = extract_value_as_i32(&entry, byte_order);
-                    tags.insert("Pentax:RedBalance".to_string(), value.to_string());
+                    tags.insert(
+                        "Pentax:RedBalance".to_string(),
+                        (value as f64 / 256.0).to_string(),
+                    );
                 }
 
                 PENTAX_FOCAL_LENGTH => {
