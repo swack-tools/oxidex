@@ -1161,10 +1161,7 @@ impl MakerNoteParser for FujifilmParser {
                             .map(u16::to_string)
                             .collect::<Vec<_>>()
                             .join(" ");
-                        tags.insert(
-                            "FujiFilm:FacePositions".to_string(),
-                            joined,
-                        );
+                        tags.insert("FujiFilm:FacePositions".to_string(), joined);
                     }
                 }
 
@@ -1506,11 +1503,14 @@ impl MakerNoteParser for FujifilmParser {
                         _ => None,
                     };
                     if let Some(width) = width
-                        && let Some(values) = extract_uint_array(&entry, data, fuji_byte_order, width)
+                        && let Some(values) =
+                            extract_uint_array(&entry, data, fuji_byte_order, width)
                         && !values.is_empty()
                     {
-                        let types: Vec<String> =
-                            values.iter().map(|&v| decode_face_element_type(v)).collect();
+                        let types: Vec<String> = values
+                            .iter()
+                            .map(|&v| decode_face_element_type(v))
+                            .collect();
                         tags.insert("FujiFilm:FaceElementTypes".to_string(), types.join(", "));
                     }
                 }

@@ -430,7 +430,10 @@ pub fn parse_photoshop_irb(data: &[u8]) -> Result<MetadataMap> {
             // via Perl's default number stringification).
             RES_PIXEL_INFO => {
                 if let Some(ratio) = be_f64_at(block.data, 4) {
-                    metadata.insert("Photoshop:PixelAspectRatio", TagValue::String(perl_number(ratio)));
+                    metadata.insert(
+                        "Photoshop:PixelAspectRatio",
+                        TagValue::String(perl_number(ratio)),
+                    );
                 }
             }
             // PhotoshopThumbnail (Photoshop.pm:186-191, `%thumbnailInfo`):

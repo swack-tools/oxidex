@@ -286,7 +286,10 @@ fn parse_ricoh_image_info(
         metadata.insert("Ricoh:RicohImageWidth", TagValue::new_string(v.to_string()));
     }
     if let Some(v) = reader.u16_at(2) {
-        metadata.insert("Ricoh:RicohImageHeight", TagValue::new_string(v.to_string()));
+        metadata.insert(
+            "Ricoh:RicohImageHeight",
+            TagValue::new_string(v.to_string()),
+        );
     }
     if let Some(bytes) = record.get(6..13) {
         let date = format!(
@@ -327,7 +330,8 @@ fn parse_ricoh_subdir(
     let Some(entry) = find_ricoh_entry(tiff, ifd_offset, byte_order, RICOH_MAIN_SUBDIR) else {
         return;
     };
-    let Some(subdir_ifd_offset) = (entry.value_offset as usize).checked_add(RICOH_SUBDIR_HEADER_LEN)
+    let Some(subdir_ifd_offset) =
+        (entry.value_offset as usize).checked_add(RICOH_SUBDIR_HEADER_LEN)
     else {
         return;
     };
@@ -338,7 +342,11 @@ fn parse_ricoh_subdir(
                 .next()
                 .is_none_or(|c| !c.is_alphanumeric() && c != '_')
     });
-    let nested_base: i64 = if is_rr1 { i64::from(entry.value_offset) } else { 0 };
+    let nested_base: i64 = if is_rr1 {
+        i64::from(entry.value_offset)
+    } else {
+        0
+    };
     // Ricoh.pm:608-627: `ByteOrder => 'BigEndian'`, independent of the
     // enclosing Main directory's own byte order.
     let sub_order = ByteOrder::BigEndian;

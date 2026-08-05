@@ -244,10 +244,7 @@ mod tests {
         let mut tags = HashMap::new();
         let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
         assert!(result.is_ok());
-        assert_eq!(
-            tags.get("Sanyo:MakerNoteOffset"),
-            Some(&"1076".to_string())
-        );
+        assert_eq!(tags.get("Sanyo:MakerNoteOffset"), Some(&"1076".to_string()));
     }
 
     #[test]

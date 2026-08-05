@@ -214,7 +214,11 @@ fn find_ge_entry(
 /// Extracts `GEModel` and `GEMake` into `metadata`, applying the -2
 /// FixBase-equivalent shift documented above. A no-op when `ctx`'s payload
 /// isn't a recognised GE MakerNote.
-pub fn parse_ge_extra_tags(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: &mut MetadataMap) {
+pub fn parse_ge_extra_tags(
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
     let payload = ctx.payload();
     if !(payload.starts_with(b"GE\0\0") || payload.starts_with(b"GENIC\0")) {
         return;
@@ -238,13 +242,16 @@ pub fn parse_ge_extra_tags(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, me
         if total <= 4 {
             continue;
         }
-        let Some(offset) =
-            usize::try_from(payload_offset as i64 + i64::from(entry.value_offset) + GE_FIXBASE_SHIFT)
-                .ok()
-        else {
+        let Some(offset) = usize::try_from(
+            payload_offset as i64 + i64::from(entry.value_offset) + GE_FIXBASE_SHIFT,
+        )
+        .ok() else {
             continue;
         };
-        let Some(bytes) = offset.checked_add(total).and_then(|end| tiff.get(offset..end)) else {
+        let Some(bytes) = offset
+            .checked_add(total)
+            .and_then(|end| tiff.get(offset..end))
+        else {
             continue;
         };
         let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());

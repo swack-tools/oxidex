@@ -1415,7 +1415,9 @@ fn parse_ricoh_extra_tags_if_ricoh(
     if !make.trim().to_ascii_lowercase().starts_with("ricoh") {
         return;
     }
-    crate::parsers::tiff::makernotes::ricoh::parse_ricoh_extra_tags(ctx, byte_order, model, metadata);
+    crate::parsers::tiff::makernotes::ricoh::parse_ricoh_extra_tags(
+        ctx, byte_order, model, metadata,
+    );
 }
 
 /// Extracts GE's `GEModel`/`GEMake` when `make` is General Imaging (branded
@@ -1430,7 +1432,11 @@ fn parse_ge_extra_tags_if_ge(
     byte_order: ByteOrder,
     metadata: &mut MetadataMap,
 ) {
-    if !make.trim().to_ascii_lowercase().starts_with("general imaging") {
+    if !make
+        .trim()
+        .to_ascii_lowercase()
+        .starts_with("general imaging")
+    {
         return;
     }
     crate::parsers::tiff::makernotes::ge::parse_ge_extra_tags(ctx, byte_order, metadata);

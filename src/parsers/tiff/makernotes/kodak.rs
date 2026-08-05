@@ -81,7 +81,12 @@ impl KodakParser {
 
     /// Reads `Kodak::Main` (see the module doc comment) out of `record`,
     /// the `Start`-shifted bytes (i.e. `payload[8..]`), in `order`.
-    fn parse_main_record(&self, record: &[u8], order: ByteOrder, tags: &mut HashMap<String, String>) {
+    fn parse_main_record(
+        &self,
+        record: &[u8],
+        order: ByteOrder,
+        tags: &mut HashMap<String, String>,
+    ) {
         let reader = EndianReader::new(record, order.to_io_byte_order());
 
         // KodakModel: string[8], truncated at the first NUL -- ExifTool's
@@ -109,7 +114,9 @@ impl KodakParser {
 
         // MonthDayCreated: int8u[2], ValueConv 'sprintf("%.2d:%.2d",split(" ",
         // $val))' -- month and day, zero-padded, colon-joined.
-        if let Some(bytes) = record.get(field_offset::MONTH_DAY_CREATED..field_offset::MONTH_DAY_CREATED + 2) {
+        if let Some(bytes) =
+            record.get(field_offset::MONTH_DAY_CREATED..field_offset::MONTH_DAY_CREATED + 2)
+        {
             tags.insert(
                 "Kodak:MonthDayCreated".to_string(),
                 format!("{:02}:{:02}", bytes[0], bytes[1]),
@@ -198,14 +205,17 @@ mod tests {
         // Real ExifTool output keeps the trailing padding: "DX4900  " (two
         // spaces), verified via `exiftool -j` on Kodak.jpg -- `string[n]`
         // is only truncated at the first NUL, and there isn't one here.
-        assert_eq!(
-            tags.get("Kodak:KodakModel"),
-            Some(&"DX4900  ".to_string())
-        );
+        assert_eq!(tags.get("Kodak:KodakModel"), Some(&"DX4900  ".to_string()));
         assert_eq!(tags.get("Kodak:KodakImageWidth"), Some(&"2448".to_string()));
-        assert_eq!(tags.get("Kodak:KodakImageHeight"), Some(&"1632".to_string()));
+        assert_eq!(
+            tags.get("Kodak:KodakImageHeight"),
+            Some(&"1632".to_string())
+        );
         assert_eq!(tags.get("Kodak:YearCreated"), Some(&"2002".to_string()));
-        assert_eq!(tags.get("Kodak:MonthDayCreated"), Some(&"05:01".to_string()));
+        assert_eq!(
+            tags.get("Kodak:MonthDayCreated"),
+            Some(&"05:01".to_string())
+        );
         assert_eq!(tags.get("Kodak:TotalZoom"), Some(&"1.4".to_string()));
     }
 

@@ -31,10 +31,8 @@ const SEQUENTIAL_SHOT: SimpleValueDecoder<u16> = SimpleValueDecoder::new(&[
 ]);
 
 /// Sanyo.pm:131-138 (`RecordShutterRelease`).
-const RECORD_SHUTTER_RELEASE: SimpleValueDecoder<u16> = SimpleValueDecoder::new(&[
-    (0, "Record while down"),
-    (1, "Press start, press stop"),
-]);
+const RECORD_SHUTTER_RELEASE: SimpleValueDecoder<u16> =
+    SimpleValueDecoder::new(&[(0, "Record while down"), (1, "Press start, press stop")]);
 
 /// Sanyo.pm:159-166 (`Resaved`).
 const RESAVED: SimpleValueDecoder<u16> = SimpleValueDecoder::new(&[(0, "No"), (1, "Yes")]);
@@ -119,14 +117,22 @@ pub fn sanyo_registry() -> TagRegistry {
         .register_u16(0x0213, "QuickShot", decode_off_on)
         .register_u16(0x0214, "SelfTimer", decode_off_on)
         .register_u16(0x0216, "VoiceMemo", decode_off_on)
-        .register_u16(0x0217, "RecordShutterRelease", decode_record_shutter_release)
+        .register_u16(
+            0x0217,
+            "RecordShutterRelease",
+            decode_record_shutter_release,
+        )
         .register_u16(0x0218, "FlickerReduce", decode_off_on)
         .register_u16(0x0219, "OpticalZoomOn", decode_off_on)
         .register_u16(0x021B, "DigitalZoomOn", decode_off_on)
         .register_u16(0x021D, "LightSourceSpecial", decode_off_on)
         .register_u16(0x021E, "Resaved", decode_resaved)
         .register_u16(0x021F, "SceneSelect", decode_scene_select)
-        .register_u16(0x0224, "SequenceShotInterval", decode_sequence_shot_interval)
+        .register_u16(
+            0x0224,
+            "SequenceShotInterval",
+            decode_sequence_shot_interval,
+        )
         .register_u16(0x0225, "FlashMode", decode_flash_mode)
 }
 

@@ -405,7 +405,11 @@ fn casio_firmware_date_type2(bytes: &[u8]) -> String {
         )
     {
         let yy_val: u32 = yy.parse().unwrap_or(0);
-        let year = if yy_val < 70 { 2000 + yy_val } else { 1900 + yy_val };
+        let year = if yy_val < 70 {
+            2000 + yy_val
+        } else {
+            1900 + yy_val
+        };
         return format!("{year}:{mo}:{dd} {hh}:{mi}");
     }
     let mut unknown: String = bytes
@@ -440,18 +444,22 @@ pub fn parse_casio_type2_extra_tags(
         && entry.value_count == 2
     {
         let (w, h) = casio_u16_pair(&entry, byte_order);
-        metadata.insert("Casio:PreviewImageSize", TagValue::new_string(format!("{w}x{h}")));
+        metadata.insert(
+            "Casio:PreviewImageSize",
+            TagValue::new_string(format!("{w}x{h}")),
+        );
     }
 
-    if let Some(entry) =
-        find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_FLASH_DISTANCE)
+    if let Some(entry) = find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_FLASH_DISTANCE)
         && let Some(value) = extract_u16_value(&entry, &[], byte_order)
     {
-        metadata.insert("Casio:FlashDistance", TagValue::new_string(value.to_string()));
+        metadata.insert(
+            "Casio:FlashDistance",
+            TagValue::new_string(value.to_string()),
+        );
     }
 
-    if let Some(entry) =
-        find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_ENHANCEMENT)
+    if let Some(entry) = find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_ENHANCEMENT)
         && let Some(value) = extract_u16_value(&entry, &[], byte_order)
     {
         let text = match value {
@@ -465,12 +473,13 @@ pub fn parse_casio_type2_extra_tags(
         metadata.insert("Casio:Enhancement", TagValue::new_string(text));
     }
 
-    if let Some(entry) =
-        find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_HOMETOWN_CITY)
-    {
+    if let Some(entry) = find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_HOMETOWN_CITY) {
         let total = entry.value_count as usize;
         let offset = entry.value_offset as usize;
-        if let Some(bytes) = offset.checked_add(total).and_then(|end| tiff.get(offset..end)) {
+        if let Some(bytes) = offset
+            .checked_add(total)
+            .and_then(|end| tiff.get(offset..end))
+        {
             let text = match bytes.iter().position(|&b| b == 0) {
                 Some(nul) => &bytes[..nul],
                 None => bytes,
@@ -482,12 +491,13 @@ pub fn parse_casio_type2_extra_tags(
         }
     }
 
-    if let Some(entry) =
-        find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_FIRMWARE_DATE)
-    {
+    if let Some(entry) = find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_FIRMWARE_DATE) {
         let total = entry.value_count as usize;
         let offset = entry.value_offset as usize;
-        if let Some(bytes) = offset.checked_add(total).and_then(|end| tiff.get(offset..end)) {
+        if let Some(bytes) = offset
+            .checked_add(total)
+            .and_then(|end| tiff.get(offset..end))
+        {
             metadata.insert(
                 "Casio:FirmwareDate",
                 TagValue::new_string(casio_firmware_date_type2(bytes)),
