@@ -956,6 +956,7 @@ const CAMERA_SETTINGS_FLASH_MODEL: usize = 28;
 const CAMERA_SETTINGS_FLASH_BITS: usize = 29;
 const CAMERA_SETTINGS_FOCUS_CONTINUOUS: usize = 32;
 const CAMERA_SETTINGS_AE_SETTING: usize = 33;
+const CAMERA_SETTINGS_IMAGE_STABILIZATION: usize = 34;
 /// ExifTool `%Canon::CameraSettings` key 35 (Canon.pm:2645) — `DisplayAperture`, not 40.
 const CAMERA_SETTINGS_DISPLAY_APERTURE: usize = 35;
 const CAMERA_SETTINGS_ZOOM_SOURCE_WIDTH: usize = 36;
@@ -1608,6 +1609,23 @@ const_decoder!(
         (2, "AE Lock"),
         (3, "AE Lock + Exposure Compensation"),
         (4, "No AE"),
+    ]
+);
+
+const_decoder!(
+    pub IMAGE_STABILIZATION,
+    i16,
+    [
+        (0, "Off"),
+        (1, "On"),
+        (2, "Shoot Only"),
+        (3, "Panning"),
+        (4, "Dynamic"),
+        (256, "Off (2)"),
+        (257, "On (2)"),
+        (258, "Shoot Only (2)"),
+        (259, "Panning (2)"),
+        (260, "Dynamic (2)"),
     ]
 );
 
@@ -5302,6 +5320,17 @@ fn parse_canon_makernote_impl_located(
                         tags.insert("Canon:Saturation".to_string(), print_parameter(saturation));
                     }
 
+                    // ImageStabilization (index 34). Canon.pm drops only the
+                    // -1 sentinel before applying its ten-value enum table.
+                    if let Some(&stabilization) = array.get(CAMERA_SETTINGS_IMAGE_STABILIZATION)
+                        && stabilization != -1
+                    {
+                        tags.insert(
+                            "Canon:ImageStabilization".to_string(),
+                            IMAGE_STABILIZATION.decode(stabilization),
+                        );
+                    }
+
                     // Sharpness (index 15). ExifTool `%Canon::CameraSettings` key 15
                     // (Canon.pm:2404): `RawConv => '$val == 0x7fff ? undef : $val'`,
                     // `PrintConv => '$val > 0 ? "+$val" : $val'` -- a positive value
@@ -7240,6 +7269,26 @@ mod tests {
         let data = canon_makernote_with_short_array(0x0004, &shot_info);
         let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
         assert_eq!(result.get("Canon:AutoRotate"), None);
+    }
+
+    #[test]
+    fn test_parse_camera_settings_image_stabilization() {
+        let mut camera_settings = vec![0i16; 35];
+        camera_settings[0] = 35;
+        camera_settings[34] = 4;
+        let data = canon_makernote_with_short_array(0x0001, &camera_settings);
+
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+        assert_eq!(
+            result.get("Canon:ImageStabilization"),
+            Some(&"Dynamic".to_string())
+        );
+
+        // Canon.pm's RawConv discards -1 before applying the enum table.
+        camera_settings[34] = -1;
+        let data = canon_makernote_with_short_array(0x0001, &camera_settings);
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+        assert_eq!(result.get("Canon:ImageStabilization"), None);
     }
 
     #[test]
