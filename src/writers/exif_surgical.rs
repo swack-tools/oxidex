@@ -418,6 +418,36 @@ pub(crate) fn tag_value_to_field_for_key(
     }
     if matches!(
         key,
+        "CompositeImageCount" | "EXIF:CompositeImageCount" | "ExifIFD:CompositeImageCount"
+    ) {
+        let TagValue::Array(values) = value else {
+            return Err(ExifToolError::parse_error(
+                "CompositeImageCount requires two unsigned 16-bit values",
+            ));
+        };
+        if values.len() != 2 {
+            return Err(ExifToolError::parse_error(
+                "CompositeImageCount requires exactly two unsigned 16-bit values",
+            ));
+        }
+        let mut bytes = Vec::with_capacity(4);
+        for value in values {
+            let TagValue::Integer(value) = value else {
+                return Err(ExifToolError::parse_error(
+                    "CompositeImageCount components must be unsigned 16-bit integers",
+                ));
+            };
+            if !(0..=u16::MAX as i64).contains(value) {
+                return Err(ExifToolError::parse_error(
+                    "CompositeImageCount component does not fit unsigned 16-bit",
+                ));
+            }
+            bytes.extend_from_slice(&(*value as u16).to_ne_bytes());
+        }
+        return Ok((3, 2, bytes));
+    }
+    if matches!(
+        key,
         "GPS:GPSLongitude" | "GPS:GPSDestLatitude" | "GPS:GPSDestLongitude"
     ) {
         return gps_longitude_to_field(value);
@@ -2430,6 +2460,15 @@ mod tests {
         assert_eq!(field_type, 3);
         assert_eq!(count, 2);
         assert_eq!(bytes, [3_u16.to_ne_bytes(), 17_u16.to_ne_bytes()].concat());
+    }
+
+    #[test]
+    fn composite_image_count_serializes_as_two_unsigned_shorts() {
+        let value = TagValue::new_array(vec![TagValue::new_integer(3), TagValue::new_integer(2)]);
+        let (field_type, count, bytes) =
+            tag_value_to_field_for_key("ExifIFD:CompositeImageCount", &value, Some(3)).unwrap();
+        assert_eq!((field_type, count), (3, 2));
+        assert_eq!(bytes, [3_u16.to_ne_bytes(), 2_u16.to_ne_bytes()].concat());
     }
 
     #[test]
