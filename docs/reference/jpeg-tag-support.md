@@ -9,7 +9,7 @@ Empirical OxiDex ↔ ExifTool tag mapping for JPEG: for each tag, ExifTool write
 Only tags OxiDex can **read** from JPEG are listed here (including those whose value formatting differs from ExifTool). The full classification of all tested tags — including unsupported and broken ones — is in the [JPEG Tag Matrix](/reference/jpeg-tag-matrix). See also [ExifTool Coverage](/reference/tag-coverage-analysis) for the tag-database view and the [Compatibility overview](/reference/comparison/) for fixture-based comparisons across formats.
 
 
-**2699** ExifTool tags readable, **192** writable via the CLI (of 4819 ExifTool-writable JPEG tags tested).
+**2701** ExifTool tags readable, **211** writable via the CLI (of 4819 ExifTool-writable JPEG tags tested).
 
 
 ## ExifIFD (93 readable tags)
@@ -19,16 +19,16 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:Acceleration` | `ExifIFD:Acceleration` | ✅ `-ExifIFD:Acceleration=` | `1.5` |
 | `ExifIFD:AmbientTemperature` | `ExifIFD:AmbientTemperature` | ⚠️ `-ExifIFD:AmbientTemperature=` | `1.5` |
 | `ExifIFD:ApertureValue` | `ExifIFD:ApertureValue` | ✅ `-ExifIFD:ApertureValue=` | `1.5` |
-| `ExifIFD:BrightnessValue` | `ExifIFD:BrightnessValue` | ⚠️ `-ExifIFD:BrightnessValue=` | `1.5` |
+| `ExifIFD:BrightnessValue` | `ExifIFD:BrightnessValue` | ✅ `-ExifIFD:BrightnessValue=` | `1.5` |
 | `ExifIFD:CameraElevationAngle` | `ExifIFD:CameraElevationAngle` | ⚠️ `-ExifIFD:CameraElevationAngle=` | `1.5` |
 | `ExifIFD:CameraFirmware` | `ExifIFD:CameraFirmware` | ✅ `-ExifIFD:CameraFirmware=` | `OxTest` |
 | `ExifIFD:ColorSpace` | `ExifIFD:ColorSpace` | — | `sRGB` |
 | `ExifIFD:CompositeImage` | `ExifIFD:CompositeImage` | — | `Not a Composite Image` |
-| `ExifIFD:CompositeImageCount` | `ExifIFD:CompositeImageCount` | ⚠️ `-ExifIFD:CompositeImageCount=` | `3 3` |
+| `ExifIFD:CompositeImageCount` | `ExifIFD:CompositeImageCount` | ✅ `-ExifIFD:CompositeImageCount=` | `3 3` |
 | `ExifIFD:CompressedBitsPerPixel` | `ExifIFD:CompressedBitsPerPixel` | ✅ `-ExifIFD:CompressedBitsPerPixel=` | `1.5` |
-| `ExifIFD:Contrast` | `ExifIFD:Contrast` | — | `Normal` |
+| `ExifIFD:Contrast` | `ExifIFD:Contrast` | ✅ `-ExifIFD:Contrast=` | `Normal` |
 | `ExifIFD:CreateDate` | `ExifIFD:CreateDate` | ✅ `-ExifIFD:CreateDate=` | `2024:01:15 10:30:00` |
-| `ExifIFD:CustomRendered` | `ExifIFD:CustomRendered` | — | `Normal` |
+| `ExifIFD:CustomRendered` | `ExifIFD:CustomRendered` | ✅ `-ExifIFD:CustomRendered=` | `Normal` |
 | `ExifIFD:DateTimeOriginal` | `ExifIFD:DateTimeOriginal` | ✅ `-ExifIFD:DateTimeOriginal=` | `2024:01:15 10:30:00` |
 | `ExifIFD:DevelopmentTypeDescription` | `ExifIFD:0xA40E` | — | `OxTest` |
 | `ExifIFD:DigitalZoomRatio` | `ExifIFD:DigitalZoomRatio` | ✅ `-ExifIFD:DigitalZoomRatio=` | `1.5` |
@@ -38,25 +38,25 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:ExposureCompensation` | `ExifIFD:ExposureCompensation` | — | `1.5` |
 | `ExifIFD:ExposureIndex` | `ExifIFD:ExposureIndex` | ✅ `-ExifIFD:ExposureIndex=` | `1.5` |
 | `ExifIFD:ExposureMode` | `ExifIFD:ExposureMode` | — | `Auto` |
-| `ExifIFD:ExposureProgram` | `ExifIFD:ExposureProgram` | — | `Not Defined` |
+| `ExifIFD:ExposureProgram` | `ExifIFD:ExposureProgram` | ✅ `-ExifIFD:ExposureProgram=` | `Not Defined` |
 | `ExifIFD:ExposureTime` | `ExifIFD:ExposureTime` | ✅ `-ExifIFD:ExposureTime=` | `1.5` |
 | `ExifIFD:FNumber` | `ExifIFD:FNumber` | ✅ `-ExifIFD:FNumber=` | `1.5` |
-| `ExifIFD:FileSource` | `ExifIFD:FileSource` | — | `Film Scanner` |
+| `ExifIFD:FileSource` | `ExifIFD:FileSource` | ✅ `-ExifIFD:FileSource=` | `Film Scanner` |
 | `ExifIFD:Flash` | `ExifIFD:Flash` | ✅ `-ExifIFD:Flash=` | `No Flash` |
 | `ExifIFD:FlashEnergy` | `ExifIFD:FlashEnergy` | ✅ `-ExifIFD:FlashEnergy=` | `1.5` |
-| `ExifIFD:FlashpixVersion` | `ExifIFD:FlashpixVersion` | ⚠️ `-ExifIFD:FlashpixVersion=` | `0100` |
+| `ExifIFD:FlashpixVersion` | `ExifIFD:FlashpixVersion` | — | `0100` |
 | `ExifIFD:FocalLength` | `ExifIFD:FocalLength` | ✅ `-ExifIFD:FocalLength=` | `1.5` |
 | `ExifIFD:FocalLengthIn35mmFormat` | `ExifIFD:FocalLengthIn35mmFormat` | ✅ `-ExifIFD:FocalLengthIn35mmFormat=` | `3` |
 | `ExifIFD:FocalPlaneResolutionUnit` | `ExifIFD:FocalPlaneResolutionUnit` | — | `inches` |
 | `ExifIFD:FocalPlaneXResolution` | `ExifIFD:FocalPlaneXResolution` | ✅ `-ExifIFD:FocalPlaneXResolution=` | `1.5` |
 | `ExifIFD:FocalPlaneYResolution` | `ExifIFD:FocalPlaneYResolution` | ✅ `-ExifIFD:FocalPlaneYResolution=` | `1.5` |
-| `ExifIFD:GainControl` | `ExifIFD:GainControl` | — | `Low gain up` |
+| `ExifIFD:GainControl` | `ExifIFD:GainControl` | ✅ `-ExifIFD:GainControl=` | `Low gain up` |
 | `ExifIFD:Gamma` | `ExifIFD:Gamma` | ✅ `-ExifIFD:Gamma=` | `1.5` |
 | `ExifIFD:Humidity` | `ExifIFD:Humidity` | ✅ `-ExifIFD:Humidity=` | `1.5` |
 | `ExifIFD:ISO` | `ExifIFD:ISO` | ✅ `-ExifIFD:ISO=` | `3` |
-| `ExifIFD:ISOSpeed` | `ExifIFD:ISOSpeed` | ⚠️ `-ExifIFD:ISOSpeed=` | `3` |
-| `ExifIFD:ISOSpeedLatitudeyyy` | `ExifIFD:ISOSpeedLatitudeyyy` | ⚠️ `-ExifIFD:ISOSpeedLatitudeyyy=` | `3` |
-| `ExifIFD:ISOSpeedLatitudezzz` | `ExifIFD:ISOSpeedLatitudezzz` | ⚠️ `-ExifIFD:ISOSpeedLatitudezzz=` | `3` |
+| `ExifIFD:ISOSpeed` | `ExifIFD:ISOSpeed` | ✅ `-ExifIFD:ISOSpeed=` | `3` |
+| `ExifIFD:ISOSpeedLatitudeyyy` | `ExifIFD:ISOSpeedLatitudeyyy` | ✅ `-ExifIFD:ISOSpeedLatitudeyyy=` | `3` |
+| `ExifIFD:ISOSpeedLatitudezzz` | `ExifIFD:ISOSpeedLatitudezzz` | ✅ `-ExifIFD:ISOSpeedLatitudezzz=` | `3` |
 | `ExifIFD:ImageEditingSoftware` | `ExifIFD:ImageEditingSoftware` | ✅ `-ExifIFD:ImageEditingSoftware=` | `OxTest` |
 | `ExifIFD:ImageEditor` | `ExifIFD:ImageEditor` | ✅ `-ExifIFD:ImageEditor=` | `OxTest` |
 | `ExifIFD:ImageHistory` | `ExifIFD:ImageHistory` | ✅ `-ExifIFD:ImageHistory=` | `OxTest` |
@@ -67,7 +67,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:LensMake` | `ExifIFD:LensMake` | ✅ `-ExifIFD:LensMake=` | `OxTest` |
 | `ExifIFD:LensModel` | `ExifIFD:LensModel` | ✅ `-ExifIFD:LensModel=` | `OxTest` |
 | `ExifIFD:LensSerialNumber` | `ExifIFD:LensSerialNumber` | ✅ `-ExifIFD:LensSerialNumber=` | `OxTest` |
-| `ExifIFD:LightSource` | `ExifIFD:LightSource` | — | `Daylight` |
+| `ExifIFD:LightSource` | `ExifIFD:LightSource` | ✅ `-ExifIFD:LightSource=` | `Daylight` |
 | `ExifIFD:MakerNoteUnknownText` | `ExifIFD:0xA40E` | — | `OxTest` |
 | `ExifIFD:MaxApertureValue` | `ExifIFD:MaxApertureValue` | — | `1.5` |
 | `ExifIFD:MetadataEditingSoftware` | `ExifIFD:MetadataEditingSoftware` | ✅ `-ExifIFD:MetadataEditingSoftware=` | `OxTest` |
@@ -83,31 +83,31 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:Pressure` | `ExifIFD:Pressure` | ✅ `-ExifIFD:Pressure=` | `1.5` |
 | `ExifIFD:RAWDevelopingSoftware` | `ExifIFD:RAWDevelopingSoftware` | ✅ `-ExifIFD:RAWDevelopingSoftware=` | `OxTest` |
 | `ExifIFD:RawFile` | `ExifIFD:RawFile` * | ✅ `-ExifIFD:RawFile=` | `OxTest` |
-| `ExifIFD:RecommendedExposureIndex` | `ExifIFD:RecommendedExposureIndex` | ⚠️ `-ExifIFD:RecommendedExposureIndex=` | `3` |
+| `ExifIFD:RecommendedExposureIndex` | `ExifIFD:RecommendedExposureIndex` | ✅ `-ExifIFD:RecommendedExposureIndex=` | `3` |
 | `ExifIFD:RelatedSoundFile` | `ExifIFD:RelatedSoundFile` | ✅ `-ExifIFD:RelatedSoundFile=` | `OxTest` |
-| `ExifIFD:Saturation` | `ExifIFD:Saturation` | — | `Normal` |
-| `ExifIFD:SceneCaptureType` | `ExifIFD:SceneCaptureType` | — | `Standard` |
+| `ExifIFD:Saturation` | `ExifIFD:Saturation` | ✅ `-ExifIFD:Saturation=` | `Normal` |
+| `ExifIFD:SceneCaptureType` | `ExifIFD:SceneCaptureType` | ✅ `-ExifIFD:SceneCaptureType=` | `Standard` |
 | `ExifIFD:SceneType` | `ExifIFD:SceneType` | — | `Directly photographed` |
-| `ExifIFD:SecurityClassification` | `ExifIFD:SecurityClassification` | — | `Confidential` |
+| `ExifIFD:SecurityClassification` | `ExifIFD:SecurityClassification` | ✅ `-ExifIFD:SecurityClassification=` | `Confidential` |
 | `ExifIFD:SelfTimerMode` | `ExifIFD:SelfTimerMode` | ✅ `-ExifIFD:SelfTimerMode=` | `3` |
 | `ExifIFD:SensingMethod` | `ExifIFD:SensingMethod` | — | `Not defined` |
 | `ExifIFD:SensitivityType` | `ExifIFD:SensitivityType` | — | `Standard Output Sensitivity` |
 | `ExifIFD:SerialNumber` | `ExifIFD:SerialNumber` | ✅ `-ExifIFD:SerialNumber=` | `OxTest` |
-| `ExifIFD:Sharpness` | `ExifIFD:Sharpness` | — | `Normal` |
+| `ExifIFD:Sharpness` | `ExifIFD:Sharpness` | ✅ `-ExifIFD:Sharpness=` | `Normal` |
 | `ExifIFD:ShutterSpeedValue` | `ExifIFD:ShutterSpeedValue` | ✅ `-ExifIFD:ShutterSpeedValue=` | `1.5` |
 | `ExifIFD:SpectralSensitivity` | `ExifIFD:SpectralSensitivity` | ✅ `-ExifIFD:SpectralSensitivity=` | `OxTest` |
-| `ExifIFD:StandardOutputSensitivity` | `ExifIFD:StandardOutputSensitivity` | ⚠️ `-ExifIFD:StandardOutputSensitivity=` | `3` |
+| `ExifIFD:StandardOutputSensitivity` | `ExifIFD:StandardOutputSensitivity` | ✅ `-ExifIFD:StandardOutputSensitivity=` | `3` |
 | `ExifIFD:SubSecTime` | `ExifIFD:SubSecTime` | ✅ `-ExifIFD:SubSecTime=` | `3` |
 | `ExifIFD:SubSecTimeDigitized` | `ExifIFD:SubSecTimeDigitized` | ✅ `-ExifIFD:SubSecTimeDigitized=` | `3` |
 | `ExifIFD:SubSecTimeOriginal` | `ExifIFD:SubSecTimeOriginal` | ✅ `-ExifIFD:SubSecTimeOriginal=` | `3` |
 | `ExifIFD:SubjectArea` | `ExifIFD:SubjectArea` | — | `3` |
 | `ExifIFD:SubjectDistance` | `ExifIFD:SubjectDistance` | ✅ `-ExifIFD:SubjectDistance=` | `1.5` |
-| `ExifIFD:SubjectDistanceRange` | `ExifIFD:SubjectDistanceRange` | — | `Macro` |
-| `ExifIFD:SubjectLocation` | `ExifIFD:SubjectLocation` | — | `3 3` |
-| `ExifIFD:TimeZoneOffset` | `ExifIFD:0x882A` | ✅ `-ExifIFD:TimeZoneOffset=` | `3` |
+| `ExifIFD:SubjectDistanceRange` | `ExifIFD:SubjectDistanceRange` | ✅ `-ExifIFD:SubjectDistanceRange=` | `Macro` |
+| `ExifIFD:SubjectLocation` | `ExifIFD:SubjectLocation` | ✅ `-ExifIFD:SubjectLocation=` | `3 3` |
+| `ExifIFD:TimeZoneOffset` | `ExifIFD:TimeZoneOffset` | ✅ `-ExifIFD:TimeZoneOffset=` | `3` |
 | `ExifIFD:UserComment` | `ExifIFD:UserComment` | ⚠️ `-ExifIFD:UserComment=` | `OxTest` |
 | `ExifIFD:WaterDepth` | `ExifIFD:WaterDepth` | ⚠️ `-ExifIFD:WaterDepth=` | `1.5` |
-| `ExifIFD:WhiteBalance` | `ExifIFD:WhiteBalance` | — | `Auto` |
+| `ExifIFD:WhiteBalance` | `ExifIFD:WhiteBalance` | ✅ `-ExifIFD:WhiteBalance=` | `Auto` |
 | `ExifIFD:XiaomiModel` | `ExifIFD:XiaomiModel` | ✅ `-ExifIFD:XiaomiModel=` | `OxTest` |
 
 ## File (1 readable tags)
@@ -136,7 +136,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `GPS:GPSDifferential` | `GPS:GPSDifferential` | ⚠️ `-GPS:GPSDifferential=` | `No Correction` |
 | `GPS:GPSHPositioningError` | `GPS:GPSHPositioningError` | ✅ `-GPS:GPSHPositioningError=` | `1.5` |
 | `GPS:GPSImgDirection` | `GPS:GPSImgDirection` | ⚠️ `-GPS:GPSImgDirection=` | `1.5` |
-| `GPS:GPSImgDirectionRef` | `GPS:GPSImgDirectionRef` | — | `Magnetic North` |
+| `GPS:GPSImgDirectionRef` | `GPS:GPSImgDirectionRef` | ⚠️ `-GPS:GPSImgDirectionRef=` | `Magnetic North` |
 | `GPS:GPSLatitude` | `GPS:GPSLatitude` | — | `37.7749` |
 | `GPS:GPSLatitudeRef` | `GPS:GPSLatitudeRef` | ⚠️ `-GPS:GPSLatitudeRef=` | `N` |
 | `GPS:GPSLongitude` | `GPS:GPSLongitude` | — | `122.4194` |
@@ -146,12 +146,12 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `GPS:GPSProcessingMethod` | `GPS:GPSProcessingMethod` | — | `OxTest` |
 | `GPS:GPSSatellites` | `GPS:GPSSatellites` | ⚠️ `-GPS:GPSSatellites=` | `OxTest` |
 | `GPS:GPSSpeed` | `GPS:GPSSpeed` | ✅ `-GPS:GPSSpeed=` | `1.5` |
-| `GPS:GPSSpeedRef` | `GPS:GPSSpeedRef` | — | `km/h` |
+| `GPS:GPSSpeedRef` | `GPS:GPSSpeedRef` | ⚠️ `-GPS:GPSSpeedRef=` | `km/h` |
 | `GPS:GPSStatus` | `GPS:GPSStatus` | ⚠️ `-GPS:GPSStatus=` | `Measurement Active` |
 | `GPS:GPSTimeStamp` | `GPS:GPSTimeStamp` | — | `10:30:00` |
 | `GPS:GPSTrack` | `GPS:GPSTrack` | ✅ `-GPS:GPSTrack=` | `1.5` |
 | `GPS:GPSTrackRef` | `GPS:GPSTrackRef` | ⚠️ `-GPS:GPSTrackRef=` | `Magnetic North` |
-| `GPS:GPSVersionID` | `GPS:GPSVersionID` | — | `2.3.0.0` |
+| `GPS:GPSVersionID` | `GPS:GPSVersionID` | ✅ `-GPS:GPSVersionID=` | `2.3.0.0` |
 
 ## IFD0 (152 readable tags)
 
@@ -224,7 +224,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:LinearResponseLimit` | `IFD0:LinearResponseLimit` | ✅ `-IFD0:LinearResponseLimit=` | `1.5` |
 | `IFD0:LocalizedCameraModel` | `IFD0:LocalizedCameraModel` | ✅ `-IFD0:LocalizedCameraModel=` | `OxTest` |
 | `IFD0:Make` | `IFD0:Make` | ✅ `-IFD0:Make=` | `OxTest` |
-| `IFD0:MakerNoteSafety` | `IFD0:MakerNoteSafety` | — | `Unsafe` |
+| `IFD0:MakerNoteSafety` | `IFD0:MakerNoteSafety` | ✅ `-IFD0:MakerNoteSafety=` | `Unsafe` |
 | `IFD0:MaxSampleValue` | `IFD0:MaxSampleValue` | ✅ `-IFD0:MaxSampleValue=` | `3` |
 | `IFD0:MinSampleValue` | `IFD0:MinSampleValue` | ✅ `-IFD0:MinSampleValue=` | `3` |
 | `IFD0:Model` | `IFD0:Model` | ✅ `-IFD0:Model=` | `OxTest` |
@@ -240,9 +240,9 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:OriginalRawFileDigest` | `IFD0:OriginalRawFileDigest` * | — | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
 | `IFD0:OriginalRawFileName` | `IFD0:OriginalRawFileName` | ✅ `-IFD0:OriginalRawFileName=` | `OxTest` |
 | `IFD0:PageName` | `IFD0:PageName` | ✅ `-IFD0:PageName=` | `OxTest` |
-| `IFD0:PageNumber` | `IFD0:PageNumber` | — | `3 3` |
+| `IFD0:PageNumber` | `IFD0:PageNumber` | ✅ `-IFD0:PageNumber=` | `3 3` |
 | `IFD0:PanasonicTitle` | `IFD0:PanasonicTitle` * | ✅ `-IFD0:PanasonicTitle=` | `OxTest` |
-| `IFD0:PanasonicTitle2` | `IFD0:PanasonicTitle2` * | ✅ `-IFD0:PanasonicTitle2=` | `OxTest` |
+| `IFD0:PanasonicTitle2` | `IFD0:PanasonicTitle2` | ✅ `-IFD0:PanasonicTitle2=` | `OxTest` |
 | `IFD0:PhotometricInterpretation` | `IFD0:PhotometricInterpretation` | — | `WhiteIsZero` |
 | `IFD0:PixelScale` | `IFD0:0x830E` | — | `1.5 1.5 1.5` |
 | `IFD0:PlanarConfiguration` | `IFD0:PlanarConfiguration` | ⚠️ `-IFD0:PlanarConfiguration=` | `Chunky` |
@@ -257,7 +257,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:ProcessingSoftware` | `IFD0:ProcessingSoftware` | ✅ `-IFD0:ProcessingSoftware=` | `OxTest` |
 | `IFD0:ProfileCalibrationSig` | `IFD0:ProfileCalibrationSig` | ✅ `-IFD0:ProfileCalibrationSig=` | `OxTest` |
 | `IFD0:ProfileCopyright` | `IFD0:ProfileCopyright` | ✅ `-IFD0:ProfileCopyright=` | `OxTest` |
-| `IFD0:ProfileEmbedPolicy` | `IFD0:ProfileEmbedPolicy` * | — | `Allow Copying` |
+| `IFD0:ProfileEmbedPolicy` | `IFD0:ProfileEmbedPolicy` | ⚠️ `-IFD0:ProfileEmbedPolicy=` | `Allow Copying` |
 | `IFD0:ProfileGainTableMap2` | `IFD0:ProfileGainTableMap2` | — | `OxTest` |
 | `IFD0:ProfileGroupName` | `IFD0:ProfileGroupName` | ✅ `-IFD0:ProfileGroupName=` | `OxTest` |
 | `IFD0:ProfileHueSatMapData1` | `IFD0:ProfileHueSatMapData1` | ⚠️ `-IFD0:ProfileHueSatMapData1=` | `1.5` |
@@ -1701,7 +1701,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-et:OriginalImageHashType` | `XMP:OriginalImageHashType` | — | `OxTest` |
 | `XMP-et:OriginalImageMD5` | `XMP:OriginalImageMD5` | — | `OxTest` |
 
-## XMP-exif (92 readable tags)
+## XMP-exif (94 readable tags)
 
 | ExifTool tag | OxiDex key | OxiDex write | Example value |
 |---|---|---|---|
@@ -1713,6 +1713,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-exif:ColorSpace` | `XMP-exif:ColorSpace` | — | `sRGB` |
 | `XMP-exif:ComponentsConfiguration` | `XMP-exif:ComponentsConfiguration` | — | `-` |
 | `XMP-exif:CompressedBitsPerPixel` | `XMP-exif:CompressedBitsPerPixel` | — | `1.5` |
+| `XMP-exif:Contrast` | `XMP-exif:Contrast` | — | `Normal` |
 | `XMP-exif:CustomRendered` | `XMP-exif:CustomRendered` | — | `Normal` |
 | `XMP-exif:DateTimeDigitized` | `XMP-exif:DateTimeDigitized` | — | `2024:01:15 10:30:00` |
 | `XMP-exif:DateTimeOriginal` | `XMP-exif:DateTimeOriginal` | — | `2024:01:15 10:30:00` |
@@ -1782,6 +1783,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-exif:OECFRows` | `XMP:OECFRows` | — | `3` |
 | `XMP-exif:OECFValues` | `XMP:OECFValues` | — | `1.5` |
 | `XMP-exif:RelatedSoundFile` | `XMP-exif:RelatedSoundFile` | — | `OxTest` |
+| `XMP-exif:Saturation` | `XMP-exif:Saturation` | — | `Normal` |
 | `XMP-exif:SceneCaptureType` | `XMP-exif:SceneCaptureType` | — | `Standard` |
 | `XMP-exif:SceneType` | `XMP-exif:SceneType` | — | `Directly photographed` |
 | `XMP-exif:Sharpness` | `XMP-exif:Sharpness` | — | `Normal` |
@@ -1954,9 +1956,9 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-iptcExt:AISystemUsed` | `XMP-iptcExt:AISystemUsed` | — | `OxTest` |
 | `XMP-iptcExt:AISystemVersionUsed` | `XMP-iptcExt:AISystemVersionUsed` | — | `OxTest` |
 | `XMP-iptcExt:AboutCvTerm` | `XMP-iptcExt:AboutCvTerm` | — | `{}` |
-| `XMP-iptcExt:AboutCvTermCvId` | `XMP:AboutCvTermCvId` | — | `OxTest` |
+| `XMP-iptcExt:AboutCvTermCvId` | `XMP:AboutCvTermCvId` * | — | `OxTest` |
 | `XMP-iptcExt:AboutCvTermId` | `XMP:AboutCvTermId` | — | `OxTest` |
-| `XMP-iptcExt:AboutCvTermName` | `XMP:AboutCvTermName` | — | `OxTest` |
+| `XMP-iptcExt:AboutCvTermName` | `XMP:AboutCvTermName` * | — | `OxTest` |
 | `XMP-iptcExt:AboutCvTermRefinedAbout` | `XMP:AboutCvTermRefinedAbout` | — | `OxTest` |
 | `XMP-iptcExt:AdditionalModelInformation` | `XMP-iptcExt:AIPromptInformation` | — | `OxTest` |
 | `XMP-iptcExt:ArtworkCircaDateCreated` | `XMP:ArtworkCircaDateCreated` | — | `2024:01:15 10:30:00` |
@@ -2279,7 +2281,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-pdf:Producer` | `XMP:Producer` | — | `OxTest` |
 | `XMP-pdf:Subject` | `XMP:Subject` | — | `OxTest` |
 | `XMP-pdf:Title` | `XMP:Title` | — | `OxTest` |
-| `XMP-pdf:Trapped` | `XMP:Trapped` * | — | `False` |
+| `XMP-pdf:Trapped` | `XMP:Trapped` | — | `False` |
 
 ## XMP-photomech (6 readable tags)
 
@@ -2361,7 +2363,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-plus:CopyrightRegistrationNumber` | `XMP-plus:CopyrightRegistrationNumber` | — | `OxTest` |
 | `XMP-plus:CopyrightStatus` | `XMP-plus:CopyrightStatus` | — | `Protected` |
 | `XMP-plus:CreditLineRequired` | `XMP-plus:CreditLineRequired` | — | `Credit Adjacent To Image` |
-| `XMP-plus:Custom1` | `XMP-plus:Custom1` | — | `OxTest` |
+| `XMP-plus:Custom1` | `XMP-plus:Custom1` * | — | `OxTest` |
 | `XMP-plus:Custom10` | `XMP-plus:Custom10` | — | `OxTest` |
 | `XMP-plus:Custom2` | `XMP-plus:Custom2` | — | `OxTest` |
 | `XMP-plus:Custom3` | `XMP-plus:Custom3` | — | `OxTest` |

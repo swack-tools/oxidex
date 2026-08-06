@@ -15,13 +15,14 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 
 | Classification | Tags |
 |---|---|
-| 📖 Read only | 2353 |
+| 📖 Read only | 2349 |
 | ❌ Unsupported | 1890 |
-| ❔ Untestable | 221 |
-| 🐛 Read OK, write broken | 160 |
-| ✅ Full (read + write) | 110 |
-| ⚠️ Full (write non-standard encoding) | 76 |
-| 🐛 Read broken | 9 |
+| ❔ Untestable | 220 |
+| 🐛 Read OK, write broken | 148 |
+| ✅ Full (read + write) | 133 |
+| ⚠️ Full (write non-standard encoding) | 71 |
+| 🐛 Read broken | 7 |
+| ✍️ Write only | 1 |
 | 🚫 Not writable in ExifTool (no synthetic sample possible; untested) | 585 |
 
 ## Per-group breakdown
@@ -29,11 +30,11 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | Group | Full | Read-only | Write-broken | Read-broken | Write-only | Unsupported | Untestable | Total |
 |---|---|---|---|---|---|---|---|---|
 | All | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
-| ExifIFD | 52 | 5 | 23 | 6 | 0 | 4 | 100 | 203 |
+| ExifIFD | 72 | 4 | 12 | 6 | 1 | 4 | 99 | 203 |
 | File | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
-| GPS | 5 | 5 | 5 | 0 | 0 | 0 | 0 | 32 |
+| GPS | 6 | 5 | 2 | 0 | 0 | 0 | 0 | 32 |
 | GSpherical | 0 | 0 | 0 | 0 | 0 | 0 | 16 | 16 |
-| IFD0 | 53 | 1 | 52 | 0 | 0 | 0 | 17 | 169 |
+| IFD0 | 55 | 1 | 49 | 0 | 0 | 0 | 17 | 169 |
 | IFD1 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
 | IFD2 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
 | IPTC | 0 | 92 | 1 | 0 | 0 | 5 | 7 | 105 |
@@ -67,16 +68,16 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | XMP-aux | 0 | 25 | 0 | 0 | 0 | 0 | 1 | 26 |
 | XMP-cc | 0 | 5 | 0 | 0 | 0 | 6 | 0 | 11 |
 | XMP-cell | 0 | 0 | 0 | 0 | 0 | 6 | 0 | 6 |
-| XMP-crd | 0 | 306 | 0 | 0 | 0 | 787 | 0 | 1093 |
+| XMP-crd | 0 | 305 | 1 | 0 | 0 | 787 | 0 | 1093 |
 | XMP-creatorAtom | 0 | 11 | 0 | 0 | 0 | 3 | 0 | 14 |
-| XMP-crs | 0 | 307 | 0 | 0 | 0 | 786 | 0 | 1093 |
+| XMP-crs | 0 | 306 | 1 | 0 | 0 | 786 | 0 | 1093 |
 | XMP-dc | 0 | 14 | 1 | 0 | 0 | 0 | 0 | 15 |
 | XMP-dex | 0 | 2 | 1 | 0 | 0 | 5 | 0 | 8 |
 | XMP-digiKam | 0 | 8 | 1 | 0 | 0 | 0 | 0 | 9 |
 | XMP-drone-dji | 0 | 25 | 0 | 0 | 0 | 3 | 0 | 28 |
 | XMP-dwc | 0 | 145 | 12 | 0 | 0 | 103 | 3 | 263 |
 | XMP-et | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
-| XMP-exif | 0 | 89 | 3 | 3 | 0 | 5 | 0 | 100 |
+| XMP-exif | 0 | 88 | 6 | 1 | 0 | 5 | 0 | 100 |
 | XMP-exifEX | 0 | 26 | 0 | 0 | 0 | 16 | 0 | 42 |
 | XMP-expressionmedia | 0 | 4 | 0 | 0 | 0 | 0 | 0 | 4 |
 | XMP-extensis | 0 | 8 | 0 | 0 | 0 | 0 | 0 | 8 |
@@ -171,21 +172,21 @@ references are into this repo.
 | `AmbientTemperature` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `ApertureValue` | ✅ ok | ✅ ok | `1.5` |
 | `Brightness` | 🐛 broken: ACR "TagName: " ValueConv prefix not stripped | ✅ ok | `OxTest` |
-| `BrightnessValue` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `BrightnessValue` | ✅ ok | ✅ ok | `1.5` |
 | `CFAPattern` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `OxTest` |
 | `CameraElevationAngle` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `CameraFirmware` | ✅ ok | ✅ ok | `OxTest` |
 | `ChromaticAberrationCorrection` | — unsupported | 🐛 broken: error | `No` |
 | `ColorSpace` | ✅ ok | 🐛 broken: error | `sRGB` |
-| `ComponentsConfiguration` | ❔ untestable (exiftool could not synthesize a sample) | value_mismatch | `-` |
+| `ComponentsConfiguration` | ❔ untestable (exiftool could not synthesize a sample) | ✅ ok | `-` |
 | `CompositeImage` | ✅ ok | 🐛 broken: error | `Not a Composite Image` |
-| `CompositeImageCount` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3 3` |
+| `CompositeImageCount` | ✅ ok | ✅ ok | `3 3` |
 | `CompositeImageExposureTimes` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
 | `CompressedBitsPerPixel` | ✅ ok | ✅ ok | `1.5` |
-| `Contrast` | ✅ ok | 🐛 broken: error | `Normal` |
+| `Contrast` | ✅ ok | ✅ ok | `Normal` |
 | `Converter` | 🐛 broken: ACR "TagName: " ValueConv prefix not stripped | ✅ ok | `OxTest` |
 | `CreateDate` | ✅ ok | ✅ ok | `2024:01:15 10:30:00` |
-| `CustomRendered` | ✅ ok | 🐛 broken: error | `Normal` |
+| `CustomRendered` | ✅ ok | ✅ ok | `Normal` |
 | `DateTimeOriginal` | ✅ ok | ✅ ok | `2024:01:15 10:30:00` |
 | `DevelopmentType` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `Accurate Reproduction` |
 | `DevelopmentTypeDescription` | ✅ ok | 🐛 broken: error | `OxTest` |
@@ -198,26 +199,26 @@ references are into this repo.
 | `ExposureCompensation` | ✅ ok | value_mismatch | `1.5` |
 | `ExposureIndex` | ✅ ok | ✅ ok | `1.5` |
 | `ExposureMode` | ✅ ok | 🐛 broken: error | `Auto` |
-| `ExposureProgram` | ✅ ok | 🐛 broken: error | `Not Defined` |
+| `ExposureProgram` | ✅ ok | ✅ ok | `Not Defined` |
 | `ExposureTime` | ✅ ok | ✅ ok | `1.5` |
 | `FNumber` | ✅ ok | ✅ ok | `1.5` |
-| `FileSource` | ✅ ok | 🐛 broken: error | `Film Scanner` |
+| `FileSource` | ✅ ok | ✅ ok | `Film Scanner` |
 | `Flash` | ✅ ok | ✅ ok | `No Flash` |
 | `FlashEnergy` | ✅ ok | ✅ ok | `1.5` |
-| `FlashpixVersion` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `0100` |
+| `FlashpixVersion` | ✅ ok | 🐛 broken: type-validation rejects CLI string values | `0100` |
 | `FocalLength` | ✅ ok | ✅ ok | `1.5` |
 | `FocalLengthIn35mmFormat` | ✅ ok | ✅ ok | `3` |
 | `FocalPlaneResolutionUnit` | ✅ ok | 🐛 broken: error | `inches` |
 | `FocalPlaneXResolution` | ✅ ok | ✅ ok | `1.5` |
 | `FocalPlaneYResolution` | ✅ ok | ✅ ok | `1.5` |
-| `GainControl` | ✅ ok | 🐛 broken: error | `Low gain up` |
+| `GainControl` | ✅ ok | ✅ ok | `Low gain up` |
 | `Gamma` | ✅ ok | ✅ ok | `1.5` |
 | `GooglePlusUploadCode` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
 | `Humidity` | ✅ ok | ✅ ok | `1.5` |
 | `ISO` | ✅ ok | ✅ ok | `3` |
-| `ISOSpeed` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
-| `ISOSpeedLatitudeyyy` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
-| `ISOSpeedLatitudezzz` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
+| `ISOSpeed` | ✅ ok | ✅ ok | `3` |
+| `ISOSpeedLatitudeyyy` | ✅ ok | ✅ ok | `3` |
+| `ISOSpeedLatitudezzz` | ✅ ok | ✅ ok | `3` |
 | `ImageEditingSoftware` | ✅ ok | ✅ ok | `OxTest` |
 | `ImageEditor` | ✅ ok | ✅ ok | `OxTest` |
 | `ImageHistory` | ✅ ok | ✅ ok | `OxTest` |
@@ -230,7 +231,7 @@ references are into this repo.
 | `LensMake` | ✅ ok | ✅ ok | `OxTest` |
 | `LensModel` | ✅ ok | ✅ ok | `OxTest` |
 | `LensSerialNumber` | ✅ ok | ✅ ok | `OxTest` |
-| `LightSource` | ✅ ok | 🐛 broken: error | `Daylight` |
+| `LightSource` | ✅ ok | ✅ ok | `Daylight` |
 | `MakerNoteApple` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
 | `MakerNoteCanon` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
 | `MakerNoteCasio` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
@@ -340,34 +341,34 @@ references are into this repo.
 | `Pressure` | ✅ ok | ✅ ok | `1.5` |
 | `RAWDevelopingSoftware` | ✅ ok | ✅ ok | `OxTest` |
 | `RawFile` | ✅ ok (formatting differs from exiftool) | ✅ ok | `OxTest` |
-| `RecommendedExposureIndex` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
+| `RecommendedExposureIndex` | ✅ ok | ✅ ok | `3` |
 | `RelatedSoundFile` | ✅ ok | ✅ ok | `OxTest` |
-| `Saturation` | ✅ ok | 🐛 broken: error | `Normal` |
-| `SceneCaptureType` | ✅ ok | 🐛 broken: error | `Standard` |
+| `Saturation` | ✅ ok | ✅ ok | `Normal` |
+| `SceneCaptureType` | ✅ ok | ✅ ok | `Standard` |
 | `SceneType` | ✅ ok | value_mismatch | `Directly photographed` |
-| `SecurityClassification` | ✅ ok | 🐛 broken: PrintConvInv missing: human-readable stored as raw | `Confidential` |
+| `SecurityClassification` | ✅ ok | ✅ ok | `Confidential` |
 | `SelfTimerMode` | ✅ ok | ✅ ok | `3` |
 | `SensingMethod` | ✅ ok | 🐛 broken: error | `Not defined` |
 | `SensitivityType` | ✅ ok | 🐛 broken: error | `Standard Output Sensitivity` |
 | `SerialNumber` | ✅ ok | ✅ ok | `OxTest` |
 | `ShadingCorrection` | — unsupported | 🐛 broken: error | `No` |
 | `Shadows` | 🐛 broken: ACR "TagName: " ValueConv prefix not stripped | ✅ ok | `OxTest` |
-| `Sharpness` | ✅ ok | 🐛 broken: error | `Normal` |
+| `Sharpness` | ✅ ok | ✅ ok | `Normal` |
 | `ShutterSpeedValue` | ✅ ok | ✅ ok | `1.5` |
 | `Smoothness` | 🐛 broken: ACR "TagName: " ValueConv prefix not stripped | ✅ ok | `OxTest` |
 | `SpectralSensitivity` | ✅ ok | ✅ ok | `OxTest` |
-| `StandardOutputSensitivity` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `3` |
+| `StandardOutputSensitivity` | ✅ ok | ✅ ok | `3` |
 | `SubSecTime` | ✅ ok | ✅ ok | `3` |
 | `SubSecTimeDigitized` | ✅ ok | ✅ ok | `3` |
 | `SubSecTimeOriginal` | ✅ ok | ✅ ok | `3` |
-| `SubjectArea` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SubjectArea` | ✅ ok | 🐛 broken: error | `3` |
 | `SubjectDistance` | ✅ ok | ✅ ok | `1.5` |
-| `SubjectDistanceRange` | ✅ ok | 🐛 broken: error | `Macro` |
-| `SubjectLocation` | ✅ ok | 🐛 broken: error | `3 3` |
-| `TimeZoneOffset` | ✅ ok | ✅ ok (reads back under hex key) | `3` |
+| `SubjectDistanceRange` | ✅ ok | ✅ ok | `Macro` |
+| `SubjectLocation` | ✅ ok | ✅ ok | `3 3` |
+| `TimeZoneOffset` | ✅ ok | ✅ ok | `3` |
 | `UserComment` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
 | `WaterDepth` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
-| `WhiteBalance` | ✅ ok | 🐛 broken: error | `Auto` |
+| `WhiteBalance` | ✅ ok | ✅ ok | `Auto` |
 | `XiaomiModel` | ✅ ok | ✅ ok | `OxTest` |
 | `XiaomiSettings` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: junk written into subdirectory pointer tag | `OxTest` |
 
@@ -397,7 +398,7 @@ references are into this repo.
 | `GPSDifferential` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `No Correction` |
 | `GPSHPositioningError` | ✅ ok | ✅ ok | `1.5` |
 | `GPSImgDirection` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
-| `GPSImgDirectionRef` | ✅ ok | 🐛 broken: PrintConvInv missing: human-readable stored as raw | `Magnetic North` |
+| `GPSImgDirectionRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `Magnetic North` |
 | `GPSLatitude` | ✅ ok | value_mismatch | `37.7749` |
 | `GPSLatitudeRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `N` |
 | `GPSLongitude` | ✅ ok | value_mismatch | `122.4194` |
@@ -407,12 +408,12 @@ references are into this repo.
 | `GPSProcessingMethod` | ✅ ok | readback_broken | `OxTest` |
 | `GPSSatellites` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
 | `GPSSpeed` | ✅ ok | ✅ ok | `1.5` |
-| `GPSSpeedRef` | ✅ ok | 🐛 broken: PrintConvInv missing: human-readable stored as raw | `km/h` |
+| `GPSSpeedRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `km/h` |
 | `GPSStatus` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `Measurement Active` |
 | `GPSTimeStamp` | ✅ ok | 🐛 broken: error | `10:30:00` |
 | `GPSTrack` | ✅ ok | ✅ ok | `1.5` |
 | `GPSTrackRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `Magnetic North` |
-| `GPSVersionID` | ✅ ok | 🐛 broken: interop (exiftool can't read it) | `2.3.0.0` |
+| `GPSVersionID` | ✅ ok | ✅ ok | `2.3.0.0` |
 
 ### GSpherical
 
@@ -515,7 +516,7 @@ references are into this repo.
 | `LinearResponseLimit` | ✅ ok | ✅ ok | `1.5` |
 | `LocalizedCameraModel` | ✅ ok | ✅ ok | `OxTest` |
 | `Make` | ✅ ok | ✅ ok | `OxTest` |
-| `MakerNoteSafety` | ✅ ok | 🐛 broken: error | `Unsafe` |
+| `MakerNoteSafety` | ✅ ok | ✅ ok | `Unsafe` |
 | `MaxSampleValue` | ✅ ok | ✅ ok | `3` |
 | `MinSampleValue` | ✅ ok | ✅ ok | `3` |
 | `Model` | ✅ ok | ✅ ok | `OxTest` |
@@ -532,9 +533,9 @@ references are into this repo.
 | `OriginalRawFileDigest` | ✅ ok (formatting differs from exiftool) | 🐛 broken: written as ASCII where numeric/rational expected | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3` |
 | `OriginalRawFileName` | ✅ ok | ✅ ok | `OxTest` |
 | `PageName` | ✅ ok | ✅ ok | `OxTest` |
-| `PageNumber` | ✅ ok | 🐛 broken: error | `3 3` |
+| `PageNumber` | ✅ ok | ✅ ok | `3 3` |
 | `PanasonicTitle` | ✅ ok (formatting differs from exiftool) | ✅ ok | `OxTest` |
-| `PanasonicTitle2` | ✅ ok (formatting differs from exiftool) | ✅ ok | `OxTest` |
+| `PanasonicTitle2` | ✅ ok | ✅ ok | `OxTest` |
 | `PhotometricInterpretation` | ✅ ok | 🐛 broken: error | `WhiteIsZero` |
 | `PixelScale` | ✅ ok | 🐛 broken: error | `1.5 1.5 1.5` |
 | `PlanarConfiguration` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `Chunky` |
@@ -553,7 +554,7 @@ references are into this repo.
 | `ProfileCalibrationSig` | ✅ ok | ✅ ok | `OxTest` |
 | `ProfileCopyright` | ✅ ok | ✅ ok | `OxTest` |
 | `ProfileDynamicRange` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: junk written into subdirectory pointer tag | `OxTest` |
-| `ProfileEmbedPolicy` | ✅ ok (formatting differs from exiftool) | 🐛 broken: error | `Allow Copying` |
+| `ProfileEmbedPolicy` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `Allow Copying` |
 | `ProfileGainTableMap2` | ✅ ok | 🐛 broken: written as ASCII where UNDEF expected (+NUL) | `OxTest` |
 | `ProfileGroupName` | ✅ ok | ✅ ok | `OxTest` |
 | `ProfileHueSatMapData1` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
@@ -2388,7 +2389,7 @@ references are into this repo.
 | `VignetteAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `VignetteMidpoint` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `What` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `WhiteBalance` | ✅ ok | — unsupported (silent no-op) | `As Shot` |
+| `WhiteBalance` | ✅ ok | 🐛 broken: error | `As Shot` |
 | `Whites2012` | ✅ ok | — unsupported (silent no-op) | `3` |
 
 ### XMP-creatorAtom
@@ -3505,7 +3506,7 @@ references are into this repo.
 | `VignetteAmount` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `VignetteMidpoint` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `What` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `WhiteBalance` | ✅ ok | — unsupported (silent no-op) | `As Shot` |
+| `WhiteBalance` | ✅ ok | 🐛 broken: error | `As Shot` |
 | `Whites2012` | ✅ ok | — unsupported (silent no-op) | `3` |
 
 ### XMP-dc
@@ -3877,7 +3878,7 @@ references are into this repo.
 | `ColorSpace` | ✅ ok | — unsupported (silent no-op) | `sRGB` |
 | `ComponentsConfiguration` | ✅ ok | — unsupported (silent no-op) | `-` |
 | `CompressedBitsPerPixel` | ✅ ok | — unsupported (silent no-op) | `1.5` |
-| `Contrast` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | — unsupported (silent no-op) | `Normal` |
+| `Contrast` | ✅ ok | — unsupported (silent no-op) | `Normal` |
 | `CustomRendered` | ✅ ok | — unsupported (silent no-op) | `Normal` |
 | `DateTimeDigitized` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
 | `DateTimeOriginal` | ✅ ok | — unsupported (silent no-op) | `2024:01:15 10:30:00` |
@@ -3903,7 +3904,7 @@ references are into this repo.
 | `FlashMode` | ✅ ok | — unsupported (silent no-op) | `On` |
 | `FlashRedEyeMode` | ✅ ok | — unsupported (silent no-op) | `True` |
 | `FlashReturn` | ✅ ok | — unsupported (silent no-op) | `No return detection` |
-| `FlashpixVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `FlashpixVersion` | ✅ ok | 🐛 broken: error | `OxTest` |
 | `FocalLength` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `FocalLengthIn35mmFormat` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `FocalPlaneResolutionUnit` | ✅ ok | — unsupported (silent no-op) | `inches` |
@@ -3935,7 +3936,7 @@ references are into this repo.
 | `GPSStatus` | ✅ ok | — unsupported (silent no-op) | `Measurement Active` |
 | `GPSTrack` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `GPSTrackRef` | ✅ ok | — unsupported (silent no-op) | `Magnetic North` |
-| `GPSVersionID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `GPSVersionID` | ✅ ok | 🐛 broken: error | `OxTest` |
 | `GainControl` | ✅ ok | — unsupported (silent no-op) | `Low gain up` |
 | `ISO` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ImageUniqueID` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
@@ -3950,11 +3951,11 @@ references are into this repo.
 | `OECFValues` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `Opto-ElectricConvFactor` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `RelatedSoundFile` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `Saturation` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | 🐛 broken: error | `Normal` |
+| `Saturation` | ✅ ok | — unsupported (silent no-op) | `Normal` |
 | `SceneCaptureType` | ✅ ok | — unsupported (silent no-op) | `Standard` |
 | `SceneType` | ✅ ok | — unsupported (silent no-op) | `Directly photographed` |
 | `SensingMethod` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | — unsupported (silent no-op) | `Monochrome area` |
-| `Sharpness` | ✅ ok | 🐛 broken: error | `Normal` |
+| `Sharpness` | ✅ ok | — unsupported (silent no-op) | `Normal` |
 | `ShutterSpeedValue` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `SpatialFrequencyResponse` | — unsupported | — unsupported (silent no-op) | `{}` |
 | `SpatialFrequencyResponseColumns` | ✅ ok | — unsupported (silent no-op) | `3` |
@@ -3962,10 +3963,10 @@ references are into this repo.
 | `SpatialFrequencyResponseRows` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `SpatialFrequencyResponseValues` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `SpectralSensitivity` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `SubjectArea` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SubjectArea` | ✅ ok | 🐛 broken: error | `3` |
 | `SubjectDistance` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `SubjectDistanceRange` | ✅ ok | — unsupported (silent no-op) | `Macro` |
-| `SubjectLocation` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `SubjectLocation` | ✅ ok | 🐛 broken: error | `3` |
 | `UserComment` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `WhiteBalance` | ✅ ok | — unsupported (silent no-op) | `Auto` |
 
@@ -4159,9 +4160,9 @@ references are into this repo.
 | `AISystemUsed` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `AISystemVersionUsed` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `AboutCvTerm` | ✅ ok | — unsupported (silent no-op) | `{}` |
-| `AboutCvTermCvId` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AboutCvTermCvId` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `OxTest` |
 | `AboutCvTermId` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `AboutCvTermName` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `AboutCvTermName` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `OxTest` |
 | `AboutCvTermRefinedAbout` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `AdditionalModelInformation` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `ArtworkCircaDateCreated` | ✅ ok | 🐛 broken: datetime write misrouted to date-shift path | `2024:01:15 10:30:00` |
@@ -4524,7 +4525,7 @@ references are into this repo.
 | `Producer` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Subject` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Title` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `Trapped` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `False` |
+| `Trapped` | ✅ ok | — unsupported (silent no-op) | `False` |
 
 ### XMP-pdfx
 
@@ -4615,7 +4616,7 @@ references are into this repo.
 | `CopyrightRegistrationNumber` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `CopyrightStatus` | ✅ ok | — unsupported (silent no-op) | `Protected` |
 | `CreditLineRequired` | ✅ ok | — unsupported (silent no-op) | `Credit Adjacent To Image` |
-| `Custom1` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `Custom1` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `OxTest` |
 | `Custom10` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Custom2` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `Custom3` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
