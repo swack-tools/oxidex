@@ -92,6 +92,13 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         _ => tag_name,
     };
 
+    if matches!(
+        tag_name,
+        "ExifIFD:ComponentsConfiguration" | "EXIF:ComponentsConfiguration"
+    ) {
+        return parse_components_configuration(tag_name, raw);
+    }
+
     // GPS.pm 0x001c applies EncodeExifText as its RawConvInv. With the default
     // CharsetEXIF this is the eight-byte ASCII identifier followed by the
     // caller's text; the TIFF field itself remains UNDEFINED.
@@ -465,6 +472,58 @@ fn parse_sharpness(tag_name: &str, raw: &str) -> Result<TagValue> {
         tag_name,
         "Can't convert Sharpness value (not a parameter)",
     ))
+}
+
+/// Inverts Exif.pm 0x9101's four-component PrintConv into its stored bytes.
+fn parse_components_configuration(tag_name: &str, raw: &str) -> Result<TagValue> {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    let mut tokens = raw
+        .split_whitespace()
+        .map(|token| token.trim_matches(','))
+        .collect::<Vec<_>>();
+
+    // ExifTool specially accepts compact strings such as "YCbCr" and "RGB".
+    // Its compact matcher is case-sensitive; an unmatched single token becomes
+    // an empty list and is therefore padded to four zero bytes.
+    let compact;
+    if tokens.len() == 1 {
+        static COMPONENT: OnceLock<Regex> = OnceLock::new();
+        let component =
+            COMPONENT.get_or_init(|| Regex::new(r"Y|Cb|Cr|R|G|B").expect("valid component regex"));
+        compact = component.find_iter(tokens[0]).map(|m| m.as_str()).collect();
+        tokens = compact;
+    }
+
+    if tokens.len() > 4 {
+        return Err(invalid(
+            tag_name,
+            "Too many values specified (4 required) for ComponentsConfiguration",
+        ));
+    }
+
+    let mut bytes = Vec::with_capacity(4);
+    for token in tokens {
+        let byte = match token.to_ascii_lowercase().as_str() {
+            "-" => 0,
+            "y" => 1,
+            "cb" => 2,
+            "cr" => 3,
+            "r" => 4,
+            "g" => 5,
+            "b" => 6,
+            _ => {
+                return Err(invalid(
+                    tag_name,
+                    "Can't convert ComponentsConfiguration value (not in PrintConv)",
+                ));
+            }
+        };
+        bytes.push(byte);
+    }
+    bytes.resize(4, 0);
+    Ok(TagValue::Binary(bytes))
 }
 
 fn invert_gps_latitude_ref<'a>(tag_name: &str, raw: &'a str) -> Result<&'a str> {
@@ -1438,6 +1497,26 @@ mod tests {
                 "{tag}={input}"
             );
         }
+    }
+
+    #[test]
+    fn components_configuration_inverts_labels_to_four_component_bytes() {
+        for (raw, expected) in [
+            ("Y, Cb, Cr, -", vec![1, 2, 3, 0]),
+            ("YCbCr", vec![1, 2, 3, 0]),
+            ("RGB", vec![4, 5, 6, 0]),
+            ("r g b", vec![4, 5, 6, 0]),
+            ("Y Cb", vec![1, 2, 0, 0]),
+            ("invalid", vec![0, 0, 0, 0]),
+        ] {
+            assert_eq!(
+                parse("ExifIFD:ComponentsConfiguration", raw).unwrap(),
+                TagValue::Binary(expected),
+                "input {raw}"
+            );
+        }
+        assert!(parse("EXIF:ComponentsConfiguration", "Y Cb Cr - R").is_err());
+        assert!(parse("EXIF:ComponentsConfiguration", "1 2 3 0").is_err());
     }
 
     #[test]
