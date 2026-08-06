@@ -733,6 +733,17 @@ impl PanasonicParser {
         // Special handling for string tags (must read from data buffer)
         // These tags contain text data that needs to be extracted from the makernote
         match tag_id {
+            // DataDump is a Binary undef payload. ExifTool prints its byte
+            // count unless -b is requested, never the payload or offset.
+            0x0021 => {
+                if let Some(bytes) = extract_raw_bytes(entry, data, ifd_offset, data_base, byte_order) {
+                    tags.insert(
+                        "Panasonic:DataDump".to_string(),
+                        crate::cli::output_formatter::binary_placeholder(bytes.len()),
+                    );
+                }
+                return;
+            }
             // Basic info strings.  0x0051 LensType, 0x0052 LensSerialNumber
             // and 0x0053 AccessoryType are all `Writable => 'string'` in
             // %Panasonic::Main (Panasonic.pm:943, :949 and :955) -- there is no
@@ -890,6 +901,20 @@ impl PanasonicParser {
             let value = inline_u16_value(entry, byte_order) as i16;
             if let Some(tag_name) = registry.get_tag_name(tag_id) {
                 tags.insert(format!("Panasonic:{}", tag_name), value.to_string());
+            }
+            return;
+        }
+
+        // These tags are int16u with PrintConv mappings. A big-endian inline
+        // SHORT occupies the high half of `value_offset`, so the generic u32
+        // registry path would decode 1 as 65536.
+        if matches!(tag_id, 0x0027 | 0x0038 | 0x0043 | 0x8002 | 0x8003) {
+            let value = i32::from(inline_u16_value(entry, byte_order));
+            if let Some(tag_name) = registry.get_tag_name(tag_id) {
+                tags.insert(
+                    format!("Panasonic:{}", tag_name),
+                    registry.decode_i32(tag_id, value),
+                );
             }
             return;
         }
