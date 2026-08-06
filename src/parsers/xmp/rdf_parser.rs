@@ -2872,6 +2872,16 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         "GainControl" => decode_via_tiff_enum(0xA407, value),
         "LightSource" => decode_via_tiff_enum(0x9208, value),
         "SceneType" => decode_via_tiff_enum(0xA301, value),
+        "ComponentsConfiguration" if tag == "XMP-exif:ComponentsConfiguration" => match value {
+            "0" => "-".to_string(),
+            "1" => "Y".to_string(),
+            "2" => "Cb".to_string(),
+            "3" => "Cr".to_string(),
+            "4" => "R".to_string(),
+            "5" => "G".to_string(),
+            "6" => "B".to_string(),
+            _ => value.to_string(),
+        },
         // XMP-exif inherits the EXIF Sharpness PrintConv. Camera Raw also
         // defines a numeric Sharpness property, so this must stay scoped to
         // the EXIF schema rather than converting every XMP tag with the same
@@ -3691,6 +3701,32 @@ mod tests {
         assert_eq!(format_xmp_value("XMP-exif:Sharpness", "2"), "Hard");
         assert_eq!(format_xmp_value("XMP:Sharpness", "0"), "0");
         assert_eq!(format_xmp_value("XMP:Sharpness", "25"), "25");
+    }
+
+    #[test]
+    fn xmp_exif_components_configuration_names_each_sequence_component() {
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description xmlns:exif="http://ns.adobe.com/exif/1.0/">
+                <exif:ComponentsConfiguration>
+                  <rdf:Seq>
+                    <rdf:li>1</rdf:li>
+                    <rdf:li>2</rdf:li>
+                    <rdf:li>3</rdf:li>
+                    <rdf:li>0</rdf:li>
+                  </rdf:Seq>
+                </exif:ComponentsConfiguration>
+              </rdf:Description>
+            </rdf:RDF>
+        "#;
+
+        assert_eq!(
+            parse_xmp(xml).unwrap(),
+            vec![(
+                "XMP-exif:ComponentsConfiguration".to_string(),
+                "Y, Cb, Cr, -".to_string(),
+            )]
+        );
     }
 
     // The expectations below are `exiftool -G1 -s` output for an XMP packet
