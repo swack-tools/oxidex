@@ -143,7 +143,10 @@ pub fn raw_bytes_to_tag_value(
 
             // FLOAT (type 11): IEEE 754 single precision
             ExifType::Float if bytes.len() >= 4 => {
-                return handle_float_type(bytes, value_count, byte_order);
+                return apply_long_binary_value_conv(
+                    tag_id,
+                    handle_float_type(bytes, value_count, byte_order),
+                );
             }
 
             // DOUBLE (type 12): IEEE 754 double precision
@@ -217,6 +220,24 @@ pub fn raw_bytes_to_tag_value(
 
     // Fallback heuristic conversion for unknown types or when type-specific logic doesn't apply
     heuristic_bytes_to_tag_value(bytes, byte_order)
+}
+
+/// Applies ExifTool 13.59's `%longBin` ValueConv for the one tag handled here.
+///
+/// `ProfileHueSatMapData2` (Exif.pm 0xC6FB) first becomes its normal
+/// space-separated float text. Only when that text exceeds 64 bytes does
+/// ExifTool return a scalar reference, causing normal output to treat it as
+/// binary data while `-b` exposes the rendered text. Keep the threshold on the
+/// rendered value rather than the raw float bytes.
+fn apply_long_binary_value_conv(tag_id: u16, value: TagValue) -> TagValue {
+    if tag_id == 0xC6FB
+        && let TagValue::String(text) = &value
+        && text.len() > 64
+    {
+        return TagValue::new_binary(text.as_bytes().to_vec());
+    }
+
+    value
 }
 
 /// Ports ExifTool 13.59's `Exif::PrintSFR` exactly.
@@ -2282,6 +2303,29 @@ mod tests {
                 ByteOrder::LittleEndian
             ),
             TagValue::Binary(bytes.to_vec())
+        );
+    }
+
+    /// Exif.pm 13.59's `%longBin` makes ProfileHueSatMapData2 binary only
+    /// after the decoded float text exceeds 64 bytes. It is a ValueConv, so
+    /// the binary payload is that text, not the raw IEEE-754 bytes.
+    #[test]
+    fn profile_hue_sat_map_data2_uses_exiftool_long_binary_threshold() {
+        let order = ByteOrder::LittleEndian;
+        let short = float_bytes(1.5, order);
+        assert_eq!(
+            raw_bytes_to_tag_value(&short, 11, 1, 0xC6FB, order),
+            TagValue::new_string("1.5")
+        );
+
+        let long = (0..5)
+            .flat_map(|_| float_bytes(0.1, order))
+            .collect::<Vec<_>>();
+        let expected = "0.100000001490116 0.100000001490116 0.100000001490116 0.100000001490116 0.100000001490116";
+        assert!(expected.len() > 64);
+        assert_eq!(
+            raw_bytes_to_tag_value(&long, 11, 5, 0xC6FB, order),
+            TagValue::Binary(expected.as_bytes().to_vec())
         );
     }
 }
