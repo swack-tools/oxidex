@@ -15,6 +15,7 @@ pub mod pfm;
 pub mod psd;
 pub mod svg;
 pub mod webp;
+pub mod wpg;
 
 pub use avif::AVIFParser;
 pub use bmp::BMPParser;

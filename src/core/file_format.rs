@@ -217,6 +217,9 @@ pub enum FileFormat {
     /// Adobe Photoshop document (.psd)
     PSD,
 
+    /// WordPerfect Graphics image (.wpg)
+    WPG,
+
     // Phase 6: Specialized formats
     /// ELF executable format
     ELF,
@@ -386,6 +389,7 @@ impl FileFormat {
             FileFormat::SVG => "SVG",
             FileFormat::ICO => "ICO",
             FileFormat::PSD => "PSD",
+            FileFormat::WPG => "WPG",
             FileFormat::ELF => "ELF",
             FileFormat::MachO => "Mach-O",
             FileFormat::DWG => "DWG",
@@ -492,6 +496,7 @@ impl FileFormat {
             FileFormat::SVG => &["svg"],
             FileFormat::ICO => &["ico"],
             FileFormat::PSD => &["psd"],
+            FileFormat::WPG => &["wpg"],
             FileFormat::ELF => &["elf", "so"],
             FileFormat::MachO => &["dylib", "bundle"],
             FileFormat::DWG => &["dwg"],

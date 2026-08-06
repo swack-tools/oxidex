@@ -51,6 +51,7 @@ use crate::parsers::image::jxl::parse_jxl_metadata;
 use crate::parsers::image::psd::parse_psd_metadata;
 use crate::parsers::image::svg::parse_svg_metadata;
 use crate::parsers::image::webp::parse_webp_metadata;
+use crate::parsers::image::wpg::parse_wpg_metadata;
 use crate::parsers::macho::parse_macho_metadata;
 use crate::parsers::pdf::parse_pdf_metadata;
 use crate::parsers::pe::parse_pe_metadata;
@@ -167,6 +168,7 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::SVG => convert_string_error(parse_svg_metadata(reader), "SVG"),
         FileFormat::ICO => convert_string_error(parse_ico_metadata(reader), "ICO"),
         FileFormat::PSD => convert_string_error(parse_psd_metadata(reader), "PSD"),
+        FileFormat::WPG => convert_string_error(parse_wpg_metadata(reader), "WPG"),
         // Specialized formats
         FileFormat::ELF => convert_string_error(parse_elf_metadata(reader), "ELF"),
         FileFormat::MachO => convert_string_error(parse_macho_metadata(reader), "Mach-O"),
