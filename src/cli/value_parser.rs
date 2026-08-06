@@ -76,6 +76,19 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         return Ok(TagValue::Binary(encoded));
     }
 
+    // GPS.pm 13.59 converts GPSDestLatitude's decimal input into a three-part
+    // DMS value before rationalizing the components. Preserve finite decimal
+    // text exactly here so that later conversion does not start from the
+    // generic rational parser's deliberately approximate continued fraction.
+    if tag_name == "GPS:GPSDestLatitude"
+        && let Some((numerator, denominator)) = exact_decimal_fraction(raw)
+    {
+        return Ok(TagValue::Rational {
+            numerator,
+            denominator,
+        });
+    }
+
     // GPS.pm 0x000a: the TIFF value is ASCII "2" or "3", while ExifTool's
     // PrintConv exposes the corresponding measurement label.  Writer.pl
     // applies that PrintConvInv before its generic string check.
@@ -831,6 +844,17 @@ mod tests {
         assert_eq!(
             parse("GPS:GPSDestDistanceRef", "Kilometers").unwrap(),
             TagValue::String("K".to_string())
+        );
+    }
+
+    #[test]
+    fn gps_dest_latitude_preserves_decimal_input_for_exact_dms_conversion() {
+        assert_eq!(
+            parse("GPS:GPSDestLatitude", "37.7749").unwrap(),
+            TagValue::Rational {
+                numerator: 377_749,
+                denominator: 10_000,
+            }
         );
     }
 
