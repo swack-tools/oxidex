@@ -64,6 +64,21 @@ mod tests {
         assert!(gps.is_some(), "Should find GPS::Main table");
     }
 
+    /// ExifTool 13.59 Exif.pm tag 0x0211 declares
+    /// `Writable => 'rational64u'` with `Count => 3`.
+    #[test]
+    fn ycbcr_coefficients_is_writable() {
+        let exif = get_tag_table("Exif::Main").expect("Exif::Main table should exist");
+        let tag = exif
+            .tags
+            .iter()
+            .find(|tag| tag.id == "0x0211" && tag.name == "YCbCrCoefficients")
+            .expect("YCbCrCoefficients (0x0211) should exist");
+
+        assert!(tag.writable);
+        assert_eq!(tag.type_name.as_deref(), Some("rational64u"));
+    }
+
     #[test]
     fn test_forensic_timezone_tags() {
         // Test that critical forensic EXIF tags for timeline reconstruction are present

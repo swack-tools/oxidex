@@ -679,7 +679,8 @@ tables:
         description: "JPEGACTables tag"
       - id: "0x0211"
         name: "YCbCrCoefficients"
-        writable: false
+        writable: true
+        type: rational64u
         description: "YCbCrCoefficients tag"
       - id: "0x0212"
         name: "YCbCrSubSampling"
