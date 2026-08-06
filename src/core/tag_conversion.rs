@@ -115,6 +115,13 @@ pub fn raw_bytes_to_tag_value(
                     });
                 }
                 let value = handle_ascii_type(bytes);
+                // Exif.pm 0x010f Make declares
+                // `RawConv => '$val =~ s/\s+$//; $$self{Make} = $val'`.
+                if tag_id == 0x010f
+                    && let TagValue::String(value) = value
+                {
+                    return TagValue::new_string(value.trim_end().to_string());
+                }
                 // Exif.pm 13.59 tag 0x0110 applies `$val =~ s/\s+$//` before
                 // exposing Model. Keep the trim tag-specific: other ASCII
                 // fields may treat trailing whitespace as data.
@@ -1131,6 +1138,14 @@ mod tests {
         );
 
         assert_eq!(value.as_string(), Some("Photographer\nEditor"));
+    }
+
+    #[test]
+    fn make_discards_trailing_whitespace_like_exiftool_rawconv() {
+        let value =
+            raw_bytes_to_tag_value(b"RICOH      \0", 2, 12, 0x010F, ByteOrder::LittleEndian);
+
+        assert_eq!(value.as_string(), Some("RICOH"));
     }
 
     #[test]
