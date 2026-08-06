@@ -1,9 +1,9 @@
-//! DjVu annotation extraction.
+//! DjVu annotation-metadata extraction.
 //!
 //! ExifTool 13.59 reads DjVu as an IFF container (`AIFF.pm:184-288`), then
 //! decodes `ANTz` with the DjVu BZZ codec and processes its s-expressions
 //! (`DjVu.pm:179-300`).  This module deliberately implements only the
-//! `metadata`/`annote` path, which ExifTool maps to `DjVu:Annotation`.
+//! `metadata` path, including `annote` and standard metadata fields.
 
 use crate::core::{FileReader, MetadataMap, TagValue};
 use djvu_bzz::bzz_decode;
@@ -118,38 +118,52 @@ impl<'a> ExpressionParser<'a> {
     }
 }
 
-fn annotation_from_expression(expression: Expression) -> Option<String> {
+fn metadata_from_expression(expression: Expression, metadata: &mut MetadataMap) {
     let Expression::List(items) = expression else {
-        return None;
+        return;
     };
     let Some(Expression::Atom(tag)) = items.first() else {
-        return None;
+        return;
     };
     if tag != "metadata" {
-        return None;
+        return;
     }
 
-    items.into_iter().skip(1).find_map(|item| {
+    for item in items.into_iter().skip(1) {
         let Expression::List(pair) = item else {
-            return None;
+            continue;
         };
         let Some(Expression::Atom(name)) = pair.first() else {
-            return None;
+            continue;
         };
         let value = match pair.get(1) {
             Some(Expression::Atom(value) | Expression::String(value)) => value,
-            _ => return None,
+            _ => continue,
         };
-        (name == "annote").then(|| value.clone())
-    })
+        match name.as_str() {
+            "annote" => metadata.insert(
+                "DjVu:Annotation".to_string(),
+                TagValue::new_string(value.clone()),
+            ),
+            "Author" => metadata.insert(
+                "DjVu-Meta:Author".to_string(),
+                TagValue::new_string(value.clone()),
+            ),
+            _ => None,
+        };
+    }
 }
 
-fn annotation_from_chunk(data: &[u8]) -> Option<String> {
-    let text = std::str::from_utf8(data).ok()?;
-    ExpressionParser::new(text)
-        .expressions()?
-        .into_iter()
-        .find_map(annotation_from_expression)
+fn collect_chunk_metadata(data: &[u8], metadata: &mut MetadataMap) {
+    let Ok(text) = std::str::from_utf8(data) else {
+        return;
+    };
+    let Some(expressions) = ExpressionParser::new(text).expressions() else {
+        return;
+    };
+    for expression in expressions {
+        metadata_from_expression(expression, metadata);
+    }
 }
 
 fn collect_annotation(chunk: &Chunk, metadata: &mut MetadataMap) {
@@ -160,22 +174,18 @@ fn collect_annotation(chunk: &Chunk, metadata: &mut MetadataMap) {
             }
         }
         Chunk::Leaf { id, data } if id == b"ANTa" => {
-            if let Some(annotation) = annotation_from_chunk(data) {
-                metadata.insert("DjVu:Annotation", TagValue::new_string(annotation));
-            }
+            collect_chunk_metadata(data, metadata);
         }
         Chunk::Leaf { id, data } if id == b"ANTz" => {
-            if let Ok(decoded) = bzz_decode(data)
-                && let Some(annotation) = annotation_from_chunk(&decoded)
-            {
-                metadata.insert("DjVu:Annotation", TagValue::new_string(annotation));
+            if let Ok(decoded) = bzz_decode(data) {
+                collect_chunk_metadata(&decoded, metadata);
             }
         }
         Chunk::Leaf { .. } => {}
     }
 }
 
-/// Extract the annotation tag from a DjVu image or multi-page document.
+/// Extract annotation metadata from a DjVu image or multi-page document.
 pub fn parse_djvu_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
     let data = reader
         .read(0, reader.size() as usize)
@@ -192,4 +202,29 @@ pub fn parse_djvu_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
     let mut metadata = MetadataMap::new();
     collect_annotation(&file.root, &mut metadata);
     Ok(metadata)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ExpressionParser, metadata_from_expression};
+    use crate::core::MetadataMap;
+
+    #[test]
+    fn extracts_author_from_annotation_metadata() {
+        let expressions = ExpressionParser::new(
+            r#"(metadata (Author "Phil Harvey") (annote "Did you get this?"))"#,
+        )
+        .expressions()
+        .unwrap();
+        let mut metadata = MetadataMap::new();
+        for expression in expressions {
+            metadata_from_expression(expression, &mut metadata);
+        }
+
+        assert_eq!(metadata.get_string("DjVu-Meta:Author"), Some("Phil Harvey"));
+        assert_eq!(
+            metadata.get_string("DjVu:Annotation"),
+            Some("Did you get this?")
+        );
+    }
 }
