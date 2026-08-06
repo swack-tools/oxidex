@@ -18,9 +18,9 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | 📖 Read only | 2353 |
 | ❌ Unsupported | 1890 |
 | ❔ Untestable | 221 |
-| 🐛 Read OK, write broken | 166 |
+| 🐛 Read OK, write broken | 165 |
 | ✅ Full (read + write) | 104 |
-| ⚠️ Full (write non-standard encoding) | 76 |
+| ⚠️ Full (write non-standard encoding) | 77 |
 | 🐛 Read broken | 9 |
 | 🚫 Not writable in ExifTool (no synthetic sample possible; untested) | 585 |
 
@@ -33,7 +33,7 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | File | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
 | GPS | 5 | 6 | 3 | 0 | 0 | 0 | 0 | 32 |
 | GSpherical | 0 | 0 | 0 | 0 | 0 | 0 | 16 | 16 |
-| IFD0 | 53 | 0 | 54 | 0 | 0 | 0 | 17 | 169 |
+| IFD0 | 53 | 0 | 53 | 0 | 0 | 0 | 17 | 169 |
 | IFD1 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
 | IFD2 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
 | IPTC | 0 | 92 | 1 | 0 | 0 | 5 | 7 | 105 |
@@ -537,7 +537,7 @@ references are into this repo.
 | `PanasonicTitle2` | ✅ ok (formatting differs from exiftool) | ✅ ok | `OxTest` |
 | `PhotometricInterpretation` | ✅ ok | 🐛 broken: error | `WhiteIsZero` |
 | `PixelScale` | ✅ ok | 🐛 broken: error | `1.5 1.5 1.5` |
-| `PlanarConfiguration` | ✅ ok | 🐛 broken: error | `Chunky` |
+| `PlanarConfiguration` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `Chunky` |
 | `Predictor` | ✅ ok (formatting differs from exiftool) | 🐛 broken: error | `Horizontal differencing` |
 | `PreviewApplicationName` | ✅ ok | ✅ ok | `OxTest` |
 | `PreviewApplicationVersion` | ✅ ok | ✅ ok | `OxTest` |

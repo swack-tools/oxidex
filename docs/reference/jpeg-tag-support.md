@@ -9,7 +9,7 @@ Empirical OxiDex ↔ ExifTool tag mapping for JPEG: for each tag, ExifTool write
 Only tags OxiDex can **read** from JPEG are listed here (including those whose value formatting differs from ExifTool). The full classification of all tested tags — including unsupported and broken ones — is in the [JPEG Tag Matrix](/reference/jpeg-tag-matrix). See also [ExifTool Coverage](/reference/tag-coverage-analysis) for the tag-database view and the [Compatibility overview](/reference/comparison/) for fixture-based comparisons across formats.
 
 
-**2699** ExifTool tags readable, **186** writable via the CLI (of 4819 ExifTool-writable JPEG tags tested).
+**2699** ExifTool tags readable, **187** writable via the CLI (of 4819 ExifTool-writable JPEG tags tested).
 
 
 ## ExifIFD (93 readable tags)
@@ -245,7 +245,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:PanasonicTitle2` | `IFD0:PanasonicTitle2` * | ✅ `-IFD0:PanasonicTitle2=` | `OxTest` |
 | `IFD0:PhotometricInterpretation` | `IFD0:PhotometricInterpretation` | — | `WhiteIsZero` |
 | `IFD0:PixelScale` | `IFD0:0x830E` | — | `1.5 1.5 1.5` |
-| `IFD0:PlanarConfiguration` | `IFD0:PlanarConfiguration` | — | `Chunky` |
+| `IFD0:PlanarConfiguration` | `IFD0:PlanarConfiguration` | ⚠️ `-IFD0:PlanarConfiguration=` | `Chunky` |
 | `IFD0:Predictor` | `IFD0:Predictor` * | — | `Horizontal differencing` |
 | `IFD0:PreviewApplicationName` | `IFD0:PreviewApplicationName` | ✅ `-IFD0:PreviewApplicationName=` | `OxTest` |
 | `IFD0:PreviewApplicationVersion` | `IFD0:PreviewApplicationVersion` | ✅ `-IFD0:PreviewApplicationVersion=` | `OxTest` |
