@@ -1324,7 +1324,7 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
             TagId::new_numeric(0x0154),
             "EXIF:SMinSampleValue".to_string(),
             FormatFamily::EXIF,
-            true,
+            false,
             ValueType::Integer,
             "Minimum sample value".to_string(),
             vec!["0".to_string()],
@@ -7234,6 +7234,15 @@ mod tests {
     fn tile_byte_counts_is_read_only() {
         let tag = get_tag_descriptor("EXIF:TileByteCounts")
             .expect("EXIF:TileByteCounts should be registered");
+        assert!(!tag.is_writable());
+    }
+
+    /// ExifTool 13.59 Exif.pm 0x0154 has no `Writable` member, and its
+    /// generated `-listx` contract therefore reports `writable='false'`.
+    #[test]
+    fn s_min_sample_value_is_read_only() {
+        let tag = get_tag_descriptor("EXIF:SMinSampleValue")
+            .expect("EXIF:SMinSampleValue should be registered");
         assert!(!tag.is_writable());
     }
 
