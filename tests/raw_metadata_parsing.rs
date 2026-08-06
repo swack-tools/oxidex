@@ -163,6 +163,19 @@ fn nikon_nef_preview_image_start_uses_the_absolute_makernote_offset() {
 }
 
 #[test]
+fn nikon_nef_does_not_emit_synthetic_image_layer_count() {
+    let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/Nikon.nef")
+        .expect("pinned Nikon NEF fixture must be available");
+
+    let metadata = parse_raw_metadata(&data, RawFormat::NikonNEF)
+        .expect("pinned Nikon NEF fixture should parse");
+
+    // ExifTool 13.59 has no ImageLayerCount tag for NEF; this was an
+    // OxiDex-invented summary rather than source metadata.
+    assert!(metadata.get("NEF:ImageLayerCount").is_none());
+}
+
+#[test]
 fn test_parse_minimal_tiff_based_raw() {
     // Create a minimal valid TIFF header
     // II (little-endian) + 0x002A (magic 42) + offset to IFD (8)

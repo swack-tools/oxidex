@@ -498,6 +498,16 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
         results.push((tag, value));
     }
 
+    // XMP's reported tag name is derived from the namespace URI, not the XML
+    // prefix.  Two different custom namespaces can therefore collapse onto
+    // the same generic `XMP:<name>` tag when a prefix is rebound in a later
+    // rdf:Description.  ExifTool registers the first such mapping (XMP6.xmp:
+    // fish/Test -> trout, then feline/Test -> tabby) and retains `trout`.
+    // Keep the first emitted value too, rather than letting a downstream
+    // MetadataMap insertion silently overwrite it.
+    let mut emitted_tags = std::collections::HashSet::new();
+    results.retain(|(tag, _)| emitted_tags.insert(tag.clone()));
+
     // Post-process results to apply formatting for specific tags
     Ok(results
         .into_iter()
@@ -1348,6 +1358,12 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>>
     let mut description_depth: Option<usize> = None;
     let mut container_depth: Option<usize> = None;
     let mut container_name = String::new();
+    // ExifTool has `List` declarations for registered XMP schemas, but an
+    // unknown schema is handled generically: repeated flattened fields keep
+    // the first value (XMP4.xmp's test:StructList2Item1/Item2).  Track this
+    // at the container level so an ordinary list inside one struct remains a
+    // list while repeated fields across unknown struct records do not merge.
+    let mut container_allows_repeated_fields = false;
     // Field names below the container, with the RDF structural elements left
     // out -- the rest of ExifTool's tag ID, in pieces.
     let mut path: Vec<String> = Vec::new();
@@ -1355,9 +1371,11 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>>
     // (flattened id, values) in first-seen order.
     let mut collected: Vec<(String, Vec<String>)> = Vec::new();
 
-    let mut push_value = |flat_id: String, value: String| {
+    let mut push_value = |flat_id: String, value: String, allow_repeat: bool| {
         if let Some((_, values)) = collected.iter_mut().find(|(id, _)| *id == flat_id) {
-            values.push(value);
+            if allow_repeat {
+                values.push(value);
+            }
         } else {
             collected.push((flat_id, vec![value]));
         }
@@ -1381,6 +1399,13 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>>
                     if is_container_candidate {
                         let local = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
                         container_depth = Some(depth);
+                        container_allows_repeated_fields =
+                            NamespaceResolver::extract_prefix(&tag_name)
+                                .and_then(|prefix| resolver.resolve_prefix(prefix))
+                                .is_some_and(|uri| {
+                                    super::namespace_mapping::namespace_to_family(uri).is_some()
+                                        || uri == "http://ns.adobe.com/xap/1.0/mm/"
+                                });
                         container_name = if is_flat_name_suppressed(&local) {
                             String::new()
                         } else {
@@ -1416,6 +1441,7 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>>
                 if container_depth == Some(depth) {
                     container_depth = None;
                     container_name.clear();
+                    container_allows_repeated_fields = false;
                     path.clear();
                     text.clear();
                 } else if container_depth.is_some() {
@@ -1424,7 +1450,8 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>>
                     // the container is the whole property, which the ordinary
                     // RDF pass already reports.
                     if !value.is_empty() && !path.is_empty() {
-                        push_value(format!("{}{}", container_name, path.join("")), value);
+                        let flat_id = format!("{}{}", container_name, path.join(""));
+                        push_value(flat_id, value, container_allows_repeated_fields);
                     }
                     text.clear();
                     if !is_rdf_namespace(&tag_name, &resolver) {
@@ -2862,6 +2889,11 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
 
         // EXIF enum tags that appear in XMP
         "ColorSpace" => decode_xmp_color_space(value),
+        // XMP.pm:2011-2024 gives this exif: Seq its own PrintConv. Do not
+        // apply it to an unrelated property with the same local name.
+        "ComponentsConfiguration" if tag.starts_with("XMP-exif:") => {
+            decode_xmp_components_configuration(value)
+        }
         "CustomRendered" => decode_xmp_custom_rendered(value),
         "ExposureMode" => decode_xmp_exposure_mode(value),
         "FileSource" => decode_xmp_file_source(value),
@@ -2976,6 +3008,20 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         _ if is_xmp_date_tag(local_name) => format_xmp_date_time(value),
 
         // Default: return original value unchanged
+        _ => value.to_string(),
+    }
+}
+
+/// XMP.pm:2011-2024 `%Image::ExifTool::XMP::exif` PrintConv.
+fn decode_xmp_components_configuration(value: &str) -> String {
+    match value {
+        "0" => "-".to_string(),
+        "1" => "Y".to_string(),
+        "2" => "Cb".to_string(),
+        "3" => "Cr".to_string(),
+        "4" => "R".to_string(),
+        "5" => "G".to_string(),
+        "6" => "B".to_string(),
         _ => value.to_string(),
     }
 }
@@ -3704,6 +3750,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rebound_custom_prefix_keeps_the_first_generic_xmp_tag() {
+        // ExifTool's XMP6.xmp fixture binds `xxxx` first to a fish schema,
+        // then to a feline schema. `exiftool -G1 -s XMP6.xmp` emits only
+        // `XMP-xxxx:Test : trout`.
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description xmlns:xxxx="http://testtag.com/fish/1.0/">
+                <xxxx:Test>trout</xxxx:Test>
+              </rdf:Description>
+              <rdf:Description xmlns:xxxx="http://testtag.com/feline/1.0/">
+                <xxxx:Test>tabby</xxxx:Test>
+              </rdf:Description>
+            </rdf:RDF>
+        "#;
+
+        assert_eq!(
+            parse_xmp(xml).unwrap(),
+            vec![("XMP:Test".to_string(), "trout".to_string())]
+        );
+    }
+
+    #[test]
     fn plus_custom1_language_lists_keep_the_plus_family_without_aliases() {
         let xml = br#"
             <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
@@ -3775,6 +3843,22 @@ mod tests {
                 "Y, Cb, Cr, -".to_string(),
             )]
         );
+    }
+
+    #[test]
+    fn components_configuration_uses_xmp_exif_print_conversion() {
+        // XMP.pm:2011-2024: the integer Seq in XMP.xmp is displayed as
+        // Y, Cb, Cr, - rather than its stored 1, 2, 3, 0 values.
+        assert_eq!(
+            format_xmp_value("XMP-exif:ComponentsConfiguration", "1"),
+            "Y"
+        );
+        assert_eq!(
+            format_xmp_value("XMP-exif:ComponentsConfiguration", "0"),
+            "-"
+        );
+        // No conversion leaks into an unrelated namespace with the same name.
+        assert_eq!(format_xmp_value("XMP:ComponentsConfiguration", "1"), "1");
     }
 
     // The expectations below are `exiftool -G1 -s` output for an XMP packet
@@ -5247,6 +5331,35 @@ mod top_level_struct_tests {
         );
         // The container itself is not a flattened tag.
         assert!(!tags.iter().any(|(t, _)| t == "XMP:LocationShown"));
+    }
+
+    #[test]
+    fn unknown_schema_struct_lists_keep_the_first_repeated_field() {
+        // `exiftool -G1 -s XMP4.xmp` reports XMP-test:StructList2Item1 as
+        // c1-1 and StructList2Item2 as c2-1, despite the second rdf:li
+        // carrying c1-2/c2-2.  The test namespace has no registered XMP
+        // table, so ExifTool's generic duplicate handling keeps the first.
+        let xml = br#"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+ <rdf:Description xmlns:test='http://ns.test.com/'>
+  <test:StructList2><rdf:Bag>
+   <rdf:li rdf:parseType='Resource'><test:Item1>c1-1</test:Item1><test:Item2>c2-1</test:Item2></rdf:li>
+   <rdf:li rdf:parseType='Resource'><test:Item1>c1-2</test:Item1><test:Item2>c2-2</test:Item2></rdf:li>
+  </rdf:Bag></test:StructList2>
+ </rdf:Description>
+</rdf:RDF>"#;
+        let tags = extract_list_struct_values(xml).unwrap();
+        assert_eq!(
+            tags.iter()
+                .find(|(tag, _)| tag == "XMP:StructList2Item1")
+                .map(|(_, value)| value.as_str()),
+            Some("c1-1")
+        );
+        assert_eq!(
+            tags.iter()
+                .find(|(tag, _)| tag == "XMP:StructList2Item2")
+                .map(|(_, value)| value.as_str()),
+            Some("c2-1")
+        );
     }
 
     /// A field that is itself a structure keeps concatenating:

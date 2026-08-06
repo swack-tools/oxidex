@@ -84,6 +84,8 @@ pub fn parse_preview_ifd(
         signature_offset: 0,
         max_entries: MAX_SUB_IFD_ENTRIES,
     };
+    let mut preview_image_offset = None;
+    let mut preview_image_length = None;
     let _ = parse_ifd_entries(ifd, order, &config, |entry, _| match entry.tag_id {
         0x0103 => {
             if let Some(value) = scalar_u32(entry, data, tiff_start, order) {
@@ -111,15 +113,18 @@ pub fn parse_preview_ifd(
             }
         }
         0x0201 => {
-            if let (Some(value), Some(base)) =
-                (scalar_u32(entry, data, tiff_start, order), preview_ifd_base)
-                && let Some(value) = base.checked_add(u64::from(value))
-            {
-                tags.insert("Nikon:PreviewImageStart".to_string(), value.to_string());
+            if let Some(value) = scalar_u32(entry, data, tiff_start, order) {
+                preview_image_offset = Some(value);
+                if let Some(base) = preview_ifd_base
+                    && let Some(value) = base.checked_add(u64::from(value))
+                {
+                    tags.insert("Nikon:PreviewImageStart".to_string(), value.to_string());
+                }
             }
         }
         0x0202 => {
             if let Some(value) = scalar_u32(entry, data, tiff_start, order) {
+                preview_image_length = Some(value);
                 tags.insert("Nikon:PreviewImageLength".to_string(), value.to_string());
             }
         }
@@ -135,6 +140,21 @@ pub fn parse_preview_ifd(
         }
         _ => {}
     });
+
+    // Nikon.pm declares 0x0201/0x0202 as an OffsetPair with
+    // `DataTag => PreviewImage`. The value is not a scalar: ExifTool returns
+    // the pointed-to bytes (Binary => 1) only when the complete range exists.
+    if let (Some(offset), Some(length)) = (preview_image_offset, preview_image_length)
+        && let Some(start) = tiff_start.checked_add(offset as usize)
+        && data
+            .get(start..start.saturating_add(length as usize))
+            .is_some()
+    {
+        tags.insert(
+            "MakerNotes:PreviewImage".to_string(),
+            format!("(Binary data {length} bytes, use -b option to extract)"),
+        );
+    }
 }
 
 /// Walk `Nikon::Scan` (MakerNote tag 0x0e10, the IFD written by Nikon Scan).
