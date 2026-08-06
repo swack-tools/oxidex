@@ -711,7 +711,7 @@ pub fn plan_exif_write(
     if plan
         .gps
         .iter()
-        .any(|entry| matches!(entry.tag_id, 0x000f | 0x0014 | 0x001d | 0x001f))
+        .any(|entry| matches!(entry.tag_id, 0x000d | 0x000f | 0x0014 | 0x001d | 0x001f))
         && !plan.gps.iter().any(|entry| entry.tag_id == 0x0000)
     {
         plan.gps.push(OutEntry {
@@ -1602,6 +1602,42 @@ mod tests {
         assert_eq!(track.field_type, 5);
         assert_eq!(track.count, 1);
         assert!(plan.gps.iter().any(|entry| entry.tag_id == 0x0000));
+    }
+
+    #[test]
+    fn plan_writes_gps_speed_with_required_gps_version() {
+        // ExifTool 13.59 GPS.pm declares GPSSpeed as rational64u. Creating a
+        // GPS IFD for it also creates the required GPSVersionID=2.3.0.0.
+        let scan = ExifScan {
+            byte_order: ByteOrder::LittleEndian,
+            entries: Vec::new(),
+            thumbnail: None,
+            makernote_offset: None,
+        };
+        let original = MetadataMap::new();
+        let mut desired = MetadataMap::new();
+        desired.insert("GPS:GPSSpeed", TagValue::new_rational(91, 2));
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let speed = plan
+            .gps
+            .iter()
+            .find(|entry| entry.tag_id == 0x000d)
+            .unwrap();
+        assert_eq!(speed.field_type, 5);
+        assert_eq!(speed.count, 1);
+        assert_eq!(
+            speed.value,
+            [91_u32.to_ne_bytes(), 2_u32.to_ne_bytes()].concat()
+        );
+        let version = plan
+            .gps
+            .iter()
+            .find(|entry| entry.tag_id == 0x0000)
+            .unwrap();
+        assert_eq!(version.field_type, 1);
+        assert_eq!(version.count, 4);
+        assert_eq!(version.value, [2, 3, 0, 0]);
     }
 
     #[test]
