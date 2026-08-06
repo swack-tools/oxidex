@@ -1837,6 +1837,28 @@ fn format_dng_ifd0_tag(
                 .map(|byte| format!("{:02X}", byte))
                 .collect::<String>(),
         ),
+        // Exif.pm 0xc6fc ProfileToneCurve is float[n] with `%longBin`:
+        // values are decoded before the long-binary display threshold applies.
+        0xC6FC if field_type == 11 => {
+            let count = usize::try_from(value_count).ok()?;
+            let values = bytes.get(..count.checked_mul(4)?)?;
+            Some(
+                values
+                    .chunks_exact(4)
+                    .map(|chunk| {
+                        let chunk: [u8; 4] = chunk.try_into().ok()?;
+                        Some(match byte_order {
+                            ByteOrder::LittleEndian => f32::from_le_bytes(chunk),
+                            ByteOrder::BigEndian => f32::from_be_bytes(chunk),
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?
+                    .into_iter()
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            )
+        }
         // rational64u[4]: min focal, max focal, min f, max f.
         0xC630 if field_type == 5 && value_count == 4 => {
             // Exif.pm's rational ValueConv yields 'inf' for n/0 and 'undef'
