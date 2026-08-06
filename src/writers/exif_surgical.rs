@@ -311,6 +311,18 @@ pub fn plan_exif_write(
     // wins and the alias is left for the pre-existing duplicate-tag-id guard
     // in the Added loop below to reconcile (skip if equal, once serialized).
     let mut desired = desired.clone();
+    // GPS.pm (ExifTool 13.59) maps GPSLatitudeRef's one-byte N/S codes to
+    // display values. Restore the declared raw code before serialization.
+    if let Some(TagValue::String(value)) = desired.get("GPS:GPSLatitudeRef") {
+        let raw = match value.as_str() {
+            "North" => Some("N"),
+            "South" => Some("S"),
+            _ => None,
+        };
+        if let Some(raw) = raw {
+            desired.insert("GPS:GPSLatitudeRef", TagValue::new_string(raw));
+        }
+    }
     // GPS.pm (ExifTool 13.59) declares GPSDestBearingRef's PrintConv as
     // M => "Magnetic North", T => "True North". The CLI supplies that
     // display value, but TIFF stores the one-byte code; invert this one
@@ -1452,6 +1464,22 @@ mod tests {
             .unwrap();
         assert_eq!(accuracy.field_type, 5);
         assert_eq!(accuracy.count, 1);
+    }
+
+    #[test]
+    fn plan_inverts_gps_latitude_ref_display_value_before_serializing() {
+        // ExifTool 13.59 GPS.pm maps the raw GPSLatitudeRef code S to the
+        // display value "South". The TIFF entry must retain the raw code.
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let mut desired = original.clone();
+        desired.insert("GPS:GPSLatitudeRef", TagValue::new_string("South"));
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let latitude_ref = plan.gps.iter().find(|e| e.tag_id == 0x0001).unwrap();
+        assert_eq!(latitude_ref.field_type, 2);
+        assert_eq!(latitude_ref.count, 2);
+        assert_eq!(latitude_ref.value, b"S\0");
     }
 
     #[test]
