@@ -316,6 +316,22 @@ pub fn format_file_source(value: i64) -> String {
     }
 }
 
+/// `%Image::ExifTool::Exif::Main` 0x9212 `SecurityClassification` PrintConv
+/// from ExifTool 13.59's `Exif.pm:2453-2463`.
+///
+/// The stored EXIF ASCII code is rendered only when the source table names
+/// it. Unknown codes deliberately remain raw at the caller.
+pub fn format_security_classification(value: &str) -> Option<&'static str> {
+    match value {
+        "T" => Some("Top Secret"),
+        "S" => Some("Secret"),
+        "C" => Some("Confidential"),
+        "R" => Some("Restricted"),
+        "U" => Some("Unclassified"),
+        _ => None,
+    }
+}
+
 /// `0xa210 FocalPlaneResolutionUnit`'s PrintConv (Exif.pm:2777), verbatim:
 ///
 /// ```text
