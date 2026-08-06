@@ -1354,6 +1354,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn subsec_time_extracts_fraction_and_accepts_bare_digits() {
+        assert_eq!(
+            parse("EXIF:SubSecTime", "2024:01:02 03:04:05.42").unwrap(),
+            TagValue::String("42".to_string())
+        );
+        assert_eq!(
+            parse("ExifIFD:SubSecTime", "007").unwrap(),
+            TagValue::String("007".to_string())
+        );
+    }
+
     // -- Rational, Writer.pl:6888-6903 + 5200-5228 --------------------------
 
     #[test]
