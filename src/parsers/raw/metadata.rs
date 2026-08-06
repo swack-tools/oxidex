@@ -1037,6 +1037,27 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 byte_order,
                                 &mut metadata,
                             );
+
+                            // Exif.pm promotes the directory with a zero
+                            // SubfileType (the full-resolution image) to its
+                            // PRIORITY_DIR. Only the fields declared
+                            // `Priority => 0` in that table may replace the
+                            // reduced-resolution IFD0 thumbnail values.
+                            if dng_subifd_is_full_resolution(&sub_tags, byte_order) {
+                                for (tag_id, field_type, value_count, raw_bytes) in &sub_tags {
+                                    if let Some((tag_name, tag_value)) =
+                                        format_dng_priority_subifd_tag(
+                                            *tag_id,
+                                            raw_bytes.as_ref(),
+                                            *field_type,
+                                            *value_count,
+                                            byte_order,
+                                        )
+                                    {
+                                        metadata.insert(tag_name, tag_value);
+                                    }
+                                }
+                            }
                         }
 
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
@@ -1921,6 +1942,60 @@ fn read_tiff_numeric_array(
             })
             .collect(),
     )
+}
+
+/// Whether this DNG SubIFD is ExifTool's full-resolution priority directory.
+///
+/// Exif.pm's `SubfileType` RawConv calls `SetPriorityDir()` only for value 0.
+/// A reduced-resolution image, even if it has larger dimensions than another
+/// preview, must never be selected by this rule.
+fn dng_subifd_is_full_resolution(
+    tags: &crate::parsers::tiff::ifd_parser::IfdEntries,
+    byte_order: ByteOrder,
+) -> bool {
+    let Some((_, field_type, value_count, bytes)) = tags.iter().find(|(tag, ..)| *tag == 0x00FE)
+    else {
+        return false;
+    };
+    if *value_count != 1 {
+        return false;
+    }
+    match *field_type {
+        3 => read_tiff_u16(bytes.as_ref(), byte_order) == Some(0),
+        4 => read_tiff_u32(bytes.as_ref(), byte_order) == Some(0),
+        _ => false,
+    }
+}
+
+/// Render the DNG fields whose `Priority => 0` causes ExifTool to read from
+/// the full-resolution SubIFD instead of IFD0.
+fn format_dng_priority_subifd_tag(
+    tag_id: u16,
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<(String, TagValue)> {
+    if !matches!(tag_id, 0x0100 | 0x0101 | 0x0102 | 0x0103 | 0x0106 | 0x0115) {
+        return None;
+    }
+
+    let tag_value = match tag_id {
+        0x0103 | 0x0106 if field_type == 3 && value_count == 1 => {
+            let value = i64::from(read_tiff_u16(bytes, byte_order)?);
+            crate::parsers::tiff::tiff_enums::tiff_enum_to_string(tag_id, value)
+                .map(TagValue::new_string)
+                .unwrap_or_else(|| {
+                    raw_bytes_to_simple_tag_value(bytes, field_type, value_count, byte_order)
+                })
+        }
+        _ => raw_bytes_to_simple_tag_value(bytes, field_type, value_count, byte_order),
+    };
+
+    Some((
+        lookup_raw_tag_name(tag_id, "IFD0", RawFormat::AdobeDNG),
+        tag_value,
+    ))
 }
 
 /// Name and display value for the DNG SubIFD tags ExifTool reports under the
@@ -3187,6 +3262,76 @@ mod dng_integer_array_tests {
 #[cfg(test)]
 mod dng_thumbnail_tiff_tests {
     use super::*;
+
+    #[test]
+    fn dng_full_resolution_subifd_overrides_reduced_ifd0_priority_fields() {
+        // ExifTool's Exif.pm promotes the directory whose SubfileType is 0,
+        // so these Priority => 0 fields must come from this full-resolution
+        // SubIFD rather than IFD0's reduced-resolution thumbnail.
+        let sub_ifd_offset = 112u32;
+        let ifd0_bits_offset = 202u32;
+        let mut dng = vec![0u8; 208];
+        dng[..8].copy_from_slice(b"II\x2a\0\x08\0\0\0");
+
+        let write_ifd = |data: &mut [u8], offset: usize, entries: &[(u16, u16, u32, u32)]| {
+            data[offset..offset + 2].copy_from_slice(&(entries.len() as u16).to_le_bytes());
+            for (index, (id, ty, count, value)) in entries.iter().enumerate() {
+                let at = offset + 2 + index * 12;
+                data[at..at + 2].copy_from_slice(&id.to_le_bytes());
+                data[at + 2..at + 4].copy_from_slice(&ty.to_le_bytes());
+                data[at + 4..at + 8].copy_from_slice(&count.to_le_bytes());
+                data[at + 8..at + 12].copy_from_slice(&value.to_le_bytes());
+            }
+        };
+
+        write_ifd(
+            &mut dng,
+            8,
+            &[
+                (0x00FE, 4, 1, 1),
+                (0x0100, 4, 1, 8),
+                (0x0101, 4, 1, 8),
+                (0x0102, 3, 3, ifd0_bits_offset),
+                (0x0103, 3, 1, 1),
+                (0x0106, 3, 1, 2),
+                (0x0115, 3, 1, 3),
+                (0x014A, 4, 1, sub_ifd_offset),
+            ],
+        );
+        write_ifd(
+            &mut dng,
+            sub_ifd_offset as usize,
+            &[
+                (0x00FE, 4, 1, 0),
+                (0x0100, 4, 1, 3516),
+                (0x0101, 4, 1, 2328),
+                (0x0102, 3, 1, 16),
+                (0x0103, 3, 1, 7),
+                (0x0106, 3, 1, 32803),
+                (0x0115, 3, 1, 1),
+            ],
+        );
+        dng[ifd0_bits_offset as usize..].copy_from_slice(&[8, 0, 8, 0, 8, 0]);
+
+        let metadata = parse_raw_metadata(&dng, RawFormat::AdobeDNG).expect("synthetic DNG");
+        for (tag, expected) in [
+            ("IFD0:ImageWidth", TagValue::new_integer(3516)),
+            ("IFD0:ImageHeight", TagValue::new_integer(2328)),
+            ("IFD0:BitsPerSample", TagValue::new_integer(16)),
+            ("IFD0:Compression", TagValue::new_string("JPEG")),
+            (
+                "IFD0:PhotometricInterpretation",
+                TagValue::new_string("Color Filter Array"),
+            ),
+            ("IFD0:SamplesPerPixel", TagValue::new_integer(1)),
+        ] {
+            assert_eq!(
+                metadata.get(tag),
+                Some(&expected),
+                "{tag} must come from the full-resolution SubIFD"
+            );
+        }
+    }
 
     #[test]
     fn rebuilds_uncompressed_reduced_resolution_ifd0_as_thumbnail_tiff() {

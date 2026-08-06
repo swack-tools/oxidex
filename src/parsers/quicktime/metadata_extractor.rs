@@ -77,6 +77,9 @@ fn extract_track_metadata(
 
     // Canon CR3 stores its timed-metadata handler here (Track4: `meta`).
     // This is distinct from the optional data handler beneath `minf`.
+    let is_meta_handler = mdia
+        .find_child("hdlr")
+        .is_some_and(|hdlr| hdlr.data.get(8..12) == Some(b"meta"));
     if let Some(hdlr) = mdia.find_child("hdlr") {
         let _ = extract_track_handler_metadata(&hdlr, metadata, index);
     }
@@ -126,7 +129,7 @@ fn extract_track_metadata(
 
     // Extract sample description - optional
     if let Some(stsd) = stbl.find_child("stsd") {
-        let _ = extract_sample_description(&stsd, metadata, index);
+        let _ = extract_sample_description(&stsd, metadata, index, is_meta_handler);
     }
 
     // Extract video frame rate from stts (sample-to-time) atom
@@ -912,6 +915,7 @@ fn extract_sample_description(
     stsd: &Atom,
     metadata: &mut MetadataMap,
     track_index: usize,
+    is_meta_handler: bool,
 ) -> Result<(), String> {
     if stsd.data.len() < 8 {
         return Ok(());
@@ -946,6 +950,17 @@ fn extract_sample_description(
             // Format/Codec ID (4 bytes)
             if let Ok(format) = std::str::from_utf8(&entry_data[4..8]) {
                 let format_trimmed = format.trim();
+
+                // QuickTime.pm selects `MetaSampleDesc` only beneath a
+                // `meta` handler. Its first declared field is MetaFormat at
+                // this exact four-byte location, and it is deliberately not
+                // a numbered track tag in ExifTool's output.
+                if is_meta_handler {
+                    metadata.insert(
+                        "QuickTime:MetaFormat".to_string(),
+                        TagValue::String(format.to_string()),
+                    );
+                }
                 metadata.insert(
                     format!("QuickTime:CompressorID{}", track_suffix),
                     TagValue::String(format_trimmed.to_string()),
@@ -3453,6 +3468,29 @@ mod tests {
             metadata.get_string("QuickTime:HandlerType"),
             Some("NRT Metadata")
         );
+    }
+
+    #[test]
+    fn meta_track_ctmd_sample_description_emits_meta_format() {
+        // QuickTime.pm's MetaSampleDesc table reads the four-byte sample
+        // format at offset 4 when the enclosing handler is `meta`.
+        let stsd_data = [
+            0, 0, 0, 0, // version and flags
+            0, 0, 0, 1, // entry count
+            0, 0, 0, 8, // entry size
+            b'C', b'T', b'M', b'D', // MetaFormat
+        ];
+        let stsd = Atom {
+            atom_type: FourCC::from_string("stsd").expect("valid atom type"),
+            data: &stsd_data,
+            header_size: 8,
+        };
+        let mut metadata = MetadataMap::new();
+
+        extract_sample_description(&stsd, &mut metadata, 3, true)
+            .expect("sample description should parse");
+
+        assert_eq!(metadata.get_string("QuickTime:MetaFormat"), Some("CTMD"));
     }
 
     #[test]
