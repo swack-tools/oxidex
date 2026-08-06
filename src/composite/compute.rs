@@ -679,6 +679,22 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             Computed::new(v.to_string(), print_fnumber(v))
         }
 
+        // Exif.pm's PrintLensID falls back to an unknown focal range when a
+        // Canon body records LensType as 65535 (displayed as `n/a`) and no
+        // lens lookup entry exists. Keep this narrow: known lens labels need
+        // the full model-matching routine and are intentionally left alone.
+        ("Exif", "LensID") => {
+            if !matches!(get(i, 0).map(str::trim), Some("n/a" | "N/A" | "65535")) {
+                return None;
+            }
+            let short = f(get(i, 4))?;
+            let long = f(get(i, 5))?;
+            if short <= 0.0 || long <= 0.0 {
+                return None;
+            }
+            Computed::same(format!("Unknown {:.0}-{:.0}mm", short, long))
+        }
+
         // require: FocalLength; desire: ScaleFactor35efl
         // ValueConv: `($val[0] || 0) * ($val[1] || 1)`
         // PrintConv: `$val[1] ? "%.1f mm (35 mm equivalent: %.1f mm)" : "%.1f mm"`
@@ -1862,6 +1878,27 @@ mod tests {
             .map(|computed| computed.print)
             .as_deref(),
             Some("2005:08:01 12:34")
+        );
+    }
+
+    #[test]
+    fn canon_unknown_lens_type_uses_focal_range_fallback() {
+        assert_eq!(
+            compute(
+                "Exif",
+                "LensID",
+                &[
+                    Some("n/a"),
+                    None,
+                    None,
+                    None,
+                    Some("7.09375 mm"),
+                    Some("21.3125 mm"),
+                ],
+                Some("Canon"),
+            )
+            .map(|computed| computed.print),
+            Some("Unknown 7-21mm".to_string())
         );
     }
 
