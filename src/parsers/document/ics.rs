@@ -88,6 +88,220 @@ impl ICSParser {
         }
         last_date
     }
+
+    /// Converts an iCalendar DATE or DATE-TIME value to ExifTool's
+    /// "YYYY:MM:DD[ HH:MM:SS[Z]]" style, matching VCard.pm's `%timeInfo`
+    /// ValueConv/PrintConv (which for ICS is effectively a passthrough
+    /// reformat: `$self->ConvertDateTime($val)` on an already-EXIF-style
+    /// string just returns it unchanged).
+    fn convert_ics_datetime(val: &str) -> String {
+        let bytes: Vec<char> = val.chars().collect();
+        // YYYYMMDDTHHMMSS(Z?)
+        if bytes.len() >= 15
+            && bytes[8] == 'T'
+            && bytes[..8].iter().all(|c| c.is_ascii_digit())
+            && bytes[9..15].iter().all(|c| c.is_ascii_digit())
+        {
+            let z = if bytes.len() > 15 && bytes[15] == 'Z' {
+                "Z"
+            } else {
+                ""
+            };
+            return format!(
+                "{}:{}:{} {}:{}:{}{}",
+                &val[0..4],
+                &val[4..6],
+                &val[6..8],
+                &val[9..11],
+                &val[11..13],
+                &val[13..15],
+                z
+            );
+        }
+        // YYYYMMDD
+        if bytes.len() == 8 && bytes.iter().all(|c| c.is_ascii_digit()) {
+            return format!("{}:{}:{}", &val[0..4], &val[4..6], &val[6..8]);
+        }
+        // YYYY-MM-DD (leave any trailing time portion untouched)
+        if bytes.len() >= 10
+            && bytes[4] == '-'
+            && bytes[7] == '-'
+            && bytes[0..4].iter().all(|c| c.is_ascii_digit())
+        {
+            return format!(
+                "{}:{}:{}{}",
+                &val[0..4],
+                &val[5..7],
+                &val[8..10],
+                &val[10..]
+            );
+        }
+        val.to_string()
+    }
+
+    /// Maps a lower-cased iCalendar property name (as it appears directly
+    /// under BEGIN:VCALENDAR) to its ExifTool tag name and whether the value
+    /// needs `%timeInfo` date reformatting.
+    ///
+    /// Transcribed from `Image::ExifTool::VCard::VCalendar` (VCard.pm,
+    /// ExifTool 13.59).
+    fn vcalendar_tag_for(prop_lower: &str) -> Option<(&'static str, bool)> {
+        Some(match prop_lower {
+            "version" => ("VCalendarVersion", false),
+            "calscale" => ("CalendarScale", false),
+            "method" => ("Method", false),
+            "prodid" => ("Software", false),
+            "attach" => ("Attachment", false),
+            "categories" => ("Categories", false),
+            "class" => ("Classification", false),
+            "comment" => ("Comment", false),
+            "description" => ("Description", false),
+            "geo" => ("Geolocation", false),
+            "location" => ("Location", false),
+            "percent-complete" => ("PercentComplete", false),
+            "priority" => ("Priority", false),
+            "resources" => ("Resources", false),
+            "status" => ("Status", false),
+            "summary" => ("Summary", false),
+            "completed" => ("DateTimeCompleted", true),
+            "dtend" => ("DateTimeEnd", true),
+            "due" => ("DateTimeDue", true),
+            "dtstart" => ("DateTimeStart", true),
+            "duration" => ("Duration", false),
+            "freebusy" => ("FreeBusyTime", false),
+            "transp" => ("TimeTransparency", false),
+            "tzid" => ("TimezoneID", false),
+            "tzname" => ("TimezoneName", false),
+            "tzoffsetfrom" => ("TimezoneOffsetFrom", false),
+            "tzoffsetto" => ("TimezoneOffsetTo", false),
+            "tzurl" => ("TimeZoneURL", false),
+            "attendee" => ("Attendee", false),
+            "contact" => ("Contact", false),
+            "organizer" => ("Organizer", false),
+            "recurrence-id" => ("RecurrenceID", false),
+            "related-to" => ("RelatedTo", false),
+            "url" => ("URL", false),
+            "uid" => ("UID", false),
+            "exdate" => ("ExceptionDateTimes", true),
+            "rdate" => ("RecurrenceDateTimes", true),
+            "rrule" => ("RecurrenceRule", false),
+            "action" => ("Action", false),
+            "repeat" => ("Repeat", false),
+            "trigger" => ("Trigger", false),
+            "created" => ("DateCreated", true),
+            "dtstamp" => ("DateTimeStamp", true),
+            "last-modified" => ("ModifyDate", true),
+            "sequence" => ("SequenceNumber", false),
+            "request-status" => ("RequestStatus", false),
+            "acknowledged" => ("Acknowledged", true),
+            // Observed X-tags (ref VCard.pm)
+            "x-apple-calendar-color" => ("CalendarColor", false),
+            "x-apple-default-alarm" => ("DefaultAlarm", false),
+            "x-apple-local-default-alarm" => ("LocalDefaultAlarm", false),
+            "x-microsoft-cdo-appt-sequence" => ("AppointmentSequence", false),
+            "x-microsoft-cdo-ownerapptid" => ("OwnerAppointmentID", false),
+            "x-microsoft-cdo-busystatus" => ("BusyStatus", false),
+            "x-microsoft-cdo-intendedstatus" => ("IntendedBusyStatus", false),
+            "x-microsoft-cdo-alldayevent" => ("AllDayEvent", false),
+            "x-microsoft-cdo-importance" => ("Importance", false),
+            "x-microsoft-cdo-insttype" => ("InstanceType", false),
+            "x-microsoft-donotforwardmeeting" => ("DoNotForwardMeeting", false),
+            "x-microsoft-disallow-counter" => ("DisallowCounterProposal", false),
+            "x-microsoft-locations" => ("MeetingLocations", false),
+            "x-wr-caldesc" => ("CalendarDescription", false),
+            "x-wr-calname" => ("CalendarName", false),
+            "x-wr-relcalid" => ("CalendarID", false),
+            "x-wr-timezone" => ("TimeZone2", false),
+            "x-wr-alarmuid" => ("AlarmUID", false),
+            _ => return None,
+        })
+    }
+
+    /// PrintConv for X-microsoft-cdo-importance (VCard.pm).
+    fn importance_print_conv(val: &str) -> Option<&'static str> {
+        match val.trim() {
+            "0" => Some("Low"),
+            "1" => Some("Normal"),
+            "2" => Some("High"),
+            _ => None,
+        }
+    }
+
+    /// PrintConv for X-microsoft-cdo-insttype (VCard.pm).
+    fn insttype_print_conv(val: &str) -> Option<&'static str> {
+        match val.trim() {
+            "0" => Some("Non-recurring Appointment"),
+            "1" => Some("Recurring Appointment"),
+            "2" => Some("Single Instance of Recurring Appointment"),
+            "3" => Some("Exception to Recurring Appointment"),
+            _ => None,
+        }
+    }
+
+    /// Emits `VCard:<TagName>` entries for iCalendar properties that are
+    /// direct children of BEGIN:VCALENDAR (nesting depth 1), matching real
+    /// ExifTool's family-0 "VCard" group and VCard.pm's tag naming.
+    /// Properties inside nested components (VEVENT, VALARM, VTIMEZONE, ...)
+    /// are skipped - see comment at the call site.
+    fn extract_vcalendar_tags(text: &str, metadata: &mut MetadataMap) {
+        let mut depth: i32 = 0;
+        for raw_line in text.lines() {
+            let line = raw_line.trim_end_matches('\r').trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("BEGIN:") {
+                let _ = rest;
+                depth += 1;
+                continue;
+            }
+            if line.starts_with("END:") {
+                depth -= 1;
+                continue;
+            }
+            // Only properties directly under BEGIN:VCALENDAR (depth 1)
+            if depth != 1 {
+                continue;
+            }
+            // Property line: NAME[;PARAM=VAL...]:VALUE
+            let Some(colon_idx) = line.find(':') else {
+                continue;
+            };
+            let name_and_params = &line[..colon_idx];
+            let value = &line[colon_idx + 1..];
+            let prop_name = name_and_params.split(';').next().unwrap_or(name_and_params);
+            let prop_lower = prop_name.to_ascii_lowercase();
+
+            let Some((tag_name, is_time)) = Self::vcalendar_tag_for(&prop_lower) else {
+                continue;
+            };
+
+            let mut out_value = if is_time {
+                Self::convert_ics_datetime(value.trim())
+            } else if prop_lower == "geo" {
+                value
+                    .trim()
+                    .strip_prefix("geo:")
+                    .unwrap_or(value.trim())
+                    .to_string()
+            } else {
+                value.trim().to_string()
+            };
+
+            if prop_lower == "x-microsoft-cdo-importance" {
+                if let Some(pretty) = Self::importance_print_conv(&out_value) {
+                    out_value = pretty.to_string();
+                }
+            } else if prop_lower == "x-microsoft-cdo-insttype" {
+                if let Some(pretty) = Self::insttype_print_conv(&out_value) {
+                    out_value = pretty.to_string();
+                }
+            }
+
+            let key = format!("VCard:{}", tag_name);
+            metadata.insert(key, TagValue::new_string(out_value));
+        }
+    }
 }
 
 impl FormatParser for ICSParser {
@@ -165,6 +379,23 @@ impl FormatParser for ICSParser {
         if let Some(last_date) = Self::extract_last_date(text) {
             metadata.insert("ICS:LastDate".to_string(), TagValue::new_string(last_date));
         }
+
+        // Real ExifTool parity: ICS files are read by ExifTool's VCard.pm module
+        // (Image::ExifTool::VCard::VCalendar table), which puts every extracted
+        // tag under family-0 group "VCard" - NOT "ICS". The `ICS:*` tags above
+        // are a fabricated namespace with no counterpart in real ExifTool output;
+        // they're left in place only because existing tests assert on them.
+        //
+        // This adds the real `VCard:<TagName>` tags for properties that are
+        // direct children of BEGIN:VCALENDAR (depth 1), matching
+        // Image::ExifTool::VCard::VCalendar. Verified against ExifTool 13.59
+        // (`exiftool -G -s`) on t/images/VCard.ics. Properties nested inside
+        // VEVENT/VALARM/VTIMEZONE etc. are intentionally NOT emitted here:
+        // ExifTool disambiguates repeated tag names (e.g. multiple VEVENTs)
+        // using family-1 group numbering (Event1, Event2, ...), which this
+        // flat Group:Tag map cannot represent without risking collisions/
+        // silently-wrong values, so those are left as a documented gap.
+        Self::extract_vcalendar_tags(text, &mut metadata);
 
         Ok(metadata)
     }
