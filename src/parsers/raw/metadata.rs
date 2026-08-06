@@ -4278,9 +4278,14 @@ fn parse_cr3_cmt3_makernotes(data: &[u8], metadata: &mut MetadataMap) {
     );
 
     let mut makernote_tags = std::collections::HashMap::new();
+    // CMT1 has already supplied the camera model. Canon.pm's ShotInfo table
+    // uses it to gate EOS-only fields such as CameraTemperature.
+    let model = metadata
+        .get_string("IFD0:Model")
+        .or_else(|| metadata.get_string("EXIF:Model"));
     if let Err(e) = crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context(
         "Canon",
-        None,
+        model,
         &ctx,
         byte_order,
         &mut makernote_tags,
