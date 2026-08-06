@@ -590,7 +590,7 @@ impl PCAPParser {
             metadata.insert("PCAPNG:Hardware".to_string(), TagValue::String(hw));
         }
         if let Some(o) = os {
-            metadata.insert("PCAPNG:OS".to_string(), TagValue::String(o));
+            metadata.insert("OperatingSystem".to_string(), TagValue::String(o));
         }
         if let Some(app) = application {
             metadata.insert("PCAPNG:Application".to_string(), TagValue::String(app));
@@ -816,8 +816,7 @@ impl PCAPParser {
                             .trim_matches('\0')
                             .to_string();
                         if !value.is_empty() {
-                            options
-                                .push(("PCAPNG:InterfaceOS".to_string(), TagValue::String(value)));
+                            options.push(("OperatingSystem".to_string(), TagValue::String(value)));
                         }
                     }
                     _ => {}
