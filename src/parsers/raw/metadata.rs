@@ -1229,13 +1229,22 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         "EXIF:PreviewImageLength".to_string(),
                         TagValue::new_integer(length as i64),
                     );
-                    metadata.insert(
-                        "EXIF:PreviewImage".to_string(),
-                        TagValue::new_string(format!(
-                            "(Binary data {} bytes, use -b option to extract)",
-                            length
-                        )),
-                    );
+                    // ExifTool validates this DataTag as a JPEG before publishing it.
+                    // CanonRaw.cr2 deliberately points at 26 bytes of dummy text: the
+                    // Start/Length tags remain visible, but PreviewImage is suppressed
+                    // with "not a valid JPEG image". Keep real bytes for valid previews
+                    // so the normal renderer supplies the placeholder and `-b` can
+                    // extract them.
+                    if let Some(start) = cr2_preview_image_start
+                        && let Some(end) = start.checked_add(length)
+                        && let Some(preview) = data.get(start as usize..end as usize)
+                        && preview.starts_with(b"\xff\xd8\xff")
+                    {
+                        metadata.insert(
+                            "EXIF:PreviewImage".to_string(),
+                            TagValue::new_binary(preview.to_vec()),
+                        );
+                    }
                 }
             }
             extract_cr2_tags(&mut metadata);
@@ -8566,7 +8575,7 @@ mod rational_array_tests {
     }
 
     #[test]
-    fn cr2_cfa_pattern_keeps_ifd3_group() {
+    fn cr2_invalid_preview_data_is_not_published_as_preview_image() {
         let path = "/tmp/oxidex-exiftool-cache/exiftool/t/images/CanonRaw.cr2";
         if !std::path::Path::new(path).exists() {
             return;
@@ -8575,10 +8584,14 @@ mod rational_array_tests {
         let metadata = parse_raw_metadata(&data, RawFormat::CanonCR2).expect("parse CR2 fixture");
 
         assert_eq!(
-            metadata.get("IFD3:CR2CFAPattern"),
-            Some(&TagValue::new_string("[Red,Green][Green,Blue]".to_string()))
+            metadata.get("EXIF:PreviewImageStart"),
+            Some(&TagValue::new_integer(8680))
         );
-        assert!(!metadata.contains_key("IFD0:CR2CFAPattern"));
+        assert_eq!(
+            metadata.get("EXIF:PreviewImageLength"),
+            Some(&TagValue::new_integer(26))
+        );
+        assert!(!metadata.contains_key("EXIF:PreviewImage"));
     }
 
     /// A single rational must keep its existing representation -- the fix is
