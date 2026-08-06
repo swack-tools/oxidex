@@ -85,11 +85,31 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         "SceneCaptureType" => "EXIF:SceneCaptureType",
         "Saturation" => "EXIF:Saturation",
         "MeteringMode" => "EXIF:MeteringMode",
+        "SubjectDistanceRange" => "ExifIFD:SubjectDistanceRange",
         "ShutterSpeedValue" => "ExifIFD:ShutterSpeedValue",
         "ApertureValue" => "EXIF:ApertureValue",
         "Flash" => "ExifIFD:Flash",
         "MakerNoteSafety" => "EXIF:MakerNoteSafety",
         _ => tag_name,
+    };
+    let raw = if matches!(
+        tag_name,
+        "SubjectDistanceRange" | "ExifIFD:SubjectDistanceRange" | "EXIF:SubjectDistanceRange"
+    ) {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "unknown" => "0",
+            "macro" => "1",
+            "close" => "2",
+            "distant" => "3",
+            _ => {
+                return Err(invalid(
+                    tag_name,
+                    "Can't convert SubjectDistanceRange value (not in PrintConv)",
+                ));
+            }
+        }
+    } else {
+        raw
     };
 
     // GPS.pm 0x001c applies EncodeExifText as its RawConvInv. With the default
@@ -1104,6 +1124,25 @@ mod tests {
             TagValue::Integer(0x38)
         );
         assert!(parse("Flash", "25").is_err());
+    }
+
+    #[test]
+    fn subject_distance_range_uses_its_print_conversion_inverse() {
+        for (tag, raw, expected) in [
+            ("ExifIFD:SubjectDistanceRange", "Unknown", 0),
+            ("EXIF:SubjectDistanceRange", "Macro", 1),
+            ("SubjectDistanceRange", "macro", 1),
+            ("ExifIFD:SubjectDistanceRange", "Close", 2),
+            ("ExifIFD:SubjectDistanceRange", "Close ", 2),
+            ("ExifIFD:SubjectDistanceRange", "Distant", 3),
+        ] {
+            assert_eq!(
+                parse(tag, raw).unwrap(),
+                TagValue::Integer(expected),
+                "{tag}={raw}"
+            );
+        }
+        assert!(parse("ExifIFD:SubjectDistanceRange", "2").is_err());
     }
 
     // -- Rational, Writer.pl:6888-6903 + 5200-5228 --------------------------
