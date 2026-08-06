@@ -10,10 +10,7 @@ name: Docs Build
 # like a healthy one.
 on:
   push:
-    branches: ['**']
-    paths:
-      - 'docs/**'
-      - '.github/workflows/docs-build.yml'
+    branches: [main]
   pull_request:
     branches: ['**']
     paths:
