@@ -200,4 +200,21 @@ mod tests {
             Some("rational64u")
         );
     }
+
+    /// ExifTool 13.59 Exif.pm 0x012d declares TransferFunction as a protected,
+    /// writable `int16u`. The generated tag model does not represent the
+    /// protected flag, but it must preserve the writable/type contract.
+    #[test]
+    fn transfer_function_matches_pinned_exiftool_contract() {
+        let exif = get_tag_table("Exif::Main").expect("Exif::Main table should exist");
+        let transfer_function = exif
+            .tags
+            .iter()
+            .find(|tag| tag.id == "0x012D")
+            .expect("TransferFunction (0x012D) should exist");
+
+        assert_eq!(transfer_function.name, "TransferFunction");
+        assert!(transfer_function.writable);
+        assert_eq!(transfer_function.type_name.as_deref(), Some("int16u"));
+    }
 }

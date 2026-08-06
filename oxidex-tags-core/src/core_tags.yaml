@@ -545,7 +545,8 @@ tables:
         description: "PageNumber tag"
       - id: "0x012D"
         name: "TransferFunction"
-        writable: false
+        writable: true
+        type: int16u
         description: "TransferFunction tag"
       - id: "0x0131"
         name: "Software"
