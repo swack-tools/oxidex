@@ -161,6 +161,11 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
     // PrintConv exposes the corresponding measurement label.  Writer.pl
     // applies that PrintConvInv before its generic string check.
     let raw = match (tag_name, raw) {
+        // Exif.pm 0xa408 uses ConvertParameter as its PrintConvInv rather
+        // than a direct label map. It accepts the documented display labels
+        // and any signed float, collapsing them to the three stored codes.
+        ("EXIF:Contrast" | "ExifIFD:Contrast", value) => invert_exif_contrast_parameter(value)
+            .ok_or_else(|| invalid(tag_name, "Can't convert Contrast value (not in PrintConv)"))?,
         ("GPS:GPSStatus", "Measurement Active") => "A",
         ("GPS:GPSStatus", "Measurement Void") => "V",
         ("GPS:GPSMeasureMode", "2-Dimensional Measurement") => "2",
@@ -260,6 +265,32 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
             "Structured values cannot be set from the command line",
         )),
     }
+}
+
+/// ExifTool 13.59 `Image::ExifTool::Exif::ConvertParameter`, as used by
+/// `ExifIFD:Contrast` (Exif.pm 0xa408).
+fn invert_exif_contrast_parameter(raw: &str) -> Option<&'static str> {
+    let is_word = |initial: u8| {
+        let bytes = raw.as_bytes();
+        bytes.iter().enumerate().any(|(index, byte)| {
+            (index == 0 || !is_ascii_word(bytes[index - 1])) && byte.eq_ignore_ascii_case(&initial)
+        })
+    };
+    let numeric = as_float_text(raw).and_then(|value| value.parse::<f64>().ok());
+
+    if is_word(b'n') || numeric == Some(0.0) {
+        Some("0")
+    } else if is_word(b's') || is_word(b'l') || numeric.is_some_and(|value| value < 0.0) {
+        Some("1")
+    } else if is_word(b'h') || numeric.is_some() {
+        Some("2")
+    } else {
+        None
+    }
+}
+
+fn is_ascii_word(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
 fn invert_gps_latitude_ref<'a>(tag_name: &str, raw: &'a str) -> Result<&'a str> {
@@ -1268,6 +1299,29 @@ mod tests {
                     TagValue::Integer(raw),
                     "{tag}={printed}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn contrast_uses_exiftools_parameter_inverse_conversion() {
+        // ExifTool 13.59 Exif.pm 0xa408 uses ConvertParameter: labels and
+        // signed numeric settings map to the three stored int16u codes.
+        let cases = [
+            ("Normal", 0),
+            ("Low", 1),
+            ("High", 2),
+            ("Soft", 1),
+            ("Hard", 2),
+            ("-1", 1),
+            ("0.00", 0),
+            ("+1", 2),
+            ("1", 2),
+            ("nope", 0),
+        ];
+        for tag in ["EXIF:Contrast", "ExifIFD:Contrast"] {
+            for (printed, raw) in cases {
+                assert_eq!(parse(tag, printed).unwrap(), TagValue::Integer(raw));
             }
         }
     }
