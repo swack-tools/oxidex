@@ -4266,6 +4266,20 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
     // whole reason a CR3 reported zero MakerNotes tags.
     parse_cr3_cmt3_makernotes(data, &mut metadata);
 
+    // Canon.pm's CR3 `THMB` entry is a binary ThumbnailImage whose first 16
+    // payload bytes are an atom-specific header (`RawConv => substr($val,16)`).
+    // Keep the exact remaining bytes; the normal binary formatter supplies
+    // ExifTool's `(Binary data N bytes, use -b option to extract)` display.
+    if let Some(payload) = find_cr3_box(data, b"THMB")
+        && let Some(image) = payload.get(16..)
+        && !image.is_empty()
+    {
+        metadata.insert(
+            "Canon:ThumbnailImage".to_string(),
+            TagValue::new_binary(image.to_vec()),
+        );
+    }
+
     // XMP lives in a top-level `uuid` box (QuickTime.pm's UUID-XMP condition
     // matches be7acfcb-97a9-42e8-9c71-999491e3afac), not in the Canon uuid box.
     if let Some(payload) = find_cr3_uuid_box(data, &UUID_XMP)
@@ -6831,6 +6845,23 @@ mod cr3_cmt1_artist_tests {
         assert_eq!(
             metadata.get("IFD0:Copyright"),
             Some(&TagValue::new_string("(c)".to_string()))
+        );
+    }
+
+    #[test]
+    fn extracts_thumbnail_image_from_cr3_thmb_box() {
+        let path = "/tmp/oxidex-exiftool-git-13.59-jjZp0q/exiftool/t/images/CanonRaw.cr3";
+        if !std::path::Path::new(path).exists() {
+            return;
+        }
+        let data = std::fs::read(path).expect("read pinned CR3 fixture");
+        let metadata = parse_cr3(&data, RawFormat::CanonCR3).expect("parse CR3 fixture");
+
+        assert_eq!(
+            metadata.get("Canon:ThumbnailImage"),
+            Some(&TagValue::new_binary(
+                b"<Dummy thumbnail image data>".to_vec()
+            ))
         );
     }
 }
