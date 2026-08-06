@@ -5200,12 +5200,13 @@ fn parse_canon_makernote_impl_located(
                         tags.insert("Canon:FlashMode".to_string(), flash_mode);
                     }
 
-                    // ContinuousDrive (index 5) - Drive mode setting
-                    // Also output as Canon:DriveMode for backward compatibility
+                    // ContinuousDrive (index 5) - Drive mode setting. Canon.pm defines
+                    // DriveMode separately as a Composite of this tag and SelfTimer.
                     if array.len() > CAMERA_SETTINGS_DRIVE_MODE {
-                        let drive_mode = DRIVE_MODE.decode(array[CAMERA_SETTINGS_DRIVE_MODE]);
-                        tags.insert("Canon:ContinuousDrive".to_string(), drive_mode.clone());
-                        tags.insert("Canon:DriveMode".to_string(), drive_mode);
+                        tags.insert(
+                            "Canon:ContinuousDrive".to_string(),
+                            DRIVE_MODE.decode(array[CAMERA_SETTINGS_DRIVE_MODE]),
+                        );
                     }
 
                     // FocusMode (index 7) - Focus mode setting
@@ -6965,7 +6966,13 @@ mod tests {
         assert_eq!(result.get("Canon:MacroMode"), Some(&"Normal".to_string()));
         assert_eq!(result.get("Canon:Quality"), Some(&"Fine".to_string()));
         assert_eq!(result.get("Canon:FlashMode"), Some(&"On".to_string()));
-        assert_eq!(result.get("Canon:DriveMode"), Some(&"Single".to_string()));
+        assert_eq!(
+            result.get("Canon:ContinuousDrive"),
+            Some(&"Single".to_string())
+        );
+        // Canon.pm defines DriveMode only as a Composite derived from
+        // ContinuousDrive and SelfTimer, never as a Canon MakerNotes tag.
+        assert_eq!(result.get("Canon:DriveMode"), None);
         assert_eq!(
             result.get("Canon:FocusMode"),
             Some(&"One-shot AF".to_string())
