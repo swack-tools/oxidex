@@ -1149,7 +1149,8 @@ tables:
         description: "ExifImageHeight tag"
       - id: "0xA004"
         name: "RelatedSoundFile"
-        writable: false
+        writable: true
+        type: string
         description: "RelatedSoundFile tag"
       - id: "0xA005"
         name: "InteropOffset"

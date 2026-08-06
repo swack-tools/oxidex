@@ -7753,4 +7753,11 @@ mod tests {
         let tag = get_tag_descriptor("QuickTime:GPSCoordinates");
         assert!(tag.is_some());
     }
+
+    #[test]
+    fn related_sound_file_is_a_writable_exif_string() {
+        let tag = get_tag_descriptor("EXIF:RelatedSoundFile").expect("registered tag");
+        assert!(tag.is_writable());
+        assert_eq!(tag.value_type(), ValueType::String);
+    }
 }
