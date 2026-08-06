@@ -53,6 +53,7 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
             tag_id,
             0xC619 // BlackLevelRepeatDim
                 | 0xC61A // BlackLevel
+                | 0xC627 // AnalogBalance
                 | 0xC62D // BayerGreenSplit
                 | 0xC632 // AntiAliasStrength
                 | 0xC65C // BestQualityScale
@@ -966,6 +967,15 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
                         let is_nef = matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW);
                         let is_rw2 = format == RawFormat::PanasonicRW2;
+
+                        if is_nef {
+                            extract_nef_subifd_jpg_from_raw(
+                                data,
+                                &sub_tags,
+                                byte_order,
+                                &mut metadata,
+                            );
+                        }
 
                         // DNG: StripOffsets/StripByteCounts are renamed by
                         // ExifTool in the embedded-image SubIFDs. Exif.pm 0x111
@@ -6101,6 +6111,50 @@ fn format_nef_subifd_tag(
     }
 }
 
+/// Extract the image data paired with NEF SubIFD JpgFromRawStart/Length.
+///
+/// ExifTool 13.59's Exif.pm assigns tags 0x0201 and 0x0202 in a SubIFD to
+/// `DataTag => 'JpgFromRaw'`. The offset is measured from the TIFF header,
+/// which is the same base as `data` in `parse_raw_metadata`.
+fn extract_nef_subifd_jpg_from_raw(
+    data: &[u8],
+    sub_tags: &[(u16, u16, u32, impl AsRef<[u8]>)],
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    let mut offset = None;
+    let mut length = None;
+
+    for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
+        if *field_type != 4 || *value_count != 1 {
+            continue;
+        }
+        match *tag_id {
+            0x0201 => offset = read_tiff_u32(raw_bytes.as_ref(), byte_order),
+            0x0202 => length = read_tiff_u32(raw_bytes.as_ref(), byte_order),
+            _ => {}
+        }
+    }
+
+    let (Some(offset), Some(length)) = (offset, length) else {
+        return;
+    };
+    if length == 0 {
+        return;
+    }
+
+    let start = offset as usize;
+    let end = start.saturating_add(length as usize);
+    let image = match data.get(start..end) {
+        Some(bytes) => TagValue::new_binary(bytes.to_vec()),
+        None => TagValue::new_string(format!(
+            "(Binary data {} bytes, use -b option to extract)",
+            length
+        )),
+    };
+    metadata.insert("EXIF:JpgFromRaw".to_string(), image);
+}
+
 /// Format TIFF/EP tag 0x9216 (TIFF-EPStandardID).
 ///
 /// Exif.pm line 2451, verbatim:
@@ -6934,6 +6988,38 @@ mod tests {
                 panic!("Version should be a string");
             }
         }
+    }
+
+    /// ExifTool 13.59 files DNG AnalogBalance under family 0 (`EXIF`), even
+    /// though the rational array is physically stored in IFD0.
+    #[test]
+    fn dng_analog_balance_uses_exif_family_and_preserves_all_components() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II\x2a\x00");
+        data.extend_from_slice(&8u32.to_le_bytes());
+
+        // IFD0 contains one RATIONAL[3] entry. Its 24-byte payload starts
+        // immediately after the IFD's next-offset field at byte 26.
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&0xC627u16.to_le_bytes());
+        data.extend_from_slice(&5u16.to_le_bytes());
+        data.extend_from_slice(&3u32.to_le_bytes());
+        data.extend_from_slice(&26u32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        for (numerator, denominator) in [(1u32, 1u32), (3, 2), (5, 4)] {
+            data.extend_from_slice(&numerator.to_le_bytes());
+            data.extend_from_slice(&denominator.to_le_bytes());
+        }
+
+        let metadata = parse_raw_metadata(&data, RawFormat::AdobeDNG).expect("valid DNG");
+        assert_eq!(
+            metadata.get("EXIF:AnalogBalance"),
+            Some(&TagValue::new_string("1 1.5 1.25".to_string()))
+        );
+        assert!(
+            !metadata.contains_key("IFD0:AnalogBalance"),
+            "DNG AnalogBalance must use ExifTool's EXIF family"
+        );
     }
 
     #[test]

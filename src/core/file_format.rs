@@ -223,6 +223,9 @@ pub enum FileFormat {
     /// WordPerfect Graphics image (.wpg)
     WPG,
 
+    /// DjVu image or multi-page document (.djvu, .djv)
+    DJVU,
+
     // Phase 6: Specialized formats
     /// ELF executable format
     ELF,
@@ -394,6 +397,7 @@ impl FileFormat {
             FileFormat::ICO => "ICO",
             FileFormat::PSD => "PSD",
             FileFormat::WPG => "WPG",
+            FileFormat::DJVU => "DJVU",
             FileFormat::ELF => "ELF",
             FileFormat::MachO => "Mach-O",
             FileFormat::DWG => "DWG",
@@ -502,6 +506,7 @@ impl FileFormat {
             FileFormat::ICO => &["ico"],
             FileFormat::PSD => &["psd"],
             FileFormat::WPG => &["wpg"],
+            FileFormat::DJVU => &["djvu", "djv"],
             FileFormat::ELF => &["elf", "so"],
             FileFormat::MachO => &["dylib", "bundle"],
             FileFormat::DWG => &["dwg"],

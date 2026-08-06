@@ -67,6 +67,8 @@ lexopt = "0.3"
 
 # Binary Parsing
 nom = "8.0"
+djvu-bzz = "0.27"
+djvu-iff = "0.27"
 # Substring search. Used by parsers::trailer to find a trailer's end marker in
 # one SIMD pass instead of testing every byte offset in the file; already in
 # the tree as a transitive dependency of nom.
