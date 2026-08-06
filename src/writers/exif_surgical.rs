@@ -260,6 +260,61 @@ pub(crate) fn tag_value_to_field(
     }
 }
 
+/// Applies tag-specific inverse conversions before generic TIFF serialization.
+///
+/// GPS.pm 13.59 defines GPSLatitude as `rational64u[3]`: command-line decimal
+/// degrees are converted by `ToDMS` into degree, minute and second rationals.
+fn tag_value_to_field_for_key(
+    key: &str,
+    value: &TagValue,
+    hint: Option<u16>,
+) -> Result<(u16, u32, Vec<u8>)> {
+    if key == "GPS:GPSLatitude"
+        && let TagValue::Rational {
+            numerator,
+            denominator,
+        } = value
+    {
+        if *denominator <= 0 {
+            return Err(ExifToolError::parse_error(
+                "GPSLatitude requires a positive rational denominator",
+            ));
+        }
+        let denominator = i64::from(*denominator);
+        let coordinate = i64::from(*numerator).abs();
+        let degrees = coordinate / denominator;
+        let degree_remainder = coordinate % denominator;
+        let minute_numerator = degree_remainder * 60;
+        let minutes = minute_numerator / denominator;
+        let second_numerator = (minute_numerator % denominator) * 60;
+        let divisor = gcd_i64(second_numerator, denominator);
+        let seconds_num = second_numerator / divisor;
+        let seconds_den = denominator / divisor;
+        let components = [degrees, 1, minutes, 1, seconds_num, seconds_den];
+        if components
+            .iter()
+            .any(|component| !(0..=u32::MAX as i64).contains(component))
+        {
+            return Err(ExifToolError::parse_error(
+                "GPSLatitude DMS component does not fit rational64u",
+            ));
+        }
+        let bytes = components
+            .into_iter()
+            .flat_map(|component| (component as u32).to_ne_bytes())
+            .collect();
+        return Ok((5, 3, bytes));
+    }
+    tag_value_to_field(value, hint)
+}
+
+fn gcd_i64(mut a: i64, mut b: i64) -> i64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a.abs().max(1)
+}
+
 /// NOTE on multi-byte native-endian buffers: tag_value_to_field intentionally
 /// emits native-endian placeholder bytes for Integer/Rational/Float; the
 /// serializer (Task 4) re-emits multi-byte numeric values in the plan's byte
@@ -311,6 +366,18 @@ pub fn plan_exif_write(
     // wins and the alias is left for the pre-existing duplicate-tag-id guard
     // in the Added loop below to reconcile (skip if equal, once serialized).
     let mut desired = desired.clone();
+    // GPS.pm (ExifTool 13.59) maps GPSLatitudeRef's one-byte N/S codes to
+    // display values. Restore the declared raw code before serialization.
+    if let Some(TagValue::String(value)) = desired.get("GPS:GPSLatitudeRef") {
+        let raw = match value.as_str() {
+            "North" => Some("N"),
+            "South" => Some("S"),
+            _ => None,
+        };
+        if let Some(raw) = raw {
+            desired.insert("GPS:GPSLatitudeRef", TagValue::new_string(raw));
+        }
+    }
     // GPS.pm (ExifTool 13.59) declares GPSDestBearingRef's PrintConv as
     // M => "Magnetic North", T => "True North". The CLI supplies that
     // display value, but TIFF stores the one-byte code; invert this one
@@ -457,7 +524,8 @@ pub fn plan_exif_write(
 
         // Changed: strict validation, then true-typed serialization
         validate_changed(&key, desired_value)?;
-        let (ft, count, bytes) = tag_value_to_field(desired_value, Some(entry.field_type))?;
+        let (ft, count, bytes) =
+            tag_value_to_field_for_key(&key, desired_value, Some(entry.field_type))?;
         bucket(
             &mut plan,
             OutEntry {
@@ -512,7 +580,8 @@ pub fn plan_exif_write(
         })?;
         // A tag being created has no existing entry to take a width from, so
         // the declared type is the only thing that can tell FLOAT from DOUBLE.
-        let (ft, count, bytes) = tag_value_to_field(value, declared_ieee_field_type(&key))?;
+        let (ft, count, bytes) =
+            tag_value_to_field_for_key(&key, value, declared_ieee_field_type(&key))?;
         let out = OutEntry {
             tag_id,
             field_type: ft,
@@ -583,10 +652,13 @@ pub fn plan_exif_write(
     }
 
     // GPS.pm (ExifTool 13.59) requires GPSVersionID in every GPS IFD. A file
-    // without a GPS IFD gains one when GPSHPositioningError is added, so emit
-    // ExifTool's declared default version alongside the tag. Existing GPS
-    // IFDs already carry their raw version entry through the loop above.
-    if plan.gps.iter().any(|entry| entry.tag_id == 0x001f)
+    // without a GPS IFD gains one when either covered tag is added, so emit
+    // ExifTool's declared default version alongside it. Existing GPS IFDs
+    // already carry their raw version entry through the loop above.
+    if plan
+        .gps
+        .iter()
+        .any(|entry| matches!(entry.tag_id, 0x001d | 0x001f))
         && !plan.gps.iter().any(|entry| entry.tag_id == 0x0000)
     {
         plan.gps.push(OutEntry {
@@ -1455,6 +1527,47 @@ mod tests {
     }
 
     #[test]
+    fn plan_inverts_gps_latitude_ref_display_value_before_serializing() {
+        // ExifTool 13.59 GPS.pm maps the raw GPSLatitudeRef code S to the
+        // display value "South". The TIFF entry must retain the raw code.
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let mut desired = original.clone();
+        desired.insert("GPS:GPSLatitudeRef", TagValue::new_string("South"));
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let latitude_ref = plan.gps.iter().find(|e| e.tag_id == 0x0001).unwrap();
+        assert_eq!(latitude_ref.field_type, 2);
+        assert_eq!(latitude_ref.count, 2);
+        assert_eq!(latitude_ref.value, b"S\0");
+    }
+
+    #[test]
+    fn plan_writes_gps_date_stamp_with_required_gps_version() {
+        // ExifTool 13.59 writes GPSDateStamp as ASCII and creates the required
+        // GPSVersionID=2.3.0.0 when the tag creates a new GPS IFD.
+        let scan = ExifScan {
+            byte_order: ByteOrder::LittleEndian,
+            entries: Vec::new(),
+            thumbnail: None,
+            makernote_offset: None,
+        };
+        let original = MetadataMap::new();
+        let mut desired = MetadataMap::new();
+        desired.insert("GPS:GPSDateStamp", TagValue::new_string("2024:01:15"));
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let date_stamp = plan.gps.iter().find(|e| e.tag_id == 0x001D).unwrap();
+        assert_eq!(date_stamp.field_type, 2);
+        assert_eq!(date_stamp.count, 11);
+        assert_eq!(date_stamp.value, b"2024:01:15\0");
+        let version = plan.gps.iter().find(|e| e.tag_id == 0x0000).unwrap();
+        assert_eq!(version.field_type, 1);
+        assert_eq!(version.count, 4);
+        assert_eq!(version.value, [2, 3, 0, 0]);
+    }
+
+    #[test]
     fn plan_inverts_gps_dest_bearing_ref_display_value_before_serializing() {
         // ExifTool 13.59 GPS.pm maps the raw GPSDestBearingRef code M to
         // the display value "Magnetic North". A writer must store M, not the
@@ -1509,6 +1622,36 @@ mod tests {
         assert_eq!(speed_ref.field_type, 2);
         assert_eq!(speed_ref.count, 2);
         assert_eq!(speed_ref.value, b"K\0");
+    }
+
+    #[test]
+    fn plan_serializes_gps_latitude_as_three_dms_rationals() {
+        // ExifTool 13.59 GPS.pm declares GPSLatitude as rational64u[3] and
+        // applies ToDMS as ValueConvInv.  The matrix input 37.7749 therefore
+        // becomes 37 degrees, 46 minutes and 29.64 seconds.
+        let scan = ExifScan {
+            byte_order: ByteOrder::LittleEndian,
+            entries: Vec::new(),
+            thumbnail: None,
+            makernote_offset: None,
+        };
+        let original = MetadataMap::new();
+        let mut desired = MetadataMap::new();
+        desired.insert("GPS:GPSLatitude", TagValue::new_rational(377_749, 10_000));
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let latitude = plan
+            .gps
+            .iter()
+            .find(|entry| entry.tag_id == 0x0002)
+            .unwrap();
+        assert_eq!(latitude.field_type, 5);
+        assert_eq!(latitude.count, 3);
+        let expected = [37_u32, 1, 46, 1, 741, 25]
+            .into_iter()
+            .flat_map(u32::to_ne_bytes)
+            .collect::<Vec<_>>();
+        assert_eq!(latitude.value, expected);
     }
 
     #[test]
