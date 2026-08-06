@@ -196,6 +196,9 @@ pub enum FileFormat {
     /// OpenEXR image format (.exr)
     EXR,
 
+    /// Portable FloatMap image format (.pfm)
+    PFM,
+
     /// Free Lossless Image Format (.flif)
     FLIF,
 
@@ -370,6 +373,7 @@ impl FileFormat {
             FileFormat::JXL => "JXL",
             FileFormat::BPG => "BPG",
             FileFormat::EXR => "EXR",
+            FileFormat::PFM => "PFM",
             FileFormat::FLIF => "FLIF",
             FileFormat::SVG => "SVG",
             FileFormat::ICO => "ICO",
@@ -473,6 +477,7 @@ impl FileFormat {
             FileFormat::JXL => &["jxl"],
             FileFormat::BPG => &["bpg"],
             FileFormat::EXR => &["exr"],
+            FileFormat::PFM => &["pfm"],
             FileFormat::FLIF => &["flif"],
             FileFormat::SVG => &["svg"],
             FileFormat::ICO => &["ico"],
