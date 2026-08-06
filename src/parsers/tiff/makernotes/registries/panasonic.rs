@@ -253,11 +253,15 @@ fn decode_highlight_warning(value: i32) -> String {
     }
 }
 
+/// Panasonic DarkFocusEnvironment (0x8003).
+///
+/// Panasonic.pm:1546-1550 defines only values 1 and 2. Other values retain
+/// ExifTool's standard numeric PrintConv fallback.
 fn decode_dark_focus_environment(value: i32) -> String {
     match value {
         1 => "No".to_string(),
         2 => "Yes".to_string(),
-        _ => value.to_string(),
+        _ => format!("Unknown ({value})"),
     }
 }
 
@@ -303,5 +307,15 @@ mod tests {
             registry.get_tag_name(0x009F).is_some(),
             "ShutterType tag should be registered"
         );
+    }
+
+    #[test]
+    fn dark_focus_environment_matches_exiftool_values() {
+        let registry = panasonic_registry();
+
+        assert_eq!(registry.get_tag_name(0x8003), Some("DarkFocusEnvironment"));
+        assert_eq!(registry.decode_i32(0x8003, 1), "No");
+        assert_eq!(registry.decode_i32(0x8003, 2), "Yes");
+        assert_eq!(registry.decode_i32(0x8003, 0), "Unknown (0)");
     }
 }
