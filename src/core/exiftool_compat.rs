@@ -71,13 +71,13 @@ use crate::core::formatters::{
     format_exposure_mode, format_exposure_program, format_file_source, format_flash,
     format_focal_plane_resolution_unit, format_gain_control, format_gps_altitude_ref,
     format_gps_direction_ref, format_gps_lat_ref, format_gps_lon_ref, format_gps_speed_ref,
-    format_icc_value, format_integer_precision_values, format_interop_index, format_light_source,
-    format_metering_mode, format_orientation, format_resolution_unit, format_saturation,
-    format_scene_capture_type, format_security_classification, format_sensing_method,
-    format_sharpness, format_subject_distance_range, format_three_decimal_values,
-    format_white_balance, format_with_unit, format_ycbcr_positioning,
-    format_ycbcr_subsampling_string, is_icc_matrix_tag, is_integer_precision_tag,
-    is_three_decimal_tag,
+    format_gray_response_unit, format_icc_value, format_integer_precision_values,
+    format_interop_index, format_light_source, format_metering_mode, format_orientation,
+    format_resolution_unit, format_saturation, format_scene_capture_type,
+    format_security_classification, format_sensing_method, format_sharpness,
+    format_subject_distance_range, format_three_decimal_values, format_white_balance,
+    format_with_unit, format_ycbcr_positioning, format_ycbcr_subsampling_string, is_icc_matrix_tag,
+    is_integer_precision_tag, is_three_decimal_tag,
 };
 use crate::core::{MetadataMap, TagValue};
 
@@ -513,6 +513,14 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
         && let Some(i) = value.as_integer()
     {
         return TagValue::String(format_focal_plane_resolution_unit(i));
+    }
+
+    // GrayResponseUnit (Exif.pm 13.59 tag 0x0122) maps the stored SHORT code
+    // to the density increment used by GrayResponseCurve.
+    if base_name == "GrayResponseUnit"
+        && let Some(i) = value.as_integer()
+    {
+        return TagValue::String(format_gray_response_unit(i));
     }
 
     // Compression enum (1-65535)
@@ -1809,6 +1817,27 @@ mod tests {
                 got,
                 TagValue::String(label.to_string()),
                 "FocalPlaneResolutionUnit {code} did not reach the PrintConv"
+            );
+        }
+    }
+
+    /// Exif.pm 13.59 tag 0x0122's exact PrintConv must be reached from the
+    /// ordinary TIFF/EXIF formatting path. A formatter that omits this dispatch
+    /// silently reports the stored enum code instead of its density increment.
+    #[test]
+    fn gray_response_unit_reaches_the_print_conv() {
+        for (code, expected) in [
+            (1i64, "0.1"),
+            (2, "0.001"),
+            (3, "0.0001"),
+            (4, "0.00001"),
+            (5, "0.000001"),
+            (6, "Unknown (6)"),
+        ] {
+            assert_eq!(
+                format_tag_value("IFD0:GrayResponseUnit", &TagValue::new_integer(code)),
+                TagValue::String(expected.to_string()),
+                "GrayResponseUnit {code} did not reach Exif.pm's PrintConv"
             );
         }
     }

@@ -30,11 +30,11 @@ pub use exif_enums::{
     file_source_label, file_source_label_bytes, format_color_space,
     format_components_configuration, format_compression, format_contrast, format_custom_rendered,
     format_digital_zoom_ratio, format_exposure_mode, format_file_source, format_flash,
-    format_focal_plane_resolution_unit, format_gain_control, format_interop_index,
-    format_light_source, format_metering_mode, format_orientation, format_resolution_unit,
-    format_saturation, format_scene_capture_type, format_security_classification,
-    format_sensing_method, format_sharpness, format_subject_distance_range, format_white_balance,
-    format_ycbcr_positioning,
+    format_focal_plane_resolution_unit, format_gain_control, format_gray_response_unit,
+    format_interop_index, format_light_source, format_metering_mode, format_orientation,
+    format_resolution_unit, format_saturation, format_scene_capture_type,
+    format_security_classification, format_sensing_method, format_sharpness,
+    format_subject_distance_range, format_white_balance, format_ycbcr_positioning,
 };
 pub use exif_print_conv::{print_exposure_time, print_exposure_time_micros_str, print_fraction};
 pub use exposure_program::format_exposure_program;
