@@ -104,6 +104,11 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         ("GPS:GPSDifferential", "Differential Corrected") => "1",
         ("EXIF:PlanarConfiguration" | "IFD0:PlanarConfiguration", "Chunky") => "1",
         ("EXIF:PlanarConfiguration" | "IFD0:PlanarConfiguration", "Planar") => "2",
+        // Exif.pm 0x0213 declares this writable int16u tag with these two
+        // PrintConv labels. Writer.pl applies the inverse conversion before
+        // validating the integer stored in the TIFF entry.
+        ("EXIF:YCbCrPositioning", "Centered") => "1",
+        ("EXIF:YCbCrPositioning", "Co-sited") => "2",
         _ => raw,
     };
     let declared = get_tag_descriptor(tag_name)
@@ -940,5 +945,17 @@ mod tests {
                 result.ok()
             );
         }
+    }
+
+    #[test]
+    fn ycbcr_positioning_accepts_exiftool_print_values() {
+        assert_eq!(
+            parse("EXIF:YCbCrPositioning", "Centered").unwrap(),
+            TagValue::Integer(1)
+        );
+        assert_eq!(
+            parse("EXIF:YCbCrPositioning", "Co-sited").unwrap(),
+            TagValue::Integer(2)
+        );
     }
 }
