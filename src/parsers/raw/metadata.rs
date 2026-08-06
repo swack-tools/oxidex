@@ -4715,6 +4715,22 @@ fn parse_cr3_ctmd_makernotes(ctmd: &[u8], metadata: &mut MetadataMap) {
             break;
         };
 
+        // CTMD type 1 is Canon.pm's packed TimeStamp: `x2vCCCCCC` under the
+        // little-endian byte order ProcessCTMD sets.
+        if record_type == 1
+            && let Some(payload) = ctmd.get(record_pos + 12..record_end)
+            && payload.len() >= 10
+            && let Some(year) = read_tiff_u16(&payload[2..], ByteOrder::LittleEndian)
+        {
+            metadata.insert(
+                "Canon:TimeStamp".to_string(),
+                TagValue::new_string(format!(
+                    "{year:04}:{:02}:{:02} {:02}:{:02}:{:02}.{:02}",
+                    payload[4], payload[5], payload[6], payload[7], payload[8], payload[9]
+                )),
+            );
+        }
+
         // CTMD type 5 is Canon.pm's ExposureInfo binary table. Its first two
         // int32 words are FNumber/ExposureTime rationals; index 2 is ISO with
         // the exact ValueConv `$val & 0x7fffffff`.
