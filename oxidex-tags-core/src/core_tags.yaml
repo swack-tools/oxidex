@@ -985,6 +985,7 @@ tables:
       - id: "0x9203"
         name: "BrightnessValue"
         writable: false
+        type: rational64s
         description: "BrightnessValue tag"
       - id: "0x9204"
         name: "ExposureCompensation"

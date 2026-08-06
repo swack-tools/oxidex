@@ -324,7 +324,7 @@ pub(crate) fn tag_value_to_field_for_key(
         ));
     }
     let hint = match key.rsplit(':').next() {
-        Some("ShutterSpeedValue") => Some(10), // Exif.pm 0x9201 declares rational64s
+        Some("ShutterSpeedValue" | "BrightnessValue") => Some(10),
         Some("GPSVersionID") => Some(1),       // GPS.pm 0x0000 declares int8u[4]
         _ => hint,
     };
@@ -2355,6 +2355,19 @@ mod tests {
         };
         let (field_type, count, bytes) = tag_value_to_field(&value, Some(10)).unwrap();
         assert_eq!(field_type, 10, "ShutterSpeedValue is rational64s");
+        assert_eq!(count, 1);
+        assert_eq!(bytes.len(), 8);
+    }
+
+    #[test]
+    fn brightness_value_uses_its_declared_signed_rational_type() {
+        let value = TagValue::Rational {
+            numerator: 3,
+            denominator: 2,
+        };
+        let (field_type, count, bytes) =
+            tag_value_to_field_for_key("ExifIFD:BrightnessValue", &value, None).unwrap();
+        assert_eq!(field_type, 10, "BrightnessValue is rational64s");
         assert_eq!(count, 1);
         assert_eq!(bytes.len(), 8);
     }
