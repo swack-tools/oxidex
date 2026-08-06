@@ -71,6 +71,8 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
     // PrintConv exposes the corresponding measurement label.  Writer.pl
     // applies that PrintConvInv before its generic string check.
     let raw = match (tag_name, raw) {
+        ("GPS:GPSStatus", "Measurement Active") => "A",
+        ("GPS:GPSStatus", "Measurement Void") => "V",
         ("GPS:GPSMeasureMode", "2-Dimensional Measurement") => "2",
         ("GPS:GPSMeasureMode", "3-Dimensional Measurement") => "3",
         ("GPS:GPSDestDistanceRef", "Kilometers") => "K",
@@ -752,6 +754,20 @@ mod tests {
             parse("GPS:GPSDestDistanceRef", "Kilometers").unwrap(),
             TagValue::String("K".to_string())
         );
+    }
+
+    #[test]
+    fn gps_status_printed_value_is_inverted_before_string_serialization() {
+        // ExifTool 13.59 GPS.pm 0x0009 PrintConv.
+        // Without the inverse conversion, the printable label is written as
+        // the ASCII GPSStatus payload instead of the required status byte.
+        for (printed, raw) in [("Measurement Active", "A"), ("Measurement Void", "V")] {
+            assert_eq!(
+                parse("GPS:GPSStatus", printed).unwrap(),
+                TagValue::String(raw.to_string()),
+                "{printed}"
+            );
+        }
     }
 
     #[test]
