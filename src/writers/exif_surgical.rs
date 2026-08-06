@@ -325,18 +325,6 @@ pub fn plan_exif_write(
             desired.insert("GPS:GPSDestBearingRef", TagValue::new_string(raw));
         }
     }
-    // GPS.pm uses the same direction-reference PrintConv for GPSTrackRef.
-    // Restore its one-byte stored code when the CLI supplies the display label.
-    if let Some(TagValue::String(value)) = desired.get("GPS:GPSTrackRef") {
-        let raw = match value.as_str() {
-            "Magnetic North" => Some("M"),
-            "True North" => Some("T"),
-            _ => None,
-        };
-        if let Some(raw) = raw {
-            desired.insert("GPS:GPSTrackRef", TagValue::new_string(raw));
-        }
-    }
     for entry in &scan.entries {
         if matches!(entry.ifd, IfdKind::Interop | IfdKind::Ifd1) || entry.tag_id == MAKERNOTE {
             continue;
@@ -1406,26 +1394,6 @@ mod tests {
         assert_eq!(bearing_ref.field_type, 2);
         assert_eq!(bearing_ref.count, 2);
         assert_eq!(bearing_ref.value, b"M\0");
-    }
-
-    #[test]
-    fn plan_inverts_gps_track_ref_display_value_before_serializing() {
-        // ExifTool 13.59 GPS.pm maps the raw GPSTrackRef code T to the display
-        // value "True North". Storing the label makes ExifTool report an
-        // unknown value, so the writer must restore the declared raw code.
-        let tiff = build_full_tiff(ByteOrder::LittleEndian);
-        let (scan, original) = scan_and_maps(&tiff);
-        let mut desired = original.clone();
-        desired.insert(
-            "GPS:GPSTrackRef",
-            TagValue::new_string("True North"),
-        );
-
-        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
-        let track_ref = plan.gps.iter().find(|e| e.tag_id == 0x000E).unwrap();
-        assert_eq!(track_ref.field_type, 2);
-        assert_eq!(track_ref.count, 2);
-        assert_eq!(track_ref.value, b"T\0");
     }
 
     #[test]
