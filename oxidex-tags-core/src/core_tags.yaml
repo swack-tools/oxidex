@@ -1187,6 +1187,10 @@ tables:
         name: "FlashEnergy"
         writable: false
         description: "FlashEnergy tag"
+      - id: "0x9216"
+        name: "TIFF-EPStandardID"
+        writable: false
+        description: "TIFF-EPStandardID tag"
       - id: "0xA20C"
         name: "SpatialFrequencyResponse"
         writable: false
