@@ -316,7 +316,10 @@ fn tag_value_to_field_for_key(
     value: &TagValue,
     hint: Option<u16>,
 ) -> Result<(u16, u32, Vec<u8>)> {
-    if matches!(key, "GPS:GPSLongitude" | "GPS:GPSDestLongitude") {
+    if matches!(
+        key,
+        "GPS:GPSLongitude" | "GPS:GPSDestLatitude" | "GPS:GPSDestLongitude"
+    ) {
         return gps_longitude_to_field(value);
     }
     if key == "GPS:GPSLatitude"
@@ -708,7 +711,7 @@ pub fn plan_exif_write(
     if plan
         .gps
         .iter()
-        .any(|entry| matches!(entry.tag_id, 0x001d | 0x001f))
+        .any(|entry| matches!(entry.tag_id, 0x0014 | 0x001d | 0x001f))
         && !plan.gps.iter().any(|entry| entry.tag_id == 0x0000)
     {
         plan.gps.push(OutEntry {
@@ -1615,6 +1618,45 @@ mod tests {
         assert_eq!(version.field_type, 1);
         assert_eq!(version.count, 4);
         assert_eq!(version.value, [2, 3, 0, 0]);
+    }
+
+    #[test]
+    fn plan_serializes_gps_dest_latitude_as_three_dms_rationals() {
+        let scan = ExifScan {
+            byte_order: ByteOrder::LittleEndian,
+            entries: Vec::new(),
+            thumbnail: None,
+            makernote_offset: None,
+        };
+        let original = MetadataMap::new();
+        let mut desired = MetadataMap::new();
+        desired.insert(
+            "GPS:GPSDestLatitude",
+            TagValue::Rational {
+                numerator: 377_749,
+                denominator: 10_000,
+            },
+        );
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let latitude = plan
+            .gps
+            .iter()
+            .find(|entry| entry.tag_id == 0x0014)
+            .unwrap();
+        assert_eq!((latitude.field_type, latitude.count), (5, 3));
+        let components: Vec<(u32, u32)> = latitude
+            .value
+            .chunks_exact(8)
+            .map(|chunk| {
+                (
+                    u32::from_ne_bytes(chunk[..4].try_into().unwrap()),
+                    u32::from_ne_bytes(chunk[4..].try_into().unwrap()),
+                )
+            })
+            .collect();
+        assert_eq!(components, [(37, 1), (46, 1), (741, 25)]);
+        assert!(plan.gps.iter().any(|entry| entry.tag_id == 0x0000));
     }
 
     #[test]
