@@ -794,10 +794,10 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
     );
 
     registry.insert(
-        "EXIF:PixelXDimension",
+        "EXIF:ExifImageWidth",
         TagDescriptor::new(
             TagId::new_numeric(0xA002),
-            "EXIF:PixelXDimension".to_string(),
+            "EXIF:ExifImageWidth".to_string(),
             FormatFamily::EXIF,
             true,
             ValueType::Integer,
@@ -7201,6 +7201,14 @@ mod tests {
         assert_eq!(tag.id(), &TagId::Numeric(0x9211));
         assert!(tag.is_writable());
         assert_eq!(tag.value_type(), ValueType::Integer);
+    }
+
+    #[test]
+    fn exif_image_width_uses_exiftools_canonical_tag_name() {
+        let tag = get_tag_descriptor("EXIF:ExifImageWidth")
+            .expect("ExifTool names EXIF tag 0xA002 ExifImageWidth");
+        assert_eq!(tag.name(), "EXIF:ExifImageWidth");
+        assert!(tag.is_writable());
     }
 
     #[test]
