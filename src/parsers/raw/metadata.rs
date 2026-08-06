@@ -1928,7 +1928,7 @@ fn read_tiff_numeric_array(
 ///     0xc68e => { Name => 'MaskedAreas', Writable => 'int32u', Count => -1 },    # line 3692
 /// ```
 ///
-/// Tags that also occur in DNG IFD0 (ImageWidth, BitsPerSample, Compression,
+/// Tags that also occur in DNG IFD0 (ImageWidth, BitsPerSample,
 /// SamplesPerPixel, PhotometricInterpretation, RowsPerStrip, ...) are
 /// deliberately NOT handled here: which IFD wins for those is decided by
 /// ExifTool's PRIORITY_DIR / `Priority => 0` machinery, which oxidex does not
@@ -1941,6 +1941,7 @@ fn format_dng_subifd_exif_tag(
     byte_order: ByteOrder,
 ) -> Option<(String, TagValue)> {
     let name = match tag_id {
+        0x0103 => "Compression",
         0x0142 => "TileWidth",
         0x0143 => "TileLength",
         0x0144 => "TileOffsets",
@@ -1978,6 +1979,12 @@ fn format_dng_subifd_exif_tag(
     }
 
     let display = match tag_id {
+        // PrintConv => \%Image::ExifTool::Exif::compression. DNG priority
+        // selects the first (primary raw) SubIFD over IFD0 and later previews.
+        0x0103 => crate::parsers::tiff::tiff_enums::tiff_enum_to_string(
+            tag_id,
+            components[0].parse().ok()?,
+        )?,
         // PrintConv => { 1 => 'Centered', 2 => 'Co-sited' }
         0x0213 => match components[0].as_str() {
             "1" => "Centered".to_string(),
@@ -3313,7 +3320,22 @@ mod panasonic_rw2_tests {
         // Tags whose IFD priority oxidex does not model are deliberately left
         // to the generic path.
         assert!(format_dng_subifd_exif_tag(0x0102, &[8, 0], 3, 1, le).is_none());
-        assert!(format_dng_subifd_exif_tag(0x0103, &[7, 0], 3, 1, le).is_none());
+        assert_eq!(
+            name_and_value(0x0103, &[7, 0], 3, 1),
+            Some(("EXIF:Compression".to_string(), "JPEG".to_string()))
+        );
+    }
+
+    #[test]
+    fn dng_primary_raw_subifd_compression_wins() {
+        let path = "/tmp/oxidex-exiftool-cache/exiftool/t/images/DNG.dng";
+        if !std::path::Path::new(path).exists() {
+            return;
+        }
+        let data = std::fs::read(path).expect("read pinned DNG fixture");
+        let metadata = parse_raw_metadata(&data, RawFormat::AdobeDNG).expect("parse DNG fixture");
+
+        assert_eq!(metadata.get_string("EXIF:Compression"), Some("JPEG"));
     }
 
     #[test]
