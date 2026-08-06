@@ -5,8 +5,8 @@
 
 #![allow(dead_code)]
 
-use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::core::value_formatter::format_file_size;
+use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
 
@@ -250,7 +250,9 @@ impl ISOParser {
         );
         metadata.insert(
             "ISO:VolumeSize".to_string(),
-            TagValue::String(format_file_size(u64::from(block_count) * u64::from(block_size))),
+            TagValue::String(format_file_size(
+                u64::from(block_count) * u64::from(block_size),
+            )),
         );
 
         Self::insert_directory_date(
