@@ -73,6 +73,7 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         "CreateDate" => "ExifIFD:CreateDate",
         "ExposureTime" => "EXIF:ExposureTime",
         "BrightnessValue" => "EXIF:BrightnessValue",
+        "CompressedBitsPerPixel" => "ExifIFD:CompressedBitsPerPixel",
         "LightSource" => "EXIF:LightSource",
         "DigitalZoomRatio" => "EXIF:DigitalZoomRatio",
         "Sharpness" => "EXIF:Sharpness",
@@ -1180,19 +1181,19 @@ mod tests {
 
     #[test]
     fn compressed_bits_per_pixel_rejects_negative_unsigned_rationals() {
-        let tag = "ExifIFD:CompressedBitsPerPixel";
-
-        assert!(parse(tag, "-1").is_err());
-        assert!(parse(tag, "-1/2").is_err());
+        for tag in ["ExifIFD:CompressedBitsPerPixel", "CompressedBitsPerPixel"] {
+            assert!(parse(tag, "-1").is_err(), "{tag}");
+            assert!(parse(tag, "-1/2").is_err(), "{tag}");
+        }
         assert_eq!(
-            parse(tag, "-0").unwrap(),
+            parse("CompressedBitsPerPixel", "-0").unwrap(),
             TagValue::Rational {
                 numerator: 0,
                 denominator: 1,
             }
         );
         assert_eq!(
-            parse(tag, "1.5").unwrap(),
+            parse("CompressedBitsPerPixel", "1.5").unwrap(),
             TagValue::Rational {
                 numerator: 3,
                 denominator: 2,

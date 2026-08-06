@@ -511,6 +511,7 @@ fn canonical_write_tag_name(tag_name: &str) -> &str {
         "CreateDate" => "ExifIFD:CreateDate",
         "ExposureTime" => "ExifIFD:ExposureTime",
         "BrightnessValue" => "ExifIFD:BrightnessValue",
+        "CompressedBitsPerPixel" => "ExifIFD:CompressedBitsPerPixel",
         "LightSource" => "ExifIFD:LightSource",
         "Contrast" => "ExifIFD:Contrast",
         "DigitalZoomRatio" => "ExifIFD:DigitalZoomRatio",
@@ -1181,6 +1182,18 @@ mod tests {
         assert_eq!(
             canonical_write_tag_name("ExifIFD:BrightnessValue"),
             "ExifIFD:BrightnessValue"
+        );
+    }
+
+    #[test]
+    fn bare_compressed_bits_per_pixel_write_targets_exif_ifd() {
+        assert_eq!(
+            canonical_write_tag_name("CompressedBitsPerPixel"),
+            "ExifIFD:CompressedBitsPerPixel"
+        );
+        assert_eq!(
+            canonical_write_tag_name("ExifIFD:CompressedBitsPerPixel"),
+            "ExifIFD:CompressedBitsPerPixel"
         );
     }
 
