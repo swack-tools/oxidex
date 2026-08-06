@@ -116,6 +116,26 @@ impl ICSParser {
         None
     }
 
+    /// Unfolds RFC 5545 §3.1 folded content lines: a line that starts with a
+    /// single space or tab is a continuation of the previous line and must
+    /// be joined to it (with that one leading whitespace character dropped)
+    /// before the line is parsed as a property. Real ExifTool's
+    /// `ProcessVCard` (VCard.pm) does this same unfolding pass first; without
+    /// it, a folded property (common in Apple/Google/Outlook exports) gets
+    /// silently truncated at the fold point.
+    fn unfold_lines(text: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for raw_line in text.lines() {
+            let line = raw_line.trim_end_matches('\r');
+            if (line.starts_with(' ') || line.starts_with('\t')) && !out.is_empty() {
+                out.last_mut().unwrap().push_str(&line[1..]);
+            } else {
+                out.push(line.to_string());
+            }
+        }
+        out
+    }
+
     /// Converts an iCalendar DATE or DATE-TIME value to ExifTool's
     /// "YYYY:MM:DD[ HH:MM:SS[Z]]" style, matching VCard.pm's `%timeInfo`
     /// ValueConv/PrintConv (which for ICS is effectively a passthrough
@@ -272,8 +292,8 @@ impl ICSParser {
     /// are skipped - see comment at the call site.
     fn extract_vcalendar_tags(text: &str, metadata: &mut MetadataMap) {
         let mut depth: i32 = 0;
-        for raw_line in text.lines() {
-            let line = raw_line.trim_end_matches('\r').trim();
+        for line in Self::unfold_lines(text) {
+            let line = line.trim();
             if line.is_empty() {
                 continue;
             }
@@ -509,6 +529,26 @@ mod tests {
         assert_eq!(
             metadata.get("VCard:Organizer").unwrap().as_string(),
             Some("mailto:jdoe@example.com")
+        );
+    }
+
+    #[test]
+    fn test_ics_unfolds_rfc5545_continuation_lines() {
+        // Verified against pinned ExifTool 13.59: a folded X-WR-CALNAME
+        // (space/tab-prefixed continuation lines, RFC 5545 section 3.1)
+        // must be rejoined before parsing, or the value truncates at the
+        // fold point. `exiftool -G -s` on this same content reports
+        // CalendarName as the fully-joined string below, byte-for-byte.
+        let ics_data = b"BEGIN:VCALENDAR\r\nCALSCALE:GREGORIAN\r\nVERSION:2.0\r\nMETHOD:PUBLISH\r\nX-WR-CALNAME:This is a long calendar name that would fold\r\n across multiple content lines per RFC 5545 section 3.1\r\n because it exceeds the seventy-five octet limit.\r\nEND:VCALENDAR\r\n";
+        let reader = BufferedReader::from_bytes(ics_data);
+        let parser = ICSParser;
+        let metadata = parser.parse(&reader).unwrap();
+
+        assert_eq!(
+            metadata.get("VCard:CalendarName").unwrap().as_string(),
+            Some(
+                "This is a long calendar name that would foldacross multiple content lines per RFC 5545 section 3.1because it exceeds the seventy-five octet limit."
+            )
         );
     }
 }
