@@ -63,6 +63,7 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     signature!(b"GIF89a", 0, FileFormat::GIF),
     signature!(b"BM", 0, FileFormat::BMP),
     signature!(b"8BPS", 0, FileFormat::PSD),
+    signature!(b"\xFFWPC", 0, FileFormat::WPG),
     signature!(b"\x00\x00\x01\x00", 0, FileFormat::ICO),
     signature!(b"FLIF", 0, FileFormat::FLIF),
     signature!(b"id=ImageMagick", 0, FileFormat::MIFF),
@@ -79,6 +80,7 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     signature!(b"ID3", 0, FileFormat::MP3),
     signature!(b"FLV", 0, FileFormat::FLV),
     signature!(b"MAC ", 0, FileFormat::APE),
+    signature!(b"\x02dss", 0, FileFormat::DSS),
     signature!(b"\x1A\x45\xDF\xA3", 0, FileFormat::MKV),
     signature!(b"OggS", 0, FileFormat::OGG),
     // ASF/WMV - Header Object GUID

@@ -76,13 +76,16 @@ impl FormatParser for Mp3Parser {
         let file_size = reader.size();
         let mut metadata = MetadataMap::with_capacity(32);
         let mut audio_start = 0u64;
+        let mut id3_size = 0u64;
 
         // Try to parse ID3v2 tag (at start of file)
         if file_size >= 10 {
             let header = reader.read(0, 10)?;
             if &header[0..3] == ID3V2_SIGNATURE {
                 let id3v2_size = parse_id3v2(reader, &mut metadata)?;
-                audio_start = 10 + id3v2_size as u64;
+                let id3v2_block_size = 10 + id3v2_size as u64;
+                audio_start = id3v2_block_size;
+                id3_size += id3v2_block_size;
             }
         }
 
@@ -97,7 +100,15 @@ impl FormatParser for Mp3Parser {
             let id3v1_data = reader.read(id3v1_offset, 128)?;
             if &id3v1_data[0..3] == ID3V1_SIGNATURE {
                 parse_id3v1(id3v1_data, &mut metadata)?;
+                id3_size += 128;
             }
+        }
+
+        if id3_size > 0 {
+            metadata.insert(
+                "ID3Size".to_string(),
+                TagValue::new_integer(id3_size as i64),
+            );
         }
 
         Ok(metadata)

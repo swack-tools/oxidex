@@ -18,6 +18,29 @@ fn printed(value: &TagValue) -> String {
     }
 }
 
+/// ExifTool 13.59 derives this from the MAC header in
+/// `t/images/APE.ape`: `((TotalFrames - 1) * BlocksPerFrame +
+/// FinalFrameBlocks) / SampleRate`, then applies `ConvertDuration`.
+///
+/// This fails if the composite is omitted or if any input is used with the
+/// wrong layout or conversion.
+#[test]
+#[ignore = "requires the pinned ExifTool fixture cache"]
+fn ape_fixture_reports_composite_duration() {
+    let path = Path::new("/tmp/oxidex-exiftool-cache/exiftool/t/images/APE.ape");
+    let reader = BufferedReader::new(path).expect("Failed to open pinned APE fixture");
+    let metadata = parse_ape_metadata(&reader).expect("Failed to parse pinned APE fixture");
+
+    assert_eq!(
+        printed(
+            metadata
+                .get("APE:Duration")
+                .expect("OxiDex missing APE:Duration")
+        ),
+        "2.64 s"
+    );
+}
+
 #[test]
 #[ignore] // Requires ExifTool to be installed
 fn test_ape_metadata_parity_with_exiftool() {

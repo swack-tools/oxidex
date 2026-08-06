@@ -1233,6 +1233,91 @@ pub fn process_spiff_segments(segments: &[Segment], metadata: &mut MetadataMap) 
     }
 }
 
+/// Extracts Ricoh's standard APP5 `RMETA` Azimuth field.
+///
+/// `Ricoh.pm::ProcessRicohRMETA` stores parallel NUL-delimited tag names and
+/// big/little-endian `int16u` menu values in section types 1 and 3.  Azimuth
+/// is the only RMETA field handled here; its complete PrintConv is fixed by
+/// the pinned ExifTool table.
+pub fn process_ricoh_rmeta_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    const DIRECTIONS: [&str; 16] = [
+        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW",
+        "NW", "NNW",
+    ];
+
+    for data in segments
+        .iter()
+        .filter(|segment| segment.marker == APP5_MARKER)
+        .map(|segment| segment.data)
+        .filter(|data| data.starts_with(b"RMETA\0") && data.len() >= 20)
+    {
+        let little_endian = match data.get(6..8) {
+            Some(b"II") => true,
+            Some(b"MM") => false,
+            _ => continue,
+        };
+        let read_u16 = |bytes: &[u8]| {
+            let pair = [bytes[0], bytes[1]];
+            if little_endian {
+                u16::from_le_bytes(pair)
+            } else {
+                u16::from_be_bytes(pair)
+            }
+        };
+        if read_u16(&data[10..12]) != 0 {
+            continue;
+        }
+        let directory_offset = read_u16(&data[14..16]) as usize;
+        let Some(count_at) = 6usize.checked_add(directory_offset) else {
+            continue;
+        };
+        let Some(count_bytes) = data.get(count_at..count_at + 2) else {
+            continue;
+        };
+        let count = read_u16(count_bytes) as usize;
+        if count > 100 {
+            continue;
+        }
+        let Some(mut pos) = count_at.checked_add(10) else {
+            continue;
+        };
+        let mut names: Vec<&[u8]> = Vec::new();
+        let mut numbers = Vec::new();
+        while let Some(header) = data.get(pos..pos + 4) {
+            let section_type = read_u16(&header[..2]);
+            let stored_size = read_u16(&header[2..]) as usize;
+            if stored_size < 2 {
+                break;
+            }
+            let payload_size = stored_size - 2;
+            pos += 4;
+            let Some(section) = data.get(pos..pos + payload_size) else {
+                break;
+            };
+            match section_type {
+                1 => names = section.split(|byte| *byte == 0).take(count).collect(),
+                3 if section.len() >= count.saturating_mul(2) => {
+                    numbers = section[..count * 2].chunks_exact(2).map(read_u16).collect();
+                }
+                _ => {}
+            }
+            pos += payload_size;
+        }
+
+        if let Some((index, _)) = names
+            .iter()
+            .enumerate()
+            .find(|(_, name)| **name == b"Azimuth")
+            && let Some(direction) = numbers
+                .get(index)
+                .and_then(|value| value.checked_sub(1))
+                .and_then(|value| DIRECTIONS.get(value as usize))
+        {
+            metadata.insert("APP5:Azimuth", TagValue::new_string(*direction));
+        }
+    }
+}
+
 /// Whether this file is an InfiRay IJPEG, i.e. carries an APP2 segment
 /// matching ExifTool's `/^....IJPEG\0/s` version header.
 ///
@@ -1482,6 +1567,47 @@ mod tests {
             metadata.get_string("APP3:ThermalData"),
             Some("(Binary data 12 bytes, use -b option to extract)")
         );
+    }
+
+    #[test]
+    fn process_ricoh_rmeta_extracts_azimuth() {
+        // Minimal standard RMETA directory with one tag. Section sizes include
+        // the two-byte size field, matching Ricoh.pm's ProcessRicohRMETA.
+        let mut payload = b"RMETA\0MM\x01\0\0\0\0\0\0\x0a\0\x01\0\0\0\0\0\0\0\0".to_vec();
+        payload.extend_from_slice(&[0, 1, 0, 10]);
+        payload.extend_from_slice(b"Azimuth\0");
+        payload.extend_from_slice(&[0, 2, 0, 3, 0]);
+        payload.extend_from_slice(&[0, 3, 0, 4, 0, 5]);
+
+        let segment = Segment::new(APP5_MARKER, 0, &payload);
+        let mut metadata = MetadataMap::new();
+
+        process_ricoh_rmeta_segments(&[segment], &mut metadata);
+
+        assert_eq!(metadata.get_string("APP5:Azimuth"), Some("E"));
+    }
+
+    #[test]
+    fn ricoh2_app5_azimuth_matches_pinned_exiftool() {
+        let paths = [
+            "/tmp/oxidex-exiftool-cache/combined-samples/Ricoh2.jpg",
+            "/tmp/oxidex-exiftool-cache/exiftool/t/images/Ricoh2.jpg",
+        ];
+        let Some(path) = paths
+            .iter()
+            .find(|path| std::path::Path::new(path).exists())
+        else {
+            return;
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(std::path::Path::new(path))
+            .expect("read Ricoh2.jpg");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse Ricoh2.jpg segments");
+        let mut metadata = MetadataMap::new();
+
+        process_ricoh_rmeta_segments(&segments, &mut metadata);
+
+        assert_eq!(metadata.get_string("APP5:Azimuth"), Some("E"));
     }
 
     /// `IPTC:ReferenceNumber` (record 2, dataset 50) is IPTC.pm's

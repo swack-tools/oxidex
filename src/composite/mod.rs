@@ -230,6 +230,12 @@ fn resolve(map: &MetadataMap, values: &HashMap<&str, Derived>, name: &str) -> Op
             .map(|d| d.value.clone())
             .or_else(|| lookup(map, name));
     }
+    // Generated QuickTime Composite dependencies retain ExifTool's
+    // `Module::Tag` table notation, while parsed values use the emitted
+    // `Group:Tag` key. Resolve that notation at the composite boundary.
+    if let Some((group, tag)) = name.split_once("::") {
+        return lookup(map, &format!("{group}:{tag}"));
+    }
     if name.contains(':') {
         return lookup(map, name);
     }

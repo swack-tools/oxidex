@@ -175,6 +175,18 @@ mod opus_integration_tests;
 #[path = "integration/ape_integration_tests.rs"]
 mod ape_integration_tests;
 
+#[path = "integration/iso_integration_tests.rs"]
+mod iso_integration_tests;
+
+#[path = "integration/ram_integration_tests.rs"]
+mod ram_integration_tests;
+
+#[path = "integration/dss_integration_tests.rs"]
+mod dss_integration_tests;
+
+#[path = "integration/wpg_integration_tests.rs"]
+mod wpg_integration_tests;
+
 // No qualcomm/google/microsoft MakerNote test modules: those three suites were
 // deleted rather than declared. Every tag name they asserted appears in zero
 // ExifTool 13.59 source files, so declaring them would have pinned invented

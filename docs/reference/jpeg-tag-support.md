@@ -9,7 +9,7 @@ Empirical OxiDex ↔ ExifTool tag mapping for JPEG: for each tag, ExifTool write
 Only tags OxiDex can **read** from JPEG are listed here (including those whose value formatting differs from ExifTool). The full classification of all tested tags — including unsupported and broken ones — is in the [JPEG Tag Matrix](/reference/jpeg-tag-matrix). See also [ExifTool Coverage](/reference/tag-coverage-analysis) for the tag-database view and the [Compatibility overview](/reference/comparison/) for fixture-based comparisons across formats.
 
 
-**2699** ExifTool tags readable, **178** writable via the CLI (of 4819 ExifTool-writable JPEG tags tested).
+**2699** ExifTool tags readable, **180** writable via the CLI (of 4819 ExifTool-writable JPEG tags tested).
 
 
 ## ExifIFD (93 readable tags)
@@ -126,7 +126,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `GPS:GPSDOP` | `GPS:GPSDOP` | ⚠️ `-GPS:GPSDOP=` | `1.5` |
 | `GPS:GPSDateStamp` | `GPS:GPSDateStamp` | ⚠️ `-GPS:GPSDateStamp=` | `2024:01:15` |
 | `GPS:GPSDestBearing` | `GPS:GPSDestBearing` | ⚠️ `-GPS:GPSDestBearing=` | `1.5` |
-| `GPS:GPSDestBearingRef` | `GPS:GPSDestBearingRef` | — | `Magnetic North` |
+| `GPS:GPSDestBearingRef` | `GPS:GPSDestBearingRef` | ⚠️ `-GPS:GPSDestBearingRef=` | `Magnetic North` |
 | `GPS:GPSDestDistance` | `GPS:GPSDestDistance` | ⚠️ `-GPS:GPSDestDistance=` | `1.5` |
 | `GPS:GPSDestDistanceRef` | `GPS:GPSDestDistanceRef` | — | `Kilometers` |
 | `GPS:GPSDestLatitude` | `GPS:GPSDestLatitude` | — | `37.7749` |
@@ -142,7 +142,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `GPS:GPSLongitude` | `GPS:GPSLongitude` | — | `122.4194` |
 | `GPS:GPSLongitudeRef` | `GPS:GPSLongitudeRef` | ⚠️ `-GPS:GPSLongitudeRef=` | `W` |
 | `GPS:GPSMapDatum` | `GPS:GPSMapDatum` | ⚠️ `-GPS:GPSMapDatum=` | `OxTest` |
-| `GPS:GPSMeasureMode` | `GPS:GPSMeasureMode` | — | `2-Dimensional Measurement` |
+| `GPS:GPSMeasureMode` | `GPS:GPSMeasureMode` | ⚠️ `-GPS:GPSMeasureMode=` | `2-Dimensional Measurement` |
 | `GPS:GPSProcessingMethod` | `GPS:GPSProcessingMethod` | — | `OxTest` |
 | `GPS:GPSSatellites` | `GPS:GPSSatellites` | ⚠️ `-GPS:GPSSatellites=` | `OxTest` |
 | `GPS:GPSSpeed` | `GPS:GPSSpeed` | ⚠️ `-GPS:GPSSpeed=` | `1.5` |
@@ -188,7 +188,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:CurrentPreProfileMatrix` | `IFD0:CurrentPreProfileMatrix` | ⚠️ `-IFD0:CurrentPreProfileMatrix=` | `1.5` |
 | `IFD0:DNGBackwardVersion` | `IFD0:DNGBackwardVersion` * | — | `3 3 3 3` |
 | `IFD0:DNGLensInfo` | `IFD0:DNGLensInfo` | — | `1.5 1.5 1.5 1.5` |
-| `IFD0:DNGPrivateData` | `IFD0:0x012D` | — | `3` |
+| `IFD0:DNGPrivateData` | `IFD0:0xC634` | — | `3` |
 | `IFD0:DNGVersion` | `IFD0:DNGVersion` * | — | `3 3 3 3` |
 | `IFD0:DefaultBlackRender` | `IFD0:DefaultBlackRender` * | — | `Auto` |
 | `IFD0:DepthFar` | `IFD0:DepthFar` | ✅ `-IFD0:DepthFar=` | `1.5` |
@@ -294,7 +294,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:TileLength` | `IFD0:TileLength` | ✅ `-IFD0:TileLength=` | `3` |
 | `IFD0:TileWidth` | `IFD0:TileWidth` | ✅ `-IFD0:TileWidth=` | `3` |
 | `IFD0:TimeCodes` | `IFD0:TimeCodes` * | — | `3` |
-| `IFD0:TransferFunction` | `IFD0:0x012D` | — | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 ` |
+| `IFD0:TransferFunction` | `IFD0:TransferFunction` | — | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 ` |
 | `IFD0:UniqueCameraModel` | `IFD0:UniqueCameraModel` | ✅ `-IFD0:UniqueCameraModel=` | `OxTest` |
 | `IFD0:WhitePoint` | `IFD0:WhitePoint` | — | `1.5 1.5` |
 | `IFD0:XPAuthor` | `IFD0:XPAuthor` | ⚠️ `-IFD0:XPAuthor=` | `3` |
@@ -2668,7 +2668,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-tiff:ResolutionUnit` | `XMP-tiff:ResolutionUnit` | — | `inches` |
 | `XMP-tiff:SamplesPerPixel` | `XMP-tiff:SamplesPerPixel` | — | `3` |
 | `XMP-tiff:Software` | `XMP-tiff:Software` | — | `OxTest` |
-| `XMP-tiff:TransferFunction` | `XMP-tiff:TransferFunction` | — | `3` |
+| `XMP-tiff:TransferFunction` | `XMP-tiff:TransferFunction` * | — | `3` |
 | `XMP-tiff:WhitePoint` | `XMP-tiff:WhitePoint` | — | `1.5` |
 | `XMP-tiff:XResolution` | `XMP-tiff:XResolution` | — | `1.5` |
 | `XMP-tiff:YCbCrCoefficients` | `XMP-tiff:YCbCrCoefficients` | — | `1.5` |

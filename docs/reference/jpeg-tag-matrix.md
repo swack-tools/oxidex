@@ -18,9 +18,9 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | 📖 Read only | 2350 |
 | ❌ Unsupported | 1890 |
 | ❔ Untestable | 221 |
-| 🐛 Read OK, write broken | 177 |
+| 🐛 Read OK, write broken | 175 |
 | ✅ Full (read + write) | 99 |
-| ⚠️ Full (write non-standard encoding) | 73 |
+| ⚠️ Full (write non-standard encoding) | 75 |
 | 🐛 Read broken | 9 |
 | 🚫 Not writable in ExifTool (no synthetic sample possible; untested) | 585 |
 
@@ -31,7 +31,7 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | All | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
 | ExifIFD | 46 | 7 | 27 | 6 | 0 | 4 | 100 | 203 |
 | File | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
-| GPS | 0 | 3 | 14 | 0 | 0 | 0 | 0 | 32 |
+| GPS | 0 | 3 | 12 | 0 | 0 | 0 | 0 | 32 |
 | GSpherical | 0 | 0 | 0 | 0 | 0 | 0 | 16 | 16 |
 | IFD0 | 53 | 0 | 54 | 0 | 0 | 0 | 17 | 169 |
 | IFD1 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
@@ -224,7 +224,7 @@ references are into this repo.
 | `ImageNumber` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ImageTitle` | ✅ ok | ✅ ok | `OxTest` |
 | `ImageUniqueID` | ✅ ok | ✅ ok | `OxTest` |
-| `LearningOptOutIn` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `LearningOptOutIn` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: interop (exiftool can't read it) | `OxTest` |
 | `Lens` | 🐛 broken: ACR "TagName: " ValueConv prefix not stripped | ✅ ok | `OxTest` |
 | `LensInfo` | ✅ ok | 🐛 broken: error | `1.5 1.5 1.5 1.5` |
 | `LensMake` | ✅ ok | ✅ ok | `OxTest` |
@@ -387,7 +387,7 @@ references are into this repo.
 | `GPSDOP` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `GPSDateStamp` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `2024:01:15` |
 | `GPSDestBearing` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
-| `GPSDestBearingRef` | ✅ ok | 🐛 broken: PrintConvInv missing: human-readable stored as raw | `Magnetic North` |
+| `GPSDestBearingRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `Magnetic North` |
 | `GPSDestDistance` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `GPSDestDistanceRef` | ✅ ok | 🐛 broken: PrintConvInv missing: human-readable stored as raw | `Kilometers` |
 | `GPSDestLatitude` | ✅ ok | 🐛 broken: interop (exiftool can't read it) | `37.7749` |
@@ -403,7 +403,7 @@ references are into this repo.
 | `GPSLongitude` | ✅ ok | 🐛 broken: interop (exiftool can't read it) | `122.4194` |
 | `GPSLongitudeRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `W` |
 | `GPSMapDatum` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
-| `GPSMeasureMode` | ✅ ok | 🐛 broken: PrintConvInv missing: human-readable stored as raw | `2-Dimensional Measurement` |
+| `GPSMeasureMode` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `2-Dimensional Measurement` |
 | `GPSProcessingMethod` | ✅ ok | readback_broken | `OxTest` |
 | `GPSSatellites` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
 | `GPSSpeed` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
@@ -4939,7 +4939,7 @@ references are into this repo.
 | `ResolutionUnit` | ✅ ok | — unsupported (silent no-op) | `inches` |
 | `SamplesPerPixel` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `Software` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `TransferFunction` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `TransferFunction` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `3` |
 | `WhitePoint` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `XResolution` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `YCbCrCoefficients` | ✅ ok | — unsupported (silent no-op) | `1.5` |

@@ -1889,6 +1889,27 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
+    #[test]
+    fn ambient_temperature_print_conv_is_scoped_to_exif() {
+        let negative_zero = TagValue::Rational {
+            numerator: 0,
+            denominator: -1,
+        };
+        assert_eq!(
+            format_tag_value("ExifIFD:AmbientTemperature", &negative_zero),
+            TagValue::String("-0 C".to_string())
+        );
+
+        let dji_value = TagValue::Rational {
+            numerator: 21,
+            denominator: 2,
+        };
+        assert_eq!(
+            format_tag_value("DJI:AmbientTemperature", &dji_value),
+            TagValue::String("10.5".to_string())
+        );
+    }
+
     // strip_family_prefix tests
     // -------------------------------------------------------------------------
 
