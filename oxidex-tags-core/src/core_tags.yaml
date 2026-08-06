@@ -1144,7 +1144,7 @@ tables:
         description: "ExifImageWidth tag"
       - id: "0xA003"
         name: "ExifImageHeight"
-        writable: false
+        writable: true
         type: int16u
         description: "ExifImageHeight tag"
       - id: "0xA004"
