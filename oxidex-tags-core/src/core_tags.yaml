@@ -1040,7 +1040,8 @@ tables:
         description: "SecurityClassification tag"
       - id: "0x9213"
         name: "ImageHistory"
-        writable: false
+        writable: true
+        type: string
         description: "ImageHistory tag"
       - id: "0x9214"
         name: "SubjectArea"
