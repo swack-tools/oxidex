@@ -9,7 +9,7 @@ Empirical OxiDex ↔ ExifTool tag mapping for JPEG: for each tag, ExifTool write
 Only tags OxiDex can **read** from JPEG are listed here (including those whose value formatting differs from ExifTool). The full classification of all tested tags — including unsupported and broken ones — is in the [JPEG Tag Matrix](/reference/jpeg-tag-matrix). See also [ExifTool Coverage](/reference/tag-coverage-analysis) for the tag-database view and the [Compatibility overview](/reference/comparison/) for fixture-based comparisons across formats.
 
 
-**2699** ExifTool tags readable, **187** writable via the CLI (of 4819 ExifTool-writable JPEG tags tested).
+**2699** ExifTool tags readable, **192** writable via the CLI (of 4819 ExifTool-writable JPEG tags tested).
 
 
 ## ExifIFD (93 readable tags)
@@ -18,7 +18,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 |---|---|---|---|
 | `ExifIFD:Acceleration` | `ExifIFD:Acceleration` | ✅ `-ExifIFD:Acceleration=` | `1.5` |
 | `ExifIFD:AmbientTemperature` | `ExifIFD:AmbientTemperature` | ⚠️ `-ExifIFD:AmbientTemperature=` | `1.5` |
-| `ExifIFD:ApertureValue` | `ExifIFD:ApertureValue` | — | `1.5` |
+| `ExifIFD:ApertureValue` | `ExifIFD:ApertureValue` | ✅ `-ExifIFD:ApertureValue=` | `1.5` |
 | `ExifIFD:BrightnessValue` | `ExifIFD:BrightnessValue` | ⚠️ `-ExifIFD:BrightnessValue=` | `1.5` |
 | `ExifIFD:CameraElevationAngle` | `ExifIFD:CameraElevationAngle` | ⚠️ `-ExifIFD:CameraElevationAngle=` | `1.5` |
 | `ExifIFD:CameraFirmware` | `ExifIFD:CameraFirmware` | ✅ `-ExifIFD:CameraFirmware=` | `OxTest` |
@@ -27,9 +27,9 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:CompositeImageCount` | `ExifIFD:CompositeImageCount` | ⚠️ `-ExifIFD:CompositeImageCount=` | `3 3` |
 | `ExifIFD:CompressedBitsPerPixel` | `ExifIFD:CompressedBitsPerPixel` | ✅ `-ExifIFD:CompressedBitsPerPixel=` | `1.5` |
 | `ExifIFD:Contrast` | `ExifIFD:Contrast` | — | `Normal` |
-| `ExifIFD:CreateDate` | `ExifIFD:CreateDate` | — | `2024:01:15 10:30:00` |
+| `ExifIFD:CreateDate` | `ExifIFD:CreateDate` | ✅ `-ExifIFD:CreateDate=` | `2024:01:15 10:30:00` |
 | `ExifIFD:CustomRendered` | `ExifIFD:CustomRendered` | — | `Normal` |
-| `ExifIFD:DateTimeOriginal` | `ExifIFD:DateTimeOriginal` | — | `2024:01:15 10:30:00` |
+| `ExifIFD:DateTimeOriginal` | `ExifIFD:DateTimeOriginal` | ✅ `-ExifIFD:DateTimeOriginal=` | `2024:01:15 10:30:00` |
 | `ExifIFD:DevelopmentTypeDescription` | `ExifIFD:0xA40E` | — | `OxTest` |
 | `ExifIFD:DigitalZoomRatio` | `ExifIFD:DigitalZoomRatio` | ✅ `-ExifIFD:DigitalZoomRatio=` | `1.5` |
 | `ExifIFD:ExifImageHeight` | `ExifIFD:ExifImageHeight` | ✅ `-ExifIFD:ExifImageHeight=` | `3` |
@@ -42,7 +42,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:ExposureTime` | `ExifIFD:ExposureTime` | ✅ `-ExifIFD:ExposureTime=` | `1.5` |
 | `ExifIFD:FNumber` | `ExifIFD:FNumber` | ✅ `-ExifIFD:FNumber=` | `1.5` |
 | `ExifIFD:FileSource` | `ExifIFD:FileSource` | — | `Film Scanner` |
-| `ExifIFD:Flash` | `ExifIFD:Flash` | — | `No Flash` |
+| `ExifIFD:Flash` | `ExifIFD:Flash` | ✅ `-ExifIFD:Flash=` | `No Flash` |
 | `ExifIFD:FlashEnergy` | `ExifIFD:FlashEnergy` | ✅ `-ExifIFD:FlashEnergy=` | `1.5` |
 | `ExifIFD:FlashpixVersion` | `ExifIFD:FlashpixVersion` | ⚠️ `-ExifIFD:FlashpixVersion=` | `0100` |
 | `ExifIFD:FocalLength` | `ExifIFD:FocalLength` | ✅ `-ExifIFD:FocalLength=` | `1.5` |
@@ -71,7 +71,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:MakerNoteUnknownText` | `ExifIFD:0xA40E` | — | `OxTest` |
 | `ExifIFD:MaxApertureValue` | `ExifIFD:MaxApertureValue` | — | `1.5` |
 | `ExifIFD:MetadataEditingSoftware` | `ExifIFD:MetadataEditingSoftware` | ✅ `-ExifIFD:MetadataEditingSoftware=` | `OxTest` |
-| `ExifIFD:MeteringMode` | `ExifIFD:MeteringMode` | — | `Average` |
+| `ExifIFD:MeteringMode` | `ExifIFD:MeteringMode` | ✅ `-ExifIFD:MeteringMode=` | `Average` |
 | `ExifIFD:MoireFilter` | `ExifIFD:MoireFilter` * | ✅ `-ExifIFD:MoireFilter=` | `OxTest` |
 | `ExifIFD:OffsetSchema` | `ExifIFD:OffsetSchema` | ✅ `-ExifIFD:OffsetSchema=` | `3` |
 | `ExifIFD:OffsetTime` | `ExifIFD:OffsetTime` | ✅ `-ExifIFD:OffsetTime=` | `+05:30` |
@@ -94,7 +94,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:SensitivityType` | `ExifIFD:SensitivityType` | — | `Standard Output Sensitivity` |
 | `ExifIFD:SerialNumber` | `ExifIFD:SerialNumber` | ✅ `-ExifIFD:SerialNumber=` | `OxTest` |
 | `ExifIFD:Sharpness` | `ExifIFD:Sharpness` | — | `Normal` |
-| `ExifIFD:ShutterSpeedValue` | `ExifIFD:ShutterSpeedValue` | — | `1.5` |
+| `ExifIFD:ShutterSpeedValue` | `ExifIFD:ShutterSpeedValue` | ✅ `-ExifIFD:ShutterSpeedValue=` | `1.5` |
 | `ExifIFD:SpectralSensitivity` | `ExifIFD:SpectralSensitivity` | ✅ `-ExifIFD:SpectralSensitivity=` | `OxTest` |
 | `ExifIFD:StandardOutputSensitivity` | `ExifIFD:StandardOutputSensitivity` | ⚠️ `-ExifIFD:StandardOutputSensitivity=` | `3` |
 | `ExifIFD:SubSecTime` | `ExifIFD:SubSecTime` | ✅ `-ExifIFD:SubSecTime=` | `3` |
@@ -136,7 +136,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `GPS:GPSDifferential` | `GPS:GPSDifferential` | ⚠️ `-GPS:GPSDifferential=` | `No Correction` |
 | `GPS:GPSHPositioningError` | `GPS:GPSHPositioningError` | ✅ `-GPS:GPSHPositioningError=` | `1.5` |
 | `GPS:GPSImgDirection` | `GPS:GPSImgDirection` | ⚠️ `-GPS:GPSImgDirection=` | `1.5` |
-| `GPS:GPSImgDirectionRef` | `GPS:GPSImgDirectionRef` | ⚠️ `-GPS:GPSImgDirectionRef=` | `Magnetic North` |
+| `GPS:GPSImgDirectionRef` | `GPS:GPSImgDirectionRef` | — | `Magnetic North` |
 | `GPS:GPSLatitude` | `GPS:GPSLatitude` | — | `37.7749` |
 | `GPS:GPSLatitudeRef` | `GPS:GPSLatitudeRef` | ⚠️ `-GPS:GPSLatitudeRef=` | `N` |
 | `GPS:GPSLongitude` | `GPS:GPSLongitude` | — | `122.4194` |
@@ -146,11 +146,11 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `GPS:GPSProcessingMethod` | `GPS:GPSProcessingMethod` | — | `OxTest` |
 | `GPS:GPSSatellites` | `GPS:GPSSatellites` | ⚠️ `-GPS:GPSSatellites=` | `OxTest` |
 | `GPS:GPSSpeed` | `GPS:GPSSpeed` | ✅ `-GPS:GPSSpeed=` | `1.5` |
-| `GPS:GPSSpeedRef` | `GPS:GPSSpeedRef` | ⚠️ `-GPS:GPSSpeedRef=` | `km/h` |
+| `GPS:GPSSpeedRef` | `GPS:GPSSpeedRef` | — | `km/h` |
 | `GPS:GPSStatus` | `GPS:GPSStatus` | ⚠️ `-GPS:GPSStatus=` | `Measurement Active` |
 | `GPS:GPSTimeStamp` | `GPS:GPSTimeStamp` | — | `10:30:00` |
 | `GPS:GPSTrack` | `GPS:GPSTrack` | ✅ `-GPS:GPSTrack=` | `1.5` |
-| `GPS:GPSTrackRef` | `GPS:GPSTrackRef` | — | `Magnetic North` |
+| `GPS:GPSTrackRef` | `GPS:GPSTrackRef` | ⚠️ `-GPS:GPSTrackRef=` | `Magnetic North` |
 | `GPS:GPSVersionID` | `GPS:GPSVersionID` | — | `2.3.0.0` |
 
 ## IFD0 (152 readable tags)
@@ -206,7 +206,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:GDALMetadata` | `IFD0:GDALMetadata` | ✅ `-IFD0:GDALMetadata=` | `OxTest` |
 | `IFD0:GDALNoData` | `IFD0:GDALNoData` | ✅ `-IFD0:GDALNoData=` | `OxTest` |
 | `IFD0:GeoTiffAsciiParams` | `IFD0:GeoTiffAsciiParams` | — | `OxTest` |
-| `IFD0:GrayResponseUnit` | `IFD0:GrayResponseUnit` * | — | `0.1` |
+| `IFD0:GrayResponseUnit` | `IFD0:GrayResponseUnit` | — | `0.1` |
 | `IFD0:HalftoneHints` | `IFD0:HalftoneHints` | — | `3 3` |
 | `IFD0:HostComputer` | `IFD0:HostComputer` | ✅ `-IFD0:HostComputer=` | `OxTest` |
 | `IFD0:IlluminantData1` | `IFD0:IlluminantData1` * | ⚠️ `-IFD0:IlluminantData1=` | `OxTest` |
