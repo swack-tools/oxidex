@@ -613,6 +613,13 @@ fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
 /// 2. GPS reference values: Converts single-character codes to human-readable descriptions
 ///    (e.g., "N" -> "North", "T" -> "True North").
 fn friendly_enum_name(tag_name: &str, value: &TagValue) -> Option<String> {
+    if tag_name.rsplit(':').next() == Some("ApertureValue")
+        && let TagValue::String(formatted) =
+            crate::core::exiftool_compat::format_tag_value(tag_name, value)
+    {
+        return Some(formatted);
+    }
+
     if tag_name.rsplit(':').next() == Some("GPSProcessingMethod")
         && let TagValue::Binary(bytes) = value
     {
@@ -635,6 +642,15 @@ fn friendly_enum_name(tag_name: &str, value: &TagValue) -> Option<String> {
         && let Some(formatted) = format_gps_reference(tag_name, &i.to_string())
     {
         return Some(formatted);
+    }
+
+    // GPSAltitudeRef is TIFF BYTE[1]. The parsers preserve BYTE values as
+    // binary, so resolve this one enum before the generic binary placeholder.
+    if tag_name.rsplit(':').next() == Some("GPSAltitudeRef")
+        && let TagValue::Binary(bytes) = value
+        && let [byte @ (0 | 1)] = bytes.as_slice()
+    {
+        return format_gps_reference(tag_name, &byte.to_string());
     }
 
     // Then try TIFF enum lookup for integer values
@@ -1016,6 +1032,20 @@ mod tests {
     }
 
     #[test]
+    fn aperture_value_uses_apex_conversion_in_all_cli_renderers() {
+        let stored = TagValue::new_rational(9515, 8133);
+        assert_eq!(format_tag_value("ExifIFD:ApertureValue", &stored), "1.5");
+        assert_eq!(
+            format_tag_value_short("ExifIFD:ApertureValue", &stored),
+            "1.5"
+        );
+        assert_eq!(
+            tag_value_to_json(Some("ExifIFD:ApertureValue"), &stored),
+            serde_json::Value::String("1.5".to_string())
+        );
+    }
+
+    #[test]
     fn test_format_tag_value_binary() {
         let value = TagValue::new_binary(vec![0x00, 0x01, 0x02, 0x03, 0x04]);
         assert_eq!(
@@ -1388,5 +1418,15 @@ mod tests {
 
         let output = ShortFormatter.format(&metadata, None);
         assert_eq!(output, format!("GPSLatitudeRef: {}\n", value));
+    }
+
+    #[test]
+    fn test_short_formatter_resolves_binary_gps_altitude_ref() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("GPS:GPSAltitudeRef", TagValue::Binary(vec![1]));
+
+        let output = ShortFormatter.format(&metadata, None);
+
+        assert_eq!(output, "GPSAltitudeRef: Below Sea Level\n");
     }
 }

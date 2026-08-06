@@ -32,6 +32,7 @@ const ORIENTATION: u16 = 0x0112;
 const X_RESOLUTION: u16 = 0x011A;
 const ARTIST: u16 = 0x013B;
 const GPS_DOP: u16 = 0x000B;
+const APERTURE_VALUE: u16 = 0x9202;
 const GPS_MEASURE_MODE: u16 = 0x000A;
 const GPS_DIFFERENTIAL: u16 = 0x001E;
 
@@ -148,6 +149,22 @@ fn jpeg_rational_tag_is_settable_from_a_decimal() {
 }
 
 #[test]
+fn jpeg_aperture_value_inverts_f_number_to_stored_apex() {
+    let file = write_to_copy(
+        "tests/fixtures/jpeg/tag_matrix_base.jpg",
+        ".jpg",
+        "-ApertureValue=1.5",
+    );
+    let entry = jpeg_entry(file.path(), IfdKind::ExifIfd, APERTURE_VALUE);
+    assert_eq!(entry.field_type, RATIONAL);
+    assert_eq!(entry.count, 1);
+    assert_eq!(
+        read_tag(file.path(), "ExifIFD:ApertureValue").as_deref(),
+        Some("1.5")
+    );
+}
+
+#[test]
 fn jpeg_datetime_tag_is_settable() {
     let file = write_to_copy(
         JPEG_FIXTURE,
@@ -166,6 +183,19 @@ fn jpeg_datetime_accepts_the_canonical_exif_form() {
         JPEG_FIXTURE,
         ".jpg",
         "-ExifIFD:DateTimeOriginal=2024:01:15 10:30:00",
+    );
+    assert_eq!(
+        read_tag(file.path(), "ExifIFD:DateTimeOriginal").as_deref(),
+        Some("2024:01:15 10:30:00"),
+    );
+}
+
+#[test]
+fn jpeg_datetime_canonical_form_creates_absent_tag_by_bare_name() {
+    let file = write_to_copy(
+        "tests/fixtures/jpeg/tag_matrix_base.jpg",
+        ".jpg",
+        "-DateTimeOriginal=2024:01:15 10:30:00",
     );
     assert_eq!(
         read_tag(file.path(), "ExifIFD:DateTimeOriginal").as_deref(),
