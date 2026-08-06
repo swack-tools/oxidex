@@ -11,6 +11,12 @@ on:
       - '.github/workflows/deploy-docs.yml'
   workflow_dispatch:
 
+# There is no value in publishing coverage and benchmark data for an obsolete
+# main commit. A newer main push supersedes the whole deployment run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 # This was one ~11-minute job that compiled Rust, ran benchmarks, built the
 # VitePress site and deployed to Pages on a single runner. It is now three
 # jobs, for three reasons:
