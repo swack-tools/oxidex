@@ -6512,6 +6512,19 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
     // XMP TAGS (100+ total)
     // ===========================
 
+    registry.insert(
+        "XMP:NativeDigest",
+        TagDescriptor::new(
+            TagId::new_named("XMP-exif:NativeDigest"),
+            "XMP:NativeDigest".to_string(),
+            FormatFamily::XMP,
+            true,
+            ValueType::String,
+            "Digest of native metadata".to_string(),
+            vec!["36864,40960;CE459FE772DF591DDF5F63CA3F2A087B".to_string()],
+        ),
+    );
+
     // --- Dublin Core (10 tags) ---
     registry.insert(
         "XMP:Creator",
@@ -7272,6 +7285,15 @@ mod tests {
         let tag = tag.unwrap();
         assert_eq!(tag.value_type(), ValueType::DateTime);
         assert_eq!(tag.format(), FormatFamily::XMP);
+    }
+
+    #[test]
+    fn test_xmp_native_digest_lookup() {
+        let tag =
+            get_tag_descriptor("XMP:NativeDigest").expect("XMP:NativeDigest should be registered");
+        assert_eq!(tag.format(), FormatFamily::XMP);
+        assert_eq!(tag.value_type(), ValueType::String);
+        assert!(tag.is_writable());
     }
 
     #[test]
