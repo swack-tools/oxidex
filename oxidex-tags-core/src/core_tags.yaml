@@ -1300,7 +1300,8 @@ tables:
         description: "ImageUniqueID tag"
       - id: "0xA430"
         name: "OwnerName"
-        writable: false
+        writable: true
+        type: string
         description: "OwnerName tag"
       - id: "0xA431"
         name: "SerialNumber"

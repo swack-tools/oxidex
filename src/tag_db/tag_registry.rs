@@ -7254,6 +7254,15 @@ mod tests {
         assert!(!tag.is_writable());
     }
 
+    /// ExifTool 13.59 Exif.pm 0xa430 declares OwnerName as a writable string.
+    #[test]
+    fn owner_name_is_a_writable_string() {
+        let tag = get_tag_descriptor("EXIF:OwnerName")
+            .expect("EXIF:OwnerName should be registered");
+        assert!(tag.is_writable());
+        assert_eq!(tag.value_type(), ValueType::String);
+    }
+
     /// ExifTool 13.59 Exif.pm 0x0154 has no `Writable` member, and its
     /// generated `-listx` contract therefore reports `writable='false'`.
     #[test]
