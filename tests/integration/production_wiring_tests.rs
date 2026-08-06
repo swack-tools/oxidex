@@ -786,7 +786,7 @@ fn read_metadata_routes_pcapng_idb_options() {
     let metadata = read_temp_file(&pcapng_with_idb_option_fixture(), ".pcapng");
 
     assert_eq!(
-        metadata.get("PCAPNG:InterfaceName"),
+        metadata.get("PCAPNG:DeviceName"),
         Some(&TagValue::String("eth0".to_string()))
     );
 }

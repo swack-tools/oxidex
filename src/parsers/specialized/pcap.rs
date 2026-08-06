@@ -740,10 +740,8 @@ impl PCAPParser {
                             .trim_matches('\0')
                             .to_string();
                         if !value.is_empty() {
-                            options.push((
-                                "PCAPNG:InterfaceName".to_string(),
-                                TagValue::String(value),
-                            ));
+                            options
+                                .push(("PCAPNG:DeviceName".to_string(), TagValue::String(value)));
                         }
                     }
                     PCAPNG_OPT_IF_DESCRIPTION => {
@@ -1318,7 +1316,7 @@ mod tests {
         let metadata = parser.parse(&reader).unwrap();
 
         assert_eq!(
-            metadata.get("PCAPNG:InterfaceName"),
+            metadata.get("PCAPNG:DeviceName"),
             Some(&TagValue::String("eth0".to_string()))
         );
     }
