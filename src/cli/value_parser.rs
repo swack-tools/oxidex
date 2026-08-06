@@ -73,6 +73,9 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
     let raw = match (tag_name, raw) {
         ("GPS:GPSMeasureMode", "2-Dimensional Measurement") => "2",
         ("GPS:GPSMeasureMode", "3-Dimensional Measurement") => "3",
+        ("GPS:GPSDestDistanceRef", "Kilometers") => "K",
+        ("GPS:GPSDestDistanceRef", "Miles") => "M",
+        ("GPS:GPSDestDistanceRef", "Nautical Miles") => "N",
         _ => raw,
     };
     let declared = get_tag_descriptor(tag_name)
@@ -738,6 +741,16 @@ mod tests {
         assert_eq!(
             parse("IFD0:Software", "1/250").unwrap(),
             TagValue::String("1/250".to_string())
+        );
+    }
+
+    #[test]
+    fn gps_dest_distance_ref_display_value_is_inverted_to_its_exif_code() {
+        // GPS.pm 0x0019 PrintConv maps raw ASCII "K" to "Kilometers".
+        // The CLI must serialize the code, not the display label.
+        assert_eq!(
+            parse("GPS:GPSDestDistanceRef", "Kilometers").unwrap(),
+            TagValue::String("K".to_string())
         );
     }
 
