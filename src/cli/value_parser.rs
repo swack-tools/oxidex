@@ -104,17 +104,15 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
 
     // GPS.pm 0x0000 applies `tr/./ /` before checking four int8u values.
     // Preserve those numeric components as bytes instead of the ASCII text.
-    if tag_name == "GPS:GPSVersionID" {
-        let bytes = raw
-            .split('.')
+    if tag_name.rsplit(':').next() == Some("GPSVersionID") {
+        let normalized = raw.replace('.', " ");
+        let bytes = normalized
+            .split_ascii_whitespace()
             .map(|part| part.parse::<u8>())
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|_| invalid(tag_name, "Expected four dot-separated unsigned bytes"))?;
+            .map_err(|_| invalid(tag_name, "Expected four unsigned bytes"))?;
         if bytes.len() != 4 {
-            return Err(invalid(
-                tag_name,
-                "Expected four dot-separated unsigned bytes",
-            ));
+            return Err(invalid(tag_name, "Expected four unsigned bytes"));
         }
         return Ok(TagValue::Binary(bytes));
     }
@@ -1186,11 +1184,19 @@ mod tests {
     }
 
     #[test]
-    fn gps_version_id_is_parsed_as_four_unsigned_bytes() {
-        assert_eq!(
-            parse("GPS:GPSVersionID", "2.3.0.0").unwrap(),
-            TagValue::Binary(vec![2, 3, 0, 0])
-        );
+    fn gps_version_id_accepts_exiftool_component_separators() {
+        for (tag, input) in [
+            ("GPS:GPSVersionID", "2.3.0.0"),
+            ("GPS:GPSVersionID", "2 3 0 0"),
+            ("GPS:GPSVersionID", "2. 3.0 0"),
+            ("GPSVersionID", "2.3.0.0"),
+        ] {
+            assert_eq!(
+                parse(tag, input).unwrap(),
+                TagValue::Binary(vec![2, 3, 0, 0]),
+                "{tag}={input}"
+            );
+        }
     }
 
     #[test]
