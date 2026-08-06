@@ -2952,6 +2952,9 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         // PhotoMechanic.pm:120-127 -- "0:6:5:003344" becomes
         // "Tagged:0, ColorClass:6, Rating:5, FrameNum:003344".
         "Prefs" => format_photomechanic_prefs(value),
+        // PhotoMechanic.pm:134-140 applies Exif::ExifTime to this XMP
+        // property, accepting the compact IPTC-style time it writes.
+        "TimeCreated" => format_photomechanic_time_created(value),
 
         // XMP.pm:1666-1677 -- crs:PerspectiveUpright names its own numbers.
         "PerspectiveUpright" => decode_perspective_upright(value),
@@ -3092,6 +3095,45 @@ fn format_photomechanic_prefs(value: &str) -> String {
         return value.to_string();
     }
     format!("Tagged:{tagged}, ColorClass:{color_class}, Rating:{rating}, FrameNum:{frame_num}")
+}
+
+/// PhotoMechanic.pm:138 uses `Exif::ExifTime` for `TimeCreated`.
+///
+/// Exif.pm:6085-6094 inserts separators into compact `HHMMSS` values and
+/// `+HHMM`/`-HHMM` offsets, while leaving every other spelling unchanged.
+fn format_photomechanic_time_created(value: &str) -> String {
+    // Exif.pm performs this replacement before testing for the compact form.
+    let value = value.trim_end_matches('\0').replace(' ', ":");
+    let bytes = value.as_bytes();
+    let mut formatted = if bytes.len() >= 6 && bytes[..6].iter().all(u8::is_ascii_digit) {
+        format!(
+            "{}:{}:{}{}",
+            &value[..2],
+            &value[2..4],
+            &value[4..6],
+            &value[6..]
+        )
+    } else {
+        value
+    };
+
+    // This runs after the time has been separated, so it applies equally to
+    // the compact form and `10:30:55+0500` after ExifTime replaces spaces.
+    if formatted.len() >= 5 {
+        let timezone_start = formatted.len() - 5;
+        let timezone = &formatted[timezone_start..];
+        if matches!(timezone.as_bytes()[0], b'+' | b'-')
+            && timezone.as_bytes()[1..].iter().all(u8::is_ascii_digit)
+        {
+            formatted = format!(
+                "{}{}:{}",
+                &formatted[..timezone_start],
+                &timezone[..3],
+                &timezone[3..]
+            );
+        }
+    }
+    formatted
 }
 
 /// `XMP.pm:1666-1677` -- the crs:PerspectiveUpright PrintConv, verbatim:
@@ -3789,6 +3831,36 @@ mod tests {
         // The first three captures are `\d+`; anything else is left alone.
         assert_eq!(format_xmp_value("XMP:Prefs", "0:6:5"), "0:6:5");
         assert_eq!(format_xmp_value("XMP:Prefs", "a:b:c:d"), "a:b:c:d");
+    }
+
+    #[test]
+    fn photomechanic_time_created_uses_exif_time_conversion() {
+        // PhotoMechanic.pm:134-140 -> Exif.pm:6085-6094 (ExifTime).
+        assert_eq!(
+            format_xmp_value("XMP:TimeCreated", "062751-0500"),
+            "06:27:51-05:00"
+        );
+        assert_eq!(
+            format_xmp_value("XMP:TimeCreated", "10 30 55+0500"),
+            "10:30:55+05:00"
+        );
+        assert_eq!(
+            format_xmp_value("XMP:TimeCreated", "not-a-time"),
+            "not-a-time"
+        );
+    }
+
+    #[test]
+    fn photomechanic_jpeg_time_created_matches_pinned_exiftool() {
+        let path =
+            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/PhotoMechanic.jpg");
+        let metadata =
+            crate::core::operations::read_metadata(path).expect("PhotoMechanic JPEG parses");
+
+        assert_eq!(
+            metadata.get_string("XMP:TimeCreated"),
+            Some("06:27:51-05:00")
+        );
     }
 
     #[test]

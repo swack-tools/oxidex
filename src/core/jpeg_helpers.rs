@@ -1544,8 +1544,7 @@ pub fn process_dji_dbg_segments(segments: &[Segment], metadata: &mut MetadataMap
     }
 }
 
-/// Reads `APP4:AmbientTemperature` and `APP4:RelativeHumidity` from DJI's
-/// ThermalParams2 record.
+/// Reads DJI's APP3/APP5 opaque thermal payloads and APP4 ThermalParams2.
 ///
 /// ExifTool selects `DJI::ThermalParams2` only for a DJI image when the APP4
 /// payload has its `2c 01 20 00` signature after either 32 or 64 bytes.  The
@@ -1557,6 +1556,53 @@ pub fn process_dji_dbg_segments(segments: &[Segment], metadata: &mut MetadataMap
 pub fn process_dji_thermal_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     if metadata.get_string("IFD0:Make") != Some("DJI") {
         return;
+    }
+
+    // JPEG.pm routes APP3 to Meta, Stim, and JPS before falling through to
+    // DJI's opaque ThermalData payload. The Mavic 2 fixture splits that one
+    // payload over eleven consecutive APP3 segments, exactly as ProcessJPEG
+    // reassembles multi-segment JPEG application data.
+    let is_other_app3_payload = |data: &[u8]| {
+        data.starts_with(b"Meta\0\0")
+            || data.starts_with(b"META\0\0")
+            || data.starts_with(b"Exif\0\0")
+            || data.starts_with(b"Stim\0")
+            || data.starts_with(b"_JPSJPS_")
+    };
+    let mut thermal_data_len = 0usize;
+    for (index, segment) in segments.iter().enumerate() {
+        if segment.marker != APP3_MARKER || is_other_app3_payload(segment.data) {
+            continue;
+        }
+        thermal_data_len += segment.data.len();
+        let run_continues = segments
+            .get(index + 1)
+            .is_some_and(|next| next.marker == APP3_MARKER && !is_other_app3_payload(next.data));
+        if !run_continues {
+            metadata.insert(
+                "APP3:ThermalData".to_string(),
+                binary_data_placeholder(thermal_data_len),
+            );
+            thermal_data_len = 0;
+        }
+    }
+
+    // APP5's earlier JPEG.pm routes (RMETA, SamsungUniqueID, and IJPEG) take
+    // precedence over DJI's fallback ThermalCalibration entry.
+    if !has_ijpeg_header(segments) {
+        for segment in segments.iter().filter(|segment| {
+            segment.marker == APP5_MARKER
+                && !segment.data.starts_with(b"RMETA\0")
+                && !segment
+                    .data
+                    .windows(b"ssuniqueid\0".len())
+                    .any(|w| w == b"ssuniqueid\0")
+        }) {
+            metadata.insert(
+                "APP5:ThermalCalibration".to_string(),
+                binary_data_placeholder(segment.data.len()),
+            );
+        }
     }
 
     let Some(table) = find_table("DJI", "ThermalParams2") else {
@@ -1768,6 +1814,31 @@ mod tests {
         assert_eq!(
             metadata.get_string("APP3:ThermalData"),
             Some("(Binary data 12 bytes, use -b option to extract)")
+        );
+    }
+
+    #[test]
+    fn dji_mavic2_thermal_app_payloads_match_pinned_exiftool() {
+        let path = std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/DJI/DJI_MAVIC2-ENTERPRISE-ADVANCED.jpg",
+        );
+        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+            .expect("read pinned DJI Mavic 2 Enterprise Advanced fixture");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse pinned DJI fixture");
+        let mut metadata = MetadataMap::new();
+
+        process_exif_segments(&segments, &reader, &mut metadata);
+        process_dji_thermal_segments(&segments, &mut metadata);
+
+        assert_eq!(metadata.get_string("IFD0:Make"), Some("DJI"));
+        assert_eq!(
+            metadata.get_string("APP3:ThermalData"),
+            Some("(Binary data 655360 bytes, use -b option to extract)")
+        );
+        assert_eq!(
+            metadata.get_string("APP5:ThermalCalibration"),
+            Some("(Binary data 23818 bytes, use -b option to extract)")
         );
     }
 

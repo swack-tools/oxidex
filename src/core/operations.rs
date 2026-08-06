@@ -853,6 +853,20 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
 
     // Process HDR and manufacturer-specific APP segments
     process_app3_segments(&segments, &mut metadata);
+    // Scalado's directory may span consecutive APP4 segments. Each starts
+    // with the same 16-byte SCALADO header, which is excluded before the
+    // remaining 12-byte records are reassembled.
+    let mut scalado_directory = Vec::new();
+    for segment in segments.iter().filter(|segment| segment.marker == 0xFFE4) {
+        if segment.data.starts_with(b"SCALADO\0") && segment.data.len() >= 16 {
+            scalado_directory.extend_from_slice(&segment.data[16..]);
+        }
+    }
+    for (key, value) in
+        crate::parsers::jpeg::app_parsers::parse_scalado_directory(&scalado_directory)
+    {
+        metadata.insert(key, value);
+    }
     // Samsung/HP/BenQ/GoPro/Rollei preview JPEG found by byte pattern
     // directly in APP2/APP3(/APP4) payload (ExifTool.pm:7997-8127).
     extract_direct_preview_image(&segments, &mut metadata);
@@ -1254,6 +1268,20 @@ mod tests {
             canonical_write_tag_name("IFD0:ModifyDate"),
             "IFD0:ModifyDate"
         );
+    }
+
+    #[test]
+    fn samsung_i8910_scalado_app4_matches_pinned_exiftool() {
+        let path = std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGT-i8910.jpg",
+        );
+        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+            .expect("read pinned Samsung GT-i8910 fixture");
+        let metadata = parse_jpeg_metadata(&reader).expect("parse pinned Samsung fixture");
+
+        assert_eq!(metadata.get_integer("APP4:PreviewImageWidth"), Some(816));
+        assert_eq!(metadata.get_integer("APP4:PreviewImageHeight"), Some(459));
+        assert_eq!(metadata.get_integer("APP4:PreviewQuality"), Some(85));
     }
 
     #[test]

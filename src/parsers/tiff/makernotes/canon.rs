@@ -1309,7 +1309,7 @@ const_decoder!(
     [
         (1, "sRGB"),
         (2, "Adobe RGB"),
-        (65535, "Uncalibrated"),
+        (65535, "n/a"),
     ]
 );
 
@@ -1347,6 +1347,36 @@ const_decoder!(
         (0xffff, "n/a"),
     ]
 );
+
+/// Canon.pm's `%pictureStyles` PrintConv leaves unknown numeric codes alone.
+/// The generic decoder's `Unknown (N)` fallback is useful for diagnostics but
+/// is not ExifTool display output for the three PictureStyle slot tags.
+fn print_canon_picture_style(value: u16) -> String {
+    match value {
+        0x0000 => "None",
+        0x0001 | 0x0081 => "Standard",
+        0x0002 | 0x0082 => "Portrait",
+        0x0003 => "High Saturation",
+        0x0004 => "Adobe RGB",
+        0x0005 => "Low Saturation",
+        0x0006 => "CM Set 1",
+        0x0007 => "CM Set 2",
+        0x0021 => "User Def. 1",
+        0x0022 => "User Def. 2",
+        0x0023 => "User Def. 3",
+        0x0041 => "PC 1",
+        0x0042 => "PC 2",
+        0x0043 => "PC 3",
+        0x0083 => "Landscape",
+        0x0084 => "Neutral",
+        0x0085 => "Faithful",
+        0x0086 => "Monochrome",
+        0x0087 => "Auto",
+        0x0088 => "Fine Detail",
+        _ => return value.to_string(),
+    }
+    .to_string()
+}
 
 // Canon tone curve decoder
 // Used for ToneCurve in ProcessingInfo
@@ -5494,7 +5524,6 @@ fn parse_canon_makernote_impl_located(
                     {
                         tags.insert("Canon:ColorTone".to_string(), print_parameter(color_tone));
                     }
-
                     // SRAWQuality (index 46). Canon.pm:2664 omits the -1 sentinel with
                     // `RawConv => '$val==-1 ? undef : $val'`; its PrintConv labels are
                     // deliberately limited to 0/1/2. Leave other values as ExifTool's
@@ -6104,6 +6133,22 @@ fn parse_canon_makernote_impl_located(
                 }
             }
 
+            // Canon.pm 0xb4 is one unsigned SHORT with the ColorSpace
+            // PrintConv (1=sRGB, 2=Adobe RGB, 65535=n/a).
+            CANON_COLOR_SPACE => {
+                if entry.field_type == 3
+                    && entry.value_count == 1
+                    && let Some(values) =
+                        extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                    && let Some(&value) = values.first()
+                {
+                    tags.insert(
+                        "Canon:ColorSpace".to_string(),
+                        COLOR_SPACE.decode(i32::from(value as u16)),
+                    );
+                }
+            }
+
             // The plain %Canon binary sub-tables -- CropInfo, AspectInfo, ModifiedInfo,
             // AFConfig, VignettingCorr, ContrastInfo, FaceDetect1/3, Ambience and the
             // rest. See `binary_tables` for the transcription, the ExifTool `Condition`
@@ -6191,6 +6236,42 @@ fn parse_canon_makernote_impl_located(
                 {
                     lens_info_serial =
                         Some(record[..5].iter().map(|b| format!("{:02x}", b)).collect());
+                }
+            }
+
+            // PictureStyleUserDef/PC are three independent PictureStyle
+            // values. Canon.pm uses an array PrintConv, rendered with `; `;
+            // it does not expose the raw parent tag itself.
+            0x4008 | 0x4009 => {
+                if entry.field_type == 3
+                    && entry.value_count == 3
+                    && let Some(values) =
+                        extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                    && values.len() == 3
+                {
+                    let name = if entry.tag_id == 0x4008 {
+                        "Canon:PictureStyleUserDef"
+                    } else {
+                        "Canon:PictureStylePC"
+                    };
+                    tags.insert(
+                        name.to_string(),
+                        values
+                            .iter()
+                            .map(|value| print_canon_picture_style(*value as u16))
+                            .collect::<Vec<_>>()
+                            .join("; "),
+                    );
+                }
+            }
+
+            // Canon.pm 0x4010 is a regular TIFF string. Empty is a real
+            // reported value, so unlike lens strings it must not be dropped.
+            0x4010 => {
+                if let Some(value) =
+                    extract_canon_string_with_base(entry, ifd_data, byte_order, base)
+                {
+                    tags.insert("Canon:CustomPictureStyleFileName".to_string(), value);
                 }
             }
 
@@ -7450,6 +7531,81 @@ mod tests {
         }
     }
 
+    /// Wraps one ASCII Canon MakerNote entry with an out-of-line value.
+    fn canon_makernote_with_ascii(tag: u16, value: &[u8]) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"Canon");
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&tag.to_le_bytes());
+        data.extend_from_slice(&2u16.to_le_bytes()); // ASCII
+        data.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        data.extend_from_slice(&23u32.to_le_bytes()); // 5-byte signature + one-entry IFD
+        data.extend_from_slice(&0u32.to_le_bytes()); // next IFD
+        data.extend_from_slice(value);
+        data
+    }
+
+    /// Wraps one inline SHORT Canon MakerNote value (the TIFF representation
+    /// for a one-element `int16u` tag).
+    fn canon_makernote_with_inline_short(tag: u16, value: u16) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"Canon");
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&tag.to_le_bytes());
+        data.extend_from_slice(&3u16.to_le_bytes()); // SHORT
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&value.to_le_bytes());
+        data.extend_from_slice(&[0, 0]);
+        data.extend_from_slice(&0u32.to_le_bytes()); // next IFD
+        data
+    }
+
+    #[test]
+    fn camera_settings_reports_sraw_quality_from_slot_46() {
+        // CanonRaw.cr3 stores 0 in CameraSettings key 46. Canon.pm maps that
+        // exact value to `n/a`; it is not an omitted/unknown setting.
+        let mut settings = vec![0i16; 47];
+        settings[0] = (settings.len() * 2) as i16;
+        settings[46] = 0;
+        let data = canon_makernote_with_short_array(CANON_CAMERA_SETTINGS, &settings);
+
+        let tags = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+        assert_eq!(tags.get("Canon:SRAWQuality"), Some(&"n/a".to_string()));
+    }
+
+    #[test]
+    fn picture_style_tags_use_exiftools_separate_table_rendering() {
+        let user_data = canon_makernote_with_short_array(0x4008, &[0x0087, 0x0087, 0x0087]);
+        let user_tags = parse_canon_makernote_impl(&user_data, ByteOrder::LittleEndian).unwrap();
+        assert_eq!(
+            user_tags.get("Canon:PictureStyleUserDef"),
+            Some(&"Auto; Auto; Auto".to_string())
+        );
+
+        let pc_data = canon_makernote_with_short_array(0x4009, &[0, 0, 0]);
+        let pc_tags = parse_canon_makernote_impl(&pc_data, ByteOrder::LittleEndian).unwrap();
+        assert_eq!(
+            pc_tags.get("Canon:PictureStylePC"),
+            Some(&"None; None; None".to_string())
+        );
+
+        let filename_data = canon_makernote_with_ascii(0x4010, b"CustomStyle\0");
+        let filename_tags =
+            parse_canon_makernote_impl(&filename_data, ByteOrder::LittleEndian).unwrap();
+        assert_eq!(
+            filename_tags.get("Canon:CustomPictureStyleFileName"),
+            Some(&"CustomStyle".to_string())
+        );
+    }
+
+    #[test]
+    fn color_space_uses_canon_pm_print_conversion() {
+        // Canon.pm 0xb4 maps 1 to sRGB (the CR2 wave-8 residual value).
+        let data = canon_makernote_with_inline_short(CANON_COLOR_SPACE, 1);
+        let tags = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+        assert_eq!(tags.get("Canon:ColorSpace"), Some(&"sRGB".to_string()));
+    }
+
     /// Byte-for-byte the CanonAFInfo record of
     /// `/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr2` (Canon EOS 350D), as
     /// dumped by `exiftool -v3`:
@@ -7817,7 +7973,7 @@ mod tests {
     fn test_decode_color_space() {
         assert_eq!(COLOR_SPACE.decode(1), "sRGB");
         assert_eq!(COLOR_SPACE.decode(2), "Adobe RGB");
-        assert_eq!(COLOR_SPACE.decode(65535), "Uncalibrated");
+        assert_eq!(COLOR_SPACE.decode(65535), "n/a");
         assert_eq!(COLOR_SPACE.decode(99), "Unknown (99)");
     }
 

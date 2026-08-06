@@ -4312,6 +4312,161 @@ fn parse_cr3_cmt3_makernotes(data: &[u8], metadata: &mut MetadataMap) {
     }
 }
 
+/// Traverse Canon's little-endian timed-metadata records and decode the
+/// embedded Canon MakerNotes in ExifInfo record types 8 and 9.
+///
+/// Canon.pm `ProcessCTMD` consumes a `[u32 size][u16 type]` header, skips the
+/// remaining six header bytes, then hands the payload to `ProcessExifInfo`.
+/// That stream consists of `[u32 size][u32 tag][payload]` records.  Only a
+/// 0x927c record is a Canon MakerNote; its payload is a complete TIFF and all
+/// TIFF offsets are relative to that payload's header.
+fn parse_cr3_ctmd_makernotes(ctmd: &[u8], metadata: &mut MetadataMap) {
+    let mut record_pos = 0usize;
+    while record_pos + 12 <= ctmd.len() {
+        let Some(record_size) = read_tiff_u32(&ctmd[record_pos..], ByteOrder::LittleEndian) else {
+            break;
+        };
+        let record_size = record_size as usize;
+        let record_end = match record_pos.checked_add(record_size) {
+            Some(end) if record_size >= 12 && end <= ctmd.len() => end,
+            _ => break,
+        };
+        let Some(record_type) = read_tiff_u16(&ctmd[record_pos + 4..], ByteOrder::LittleEndian)
+        else {
+            break;
+        };
+
+        if matches!(record_type, 8 | 9) {
+            let mut entry_pos = record_pos + 12;
+            while entry_pos + 8 <= record_end {
+                let Some(entry_size) = read_tiff_u32(&ctmd[entry_pos..], ByteOrder::LittleEndian)
+                else {
+                    break;
+                };
+                let entry_size = entry_size as usize;
+                let entry_end = match entry_pos.checked_add(entry_size) {
+                    Some(end) if entry_size >= 8 && end <= record_end => end,
+                    _ => break,
+                };
+                let Some(tag) = read_tiff_u32(&ctmd[entry_pos + 4..], ByteOrder::LittleEndian)
+                else {
+                    break;
+                };
+
+                if tag == 0x927c {
+                    let tiff = &ctmd[entry_pos + 8..entry_end];
+                    if (tiff.starts_with(b"II*\0") || tiff.starts_with(b"MM\0*"))
+                        && let Ok(byte_order) = detect_byte_order(tiff)
+                        && tiff.len() >= 8
+                    {
+                        let first_ifd_offset = read_u32(&tiff[4..8], byte_order) as usize;
+                        if first_ifd_offset < tiff.len() {
+                            let ctx = MakerNoteContext::in_tiff(
+                                tiff,
+                                first_ifd_offset,
+                                tiff.len() - first_ifd_offset,
+                                0,
+                            );
+                            let mut tags = std::collections::HashMap::new();
+                            if crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context(
+                                "Canon",
+                                None,
+                                &ctx,
+                                byte_order,
+                                &mut tags,
+                            )
+                            .is_ok()
+                            {
+                                for (name, value) in tags {
+                                    metadata.insert(name, TagValue::new_string(value));
+                                }
+                            }
+                        }
+                    }
+                }
+                entry_pos = entry_end;
+            }
+        }
+        record_pos = record_end;
+    }
+}
+
+/// Locate the sole timed-metadata sample for a CR3 `CTMD` sample description.
+///
+/// The `stsd` entry identifies the timed-metadata track. Its sibling `stsz`
+/// and `co64` boxes supply, respectively, the one sample's exact byte length
+/// and file offset. This intentionally accepts only the one-sample shape used
+/// by Canon still-image CR3 files; it does not guess from an `mdat` scan.
+fn find_cr3_ctmd_sample(data: &[u8]) -> Option<&[u8]> {
+    let mut cursor = 0usize;
+    while cursor + 4 <= data.len() {
+        let relative = data[cursor..]
+            .windows(4)
+            .position(|bytes| bytes == b"CTMD")?;
+        let type_pos = cursor + relative;
+        cursor = type_pos + 4;
+        if type_pos < 4 {
+            continue;
+        }
+
+        let entry_start = type_pos - 4;
+        let entry_size =
+            u32::from_be_bytes(data.get(entry_start..type_pos)?.try_into().ok()?) as usize;
+        let entry_end = match entry_start.checked_add(entry_size) {
+            Some(end) if entry_size >= 8 && end <= data.len() => end,
+            _ => continue,
+        };
+        let search_end = data[entry_end..]
+            .windows(4)
+            .position(|bytes| bytes == b"stsd")
+            .map(|offset| entry_end + offset.saturating_sub(4))
+            .unwrap_or(data.len());
+
+        let find_child = |kind: &[u8; 4]| {
+            let mut at = entry_end;
+            while at + 8 <= search_end {
+                let relative = data[at..search_end]
+                    .windows(4)
+                    .position(|bytes| bytes == kind)?;
+                let type_at = at + relative;
+                at = type_at + 4;
+                if type_at < 4 {
+                    continue;
+                }
+                let start = type_at - 4;
+                let size = u32::from_be_bytes(data.get(start..type_at)?.try_into().ok()?) as usize;
+                let end = start.checked_add(size)?;
+                if size >= 8 && end <= search_end {
+                    return Some(&data[type_at + 4..end]);
+                }
+            }
+            None
+        };
+
+        let Some(stsz) = find_child(b"stsz") else {
+            continue;
+        };
+        let Some(co64) = find_child(b"co64") else {
+            continue;
+        };
+        // FullBox flags (4), constant sample size (4), sample count (4).
+        let sample_size = u32::from_be_bytes(stsz.get(4..8)?.try_into().ok()?) as usize;
+        let sample_count = u32::from_be_bytes(stsz.get(8..12)?.try_into().ok()?);
+        // FullBox flags (4), entry count (4), first 64-bit offset (8).
+        let offset_count = u32::from_be_bytes(co64.get(4..8)?.try_into().ok()?);
+        let sample_offset = u64::from_be_bytes(co64.get(8..16)?.try_into().ok()?);
+        if sample_count != 1 || offset_count != 1 || sample_size == 0 {
+            continue;
+        }
+        let start = usize::try_from(sample_offset).ok()?;
+        let end = start.checked_add(sample_size)?;
+        if let Some(sample) = data.get(start..end) {
+            return Some(sample);
+        }
+    }
+    None
+}
+
 /// Read Canon's CR3 `CMP1` image-description atom.
 ///
 /// ExifTool 13.59 declares this as `Canon::CMP1`, a big-endian
@@ -4565,6 +4720,13 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
     // Canon.pm's THMB conversion removes its 16-byte atom header and exposes
     // the remainder as the Canon/MakerNotes thumbnail.
     parse_cr3_thmb(data, &mut metadata);
+
+    // Timed metadata is a sample stream, not an ISO box payload. Locate the
+    // CTMD track through its own `stsz`/`co64` sample tables, then apply
+    // Canon.pm's type-8/type-9 ExifInfo traversal.
+    if let Some(ctmd) = find_cr3_ctmd_sample(data) {
+        parse_cr3_ctmd_makernotes(ctmd, &mut metadata);
+    }
 
     // XMP lives in a top-level `uuid` box (QuickTime.pm's UUID-XMP condition
     // matches be7acfcb-97a9-42e8-9c71-999491e3afac), not in the Canon uuid box.
@@ -7340,6 +7502,59 @@ mod cr3_cmt1_artist_tests {
         assert_eq!(
             metadata.get("Canon:ThumbnailImage"),
             Some(&TagValue::new_binary(thumbnail.to_vec()))
+        );
+    }
+
+    #[test]
+    fn cr3_ctmd_sample_table_reaches_exifinfo_colordata_makernote() {
+        // Canon.pm ProcessCTMD gives type 8's payload to ProcessExifInfo.
+        // Its 0x927c entry is a complete TIFF whose offsets are relative to
+        // the TIFF header at the start of the entry payload.
+        let color_data_offset = 26u32;
+        let mut maker_note = vec![0u8; color_data_offset as usize + 1820 * 2];
+        maker_note[..8].copy_from_slice(b"II\x2a\0\x08\0\0\0");
+        maker_note[8..10].copy_from_slice(&1u16.to_le_bytes());
+        maker_note[10..12].copy_from_slice(&0x4001u16.to_le_bytes());
+        maker_note[12..14].copy_from_slice(&3u16.to_le_bytes());
+        maker_note[14..18].copy_from_slice(&1820u32.to_le_bytes());
+        maker_note[18..22].copy_from_slice(&color_data_offset.to_le_bytes());
+        maker_note[color_data_offset as usize..color_data_offset as usize + 2]
+            .copy_from_slice(&16i16.to_le_bytes());
+
+        let exif_info_size = 8 + maker_note.len();
+        let ctmd_size = 12 + exif_info_size;
+        let mut ctmd = Vec::with_capacity(ctmd_size);
+        ctmd.extend_from_slice(&(ctmd_size as u32).to_le_bytes());
+        ctmd.extend_from_slice(&8u16.to_le_bytes());
+        ctmd.extend_from_slice(&[0; 6]);
+        ctmd.extend_from_slice(&(exif_info_size as u32).to_le_bytes());
+        ctmd.extend_from_slice(&0x927cu32.to_le_bytes());
+        ctmd.extend_from_slice(&maker_note);
+
+        // This is the real Canon route, not a bare CTMD byte scan: the CTMD
+        // sample description is followed by its sibling stsz/co64 tables,
+        // which point to the timed-metadata payload in mdat.
+        let sample_offset = 8 + 20 + 24;
+        let mut cr3 = Vec::with_capacity(sample_offset + ctmd.len());
+        cr3.extend_from_slice(&8u32.to_be_bytes());
+        cr3.extend_from_slice(b"CTMD");
+        cr3.extend_from_slice(&20u32.to_be_bytes());
+        cr3.extend_from_slice(b"stsz");
+        cr3.extend_from_slice(&[0; 4]);
+        cr3.extend_from_slice(&(ctmd.len() as u32).to_be_bytes());
+        cr3.extend_from_slice(&1u32.to_be_bytes());
+        cr3.extend_from_slice(&24u32.to_be_bytes());
+        cr3.extend_from_slice(b"co64");
+        cr3.extend_from_slice(&[0; 4]);
+        cr3.extend_from_slice(&1u32.to_be_bytes());
+        cr3.extend_from_slice(&(sample_offset as u64).to_be_bytes());
+        cr3.extend_from_slice(&ctmd);
+
+        let metadata = parse_cr3(&cr3, RawFormat::CanonCR3).expect("synthetic CR3");
+
+        assert_eq!(
+            metadata.get("Canon:ColorDataVersion"),
+            Some(&TagValue::new_string("16 (M50)"))
         );
     }
 }

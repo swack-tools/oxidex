@@ -102,6 +102,12 @@ pub fn raw_bytes_to_tag_value(
                 return handle_short_type(bytes, value_count, byte_order);
             }
 
+            // SSHORT (type 8): signed 16-bit integers. ExifTool's
+            // TimeZoneOffset (0x882a) is a variable-count int16s field.
+            ExifType::SShort if bytes.len() >= 2 => {
+                return handle_sshort_type(bytes, value_count, byte_order);
+            }
+
             // LONG (type 4): unsigned 32-bit integers
             ExifType::Long if bytes.len() >= 4 => {
                 return handle_long_type(bytes, value_count, byte_order);
@@ -961,6 +967,25 @@ mod sample_format_tests {
     }
 }
 
+/// Handles SSHORT type fields (type 8) - signed 16-bit integers.
+fn handle_sshort_type(bytes: &[u8], value_count: u32, byte_order: ByteOrder) -> TagValue {
+    let read_i16 = |bytes: &[u8]| match byte_order {
+        ByteOrder::LittleEndian => i16::from_le_bytes([bytes[0], bytes[1]]),
+        ByteOrder::BigEndian => i16::from_be_bytes([bytes[0], bytes[1]]),
+    };
+
+    if value_count > 1 && bytes.len() >= value_count as usize * 2 {
+        let values = bytes[..value_count as usize * 2]
+            .chunks_exact(2)
+            .map(read_i16)
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>();
+        return TagValue::new_string(values.join(" "));
+    }
+
+    TagValue::new_integer(i64::from(read_i16(&bytes[..2])))
+}
+
 /// Handles LONG type fields (type 4).
 fn handle_long_type(bytes: &[u8], value_count: u32, byte_order: ByteOrder) -> TagValue {
     if value_count > 1 && bytes.len() >= (value_count as usize * 4) {
@@ -1152,6 +1177,30 @@ fn format_gps_numeric_value(value: f64) -> String {
 mod tests {
     use super::*;
     use crate::parsers::tiff::ifd_parser::ByteOrder;
+
+    #[test]
+    fn samsung_galaxy_a55_timezone_offset_matches_pinned_exiftool() {
+        let path = std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGalaxyA55_5G.jpg",
+        );
+        let metadata =
+            crate::core::operations::read_metadata(path).expect("Samsung Galaxy A55 parses");
+
+        assert_eq!(metadata.get_integer("ExifIFD:TimeZoneOffset"), Some(2));
+    }
+
+    #[test]
+    fn sshort_preserves_signed_values_and_byte_order() {
+        assert_eq!(
+            raw_bytes_to_tag_value(&[0xF8, 0xFF], 8, 1, 0x882A, ByteOrder::LittleEndian)
+                .as_integer(),
+            Some(-8)
+        );
+        assert_eq!(
+            raw_bytes_to_tag_value(&[0xFF, 0xF8], 8, 1, 0x882A, ByteOrder::BigEndian).as_integer(),
+            Some(-8)
+        );
+    }
 
     /// Helper function to create RATIONAL bytes (numerator/denominator)
     fn make_rational_bytes(numerator: u32, denominator: u32, byte_order: ByteOrder) -> Vec<u8> {

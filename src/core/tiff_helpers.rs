@@ -967,6 +967,15 @@ const TAG_THUMBNAIL_OFFSET: u16 = 0x0201;
 /// JPEGInterchangeFormatLength (0x0202) - ExifTool names this `ThumbnailLength` in IFD1.
 const TAG_THUMBNAIL_LENGTH: u16 = 0x0202;
 
+/// TIFF strip offset (0x0111).
+const TAG_STRIP_OFFSETS: u16 = 0x0111;
+
+/// TIFF rows per strip (0x0116).
+const TAG_ROWS_PER_STRIP: u16 = 0x0116;
+
+/// TIFF strip byte counts (0x0117).
+const TAG_STRIP_BYTE_COUNTS: u16 = 0x0117;
+
 /// Upper bound on a thumbnail we are willing to materialise, guarding against
 /// a corrupt length field causing a huge allocation. Real camera thumbnails
 /// are 5-30 KB; ExifTool's own EXIF segment ceiling is 64 KB.
@@ -1136,6 +1145,51 @@ pub fn parse_ifd1_thumbnail(
             TAG_THUMBNAIL_LENGTH => {
                 thumb_length =
                     read_unsigned_field(raw_bytes, *field_type, *value_count, *tag_id, byte_order);
+            }
+            TAG_STRIP_OFFSETS | TAG_ROWS_PER_STRIP | TAG_STRIP_BYTE_COUNTS => {
+                let tag_name = lookup_tag_name(*tag_id, "IFD1");
+                let base_name = tag_name
+                    .split_once(':')
+                    .map_or(tag_name.as_str(), |(_, name)| name);
+
+                // At family 0 the IFD0 copy has precedence over IFD1, as it
+                // does for Compression below. AppleQT-200.jpg has these only
+                // in IFD1, where ExifTool reports all three.
+                if metadata.get(&format!("IFD0:{base_name}")).is_none() {
+                    let tag_value = if *tag_id == TAG_STRIP_OFFSETS && *value_count == 1 {
+                        // TIFF stores IFD1 strip locations relative to the
+                        // APP1 TIFF header, while ExifTool reports the file
+                        // offset (AppleQT-200: 784 + 12 = 796).
+                        read_unsigned_field(
+                            raw_bytes,
+                            *field_type,
+                            *value_count,
+                            *tag_id,
+                            byte_order,
+                        )
+                        .and_then(|offset| offset.checked_add(tiff_base))
+                        .and_then(|offset| i64::try_from(offset).ok())
+                        .map(TagValue::new_integer)
+                        .unwrap_or_else(|| {
+                            raw_bytes_to_tag_value(
+                                raw_bytes,
+                                *field_type,
+                                *value_count,
+                                *tag_id,
+                                byte_order,
+                            )
+                        })
+                    } else {
+                        raw_bytes_to_tag_value(
+                            raw_bytes,
+                            *field_type,
+                            *value_count,
+                            *tag_id,
+                            byte_order,
+                        )
+                    };
+                    metadata.insert(tag_name, tag_value);
+                }
             }
             _ => {}
         }
@@ -1739,6 +1793,18 @@ mod ifd1_tests {
 
     const SHORT: u16 = 3;
     const LONG: u16 = 4;
+
+    #[test]
+    fn apple_qt_200_ifd1_strip_metadata_matches_pinned_exiftool() {
+        let path = std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Apple/AppleQT-200.jpg",
+        );
+        let metadata = crate::core::operations::read_metadata(path).expect("AppleQT-200 parses");
+
+        assert_eq!(metadata.get_integer("IFD1:StripOffsets"), Some(796));
+        assert_eq!(metadata.get_integer("IFD1:RowsPerStrip"), Some(60));
+        assert_eq!(metadata.get_integer("IFD1:StripByteCounts"), Some(9600));
+    }
 
     /// Builds a little-endian TIFF whose IFD0 is empty and whose IFD1 holds the
     /// supplied `(tag, type, value)` entries, followed by `thumb` bytes.
