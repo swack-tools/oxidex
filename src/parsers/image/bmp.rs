@@ -35,12 +35,26 @@ impl BMPParser {
         Ok((width, height))
     }
 
-    /// Reads the number of color planes from the DIB header (offset 26, 2 bytes).
+    /// Reads the number of color planes from the DIB header.
     pub fn read_planes(reader: &dyn FileReader) -> Result<u16> {
-        if reader.size() < 28 {
+        if reader.size() < 18 {
             return Ok(0);
         }
-        let planes = reader.read(26, 2)?;
+
+        let dib_header = reader.read(14, 4)?;
+        let dib_header_size = EndianReader::little_endian(dib_header)
+            .u32_at(0)
+            .unwrap_or(0);
+        let offset = if matches!(dib_header_size, 12 | 16 | 64) {
+            22
+        } else {
+            26
+        };
+        if reader.size() < offset + 2 {
+            return Ok(0);
+        }
+
+        let planes = reader.read(offset, 2)?;
         let endian_reader = EndianReader::little_endian(planes);
         Ok(endian_reader.u16_at(0).unwrap_or(0))
     }
