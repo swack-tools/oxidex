@@ -345,6 +345,22 @@ pub(crate) fn tag_value_to_field_for_key(
             "SubjectArea requires 2 to 4 unsigned short values",
         ));
     }
+    if key.rsplit(':').next() == Some("SubjectLocation") {
+        if let TagValue::Array(values) = value
+            && let [TagValue::Integer(x), TagValue::Integer(y)] = values.as_slice()
+            && (0..=u16::MAX as i64).contains(x)
+            && (0..=u16::MAX as i64).contains(y)
+        {
+            let mut bytes = (u16::try_from(*x).expect("range checked"))
+                .to_ne_bytes()
+                .to_vec();
+            bytes.extend_from_slice(&(u16::try_from(*y).expect("range checked")).to_ne_bytes());
+            return Ok((3, 2, bytes));
+        }
+        return Err(ExifToolError::parse_error(
+            "SubjectLocation requires exactly two unsigned short values",
+        ));
+    }
     let hint = match key.rsplit(':').next() {
         Some("ShutterSpeedValue" | "BrightnessValue") => Some(10),
         Some("GPSVersionID") => Some(1),
@@ -2406,6 +2422,17 @@ mod tests {
             ]
             .concat()
         );
+    }
+
+    #[test]
+    fn subject_location_serializes_as_exactly_two_unsigned_shorts() {
+        let value = TagValue::new_array(vec![TagValue::new_integer(3), TagValue::new_integer(4)]);
+        let (field_type, count, bytes) =
+            tag_value_to_field_for_key("EXIF:SubjectLocation", &value, Some(3)).unwrap();
+
+        assert_eq!(field_type, 3);
+        assert_eq!(count, 2);
+        assert_eq!(bytes, [3_u16.to_ne_bytes(), 4_u16.to_ne_bytes()].concat());
     }
 
     #[test]

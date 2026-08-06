@@ -216,6 +216,23 @@ pub fn convert_tag_value_to_entry(
                 bytes,
             )))
         }
+        TagValue::Array(values) if tag_id == 0xa214 => {
+            let [TagValue::Integer(x), TagValue::Integer(y)] = values.as_slice() else {
+                return Ok(None);
+            };
+            let (Ok(x), Ok(y)) = (u16::try_from(*x), u16::try_from(*y)) else {
+                return Ok(None);
+            };
+            let mut bytes = match byte_order {
+                ByteOrder::LittleEndian => x.to_le_bytes().to_vec(),
+                ByteOrder::BigEndian => x.to_be_bytes().to_vec(),
+            };
+            bytes.extend_from_slice(&match byte_order {
+                ByteOrder::LittleEndian => y.to_le_bytes(),
+                ByteOrder::BigEndian => y.to_be_bytes(),
+            });
+            Ok(Some(IfdEntryData::new(tag_id, ExifType::Short, 2, bytes)))
+        }
         TagValue::Array(_) => Ok(None), // Arrays not yet supported in TIFF writer
     }
 }
