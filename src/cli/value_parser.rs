@@ -647,6 +647,20 @@ fn parse_float(tag_name: &str, raw: &str) -> Result<f64> {
 /// `CheckValue`'s `rational` branch (`Writer.pl:6888-6903`) followed by
 /// `Rationalize` (`Writer.pl:5200-5228`).
 fn parse_rational(tag_name: &str, raw: &str) -> Result<TagValue> {
+    // Exif.pm 13.59 0x9102 declares CompressedBitsPerPixel as rational64u.
+    // Writer.pl rejects negative numerators for this unsigned rational instead
+    // of silently serializing the value as rational64s. Preserve negative zero,
+    // which ExifTool accepts and stores as zero.
+    if tag_name == "ExifIFD:CompressedBitsPerPixel" {
+        let negative_fraction = as_fraction(raw).is_some_and(|(numerator, _)| numerator < 0);
+        let negative_float = as_float_text(raw)
+            .and_then(|text| text.parse::<f64>().ok())
+            .is_some_and(|value| value < 0.0);
+        if negative_fraction || negative_float {
+            return Err(invalid(tag_name, "Must be an unsigned rational"));
+        }
+    }
+
     // Exif.pm 13.59 0x9202 stores APEX but accepts the displayed F-number:
     // ValueConvInv => '$val>0 ? 2*log($val)/log(2) : 0'. Apply this before
     // the generic rational cases because ExifTool rejects fractions, `inf`
@@ -1160,6 +1174,28 @@ mod tests {
             TagValue::Rational {
                 numerator: 0,
                 denominator: 0
+            }
+        );
+    }
+
+    #[test]
+    fn compressed_bits_per_pixel_rejects_negative_unsigned_rationals() {
+        let tag = "ExifIFD:CompressedBitsPerPixel";
+
+        assert!(parse(tag, "-1").is_err());
+        assert!(parse(tag, "-1/2").is_err());
+        assert_eq!(
+            parse(tag, "-0").unwrap(),
+            TagValue::Rational {
+                numerator: 0,
+                denominator: 1,
+            }
+        );
+        assert_eq!(
+            parse(tag, "1.5").unwrap(),
+            TagValue::Rational {
+                numerator: 3,
+                denominator: 2,
             }
         );
     }
