@@ -341,6 +341,8 @@ pub(crate) fn tag_value_to_field_for_key(
             | "ExifIFD:ISOSpeedLatitudeyyy"
             | "EXIF:ISOSpeedLatitudezzz"
             | "ExifIFD:ISOSpeedLatitudezzz"
+            | "EXIF:RecommendedExposureIndex"
+            | "ExifIFD:RecommendedExposureIndex"
     ) {
         return tag_value_to_field(value, Some(4));
     }
