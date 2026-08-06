@@ -84,6 +84,12 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         "WhiteBalance" => "EXIF:WhiteBalance",
         "SceneCaptureType" => "EXIF:SceneCaptureType",
         "Saturation" => "EXIF:Saturation",
+        "FlashpixVersion" => "EXIF:FlashpixVersion",
+        "CompressedBitsPerPixel" => "EXIF:CompressedBitsPerPixel",
+        "RelatedSoundFile" => "EXIF:RelatedSoundFile",
+        "SubjectDistanceRange" => "EXIF:SubjectDistanceRange",
+        "ComponentsConfiguration" => "EXIF:ComponentsConfiguration",
+        "SecurityClassification" => "EXIF:SecurityClassification",
         "MeteringMode" => "EXIF:MeteringMode",
         "ShutterSpeedValue" => "ExifIFD:ShutterSpeedValue",
         "ApertureValue" => "EXIF:ApertureValue",
@@ -91,6 +97,53 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         "MakerNoteSafety" => "EXIF:MakerNoteSafety",
         _ => tag_name,
     };
+
+    let leaf = declared_tag_name.rsplit(':').next();
+
+    if leaf == Some("FlashpixVersion") {
+        let encoded: String = raw.chars().filter(|character| *character != '.').collect();
+        if encoded.len() != 4 || !encoded.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(invalid(tag_name, "Error converting value (PrintConvInv)"));
+        }
+        return Ok(TagValue::Binary(encoded.into_bytes()));
+    }
+
+    if leaf == Some("ComponentsConfiguration") {
+        return parse_components_configuration(tag_name, raw);
+    }
+
+    if leaf == Some("SubjectDistanceRange") {
+        let value = match raw.trim().to_ascii_lowercase().as_str() {
+            "unknown" => 0,
+            "macro" => 1,
+            "close" => 2,
+            "distant" => 3,
+            _ => {
+                return Err(invalid(
+                    tag_name,
+                    "Can't convert SubjectDistanceRange value (not in PrintConv)",
+                ));
+            }
+        };
+        return Ok(TagValue::Integer(value));
+    }
+
+    if leaf == Some("SecurityClassification") {
+        let value = match raw.trim().to_ascii_lowercase().as_str() {
+            "top secret" => "T",
+            "secret" => "S",
+            "confidential" => "C",
+            "restricted" => "R",
+            "unclassified" => "U",
+            _ => {
+                return Err(invalid(
+                    tag_name,
+                    "Can't convert SecurityClassification value (not in PrintConv)",
+                ));
+            }
+        };
+        return Ok(TagValue::String(value.to_string()));
+    }
 
     // GPS.pm 0x001c applies EncodeExifText as its RawConvInv. With the default
     // CharsetEXIF this is the eight-byte ASCII identifier followed by the
@@ -455,6 +508,51 @@ fn is_ascii_word(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
+/// Inverts Exif.pm 0x9101's four-component PrintConv into stored bytes.
+fn parse_components_configuration(tag_name: &str, raw: &str) -> Result<TagValue> {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    let mut tokens = raw
+        .split_whitespace()
+        .map(|token| token.trim_matches(','))
+        .collect::<Vec<_>>();
+    let compact;
+    if tokens.len() == 1 {
+        static COMPONENT: OnceLock<Regex> = OnceLock::new();
+        let component =
+            COMPONENT.get_or_init(|| Regex::new(r"Y|Cb|Cr|R|G|B").expect("valid regex"));
+        compact = component
+            .find_iter(tokens[0])
+            .map(|value| value.as_str())
+            .collect();
+        tokens = compact;
+    }
+    if tokens.len() > 4 {
+        return Err(invalid(tag_name, "Too many values specified (4 required)"));
+    }
+    let mut bytes = Vec::with_capacity(4);
+    for token in tokens {
+        bytes.push(match token.to_ascii_lowercase().as_str() {
+            "-" => 0,
+            "y" => 1,
+            "cb" => 2,
+            "cr" => 3,
+            "r" => 4,
+            "g" => 5,
+            "b" => 6,
+            _ => {
+                return Err(invalid(
+                    tag_name,
+                    "Can't convert ComponentsConfiguration value (not in PrintConv)",
+                ));
+            }
+        });
+    }
+    bytes.resize(4, 0);
+    Ok(TagValue::Binary(bytes))
+}
+
 /// Exif.pm's `ConvertParameter` inverse conversion used by Sharpness (0xa40a).
 ///
 /// `ConvertParameter` recognizes the first letter at a word boundary rather
@@ -702,6 +800,15 @@ fn parse_float(tag_name: &str, raw: &str) -> Result<f64> {
 /// `CheckValue`'s `rational` branch (`Writer.pl:6888-6903`) followed by
 /// `Rationalize` (`Writer.pl:5200-5228`).
 fn parse_rational(tag_name: &str, raw: &str) -> Result<TagValue> {
+    if tag_name.rsplit(':').next() == Some("CompressedBitsPerPixel") {
+        let negative_fraction = as_fraction(raw).is_some_and(|(numerator, _)| numerator < 0);
+        let negative_float = as_float_text(raw)
+            .and_then(|text| text.parse::<f64>().ok())
+            .is_some_and(|value| value < 0.0);
+        if negative_fraction || negative_float {
+            return Err(invalid(tag_name, "Must be an unsigned rational"));
+        }
+    }
     // Exif.pm 13.59 0x9202 stores APEX but accepts the displayed F-number:
     // ValueConvInv => '$val>0 ? 2*log($val)/log(2) : 0'. Apply this before
     // the generic rational cases because ExifTool rejects fractions, `inf`
@@ -1835,5 +1942,65 @@ mod tests {
         );
         assert!(parse("EXIF:SubjectLocation", "3").is_err());
         assert!(parse("EXIF:SubjectLocation", "3 4 5").is_err());
+    }
+
+    #[test]
+    fn exif_write_parity_addendum_matches_pinned_inverse_rules() {
+        for tag in [
+            "FlashpixVersion",
+            "EXIF:FlashpixVersion",
+            "ExifIFD:FlashpixVersion",
+        ] {
+            assert_eq!(
+                parse(tag, "01.00").unwrap(),
+                TagValue::Binary(b"0100".to_vec())
+            );
+            assert!(parse(tag, "1.00").is_err());
+        }
+        for tag in [
+            "CompressedBitsPerPixel",
+            "EXIF:CompressedBitsPerPixel",
+            "ExifIFD:CompressedBitsPerPixel",
+        ] {
+            assert!(parse(tag, "-1/2").is_err(), "{tag}");
+            assert_eq!(
+                parse(tag, "1.5").unwrap(),
+                TagValue::Rational {
+                    numerator: 3,
+                    denominator: 2
+                }
+            );
+        }
+        for tag in [
+            "SubjectDistanceRange",
+            "EXIF:SubjectDistanceRange",
+            "ExifIFD:SubjectDistanceRange",
+        ] {
+            assert_eq!(parse(tag, " close ").unwrap(), TagValue::Integer(2));
+            assert!(parse(tag, "2").is_err());
+        }
+        for tag in [
+            "SecurityClassification",
+            "EXIF:SecurityClassification",
+            "ExifIFD:SecurityClassification",
+        ] {
+            assert_eq!(parse(tag, "top secret").unwrap(), TagValue::new_string("T"));
+            assert!(parse(tag, "T").is_err());
+        }
+        for tag in [
+            "ComponentsConfiguration",
+            "EXIF:ComponentsConfiguration",
+            "ExifIFD:ComponentsConfiguration",
+        ] {
+            assert_eq!(
+                parse(tag, "YCbCr").unwrap(),
+                TagValue::Binary(vec![1, 2, 3, 0])
+            );
+            assert_eq!(parse(tag, "invalid").unwrap(), TagValue::Binary(vec![0; 4]));
+        }
+        assert_eq!(
+            parse("RelatedSoundFile", "related.wav").unwrap(),
+            TagValue::new_string("related.wav")
+        );
     }
 }

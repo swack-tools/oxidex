@@ -522,6 +522,12 @@ fn canonical_write_tag_name(tag_name: &str) -> &str {
         "WhiteBalance" => "ExifIFD:WhiteBalance",
         "SceneCaptureType" => "ExifIFD:SceneCaptureType",
         "Saturation" => "ExifIFD:Saturation",
+        "FlashpixVersion" => "ExifIFD:FlashpixVersion",
+        "CompressedBitsPerPixel" => "ExifIFD:CompressedBitsPerPixel",
+        "RelatedSoundFile" => "ExifIFD:RelatedSoundFile",
+        "SubjectDistanceRange" => "ExifIFD:SubjectDistanceRange",
+        "ComponentsConfiguration" => "ExifIFD:ComponentsConfiguration",
+        "SecurityClassification" => "ExifIFD:SecurityClassification",
         "MeteringMode" => "ExifIFD:MeteringMode",
         "ShutterSpeedValue" => "ExifIFD:ShutterSpeedValue",
         "Flash" => "ExifIFD:Flash",
@@ -1226,6 +1232,24 @@ mod tests {
     fn bare_flash_write_targets_exif_ifd() {
         assert_eq!(canonical_write_tag_name("Flash"), "ExifIFD:Flash");
         assert_eq!(canonical_write_tag_name("ExifIFD:Flash"), "ExifIFD:Flash");
+    }
+
+    #[test]
+    fn write_parity_addendum_bare_names_target_exif_ifd() {
+        for name in [
+            "FlashpixVersion",
+            "CompressedBitsPerPixel",
+            "RelatedSoundFile",
+            "SubjectDistanceRange",
+            "ComponentsConfiguration",
+            "SecurityClassification",
+        ] {
+            assert_eq!(
+                canonical_write_tag_name(name),
+                format!("ExifIFD:{name}"),
+                "{name}"
+            );
+        }
     }
 
     #[test]
