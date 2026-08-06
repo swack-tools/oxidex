@@ -1004,6 +1004,10 @@ tables:
         name: "FlashEnergy"
         writable: false
         description: "FlashEnergy tag"
+      - id: "0x920C"
+        name: "SpatialFrequencyResponse"
+        writable: false
+        description: "SpatialFrequencyResponse tag"
       - id: "0x9211"
         name: "ImageNumber"
         writable: false
