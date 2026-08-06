@@ -85,8 +85,8 @@ pub fn raw_bytes_to_tag_value(
     // Exif.pm 0x9287 (`LearningOptOutIn`) is a variable-length int16u
     // sequence. The first value is a pair count; each following usage/choice
     // value alternates between the two exact PrintConv maps.
-    if tag_id == 0x9287 && field_type == 3 {
-        if let Some(value) = format_learning_opt_out_in(bytes, value_count, byte_order) {
+    if tag_id == 0x9287 && matches!(field_type, 3 | 4) {
+        if let Some(value) = format_learning_opt_out_in(bytes, byte_order) {
             return TagValue::new_string(value);
         }
     }
@@ -313,13 +313,8 @@ pub(crate) fn apply_tile_offsets_value_conv(tag_id: u16, value: TagValue) -> Tag
     value
 }
 
-fn format_learning_opt_out_in(
-    bytes: &[u8],
-    value_count: u32,
-    byte_order: ByteOrder,
-) -> Option<String> {
-    let count = usize::try_from(value_count).ok()?;
-    let bytes = bytes.get(..count.checked_mul(2)?)?;
+fn format_learning_opt_out_in(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
+    let bytes = bytes.get(..bytes.len().checked_sub(bytes.len() % 2)?)?;
     let values: Vec<u16> = bytes
         .chunks_exact(2)
         .map(|pair| match byte_order {

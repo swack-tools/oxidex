@@ -1946,6 +1946,25 @@ mod tests {
     }
 
     #[test]
+    fn samsung_sdc130z_learning_opt_out_uses_exif_int16u_override() {
+        let path = std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungSDC-130Z.jpg",
+        );
+        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+            .expect("read pinned Samsung SDC-130Z fixture");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse pinned Samsung SDC-130Z segments");
+        let mut metadata = MetadataMap::new();
+
+        process_exif_segments(&segments, &reader, &mut metadata);
+
+        assert_eq!(
+            metadata.get_string("ExifIFD:LearningOptOutIn"),
+            Some("Unknown(65535)")
+        );
+    }
+
+    #[test]
     fn process_ricoh_rmeta_extracts_azimuth() {
         // Minimal standard RMETA directory with one tag. Section sizes include
         // the two-byte size field, matching Ricoh.pm's ProcessRicohRMETA.

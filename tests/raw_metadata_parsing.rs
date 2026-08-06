@@ -245,6 +245,19 @@ fn canon_cr3_ctmd_timestamp_uses_canon_pm_packed_datetime() {
 }
 
 #[test]
+fn canon_cr3_af_points_selected_uses_eos_afinfo2_bitset() {
+    // Canon.pm AFInfo2 key 13 reads ceil(NumAFPoints / 16) int16 words after
+    // AFPointsInFocus, but only for EOS bodies. CanonRaw.cr3 is an EOS fixture
+    // whose selected-points bitset selects point 0, which ExifTool renders as "0".
+    let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
+        .expect("pinned Canon CR3 fixture must be available");
+    let metadata = parse_raw_metadata(&data, RawFormat::CanonCR3)
+        .expect("pinned Canon CR3 fixture should parse");
+
+    assert_eq!(metadata.get_string("Canon:AFPointsSelected"), Some("0"));
+}
+
+#[test]
 fn test_parse_minimal_tiff_based_raw() {
     // Create a minimal valid TIFF header
     // II (little-endian) + 0x002A (magic 42) + offset to IFD (8)

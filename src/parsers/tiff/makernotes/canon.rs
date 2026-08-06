@@ -6534,7 +6534,9 @@ fn parse_canon_makernote_impl_located(
 
                     // Keys 8+ are variable-length: AFAreaWidths[n], AFAreaHeights[n],
                     // AFAreaXPositions[n], AFAreaYPositions[n], then AFPointsInFocus as
-                    // ceil(n/16) 16-bit words.
+                    // ceil(n/16) 16-bit words. EOS bodies carry AFPointsSelected in the
+                    // next same-sized bitset; other bodies use that slot for an unknown
+                    // record with one additional word (Canon.pm AFInfo2 keys 13-14).
                     if num_points > 0 {
                         let n = num_points as usize;
                         let widths_start = AF_INFO2_VARIABLE_START;
@@ -6572,6 +6574,17 @@ fn parse_canon_makernote_impl_located(
                             tags.insert(
                                 "Canon:AFPointsInFocus".to_string(),
                                 decode_bits_16(&array[focus_start..focus_start + focus_words]),
+                            );
+                        }
+                        let selected_start = focus_start + focus_words;
+                        if camera_info_model.contains("EOS")
+                            && array.len() >= selected_start + focus_words
+                        {
+                            tags.insert(
+                                "Canon:AFPointsSelected".to_string(),
+                                decode_bits_16(
+                                    &array[selected_start..selected_start + focus_words],
+                                ),
                             );
                         }
                     }
