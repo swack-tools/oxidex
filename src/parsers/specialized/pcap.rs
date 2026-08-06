@@ -741,7 +741,7 @@ impl PCAPParser {
                             .to_string();
                         if !value.is_empty() {
                             options.push((
-                                "PCAPNG:InterfaceName".to_string(),
+                                "PCAPNG:DeviceName".to_string(),
                                 TagValue::String(value),
                             ));
                         }
@@ -1319,7 +1319,7 @@ mod tests {
         let metadata = parser.parse(&reader).unwrap();
 
         assert_eq!(
-            metadata.get("PCAPNG:InterfaceName"),
+            metadata.get("PCAPNG:DeviceName"),
             Some(&TagValue::String("eth0".to_string()))
         );
     }

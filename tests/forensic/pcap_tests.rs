@@ -504,7 +504,7 @@ fn test_pcapng_wifi() {
 /// Test 9: PCAP-NG Interface Name option parsing
 ///
 /// Verifies:
-/// - InterfaceName option is correctly extracted from IDB
+/// - DeviceName option (if_name, opt code 2) is correctly extracted from IDB
 /// - Option parsing handles padded strings correctly
 #[test]
 fn test_pcapng_interface_name() {
@@ -514,11 +514,11 @@ fn test_pcapng_interface_name() {
     let parser = PCAPParser;
     let metadata = parser.parse(&reader).expect("Failed to parse PCAP-NG");
 
-    // Verify interface name is extracted
+    // Verify interface name is extracted under ExifTool's tag name, DeviceName
     assert_eq!(
-        metadata.get("PCAPNG:InterfaceName"),
+        metadata.get("PCAPNG:DeviceName"),
         Some(&TagValue::String("eth0".to_string())),
-        "InterfaceName should be extracted from IDB options"
+        "DeviceName should be extracted from IDB options"
     );
 }
 
