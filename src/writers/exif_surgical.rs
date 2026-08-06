@@ -2103,6 +2103,29 @@ mod tests {
     }
 
     #[test]
+    fn plan_writes_exif_version_as_undefined_four_byte_payload() {
+        let scan = ExifScan {
+            byte_order: ByteOrder::LittleEndian,
+            entries: Vec::new(),
+            thumbnail: None,
+            makernote_offset: None,
+        };
+        let original = MetadataMap::new();
+        let mut desired = MetadataMap::new();
+        desired.insert("ExifIFD:ExifVersion", TagValue::Binary(b"0231".to_vec()));
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let version = plan
+            .exif_ifd
+            .iter()
+            .find(|entry| entry.tag_id == 0x9000)
+            .unwrap();
+        assert_eq!(version.field_type, 7);
+        assert_eq!(version.count, 4);
+        assert_eq!(version.value, b"0231");
+    }
+
+    #[test]
     fn plan_rejects_gps_version_id_with_wrong_byte_count() {
         let scan = ExifScan {
             byte_order: ByteOrder::LittleEndian,

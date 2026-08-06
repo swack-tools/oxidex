@@ -155,6 +155,24 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         return Ok(TagValue::Binary(encoded));
     }
 
+    // Exif.pm 13.59 0x9000 writes ExifVersion as four UNDEFINED ASCII bytes.
+    // PrintConvInv accepts dotted versions, removes their dots, and left-pads
+    // a three-digit input (for example, `2.31` becomes `0231`).
+    if declared_tag_name.rsplit(':').next() == Some("ExifVersion") {
+        let digits = raw.replace('.', "");
+        let digits = match digits.len() {
+            4 if digits.bytes().all(|byte| byte.is_ascii_digit()) => digits,
+            3 if digits.bytes().all(|byte| byte.is_ascii_digit()) => format!("0{digits}"),
+            _ => {
+                return Err(invalid(
+                    tag_name,
+                    "ExifVersion requires three or four digits, optionally separated by dots",
+                ));
+            }
+        };
+        return Ok(TagValue::Binary(digits.into_bytes()));
+    }
+
     // Exif.pm 0xa300 is writable undef. PrintConvInv accepts the three labels,
     // then ValueConvInv converts a decimal byte to its one-byte TIFF payload.
     if declared_tag_name.rsplit(':').next() == Some("FileSource") {
@@ -2072,6 +2090,17 @@ mod tests {
                 parse("IFD0:ProfileEmbedPolicy", label).unwrap(),
                 TagValue::Integer(code)
             );
+        }
+    }
+
+    #[test]
+    fn exif_version_writes_four_undefined_ascii_digits() {
+        // ExifTool 13.59 Exif.pm 0x9000 accepts dotted versions, removes the
+        // dots, and left-pads three digits before writing `undef` bytes.
+        for tag in ["ExifVersion", "EXIF:ExifVersion", "ExifIFD:ExifVersion"] {
+            assert_eq!(parse(tag, "2.31").unwrap(), TagValue::Binary(b"0231".to_vec()));
+            assert_eq!(parse(tag, "0231").unwrap(), TagValue::Binary(b"0231".to_vec()));
+            assert!(parse(tag, "23").is_err());
         }
     }
 }
