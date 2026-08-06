@@ -710,6 +710,11 @@ tables:
         name: "RenderingIntent"
         writable: false
         description: "RenderingIntent tag"
+      - id: "0x1000"
+        name: "RelatedImageFileFormat"
+        writable: true
+        type: string
+        description: "RelatedImageFileFormat tag"
       - id: "0x1001"
         name: "RelatedImageWidth"
         writable: false
