@@ -9,6 +9,7 @@ use crate::exiftool_tables::{DecodedValue, decode_binary_table, find_table};
 use crate::io::ByteOrder;
 
 const DSS_SIGNATURE: &[u8] = b"\x02dss";
+const DS2_SIGNATURE: &[u8] = b"\x03ds2";
 const DSS_PROCESS_PROBE_LEN: u64 = 69;
 const DSS_EXIFTOOL_READ_LEN: u64 = 898;
 
@@ -23,7 +24,7 @@ pub fn parse_dss_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
     let data = reader
         .read(0, read_len)
         .map_err(|error| error.to_string())?;
-    if !data.starts_with(DSS_SIGNATURE) {
+    if !data.starts_with(DSS_SIGNATURE) && !data.starts_with(DS2_SIGNATURE) {
         return Err("invalid DSS signature".to_string());
     }
 

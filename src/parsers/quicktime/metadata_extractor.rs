@@ -480,8 +480,12 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
     // Extract media data offset and size from mdat atom
     // We need to track position in the original file
     let mut offset = 0u64;
+    let mut total_media_data_size = 0u64;
+    let mut found_media_data = false;
     for atom in root_atoms {
         if atom.atom_type.matches("mdat") {
+            found_media_data = true;
+            total_media_data_size += atom.data.len() as u64;
             metadata.insert(
                 "QuickTime:MediaDataSize".to_string(),
                 TagValue::Integer(atom.data.len() as i64),
@@ -493,6 +497,9 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
         }
         // Calculate atom size (header + data length), accounting for extended headers
         offset += atom.header_size as u64 + atom.data.len() as u64;
+    }
+    if found_media_data {
+        metadata.set_value_form("QuickTime:MediaDataSize", total_media_data_size.to_string());
     }
 }
 
