@@ -5,7 +5,9 @@
 
 use super::{FileReader, MetadataMap, TagValue};
 use crate::core::operations_helpers::read_u32;
-use crate::core::tag_conversion::{gps_coordinate_degrees, raw_bytes_to_tag_value};
+use crate::core::tag_conversion::{
+    apply_tile_offsets_value_conv, gps_coordinate_degrees, raw_bytes_to_tag_value,
+};
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::tiff::geotiff_parser;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, find_entry_position, parse_ifd};
@@ -121,6 +123,56 @@ mod print_im_dispatch_tests {
 
         assert_eq!(metadata.get_string("PrintIM:PrintIMVersion"), Some("0250"));
         assert!(metadata.get("IFD0:PrintIM").is_none());
+    }
+}
+
+#[cfg(test)]
+mod tile_offsets_tests {
+    use super::*;
+    use crate::test_support::TestReader;
+
+    fn push_entry(out: &mut Vec<u8>, tag: u16, field_type: u16, count: u32, value: u32) {
+        out.extend_from_slice(&tag.to_le_bytes());
+        out.extend_from_slice(&field_type.to_le_bytes());
+        out.extend_from_slice(&count.to_le_bytes());
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    #[test]
+    fn long_tile_offsets_use_exiftools_valueconv_binary_reference() {
+        // ExifTool 13.59 Exif.pm 0x144:
+        // ValueConv => 'length($val) > 32 ? \\$val : $val'.  Ten four-digit
+        // offsets produce a 49-byte, space-separated value string.
+        let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+        tiff.extend_from_slice(&4_u16.to_le_bytes());
+        push_entry(&mut tiff, 0x0100, 4, 1, 10);
+        push_entry(&mut tiff, 0x0101, 4, 1, 10);
+        push_entry(&mut tiff, 0x0144, 4, 10, 62);
+        push_entry(&mut tiff, 0x0145, 4, 10, 102);
+        tiff.extend_from_slice(&0_u32.to_le_bytes());
+        for offset in 1000_u32..1010 {
+            tiff.extend_from_slice(&offset.to_le_bytes());
+        }
+        for _ in 0..10 {
+            tiff.extend_from_slice(&1_u32.to_le_bytes());
+        }
+
+        let reader = TestReader::new(tiff);
+        let mut metadata = MetadataMap::new();
+        parse_ifd_chain(&reader, 8, ByteOrder::LittleEndian, &mut metadata).unwrap();
+
+        assert_eq!(
+            metadata.get("IFD0:TileOffsets"),
+            Some(&TagValue::Binary(
+                b"1000 1001 1002 1003 1004 1005 1006 1007 1008 1009".to_vec()
+            ))
+        );
+        assert_eq!(
+            metadata
+                .get("IFD0:TileByteCounts")
+                .and_then(TagValue::as_string),
+            Some("1 1 1 1 1 1 1 1 1 1")
+        );
     }
 }
 
@@ -466,6 +518,7 @@ fn process_tiff_ifd_tags<'a>(
             }
             (_, value) => value,
         };
+        let tag_value = apply_tile_offsets_value_conv(*tag_id, tag_value);
         metadata.insert(tag_name, tag_value);
     }
 

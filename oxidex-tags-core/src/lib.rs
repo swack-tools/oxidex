@@ -113,4 +113,21 @@ mod tests {
             .expect("SubSecTimeDigitized (0x9292) should exist");
         assert_eq!(subsec_time_digitized.name, "SubSecTimeDigitized");
     }
+
+    /// ExifTool 13.59 Exif.pm 0x0143 declares TileLength as a protected,
+    /// writable `int32u`. The generated tag model does not represent the
+    /// protected flag, but it must preserve the writable/type contract.
+    #[test]
+    fn tile_length_matches_pinned_exiftool_contract() {
+        let exif = get_tag_table("Exif::Main").expect("Exif::Main table should exist");
+        let tile_length = exif
+            .tags
+            .iter()
+            .find(|tag| tag.id == "0x0143")
+            .expect("TileLength (0x0143) should exist");
+
+        assert_eq!(tile_length.name, "TileLength");
+        assert!(tile_length.writable);
+        assert_eq!(tile_length.type_name.as_deref(), Some("int32u"));
+    }
 }

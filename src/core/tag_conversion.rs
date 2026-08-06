@@ -122,6 +122,23 @@ pub fn raw_bytes_to_tag_value(
     heuristic_bytes_to_tag_value(bytes, byte_order)
 }
 
+/// Applies ExifTool 13.59's exact `TileOffsets` ValueConv.
+///
+/// Exif.pm's 0x0144 entry returns a scalar reference when the already-decoded,
+/// space-separated value is longer than 32 bytes. ExifTool consequently treats
+/// that string as binary data: normal output shows its binary placeholder and
+/// `-b` returns the ASCII offset list itself.
+pub(crate) fn apply_tile_offsets_value_conv(tag_id: u16, value: TagValue) -> TagValue {
+    if tag_id == 0x0144
+        && let TagValue::String(text) = &value
+        && text.len() > 32
+    {
+        return TagValue::new_binary(text.as_bytes().to_vec());
+    }
+
+    value
+}
+
 fn format_learning_opt_out_in(
     bytes: &[u8],
     value_count: u32,
