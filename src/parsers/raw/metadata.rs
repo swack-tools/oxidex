@@ -1229,13 +1229,22 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         "EXIF:PreviewImageLength".to_string(),
                         TagValue::new_integer(length as i64),
                     );
-                    metadata.insert(
-                        "EXIF:PreviewImage".to_string(),
-                        TagValue::new_string(format!(
-                            "(Binary data {} bytes, use -b option to extract)",
-                            length
-                        )),
-                    );
+                    // ExifTool validates this DataTag as a JPEG before publishing it.
+                    // CanonRaw.cr2 deliberately points at 26 bytes of dummy text: the
+                    // Start/Length tags remain visible, but PreviewImage is suppressed
+                    // with "not a valid JPEG image". Keep real bytes for valid previews
+                    // so the normal renderer supplies the placeholder and `-b` can
+                    // extract them.
+                    if let Some(start) = cr2_preview_image_start
+                        && let Some(end) = start.checked_add(length)
+                        && let Some(preview) = data.get(start as usize..end as usize)
+                        && preview.starts_with(b"\xff\xd8\xff")
+                    {
+                        metadata.insert(
+                            "EXIF:PreviewImage".to_string(),
+                            TagValue::new_binary(preview.to_vec()),
+                        );
+                    }
                 }
             }
             extract_cr2_tags(&mut metadata);
@@ -8579,6 +8588,58 @@ mod rational_array_tests {
             Some(&TagValue::new_string("[Red,Green][Green,Blue]".to_string()))
         );
         assert!(!metadata.contains_key("IFD0:CR2CFAPattern"));
+    }
+
+    fn synthetic_cr2_with_preview(preview: &[u8]) -> Vec<u8> {
+        let preview_start = 46u32;
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II\x2a\x00");
+        data.extend_from_slice(&16u32.to_le_bytes());
+        data.extend_from_slice(b"CR\x02\x00");
+        data.extend_from_slice(&0u32.to_le_bytes());
+
+        data.extend_from_slice(&2u16.to_le_bytes());
+        for (tag, value) in [
+            (0x0111u16, preview_start),
+            (0x0117, u32::try_from(preview.len()).expect("preview fits")),
+        ] {
+            data.extend_from_slice(&tag.to_le_bytes());
+            data.extend_from_slice(&4u16.to_le_bytes());
+            data.extend_from_slice(&1u32.to_le_bytes());
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        data.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(data.len(), preview_start as usize);
+        data.extend_from_slice(preview);
+        data
+    }
+
+    #[test]
+    fn cr2_preview_image_is_published_only_for_jpeg_data() {
+        let invalid = b"not a valid JPEG preview";
+        let metadata = parse_raw_metadata(
+            &synthetic_cr2_with_preview(invalid),
+            RawFormat::CanonCR2,
+        )
+        .expect("valid synthetic CR2");
+        assert_eq!(
+            metadata.get("EXIF:PreviewImageStart"),
+            Some(&TagValue::new_integer(46))
+        );
+        assert_eq!(
+            metadata.get("EXIF:PreviewImageLength"),
+            Some(&TagValue::new_integer(invalid.len() as i64))
+        );
+        assert!(!metadata.contains_key("EXIF:PreviewImage"));
+
+        let jpeg = b"\xff\xd8\xff\xd9";
+        let metadata =
+            parse_raw_metadata(&synthetic_cr2_with_preview(jpeg), RawFormat::CanonCR2)
+                .expect("valid synthetic CR2");
+        assert_eq!(
+            metadata.get("EXIF:PreviewImage"),
+            Some(&TagValue::new_binary(jpeg.to_vec()))
+        );
     }
 
     /// A single rational must keep its existing representation -- the fix is
