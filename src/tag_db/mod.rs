@@ -237,6 +237,7 @@ pub fn lookup_tag_name(tag_id: u16, ifd_name: &str) -> String {
     let tag_id = match (format_family, tag_id) {
         (FormatFamily::EXIF, 0x920C) => 0xA20C,
         (FormatFamily::EXIF, 0x920D) => 0xA20D,
+        (FormatFamily::EXIF, 0x9215) => 0xA215,
         _ => tag_id,
     };
 
@@ -287,6 +288,11 @@ mod tests {
             "ExifIFD:SpatialFrequencyResponse"
         );
         assert_eq!(lookup_tag_name(0x920D, "ExifIFD"), "ExifIFD:Noise");
+    }
+
+    #[test]
+    fn legacy_exif_exposure_index_id_resolves_to_standard_name() {
+        assert_eq!(lookup_tag_name(0x9215, "ExifIFD"), "ExifIFD:ExposureIndex");
     }
 
     #[test]
