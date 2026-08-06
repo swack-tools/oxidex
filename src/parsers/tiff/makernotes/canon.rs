@@ -4084,6 +4084,22 @@ fn decode_file_info_enum(name: &str, value: i64) -> String {
         .unwrap_or_else(|| format!("Unknown ({value})"))
 }
 
+/// RFLensType additions from the repository's pinned ExifTool 13.59 Canon.pm
+/// (lines 7131-7139). The checked-in generated table is stamped 13.30, so keep
+/// this release delta explicit until the generated tables are regenerated as a
+/// whole rather than editing a generated artifact by hand.
+fn decode_rf_lens_type_1359(value: u16) -> String {
+    match value {
+        324 => "Canon RF-S 14-30mm F4-6.3 IS STM PZ".to_string(),
+        328 => "Canon RF 85mm F1.4 L VCM".to_string(),
+        329 => "Canon RF 20-50mm F4 L IS USM PZ".to_string(),
+        330 => "Canon RF 45mm F1.2 STM".to_string(),
+        331 => "Canon RF 7-14mm F2.8-3.5 L FISHEYE STM".to_string(),
+        332 => "Canon RF 14mm F1.4 L VCM".to_string(),
+        _ => decode_file_info_enum("RFLensType", i64::from(value)),
+    }
+}
+
 /// Decodes the AF points in focus bitfield to a human-readable string.
 ///
 /// Canon stores which AF points were used for focus as a bitmask, where
@@ -5940,7 +5956,7 @@ fn parse_canon_makernote_impl_located(
                     if let Some(&rf_lens_type) = array.get(FILE_INFO_RF_LENS_TYPE) {
                         tags.insert(
                             "Canon:RFLensType".to_string(),
-                            decode_file_info_enum("RFLensType", i64::from(rf_lens_type as u16)),
+                            decode_rf_lens_type_1359(rf_lens_type as u16),
                         );
                     }
 
@@ -7647,6 +7663,29 @@ mod tests {
                 case.expected,
                 "{}",
                 case.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_file_info_rf_lens_type_uses_pinned_1359_enum_and_unsigned_fallback() {
+        let cases = [
+            (324u16, "Canon RF-S 14-30mm F4-6.3 IS STM PZ"),
+            (0x8001u16, "Unknown (32769)"),
+        ];
+
+        for (raw, expected) in cases {
+            let mut file_info = vec![0i16; 62];
+            file_info[0] = 124;
+            file_info[FILE_INFO_RF_LENS_TYPE] = raw as i16;
+
+            let data = canon_makernote_with_short_array(CANON_FILE_INFO, &file_info);
+            let tags = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+
+            assert_eq!(
+                tags.get("Canon:RFLensType").map(String::as_str),
+                Some(expected),
+                "raw RFLensType {raw}"
             );
         }
     }
