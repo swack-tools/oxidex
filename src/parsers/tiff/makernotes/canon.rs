@@ -788,6 +788,12 @@ const CANON_AF_INFO2: u16 = 0x0026;
 /// 'Image::ExifTool::Canon::AFInfo2' }`. A second MakerNote tag carrying the very same
 /// `%Canon::AFInfo2` record, used by the G1XmkII and the EOS M bodies after it.
 const CANON_AF_INFO3: u16 = 0x003C;
+/// ExifTool Canon.pm:1757 -- `0x38 => { Name => 'BatteryType', Writable =>
+/// 'undef', Condition => '$count == 76', RawConv =>
+/// '$val=~/^.{4}([^\0]+)/s ? $1 : undef' }`: the first four bytes are a
+/// length/reserved field ExifTool discards, and the battery model is the
+/// NUL-terminated ASCII string starting at byte 4.
+const CANON_BATTERY_TYPE: u16 = 0x0038;
 const CANON_FILE_INFO: u16 = 0x0093;
 const CANON_LENS_MODEL: u16 = 0x0095;
 const CANON_INTERNAL_SERIAL_NUMBER: u16 = 0x0096;
@@ -6147,6 +6153,29 @@ fn parse_canon_makernote_impl_located(
                 }
             }
 
+            // BatteryType (tag 0x0038). Canon.pm:1757 -- `Condition => '$count == 76'`,
+            // `RawConv => '$val=~/^.{4}([^\0]+)/s ? $1 : undef'`: skip the leading 4
+            // bytes (a length/reserved field ExifTool discards) and take the ASCII run
+            // up to (not including) the first NUL.
+            CANON_BATTERY_TYPE => {
+                if entry.value_count == 76 {
+                    if let Some(bytes) = extract_canon_bytes_with_base(entry, ifd_data, base) {
+                        if let Some(rest) = bytes.get(4..) {
+                            let text = match rest.iter().position(|&b| b == 0) {
+                                Some(nul) => &rest[..nul],
+                                None => rest,
+                            };
+                            if !text.is_empty() {
+                                tags.insert(
+                                    "Canon:BatteryType".to_string(),
+                                    String::from_utf8_lossy(text).to_string(),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
             // AFInfo (tag 0x0012) - autofocus information used by older Canon models
             CANON_AF_INFO => {
                 if let Some(array) =
@@ -7003,6 +7032,35 @@ mod tests {
             result.get("Canon:LensModel"),
             Some(&"Canon EF 24-70mm f/2.8L II USM".to_string())
         );
+    }
+
+    /// `BatteryType` (tag 0x0038). Canon.pm:1757 -- `Condition => '$count ==
+    /// 76'`, `RawConv => '$val=~/^.{4}([^\0]+)/s ? $1 : undef'`: the first 4
+    /// bytes are a length/reserved field ExifTool discards; the value is the
+    /// NUL-terminated ASCII run starting at byte 4. Bytes taken from
+    /// CanonRaw.cr3 (EOS M50), where ExifTool reports `BatteryType: LP-E12`.
+    #[test]
+    fn test_parse_battery_type_tag() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"Canon");
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+
+        // BatteryType tag (0x0038)
+        data.extend_from_slice(&[0x38, 0x00]); // Tag
+        data.extend_from_slice(&[0x07, 0x00]); // Type: UNDEFINED
+        data.extend_from_slice(&[0x4C, 0x00, 0x00, 0x00]); // Count: 76 bytes
+        data.extend_from_slice(&[0x17, 0x00, 0x00, 0x00]); // Offset: 23
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
+
+        // 4 reserved bytes + "LP-E12" + NUL padding to 76 bytes total
+        let mut record = vec![0x4c, 0x00, 0x00, 0x00];
+        record.extend_from_slice(b"LP-E12");
+        record.resize(76, 0);
+        data.extend_from_slice(&record);
+
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+
+        assert_eq!(result.get("Canon:BatteryType"), Some(&"LP-E12".to_string()));
     }
 
     /// Canon's int32 BinaryData sub-tables arrive as TIFF LONG records. This is the
