@@ -22,6 +22,12 @@ const REPO_SLUG = (args && args.repoSlug) || 'swack-tools/oxidex'
 const COMMIT_AUTHOR_NAME = (args && args.commitAuthorName) || 'swackhamer'
 const COMMIT_AUTHOR_EMAIL = (args && args.commitAuthorEmail) || '619624+swackhamer@users.noreply.github.com'
 const GIT_AUTHOR_OVERRIDE = `-c user.name="${COMMIT_AUTHOR_NAME}" -c user.email="${COMMIT_AUTHOR_EMAIL}"`
+// The origin remote is configured over SSH, which has proven intermittently unreliable
+// in this environment (git push/ls-remote/fetch hang or time out unpredictably, even
+// though the SSH connection itself authenticates fine). HTTPS via gh's stored
+// credentials has been reliable every time it's been tried, so every push/pull/fetch
+// below targets this explicit HTTPS URL instead of the (SSH) "origin" remote name.
+const REPO_HTTPS_URL = `https://github.com/${REPO_SLUG}.git`
 const SHARD_THRESHOLD = 25
 const MAX_SHARDS = 6
 const MAX_DRY_ROUNDS = 3
@@ -88,7 +94,7 @@ const COMPARISON_REPORT_SCHEMA = {
 function findGapsPrompt() {
   return `Run these steps in order from the oxidex repository at "${REPO_PATH}":\n` +
     `1. cd "${REPO_PATH}"\n` +
-    `2. git checkout main && git pull --ff-only origin main -- this must succeed cleanly (fast-forward only); if it fails, STOP and report the failure in your summary rather than proceeding on a stale or diverged tree.\n` +
+    `2. git checkout main && git pull --ff-only ${REPO_HTTPS_URL} main -- this must succeed cleanly (fast-forward only); if it fails, STOP and report the failure in your summary rather than proceeding on a stale or diverged tree. Use this explicit HTTPS URL, not "origin" (the origin remote is SSH-based and has proven intermittently unreliable in this environment -- if a git network command hangs for more than ~30s even against this HTTPS URL, Ctrl-C/retry once before concluding it's a real failure).\n` +
     `3. cat .exiftool-version -- confirm it reads "13.59". If it does not, STOP and report the mismatch; do not grade against a different pinned version.\n` +
     `4. EXIFTOOL_CACHE_DIR=${CACHE_DIR} just compare-exiftool-full -- this builds tag-comparison, downloads/reuses the cached pinned ExifTool 13.59 release plus its test corpus and camera samples, and writes comparison.json in the repo root.\n\n` +
     `Read comparison.json and return its contents as your structured output verbatim: the by_format map keyed by format name, each with missing_in_oxidex, value_differences, and regressions. If a format's missing_in_oxidex or value_differences array is large (roughly 50+ entries), truncate it to a representative sample and set the corresponding missing_in_oxidex_truncated / value_differences_truncated to true and missing_in_oxidex_total_count / value_differences_total_count to the real total count -- don't silently truncate without those markers. Also run \`pwd\` and \`git branch --show-current\` and report them as repo_path and repo_branch. Do not modify or commit anything -- this is a read-only discovery step (aside from the git pull in step 2).`
@@ -212,7 +218,7 @@ function fixPrompt(group, workItem) {
     `git ${GIT_AUTHOR_OVERRIDE} commit -m "..." -- the repo owner's default git config email is private/unverified on ` +
     `GitHub and a plain "git commit" will produce a commit that GitHub REJECTS on push (GH007) with no useful error until ` +
     `then, so you MUST pass that -c override on the commit command itself, not via "git config". Then:\n` +
-    `5. git push -u origin "$(git branch --show-current)"\n` +
+    `5. git push ${REPO_HTTPS_URL} "$(git branch --show-current):$(git branch --show-current)" -- use this explicit HTTPS URL, not "git push -u origin ..." (the origin remote is SSH-based and has proven intermittently unreliable in this environment; HTTPS via gh's stored credentials has been reliable every time). If it hangs more than ~30s, ctrl-c and retry once before treating it as a real failure.\n` +
     `6. gh pr create --repo ${REPO_SLUG} --base main --head "$(git branch --show-current)" ` +
     `--title "fix(${group.format.toLowerCase()}): ${workItem.label || 'coverage'} tag fixes" ` +
     `--body "Automated ExifTool tag-coverage fix, format ${group.format}${workItem.label ? ` (scope: ${workItem.label})` : ''}. Verified in an isolated worktree: before/after tag-comparison run against pinned ExifTool 13.59 confirmed a strict reduction in missing/differing tags with zero regressions, plus cargo test --workspace passing. Please review before merging -- this was not merged automatically." ` +
@@ -239,20 +245,20 @@ function mergePrompt(result) {
   // same location discipline still matters here.
   return `Before doing anything else, run \`pwd\` and \`git branch --show-current\`. If you are not in exactly "${REPO_PATH}" on branch "main", run \`cd "${REPO_PATH}" && git checkout main\` first and re-verify -- never run any command in this task from any other directory (e.g. a fix-agent's leftover worktree).\n\n` +
     `Once confirmed, you're in the oxidex repository's shared main tree. A fix for format "${result.format}" was verified in an isolated worktree (before/after tag-comparison against pinned ExifTool 13.59 confirmed a strict reduction in missing/differing tags with zero regressions, plus cargo test --workspace) and is open as PR ${result.prUrl}.\n\n` +
-    `1. git pull --ff-only origin main\n` +
+    `1. git pull --ff-only ${REPO_HTTPS_URL} main -- use this explicit HTTPS URL, not "origin" (the origin remote is SSH-based and has proven intermittently unreliable here; if it hangs more than ~30s, ctrl-c and retry once).\n` +
     `2. gh pr checks ${result.prUrl} -- if this reports any check with a FAILURE status (not merely pending or absent -- this repo may have no CI configured on these branches, which is fine, don't block on that), STOP: do not merge, report merged: false, and explain which check failed in summary.\n` +
     `3. gh pr merge ${result.prUrl} --squash --delete-branch\n` +
-    `4. git pull --ff-only origin main\n` +
+    `4. git pull --ff-only ${REPO_HTTPS_URL} main\n` +
     `5. cargo build --release --bin oxidex && cargo build --release --bin tag-comparison --features tag-comparison-binary\n` +
     `6. cargo test --workspace\n` +
     `7. EXIFTOOL_CACHE_DIR=${CACHE_DIR} ./target/release/tag-comparison --exiftool ${CACHE_DIR}/exiftool/exiftool --samples ${CACHE_DIR}/combined-samples --format ${result.format} -o /tmp/tagcmp-${result.format}-postmerge.json --markdown-dir /tmp/tagcmp-${result.format}-postmerge-md, and confirm the regressions array for "${result.format}" in that file is empty.\n\n` +
     `If step 6 or 7 fails -- this fix, or its interaction with whatever else has landed on main since it was verified, broke something for real -- do NOT force-push, reset, or rewrite history on this shared branch (other rounds may already be building on top of it). Instead, revert it the safe way, through another reviewable PR:\n` +
     `  a. git checkout -b "revert-${result.format.toLowerCase()}-$(git rev-parse --short HEAD)"\n` +
     `  b. git ${GIT_AUTHOR_OVERRIDE} revert --no-edit HEAD\n` +
-    `  c. git push -u origin "$(git branch --show-current)"\n` +
+    `  c. git push ${REPO_HTTPS_URL} "$(git branch --show-current):$(git branch --show-current)"\n` +
     `  d. gh pr create --repo ${REPO_SLUG} --base main --head "$(git branch --show-current)" --title "revert: ${result.format} coverage fix (broke tests/regressed post-merge)" --body "Reverts the squash-merge of ${result.prUrl} -- it passed isolated-worktree verification but broke cargo test --workspace or introduced a real regression once merged onto current main. See round log for details."\n` +
     `  e. gh pr merge --squash --delete-branch "$(git branch --show-current)"\n` +
-    `  f. git checkout main && git pull --ff-only origin main\n` +
+    `  f. git checkout main && git pull --ff-only ${REPO_HTTPS_URL} main\n` +
     `Report merged: false with a summary explaining exactly what broke and that it was reverted via a follow-up PR.\n\n` +
     `If steps 6 and 7 both pass, the merge stands. Report: format ("${result.format}"), prUrl ("${result.prUrl}"), merged (true only if the squash-merge is confirmed regression-free by both checks above), summary.`
 }
@@ -281,7 +287,7 @@ const AUDIT_SCHEMA = {
 function auditPrompt(roundLog) {
   return `You are reviewing the execution log of an automated ExifTool tag-coverage-gap-closing loop that just ran against the oxidex repository at "${REPO_PATH}". Here is the round-by-round summary as JSON:\n\n${JSON.stringify(roundLog, null, 2)}\n\n` +
     `Look for concrete, actionable inefficiency patterns in how the loop itself operates -- NOT in the tag fixes -- for example: formats repeatedly failing verification across multiple rounds (suggesting the fix prompt or sharding gave a worker an impossible or wrongly-scoped task), shards that turned out to overlap and collide, rounds that closed suspiciously few gaps relative to workers spawned, or any sign from the summaries that workers cut corners (approximated a conversion instead of omitting it, skipped the pinned-oracle check, etc -- these would violate AGENTS.md).\n\n` +
-    `If you find something concrete and actionable that you can fix in the workflow script itself, read "${REPO_PATH}/.claude/workflows/exiftool-coverage-loop.js", make the targeted improvement on a fresh branch off current main (cd "${REPO_PATH}" && git checkout main && git pull --ff-only origin main && git checkout -b <branch>), commit using git ${GIT_AUTHOR_OVERRIDE} commit -m "..." (the repo owner's default git config email is private/unverified on GitHub, so a plain "git commit" produces a commit GitHub REJECTS on push (GH007) -- pass that -c override on the commit command itself, never via "git config"), push, and open a PR (gh pr create --repo ${REPO_SLUG} --base main --head <branch> --title "chore(coverage-loop): <short description>" --body "<what was inefficient and why this fixes it>") explaining the inefficiency and the fix. If nothing concrete and actionable turned up, do NOT open a PR -- just report your findings, even if the finding is "no significant inefficiency observed."\n\n` +
+    `If you find something concrete and actionable that you can fix in the workflow script itself, read "${REPO_PATH}/.claude/workflows/exiftool-coverage-loop.js", make the targeted improvement on a fresh branch off current main (cd "${REPO_PATH}" && git checkout main && git pull --ff-only ${REPO_HTTPS_URL} main && git checkout -b <branch>), commit using git ${GIT_AUTHOR_OVERRIDE} commit -m "..." (the repo owner's default git config email is private/unverified on GitHub, so a plain "git commit" produces a commit GitHub REJECTS on push (GH007) -- pass that -c override on the commit command itself, never via "git config"), push with \`git push ${REPO_HTTPS_URL} "<branch>:<branch>"\` (use this explicit HTTPS URL, not "origin" -- the origin remote is SSH-based and has proven intermittently unreliable here), and open a PR (gh pr create --repo ${REPO_SLUG} --base main --head <branch> --title "chore(coverage-loop): <short description>" --body "<what was inefficient and why this fixes it>") explaining the inefficiency and the fix. If nothing concrete and actionable turned up, do NOT open a PR -- just report your findings, even if the finding is "no significant inefficiency observed."\n\n` +
     `Report: findings (array of {description, severity: "low"|"medium"|"high"}), prOpened (bool), prUrl (string or null), summary (one paragraph).`
 }
 
