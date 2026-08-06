@@ -316,10 +316,17 @@ pub(crate) fn tag_value_to_field_for_key(
     value: &TagValue,
     hint: Option<u16>,
 ) -> Result<(u16, u32, Vec<u8>)> {
-    let hint = if key.rsplit(':').next() == Some("ShutterSpeedValue") {
-        Some(10) // Exif.pm 0x9201 declares rational64s
-    } else {
-        hint
+    if key.rsplit(':').next() == Some("GPSVersionID")
+        && !matches!(value, TagValue::Binary(bytes) if bytes.len() == 4)
+    {
+        return Err(ExifToolError::parse_error(
+            "GPSVersionID must contain exactly four bytes",
+        ));
+    }
+    let hint = match key.rsplit(':').next() {
+        Some("ShutterSpeedValue") => Some(10), // Exif.pm 0x9201 declares rational64s
+        Some("GPSVersionID") => Some(1),       // GPS.pm 0x0000 declares int8u[4]
+        _ => hint,
     };
     // Exif.pm 13.59 declares TileWidth (0x0142) as int32u. Do not let the
     // generic smallest-fit integer encoding downcast a newly created tag to
@@ -545,6 +552,27 @@ pub fn plan_exif_write(
         };
         if let Some(raw) = raw {
             desired.insert("GPS:GPSTrackRef", TagValue::new_string(raw));
+        }
+    }
+    if let Some(TagValue::String(value)) = desired.get("GPS:GPSImgDirectionRef") {
+        let raw = match value.as_str() {
+            "Magnetic North" => Some("M"),
+            "True North" => Some("T"),
+            _ => None,
+        };
+        if let Some(raw) = raw {
+            desired.insert("GPS:GPSImgDirectionRef", TagValue::new_string(raw));
+        }
+    }
+    if let Some(TagValue::String(value)) = desired.get("GPS:GPSSpeedRef") {
+        let raw = match value.as_str() {
+            "km/h" => Some("K"),
+            "mph" => Some("M"),
+            "knots" => Some("N"),
+            _ => None,
+        };
+        if let Some(raw) = raw {
+            desired.insert("GPS:GPSSpeedRef", TagValue::new_string(raw));
         }
     }
     for entry in &scan.entries {
@@ -1924,6 +1952,71 @@ mod tests {
         assert_eq!(track_ref.field_type, 2);
         assert_eq!(track_ref.count, 2);
         assert_eq!(track_ref.value, b"T\0");
+    }
+
+    #[test]
+    fn plan_inverts_gps_img_direction_ref_display_value_before_serializing() {
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let mut desired = original.clone();
+        desired.insert(
+            "GPS:GPSImgDirectionRef",
+            TagValue::new_string("Magnetic North"),
+        );
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let image_direction_ref = plan.gps.iter().find(|e| e.tag_id == 0x0010).unwrap();
+        assert_eq!(image_direction_ref.field_type, 2);
+        assert_eq!(image_direction_ref.count, 2);
+        assert_eq!(image_direction_ref.value, b"M\0");
+    }
+
+    #[test]
+    fn plan_inverts_gps_speed_ref_display_value_before_serializing() {
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let mut desired = original.clone();
+        desired.insert("GPS:GPSSpeedRef", TagValue::new_string("km/h"));
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let speed_ref = plan.gps.iter().find(|e| e.tag_id == 0x000c).unwrap();
+        assert_eq!(speed_ref.field_type, 2);
+        assert_eq!(speed_ref.count, 2);
+        assert_eq!(speed_ref.value, b"K\0");
+    }
+
+    #[test]
+    fn plan_creates_gps_version_id_as_four_bytes() {
+        let scan = ExifScan {
+            byte_order: ByteOrder::LittleEndian,
+            entries: Vec::new(),
+            thumbnail: None,
+            makernote_offset: None,
+        };
+        let original = MetadataMap::new();
+        let mut desired = MetadataMap::new();
+        desired.insert("GPS:GPSVersionID", TagValue::Binary(vec![2, 3, 0, 0]));
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let version = plan.gps.iter().find(|e| e.tag_id == 0x0000).unwrap();
+        assert_eq!(version.field_type, 1);
+        assert_eq!(version.count, 4);
+        assert_eq!(version.value, [2, 3, 0, 0]);
+    }
+
+    #[test]
+    fn plan_rejects_gps_version_id_with_wrong_byte_count() {
+        let scan = ExifScan {
+            byte_order: ByteOrder::LittleEndian,
+            entries: Vec::new(),
+            thumbnail: None,
+            makernote_offset: None,
+        };
+        let original = MetadataMap::new();
+        let mut desired = MetadataMap::new();
+        desired.insert("GPS:GPSVersionID", TagValue::Binary(vec![2, 3, 0]));
+
+        assert!(plan_exif_write(&scan, &original, &desired).is_err());
     }
 
     #[test]

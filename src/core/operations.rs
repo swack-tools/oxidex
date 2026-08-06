@@ -503,6 +503,7 @@ fn validate_caller_changes(metadata: &MetadataMap, baseline: Option<&MetadataMap
 
 fn canonical_write_tag_name(tag_name: &str) -> &str {
     match tag_name {
+        "GPSVersionID" => "GPS:GPSVersionID",
         "GPSDateStamp" => "GPS:GPSDateStamp",
         "GPSLatitudeRef" => "GPS:GPSLatitudeRef",
         "GPSDestLatitudeRef" => "GPS:GPSDestLatitudeRef",
@@ -1060,6 +1061,15 @@ mod tests {
         assert_eq!(
             canonical_write_tag_name("GPS:GPSDateStamp"),
             "GPS:GPSDateStamp"
+        );
+    }
+
+    #[test]
+    fn bare_gps_version_id_write_targets_the_gps_ifd() {
+        assert_eq!(canonical_write_tag_name("GPSVersionID"), "GPS:GPSVersionID");
+        assert_eq!(
+            canonical_write_tag_name("GPS:GPSVersionID"),
+            "GPS:GPSVersionID"
         );
     }
 
