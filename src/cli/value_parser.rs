@@ -226,6 +226,26 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         return Ok(TagValue::String(offset));
     }
 
+    if declared_tag_name.rsplit(':').next() == Some("OffsetTimeOriginal") {
+        let offset = inverse_offset_time(raw).ok_or_else(|| {
+            invalid(
+                tag_name,
+                "Can't convert OffsetTimeOriginal value to a time zone offset",
+            )
+        })?;
+        return Ok(TagValue::String(offset));
+    }
+
+    if declared_tag_name.rsplit(':').next() == Some("OffsetTimeDigitized") {
+        let offset = inverse_offset_time(raw).ok_or_else(|| {
+            invalid(
+                tag_name,
+                "Can't convert OffsetTimeDigitized value to a time zone offset",
+            )
+        })?;
+        return Ok(TagValue::String(offset));
+    }
+
     // Exif.pm 0xa300 is writable undef. PrintConvInv accepts the three labels,
     // then ValueConvInv converts a decimal byte to its one-byte TIFF payload.
     if declared_tag_name.rsplit(':').next() == Some("FileSource") {
@@ -1663,6 +1683,18 @@ mod tests {
             );
         }
         assert!(parse("ExifIFD:OffsetTime", "UTC").is_err());
+    }
+
+    #[test]
+    fn derived_offset_times_use_exiftool_inverse_offset_time() {
+        for tag in ["ExifIFD:OffsetTimeOriginal", "ExifIFD:OffsetTimeDigitized"] {
+            assert_eq!(
+                parse(tag, "2024:01:15 10:30:00+12:45").unwrap(),
+                TagValue::String("+12:45".to_string()),
+                "{tag}"
+            );
+            assert!(parse(tag, "UTC").is_err(), "{tag}");
+        }
     }
 
     #[test]
