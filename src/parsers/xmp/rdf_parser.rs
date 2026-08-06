@@ -6022,6 +6022,22 @@ mod top_level_struct_tests {
                 .map(|(_, values)| values.as_slice()),
             Some(["c2-1".to_string()].as_slice())
         );
+        // XMP4.xmp's second structure owns both values of TestList2; the
+        // unknown-schema duplicate rule must not discard its second list item.
+        assert_eq!(
+            tags.iter()
+                .find(|(tag, _)| tag == "XMP:StructList2TestList2")
+                .map(|(_, values)| values.as_slice()),
+            Some(["y1".to_string(), "y2".to_string()].as_slice())
+        );
+        assert_eq!(
+            parse_xmp_typed(xml)
+                .unwrap()
+                .iter()
+                .find(|(tag, _)| tag == "XMP:StructList2TestList2")
+                .map(|(_, value)| value.clone()),
+            Some(XmpValue::List(vec!["y1".to_string(), "y2".to_string()]))
+        );
     }
 
     /// A field that is itself a structure keeps concatenating:
