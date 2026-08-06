@@ -1114,6 +1114,20 @@ struct Walker {
 }
 
 impl Walker {
+    /// Resolved HTML tables retain ExifTool's family-0 HTML group.
+    fn add_known_family_zero_alias(&mut self, group: &str, name: &str, value: String, list: bool) {
+        if group.starts_with("HTML-") || group == "HTTP-equiv" {
+            self.out.add(format!("HTML:{name}"), value, list);
+        }
+    }
+
+    /// Only dynamically added Office tags belong to HTML's family-0 group.
+    fn add_dynamic_family_zero_alias(&mut self, group: &str, name: &str, value: String) {
+        if group == "HTML-office" {
+            self.out.add(format!("HTML:{name}"), value, false);
+        }
+    }
+
     /// `$et->HandleTag($table, $tag, $val)` for a resolved tag.
     fn handle(&mut self, group: &str, definition: &TagDef, value: &str) {
         let converted = match definition.conv {
@@ -1133,13 +1147,12 @@ impl Walker {
             // their family-0 group remains HTML. Keep the more specific key
             // used by this parser and also expose the family-0 key expected
             // when metadata is requested by format group.
-            if group.starts_with("HTML-") {
-                self.out.add(
-                    format!("HTML:{}", definition.name),
-                    converted.clone(),
-                    definition.list,
-                );
-            }
+            self.add_known_family_zero_alias(
+                group,
+                definition.name,
+                converted.clone(),
+                definition.list,
+            );
             self.out.add(
                 format!("{}:{}", group, definition.name),
                 converted,
@@ -1150,11 +1163,10 @@ impl Walker {
 
     /// A tag the table does not declare, which ExifTool adds on the fly.
     fn handle_unknown(&mut self, group: &str, name: &str, value: &str) {
-        self.out.add(
-            format!("{}:{}", group, normalize_added_tag_name(name)),
-            value.to_string(),
-            false,
-        );
+        let name = normalize_added_tag_name(name);
+        self.add_dynamic_family_zero_alias(group, &name, value.to_string());
+        self.out
+            .add(format!("{}:{name}", group), value.to_string(), false);
     }
 
     /// The non-XML value pipeline: recode, collapse record separators, then
@@ -1721,6 +1733,8 @@ mod tests {
             value(&metadata, "HTML-dc:Date").as_deref(),
             Some("2007-30-01")
         );
+        // Known HTML namespaces retain ExifTool's family-0 HTML alias.
+        assert_eq!(value(&metadata, "HTML:Date").as_deref(), Some("2007-30-01"));
         assert_eq!(
             value(&metadata, "HTML-dc:Subject").as_deref(),
             Some("Greek: α β γ")
@@ -1754,6 +1768,64 @@ mod tests {
             value(&metadata, "HTML-office:CheckedBy").as_deref(),
             Some("Phil")
         );
+    }
+
+    #[test]
+    fn family_zero_aliases_cover_http_equiv_and_dynamic_office_tags() {
+        let doc = b"<html><head>\n\
+            <meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\">\n\
+            <xml><o:CustomDocumentProperties>\n\
+            <o:Checked_x0020_by>Phil</o:Checked_x0020_by>\n\
+            <o:test1>1</o:test1>\n\
+            <o:test2>15</o:test2>\n\
+            <o:test3>2010-02-05T05:00:00Z</o:test3>\n\
+            <o:test4>text</o:test4>\n\
+            </o:CustomDocumentProperties></xml>\n\
+            </head></html>\n";
+
+        let metadata = HTMLParser::parse_bytes(doc);
+
+        assert_eq!(
+            value(&metadata, "HTML:ContentType").as_deref(),
+            Some("text/html; charset=utf-8")
+        );
+        assert_eq!(value(&metadata, "HTML:CheckedBy").as_deref(), Some("Phil"));
+        for (tag, expected) in [
+            ("Test1", "1"),
+            ("Test2", "15"),
+            ("Test3", "2010-02-05T05:00:00Z"),
+            ("Test4", "text"),
+        ] {
+            assert_eq!(
+                value(&metadata, &format!("HTML:{tag}")).as_deref(),
+                Some(expected)
+            );
+        }
+
+        // The family-1 names remain available to callers that request the
+        // source-specific ExifTool groups.
+        assert_eq!(
+            value(&metadata, "HTTP-equiv:ContentType").as_deref(),
+            Some("text/html; charset=utf-8")
+        );
+        assert_eq!(
+            value(&metadata, "HTML-office:CheckedBy").as_deref(),
+            Some("Phil")
+        );
+        assert_eq!(value(&metadata, "HTML-office:Test1").as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn unknown_non_office_html_namespace_does_not_get_family_zero_alias() {
+        let metadata = HTMLParser::parse_bytes(
+            b"<html><head>\n<meta name=\"custom:unlisted-tag\" content=\"value\" />\n</head></html>\n",
+        );
+
+        assert_eq!(
+            value(&metadata, "HTML-custom:CustomUnlistedTag").as_deref(),
+            Some("value")
+        );
+        assert_eq!(metadata.get("HTML:CustomUnlistedTag"), None);
     }
 
     #[test]
