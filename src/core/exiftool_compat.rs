@@ -300,6 +300,16 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
         }
     }
 
+    // GPS.pm 0x001c uses the same ConvertExifText RawConv as
+    // GPSProcessingMethod: remove the eight-byte EXIF character-code header
+    // and expose the decoded area text instead of an opaque binary value.
+    if is_gps_area_information(base_name)
+        && let TagValue::Binary(data) = value
+        && let Some(decoded) = decode_gps_area_information(data)
+    {
+        return TagValue::String(decoded);
+    }
+
     // ---------------------------------------------------------------------
     // Rule 7: Binary Decoders (CFAPattern, SceneType, version bytes)
     // ---------------------------------------------------------------------
@@ -1418,6 +1428,21 @@ pub fn is_gps_processing_method(base_name: &str) -> bool {
     base_name == "GPSProcessingMethod"
 }
 
+/// Checks if the tag is GPS area information (GPSAreaInformation).
+pub fn is_gps_area_information(base_name: &str) -> bool {
+    base_name == "GPSAreaInformation"
+}
+
+/// Applies GPS.pm 0x001c's ASCII `ConvertExifText` branch exactly. Other
+/// character-code identifiers are left opaque until their byte-order/charset
+/// rules can be reproduced without guessing.
+fn decode_gps_area_information(data: &[u8]) -> Option<String> {
+    let text = data.strip_prefix(b"ASCII\0\0\0")?;
+    let text = text.split(|byte| *byte == 0).next().unwrap_or_default();
+    let text = std::str::from_utf8(text).ok()?;
+    Some(text.trim_end_matches(' ').to_string())
+}
+
 /// Checks if the tag is a CFA pattern (CFAPattern).
 ///
 /// # Arguments
@@ -2097,6 +2122,13 @@ mod tests {
         let value = TagValue::Binary(data);
         let formatted = format_tag_value("GPS:GPSProcessingMethod", &value);
         assert_eq!(formatted.as_string(), Some("GPS"));
+    }
+
+    #[test]
+    fn test_gps_area_information_formatting() {
+        let value = TagValue::Binary(b"ASCII\0\0\0San Francisco".to_vec());
+        let formatted = format_tag_value("GPS:GPSAreaInformation", &value);
+        assert_eq!(formatted.as_string(), Some("San Francisco"));
     }
 
     // -------------------------------------------------------------------------
