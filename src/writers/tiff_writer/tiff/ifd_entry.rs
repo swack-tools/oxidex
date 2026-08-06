@@ -97,6 +97,39 @@ pub fn convert_tag_value_to_entry(
     tag_value: &TagValue,
     byte_order: ByteOrder,
 ) -> Result<Option<IfdEntryData>> {
+    if tag_id == 0x8827
+        && let TagValue::Array(values) = tag_value
+    {
+        if values.is_empty() {
+            return Err(ExifToolError::parse_error(
+                "ISO requires at least one unsigned 16-bit value",
+            ));
+        }
+        let mut bytes = Vec::with_capacity(values.len() * 2);
+        for value in values {
+            let TagValue::Integer(value) = value else {
+                return Err(ExifToolError::parse_error(
+                    "ISO values must be unsigned 16-bit integers",
+                ));
+            };
+            if !(0..=u16::MAX as i64).contains(value) {
+                return Err(ExifToolError::parse_error(
+                    "ISO value does not fit unsigned 16-bit",
+                ));
+            }
+            bytes.extend_from_slice(&match byte_order {
+                ByteOrder::LittleEndian => (*value as u16).to_le_bytes(),
+                ByteOrder::BigEndian => (*value as u16).to_be_bytes(),
+            });
+        }
+        return Ok(Some(IfdEntryData::new(
+            tag_id,
+            ExifType::Short,
+            values.len() as u32,
+            bytes,
+        )));
+    }
+
     if tag_id == 0x0129
         && let TagValue::Array(values) = tag_value
     {
@@ -534,5 +567,19 @@ mod tests {
         assert_eq!(entry.field_type, ExifType::Undefined);
         assert_eq!(entry.value_count, 4);
         assert_eq!(entry.value_bytes, data);
+    }
+
+    #[test]
+    fn iso_list_writes_variable_count_unsigned_shorts() {
+        let entry = convert_tag_value_to_entry(
+            0x8827,
+            &TagValue::new_array(vec![TagValue::new_integer(100), TagValue::new_integer(200)]),
+            ByteOrder::BigEndian,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(entry.field_type, ExifType::Short);
+        assert_eq!(entry.value_count, 2);
+        assert_eq!(entry.value_bytes, vec![0, 100, 0, 200]);
     }
 }

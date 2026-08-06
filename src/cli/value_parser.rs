@@ -186,6 +186,33 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         return Ok(TagValue::String(value.to_string()));
     }
 
+    // Exif.pm 13.59 0x8827 declares ISO as a variable-count int16u list.
+    if matches!(leaf, Some("ISO")) {
+        let normalized = raw.replace(',', " ");
+        let parts: Vec<_> = normalized.split_whitespace().collect();
+        if parts.is_empty() {
+            return Err(invalid(
+                tag_name,
+                "Expected at least one unsigned 16-bit ISO value",
+            ));
+        }
+        let values = parts
+            .into_iter()
+            .map(|part| {
+                let value = parse_integer(tag_name, part)?;
+                if !(0..=u16::MAX as i64).contains(&value) {
+                    return Err(invalid(tag_name, "ISO value does not fit unsigned 16-bit"));
+                }
+                Ok(TagValue::new_integer(value))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        return if values.len() == 1 {
+            Ok(values.into_iter().next().expect("one ISO value"))
+        } else {
+            Ok(TagValue::new_array(values))
+        };
+    }
+
     // GPS.pm 0x001c applies EncodeExifText as its RawConvInv. With the default
     // CharsetEXIF this is the eight-byte ASCII identifier followed by the
     // caller's text; the TIFF field itself remains UNDEFINED.
@@ -2257,9 +2284,28 @@ mod tests {
         // ExifTool 13.59 Exif.pm 0x9000 accepts dotted versions, removes the
         // dots, and left-pads three digits before writing `undef` bytes.
         for tag in ["ExifVersion", "EXIF:ExifVersion", "ExifIFD:ExifVersion"] {
-            assert_eq!(parse(tag, "2.31").unwrap(), TagValue::Binary(b"0231".to_vec()));
-            assert_eq!(parse(tag, "0231").unwrap(), TagValue::Binary(b"0231".to_vec()));
+            assert_eq!(
+                parse(tag, "2.31").unwrap(),
+                TagValue::Binary(b"0231".to_vec())
+            );
+            assert_eq!(
+                parse(tag, "0231").unwrap(),
+                TagValue::Binary(b"0231".to_vec())
+            );
             assert!(parse(tag, "23").is_err());
         }
+    }
+
+    #[test]
+    fn iso_accepts_variable_count_unsigned_short_lists() {
+        assert_eq!(
+            parse("ExifIFD:ISO", "100, 200").unwrap(),
+            TagValue::new_array(vec![TagValue::new_integer(100), TagValue::new_integer(200)])
+        );
+        assert_eq!(
+            parse("ExifIFD:ISO", "400").unwrap(),
+            TagValue::new_integer(400)
+        );
+        assert!(parse("ExifIFD:ISO", "65536").is_err());
     }
 }
