@@ -724,7 +724,8 @@ tables:
         description: "RelatedImageWidth tag"
       - id: "0x1002"
         name: "RelatedImageHeight"
-        writable: false
+        writable: true
+        type: int16u
         description: "RelatedImageHeight tag"
       - id: "0x4746"
         name: "Rating"
