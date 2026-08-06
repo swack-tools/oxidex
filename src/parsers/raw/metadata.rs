@@ -2465,7 +2465,7 @@ fn format_exif_display_value(
 /// PanasonicRaw's WBType1..7 (`%wbTypeInfo` in PanasonicRaw.pm:46 is
 /// `PrintConv => \%Image::ExifTool::Exif::lightSource`).
 ///
-/// Returns `None` for codes the hash has no entry for (5-8, 25-254, ...).
+/// Returns `None` for codes the hash has no entry for (5-8, 35-254, ...).
 /// ExifTool prints the bare number in that case, and a missing label is far
 /// better than one borrowed from a neighbouring code.
 fn exif_light_source_label(code: u16) -> Option<&'static str> {
@@ -2491,6 +2491,16 @@ fn exif_light_source_label(code: u16) -> Option<&'static str> {
         22 => "D75",
         23 => "D50",
         24 => "ISO Studio Tungsten",
+        25 => "Daylight",
+        26 => "Day White",
+        27 => "Cool White",
+        28 => "White",
+        29 => "Warm White",
+        30 => "Daylight LED",
+        31 => "Day White LED",
+        32 => "Cool White LED",
+        33 => "White LED",
+        34 => "Warm White LED",
         255 => "Other",
         _ => return None,
     })
@@ -7877,6 +7887,9 @@ mod backlog_group_1_printconv_tests {
         assert_eq!(f(15).as_deref(), Some("White Fluorescent"));
         assert_eq!(f(23).as_deref(), Some("D50"));
         assert_eq!(f(24).as_deref(), Some("ISO Studio Tungsten"));
+        assert_eq!(f(25).as_deref(), Some("Daylight"));
+        assert_eq!(f(26).as_deref(), Some("Day White"));
+        assert_eq!(f(34).as_deref(), Some("Warm White LED"));
         assert_eq!(f(255).as_deref(), Some("Other"));
     }
 
@@ -7885,7 +7898,7 @@ mod backlog_group_1_printconv_tests {
     /// a stand-in label.
     #[test]
     fn light_source_gap_values_have_no_label() {
-        for raw in [5u16, 6, 7, 8, 25] {
+        for raw in [5u16, 6, 7, 8, 35] {
             assert_eq!(
                 format_exif_display_value(
                     0x9208,

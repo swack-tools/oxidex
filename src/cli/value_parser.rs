@@ -73,6 +73,7 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         "CreateDate" => "ExifIFD:CreateDate",
         "ExposureTime" => "EXIF:ExposureTime",
         "BrightnessValue" => "EXIF:BrightnessValue",
+        "LightSource" => "EXIF:LightSource",
         "MeteringMode" => "EXIF:MeteringMode",
         "ShutterSpeedValue" => "ExifIFD:ShutterSpeedValue",
         "ApertureValue" => "EXIF:ApertureValue",
@@ -178,8 +179,44 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         ("EXIF:YCbCrPositioning", "Co-sited") => "2",
         _ => raw,
     };
-    let raw = if declared_tag_name.rsplit(':').next() == Some("MeteringMode") {
-        match raw {
+    let raw = match declared_tag_name.rsplit(':').next() {
+        Some("LightSource") => match raw {
+            // Exif.pm 13.59 %lightSource PrintConv. Code 25 repeats the
+            // "Daylight" label, so its inverse is the first matching code 1.
+            "Unknown" => "0",
+            "Daylight" => "1",
+            "Fluorescent" => "2",
+            "Tungsten (Incandescent)" => "3",
+            "Flash" => "4",
+            "Fine Weather" => "9",
+            "Cloudy" => "10",
+            "Shade" => "11",
+            "Daylight Fluorescent" => "12",
+            "Day White Fluorescent" => "13",
+            "Cool White Fluorescent" => "14",
+            "White Fluorescent" => "15",
+            "Warm White Fluorescent" => "16",
+            "Standard Light A" => "17",
+            "Standard Light B" => "18",
+            "Standard Light C" => "19",
+            "D55" => "20",
+            "D65" => "21",
+            "D75" => "22",
+            "D50" => "23",
+            "ISO Studio Tungsten" => "24",
+            "Day White" => "26",
+            "Cool White" => "27",
+            "White" => "28",
+            "Warm White" => "29",
+            "Daylight LED" => "30",
+            "Day White LED" => "31",
+            "Cool White LED" => "32",
+            "White LED" => "33",
+            "Warm White LED" => "34",
+            "Other" => "255",
+            _ => raw,
+        },
+        Some("MeteringMode") => match raw {
             "Unknown" => "0",
             "Average" => "1",
             "Center-weighted average" => "2",
@@ -189,9 +226,8 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
             "Partial" => "6",
             "Other" => "255",
             _ => raw,
-        }
-    } else {
-        raw
+        },
+        _ => raw,
     };
     let declared = get_tag_descriptor(declared_tag_name)
         .filter(|_| has_reliable_value_type(declared_tag_name))
@@ -1302,5 +1338,53 @@ mod tests {
             parse("EXIF:PageNumber", "3 17").unwrap(),
             TagValue::new_array(vec![TagValue::new_integer(3), TagValue::new_integer(17)])
         );
+    }
+
+    #[test]
+    fn light_source_uses_the_complete_exiftool_13_59_print_conversion_inverse() {
+        // Exif.pm %lightSource: all labels accepted for the writable int16u
+        // LightSource tag. The duplicate "Daylight" at code 25 must invert
+        // to the first matching code, 1, as ExifTool's PrintConvInv does.
+        for (printed, raw) in [
+            ("Unknown", 0),
+            ("Daylight", 1),
+            ("Fluorescent", 2),
+            ("Tungsten (Incandescent)", 3),
+            ("Flash", 4),
+            ("Fine Weather", 9),
+            ("Cloudy", 10),
+            ("Shade", 11),
+            ("Daylight Fluorescent", 12),
+            ("Day White Fluorescent", 13),
+            ("Cool White Fluorescent", 14),
+            ("White Fluorescent", 15),
+            ("Warm White Fluorescent", 16),
+            ("Standard Light A", 17),
+            ("Standard Light B", 18),
+            ("Standard Light C", 19),
+            ("D55", 20),
+            ("D65", 21),
+            ("D75", 22),
+            ("D50", 23),
+            ("ISO Studio Tungsten", 24),
+            ("Day White", 26),
+            ("Cool White", 27),
+            ("White", 28),
+            ("Warm White", 29),
+            ("Daylight LED", 30),
+            ("Day White LED", 31),
+            ("Cool White LED", 32),
+            ("White LED", 33),
+            ("Warm White LED", 34),
+            ("Other", 255),
+        ] {
+            for tag in ["LightSource", "EXIF:LightSource", "ExifIFD:LightSource"] {
+                assert_eq!(
+                    parse(tag, printed).unwrap(),
+                    TagValue::Integer(raw),
+                    "{tag}: {printed}"
+                );
+            }
+        }
     }
 }
