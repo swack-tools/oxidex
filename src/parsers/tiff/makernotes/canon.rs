@@ -5243,12 +5243,11 @@ fn parse_canon_makernote_impl_located(
                         );
                     }
 
-                    // CanonFlashMode (index 4) - Flash mode setting
-                    // Also output as Canon:FlashMode for backward compatibility
+                    // CanonFlashMode (index 4) - Flash mode setting. Canon.pm names
+                    // this tag `CanonFlashMode`; it does not emit a `FlashMode` alias.
                     if array.len() > CAMERA_SETTINGS_FLASH_MODE {
                         let flash_mode = FLASH_MODE.decode(array[CAMERA_SETTINGS_FLASH_MODE]);
-                        tags.insert("Canon:CanonFlashMode".to_string(), flash_mode.clone());
-                        tags.insert("Canon:FlashMode".to_string(), flash_mode);
+                        tags.insert("Canon:CanonFlashMode".to_string(), flash_mode);
                     }
 
                     // ContinuousDrive (index 5) - Drive mode setting. Canon.pm defines
@@ -7140,7 +7139,10 @@ mod tests {
         // Verify extracted values
         assert_eq!(result.get("Canon:MacroMode"), Some(&"Normal".to_string()));
         assert_eq!(result.get("Canon:Quality"), Some(&"Fine".to_string()));
-        assert_eq!(result.get("Canon:FlashMode"), Some(&"On".to_string()));
+        assert_eq!(result.get("Canon:CanonFlashMode"), Some(&"On".to_string()));
+        // Canon.pm names CameraSettings key 4 `CanonFlashMode`; a shortened
+        // `FlashMode` alias is not emitted by ExifTool.
+        assert_eq!(result.get("Canon:FlashMode"), None);
         assert_eq!(
             result.get("Canon:ContinuousDrive"),
             Some(&"Single".to_string())
