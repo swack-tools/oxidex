@@ -263,9 +263,10 @@ pub fn decode_user_comment(data: &[u8]) -> Option<String> {
             )
         }
         _ => {
-            // Unknown encoding or no encoding prefix - try UTF-8
+            // ExifTool's ConvertExifText retains an invalid identifier in the
+            // printable value (rather than discarding the first eight bytes).
             Some(
-                String::from_utf8_lossy(text_data)
+                String::from_utf8_lossy(data)
                     .trim_end_matches('\0')
                     .to_string(),
             )
@@ -619,10 +620,15 @@ mod tests {
     }
 
     #[test]
-    fn test_user_comment_unknown_encoding() {
-        // Unknown encoding prefix - treat text as UTF-8
-        let data = b"UNKNOWN\0Test text";
-        assert_eq!(decode_user_comment(data), Some("Test text".to_string()));
+    fn test_user_comment_invalid_encoding_preserves_header() {
+        // ExifTool 13.59 ConvertExifText warns for an invalid identifier, then
+        // returns the full byte sequence rather than silently dropping its
+        // first eight bytes.
+        let data = b"INVALID!Test text";
+        assert_eq!(
+            decode_user_comment(data),
+            Some("INVALID!Test text".to_string())
+        );
     }
 
     #[test]
