@@ -81,7 +81,7 @@ fn extract_track_metadata(
         .find_child("hdlr")
         .is_some_and(|hdlr| hdlr.data.get(8..12) == Some(b"meta"));
     if let Some(hdlr) = mdia.find_child("hdlr") {
-        let _ = extract_track_handler_metadata(&hdlr, metadata, index);
+        let _ = extract_track_handler_metadata(&hdlr, metadata);
     }
 
     // Extract media header - optional
@@ -110,12 +110,12 @@ fn extract_track_metadata(
     if let Some(dinf) = minf.find_child("dinf")
         && let Some(dref) = dinf.find_child("dref")
     {
-        let _ = extract_data_handler_info(dref.data, metadata, index);
+        let _ = extract_data_handler_info(dref.data, metadata);
     }
 
     // Some files carry the data handler directly in minf rather than dref.
     if let Some(hdlr) = minf.find_child("hdlr") {
-        let _ = extract_track_handler_metadata(&hdlr, metadata, index);
+        let _ = extract_track_handler_metadata(&hdlr, metadata);
     }
 
     // Sample table - required for sample descriptions
@@ -3474,8 +3474,7 @@ mod tests {
         };
         let mut metadata = MetadataMap::new();
 
-        extract_track_handler_metadata(&hdlr, &mut metadata, 3)
-            .expect("track handler should parse");
+        extract_track_handler_metadata(&hdlr, &mut metadata).expect("track handler should parse");
 
         assert_eq!(
             metadata.get_string("QuickTime:HandlerType"),
