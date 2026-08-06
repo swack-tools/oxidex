@@ -53,6 +53,7 @@ fn lookup_raw_tag_name(tag_id: u16, ifd_name: &str, format: RawFormat) -> String
             tag_id,
             0xC619 // BlackLevelRepeatDim
                 | 0xC61A // BlackLevel
+                | 0xC627 // AnalogBalance
                 | 0xC62D // BayerGreenSplit
                 | 0xC632 // AntiAliasStrength
                 | 0xC65C // BestQualityScale
@@ -6934,6 +6935,38 @@ mod tests {
                 panic!("Version should be a string");
             }
         }
+    }
+
+    /// ExifTool 13.59 files DNG AnalogBalance under family 0 (`EXIF`), even
+    /// though the rational array is physically stored in IFD0.
+    #[test]
+    fn dng_analog_balance_uses_exif_family_and_preserves_all_components() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II\x2a\x00");
+        data.extend_from_slice(&8u32.to_le_bytes());
+
+        // IFD0 contains one RATIONAL[3] entry. Its 24-byte payload starts
+        // immediately after the IFD's next-offset field at byte 26.
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&0xC627u16.to_le_bytes());
+        data.extend_from_slice(&5u16.to_le_bytes());
+        data.extend_from_slice(&3u32.to_le_bytes());
+        data.extend_from_slice(&26u32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        for (numerator, denominator) in [(1u32, 1u32), (3, 2), (5, 4)] {
+            data.extend_from_slice(&numerator.to_le_bytes());
+            data.extend_from_slice(&denominator.to_le_bytes());
+        }
+
+        let metadata = parse_raw_metadata(&data, RawFormat::AdobeDNG).expect("valid DNG");
+        assert_eq!(
+            metadata.get("EXIF:AnalogBalance"),
+            Some(&TagValue::new_string("1 1.5 1.25".to_string()))
+        );
+        assert!(
+            !metadata.contains_key("IFD0:AnalogBalance"),
+            "DNG AnalogBalance must use ExifTool's EXIF family"
+        );
     }
 
     #[test]
