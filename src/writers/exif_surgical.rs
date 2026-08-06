@@ -311,7 +311,7 @@ fn gcd_u64(mut left: u64, mut right: u64) -> u64 {
 /// Applies tag-specific inverse conversions before generic TIFF serialization.
 /// GPS.pm 13.59 defines both coordinates as `rational64u[3]` values converted
 /// by `ToDMS` into degree, minute and second rationals.
-fn tag_value_to_field_for_key(
+pub(crate) fn tag_value_to_field_for_key(
     key: &str,
     value: &TagValue,
     hint: Option<u16>,
@@ -326,6 +326,36 @@ fn tag_value_to_field_for_key(
     // SHORT merely because its current value fits in 16 bits.
     if matches!(key, "IFD0:TileWidth" | "EXIF:TileWidth") {
         return tag_value_to_field(value, Some(4));
+    }
+    // Exif.pm 13.59 0x0129 declares PageNumber as `int16u[2]`. It is exposed
+    // as a space-separated pair, so preserve both values instead of falling
+    // through to the generic array rejection.
+    if matches!(key, "IFD0:PageNumber" | "EXIF:PageNumber" | "PageNumber") {
+        let TagValue::Array(values) = value else {
+            return Err(ExifToolError::parse_error(
+                "PageNumber requires two unsigned 16-bit values",
+            ));
+        };
+        if values.len() != 2 {
+            return Err(ExifToolError::parse_error(
+                "PageNumber requires exactly two unsigned 16-bit values",
+            ));
+        }
+        let mut bytes = Vec::with_capacity(4);
+        for value in values {
+            let TagValue::Integer(value) = value else {
+                return Err(ExifToolError::parse_error(
+                    "PageNumber components must be unsigned 16-bit integers",
+                ));
+            };
+            if !(0..=u16::MAX as i64).contains(value) {
+                return Err(ExifToolError::parse_error(
+                    "PageNumber component does not fit unsigned 16-bit",
+                ));
+            }
+            bytes.extend_from_slice(&(*value as u16).to_ne_bytes());
+        }
+        return Ok((3, 2, bytes));
     }
     if matches!(
         key,
@@ -2209,6 +2239,19 @@ mod tests {
         let (field_type_none, _, _) = tag_value_to_field(&TagValue::new_integer(5), None).unwrap();
         assert_eq!(field_type_none, 3, "no hint: smallest-fit still applies");
         let _ = (scan, original); // silence unused if not otherwise referenced
+    }
+
+    #[test]
+    fn page_number_pair_serializes_as_two_unsigned_shorts() {
+        // ExifTool 13.59 Exif.pm 0x0129: Writable => 'int16u', Count => 2.
+        // A list must retain both components and the existing SHORT field.
+        let value = TagValue::new_array(vec![TagValue::new_integer(3), TagValue::new_integer(17)]);
+        let (field_type, count, bytes) =
+            tag_value_to_field_for_key("IFD0:PageNumber", &value, Some(3)).unwrap();
+
+        assert_eq!(field_type, 3);
+        assert_eq!(count, 2);
+        assert_eq!(bytes, [3_u16.to_ne_bytes(), 17_u16.to_ne_bytes()].concat());
     }
 
     #[test]

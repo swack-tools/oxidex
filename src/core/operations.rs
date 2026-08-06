@@ -515,6 +515,7 @@ fn canonical_write_tag_name(tag_name: &str) -> &str {
         "Flash" => "ExifIFD:Flash",
         "Software" => "IFD0:Software",
         "DocumentName" => "IFD0:DocumentName",
+        "PageNumber" => "IFD0:PageNumber",
         "ModifyDate" => "IFD0:ModifyDate",
         "DateTimeOriginal" => "ExifIFD:DateTimeOriginal",
         "ApertureValue" => "ExifIFD:ApertureValue",
@@ -1176,6 +1177,15 @@ mod tests {
         assert_eq!(
             canonical_write_tag_name("IFD0:DocumentName"),
             "IFD0:DocumentName"
+        );
+    }
+
+    #[test]
+    fn bare_page_number_write_targets_ifd0() {
+        assert_eq!(canonical_write_tag_name("PageNumber"), "IFD0:PageNumber");
+        assert_eq!(
+            canonical_write_tag_name("IFD0:PageNumber"),
+            "IFD0:PageNumber"
         );
     }
 

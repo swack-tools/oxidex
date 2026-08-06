@@ -97,6 +97,34 @@ pub fn convert_tag_value_to_entry(
     tag_value: &TagValue,
     byte_order: ByteOrder,
 ) -> Result<Option<IfdEntryData>> {
+    if tag_id == 0x0129
+        && let TagValue::Array(values) = tag_value
+    {
+        if values.len() != 2 {
+            return Err(ExifToolError::parse_error(
+                "PageNumber requires exactly two unsigned 16-bit values",
+            ));
+        }
+        let mut bytes = Vec::with_capacity(4);
+        for value in values {
+            let TagValue::Integer(value) = value else {
+                return Err(ExifToolError::parse_error(
+                    "PageNumber components must be unsigned 16-bit integers",
+                ));
+            };
+            if !(0..=u16::MAX as i64).contains(value) {
+                return Err(ExifToolError::parse_error(
+                    "PageNumber component does not fit unsigned 16-bit",
+                ));
+            }
+            bytes.extend_from_slice(&match byte_order {
+                ByteOrder::LittleEndian => (*value as u16).to_le_bytes(),
+                ByteOrder::BigEndian => (*value as u16).to_be_bytes(),
+            });
+        }
+        return Ok(Some(IfdEntryData::new(tag_id, ExifType::Short, 2, bytes)));
+    }
+
     match tag_value {
         TagValue::String(s) => {
             // ExifTool 13.59 Exif.pm 0x0212 declares `int16u[2]` and uses
