@@ -728,6 +728,12 @@ pub fn plan_exif_write(
             )));
         }
         let value = desired.get(&key).unwrap();
+        if requires_subifd_write(&key) {
+            return Err(ExifToolError::unsupported_format(format!(
+                "Cannot write tag '{}': it requires a SubIFD, which this writer does not create or edit",
+                key
+            )));
+        }
         let Some(descriptor) = get_tag_descriptor(&key) else {
             return Err(ExifToolError::parse_error(format!(
                 "Cannot add tag '{}': not a known EXIF tag",
@@ -854,6 +860,14 @@ pub(crate) fn descriptor_tag_id(descriptor: &crate::core::TagDescriptor) -> Opti
         crate::core::TagId::Numeric(id) => Some(*id),
         crate::core::TagId::Named(_) => None,
     }
+}
+
+/// ExifTool 13.59 Exif.pm declares tag 0xC61A (BlackLevel) as a protected,
+/// variable-count rational64u value in a SubIFD. The surgical writers preserve
+/// SubIFDs but deliberately do not create or rewrite them, so routing a new
+/// value through their IFD0 fallback would produce a semantically wrong file.
+pub(crate) fn requires_subifd_write(key: &str) -> bool {
+    key == "EXIF:BlackLevel"
 }
 
 /// Walks IFD0 (and ExifIFD, GPS, InteropIFD, IFD1) and returns every entry
@@ -2256,6 +2270,25 @@ mod tests {
         let plan = plan_exif_write(&scan, &original, &desired).unwrap();
         assert!(plan.ifd0.is_empty() && plan.exif_ifd.is_empty() && plan.gps.is_empty());
         assert!(plan.ifd1.is_empty() && plan.thumbnail.is_none());
+    }
+
+    #[test]
+    fn plan_adding_black_level_errors_instead_of_creating_an_ifd0_tag() {
+        let scan = ExifScan {
+            byte_order: ByteOrder::LittleEndian,
+            entries: Vec::new(),
+            thumbnail: None,
+            makernote_offset: None,
+        };
+        let original = MetadataMap::new();
+        let mut desired = MetadataMap::new();
+        desired.insert("EXIF:BlackLevel", TagValue::new_rational(1, 1));
+
+        let err = plan_exif_write(&scan, &original, &desired).unwrap_err();
+        assert!(
+            err.to_string().contains("SubIFD"),
+            "BlackLevel must be rejected rather than fabricated in IFD0: {err}"
+        );
     }
 
     #[test]

@@ -54,6 +54,15 @@ pub fn validate_tag_for_tiff(tag_name: &str) -> Result<u16> {
         )));
     }
 
+    // ExifTool 13.59 Exif.pm declares this DNG tag in a SubIFD. The legacy
+    // TIFF writer only builds IFD0/ExifIFD/GPS tables, so it must not accept
+    // a value it would place in IFD0.
+    if tag_name == "EXIF:BlackLevel" {
+        return Err(ExifToolError::unsupported_format(
+            "BlackLevel requires a SubIFD, which the TIFF writer cannot create",
+        ));
+    }
+
     // Look up tag in registry
     let tag_descriptor = tag_registry::get_tag_descriptor(tag_name)
         .ok_or_else(|| ExifToolError::unsupported_format(format!("Unknown tag: {}", tag_name)))?;
@@ -132,6 +141,15 @@ pub fn separate_by_ifd(metadata: &MetadataMap) -> (MetadataMap, MetadataMap, Met
 mod tests {
     use super::*;
     use crate::core::tag_value::TagValue;
+
+    #[test]
+    fn black_level_requires_a_subifd() {
+        let err = validate_tag_for_tiff("EXIF:BlackLevel").unwrap_err();
+        assert!(
+            err.to_string().contains("SubIFD"),
+            "BlackLevel must not be routed to IFD0: {err}"
+        );
+    }
 
     #[test]
     fn test_is_tiff_writable_family() {

@@ -45,7 +45,8 @@ use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::tag_db::lookup_tag_name;
 use crate::tag_db::tag_registry::{declared_ieee_field_type, get_tag_descriptor};
 use crate::writers::exif_surgical::{
-    IfdKind, descriptor_tag_id, native_to_byte_order, tag_value_to_field_for_key, validate_changed,
+    IfdKind, descriptor_tag_id, native_to_byte_order, requires_subifd_write,
+    tag_value_to_field_for_key, validate_changed,
 };
 
 /// IFD0 tag pointing to the ExifIFD
@@ -329,6 +330,13 @@ pub fn rewrite_tiff_file(
                 "Editing tag '{}' is not yet supported for TIFF-structured \
                  files: it lives outside IFD0/ExifIFD/GPS (SubIFD, IFD1 or \
                  MakerNote), which this writer carries untouched",
+                key
+            )));
+        }
+
+        if requires_subifd_write(key) {
+            return Err(ExifToolError::unsupported_format(format!(
+                "Cannot write tag '{}': it requires a SubIFD, which this writer does not create or edit",
                 key
             )));
         }
