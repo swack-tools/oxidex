@@ -31,6 +31,8 @@ use crate::core::formatters::{
 use crate::core::tag_conversion::apply_tile_offsets_value_conv;
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::exiftool_tables::{DecodedValue, decode_binary_table, find_table};
+use crate::io::ByteOrder as TableByteOrder;
 use crate::io::EndianReader;
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::icc::parse_icc_profile_data as parse_icc;
@@ -4165,6 +4167,31 @@ fn parse_cr3_cmt3_makernotes(data: &[u8], metadata: &mut MetadataMap) {
     }
 }
 
+/// Read Canon's CR3 `CMP1` image-description atom.
+///
+/// ExifTool 13.59 declares this as `Canon::CMP1`, a big-endian
+/// `ProcessBinaryData` record.  Its generated table has only two lossless
+/// fields: `ImageWidth` at int16 index 8 and `ImageHeight` at index 10.  These
+/// are Canon/MakerNotes tags, not the QuickTime source-image dimensions.
+fn parse_cr3_cmp1(data: &[u8], metadata: &mut MetadataMap) {
+    let Some(record) = find_cr3_box(data, b"CMP1") else {
+        return;
+    };
+    let Some(table) = find_table("Canon", "CMP1") else {
+        return;
+    };
+
+    for decoded in decode_binary_table(table, record, TableByteOrder::Big) {
+        let DecodedValue::Integer(value) = decoded.raw else {
+            continue;
+        };
+        metadata.insert(
+            format!("Canon:{}", decoded.field.name),
+            TagValue::Integer(value),
+        );
+    }
+}
+
 /// Byte offset of `part` within `whole`, when `part` is a subslice of it.
 fn subslice_offset(whole: &[u8], part: &[u8]) -> Option<usize> {
     let whole_start = whole.as_ptr() as usize;
@@ -4365,6 +4392,11 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
             TagValue::new_binary(image.to_vec()),
         );
     }
+
+    // Canon.pm's CMP1 table is a separate CR3 atom, not part of CMT3's TIFF
+    // MakerNote.  Decode its two declared dimensions directly from the
+    // generated table before handling unrelated UUID payloads.
+    parse_cr3_cmp1(data, &mut metadata);
 
     // XMP lives in a top-level `uuid` box (QuickTime.pm's UUID-XMP condition
     // matches be7acfcb-97a9-42e8-9c71-999491e3afac), not in the Canon uuid box.
@@ -6995,6 +7027,23 @@ impl<'a> FileReader for SliceReader<'a> {
 mod cr3_cmt1_artist_tests {
     use super::*;
 
+    /// Construct the CR3 `CMP1` atom shape emitted by CanonRaw.cr3.  The
+    /// generated `Canon::CMP1` table defines its two fields at int16 indices
+    /// 8 and 10, so the width and height are big-endian `int32u` values at
+    /// byte offsets 16 and 20 in the atom payload.
+    fn build_cr3_with_cmp1(width: u32, height: u32) -> Vec<u8> {
+        let mut cmp1 = vec![0u8; 24];
+        cmp1[16..20].copy_from_slice(&width.to_be_bytes());
+        cmp1[20..24].copy_from_slice(&height.to_be_bytes());
+
+        let mut data = Vec::new();
+        data.extend_from_slice(b"\0\0\0\x18ftypcrx "); // plausible leading box
+        data.extend_from_slice(&((8 + cmp1.len()) as u32).to_be_bytes());
+        data.extend_from_slice(b"CMP1");
+        data.extend_from_slice(&cmp1);
+        data
+    }
+
     /// Build a minimal CR3-shaped buffer: a `CMT1` box whose payload is a
     /// little-endian TIFF with a single IFD0 ASCII entry `tag_id` holding
     /// `value` (its trailing NUL included in the count). The value is kept
@@ -7081,6 +7130,21 @@ mod cr3_cmt1_artist_tests {
             Some(&TagValue::new_binary(
                 b"<Dummy thumbnail image data>".to_vec()
             ))
+        );
+    }
+
+    #[test]
+    fn extracts_canon_cmp1_dimensions_from_cr3() {
+        let metadata = parse_cr3(&build_cr3_with_cmp1(1624, 1080), RawFormat::CanonCR3)
+            .expect("synthetic CR3 should parse");
+
+        assert_eq!(
+            metadata.get("Canon:ImageWidth"),
+            Some(&TagValue::Integer(1624))
+        );
+        assert_eq!(
+            metadata.get("Canon:ImageHeight"),
+            Some(&TagValue::Integer(1080))
         );
     }
 }
