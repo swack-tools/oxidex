@@ -1114,9 +1114,9 @@ struct Walker {
 }
 
 impl Walker {
-    /// Keep namespaced family-1 tags available under HTML's family-0 group.
+    /// Keep HTTP-equiv and dynamically added Office tags under HTML's family-0 group.
     fn add_family_zero_alias(&mut self, group: &str, name: &str, value: String, list: bool) {
-        if group.starts_with("HTML-") || group == "HTTP-equiv" {
+        if group == "HTML-office" || group == "HTTP-equiv" {
             self.out.add(format!("HTML:{name}"), value, list);
         }
     }
@@ -1799,6 +1799,19 @@ mod tests {
             Some("Phil")
         );
         assert_eq!(value(&metadata, "HTML-office:Test1").as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn unknown_non_office_html_namespace_does_not_get_family_zero_alias() {
+        let metadata = HTMLParser::parse_bytes(
+            b"<html><head>\n<meta name=\"custom:unlisted-tag\" content=\"value\" />\n</head></html>\n",
+        );
+
+        assert_eq!(
+            value(&metadata, "HTML-custom:CustomUnlistedTag").as_deref(),
+            Some("value")
+        );
+        assert_eq!(metadata.get("HTML:CustomUnlistedTag"), None);
     }
 
     #[test]
