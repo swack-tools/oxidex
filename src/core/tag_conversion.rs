@@ -540,44 +540,51 @@ pub(crate) fn format_dms_with_ref(degrees_total: f64, positive_ref: char) -> Str
     format!("{} {}", format_dms(degrees_total), reference)
 }
 
-/// Formats GPSTimeStamp from 3 rational values (hours, minutes, seconds).
-///
-/// ExifTool formats GPSTimeStamp as "HH:MM:SS" (e.g., "15:38:33").
-/// The GPS timestamp represents UTC time.
-///
-/// # Format Rules
-///
-/// - Hours and minutes are zero-padded to 2 digits (e.g., "08:05:03")
-/// - Seconds are displayed without decimal places if they are whole numbers
-/// - Fractional seconds are displayed with appropriate precision (e.g., "15:38:33.5")
+/// Formats GPSTimeStamp with GPS.pm's `ConvertTimeStamp` and `PrintTimeStamp`.
 fn format_gps_timestamp(bytes: &[u8], byte_order: ByteOrder) -> TagValue {
-    let mut hms = Vec::new();
-    for i in 0..3 {
+    let mut values = [0.0; 3];
+    for (i, value) in values.iter_mut().enumerate() {
         let offset = i * 8;
         let numerator = read_u32(&bytes[offset..offset + 4], byte_order);
         let denominator = read_u32(&bytes[offset + 4..offset + 8], byte_order);
-        if denominator != 0 {
-            hms.push(numerator as f64 / denominator as f64);
-        } else {
-            hms.push(numerator as f64);
-        }
+        *value = match denominator {
+            0 if numerator == 0 => 0.0, // GetRational64u's `undef`, coerced by `|| 0`
+            0 => f64::INFINITY,         // GetRational64u's `inf`
+            _ => numerator as f64 / denominator as f64,
+        };
     }
 
-    let hours = hms[0] as u32;
-    let minutes = hms[1] as u32;
-    let seconds = hms[2];
+    // GPS.pm:466-477 combines the rational components before splitting them
+    // back into a clock time. Its 9-place ValueConv rounding may carry into a
+    // later minute; PrintTimeStamp then rounds the display to microseconds.
+    let mut remaining = ((values[0] * 60.0 + values[1]) * 60.0) + values[2];
+    let hours = (remaining / 3600.0).trunc();
+    remaining -= hours * 3600.0;
+    let minutes = (remaining / 60.0).trunc();
+    remaining -= minutes * 60.0;
 
-    // Format seconds: no decimal places if whole number, otherwise show fractional part
-    let formatted = if seconds.fract() == 0.0 {
-        format!("{:02}:{:02}:{:02}", hours, minutes, seconds as u32)
+    let converted_seconds = format!("{remaining:012.9}");
+    let converted_seconds = if converted_seconds
+        .parse::<f64>()
+        .is_ok_and(|seconds| seconds >= 60.0)
+    {
+        "00".to_string()
     } else {
-        // Trim trailing zeros from fractional seconds - use 9 decimals for ExifTool compat
-        let sec_str = format!("{:.9}", seconds);
-        let sec_str = sec_str.trim_end_matches('0').trim_end_matches('.');
-        format!("{:02}:{:02}:{}", hours, minutes, sec_str)
+        converted_seconds
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
     };
 
-    TagValue::new_string(formatted)
+    let seconds = converted_seconds.parse::<f64>().unwrap_or(f64::NAN);
+    let printed_seconds = ((seconds * 1_000_000.0 + 0.5).trunc()) / 1_000_000.0;
+    let printed_seconds = if printed_seconds < 10.0 {
+        format!("0{printed_seconds}")
+    } else {
+        printed_seconds.to_string()
+    };
+
+    TagValue::new_string(format!("{hours:02.0}:{minutes:02.0}:{printed_seconds}"))
 }
 
 /// Formats LensInfo from 4 rational values (min_focal, max_focal, min_f_at_min, min_f_at_max).
@@ -1355,6 +1362,21 @@ mod tests {
         } else {
             panic!("Expected String variant, got {:?}", result);
         }
+    }
+
+    #[test]
+    fn gps_timestamp_normalizes_fractional_components_and_rounds_to_microseconds() {
+        // GPS.pm's ConvertTimeStamp first combines all three rational components
+        // into elapsed seconds, then PrintTimeStamp rounds a fractional result
+        // to the nearest microsecond for display.
+        let bytes = make_rational_array_bytes(
+            &[(31, 2), (153, 4), (3_312_345_679, 100_000_000)],
+            ByteOrder::BigEndian,
+        );
+
+        let result = raw_bytes_to_tag_value(&bytes, 5, 3, 0x0007, ByteOrder::BigEndian);
+
+        assert_eq!(result.as_string(), Some("16:08:48.123457"));
     }
 
     #[test]
