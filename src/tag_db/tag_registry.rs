@@ -7224,6 +7224,15 @@ mod tests {
         assert!(!tag.is_writable());
     }
 
+    #[test]
+    fn related_sound_file_is_a_writable_exif_string() {
+        // ExifTool 13.59 Exif.pm 0xa004 declares Writable => 'string'.
+        let tag = get_tag_descriptor("EXIF:RelatedSoundFile")
+            .expect("RelatedSoundFile should be registered");
+        assert!(tag.is_writable());
+        assert_eq!(tag.value_type(), ValueType::String);
+    }
+
     /// ExifTool 13.59 Exif.pm 0x0154 has no `Writable` member, and its
     /// generated `-listx` contract therefore reports `writable='false'`.
     #[test]
