@@ -464,6 +464,14 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 let mut dng_adobe_private_data: Option<Vec<u8>> = None;
 
                 // Convert tags to metadata
+                if format == RawFormat::AdobeDNG && ifd_index == 0 {
+                    if let Some(thumbnail) = rebuild_dng_thumbnail_tiff(data, &tags, byte_order) {
+                        metadata.insert(
+                            "EXIF:ThumbnailTIFF".to_string(),
+                            TagValue::Binary(thumbnail),
+                        );
+                    }
+                }
                 for (tag_id, field_type, value_count, raw_bytes) in &tags {
                     let bytes = raw_bytes.as_ref();
 
@@ -3171,6 +3179,50 @@ mod dng_integer_array_tests {
             format_dng_integer_array(0xC61A, &[1, 0], 3, 1, ByteOrder::LittleEndian),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod dng_thumbnail_tiff_tests {
+    use super::*;
+
+    #[test]
+    fn rebuilds_uncompressed_reduced_resolution_ifd0_as_thumbnail_tiff() {
+        // This is the exact input shape ExifTool's Exif.pm `RebuildTIFF`
+        // accepts for the DNG.dng corpus fixture: an uncompressed,
+        // reduced-resolution RGB image in IFD0.
+        let mut dng = vec![0u8; 172 + 8 * 8 * 3];
+        dng[..8].copy_from_slice(b"II\x2a\0\x08\0\0\0");
+        let entries = [
+            (0x00feu16, 4u16, 1u32, 1u32), // reduced-resolution image
+            (0x0100, 4, 1, 8),
+            (0x0101, 4, 1, 8),
+            (0x0102, 3, 3, 166), // BitsPerSample: 8 8 8
+            (0x0103, 3, 1, 1),
+            (0x0106, 3, 1, 2),
+            (0x0111, 4, 1, 172),
+            (0x0112, 3, 1, 1),
+            (0x0115, 3, 1, 3),
+            (0x0116, 4, 1, 8),
+            (0x0117, 4, 1, 192),
+            (0x011c, 3, 1, 1),
+        ];
+        dng[8..10].copy_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (index, (id, ty, count, value)) in entries.iter().enumerate() {
+            let at = 10 + index * 12;
+            dng[at..at + 2].copy_from_slice(&id.to_le_bytes());
+            dng[at + 2..at + 4].copy_from_slice(&ty.to_le_bytes());
+            dng[at + 4..at + 8].copy_from_slice(&count.to_le_bytes());
+            dng[at + 8..at + 12].copy_from_slice(&value.to_le_bytes());
+        }
+        dng[166..172].copy_from_slice(&[8, 0, 8, 0, 8, 0]);
+
+        let metadata =
+            parse_raw_metadata(&dng, RawFormat::AdobeDNG).expect("synthetic DNG should parse");
+        let thumbnail = metadata
+            .get("EXIF:ThumbnailTIFF")
+            .expect("DNG reduced-resolution IFD0 should produce ThumbnailTIFF");
+        assert!(matches!(thumbnail, TagValue::Binary(bytes) if bytes.len() == 408));
     }
 }
 
@@ -6444,6 +6496,139 @@ fn dng_binary_or_placeholder(data: &[u8], offset: u32, length: u32) -> TagValue 
             length
         )),
     }
+}
+
+/// Rebuild ExifTool's `ThumbnailTIFF` Composite from an uncompressed,
+/// reduced-resolution DNG IFD0.  This follows Exif.pm `RebuildTIFF`: normalize
+/// the output to big-endian TIFF, set 72 dpi, and copy the source strips.
+fn rebuild_dng_thumbnail_tiff(
+    data: &[u8],
+    tags: &crate::parsers::tiff::ifd_parser::IfdEntries,
+    byte_order: ByteOrder,
+) -> Option<Vec<u8>> {
+    let entry = |id| tags.iter().find(|(tag, ..)| *tag == id);
+    let values = |id| {
+        let (_, field_type, count, bytes) = entry(id)?;
+        let width = match *field_type {
+            3 => 2,
+            4 => 4,
+            _ => return None,
+        };
+        if bytes.len() < width * *count as usize {
+            return None;
+        }
+        (0..*count as usize)
+            .map(|i| match width {
+                2 => read_tiff_u16(&bytes[i * 2..], byte_order).map(u32::from),
+                _ => read_tiff_u32(&bytes[i * 4..], byte_order),
+            })
+            .collect::<Option<Vec<_>>>()
+    };
+    let one = |id| values(id).and_then(|v| (v.len() == 1).then_some(v[0]));
+    if one(0x00fe)? != 1 || one(0x0103)? != 1 {
+        return None;
+    }
+    let width: u32 = one(0x0100)?;
+    let height: u32 = one(0x0101)?;
+    if width > 256 || height == 0 {
+        return None;
+    }
+    let bits = values(0x0102)?;
+    let photometric = one(0x0106)?;
+    let samples = one(0x0115)?;
+    let rows = one(0x0116)?;
+    let planar = one(0x011c).unwrap_or(1);
+    let orientation = one(0x0112).unwrap_or(1);
+    let offsets = values(0x0111)?;
+    let lengths = values(0x0117)?;
+    if offsets.len() != lengths.len() || bits.len() != samples as usize {
+        return None;
+    }
+    let row_bytes = bits.iter().try_fold(0u32, |sum, bit| {
+        sum.checked_add(width.checked_mul((*bit + 7) / 8)?)
+    })?;
+    let mut pixels = Vec::new();
+    for (offset, length) in offsets.into_iter().zip(lengths) {
+        if length != row_bytes.checked_mul(rows)? {
+            return None;
+        }
+        pixels.extend_from_slice(data.get(offset as usize..offset.checked_add(length)? as usize)?);
+    }
+    if pixels.len() != height.checked_mul(row_bytes)? as usize {
+        return None;
+    }
+
+    let mut entries: Vec<(u16, u16, Vec<u8>)> = vec![
+        (0x00fe, 4, vec![0, 0, 0, 0]),
+        (0x0100, 4, width.to_be_bytes().to_vec()),
+        (0x0101, 4, height.to_be_bytes().to_vec()),
+        (
+            0x0102,
+            3,
+            bits.iter()
+                .flat_map(|v| (*v as u16).to_be_bytes())
+                .collect(),
+        ),
+        (0x0103, 3, vec![0, 1]),
+        (0x0106, 3, (photometric as u16).to_be_bytes().to_vec()),
+        (0x0111, 4, vec![0; 4]),
+        (0x0112, 3, (orientation as u16).to_be_bytes().to_vec()),
+        (0x0115, 3, (samples as u16).to_be_bytes().to_vec()),
+        (0x0116, 4, height.to_be_bytes().to_vec()),
+        (0x0117, 4, (pixels.len() as u32).to_be_bytes().to_vec()),
+        (
+            0x011a,
+            5,
+            [72u32.to_be_bytes(), 1u32.to_be_bytes()].concat(),
+        ),
+        (
+            0x011b,
+            5,
+            [72u32.to_be_bytes(), 1u32.to_be_bytes()].concat(),
+        ),
+        (0x011c, 3, (planar as u16).to_be_bytes().to_vec()),
+        (0x0128, 3, vec![0, 2]),
+    ];
+    let ifd_end = 8 + 2 + entries.len() * 12 + 4;
+    let mut value_area = Vec::new();
+    let mut locations = Vec::with_capacity(entries.len());
+    for (id, _, value) in &entries {
+        if *id == 0x0111 {
+            locations.push(None);
+        } else if value.len() <= 4 {
+            locations.push(Some(u32::MAX));
+        } else {
+            let at = ifd_end + value_area.len();
+            value_area.extend_from_slice(value);
+            locations.push(Some(at as u32));
+        }
+    }
+    let strip_at = (ifd_end + value_area.len()) as u32;
+    let mut out = Vec::with_capacity(strip_at as usize + pixels.len());
+    out.extend_from_slice(b"MM\0*");
+    out.extend_from_slice(&8u32.to_be_bytes());
+    out.extend_from_slice(&(entries.len() as u16).to_be_bytes());
+    for ((id, ty, value), location) in entries.iter_mut().zip(locations) {
+        out.extend_from_slice(&id.to_be_bytes());
+        out.extend_from_slice(&ty.to_be_bytes());
+        let count = if *id == 0x0102 { bits.len() as u32 } else { 1 };
+        out.extend_from_slice(&count.to_be_bytes());
+        let offset = if *id == 0x0111 {
+            strip_at
+        } else {
+            location.unwrap()
+        };
+        if offset == u32::MAX {
+            out.extend_from_slice(value);
+            out.resize(out.len() + (4 - value.len()), 0);
+        } else {
+            out.extend_from_slice(&offset.to_be_bytes());
+        }
+    }
+    out.extend_from_slice(&0u32.to_be_bytes());
+    out.extend_from_slice(&value_area);
+    out.extend_from_slice(&pixels);
+    Some(out)
 }
 
 // ===== Helper Functions =====

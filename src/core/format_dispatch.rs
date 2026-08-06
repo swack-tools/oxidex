@@ -38,6 +38,7 @@ use crate::parsers::font::woff2::parse_woff2_metadata;
 use crate::parsers::image::bmp::parse_bmp_metadata;
 use crate::parsers::image::bpg::parse_bpg_metadata;
 use crate::parsers::image::djvu::parse_djvu_metadata;
+use crate::parsers::image::dpx::parse_dpx_metadata;
 use crate::parsers::image::exr::parse_exr_metadata;
 use crate::parsers::image::flif::parse_flif_metadata;
 use crate::parsers::image::gif::parse_gif_metadata;
@@ -165,6 +166,7 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::JXL => convert_string_error(parse_jxl_metadata(reader), "JXL"),
         FileFormat::BPG => convert_string_error(parse_bpg_metadata(reader), "BPG"),
         FileFormat::EXR => convert_string_error(parse_exr_metadata(reader), "EXR"),
+        FileFormat::DPX => convert_string_error(parse_dpx_metadata(reader), "DPX"),
         FileFormat::PFM => convert_string_error(parse_pfm_metadata(reader), "PFM"),
         FileFormat::FLIF => convert_string_error(parse_flif_metadata(reader), "FLIF"),
         FileFormat::MIFF => convert_string_error(parse_miff_metadata(reader), "MIFF"),

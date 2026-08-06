@@ -63,6 +63,9 @@ pub enum FileFormat {
     /// BMP bitmap image format (.bmp)
     BMP,
 
+    /// Digital Picture Exchange image format (.dpx)
+    DPX,
+
     /// QuickTime/MP4 video format (.mov, .mp4)
     QuickTime,
 
@@ -346,6 +349,7 @@ impl FileFormat {
             FileFormat::PDF => "PDF",
             FileFormat::GIF => "GIF",
             FileFormat::BMP => "BMP",
+            FileFormat::DPX => "DPX",
             FileFormat::QuickTime => "QuickTime",
             FileFormat::HEIF => "HEIF",
             FileFormat::WebP => "WebP",
@@ -451,6 +455,7 @@ impl FileFormat {
             FileFormat::PDF => &["pdf"],
             FileFormat::GIF => &["gif"],
             FileFormat::BMP => &["bmp"],
+            FileFormat::DPX => &["dpx"],
             FileFormat::QuickTime => &["mov", "mp4", "m4v"],
             FileFormat::HEIF => &["heif", "heic"],
             FileFormat::WebP => &["webp"],

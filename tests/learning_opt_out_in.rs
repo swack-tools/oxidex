@@ -21,7 +21,7 @@ fn jpeg_exif_learning_opt_out_in_matches_exiftool_13_59() {
     jpeg.extend_from_slice(&[2, 0, 1, 0, 0, 0, 4, 0, 1, 0]);
     jpeg.extend_from_slice(&[0xff, 0xd9]);
 
-    let file = NamedTempFile::new_in("/dev/shm").expect("creates JPEG fixture");
+    let file = NamedTempFile::new().expect("creates JPEG fixture");
     std::fs::write(file.path(), jpeg).expect("writes JPEG fixture");
 
     let metadata = read_metadata(file.path()).expect("reads JPEG fixture");

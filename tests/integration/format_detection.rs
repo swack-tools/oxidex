@@ -8,6 +8,7 @@ mod common;
 
 use common::TestReader;
 use oxidex::core::FileFormat;
+use oxidex::core::format_dispatch::dispatch_format_parser;
 use oxidex::parsers::detect_format;
 use oxidex::parsers::raw::RawFormat;
 
@@ -196,4 +197,71 @@ fn test_existing_formats_still_work() {
     let pdf_data = vec![0x25, 0x50, 0x44, 0x46, 0x2D, 0x31, 0x2E, 0x34];
     let reader = TestReader::new(pdf_data);
     assert_eq!(detect_format(&reader).unwrap(), FileFormat::PDF);
+}
+
+#[test]
+fn test_detect_dpx_magic_bytes() {
+    for magic in [b"SDPX", b"XPDS"] {
+        let reader = TestReader::new(magic.to_vec());
+        assert_eq!(
+            detect_format(&reader).unwrap().name(),
+            "DPX",
+            "{magic:?} must select the DPX parser"
+        );
+    }
+}
+
+#[test]
+fn test_parse_dpx_direct_table_fields() {
+    let mut data = vec![0; 2080];
+    data[..4].copy_from_slice(b"SDPX");
+    data[8..12].copy_from_slice(b"V2.0");
+    data[16..20].copy_from_slice(&2080_u32.to_be_bytes());
+    data[20..24].copy_from_slice(&1_u32.to_be_bytes());
+    data[24..28].copy_from_slice(&1664_u32.to_be_bytes());
+    data[28..32].copy_from_slice(&384_u32.to_be_bytes());
+    data[36..50].copy_from_slice(b"frame0001.dpx\0");
+    data[160..172].copy_from_slice(b"OxiDex Test\0");
+    data[768..770].copy_from_slice(&0_u16.to_be_bytes());
+    data[770..772].copy_from_slice(&1_u16.to_be_bytes());
+    data[772..776].copy_from_slice(&1920_u32.to_be_bytes());
+    data[776..780].copy_from_slice(&1080_u32.to_be_bytes());
+    data[800..804].copy_from_slice(&[50, 6, 6, 10]);
+    data[820..839].copy_from_slice(b"Synthetic DPX test\0");
+
+    let metadata = dispatch_format_parser(&TestReader::new(data), FileFormat::DPX)
+        .expect("DPX header should parse");
+
+    assert_eq!(metadata.get_string("FileType"), Some("DPX"));
+    assert_eq!(metadata.get_string("MIMEType"), Some("image/x-dpx"));
+    assert_eq!(metadata.get_string("ByteOrder"), Some("Big-endian"));
+    assert_eq!(metadata.get_string("HeaderVersion"), Some("V2.0"));
+    assert_eq!(metadata.get_integer("DPXFileSize"), Some(2080));
+    assert_eq!(metadata.get_string("DittoKey"), Some("New"));
+    assert_eq!(metadata.get_string("ImageFileName"), Some("frame0001.dpx"));
+    assert_eq!(metadata.get_string("Creator"), Some("OxiDex Test"));
+    assert_eq!(
+        metadata.get_string("Orientation"),
+        Some("Horizontal (normal)")
+    );
+    assert_eq!(metadata.get_integer("ImageElements"), Some(1));
+    assert_eq!(metadata.get_integer("ImageWidth"), Some(1920));
+    assert_eq!(metadata.get_integer("ImageHeight"), Some(1080));
+    assert_eq!(
+        metadata.get_string("ComponentsConfiguration"),
+        Some("R, G, B")
+    );
+    assert_eq!(
+        metadata.get_string("TransferCharacteristic"),
+        Some("ITU-R 709-4")
+    );
+    assert_eq!(
+        metadata.get_string("ColorimetricSpecification"),
+        Some("ITU-R 709-4")
+    );
+    assert_eq!(metadata.get_integer("BitDepth"), Some(10));
+    assert_eq!(
+        metadata.get_string("ImageDescription"),
+        Some("Synthetic DPX test")
+    );
 }

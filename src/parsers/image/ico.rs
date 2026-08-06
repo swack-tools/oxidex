@@ -20,7 +20,9 @@ struct IcoDirectoryEntry {
     width: u16,
     height: u16,
     color_count: u8,
+    color_planes: u16,
     bits_per_pixel: u16,
+    image_length: u32,
 }
 
 impl ICOParser {
@@ -65,23 +67,33 @@ impl ICOParser {
         let width = if entry[0] == 0 { 256 } else { entry[0] as u16 };
         let height = if entry[1] == 0 { 256 } else { entry[1] as u16 };
         let color_count = entry[2];
+        let color_planes = entry_reader.u16_at(4).unwrap_or(0);
 
         // Bits per pixel at offset 6-7 (for ICO) or hotspot Y (for CUR)
         let bits_per_pixel = entry_reader.u16_at(6).unwrap_or(0);
+        let image_length = entry_reader.u32_at(8).unwrap_or(0);
 
         Ok(IcoDirectoryEntry {
             width,
             height,
             color_count,
+            color_planes,
             bits_per_pixel,
+            image_length,
         })
     }
 
     /// Reads all directory entries and extracts metadata
-    fn analyze_entries(reader: &dyn FileReader, count: u16) -> Result<(u16, u16, u16, String)> {
+    fn analyze_entries(
+        reader: &dyn FileReader,
+        count: u16,
+    ) -> Result<(u16, u16, u16, u8, u16, u32, String)> {
         let mut max_width = 0u16;
         let mut max_height = 0u16;
         let mut max_bits = 0u16;
+        let mut color_count = 0u8;
+        let mut color_planes = 0u16;
+        let mut image_length = 0u32;
         let mut sizes = Vec::new();
 
         for i in 0..count {
@@ -102,11 +114,23 @@ impl ICOParser {
                 max_bits = entry.bits_per_pixel;
             }
 
+            color_count = entry.color_count;
+            color_planes = entry.color_planes;
+            image_length = entry.image_length;
+
             sizes.push(format!("{}x{}", entry.width, entry.height));
         }
 
         let available_sizes = sizes.join(", ");
-        Ok((max_width, max_height, max_bits, available_sizes))
+        Ok((
+            max_width,
+            max_height,
+            max_bits,
+            color_count,
+            color_planes,
+            image_length,
+            available_sizes,
+        ))
     }
 }
 
@@ -141,8 +165,15 @@ impl FormatParser for ICOParser {
         );
 
         if image_count > 0 && reader.size() >= 6 + (image_count as u64 * 16) {
-            let (max_width, max_height, max_bits, available_sizes) =
-                Self::analyze_entries(reader, image_count)?;
+            let (
+                max_width,
+                max_height,
+                max_bits,
+                color_count,
+                color_planes,
+                image_length,
+                available_sizes,
+            ) = Self::analyze_entries(reader, image_count)?;
 
             metadata.insert(
                 "ImageWidth".to_string(),
@@ -153,10 +184,22 @@ impl FormatParser for ICOParser {
                 TagValue::String(max_height.to_string()),
             );
             metadata.insert(
-                "BitDepth".to_string(),
-                TagValue::String(max_bits.to_string()),
+                "NumColors".to_string(),
+                TagValue::String(color_count.to_string()),
+            );
+            metadata.insert(
+                "ImageLength".to_string(),
+                TagValue::String(image_length.to_string()),
             );
             if file_type == ICO_TYPE_ICON {
+                metadata.insert(
+                    "ColorPlanes".to_string(),
+                    TagValue::String(color_planes.to_string()),
+                );
+                metadata.insert(
+                    "BitDepth".to_string(),
+                    TagValue::String(max_bits.to_string()),
+                );
                 metadata.insert(
                     "BitsPerPixel".to_string(),
                     TagValue::String(max_bits.to_string()),

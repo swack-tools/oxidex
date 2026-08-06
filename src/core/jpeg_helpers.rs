@@ -1540,19 +1540,24 @@ pub fn process_dji_thermal_segments(segments: &[Segment], metadata: &mut Metadat
             continue;
         };
 
-        let temperature =
+        for decoded in
             decode_binary_table(table, &data[table_offset..], crate::io::ByteOrder::Little)
-                .into_iter()
-                .find(|field| field.field.name == "AmbientTemperature")
-                .and_then(|field| match field.raw {
-                    DecodedValue::Float(value) => Some(value),
-                    _ => None,
-                });
-        if let Some(temperature) = temperature {
-            metadata.insert(
-                "APP4:AmbientTemperature".to_string(),
-                TagValue::String(format!("{temperature:.1} C")),
-            );
+        {
+            let value = match (decoded.field.name, &decoded.raw) {
+                ("AmbientTemperature" | "ReflectedTemperature", DecodedValue::Float(value)) => {
+                    Some(format!("{value:.1} C"))
+                }
+                ("ObjectDistance", DecodedValue::Float(value)) => Some(format!("{value:.1} m")),
+                ("Emissivity", _) => decoded.apply_print_conv_to_raw(),
+                ("IDString", DecodedValue::String(value)) => Some(value.clone()),
+                _ => None,
+            };
+            if let Some(value) = value {
+                metadata.insert(
+                    format!("APP4:{}", decoded.field.name),
+                    TagValue::String(value),
+                );
+            }
         }
 
         let humidity =
@@ -1592,9 +1597,8 @@ fn perl_sprintf_g(value: f64) -> String {
     let bytes = &output[..length];
     // `%g` emits ASCII digits, punctuation, exponent markers, or the
     // implementation's ASCII inf/nan spelling.
-    String::from_utf8(bytes.iter().map(|byte| *byte as u8).collect()).expect("C %g output is ASCII")
+String::from_utf8(bytes.iter().map(|byte| *byte as u8).collect()).expect("C %g output is ASCII")
 }
-
 /// Emits `APP3:ImagingData`, the InfiRay IR + thermal + visible payload.
 ///
 /// `JPEG::Main` declares it `Binary => 1` (JPEG.pm:119-123), so ExifTool

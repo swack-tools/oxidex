@@ -1261,6 +1261,7 @@ impl OxiDexExtractor {
             "DR4" => vec!["dr4"],
             "VRD" => vec!["vrd"],
             "LFP" => vec!["lfp", "lfr"],
+            "FPF" => vec!["fpf"],
             "DJVU" => vec!["djvu", "djv"],
             "HTML" => vec!["html", "htm"],
             "LNK" => vec!["lnk"],
@@ -1277,6 +1278,11 @@ mod tests {
     fn test_oxidex_extractor_creation() {
         let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures/jpeg"));
         assert_eq!(extractor.fixture_path, PathBuf::from("tests/fixtures/jpeg"));
+    }
+
+    #[test]
+    fn test_fpf_format_discovers_standalone_fpf_files() {
+        assert_eq!(OxiDexExtractor::format_to_extensions("FPF"), vec!["fpf"]);
     }
 
     /// Regression test for the corpus-pollution bug: pointing the extractor

@@ -803,10 +803,95 @@ fn parse_video_format(
     let bih_data = reader.read(offset, 40)?;
     let r = EndianReader::little_endian(bih_data);
 
-    let _width = r.u32_at(4).unwrap_or(0);
-    let _height = r.u32_at(8).unwrap_or(0);
+    // RIFF.pm routes a video `strf` chunk to BMP::Main.  Keep these names and
+    // conversions in the File group; they are not AVI aliases.
+    let header_size = r.u32_at(0).unwrap_or(0);
+    let width = r.u32_at(4).unwrap_or(0);
+    let height = r.i32_at(8).unwrap_or(0).unsigned_abs();
+    let planes = r.u16_at(12).unwrap_or(0);
     let bit_count = r.u16_at(14).unwrap_or(0);
-    let _compression = [bih_data[16], bih_data[17], bih_data[18], bih_data[19]];
+    let compression = r.u32_at(16).unwrap_or(0);
+    let image_length = r.u32_at(20).unwrap_or(0);
+    let pixels_per_meter_x = r.u32_at(24).unwrap_or(0);
+    let pixels_per_meter_y = r.u32_at(28).unwrap_or(0);
+    let num_colors = r.u32_at(32).unwrap_or(0);
+    let num_important_colors = r.u32_at(36).unwrap_or(0);
+
+    let bmp_version = match header_size {
+        40 => TagValue::new_string("Windows V3".to_string()),
+        68 => TagValue::new_string("AVI BMP structure?".to_string()),
+        108 => TagValue::new_string("Windows V4".to_string()),
+        124 => TagValue::new_string("Windows V5".to_string()),
+        value => TagValue::new_integer(value as i64),
+    };
+    metadata.insert("File:BMPVersion".to_string(), bmp_version);
+    metadata.insert(
+        "File:ImageWidth".to_string(),
+        TagValue::new_integer(width as i64),
+    );
+    metadata.insert(
+        "File:ImageHeight".to_string(),
+        TagValue::new_integer(height as i64),
+    );
+    metadata.insert(
+        "File:Planes".to_string(),
+        TagValue::new_integer(planes as i64),
+    );
+    metadata.insert(
+        "File:BitDepth".to_string(),
+        TagValue::new_integer(bit_count as i64),
+    );
+
+    let compression_value = if compression <= 256 {
+        Some(match compression {
+            0 => TagValue::new_string("None".to_string()),
+            1 => TagValue::new_string("8-Bit RLE".to_string()),
+            2 => TagValue::new_string("4-Bit RLE".to_string()),
+            3 => TagValue::new_string("Bitfields".to_string()),
+            4 => TagValue::new_string("JPEG".to_string()),
+            5 => TagValue::new_string("PNG".to_string()),
+            value => TagValue::new_integer(value as i64),
+        })
+    } else if let Ok(fourcc) = std::str::from_utf8(&bih_data[16..20]) {
+        Some(TagValue::new_string(
+            fourcc.trim_end_matches([' ', '\0']).to_string(),
+        ))
+    } else {
+        // ExifTool's `unpack("A4", ...)` is not safely representable as a Rust
+        // string for non-UTF-8 bytes.  Omit rather than fabricate a conversion.
+        None
+    };
+    if let Some(compression_value) = compression_value {
+        metadata.insert("File:Compression".to_string(), compression_value);
+    }
+    metadata.insert(
+        "File:ImageLength".to_string(),
+        TagValue::new_integer(image_length as i64),
+    );
+    metadata.insert(
+        "File:PixelsPerMeterX".to_string(),
+        TagValue::new_integer(pixels_per_meter_x as i64),
+    );
+    metadata.insert(
+        "File:PixelsPerMeterY".to_string(),
+        TagValue::new_integer(pixels_per_meter_y as i64),
+    );
+    metadata.insert(
+        "File:NumColors".to_string(),
+        if num_colors == 0 {
+            TagValue::new_string("Use BitDepth".to_string())
+        } else {
+            TagValue::new_integer(num_colors as i64)
+        },
+    );
+    metadata.insert(
+        "File:NumImportantColors".to_string(),
+        if num_important_colors == 0 {
+            TagValue::new_string("All".to_string())
+        } else {
+            TagValue::new_integer(num_important_colors as i64)
+        },
+    );
 
     // BitDepth for first video stream
     if is_first && bit_count > 0 {
@@ -946,6 +1031,85 @@ mod tests {
         let mut riff_body = b"AVI ".to_vec();
         riff_body.extend_from_slice(&chunk(b"LIST", &hdrl));
         chunk(b"RIFF", &riff_body)
+    }
+
+    /// Builds an AVI containing a first video stream with a BITMAPINFOHEADER
+    /// `strf` chunk.  RIFF.pm dispatches this exact chunk to BMP::Main.
+    fn synthetic_avi_with_bitmap_info_header(bitmap_info: &[u8]) -> Vec<u8> {
+        fn chunk(id: &[u8; 4], body: &[u8]) -> Vec<u8> {
+            let mut out = id.to_vec();
+            out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            out.extend_from_slice(body);
+            out
+        }
+
+        let mut avih = vec![0u8; 56];
+        avih[0..4].copy_from_slice(&66_667u32.to_le_bytes());
+        avih[16..20].copy_from_slice(&233u32.to_le_bytes());
+        avih[24..28].copy_from_slice(&2u32.to_le_bytes());
+        avih[32..36].copy_from_slice(&320u32.to_le_bytes());
+        avih[36..40].copy_from_slice(&240u32.to_le_bytes());
+
+        let mut strh = vec![0u8; 56];
+        strh[0..4].copy_from_slice(b"vids");
+        strh[4..8].copy_from_slice(b"mjpg");
+        strh[20..24].copy_from_slice(&1u32.to_le_bytes());
+        strh[24..28].copy_from_slice(&15u32.to_le_bytes());
+        strh[32..36].copy_from_slice(&233u32.to_le_bytes());
+
+        let mut strl = b"strl".to_vec();
+        strl.extend_from_slice(&chunk(b"strh", &strh));
+        strl.extend_from_slice(&chunk(b"strf", bitmap_info));
+
+        let mut hdrl = b"hdrl".to_vec();
+        hdrl.extend_from_slice(&chunk(b"avih", &avih));
+        hdrl.extend_from_slice(&chunk(b"LIST", &strl));
+
+        let mut riff_body = b"AVI ".to_vec();
+        riff_body.extend_from_slice(&chunk(b"LIST", &hdrl));
+        chunk(b"RIFF", &riff_body)
+    }
+
+    #[test]
+    fn video_bitmap_info_header_matches_exiftool_bmp_main_fields() {
+        // This is the BITMAPINFOHEADER from ExifTool 13.59's RIFF.avi fixture:
+        // `strf` is routed to BMP::Main by RIFF.pm, not an AVI-specific table.
+        let mut bih = vec![0u8; 40];
+        bih[0..4].copy_from_slice(&40u32.to_le_bytes());
+        bih[4..8].copy_from_slice(&320u32.to_le_bytes());
+        bih[8..12].copy_from_slice(&240i32.to_le_bytes());
+        bih[12..14].copy_from_slice(&1u16.to_le_bytes());
+        bih[14..16].copy_from_slice(&24u16.to_le_bytes());
+        bih[16..20].copy_from_slice(b"MJPG");
+        bih[20..24].copy_from_slice(&230_400u32.to_le_bytes());
+
+        let reader = TestReader::new(synthetic_avi_with_bitmap_info_header(&bih));
+        let metadata = parse_avi_metadata(&reader).unwrap();
+
+        for (tag, expected) in [
+            (
+                "File:BMPVersion",
+                TagValue::String("Windows V3".to_string()),
+            ),
+            ("File:ImageWidth", TagValue::Integer(320)),
+            ("File:ImageHeight", TagValue::Integer(240)),
+            ("File:Planes", TagValue::Integer(1)),
+            ("File:BitDepth", TagValue::Integer(24)),
+            ("File:Compression", TagValue::String("MJPG".to_string())),
+            ("File:ImageLength", TagValue::Integer(230_400)),
+            ("File:PixelsPerMeterX", TagValue::Integer(0)),
+            ("File:PixelsPerMeterY", TagValue::Integer(0)),
+            (
+                "File:NumColors",
+                TagValue::String("Use BitDepth".to_string()),
+            ),
+            (
+                "File:NumImportantColors",
+                TagValue::String("All".to_string()),
+            ),
+        ] {
+            assert_eq!(metadata.get(tag), Some(&expected), "{tag}");
+        }
     }
 
     /// ExifTool 13.55 has no AVI group at all -- it reports AVI tags under

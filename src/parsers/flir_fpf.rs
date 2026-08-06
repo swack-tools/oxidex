@@ -53,8 +53,7 @@ fn read_f32(buf: &[u8], off: usize, little_endian: bool) -> Option<f32> {
 fn read_str(buf: &[u8], off: usize, len: usize) -> Option<String> {
     let b = buf.get(off..off + len)?;
     let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
-    let s = String::from_utf8_lossy(&b[..end]).trim().to_string();
-    if s.is_empty() { None } else { Some(s) }
+    Some(String::from_utf8_lossy(&b[..end]).trim().to_string())
 }
 
 /// `sprintf("%.1f",$val)` / `sprintf("%.2f",$val)` PrintConvs shared by
@@ -231,12 +230,33 @@ pub fn parse_fpf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         insert_float(&mut metadata, "IRWindowTransmission", v, 2);
     }
 
-    // DateTimeOriginal (0x248, int32u[7]) is deliberately omitted: ExifTool's
-    // RawConv/ValueConv (`sprintf("%.4d:%.2d:%.2d %.2d:%.2d:%.2d.%.3d",
-    // split(" ",$val))` then `$self->ConvertDateTime($val)`) depends on
-    // `ConvertDateTime`'s timezone/locale handling, which this module has no
-    // faithful equivalent for yet -- reporting a guessed format under the
-    // real tag name would be worse than omitting it.
+    // FLIR.pm FPF: `int32u[7]`, ValueConv =>
+    // `sprintf("%.4d:%.2d:%.2d %.2d:%.2d:%.2d.%.3d", split(" ",$val))`.
+    // This format has no timezone or locale conversion.
+    if let (
+        Some(year),
+        Some(month),
+        Some(day),
+        Some(hour),
+        Some(minute),
+        Some(second),
+        Some(millis),
+    ) = (
+        read_u32(buf, 0x248, little_endian),
+        read_u32(buf, 0x24c, little_endian),
+        read_u32(buf, 0x250, little_endian),
+        read_u32(buf, 0x254, little_endian),
+        read_u32(buf, 0x258, little_endian),
+        read_u32(buf, 0x25c, little_endian),
+        read_u32(buf, 0x260, little_endian),
+    ) {
+        metadata.insert(
+            format!("{GROUP}:DateTimeOriginal"),
+            TagValue::String(format!(
+                "{year:04}:{month:02}:{day:02} {hour:02}:{minute:02}:{second:02}.{millis:03}"
+            )),
+        );
+    }
 
     if let Some(v) = read_f32(buf, 0x2a4, little_endian) {
         insert_float(&mut metadata, "CameraScaleMin", v, 1);
@@ -299,8 +319,7 @@ mod tests {
     }
 
     /// Cross-checked against the pinned ExifTool 13.59 oracle on the same
-    /// synthetic buffer (`FLIR:*` output identical apart from the
-    /// deliberately-omitted `DateTimeOriginal`).
+    /// synthetic buffer (matching `FLIR:*` output).
     fn sample_buffer() -> Vec<u8> {
         let mut buf = vec![0u8; HEADER_LEN + 100];
         buf[0..24].copy_from_slice(b"FPF Public Image Format\0");
@@ -343,6 +362,41 @@ mod tests {
         // 0.5 * 100 -> "50.0 %".
         assert_eq!(metadata.get_string("FLIR:RelativeHumidity"), Some("50.0 %"));
         assert_eq!(metadata.get_string("File:FileType"), Some("FPF"));
+    }
+
+    #[test]
+    fn preserves_empty_fixed_strings_and_decodes_fpf_datetime_original() {
+        let mut buf = sample_buffer();
+        // FLIR.pm FPF: DateTimeOriginal is int32u[7] at 0x248, formatted as
+        // YYYY:MM:DD HH:MM:SS.mmm. The zero-filled lens/filter fields are
+        // emitted by ExifTool as empty strings rather than omitted.
+        for (offset, value) in [
+            (0x248, 2013u32),
+            (0x24c, 2),
+            (0x250, 22),
+            (0x254, 11),
+            (0x258, 19),
+            (0x25c, 20),
+            (0x260, 891),
+        ] {
+            buf[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+
+        let metadata = parse_fpf_metadata(&SliceReader(buf)).expect("valid FPF file");
+
+        assert_eq!(
+            metadata.get_string("FLIR:DateTimeOriginal"),
+            Some("2013:02:22 11:19:20.891")
+        );
+        for name in [
+            "LensPartNumber",
+            "LensSerialNumber",
+            "FilterModel",
+            "FilterPartNumber",
+            "FilterSerialNumber",
+        ] {
+            assert_eq!(metadata.get_string(&format!("FLIR:{name}")), Some(""));
+        }
     }
 
     #[test]

@@ -1,8 +1,7 @@
 use oxidex::core::operations::read_metadata;
 use std::path::Path;
 
-const EXIFTOOL_JPEG: &str =
-    "/tmp/oxidex-exiftool-cache/exiftool-partial/exiftool-13.59/t/images/ExifTool.jpg";
+const EXIFTOOL_JPEG: &str = "/tmp/oxidex-exiftool-cache/exiftool/t/images/ExifTool.jpg";
 
 /// ExifTool 13.59 finds the `zmie` marker in an inner MIE trailer and reports
 /// its required empty data block as MIE-Main:TrailerSignature.
