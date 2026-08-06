@@ -4508,6 +4508,26 @@ mod tests {
     }
 
     #[test]
+    fn pdf_trapped_removes_one_leading_slash() {
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description xmlns:pdf="http://ns.adobe.com/pdf/1.3/">
+                <pdf:Trapped>/Unknown</pdf:Trapped>
+              </rdf:Description>
+            </rdf:RDF>
+        "#;
+
+        let tags = parse_xmp(xml).expect("parses PDF Trapped property");
+        assert_eq!(
+            tags.iter()
+                .find(|(name, _)| name == "XMP:Trapped")
+                .map(|(_, value)| value.as_str()),
+            Some("Unknown")
+        );
+        assert_eq!(format_xmp_value("XMP:Trapped", "//Unknown"), "/Unknown");
+    }
+
+    #[test]
     fn test_parse_simple_xmp() {
         let xml = br#"
             <x:xmpmeta xmlns:x="adobe:ns:meta/">
