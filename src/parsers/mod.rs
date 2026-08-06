@@ -25,6 +25,7 @@ pub mod audio;
 pub mod canon_vrd;
 pub mod common;
 pub mod detection;
+pub mod djvu;
 pub mod document;
 pub mod elf;
 pub mod flir_fpf;

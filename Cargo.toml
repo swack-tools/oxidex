@@ -73,7 +73,6 @@ djvu-iff = "0.27"
 # one SIMD pass instead of testing every byte offset in the file; already in
 # the tree as a transitive dependency of nom.
 memchr = "2.8"
-
 # XML Parsing (for XMP metadata)
 quick-xml = { version = "0.41", features = ["serialize"] }
 

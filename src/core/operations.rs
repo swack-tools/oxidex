@@ -237,6 +237,12 @@ pub fn read_metadata_with_detector(
         Ok(f) => f,
         Err(e) => {
             if is_unsupported(&e) && add_identity_tags(&mut metadata, &reader, path) {
+                if metadata
+                    .get_string("File:FileType")
+                    .is_some_and(|file_type| file_type.starts_with("DJVU"))
+                {
+                    crate::parsers::djvu::extract_annotation(&reader, &mut metadata)?;
+                }
                 crate::composite::apply(&mut metadata);
                 return Ok(metadata);
             }
@@ -273,6 +279,12 @@ pub fn read_metadata_with_detector(
         Ok(m) => m,
         Err(e) => {
             if is_unsupported(&e) && add_identity_tags(&mut metadata, &reader, path) {
+                if metadata
+                    .get_string("File:FileType")
+                    .is_some_and(|file_type| file_type.starts_with("DJVU"))
+                {
+                    crate::parsers::djvu::extract_annotation(&reader, &mut metadata)?;
+                }
                 crate::composite::apply(&mut metadata);
                 return Ok(metadata);
             }

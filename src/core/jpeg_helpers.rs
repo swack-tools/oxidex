@@ -512,6 +512,28 @@ pub fn process_app3_segments(segments: &[Segment], metadata: &mut MetadataMap) {
             metadata.insert(key.clone(), value.clone());
         }
     }
+
+    if metadata.get_string("IFD0:Make") != Some("DJI") {
+        return;
+    }
+
+    let mut thermal_len = 0usize;
+    for (index, segment) in segments.iter().enumerate() {
+        if segment.marker != APP3_MARKER {
+            continue;
+        }
+        thermal_len += segment.data.len();
+        if !segments
+            .get(index + 1)
+            .is_some_and(|next| next.marker == APP3_MARKER)
+        {
+            metadata.insert(
+                "APP3:ThermalData".to_string(),
+                binary_data_placeholder(thermal_len),
+            );
+            thermal_len = 0;
+        }
+    }
 }
 
 /// ExifTool.pm:7997-8127 — a preview JPEG embedded directly in APP2/APP3
@@ -1444,6 +1466,23 @@ fn merge(source: MetadataMap, metadata: &mut MetadataMap) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_app3_segments_combines_dji_thermal_data() {
+        let segments = [
+            Segment::new(0xFFE3, 0, b"thermal"),
+            Segment::new(0xFFE3, 11, b"bytes"),
+        ];
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:Make", TagValue::String("DJI".to_string()));
+
+        process_app3_segments(&segments, &mut metadata);
+
+        assert_eq!(
+            metadata.get_string("APP3:ThermalData"),
+            Some("(Binary data 12 bytes, use -b option to extract)")
+        );
+    }
 
     /// `IPTC:ReferenceNumber` (record 2, dataset 50) is IPTC.pm's
     /// `digits[8]` format: trailing-NUL-stripped text, kept as-is -- not
