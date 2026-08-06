@@ -688,6 +688,13 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         }
                     } else {
                         match (format, ifd_index, *tag_id) {
+                            // CR2CFAPattern is physically stored in the sensor IFD3 and
+                            // ExifTool preserves that family-1 group. The generic fallback
+                            // folds unusual chained IFDs into IFD0, which is wrong for this
+                            // uniquely identified CR2 tag.
+                            (RawFormat::CanonCR2, 3, 0xC5E0) => {
+                                lookup_raw_tag_name(*tag_id, "IFD3", format)
+                            }
                             // TIFF/EP tag 0x9216 (TIFF-EPStandardID) lives in NEF
                             // IFD0. lookup_tag_name has no entry for it under the
                             // IFD0 group, so oxidex emitted "IFD0:0x9216" with a
@@ -8499,6 +8506,22 @@ mod rational_array_tests {
             metadata.get("SubIFD0:BitsPerSample"),
             Some(&TagValue::new_integer(16))
         );
+    }
+
+    #[test]
+    fn cr2_cfa_pattern_keeps_ifd3_group() {
+        let path = "/tmp/oxidex-exiftool-cache/exiftool/t/images/CanonRaw.cr2";
+        if !std::path::Path::new(path).exists() {
+            return;
+        }
+        let data = std::fs::read(path).expect("read pinned CR2 fixture");
+        let metadata = parse_raw_metadata(&data, RawFormat::CanonCR2).expect("parse CR2 fixture");
+
+        assert_eq!(
+            metadata.get("IFD3:CR2CFAPattern"),
+            Some(&TagValue::new_string("[Red,Green][Green,Blue]".to_string()))
+        );
+        assert!(!metadata.contains_key("IFD0:CR2CFAPattern"));
     }
 
     /// A single rational must keep its existing representation -- the fix is
