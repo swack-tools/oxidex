@@ -18,6 +18,23 @@ fn printed(value: &TagValue) -> String {
     }
 }
 
+/// ExifTool 13.59 reports the complete ID3v2 block: its 381-byte synchsafe
+/// payload plus the 10-byte header.
+///
+/// This fails when the tag is omitted or when only the payload size is exposed.
+#[test]
+#[ignore = "requires the pinned ExifTool fixture cache"]
+fn mp3_fixture_reports_id3_size() {
+    let path = Path::new("/tmp/oxidex-exiftool-cache/exiftool/t/images/MP3.mp3");
+    let reader = BufferedReader::new(path).expect("Failed to open pinned MP3 fixture");
+    let metadata = parse_mp3_metadata(&reader).expect("Failed to parse pinned MP3 fixture");
+
+    assert_eq!(
+        printed(metadata.get("ID3Size").expect("OxiDex missing ID3Size")),
+        "391"
+    );
+}
+
 #[test]
 #[ignore] // Requires ExifTool to be installed
 fn test_mp3_metadata_parity_with_exiftool() {
