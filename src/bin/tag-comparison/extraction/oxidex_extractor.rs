@@ -430,6 +430,14 @@ impl OxiDexExtractor {
                 }
 
                 // Try to format dates in EXIF style
+                // PNG date:* tEXt keywords are ISO-8601 text fields. ExifTool
+                // preserves their spelling, unlike EXIF date tags.
+                if key.starts_with("PNG:Datecreate")
+                    || key.starts_with("PNG:Datemodify")
+                    || key.starts_with("PNG:Datetimestamp")
+                {
+                    return s.clone();
+                }
                 if (key.contains("Date") || key.contains("Time"))
                     && (s.contains('T') || s.contains('-'))
                 {
@@ -1377,6 +1385,16 @@ mod tests {
                 &TagValue::String("  leading description  ".to_string()),
             ),
             "  leading description"
+        );
+    }
+
+    #[test]
+    fn png_date_text_preserves_iso8601_spelling() {
+        let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
+        let value = TagValue::String("2025-11-09T15:06:20+00:00".to_string());
+        assert_eq!(
+            extractor.format_value("PNG:Datecreate", "Datecreate", &value),
+            "2025-11-09T15:06:20+00:00"
         );
     }
 
