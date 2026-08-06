@@ -7150,7 +7150,7 @@ mod rw2_embedded_exif_printconv_tests {
 
     /// RW2 preview MakerNote regression fixture. The values after the IFD are
     /// addressed from the preview TIFF header, exactly as Panasonic.rw2 does.
-    fn panasonic_preview_makernote() -> Vec<u8> {
+    fn panasonic_preview_makernote(big_endian: bool) -> Vec<u8> {
         const ENTRY_COUNT: usize = 8;
         const MAKERNOTE_OFFSET: u32 = 44;
         const IFD_OFFSET: u32 = MAKERNOTE_OFFSET + 12;
@@ -7160,26 +7160,27 @@ mod rw2_embedded_exif_printconv_tests {
         let face_info_offset = af_point_offset + 16;
 
         let mut makernote = b"Panasonic\0\0\0".to_vec();
-        makernote.extend_from_slice(&(ENTRY_COUNT as u16).to_le_bytes());
+        makernote.extend_from_slice(&u16b(ENTRY_COUNT as u16, big_endian));
         let mut entry = |tag_id: u16, field_type: u16, count: u32, value: u32| {
-            makernote.extend_from_slice(&tag_id.to_le_bytes());
-            makernote.extend_from_slice(&field_type.to_le_bytes());
-            makernote.extend_from_slice(&count.to_le_bytes());
-            makernote.extend_from_slice(&value.to_le_bytes());
+            makernote.extend_from_slice(&u16b(tag_id, big_endian));
+            makernote.extend_from_slice(&u16b(field_type, big_endian));
+            makernote.extend_from_slice(&u32b(count, big_endian));
+            makernote.extend_from_slice(&u32b(value, big_endian));
         };
         entry(0x0021, 7, 8200, data_dump_offset);
         entry(0x004d, 5, 2, af_point_offset);
         entry(0x004e, 7, 42, face_info_offset);
-        entry(0x0027, 3, 1, 0);
-        entry(0x0038, 3, 1, 1);
-        entry(0x0043, 3, 1, 2);
-        entry(0x8002, 3, 1, 2);
-        entry(0x8003, 3, 1, 1);
-        makernote.extend_from_slice(&0u32.to_le_bytes());
+        let inline_short = |value| if big_endian { value << 16 } else { value };
+        entry(0x0027, 3, 1, inline_short(0));
+        entry(0x0038, 3, 1, inline_short(1));
+        entry(0x0043, 3, 1, inline_short(2));
+        entry(0x8002, 3, 1, inline_short(2));
+        entry(0x8003, 3, 1, inline_short(1));
+        makernote.extend_from_slice(&u32b(0, big_endian));
 
         makernote.extend(std::iter::repeat_n(0, 8200));
-        makernote.extend_from_slice(&rational(128, 256, false));
-        makernote.extend_from_slice(&rational(128, 256, false));
+        makernote.extend_from_slice(&rational(128, 256, big_endian));
+        makernote.extend_from_slice(&rational(128, 256, big_endian));
         makernote.extend(std::iter::repeat_n(0, 42));
         makernote
     }
@@ -7188,7 +7189,7 @@ mod rw2_embedded_exif_printconv_tests {
     /// DataDump; missing registry entries lose the five inline PrintConv tags.
     #[test]
     fn rw2_preview_reaches_panasonic_makernote_tags() {
-        let makernote = panasonic_preview_makernote();
+        let makernote = panasonic_preview_makernote(false);
         let metadata = extract(&[(0x927c, 7, makernote.len() as u32, &makernote)], false);
         let tag = |name| metadata.get(name).and_then(TagValue::as_string);
 
@@ -7203,6 +7204,21 @@ mod rw2_embedded_exif_printconv_tests {
         assert_eq!(tag("Panasonic:JPEGQuality"), Some("High"));
         assert_eq!(tag("Panasonic:NumFacePositions"), Some("0"));
         assert_eq!(tag("Panasonic:VideoFrameRate"), Some("n/a"));
+    }
+
+    /// Big-endian inline SHORT values occupy the high half of the parsed u32.
+    /// These IDs must use `inline_u16_value`, not the generic raw u32 path.
+    #[test]
+    fn rw2_big_endian_preview_decodes_panasonic_inline_short_tags() {
+        let makernote = panasonic_preview_makernote(true);
+        let metadata = extract(&[(0x927c, 7, makernote.len() as u32, &makernote)], true);
+        let tag = |name| metadata.get(name).and_then(TagValue::as_string);
+
+        assert_eq!(tag("Panasonic:VideoFrameRate"), Some("n/a"));
+        assert_eq!(tag("Panasonic:BatteryLevel"), Some("Full"));
+        assert_eq!(tag("Panasonic:JPEGQuality"), Some("High"));
+        assert_eq!(tag("Panasonic:HighlightWarning"), Some("Yes"));
+        assert_eq!(tag("Panasonic:DarkFocusEnvironment"), Some("No"));
     }
 
     /// Panasonic.rw2 carries `CustomRendered = 0`, so the `1 => 'Custom'` arm

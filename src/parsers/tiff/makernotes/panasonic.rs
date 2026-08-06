@@ -905,6 +905,20 @@ impl PanasonicParser {
             return;
         }
 
+        // These tags are int16u with PrintConv mappings. A big-endian inline
+        // SHORT occupies the high half of `value_offset`, so the generic u32
+        // registry path would decode 1 as 65536.
+        if matches!(tag_id, 0x0027 | 0x0038 | 0x0043 | 0x8002 | 0x8003) {
+            let value = i32::from(inline_u16_value(entry, byte_order));
+            if let Some(tag_name) = registry.get_tag_name(tag_id) {
+                tags.insert(
+                    format!("Panasonic:{}", tag_name),
+                    registry.decode_i32(tag_id, value),
+                );
+            }
+            return;
+        }
+
         // RollAngle / PitchAngle: same int16u-wire/int16s-Format override,
         // plus ValueConv '$val/10' (RollAngle, Panasonic.pm:1200-1207) and
         // '-$val/10' (PitchAngle, Panasonic.pm:1208-1215). The negation is
