@@ -65,6 +65,7 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     signature!(b"8BPS", 0, FileFormat::PSD),
     signature!(b"\x00\x00\x01\x00", 0, FileFormat::ICO),
     signature!(b"FLIF", 0, FileFormat::FLIF),
+    signature!(b"id=ImageMagick", 0, FileFormat::MIFF),
     signature!(b"\x76\x2F\x31\x01", 0, FileFormat::EXR),
     signature!(b"\x42\x50\x47\xFB", 0, FileFormat::BPG),
     signature!(b"\xFF\x0A", 0, FileFormat::JXL),

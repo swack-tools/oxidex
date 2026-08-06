@@ -202,6 +202,9 @@ pub enum FileFormat {
     /// Free Lossless Image Format (.flif)
     FLIF,
 
+    /// Magick Image File Format (.miff, .mif)
+    MIFF,
+
     /// Scalable Vector Graphics (.svg)
     SVG,
 
@@ -375,6 +378,7 @@ impl FileFormat {
             FileFormat::EXR => "EXR",
             FileFormat::PFM => "PFM",
             FileFormat::FLIF => "FLIF",
+            FileFormat::MIFF => "MIFF",
             FileFormat::SVG => "SVG",
             FileFormat::ICO => "ICO",
             FileFormat::PSD => "PSD",
@@ -479,6 +483,7 @@ impl FileFormat {
             FileFormat::EXR => &["exr"],
             FileFormat::PFM => &["pfm"],
             FileFormat::FLIF => &["flif"],
+            FileFormat::MIFF => &["miff", "mif"],
             FileFormat::SVG => &["svg"],
             FileFormat::ICO => &["ico"],
             FileFormat::PSD => &["psd"],
