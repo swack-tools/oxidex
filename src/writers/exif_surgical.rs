@@ -323,6 +323,30 @@ pub(crate) fn tag_value_to_field_for_key(
             "GPSVersionID must contain exactly four bytes",
         ));
     }
+    if matches!(key, "ISO" | "EXIF:ISO" | "ExifIFD:ISO")
+        && let TagValue::Array(values) = value
+    {
+        if values.is_empty() {
+            return Err(ExifToolError::parse_error(
+                "ISO requires at least one unsigned 16-bit value",
+            ));
+        }
+        let mut bytes = Vec::with_capacity(values.len() * 2);
+        for value in values {
+            let TagValue::Integer(value) = value else {
+                return Err(ExifToolError::parse_error(
+                    "ISO values must be unsigned 16-bit integers",
+                ));
+            };
+            if !(0..=u16::MAX as i64).contains(value) {
+                return Err(ExifToolError::parse_error(
+                    "ISO value does not fit unsigned 16-bit",
+                ));
+            }
+            bytes.extend_from_slice(&(*value as u16).to_ne_bytes());
+        }
+        return Ok((3, values.len() as u32, bytes));
+    }
     if key.rsplit(':').next() == Some("SubjectArea") {
         if let TagValue::Array(values) = value
             && (2..=4).contains(&values.len())
@@ -2734,5 +2758,18 @@ mod tests {
             let plan = plan_exif_write(&scan, &original, &original.clone()).unwrap();
             assert_roundtrip(&plan);
         }
+    }
+
+    #[test]
+    fn iso_list_serializes_as_variable_count_unsigned_shorts() {
+        let value =
+            TagValue::new_array(vec![TagValue::new_integer(100), TagValue::new_integer(200)]);
+        let (field_type, count, bytes) =
+            tag_value_to_field_for_key("ExifIFD:ISO", &value, Some(3)).unwrap();
+        assert_eq!((field_type, count), (3, 2));
+        assert_eq!(
+            bytes,
+            [100_u16.to_ne_bytes(), 200_u16.to_ne_bytes()].concat()
+        );
     }
 }
