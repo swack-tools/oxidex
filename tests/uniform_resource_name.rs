@@ -7,6 +7,11 @@ const APPLE_IPHONE_16_PRO: &str =
 /// ExifTool 13.59 exposes an APP2 payload beginning with `urn:` unchanged.
 #[test]
 fn apple_iphone_16_pro_app2_uniform_resource_name_matches_exiftool() {
+    if !Path::new(APPLE_IPHONE_16_PRO).is_file() {
+        eprintln!("skipping: corpus fixture not present at {APPLE_IPHONE_16_PRO}");
+        return;
+    }
+
     let metadata = read_metadata(Path::new(APPLE_IPHONE_16_PRO)).expect("Apple JPEG parses");
 
     assert_eq!(

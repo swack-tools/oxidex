@@ -7,6 +7,11 @@ const DJI_M30T: &str = "/tmp/oxidex-exiftool-cache/combined-samples/DJI/DJI_M30T
 /// bracketed `sensor_id` record unchanged.
 #[test]
 fn dji_m30t_app7_sensor_id_matches_exiftool() {
+    if !Path::new(DJI_M30T).is_file() {
+        eprintln!("skipping: corpus fixture not present at {DJI_M30T}");
+        return;
+    }
+
     let metadata = read_metadata(Path::new(DJI_M30T)).expect("DJI M30T parses");
 
     assert_eq!(metadata.get_string("APP7:SensorID"), Some("4XAGJCP02AA007"));

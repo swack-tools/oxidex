@@ -8,6 +8,11 @@ const EXIFTOOL_JPEG: &str =
 /// its required empty data block as MIE-Main:TrailerSignature.
 #[test]
 fn exiftool_jpeg_mie_trailer_signature_matches_exiftool() {
+    if !Path::new(EXIFTOOL_JPEG).is_file() {
+        eprintln!("skipping: pinned fixture not present at {EXIFTOOL_JPEG}");
+        return;
+    }
+
     let metadata = read_metadata(Path::new(EXIFTOOL_JPEG)).expect("ExifTool JPEG parses");
 
     assert_eq!(metadata.get_string("MIE-Main:TrailerSignature"), Some(""));
