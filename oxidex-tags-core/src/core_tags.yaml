@@ -453,7 +453,8 @@ tables:
         description: "ImageDescription tag"
       - id: "0x010F"
         name: "Make"
-        writable: false
+        writable: true
+        type: string
         description: "Make tag"
       - id: "0x0110"
         name: "Model"
