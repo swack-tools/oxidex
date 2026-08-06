@@ -3987,25 +3987,6 @@ fn extract_nef_tags(metadata: &mut MetadataMap) {
         );
     }
 
-    // Count available image representations
-    let mut image_count = 0;
-    if metadata.contains_key("IFD0:ImageWidth") {
-        image_count += 1;
-    }
-    if metadata.contains_key("IFD1:ImageWidth") {
-        image_count += 1;
-    }
-    if metadata.contains_key("SubIFD0:ImageWidth") {
-        image_count += 1;
-    }
-
-    if image_count > 0 {
-        metadata.insert(
-            "NEF:ImageLayerCount".to_string(),
-            TagValue::new_integer(image_count),
-        );
-    }
-
     // Check for RAW data in SubIFD
     if metadata.contains_key("SubIFD0:ImageWidth") {
         metadata.insert(
