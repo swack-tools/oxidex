@@ -73,9 +73,19 @@ fn decode_tag(signature: &str, data: &[u8], size: usize, metadata: &mut HashMap<
             .ok()
             .map(TagValue::new_string),
         TagType::Text => parse_text_type(data).ok().map(TagValue::new_string),
-        TagType::Xyz => parse_xyz_type(data)
-            .ok()
-            .map(|(x, y, z)| TagValue::new_string(format!("{} {} {}", x, y, z))),
+        TagType::Xyz => parse_xyz_type(data).ok().map(|(x, y, z)| {
+            let value = if def.name == "BlueMatrixColumn" {
+                format!(
+                    "{} {} {}",
+                    format_fixed32s(x),
+                    format_fixed32s(y),
+                    format_fixed32s(z)
+                )
+            } else {
+                format!("{} {} {}", x, y, z)
+            };
+            TagValue::new_string(value)
+        }),
         TagType::Curve | TagType::Binary => Some(binary_placeholder(size)),
         TagType::S15Fixed16Array => Some(
             parse_s15fixed16_array(data)
@@ -369,6 +379,13 @@ fn parse_xyz_type(data: &[u8]) -> Result<(f64, f64, f64)> {
     Ok((x, y, z))
 }
 
+/// ExifTool's `GetFixed32s` removes insignificant digits at five decimal
+/// places before rendering the value.
+fn format_fixed32s(value: f64) -> String {
+    let adjustment = if value > 0.0 { 0.5 } else { -0.5 };
+    perl_number((value * 1e5 + adjustment).trunc() / 1e5)
+}
+
 /// Parses ICC signatureType (4-byte signature)
 fn parse_signature_type(data: &[u8]) -> Result<String> {
     if data.len() < 12 {
@@ -633,6 +650,23 @@ mod tests {
         for (decoded, expected) in numbers.iter().zip(raw) {
             assert!((decoded - f64::from(expected) / 65536.0).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn blue_matrix_column_matches_exiftool_fixed32_rounding() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"XYZ ");
+        payload.extend_from_slice(&0u32.to_be_bytes());
+        for value in [9778i32, 4143, 48800] {
+            payload.extend_from_slice(&value.to_be_bytes());
+        }
+
+        let metadata = parse(&build_profile(&[("bXYZ", payload)]));
+
+        assert_eq!(
+            value(&metadata, "BlueMatrixColumn"),
+            Some("0.1492 0.06322 0.74463")
+        );
     }
 
     #[test]
