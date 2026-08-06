@@ -31,6 +31,7 @@ const RATIONAL: u16 = 5;
 const ORIENTATION: u16 = 0x0112;
 const X_RESOLUTION: u16 = 0x011A;
 const ARTIST: u16 = 0x013B;
+const GPS_MEASURE_MODE: u16 = 0x000A;
 
 fn oxidex(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_oxidex"))
@@ -83,6 +84,21 @@ fn read_tag(path: &Path, key: &str) -> Option<String> {
 fn tiff_entry(path: &Path, ifd: IfdKind, tag_id: u16) -> RawEntry {
     let bytes = fs::read(path).expect("read written tiff");
     let scan = scan_exif_entries(&bytes).expect("scan written tiff");
+    scan.entries
+        .into_iter()
+        .find(|entry| entry.ifd == ifd && entry.tag_id == tag_id)
+        .unwrap_or_else(|| panic!("no {ifd:?} entry for tag 0x{tag_id:04x}"))
+}
+
+/// Returns an EXIF entry from a JPEG's APP1 TIFF payload.
+fn jpeg_entry(path: &Path, ifd: IfdKind, tag_id: u16) -> RawEntry {
+    let bytes = fs::read(path).expect("read written jpeg");
+    let exif_start = bytes
+        .windows(b"Exif\0\0".len())
+        .position(|window| window == b"Exif\0\0")
+        .expect("written jpeg must contain EXIF APP1 data");
+    let scan = scan_exif_entries(&bytes[exif_start + b"Exif\0\0".len()..])
+        .expect("scan written EXIF TIFF");
     scan.entries
         .into_iter()
         .find(|entry| entry.ifd == ifd && entry.tag_id == tag_id)
@@ -162,6 +178,21 @@ fn jpeg_string_tag_is_still_settable() {
         read_tag(file.path(), "IFD0:Artist").as_deref(),
         Some("Grace Hopper")
     );
+}
+
+#[test]
+fn jpeg_gps_measure_mode_display_value_is_serialized_as_its_exif_code() {
+    // GPS.pm 0x000a's PrintConv maps raw ASCII "2" to this display value.
+    // Storing the label itself makes ExifTool report an unknown raw value.
+    let file = write_to_copy(
+        JPEG_FIXTURE,
+        ".jpg",
+        "-GPS:GPSMeasureMode=2-Dimensional Measurement",
+    );
+    let entry = jpeg_entry(file.path(), IfdKind::Gps, GPS_MEASURE_MODE);
+    assert_eq!(entry.field_type, ASCII);
+    assert_eq!(entry.count, 2);
+    assert_eq!(entry.value, b"2\0");
 }
 
 #[test]

@@ -311,6 +311,20 @@ pub fn plan_exif_write(
     // wins and the alias is left for the pre-existing duplicate-tag-id guard
     // in the Added loop below to reconcile (skip if equal, once serialized).
     let mut desired = desired.clone();
+    // GPS.pm (ExifTool 13.59) declares GPSDestBearingRef's PrintConv as
+    // M => "Magnetic North", T => "True North". The CLI supplies that
+    // display value, but TIFF stores the one-byte code; invert this one
+    // declared conversion before the generic string serializer sees it.
+    if let Some(TagValue::String(value)) = desired.get("GPS:GPSDestBearingRef") {
+        let raw = match value.as_str() {
+            "Magnetic North" => Some("M"),
+            "True North" => Some("T"),
+            _ => None,
+        };
+        if let Some(raw) = raw {
+            desired.insert("GPS:GPSDestBearingRef", TagValue::new_string(raw));
+        }
+    }
     for entry in &scan.entries {
         if matches!(entry.ifd, IfdKind::Interop | IfdKind::Ifd1) || entry.tag_id == MAKERNOTE {
             continue;
@@ -1360,6 +1374,26 @@ mod tests {
         assert_eq!(make.field_type, 2);
         assert_eq!(make.value, b"Nikon\0");
         assert_eq!(make.count, 6);
+    }
+
+    #[test]
+    fn plan_inverts_gps_dest_bearing_ref_display_value_before_serializing() {
+        // ExifTool 13.59 GPS.pm maps the raw GPSDestBearingRef code M to
+        // the display value "Magnetic North". A writer must store M, not the
+        // display label, or ExifTool reads it back as an unknown value.
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let mut desired = original.clone();
+        desired.insert(
+            "GPS:GPSDestBearingRef",
+            TagValue::new_string("Magnetic North"),
+        );
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let bearing_ref = plan.gps.iter().find(|e| e.tag_id == 0x0017).unwrap();
+        assert_eq!(bearing_ref.field_type, 2);
+        assert_eq!(bearing_ref.count, 2);
+        assert_eq!(bearing_ref.value, b"M\0");
     }
 
     #[test]

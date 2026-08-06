@@ -73,10 +73,11 @@ use crate::core::formatters::{
     format_gps_direction_ref, format_gps_lat_ref, format_gps_lon_ref, format_gps_speed_ref,
     format_icc_value, format_integer_precision_values, format_interop_index, format_light_source,
     format_metering_mode, format_orientation, format_resolution_unit, format_saturation,
-    format_scene_capture_type, format_sensing_method, format_sharpness,
-    format_subject_distance_range, format_three_decimal_values, format_white_balance,
-    format_with_unit, format_ycbcr_positioning, format_ycbcr_subsampling_string, is_icc_matrix_tag,
-    is_integer_precision_tag, is_three_decimal_tag,
+    format_scene_capture_type, format_security_classification, format_sensing_method,
+    format_sharpness, format_subject_distance_range, format_three_decimal_values,
+    format_white_balance, format_with_unit, format_ycbcr_positioning,
+    format_ycbcr_subsampling_string, is_icc_matrix_tag, is_integer_precision_tag,
+    is_three_decimal_tag,
 };
 use crate::core::{MetadataMap, TagValue};
 
@@ -442,6 +443,15 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
         && let Some(i) = value.as_integer()
     {
         return TagValue::String(format_gain_control(i));
+    }
+
+    // SecurityClassification (Exif.pm:2453-2463) is an ASCII PrintConv, not
+    // a numeric TIFF enum. Preserve codes not present in ExifTool's table.
+    if base_name == "SecurityClassification"
+        && let Some(value) = value.as_string()
+        && let Some(label) = format_security_classification(value)
+    {
+        return TagValue::String(label.to_string());
     }
 
     // FileSource (Exif.pm:2811). `Writable => 'undef'`, so the TIFF reader
@@ -1716,6 +1726,36 @@ mod tests {
         assert_eq!(
             format_tag_value("ExifIFD:FileSource", &TagValue::new_integer(3)),
             TagValue::String("Digital Camera".to_string())
+        );
+    }
+
+    /// `Exif.pm:2453-2463` maps the one-letter stored classification codes;
+    /// without this dispatch they escape unchanged as their raw ASCII values.
+    #[test]
+    fn security_classification_string_values_reach_the_print_conv() {
+        for (raw, expected) in [
+            ("T", "Top Secret"),
+            ("S", "Secret"),
+            ("C", "Confidential"),
+            ("R", "Restricted"),
+            ("U", "Unclassified"),
+        ] {
+            assert_eq!(
+                format_tag_value(
+                    "ExifIFD:SecurityClassification",
+                    &TagValue::String(raw.to_string()),
+                ),
+                TagValue::String(expected.to_string()),
+                "SecurityClassification {raw} did not reach Exif.pm's PrintConv"
+            );
+        }
+
+        // The PrintConv hash has no fallback label: ExifTool leaves unknown
+        // stored strings as-is rather than inventing a classification.
+        let unknown = TagValue::String("X".to_string());
+        assert_eq!(
+            format_tag_value("ExifIFD:SecurityClassification", &unknown),
+            unknown
         );
     }
 
