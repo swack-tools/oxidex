@@ -19,3 +19,12 @@ fn dji_zh20n_app4_ambient_temperature_matches_exiftool() {
         Some("25.0 C")
     );
 }
+
+/// ExifTool 13.59 reads the little-endian float at ThermalParams2 offset 8
+/// and applies `sprintf("%.2f", $val)`.
+#[test]
+fn dji_zh20n_app4_emissivity_matches_exiftool() {
+    let metadata = read_metadata(Path::new(DJI_ZH20N)).expect("DJI ZH20N parses");
+
+    assert_eq!(metadata.get_string("APP4:Emissivity"), Some("0.95"));
+}

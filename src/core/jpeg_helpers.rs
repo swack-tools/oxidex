@@ -1450,7 +1450,7 @@ pub fn process_dji_dbg_segments(segments: &[Segment], metadata: &mut MetadataMap
     }
 }
 
-/// Reads `APP4:AmbientTemperature` from DJI's ThermalParams2 record.
+/// Reads selected APP4 tags from DJI's ThermalParams2 record.
 ///
 /// ExifTool selects `DJI::ThermalParams2` only for a DJI image when the APP4
 /// payload has its `2c 01 20 00` signature after either 32 or 64 bytes.  The
@@ -1476,18 +1476,31 @@ pub fn process_dji_thermal_segments(segments: &[Segment], metadata: &mut Metadat
             continue;
         };
 
-        let temperature =
-            decode_binary_table(table, &data[table_offset..], crate::io::ByteOrder::Little)
-                .into_iter()
-                .find(|field| field.field.name == "AmbientTemperature")
+        let fields =
+            decode_binary_table(table, &data[table_offset..], crate::io::ByteOrder::Little);
+        let float_field = |name| {
+            fields
+                .iter()
+                .find(|field| field.field.name == name)
                 .and_then(|field| match field.raw {
                     DecodedValue::Float(value) => Some(value),
                     _ => None,
-                });
+                })
+        };
+
+        let temperature = float_field("AmbientTemperature");
         if let Some(temperature) = temperature {
             metadata.insert(
                 "APP4:AmbientTemperature".to_string(),
                 TagValue::String(format!("{temperature:.1} C")),
+            );
+        }
+
+        let emissivity = float_field("Emissivity");
+        if let Some(emissivity) = emissivity {
+            metadata.insert(
+                "APP4:Emissivity".to_string(),
+                TagValue::String(format!("{emissivity:.2}")),
             );
         }
     }
