@@ -563,7 +563,8 @@ tables:
         description: "Artist tag"
       - id: "0x013C"
         name: "HostComputer"
-        writable: false
+        writable: true
+        type: string
         description: "HostComputer tag"
       - id: "0x013D"
         name: "Predictor"
