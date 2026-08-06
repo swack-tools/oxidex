@@ -389,6 +389,8 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
             invert_subsec_time(value)
                 .ok_or_else(|| invalid(tag_name, "SubSecTimeOriginal needs fractional seconds"))?
         }
+        ("EXIF:SubSecTime" | "ExifIFD:SubSecTime", value) => invert_subsec_time(value)
+            .ok_or_else(|| invalid(tag_name, "SubSecTime needs fractional seconds"))?,
         // Exif.pm 13.59 0xc635 converts the writable int16u code to these
         // labels. Apply the inverse before the generic integer parser.
         ("MakerNoteSafety" | "EXIF:MakerNoteSafety" | "IFD0:MakerNoteSafety", "Unsafe") => "0",
