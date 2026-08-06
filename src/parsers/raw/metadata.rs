@@ -4691,6 +4691,31 @@ fn parse_cr3_thmb(data: &[u8], metadata: &mut MetadataMap) {
     );
 }
 
+/// Read Canon's CR3 `CMP1` image-description atom.
+///
+/// ExifTool 13.59 declares this as `Canon::CMP1`, a big-endian
+/// `ProcessBinaryData` record.  Its generated table has only two lossless
+/// fields: `ImageWidth` at int16 index 8 and `ImageHeight` at index 10.  These
+/// are Canon/MakerNotes tags, not the QuickTime source-image dimensions.
+fn parse_cr3_cmp1(data: &[u8], metadata: &mut MetadataMap) {
+    let Some(record) = find_cr3_box(data, b"CMP1") else {
+        return;
+    };
+    let Some(table) = find_table("Canon", "CMP1") else {
+        return;
+    };
+
+    for decoded in decode_binary_table(table, record, TableByteOrder::Big) {
+        let DecodedValue::Integer(value) = decoded.raw else {
+            continue;
+        };
+        metadata.insert(
+            format!("Canon:{}", decoded.field.name),
+            TagValue::Integer(value),
+        );
+    }
+}
+
 /// Byte offset of `part` within `whole`, when `part` is a subslice of it.
 fn subslice_offset(whole: &[u8], part: &[u8]) -> Option<usize> {
     let whole_start = whole.as_ptr() as usize;
