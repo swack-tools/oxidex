@@ -60,7 +60,7 @@ pub mod xmp_extractor;
 use crate::core::formatters::exif_enums::{
     compression_label, file_source_label_bytes, flash_label, focal_plane_resolution_unit_label,
 };
-use crate::core::formatters::exif_print_conv::print_exposure_time;
+use crate::core::formatters::exif_print_conv::{print_exposure_time, print_f_number};
 use crate::core::{FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::icc::extract_icc_profile;
@@ -481,6 +481,7 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 }
 
 const TIFF_ARTIST_TAG: u16 = 0x013b;
+const TAG_FNUMBER: u16 = 0x829d;
 const TAG_EXIF_IFD: u16 = 0x8769;
 const TAG_SHUTTER_SPEED_VALUE: u16 = 0x9201;
 const TAG_APERTURE_VALUE: u16 = 0x9202;
@@ -772,6 +773,22 @@ fn parse_exif_ifd(
         let count = read_embedded_tiff_u32(data, base.checked_add(4)?, byte_order)?;
 
         match tag {
+            // ExifTool 13.59 Exif.pm 0x829d: unsigned rational with
+            // `PrintConv => PrintFNumber`. PDF.pdf stores 350/100 and reports
+            // `[ExifIFD] FNumber : 3.5`.
+            TAG_FNUMBER if field_type == 5 => {
+                if let Some((num, den)) = read_unsigned_rational_value(data, base, byte_order) {
+                    if den != 0 {
+                        let key = crate::tag_db::lookup_tag_name(TAG_FNUMBER, "ExifIFD");
+                        metadata.insert(
+                            key,
+                            crate::core::TagValue::new_string(print_f_number(
+                                f64::from(num) / f64::from(den),
+                            )),
+                        );
+                    }
+                }
+            }
             // ExifTool 13.55 Exif.pm 0x9000 has no PrintConv, only
             // `RawConv => '$val=~s/\0+$//; $val'`, so the four undef bytes are
             // emitted verbatim minus any trailing NULs ("0210" for PDF.pdf).
@@ -1378,6 +1395,7 @@ mod embedded_exif_tests {
         copyright: &'static str,
         date_time_original: &'static str,
         create_date: &'static str,
+        f_number: (u32, u32),
         aperture: (u32, u32),
         brightness: (i32, i32),
         flash: u16,
@@ -1398,6 +1416,7 @@ mod embedded_exif_tests {
                 copyright: "Copyright 2004 Phil Harvey",
                 date_time_original: "2001:05:19 18:36:41",
                 create_date: "2001:05:19 18:36:41",
+                f_number: (350, 100),
                 aperture: (360, 100),
                 brightness: (200, 100),
                 flash: 1,
@@ -1417,7 +1436,7 @@ mod embedded_exif_tests {
     impl ExifFixture {
         fn build(&self) -> Vec<u8> {
             const IFD0_ENTRIES: usize = 2;
-            const EXIF_ENTRIES: usize = 11;
+            const EXIF_ENTRIES: usize = 12;
             const IFD1_ENTRIES: usize = 1;
 
             let ifd0_off = 8usize;
@@ -1448,6 +1467,8 @@ mod embedded_exif_tests {
                 bytes.extend_from_slice(&den);
                 push_heap(&bytes)
             };
+            let f_number_at =
+                rational(self.f_number.0.to_le_bytes(), self.f_number.1.to_le_bytes());
             let aperture_at =
                 rational(self.aperture.0.to_le_bytes(), self.aperture.1.to_le_bytes());
             let brightness_at = rational(
@@ -1471,6 +1492,7 @@ mod embedded_exif_tests {
             ));
 
             let mut exif = Vec::new();
+            exif.extend_from_slice(&entry(0x829d, 5, 1, f_number_at));
             exif.extend_from_slice(&entry(0x9003, 2, dto_count, dto_at));
             exif.extend_from_slice(&entry(0x9004, 2, create_count, create_at));
             exif.extend_from_slice(&entry(0x9202, 5, 1, aperture_at));
@@ -1538,6 +1560,7 @@ mod embedded_exif_tests {
         assert_eq!(get(&map, "IFD1:Compression"), "JPEG (old-style)");
         assert_eq!(get(&map, "ExifIFD:DateTimeOriginal"), "2001:05:19 18:36:41");
         assert_eq!(get(&map, "ExifIFD:CreateDate"), "2001:05:19 18:36:41");
+        assert_eq!(get(&map, "ExifIFD:FNumber"), "3.5");
         assert_eq!(get(&map, "ExifIFD:BrightnessValue"), "2");
         assert_eq!(get(&map, "ExifIFD:ExifImageWidth"), "8");
         assert_eq!(get(&map, "ExifIFD:ExifImageHeight"), "8");
