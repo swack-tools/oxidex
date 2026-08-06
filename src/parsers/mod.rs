@@ -27,6 +27,7 @@ pub mod common;
 pub mod detection;
 pub mod document;
 pub mod elf;
+pub mod flir_fpf;
 pub mod font;
 pub mod icc;
 pub mod image;
