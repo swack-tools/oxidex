@@ -224,6 +224,14 @@ fn convert_integer_to_entry(
     value: i64,
     byte_order: ByteOrder,
 ) -> Result<Option<IfdEntryData>> {
+    // Exif.pm 13.59 0x8833 declares ISOSpeed as int32u.
+    if tag_id == 0x8833 && (0..=u32::MAX as i64).contains(&value) {
+        let bytes = match byte_order {
+            ByteOrder::LittleEndian => (value as u32).to_le_bytes().to_vec(),
+            ByteOrder::BigEndian => (value as u32).to_be_bytes().to_vec(),
+        };
+        return Ok(Some(IfdEntryData::new(tag_id, ExifType::Long, 1, bytes)));
+    }
     if value >= 0 && value <= u16::MAX as i64 {
         // Fits in u16 - use Short
         let value_u16 = value as u16;

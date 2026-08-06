@@ -331,7 +331,10 @@ pub(crate) fn tag_value_to_field_for_key(
     // Exif.pm 13.59 declares TileWidth (0x0142) as int32u. Do not let the
     // generic smallest-fit integer encoding downcast a newly created tag to
     // SHORT merely because its current value fits in 16 bits.
-    if matches!(key, "IFD0:TileWidth" | "EXIF:TileWidth") {
+    if matches!(
+        key,
+        "IFD0:TileWidth" | "EXIF:TileWidth" | "EXIF:ISOSpeed" | "ExifIFD:ISOSpeed"
+    ) {
         return tag_value_to_field(value, Some(4));
     }
     // Exif.pm 13.59 0x0129 declares PageNumber as `int16u[2]`. It is exposed
