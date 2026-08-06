@@ -70,6 +70,18 @@ pub fn raw_bytes_to_tag_value(
         return TagValue::new_string(value);
     }
 
+    // Exif.pm declares LensSerialNumber as a string. NikonZ7_2.jpg stores
+    // `20147348\0 \0`; ExifTool's string reader terminates at the first NUL,
+    // rather than retaining the padding after it.
+    if tag_id == 0xA435 && field_type == 2 {
+        let text = String::from_utf8_lossy(bytes)
+            .split('\0')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        return TagValue::new_string(text);
+    }
+
     // Exif.pm 0x9287 (`LearningOptOutIn`) is a variable-length int16u
     // sequence. The first value is a pair count; each following usage/choice
     // value alternates between the two exact PrintConv maps.

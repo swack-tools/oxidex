@@ -1928,6 +1928,24 @@ mod tests {
     }
 
     #[test]
+    fn nikon_z7_2_lens_serial_number_stops_at_first_nul() {
+        let path =
+            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Nikon/NikonZ7_2.jpg");
+        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+            .expect("read pinned Nikon Z7 II fixture");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse pinned Nikon Z7 II segments");
+        let mut metadata = MetadataMap::new();
+
+        process_exif_segments(&segments, &reader, &mut metadata);
+
+        assert_eq!(
+            metadata.get_string("ExifIFD:LensSerialNumber"),
+            Some("20147348")
+        );
+    }
+
+    #[test]
     fn process_ricoh_rmeta_extracts_azimuth() {
         // Minimal standard RMETA directory with one tag. Section sizes include
         // the two-byte size field, matching Ricoh.pm's ProcessRicohRMETA.

@@ -230,6 +230,21 @@ fn canon_cr3_ctmd_exposure_info_masks_iso_high_bit() {
 }
 
 #[test]
+fn canon_cr3_ctmd_timestamp_uses_canon_pm_packed_datetime() {
+    // Canon.pm CTMD type 1 RawConv is `x2vCCCCCC`: skip two bytes, then
+    // little-endian year/month/day/hour/minute/second/centisecond.
+    let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
+        .expect("pinned Canon CR3 fixture must be available");
+    let metadata = parse_raw_metadata(&data, RawFormat::CanonCR3)
+        .expect("pinned Canon CR3 fixture should parse");
+
+    assert_eq!(
+        metadata.get_string("Canon:TimeStamp"),
+        Some("2018:02:21 12:08:56.21")
+    );
+}
+
+#[test]
 fn test_parse_minimal_tiff_based_raw() {
     // Create a minimal valid TIFF header
     // II (little-endian) + 0x002A (magic 42) + offset to IFD (8)

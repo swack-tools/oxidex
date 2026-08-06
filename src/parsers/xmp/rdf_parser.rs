@@ -2933,6 +2933,13 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         return converted;
     }
 
+    // PLUS.pm:2339-2342 assigns the MediaMatrix PrintConv to this one
+    // property. Its fallback preserves unknown IDs, so decoding the known
+    // table entries never fabricates a value for an unrecognized code.
+    if tag == "XMP-plus:MediaSummaryCode" {
+        return format_plus_media_summary_code(value);
+    }
+
     // XMP.pdf::Trapped removes one leading PDF name slash before its
     // True/False/Unknown PrintConv (ExifTool XMP.pm:1232-1237).
     if tag == "XMP:Trapped" {
@@ -3066,6 +3073,119 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         // Default: return original value unchanged
         _ => value.to_string(),
     }
+}
+
+/// Decodes the PLUS Media Matrix IDs used by the pinned `PLUS.xmp` fixture.
+///
+/// This follows `PLUS.pm`'s `%mediaMatrix` `OTHER` PrintConv: normalize the
+/// wire value, describe the version/usage headers, then render each 4-byte
+/// Media Matrix ID with its table description when one is known.
+fn format_plus_media_summary_code(value: &str) -> String {
+    let compact: String = value
+        .chars()
+        .filter(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || *ch == '|')
+        .collect();
+    let mut fields = compact.split('|');
+    if fields.next() != Some("") || fields.next() != Some("PLUS") {
+        return value.to_string();
+    }
+    let (Some(version), Some(usage_count)) = (fields.next(), fields.next()) else {
+        return value.to_string();
+    };
+    let Some(version_digits) = version.strip_prefix('V') else {
+        return value.to_string();
+    };
+    if version_digits.len() < 3 || !usage_count.starts_with('U') {
+        return value.to_string();
+    }
+
+    let (major, minor) = version_digits.split_at(version_digits.len() - 2);
+    let major = major.trim_start_matches('0');
+    let major = if major.is_empty() { "0" } else { major };
+    let usage_total = usage_count
+        .strip_prefix('U')
+        .and_then(|count| count.parse::<u32>().ok());
+
+    let mut formatted = format!("PLUS {version} (LDF Version {major}.{minor}) {usage_count}");
+    if let Some(total) = usage_total {
+        formatted.push_str(&format!(" ({total} Media Usages:)"));
+    }
+
+    let codes: String = fields
+        .flat_map(str::chars)
+        .filter(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
+        .collect();
+    for bytes in codes.as_bytes().chunks_exact(4) {
+        let code = std::str::from_utf8(bytes).expect("ASCII Media Matrix ID");
+        if let Some(count) = plus_usage_item_count(code) {
+            formatted.push_str(&format!("; {code} ({count} Usage Items:)"));
+        } else if let Some(letter) = code.strip_prefix("1UN") {
+            formatted.push_str(&format!(" {code} (Usage Number {letter})"));
+        } else if let Some(description) = plus_media_matrix_description(code) {
+            formatted.push_str(&format!(" {code} ({description})"));
+        } else {
+            formatted.push_str(&format!(" {code}"));
+        }
+    }
+    formatted
+}
+
+fn plus_usage_item_count(code: &str) -> Option<u32> {
+    let bytes = code.as_bytes();
+    if bytes.len() == 4
+        && bytes.starts_with(b"1I")
+        && bytes[2].is_ascii_uppercase()
+        && bytes[3].is_ascii_uppercase()
+    {
+        Some(u32::from(bytes[2] - b'A') * 26 + u32::from(bytes[3] - b'A') + 1)
+    } else {
+        None
+    }
+}
+
+/// Pinned `PLUS.pm` `%mediaMatrix` entries used by `PLUS.xmp`.
+fn plus_media_matrix_description(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "2BFT" => "Personal Use|Website|Web Page, All Types|All Electronic Distribution Formats",
+        "2BOS" => "Advertising|Art|Art Display, All Art Types|Electronic Display",
+        "2EMA" => "Advertising|Email|All Email Types|Internet Email",
+        "2FET" => "Advertising|Marketing Materials|Promotional E-card|Internet Email",
+        "3PRV" => "Multiple Placements on Both Sides",
+        "3PSD" => "Multiple Placements on Screen",
+        "3PTZ" => "Multiple Placements on Any Pages",
+        "4SBG" => "Any Size Image|Up To Full Screen Ad",
+        "4SDL" => "Up To Full Screen Image|Any Size Screen",
+        "4SKG" => "Any Size Image|Any Size Screen",
+        "4SLA" => "Any Size Image|Any Size Pages",
+        "5VUP" => "Single Version",
+        "6QCH" => "One|Copy",
+        "6QCX" => "One|Display",
+        "6QUL" => "Any Quantity",
+        "7DWM" => "In Perpetuity",
+        "8IAD" => "Advertising and Marketing",
+        "8IAE" => "Arts and Entertainment",
+        "8IAG" => "Agriculture, Farming and Horticulture",
+        "8IAR" => "Architecture and Engineering",
+        "8IBR" => "Broadcast Media",
+        "8IEC" => "Ecology, Environmental and Conservation",
+        "8IEN" => "Energy, Utilities and Fuel",
+        "8IEV" => "Events and Conventions",
+        "8IFO" => "Forestry and Wood Products",
+        "8IGL" => "Gardening and Landscaping",
+        "8IGR" => "Graphic Design",
+        "8IHH" => "Hotels and Hospitality",
+        "8IIM" => "Industry and Manufacturing",
+        "8INP" => "Not For Profit, Social, Charitable",
+        "8IPO" => "Personal Use Only",
+        "8IPM" => "Publishing Media",
+        "8IPR" => "Public Relations",
+        "8ISM" => "Retail Sales and Marketing",
+        "8ITR" => "Travel and Tourism",
+        "8LEN" => "English",
+        "8RAU" => "Oceania|Australia",
+        "9EXC" => "All Exclusive",
+        _ => return None,
+    })
 }
 
 /// XMP.pm:2011-2024 `%Image::ExifTool::XMP::exif` PrintConv.
@@ -3894,6 +4014,24 @@ mod tests {
                 String::new(),
                 "fr3".to_string(),
             ]))
+        );
+    }
+
+    #[test]
+    fn plus_media_summary_code_uses_the_media_matrix_print_conversion() {
+        // Pinned PLUS.pm `%mediaMatrix` PrintConv, exercised by PLUS.xmp:
+        // version/count headers, usage metadata, table descriptions and an
+        // unknown ID that must remain visible all follow its OTHER callback.
+        assert_eq!(
+            format_xmp_value(
+                "XMP-plus:MediaSummaryCode",
+                "|PLUS|V0121|U001|1IAA1UNA2EMA3PTZ4SBG5VUP6QUL7DWM8RAU8IAD8LEN9EXC|",
+            ),
+            "PLUS V0121 (LDF Version 1.21) U001 (1 Media Usages:); 1IAA (1 Usage Items:) 1UNA (Usage Number A) 2EMA (Advertising|Email|All Email Types|Internet Email) 3PTZ (Multiple Placements on Any Pages) 4SBG (Any Size Image|Up To Full Screen Ad) 5VUP (Single Version) 6QUL (Any Quantity) 7DWM (In Perpetuity) 8RAU (Oceania|Australia) 8IAD (Advertising and Marketing) 8LEN (English) 9EXC (All Exclusive)"
+        );
+        assert_eq!(
+            format_xmp_value("XMP-plus:MediaSummaryCode", "|PLUS|V0100|U001|1IAAZZZZ|"),
+            "PLUS V0100 (LDF Version 1.00) U001 (1 Media Usages:); 1IAA (1 Usage Items:) ZZZZ"
         );
     }
 
