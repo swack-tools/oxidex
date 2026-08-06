@@ -385,6 +385,10 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         // validating the integer stored in the TIFF entry.
         ("EXIF:YCbCrPositioning", "Centered") => "1",
         ("EXIF:YCbCrPositioning", "Co-sited") => "2",
+        ("EXIF:SubSecTimeOriginal" | "ExifIFD:SubSecTimeOriginal", value) => {
+            invert_subsec_time(value)
+                .ok_or_else(|| invalid(tag_name, "SubSecTimeOriginal needs fractional seconds"))?
+        }
         // Exif.pm 13.59 0xc635 converts the writable int16u code to these
         // labels. Apply the inverse before the generic integer parser.
         ("MakerNoteSafety" | "EXIF:MakerNoteSafety" | "IFD0:MakerNoteSafety", "Unsafe") => "0",
@@ -543,6 +547,15 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
             "Structured values cannot be set from the command line",
         )),
     }
+}
+
+fn invert_subsec_time(value: &str) -> Option<&str> {
+    if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Some(value);
+    }
+    let (_, fraction) = value.split_once('.')?;
+    let end = fraction.bytes().take_while(u8::is_ascii_digit).count();
+    (end > 0).then_some(&fraction[..end])
 }
 
 /// ExifTool 13.59 `Image::ExifTool::Exif::ConvertParameter`, as used by
@@ -1329,6 +1342,14 @@ mod tests {
             TagValue::Integer(0x38)
         );
         assert!(parse("Flash", "25").is_err());
+    }
+
+    #[test]
+    fn subsec_time_original_extracts_fraction_from_printed_datetime() {
+        assert_eq!(
+            parse("ExifIFD:SubSecTimeOriginal", "2024:01:02 03:04:05.6789").unwrap(),
+            TagValue::String("6789".to_string())
+        );
     }
 
     // -- Rational, Writer.pl:6888-6903 + 5200-5228 --------------------------
