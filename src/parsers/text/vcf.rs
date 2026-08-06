@@ -212,8 +212,7 @@ impl VCFParser {
                     }
                     "ADR" => {
                         has_address = true;
-                        metadata
-                            .insert("Address".to_string(), TagValue::String(value.to_string()));
+                        metadata.insert("Address".to_string(), TagValue::String(value.to_string()));
                     }
                     "URL" => {
                         has_url = true;
@@ -230,8 +229,7 @@ impl VCFParser {
                     }
                     _ => {
                         if let Some(name) = main_table_name(&key) {
-                            metadata
-                                .insert(name.to_string(), TagValue::String(value.to_string()));
+                            metadata.insert(name.to_string(), TagValue::String(value.to_string()));
                         }
                     }
                 }
