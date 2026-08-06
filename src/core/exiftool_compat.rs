@@ -694,12 +694,12 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     }
 
     // ---------------------------------------------------------------------
-    // Rule 14a: TransferFunction (Exif.pm 0x012d, Binary => 1)
+    // Rule 14a: TransferFunction / LinearizationTable (Exif.pm Binary => 1)
     // ---------------------------------------------------------------------
     // ExifTool decodes this int16u array to its space-separated textual form
     // before applying the Binary flag, so its reported byte count is the UTF-8
     // length of that rendered payload rather than the raw TIFF value length.
-    if base_name == "TransferFunction"
+    if matches!(base_name, "TransferFunction" | "LinearizationTable")
         && let Some(payload) = value.as_string()
     {
         return TagValue::String(format!(
@@ -2870,6 +2870,16 @@ mod tests {
         assert_eq!(
             formatted.as_string(),
             Some("(Binary data 5448 bytes, use -b option to extract)")
+        );
+    }
+
+    #[test]
+    fn linearization_table_uses_exiftools_binary_placeholder() {
+        let value = TagValue::String("1 2 3".to_string());
+        let formatted = format_tag_value("EXIF:LinearizationTable", &value);
+        assert_eq!(
+            formatted.as_string(),
+            Some("(Binary data 5 bytes, use -b option to extract)")
         );
     }
 
