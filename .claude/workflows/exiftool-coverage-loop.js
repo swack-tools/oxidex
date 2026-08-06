@@ -6,6 +6,7 @@ export const meta = {
     { title: 'Triage', detail: 'list open PRs from prior rounds to avoid duplicate work' },
     { title: 'Shard', detail: 'split large-gap formats into focused worker slices' },
     { title: 'Fix', detail: 'one isolated-worktree agent per slice, PRs its own verified fix' },
+    { title: 'Merge', detail: 'squash-merge each verified PR with a pre/post regression check' },
     { title: 'Audit', detail: 'review the run for process inefficiencies, PR the harness if warranted' },
   ],
 }
@@ -219,6 +220,43 @@ function fixPrompt(group, workItem) {
     `Report: format -- use exactly the string "${group.format}" verbatim, not a slug or description of your own choosing, since the caller matches on it programmatically -- scope ("${workItem.label || 'all'}"), verified (true only if you committed, pushed, AND opened the PR successfully after both checks passed), gapsClosed (the count reduction between the start and end files you confirmed), branch (run "git branch --show-current" and report it if verified, else null), prUrl (the URL gh pr create printed, or null), and a one-paragraph summary. If you cannot verify a real, regression-free improvement, do NOT commit, push, or open a PR -- run "git checkout -- ." and "git clean -fd" to leave your worktree clean, and report verified: false, gapsClosed: 0, branch: null, prUrl: null.`
 }
 
+const MERGE_RESULT_SCHEMA = {
+  type: 'object',
+  properties: {
+    format: { type: 'string' },
+    prUrl: { type: 'string' },
+    merged: { type: 'boolean' },
+    summary: { type: 'string' },
+  },
+  required: ['format', 'prUrl', 'merged', 'summary'],
+}
+
+function mergePrompt(result) {
+  // A past incident with the old local-merge design: a merge agent wandered into a
+  // fix-agent's worktree directory to inspect the branch and ran git commands from
+  // there instead of the shared main tree. gh pr merge doesn't strictly require being
+  // in any particular directory, but the post-merge rebuild/retest below does, so the
+  // same location discipline still matters here.
+  return `Before doing anything else, run \`pwd\` and \`git branch --show-current\`. If you are not in exactly "${REPO_PATH}" on branch "main", run \`cd "${REPO_PATH}" && git checkout main\` first and re-verify -- never run any command in this task from any other directory (e.g. a fix-agent's leftover worktree).\n\n` +
+    `Once confirmed, you're in the oxidex repository's shared main tree. A fix for format "${result.format}" was verified in an isolated worktree (before/after tag-comparison against pinned ExifTool 13.59 confirmed a strict reduction in missing/differing tags with zero regressions, plus cargo test --workspace) and is open as PR ${result.prUrl}.\n\n` +
+    `1. git pull --ff-only origin main\n` +
+    `2. gh pr checks ${result.prUrl} -- if this reports any check with a FAILURE status (not merely pending or absent -- this repo may have no CI configured on these branches, which is fine, don't block on that), STOP: do not merge, report merged: false, and explain which check failed in summary.\n` +
+    `3. gh pr merge ${result.prUrl} --squash --delete-branch\n` +
+    `4. git pull --ff-only origin main\n` +
+    `5. cargo build --release --bin oxidex && cargo build --release --bin tag-comparison --features tag-comparison-binary\n` +
+    `6. cargo test --workspace\n` +
+    `7. EXIFTOOL_CACHE_DIR=${CACHE_DIR} ./target/release/tag-comparison --exiftool ${CACHE_DIR}/exiftool/exiftool --samples ${CACHE_DIR}/combined-samples --format ${result.format} -o /tmp/tagcmp-${result.format}-postmerge.json --markdown-dir /tmp/tagcmp-${result.format}-postmerge-md, and confirm the regressions array for "${result.format}" in that file is empty.\n\n` +
+    `If step 6 or 7 fails -- this fix, or its interaction with whatever else has landed on main since it was verified, broke something for real -- do NOT force-push, reset, or rewrite history on this shared branch (other rounds may already be building on top of it). Instead, revert it the safe way, through another reviewable PR:\n` +
+    `  a. git checkout -b "revert-${result.format.toLowerCase()}-$(git rev-parse --short HEAD)"\n` +
+    `  b. git ${GIT_AUTHOR_OVERRIDE} revert --no-edit HEAD\n` +
+    `  c. git push -u origin "$(git branch --show-current)"\n` +
+    `  d. gh pr create --repo ${REPO_SLUG} --base main --head "$(git branch --show-current)" --title "revert: ${result.format} coverage fix (broke tests/regressed post-merge)" --body "Reverts the squash-merge of ${result.prUrl} -- it passed isolated-worktree verification but broke cargo test --workspace or introduced a real regression once merged onto current main. See round log for details."\n` +
+    `  e. gh pr merge --squash --delete-branch "$(git branch --show-current)"\n` +
+    `  f. git checkout main && git pull --ff-only origin main\n` +
+    `Report merged: false with a summary explaining exactly what broke and that it was reverted via a follow-up PR.\n\n` +
+    `If steps 6 and 7 both pass, the merge stands. Report: format ("${result.format}"), prUrl ("${result.prUrl}"), merged (true only if the squash-merge is confirmed regression-free by both checks above), summary.`
+}
+
 const AUDIT_SCHEMA = {
   type: 'object',
   properties: {
@@ -270,7 +308,7 @@ while (dryRounds < MAX_DRY_ROUNDS && round < MAX_ROUNDS) {
 
   if (gapGroups.length === 0) {
     log(`round ${round}: zero gaps -- full coverage reached`)
-    roundLog.push({ round, gapFormats: 0, workItems: 0, verified: 0, prsOpened: 0, skippedInFlight: 0 })
+    roundLog.push({ round, gapFormats: 0, workItems: 0, verified: 0, prsOpened: 0, merged: 0, gapsClosedOnMain: 0, skippedInFlight: 0 })
     dryRounds++
     continue
   }
@@ -295,7 +333,7 @@ while (dryRounds < MAX_DRY_ROUNDS && round < MAX_ROUNDS) {
 
   if (gapGroups.length === 0) {
     log(`round ${round}: everything with a gap already has an open PR awaiting review -- nothing new to assign this round`)
-    roundLog.push({ round, gapFormats: 0, workItems: 0, verified: 0, prsOpened: 0, skippedInFlight: inFlightFormats.size })
+    roundLog.push({ round, gapFormats: 0, workItems: 0, verified: 0, prsOpened: 0, merged: 0, gapsClosedOnMain: 0, skippedInFlight: inFlightFormats.size })
     dryRounds++
     continue
   }
@@ -342,19 +380,40 @@ while (dryRounds < MAX_DRY_ROUNDS && round < MAX_ROUNDS) {
     })
   ))
 
-  const verified = fixResults.filter(Boolean).filter(r => r.verified)
+  const verified = fixResults.filter(Boolean).filter(r => r.verified && r.prUrl)
   log(`round ${round}: ${verified.length}/${fixResults.filter(Boolean).length} fix attempts verified and PR'd`)
+
+  phase('Merge')
+  let mergedCount = 0
+  let closedCount = 0
+  for (const r of verified) {
+    const merged = await agent(mergePrompt(r), {
+      label: `merge-${r.format}${r.scope && r.scope !== 'all' ? '-' + r.scope : ''}`,
+      phase: 'Merge',
+      schema: MERGE_RESULT_SCHEMA,
+    })
+    if (merged && merged.merged) {
+      mergedCount++
+      closedCount += r.gapsClosed
+      log(`round ${round}: squash-merged ${r.format} -- ${r.prUrl}`)
+    } else {
+      log(`round ${round}: merge withheld/reverted for ${r.format} (${merged ? merged.summary : 'merge agent failed'})`)
+    }
+  }
+  log(`round ${round}: merged ${mergedCount}/${verified.length} PRs, closing ${closedCount} gaps on main`)
 
   roundLog.push({
     round,
     gapFormats: gapGroups.length,
     workItems: workItems.length,
     verified: verified.length,
-    prsOpened: verified.filter(r => r.prUrl).length,
+    prsOpened: verified.length,
+    merged: mergedCount,
+    gapsClosedOnMain: closedCount,
     skippedInFlight: inFlightFormats.size,
   })
 
-  dryRounds = verified.length === 0 ? dryRounds + 1 : 0
+  dryRounds = mergedCount === 0 ? dryRounds + 1 : 0
 }
 
 const stoppedReason = dryRounds >= MAX_DRY_ROUNDS ? `${dryRounds} consecutive dry rounds` : `hit the ${MAX_ROUNDS}-round safety cap`
