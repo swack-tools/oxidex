@@ -58,6 +58,32 @@ fn main_table_name(key: &str) -> Option<&'static str> {
     })
 }
 
+/// Splits a vCard content line into its `group.name *(";" param)` prefix and
+/// its value, at the first ":" that is not inside a double-quoted parameter
+/// value.
+///
+/// RFC 6350 section 3.3 allows parameter values to be quoted strings
+/// (`DQUOTE *QSAFE-CHAR DQUOTE`) which may themselves contain ":", ";", and
+/// ",". A naive `str::split_once(':')` finds the first colon anywhere in the
+/// line, so a line like:
+///   `ADR;type=OTHER;GEO="geo:12.3457,78.910";LABEL=Test\nLabel:;;Other Rd....`
+/// gets split inside the quoted GEO parameter value instead of at the real
+/// property/value boundary, corrupting the extracted value. This walks the
+/// line tracking quote state so the split lands on the correct colon.
+fn split_property_line(line: &str) -> Option<(&str, &str)> {
+    let mut in_quotes = false;
+    for (idx, ch) in line.char_indices() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            ':' if !in_quotes => {
+                return Some((&line[..idx], &line[idx + 1..]));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Converts a vCard/iCalendar date-time value to ExifTool's EXIF-style
 /// separators, matching the `%timeInfo` ValueConv in VCard.pm:
 ///   YYYYMMDDThhmmss(Z?) -> YYYY:MM:DD hh:mm:ss(Z?)
@@ -161,7 +187,7 @@ impl VCFParser {
 
         // Parse vCard line by line
         for line in text.lines() {
-            if let Some((raw_key, raw_value)) = line.split_once(':') {
+            if let Some((raw_key, raw_value)) = split_property_line(line) {
                 // Strip any ";PARAM=..." group parameters from the key so
                 // "TEL;TYPE=CELL" still matches on "TEL". We don't yet fold
                 // the TYPE into the tag name the way ExifTool does (e.g.
@@ -369,5 +395,25 @@ mod tests {
         assert_eq!(main_table_name("PRODID"), Some("Software"));
         assert_eq!(main_table_name("UID"), Some("UID"));
         assert_eq!(main_table_name("BOGUS"), None);
+    }
+
+    #[test]
+    fn split_property_line_ignores_colons_inside_quoted_params() {
+        // RFC 6350 quoted parameter values may contain ":" (e.g. a "geo:"
+        // URI), which must not be mistaken for the property/value delimiter.
+        let line =
+            r#"ADR;type=OTHER;GEO="geo:12.3457,78.910";LABEL=Test\nLabel:;;Other Rd.;City;ON;K0K0K0;Canada"#;
+        let (key, value) = split_property_line(line).expect("line should split");
+        assert_eq!(key, r#"ADR;type=OTHER;GEO="geo:12.3457,78.910";LABEL=Test\nLabel"#);
+        assert_eq!(value, ";;Other Rd.;City;ON;K0K0K0;Canada");
+    }
+
+    #[test]
+    fn split_property_line_handles_plain_lines() {
+        assert_eq!(
+            split_property_line("TEL;type=CELL:555-0000"),
+            Some(("TEL;type=CELL", "555-0000"))
+        );
+        assert_eq!(split_property_line("no-colon-here"), None);
     }
 }
