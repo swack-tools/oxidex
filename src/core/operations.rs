@@ -14,8 +14,7 @@ use crate::core::jpeg_helpers::{
     process_icc_segments, process_infiray_segments, process_iptc_segments, process_jfif_segments,
     process_mpf_segments, process_photoshop_segments, process_qualcomm_segments,
     process_ricoh_rmeta_segments, process_sof_segments, process_spiff_segments,
-    process_uniform_resource_name_segments,
-    process_xmp_segments,
+    process_uniform_resource_name_segments, process_xmp_segments,
 };
 use crate::core::operations_helpers::{read_u16, read_u32};
 #[cfg(test)]
