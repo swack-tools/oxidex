@@ -705,14 +705,15 @@ pub fn plan_exif_write(
     }
 
     // GPS.pm (ExifTool 13.59) requires GPSVersionID in every GPS IFD. A file
-    // without a GPS IFD gains one when either covered tag is added, so emit
+    // without a GPS IFD gains one when a covered tag is added, so emit
     // ExifTool's declared default version alongside it. Existing GPS IFDs
     // already carry their raw version entry through the loop above.
-    if plan
-        .gps
-        .iter()
-        .any(|entry| matches!(entry.tag_id, 0x000d | 0x000f | 0x0014 | 0x001d | 0x001f))
-        && !plan.gps.iter().any(|entry| entry.tag_id == 0x0000)
+    if plan.gps.iter().any(|entry| {
+        matches!(
+            entry.tag_id,
+            0x000d | 0x000f | 0x0014 | 0x0018 | 0x001d | 0x001f
+        )
+    }) && !plan.gps.iter().any(|entry| entry.tag_id == 0x0000)
     {
         plan.gps.push(OutEntry {
             tag_id: 0x0000,
@@ -1635,6 +1636,42 @@ mod tests {
             .iter()
             .find(|entry| entry.tag_id == 0x0000)
             .unwrap();
+        assert_eq!(version.field_type, 1);
+        assert_eq!(version.count, 4);
+        assert_eq!(version.value, [2, 3, 0, 0]);
+    }
+
+    #[test]
+    fn plan_adds_required_gps_version_with_gps_dest_bearing() {
+        // GPS.pm 13.59 declares GPSVersionID mandatory. Creating a GPS IFD
+        // solely for GPSDestBearing must therefore add version 2.3.0.0 too.
+        let scan = ExifScan {
+            byte_order: ByteOrder::LittleEndian,
+            entries: Vec::new(),
+            thumbnail: None,
+            makernote_offset: None,
+        };
+        let original = MetadataMap::new();
+        let mut desired = MetadataMap::new();
+        desired.insert("GPS:GPSDestBearing", TagValue::new_rational(3, 2));
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let bearing = plan
+            .gps
+            .iter()
+            .find(|entry| entry.tag_id == 0x0018)
+            .unwrap();
+        assert_eq!(bearing.field_type, 5);
+        assert_eq!(bearing.count, 1);
+        assert_eq!(
+            bearing.value,
+            [3_u32.to_ne_bytes(), 2_u32.to_ne_bytes()].concat()
+        );
+        let version = plan
+            .gps
+            .iter()
+            .find(|entry| entry.tag_id == 0x0000)
+            .expect("GPSVersionID is required when GPSDestBearing creates a GPS IFD");
         assert_eq!(version.field_type, 1);
         assert_eq!(version.count, 4);
         assert_eq!(version.value, [2, 3, 0, 0]);
