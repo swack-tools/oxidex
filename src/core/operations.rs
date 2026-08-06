@@ -535,6 +535,7 @@ fn canonical_write_tag_name(tag_name: &str) -> &str {
         "DocumentName" => "IFD0:DocumentName",
         "PageNumber" => "IFD0:PageNumber",
         "MakerNoteSafety" => "IFD0:MakerNoteSafety",
+        "ProfileEmbedPolicy" => "IFD0:ProfileEmbedPolicy",
         "ModifyDate" => "IFD0:ModifyDate",
         "DateTimeOriginal" => "ExifIFD:DateTimeOriginal",
         "ApertureValue" => "ExifIFD:ApertureValue",
@@ -1282,6 +1283,14 @@ mod tests {
         assert_eq!(
             canonical_write_tag_name("IFD0:MakerNoteSafety"),
             "IFD0:MakerNoteSafety"
+        );
+    }
+
+    #[test]
+    fn bare_profile_embed_policy_write_targets_ifd0() {
+        assert_eq!(
+            canonical_write_tag_name("ProfileEmbedPolicy"),
+            "IFD0:ProfileEmbedPolicy"
         );
     }
 

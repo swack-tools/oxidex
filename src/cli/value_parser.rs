@@ -95,6 +95,7 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         "ApertureValue" => "EXIF:ApertureValue",
         "Flash" => "ExifIFD:Flash",
         "MakerNoteSafety" => "EXIF:MakerNoteSafety",
+        "ProfileEmbedPolicy" => "EXIF:ProfileEmbedPolicy",
         _ => tag_name,
     };
 
@@ -370,6 +371,22 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         // labels. Apply the inverse before the generic integer parser.
         ("MakerNoteSafety" | "EXIF:MakerNoteSafety" | "IFD0:MakerNoteSafety", "Unsafe") => "0",
         ("MakerNoteSafety" | "EXIF:MakerNoteSafety" | "IFD0:MakerNoteSafety", "Safe") => "1",
+        (
+            "ProfileEmbedPolicy" | "EXIF:ProfileEmbedPolicy" | "IFD0:ProfileEmbedPolicy",
+            "Allow Copying",
+        ) => "0",
+        (
+            "ProfileEmbedPolicy" | "EXIF:ProfileEmbedPolicy" | "IFD0:ProfileEmbedPolicy",
+            "Embed if Used",
+        ) => "1",
+        (
+            "ProfileEmbedPolicy" | "EXIF:ProfileEmbedPolicy" | "IFD0:ProfileEmbedPolicy",
+            "Never Embed",
+        ) => "2",
+        (
+            "ProfileEmbedPolicy" | "EXIF:ProfileEmbedPolicy" | "IFD0:ProfileEmbedPolicy",
+            "No Restrictions",
+        ) => "3",
         _ => raw,
     };
     let raw = match declared_tag_name.rsplit(':').next() {
@@ -2041,5 +2058,20 @@ mod tests {
             parse("RelatedSoundFile", "related.wav").unwrap(),
             TagValue::new_string("related.wav")
         );
+    }
+
+    #[test]
+    fn profile_embed_policy_inverts_pinned_printconv_labels() {
+        for (label, code) in [
+            ("Allow Copying", 0),
+            ("Embed if Used", 1),
+            ("Never Embed", 2),
+            ("No Restrictions", 3),
+        ] {
+            assert_eq!(
+                parse("IFD0:ProfileEmbedPolicy", label).unwrap(),
+                TagValue::Integer(code)
+            );
+        }
     }
 }
