@@ -688,6 +688,13 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         }
                     } else {
                         match (format, ifd_index, *tag_id) {
+                            // CR2CFAPattern is physically stored in the sensor IFD3 and
+                            // ExifTool preserves that family-1 group. The generic fallback
+                            // folds unusual chained IFDs into IFD0, which is wrong for this
+                            // uniquely identified CR2 tag.
+                            (RawFormat::CanonCR2, 3, 0xC5E0) => {
+                                lookup_raw_tag_name(*tag_id, "IFD3", format)
+                            }
                             // TIFF/EP tag 0x9216 (TIFF-EPStandardID) lives in NEF
                             // IFD0. lookup_tag_name has no entry for it under the
                             // IFD0 group, so oxidex emitted "IFD0:0x9216" with a
@@ -2141,6 +2148,18 @@ fn format_exif_display_value(
                 let values = join_integer_array(bytes, value_count, byte_order, 2)?;
                 Some(format!("Unknown ({values})"))
             }
+        }
+        // LensInfo: RATIONAL[4]. Exif.pm 0xa432 PrintConv is PrintLensInfo.
+        0xA432 if field_type == 5 && value_count == 4 => {
+            crate::core::tag_conversion::raw_bytes_to_tag_value(
+                bytes,
+                field_type,
+                value_count,
+                tag_id,
+                byte_order,
+            )
+            .as_string()
+            .map(str::to_string)
         }
         // ComponentsConfiguration: UNDEFINED[4].
         0x9101 if field_type == 7 => {
@@ -4258,6 +4277,20 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
     // from the start of the box. Nothing read this box before, which is the
     // whole reason a CR3 reported zero MakerNotes tags.
     parse_cr3_cmt3_makernotes(data, &mut metadata);
+
+    // Canon.pm's CR3 `THMB` entry is a binary ThumbnailImage whose first 16
+    // payload bytes are an atom-specific header (`RawConv => substr($val,16)`).
+    // Keep the exact remaining bytes; the normal binary formatter supplies
+    // ExifTool's `(Binary data N bytes, use -b option to extract)` display.
+    if let Some(payload) = find_cr3_box(data, b"THMB")
+        && let Some(image) = payload.get(16..)
+        && !image.is_empty()
+    {
+        metadata.insert(
+            "Canon:ThumbnailImage".to_string(),
+            TagValue::new_binary(image.to_vec()),
+        );
+    }
 
     // XMP lives in a top-level `uuid` box (QuickTime.pm's UUID-XMP condition
     // matches be7acfcb-97a9-42e8-9c71-999491e3afac), not in the Canon uuid box.
@@ -6826,6 +6859,23 @@ mod cr3_cmt1_artist_tests {
             Some(&TagValue::new_string("(c)".to_string()))
         );
     }
+
+    #[test]
+    fn extracts_thumbnail_image_from_cr3_thmb_box() {
+        let path = "/tmp/oxidex-exiftool-git-13.59-jjZp0q/exiftool/t/images/CanonRaw.cr3";
+        if !std::path::Path::new(path).exists() {
+            return;
+        }
+        let data = std::fs::read(path).expect("read pinned CR3 fixture");
+        let metadata = parse_cr3(&data, RawFormat::CanonCR3).expect("parse CR3 fixture");
+
+        assert_eq!(
+            metadata.get("Canon:ThumbnailImage"),
+            Some(&TagValue::new_binary(
+                b"<Dummy thumbnail image data>".to_vec()
+            ))
+        );
+    }
 }
 
 #[cfg(test)]
@@ -8147,6 +8197,20 @@ mod backlog_group_1_printconv_tests {
         );
     }
 
+    #[test]
+    fn exif_lens_info_matches_canon_raw_print_conversion() {
+        let mut lens = Vec::new();
+        for (numerator, denominator) in [(15u32, 1u32), (45, 1), (0, 1), (0, 1)] {
+            lens.extend_from_slice(&numerator.to_le_bytes());
+            lens.extend_from_slice(&denominator.to_le_bytes());
+        }
+
+        assert_eq!(
+            format_exif_display_value(0xA432, &lens, 5, 4, ByteOrder::LittleEndian).as_deref(),
+            Some("15-45mm f/0")
+        );
+    }
+
     // ---- FileSource (Exif.pm:2757) --------------------------------------
 
     /// The whole table, verbatim from Exif.pm:2761-2767. SigmaDP2.x3f carries
@@ -8499,6 +8563,22 @@ mod rational_array_tests {
             metadata.get("SubIFD0:BitsPerSample"),
             Some(&TagValue::new_integer(16))
         );
+    }
+
+    #[test]
+    fn cr2_cfa_pattern_keeps_ifd3_group() {
+        let path = "/tmp/oxidex-exiftool-cache/exiftool/t/images/CanonRaw.cr2";
+        if !std::path::Path::new(path).exists() {
+            return;
+        }
+        let data = std::fs::read(path).expect("read pinned CR2 fixture");
+        let metadata = parse_raw_metadata(&data, RawFormat::CanonCR2).expect("parse CR2 fixture");
+
+        assert_eq!(
+            metadata.get("IFD3:CR2CFAPattern"),
+            Some(&TagValue::new_string("[Red,Green][Green,Blue]".to_string()))
+        );
+        assert!(!metadata.contains_key("IFD0:CR2CFAPattern"));
     }
 
     /// A single rational must keep its existing representation -- the fix is
