@@ -15,10 +15,10 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 
 | Classification | Tags |
 |---|---|
-| 📖 Read only | 2350 |
+| 📖 Read only | 2352 |
 | ❌ Unsupported | 1890 |
 | ❔ Untestable | 221 |
-| 🐛 Read OK, write broken | 169 |
+| 🐛 Read OK, write broken | 167 |
 | ✅ Full (read + write) | 101 |
 | ⚠️ Full (write non-standard encoding) | 79 |
 | 🐛 Read broken | 9 |
@@ -31,7 +31,7 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | All | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
 | ExifIFD | 46 | 7 | 27 | 6 | 0 | 4 | 100 | 203 |
 | File | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
-| GPS | 2 | 3 | 6 | 0 | 0 | 0 | 0 | 32 |
+| GPS | 2 | 5 | 4 | 0 | 0 | 0 | 0 | 32 |
 | GSpherical | 0 | 0 | 0 | 0 | 0 | 0 | 16 | 16 |
 | IFD0 | 53 | 0 | 54 | 0 | 0 | 0 | 17 | 169 |
 | IFD1 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
@@ -392,7 +392,7 @@ references are into this repo.
 | `GPSDestDistanceRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `Kilometers` |
 | `GPSDestLatitude` | ✅ ok | 🐛 broken: interop (exiftool can't read it) | `37.7749` |
 | `GPSDestLatitudeRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `N` |
-| `GPSDestLongitude` | ✅ ok | 🐛 broken: interop (exiftool can't read it) | `122.4194` |
+| `GPSDestLongitude` | ✅ ok | value_mismatch | `122.4194` |
 | `GPSDestLongitudeRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `W` |
 | `GPSDifferential` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `No Correction` |
 | `GPSHPositioningError` | ✅ ok | ✅ ok | `1.5` |
@@ -400,7 +400,7 @@ references are into this repo.
 | `GPSImgDirectionRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `Magnetic North` |
 | `GPSLatitude` | ✅ ok | value_mismatch | `37.7749` |
 | `GPSLatitudeRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `N` |
-| `GPSLongitude` | ✅ ok | 🐛 broken: interop (exiftool can't read it) | `122.4194` |
+| `GPSLongitude` | ✅ ok | value_mismatch | `122.4194` |
 | `GPSLongitudeRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `W` |
 | `GPSMapDatum` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
 | `GPSMeasureMode` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `2-Dimensional Measurement` |

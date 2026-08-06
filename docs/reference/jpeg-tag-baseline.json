@@ -4,9 +4,9 @@
  "writable_cli": 186,
  "full": 101,
  "full_nonstandard": 79,
- "read_only": 2350,
+ "read_only": 2352,
  "read_broken": 9,
- "write_broken": 169,
+ "write_broken": 167,
  "unsupported": 1890,
  "untestable": 221
 }
