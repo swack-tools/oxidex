@@ -297,6 +297,18 @@ fn parse_rational(tag_name: &str, raw: &str) -> Result<TagValue> {
             denominator,
         });
     }
+    // GPS.pm 13.59 converts GPSLongitude's decimal input to D/M/S before
+    // Rationalize runs on the three components. Retain a plain decimal's
+    // exact value here so the writer can perform that conversion without the
+    // precision loss caused by rationalizing the combined degree value first.
+    if tag_name == "GPS:GPSLongitude"
+        && let Some((numerator, denominator)) = exact_decimal_fraction(raw)
+    {
+        return Ok(TagValue::Rational {
+            numerator,
+            denominator,
+        });
+    }
     let text =
         as_float_text(raw).ok_or_else(|| invalid(tag_name, "Not a floating point number"))?;
     let value: f64 = text
@@ -307,6 +319,50 @@ fn parse_rational(tag_name: &str, raw: &str) -> Result<TagValue> {
         numerator: numerator as i32,
         denominator: denominator as i32,
     })
+}
+
+fn exact_decimal_fraction(raw: &str) -> Option<(i32, i32)> {
+    let raw = raw.strip_prefix('+').unwrap_or(raw);
+    let (negative, raw) = match raw.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, raw),
+    };
+    let (whole, fraction) = raw.split_once('.')?;
+    if whole.is_empty() && fraction.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let scale = 10_i64.checked_pow(u32::try_from(fraction.len()).ok()?)?;
+    let whole = if whole.is_empty() {
+        0
+    } else {
+        whole.parse::<i64>().ok()?
+    };
+    let fraction = if fraction.is_empty() {
+        0
+    } else {
+        fraction.parse::<i64>().ok()?
+    };
+    let mut numerator = whole.checked_mul(scale)?.checked_add(fraction)?;
+    if negative {
+        numerator = -numerator;
+    }
+    let divisor = gcd_i64(numerator, scale);
+    Some((
+        i32::try_from(numerator / divisor).ok()?,
+        i32::try_from(scale / divisor).ok()?,
+    ))
+}
+
+fn gcd_i64(mut left: i64, mut right: i64) -> i64 {
+    left = left.abs();
+    right = right.abs();
+    while right != 0 {
+        (left, right) = (right, left % right);
+    }
+    left.max(1)
 }
 
 /// `AssembleRational` — `Writer.pl:5182-5187`.
@@ -659,6 +715,17 @@ mod tests {
             TagValue::Rational {
                 numerator: 0,
                 denominator: 0
+            }
+        );
+    }
+
+    #[test]
+    fn gps_longitude_preserves_decimal_for_dms_conversion() {
+        assert_eq!(
+            parse("GPS:GPSLongitude", "122.4194").unwrap(),
+            TagValue::Rational {
+                numerator: 612_097,
+                denominator: 5_000,
             }
         );
     }
