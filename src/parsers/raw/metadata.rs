@@ -647,7 +647,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             0x0202 if bytes.len() >= 4 => {
                                 let value = read_u32(bytes, byte_order);
                                 metadata.insert(
-                                    "EXIF:ThumbnailLength".to_string(),
+                                    "IFD1:ThumbnailLength".to_string(),
                                     TagValue::new_integer(value as i64),
                                 );
                                 metadata.insert(
@@ -7192,6 +7192,34 @@ mod tests {
     }
 
     #[test]
+    fn cr2_ifd1_thumbnail_length_uses_ifd1_family() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II\x2a\x00");
+        data.extend_from_slice(&16u32.to_le_bytes());
+        data.extend_from_slice(b"CR\x02\x00");
+        data.extend_from_slice(&0u32.to_le_bytes());
+
+        // Empty IFD0 points to IFD1 at byte 22.
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&22u32.to_le_bytes());
+
+        // Exif.pm 0x0202 selects ThumbnailLength when DIR_NAME is IFD1.
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&0x0202u16.to_le_bytes());
+        data.extend_from_slice(&4u16.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&28u32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+
+        let metadata = parse_raw_metadata(&data, RawFormat::CanonCR2).expect("valid CR2");
+        assert_eq!(
+            metadata.get("IFD1:ThumbnailLength"),
+            Some(&TagValue::new_integer(28))
+        );
+        assert!(!metadata.contains_key("EXIF:ThumbnailLength"));
+    }
+
+    #[test]
     fn test_nef_format_detection() {
         // Create a minimal NEF (just TIFF header, NEF is detected by extension)
         let mut data = Vec::new();
@@ -8617,11 +8645,9 @@ mod rational_array_tests {
     #[test]
     fn cr2_preview_image_is_published_only_for_jpeg_data() {
         let invalid = b"not a valid JPEG preview";
-        let metadata = parse_raw_metadata(
-            &synthetic_cr2_with_preview(invalid),
-            RawFormat::CanonCR2,
-        )
-        .expect("valid synthetic CR2");
+        let metadata =
+            parse_raw_metadata(&synthetic_cr2_with_preview(invalid), RawFormat::CanonCR2)
+                .expect("valid synthetic CR2");
         assert_eq!(
             metadata.get("EXIF:PreviewImageStart"),
             Some(&TagValue::new_integer(46))
@@ -8633,9 +8659,8 @@ mod rational_array_tests {
         assert!(!metadata.contains_key("EXIF:PreviewImage"));
 
         let jpeg = b"\xff\xd8\xff\xd9";
-        let metadata =
-            parse_raw_metadata(&synthetic_cr2_with_preview(jpeg), RawFormat::CanonCR2)
-                .expect("valid synthetic CR2");
+        let metadata = parse_raw_metadata(&synthetic_cr2_with_preview(jpeg), RawFormat::CanonCR2)
+            .expect("valid synthetic CR2");
         assert_eq!(
             metadata.get("EXIF:PreviewImage"),
             Some(&TagValue::new_binary(jpeg.to_vec()))
