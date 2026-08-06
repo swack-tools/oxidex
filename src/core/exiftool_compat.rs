@@ -178,6 +178,19 @@ pub fn format_for_exiftool(metadata: &MetadataMap) -> MetadataMap {
 pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     let base_name = strip_family_prefix(tag_name);
 
+    if base_name == "ProfileEmbedPolicy"
+        && let Some(value) = value.as_integer()
+        && let Some(label) = match value {
+            0 => Some("Allow Copying"),
+            1 => Some("Embed if Used"),
+            2 => Some("Never Embed"),
+            3 => Some("No Restrictions"),
+            _ => None,
+        }
+    {
+        return TagValue::new_string(label);
+    }
+
     // ---------------------------------------------------------------------
     // Rule 1: GPS Latitude/Longitude References
     // Convert single-character direction codes to full names
