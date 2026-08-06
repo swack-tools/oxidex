@@ -764,6 +764,7 @@ mod tests {
         assert_eq!(
             parse("GPS:GPSDestDistanceRef", "Kilometers").unwrap(),
             TagValue::String("K".to_string())
+        );
     }
 
     #[test]
