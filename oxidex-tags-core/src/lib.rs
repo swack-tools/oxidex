@@ -145,4 +145,21 @@ mod tests {
         assert!(tile_length.writable);
         assert_eq!(tile_length.type_name.as_deref(), Some("int32u"));
     }
+
+    /// ExifTool 13.59 Exif.pm 0x013e declares WhitePoint as a writable
+    /// `rational64u` pair in IFD0. The generated tag model does not represent
+    /// the fixed count of two, but it must preserve the writable/type contract.
+    #[test]
+    fn white_point_matches_pinned_exiftool_contract() {
+        let exif = get_tag_table("Exif::Main").expect("Exif::Main table should exist");
+        let white_point = exif
+            .tags
+            .iter()
+            .find(|tag| tag.id == "0x013E")
+            .expect("WhitePoint (0x013E) should exist");
+
+        assert_eq!(white_point.name, "WhitePoint");
+        assert!(white_point.writable);
+        assert_eq!(white_point.type_name.as_deref(), Some("rational64u"));
+    }
 }

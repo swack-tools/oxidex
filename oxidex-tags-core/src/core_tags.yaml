@@ -570,7 +570,8 @@ tables:
         description: "Predictor tag"
       - id: "0x013E"
         name: "WhitePoint"
-        writable: false
+        writable: true
+        type: rational64u
         description: "WhitePoint tag"
       - id: "0x013F"
         name: "PrimaryChromaticities"
