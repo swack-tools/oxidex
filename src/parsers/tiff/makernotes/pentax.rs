@@ -1036,11 +1036,48 @@ impl PentaxParser {
                 }
 
                 PENTAX_AUTO_BRACKETING => {
-                    let value = extract_value_as_i32(&entry, byte_order);
-                    tags.insert(
-                        "Pentax:AutoBracketing".to_string(),
-                        AUTO_BRACKETING.decode(value),
-                    );
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
+                    if raw.len() >= 4 {
+                        let read = |bytes: &[u8]| match byte_order {
+                            ByteOrder::LittleEndian => u16::from_le_bytes([bytes[0], bytes[1]]),
+                            ByteOrder::BigEndian => u16::from_be_bytes([bytes[0], bytes[1]]),
+                        };
+                        let step = read(&raw[..2]);
+                        let extended = read(&raw[2..4]);
+                        let step = match step {
+                            0 => "0".to_string(),
+                            value if value < 10 => format!("{:.1}", value as f64 / 3.0),
+                            value if value < 20 => format!("{:.1}", value as f64 - 9.5),
+                            value if value & 0x1000 != 0 => format!("{}/2", value - 0x1000),
+                            value if value & 0x2000 != 0 => format!("{}/3", value - 0x2000),
+                            value => value.to_string(),
+                        };
+                        let extended = if extended == 0 {
+                            "No Extended Bracket".to_string()
+                        } else {
+                            let kind = match extended >> 8 {
+                                1 => "WB-BA".to_string(),
+                                2 => "WB-GM".to_string(),
+                                3 => "Saturation".to_string(),
+                                4 => "Sharpness".to_string(),
+                                5 => "Contrast".to_string(),
+                                6 => "Hue".to_string(),
+                                7 => "HighLowKey".to_string(),
+                                other => format!("Unknown({other})"),
+                            };
+                            format!("{kind}+{}", extended & 0xff)
+                        };
+                        tags.insert(
+                            "Pentax:AutoBracketing".to_string(),
+                            format!("{step} EV, {extended}"),
+                        );
+                    } else {
+                        let value = extract_value_as_i32(&entry, byte_order);
+                        tags.insert(
+                            "Pentax:AutoBracketing".to_string(),
+                            AUTO_BRACKETING.decode(value),
+                        );
+                    }
                 }
 
                 PENTAX_WORLD_TIME_LOCATION => {
@@ -1187,7 +1224,12 @@ impl PentaxParser {
 
                 PENTAX_HOMETOWN_CITY => {
                     let value = entry.value_offset;
-                    tags.insert("Pentax:HometownCity".to_string(), value.to_string());
+                    let name = PENTAX_CONV6
+                        .iter()
+                        .find(|(code, _)| *code == value as i64)
+                        .map(|(_, name)| (*name).to_string())
+                        .unwrap_or_else(|| value.to_string());
+                    tags.insert("Pentax:HometownCity".to_string(), name);
                 }
 
                 // `SeparateTable => 'City'`, `PrintConv => \%pentaxCities`
@@ -2964,6 +3006,18 @@ fn pentax_model_id_name(id: u32) -> Option<&'static str> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn samsung_gx20_auto_bracketing_uses_pentax_two_value_print_conv() {
+        let metadata = crate::core::operations::read_metadata(std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGX20.jpg",
+        ))
+        .expect("read pinned Samsung GX20 fixture");
+        assert_eq!(
+            metadata.get_string("Pentax:AutoBracketing"),
+            Some("0 EV, No Extended Bracket")
+        );
+    }
+
     /// A "PENTAX \0" MakerNote block carrying `entries` (tag, type, count,
     /// value-or-offset) big-endian, plus `trailer` laid down at offset 64.
     ///
@@ -4016,6 +4070,15 @@ mod tests {
         assert_eq!(tags["Pentax:DestinationDST"], "No");
         assert_eq!(tags["Pentax:HometownCity"], "Toronto");
         assert_eq!(tags["Pentax:DestinationCity"], "Toronto");
+    }
+
+    #[test]
+    fn samsung_gx20_hometown_city_uses_pentax_city_table() {
+        let metadata = crate::core::operations::read_metadata(std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGX20.jpg",
+        ))
+        .expect("read pinned Samsung GX20 fixture");
+        assert_eq!(metadata.get_string("Pentax:HometownCity"), Some("New York"));
     }
 }
 

@@ -75,6 +75,15 @@ fn extract_track_metadata(
         .find_child("mdia")
         .ok_or_else(|| "missing mdia atom".to_string())?;
 
+    // Canon CR3 stores its timed-metadata handler here (Track4: `meta`).
+    // This is distinct from the optional data handler beneath `minf`.
+    let is_meta_handler = mdia
+        .find_child("hdlr")
+        .is_some_and(|hdlr| hdlr.data.get(8..12) == Some(b"meta"));
+    if let Some(hdlr) = mdia.find_child("hdlr") {
+        let _ = extract_track_handler_metadata(&hdlr, metadata);
+    }
+
     // Extract media header - optional
     if let Some(mdhd) = mdia.find_child("mdhd") {
         let _ = extract_media_header(&mdhd, metadata, index);
@@ -90,27 +99,23 @@ fn extract_track_metadata(
         let _ = extract_video_media_header(&vmhd, metadata, index);
     }
 
-    // Check if this is an audio track (has smhd)
-    let is_audio_track = minf.find_child("smhd").is_some();
-
     // Extract sound media header (smhd) - optional, contains Balance
     if let Some(smhd) = minf.find_child("smhd") {
         let _ = extract_sound_media_header(&smhd, metadata, index);
     }
 
-    // Extract handler reference from dinf (data information) container - contains HandlerClass
-    // ExifTool only extracts HandlerClass for audio tracks
-    if is_audio_track {
-        if let Some(dinf) = minf.find_child("dinf")
-            && let Some(dref) = dinf.find_child("dref")
-        {
-            let _ = extract_data_handler_info(dref.data, metadata);
-        }
+    // The media-info directory owns the data handler for both video and audio
+    // tracks. Its `dhlr` must follow the media handler's `mhlr`, matching the
+    // later HandlerClass value ExifTool reports for this track.
+    if let Some(dinf) = minf.find_child("dinf")
+        && let Some(dref) = dinf.find_child("dref")
+    {
+        let _ = extract_data_handler_info(dref.data, metadata);
+    }
 
-        // Also check for hdlr directly in minf (some formats use this)
-        if let Some(hdlr) = minf.find_child("hdlr") {
-            let _ = extract_track_handler_metadata(&hdlr, metadata);
-        }
+    // Some files carry the data handler directly in minf rather than dref.
+    if let Some(hdlr) = minf.find_child("hdlr") {
+        let _ = extract_track_handler_metadata(&hdlr, metadata);
     }
 
     // Sample table - required for sample descriptions
@@ -120,7 +125,7 @@ fn extract_track_metadata(
 
     // Extract sample description - optional
     if let Some(stsd) = stbl.find_child("stsd") {
-        let _ = extract_sample_description(&stsd, metadata, index);
+        let _ = extract_sample_description(&stsd, metadata, index, is_meta_handler);
     }
 
     // Extract video frame rate from stts (sample-to-time) atom
@@ -906,6 +911,7 @@ fn extract_sample_description(
     stsd: &Atom,
     metadata: &mut MetadataMap,
     track_index: usize,
+    is_meta_handler: bool,
 ) -> Result<(), String> {
     if stsd.data.len() < 8 {
         return Ok(());
@@ -940,6 +946,17 @@ fn extract_sample_description(
             // Format/Codec ID (4 bytes)
             if let Ok(format) = std::str::from_utf8(&entry_data[4..8]) {
                 let format_trimmed = format.trim();
+
+                // QuickTime.pm selects `MetaSampleDesc` only beneath a
+                // `meta` handler. Its first declared field is MetaFormat at
+                // this exact four-byte location, and it is deliberately not
+                // a numbered track tag in ExifTool's output.
+                if is_meta_handler {
+                    metadata.insert(
+                        "QuickTime:MetaFormat".to_string(),
+                        TagValue::String(format.to_string()),
+                    );
+                }
                 metadata.insert(
                     format!("QuickTime:CompressorID{}", track_suffix),
                     TagValue::String(format_trimmed.to_string()),
@@ -1505,6 +1522,18 @@ fn extract_track_handler_metadata(hdlr: &Atom, metadata: &mut MetadataMap) -> Re
                 TagValue::String(component_desc.to_string()),
             );
         }
+    }
+
+    // QuickTime.pm's HandlerType table gives `meta` the specific label "NRT
+    // Metadata".  ExifTool surfaces this track-level value without a numeric
+    // suffix, and CR3's Track4 is exactly this handler.  Other track handler
+    // values retain the existing suffix-only behavior to avoid replacing the
+    // file-level HandlerType with a different track's subtype.
+    if hdlr.data[8..12] == *b"meta" {
+        metadata.insert(
+            "QuickTime:HandlerType".to_string(),
+            TagValue::String("NRT Metadata".to_string()),
+        );
     }
 
     Ok(())
@@ -3411,6 +3440,70 @@ fn extract_xmp_from_atom(data: &[u8], metadata: &mut MetadataMap) -> Result<(), 
 mod tests {
     use super::*;
     use crate::parsers::quicktime::FourCC;
+
+    #[test]
+    fn quicktime_fixture_prefers_media_info_data_handler_class() {
+        // QuickTime.pm Handler: its `dhlr` PrintConv is "Data Handler".
+        // The first track in QuickTime.mov has mdia/hdlr=mhlr but its
+        // minf/hdlr=dhlr; ExifTool's unsuffixed reported HandlerClass is the
+        // latter.
+        let data = std::fs::read("/tmp/oxidex-exiftool-cache/combined-samples/QuickTime.mov")
+            .expect("pinned QuickTime fixture must be available");
+        let metadata = crate::parsers::quicktime::parse_quicktime_metadata_from_bytes(&data)
+            .expect("pinned QuickTime fixture must parse");
+
+        assert_eq!(
+            metadata.get_string("QuickTime:HandlerClass"),
+            Some("Data Handler")
+        );
+    }
+
+    #[test]
+    fn track_meta_handler_uses_exiftools_nrt_metadata_label() {
+        // QuickTime.pm's `HandlerType` PrintConv maps `meta` to "NRT
+        // Metadata". CanonRaw.cr3 carries this in Track4's mdia/hdlr atom.
+        let handler_data = [
+            0, 0, 0, 0, // version and flags
+            0, 0, 0, 0, // handler class
+            b'm', b'e', b't', b'a', // handler subtype
+        ];
+        let hdlr = Atom {
+            atom_type: FourCC::from_string("hdlr").expect("valid atom type"),
+            data: &handler_data,
+            header_size: 8,
+        };
+        let mut metadata = MetadataMap::new();
+
+        extract_track_handler_metadata(&hdlr, &mut metadata).expect("track handler should parse");
+
+        assert_eq!(
+            metadata.get_string("QuickTime:HandlerType"),
+            Some("NRT Metadata")
+        );
+    }
+
+    #[test]
+    fn meta_track_ctmd_sample_description_emits_meta_format() {
+        // QuickTime.pm's MetaSampleDesc table reads the four-byte sample
+        // format at offset 4 when the enclosing handler is `meta`.
+        let stsd_data = [
+            0, 0, 0, 0, // version and flags
+            0, 0, 0, 1, // entry count
+            0, 0, 0, 8, // entry size
+            b'C', b'T', b'M', b'D', // MetaFormat
+        ];
+        let stsd = Atom {
+            atom_type: FourCC::from_string("stsd").expect("valid atom type"),
+            data: &stsd_data,
+            header_size: 8,
+        };
+        let mut metadata = MetadataMap::new();
+
+        extract_sample_description(&stsd, &mut metadata, 3, true)
+            .expect("sample description should parse");
+
+        assert_eq!(metadata.get_string("QuickTime:MetaFormat"), Some("CTMD"));
+    }
 
     #[test]
     fn pentax_mov_uses_the_generated_binary_layout() {

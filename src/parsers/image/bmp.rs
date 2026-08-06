@@ -4,6 +4,7 @@
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::exiftool_tables::binary_tables::BMP_MAIN;
 use crate::io::EndianReader;
 
 /// BMP signature: "BM" (0x42 0x4D)
@@ -33,6 +34,16 @@ impl BMPParser {
         let width = endian_reader.i32_at(0).unwrap_or(0);
         let height = endian_reader.i32_at(4).unwrap_or(0);
         Ok((width, height))
+    }
+
+    /// Reads the DIB header size, which ExifTool reports as BMPVersion.
+    pub fn read_bmp_version(reader: &dyn FileReader) -> Result<u32> {
+        if reader.size() < 18 {
+            return Ok(0);
+        }
+        let version = reader.read(14, 4)?;
+        let endian_reader = EndianReader::little_endian(version);
+        Ok(endian_reader.u32_at(0).unwrap_or(0))
     }
 
     /// Reads the number of color planes from the DIB header.
@@ -76,6 +87,36 @@ impl BMPParser {
         }
         let comp = reader.read(30, 4)?;
         let endian_reader = EndianReader::little_endian(comp);
+        Ok(endian_reader.u32_at(0).unwrap_or(0))
+    }
+
+    /// Reads the compressed image size from the DIB header (offset 34, 4 bytes).
+    pub fn read_image_length(reader: &dyn FileReader) -> Result<u32> {
+        if reader.size() < 38 {
+            return Ok(0);
+        }
+        let length = reader.read(34, 4)?;
+        let endian_reader = EndianReader::little_endian(length);
+        Ok(endian_reader.u32_at(0).unwrap_or(0))
+    }
+
+    /// Reads horizontal pixels per meter from the DIB header (offset 38, 4 bytes).
+    pub fn read_pixels_per_meter_x(reader: &dyn FileReader) -> Result<u32> {
+        if reader.size() < 42 {
+            return Ok(0);
+        }
+        let pixels_per_meter = reader.read(38, 4)?;
+        let endian_reader = EndianReader::little_endian(pixels_per_meter);
+        Ok(endian_reader.u32_at(0).unwrap_or(0))
+    }
+
+    /// Reads vertical pixels per meter from the DIB header (offset 42, 4 bytes).
+    pub fn read_pixels_per_meter_y(reader: &dyn FileReader) -> Result<u32> {
+        if reader.size() < 46 {
+            return Ok(0);
+        }
+        let pixels_per_meter = reader.read(42, 4)?;
+        let endian_reader = EndianReader::little_endian(pixels_per_meter);
         Ok(endian_reader.u32_at(0).unwrap_or(0))
     }
 
@@ -135,6 +176,35 @@ impl FormatParser for BMPParser {
             "FileSize".to_string(),
             TagValue::String(reader.size().to_string()),
         );
+
+        let bmp_version = Self::read_bmp_version(reader)?;
+        if bmp_version >= 40 {
+            let version = BMP_MAIN
+                .fields
+                .iter()
+                .find(|field| field.name == "BMPVersion")
+                .and_then(|field| field.print_conv.apply(i64::from(bmp_version)))
+                .unwrap_or_else(|| bmp_version.to_string());
+            metadata.insert("BMPVersion".to_string(), TagValue::String(version));
+
+            let image_length = Self::read_image_length(reader)?;
+            metadata.insert(
+                "ImageLength".to_string(),
+                TagValue::Integer(i64::from(image_length)),
+            );
+
+            let pixels_per_meter_x = Self::read_pixels_per_meter_x(reader)?;
+            metadata.insert(
+                "PixelsPerMeterX".to_string(),
+                TagValue::Integer(i64::from(pixels_per_meter_x)),
+            );
+
+            let pixels_per_meter_y = Self::read_pixels_per_meter_y(reader)?;
+            metadata.insert(
+                "PixelsPerMeterY".to_string(),
+                TagValue::Integer(i64::from(pixels_per_meter_y)),
+            );
+        }
 
         let (width, height) = Self::read_dimensions(reader)?;
         let abs_width = width.abs() as u64;
@@ -263,4 +333,41 @@ impl FormatParser for BMPParser {
 pub fn parse_bmp_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
     let parser = BMPParser;
     parser.parse(reader).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TestReader;
+
+    #[test]
+    fn parses_direct_v3_fields_from_pinned_exiftool_bmp_sample() {
+        // Header values from ExifTool 13.59's t/images/BMP.bmp fixture.
+        let mut bmp = vec![0_u8; 54];
+        bmp[..2].copy_from_slice(BMP_SIGNATURE);
+        bmp[14..18].copy_from_slice(&40_u32.to_le_bytes());
+        bmp[18..22].copy_from_slice(&8_i32.to_le_bytes());
+        bmp[22..26].copy_from_slice(&8_i32.to_le_bytes());
+        bmp[26..28].copy_from_slice(&1_u16.to_le_bytes());
+        bmp[28..30].copy_from_slice(&8_u16.to_le_bytes());
+        bmp[34..38].copy_from_slice(&64_u32.to_le_bytes());
+        bmp[38..42].copy_from_slice(&2835_i32.to_le_bytes());
+        bmp[42..46].copy_from_slice(&2835_i32.to_le_bytes());
+
+        let metadata = BMPParser.parse(&TestReader::new(bmp)).unwrap();
+
+        assert_eq!(
+            metadata.get("BMPVersion"),
+            Some(&TagValue::String("Windows V3".to_string()))
+        );
+        assert_eq!(metadata.get("ImageLength"), Some(&TagValue::Integer(64)));
+        assert_eq!(
+            metadata.get("PixelsPerMeterX"),
+            Some(&TagValue::Integer(2835))
+        );
+        assert_eq!(
+            metadata.get("PixelsPerMeterY"),
+            Some(&TagValue::Integer(2835))
+        );
+    }
 }

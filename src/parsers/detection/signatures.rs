@@ -62,6 +62,8 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     signature!(b"GIF87a", 0, FileFormat::GIF),
     signature!(b"GIF89a", 0, FileFormat::GIF),
     signature!(b"BM", 0, FileFormat::BMP),
+    signature!(b"SDPX", 0, FileFormat::DPX),
+    signature!(b"XPDS", 0, FileFormat::DPX),
     signature!(b"8BPS", 0, FileFormat::PSD),
     signature!(b"\xFFWPC", 0, FileFormat::WPG),
     signature!(b"\x00\x00\x01\x00", 0, FileFormat::ICO),

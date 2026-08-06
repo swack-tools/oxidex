@@ -31,6 +31,8 @@ use crate::core::formatters::{
 use crate::core::tag_conversion::apply_tile_offsets_value_conv;
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::exiftool_tables::{DecodedValue, decode_binary_table, find_table};
+use crate::io::ByteOrder as TableByteOrder;
 use crate::io::EndianReader;
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::icc::parse_icc_profile_data as parse_icc;
@@ -464,6 +466,14 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 let mut dng_adobe_private_data: Option<Vec<u8>> = None;
 
                 // Convert tags to metadata
+                if format == RawFormat::AdobeDNG && ifd_index == 0 {
+                    if let Some(thumbnail) = rebuild_dng_thumbnail_tiff(data, &tags, byte_order) {
+                        metadata.insert(
+                            "EXIF:ThumbnailTIFF".to_string(),
+                            TagValue::Binary(thumbnail),
+                        );
+                    }
+                }
                 for (tag_id, field_type, value_count, raw_bytes) in &tags {
                     let bytes = raw_bytes.as_ref();
 
@@ -688,13 +698,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         }
                     } else {
                         match (format, ifd_index, *tag_id) {
-                            // CR2CFAPattern is physically stored in the sensor IFD3 and
-                            // ExifTool preserves that family-1 group. The generic fallback
-                            // folds unusual chained IFDs into IFD0, which is wrong for this
-                            // uniquely identified CR2 tag.
-                            (RawFormat::CanonCR2, 3, 0xC5E0) => {
-                                lookup_raw_tag_name(*tag_id, "IFD3", format)
-                            }
+                            // CR2CFAPattern is physically stored in the sensor IFD3, but
+                            // ExifTool reports it in the EXIF family for CR2 output.
+                            (RawFormat::CanonCR2, 3, 0xC5E0) => "EXIF:CR2CFAPattern".to_string(),
                             // TIFF/EP tag 0x9216 (TIFF-EPStandardID) lives in NEF
                             // IFD0. lookup_tag_name has no entry for it under the
                             // IFD0 group, so oxidex emitted "IFD0:0x9216" with a
@@ -1027,6 +1033,27 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 byte_order,
                                 &mut metadata,
                             );
+
+                            // Exif.pm promotes the directory with a zero
+                            // SubfileType (the full-resolution image) to its
+                            // PRIORITY_DIR. Only the fields declared
+                            // `Priority => 0` in that table may replace the
+                            // reduced-resolution IFD0 thumbnail values.
+                            if dng_subifd_is_full_resolution(&sub_tags, byte_order) {
+                                for (tag_id, field_type, value_count, raw_bytes) in &sub_tags {
+                                    if let Some((tag_name, tag_value)) =
+                                        format_dng_priority_subifd_tag(
+                                            *tag_id,
+                                            raw_bytes.as_ref(),
+                                            *field_type,
+                                            *value_count,
+                                            byte_order,
+                                        )
+                                    {
+                                        metadata.insert(tag_name, tag_value);
+                                    }
+                                }
+                            }
                         }
 
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
@@ -1911,6 +1938,60 @@ fn read_tiff_numeric_array(
             })
             .collect(),
     )
+}
+
+/// Whether this DNG SubIFD is ExifTool's full-resolution priority directory.
+///
+/// Exif.pm's `SubfileType` RawConv calls `SetPriorityDir()` only for value 0.
+/// A reduced-resolution image, even if it has larger dimensions than another
+/// preview, must never be selected by this rule.
+fn dng_subifd_is_full_resolution(
+    tags: &crate::parsers::tiff::ifd_parser::IfdEntries,
+    byte_order: ByteOrder,
+) -> bool {
+    let Some((_, field_type, value_count, bytes)) = tags.iter().find(|(tag, ..)| *tag == 0x00FE)
+    else {
+        return false;
+    };
+    if *value_count != 1 {
+        return false;
+    }
+    match *field_type {
+        3 => read_tiff_u16(bytes.as_ref(), byte_order) == Some(0),
+        4 => read_tiff_u32(bytes.as_ref(), byte_order) == Some(0),
+        _ => false,
+    }
+}
+
+/// Render the DNG fields whose `Priority => 0` causes ExifTool to read from
+/// the full-resolution SubIFD instead of IFD0.
+fn format_dng_priority_subifd_tag(
+    tag_id: u16,
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<(String, TagValue)> {
+    if !matches!(tag_id, 0x0100 | 0x0101 | 0x0102 | 0x0103 | 0x0106 | 0x0115) {
+        return None;
+    }
+
+    let tag_value = match tag_id {
+        0x0103 | 0x0106 if field_type == 3 && value_count == 1 => {
+            let value = i64::from(read_tiff_u16(bytes, byte_order)?);
+            crate::parsers::tiff::tiff_enums::tiff_enum_to_string(tag_id, value)
+                .map(TagValue::new_string)
+                .unwrap_or_else(|| {
+                    raw_bytes_to_simple_tag_value(bytes, field_type, value_count, byte_order)
+                })
+        }
+        _ => raw_bytes_to_simple_tag_value(bytes, field_type, value_count, byte_order),
+    };
+
+    Some((
+        lookup_raw_tag_name(tag_id, "IFD0", RawFormat::AdobeDNG),
+        tag_value,
+    ))
 }
 
 /// Name and display value for the DNG SubIFD tags ExifTool reports under the
@@ -3175,6 +3256,120 @@ mod dng_integer_array_tests {
 }
 
 #[cfg(test)]
+mod dng_thumbnail_tiff_tests {
+    use super::*;
+
+    #[test]
+    fn dng_full_resolution_subifd_overrides_reduced_ifd0_priority_fields() {
+        // ExifTool's Exif.pm promotes the directory whose SubfileType is 0,
+        // so these Priority => 0 fields must come from this full-resolution
+        // SubIFD rather than IFD0's reduced-resolution thumbnail.
+        let sub_ifd_offset = 112u32;
+        let ifd0_bits_offset = 202u32;
+        let mut dng = vec![0u8; 208];
+        dng[..8].copy_from_slice(b"II\x2a\0\x08\0\0\0");
+
+        let write_ifd = |data: &mut [u8], offset: usize, entries: &[(u16, u16, u32, u32)]| {
+            data[offset..offset + 2].copy_from_slice(&(entries.len() as u16).to_le_bytes());
+            for (index, (id, ty, count, value)) in entries.iter().enumerate() {
+                let at = offset + 2 + index * 12;
+                data[at..at + 2].copy_from_slice(&id.to_le_bytes());
+                data[at + 2..at + 4].copy_from_slice(&ty.to_le_bytes());
+                data[at + 4..at + 8].copy_from_slice(&count.to_le_bytes());
+                data[at + 8..at + 12].copy_from_slice(&value.to_le_bytes());
+            }
+        };
+
+        write_ifd(
+            &mut dng,
+            8,
+            &[
+                (0x00FE, 4, 1, 1),
+                (0x0100, 4, 1, 8),
+                (0x0101, 4, 1, 8),
+                (0x0102, 3, 3, ifd0_bits_offset),
+                (0x0103, 3, 1, 1),
+                (0x0106, 3, 1, 2),
+                (0x0115, 3, 1, 3),
+                (0x014A, 4, 1, sub_ifd_offset),
+            ],
+        );
+        write_ifd(
+            &mut dng,
+            sub_ifd_offset as usize,
+            &[
+                (0x00FE, 4, 1, 0),
+                (0x0100, 4, 1, 3516),
+                (0x0101, 4, 1, 2328),
+                (0x0102, 3, 1, 16),
+                (0x0103, 3, 1, 7),
+                (0x0106, 3, 1, 32803),
+                (0x0115, 3, 1, 1),
+            ],
+        );
+        dng[ifd0_bits_offset as usize..].copy_from_slice(&[8, 0, 8, 0, 8, 0]);
+
+        let metadata = parse_raw_metadata(&dng, RawFormat::AdobeDNG).expect("synthetic DNG");
+        for (tag, expected) in [
+            ("IFD0:ImageWidth", TagValue::new_integer(3516)),
+            ("IFD0:ImageHeight", TagValue::new_integer(2328)),
+            ("IFD0:BitsPerSample", TagValue::new_integer(16)),
+            ("IFD0:Compression", TagValue::new_string("JPEG")),
+            (
+                "IFD0:PhotometricInterpretation",
+                TagValue::new_string("Color Filter Array"),
+            ),
+            ("IFD0:SamplesPerPixel", TagValue::new_integer(1)),
+        ] {
+            assert_eq!(
+                metadata.get(tag),
+                Some(&expected),
+                "{tag} must come from the full-resolution SubIFD"
+            );
+        }
+    }
+
+    #[test]
+    fn rebuilds_uncompressed_reduced_resolution_ifd0_as_thumbnail_tiff() {
+        // This is the exact input shape ExifTool's Exif.pm `RebuildTIFF`
+        // accepts for the DNG.dng corpus fixture: an uncompressed,
+        // reduced-resolution RGB image in IFD0.
+        let mut dng = vec![0u8; 172 + 8 * 8 * 3];
+        dng[..8].copy_from_slice(b"II\x2a\0\x08\0\0\0");
+        let entries = [
+            (0x00feu16, 4u16, 1u32, 1u32), // reduced-resolution image
+            (0x0100, 4, 1, 8),
+            (0x0101, 4, 1, 8),
+            (0x0102, 3, 3, 166), // BitsPerSample: 8 8 8
+            (0x0103, 3, 1, 1),
+            (0x0106, 3, 1, 2),
+            (0x0111, 4, 1, 172),
+            (0x0112, 3, 1, 1),
+            (0x0115, 3, 1, 3),
+            (0x0116, 4, 1, 8),
+            (0x0117, 4, 1, 192),
+            (0x011c, 3, 1, 1),
+        ];
+        dng[8..10].copy_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (index, (id, ty, count, value)) in entries.iter().enumerate() {
+            let at = 10 + index * 12;
+            dng[at..at + 2].copy_from_slice(&id.to_le_bytes());
+            dng[at + 2..at + 4].copy_from_slice(&ty.to_le_bytes());
+            dng[at + 4..at + 8].copy_from_slice(&count.to_le_bytes());
+            dng[at + 8..at + 12].copy_from_slice(&value.to_le_bytes());
+        }
+        dng[166..172].copy_from_slice(&[8, 0, 8, 0, 8, 0]);
+
+        let metadata =
+            parse_raw_metadata(&dng, RawFormat::AdobeDNG).expect("synthetic DNG should parse");
+        let thumbnail = metadata
+            .get("EXIF:ThumbnailTIFF")
+            .expect("DNG reduced-resolution IFD0 should produce ThumbnailTIFF");
+        assert!(matches!(thumbnail, TagValue::Binary(bytes) if bytes.len() == 408));
+    }
+}
+
+#[cfg(test)]
 mod panasonic_rw2_tests {
     use super::*;
 
@@ -3788,25 +3983,6 @@ fn extract_nef_tags(metadata: &mut MetadataMap) {
         );
     }
 
-    // Count available image representations
-    let mut image_count = 0;
-    if metadata.contains_key("IFD0:ImageWidth") {
-        image_count += 1;
-    }
-    if metadata.contains_key("IFD1:ImageWidth") {
-        image_count += 1;
-    }
-    if metadata.contains_key("SubIFD0:ImageWidth") {
-        image_count += 1;
-    }
-
-    if image_count > 0 {
-        metadata.insert(
-            "NEF:ImageLayerCount".to_string(),
-            TagValue::new_integer(image_count),
-        );
-    }
-
     // Check for RAW data in SubIFD
     if metadata.contains_key("SubIFD0:ImageWidth") {
         metadata.insert(
@@ -4087,6 +4263,19 @@ fn parse_cr3_cmt3_makernotes(data: &[u8], metadata: &mut MetadataMap) {
         return;
     }
 
+    // Canon.pm 0x0097 (`DustRemovalData`) is an opaque `undef` value flagged
+    // Binary. The MakerNote dispatcher intentionally returns display strings,
+    // so preserve this one raw CMT3 IFD value before its results are merged.
+    // CMT3 is a complete TIFF and its offsets are relative to `tiff`, exactly
+    // as `parse_ifd` expects.
+    let dust_removal_data = parse_ifd(&SliceReader::new(tiff), first_ifd_offset as u64, byte_order)
+        .ok()
+        .and_then(|ifd_tags| {
+            ifd_tags.into_iter().find_map(|(tag_id, _, _, raw_bytes)| {
+                (tag_id == 0x0097).then(|| raw_bytes.into_owned())
+            })
+        });
+
     // The absolute file offset of the box payload, so `IsOffset` tags inside it
     // resolve against the file rather than against the box.
     let tiff_base = subslice_offset(data, tiff).unwrap_or(0) as u64;
@@ -4098,9 +4287,14 @@ fn parse_cr3_cmt3_makernotes(data: &[u8], metadata: &mut MetadataMap) {
     );
 
     let mut makernote_tags = std::collections::HashMap::new();
+    // CMT1 has already supplied the camera model. Canon.pm's ShotInfo table
+    // uses it to gate EOS-only fields such as CameraTemperature.
+    let model = metadata
+        .get_string("IFD0:Model")
+        .or_else(|| metadata.get_string("EXIF:Model"));
     if let Err(e) = crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context(
         "Canon",
-        None,
+        model,
         &ctx,
         byte_order,
         &mut makernote_tags,
@@ -4111,6 +4305,241 @@ fn parse_cr3_cmt3_makernotes(data: &[u8], metadata: &mut MetadataMap) {
     for (tag_name, tag_value) in makernote_tags {
         metadata.insert(tag_name, TagValue::new_string(tag_value));
     }
+    if let Some(bytes) = dust_removal_data {
+        metadata.insert(
+            "Canon:DustRemovalData".to_string(),
+            TagValue::new_binary(bytes),
+        );
+    }
+}
+
+/// Traverse Canon's little-endian timed-metadata records and decode the
+/// embedded Canon MakerNotes in ExifInfo record types 8 and 9.
+///
+/// Canon.pm `ProcessCTMD` consumes a `[u32 size][u16 type]` header, skips the
+/// remaining six header bytes, then hands the payload to `ProcessExifInfo`.
+/// That stream consists of `[u32 size][u32 tag][payload]` records.  Only a
+/// 0x927c record is a Canon MakerNote; its payload is a complete TIFF and all
+/// TIFF offsets are relative to that payload's header.
+fn parse_cr3_ctmd_makernotes(ctmd: &[u8], metadata: &mut MetadataMap) {
+    let mut record_pos = 0usize;
+    while record_pos + 12 <= ctmd.len() {
+        let Some(record_size) = read_tiff_u32(&ctmd[record_pos..], ByteOrder::LittleEndian) else {
+            break;
+        };
+        let record_size = record_size as usize;
+        let record_end = match record_pos.checked_add(record_size) {
+            Some(end) if record_size >= 12 && end <= ctmd.len() => end,
+            _ => break,
+        };
+        let Some(record_type) = read_tiff_u16(&ctmd[record_pos + 4..], ByteOrder::LittleEndian)
+        else {
+            break;
+        };
+
+        // CTMD type 1 is Canon.pm's packed TimeStamp: `x2vCCCCCC` under the
+        // little-endian byte order ProcessCTMD sets.
+        if record_type == 1
+            && let Some(payload) = ctmd.get(record_pos + 12..record_end)
+            && payload.len() >= 10
+            && let Some(year) = read_tiff_u16(&payload[2..], ByteOrder::LittleEndian)
+        {
+            metadata.insert(
+                "Canon:TimeStamp".to_string(),
+                TagValue::new_string(format!(
+                    "{year:04}:{:02}:{:02} {:02}:{:02}:{:02}.{:02}",
+                    payload[4], payload[5], payload[6], payload[7], payload[8], payload[9]
+                )),
+            );
+        }
+
+        // CTMD type 5 is Canon.pm's ExposureInfo binary table. Its first two
+        // int32 words are FNumber/ExposureTime rationals; index 2 is ISO with
+        // the exact ValueConv `$val & 0x7fffffff`.
+        if record_type == 5
+            && record_pos + 24 <= record_end
+            && let Some(raw_iso) =
+                read_tiff_u32(&ctmd[record_pos + 20..record_end], ByteOrder::LittleEndian)
+        {
+            metadata.insert(
+                "Canon:ISO".to_string(),
+                TagValue::new_string((raw_iso & 0x7fff_ffff).to_string()),
+            );
+        }
+
+        if matches!(record_type, 8 | 9) {
+            let mut entry_pos = record_pos + 12;
+            while entry_pos + 8 <= record_end {
+                let Some(entry_size) = read_tiff_u32(&ctmd[entry_pos..], ByteOrder::LittleEndian)
+                else {
+                    break;
+                };
+                let entry_size = entry_size as usize;
+                let entry_end = match entry_pos.checked_add(entry_size) {
+                    Some(end) if entry_size >= 8 && end <= record_end => end,
+                    _ => break,
+                };
+                let Some(tag) = read_tiff_u32(&ctmd[entry_pos + 4..], ByteOrder::LittleEndian)
+                else {
+                    break;
+                };
+
+                if tag == 0x927c {
+                    let tiff = &ctmd[entry_pos + 8..entry_end];
+                    if (tiff.starts_with(b"II*\0") || tiff.starts_with(b"MM\0*"))
+                        && let Ok(byte_order) = detect_byte_order(tiff)
+                        && tiff.len() >= 8
+                    {
+                        let first_ifd_offset = read_u32(&tiff[4..8], byte_order) as usize;
+                        if first_ifd_offset < tiff.len() {
+                            let ctx = MakerNoteContext::in_tiff(
+                                tiff,
+                                first_ifd_offset,
+                                tiff.len() - first_ifd_offset,
+                                0,
+                            );
+                            let mut tags = std::collections::HashMap::new();
+                            if crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context(
+                                "Canon",
+                                None,
+                                &ctx,
+                                byte_order,
+                                &mut tags,
+                            )
+                            .is_ok()
+                            {
+                                for (name, value) in tags {
+                                    metadata.insert(name, TagValue::new_string(value));
+                                }
+                            }
+                        }
+                    }
+                }
+                entry_pos = entry_end;
+            }
+        }
+        record_pos = record_end;
+    }
+}
+
+/// Locate the sole timed-metadata sample for a CR3 `CTMD` sample description.
+///
+/// The `stsd` entry identifies the timed-metadata track. Its sibling `stsz`
+/// and `co64` boxes supply, respectively, the one sample's exact byte length
+/// and file offset. This intentionally accepts only the one-sample shape used
+/// by Canon still-image CR3 files; it does not guess from an `mdat` scan.
+fn find_cr3_ctmd_sample(data: &[u8]) -> Option<&[u8]> {
+    let mut cursor = 0usize;
+    while cursor + 4 <= data.len() {
+        let relative = data[cursor..]
+            .windows(4)
+            .position(|bytes| bytes == b"CTMD")?;
+        let type_pos = cursor + relative;
+        cursor = type_pos + 4;
+        if type_pos < 4 {
+            continue;
+        }
+
+        let entry_start = type_pos - 4;
+        let entry_size =
+            u32::from_be_bytes(data.get(entry_start..type_pos)?.try_into().ok()?) as usize;
+        let entry_end = match entry_start.checked_add(entry_size) {
+            Some(end) if entry_size >= 8 && end <= data.len() => end,
+            _ => continue,
+        };
+        let search_end = data[entry_end..]
+            .windows(4)
+            .position(|bytes| bytes == b"stsd")
+            .map(|offset| entry_end + offset.saturating_sub(4))
+            .unwrap_or(data.len());
+
+        let find_child = |kind: &[u8; 4]| {
+            let mut at = entry_end;
+            while at + 8 <= search_end {
+                let relative = data[at..search_end]
+                    .windows(4)
+                    .position(|bytes| bytes == kind)?;
+                let type_at = at + relative;
+                at = type_at + 4;
+                if type_at < 4 {
+                    continue;
+                }
+                let start = type_at - 4;
+                let size = u32::from_be_bytes(data.get(start..type_at)?.try_into().ok()?) as usize;
+                let end = start.checked_add(size)?;
+                if size >= 8 && end <= search_end {
+                    return Some(&data[type_at + 4..end]);
+                }
+            }
+            None
+        };
+
+        let Some(stsz) = find_child(b"stsz") else {
+            continue;
+        };
+        let Some(co64) = find_child(b"co64") else {
+            continue;
+        };
+        // FullBox flags (4), constant sample size (4), sample count (4).
+        let sample_size = u32::from_be_bytes(stsz.get(4..8)?.try_into().ok()?) as usize;
+        let sample_count = u32::from_be_bytes(stsz.get(8..12)?.try_into().ok()?);
+        // FullBox flags (4), entry count (4), first 64-bit offset (8).
+        let offset_count = u32::from_be_bytes(co64.get(4..8)?.try_into().ok()?);
+        let sample_offset = u64::from_be_bytes(co64.get(8..16)?.try_into().ok()?);
+        if sample_count != 1 || offset_count != 1 || sample_size == 0 {
+            continue;
+        }
+        let start = usize::try_from(sample_offset).ok()?;
+        let end = start.checked_add(sample_size)?;
+        if let Some(sample) = data.get(start..end) {
+            return Some(sample);
+        }
+    }
+    None
+}
+
+/// Read Canon's CR3 `CMP1` image-description atom.
+///
+/// ExifTool 13.59 declares this as `Canon::CMP1`, a big-endian
+/// `ProcessBinaryData` record.  Its generated table has only two lossless
+/// fields: `ImageWidth` at int16 index 8 and `ImageHeight` at index 10.  These
+/// are Canon/MakerNotes tags, not the QuickTime source-image dimensions.
+fn parse_cr3_cmp1(data: &[u8], metadata: &mut MetadataMap) {
+    let Some(record) = find_cr3_box(data, b"CMP1") else {
+        return;
+    };
+    let Some(table) = find_table("Canon", "CMP1") else {
+        return;
+    };
+
+    for decoded in decode_binary_table(table, record, TableByteOrder::Big) {
+        let DecodedValue::Integer(value) = decoded.raw else {
+            continue;
+        };
+        metadata.insert(
+            format!("Canon:{}", decoded.field.name),
+            TagValue::Integer(value),
+        );
+    }
+}
+
+/// Read Canon's CR3 `THMB` thumbnail atom.
+///
+/// `Canon.pm` declares this atom as `ThumbnailImage` with the exact
+/// conversion `substr($val, 16)`: the first sixteen payload bytes describe the
+/// thumbnail, while the remaining bytes are the binary image.  Keep it binary
+/// so the normal ExifTool-compatible renderer owns its display form.
+fn parse_cr3_thmb(data: &[u8], metadata: &mut MetadataMap) {
+    let Some(payload) = find_cr3_box(data, b"THMB") else {
+        return;
+    };
+    let Some(thumbnail) = payload.get(16..) else {
+        return;
+    };
+    metadata.insert(
+        "Canon:ThumbnailImage".to_string(),
+        TagValue::new_binary(thumbnail.to_vec()),
+    );
 }
 
 /// Byte offset of `part` within `whole`, when `part` is a subslice of it.
@@ -4312,6 +4741,22 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
             "Canon:ThumbnailImage".to_string(),
             TagValue::new_binary(image.to_vec()),
         );
+    }
+
+    // Canon.pm's CMP1 table is a separate CR3 atom, not part of CMT3's TIFF
+    // MakerNote.  Decode its two declared dimensions directly from the
+    // generated table before handling unrelated UUID payloads.
+    parse_cr3_cmp1(data, &mut metadata);
+
+    // Canon.pm's THMB conversion removes its 16-byte atom header and exposes
+    // the remainder as the Canon/MakerNotes thumbnail.
+    parse_cr3_thmb(data, &mut metadata);
+
+    // Timed metadata is a sample stream, not an ISO box payload. Locate the
+    // CTMD track through its own `stsz`/`co64` sample tables, then apply
+    // Canon.pm's type-8/type-9 ExifInfo traversal.
+    if let Some(ctmd) = find_cr3_ctmd_sample(data) {
+        parse_cr3_ctmd_makernotes(ctmd, &mut metadata);
     }
 
     // XMP lives in a top-level `uuid` box (QuickTime.pm's UUID-XMP condition
@@ -6446,6 +6891,139 @@ fn dng_binary_or_placeholder(data: &[u8], offset: u32, length: u32) -> TagValue 
     }
 }
 
+/// Rebuild ExifTool's `ThumbnailTIFF` Composite from an uncompressed,
+/// reduced-resolution DNG IFD0.  This follows Exif.pm `RebuildTIFF`: normalize
+/// the output to big-endian TIFF, set 72 dpi, and copy the source strips.
+fn rebuild_dng_thumbnail_tiff(
+    data: &[u8],
+    tags: &crate::parsers::tiff::ifd_parser::IfdEntries,
+    byte_order: ByteOrder,
+) -> Option<Vec<u8>> {
+    let entry = |id| tags.iter().find(|(tag, ..)| *tag == id);
+    let values = |id| {
+        let (_, field_type, count, bytes) = entry(id)?;
+        let width = match *field_type {
+            3 => 2,
+            4 => 4,
+            _ => return None,
+        };
+        if bytes.len() < width * *count as usize {
+            return None;
+        }
+        (0..*count as usize)
+            .map(|i| match width {
+                2 => read_tiff_u16(&bytes[i * 2..], byte_order).map(u32::from),
+                _ => read_tiff_u32(&bytes[i * 4..], byte_order),
+            })
+            .collect::<Option<Vec<_>>>()
+    };
+    let one = |id| values(id).and_then(|v| (v.len() == 1).then_some(v[0]));
+    if one(0x00fe)? != 1 || one(0x0103)? != 1 {
+        return None;
+    }
+    let width: u32 = one(0x0100)?;
+    let height: u32 = one(0x0101)?;
+    if width > 256 || height == 0 {
+        return None;
+    }
+    let bits = values(0x0102)?;
+    let photometric = one(0x0106)?;
+    let samples = one(0x0115)?;
+    let rows = one(0x0116)?;
+    let planar = one(0x011c).unwrap_or(1);
+    let orientation = one(0x0112).unwrap_or(1);
+    let offsets = values(0x0111)?;
+    let lengths = values(0x0117)?;
+    if offsets.len() != lengths.len() || bits.len() != samples as usize {
+        return None;
+    }
+    let row_bytes = bits.iter().try_fold(0u32, |sum, bit| {
+        sum.checked_add(width.checked_mul((*bit + 7) / 8)?)
+    })?;
+    let mut pixels = Vec::new();
+    for (offset, length) in offsets.into_iter().zip(lengths) {
+        if length != row_bytes.checked_mul(rows)? {
+            return None;
+        }
+        pixels.extend_from_slice(data.get(offset as usize..offset.checked_add(length)? as usize)?);
+    }
+    if pixels.len() != height.checked_mul(row_bytes)? as usize {
+        return None;
+    }
+
+    let mut entries: Vec<(u16, u16, Vec<u8>)> = vec![
+        (0x00fe, 4, vec![0, 0, 0, 0]),
+        (0x0100, 4, width.to_be_bytes().to_vec()),
+        (0x0101, 4, height.to_be_bytes().to_vec()),
+        (
+            0x0102,
+            3,
+            bits.iter()
+                .flat_map(|v| (*v as u16).to_be_bytes())
+                .collect(),
+        ),
+        (0x0103, 3, vec![0, 1]),
+        (0x0106, 3, (photometric as u16).to_be_bytes().to_vec()),
+        (0x0111, 4, vec![0; 4]),
+        (0x0112, 3, (orientation as u16).to_be_bytes().to_vec()),
+        (0x0115, 3, (samples as u16).to_be_bytes().to_vec()),
+        (0x0116, 4, height.to_be_bytes().to_vec()),
+        (0x0117, 4, (pixels.len() as u32).to_be_bytes().to_vec()),
+        (
+            0x011a,
+            5,
+            [72u32.to_be_bytes(), 1u32.to_be_bytes()].concat(),
+        ),
+        (
+            0x011b,
+            5,
+            [72u32.to_be_bytes(), 1u32.to_be_bytes()].concat(),
+        ),
+        (0x011c, 3, (planar as u16).to_be_bytes().to_vec()),
+        (0x0128, 3, vec![0, 2]),
+    ];
+    let ifd_end = 8 + 2 + entries.len() * 12 + 4;
+    let mut value_area = Vec::new();
+    let mut locations = Vec::with_capacity(entries.len());
+    for (id, _, value) in &entries {
+        if *id == 0x0111 {
+            locations.push(None);
+        } else if value.len() <= 4 {
+            locations.push(Some(u32::MAX));
+        } else {
+            let at = ifd_end + value_area.len();
+            value_area.extend_from_slice(value);
+            locations.push(Some(at as u32));
+        }
+    }
+    let strip_at = (ifd_end + value_area.len()) as u32;
+    let mut out = Vec::with_capacity(strip_at as usize + pixels.len());
+    out.extend_from_slice(b"MM\0*");
+    out.extend_from_slice(&8u32.to_be_bytes());
+    out.extend_from_slice(&(entries.len() as u16).to_be_bytes());
+    for ((id, ty, value), location) in entries.iter_mut().zip(locations) {
+        out.extend_from_slice(&id.to_be_bytes());
+        out.extend_from_slice(&ty.to_be_bytes());
+        let count = if *id == 0x0102 { bits.len() as u32 } else { 1 };
+        out.extend_from_slice(&count.to_be_bytes());
+        let offset = if *id == 0x0111 {
+            strip_at
+        } else {
+            location.unwrap()
+        };
+        if offset == u32::MAX {
+            out.extend_from_slice(value);
+            out.resize(out.len() + (4 - value.len()), 0);
+        } else {
+            out.extend_from_slice(&offset.to_be_bytes());
+        }
+    }
+    out.extend_from_slice(&0u32.to_be_bytes());
+    out.extend_from_slice(&value_area);
+    out.extend_from_slice(&pixels);
+    Some(out)
+}
+
 // ===== Helper Functions =====
 
 /// Detect byte order from TIFF header
@@ -6810,6 +7388,38 @@ impl<'a> FileReader for SliceReader<'a> {
 mod cr3_cmt1_artist_tests {
     use super::*;
 
+    /// Construct the CR3 `CMP1` atom shape emitted by CanonRaw.cr3.  The
+    /// generated `Canon::CMP1` table defines its two fields at int16 indices
+    /// 8 and 10, so the width and height are big-endian `int32u` values at
+    /// byte offsets 16 and 20 in the atom payload.
+    fn build_cr3_with_cmp1(width: u32, height: u32) -> Vec<u8> {
+        let mut cmp1 = vec![0u8; 24];
+        cmp1[16..20].copy_from_slice(&width.to_be_bytes());
+        cmp1[20..24].copy_from_slice(&height.to_be_bytes());
+
+        let mut data = Vec::new();
+        data.extend_from_slice(b"\0\0\0\x18ftypcrx "); // plausible leading box
+        data.extend_from_slice(&((8 + cmp1.len()) as u32).to_be_bytes());
+        data.extend_from_slice(b"CMP1");
+        data.extend_from_slice(&cmp1);
+        data
+    }
+
+    /// Canon.pm's `uuid` table defines `THMB` as `ThumbnailImage` with
+    /// `RawConv => 'substr($val, 16)'`.  The first 16 bytes are the fixed
+    /// atom header; the remaining bytes are the binary thumbnail itself.
+    fn build_cr3_with_thmb(thumbnail: &[u8]) -> Vec<u8> {
+        let mut thmb = vec![0u8; 16];
+        thmb.extend_from_slice(thumbnail);
+
+        let mut data = Vec::new();
+        data.extend_from_slice(b"\0\0\0\x18ftypcrx "); // plausible leading box
+        data.extend_from_slice(&((8 + thmb.len()) as u32).to_be_bytes());
+        data.extend_from_slice(b"THMB");
+        data.extend_from_slice(&thmb);
+        data
+    }
+
     /// Build a minimal CR3-shaped buffer: a `CMT1` box whose payload is a
     /// little-endian TIFF with a single IFD0 ASCII entry `tag_id` holding
     /// `value` (its trailing NUL included in the count). The value is kept
@@ -6896,6 +7506,86 @@ mod cr3_cmt1_artist_tests {
             Some(&TagValue::new_binary(
                 b"<Dummy thumbnail image data>".to_vec()
             ))
+        );
+    }
+
+    #[test]
+    fn extracts_canon_cmp1_dimensions_from_cr3() {
+        let metadata = parse_cr3(&build_cr3_with_cmp1(1624, 1080), RawFormat::CanonCR3)
+            .expect("synthetic CR3 should parse");
+
+        assert_eq!(
+            metadata.get("Canon:ImageWidth"),
+            Some(&TagValue::Integer(1624))
+        );
+        assert_eq!(
+            metadata.get("Canon:ImageHeight"),
+            Some(&TagValue::Integer(1080))
+        );
+    }
+
+    #[test]
+    fn extracts_canon_thmb_thumbnail_from_cr3() {
+        let thumbnail = b"thumbnail";
+        let metadata = parse_cr3(&build_cr3_with_thmb(thumbnail), RawFormat::CanonCR3)
+            .expect("synthetic CR3 should parse");
+
+        assert_eq!(
+            metadata.get("Canon:ThumbnailImage"),
+            Some(&TagValue::new_binary(thumbnail.to_vec()))
+        );
+    }
+
+    #[test]
+    fn cr3_ctmd_sample_table_reaches_exifinfo_colordata_makernote() {
+        // Canon.pm ProcessCTMD gives type 8's payload to ProcessExifInfo.
+        // Its 0x927c entry is a complete TIFF whose offsets are relative to
+        // the TIFF header at the start of the entry payload.
+        let color_data_offset = 26u32;
+        let mut maker_note = vec![0u8; color_data_offset as usize + 1820 * 2];
+        maker_note[..8].copy_from_slice(b"II\x2a\0\x08\0\0\0");
+        maker_note[8..10].copy_from_slice(&1u16.to_le_bytes());
+        maker_note[10..12].copy_from_slice(&0x4001u16.to_le_bytes());
+        maker_note[12..14].copy_from_slice(&3u16.to_le_bytes());
+        maker_note[14..18].copy_from_slice(&1820u32.to_le_bytes());
+        maker_note[18..22].copy_from_slice(&color_data_offset.to_le_bytes());
+        maker_note[color_data_offset as usize..color_data_offset as usize + 2]
+            .copy_from_slice(&16i16.to_le_bytes());
+
+        let exif_info_size = 8 + maker_note.len();
+        let ctmd_size = 12 + exif_info_size;
+        let mut ctmd = Vec::with_capacity(ctmd_size);
+        ctmd.extend_from_slice(&(ctmd_size as u32).to_le_bytes());
+        ctmd.extend_from_slice(&8u16.to_le_bytes());
+        ctmd.extend_from_slice(&[0; 6]);
+        ctmd.extend_from_slice(&(exif_info_size as u32).to_le_bytes());
+        ctmd.extend_from_slice(&0x927cu32.to_le_bytes());
+        ctmd.extend_from_slice(&maker_note);
+
+        // This is the real Canon route, not a bare CTMD byte scan: the CTMD
+        // sample description is followed by its sibling stsz/co64 tables,
+        // which point to the timed-metadata payload in mdat.
+        let sample_offset = 8 + 20 + 24;
+        let mut cr3 = Vec::with_capacity(sample_offset + ctmd.len());
+        cr3.extend_from_slice(&8u32.to_be_bytes());
+        cr3.extend_from_slice(b"CTMD");
+        cr3.extend_from_slice(&20u32.to_be_bytes());
+        cr3.extend_from_slice(b"stsz");
+        cr3.extend_from_slice(&[0; 4]);
+        cr3.extend_from_slice(&(ctmd.len() as u32).to_be_bytes());
+        cr3.extend_from_slice(&1u32.to_be_bytes());
+        cr3.extend_from_slice(&24u32.to_be_bytes());
+        cr3.extend_from_slice(b"co64");
+        cr3.extend_from_slice(&[0; 4]);
+        cr3.extend_from_slice(&1u32.to_be_bytes());
+        cr3.extend_from_slice(&(sample_offset as u64).to_be_bytes());
+        cr3.extend_from_slice(&ctmd);
+
+        let metadata = parse_cr3(&cr3, RawFormat::CanonCR3).expect("synthetic CR3");
+
+        assert_eq!(
+            metadata.get("Canon:ColorDataVersion"),
+            Some(&TagValue::new_string("16 (M50)"))
         );
     }
 }
@@ -8631,7 +9321,7 @@ mod rational_array_tests {
     }
 
     #[test]
-    fn cr2_cfa_pattern_keeps_ifd3_group() {
+    fn cr2_cfa_pattern_uses_exif_group() {
         let path = "/tmp/oxidex-exiftool-cache/exiftool/t/images/CanonRaw.cr2";
         if !std::path::Path::new(path).exists() {
             return;
@@ -8640,10 +9330,10 @@ mod rational_array_tests {
         let metadata = parse_raw_metadata(&data, RawFormat::CanonCR2).expect("parse CR2 fixture");
 
         assert_eq!(
-            metadata.get("IFD3:CR2CFAPattern"),
+            metadata.get("EXIF:CR2CFAPattern"),
             Some(&TagValue::new_string("[Red,Green][Green,Blue]".to_string()))
         );
-        assert!(!metadata.contains_key("IFD0:CR2CFAPattern"));
+        assert!(!metadata.contains_key("IFD3:CR2CFAPattern"));
     }
 
     fn synthetic_cr2_with_preview(preview: &[u8]) -> Vec<u8> {

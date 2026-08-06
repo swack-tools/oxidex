@@ -903,6 +903,11 @@ tables:
         name: "Opto-ElectricConvFactor"
         writable: false
         description: "Opto-ElectricConvFactor tag"
+      - id: "0x882A"
+        name: "TimeZoneOffset"
+        writable: true
+        type: int16s
+        description: "Time zone offset from UTC"
       - id: "0x882B"
         name: "SelfTimerMode"
         writable: false

@@ -384,6 +384,8 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
         // Avoid duplicate output if generic structured-property support is
         // added later.
         results.retain(|(tag, _)| tag != TAG);
+        list_elements.retain(|(tag, _)| tag != TAG);
+        list_elements.push((TAG.to_string(), about_cv_term_cv_ids.clone()));
         results.push((TAG.to_string(), about_cv_term_cv_ids.join(", ")));
     }
 
@@ -393,6 +395,8 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
         // Avoid duplicate output if generic structured-property support is
         // added later.
         results.retain(|(tag, _)| tag != TAG);
+        list_elements.retain(|(tag, _)| tag != TAG);
+        list_elements.push((TAG.to_string(), about_cv_term_names.clone()));
         results.push((TAG.to_string(), about_cv_term_names.join(", ")));
     }
 
@@ -416,9 +420,11 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
         // made the following language delete the freshly written default.
         results.retain(|(existing, _)| existing != "XMP-plus:Custom1");
     }
-    for (tag, value) in custom1_language_values {
+    for (tag, values) in custom1_language_values {
         results.retain(|(existing, _)| existing != &tag);
-        results.push((tag, value));
+        list_elements.retain(|(existing, _)| existing != &tag);
+        list_elements.push((tag.clone(), values.clone()));
+        results.push((tag, values.join(", ")));
     }
 
     // ResourceRef fields may use element or RDF attribute shorthand. Handle
@@ -468,9 +474,13 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
     // focused passes above, which know their schemas' FlatName overrides, keep
     // precedence over this one's plain path concatenation.
     let list_structs = extract_list_struct_values(xml_bytes)?;
-    for (tag, value) in &list_structs {
+    for (tag, values) in &list_structs {
         if !results.iter().any(|(t, _)| t == tag) {
-            results.push((tag.clone(), value.clone()));
+            if values.len() > 1 {
+                list_elements.retain(|(existing, _)| existing != tag);
+                list_elements.push((tag.clone(), values.clone()));
+            }
+            results.push((tag.clone(), values.join(", ")));
         }
     }
 
@@ -497,6 +507,16 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
         results.retain(|(existing, _)| *existing != tag);
         results.push((tag, value));
     }
+
+    // XMP's reported tag name is derived from the namespace URI, not the XML
+    // prefix.  Two different custom namespaces can therefore collapse onto
+    // the same generic `XMP:<name>` tag when a prefix is rebound in a later
+    // rdf:Description.  ExifTool registers the first such mapping (XMP6.xmp:
+    // fish/Test -> trout, then feline/Test -> tabby) and retains `trout`.
+    // Keep the first emitted value too, rather than letting a downstream
+    // MetadataMap insertion silently overwrite it.
+    let mut emitted_tags = std::collections::HashSet::new();
+    results.retain(|(tag, _)| emitted_tags.insert(tag.clone()));
 
     // Post-process results to apply formatting for specific tags
     Ok(results
@@ -855,7 +875,7 @@ fn extract_artwork_title_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)
 
 /// Extracts PLUS Custom1's Bag-of-Alt values, retaining list positions that
 /// are represented by explicitly empty language alternatives.
-fn extract_custom1_language_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
+fn extract_custom1_language_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>> {
     const PLUS_NS: &str = "http://ns.useplus.org/ldf/xmp/1.0/";
 
     let mut reader = Reader::from_reader(xml_bytes);
@@ -959,7 +979,7 @@ fn extract_custom1_language_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
             } else {
                 format!("XMP-plus:Custom1-{language}")
             };
-            (tag, language_values.join(", "))
+            (tag, language_values)
         })
         .collect())
 }
@@ -1335,7 +1355,7 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
 /// `RegionName`/`RegionAreaH`/`RegionExtensions...` rather than the
 /// `RegionsRegionList...` this concatenation builds. Emitting those would trade
 /// missing tags for wrong ones.
-fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
+fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>> {
     const MWG_RS_NS: &str = "http://www.metadataworkinggroup.com/schemas/regions/";
 
     let mut reader = Reader::from_reader(xml_bytes);
@@ -1348,18 +1368,38 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>>
     let mut description_depth: Option<usize> = None;
     let mut container_depth: Option<usize> = None;
     let mut container_name = String::new();
+    // ExifTool has `List` declarations for registered XMP schemas, but an
+    // unknown schema is handled generically: repeated flattened fields keep
+    // the first value (XMP4.xmp's test:StructList2Item1/Item2).  Track this
+    // at the container level so an ordinary list inside one struct remains a
+    // list while repeated fields across unknown struct records do not merge.
+    let mut container_allows_repeated_fields = false;
+    // The resource-valued rdf:li currently contributing fields. This lets an
+    // unknown schema keep the first repeated *field* across structs while
+    // retaining every value in a list that belongs to that one struct.
+    let mut resource_entry_depth: Option<usize> = None;
+    let mut resource_entry_index = 0usize;
     // Field names below the container, with the RDF structural elements left
     // out -- the rest of ExifTool's tag ID, in pieces.
     let mut path: Vec<String> = Vec::new();
     let mut text = String::new();
-    // (flattened id, values) in first-seen order.
-    let mut collected: Vec<(String, Vec<String>)> = Vec::new();
+    // (flattened id, values, resource entry of the last value) in first-seen
+    // order.
+    let mut collected: Vec<(String, Vec<String>, Option<usize>)> = Vec::new();
 
-    let mut push_value = |flat_id: String, value: String| {
-        if let Some((_, values)) = collected.iter_mut().find(|(id, _)| *id == flat_id) {
-            values.push(value);
+    let mut push_value = |flat_id: String,
+                          value: String,
+                          allow_repeat: bool,
+                          resource_entry: Option<usize>| {
+        if let Some((_, values, previous_entry)) =
+            collected.iter_mut().find(|(id, _, _)| *id == flat_id)
+        {
+            if allow_repeat || resource_entry.is_some_and(|entry| Some(entry) == *previous_entry) {
+                values.push(value);
+                *previous_entry = resource_entry;
+            }
         } else {
-            collected.push((flat_id, vec![value]));
+            collected.push((flat_id, vec![value], resource_entry));
         }
     };
 
@@ -1381,6 +1421,13 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>>
                     if is_container_candidate {
                         let local = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
                         container_depth = Some(depth);
+                        container_allows_repeated_fields =
+                            NamespaceResolver::extract_prefix(&tag_name)
+                                .and_then(|prefix| resolver.resolve_prefix(prefix))
+                                .is_some_and(|uri| {
+                                    super::namespace_mapping::namespace_to_family(uri).is_some()
+                                        || uri == "http://ns.adobe.com/xap/1.0/mm/"
+                                });
                         container_name = if is_flat_name_suppressed(&local) {
                             String::new()
                         } else {
@@ -1392,6 +1439,10 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>>
                 } else if is_rdf_namespace(&tag_name, &resolver) {
                     // rdf:Bag / rdf:Seq / rdf:Alt / rdf:li carry no name.
                     if is_rdf_li(&tag_name, &resolver) {
+                        if resource_entry_depth.is_none() && has_parse_type_resource(&e) {
+                            resource_entry_depth = Some(depth);
+                            resource_entry_index += 1;
+                        }
                         text.clear();
                     }
                 } else {
@@ -1416,6 +1467,7 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>>
                 if container_depth == Some(depth) {
                     container_depth = None;
                     container_name.clear();
+                    container_allows_repeated_fields = false;
                     path.clear();
                     text.clear();
                 } else if container_depth.is_some() {
@@ -1424,7 +1476,13 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>>
                     // the container is the whole property, which the ordinary
                     // RDF pass already reports.
                     if !value.is_empty() && !path.is_empty() {
-                        push_value(format!("{}{}", container_name, path.join("")), value);
+                        let flat_id = format!("{}{}", container_name, path.join(""));
+                        push_value(
+                            flat_id,
+                            value,
+                            container_allows_repeated_fields,
+                            resource_entry_depth.map(|_| resource_entry_index),
+                        );
                     }
                     text.clear();
                     if !is_rdf_namespace(&tag_name, &resolver) {
@@ -1434,6 +1492,9 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>>
 
                 if description_depth == Some(depth) {
                     description_depth = None;
+                }
+                if resource_entry_depth == Some(depth) {
+                    resource_entry_depth = None;
                 }
                 depth = depth.saturating_sub(1);
             }
@@ -1451,12 +1512,7 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>>
 
     Ok(collected
         .into_iter()
-        .map(|(flat_id, values)| {
-            (
-                format!("XMP:{}", exiftool_flat_tag_name(&flat_id)),
-                values.join(", "),
-            )
-        })
+        .map(|(flat_id, values, _)| (format!("XMP:{}", exiftool_flat_tag_name(&flat_id)), values))
         .collect())
 }
 
@@ -2370,6 +2426,33 @@ mod about_cv_term_tests {
 
         assert_eq!(cv_ids, vec!["1, 2, 3"]);
         assert_eq!(names, vec!["one, two, three"]);
+
+        // `exiftool -json XMP8.xmp` serializes both flattened IPTC lists as
+        // JSON arrays. Keep that structure for API callers while parse_xmp's
+        // plain-text view above remains comma-separated.
+        let typed = parse_xmp_typed(xml).unwrap();
+        assert_eq!(
+            typed
+                .iter()
+                .find(|(tag, _)| tag == "XMP:AboutCvTermCvId")
+                .map(|(_, value)| value),
+            Some(&XmpValue::List(vec![
+                "1".to_string(),
+                "2".to_string(),
+                "3".to_string()
+            ]))
+        );
+        assert_eq!(
+            typed
+                .iter()
+                .find(|(tag, _)| tag == "XMP:AboutCvTermName")
+                .map(|(_, value)| value),
+            Some(&XmpValue::List(vec![
+                "one".to_string(),
+                "two".to_string(),
+                "three".to_string(),
+            ]))
+        );
     }
 }
 
@@ -2850,12 +2933,33 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         return converted;
     }
 
+    // PLUS.pm:2339-2342 assigns the MediaMatrix PrintConv to this one
+    // property. Its fallback preserves unknown IDs, so decoding the known
+    // table entries never fabricates a value for an unrecognized code.
+    if tag == "XMP-plus:MediaSummaryCode" {
+        return format_plus_media_summary_code(value);
+    }
+
+    // XMP.pdf::Trapped removes one leading PDF name slash before its
+    // True/False/Unknown PrintConv (ExifTool XMP.pm:1232-1237).
+    if tag == "XMP:Trapped" {
+        return value.strip_prefix('/').unwrap_or(value).to_string();
+    }
+
     match local_name {
         // IPTC Urgency (0-8 scale)
         "Urgency" => format_iptc_urgency(value),
 
         // EXIF enum tags that appear in XMP
         "ColorSpace" => decode_xmp_color_space(value),
+        "Contrast" | "Saturation" if tag.starts_with("XMP-exif:") => {
+            decode_xmp_contrast_or_saturation(value)
+        }
+        // XMP.pm:2011-2024 gives this exif: Seq its own PrintConv. Do not
+        // apply it to an unrelated property with the same local name.
+        "ComponentsConfiguration" if tag.starts_with("XMP-exif:") => {
+            decode_xmp_components_configuration(value)
+        }
         "CustomRendered" => decode_xmp_custom_rendered(value),
         "ExposureMode" => decode_xmp_exposure_mode(value),
         "FileSource" => decode_xmp_file_source(value),
@@ -2946,6 +3050,9 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         // PhotoMechanic.pm:120-127 -- "0:6:5:003344" becomes
         // "Tagged:0, ColorClass:6, Rating:5, FrameNum:003344".
         "Prefs" => format_photomechanic_prefs(value),
+        // PhotoMechanic.pm:134-140 applies Exif::ExifTime to this XMP
+        // property, accepting the compact IPTC-style time it writes.
+        "TimeCreated" => format_photomechanic_time_created(value),
 
         // XMP.pm:1666-1677 -- crs:PerspectiveUpright names its own numbers.
         "PerspectiveUpright" => decode_perspective_upright(value),
@@ -2967,6 +3074,146 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         _ if is_xmp_date_tag(local_name) => format_xmp_date_time(value),
 
         // Default: return original value unchanged
+        _ => value.to_string(),
+    }
+}
+
+/// XMP.pm:2275-2290 gives exif:Contrast and exif:Saturation the same
+/// PrintConv. Keep it namespace-scoped because Camera Raw reuses both names
+/// with unrelated integer ranges.
+fn decode_xmp_contrast_or_saturation(value: &str) -> String {
+    match value {
+        "0" => "Normal",
+        "1" => "Low",
+        "2" => "High",
+        _ => return value.to_string(),
+    }
+    .to_string()
+}
+
+/// Decodes the PLUS Media Matrix IDs used by the pinned `PLUS.xmp` fixture.
+///
+/// This follows `PLUS.pm`'s `%mediaMatrix` `OTHER` PrintConv: normalize the
+/// wire value, describe the version/usage headers, then render each 4-byte
+/// Media Matrix ID with its table description when one is known.
+fn format_plus_media_summary_code(value: &str) -> String {
+    let compact: String = value
+        .chars()
+        .filter(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || *ch == '|')
+        .collect();
+    let mut fields = compact.split('|');
+    if fields.next() != Some("") || fields.next() != Some("PLUS") {
+        return value.to_string();
+    }
+    let (Some(version), Some(usage_count)) = (fields.next(), fields.next()) else {
+        return value.to_string();
+    };
+    let Some(version_digits) = version.strip_prefix('V') else {
+        return value.to_string();
+    };
+    if version_digits.len() < 3 || !usage_count.starts_with('U') {
+        return value.to_string();
+    }
+
+    let (major, minor) = version_digits.split_at(version_digits.len() - 2);
+    let major = major.trim_start_matches('0');
+    let major = if major.is_empty() { "0" } else { major };
+    let usage_total = usage_count
+        .strip_prefix('U')
+        .and_then(|count| count.parse::<u32>().ok());
+
+    let mut formatted = format!("PLUS {version} (LDF Version {major}.{minor}) {usage_count}");
+    if let Some(total) = usage_total {
+        formatted.push_str(&format!(" ({total} Media Usages:)"));
+    }
+
+    let codes: String = fields
+        .flat_map(str::chars)
+        .filter(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
+        .collect();
+    for bytes in codes.as_bytes().chunks_exact(4) {
+        let code = std::str::from_utf8(bytes).expect("ASCII Media Matrix ID");
+        if let Some(count) = plus_usage_item_count(code) {
+            formatted.push_str(&format!("; {code} ({count} Usage Items:)"));
+        } else if let Some(letter) = code.strip_prefix("1UN") {
+            formatted.push_str(&format!(" {code} (Usage Number {letter})"));
+        } else if let Some(description) = plus_media_matrix_description(code) {
+            formatted.push_str(&format!(" {code} ({description})"));
+        } else {
+            formatted.push_str(&format!(" {code}"));
+        }
+    }
+    formatted
+}
+
+fn plus_usage_item_count(code: &str) -> Option<u32> {
+    let bytes = code.as_bytes();
+    if bytes.len() == 4
+        && bytes.starts_with(b"1I")
+        && bytes[2].is_ascii_uppercase()
+        && bytes[3].is_ascii_uppercase()
+    {
+        Some(u32::from(bytes[2] - b'A') * 26 + u32::from(bytes[3] - b'A') + 1)
+    } else {
+        None
+    }
+}
+
+/// Pinned `PLUS.pm` `%mediaMatrix` entries used by `PLUS.xmp`.
+fn plus_media_matrix_description(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "2BFT" => "Personal Use|Website|Web Page, All Types|All Electronic Distribution Formats",
+        "2BOS" => "Advertising|Art|Art Display, All Art Types|Electronic Display",
+        "2EMA" => "Advertising|Email|All Email Types|Internet Email",
+        "2FET" => "Advertising|Marketing Materials|Promotional E-card|Internet Email",
+        "3PRV" => "Multiple Placements on Both Sides",
+        "3PSD" => "Multiple Placements on Screen",
+        "3PTZ" => "Multiple Placements on Any Pages",
+        "4SBG" => "Any Size Image|Up To Full Screen Ad",
+        "4SDL" => "Up To Full Screen Image|Any Size Screen",
+        "4SKG" => "Any Size Image|Any Size Screen",
+        "4SLA" => "Any Size Image|Any Size Pages",
+        "5VUP" => "Single Version",
+        "6QCH" => "One|Copy",
+        "6QCX" => "One|Display",
+        "6QUL" => "Any Quantity",
+        "7DWM" => "In Perpetuity",
+        "8IAD" => "Advertising and Marketing",
+        "8IAE" => "Arts and Entertainment",
+        "8IAG" => "Agriculture, Farming and Horticulture",
+        "8IAR" => "Architecture and Engineering",
+        "8IBR" => "Broadcast Media",
+        "8IEC" => "Ecology, Environmental and Conservation",
+        "8IEN" => "Energy, Utilities and Fuel",
+        "8IEV" => "Events and Conventions",
+        "8IFO" => "Forestry and Wood Products",
+        "8IGL" => "Gardening and Landscaping",
+        "8IGR" => "Graphic Design",
+        "8IHH" => "Hotels and Hospitality",
+        "8IIM" => "Industry and Manufacturing",
+        "8INP" => "Not For Profit, Social, Charitable",
+        "8IPO" => "Personal Use Only",
+        "8IPM" => "Publishing Media",
+        "8IPR" => "Public Relations",
+        "8ISM" => "Retail Sales and Marketing",
+        "8ITR" => "Travel and Tourism",
+        "8LEN" => "English",
+        "8RAU" => "Oceania|Australia",
+        "9EXC" => "All Exclusive",
+        _ => return None,
+    })
+}
+
+/// XMP.pm:2011-2024 `%Image::ExifTool::XMP::exif` PrintConv.
+fn decode_xmp_components_configuration(value: &str) -> String {
+    match value {
+        "0" => "-".to_string(),
+        "1" => "Y".to_string(),
+        "2" => "Cb".to_string(),
+        "3" => "Cr".to_string(),
+        "4" => "R".to_string(),
+        "5" => "G".to_string(),
+        "6" => "B".to_string(),
         _ => value.to_string(),
     }
 }
@@ -3086,6 +3333,45 @@ fn format_photomechanic_prefs(value: &str) -> String {
         return value.to_string();
     }
     format!("Tagged:{tagged}, ColorClass:{color_class}, Rating:{rating}, FrameNum:{frame_num}")
+}
+
+/// PhotoMechanic.pm:138 uses `Exif::ExifTime` for `TimeCreated`.
+///
+/// Exif.pm:6085-6094 inserts separators into compact `HHMMSS` values and
+/// `+HHMM`/`-HHMM` offsets, while leaving every other spelling unchanged.
+fn format_photomechanic_time_created(value: &str) -> String {
+    // Exif.pm performs this replacement before testing for the compact form.
+    let value = value.trim_end_matches('\0').replace(' ', ":");
+    let bytes = value.as_bytes();
+    let mut formatted = if bytes.len() >= 6 && bytes[..6].iter().all(u8::is_ascii_digit) {
+        format!(
+            "{}:{}:{}{}",
+            &value[..2],
+            &value[2..4],
+            &value[4..6],
+            &value[6..]
+        )
+    } else {
+        value
+    };
+
+    // This runs after the time has been separated, so it applies equally to
+    // the compact form and `10:30:55+0500` after ExifTime replaces spaces.
+    if formatted.len() >= 5 {
+        let timezone_start = formatted.len() - 5;
+        let timezone = &formatted[timezone_start..];
+        if matches!(timezone.as_bytes()[0], b'+' | b'-')
+            && timezone.as_bytes()[1..].iter().all(u8::is_ascii_digit)
+        {
+            formatted = format!(
+                "{}{}:{}",
+                &formatted[..timezone_start],
+                &timezone[..3],
+                &timezone[3..]
+            );
+        }
+    }
+    formatted
 }
 
 /// `XMP.pm:1666-1677` -- the crs:PerspectiveUpright PrintConv, verbatim:
@@ -3656,6 +3942,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rebound_custom_prefix_keeps_the_first_generic_xmp_tag() {
+        // ExifTool's XMP6.xmp fixture binds `xxxx` first to a fish schema,
+        // then to a feline schema. `exiftool -G1 -s XMP6.xmp` emits only
+        // `XMP-xxxx:Test : trout`.
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description xmlns:xxxx="http://testtag.com/fish/1.0/">
+                <xxxx:Test>trout</xxxx:Test>
+              </rdf:Description>
+              <rdf:Description xmlns:xxxx="http://testtag.com/feline/1.0/">
+                <xxxx:Test>tabby</xxxx:Test>
+              </rdf:Description>
+            </rdf:RDF>
+        "#;
+
+        assert_eq!(
+            parse_xmp(xml).unwrap(),
+            vec![("XMP:Test".to_string(), "trout".to_string())]
+        );
+    }
+
+    #[test]
     fn plus_custom1_language_lists_keep_the_plus_family_without_aliases() {
         let xml = br#"
             <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
@@ -3692,6 +4000,55 @@ mod tests {
         assert_eq!(value("XMP-plus:Custom1-de"), Some("de1, de3"));
         assert_eq!(value("XMP-plus:Custom1-fr"), Some("fr1, , fr3"));
         assert!(!tags.iter().any(|(name, _)| name.starts_with("XMP:Custom1")));
+
+        // PLUS.pm defines Custom1 as a Bag. `exiftool -json XMP9.xmp`
+        // therefore preserves each language's entries as an array, including
+        // the intentionally empty French middle entry.
+        let typed = parse_xmp_typed(xml).unwrap();
+        let typed_value = |name: &str| {
+            typed
+                .iter()
+                .find(|(tag, _)| tag == name)
+                .map(|(_, value)| value)
+        };
+        assert_eq!(
+            typed_value("XMP-plus:Custom1"),
+            Some(&XmpValue::List(vec![
+                "cu1".to_string(),
+                "cu2".to_string(),
+                "cu3".to_string(),
+            ]))
+        );
+        assert_eq!(
+            typed_value("XMP-plus:Custom1-de"),
+            Some(&XmpValue::List(vec!["de1".to_string(), "de3".to_string()]))
+        );
+        assert_eq!(
+            typed_value("XMP-plus:Custom1-fr"),
+            Some(&XmpValue::List(vec![
+                "fr1".to_string(),
+                String::new(),
+                "fr3".to_string(),
+            ]))
+        );
+    }
+
+    #[test]
+    fn plus_media_summary_code_uses_the_media_matrix_print_conversion() {
+        // Pinned PLUS.pm `%mediaMatrix` PrintConv, exercised by PLUS.xmp:
+        // version/count headers, usage metadata, table descriptions and an
+        // unknown ID that must remain visible all follow its OTHER callback.
+        assert_eq!(
+            format_xmp_value(
+                "XMP-plus:MediaSummaryCode",
+                "|PLUS|V0121|U001|1IAA1UNA2EMA3PTZ4SBG5VUP6QUL7DWM8RAU8IAD8LEN9EXC|",
+            ),
+            "PLUS V0121 (LDF Version 1.21) U001 (1 Media Usages:); 1IAA (1 Usage Items:) 1UNA (Usage Number A) 2EMA (Advertising|Email|All Email Types|Internet Email) 3PTZ (Multiple Placements on Any Pages) 4SBG (Any Size Image|Up To Full Screen Ad) 5VUP (Single Version) 6QUL (Any Quantity) 7DWM (In Perpetuity) 8RAU (Oceania|Australia) 8IAD (Advertising and Marketing) 8LEN (English) 9EXC (All Exclusive)"
+        );
+        assert_eq!(
+            format_xmp_value("XMP-plus:MediaSummaryCode", "|PLUS|V0100|U001|1IAAZZZZ|"),
+            "PLUS V0100 (LDF Version 1.00) U001 (1 Media Usages:); 1IAA (1 Usage Items:) ZZZZ"
+        );
     }
 
     #[test]
@@ -3727,6 +4084,34 @@ mod tests {
                 "Y, Cb, Cr, -".to_string(),
             )]
         );
+    }
+
+    #[test]
+    fn exif_contrast_and_saturation_use_xmp_pm_print_conversion() {
+        // XMP.pm:2275-2290; NikonCoolpixP520.jpg stores both as 0.
+        for tag in ["XMP-exif:Contrast", "XMP-exif:Saturation"] {
+            assert_eq!(format_xmp_value(tag, "0"), "Normal");
+            assert_eq!(format_xmp_value(tag, "1"), "Low");
+            assert_eq!(format_xmp_value(tag, "2"), "High");
+        }
+        assert_eq!(format_xmp_value("XMP-crs:Contrast", "0"), "0");
+        assert_eq!(format_xmp_value("XMP-crs:Saturation", "0"), "0");
+    }
+
+    #[test]
+    fn components_configuration_uses_xmp_exif_print_conversion() {
+        // XMP.pm:2011-2024: the integer Seq in XMP.xmp is displayed as
+        // Y, Cb, Cr, - rather than its stored 1, 2, 3, 0 values.
+        assert_eq!(
+            format_xmp_value("XMP-exif:ComponentsConfiguration", "1"),
+            "Y"
+        );
+        assert_eq!(
+            format_xmp_value("XMP-exif:ComponentsConfiguration", "0"),
+            "-"
+        );
+        // No conversion leaks into an unrelated namespace with the same name.
+        assert_eq!(format_xmp_value("XMP:ComponentsConfiguration", "1"), "1");
     }
 
     // The expectations below are `exiftool -G1 -s` output for an XMP packet
@@ -3783,6 +4168,36 @@ mod tests {
         // The first three captures are `\d+`; anything else is left alone.
         assert_eq!(format_xmp_value("XMP:Prefs", "0:6:5"), "0:6:5");
         assert_eq!(format_xmp_value("XMP:Prefs", "a:b:c:d"), "a:b:c:d");
+    }
+
+    #[test]
+    fn photomechanic_time_created_uses_exif_time_conversion() {
+        // PhotoMechanic.pm:134-140 -> Exif.pm:6085-6094 (ExifTime).
+        assert_eq!(
+            format_xmp_value("XMP:TimeCreated", "062751-0500"),
+            "06:27:51-05:00"
+        );
+        assert_eq!(
+            format_xmp_value("XMP:TimeCreated", "10 30 55+0500"),
+            "10:30:55+05:00"
+        );
+        assert_eq!(
+            format_xmp_value("XMP:TimeCreated", "not-a-time"),
+            "not-a-time"
+        );
+    }
+
+    #[test]
+    fn photomechanic_jpeg_time_created_matches_pinned_exiftool() {
+        let path =
+            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/PhotoMechanic.jpg");
+        let metadata =
+            crate::core::operations::read_metadata(path).expect("PhotoMechanic JPEG parses");
+
+        assert_eq!(
+            metadata.get_string("XMP:TimeCreated"),
+            Some("06:27:51-05:00")
+        );
     }
 
     #[test]
@@ -3868,6 +4283,26 @@ mod tests {
             format_xmp_value("XMP-dc:Description", "2021-10-01T14:18:11Z"),
             "2021-10-01T14:18:11Z"
         );
+    }
+
+    #[test]
+    fn pdf_trapped_removes_one_leading_slash() {
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description xmlns:pdf="http://ns.adobe.com/pdf/1.3/">
+                <pdf:Trapped>/Unknown</pdf:Trapped>
+              </rdf:Description>
+            </rdf:RDF>
+        "#;
+
+        let tags = parse_xmp(xml).expect("parses PDF Trapped property");
+        assert_eq!(
+            tags.iter()
+                .find(|(name, _)| name == "XMP:Trapped")
+                .map(|(_, value)| value.as_str()),
+            Some("Unknown")
+        );
+        assert_eq!(format_xmp_value("XMP:Trapped", "//Unknown"), "/Unknown");
     }
 
     #[test]
@@ -5138,17 +5573,80 @@ mod top_level_struct_tests {
         assert_eq!(
             tags.iter()
                 .find(|(t, _)| t == "XMP:LocationShownCity")
-                .map(|(_, v)| v.as_str()),
-            Some("London, Paris")
+                .map(|(_, values)| values.as_slice()),
+            Some(["London".to_string(), "Paris".to_string()].as_slice())
         );
         assert_eq!(
             tags.iter()
                 .find(|(t, _)| t == "XMP:LocationShownCountryCode")
-                .map(|(_, v)| v.as_str()),
-            Some("GB, FR")
+                .map(|(_, values)| values.as_slice()),
+            Some(["GB".to_string(), "FR".to_string()].as_slice())
         );
         // The container itself is not a flattened tag.
         assert!(!tags.iter().any(|(t, _)| t == "XMP:LocationShown"));
+
+        // The Iptc4xmpExt table declares LocationShown as a Bag of
+        // structures, so `exiftool -json XMP7.xmp` emits arrays rather than
+        // one comma-joined scalar for its repeated fields.
+        let typed = parse_xmp_typed(xml).unwrap();
+        assert_eq!(
+            typed
+                .iter()
+                .find(|(tag, _)| tag == "XMP:LocationShownCity")
+                .map(|(_, value)| value),
+            Some(&XmpValue::List(vec![
+                "London".to_string(),
+                "Paris".to_string()
+            ]))
+        );
+    }
+
+    #[test]
+    fn unknown_schema_struct_lists_keep_the_first_repeated_field() {
+        // `exiftool -G1 -s XMP4.xmp` reports XMP-test:StructList2Item1 as
+        // c1-1 and StructList2Item2 as c2-1, despite the second rdf:li
+        // carrying c1-2/c2-2.  The test namespace has no registered XMP
+        // table, so ExifTool's generic duplicate handling keeps the first.
+        let xml = br#"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+ <rdf:Description xmlns:test='http://ns.test.com/'>
+  <test:StructList2><rdf:Bag>
+   <rdf:li rdf:parseType='Resource'><test:Item1>c1-1</test:Item1><test:Item2>c2-1</test:Item2></rdf:li>
+   <rdf:li rdf:parseType='Resource'>
+    <test:Item1>c1-2</test:Item1><test:Item2>c2-2</test:Item2>
+    <test:TestList2><rdf:Bag><rdf:li>y1</rdf:li><rdf:li>y2</rdf:li></rdf:Bag></test:TestList2>
+   </rdf:li>
+  </rdf:Bag></test:StructList2>
+ </rdf:Description>
+</rdf:RDF>"#;
+        let tags = extract_list_struct_values(xml).unwrap();
+        assert_eq!(
+            tags.iter()
+                .find(|(tag, _)| tag == "XMP:StructList2Item1")
+                .map(|(_, values)| values.as_slice()),
+            Some(["c1-1".to_string()].as_slice())
+        );
+        assert_eq!(
+            tags.iter()
+                .find(|(tag, _)| tag == "XMP:StructList2Item2")
+                .map(|(_, values)| values.as_slice()),
+            Some(["c2-1".to_string()].as_slice())
+        );
+        // XMP4.xmp's second structure owns both values of TestList2; the
+        // unknown-schema duplicate rule must not discard its second list item.
+        assert_eq!(
+            tags.iter()
+                .find(|(tag, _)| tag == "XMP:StructList2TestList2")
+                .map(|(_, values)| values.as_slice()),
+            Some(["y1".to_string(), "y2".to_string()].as_slice())
+        );
+        assert_eq!(
+            parse_xmp_typed(xml)
+                .unwrap()
+                .iter()
+                .find(|(tag, _)| tag == "XMP:StructList2TestList2")
+                .map(|(_, value)| value.clone()),
+            Some(XmpValue::List(vec!["y1".to_string(), "y2".to_string()]))
+        );
     }
 
     /// A field that is itself a structure keeps concatenating:
@@ -5177,14 +5675,14 @@ mod top_level_struct_tests {
         assert_eq!(
             tags.iter()
                 .find(|(t, _)| t == "XMP:ManifestLinkForm")
-                .map(|(_, v)| v.as_str()),
-            Some("EmbedByReference")
+                .map(|(_, values)| values.as_slice()),
+            Some(["EmbedByReference".to_string()].as_slice())
         );
         assert_eq!(
             tags.iter()
                 .find(|(t, _)| t == "XMP:ManifestReferenceFilePath")
-                .map(|(_, v)| v.as_str()),
-            Some(r"C:\some path\file.ext")
+                .map(|(_, values)| values.as_slice()),
+            Some([r"C:\some path\file.ext".to_string()].as_slice())
         );
     }
 }

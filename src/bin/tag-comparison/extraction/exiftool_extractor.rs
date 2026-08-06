@@ -662,6 +662,7 @@ impl ExifToolExtractor {
             "DR4" => vec!["dr4"],
             "VRD" => vec!["vrd"],
             "LFP" => vec!["lfp", "lfr"],
+            "FPF" => vec!["fpf"],
             "DJVU" => vec!["djvu", "djv"],
             "HTML" => vec!["html", "htm"],
             "LNK" => vec!["lnk"],
@@ -705,6 +706,11 @@ mod tests {
     fn test_exiftool_extractor_creation() {
         let extractor = ExifToolExtractor::new(vec!["exiftool".to_string()]);
         assert_eq!(extractor.exiftool_argv, vec!["exiftool".to_string()]);
+    }
+
+    #[test]
+    fn test_fpf_format_discovers_standalone_fpf_files() {
+        assert_eq!(ExifToolExtractor::format_to_extensions("FPF"), vec!["fpf"]);
     }
 
     #[test]

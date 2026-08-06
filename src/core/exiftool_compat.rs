@@ -215,9 +215,15 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
 
     if is_gps_dest_distance_ref(base_name)
         && let Some(s) = value.as_string()
-        && let Some(formatted) = format_gps_dest_distance_ref(s)
     {
-        return TagValue::String(formatted);
+        if let Some(formatted) = format_gps_dest_distance_ref(s) {
+            return TagValue::String(formatted);
+        }
+        // GPS.pm's PrintConv falls through to ExifTool's standard unknown
+        // representation for a present-but-empty two-byte reference field.
+        if s.trim().is_empty() {
+            return TagValue::String("Unknown ()".to_string());
+        }
     }
 
     // ---------------------------------------------------------------------

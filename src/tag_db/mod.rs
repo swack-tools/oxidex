@@ -230,6 +230,16 @@ pub fn lookup_tag_name(tag_id: u16, ifd_name: &str) -> String {
         FormatFamily::EXIF
     };
 
+    // Exif.pm:2427-2438 declares these legacy 0x92xx fields as exact
+    // duplicates of the standard 0xA2xx entries.  The generated database
+    // contains the latter, so use its canonical names when real JPEGs carry
+    // the legacy spellings.
+    let tag_id = match (format_family, tag_id) {
+        (FormatFamily::EXIF, 0x920C) => 0xA20C,
+        (FormatFamily::EXIF, 0x920D) => 0xA20D,
+        _ => tag_id,
+    };
+
     // Look up the tag in the appropriate format family
     if let Some(tag_name) = TAG_ID_TO_NAME_INDEX.get(&(tag_id, format_family)) {
         // Found the tag, now we need to replace the prefix with the correct IFD name
@@ -263,6 +273,34 @@ mod tests {
     #[test]
     fn hd_photo_uncompressed_tag_resolves_by_id() {
         assert_eq!(lookup_tag_name(0xBC03, "IFD0"), "IFD0:Uncompressed");
+    }
+
+    #[test]
+    fn exif_timezone_offset_resolves_by_id() {
+        assert_eq!(lookup_tag_name(0x882A, "ExifIFD"), "ExifIFD:TimeZoneOffset");
+    }
+
+    #[test]
+    fn legacy_exif_frequency_and_noise_ids_resolve_to_standard_names() {
+        assert_eq!(
+            lookup_tag_name(0x920C, "ExifIFD"),
+            "ExifIFD:SpatialFrequencyResponse"
+        );
+        assert_eq!(lookup_tag_name(0x920D, "ExifIFD"), "ExifIFD:Noise");
+    }
+
+    #[test]
+    fn fujifilm_sp_2500_legacy_exif_aliases_match_pinned_exiftool() {
+        let path = std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/FujiFilm/FujiSP-2500.jpg",
+        );
+        let metadata = crate::core::operations::read_metadata(path).expect("Fuji SP-2500 parses");
+
+        assert_eq!(
+            metadata.get_integer("ExifIFD:SpatialFrequencyResponse"),
+            Some(311)
+        );
+        assert_eq!(metadata.get_integer("ExifIFD:Noise"), Some(6));
     }
 
     /// The rule that still earns its place. `XMP::Main` is keyed by namespace

@@ -102,6 +102,25 @@ impl SVGParser {
         }
     }
 
+    /// XMP.pm's `%dateTimeInfo` uses `ConvertDateTime` for dc:date, changing
+    /// only ISO date separators while retaining any time and timezone text.
+    fn format_xmp_date(value: &str) -> String {
+        let value = value.trim();
+        let (date, rest) = match value.split_once('T') {
+            Some((date, rest)) => (date, Some(rest)),
+            None => (value, None),
+        };
+        let year = date.split('-').next().unwrap_or("");
+        if year.len() != 4 || !year.bytes().all(|byte| byte.is_ascii_digit()) {
+            return value.to_string();
+        }
+        let date = date.replace('-', ":");
+        match rest {
+            Some(rest) => format!("{date} {rest}"),
+            None => date,
+        }
+    }
+
     /// Parses viewBox attribute: "minX minY width height"
     fn parse_viewbox(viewbox: &str) -> Option<(String, String)> {
         let parts: Vec<&str> = viewbox.split_whitespace().collect();
@@ -248,8 +267,13 @@ impl SVGParser {
     /// Extract Dublin Core elements that map to XMP tags
     fn extract_dublin_core(text: &str, metadata: &mut MetadataMap) {
         // dc:date -> XMP:Date
-        if let Some(dc_date) = Self::extract_element_content(text, "dc:date") {
-            metadata.insert("XMP:Date".to_string(), TagValue::new_string(dc_date));
+        if let Some(dc_date) = Self::extract_element_content(text, "dc:date")
+            .or_else(|| Self::extract_attribute(text, "dc:date"))
+        {
+            metadata.insert(
+                "XMP:Date".to_string(),
+                TagValue::new_string(Self::format_xmp_date(&dc_date)),
+            );
         }
 
         // dc:format -> XMP:Format
@@ -837,6 +861,16 @@ mod tests {
             metadata.get("XMP:Description").unwrap().as_string(),
             Some("DC Description")
         );
+    }
+
+    #[test]
+    fn pinned_xmp_svg_dublin_core_date_matches_exiftool() {
+        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/XMP.svg");
+        let reader = BufferedReader::new(path).expect("read pinned XMP.svg fixture");
+        let parser = SVGParser;
+        let metadata = parser.parse(&reader).expect("parse pinned XMP.svg fixture");
+
+        assert_eq!(metadata.get_string("XMP:Date"), Some("2000:04:11"));
     }
 
     #[test]

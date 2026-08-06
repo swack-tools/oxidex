@@ -1,11 +1,10 @@
 use oxidex::core::operations::read_metadata;
 use std::path::Path;
 
-const EXIFTOOL_JPEG: &str =
-    "/tmp/oxidex-exiftool-cache/exiftool-partial/exiftool-13.59/t/images/ExifTool.jpg";
+const EXIFTOOL_JPEG: &str = "/tmp/oxidex-exiftool-cache/exiftool/t/images/ExifTool.jpg";
 
-/// ExifTool 13.59 finds the `zmie` marker in an inner MIE trailer and reports
-/// its required empty data block as MIE-Main:TrailerSignature.
+/// The comparison report uses ExifTool's group-0 `MIE` family for this inner
+/// `zmie` trailer (rather than the group-1 `MIE-Main` spelling).
 #[test]
 fn exiftool_jpeg_mie_trailer_signature_matches_exiftool() {
     if !Path::new(EXIFTOOL_JPEG).is_file() {
@@ -15,5 +14,9 @@ fn exiftool_jpeg_mie_trailer_signature_matches_exiftool() {
 
     let metadata = read_metadata(Path::new(EXIFTOOL_JPEG)).expect("ExifTool JPEG parses");
 
-    assert_eq!(metadata.get_string("MIE-Main:TrailerSignature"), Some(""));
+    assert_eq!(metadata.get_string("MIE:TrailerSignature"), Some(""));
+    assert_eq!(
+        metadata.get_string("MIE:Copyright"),
+        Some("© 2006 Phil Harvey")
+    );
 }

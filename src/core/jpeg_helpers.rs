@@ -254,13 +254,15 @@ pub fn process_exif_segments(
                 // second, larger preview there under tag 0x0111/0x0117,
                 // named PreviewImageStart/PreviewImageLength (not
                 // StripOffsets/StripByteCounts - see Exif.pm:707-768).
-                // Offsets are TIFF-relative, so this uses `tiff_reader`
-                // directly, with no `tiff_base` to add.
+                // Offsets are TIFF-relative: the helper reads via
+                // `tiff_reader` and uses `tiff_offset` only for the absolute
+                // JpgFromRawStart value ExifTool displays.
                 crate::core::tiff_helpers::parse_ifd2_preview_image(
                     &tiff_reader,
                     ifd_offset,
                     tags.len(),
                     byte_order,
+                    tiff_offset,
                     metadata,
                 );
             }
@@ -1233,17 +1235,21 @@ pub fn process_spiff_segments(segments: &[Segment], metadata: &mut MetadataMap) 
     }
 }
 
-/// Extracts Ricoh's standard APP5 `RMETA` Azimuth field.
+/// Extracts Ricoh's standard APP5 `RMETA` menu fields.
 ///
 /// `Ricoh.pm::ProcessRicohRMETA` stores parallel NUL-delimited tag names and
-/// big/little-endian `int16u` menu values in section types 1 and 3.  Azimuth
-/// is the only RMETA field handled here; its complete PrintConv is fixed by
-/// the pinned ExifTool table.
+/// big/little-endian `int16u` menu values in section types 1 and 3.  Each
+/// emitted value below is a complete PrintConv map from the pinned
+/// `Ricoh::RMETA` table.
 pub fn process_ricoh_rmeta_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     const DIRECTIONS: [&str; 16] = [
         "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW",
         "NW", "NNW",
     ];
+    const SIGN_TYPES: [&str; 3] = ["Directional", "Warning", "Information"];
+    const LOCATIONS: [&str; 4] = ["Verge", "Gantry", "Central reservation", "Roundabout"];
+    const LIT_VALUES: [&str; 2] = ["Yes", "No"];
+    const CONDITIONS: [&str; 4] = ["Good", "Fair", "Poor", "Damaged"];
 
     for data in segments
         .iter()
@@ -1304,16 +1310,41 @@ pub fn process_ricoh_rmeta_segments(segments: &[Segment], metadata: &mut Metadat
             pos += payload_size;
         }
 
-        if let Some((index, _)) = names
-            .iter()
-            .enumerate()
-            .find(|(_, name)| **name == b"Azimuth")
-            && let Some(direction) = numbers
-                .get(index)
-                .and_then(|value| value.checked_sub(1))
-                .and_then(|value| DIRECTIONS.get(value as usize))
-        {
-            metadata.insert("APP5:Azimuth", TagValue::new_string(*direction));
+        for (index, name) in names.iter().enumerate() {
+            let Some(value) = numbers.get(index).copied() else {
+                continue;
+            };
+            let mapped = if *name == b"Sign type" {
+                value
+                    .checked_sub(1)
+                    .and_then(|index| SIGN_TYPES.get(index as usize))
+                    .map(|value| ("APP5:SignType", *value))
+            } else if *name == b"Location" {
+                value
+                    .checked_sub(1)
+                    .and_then(|index| LOCATIONS.get(index as usize))
+                    .map(|value| ("APP5:Location", *value))
+            } else if *name == b"Lit" {
+                value
+                    .checked_sub(1)
+                    .and_then(|index| LIT_VALUES.get(index as usize))
+                    .map(|value| ("APP5:Lit", *value))
+            } else if *name == b"Condition" {
+                value
+                    .checked_sub(1)
+                    .and_then(|index| CONDITIONS.get(index as usize))
+                    .map(|value| ("APP5:Condition", *value))
+            } else if *name == b"Azimuth" {
+                value
+                    .checked_sub(1)
+                    .and_then(|value| DIRECTIONS.get(value as usize))
+                    .map(|value| ("APP5:Azimuth", *value))
+            } else {
+                None
+            };
+            if let Some((key, value)) = mapped {
+                metadata.insert(key, TagValue::new_string(value));
+            }
         }
     }
 }
@@ -1515,8 +1546,7 @@ pub fn process_dji_dbg_segments(segments: &[Segment], metadata: &mut MetadataMap
     }
 }
 
-/// Reads `APP4:AmbientTemperature` and `APP4:RelativeHumidity` from DJI's
-/// ThermalParams2 record.
+/// Reads DJI's APP3/APP5 opaque thermal payloads and APP4 ThermalParams2.
 ///
 /// ExifTool selects `DJI::ThermalParams2` only for a DJI image when the APP4
 /// payload has its `2c 01 20 00` signature after either 32 or 64 bytes.  The
@@ -1530,6 +1560,53 @@ pub fn process_dji_thermal_segments(segments: &[Segment], metadata: &mut Metadat
         return;
     }
 
+    // JPEG.pm routes APP3 to Meta, Stim, and JPS before falling through to
+    // DJI's opaque ThermalData payload. The Mavic 2 fixture splits that one
+    // payload over eleven consecutive APP3 segments, exactly as ProcessJPEG
+    // reassembles multi-segment JPEG application data.
+    let is_other_app3_payload = |data: &[u8]| {
+        data.starts_with(b"Meta\0\0")
+            || data.starts_with(b"META\0\0")
+            || data.starts_with(b"Exif\0\0")
+            || data.starts_with(b"Stim\0")
+            || data.starts_with(b"_JPSJPS_")
+    };
+    let mut thermal_data_len = 0usize;
+    for (index, segment) in segments.iter().enumerate() {
+        if segment.marker != APP3_MARKER || is_other_app3_payload(segment.data) {
+            continue;
+        }
+        thermal_data_len += segment.data.len();
+        let run_continues = segments
+            .get(index + 1)
+            .is_some_and(|next| next.marker == APP3_MARKER && !is_other_app3_payload(next.data));
+        if !run_continues {
+            metadata.insert(
+                "APP3:ThermalData".to_string(),
+                binary_data_placeholder(thermal_data_len),
+            );
+            thermal_data_len = 0;
+        }
+    }
+
+    // APP5's earlier JPEG.pm routes (RMETA, SamsungUniqueID, and IJPEG) take
+    // precedence over DJI's fallback ThermalCalibration entry.
+    if !has_ijpeg_header(segments) {
+        for segment in segments.iter().filter(|segment| {
+            segment.marker == APP5_MARKER
+                && !segment.data.starts_with(b"RMETA\0")
+                && !segment
+                    .data
+                    .windows(b"ssuniqueid\0".len())
+                    .any(|w| w == b"ssuniqueid\0")
+        }) {
+            metadata.insert(
+                "APP5:ThermalCalibration".to_string(),
+                binary_data_placeholder(segment.data.len()),
+            );
+        }
+    }
+
     let Some(table) = find_table("DJI", "ThermalParams2") else {
         return;
     };
@@ -1540,19 +1617,24 @@ pub fn process_dji_thermal_segments(segments: &[Segment], metadata: &mut Metadat
             continue;
         };
 
-        let temperature =
+        for decoded in
             decode_binary_table(table, &data[table_offset..], crate::io::ByteOrder::Little)
-                .into_iter()
-                .find(|field| field.field.name == "AmbientTemperature")
-                .and_then(|field| match field.raw {
-                    DecodedValue::Float(value) => Some(value),
-                    _ => None,
-                });
-        if let Some(temperature) = temperature {
-            metadata.insert(
-                "APP4:AmbientTemperature".to_string(),
-                TagValue::String(format!("{temperature:.1} C")),
-            );
+        {
+            let value = match (decoded.field.name, &decoded.raw) {
+                ("AmbientTemperature" | "ReflectedTemperature", DecodedValue::Float(value)) => {
+                    Some(format!("{value:.1} C"))
+                }
+                ("ObjectDistance", DecodedValue::Float(value)) => Some(format!("{value:.1} m")),
+                ("Emissivity", _) => decoded.apply_print_conv_to_raw(),
+                ("IDString", DecodedValue::String(value)) => Some(value.clone()),
+                _ => None,
+            };
+            if let Some(value) = value {
+                metadata.insert(
+                    format!("APP4:{}", decoded.field.name),
+                    TagValue::String(value),
+                );
+            }
         }
 
         let humidity =
@@ -1594,7 +1676,6 @@ fn perl_sprintf_g(value: f64) -> String {
     // implementation's ASCII inf/nan spelling.
     String::from_utf8(bytes.iter().map(|byte| *byte as u8).collect()).expect("C %g output is ASCII")
 }
-
 /// Emits `APP3:ImagingData`, the InfiRay IR + thermal + visible payload.
 ///
 /// `JPEG::Main` declares it `Binary => 1` (JPEG.pm:119-123), so ExifTool
@@ -1739,6 +1820,170 @@ mod tests {
     }
 
     #[test]
+    fn dji_mavic2_thermal_app_payloads_match_pinned_exiftool() {
+        let path = std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/DJI/DJI_MAVIC2-ENTERPRISE-ADVANCED.jpg",
+        );
+        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+            .expect("read pinned DJI Mavic 2 Enterprise Advanced fixture");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse pinned DJI fixture");
+        let mut metadata = MetadataMap::new();
+
+        process_exif_segments(&segments, &reader, &mut metadata);
+        process_dji_thermal_segments(&segments, &mut metadata);
+
+        assert_eq!(metadata.get_string("IFD0:Make"), Some("DJI"));
+        assert_eq!(
+            metadata.get_string("APP3:ThermalData"),
+            Some("(Binary data 655360 bytes, use -b option to extract)")
+        );
+        assert_eq!(
+            metadata.get_string("APP5:ThermalCalibration"),
+            Some("(Binary data 23818 bytes, use -b option to extract)")
+        );
+    }
+
+    #[test]
+    fn leica_tl2_ifd2_jpg_from_raw_pair_matches_pinned_exiftool() {
+        let path =
+            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaTL2.jpg");
+        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+            .expect("read pinned Leica TL2 fixture");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse pinned Leica TL2 segments");
+        let mut metadata = MetadataMap::new();
+
+        process_exif_segments(&segments, &reader, &mut metadata);
+
+        assert_eq!(metadata.get_integer("IFD2:JpgFromRawStart"), Some(7063524));
+        assert_eq!(metadata.get_integer("IFD2:JpgFromRawLength"), Some(1215652));
+        assert_eq!(
+            metadata.get_string("IFD2:JpgFromRaw"),
+            Some("(Binary data 1215652 bytes, use -b option to extract)")
+        );
+    }
+
+    #[test]
+    fn leica_cl_ifd2_preview_pair_matches_pinned_exiftool() {
+        let path =
+            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaCL.jpg");
+        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+            .expect("read pinned Leica CL fixture");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse pinned Leica CL segments");
+        let mut metadata = MetadataMap::new();
+
+        process_exif_segments(&segments, &reader, &mut metadata);
+
+        assert_eq!(
+            metadata.get_integer("IFD2:PreviewImageStart"),
+            Some(7064224)
+        );
+        assert_eq!(
+            metadata.get_integer("IFD2:PreviewImageLength"),
+            Some(895146)
+        );
+        assert_eq!(
+            metadata.get_string("IFD2:PreviewImage"),
+            Some("(Binary data 895146 bytes, use -b option to extract)")
+        );
+    }
+
+    #[test]
+    fn olympus_sh25mr_gps_area_information_decodes_exif_unicode() {
+        let path = std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Olympus/OlympusSH-25MR.jpg",
+        );
+        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+            .expect("read pinned Olympus SH-25MR fixture");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse pinned Olympus SH-25MR segments");
+        let mut metadata = MetadataMap::new();
+
+        process_exif_segments(&segments, &reader, &mut metadata);
+
+        assert_eq!(
+            metadata.get_string("GPS:GPSAreaInformation"),
+            Some("府中市郷土の森博物館")
+        );
+    }
+
+    #[test]
+    fn ricoh2_empty_gps_dest_distance_ref_matches_pinned_exiftool() {
+        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Ricoh2.jpg");
+        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+            .expect("read pinned Ricoh2 fixture");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse pinned Ricoh2 segments");
+        let mut metadata = MetadataMap::new();
+
+        process_exif_segments(&segments, &reader, &mut metadata);
+        let formatted = crate::core::exiftool_compat::format_for_exiftool(&metadata);
+
+        assert_eq!(
+            formatted.get_string("GPS:GPSDestDistanceRef"),
+            Some("Unknown ()")
+        );
+    }
+
+    #[test]
+    fn nikon_z7_2_lens_serial_number_stops_at_first_nul() {
+        let path =
+            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Nikon/NikonZ7_2.jpg");
+        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+            .expect("read pinned Nikon Z7 II fixture");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse pinned Nikon Z7 II segments");
+        let mut metadata = MetadataMap::new();
+
+        process_exif_segments(&segments, &reader, &mut metadata);
+
+        assert_eq!(
+            metadata.get_string("ExifIFD:LensSerialNumber"),
+            Some("20147348")
+        );
+    }
+
+    #[test]
+    fn samsung_sdc130z_learning_opt_out_uses_exif_int16u_override() {
+        let path = std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungSDC-130Z.jpg",
+        );
+        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+            .expect("read pinned Samsung SDC-130Z fixture");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse pinned Samsung SDC-130Z segments");
+        let mut metadata = MetadataMap::new();
+
+        process_exif_segments(&segments, &reader, &mut metadata);
+
+        assert_eq!(
+            metadata.get_string("ExifIFD:LearningOptOutIn"),
+            Some("Unknown(65535)")
+        );
+    }
+
+    #[test]
+    fn panasonic_tz57_title2_uses_exif_string_format_override() {
+        let path = std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Panasonic/PanasonicDMC-TZ57.jpg",
+        );
+        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+            .expect("read pinned Panasonic TZ57 fixture");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse pinned Panasonic TZ57 segments");
+        let mut metadata = MetadataMap::new();
+
+        process_exif_segments(&segments, &reader, &mut metadata);
+
+        assert_eq!(
+            metadata.get_string("IFD0:PanasonicTitle2"),
+            Some("9999:99:99 00:00:00")
+        );
+    }
+
+    #[test]
     fn process_ricoh_rmeta_extracts_azimuth() {
         // Minimal standard RMETA directory with one tag. Section sizes include
         // the two-byte size field, matching Ricoh.pm's ProcessRicohRMETA.
@@ -1777,6 +2022,23 @@ mod tests {
         process_ricoh_rmeta_segments(&segments, &mut metadata);
 
         assert_eq!(metadata.get_string("APP5:Azimuth"), Some("E"));
+    }
+
+    #[test]
+    fn exiftool_jpeg_rmeta_menu_fields_match_pinned_exiftool() {
+        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/ExifTool.jpg");
+        let reader =
+            crate::io::buffered_reader::BufferedReader::new(path).expect("read ExifTool.jpg");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse ExifTool.jpg segments");
+        let mut metadata = MetadataMap::new();
+
+        process_ricoh_rmeta_segments(&segments, &mut metadata);
+
+        assert_eq!(metadata.get_string("APP5:Condition"), Some("Good"));
+        assert_eq!(metadata.get_string("APP5:Lit"), Some("No"));
+        assert_eq!(metadata.get_string("APP5:Location"), Some("Roundabout"));
+        assert_eq!(metadata.get_string("APP5:SignType"), Some("Information"));
     }
 
     /// `IPTC:ReferenceNumber` (record 2, dataset 50) is IPTC.pm's

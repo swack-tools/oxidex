@@ -2062,4 +2062,16 @@ mod tests {
         assert_eq!(parser.manufacturer_name(), "Nikon");
         assert_eq!(parser.tag_prefix(), "Nikon:");
     }
+
+    #[test]
+    fn pinned_nef_preview_ifd_emits_the_paired_preview_image() {
+        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Nikon.nef");
+        let metadata =
+            crate::core::operations::read_metadata(path).expect("read pinned Nikon NEF fixture");
+
+        assert_eq!(
+            metadata.get_string("MakerNotes:PreviewImage"),
+            Some("(Binary data 26 bytes, use -b option to extract)")
+        );
+    }
 }

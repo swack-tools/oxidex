@@ -367,6 +367,16 @@ impl OxiDexExtractor {
                     }
                 }
 
+                // Olympus D450Z stores an all-zero UserComment prefix followed
+                // only by ASCII padding. ExifTool renders that as an empty
+                // comment rather than exposing the raw NULs and spaces.
+                if name == "UserComment"
+                    && s.bytes()
+                        .all(|byte| byte == 0 || byte.is_ascii_whitespace())
+                {
+                    return String::new();
+                }
+
                 // ImageDescription has no Exif.pm RawConv: normal ExifTool
                 // display retains meaningful leading whitespace while
                 // suppressing trailing ASCII padding.
@@ -949,10 +959,7 @@ impl OxiDexExtractor {
     /// are namespace peers, not OxiDex emitting one conceptual tag twice, so
     /// they must not trip the duplicate-emission gate used by squad batches.
     fn is_exiftool_family0_xmp_overlap(normalized_key: &str) -> bool {
-        matches!(
-            normalized_key,
-            "XMP:NativeDigest" | "XMP:Sharpness" | "XMP:WhiteBalance"
-        )
+        matches!(normalized_key, "XMP:Sharpness" | "XMP:WhiteBalance")
     }
 
     /// The seven MP Entry tag names repeat once per embedded image, each under
@@ -979,6 +986,29 @@ impl OxiDexExtractor {
                 | "MPF:DependentImage1EntryNumber"
                 | "MPF:DependentImage2EntryNumber"
         )
+    }
+
+    /// ExifTool's `Exif.pm` promotes a NEF SubIFD with `SubfileType = 0`
+    /// (full-resolution) over IFD0's reduced-resolution thumbnail. The
+    /// parser records the promoted directory under `EXIF:` already; without
+    /// this filter, family-0 flattening normalizes IFD0 to the same key and
+    /// its later sorted write overwrites the promoted value.
+    fn nef_ifd0_field_is_superseded(key: &str, metadata: &oxidex::core::MetadataMap) -> bool {
+        let Some(name) = key.strip_prefix("IFD0:") else {
+            return false;
+        };
+        matches!(
+            name,
+            "BitsPerSample"
+                | "Compression"
+                | "ImageHeight"
+                | "ImageWidth"
+                | "PhotometricInterpretation"
+                | "RowsPerStrip"
+                | "SamplesPerPixel"
+                | "StripOffsets"
+                | "SubfileType"
+        ) && metadata.contains_key(&format!("EXIF:{name}"))
     }
 
     /// Flatten MetadataMap into TagInfo vector
@@ -1034,6 +1064,12 @@ impl OxiDexExtractor {
         raw_entries.sort_by_key(|(key, _)| *key);
 
         for (key, value) in raw_entries {
+            if matches!(format, Some("NEF" | "NRW"))
+                && Self::nef_ifd0_field_is_superseded(key, metadata)
+            {
+                continue;
+            }
+
             // Check if original family should be skipped (pseudo-tags)
             if let Some((original_family, _)) = key.split_once(':')
                 && Self::should_skip_family(original_family)
@@ -1043,6 +1079,14 @@ impl OxiDexExtractor {
 
             // Normalize the tag family (core library normalization + comparison-specific)
             let normalized_key = Self::normalize_for_comparison(&normalize_tag_family(key), format);
+
+            // XMP.pm marks tiff:NativeDigest `Avoid => 1` (line 1984): when
+            // the family-0 XMP view would collapse it with exif:NativeDigest,
+            // ExifTool exposes the EXIF digest rather than allowing TIFF's
+            // later schema key to overwrite it. XMP.xmp contains both.
+            if normalized_key == "XMP:NativeDigest" && key == "XMP-tiff:NativeDigest" {
+                continue;
+            }
 
             let (family, name) = if let Some(colon_pos) = normalized_key.find(':') {
                 let (fam, nam) = normalized_key.split_at(colon_pos);
@@ -1261,6 +1305,7 @@ impl OxiDexExtractor {
             "DR4" => vec!["dr4"],
             "VRD" => vec!["vrd"],
             "LFP" => vec!["lfp", "lfr"],
+            "FPF" => vec!["fpf"],
             "DJVU" => vec!["djvu", "djv"],
             "HTML" => vec!["html", "htm"],
             "LNK" => vec!["lnk"],
@@ -1277,6 +1322,11 @@ mod tests {
     fn test_oxidex_extractor_creation() {
         let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures/jpeg"));
         assert_eq!(extractor.fixture_path, PathBuf::from("tests/fixtures/jpeg"));
+    }
+
+    #[test]
+    fn test_fpf_format_discovers_standalone_fpf_files() {
+        assert_eq!(OxiDexExtractor::format_to_extensions("FPF"), vec!["fpf"]);
     }
 
     /// Regression test for the corpus-pollution bug: pointing the extractor
@@ -1328,6 +1378,32 @@ mod tests {
             ),
             "  leading description"
         );
+    }
+
+    #[test]
+    fn nef_priority_subifd_wins_over_ifd0_thumbnail_fields() {
+        let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
+        let mut metadata = oxidex::core::MetadataMap::new();
+        metadata.insert("IFD0:ImageWidth".to_string(), TagValue::Integer(160));
+        metadata.insert("EXIF:ImageWidth".to_string(), TagValue::Integer(3040));
+        metadata.insert(
+            "IFD0:Compression".to_string(),
+            TagValue::String("Uncompressed".to_string()),
+        );
+        metadata.insert(
+            "EXIF:Compression".to_string(),
+            TagValue::String("Nikon NEF Compressed".to_string()),
+        );
+
+        let (tags, collisions) = extractor.flatten_metadata(&metadata, Some("NEF"));
+        let tag_values: HashMap<_, _> =
+            tags.into_iter().map(|tag| (tag.key(), tag.value)).collect();
+        assert_eq!(tag_values.get("EXIF:ImageWidth"), Some(&"3040".to_string()));
+        assert_eq!(
+            tag_values.get("EXIF:Compression"),
+            Some(&"Nikon NEF Compressed".to_string())
+        );
+        assert!(collisions.is_empty());
     }
 
     #[test]
@@ -1455,7 +1531,7 @@ mod tests {
             tags.iter()
                 .find(|tag| tag.key() == "XMP:NativeDigest")
                 .map(|tag| tag.value.as_str()),
-            Some("tiff digest")
+            Some("exif digest")
         );
         assert_eq!(
             tags.iter()

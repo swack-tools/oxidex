@@ -163,6 +163,116 @@ fn nikon_nef_preview_image_start_uses_the_absolute_makernote_offset() {
 }
 
 #[test]
+fn nikon_nef_does_not_emit_synthetic_image_layer_count() {
+    let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/Nikon.nef")
+        .expect("pinned Nikon NEF fixture must be available");
+
+    let metadata = parse_raw_metadata(&data, RawFormat::NikonNEF)
+        .expect("pinned Nikon NEF fixture should parse");
+
+    // ExifTool 13.59 has no ImageLayerCount tag for NEF; this was an
+    // OxiDex-invented summary rather than source metadata.
+    assert!(metadata.get("NEF:ImageLayerCount").is_none());
+}
+
+#[test]
+fn canon_cr3_image_unique_id_is_lowercase_makernote_hex() {
+    // Canon.pm 0x28 is undef[16] with `unpack("H*", $val)`, except an
+    // all-zero UUID is suppressed. This is the real wave-9 residual fixture.
+    let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
+        .expect("pinned Canon CR3 fixture must be available");
+    let metadata = parse_raw_metadata(&data, RawFormat::CanonCR3)
+        .expect("pinned Canon CR3 fixture should parse");
+
+    assert_eq!(
+        metadata.get_string("Canon:ImageUniqueID"),
+        Some("3b7f679f6bf5d5e1b60ca2b2f051a029")
+    );
+}
+
+#[test]
+fn canon_cr3_internal_serial_number_trims_only_trailing_ff_bytes() {
+    // Canon.pm 0x96 is a string; its ValueConv removes trailing 0xff bytes.
+    // CanonRaw.cr3 is the wave-10 fixture with this exact value.
+    let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
+        .expect("pinned Canon CR3 fixture must be available");
+    let metadata = parse_raw_metadata(&data, RawFormat::CanonCR3)
+        .expect("pinned Canon CR3 fixture should parse");
+
+    assert_eq!(
+        metadata.get_string("Canon:InternalSerialNumber"),
+        Some("CG0156580")
+    );
+}
+
+#[test]
+fn canon_cr3_shot_info_camera_temperature_uses_celsius_conversion() {
+    // Canon.pm ShotInfo key 12: RawConv omits zero, then ValueConv subtracts
+    // 128 and PrintConv appends ` C`. CanonRaw.cr3 stores raw value 166.
+    let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
+        .expect("pinned Canon CR3 fixture must be available");
+    let metadata = parse_raw_metadata(&data, RawFormat::CanonCR3)
+        .expect("pinned Canon CR3 fixture should parse");
+
+    assert_eq!(metadata.get_string("Canon:CameraTemperature"), Some("38 C"));
+}
+
+#[test]
+fn canon_cr3_ctmd_exposure_info_masks_iso_high_bit() {
+    // Canon.pm CTMD type 5 -> ExposureInfo index 2: int32u with
+    // `ValueConv => '$val & 0x7fffffff'`. CanonRaw.cr3 reports 12800.
+    let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
+        .expect("pinned Canon CR3 fixture must be available");
+    let metadata = parse_raw_metadata(&data, RawFormat::CanonCR3)
+        .expect("pinned Canon CR3 fixture should parse");
+
+    assert_eq!(metadata.get_string("Canon:ISO"), Some("12800"));
+}
+
+#[test]
+fn canon_cr3_ctmd_timestamp_uses_canon_pm_packed_datetime() {
+    // Canon.pm CTMD type 1 RawConv is `x2vCCCCCC`: skip two bytes, then
+    // little-endian year/month/day/hour/minute/second/centisecond.
+    let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
+        .expect("pinned Canon CR3 fixture must be available");
+    let metadata = parse_raw_metadata(&data, RawFormat::CanonCR3)
+        .expect("pinned Canon CR3 fixture should parse");
+
+    assert_eq!(
+        metadata.get_string("Canon:TimeStamp"),
+        Some("2018:02:21 12:08:56.21")
+    );
+}
+
+#[test]
+fn canon_cr3_af_points_selected_uses_eos_afinfo2_bitset() {
+    // Canon.pm AFInfo2 key 13 reads ceil(NumAFPoints / 16) int16 words after
+    // AFPointsInFocus, but only for EOS bodies. CanonRaw.cr3 is an EOS fixture
+    // whose selected-points bitset selects point 0, which ExifTool renders as "0".
+    let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
+        .expect("pinned Canon CR3 fixture must be available");
+    let metadata = parse_raw_metadata(&data, RawFormat::CanonCR3)
+        .expect("pinned Canon CR3 fixture should parse");
+
+    assert_eq!(metadata.get_string("Canon:AFPointsSelected"), Some("0"));
+}
+
+#[test]
+fn canon_cr3_dust_removal_data_preserves_binary_cmt3_payload() {
+    // Canon.pm 0x0097 is `undef` with the Binary flag; CanonRaw.cr3 stores a
+    // 1024-byte CMT3 payload, which ExifTool reports only with `-b`.
+    let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
+        .expect("pinned Canon CR3 fixture must be available");
+    let metadata = parse_raw_metadata(&data, RawFormat::CanonCR3)
+        .expect("pinned Canon CR3 fixture should parse");
+
+    assert!(matches!(
+        metadata.get("Canon:DustRemovalData"),
+        Some(TagValue::Binary(bytes)) if bytes.len() == 1024
+    ));
+}
+
+#[test]
 fn test_parse_minimal_tiff_based_raw() {
     // Create a minimal valid TIFF header
     // II (little-endian) + 0x002A (magic 42) + offset to IFD (8)
