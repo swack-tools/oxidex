@@ -3875,7 +3875,7 @@ references are into this repo.
 | `CFAPatternRows` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `CFAPatternValues` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ColorSpace` | ✅ ok | — unsupported (silent no-op) | `sRGB` |
-| `ComponentsConfiguration` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `-` |
+| `ComponentsConfiguration` | ✅ ok | — unsupported (silent no-op) | `-` |
 | `CompressedBitsPerPixel` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `Contrast` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | — unsupported (silent no-op) | `Normal` |
 | `CustomRendered` | ✅ ok | — unsupported (silent no-op) | `Normal` |

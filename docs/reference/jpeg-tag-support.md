@@ -1711,7 +1711,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-exif:CFAPatternRows` | `XMP:CFAPatternRows` | — | `3` |
 | `XMP-exif:CFAPatternValues` | `XMP:CFAPatternValues` | — | `3` |
 | `XMP-exif:ColorSpace` | `XMP-exif:ColorSpace` | — | `sRGB` |
-| `XMP-exif:ComponentsConfiguration` | `XMP-exif:ComponentsConfiguration` * | — | `-` |
+| `XMP-exif:ComponentsConfiguration` | `XMP-exif:ComponentsConfiguration` | — | `-` |
 | `XMP-exif:CompressedBitsPerPixel` | `XMP-exif:CompressedBitsPerPixel` | — | `1.5` |
 | `XMP-exif:CustomRendered` | `XMP-exif:CustomRendered` | — | `Normal` |
 | `XMP-exif:DateTimeDigitized` | `XMP-exif:DateTimeDigitized` | — | `2024:01:15 10:30:00` |
