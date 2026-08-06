@@ -993,6 +993,14 @@ fn parse_rational(tag_name: &str, raw: &str) -> Result<TagValue> {
             return Err(invalid(tag_name, "Must be an unsigned rational"));
         }
     }
+    // Exif.pm 13.59 0x9206 PrintConvInv removes the optional whitespace and
+    // trailing metres suffix from SubjectDistance before rationalizing it.
+    let raw = if tag_name.rsplit_once(':').map_or(tag_name, |(_, name)| name) == "SubjectDistance"
+    {
+        raw.strip_suffix('m').map(str::trim_end).unwrap_or(raw)
+    } else {
+        raw
+    };
     // Exif.pm 13.59 0x9202 stores APEX but accepts the displayed F-number:
     // ValueConvInv => '$val>0 ? 2*log($val)/log(2) : 0'. Apply this before
     // the generic rational cases because ExifTool rejects fractions, `inf`
@@ -2307,5 +2315,25 @@ mod tests {
             TagValue::new_integer(400)
         );
         assert!(parse("ExifIFD:ISO", "65536").is_err());
+    }
+
+    #[test]
+    fn subject_distance_accepts_exiftools_printed_meter_suffix() {
+        for tag in ["SubjectDistance", "EXIF:SubjectDistance", "ExifIFD:SubjectDistance"] {
+            assert_eq!(
+                parse(tag, "1.5 m").unwrap(),
+                TagValue::Rational {
+                    numerator: 3,
+                    denominator: 2,
+                }
+            );
+            assert_eq!(
+                parse(tag, "1.5m").unwrap(),
+                TagValue::Rational {
+                    numerator: 3,
+                    denominator: 2,
+                }
+            );
+        }
     }
 }
