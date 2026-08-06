@@ -1,14 +1,38 @@
 export const meta = {
   name: 'exiftool-coverage-loop',
-  description: 'Find oxidex/ExifTool tag-coverage gaps and fix them in a forever loop, one subagent per format, until two rounds close nothing',
+  description: 'Find oxidex/ExifTool tag-coverage gaps and fix them in a forever loop: shard large-gap formats across workers, PR each verified fix, dedup against open PRs, until dry',
   phases: [
     { title: 'Find', detail: 'run tag-comparison against the ExifTool test corpus + samples' },
-    { title: 'Fix', detail: 'one isolated-worktree agent per format with gaps' },
-    { title: 'Merge', detail: 'sequential merge-back with a regression safety net' },
+    { title: 'Triage', detail: 'list open PRs from prior rounds to avoid duplicate work' },
+    { title: 'Shard', detail: 'split large-gap formats into focused worker slices' },
+    { title: 'Fix', detail: 'one isolated-worktree agent per slice, PRs its own verified fix' },
+    { title: 'Merge', detail: 'squash-merge each verified PR with a pre/post regression check' },
+    { title: 'Audit', detail: 'review the run for process inefficiencies, PR the harness if warranted' },
   ],
 }
 
 const CACHE_DIR = (args && args.cacheDir) || '/tmp/oxidex-exiftool-cache'
+const REPO_PATH = (args && args.repoPath) || '/home/allen/git/oxidex'
+const REPO_SLUG = (args && args.repoSlug) || 'swack-tools/oxidex'
+// GitHub rejects pushes whose commit author is a private, unverified email (GH007) --
+// the repo owner's git config uses their private gmail, which triggers this on every
+// push. We can't touch git config (global or repo) to fix it globally, so every commit
+// a worker makes must override author/committer inline via `git -c` for that one
+// command -- this is their public GitHub noreply address, safe to bake in.
+const COMMIT_AUTHOR_NAME = (args && args.commitAuthorName) || 'swackhamer'
+const COMMIT_AUTHOR_EMAIL = (args && args.commitAuthorEmail) || '619624+swackhamer@users.noreply.github.com'
+const GIT_AUTHOR_OVERRIDE = `-c user.name="${COMMIT_AUTHOR_NAME}" -c user.email="${COMMIT_AUTHOR_EMAIL}"`
+// The origin remote is configured over SSH, which has proven intermittently unreliable
+// in this environment (git push/ls-remote/fetch hang or time out unpredictably, even
+// though the SSH connection itself authenticates fine). HTTPS via gh's stored
+// credentials has been reliable every time it's been tried, so every push/pull/fetch
+// below targets this explicit HTTPS URL instead of the (SSH) "origin" remote name.
+const REPO_HTTPS_URL = `https://github.com/${REPO_SLUG}.git`
+const SHARD_THRESHOLD = 25
+const MAX_SHARDS = 6
+const MAX_DRY_ROUNDS = 3
+const MAX_ROUNDS = 25
+const MAX_WORKITEMS_PER_ROUND = 50
 
 const COMPARISON_REPORT_SCHEMA = {
   type: 'object',
@@ -16,10 +40,6 @@ const COMPARISON_REPORT_SCHEMA = {
     overall_coverage: { type: 'number' },
     total_regressions: { type: 'number' },
     summary: { type: 'string' },
-    // Ground truth for later stages to verify they're operating in the same
-    // location as this (known-good, non-isolated) agent -- see mergePrompt,
-    // which had a real incident where a merge agent wandered into the wrong
-    // worktree/branch entirely and silently merged there instead.
     repo_path: { type: 'string' },
     repo_branch: { type: 'string' },
     by_format: {
@@ -59,13 +79,6 @@ const COMPARISON_REPORT_SCHEMA = {
             },
           },
           regressions: { type: 'array', items: { type: 'string' } },
-          // For large formats the relaying agent truncates these arrays
-          // rather than writing thousands of entries into its own
-          // structured-output call, and adds these markers when it does.
-          // Consumers needing the complete list must re-derive it directly
-          // (e.g. by re-running tag-comparison --format X themselves)
-          // rather than trusting missing_in_oxidex/value_differences here
-          // to be exhaustive.
           missing_in_oxidex_truncated: { type: 'boolean' },
           missing_in_oxidex_total_count: { type: 'number' },
           value_differences_truncated: { type: 'boolean' },
@@ -78,67 +91,38 @@ const COMPARISON_REPORT_SCHEMA = {
   required: ['by_format', 'repo_path', 'repo_branch'],
 }
 
-const FIX_RESULT_SCHEMA = {
-  type: 'object',
-  properties: {
-    format: { type: 'string' },
-    verified: { type: 'boolean' },
-    gapsClosed: { type: 'number' },
-    branch: { type: ['string', 'null'] },
-    summary: { type: 'string' },
-  },
-  required: ['format', 'verified', 'gapsClosed', 'summary'],
+function findGapsPrompt() {
+  return `Run these steps in order from the oxidex repository at "${REPO_PATH}":\n` +
+    `1. cd "${REPO_PATH}"\n` +
+    `2. git checkout main && git pull --ff-only ${REPO_HTTPS_URL} main -- this must succeed cleanly (fast-forward only); if it fails, STOP and report the failure in your summary rather than proceeding on a stale or diverged tree. Use this explicit HTTPS URL, not "origin" (the origin remote is SSH-based and has proven intermittently unreliable in this environment -- if a git network command hangs for more than ~30s even against this HTTPS URL, Ctrl-C/retry once before concluding it's a real failure).\n` +
+    `3. cat .exiftool-version -- confirm it reads "13.59". If it does not, STOP and report the mismatch; do not grade against a different pinned version.\n` +
+    `4. EXIFTOOL_CACHE_DIR=${CACHE_DIR} just compare-exiftool-full -- this builds tag-comparison, downloads/reuses the cached pinned ExifTool 13.59 release plus its test corpus and camera samples, and writes comparison.json in the repo root.\n\n` +
+    `Read comparison.json and return its contents as your structured output verbatim: the by_format map keyed by format name, each with missing_in_oxidex, value_differences, and regressions. If a format's missing_in_oxidex or value_differences array is large (roughly 50+ entries), truncate it to a representative sample and set the corresponding missing_in_oxidex_truncated / value_differences_truncated to true and missing_in_oxidex_total_count / value_differences_total_count to the real total count -- don't silently truncate without those markers. Also run \`pwd\` and \`git branch --show-current\` and report them as repo_path and repo_branch. Do not modify or commit anything -- this is a read-only discovery step (aside from the git pull in step 2).`
 }
 
-function fixPrompt(group) {
-  // The find-stage report's inline missing_in_oxidex/value_differences arrays may be
-  // truncated for large formats (see COMPARISON_REPORT_SCHEMA's _truncated/_total_count
-  // fields) -- they're illustrative here, not authoritative. The agent re-derives its own
-  // complete, current gap list directly from tag-comparison before doing any work.
-  const approxCount = (group.missing_in_oxidex_total_count ?? (group.missing_in_oxidex || []).length) +
-    (group.value_differences_total_count ?? (group.value_differences || []).length)
-  const sampleMissing = (group.missing_in_oxidex || []).slice(0, 10)
-    .map(t => `  - ${t.family}:${t.name} = ${t.value}`).join('\n') || '  (none in the inline sample)'
-  const sampleDiffs = (group.value_differences || []).slice(0, 10)
-    .map(d => `  - ${d.tag_key}: exiftool="${d.exiftool_value}" oxidex="${d.oxidex_value}"`).join('\n') || '  (none in the inline sample)'
+const OPEN_PRS_SCHEMA = {
+  type: 'object',
+  properties: {
+    prs: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          number: { type: 'number' },
+          headRefName: { type: 'string' },
+          title: { type: 'string' },
+          url: { type: 'string' },
+        },
+        required: ['number', 'headRefName', 'title', 'url'],
+      },
+    },
+  },
+  required: ['prs'],
+}
 
-  return `You are working in the oxidex repository (a Rust ExifTool reimplementation), on format "${group.format}". ` +
-    `The find stage reported roughly ${approxCount} coverage gaps for this format. A few examples (this inline ` +
-    `list may be truncated for large formats, so treat it as illustrative, not authoritative):\n\n` +
-    `Missing entirely, a sample:\n${sampleMissing}\n\n` +
-    `Value differences, a sample:\n${sampleDiffs}\n\n` +
-    `Before doing anything else, get your OWN complete, current gap list for this format:\n` +
-    `1. cargo build --release --bin tag-comparison --features tag-comparison-binary (if not already built)\n` +
-    `2. ./target/release/tag-comparison --exiftool ${CACHE_DIR}/exiftool/exiftool ` +
-    `--samples ${CACHE_DIR}/combined-samples --format ${group.format} ` +
-    `-o /tmp/tagcmp-${group.format}-start.json --markdown-dir /tmp/tagcmp-${group.format}-start-md\n` +
-    `Read /tmp/tagcmp-${group.format}-start.json -- its missing_in_oxidex and value_differences arrays for ` +
-    `"${group.format}" are the complete, authoritative gap list (this file comes straight from the comparison ` +
-    `tool, not through an agent relay that may truncate it).\n\n` +
-    `Find the relevant parser code yourself (grep src/parsers and src/core for "${group.format}" and tag names ` +
-    `from that file -- there is no static format-to-file map to hand you). Implement as many of these gaps as ` +
-    `you can correctly verify in this pass. You do not need to close all of them -- large formats won't close ` +
-    `in one round, and that's expected; whatever remains will resurface next round. For value differences, ` +
-    `use judgment: only "fix" genuine bugs, not benign formatting differences. oxidex already runs its own ` +
-    `format_for_exiftool/normalize_tag_family layer before this comparison runs, so gross PrintConv-vs-raw ` +
-    `noise is already filtered out -- don't chase incidental ExifTool quirks that aren't part of the tag's ` +
-    `documented semantics.\n\n` +
-    `When you believe you've made progress:\n` +
-    `1. cargo build --release --bin oxidex\n` +
-    `2. Re-run: ./target/release/tag-comparison --exiftool ${CACHE_DIR}/exiftool/exiftool ` +
-    `--samples ${CACHE_DIR}/combined-samples --format ${group.format} ` +
-    `-o /tmp/tagcmp-${group.format}-end.json --markdown-dir /tmp/tagcmp-${group.format}-end-md\n` +
-    `3. Read /tmp/tagcmp-${group.format}-end.json and confirm the combined missing_in_oxidex + ` +
-    `value_differences count for "${group.format}" is strictly lower than in the "-start.json" file from ` +
-    `step 2 above, and that regressions is empty.\n` +
-    `4. cargo test --workspace\n\n` +
-    `If both checks pass, commit on your current git branch with a descriptive message. Report: format -- ` +
-    `use exactly the string "${group.format}" verbatim, not a slug or description of your own choosing, since ` +
-    `the caller matches on it programmatically -- verified (true only if you committed after both checks ` +
-    `passed), gapsClosed (the count reduction between the start and end files you confirmed), branch (run ` +
-    `"git branch --show-current" and report it if verified, else null), and a one-paragraph summary. If you ` +
-    `cannot verify a real, regression-free improvement, do NOT commit -- run "git checkout -- ." and ` +
-    `"git clean -fd" to leave your worktree clean, and report verified: false, gapsClosed: 0, branch: null.`
+function openPRsPrompt() {
+  return `Run: gh pr list --repo ${REPO_SLUG} --state open --limit 200 --json number,headRefName,title,url\n` +
+    `Parse the JSON output and return it as { prs: [...] }. This is read-only -- do not create, edit, or merge anything.`
 }
 
 function gapGroupsFrom(report, onlyFormats) {
@@ -147,67 +131,171 @@ function gapGroupsFrom(report, onlyFormats) {
     .filter(f => !onlyFormats || onlyFormats.includes(f.format))
 }
 
+function totalGapCount(group) {
+  return (group.missing_in_oxidex_total_count ?? (group.missing_in_oxidex || []).length) +
+    (group.value_differences_total_count ?? (group.value_differences || []).length)
+}
+
+const SHARD_PLAN_SCHEMA = {
+  type: 'object',
+  properties: {
+    format: { type: 'string' },
+    shards: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          label: { type: 'string' },
+          focusHint: { type: 'string' },
+          estimatedGapCount: { type: 'number' },
+        },
+        required: ['label', 'focusHint', 'estimatedGapCount'],
+      },
+    },
+  },
+  required: ['format', 'shards'],
+}
+
+function shardPlanPrompt(group) {
+  return `You are working in the oxidex repository at "${REPO_PATH}" (read-only planning, make no changes) on format "${group.format}", which the find stage reported has a large number of coverage gaps (roughly ${totalGapCount(group)}).\n\n` +
+    `1. cd "${REPO_PATH}"\n` +
+    `2. Build if needed: cargo build --release --bin tag-comparison --features tag-comparison-binary\n` +
+    `3. Run: ./target/release/tag-comparison --exiftool ${CACHE_DIR}/exiftool/exiftool --samples ${CACHE_DIR}/combined-samples --format ${group.format} -o /tmp/tagcmp-${group.format}-shardplan.json --markdown-dir /tmp/tagcmp-${group.format}-shardplan-md\n` +
+    `4. Read /tmp/tagcmp-${group.format}-shardplan.json -- its missing_in_oxidex and value_differences arrays for "${group.format}" are the complete, current gap list.\n\n` +
+    `Partition this gap list into ${MAX_SHARDS <= 2 ? 2 : `2-${MAX_SHARDS}`} shards along natural boundaries that map to genuinely separable code regions -- typically by maker/vendor (grep the "family" and tag names against src/parsers to see which module owns them), by source_file when different camera samples clearly exercise different code paths, or by a shared root-cause bug affecting a cluster of tags (e.g. several tags in one sub-IFD/segment misreading the same field). Do NOT split by arbitrary alphabetical or count-based chunks -- a shard should be something one focused worker can plausibly understand and fix without touching the same code another shard's worker is touching, so two shards should virtually never edit the same file. Small formats or ones with a single obvious cause can get just 1-2 shards; only split as finely as the gap list's actual structure supports.\n\n` +
+    `For each shard, give a short label (used in the branch/PR name, so keep it terse and slug-friendly-ish), a focusHint that's specific enough for another agent with no other context to grep for and select the right tags/files (list actual tag names, source files, or a code-level description of the shared bug), and an estimatedGapCount.\n\n` +
+    `Report: format ("${group.format}" verbatim) and shards (array of {label, focusHint, estimatedGapCount}). This is a planning step only -- do not modify, commit, or build anything beyond what's listed above.`
+}
+
+const FIX_RESULT_SCHEMA = {
+  type: 'object',
+  properties: {
+    format: { type: 'string' },
+    scope: { type: 'string' },
+    verified: { type: 'boolean' },
+    gapsClosed: { type: 'number' },
+    branch: { type: ['string', 'null'] },
+    prUrl: { type: ['string', 'null'] },
+    summary: { type: 'string' },
+  },
+  required: ['format', 'verified', 'gapsClosed', 'summary'],
+}
+
+function fixPrompt(group, workItem) {
+  const approxCount = totalGapCount(group)
+  const sampleMissing = (group.missing_in_oxidex || []).slice(0, 10)
+    .map(t => `  - ${t.family}:${t.name} = ${t.value}`).join('\n') || '  (none in the inline sample)'
+  const sampleDiffs = (group.value_differences || []).slice(0, 10)
+    .map(d => `  - ${d.tag_key}: exiftool="${d.exiftool_value}" oxidex="${d.oxidex_value}"`).join('\n') || '  (none in the inline sample)'
+  const scopeLine = workItem.focusHint
+    ? `Your scope for this pass is narrower than the whole format -- focus specifically on: ${workItem.focusHint}\n` +
+      `Other workers may be assigned other slices of this same format's gap list in this same round; stay inside your scope so you don't collide with their edits. If you find your scope was mis-drawn (e.g. the tags you were assigned actually require touching the same code as an unrelated tag outside your scope), use judgment, note it in your summary, but still only commit changes you can verify.\n\n`
+    : ''
+
+  return `You are working in the oxidex repository (a Rust ExifTool reimplementation) at "${REPO_PATH}", on format "${group.format}"` +
+    `${workItem.label ? ` (assigned slice: "${workItem.label}")` : ''}. ` +
+    `The find stage reported roughly ${approxCount} coverage gaps for this format overall. A few examples (this inline list may be truncated for large formats, so treat it as illustrative, not authoritative):\n\n` +
+    `Missing entirely, a sample:\n${sampleMissing}\n\n` +
+    `Value differences, a sample:\n${sampleDiffs}\n\n` +
+    scopeLine +
+    `Before doing anything else, get your OWN complete, current gap list for this format:\n` +
+    `1. cargo build --release --bin tag-comparison --features tag-comparison-binary (if not already built)\n` +
+    `2. ./target/release/tag-comparison --exiftool ${CACHE_DIR}/exiftool/exiftool ` +
+    `--samples ${CACHE_DIR}/combined-samples --format ${group.format} ` +
+    `-o /tmp/tagcmp-${group.format}-${workItem.slug}-start.json --markdown-dir /tmp/tagcmp-${group.format}-${workItem.slug}-start-md\n` +
+    `Read /tmp/tagcmp-${group.format}-${workItem.slug}-start.json -- its missing_in_oxidex and value_differences arrays for "${group.format}" are the complete, authoritative gap list (this file comes straight from the comparison tool, not through an agent relay that may truncate it). ${workItem.focusHint ? 'Filter it down to your assigned scope described above.' : ''}\n\n` +
+    `Find the relevant parser code yourself (grep src/parsers and src/core for "${group.format}" and tag names from that file -- there is no static format-to-file map to hand you). ` +
+    `Check src/exiftool_tables::find_table(module, table) first per AGENTS.md -- ExifTool's real byte layout is often already transcribed there, which is the cheap way to close a gap versus re-deriving a binary record by hand. ` +
+    `Implement as many of your assigned gaps as you can correctly verify in this pass. You do not need to close all of them -- large formats won't close in one round, and that's expected; whatever remains will resurface next round. For value differences, use judgment: only "fix" genuine bugs, not benign formatting differences. oxidex already runs its own format_for_exiftool/normalize_tag_family layer before this comparison runs, so gross PrintConv-vs-raw noise is already filtered out -- don't chase incidental ExifTool quirks that aren't part of the tag's documented semantics. Never approximate or guess a conversion -- per AGENTS.md, a plausible-but-wrong value is worse than an absent tag; omit rather than fabricate.\n\n` +
+    `When you believe you've made progress:\n` +
+    `1. cargo build --release --bin oxidex\n` +
+    `2. Re-run: ./target/release/tag-comparison --exiftool ${CACHE_DIR}/exiftool/exiftool ` +
+    `--samples ${CACHE_DIR}/combined-samples --format ${group.format} ` +
+    `-o /tmp/tagcmp-${group.format}-${workItem.slug}-end.json --markdown-dir /tmp/tagcmp-${group.format}-${workItem.slug}-end-md\n` +
+    `3. Read /tmp/tagcmp-${group.format}-${workItem.slug}-end.json and confirm the combined missing_in_oxidex + value_differences count for "${group.format}" is strictly lower than in the "-start.json" file, and that regressions is empty.\n` +
+    `4. cargo test --workspace\n\n` +
+    `If both checks pass, commit on your current git branch with a descriptive message using ` +
+    `git ${GIT_AUTHOR_OVERRIDE} commit -m "..." -- the repo owner's default git config email is private/unverified on ` +
+    `GitHub and a plain "git commit" will produce a commit that GitHub REJECTS on push (GH007) with no useful error until ` +
+    `then, so you MUST pass that -c override on the commit command itself, not via "git config". Then:\n` +
+    `5. git push ${REPO_HTTPS_URL} "$(git branch --show-current):$(git branch --show-current)" -- use this explicit HTTPS URL, not "git push -u origin ..." (the origin remote is SSH-based and has proven intermittently unreliable in this environment; HTTPS via gh's stored credentials has been reliable every time). If it hangs more than ~30s, ctrl-c and retry once before treating it as a real failure.\n` +
+    `6. gh pr create --repo ${REPO_SLUG} --base main --head "$(git branch --show-current)" ` +
+    `--title "fix(${group.format.toLowerCase()}): ${workItem.label || 'coverage'} tag fixes" ` +
+    `--body "Automated ExifTool tag-coverage fix, format ${group.format}${workItem.label ? ` (scope: ${workItem.label})` : ''}. Verified in an isolated worktree: before/after tag-comparison run against pinned ExifTool 13.59 confirmed a strict reduction in missing/differing tags with zero regressions, plus cargo test --workspace passing. Please review before merging -- this was not merged automatically." ` +
+    `-- this prints the PR URL, capture it.\n\n` +
+    `Report: format -- use exactly the string "${group.format}" verbatim, not a slug or description of your own choosing, since the caller matches on it programmatically -- scope ("${workItem.label || 'all'}"), verified (true only if you committed, pushed, AND opened the PR successfully after both checks passed), gapsClosed (the count reduction between the start and end files you confirmed), branch (run "git branch --show-current" and report it if verified, else null), prUrl (the URL gh pr create printed, or null), and a one-paragraph summary. If you cannot verify a real, regression-free improvement, do NOT commit, push, or open a PR -- run "git checkout -- ." and "git clean -fd" to leave your worktree clean, and report verified: false, gapsClosed: 0, branch: null, prUrl: null.`
+}
+
 const MERGE_RESULT_SCHEMA = {
   type: 'object',
   properties: {
     format: { type: 'string' },
-    success: { type: 'boolean' },
+    prUrl: { type: 'string' },
+    merged: { type: 'boolean' },
     summary: { type: 'string' },
   },
-  required: ['format', 'success', 'summary'],
+  required: ['format', 'prUrl', 'merged', 'summary'],
 }
 
-function mergePrompt(result, repoPath, repoBranch) {
-  // A past incident: a merge agent wandered into a fix-agent's worktree directory
-  // (e.g. to inspect the branch) and ran the merge from there instead of returning to
-  // the shared main tree -- it silently merged into whatever branch that OTHER
-  // directory happened to have checked out, reported success:true, and the real
-  // target branch never received the commit at all. Verify location explicitly
-  // before touching git, and never cd elsewhere to inspect the branch.
-  return `Before doing anything else, run \`pwd\` and \`git branch --show-current\` and confirm the output ` +
-    `is EXACTLY "${repoPath}" and "${repoBranch}". If either does not match -- including if you are inside ` +
-    `any other directory such as a worktree for the branch being merged -- \`cd "${repoPath}"\` first and ` +
-    `re-verify before proceeding. Do not run any git command in this task from any other directory. To ` +
-    `inspect the branch being merged, use "git log ${result.branch} --oneline" or ` +
-    `"git diff ${repoBranch}..${result.branch}" -- both work without cd-ing anywhere.\n\n` +
-    `Once confirmed, you are in the oxidex repository's main working tree on "${repoBranch}". A subagent ` +
-    `working in git branch "${result.branch}" verified a coverage fix for format "${result.format}": ` +
-    `${result.summary}\n\n` +
-    `1. Run: git merge --no-ff "${result.branch}" -m "merge: ${result.format} coverage fix"\n` +
-    `   If it conflicts, run "git merge --abort", report success: false, and explain the conflict in summary.\n` +
-    `2. If the merge succeeded, run: cargo test --workspace\n` +
-    `3. If tests fail: before running any reset command, re-verify \`pwd\` and \`git branch --show-current\` ` +
-    `STILL match "${repoPath}" and "${repoBranch}" exactly -- a long test run is exactly the kind of gap ` +
-    `where you might have changed directories in between. If they no longer match, STOP -- do not run ` +
-    `"git reset --hard" from anywhere -- report success: false and explain the location mismatch instead of ` +
-    `guessing. If they still match, run "git reset --hard HEAD~1" to undo only the merge commit you just ` +
-    `made, report success: false, and explain the regression in summary.\n` +
-    `4. If tests pass, the merge stands. Report success: true.\n\n` +
-    `Report: format ("${result.format}"), success (bool), summary (include the pwd/branch you verified in ` +
-    `step 1 as part of the summary, for auditability).`
+function mergePrompt(result) {
+  // A past incident with the old local-merge design: a merge agent wandered into a
+  // fix-agent's worktree directory to inspect the branch and ran git commands from
+  // there instead of the shared main tree. gh pr merge doesn't strictly require being
+  // in any particular directory, but the post-merge rebuild/retest below does, so the
+  // same location discipline still matters here.
+  return `Before doing anything else, run \`pwd\` and \`git branch --show-current\`. If you are not in exactly "${REPO_PATH}" on branch "main", run \`cd "${REPO_PATH}" && git checkout main\` first and re-verify -- never run any command in this task from any other directory (e.g. a fix-agent's leftover worktree).\n\n` +
+    `Once confirmed, you're in the oxidex repository's shared main tree. A fix for format "${result.format}" was verified in an isolated worktree (before/after tag-comparison against pinned ExifTool 13.59 confirmed a strict reduction in missing/differing tags with zero regressions, plus cargo test --workspace) and is open as PR ${result.prUrl}.\n\n` +
+    `1. git pull --ff-only ${REPO_HTTPS_URL} main -- use this explicit HTTPS URL, not "origin" (the origin remote is SSH-based and has proven intermittently unreliable here; if it hangs more than ~30s, ctrl-c and retry once).\n` +
+    `2. gh pr checks ${result.prUrl} -- if this reports any check with a FAILURE status (not merely pending or absent -- this repo may have no CI configured on these branches, which is fine, don't block on that), STOP: do not merge, report merged: false, and explain which check failed in summary.\n` +
+    `3. gh pr merge ${result.prUrl} --squash --delete-branch\n` +
+    `4. git pull --ff-only ${REPO_HTTPS_URL} main\n` +
+    `5. cargo build --release --bin oxidex && cargo build --release --bin tag-comparison --features tag-comparison-binary\n` +
+    `6. cargo test --workspace\n` +
+    `7. EXIFTOOL_CACHE_DIR=${CACHE_DIR} ./target/release/tag-comparison --exiftool ${CACHE_DIR}/exiftool/exiftool --samples ${CACHE_DIR}/combined-samples --format ${result.format} -o /tmp/tagcmp-${result.format}-postmerge.json --markdown-dir /tmp/tagcmp-${result.format}-postmerge-md, and confirm the regressions array for "${result.format}" in that file is empty.\n\n` +
+    `If step 6 or 7 fails -- this fix, or its interaction with whatever else has landed on main since it was verified, broke something for real -- do NOT force-push, reset, or rewrite history on this shared branch (other rounds may already be building on top of it). Instead, revert it the safe way, through another reviewable PR:\n` +
+    `  a. git checkout -b "revert-${result.format.toLowerCase()}-$(git rev-parse --short HEAD)"\n` +
+    `  b. git ${GIT_AUTHOR_OVERRIDE} revert --no-edit HEAD\n` +
+    `  c. git push ${REPO_HTTPS_URL} "$(git branch --show-current):$(git branch --show-current)"\n` +
+    `  d. gh pr create --repo ${REPO_SLUG} --base main --head "$(git branch --show-current)" --title "revert: ${result.format} coverage fix (broke tests/regressed post-merge)" --body "Reverts the squash-merge of ${result.prUrl} -- it passed isolated-worktree verification but broke cargo test --workspace or introduced a real regression once merged onto current main. See round log for details."\n` +
+    `  e. gh pr merge --squash --delete-branch "$(git branch --show-current)"\n` +
+    `  f. git checkout main && git pull --ff-only ${REPO_HTTPS_URL} main\n` +
+    `Report merged: false with a summary explaining exactly what broke and that it was reverted via a follow-up PR.\n\n` +
+    `If steps 6 and 7 both pass, the merge stands. Report: format ("${result.format}"), prUrl ("${result.prUrl}"), merged (true only if the squash-merge is confirmed regression-free by both checks above), summary.`
 }
 
-function findGapsPrompt() {
-  return `Run \`EXIFTOOL_CACHE_DIR=${CACHE_DIR} just compare-exiftool-full\` from the oxidex repository root. ` +
-    `This builds the tag-comparison binary, downloads or reuses a cached ExifTool release plus its t/images ` +
-    `test corpus and camera sample set, and writes comparison.json in the repo root. Read comparison.json and ` +
-    `return its contents as your structured output verbatim: the by_format map keyed by format name, each ` +
-    `with missing_in_oxidex, value_differences, and regressions. If a format's missing_in_oxidex or ` +
-    `value_differences array is large (roughly 50+ entries), truncate it to a representative sample and set ` +
-    `the corresponding missing_in_oxidex_truncated / value_differences_truncated to true and ` +
-    `missing_in_oxidex_total_count / value_differences_total_count to the real total count -- don't silently ` +
-    `truncate without those markers, since downstream consumers rely on them to know the list isn't ` +
-    `exhaustive. Also run \`pwd\` and \`git branch --show-current\` and report them as repo_path and ` +
-    `repo_branch -- later stages use these to verify they're operating in the same location as you, since a ` +
-    `past incident had a merge agent wander into an unrelated worktree/branch and silently merge there ` +
-    `instead of here. Do not modify or commit anything -- this is a read-only discovery step.`
+const AUDIT_SCHEMA = {
+  type: 'object',
+  properties: {
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          description: { type: 'string' },
+          severity: { type: 'string' },
+        },
+        required: ['description', 'severity'],
+      },
+    },
+    prOpened: { type: 'boolean' },
+    prUrl: { type: ['string', 'null'] },
+    summary: { type: 'string' },
+  },
+  required: ['findings', 'prOpened', 'summary'],
 }
 
-const MAX_DRY_ROUNDS = 2
+function auditPrompt(roundLog) {
+  return `You are reviewing the execution log of an automated ExifTool tag-coverage-gap-closing loop that just ran against the oxidex repository at "${REPO_PATH}". Here is the round-by-round summary as JSON:\n\n${JSON.stringify(roundLog, null, 2)}\n\n` +
+    `Look for concrete, actionable inefficiency patterns in how the loop itself operates -- NOT in the tag fixes -- for example: formats repeatedly failing verification across multiple rounds (suggesting the fix prompt or sharding gave a worker an impossible or wrongly-scoped task), shards that turned out to overlap and collide, rounds that closed suspiciously few gaps relative to workers spawned, or any sign from the summaries that workers cut corners (approximated a conversion instead of omitting it, skipped the pinned-oracle check, etc -- these would violate AGENTS.md).\n\n` +
+    `If you find something concrete and actionable that you can fix in the workflow script itself, read "${REPO_PATH}/.claude/workflows/exiftool-coverage-loop.js", make the targeted improvement on a fresh branch off current main (cd "${REPO_PATH}" && git checkout main && git pull --ff-only ${REPO_HTTPS_URL} main && git checkout -b <branch>), commit using git ${GIT_AUTHOR_OVERRIDE} commit -m "..." (the repo owner's default git config email is private/unverified on GitHub, so a plain "git commit" produces a commit GitHub REJECTS on push (GH007) -- pass that -c override on the commit command itself, never via "git config"), push with \`git push ${REPO_HTTPS_URL} "<branch>:<branch>"\` (use this explicit HTTPS URL, not "origin" -- the origin remote is SSH-based and has proven intermittently unreliable here), and open a PR (gh pr create --repo ${REPO_SLUG} --base main --head <branch> --title "chore(coverage-loop): <short description>" --body "<what was inefficient and why this fixes it>") explaining the inefficiency and the fix. If nothing concrete and actionable turned up, do NOT open a PR -- just report your findings, even if the finding is "no significant inefficiency observed."\n\n` +
+    `Report: findings (array of {description, severity: "low"|"medium"|"high"}), prOpened (bool), prUrl (string or null), summary (one paragraph).`
+}
+
+const roundLog = []
 let dryRounds = 0
 let round = 0
 
-while (dryRounds < MAX_DRY_ROUNDS) {
+while (dryRounds < MAX_DRY_ROUNDS && round < MAX_ROUNDS) {
   round++
   log(`--- round ${round} (dry streak: ${dryRounds}/${MAX_DRY_ROUNDS}) ---`)
 
@@ -218,64 +306,133 @@ while (dryRounds < MAX_DRY_ROUNDS) {
   })
 
   if (!report) {
-    // agent() returns null on a terminal failure after retries (e.g. the sandbox
-    // blocks the curl calls just-compare-exiftool-full needs, or the report never
-    // validates against the schema). This must abort loudly, not silently count as
-    // a dry round -- "couldn't check for gaps" and "checked and found none" are
-    // different failure modes.
     throw new Error(`round ${round}: Find stage failed -- aborting without counting it as dry`)
   }
 
-  const gapGroups = gapGroupsFrom(report, args && args.onlyFormats)
-  log(`round ${round}: found gaps in ${gapGroups.length} formats`)
+  let gapGroups = gapGroupsFrom(report, args && args.onlyFormats)
+  log(`round ${round}: found gaps in ${gapGroups.length} formats (overall coverage ${report.overall_coverage}%)`)
 
   if (gapGroups.length === 0) {
+    log(`round ${round}: zero gaps -- full coverage reached`)
+    roundLog.push({ round, gapFormats: 0, workItems: 0, verified: 0, prsOpened: 0, merged: 0, gapsClosedOnMain: 0, skippedInFlight: 0 })
     dryRounds++
     continue
   }
 
+  phase('Triage')
+  const openPrsResult = await agent(openPRsPrompt(), {
+    label: `open-prs-round-${round}`,
+    schema: OPEN_PRS_SCHEMA,
+  })
+  const openPrs = (openPrsResult && openPrsResult.prs) || []
+  const inFlightFormats = new Set()
+  for (const g of gapGroups) {
+    const marker = `fix(${g.format.toLowerCase()})`
+    if (openPrs.some(pr => pr.title.toLowerCase().includes(marker))) {
+      inFlightFormats.add(g.format)
+    }
+  }
+  if (inFlightFormats.size) {
+    log(`round ${round}: skipping ${inFlightFormats.size} format(s) with an open unmerged PR already: ${[...inFlightFormats].join(', ')}`)
+  }
+  gapGroups = gapGroups.filter(g => !inFlightFormats.has(g.format))
+
+  if (gapGroups.length === 0) {
+    log(`round ${round}: everything with a gap already has an open PR awaiting review -- nothing new to assign this round`)
+    roundLog.push({ round, gapFormats: 0, workItems: 0, verified: 0, prsOpened: 0, merged: 0, gapsClosedOnMain: 0, skippedInFlight: inFlightFormats.size })
+    dryRounds++
+    continue
+  }
+
+  phase('Shard')
+  const shardedPerFormat = await parallel(gapGroups.map(g => async () => {
+    if (totalGapCount(g) <= SHARD_THRESHOLD) {
+      return { group: g, items: [{ label: null, focusHint: null, slug: 'all' }] }
+    }
+    const plan = await agent(shardPlanPrompt(g), {
+      label: `shard-plan-${g.format}`,
+      phase: 'Shard',
+      schema: SHARD_PLAN_SCHEMA,
+    })
+    const shards = (plan && plan.shards && plan.shards.length) ? plan.shards.slice(0, MAX_SHARDS) : [{ label: null, focusHint: null, estimatedGapCount: totalGapCount(g) }]
+    log(`round ${round}: ${g.format} sharded into ${shards.length} slice(s)`)
+    return {
+      group: g,
+      items: shards.map((s, i) => ({
+        label: s.label || null,
+        focusHint: s.focusHint || null,
+        slug: (s.label || `shard${i}`).toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30) || `shard${i}`,
+      })),
+    }
+  }))
+
+  let workItems = shardedPerFormat.filter(Boolean).flatMap(({ group, items }) => items.map(item => ({ group, item })))
+  if (workItems.length > MAX_WORKITEMS_PER_ROUND) {
+    log(`round ${round}: ${workItems.length} work items planned, capping at ${MAX_WORKITEMS_PER_ROUND} (dropped ${workItems.length - MAX_WORKITEMS_PER_ROUND} -- they resurface next round)`)
+    workItems = workItems.slice(0, MAX_WORKITEMS_PER_ROUND)
+  }
+  log(`round ${round}: dispatching ${workItems.length} fix worker(s)`)
+
   phase('Fix')
-  const rawFixResults = await parallel(gapGroups.map(g => () =>
-    agent(fixPrompt(g), {
-      label: `fix-${g.format}`,
+  const fixResults = await parallel(workItems.map(({ group, item }) => () =>
+    agent(fixPrompt(group, item), {
+      label: `fix-${group.format}${item.label ? '-' + item.slug : ''}`,
       phase: 'Fix',
       isolation: 'worktree',
       schema: FIX_RESULT_SCHEMA,
+    }).then(r => {
+      if (r) log(`round ${round}: fix-${group.format}${item.label ? '/' + item.label : ''} -- ${r.verified ? `verified, closed ${r.gapsClosed}, PR ${r.prUrl}` : 'not verified, no PR'}`)
+      return r ? { ...r, format: group.format } : r
     })
   ))
 
-  // See the format-enforcement note where this pattern was introduced (Task 3):
-  // parallel() preserves input order, so gapGroups[i] is the ground truth for
-  // rawFixResults[i]'s format regardless of what the agent self-reports.
-  const fixResults = rawFixResults.map((r, i) => {
-    if (!r) return r
-    if (r.format !== gapGroups[i].format) {
-      log(`round ${round}: fix-${gapGroups[i].format} agent reported format "${r.format}", overriding to match the input group`)
-    }
-    return { ...r, format: gapGroups[i].format }
-  })
-
-  const verified = fixResults.filter(Boolean).filter(r => r.verified)
-  log(`round ${round}: ${verified.length}/${fixResults.filter(Boolean).length} fix attempts verified`)
+  const verified = fixResults.filter(Boolean).filter(r => r.verified && r.prUrl)
+  log(`round ${round}: ${verified.length}/${fixResults.filter(Boolean).length} fix attempts verified and PR'd`)
 
   phase('Merge')
+  let mergedCount = 0
   let closedCount = 0
   for (const r of verified) {
-    const merged = await agent(mergePrompt(r, report.repo_path, report.repo_branch), {
-      label: `merge-${r.format}`,
+    const merged = await agent(mergePrompt(r), {
+      label: `merge-${r.format}${r.scope && r.scope !== 'all' ? '-' + r.scope : ''}`,
       phase: 'Merge',
       schema: MERGE_RESULT_SCHEMA,
     })
-    if (merged && merged.success) {
+    if (merged && merged.merged) {
+      mergedCount++
       closedCount += r.gapsClosed
+      log(`round ${round}: squash-merged ${r.format} -- ${r.prUrl}`)
     } else {
-      log(`round ${round}: merge discarded for ${r.format} (${merged ? merged.summary : 'merge agent failed'})`)
+      log(`round ${round}: merge withheld/reverted for ${r.format} (${merged ? merged.summary : 'merge agent failed'})`)
     }
   }
+  log(`round ${round}: merged ${mergedCount}/${verified.length} PRs, closing ${closedCount} gaps on main`)
 
-  log(`round ${round}: closed ${closedCount} gaps`)
-  dryRounds = closedCount === 0 ? dryRounds + 1 : 0
+  roundLog.push({
+    round,
+    gapFormats: gapGroups.length,
+    workItems: workItems.length,
+    verified: verified.length,
+    prsOpened: verified.length,
+    merged: mergedCount,
+    gapsClosedOnMain: closedCount,
+    skippedInFlight: inFlightFormats.size,
+  })
+
+  dryRounds = mergedCount === 0 ? dryRounds + 1 : 0
 }
 
-log(`stopped after ${round} rounds (${dryRounds} consecutive dry rounds)`)
-return { rounds: round }
+const stoppedReason = dryRounds >= MAX_DRY_ROUNDS ? `${dryRounds} consecutive dry rounds` : `hit the ${MAX_ROUNDS}-round safety cap`
+log(`stopped after ${round} rounds (${stoppedReason})`)
+
+phase('Audit')
+const audit = await agent(auditPrompt(roundLog), {
+  label: 'process-audit',
+  schema: AUDIT_SCHEMA,
+})
+if (audit) {
+  log(`audit: ${audit.summary}`)
+  if (audit.prOpened) log(`audit opened a process-improvement PR: ${audit.prUrl}`)
+}
+
+return { rounds: round, stoppedReason, roundLog, audit }

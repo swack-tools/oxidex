@@ -196,6 +196,9 @@ pub enum FileFormat {
     /// OpenEXR image format (.exr)
     EXR,
 
+    /// Portable FloatMap image format (.pfm)
+    PFM,
+
     /// Free Lossless Image Format (.flif)
     FLIF,
 
@@ -304,6 +307,9 @@ pub enum FileFormat {
     /// Canon DPP version 4 recipe, standalone rather than appended (.dr4)
     DR4,
 
+    /// FLIR Public image Format (.fpf) -- thermal camera raw image
+    FPF,
+
     /// Unknown or unsupported format
     Unknown,
 }
@@ -370,6 +376,7 @@ impl FileFormat {
             FileFormat::JXL => "JXL",
             FileFormat::BPG => "BPG",
             FileFormat::EXR => "EXR",
+            FileFormat::PFM => "PFM",
             FileFormat::FLIF => "FLIF",
             FileFormat::MIFF => "MIFF",
             FileFormat::SVG => "SVG",
@@ -405,6 +412,7 @@ impl FileFormat {
             FileFormat::EPS => "EPS",
             FileFormat::VRD => "VRD",
             FileFormat::DR4 => "DR4",
+            FileFormat::FPF => "FPF",
             FileFormat::Unknown => "Unknown",
         }
     }
@@ -473,6 +481,7 @@ impl FileFormat {
             FileFormat::JXL => &["jxl"],
             FileFormat::BPG => &["bpg"],
             FileFormat::EXR => &["exr"],
+            FileFormat::PFM => &["pfm"],
             FileFormat::FLIF => &["flif"],
             FileFormat::MIFF => &["miff", "mif"],
             FileFormat::SVG => &["svg"],
@@ -508,6 +517,7 @@ impl FileFormat {
             FileFormat::EPS => &["eps", "epsf", "ps"],
             FileFormat::VRD => &["vrd"],
             FileFormat::DR4 => &["dr4"],
+            FileFormat::FPF => &["fpf"],
             FileFormat::Unknown => &[],
         }
     }

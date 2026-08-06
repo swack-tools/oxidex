@@ -127,6 +127,71 @@ const FIELD_RENAMES: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// IPTC Extension's `ArtworkOrObject` structure declares `Flat => 1` on every
+/// field (XMP2.pl:542-558), so ExifTool reports `ArtworkOrObjectAOTitle` as
+/// `ArtworkTitle` regardless of how deep the structure is nested -- including
+/// inside `mwg-rs:Regions/RegionList/.../Extensions`, where the concatenated
+/// ID is `RegionExtensionsArtworkOrObjectAOTitle`. `apply_flat_name`'s
+/// prefix rewrite only rewrites the *start* of the ID (the `Regions` ->
+/// `Region` part), so this is a separate suffix rewrite applied afterwards.
+const ARTWORK_SUFFIX_RENAMES: &[(&str, &str)] = &[
+    // XMP2.pl:553
+    (
+        "ArtworkOrObjectAOCircaDateCreated",
+        "ArtworkCircaDateCreated",
+    ),
+    // XMP2.pl:556
+    (
+        "ArtworkOrObjectAOContentDescription",
+        "ArtworkContentDescription",
+    ),
+    // XMP2.pl:557
+    (
+        "ArtworkOrObjectAOContributionDescription",
+        "ArtworkContributionDescription",
+    ),
+    // XMP2.pl:542
+    ("ArtworkOrObjectAOCopyrightNotice", "ArtworkCopyrightNotice"),
+    // XMP2.pl:543
+    ("ArtworkOrObjectAOCreator", "ArtworkCreator"),
+    // XMP2.pl:552
+    ("ArtworkOrObjectAOCreatorId", "ArtworkCreatorID"),
+    // XMP2.pl:549
+    (
+        "ArtworkOrObjectAOCurrentCopyrightOwnerId",
+        "ArtworkCopyrightOwnerID",
+    ),
+    // XMP2.pl:548
+    (
+        "ArtworkOrObjectAOCurrentCopyrightOwnerName",
+        "ArtworkCopyrightOwnerName",
+    ),
+    // XMP2.pl:551
+    ("ArtworkOrObjectAOCurrentLicensorId", "ArtworkLicensorID"),
+    // XMP2.pl:550
+    (
+        "ArtworkOrObjectAOCurrentLicensorName",
+        "ArtworkLicensorName",
+    ),
+    // XMP2.pl:544
+    ("ArtworkOrObjectAODateCreated", "ArtworkDateCreated"),
+    // XMP2.pl:558
+    (
+        "ArtworkOrObjectAOPhysicalDescription",
+        "ArtworkPhysicalDescription",
+    ),
+    // XMP2.pl:545
+    ("ArtworkOrObjectAOSource", "ArtworkSource"),
+    // XMP2.pl:546
+    ("ArtworkOrObjectAOSourceInvNo", "ArtworkSourceInventoryNo"),
+    // XMP2.pl:555
+    ("ArtworkOrObjectAOSourceInvURL", "ArtworkSourceInvURL"),
+    // XMP2.pl:554
+    ("ArtworkOrObjectAOStylePeriod", "ArtworkStylePeriod"),
+    // XMP2.pl:547
+    ("ArtworkOrObjectAOTitle", "ArtworkTitle"),
+];
+
 /// One element on the RDF property path.
 struct Frame {
     /// This element's contribution to the flattened tag ID, or `None` when its
@@ -368,9 +433,33 @@ fn apply_flat_name(root_uri: &str, id: &str) -> String {
             best = Some((prefix, replacement));
         }
     }
-    match best {
+    let rewritten = match best {
         Some((prefix, replacement)) => format!("{replacement}{}", &id[prefix.len()..]),
         None => id.to_string(),
+    };
+
+    // Suffix rewrite: the ArtworkOrObject Flat fields apply regardless of
+    // where they're nested, so this runs even when the prefix rewrite above
+    // did nothing (a top-level ArtworkOrObject is handled separately by
+    // `extract_top_level_struct_values`, but nested occurrences like the one
+    // under mwg-rs:Regions/Extensions only go through this generic path).
+    let mut best_suffix: Option<(&str, &str)> = None;
+    for (suffix, replacement) in ARTWORK_SUFFIX_RENAMES {
+        if !rewritten.ends_with(suffix) {
+            continue;
+        }
+        if best_suffix.is_none_or(|(current, _)| suffix.len() > current.len()) {
+            best_suffix = Some((suffix, replacement));
+        }
+    }
+    match best_suffix {
+        Some((suffix, replacement)) => {
+            format!(
+                "{}{replacement}",
+                &rewritten[..rewritten.len() - suffix.len()]
+            )
+        }
+        None => rewritten,
     }
 }
 
@@ -693,6 +782,51 @@ mod tests {
         // The un-rewritten concatenations must not leak out.
         assert!(value_of(&tags, "XMP:RegionsAppliedToDimensionsW").is_none());
         assert!(value_of(&tags, "XMP:RegionsRegionListType").is_none());
+    }
+
+    /// IPTC Extension's `ArtworkOrObject` fields carry `Flat => 1` regardless
+    /// of nesting depth (XMP2.pl:547), so `AOTitle` under
+    /// `mwg-rs:Regions/RegionList/.../Extensions` must still report as
+    /// `RegionExtensionsArtworkTitle-<lang>`, not the raw concatenation
+    /// `RegionExtensionsArtworkOrObjectAOTitle-<lang>`. Matches XMP5.xmp /
+    /// `exiftool -G1 -a -s XMP5.xmp`.
+    #[test]
+    fn artwork_or_object_flat_fields_rename_even_when_nested() {
+        const XMP: &[u8] = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+ <rdf:Description rdf:about=""
+     xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
+     xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/">
+  <mwg-rs:Regions rdf:parseType="Resource">
+   <mwg-rs:RegionList>
+    <rdf:Bag>
+     <rdf:li rdf:parseType="Resource">
+      <mwg-rs:Extensions rdf:parseType="Resource">
+       <Iptc4xmpExt:ArtworkOrObject>
+        <rdf:Bag>
+         <rdf:li rdf:parseType="Resource">
+          <Iptc4xmpExt:AOTitle>
+           <rdf:Alt><rdf:li xml:lang="de">verfaenglich</rdf:li></rdf:Alt>
+          </Iptc4xmpExt:AOTitle>
+         </rdf:li>
+        </rdf:Bag>
+       </Iptc4xmpExt:ArtworkOrObject>
+      </mwg-rs:Extensions>
+     </rdf:li>
+    </rdf:Bag>
+   </mwg-rs:RegionList>
+  </mwg-rs:Regions>
+ </rdf:Description>
+</rdf:RDF>"#;
+
+        let tags = extract_flattened_struct_fields(XMP).unwrap();
+        assert_eq!(
+            value_of(&tags, "XMP:RegionExtensionsArtworkTitle-de").as_deref(),
+            Some("verfaenglich")
+        );
+        assert!(
+            value_of(&tags, "XMP:RegionExtensionsArtworkOrObjectAOTitle-de").is_none(),
+            "the un-renamed concatenation must not leak out: {tags:?}"
+        );
     }
 
     #[test]

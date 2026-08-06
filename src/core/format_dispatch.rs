@@ -39,9 +39,11 @@ use crate::parsers::image::exr::parse_exr_metadata;
 use crate::parsers::image::flif::parse_flif_metadata;
 use crate::parsers::image::gif::parse_gif_metadata;
 use crate::parsers::image::miff::parse_miff_metadata;
+use crate::parsers::image::pfm::parse_pfm_metadata;
 // Note: HEIF uses parse_quicktime_metadata since HEIF is ISOBMFF-based
 use crate::parsers::canon_vrd::{parse_dr4_file, parse_vrd_file};
 use crate::parsers::elf::parse_elf_metadata;
+use crate::parsers::flir_fpf::parse_fpf_metadata;
 use crate::parsers::icc::parse_icc_file;
 use crate::parsers::image::ico::parse_ico_metadata;
 use crate::parsers::image::jxl::parse_jxl_metadata;
@@ -157,6 +159,7 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::JXL => convert_string_error(parse_jxl_metadata(reader), "JXL"),
         FileFormat::BPG => convert_string_error(parse_bpg_metadata(reader), "BPG"),
         FileFormat::EXR => convert_string_error(parse_exr_metadata(reader), "EXR"),
+        FileFormat::PFM => convert_string_error(parse_pfm_metadata(reader), "PFM"),
         FileFormat::FLIF => convert_string_error(parse_flif_metadata(reader), "FLIF"),
         FileFormat::MIFF => convert_string_error(parse_miff_metadata(reader), "MIFF"),
         FileFormat::SVG => convert_string_error(parse_svg_metadata(reader), "SVG"),
@@ -197,6 +200,7 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::EPS => convert_string_error(parse_eps_metadata(reader), "EPS"),
         FileFormat::VRD => parse_vrd_file(reader),
         FileFormat::DR4 => parse_dr4_file(reader),
+        FileFormat::FPF => parse_fpf_metadata(reader),
         _ => Err(ExifToolError::unsupported_format(format!(
             "Format {:?} not yet supported in this iteration",
             format

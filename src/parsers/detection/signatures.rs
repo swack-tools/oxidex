@@ -139,6 +139,9 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     // not reproduced here, where it would only widen false positives.
     signature!(b"IIII\x04\x00\x04\x00", 0, FileFormat::DR4),
     signature!(b"IIII\x05\x00\x04\x00", 0, FileFormat::DR4),
+    // FLIR Public image Format, standalone thermal-camera file. FLIR.pm:1605
+    // gives the magic as `FPF Public Image Format\0`.
+    signature!(b"FPF Public Image Format\0", 0, FileFormat::FPF),
     // XMP Sidecar (<?xpacket or <x:xmpmeta)
     signature!(b"<?xpacket", 0, FileFormat::XMP),
     signature!(b"<x:xmpmeta", 0, FileFormat::XMP),

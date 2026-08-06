@@ -793,6 +793,10 @@ tables:
         name: "WangTag4"
         writable: false
         description: "WangTag4 tag"
+      - id: "0x827D"
+        name: "Model2"
+        writable: false
+        description: "Model2 tag"
       - id: "0x828E"
         name: "CFAPattern2"
         writable: false

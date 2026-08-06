@@ -256,6 +256,13 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         return Ok(FileFormat::DWG);
     }
 
+    // Portable FloatMap (PFM): "P" + F/f + LF + "<width> <height>" + LF +
+    // "<scale>" + LF. ExifTool's magic regex (Other.pm):
+    // ^P[Ff]\x0a\d+ \d+\x0a[-+0-9.]+\x0a
+    if crate::parsers::image::pfm::looks_like_pfm(magic_bytes) {
+        return Ok(FileFormat::PFM);
+    }
+
     // SVG must outrank ICS/EML text heuristics, but only when SVG is the XML
     // root element. Email bodies may legitimately embed SVG markup.
     if looks_like_svg_root(magic_bytes) {
