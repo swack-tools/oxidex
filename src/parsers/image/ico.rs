@@ -156,10 +156,12 @@ impl FormatParser for ICOParser {
                 "BitDepth".to_string(),
                 TagValue::String(max_bits.to_string()),
             );
-            metadata.insert(
-                "BitsPerPixel".to_string(),
-                TagValue::String(max_bits.to_string()),
-            );
+            if file_type == ICO_TYPE_ICON {
+                metadata.insert(
+                    "BitsPerPixel".to_string(),
+                    TagValue::String(max_bits.to_string()),
+                );
+            }
             metadata.insert(
                 "AvailableSizes".to_string(),
                 TagValue::String(available_sizes),
