@@ -10,6 +10,7 @@ pub mod gif;
 pub mod heif;
 pub mod ico;
 pub mod jxl;
+pub mod miff;
 pub mod psd;
 pub mod svg;
 pub mod webp;
