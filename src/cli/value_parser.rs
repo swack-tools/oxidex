@@ -119,6 +119,36 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         return Ok(TagValue::Binary(bytes));
     }
 
+    // Exif.pm 13.59 0x0129 declares PageNumber as `int16u[2]`. Unlike a
+    // scalar integer, the CLI spelling contains both the zero-based page
+    // index and the document page count.
+    if matches!(
+        tag_name,
+        "PageNumber" | "EXIF:PageNumber" | "IFD0:PageNumber"
+    ) {
+        let parts: Vec<_> = raw.split_whitespace().collect();
+        if parts.len() != 2 {
+            return Err(invalid(
+                tag_name,
+                "Expected two unsigned 16-bit page numbers",
+            ));
+        }
+        let values = parts
+            .into_iter()
+            .map(|part| {
+                let value = parse_integer(tag_name, part)?;
+                if !(0..=u16::MAX as i64).contains(&value) {
+                    return Err(invalid(
+                        tag_name,
+                        "Page number does not fit unsigned 16-bit",
+                    ));
+                }
+                Ok(TagValue::new_integer(value))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(TagValue::new_array(values));
+    }
+
     let raw = if matches!(
         tag_name,
         "GPSLatitudeRef" | "GPS:GPSLatitudeRef" | "GPSDestLatitudeRef" | "GPS:GPSDestLatitudeRef"
@@ -1254,6 +1284,17 @@ mod tests {
         assert_eq!(
             parse("EXIF:YCbCrPositioning", "Co-sited").unwrap(),
             TagValue::Integer(2)
+        );
+    }
+
+    #[test]
+    fn page_number_accepts_its_two_unsigned_short_components() {
+        // ExifTool 13.59 Exif.pm 0x0129 declares PageNumber as
+        // `Writable => 'int16u', Count => 2`. A space-separated CLI value is
+        // therefore a pair, not one malformed integer.
+        assert_eq!(
+            parse("EXIF:PageNumber", "3 17").unwrap(),
+            TagValue::new_array(vec![TagValue::new_integer(3), TagValue::new_integer(17)])
         );
     }
 }

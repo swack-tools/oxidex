@@ -45,7 +45,7 @@ use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::tag_db::lookup_tag_name;
 use crate::tag_db::tag_registry::{declared_ieee_field_type, get_tag_descriptor};
 use crate::writers::exif_surgical::{
-    IfdKind, descriptor_tag_id, native_to_byte_order, tag_value_to_field, validate_changed,
+    IfdKind, descriptor_tag_id, native_to_byte_order, tag_value_to_field_for_key, validate_changed,
 };
 
 /// IFD0 tag pointing to the ExifIFD
@@ -306,7 +306,8 @@ pub fn rewrite_tiff_file(
         };
 
         validate_changed(&key, &desired_value)?;
-        let (ft, count, native) = tag_value_to_field(&desired_value, Some(entry.field_type))?;
+        let (ft, count, native) =
+            tag_value_to_field_for_key(&key, &desired_value, Some(entry.field_type))?;
         let bytes = native_to_byte_order(ft, &native, bo);
         write_record_value(&mut out, entry.record_offset, ft, count, &bytes, bo);
     }
@@ -344,7 +345,8 @@ pub fn rewrite_tiff_file(
         validate_changed(key, value)?;
         // As in the EXIF writer: a created tag has no existing entry to take
         // an IEEE 754 width from, so the declared type has to supply it.
-        let (ft, count, native) = tag_value_to_field(value, declared_ieee_field_type(key))?;
+        let (ft, count, native) =
+            tag_value_to_field_for_key(key, value, declared_ieee_field_type(key))?;
         let bytes = native_to_byte_order(ft, &native, bo);
 
         let bucket = if key.starts_with("ExifIFD:") {
