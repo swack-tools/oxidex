@@ -46,6 +46,18 @@ pub fn raw_bytes_to_tag_value(
     tag_id: u16,
     byte_order: ByteOrder,
 ) -> TagValue {
+    // Exif.pm 13.59 declares SampleFormat as a four-element PrintConv array,
+    // with the same `%sampleFormat` enum table repeated for each pixel sample.
+    // ExifTool splits the SHORT list, converts each of those four values, and
+    // joins the printed results with `; `. Do this before the generic SHORT
+    // decoder flattens a multi-value field into an undecorated string.
+    if tag_id == 0x0153
+        && field_type == 3
+        && let Some(value) = format_sample_format(bytes, value_count, byte_order)
+    {
+        return TagValue::new_string(value);
+    }
+
     // Exif.pm 0x9287 (`LearningOptOutIn`) is a variable-length int16u
     // sequence. The first value is a pair count; each following usage/choice
     // value alternates between the two exact PrintConv maps.
@@ -156,6 +168,32 @@ pub fn raw_bytes_to_tag_value(
 
     // Fallback heuristic conversion for unknown types or when type-specific logic doesn't apply
     heuristic_bytes_to_tag_value(bytes, byte_order)
+}
+
+fn format_sample_format(bytes: &[u8], value_count: u32, byte_order: ByteOrder) -> Option<String> {
+    let count = usize::try_from(value_count).ok()?;
+    let bytes = bytes.get(..count.checked_mul(2)?)?;
+
+    Some(
+        bytes
+            .chunks_exact(2)
+            .enumerate()
+            .map(|(index, pair)| {
+                let value = match byte_order {
+                    ByteOrder::LittleEndian => u16::from_le_bytes([pair[0], pair[1]]),
+                    ByteOrder::BigEndian => u16::from_be_bytes([pair[0], pair[1]]),
+                };
+
+                if index >= 4 {
+                    return value.to_string();
+                }
+
+                crate::parsers::tiff::tiff_enums::tiff_enum_to_string(0x0153, i64::from(value))
+                    .unwrap_or_else(|| format!("Unknown ({value})"))
+            })
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
 }
 
 /// Applies ExifTool 13.59's exact `TileOffsets` ValueConv.
@@ -805,6 +843,40 @@ fn handle_short_type(bytes: &[u8], value_count: u32, byte_order: ByteOrder) -> T
 
     let value = read_u16(&bytes[0..2], byte_order) as i64;
     TagValue::new_integer(value)
+}
+
+#[cfg(test)]
+mod sample_format_tests {
+    use super::*;
+
+    /// ExifTool 13.59 Exif.pm declares SampleFormat's PrintConv as four
+    /// repeated `%sampleFormat` tables. Its conversion engine splits the raw
+    /// SHORT list and rejoins PrintConv results with `; `.
+    #[test]
+    fn sample_format_converts_each_samples_per_pixel_value() {
+        let raw = [
+            1u16.to_le_bytes(),
+            2u16.to_le_bytes(),
+            3u16.to_le_bytes(),
+            6u16.to_le_bytes(),
+        ]
+        .concat();
+
+        assert_eq!(
+            raw_bytes_to_tag_value(&raw, 3, 4, 0x0153, ByteOrder::LittleEndian),
+            TagValue::new_string("Unsigned; Signed; Float; Complex float")
+        );
+    }
+
+    /// ExifTool's hash PrintConv fallback is `Unknown ($val)`, not the bare
+    /// numeric value emitted when OxiDex's generic enum lookup falls through.
+    #[test]
+    fn sample_format_preserves_exiftool_unknown_value_wording() {
+        assert_eq!(
+            raw_bytes_to_tag_value(&7u16.to_be_bytes(), 3, 1, 0x0153, ByteOrder::BigEndian,),
+            TagValue::new_string("Unknown (7)")
+        );
+    }
 }
 
 /// Handles LONG type fields (type 4).

@@ -1324,23 +1324,10 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
             TagId::new_numeric(0x0154),
             "EXIF:SMinSampleValue".to_string(),
             FormatFamily::EXIF,
-            true,
+            false,
             ValueType::Integer,
             "Minimum sample value".to_string(),
             vec!["0".to_string()],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:SMaxSampleValue",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0155),
-            "EXIF:SMaxSampleValue".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "Maximum sample value".to_string(),
-            vec!["255".to_string(), "65535".to_string()],
         ),
     );
 
@@ -7235,6 +7222,26 @@ mod tests {
         let tag = get_tag_descriptor("EXIF:TileByteCounts")
             .expect("EXIF:TileByteCounts should be registered");
         assert!(!tag.is_writable());
+    }
+
+    /// ExifTool 13.59 Exif.pm 0x0154 has no `Writable` member, and its
+    /// generated `-listx` contract therefore reports `writable='false'`.
+    #[test]
+    fn s_min_sample_value_is_read_only() {
+        let tag = get_tag_descriptor("EXIF:SMinSampleValue")
+            .expect("EXIF:SMinSampleValue should be registered");
+        assert!(!tag.is_writable());
+    }
+
+    /// ExifTool 13.59 Exif.pm 0x0155 is a bare tag name with neither a
+    /// `Writable` member nor a fixed TIFF type. The generated `-listx` contract
+    /// is consequently `writable='false' type='?'`.
+    #[test]
+    fn s_max_sample_value_is_read_only_and_untyped() {
+        let tag = get_tag_descriptor("EXIF:SMaxSampleValue")
+            .expect("EXIF:SMaxSampleValue should be registered");
+        assert!(!tag.is_writable());
+        assert!(!has_reliable_value_type("EXIF:SMaxSampleValue"));
     }
 
     #[test]
