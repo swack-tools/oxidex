@@ -333,10 +333,7 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
     // RealAudio metafiles identify themselves by a streaming protocol in the
     // first record. This must precede the generic text fallback so a RAM URL
     // reaches its Real-specific extractor rather than the TXT parser.
-    if magic_bytes.starts_with(b"pnm://")
-        || magic_bytes.starts_with(b"rtsp://")
-        || magic_bytes.starts_with(b"http://")
-    {
+    if crate::parsers::audio::ram::ram_url(magic_bytes).is_some() {
         return Ok(FileFormat::RAM);
     }
 
@@ -655,6 +652,14 @@ mod tests {
         // 0x8E lands in the C1 range, which is what makes this
         // unknown-8bit rather than iso-8859-1.
         let reader = TestReader::new(b"this \x8e is MacRoman\r".to_vec());
+        assert_eq!(detect_format(&reader).unwrap(), FileFormat::TXT);
+    }
+
+    /// A web URL is ordinary text unless it names one of the Real media
+    /// resources accepted by ExifTool's `Real.pm` metafile gate.
+    #[test]
+    fn http_text_without_real_media_suffix_stays_txt() {
+        let reader = TestReader::new(b"http://example.test/index.html\n".to_vec());
         assert_eq!(detect_format(&reader).unwrap(), FileFormat::TXT);
     }
 

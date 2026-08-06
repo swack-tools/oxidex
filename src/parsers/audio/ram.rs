@@ -20,24 +20,26 @@ pub fn parse_ram_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
             reader.size().min((MAX_RAM_RECORD_LEN + 1) as u64) as usize,
         )
         .map_err(|error| error.to_string())?;
+    let url = ram_url(data).ok_or_else(|| "Invalid RAM streaming URL".to_string())?;
+
+    let mut metadata = MetadataMap::new();
+    metadata.insert("Real:URL", TagValue::new_string(url));
+    Ok(metadata)
+}
+
+/// Return the bounded first record when it satisfies ExifTool's RAM URL gate.
+pub(crate) fn ram_url(data: &[u8]) -> Option<&str> {
     let record_end = data
         .iter()
         .position(|&byte| matches!(byte, b'\r' | b'\n'))
         .unwrap_or(data.len());
 
     if record_end > MAX_RAM_RECORD_LEN {
-        return Err("RAM URL record exceeds 256 bytes".to_string());
+        return None;
     }
 
-    let url = std::str::from_utf8(&data[..record_end])
-        .map_err(|error| format!("RAM URL is not UTF-8: {error}"))?;
-    if !is_ram_url(url) {
-        return Err("Invalid RAM streaming URL".to_string());
-    }
-
-    let mut metadata = MetadataMap::new();
-    metadata.insert("Real:URL", TagValue::new_string(url));
-    Ok(metadata)
+    let url = std::str::from_utf8(&data[..record_end]).ok()?;
+    is_ram_url(url).then_some(url)
 }
 
 fn is_ram_url(url: &str) -> bool {
