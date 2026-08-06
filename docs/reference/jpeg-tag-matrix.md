@@ -15,12 +15,12 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 
 | Classification | Tags |
 |---|---|
-| 📖 Read only | 2349 |
+| 📖 Read only | 2350 |
 | ❌ Unsupported | 1890 |
 | ❔ Untestable | 221 |
-| 🐛 Read OK, write broken | 170 |
-| ✅ Full (read + write) | 100 |
-| ⚠️ Full (write non-standard encoding) | 80 |
+| 🐛 Read OK, write broken | 169 |
+| ✅ Full (read + write) | 101 |
+| ⚠️ Full (write non-standard encoding) | 79 |
 | 🐛 Read broken | 9 |
 | 🚫 Not writable in ExifTool (no synthetic sample possible; untested) | 585 |
 
@@ -31,7 +31,7 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | All | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
 | ExifIFD | 46 | 7 | 27 | 6 | 0 | 4 | 100 | 203 |
 | File | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
-| GPS | 1 | 2 | 7 | 0 | 0 | 0 | 0 | 32 |
+| GPS | 2 | 3 | 6 | 0 | 0 | 0 | 0 | 32 |
 | GSpherical | 0 | 0 | 0 | 0 | 0 | 0 | 16 | 16 |
 | IFD0 | 53 | 0 | 54 | 0 | 0 | 0 | 17 | 169 |
 | IFD1 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
@@ -385,7 +385,7 @@ references are into this repo.
 | `GPSAltitudeRef` | ✅ ok | 🐛 broken: error | `Above Sea Level` |
 | `GPSAreaInformation` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
 | `GPSDOP` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
-| `GPSDateStamp` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `2024:01:15` |
+| `GPSDateStamp` | ✅ ok | ✅ ok | `2024:01:15` |
 | `GPSDestBearing` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `GPSDestBearingRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `Magnetic North` |
 | `GPSDestDistance` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
@@ -398,7 +398,7 @@ references are into this repo.
 | `GPSHPositioningError` | ✅ ok | ✅ ok | `1.5` |
 | `GPSImgDirection` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `GPSImgDirectionRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `Magnetic North` |
-| `GPSLatitude` | ✅ ok | 🐛 broken: interop (exiftool can't read it) | `37.7749` |
+| `GPSLatitude` | ✅ ok | value_mismatch | `37.7749` |
 | `GPSLatitudeRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `N` |
 | `GPSLongitude` | ✅ ok | 🐛 broken: interop (exiftool can't read it) | `122.4194` |
 | `GPSLongitudeRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `W` |

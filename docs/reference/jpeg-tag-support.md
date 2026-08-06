@@ -124,7 +124,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `GPS:GPSAltitudeRef` | `GPS:GPSAltitudeRef` | — | `Above Sea Level` |
 | `GPS:GPSAreaInformation` | `GPS:GPSAreaInformation` | ⚠️ `-GPS:GPSAreaInformation=` | `OxTest` |
 | `GPS:GPSDOP` | `GPS:GPSDOP` | ⚠️ `-GPS:GPSDOP=` | `1.5` |
-| `GPS:GPSDateStamp` | `GPS:GPSDateStamp` | ⚠️ `-GPS:GPSDateStamp=` | `2024:01:15` |
+| `GPS:GPSDateStamp` | `GPS:GPSDateStamp` | ✅ `-GPS:GPSDateStamp=` | `2024:01:15` |
 | `GPS:GPSDestBearing` | `GPS:GPSDestBearing` | ⚠️ `-GPS:GPSDestBearing=` | `1.5` |
 | `GPS:GPSDestBearingRef` | `GPS:GPSDestBearingRef` | ⚠️ `-GPS:GPSDestBearingRef=` | `Magnetic North` |
 | `GPS:GPSDestDistance` | `GPS:GPSDestDistance` | ⚠️ `-GPS:GPSDestDistance=` | `1.5` |
