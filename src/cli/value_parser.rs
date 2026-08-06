@@ -144,6 +144,10 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         ("GPS:GPSDifferential", "Differential Corrected") => "1",
         ("EXIF:PlanarConfiguration" | "IFD0:PlanarConfiguration", "Chunky") => "1",
         ("EXIF:PlanarConfiguration" | "IFD0:PlanarConfiguration", "Planar") => "2",
+        // Exif.pm 0xa403 stores an int16u and exposes these PrintConv labels.
+        // Apply the inverse conversion before generic integer parsing.
+        ("EXIF:WhiteBalance" | "ExifIFD:WhiteBalance", "Auto") => "0",
+        ("EXIF:WhiteBalance" | "ExifIFD:WhiteBalance", "Manual") => "1",
         // Exif.pm 0x0213 declares this writable int16u tag with these two
         // PrintConv labels. Writer.pl applies the inverse conversion before
         // validating the integer stored in the TIFF entry.
@@ -1236,6 +1240,21 @@ mod tests {
         // The CLI must apply PrintConvInv before its integer shape check.
         for tag in ["EXIF:PlanarConfiguration", "IFD0:PlanarConfiguration"] {
             for (printed, raw) in [("Chunky", 1), ("Planar", 2)] {
+                assert_eq!(
+                    parse(tag, printed).unwrap(),
+                    TagValue::Integer(raw),
+                    "{tag}={printed}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn white_balance_printed_values_are_inverted_to_tiff_codes() {
+        // ExifTool 13.59 Exif.pm 0xa403 declares writable int16u with this
+        // PrintConv. The CLI must invert its labels before integer parsing.
+        for tag in ["EXIF:WhiteBalance", "ExifIFD:WhiteBalance"] {
+            for (printed, raw) in [("Auto", 0), ("Manual", 1)] {
                 assert_eq!(
                     parse(tag, printed).unwrap(),
                     TagValue::Integer(raw),
