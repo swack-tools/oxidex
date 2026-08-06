@@ -224,8 +224,8 @@ fn convert_integer_to_entry(
     value: i64,
     byte_order: ByteOrder,
 ) -> Result<Option<IfdEntryData>> {
-    // Exif.pm 13.59 0x8833 declares ISOSpeed as int32u.
-    if tag_id == 0x8833 && (0..=u32::MAX as i64).contains(&value) {
+    // Exif.pm 13.59 declares the sensitivity tags as int32u.
+    if matches!(tag_id, 0x8833 | 0x8834) && (0..=u32::MAX as i64).contains(&value) {
         let bytes = match byte_order {
             ByteOrder::LittleEndian => (value as u32).to_le_bytes().to_vec(),
             ByteOrder::BigEndian => (value as u32).to_be_bytes().to_vec(),
@@ -363,6 +363,20 @@ mod tests {
         assert_eq!(entry.field_type, ExifType::Short);
         assert_eq!(entry.value_count, 1);
         assert_eq!(entry.value_bytes, vec![0x90, 0x01]); // 400 in little-endian
+    }
+
+    #[test]
+    fn iso_speed_latitude_yyy_keeps_exiftool_long_encoding() {
+        let entry = convert_tag_value_to_entry(
+            0x8834,
+            &TagValue::new_integer(400),
+            ByteOrder::LittleEndian,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(entry.field_type, ExifType::Long);
+        assert_eq!(entry.value_count, 1);
+        assert_eq!(entry.value_bytes, 400u32.to_le_bytes());
     }
 
     #[test]

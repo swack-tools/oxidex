@@ -333,7 +333,12 @@ pub(crate) fn tag_value_to_field_for_key(
     // SHORT merely because its current value fits in 16 bits.
     if matches!(
         key,
-        "IFD0:TileWidth" | "EXIF:TileWidth" | "EXIF:ISOSpeed" | "ExifIFD:ISOSpeed"
+        "IFD0:TileWidth"
+            | "EXIF:TileWidth"
+            | "EXIF:ISOSpeed"
+            | "ExifIFD:ISOSpeed"
+            | "EXIF:ISOSpeedLatitudeyyy"
+            | "ExifIFD:ISOSpeedLatitudeyyy"
     ) {
         return tag_value_to_field(value, Some(4));
     }
