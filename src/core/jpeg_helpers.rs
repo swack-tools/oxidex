@@ -1674,7 +1674,7 @@ fn perl_sprintf_g(value: f64) -> String {
     let bytes = &output[..length];
     // `%g` emits ASCII digits, punctuation, exponent markers, or the
     // implementation's ASCII inf/nan spelling.
-String::from_utf8(bytes.iter().map(|byte| *byte as u8).collect()).expect("C %g output is ASCII")
+    String::from_utf8(bytes.iter().map(|byte| *byte as u8).collect()).expect("C %g output is ASCII")
 }
 /// Emits `APP3:ImagingData`, the InfiRay IR + thermal + visible payload.
 ///
