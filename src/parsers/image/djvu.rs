@@ -6,6 +6,7 @@
 //! `metadata` path, including `annote` and standard metadata fields.
 
 use crate::core::{FileReader, MetadataMap, TagValue};
+use crate::parsers::xmp::rdf_parser::{XmpValue, parse_xmp_typed};
 use djvu_bzz::bzz_decode;
 use djvu_iff::{Chunk, parse};
 
@@ -323,8 +324,32 @@ fn collect_chunk_metadata(data: &[u8], metadata: &mut MetadataMap) {
         return;
     };
     for expression in expressions {
-        metadata_from_expression(expression, metadata);
+        collect_annotation_expression(expression, metadata);
     }
+}
+
+/// Dispatch the two annotation forms ExifTool handles: `(metadata ...)` and
+/// top-level `(xmp XML)`.  XMP is not a child of the metadata form.
+fn collect_annotation_expression(expression: Expression, metadata: &mut MetadataMap) {
+    if let Expression::List(items) = &expression
+        && let Some(Expression::Atom(tag)) = items.first()
+        && tag == "xmp"
+        && let Some(Expression::Atom(xml) | Expression::String(xml)) = items.get(1)
+    {
+        if let Ok(tags) = parse_xmp_typed(xml.as_bytes()) {
+            for (name, value) in tags {
+                let value = match value {
+                    XmpValue::Scalar(value) => TagValue::new_string(value),
+                    XmpValue::List(values) => {
+                        TagValue::Array(values.into_iter().map(TagValue::new_string).collect())
+                    }
+                };
+                metadata.insert(name, value);
+            }
+        }
+        return;
+    }
+    metadata_from_expression(expression, metadata);
 }
 
 /// Extract DjVu INFO, included-file and annotation metadata from a DjVu image
@@ -362,8 +387,8 @@ pub fn parse_djvu_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
 
 #[cfg(test)]
 mod tests {
-    use super::{ExpressionParser, collect_info, metadata_from_expression};
-    use crate::core::MetadataMap;
+    use super::{ExpressionParser, collect_chunk_metadata, collect_info, metadata_from_expression};
+    use crate::core::{MetadataMap, TagValue};
 
     #[test]
     fn extracts_standard_annotation_metadata_with_exiftool_names() {
@@ -400,5 +425,24 @@ mod tests {
         assert_eq!(metadata.get_integer("DjVu:SpatialResolution"), Some(100));
         assert_eq!(metadata.get_float("DjVu:Gamma"), Some(2.2));
         assert_eq!(metadata.get_string("DjVu:Orientation"), Some("Unknown (0)"));
+    }
+
+    #[test]
+    fn extracts_typed_xmp_from_top_level_annotation_expression() {
+        let annotation = r#"(xmp "<x:xmpmeta xmlns:x='adobe:ns:meta/'><rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'><rdf:Description xmlns:dc='http://purl.org/dc/elements/1.1/'><dc:title><rdf:Alt><rdf:li>DjVu Metadata Sample</rdf:li></rdf:Alt></dc:title><dc:subject><rdf:Bag><rdf:li>ExifTool</rdf:li><rdf:li>Test</rdf:li></rdf:Bag></dc:subject></rdf:Description></rdf:RDF></x:xmpmeta>")"#;
+        let mut metadata = MetadataMap::new();
+        collect_chunk_metadata(annotation.as_bytes(), &mut metadata);
+
+        assert_eq!(
+            metadata.get_string("XMP:Title"),
+            Some("DjVu Metadata Sample")
+        );
+        assert_eq!(
+            metadata.get("XMP:Subject"),
+            Some(&TagValue::Array(vec![
+                TagValue::new_string("ExifTool"),
+                TagValue::new_string("Test"),
+            ]))
+        );
     }
 }

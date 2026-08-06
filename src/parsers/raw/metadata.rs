@@ -4192,6 +4192,25 @@ fn parse_cr3_cmp1(data: &[u8], metadata: &mut MetadataMap) {
     }
 }
 
+/// Read Canon's CR3 `THMB` thumbnail atom.
+///
+/// `Canon.pm` declares this atom as `ThumbnailImage` with the exact
+/// conversion `substr($val, 16)`: the first sixteen payload bytes describe the
+/// thumbnail, while the remaining bytes are the binary image.  Keep it binary
+/// so the normal ExifTool-compatible renderer owns its display form.
+fn parse_cr3_thmb(data: &[u8], metadata: &mut MetadataMap) {
+    let Some(payload) = find_cr3_box(data, b"THMB") else {
+        return;
+    };
+    let Some(thumbnail) = payload.get(16..) else {
+        return;
+    };
+    metadata.insert(
+        "Canon:ThumbnailImage".to_string(),
+        TagValue::new_binary(thumbnail.to_vec()),
+    );
+}
+
 /// Byte offset of `part` within `whole`, when `part` is a subslice of it.
 fn subslice_offset(whole: &[u8], part: &[u8]) -> Option<usize> {
     let whole_start = whole.as_ptr() as usize;
@@ -4397,6 +4416,10 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
     // MakerNote.  Decode its two declared dimensions directly from the
     // generated table before handling unrelated UUID payloads.
     parse_cr3_cmp1(data, &mut metadata);
+
+    // Canon.pm's THMB conversion removes its 16-byte atom header and exposes
+    // the remainder as the Canon/MakerNotes thumbnail.
+    parse_cr3_thmb(data, &mut metadata);
 
     // XMP lives in a top-level `uuid` box (QuickTime.pm's UUID-XMP condition
     // matches be7acfcb-97a9-42e8-9c71-999491e3afac), not in the Canon uuid box.
@@ -7044,6 +7067,21 @@ mod cr3_cmt1_artist_tests {
         data
     }
 
+    /// Canon.pm's `uuid` table defines `THMB` as `ThumbnailImage` with
+    /// `RawConv => 'substr($val, 16)'`.  The first 16 bytes are the fixed
+    /// atom header; the remaining bytes are the binary thumbnail itself.
+    fn build_cr3_with_thmb(thumbnail: &[u8]) -> Vec<u8> {
+        let mut thmb = vec![0u8; 16];
+        thmb.extend_from_slice(thumbnail);
+
+        let mut data = Vec::new();
+        data.extend_from_slice(b"\0\0\0\x18ftypcrx "); // plausible leading box
+        data.extend_from_slice(&((8 + thmb.len()) as u32).to_be_bytes());
+        data.extend_from_slice(b"THMB");
+        data.extend_from_slice(&thmb);
+        data
+    }
+
     /// Build a minimal CR3-shaped buffer: a `CMT1` box whose payload is a
     /// little-endian TIFF with a single IFD0 ASCII entry `tag_id` holding
     /// `value` (its trailing NUL included in the count). The value is kept
@@ -7145,6 +7183,18 @@ mod cr3_cmt1_artist_tests {
         assert_eq!(
             metadata.get("Canon:ImageHeight"),
             Some(&TagValue::Integer(1080))
+        );
+    }
+
+    #[test]
+    fn extracts_canon_thmb_thumbnail_from_cr3() {
+        let thumbnail = b"thumbnail";
+        let metadata = parse_cr3(&build_cr3_with_thmb(thumbnail), RawFormat::CanonCR3)
+            .expect("synthetic CR3 should parse");
+
+        assert_eq!(
+            metadata.get("Canon:ThumbnailImage"),
+            Some(&TagValue::new_binary(thumbnail.to_vec()))
         );
     }
 }
