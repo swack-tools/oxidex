@@ -9,10 +9,12 @@ use crate::core::format_dispatch::dispatch_format_parser;
 use crate::core::jpeg_helpers::{
     extract_direct_preview_image, process_app3_segments, process_app6_segments,
     process_app10_segments, process_app11_segments, process_app12_segments, process_app14_segments,
-    process_app15_segments, process_com_segments, process_dqt_segments, process_exif_segments,
+    process_app15_segments, process_com_segments, process_dji_dbg_segments,
+    process_dji_thermal_segments, process_dqt_segments, process_exif_segments,
     process_icc_segments, process_infiray_segments, process_iptc_segments, process_jfif_segments,
     process_mpf_segments, process_photoshop_segments, process_qualcomm_segments,
-    process_sof_segments, process_spiff_segments, process_xmp_segments,
+    process_sof_segments, process_spiff_segments, process_uniform_resource_name_segments,
+    process_xmp_segments,
 };
 use crate::core::operations_helpers::{read_u16, read_u32};
 #[cfg(test)]
@@ -778,6 +780,7 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
 
     process_iptc_segments(&segments, &mut metadata);
     process_photoshop_segments(&segments, &mut metadata);
+    process_uniform_resource_name_segments(&segments, &mut metadata);
     process_icc_segments(&segments, &mut metadata);
     process_mpf_segments(&segments, &mut metadata);
     // APP2/APP4 FPXR: FlashPix streams split across application segments.
@@ -807,6 +810,9 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
         {
             metadata.insert(key.clone(), value.clone());
         }
+        for (key, value) in crate::parsers::mie::parse_mie_trailer(file).iter() {
+            metadata.insert(key.clone(), value.clone());
+        }
     }
 
     // Process HDR and manufacturer-specific APP segments
@@ -818,6 +824,8 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
     // by the two calls that already own those markers.
     process_infiray_segments(&segments, &mut metadata);
     process_qualcomm_segments(&segments, &mut metadata);
+    process_dji_dbg_segments(&segments, &mut metadata);
+    process_dji_thermal_segments(&segments, &mut metadata);
     process_app6_segments(&segments, &mut metadata);
     process_app10_segments(&segments, &mut metadata);
     process_app11_segments(&segments, &mut metadata);

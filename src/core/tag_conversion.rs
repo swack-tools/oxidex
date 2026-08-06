@@ -46,6 +46,15 @@ pub fn raw_bytes_to_tag_value(
     tag_id: u16,
     byte_order: ByteOrder,
 ) -> TagValue {
+    // Exif.pm 0x9287 (`LearningOptOutIn`) is a variable-length int16u
+    // sequence. The first value is a pair count; each following usage/choice
+    // value alternates between the two exact PrintConv maps.
+    if tag_id == 0x9287 && field_type == 3 {
+        if let Some(value) = format_learning_opt_out_in(bytes, value_count, byte_order) {
+            return TagValue::new_string(value);
+        }
+    }
+
     // Try special tag handlers first (GPS_VERSION_ID, EXIF_VERSION, etc.)
     if let Some(value) = handle_special_byte_tags(tag_id, bytes) {
         return value;
@@ -111,6 +120,47 @@ pub fn raw_bytes_to_tag_value(
 
     // Fallback heuristic conversion for unknown types or when type-specific logic doesn't apply
     heuristic_bytes_to_tag_value(bytes, byte_order)
+}
+
+fn format_learning_opt_out_in(
+    bytes: &[u8],
+    value_count: u32,
+    byte_order: ByteOrder,
+) -> Option<String> {
+    let count = usize::try_from(value_count).ok()?;
+    let bytes = bytes.get(..count.checked_mul(2)?)?;
+    let values: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|pair| match byte_order {
+            ByteOrder::LittleEndian => u16::from_le_bytes([pair[0], pair[1]]),
+            ByteOrder::BigEndian => u16::from_be_bytes([pair[0], pair[1]]),
+        })
+        .collect();
+
+    let _pair_count = *values.first()?;
+    Some(
+        values[1..]
+            .iter()
+            .enumerate()
+            .map(|(index, value)| match index % 2 {
+                0 => match value {
+                    0 => "All / Individual Usage Not Specified".to_string(),
+                    1 => "Non-Generative AI/ML Training".to_string(),
+                    2 => "Generative AI/ML Training".to_string(),
+                    3 => "Data Mining".to_string(),
+                    4 => "Input to Foundation Model (Trained AI/ML Model)".to_string(),
+                    value => format!("Unknown({value})"),
+                },
+                _ => match value {
+                    0 => "Opt-out".to_string(),
+                    1 => "Opt-in".to_string(),
+                    2 => "Unspecified".to_string(),
+                    value => format!("Unknown({value})"),
+                },
+            })
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
 }
 
 /// Parses a string value to a TagValue *without discarding the source text*.

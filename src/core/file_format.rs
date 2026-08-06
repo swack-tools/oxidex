@@ -214,6 +214,9 @@ pub enum FileFormat {
     /// Adobe Photoshop document (.psd)
     PSD,
 
+    /// DjVu image or multi-page document (.djvu, .djv)
+    DJVU,
+
     // Phase 6: Specialized formats
     /// ELF executable format
     ELF,
@@ -382,6 +385,7 @@ impl FileFormat {
             FileFormat::SVG => "SVG",
             FileFormat::ICO => "ICO",
             FileFormat::PSD => "PSD",
+            FileFormat::DJVU => "DJVU",
             FileFormat::ELF => "ELF",
             FileFormat::MachO => "Mach-O",
             FileFormat::DWG => "DWG",
@@ -487,6 +491,7 @@ impl FileFormat {
             FileFormat::SVG => &["svg"],
             FileFormat::ICO => &["ico"],
             FileFormat::PSD => &["psd"],
+            FileFormat::DJVU => &["djvu", "djv"],
             FileFormat::ELF => &["elf", "so"],
             FileFormat::MachO => &["dylib", "bundle"],
             FileFormat::DWG => &["dwg"],

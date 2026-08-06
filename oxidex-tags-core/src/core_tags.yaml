@@ -543,6 +543,10 @@ tables:
         name: "PageNumber"
         writable: false
         description: "PageNumber tag"
+      - id: "0x012D"
+        name: "TransferFunction"
+        writable: false
+        description: "TransferFunction tag"
       - id: "0x0131"
         name: "Software"
         writable: false
@@ -1024,6 +1028,10 @@ tables:
         name: "UserComment"
         writable: false
         description: "UserComment tag"
+      - id: "0x9287"
+        name: "LearningOptOutIn"
+        writable: false
+        description: "Learning opt-out or opt-in preferences"
       - id: "0x9290"
         name: "SubSecTime"
         writable: false

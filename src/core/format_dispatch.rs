@@ -35,6 +35,7 @@ use crate::parsers::font::woff2::parse_woff2_metadata;
 // Note: AVIF uses parse_quicktime_metadata since AVIF is ISOBMFF-based
 use crate::parsers::image::bmp::parse_bmp_metadata;
 use crate::parsers::image::bpg::parse_bpg_metadata;
+use crate::parsers::image::djvu::parse_djvu_metadata;
 use crate::parsers::image::exr::parse_exr_metadata;
 use crate::parsers::image::flif::parse_flif_metadata;
 use crate::parsers::image::gif::parse_gif_metadata;
@@ -165,6 +166,7 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::SVG => convert_string_error(parse_svg_metadata(reader), "SVG"),
         FileFormat::ICO => convert_string_error(parse_ico_metadata(reader), "ICO"),
         FileFormat::PSD => convert_string_error(parse_psd_metadata(reader), "PSD"),
+        FileFormat::DJVU => convert_string_error(parse_djvu_metadata(reader), "DjVu"),
         // Specialized formats
         FileFormat::ELF => convert_string_error(parse_elf_metadata(reader), "ELF"),
         FileFormat::MachO => convert_string_error(parse_macho_metadata(reader), "Mach-O"),
