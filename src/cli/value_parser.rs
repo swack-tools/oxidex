@@ -73,6 +73,7 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         "CreateDate" => "ExifIFD:CreateDate",
         "ExposureTime" => "EXIF:ExposureTime",
         "BrightnessValue" => "EXIF:BrightnessValue",
+        "ExposureProgram" => "EXIF:ExposureProgram",
         "MeteringMode" => "EXIF:MeteringMode",
         "ShutterSpeedValue" => "ExifIFD:ShutterSpeedValue",
         "ApertureValue" => "EXIF:ApertureValue",
@@ -150,8 +151,23 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         ("EXIF:YCbCrPositioning", "Co-sited") => "2",
         _ => raw,
     };
-    let raw = if declared_tag_name.rsplit(':').next() == Some("MeteringMode") {
-        match raw {
+    let raw = match declared_tag_name.rsplit(':').next() {
+        Some("ExposureProgram") => match raw {
+            // Exif.pm 13.59 0x8822 PrintConv. Writer.pl invokes the inverse
+            // conversion before validating the declared int16u value.
+            "Not Defined" => "0",
+            "Manual" => "1",
+            "Program AE" => "2",
+            "Aperture-priority AE" => "3",
+            "Shutter speed priority AE" => "4",
+            "Creative (Slow speed)" => "5",
+            "Action (High speed)" => "6",
+            "Portrait" => "7",
+            "Landscape" => "8",
+            "Bulb" => "9",
+            _ => raw,
+        },
+        Some("MeteringMode") => match raw {
             "Unknown" => "0",
             "Average" => "1",
             "Center-weighted average" => "2",
@@ -161,9 +177,8 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
             "Partial" => "6",
             "Other" => "255",
             _ => raw,
-        }
-    } else {
-        raw
+        },
+        _ => raw,
     };
     let declared = get_tag_descriptor(declared_tag_name)
         .filter(|_| has_reliable_value_type(declared_tag_name))
@@ -974,6 +989,36 @@ mod tests {
             parse("EXIF:MeteringMode", "255").unwrap(),
             TagValue::Integer(255)
         );
+    }
+
+    #[test]
+    fn exposure_program_uses_the_declared_print_conversion_inverse() {
+        // ExifTool 13.59 Exif.pm 0x8822 is writable int16u and its PrintConv
+        // labels are accepted as CLI input through Writer.pl's ConvInv path.
+        for (printed, raw) in [
+            ("Not Defined", 0),
+            ("Manual", 1),
+            ("Program AE", 2),
+            ("Aperture-priority AE", 3),
+            ("Shutter speed priority AE", 4),
+            ("Creative (Slow speed)", 5),
+            ("Action (High speed)", 6),
+            ("Portrait", 7),
+            ("Landscape", 8),
+            ("Bulb", 9),
+        ] {
+            for tag in [
+                "ExposureProgram",
+                "EXIF:ExposureProgram",
+                "ExifIFD:ExposureProgram",
+            ] {
+                assert_eq!(
+                    parse(tag, printed).unwrap(),
+                    TagValue::Integer(raw),
+                    "{tag}: {printed}"
+                );
+            }
+        }
     }
 
     #[test]
