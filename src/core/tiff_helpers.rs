@@ -501,8 +501,15 @@ fn process_tiff_ifd_tags<'a>(
 
         // Convert tag to metadata
         let tag_name = lookup_tag_name(*tag_id, ifd_name);
-        let tag_value =
-            raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order);
+        // Exif.pm 0x140 declares `Format => 'binary', Binary => 1`, so the
+        // original byte sequence is the value even when the TIFF field type
+        // says SHORT.  Gate on the resolved name because 0x0140 is reused by
+        // MakerNote tables whose values are not ColorMap payloads.
+        let tag_value = if tag_name.rsplit(':').next() == Some("ColorMap") {
+            TagValue::Binary(bytes.to_vec())
+        } else {
+            raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order)
+        };
         // Exif.pm 0x117's generic StripByteCounts branch deliberately turns a
         // long printable list into a scalar reference:
         //
@@ -579,6 +586,27 @@ mod strip_byte_counts_tests {
             metadata.get("IFD0:StripByteCounts"),
             Some(&TagValue::Binary(expected))
         );
+    }
+}
+
+#[cfg(test)]
+mod color_map_tests {
+    use super::*;
+    use std::borrow::Cow;
+
+    #[test]
+    fn color_map_preserves_the_original_short_bytes_as_binary() {
+        // Exif.pm 0x140 declares `Format => 'binary', Binary => 1`.  Pinned
+        // ExifTool 13.59 therefore reports this six-SHORT payload as 12 bytes
+        // of binary data and `-b` returns these bytes verbatim, rather than a
+        // decoded space-separated list of the six integers.
+        let raw = vec![1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0];
+        let tags = vec![(0x0140, 3, 6, Cow::Borrowed(raw.as_slice()))];
+        let mut metadata = MetadataMap::new();
+
+        process_tiff_ifd_tags(&tags, "IFD0", ByteOrder::LittleEndian, &mut metadata);
+
+        assert_eq!(metadata.get("IFD0:ColorMap"), Some(&TagValue::Binary(raw)));
     }
 }
 

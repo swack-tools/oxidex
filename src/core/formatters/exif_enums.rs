@@ -570,6 +570,18 @@ pub fn format_resolution_unit(value: i64) -> String {
     }
 }
 
+/// Format GrayResponseUnit using Exif.pm 13.59 tag 0x0122's PrintConv.
+pub fn format_gray_response_unit(value: i64) -> String {
+    match value {
+        1 => "0.1".to_string(),
+        2 => "0.001".to_string(),
+        3 => "0.0001".to_string(),
+        4 => "0.00001".to_string(),
+        5 => "0.000001".to_string(),
+        _ => format!("Unknown ({})", value),
+    }
+}
+
 /// Format YCbCrPositioning enum value
 /// EXIF tag 0x0213
 pub fn format_ycbcr_positioning(value: i64) -> String {
