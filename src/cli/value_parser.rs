@@ -75,6 +75,7 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         "BrightnessValue" => "EXIF:BrightnessValue",
         "LightSource" => "EXIF:LightSource",
         "DigitalZoomRatio" => "EXIF:DigitalZoomRatio",
+        "Sharpness" => "EXIF:Sharpness",
         "MeteringMode" => "EXIF:MeteringMode",
         "ShutterSpeedValue" => "ExifIFD:ShutterSpeedValue",
         "ApertureValue" => "EXIF:ApertureValue",
@@ -241,6 +242,9 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
 
     match declared {
         None | Some(ValueType::String) => Ok(TagValue::String(raw.to_string())),
+        Some(ValueType::Integer) if declared_tag_name.rsplit(':').next() == Some("Sharpness") => {
+            parse_sharpness(tag_name, raw)
+        }
         Some(ValueType::Integer) if declared_tag_name.rsplit(':').next() == Some("Flash") => {
             crate::core::formatters::exif_enums::parse_flash_label(raw)
                 .map(TagValue::Integer)
@@ -292,6 +296,48 @@ fn invert_exif_contrast_parameter(raw: &str) -> Option<&'static str> {
 
 fn is_ascii_word(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+/// Exif.pm's `ConvertParameter` inverse conversion used by Sharpness (0xa40a).
+///
+/// `ConvertParameter` recognizes the first letter at a word boundary rather
+/// than only accepting its three rendered labels: any normal/zero-like value
+/// maps to 0, soft/low/negative to 1, and hard/high/positive to 2.
+fn parse_sharpness(tag_name: &str, raw: &str) -> Result<TagValue> {
+    let has_word_initial = |initials: &[u8]| {
+        raw.as_bytes().iter().enumerate().any(|(index, byte)| {
+            let at_word_boundary = index == 0
+                || !raw.as_bytes()[index - 1].is_ascii_alphanumeric()
+                    && raw.as_bytes()[index - 1] != b'_';
+            at_word_boundary
+                && byte.is_ascii_alphabetic()
+                && initials.contains(&byte.to_ascii_lowercase())
+        })
+    };
+
+    if has_word_initial(b"n") {
+        return Ok(TagValue::Integer(0));
+    }
+    if has_word_initial(b"sl") {
+        return Ok(TagValue::Integer(1));
+    }
+    if has_word_initial(b"h") {
+        return Ok(TagValue::Integer(2));
+    }
+    if let Some(number) = as_float_text(raw).and_then(|value| value.parse::<f64>().ok()) {
+        return Ok(TagValue::Integer(if number == 0.0 {
+            0
+        } else if number < 0.0 {
+            1
+        } else {
+            2
+        }));
+    }
+
+    Err(invalid(
+        tag_name,
+        "Can't convert Sharpness value (not a parameter)",
+    ))
 }
 
 fn invert_gps_latitude_ref<'a>(tag_name: &str, raw: &'a str) -> Result<&'a str> {
@@ -1441,6 +1487,32 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn sharpness_uses_exiftools_convert_parameter_inverse() {
+        // Exif.pm 13.59 0xa40a delegates PrintConvInv to ConvertParameter:
+        // Normal/zero -> 0, Soft/Low/negative -> 1, Hard/High/positive -> 2.
+        for (printed, raw) in [
+            ("Normal", 0),
+            ("neutral", 0),
+            ("0", 0),
+            ("Soft", 1),
+            ("Low", 1),
+            ("-0.25", 1),
+            ("Hard", 2),
+            ("High", 2),
+            ("0.25", 2),
+        ] {
+            for tag in ["Sharpness", "EXIF:Sharpness", "ExifIFD:Sharpness"] {
+                assert_eq!(
+                    parse(tag, printed).unwrap(),
+                    TagValue::Integer(raw),
+                    "{tag}: {printed}"
+                );
+            }
+        }
+        assert!(parse("ExifIFD:Sharpness", "ambiguous").is_err());
     }
 
     #[test]
