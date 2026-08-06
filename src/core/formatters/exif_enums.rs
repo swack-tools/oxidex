@@ -192,6 +192,7 @@ pub fn format_scene_capture_type(value: i64) -> String {
         1 => "Landscape".to_string(),
         2 => "Portrait".to_string(),
         3 => "Night".to_string(),
+        4 => "Other".to_string(),
         _ => format!("Unknown ({})", value),
     }
 }
@@ -668,6 +669,12 @@ pub fn format_interop_index(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_capture_type_includes_samsungs_non_standard_other_value() {
+        assert_eq!(format_scene_capture_type(4), "Other");
+        assert_eq!(format_scene_capture_type(5), "Unknown (5)");
+    }
 
     #[test]
     fn test_color_space() {

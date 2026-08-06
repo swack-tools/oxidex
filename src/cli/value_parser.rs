@@ -165,6 +165,18 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
     } else {
         raw
     };
+    let raw = if declared_tag_name.rsplit(':').next() == Some("SceneCaptureType") {
+        match raw {
+            "Standard" => "0",
+            "Landscape" => "1",
+            "Portrait" => "2",
+            "Night" => "3",
+            "Other" => "4",
+            _ => raw,
+        }
+    } else {
+        raw
+    };
     let declared = get_tag_descriptor(declared_tag_name)
         .filter(|_| has_reliable_value_type(declared_tag_name))
         .map(|descriptor| descriptor.value_type());
@@ -973,6 +985,22 @@ mod tests {
         assert_eq!(
             parse("EXIF:MeteringMode", "255").unwrap(),
             TagValue::Integer(255)
+        );
+    }
+
+    #[test]
+    fn scene_capture_type_uses_the_declared_print_conversion_inverse() {
+        assert_eq!(
+            parse("ExifIFD:SceneCaptureType", "Portrait").unwrap(),
+            TagValue::Integer(2)
+        );
+        assert_eq!(
+            parse("EXIF:SceneCaptureType", "Other").unwrap(),
+            TagValue::Integer(4)
+        );
+        assert_eq!(
+            parse("ExifIFD:SceneCaptureType", "3").unwrap(),
+            TagValue::Integer(3)
         );
     }
 
