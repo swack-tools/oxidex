@@ -55,6 +55,9 @@ mod iptc_integration_test;
 #[path = "integration/infiray_tests.rs"]
 mod infiray_tests;
 
+#[path = "integration/dji_app4_tests.rs"]
+mod dji_app4_tests;
+
 #[path = "integration/exif_makernotes_tests.rs"]
 mod exif_makernotes_tests;
 

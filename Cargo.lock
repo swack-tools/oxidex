@@ -551,6 +551,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "djvu-bzz"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78f5b18e913e68c66ee4cad0011b1d8eb73a28e7e9ed7b2e221d07e03c70f9dc"
+dependencies = [
+ "djvu-zp",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "djvu-iff"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44c853d63bf88ceb420ce03537531f21e71beb0e74d7b75cc90181ca6723a50a"
+dependencies = [
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "djvu-zp"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b909dedf10ce25934a104cf0072ddb46d8e6d50bf2fcc96a158661387949af2"
+dependencies = [
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "either"
 version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1150,6 +1178,8 @@ dependencies = [
  "crc",
  "criterion",
  "csv",
+ "djvu-bzz",
+ "djvu-iff",
  "encoding_rs",
  "flate2",
  "hex",

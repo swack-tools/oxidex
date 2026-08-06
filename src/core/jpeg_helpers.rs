@@ -7,6 +7,7 @@ use super::{FileReader, MetadataMap, TagValue};
 use crate::core::operations_helpers::read_u32;
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
 use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd};
+use crate::exiftool_tables::{DecodedValue, decode_binary_table, find_table};
 use crate::io::EndianReader;
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::jpeg::app_segments::app8_isothermal::INFIRAY_ISOTHERMAL_MIN_LENGTH;
@@ -664,6 +665,33 @@ pub fn process_mpf_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     }
 }
 
+/// Extracts the Apple HDR Uniform Resource Name stored directly in JPEG APP2.
+///
+/// ExifTool 13.59's `JPEG::Main` table matches an APP2 payload only when it
+/// begins with `urn:`.  The matching payload is exposed as a string, whose
+/// NUL padding is not part of the displayed value.
+pub fn process_uniform_resource_name_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    for segment in segments.iter().filter(|s| s.marker == APP2_MARKER) {
+        if !segment.data.starts_with(b"urn:") {
+            continue;
+        }
+
+        let value = segment
+            .data
+            .split(|&byte| byte == 0)
+            .next()
+            .expect("split always yields the first field");
+        let Ok(value) = std::str::from_utf8(value) else {
+            continue;
+        };
+
+        metadata.insert(
+            "JPEG:UniformResourceName",
+            TagValue::String(value.to_owned()),
+        );
+    }
+}
+
 /// Processes ICC profile APP2 segments and extracts color profile metadata.
 ///
 /// ICC (International Color Consortium) profiles describe the color
@@ -1305,6 +1333,59 @@ pub fn process_qualcomm_segments(segments: &[Segment], metadata: &mut MetadataMa
     }
 }
 
+/// Processes DJI's bracketed debug records carried in APP7.
+pub fn process_dji_dbg_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    for segment in segments.iter().filter(|s| s.marker == APP7_MARKER) {
+        merge(
+            crate::parsers::jpeg::app_segments::parse_dji_dbg_app7(segment.data),
+            metadata,
+        );
+    }
+}
+
+/// Reads `APP4:AmbientTemperature` from DJI's ThermalParams2 record.
+///
+/// ExifTool selects `DJI::ThermalParams2` only for a DJI image when the APP4
+/// payload has its `2c 01 20 00` signature after either 32 or 64 bytes.  The
+/// optional first 32 bytes are a prefix, so the table begins at byte 32 when
+/// the signature is at byte 64.  Its temperature is a little-endian float at
+/// table offset 0, rendered by DJI.pm as `sprintf("%.1f C", $val)`.
+pub fn process_dji_thermal_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    if metadata.get_string("IFD0:Make") != Some("DJI") {
+        return;
+    }
+
+    let Some(table) = find_table("DJI", "ThermalParams2") else {
+        return;
+    };
+
+    for segment in segments.iter().filter(|s| s.marker == APP4_MARKER) {
+        let data = segment.data;
+        let table_offset = if data.get(64..68) == Some(&[0x2c, 0x01, 0x20, 0x00][..]) {
+            32
+        } else if data.get(32..36) == Some(&[0x2c, 0x01, 0x20, 0x00][..]) {
+            0
+        } else {
+            continue;
+        };
+
+        let temperature =
+            decode_binary_table(table, &data[table_offset..], crate::io::ByteOrder::Little)
+                .into_iter()
+                .find(|field| field.field.name == "AmbientTemperature")
+                .and_then(|field| match field.raw {
+                    DecodedValue::Float(value) => Some(value),
+                    _ => None,
+                });
+        if let Some(temperature) = temperature {
+            metadata.insert(
+                "APP4:AmbientTemperature".to_string(),
+                TagValue::String(format!("{temperature:.1} C")),
+            );
+        }
+    }
+}
+
 /// Emits `APP3:ImagingData`, the InfiRay IR + thermal + visible payload.
 ///
 /// `JPEG::Main` declares it `Binary => 1` (JPEG.pm:119-123), so ExifTool
@@ -1701,5 +1782,33 @@ mod print_im_tests {
 
         assert_eq!(metadata.get_string("PrintIM:PrintIMVersion"), Some("0300"));
         assert!(metadata.get("IFD0:PrintIM").is_none());
+    }
+}
+
+#[cfg(test)]
+mod transfer_function_tests {
+    use super::*;
+    use std::borrow::Cow;
+
+    #[test]
+    fn jpeg_ifd0_transfer_function_is_named_and_rendered_as_binary() {
+        // Exif.pm 13.59 declares 0x012d as `int16u[768], Binary => 1`.
+        // The Binary payload is ExifTool's space-separated int16 rendering,
+        // not the raw TIFF byte span: "0 65535 12" is 10 bytes.
+        let tags = vec![(
+            0x012d,
+            3,
+            3,
+            Cow::Owned(vec![0x00, 0x00, 0xff, 0xff, 0x0c, 0x00]),
+        )];
+        let mut metadata = MetadataMap::new();
+
+        process_ifd0_tags(&tags, ByteOrder::LittleEndian, &mut metadata);
+
+        assert_eq!(
+            crate::core::exiftool_compat::format_for_exiftool(&metadata)
+                .get_string("IFD0:TransferFunction"),
+            Some("(Binary data 10 bytes, use -b option to extract)")
+        );
     }
 }

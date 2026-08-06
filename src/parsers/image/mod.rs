@@ -3,6 +3,7 @@
 pub mod avif;
 pub mod bmp;
 pub mod bpg;
+pub mod djvu;
 pub mod embedded;
 pub mod exr;
 pub mod flif;
