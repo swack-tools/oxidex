@@ -84,6 +84,7 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         "WhiteBalance" => "EXIF:WhiteBalance",
         "SceneCaptureType" => "EXIF:SceneCaptureType",
         "Saturation" => "EXIF:Saturation",
+        "FlashpixVersion" => "ExifIFD:FlashpixVersion",
         "MeteringMode" => "EXIF:MeteringMode",
         "ShutterSpeedValue" => "ExifIFD:ShutterSpeedValue",
         "ApertureValue" => "EXIF:ApertureValue",
@@ -91,6 +92,20 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         "MakerNoteSafety" => "EXIF:MakerNoteSafety",
         _ => tag_name,
     };
+
+    // Exif.pm 13.59 0xa000 removes dots in FlashpixVersion's PrintConvInv,
+    // then requires exactly four decimal digits. The TIFF value remains four
+    // UNDEFINED bytes rather than an ASCII field.
+    if matches!(
+        tag_name,
+        "FlashpixVersion" | "ExifIFD:FlashpixVersion" | "EXIF:FlashpixVersion"
+    ) {
+        let encoded: String = raw.chars().filter(|character| *character != '.').collect();
+        if encoded.len() != 4 || !encoded.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(invalid(tag_name, "Error converting value (PrintConvInv)"));
+        }
+        return Ok(TagValue::Binary(encoded.into_bytes()));
+    }
 
     // GPS.pm 0x001c applies EncodeExifText as its RawConvInv. With the default
     // CharsetEXIF this is the eight-byte ASCII identifier followed by the
@@ -1104,6 +1119,25 @@ mod tests {
             TagValue::Integer(0x38)
         );
         assert!(parse("Flash", "25").is_err());
+    }
+
+    #[test]
+    fn flashpix_version_removes_dots_and_requires_four_digits() {
+        for (tag, raw, expected) in [
+            ("ExifIFD:FlashpixVersion", "0100", b"0100".as_slice()),
+            ("EXIF:FlashpixVersion", "01.00", b"0100".as_slice()),
+            ("FlashpixVersion", "0.1.0.0", b"0100".as_slice()),
+            ("ExifIFD:FlashpixVersion", "0000", b"0000".as_slice()),
+        ] {
+            assert_eq!(
+                parse(tag, raw).unwrap(),
+                TagValue::Binary(expected.to_vec())
+            );
+        }
+
+        for raw in ["1.00", "abcd", "01000", " 0100 "] {
+            assert!(parse("ExifIFD:FlashpixVersion", raw).is_err(), "{raw}");
+        }
     }
 
     // -- Rational, Writer.pl:6888-6903 + 5200-5228 --------------------------
