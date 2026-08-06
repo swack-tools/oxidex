@@ -162,4 +162,23 @@ mod tests {
         assert!(white_point.writable);
         assert_eq!(white_point.type_name.as_deref(), Some("rational64u"));
     }
+
+    /// ExifTool 13.59 Exif.pm 0x013f declares PrimaryChromaticities as a
+    /// writable `rational64u` with six values in IFD0.
+    #[test]
+    fn primary_chromaticities_matches_pinned_exiftool_contract() {
+        let exif = get_tag_table("Exif::Main").expect("Exif::Main table should exist");
+        let primary_chromaticities = exif
+            .tags
+            .iter()
+            .find(|tag| tag.id == "0x013F")
+            .expect("PrimaryChromaticities (0x013F) should exist");
+
+        assert_eq!(primary_chromaticities.name, "PrimaryChromaticities");
+        assert!(primary_chromaticities.writable);
+        assert_eq!(
+            primary_chromaticities.type_name.as_deref(),
+            Some("rational64u")
+        );
+    }
 }

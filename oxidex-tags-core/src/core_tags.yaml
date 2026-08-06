@@ -575,7 +575,8 @@ tables:
         description: "WhitePoint tag"
       - id: "0x013F"
         name: "PrimaryChromaticities"
-        writable: false
+        writable: true
+        type: rational64u
         description: "PrimaryChromaticities tag"
       - id: "0x0140"
         name: "ColorMap"
