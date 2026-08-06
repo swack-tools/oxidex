@@ -134,7 +134,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `GPS:GPSDestLongitude` | `GPS:GPSDestLongitude` | — | `122.4194` |
 | `GPS:GPSDestLongitudeRef` | `GPS:GPSDestLongitudeRef` | ⚠️ `-GPS:GPSDestLongitudeRef=` | `W` |
 | `GPS:GPSDifferential` | `GPS:GPSDifferential` | ⚠️ `-GPS:GPSDifferential=` | `No Correction` |
-| `GPS:GPSHPositioningError` | `GPS:GPSHPositioningError` | ⚠️ `-GPS:GPSHPositioningError=` | `1.5` |
+| `GPS:GPSHPositioningError` | `GPS:GPSHPositioningError` | ✅ `-GPS:GPSHPositioningError=` | `1.5` |
 | `GPS:GPSImgDirection` | `GPS:GPSImgDirection` | ⚠️ `-GPS:GPSImgDirection=` | `1.5` |
 | `GPS:GPSImgDirectionRef` | `GPS:GPSImgDirectionRef` | ⚠️ `-GPS:GPSImgDirectionRef=` | `Magnetic North` |
 | `GPS:GPSLatitude` | `GPS:GPSLatitude` | — | `37.7749` |

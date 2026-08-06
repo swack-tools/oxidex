@@ -19,8 +19,8 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | ❌ Unsupported | 1890 |
 | ❔ Untestable | 221 |
 | 🐛 Read OK, write broken | 170 |
-| ✅ Full (read + write) | 99 |
-| ⚠️ Full (write non-standard encoding) | 81 |
+| ✅ Full (read + write) | 100 |
+| ⚠️ Full (write non-standard encoding) | 80 |
 | 🐛 Read broken | 9 |
 | 🚫 Not writable in ExifTool (no synthetic sample possible; untested) | 585 |
 
@@ -31,7 +31,7 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | All | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
 | ExifIFD | 46 | 7 | 27 | 6 | 0 | 4 | 100 | 203 |
 | File | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
-| GPS | 0 | 2 | 7 | 0 | 0 | 0 | 0 | 32 |
+| GPS | 1 | 2 | 7 | 0 | 0 | 0 | 0 | 32 |
 | GSpherical | 0 | 0 | 0 | 0 | 0 | 0 | 16 | 16 |
 | IFD0 | 53 | 0 | 54 | 0 | 0 | 0 | 17 | 169 |
 | IFD1 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
@@ -395,7 +395,7 @@ references are into this repo.
 | `GPSDestLongitude` | ✅ ok | 🐛 broken: interop (exiftool can't read it) | `122.4194` |
 | `GPSDestLongitudeRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `W` |
 | `GPSDifferential` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `No Correction` |
-| `GPSHPositioningError` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `GPSHPositioningError` | ✅ ok | ✅ ok | `1.5` |
 | `GPSImgDirection` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `GPSImgDirectionRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `Magnetic North` |
 | `GPSLatitude` | ✅ ok | 🐛 broken: interop (exiftool can't read it) | `37.7749` |
