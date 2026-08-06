@@ -25,6 +25,7 @@
 //! ```
 
 use crate::core::formatters::decode_gps_processing_method;
+use crate::core::formatters::exiftool_rational_number;
 use crate::core::metadata_map::MetadataMap;
 use crate::core::tag_value::TagValue;
 use crate::core::value_formatter::format_gps_reference;
@@ -529,7 +530,9 @@ fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String {
             numerator,
             denominator,
         } => {
-            if *denominator == 1 {
+            if tag_name == "GPS:GPSDOP" && *denominator != 0 {
+                exiftool_rational_number(*numerator as f64 / *denominator as f64)
+            } else if *denominator == 1 {
                 numerator.to_string()
             } else if *denominator == 0 {
                 "0".to_string()
@@ -571,6 +574,12 @@ fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
         TagValue::String(s) => s.clone(),
         TagValue::Integer(i) => i.to_string(),
         TagValue::Float(f) => f.to_string(),
+        TagValue::Rational {
+            numerator,
+            denominator,
+        } if tag_name == "GPS:GPSDOP" && *denominator != 0 => {
+            exiftool_rational_number(*numerator as f64 / *denominator as f64)
+        }
         TagValue::Rational {
             numerator,
             denominator,
@@ -994,6 +1003,16 @@ mod tests {
     fn test_format_tag_value_rational() {
         let value = TagValue::new_rational(1, 125);
         assert_eq!(format_tag_value("EXIF:ExposureTime", &value), "1/125");
+    }
+
+    #[test]
+    fn gps_dop_uses_exiftool_decimal_rendering() {
+        // ExifTool 13.59 GPS.pm declares GPSDOP as rational64u without a
+        // PrintConv. GetRational64u renders the quotient, not the stored
+        // numerator/denominator pair: 3/2 is displayed as 1.5.
+        let value = TagValue::new_rational(3, 2);
+        assert_eq!(format_tag_value("GPS:GPSDOP", &value), "1.5");
+        assert_eq!(format_tag_value_short("GPS:GPSDOP", &value), "1.5");
     }
 
     #[test]
