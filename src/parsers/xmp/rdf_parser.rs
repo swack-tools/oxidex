@@ -6013,14 +6013,14 @@ mod top_level_struct_tests {
         assert_eq!(
             tags.iter()
                 .find(|(tag, _)| tag == "XMP:StructList2Item1")
-                .map(|(_, value)| value.as_str()),
-            Some("c1-1")
+                .map(|(_, values)| values.as_slice()),
+            Some(["c1-1".to_string()].as_slice())
         );
         assert_eq!(
             tags.iter()
                 .find(|(tag, _)| tag == "XMP:StructList2Item2")
-                .map(|(_, value)| value.as_str()),
-            Some("c2-1")
+                .map(|(_, values)| values.as_slice()),
+            Some(["c2-1".to_string()].as_slice())
         );
     }
 
