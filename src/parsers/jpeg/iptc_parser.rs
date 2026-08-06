@@ -111,6 +111,15 @@ fn parse_image_resource_block(input: &[u8]) -> IResult<&[u8], ImageResourceBlock
     // Parse data
     let (input, data) = take(data_size as usize)(input)?;
 
+    // Photoshop pads every odd-length resource payload to an even boundary.
+    // Consume that byte before returning the next resource, exactly as
+    // Photoshop.pm's resource loop advances its cursor.
+    let (input, _) = if data_size % 2 == 1 && !input.is_empty() {
+        take(1usize)(input)?
+    } else {
+        (input, &b""[..])
+    };
+
     Ok((input, ImageResourceBlock { id, name, data }))
 }
 
@@ -750,6 +759,34 @@ pub fn collapse_iptc_entries(entries: Vec<(u8, u8, String, String)>) -> Vec<(Str
 /// lists. See [`extract_iptc_from_segments`] for the string-valued variant.
 pub fn extract_iptc_values_from_segments(segments: &[Segment]) -> Result<Vec<(String, TagValue)>> {
     Ok(collapse_iptc_entries(iptc_entries_from_segments(segments)))
+}
+
+/// Returns ExifTool's `CurrentIPTCDigest` for the first standard JPEG IPTC
+/// resource.
+///
+/// IPTC.pm calculates this MD5 over the original IIM bytes in the APP13
+/// Photoshop resource, before parsing or converting any individual datasets.
+/// The first resource wins because ExifTool records only one standard IPTC
+/// directory per file.
+pub fn current_iptc_digest_from_segments(segments: &[Segment]) -> Option<String> {
+    for segment in segments {
+        if segment.marker != APP13_MARKER || !segment.data.starts_with(PHOTOSHOP_SIGNATURE) {
+            continue;
+        }
+
+        let mut current = &segment.data[PHOTOSHOP_SIGNATURE.len()..];
+        while current.len() > 4 {
+            let Ok((remaining, block)) = parse_image_resource_block(current) else {
+                break;
+            };
+            if block.id == IPTC_RESOURCE_ID {
+                return Some(format!("{:x}", md5::compute(block.data)));
+            }
+            current = remaining;
+        }
+    }
+
+    None
 }
 
 /// Extracts IPTC metadata from JPEG segments.

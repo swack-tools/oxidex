@@ -405,6 +405,12 @@ pub fn process_xmp_segments(segments: &[Segment], metadata: &mut MetadataMap) {
 /// * `segments` - Parsed JPEG segments
 /// * `metadata` - MetadataMap to populate with IPTC tags
 pub fn process_iptc_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    if let Some(digest) =
+        crate::parsers::jpeg::iptc_parser::current_iptc_digest_from_segments(segments)
+    {
+        metadata.insert("File:CurrentIPTCDigest", TagValue::new_string(digest));
+    }
+
     match crate::parsers::jpeg::iptc_parser::extract_iptc_values_from_segments(segments) {
         Ok(iptc_tags) => {
             // Add all IPTC tags to metadata. Keywords and
@@ -2075,6 +2081,66 @@ mod tests {
         assert_eq!(
             metadata.get("IPTC:ReferenceNumber"),
             Some(&TagValue::new_string("0042"))
+        );
+    }
+
+    /// ExifTool's IPTC.pm calculates `CurrentIPTCDigest` from the exact bytes
+    /// in the standard APP13 Photoshop IPTC resource, not from decoded values.
+    #[test]
+    fn process_iptc_segments_reports_current_iptc_digest() {
+        const APP13_MARKER: u16 = 0xFFED;
+        const PHOTOSHOP_SIGNATURE: &[u8] = b"Photoshop 3.0\0";
+
+        let mut app13_data = Vec::new();
+        app13_data.extend_from_slice(PHOTOSHOP_SIGNATURE);
+        app13_data.extend_from_slice(b"8BIM");
+        app13_data.extend_from_slice(&[0x04, 0x04]); // resource ID: IPTC
+        app13_data.extend_from_slice(&[0x00, 0x00]); // empty name and padding
+
+        let iptc_data = b"\x1c\x02\x05\x00\x04Rust";
+        app13_data.extend_from_slice(&(iptc_data.len() as u32).to_be_bytes());
+        app13_data.extend_from_slice(iptc_data);
+        app13_data.push(0); // required resource padding for the odd-length payload
+
+        let segment = Segment::new(APP13_MARKER, 0, &app13_data);
+        let mut metadata = MetadataMap::new();
+        process_iptc_segments(&[segment], &mut metadata);
+
+        assert_eq!(
+            metadata.get_string("File:CurrentIPTCDigest"),
+            Some("b03d5c713884f15f88d6429c6c7bd683")
+        );
+    }
+
+    #[test]
+    fn process_iptc_segments_finds_digest_after_odd_length_resource() {
+        const APP13_MARKER: u16 = 0xFFED;
+        const PHOTOSHOP_SIGNATURE: &[u8] = b"Photoshop 3.0\0";
+
+        let mut app13_data = Vec::new();
+        app13_data.extend_from_slice(PHOTOSHOP_SIGNATURE);
+        app13_data.extend_from_slice(b"8BIM");
+        app13_data.extend_from_slice(&[0x04, 0x0d]);
+        app13_data.extend_from_slice(&[0x00, 0x00]); // empty name and padding
+        app13_data.extend_from_slice(&1u32.to_be_bytes());
+        app13_data.push(30); // odd-length payload
+        app13_data.push(0); // required resource padding
+        app13_data.extend_from_slice(b"8BIM");
+        app13_data.extend_from_slice(&[0x04, 0x04]); // resource ID: IPTC
+        app13_data.extend_from_slice(&[0x00, 0x00]); // empty name and padding
+
+        let iptc_data = b"\x1c\x02\x05\x00\x04Rust";
+        app13_data.extend_from_slice(&(iptc_data.len() as u32).to_be_bytes());
+        app13_data.extend_from_slice(iptc_data);
+        app13_data.push(0); // required resource padding for the odd-length payload
+
+        let segment = Segment::new(APP13_MARKER, 0, &app13_data);
+        let mut metadata = MetadataMap::new();
+        process_iptc_segments(&[segment], &mut metadata);
+
+        assert_eq!(
+            metadata.get_string("File:CurrentIPTCDigest"),
+            Some("b03d5c713884f15f88d6429c6c7bd683")
         );
     }
 
