@@ -708,6 +708,18 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
         ));
     }
 
+    // Exif.pm `%longBin` leaves ProfileToneCurve's decoded float list visible
+    // only when its textual payload is at most 64 bytes.
+    if base_name == "ProfileToneCurve"
+        && let Some(payload) = value.as_string()
+        && payload.len() > 64
+    {
+        return TagValue::String(format!(
+            "(Binary data {} bytes, use -b option to extract)",
+            payload.len()
+        ));
+    }
+
     // ---------------------------------------------------------------------
     // Rule 15: Percentage Tags (Quality, MeasurementFlare)
     // Append "%" suffix to numeric values representing percentages
@@ -2909,6 +2921,20 @@ mod tests {
         assert_eq!(
             formatted.as_string(),
             Some("(Binary data 5 bytes, use -b option to extract)")
+        );
+    }
+
+    #[test]
+    fn profile_tone_curve_keeps_short_payloads_and_hides_long_ones() {
+        assert_eq!(
+            format_tag_value("EXIF:ProfileToneCurve", &TagValue::new_string("0 1")).as_string(),
+            Some("0 1")
+        );
+        let payload = "0 0.0625 0.125 0.1875 0.25 0.3125 0.375 0.4375 0.5 0.5625 0.625 0.6875 0.75 0.8125 0.875 0.9375 1";
+        assert_eq!(payload.len(), 97);
+        assert_eq!(
+            format_tag_value("EXIF:ProfileToneCurve", &TagValue::new_string(payload)).as_string(),
+            Some("(Binary data 97 bytes, use -b option to extract)")
         );
     }
 
