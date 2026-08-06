@@ -895,7 +895,8 @@ tables:
         description: "ExposureProgram tag"
       - id: "0x8824"
         name: "SpectralSensitivity"
-        writable: false
+        writable: true
+        type: string
         description: "SpectralSensitivity tag"
       - id: "0x8825"
         name: "GPSInfo"
