@@ -108,19 +108,10 @@ pub fn tiff_enum_to_string(tag_id: u16, value: i64) -> Option<String> {
             _ => None,
         },
 
-        // NewSubfileType (tag 0x00FE) - the standard SubfileType tag
-        // Note: OldSubfileType is 0x00FF (deprecated, uses different bitmask values)
-        0x00FE => match value {
-            0 => Some("Full-resolution image".to_string()),
-            1 => Some("Reduced-resolution image".to_string()),
-            2 => Some("Single page of multi-page image".to_string()),
-            3 => Some("Single page of multi-page reduced-resolution image".to_string()),
-            4 => Some("Transparency mask".to_string()),
-            5 => Some("Transparency mask of reduced-resolution image".to_string()),
-            6 => Some("Transparency mask of multi-page image".to_string()),
-            7 => Some("Transparency mask of reduced-resolution multi-page image".to_string()),
-            _ => None,
-        },
+        // TIFF calls tag 0x00fe NewSubfileType, but ExifTool calls it
+        // SubfileType. Its PrintConv includes both DNG additions and a
+        // bitmask fallback for combinations not listed explicitly.
+        0x00FE => new_subfile_type_label(value),
 
         // Predictor (tag 0x013D)
         0x013D => match value {
@@ -355,6 +346,46 @@ pub fn tiff_enum_to_string(tag_id: u16, value: i64) -> Option<String> {
     }
 }
 
+/// Formats TIFF NewSubfileType (0x00fe) exactly as ExifTool 13.59's
+/// `%subfileType` PrintConv table.
+fn new_subfile_type_label(value: i64) -> Option<String> {
+    match value {
+        0 => return Some("Full-resolution image".to_string()),
+        1 => return Some("Reduced-resolution image".to_string()),
+        2 => return Some("Single page of multi-page image".to_string()),
+        3 => return Some("Single page of multi-page reduced-resolution image".to_string()),
+        4 => return Some("Transparency mask".to_string()),
+        5 => return Some("Transparency mask of reduced-resolution image".to_string()),
+        6 => return Some("Transparency mask of multi-page image".to_string()),
+        7 => return Some("Transparency mask of reduced-resolution multi-page image".to_string()),
+        8 => return Some("Depth map".to_string()),
+        9 => return Some("Depth map of reduced-resolution image".to_string()),
+        16 => return Some("Enhanced image data".to_string()),
+        0x10001 => return Some("Alternate reduced-resolution image".to_string()),
+        0x10004 => return Some("Semantic Mask".to_string()),
+        0xffff_ffff => return Some("invalid".to_string()),
+        _ => {}
+    }
+
+    let value = u32::try_from(value).ok()?;
+    let mut labels = Vec::new();
+    for bit in 0..u32::BITS {
+        if value & (1 << bit) == 0 {
+            continue;
+        }
+        let label = match bit {
+            0 => "Reduced resolution".to_string(),
+            1 => "Single page".to_string(),
+            2 => "Transparency mask".to_string(),
+            3 => "TIFF/IT final page".to_string(),
+            4 => "TIFF-FX mixed raster content".to_string(),
+            _ => format!("[{bit}]"),
+        };
+        labels.push(label);
+    }
+    (!labels.is_empty()).then(|| labels.join(", "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::tiff_enum_to_string;
@@ -400,6 +431,56 @@ mod tests {
             );
         }
         assert_eq!(tiff_enum_to_string(0x013D, 34896), None);
+    }
+
+    /// ExifTool 13.59 calls TIFF's `NewSubfileType` tag `SubfileType` and
+    /// gives its DNG additions exact PrintConv labels.  The TIFF enum adapter
+    /// must retain those labels instead of falling back to the raw integers.
+    #[test]
+    fn new_subfile_type_extensions_match_exiftool_13_59() {
+        for (code, label) in [
+            (8i64, "Depth map"),
+            (9, "Depth map of reduced-resolution image"),
+            (16, "Enhanced image data"),
+            (0x10001, "Alternate reduced-resolution image"),
+            (0x10004, "Semantic Mask"),
+            (0xffff_ffff, "invalid"),
+        ] {
+            assert_eq!(
+                tiff_enum_to_string(0x00FE, code).as_deref(),
+                Some(label),
+                "NewSubfileType {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn new_subfile_type_bitmask_values_match_exiftool_13_59() {
+        for (code, label) in [
+            (10i64, "Single page, TIFF/IT final page"),
+            (
+                13,
+                "Reduced resolution, Transparency mask, TIFF/IT final page",
+            ),
+            (
+                19,
+                "Reduced resolution, Single page, TIFF-FX mixed raster content",
+            ),
+            (32, "[5]"),
+            (33, "Reduced resolution, [5]"),
+            (
+                0xffff_fffe,
+                "Single page, Transparency mask, TIFF/IT final page, TIFF-FX mixed raster content, [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15], [16], [17], [18], [19], [20], [21], [22], [23], [24], [25], [26], [27], [28], [29], [30], [31]",
+            ),
+        ] {
+            assert_eq!(
+                tiff_enum_to_string(0x00FE, code).as_deref(),
+                Some(label),
+                "NewSubfileType {code}"
+            );
+        }
+        assert_eq!(tiff_enum_to_string(0x00FE, -1), None);
+        assert_eq!(tiff_enum_to_string(0x00FE, 0x1_0000_0000), None);
     }
 
     /// Compression (0x0103) now resolves through the one
