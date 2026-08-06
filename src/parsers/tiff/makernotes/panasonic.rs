@@ -733,6 +733,17 @@ impl PanasonicParser {
         // Special handling for string tags (must read from data buffer)
         // These tags contain text data that needs to be extracted from the makernote
         match tag_id {
+            // DataDump is a Binary undef payload. ExifTool prints its byte
+            // count unless -b is requested, never the payload or offset.
+            0x0021 => {
+                if let Some(bytes) = extract_raw_bytes(entry, data, ifd_offset, data_base, byte_order) {
+                    tags.insert(
+                        "Panasonic:DataDump".to_string(),
+                        crate::cli::output_formatter::binary_placeholder(bytes.len()),
+                    );
+                }
+                return;
+            }
             // Basic info strings.  0x0051 LensType, 0x0052 LensSerialNumber
             // and 0x0053 AccessoryType are all `Writable => 'string'` in
             // %Panasonic::Main (Panasonic.pm:943, :949 and :955) -- there is no
