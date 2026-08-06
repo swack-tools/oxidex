@@ -15,10 +15,10 @@ fn push_segment(jpeg: &mut Vec<u8>, marker: u8, data: &[u8]) {
     jpeg.extend_from_slice(data);
 }
 
-fn samsung_unique_id_jpeg() -> Vec<u8> {
+fn samsung_unique_id_jpeg_with_payload(unique_id: &[u8]) -> Vec<u8> {
     let mut jpeg = vec![0xff, 0xd8];
     let mut app5 = b"ssuniqueid\0".to_vec();
-    app5.extend_from_slice(&UNIQUE_ID_BYTES);
+    app5.extend_from_slice(unique_id);
     push_segment(&mut jpeg, 0xe5, &app5);
     push_segment(
         &mut jpeg,
@@ -28,6 +28,10 @@ fn samsung_unique_id_jpeg() -> Vec<u8> {
     push_segment(&mut jpeg, 0xda, &[0x01, 0x01, 0x00, 0x00, 0x3f, 0x00]);
     jpeg.extend_from_slice(&[0xff, 0xd9]);
     jpeg
+}
+
+fn samsung_unique_id_jpeg() -> Vec<u8> {
+    samsung_unique_id_jpeg_with_payload(&UNIQUE_ID_BYTES)
 }
 
 #[test]
@@ -43,4 +47,19 @@ fn samsung_app5_unique_id_is_lowercase_hex() {
         metadata.get_string("Samsung:UniqueID"),
         Some("3d7a41f08b2c19de6094a53f770ec152be286d0391f44ac815e75b9d206fb30a"),
     );
+}
+
+#[test]
+fn samsung_app5_unique_id_preserves_the_complete_payload() {
+    // ExifTool's Samsung APP5 handler passes every byte following
+    // `ssuniqueid\0` to `unpack("H*", ...)`; it does not require a 32-byte
+    // payload.
+    let mut file = tempfile::NamedTempFile::new().expect("temp file");
+    file.write_all(&samsung_unique_id_jpeg_with_payload(&[0xaa, 0x00, 0xf1]))
+        .expect("write jpeg");
+    file.flush().expect("flush");
+
+    let metadata = Metadata::from_path(file.path()).expect("Samsung JPEG parses");
+
+    assert_eq!(metadata.get_string("Samsung:UniqueID"), Some("aa00f1"));
 }

@@ -1345,15 +1345,11 @@ const APP9_MARKER: u16 = 0xFFE9;
 /// `unpack("H*", $val)`.  Hex encoding produces the same lowercase rendering.
 pub fn process_samsung_unique_id_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     const SAMSUNG_UNIQUE_ID_PREFIX: &[u8] = b"ssuniqueid\0";
-    const UNIQUE_ID_LENGTH: usize = 32;
 
     for segment in segments.iter().filter(|s| s.marker == APP5_MARKER) {
         let Some(unique_id) = segment.data.strip_prefix(SAMSUNG_UNIQUE_ID_PREFIX) else {
             continue;
         };
-        if unique_id.len() != UNIQUE_ID_LENGTH {
-            continue;
-        }
         metadata.insert(
             "Samsung:UniqueID".to_string(),
             TagValue::new_string(hex::encode(unique_id)),
