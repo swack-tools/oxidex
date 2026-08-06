@@ -316,6 +316,12 @@ fn tag_value_to_field_for_key(
     value: &TagValue,
     hint: Option<u16>,
 ) -> Result<(u16, u32, Vec<u8>)> {
+    // Exif.pm 13.59 declares TileWidth (0x0142) as int32u. Do not let the
+    // generic smallest-fit integer encoding downcast a newly created tag to
+    // SHORT merely because its current value fits in 16 bits.
+    if matches!(key, "IFD0:TileWidth" | "EXIF:TileWidth") {
+        return tag_value_to_field(value, Some(4));
+    }
     if matches!(
         key,
         "GPS:GPSLongitude" | "GPS:GPSDestLatitude" | "GPS:GPSDestLongitude"
@@ -2127,6 +2133,31 @@ mod tests {
         let (field_type_none, _, _) = tag_value_to_field(&TagValue::new_integer(5), None).unwrap();
         assert_eq!(field_type_none, 3, "no hint: smallest-fit still applies");
         let _ = (scan, original); // silence unused if not otherwise referenced
+    }
+
+    #[test]
+    fn plan_adds_tile_width_as_declared_int32u() {
+        // Exif.pm 13.59 declares IFD0 0x0142 as Writable => 'int32u'.
+        // Even a small value must therefore be LONG, not the generic
+        // smallest-fit SHORT selected for an untyped integer addition.
+        let scan = ExifScan {
+            byte_order: ByteOrder::LittleEndian,
+            entries: Vec::new(),
+            thumbnail: None,
+            makernote_offset: None,
+        };
+        let original = MetadataMap::new();
+        let mut desired = MetadataMap::new();
+        desired.insert("IFD0:TileWidth", TagValue::new_integer(3));
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let tile_width = plan
+            .ifd0
+            .iter()
+            .find(|entry| entry.tag_id == 0x0142)
+            .unwrap();
+        assert_eq!(tile_width.field_type, 4);
+        assert_eq!(tile_width.count, 1);
     }
 
     /// `TagValue::Float` is an f64 and TIFF has two IEEE 754 widths, so the
