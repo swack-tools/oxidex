@@ -67,6 +67,19 @@ const RATIONAL_MAX: i64 = 0x7fff_ffff;
 /// through as a string; the write path validates those with intrinsic checks
 /// only (`core::validation::validate_tag_value_intrinsics`).
 pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
+    let declared_tag_name = match tag_name {
+        "GPSDestBearing" => "GPS:GPSDestBearing",
+        "DateTimeOriginal" => "EXIF:DateTimeOriginal",
+        "CreateDate" => "ExifIFD:CreateDate",
+        "ExposureTime" => "EXIF:ExposureTime",
+        "BrightnessValue" => "EXIF:BrightnessValue",
+        "MeteringMode" => "EXIF:MeteringMode",
+        "ShutterSpeedValue" => "ExifIFD:ShutterSpeedValue",
+        "ApertureValue" => "EXIF:ApertureValue",
+        "Flash" => "ExifIFD:Flash",
+        _ => tag_name,
+    };
+
     // GPS.pm 0x001c applies EncodeExifText as its RawConvInv. With the default
     // CharsetEXIF this is the eight-byte ASCII identifier followed by the
     // caller's text; the TIFF field itself remains UNDEFINED.
@@ -89,6 +102,14 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         });
     }
 
+    let raw = if matches!(
+        tag_name,
+        "GPSLatitudeRef" | "GPS:GPSLatitudeRef" | "GPSDestLatitudeRef" | "GPS:GPSDestLatitudeRef"
+    ) {
+        invert_gps_latitude_ref(tag_name, raw)?
+    } else {
+        raw
+    };
     // GPS.pm 0x000a: the TIFF value is ASCII "2" or "3", while ExifTool's
     // PrintConv exposes the corresponding measurement label.  Writer.pl
     // applies that PrintConvInv before its generic string check.
@@ -111,15 +132,40 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         ("EXIF:YCbCrPositioning", "Co-sited") => "2",
         _ => raw,
     };
-    let declared = get_tag_descriptor(tag_name)
-        .filter(|_| has_reliable_value_type(tag_name))
+    let raw = if declared_tag_name.rsplit(':').next() == Some("MeteringMode") {
+        match raw {
+            "Unknown" => "0",
+            "Average" => "1",
+            "Center-weighted average" => "2",
+            "Spot" => "3",
+            "Multi-spot" => "4",
+            "Multi-segment" => "5",
+            "Partial" => "6",
+            "Other" => "255",
+            _ => raw,
+        }
+    } else {
+        raw
+    };
+    let declared = get_tag_descriptor(declared_tag_name)
+        .filter(|_| has_reliable_value_type(declared_tag_name))
         .map(|descriptor| descriptor.value_type());
 
     match declared {
         None | Some(ValueType::String) => Ok(TagValue::String(raw.to_string())),
+        Some(ValueType::Integer) if declared_tag_name.rsplit(':').next() == Some("Flash") => {
+            crate::core::formatters::exif_enums::parse_flash_label(raw)
+                .map(TagValue::Integer)
+                .ok_or_else(|| invalid(tag_name, "Can't convert Flash value (not in PrintConv)"))
+        }
         Some(ValueType::Integer) => Ok(TagValue::Integer(parse_integer(tag_name, raw)?)),
         Some(ValueType::Float) => Ok(TagValue::Float(parse_float(tag_name, raw)?)),
-        Some(ValueType::Rational) => parse_rational(tag_name, raw),
+        Some(ValueType::Rational)
+            if declared_tag_name.rsplit(':').next() == Some("ShutterSpeedValue") =>
+        {
+            parse_shutter_speed_value(tag_name, raw)
+        }
+        Some(ValueType::Rational) => parse_rational(declared_tag_name, raw),
         Some(ValueType::DateTime) => parse_datetime(tag_name, raw),
         // ExifTool's `undef` format imposes no shape on the value and stores
         // the argument's bytes verbatim (`Writer.pl:6847-6858`).
@@ -132,6 +178,35 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
             "Structured values cannot be set from the command line",
         )),
     }
+}
+
+fn invert_gps_latitude_ref<'a>(tag_name: &str, raw: &'a str) -> Result<&'a str> {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    static CARDINAL: OnceLock<Regex> = OnceLock::new();
+    static NUMBER: OnceLock<Regex> = OnceLock::new();
+    let cardinal = CARDINAL.get_or_init(|| {
+        Regex::new(r"(?i)(^|[^A-Z])([NS])(orth|outh)?\b").expect("valid GPS latitude regex")
+    });
+    if let Some(captures) = cardinal.captures(raw) {
+        return Ok(if captures[2].eq_ignore_ascii_case("S") {
+            "S"
+        } else {
+            "N"
+        });
+    }
+
+    let number =
+        NUMBER.get_or_init(|| Regex::new(r"([-+]?)\d+").expect("valid signed-number regex"));
+    if let Some(captures) = number.captures(raw) {
+        return Ok(if &captures[1] == "-" { "S" } else { "N" });
+    }
+
+    Err(invalid(
+        tag_name,
+        "GPSLatitudeRef must contain N/North, S/South, or a signed number",
+    ))
 }
 
 fn invalid(tag_name: &str, reason: impl Into<String>) -> ExifToolError {
@@ -285,6 +360,28 @@ fn parse_float(tag_name: &str, raw: &str) -> Result<f64> {
 /// `CheckValue`'s `rational` branch (`Writer.pl:6888-6903`) followed by
 /// `Rationalize` (`Writer.pl:5200-5228`).
 fn parse_rational(tag_name: &str, raw: &str) -> Result<TagValue> {
+    // Exif.pm 13.59 0x9202 stores APEX but accepts the displayed F-number:
+    // ValueConvInv => '$val>0 ? 2*log($val)/log(2) : 0'. Apply this before
+    // the generic rational cases because ExifTool rejects fractions, `inf`
+    // and `undef` here rather than storing them directly.
+    if tag_name.rsplit_once(':').map_or(tag_name, |(_, name)| name) == "ApertureValue" {
+        let text =
+            as_float_text(raw).ok_or_else(|| invalid(tag_name, "Not a floating point number"))?;
+        let f_number: f64 = text
+            .parse()
+            .map_err(|_| invalid(tag_name, "Not a floating point number"))?;
+        let apex = if f_number > 0.0 {
+            2.0 * f_number.ln() / 2.0_f64.ln()
+        } else {
+            0.0
+        };
+        let (numerator, denominator) = rationalize(apex, RATIONAL_MAX);
+        return Ok(TagValue::Rational {
+            numerator: numerator as i32,
+            denominator: denominator as i32,
+        });
+    }
+
     // Writer.pl:5203-5204 — 'inf' is 1/0 and 'undef' is 0/0.
     if raw == "inf" {
         return Ok(TagValue::Rational {
@@ -383,6 +480,33 @@ fn gcd_i64(mut left: i64, mut right: i64) -> i64 {
         (left, right) = (right, left % right);
     }
     left.max(1)
+}
+
+/// Inverts Exif.pm 0x9201's display conversions before storing the signed
+/// APEX rational. `1/125` is an exposure time in seconds, not the literal
+/// value written to TIFF: PrintConvInv converts the fraction to 0.008, then
+/// ValueConvInv computes `-log2(0.008)`.
+fn parse_shutter_speed_value(tag_name: &str, raw: &str) -> Result<TagValue> {
+    let seconds = if let Some((numerator, denominator)) = as_fraction(raw) {
+        if denominator == 0 {
+            return Err(invalid(tag_name, "Not a floating point number"));
+        }
+        numerator as f64 / denominator as f64
+    } else {
+        as_float_text(raw)
+            .and_then(|text| text.parse::<f64>().ok())
+            .ok_or_else(|| invalid(tag_name, "Not a floating point number"))?
+    };
+    let apex = if seconds > 0.0 {
+        -seconds.log2()
+    } else {
+        -100.0
+    };
+    let (numerator, denominator) = rationalize(apex, RATIONAL_MAX);
+    Ok(TagValue::Rational {
+        numerator: numerator as i32,
+        denominator: denominator as i32,
+    })
 }
 
 /// `AssembleRational` — `Writer.pl:5182-5187`.
@@ -681,6 +805,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn flash_uses_its_print_conversion_inverse() {
+        assert_eq!(parse("Flash", "Fired").unwrap(), TagValue::Integer(1));
+        assert_eq!(
+            parse("ExifIFD:Flash", "Auto, Did not fire").unwrap(),
+            TagValue::Integer(0x18)
+        );
+        assert_eq!(
+            parse("EXIF:Flash", "Unknown (0x38)").unwrap(),
+            TagValue::Integer(0x38)
+        );
+        assert!(parse("Flash", "25").is_err());
+    }
+
     // -- Rational, Writer.pl:6888-6903 + 5200-5228 --------------------------
 
     #[test]
@@ -760,6 +898,86 @@ mod tests {
     }
 
     #[test]
+    fn aperture_value_inverts_the_displayed_f_number_to_apex() {
+        for tag in [
+            "EXIF:ApertureValue",
+            "ExifIFD:ApertureValue",
+            "ApertureValue",
+        ] {
+            assert_eq!(
+                parse(tag, "1.5").unwrap(),
+                TagValue::Rational {
+                    numerator: 9515,
+                    denominator: 8133,
+                },
+                "{tag}"
+            );
+        }
+        assert_eq!(
+            parse("EXIF:ApertureValue", "0").unwrap(),
+            TagValue::Rational {
+                numerator: 0,
+                denominator: 1,
+            }
+        );
+        assert!(parse("EXIF:ApertureValue", "3/2").is_err());
+    }
+
+    #[test]
+    fn bare_exposure_time_uses_the_canonical_rational_declaration() {
+        assert_eq!(
+            parse("ExposureTime", "1/4").unwrap(),
+            TagValue::Rational {
+                numerator: 1,
+                denominator: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn bare_brightness_value_uses_the_canonical_signed_rational_declaration() {
+        assert_eq!(
+            parse("BrightnessValue", "-2.5").unwrap(),
+            TagValue::Rational {
+                numerator: -5,
+                denominator: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn metering_mode_uses_the_declared_print_conversion_inverse() {
+        assert_eq!(parse("MeteringMode", "Spot").unwrap(), TagValue::Integer(3));
+        assert_eq!(
+            parse("ExifIFD:MeteringMode", "Multi-segment").unwrap(),
+            TagValue::Integer(5)
+        );
+        assert_eq!(
+            parse("EXIF:MeteringMode", "255").unwrap(),
+            TagValue::Integer(255)
+        );
+    }
+
+    #[test]
+    fn shutter_speed_value_inverts_seconds_to_stored_apex() {
+        // ExifTool 13.59 stores `-ShutterSpeedValue=1/125` as 49471/7102.
+        assert_eq!(
+            parse("ShutterSpeedValue", "1/125").unwrap(),
+            TagValue::Rational {
+                numerator: 49_471,
+                denominator: 7_102,
+            }
+        );
+        assert_eq!(
+            parse("ExifIFD:ShutterSpeedValue", "0").unwrap(),
+            TagValue::Rational {
+                numerator: -100,
+                denominator: 1,
+            }
+        );
+    }
+
+    #[test]
     fn rational_rejects_non_numeric() {
         let err = parse("EXIF:FNumber", "abc").unwrap_err().to_string();
         assert!(err.contains("Not a floating point number"), "{err}");
@@ -830,6 +1048,17 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn bare_create_date_uses_its_declared_datetime_type() {
+        let TagValue::DateTime(dt) = parse("CreateDate", "2024:02:03 04:05:06").unwrap() else {
+            panic!("bare CreateDate did not parse as DateTime");
+        };
+        assert_eq!(
+            crate::core::date_shift::format_exif_datetime(&dt),
+            "2024:02:03 04:05:06"
+        );
+    }
+
     // -- String / unknown tags ---------------------------------------------
 
     #[test]
@@ -861,6 +1090,49 @@ mod tests {
             TagValue::Rational {
                 numerator: 377_749,
                 denominator: 10_000,
+            }
+        );
+    }
+
+    #[test]
+    fn gps_latitude_ref_uses_the_declared_print_conversion_inverse() {
+        assert_eq!(
+            parse("GPS:GPSLatitudeRef", "South").unwrap(),
+            TagValue::String("S".to_string())
+        );
+        assert_eq!(
+            parse("GPSLatitudeRef", "12.5").unwrap(),
+            TagValue::String("N".to_string())
+        );
+        assert_eq!(
+            parse("GPSLatitudeRef", "-12.5").unwrap(),
+            TagValue::String("S".to_string())
+        );
+    }
+
+    #[test]
+    fn gps_dest_latitude_ref_uses_the_declared_print_conversion_inverse() {
+        assert_eq!(
+            parse("GPS:GPSDestLatitudeRef", "South").unwrap(),
+            TagValue::String("S".to_string())
+        );
+        assert_eq!(
+            parse("GPSDestLatitudeRef", "+12.5").unwrap(),
+            TagValue::String("N".to_string())
+        );
+        assert_eq!(
+            parse("GPSDestLatitudeRef", "-12.5").unwrap(),
+            TagValue::String("S".to_string())
+        );
+    }
+
+    #[test]
+    fn bare_gps_dest_bearing_uses_its_declared_rational_type() {
+        assert_eq!(
+            parse("GPSDestBearing", "90.5").unwrap(),
+            TagValue::Rational {
+                numerator: 181,
+                denominator: 2,
             }
         );
     }

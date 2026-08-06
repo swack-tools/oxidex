@@ -1025,7 +1025,7 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
         ("GPS", "GPSDateTime") => Computed::same(format!("{} {}Z", get(i, 0)?, get(i, 1)?)),
 
         // GPS.pm signed-coordinate ValueConv and default ToDMS PrintConv.
-        ("GPS", "GPSLatitude" | "GPSLongitude") => {
+        ("GPS", "GPSLatitude" | "GPSLongitude" | "GPSDestLongitude") => {
             let coordinate = get(i, 0)?;
             if coordinate.is_empty() {
                 return Computed::same("");
@@ -1648,6 +1648,14 @@ mod tests {
         );
         assert_eq!(
             gps("GPSLongitude", &[Some("1 deg 54' 51.00\""), Some("west")]).as_deref(),
+            Some("1 deg 54' 51.00\" W")
+        );
+        assert_eq!(
+            gps(
+                "GPSDestLongitude",
+                &[Some("1 deg 54' 51.00\""), Some("west")]
+            )
+            .as_deref(),
             Some("1 deg 54' 51.00\" W")
         );
         assert_eq!(

@@ -222,7 +222,7 @@ pub(crate) fn tag_value_to_field(
             numerator,
             denominator,
         } => {
-            if *numerator >= 0 && *denominator >= 0 {
+            if hint != Some(10) && *numerator >= 0 && *denominator >= 0 {
                 let mut b = (*numerator as u32).to_ne_bytes().to_vec();
                 b.extend_from_slice(&(*denominator as u32).to_ne_bytes());
                 Ok((5, 1, b))
@@ -316,6 +316,11 @@ fn tag_value_to_field_for_key(
     value: &TagValue,
     hint: Option<u16>,
 ) -> Result<(u16, u32, Vec<u8>)> {
+    let hint = if key.rsplit(':').next() == Some("ShutterSpeedValue") {
+        Some(10) // Exif.pm 0x9201 declares rational64s
+    } else {
+        hint
+    };
     // Exif.pm 13.59 declares TileWidth (0x0142) as int32u. Do not let the
     // generic smallest-fit integer encoding downcast a newly created tag to
     // SHORT merely because its current value fits in 16 bits.
@@ -437,6 +442,30 @@ pub fn plan_exif_write(
             desired.insert("GPS:GPSLatitudeRef", TagValue::new_string(raw));
         }
     }
+    // GPS.pm (ExifTool 13.59) stores GPSDestLongitudeRef as E/W while
+    // exposing East/West through PrintConv. Restore the raw code on writes.
+    if let Some(TagValue::String(value)) = desired.get("GPS:GPSDestLongitudeRef") {
+        let raw = match value.as_str() {
+            "East" => Some("E"),
+            "West" => Some("W"),
+            _ => None,
+        };
+        if let Some(raw) = raw {
+            desired.insert("GPS:GPSDestLongitudeRef", TagValue::new_string(raw));
+        }
+    }
+    // GPS.pm (ExifTool 13.59) stores GPSLongitudeRef as E/W while exposing
+    // East/West through PrintConv. Restore the declared raw code on writes.
+    if let Some(TagValue::String(value)) = desired.get("GPS:GPSLongitudeRef") {
+        let raw = match value.as_str() {
+            "East" => Some("E"),
+            "West" => Some("W"),
+            _ => None,
+        };
+        if let Some(raw) = raw {
+            desired.insert("GPS:GPSLongitudeRef", TagValue::new_string(raw));
+        }
+    }
     // GPS.pm (ExifTool 13.59) declares GPSDestBearingRef's PrintConv as
     // M => "Magnetic North", T => "True North". The CLI supplies that
     // display value, but TIFF stores the one-byte code; invert this one
@@ -451,27 +480,16 @@ pub fn plan_exif_write(
             desired.insert("GPS:GPSDestBearingRef", TagValue::new_string(raw));
         }
     }
-    if let Some(TagValue::String(value)) = desired.get("GPS:GPSImgDirectionRef") {
+    // GPS.pm uses the same direction-reference PrintConv for GPSTrackRef.
+    // Restore its one-byte stored code when the CLI supplies the display label.
+    if let Some(TagValue::String(value)) = desired.get("GPS:GPSTrackRef") {
         let raw = match value.as_str() {
             "Magnetic North" => Some("M"),
             "True North" => Some("T"),
             _ => None,
         };
         if let Some(raw) = raw {
-            desired.insert("GPS:GPSImgDirectionRef", TagValue::new_string(raw));
-        }
-    }
-    // GPS.pm (ExifTool 13.59) maps GPSSpeedRef's raw one-byte codes to
-    // user-facing units. Store the declared raw code, never the display label.
-    if let Some(TagValue::String(value)) = desired.get("GPS:GPSSpeedRef") {
-        let raw = match value.as_str() {
-            "km/h" => Some("K"),
-            "mph" => Some("M"),
-            "knots" => Some("N"),
-            _ => None,
-        };
-        if let Some(raw) = raw {
-            desired.insert("GPS:GPSSpeedRef", TagValue::new_string(raw));
+            desired.insert("GPS:GPSTrackRef", TagValue::new_string(raw));
         }
     }
     for entry in &scan.entries {
@@ -1764,6 +1782,38 @@ mod tests {
     }
 
     #[test]
+    fn plan_inverts_gps_longitude_ref_display_value_before_serializing() {
+        // GPS.pm 13.59 maps the raw code W to "West". The writer receives
+        // that display value from the CLI/read map and must restore W\0.
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let mut desired = original.clone();
+        desired.insert("GPS:GPSLongitudeRef", TagValue::new_string("West"));
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let longitude_ref = plan.gps.iter().find(|e| e.tag_id == 0x0003).unwrap();
+        assert_eq!(longitude_ref.field_type, 2);
+        assert_eq!(longitude_ref.count, 2);
+        assert_eq!(longitude_ref.value, b"W\0");
+    }
+
+    #[test]
+    fn plan_inverts_gps_dest_longitude_ref_display_value_before_serializing() {
+        // GPS.pm 13.59 maps the raw code W to "West". Store W\0 when the
+        // caller supplies the display value read from metadata or the CLI.
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let mut desired = original.clone();
+        desired.insert("GPS:GPSDestLongitudeRef", TagValue::new_string("West"));
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let longitude_ref = plan.gps.iter().find(|e| e.tag_id == 0x0015).unwrap();
+        assert_eq!(longitude_ref.field_type, 2);
+        assert_eq!(longitude_ref.count, 2);
+        assert_eq!(longitude_ref.value, b"W\0");
+    }
+
+    #[test]
     fn plan_inverts_gps_dest_bearing_ref_display_value_before_serializing() {
         // ExifTool 13.59 GPS.pm maps the raw GPSDestBearingRef code M to
         // the display value "Magnetic North". A writer must store M, not the
@@ -1784,40 +1834,20 @@ mod tests {
     }
 
     #[test]
-    fn plan_inverts_gps_img_direction_ref_display_value_before_serializing() {
-        // ExifTool 13.59 GPS.pm maps the raw GPSImgDirectionRef code M to
-        // the display value "Magnetic North". A writer must store M, not the
-        // display label, or ExifTool reads it back as an unknown value.
+    fn plan_inverts_gps_track_ref_display_value_before_serializing() {
+        // ExifTool 13.59 GPS.pm maps the raw GPSTrackRef code T to the display
+        // value "True North". Storing the label makes ExifTool report an
+        // unknown value, so the writer must restore the declared raw code.
         let tiff = build_full_tiff(ByteOrder::LittleEndian);
         let (scan, original) = scan_and_maps(&tiff);
         let mut desired = original.clone();
-        desired.insert(
-            "GPS:GPSImgDirectionRef",
-            TagValue::new_string("Magnetic North"),
-        );
+        desired.insert("GPS:GPSTrackRef", TagValue::new_string("True North"));
 
         let plan = plan_exif_write(&scan, &original, &desired).unwrap();
-        let image_direction_ref = plan.gps.iter().find(|e| e.tag_id == 0x0010).unwrap();
-        assert_eq!(image_direction_ref.field_type, 2);
-        assert_eq!(image_direction_ref.count, 2);
-        assert_eq!(image_direction_ref.value, b"M\0");
-    }
-
-    #[test]
-    fn plan_inverts_gps_speed_ref_display_value_before_serializing() {
-        // ExifTool 13.59 GPS.pm maps the raw GPSSpeedRef code K to the
-        // display value "km/h". The TIFF entry must retain the raw code so
-        // ExifTool does not report an unknown value on readback.
-        let tiff = build_full_tiff(ByteOrder::LittleEndian);
-        let (scan, original) = scan_and_maps(&tiff);
-        let mut desired = original.clone();
-        desired.insert("GPS:GPSSpeedRef", TagValue::new_string("km/h"));
-
-        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
-        let speed_ref = plan.gps.iter().find(|e| e.tag_id == 0x000C).unwrap();
-        assert_eq!(speed_ref.field_type, 2);
-        assert_eq!(speed_ref.count, 2);
-        assert_eq!(speed_ref.value, b"K\0");
+        let track_ref = plan.gps.iter().find(|e| e.tag_id == 0x000E).unwrap();
+        assert_eq!(track_ref.field_type, 2);
+        assert_eq!(track_ref.count, 2);
+        assert_eq!(track_ref.value, b"T\0");
     }
 
     #[test]
@@ -2133,6 +2163,18 @@ mod tests {
         let (field_type_none, _, _) = tag_value_to_field(&TagValue::new_integer(5), None).unwrap();
         assert_eq!(field_type_none, 3, "no hint: smallest-fit still applies");
         let _ = (scan, original); // silence unused if not otherwise referenced
+    }
+
+    #[test]
+    fn signed_rational_hint_is_preserved_for_positive_apex_value() {
+        let value = TagValue::Rational {
+            numerator: 49_471,
+            denominator: 7_102,
+        };
+        let (field_type, count, bytes) = tag_value_to_field(&value, Some(10)).unwrap();
+        assert_eq!(field_type, 10, "ShutterSpeedValue is rational64s");
+        assert_eq!(count, 1);
+        assert_eq!(bytes.len(), 8);
     }
 
     #[test]

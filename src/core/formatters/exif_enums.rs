@@ -132,6 +132,25 @@ pub fn flash_label(value: i64) -> Option<&'static str> {
         .map(|&(_, label)| label)
 }
 
+/// Inverts Exif.pm's `%flash` PrintConv for command-line writes.
+///
+/// Hash labels are matched case-insensitively. Because 0x9209 has
+/// `Flags => 'PrintHex'`, ExifTool also accepts its displayed fallback form,
+/// such as `Unknown (0x38)`, for an unnamed unsigned 16-bit value.
+pub fn parse_flash_label(value: &str) -> Option<i64> {
+    if let Some(&(id, _)) = FLASH
+        .iter()
+        .find(|&&(_, label)| label.eq_ignore_ascii_case(value))
+    {
+        return Some(id);
+    }
+
+    let lower = value.to_ascii_lowercase();
+    let hex = lower.strip_prefix("unknown (0x")?.strip_suffix(')')?;
+    let parsed = u16::from_str_radix(hex, 16).ok()?;
+    Some(i64::from(parsed))
+}
+
 /// Format Flash enum value
 /// EXIF tag 0x9209
 ///
@@ -654,6 +673,18 @@ mod tests {
     fn test_flash() {
         assert_eq!(format_flash(0), "No Flash");
         assert_eq!(format_flash(1), "Fired");
+    }
+
+    #[test]
+    fn flash_print_conv_inverse_matches_labels_and_print_hex_fallback() {
+        for &(id, label) in FLASH {
+            assert_eq!(parse_flash_label(label), Some(id));
+            assert_eq!(parse_flash_label(&label.to_ascii_uppercase()), Some(id));
+        }
+        assert_eq!(parse_flash_label("Unknown (0x38)"), Some(0x38));
+        assert_eq!(parse_flash_label("unknown (0Xffff)"), Some(0xffff));
+        assert_eq!(parse_flash_label("25"), None);
+        assert_eq!(parse_flash_label("Unknown (0x10000)"), None);
     }
 
     #[test]

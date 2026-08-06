@@ -100,7 +100,22 @@ pub fn raw_bytes_to_tag_value(
 
             // ASCII (type 2): null-terminated string
             ExifType::Ascii => {
-                return handle_ascii_type(bytes);
+                let value = handle_ascii_type(bytes);
+                // Exif.pm 13.59 tag 0x0110 applies `$val =~ s/\s+$//` before
+                // exposing Model. Keep the trim tag-specific: other ASCII
+                // fields may treat trailing whitespace as data.
+                if tag_id == 0x0110
+                    && let TagValue::String(value) = value
+                {
+                    return TagValue::new_string(value.trim_end().to_string());
+                }
+                // Artist has its own identical RawConv in Exif.pm 13.59.
+                if tag_id == 0x013b
+                    && let TagValue::String(value) = value
+                {
+                    return TagValue::new_string(value.trim_end().to_string());
+                }
+                return value;
             }
 
             // BYTE (type 1) and UNDEFINED (type 7): binary or heuristic conversion
@@ -322,6 +337,7 @@ fn handle_rational_type(
     const GPS_DEST_LATITUDE: u16 = 0x0014;
     const GPS_DEST_LONGITUDE: u16 = 0x0016;
     const GPS_ALTITUDE: u16 = 0x0006;
+    const GPS_DOP: u16 = 0x000B;
 
     // GPS timestamp (3 rationals: hours, minutes, seconds)
     const GPS_TIMESTAMP: u16 = 0x0007;
@@ -385,6 +401,11 @@ fn handle_rational_type(
         let value = numerator as f64 / denominator as f64;
 
         match tag_id {
+            // GPSDOP is a bare rational64u in GPS.pm, so display the
+            // GetRational64u quotient rather than exposing its stored fraction.
+            GPS_DOP => {
+                return TagValue::new_string(exiftool_rational_number(value));
+            }
             // GPSSpeed - format with precision, no unit (unit is in GPSSpeedRef)
             GPS_SPEED => {
                 return TagValue::new_string(format_gps_numeric_value(value));
@@ -1023,6 +1044,26 @@ mod tests {
     }
 
     #[test]
+    fn model_trims_trailing_whitespace_like_exiftool() {
+        // Exif.pm 13.59 tag 0x0110 applies
+        // `RawConv => '$val =~ s/\s+$//; ...'` before exposing Model.
+        let value =
+            raw_bytes_to_tag_value(b"Camera X \t\0", 2, 11, 0x0110, ByteOrder::LittleEndian);
+
+        assert_eq!(value.as_string(), Some("Camera X"));
+    }
+
+    #[test]
+    fn artist_trims_trailing_whitespace_like_exiftool() {
+        // Exif.pm 13.59 tag 0x013b applies
+        // `RawConv => '$val =~ s/\s+$//; $val'` before exposing Artist.
+        let value =
+            raw_bytes_to_tag_value(b"Ada Lovelace \t\0", 2, 15, 0x013b, ByteOrder::LittleEndian);
+
+        assert_eq!(value.as_string(), Some("Ada Lovelace"));
+    }
+
+    #[test]
     fn test_parse_string_still_yields_integer_when_reversible() {
         // Plain integer literals keep TagValue::Integer, which is what the
         // enum PrintConv lookups match on (friendly_enum_name in the CLI,
@@ -1095,6 +1136,15 @@ mod tests {
         } else {
             panic!("Expected String variant, got {:?}", result);
         }
+    }
+
+    #[test]
+    fn test_gps_dop_formats_rational_like_exiftool() {
+        let bytes = make_rational_bytes(260, 100, ByteOrder::BigEndian);
+
+        let value = raw_bytes_to_tag_value(&bytes, 5, 1, 0x000B, ByteOrder::BigEndian);
+
+        assert_eq!(value.as_string(), Some("2.6"));
     }
 
     #[test]

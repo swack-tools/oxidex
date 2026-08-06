@@ -501,6 +501,27 @@ fn validate_caller_changes(metadata: &MetadataMap, baseline: Option<&MetadataMap
     Ok(())
 }
 
+fn canonical_write_tag_name(tag_name: &str) -> &str {
+    match tag_name {
+        "GPSDateStamp" => "GPS:GPSDateStamp",
+        "GPSLatitudeRef" => "GPS:GPSLatitudeRef",
+        "GPSDestLatitudeRef" => "GPS:GPSDestLatitudeRef",
+        "GPSDestBearing" => "GPS:GPSDestBearing",
+        "CreateDate" => "ExifIFD:CreateDate",
+        "ExposureTime" => "ExifIFD:ExposureTime",
+        "BrightnessValue" => "ExifIFD:BrightnessValue",
+        "MeteringMode" => "ExifIFD:MeteringMode",
+        "ShutterSpeedValue" => "ExifIFD:ShutterSpeedValue",
+        "Flash" => "ExifIFD:Flash",
+        "Software" => "IFD0:Software",
+        "DocumentName" => "IFD0:DocumentName",
+        "ModifyDate" => "IFD0:ModifyDate",
+        "DateTimeOriginal" => "ExifIFD:DateTimeOriginal",
+        "ApertureValue" => "ExifIFD:ApertureValue",
+        _ => tag_name,
+    }
+}
+
 /// Modifies a single tag in a file's metadata.
 ///
 /// This is a convenience function that:
@@ -552,7 +573,7 @@ pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()
     let mut metadata = read_metadata(path)?;
 
     // Step 2: Modify the single tag
-    metadata.insert(tag_name, new_value);
+    metadata.insert(canonical_write_tag_name(tag_name), new_value);
 
     // Step 3: Write all metadata back to file
     write_metadata(path, &metadata)?;
@@ -589,7 +610,7 @@ pub fn remove_tag(path: &Path, tag_name: &str) -> Result<()> {
     let mut metadata = read_metadata(path)?;
 
     // Step 2: Remove the tag (if it exists)
-    metadata.remove(tag_name);
+    metadata.remove(canonical_write_tag_name(tag_name));
 
     // Step 3: Write metadata back to file
     write_metadata(path, &metadata)?;
@@ -1031,6 +1052,141 @@ pub(crate) fn parse_casio_cam_metadata(reader: &dyn FileReader) -> Result<Metada
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+
+    #[test]
+    fn bare_gps_date_stamp_write_targets_the_gps_ifd() {
+        assert_eq!(canonical_write_tag_name("GPSDateStamp"), "GPS:GPSDateStamp");
+        assert_eq!(
+            canonical_write_tag_name("GPS:GPSDateStamp"),
+            "GPS:GPSDateStamp"
+        );
+    }
+
+    #[test]
+    fn bare_gps_latitude_ref_write_targets_the_gps_ifd() {
+        assert_eq!(
+            canonical_write_tag_name("GPSLatitudeRef"),
+            "GPS:GPSLatitudeRef"
+        );
+        assert_eq!(
+            canonical_write_tag_name("GPS:GPSLatitudeRef"),
+            "GPS:GPSLatitudeRef"
+        );
+    }
+
+    #[test]
+    fn bare_gps_dest_latitude_ref_write_targets_the_gps_ifd() {
+        assert_eq!(
+            canonical_write_tag_name("GPSDestLatitudeRef"),
+            "GPS:GPSDestLatitudeRef"
+        );
+        assert_eq!(
+            canonical_write_tag_name("GPS:GPSDestLatitudeRef"),
+            "GPS:GPSDestLatitudeRef"
+        );
+    }
+
+    #[test]
+    fn bare_gps_dest_bearing_write_targets_the_gps_ifd() {
+        assert_eq!(
+            canonical_write_tag_name("GPSDestBearing"),
+            "GPS:GPSDestBearing"
+        );
+        assert_eq!(
+            canonical_write_tag_name("GPS:GPSDestBearing"),
+            "GPS:GPSDestBearing"
+        );
+    }
+
+    #[test]
+    fn bare_software_write_targets_ifd0() {
+        assert_eq!(canonical_write_tag_name("Software"), "IFD0:Software");
+        assert_eq!(canonical_write_tag_name("IFD0:Software"), "IFD0:Software");
+    }
+
+    #[test]
+    fn bare_create_date_write_targets_exif_ifd() {
+        assert_eq!(canonical_write_tag_name("CreateDate"), "ExifIFD:CreateDate");
+        assert_eq!(
+            canonical_write_tag_name("ExifIFD:CreateDate"),
+            "ExifIFD:CreateDate"
+        );
+    }
+
+    #[test]
+    fn bare_exposure_time_write_targets_exif_ifd() {
+        assert_eq!(
+            canonical_write_tag_name("ExposureTime"),
+            "ExifIFD:ExposureTime"
+        );
+        assert_eq!(
+            canonical_write_tag_name("ExifIFD:ExposureTime"),
+            "ExifIFD:ExposureTime"
+        );
+    }
+
+    #[test]
+    fn bare_brightness_value_write_targets_exif_ifd() {
+        assert_eq!(
+            canonical_write_tag_name("BrightnessValue"),
+            "ExifIFD:BrightnessValue"
+        );
+        assert_eq!(
+            canonical_write_tag_name("ExifIFD:BrightnessValue"),
+            "ExifIFD:BrightnessValue"
+        );
+    }
+
+    #[test]
+    fn bare_metering_mode_write_targets_exif_ifd() {
+        assert_eq!(
+            canonical_write_tag_name("MeteringMode"),
+            "ExifIFD:MeteringMode"
+        );
+        assert_eq!(
+            canonical_write_tag_name("ExifIFD:MeteringMode"),
+            "ExifIFD:MeteringMode"
+        );
+    }
+
+    #[test]
+    fn bare_shutter_speed_value_write_targets_exif_ifd() {
+        assert_eq!(
+            canonical_write_tag_name("ShutterSpeedValue"),
+            "ExifIFD:ShutterSpeedValue"
+        );
+        assert_eq!(
+            canonical_write_tag_name("ExifIFD:ShutterSpeedValue"),
+            "ExifIFD:ShutterSpeedValue"
+        );
+    }
+
+    #[test]
+    fn bare_flash_write_targets_exif_ifd() {
+        assert_eq!(canonical_write_tag_name("Flash"), "ExifIFD:Flash");
+        assert_eq!(canonical_write_tag_name("ExifIFD:Flash"), "ExifIFD:Flash");
+    }
+
+    #[test]
+    fn bare_document_name_write_targets_ifd0() {
+        assert_eq!(
+            canonical_write_tag_name("DocumentName"),
+            "IFD0:DocumentName"
+        );
+        assert_eq!(
+            canonical_write_tag_name("IFD0:DocumentName"),
+            "IFD0:DocumentName"
+        );
+    }
+
+    #[test]
+    fn bare_modify_date_write_targets_ifd0() {
+        assert_eq!(canonical_write_tag_name("ModifyDate"), "IFD0:ModifyDate");
+        assert_eq!(
+            canonical_write_tag_name("IFD0:ModifyDate"),
+            "IFD0:ModifyDate"
+        );
+    }
 
     #[test]
     fn test_lookup_tag_name_known_tags() {

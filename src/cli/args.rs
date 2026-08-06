@@ -737,6 +737,21 @@ impl CliArgs {
             let tag = arg[1..pos].to_string();
             let value = arg[pos + 1..].to_string();
 
+            // CreateDate and DateTimeOriginal are normal writable EXIF tags. Routing an absolute
+            // assignment through the date-shift path makes it impossible to
+            // create tags 0x9004/0x9003 when absent, because that path only
+            // patches existing date entries. Keep it in the ordinary write
+            // path, which can add a new ExifIFD entry like ExifTool does.
+            if matches!(
+                tag
+                .rsplit_once(':')
+                .map_or(tag.as_str(), |(_, name)| name),
+                name if name.eq_ignore_ascii_case("CreateDate")
+                    || name.eq_ignore_ascii_case("DateTimeOriginal")
+            ) {
+                return None;
+            }
+
             // Check if this looks like a date shift operation
             // Date shifts should have either:
             // - "AllDates" as the tag pattern (case-insensitive)
@@ -1042,6 +1057,30 @@ mod tests {
                 "=".to_string(),
                 "2025:01:15 10:30:00".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn create_date_assignment_is_a_normal_tag_write() {
+        assert_eq!(
+            CliArgs::parse_date_shift("-CreateDate=2024:02:03 04:05:06"),
+            None
+        );
+        assert_eq!(
+            CliArgs::parse_date_shift("-ExifIFD:CreateDate=2024:02:03 04:05:06"),
+            None
+        );
+    }
+
+    #[test]
+    fn date_time_original_assignment_is_a_normal_tag_write() {
+        assert_eq!(
+            CliArgs::parse_date_shift("-DateTimeOriginal=2024:02:03 04:05:06"),
+            None
+        );
+        assert_eq!(
+            CliArgs::parse_date_shift("-ExifIFD:DateTimeOriginal=2024:02:03 04:05:06"),
+            None
         );
     }
 }
