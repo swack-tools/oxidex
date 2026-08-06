@@ -1240,9 +1240,13 @@ const_decoder!(
         (0, "Single"),
         (1, "Continuous"),
         (2, "Movie"),
-        (4, "Continuous, Speed Priority"),
-        (5, "Continuous, Low"),
-        (6, "Continuous, High"),
+        (3, "Continuous, Speed Priority"),
+        (4, "Continuous, Low"),
+        (5, "Continuous, High"),
+        (6, "Silent Single"),
+        (8, "Continuous, High+"),
+        (9, "Single, Silent"),
+        (10, "Continuous, Silent"),
     ]
 );
 
@@ -7041,9 +7045,13 @@ mod tests {
         assert_eq!(DRIVE_MODE.decode(0), "Single");
         assert_eq!(DRIVE_MODE.decode(1), "Continuous");
         assert_eq!(DRIVE_MODE.decode(2), "Movie");
-        assert_eq!(DRIVE_MODE.decode(4), "Continuous, Speed Priority");
-        assert_eq!(DRIVE_MODE.decode(5), "Continuous, Low");
-        assert_eq!(DRIVE_MODE.decode(6), "Continuous, High");
+        assert_eq!(DRIVE_MODE.decode(3), "Continuous, Speed Priority");
+        assert_eq!(DRIVE_MODE.decode(4), "Continuous, Low");
+        assert_eq!(DRIVE_MODE.decode(5), "Continuous, High");
+        assert_eq!(DRIVE_MODE.decode(6), "Silent Single");
+        assert_eq!(DRIVE_MODE.decode(8), "Continuous, High+");
+        assert_eq!(DRIVE_MODE.decode(9), "Single, Silent");
+        assert_eq!(DRIVE_MODE.decode(10), "Continuous, Silent");
         assert_eq!(DRIVE_MODE.decode(99), "Unknown (99)");
     }
 
