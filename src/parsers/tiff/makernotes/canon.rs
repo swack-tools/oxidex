@@ -3013,18 +3013,18 @@ const_decoder!(
         (7, "Black & White"),
         (8, "Shade"),
         (9, "Manual Temperature (Kelvin)"),
-        (10, "PC Set 1"),
-        (11, "PC Set 2"),
-        (12, "PC Set 3"),
+        (10, "PC Set1"),
+        (11, "PC Set2"),
+        (12, "PC Set3"),
         (14, "Daylight Fluorescent"),
         (15, "Custom 1"),
         (16, "Custom 2"),
         (17, "Underwater"),
         (18, "Custom 3"),
         (19, "Custom 4"),
-        (20, "PC Set 4"),
-        (21, "PC Set 5"),
-        (23, "Auto (Ambience Priority)"),
+        (20, "PC Set4"),
+        (21, "PC Set5"),
+        (23, "Auto (ambience priority)"),
     ]
 );
 
@@ -8062,6 +8062,22 @@ mod tests {
         assert_eq!(TONE_CURVE.decode(1), "Manual");
         assert_eq!(TONE_CURVE.decode(2), "Custom");
         assert_eq!(TONE_CURVE.decode(99), "Unknown (99)");
+    }
+
+    /// Canon.pm 13.59 `%canonWhiteBalance` keeps `PC Set` directly adjacent
+    /// to its number and spells the priority label with lowercase `ambience`.
+    #[test]
+    fn white_balance_labels_match_pinned_exiftool() {
+        for (raw, expected) in [
+            (10, "PC Set1"),
+            (11, "PC Set2"),
+            (12, "PC Set3"),
+            (20, "PC Set4"),
+            (21, "PC Set5"),
+            (23, "Auto (ambience priority)"),
+        ] {
+            assert_eq!(WHITE_BALANCE.decode(raw), expected);
+        }
     }
 
     #[test]
