@@ -651,8 +651,14 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
             FormatFamily::EXIF,
             true,
             ValueType::Integer,
-            "Color space information (1=sRGB, 65535=Uncalibrated)".to_string(),
-            vec!["1".to_string(), "65535".to_string()],
+            "Color space information (1=sRGB, 2=Adobe RGB, 65533=Wide Gamut RGB, 65534=ICC Profile, 65535=Uncalibrated)".to_string(),
+            vec![
+                "1".to_string(),
+                "2".to_string(),
+                "65533".to_string(),
+                "65534".to_string(),
+                "65535".to_string(),
+            ],
         ),
     );
 

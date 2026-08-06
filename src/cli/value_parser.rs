@@ -394,6 +394,12 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
     // PrintConv exposes the corresponding measurement label.  Writer.pl
     // applies that PrintConvInv before its generic string check.
     let raw = match (tag_name, raw) {
+        // Exif.pm 0xa001 is a writable int16u with this PrintConv table.
+        ("EXIF:ColorSpace" | "ExifIFD:ColorSpace", "sRGB") => "1",
+        ("EXIF:ColorSpace" | "ExifIFD:ColorSpace", "Adobe RGB") => "2",
+        ("EXIF:ColorSpace" | "ExifIFD:ColorSpace", "Uncalibrated") => "65535",
+        ("EXIF:ColorSpace" | "ExifIFD:ColorSpace", "ICC Profile") => "65534",
+        ("EXIF:ColorSpace" | "ExifIFD:ColorSpace", "Wide Gamut RGB") => "65533",
         // Exif.pm 0xa408 uses ConvertParameter as its PrintConvInv rather
         // than a direct label map. It accepts the documented display labels
         // and any signed float, collapsing them to the three stored codes.
@@ -1923,6 +1929,22 @@ mod tests {
         }
         assert_eq!(parse("GainControl", "None").unwrap(), TagValue::Integer(0));
         assert!(parse("GainControl", "1").is_err());
+    }
+
+    #[test]
+    fn color_space_printed_values_are_inverted_to_tiff_codes() {
+        let cases = [
+            ("sRGB", 1),
+            ("Adobe RGB", 2),
+            ("Uncalibrated", 65535),
+            ("ICC Profile", 65534),
+            ("Wide Gamut RGB", 65533),
+        ];
+        for tag in ["EXIF:ColorSpace", "ExifIFD:ColorSpace"] {
+            for (printed, raw) in cases {
+                assert_eq!(parse(tag, printed).unwrap(), TagValue::Integer(raw));
+            }
+        }
     }
 
     #[test]
