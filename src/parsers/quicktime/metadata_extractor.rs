@@ -99,27 +99,23 @@ fn extract_track_metadata(
         let _ = extract_video_media_header(&vmhd, metadata, index);
     }
 
-    // Check if this is an audio track (has smhd)
-    let is_audio_track = minf.find_child("smhd").is_some();
-
     // Extract sound media header (smhd) - optional, contains Balance
     if let Some(smhd) = minf.find_child("smhd") {
         let _ = extract_sound_media_header(&smhd, metadata, index);
     }
 
-    // Extract handler reference from dinf (data information) container - contains HandlerClass
-    // ExifTool only extracts HandlerClass for audio tracks
-    if is_audio_track {
-        if let Some(dinf) = minf.find_child("dinf")
-            && let Some(dref) = dinf.find_child("dref")
-        {
-            let _ = extract_data_handler_info(dref.data, metadata);
-        }
+    // The media-info directory owns the data handler for both video and audio
+    // tracks. Its `dhlr` must follow the media handler's `mhlr`, matching the
+    // later HandlerClass value ExifTool reports for this track.
+    if let Some(dinf) = minf.find_child("dinf")
+        && let Some(dref) = dinf.find_child("dref")
+    {
+        let _ = extract_data_handler_info(dref.data, metadata, index);
+    }
 
-        // Also check for hdlr directly in minf (some formats use this)
-        if let Some(hdlr) = minf.find_child("hdlr") {
-            let _ = extract_track_handler_metadata(&hdlr, metadata);
-        }
+    // Some files carry the data handler directly in minf rather than dref.
+    if let Some(hdlr) = minf.find_child("hdlr") {
+        let _ = extract_track_handler_metadata(&hdlr, metadata, index);
     }
 
     // Sample table - required for sample descriptions
@@ -3444,6 +3440,23 @@ fn extract_xmp_from_atom(data: &[u8], metadata: &mut MetadataMap) -> Result<(), 
 mod tests {
     use super::*;
     use crate::parsers::quicktime::FourCC;
+
+    #[test]
+    fn quicktime_fixture_prefers_media_info_data_handler_class() {
+        // QuickTime.pm Handler: its `dhlr` PrintConv is "Data Handler".
+        // The first track in QuickTime.mov has mdia/hdlr=mhlr but its
+        // minf/hdlr=dhlr; ExifTool's unsuffixed reported HandlerClass is the
+        // latter.
+        let data = std::fs::read("/tmp/oxidex-exiftool-cache/combined-samples/QuickTime.mov")
+            .expect("pinned QuickTime fixture must be available");
+        let metadata = crate::parsers::quicktime::parse_quicktime_metadata_from_bytes(&data)
+            .expect("pinned QuickTime fixture must parse");
+
+        assert_eq!(
+            metadata.get_string("QuickTime:HandlerClass"),
+            Some("Data Handler")
+        );
+    }
 
     #[test]
     fn track_meta_handler_uses_exiftools_nrt_metadata_label() {

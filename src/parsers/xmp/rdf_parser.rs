@@ -384,6 +384,7 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
         // Avoid duplicate output if generic structured-property support is
         // added later.
         results.retain(|(tag, _)| tag != TAG);
+        list_elements.push((TAG.to_string(), about_cv_term_cv_ids.clone()));
         results.push((TAG.to_string(), about_cv_term_cv_ids.join(", ")));
     }
 
@@ -393,6 +394,7 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
         // Avoid duplicate output if generic structured-property support is
         // added later.
         results.retain(|(tag, _)| tag != TAG);
+        list_elements.push((TAG.to_string(), about_cv_term_names.clone()));
         results.push((TAG.to_string(), about_cv_term_names.join(", ")));
     }
 
@@ -2397,6 +2399,33 @@ mod about_cv_term_tests {
 
         assert_eq!(cv_ids, vec!["1, 2, 3"]);
         assert_eq!(names, vec!["one, two, three"]);
+
+        // `exiftool -json XMP8.xmp` serializes both flattened IPTC lists as
+        // JSON arrays. Keep that structure for API callers while parse_xmp's
+        // plain-text view above remains comma-separated.
+        let typed = parse_xmp_typed(xml).unwrap();
+        assert_eq!(
+            typed
+                .iter()
+                .find(|(tag, _)| tag == "XMP:AboutCvTermCvId")
+                .map(|(_, value)| value),
+            Some(&XmpValue::List(vec![
+                "1".to_string(),
+                "2".to_string(),
+                "3".to_string()
+            ]))
+        );
+        assert_eq!(
+            typed
+                .iter()
+                .find(|(tag, _)| tag == "XMP:AboutCvTermName")
+                .map(|(_, value)| value),
+            Some(&XmpValue::List(vec![
+                "one".to_string(),
+                "two".to_string(),
+                "three".to_string(),
+            ]))
+        );
     }
 }
 

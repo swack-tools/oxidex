@@ -981,6 +981,29 @@ impl OxiDexExtractor {
         )
     }
 
+    /// ExifTool's `Exif.pm` promotes a NEF SubIFD with `SubfileType = 0`
+    /// (full-resolution) over IFD0's reduced-resolution thumbnail. The
+    /// parser records the promoted directory under `EXIF:` already; without
+    /// this filter, family-0 flattening normalizes IFD0 to the same key and
+    /// its later sorted write overwrites the promoted value.
+    fn nef_ifd0_field_is_superseded(key: &str, metadata: &oxidex::core::MetadataMap) -> bool {
+        let Some(name) = key.strip_prefix("IFD0:") else {
+            return false;
+        };
+        matches!(
+            name,
+            "BitsPerSample"
+                | "Compression"
+                | "ImageHeight"
+                | "ImageWidth"
+                | "PhotometricInterpretation"
+                | "RowsPerStrip"
+                | "SamplesPerPixel"
+                | "StripOffsets"
+                | "SubfileType"
+        ) && metadata.contains_key(&format!("EXIF:{name}"))
+    }
+
     /// Flatten MetadataMap into TagInfo vector
     ///
     /// Returns the flattened tags plus, for every displayed `family:name`
@@ -1034,6 +1057,12 @@ impl OxiDexExtractor {
         raw_entries.sort_by_key(|(key, _)| *key);
 
         for (key, value) in raw_entries {
+            if matches!(format, Some("NEF" | "NRW"))
+                && Self::nef_ifd0_field_is_superseded(key, metadata)
+            {
+                continue;
+            }
+
             // Check if original family should be skipped (pseudo-tags)
             if let Some((original_family, _)) = key.split_once(':')
                 && Self::should_skip_family(original_family)
@@ -1334,6 +1363,32 @@ mod tests {
             ),
             "  leading description"
         );
+    }
+
+    #[test]
+    fn nef_priority_subifd_wins_over_ifd0_thumbnail_fields() {
+        let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
+        let mut metadata = oxidex::core::MetadataMap::new();
+        metadata.insert("IFD0:ImageWidth".to_string(), TagValue::Integer(160));
+        metadata.insert("EXIF:ImageWidth".to_string(), TagValue::Integer(3040));
+        metadata.insert(
+            "IFD0:Compression".to_string(),
+            TagValue::String("Uncompressed".to_string()),
+        );
+        metadata.insert(
+            "EXIF:Compression".to_string(),
+            TagValue::String("Nikon NEF Compressed".to_string()),
+        );
+
+        let (tags, collisions) = extractor.flatten_metadata(&metadata, Some("NEF"));
+        let tag_values: HashMap<_, _> =
+            tags.into_iter().map(|tag| (tag.key(), tag.value)).collect();
+        assert_eq!(tag_values.get("EXIF:ImageWidth"), Some(&"3040".to_string()));
+        assert_eq!(
+            tag_values.get("EXIF:Compression"),
+            Some(&"Nikon NEF Compressed".to_string())
+        );
+        assert!(collisions.is_empty());
     }
 
     #[test]
