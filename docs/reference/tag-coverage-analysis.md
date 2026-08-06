@@ -10,13 +10,13 @@ This document is automatically updated on each push to `main`. Last updated: **2
 
 | Metric | Value |
 |--------|-------|
-| Total Tags | 16,680 |
+| Total Tags | 16,681 |
 | Tag Tables | 931 |
 | Domains | 6 |
 | Format Parsers | 38 |
 | ExifTool Parity | 58%* |
 
-*ExifTool officially documents ~28,853 unique tags. OxiDex defines 16,680 tags (including variant definitions).
+*ExifTool officially documents ~28,853 unique tags. OxiDex defines 16,681 tags (including variant definitions).
 
 ::: tip Empirical JPEG comparison
 The counts on this page are derived statically from the tag database. For JPEG
@@ -33,12 +33,12 @@ round-trips, regression-gated in CI) is available:
 | Domain | Tables | Tags | Description |
 |--------|--------|------|-------------|
 | Camera | 580 | 8,246 | MakerNotes from 40+ manufacturers |
-| Core | 108 | 1,451 | EXIF, GPS, XMP, IPTC standards |
+| Core | 108 | 1,452 | EXIF, GPS, XMP, IPTC standards |
 | Document | 50 | 434 | PDF, Office, HTML metadata |
 | Image | 63 | 576 | PNG, GIF, BMP, WebP, etc. |
 | Media | 113 | 2,496 | Audio/video containers |
 | Specialty | 17 | 3,477 | FLIR, DICOM, DJI, etc. |
-| **Total** | **931** | **16,680** | |
+| **Total** | **931** | **16,681** | |
 
 ---
 
