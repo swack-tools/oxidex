@@ -62,16 +62,15 @@ fn scalar_u32(entry: &IfdEntry, data: &[u8], tiff_start: usize, order: ByteOrder
 
 /// Walk `Nikon::PreviewIFD` (MakerNote tag 0x0011).
 ///
-/// `PreviewImageStart` and the `PreviewImage` block it points at are
-/// deliberately not emitted: ExifTool reports the start as an absolute file
-/// offset, and the MakerNote parser is handed only the MakerNote block, so the
-/// file position of that block is not knowable here. Emitting the
-/// MakerNote-relative offset would be a wrong number rather than a missing one.
+/// `PreviewImageStart` is reported only when the absolute file offset of the
+/// embedded Nikon TIFF header is known. Emitting the MakerNote-relative value
+/// without that base would be a wrong number rather than a missing one.
 pub fn parse_preview_ifd(
     data: &[u8],
     tiff_start: usize,
     ifd_offset: usize,
     order: ByteOrder,
+    preview_ifd_base: Option<u64>,
     tags: &mut HashMap<String, String>,
 ) {
     let Some(start) = tiff_start.checked_add(ifd_offset) else {
@@ -109,6 +108,14 @@ pub fn parse_preview_ifd(
                     "Nikon:ResolutionUnit".to_string(),
                     resolution_unit_name(value),
                 );
+            }
+        }
+        0x0201 => {
+            if let (Some(value), Some(base)) =
+                (scalar_u32(entry, data, tiff_start, order), preview_ifd_base)
+                && let Some(value) = base.checked_add(u64::from(value))
+            {
+                tags.insert("Nikon:PreviewImageStart".to_string(), value.to_string());
             }
         }
         0x0202 => {
@@ -292,7 +299,7 @@ mod tests {
 
         let data = makernote(100, &payload);
         let mut tags = HashMap::new();
-        parse_preview_ifd(&data, 10, 100, ByteOrder::LittleEndian, &mut tags);
+        parse_preview_ifd(&data, 10, 100, ByteOrder::LittleEndian, None, &mut tags);
 
         assert_eq!(tags.get("Nikon:Compression").unwrap(), "JPEG (old-style)");
         assert_eq!(tags.get("Nikon:XResolution").unwrap(), "72");
@@ -370,7 +377,7 @@ mod tests {
     fn out_of_range_sub_ifd_offsets_are_ignored() {
         let data = makernote(0, &[0u8; 4]);
         let mut tags = HashMap::new();
-        parse_preview_ifd(&data, 10, 4096, ByteOrder::LittleEndian, &mut tags);
+        parse_preview_ifd(&data, 10, 4096, ByteOrder::LittleEndian, None, &mut tags);
         parse_scan_ifd(&data, 10, 4096, ByteOrder::LittleEndian, &mut tags);
         assert!(tags.is_empty());
     }
