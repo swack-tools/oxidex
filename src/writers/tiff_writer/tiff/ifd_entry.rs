@@ -195,6 +195,44 @@ pub fn convert_tag_value_to_entry(
         // Unsupported types - skip for now (will add TODO in tests)
         TagValue::Float(_) => Ok(None),
         TagValue::Struct(_) => Ok(None),
+        TagValue::Array(values) if tag_id == 0x9214 && (2..=4).contains(&values.len()) => {
+            let mut bytes = Vec::with_capacity(values.len() * 2);
+            for value in values {
+                let TagValue::Integer(component) = value else {
+                    return Ok(None);
+                };
+                let Ok(component) = u16::try_from(*component) else {
+                    return Ok(None);
+                };
+                bytes.extend_from_slice(&match byte_order {
+                    ByteOrder::LittleEndian => component.to_le_bytes(),
+                    ByteOrder::BigEndian => component.to_be_bytes(),
+                });
+            }
+            Ok(Some(IfdEntryData::new(
+                tag_id,
+                ExifType::Short,
+                values.len() as u32,
+                bytes,
+            )))
+        }
+        TagValue::Array(values) if tag_id == 0xa214 => {
+            let [TagValue::Integer(x), TagValue::Integer(y)] = values.as_slice() else {
+                return Ok(None);
+            };
+            let (Ok(x), Ok(y)) = (u16::try_from(*x), u16::try_from(*y)) else {
+                return Ok(None);
+            };
+            let mut bytes = match byte_order {
+                ByteOrder::LittleEndian => x.to_le_bytes().to_vec(),
+                ByteOrder::BigEndian => x.to_be_bytes().to_vec(),
+            };
+            bytes.extend_from_slice(&match byte_order {
+                ByteOrder::LittleEndian => y.to_le_bytes(),
+                ByteOrder::BigEndian => y.to_be_bytes(),
+            });
+            Ok(Some(IfdEntryData::new(tag_id, ExifType::Short, 2, bytes)))
+        }
         TagValue::Array(_) => Ok(None), // Arrays not yet supported in TIFF writer
     }
 }
@@ -224,6 +262,16 @@ fn convert_integer_to_entry(
     value: i64,
     byte_order: ByteOrder,
 ) -> Result<Option<IfdEntryData>> {
+    // Exif.pm 13.59 declares the sensitivity tags as int32u.
+    if matches!(tag_id, 0x8831 | 0x8832 | 0x8833 | 0x8834 | 0x8835)
+        && (0..=u32::MAX as i64).contains(&value)
+    {
+        let bytes = match byte_order {
+            ByteOrder::LittleEndian => (value as u32).to_le_bytes().to_vec(),
+            ByteOrder::BigEndian => (value as u32).to_be_bytes().to_vec(),
+        };
+        return Ok(Some(IfdEntryData::new(tag_id, ExifType::Long, 1, bytes)));
+    }
     if value >= 0 && value <= u16::MAX as i64 {
         // Fits in u16 - use Short
         let value_u16 = value as u16;
@@ -312,6 +360,25 @@ mod tests {
     }
 
     #[test]
+    fn subject_area_writes_two_to_four_unsigned_shorts() {
+        let entry = convert_tag_value_to_entry(
+            0x9214,
+            &TagValue::new_array(vec![
+                TagValue::new_integer(10),
+                TagValue::new_integer(20),
+                TagValue::new_integer(30),
+            ]),
+            ByteOrder::LittleEndian,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(entry.field_type, ExifType::Short);
+        assert_eq!(entry.value_count, 3);
+        assert_eq!(entry.value_bytes, vec![10, 0, 20, 0, 30, 0]);
+    }
+
+    #[test]
     fn test_entry_is_inline() {
         let entry_inline =
             IfdEntryData::new(0x0110, ExifType::Ascii, 4, vec![0x41, 0x42, 0x43, 0x00]);
@@ -355,6 +422,20 @@ mod tests {
         assert_eq!(entry.field_type, ExifType::Short);
         assert_eq!(entry.value_count, 1);
         assert_eq!(entry.value_bytes, vec![0x90, 0x01]); // 400 in little-endian
+    }
+
+    #[test]
+    fn iso_speed_latitude_yyy_keeps_exiftool_long_encoding() {
+        let entry = convert_tag_value_to_entry(
+            0x8834,
+            &TagValue::new_integer(400),
+            ByteOrder::LittleEndian,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(entry.field_type, ExifType::Long);
+        assert_eq!(entry.value_count, 1);
+        assert_eq!(entry.value_bytes, 400u32.to_le_bytes());
     }
 
     #[test]

@@ -148,6 +148,36 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         return Ok(TagValue::Binary(bytes));
     }
 
+    if declared_tag_name.rsplit(':').next() == Some("SubjectArea") {
+        let components = raw
+            .split_whitespace()
+            .map(|component| component.parse::<u16>())
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|_| {
+                invalid(
+                    tag_name,
+                    "SubjectArea requires 2 to 4 unsigned short values",
+                )
+            })?;
+        if !(2..=4).contains(&components.len()) {
+            return Err(invalid(
+                tag_name,
+                "SubjectArea requires 2 to 4 unsigned short values",
+            ));
+        }
+        return Ok(TagValue::Array(
+            components
+                .into_iter()
+                .map(|component| TagValue::Integer(i64::from(component)))
+                .collect(),
+        ));
+    }
+
+    // Exif.pm 13.59 0xa214 stores exactly two int16u components (X and Y).
+    if declared_tag_name.rsplit(':').next() == Some("SubjectLocation") {
+        return parse_subject_location(tag_name, raw);
+    }
+
     // Exif.pm 13.59 0x0129 declares PageNumber as `int16u[2]`. Unlike a
     // scalar integer, the CLI spelling contains both the zero-based page
     // index and the document page count.
@@ -464,6 +494,31 @@ fn parse_sharpness(tag_name: &str, raw: &str) -> Result<TagValue> {
     Err(invalid(
         tag_name,
         "Can't convert Sharpness value (not a parameter)",
+    ))
+}
+
+fn parse_subject_location(tag_name: &str, raw: &str) -> Result<TagValue> {
+    let components = raw
+        .split_whitespace()
+        .map(|component| component.parse::<u16>())
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| {
+            invalid(
+                tag_name,
+                "SubjectLocation requires two unsigned short values",
+            )
+        })?;
+    if components.len() != 2 {
+        return Err(invalid(
+            tag_name,
+            "SubjectLocation requires exactly two unsigned short values",
+        ));
+    }
+    Ok(TagValue::Array(
+        components
+            .into_iter()
+            .map(|component| TagValue::Integer(i64::from(component)))
+            .collect(),
     ))
 }
 
@@ -1755,5 +1810,30 @@ mod tests {
                 denominator: 2,
             }
         );
+    }
+
+    #[test]
+    fn subject_area_accepts_two_to_four_unsigned_short_components() {
+        assert_eq!(
+            parse("EXIF:SubjectArea", "3 17 42").unwrap(),
+            TagValue::new_array(vec![
+                TagValue::new_integer(3),
+                TagValue::new_integer(17),
+                TagValue::new_integer(42),
+            ])
+        );
+        assert!(parse("EXIF:SubjectArea", "3").is_err());
+        assert!(parse("EXIF:SubjectArea", "3 17 42 99 100").is_err());
+        assert!(parse("EXIF:SubjectArea", "-1 17").is_err());
+    }
+
+    #[test]
+    fn subject_location_parses_exactly_two_unsigned_short_components() {
+        assert_eq!(
+            parse("EXIF:SubjectLocation", "3 4").unwrap(),
+            TagValue::Array(vec![TagValue::Integer(3), TagValue::Integer(4)])
+        );
+        assert!(parse("EXIF:SubjectLocation", "3").is_err());
+        assert!(parse("EXIF:SubjectLocation", "3 4 5").is_err());
     }
 }
