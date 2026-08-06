@@ -316,7 +316,7 @@ fn tag_value_to_field_for_key(
     value: &TagValue,
     hint: Option<u16>,
 ) -> Result<(u16, u32, Vec<u8>)> {
-    if key == "GPS:GPSLongitude" {
+    if matches!(key, "GPS:GPSLongitude" | "GPS:GPSDestLongitude") {
         return gps_longitude_to_field(value);
     }
     if key == "GPS:GPSLatitude"
@@ -1722,6 +1722,39 @@ mod tests {
         }
         assert_eq!(longitude.field_type, 5);
         assert_eq!(longitude.count, 3);
+        assert_eq!(longitude.value, expected);
+    }
+
+    #[test]
+    fn plan_serializes_gps_dest_longitude_as_three_dms_rationals() {
+        // ExifTool 13.59 GPS.pm declares GPSDestLongitude as rational64u[3]
+        // and applies ToDMS as ValueConvInv. The matrix input 122.4194
+        // therefore becomes 122 degrees, 25 minutes and 9.84 seconds.
+        let scan = ExifScan {
+            byte_order: ByteOrder::LittleEndian,
+            entries: Vec::new(),
+            thumbnail: None,
+            makernote_offset: None,
+        };
+        let original = MetadataMap::new();
+        let mut desired = MetadataMap::new();
+        desired.insert(
+            "GPS:GPSDestLongitude",
+            TagValue::new_rational(1_224_194, 10_000),
+        );
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let longitude = plan
+            .gps
+            .iter()
+            .find(|entry| entry.tag_id == 0x0016)
+            .unwrap();
+        assert_eq!(longitude.field_type, 5);
+        assert_eq!(longitude.count, 3);
+        let expected = [122_u32, 1, 25, 1, 246, 25]
+            .into_iter()
+            .flat_map(u32::to_ne_bytes)
+            .collect::<Vec<_>>();
         assert_eq!(longitude.value, expected);
     }
 
