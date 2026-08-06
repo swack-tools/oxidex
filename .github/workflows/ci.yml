@@ -24,15 +24,9 @@ concurrency:
   # Pull request runs are keyed by branch, so pushing a new commit cancels the
   # superseded run (~13 CI minutes saved per force-push).
   #
-  # Pushes to main are keyed by COMMIT SHA instead, which makes each merge its
-  # own group. This is deliberate: with a shared `main` group, every merge
-  # cancelled the previous merge's run, and at ~4 merges/hour no post-merge run
-  # ever survived its own 13-minute duration. The only verification a merged
-  # commit ever gets was being destroyed by the next merge (20 of the last 25
-  # main runs were `cancelled`), which is how #211 and #256 shipped a stale
-  # api/oxidex.h and turned main red. Keying by SHA also avoids serialising
-  # runs behind one another, which a plain `cancel-in-progress: false` would do.
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.head_ref || github.ref }}
+  # Main runs share the branch ref, so a newer main commit cancels the obsolete
+  # build rather than consuming runners for a commit that can no longer deploy.
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref || github.head_ref || github.ref }}
   cancel-in-progress: true
 
 env:
