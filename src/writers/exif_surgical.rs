@@ -325,6 +325,29 @@ pub fn plan_exif_write(
             desired.insert("GPS:GPSDestBearingRef", TagValue::new_string(raw));
         }
     }
+    if let Some(TagValue::String(value)) = desired.get("GPS:GPSImgDirectionRef") {
+        let raw = match value.as_str() {
+            "Magnetic North" => Some("M"),
+            "True North" => Some("T"),
+            _ => None,
+        };
+        if let Some(raw) = raw {
+            desired.insert("GPS:GPSImgDirectionRef", TagValue::new_string(raw));
+        }
+    }
+    // GPS.pm (ExifTool 13.59) maps GPSSpeedRef's raw one-byte codes to
+    // user-facing units. Store the declared raw code, never the display label.
+    if let Some(TagValue::String(value)) = desired.get("GPS:GPSSpeedRef") {
+        let raw = match value.as_str() {
+            "km/h" => Some("K"),
+            "mph" => Some("M"),
+            "knots" => Some("N"),
+            _ => None,
+        };
+        if let Some(raw) = raw {
+            desired.insert("GPS:GPSSpeedRef", TagValue::new_string(raw));
+        }
+    }
     for entry in &scan.entries {
         if matches!(entry.ifd, IfdKind::Interop | IfdKind::Ifd1) || entry.tag_id == MAKERNOTE {
             continue;
@@ -1394,6 +1417,43 @@ mod tests {
         assert_eq!(bearing_ref.field_type, 2);
         assert_eq!(bearing_ref.count, 2);
         assert_eq!(bearing_ref.value, b"M\0");
+    }
+
+    #[test]
+    fn plan_inverts_gps_img_direction_ref_display_value_before_serializing() {
+        // ExifTool 13.59 GPS.pm maps the raw GPSImgDirectionRef code M to
+        // the display value "Magnetic North". A writer must store M, not the
+        // display label, or ExifTool reads it back as an unknown value.
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let mut desired = original.clone();
+        desired.insert(
+            "GPS:GPSImgDirectionRef",
+            TagValue::new_string("Magnetic North"),
+        );
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let image_direction_ref = plan.gps.iter().find(|e| e.tag_id == 0x0010).unwrap();
+        assert_eq!(image_direction_ref.field_type, 2);
+        assert_eq!(image_direction_ref.count, 2);
+        assert_eq!(image_direction_ref.value, b"M\0");
+    }
+
+    #[test]
+    fn plan_inverts_gps_speed_ref_display_value_before_serializing() {
+        // ExifTool 13.59 GPS.pm maps the raw GPSSpeedRef code K to the
+        // display value "km/h". The TIFF entry must retain the raw code so
+        // ExifTool does not report an unknown value on readback.
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let mut desired = original.clone();
+        desired.insert("GPS:GPSSpeedRef", TagValue::new_string("km/h"));
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let speed_ref = plan.gps.iter().find(|e| e.tag_id == 0x000C).unwrap();
+        assert_eq!(speed_ref.field_type, 2);
+        assert_eq!(speed_ref.count, 2);
+        assert_eq!(speed_ref.value, b"K\0");
     }
 
     #[test]
