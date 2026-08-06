@@ -15,6 +15,10 @@ fn chunk(id: &[u8; 4], data: &[u8]) -> Vec<u8> {
 
 fn djvu_with_compressed_annotation(annotation: &str) -> Vec<u8> {
     let annotation = format!("(metadata (annote \"{annotation}\"))");
+    djvu_with_compressed_metadata(&annotation)
+}
+
+fn djvu_with_compressed_metadata(annotation: &str) -> Vec<u8> {
     let antz = chunk(b"ANTz", &bzz_encode(annotation.as_bytes()));
 
     let mut page = b"DJVI".to_vec();
@@ -45,5 +49,25 @@ fn extracts_annotation_from_a_compressed_nested_djvu_form() {
     assert_eq!(
         metadata.get_string("DjVu:Annotation"),
         Some("Did you get this?")
+    );
+}
+
+#[test]
+fn extracts_standard_title_from_compressed_djvu_metadata() {
+    let file = Builder::new()
+        .suffix(".djvu")
+        .tempfile()
+        .expect("creates DjVu test file");
+    std::fs::write(
+        file.path(),
+        djvu_with_compressed_metadata(r#"(metadata (Title "DjVu Metadata Sample"))"#),
+    )
+    .expect("writes DjVu test file");
+
+    let metadata = read_metadata(file.path()).expect("reads DjVu metadata");
+
+    assert_eq!(
+        metadata.get_string("DjVu-Meta:Title"),
+        Some("DjVu Metadata Sample")
     );
 }
