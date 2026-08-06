@@ -451,6 +451,21 @@ fn process_tiff_ifd_tags<'a>(
         let tag_name = lookup_tag_name(*tag_id, ifd_name);
         let tag_value =
             raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order);
+        // Exif.pm 0x117's generic StripByteCounts branch deliberately turns a
+        // long printable list into a scalar reference:
+        //
+        //     ValueConv => 'length($val) > 32 ? \\$val : $val'
+        //
+        // ExifTool renders that referenced string through its binary-data
+        // path.  Gate on the resolved name rather than tag id alone: 0x0117
+        // is reused by MakerNote tables and those tags do not inherit this
+        // TIFF-table conversion.
+        let tag_value = match (tag_name.rsplit(':').next(), tag_value) {
+            (Some("StripByteCounts"), TagValue::String(value)) if value.len() > 32 => {
+                TagValue::Binary(value.into_bytes())
+            }
+            (_, value) => value,
+        };
         metadata.insert(tag_name, tag_value);
     }
 
@@ -481,6 +496,37 @@ fn process_tiff_ifd_tags<'a>(
     }
 
     (exif_ifd_offset, gps_ifd_offset, makernote_data)
+}
+
+#[cfg(test)]
+mod strip_byte_counts_tests {
+    use super::*;
+    use std::borrow::Cow;
+
+    #[test]
+    fn long_strip_byte_counts_use_exiftools_binary_placeholder_value() {
+        // Exif.pm 0x117 applies
+        // `ValueConv => 'length($val) > 32 ? \\$val : $val'`.  Fifty four-digit
+        // counts become a 249-byte space-separated value, so ExifTool exposes
+        // the referenced string as binary data instead of printing the list.
+        let raw = (0..50)
+            .flat_map(|_| 1961u32.to_le_bytes())
+            .collect::<Vec<_>>();
+        let tags = vec![(0x0117, 4, 50, Cow::Owned(raw))];
+        let mut metadata = MetadataMap::new();
+
+        process_tiff_ifd_tags(&tags, "IFD0", ByteOrder::LittleEndian, &mut metadata);
+
+        let expected = std::iter::repeat_n("1961", 50)
+            .collect::<Vec<_>>()
+            .join(" ")
+            .into_bytes();
+        assert_eq!(expected.len(), 249);
+        assert_eq!(
+            metadata.get("IFD0:StripByteCounts"),
+            Some(&TagValue::Binary(expected))
+        );
+    }
 }
 
 /// Parses an EXIF sub-IFD and extracts tags.
