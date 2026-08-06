@@ -2850,6 +2850,12 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         return converted;
     }
 
+    // XMP.pdf::Trapped removes one leading PDF name slash before its
+    // True/False/Unknown PrintConv (ExifTool XMP.pm:1232-1237).
+    if tag == "XMP:Trapped" {
+        return value.strip_prefix('/').unwrap_or(value).to_string();
+    }
+
     match local_name {
         // IPTC Urgency (0-8 scale)
         "Urgency" => format_iptc_urgency(value),
@@ -3868,6 +3874,26 @@ mod tests {
             format_xmp_value("XMP-dc:Description", "2021-10-01T14:18:11Z"),
             "2021-10-01T14:18:11Z"
         );
+    }
+
+    #[test]
+    fn pdf_trapped_removes_one_leading_slash() {
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description xmlns:pdf="http://ns.adobe.com/pdf/1.3/">
+                <pdf:Trapped>/Unknown</pdf:Trapped>
+              </rdf:Description>
+            </rdf:RDF>
+        "#;
+
+        let tags = parse_xmp(xml).expect("parses PDF Trapped property");
+        assert_eq!(
+            tags.iter()
+                .find(|(name, _)| name == "XMP:Trapped")
+                .map(|(_, value)| value.as_str()),
+            Some("Unknown")
+        );
+        assert_eq!(format_xmp_value("XMP:Trapped", "//Unknown"), "/Unknown");
     }
 
     #[test]

@@ -75,6 +75,12 @@ fn extract_track_metadata(
         .find_child("mdia")
         .ok_or_else(|| "missing mdia atom".to_string())?;
 
+    // Canon CR3 stores its timed-metadata handler here (Track4: `meta`).
+    // This is distinct from the optional data handler beneath `minf`.
+    if let Some(hdlr) = mdia.find_child("hdlr") {
+        let _ = extract_track_handler_metadata(&hdlr, metadata, index);
+    }
+
     // Extract media header - optional
     if let Some(mdhd) = mdia.find_child("mdhd") {
         let _ = extract_media_header(&mdhd, metadata, index);
@@ -1505,6 +1511,18 @@ fn extract_track_handler_metadata(hdlr: &Atom, metadata: &mut MetadataMap) -> Re
                 TagValue::String(component_desc.to_string()),
             );
         }
+    }
+
+    // QuickTime.pm's HandlerType table gives `meta` the specific label "NRT
+    // Metadata".  ExifTool surfaces this track-level value without a numeric
+    // suffix, and CR3's Track4 is exactly this handler.  Other track handler
+    // values retain the existing suffix-only behavior to avoid replacing the
+    // file-level HandlerType with a different track's subtype.
+    if hdlr.data[8..12] == *b"meta" {
+        metadata.insert(
+            "QuickTime:HandlerType".to_string(),
+            TagValue::String("NRT Metadata".to_string()),
+        );
     }
 
     Ok(())
@@ -3411,6 +3429,31 @@ fn extract_xmp_from_atom(data: &[u8], metadata: &mut MetadataMap) -> Result<(), 
 mod tests {
     use super::*;
     use crate::parsers::quicktime::FourCC;
+
+    #[test]
+    fn track_meta_handler_uses_exiftools_nrt_metadata_label() {
+        // QuickTime.pm's `HandlerType` PrintConv maps `meta` to "NRT
+        // Metadata". CanonRaw.cr3 carries this in Track4's mdia/hdlr atom.
+        let handler_data = [
+            0, 0, 0, 0, // version and flags
+            0, 0, 0, 0, // handler class
+            b'm', b'e', b't', b'a', // handler subtype
+        ];
+        let hdlr = Atom {
+            atom_type: FourCC::from_string("hdlr").expect("valid atom type"),
+            data: &handler_data,
+            header_size: 8,
+        };
+        let mut metadata = MetadataMap::new();
+
+        extract_track_handler_metadata(&hdlr, &mut metadata, 3)
+            .expect("track handler should parse");
+
+        assert_eq!(
+            metadata.get_string("QuickTime:HandlerType"),
+            Some("NRT Metadata")
+        );
+    }
 
     #[test]
     fn pentax_mov_uses_the_generated_binary_layout() {

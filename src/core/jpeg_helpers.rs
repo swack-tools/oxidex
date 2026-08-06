@@ -1233,17 +1233,21 @@ pub fn process_spiff_segments(segments: &[Segment], metadata: &mut MetadataMap) 
     }
 }
 
-/// Extracts Ricoh's standard APP5 `RMETA` Azimuth field.
+/// Extracts Ricoh's standard APP5 `RMETA` menu fields.
 ///
 /// `Ricoh.pm::ProcessRicohRMETA` stores parallel NUL-delimited tag names and
-/// big/little-endian `int16u` menu values in section types 1 and 3.  Azimuth
-/// is the only RMETA field handled here; its complete PrintConv is fixed by
-/// the pinned ExifTool table.
+/// big/little-endian `int16u` menu values in section types 1 and 3.  Each
+/// emitted value below is a complete PrintConv map from the pinned
+/// `Ricoh::RMETA` table.
 pub fn process_ricoh_rmeta_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     const DIRECTIONS: [&str; 16] = [
         "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW",
         "NW", "NNW",
     ];
+    const SIGN_TYPES: [&str; 3] = ["Directional", "Warning", "Information"];
+    const LOCATIONS: [&str; 4] = ["Verge", "Gantry", "Central reservation", "Roundabout"];
+    const LIT_VALUES: [&str; 2] = ["Yes", "No"];
+    const CONDITIONS: [&str; 4] = ["Good", "Fair", "Poor", "Damaged"];
 
     for data in segments
         .iter()
@@ -1304,16 +1308,41 @@ pub fn process_ricoh_rmeta_segments(segments: &[Segment], metadata: &mut Metadat
             pos += payload_size;
         }
 
-        if let Some((index, _)) = names
-            .iter()
-            .enumerate()
-            .find(|(_, name)| **name == b"Azimuth")
-            && let Some(direction) = numbers
-                .get(index)
-                .and_then(|value| value.checked_sub(1))
-                .and_then(|value| DIRECTIONS.get(value as usize))
-        {
-            metadata.insert("APP5:Azimuth", TagValue::new_string(*direction));
+        for (index, name) in names.iter().enumerate() {
+            let Some(value) = numbers.get(index).copied() else {
+                continue;
+            };
+            let mapped = if *name == b"Sign type" {
+                value
+                    .checked_sub(1)
+                    .and_then(|index| SIGN_TYPES.get(index as usize))
+                    .map(|value| ("APP5:SignType", *value))
+            } else if *name == b"Location" {
+                value
+                    .checked_sub(1)
+                    .and_then(|index| LOCATIONS.get(index as usize))
+                    .map(|value| ("APP5:Location", *value))
+            } else if *name == b"Lit" {
+                value
+                    .checked_sub(1)
+                    .and_then(|index| LIT_VALUES.get(index as usize))
+                    .map(|value| ("APP5:Lit", *value))
+            } else if *name == b"Condition" {
+                value
+                    .checked_sub(1)
+                    .and_then(|index| CONDITIONS.get(index as usize))
+                    .map(|value| ("APP5:Condition", *value))
+            } else if *name == b"Azimuth" {
+                value
+                    .checked_sub(1)
+                    .and_then(|value| DIRECTIONS.get(value as usize))
+                    .map(|value| ("APP5:Azimuth", *value))
+            } else {
+                None
+            };
+            if let Some((key, value)) = mapped {
+                metadata.insert(key, TagValue::new_string(value));
+            }
         }
     }
 }
@@ -1781,6 +1810,23 @@ mod tests {
         process_ricoh_rmeta_segments(&segments, &mut metadata);
 
         assert_eq!(metadata.get_string("APP5:Azimuth"), Some("E"));
+    }
+
+    #[test]
+    fn exiftool_jpeg_rmeta_menu_fields_match_pinned_exiftool() {
+        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/ExifTool.jpg");
+        let reader =
+            crate::io::buffered_reader::BufferedReader::new(path).expect("read ExifTool.jpg");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse ExifTool.jpg segments");
+        let mut metadata = MetadataMap::new();
+
+        process_ricoh_rmeta_segments(&segments, &mut metadata);
+
+        assert_eq!(metadata.get_string("APP5:Condition"), Some("Good"));
+        assert_eq!(metadata.get_string("APP5:Lit"), Some("No"));
+        assert_eq!(metadata.get_string("APP5:Location"), Some("Roundabout"));
+        assert_eq!(metadata.get_string("APP5:SignType"), Some("Information"));
     }
 
     /// `IPTC:ReferenceNumber` (record 2, dataset 50) is IPTC.pm's
