@@ -694,7 +694,8 @@ tables:
         description: "YCbCrPositioning tag"
       - id: "0x0214"
         name: "ReferenceBlackWhite"
-        writable: false
+        writable: true
+        type: rational64u
         description: "ReferenceBlackWhite tag"
       - id: "0x022F"
         name: "StripRowCounts"

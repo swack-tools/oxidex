@@ -181,4 +181,23 @@ mod tests {
             Some("rational64u")
         );
     }
+
+    /// ExifTool 13.59 Exif.pm 0x0214 declares ReferenceBlackWhite as a
+    /// writable `rational64u` with six components in IFD0.
+    #[test]
+    fn reference_black_white_matches_pinned_exiftool_contract() {
+        let exif = get_tag_table("Exif::Main").expect("Exif::Main table should exist");
+        let reference_black_white = exif
+            .tags
+            .iter()
+            .find(|tag| tag.id == "0x0214")
+            .expect("ReferenceBlackWhite (0x0214) should exist");
+
+        assert_eq!(reference_black_white.name, "ReferenceBlackWhite");
+        assert!(reference_black_white.writable);
+        assert_eq!(
+            reference_black_white.type_name.as_deref(),
+            Some("rational64u")
+        );
+    }
 }
