@@ -191,6 +191,21 @@ fn canon_cr3_image_unique_id_is_lowercase_makernote_hex() {
 }
 
 #[test]
+fn canon_cr3_internal_serial_number_trims_only_trailing_ff_bytes() {
+    // Canon.pm 0x96 is a string; its ValueConv removes trailing 0xff bytes.
+    // CanonRaw.cr3 is the wave-10 fixture with this exact value.
+    let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
+        .expect("pinned Canon CR3 fixture must be available");
+    let metadata = parse_raw_metadata(&data, RawFormat::CanonCR3)
+        .expect("pinned Canon CR3 fixture should parse");
+
+    assert_eq!(
+        metadata.get_string("Canon:InternalSerialNumber"),
+        Some("CG0156580")
+    );
+}
+
+#[test]
 fn test_parse_minimal_tiff_based_raw() {
     // Create a minimal valid TIFF header
     // II (little-endian) + 0x002A (magic 42) + offset to IFD (8)

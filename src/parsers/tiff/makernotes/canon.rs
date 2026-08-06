@@ -5886,6 +5886,26 @@ fn parse_canon_makernote_impl_located(
                 }
             }
 
+            // Canon.pm 0x96 is an ASCII string except that some bodies pad it
+            // with 0xff rather than NUL. Its ValueConv removes only those
+            // trailing 0xff bytes before normal TIFF string termination.
+            CANON_INTERNAL_SERIAL_NUMBER => {
+                if let Some(raw) = extract_canon_bytes_with_base(entry, ifd_data, base) {
+                    let without_ff = raw
+                        .iter()
+                        .rposition(|&byte| byte != 0xff)
+                        .map_or(&[][..], |last| &raw[..=last]);
+                    let text = without_ff
+                        .split(|&byte| byte == 0)
+                        .next()
+                        .unwrap_or_default();
+                    tags.insert(
+                        "Canon:InternalSerialNumber".to_string(),
+                        String::from_utf8_lossy(text).to_string(),
+                    );
+                }
+            }
+
             // FileInfo array (Phase 3)
             CANON_FILE_INFO => {
                 // FileInfo is a SHORT array

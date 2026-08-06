@@ -474,9 +474,13 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
     // focused passes above, which know their schemas' FlatName overrides, keep
     // precedence over this one's plain path concatenation.
     let list_structs = extract_list_struct_values(xml_bytes)?;
-    for (tag, value) in &list_structs {
+    for (tag, values) in &list_structs {
         if !results.iter().any(|(t, _)| t == tag) {
-            results.push((tag.clone(), value.clone()));
+            if values.len() > 1 {
+                list_elements.retain(|(existing, _)| existing != tag);
+                list_elements.push((tag.clone(), values.clone()));
+            }
+            results.push((tag.clone(), values.join(", ")));
         }
     }
 
@@ -1351,7 +1355,7 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
 /// `RegionName`/`RegionAreaH`/`RegionExtensions...` rather than the
 /// `RegionsRegionList...` this concatenation builds. Emitting those would trade
 /// missing tags for wrong ones.
-fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
+fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>> {
     const MWG_RS_NS: &str = "http://www.metadataworkinggroup.com/schemas/regions/";
 
     let mut reader = Reader::from_reader(xml_bytes);
@@ -1484,12 +1488,7 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>>
 
     Ok(collected
         .into_iter()
-        .map(|(flat_id, values)| {
-            (
-                format!("XMP:{}", exiftool_flat_tag_name(&flat_id)),
-                values.join(", "),
-            )
-        })
+        .map(|(flat_id, values)| (format!("XMP:{}", exiftool_flat_tag_name(&flat_id)), values))
         .collect())
 }
 
@@ -5384,17 +5383,32 @@ mod top_level_struct_tests {
         assert_eq!(
             tags.iter()
                 .find(|(t, _)| t == "XMP:LocationShownCity")
-                .map(|(_, v)| v.as_str()),
-            Some("London, Paris")
+                .map(|(_, values)| values.as_slice()),
+            Some(["London".to_string(), "Paris".to_string()].as_slice())
         );
         assert_eq!(
             tags.iter()
                 .find(|(t, _)| t == "XMP:LocationShownCountryCode")
-                .map(|(_, v)| v.as_str()),
-            Some("GB, FR")
+                .map(|(_, values)| values.as_slice()),
+            Some(["GB".to_string(), "FR".to_string()].as_slice())
         );
         // The container itself is not a flattened tag.
         assert!(!tags.iter().any(|(t, _)| t == "XMP:LocationShown"));
+
+        // The Iptc4xmpExt table declares LocationShown as a Bag of
+        // structures, so `exiftool -json XMP7.xmp` emits arrays rather than
+        // one comma-joined scalar for its repeated fields.
+        let typed = parse_xmp_typed(xml).unwrap();
+        assert_eq!(
+            typed
+                .iter()
+                .find(|(tag, _)| tag == "XMP:LocationShownCity")
+                .map(|(_, value)| value),
+            Some(&XmpValue::List(vec![
+                "London".to_string(),
+                "Paris".to_string()
+            ]))
+        );
     }
 
     #[test]
@@ -5415,14 +5429,14 @@ mod top_level_struct_tests {
         assert_eq!(
             tags.iter()
                 .find(|(tag, _)| tag == "XMP:StructList2Item1")
-                .map(|(_, value)| value.as_str()),
-            Some("c1-1")
+                .map(|(_, values)| values.as_slice()),
+            Some(["c1-1".to_string()].as_slice())
         );
         assert_eq!(
             tags.iter()
                 .find(|(tag, _)| tag == "XMP:StructList2Item2")
-                .map(|(_, value)| value.as_str()),
-            Some("c2-1")
+                .map(|(_, values)| values.as_slice()),
+            Some(["c2-1".to_string()].as_slice())
         );
     }
 
@@ -5452,14 +5466,14 @@ mod top_level_struct_tests {
         assert_eq!(
             tags.iter()
                 .find(|(t, _)| t == "XMP:ManifestLinkForm")
-                .map(|(_, v)| v.as_str()),
-            Some("EmbedByReference")
+                .map(|(_, values)| values.as_slice()),
+            Some(["EmbedByReference".to_string()].as_slice())
         );
         assert_eq!(
             tags.iter()
                 .find(|(t, _)| t == "XMP:ManifestReferenceFilePath")
-                .map(|(_, v)| v.as_str()),
-            Some(r"C:\some path\file.ext")
+                .map(|(_, values)| values.as_slice()),
+            Some([r"C:\some path\file.ext".to_string()].as_slice())
         );
     }
 }

@@ -1865,6 +1865,32 @@ mod tests {
     }
 
     #[test]
+    fn leica_cl_ifd2_preview_pair_matches_pinned_exiftool() {
+        let path =
+            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaCL.jpg");
+        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+            .expect("read pinned Leica CL fixture");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse pinned Leica CL segments");
+        let mut metadata = MetadataMap::new();
+
+        process_exif_segments(&segments, &reader, &mut metadata);
+
+        assert_eq!(
+            metadata.get_integer("IFD2:PreviewImageStart"),
+            Some(7064224)
+        );
+        assert_eq!(
+            metadata.get_integer("IFD2:PreviewImageLength"),
+            Some(895146)
+        );
+        assert_eq!(
+            metadata.get_string("IFD2:PreviewImage"),
+            Some("(Binary data 895146 bytes, use -b option to extract)")
+        );
+    }
+
+    #[test]
     fn process_ricoh_rmeta_extracts_azimuth() {
         // Minimal standard RMETA directory with one tag. Section sizes include
         // the two-byte size field, matching Ricoh.pm's ProcessRicohRMETA.

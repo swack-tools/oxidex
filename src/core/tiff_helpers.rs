@@ -1333,12 +1333,22 @@ pub fn parse_ifd2_preview_image(
     }
 
     if let (Some(start), Some(length)) = (preview_start, preview_length)
-        && length > 0
+        && let Some(absolute_start) = start.checked_add(tiff_base)
     {
         metadata.insert(
-            "IFD2:PreviewImage",
-            read_or_placeholder(reader, start, length),
+            "IFD2:PreviewImageStart",
+            TagValue::new_integer(absolute_start as i64),
         );
+        metadata.insert(
+            "IFD2:PreviewImageLength",
+            TagValue::new_integer(length as i64),
+        );
+        if length > 0 {
+            metadata.insert(
+                "IFD2:PreviewImage",
+                read_or_placeholder(reader, start, length),
+            );
+        }
     }
 
     if let (Some(start), Some(length)) = (jpg_from_raw_start, jpg_from_raw_length)
