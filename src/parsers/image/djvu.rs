@@ -149,6 +149,10 @@ fn metadata_from_expression(expression: Expression, metadata: &mut MetadataMap) 
                 "DjVu-Meta:Author".to_string(),
                 TagValue::new_string(value.clone()),
             ),
+            "Title" => metadata.insert(
+                "DjVu-Meta:Title".to_string(),
+                TagValue::new_string(value.clone()),
+            ),
             _ => None,
         };
     }
