@@ -1040,6 +1040,21 @@ const FILE_INFO_WB_BRACKET_VALUE_GM: usize = 13;
 const FILE_INFO_FILTER_EFFECT: usize = 14;
 /// ExifTool `%Canon::FileInfo` key 15 (Canon.pm:6984) — `ToningEffect`.
 const FILE_INFO_TONING_EFFECT: usize = 15;
+/// ExifTool `%Canon::FileInfo` key 7 (Canon.pm:6934) — `RawJpgSize`.
+const FILE_INFO_RAW_JPG_SIZE: usize = 7;
+/// ExifTool `%Canon::FileInfo` key 19 (Canon.pm:7003) — `LiveViewShooting`.
+const FILE_INFO_LIVE_VIEW_SHOOTING: usize = 19;
+/// ExifTool `%Canon::FileInfo` keys 20/21 (Canon.pm:7004-7005) — focus distance range.
+const FILE_INFO_FOCUS_DISTANCE_UPPER: usize = 20;
+const FILE_INFO_FOCUS_DISTANCE_LOWER: usize = 21;
+/// ExifTool `%Canon::FileInfo` key 23 (Canon.pm:7010) — `ShutterMode`.
+const FILE_INFO_SHUTTER_MODE: usize = 23;
+/// ExifTool `%Canon::FileInfo` key 25 (Canon.pm:7017) — `FlashExposureLock`.
+const FILE_INFO_FLASH_EXPOSURE_LOCK: usize = 25;
+/// ExifTool `%Canon::FileInfo` key 32 (Canon.pm:7033) — `AntiFlicker`.
+const FILE_INFO_ANTI_FLICKER: usize = 32;
+/// ExifTool `%Canon::FileInfo` key 61 (Canon.pm:7048) — `RFLensType`.
+const FILE_INFO_RF_LENS_TYPE: usize = 0x3d;
 
 // SensorInfo array indices (tag 0x00E0)
 //
@@ -4060,6 +4075,15 @@ fn format_focus_distance(value: i16) -> String {
     format!("{} m", format_perl_number(distance_m))
 }
 
+/// Applies the pinned `%Canon::FileInfo` enum directly, including ExifTool's
+/// numeric fallback for a value that is not listed in its `PrintConv` map.
+fn decode_file_info_enum(name: &str, value: i64) -> String {
+    crate::exiftool_tables::find_table("Canon", "FileInfo")
+        .and_then(|table| table.fields.iter().find(|field| field.name == name))
+        .and_then(|field| field.print_conv.apply(value))
+        .unwrap_or_else(|| format!("Unknown ({value})"))
+}
+
 /// Decodes the AF points in focus bitfield to a human-readable string.
 ///
 /// Canon stores which AF points were used for focus as a bitmask, where
@@ -5827,6 +5851,16 @@ fn parse_canon_makernote_impl_located(
                         );
                     }
 
+                    // RawJpgSize (Perl key 7). `RawConv => '$val < 0 ? undef : $val'`.
+                    if let Some(&raw_jpg_size) = array.get(FILE_INFO_RAW_JPG_SIZE)
+                        && raw_jpg_size >= 0
+                    {
+                        tags.insert(
+                            "Canon:RawJpgSize".to_string(),
+                            CANON_IMAGE_SIZE.decode(raw_jpg_size),
+                        );
+                    }
+
                     // LongExposureNoiseReduction2 (Perl key 8). `RawConv => '$val<0 ? undef'`.
                     if let Some(&long_exposure_nr) = array.get(FILE_INFO_LONG_EXPOSURE_NR2)
                         && long_exposure_nr >= 0
@@ -5869,6 +5903,44 @@ fn parse_canon_makernote_impl_located(
                         tags.insert(
                             "Canon:ToningEffect".to_string(),
                             TONING_EFFECT.decode(toning_effect),
+                        );
+                    }
+
+                    for (index, name) in [
+                        (FILE_INFO_LIVE_VIEW_SHOOTING, "LiveViewShooting"),
+                        (FILE_INFO_SHUTTER_MODE, "ShutterMode"),
+                        (FILE_INFO_FLASH_EXPOSURE_LOCK, "FlashExposureLock"),
+                        (FILE_INFO_ANTI_FLICKER, "AntiFlicker"),
+                    ] {
+                        if let Some(&value) = array.get(index) {
+                            tags.insert(
+                                format!("Canon:{name}"),
+                                decode_file_info_enum(name, i64::from(value)),
+                            );
+                        }
+                    }
+
+                    // ExifTool only emits the lower bound when key 20's RawConv accepts
+                    // the upper bound. A zero upper value means it was not recorded.
+                    if let Some(&upper) = array.get(FILE_INFO_FOCUS_DISTANCE_UPPER)
+                        && upper != 0
+                    {
+                        tags.insert(
+                            "Canon:FocusDistanceUpper".to_string(),
+                            format_focus_distance(upper),
+                        );
+                        if let Some(&lower) = array.get(FILE_INFO_FOCUS_DISTANCE_LOWER) {
+                            tags.insert(
+                                "Canon:FocusDistanceLower".to_string(),
+                                format_focus_distance(lower),
+                            );
+                        }
+                    }
+
+                    if let Some(&rf_lens_type) = array.get(FILE_INFO_RF_LENS_TYPE) {
+                        tags.insert(
+                            "Canon:RFLensType".to_string(),
+                            decode_file_info_enum("RFLensType", i64::from(rf_lens_type as u16)),
                         );
                     }
 
@@ -7471,6 +7543,112 @@ mod tests {
             result.get("Canon:BracketShotNumber"),
             Some(&"9".to_string())
         );
+    }
+
+    /// CanonRaw.cr3's FileInfo values, as reported by pinned ExifTool 13.59.
+    #[test]
+    fn test_parse_file_info_canon_raw_values() {
+        let mut file_info = vec![0i16; 62];
+        file_info[0] = 124; // byte length; keeps the record at its documented alignment
+        file_info[7] = 0; // RawJpgSize: Large
+        file_info[19] = 1; // LiveViewShooting: On
+        file_info[20] = 24; // FocusDistanceUpper: 0.24 m
+        file_info[21] = 22; // FocusDistanceLower: 0.22 m
+        file_info[23] = 1; // ShutterMode: Electronic First Curtain
+        file_info[25] = 0; // FlashExposureLock: Off
+        file_info[32] = 0; // AntiFlicker: Off
+        file_info[61] = 0; // RFLensType: n/a
+
+        let data = canon_makernote_with_short_array(CANON_FILE_INFO, &file_info);
+        let tags = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+
+        assert_eq!(
+            tags.get("Canon:RawJpgSize").map(String::as_str),
+            Some("Large")
+        );
+        assert_eq!(
+            tags.get("Canon:LiveViewShooting").map(String::as_str),
+            Some("On")
+        );
+        assert_eq!(
+            tags.get("Canon:FocusDistanceUpper").map(String::as_str),
+            Some("0.24 m")
+        );
+        assert_eq!(
+            tags.get("Canon:FocusDistanceLower").map(String::as_str),
+            Some("0.22 m")
+        );
+        assert_eq!(
+            tags.get("Canon:ShutterMode").map(String::as_str),
+            Some("Electronic First Curtain")
+        );
+        assert_eq!(
+            tags.get("Canon:FlashExposureLock").map(String::as_str),
+            Some("Off")
+        );
+        assert_eq!(
+            tags.get("Canon:AntiFlicker").map(String::as_str),
+            Some("Off")
+        );
+        assert_eq!(
+            tags.get("Canon:RFLensType").map(String::as_str),
+            Some("n/a")
+        );
+    }
+
+    #[test]
+    fn test_parse_file_info_sentinels_and_unknown_enums() {
+        struct Case {
+            name: &'static str,
+            changes: &'static [(usize, i16)],
+            tag: &'static str,
+            expected: Option<&'static str>,
+        }
+
+        let cases = [
+            Case {
+                name: "negative raw JPEG size is omitted",
+                changes: &[(7, -1)],
+                tag: "Canon:RawJpgSize",
+                expected: None,
+            },
+            Case {
+                name: "focus distance beyond 655.345 m is infinity",
+                changes: &[(20, -1)],
+                tag: "Canon:FocusDistanceUpper",
+                expected: Some("inf"),
+            },
+            Case {
+                name: "lower focus distance is suppressed without upper distance",
+                changes: &[(20, 0), (21, 22)],
+                tag: "Canon:FocusDistanceLower",
+                expected: None,
+            },
+            Case {
+                name: "unknown live view enum falls back to its number",
+                changes: &[(19, 99)],
+                tag: "Canon:LiveViewShooting",
+                expected: Some("Unknown (99)"),
+            },
+        ];
+
+        for case in cases {
+            let mut file_info = vec![0i16; 62];
+            file_info[0] = 124;
+            for &(index, value) in case.changes {
+                file_info[index] = value;
+            }
+
+            let data = canon_makernote_with_short_array(CANON_FILE_INFO, &file_info);
+            let tags = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+
+            assert_eq!(
+                tags.get(case.tag).map(String::as_str),
+                case.expected,
+                "{}",
+                case.name
+            );
+        }
     }
 
     #[test]
