@@ -104,12 +104,12 @@ fn extract_track_metadata(
         if let Some(dinf) = minf.find_child("dinf")
             && let Some(dref) = dinf.find_child("dref")
         {
-            let _ = extract_data_handler_info(dref.data, metadata, index);
+            let _ = extract_data_handler_info(dref.data, metadata);
         }
 
         // Also check for hdlr directly in minf (some formats use this)
         if let Some(hdlr) = minf.find_child("hdlr") {
-            let _ = extract_track_handler_metadata(&hdlr, metadata, index);
+            let _ = extract_track_handler_metadata(&hdlr, metadata);
         }
     }
 
@@ -1423,11 +1423,13 @@ fn extract_video_frame_rate(
 
 /// Extract data handler information from dref atom in minf→dinf→dref
 /// The dref contains data references that can specify data handlers
-fn extract_data_handler_info(
-    data: &[u8],
-    metadata: &mut MetadataMap,
-    track_index: usize,
-) -> Result<(), String> {
+///
+/// Note: does not take a track index / suffix. ExifTool's own JSON output
+/// only ever has one `HandlerClass` key per file -- when multiple tracks
+/// each contribute an hdlr/dref, later tracks silently overwrite earlier
+/// ones (last write wins) rather than appearing under distinct keys like
+/// `HandlerClass_2`. We mirror that by always writing the bare tag name.
+fn extract_data_handler_info(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
     // dref structure:
     // 0-3: version/flags
     // 4-7: number of entries
@@ -1436,12 +1438,6 @@ fn extract_data_handler_info(
     if data.len() < 8 {
         return Ok(());
     }
-
-    let track_suffix = if track_index > 0 {
-        format!("_{}", track_index + 1)
-    } else {
-        String::new()
-    };
 
     let reader = EndianReader::big_endian(data);
 
@@ -1468,7 +1464,7 @@ fn extract_data_handler_info(
                 _ => return Ok(()), // Unknown type, don't output
             };
             metadata.insert(
-                format!("QuickTime:HandlerClass{}", track_suffix),
+                "QuickTime:HandlerClass".to_string(),
                 TagValue::String(handler_class.to_string()),
             );
         }
@@ -1478,20 +1474,12 @@ fn extract_data_handler_info(
 }
 
 /// Extract track-level handler metadata from hdlr atom in track
-fn extract_track_handler_metadata(
-    hdlr: &Atom,
-    metadata: &mut MetadataMap,
-    track_index: usize,
-) -> Result<(), String> {
+///
+/// Note: does not take a track index / suffix -- see `extract_data_handler_info`.
+fn extract_track_handler_metadata(hdlr: &Atom, metadata: &mut MetadataMap) -> Result<(), String> {
     if hdlr.data.len() < 12 {
         return Ok(());
     }
-
-    let track_suffix = if track_index > 0 {
-        format!("_{}", track_index + 1)
-    } else {
-        String::new()
-    };
 
     // Component type / handler class (4 bytes at offset 4)
     let component_type = &hdlr.data[4..8];
@@ -1503,7 +1491,7 @@ fn extract_track_handler_metadata(
         };
         if !component_desc.is_empty() {
             metadata.insert(
-                format!("QuickTime:HandlerClass{}", track_suffix),
+                "QuickTime:HandlerClass".to_string(),
                 TagValue::String(component_desc.to_string()),
             );
         }
