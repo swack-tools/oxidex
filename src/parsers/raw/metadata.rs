@@ -458,6 +458,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 let mut gps_ifd_offset = None;
                 let mut sub_ifd_offsets = Vec::new();
                 let mut makernote_data: Option<Vec<u8>> = None;
+                let mut makernote_preview_ifd_base: Option<u64> = None;
                 let mut camera_make: Option<String> = None;
                 let mut dng_adobe_private_data: Option<Vec<u8>> = None;
 
@@ -570,6 +571,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // MakerNotes contain manufacturer-specific camera settings
                     if *tag_id == 0x927C {
                         makernote_data = Some(bytes.to_vec());
+                        makernote_preview_ifd_base =
+                            ifd_entry_value_offset(data, ifd_offset, byte_order, 0x927C)
+                                .and_then(|offset| u64::from(offset).checked_add(10));
                         continue; // Don't add raw MakerNote to metadata, will be parsed separately
                     }
 
@@ -850,6 +854,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // Prefer EXIF IFD MakerNote/Make over IFD0 versions
                     if exif_makernote.is_some() {
                         makernote_data = exif_makernote;
+                        makernote_preview_ifd_base =
+                            ifd_entry_value_offset(data, offset, byte_order, 0x927C)
+                                .and_then(|offset| u64::from(offset).checked_add(10));
                     }
                     if exif_make.is_some() {
                         camera_make = exif_make;
@@ -904,7 +911,20 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // Use the MakerNote dispatcher to parse manufacturer-specific tags
                     let mut makernote_tags = std::collections::HashMap::new();
                     let mut value_forms = std::collections::HashMap::new();
-                    if let Err(e) =
+                    let result = if matches!(
+                        make.trim().to_ascii_lowercase().as_str(),
+                        "nikon" | "nikon corporation"
+                    ) && let Some(preview_ifd_base) = makernote_preview_ifd_base
+                    {
+                        crate::parsers::tiff::makernotes::nikon::parse_nikon_makernotes_with_preview_ifd_base(
+                            mn_data,
+                            byte_order,
+                            camera_model.as_deref(),
+                            preview_ifd_base,
+                            &mut makernote_tags,
+                            &mut value_forms,
+                        )
+                    } else {
                         crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_model_and_values(
                             make,
                             camera_model.as_deref(),
@@ -913,7 +933,8 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             &mut makernote_tags,
                             &mut value_forms,
                         )
-                    {
+                    };
+                    if let Err(e) = result {
                         eprintln!("Warning: Failed to parse MakerNote for {}: {}", make, e);
                     } else {
                         // Add parsed MakerNote tags to metadata

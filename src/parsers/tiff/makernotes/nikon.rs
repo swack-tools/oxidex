@@ -606,6 +606,20 @@ impl MakerNoteParser for NikonParser {
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
+        self.parse_with_preview_ifd_base(data, byte_order, model, tags, value_forms, None)
+    }
+}
+
+impl NikonParser {
+    fn parse_with_preview_ifd_base(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+        preview_ifd_base: Option<u64>,
+    ) -> std::result::Result<(), String> {
         if data.is_empty() {
             return Ok(());
         }
@@ -944,6 +958,7 @@ impl MakerNoteParser for NikonParser {
                         tiff_start,
                         entry.value_offset as usize,
                         order,
+                        preview_ifd_base,
                         tags,
                     );
                 }
@@ -1806,6 +1821,26 @@ pub fn parse_nikon_makernotes(
     if let Err(e) = parser.parse(data, byte_order, tags) {
         eprintln!("Nikon MakerNotes parse error: {}", e);
     }
+}
+
+/// Parses Nikon MakerNotes while converting PreviewIFD's relative image start
+/// to the absolute file offset ExifTool reports.
+pub fn parse_nikon_makernotes_with_preview_ifd_base(
+    data: &[u8],
+    byte_order: ByteOrder,
+    model: Option<&str>,
+    preview_ifd_base: u64,
+    tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
+) -> std::result::Result<(), String> {
+    NikonParser.parse_with_preview_ifd_base(
+        data,
+        byte_order,
+        model,
+        tags,
+        value_forms,
+        Some(preview_ifd_base),
+    )
 }
 
 /// Checks if data appears to be a Nikon MakerNote

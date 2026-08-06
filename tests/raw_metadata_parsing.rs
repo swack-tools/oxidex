@@ -135,6 +135,25 @@ fn test_rw2_af_point_position_is_relocated_from_makernote() {
 }
 
 #[test]
+fn nikon_nef_preview_image_start_uses_the_absolute_makernote_offset() {
+    // ExifTool 13.59: `exiftool -G1 -s -PreviewImageStart Nikon.nef` reports
+    // `[PreviewIFD] PreviewImageStart : 5958`. The Nikon PreviewIFD stores
+    // 4204 relative to its embedded TIFF header, so this catches dropping the
+    // tag or reporting that plausible-but-wrong relative value.
+    let fixture_path = "/tmp/oxidex-exiftool-cache/combined-samples/Nikon.nef";
+    let data = fs::read(fixture_path).expect("pinned Nikon NEF fixture must be available");
+
+    let metadata = parse_raw_metadata(&data, RawFormat::NikonNEF)
+        .expect("pinned Nikon NEF fixture should parse");
+
+    assert_eq!(
+        metadata.get_string("Nikon:PreviewImageStart"),
+        Some("5958"),
+        "PreviewIFD offsets must be reported relative to the embedded Nikon TIFF header"
+    );
+}
+
+#[test]
 fn test_parse_minimal_tiff_based_raw() {
     // Create a minimal valid TIFF header
     // II (little-endian) + 0x002A (magic 42) + offset to IFD (8)
