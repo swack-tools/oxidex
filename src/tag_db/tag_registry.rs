@@ -1962,10 +1962,10 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
     );
 
     registry.insert(
-        "EXIF:TIFFEPStandardID",
+        "EXIF:TIFF-EPStandardID",
         TagDescriptor::new(
             TagId::new_numeric(0x9216),
-            "EXIF:TIFFEPStandardID".to_string(),
+            "EXIF:TIFF-EPStandardID".to_string(),
             FormatFamily::EXIF,
             false,
             ValueType::Binary,
