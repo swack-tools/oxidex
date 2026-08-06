@@ -2242,6 +2242,16 @@ fn format_exif_display_value(
     byte_order: ByteOrder,
 ) -> Option<String> {
     match tag_id {
+        // ProfileCalibrationSig: Exif.pm 0xc6f4 inherits %utf8StringConv,
+        // which sets `Format => 'string'`. DNG permits the on-disk type to
+        // be either ASCII or BYTE (Validate.pm:156); a BYTE value therefore
+        // still has to be decoded as UTF-8 instead of falling through to the
+        // generic binary representation.
+        0xC6F4 if matches!(field_type, 1 | 2) && value_count >= 1 => {
+            let count = usize::try_from(value_count).ok()?;
+            let text = String::from_utf8_lossy(bytes.get(..count)?);
+            Some(text.trim_end_matches('\0').to_string())
+        }
         // ExtraSamples: SHORT, with a scalar PrintConv hash in Exif.pm 0x0152.
         // A single component is looked up normally and an unknown value uses
         // ExifTool's standard `Unknown ($val)` hash fallback. With multiple
@@ -9274,6 +9284,35 @@ mod backlog_group_1_printconv_tests {
         assert_eq!(
             metadata.get("EXIF:PreviewImage"),
             Some(&TagValue::Binary(vec![0xDE, 0xAD, 0xBE, 0xEF]))
+        );
+    }
+}
+
+#[cfg(test)]
+mod profile_calibration_sig_tests {
+    use super::*;
+
+    /// Exif.pm 13.59's 0xC6F4 inherits `%utf8StringConv`, whose `Format`
+    /// forces the DNG-legal BYTE representation to be decoded as UTF-8.
+    #[test]
+    fn profile_calibration_sig_decodes_byte_format_as_utf8() {
+        assert_eq!(
+            format_exif_display_value(
+                0xC6F4,
+                b"Camera \xCE\xA9 profile\0",
+                1,
+                18,
+                ByteOrder::LittleEndian,
+            ),
+            Some("Camera \u{03A9} profile".to_string())
+        );
+    }
+
+    #[test]
+    fn profile_calibration_sig_also_accepts_ascii_format() {
+        assert_eq!(
+            format_exif_display_value(0xC6F4, b"Adobe profile\0", 2, 14, ByteOrder::LittleEndian),
+            Some("Adobe profile".to_string())
         );
     }
 }
