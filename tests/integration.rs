@@ -178,6 +178,9 @@ mod iso_integration_tests;
 #[path = "integration/ram_integration_tests.rs"]
 mod ram_integration_tests;
 
+#[path = "integration/dss_integration_tests.rs"]
+mod dss_integration_tests;
+
 #[path = "integration/wpg_integration_tests.rs"]
 mod wpg_integration_tests;
 

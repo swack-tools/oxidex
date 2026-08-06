@@ -14,6 +14,7 @@ use crate::parsers::archive::tar::parse_tar_metadata;
 use crate::parsers::archive::zip::parse_zip_metadata;
 use crate::parsers::audio::aac::parse_aac_metadata;
 use crate::parsers::audio::ape::parse_ape_metadata;
+use crate::parsers::audio::dss::parse_dss_metadata;
 use crate::parsers::audio::flac::parse_flac_metadata;
 use crate::parsers::audio::mp3::parse_mp3_metadata;
 use crate::parsers::audio::ogg::parse_ogg_metadata;
@@ -136,6 +137,7 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::OPUS => convert_string_error(parse_opus_metadata(reader), "Opus"),
         FileFormat::APE => convert_string_error(parse_ape_metadata(reader), "APE"),
         FileFormat::RAM => convert_string_error(parse_ram_metadata(reader), "RAM"),
+        FileFormat::DSS => convert_string_error(parse_dss_metadata(reader), "DSS"),
         FileFormat::ZIP => convert_string_error(parse_zip_metadata(reader), "ZIP"),
         FileFormat::DOCX => convert_string_error(parse_docx_metadata(reader), "DOCX"),
         FileFormat::XLSX => convert_string_error(parse_xlsx_metadata(reader), "XLSX"),

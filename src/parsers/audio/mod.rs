@@ -6,6 +6,7 @@
 
 pub mod aac;
 pub mod ape;
+pub mod dss;
 pub mod flac;
 pub mod mp3;
 pub mod ogg;

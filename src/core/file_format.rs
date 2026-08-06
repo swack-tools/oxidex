@@ -132,6 +132,9 @@ pub enum FileFormat {
     /// RealAudio metafile containing a streaming URL (.ram)
     RAM,
 
+    /// Olympus Digital Speech Standard audio (.dss, .ds2)
+    DSS,
+
     // Phase 2: Document formats
     /// ZIP archive format (.zip)
     ZIP,
@@ -362,6 +365,7 @@ impl FileFormat {
             FileFormat::OPUS => "Opus",
             FileFormat::APE => "APE",
             FileFormat::RAM => "RAM",
+            FileFormat::DSS => "DSS",
             FileFormat::ZIP => "ZIP",
             FileFormat::DOCX => "DOCX",
             FileFormat::XLSX => "XLSX",
@@ -469,6 +473,7 @@ impl FileFormat {
             FileFormat::OPUS => &["opus"],
             FileFormat::APE => &["ape"],
             FileFormat::RAM => &["ram"],
+            FileFormat::DSS => &["dss", "ds2"],
             FileFormat::ZIP => &["zip"],
             FileFormat::DOCX => &["docx"],
             FileFormat::XLSX => &["xlsx"],

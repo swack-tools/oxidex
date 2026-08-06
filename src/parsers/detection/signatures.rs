@@ -80,6 +80,7 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     signature!(b"ID3", 0, FileFormat::MP3),
     signature!(b"FLV", 0, FileFormat::FLV),
     signature!(b"MAC ", 0, FileFormat::APE),
+    signature!(b"\x02dss", 0, FileFormat::DSS),
     signature!(b"\x1A\x45\xDF\xA3", 0, FileFormat::MKV),
     signature!(b"OggS", 0, FileFormat::OGG),
     // ASF/WMV - Header Object GUID
