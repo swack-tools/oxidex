@@ -222,15 +222,15 @@ pub fn raw_bytes_to_tag_value(
     heuristic_bytes_to_tag_value(bytes, byte_order)
 }
 
-/// Applies ExifTool 13.59's `%longBin` ValueConv for the one tag handled here.
+/// Applies ExifTool 13.59's `%longBin` ValueConv for the covered DNG tags.
 ///
-/// `ProfileHueSatMapData2` (Exif.pm 0xC6FB) first becomes its normal
-/// space-separated float text. Only when that text exceeds 64 bytes does
-/// ExifTool return a scalar reference, causing normal output to treat it as
-/// binary data while `-b` exposes the rendered text. Keep the threshold on the
-/// rendered value rather than the raw float bytes.
+/// `ProfileHueSatMapData2` (0xC6FB) and `ProfileHueSatMapData3` (0xCD39)
+/// first become normal space-separated float text. Only when that text exceeds
+/// 64 bytes does ExifTool return a scalar reference, causing normal output to
+/// treat it as binary data while `-b` exposes the rendered text. Keep the
+/// threshold on the rendered value rather than the raw float bytes.
 fn apply_long_binary_value_conv(tag_id: u16, value: TagValue) -> TagValue {
-    if tag_id == 0xC6FB
+    if matches!(tag_id, 0xC6FB | 0xCD39)
         && let TagValue::String(text) = &value
         && text.len() > 64
     {
@@ -2325,6 +2325,28 @@ mod tests {
         assert!(expected.len() > 64);
         assert_eq!(
             raw_bytes_to_tag_value(&long, 11, 5, 0xC6FB, order),
+            TagValue::Binary(expected.as_bytes().to_vec())
+        );
+    }
+
+    /// Exif.pm 13.59 applies the same `%longBin` ValueConv to the DNG 1.6
+    /// ProfileHueSatMapData3 tag (0xCD39).
+    #[test]
+    fn profile_hue_sat_map_data3_uses_exiftool_long_binary_threshold() {
+        let order = ByteOrder::LittleEndian;
+        let short = float_bytes(1.5, order);
+        assert_eq!(
+            raw_bytes_to_tag_value(&short, 11, 1, 0xCD39, order),
+            TagValue::new_string("1.5")
+        );
+
+        let long = (0..5)
+            .flat_map(|_| float_bytes(0.1, order))
+            .collect::<Vec<_>>();
+        let expected = "0.100000001490116 0.100000001490116 0.100000001490116 0.100000001490116 0.100000001490116";
+        assert!(expected.len() > 64);
+        assert_eq!(
+            raw_bytes_to_tag_value(&long, 11, 5, 0xCD39, order),
             TagValue::Binary(expected.as_bytes().to_vec())
         );
     }
