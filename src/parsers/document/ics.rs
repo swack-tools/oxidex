@@ -89,6 +89,33 @@ impl ICSParser {
         last_date
     }
 
+    /// Splits an iCalendar content line into its `NAME *(";" param)` prefix
+    /// and its value, at the first ":" that is not inside a double-quoted
+    /// parameter value.
+    ///
+    /// RFC 5545 section 3.2 allows parameter values to be quoted strings
+    /// which may themselves contain ":", ";", and ",". A naive
+    /// `str::find(':')` finds the first colon anywhere in the line, so a
+    /// line like:
+    ///   `ORGANIZER;CN="Doe, John";DIR="ldap:ldap.example.com":mailto:jdoe@example.com`
+    /// gets split inside the quoted DIR parameter value instead of at the
+    /// real property/value boundary, corrupting the extracted value. This
+    /// walks the line tracking quote state so the split lands on the
+    /// correct colon.
+    fn split_property_line(line: &str) -> Option<(&str, &str)> {
+        let mut in_quotes = false;
+        for (idx, ch) in line.char_indices() {
+            match ch {
+                '"' => in_quotes = !in_quotes,
+                ':' if !in_quotes => {
+                    return Some((&line[..idx], &line[idx + 1..]));
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     /// Converts an iCalendar DATE or DATE-TIME value to ExifTool's
     /// "YYYY:MM:DD[ HH:MM:SS[Z]]" style, matching VCard.pm's `%timeInfo`
     /// ValueConv/PrintConv (which for ICS is effectively a passthrough
@@ -264,11 +291,9 @@ impl ICSParser {
                 continue;
             }
             // Property line: NAME[;PARAM=VAL...]:VALUE
-            let Some(colon_idx) = line.find(':') else {
+            let Some((name_and_params, value)) = Self::split_property_line(line) else {
                 continue;
             };
-            let name_and_params = &line[..colon_idx];
-            let value = &line[colon_idx + 1..];
             let prop_name = name_and_params.split(';').next().unwrap_or(name_and_params);
             let prop_lower = prop_name.to_ascii_lowercase();
 
@@ -457,5 +482,32 @@ mod tests {
 
         let result = parser.parse(&reader);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn split_property_line_ignores_colons_inside_quoted_params() {
+        // RFC 5545 quoted parameter values may contain ":" (e.g. a "ldap:"
+        // URI), which must not be mistaken for the property/value delimiter.
+        let line = r#"ORGANIZER;CN="Doe, John";DIR="ldap:ldap.example.com":mailto:jdoe@example.com"#;
+        let (name_and_params, value) =
+            ICSParser::split_property_line(line).expect("line should split");
+        assert_eq!(
+            name_and_params,
+            r#"ORGANIZER;CN="Doe, John";DIR="ldap:ldap.example.com""#
+        );
+        assert_eq!(value, "mailto:jdoe@example.com");
+    }
+
+    #[test]
+    fn test_ics_vcalendar_tags_survive_quoted_params() {
+        let ics_data = b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nORGANIZER;CN=\"Doe, John\";DIR=\"ldap:ldap.example.com\":mailto:jdoe@example.com\r\nEND:VCALENDAR";
+        let reader = BufferedReader::from_bytes(ics_data);
+        let parser = ICSParser;
+        let metadata = parser.parse(&reader).unwrap();
+
+        assert_eq!(
+            metadata.get("VCard:Organizer").unwrap().as_string(),
+            Some("mailto:jdoe@example.com")
+        );
     }
 }
