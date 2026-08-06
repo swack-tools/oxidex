@@ -6,7 +6,7 @@
 
 use oxidex::core::operations::read_metadata;
 use oxidex::io::buffered_reader::BufferedReader;
-use oxidex::parsers::quicktime::parse_quicktime_metadata;
+use oxidex::parsers::quicktime::{parse_quicktime_metadata, parse_quicktime_metadata_from_bytes};
 use std::path::PathBuf;
 
 /// Helper function to get path to test fixture
@@ -318,4 +318,29 @@ fn m4a_fixture_reports_composite_avg_bitrate() {
     let metadata = read_metadata(path).expect("read pinned M4A fixture");
 
     assert_eq!(metadata.get_string("Composite:AvgBitrate"), Some("0 bps"));
+}
+
+#[test]
+fn avg_bitrate_sums_multiple_media_data_atoms() {
+    fn atom(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(payload.len() + 8);
+        bytes.extend_from_slice(&((payload.len() + 8) as u32).to_be_bytes());
+        bytes.extend_from_slice(kind);
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+
+    let mut movie_header = vec![0; 100];
+    movie_header[12..16].copy_from_slice(&1_000_u32.to_be_bytes());
+    movie_header[16..20].copy_from_slice(&2_000_u32.to_be_bytes());
+
+    let mut file = atom(b"mdat", &[0; 10]);
+    file.extend(atom(b"mdat", &[0; 15]));
+    file.extend(atom(b"moov", &atom(b"mvhd", &movie_header)));
+
+    let mut metadata = parse_quicktime_metadata_from_bytes(&file).expect("parse synthetic M4A");
+    oxidex::composite::apply(&mut metadata);
+
+    // (10 + 15) payload bytes * 8 bits / 2 seconds = 100 bps.
+    assert_eq!(metadata.get_string("Composite:AvgBitrate"), Some("100 bps"));
 }
