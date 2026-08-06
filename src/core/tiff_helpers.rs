@@ -610,6 +610,30 @@ mod color_map_tests {
     }
 }
 
+#[cfg(test)]
+mod document_name_tests {
+    use super::*;
+    use std::borrow::Cow;
+
+    #[test]
+    fn document_name_preserves_trailing_whitespace() {
+        // ExifTool 13.59 Exif.pm 0x10d has no RawConv or PrintConv.  In
+        // particular, the trailing ASCII space is data: the pinned oracle
+        // prints "Plan Scan " (the NUL terminator itself is not exposed).
+        let tags = vec![(0x010d, 2, 11, Cow::Borrowed(b"Plan Scan \0".as_slice()))];
+        let mut metadata = MetadataMap::new();
+
+        process_tiff_ifd_tags(&tags, "IFD0", ByteOrder::LittleEndian, &mut metadata);
+
+        assert_eq!(
+            metadata
+                .get("IFD0:DocumentName")
+                .and_then(TagValue::as_string),
+            Some("Plan Scan ")
+        );
+    }
+}
+
 /// Parses an EXIF sub-IFD and extracts tags.
 ///
 /// The EXIF sub-IFD contains detailed camera settings and shooting parameters.

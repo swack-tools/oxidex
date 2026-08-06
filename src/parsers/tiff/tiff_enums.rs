@@ -52,6 +52,14 @@ pub fn tiff_enum_to_string(tag_id: u16, value: i64) -> Option<String> {
             _ => None,
         },
 
+        // Thresholding (tag 0x0107)
+        0x0107 => match value {
+            1 => Some("No dithering or halftoning".to_string()),
+            2 => Some("Ordered dither or halftone".to_string()),
+            3 => Some("Randomized dither".to_string()),
+            _ => None,
+        },
+
         // PlanarConfiguration (tag 0x011C)
         0x011C => match value {
             1 => Some("Chunky".to_string()),
@@ -350,6 +358,26 @@ pub fn tiff_enum_to_string(tag_id: u16, value: i64) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::tiff_enum_to_string;
+
+    /// ExifTool 13.59 `Exif.pm` maps TIFF Thresholding (0x0107) through a
+    /// three-value PrintConv table. A missing arm makes the CLI expose the
+    /// numeric code instead of the declared TIFF meaning.
+    #[test]
+    fn thresholding_matches_exiftool_13_59() {
+        for (code, label) in [
+            (1i64, "No dithering or halftoning"),
+            (2, "Ordered dither or halftone"),
+            (3, "Randomized dither"),
+        ] {
+            assert_eq!(
+                tiff_enum_to_string(0x0107, code).as_deref(),
+                Some(label),
+                "Thresholding {code}"
+            );
+        }
+        assert_eq!(tiff_enum_to_string(0x0107, 0), None);
+        assert_eq!(tiff_enum_to_string(0x0107, 4), None);
+    }
 
     /// ExifTool 13.59 `Exif.pm` defines all seven Predictor PrintConv values,
     /// including the DNG 1.5 variants. Keep their spelling exact: code 3 is
