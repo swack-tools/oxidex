@@ -142,14 +142,44 @@ fn metadata_from_expression(expression: Expression, metadata: &mut MetadataMap) 
             _ => continue,
         };
         match name.as_str() {
-            "annote" => metadata.insert("DjVu:Annotation".to_string(), TagValue::new_string(value.clone())),
-            "Author" => metadata.insert("DjVu-Meta:Author".to_string(), TagValue::new_string(value.clone())),
-            "Title" => metadata.insert("DjVu-Meta:Title".to_string(), TagValue::new_string(value.clone())),
+            "annote" => metadata.insert(
+                "DjVu:Annotation".to_string(),
+                TagValue::new_string(value.clone()),
+            ),
+            "Author" => {
+                metadata.insert(
+                    "DjVu-Meta:Author".to_string(),
+                    TagValue::new_string(value.clone()),
+                );
+                metadata.insert(
+                    "DjVu:Author".to_string(),
+                    TagValue::new_string(value.clone()),
+                )
+            }
+            "Title" => {
+                metadata.insert(
+                    "DjVu-Meta:Title".to_string(),
+                    TagValue::new_string(value.clone()),
+                );
+                metadata.insert(
+                    "DjVu:Title".to_string(),
+                    TagValue::new_string(value.clone()),
+                )
+            }
             "url" => metadata.insert("DjVu:URL".to_string(), TagValue::new_string(value.clone())),
-            "CreationDate" => djvu_date(value).map(|value| metadata.insert("DjVu:CreateDate".to_string(), TagValue::new_string(value))),
-            "ModDate" => djvu_date(value).map(|value| metadata.insert("DjVu:ModifyDate".to_string(), TagValue::new_string(value))),
-            "Trapped" => metadata.insert("DjVu:Trapped".to_string(), TagValue::new_string(value.trim_start_matches('/').to_string())),
-            "note" | "Subject" | "Keywords" | "Creator" | "Producer" => metadata.insert(format!("DjVu:{name}"), TagValue::new_string(value.clone())),
+            "CreationDate" => djvu_date(value).and_then(|value| {
+                metadata.insert("DjVu:CreateDate".to_string(), TagValue::new_string(value))
+            }),
+            "ModDate" => djvu_date(value).and_then(|value| {
+                metadata.insert("DjVu:ModifyDate".to_string(), TagValue::new_string(value))
+            }),
+            "Trapped" => metadata.insert(
+                "DjVu:Trapped".to_string(),
+                TagValue::new_string(value.trim_start_matches('/').to_string()),
+            ),
+            "note" | "Subject" | "Keywords" | "Creator" | "Producer" => {
+                metadata.insert(format!("DjVu:{name}"), TagValue::new_string(value.clone()))
+            }
             _ => None,
         };
     }

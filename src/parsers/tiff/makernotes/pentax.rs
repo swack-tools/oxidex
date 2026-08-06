@@ -1224,7 +1224,12 @@ impl PentaxParser {
 
                 PENTAX_HOMETOWN_CITY => {
                     let value = entry.value_offset;
-                    tags.insert("Pentax:HometownCity".to_string(), value.to_string());
+                    let name = PENTAX_CONV6
+                        .iter()
+                        .find(|(code, _)| *code == value as i64)
+                        .map(|(_, name)| (*name).to_string())
+                        .unwrap_or_else(|| value.to_string());
+                    tags.insert("Pentax:HometownCity".to_string(), name);
                 }
 
                 // `SeparateTable => 'City'`, `PrintConv => \%pentaxCities`
@@ -4065,6 +4070,15 @@ mod tests {
         assert_eq!(tags["Pentax:DestinationDST"], "No");
         assert_eq!(tags["Pentax:HometownCity"], "Toronto");
         assert_eq!(tags["Pentax:DestinationCity"], "Toronto");
+    }
+
+    #[test]
+    fn samsung_gx20_hometown_city_uses_pentax_city_table() {
+        let metadata = crate::core::operations::read_metadata(std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGX20.jpg",
+        ))
+        .expect("read pinned Samsung GX20 fixture");
+        assert_eq!(metadata.get_string("Pentax:HometownCity"), Some("New York"));
     }
 }
 

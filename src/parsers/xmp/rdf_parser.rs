@@ -2952,6 +2952,9 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
 
         // EXIF enum tags that appear in XMP
         "ColorSpace" => decode_xmp_color_space(value),
+        "Contrast" | "Saturation" if tag.starts_with("XMP-exif:") => {
+            decode_xmp_contrast_or_saturation(value)
+        }
         // XMP.pm:2011-2024 gives this exif: Seq its own PrintConv. Do not
         // apply it to an unrelated property with the same local name.
         "ComponentsConfiguration" if tag.starts_with("XMP-exif:") => {
@@ -3073,6 +3076,19 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         // Default: return original value unchanged
         _ => value.to_string(),
     }
+}
+
+/// XMP.pm:2275-2290 gives exif:Contrast and exif:Saturation the same
+/// PrintConv. Keep it namespace-scoped because Camera Raw reuses both names
+/// with unrelated integer ranges.
+fn decode_xmp_contrast_or_saturation(value: &str) -> String {
+    match value {
+        "0" => "Normal",
+        "1" => "Low",
+        "2" => "High",
+        _ => return value.to_string(),
+    }
+    .to_string()
 }
 
 /// Decodes the PLUS Media Matrix IDs used by the pinned `PLUS.xmp` fixture.
@@ -4068,6 +4084,18 @@ mod tests {
                 "Y, Cb, Cr, -".to_string(),
             )]
         );
+    }
+
+    #[test]
+    fn exif_contrast_and_saturation_use_xmp_pm_print_conversion() {
+        // XMP.pm:2275-2290; NikonCoolpixP520.jpg stores both as 0.
+        for tag in ["XMP-exif:Contrast", "XMP-exif:Saturation"] {
+            assert_eq!(format_xmp_value(tag, "0"), "Normal");
+            assert_eq!(format_xmp_value(tag, "1"), "Low");
+            assert_eq!(format_xmp_value(tag, "2"), "High");
+        }
+        assert_eq!(format_xmp_value("XMP-crs:Contrast", "0"), "0");
+        assert_eq!(format_xmp_value("XMP-crs:Saturation", "0"), "0");
     }
 
     #[test]

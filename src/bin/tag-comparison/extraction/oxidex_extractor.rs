@@ -367,6 +367,16 @@ impl OxiDexExtractor {
                     }
                 }
 
+                // Olympus D450Z stores an all-zero UserComment prefix followed
+                // only by ASCII padding. ExifTool renders that as an empty
+                // comment rather than exposing the raw NULs and spaces.
+                if name == "UserComment"
+                    && s.bytes()
+                        .all(|byte| byte == 0 || byte.is_ascii_whitespace())
+                {
+                    return String::new();
+                }
+
                 // ImageDescription has no Exif.pm RawConv: normal ExifTool
                 // display retains meaningful leading whitespace while
                 // suppressing trailing ASCII padding.

@@ -258,6 +258,21 @@ fn canon_cr3_af_points_selected_uses_eos_afinfo2_bitset() {
 }
 
 #[test]
+fn canon_cr3_dust_removal_data_preserves_binary_cmt3_payload() {
+    // Canon.pm 0x0097 is `undef` with the Binary flag; CanonRaw.cr3 stores a
+    // 1024-byte CMT3 payload, which ExifTool reports only with `-b`.
+    let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
+        .expect("pinned Canon CR3 fixture must be available");
+    let metadata = parse_raw_metadata(&data, RawFormat::CanonCR3)
+        .expect("pinned Canon CR3 fixture should parse");
+
+    assert!(matches!(
+        metadata.get("Canon:DustRemovalData"),
+        Some(TagValue::Binary(bytes)) if bytes.len() == 1024
+    ));
+}
+
+#[test]
 fn test_parse_minimal_tiff_based_raw() {
     // Create a minimal valid TIFF header
     // II (little-endian) + 0x002A (magic 42) + offset to IFD (8)

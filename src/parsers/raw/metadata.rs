@@ -698,13 +698,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         }
                     } else {
                         match (format, ifd_index, *tag_id) {
-                            // CR2CFAPattern is physically stored in the sensor IFD3 and
-                            // ExifTool preserves that family-1 group. The generic fallback
-                            // folds unusual chained IFDs into IFD0, which is wrong for this
-                            // uniquely identified CR2 tag.
-                            (RawFormat::CanonCR2, 3, 0xC5E0) => {
-                                lookup_raw_tag_name(*tag_id, "IFD3", format)
-                            }
+                            // CR2CFAPattern is physically stored in the sensor IFD3, but
+                            // ExifTool reports it in the EXIF family for CR2 output.
+                            (RawFormat::CanonCR2, 3, 0xC5E0) => "EXIF:CR2CFAPattern".to_string(),
                             // TIFF/EP tag 0x9216 (TIFF-EPStandardID) lives in NEF
                             // IFD0. lookup_tag_name has no entry for it under the
                             // IFD0 group, so oxidex emitted "IFD0:0x9216" with a
@@ -4267,6 +4263,19 @@ fn parse_cr3_cmt3_makernotes(data: &[u8], metadata: &mut MetadataMap) {
         return;
     }
 
+    // Canon.pm 0x0097 (`DustRemovalData`) is an opaque `undef` value flagged
+    // Binary. The MakerNote dispatcher intentionally returns display strings,
+    // so preserve this one raw CMT3 IFD value before its results are merged.
+    // CMT3 is a complete TIFF and its offsets are relative to `tiff`, exactly
+    // as `parse_ifd` expects.
+    let dust_removal_data = parse_ifd(&SliceReader::new(tiff), first_ifd_offset as u64, byte_order)
+        .ok()
+        .and_then(|ifd_tags| {
+            ifd_tags.into_iter().find_map(|(tag_id, _, _, raw_bytes)| {
+                (tag_id == 0x0097).then(|| raw_bytes.into_owned())
+            })
+        });
+
     // The absolute file offset of the box payload, so `IsOffset` tags inside it
     // resolve against the file rather than against the box.
     let tiff_base = subslice_offset(data, tiff).unwrap_or(0) as u64;
@@ -4295,6 +4304,12 @@ fn parse_cr3_cmt3_makernotes(data: &[u8], metadata: &mut MetadataMap) {
     }
     for (tag_name, tag_value) in makernote_tags {
         metadata.insert(tag_name, TagValue::new_string(tag_value));
+    }
+    if let Some(bytes) = dust_removal_data {
+        metadata.insert(
+            "Canon:DustRemovalData".to_string(),
+            TagValue::new_binary(bytes),
+        );
     }
 }
 
@@ -9306,7 +9321,7 @@ mod rational_array_tests {
     }
 
     #[test]
-    fn cr2_cfa_pattern_keeps_ifd3_group() {
+    fn cr2_cfa_pattern_uses_exif_group() {
         let path = "/tmp/oxidex-exiftool-cache/exiftool/t/images/CanonRaw.cr2";
         if !std::path::Path::new(path).exists() {
             return;
@@ -9315,10 +9330,10 @@ mod rational_array_tests {
         let metadata = parse_raw_metadata(&data, RawFormat::CanonCR2).expect("parse CR2 fixture");
 
         assert_eq!(
-            metadata.get("IFD3:CR2CFAPattern"),
+            metadata.get("EXIF:CR2CFAPattern"),
             Some(&TagValue::new_string("[Red,Green][Green,Blue]".to_string()))
         );
-        assert!(!metadata.contains_key("IFD0:CR2CFAPattern"));
+        assert!(!metadata.contains_key("IFD3:CR2CFAPattern"));
     }
 
     fn synthetic_cr2_with_preview(preview: &[u8]) -> Vec<u8> {
