@@ -1347,6 +1347,42 @@ fn is_ijpeg_version_header(data: &[u8]) -> bool {
     data.len() >= infiray::VERSION_MIN_LENGTH && &data[4..10] == b"IJPEG\0"
 }
 
+/// APP4 selectors before DJI ThermalParams2 in ExifTool 13.59's single
+/// `if`/`elsif` chain (ExifTool.pm:8060-8098).
+fn app4_precedes_dji_thermal_params(data: &[u8]) -> bool {
+    (data.starts_with(b"SCALADO\0") && data.len() >= 16)
+        || data.starts_with(b"Qualcomm Dual Camera Attributes")
+        || data.starts_with(b"FPXR\0")
+}
+
+fn app4_precedes_dji_thermal_params2(data: &[u8]) -> bool {
+    app4_precedes_dji_thermal_params(data) || data.starts_with(&[0xaa, 0x55, 0x12, 0x06])
+}
+
+/// The byte offset selected by ExifTool's DJI ThermalParams2 APP4 branch.
+fn dji_thermal_params2_offset(data: &[u8]) -> Option<usize> {
+    if app4_precedes_dji_thermal_params2(data) {
+        return None;
+    }
+    if data.get(64..68) == Some(&[0x2c, 0x01, 0x20, 0x00][..]) {
+        Some(32)
+    } else if data.get(32..36) == Some(&[0x2c, 0x01, 0x20, 0x00][..]) {
+        Some(0)
+    } else {
+        None
+    }
+}
+
+/// Whether an APP4 payload is consumed before ExifTool reaches its later
+/// InfiRay `HasIJPEG` branch (ExifTool.pm:8060-8113).
+fn app4_precedes_infiray(data: &[u8], make_is_dji: bool) -> bool {
+    app4_precedes_dji_thermal_params(data)
+        || (make_is_dji
+            && (data.starts_with(&[0xaa, 0x55, 0x12, 0x06])
+                || dji_thermal_params2_offset(data).is_some()
+                || (data.len() >= 36 && data[32..36] == [0xaa, 0x55, 0x38, 0x00])))
+}
+
 /// Processes the InfiRay IJPEG records carried in APP2, APP3, APP4, APP5,
 /// APP7 and APP9 (`Image::ExifTool::InfiRay`).
 ///
@@ -1402,9 +1438,13 @@ pub fn process_infiray_segments(segments: &[Segment], metadata: &mut MetadataMap
             infiray::SENSOR_MIN_LENGTH,
         ),
     ];
+    let make_is_dji = metadata.get_string("IFD0:Make") == Some("DJI");
     for (marker, group, table, min_length) in RECORDS {
         for segment in segments.iter().filter(|s| s.marker == marker) {
             if segment.data.len() < min_length {
+                continue;
+            }
+            if marker == APP4_MARKER && app4_precedes_infiray(segment.data, make_is_dji) {
                 continue;
             }
             // ExifTool tests the Qualcomm signature before it reaches the
@@ -1450,13 +1490,16 @@ pub fn process_dji_dbg_segments(segments: &[Segment], metadata: &mut MetadataMap
     }
 }
 
-/// Reads `APP4:AmbientTemperature` from DJI's ThermalParams2 record.
+/// Reads `APP4:AmbientTemperature` and `APP4:RelativeHumidity` from DJI's
+/// ThermalParams2 record.
 ///
 /// ExifTool selects `DJI::ThermalParams2` only for a DJI image when the APP4
 /// payload has its `2c 01 20 00` signature after either 32 or 64 bytes.  The
 /// optional first 32 bytes are a prefix, so the table begins at byte 32 when
 /// the signature is at byte 64.  Its temperature is a little-endian float at
-/// table offset 0, rendered by DJI.pm as `sprintf("%.1f C", $val)`.
+/// table offset 0, rendered by DJI.pm as `sprintf("%.1f C", $val)`. Relative
+/// humidity is a float at table offset 12, rendered as
+/// `sprintf("%g %%", $val * 100)`.
 pub fn process_dji_thermal_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     if metadata.get_string("IFD0:Make") != Some("DJI") {
         return;
@@ -1468,11 +1511,7 @@ pub fn process_dji_thermal_segments(segments: &[Segment], metadata: &mut Metadat
 
     for segment in segments.iter().filter(|s| s.marker == APP4_MARKER) {
         let data = segment.data;
-        let table_offset = if data.get(64..68) == Some(&[0x2c, 0x01, 0x20, 0x00][..]) {
-            32
-        } else if data.get(32..36) == Some(&[0x2c, 0x01, 0x20, 0x00][..]) {
-            0
-        } else {
+        let Some(table_offset) = dji_thermal_params2_offset(data) else {
             continue;
         };
 
@@ -1490,7 +1529,45 @@ pub fn process_dji_thermal_segments(segments: &[Segment], metadata: &mut Metadat
                 TagValue::String(format!("{temperature:.1} C")),
             );
         }
+
+        let humidity =
+            decode_binary_table(table, &data[table_offset..], crate::io::ByteOrder::Little)
+                .into_iter()
+                .find(|field| field.field.name == "RelativeHumidity")
+                .and_then(|field| match field.raw {
+                    DecodedValue::Float(value) => Some(value),
+                    _ => None,
+                });
+        if let Some(humidity) = humidity {
+            metadata.insert(
+                "APP4:RelativeHumidity".to_string(),
+                TagValue::String(format!("{} %", perl_sprintf_g(humidity * 100.0))),
+            );
+        }
     }
+}
+
+/// Formats a number with Perl/C `sprintf("%g")` semantics.
+///
+/// ExifTool's conversion uses the platform C formatter, so doing the same is
+/// the exact port: six significant digits by default, C exponent spelling,
+/// and the same rounding behavior. Perl normalizes negative zero when it is
+/// multiplied by positive 100, which is reproduced before calling `snprintf`.
+fn perl_sprintf_g(value: f64) -> String {
+    let value = if value == 0.0 { 0.0 } else { value };
+    let mut output = [0_i8; 32];
+    // SAFETY: `output` is writable for its full reported size, the format is a
+    // static NUL-terminated C string with one `%g`, and `value` has the
+    // required promoted `double` type. A default-precision rendering of any
+    // finite f64, infinity or NaN fits comfortably in 32 bytes.
+    let length =
+        unsafe { libc::snprintf(output.as_mut_ptr(), output.len(), c"%g".as_ptr(), value) };
+    debug_assert!(length >= 0 && (length as usize) < output.len());
+    let length = usize::try_from(length).unwrap_or(0).min(output.len() - 1);
+    let bytes = &output[..length];
+    // `%g` emits ASCII digits, punctuation, exponent markers, or the
+    // implementation's ASCII inf/nan spelling.
+    String::from_utf8(bytes.iter().map(|byte| *byte as u8).collect()).expect("C %g output is ASCII")
 }
 
 /// Emits `APP3:ImagingData`, the InfiRay IR + thermal + visible payload.
@@ -1551,6 +1628,73 @@ fn merge(source: MetadataMap, metadata: &mut MetadataMap) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dji_thermal_params2(relative_humidity: f32) -> Vec<u8> {
+        let mut payload = vec![0; 68];
+        payload[12..16].copy_from_slice(&relative_humidity.to_le_bytes());
+        payload[32..36].copy_from_slice(&[0x2c, 0x01, 0x20, 0x00]);
+        payload
+    }
+
+    fn dji_metadata() -> MetadataMap {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:Make", TagValue::new_string("DJI"));
+        metadata
+    }
+
+    #[test]
+    fn dji_relative_humidity_uses_perl_general_number_format() {
+        for (raw, expected) in [
+            (0.123_456_78_f32, "12.3457 %"),
+            (1e-7_f32, "1e-05 %"),
+            (-0.0_f32, "0 %"),
+        ] {
+            let payload = dji_thermal_params2(raw);
+            let segment = Segment::new(APP4_MARKER, 0, &payload);
+            let mut metadata = dji_metadata();
+
+            process_dji_thermal_segments(&[segment], &mut metadata);
+
+            assert_eq!(
+                metadata.get_string("APP4:RelativeHumidity"),
+                Some(expected),
+                "raw humidity {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dji_thermal_params2_does_not_claim_an_earlier_fpxr_app4_branch() {
+        let mut payload = dji_thermal_params2(0.5);
+        payload[..5].copy_from_slice(b"FPXR\0");
+        let segment = Segment::new(APP4_MARKER, 0, &payload);
+        let mut metadata = dji_metadata();
+
+        process_dji_thermal_segments(&[segment], &mut metadata);
+
+        assert_eq!(metadata.get_string("APP4:RelativeHumidity"), None);
+        assert_eq!(metadata.get_string("APP4:AmbientTemperature"), None);
+    }
+
+    #[test]
+    fn infiray_does_not_claim_an_earlier_dji_thermal_params2_app4_branch() {
+        let mut version = vec![0; infiray::VERSION_MIN_LENGTH];
+        version[4..10].copy_from_slice(b"IJPEG\0");
+        let mut thermal = dji_thermal_params2(0.5);
+        thermal.resize(infiray::FACTORY_MIN_LENGTH, 0);
+        let segments = [
+            Segment::new(APP2_MARKER, 0, &version),
+            Segment::new(APP4_MARKER, 0, &thermal),
+        ];
+        let mut metadata = dji_metadata();
+
+        process_infiray_segments(&segments, &mut metadata);
+        process_dji_thermal_segments(&segments, &mut metadata);
+
+        assert_eq!(metadata.get_string("APP4:RelativeHumidity"), Some("50 %"));
+        assert_eq!(metadata.get_string("APP4:IJPEGTempVersion"), None);
+        assert_eq!(metadata.get_string("APP4:FactDefEmissivity"), None);
+    }
 
     #[test]
     fn process_app3_segments_combines_dji_thermal_data() {
