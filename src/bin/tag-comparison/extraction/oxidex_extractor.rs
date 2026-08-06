@@ -949,10 +949,7 @@ impl OxiDexExtractor {
     /// are namespace peers, not OxiDex emitting one conceptual tag twice, so
     /// they must not trip the duplicate-emission gate used by squad batches.
     fn is_exiftool_family0_xmp_overlap(normalized_key: &str) -> bool {
-        matches!(
-            normalized_key,
-            "XMP:NativeDigest" | "XMP:Sharpness" | "XMP:WhiteBalance"
-        )
+        matches!(normalized_key, "XMP:Sharpness" | "XMP:WhiteBalance")
     }
 
     /// The seven MP Entry tag names repeat once per embedded image, each under
@@ -1072,6 +1069,14 @@ impl OxiDexExtractor {
 
             // Normalize the tag family (core library normalization + comparison-specific)
             let normalized_key = Self::normalize_for_comparison(&normalize_tag_family(key), format);
+
+            // XMP.pm marks tiff:NativeDigest `Avoid => 1` (line 1984): when
+            // the family-0 XMP view would collapse it with exif:NativeDigest,
+            // ExifTool exposes the EXIF digest rather than allowing TIFF's
+            // later schema key to overwrite it. XMP.xmp contains both.
+            if normalized_key == "XMP:NativeDigest" && key == "XMP-tiff:NativeDigest" {
+                continue;
+            }
 
             let (family, name) = if let Some(colon_pos) = normalized_key.find(':') {
                 let (fam, nam) = normalized_key.split_at(colon_pos);
@@ -1516,7 +1521,7 @@ mod tests {
             tags.iter()
                 .find(|tag| tag.key() == "XMP:NativeDigest")
                 .map(|tag| tag.value.as_str()),
-            Some("tiff digest")
+            Some("exif digest")
         );
         assert_eq!(
             tags.iter()

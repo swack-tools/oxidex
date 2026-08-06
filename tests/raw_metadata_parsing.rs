@@ -218,6 +218,18 @@ fn canon_cr3_shot_info_camera_temperature_uses_celsius_conversion() {
 }
 
 #[test]
+fn canon_cr3_ctmd_exposure_info_masks_iso_high_bit() {
+    // Canon.pm CTMD type 5 -> ExposureInfo index 2: int32u with
+    // `ValueConv => '$val & 0x7fffffff'`. CanonRaw.cr3 reports 12800.
+    let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
+        .expect("pinned Canon CR3 fixture must be available");
+    let metadata = parse_raw_metadata(&data, RawFormat::CanonCR3)
+        .expect("pinned Canon CR3 fixture should parse");
+
+    assert_eq!(metadata.get_string("Canon:ISO"), Some("12800"));
+}
+
+#[test]
 fn test_parse_minimal_tiff_based_raw() {
     // Create a minimal valid TIFF header
     // II (little-endian) + 0x002A (magic 42) + offset to IFD (8)

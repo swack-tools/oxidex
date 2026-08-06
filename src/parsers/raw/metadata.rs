@@ -4322,6 +4322,20 @@ fn parse_cr3_ctmd_makernotes(ctmd: &[u8], metadata: &mut MetadataMap) {
             break;
         };
 
+        // CTMD type 5 is Canon.pm's ExposureInfo binary table. Its first two
+        // int32 words are FNumber/ExposureTime rationals; index 2 is ISO with
+        // the exact ValueConv `$val & 0x7fffffff`.
+        if record_type == 5
+            && record_pos + 24 <= record_end
+            && let Some(raw_iso) =
+                read_tiff_u32(&ctmd[record_pos + 20..record_end], ByteOrder::LittleEndian)
+        {
+            metadata.insert(
+                "Canon:ISO".to_string(),
+                TagValue::new_string((raw_iso & 0x7fff_ffff).to_string()),
+            );
+        }
+
         if matches!(record_type, 8 | 9) {
             let mut entry_pos = record_pos + 12;
             while entry_pos + 8 <= record_end {

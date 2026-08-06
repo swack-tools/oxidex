@@ -1910,6 +1910,24 @@ mod tests {
     }
 
     #[test]
+    fn ricoh2_empty_gps_dest_distance_ref_matches_pinned_exiftool() {
+        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Ricoh2.jpg");
+        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+            .expect("read pinned Ricoh2 fixture");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse pinned Ricoh2 segments");
+        let mut metadata = MetadataMap::new();
+
+        process_exif_segments(&segments, &reader, &mut metadata);
+        let formatted = crate::core::exiftool_compat::format_for_exiftool(&metadata);
+
+        assert_eq!(
+            formatted.get_string("GPS:GPSDestDistanceRef"),
+            Some("Unknown ()")
+        );
+    }
+
+    #[test]
     fn process_ricoh_rmeta_extracts_azimuth() {
         // Minimal standard RMETA directory with one tag. Section sizes include
         // the two-byte size field, matching Ricoh.pm's ProcessRicohRMETA.
