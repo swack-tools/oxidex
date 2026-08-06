@@ -125,7 +125,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `GPS:GPSAreaInformation` | `GPS:GPSAreaInformation` | ⚠️ `-GPS:GPSAreaInformation=` | `OxTest` |
 | `GPS:GPSDOP` | `GPS:GPSDOP` | ⚠️ `-GPS:GPSDOP=` | `1.5` |
 | `GPS:GPSDateStamp` | `GPS:GPSDateStamp` | ✅ `-GPS:GPSDateStamp=` | `2024:01:15` |
-| `GPS:GPSDestBearing` | `GPS:GPSDestBearing` | ⚠️ `-GPS:GPSDestBearing=` | `1.5` |
+| `GPS:GPSDestBearing` | `GPS:GPSDestBearing` | ✅ `-GPS:GPSDestBearing=` | `1.5` |
 | `GPS:GPSDestBearingRef` | `GPS:GPSDestBearingRef` | ⚠️ `-GPS:GPSDestBearingRef=` | `Magnetic North` |
 | `GPS:GPSDestDistance` | `GPS:GPSDestDistance` | ⚠️ `-GPS:GPSDestDistance=` | `1.5` |
 | `GPS:GPSDestDistanceRef` | `GPS:GPSDestDistanceRef` | ⚠️ `-GPS:GPSDestDistanceRef=` | `Kilometers` |
@@ -145,11 +145,11 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `GPS:GPSMeasureMode` | `GPS:GPSMeasureMode` | ⚠️ `-GPS:GPSMeasureMode=` | `2-Dimensional Measurement` |
 | `GPS:GPSProcessingMethod` | `GPS:GPSProcessingMethod` | — | `OxTest` |
 | `GPS:GPSSatellites` | `GPS:GPSSatellites` | ⚠️ `-GPS:GPSSatellites=` | `OxTest` |
-| `GPS:GPSSpeed` | `GPS:GPSSpeed` | ⚠️ `-GPS:GPSSpeed=` | `1.5` |
+| `GPS:GPSSpeed` | `GPS:GPSSpeed` | ✅ `-GPS:GPSSpeed=` | `1.5` |
 | `GPS:GPSSpeedRef` | `GPS:GPSSpeedRef` | ⚠️ `-GPS:GPSSpeedRef=` | `km/h` |
 | `GPS:GPSStatus` | `GPS:GPSStatus` | ⚠️ `-GPS:GPSStatus=` | `Measurement Active` |
 | `GPS:GPSTimeStamp` | `GPS:GPSTimeStamp` | — | `10:30:00` |
-| `GPS:GPSTrack` | `GPS:GPSTrack` | ⚠️ `-GPS:GPSTrack=` | `1.5` |
+| `GPS:GPSTrack` | `GPS:GPSTrack` | ✅ `-GPS:GPSTrack=` | `1.5` |
 | `GPS:GPSTrackRef` | `GPS:GPSTrackRef` | — | `Magnetic North` |
 | `GPS:GPSVersionID` | `GPS:GPSVersionID` | — | `2.3.0.0` |
 

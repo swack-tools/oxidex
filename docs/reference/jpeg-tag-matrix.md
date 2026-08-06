@@ -15,12 +15,12 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 
 | Classification | Tags |
 |---|---|
-| 📖 Read only | 2352 |
+| 📖 Read only | 2353 |
 | ❌ Unsupported | 1890 |
 | ❔ Untestable | 221 |
-| 🐛 Read OK, write broken | 167 |
-| ✅ Full (read + write) | 101 |
-| ⚠️ Full (write non-standard encoding) | 79 |
+| 🐛 Read OK, write broken | 166 |
+| ✅ Full (read + write) | 104 |
+| ⚠️ Full (write non-standard encoding) | 76 |
 | 🐛 Read broken | 9 |
 | 🚫 Not writable in ExifTool (no synthetic sample possible; untested) | 585 |
 
@@ -31,7 +31,7 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | All | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
 | ExifIFD | 46 | 7 | 27 | 6 | 0 | 4 | 100 | 203 |
 | File | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
-| GPS | 2 | 5 | 4 | 0 | 0 | 0 | 0 | 32 |
+| GPS | 5 | 6 | 3 | 0 | 0 | 0 | 0 | 32 |
 | GSpherical | 0 | 0 | 0 | 0 | 0 | 0 | 16 | 16 |
 | IFD0 | 53 | 0 | 54 | 0 | 0 | 0 | 17 | 169 |
 | IFD1 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
@@ -386,11 +386,11 @@ references are into this repo.
 | `GPSAreaInformation` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
 | `GPSDOP` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `GPSDateStamp` | ✅ ok | ✅ ok | `2024:01:15` |
-| `GPSDestBearing` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `GPSDestBearing` | ✅ ok | ✅ ok | `1.5` |
 | `GPSDestBearingRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `Magnetic North` |
 | `GPSDestDistance` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `GPSDestDistanceRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `Kilometers` |
-| `GPSDestLatitude` | ✅ ok | 🐛 broken: interop (exiftool can't read it) | `37.7749` |
+| `GPSDestLatitude` | ✅ ok | value_mismatch | `37.7749` |
 | `GPSDestLatitudeRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `N` |
 | `GPSDestLongitude` | ✅ ok | value_mismatch | `122.4194` |
 | `GPSDestLongitudeRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `W` |
@@ -406,11 +406,11 @@ references are into this repo.
 | `GPSMeasureMode` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `2-Dimensional Measurement` |
 | `GPSProcessingMethod` | ✅ ok | readback_broken | `OxTest` |
 | `GPSSatellites` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `OxTest` |
-| `GPSSpeed` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `GPSSpeed` | ✅ ok | ✅ ok | `1.5` |
 | `GPSSpeedRef` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `km/h` |
 | `GPSStatus` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `Measurement Active` |
 | `GPSTimeStamp` | ✅ ok | 🐛 broken: error | `10:30:00` |
-| `GPSTrack` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
+| `GPSTrack` | ✅ ok | ✅ ok | `1.5` |
 | `GPSTrackRef` | ✅ ok | 🐛 broken: PrintConvInv missing: human-readable stored as raw | `Magnetic North` |
 | `GPSVersionID` | ✅ ok | readback_broken | `2.3.0.0` |
 
