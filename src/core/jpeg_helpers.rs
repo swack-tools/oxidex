@@ -254,13 +254,15 @@ pub fn process_exif_segments(
                 // second, larger preview there under tag 0x0111/0x0117,
                 // named PreviewImageStart/PreviewImageLength (not
                 // StripOffsets/StripByteCounts - see Exif.pm:707-768).
-                // Offsets are TIFF-relative, so this uses `tiff_reader`
-                // directly, with no `tiff_base` to add.
+                // Offsets are TIFF-relative: the helper reads via
+                // `tiff_reader` and uses `tiff_offset` only for the absolute
+                // JpgFromRawStart value ExifTool displays.
                 crate::core::tiff_helpers::parse_ifd2_preview_image(
                     &tiff_reader,
                     ifd_offset,
                     tags.len(),
                     byte_order,
+                    tiff_offset,
                     metadata,
                 );
             }
@@ -1839,6 +1841,26 @@ mod tests {
         assert_eq!(
             metadata.get_string("APP5:ThermalCalibration"),
             Some("(Binary data 23818 bytes, use -b option to extract)")
+        );
+    }
+
+    #[test]
+    fn leica_tl2_ifd2_jpg_from_raw_pair_matches_pinned_exiftool() {
+        let path =
+            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaTL2.jpg");
+        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+            .expect("read pinned Leica TL2 fixture");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse pinned Leica TL2 segments");
+        let mut metadata = MetadataMap::new();
+
+        process_exif_segments(&segments, &reader, &mut metadata);
+
+        assert_eq!(metadata.get_integer("IFD2:JpgFromRawStart"), Some(7063524));
+        assert_eq!(metadata.get_integer("IFD2:JpgFromRawLength"), Some(1215652));
+        assert_eq!(
+            metadata.get_string("IFD2:JpgFromRaw"),
+            Some("(Binary data 1215652 bytes, use -b option to extract)")
         );
     }
 

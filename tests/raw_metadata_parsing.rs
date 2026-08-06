@@ -176,6 +176,21 @@ fn nikon_nef_does_not_emit_synthetic_image_layer_count() {
 }
 
 #[test]
+fn canon_cr3_image_unique_id_is_lowercase_makernote_hex() {
+    // Canon.pm 0x28 is undef[16] with `unpack("H*", $val)`, except an
+    // all-zero UUID is suppressed. This is the real wave-9 residual fixture.
+    let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
+        .expect("pinned Canon CR3 fixture must be available");
+    let metadata = parse_raw_metadata(&data, RawFormat::CanonCR3)
+        .expect("pinned Canon CR3 fixture should parse");
+
+    assert_eq!(
+        metadata.get_string("Canon:ImageUniqueID"),
+        Some("3b7f679f6bf5d5e1b60ca2b2f051a029")
+    );
+}
+
+#[test]
 fn test_parse_minimal_tiff_based_raw() {
     // Create a minimal valid TIFF header
     // II (little-endian) + 0x002A (magic 42) + offset to IFD (8)

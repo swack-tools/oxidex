@@ -1272,6 +1272,7 @@ pub fn parse_ifd2_preview_image(
     ifd0_offset: u64,
     ifd0_entry_count: usize,
     byte_order: ByteOrder,
+    tiff_base: u64,
     metadata: &mut MetadataMap,
 ) {
     let Some(ifd1_offset) = next_ifd_offset(reader, ifd0_offset, ifd0_entry_count, byte_order)
@@ -1304,6 +1305,8 @@ pub fn parse_ifd2_preview_image(
 
     let mut preview_start: Option<u64> = None;
     let mut preview_length: Option<u64> = None;
+    let mut jpg_from_raw_start: Option<u64> = None;
+    let mut jpg_from_raw_length: Option<u64> = None;
     for (tag_id, field_type, value_count, raw_bytes) in &ifd2_entries {
         match *tag_id {
             0x0111 => {
@@ -1314,21 +1317,48 @@ pub fn parse_ifd2_preview_image(
                 preview_length =
                     read_unsigned_field(raw_bytes, *field_type, *value_count, *tag_id, byte_order);
             }
+            // Leica TL2's IFD2 carries the larger embedded JPEG via the
+            // JPEGInterchangeFormat pair. ExifTool names this JpgFromRaw
+            // outside IFD1 (Exif.pm's contextual 0x0201/0x0202 entries).
+            0x0201 => {
+                jpg_from_raw_start =
+                    read_unsigned_field(raw_bytes, *field_type, *value_count, *tag_id, byte_order);
+            }
+            0x0202 => {
+                jpg_from_raw_length =
+                    read_unsigned_field(raw_bytes, *field_type, *value_count, *tag_id, byte_order);
+            }
             _ => {}
         }
     }
 
-    let (Some(start), Some(length)) = (preview_start, preview_length) else {
-        return;
-    };
-    if length == 0 {
-        return;
+    if let (Some(start), Some(length)) = (preview_start, preview_length)
+        && length > 0
+    {
+        metadata.insert(
+            "IFD2:PreviewImage",
+            read_or_placeholder(reader, start, length),
+        );
     }
 
-    metadata.insert(
-        "IFD2:PreviewImage",
-        read_or_placeholder(reader, start, length),
-    );
+    if let (Some(start), Some(length)) = (jpg_from_raw_start, jpg_from_raw_length)
+        && let Some(absolute_start) = start.checked_add(tiff_base)
+    {
+        metadata.insert(
+            "IFD2:JpgFromRawStart",
+            TagValue::new_integer(absolute_start as i64),
+        );
+        metadata.insert(
+            "IFD2:JpgFromRawLength",
+            TagValue::new_integer(length as i64),
+        );
+        if length > 0 {
+            metadata.insert(
+                "IFD2:JpgFromRaw",
+                read_or_placeholder(reader, start, length),
+            );
+        }
+    }
 }
 
 /// The value ExifTool reports for a binary tag: the bytes when the range is
@@ -2507,6 +2537,26 @@ mod ifd2_preview_image_tests {
         build_tiff_with_ifd2(50, declared_length, &[])
     }
 
+    fn build_tiff_with_ifd2_jpg_from_raw(start: u32, length: u32) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II");
+        data.extend_from_slice(&42u16.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&14u32.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&20u32.to_le_bytes());
+        data.extend_from_slice(&2u16.to_le_bytes());
+        for (tag, value) in [(0x0201u16, start), (0x0202, length)] {
+            data.extend_from_slice(&tag.to_le_bytes());
+            data.extend_from_slice(&LONG.to_le_bytes());
+            data.extend_from_slice(&1u32.to_le_bytes());
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data
+    }
+
     // These tests call `parse_ifd2_preview_image` directly rather than
     // `parse_ifd_chain`: the rename/extraction only belongs to the
     // APP1/JPEG-embedded case (Exif.pm:707-768's "APP1 IFD2 is for Leica
@@ -2534,6 +2584,7 @@ mod ifd2_preview_image_tests {
             TIFF_HEADER_SIZE,
             0,
             ByteOrder::LittleEndian,
+            0,
             &mut metadata,
         );
 
@@ -2563,6 +2614,7 @@ mod ifd2_preview_image_tests {
             TIFF_HEADER_SIZE,
             0,
             ByteOrder::LittleEndian,
+            0,
             &mut metadata,
         );
 
@@ -2572,6 +2624,39 @@ mod ifd2_preview_image_tests {
                 "(Binary data {} bytes, use -b option to extract)",
                 declared_length
             )))
+        );
+    }
+
+    #[test]
+    fn ifd2_jpeg_interchange_pair_becomes_jpg_from_raw() {
+        let stored_start = 50u32;
+        let length = 26u32;
+        let buffer = build_tiff_with_ifd2_jpg_from_raw(stored_start, length);
+        let reader = crate::io::buffered_reader::BufferedReader::from_bytes(&buffer);
+        let mut metadata = MetadataMap::new();
+
+        parse_ifd2_preview_image(
+            &reader,
+            TIFF_HEADER_SIZE,
+            0,
+            ByteOrder::LittleEndian,
+            12,
+            &mut metadata,
+        );
+
+        assert_eq!(
+            metadata.get("IFD2:JpgFromRawStart"),
+            Some(&TagValue::new_integer(62))
+        );
+        assert_eq!(
+            metadata.get("IFD2:JpgFromRawLength"),
+            Some(&TagValue::new_integer(i64::from(length)))
+        );
+        assert_eq!(
+            metadata.get("IFD2:JpgFromRaw"),
+            Some(&TagValue::new_string(
+                "(Binary data 26 bytes, use -b option to extract)".to_string()
+            ))
         );
     }
 }

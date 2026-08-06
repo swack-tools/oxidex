@@ -384,6 +384,7 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
         // Avoid duplicate output if generic structured-property support is
         // added later.
         results.retain(|(tag, _)| tag != TAG);
+        list_elements.retain(|(tag, _)| tag != TAG);
         list_elements.push((TAG.to_string(), about_cv_term_cv_ids.clone()));
         results.push((TAG.to_string(), about_cv_term_cv_ids.join(", ")));
     }
@@ -394,6 +395,7 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
         // Avoid duplicate output if generic structured-property support is
         // added later.
         results.retain(|(tag, _)| tag != TAG);
+        list_elements.retain(|(tag, _)| tag != TAG);
         list_elements.push((TAG.to_string(), about_cv_term_names.clone()));
         results.push((TAG.to_string(), about_cv_term_names.join(", ")));
     }
@@ -418,9 +420,11 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
         // made the following language delete the freshly written default.
         results.retain(|(existing, _)| existing != "XMP-plus:Custom1");
     }
-    for (tag, value) in custom1_language_values {
+    for (tag, values) in custom1_language_values {
         results.retain(|(existing, _)| existing != &tag);
-        results.push((tag, value));
+        list_elements.retain(|(existing, _)| existing != &tag);
+        list_elements.push((tag.clone(), values.clone()));
+        results.push((tag, values.join(", ")));
     }
 
     // ResourceRef fields may use element or RDF attribute shorthand. Handle
@@ -867,7 +871,7 @@ fn extract_artwork_title_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)
 
 /// Extracts PLUS Custom1's Bag-of-Alt values, retaining list positions that
 /// are represented by explicitly empty language alternatives.
-fn extract_custom1_language_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
+fn extract_custom1_language_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>> {
     const PLUS_NS: &str = "http://ns.useplus.org/ldf/xmp/1.0/";
 
     let mut reader = Reader::from_reader(xml_bytes);
@@ -971,7 +975,7 @@ fn extract_custom1_language_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
             } else {
                 format!("XMP-plus:Custom1-{language}")
             };
-            (tag, language_values.join(", "))
+            (tag, language_values)
         })
         .collect())
 }
@@ -3837,6 +3841,37 @@ mod tests {
         assert_eq!(value("XMP-plus:Custom1-de"), Some("de1, de3"));
         assert_eq!(value("XMP-plus:Custom1-fr"), Some("fr1, , fr3"));
         assert!(!tags.iter().any(|(name, _)| name.starts_with("XMP:Custom1")));
+
+        // PLUS.pm defines Custom1 as a Bag. `exiftool -json XMP9.xmp`
+        // therefore preserves each language's entries as an array, including
+        // the intentionally empty French middle entry.
+        let typed = parse_xmp_typed(xml).unwrap();
+        let typed_value = |name: &str| {
+            typed
+                .iter()
+                .find(|(tag, _)| tag == name)
+                .map(|(_, value)| value)
+        };
+        assert_eq!(
+            typed_value("XMP-plus:Custom1"),
+            Some(&XmpValue::List(vec![
+                "cu1".to_string(),
+                "cu2".to_string(),
+                "cu3".to_string(),
+            ]))
+        );
+        assert_eq!(
+            typed_value("XMP-plus:Custom1-de"),
+            Some(&XmpValue::List(vec!["de1".to_string(), "de3".to_string()]))
+        );
+        assert_eq!(
+            typed_value("XMP-plus:Custom1-fr"),
+            Some(&XmpValue::List(vec![
+                "fr1".to_string(),
+                String::new(),
+                "fr3".to_string(),
+            ]))
+        );
     }
 
     #[test]

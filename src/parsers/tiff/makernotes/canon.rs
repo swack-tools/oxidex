@@ -784,6 +784,8 @@ const CANON_FLASH_INFO: u16 = 0x0003;
 const CANON_AF_INFO: u16 = 0x0012;
 const CANON_SERIAL_NUMBER_FORMAT: u16 = 0x0015;
 const CANON_AF_INFO2: u16 = 0x0026;
+/// Canon.pm:1726 -- 16-byte undef value rendered with `unpack("H*", $val)`.
+const CANON_IMAGE_UNIQUE_ID: u16 = 0x0028;
 /// ExifTool Canon.pm:1764 -- `0x3c => { Name => 'AFInfo3', ... TagTable =>
 /// 'Image::ExifTool::Canon::AFInfo2' }`. A second MakerNote tag carrying the very same
 /// `%Canon::AFInfo2` record, used by the G1XmkII and the EOS M bodies after it.
@@ -5866,6 +5868,21 @@ fn parse_canon_makernote_impl_located(
                     && !lens_model.is_empty()
                 {
                     tags.insert("Canon:LensModel".to_string(), lens_model);
+                }
+            }
+
+            // Canon.pm 0x28 suppresses precisely sixteen zero bytes, then
+            // applies `unpack("H*", $val)` to the otherwise opaque UUID.
+            CANON_IMAGE_UNIQUE_ID => {
+                if entry.value_count == 16
+                    && let Some(value) = extract_canon_bytes_with_base(entry, ifd_data, base)
+                    && value.len() == 16
+                    && value.iter().any(|&byte| byte != 0)
+                {
+                    tags.insert(
+                        "Canon:ImageUniqueID".to_string(),
+                        value.iter().map(|byte| format!("{byte:02x}")).collect(),
+                    );
                 }
             }
 
