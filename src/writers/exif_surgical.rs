@@ -260,15 +260,65 @@ pub(crate) fn tag_value_to_field(
     }
 }
 
+/// GPS.pm 13.59 declares GPSLongitude as `rational64u[3]` and applies
+/// `ToDMS` to the decimal value before TIFF serialization. Preserve the
+/// input rational exactly while splitting it into degrees, minutes, seconds.
+fn gps_longitude_to_field(value: &TagValue) -> Result<(u16, u32, Vec<u8>)> {
+    let TagValue::Rational {
+        numerator,
+        denominator,
+    } = value
+    else {
+        return tag_value_to_field(value, Some(5));
+    };
+    if *denominator == 0 {
+        return Err(ExifToolError::parse_error(
+            "GPSLongitude must be a finite coordinate",
+        ));
+    }
+
+    let numerator = i64::from(*numerator).unsigned_abs();
+    let denominator = i64::from(*denominator).unsigned_abs();
+    let degrees = numerator / denominator;
+    let minute_numerator = (numerator % denominator) * 60;
+    let minutes = minute_numerator / denominator;
+    let second_numerator = (minute_numerator % denominator) * 60;
+    let divisor = gcd_u64(second_numerator, denominator);
+    let seconds = (second_numerator / divisor, denominator / divisor);
+    let parts = [(degrees, 1), (minutes, 1), seconds];
+
+    let mut bytes = Vec::with_capacity(24);
+    for (numerator, denominator) in parts {
+        let numerator = u32::try_from(numerator).map_err(|_| {
+            ExifToolError::parse_error("GPSLongitude component exceeds rational64u range")
+        })?;
+        let denominator = u32::try_from(denominator).map_err(|_| {
+            ExifToolError::parse_error("GPSLongitude component exceeds rational64u range")
+        })?;
+        bytes.extend_from_slice(&numerator.to_ne_bytes());
+        bytes.extend_from_slice(&denominator.to_ne_bytes());
+    }
+    Ok((5, 3, bytes))
+}
+
+fn gcd_u64(mut left: u64, mut right: u64) -> u64 {
+    while right != 0 {
+        (left, right) = (right, left % right);
+    }
+    left.max(1)
+}
+
 /// Applies tag-specific inverse conversions before generic TIFF serialization.
-///
-/// GPS.pm 13.59 defines GPSLatitude as `rational64u[3]`: command-line decimal
-/// degrees are converted by `ToDMS` into degree, minute and second rationals.
+/// GPS.pm 13.59 defines both coordinates as `rational64u[3]` values converted
+/// by `ToDMS` into degree, minute and second rationals.
 fn tag_value_to_field_for_key(
     key: &str,
     value: &TagValue,
     hint: Option<u16>,
 ) -> Result<(u16, u32, Vec<u8>)> {
+    if key == "GPS:GPSLongitude" {
+        return gps_longitude_to_field(value);
+    }
     if key == "GPS:GPSLatitude"
         && let TagValue::Rational {
             numerator,
@@ -1652,6 +1702,27 @@ mod tests {
             .flat_map(u32::to_ne_bytes)
             .collect::<Vec<_>>();
         assert_eq!(latitude.value, expected);
+    }
+
+    #[test]
+    fn plan_serializes_gps_longitude_as_exif_dms_rationals() {
+        // ExifTool 13.59 GPS.pm applies ToDMS before writing GPSLongitude.
+        // Its exact representation for 122.4194 is 122/1, 25/1, 246/25.
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let mut desired = original.clone();
+        desired.insert("GPS:GPSLongitude", TagValue::new_rational(612_097, 5_000));
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let longitude = plan.gps.iter().find(|e| e.tag_id == 0x0004).unwrap();
+        let mut expected = Vec::new();
+        for (numerator, denominator) in [(122_u32, 1_u32), (25, 1), (246, 25)] {
+            expected.extend_from_slice(&numerator.to_ne_bytes());
+            expected.extend_from_slice(&denominator.to_ne_bytes());
+        }
+        assert_eq!(longitude.field_type, 5);
+        assert_eq!(longitude.count, 3);
+        assert_eq!(longitude.value, expected);
     }
 
     #[test]
