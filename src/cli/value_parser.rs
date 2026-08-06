@@ -67,6 +67,14 @@ const RATIONAL_MAX: i64 = 0x7fff_ffff;
 /// through as a string; the write path validates those with intrinsic checks
 /// only (`core::validation::validate_tag_value_intrinsics`).
 pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
+    // GPS.pm 0x000a: the TIFF value is ASCII "2" or "3", while ExifTool's
+    // PrintConv exposes the corresponding measurement label.  Writer.pl
+    // applies that PrintConvInv before its generic string check.
+    let raw = match (tag_name, raw) {
+        ("GPS:GPSMeasureMode", "2-Dimensional Measurement") => "2",
+        ("GPS:GPSMeasureMode", "3-Dimensional Measurement") => "3",
+        _ => raw,
+    };
     let declared = get_tag_descriptor(tag_name)
         .filter(|_| has_reliable_value_type(tag_name))
         .map(|descriptor| descriptor.value_type());
