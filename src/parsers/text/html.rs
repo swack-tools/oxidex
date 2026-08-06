@@ -1114,10 +1114,17 @@ struct Walker {
 }
 
 impl Walker {
-    /// Keep HTTP-equiv and dynamically added Office tags under HTML's family-0 group.
-    fn add_family_zero_alias(&mut self, group: &str, name: &str, value: String, list: bool) {
-        if group == "HTML-office" || group == "HTTP-equiv" {
+    /// Resolved HTML tables retain ExifTool's family-0 HTML group.
+    fn add_known_family_zero_alias(&mut self, group: &str, name: &str, value: String, list: bool) {
+        if group.starts_with("HTML-") || group == "HTTP-equiv" {
             self.out.add(format!("HTML:{name}"), value, list);
+        }
+    }
+
+    /// Only dynamically added Office tags belong to HTML's family-0 group.
+    fn add_dynamic_family_zero_alias(&mut self, group: &str, name: &str, value: String) {
+        if group == "HTML-office" {
+            self.out.add(format!("HTML:{name}"), value, false);
         }
     }
 
@@ -1140,7 +1147,12 @@ impl Walker {
             // their family-0 group remains HTML. Keep the more specific key
             // used by this parser and also expose the family-0 key expected
             // when metadata is requested by format group.
-            self.add_family_zero_alias(group, definition.name, converted.clone(), definition.list);
+            self.add_known_family_zero_alias(
+                group,
+                definition.name,
+                converted.clone(),
+                definition.list,
+            );
             self.out.add(
                 format!("{}:{}", group, definition.name),
                 converted,
@@ -1152,7 +1164,7 @@ impl Walker {
     /// A tag the table does not declare, which ExifTool adds on the fly.
     fn handle_unknown(&mut self, group: &str, name: &str, value: &str) {
         let name = normalize_added_tag_name(name);
-        self.add_family_zero_alias(group, &name, value.to_string(), false);
+        self.add_dynamic_family_zero_alias(group, &name, value.to_string());
         self.out
             .add(format!("{}:{name}", group), value.to_string(), false);
     }
@@ -1721,6 +1733,8 @@ mod tests {
             value(&metadata, "HTML-dc:Date").as_deref(),
             Some("2007-30-01")
         );
+        // Known HTML namespaces retain ExifTool's family-0 HTML alias.
+        assert_eq!(value(&metadata, "HTML:Date").as_deref(), Some("2007-30-01"));
         assert_eq!(
             value(&metadata, "HTML-dc:Subject").as_deref(),
             Some("Greek: α β γ")
