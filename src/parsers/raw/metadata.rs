@@ -1159,7 +1159,16 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     byte_order,
                                 )
                             };
-                            metadata.insert(tag_name, tag_value);
+                            // ExifTool's DNG priority rules select the first
+                            // (primary raw) SubIFD's BitsPerSample. Later
+                            // reduced-resolution SubIFDs carry 8 8 8 and must
+                            // not displace its 16-bit value.
+                            if format != RawFormat::AdobeDNG
+                                || tag_id != 0x0102
+                                || !metadata.contains_key(&tag_name)
+                            {
+                                metadata.insert(tag_name, tag_value);
+                            }
                         }
                     }
                 }
@@ -8416,6 +8425,21 @@ mod rational_array_tests {
         assert_eq!(
             raw_bytes_to_simple_tag_value(&bytes, 10, 9, ByteOrder::LittleEndian).as_string(),
             Some("0.6159 -0.0945 -0.0745 -0.6846 1.3563 0.3684 -0.0802 0.1086 0.7555")
+        );
+    }
+
+    #[test]
+    fn dng_primary_raw_subifd_bits_per_sample_wins() {
+        let path = "/tmp/oxidex-exiftool-cache/exiftool/t/images/DNG.dng";
+        if !std::path::Path::new(path).exists() {
+            return;
+        }
+        let data = std::fs::read(path).expect("read pinned DNG fixture");
+        let metadata = parse_raw_metadata(&data, RawFormat::AdobeDNG).expect("parse DNG fixture");
+
+        assert_eq!(
+            metadata.get("SubIFD0:BitsPerSample"),
+            Some(&TagValue::new_integer(16))
         );
     }
 
