@@ -965,6 +965,8 @@ const CAMERA_SETTINGS_PHOTO_EFFECT: usize = 40;
 const CAMERA_SETTINGS_MANUAL_FLASH_OUTPUT: usize = 41;
 /// ExifTool `%Canon::CameraSettings` key 42 (Canon.pm:2681) — `ColorTone`.
 const CAMERA_SETTINGS_COLOR_TONE: usize = 42;
+/// ExifTool `%Canon::CameraSettings` key 46 (Canon.pm:2664) — `SRAWQuality`.
+const CAMERA_SETTINGS_SRAW_QUALITY: usize = 46;
 
 // ShotInfo array (tag 0x0004) indices
 // Reference: ExifTool Canon.pm ShotInfo table
@@ -5492,6 +5494,26 @@ fn parse_canon_makernote_impl_located(
                     {
                         tags.insert("Canon:ColorTone".to_string(), print_parameter(color_tone));
                     }
+
+                    // SRAWQuality (index 46). Canon.pm:2664 omits the -1 sentinel with
+                    // `RawConv => '$val==-1 ? undef : $val'`; its PrintConv labels are
+                    // deliberately limited to 0/1/2. Leave other values as ExifTool's
+                    // standard unmatched-enum rendering.
+                    if let Some(&sraw_quality) = array.get(CAMERA_SETTINGS_SRAW_QUALITY)
+                        && sraw_quality != -1
+                    {
+                        let rendered =
+                            crate::exiftool_tables::find_table("Canon", "CameraSettings")
+                                .and_then(|table| {
+                                    table
+                                        .fields
+                                        .iter()
+                                        .find(|field| field.name == "SRAWQuality")
+                                })
+                                .and_then(|field| field.print_conv.apply(i64::from(sraw_quality)))
+                                .unwrap_or_else(|| format!("Unknown ({sraw_quality})"));
+                        tags.insert("Canon:SRAWQuality".to_string(), rendered);
+                    }
                 }
             }
 
@@ -7402,6 +7424,30 @@ mod tests {
             data.extend_from_slice(&value.to_le_bytes());
         }
         data
+    }
+
+    /// `%Canon::CameraSettings` key 46 (Canon.pm:2664): `RawConv` omits -1,
+    /// and the remaining values use exactly these three PrintConv labels.
+    #[test]
+    fn test_parse_camera_settings_sraw_quality() {
+        for (raw, expected) in [
+            (0, Some("n/a")),
+            (1, Some("sRAW1 (mRAW)")),
+            (2, Some("sRAW2 (sRAW)")),
+            (-1, None),
+        ] {
+            let mut settings = vec![0i16; 47];
+            settings[0] = (settings.len() * 2) as i16;
+            settings[46] = raw;
+            let data = canon_makernote_with_short_array(CANON_CAMERA_SETTINGS, &settings);
+
+            let tags = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+            assert_eq!(
+                tags.get("Canon:SRAWQuality").map(String::as_str),
+                expected,
+                "raw CameraSettings[46] = {raw}"
+            );
+        }
     }
 
     /// Byte-for-byte the CanonAFInfo record of
