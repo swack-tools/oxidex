@@ -125,6 +125,34 @@ pub fn convert_tag_value_to_entry(
         return Ok(Some(IfdEntryData::new(tag_id, ExifType::Short, 2, bytes)));
     }
 
+    if tag_id == 0xa461
+        && let TagValue::Array(values) = tag_value
+    {
+        if values.len() != 2 {
+            return Err(ExifToolError::parse_error(
+                "CompositeImageCount requires exactly two unsigned 16-bit values",
+            ));
+        }
+        let mut bytes = Vec::with_capacity(4);
+        for value in values {
+            let TagValue::Integer(value) = value else {
+                return Err(ExifToolError::parse_error(
+                    "CompositeImageCount components must be unsigned 16-bit integers",
+                ));
+            };
+            if !(0..=u16::MAX as i64).contains(value) {
+                return Err(ExifToolError::parse_error(
+                    "CompositeImageCount component does not fit unsigned 16-bit",
+                ));
+            }
+            bytes.extend_from_slice(&match byte_order {
+                ByteOrder::LittleEndian => (*value as u16).to_le_bytes(),
+                ByteOrder::BigEndian => (*value as u16).to_be_bytes(),
+            });
+        }
+        return Ok(Some(IfdEntryData::new(tag_id, ExifType::Short, 2, bytes)));
+    }
+
     match tag_value {
         TagValue::String(s) => {
             // ExifTool 13.59 Exif.pm 0x0212 declares `int16u[2]` and uses
@@ -376,6 +404,20 @@ mod tests {
         assert_eq!(entry.field_type, ExifType::Short);
         assert_eq!(entry.value_count, 3);
         assert_eq!(entry.value_bytes, vec![10, 0, 20, 0, 30, 0]);
+    }
+
+    #[test]
+    fn composite_image_count_writes_two_unsigned_shorts() {
+        let entry = convert_tag_value_to_entry(
+            0xa461,
+            &TagValue::new_array(vec![TagValue::new_integer(3), TagValue::new_integer(2)]),
+            ByteOrder::BigEndian,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(entry.field_type, ExifType::Short);
+        assert_eq!(entry.value_count, 2);
+        assert_eq!(entry.value_bytes, vec![0, 3, 0, 2]);
     }
 
     #[test]

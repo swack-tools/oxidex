@@ -261,6 +261,34 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         return Ok(TagValue::new_array(values));
     }
 
+    // Exif.pm 13.59 0xa461 declares CompositeImageCount as `int16u[2]`.
+    if matches!(
+        tag_name,
+        "CompositeImageCount" | "EXIF:CompositeImageCount" | "ExifIFD:CompositeImageCount"
+    ) {
+        let parts: Vec<_> = raw.split_whitespace().collect();
+        if parts.len() != 2 {
+            return Err(invalid(
+                tag_name,
+                "Expected two unsigned 16-bit composite image counts",
+            ));
+        }
+        let values = parts
+            .into_iter()
+            .map(|part| {
+                let value = parse_integer(tag_name, part)?;
+                if !(0..=u16::MAX as i64).contains(&value) {
+                    return Err(invalid(
+                        tag_name,
+                        "Composite image count does not fit unsigned 16-bit",
+                    ));
+                }
+                Ok(TagValue::new_integer(value))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(TagValue::new_array(values));
+    }
+
     let raw = if matches!(
         tag_name,
         "GPSLatitudeRef" | "GPS:GPSLatitudeRef" | "GPSDestLatitudeRef" | "GPS:GPSDestLatitudeRef"
@@ -1805,6 +1833,17 @@ mod tests {
             parse("EXIF:PageNumber", "3 17").unwrap(),
             TagValue::new_array(vec![TagValue::new_integer(3), TagValue::new_integer(17)])
         );
+    }
+
+    #[test]
+    fn composite_image_count_accepts_its_two_unsigned_short_components() {
+        assert_eq!(
+            parse("ExifIFD:CompositeImageCount", "3 2").unwrap(),
+            TagValue::new_array(vec![TagValue::new_integer(3), TagValue::new_integer(2)])
+        );
+        assert!(parse("ExifIFD:CompositeImageCount", "3").is_err());
+        assert!(parse("ExifIFD:CompositeImageCount", "3 2 1").is_err());
+        assert!(parse("ExifIFD:CompositeImageCount", "-1 2").is_err());
     }
 
     #[test]

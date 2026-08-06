@@ -2073,6 +2073,19 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
     );
 
     registry.insert(
+        "EXIF:CompositeImageCount",
+        TagDescriptor::new(
+            TagId::new_numeric(0xa461),
+            "EXIF:CompositeImageCount".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::Integer,
+            "Source and used image counts in composite".to_string(),
+            vec!["2 2".to_string()],
+        ),
+    );
+
+    registry.insert(
         "EXIF:SourceImageNumberOfCompositeImage",
         TagDescriptor::new(
             TagId::new_numeric(0xa461),
