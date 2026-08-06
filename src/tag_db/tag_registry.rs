@@ -1893,7 +1893,7 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
     registry.insert(
         "EXIF:ImageNumber",
         TagDescriptor::new(
-            TagId::new_numeric(0xa500),
+            TagId::new_numeric(0x9211),
             "EXIF:ImageNumber".to_string(),
             FormatFamily::EXIF,
             true,
@@ -7192,6 +7192,15 @@ mod tests {
         assert_eq!(tag.format(), FormatFamily::EXIF);
         assert_eq!(tag.value_type(), ValueType::String);
         assert!(tag.is_writable());
+    }
+
+    #[test]
+    fn image_number_uses_exiftools_tag_id() {
+        let tag = get_tag_descriptor("EXIF:ImageNumber")
+            .expect("ExifTool defines EXIF ImageNumber");
+        assert_eq!(tag.id(), &TagId::Numeric(0x9211));
+        assert!(tag.is_writable());
+        assert_eq!(tag.value_type(), ValueType::Integer);
     }
 
     #[test]
