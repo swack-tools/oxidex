@@ -764,16 +764,24 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
             numerator,
             denominator,
         } = value
-            && *denominator != 0
         {
-            let float_val = *numerator as f64 / *denominator as f64;
-            let float_str = if float_val.fract() == 0.0 {
-                format!("{:.0}", float_val)
-            } else {
-                format!("{}", float_val)
-            };
-            let formatted = format_with_unit(tag_name, &float_str);
-            return TagValue::String(formatted);
+            // Exif.pm 0x9206 prints zero-denominator rational values as
+            // `inf` (nonzero numerator) or `undef` (zero numerator), without
+            // the normal meter suffix.
+            if base_name == "SubjectDistance" && *denominator == 0 {
+                return TagValue::String(if *numerator == 0 { "undef" } else { "inf" }.into());
+            }
+
+            if *denominator != 0 {
+                let float_val = *numerator as f64 / *denominator as f64;
+                let float_str = if float_val.fract() == 0.0 {
+                    format!("{:.0}", float_val)
+                } else {
+                    format!("{}", float_val)
+                };
+                let formatted = format_with_unit(tag_name, &float_str);
+                return TagValue::String(formatted);
+            }
         }
     }
 
@@ -2438,6 +2446,27 @@ mod tests {
         let value = TagValue::String("2.5".to_string());
         let formatted = format_tag_value("EXIF:SubjectDistance", &value);
         assert_eq!(formatted.as_string(), Some("2.5 m"));
+    }
+
+    #[test]
+    fn subject_distance_preserves_exiftool_rational_sentinels() {
+        let infinity = TagValue::Rational {
+            numerator: 1,
+            denominator: 0,
+        };
+        let undefined = TagValue::Rational {
+            numerator: 0,
+            denominator: 0,
+        };
+
+        assert_eq!(
+            format_tag_value("EXIF:SubjectDistance", &infinity).as_string(),
+            Some("inf")
+        );
+        assert_eq!(
+            format_tag_value("EXIF:SubjectDistance", &undefined).as_string(),
+            Some("undef")
+        );
     }
 
     // -------------------------------------------------------------------------
