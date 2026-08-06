@@ -9,7 +9,7 @@ Empirical OxiDex ↔ ExifTool tag mapping for JPEG: for each tag, ExifTool write
 Only tags OxiDex can **read** from JPEG are listed here (including those whose value formatting differs from ExifTool). The full classification of all tested tags — including unsupported and broken ones — is in the [JPEG Tag Matrix](/reference/jpeg-tag-matrix). See also [ExifTool Coverage](/reference/tag-coverage-analysis) for the tag-database view and the [Compatibility overview](/reference/comparison/) for fixture-based comparisons across formats.
 
 
-**2699** ExifTool tags readable, **183** writable via the CLI (of 4819 ExifTool-writable JPEG tags tested).
+**2699** ExifTool tags readable, **186** writable via the CLI (of 4819 ExifTool-writable JPEG tags tested).
 
 
 ## ExifIFD (93 readable tags)
@@ -122,7 +122,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 |---|---|---|---|
 | `GPS:GPSAltitude` | `GPS:GPSAltitude` | ⚠️ `-GPS:GPSAltitude=` | `10.5` |
 | `GPS:GPSAltitudeRef` | `GPS:GPSAltitudeRef` | — | `Above Sea Level` |
-| `GPS:GPSAreaInformation` | `GPS:GPSAreaInformation` * | — | `OxTest` |
+| `GPS:GPSAreaInformation` | `GPS:GPSAreaInformation` | ⚠️ `-GPS:GPSAreaInformation=` | `OxTest` |
 | `GPS:GPSDOP` | `GPS:GPSDOP` | ⚠️ `-GPS:GPSDOP=` | `1.5` |
 | `GPS:GPSDateStamp` | `GPS:GPSDateStamp` | ⚠️ `-GPS:GPSDateStamp=` | `2024:01:15` |
 | `GPS:GPSDestBearing` | `GPS:GPSDestBearing` | ⚠️ `-GPS:GPSDestBearing=` | `1.5` |
@@ -133,7 +133,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `GPS:GPSDestLatitudeRef` | `GPS:GPSDestLatitudeRef` | ⚠️ `-GPS:GPSDestLatitudeRef=` | `N` |
 | `GPS:GPSDestLongitude` | `GPS:GPSDestLongitude` | — | `122.4194` |
 | `GPS:GPSDestLongitudeRef` | `GPS:GPSDestLongitudeRef` | ⚠️ `-GPS:GPSDestLongitudeRef=` | `W` |
-| `GPS:GPSDifferential` | `GPS:GPSDifferential` | — | `No Correction` |
+| `GPS:GPSDifferential` | `GPS:GPSDifferential` | ⚠️ `-GPS:GPSDifferential=` | `No Correction` |
 | `GPS:GPSHPositioningError` | `GPS:GPSHPositioningError` | ⚠️ `-GPS:GPSHPositioningError=` | `1.5` |
 | `GPS:GPSImgDirection` | `GPS:GPSImgDirection` | ⚠️ `-GPS:GPSImgDirection=` | `1.5` |
 | `GPS:GPSImgDirectionRef` | `GPS:GPSImgDirectionRef` | ⚠️ `-GPS:GPSImgDirectionRef=` | `Magnetic North` |
@@ -147,7 +147,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `GPS:GPSSatellites` | `GPS:GPSSatellites` | ⚠️ `-GPS:GPSSatellites=` | `OxTest` |
 | `GPS:GPSSpeed` | `GPS:GPSSpeed` | ⚠️ `-GPS:GPSSpeed=` | `1.5` |
 | `GPS:GPSSpeedRef` | `GPS:GPSSpeedRef` | ⚠️ `-GPS:GPSSpeedRef=` | `km/h` |
-| `GPS:GPSStatus` | `GPS:GPSStatus` | — | `Measurement Active` |
+| `GPS:GPSStatus` | `GPS:GPSStatus` | ⚠️ `-GPS:GPSStatus=` | `Measurement Active` |
 | `GPS:GPSTimeStamp` | `GPS:GPSTimeStamp` | — | `10:30:00` |
 | `GPS:GPSTrack` | `GPS:GPSTrack` | ⚠️ `-GPS:GPSTrack=` | `1.5` |
 | `GPS:GPSTrackRef` | `GPS:GPSTrackRef` | — | `Magnetic North` |
