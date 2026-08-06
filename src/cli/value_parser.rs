@@ -67,6 +67,15 @@ const RATIONAL_MAX: i64 = 0x7fff_ffff;
 /// through as a string; the write path validates those with intrinsic checks
 /// only (`core::validation::validate_tag_value_intrinsics`).
 pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
+    // GPS.pm 0x001c applies EncodeExifText as its RawConvInv. With the default
+    // CharsetEXIF this is the eight-byte ASCII identifier followed by the
+    // caller's text; the TIFF field itself remains UNDEFINED.
+    if tag_name == "GPS:GPSAreaInformation" {
+        let mut encoded = b"ASCII\0\0\0".to_vec();
+        encoded.extend_from_slice(raw.as_bytes());
+        return Ok(TagValue::Binary(encoded));
+    }
+
     // GPS.pm 0x000a: the TIFF value is ASCII "2" or "3", while ExifTool's
     // PrintConv exposes the corresponding measurement label.  Writer.pl
     // applies that PrintConvInv before its generic string check.
@@ -755,6 +764,13 @@ mod tests {
         assert_eq!(
             parse("GPS:GPSDestDistanceRef", "Kilometers").unwrap(),
             TagValue::String("K".to_string())
+    }
+
+    #[test]
+    fn gps_area_information_is_encoded_as_exif_text() {
+        assert_eq!(
+            parse("GPS:GPSAreaInformation", "San Francisco").unwrap(),
+            TagValue::Binary(b"ASCII\0\0\0San Francisco".to_vec())
         );
     }
 
