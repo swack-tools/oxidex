@@ -142,6 +142,14 @@ pub fn raw_bytes_to_tag_value(
                 {
                     return TagValue::new_string(value.trim_end().to_string());
                 }
+                // Exif.pm 13.59 tag 0x0131 applies `$val =~ s/\s+$//` before
+                // exposing Software. Keep the trim tag-specific: other ASCII
+                // fields may treat trailing whitespace as data.
+                if tag_id == 0x0131
+                    && let TagValue::String(value) = value
+                {
+                    return TagValue::new_string(value.trim_end().to_string());
+                }
                 // Artist has its own identical RawConv in Exif.pm 13.59.
                 if tag_id == 0x013b
                     && let TagValue::String(value) = value
