@@ -28,6 +28,7 @@ use crate::core::formatters::{
     file_source_label_bytes, format_color_space, format_contrast, format_custom_rendered,
     format_sharpness,
 };
+use crate::core::tag_conversion::apply_tile_offsets_value_conv;
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
@@ -1159,7 +1160,16 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     byte_order,
                                 )
                             };
-                            metadata.insert(tag_name, tag_value);
+                            // ExifTool's DNG priority rules select the first
+                            // (primary raw) SubIFD's BitsPerSample. Later
+                            // reduced-resolution SubIFDs carry 8 8 8 and must
+                            // not displace its 16-bit value.
+                            if format != RawFormat::AdobeDNG
+                                || tag_id != 0x0102
+                                || !metadata.contains_key(&tag_name)
+                            {
+                                metadata.insert(tag_name, tag_value);
+                            }
                         }
                     }
                 }
@@ -2024,7 +2034,10 @@ fn format_dng_subifd_exif_tag(
         _ => components.join(" "),
     };
 
-    Some((format!("EXIF:{}", name), TagValue::new_string(display)))
+    Some((
+        format!("EXIF:{}", name),
+        apply_tile_offsets_value_conv(tag_id, TagValue::new_string(display)),
+    ))
 }
 
 fn read_tiff_u16(bytes: &[u8], byte_order: ByteOrder) -> Option<u16> {
@@ -3301,6 +3314,19 @@ mod panasonic_rw2_tests {
         // to the generic path.
         assert!(format_dng_subifd_exif_tag(0x0102, &[8, 0], 3, 1, le).is_none());
         assert!(format_dng_subifd_exif_tag(0x0103, &[7, 0], 3, 1, le).is_none());
+    }
+
+    #[test]
+    fn long_dng_tile_offsets_use_exiftools_valueconv_binary_reference() {
+        let offsets: Vec<u8> = (1000_u32..1010).flat_map(u32::to_le_bytes).collect();
+
+        assert_eq!(
+            format_dng_subifd_exif_tag(0x0144, &offsets, 4, 10, ByteOrder::LittleEndian),
+            Some((
+                "EXIF:TileOffsets".to_string(),
+                TagValue::Binary(b"1000 1001 1002 1003 1004 1005 1006 1007 1008 1009".to_vec())
+            ))
+        );
     }
 
     #[test]
@@ -8416,6 +8442,21 @@ mod rational_array_tests {
         assert_eq!(
             raw_bytes_to_simple_tag_value(&bytes, 10, 9, ByteOrder::LittleEndian).as_string(),
             Some("0.6159 -0.0945 -0.0745 -0.6846 1.3563 0.3684 -0.0802 0.1086 0.7555")
+        );
+    }
+
+    #[test]
+    fn dng_primary_raw_subifd_bits_per_sample_wins() {
+        let path = "/tmp/oxidex-exiftool-cache/exiftool/t/images/DNG.dng";
+        if !std::path::Path::new(path).exists() {
+            return;
+        }
+        let data = std::fs::read(path).expect("read pinned DNG fixture");
+        let metadata = parse_raw_metadata(&data, RawFormat::AdobeDNG).expect("parse DNG fixture");
+
+        assert_eq!(
+            metadata.get("SubIFD0:BitsPerSample"),
+            Some(&TagValue::new_integer(16))
         );
     }
 

@@ -123,6 +123,8 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         ("GPS:GPSDestDistanceRef", "Nautical Miles") => "N",
         ("GPS:GPSDifferential", "No Correction") => "0",
         ("GPS:GPSDifferential", "Differential Corrected") => "1",
+        ("EXIF:PlanarConfiguration" | "IFD0:PlanarConfiguration", "Chunky") => "1",
+        ("EXIF:PlanarConfiguration" | "IFD0:PlanarConfiguration", "Planar") => "2",
         _ => raw,
     };
     let raw = if declared_tag_name.rsplit(':').next() == Some("MeteringMode") {
@@ -1149,6 +1151,21 @@ mod tests {
                 TagValue::String(raw.to_string()),
                 "{printed}"
             );
+        }
+    }
+
+    #[test]
+    fn planar_configuration_printed_values_are_inverted_to_tiff_codes() {
+        // ExifTool 13.59 Exif.pm 0x011c declares int16u with this PrintConv.
+        // The CLI must apply PrintConvInv before its integer shape check.
+        for tag in ["EXIF:PlanarConfiguration", "IFD0:PlanarConfiguration"] {
+            for (printed, raw) in [("Chunky", 1), ("Planar", 2)] {
+                assert_eq!(
+                    parse(tag, printed).unwrap(),
+                    TagValue::Integer(raw),
+                    "{tag}={printed}"
+                );
+            }
         }
     }
 

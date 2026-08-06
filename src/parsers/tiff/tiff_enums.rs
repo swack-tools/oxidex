@@ -118,7 +118,11 @@ pub fn tiff_enum_to_string(tag_id: u16, value: i64) -> Option<String> {
         0x013D => match value {
             1 => Some("None".to_string()),
             2 => Some("Horizontal differencing".to_string()),
-            3 => Some("Floating point predictor".to_string()),
+            3 => Some("Floating point".to_string()),
+            34892 => Some("Horizontal difference X2".to_string()),
+            34893 => Some("Horizontal difference X4".to_string()),
+            34894 => Some("Floating point X2".to_string()),
+            34895 => Some("Floating point X4".to_string()),
             _ => None,
         },
 
@@ -346,6 +350,29 @@ pub fn tiff_enum_to_string(tag_id: u16, value: i64) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::tiff_enum_to_string;
+
+    /// ExifTool 13.59 `Exif.pm` defines all seven Predictor PrintConv values,
+    /// including the DNG 1.5 variants. Keep their spelling exact: code 3 is
+    /// `Floating point`, not the plausible but incorrect `... predictor`.
+    #[test]
+    fn predictor_matches_exiftool_13_59() {
+        for (code, label) in [
+            (1i64, "None"),
+            (2, "Horizontal differencing"),
+            (3, "Floating point"),
+            (34892, "Horizontal difference X2"),
+            (34893, "Horizontal difference X4"),
+            (34894, "Floating point X2"),
+            (34895, "Floating point X4"),
+        ] {
+            assert_eq!(
+                tiff_enum_to_string(0x013D, code).as_deref(),
+                Some(label),
+                "Predictor {code}"
+            );
+        }
+        assert_eq!(tiff_enum_to_string(0x013D, 34896), None);
+    }
 
     /// Compression (0x0103) now resolves through the one
     /// `%Image::ExifTool::Exif::compression` table.

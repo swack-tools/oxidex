@@ -590,7 +590,8 @@ tables:
         description: "TileWidth tag"
       - id: "0x0143"
         name: "TileLength"
-        writable: false
+        writable: true
+        type: int32u
         description: "TileLength tag"
       - id: "0x0144"
         name: "TileOffsets"
