@@ -28,6 +28,7 @@ use crate::core::formatters::{
     file_source_label_bytes, format_color_space, format_contrast, format_custom_rendered,
     format_sharpness,
 };
+use crate::core::tag_conversion::apply_tile_offsets_value_conv;
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
@@ -2024,7 +2025,10 @@ fn format_dng_subifd_exif_tag(
         _ => components.join(" "),
     };
 
-    Some((format!("EXIF:{}", name), TagValue::new_string(display)))
+    Some((
+        format!("EXIF:{}", name),
+        apply_tile_offsets_value_conv(tag_id, TagValue::new_string(display)),
+    ))
 }
 
 fn read_tiff_u16(bytes: &[u8], byte_order: ByteOrder) -> Option<u16> {
@@ -3301,6 +3305,19 @@ mod panasonic_rw2_tests {
         // to the generic path.
         assert!(format_dng_subifd_exif_tag(0x0102, &[8, 0], 3, 1, le).is_none());
         assert!(format_dng_subifd_exif_tag(0x0103, &[7, 0], 3, 1, le).is_none());
+    }
+
+    #[test]
+    fn long_dng_tile_offsets_use_exiftools_valueconv_binary_reference() {
+        let offsets: Vec<u8> = (1000_u32..1010).flat_map(u32::to_le_bytes).collect();
+
+        assert_eq!(
+            format_dng_subifd_exif_tag(0x0144, &offsets, 4, 10, ByteOrder::LittleEndian),
+            Some((
+                "EXIF:TileOffsets".to_string(),
+                TagValue::Binary(b"1000 1001 1002 1003 1004 1005 1006 1007 1008 1009".to_vec())
+            ))
+        );
     }
 
     #[test]
