@@ -13,6 +13,14 @@ export const meta = {
 const CACHE_DIR = (args && args.cacheDir) || '/tmp/oxidex-exiftool-cache'
 const REPO_PATH = (args && args.repoPath) || '/home/allen/git/oxidex'
 const REPO_SLUG = (args && args.repoSlug) || 'swack-tools/oxidex'
+// GitHub rejects pushes whose commit author is a private, unverified email (GH007) --
+// the repo owner's git config uses their private gmail, which triggers this on every
+// push. We can't touch git config (global or repo) to fix it globally, so every commit
+// a worker makes must override author/committer inline via `git -c` for that one
+// command -- this is their public GitHub noreply address, safe to bake in.
+const COMMIT_AUTHOR_NAME = (args && args.commitAuthorName) || 'swackhamer'
+const COMMIT_AUTHOR_EMAIL = (args && args.commitAuthorEmail) || '619624+swackhamer@users.noreply.github.com'
+const GIT_AUTHOR_OVERRIDE = `-c user.name="${COMMIT_AUTHOR_NAME}" -c user.email="${COMMIT_AUTHOR_EMAIL}"`
 const SHARD_THRESHOLD = 25
 const MAX_SHARDS = 6
 const MAX_DRY_ROUNDS = 3
@@ -199,7 +207,10 @@ function fixPrompt(group, workItem) {
     `-o /tmp/tagcmp-${group.format}-${workItem.slug}-end.json --markdown-dir /tmp/tagcmp-${group.format}-${workItem.slug}-end-md\n` +
     `3. Read /tmp/tagcmp-${group.format}-${workItem.slug}-end.json and confirm the combined missing_in_oxidex + value_differences count for "${group.format}" is strictly lower than in the "-start.json" file, and that regressions is empty.\n` +
     `4. cargo test --workspace\n\n` +
-    `If both checks pass, commit on your current git branch with a descriptive message, then:\n` +
+    `If both checks pass, commit on your current git branch with a descriptive message using ` +
+    `git ${GIT_AUTHOR_OVERRIDE} commit -m "..." -- the repo owner's default git config email is private/unverified on ` +
+    `GitHub and a plain "git commit" will produce a commit that GitHub REJECTS on push (GH007) with no useful error until ` +
+    `then, so you MUST pass that -c override on the commit command itself, not via "git config". Then:\n` +
     `5. git push -u origin "$(git branch --show-current)"\n` +
     `6. gh pr create --repo ${REPO_SLUG} --base main --head "$(git branch --show-current)" ` +
     `--title "fix(${group.format.toLowerCase()}): ${workItem.label || 'coverage'} tag fixes" ` +
@@ -232,7 +243,7 @@ const AUDIT_SCHEMA = {
 function auditPrompt(roundLog) {
   return `You are reviewing the execution log of an automated ExifTool tag-coverage-gap-closing loop that just ran against the oxidex repository at "${REPO_PATH}". Here is the round-by-round summary as JSON:\n\n${JSON.stringify(roundLog, null, 2)}\n\n` +
     `Look for concrete, actionable inefficiency patterns in how the loop itself operates -- NOT in the tag fixes -- for example: formats repeatedly failing verification across multiple rounds (suggesting the fix prompt or sharding gave a worker an impossible or wrongly-scoped task), shards that turned out to overlap and collide, rounds that closed suspiciously few gaps relative to workers spawned, or any sign from the summaries that workers cut corners (approximated a conversion instead of omitting it, skipped the pinned-oracle check, etc -- these would violate AGENTS.md).\n\n` +
-    `If you find something concrete and actionable that you can fix in the workflow script itself, read "${REPO_PATH}/.claude/workflows/exiftool-coverage-loop.js", make the targeted improvement on a fresh branch off current main (cd "${REPO_PATH}" && git checkout main && git pull --ff-only origin main && git checkout -b <branch>), commit, push, and open a PR (gh pr create --repo ${REPO_SLUG} --base main --head <branch> --title "chore(coverage-loop): <short description>" --body "<what was inefficient and why this fixes it>") explaining the inefficiency and the fix. If nothing concrete and actionable turned up, do NOT open a PR -- just report your findings, even if the finding is "no significant inefficiency observed."\n\n` +
+    `If you find something concrete and actionable that you can fix in the workflow script itself, read "${REPO_PATH}/.claude/workflows/exiftool-coverage-loop.js", make the targeted improvement on a fresh branch off current main (cd "${REPO_PATH}" && git checkout main && git pull --ff-only origin main && git checkout -b <branch>), commit using git ${GIT_AUTHOR_OVERRIDE} commit -m "..." (the repo owner's default git config email is private/unverified on GitHub, so a plain "git commit" produces a commit GitHub REJECTS on push (GH007) -- pass that -c override on the commit command itself, never via "git config"), push, and open a PR (gh pr create --repo ${REPO_SLUG} --base main --head <branch> --title "chore(coverage-loop): <short description>" --body "<what was inefficient and why this fixes it>") explaining the inefficiency and the fix. If nothing concrete and actionable turned up, do NOT open a PR -- just report your findings, even if the finding is "no significant inefficiency observed."\n\n` +
     `Report: findings (array of {description, severity: "low"|"medium"|"high"}), prOpened (bool), prUrl (string or null), summary (one paragraph).`
 }
 
