@@ -77,6 +77,8 @@ pub fn panasonic_registry() -> TagRegistry {
         .register_enum_tag_required(0x001C, "MacroMode", &MACRO_MODE)
         .register_enum_tag_required(0x001F, "ShootingMode", &SHOOTING_MODE)
         .register_enum_tag_required(0x0020, "Audio", &AUDIO)
+        .register_raw(0x0021, "DataDump")
+        .register_i32(0x0027, "VideoFrameRate", decode_video_frame_rate)
         .register_enum_tag_required(0x0028, "ColorEffect", &COLOR_EFFECT)
         .register_enum_tag_required(0x002A, "BurstMode", &BURST_MODE)
         .register_enum_tag_required(0x002C, "ContrastMode", &CONTRAST_MODE)
@@ -88,9 +90,11 @@ pub fn panasonic_registry() -> TagRegistry {
         .register_enum_tag_required(0x0034, "OpticalZoomMode", &OPTICAL_ZOOM_MODE)
         .register_enum_tag_required(0x0035, "ConversionLens", &CONVERSION_LENS)
         .register_integer_tag(0x0036, "TravelDay", None)
+        .register_i32(0x0038, "BatteryLevel", decode_battery_level)
         .register_raw(0x0040, "Saturation")
         .register_raw(0x0041, "Sharpness")
         .register_enum_tag_required(0x0042, "FilmMode", &FILM_MODE)
+        .register_i32(0x0043, "JPEGQuality", decode_jpeg_quality)
         .register_enum_tag_required(0x003A, "WorldTimeLocation", &WORLD_TIME_LOCATION)
         .register_enum_tag_required(0x003B, "TextStamp", &TEXT_STAMP)
         .register_integer_tag(0x003C, "ProgramISO", None)
@@ -165,6 +169,12 @@ pub fn panasonic_registry() -> TagRegistry {
         // ====================================================================
         .register_integer_tag(0x8000, "MakerNoteVersion", None)
         .register_i32(0x8001, "SceneMode", decode_scene_mode)
+        .register_i32(0x8002, "HighlightWarning", decode_highlight_warning)
+        .register_i32(
+            0x8003,
+            "DarkFocusEnvironment",
+            decode_dark_focus_environment,
+        )
         .register_integer_tag(0x8004, "WBRedLevel", None)
         .register_integer_tag(0x8005, "WBGreenLevel", None)
         .register_integer_tag(0x8006, "WBBlueLevel", None)
@@ -201,6 +211,54 @@ fn decode_scene_mode(value: i32) -> String {
         return "Off".to_string();
     }
     SHOOTING_MODE.decode(value)
+}
+
+fn decode_video_frame_rate(value: i32) -> String {
+    match value {
+        0 => "n/a".to_string(),
+        _ => value.to_string(),
+    }
+}
+
+fn decode_battery_level(value: i32) -> String {
+    match value {
+        1 => "Full".to_string(),
+        2 => "Medium".to_string(),
+        3 => "Low".to_string(),
+        4 => "Near Empty".to_string(),
+        7 => "Near Full".to_string(),
+        8 => "Medium Low".to_string(),
+        256 => "n/a".to_string(),
+        _ => value.to_string(),
+    }
+}
+
+fn decode_jpeg_quality(value: i32) -> String {
+    match value {
+        0 => "n/a (Movie)".to_string(),
+        2 => "High".to_string(),
+        3 => "Standard".to_string(),
+        6 => "Very High".to_string(),
+        255 => "n/a (RAW only)".to_string(),
+        _ => value.to_string(),
+    }
+}
+
+fn decode_highlight_warning(value: i32) -> String {
+    match value {
+        0 => "Disabled".to_string(),
+        1 => "No".to_string(),
+        2 => "Yes".to_string(),
+        _ => value.to_string(),
+    }
+}
+
+fn decode_dark_focus_environment(value: i32) -> String {
+    match value {
+        1 => "No".to_string(),
+        2 => "Yes".to_string(),
+        _ => value.to_string(),
+    }
 }
 
 // ============================================================================
