@@ -224,7 +224,7 @@ references are into this repo.
 | `ImageNumber` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ImageTitle` | ✅ ok | ✅ ok | `OxTest` |
 | `ImageUniqueID` | ✅ ok | ✅ ok | `OxTest` |
-| `LearningOptOutIn` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: error | `OxTest` |
+| `LearningOptOutIn` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: interop (exiftool can't read it) | `OxTest` |
 | `Lens` | 🐛 broken: ACR "TagName: " ValueConv prefix not stripped | ✅ ok | `OxTest` |
 | `LensInfo` | ✅ ok | 🐛 broken: error | `1.5 1.5 1.5 1.5` |
 | `LensMake` | ✅ ok | ✅ ok | `OxTest` |
@@ -4939,7 +4939,7 @@ references are into this repo.
 | `ResolutionUnit` | ✅ ok | — unsupported (silent no-op) | `inches` |
 | `SamplesPerPixel` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `Software` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
-| `TransferFunction` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `TransferFunction` | ✅ ok (formatting differs from exiftool) | — unsupported (silent no-op) | `3` |
 | `WhitePoint` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `XResolution` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `YCbCrCoefficients` | ✅ ok | — unsupported (silent no-op) | `1.5` |

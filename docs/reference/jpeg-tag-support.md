@@ -188,7 +188,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:CurrentPreProfileMatrix` | `IFD0:CurrentPreProfileMatrix` | ⚠️ `-IFD0:CurrentPreProfileMatrix=` | `1.5` |
 | `IFD0:DNGBackwardVersion` | `IFD0:DNGBackwardVersion` * | — | `3 3 3 3` |
 | `IFD0:DNGLensInfo` | `IFD0:DNGLensInfo` | — | `1.5 1.5 1.5 1.5` |
-| `IFD0:DNGPrivateData` | `IFD0:0x012D` | — | `3` |
+| `IFD0:DNGPrivateData` | `IFD0:0xC634` | — | `3` |
 | `IFD0:DNGVersion` | `IFD0:DNGVersion` * | — | `3 3 3 3` |
 | `IFD0:DefaultBlackRender` | `IFD0:DefaultBlackRender` * | — | `Auto` |
 | `IFD0:DepthFar` | `IFD0:DepthFar` | ✅ `-IFD0:DepthFar=` | `1.5` |
@@ -294,7 +294,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `IFD0:TileLength` | `IFD0:TileLength` | ✅ `-IFD0:TileLength=` | `3` |
 | `IFD0:TileWidth` | `IFD0:TileWidth` | ✅ `-IFD0:TileWidth=` | `3` |
 | `IFD0:TimeCodes` | `IFD0:TimeCodes` * | — | `3` |
-| `IFD0:TransferFunction` | `IFD0:0x012D` | — | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 ` |
+| `IFD0:TransferFunction` | `IFD0:TransferFunction` | — | `3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 ` |
 | `IFD0:UniqueCameraModel` | `IFD0:UniqueCameraModel` | ✅ `-IFD0:UniqueCameraModel=` | `OxTest` |
 | `IFD0:WhitePoint` | `IFD0:WhitePoint` | — | `1.5 1.5` |
 | `IFD0:XPAuthor` | `IFD0:XPAuthor` | ⚠️ `-IFD0:XPAuthor=` | `3` |
@@ -2668,7 +2668,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-tiff:ResolutionUnit` | `XMP-tiff:ResolutionUnit` | — | `inches` |
 | `XMP-tiff:SamplesPerPixel` | `XMP-tiff:SamplesPerPixel` | — | `3` |
 | `XMP-tiff:Software` | `XMP-tiff:Software` | — | `OxTest` |
-| `XMP-tiff:TransferFunction` | `XMP-tiff:TransferFunction` | — | `3` |
+| `XMP-tiff:TransferFunction` | `XMP-tiff:TransferFunction` * | — | `3` |
 | `XMP-tiff:WhitePoint` | `XMP-tiff:WhitePoint` | — | `1.5` |
 | `XMP-tiff:XResolution` | `XMP-tiff:XResolution` | — | `1.5` |
 | `XMP-tiff:YCbCrCoefficients` | `XMP-tiff:YCbCrCoefficients` | — | `1.5` |
