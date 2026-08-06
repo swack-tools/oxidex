@@ -102,6 +102,23 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         });
     }
 
+    // GPS.pm 0x0000 applies `tr/./ /` before checking four int8u values.
+    // Preserve those numeric components as bytes instead of the ASCII text.
+    if tag_name == "GPS:GPSVersionID" {
+        let bytes = raw
+            .split('.')
+            .map(|part| part.parse::<u8>())
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|_| invalid(tag_name, "Expected four dot-separated unsigned bytes"))?;
+        if bytes.len() != 4 {
+            return Err(invalid(
+                tag_name,
+                "Expected four dot-separated unsigned bytes",
+            ));
+        }
+        return Ok(TagValue::Binary(bytes));
+    }
+
     let raw = if matches!(
         tag_name,
         "GPSLatitudeRef" | "GPS:GPSLatitudeRef" | "GPSDestLatitudeRef" | "GPS:GPSDestLatitudeRef"
@@ -110,6 +127,7 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
     } else {
         raw
     };
+
     // GPS.pm 0x000a: the TIFF value is ASCII "2" or "3", while ExifTool's
     // PrintConv exposes the corresponding measurement label.  Writer.pl
     // applies that PrintConvInv before its generic string check.
@@ -1134,6 +1152,14 @@ mod tests {
                 numerator: 181,
                 denominator: 2,
             }
+        );
+    }
+
+    #[test]
+    fn gps_version_id_is_parsed_as_four_unsigned_bytes() {
+        assert_eq!(
+            parse("GPS:GPSVersionID", "2.3.0.0").unwrap(),
+            TagValue::Binary(vec![2, 3, 0, 0])
         );
     }
 
