@@ -124,6 +124,24 @@ mod print_im_dispatch_tests {
         assert_eq!(metadata.get_string("PrintIM:PrintIMVersion"), Some("0250"));
         assert!(metadata.get("IFD0:PrintIM").is_none());
     }
+
+    #[test]
+    fn linked_tiff_ifds_emit_file_page_count() {
+        // Three empty top-level IFDs linked at offsets 8, 14, and 20.
+        let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+        tiff.extend_from_slice(&0_u16.to_le_bytes());
+        tiff.extend_from_slice(&14_u32.to_le_bytes());
+        tiff.extend_from_slice(&0_u16.to_le_bytes());
+        tiff.extend_from_slice(&20_u32.to_le_bytes());
+        tiff.extend_from_slice(&0_u16.to_le_bytes());
+        tiff.extend_from_slice(&0_u32.to_le_bytes());
+
+        let reader = TestReader::new(tiff);
+        let mut metadata = MetadataMap::new();
+        parse_ifd_chain(&reader, 8, ByteOrder::LittleEndian, &mut metadata).unwrap();
+
+        assert_eq!(metadata.get_integer("File:PageCount"), Some(3));
+    }
 }
 
 #[cfg(test)]
@@ -315,6 +333,13 @@ pub fn parse_ifd_chain(
             eprintln!("Warning: More than 10 IFDs found, stopping to prevent infinite loop");
             break;
         }
+    }
+
+    // ExifTool reports the number of linked top-level image directories as
+    // File:PageCount. Sub-IFDs (Exif/GPS/SubIFDs) are not pages and do not
+    // participate in this count.
+    if ifd_index > 1 {
+        metadata.insert("File:PageCount", TagValue::new_integer(ifd_index as i64));
     }
 
     Ok(())
