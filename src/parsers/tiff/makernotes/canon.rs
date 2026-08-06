@@ -1415,7 +1415,6 @@ const_decoder!(
     pub RECORD_MODE,
     i16,
     [
-        (0, "n/a"),
         (1, "JPEG"),
         (2, "CRW+THM"),
         (3, "AVI+THM"),
@@ -8134,6 +8133,13 @@ mod tests {
         ] {
             assert_eq!(WHITE_BALANCE.decode(raw), expected);
         }
+    }
+
+    /// Canon.pm 13.59 has no RecordMode PrintConv entry for zero. Only raw
+    /// `-1` is discarded, so zero reaches the standard unknown-value fallback.
+    #[test]
+    fn record_mode_zero_is_unknown() {
+        assert_eq!(RECORD_MODE.decode(0), "Unknown (0)");
     }
 
     #[test]
