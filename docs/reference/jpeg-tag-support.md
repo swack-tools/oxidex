@@ -9,7 +9,7 @@ Empirical OxiDex ↔ ExifTool tag mapping for JPEG: for each tag, ExifTool write
 Only tags OxiDex can **read** from JPEG are listed here (including those whose value formatting differs from ExifTool). The full classification of all tested tags — including unsupported and broken ones — is in the [JPEG Tag Matrix](/reference/jpeg-tag-matrix). See also [ExifTool Coverage](/reference/tag-coverage-analysis) for the tag-database view and the [Compatibility overview](/reference/comparison/) for fixture-based comparisons across formats.
 
 
-**2701** ExifTool tags readable, **211** writable via the CLI (of 4819 ExifTool-writable JPEG tags tested).
+**2701** ExifTool tags readable, **213** writable via the CLI (of 4819 ExifTool-writable JPEG tags tested).
 
 
 ## ExifIFD (93 readable tags)
@@ -22,7 +22,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:BrightnessValue` | `ExifIFD:BrightnessValue` | ✅ `-ExifIFD:BrightnessValue=` | `1.5` |
 | `ExifIFD:CameraElevationAngle` | `ExifIFD:CameraElevationAngle` | ⚠️ `-ExifIFD:CameraElevationAngle=` | `1.5` |
 | `ExifIFD:CameraFirmware` | `ExifIFD:CameraFirmware` | ✅ `-ExifIFD:CameraFirmware=` | `OxTest` |
-| `ExifIFD:ColorSpace` | `ExifIFD:ColorSpace` | — | `sRGB` |
+| `ExifIFD:ColorSpace` | `ExifIFD:ColorSpace` | ✅ `-ExifIFD:ColorSpace=` | `sRGB` |
 | `ExifIFD:CompositeImage` | `ExifIFD:CompositeImage` | — | `Not a Composite Image` |
 | `ExifIFD:CompositeImageCount` | `ExifIFD:CompositeImageCount` | ✅ `-ExifIFD:CompositeImageCount=` | `3 3` |
 | `ExifIFD:CompressedBitsPerPixel` | `ExifIFD:CompressedBitsPerPixel` | ✅ `-ExifIFD:CompressedBitsPerPixel=` | `1.5` |
@@ -34,7 +34,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:DigitalZoomRatio` | `ExifIFD:DigitalZoomRatio` | ✅ `-ExifIFD:DigitalZoomRatio=` | `1.5` |
 | `ExifIFD:ExifImageHeight` | `ExifIFD:ExifImageHeight` | ✅ `-ExifIFD:ExifImageHeight=` | `3` |
 | `ExifIFD:ExifImageWidth` | `ExifIFD:ExifImageWidth` | ✅ `-ExifIFD:ExifImageWidth=` | `3` |
-| `ExifIFD:ExifVersion` | `ExifIFD:ExifVersion` | ⚠️ `-ExifIFD:ExifVersion=` | `0100` |
+| `ExifIFD:ExifVersion` | `ExifIFD:ExifVersion` | ✅ `-ExifIFD:ExifVersion=` | `0100` |
 | `ExifIFD:ExposureCompensation` | `ExifIFD:ExposureCompensation` | — | `1.5` |
 | `ExifIFD:ExposureIndex` | `ExifIFD:ExposureIndex` | ✅ `-ExifIFD:ExposureIndex=` | `1.5` |
 | `ExifIFD:ExposureMode` | `ExifIFD:ExposureMode` | — | `Auto` |
@@ -60,7 +60,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `ExifIFD:ImageEditingSoftware` | `ExifIFD:ImageEditingSoftware` | ✅ `-ExifIFD:ImageEditingSoftware=` | `OxTest` |
 | `ExifIFD:ImageEditor` | `ExifIFD:ImageEditor` | ✅ `-ExifIFD:ImageEditor=` | `OxTest` |
 | `ExifIFD:ImageHistory` | `ExifIFD:ImageHistory` | ✅ `-ExifIFD:ImageHistory=` | `OxTest` |
-| `ExifIFD:ImageNumber` | `ExifIFD:ImageNumber` | — | `3` |
+| `ExifIFD:ImageNumber` | `ExifIFD:ImageNumber` | ✅ `-ExifIFD:ImageNumber=` | `3` |
 | `ExifIFD:ImageTitle` | `ExifIFD:ImageTitle` | ✅ `-ExifIFD:ImageTitle=` | `OxTest` |
 | `ExifIFD:ImageUniqueID` | `ExifIFD:ImageUniqueID` | ✅ `-ExifIFD:ImageUniqueID=` | `OxTest` |
 | `ExifIFD:LensInfo` | `ExifIFD:LensInfo` | — | `1.5 1.5 1.5 1.5` |

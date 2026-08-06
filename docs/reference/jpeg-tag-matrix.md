@@ -15,12 +15,12 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 
 | Classification | Tags |
 |---|---|
-| 📖 Read only | 2349 |
+| 📖 Read only | 2347 |
 | ❌ Unsupported | 1890 |
 | ❔ Untestable | 220 |
 | 🐛 Read OK, write broken | 148 |
-| ✅ Full (read + write) | 133 |
-| ⚠️ Full (write non-standard encoding) | 71 |
+| ✅ Full (read + write) | 136 |
+| ⚠️ Full (write non-standard encoding) | 70 |
 | 🐛 Read broken | 7 |
 | ✍️ Write only | 1 |
 | 🚫 Not writable in ExifTool (no synthetic sample possible; untested) | 585 |
@@ -30,7 +30,7 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | Group | Full | Read-only | Write-broken | Read-broken | Write-only | Unsupported | Untestable | Total |
 |---|---|---|---|---|---|---|---|---|
 | All | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
-| ExifIFD | 72 | 4 | 12 | 6 | 1 | 4 | 99 | 203 |
+| ExifIFD | 75 | 3 | 11 | 6 | 1 | 4 | 99 | 203 |
 | File | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
 | GPS | 6 | 5 | 2 | 0 | 0 | 0 | 0 | 32 |
 | GSpherical | 0 | 0 | 0 | 0 | 0 | 0 | 16 | 16 |
@@ -77,7 +77,7 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | XMP-drone-dji | 0 | 25 | 0 | 0 | 0 | 3 | 0 | 28 |
 | XMP-dwc | 0 | 145 | 12 | 0 | 0 | 103 | 3 | 263 |
 | XMP-et | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
-| XMP-exif | 0 | 88 | 6 | 1 | 0 | 5 | 0 | 100 |
+| XMP-exif | 0 | 87 | 7 | 1 | 0 | 5 | 0 | 100 |
 | XMP-exifEX | 0 | 26 | 0 | 0 | 0 | 16 | 0 | 42 |
 | XMP-expressionmedia | 0 | 4 | 0 | 0 | 0 | 0 | 0 | 4 |
 | XMP-extensis | 0 | 8 | 0 | 0 | 0 | 0 | 0 | 8 |
@@ -177,7 +177,7 @@ references are into this repo.
 | `CameraElevationAngle` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `1.5` |
 | `CameraFirmware` | ✅ ok | ✅ ok | `OxTest` |
 | `ChromaticAberrationCorrection` | — unsupported | 🐛 broken: error | `No` |
-| `ColorSpace` | ✅ ok | 🐛 broken: error | `sRGB` |
+| `ColorSpace` | ✅ ok | ✅ ok | `sRGB` |
 | `ComponentsConfiguration` | ❔ untestable (exiftool could not synthesize a sample) | ✅ ok | `-` |
 | `CompositeImage` | ✅ ok | 🐛 broken: error | `Not a Composite Image` |
 | `CompositeImageCount` | ✅ ok | ✅ ok | `3 3` |
@@ -194,7 +194,7 @@ references are into this repo.
 | `DistortionCorrection` | — unsupported | 🐛 broken: error | `No` |
 | `ExifImageHeight` | ✅ ok | ✅ ok | `3` |
 | `ExifImageWidth` | ✅ ok | ✅ ok | `3` |
-| `ExifVersion` | ✅ ok | ⚠️ writes, but non-standard encoding (exiftool tolerates) | `0100` |
+| `ExifVersion` | ✅ ok | ✅ ok | `0100` |
 | `Exposure` | 🐛 broken: ACR "TagName: " ValueConv prefix not stripped | ✅ ok | `OxTest` |
 | `ExposureCompensation` | ✅ ok | value_mismatch | `1.5` |
 | `ExposureIndex` | ✅ ok | ✅ ok | `1.5` |
@@ -222,7 +222,7 @@ references are into this repo.
 | `ImageEditingSoftware` | ✅ ok | ✅ ok | `OxTest` |
 | `ImageEditor` | ✅ ok | ✅ ok | `OxTest` |
 | `ImageHistory` | ✅ ok | ✅ ok | `OxTest` |
-| `ImageNumber` | ✅ ok | — unsupported (silent no-op) | `3` |
+| `ImageNumber` | ✅ ok | ✅ ok | `3` |
 | `ImageTitle` | ✅ ok | ✅ ok | `OxTest` |
 | `ImageUniqueID` | ✅ ok | ✅ ok | `OxTest` |
 | `LearningOptOutIn` | ❔ untestable (exiftool could not synthesize a sample) | 🐛 broken: interop (exiftool can't read it) | `OxTest` |
@@ -3889,7 +3889,7 @@ references are into this repo.
 | `DigitalZoomRatio` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `ExifImageHeight` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `ExifImageWidth` | ✅ ok | — unsupported (silent no-op) | `3` |
-| `ExifVersion` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
+| `ExifVersion` | ✅ ok | 🐛 broken: error | `OxTest` |
 | `ExposureCompensation` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `ExposureIndex` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `ExposureMode` | ✅ ok | — unsupported (silent no-op) | `Auto` |
