@@ -717,7 +717,8 @@ tables:
         description: "RelatedImageFileFormat tag"
       - id: "0x1001"
         name: "RelatedImageWidth"
-        writable: false
+        writable: true
+        type: int16u
         description: "RelatedImageWidth tag"
       - id: "0x1002"
         name: "RelatedImageHeight"
