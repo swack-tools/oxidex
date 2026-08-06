@@ -323,9 +323,31 @@ pub(crate) fn tag_value_to_field_for_key(
             "GPSVersionID must contain exactly four bytes",
         ));
     }
+    if key.rsplit(':').next() == Some("SubjectArea") {
+        if let TagValue::Array(values) = value
+            && (2..=4).contains(&values.len())
+        {
+            let mut bytes = Vec::with_capacity(values.len() * 2);
+            for value in values {
+                let TagValue::Integer(component) = value else {
+                    return Err(ExifToolError::parse_error(
+                        "SubjectArea requires unsigned shorts",
+                    ));
+                };
+                let component = u16::try_from(*component).map_err(|_| {
+                    ExifToolError::parse_error("SubjectArea requires unsigned shorts")
+                })?;
+                bytes.extend_from_slice(&component.to_ne_bytes());
+            }
+            return Ok((3, values.len() as u32, bytes));
+        }
+        return Err(ExifToolError::parse_error(
+            "SubjectArea requires 2 to 4 unsigned short values",
+        ));
+    }
     let hint = match key.rsplit(':').next() {
         Some("ShutterSpeedValue" | "BrightnessValue") => Some(10),
-        Some("GPSVersionID") => Some(1),       // GPS.pm 0x0000 declares int8u[4]
+        Some("GPSVersionID") => Some(1),
         _ => hint,
     };
     // Exif.pm 13.59 declares TileWidth (0x0142) as int32u. Do not let the
@@ -2359,6 +2381,31 @@ mod tests {
         assert_eq!(field_type, 3);
         assert_eq!(count, 2);
         assert_eq!(bytes, [3_u16.to_ne_bytes(), 17_u16.to_ne_bytes()].concat());
+    }
+
+    #[test]
+    fn subject_area_serializes_as_two_to_four_unsigned_shorts() {
+        // ExifTool 13.59 Exif.pm 0x9214: Writable => 'int16u', Count => -1
+        // (limited to two, three, or four components).
+        let value = TagValue::new_array(vec![
+            TagValue::new_integer(3),
+            TagValue::new_integer(17),
+            TagValue::new_integer(42),
+        ]);
+        let (field_type, count, bytes) =
+            tag_value_to_field_for_key("EXIF:SubjectArea", &value, Some(3)).unwrap();
+
+        assert_eq!(field_type, 3);
+        assert_eq!(count, 3);
+        assert_eq!(
+            bytes,
+            [
+                3_u16.to_ne_bytes(),
+                17_u16.to_ne_bytes(),
+                42_u16.to_ne_bytes()
+            ]
+            .concat()
+        );
     }
 
     #[test]

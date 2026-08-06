@@ -195,6 +195,27 @@ pub fn convert_tag_value_to_entry(
         // Unsupported types - skip for now (will add TODO in tests)
         TagValue::Float(_) => Ok(None),
         TagValue::Struct(_) => Ok(None),
+        TagValue::Array(values) if tag_id == 0x9214 && (2..=4).contains(&values.len()) => {
+            let mut bytes = Vec::with_capacity(values.len() * 2);
+            for value in values {
+                let TagValue::Integer(component) = value else {
+                    return Ok(None);
+                };
+                let Ok(component) = u16::try_from(*component) else {
+                    return Ok(None);
+                };
+                bytes.extend_from_slice(&match byte_order {
+                    ByteOrder::LittleEndian => component.to_le_bytes(),
+                    ByteOrder::BigEndian => component.to_be_bytes(),
+                });
+            }
+            Ok(Some(IfdEntryData::new(
+                tag_id,
+                ExifType::Short,
+                values.len() as u32,
+                bytes,
+            )))
+        }
         TagValue::Array(_) => Ok(None), // Arrays not yet supported in TIFF writer
     }
 }
@@ -319,6 +340,25 @@ mod tests {
         assert_eq!(entry.field_type, ExifType::Short);
         assert_eq!(entry.value_count, 2);
         assert_eq!(entry.value_bytes, vec![0, 2, 0, 2]);
+    }
+
+    #[test]
+    fn subject_area_writes_two_to_four_unsigned_shorts() {
+        let entry = convert_tag_value_to_entry(
+            0x9214,
+            &TagValue::new_array(vec![
+                TagValue::new_integer(10),
+                TagValue::new_integer(20),
+                TagValue::new_integer(30),
+            ]),
+            ByteOrder::LittleEndian,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(entry.field_type, ExifType::Short);
+        assert_eq!(entry.value_count, 3);
+        assert_eq!(entry.value_bytes, vec![10, 0, 20, 0, 30, 0]);
     }
 
     #[test]

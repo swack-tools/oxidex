@@ -2179,7 +2179,7 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
     registry.insert(
         "EXIF:SubjectArea",
         TagDescriptor::new(
-            TagId::new_numeric(0xa214),
+            TagId::new_numeric(0x9214),
             "EXIF:SubjectArea".to_string(),
             FormatFamily::EXIF,
             true,
