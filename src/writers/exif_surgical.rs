@@ -595,10 +595,13 @@ pub fn plan_exif_write(
     }
 
     // GPS.pm (ExifTool 13.59) requires GPSVersionID in every GPS IFD. A file
-    // without a GPS IFD gains one when GPSHPositioningError is added, so emit
-    // ExifTool's declared default version alongside the tag. Existing GPS
-    // IFDs already carry their raw version entry through the loop above.
-    if plan.gps.iter().any(|entry| entry.tag_id == 0x001f)
+    // without a GPS IFD gains one when either covered tag is added, so emit
+    // ExifTool's declared default version alongside it. Existing GPS IFDs
+    // already carry their raw version entry through the loop above.
+    if plan
+        .gps
+        .iter()
+        .any(|entry| matches!(entry.tag_id, 0x001d | 0x001f))
         && !plan.gps.iter().any(|entry| entry.tag_id == 0x0000)
     {
         plan.gps.push(OutEntry {
@@ -1480,6 +1483,31 @@ mod tests {
         assert_eq!(latitude_ref.field_type, 2);
         assert_eq!(latitude_ref.count, 2);
         assert_eq!(latitude_ref.value, b"S\0");
+    }
+
+    #[test]
+    fn plan_writes_gps_date_stamp_with_required_gps_version() {
+        // ExifTool 13.59 writes GPSDateStamp as ASCII and creates the required
+        // GPSVersionID=2.3.0.0 when the tag creates a new GPS IFD.
+        let scan = ExifScan {
+            byte_order: ByteOrder::LittleEndian,
+            entries: Vec::new(),
+            thumbnail: None,
+            makernote_offset: None,
+        };
+        let original = MetadataMap::new();
+        let mut desired = MetadataMap::new();
+        desired.insert("GPS:GPSDateStamp", TagValue::new_string("2024:01:15"));
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let date_stamp = plan.gps.iter().find(|e| e.tag_id == 0x001D).unwrap();
+        assert_eq!(date_stamp.field_type, 2);
+        assert_eq!(date_stamp.count, 11);
+        assert_eq!(date_stamp.value, b"2024:01:15\0");
+        let version = plan.gps.iter().find(|e| e.tag_id == 0x0000).unwrap();
+        assert_eq!(version.field_type, 1);
+        assert_eq!(version.count, 4);
+        assert_eq!(version.value, [2, 3, 0, 0]);
     }
 
     #[test]
