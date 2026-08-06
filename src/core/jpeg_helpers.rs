@@ -1338,6 +1338,25 @@ const APP5_MARKER: u16 = 0xFFE5;
 const APP7_MARKER: u16 = 0xFFE7;
 const APP9_MARKER: u16 = 0xFFE9;
 
+/// Extracts Samsung's `ssuniqueid\0` APP5 record.
+///
+/// ExifTool 13.59 handles this before the other APP5 layouts: the eleven-byte
+/// identifier is followed by the 32-byte unique ID, whose `ValueConv` is
+/// `unpack("H*", $val)`.  Hex encoding produces the same lowercase rendering.
+pub fn process_samsung_unique_id_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    const SAMSUNG_UNIQUE_ID_PREFIX: &[u8] = b"ssuniqueid\0";
+
+    for segment in segments.iter().filter(|s| s.marker == APP5_MARKER) {
+        let Some(unique_id) = segment.data.strip_prefix(SAMSUNG_UNIQUE_ID_PREFIX) else {
+            continue;
+        };
+        metadata.insert(
+            "Samsung:UniqueID".to_string(),
+            TagValue::new_string(hex::encode(unique_id)),
+        );
+    }
+}
+
 /// ExifTool's `/^....IJPEG\0/s`: four bytes of version, then the signature.
 ///
 /// This is checked after ICC_PROFILE, FPXR and MPF in ExifTool's APP2 chain,
@@ -1445,6 +1464,12 @@ pub fn process_infiray_segments(segments: &[Segment], metadata: &mut MetadataMap
                 continue;
             }
             if marker == APP4_MARKER && app4_precedes_infiray(segment.data, make_is_dji) {
+                continue;
+            }
+            // ExifTool dispatches `ssuniqueid\0` before its HasIJPEG APP5
+            // branch, so this Samsung record must never be decoded as an
+            // unrelated InfiRay Picture table.
+            if marker == APP5_MARKER && segment.data.starts_with(b"ssuniqueid\0") {
                 continue;
             }
             // ExifTool tests the Qualcomm signature before it reaches the
