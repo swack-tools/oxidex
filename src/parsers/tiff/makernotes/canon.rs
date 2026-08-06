@@ -984,6 +984,8 @@ const SHOT_INFO_WHITE_BALANCE: usize = 7;
 const SHOT_INFO_SLOW_SHUTTER: usize = 8;
 const SHOT_INFO_SEQUENCE_NUMBER: usize = 9;
 const SHOT_INFO_OPTICAL_ZOOM_CODE: usize = 10;
+/// ExifTool `%Canon::ShotInfo` key 12 (Canon.pm:2866) — CameraTemperature.
+const SHOT_INFO_CAMERA_TEMPERATURE: usize = 12;
 const SHOT_INFO_FLASH_GUIDE_NUMBER: usize = 13;
 const SHOT_INFO_AF_POINTS_IN_FOCUS: usize = 14;
 // Alias for backward compatibility with tests
@@ -5646,6 +5648,20 @@ fn parse_canon_makernote_impl_located(
                             } else {
                                 zoom_code.to_string()
                             },
+                        );
+                    }
+
+                    // CameraTemperature (index 12). Canon.pm emits it only
+                    // for EOS bodies other than EOS-1D/1DS, suppresses a raw
+                    // zero, then converts the stored offset temperature.
+                    if let Some(&raw_temperature) = array.get(SHOT_INFO_CAMERA_TEMPERATURE)
+                        && raw_temperature != 0
+                        && model.contains("EOS")
+                        && !model.contains("EOS-1D")
+                    {
+                        tags.insert(
+                            "Canon:CameraTemperature".to_string(),
+                            format!("{} C", raw_temperature - 128),
                         );
                     }
 

@@ -1891,6 +1891,25 @@ mod tests {
     }
 
     #[test]
+    fn olympus_sh25mr_gps_area_information_decodes_exif_unicode() {
+        let path = std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Olympus/OlympusSH-25MR.jpg",
+        );
+        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+            .expect("read pinned Olympus SH-25MR fixture");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse pinned Olympus SH-25MR segments");
+        let mut metadata = MetadataMap::new();
+
+        process_exif_segments(&segments, &reader, &mut metadata);
+
+        assert_eq!(
+            metadata.get_string("GPS:GPSAreaInformation"),
+            Some("府中市郷土の森博物館")
+        );
+    }
+
+    #[test]
     fn process_ricoh_rmeta_extracts_azimuth() {
         // Minimal standard RMETA directory with one tag. Section sizes include
         // the two-byte size field, matching Ricoh.pm's ProcessRicohRMETA.

@@ -942,6 +942,18 @@ pub fn parse_gps_subifd(
                 tag_id,
                 byte_order,
             );
+            let tag_value = if matches!(tag_id, 0x001B | 0x001C)
+                && let TagValue::Binary(bytes) = &tag_value
+            {
+                let decoded = crate::core::formatters::decode_gps_processing_method(bytes);
+                if decoded.is_empty() {
+                    tag_value
+                } else {
+                    TagValue::new_string(decoded)
+                }
+            } else {
+                tag_value
+            };
             metadata.insert(&tag_name, tag_value);
             if matches!(tag_id, 0x0002 | 0x0004 | 0x0014 | 0x0016)
                 && field_type == 5

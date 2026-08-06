@@ -1374,20 +1374,32 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
     // at the container level so an ordinary list inside one struct remains a
     // list while repeated fields across unknown struct records do not merge.
     let mut container_allows_repeated_fields = false;
+    // The resource-valued rdf:li currently contributing fields. This lets an
+    // unknown schema keep the first repeated *field* across structs while
+    // retaining every value in a list that belongs to that one struct.
+    let mut resource_entry_depth: Option<usize> = None;
+    let mut resource_entry_index = 0usize;
     // Field names below the container, with the RDF structural elements left
     // out -- the rest of ExifTool's tag ID, in pieces.
     let mut path: Vec<String> = Vec::new();
     let mut text = String::new();
-    // (flattened id, values) in first-seen order.
-    let mut collected: Vec<(String, Vec<String>)> = Vec::new();
+    // (flattened id, values, resource entry of the last value) in first-seen
+    // order.
+    let mut collected: Vec<(String, Vec<String>, Option<usize>)> = Vec::new();
 
-    let mut push_value = |flat_id: String, value: String, allow_repeat: bool| {
-        if let Some((_, values)) = collected.iter_mut().find(|(id, _)| *id == flat_id) {
-            if allow_repeat {
+    let mut push_value = |flat_id: String,
+                          value: String,
+                          allow_repeat: bool,
+                          resource_entry: Option<usize>| {
+        if let Some((_, values, previous_entry)) =
+            collected.iter_mut().find(|(id, _, _)| *id == flat_id)
+        {
+            if allow_repeat || resource_entry.is_some_and(|entry| Some(entry) == *previous_entry) {
                 values.push(value);
+                *previous_entry = resource_entry;
             }
         } else {
-            collected.push((flat_id, vec![value]));
+            collected.push((flat_id, vec![value], resource_entry));
         }
     };
 
@@ -1427,6 +1439,10 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                 } else if is_rdf_namespace(&tag_name, &resolver) {
                     // rdf:Bag / rdf:Seq / rdf:Alt / rdf:li carry no name.
                     if is_rdf_li(&tag_name, &resolver) {
+                        if resource_entry_depth.is_none() && has_parse_type_resource(&e) {
+                            resource_entry_depth = Some(depth);
+                            resource_entry_index += 1;
+                        }
                         text.clear();
                     }
                 } else {
@@ -1461,7 +1477,12 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                     // RDF pass already reports.
                     if !value.is_empty() && !path.is_empty() {
                         let flat_id = format!("{}{}", container_name, path.join(""));
-                        push_value(flat_id, value, container_allows_repeated_fields);
+                        push_value(
+                            flat_id,
+                            value,
+                            container_allows_repeated_fields,
+                            resource_entry_depth.map(|_| resource_entry_index),
+                        );
                     }
                     text.clear();
                     if !is_rdf_namespace(&tag_name, &resolver) {
@@ -1471,6 +1492,9 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
 
                 if description_depth == Some(depth) {
                     description_depth = None;
+                }
+                if resource_entry_depth == Some(depth) {
+                    resource_entry_depth = None;
                 }
                 depth = depth.saturating_sub(1);
             }
@@ -1488,7 +1512,7 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
 
     Ok(collected
         .into_iter()
-        .map(|(flat_id, values)| (format!("XMP:{}", exiftool_flat_tag_name(&flat_id)), values))
+        .map(|(flat_id, values, _)| (format!("XMP:{}", exiftool_flat_tag_name(&flat_id)), values))
         .collect())
 }
 
@@ -5421,7 +5445,10 @@ mod top_level_struct_tests {
  <rdf:Description xmlns:test='http://ns.test.com/'>
   <test:StructList2><rdf:Bag>
    <rdf:li rdf:parseType='Resource'><test:Item1>c1-1</test:Item1><test:Item2>c2-1</test:Item2></rdf:li>
-   <rdf:li rdf:parseType='Resource'><test:Item1>c1-2</test:Item1><test:Item2>c2-2</test:Item2></rdf:li>
+   <rdf:li rdf:parseType='Resource'>
+    <test:Item1>c1-2</test:Item1><test:Item2>c2-2</test:Item2>
+    <test:TestList2><rdf:Bag><rdf:li>y1</rdf:li><rdf:li>y2</rdf:li></rdf:Bag></test:TestList2>
+   </rdf:li>
   </rdf:Bag></test:StructList2>
  </rdf:Description>
 </rdf:RDF>"#;
@@ -5437,6 +5464,22 @@ mod top_level_struct_tests {
                 .find(|(tag, _)| tag == "XMP:StructList2Item2")
                 .map(|(_, values)| values.as_slice()),
             Some(["c2-1".to_string()].as_slice())
+        );
+        // XMP4.xmp's second structure owns both values of TestList2; the
+        // unknown-schema duplicate rule must not discard its second list item.
+        assert_eq!(
+            tags.iter()
+                .find(|(tag, _)| tag == "XMP:StructList2TestList2")
+                .map(|(_, values)| values.as_slice()),
+            Some(["y1".to_string(), "y2".to_string()].as_slice())
+        );
+        assert_eq!(
+            parse_xmp_typed(xml)
+                .unwrap()
+                .iter()
+                .find(|(tag, _)| tag == "XMP:StructList2TestList2")
+                .map(|(_, value)| value.clone()),
+            Some(XmpValue::List(vec!["y1".to_string(), "y2".to_string()]))
         );
     }
 

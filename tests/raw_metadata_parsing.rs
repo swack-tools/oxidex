@@ -206,6 +206,18 @@ fn canon_cr3_internal_serial_number_trims_only_trailing_ff_bytes() {
 }
 
 #[test]
+fn canon_cr3_shot_info_camera_temperature_uses_celsius_conversion() {
+    // Canon.pm ShotInfo key 12: RawConv omits zero, then ValueConv subtracts
+    // 128 and PrintConv appends ` C`. CanonRaw.cr3 stores raw value 166.
+    let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
+        .expect("pinned Canon CR3 fixture must be available");
+    let metadata = parse_raw_metadata(&data, RawFormat::CanonCR3)
+        .expect("pinned Canon CR3 fixture should parse");
+
+    assert_eq!(metadata.get_string("Canon:CameraTemperature"), Some("38 C"));
+}
+
+#[test]
 fn test_parse_minimal_tiff_based_raw() {
     // Create a minimal valid TIFF header
     // II (little-endian) + 0x002A (magic 42) + offset to IFD (8)
