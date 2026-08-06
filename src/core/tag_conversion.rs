@@ -100,6 +100,20 @@ pub fn raw_bytes_to_tag_value(
 
             // ASCII (type 2): null-terminated string
             ExifType::Ascii => {
+                // Exif.pm 0x8298 stores photographer and editor notices as
+                // NUL-separated strings but exposes them separated by a newline.
+                if tag_id == 0x8298 {
+                    let mut parts = bytes.split(|byte| *byte == 0);
+                    let photographer = String::from_utf8_lossy(parts.next().unwrap_or_default());
+                    let editor = String::from_utf8_lossy(parts.next().unwrap_or_default());
+                    let photographer = photographer.trim_end_matches(' ');
+                    let editor = editor.trim_end_matches(' ');
+                    return TagValue::new_string(if editor.is_empty() {
+                        photographer.to_string()
+                    } else {
+                        format!("{photographer}\n{editor}")
+                    });
+                }
                 let value = handle_ascii_type(bytes);
                 // Exif.pm 13.59 tag 0x0110 applies `$val =~ s/\s+$//` before
                 // exposing Model. Keep the trim tag-specific: other ASCII
@@ -1104,6 +1118,19 @@ mod tests {
             raw_bytes_to_tag_value(&bytes, 5, 3, 0x0002, ByteOrder::LittleEndian).as_string(),
             Some("54 deg 59' 22.80\"")
         );
+    }
+
+    #[test]
+    fn copyright_decodes_photographer_and_editor_separator() {
+        let value = raw_bytes_to_tag_value(
+            b"Photographer\0Editor\0",
+            2,
+            20,
+            0x8298,
+            ByteOrder::LittleEndian,
+        );
+
+        assert_eq!(value.as_string(), Some("Photographer\nEditor"));
     }
 
     #[test]

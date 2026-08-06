@@ -430,6 +430,31 @@ pub fn plan_exif_write(
     // wins and the alias is left for the pre-existing duplicate-tag-id guard
     // in the Added loop below to reconcile (skip if equal, once serialized).
     let mut desired = desired.clone();
+    // Exif.pm 0x8298 PrintConvInv stores photographer/editor notices with an
+    // internal NUL; the generic string serializer supplies the final NUL.
+    for key in ["IFD0:Copyright", "EXIF:Copyright"] {
+        if let Some(TagValue::String(value)) = desired.get(key).cloned()
+            && let Some(separator) = value.find(['\n', '\r'])
+        {
+            let photographer = value[..separator].trim_end();
+            let editor = value[separator..]
+                .trim_start_matches(['\n', '\r'])
+                .trim_start();
+            let stored = if editor.is_empty() {
+                photographer.to_string()
+            } else {
+                format!(
+                    "{}\0{editor}",
+                    if photographer.is_empty() {
+                        " "
+                    } else {
+                        photographer
+                    }
+                )
+            };
+            desired.insert(key, TagValue::new_string(stored));
+        }
+    }
     // GPS.pm (ExifTool 13.59) maps GPSLatitudeRef's one-byte N/S codes to
     // display values. Restore the declared raw code before serialization.
     if let Some(TagValue::String(value)) = desired.get("GPS:GPSLatitudeRef") {
@@ -1563,6 +1588,27 @@ mod tests {
         assert_eq!(make.field_type, 2);
         assert_eq!(make.value, b"Nikon\0");
         assert_eq!(make.count, 6);
+    }
+
+    #[test]
+    fn plan_encodes_copyright_newline_as_exif_nul_separator() {
+        let tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let (scan, original) = scan_and_maps(&tiff);
+        let mut desired = original.clone();
+        desired.insert(
+            "IFD0:Copyright",
+            TagValue::new_string("Photographer\nEditor"),
+        );
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let copyright = plan
+            .ifd0
+            .iter()
+            .find(|entry| entry.tag_id == 0x8298)
+            .unwrap();
+
+        assert_eq!(copyright.field_type, 2);
+        assert_eq!(copyright.value, b"Photographer\0Editor\0");
     }
 
     #[test]
