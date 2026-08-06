@@ -98,10 +98,7 @@ pub fn parse_miff_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
     let text = text.trim_end_matches([':']); // in case terminator wasn't found and trailing ':' remains
 
     let mut metadata = MetadataMap::new();
-    metadata.insert(
-        "FileType".to_string(),
-        TagValue::String("MIFF".to_string()),
-    );
+    metadata.insert("FileType".to_string(), TagValue::String("MIFF".to_string()));
     metadata.insert("FileSize".to_string(), TagValue::Integer(size as i64));
 
     let mut entries = split_ws(text);
@@ -151,7 +148,10 @@ pub fn parse_miff_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
                     // requires a later token ending in `}` to exit.
                     mode = Mode::Comment;
                     continue;
-                } else if entry.rfind('=').is_some_and(|eq| eq > 0 && eq < entry.len() - 1) {
+                } else if entry
+                    .rfind('=')
+                    .is_some_and(|eq| eq > 0 && eq < entry.len() - 1)
+                {
                     // Perl's greedy `/(.+)=(.+)/` backtracks to the
                     // rightmost '=' that still leaves >=1 char on each side.
                     let eq = entry.rfind('=').unwrap();
@@ -205,8 +205,7 @@ mod tests {
 
     #[test]
     fn parses_basic_header() {
-        let data =
-            b"id=ImageMagick\nclass=DirectClass  matte=False\ncolumns=8  rows=8  depth=8\n\
+        let data = b"id=ImageMagick\nclass=DirectClass  matte=False\ncolumns=8  rows=8  depth=8\n\
               Resolution=72x72  units=pixels-per-inch\n:\x1a\x00\x00rest-of-file";
         let reader = BufferedReader::from_bytes(data);
         let meta = parse_miff_metadata(&reader).expect("parse should succeed");
