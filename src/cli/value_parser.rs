@@ -92,6 +92,23 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         return Ok(TagValue::Binary(encoded));
     }
 
+    // Exif.pm 0xa300 is writable undef. PrintConvInv accepts the three labels,
+    // then ValueConvInv converts a decimal byte to its one-byte TIFF payload.
+    if matches!(tag_name, "EXIF:FileSource" | "ExifIFD:FileSource") {
+        let raw = match raw {
+            "Film Scanner" => "1",
+            "Reflection Print Scanner" => "2",
+            "Digital Camera" => "3",
+            _ => raw,
+        };
+        if raw.bytes().all(u8::is_ascii_digit)
+            && let Ok(value) = raw.parse::<u8>()
+        {
+            return Ok(TagValue::Binary(vec![value]));
+        }
+        return Ok(TagValue::Binary(raw.as_bytes().to_vec()));
+    }
+
     // GPS.pm 13.59 converts GPSDestLatitude's decimal input into a three-part
     // DMS value before rationalizing the components. Preserve finite decimal
     // text exactly here so that later conversion does not start from the
@@ -1336,6 +1353,19 @@ mod tests {
             parse("GPS:GPSAreaInformation", "San Francisco").unwrap(),
             TagValue::Binary(b"ASCII\0\0\0San Francisco".to_vec())
         );
+    }
+
+    #[test]
+    fn file_source_printed_values_are_inverted_to_undef_bytes() {
+        for (printed, byte) in [
+            ("Film Scanner", 1),
+            ("Reflection Print Scanner", 2),
+            ("Digital Camera", 3),
+        ] {
+            for tag in ["EXIF:FileSource", "ExifIFD:FileSource"] {
+                assert_eq!(parse(tag, printed).unwrap(), TagValue::Binary(vec![byte]));
+            }
+        }
     }
 
     #[test]
