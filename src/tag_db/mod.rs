@@ -282,6 +282,14 @@ mod tests {
     }
 
     #[test]
+    fn tiff_ep_standard_id_uses_the_pinned_exiftool_name() {
+        assert_eq!(
+            lookup_tag_name(0x9216, "ExifIFD"),
+            "ExifIFD:TIFF-EPStandardID"
+        );
+    }
+
+    #[test]
     fn legacy_exif_frequency_and_noise_ids_resolve_to_standard_names() {
         assert_eq!(
             lookup_tag_name(0x920C, "ExifIFD"),
