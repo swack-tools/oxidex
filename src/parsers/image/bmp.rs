@@ -202,6 +202,35 @@ impl FormatParser for BMPParser {
             );
         }
 
+        let bmp_version = Self::read_bmp_version(reader)?;
+        if bmp_version >= 40 {
+            let version = BMP_MAIN
+                .fields
+                .iter()
+                .find(|field| field.name == "BMPVersion")
+                .and_then(|field| field.print_conv.apply(i64::from(bmp_version)))
+                .unwrap_or_else(|| bmp_version.to_string());
+            metadata.insert("BMPVersion".to_string(), TagValue::String(version));
+
+            let image_length = Self::read_image_length(reader)?;
+            metadata.insert(
+                "ImageLength".to_string(),
+                TagValue::Integer(i64::from(image_length)),
+            );
+
+            let pixels_per_meter_x = Self::read_pixels_per_meter_x(reader)?;
+            metadata.insert(
+                "PixelsPerMeterX".to_string(),
+                TagValue::Integer(i64::from(pixels_per_meter_x)),
+            );
+
+            let pixels_per_meter_y = Self::read_pixels_per_meter_y(reader)?;
+            metadata.insert(
+                "PixelsPerMeterY".to_string(),
+                TagValue::Integer(i64::from(pixels_per_meter_y)),
+            );
+        }
+
         let (width, height) = Self::read_dimensions(reader)?;
         let abs_width = width.abs() as u64;
         let abs_height = height.abs() as u64;
