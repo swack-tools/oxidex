@@ -9,6 +9,7 @@ use super::registries::{
     lookup_in_table,
 };
 use crate::core::TagValue;
+use crate::core::formatters::perl_number;
 use crate::error::Result;
 use std::collections::HashMap;
 
@@ -394,10 +395,21 @@ fn extract_illuminant(
         let z = read_s15fixed16(data, offset + 8)?;
         metadata.insert(
             "ConnectionSpaceIlluminant".to_string(),
-            TagValue::new_string(format!("{} {} {}", x, y, z)),
+            TagValue::new_string(format!(
+                "{} {} {}",
+                format_fixed32s(x),
+                format_fixed32s(y),
+                format_fixed32s(z)
+            )),
         );
     }
     Ok(())
+}
+
+/// Applies ExifTool's `GetFixed32s` removal of insignificant digits.
+fn format_fixed32s(value: f64) -> String {
+    let adjustment = if value > 0.0 { 0.5 } else { -0.5 };
+    perl_number((value * 1e5 + adjustment).trunc() / 1e5)
 }
 
 /// Extracts profile creator from header
@@ -458,6 +470,23 @@ fn extract_profile_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connection_space_illuminant_matches_exiftool_fixed32_rounding() {
+        let mut header = [0u8; 128];
+        for (index, value) in [63_190i32, 65_536, 54_061].iter().enumerate() {
+            let offset = 68 + index * 4;
+            header[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+        }
+        let mut metadata = HashMap::new();
+
+        extract_illuminant(&header, 68, &mut metadata).unwrap();
+
+        assert_eq!(
+            metadata.get("ConnectionSpaceIlluminant"),
+            Some(&TagValue::new_string("0.9642 1 0.82491".to_string()))
+        );
+    }
 
     #[test]
     fn cmm_flags_match_exiftool_independence_wording() {
