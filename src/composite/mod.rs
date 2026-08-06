@@ -258,6 +258,7 @@ pub fn apply(map: &mut MetadataMap) -> usize {
     // ExifTool branches on manufacturer for Canon sensor geometry, so resolve
     // it once up front rather than per composite.
     let make = lookup(map, "Make");
+    let file_type = lookup(map, "FileType");
     // ValueConv forms of composites computed so far, keyed by bare tag name.
     let mut values: HashMap<&str, Derived> = HashMap::new();
     // Composites this run produced. They may be recomputed on a later pass
@@ -317,6 +318,18 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             }
             for &(index, dep) in comp.desire {
                 owned[index] = resolve(map, &values, dep);
+            }
+            // Exif.pm ImageSize ValueConv uses ExifImageWidth/Height for CR2
+            // instead of the required IFD0 ImageWidth/Height pair. CanonRaw.cr2
+            // carries both as 3456x2304 and 384x256 respectively.
+            if comp.module == "Exif"
+                && comp.name == "ImageSize"
+                && file_type.as_deref() == Some("CR2")
+                && owned.get(2).and_then(Option::as_ref).is_some()
+                && owned.get(3).and_then(Option::as_ref).is_some()
+            {
+                owned[0] = owned[2].clone();
+                owned[1] = owned[3].clone();
             }
             // A composite with only optional inputs still needs at least one.
             if comp.require.is_empty() && owned.iter().all(Option::is_none) {
@@ -379,6 +392,21 @@ mod tests {
         // Megapixels depends on ImageSize, which is itself derived -- this only
         // works because resolution runs to a fixpoint.
         assert_eq!(m.get_string("Composite:Megapixels"), Some("12.0"));
+    }
+
+    #[test]
+    fn cr2_image_size_prefers_exif_dimensions() {
+        let mut m = map_of(&[
+            ("File:FileType", "CR2"),
+            ("IFD0:ImageWidth", "384"),
+            ("IFD0:ImageHeight", "256"),
+            ("ExifIFD:ExifImageWidth", "3456"),
+            ("ExifIFD:ExifImageHeight", "2304"),
+        ]);
+
+        apply(&mut m);
+
+        assert_eq!(m.get_string("Composite:ImageSize"), Some("3456x2304"));
     }
 
     #[test]

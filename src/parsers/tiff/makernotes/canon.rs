@@ -956,6 +956,7 @@ const CAMERA_SETTINGS_FLASH_MODEL: usize = 28;
 const CAMERA_SETTINGS_FLASH_BITS: usize = 29;
 const CAMERA_SETTINGS_FOCUS_CONTINUOUS: usize = 32;
 const CAMERA_SETTINGS_AE_SETTING: usize = 33;
+const CAMERA_SETTINGS_IMAGE_STABILIZATION: usize = 34;
 /// ExifTool `%Canon::CameraSettings` key 35 (Canon.pm:2645) — `DisplayAperture`, not 40.
 const CAMERA_SETTINGS_DISPLAY_APERTURE: usize = 35;
 const CAMERA_SETTINGS_ZOOM_SOURCE_WIDTH: usize = 36;
@@ -1608,6 +1609,23 @@ const_decoder!(
         (2, "AE Lock"),
         (3, "AE Lock + Exposure Compensation"),
         (4, "No AE"),
+    ]
+);
+
+const_decoder!(
+    pub IMAGE_STABILIZATION,
+    i16,
+    [
+        (0, "Off"),
+        (1, "On"),
+        (2, "Shoot Only"),
+        (3, "Panning"),
+        (4, "Dynamic"),
+        (256, "Off (2)"),
+        (257, "On (2)"),
+        (258, "Shoot Only (2)"),
+        (259, "Panning (2)"),
+        (260, "Dynamic (2)"),
     ]
 );
 
@@ -3013,18 +3031,18 @@ const_decoder!(
         (7, "Black & White"),
         (8, "Shade"),
         (9, "Manual Temperature (Kelvin)"),
-        (10, "PC Set 1"),
-        (11, "PC Set 2"),
-        (12, "PC Set 3"),
+        (10, "PC Set1"),
+        (11, "PC Set2"),
+        (12, "PC Set3"),
         (14, "Daylight Fluorescent"),
         (15, "Custom 1"),
         (16, "Custom 2"),
         (17, "Underwater"),
         (18, "Custom 3"),
         (19, "Custom 4"),
-        (20, "PC Set 4"),
-        (21, "PC Set 5"),
-        (23, "Auto (Ambience Priority)"),
+        (20, "PC Set4"),
+        (21, "PC Set5"),
+        (23, "Auto (ambience priority)"),
     ]
 );
 
@@ -5234,12 +5252,13 @@ fn parse_canon_makernote_impl_located(
                         tags.insert("Canon:FlashMode".to_string(), flash_mode);
                     }
 
-                    // ContinuousDrive (index 5) - Drive mode setting
-                    // Also output as Canon:DriveMode for backward compatibility
+                    // ContinuousDrive (index 5) - Drive mode setting. Canon.pm defines
+                    // DriveMode separately as a Composite of this tag and SelfTimer.
                     if array.len() > CAMERA_SETTINGS_DRIVE_MODE {
-                        let drive_mode = DRIVE_MODE.decode(array[CAMERA_SETTINGS_DRIVE_MODE]);
-                        tags.insert("Canon:ContinuousDrive".to_string(), drive_mode.clone());
-                        tags.insert("Canon:DriveMode".to_string(), drive_mode);
+                        tags.insert(
+                            "Canon:ContinuousDrive".to_string(),
+                            DRIVE_MODE.decode(array[CAMERA_SETTINGS_DRIVE_MODE]),
+                        );
                     }
 
                     // FocusMode (index 7) - Focus mode setting
@@ -5299,6 +5318,17 @@ fn parse_canon_makernote_impl_located(
                         && saturation != 0x7fff
                     {
                         tags.insert("Canon:Saturation".to_string(), print_parameter(saturation));
+                    }
+
+                    // ImageStabilization (index 34). Canon.pm drops only the
+                    // -1 sentinel before applying its ten-value enum table.
+                    if let Some(&stabilization) = array.get(CAMERA_SETTINGS_IMAGE_STABILIZATION)
+                        && stabilization != -1
+                    {
+                        tags.insert(
+                            "Canon:ImageStabilization".to_string(),
+                            IMAGE_STABILIZATION.decode(stabilization),
+                        );
                     }
 
                     // Sharpness (index 15). ExifTool `%Canon::CameraSettings` key 15
@@ -7112,7 +7142,13 @@ mod tests {
         assert_eq!(result.get("Canon:MacroMode"), Some(&"Normal".to_string()));
         assert_eq!(result.get("Canon:Quality"), Some(&"Fine".to_string()));
         assert_eq!(result.get("Canon:FlashMode"), Some(&"On".to_string()));
-        assert_eq!(result.get("Canon:DriveMode"), Some(&"Single".to_string()));
+        assert_eq!(
+            result.get("Canon:ContinuousDrive"),
+            Some(&"Single".to_string())
+        );
+        // Canon.pm defines DriveMode only as a Composite derived from
+        // ContinuousDrive and SelfTimer, never as a Canon MakerNotes tag.
+        assert_eq!(result.get("Canon:DriveMode"), None);
         assert_eq!(
             result.get("Canon:FocusMode"),
             Some(&"One-shot AF".to_string())
@@ -7233,6 +7269,26 @@ mod tests {
         let data = canon_makernote_with_short_array(0x0004, &shot_info);
         let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
         assert_eq!(result.get("Canon:AutoRotate"), None);
+    }
+
+    #[test]
+    fn test_parse_camera_settings_image_stabilization() {
+        let mut camera_settings = vec![0i16; 35];
+        camera_settings[0] = 35;
+        camera_settings[34] = 4;
+        let data = canon_makernote_with_short_array(0x0001, &camera_settings);
+
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+        assert_eq!(
+            result.get("Canon:ImageStabilization"),
+            Some(&"Dynamic".to_string())
+        );
+
+        // Canon.pm's RawConv discards -1 before applying the enum table.
+        camera_settings[34] = -1;
+        let data = canon_makernote_with_short_array(0x0001, &camera_settings);
+        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+        assert_eq!(result.get("Canon:ImageStabilization"), None);
     }
 
     #[test]
@@ -8062,6 +8118,22 @@ mod tests {
         assert_eq!(TONE_CURVE.decode(1), "Manual");
         assert_eq!(TONE_CURVE.decode(2), "Custom");
         assert_eq!(TONE_CURVE.decode(99), "Unknown (99)");
+    }
+
+    /// Canon.pm 13.59 `%canonWhiteBalance` keeps `PC Set` directly adjacent
+    /// to its number and spells the priority label with lowercase `ambience`.
+    #[test]
+    fn white_balance_labels_match_pinned_exiftool() {
+        for (raw, expected) in [
+            (10, "PC Set1"),
+            (11, "PC Set2"),
+            (12, "PC Set3"),
+            (20, "PC Set4"),
+            (21, "PC Set5"),
+            (23, "Auto (ambience priority)"),
+        ] {
+            assert_eq!(WHITE_BALANCE.decode(raw), expected);
+        }
     }
 
     #[test]
