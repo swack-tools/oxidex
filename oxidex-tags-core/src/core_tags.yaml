@@ -545,7 +545,8 @@ tables:
         description: "PageNumber tag"
       - id: "0x012D"
         name: "TransferFunction"
-        writable: false
+        writable: true
+        type: int16u
         description: "TransferFunction tag"
       - id: "0x0131"
         name: "Software"
@@ -570,11 +571,13 @@ tables:
         description: "Predictor tag"
       - id: "0x013E"
         name: "WhitePoint"
-        writable: false
+        writable: true
+        type: rational64u
         description: "WhitePoint tag"
       - id: "0x013F"
         name: "PrimaryChromaticities"
-        writable: false
+        writable: true
+        type: rational64u
         description: "PrimaryChromaticities tag"
       - id: "0x0140"
         name: "ColorMap"
@@ -679,7 +682,8 @@ tables:
         description: "JPEGACTables tag"
       - id: "0x0211"
         name: "YCbCrCoefficients"
-        writable: false
+        writable: true
+        type: rational64u
         description: "YCbCrCoefficients tag"
       - id: "0x0212"
         name: "YCbCrSubSampling"
@@ -691,7 +695,8 @@ tables:
         description: "YCbCrPositioning tag"
       - id: "0x0214"
         name: "ReferenceBlackWhite"
-        writable: false
+        writable: true
+        type: rational64u
         description: "ReferenceBlackWhite tag"
       - id: "0x022F"
         name: "StripRowCounts"

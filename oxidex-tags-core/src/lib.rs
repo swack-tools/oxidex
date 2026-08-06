@@ -64,6 +64,21 @@ mod tests {
         assert!(gps.is_some(), "Should find GPS::Main table");
     }
 
+    /// ExifTool 13.59 Exif.pm tag 0x0211 declares
+    /// `Writable => 'rational64u'` with `Count => 3`.
+    #[test]
+    fn ycbcr_coefficients_is_writable() {
+        let exif = get_tag_table("Exif::Main").expect("Exif::Main table should exist");
+        let tag = exif
+            .tags
+            .iter()
+            .find(|tag| tag.id == "0x0211" && tag.name == "YCbCrCoefficients")
+            .expect("YCbCrCoefficients (0x0211) should exist");
+
+        assert!(tag.writable);
+        assert_eq!(tag.type_name.as_deref(), Some("rational64u"));
+    }
+
     #[test]
     fn test_forensic_timezone_tags() {
         // Test that critical forensic EXIF tags for timeline reconstruction are present
@@ -129,5 +144,77 @@ mod tests {
         assert_eq!(tile_length.name, "TileLength");
         assert!(tile_length.writable);
         assert_eq!(tile_length.type_name.as_deref(), Some("int32u"));
+    }
+
+    /// ExifTool 13.59 Exif.pm 0x013e declares WhitePoint as a writable
+    /// `rational64u` pair in IFD0. The generated tag model does not represent
+    /// the fixed count of two, but it must preserve the writable/type contract.
+    #[test]
+    fn white_point_matches_pinned_exiftool_contract() {
+        let exif = get_tag_table("Exif::Main").expect("Exif::Main table should exist");
+        let white_point = exif
+            .tags
+            .iter()
+            .find(|tag| tag.id == "0x013E")
+            .expect("WhitePoint (0x013E) should exist");
+
+        assert_eq!(white_point.name, "WhitePoint");
+        assert!(white_point.writable);
+        assert_eq!(white_point.type_name.as_deref(), Some("rational64u"));
+    }
+
+    /// ExifTool 13.59 Exif.pm 0x013f declares PrimaryChromaticities as a
+    /// writable `rational64u` with six values in IFD0.
+    #[test]
+    fn primary_chromaticities_matches_pinned_exiftool_contract() {
+        let exif = get_tag_table("Exif::Main").expect("Exif::Main table should exist");
+        let primary_chromaticities = exif
+            .tags
+            .iter()
+            .find(|tag| tag.id == "0x013F")
+            .expect("PrimaryChromaticities (0x013F) should exist");
+
+        assert_eq!(primary_chromaticities.name, "PrimaryChromaticities");
+        assert!(primary_chromaticities.writable);
+        assert_eq!(
+            primary_chromaticities.type_name.as_deref(),
+            Some("rational64u")
+        );
+    }
+
+    /// ExifTool 13.59 Exif.pm 0x0214 declares ReferenceBlackWhite as a
+    /// writable `rational64u` with six components in IFD0.
+    #[test]
+    fn reference_black_white_matches_pinned_exiftool_contract() {
+        let exif = get_tag_table("Exif::Main").expect("Exif::Main table should exist");
+        let reference_black_white = exif
+            .tags
+            .iter()
+            .find(|tag| tag.id == "0x0214")
+            .expect("ReferenceBlackWhite (0x0214) should exist");
+
+        assert_eq!(reference_black_white.name, "ReferenceBlackWhite");
+        assert!(reference_black_white.writable);
+        assert_eq!(
+            reference_black_white.type_name.as_deref(),
+            Some("rational64u")
+        );
+    }
+
+    /// ExifTool 13.59 Exif.pm 0x012d declares TransferFunction as a protected,
+    /// writable `int16u`. The generated tag model does not represent the
+    /// protected flag, but it must preserve the writable/type contract.
+    #[test]
+    fn transfer_function_matches_pinned_exiftool_contract() {
+        let exif = get_tag_table("Exif::Main").expect("Exif::Main table should exist");
+        let transfer_function = exif
+            .tags
+            .iter()
+            .find(|tag| tag.id == "0x012D")
+            .expect("TransferFunction (0x012D) should exist");
+
+        assert_eq!(transfer_function.name, "TransferFunction");
+        assert!(transfer_function.writable);
+        assert_eq!(transfer_function.type_name.as_deref(), Some("int16u"));
     }
 }
