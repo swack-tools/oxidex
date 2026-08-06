@@ -31,6 +31,7 @@ const RATIONAL: u16 = 5;
 const ORIENTATION: u16 = 0x0112;
 const X_RESOLUTION: u16 = 0x011A;
 const ARTIST: u16 = 0x013B;
+const GPS_DOP: u16 = 0x000B;
 const GPS_MEASURE_MODE: u16 = 0x000A;
 const GPS_DIFFERENTIAL: u16 = 0x001E;
 
@@ -220,6 +221,18 @@ fn jpeg_gps_differential_corrected_is_serialized_as_its_exif_code() {
     assert_eq!(entry.field_type, SHORT);
     assert_eq!(entry.count, 1);
     assert_eq!(entry.value, &[0, 1]);
+}
+
+#[test]
+fn jpeg_gps_dop_is_a_rational_and_reads_as_exiftool_decimal() {
+    // GPS.pm 13.59 0x000b is rational64u with no PrintConv. ExifTool's
+    // rational reader displays the quotient (1.5), not the storage pair
+    // (3/2), while the TIFF entry itself must remain an unsigned RATIONAL.
+    let file = write_to_copy(JPEG_FIXTURE, ".jpg", "-GPS:GPSDOP=1.5");
+    let entry = jpeg_entry(file.path(), IfdKind::Gps, GPS_DOP);
+    assert_eq!(entry.field_type, RATIONAL);
+    assert_eq!(entry.count, 1);
+    assert_eq!(read_tag(file.path(), "GPS:GPSDOP").as_deref(), Some("1.5"));
 }
 
 #[test]

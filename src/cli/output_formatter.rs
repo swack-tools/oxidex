@@ -24,6 +24,8 @@
 //! println!("{}", json_output);
 //! ```
 
+use crate::core::formatters::decode_gps_processing_method;
+use crate::core::formatters::exiftool_rational_number;
 use crate::core::metadata_map::MetadataMap;
 use crate::core::tag_value::TagValue;
 use crate::core::value_formatter::format_gps_reference;
@@ -528,7 +530,9 @@ fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String {
             numerator,
             denominator,
         } => {
-            if *denominator == 1 {
+            if tag_name == "GPS:GPSDOP" && *denominator != 0 {
+                exiftool_rational_number(*numerator as f64 / *denominator as f64)
+            } else if *denominator == 1 {
                 numerator.to_string()
             } else if *denominator == 0 {
                 "0".to_string()
@@ -573,6 +577,12 @@ fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
         TagValue::Rational {
             numerator,
             denominator,
+        } if tag_name == "GPS:GPSDOP" && *denominator != 0 => {
+            exiftool_rational_number(*numerator as f64 / *denominator as f64)
+        }
+        TagValue::Rational {
+            numerator,
+            denominator,
         } => format!("{}/{}", numerator, denominator),
         TagValue::Binary(bytes) => binary_placeholder(bytes.len()),
         // ExifTool's date form, which is what `-s` and `-j` already print and
@@ -603,6 +613,15 @@ fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
 /// 2. GPS reference values: Converts single-character codes to human-readable descriptions
 ///    (e.g., "N" -> "North", "T" -> "True North").
 fn friendly_enum_name(tag_name: &str, value: &TagValue) -> Option<String> {
+    if tag_name.rsplit(':').next() == Some("GPSProcessingMethod")
+        && let TagValue::Binary(bytes) = value
+    {
+        let decoded = decode_gps_processing_method(bytes);
+        if !decoded.is_empty() {
+            return Some(decoded);
+        }
+    }
+
     // First, check if this is a GPS reference value (string-based)
     if let TagValue::String(s) = value
         && let Some(formatted) = format_gps_reference(tag_name, s)
@@ -987,6 +1006,16 @@ mod tests {
     }
 
     #[test]
+    fn gps_dop_uses_exiftool_decimal_rendering() {
+        // ExifTool 13.59 GPS.pm declares GPSDOP as rational64u without a
+        // PrintConv. GetRational64u renders the quotient, not the stored
+        // numerator/denominator pair: 3/2 is displayed as 1.5.
+        let value = TagValue::new_rational(3, 2);
+        assert_eq!(format_tag_value("GPS:GPSDOP", &value), "1.5");
+        assert_eq!(format_tag_value_short("GPS:GPSDOP", &value), "1.5");
+    }
+
+    #[test]
     fn test_format_tag_value_binary() {
         let value = TagValue::new_binary(vec![0x00, 0x01, 0x02, 0x03, 0x04]);
         assert_eq!(
@@ -1001,6 +1030,24 @@ mod tests {
         assert_eq!(
             format_tag_value("IFD0:Orientation", &value),
             "Horizontal (normal)"
+        );
+    }
+
+    /// GPS.pm 13.59 tag 0x001b applies `ConvertExifText`, so the EXIF text
+    /// header is removed and the method is printed as text, not as a binary
+    /// placeholder.
+    #[test]
+    fn gps_processing_method_is_decoded_in_cli_renderers() {
+        let value = TagValue::new_binary(b"ASCII\0\0\0GPS".to_vec());
+
+        assert_eq!(format_tag_value("GPS:GPSProcessingMethod", &value), "GPS");
+        assert_eq!(
+            format_tag_value_short("GPS:GPSProcessingMethod", &value),
+            "GPS"
+        );
+        assert_eq!(
+            tag_value_to_json(Some("GPS:GPSProcessingMethod"), &value),
+            serde_json::Value::String("GPS".to_string())
         );
     }
 

@@ -582,6 +582,22 @@ pub fn plan_exif_write(
         }
     }
 
+    // GPS.pm (ExifTool 13.59) requires GPSVersionID in every GPS IFD. A file
+    // without a GPS IFD gains one when GPSHPositioningError is added, so emit
+    // ExifTool's declared default version alongside the tag. Existing GPS
+    // IFDs already carry their raw version entry through the loop above.
+    if plan.gps.iter().any(|entry| entry.tag_id == 0x001f)
+        && !plan.gps.iter().any(|entry| entry.tag_id == 0x0000)
+    {
+        plan.gps.push(OutEntry {
+            tag_id: 0x0000,
+            field_type: 1,
+            count: 4,
+            value: vec![2, 3, 0, 0],
+            native_endian: false,
+        });
+    }
+
     Ok(plan)
 }
 
@@ -1397,6 +1413,45 @@ mod tests {
         assert_eq!(make.field_type, 2);
         assert_eq!(make.value, b"Nikon\0");
         assert_eq!(make.count, 6);
+    }
+
+    #[test]
+    fn plan_adds_required_gps_version_with_gps_h_positioning_error() {
+        // ExifTool 13.59 GPS.pm requires GPSVersionID whenever a GPS IFD is
+        // created. Without it, writing this otherwise-correct RATIONAL makes
+        // `exiftool -validate` report "Missing required JPEG GPS tag 0x0000".
+        let scan = ExifScan {
+            byte_order: ByteOrder::LittleEndian,
+            entries: Vec::new(),
+            thumbnail: None,
+            makernote_offset: None,
+        };
+        let original = MetadataMap::new();
+        let mut desired = MetadataMap::new();
+        desired.insert(
+            "GPS:GPSHPositioningError",
+            TagValue::Rational {
+                numerator: 3,
+                denominator: 2,
+            },
+        );
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let version = plan
+            .gps
+            .iter()
+            .find(|entry| entry.tag_id == 0x0000)
+            .unwrap();
+        assert_eq!(version.field_type, 1);
+        assert_eq!(version.count, 4);
+        assert_eq!(version.value, [2, 3, 0, 0]);
+        let accuracy = plan
+            .gps
+            .iter()
+            .find(|entry| entry.tag_id == 0x001f)
+            .unwrap();
+        assert_eq!(accuracy.field_type, 5);
+        assert_eq!(accuracy.count, 1);
     }
 
     #[test]
