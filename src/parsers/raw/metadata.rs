@@ -4716,6 +4716,25 @@ fn parse_cr3_cmp1(data: &[u8], metadata: &mut MetadataMap) {
     }
 }
 
+/// Read Canon's CR3 `THMB` thumbnail atom.
+///
+/// `Canon.pm` declares this atom as `ThumbnailImage` with the exact
+/// conversion `substr($val, 16)`: the first sixteen payload bytes describe the
+/// thumbnail, while the remaining bytes are the binary image.  Keep it binary
+/// so the normal ExifTool-compatible renderer owns its display form.
+fn parse_cr3_thmb(data: &[u8], metadata: &mut MetadataMap) {
+    let Some(payload) = find_cr3_box(data, b"THMB") else {
+        return;
+    };
+    let Some(thumbnail) = payload.get(16..) else {
+        return;
+    };
+    metadata.insert(
+        "Canon:ThumbnailImage".to_string(),
+        TagValue::new_binary(thumbnail.to_vec()),
+    );
+}
+
 /// Byte offset of `part` within `whole`, when `part` is a subslice of it.
 fn subslice_offset(whole: &[u8], part: &[u8]) -> Option<usize> {
     let whole_start = whole.as_ptr() as usize;
