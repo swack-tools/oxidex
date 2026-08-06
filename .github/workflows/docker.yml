@@ -2,30 +2,12 @@ name: Docker
 
 on:
   push:
-    branches: [main]
     tags: ['v*']
-  pull_request:
-    # Only when the image definition itself changes. A paths filter is safe
-    # here because this workflow is NOT a required status check. This is the
-    # opposite of ci.yml, whose header explains that filtering there would
-    # leave docs-only PRs waiting forever on a check that never reports.
-    paths:
-      - 'Dockerfile'
-      - '.dockerignore'
-      - '.github/workflows/docker.yml'
-  workflow_dispatch:
 
 concurrency:
-  # Unlike ci.yml (which has no tag trigger), this workflow triggers on both
-  # branch and tag pushes. A tag push is still a `push` event, so keying on
-  # SHA alone would put pushing tag v1.2.1 at commit X in the same group as
-  # the earlier push of commit X to main -- with cancel-in-progress: true,
-  # the tag run would cancel the still-running main run, and :latest would
-  # never advance for that release commit. Folding the ref into the key
-  # keeps a tag push and a main push of the same commit in separate groups,
-  # while still deduping repeated pushes of the same ref. PR runs key by
-  # branch head, same as ci.yml, so a new push cancels the superseded run.
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && format('{0}@{1}', github.ref, github.sha) || github.head_ref || github.ref }}
+  # The workflow only accepts tag pushes. Include both the tag and target SHA
+  # so repeated tag pushes dedupe without colliding with another release.
+  group: ${{ github.workflow }}-${{ github.ref }}@${{ github.sha }}
   cancel-in-progress: true
 
 env:
@@ -35,28 +17,40 @@ permissions:
   contents: read
 
 jobs:
+  verify-tag-on-main:
+    name: Verify tag is reachable from main
+    runs-on: ubuntu-latest
+    outputs:
+      allowed: ${{ steps.ancestry.outputs.allowed }}
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Verify main ancestry
+        id: ancestry
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "allowed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Tag ${GITHUB_REF_NAME} is not reachable from origin/main; Docker image publication is skipped."
+            echo "allowed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: Build ${{ matrix.arch }}
-    # Fork PRs skip the Docker build entirely rather than run the fork's
-    # build.rs (via `COPY . .` + `cargo build`) on billed WarpBuild runners.
-    # No secrets are at risk either way -- the login step below is already
-    # gated on github.event_name != 'pull_request' -- so this is cost/abuse
-    # protection, not a security boundary. `github` is available in a
-    # job-level `if`; `matrix` is not, so this cannot be scoped by arch here.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: [verify-tag-on-main]
+    if: needs.verify-tag-on-main.outputs.allowed == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        # Pull requests build amd64 only. The arm64 entry is absent from the
-        # matrix entirely, so no Warp arm64 runner is ever allocated -- this
-        # cannot be expressed as a job-level `if`, because the matrix context
-        # is unavailable there.
         include: >-
-          ${{ fromJSON(github.event_name == 'pull_request'
-          && '[{"arch":"amd64","platform":"linux/amd64","runner":"warp-ubuntu-latest-x64-8x"}]'
-          || '[{"arch":"amd64","platform":"linux/amd64","runner":"warp-ubuntu-latest-x64-8x"},{"arch":"arm64","platform":"linux/arm64","runner":"warp-ubuntu-latest-arm64-8x"}]') }}
+          ${{ fromJSON('[{"arch":"amd64","platform":"linux/amd64","runner":"warp-ubuntu-latest-x64-8x"},{"arch":"arm64","platform":"linux/arm64","runner":"warp-ubuntu-latest-arm64-8x"}]') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -68,7 +62,6 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -79,7 +72,6 @@ jobs:
       # exists, so a failure here means no tag ever moves.
       - name: Build and push by digest
         id: build
-        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
@@ -92,23 +84,6 @@ jobs:
           cache-from: type=gha,scope=oxidex-${{ matrix.arch }}
           cache-to: type=gha,scope=oxidex-${{ matrix.arch }},mode=max
 
-      # Pull requests load the image into the local daemon instead of pushing.
-      # cache-to is deliberately omitted: a PR branch's cache entry is not
-      # readable from main, so writing it would only consume the 10 GB quota.
-      - name: Build for validation
-        if: github.event_name == 'pull_request'
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          platforms: ${{ matrix.platform }}
-          provenance: false
-          load: true
-          tags: oxidex:ci
-          build-args: |
-            VERSION=pr-${{ github.event.pull_request.number }}
-            REVISION=${{ github.sha }}
-          cache-from: type=gha,scope=oxidex-${{ matrix.arch }}
-
       # Runs on the native runner for this architecture, so each image is
       # exercised on the hardware it targets. This cannot live in the merge
       # job: that runs on ubuntu-latest and could not execute the arm64 image
@@ -118,11 +93,7 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            ref="oxidex:ci"
-          else
-            ref="${IMAGE}@${DIGEST}"
-          fi
+          ref="${IMAGE}@${DIGEST}"
           echo "Testing $ref"
 
           version=$(docker run --rm "$ref" --version)
@@ -141,7 +112,6 @@ jobs:
           echo "Smoke test passed for $ref"
 
       - name: Export digest
-        if: github.event_name != 'pull_request'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
@@ -150,7 +120,6 @@ jobs:
           touch "${RUNNER_TEMP}/digests/${DIGEST#sha256:}"
 
       - name: Upload digest
-        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: digest-${{ matrix.arch }}
@@ -160,8 +129,8 @@ jobs:
 
   merge:
     name: Publish manifest list
-    needs: [build]
-    if: github.event_name != 'pull_request'
+    needs: [verify-tag-on-main, build]
+    if: needs.verify-tag-on-main.outputs.allowed == 'true' && needs.build.result == 'success'
     # No build work happens here, so no Warp runner is consumed.
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -182,17 +151,15 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # latest=false is load-bearing. Without it metadata-action also stamps
-      # `latest` onto every version tag, which would put tag pushes and main
-      # pushes in a race over what :latest means.
+      # Tags have already passed the main-ancestry check, so each accepted
+      # release advances :latest together with its versioned image tags.
       - name: Compute tags
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.IMAGE }}
-          flavor: latest=false
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest
             type=ref,event=tag
             type=semver,pattern={{version}}
 
