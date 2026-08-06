@@ -2143,7 +2143,7 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
             TagId::new_numeric(0xa20c),
             "EXIF:SpatialFrequencyResponse".to_string(),
             FormatFamily::EXIF,
-            true,
+            false,
             ValueType::Binary,
             "Spatial frequency response".to_string(),
             vec!["binary".to_string()],
@@ -7261,6 +7261,15 @@ mod tests {
             .expect("EXIF:OwnerName should be registered");
         assert!(tag.is_writable());
         assert_eq!(tag.value_type(), ValueType::String);
+    }
+
+    /// ExifTool 13.59 Exif.pm 0xa20c defines only a PrintConv and no
+    /// `Writable` member, so the structured SFR payload is read-only.
+    #[test]
+    fn spatial_frequency_response_is_read_only() {
+        let tag = get_tag_descriptor("EXIF:SpatialFrequencyResponse")
+            .expect("EXIF:SpatialFrequencyResponse should be registered");
+        assert!(!tag.is_writable());
     }
 
     /// ExifTool 13.59 Exif.pm 0x0154 has no `Writable` member, and its
