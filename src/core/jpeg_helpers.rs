@@ -1515,15 +1515,15 @@ pub fn process_dji_dbg_segments(segments: &[Segment], metadata: &mut MetadataMap
     }
 }
 
-/// Reads `APP4:AmbientTemperature` and `APP4:RelativeHumidity` from DJI's
-/// ThermalParams2 record.
+/// Reads selected APP4 tags from DJI's ThermalParams2 record.
 ///
 /// ExifTool selects `DJI::ThermalParams2` only for a DJI image when the APP4
 /// payload has its `2c 01 20 00` signature after either 32 or 64 bytes.  The
 /// optional first 32 bytes are a prefix, so the table begins at byte 32 when
 /// the signature is at byte 64.  Its temperature is a little-endian float at
-/// table offset 0, rendered by DJI.pm as `sprintf("%.1f C", $val)`. Relative
-/// humidity is a float at table offset 12, rendered as
+/// table offset 0, rendered by DJI.pm as `sprintf("%.1f C", $val)`. Emissivity
+/// is a float at offset 8 rendered with two decimal places. Relative humidity
+/// is a float at table offset 12, rendered as
 /// `sprintf("%g %%", $val * 100)`.
 pub fn process_dji_thermal_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     if metadata.get_string("IFD0:Make") != Some("DJI") {
@@ -1540,14 +1540,19 @@ pub fn process_dji_thermal_segments(segments: &[Segment], metadata: &mut Metadat
             continue;
         };
 
-        let temperature =
-            decode_binary_table(table, &data[table_offset..], crate::io::ByteOrder::Little)
-                .into_iter()
-                .find(|field| field.field.name == "AmbientTemperature")
+        let fields =
+            decode_binary_table(table, &data[table_offset..], crate::io::ByteOrder::Little);
+        let float_field = |name| {
+            fields
+                .iter()
+                .find(|field| field.field.name == name)
                 .and_then(|field| match field.raw {
                     DecodedValue::Float(value) => Some(value),
                     _ => None,
-                });
+                })
+        };
+
+        let temperature = float_field("AmbientTemperature");
         if let Some(temperature) = temperature {
             metadata.insert(
                 "APP4:AmbientTemperature".to_string(),
@@ -1555,14 +1560,14 @@ pub fn process_dji_thermal_segments(segments: &[Segment], metadata: &mut Metadat
             );
         }
 
-        let humidity =
-            decode_binary_table(table, &data[table_offset..], crate::io::ByteOrder::Little)
-                .into_iter()
-                .find(|field| field.field.name == "RelativeHumidity")
-                .and_then(|field| match field.raw {
-                    DecodedValue::Float(value) => Some(value),
-                    _ => None,
-                });
+        if let Some(emissivity) = float_field("Emissivity") {
+            metadata.insert(
+                "APP4:Emissivity".to_string(),
+                TagValue::String(format!("{emissivity:.2}")),
+            );
+        }
+
+        let humidity = float_field("RelativeHumidity");
         if let Some(humidity) = humidity {
             metadata.insert(
                 "APP4:RelativeHumidity".to_string(),
@@ -1656,9 +1661,21 @@ mod tests {
 
     fn dji_thermal_params2(relative_humidity: f32) -> Vec<u8> {
         let mut payload = vec![0; 68];
+        payload[8..12].copy_from_slice(&0.95_f32.to_le_bytes());
         payload[12..16].copy_from_slice(&relative_humidity.to_le_bytes());
         payload[32..36].copy_from_slice(&[0x2c, 0x01, 0x20, 0x00]);
         payload
+    }
+
+    #[test]
+    fn dji_thermal_params2_extracts_emissivity_from_the_transcribed_table() {
+        let payload = dji_thermal_params2(0.5);
+        let segment = Segment::new(APP4_MARKER, 0, &payload);
+        let mut metadata = dji_metadata();
+
+        process_dji_thermal_segments(&[segment], &mut metadata);
+
+        assert_eq!(metadata.get_string("APP4:Emissivity"), Some("0.95"));
     }
 
     fn dji_metadata() -> MetadataMap {
@@ -1699,6 +1716,7 @@ mod tests {
 
         assert_eq!(metadata.get_string("APP4:RelativeHumidity"), None);
         assert_eq!(metadata.get_string("APP4:AmbientTemperature"), None);
+        assert_eq!(metadata.get_string("APP4:Emissivity"), None);
     }
 
     #[test]
