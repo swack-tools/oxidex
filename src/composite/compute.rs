@@ -13,6 +13,7 @@
 //! why this layer is worth building before chasing per-format gaps.
 use crate::core::formatters::duration::convert_duration;
 use crate::core::formatters::exif_print_conv::print_exposure_time;
+use crate::parsers::tiff::makernotes::panasonic::SHOOTING_MODE;
 
 /// Inputs to a composite: `require` values followed by `desire` values, in the
 /// order ExifTool declares them, so indices line up with its `$val[N]`.
@@ -480,6 +481,129 @@ fn canon_sensor_diag(xres: Option<&str>, yres: Option<&str>) -> Option<f64> {
     Some(((xd * xd + yd * yd) as f64).sqrt() * 0.0254)
 }
 
+/// Recover Panasonic's numeric SceneMode from its printed form.
+///
+/// Composite inputs currently arrive after MakerNote PrintConv. Refuse labels
+/// shared by multiple numeric values (notably HDR and Creative Control), since
+/// choosing either would make AdvancedSceneMode look valid while being wrong.
+fn panasonic_scene_mode(value: &str) -> Option<i32> {
+    if value == "Off" {
+        return Some(0);
+    }
+    if let Some(value) = printed_integer(value) {
+        return i32::try_from(value).ok();
+    }
+
+    let mut found = None;
+    for candidate in 1..=92 {
+        if SHOOTING_MODE.decode(candidate) == value {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(candidate);
+        }
+    }
+    found
+}
+
+/// Panasonic.pm 13.59 `%Panasonic::Composite` AdvancedSceneMode PrintConv.
+fn panasonic_advanced_scene_mode(model: &str, scene: &str, advanced: &str) -> Option<Computed> {
+    let scene = panasonic_scene_mode(scene)?;
+    let advanced = printed_integer(advanced)?;
+    let value = format!("{model} {scene} {advanced}");
+
+    let model_specific = match (model, scene, advanced) {
+        ("DMC-TZ40", 90, 1) => Some("Expressive"),
+        ("DMC-TZ40", 90, 2) => Some("Retro"),
+        ("DMC-TZ40", 90, 3) => Some("High Key"),
+        ("DMC-TZ40", 90, 4) => Some("Sepia"),
+        ("DMC-TZ40", 90, 5) => Some("High Dynamic"),
+        ("DMC-TZ40", 90, 6) => Some("Miniature"),
+        ("DMC-TZ40", 90, 9) => Some("Low Key"),
+        ("DMC-TZ40", 90, 10) => Some("Toy Effect"),
+        ("DMC-TZ40", 90, 11) => Some("Dynamic Monochrome"),
+        ("DMC-TZ40", 90, 12) => Some("Soft"),
+        _ => None,
+    };
+
+    let fixed = model_specific.or(match (scene, advanced) {
+        (0, 1) => Some("Off"),
+        (2, 2) => Some("Outdoor Portrait"),
+        (2, 3) => Some("Indoor Portrait"),
+        (2, 4) => Some("Creative Portrait"),
+        (3, 2) => Some("Nature"),
+        (3, 3) => Some("Architecture"),
+        (3, 4) => Some("Creative Scenery"),
+        (4, 2) => Some("Outdoor Sports"),
+        (4, 3) => Some("Indoor Sports"),
+        (4, 4) => Some("Creative Sports"),
+        (9, 2) => Some("Flower"),
+        (9, 3) => Some("Objects"),
+        (9, 4) => Some("Creative Macro"),
+        (18, 1) => Some("High Sensitivity"),
+        (20, 1) => Some("Fireworks"),
+        (21, 2) => Some("Illuminations"),
+        (21, 4) => Some("Creative Night Scenery"),
+        (26, 1) => Some("High-speed Burst (shot 1)"),
+        (27, 1) => Some("High-speed Burst (shot 2)"),
+        (29, 1) => Some("Snow"),
+        (30, 1) => Some("Starry Sky"),
+        (31, 1) => Some("Beach"),
+        (36, 1) => Some("High-speed Burst (shot 3)"),
+        (39, 1) => Some("Aerial Photo / Underwater / Multi-aspect"),
+        (45, 2) => Some("Cinema"),
+        (45, 7) => Some("Expressive"),
+        (45, 8) => Some("Retro"),
+        (45, 9) => Some("Pure"),
+        (45, 10) => Some("Elegant"),
+        (45, 12) => Some("Monochrome"),
+        (45, 13) => Some("Dynamic Art"),
+        (45, 14) => Some("Silhouette"),
+        (51, 2) => Some("HDR Art"),
+        (51, 3) => Some("HDR B&W"),
+        (59, 1) => Some("Expressive"),
+        (59, 2) => Some("Retro"),
+        (59, 3) => Some("High Key"),
+        (59, 4) => Some("Sepia"),
+        (59, 5) => Some("High Dynamic"),
+        (59, 6) => Some("Miniature"),
+        (59, 9) => Some("Low Key"),
+        (59, 10) => Some("Toy Effect"),
+        (59, 11) => Some("Dynamic Monochrome"),
+        (59, 12) => Some("Soft"),
+        (66, 1) => Some("Impressive Art"),
+        (66, 2) => Some("Cross Process"),
+        (66, 3) => Some("Color Select"),
+        (66, 4) => Some("Star"),
+        (90, 3) => Some("Old Days"),
+        (90, 4) => Some("Sunshine"),
+        (90, 5) => Some("Bleach Bypass"),
+        (90, 6) => Some("Toy Pop"),
+        (90, 7) => Some("Fantasy"),
+        (90, 8) => Some("Monochrome"),
+        (90, 9) => Some("Rough Monochrome"),
+        (90, 10) => Some("Silky Monochrome"),
+        (92, 1) => Some("Handheld Night Shot"),
+        _ => None,
+    });
+
+    let print = if let Some(fixed) = fixed {
+        fixed.to_string()
+    } else {
+        let shooting = SHOOTING_MODE.decode(scene);
+        if shooting.starts_with("Unknown (") {
+            return Computed::new(value.clone(), format!("Unknown ({value})"));
+        }
+        match advanced {
+            1 => shooting,
+            5 => format!("{shooting} (intelligent auto)"),
+            7 => format!("{shooting} (intelligent auto plus)"),
+            _ => format!("{shooting} ({advanced})"),
+        }
+    };
+    Computed::new(value, print)
+}
+
 /// Compute one composite by name. `None` means "do not emit this tag".
 ///
 /// `make` is the camera manufacturer, needed because ExifTool branches on it
@@ -490,6 +614,10 @@ fn canon_sensor_diag(xres: Option<&str>, yres: Option<&str>) -> Option<f64> {
 #[must_use]
 pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
     match (module, name) {
+        ("Panasonic", "AdvancedSceneMode") => {
+            panasonic_advanced_scene_mode(get(i, 0)?, get(i, 1)?, get(i, 2)?)
+        }
+
         // QuickTime.pm:8653-8665:
         // `int(MediaDataSize * 8 / (Duration / TimeScale) + 0.5)` followed
         // by `ConvertBitrate`. `Duration` reaches this layer in its unrounded
@@ -1630,6 +1758,23 @@ mod tests {
             .as_deref(),
             Some("2nd-curtain sync")
         );
+    }
+
+    #[test]
+    fn panasonic_advanced_scene_mode_matches_pinned_exiftool() {
+        let panasonic = |model, scene_mode, advanced_scene_type| {
+            compute(
+                "Panasonic",
+                "AdvancedSceneMode",
+                &[Some(model), Some(scene_mode), Some(advanced_scene_type)],
+                Some("Panasonic"),
+            )
+            .map(|computed| computed.print)
+        };
+
+        // ExifTool 13.59, Panasonic.rw2: Model=DMC-LX3, SceneMode=Off,
+        // AdvancedSceneType=1.
+        assert_eq!(panasonic("DMC-LX3", "Off", "1").as_deref(), Some("Off"));
     }
 
     #[test]
