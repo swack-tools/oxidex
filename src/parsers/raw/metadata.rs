@@ -2123,6 +2123,25 @@ fn format_exif_display_value(
     byte_order: ByteOrder,
 ) -> Option<String> {
     match tag_id {
+        // ExtraSamples: SHORT, with a scalar PrintConv hash in Exif.pm 0x0152.
+        // A single component is looked up normally and an unknown value uses
+        // ExifTool's standard `Unknown ($val)` hash fallback. With multiple
+        // components ExifTool passes the complete space-separated value to
+        // the same scalar hash, so even `1 2` prints as `Unknown (1 2)`.
+        0x0152 if field_type == 3 && value_count >= 1 => {
+            if value_count == 1 {
+                let value = read_tiff_u16(bytes, byte_order)?;
+                Some(match value {
+                    0 => "Unspecified".to_string(),
+                    1 => "Associated Alpha".to_string(),
+                    2 => "Unassociated Alpha".to_string(),
+                    _ => format!("Unknown ({value})"),
+                })
+            } else {
+                let values = join_integer_array(bytes, value_count, byte_order, 2)?;
+                Some(format!("Unknown ({values})"))
+            }
+        }
         // ComponentsConfiguration: UNDEFINED[4].
         0x9101 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
@@ -8508,6 +8527,39 @@ mod rational_array_tests {
                 "tag {tag:#06X} value {raw}"
             );
         }
+    }
+
+    /// ExifTool 13.59 `Exif.pm` 0x0152 applies this PrintConv hash to a
+    /// scalar SHORT, including its standard `Unknown ($val)` fallback. When
+    /// the TIFF stores more than one component, ExifTool passes the complete
+    /// space-separated value to that scalar hash and reports it as unknown.
+    /// The generic decoder retained the numbers but never applied either
+    /// part of that display contract.
+    #[test]
+    fn extra_samples_matches_exiftool_13_59_print_conv() {
+        for (raw, expected) in [
+            (0u16, "Unspecified"),
+            (1, "Associated Alpha"),
+            (2, "Unassociated Alpha"),
+            (9, "Unknown (9)"),
+        ] {
+            assert_eq!(
+                format_exif_display_value(
+                    0x0152,
+                    &raw.to_le_bytes(),
+                    3,
+                    1,
+                    ByteOrder::LittleEndian,
+                ),
+                Some(expected.to_string()),
+                "ExtraSamples {raw}"
+            );
+        }
+
+        assert_eq!(
+            format_exif_display_value(0x0152, &[0, 1, 0, 2], 3, 2, ByteOrder::BigEndian,),
+            Some("Unknown (1 2)".to_string())
+        );
     }
 
     /// SHORT and LONG dropped `value_count` exactly as the rational branches
