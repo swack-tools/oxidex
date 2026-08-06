@@ -65,26 +65,27 @@ fn record_name(record_type: u8) -> String {
     name.to_string()
 }
 
-fn format_records(record_types: &[u8]) -> Vec<String> {
-    let mut records = Vec::new();
-    let mut index = 0;
-
-    while index < record_types.len() {
-        let record_type = record_types[index];
-        let mut count = 1;
-        while index + count < record_types.len() && record_types[index + count] == record_type {
-            count += 1;
-        }
-
-        let mut name = record_name(record_type);
-        if count > 1 {
-            name.push_str(&format!(" x {count}"));
-        }
-        records.push(name);
-        index += count;
+fn add_record_type(record_runs: &mut Vec<(u8, usize)>, record_type: u8) {
+    if let Some((last_type, count)) = record_runs.last_mut()
+        && *last_type == record_type
+    {
+        *count += 1;
+    } else {
+        record_runs.push((record_type, 1));
     }
+}
 
-    records
+fn format_records(record_runs: &[(u8, usize)]) -> Vec<String> {
+    record_runs
+        .iter()
+        .map(|&(record_type, count)| {
+            let mut name = record_name(record_type);
+            if count > 1 {
+                name.push_str(&format!(" x {count}"));
+            }
+            name
+        })
+        .collect()
 }
 
 /// Parses only WPG v1's ExifTool-compatible `WPG:Records` list.
@@ -122,7 +123,7 @@ pub fn parse_wpg_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
         .map_err(|error| error.to_string())?;
 
     let mut cursor = 0;
-    let mut record_types = Vec::new();
+    let mut record_runs = Vec::new();
     while let Some(&record_type) = data.get(cursor) {
         cursor += 1;
         let Some(length) = read_var_int(&data, &mut cursor) else {
@@ -138,14 +139,14 @@ pub fn parse_wpg_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
         if record_type == 0 {
             break;
         }
-        record_types.push(record_type);
+        add_record_type(&mut record_runs, record_type);
     }
 
-    if !record_types.is_empty() {
+    if !record_runs.is_empty() {
         metadata.insert(
             "WPG:Records".to_string(),
             TagValue::Array(
-                format_records(&record_types)
+                format_records(&record_runs)
                     .into_iter()
                     .map(TagValue::String)
                     .collect(),
@@ -153,4 +154,22 @@ pub fn parse_wpg_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
         );
     }
     Ok(metadata)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::add_record_type;
+
+    /// A file may contain arbitrarily many adjacent zero-length records. The
+    /// state retained for one run must remain constant while its count grows.
+    #[test]
+    fn repeated_record_types_use_one_counting_run() {
+        let mut runs = Vec::new();
+
+        for _ in 0..100_000 {
+            add_record_type(&mut runs, 0x08);
+        }
+
+        assert_eq!(runs, vec![(0x08, 100_000)]);
+    }
 }
