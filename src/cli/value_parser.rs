@@ -60,6 +60,46 @@ use chrono::{NaiveDate, TimeZone, Timelike, Utc};
 /// wider cap is not representable here and the default is used for both.
 const RATIONAL_MAX: i64 = 0x7fff_ffff;
 
+/// Port of ExifTool's `InverseOffsetTime` (WriteExif.pl:60-67).
+fn inverse_offset_time(value: &str) -> Option<String> {
+    if value.eq_ignore_ascii_case("now") {
+        return Some(chrono::Local::now().format("%:z").to_string());
+    }
+    if value.ends_with('Z') {
+        return Some("+00:00".to_string());
+    }
+
+    let bytes = value.as_bytes();
+    for start in 0..bytes.len() {
+        let sign = bytes[start];
+        if sign != b'+' && sign != b'-' {
+            continue;
+        }
+        let hour_start = start + 1;
+        if hour_start >= bytes.len() || !bytes[hour_start].is_ascii_digit() {
+            continue;
+        }
+        let mut hour_end = hour_start + 1;
+        if hour_end < bytes.len() && bytes[hour_end].is_ascii_digit() {
+            hour_end += 1;
+        }
+        let minute_start = if bytes.get(hour_end) == Some(&b':') {
+            hour_end + 1
+        } else {
+            hour_end
+        };
+        let minute_end = minute_start.checked_add(2)?;
+        let minute = bytes.get(minute_start..minute_end)?;
+        if !minute.iter().all(u8::is_ascii_digit) {
+            continue;
+        }
+        let hour = std::str::from_utf8(&bytes[hour_start..hour_end]).ok()?;
+        let minute = std::str::from_utf8(minute).ok()?;
+        return Some(format!("{}{:0>2}:{minute}", sign as char, hour));
+    }
+    None
+}
+
 /// Parses `raw` into the value type `tag_name` declares in the tag registry.
 ///
 /// Tags with no registry entry — or whose registry type metadata is flagged
@@ -171,6 +211,19 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
             }
         };
         return Ok(TagValue::Binary(digits.into_bytes()));
+    }
+
+    // Exif.pm 0x9010 delegates PrintConvInv to InverseOffsetTime. The stored
+    // value is always a canonical EXIF offset, even when the caller supplies
+    // a full date/time, `Z`, or an offset without a leading zero.
+    if declared_tag_name.rsplit(':').next() == Some("OffsetTime") {
+        let offset = inverse_offset_time(raw).ok_or_else(|| {
+            invalid(
+                tag_name,
+                "Can't convert OffsetTime value to a time zone offset",
+            )
+        })?;
+        return Ok(TagValue::String(offset));
     }
 
     // Exif.pm 0xa300 is writable undef. PrintConvInv accepts the three labels,
@@ -1593,6 +1646,23 @@ mod tests {
             parse("EXIF:DateTimeOriginal", "now").unwrap(),
             TagValue::DateTime(_)
         ));
+    }
+
+    #[test]
+    fn offset_time_uses_exiftool_inverse_offset_time() {
+        for (raw, expected) in [
+            ("Z", "+00:00"),
+            ("+5:30", "+05:30"),
+            ("-0830", "-08:30"),
+            ("2024:01:15 10:30:00+12:45", "+12:45"),
+        ] {
+            assert_eq!(
+                parse("ExifIFD:OffsetTime", raw).unwrap(),
+                TagValue::String(expected.to_string()),
+                "input {raw}"
+            );
+        }
+        assert!(parse("ExifIFD:OffsetTime", "UTC").is_err());
     }
 
     #[test]
