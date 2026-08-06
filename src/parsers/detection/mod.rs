@@ -321,6 +321,16 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         return Ok(FileFormat::JXL);
     }
 
+    // RealAudio metafiles identify themselves by a streaming protocol in the
+    // first record. This must precede the generic text fallback so a RAM URL
+    // reaches its Real-specific extractor rather than the TXT parser.
+    if magic_bytes.starts_with(b"pnm://")
+        || magic_bytes.starts_with(b"rtsp://")
+        || magic_bytes.starts_with(b"http://")
+    {
+        return Ok(FileFormat::RAM);
+    }
+
     // Plain text detection (fallback for files that look like text)
     // Check if most bytes are printable ASCII or valid UTF-8
     if is_likely_text(magic_bytes) {

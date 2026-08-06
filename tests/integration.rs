@@ -175,6 +175,9 @@ mod ape_integration_tests;
 #[path = "integration/iso_integration_tests.rs"]
 mod iso_integration_tests;
 
+#[path = "integration/ram_integration_tests.rs"]
+mod ram_integration_tests;
+
 // No qualcomm/google/microsoft MakerNote test modules: those three suites were
 // deleted rather than declared. Every tag name they asserted appears in zero
 // ExifTool 13.59 source files, so declaring them would have pinned invented

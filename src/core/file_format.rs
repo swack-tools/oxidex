@@ -129,6 +129,9 @@ pub enum FileFormat {
     /// APE (Monkey's Audio) format (.ape)
     APE,
 
+    /// RealAudio metafile containing a streaming URL (.ram)
+    RAM,
+
     // Phase 2: Document formats
     /// ZIP archive format (.zip)
     ZIP,
@@ -355,6 +358,7 @@ impl FileFormat {
             FileFormat::OGG => "OGG",
             FileFormat::OPUS => "Opus",
             FileFormat::APE => "APE",
+            FileFormat::RAM => "RAM",
             FileFormat::ZIP => "ZIP",
             FileFormat::DOCX => "DOCX",
             FileFormat::XLSX => "XLSX",
@@ -460,6 +464,7 @@ impl FileFormat {
             FileFormat::OGG => &["ogg"],
             FileFormat::OPUS => &["opus"],
             FileFormat::APE => &["ape"],
+            FileFormat::RAM => &["ram"],
             FileFormat::ZIP => &["zip"],
             FileFormat::DOCX => &["docx"],
             FileFormat::XLSX => &["xlsx"],

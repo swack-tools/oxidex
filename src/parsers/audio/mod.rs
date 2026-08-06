@@ -10,6 +10,7 @@ pub mod flac;
 pub mod mp3;
 pub mod ogg;
 pub mod opus;
+pub mod ram;
 pub mod wav;
 
 pub use aac::AacParser;
