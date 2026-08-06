@@ -9,7 +9,7 @@ Empirical OxiDex ↔ ExifTool tag mapping for JPEG: for each tag, ExifTool write
 Only tags OxiDex can **read** from JPEG are listed here (including those whose value formatting differs from ExifTool). The full classification of all tested tags — including unsupported and broken ones — is in the [JPEG Tag Matrix](/reference/jpeg-tag-matrix). See also [ExifTool Coverage](/reference/tag-coverage-analysis) for the tag-database view and the [Compatibility overview](/reference/comparison/) for fixture-based comparisons across formats.
 
 
-**2699** ExifTool tags readable, **178** writable via the CLI (of 4819 ExifTool-writable JPEG tags tested).
+**2699** ExifTool tags readable, **180** writable via the CLI (of 4819 ExifTool-writable JPEG tags tested).
 
 
 ## ExifIFD (93 readable tags)
@@ -126,7 +126,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `GPS:GPSDOP` | `GPS:GPSDOP` | ⚠️ `-GPS:GPSDOP=` | `1.5` |
 | `GPS:GPSDateStamp` | `GPS:GPSDateStamp` | ⚠️ `-GPS:GPSDateStamp=` | `2024:01:15` |
 | `GPS:GPSDestBearing` | `GPS:GPSDestBearing` | ⚠️ `-GPS:GPSDestBearing=` | `1.5` |
-| `GPS:GPSDestBearingRef` | `GPS:GPSDestBearingRef` | — | `Magnetic North` |
+| `GPS:GPSDestBearingRef` | `GPS:GPSDestBearingRef` | ⚠️ `-GPS:GPSDestBearingRef=` | `Magnetic North` |
 | `GPS:GPSDestDistance` | `GPS:GPSDestDistance` | ⚠️ `-GPS:GPSDestDistance=` | `1.5` |
 | `GPS:GPSDestDistanceRef` | `GPS:GPSDestDistanceRef` | — | `Kilometers` |
 | `GPS:GPSDestLatitude` | `GPS:GPSDestLatitude` | — | `37.7749` |
@@ -142,7 +142,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `GPS:GPSLongitude` | `GPS:GPSLongitude` | — | `122.4194` |
 | `GPS:GPSLongitudeRef` | `GPS:GPSLongitudeRef` | ⚠️ `-GPS:GPSLongitudeRef=` | `W` |
 | `GPS:GPSMapDatum` | `GPS:GPSMapDatum` | ⚠️ `-GPS:GPSMapDatum=` | `OxTest` |
-| `GPS:GPSMeasureMode` | `GPS:GPSMeasureMode` | — | `2-Dimensional Measurement` |
+| `GPS:GPSMeasureMode` | `GPS:GPSMeasureMode` | ⚠️ `-GPS:GPSMeasureMode=` | `2-Dimensional Measurement` |
 | `GPS:GPSProcessingMethod` | `GPS:GPSProcessingMethod` | — | `OxTest` |
 | `GPS:GPSSatellites` | `GPS:GPSSatellites` | ⚠️ `-GPS:GPSSatellites=` | `OxTest` |
 | `GPS:GPSSpeed` | `GPS:GPSSpeed` | ⚠️ `-GPS:GPSSpeed=` | `1.5` |
