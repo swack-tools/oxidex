@@ -224,13 +224,14 @@ pub fn raw_bytes_to_tag_value(
 
 /// Applies ExifTool 13.59's `%longBin` ValueConv for the covered DNG tags.
 ///
-/// `ProfileHueSatMapData2` (0xC6FB) and `ProfileHueSatMapData3` (0xCD39)
-/// first become normal space-separated float text. Only when that text exceeds
-/// 64 bytes does ExifTool return a scalar reference, causing normal output to
-/// treat it as binary data while `-b` exposes the rendered text. Keep the
-/// threshold on the rendered value rather than the raw float bytes.
+/// `ProfileHueSatMapData2` (0xC6FB), `ProfileLookTableData` (0xC726), and
+/// `ProfileHueSatMapData3` (0xCD39) first become normal space-separated float
+/// text. Only when that text exceeds 64 bytes does ExifTool return a scalar
+/// reference, causing normal output to treat it as binary data while `-b`
+/// exposes the rendered text. Keep the threshold on the rendered value rather
+/// than the raw float bytes.
 fn apply_long_binary_value_conv(tag_id: u16, value: TagValue) -> TagValue {
-    if matches!(tag_id, 0xC6FB | 0xCD39)
+    if matches!(tag_id, 0xC6FB | 0xC726 | 0xCD39)
         && let TagValue::String(text) = &value
         && text.len() > 64
     {
@@ -2325,6 +2326,29 @@ mod tests {
         assert!(expected.len() > 64);
         assert_eq!(
             raw_bytes_to_tag_value(&long, 11, 5, 0xC6FB, order),
+            TagValue::Binary(expected.as_bytes().to_vec())
+        );
+    }
+
+    /// Exif.pm 13.59 applies `%longBin` to DNG's ProfileLookTableData
+    /// (0xC726) too: normal display keeps short float lists, but the decoded
+    /// text (not the raw bytes) becomes binary above 64 characters.
+    #[test]
+    fn profile_look_table_data_uses_exiftool_long_binary_threshold() {
+        let order = ByteOrder::LittleEndian;
+        let short = float_bytes(1.5, order);
+        assert_eq!(
+            raw_bytes_to_tag_value(&short, 11, 1, 0xC726, order),
+            TagValue::new_string("1.5")
+        );
+
+        let long = (0..5)
+            .flat_map(|_| float_bytes(0.1, order))
+            .collect::<Vec<_>>();
+        let expected = "0.100000001490116 0.100000001490116 0.100000001490116 0.100000001490116 0.100000001490116";
+        assert!(expected.len() > 64);
+        assert_eq!(
+            raw_bytes_to_tag_value(&long, 11, 5, 0xC726, order),
             TagValue::Binary(expected.as_bytes().to_vec())
         );
     }
