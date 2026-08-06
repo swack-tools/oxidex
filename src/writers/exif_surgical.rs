@@ -1437,11 +1437,19 @@ mod tests {
         );
 
         let plan = plan_exif_write(&scan, &original, &desired).unwrap();
-        let version = plan.gps.iter().find(|entry| entry.tag_id == 0x0000).unwrap();
+        let version = plan
+            .gps
+            .iter()
+            .find(|entry| entry.tag_id == 0x0000)
+            .unwrap();
         assert_eq!(version.field_type, 1);
         assert_eq!(version.count, 4);
         assert_eq!(version.value, [2, 3, 0, 0]);
-        let accuracy = plan.gps.iter().find(|entry| entry.tag_id == 0x001f).unwrap();
+        let accuracy = plan
+            .gps
+            .iter()
+            .find(|entry| entry.tag_id == 0x001f)
+            .unwrap();
         assert_eq!(accuracy.field_type, 5);
         assert_eq!(accuracy.count, 1);
     }
