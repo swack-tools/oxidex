@@ -88,6 +88,7 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         "ShutterSpeedValue" => "ExifIFD:ShutterSpeedValue",
         "ApertureValue" => "EXIF:ApertureValue",
         "Flash" => "ExifIFD:Flash",
+        "MakerNoteSafety" => "EXIF:MakerNoteSafety",
         _ => tag_name,
     };
 
@@ -254,6 +255,10 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         // validating the integer stored in the TIFF entry.
         ("EXIF:YCbCrPositioning", "Centered") => "1",
         ("EXIF:YCbCrPositioning", "Co-sited") => "2",
+        // Exif.pm 13.59 0xc635 converts the writable int16u code to these
+        // labels. Apply the inverse before the generic integer parser.
+        ("MakerNoteSafety" | "EXIF:MakerNoteSafety" | "IFD0:MakerNoteSafety", "Unsafe") => "0",
+        ("MakerNoteSafety" | "EXIF:MakerNoteSafety" | "IFD0:MakerNoteSafety", "Safe") => "1",
         _ => raw,
     };
     let raw = match declared_tag_name.rsplit(':').next() {
@@ -1613,6 +1618,20 @@ mod tests {
             parse("EXIF:YCbCrPositioning", "Co-sited").unwrap(),
             TagValue::Integer(2)
         );
+    }
+
+    #[test]
+    fn maker_note_safety_accepts_exiftool_print_values() {
+        // ExifTool 13.59 Exif.pm 0xc635 declares writable int16u with this
+        // PrintConv. The display labels must be inverted before integer
+        // parsing and TIFF serialization.
+        for (printed, raw) in [("Unsafe", 0), ("Safe", 1)] {
+            assert_eq!(
+                parse("EXIF:MakerNoteSafety", printed).unwrap(),
+                TagValue::Integer(raw),
+                "{printed}"
+            );
+        }
     }
 
     #[test]
