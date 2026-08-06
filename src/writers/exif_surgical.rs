@@ -711,7 +711,7 @@ pub fn plan_exif_write(
     if plan
         .gps
         .iter()
-        .any(|entry| matches!(entry.tag_id, 0x0014 | 0x001d | 0x001f))
+        .any(|entry| matches!(entry.tag_id, 0x000f | 0x0014 | 0x001d | 0x001f))
         && !plan.gps.iter().any(|entry| entry.tag_id == 0x0000)
     {
         plan.gps.push(OutEntry {
@@ -1577,6 +1577,31 @@ mod tests {
             .unwrap();
         assert_eq!(accuracy.field_type, 5);
         assert_eq!(accuracy.count, 1);
+    }
+
+    #[test]
+    fn plan_writes_gps_track_with_required_gps_version() {
+        // ExifTool 13.59 requires GPSVersionID whenever GPSTrack creates a
+        // GPS IFD; omitting it produces "Missing required JPEG GPS tag 0x0000".
+        let scan = ExifScan {
+            byte_order: ByteOrder::LittleEndian,
+            entries: Vec::new(),
+            thumbnail: None,
+            makernote_offset: None,
+        };
+        let original = MetadataMap::new();
+        let mut desired = MetadataMap::new();
+        desired.insert("GPS:GPSTrack", TagValue::new_rational(3, 2));
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let track = plan
+            .gps
+            .iter()
+            .find(|entry| entry.tag_id == 0x000f)
+            .unwrap();
+        assert_eq!(track.field_type, 5);
+        assert_eq!(track.count, 1);
+        assert!(plan.gps.iter().any(|entry| entry.tag_id == 0x0000));
     }
 
     #[test]
