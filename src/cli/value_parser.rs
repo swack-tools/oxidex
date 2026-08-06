@@ -74,6 +74,7 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         "ExposureTime" => "EXIF:ExposureTime",
         "BrightnessValue" => "EXIF:BrightnessValue",
         "LightSource" => "EXIF:LightSource",
+        "DigitalZoomRatio" => "EXIF:DigitalZoomRatio",
         "MeteringMode" => "EXIF:MeteringMode",
         "ShutterSpeedValue" => "ExifIFD:ShutterSpeedValue",
         "ApertureValue" => "EXIF:ApertureValue",
@@ -1440,5 +1441,20 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn bare_digital_zoom_ratio_is_parsed_as_its_writable_exif_rational() {
+        // ExifTool 13.59 Exif.pm 0xa404 declares DigitalZoomRatio as a
+        // writable rational64u without a PrintConv.  The unqualified CLI
+        // name must therefore be resolved to the EXIF descriptor before
+        // parsing, rather than being passed to the writer as a String.
+        assert_eq!(
+            parse("DigitalZoomRatio", "1.5").unwrap(),
+            TagValue::Rational {
+                numerator: 3,
+                denominator: 2,
+            }
+        );
     }
 }
