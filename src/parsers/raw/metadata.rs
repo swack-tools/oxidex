@@ -2251,6 +2251,22 @@ fn format_exif_display_value(
             .as_string()
             .map(str::to_string)
         }
+        // NoiseProfile: DNG 1.3's variable-length DOUBLE array. Exif.pm
+        // 0xc761 has no PrintConv, so its normal display is the decoded,
+        // space-separated doubles. The RAW fallback does not otherwise
+        // decode DOUBLE fields, so delegate only this DNG tag to the shared
+        // TIFF converter that implements ExifTool's GetDouble rendering.
+        0xC761 if field_type == 12 && value_count >= 1 => {
+            crate::core::tag_conversion::raw_bytes_to_tag_value(
+                bytes,
+                field_type,
+                value_count,
+                tag_id,
+                byte_order,
+            )
+            .as_string()
+            .map(str::to_string)
+        }
         // TIFF-EPStandardID: BYTE[n]. Exif.pm has the same PrintConv for its
         // two historical IDs (0x9216 and 0xA216): `$val =~ tr/ /./; $val`.
         0x9216 | 0xA216 if field_type == 1 => format_tiff_ep_standard_id(bytes, value_count),
@@ -9236,6 +9252,22 @@ mod backlog_group_1_printconv_tests {
         assert_eq!(
             metadata.get("EXIF:PreviewImage"),
             Some(&TagValue::Binary(vec![0xDE, 0xAD, 0xBE, 0xEF]))
+        );
+    }
+}
+
+#[cfg(test)]
+mod noise_profile_tests {
+    use super::*;
+
+    /// DNG 1.3's 0xC761 is a variable DOUBLE array. ExifTool's table has no
+    /// PrintConv, so its default display is the space-separated decoded list.
+    #[test]
+    fn noise_profile_decodes_double_array_like_pinned_exiftool() {
+        let bytes = [0.125f64.to_le_bytes(), 2.5f64.to_le_bytes()].concat();
+        assert_eq!(
+            format_exif_display_value(0xC761, &bytes, 12, 2, ByteOrder::LittleEndian),
+            Some("0.125 2.5".to_string())
         );
     }
 }
