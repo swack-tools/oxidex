@@ -73,6 +73,17 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         "CreateDate" => "ExifIFD:CreateDate",
         "ExposureTime" => "EXIF:ExposureTime",
         "BrightnessValue" => "EXIF:BrightnessValue",
+        "LightSource" => "EXIF:LightSource",
+        "DigitalZoomRatio" => "EXIF:DigitalZoomRatio",
+        "Sharpness" => "EXIF:Sharpness",
+        "Contrast" => "EXIF:Contrast",
+        "CustomRendered" => "EXIF:CustomRendered",
+        "GainControl" => "EXIF:GainControl",
+        "FileSource" => "EXIF:FileSource",
+        "ExposureProgram" => "EXIF:ExposureProgram",
+        "WhiteBalance" => "EXIF:WhiteBalance",
+        "SceneCaptureType" => "EXIF:SceneCaptureType",
+        "Saturation" => "EXIF:Saturation",
         "MeteringMode" => "EXIF:MeteringMode",
         "ShutterSpeedValue" => "ExifIFD:ShutterSpeedValue",
         "ApertureValue" => "EXIF:ApertureValue",
@@ -87,6 +98,25 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         let mut encoded = b"ASCII\0\0\0".to_vec();
         encoded.extend_from_slice(raw.as_bytes());
         return Ok(TagValue::Binary(encoded));
+    }
+
+    // Exif.pm 0xa300 is writable undef. PrintConvInv accepts the three labels,
+    // then ValueConvInv converts a decimal byte to its one-byte TIFF payload.
+    if declared_tag_name.rsplit(':').next() == Some("FileSource") {
+        let raw = match raw {
+            "Film Scanner" => "1",
+            "Reflection Print Scanner" => "2",
+            "Digital Camera" => "3",
+            _ => {
+                return Err(invalid(
+                    tag_name,
+                    "Can't convert FileSource value (not in PrintConv)",
+                ));
+            }
+        };
+        return Ok(TagValue::Binary(vec![
+            raw.parse::<u8>().expect("known byte"),
+        ]));
     }
 
     // GPS.pm 13.59 converts GPSDestLatitude's decimal input into a three-part
@@ -160,6 +190,54 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
     // PrintConv exposes the corresponding measurement label.  Writer.pl
     // applies that PrintConvInv before its generic string check.
     let raw = match (tag_name, raw) {
+        // Exif.pm 0xa408 uses ConvertParameter as its PrintConvInv rather
+        // than a direct label map. It accepts the documented display labels
+        // and any signed float, collapsing them to the three stored codes.
+        ("Contrast" | "EXIF:Contrast" | "ExifIFD:Contrast", value) => {
+            invert_exif_contrast_parameter(value).ok_or_else(|| {
+                invalid(tag_name, "Can't convert Contrast value (not in PrintConv)")
+            })?
+        }
+        // Exif.pm 0xa401 stores int16u values and defines Apple extension
+        // labels in addition to the two standard EXIF values.
+        ("CustomRendered" | "EXIF:CustomRendered" | "ExifIFD:CustomRendered", "Normal") => "0",
+        ("CustomRendered" | "EXIF:CustomRendered" | "ExifIFD:CustomRendered", "Custom") => "1",
+        (
+            "CustomRendered" | "EXIF:CustomRendered" | "ExifIFD:CustomRendered",
+            "HDR (no original saved)",
+        ) => "2",
+        (
+            "CustomRendered" | "EXIF:CustomRendered" | "ExifIFD:CustomRendered",
+            "HDR (original saved)",
+        ) => "3",
+        (
+            "CustomRendered" | "EXIF:CustomRendered" | "ExifIFD:CustomRendered",
+            "Original (for HDR)",
+        ) => "4",
+        ("CustomRendered" | "EXIF:CustomRendered" | "ExifIFD:CustomRendered", "Panorama") => "6",
+        ("CustomRendered" | "EXIF:CustomRendered" | "ExifIFD:CustomRendered", "Portrait HDR") => {
+            "7"
+        }
+        ("CustomRendered" | "EXIF:CustomRendered" | "ExifIFD:CustomRendered", "Portrait") => "8",
+        ("CustomRendered" | "EXIF:CustomRendered" | "ExifIFD:CustomRendered", _) => {
+            return Err(invalid(
+                tag_name,
+                "Can't convert CustomRendered value (not in PrintConv)",
+            ));
+        }
+        // Exif.pm 0xa407 stores int16u values and exposes these PrintConv
+        // labels. Invert them before generic integer parsing.
+        ("GainControl" | "EXIF:GainControl" | "ExifIFD:GainControl", "None") => "0",
+        ("GainControl" | "EXIF:GainControl" | "ExifIFD:GainControl", "Low gain up") => "1",
+        ("GainControl" | "EXIF:GainControl" | "ExifIFD:GainControl", "High gain up") => "2",
+        ("GainControl" | "EXIF:GainControl" | "ExifIFD:GainControl", "Low gain down") => "3",
+        ("GainControl" | "EXIF:GainControl" | "ExifIFD:GainControl", "High gain down") => "4",
+        ("GainControl" | "EXIF:GainControl" | "ExifIFD:GainControl", _) => {
+            return Err(invalid(
+                tag_name,
+                "Can't convert GainControl value (not in PrintConv)",
+            ));
+        }
         ("GPS:GPSStatus", "Measurement Active") => "A",
         ("GPS:GPSStatus", "Measurement Void") => "V",
         ("GPS:GPSMeasureMode", "2-Dimensional Measurement") => "2",
@@ -178,8 +256,96 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         ("EXIF:YCbCrPositioning", "Co-sited") => "2",
         _ => raw,
     };
-    let raw = if declared_tag_name.rsplit(':').next() == Some("MeteringMode") {
-        match raw {
+    let raw = match declared_tag_name.rsplit(':').next() {
+        Some("ExposureProgram") => match raw {
+            "Not Defined" => "0",
+            "Manual" => "1",
+            "Program AE" => "2",
+            "Aperture-priority AE" => "3",
+            "Shutter speed priority AE" => "4",
+            "Creative (Slow speed)" => "5",
+            "Action (High speed)" => "6",
+            "Portrait" => "7",
+            "Landscape" => "8",
+            "Bulb" => "9",
+            _ => {
+                return Err(invalid(
+                    tag_name,
+                    "Can't convert ExposureProgram value (not in PrintConv)",
+                ));
+            }
+        },
+        Some("WhiteBalance") => match raw {
+            "Auto" => "0",
+            "Manual" => "1",
+            _ => {
+                return Err(invalid(
+                    tag_name,
+                    "Can't convert WhiteBalance value (not in PrintConv)",
+                ));
+            }
+        },
+        Some("SceneCaptureType") => match raw {
+            "Standard" => "0",
+            "Landscape" => "1",
+            "Portrait" => "2",
+            "Night" => "3",
+            "Other" => "4",
+            _ => {
+                return Err(invalid(
+                    tag_name,
+                    "Can't convert SceneCaptureType value (not in PrintConv)",
+                ));
+            }
+        },
+        Some("Saturation") => invert_exif_contrast_parameter(raw).ok_or_else(|| {
+            invalid(
+                tag_name,
+                "Can't convert Saturation value (not in PrintConv)",
+            )
+        })?,
+        Some("LightSource") => match raw {
+            // Exif.pm 13.59 %lightSource PrintConv. Code 25 repeats the
+            // "Daylight" label, so its inverse is the first matching code 1.
+            "Unknown" => "0",
+            "Daylight" => "1",
+            "Fluorescent" => "2",
+            "Tungsten (Incandescent)" => "3",
+            "Flash" => "4",
+            "Fine Weather" => "9",
+            "Cloudy" => "10",
+            "Shade" => "11",
+            "Daylight Fluorescent" => "12",
+            "Day White Fluorescent" => "13",
+            "Cool White Fluorescent" => "14",
+            "White Fluorescent" => "15",
+            "Warm White Fluorescent" => "16",
+            "Standard Light A" => "17",
+            "Standard Light B" => "18",
+            "Standard Light C" => "19",
+            "D55" => "20",
+            "D65" => "21",
+            "D75" => "22",
+            "D50" => "23",
+            "ISO Studio Tungsten" => "24",
+            "Day White" => "26",
+            "Cool White" => "27",
+            "White" => "28",
+            "Warm White" => "29",
+            "Daylight LED" => "30",
+            "Day White LED" => "31",
+            "Cool White LED" => "32",
+            "White LED" => "33",
+            "Warm White LED" => "34",
+            "Other" => "255",
+            _ => {
+                return Err(invalid(
+                    tag_name,
+                    "Can't convert LightSource value (not in PrintConv)",
+                ));
+            }
+        },
+        Some("MeteringMode") => match raw {
             "Unknown" => "0",
             "Average" => "1",
             "Center-weighted average" => "2",
@@ -189,9 +355,8 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
             "Partial" => "6",
             "Other" => "255",
             _ => raw,
-        }
-    } else {
-        raw
+        },
+        _ => raw,
     };
     let declared = get_tag_descriptor(declared_tag_name)
         .filter(|_| has_reliable_value_type(declared_tag_name))
@@ -199,6 +364,9 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
 
     match declared {
         None | Some(ValueType::String) => Ok(TagValue::String(raw.to_string())),
+        Some(ValueType::Integer) if declared_tag_name.rsplit(':').next() == Some("Sharpness") => {
+            parse_sharpness(tag_name, raw)
+        }
         Some(ValueType::Integer) if declared_tag_name.rsplit(':').next() == Some("Flash") => {
             crate::core::formatters::exif_enums::parse_flash_label(raw)
                 .map(TagValue::Integer)
@@ -224,6 +392,74 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
             "Structured values cannot be set from the command line",
         )),
     }
+}
+
+/// ExifTool 13.59 `Image::ExifTool::Exif::ConvertParameter`, as used by
+/// `ExifIFD:Contrast` (Exif.pm 0xa408).
+fn invert_exif_contrast_parameter(raw: &str) -> Option<&'static str> {
+    let is_word = |initial: u8| {
+        let bytes = raw.as_bytes();
+        bytes.iter().enumerate().any(|(index, byte)| {
+            (index == 0 || !is_ascii_word(bytes[index - 1])) && byte.eq_ignore_ascii_case(&initial)
+        })
+    };
+    let numeric = as_float_text(raw).and_then(|value| value.parse::<f64>().ok());
+
+    if is_word(b'n') || numeric == Some(0.0) {
+        Some("0")
+    } else if is_word(b's') || is_word(b'l') || numeric.is_some_and(|value| value < 0.0) {
+        Some("1")
+    } else if is_word(b'h') || numeric.is_some() {
+        Some("2")
+    } else {
+        None
+    }
+}
+
+fn is_ascii_word(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+/// Exif.pm's `ConvertParameter` inverse conversion used by Sharpness (0xa40a).
+///
+/// `ConvertParameter` recognizes the first letter at a word boundary rather
+/// than only accepting its three rendered labels: any normal/zero-like value
+/// maps to 0, soft/low/negative to 1, and hard/high/positive to 2.
+fn parse_sharpness(tag_name: &str, raw: &str) -> Result<TagValue> {
+    let has_word_initial = |initials: &[u8]| {
+        raw.as_bytes().iter().enumerate().any(|(index, byte)| {
+            let at_word_boundary = index == 0
+                || !raw.as_bytes()[index - 1].is_ascii_alphanumeric()
+                    && raw.as_bytes()[index - 1] != b'_';
+            at_word_boundary
+                && byte.is_ascii_alphabetic()
+                && initials.contains(&byte.to_ascii_lowercase())
+        })
+    };
+
+    if has_word_initial(b"n") {
+        return Ok(TagValue::Integer(0));
+    }
+    if has_word_initial(b"sl") {
+        return Ok(TagValue::Integer(1));
+    }
+    if has_word_initial(b"h") {
+        return Ok(TagValue::Integer(2));
+    }
+    if let Some(number) = as_float_text(raw).and_then(|value| value.parse::<f64>().ok()) {
+        return Ok(TagValue::Integer(if number == 0.0 {
+            0
+        } else if number < 0.0 {
+            1
+        } else {
+            2
+        }));
+    }
+
+    Err(invalid(
+        tag_name,
+        "Can't convert Sharpness value (not a parameter)",
+    ))
 }
 
 fn invert_gps_latitude_ref<'a>(tag_name: &str, raw: &'a str) -> Result<&'a str> {
@@ -1208,6 +1444,24 @@ mod tests {
     }
 
     #[test]
+    fn file_source_printed_values_are_inverted_to_undef_bytes() {
+        for (printed, byte) in [
+            ("Film Scanner", 1),
+            ("Reflection Print Scanner", 2),
+            ("Digital Camera", 3),
+        ] {
+            for tag in ["EXIF:FileSource", "ExifIFD:FileSource"] {
+                assert_eq!(parse(tag, printed).unwrap(), TagValue::Binary(vec![byte]));
+            }
+        }
+        assert_eq!(
+            parse("FileSource", "Digital Camera").unwrap(),
+            TagValue::Binary(vec![3])
+        );
+        assert!(parse("FileSource", "3").is_err());
+    }
+
+    #[test]
     fn gps_status_printed_value_is_inverted_before_string_serialization() {
         // ExifTool 13.59 GPS.pm 0x0009 PrintConv.
         // Without the inverse conversion, the printable label is written as
@@ -1234,6 +1488,74 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn contrast_uses_exiftools_parameter_inverse_conversion() {
+        // ExifTool 13.59 Exif.pm 0xa408 uses ConvertParameter: labels and
+        // signed numeric settings map to the three stored int16u codes.
+        let cases = [
+            ("Normal", 0),
+            ("Low", 1),
+            ("High", 2),
+            ("Soft", 1),
+            ("Hard", 2),
+            ("-1", 1),
+            ("0.00", 0),
+            ("+1", 2),
+            ("1", 2),
+            ("nope", 0),
+        ];
+        for tag in ["EXIF:Contrast", "ExifIFD:Contrast"] {
+            for (printed, raw) in cases {
+                assert_eq!(parse(tag, printed).unwrap(), TagValue::Integer(raw));
+            }
+        }
+        assert_eq!(parse("Contrast", "Normal").unwrap(), TagValue::Integer(0));
+    }
+
+    #[test]
+    fn custom_rendered_printed_values_are_inverted_to_tiff_codes() {
+        // ExifTool 13.59 Exif.pm 0xa401, including Apple's declared values.
+        let cases = [
+            ("Normal", 0),
+            ("Custom", 1),
+            ("HDR (no original saved)", 2),
+            ("HDR (original saved)", 3),
+            ("Original (for HDR)", 4),
+            ("Panorama", 6),
+            ("Portrait HDR", 7),
+            ("Portrait", 8),
+        ];
+        for tag in ["EXIF:CustomRendered", "ExifIFD:CustomRendered"] {
+            for (printed, raw) in cases {
+                assert_eq!(parse(tag, printed).unwrap(), TagValue::Integer(raw));
+            }
+        }
+        assert_eq!(
+            parse("CustomRendered", "Normal").unwrap(),
+            TagValue::Integer(0)
+        );
+        assert!(parse("CustomRendered", "1").is_err());
+    }
+
+    #[test]
+    fn gain_control_printed_values_are_inverted_to_tiff_codes() {
+        // ExifTool 13.59 Exif.pm 0xa407 PrintConv.
+        let cases = [
+            ("None", 0),
+            ("Low gain up", 1),
+            ("High gain up", 2),
+            ("Low gain down", 3),
+            ("High gain down", 4),
+        ];
+        for tag in ["EXIF:GainControl", "ExifIFD:GainControl"] {
+            for (printed, raw) in cases {
+                assert_eq!(parse(tag, printed).unwrap(), TagValue::Integer(raw));
+            }
+        }
+        assert_eq!(parse("GainControl", "None").unwrap(), TagValue::Integer(0));
+        assert!(parse("GainControl", "1").is_err());
     }
 
     #[test]
@@ -1301,6 +1623,118 @@ mod tests {
         assert_eq!(
             parse("EXIF:PageNumber", "3 17").unwrap(),
             TagValue::new_array(vec![TagValue::new_integer(3), TagValue::new_integer(17)])
+        );
+    }
+
+    #[test]
+    fn light_source_uses_the_complete_exiftool_13_59_print_conversion_inverse() {
+        // Exif.pm %lightSource: all labels accepted for the writable int16u
+        // LightSource tag. The duplicate "Daylight" at code 25 must invert
+        // to the first matching code, 1, as ExifTool's PrintConvInv does.
+        for (printed, raw) in [
+            ("Unknown", 0),
+            ("Daylight", 1),
+            ("Fluorescent", 2),
+            ("Tungsten (Incandescent)", 3),
+            ("Flash", 4),
+            ("Fine Weather", 9),
+            ("Cloudy", 10),
+            ("Shade", 11),
+            ("Daylight Fluorescent", 12),
+            ("Day White Fluorescent", 13),
+            ("Cool White Fluorescent", 14),
+            ("White Fluorescent", 15),
+            ("Warm White Fluorescent", 16),
+            ("Standard Light A", 17),
+            ("Standard Light B", 18),
+            ("Standard Light C", 19),
+            ("D55", 20),
+            ("D65", 21),
+            ("D75", 22),
+            ("D50", 23),
+            ("ISO Studio Tungsten", 24),
+            ("Day White", 26),
+            ("Cool White", 27),
+            ("White", 28),
+            ("Warm White", 29),
+            ("Daylight LED", 30),
+            ("Day White LED", 31),
+            ("Cool White LED", 32),
+            ("White LED", 33),
+            ("Warm White LED", 34),
+            ("Other", 255),
+        ] {
+            for tag in ["LightSource", "EXIF:LightSource", "ExifIFD:LightSource"] {
+                assert_eq!(
+                    parse(tag, printed).unwrap(),
+                    TagValue::Integer(raw),
+                    "{tag}: {printed}"
+                );
+            }
+        }
+        for tag in ["LightSource", "EXIF:LightSource", "ExifIFD:LightSource"] {
+            assert!(parse(tag, "1").is_err(), "{tag} accepted a raw hash code");
+        }
+    }
+
+    #[test]
+    fn additional_exif_enum_writes_match_pinned_inverse_rules() {
+        for (tag, printed, expected) in [
+            ("ExposureProgram", "Program AE", 2),
+            ("WhiteBalance", "Manual", 1),
+            ("SceneCaptureType", "Portrait", 2),
+            ("Saturation", "High", 2),
+        ] {
+            assert_eq!(parse(tag, printed).unwrap(), TagValue::Integer(expected));
+        }
+        for (tag, raw) in [
+            ("ExposureProgram", "2"),
+            ("WhiteBalance", "1"),
+            ("SceneCaptureType", "2"),
+        ] {
+            assert!(parse(tag, raw).is_err(), "{tag} accepted raw hash code");
+        }
+        assert_eq!(parse("Saturation", "-1").unwrap(), TagValue::Integer(1));
+    }
+
+    #[test]
+    fn sharpness_uses_exiftools_convert_parameter_inverse() {
+        // Exif.pm 13.59 0xa40a delegates PrintConvInv to ConvertParameter:
+        // Normal/zero -> 0, Soft/Low/negative -> 1, Hard/High/positive -> 2.
+        for (printed, raw) in [
+            ("Normal", 0),
+            ("neutral", 0),
+            ("0", 0),
+            ("Soft", 1),
+            ("Low", 1),
+            ("-0.25", 1),
+            ("Hard", 2),
+            ("High", 2),
+            ("0.25", 2),
+        ] {
+            for tag in ["Sharpness", "EXIF:Sharpness", "ExifIFD:Sharpness"] {
+                assert_eq!(
+                    parse(tag, printed).unwrap(),
+                    TagValue::Integer(raw),
+                    "{tag}: {printed}"
+                );
+            }
+        }
+        assert!(parse("ExifIFD:Sharpness", "ambiguous").is_err());
+    }
+
+    #[test]
+    fn bare_digital_zoom_ratio_is_parsed_as_its_writable_exif_rational() {
+        // ExifTool 13.59 Exif.pm 0xa404 declares DigitalZoomRatio as a
+        // writable rational64u without a PrintConv.  The unqualified CLI
+        // name must therefore be resolved to the EXIF descriptor before
+        // parsing, rather than being passed to the writer as a String.
+        assert_eq!(
+            parse("DigitalZoomRatio", "1.5").unwrap(),
+            TagValue::Rational {
+                numerator: 3,
+                denominator: 2,
+            }
         );
     }
 }

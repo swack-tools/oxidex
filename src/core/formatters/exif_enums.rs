@@ -60,6 +60,16 @@ pub fn format_light_source(value: i64) -> String {
         22 => "D75".to_string(),
         23 => "D50".to_string(),
         24 => "ISO Studio Tungsten".to_string(),
+        25 => "Daylight".to_string(),
+        26 => "Day White".to_string(),
+        27 => "Cool White".to_string(),
+        28 => "White".to_string(),
+        29 => "Warm White".to_string(),
+        30 => "Daylight LED".to_string(),
+        31 => "Day White LED".to_string(),
+        32 => "Cool White LED".to_string(),
+        33 => "White LED".to_string(),
+        34 => "Warm White LED".to_string(),
         255 => "Other".to_string(),
         _ => format!("Unknown ({})", value),
     }
@@ -192,6 +202,7 @@ pub fn format_scene_capture_type(value: i64) -> String {
         1 => "Landscape".to_string(),
         2 => "Portrait".to_string(),
         3 => "Night".to_string(),
+        4 => "Other".to_string(),
         _ => format!("Unknown ({})", value),
     }
 }
@@ -679,6 +690,18 @@ mod tests {
     fn test_metering_mode() {
         assert_eq!(format_metering_mode(5), "Multi-segment");
         assert_eq!(format_metering_mode(1), "Average");
+    }
+
+    #[test]
+    fn light_source_includes_exif_3_1_codes() {
+        assert_eq!(format_light_source(25), "Daylight");
+        assert_eq!(format_light_source(26), "Day White");
+        assert_eq!(format_light_source(34), "Warm White LED");
+    }
+
+    #[test]
+    fn scene_capture_type_includes_samsung_other_value() {
+        assert_eq!(format_scene_capture_type(4), "Other");
     }
 
     #[test]

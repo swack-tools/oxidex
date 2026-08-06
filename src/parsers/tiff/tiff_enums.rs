@@ -247,6 +247,16 @@ pub fn tiff_enum_to_string(tag_id: u16, value: i64) -> Option<String> {
             22 => Some("D75".to_string()),
             23 => Some("D50".to_string()),
             24 => Some("ISO Studio Tungsten".to_string()),
+            25 => Some("Daylight".to_string()),
+            26 => Some("Day White".to_string()),
+            27 => Some("Cool White".to_string()),
+            28 => Some("White".to_string()),
+            29 => Some("Warm White".to_string()),
+            30 => Some("Daylight LED".to_string()),
+            31 => Some("Day White LED".to_string()),
+            32 => Some("Cool White LED".to_string()),
+            33 => Some("White LED".to_string()),
+            34 => Some("Warm White LED".to_string()),
             255 => Some("Other".to_string()),
             _ => None,
         },
@@ -408,6 +418,19 @@ mod tests {
         }
         assert_eq!(tiff_enum_to_string(0x0107, 0), None);
         assert_eq!(tiff_enum_to_string(0x0107, 4), None);
+    }
+
+    #[test]
+    fn light_source_includes_exif_3_1_codes() {
+        assert_eq!(tiff_enum_to_string(0x9208, 25).as_deref(), Some("Daylight"));
+        assert_eq!(
+            tiff_enum_to_string(0x9208, 26).as_deref(),
+            Some("Day White")
+        );
+        assert_eq!(
+            tiff_enum_to_string(0x9208, 34).as_deref(),
+            Some("Warm White LED")
+        );
     }
 
     /// ExifTool 13.59 `Exif.pm` defines all seven Predictor PrintConv values,

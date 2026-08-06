@@ -511,6 +511,17 @@ fn canonical_write_tag_name(tag_name: &str) -> &str {
         "CreateDate" => "ExifIFD:CreateDate",
         "ExposureTime" => "ExifIFD:ExposureTime",
         "BrightnessValue" => "ExifIFD:BrightnessValue",
+        "LightSource" => "ExifIFD:LightSource",
+        "Contrast" => "ExifIFD:Contrast",
+        "DigitalZoomRatio" => "ExifIFD:DigitalZoomRatio",
+        "Sharpness" => "ExifIFD:Sharpness",
+        "CustomRendered" => "ExifIFD:CustomRendered",
+        "GainControl" => "ExifIFD:GainControl",
+        "FileSource" => "ExifIFD:FileSource",
+        "ExposureProgram" => "ExifIFD:ExposureProgram",
+        "WhiteBalance" => "ExifIFD:WhiteBalance",
+        "SceneCaptureType" => "ExifIFD:SceneCaptureType",
+        "Saturation" => "ExifIFD:Saturation",
         "MeteringMode" => "ExifIFD:MeteringMode",
         "ShutterSpeedValue" => "ExifIFD:ShutterSpeedValue",
         "Flash" => "ExifIFD:Flash",
@@ -1062,6 +1073,29 @@ mod tests {
             canonical_write_tag_name("GPS:GPSDateStamp"),
             "GPS:GPSDateStamp"
         );
+    }
+
+    #[test]
+    fn bare_writable_exif_parity_tags_target_exif_ifd() {
+        for tag in [
+            "LightSource",
+            "Contrast",
+            "DigitalZoomRatio",
+            "Sharpness",
+            "CustomRendered",
+            "GainControl",
+            "FileSource",
+            "ExposureProgram",
+            "WhiteBalance",
+            "SceneCaptureType",
+            "Saturation",
+        ] {
+            assert_eq!(
+                canonical_write_tag_name(tag),
+                format!("ExifIFD:{tag}"),
+                "{tag}"
+            );
+        }
     }
 
     #[test]
