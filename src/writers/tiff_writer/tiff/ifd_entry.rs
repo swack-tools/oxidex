@@ -99,6 +99,24 @@ pub fn convert_tag_value_to_entry(
 ) -> Result<Option<IfdEntryData>> {
     match tag_value {
         TagValue::String(s) => {
+            // ExifTool 13.59 Exif.pm 0x0212 declares `int16u[2]` and uses
+            // JPEG.pm's yCbCrSubSampling PrintConv hash. Convert its exact
+            // printable labels back to the two SHORT components before the
+            // generic string path turns them into an invalid ASCII entry.
+            if tag_id == 0x0212
+                && let Some((horizontal, vertical)) = ycbcr_subsampling_components(s)
+            {
+                let mut bytes = Vec::with_capacity(4);
+                for component in [horizontal, vertical] {
+                    let encoded = match byte_order {
+                        ByteOrder::LittleEndian => component.to_le_bytes(),
+                        ByteOrder::BigEndian => component.to_be_bytes(),
+                    };
+                    bytes.extend_from_slice(&encoded);
+                }
+                return Ok(Some(IfdEntryData::new(tag_id, ExifType::Short, 2, bytes)));
+            }
+
             // ASCII type - null-terminated string
             let mut bytes = s.as_bytes().to_vec();
             bytes.push(0); // Add null terminator
@@ -150,6 +168,20 @@ pub fn convert_tag_value_to_entry(
         TagValue::Float(_) => Ok(None),
         TagValue::Struct(_) => Ok(None),
         TagValue::Array(_) => Ok(None), // Arrays not yet supported in TIFF writer
+    }
+}
+
+fn ycbcr_subsampling_components(value: &str) -> Option<(u16, u16)> {
+    match value {
+        "YCbCr4:4:4 (1 1)" => Some((1, 1)),
+        "YCbCr4:2:2 (2 1)" => Some((2, 1)),
+        "YCbCr4:2:0 (2 2)" => Some((2, 2)),
+        "YCbCr4:1:1 (4 1)" => Some((4, 1)),
+        "YCbCr4:1:0 (4 2)" => Some((4, 2)),
+        "YCbCr4:4:0 (1 2)" => Some((1, 2)),
+        "YCbCr4:4:1 (1 4)" => Some((1, 4)),
+        "YCbCr4:2:1 (2 4)" => Some((2, 4)),
+        _ => None,
     }
 }
 
@@ -232,6 +264,24 @@ fn convert_rational_to_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ExifTool 13.59 Exif.pm declares YCbCrSubSampling (0x0212) as
+    /// `Writable => 'int16u', Count => 2`. Its printable values therefore
+    /// must be serialized as a pair of SHORTs, not as an ASCII string.
+    #[test]
+    fn ycbcr_subsampling_print_value_becomes_two_shorts() {
+        let entry = convert_tag_value_to_entry(
+            0x0212,
+            &TagValue::new_string("YCbCr4:2:0 (2 2)"),
+            ByteOrder::BigEndian,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(entry.field_type, ExifType::Short);
+        assert_eq!(entry.value_count, 2);
+        assert_eq!(entry.value_bytes, vec![0, 2, 0, 2]);
+    }
 
     #[test]
     fn test_entry_is_inline() {
