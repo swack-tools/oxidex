@@ -129,6 +129,12 @@ pub enum FileFormat {
     /// APE (Monkey's Audio) format (.ape)
     APE,
 
+    /// RealAudio metafile containing a streaming URL (.ram)
+    RAM,
+
+    /// Olympus Digital Speech Standard audio (.dss, .ds2)
+    DSS,
+
     // Phase 2: Document formats
     /// ZIP archive format (.zip)
     ZIP,
@@ -213,6 +219,9 @@ pub enum FileFormat {
 
     /// Adobe Photoshop document (.psd)
     PSD,
+
+    /// WordPerfect Graphics image (.wpg)
+    WPG,
 
     /// DjVu image or multi-page document (.djvu, .djv)
     DJVU,
@@ -358,6 +367,8 @@ impl FileFormat {
             FileFormat::OGG => "OGG",
             FileFormat::OPUS => "Opus",
             FileFormat::APE => "APE",
+            FileFormat::RAM => "RAM",
+            FileFormat::DSS => "DSS",
             FileFormat::ZIP => "ZIP",
             FileFormat::DOCX => "DOCX",
             FileFormat::XLSX => "XLSX",
@@ -385,6 +396,7 @@ impl FileFormat {
             FileFormat::SVG => "SVG",
             FileFormat::ICO => "ICO",
             FileFormat::PSD => "PSD",
+            FileFormat::WPG => "WPG",
             FileFormat::DJVU => "DJVU",
             FileFormat::ELF => "ELF",
             FileFormat::MachO => "Mach-O",
@@ -464,6 +476,8 @@ impl FileFormat {
             FileFormat::OGG => &["ogg"],
             FileFormat::OPUS => &["opus"],
             FileFormat::APE => &["ape"],
+            FileFormat::RAM => &["ram"],
+            FileFormat::DSS => &["dss", "ds2"],
             FileFormat::ZIP => &["zip"],
             FileFormat::DOCX => &["docx"],
             FileFormat::XLSX => &["xlsx"],
@@ -491,6 +505,7 @@ impl FileFormat {
             FileFormat::SVG => &["svg"],
             FileFormat::ICO => &["ico"],
             FileFormat::PSD => &["psd"],
+            FileFormat::WPG => &["wpg"],
             FileFormat::DJVU => &["djvu", "djv"],
             FileFormat::ELF => &["elf", "so"],
             FileFormat::MachO => &["dylib", "bundle"],

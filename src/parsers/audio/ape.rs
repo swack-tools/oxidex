@@ -25,6 +25,7 @@
 //! - <http://www.personal.uni-jena.de/~pfk/mpp/sv8/apetag.html>
 //! - ExifTool Source: `lib/Image/ExifTool/APE.pm`
 
+use crate::core::formatters::convert_duration;
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
@@ -151,13 +152,40 @@ fn parse_mac_audio_header(
 
     // ExifTool reports CompressionLevel as the raw code (1000/2000/...),
     // with no PrintConv, so it must not be mapped to a name here.
+    let blocks_per_frame = h.u32_at(4);
+    let final_frame_blocks = h.u32_at(8);
+    let total_frames = h.u32_at(12);
+    let sample_rate = h.u32_at(20);
+
     insert_int(metadata, "CompressionLevel", h.u16_at(0).map(i64::from));
-    insert_int(metadata, "BlocksPerFrame", h.u32_at(4).map(i64::from));
-    insert_int(metadata, "FinalFrameBlocks", h.u32_at(8).map(i64::from));
-    insert_int(metadata, "TotalFrames", h.u32_at(12).map(i64::from));
+    insert_int(metadata, "BlocksPerFrame", blocks_per_frame.map(i64::from));
+    insert_int(
+        metadata,
+        "FinalFrameBlocks",
+        final_frame_blocks.map(i64::from),
+    );
+    insert_int(metadata, "TotalFrames", total_frames.map(i64::from));
     insert_int(metadata, "BitsPerSample", h.u16_at(16).map(i64::from));
     insert_int(metadata, "Channels", h.u16_at(18).map(i64::from));
-    insert_int(metadata, "SampleRate", h.u32_at(20).map(i64::from));
+    insert_int(metadata, "SampleRate", sample_rate.map(i64::from));
+
+    // Image::ExifTool::APE::Composite::Duration:
+    // ((TotalFrames - 1) * BlocksPerFrame + FinalFrameBlocks) / SampleRate
+    if let (Some(sample_rate), Some(total_frames), Some(blocks_per_frame), Some(final_frame_blocks)) = (
+        sample_rate,
+        total_frames,
+        blocks_per_frame,
+        final_frame_blocks,
+    ) && sample_rate != 0
+        && total_frames != 0
+    {
+        let samples = u64::from(total_frames - 1) * u64::from(blocks_per_frame)
+            + u64::from(final_frame_blocks);
+        metadata.insert(
+            "APE:Duration".to_string(),
+            TagValue::new_string(convert_duration(samples as f64 / f64::from(sample_rate))),
+        );
+    }
 
     Ok(())
 }

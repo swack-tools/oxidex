@@ -92,6 +92,40 @@ fn printed_integer(value: &str) -> Option<i64> {
     })
 }
 
+/// ExifTool's `ConvertBitrate`: scale by 1000 through bps/kbps/Mbps/Gbps,
+/// then use `%.3g` below 100 and `%.0f` otherwise.
+fn convert_bitrate(bitrate: f64) -> String {
+    const UNITS: [&str; 4] = ["bps", "kbps", "Mbps", "Gbps"];
+    let mut value = bitrate;
+    for (index, unit) in UNITS.iter().enumerate() {
+        if value >= 1000.0 && index + 1 < UNITS.len() {
+            value /= 1000.0;
+            continue;
+        }
+        return if value < 100.0 {
+            format!("{} {unit}", format_significant_3(value))
+        } else {
+            format!("{value:.0} {unit}")
+        };
+    }
+    unreachable!("the bitrate unit list is non-empty")
+}
+
+/// Perl's `%.3g`, without exponential notation for the values ConvertBitrate
+/// receives after unit scaling.
+fn format_significant_3(value: f64) -> String {
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    let magnitude = value.abs().log10().floor() as i32;
+    let decimals = (2 - magnitude).max(0) as usize;
+    let rendered = format!("{value:.decimals$}");
+    rendered
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+}
+
 fn canon_exposure_mode(value: &str) -> Option<i64> {
     Some(match value {
         "Easy" => 0,
@@ -456,6 +490,19 @@ fn canon_sensor_diag(xres: Option<&str>, yres: Option<&str>) -> Option<f64> {
 #[must_use]
 pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
     match (module, name) {
+        // QuickTime.pm:8653-8665:
+        // `int(MediaDataSize * 8 / (Duration / TimeScale) + 0.5)` followed
+        // by `ConvertBitrate`. `Duration` reaches this layer in its unrounded
+        // ValueConv form, so its displayed `29.05 s` form is never reused.
+        ("QuickTime", "AvgBitrate") => {
+            let (size, duration) = (f(get(i, 0))?, f(get(i, 1))?);
+            if duration <= 0.0 {
+                return None;
+            }
+            let bitrate = (size * 8.0 / duration + 0.5).floor();
+            Computed::new(bitrate.to_string(), convert_bitrate(bitrate))
+        }
+
         // require: ImageWidth, ImageHeight
         // desire:  ExifImageWidth, ExifImageHeight, RawImageCroppedSize
         // ValueConv picks Exif dimensions only for a few TIFF-based RAW types;

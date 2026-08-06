@@ -157,6 +157,10 @@ impl FormatParser for ICOParser {
                 TagValue::String(max_bits.to_string()),
             );
             metadata.insert(
+                "BitsPerPixel".to_string(),
+                TagValue::String(max_bits.to_string()),
+            );
+            metadata.insert(
                 "AvailableSizes".to_string(),
                 TagValue::String(available_sizes),
             );

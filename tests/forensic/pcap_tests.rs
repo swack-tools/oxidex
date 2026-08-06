@@ -128,7 +128,11 @@ fn create_pcap_with_packets(
 }
 
 /// Creates a minimal valid PCAP-NG file with Interface Description Block
-fn create_pcapng_with_idb(link_type: u16, interface_name: Option<&str>) -> Vec<u8> {
+fn create_pcapng_with_idb(
+    link_type: u16,
+    interface_name: Option<&str>,
+    operating_system: Option<&str>,
+) -> Vec<u8> {
     let mut data = Vec::new();
 
     // Section Header Block (SHB)
@@ -188,6 +192,16 @@ fn create_pcapng_with_idb(link_type: u16, interface_name: Option<&str>) -> Vec<u
         }
     }
 
+    if let Some(os) = operating_system {
+        // Option code: 12 (if_os)
+        idb_data.extend_from_slice(&12u16.to_le_bytes());
+        let os_len = os.len();
+        let padded_len = os_len.div_ceil(4) * 4;
+        idb_data.extend_from_slice(&(os_len as u16).to_le_bytes());
+        idb_data.extend_from_slice(os.as_bytes());
+        idb_data.resize(idb_data.len() + padded_len - os_len, 0);
+    }
+
     // End of options (option code 0, length 0)
     idb_data.extend_from_slice(&0u16.to_le_bytes());
     idb_data.extend_from_slice(&0u16.to_le_bytes());
@@ -201,6 +215,33 @@ fn create_pcapng_with_idb(link_type: u16, interface_name: Option<&str>) -> Vec<u
 
     // IDB block length again (at end)
     data.extend_from_slice(&idb_length.to_le_bytes());
+
+    data
+}
+
+/// Creates a PCAP-NG Section Header Block with the standard operating-system option.
+fn create_pcapng_with_operating_system(operating_system: &str) -> Vec<u8> {
+    let mut data = Vec::new();
+    let padded_len = operating_system.len().div_ceil(4) * 4;
+    let block_length = 36 + padded_len as u32;
+
+    data.extend_from_slice(&0x0a0d0d0au32.to_le_bytes());
+    data.extend_from_slice(&block_length.to_le_bytes());
+    data.extend_from_slice(&0x1a2b3c4du32.to_le_bytes());
+    data.extend_from_slice(&1u16.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&u64::MAX.to_le_bytes());
+
+    // shb_os (option 3)
+    data.extend_from_slice(&3u16.to_le_bytes());
+    data.extend_from_slice(&(operating_system.len() as u16).to_le_bytes());
+    data.extend_from_slice(operating_system.as_bytes());
+    data.resize(data.len() + padded_len - operating_system.len(), 0);
+
+    // End of options and repeated block length.
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&block_length.to_le_bytes());
 
     data
 }
@@ -448,6 +489,48 @@ fn test_pcap_nanosecond() {
 // PCAP-NG Tests
 // ============================================================================
 
+/// The standard SHB operating-system option uses ExifTool's OperatingSystem name.
+#[test]
+fn test_pcapng_operating_system() {
+    let reader = TestReader::new(create_pcapng_with_operating_system(
+        "64-bit Windows 10 (1809), build 17763",
+    ));
+
+    let metadata = PCAPParser
+        .parse(&reader)
+        .expect("Failed to parse PCAP-NG operating-system option");
+
+    assert_eq!(
+        metadata.get("OperatingSystem"),
+        Some(&TagValue::String(
+            "64-bit Windows 10 (1809), build 17763".to_string()
+        )),
+        "PCAP-NG shb_os must use ExifTool's OperatingSystem tag name"
+    );
+}
+
+/// The standard IDB operating-system option uses ExifTool's OperatingSystem name.
+#[test]
+fn test_pcapng_interface_operating_system() {
+    let reader = TestReader::new(create_pcapng_with_idb(
+        1,
+        None,
+        Some("64-bit Windows 10 (1809), build 17763"),
+    ));
+
+    let metadata = PCAPParser
+        .parse(&reader)
+        .expect("Failed to parse PCAP-NG interface operating-system option");
+
+    assert_eq!(
+        metadata.get("OperatingSystem"),
+        Some(&TagValue::String(
+            "64-bit Windows 10 (1809), build 17763".to_string()
+        )),
+        "PCAP-NG if_os must use ExifTool's OperatingSystem tag name"
+    );
+}
+
 /// Test 7: PCAP-NG with Ethernet Interface Description Block
 ///
 /// Verifies:
@@ -455,7 +538,7 @@ fn test_pcap_nanosecond() {
 /// - LinkTypeName is "Ethernet" for IDB link type 1
 #[test]
 fn test_pcapng_ethernet() {
-    let data = create_pcapng_with_idb(1, Some("eth0"));
+    let data = create_pcapng_with_idb(1, Some("eth0"), None);
 
     let reader = TestReader::new(data);
     let parser = PCAPParser;
@@ -481,7 +564,7 @@ fn test_pcapng_ethernet() {
 /// - LinkTypeName is "IEEE 802.11 (WiFi)" for IDB link type 105
 #[test]
 fn test_pcapng_wifi() {
-    let data = create_pcapng_with_idb(105, Some("wlan0"));
+    let data = create_pcapng_with_idb(105, Some("wlan0"), None);
 
     let reader = TestReader::new(data);
     let parser = PCAPParser;
@@ -508,7 +591,7 @@ fn test_pcapng_wifi() {
 /// - Option parsing handles padded strings correctly
 #[test]
 fn test_pcapng_interface_name() {
-    let data = create_pcapng_with_idb(1, Some("eth0"));
+    let data = create_pcapng_with_idb(1, Some("eth0"), None);
 
     let reader = TestReader::new(data);
     let parser = PCAPParser;
@@ -537,7 +620,7 @@ fn test_pcapng_multiple_link_types() {
     ];
 
     for (link_type, expected_name) in test_cases {
-        let data = create_pcapng_with_idb(link_type, None);
+        let data = create_pcapng_with_idb(link_type, None, None);
         let reader = TestReader::new(data);
         let parser = PCAPParser;
 

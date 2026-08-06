@@ -569,6 +569,9 @@ fn extract_movie_header(mvhd: &Atom, metadata: &mut MetadataMap) -> Result<(), S
         "QuickTime:Duration".to_string(),
         TagValue::String(format!("{:.2} s", duration_sec)),
     );
+    // QuickTime's `AvgBitrate` composite consumes the unrounded ValueConv
+    // duration, not the two-decimal PrintConv displayed above.
+    metadata.set_value_form("QuickTime:Duration", duration_sec.to_string());
 
     // Preferred rate (fixed-point 16.16)
     if let Some(rate) = r.i32_at(rate_offset) {

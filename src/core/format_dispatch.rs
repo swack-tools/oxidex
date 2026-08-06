@@ -14,10 +14,12 @@ use crate::parsers::archive::tar::parse_tar_metadata;
 use crate::parsers::archive::zip::parse_zip_metadata;
 use crate::parsers::audio::aac::parse_aac_metadata;
 use crate::parsers::audio::ape::parse_ape_metadata;
+use crate::parsers::audio::dss::parse_dss_metadata;
 use crate::parsers::audio::flac::parse_flac_metadata;
 use crate::parsers::audio::mp3::parse_mp3_metadata;
 use crate::parsers::audio::ogg::parse_ogg_metadata;
 use crate::parsers::audio::opus::parse_opus_metadata;
+use crate::parsers::audio::ram::parse_ram_metadata;
 use crate::parsers::audio::wav::parse_wav_metadata;
 use crate::parsers::document::eml::parse_eml_metadata;
 use crate::parsers::document::epub::parse_epub_metadata;
@@ -51,6 +53,7 @@ use crate::parsers::image::jxl::parse_jxl_metadata;
 use crate::parsers::image::psd::parse_psd_metadata;
 use crate::parsers::image::svg::parse_svg_metadata;
 use crate::parsers::image::webp::parse_webp_metadata;
+use crate::parsers::image::wpg::parse_wpg_metadata;
 use crate::parsers::macho::parse_macho_metadata;
 use crate::parsers::pdf::parse_pdf_metadata;
 use crate::parsers::pe::parse_pe_metadata;
@@ -134,6 +137,8 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::OGG => convert_string_error(parse_ogg_metadata(reader), "OGG"),
         FileFormat::OPUS => convert_string_error(parse_opus_metadata(reader), "Opus"),
         FileFormat::APE => convert_string_error(parse_ape_metadata(reader), "APE"),
+        FileFormat::RAM => convert_string_error(parse_ram_metadata(reader), "RAM"),
+        FileFormat::DSS => convert_string_error(parse_dss_metadata(reader), "DSS"),
         FileFormat::ZIP => convert_string_error(parse_zip_metadata(reader), "ZIP"),
         FileFormat::DOCX => convert_string_error(parse_docx_metadata(reader), "DOCX"),
         FileFormat::XLSX => convert_string_error(parse_xlsx_metadata(reader), "XLSX"),
@@ -166,6 +171,7 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::SVG => convert_string_error(parse_svg_metadata(reader), "SVG"),
         FileFormat::ICO => convert_string_error(parse_ico_metadata(reader), "ICO"),
         FileFormat::PSD => convert_string_error(parse_psd_metadata(reader), "PSD"),
+        FileFormat::WPG => convert_string_error(parse_wpg_metadata(reader), "WPG"),
         FileFormat::DJVU => convert_string_error(parse_djvu_metadata(reader), "DjVu"),
         // Specialized formats
         FileFormat::ELF => convert_string_error(parse_elf_metadata(reader), "ELF"),
