@@ -1490,6 +1490,21 @@ pub fn process_dji_thermal_segments(segments: &[Segment], metadata: &mut Metadat
                 TagValue::String(format!("{temperature:.1} C")),
             );
         }
+
+        let humidity =
+            decode_binary_table(table, &data[table_offset..], crate::io::ByteOrder::Little)
+                .into_iter()
+                .find(|field| field.field.name == "RelativeHumidity")
+                .and_then(|field| match field.raw {
+                    DecodedValue::Float(value) => Some(value),
+                    _ => None,
+                });
+        if let Some(humidity) = humidity {
+            metadata.insert(
+                "APP4:RelativeHumidity".to_string(),
+                TagValue::String(format!("{} %", humidity * 100.0)),
+            );
+        }
     }
 }
 
