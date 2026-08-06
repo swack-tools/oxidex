@@ -35,6 +35,16 @@ impl BMPParser {
         Ok((width, height))
     }
 
+    /// Reads the number of color planes from the DIB header (offset 26, 2 bytes).
+    pub fn read_planes(reader: &dyn FileReader) -> Result<u16> {
+        if reader.size() < 28 {
+            return Ok(0);
+        }
+        let planes = reader.read(26, 2)?;
+        let endian_reader = EndianReader::little_endian(planes);
+        Ok(endian_reader.u16_at(0).unwrap_or(0))
+    }
+
     /// Reads bit depth from BMP header (offset 28, 2 bytes)
     pub fn read_bit_depth(reader: &dyn FileReader) -> Result<u16> {
         if reader.size() < 30 {
@@ -131,6 +141,9 @@ impl FormatParser for BMPParser {
             "BMP:Height".to_string(),
             TagValue::Integer(abs_height as i64),
         );
+
+        let planes = Self::read_planes(reader)?;
+        metadata.insert("Planes".to_string(), TagValue::Integer(planes as i64));
 
         let bit_depth = Self::read_bit_depth(reader)?;
         metadata.insert(
