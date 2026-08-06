@@ -126,6 +126,7 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         "Saturation" => "EXIF:Saturation",
         "FlashpixVersion" => "EXIF:FlashpixVersion",
         "CompressedBitsPerPixel" => "EXIF:CompressedBitsPerPixel",
+        "SubjectDistance" => "EXIF:SubjectDistance",
         "RelatedSoundFile" => "EXIF:RelatedSoundFile",
         "SubjectDistanceRange" => "EXIF:SubjectDistanceRange",
         "ComponentsConfiguration" => "EXIF:ComponentsConfiguration",
@@ -995,8 +996,7 @@ fn parse_rational(tag_name: &str, raw: &str) -> Result<TagValue> {
     }
     // Exif.pm 13.59 0x9206 PrintConvInv removes the optional whitespace and
     // trailing metres suffix from SubjectDistance before rationalizing it.
-    let raw = if tag_name.rsplit_once(':').map_or(tag_name, |(_, name)| name) == "SubjectDistance"
-    {
+    let raw = if tag_name.rsplit_once(':').map_or(tag_name, |(_, name)| name) == "SubjectDistance" {
         raw.strip_suffix('m').map(str::trim_end).unwrap_or(raw)
     } else {
         raw
@@ -2319,7 +2319,11 @@ mod tests {
 
     #[test]
     fn subject_distance_accepts_exiftools_printed_meter_suffix() {
-        for tag in ["SubjectDistance", "EXIF:SubjectDistance", "ExifIFD:SubjectDistance"] {
+        for tag in [
+            "SubjectDistance",
+            "EXIF:SubjectDistance",
+            "ExifIFD:SubjectDistance",
+        ] {
             assert_eq!(
                 parse(tag, "1.5 m").unwrap(),
                 TagValue::Rational {
