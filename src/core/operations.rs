@@ -528,6 +528,7 @@ fn canonical_write_tag_name(tag_name: &str) -> &str {
         "Software" => "IFD0:Software",
         "DocumentName" => "IFD0:DocumentName",
         "PageNumber" => "IFD0:PageNumber",
+        "MakerNoteSafety" => "IFD0:MakerNoteSafety",
         "ModifyDate" => "IFD0:ModifyDate",
         "DateTimeOriginal" => "ExifIFD:DateTimeOriginal",
         "ApertureValue" => "ExifIFD:ApertureValue",
@@ -1231,6 +1232,18 @@ mod tests {
         assert_eq!(
             canonical_write_tag_name("IFD0:PageNumber"),
             "IFD0:PageNumber"
+        );
+    }
+
+    #[test]
+    fn bare_maker_note_safety_write_targets_ifd0() {
+        assert_eq!(
+            canonical_write_tag_name("MakerNoteSafety"),
+            "IFD0:MakerNoteSafety"
+        );
+        assert_eq!(
+            canonical_write_tag_name("IFD0:MakerNoteSafety"),
+            "IFD0:MakerNoteSafety"
         );
     }
 

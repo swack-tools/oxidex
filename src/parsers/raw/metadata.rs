@@ -2170,6 +2170,9 @@ fn format_exif_display_value(
             .as_string()
             .map(str::to_string)
         }
+        // TIFF-EPStandardID: BYTE[n]. Exif.pm has the same PrintConv for its
+        // two historical IDs (0x9216 and 0xA216): `$val =~ tr/ /./; $val`.
+        0x9216 | 0xA216 if field_type == 1 => format_tiff_ep_standard_id(bytes, value_count),
         // ComponentsConfiguration: UNDEFINED[4].
         0x9101 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
@@ -7814,6 +7817,18 @@ mod backlog_group_1_printconv_tests {
             Some("2.1")
         );
         assert_eq!(format_tiff_ep_standard_id(&[1, 0, 0, 0], 0), None);
+    }
+
+    #[test]
+    fn exif_tiff_ep_standard_id_print_conv_covers_both_duplicate_ids() {
+        for tag_id in [0x9216, 0xA216] {
+            assert_eq!(
+                format_exif_display_value(tag_id, &[1, 0, 0, 0], 1, 4, ByteOrder::BigEndian)
+                    .as_deref(),
+                Some("1.0.0.0"),
+                "tag 0x{tag_id:04X}"
+            );
+        }
     }
 
     // ---- CFARepeatPatternDim (Exif.pm:1751, Count => 2) ------------------

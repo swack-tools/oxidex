@@ -46,6 +46,18 @@ pub fn raw_bytes_to_tag_value(
     tag_id: u16,
     byte_order: ByteOrder,
 ) -> TagValue {
+    // Exif.pm 13.59 tag 0xA20C applies `PrintSFR` to its opaque payload.
+    // The header and rational matrix are both byte-order-dependent, so this
+    // must happen while the TIFF reader's byte order is still available.
+    // Invalid payloads deliberately fall through as binary data, just as
+    // PrintSFR returns its original value when the structure does not check
+    // out.
+    if tag_id == 0xA20C
+        && let Some(value) = format_spatial_frequency_response(bytes, byte_order)
+    {
+        return TagValue::new_string(value);
+    }
+
     // Exif.pm 13.59 declares SampleFormat as a four-element PrintConv array,
     // with the same `%sampleFormat` enum table repeated for each pixel sample.
     // ExifTool splits the SHORT list, converts each of those four values, and
@@ -176,6 +188,68 @@ pub fn raw_bytes_to_tag_value(
 
     // Fallback heuristic conversion for unknown types or when type-specific logic doesn't apply
     heuristic_bytes_to_tag_value(bytes, byte_order)
+}
+
+/// Ports ExifTool 13.59's `Exif::PrintSFR` exactly.
+///
+/// The first two unsigned shorts are the number of column labels and rows.
+/// They are followed by NUL-separated labels and a column-major matrix of
+/// unsigned rational values at the end of the payload.
+fn format_spatial_frequency_response(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
+    if bytes.len() <= 4 {
+        return None;
+    }
+
+    let column_count = usize::from(read_u16(bytes.get(..2)?, byte_order));
+    let row_count = usize::from(read_u16(bytes.get(2..4)?, byte_order));
+    let matrix_len = column_count.checked_mul(row_count)?.checked_mul(8)?;
+    let matrix_offset = bytes.len().checked_sub(matrix_len)?;
+
+    // PrintSFR requires the matrix to leave the four-byte header intact.
+    if matrix_offset < 4 {
+        return None;
+    }
+
+    // Perl's `split /\0/, ..., $n + 1` must find all `n` separators. The last
+    // field is discarded because it is the data after the final label.
+    let mut labels = bytes[4..]
+        .splitn(column_count.checked_add(1)?, |byte| *byte == 0)
+        .collect::<Vec<_>>();
+    if labels.len() != column_count.checked_add(1)? {
+        return None;
+    }
+    labels.pop();
+
+    let labels = labels
+        .into_iter()
+        .map(|label| std::str::from_utf8(label).ok())
+        .collect::<Option<Vec<_>>>()?;
+
+    let mut columns = Vec::with_capacity(column_count);
+    for (column, label) in labels.into_iter().enumerate() {
+        let mut rows = Vec::with_capacity(row_count);
+        for row in 0..row_count {
+            let entry = column.checked_add(row.checked_mul(column_count)?)?;
+            let offset = matrix_offset.checked_add(entry.checked_mul(8)?)?;
+            let numerator = read_u32(bytes.get(offset..offset.checked_add(4)?)?, byte_order);
+            let denominator = read_u32(
+                bytes.get(offset.checked_add(4)?..offset.checked_add(8)?)?,
+                byte_order,
+            );
+            rows.push(if denominator == 0 {
+                if numerator == 0 {
+                    "undef".to_string()
+                } else {
+                    "inf".to_string()
+                }
+            } else {
+                exiftool_rational_number(numerator as f64 / denominator as f64)
+            });
+        }
+        columns.push(format!("{label}={}", rows.join(",")));
+    }
+
+    Some(columns.join("; "))
 }
 
 fn format_sample_format(bytes: &[u8], value_count: u32, byte_order: ByteOrder) -> Option<String> {
@@ -2086,5 +2160,61 @@ mod tests {
         for len in 0..8 {
             let _ = raw_bytes_to_tag_value(&vec![0u8; len], 12, 1, RAW_TO_PREVIEW_GAIN, order);
         }
+    }
+
+    /// Exif.pm 13.59 `PrintSFR` uses a column-major unsigned-rational matrix
+    /// after the NUL-separated labels. Check both TIFF byte orders because the
+    /// PrintConv reads its shorts and rationals through ExifTool's active
+    /// byte-order accessors.
+    #[test]
+    fn spatial_frequency_response_matches_pinned_exiftool_printsfr() {
+        for order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let mut bytes = Vec::new();
+            match order {
+                ByteOrder::LittleEndian => {
+                    bytes.extend_from_slice(&2u16.to_le_bytes());
+                    bytes.extend_from_slice(&2u16.to_le_bytes());
+                }
+                ByteOrder::BigEndian => {
+                    bytes.extend_from_slice(&2u16.to_be_bytes());
+                    bytes.extend_from_slice(&2u16.to_be_bytes());
+                }
+            }
+            bytes.extend_from_slice(b"Red\0Blue\0");
+
+            // PrintSFR indexes as i + j*n: Red = 1.5,3 and Blue = 2.25,4.
+            for (numerator, denominator) in [(3u32, 2u32), (9, 4), (3, 1), (4, 1)] {
+                match order {
+                    ByteOrder::LittleEndian => {
+                        bytes.extend_from_slice(&numerator.to_le_bytes());
+                        bytes.extend_from_slice(&denominator.to_le_bytes());
+                    }
+                    ByteOrder::BigEndian => {
+                        bytes.extend_from_slice(&numerator.to_be_bytes());
+                        bytes.extend_from_slice(&denominator.to_be_bytes());
+                    }
+                }
+            }
+
+            assert_eq!(
+                raw_bytes_to_tag_value(&bytes, 7, bytes.len() as u32, 0xA20C, order).as_string(),
+                Some("Red=1.5,3; Blue=2.25,4"),
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_spatial_frequency_response_stays_binary() {
+        let bytes = [1, 0, 1, 0, b'X']; // Missing the label terminator and matrix.
+        assert_eq!(
+            raw_bytes_to_tag_value(
+                &bytes,
+                7,
+                bytes.len() as u32,
+                0xA20C,
+                ByteOrder::LittleEndian
+            ),
+            TagValue::Binary(bytes.to_vec())
+        );
     }
 }
