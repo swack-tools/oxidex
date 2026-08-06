@@ -202,6 +202,7 @@ pub fn format_scene_capture_type(value: i64) -> String {
         1 => "Landscape".to_string(),
         2 => "Portrait".to_string(),
         3 => "Night".to_string(),
+        4 => "Other".to_string(),
         _ => format!("Unknown ({})", value),
     }
 }
@@ -696,6 +697,11 @@ mod tests {
         assert_eq!(format_light_source(25), "Daylight");
         assert_eq!(format_light_source(26), "Day White");
         assert_eq!(format_light_source(34), "Warm White LED");
+    }
+
+    #[test]
+    fn scene_capture_type_includes_samsung_other_value() {
+        assert_eq!(format_scene_capture_type(4), "Other");
     }
 
     #[test]
