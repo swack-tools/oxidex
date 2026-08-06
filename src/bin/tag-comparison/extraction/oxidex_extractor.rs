@@ -367,9 +367,21 @@ impl OxiDexExtractor {
                     }
                 }
 
-                // Copyright and similar text tags - trim whitespace and null bytes to match ExifTool
-                // ExifTool trims empty copyright strings to empty
-                if name == "Copyright" || name == "Artist" || name == "ImageDescription" {
+                // ImageDescription has no Exif.pm RawConv: normal ExifTool
+                // display retains meaningful leading whitespace while
+                // suppressing trailing ASCII padding.
+                if name == "ImageDescription" {
+                    return s
+                        .trim_end_matches('\0')
+                        .trim_end()
+                        .trim_end_matches('\0')
+                        .to_string();
+                }
+
+                // Copyright and Artist text tags - trim whitespace and null
+                // bytes to match ExifTool. ExifTool trims empty copyright
+                // strings to empty.
+                if name == "Copyright" || name == "Artist" {
                     // Trim null bytes and whitespace
                     let trimmed = s
                         .trim_end_matches('\0')
@@ -1301,6 +1313,21 @@ mod tests {
         let (tags, collisions) = extractor.flatten_metadata(&metadata, None);
         assert_eq!(tags.len(), 0);
         assert!(collisions.is_empty());
+    }
+
+    /// ExifTool 13.59 preserves leading whitespace in IFD0:ImageDescription.
+    /// Its normal display path suppresses only trailing ASCII padding.
+    #[test]
+    fn image_description_preserves_leading_whitespace() {
+        let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
+        assert_eq!(
+            extractor.format_value(
+                "IFD0:ImageDescription",
+                "ImageDescription",
+                &TagValue::String("  leading description  ".to_string()),
+            ),
+            "  leading description"
+        );
     }
 
     #[test]

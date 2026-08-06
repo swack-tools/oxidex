@@ -127,6 +127,33 @@ mod print_im_dispatch_tests {
 }
 
 #[cfg(test)]
+mod software_tests {
+    use super::*;
+    use crate::test_support::TestReader;
+
+    #[test]
+    fn software_trims_trailing_whitespace_like_exiftool() {
+        // ExifTool 13.59 Exif.pm 0x0131 uses
+        // `$val =~ s/\s+$//; $$self{Software} = $val`.  The whitespace here
+        // is part of the on-disk ASCII value, before its NUL terminator.
+        let software = b"Capture One \t\n\0";
+        let mut tiff = b"II\x2a\0\x08\0\0\0\x01\0".to_vec();
+        tiff.extend_from_slice(&0x0131u16.to_le_bytes());
+        tiff.extend_from_slice(&2u16.to_le_bytes()); // ASCII
+        tiff.extend_from_slice(&(software.len() as u32).to_le_bytes());
+        tiff.extend_from_slice(&26u32.to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
+        tiff.extend_from_slice(software);
+
+        let reader = TestReader::new(tiff);
+        let mut metadata = MetadataMap::new();
+        parse_ifd_chain(&reader, 8, ByteOrder::LittleEndian, &mut metadata).unwrap();
+
+        assert_eq!(metadata.get_string("IFD0:Software"), Some("Capture One"));
+    }
+}
+
+#[cfg(test)]
 mod tile_offsets_tests {
     use super::*;
     use crate::test_support::TestReader;

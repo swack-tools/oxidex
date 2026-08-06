@@ -544,6 +544,19 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
         return TagValue::String(format_resolution_unit(i));
     }
 
+    // FillOrder (Exif.pm 13.59 tag 0x010a) maps the two defined SHORT codes.
+    // Keep unnamed values raw: its PrintConv table has no invented fallback.
+    if base_name == "FillOrder"
+        && let Some(i) = value.as_integer()
+        && let Some(label) = match i {
+            1 => Some("Normal"),
+            2 => Some("Reversed"),
+            _ => None,
+        }
+    {
+        return TagValue::String(label.to_string());
+    }
+
     // YCbCrPositioning enum (1=Centered, 2=Co-sited)
     if base_name == "YCbCrPositioning"
         && let Some(i) = value.as_integer()
@@ -1840,6 +1853,23 @@ mod tests {
                 "GrayResponseUnit {code} did not reach Exif.pm's PrintConv"
             );
         }
+    }
+
+    /// ExifTool 13.59 `Exif.pm` tag 0x010a maps the stored SHORT values to
+    /// `Normal` and `Reversed`. The TIFF enum table already knew these labels,
+    /// but this central compatibility path did not send FillOrder through it.
+    #[test]
+    fn fill_order_reaches_the_print_conv() {
+        for (code, expected) in [(1i64, "Normal"), (2, "Reversed")] {
+            assert_eq!(
+                format_tag_value("IFD0:FillOrder", &TagValue::new_integer(code)),
+                TagValue::String(expected.to_string()),
+                "FillOrder {code} did not reach Exif.pm's PrintConv"
+            );
+        }
+
+        let unknown = TagValue::new_integer(3);
+        assert_eq!(format_tag_value("IFD0:FillOrder", &unknown), unknown);
     }
 
     /// Flash reaches the hash, and unnamed codes come back in hex.
