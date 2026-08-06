@@ -178,6 +178,13 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         ("EXIF:CustomRendered" | "ExifIFD:CustomRendered", "Panorama") => "6",
         ("EXIF:CustomRendered" | "ExifIFD:CustomRendered", "Portrait HDR") => "7",
         ("EXIF:CustomRendered" | "ExifIFD:CustomRendered", "Portrait") => "8",
+        // Exif.pm 0xa407 stores int16u values and exposes these PrintConv
+        // labels. Invert them before generic integer parsing.
+        ("EXIF:GainControl" | "ExifIFD:GainControl", "None") => "0",
+        ("EXIF:GainControl" | "ExifIFD:GainControl", "Low gain up") => "1",
+        ("EXIF:GainControl" | "ExifIFD:GainControl", "High gain up") => "2",
+        ("EXIF:GainControl" | "ExifIFD:GainControl", "Low gain down") => "3",
+        ("EXIF:GainControl" | "ExifIFD:GainControl", "High gain down") => "4",
         ("GPS:GPSStatus", "Measurement Active") => "A",
         ("GPS:GPSStatus", "Measurement Void") => "V",
         ("GPS:GPSMeasureMode", "2-Dimensional Measurement") => "2",
@@ -1397,6 +1404,23 @@ mod tests {
             ("Portrait", 8),
         ];
         for tag in ["EXIF:CustomRendered", "ExifIFD:CustomRendered"] {
+            for (printed, raw) in cases {
+                assert_eq!(parse(tag, printed).unwrap(), TagValue::Integer(raw));
+            }
+        }
+    }
+
+    #[test]
+    fn gain_control_printed_values_are_inverted_to_tiff_codes() {
+        // ExifTool 13.59 Exif.pm 0xa407 PrintConv.
+        let cases = [
+            ("None", 0),
+            ("Low gain up", 1),
+            ("High gain up", 2),
+            ("Low gain down", 3),
+            ("High gain down", 4),
+        ];
+        for tag in ["EXIF:GainControl", "ExifIFD:GainControl"] {
             for (printed, raw) in cases {
                 assert_eq!(parse(tag, printed).unwrap(), TagValue::Integer(raw));
             }
