@@ -82,6 +82,17 @@ pub fn raw_bytes_to_tag_value(
         return TagValue::new_string(text);
     }
 
+    // Exif.pm 0xc6d3 (`PanasonicTitle2`) is physically UNDEFINED but
+    // explicitly overrides its format to string. PanasonicDMC-TZ57.jpg
+    // stores a NUL-padded timestamp in this 128-byte field.
+    if tag_id == 0xC6D3 && field_type == 7 {
+        let decoded = String::from_utf8_lossy(bytes);
+        let text = decoded.split('\0').next().unwrap_or_default();
+        if !text.is_empty() {
+            return TagValue::new_string(text);
+        }
+    }
+
     // Exif.pm 0x9287 (`LearningOptOutIn`) is a variable-length int16u
     // sequence. The first value is a pair count; each following usage/choice
     // value alternates between the two exact PrintConv maps.
