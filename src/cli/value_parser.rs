@@ -150,6 +150,11 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         ("EXIF:YCbCrPositioning", "Co-sited") => "2",
         _ => raw,
     };
+    let raw = if matches!(tag_name, "ExifIFD:Saturation" | "EXIF:Saturation") {
+        invert_exif_parameter(tag_name, raw)?
+    } else {
+        raw
+    };
     let raw = if declared_tag_name.rsplit(':').next() == Some("MeteringMode") {
         match raw {
             "Unknown" => "0",
@@ -195,6 +200,33 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
             tag_name,
             "Structured values cannot be set from the command line",
         )),
+    }
+}
+
+/// Inverts Exif.pm's `ConvertParameter`, used by EXIF Saturation (0xa409).
+fn invert_exif_parameter<'a>(tag_name: &str, raw: &'a str) -> Result<&'a str> {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    static NORMAL: OnceLock<Regex> = OnceLock::new();
+    static LOW: OnceLock<Regex> = OnceLock::new();
+    static HIGH: OnceLock<Regex> = OnceLock::new();
+    let normal = NORMAL.get_or_init(|| Regex::new(r"(?i)\bn").expect("valid parameter regex"));
+    let low = LOW.get_or_init(|| Regex::new(r"(?i)\b[sl]").expect("valid parameter regex"));
+    let high = HIGH.get_or_init(|| Regex::new(r"(?i)\bh").expect("valid parameter regex"));
+    let numeric = as_float_text(raw).and_then(|text| text.parse::<f64>().ok());
+
+    if normal.is_match(raw) || numeric == Some(0.0) {
+        Ok("0")
+    } else if low.is_match(raw) || numeric.is_some_and(|value| value < 0.0) {
+        Ok("1")
+    } else if high.is_match(raw) || numeric.is_some() {
+        Ok("2")
+    } else {
+        Err(invalid(
+            tag_name,
+            "Can't convert Saturation value (not in PrintConv)",
+        ))
     }
 }
 
@@ -835,6 +867,27 @@ mod tests {
             TagValue::Integer(0x38)
         );
         assert!(parse("Flash", "25").is_err());
+    }
+
+    #[test]
+    fn exif_saturation_uses_convert_parameter_inverse() {
+        for (raw, expected) in [
+            ("Normal", 0),
+            ("Low", 1),
+            ("Soft", 1),
+            ("High", 2),
+            ("Hard", 2),
+            ("0", 0),
+            ("-1", 1),
+            ("1", 2),
+        ] {
+            assert_eq!(
+                parse("ExifIFD:Saturation", raw).unwrap(),
+                TagValue::Integer(expected),
+                "input {raw}"
+            );
+        }
+        assert!(parse("EXIF:Saturation", "invalid").is_err());
     }
 
     // -- Rational, Writer.pl:6888-6903 + 5200-5228 --------------------------
