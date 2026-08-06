@@ -488,7 +488,8 @@ mod tests {
     fn split_property_line_ignores_colons_inside_quoted_params() {
         // RFC 5545 quoted parameter values may contain ":" (e.g. a "ldap:"
         // URI), which must not be mistaken for the property/value delimiter.
-        let line = r#"ORGANIZER;CN="Doe, John";DIR="ldap:ldap.example.com":mailto:jdoe@example.com"#;
+        let line =
+            r#"ORGANIZER;CN="Doe, John";DIR="ldap:ldap.example.com":mailto:jdoe@example.com"#;
         let (name_and_params, value) =
             ICSParser::split_property_line(line).expect("line should split");
         assert_eq!(
