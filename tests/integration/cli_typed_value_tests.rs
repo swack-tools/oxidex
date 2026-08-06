@@ -32,6 +32,7 @@ const ORIENTATION: u16 = 0x0112;
 const X_RESOLUTION: u16 = 0x011A;
 const ARTIST: u16 = 0x013B;
 const GPS_MEASURE_MODE: u16 = 0x000A;
+const GPS_DIFFERENTIAL: u16 = 0x001E;
 
 fn oxidex(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_oxidex"))
@@ -193,6 +194,32 @@ fn jpeg_gps_measure_mode_display_value_is_serialized_as_its_exif_code() {
     assert_eq!(entry.field_type, ASCII);
     assert_eq!(entry.count, 2);
     assert_eq!(entry.value, b"2\0");
+}
+
+#[test]
+fn jpeg_gps_differential_display_value_is_serialized_as_its_exif_code() {
+    // GPS.pm 0x001e's PrintConv maps raw int16u 0 to this display value.
+    // The writer must store the tag's numeric value rather than trying to
+    // parse the label as a generic integer.
+    let file = write_to_copy(JPEG_FIXTURE, ".jpg", "-GPS:GPSDifferential=No Correction");
+    let entry = jpeg_entry(file.path(), IfdKind::Gps, GPS_DIFFERENTIAL);
+    assert_eq!(entry.field_type, SHORT);
+    assert_eq!(entry.count, 1);
+    assert_eq!(entry.value, &[0, 0]);
+}
+
+#[test]
+fn jpeg_gps_differential_corrected_is_serialized_as_its_exif_code() {
+    // GPS.pm 0x001e's PrintConv maps raw int16u 1 to this display value.
+    let file = write_to_copy(
+        JPEG_FIXTURE,
+        ".jpg",
+        "-GPS:GPSDifferential=Differential Corrected",
+    );
+    let entry = jpeg_entry(file.path(), IfdKind::Gps, GPS_DIFFERENTIAL);
+    assert_eq!(entry.field_type, SHORT);
+    assert_eq!(entry.count, 1);
+    assert_eq!(entry.value, &[0, 1]);
 }
 
 #[test]

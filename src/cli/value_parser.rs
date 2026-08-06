@@ -78,6 +78,8 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         ("GPS:GPSDestDistanceRef", "Kilometers") => "K",
         ("GPS:GPSDestDistanceRef", "Miles") => "M",
         ("GPS:GPSDestDistanceRef", "Nautical Miles") => "N",
+        ("GPS:GPSDifferential", "No Correction") => "0",
+        ("GPS:GPSDifferential", "Differential Corrected") => "1",
         _ => raw,
     };
     let declared = get_tag_descriptor(tag_name)
