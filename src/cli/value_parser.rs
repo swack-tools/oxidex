@@ -168,6 +168,16 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         // and any signed float, collapsing them to the three stored codes.
         ("EXIF:Contrast" | "ExifIFD:Contrast", value) => invert_exif_contrast_parameter(value)
             .ok_or_else(|| invalid(tag_name, "Can't convert Contrast value (not in PrintConv)"))?,
+        // Exif.pm 0xa401 stores int16u values and defines Apple extension
+        // labels in addition to the two standard EXIF values.
+        ("EXIF:CustomRendered" | "ExifIFD:CustomRendered", "Normal") => "0",
+        ("EXIF:CustomRendered" | "ExifIFD:CustomRendered", "Custom") => "1",
+        ("EXIF:CustomRendered" | "ExifIFD:CustomRendered", "HDR (no original saved)") => "2",
+        ("EXIF:CustomRendered" | "ExifIFD:CustomRendered", "HDR (original saved)") => "3",
+        ("EXIF:CustomRendered" | "ExifIFD:CustomRendered", "Original (for HDR)") => "4",
+        ("EXIF:CustomRendered" | "ExifIFD:CustomRendered", "Panorama") => "6",
+        ("EXIF:CustomRendered" | "ExifIFD:CustomRendered", "Portrait HDR") => "7",
+        ("EXIF:CustomRendered" | "ExifIFD:CustomRendered", "Portrait") => "8",
         ("GPS:GPSStatus", "Measurement Active") => "A",
         ("GPS:GPSStatus", "Measurement Void") => "V",
         ("GPS:GPSMeasureMode", "2-Dimensional Measurement") => "2",
@@ -1367,6 +1377,26 @@ mod tests {
             ("nope", 0),
         ];
         for tag in ["EXIF:Contrast", "ExifIFD:Contrast"] {
+            for (printed, raw) in cases {
+                assert_eq!(parse(tag, printed).unwrap(), TagValue::Integer(raw));
+            }
+        }
+    }
+
+    #[test]
+    fn custom_rendered_printed_values_are_inverted_to_tiff_codes() {
+        // ExifTool 13.59 Exif.pm 0xa401, including Apple's declared values.
+        let cases = [
+            ("Normal", 0),
+            ("Custom", 1),
+            ("HDR (no original saved)", 2),
+            ("HDR (original saved)", 3),
+            ("Original (for HDR)", 4),
+            ("Panorama", 6),
+            ("Portrait HDR", 7),
+            ("Portrait", 8),
+        ];
+        for tag in ["EXIF:CustomRendered", "ExifIFD:CustomRendered"] {
             for (printed, raw) in cases {
                 assert_eq!(parse(tag, printed).unwrap(), TagValue::Integer(raw));
             }
