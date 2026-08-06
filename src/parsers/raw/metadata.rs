@@ -2149,6 +2149,18 @@ fn format_exif_display_value(
                 Some(format!("Unknown ({values})"))
             }
         }
+        // LensInfo: RATIONAL[4]. Exif.pm 0xa432 PrintConv is PrintLensInfo.
+        0xA432 if field_type == 5 && value_count == 4 => {
+            crate::core::tag_conversion::raw_bytes_to_tag_value(
+                bytes,
+                field_type,
+                value_count,
+                tag_id,
+                byte_order,
+            )
+            .as_string()
+            .map(str::to_string)
+        }
         // ComponentsConfiguration: UNDEFINED[4].
         0x9101 if field_type == 7 => {
             let count = usize::try_from(value_count).ok()?;
@@ -8182,6 +8194,20 @@ mod backlog_group_1_printconv_tests {
             )
             .as_deref(),
             Some("50mm f/1.4")
+        );
+    }
+
+    #[test]
+    fn exif_lens_info_matches_canon_raw_print_conversion() {
+        let mut lens = Vec::new();
+        for (numerator, denominator) in [(15u32, 1u32), (45, 1), (0, 1), (0, 1)] {
+            lens.extend_from_slice(&numerator.to_le_bytes());
+            lens.extend_from_slice(&denominator.to_le_bytes());
+        }
+
+        assert_eq!(
+            format_exif_display_value(0xA432, &lens, 5, 4, ByteOrder::LittleEndian).as_deref(),
+            Some("15-45mm f/0")
         );
     }
 
