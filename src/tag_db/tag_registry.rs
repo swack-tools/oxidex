@@ -960,7 +960,7 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
             TagId::new_numeric(0x0145),
             "EXIF:TileByteCounts".to_string(),
             FormatFamily::EXIF,
-            true,
+            false,
             ValueType::Integer,
             "Number of bytes in each tile".to_string(),
             vec!["512".to_string(), "1024".to_string()],
@@ -7224,6 +7224,17 @@ mod tests {
         let tag = get_tag_descriptor("EXIF:FNumber");
         assert!(tag.is_some());
         assert_eq!(tag.unwrap().value_type(), ValueType::Rational);
+    }
+
+    /// ExifTool 13.59 Exif.pm 0x0145 declares only `OffsetPair` and
+    /// `ValueConv`; without a `Writable` member this image-data bookkeeping
+    /// field is read-only. Keep the manual registry override aligned with the
+    /// generated YAML row, which already records `writable: false`.
+    #[test]
+    fn tile_byte_counts_is_read_only() {
+        let tag = get_tag_descriptor("EXIF:TileByteCounts")
+            .expect("EXIF:TileByteCounts should be registered");
+        assert!(!tag.is_writable());
     }
 
     #[test]
