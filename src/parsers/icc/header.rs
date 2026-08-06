@@ -272,7 +272,7 @@ fn extract_flags(
     let independent = if flags & 0x02 == 0 {
         "Independent"
     } else {
-        "Dependent"
+        "Not Independent"
     };
     metadata.insert(
         "CMMFlags".to_string(),
@@ -453,4 +453,34 @@ fn extract_profile_id(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cmm_flags_match_exiftool_independence_wording() {
+        let mut header = [0u8; 128];
+        header[44..48].copy_from_slice(&2u32.to_be_bytes());
+        let mut metadata = HashMap::new();
+
+        extract_flags(&header, 44, &mut metadata).unwrap();
+
+        assert_eq!(
+            metadata.get("CMMFlags"),
+            Some(&TagValue::new_string(
+                "Not Embedded, Not Independent".to_string()
+            ))
+        );
+
+        header[44..48].copy_from_slice(&0u32.to_be_bytes());
+        extract_flags(&header, 44, &mut metadata).unwrap();
+        assert_eq!(
+            metadata.get("CMMFlags"),
+            Some(&TagValue::new_string(
+                "Not Embedded, Independent".to_string()
+            ))
+        );
+    }
 }
