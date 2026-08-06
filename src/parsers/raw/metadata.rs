@@ -967,6 +967,15 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         let is_nef = matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW);
                         let is_rw2 = format == RawFormat::PanasonicRW2;
 
+                        if is_nef {
+                            extract_nef_subifd_jpg_from_raw(
+                                data,
+                                &sub_tags,
+                                byte_order,
+                                &mut metadata,
+                            );
+                        }
+
                         // DNG: StripOffsets/StripByteCounts are renamed by
                         // ExifTool in the embedded-image SubIFDs. Exif.pm 0x111
                         // (Notes, verbatim): "called StripOffsets in most
@@ -2554,8 +2563,8 @@ fn extract_panasonic_raw_distortion_info(
 /// `BabyAge2 = 9104`, which are the rebuilt offsets of 0x4D, 0x4E and 0x8010
 /// verbatim. Those entries are dropped before the block reaches the parser.
 const PANASONIC_DEREFERENCED_TAGS: &[u16] = &[
-    0x0001, 0x0002, 0x0025, 0x0026, 0x0033, 0x0052, 0x0054, 0x0065, 0x0066, 0x0067, 0x0069, 0x006B,
-    0x006D, 0x006F, 0x0080,
+    0x0001, 0x0002, 0x0025, 0x0026, 0x0033, 0x004D, 0x0052, 0x0054, 0x0065, 0x0066, 0x0067, 0x0069,
+    0x006B, 0x006D, 0x006F, 0x0080,
 ];
 
 /// Locate one IFD entry's out-of-line value inside `tiff` and return its
@@ -6099,6 +6108,50 @@ fn format_nef_subifd_tag(
         // for every TIFF-based RAW format, not just NEF.
         _ => None,
     }
+}
+
+/// Extract the image data paired with NEF SubIFD JpgFromRawStart/Length.
+///
+/// ExifTool 13.59's Exif.pm assigns tags 0x0201 and 0x0202 in a SubIFD to
+/// `DataTag => 'JpgFromRaw'`. The offset is measured from the TIFF header,
+/// which is the same base as `data` in `parse_raw_metadata`.
+fn extract_nef_subifd_jpg_from_raw(
+    data: &[u8],
+    sub_tags: &[(u16, u16, u32, impl AsRef<[u8]>)],
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    let mut offset = None;
+    let mut length = None;
+
+    for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
+        if *field_type != 4 || *value_count != 1 {
+            continue;
+        }
+        match *tag_id {
+            0x0201 => offset = read_tiff_u32(raw_bytes.as_ref(), byte_order),
+            0x0202 => length = read_tiff_u32(raw_bytes.as_ref(), byte_order),
+            _ => {}
+        }
+    }
+
+    let (Some(offset), Some(length)) = (offset, length) else {
+        return;
+    };
+    if length == 0 {
+        return;
+    }
+
+    let start = offset as usize;
+    let end = start.saturating_add(length as usize);
+    let image = match data.get(start..end) {
+        Some(bytes) => TagValue::new_binary(bytes.to_vec()),
+        None => TagValue::new_string(format!(
+            "(Binary data {} bytes, use -b option to extract)",
+            length
+        )),
+    };
+    metadata.insert("EXIF:JpgFromRaw".to_string(), image);
 }
 
 /// Format TIFF/EP tag 0x9216 (TIFF-EPStandardID).

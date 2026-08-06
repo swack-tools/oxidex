@@ -6,6 +6,7 @@
 //! Note: Tests requiring actual raw file fixtures will fail if fixtures
 //! don't exist yet - that's expected and OK for this iteration.
 
+use oxidex::core::TagValue;
 use oxidex::parsers::raw::{RawFormat, parse_raw_metadata};
 use std::fs;
 
@@ -95,6 +96,42 @@ fn test_parse_nef_metadata() {
             fixture_path
         );
     }
+}
+
+#[test]
+fn test_nef_jpg_from_raw_is_extracted_from_sub_ifd_pair() {
+    let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/Nikon.nef")
+        .expect("Nikon NEF comparison fixture should be available");
+
+    let metadata = parse_raw_metadata(&data, RawFormat::NikonNEF)
+        .expect("Nikon NEF comparison fixture should parse");
+
+    // ExifTool 13.59 Exif.pm declares the SubIFD 0x0201/0x0202 pair as
+    // DataTag => JpgFromRaw. The fixture's bytes are exactly the declared
+    // 29-byte range at its JpgFromRawStart offset.
+    assert_eq!(
+        metadata.get("EXIF:JpgFromRaw"),
+        Some(&TagValue::new_binary(
+            b"<Dummy JpgFromRaw image data>".to_vec()
+        ))
+    );
+}
+
+#[test]
+fn test_rw2_af_point_position_is_relocated_from_makernote() {
+    let data = fs::read("/tmp/oxidex-exiftool-cache/exiftool/t/images/Panasonic.rw2")
+        .expect("pinned ExifTool Panasonic RW2 fixture should be available");
+
+    let metadata = parse_raw_metadata(&data, RawFormat::PanasonicRW2)
+        .expect("Panasonic RW2 fixture should parse");
+
+    // ExifTool 13.59's Panasonic.pm defines tag 0x004d as two rational64u
+    // AF-area-center coordinates. Its exact PrintConv renders this fixture as
+    // "0.5 0.5".
+    assert_eq!(
+        metadata.get("Panasonic:AFPointPosition"),
+        Some(&TagValue::new_string("0.5 0.5".to_string()))
+    );
 }
 
 #[test]

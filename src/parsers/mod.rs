@@ -33,6 +33,7 @@ pub mod icc;
 pub mod image;
 pub mod jpeg;
 pub mod macho;
+pub mod mie;
 pub mod pdf;
 pub mod pe;
 pub mod photo_mechanic;

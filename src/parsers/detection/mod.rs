@@ -160,6 +160,15 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         return Ok(format);
     }
 
+    // DjVu is an IFF container with a distinctive `AT&TFORM` prefix.  Its
+    // root form must be a single-page image or multi-page document, matching
+    // AIFF.pm's DjVu gate before it starts walking chunks.
+    if magic_bytes.starts_with(b"AT&TFORM")
+        && matches!(magic_bytes.get(12..16), Some(b"DJVU" | b"DJVM"))
+    {
+        return Ok(FileFormat::DJVU);
+    }
+
     // ZIP variants require archive inspection before offset-based signatures can claim
     // bytes that happen to appear inside ZIP headers, names, or payloads.
     if magic_bytes.starts_with(&[0x50, 0x4B]) {

@@ -12,6 +12,7 @@
 //! or a non-integer format are left out rather than approximated, and fields ExifTool
 //! flags `Unknown` are omitted because ExifTool itself hides them without `-U`.
 
+use crate::core::formatters::exiftool_rational_number;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use std::collections::HashMap;
 
@@ -1329,6 +1330,32 @@ fn read_field(record: &[i16], field: &CanonBinaryField, byte_order: ByteOrder) -
     Some(values)
 }
 
+/// ExifTool's `GetRational64s` conversion for `%Canon::AFMicroAdj` key 2.
+///
+/// `AFMicroAdj` declares `FORMAT => 'int32s'`, so its key 2 begins at word 4 in the
+/// parser's 16-bit view. The field itself is a signed numerator/denominator pair, and
+/// `GetRational64s` renders a non-zero denominator via `RoundFloat(..., 10)`.
+fn read_af_micro_adj_value(record: &[i16], byte_order: ByteOrder) -> Option<String> {
+    fn read_i32(record: &[i16], word: usize, byte_order: ByteOrder) -> Option<i32> {
+        let first = u32::from(*record.get(word)? as u16);
+        let second = u32::from(*record.get(word.checked_add(1)?)? as u16);
+        let combined = match byte_order {
+            ByteOrder::LittleEndian => first | (second << 16),
+            ByteOrder::BigEndian => (first << 16) | second,
+        };
+        Some(combined as i32)
+    }
+
+    let numerator = read_i32(record, 4, byte_order)?;
+    let denominator = read_i32(record, 6, byte_order)?;
+    if denominator == 0 {
+        return Some(if numerator == 0 { "undef" } else { "inf" }.to_string());
+    }
+    Some(exiftool_rational_number(
+        f64::from(numerator) / f64::from(denominator),
+    ))
+}
+
 /// Renders one value through the field's `PrintConv`.
 fn render_value(conv: CanonBinaryConv, value: i64) -> String {
     match conv {
@@ -1455,6 +1482,11 @@ pub(crate) fn parse_binary_table(
             .join(" ");
         tags.insert(format!("Canon:{}", field.name), rendered);
     }
+    if tag_id == 0x4013
+        && let Some(value) = read_af_micro_adj_value(record, byte_order)
+    {
+        tags.insert("Canon:AFMicroAdjValue".to_string(), value);
+    }
     true
 }
 
@@ -1526,6 +1558,24 @@ mod tests {
     #[test]
     fn test_length_prefixed_table_keeps_exiftool_indices() {
         assert!(table_is_length_prefixed(0x4028));
+    }
+
+    /// The AFMicroAdj record from CanonRaw.cr3 has a signed rational at key 2.
+    /// ExifTool 13.59 reads its bytes `00 00 00 00 0a 00 00 00` as `0/10` and
+    /// renders `AFMicroAdjValue` as `0`.
+    #[test]
+    fn test_af_micro_adj_value_reads_signed_rational_from_canonraw_cr3() {
+        let record = [
+            0x2c, 0x00, 0x00, 0x00, // record byte count
+            0x00, 0x00, 0x00, 0x00, // key 1: AFMicroAdjMode = Disable
+            0x00, 0x00, 0x00, 0x00, // key 2 numerator
+            0x0a, 0x00, 0x00, 0x00, // key 2 denominator
+        ];
+
+        assert_eq!(
+            parse_bytes(0x4013, &record).get("Canon:AFMicroAdjValue"),
+            Some(&"0".to_string())
+        );
     }
 
     /// `%Canon::TimeInfo` declares `FORMAT => 'int32s'`, so ExifTool key 2 starts at
