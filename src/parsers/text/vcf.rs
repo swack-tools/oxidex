@@ -238,8 +238,7 @@ impl VCFParser {
                     }
                     "ADR" => {
                         has_address = true;
-                        metadata
-                            .insert("Address".to_string(), TagValue::String(value.to_string()));
+                        metadata.insert("Address".to_string(), TagValue::String(value.to_string()));
                     }
                     "URL" => {
                         has_url = true;
@@ -256,8 +255,7 @@ impl VCFParser {
                     }
                     _ => {
                         if let Some(name) = main_table_name(&key) {
-                            metadata
-                                .insert(name.to_string(), TagValue::String(value.to_string()));
+                            metadata.insert(name.to_string(), TagValue::String(value.to_string()));
                         }
                     }
                 }
@@ -401,10 +399,12 @@ mod tests {
     fn split_property_line_ignores_colons_inside_quoted_params() {
         // RFC 6350 quoted parameter values may contain ":" (e.g. a "geo:"
         // URI), which must not be mistaken for the property/value delimiter.
-        let line =
-            r#"ADR;type=OTHER;GEO="geo:12.3457,78.910";LABEL=Test\nLabel:;;Other Rd.;City;ON;K0K0K0;Canada"#;
+        let line = r#"ADR;type=OTHER;GEO="geo:12.3457,78.910";LABEL=Test\nLabel:;;Other Rd.;City;ON;K0K0K0;Canada"#;
         let (key, value) = split_property_line(line).expect("line should split");
-        assert_eq!(key, r#"ADR;type=OTHER;GEO="geo:12.3457,78.910";LABEL=Test\nLabel"#);
+        assert_eq!(
+            key,
+            r#"ADR;type=OTHER;GEO="geo:12.3457,78.910";LABEL=Test\nLabel"#
+        );
         assert_eq!(value, ";;Other Rd.;City;ON;K0K0K0;Canada");
     }
 
