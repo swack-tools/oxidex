@@ -987,6 +987,32 @@ mod tests {
     }
 
     #[test]
+    fn nef_priority_subifd_wins_over_ifd0_thumbnail_fields() {
+        let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
+        let mut metadata = oxidex::core::MetadataMap::new();
+        metadata.insert("IFD0:ImageWidth".to_string(), TagValue::Integer(160));
+        metadata.insert("EXIF:ImageWidth".to_string(), TagValue::Integer(3040));
+        metadata.insert(
+            "IFD0:Compression".to_string(),
+            TagValue::String("Uncompressed".to_string()),
+        );
+        metadata.insert(
+            "EXIF:Compression".to_string(),
+            TagValue::String("Nikon NEF Compressed".to_string()),
+        );
+
+        let (tags, collisions) = extractor.flatten_metadata(&metadata, Some("NEF"));
+        let tag_values: HashMap<_, _> =
+            tags.into_iter().map(|tag| (tag.key(), tag.value)).collect();
+        assert_eq!(tag_values.get("EXIF:ImageWidth"), Some(&"3040".to_string()));
+        assert_eq!(
+            tag_values.get("EXIF:Compression"),
+            Some(&"Nikon NEF Compressed".to_string())
+        );
+        assert!(collisions.is_empty());
+    }
+
+    #[test]
     fn test_extractor_uses_shared_family_aliases() {
         assert_eq!(
             OxiDexExtractor::normalize_for_comparison("Leica:Contrast", Some("JPEG")),
