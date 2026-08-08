@@ -4098,6 +4098,9 @@ mod tests {
 
     #[test]
     fn samsung_gx20_preview_image_size_splits_the_packed_word() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         // Pentax.pm:932-938: `Writable => 'int16u', Count => 2, PrintConv =>
         // '$val =~ tr/ /x/; $val'` -- two packed int16u (width, height), not
         // one int32u. Regression test for the bug where this printed the raw
