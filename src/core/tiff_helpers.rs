@@ -11,7 +11,9 @@ use crate::core::tag_conversion::{
 };
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::tiff::geotiff_parser;
-use crate::parsers::tiff::ifd_parser::{ByteOrder, find_entry_position, parse_ifd};
+use crate::parsers::tiff::ifd_parser::{
+    ByteOrder, find_entry_position, ifd_entry_count, parse_ifd,
+};
 use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values;
 use crate::parsers::tiff::makernotes::makernote_context::{
     MakerNoteContext, value_overlaps_directory,
@@ -316,8 +318,17 @@ pub fn parse_ifd_chain(
             parse_makernote(&ctx, byte_order, metadata);
         }
 
-        // Read next IFD offset
-        let entry_count = tags.len();
+        // Read next IFD offset. This MUST be the on-disk entry count, not
+        // `tags.len()`: parse_ifd silently drops malformed entries, so the
+        // returned vector can be shorter than what is actually on disk. Using
+        // its length here walks too few entries into the file and reads
+        // whatever bytes happen to sit at that wrong location -- typically
+        // the tail of a skipped entry -- as the next-IFD pointer, corrupting
+        // the rest of the chain instead of correctly reaching offset 0 (or
+        // whatever ExifTool itself would read there).
+        let Some(entry_count) = ifd_entry_count(reader, ifd_offset, byte_order) else {
+            break;
+        };
         let next_offset_location = ifd_offset + 2 + (entry_count as u64 * 12);
 
         if next_offset_location + 4 > reader.size() {
@@ -344,6 +355,78 @@ pub fn parse_ifd_chain(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod parse_ifd_chain_malformed_entry_tests {
+    use super::*;
+    use crate::test_support::TestReader;
+
+    /// A minimal little-endian TIFF: `II`, magic 42, IFD0 at offset 8 with 2
+    /// entries -- `Make` (ASCII, inline, well-formed) and `ExposureTime`
+    /// (RATIONAL, so its 8-byte value is stored via an offset field, which
+    /// this test deliberately sets far past EOF) -- followed by a
+    /// terminating next-IFD offset of 0.
+    ///
+    /// `exiftool -a -G1 -s` on the equivalent real file reports `Make: A`
+    /// and warns about the bad ExposureTime entry, but still terminates the
+    /// chain correctly; it does not abandon IFD0.
+    fn malformed_second_entry_tiff() -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II");
+        data.extend_from_slice(&42u16.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes()); // IFD0 at offset 8
+
+        data.extend_from_slice(&2u16.to_le_bytes()); // 2 entries
+
+        // Entry 1: Make (0x010F), ASCII, count 1, inline "A\0\0\0"
+        data.extend_from_slice(&0x010Fu16.to_le_bytes());
+        data.extend_from_slice(&2u16.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(b"A\0\0\0");
+
+        // Entry 2: ExposureTime (0x829A), RATIONAL (8 bytes -> offset-based),
+        // count 1, offset pointing far past the 38-byte file.
+        data.extend_from_slice(&0x829Au16.to_le_bytes());
+        data.extend_from_slice(&5u16.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&999_999_999u32.to_le_bytes());
+
+        data.extend_from_slice(&0u32.to_le_bytes()); // next IFD = 0
+        data
+    }
+
+    /// Regression test for the bug this module's `parse_ifd_chain` used to
+    /// have: it located the next-IFD pointer at
+    /// `ifd_offset + 2 + tags.len() * 12`, where `tags.len()` is the
+    /// *returned, post-skip* entry count. `parse_ifd` drops individual
+    /// malformed entries (Exif.pm:6660's "Bad offset" -> `$bad=1` ->
+    /// skipped), so once any entry is dropped, `tags.len()` undercounts the
+    /// true on-disk entry count and the pointer lookup lands inside the
+    /// *previous* entry's own bytes instead of the real next-IFD field.
+    ///
+    /// Here that means the lookup used to happen at offset 22 -- the start
+    /// of the (skipped) ExposureTime entry -- misreading its own
+    /// `tag_id`+`field_type` bytes (`0x829A`, `0x0005`) as the next-IFD
+    /// offset (0x0005829A), which is nowhere near the 38-byte file. The old
+    /// code surfaced this as a top-level parse failure -- "IFD offset beyond
+    /// file size" at a garbage offset -- discarding the `Make` tag it had
+    /// already extracted, where real ExifTool (and the fixed code) reports
+    /// `Make: A` and a bad-entry warning, then correctly terminates the
+    /// chain at the real (zero) next-IFD pointer.
+    #[test]
+    fn a_skipped_entry_does_not_desync_the_next_ifd_pointer_lookup() {
+        let reader = TestReader::new(malformed_second_entry_tiff());
+        let mut metadata = MetadataMap::new();
+
+        parse_ifd_chain(&reader, 8, ByteOrder::LittleEndian, &mut metadata)
+            .expect("a single bad entry must not fail the whole chain");
+
+        assert_eq!(metadata.get_string("IFD0:Make"), Some("A"));
+        // The chain must terminate normally (next-IFD == 0), not report a
+        // second page from a misread pointer.
+        assert_eq!(metadata.get_integer("File:PageCount"), None);
+    }
 }
 
 /// Gets the canonical IFD name for a given index.
@@ -1349,11 +1432,22 @@ pub fn parse_ifd2_preview_image(
         return;
     }
 
-    let Ok(ifd1_entries) = parse_ifd(reader, ifd1_offset, byte_order) else {
+    // Bail if IFD1 itself is too malformed to parse at all (this call's
+    // result is otherwise unused here -- IFD2's own tags are what get read
+    // below -- but it's the same directory-level validation every other
+    // caller in this chain performs before trusting an offset into it).
+    if parse_ifd(reader, ifd1_offset, byte_order).is_err() {
+        return;
+    }
+
+    // On-disk count, not a parsed-entries `.len()` -- see `ifd_entry_count`'s
+    // doc comment. parse_ifd can silently drop malformed IFD1 entries, and
+    // this offset locates IFD1's *own* next-IFD pointer.
+    let Some(ifd1_entry_count) = ifd_entry_count(reader, ifd1_offset, byte_order) else {
         return;
     };
-
-    let Some(ifd2_offset) = next_ifd_offset(reader, ifd1_offset, ifd1_entries.len(), byte_order)
+    let Some(ifd2_offset) =
+        next_ifd_offset(reader, ifd1_offset, ifd1_entry_count as usize, byte_order)
     else {
         return;
     };

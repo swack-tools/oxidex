@@ -237,6 +237,24 @@ pub fn process_exif_segments(
                     parse_gps_subifd(&tiff_reader, offset, byte_order, metadata);
                 }
 
+                // IFD0's on-disk entry count, needed to locate its own
+                // next-IFD pointer (immediately after the last entry).
+                // `tags.len()` is NOT this: parse_ifd silently drops
+                // malformed entries, so it can undercount, which walks the
+                // pointer lookup too few entries into the file and misreads
+                // whatever bytes happen to sit there -- typically the tail of
+                // a skipped entry -- as the next-IFD offset. `parse_ifd`
+                // above already succeeded reading this exact IFD, so this
+                // 2-byte re-read cannot fail in practice; `tags.len()` is
+                // kept only as a defensive fallback, never the primary path.
+                let ifd0_entry_count = crate::parsers::tiff::ifd_parser::ifd_entry_count(
+                    &tiff_reader,
+                    ifd_offset,
+                    byte_order,
+                )
+                .map(|count| count as usize)
+                .unwrap_or(tags.len());
+
                 // Walk IFD0's next-IFD pointer to IFD1 (the thumbnail IFD), which
                 // carries Compression/ThumbnailOffset/ThumbnailLength/ThumbnailImage.
                 // `tiff_offset` is the absolute file position of the TIFF header,
@@ -244,7 +262,7 @@ pub fn process_exif_segments(
                 crate::core::tiff_helpers::parse_ifd1_thumbnail(
                     &tiff_reader,
                     ifd_offset,
-                    tags.len(),
+                    ifd0_entry_count,
                     byte_order,
                     tiff_offset,
                     metadata,
@@ -260,7 +278,7 @@ pub fn process_exif_segments(
                 crate::core::tiff_helpers::parse_ifd2_preview_image(
                     &tiff_reader,
                     ifd_offset,
-                    tags.len(),
+                    ifd0_entry_count,
                     byte_order,
                     tiff_offset,
                     metadata,
