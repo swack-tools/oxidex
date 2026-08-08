@@ -238,7 +238,20 @@ jobs:
       # recompiling and re-running work another step had already done.
       #
       # If you add a step here, give it `--all-features` and nothing else.
-      - run: cargo build --release --all-features
+      #
+      # `fixloop`, not `release`. This step exists to prove the release-side
+      # codegen path still compiles and links; release.yml does the real
+      # per-platform release builds on tag pushes. [profile.release] carries
+      # lto = true + codegen-units = 1, which is tuned for the shipped
+      # binary's runtime, not for answering that question -- it cost ~95-100s
+      # of mostly LTO link time here. [profile.fixloop] already exists in
+      # Cargo.toml, inherits release (so it keeps panic = "abort", the thing
+      # that forces the separate test-profile compile below) and only drops
+      # lto and raises codegen-units.
+      #
+      # The gap this accepts: an LTO-only failure would now surface at tag
+      # time in release.yml rather than here.
+      - run: cargo build --profile fixloop --all-features
       # Tests run in the (unwind) test profile: the release profile sets
       # panic = "abort", which newer cargo refuses to mix with the unwind test
       # harness. So this is a second compile by necessity -- profile, not
