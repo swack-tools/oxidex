@@ -9,7 +9,8 @@ use super::binary::{
     BinTable, BinTag, Fmt, print_exposure_time, print_f_number, read_scalar, signed_adjustment,
 };
 use super::lens_spec::print_lens_spec;
-use crate::io::EndianReader;
+use crate::exiftool_tables::{self, DecodedValue};
+use crate::io::{ByteOrder as IoByteOrder, EndianReader};
 use std::collections::HashMap;
 
 // ============================================================================
@@ -104,6 +105,112 @@ fn focus_status(value: i64) -> Option<String> {
             }
         }
     })
+}
+
+// ============================================================================
+// CameraInfo (tag 0x0010, count 368 or 5478)
+// ============================================================================
+//
+// Distinct from `CameraInfo2` below: ExifTool's Condition picks between the
+// two sub-directories purely by byte count (Sony.pm:716-747), and this table
+// is always big-endian regardless of the file's own byte order, while
+// `CameraInfo2` is always little-endian.
+
+/// Byte counts ExifTool uses to recognise a `CameraInfo` block: A700 writes
+/// 368, A850/A900 write 5478.
+const CAMERA_INFO_COUNTS: [usize; 2] = [368, 5478];
+
+/// Bodies whose `CameraInfo` block carries the AF micro-adjust group at byte
+/// offsets 304-305 (0x130/0x131). ExifTool gates all three tags on
+/// `$$self{Model} =~ /^DSLR-A(850|900)\b/` (Sony.pm:2874-2894); the A700
+/// writes a shorter (368-byte) block that does not reach these offsets.
+const AF_MICRO_ADJ_MODELS: [&str; 2] = ["DSLR-A850", "DSLR-A900"];
+
+/// `Sony::CameraInfo`'s `LensSpec` (0x00) stores its two 16-bit BCD fields
+/// byte-swapped relative to `CameraInfo2`: ExifTool's ValueConv is
+/// `pack('v*', unpack('n*', $val))`, i.e. each big-endian 16-bit word read
+/// back out little-endian, which swaps the bytes within each of the four
+/// pairs before the shared `ConvLensSpec`/`PrintLensSpec` logic runs
+/// (Sony.pm:2750-2764).
+fn camera_info_lens_spec_bytes(bytes: &[u8]) -> Option<[u8; 8]> {
+    let b: &[u8; 8] = bytes.try_into().ok()?;
+    Some([b[1], b[0], b[3], b[2], b[5], b[4], b[7], b[6]])
+}
+
+/// Decodes tag 0x0010 when it holds a `CameraInfo` block (A700, A850, A900).
+///
+/// Returns `false` when the byte count belongs to `CameraInfo2` or
+/// `CameraInfo3`, so the caller can try those in turn.
+pub fn extract_camera_info(
+    data: &[u8],
+    model: Option<&str>,
+    tags: &mut HashMap<String, String>,
+) -> bool {
+    if !CAMERA_INFO_COUNTS.contains(&data.len()) {
+        return false;
+    }
+    let Some(table) = exiftool_tables::find_table("Sony", "CameraInfo") else {
+        return false;
+    };
+
+    for decoded in exiftool_tables::decode_binary_table(table, data, IoByteOrder::Big) {
+        let name = decoded.field.name;
+        match name {
+            "LensSpec" => {
+                if let Some(printed) = data
+                    .get(..8)
+                    .and_then(camera_info_lens_spec_bytes)
+                    .and_then(|swapped| print_lens_spec(&swapped))
+                {
+                    tags.insert("Sony:LensSpec".to_string(), printed);
+                }
+            }
+            // The AF micro-adjust group needs a ValueConv and bit masks the
+            // generated schema does not carry (see the block below); skip the
+            // generic path so it is not rendered as an unmasked raw byte.
+            "AFMicroAdjValue" | "AFMicroAdjMode" => {}
+            // `afStatusInfo`'s `OTHER` sub formats every value the two literal
+            // enum entries do not cover ("Front Focus (N)" / "Back Focus
+            // (+N)"); the generated IntEnum can only carry the two literals,
+            // so apply the hand-verified `af_status` helper instead of the
+            // generic PrintConv, which would silently omit every non-zero
+            // reading.
+            _ if name.starts_with("AFStatus") => {
+                if let DecodedValue::Integer(v) = decoded.raw
+                    && let Some(printed) = af_status(v)
+                {
+                    tags.insert(format!("Sony:{name}"), printed);
+                }
+            }
+            _ => {
+                if let Some(printed) = decoded.apply_print_conv_to_raw() {
+                    tags.insert(format!("Sony:{name}"), printed);
+                }
+            }
+        }
+    }
+
+    // `AFMicroAdjValue` (0x130, ValueConv `$val - 20`) and the byte 0x131
+    // that packs `AFMicroAdjMode` (Mask 0x80) with `AFMicroAdjRegisteredLenses`
+    // (Mask 0x7f), all A850/A900-only (Sony.pm:2874-2894).
+    if AF_MICRO_ADJ_MODELS.contains(&model.unwrap_or(""))
+        && let (Some(&value_byte), Some(&mode_byte)) = (data.get(304), data.get(305))
+    {
+        tags.insert(
+            "Sony:AFMicroAdjValue".to_string(),
+            (i64::from(value_byte) - 20).to_string(),
+        );
+        tags.insert(
+            "Sony:AFMicroAdjMode".to_string(),
+            (if mode_byte & 0x80 != 0 { "On" } else { "Off" }).to_string(),
+        );
+        tags.insert(
+            "Sony:AFMicroAdjRegisteredLenses".to_string(),
+            (mode_byte & 0x7f).to_string(),
+        );
+    }
+
+    true
 }
 
 // ============================================================================
@@ -566,8 +673,86 @@ mod tests {
     #[test]
     fn wrong_sized_blocks_are_refused_rather_than_misread() {
         let mut tags = HashMap::new();
+        assert!(!extract_camera_info(&[0u8; 100], None, &mut tags));
         assert!(!extract_camera_info2(&[0u8; 100], &mut tags));
         assert!(!extract_focus_info(&[0u8; 100], None, &mut tags));
         assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn camera_info_lens_spec_undoes_the_16_bit_word_swap() {
+        // CameraInfo2's ValueConv passes LensSpec bytes straight through, but
+        // CameraInfo's does `pack('v*', unpack('n*', $val))` first -- a
+        // pairwise byte swap. Feeding the ILCA-77M2 kit lens's CameraInfo2
+        // bytes through the swap and back should reproduce the original.
+        let unswapped = [0x01, 0x00, 0x16, 0x00, 0x50, 0x28, 0x00, 0x01];
+        let camera_info_bytes = [0x00, 0x01, 0x00, 0x16, 0x28, 0x50, 0x01, 0x00];
+        assert_eq!(
+            camera_info_lens_spec_bytes(&camera_info_bytes),
+            Some(unswapped)
+        );
+        assert_eq!(
+            print_lens_spec(&camera_info_lens_spec_bytes(&camera_info_bytes).unwrap()),
+            Some("DT 16-50mm F2.8 SSM".to_string())
+        );
+    }
+
+    #[test]
+    fn camera_info_decodes_af_status_and_gates_micro_adjust_on_model() {
+        // A 5478-byte block shaped like the DSLR-A900 sample: AF-S,
+        // AFPointSelected/AFPoint both Lower-right, AFStatusFarRight showing
+        // -65 (a front-focus reading outside the two literal enum values),
+        // AFMicroAdjValue/Mode all zero.
+        let mut data = vec![0u8; 5478];
+        data[20] = 1; // FocusModeSetting: AF-S
+        data[21] = 5; // AFPointSelected: Lower-right
+        data[25] = 21; // AFPoint: Lower-right
+        data[68..70].copy_from_slice(&(-65i16).to_be_bytes()); // AFStatusFarRight
+
+        let mut tags = HashMap::new();
+        assert!(extract_camera_info(&data, Some("DSLR-A900"), &mut tags));
+        assert_eq!(tags.get("Sony:FocusModeSetting"), Some(&"AF-S".to_string()));
+        assert_eq!(
+            tags.get("Sony:AFPointSelected"),
+            Some(&"Lower-right".to_string())
+        );
+        assert_eq!(tags.get("Sony:AFPoint"), Some(&"Lower-right".to_string()));
+        assert_eq!(
+            tags.get("Sony:AFStatusFarRight"),
+            Some(&"Front Focus (-65)".to_string())
+        );
+        // Zero-filled by default: af_status(0) is "In Focus".
+        assert_eq!(
+            tags.get("Sony:AFStatusActiveSensor"),
+            Some(&"In Focus".to_string())
+        );
+        assert_eq!(tags.get("Sony:AFMicroAdjValue"), Some(&"-20".to_string()));
+        assert_eq!(tags.get("Sony:AFMicroAdjMode"), Some(&"Off".to_string()));
+        assert_eq!(
+            tags.get("Sony:AFMicroAdjRegisteredLenses"),
+            Some(&"0".to_string())
+        );
+
+        // The A700 writes the shorter 368-byte block and never reaches the
+        // AF micro-adjust group, whether or not the model gate would allow it.
+        let short = vec![0u8; 368];
+        let mut short_tags = HashMap::new();
+        assert!(extract_camera_info(
+            &short,
+            Some("DSLR-A700"),
+            &mut short_tags
+        ));
+        assert!(!short_tags.contains_key("Sony:AFMicroAdjValue"));
+
+        // A body outside the A850/A900 gate never gets the micro-adjust group
+        // even at the 5478-byte length (Sony.pm's Condition is model-gated,
+        // not count-gated, for these three tags).
+        let mut ungated_tags = HashMap::new();
+        assert!(extract_camera_info(
+            &data,
+            Some("DSLR-A700"),
+            &mut ungated_tags
+        ));
+        assert!(!ungated_tags.contains_key("Sony:AFMicroAdjValue"));
     }
 }

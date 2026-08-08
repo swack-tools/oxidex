@@ -413,8 +413,15 @@ fn parse_sony_makernote_impl(
                 panorama = b.starts_with(&[0x01, 0x01]) || b.starts_with(&[0, 0, 0x01, 0x01]);
             }
             TAG_CAMERA_INFO => {
+                // ExifTool picks between `CameraInfo` (A700/A850/A900),
+                // `CameraInfo2` (A200/A230/.../A390) and `CameraInfo3` purely
+                // by byte count (Sony.pm:716-747); the two extractors below
+                // each refuse a count that is not theirs.
                 let mut tags = HashMap::new();
-                amount::extract_camera_info2(value.bytes(), &mut tags);
+                let bytes = value.bytes();
+                if !amount::extract_camera_info(bytes, model, &mut tags) {
+                    amount::extract_camera_info2(bytes, &mut tags);
+                }
                 push_all(&mut found, tags, SUB_DIRECTORY_PRIORITY);
             }
             TAG_FOCUS_INFO => {
