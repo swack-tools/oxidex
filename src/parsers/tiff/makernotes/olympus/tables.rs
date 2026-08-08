@@ -540,6 +540,34 @@ pub static MAIN: &[TagDef] = &[
 ];
 
 // ===========================================================================
+// Olympus::Main, re-entered via the MainInfoIFD sub-IFD (0x4000)
+// ===========================================================================
+//
+// ExifTool's 0x4000 tag is model-conditional between an inline variant and
+// `Name => 'MainInfoIFD', Flags => 'SubIFD', SubDirectory => { TagTable =>
+// 'Image::ExifTool::Olympus::Main', Start => '$val' }` (Olympus.pm) -- a
+// second, later-processed walk of the *same* Main table at a different
+// offset. Neither Main's nor Equipment's 0x0104 entry sets `Priority`, so
+// both default to priority 1 and ExifTool's FoundTag() (ExifTool.pm) lets the
+// later-encountered value win outright, overwriting the earlier one under
+// the plain `BodyFirmwareVersion` key. Since 0x4000 > 0x2010, MainInfoIFD is
+// always walked after Equipment, so its copy wins whenever both are present
+// -- e.g. OlympusSH-1.jpg: Equipment 0x0104 = 0x1003 ("1.003") is superseded
+// by MainInfo 0x0104 = 0 ("0"), and `exiftool -G1 -s` prints only the latter.
+//
+// This table intentionally does NOT reuse the full `MAIN` table above for
+// this second walk. Several of its entries -- ShutterSpeedValue (0x1000),
+// ISOValue (0x1001), ApertureValue (0x1002), BrightnessValue (0x1003) and
+// Sharpness (0x100F) -- carry `Priority => 0` in Olympus.pm, which flips
+// FoundTag()'s resolution: a priority-0 duplicate does NOT overwrite an
+// existing priority-1 value, so for those tags the *first* (top-level)
+// occurrence wins, not the last. Reusing `MAIN` wholesale here would get
+// that backwards for any file whose MainInfoIFD carries a different value
+// for one of them. Until each such tag is individually verified, only the
+// one tag actually in scope is re-declared.
+pub static MAIN_INFO: &[TagDef] = &[TagDef::raw(0x0104, "BodyFirmwareVersion")];
+
+// ===========================================================================
 // Olympus::Equipment (0x2010)
 // ===========================================================================
 
@@ -1626,6 +1654,20 @@ mod tests {
             apply_conv(def, &OlyVal::Int(vec![0x1005])).unwrap(),
             "1.005"
         );
+    }
+
+    #[test]
+    fn main_info_body_firmware_version_is_raw_not_hex() {
+        // Olympus::Main's 0x0104 (Olympus.pm: `Writable => 'string'`, no
+        // PrintConv) is a different tag definition than Equipment's 0x0104
+        // above, even though both are named BodyFirmwareVersion. MainInfoIFD
+        // (0x4000) recurses into Main, not Equipment, so its copy must print
+        // the stored int32u as-is -- e.g. OlympusSH-1.jpg's MainInfo 0x0104
+        // is literally 0, which `exiftool -G1 -s` prints as "0", not "0.000"
+        // or any hex-derived form.
+        let def = conv_of(MAIN_INFO, 0x0104);
+        assert_eq!(apply_conv(def, &OlyVal::Int(vec![0])).unwrap(), "0");
+        assert_eq!(apply_conv(def, &OlyVal::Int(vec![4099])).unwrap(), "4099");
     }
 
     #[test]

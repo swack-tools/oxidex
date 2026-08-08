@@ -46,6 +46,7 @@
 //! assert!(result.len() >= 3); // XMPToolkit + Creator + Rating
 //! ```
 
+use crate::core::formatters::print_fraction;
 use crate::core::value_formatter::format_iptc_urgency;
 use crate::error::{ExifToolError, Result};
 use crate::parsers::xmp::namespace_resolver::NamespaceResolver;
@@ -3784,8 +3785,16 @@ fn format_exif_exposure_compensation(value: &str) -> String {
         // XMP.pm:2099 -- `PrintConv => Image::ExifTool::Exif::PrintFraction`.
         // The old `{:.2}` here printed XMP.xmp's exif:ExposureBiasValue of
         // "-3/3" as "-1.00" (and, before that, could not parse the rational at
-        // all); ExifTool prints "-1".
-        Some(number) => print_exif_fraction(number),
+        // all); ExifTool prints "-1". A later local reimplementation of
+        // PrintFraction fixed that but kept a `{:+.3}` (three *decimal
+        // places*) fallback for values that aren't a whole/half/third stop,
+        // where ExifTool's `sprintf("%+.3g", $val)` is three *significant
+        // digits* with insignificant trailing zeros stripped -- so
+        // NikonCoolpixP520.jpg's -3/10 EV printed "-0.300" instead of "-0.3".
+        // `print_fraction` is the shared, ExifTool-Perl-swept port (see its
+        // doc comment for the 1,538-input comparison); every other call site
+        // in this crate already uses it.
+        Some(number) => print_fraction(number),
         None => value.trim().to_string(),
     }
 }
@@ -3808,29 +3817,6 @@ fn parse_xmp_number(value: &str) -> Option<f64> {
         return Some(numerator / denominator);
     }
     trimmed.parse().ok()
-}
-
-/// `Image::ExifTool::Exif::PrintFraction` (`Exif.pm:5516`), verbatim.
-fn print_exif_fraction(value: f64) -> String {
-    // Exif.pm:5521 -- "avoid round-off errors".
-    let value = value * 1.00001;
-    if value == 0.0 {
-        return "0".to_string();
-    }
-    let close_enough = |scaled: f64| {
-        let truncated = scaled.trunc();
-        truncated != 0.0 && truncated / scaled > 0.999
-    };
-    if close_enough(value) {
-        return format!("{:+}", value.trunc() as i64);
-    }
-    if close_enough(value * 2.0) {
-        return format!("{:+}/2", (value * 2.0).trunc() as i64);
-    }
-    if close_enough(value * 3.0) {
-        return format!("{:+}/3", (value * 3.0).trunc() as i64);
-    }
-    format!("{:+.3}", value)
 }
 
 /// APEX aperture: `sqrt(2) ** $val`, printed with one decimal.
@@ -5503,14 +5489,29 @@ mod top_level_struct_tests {
     }
 
     /// PrintFraction is what EXIF-style exposure compensation goes through;
-    /// whole stops print signed, thirds and halves print as fractions.
+    /// whole stops print signed, thirds and halves print as fractions, and
+    /// anything else falls back to `%+.3g` -- three *significant digits*,
+    /// trailing zeros stripped, not three decimal places. Exercises the
+    /// public `format_exif_exposure_compensation` entry point (rationals as
+    /// XMP actually stores them) rather than the shared `print_fraction`
+    /// helper directly, since that helper already has its own doctest/unit
+    /// coverage in `core::formatters::exif_print_conv`.
     #[test]
     fn print_fraction_follows_exif_pm() {
-        assert_eq!(print_exif_fraction(0.0), "0");
-        assert_eq!(print_exif_fraction(-1.0), "-1");
-        assert_eq!(print_exif_fraction(2.0), "+2");
-        assert_eq!(print_exif_fraction(1.0 / 3.0), "+1/3");
-        assert_eq!(print_exif_fraction(0.5), "+1/2");
+        assert_eq!(format_exif_exposure_compensation("0/10"), "0");
+        assert_eq!(format_exif_exposure_compensation("-10/10"), "-1");
+        assert_eq!(format_exif_exposure_compensation("20/10"), "+2");
+        assert_eq!(format_exif_exposure_compensation("1/3"), "+1/3");
+        assert_eq!(format_exif_exposure_compensation("5/10"), "+1/2");
+        // Regression: NikonCoolpixP520.jpg's exif:ExposureBiasValue="-3/10".
+        // ExifTool (`exiftool -G1 -s`) prints "-0.3"; a `{:+.3}` fallback
+        // (three decimal places, not three significant digits) printed
+        // "-0.300" here because -0.3 is not a whole/half/third stop.
+        assert_eq!(format_exif_exposure_compensation("-3/10"), "-0.3");
+        // Regression: LeicaV-LUX4.jpg's exif:ExposureBiasValue="-33/100".
+        // ExifTool prints "-0.33"; the same fixed-decimals fallback printed
+        // "-0.330".
+        assert_eq!(format_exif_exposure_compensation("-33/100"), "-0.33");
     }
 
     /// XMP.pm renames three exif-namespace properties; without these the tags

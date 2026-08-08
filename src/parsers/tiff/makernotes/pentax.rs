@@ -1199,9 +1199,18 @@ impl PentaxParser {
                     tags.insert("Pentax:PentaxModelID".to_string(), name);
                 }
 
-                PENTAX_PREVIEW_IMAGE_SIZE => {
-                    let value = entry.value_offset;
-                    tags.insert("Pentax:PreviewImageSize".to_string(), value.to_string());
+                // `Writable => 'int16u', Count => 2, PrintConv => '$val =~
+                // tr/ /x/; $val'` (Pentax.pm:932-938): two packed int16u
+                // (width, height) joined with "x", not one int32u. The pair
+                // is exactly 4 bytes, so `right_align_inline_value` (which
+                // only rewrites payloads *under* 4 bytes) leaves
+                // `entry.value_offset` as the raw packed word here --
+                // printing it directly gave e.g. 41943520 (0x028001E0) for
+                // SamsungGX20.jpg's real 640x480. Split it back into its two
+                // halves per `byte_order` instead.
+                PENTAX_PREVIEW_IMAGE_SIZE if entry.value_count == 2 => {
+                    let (w, h) = pentax_u16_pair(&entry, byte_order);
+                    tags.insert("Pentax:PreviewImageSize".to_string(), format!("{w}x{h}"));
                 }
 
                 PENTAX_PREVIEW_IMAGE_LENGTH => {
@@ -4080,6 +4089,22 @@ mod tests {
         .expect("read pinned Samsung GX20 fixture");
         assert_eq!(metadata.get_string("Pentax:HometownCity"), Some("New York"));
     }
+
+    #[test]
+    fn samsung_gx20_preview_image_size_splits_the_packed_word() {
+        // Pentax.pm:932-938: `Writable => 'int16u', Count => 2, PrintConv =>
+        // '$val =~ tr/ /x/; $val'` -- two packed int16u (width, height), not
+        // one int32u. Regression test for the bug where this printed the raw
+        // packed word (41943520, 0x028001E0) instead of "640x480".
+        let metadata = crate::core::operations::read_metadata(std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGX20.jpg",
+        ))
+        .expect("read pinned Samsung GX20 fixture");
+        assert_eq!(
+            metadata.get_string("Pentax:PreviewImageSize"),
+            Some("640x480")
+        );
+    }
 }
 
 // ============================================================================
@@ -4096,6 +4121,25 @@ fn extract_u16_value(entry: &IfdEntry, _byte_order: ByteOrder) -> u16 {
     // `right_align_inline_value` normalizes both byte orders before tag
     // dispatch, so inline SHORT values always occupy the low two bytes here.
     (entry.value_offset & 0xFFFF) as u16
+}
+
+/// Unpacks the two `int16u` values `PreviewImageSize` (Pentax.pm:932-938,
+/// `Count => 2`) packs into one 4-byte inline entry, in the entry's own
+/// byte order. Unlike `extract_u16_value` above, a 2-element SHORT array is
+/// exactly 4 bytes, so `right_align_inline_value` leaves it untouched
+/// (it only rewrites payloads *under* 4 bytes) -- `entry.value_offset` here
+/// is still the raw word as read off disk, both halves live.
+fn pentax_u16_pair(entry: &IfdEntry, byte_order: ByteOrder) -> (u16, u16) {
+    match byte_order {
+        ByteOrder::LittleEndian => (
+            (entry.value_offset & 0xFFFF) as u16,
+            ((entry.value_offset >> 16) & 0xFFFF) as u16,
+        ),
+        ByteOrder::BigEndian => (
+            ((entry.value_offset >> 16) & 0xFFFF) as u16,
+            (entry.value_offset & 0xFFFF) as u16,
+        ),
+    }
 }
 
 fn extract_value_as_i32(entry: &IfdEntry, byte_order: ByteOrder) -> i32 {

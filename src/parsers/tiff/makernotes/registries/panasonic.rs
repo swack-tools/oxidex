@@ -148,6 +148,10 @@ pub fn panasonic_registry() -> TagRegistry {
         .register_enum_tag_required(0x0093, "SweepPanoramaDirection", &SWEEP_PANORAMA_DIRECTION)
         .register_integer_tag(0x0094, "SweepPanoramaFieldOfView", None)
         .register_enum_tag_required(0x0096, "TimerRecording", &TIMER_RECORDING)
+        // rational64u with no ValueConv/PrintConv (Panasonic.pm:1247-1250);
+        // handled in parse_entry (next to ClearRetouchValue below) so the
+        // out-of-line numerator/denominator is dereferenced instead of the
+        // raw pointer being printed as an integer.
         .register_raw(0x009D, "InternalNDFilter")
         .register_enum_tag_required(0x009E, "HDR", &HDR)
         .register_enum_tag_required(0x009F, "ShutterType", &SHUTTER_TYPE)
