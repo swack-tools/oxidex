@@ -669,6 +669,102 @@ mod tests {
         );
     }
 
+    /// Builds a `curv` tone-reproduction-curve payload with `points` 16-bit
+    /// entries: 4-byte signature, 4 reserved, a 4-byte count, then the table.
+    /// Apple's Display P3 writes `curv` with 1024 points (2060 bytes) and
+    /// ExifTool.jpg writes one with a single point (14 bytes).
+    fn build_curv(points: usize) -> Vec<u8> {
+        let mut payload = Vec::with_capacity(12 + points * 2);
+        payload.extend_from_slice(b"curv");
+        payload.extend_from_slice(&0u32.to_be_bytes());
+        payload.extend_from_slice(&(points as u32).to_be_bytes());
+        payload.extend(std::iter::repeat_n(0u8, points * 2));
+        payload
+    }
+
+    /// Builds a `para` parametric-curve payload of function type 3: 4-byte
+    /// signature, 4 reserved, a 2-byte function type, 2 reserved, then five
+    /// s15Fixed16 parameters - 32 bytes, the shape every recent iPhone/iPad
+    /// Display P3 profile carries.
+    fn build_para() -> Vec<u8> {
+        let mut payload = Vec::with_capacity(32);
+        payload.extend_from_slice(b"para");
+        payload.extend_from_slice(&0u32.to_be_bytes());
+        payload.extend_from_slice(&3u16.to_be_bytes());
+        payload.extend_from_slice(&0u16.to_be_bytes());
+        payload.extend(std::iter::repeat_n(0u8, 20));
+        payload
+    }
+
+    /// rTRC/gTRC/bTRC are `Name => 'RedTRC'/'GreenTRC'/'BlueTRC'` in
+    /// ICC_Profile.pm (449-452, 421-424, 361-364); the long
+    /// `Red Tone Reproduction Curve` spelling is only the `Description` and
+    /// `-s` never prints it. Emitting the long form hid a byte-exact value
+    /// behind a key ExifTool never writes, on all 135 corpus files.
+    ///
+    /// Ground truth, ExifTool 13.59 (the pin in `.exiftool-version`):
+    ///
+    /// ```text
+    /// $ exiftool -a -G1 -s Apple/Apple_iPadAir_3rd_generation.jpg
+    /// [ICC_Profile]   RedTRC     : (Binary data 32 bytes, use -b option to extract)
+    /// [ICC_Profile]   GreenTRC   : (Binary data 32 bytes, use -b option to extract)
+    /// [ICC_Profile]   BlueTRC    : (Binary data 32 bytes, use -b option to extract)
+    ///
+    /// $ exiftool -a -G1 -s Apple/Apple_iPadPro.jpg
+    /// [ICC_Profile]   RedTRC     : (Binary data 2060 bytes, use -b option to extract)
+    /// [ICC_Profile]   GreenTRC   : (Binary data 2060 bytes, use -b option to extract)
+    /// [ICC_Profile]   BlueTRC    : (Binary data 2060 bytes, use -b option to extract)
+    /// ```
+    ///
+    /// Both payload shapes are asserted because the count is the tag's own
+    /// declared size, not a constant: the iPadAir profile stores a 32-byte
+    /// `para` curve and the iPadPro profile a 2060-byte `curv` with 1024
+    /// points, and a hardcoded number would satisfy exactly one of them.
+    #[test]
+    fn colour_trc_tags_use_exiftools_short_names_and_their_own_byte_counts() {
+        // Apple_iPadAir_3rd_generation.jpg: `para`, 32 bytes.
+        let para = parse(&build_profile(&[
+            ("rTRC", build_para()),
+            ("gTRC", build_para()),
+            ("bTRC", build_para()),
+        ]));
+        for name in ["RedTRC", "GreenTRC", "BlueTRC"] {
+            assert_eq!(
+                value(&para, name),
+                Some("(Binary data 32 bytes, use -b option to extract)"),
+                "{name} should carry the 32-byte para payload's own size"
+            );
+        }
+
+        // Apple_iPadPro.jpg: `curv` with 1024 points, 12 + 2048 = 2060 bytes.
+        let curv = parse(&build_profile(&[
+            ("rTRC", build_curv(1024)),
+            ("gTRC", build_curv(1024)),
+            ("bTRC", build_curv(1024)),
+        ]));
+        for name in ["RedTRC", "GreenTRC", "BlueTRC"] {
+            assert_eq!(
+                value(&curv, name),
+                Some("(Binary data 2060 bytes, use -b option to extract)"),
+                "{name} should carry the 2060-byte curv payload's own size"
+            );
+        }
+
+        // The long `Description` spelling is never a key.
+        for metadata in [&para, &curv] {
+            for name in [
+                "RedToneReproductionCurve",
+                "GreenToneReproductionCurve",
+                "BlueToneReproductionCurve",
+            ] {
+                assert!(
+                    !metadata.contains_key(name),
+                    "{name} is a Description, not a tag Name"
+                );
+            }
+        }
+    }
+
     #[test]
     fn opaque_payloads_report_the_size_from_the_tag_table() {
         // kTRC/vcgt/ndin have no ExifTool formatter, so they print the tag's
