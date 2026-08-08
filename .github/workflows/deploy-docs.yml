@@ -63,7 +63,6 @@ jobs:
           cache-on-failure: true
           cache-provider: warpbuild
           shared-key: report
-          cache-workspace-crates: true
 
       # Archive::Zip is not in core perl, and ExifTool needs it to look inside
       # ZIP containers. Without it OOXML.docx reads as plain ZIP and every
@@ -150,7 +149,6 @@ jobs:
           cache-on-failure: true
           cache-provider: warpbuild
           shared-key: bench
-          cache-workspace-crates: true
 
       - name: Run benchmarks
         if: steps.changes.outputs.benchmarks_changed == 'true'

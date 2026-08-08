@@ -99,7 +99,6 @@ jobs:
           cache-on-failure: true
           cache-provider: warpbuild
           shared-key: jpeg-tag-matrix
-          cache-workspace-crates: true
 
       - name: Resolve pinned ExifTool version
         id: exiftool-version
