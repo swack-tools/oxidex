@@ -339,6 +339,36 @@ fn process_ifd0_tags(
             continue;
         }
 
+        // Check for ICC_Profile (tag 0x8773 = 34675).
+        //
+        // A JPEG may carry its ICC profile inside IFD0 rather than in an APP2
+        // "ICC_PROFILE\0" segment. Exif.pm 0x8773 is a SubDirectory into
+        // ICC_Profile::Main, the same table `process_icc_segments` feeds from
+        // APP2, so the payload goes to the same parser and lands under the
+        // same family-0 "ICC_Profile" group. Panasonic/PanasonicDMC-ZS19.jpg
+        // has no APP2 segment at all, yet ExifTool reports a full 39-tag
+        // ICC_Profile group from IFD0 alone.
+        //
+        // 128 is the fixed ICC header size, below which there is no profile
+        // to read; `parse_icc_profile_data` rejects anything shorter anyway.
+        //
+        // This runs before `process_icc_segments`, so an APP2 profile still
+        // wins when a file carries both.
+        if *tag_id == 0x8773 && bytes.len() >= 128 {
+            match crate::parsers::icc::parse_icc_profile_data(bytes) {
+                Ok(icc_tags) => {
+                    for (tag_name, value) in icc_tags {
+                        metadata.insert(format!("ICC_Profile:{}", tag_name), value);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to parse ICC profile in EXIF IFD0: {}", e);
+                }
+            }
+            // Don't continue - the raw blob is still added below, matching
+            // `process_tiff_ifd_tags`'s handling of the same tag in TIFF.
+        }
+
         // Check for IPTC-NAA (tag 0x83BB = 33723).
         //
         // A JPEG may carry its IPTC IIM block inside IFD0 rather than in an
