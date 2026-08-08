@@ -237,10 +237,21 @@ fn test_panasonic_parser_big_endian() {
 
     // Entry: WhiteBalance (tag 0x0003) = Daylight (value 2)
     // Registry: 0x0003 = WhiteBalance, WHITE_BALANCE decoder: 2 = "Daylight"
+    //
+    // A count-1 SHORT is left-justified in the 4-byte value field per TIFF,
+    // so on a big-endian directory the 2-byte value occupies the *first* two
+    // bytes (the high half once the field is parsed as a big-endian u32) --
+    // confirmed against real bytes in
+    // combined-samples/Panasonic/PanasonicDMC-LC40.jpg's MakerNote, whose
+    // WhiteBalance entry is `00 01` for a value of 1. The value previously
+    // sat in the low half here, which is little-endian placement; that only
+    // "worked" because the generic fallback used to read the whole 4-byte
+    // field as one right-justified integer instead of respecting the
+    // directory's byte order.
     data.extend_from_slice(&[0x00, 0x03]); // Tag ID (BE) = 0x0003
     data.extend_from_slice(&[0x00, 0x03]); // Type: SHORT (BE)
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // Count: 1 (BE)
-    data.extend_from_slice(&[0x00, 0x00, 0x00, 0x02]); // Value: 2 (BE) = Daylight
+    data.extend_from_slice(&[0x00, 0x02, 0x00, 0x00]); // Value: 2 (BE, high half) = Daylight
 
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD (BE)
 
