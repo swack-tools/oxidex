@@ -3009,6 +3009,15 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         // RegionExtensionsFlashMode, not FlashMode (XMP5.xmp).
         name if name.ends_with("FlashMode") => decode_xmp_flash_mode(value),
         name if name.ends_with("FlashReturn") => decode_xmp_flash_return(value),
+        // The same struct's three `boolean` fields (XMP.pm:2139/2157/2158
+        // declare Fired/Function/RedEyeMode with `%boolConv`). Suffix-matched
+        // for the same nesting reason as Mode/Return above.
+        name if name.ends_with("FlashFired")
+            || name.ends_with("FlashFunction")
+            || name.ends_with("FlashRedEyeMode") =>
+        {
+            decode_xmp_boolean(value)
+        }
 
         // Camera Raw Settings - numeric parameters
         "ProcessingParameters" => format_camera_raw_parameters(value),
@@ -3507,6 +3516,36 @@ fn decode_xmp_flash_return(value: &str) -> String {
         "2" => "Return not detected".to_string(),
         "3" => "Return detected".to_string(),
         _ => value.to_string(),
+    }
+}
+
+/// Decode a `Writable => 'boolean'` XMP field through ExifTool's `%boolConv`
+/// (`XMP.pm:246-257`). The hash names `True`/`False` exactly and its `OTHER`
+/// fallback lower-cases anything else before comparing, so the file's spelling
+/// never reaches the output:
+///
+/// ```text
+/// PrintConv => {
+///     OTHER => sub { # (inverse conversion is the same)
+///         my $val = shift;
+///         return 'False' if lc $val eq 'false';
+///         return 'True' if lc $val eq 'true';
+///         return $val;
+///     },
+///     True => 'True',
+///     False => 'False',
+/// },
+/// ```
+///
+/// Anything that is not a boolean spelling passes through untouched -- ExifTool
+/// has no entry for `0`/`1` and returns `$val` unchanged for them.
+fn decode_xmp_boolean(value: &str) -> String {
+    if value.eq_ignore_ascii_case("true") {
+        "True".to_string()
+    } else if value.eq_ignore_ascii_case("false") {
+        "False".to_string()
+    } else {
+        value.to_string()
     }
 }
 
@@ -5479,6 +5518,59 @@ mod top_level_struct_tests {
         assert_eq!(decode_xmp_flash_return("3"), "Return detected");
         // 1 is absent from ExifTool's Return table, so it passes through.
         assert_eq!(decode_xmp_flash_return("1"), "1");
+    }
+
+    /// The `exif:Flash` struct's three `boolean` fields carry `%boolConv`
+    /// (XMP.pm:2139/2157/2158), whose `OTHER` sub lower-cases the value before
+    /// comparing (XMP.pm:246-257). A file that spells them the XML Schema way
+    /// -- `<exif:Fired>true</exif:Fired>` -- therefore still reports `True`,
+    /// and oxidex used to echo the file's own lowercase spelling instead.
+    ///
+    /// Ground truth, exiftool 13.59 (the release `.exiftool-version` pins) on a
+    /// JPEG whose XMP packet is the one below:
+    ///
+    /// ```text
+    /// $ exiftool -G1 -s -XMP-exif:all flash_lc.jpg
+    /// [XMP-exif]      FlashFired                      : True
+    /// [XMP-exif]      FlashFunction                   : False
+    /// [XMP-exif]      FlashRedEyeMode                 : True
+    /// ```
+    #[test]
+    fn flash_struct_booleans_normalise_case_like_exiftool() {
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/">
+                <exif:Flash rdf:parseType="Resource">
+                  <exif:Fired>true</exif:Fired>
+                  <exif:Function>false</exif:Function>
+                  <exif:RedEyeMode>true</exif:RedEyeMode>
+                </exif:Flash>
+              </rdf:Description>
+            </rdf:RDF>
+        "#;
+
+        let tags = parse_xmp(xml).unwrap();
+        assert_eq!(tag(&tags, "XMP:FlashFired"), Some("True"));
+        assert_eq!(tag(&tags, "XMP:FlashFunction"), Some("False"));
+        assert_eq!(tag(&tags, "XMP:FlashRedEyeMode"), Some("True"));
+    }
+
+    /// `%boolConv` asserted as literals, including the spelling ExifTool's own
+    /// files use (`True`/`False`, which the hash matches directly) and a
+    /// non-boolean, which `OTHER` returns unchanged rather than coercing.
+    #[test]
+    fn xmp_boolconv_matches_exiftool() {
+        assert_eq!(decode_xmp_boolean("True"), "True");
+        assert_eq!(decode_xmp_boolean("False"), "False");
+        assert_eq!(decode_xmp_boolean("true"), "True");
+        assert_eq!(decode_xmp_boolean("false"), "False");
+        assert_eq!(decode_xmp_boolean("TRUE"), "True");
+        assert_eq!(decode_xmp_boolean("FALSE"), "False");
+        // ExifTool's table has no 0/1 entry and `OTHER` returns $val, so these
+        // must not become True/False.
+        assert_eq!(decode_xmp_boolean("1"), "1");
+        assert_eq!(decode_xmp_boolean("0"), "0");
+        assert_eq!(decode_xmp_boolean(""), "");
     }
 
     /// `Iptc4xmpCore:CreatorContactInfo` fields have concatenated tag IDs but
