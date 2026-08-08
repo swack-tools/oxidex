@@ -1716,7 +1716,12 @@ pub fn process_dji_thermal_segments(segments: &[Segment], metadata: &mut Metadat
 /// multiplied by positive 100, which is reproduced before calling `snprintf`.
 fn perl_sprintf_g(value: f64) -> String {
     let value = if value == 0.0 { 0.0 } else { value };
-    let mut output = [0_i8; 32];
+    // `libc::c_char`, not a literal `i8`: it is signed on x86_64 and UNSIGNED
+    // on aarch64, so hardcoding either side compiles on one architecture and
+    // fails on the other. This was `[0_i8; 32]`, which broke every arm64
+    // build -- caught by the Docker dry run, since arm64 is only built there
+    // and in release.yml.
+    let mut output = [0 as libc::c_char; 32];
     // SAFETY: `output` is writable for its full reported size, the format is a
     // static NUL-terminated C string with one `%g`, and `value` has the
     // required promoted `double` type. A default-precision rendering of any
@@ -1727,7 +1732,9 @@ fn perl_sprintf_g(value: f64) -> String {
     let length = usize::try_from(length).unwrap_or(0).min(output.len() - 1);
     let bytes = &output[..length];
     // `%g` emits ASCII digits, punctuation, exponent markers, or the
-    // implementation's ASCII inf/nan spelling.
+    // implementation's ASCII inf/nan spelling. `as u8` is a no-op where
+    // c_char is already unsigned and a reinterpret where it is signed; both
+    // are correct for ASCII.
     String::from_utf8(bytes.iter().map(|byte| *byte as u8).collect()).expect("C %g output is ASCII")
 }
 /// Emits `APP3:ImagingData`, the InfiRay IR + thermal + visible payload.
