@@ -205,9 +205,9 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         }
         // `CheckValue` rounds a fractional value only when it is the whole
         // value: `return 'Not an integer' unless IsFloat($val) and $count == 1`
-        // (Writer.pl:6896-6898), and `Count => -1` sets `$count` to the number
-        // of values supplied (Writer.pl:6880). So "800.5" is stored as 801
-        // while "800.5 900" is rejected outright. `IsInt`/`IsHex` carry no such
+        // (Writer.pl:6900), and `Count => -1` sets `$count` to the number of
+        // values supplied (Writer.pl:6882). So "800.5" is stored as 801 while
+        // "800.5 900" is rejected outright. `IsInt`/`IsHex` carry no such
         // restriction.
         let rounding_allowed = parts.len() == 1;
         let values = parts
@@ -218,8 +218,12 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
                 }
                 let value = parse_integer(tag_name, part)?;
                 // `%intRange` int16u is [0, 0xffff] (Writer.pl:241); a value
-                // outside it is "Value below/above int16u maximum" and nothing
-                // is written.
+                // outside it is refused and nothing is written. The oracle's
+                // wording differs by end: 65536 gives "Value above int16u
+                // maximum", but -1 reports "Value below int32u minimum",
+                // because `-ExifIFD:ISO=` matches several candidate tags and
+                // the surfaced warning comes from the last one tried. Either
+                // way the write is refused.
                 if !(0..=u16::MAX as i64).contains(&value) {
                     return Err(invalid(tag_name, "ISO value does not fit unsigned 16-bit"));
                 }

@@ -293,6 +293,18 @@ pub fn parse_ifd(
         // a type of 0 -- an IFD simply padded with zeros, which is common and
         // harmless -- is skipped *without* spending warning budget. Only a
         // nonzero-but-unrecognised format counts.
+        //
+        // Deliberate divergence, stated rather than implied: Exif.pm:6475-6477
+        // is stricter on the *first* entry --
+        // `next if $index or $$et{Model} =~ /^ILCE/; return 0;` -- so a bad
+        // format code at index 0 makes ExifTool abandon the whole directory
+        // ("assume corrupted IFD"), Sony ILCE excepted. We skip unconditionally
+        // instead. Nothing has been extracted at index 0, so ExifTool's
+        // `return 0` discards nothing and the two only differ in whether the
+        // remaining entries are attempted; skipping recovers more and still
+        // cannot fabricate a value, since a skipped entry is omitted outright.
+        // Matching ExifTool exactly would also need the Model, which is not
+        // resolved this early in the parse.
         let Some(exif_type) = ExifType::from_u16(entry.field_type) else {
             if entry.field_type != 0 {
                 warn_count += 1;
@@ -896,36 +908,70 @@ mod tests {
     }
 
     /// ExifTool abandons a directory once more than 10 entries have warned
-    /// (Exif.pm:6455), but keeps whatever it already extracted. Verify we do
-    /// not turn a heavily corrupted IFD into an unbounded stream of skips.
+    /// (Exif.pm:6455 checks `if ($warnCount > 10)` at the top of the entry
+    /// loop), but keeps whatever it already extracted.
+    ///
+    /// The threshold is only observable if a *good* entry sits past it: with
+    /// every trailing entry corrupt, "budget fired" and "each entry merely
+    /// skipped" produce identical output. So this builds
+    /// `[good, bad * n, good, ...]` and asserts the trailing good entry is
+    /// reached at n = 10 and not reached at n = 11, which pins the boundary
+    /// exactly where ExifTool puts it.
     #[test]
     fn test_parse_ifd_aborts_after_warning_budget() {
-        const N: usize = 20;
-        let mut data = vec![0u8; 2 + N * 12 + 4 + 16];
-        data[0] = N as u8;
-        data[1] = 0x00;
-
-        // Entry 0 is valid: Orientation (0x0112) SHORT[1] = 1, inline.
-        let e = 2;
-        data[e..e + 12].copy_from_slice(&[
+        /// Orientation (0x0112) SHORT[1] = 1, inline.
+        const GOOD_FIRST: [u8; 12] = [
             0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
-        ]);
+        ];
+        /// ResolutionUnit (0x0128) SHORT[1] = 2, inline.
+        const GOOD_LAST: [u8; 12] = [
+            0x28, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+        ];
+        /// ASCII[64] whose value offset points far past the end of the buffer.
+        const BAD: [u8; 12] = [
+            0x00, 0x02, 0x02, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x00,
+        ];
 
-        // Entries 1..N are all ASCII[64] pointing far past the end of the buffer.
-        for i in 1..N {
-            let e = 2 + i * 12;
-            data[e..e + 12].copy_from_slice(&[
-                0x00, 0x02, 0x02, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x00,
-            ]);
-        }
+        // [GOOD_FIRST, BAD * bad_count, GOOD_LAST]
+        let build = |bad_count: usize| {
+            let n = bad_count + 2;
+            let mut data = vec![0u8; 2 + n * 12 + 4 + 16];
+            data[0] = n as u8;
+            data[1] = 0x00;
+            data[2..14].copy_from_slice(&GOOD_FIRST);
+            for i in 0..bad_count {
+                let e = 2 + (1 + i) * 12;
+                data[e..e + 12].copy_from_slice(&BAD);
+            }
+            let e = 2 + (1 + bad_count) * 12;
+            data[e..e + 12].copy_from_slice(&GOOD_LAST);
+            data
+        };
+        let parse = |bad_count: usize| {
+            let reader = TestReader::new(build(bad_count));
+            parse_ifd(&reader, 0, ByteOrder::LittleEndian)
+                .expect("a corrupt directory yields what it can, not an error")
+        };
 
-        let reader = TestReader::new(data);
-        let entries = parse_ifd(&reader, 0, ByteOrder::LittleEndian)
-            .expect("a corrupt directory yields what it can, not an error");
+        // 10 warnings: still under the limit, so the trailing entry is reached.
+        let under = parse(10);
+        assert!(
+            under.iter().any(|(id, ..)| *id == 0x0128),
+            "10 warnings is within budget -- the entry after them must be read"
+        );
+        assert_eq!(under.len(), 2);
 
-        // The one good entry is kept, every bad one is dropped.
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].0, 0x0112);
+        // 11 warnings: `warnCount > 10` on the next iteration, so consumption
+        // stops before the trailing entry -- but the entry read *before* the
+        // corruption is still returned, which is the half of Exif.pm:6455 that
+        // matters (its `return 0` leaves already-extracted tags intact).
+        let over = parse(11);
+        assert!(
+            !over.iter().any(|(id, ..)| *id == 0x0128),
+            "11 warnings exceeds budget -- parsing must stop before the next entry"
+        );
+        assert_eq!(over.len(), 1);
+        assert_eq!(over[0].0, 0x0112);
     }
 
     #[test]
