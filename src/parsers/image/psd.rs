@@ -1402,6 +1402,9 @@ mod tests {
 
     #[test]
     fn parses_thumbnail_length_from_embedded_exif_ifd1() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         // Ground truth, Exif.pm line 1295-1297: the FIRST variant of the 0x202
         // conditional list is `Name => 'ThumbnailLength'`, gated on
         // `$$self{DIR_NAME} eq 'IFD1'`. PSD-embedded EXIF reaches this code with

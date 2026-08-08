@@ -1220,6 +1220,9 @@ mod tests {
 
     #[test]
     fn samsung_galaxy_a55_timezone_offset_matches_pinned_exiftool() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let path = std::path::Path::new(
             "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGalaxyA55_5G.jpg",
         );

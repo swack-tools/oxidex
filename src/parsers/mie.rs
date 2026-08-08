@@ -208,6 +208,9 @@ mod tests {
 
     #[test]
     fn decodes_the_pinned_exiftool_jpeg_mie_document_trailer() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let file = std::fs::read("/tmp/oxidex-exiftool-cache/combined-samples/ExifTool.jpg")
             .expect("pinned ExifTool JPEG fixture should be available");
         let metadata = parse_mie_trailer(&file);

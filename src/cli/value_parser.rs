@@ -1423,7 +1423,6 @@ mod tests {
             ("+800", 800),
             ("800.4", 800),
             ("800.5", 801),
-            ("-800.5", -801),
             ("0x320", 800),
             ("320a", 0x320a), // IsHex matches bare hex digits
             ("abc", 0xabc),
@@ -1440,10 +1439,31 @@ mod tests {
 
     #[test]
     fn integer_rejects_what_checkvalue_rejects() {
-        for raw in ["", "zz", "12:30", "1/2", "hello world"] {
+        for raw in ["zz", "12:30", "1/2", "hello world"] {
             let err = parse("EXIF:ISO", raw).unwrap_err().to_string();
             assert!(err.contains("Not an integer"), "input {raw}: {err}");
         }
+    }
+
+    /// ISO is unsigned, so a negative magnitude is out of range rather than
+    /// "not an integer" -- `exiftool -ExifIFD:ISO=-800.5` (13.59) answers
+    /// `Warning: Value below int32u minimum for ExifIFD:ISO`, not the
+    /// `Not an integer` it gives for `zz`. The two rejections are distinct
+    /// and must not be collapsed.
+    #[test]
+    fn integer_rejects_negative_iso_as_out_of_range() {
+        let err = parse("EXIF:ISO", "-800.5").unwrap_err().to_string();
+        assert!(!err.contains("Not an integer"), "{err}");
+    }
+
+    /// An empty value is a *delete* request upstream of CheckValue -- real
+    /// ExifTool reports `0 image files updated` for `-ExifIFD:ISO=` rather
+    /// than a validation warning. The CLI value parser still refuses it,
+    /// but not with CheckValue's "Not an integer" wording.
+    #[test]
+    fn integer_rejects_empty_without_claiming_not_an_integer() {
+        let err = parse("EXIF:ISO", "").unwrap_err().to_string();
+        assert!(!err.contains("Not an integer"), "{err}");
     }
 
     #[test]

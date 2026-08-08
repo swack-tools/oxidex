@@ -305,6 +305,9 @@ mod tests {
 
     #[test]
     fn fujifilm_sp_2500_legacy_exif_aliases_match_pinned_exiftool() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let path = std::path::Path::new(
             "/tmp/oxidex-exiftool-cache/combined-samples/FujiFilm/FujiSP-2500.jpg",
         );

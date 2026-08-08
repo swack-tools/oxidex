@@ -1827,6 +1827,9 @@ mod tests {
 
     #[test]
     fn dji_mavic2_thermal_app_payloads_match_pinned_exiftool() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let path = std::path::Path::new(
             "/tmp/oxidex-exiftool-cache/combined-samples/DJI/DJI_MAVIC2-ENTERPRISE-ADVANCED.jpg",
         );
@@ -1852,6 +1855,9 @@ mod tests {
 
     #[test]
     fn leica_tl2_ifd2_jpg_from_raw_pair_matches_pinned_exiftool() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let path =
             std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaTL2.jpg");
         let reader = crate::io::buffered_reader::BufferedReader::new(path)
@@ -1872,6 +1878,9 @@ mod tests {
 
     #[test]
     fn leica_cl_ifd2_preview_pair_matches_pinned_exiftool() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let path =
             std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaCL.jpg");
         let reader = crate::io::buffered_reader::BufferedReader::new(path)
@@ -1898,6 +1907,9 @@ mod tests {
 
     #[test]
     fn olympus_sh25mr_gps_area_information_decodes_exif_unicode() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let path = std::path::Path::new(
             "/tmp/oxidex-exiftool-cache/combined-samples/Olympus/OlympusSH-25MR.jpg",
         );
@@ -1917,6 +1929,9 @@ mod tests {
 
     #[test]
     fn ricoh2_empty_gps_dest_distance_ref_matches_pinned_exiftool() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Ricoh2.jpg");
         let reader = crate::io::buffered_reader::BufferedReader::new(path)
             .expect("read pinned Ricoh2 fixture");
@@ -1935,6 +1950,9 @@ mod tests {
 
     #[test]
     fn nikon_z7_2_lens_serial_number_stops_at_first_nul() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let path =
             std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Nikon/NikonZ7_2.jpg");
         let reader = crate::io::buffered_reader::BufferedReader::new(path)
@@ -1953,6 +1971,9 @@ mod tests {
 
     #[test]
     fn samsung_sdc130z_learning_opt_out_uses_exif_int16u_override() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let path = std::path::Path::new(
             "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungSDC-130Z.jpg",
         );
@@ -1972,6 +1993,9 @@ mod tests {
 
     #[test]
     fn panasonic_tz57_title2_uses_exif_string_format_override() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let path = std::path::Path::new(
             "/tmp/oxidex-exiftool-cache/combined-samples/Panasonic/PanasonicDMC-TZ57.jpg",
         );
@@ -2009,6 +2033,9 @@ mod tests {
 
     #[test]
     fn ricoh2_app5_azimuth_matches_pinned_exiftool() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let paths = [
             "/tmp/oxidex-exiftool-cache/combined-samples/Ricoh2.jpg",
             "/tmp/oxidex-exiftool-cache/exiftool/t/images/Ricoh2.jpg",
@@ -2032,6 +2059,9 @@ mod tests {
 
     #[test]
     fn exiftool_jpeg_rmeta_menu_fields_match_pinned_exiftool() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/ExifTool.jpg");
         let reader =
             crate::io::buffered_reader::BufferedReader::new(path).expect("read ExifTool.jpg");

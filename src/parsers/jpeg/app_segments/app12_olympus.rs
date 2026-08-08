@@ -1580,6 +1580,9 @@ mod tests {
     /// Test is_olympus_picture_info detection
     #[test]
     fn test_is_olympus_picture_info() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         assert!(is_olympus_picture_info("OLYMPUS DIGITAL CAMERA"));
         assert!(is_olympus_picture_info("[picture info]\nType=test"));
         assert!(is_olympus_picture_info("CAMEDIA C-5050Z"));

@@ -2065,6 +2065,9 @@ mod tests {
 
     #[test]
     fn pinned_nef_preview_ifd_emits_the_paired_preview_image() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Nikon.nef");
         let metadata =
             crate::core::operations::read_metadata(path).expect("read pinned Nikon NEF fixture");
