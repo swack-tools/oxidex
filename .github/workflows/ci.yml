@@ -180,12 +180,20 @@ jobs:
       # a later failure in this job (a flaky test, say) throws away a
       # perfectly good ExifTool download and the next run re-fetches it. The
       # explicit save below runs as soon as the tree is verified.
+      #
+      # The `-src-` in the key is load-bearing. Caches are scoped to the
+      # REPOSITORY, not the workflow, and jpeg-tag-matrix.yml caches its own
+      # ExifTool at a different path (/tmp/exiftool, a git clone, vs the
+      # tarball extraction here). If both used the same key the first to save
+      # would win it, and the other workflow would then get cache-hit: true,
+      # skip its download, and fail its -ver assertion on a path that was
+      # never populated. Keep these two key families distinct.
       - name: Restore pinned ExifTool source
         id: exiftool-cache
         uses: WarpBuilds/cache/restore@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
         with:
           path: /tmp/exiftool-src
-          key: exiftool-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
+          key: exiftool-src-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
       - name: Download pinned ExifTool
         if: steps.exiftool-cache.outputs.cache-hit != 'true'
         env:

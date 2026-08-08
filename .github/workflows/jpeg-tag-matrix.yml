@@ -124,7 +124,7 @@ jobs:
         uses: WarpBuilds/cache/restore@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
         with:
           path: /tmp/exiftool
-          key: exiftool-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
+          key: exiftool-clone-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
 
       - name: Clone pinned ExifTool
         if: steps.exiftool-cache.outputs.cache-hit != 'true'
