@@ -119,6 +119,21 @@ jobs:
       # cache-all-crates: this job also builds cargo-nextest and cbindgen via
       # taiki-e/install-action, and default caching only covers workspace
       # dependencies, not CI tooling.
+      #
+      # Two cache ideas were measured here and REJECTED. Do not re-add either
+      # without new evidence:
+      #
+      #  - cache-workspace-crates: true -- 408s to 406s, i.e. nothing. Cargo
+      #    fingerprints path dependencies by mtime and git checkout rewrites
+      #    every workspace source file with a fresh mtime, so restored
+      #    workspace artifacts always look stale. Unfixable from target/.
+      #
+      #  - sccache as RUSTC_WRAPPER -- 267s to 269s, i.e. slightly worse, and
+      #    that was WITH a 100% hit rate. The rate is a trap here: only 27 of
+      #    94 rustc calls were cacheable at all, the other 62 being refused
+      #    for `crate-type`. sccache caches rlib/lib but not cdylib,
+      #    staticlib or test harnesses -- which is precisely what this crate
+      #    builds for its C FFI, and precisely where the time goes.
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           cache-on-failure: true
@@ -130,33 +145,7 @@ jobs:
           # Pin cbindgen: the committed api/oxidex.h is generated with 0.29.2,
           # and newer cbindgen emits extra #define macros that would fail the
           # "Verify C header is up-to-date" check non-deterministically.
-          tool: cargo-nextest,cbindgen@0.29.2,sccache
-      # sccache covers the gap rust-cache structurally cannot. rust-cache
-      # restores target/, but cargo fingerprints path dependencies by mtime
-      # and git checkout rewrites every workspace source file with a fresh
-      # mtime, so the nine workspace crates are recompiled on every run no
-      # matter what is in target/ (measured: cache-workspace-crates changed
-      # 408s to 406s, i.e. nothing). sccache keys on a hash of the source
-      # text and compiler flags instead, so it is immune to that churn.
-      #
-      # restore-keys IS safe here, unlike on the ExifTool cache: sccache
-      # entries are content-addressed, so a stale entry cannot return a
-      # wrong object -- it simply fails to match and the compile proceeds.
-      # The run_id in the primary key makes every run save a fresh, larger
-      # entry rather than repeatedly re-saving an identical one.
-      - name: Restore sccache
-        id: sccache-restore
-        uses: WarpBuilds/cache/restore@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
-        with:
-          path: /tmp/sccache
-          key: sccache-test-${{ runner.os }}-${{ github.run_id }}
-          restore-keys: |
-            sccache-test-${{ runner.os }}-
-      - name: Enable sccache
-        run: |
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-          echo "SCCACHE_DIR=/tmp/sccache" >> "$GITHUB_ENV"
-          echo "SCCACHE_CACHE_SIZE=5G" >> "$GITHUB_ENV"
+          tool: cargo-nextest,cbindgen@0.29.2
       # Pinned, not "newest". This step used to scrape the newest
       # Image-ExifTool tarball off SourceForge's RSS feed, which meant the
       # release CI graded against changed whenever upstream published -- while
@@ -271,21 +260,6 @@ jobs:
           cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h.tmp
           diff -q api/oxidex.h api/oxidex.h.tmp || (echo "C header out of date" && exit 1)
           rm api/oxidex.h.tmp
-      # Hit rate is the number to watch when tuning this job: a low rate means
-      # sccache is paying hashing overhead for nothing and should be dropped,
-      # not tuned. `always()` so a failed build still reports its stats.
-      - name: sccache stats
-        if: always()
-        run: sccache --show-stats
-      # always(): the compilations this cached already happened, so persisting
-      # them is useful even when a later test fails -- same reasoning as
-      # cache-on-failure on rust-cache above.
-      - name: Save sccache
-        if: always()
-        uses: WarpBuilds/cache/save@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
-        with:
-          path: /tmp/sccache
-          key: ${{ steps.sccache-restore.outputs.cache-primary-key }}
   # The generated ExifTool tables are 100k+ lines that no reviewer reads in a
   # diff, so their correctness rests entirely on verify.py -- which, until this
   # job existed, nothing ever ran. A hand-edit of binary_tables.rs, or a
