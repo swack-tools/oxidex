@@ -36,6 +36,14 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # `key` carries the target triple: both matrix legs share a job id, so
+      # without it the x64 and arm64 caches would collide on one key.
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          cache-provider: warpbuild
+          shared-key: release
+          key: ${{ matrix.target }}
+
       - name: Install musl tools
         run: |
           sudo apt-get update -qq
@@ -74,6 +82,11 @@ jobs:
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           targets: x86_64-pc-windows-gnu
+
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          cache-provider: warpbuild
+          shared-key: release-windows
 
       - name: Install MinGW cross-compiler
         run: |
@@ -118,6 +131,13 @@ jobs:
       - name: Install dependencies
         run: |
           brew install just create-dmg
+
+      # This job has no rust-toolchain step -- it builds with the runner
+      # image's preinstalled Rust, which is what the cache key hashes.
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          cache-provider: warpbuild
+          shared-key: release-macos
 
       - name: Import signing certificate
         env:

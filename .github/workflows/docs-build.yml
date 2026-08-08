@@ -45,10 +45,12 @@ jobs:
           fi
           echo "Confirmed: docs/reference/comparison/ has no generated report (cold-clone conditions)."
 
+      # WarpBuild-native fork: routes the npm cache through WarpBuild's cache
+      # backend on this warp-ubuntu-* runner instead of the GitHub one.
       - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: WarpBuilds/setup-node@2867cf8f859d73439e1ad18b542617e5a29f0f10 # v7.0.0
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: docs/package-lock.json
 
