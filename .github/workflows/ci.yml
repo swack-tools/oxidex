@@ -64,6 +64,12 @@ env:
 # `runs-on` is safe because it does not change the check name; renaming or
 # splitting these jobs is NOT safe -- a required check that never reports
 # leaves every PR permanently unmergeable (see the paths-ignore note above).
+#
+# "Release Build" and "Doc Tests" were split OUT of Build & Test, which kept
+# its name and so kept reporting. They are new check names, so they are not
+# required until someone with admin rights adds them to branch protection.
+# Until that happens a release-profile break or a failing doc test does not
+# block a merge, even though the job goes red.
 jobs:
   lint:
     name: Lint & Audit
@@ -107,17 +113,40 @@ jobs:
 
   test:
     name: Build & Test
-    # 8x: this job is almost entirely parallelisable work -- cargo build
-    # --release (parallel across codegen units), nextest (test-level
-    # parallelism) and doc tests.
+    # 8x: nextest parallelises across tests, and this is the long pole of
+    # the three compile jobs -- Release Build and Doc Tests are sized to
+    # finish inside it, not to race it.
     #
-    # It used to run five cargo invocations across three different feature
-    # graphs, which cost a full nine-crate rebuild each time cargo saw a new
-    # fingerprint. It is now three invocations over ONE feature graph
-    # (--all-features), differing only where they must: release profile,
-    # test profile, rustdoc.
+    # History, because both steps mattered: this job once ran five cargo
+    # invocations across three feature graphs, and cargo fingerprints per
+    # feature set, so each graph forced a full nine-crate rebuild (406s).
+    # Collapsing to ONE graph (--all-features, which already implies every
+    # feature) took it to 267s. What remained was three compiles that share
+    # nothing -- release-side profile, test profile, rustdoc are three
+    # distinct fingerprints -- so they were split into three concurrent jobs
+    # rather than summed on one runner.
+    #
+    # If you add a cargo step here, give it `--all-features` and nothing
+    # else, or it will rebuild the workspace for its own feature graph.
     runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 25
+    # Cargo profile overrides, CI-only on purpose -- they are env rather than
+    # a [profile.test] edit so local dev and the OOM guards in Cargo.toml are
+    # untouched.
+    #
+    # [profile.test] carries codegen-units = 4, which caps codegen at four
+    # parallel units on a runner with eight vCPUs; that setting and the
+    # per-package opt-level = 2 overrides exist to stop the generated tag
+    # crates OOMing a small machine, and this runner has 32 GB. 16 units
+    # matches [profile.dev].
+    #
+    # line-tables-only keeps file:line in backtraces (RUST_BACKTRACE=1 is set
+    # workflow-wide) while skipping the full debuginfo this never reads.
+    #
+    # If this job starts failing on memory, this block is the first suspect.
+    env:
+      CARGO_PROFILE_TEST_CODEGEN_UNITS: 16
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
@@ -125,6 +154,29 @@ jobs:
       # cache-all-crates: this job also builds cargo-nextest and cbindgen via
       # taiki-e/install-action, and default caching only covers workspace
       # dependencies, not CI tooling.
+      #
+      # Two cache ideas were measured here and REJECTED. Do not re-add either
+      # without new evidence:
+      #
+      #  - cache-workspace-crates: true -- 408s to 406s, i.e. nothing. Cargo
+      #    fingerprints path dependencies by mtime and git checkout rewrites
+      #    every workspace source file with a fresh mtime, so restored
+      #    workspace artifacts always look stale. Unfixable from target/.
+      #
+      #  - one shared cache entry across the three compile jobs
+      #    (shared-key: workspace, save-if: false on the other two) -- 133s
+      #    to 147s wall clock. A test-profile cache does not contain fixloop
+      #    or rustdoc artifacts, so Release Build went 48s -> 92s and Doc
+      #    Tests 66s -> 76s restoring a cache that could not help them. Each
+      #    compile job needs its OWN key to stay warm for its own profile;
+      #    the three copies of ~/.cargo are the price of that.
+      #
+      #  - sccache as RUSTC_WRAPPER -- 267s to 269s, i.e. slightly worse, and
+      #    that was WITH a 100% hit rate. The rate is a trap here: only 27 of
+      #    94 rustc calls were cacheable at all, the other 62 being refused
+      #    for `crate-type`. sccache caches rlib/lib but not cdylib,
+      #    staticlib or test harnesses -- which is precisely what this crate
+      #    builds for its C FFI, and precisely where the time goes.
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           cache-on-failure: true
@@ -171,12 +223,20 @@ jobs:
       # a later failure in this job (a flaky test, say) throws away a
       # perfectly good ExifTool download and the next run re-fetches it. The
       # explicit save below runs as soon as the tree is verified.
+      #
+      # The `-src-` in the key is load-bearing. Caches are scoped to the
+      # REPOSITORY, not the workflow, and jpeg-tag-matrix.yml caches its own
+      # ExifTool at a different path (/tmp/exiftool, a git clone, vs the
+      # tarball extraction here). If both used the same key the first to save
+      # would win it, and the other workflow would then get cache-hit: true,
+      # skip its download, and fail its -ver assertion on a path that was
+      # never populated. Keep these two key families distinct.
       - name: Restore pinned ExifTool source
         id: exiftool-cache
         uses: WarpBuilds/cache/restore@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
         with:
           path: /tmp/exiftool-src
-          key: exiftool-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
+          key: exiftool-src-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
       - name: Download pinned ExifTool
         if: steps.exiftool-cache.outputs.cache-hit != 'true'
         env:
@@ -228,8 +288,6 @@ jobs:
       # what the old five-invocation layout cost: 406s of which ~139s was
       # recompiling and re-running work another step had already done.
       #
-      # If you add a step here, give it `--all-features` and nothing else.
-      - run: cargo build --release --all-features
       # Tests run in the (unwind) test profile: the release profile sets
       # panic = "abort", which newer cargo refuses to mix with the unwind test
       # harness. So this is a second compile by necessity -- profile, not
@@ -242,15 +300,77 @@ jobs:
       # installed ABOVE this step now. Moving that install back below here
       # would not fail the job; it would silently skip the comparison tests.
       - run: cargo nextest run --all-features
-      # rustdoc is a separate artifact kind, so this compiles once more no
-      # matter what. Same feature set regardless, to reuse everything else.
-      - name: Run doc tests
-        run: cargo test --doc --all-features
       - name: Verify C header is up-to-date
         run: |
           cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h.tmp
           diff -q api/oxidex.h api/oxidex.h.tmp || (echo "C header out of date" && exit 1)
           rm api/oxidex.h.tmp
+
+  release-build:
+    name: Release Build
+    # Split out of Build & Test so the three compiles run concurrently
+    # instead of serially: they share no artifacts (release-side profile,
+    # test profile and rustdoc are three distinct fingerprints), so running
+    # them on one runner only added their times together.
+    #
+    # 4x, not 8x: fixloop sets codegen-units = 16 so this parallelises, but
+    # it is not the long pole -- Build & Test is. Sizing it to finish just
+    # inside that job is what this is worth paying for, not raw speed.
+    runs-on: warp-ubuntu-latest-x64-4x
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      # WarpBuild-native cache backend. Its own shared-key on purpose:
+      # this job compiles a different profile from Build & Test, and a
+      # shared entry was measured slower (see that job's note).
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          cache-on-failure: true
+          cache-provider: warpbuild
+          shared-key: release-build
+      # If you add a step here, give it `--all-features` and nothing else.
+      #
+      # `fixloop`, not `release`. This step exists to prove the release-side
+      # codegen path still compiles and links; release.yml does the real
+      # per-platform release builds on tag pushes. [profile.release] carries
+      # lto = true + codegen-units = 1, which is tuned for the shipped
+      # binary's runtime, not for answering that question -- it cost ~95-100s
+      # of mostly LTO link time here. [profile.fixloop] already exists in
+      # Cargo.toml, inherits release (so it keeps panic = "abort", the thing
+      # that forces the separate test-profile compile below) and only drops
+      # lto and raises codegen-units.
+      #
+      # The gap this accepts: an LTO-only failure would now surface at tag
+      # time in release.yml rather than here.
+      - run: cargo build --profile fixloop --all-features
+
+  doc-tests:
+    name: Doc Tests
+    # Split out for the same reason as Release Build. rustdoc is its own
+    # artifact kind, so this never shared a compile with the other two.
+    #
+    # No ExifTool here on purpose: doc tests are the examples in ///, none
+    # of which shell out to the oracle. If a doc test ever does, it belongs
+    # in Build & Test rather than having the install duplicated here.
+    runs-on: warp-ubuntu-latest-x64-4x
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      # WarpBuild-native cache backend. Its own shared-key on purpose:
+      # this job compiles a different profile from Build & Test, and a
+      # shared entry was measured slower (see that job's note).
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          cache-on-failure: true
+          cache-provider: warpbuild
+          shared-key: doc-tests
+      # rustdoc is a separate artifact kind, so this compiles once more no
+      # matter what. Same feature set regardless, to reuse everything else.
+      - name: Run doc tests
+        run: cargo test --doc --all-features
+
   # The generated ExifTool tables are 100k+ lines that no reviewer reads in a
   # diff, so their correctness rests entirely on verify.py -- which, until this
   # job existed, nothing ever ran. A hand-edit of binary_tables.rs, or a
@@ -310,23 +430,39 @@ jobs:
 
   metrics:
     name: Benchmarks
-    # 2x, and DELIBERATELY the same label as deploy-docs.yml's benchmark job.
+    # 8x, and DELIBERATELY the same label as deploy-docs.yml's benchmark job.
+    # These two publish into the same story -- this one as a 90-day artifact,
+    # the other to the docs performance page -- so they must always match on
+    # runner AND on how they measure. They move together or not at all.
     #
-    # These two jobs publish comparable numbers -- this one as a 90-day
-    # artifact, the other to the docs performance page -- so they must always
-    # name the SAME runner. Criterion's measurement loop is single-threaded,
-    # so cores buy nothing here beyond the build that precedes it; 2x is the
-    # cheapest label that keeps the two aligned.
+    # This job is tuned for THROUGHPUT, not for measurement fidelity. That is
+    # a deliberate, explicit trade (2026-08-08, see CHANGELOG):
     #
-    # These moved off ubuntu-latest on 2026-08-08 (CHANGELOG: benchmark
-    # baseline discontinuity). Numbers from before that date were measured on
-    # GitHub-hosted hardware and are NOT comparable with numbers after it. If
-    # these ever move again, both must move together, in one commit, and the
-    # discontinuity must be recorded in CHANGELOG.md again.
-    runs-on: warp-ubuntu-latest-x64-2x
+    #  - --quick        fewer criterion samples per benchmark. deploy-docs.yml
+    #                   already ran with this and ci.yml did not, so the two
+    #                   were quietly publishing different methodologies; they
+    #                   now match.
+    #  - lto = false    [profile.bench] ships lto = "thin". Turning it off
+    #                   means these numbers describe a binary NOBODY SHIPS --
+    #                   [profile.release] keeps lto = true. Do not quote them
+    #                   as OxiDex's real-world performance.
+    #  - codegen-units  1 is pointless once LTO is off, and it serialises
+    #                   codegen on a runner with eight cores.
+    #
+    # Consequence: numbers from before 2026-08-08 are NOT comparable with
+    # numbers after it, on hardware or methodology. If any of this changes
+    # again, both jobs move together, in one commit, and the discontinuity is
+    # recorded in CHANGELOG.md again.
+    runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 30
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [test]
+    # No `needs:` on purpose. This used to wait for Build & Test, which put
+    # that job's full duration in front of a job that does not consume
+    # anything it produces. A broken build now shows up as a red Build & Test
+    # beside a green Benchmarks, rather than as a delay.
+    env:
+      CARGO_PROFILE_BENCH_LTO: false
+      CARGO_PROFILE_BENCH_CODEGEN_UNITS: 16
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
@@ -336,7 +472,7 @@ jobs:
           cache-provider: warpbuild
           shared-key: metrics
       - name: Run benchmarks
-        run: cargo bench --bench integration_benchmarks --bench parse_benchmarks
+        run: cargo bench --bench integration_benchmarks --bench parse_benchmarks -- --quick
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: benchmark-results

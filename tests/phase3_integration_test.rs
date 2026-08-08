@@ -66,15 +66,28 @@ mod phase3_integration_tests {
         assert!(content.contains("name:"), "workflow should have a name");
         assert!(content.contains("jobs:"), "workflow should have jobs");
 
-        // The single `build-and-deploy` job was split into three so each stage
-        // could run on a runner sized to its own workload, and so the Pages
-        // credentials stopped sharing a runner with the Rust build. All three
-        // are asserted: dropping any one of them silently breaks the pipeline
-        // (no report, no benchmarks, or nothing deployed) while the remaining
-        // jobs still go green.
-        for job in ["comparison-report:", "benchmarks:", "publish:"] {
+        // The single `build-and-deploy` job was split so each stage could run
+        // on a runner sized to its own workload, and so the Pages credentials
+        // stopped sharing a runner with the Rust build. Both are asserted:
+        // dropping either silently breaks the pipeline (no report, or nothing
+        // deployed) while the remaining job still goes green.
+        //
+        // There is deliberately no `benchmarks:` job here. It ran the same
+        // cargo bench as ci.yml's Benchmarks job, and this workflow's path
+        // filter meant a typical main push measured the same commit twice.
+        // `publish` downloads ci.yml's artifact instead, so what has to hold
+        // now is that the consuming steps exist -- asserted below.
+        for job in ["comparison-report:", "publish:"] {
             assert!(content.contains(job), "workflow should have {job} job");
         }
+        assert!(
+            content.contains("name: benchmark-results"),
+            "publish should consume ci.yml's benchmark-results artifact"
+        );
+        assert!(
+            content.contains("actions: read"),
+            "publish needs actions: read to download from another workflow's run"
+        );
 
         // Check triggers
         assert!(
