@@ -928,10 +928,18 @@ impl PanasonicParser {
             return;
         }
 
-        // These tags are int16u with PrintConv mappings. A big-endian inline
-        // SHORT occupies the high half of `value_offset`, so the generic u32
-        // registry path would decode 1 as 65536.
-        if matches!(tag_id, 0x0027 | 0x0038 | 0x0043 | 0x8002 | 0x8003) {
+        // These tags are int16u. A big-endian inline SHORT occupies the high
+        // half of `value_offset`, so the generic u32 registry path would decode
+        // 1 as 65536. 0x0076 MergedImages is int16u with no PrintConv
+        // (Panasonic.pm:1089-1093), so `decode_i32` hands the number straight
+        // back -- it is here only for the byte-order-correct read. No corpus
+        // file needs it today: `MakerNotePanasonic` is `ByteOrder => 'Unknown'`
+        // and every corpus directory resolves little-endian, even in the nine
+        // files whose enclosing EXIF is big-endian. It is the cheap side of an
+        // asymmetric bet -- on a big-endian directory the u32 path would print
+        // 196608 for a reading of 3, and a wrong number under a real tag name
+        // is not detectable downstream the way a missing tag is.
+        if matches!(tag_id, 0x0027 | 0x0038 | 0x0043 | 0x0076 | 0x8002 | 0x8003) {
             let value = i32::from(inline_u16_value(entry, byte_order));
             if let Some(tag_name) = registry.get_tag_name(tag_id) {
                 tags.insert(
@@ -2124,6 +2132,88 @@ mod tests {
         assert_eq!(tags.get("Panasonic:RollAngle").unwrap(), "-1");
         assert_eq!(tags.get("Panasonic:PitchAngle").unwrap(), "44.1");
         assert_eq!(tags.get("Panasonic:ClearRetouchValue").unwrap(), "undef");
+    }
+
+    /// MergedImages (0x0076) is `Writable => 'int16u'` with no PrintConv
+    /// (Panasonic.pm:1089-1093), so ExifTool prints the SHORT itself.
+    ///
+    /// `exiftool -a -G1 -s -MergedImages -BurstSpeed -ExifByteOrder` on the
+    /// pinned 13.59 reports, for `combined-samples/Leica/LeicaD-LUX6.jpg`:
+    ///
+    /// ```text
+    /// [Panasonic]     MergedImages                    : 3
+    /// [Panasonic]     BurstSpeed                      : 0
+    /// [File]          ExifByteOrder                   : Little-endian (Intel, II)
+    /// ```
+    ///
+    /// and `-v3` on the same file shows the entry it comes from:
+    ///
+    /// ```text
+    /// 71) MergedImages = 3
+    ///     - Tag 0x0076 (2 bytes, int16u[1]):
+    ///         083a: 03 00                                           [..]
+    /// ```
+    ///
+    /// The reading must not be mistaken for an enum: "3" is a count of merged
+    /// frames, and the neighbouring BurstSpeed proves a zero SHORT prints "0"
+    /// rather than being suppressed.
+    #[test]
+    fn merged_images_prints_the_raw_int16u_count() {
+        // Little-endian, as LeicaD-LUX6.jpg stores it: 0x0076, int16u[1], 3.
+        let mut data = Vec::new();
+        data.extend_from_slice(PANASONIC_HEADER);
+        data.extend_from_slice(&2u16.to_le_bytes()); // entry_count
+        for (tag_id, value) in [(0x0076u16, 3u32), (0x0077, 0)] {
+            data.extend_from_slice(&tag_id.to_le_bytes());
+            data.extend_from_slice(&3u16.to_le_bytes()); // int16u
+            data.extend_from_slice(&1u32.to_le_bytes()); // count
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+
+        let mut tags = HashMap::new();
+        parse_panasonic_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
+        assert_eq!(tags.get("Panasonic:MergedImages").unwrap(), "3");
+        assert_eq!(tags.get("Panasonic:BurstSpeed").unwrap(), "0");
+    }
+
+    /// A big-endian inline SHORT lives in the *high* half of the 4-byte value
+    /// field, so reading `value_offset` as a u32 would report 3 as 196608.
+    ///
+    /// `MakerNotePanasonic` is `ByteOrder => 'Unknown'` (MakerNotes.pm:733-741),
+    /// so the directory's endianness is resolved from its entry count rather
+    /// than inherited from the enclosing TIFF: nine corpus files carrying
+    /// MergedImages have big-endian EXIF, yet every one of their *MakerNote*
+    /// directories resolves little-endian. `combined-samples/Panasonic/
+    /// PanasonicDMC-GH3.jpg` is the clearest case -- pinned 13.59 reports
+    ///
+    /// ```text
+    /// [Panasonic]     MergedImages                    : 0
+    /// [Panasonic]     BurstSpeed                      : 6
+    /// [File]          ExifByteOrder                   : Big-endian (Motorola, MM)
+    /// ```
+    ///
+    /// and oxidex already prints BurstSpeed 6 there through the plain-u32 path,
+    /// which it could only do by reading the directory little-endian.
+    ///
+    /// So no corpus file exercises a big-endian Panasonic directory, and this
+    /// fixture is constructed. It is worth having anyway: on such a directory
+    /// the plain-u32 path silently yields 196608 for a reading of 3, which is
+    /// the failure mode that produces a confident wrong number rather than a
+    /// missing tag.
+    #[test]
+    fn merged_images_reads_the_high_half_of_a_big_endian_short() {
+        let mut data = Vec::new();
+        data.extend_from_slice(PANASONIC_HEADER);
+        data.extend_from_slice(&1u16.to_be_bytes()); // entry_count
+        data.extend_from_slice(&0x0076u16.to_be_bytes());
+        data.extend_from_slice(&3u16.to_be_bytes()); // int16u
+        data.extend_from_slice(&1u32.to_be_bytes()); // count
+        data.extend_from_slice(&3u16.to_be_bytes()); // high half of value field
+        data.extend_from_slice(&[0, 0]); // low half, unused
+
+        let mut tags = HashMap::new();
+        parse_panasonic_makernotes(&data, ByteOrder::BigEndian, &mut tags);
+        assert_eq!(tags.get("Panasonic:MergedImages").unwrap(), "3");
     }
 
     /// `combined-samples/Panasonic/PanasonicDC-FZ80.jpg`'s MakerNote: every

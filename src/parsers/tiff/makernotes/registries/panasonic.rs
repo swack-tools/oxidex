@@ -123,6 +123,11 @@ pub fn panasonic_registry() -> TagRegistry {
         .register_integer_tag(0x0060, "LensFirmwareVersion", None)
         .register_enum_tag_required(0x0062, "FlashWarning", &FLASH_WARNING)
         .register_enum_tag_required(0x0070, "IntelligentResolution", &INTELLIGENT_RESOLUTION)
+        // MergedImages is a plain count, not an enum: Panasonic.pm:1089-1093
+        // declares `Writable => 'int16u'` with
+        // `Notes => 'number of images in HDR or Live View Composite picture'`
+        // and no PrintConv, so ExifTool prints the number itself.
+        .register_integer_tag(0x0076, "MergedImages", None)
         // BurstSpeed is a plain count, not an enum: Panasonic.pm:1094 declares
         // `Writable => 'int16u', Notes => 'images per second'` and no PrintConv.
         // A Low/Mid/High decoder printed "Low" where ExifTool prints "0".
