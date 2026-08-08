@@ -156,8 +156,14 @@ jobs:
           path: /tmp/exiftool
           key: ${{ steps.exiftool-cache.outputs.cache-primary-key }}
 
+      # --locked, unlike every other workflow here, because this is the only
+      # job that commits to main unattended. Cargo.lock is tracked, and the
+      # `git add -u` below stages whatever the job dirtied -- so a build
+      # allowed to refresh the lockfile would push an unreviewed dependency
+      # change to main under a "docs: auto-update" message. Failing loudly
+      # when the lockfile is stale is the right trade for that.
       - name: Build oxidex
-        run: cargo build --bin oxidex
+        run: cargo build --locked --bin oxidex
 
       # Two corpus roots, because neither covers what the other does:
       #
