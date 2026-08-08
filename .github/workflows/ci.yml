@@ -87,7 +87,6 @@ jobs:
           cache-on-failure: true
           cache-provider: warpbuild
           shared-key: lint
-          cache-workspace-crates: true
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-features -- -D warnings
       - uses: rustsec/audit-check@e9159ac5f7d7d873ce074ca134da2f445c0a4a61 # v1.3.2
@@ -102,10 +101,15 @@ jobs:
 
   test:
     name: Build & Test
-    # 8x: this job's ~12 minutes are almost entirely parallelisable work --
-    # cargo build --release (~2m51s, parallel across codegen units), nextest
-    # (~4m32s, test-level parallelism), the ExifTool comparison suite
-    # (~2m15s), the C FFI test (~1m16s) and doc tests (~56s).
+    # 8x: this job is almost entirely parallelisable work -- cargo build
+    # --release (parallel across codegen units), nextest (test-level
+    # parallelism) and doc tests.
+    #
+    # It used to run five cargo invocations across three different feature
+    # graphs, which cost a full nine-crate rebuild each time cargo saw a new
+    # fingerprint. It is now three invocations over ONE feature graph
+    # (--all-features), differing only where they must: release profile,
+    # test profile, rustdoc.
     runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 25
     steps:
@@ -115,49 +119,18 @@ jobs:
       # cache-all-crates: this job also builds cargo-nextest and cbindgen via
       # taiki-e/install-action, and default caching only covers workspace
       # dependencies, not CI tooling.
-      #
-      # cache-workspace-crates: rust-cache drops workspace members from the
-      # cache by default, on the assumption they change every commit. That is
-      # true of the root `oxidex` crate but false of the eight generated
-      # `oxidex-tags-*` crates, which are regenerated from ExifTool only when
-      # the tag tables move. Measured on run 31274063378: those eight were
-      # compiled from scratch three times in one job (build, nextest, C FFI)
-      # and cached zero times across runs. Cargo fingerprints still force a
-      # rebuild whenever their sources actually change.
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           cache-on-failure: true
           cache-provider: warpbuild
           shared-key: test
           cache-all-crates: true
-          cache-workspace-crates: true
       - uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
         with:
           # Pin cbindgen: the committed api/oxidex.h is generated with 0.29.2,
           # and newer cbindgen emits extra #define macros that would fail the
           # "Verify C header is up-to-date" check non-deterministically.
           tool: cargo-nextest,cbindgen@0.29.2
-      - run: cargo build --release --all-features --features tag-comparison-binary
-      # Tests run in the (unwind) test profile: the release profile sets
-      # panic = "abort", which newer cargo refuses to mix with the unwind test
-      # harness. The release artifacts themselves are covered by the build step
-      # above and by release.yml's per-platform builds on tag pushes.
-      - run: cargo nextest run --all-features --features tag-comparison-binary
-      # Same feature set as the nextest step above, deliberately. Without it
-      # cargo resolves a different feature graph and rebuilds all nine
-      # workspace crates before running one test: measured at 51s on run
-      # 31274063378, of which only 11.75s was the test itself. nextest
-      # already runs this same test (as oxidex::ffi_c_integration); this step
-      # is kept for its uncaptured output, not for coverage.
-      - name: C FFI integration test
-        run: cargo test --all-features --features tag-comparison-binary --test ffi_c_integration -- --nocapture
-      - name: Run doc tests
-        run: cargo test --doc --all-features
-      - name: Verify C header is up-to-date
-        run: |
-          cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h.tmp
-          diff -q api/oxidex.h api/oxidex.h.tmp || (echo "C header out of date" && exit 1)
-          rm api/oxidex.h.tmp
       # Pinned, not "newest". This step used to scrape the newest
       # Image-ExifTool tarball off SourceForge's RSS feed, which meant the
       # release CI graded against changed whenever upstream published -- while
@@ -226,6 +199,11 @@ jobs:
           echo "/tmp/exiftool-src" >> "$GITHUB_PATH"
           GOT=$(/tmp/exiftool-src/exiftool -ver)
           [ "$GOT" = "$V" ] || { echo "::error::installed ExifTool $GOT, expected $V"; exit 1; }
+          # Exported for the nextest step below: EXIFTOOL points the oracle
+          # at the pinned checkout explicitly rather than relying on PATH
+          # order, so a runner image shipping its own exiftool cannot
+          # quietly win the lookup.
+          echo "EXIFTOOL=/tmp/exiftool-src/exiftool" >> "$GITHUB_ENV"
       # Only on a miss, and only once the step above has proved the tree is
       # the right release -- default `success()` semantics are load-bearing
       # here, so a failed verify never persists a bad tree. Reuses the
@@ -236,14 +214,37 @@ jobs:
         with:
           path: /tmp/exiftool-src
           key: ${{ steps.exiftool-cache.outputs.cache-primary-key }}
-      - name: Integration tests (ExifTool comparison)
-        # EXIFTOOL points the oracle at the pinned checkout explicitly rather
-        # than relying on PATH order, so a runner image that ships its own
-        # exiftool cannot quietly win the lookup.
-        env:
-          EXIFTOOL: /tmp/exiftool-src/exiftool
-        run: cargo test --features exiftool-comparison
-
+      # ONE feature graph for the whole job. `--all-features` already implies
+      # tag-comparison-binary and exiftool-comparison, so naming either again
+      # is redundant -- and naming a DIFFERENT subset is expensive: every
+      # distinct feature set gets its own fingerprint, so cargo rebuilds all
+      # nine workspace crates for it. Measured on run 31274865213, that is
+      # what the old five-invocation layout cost: 406s of which ~139s was
+      # recompiling and re-running work another step had already done.
+      #
+      # If you add a step here, give it `--all-features` and nothing else.
+      - run: cargo build --release --all-features
+      # Tests run in the (unwind) test profile: the release profile sets
+      # panic = "abort", which newer cargo refuses to mix with the unwind test
+      # harness. So this is a second compile by necessity -- profile, not
+      # features. The release artifacts themselves are covered by the build
+      # step above and by release.yml's per-platform builds on tag pushes.
+      #
+      # This one invocation now covers what used to be three: the unit and
+      # integration suites, the C FFI test (oxidex::ffi_c_integration), and
+      # the exiftool-comparison suite -- the last only because ExifTool is
+      # installed ABOVE this step now. Moving that install back below here
+      # would not fail the job; it would silently skip the comparison tests.
+      - run: cargo nextest run --all-features
+      # rustdoc is a separate artifact kind, so this compiles once more no
+      # matter what. Same feature set regardless, to reuse everything else.
+      - name: Run doc tests
+        run: cargo test --doc --all-features
+      - name: Verify C header is up-to-date
+        run: |
+          cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h.tmp
+          diff -q api/oxidex.h api/oxidex.h.tmp || (echo "C header out of date" && exit 1)
+          rm api/oxidex.h.tmp
   # The generated ExifTool tables are 100k+ lines that no reviewer reads in a
   # diff, so their correctness rests entirely on verify.py -- which, until this
   # job existed, nothing ever ran. A hand-edit of binary_tables.rs, or a
@@ -328,7 +329,6 @@ jobs:
           cache-on-failure: true
           cache-provider: warpbuild
           shared-key: metrics
-          cache-workspace-crates: true
       - name: Run benchmarks
         run: cargo bench --bench integration_benchmarks --bench parse_benchmarks
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -43,7 +43,6 @@ jobs:
           cache-on-failure: true
           cache-provider: warpbuild
           shared-key: release
-          cache-workspace-crates: true
           key: ${{ matrix.target }}
 
       - name: Install musl tools
@@ -90,7 +89,6 @@ jobs:
           cache-on-failure: true
           cache-provider: warpbuild
           shared-key: release-windows
-          cache-workspace-crates: true
 
       - name: Install MinGW cross-compiler
         run: |
@@ -143,7 +141,6 @@ jobs:
           cache-on-failure: true
           cache-provider: warpbuild
           shared-key: release-macos
-          cache-workspace-crates: true
 
       - name: Import signing certificate
         env:
