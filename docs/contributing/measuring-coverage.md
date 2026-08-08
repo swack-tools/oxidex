@@ -70,7 +70,7 @@ constraint.
 | Corpus | Size | Available in CI | Scored by default |
 |--------|------|-----------------|-------------------|
 | `tests/fixtures` | 44 media files | ✅ checked in | ✅ |
-| `<cache>/exiftool/t/images` | 194 files, ~126 formats | ✅ from the pinned clone | ✅ |
+| ExifTool's `t/images` | 194 files, ~126 formats | ✅ from the pinned clone | ✅ |
 | `<cache>/combined-samples` | ~4,200 files by manufacturer | ❌ local dev cache | opt-in |
 
 `<cache>` is `$EXIFTOOL_CACHE_DIR`, default `/tmp/oxidex-exiftool-cache`.
@@ -79,6 +79,17 @@ constraint.
 release tree already cloned for the oracle, so it costs nothing extra, and it
 is pinned to the same version the transcriptions came from — it cannot drift
 from the oracle grading against it.
+
+Where the recipe finds it depends on how your cache was populated. A git clone
+carries `t/images`; a tarball extract may not. So `just docs-coverage` uses
+`<cache>/exiftool/t/images` when present, and otherwise clones to
+`<cache>/exiftool-corpus-<version>`. It **never deletes `<cache>/exiftool`** —
+that is the shared oracle tree that `just compare-exiftool-full` populates and
+that the coverage loop reads afterwards, and a missing corpus is not evidence
+the oracle is broken. The version assertion runs against whichever tree the
+samples actually came from, because sample files change between releases and a
+corpus from the wrong version is the same skew problem as an oracle from the
+wrong version.
 
 **Why `tests/fixtures` alone is not enough.** It covers 6 formats and scored
 96.0%. That number was true and badly misleading: adding `t/images` dropped the

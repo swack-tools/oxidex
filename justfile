@@ -556,17 +556,34 @@ docs-coverage:
     # ExifTool's own t/images is the format-breadth corpus (~126 formats).
     # Pinned to the same release the transcriptions came from, so it cannot
     # drift from the oracle grading against it.
-    if [ ! -d "$ET_DIR/t/images" ]; then
-        echo "Cloning pinned ExifTool $V (for its t/images corpus)..."
-        mkdir -p "$CACHE_DIR"
-        rm -rf "$ET_DIR"
-        git clone -q --depth 1 --branch "$V" \
-            https://github.com/exiftool/exiftool "$ET_DIR"
+    #
+    # Deliberately never `rm -rf "$ET_DIR"`. That path is the SHARED oracle
+    # tree: compare-exiftool-full populates it from a tarball (with a GCS
+    # fallback), and the exiftool-coverage-loop and find_tag_gaps.py read it
+    # afterwards from separate invocations. A tarball extract may or may not
+    # carry t/images, so "missing corpus" is not evidence the tree is broken
+    # and must not be treated as a licence to delete it. Fall back to a
+    # dedicated clone instead -- version-suffixed, so it is idempotent and a
+    # pin bump cannot serve last release's samples.
+    if [ -d "$ET_DIR/t/images" ]; then
+        CORPUS_TREE="$ET_DIR"
+    else
+        CORPUS_TREE="$CACHE_DIR/exiftool-corpus-$V"
+        if [ ! -d "$CORPUS_TREE/t/images" ]; then
+            echo "Cloning pinned ExifTool $V for its t/images corpus..."
+            mkdir -p "$CACHE_DIR"
+            rm -rf "$CORPUS_TREE"
+            git clone -q --depth 1 --branch "$V" \
+                https://github.com/exiftool/exiftool "$CORPUS_TREE"
+        fi
     fi
-    GOT=$("$ET_DIR/exiftool" -ver)
-    [ "$GOT" = "$V" ] || { echo "ExifTool $GOT in cache, expected $V" >&2; exit 1; }
+    # Assert against whichever tree the samples actually came from: sample
+    # files change between releases, so a corpus from the wrong version is the
+    # same skew problem as an oracle from the wrong version.
+    GOT=$("$CORPUS_TREE/exiftool" -ver)
+    [ "$GOT" = "$V" ] || { echo "corpus tree is ExifTool $GOT, expected $V" >&2; exit 1; }
 
-    CORPORA=("$ET_DIR/t/images" tests/fixtures)
+    CORPORA=("$CORPUS_TREE/t/images" tests/fixtures)
     MIN_FILES=200
     MIN_TAGS=10000
     if [ "${OXIDEX_DEEP_CORPUS:-0}" = "1" ]; then
