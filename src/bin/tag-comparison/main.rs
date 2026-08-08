@@ -275,8 +275,8 @@ fn detect_formats(
 }
 
 /// Map file extension to format name
-fn extension_to_format(ext: &str) -> Option<&'static str> {
-    match ext.to_lowercase().as_str() {
+fn extension_to_format(ext: &str) -> Option<String> {
+    let named: Option<&'static str> = match ext.to_lowercase().as_str() {
         "jpg" | "jpeg" => Some("JPEG"),
         "png" => Some("PNG"),
         "tif" | "tiff" => Some("TIFF"),
@@ -377,6 +377,64 @@ fn extension_to_format(ext: &str) -> Option<&'static str> {
         "djvu" | "djv" => Some("DJVU"),
         "html" | "htm" => Some("HTML"),
         "lnk" => Some("LNK"),
+        // Anything not named above is grouped under its own uppercased
+        // extension rather than dropped.
+        //
+        // This arm used to be `None`, which silently removed the file from the
+        // run entirely -- not from one format's numbers, but from the corpus.
+        // On ExifTool's own t/images that was 83 of 194 files (43%), and they
+        // were disproportionately the formats with no parser yet: FITS, DICOM,
+        // MIE, CRW, JP2, R3D, IIQ, INDD, PCD, MRC. Their absence did not read
+        // as a gap; it read as a corpus that oxidex handled well, because the
+        // only formats that could appear in the report were ones already
+        // mapped here. A format with no parser now shows up with its real
+        // score instead of not showing up at all.
+        //
+        // Non-media files (.txt, .log, .csv) reach here too. ExifTool reports
+        // only File/System pseudo-tags for those, which this harness skips, so
+        // they land as "not measurable" -- named in the report, excluded from
+        // the coverage ratio, and contributing nothing either way.
+        // Not named above: fall through to the uppercased extension below.
         _ => None,
+    };
+
+    Some(named.map_or_else(|| ext.to_uppercase(), |f| f.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_extensions_keep_their_canonical_format_name() {
+        assert_eq!(extension_to_format("jpg").as_deref(), Some("JPEG"));
+        assert_eq!(extension_to_format("JPEG").as_deref(), Some("JPEG"));
+        assert_eq!(extension_to_format("cr3").as_deref(), Some("CR2"));
+        assert_eq!(extension_to_format("mts").as_deref(), Some("M2TS"));
+    }
+
+    /// The corpus-truncation fix: an extension with no arm above is grouped
+    /// under itself instead of returning `None`, which used to delete the file
+    /// from the run. Nothing may map to `None` any more -- a format that has
+    /// no parser has to be able to score badly, and it cannot score at all if
+    /// its files never reach the harness.
+    #[test]
+    fn unknown_extensions_group_under_themselves_rather_than_being_dropped() {
+        for (ext, expected) in [
+            ("fits", "FITS"),
+            ("dcm", "DCM"),
+            ("crw", "CRW"),
+            ("r3d", "R3D"),
+            ("iiq", "IIQ"),
+            // Non-media reaches here too; it lands as "not measurable" later
+            // rather than being silently removed from the corpus.
+            ("txt", "TXT"),
+        ] {
+            assert_eq!(
+                extension_to_format(ext).as_deref(),
+                Some(expected),
+                ".{ext} must be grouped, not dropped",
+            );
+        }
     }
 }

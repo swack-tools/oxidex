@@ -247,6 +247,66 @@ fn find_same_file_pair<'a>(
     None
 }
 
+/// Per-(file, tag) coverage: `(matched_instances, total_exiftool_instances)`.
+///
+/// Returns raw counts rather than a percentage so the report can sum them
+/// across formats before dividing — averaging per-format percentages would let
+/// a 3-tag format outweigh a 3,000-tag one.
+///
+/// This is the counterpart to the distinct-key ratio the harness has always
+/// reported, and it exists because that ratio is not a coverage measurement.
+/// Both sides are deduplicated to a set of `family:name` keys before it is
+/// taken, which drops two things at once: the 4,085 JPEGs in the corpus
+/// collapse to ~3,700 keys, and a key counts as "matched" when oxidex emits it
+/// on *any* file — not necessarily the file ExifTool read it from. Measured on
+/// ExifTool's own `t/images` (194 files, ExifTool 13.59), the two disagree by
+/// 22 points: 97.1% by distinct key, 75.4% per (file, tag).
+///
+/// An ExifTool instance counts as matched only when oxidex emits the same
+/// normalized key **on the same source file** and the two values agree under
+/// [`normalize_value_for_comparison`] — the same key and value rules the
+/// distinct-key path uses, so the two numbers differ in what they count, not
+/// in how they decide a match.
+fn count_instance_coverage(
+    oxidex_instances: &HashMap<String, Vec<TagInfo>>,
+    exiftool_instances: &HashMap<String, Vec<TagInfo>>,
+) -> (usize, usize) {
+    // (source_file, normalized key) -> oxidex value. Normalizing both sides
+    // keeps `Canon:Make` and `MakerNotes:Make` on the same footing here
+    // exactly as they are in the distinct-key path.
+    let mut ox_by_file_key: HashMap<(&str, String), &TagInfo> = HashMap::new();
+    for list in oxidex_instances.values() {
+        for tag in list {
+            if let Some(sf) = tag.source_file.as_deref() {
+                let norm_key = normalize_key_for_comparison(&tag.key());
+                ox_by_file_key.entry((sf, norm_key)).or_insert(tag);
+            }
+        }
+    }
+
+    let mut matched = 0usize;
+    let mut total = 0usize;
+    for list in exiftool_instances.values() {
+        for et in list {
+            // An instance with no source file cannot be attributed to a file,
+            // so it cannot be scored per file either. Skipped from BOTH sides
+            // of the ratio rather than counted as a miss.
+            let Some(sf) = et.source_file.as_deref() else {
+                continue;
+            };
+            total += 1;
+            let norm_key = normalize_key_for_comparison(&et.key());
+            if let Some(ox) = ox_by_file_key.get(&(sf, norm_key))
+                && normalize_value_for_comparison(&ox.value)
+                    == normalize_value_for_comparison(&et.value)
+            {
+                matched += 1;
+            }
+        }
+    }
+    (matched, total)
+}
+
 impl ComparisonEngine {
     /// Compare OxiDex and ExifTool tags for a format
     ///
@@ -476,6 +536,15 @@ impl ComparisonEngine {
 
         // Calculate coverage
         comparison.calculate_coverage();
+
+        // Per-(file, tag) coverage, from the same instance maps the value
+        // comparison above already uses. The `#[cfg(test)]` `compare` wrapper
+        // passes empty maps, which correctly yields 0/0 -> not measurable.
+        let (matched_instances, total_instances) =
+            count_instance_coverage(oxidex_instances, exiftool_instances);
+        comparison.matched_instances = matched_instances;
+        comparison.total_exiftool_instances = total_instances;
+        comparison.calculate_instance_coverage();
 
         comparison
     }
@@ -1064,5 +1133,138 @@ mod tests {
         assert!(result.value_differences.is_empty());
         assert_eq!(result.missing_in_oxidex.len(), 1);
         assert_eq!(result.extra_in_oxidex.len(), 1);
+    }
+
+    /// Build an `all_instances` map from `(file, family, name, value)` rows.
+    fn instances(rows: &[(&str, &str, &str, &str)]) -> HashMap<String, Vec<TagInfo>> {
+        let mut map: HashMap<String, Vec<TagInfo>> = HashMap::new();
+        for (file, family, name, value) in rows {
+            let tag = TagInfo::new(name.to_string(), family.to_string(), value.to_string())
+                .with_source_file(file.to_string());
+            map.entry(format!("{}:{}", family, name))
+                .or_default()
+                .push(tag);
+        }
+        map
+    }
+
+    /// The whole reason the instance metric exists: a tag ExifTool reads from
+    /// three files that oxidex reads from only one is 100% by distinct key and
+    /// 33% per (file, tag). The published report used to headline the former.
+    #[test]
+    fn instance_coverage_does_not_credit_a_key_matched_on_one_file_only() {
+        let et = instances(&[
+            ("a.jpg", "EXIF", "Make", "Canon"),
+            ("b.jpg", "EXIF", "Make", "Canon"),
+            ("c.jpg", "EXIF", "Make", "Canon"),
+        ]);
+        let ox = instances(&[("a.jpg", "EXIF", "Make", "Canon")]);
+
+        let (matched, total) = count_instance_coverage(&ox, &et);
+        assert_eq!((matched, total), (1, 3));
+
+        // ...while the distinct-key path calls the same data fully covered.
+        let result = ComparisonEngine::compare_with_instances(
+            vec![TagInfo::new(
+                "Make".to_string(),
+                "EXIF".to_string(),
+                "Canon".to_string(),
+            )],
+            vec![TagInfo::new(
+                "Make".to_string(),
+                "EXIF".to_string(),
+                "Canon".to_string(),
+            )],
+            "JPEG",
+            3,
+            None,
+            &ox,
+            &et,
+        );
+        assert_eq!(result.coverage_percentage, 100.0);
+        assert!((result.instance_coverage_percentage - 100.0 / 3.0).abs() < 1e-9);
+        assert!(result.is_measurable());
+    }
+
+    /// A match must be same-file. Right key on the wrong file is not coverage.
+    #[test]
+    fn instance_coverage_requires_the_same_source_file() {
+        let et = instances(&[("a.jpg", "EXIF", "Make", "Canon")]);
+        let ox = instances(&[("b.jpg", "EXIF", "Make", "Canon")]);
+        assert_eq!(count_instance_coverage(&ox, &et), (0, 1));
+    }
+
+    /// Same file, same key, different value is a miss — not a free match.
+    #[test]
+    fn instance_coverage_requires_the_value_to_agree() {
+        let et = instances(&[("a.jpg", "EXIF", "ISO", "100")]);
+        let ox = instances(&[("a.jpg", "EXIF", "ISO", "200")]);
+        assert_eq!(count_instance_coverage(&ox, &et), (0, 1));
+    }
+
+    /// Family normalization applies to instances too, so `Canon:Make` and
+    /// `MakerNotes:Make` are the same tag here exactly as they are elsewhere.
+    #[test]
+    fn instance_coverage_normalizes_families() {
+        let et = instances(&[("a.jpg", "MakerNotes", "LensType", "EF 50mm")]);
+        let ox = instances(&[("a.jpg", "Canon", "LensType", "EF 50mm")]);
+        assert_eq!(count_instance_coverage(&ox, &et), (1, 1));
+    }
+
+    /// BMP/ICO in ExifTool's `t/images`: everything ExifTool emits is a
+    /// skipped pseudo-family, so nothing is comparable. That must read as
+    /// "not measurable", never as a measured 0%.
+    #[test]
+    fn a_format_with_no_comparable_tags_is_not_measurable() {
+        let empty: HashMap<String, Vec<TagInfo>> = HashMap::new();
+        let ox = instances(&[("x.bmp", "PNG", "ImageWidth", "16")]);
+        assert_eq!(count_instance_coverage(&ox, &empty), (0, 0));
+
+        let result = ComparisonEngine::compare_with_instances(
+            vec![TagInfo::new(
+                "ImageWidth".to_string(),
+                "PNG".to_string(),
+                "16".to_string(),
+            )],
+            vec![],
+            "BMP",
+            1,
+            None,
+            &ox,
+            &empty,
+        );
+        assert!(!result.is_measurable());
+        assert_eq!(result.instance_coverage_percentage, 0.0);
+        assert!(result.summary().contains("not measurable"));
+    }
+
+    /// The report must sum raw instance counts, not average per-format
+    /// percentages -- otherwise a 1-tag format outweighs a 1,000-tag one.
+    #[test]
+    fn overall_instance_coverage_weights_by_size_not_by_format() {
+        use crate::models::ComparisonReport;
+
+        let mut big = FormatComparison::new("JPEG".to_string(), 100);
+        big.matched_instances = 500;
+        big.total_exiftool_instances = 1000;
+        big.calculate_instance_coverage();
+
+        let mut small = FormatComparison::new("GIF".to_string(), 1);
+        small.matched_instances = 1;
+        small.total_exiftool_instances = 1;
+        small.calculate_instance_coverage();
+
+        // Unmeasurable: contributes 0/0 and must be named, not silently sunk.
+        let unmeasurable = FormatComparison::new("BMP".to_string(), 1);
+
+        let mut report = ComparisonReport::new();
+        report.add_format("JPEG".to_string(), big);
+        report.add_format("GIF".to_string(), small);
+        report.add_format("BMP".to_string(), unmeasurable);
+        report.calculate_overall_coverage();
+
+        // 501/1001, not the 75% a per-format average would give.
+        assert!((report.overall_instance_coverage - 50.05).abs() < 0.01);
+        assert_eq!(report.unmeasurable_formats, vec!["BMP".to_string()]);
     }
 }

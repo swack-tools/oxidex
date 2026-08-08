@@ -41,10 +41,11 @@ fn generate_index(
         report.oxidex_version
     ));
 
-    // Overall stats
+    // Overall stats. The headline is the per-(file, tag) figure: of every tag
+    // ExifTool read out of these files, the share oxidex read the same way.
     content.push_str(&format!(
         "**Overall Coverage:** {:.1}%",
-        report.overall_coverage
+        report.overall_instance_coverage
     ));
 
     if report.total_regressions > 0 {
@@ -54,6 +55,59 @@ fn generate_index(
         ));
     }
     content.push_str("\n\n");
+
+    content.push_str(&format!(
+        "::: warning What this number is, and what it is not\n\
+         **Overall Coverage** is measured per (file, tag): every tag ExifTool \
+         extracted from every sample file counts once, and it counts as \
+         covered only when OxiDex extracted the same tag from *that same file* \
+         with the same value. Across this corpus that is \
+         **{matched} of {total} tag instances**.\n\n\
+         It is deliberately **not** the share of distinct tag *names* the \
+         corpus contains, which for the same run is {name_pct:.1}% \
+         ({name_matched} of {name_total} keys). That figure deduplicates both \
+         sides across the whole corpus, so a tag ExifTool reads from 4,000 \
+         files counts as covered when OxiDex reads it from one — possibly not \
+         even the same one. On ExifTool's own `t/images` the two differ by 22 \
+         points. The per-name column is kept below as a breadth signal; it is \
+         an inventory of names, not a measure of extraction.\n\
+         :::\n\n",
+        matched = report
+            .by_format
+            .values()
+            .map(|c| c.matched_instances)
+            .sum::<usize>(),
+        total = report
+            .by_format
+            .values()
+            .map(|c| c.total_exiftool_instances)
+            .sum::<usize>(),
+        name_pct = report.overall_coverage,
+        name_matched = report
+            .by_format
+            .values()
+            .map(|c| c.matched_tags.len())
+            .sum::<usize>(),
+        name_total = report
+            .by_format
+            .values()
+            .map(|c| c.total_exiftool_tags)
+            .sum::<usize>(),
+    ));
+
+    if !report.unmeasurable_formats.is_empty() {
+        content.push_str(&format!(
+            "::: info {} format(s) not measurable\n\
+             Every tag ExifTool emitted for {} fell in a pseudo-family this \
+             harness skips (`File`, `System`, `Composite`, `ExifTool`), so \
+             there was nothing to compare. These are excluded from **Overall \
+             Coverage** and listed as `n/a` below rather than scored 0% — an \
+             absent measurement is not a measured zero.\n\
+             :::\n\n",
+            report.unmeasurable_formats.len(),
+            report.unmeasurable_formats.join(", "),
+        ));
+    }
 
     content.push_str(
         "::: tip Empirical JPEG tag matrix\n\
@@ -67,10 +121,16 @@ fn generate_index(
 
     // Summary table for tested formats
     content.push_str("## Coverage by Format\n\n");
+    content.push_str(
+        "`Coverage` is per (file, tag) — matched instances over ExifTool \
+         instances. `Names Seen` is the distinct-key inventory described \
+         above, shown for breadth only. `Missing`, `Extra` and `Value Diffs` \
+         count distinct keys.\n\n",
+    );
     content
-        .push_str("| Format | Files | Total Tags | Coverage | Missing | Extra | Value Diffs | Regressions |\n");
+        .push_str("| Format | Files | Tag Instances | Coverage | Names Seen | Missing | Extra | Value Diffs | Regressions |\n");
     content
-        .push_str("|--------|-------|------------|----------|---------|-------|-------------|-------------|\n");
+        .push_str("|--------|-------|---------------|----------|------------|---------|-------|-------------|-------------|\n");
 
     let mut formats: Vec<_> = report.by_format.iter().collect();
     formats.sort_by(|a, b| a.0.cmp(b.0));
@@ -85,13 +145,32 @@ fn generate_index(
             format!("⚠️ {}", comp.regressions.len())
         };
 
+        // `n/a`, never `0.0%`: a format with no comparable ExifTool tags was
+        // not measured, and printing a zero states a result no run produced.
+        let coverage_cell = if comp.is_measurable() {
+            format!("{:.1}%", comp.instance_coverage_percentage)
+        } else {
+            "n/a".to_string()
+        };
+        let names_cell = if comp.total_exiftool_tags == 0 {
+            "n/a".to_string()
+        } else {
+            format!(
+                "{}/{} ({:.0}%)",
+                comp.matched_tags.len(),
+                comp.total_exiftool_tags,
+                comp.coverage_percentage
+            )
+        };
+
         content.push_str(&format!(
-            "| [{}](./{}.md) | {} | {} | {:.1}% | {} | {} | {} | {} |\n",
+            "| [{}](./{}.md) | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             format,
             format.to_lowercase(),
             comp.files_tested,
-            comp.total_exiftool_tags,
-            comp.coverage_percentage,
+            comp.total_exiftool_instances,
+            coverage_cell,
+            names_cell,
             comp.missing_in_oxidex.len(),
             comp.extra_in_oxidex.len(),
             comp.value_differences.len(),
@@ -174,9 +253,26 @@ fn generate_format_page(
         "- **Files Tested:** {}\n",
         comparison.files_tested
     ));
+    if comparison.is_measurable() {
+        content.push_str(&format!(
+            "- **Coverage (per file+tag):** {:.1}% — {} of {} tag instances\n",
+            comparison.instance_coverage_percentage,
+            comparison.matched_instances,
+            comparison.total_exiftool_instances,
+        ));
+    } else {
+        content.push_str(
+            "- **Coverage (per file+tag):** n/a — ExifTool emitted no \
+             comparable tags for this format (all fell in skipped \
+             pseudo-families), so there was nothing to measure\n",
+        );
+    }
     content.push_str(&format!(
-        "- **Coverage:** {:.1}%\n",
-        comparison.coverage_percentage
+        "- **Distinct tag names seen:** {} of {} ({:.1}%) — an inventory of \
+         names across the corpus, not extraction coverage\n",
+        comparison.matched_tags.len(),
+        comparison.total_exiftool_tags,
+        comparison.coverage_percentage,
     ));
     content.push_str(&format!(
         "- **Matched Tags:** {}\n",
