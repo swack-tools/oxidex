@@ -167,14 +167,23 @@ pub struct IfdEntry {
 /// - `Ok(Vec<(u16, u16, u32, Cow<'static, [u8]>)>)`: Vector of (tag_id, field_type, value_count, raw_value_bytes) tuples
 /// - `Err(ExifToolError)`: Parse error or I/O error
 ///
+/// # Malformed entries
+///
+/// Individual bad entries are *skipped*, not fatal, matching ExifTool's
+/// `ProcessExif`: an unreadable value offset or an unrecognised format code
+/// produces a warning and no tag, and parsing continues with the next entry
+/// (`Exif.pm` lines 6471 and 6660). Once more than 10 entries have warned,
+/// ExifTool gives up on the directory but keeps the tags it already read
+/// (`Exif.pm:6455`); this function does the same by returning the partial
+/// list. Skipped entries are never given a substitute value.
+///
 /// # Errors
 ///
-/// Returns an error if:
+/// Returns an error only for directory-level corruption, where nothing can be
+/// read at all:
 /// - IFD offset is beyond file size
-/// - Entry count is invalid
-/// - Tag entry data is truncated
-/// - Value offset points beyond file size
-/// - Unknown or invalid field type encountered
+/// - The IFD's declared size extends past the end of the data
+/// - Entry count is invalid or the entry array is truncated
 ///
 /// # Example
 ///
@@ -264,12 +273,30 @@ pub fn parse_ifd(
     // Pre-allocate capacity to avoid reallocations since entry_count is known upfront
     let mut result = Vec::with_capacity(entry_count as usize);
 
+    // ExifTool budgets per-entry warnings and only abandons the directory once
+    // there are more than 10 of them (Exif.pm:6455 `if ($warnCount > 10) { ...
+    // "Too many warnings -- $dir parsing aborted" ... return 0 }`). The tags it
+    // already extracted before that point stay extracted, so the equivalent
+    // here is to stop consuming entries while keeping `result`, not to error.
+    let mut warn_count = 0u32;
+
     for entry in ifd_entries {
+        if warn_count > 10 {
+            break;
+        }
+
         // Get type information. ExifTool skips entries with an unknown/invalid
         // format type (e.g. type 0 written by some corrupted camera firmware)
         // rather than abandoning the directory, so a single bad entry doesn't
         // cost the entire IFD chain (IFD0 -> ExifIFD -> GPS -> IFD1).
+        // Exif.pm:6470 guards the warning with `if ($format or $validate)`, so
+        // a type of 0 -- an IFD simply padded with zeros, which is common and
+        // harmless -- is skipped *without* spending warning budget. Only a
+        // nonzero-but-unrecognised format counts.
         let Some(exif_type) = ExifType::from_u16(entry.field_type) else {
+            if entry.field_type != 0 {
+                warn_count += 1;
+            }
             continue;
         };
 
@@ -289,15 +316,28 @@ pub fn parse_ifd(
             // Value is stored at an offset
             let value_offset = entry.value_offset as u64;
 
-            // Validate offset
-            if value_offset + total_size as u64 > file_size {
-                return Err(ExifToolError::parse_error_at(
-                    format!(
-                        "Tag 0x{:04X} value offset ({}) + size ({}) exceeds file size",
-                        entry.tag_id, value_offset, total_size
-                    ),
-                    value_offset as usize,
-                ));
+            // Validate offset. A value pointer that runs off the end of the
+            // data is a property of *this entry*, not of the directory, and
+            // ExifTool treats it as such: Exif.pm:6660 warns "Bad offset for
+            // $dir $tagStr", sets `$bad = 1` (which suppresses the tag), and
+            // falls through to the next entry -- it never abandons the IFD.
+            //
+            // Aborting here instead used to discard every tag in the file,
+            // because each caller reaches parse_ifd through an `if let Ok(..)`
+            // (e.g. core/jpeg_helpers.rs, core/tiff_helpers.rs), so one bad
+            // entry took IFD0 + ExifIFD + GPS + IFD1 with it. ExifTool itself
+            // writes such an entry: `-IFD0:GeoTiffDoubleParams=1.5` stores the
+            // ASCII "1.5" in the offset field, and the pinned 13.59 oracle
+            // still reports Make/Model on the result while warning about the
+            // one bad tag.
+            //
+            // Note this skips the entry rather than substituting a value:
+            // ExifTool emits no tag at all for a bad offset, and inventing one
+            // would be worse than omitting it.
+            let end = value_offset.saturating_add(total_size as u64);
+            if end > file_size {
+                warn_count += 1;
+                continue;
             }
 
             // Read value data from offset
@@ -305,7 +345,15 @@ pub fn parse_ifd(
             // but we can't guarantee the lifetime matches our 'static constraint.
             // Future optimization: change FileReader to support arena allocation or
             // return data with explicit lifetimes that can be borrowed.
-            Cow::Owned(reader.read(value_offset, total_size)?.to_vec())
+            //
+            // A short/failed read is likewise per-entry in ExifTool
+            // (Exif.pm:6594 "Error reading value for $dir entry $index" ->
+            // `$bad = 1`), so skip the entry instead of failing the directory.
+            let Ok(value_data) = reader.read(value_offset, total_size) else {
+                warn_count += 1;
+                continue;
+            };
+            Cow::Owned(value_data.to_vec())
         };
 
         result.push((
@@ -784,8 +832,100 @@ mod tests {
         let reader = TestReader::new(data);
         let result = parse_ifd(&reader, 0, ByteOrder::LittleEndian);
 
-        // Should fail due to invalid offset
-        assert!(result.is_err());
+        // ExifTool warns "Bad offset for $dir $tagStr" (Exif.pm:6660), marks
+        // the entry `$bad` so no tag is emitted, and moves on -- an
+        // out-of-range value pointer is never fatal to the directory.
+        let entries = result.expect("bad value offset should be skipped, not fatal");
+        assert!(entries.is_empty());
+    }
+
+    /// Regression test for the real-world trigger: `exiftool
+    /// -IFD0:GeoTiffDoubleParams=1.5` writes the ASCII bytes "1.5\0" into the
+    /// entry's value-offset field, producing an offset of 0x00352E31 that is
+    /// far past the end of the 62-byte TIFF block. Before the fix, that single
+    /// entry made `parse_ifd` return `Err`, and because every caller reaches it
+    /// through `if let Ok(..)` the whole EXIF block (IFD0 + ExifIFD + GPS) was
+    /// silently dropped.
+    ///
+    /// ExifTool 13.59 reports Make and Model on such a file and emits only
+    /// `Warning: Bad offset for IFD0 GeoTiffDoubleParams`.
+    #[test]
+    fn test_parse_ifd_bad_value_offset_keeps_other_entries() {
+        // Byte-for-byte the IFD0 that exiftool 13.59 wrote, taken from the
+        // `-v3` dump of the repro file (TIFF block, little-endian, IFD at 8).
+        #[rustfmt::skip]
+        let data: Vec<u8> = vec![
+            // TIFF header
+            0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00,
+            // entry count = 3
+            0x03, 0x00,
+            // 0) Make (0x010f) ASCII[11] @ offset 0x32
+            0x0f, 0x01, 0x02, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00,
+            // 1) Model (0x0110) ASCII[3] inline "TM\0"
+            0x10, 0x01, 0x02, 0x00, 0x03, 0x00, 0x00, 0x00, 0x54, 0x4d, 0x00, 0x00,
+            // 2) GeoTiffDoubleParams (0x87b0) DOUBLE[1], 8 bytes, so the value
+            //    is out-of-line -- but the offset field holds ASCII "1.5\0"
+            //    (0x00352e31 = 3_485_233), way beyond the block.
+            0xb0, 0x87, 0x0c, 0x00, 0x01, 0x00, 0x00, 0x00, 0x31, 0x2e, 0x35, 0x00,
+            // next IFD offset = 0
+            0x00, 0x00, 0x00, 0x00,
+            // value data: "TestCamera\0" at 0x32
+            0x54, 0x65, 0x73, 0x74, 0x43, 0x61, 0x6d, 0x65, 0x72, 0x61, 0x00, 0x00,
+        ];
+        assert_eq!(data[0x32], b'T', "Make value must sit at offset 0x32");
+
+        let reader = TestReader::new(data);
+        let entries = parse_ifd(&reader, 8, ByteOrder::LittleEndian)
+            .expect("one bad offset must not discard the whole IFD");
+
+        // Make and Model survive; GeoTiffDoubleParams is dropped.
+        assert_eq!(entries.len(), 2);
+
+        let (tag_id, _, _, value) = &entries[0];
+        assert_eq!(*tag_id, 0x010f);
+        assert_eq!(value.as_ref(), b"TestCamera\0");
+
+        let (tag_id, _, _, value) = &entries[1];
+        assert_eq!(*tag_id, 0x0110);
+        assert_eq!(value.as_ref(), b"TM\0");
+
+        assert!(
+            !entries.iter().any(|(id, ..)| *id == 0x87b0),
+            "bad-offset tag must be omitted, never fabricated"
+        );
+    }
+
+    /// ExifTool abandons a directory once more than 10 entries have warned
+    /// (Exif.pm:6455), but keeps whatever it already extracted. Verify we do
+    /// not turn a heavily corrupted IFD into an unbounded stream of skips.
+    #[test]
+    fn test_parse_ifd_aborts_after_warning_budget() {
+        const N: usize = 20;
+        let mut data = vec![0u8; 2 + N * 12 + 4 + 16];
+        data[0] = N as u8;
+        data[1] = 0x00;
+
+        // Entry 0 is valid: Orientation (0x0112) SHORT[1] = 1, inline.
+        let e = 2;
+        data[e..e + 12].copy_from_slice(&[
+            0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        ]);
+
+        // Entries 1..N are all ASCII[64] pointing far past the end of the buffer.
+        for i in 1..N {
+            let e = 2 + i * 12;
+            data[e..e + 12].copy_from_slice(&[
+                0x00, 0x02, 0x02, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x00,
+            ]);
+        }
+
+        let reader = TestReader::new(data);
+        let entries = parse_ifd(&reader, 0, ByteOrder::LittleEndian)
+            .expect("a corrupt directory yields what it can, not an error");
+
+        // The one good entry is kept, every bad one is dropped.
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, 0x0112);
     }
 
     #[test]

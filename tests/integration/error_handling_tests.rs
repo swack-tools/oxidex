@@ -379,19 +379,29 @@ fn test_error_integer_overflow_protection() {
 
     let reader = BufferedReader::new(temp_path).expect("Failed to open temp file");
 
-    // Try to parse with timeout (should reject extreme count)
+    // Parse with a timeout: the point of this test is that the ~16GB the entry
+    // asks for is never allocated and the parse returns promptly.
     let result = with_timeout(Duration::from_secs(5), || parse_tiff_file(&reader));
 
     match result {
-        Ok(Ok(_)) => {
-            panic!("Parser should reject tag with extreme value count");
+        // ExifTool does not reject the *file* over one oversized entry. On this
+        // exact 26-byte input, exiftool 13.59 reports FileType/ExifByteOrder and
+        // emits only `Warning: Invalid size (17179869180) for IFD0 tag 0x0100
+        // ImageWidth` -- Exif.pm:6505 warns and does `next`, skipping the entry
+        // and continuing the directory. So a successful parse is correct; what
+        // must never happen is the bogus tag showing up with a made-up value.
+        Ok(Ok(entries)) => {
+            assert!(
+                !entries.iter().any(|(tag_id, ..)| *tag_id == 0x0100),
+                "the oversized ImageWidth entry must be skipped, not given a value"
+            );
         }
         Ok(Err(e)) => {
-            println!("Parser correctly rejected extreme value count: {}", e);
+            println!("Parser rejected extreme value count: {}", e);
         }
         Err(timeout_msg) => {
             panic!(
-                "Parser should quickly reject extreme counts, not timeout: {}",
+                "Parser should quickly skip extreme counts, not timeout: {}",
                 timeout_msg
             );
         }
