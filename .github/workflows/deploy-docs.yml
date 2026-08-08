@@ -75,8 +75,14 @@ jobs:
       - name: Install Perl (for ExifTool)
         run: sudo apt-get update -qq && sudo apt-get install -y perl libarchive-zip-perl
 
+      # taiki-e/install-action, not extractions/setup-just: the latter was
+      # measured at 77s to install one small binary, which was a third of
+      # this job. install-action fetches a prebuilt binary and is what the
+      # rest of the repo already uses (ci.yml, for nextest and cbindgen).
       - name: Install just
-        uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2.0.0
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: just
 
       # The corpus cache key below needs the pin before the recipe runs. Same
       # strict validation as ci.yml's resolve step: the value is file content,
