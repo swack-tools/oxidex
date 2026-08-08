@@ -876,9 +876,6 @@ mod tests {
     /// wrong suffix rather than simply leaving a gap open.
     #[test]
     fn unclaimed_macintosh_language_ids_stay_unmapped() {
-        if !crate::test_support::pinned_corpus_available() {
-            return;
-        }
         for id in [12 /* ar */, 14 /* el */, 32 /* ru */] {
             let record = mac_record(id);
             assert_eq!(

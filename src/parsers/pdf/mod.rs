@@ -1345,9 +1345,6 @@ mod embedded_exif_tests {
 
     #[test]
     fn formats_exposure_compensation_as_exiftool_fraction() {
-        if !crate::test_support::pinned_corpus_available() {
-            return;
-        }
         // PDF.pdf itself stores 0/100; every other case exercises the
         // PrintFraction branches a plain decimal format would get wrong.
         for (num, den, expected) in [
