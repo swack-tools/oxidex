@@ -41,10 +41,10 @@ use crate::parsers::image::djvu::parse_djvu_metadata;
 use crate::parsers::image::dpx::parse_dpx_metadata;
 use crate::parsers::image::exr::parse_exr_metadata;
 use crate::parsers::image::flif::parse_flif_metadata;
-use crate::parsers::image::xcf::parse_xcf_metadata;
 use crate::parsers::image::gif::parse_gif_metadata;
 use crate::parsers::image::miff::parse_miff_metadata;
 use crate::parsers::image::pfm::parse_pfm_metadata;
+use crate::parsers::image::xcf::parse_xcf_metadata;
 // Note: HEIF uses parse_quicktime_metadata since HEIF is ISOBMFF-based
 use crate::parsers::canon_vrd::{parse_dr4_file, parse_vrd_file};
 use crate::parsers::elf::parse_elf_metadata;
