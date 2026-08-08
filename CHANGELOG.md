@@ -10,11 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **Benchmark baseline discontinuity (2026-08-08)** - CI benchmarks moved from GitHub-hosted `ubuntu-latest` to `warp-ubuntu-latest-x64-2x`
+- **Benchmark baseline discontinuity (2026-08-08)** - CI benchmarks moved from GitHub-hosted `ubuntu-latest` to `warp-ubuntu-latest-x64-8x`, and are now tuned for throughput over measurement fidelity
   - **Affects**: the 90-day benchmark artifact published by `ci.yml`, and the timings on the docs performance page published by `deploy-docs.yml`
-  - **Impact**: benchmark numbers measured before this date are **not comparable** with numbers measured after it. Criterion timings are only meaningful against a fixed hardware baseline, and the runner class changed.
-  - **Not a performance regression or improvement**: any step change in the published figures at this date reflects the hardware move, not a change in OxiDex itself.
-  - Both benchmark jobs were moved together, in one commit, and must continue to name the same runner label as each other.
+  - **What changed**: runner class; `--quick` (fewer criterion samples — `deploy-docs.yml` already used it and `ci.yml` did not, so the two had been publishing different methodologies); `lto = false` and `codegen-units = 16` on the bench profile, applied via CI env so `Cargo.toml` is unchanged
+  - **These numbers describe a binary nobody ships**: `[profile.release]` keeps `lto = true`, so benchmark figures are now a *regression signal*, not a performance claim to quote publicly
+  - **Impact**: benchmark numbers measured before this date are **not comparable** with numbers after it, on either hardware or methodology.
+  - **Not a performance regression or improvement**: any step change in the published figures at this date reflects the CI change, not a change in OxiDex itself.
+  - Both benchmark jobs were changed together, in one commit, and must continue to match each other on runner label and measurement flags.
 - **CI/CD caching moved to WarpBuild** - Rust, npm, Docker layer, and ExifTool-source caches now use WarpBuild's cache backend rather than the GitHub Actions cache
 
 ### Added

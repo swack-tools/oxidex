@@ -424,25 +424,39 @@ jobs:
 
   metrics:
     name: Benchmarks
-    # 2x, and DELIBERATELY the same label as deploy-docs.yml's benchmark job.
+    # 8x, and DELIBERATELY the same label as deploy-docs.yml's benchmark job.
+    # These two publish into the same story -- this one as a 90-day artifact,
+    # the other to the docs performance page -- so they must always match on
+    # runner AND on how they measure. They move together or not at all.
     #
-    # These two jobs publish comparable numbers -- this one as a 90-day
-    # artifact, the other to the docs performance page -- so they must always
-    # name the SAME runner. Criterion's measurement loop is single-threaded,
-    # so cores buy nothing here beyond the build that precedes it; 2x is the
-    # cheapest label that keeps the two aligned.
+    # This job is tuned for THROUGHPUT, not for measurement fidelity. That is
+    # a deliberate, explicit trade (2026-08-08, see CHANGELOG):
     #
-    # These moved off ubuntu-latest on 2026-08-08 (CHANGELOG: benchmark
-    # baseline discontinuity). Numbers from before that date were measured on
-    # GitHub-hosted hardware and are NOT comparable with numbers after it. If
-    # these ever move again, both must move together, in one commit, and the
-    # discontinuity must be recorded in CHANGELOG.md again.
+    #  - --quick        fewer criterion samples per benchmark. deploy-docs.yml
+    #                   already ran with this and ci.yml did not, so the two
+    #                   were quietly publishing different methodologies; they
+    #                   now match.
+    #  - lto = false    [profile.bench] ships lto = "thin". Turning it off
+    #                   means these numbers describe a binary NOBODY SHIPS --
+    #                   [profile.release] keeps lto = true. Do not quote them
+    #                   as OxiDex's real-world performance.
+    #  - codegen-units  1 is pointless once LTO is off, and it serialises
+    #                   codegen on a runner with eight cores.
+    #
+    # Consequence: numbers from before 2026-08-08 are NOT comparable with
+    # numbers after it, on hardware or methodology. If any of this changes
+    # again, both jobs move together, in one commit, and the discontinuity is
+    # recorded in CHANGELOG.md again.
     runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 30
-    # TEMP-MEASURE: dispatch allowed so this can be timed off main. Restore to
-    # `github.event_name == 'push' && github.ref == 'refs/heads/main'` after.
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
-    needs: [test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # No `needs:` on purpose. This used to wait for Build & Test, which put
+    # that job's full duration in front of a job that does not consume
+    # anything it produces. A broken build now shows up as a red Build & Test
+    # beside a green Benchmarks, rather than as a delay.
+    env:
+      CARGO_PROFILE_BENCH_LTO: false
+      CARGO_PROFILE_BENCH_CODEGEN_UNITS: 16
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable

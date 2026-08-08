@@ -18,29 +18,25 @@ concurrency:
   cancel-in-progress: true
 
 # This was one ~11-minute job that compiled Rust, ran benchmarks, built the
-# VitePress site and deployed to Pages on a single runner. It is now three
-# jobs, for three reasons:
+# VitePress site and deployed to Pages on a single runner. It is now two:
 #
-#  1. The three phases have unrelated compute profiles. Generating the
-#     ExifTool comparison report is a cold Rust build (~3m47s, parallel);
-#     benchmarking is a single-threaded criterion measurement (~6m09s); the
-#     site build is ~45s of Node. Sizing one runner for all three means
-#     overpaying for two of them.
-#  2. `comparison-report` and `benchmarks` have no dependency on each other,
-#     so splitting lets them run concurrently: the serial ~11m15s becomes
-#     roughly the length of the longest branch.
-#
-#     Historical note: while `benchmarks` was on ubuntu-latest it once sat in
-#     the GitHub-hosted runner queue for 8 minutes while the warp runner for
-#     `comparison-report` started in 5 seconds -- an 8-minute queue wait was
-#     the standing cost of keeping benchmarks on GitHub-hosted hardware for
-#     measurement comparability. As of 2026-08-08 both benchmark jobs run on
-#     warp-ubuntu-latest-x64-2x, so that queue is gone and the concurrency
-#     win is no longer hostage to a queue outside our control.
-#  3. `pages: write` and `id-token: write` now live only on `publish`, a job
-#     that runs no project code -- it downloads artifacts and builds the site.
+#  1. The phases have unrelated compute profiles. Generating the ExifTool
+#     comparison report is a cold Rust build (~3m47s, parallel); the site
+#     build is ~45s of Node. Sizing one runner for both means overpaying for
+#     one of them.
+#  2. `pages: write` and `id-token: write` live only on `publish`, a job that
+#     runs no project code -- it downloads artifacts and builds the site.
 #     Previously the deploy credentials were present on a runner that had just
 #     executed a full Rust build and benchmark suite.
+#
+# There is NO benchmarks job here any more. It ran the same `cargo bench` as
+# ci.yml's Benchmarks job, and this workflow's path filter (src/parsers/**,
+# benches/**) meant a typical main push measured the same commit twice on two
+# 8x runners. `publish` now downloads ci.yml's benchmark artifact instead --
+# measured once, consumed twice. If you are tempted to re-add a benchmark
+# step here, note that it would also have to match ci.yml's runner label AND
+# its --quick/lto/codegen-units settings or the two would publish
+# incomparable numbers.
 jobs:
   comparison-report:
     name: Generate ExifTool comparison report
@@ -98,82 +94,20 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  benchmarks:
-    name: Run benchmarks
-    # 2x, and DELIBERATELY the same label as ci.yml's Benchmarks job.
-    #
-    # These two jobs publish comparable numbers -- these go to the docs
-    # performance page, ci.yml's go to a 90-day artifact -- so they must
-    # always name the SAME runner. Criterion's measurement loop is
-    # single-threaded, so cores buy nothing beyond the preceding build.
-    #
-    # These moved off ubuntu-latest on 2026-08-08 (CHANGELOG: benchmark
-    # baseline discontinuity). Numbers from before that date were measured on
-    # GitHub-hosted hardware and are NOT comparable with numbers after it. If
-    # these ever move again, both must move together, in one commit, and the
-    # discontinuity must be recorded in CHANGELOG.md again.
-    runs-on: warp-ubuntu-latest-x64-2x
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    outputs:
-      benchmarks_changed: ${{ steps.changes.outputs.benchmarks_changed }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # HEAD~1 must exist for the change detection below.
-          fetch-depth: 2
-
-      - name: Check if benchmarks changed
-        id: changes
-        run: |
-          if git diff --name-only HEAD~1 HEAD | grep -qE '^benches/|^src/'; then
-            echo "benchmarks_changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "benchmarks_changed=false" >> "$GITHUB_OUTPUT"
-          fi
-          # Always run benchmarks on workflow_dispatch or workflow file changes
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "benchmarks_changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Setup Rust toolchain
-        if: steps.changes.outputs.benchmarks_changed == 'true'
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-
-      - name: Cache Rust dependencies
-        if: steps.changes.outputs.benchmarks_changed == 'true'
-        uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
-        with:
-          cache-on-failure: true
-          cache-provider: warpbuild
-          shared-key: bench
-
-      - name: Run benchmarks
-        if: steps.changes.outputs.benchmarks_changed == 'true'
-        run: cargo bench --bench integration_benchmarks --bench parse_benchmarks -- --quick
-
-      - name: Upload criterion results
-        if: steps.changes.outputs.benchmarks_changed == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: criterion-results
-          path: target/criterion
-          if-no-files-found: error
-          retention-days: 1
-
   publish:
     name: Build site and deploy to Pages
-    needs: [comparison-report, benchmarks]
+    needs: [comparison-report]
     # 2x: npm ci plus a VitePress build (~45s). This job compiles no Rust --
-    # it consumes what the two jobs above produced.
+    # it consumes what comparison-report produced and what ci.yml measured.
     runs-on: warp-ubuntu-latest-x64-2x
     timeout-minutes: 20
     permissions:
       contents: read
       pages: write
       id-token: write
+      # actions: read is for downloading the benchmark artifact out of a
+      # DIFFERENT workflow run (ci.yml's). Without it that download 404s.
+      actions: read
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -187,21 +121,75 @@ jobs:
           name: comparison-report
           path: docs/reference/comparison
 
+      # Benchmarks are measured ONCE, by ci.yml's Benchmarks job, and consumed
+      # here. This workflow used to run `cargo bench` itself, which meant any
+      # main push touching src/parsers/** or benches/** measured the same
+      # commit twice, on two 8x runners, for ~600s each.
+      #
+      # Same-SHA is preferred but NOT required, and that is the whole subtlety
+      # of this step: ci.yml and this workflow start from the same push, so by
+      # the time publish runs, ci.yml's Benchmarks job is usually still
+      # measuring. Insisting on this commit's numbers would mean the
+      # performance page almost never updated. So it falls back to the most
+      # recent successful run on main, and the stamp below reports the commit
+      # the numbers ACTUALLY came from rather than assuming it is this one.
+      - name: Locate a benchmark run
+        id: benchrun
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          read -r ID SHA <<<"$(gh run list --workflow=ci.yml --commit="$GITHUB_SHA" \
+                --status=success --limit=1 --json databaseId,headSha \
+                --jq '.[0] | "\(.databaseId) \(.headSha)"' 2>/dev/null || true)"
+          if [ -z "${ID:-}" ]; then
+            read -r ID SHA <<<"$(gh run list --workflow=ci.yml --branch=main \
+                  --status=success --limit=1 --json databaseId,headSha \
+                  --jq '.[0] | "\(.databaseId) \(.headSha)"' 2>/dev/null || true)"
+            [ -n "${ID:-}" ] && echo "::notice::no benchmark run for $GITHUB_SHA yet; using latest main run $ID ($SHA)"
+          fi
+          if [ -z "${ID:-}" ]; then
+            echo "::warning::no successful ci.yml run found; performance page keeps its existing numbers"
+          fi
+          echo "id=${ID:-}" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA:-}" >> "$GITHUB_OUTPUT"
+
       - name: Download criterion results
-        if: needs.benchmarks.outputs.benchmarks_changed == 'true'
+        if: steps.benchrun.outputs.id != ''
+        continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: criterion-results
+          name: benchmark-results
           path: target/criterion
+          run-id: ${{ steps.benchrun.outputs.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Stamped here rather than in the benchmarks job so that job's only
-      # output is target/criterion. The commit is identical either way, and
-      # the timestamp differs only by the few minutes between the two jobs.
-      - name: Update benchmark metadata in docs
-        if: needs.benchmarks.outputs.benchmarks_changed == 'true'
+      # Gate everything downstream on the files actually being here, not on
+      # the lookup having succeeded -- the download is continue-on-error, so
+      # a 404 on an expired artifact must not publish an empty benchmarks dir.
+      - name: Check benchmark results are present
+        id: bench
         run: |
+          set -euo pipefail
+          if [ -d target/criterion ] && [ -n "$(ls -A target/criterion 2>/dev/null)" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no criterion results; performance page keeps its existing numbers"
+          fi
+
+      # The commit stamped is the one the NUMBERS came from, which is not
+      # necessarily HEAD -- see the fallback in "Locate a benchmark run".
+      # Stamping HEAD unconditionally would attribute another commit's
+      # measurements to this one.
+      - name: Update benchmark metadata in docs
+        if: steps.bench.outputs.present == 'true'
+        env:
+          BENCH_SHA: ${{ steps.benchrun.outputs.sha }}
+        run: |
+          set -euo pipefail
           DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          COMMIT=$(git rev-parse --short HEAD)
+          COMMIT=$(git rev-parse --short "$BENCH_SHA" 2>/dev/null || echo "${BENCH_SHA:0:7}")
           sed -i "s/- \*\*Date:\*\* .*/- **Date:** $DATE/" docs/performance/index.md
           sed -i "s/- \*\*Commit:\*\* .*/- **Commit:** [\`$COMMIT\`](https:\/\/github.com\/swack-tools\/oxidex\/commit\/$COMMIT)/" docs/performance/index.md
 
@@ -223,7 +211,7 @@ jobs:
         working-directory: docs
 
       - name: Copy benchmark reports to site
-        if: needs.benchmarks.outputs.benchmarks_changed == 'true'
+        if: steps.bench.outputs.present == 'true'
         run: |
           mkdir -p docs/.vitepress/dist/benchmarks
           cp -r target/criterion/* docs/.vitepress/dist/benchmarks/
