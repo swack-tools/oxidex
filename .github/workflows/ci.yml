@@ -64,6 +64,12 @@ env:
 # `runs-on` is safe because it does not change the check name; renaming or
 # splitting these jobs is NOT safe -- a required check that never reports
 # leaves every PR permanently unmergeable (see the paths-ignore note above).
+#
+# "Release Build" and "Doc Tests" were split OUT of Build & Test, which kept
+# its name and so kept reporting. They are new check names, so they are not
+# required until someone with admin rights adds them to branch protection.
+# Until that happens a release-profile break or a failing doc test does not
+# block a merge, even though the job goes red.
 jobs:
   lint:
     name: Lint & Audit
@@ -101,15 +107,21 @@ jobs:
 
   test:
     name: Build & Test
-    # 8x: this job is almost entirely parallelisable work -- cargo build
-    # --release (parallel across codegen units), nextest (test-level
-    # parallelism) and doc tests.
+    # 8x: nextest parallelises across tests, and this is the long pole of
+    # the three compile jobs -- Release Build and Doc Tests are sized to
+    # finish inside it, not to race it.
     #
-    # It used to run five cargo invocations across three different feature
-    # graphs, which cost a full nine-crate rebuild each time cargo saw a new
-    # fingerprint. It is now three invocations over ONE feature graph
-    # (--all-features), differing only where they must: release profile,
-    # test profile, rustdoc.
+    # History, because both steps mattered: this job once ran five cargo
+    # invocations across three feature graphs, and cargo fingerprints per
+    # feature set, so each graph forced a full nine-crate rebuild (406s).
+    # Collapsing to ONE graph (--all-features, which already implies every
+    # feature) took it to 267s. What remained was three compiles that share
+    # nothing -- release-side profile, test profile, rustdoc are three
+    # distinct fingerprints -- so they were split into three concurrent jobs
+    # rather than summed on one runner.
+    #
+    # If you add a cargo step here, give it `--all-features` and nothing
+    # else, or it will rebuild the workspace for its own feature graph.
     runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 25
     steps:
@@ -245,6 +257,63 @@ jobs:
       # what the old five-invocation layout cost: 406s of which ~139s was
       # recompiling and re-running work another step had already done.
       #
+      # Tests run in the (unwind) test profile: the release profile sets
+      # panic = "abort", which newer cargo refuses to mix with the unwind test
+      # harness. So this is a second compile by necessity -- profile, not
+      # features. The release artifacts themselves are covered by the build
+      # step above and by release.yml's per-platform builds on tag pushes.
+      #
+      # This one invocation now covers what used to be three: the unit and
+      # integration suites, the C FFI test (oxidex::ffi_c_integration), and
+      # the exiftool-comparison suite -- the last only because ExifTool is
+      # installed ABOVE this step now. Moving that install back below here
+      # would not fail the job; it would silently skip the comparison tests.
+      - run: cargo nextest run --all-features
+      - name: Verify C header is up-to-date
+        run: |
+          cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h.tmp
+          diff -q api/oxidex.h api/oxidex.h.tmp || (echo "C header out of date" && exit 1)
+          rm api/oxidex.h.tmp
+
+  release-build:
+    name: Release Build
+    # Split out of Build & Test so the three compiles run concurrently
+    # instead of serially: they share no artifacts (release-side profile,
+    # test profile and rustdoc are three distinct fingerprints), so running
+    # them on one runner only added their times together.
+    #
+    # 4x, not 8x: fixloop sets codegen-units = 16 so this parallelises, but
+    # it is not the long pole -- Build & Test is. Sizing it to finish just
+    # inside that job is what this is worth paying for, not raw speed.
+    runs-on: warp-ubuntu-latest-x64-4x
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      # WarpBuild-native cache backend (see the Lint & Audit job for why).
+      # cache-all-crates: this job also builds cargo-nextest and cbindgen via
+      # taiki-e/install-action, and default caching only covers workspace
+      # dependencies, not CI tooling.
+      #
+      # Two cache ideas were measured here and REJECTED. Do not re-add either
+      # without new evidence:
+      #
+      #  - cache-workspace-crates: true -- 408s to 406s, i.e. nothing. Cargo
+      #    fingerprints path dependencies by mtime and git checkout rewrites
+      #    every workspace source file with a fresh mtime, so restored
+      #    workspace artifacts always look stale. Unfixable from target/.
+      #
+      #  - sccache as RUSTC_WRAPPER -- 267s to 269s, i.e. slightly worse, and
+      #    that was WITH a 100% hit rate. The rate is a trap here: only 27 of
+      #    94 rustc calls were cacheable at all, the other 62 being refused
+      #    for `crate-type`. sccache caches rlib/lib but not cdylib,
+      #    staticlib or test harnesses -- which is precisely what this crate
+      #    builds for its C FFI, and precisely where the time goes.
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          cache-on-failure: true
+          cache-provider: warpbuild
+          shared-key: release-build
       # If you add a step here, give it `--all-features` and nothing else.
       #
       # `fixloop`, not `release`. This step exists to prove the release-side
@@ -260,27 +329,49 @@ jobs:
       # The gap this accepts: an LTO-only failure would now surface at tag
       # time in release.yml rather than here.
       - run: cargo build --profile fixloop --all-features
-      # Tests run in the (unwind) test profile: the release profile sets
-      # panic = "abort", which newer cargo refuses to mix with the unwind test
-      # harness. So this is a second compile by necessity -- profile, not
-      # features. The release artifacts themselves are covered by the build
-      # step above and by release.yml's per-platform builds on tag pushes.
+
+  doc-tests:
+    name: Doc Tests
+    # Split out for the same reason as Release Build. rustdoc is its own
+    # artifact kind, so this never shared a compile with the other two.
+    #
+    # No ExifTool here on purpose: doc tests are the examples in ///, none
+    # of which shell out to the oracle. If a doc test ever does, it belongs
+    # in Build & Test rather than having the install duplicated here.
+    runs-on: warp-ubuntu-latest-x64-4x
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      # WarpBuild-native cache backend (see the Lint & Audit job for why).
+      # cache-all-crates: this job also builds cargo-nextest and cbindgen via
+      # taiki-e/install-action, and default caching only covers workspace
+      # dependencies, not CI tooling.
       #
-      # This one invocation now covers what used to be three: the unit and
-      # integration suites, the C FFI test (oxidex::ffi_c_integration), and
-      # the exiftool-comparison suite -- the last only because ExifTool is
-      # installed ABOVE this step now. Moving that install back below here
-      # would not fail the job; it would silently skip the comparison tests.
-      - run: cargo nextest run --all-features
+      # Two cache ideas were measured here and REJECTED. Do not re-add either
+      # without new evidence:
+      #
+      #  - cache-workspace-crates: true -- 408s to 406s, i.e. nothing. Cargo
+      #    fingerprints path dependencies by mtime and git checkout rewrites
+      #    every workspace source file with a fresh mtime, so restored
+      #    workspace artifacts always look stale. Unfixable from target/.
+      #
+      #  - sccache as RUSTC_WRAPPER -- 267s to 269s, i.e. slightly worse, and
+      #    that was WITH a 100% hit rate. The rate is a trap here: only 27 of
+      #    94 rustc calls were cacheable at all, the other 62 being refused
+      #    for `crate-type`. sccache caches rlib/lib but not cdylib,
+      #    staticlib or test harnesses -- which is precisely what this crate
+      #    builds for its C FFI, and precisely where the time goes.
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          cache-on-failure: true
+          cache-provider: warpbuild
+          shared-key: doc-tests
       # rustdoc is a separate artifact kind, so this compiles once more no
       # matter what. Same feature set regardless, to reuse everything else.
       - name: Run doc tests
         run: cargo test --doc --all-features
-      - name: Verify C header is up-to-date
-        run: |
-          cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h.tmp
-          diff -q api/oxidex.h api/oxidex.h.tmp || (echo "C header out of date" && exit 1)
-          rm api/oxidex.h.tmp
+
   # The generated ExifTool tables are 100k+ lines that no reviewer reads in a
   # diff, so their correctness rests entirely on verify.py -- which, until this
   # job existed, nothing ever ran. A hand-edit of binary_tables.rs, or a
