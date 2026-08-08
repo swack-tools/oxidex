@@ -140,6 +140,14 @@ jobs:
       #    every workspace source file with a fresh mtime, so restored
       #    workspace artifacts always look stale. Unfixable from target/.
       #
+      #  - one shared cache entry across the three compile jobs
+      #    (shared-key: workspace, save-if: false on the other two) -- 133s
+      #    to 147s wall clock. A test-profile cache does not contain fixloop
+      #    or rustdoc artifacts, so Release Build went 48s -> 92s and Doc
+      #    Tests 66s -> 76s restoring a cache that could not help them. Each
+      #    compile job needs its OWN key to stay warm for its own profile;
+      #    the three copies of ~/.cargo are the price of that.
+      #
       #  - sccache as RUSTC_WRAPPER -- 267s to 269s, i.e. slightly worse, and
       #    that was WITH a 100% hit rate. The rate is a trap here: only 27 of
       #    94 rustc calls were cacheable at all, the other 62 being refused
@@ -150,7 +158,7 @@ jobs:
         with:
           cache-on-failure: true
           cache-provider: warpbuild
-          shared-key: workspace
+          shared-key: test
           cache-all-crates: true
       - uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
         with:
@@ -290,34 +298,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-      # WarpBuild-native cache backend (see the Lint & Audit job for why).
-      # cache-all-crates: this job also builds cargo-nextest and cbindgen via
-      # taiki-e/install-action, and default caching only covers workspace
-      # dependencies, not CI tooling.
-      #
-      # Two cache ideas were measured here and REJECTED. Do not re-add either
-      # without new evidence:
-      #
-      #  - cache-workspace-crates: true -- 408s to 406s, i.e. nothing. Cargo
-      #    fingerprints path dependencies by mtime and git checkout rewrites
-      #    every workspace source file with a fresh mtime, so restored
-      #    workspace artifacts always look stale. Unfixable from target/.
-      #
-      #  - sccache as RUSTC_WRAPPER -- 267s to 269s, i.e. slightly worse, and
-      #    that was WITH a 100% hit rate. The rate is a trap here: only 27 of
-      #    94 rustc calls were cacheable at all, the other 62 being refused
-      #    for `crate-type`. sccache caches rlib/lib but not cdylib,
-      #    staticlib or test harnesses -- which is precisely what this crate
-      #    builds for its C FFI, and precisely where the time goes.
+      # WarpBuild-native cache backend. Its own shared-key on purpose:
+      # this job compiles a different profile from Build & Test, and a
+      # shared entry was measured slower (see that job's note).
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           cache-on-failure: true
           cache-provider: warpbuild
-          shared-key: workspace
-          # Read-only: Build & Test writes this entry. Three jobs saving
-          # under one key would race and the last writer would win at
-          # random, making what any of them restores nondeterministic.
-          save-if: false
+          shared-key: release-build
       # If you add a step here, give it `--all-features` and nothing else.
       #
       # `fixloop`, not `release`. This step exists to prove the release-side
@@ -347,34 +335,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-      # WarpBuild-native cache backend (see the Lint & Audit job for why).
-      # cache-all-crates: this job also builds cargo-nextest and cbindgen via
-      # taiki-e/install-action, and default caching only covers workspace
-      # dependencies, not CI tooling.
-      #
-      # Two cache ideas were measured here and REJECTED. Do not re-add either
-      # without new evidence:
-      #
-      #  - cache-workspace-crates: true -- 408s to 406s, i.e. nothing. Cargo
-      #    fingerprints path dependencies by mtime and git checkout rewrites
-      #    every workspace source file with a fresh mtime, so restored
-      #    workspace artifacts always look stale. Unfixable from target/.
-      #
-      #  - sccache as RUSTC_WRAPPER -- 267s to 269s, i.e. slightly worse, and
-      #    that was WITH a 100% hit rate. The rate is a trap here: only 27 of
-      #    94 rustc calls were cacheable at all, the other 62 being refused
-      #    for `crate-type`. sccache caches rlib/lib but not cdylib,
-      #    staticlib or test harnesses -- which is precisely what this crate
-      #    builds for its C FFI, and precisely where the time goes.
+      # WarpBuild-native cache backend. Its own shared-key on purpose:
+      # this job compiles a different profile from Build & Test, and a
+      # shared entry was measured slower (see that job's note).
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           cache-on-failure: true
           cache-provider: warpbuild
-          shared-key: workspace
-          # Read-only: Build & Test writes this entry. Three jobs saving
-          # under one key would race and the last writer would win at
-          # random, making what any of them restores nondeterministic.
-          save-if: false
+          shared-key: doc-tests
       # rustdoc is a separate artifact kind, so this compiles once more no
       # matter what. Same feature set regardless, to reuse everything else.
       - name: Run doc tests
