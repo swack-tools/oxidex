@@ -541,32 +541,68 @@ docs-generate-tags:
     cargo run -p oxidex-tags --example render_domain -- document docs/tag-domains/document.md
     cargo run -p oxidex-tags --example render_domain -- specialty docs/tag-domains/specialty.md
 
-# Regenerate tag coverage analysis report (measured against pinned ExifTool)
+# Regenerate tag coverage analysis (measured vs pinned ExifTool; OXIDEX_DEEP_CORPUS=1 for the deep corpus)
 docs-coverage:
     #!/usr/bin/env bash
     set -euo pipefail
+    # OXIDEX_DEEP_CORPUS=1 additionally scores $EXIFTOOL_CACHE_DIR/combined-samples
+    # (~4,200 manufacturer sample files, populated by `just compare-exiftool-full`).
+    # That corpus is a local developer cache absent on CI, so the COMMITTED report
+    # is never generated from it -- see docs/contributing/measuring-coverage.md.
+    CACHE_DIR="${EXIFTOOL_CACHE_DIR:-/tmp/oxidex-exiftool-cache}"
+    ET_DIR="$CACHE_DIR/exiftool"
+    V=$(tr -d '[:space:]' < .exiftool-version)
+
+    # ExifTool's own t/images is the format-breadth corpus (~126 formats).
+    # Pinned to the same release the transcriptions came from, so it cannot
+    # drift from the oracle grading against it.
+    if [ ! -d "$ET_DIR/t/images" ]; then
+        echo "Cloning pinned ExifTool $V (for its t/images corpus)..."
+        mkdir -p "$CACHE_DIR"
+        rm -rf "$ET_DIR"
+        git clone -q --depth 1 --branch "$V" \
+            https://github.com/exiftool/exiftool "$ET_DIR"
+    fi
+    GOT=$("$ET_DIR/exiftool" -ver)
+    [ "$GOT" = "$V" ] || { echo "ExifTool $GOT in cache, expected $V" >&2; exit 1; }
+
+    CORPORA=("$ET_DIR/t/images" tests/fixtures)
+    MIN_FILES=200
+    MIN_TAGS=10000
+    if [ "${OXIDEX_DEEP_CORPUS:-0}" = "1" ]; then
+        if [ ! -d "$CACHE_DIR/combined-samples" ]; then
+            echo "OXIDEX_DEEP_CORPUS=1 but $CACHE_DIR/combined-samples is absent." >&2
+            echo "Populate it with: just compare-exiftool-full" >&2
+            exit 1
+        fi
+        CORPORA+=("$CACHE_DIR/combined-samples")
+        # The deep corpus is ~20x the file count; floors scale with it, and
+        # this run is for local inspection rather than for the committed doc.
+        MIN_FILES=2000
+        MIN_TAGS=100000
+    fi
+
     echo "Building oxidex..."
     cargo build --bin oxidex
 
-    echo "Measuring extraction coverage against pinned ExifTool..."
-    # --ext: tests/fixtures doubles as a test-fixture tree and carries mock .sh
-    # scripts and .json/.md scaffolding. ExifTool scores those as ENV
-    # SCRIPT/JSON and they drag the total from 96.0% to 83.8% while saying
-    # nothing about metadata extraction.
+    echo "Measuring extraction coverage against pinned ExifTool $V..."
+    # --exclude-ext, not --ext: a deny-list of things that are never metadata
+    # keeps scoring every real format including ones added later, whereas an
+    # allow-list silently omits each new format until someone extends it.
     # --min-*: a degraded oracle does not crash, it reports a confident wrong
     # number over a fraction of the corpus. Fail instead.
-    uv run tools/exiftool-tables/conformance.py tests/fixtures \
+    uv run tools/exiftool-tables/conformance.py "${CORPORA[@]}" \
         --recursive \
-        --ext jpg,jpeg,tif,tiff,png,pdf,mp4,mov,dng,heic,webp,gif,bmp \
+        --exclude-ext sh,md,py,json \
         --oxidex ./target/debug/oxidex \
-        --min-files 40 \
-        --min-tags 1200 \
+        --min-files "$MIN_FILES" \
+        --min-tags "$MIN_TAGS" \
         --json-out /tmp/oxidex-conformance.json
 
     echo "Regenerating tag coverage analysis..."
     uv run scripts/generate_tag_coverage.py \
         --conformance /tmp/oxidex-conformance.json \
-        --corpus-desc 'tests/fixtures (recursive), media files only' \
+        --corpus-desc "ExifTool $V \`t/images\` + \`tests/fixtures\`" \
         --output docs/reference/tag-coverage-analysis.md
     echo "Tag coverage report updated"
 

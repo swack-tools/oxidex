@@ -176,6 +176,7 @@ export default defineConfig({
           text: 'ExifTool Comparison',
           collapsed: true,
           items: [
+            { text: 'Measuring Coverage', link: '/contributing/measuring-coverage' },
             { text: 'Overview', link: '/contributing/testing/comparison/README' },
             { text: 'Parity Report', link: '/contributing/testing/comparison/PARITY_REPORT' },
             { text: 'Field Naming Guide', link: '/contributing/testing/comparison/FIELD_NAMING_GUIDE' },

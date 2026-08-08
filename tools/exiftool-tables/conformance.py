@@ -242,7 +242,14 @@ def compare(et, ox):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("corpus", help="directory of sample files")
+    ap.add_argument("corpus", nargs="+",
+                    help="one or more directories of sample files. Multiple "
+                         "roots are scored as a single corpus, because no one "
+                         "tree covers everything: ExifTool's own t/images is "
+                         "the format-breadth corpus (~126 formats, pinned and "
+                         "cloned in CI), while tests/fixtures carries the "
+                         "OxiDex-specific samples. Duplicate paths across "
+                         "roots are scored once.")
     ap.add_argument("--exiftool-dir",
                     help="ExifTool checkout root; defaults to the pinned tree "
                          "resolved by scripts/exiftool_oracle.py")
@@ -250,13 +257,23 @@ def main():
     ap.add_argument("--only", help="substring filter on filename")
     ap.add_argument("--ext",
                     help="comma-separated extension allow-list, e.g. "
-                         "'jpg,tif,png'. Corpora that double as test-fixture "
+                         "'jpg,tif,png'. For narrowing a run to one format "
+                         "while debugging. Default is no filter -- prefer "
+                         "--exclude-ext for corpus-wide runs, so that a newly "
+                         "added format is scored without editing anything.")
+    ap.add_argument("--exclude-ext",
+                    help="comma-separated extension deny-list, e.g. "
+                         "'sh,md,py,json'. Corpora that double as test-fixture "
                          "trees carry harness scaffolding -- mock .sh scripts, "
                          ".json baselines, .md notes -- and ExifTool happily "
                          "scores those as ENV SCRIPT/JSON, whose 'tags' are "
-                         "just object keys. Left unfiltered they swamp the "
-                         "total: tests/fixtures scores 83.8%% with them and "
-                         "97%%+ without. Default is no filter.")
+                         "just object keys. tests/fixtures alone scores 83.8%% "
+                         "with them and 96%%+ without.\n"
+                         "Prefer this over --ext for corpus-wide runs: a deny-"
+                         "list of things that are never metadata keeps scoring "
+                         "every real format, including ones added later, "
+                         "whereas an allow-list silently omits each new format "
+                         "until someone remembers to extend it.")
     ap.add_argument("--recursive", action="store_true",
                     help="walk the corpus recursively (most sample corpora are "
                          "nested one directory per manufacturer)")
@@ -279,15 +296,33 @@ def main():
     print(f"oracle: {oracle.provenance()}")
     print(f"        {oracle.display()}\n")
 
-    if args.recursive:
-        walked = (os.path.join(root, f)
-                  for root, _dirs, fs in os.walk(args.corpus) for f in fs)
-    else:
-        walked = (os.path.join(args.corpus, f) for f in os.listdir(args.corpus))
+    # A missing root is fatal rather than skipped. Corpora are optional by
+    # configuration, not by accident: silently dropping one that was asked for
+    # would shrink the denominator and report a score for a corpus nobody
+    # chose -- the same class of quiet wrongness the floors below exist to catch.
+    missing_roots = [c for c in args.corpus if not os.path.isdir(c)]
+    if missing_roots:
+        sys.exit(
+            "❌ corpus root(s) not found: " + ", ".join(missing_roots) + "\n"
+            "   Refusing to score a partial corpus. Drop the root from the "
+            "command line if it is genuinely not expected to be present."
+        )
 
-    exts = None
-    if args.ext:
-        exts = {e.strip().lower().lstrip(".") for e in args.ext.split(",") if e.strip()}
+    def walk(root):
+        if args.recursive:
+            return (os.path.join(d, f)
+                    for d, _dirs, fs in os.walk(root) for f in fs)
+        return (os.path.join(root, f) for f in os.listdir(root))
+
+    walked = (p for root in args.corpus for p in walk(root))
+
+    def ext_set(spec):
+        if not spec:
+            return None
+        return {e.strip().lower().lstrip(".") for e in spec.split(",") if e.strip()}
+
+    exts = ext_set(args.ext)
+    excluded = ext_set(args.exclude_ext) or set()
 
     def keep(p):
         if not os.path.isfile(p):
@@ -295,14 +330,26 @@ def main():
         base = os.path.basename(p)
         if args.only and args.only.lower() not in base.lower():
             return False
-        if exts is not None and os.path.splitext(base)[1].lstrip(".").lower() not in exts:
+        ext = os.path.splitext(base)[1].lstrip(".").lower()
+        if exts is not None and ext not in exts:
+            return False
+        if ext in excluded:
             return False
         return True
 
-    files = sorted(p for p in walked if keep(p))
+    # realpath-dedup: overlapping roots (or a symlink farm pointing into one)
+    # would otherwise score the same file twice and weight it double.
+    seen_real = set()
+    files = []
+    for p in sorted(p for p in walked if keep(p)):
+        rp = os.path.realpath(p)
+        if rp in seen_real:
+            continue
+        seen_real.add(rp)
+        files.append(p)
     if not files:
         sys.exit(
-            f"no files in {args.corpus}"
+            f"no files in {', '.join(args.corpus)}"
             + (f" matching --ext {args.ext}" if exts else "")
         )
 
@@ -349,7 +396,7 @@ def main():
         sys.exit(
             f"❌ vacuous run: scored {scored_files} file(s) / {et_tags_seen} ExifTool tag(s), "
             f"below the floor of {args.min_files}/{args.min_tags}.\n"
-            f"   {len(files)} file(s) were found in {args.corpus}"
+            f"   {len(files)} file(s) were found in {', '.join(args.corpus)}"
             f"{'' if args.recursive else ' (non-recursive; pass --recursive for a nested corpus)'}.\n"
             f"   oracle: {oracle.provenance()}\n"
             "   Check the oracle can actually read this corpus before trusting any score."
