@@ -15,13 +15,13 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 
 | Classification | Tags |
 |---|---|
-| 📖 Read only | 2347 |
+| 📖 Read only | 2348 |
 | ❌ Unsupported | 1890 |
 | ❔ Untestable | 220 |
 | 🐛 Read OK, write broken | 148 |
 | ✅ Full (read + write) | 136 |
 | ⚠️ Full (write non-standard encoding) | 70 |
-| 🐛 Read broken | 7 |
+| 🐛 Read broken | 6 |
 | ✍️ Write only | 1 |
 | 🚫 Not writable in ExifTool (no synthetic sample possible; untested) | 585 |
 
@@ -77,7 +77,7 @@ Every ExifTool-writable JPEG tag, classified by empirical test: read support (Ex
 | XMP-drone-dji | 0 | 25 | 0 | 0 | 0 | 3 | 0 | 28 |
 | XMP-dwc | 0 | 145 | 12 | 0 | 0 | 103 | 3 | 263 |
 | XMP-et | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
-| XMP-exif | 0 | 87 | 7 | 1 | 0 | 5 | 0 | 100 |
+| XMP-exif | 0 | 88 | 7 | 0 | 0 | 5 | 0 | 100 |
 | XMP-exifEX | 0 | 26 | 0 | 0 | 0 | 16 | 0 | 42 |
 | XMP-expressionmedia | 0 | 4 | 0 | 0 | 0 | 0 | 0 | 4 |
 | XMP-extensis | 0 | 8 | 0 | 0 | 0 | 0 | 0 | 8 |
@@ -3954,7 +3954,7 @@ references are into this repo.
 | `Saturation` | ✅ ok | — unsupported (silent no-op) | `Normal` |
 | `SceneCaptureType` | ✅ ok | — unsupported (silent no-op) | `Standard` |
 | `SceneType` | ✅ ok | — unsupported (silent no-op) | `Directly photographed` |
-| `SensingMethod` | 🐛 broken: -e compat applies EXIF enum table to XMP tag | — unsupported (silent no-op) | `Monochrome area` |
+| `SensingMethod` | ✅ ok | — unsupported (silent no-op) | `Monochrome area` |
 | `Sharpness` | ✅ ok | — unsupported (silent no-op) | `Normal` |
 | `ShutterSpeedValue` | ✅ ok | — unsupported (silent no-op) | `1.5` |
 | `SpatialFrequencyResponse` | — unsupported | — unsupported (silent no-op) | `{}` |

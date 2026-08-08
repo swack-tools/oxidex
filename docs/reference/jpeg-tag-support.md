@@ -9,7 +9,7 @@ Empirical OxiDex ↔ ExifTool tag mapping for JPEG: for each tag, ExifTool write
 Only tags OxiDex can **read** from JPEG are listed here (including those whose value formatting differs from ExifTool). The full classification of all tested tags — including unsupported and broken ones — is in the [JPEG Tag Matrix](/reference/jpeg-tag-matrix). See also [ExifTool Coverage](/reference/tag-coverage-analysis) for the tag-database view and the [Compatibility overview](/reference/comparison/) for fixture-based comparisons across formats.
 
 
-**2701** ExifTool tags readable, **213** writable via the CLI (of 4819 ExifTool-writable JPEG tags tested).
+**2702** ExifTool tags readable, **213** writable via the CLI (of 4819 ExifTool-writable JPEG tags tested).
 
 
 ## ExifIFD (93 readable tags)
@@ -1701,7 +1701,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-et:OriginalImageHashType` | `XMP:OriginalImageHashType` | — | `OxTest` |
 | `XMP-et:OriginalImageMD5` | `XMP:OriginalImageMD5` | — | `OxTest` |
 
-## XMP-exif (94 readable tags)
+## XMP-exif (95 readable tags)
 
 | ExifTool tag | OxiDex key | OxiDex write | Example value |
 |---|---|---|---|
@@ -1786,6 +1786,7 @@ Only tags OxiDex can **read** from JPEG are listed here (including those whose v
 | `XMP-exif:Saturation` | `XMP-exif:Saturation` | — | `Normal` |
 | `XMP-exif:SceneCaptureType` | `XMP-exif:SceneCaptureType` | — | `Standard` |
 | `XMP-exif:SceneType` | `XMP-exif:SceneType` | — | `Directly photographed` |
+| `XMP-exif:SensingMethod` | `XMP-exif:SensingMethod` | — | `Monochrome area` |
 | `XMP-exif:Sharpness` | `XMP-exif:Sharpness` | — | `Normal` |
 | `XMP-exif:ShutterSpeedValue` | `XMP-exif:ShutterSpeedValue` | — | `1.5` |
 | `XMP-exif:SpatialFrequencyResponseColumns` | `XMP:SpatialFrequencyResponseColumns` | — | `3` |
