@@ -305,6 +305,7 @@ fn extension_to_format(ext: &str) -> Option<&'static str> {
         "svg" => Some("SVG"),
         "eps" | "ps" => Some("EPS"),
         "flif" => Some("FLIF"),
+        "xcf" => Some("XCF"),
         "exr" => Some("EXR"),
         "jxl" => Some("JXL"),
         "avif" => Some("AVIF"),

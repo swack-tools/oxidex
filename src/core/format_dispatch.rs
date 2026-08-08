@@ -41,6 +41,7 @@ use crate::parsers::image::djvu::parse_djvu_metadata;
 use crate::parsers::image::dpx::parse_dpx_metadata;
 use crate::parsers::image::exr::parse_exr_metadata;
 use crate::parsers::image::flif::parse_flif_metadata;
+use crate::parsers::image::xcf::parse_xcf_metadata;
 use crate::parsers::image::gif::parse_gif_metadata;
 use crate::parsers::image::miff::parse_miff_metadata;
 use crate::parsers::image::pfm::parse_pfm_metadata;
@@ -169,6 +170,7 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::DPX => convert_string_error(parse_dpx_metadata(reader), "DPX"),
         FileFormat::PFM => convert_string_error(parse_pfm_metadata(reader), "PFM"),
         FileFormat::FLIF => convert_string_error(parse_flif_metadata(reader), "FLIF"),
+        FileFormat::XCF => convert_string_error(parse_xcf_metadata(reader), "XCF"),
         FileFormat::MIFF => convert_string_error(parse_miff_metadata(reader), "MIFF"),
         FileFormat::SVG => convert_string_error(parse_svg_metadata(reader), "SVG"),
         FileFormat::ICO => convert_string_error(parse_ico_metadata(reader), "ICO"),
