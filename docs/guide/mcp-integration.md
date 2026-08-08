@@ -41,7 +41,7 @@ The Model Context Protocol (MCP) is an open standard that allows AI assistants t
    - Works even with incorrect file extensions
 
 7. **list_tags** - Browse available metadata tags
-   - Explore 32,677+ metadata tags supported by OxiDex
+   - Explore the 16,684 metadata tags defined by OxiDex
    - Filter by group (EXIF, XMP, IPTC, GPS, etc.)
    - Filter by file format or search by keyword
    - Show only writable tags for write operations
