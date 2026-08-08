@@ -104,9 +104,6 @@ mod tests {
 
     #[test]
     fn test_tag_names_match_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
-            return;
-        }
         // Ground truth: PhaseOne.pm Main table, verified against
         // `exiftool -G1 -s /tmp/oxidex-exiftool-cache/combined-samples/PhaseOne.iiq`.
         assert_eq!(phaseone_tag_name(0x0211), Some("SensorTemperature2"));

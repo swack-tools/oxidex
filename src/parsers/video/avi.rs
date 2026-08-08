@@ -1072,9 +1072,6 @@ mod tests {
 
     #[test]
     fn video_bitmap_info_header_matches_exiftool_bmp_main_fields() {
-        if !crate::test_support::pinned_corpus_available() {
-            return;
-        }
         // This is the BITMAPINFOHEADER from ExifTool 13.59's RIFF.avi fixture:
         // `strf` is routed to BMP::Main by RIFF.pm, not an AVI-specific table.
         let mut bih = vec![0u8; 40];

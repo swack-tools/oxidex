@@ -7533,9 +7533,6 @@ mod tests {
     /// The old generic path accepted only SHORT/UNDEFINED and silently skipped it.
     #[test]
     fn test_parse_long_binary_table_record() {
-        if !crate::test_support::pinned_corpus_available() {
-            return;
-        }
         let mut data = Vec::new();
         data.extend_from_slice(b"Canon");
         data.extend_from_slice(&[0x01, 0x00]); // 1 entry
@@ -7593,9 +7590,6 @@ mod tests {
     /// are all zero the tag is dropped entirely rather than hexed to all zeros.
     #[test]
     fn test_lens_info_serial_number_dropped_when_leading_bytes_are_zero() {
-        if !crate::test_support::pinned_corpus_available() {
-            return;
-        }
         let mut data = Vec::new();
         data.extend_from_slice(b"Canon");
         data.extend_from_slice(&[0x01, 0x00]);
@@ -7663,9 +7657,6 @@ mod tests {
     /// value, matching ExifTool's same-priority tie (last value wins).
     #[test]
     fn test_level_info_focal_length_overwrites_earlier_tag() {
-        if !crate::test_support::pinned_corpus_available() {
-            return;
-        }
         let mut data = Vec::new();
         data.extend_from_slice(b"Canon");
         data.extend_from_slice(&[0x02, 0x00]); // 2 entries
@@ -7883,9 +7874,6 @@ mod tests {
 
     #[test]
     fn color_space_uses_canon_pm_print_conversion() {
-        if !crate::test_support::pinned_corpus_available() {
-            return;
-        }
         // Canon.pm 0xb4 maps 1 to sRGB (the CR2 wave-8 residual value).
         let data = canon_makernote_with_inline_short(CANON_COLOR_SPACE, 1);
         let tags = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
@@ -7904,9 +7892,6 @@ mod tests {
     /// ```
     #[test]
     fn test_parse_af_info_array() {
-        if !crate::test_support::pinned_corpus_available() {
-            return;
-        }
         let af_info: Vec<i16> = vec![
             7, 7, 3456, 2304, 3456, 2304, 189, 188, // keys 0-7
             0, -1237, -742, 0, 742, 1237, 0, // key 8: AFAreaXPositions[7]
@@ -8559,9 +8544,6 @@ mod tests {
     /// 0xf's `EOS-1D` dispatch arm is unused in practice.
     #[test]
     fn test_apply_canon_custom_functions_wires_1d_series_tag_0x90() {
-        if !crate::test_support::pinned_corpus_available() {
-            return;
-        }
         // The declared-length word (44 = 0x2c) followed by the 21 packed
         // `tag<<8 | value` int16 words from that file's raw record, byte-for-byte.
         let array: Vec<i16> = [
