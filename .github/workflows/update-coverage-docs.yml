@@ -1,12 +1,20 @@
 name: Update Coverage Documentation
 
+# This job measures extraction coverage rather than estimating it, so it needs
+# an oxidex binary and the pinned ExifTool. The corpus and the comparison tool
+# are inputs to the published number, so a change to either must re-run it --
+# hence tests/fixtures, conformance.py and .exiftool-version in the filter.
 on:
   push:
     branches: [main]
     paths:
       - 'src/**'
       - 'oxidex-tags-*/src/**'
+      - 'tests/fixtures/**'
       - 'scripts/generate_tag_coverage.py'
+      - 'scripts/exiftool_oracle.py'
+      - 'tools/exiftool-tables/conformance.py'
+      - '.exiftool-version'
       - '.github/workflows/update-coverage-docs.yml'
   workflow_dispatch:
 
@@ -17,9 +25,19 @@ concurrency:
 jobs:
   update-coverage:
     name: Generate Coverage Report
-    # 2x: the whole job is ~13 seconds -- one Python script under uv, then a
-    # git diff and possibly a commit. The smallest runner is the right one.
-    runs-on: warp-ubuntu-latest-x64-2x
+    # 4x. This used to be 2x because the whole job was ~13 seconds of Python:
+    # it counted `.insert(`/`.push(` call sites in src/parsers and mapped the
+    # count through hand-tuned thresholds to a "coverage %". That number was
+    # never a measurement, so the job was cheap and wrong. It now builds
+    # oxidex and diffs it against the pinned ExifTool over the fixture corpus,
+    # which is dominated by the cargo build -- hence 4x, with rust-cache
+    # carrying the build between runs. 8x is the repo's standing ceiling and
+    # belongs to jpeg-tag-matrix; this job is far smaller and does not need it.
+    #
+    # Debug, not release: 44 files is nothing to parse, so the whole job is
+    # compile time and `--release` would only add LTO for no measured gain.
+    runs-on: warp-ubuntu-latest-x64-4x
+    timeout-minutes: 30
     # Only contents:write is needed now that this pushes to main directly.
     # pull-requests:write and actions:write were for the PR/dispatch dance
     # this no longer does.
@@ -42,10 +60,121 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
 
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable (2026-07)
+        with:
+          toolchain: stable
+
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          cache-on-failure: true
+          cache-provider: warpbuild
+          shared-key: update-coverage-docs
+
+      # No EXIFTOOL_VERSION literal. A pin in this file would be a second
+      # source of truth, and when one drifted from .exiftool-version the JPEG
+      # matrix graded 13.55 output against 13.59 tables and reported sixteen
+      # correct Canon R6 Mark III tags as regressions. Resolved at run time.
+      - name: Resolve pinned ExifTool version
+        id: exiftool-version
+        run: |
+          set -euo pipefail
+          V=$(tr -d '[:space:]' < .exiftool-version)
+          case "$V" in
+            *[!0-9.]* | "" | .* | *.)
+              echo "::error::refusing non-numeric ExifTool pin '$V'"; exit 1 ;;
+          esac
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      # Same path and same key as jpeg-tag-matrix.yml, deliberately: both
+      # shallow-clone the same tag to /tmp/exiftool, so sharing the entry is
+      # correct and halves the download. The `exiftool-clone-` prefix is what
+      # keeps it distinct from ci.yml's `exiftool-src-` tarball at
+      # /tmp/exiftool-src -- caches are scoped to the repo, not the workflow,
+      # so one shared key across two different paths would hand a cache hit to
+      # a job whose path nothing had populated. No restore-keys: the key IS
+      # the pinned version, so any prefix match would serve a different
+      # release -- the exact skew that manufactures phantom regressions.
+      - name: Restore pinned ExifTool source
+        id: exiftool-cache
+        uses: WarpBuilds/cache/restore@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
+        with:
+          path: /tmp/exiftool
+          key: exiftool-clone-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
+
+      - name: Clone pinned ExifTool
+        if: steps.exiftool-cache.outputs.cache-hit != 'true'
+        env:
+          V: ${{ steps.exiftool-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch "$V" \
+            https://github.com/exiftool/exiftool /tmp/exiftool
+
+      # Archive::Zip gates every ZIP-container format; without it a .docx
+      # reports FileType: ZIP while -ver still prints the right release, so a
+      # matching version is not on its own a working oracle. Runs even on a
+      # cache hit, as do the assertions: a corrupted or wrong-version entry
+      # must fail the job, not sail through.
+      - name: Install Archive::Zip and verify ExifTool
+        env:
+          V: ${{ steps.exiftool-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          sudo cpanm --notest Archive::Zip 2>/dev/null || sudo cpan -T Archive::Zip
+          perl -MArchive::Zip -e 1
+          echo "/tmp/exiftool" >> "$GITHUB_PATH"
+          GOT=$(/tmp/exiftool/exiftool -ver)
+          [ "$GOT" = "$V" ] || { echo "::error::installed ExifTool $GOT, expected $V"; exit 1; }
+          echo "EXIFTOOL=/tmp/exiftool/exiftool" >> "$GITHUB_ENV"
+
+      # Only on a miss, and only after the verify above passed -- default
+      # `success()` semantics keep a bad tree from being persisted.
+      - name: Save pinned ExifTool source
+        if: steps.exiftool-cache.outputs.cache-hit != 'true'
+        uses: WarpBuilds/cache/save@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
+        with:
+          path: /tmp/exiftool
+          key: ${{ steps.exiftool-cache.outputs.cache-primary-key }}
+
+      - name: Build oxidex
+        run: cargo build --bin oxidex
+
+      # --ext keeps the score honest: tests/fixtures doubles as a test-fixture
+      # tree and carries 18 mock .sh scripts plus .json/.md/.xml scaffolding.
+      # ExifTool scores those as ENV SCRIPT/JSON, whose "tags" are just object
+      # keys, and unfiltered they drag the total from 96.0% to 83.8% while
+      # saying nothing about metadata extraction.
+      #
+      # The floors are the degraded-oracle guard. A broken oracle does not
+      # crash -- it reads a fraction of the corpus and reports a confident,
+      # precisely-formatted, completely wrong percentage. 44 media files and
+      # ~1,200 ExifTool tags is the current run; the floors sit just under it,
+      # so losing the corpus or the oracle fails the job instead of quietly
+      # publishing a smaller number.
+      - name: Measure extraction coverage against pinned ExifTool
+        run: |
+          uv run tools/exiftool-tables/conformance.py tests/fixtures \
+            --recursive \
+            --ext jpg,jpeg,tif,tiff,png,pdf,mp4,mov,dng,heic,webp,gif,bmp \
+            --oxidex ./target/debug/oxidex \
+            --min-files 40 \
+            --min-tags 1200 \
+            --json-out "$RUNNER_TEMP/conformance.json"
+
       - name: Generate coverage report
         run: |
-          uv run scripts/generate_tag_coverage.py --output docs/reference/tag-coverage-analysis.md
+          uv run scripts/generate_tag_coverage.py \
+            --conformance "$RUNNER_TEMP/conformance.json" \
+            --corpus-desc 'tests/fixtures (recursive), media files only' \
+            --output docs/reference/tag-coverage-analysis.md
           echo "Coverage report generated"
+
+      - name: Upload conformance results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: conformance-results
+          path: ${{ runner.temp }}/conformance.json
+          retention-days: 90
 
       - name: Check for changes
         id: changes

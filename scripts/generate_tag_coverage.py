@@ -6,23 +6,50 @@
 # ]
 # ///
 """
-Generate Tag Coverage Analysis Report
+Generate the Tag Coverage report.
 
-This script analyzes the OxiDex tag database and parser implementations
-to generate a comprehensive coverage report.
+This script reports two things, and it is careful never to conflate them:
+
+  1. Tag *knowledge* -- how many tags OxiDex has definitions for. Counted
+     directly from the `oxidex-tags-*/src/*.yaml` databases. This is exact.
+
+  2. Tag *extraction* -- what OxiDex actually pulls out of real files,
+     measured against the pinned ExifTool. This is NOT derivable from source
+     code, and is read from `tools/exiftool-tables/conformance.py --json-out`.
+
+The old version of this script estimated (2) by counting `.insert(`/`.push(`
+call sites in `src/parsers/**` and mapping the count through hand-tuned
+thresholds. That number was wrong in every direction at once: overlapping
+regexes counted a single `metadata.insert("X".to_string(), v)` three times,
+buffer-building calls like `data.push(..)` were scored as tags, parsers
+written as a single loose `.rs` file were invisible, and every parser above
+100 hits collapsed to the same "90%". It also divided the YAML tag count by a
+hardcoded 28,853 and published the result as "ExifTool Parity", which is the
+exact inference AGENTS.md forbids -- a rising definition count is not evidence
+of rising extraction coverage.
+
+None of that is patchable, because call sites were never the quantity of
+interest. It is replaced by a measurement or it is not reported.
 
 Usage:
-    uv run scripts/generate_tag_coverage.py [--output docs/reference/tag-coverage-analysis.md]
+    # measured (what CI runs)
+    uv run tools/exiftool-tables/conformance.py tests/fixtures --recursive \
+        --oxidex ./target/debug/oxidex --json-out /tmp/conformance.json
+    uv run scripts/generate_tag_coverage.py --conformance /tmp/conformance.json
+
+    # definitions only, to stdout -- cannot overwrite the committed doc
+    uv run scripts/generate_tag_coverage.py --skip-conformance
 
 Or via justfile:
     just docs-coverage
 """
 
 import argparse
+import json
 import re
 import sys
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -38,10 +65,25 @@ def get_project_root() -> Path:
     raise RuntimeError("Could not find project root")
 
 
+def read_exiftool_pin(project_root: Path) -> str:
+    """The release the transcriptions came from, and the only version any part
+    of this repo may grade against. Never hardcode it -- a second copy is how
+    the matrix once graded 13.55 output against 13.59 tables."""
+    pin = project_root / ".exiftool-version"
+    if not pin.exists():
+        return "unknown"
+    return pin.read_text().strip()
+
+
 def parse_yaml_tags(project_root: Path) -> dict:
     """Parse all YAML tag files and count tags by domain/category"""
     domains = {}
-    yaml_files = list(project_root.glob("oxidex-tags-*/src/*.yaml"))
+    yaml_files = sorted(project_root.glob("oxidex-tags-*/src/*.yaml"))
+    if not yaml_files:
+        sys.exit(
+            "no oxidex-tags-*/src/*.yaml files found -- the tag databases moved, "
+            "and this script would otherwise report a confident zero."
+        )
 
     for yaml_file in yaml_files:
         # Extract domain from path (e.g., oxidex-tags-core -> core)
@@ -76,151 +118,15 @@ def parse_yaml_tags(project_root: Path) -> dict:
     return domains
 
 
-def count_tag_patterns(content: str) -> int:
-    """Count various tag extraction patterns in Rust code"""
-    count = 0
-    # HashMap/BTreeMap insert patterns
-    count += len(re.findall(r'tags\.insert\s*\(', content))
-    count += len(re.findall(r'metadata\.insert\s*\(', content))
-    count += len(re.findall(r'result\.insert\s*\(', content))
-    count += len(re.findall(r'\.insert\s*\(\s*["\']\w+["\']', content))
-
-    # Vec<(String, String)> patterns - used by XMP, IPTC, etc.
-    count += len(re.findall(r'tags\.push\s*\(', content))
-    count += len(re.findall(r'_tags\.push\s*\(', content))  # all_xmp_tags.push, all_iptc_tags.push
-    count += len(re.findall(r'\.push\s*\(\s*\(\s*["\']\w+["\']', content))
-    count += len(re.findall(r'\.push\s*\(\s*\(\s*\w+\.to_string\(\)', content))
-    count += len(re.findall(r'\.push\s*\(\s*\(\s*tag_name', content))  # .push((tag_name, value))
-    count += len(re.findall(r'_tags\.extend\s*\(', content))  # all_xmp_tags.extend()
-
-    # Issue 1.1: XMP/IPTC return Vec instead of insert - detect tuple pushes and Vec return signatures
-    count += len(re.findall(r'\.push\s*\(\s*\([^,]+,', content))  # Generic .push((x, y))
-    # Count functions that return Vec<(String, String)> as contributing 1 insertion point
-    # (actual tags are counted via the .push patterns above)
-    vec_return_pattern = r'fn\s+\w+.*->\s*Result<Vec<\(String,\s*String\)>>'
-    if re.search(vec_return_pattern, content):
-        count += 1  # Add 1 for having a Vec-returning function (actual tags counted via push)
-
-    # Direct tuple creation with string keys
-    count += len(re.findall(r'\(\s*["\']\w+["\']\.to_string\(\)\s*,', content))
-
-    # ICC parser patterns (header.rs uses metadata.insert extensively)
-    # ICC uses registry-based insertion via metadata.insert(), already counted above
-    # No additional patterns needed - ICC is well-covered by existing insert() detection
-
-    return count
-
-
-def analyze_parsers(project_root: Path) -> dict:
-    """Analyze parser implementations to find tag extraction"""
-    parsers_dir = project_root / "src" / "parsers"
-    core_dir = project_root / "src" / "core"
-    parser_coverage = {}
-
-    # Also count tag insertions in core directory (operations.rs has JPEG, PNG, etc.)
-    core_insertions = 0
-    for rs_file in core_dir.rglob("*.rs"):
-        try:
-            content = rs_file.read_text()
-            core_insertions += count_tag_patterns(content)
-        except Exception:
-            continue
-
-    # JPEG/TIFF/PNG parsing happens in core/operations.rs
-    # Estimate based on typical tag counts in these parsers
-    if core_insertions > 50:
-        parser_coverage["JPEG"] = {"directory": "core", "tag_insertions": core_insertions // 3, "has_parser": True}
-        parser_coverage["PNG"] = {"directory": "core", "tag_insertions": core_insertions // 4, "has_parser": True}
-
-    # Map directory names to format names
-    format_map = {
-        "audio": ["FLAC", "MP3", "AAC", "APE", "Opus", "OGG", "WAV"],
-        "image": ["BMP", "GIF", "WebP"],
-        "jpeg": ["JPEG"],
-        "png": ["PNG"],
-        "tiff": ["TIFF", "EXIF"],
-        "pdf": ["PDF"],
-        "quicktime": ["QuickTime", "MP4", "MOV"],
-        "video": ["MKV", "AVI", "RIFF"],
-        "pe": ["PE"],
-        "elf": ["ELF"],
-        "macho": ["Mach-O"],
-        "archive": ["ZIP"],
-        "document": ["DOCX", "XLSX"],
-        "font": ["TTF", "OTF"],
-        "raw": ["DNG", "CR2", "NEF"],
-        "icc": ["ICC"],
-        "xmp": ["XMP"],  # XMP parser is standalone and used by JPEG/TIFF/etc
-        "iptc": ["IPTC"],  # IPTC parser (if exists as standalone)
-    }
-
-    # Note: IPTC and XMP are embedded formats parsed within JPEG/TIFF, but may have dedicated parsers
-    # Check if IPTC/XMP parsing exists in jpeg parser (these call out to shared parsers)
-    jpeg_parser_dir = parsers_dir / "jpeg"
-    if jpeg_parser_dir.exists():
-        iptc_file = jpeg_parser_dir / "iptc_parser.rs"
-        xmp_file = jpeg_parser_dir / "xmp_parser.rs"
-
-        # Count IPTC tags from jpeg/iptc_parser.rs
-        if iptc_file.exists():
-            content = iptc_file.read_text()
-            insertions = count_tag_patterns(content)
-            if insertions > 0:
-                parser_coverage["IPTC"] = {"directory": "jpeg/iptc", "tag_insertions": insertions, "has_parser": True}
-
-        # For XMP, count both the jpeg wrapper and the shared XMP parser directory
-        xmp_insertions = 0
-        if xmp_file.exists():
-            content = xmp_file.read_text()
-            xmp_insertions = count_tag_patterns(content)
-
-        # Also count tags from the shared XMP parser directory
-        xmp_parser_dir = parsers_dir / "xmp"
-        if xmp_parser_dir.exists():
-            for rs_file in xmp_parser_dir.rglob("*.rs"):
-                try:
-                    content = rs_file.read_text()
-                    xmp_insertions += count_tag_patterns(content)
-                except Exception:
-                    continue
-
-        if xmp_insertions > 0:
-            parser_coverage["XMP"] = {"directory": "xmp", "tag_insertions": xmp_insertions, "has_parser": True}
-
-    for parser_dir in parsers_dir.iterdir():
-        if not parser_dir.is_dir():
-            continue
-
-        dir_name = parser_dir.name
-        # Skip directories handled specially or support directories
-        if dir_name in ["common", "detection", "mod.rs", "xmp"]:
-            continue
-
-        # Count tag insertions
-        tag_insertions = 0
-        for rs_file in parser_dir.rglob("*.rs"):
-            try:
-                content = rs_file.read_text()
-                tag_insertions += count_tag_patterns(content)
-            except Exception:
-                continue
-
-        formats = format_map.get(dir_name, [dir_name.upper()])
-        for fmt in formats:
-            # Don't overwrite if we already have better coverage from core
-            if fmt in parser_coverage and parser_coverage[fmt]["tag_insertions"] > tag_insertions:
-                continue
-            parser_coverage[fmt] = {
-                "directory": dir_name,
-                "tag_insertions": tag_insertions,
-                "has_parser": tag_insertions > 0
-            }
-
-    return parser_coverage
-
-
 def check_makernote_status(project_root: Path) -> dict:
-    """Check MakerNote dispatcher status"""
+    """Check MakerNote dispatcher status.
+
+    This stays source-derived because it is a structural fact, not a coverage
+    estimate: either `dispatch_makernote` is called from the TIFF file parser
+    or it is not, and either a manufacturer has a dispatcher arm or it does
+    not. Neither claims anything about how many of that manufacturer's tags
+    are extracted -- the conformance table below is the only thing that does.
+    """
     dispatcher_path = project_root / "src" / "parsers" / "tiff" / "makernote_dispatcher.rs"
     file_parser_path = project_root / "src" / "parsers" / "tiff" / "file_parser.rs"
 
@@ -247,113 +153,206 @@ def check_makernote_status(project_root: Path) -> dict:
     return result
 
 
-def get_audio_coverage() -> dict:
-    """Audio parsers are known to be complete"""
-    return {
-        "FLAC": 100,
-        "MP3": 100,
-        "AAC": 100,
-        "APE": 100,
-        "Opus": 100,
-        "OGG": 100,
-        "WAV": 100,
-    }
+def load_conformance(path: Path) -> dict:
+    """Read the JSON written by tools/exiftool-tables/conformance.py --json-out.
+
+    Shape:
+      per_format: {FMT: {files, matched, value_diff, missing, renames, extra}}
+      renames:    {FMT: {"OxiName->ExifToolName": file_count}}
+      missing:    {"FMT:TagName": file_count}
+    """
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        sys.exit(f"could not read conformance JSON {path}: {exc}")
+
+    per_format = data.get("per_format") or {}
+    if not per_format:
+        sys.exit(
+            f"{path} has no per_format data. A conformance run that scored "
+            "nothing must not be published as a coverage report."
+        )
+    return data
 
 
-def estimate_coverage(parser_info: dict, domain_data: dict) -> dict:
-    """Estimate coverage percentages based on parser analysis"""
-    # Coverage thresholds based on tag insertion counts
-    # These are calibrated based on typical tag counts per format
-    coverage = {}
+def score_row(counts: dict) -> tuple:
+    """(total, score, ceiling) for one format, matching conformance.py exactly.
 
-    # Manual overrides for parsers that use dynamic tag extraction
-    # These parsers extract many tags at runtime via XML/structure parsing
-    # rather than hardcoded insertions, so static analysis underestimates them
-    dynamic_parsers = {
-        "XMP": 60,    # Parses arbitrary XML namespaces, extracts many tags
-        "IPTC": 60,   # Parses IPTC record structures, extracts many tags
-        "JPEG": 60,   # Delegates to TIFF/EXIF/XMP/IPTC, comprehensive
-    }
+    `extra` is deliberately outside the denominator: an OxiDex-only tag with no
+    ExifTool counterpart is not a missed ExifTool tag, and putting it in the
+    denominator would penalise emitting more than ExifTool does.
+    """
+    total = (counts.get("matched", 0) + counts.get("value_diff", 0)
+             + counts.get("missing", 0) + counts.get("renames", 0))
+    if not total:
+        return 0, None, None
+    score = counts.get("matched", 0) / total
+    # What the score becomes once every rename is corrected: free coverage,
+    # no parsing work. A wide score-to-ceiling spread means naming debt.
+    ceiling = (counts.get("matched", 0) + counts.get("renames", 0)) / total
+    return total, score, ceiling
 
-    for fmt, info in parser_info.items():
-        # Check for dynamic parser override first
-        if fmt in dynamic_parsers and info.get("has_parser", False):
-            coverage[fmt] = dynamic_parsers[fmt]
+
+def render_conformance(data: dict, corpus_desc: str, exiftool_version: str) -> str:
+    per_format = data["per_format"]
+
+    md = f"""
+---
+
+## Measured Extraction Coverage
+
+Every number in this section comes from running OxiDex and ExifTool
+{exiftool_version} over the same files and diffing the output tag by tag. It is
+a measurement, not an estimate derived from source code.
+
+**Corpus:** {corpus_desc}
+
+| Column | Meaning |
+|--------|---------|
+| Match | Same tag name, same value. |
+| Rename | OxiDex read the value correctly under a name ExifTool does not use. Value-confirmed, so this is a naming fix, not parsing work. |
+| Value | Both emit the tag, values disagree. Usually a `PrintConv` gap. |
+| Missing | ExifTool emits a tag OxiDex does not. Real extraction work. |
+| Score | Match / (Match + Rename + Value + Missing). |
+| Ceiling | Score once every rename is corrected. |
+
+| Format | Files | Match | Rename | Value | Missing | Score | Ceiling |
+|--------|------:|------:|-------:|------:|--------:|------:|--------:|
+"""
+
+    grand = defaultdict(int)
+    for fmt in sorted(per_format):
+        counts = per_format[fmt]
+        total, score, ceiling = score_row(counts)
+        if not total:
             continue
+        for k in ("files", "matched", "value_diff", "missing", "renames", "extra"):
+            grand[k] += counts.get(k, 0)
+        md += (
+            f"| {fmt} | {counts.get('files', 0)} | {counts.get('matched', 0)} "
+            f"| {counts.get('renames', 0)} | {counts.get('value_diff', 0)} "
+            f"| {counts.get('missing', 0)} | {score:.1%} | {ceiling:.1%} |\n"
+        )
 
-        insertions = info.get("tag_insertions", 0)
+    g_total, g_score, g_ceiling = score_row(grand)
+    if g_total:
+        md += (
+            f"| **Total** | **{grand['files']}** | **{grand['matched']}** "
+            f"| **{grand['renames']}** | **{grand['value_diff']}** "
+            f"| **{grand['missing']}** | **{g_score:.1%}** | **{g_ceiling:.1%}** |\n"
+        )
 
-        if insertions == 0:
-            coverage[fmt] = 0
-        elif insertions >= 100:
-            # Very comprehensive parser (100+ tag insertions)
-            coverage[fmt] = 90
-        elif insertions >= 50:
-            # Good coverage (50-99 insertions)
-            coverage[fmt] = 75
-        elif insertions >= 30:
-            # Moderate coverage (30-49 insertions)
-            coverage[fmt] = 60
-        elif insertions >= 15:
-            # Partial coverage (15-29 insertions)
-            coverage[fmt] = 40
-        elif insertions >= 5:
-            # Minimal coverage (5-14 insertions)
-            coverage[fmt] = 20
-        else:
-            # Very minimal (1-4 insertions)
-            coverage[fmt] = 10
+    # Renames: the cheapest possible fix class, so they are worth listing
+    # explicitly rather than leaving buried in the score-to-ceiling gap.
+    renames = data.get("renames") or {}
+    flat_renames = sorted(
+        ((fmt, pair, n) for fmt, pairs in renames.items() for pair, n in pairs.items()),
+        key=lambda r: (-r[2], r[0], r[1]),
+    )
+    if flat_renames:
+        md += f"""
+### Renames — free coverage ({len(flat_renames)})
 
-    return coverage
+OxiDex reads these values correctly under the wrong name. The value match is
+what makes the mapping safe to act on; name similarity alone would be a guess.
+
+| Format | OxiDex name | ExifTool name | Files |
+|--------|-------------|---------------|------:|
+"""
+        for fmt, pair, n in flat_renames[:40]:
+            ox_name, _, et_name = pair.partition("->")
+            md += f"| {fmt} | `{ox_name}` | `{et_name}` | {n} |\n"
+        if len(flat_renames) > 40:
+            md += f"\n_{len(flat_renames) - 40} further renames omitted from this table._\n"
+
+    # Missing: the only class that is genuinely parsing work.
+    missing = data.get("missing") or {}
+    top_missing = sorted(missing.items(), key=lambda kv: (-kv[1], kv[0]))
+    if top_missing:
+        md += f"""
+### Top missing tags — real extraction work ({len(top_missing)} distinct)
+
+| Format | Tag | Files |
+|--------|-----|------:|
+"""
+        for key, n in top_missing[:25]:
+            fmt, _, tag = key.partition(":")
+            md += f"| {fmt} | `{tag}` | {n} |\n"
+        if len(top_missing) > 25:
+            md += f"\n_{len(top_missing) - 25} further missing tags omitted from this table._\n"
+
+    return md
 
 
-def generate_markdown(domains: dict, parser_coverage: dict, makernote_status: dict, coverage: dict) -> str:
-    """Generate the comprehensive tag coverage markdown report"""
-    today = datetime.now().strftime("%Y-%m-%d")
+def render_unmeasured() -> str:
+    return """
+---
 
-    # Calculate totals
+## Measured Extraction Coverage
+
+::: warning Not measured in this run
+This report was generated without a conformance run, so it carries no
+extraction-coverage numbers. Tag *definitions* (above) are not extraction
+coverage — a tag can be defined and still never be read out of a file.
+
+Run the measurement to populate this section:
+
+```bash
+just docs-coverage
+```
+:::
+"""
+
+
+def generate_markdown(domains: dict, makernote_status: dict,
+                      conformance: dict, corpus_desc: str,
+                      exiftool_version: str) -> str:
+    """Generate the tag coverage markdown report"""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
     total_tags = sum(d["total_tags"] for d in domains.values())
     total_tables = sum(d["total_tables"] for d in domains.values())
-    total_categories = sum(len(d["categories"]) for d in domains.values())
-
-    # Count parsers with coverage
-    parsers_with_coverage = sum(1 for c in coverage.values() if c > 0)
-
-    # Calculate coverage percentage vs ExifTool's documented tags
-    exiftool_tags = 28853
-    coverage_pct = round((total_tags / exiftool_tags) * 100)
 
     md = f"""# ExifTool Tag Coverage
 
-This document details OxiDex's coverage of ExifTool's tag database and analyzes parser implementation status.
+This document reports two separate things about OxiDex, and does not mix them:
+how many tags it has **definitions** for, and how many tags it actually
+**extracts** from real files.
 
 ::: info Auto-Generated
 This document is automatically updated on each push to `main`. Last updated: **{today}**
 :::
 
-## Summary
+## Tag Definitions
+
+Counted from the `oxidex-tags-*` YAML databases. This is what OxiDex knows a
+tag *exists*; it says nothing about whether any parser reads it.
 
 | Metric | Value |
 |--------|-------|
 | Total Tags | {total_tags:,} |
 | Tag Tables | {total_tables} |
 | Domains | {len(domains)} |
-| Format Parsers | {parsers_with_coverage} |
-| ExifTool Parity | {coverage_pct}%* |
 
-*ExifTool officially documents ~{exiftool_tags:,} unique tags. OxiDex defines {total_tags:,} tags (including variant definitions).
+::: warning Definitions are not coverage
+A definition count is documentation, not capability. `src/tag_sync` ingests
+`exiftool -f -listx`, which carries `count encoding id index lang name type
+version writable` and no layout at all — no `SubDirectory`, `FORMAT`,
+`FIRST_ENTRY`, `ValueConv` or `Condition`. It can say a tag exists; it can
+never say how to read one. A rising tag count is therefore **not** evidence of
+rising extraction coverage. See [Measured Extraction Coverage](#measured-extraction-coverage).
+:::
 
 ::: tip Empirical JPEG comparison
-The counts on this page are derived statically from the tag database. For JPEG
-specifically, an empirical per-tag comparison against ExifTool (read + write
-round-trips, regression-gated in CI) is available:
+For JPEG specifically there is a deeper per-tag comparison against ExifTool
+covering read *and* write round-trips, regression-gated in CI:
 [JPEG Tag Support](/reference/jpeg-tag-support) ·
 [JPEG Tag Matrix](/reference/jpeg-tag-matrix)
 :::
 
 ---
 
-## Coverage by Domain
+## Definitions by Domain
 
 | Domain | Tables | Tags | Description |
 |--------|--------|------|-------------|
@@ -374,6 +373,12 @@ round-trips, regression-gated in CI) is available:
 
     md += f"| **Total** | **{total_tables}** | **{total_tags:,}** | |\n"
 
+    # Measured coverage -- the only section that may state a coverage number.
+    if conformance:
+        md += render_conformance(conformance, corpus_desc, exiftool_version)
+    else:
+        md += render_unmeasured()
+
     # MakerNote status
     md += """
 ---
@@ -384,10 +389,14 @@ round-trips, regression-gated in CI) is available:
 
     if makernote_status["wired_up"]:
         md += f"""::: tip ✅ MakerNote Parsers Active
-MakerNote parsers for {len(makernote_status['manufacturers'])}+ camera manufacturers are **fully implemented and connected** to the TIFF parsing pipeline.
+MakerNote parsers for {len(makernote_status['manufacturers'])} camera manufacturers are **implemented and connected** to the TIFF parsing pipeline.
+
+This means the dispatcher has an arm for these makes and that the TIFF parser
+calls it. It is not a claim about how much of each manufacturer's MakerNote is
+extracted — only the conformance table above measures that.
 :::
 
-### Supported Manufacturers
+### Dispatched Manufacturers
 
 """
         # Group manufacturers
@@ -397,101 +406,38 @@ MakerNote parsers for {len(makernote_status['manufacturers'])}+ camera manufactu
         legacy = ["Casio", "Ge", "Hp", "Jvc", "Kodak", "Leaf", "Motorola", "Ricoh", "Sanyo"]
 
         all_mfrs = set(makernote_status["manufacturers"])
+        lowered = {x.lower() for x in all_mfrs}
 
         def filter_mfrs(group):
-            return ", ".join(m for m in group if m in all_mfrs or m.lower() in [x.lower() for x in all_mfrs])
+            return ", ".join(m for m in group if m in all_mfrs or m.lower() in lowered)
 
         md += f"**Traditional Cameras:** {filter_mfrs(traditional)}\n\n"
         md += f"**Smartphones:** {filter_mfrs(smartphones)}\n\n"
         md += f"**Specialty Devices:** {filter_mfrs(specialty)}\n\n"
         md += f"**Legacy Cameras:** {filter_mfrs(legacy)}\n\n"
+
+        # Anything the dispatcher handles that the four hand-maintained groups
+        # above do not mention. Without this, adding a make to the dispatcher
+        # silently fails to appear in the docs -- which is how the old
+        # format_map went stale and started publishing rows like "CANON_VRD".
+        grouped = {m.lower() for m in traditional + smartphones + specialty + legacy}
+        ungrouped = sorted(m for m in all_mfrs if m.lower() not in grouped)
+        if ungrouped:
+            md += f"**Other:** {', '.join(ungrouped)}\n\n"
     else:
         md += """::: warning ⚠️ MakerNote Parsers Not Connected
 MakerNote parsers exist but are NOT wired up to the parsing pipeline. This is a critical gap.
 :::
 """
 
-    # Coverage by use case
-    md += """
----
-
-## Coverage by Use Case
-
-| Use Case | Coverage | Formats |
-|----------|----------|---------|
-"""
-
-    use_cases = [
-        ("JPEG photos", ["JPEG", "EXIF", "XMP", "IPTC"], "EXIF, XMP, IPTC, MakerNotes"),
-        ("RAW photos", ["TIFF", "DNG", "CR2", "NEF"], "DNG, CR2, NEF, ARW, etc."),
-        ("Video files", ["QuickTime", "MP4", "MOV", "MKV", "RIFF"], "QuickTime, Matroska, RIFF"),
-        ("Audio files", ["FLAC", "MP3", "AAC", "OGG", "WAV"], "ID3, FLAC, Vorbis, AAC"),
-        ("PDF documents", ["PDF"], "Info dict, XMP"),
-        ("Office docs", ["DOCX", "XLSX"], "OOXML, iWork"),
-        ("Executables", ["PE", "ELF", "Mach-O"], "PE, ELF, Mach-O"),
-    ]
-
-    for use_case, formats, notes in use_cases:
-        relevant_coverage = [coverage.get(f, 0) for f in formats if f in coverage]
-        if relevant_coverage:
-            avg_cov = sum(relevant_coverage) // len(relevant_coverage)
-            if avg_cov == 100:
-                cov_str = "✅ 100%"
-            elif avg_cov >= 75:
-                cov_str = f"✅ {avg_cov}%"
-            elif avg_cov >= 50:
-                cov_str = f"⚠️ {avg_cov}%"
-            else:
-                cov_str = f"⚠️ {avg_cov}%"
-        else:
-            cov_str = "N/A"
-        md += f"| {use_case} | {cov_str} | {notes} |\n"
-
-    # Coverage analysis by format
-    md += """
----
-
-## Parser Coverage by Format
-
-### ✅ Strong Coverage (>50%)
-
-| Format | Coverage | Status |
-|--------|----------|--------|
-"""
-
-    strong = [(k, v) for k, v in coverage.items() if v >= 50]
-    for fmt, cov in sorted(strong, key=lambda x: -x[1]):
-        status = "✅ Complete" if cov == 100 else "✅ Good"
-        md += f"| {fmt} | {cov}% | {status} |\n"
-
-    md += """
-### ⚠️ Partial Coverage (10-50%)
-
-| Format | Coverage | Priority |
-|--------|----------|----------|
-"""
-
-    partial = [(k, v) for k, v in coverage.items() if 10 <= v < 50]
-    for fmt, cov in sorted(partial, key=lambda x: -x[1]):
-        priority = "High" if cov >= 30 else "Medium"
-        md += f"| {fmt} | {cov}% | {priority} |\n"
-
-    minimal = [(k, v) for k, v in coverage.items() if v < 10]
-    if minimal:
-        md += """
-### ❌ Minimal Coverage (<10%)
-
-| Format | Coverage |
-|--------|----------|
-"""
-        for fmt, cov in sorted(minimal, key=lambda x: x[0]):
-            md += f"| {fmt} | {cov}% |\n"
-
     # Module categories (from exiftool-coverage)
     md += """
 ---
 
 ## ExifTool Module Reference
+
+Approximate tag counts published by ExifTool for its own modules, for scale.
+These describe ExifTool, not OxiDex, and are not used in any calculation above.
 
 ### Base Format Modules
 
@@ -545,36 +491,19 @@ MakerNote parsers exist but are NOT wired up to the parsing pipeline. This is a 
 
 ---
 
-## Recommendations
-
-"""
-    # Find formats that need work
-    low_coverage = [(fmt, cov) for fmt, cov in coverage.items() if 0 < cov < 50]
-    no_coverage = [fmt for fmt, cov in coverage.items() if cov == 0]
-
-    if low_coverage:
-        md += "### Formats Needing Enhancement\n\n"
-        for fmt, cov in sorted(low_coverage, key=lambda x: x[1])[:8]:
-            md += f"- **{fmt}** ({cov}% coverage)\n"
-        md += "\n"
-
-    if no_coverage:
-        md += "### Missing Parser Support\n\n"
-        for fmt in sorted(no_coverage)[:5]:
-            md += f"- {fmt}\n"
-        md += "\n"
-
-    md += """---
-
 ## Tag Count Notes
 
-### Why Counts Differ from ExifTool
+### Why definition counts differ from ExifTool's
 
-ExifTool officially documents ~28,853 unique tags, but our database contains more because:
+The OxiDex tag database and ExifTool's documented tag list are not directly
+comparable, because OxiDex stores:
 
 1. **Variant definitions**: Tags with multiple format/type variants
 2. **Nested structures**: Subtable entries counted separately
 3. **Conditional definitions**: Platform or version-specific tags
+
+Dividing one count by the other produces a ratio that moves for reasons
+unrelated to capability, which is why this page does not publish one.
 
 ### Excluded Tags
 
@@ -596,11 +525,27 @@ Some ExifTool tags are excluded by design:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate tag coverage analysis report")
+    parser = argparse.ArgumentParser(description="Generate tag coverage report")
     parser.add_argument(
         "--output", "-o",
         default="docs/reference/tag-coverage-analysis.md",
         help="Output file path (default: docs/reference/tag-coverage-analysis.md)"
+    )
+    parser.add_argument(
+        "--conformance", "-c",
+        help="JSON written by tools/exiftool-tables/conformance.py --json-out. "
+             "Required unless --skip-conformance is passed."
+    )
+    parser.add_argument(
+        "--corpus-desc",
+        default="tests/fixtures (recursive)",
+        help="Human description of the corpus the conformance run scored"
+    )
+    parser.add_argument(
+        "--skip-conformance",
+        action="store_true",
+        help="Emit definitions only. Implies --dry-run: a report with no "
+             "measurement must never overwrite one that has it."
     )
     parser.add_argument(
         "--dry-run", "-n",
@@ -609,27 +554,43 @@ def main():
     )
     args = parser.parse_args()
 
+    if not args.conformance and not args.skip_conformance:
+        sys.exit(
+            "refusing to generate: no --conformance JSON.\n"
+            "  Extraction coverage cannot be inferred from source code, so this\n"
+            "  script will not write a coverage report without a measurement.\n"
+            "  Run `just docs-coverage`, or pass --skip-conformance for a\n"
+            "  definitions-only view on stdout."
+        )
+
+    # A definitions-only run is a preview, never a publish. Without this, a
+    # local `--skip-conformance` would strip the measured section out of the
+    # committed doc and CI would put it straight back, churning main.
+    dry_run = args.dry_run or args.skip_conformance
+
     project_root = get_project_root()
     print(f"Project root: {project_root}")
+
+    exiftool_version = read_exiftool_pin(project_root)
+    print(f"ExifTool pin: {exiftool_version}")
 
     print("Parsing YAML tag files...")
     domains = parse_yaml_tags(project_root)
 
-    print("Analyzing parser implementations...")
-    parser_coverage = analyze_parsers(project_root)
+    conformance = {}
+    if args.conformance:
+        print(f"Loading conformance results from {args.conformance}...")
+        conformance = load_conformance(Path(args.conformance))
 
     print("Checking MakerNote status...")
     makernote_status = check_makernote_status(project_root)
 
-    print("Estimating coverage...")
-    coverage = estimate_coverage(parser_coverage, domains)
-    # Add audio coverage (known to be complete)
-    coverage.update(get_audio_coverage())
-
     print("Generating markdown...")
-    markdown = generate_markdown(domains, parser_coverage, makernote_status, coverage)
+    markdown = generate_markdown(
+        domains, makernote_status, conformance, args.corpus_desc, exiftool_version
+    )
 
-    if args.dry_run:
+    if dry_run:
         print(markdown)
     else:
         output_path = project_root / args.output
@@ -639,11 +600,22 @@ def main():
 
     # Print summary
     total_tags = sum(d["total_tags"] for d in domains.values())
-    print(f"\nSummary:")
+    print("\nSummary:")
     print(f"  Domains: {len(domains)}")
-    print(f"  Total tags: {total_tags:,}")
+    print(f"  Total tag definitions: {total_tags:,}")
     print(f"  MakerNotes wired up: {makernote_status['wired_up']}")
-    print(f"  Manufacturers: {len(makernote_status['manufacturers'])}")
+    print(f"  Manufacturers dispatched: {len(makernote_status['manufacturers'])}")
+    if conformance:
+        grand = defaultdict(int)
+        for counts in conformance["per_format"].values():
+            for k in ("files", "matched", "value_diff", "missing", "renames"):
+                grand[k] += counts.get(k, 0)
+        total, score, ceiling = score_row(grand)
+        if total:
+            print(f"  Measured score: {score:.1%} (ceiling {ceiling:.1%}) "
+                  f"over {grand['files']} file(s), ExifTool {exiftool_version}")
+    else:
+        print("  Measured coverage: NOT RUN (definitions only)")
 
 
 if __name__ == "__main__":

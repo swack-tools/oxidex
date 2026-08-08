@@ -1,34 +1,43 @@
 # ExifTool Tag Coverage
 
-This document details OxiDex's coverage of ExifTool's tag database and analyzes parser implementation status.
+This document reports two separate things about OxiDex, and does not mix them:
+how many tags it has **definitions** for, and how many tags it actually
+**extracts** from real files.
 
 ::: info Auto-Generated
 This document is automatically updated on each push to `main`. Last updated: **2026-08-08**
 :::
 
-## Summary
+## Tag Definitions
+
+Counted from the `oxidex-tags-*` YAML databases. This is what OxiDex knows a
+tag *exists*; it says nothing about whether any parser reads it.
 
 | Metric | Value |
 |--------|-------|
 | Total Tags | 16,684 |
 | Tag Tables | 931 |
 | Domains | 6 |
-| Format Parsers | 38 |
-| ExifTool Parity | 58%* |
 
-*ExifTool officially documents ~28,853 unique tags. OxiDex defines 16,684 tags (including variant definitions).
+::: warning Definitions are not coverage
+A definition count is documentation, not capability. `src/tag_sync` ingests
+`exiftool -f -listx`, which carries `count encoding id index lang name type
+version writable` and no layout at all — no `SubDirectory`, `FORMAT`,
+`FIRST_ENTRY`, `ValueConv` or `Condition`. It can say a tag exists; it can
+never say how to read one. A rising tag count is therefore **not** evidence of
+rising extraction coverage. See [Measured Extraction Coverage](#measured-extraction-coverage).
+:::
 
 ::: tip Empirical JPEG comparison
-The counts on this page are derived statically from the tag database. For JPEG
-specifically, an empirical per-tag comparison against ExifTool (read + write
-round-trips, regression-gated in CI) is available:
+For JPEG specifically there is a deeper per-tag comparison against ExifTool
+covering read *and* write round-trips, regression-gated in CI:
 [JPEG Tag Support](/reference/jpeg-tag-support) ·
 [JPEG Tag Matrix](/reference/jpeg-tag-matrix)
 :::
 
 ---
 
-## Coverage by Domain
+## Definitions by Domain
 
 | Domain | Tables | Tags | Description |
 |--------|--------|------|-------------|
@@ -42,13 +51,69 @@ round-trips, regression-gated in CI) is available:
 
 ---
 
+## Measured Extraction Coverage
+
+Every number in this section comes from running OxiDex and ExifTool
+13.59 over the same files and diffing the output tag by tag. It is
+a measurement, not an estimate derived from source code.
+
+**Corpus:** tests/fixtures (recursive), media files only
+
+| Column | Meaning |
+|--------|---------|
+| Match | Same tag name, same value. |
+| Rename | OxiDex read the value correctly under a name ExifTool does not use. Value-confirmed, so this is a naming fix, not parsing work. |
+| Value | Both emit the tag, values disagree. Usually a `PrintConv` gap. |
+| Missing | ExifTool emits a tag OxiDex does not. Real extraction work. |
+| Score | Match / (Match + Rename + Value + Missing). |
+| Ceiling | Score once every rename is corrected. |
+
+| Format | Files | Match | Rename | Value | Missing | Score | Ceiling |
+|--------|------:|------:|-------:|------:|--------:|------:|--------:|
+| DNG | 1 | 4 | 0 | 0 | 1 | 80.0% | 80.0% |
+| JPEG | 28 | 808 | 0 | 23 | 0 | 97.2% | 97.2% |
+| MP4 | 2 | 66 | 0 | 0 | 0 | 100.0% | 100.0% |
+| PDF | 2 | 28 | 0 | 0 | 0 | 100.0% | 100.0% |
+| PNG | 4 | 138 | 6 | 0 | 16 | 86.2% | 90.0% |
+| TIFF | 7 | 143 | 0 | 4 | 0 | 97.3% | 97.3% |
+| **Total** | **44** | **1187** | **6** | **27** | **17** | **96.0%** | **96.4%** |
+
+### Renames — free coverage (4)
+
+OxiDex reads these values correctly under the wrong name. The value match is
+what makes the mapping safe to act on; name similarity alone would be a guess.
+
+| Format | OxiDex name | ExifTool name | Files |
+|--------|-------------|---------------|------:|
+| PNG | `tEXt:Description` | `Description` | 2 |
+| PNG | `tEXt:Title` | `Title` | 2 |
+| PNG | `tEXt:Author` | `Author` | 1 |
+| PNG | `tEXt:Software` | `Software` | 1 |
+
+### Top missing tags — real extraction work (6 distinct)
+
+| Format | Tag | Files |
+|--------|-----|------:|
+| PNG | `Datecreate` | 4 |
+| PNG | `Datemodify` | 4 |
+| PNG | `Datetimestamp` | 4 |
+| PNG | `ExifByteOrder` | 2 |
+| PNG | `Warning` | 2 |
+| DNG | `Warning` | 1 |
+
+---
+
 ## MakerNote Status
 
 ::: tip ✅ MakerNote Parsers Active
-MakerNote parsers for 30+ camera manufacturers are **fully implemented and connected** to the TIFF parsing pipeline.
+MakerNote parsers for 30 camera manufacturers are **implemented and connected** to the TIFF parsing pipeline.
+
+This means the dispatcher has an arm for these makes and that the TIFF parser
+calls it. It is not a claim about how much of each manufacturer's MakerNote is
+extracted — only the conformance table above measures that.
 :::
 
-### Supported Manufacturers
+### Dispatched Manufacturers
 
 **Traditional Cameras:** Canon, Nikon, Sony, Panasonic, Fujifilm, Leica
 
@@ -58,76 +123,15 @@ MakerNote parsers for 30+ camera manufacturers are **fully implemented and conne
 
 **Legacy Cameras:** Ge, Hp, Jvc, Kodak, Motorola, Ricoh, Sanyo
 
+**Other:** Adobe Indesign, Capture One, Fotostation, Gimp, Leica Camera Ag, Nikon Capture, Photoshop, Scalado
 
----
-
-## Coverage by Use Case
-
-| Use Case | Coverage | Formats |
-|----------|----------|---------|
-| JPEG photos | ⚠️ 67% | EXIF, XMP, IPTC, MakerNotes |
-| RAW photos | ✅ 90% | DNG, CR2, NEF, ARW, etc. |
-| Video files | ✅ 90% | QuickTime, Matroska, RIFF |
-| Audio files | ✅ 100% | ID3, FLAC, Vorbis, AAC |
-| PDF documents | ✅ 90% | Info dict, XMP |
-| Office docs | ✅ 75% | OOXML, iWork |
-| Executables | ✅ 80% | PE, ELF, Mach-O |
-
----
-
-## Parser Coverage by Format
-
-### ✅ Strong Coverage (>50%)
-
-| Format | Coverage | Status |
-|--------|----------|--------|
-| FLAC | 100% | ✅ Complete |
-| MP3 | 100% | ✅ Complete |
-| AAC | 100% | ✅ Complete |
-| APE | 100% | ✅ Complete |
-| Opus | 100% | ✅ Complete |
-| OGG | 100% | ✅ Complete |
-| WAV | 100% | ✅ Complete |
-| BMP | 90% | ✅ Good |
-| GIF | 90% | ✅ Good |
-| WebP | 90% | ✅ Good |
-| ZIP | 90% | ✅ Good |
-| TTF | 90% | ✅ Good |
-| OTF | 90% | ✅ Good |
-| PE | 90% | ✅ Good |
-| TIFF | 90% | ✅ Good |
-| EXIF | 90% | ✅ Good |
-| DNG | 90% | ✅ Good |
-| CR2 | 90% | ✅ Good |
-| NEF | 90% | ✅ Good |
-| PDF | 90% | ✅ Good |
-| MKV | 90% | ✅ Good |
-| AVI | 90% | ✅ Good |
-| RIFF | 90% | ✅ Good |
-| QuickTime | 90% | ✅ Good |
-| MP4 | 90% | ✅ Good |
-| MOV | 90% | ✅ Good |
-| ICC | 90% | ✅ Good |
-| SPECIALIZED | 90% | ✅ Good |
-| Mach-O | 75% | ✅ Good |
-| ELF | 75% | ✅ Good |
-| DOCX | 75% | ✅ Good |
-| XLSX | 75% | ✅ Good |
-| TEXT | 75% | ✅ Good |
-| JPEG | 60% | ✅ Good |
-| PNG | 60% | ✅ Good |
-| IPTC | 60% | ✅ Good |
-| XMP | 60% | ✅ Good |
-
-### ⚠️ Partial Coverage (10-50%)
-
-| Format | Coverage | Priority |
-|--------|----------|----------|
-| CANON_VRD | 20% | Medium |
 
 ---
 
 ## ExifTool Module Reference
+
+Approximate tag counts published by ExifTool for its own modules, for scale.
+These describe ExifTool, not OxiDex, and are not used in any calculation above.
 
 ### Base Format Modules
 
@@ -181,23 +185,19 @@ MakerNote parsers for 30+ camera manufacturers are **fully implemented and conne
 
 ---
 
-## Recommendations
-
-### Formats Needing Enhancement
-
-- **CANON_VRD** (20% coverage)
-
----
-
 ## Tag Count Notes
 
-### Why Counts Differ from ExifTool
+### Why definition counts differ from ExifTool's
 
-ExifTool officially documents ~28,853 unique tags, but our database contains more because:
+The OxiDex tag database and ExifTool's documented tag list are not directly
+comparable, because OxiDex stores:
 
 1. **Variant definitions**: Tags with multiple format/type variants
 2. **Nested structures**: Subtable entries counted separately
 3. **Conditional definitions**: Platform or version-specific tags
+
+Dividing one count by the other produces a ratio that moves for reasons
+unrelated to capability, which is why this page does not publish one.
 
 ### Excluded Tags
 
