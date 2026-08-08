@@ -3014,7 +3014,17 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         "ISO" => format_exif_iso(value),
         "ShutterSpeed" => format_exif_shutter_speed(value),
         "Aperture" => format_exif_aperture(value),
-        "ExposureCompensation" => format_exif_exposure_compensation(value),
+        // XMP.pm:2096-2099 gives PrintFraction to exif:ExposureBiasValue alone
+        // (renamed ExposureCompensation by PROPERTY_RENAMES). Microsoft's
+        // Windows Live Photo Gallery writes an unrelated
+        // `MSImagingV1:ExposureCompensation`, which ExifTool reports verbatim
+        // as "0.080000"; without this guard it came back "+0.08" -- wrong in
+        // kind, not just precision. Falling through leaves it to the generic
+        // rational/verbatim handling every sibling property in that vendor
+        // block already gets.
+        "ExposureCompensation" if tag.starts_with("XMP-exif:") => {
+            format_exif_exposure_compensation(value)
+        }
         "FocalLength" => format_exif_focal_length(value),
 
         // XMP.pm:2088/2102 -- ApertureValue and MaxApertureValue are APEX,
@@ -5512,6 +5522,30 @@ mod top_level_struct_tests {
         // ExifTool prints "-0.33"; the same fixed-decimals fallback printed
         // "-0.330".
         assert_eq!(format_exif_exposure_compensation("-33/100"), "-0.33");
+    }
+
+    /// XMP.pm gives PrintFraction to exif:ExposureBiasValue alone. A
+    /// vendor property that merely shares the local name is reported
+    /// verbatim -- ExifTool never applies another schema's PrintConv.
+    ///
+    /// Quoted from `exiftool -a -G1 -s FujiFilm/FujiFilmFinePixHS30EXR.jpg`:
+    ///   [XMP-prefix0] ExposureCompensation : 0.080000
+    #[test]
+    fn exposure_compensation_print_conv_is_namespace_scoped() {
+        assert_eq!(
+            format_xmp_value("XMP-exif:ExposureCompensation", "-3/3"),
+            "-1"
+        );
+        // MSImagingV1 (Microsoft Windows Live Photo Gallery) -- unknown
+        // namespace, so oxidex files it under the bare XMP family.
+        assert_eq!(
+            format_xmp_value("XMP:ExposureCompensation", "0.080000"),
+            "0.080000"
+        );
+        assert_eq!(
+            format_xmp_value("XMP:ExposureCompensation", "0.000000"),
+            "0.000000"
+        );
     }
 
     /// XMP.pm renames three exif-namespace properties; without these the tags
