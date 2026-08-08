@@ -1143,6 +1143,32 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             Computed::same(get(i, white_balance + 2)?)
         }
 
+        // Nikon.pm:13240-13246 Composite::AutoFocus:
+        //   Require   => { 0 => 'Nikon:FocusMode' }
+        //   ValueConv => '($val[0] =~ /^Manual/i) ? 0 : 1'
+        //   PrintConv => \%offOn            # ( 0 => 'Off', 1 => 'On' )
+        //
+        // The sole input is Nikon MakerNotes 0x0007, a `Writable => 'string'`
+        // tag whose `RawConv` only stashes the value (Nikon.pm:1816-1820), so
+        // `$val[0]` is the string as the camera wrote it -- typically all caps,
+        // "MANUAL". Nikon::Main's table-wide `PRINT_CONV => \&FormatString`
+        // (Nikon.pm:1784, 13526) is what lowercases it to "Manual" for display,
+        // and that is the form oxidex stores under `Nikon:FocusMode`. The `/i`
+        // makes the two indistinguishable here, so this reads either.
+        //
+        // Only "Manual" is Off; every autofocus mode the corpus carries
+        // (AF-S, AF-C, AF-A, AF-F, AF-P) falls through to On, which is exactly
+        // what a negated match on one prefix means.
+        ("Nikon", "AutoFocus") => {
+            let manual = get(i, 0)?
+                .get(..6)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Manual"));
+            Computed::new(
+                if manual { "0" } else { "1" },
+                if manual { "Off" } else { "On" },
+            )
+        }
+
         // Exif.pm `RedBlueBalance`, followed by
         // `int($val * 1e6 + 0.5) * 1e-6`.
         ("Exif", "RedBalance" | "BlueBalance") => {
@@ -1774,6 +1800,61 @@ mod tests {
             .as_deref(),
             Some("2nd-curtain sync")
         );
+    }
+
+    #[test]
+    fn nikon_auto_focus_is_off_only_for_manual_focus() {
+        let nikon = |focus_mode: Option<&str>| {
+            compute(
+                "Nikon",
+                "AutoFocus",
+                &[focus_mode],
+                Some("NIKON CORPORATION"),
+            )
+            .map(|computed| computed.print)
+        };
+
+        // `exiftool -a -G1 -s -FocusMode -AutoFocus` under the pinned 13.59,
+        // one corpus file per distinct FocusMode the corpus carries:
+        //
+        //   ======== Nikon/NikonD810.jpg
+        //   [Nikon]     FocusMode  : Manual
+        //   [Composite] AutoFocus  : Off
+        //   ======== Nikon.nef
+        //   [Nikon]     FocusMode  : AF-S
+        //   [Composite] AutoFocus  : On
+        //   ======== Nikon/Nikon1V3.jpg
+        //   [Nikon]     FocusMode  : AF-C
+        //   [Composite] AutoFocus  : On
+        //   ======== Nikon/Nikon1AW1.jpg
+        //   [Nikon]     FocusMode  : AF-A
+        //   [Composite] AutoFocus  : On
+        //   ======== Nikon/NikonCoolpixA300.jpg
+        //   [Nikon]     FocusMode  : AF-F
+        //   [Composite] AutoFocus  : On
+        //   ======== Nikon/NikonCoolpixA1000.jpg
+        //   [Nikon]     FocusMode  : AF-P
+        //   [Composite] AutoFocus  : On
+        assert_eq!(nikon(Some("Manual")).as_deref(), Some("Off"));
+        assert_eq!(nikon(Some("AF-S")).as_deref(), Some("On"));
+        assert_eq!(nikon(Some("AF-C")).as_deref(), Some("On"));
+        assert_eq!(nikon(Some("AF-A")).as_deref(), Some("On"));
+        assert_eq!(nikon(Some("AF-F")).as_deref(), Some("On"));
+        assert_eq!(nikon(Some("AF-P")).as_deref(), Some("On"));
+
+        // The match is `/^Manual/i`, and the cameras write the tag in caps --
+        // `exiftool -n -Nikon:FocusMode` reports MANUAL for all eleven files
+        // that print "Manual". Nikon::Main's FormatString PrintConv is what
+        // lowercases it, so both spellings must land on Off.
+        assert_eq!(nikon(Some("MANUAL")).as_deref(), Some("Off"));
+        // Anchored at the start, so this is a prefix test, not equality.
+        assert_eq!(nikon(Some("Manual (Preset)")).as_deref(), Some("Off"));
+        // ...and only at the start.
+        assert_eq!(nikon(Some("AF-S (Manual)")).as_deref(), Some("On"));
+
+        // The single input is a `Require`, so an absent FocusMode emits
+        // nothing rather than defaulting to the more common "On".
+        assert_eq!(nikon(None), None);
     }
 
     #[test]

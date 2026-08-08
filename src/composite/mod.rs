@@ -695,6 +695,52 @@ mod tests {
     }
 
     #[test]
+    fn auto_focus_needs_a_nikon_focus_mode_specifically() {
+        // Nikon.pm's Composite::AutoFocus writes its dependency group-qualified
+        // (`Require => { 0 => 'Nikon:FocusMode' }`), and that qualification is
+        // the whole reason ExifTool stays silent on the 3900-odd corpus files
+        // that are not Nikons. Twelve other makers publish a `FocusMode` of
+        // their own -- Canon on 610 corpus files, FujiFilm on 366, Panasonic
+        // on 312, Sony on 253 -- and `Composite:AutoFocus` appears on exactly
+        // the 298 that carry `Nikon:FocusMode`, on none of the rest.
+        let mut m = map_of(&[("Nikon:FocusMode", "Manual")]);
+        apply(&mut m);
+        assert_eq!(m.get_string("Composite:AutoFocus"), Some("Off"));
+
+        let mut m = map_of(&[("Nikon:FocusMode", "AF-S")]);
+        apply(&mut m);
+        assert_eq!(m.get_string("Composite:AutoFocus"), Some("On"));
+
+        // `exiftool -a -G1 -s -FocusMode -AutoFocus` on the pinned 13.59:
+        //
+        //   ======== Canon.jpg
+        //   [Canon]     FocusMode  : Manual Focus (3)
+        //   ======== Olympus/OlympusAIR-A01.jpg
+        //   [Olympus]   FocusMode  : Single AF; S-AF, Imager AF
+        //   ======== FujiFilm.jpg
+        //   [FujiFilm]  FocusMode  : Auto
+        //
+        // No AutoFocus line on any of the three. Canon.jpg is the sharp case:
+        // its FocusMode starts with "Manual", so a dependency that fell back
+        // to a bare-name search would not merely over-emit, it would over-emit
+        // the minority value.
+        for focus_mode in [
+            ("Canon:FocusMode", "Manual Focus (3)"),
+            ("Olympus:FocusMode", "Single AF; S-AF, Imager AF"),
+            ("FujiFilm:FocusMode", "Auto"),
+        ] {
+            let mut m = map_of(&[focus_mode]);
+            apply(&mut m);
+            assert_eq!(
+                m.get_string("Composite:AutoFocus"),
+                None,
+                "{} must not derive AutoFocus",
+                focus_mode.0
+            );
+        }
+    }
+
+    #[test]
     fn never_overwrites_a_parsed_value() {
         // A value read from the file must win over a derived one.
         let mut m = map_of(&[
