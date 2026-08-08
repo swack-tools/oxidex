@@ -3926,15 +3926,32 @@ fn format_xmp_apex_shutter_speed(value: &str) -> String {
     print_xmp_exposure_time(seconds)
 }
 
-/// `Image::ExifTool::Exif::PrintExposureTime` (`Exif.pm`), verbatim.
+/// `Image::ExifTool::Exif::PrintExposureTime` (`Exif.pm:5701`).
+///
+/// ```text
+/// sub PrintExposureTime($)
+/// {
+///     my $secs = shift;
+///     return $secs unless Image::ExifTool::IsFloat($secs);
+///     if ($secs < 0.25001 and $secs > 0) {
+///         return sprintf("1/%d",int(0.5 + 1/$secs));
+///     }
+///     $_ = sprintf("%.1f",$secs);
+///     s/\.0$//;
+///     return $_;
+/// }
+/// ```
+///
+/// Delegates to the shared port instead of keeping a second copy. The copy
+/// that used to live here tested `seconds == seconds.trunc()` in place of
+/// Perl's `s/\.0$//`, which is a strictly narrower condition: Perl drops the
+/// decimal whenever `sprintf("%.1f")` *rounds* to a whole number, not only
+/// when the value already is one. A 2.00694 s exposure therefore printed
+/// "2.0" here against ExifTool's "2". The `as i64` cast in that branch also
+/// saturated for exposures past `i64::MAX`, turning 1e20 s into
+/// "9223372036854775807" where ExifTool prints "100000000000000000000".
 fn print_xmp_exposure_time(seconds: f64) -> String {
-    if seconds < 0.25001 && seconds > 0.0 {
-        return format!("1/{}", (0.5 + 1.0 / seconds) as i64);
-    }
-    if seconds == seconds.trunc() {
-        return format!("{}", seconds as i64);
-    }
-    format!("{:.1}", seconds)
+    crate::core::formatters::print_exposure_time(seconds)
 }
 
 /// A rational with no PrintConv, printed the way Perl prints a number.
@@ -5699,6 +5716,38 @@ mod top_level_struct_tests {
         assert_eq!(format_xmp_plain_rational("2272000/224"), "10142.8571428571");
         // [XMP] ExposureCompensation : -1   (exif:ExposureBiasValue = -3/3)
         assert_eq!(format_exif_exposure_compensation("-3/3"), "-1");
+    }
+
+    /// `XMP-exif:ShutterSpeedValue` is APEX (`XMP.pm:2081`,
+    /// `ValueConv => 'abs($val)<100 ? 1/(2**$val) : 0'`) printed through
+    /// `Image::ExifTool::Exif::PrintExposureTime` (`Exif.pm:5701`), which ends
+    /// `$_ = sprintf("%.1f",$secs); s/\.0$//;` -- the trailing ".0" is dropped
+    /// whenever the value *rounds* to a whole number of seconds, not only when
+    /// it is exactly one. This regressed as "2.0" while the XMP path carried
+    /// its own `seconds == seconds.trunc()` copy of the function.
+    ///
+    /// Ground truth, ExifTool 13.59, on a sidecar carrying
+    /// `exif:ShutterSpeedValue='-201/200'` (APEX -1.005 -> 2.00694 s):
+    ///
+    /// ```text
+    /// $ exiftool -G1 -s apex_edge.xmp
+    /// [XMP-exif]      ShutterSpeedValue               : 2
+    /// ```
+    #[test]
+    fn xmp_apex_shutter_speed_drops_a_rounded_trailing_zero() {
+        // APEX -1.005 -> 2.00694 s. Perl: sprintf("%.1f") = "2.0", s/\.0$// = "2".
+        assert_eq!(format_xmp_apex_shutter_speed("-201/200"), "2");
+        // Exactly 2 s (APEX -1) has always printed "2"; keep it that way.
+        assert_eq!(format_xmp_apex_shutter_speed("-1/1"), "2");
+        // A value that rounds up to a whole second from below.
+        // PrintExposureTime(0.959995800571048) == "1" under ExifTool 13.59.
+        assert_eq!(print_xmp_exposure_time(0.959_995_800_571_048), "1");
+        // 30.0438959140945 s -> "30", not "30.0".
+        assert_eq!(print_xmp_exposure_time(30.043_895_914_094_5), "30");
+        // The sub-quarter-second branch is untouched: XMP.xmp's 42/32 APEX
+        // still prints "0.4", and a genuine fraction keeps one decimal.
+        assert_eq!(format_xmp_apex_shutter_speed("42/32"), "0.4");
+        assert_eq!(print_xmp_exposure_time(0.5), "0.5");
     }
 
     /// PrintFraction is what EXIF-style exposure compensation goes through;
