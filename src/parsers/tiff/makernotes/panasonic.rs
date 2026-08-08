@@ -398,8 +398,11 @@ const_decoder!(pub COLOR_MODE,
 );
 
 // InternalNDFilter (0x009D) has no PrintConv in ExifTool: Panasonic.pm:1247
-// declares only `Writable => 'rational64u'`, so the value is reported as-is.
-// The Off/On/Auto decoder that used to live here was invented.
+// declares only `Writable => 'rational64u'`, so the value is reported as-is
+// (no Off/On/Auto decoder -- one used to live here but was invented). The
+// rational64u decode itself is handled in `parse_entry`'s tag_id match, next
+// to ClearRetouchValue, since it needs the out-of-line numerator/denominator
+// bytes rather than a scalar decoder.
 
 // CameraOrientation decoder (tag 0x008F), Panasonic.pm:1188-1199. Registered
 // with no decoder at all, so oxidex printed the raw int8u ("0") where
@@ -878,6 +881,26 @@ impl PanasonicParser {
                     .and_then(|pairs| decode_af_point_position(&pairs));
                 if let Some(printed) = printed {
                     tags.insert("Panasonic:AFPointPosition".to_string(), printed);
+                }
+                return;
+            }
+            // InternalNDFilter: plain rational64u, no ValueConv/PrintConv
+            // (Panasonic.pm:1247-1250). Count is 1, so the 8-byte value never
+            // fits inline in the IFD entry's value_offset field -- it's an
+            // out-of-line pointer that must be dereferenced, the same as
+            // ClearRetouchValue below. Falling through to the generic
+            // registry path (as register_raw did with no match arm here)
+            // printed that raw pointer as an integer instead of the
+            // numerator/denominator it points to: on
+            // `combined-samples/Leica/LeicaD-Lux8.jpg` oxidex read "4816"
+            // (the pointer) where ExifTool's `-v3` shows the entry is 0/128
+            // ("InternalNDFilter = 0 (0/128)"), i.e. GetRational64u(0, 128).
+            0x009D => {
+                let printed = extract_rational_values(entry, data, ifd_offset, data_base, byte_order)
+                    .and_then(|pairs| pairs.first().copied())
+                    .and_then(|(num, den)| format_rational64u(num, den));
+                if let Some(printed) = printed {
+                    tags.insert("Panasonic:InternalNDFilter".to_string(), printed);
                 }
                 return;
             }
@@ -2040,22 +2063,27 @@ mod tests {
     }
 
     /// `combined-samples/Leica/LeicaD-Lux7.jpg`'s MakerNote, byte-for-byte:
-    /// AFPointPosition's 16 bytes from `exiftool -v3`, ClearRetouchValue's
-    /// 0/0, and the accelerometer/orientation/angle SHORTs/BYTE built from
-    /// the signed values `exiftool -G1 -s` reports for the same file.
+    /// AFPointPosition's 16 bytes from `exiftool -v3`, InternalNDFilter's
+    /// 0/128 and ClearRetouchValue's 0/0 (both also `exiftool -v3`), and the
+    /// accelerometer/orientation/angle SHORTs/BYTE built from the signed
+    /// values `exiftool -G1 -s` reports for the same file. LeicaD-Lux8.jpg's
+    /// InternalNDFilter is the identical 8 bytes (`exiftool -v3`:
+    /// `InternalNDFilter = 0 (0/128)` at both tag 0x009d entries), so this
+    /// fixture also stands in for that sample.
     #[test]
     fn test_matches_exiftool_on_leica_d_lux7_bytes() {
         let mut data = Vec::new();
         data.extend_from_slice(PANASONIC_HEADER); // 12 bytes, ifd_offset == 12
-        data.extend_from_slice(&8u16.to_le_bytes()); // entry_count
+        data.extend_from_slice(&9u16.to_le_bytes()); // entry_count
 
         // Each entry: tag_id, field_type, value_count, value_offset (all LE).
         // Out-of-line offsets are relative to ifd_offset (12), per
         // resolve_value_offset's data_base=None branch.
         let entries_start = 14usize; // ifd_offset(12) + entry_count field(2)
-        let entry_bytes = 8 * 12;
+        let entry_bytes = 9 * 12;
         let af_point_offset = entries_start + entry_bytes; // absolute
-        let clear_retouch_offset = af_point_offset + 16; // absolute
+        let internal_nd_filter_offset = af_point_offset + 16; // absolute
+        let clear_retouch_offset = internal_nd_filter_offset + 8; // absolute
 
         let mut push_entry = |tag_id: u16, field_type: u16, count: u32, value: u32| {
             data.extend_from_slice(&tag_id.to_le_bytes());
@@ -2070,6 +2098,7 @@ mod tests {
         push_entry(0x008F, 1, 1, 0); // CameraOrientation: Normal
         push_entry(0x0090, 3, 1, 0xFFF6); // RollAngle: raw -10 -> -1
         push_entry(0x0091, 3, 1, 0xFE47); // PitchAngle: raw -441 -> 44.1
+        push_entry(0x009D, 5, 1, (internal_nd_filter_offset - 12) as u32); // InternalNDFilter
         push_entry(0x00A3, 5, 1, (clear_retouch_offset - 12) as u32); // ClearRetouchValue
 
         // AFPointPosition's rational64u[2]: 128/256, 128/256 (0.5, 0.5).
@@ -2077,6 +2106,9 @@ mod tests {
             0x80, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x01,
             0x00, 0x00,
         ]);
+        // InternalNDFilter's rational64u: 0/128 -> "0" (real LeicaD-Lux7.jpg
+        // and LeicaD-Lux8.jpg bytes, `exiftool -v3`).
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00]);
         // ClearRetouchValue's rational64u: 0/0 -> "undef".
         data.extend_from_slice(&[0u8; 8]);
 
@@ -2084,6 +2116,7 @@ mod tests {
         parse_panasonic_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
 
         assert_eq!(tags.get("Panasonic:AFPointPosition").unwrap(), "0.5 0.5");
+        assert_eq!(tags.get("Panasonic:InternalNDFilter").unwrap(), "0");
         assert_eq!(tags.get("Panasonic:AccelerometerX").unwrap(), "-3");
         assert_eq!(tags.get("Panasonic:AccelerometerY").unwrap(), "-178");
         assert_eq!(tags.get("Panasonic:AccelerometerZ").unwrap(), "183");
