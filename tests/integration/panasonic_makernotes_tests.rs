@@ -240,7 +240,16 @@ fn test_panasonic_parser_big_endian() {
     data.extend_from_slice(&[0x00, 0x03]); // Tag ID (BE) = 0x0003
     data.extend_from_slice(&[0x00, 0x03]); // Type: SHORT (BE)
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // Count: 1 (BE)
-    data.extend_from_slice(&[0x00, 0x00, 0x00, 0x02]); // Value: 2 (BE) = Daylight
+    // TIFF6.0: a value that fits within the 4-byte field is left-justified
+    // there, regardless of byte order -- so a count-1 SHORT's 2 bytes occupy
+    // the field's FIRST two bytes, not its last two. This fixture used to
+    // encode the value right-justified (`00 00 00 02`), which is not how any
+    // real TIFF/EXIF writer lays inline values out; it happened to match the
+    // pre-fix code's incorrect low-half read. `inline_u16_value` now reads
+    // the high half for BigEndian, matching the spec and every real
+    // big-endian Panasonic MakerNote directory verified against pinned
+    // ExifTool 13.59 (see PanasonicDMC-LC5/20/40.jpg, LeicaDigilux1.jpg).
+    data.extend_from_slice(&[0x00, 0x02, 0x00, 0x00]); // Value: 2 (BE) = Daylight
 
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD (BE)
 
