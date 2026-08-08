@@ -41,7 +41,9 @@ jobs:
   comparison-report:
     name: Generate ExifTool comparison report
     # 8x: `just compare-exiftool-full-update` builds the tag-comparison binary
-    # from cold and then runs it across the downloaded ExifTool sample corpus.
+    # from cold and then runs it across the ExifTool sample corpus (restored
+    # from the corpus cache below; downloaded only on the first run after an
+    # .exiftool-version bump).
     runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 30
     permissions:
@@ -73,13 +75,146 @@ jobs:
       - name: Install Perl (for ExifTool)
         run: sudo apt-get update -qq && sudo apt-get install -y perl libarchive-zip-perl
 
+      # taiki-e/install-action, not extractions/setup-just: the latter was
+      # measured at 77s to install one small binary, which was a third of
+      # this job. install-action fetches a prebuilt binary and is what the
+      # rest of the repo already uses (ci.yml, for nextest and cbindgen).
       - name: Install just
-        uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2.0.0
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: just
+
+      # The corpus cache key below needs the pin before the recipe runs. Same
+      # strict validation as ci.yml's resolve step: the value is file content,
+      # so it never reaches shell or a cache key unvalidated.
+      - name: Resolve pinned ExifTool version
+        id: exiftool-version
+        run: |
+          set -euo pipefail
+          V=$(tr -d '[:space:]' < .exiftool-version)
+          case "$V" in
+            *[!0-9.]* | "" | .* | *.)
+              echo "::error::refusing non-numeric ExifTool pin '$V'"; exit 1 ;;
+          esac
+          echo "Pinned ExifTool: $V"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      # The recipe's whole working set: the pinned ExifTool source tree plus
+      # the 13 manufacturer sample tarballs (~84MB total, sizes measured
+      # 2026-08-08 against the GCS mirror). Uncached, every run re-fetched all
+      # of it with exiftool.org -- a small, throttle-happy server -- as the
+      # PRIMARY source and no transfer timeout (the recipe's --connect-timeout
+      # bounds only the connect phase), so the download step had an unbounded
+      # tail and an external availability dependency on every main push.
+      # Cached, it is a seconds-long restore, and the corpus is bit-identical
+      # between version bumps -- the published coverage numbers cannot shrink
+      # because one mirror hiccuped mid-run.
+      #
+      #  - Keyed on the pin with NO restore-keys: a fuzzy match on a
+      #    version-pinned ExifTool cache serves a stale release (the standing
+      #    rule; see ci.yml's ExifTool cache).
+      #  - 'exiftool-corpus-' is deliberately a DIFFERENT key family from the
+      #    'exiftool-<ver>-<os>' keys other workflows use: those hold
+      #    source-only trees at other paths, and a key shared across layouts
+      #    restores whichever layout happened to save first.
+      #  - restore + save are separate steps because the combined action saves
+      #    from a post step declared `post-if: success()`: a comparison
+      #    failure -- the case cache-on-failure exists for -- would throw away
+      #    a perfectly good corpus download.
+      - name: Restore ExifTool corpus cache
+        id: corpus-cache
+        uses: WarpBuilds/cache/restore@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
+        with:
+          path: /tmp/oxidex-exiftool-cache
+          key: exiftool-corpus-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
+
+      # The recipe trusts what it finds in the cache dir: a tarball that
+      # exists is extracted with `|| true`, so a truncated one silently
+      # SHRINKS the corpus instead of failing, and the source tree is trusted
+      # on the word of a marker file. Heal both here, before the recipe runs:
+      # anything corrupt is deleted so the recipe re-downloads it fresh (the
+      # heal path IS the normal cold path). The warning annotation keeps a
+      # repeatedly-healing -- i.e. poisoned -- cache entry visible.
+      - name: Verify restored corpus
+        if: steps.corpus-cache.outputs.cache-hit == 'true'
+        env:
+          V: ${{ steps.exiftool-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          DIR=/tmp/oxidex-exiftool-cache
+          for f in "$DIR"/samples-*.tar.gz; do
+            if ! gzip -t "$f" 2>/dev/null; then
+              echo "::warning::corrupt $(basename "$f") in corpus cache; deleted for re-download"
+              rm -f "$f"
+            fi
+          done
+          GOT=$("$DIR/exiftool/exiftool" -ver 2>/dev/null || true)
+          if [ "$GOT" != "$V" ]; then
+            echo "::warning::cached ExifTool reports '${GOT:-nothing}', expected $V; deleted for re-download"
+            rm -rf "$DIR/exiftool" "$DIR/.exiftool-version"
+          fi
 
       - name: Generate ExifTool comparison report
         run: just compare-exiftool-full-update
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Same literal path as the corpus cache steps above. The recipe's
+          # default happens to match, but the coupling should be explicit
+          # rather than a coincidence. (The GITHUB_TOKEN that used to be
+          # passed here was dead weight: nothing under this recipe reads it
+          # -- checked the justfile and src/bin/tag-comparison -- and it only
+          # curls public endpoints.)
+          EXIFTOOL_CACHE_DIR: /tmp/oxidex-exiftool-cache
+
+      # Save only a corpus that is provably complete: the pinned source tree
+      # answering `-ver` correctly, plus every manufacturer tarball present
+      # and gzip-valid. The key is immutable once saved, so persisting a
+      # partial set (say, one manufacturer unavailable mid-run) would pin
+      # that gap until the next .exiftool-version bump. Skipping the save
+      # instead costs one more download attempt next run and corrupts
+      # nothing.
+      #
+      # The list mirrors MANUFACTURERS in the justfile's
+      # compare-exiftool-full-update recipe. If the two drift, the failure
+      # mode is a skipped save with the culprit named in the log -- never
+      # wrong data.
+      - name: Check corpus is complete before save
+        id: corpus-check
+        if: always() && steps.corpus-cache.outputs.cache-hit != 'true'
+        env:
+          V: ${{ steps.exiftool-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          DIR=/tmp/oxidex-exiftool-cache
+          complete=true
+          if [ -z "$V" ]; then
+            echo "no resolved ExifTool version"
+            complete=false
+          fi
+          GOT=$("$DIR/exiftool/exiftool" -ver 2>/dev/null || true)
+          if [ "$GOT" != "$V" ]; then
+            echo "source tree bad or missing (got '${GOT:-nothing}', want $V)"
+            complete=false
+          fi
+          for m in Canon Nikon Sony FujiFilm Panasonic Apple Google Samsung Olympus Pentax Leica DJI GoPro; do
+            if ! gzip -t "$DIR/samples-$m.tar.gz" 2>/dev/null; then
+              echo "samples-$m.tar.gz missing or corrupt"
+              complete=false
+            fi
+          done
+          echo "complete=$complete" >> "$GITHUB_OUTPUT"
+          [ "$complete" = true ] || echo "corpus incomplete; the save step below will be skipped"
+
+      # always(): a failed comparison still downloaded a good corpus, and
+      # persisting it is the point -- same reasoning as cache-on-failure on
+      # rust-cache above. Reuses the restore step's cache-primary-key rather
+      # than recomputing it.
+      - name: Save ExifTool corpus cache
+        if: always() && steps.corpus-cache.outputs.cache-hit != 'true' && steps.corpus-check.outputs.complete == 'true'
+        uses: WarpBuilds/cache/save@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
+        with:
+          path: /tmp/oxidex-exiftool-cache
+          key: ${{ steps.corpus-cache.outputs.cache-primary-key }}
 
       # docs/reference/comparison/ is gitignored and generated at deploy time,
       # so it only exists inside this job. `publish` needs it to render the
@@ -139,20 +274,33 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          read -r ID SHA <<<"$(gh run list --workflow=ci.yml --commit="$GITHUB_SHA" \
-                --status=success --limit=1 --json databaseId,headSha \
-                --jq '.[0] | "\(.databaseId) \(.headSha)"' 2>/dev/null || true)"
-          if [ -z "${ID:-}" ]; then
-            read -r ID SHA <<<"$(gh run list --workflow=ci.yml --branch=main \
-                  --status=success --limit=1 --json databaseId,headSha \
-                  --jq '.[0] | "\(.databaseId) \(.headSha)"' 2>/dev/null || true)"
-            [ -n "${ID:-}" ] && echo "::notice::no benchmark run for $GITHUB_SHA yet; using latest main run $ID ($SHA)"
+          # Walk candidates newest-first and take the first that actually
+          # CARRIES the artifact. "Latest successful run" is not enough: since
+          # ci.yml's Benchmarks job skips on a push that touched neither
+          # benches/ nor src/, a perfectly green run can have no artifact at
+          # all, and a docs-only merge is exactly when this workflow runs.
+          # Same reason artifact expiry cannot strand the page.
+          pick() {
+            gh run list --workflow=ci.yml "$@" --status=success --limit=20 \
+              --json databaseId,headSha --jq '.[] | "\(.databaseId) \(.headSha)"' 2>/dev/null || true
+          }
+          ID=""; SHA=""
+          # Same-SHA first, then recent main history.
+          while read -r CAND CSHA; do
+            [ -z "${CAND:-}" ] && continue
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CAND/artifacts" \
+                 --jq '.artifacts[] | select(.name=="benchmark-results" and .expired==false) | .name' \
+                 2>/dev/null | grep -q .; then
+              ID="$CAND"; SHA="$CSHA"; break
+            fi
+          done <<<"$(printf '%s\n%s\n' "$(pick --commit="$GITHUB_SHA")" "$(pick --branch=main)")"
+          if [ -z "$ID" ]; then
+            echo "::warning::no ci.yml run carries a benchmark-results artifact; performance page keeps its existing numbers"
+          elif [ "$SHA" != "$GITHUB_SHA" ]; then
+            echo "::notice::no benchmarks for $GITHUB_SHA; using run $ID from $SHA"
           fi
-          if [ -z "${ID:-}" ]; then
-            echo "::warning::no successful ci.yml run found; performance page keeps its existing numbers"
-          fi
-          echo "id=${ID:-}" >> "$GITHUB_OUTPUT"
-          echo "sha=${SHA:-}" >> "$GITHUB_OUTPUT"
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Download criterion results
         if: steps.benchrun.outputs.id != ''
@@ -202,7 +350,29 @@ jobs:
           cache: 'npm'
           cache-dependency-path: docs/package-lock.json
 
+      # setup-node's `cache: npm` above only caches npm's DOWNLOAD cache;
+      # `npm ci` still deletes and re-extracts node_modules on every run.
+      # Cache the installed tree itself, content-addressed by the lockfile,
+      # and skip npm ci entirely on a hit. No restore-keys: a near-miss
+      # node_modules with npm ci skipped is a broken build, so only an exact
+      # lockfile match may hit. The 'node24' literal moves with node-version
+      # above. The combined action (post-step save, `post-if: success()`) is
+      # fine here, unlike the corpus cache: a failed run merely re-pays a
+      # short npm ci next time.
+      #
+      # The tree is safe to reuse: the only install script that runs on Linux
+      # is esbuild's, which writes inside node_modules only (fsevents is
+      # darwin-only and never installed here), and nothing in it is keyed to
+      # a node minor version.
+      - name: Cache docs/node_modules
+        id: node-modules-cache
+        uses: WarpBuilds/cache@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
+        with:
+          path: docs/node_modules
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('docs/package-lock.json') }}
+
       - name: Install docs dependencies
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
         run: npm ci
         working-directory: docs
 

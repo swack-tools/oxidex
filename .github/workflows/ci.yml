@@ -183,7 +183,7 @@ jobs:
           cache-provider: warpbuild
           shared-key: test
           cache-all-crates: true
-      - uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
+      - uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
         with:
           # Pin cbindgen: the committed api/oxidex.h is generated with 0.29.2,
           # and newer cbindgen emits extra #define macros that would fail the
@@ -465,15 +465,42 @@ jobs:
       CARGO_PROFILE_BENCH_CODEGEN_UNITS: 16
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # HEAD~1 must exist for the change detection below.
+          fetch-depth: 2
+      # ci.yml deliberately carries no `paths:` filter -- Lint & Audit and
+      # Build & Test are required checks and a filtered-out required check
+      # never reports at all. So the gate lives here, in the one job that
+      # neither gates merges nor is worth 130s on a merge that cannot have
+      # moved a benchmark.
+      #
+      # deploy-docs.yml's publish tolerates a skipped run: it walks back
+      # through recent successful ci.yml runs for one that actually carries a
+      # benchmark-results artifact, and stamps the commit those numbers came
+      # from.
+      - name: Check whether anything benchmarkable changed
+        id: changes
+        run: |
+          set -euo pipefail
+          if git diff --name-only HEAD~1 HEAD | grep -qE '^benches/|^src/|^Cargo\.(toml|lock)$'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no benches/, src/ or manifest change; skipping benchmarks"
+          fi
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        if: steps.changes.outputs.run == 'true'
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        if: steps.changes.outputs.run == 'true'
         with:
           cache-on-failure: true
           cache-provider: warpbuild
           shared-key: metrics
       - name: Run benchmarks
+        if: steps.changes.outputs.run == 'true'
         run: cargo bench --bench integration_benchmarks --bench parse_benchmarks -- --quick
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.changes.outputs.run == 'true'
         with:
           name: benchmark-results
           path: target/criterion/
