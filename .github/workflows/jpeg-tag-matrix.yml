@@ -50,6 +50,10 @@ jobs:
     #  16x     126       15      85      226
     #  32x     150       15      33      198
     #
+    # (The build column predates collapsing the two cargo invocations below
+    # into one, which used to compile the root crate twice; treat those
+    # absolute build numbers as an upper bound, not a current baseline.)
+    #
     # 8x is well clear of 4x (1.68x), so it earns the ceiling rather than
     # merely sitting at it.
     #
@@ -161,10 +165,27 @@ jobs:
           path: /tmp/exiftool
           key: ${{ steps.exiftool-cache.outputs.cache-primary-key }}
 
+      # One invocation, one feature graph. This used to be two builds
+      # (`--bin oxidex`, then `--features jpeg-tag-matrix-binary --bin
+      # jpeg-tag-matrix`), and cargo fingerprints a crate by its feature set,
+      # so the second build recompiled the root crate -- the workspace's
+      # largest compile unit by far (~360k lines; the tag crates stay fresh
+      # because their features don't change). rust-cache never restores
+      # workspace-member artifacts, so that duplicate compile was paid on
+      # every run, warm or cold.
+      #
+      # Safe because `jpeg-tag-matrix-binary` exists only to satisfy the
+      # bin's `required-features`: it is an empty feature ([features] in
+      # Cargo.toml) and no source anywhere gates on it, so the oxidex binary
+      # this produces is behaviorally identical to a no-feature build.
+      # Deliberately NOT `--all-features`: that would switch on `magika`
+      # (cfg-gated file detection in src/core/operations.rs, plus the ort
+      # runtime dependency) and change the behavior of the very binary this
+      # matrix grades.
       - name: Build oxidex and jpeg-tag-matrix (release)
-        run: |
-          cargo build --release --bin oxidex
-          cargo build --release --features jpeg-tag-matrix-binary --bin jpeg-tag-matrix
+        run: >
+          cargo build --release --features jpeg-tag-matrix-binary
+          --bin oxidex --bin jpeg-tag-matrix
 
       - name: Generate ExifTool tag manifest
         run: ./target/release/jpeg-tag-matrix manifest --flag-noops
