@@ -268,20 +268,33 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          read -r ID SHA <<<"$(gh run list --workflow=ci.yml --commit="$GITHUB_SHA" \
-                --status=success --limit=1 --json databaseId,headSha \
-                --jq '.[0] | "\(.databaseId) \(.headSha)"' 2>/dev/null || true)"
-          if [ -z "${ID:-}" ]; then
-            read -r ID SHA <<<"$(gh run list --workflow=ci.yml --branch=main \
-                  --status=success --limit=1 --json databaseId,headSha \
-                  --jq '.[0] | "\(.databaseId) \(.headSha)"' 2>/dev/null || true)"
-            [ -n "${ID:-}" ] && echo "::notice::no benchmark run for $GITHUB_SHA yet; using latest main run $ID ($SHA)"
+          # Walk candidates newest-first and take the first that actually
+          # CARRIES the artifact. "Latest successful run" is not enough: since
+          # ci.yml's Benchmarks job skips on a push that touched neither
+          # benches/ nor src/, a perfectly green run can have no artifact at
+          # all, and a docs-only merge is exactly when this workflow runs.
+          # Same reason artifact expiry cannot strand the page.
+          pick() {
+            gh run list --workflow=ci.yml "$@" --status=success --limit=20 \
+              --json databaseId,headSha --jq '.[] | "\(.databaseId) \(.headSha)"' 2>/dev/null || true
+          }
+          ID=""; SHA=""
+          # Same-SHA first, then recent main history.
+          while read -r CAND CSHA; do
+            [ -z "${CAND:-}" ] && continue
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CAND/artifacts" \
+                 --jq '.artifacts[] | select(.name=="benchmark-results" and .expired==false) | .name' \
+                 2>/dev/null | grep -q .; then
+              ID="$CAND"; SHA="$CSHA"; break
+            fi
+          done <<<"$(printf '%s\n%s\n' "$(pick --commit="$GITHUB_SHA")" "$(pick --branch=main)")"
+          if [ -z "$ID" ]; then
+            echo "::warning::no ci.yml run carries a benchmark-results artifact; performance page keeps its existing numbers"
+          elif [ "$SHA" != "$GITHUB_SHA" ]; then
+            echo "::notice::no benchmarks for $GITHUB_SHA; using run $ID from $SHA"
           fi
-          if [ -z "${ID:-}" ]; then
-            echo "::warning::no successful ci.yml run found; performance page keeps its existing numbers"
-          fi
-          echo "id=${ID:-}" >> "$GITHUB_OUTPUT"
-          echo "sha=${SHA:-}" >> "$GITHUB_OUTPUT"
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Download criterion results
         if: steps.benchrun.outputs.id != ''
