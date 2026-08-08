@@ -4089,6 +4089,22 @@ mod tests {
         .expect("read pinned Samsung GX20 fixture");
         assert_eq!(metadata.get_string("Pentax:HometownCity"), Some("New York"));
     }
+
+    #[test]
+    fn samsung_gx20_preview_image_size_splits_the_packed_word() {
+        // Pentax.pm:932-938: `Writable => 'int16u', Count => 2, PrintConv =>
+        // '$val =~ tr/ /x/; $val'` -- two packed int16u (width, height), not
+        // one int32u. Regression test for the bug where this printed the raw
+        // packed word (41943520, 0x028001E0) instead of "640x480".
+        let metadata = crate::core::operations::read_metadata(std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGX20.jpg",
+        ))
+        .expect("read pinned Samsung GX20 fixture");
+        assert_eq!(
+            metadata.get_string("Pentax:PreviewImageSize"),
+            Some("640x480")
+        );
+    }
 }
 
 // ============================================================================
