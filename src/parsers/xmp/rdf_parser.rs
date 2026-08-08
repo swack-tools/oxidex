@@ -2993,7 +2993,13 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         // local name (crs:Sharpness=0 is an adjustment amount, not Normal).
         "Sharpness" if tag.starts_with("XMP-exif:") => decode_via_tiff_enum(0xA40A, value),
         "SubjectDistanceRange" => decode_via_tiff_enum(0xA40C, value),
-        "SensingMethod" => decode_xmp_sensing_method(value),
+        // XMP-exif is the only XMP schema in ExifTool 13.59 that declares a
+        // SensingMethod, and its PrintConv is *not* the EXIF 0xa217 one --
+        // see `decode_xmp_sensing_method`. Scoping matters twice over here:
+        // the labels differ, and the unnamed-code fallback wraps whatever it
+        // is handed in `Unknown (...)`, which must not be inflicted on an
+        // unrelated property that merely shares the local name.
+        "SensingMethod" if tag.starts_with("XMP-exif:") => decode_xmp_sensing_method(value),
         "WhiteBalance" => decode_xmp_white_balance(value),
         "YCbCrPositioning" => decode_xmp_ycbcr_positioning(value),
         "ColorMode" => decode_xmp_color_mode(value),
@@ -3600,17 +3606,46 @@ fn decode_xmp_scene_capture_type(value: &str) -> String {
     }
 }
 
-/// Decode XMP SensingMethod
+/// Decode `XMP-exif:SensingMethod` (`exif:SensingMethod`).
+///
+/// This is **not** the EXIF 0xa217 table. `%Image::ExifTool::Exif::Main`
+/// (Exif.pm:2797) names 1 `Not defined` and has no 6 at all; the XMP schema
+/// (XMP.pm:2189, inside the `GROUPS => { 1 => 'XMP-exif' }` table that opens at
+/// XMP.pm:1990) carries its own hash, quoted verbatim:
+///
+/// ```text
+///     Notes => 'values 1 and 6 are not standard EXIF',
+///     PrintConv => {
+///         1 => 'Monochrome area', # (not standard EXIF)
+///         2 => 'One-chip color area',
+///         3 => 'Two-chip color area',
+///         4 => 'Three-chip color area',
+///         5 => 'Color sequential area',
+///         6 => 'Monochrome linear', # (not standard EXIF)
+///         7 => 'Trilinear',
+///         8 => 'Color sequential linear',
+///     },
+/// ```
+///
+/// Reusing the EXIF labels here printed `Not defined` for the one value the two
+/// tables actively disagree about, and left 6 as a bare `6`.
+///
+/// A code the hash does not name falls through ExifTool's generic PrintConv
+/// miss (ExifTool.pm:3633, `$value = "Unknown ($val)"`); there is no `PrintHex`
+/// on this tag, so the number stays decimal. Confirmed against pinned 13.59:
+/// `0`, `9`, `15` and the non-numeric `foo` all print `Unknown (<val>)`.
 fn decode_xmp_sensing_method(value: &str) -> String {
-    match value.trim() {
-        "1" => "Not defined".to_string(),
+    let code = value.trim();
+    match code {
+        "1" => "Monochrome area".to_string(),
         "2" => "One-chip color area".to_string(),
         "3" => "Two-chip color area".to_string(),
         "4" => "Three-chip color area".to_string(),
         "5" => "Color sequential area".to_string(),
+        "6" => "Monochrome linear".to_string(),
         "7" => "Trilinear".to_string(),
         "8" => "Color sequential linear".to_string(),
-        _ => value.to_string(),
+        _ => format!("Unknown ({code})"),
     }
 }
 
@@ -4054,6 +4089,79 @@ mod tests {
         assert_eq!(format_xmp_value("XMP-exif:Sharpness", "2"), "Hard");
         assert_eq!(format_xmp_value("XMP:Sharpness", "0"), "0");
         assert_eq!(format_xmp_value("XMP:Sharpness", "25"), "25");
+    }
+
+    /// `XMP-exif:SensingMethod` used the EXIF 0xa217 PrintConv, which disagrees
+    /// with the XMP schema's own hash on exactly the two codes XMP.pm:2192
+    /// flags as "not standard EXIF". Ground truth, from the pinned 13.59 oracle
+    /// over a JPEG written with `exiftool "-XMP-exif:SensingMethod#=<n>"`:
+    ///
+    /// ```text
+    /// $ exiftool -G1 -s sm.jpg
+    /// [XMP-exif]      SensingMethod                   : Monochrome area      # 1
+    /// [XMP-exif]      SensingMethod                   : Monochrome linear    # 6
+    /// [XMP-exif]      SensingMethod                   : Unknown (0)          # 0
+    /// [XMP-exif]      SensingMethod                   : Unknown (9)          # 9
+    /// ```
+    ///
+    /// oxidex previously printed `Not defined` for 1 and a bare `6` for 6.
+    #[test]
+    fn xmp_exif_sensing_method_uses_the_xmp_schema_print_conversion() {
+        // XMP.pm:2194 -- the EXIF table (Exif.pm:2801) says "Not defined" here.
+        assert_eq!(
+            format_xmp_value("XMP-exif:SensingMethod", "1"),
+            "Monochrome area"
+        );
+        // XMP.pm:2199 -- absent entirely from the EXIF table.
+        assert_eq!(
+            format_xmp_value("XMP-exif:SensingMethod", "6"),
+            "Monochrome linear"
+        );
+        // The six codes both tables agree on.
+        for (code, label) in [
+            ("2", "One-chip color area"),
+            ("3", "Two-chip color area"),
+            ("4", "Three-chip color area"),
+            ("5", "Color sequential area"),
+            ("7", "Trilinear"),
+            ("8", "Color sequential linear"),
+        ] {
+            assert_eq!(format_xmp_value("XMP-exif:SensingMethod", code), label);
+        }
+        // Unnamed codes take ExifTool.pm:3633's generic PrintConv miss, in
+        // decimal (no PrintHex on this tag).
+        assert_eq!(
+            format_xmp_value("XMP-exif:SensingMethod", "0"),
+            "Unknown (0)"
+        );
+        assert_eq!(
+            format_xmp_value("XMP-exif:SensingMethod", "9"),
+            "Unknown (9)"
+        );
+        // XMP-exif is the only XMP schema declaring a SensingMethod in 13.59,
+        // so neither the labels nor the Unknown() wrapper may leak elsewhere.
+        assert_eq!(format_xmp_value("XMP:SensingMethod", "1"), "1");
+        assert_eq!(format_xmp_value("XMP-crs:SensingMethod", "0"), "0");
+    }
+
+    /// End-to-end through the RDF parser, matching the packet ExifTool writes
+    /// for `-XMP-exif:SensingMethod#=1`.
+    #[test]
+    fn xmp_exif_sensing_method_decodes_through_the_rdf_parser() {
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description xmlns:exif="http://ns.adobe.com/exif/1.0/"
+                exif:SensingMethod="1"/>
+            </rdf:RDF>
+        "#;
+
+        assert_eq!(
+            parse_xmp(xml).unwrap(),
+            vec![(
+                "XMP-exif:SensingMethod".to_string(),
+                "Monochrome area".to_string(),
+            )]
+        );
     }
 
     #[test]
