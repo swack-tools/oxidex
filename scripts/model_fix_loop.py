@@ -1538,12 +1538,68 @@ def refresh_worktree(repo_root, base_ref):
         cwd=repo_root, capture_output=True, text=True,
     )
     message = (result.stdout + result.stderr).strip()
+    if result.returncode != 0:
+        reconciled, reconcile_msg = _reconcile_published_worktree(repo_root, base_ref)
+        if reconciled:
+            return True, reconcile_msg
+        message = f"{message} [{reconcile_msg}]"
     if fetch.returncode != 0:
         fetch_err = (fetch.stdout + fetch.stderr).strip()
         message = (
             f"{message} [warning: fetch failed, so {base_ref} may be stale: {fetch_err}]"
         ).strip()
     return result.returncode == 0, message
+
+
+def _reconcile_published_worktree(repo_root, base_ref):
+    """Reset to base_ref when this worktree's local commits already landed
+    upstream. Returns (reconciled: bool, message: str).
+
+    A worker commits its verified fix and exits (max_tags_per_process=1), so
+    on respawn the worktree carries commits base_ref does not -- and
+    --ff-only correctly refuses. Left alone it stays diverged forever,
+    measuring against the commit it forked from while the rest of the fleet
+    moves on. That is the same staleness the fetch fix addressed, arriving by
+    a different route.
+
+    Resetting unconditionally would be the obvious fix and the wrong one: it
+    would discard a verified fix that has not been published yet. So this
+    resets ONLY when every local commit is already reachable upstream by
+    patch-id -- i.e. the work landed, possibly squashed under a different sha,
+    and the local copy is now redundant. `git cherry` answers exactly that
+    question: '-' means an equivalent patch exists in base_ref, '+' means it
+    does not.
+
+    If anything is still unpublished ('+'), this deliberately does nothing and
+    the worker keeps its commits. Waiting on the tip is recoverable; throwing
+    away a verified fix is not.
+    """
+    cherry = subprocess.run(  # nosec B603
+        ["git", "cherry", base_ref, "HEAD"],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    if cherry.returncode != 0:
+        return False, f"cannot compare against {base_ref}: {cherry.stderr.strip()}"
+
+    lines = [line for line in cherry.stdout.splitlines() if line.strip()]
+    unpublished = [line for line in lines if line.startswith("+")]
+    if unpublished:
+        return False, (
+            f"holding {len(unpublished)} unpublished commit(s); "
+            f"staying put rather than discarding verified work"
+        )
+    if not lines:
+        return False, "diverged but no commits to reconcile"
+
+    reset = subprocess.run(  # nosec B603
+        ["git", "reset", "--hard", base_ref],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    if reset.returncode != 0:
+        return False, f"reset to {base_ref} failed: {reset.stderr.strip()}"
+    return True, (
+        f"reconciled to {base_ref}: {len(lines)} local commit(s) already upstream"
+    )
 
 
 def file_content_at_head(path, repo_root):
