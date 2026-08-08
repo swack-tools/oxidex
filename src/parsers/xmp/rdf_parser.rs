@@ -2993,7 +2993,13 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         // local name (crs:Sharpness=0 is an adjustment amount, not Normal).
         "Sharpness" if tag.starts_with("XMP-exif:") => decode_via_tiff_enum(0xA40A, value),
         "SubjectDistanceRange" => decode_via_tiff_enum(0xA40C, value),
-        "SensingMethod" => decode_xmp_sensing_method(value),
+        // XMP-exif is the only XMP schema in ExifTool 13.59 that declares a
+        // SensingMethod, and its PrintConv is *not* the EXIF 0xa217 one --
+        // see `decode_xmp_sensing_method`. Scoping matters twice over here:
+        // the labels differ, and the unnamed-code fallback wraps whatever it
+        // is handed in `Unknown (...)`, which must not be inflicted on an
+        // unrelated property that merely shares the local name.
+        "SensingMethod" if tag.starts_with("XMP-exif:") => decode_xmp_sensing_method(value),
         "WhiteBalance" => decode_xmp_white_balance(value),
         "YCbCrPositioning" => decode_xmp_ycbcr_positioning(value),
         "ColorMode" => decode_xmp_color_mode(value),
@@ -3003,6 +3009,15 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         // RegionExtensionsFlashMode, not FlashMode (XMP5.xmp).
         name if name.ends_with("FlashMode") => decode_xmp_flash_mode(value),
         name if name.ends_with("FlashReturn") => decode_xmp_flash_return(value),
+        // The same struct's three `boolean` fields (XMP.pm:2139/2157/2158
+        // declare Fired/Function/RedEyeMode with `%boolConv`). Suffix-matched
+        // for the same nesting reason as Mode/Return above.
+        name if name.ends_with("FlashFired")
+            || name.ends_with("FlashFunction")
+            || name.ends_with("FlashRedEyeMode") =>
+        {
+            decode_xmp_boolean(value)
+        }
 
         // Camera Raw Settings - numeric parameters
         "ProcessingParameters" => format_camera_raw_parameters(value),
@@ -3504,6 +3519,36 @@ fn decode_xmp_flash_return(value: &str) -> String {
     }
 }
 
+/// Decode a `Writable => 'boolean'` XMP field through ExifTool's `%boolConv`
+/// (`XMP.pm:246-257`). The hash names `True`/`False` exactly and its `OTHER`
+/// fallback lower-cases anything else before comparing, so the file's spelling
+/// never reaches the output:
+///
+/// ```text
+/// PrintConv => {
+///     OTHER => sub { # (inverse conversion is the same)
+///         my $val = shift;
+///         return 'False' if lc $val eq 'false';
+///         return 'True' if lc $val eq 'true';
+///         return $val;
+///     },
+///     True => 'True',
+///     False => 'False',
+/// },
+/// ```
+///
+/// Anything that is not a boolean spelling passes through untouched -- ExifTool
+/// has no entry for `0`/`1` and returns `$val` unchanged for them.
+fn decode_xmp_boolean(value: &str) -> String {
+    if value.eq_ignore_ascii_case("true") {
+        "True".to_string()
+    } else if value.eq_ignore_ascii_case("false") {
+        "False".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
 /// Decode XMP ColorSpace (1 = sRGB, 65535 = Uncalibrated)
 fn decode_xmp_color_space(value: &str) -> String {
     match value.trim() {
@@ -3600,17 +3645,46 @@ fn decode_xmp_scene_capture_type(value: &str) -> String {
     }
 }
 
-/// Decode XMP SensingMethod
+/// Decode `XMP-exif:SensingMethod` (`exif:SensingMethod`).
+///
+/// This is **not** the EXIF 0xa217 table. `%Image::ExifTool::Exif::Main`
+/// (Exif.pm:2797) names 1 `Not defined` and has no 6 at all; the XMP schema
+/// (XMP.pm:2189, inside the `GROUPS => { 1 => 'XMP-exif' }` table that opens at
+/// XMP.pm:1990) carries its own hash, quoted verbatim:
+///
+/// ```text
+///     Notes => 'values 1 and 6 are not standard EXIF',
+///     PrintConv => {
+///         1 => 'Monochrome area', # (not standard EXIF)
+///         2 => 'One-chip color area',
+///         3 => 'Two-chip color area',
+///         4 => 'Three-chip color area',
+///         5 => 'Color sequential area',
+///         6 => 'Monochrome linear', # (not standard EXIF)
+///         7 => 'Trilinear',
+///         8 => 'Color sequential linear',
+///     },
+/// ```
+///
+/// Reusing the EXIF labels here printed `Not defined` for the one value the two
+/// tables actively disagree about, and left 6 as a bare `6`.
+///
+/// A code the hash does not name falls through ExifTool's generic PrintConv
+/// miss (ExifTool.pm:3633, `$value = "Unknown ($val)"`); there is no `PrintHex`
+/// on this tag, so the number stays decimal. Confirmed against pinned 13.59:
+/// `0`, `9`, `15` and the non-numeric `foo` all print `Unknown (<val>)`.
 fn decode_xmp_sensing_method(value: &str) -> String {
-    match value.trim() {
-        "1" => "Not defined".to_string(),
+    let code = value.trim();
+    match code {
+        "1" => "Monochrome area".to_string(),
         "2" => "One-chip color area".to_string(),
         "3" => "Two-chip color area".to_string(),
         "4" => "Three-chip color area".to_string(),
         "5" => "Color sequential area".to_string(),
+        "6" => "Monochrome linear".to_string(),
         "7" => "Trilinear".to_string(),
         "8" => "Color sequential linear".to_string(),
-        _ => value.to_string(),
+        _ => format!("Unknown ({code})"),
     }
 }
 
@@ -3852,15 +3926,32 @@ fn format_xmp_apex_shutter_speed(value: &str) -> String {
     print_xmp_exposure_time(seconds)
 }
 
-/// `Image::ExifTool::Exif::PrintExposureTime` (`Exif.pm`), verbatim.
+/// `Image::ExifTool::Exif::PrintExposureTime` (`Exif.pm:5701`).
+///
+/// ```text
+/// sub PrintExposureTime($)
+/// {
+///     my $secs = shift;
+///     return $secs unless Image::ExifTool::IsFloat($secs);
+///     if ($secs < 0.25001 and $secs > 0) {
+///         return sprintf("1/%d",int(0.5 + 1/$secs));
+///     }
+///     $_ = sprintf("%.1f",$secs);
+///     s/\.0$//;
+///     return $_;
+/// }
+/// ```
+///
+/// Delegates to the shared port instead of keeping a second copy. The copy
+/// that used to live here tested `seconds == seconds.trunc()` in place of
+/// Perl's `s/\.0$//`, which is a strictly narrower condition: Perl drops the
+/// decimal whenever `sprintf("%.1f")` *rounds* to a whole number, not only
+/// when the value already is one. A 2.00694 s exposure therefore printed
+/// "2.0" here against ExifTool's "2". The `as i64` cast in that branch also
+/// saturated for exposures past `i64::MAX`, turning 1e20 s into
+/// "9223372036854775807" where ExifTool prints "100000000000000000000".
 fn print_xmp_exposure_time(seconds: f64) -> String {
-    if seconds < 0.25001 && seconds > 0.0 {
-        return format!("1/{}", (0.5 + 1.0 / seconds) as i64);
-    }
-    if seconds == seconds.trunc() {
-        return format!("{}", seconds as i64);
-    }
-    format!("{:.1}", seconds)
+    crate::core::formatters::print_exposure_time(seconds)
 }
 
 /// A rational with no PrintConv, printed the way Perl prints a number.
@@ -4054,6 +4145,79 @@ mod tests {
         assert_eq!(format_xmp_value("XMP-exif:Sharpness", "2"), "Hard");
         assert_eq!(format_xmp_value("XMP:Sharpness", "0"), "0");
         assert_eq!(format_xmp_value("XMP:Sharpness", "25"), "25");
+    }
+
+    /// `XMP-exif:SensingMethod` used the EXIF 0xa217 PrintConv, which disagrees
+    /// with the XMP schema's own hash on exactly the two codes XMP.pm:2192
+    /// flags as "not standard EXIF". Ground truth, from the pinned 13.59 oracle
+    /// over a JPEG written with `exiftool "-XMP-exif:SensingMethod#=<n>"`:
+    ///
+    /// ```text
+    /// $ exiftool -G1 -s sm.jpg
+    /// [XMP-exif]      SensingMethod                   : Monochrome area      # 1
+    /// [XMP-exif]      SensingMethod                   : Monochrome linear    # 6
+    /// [XMP-exif]      SensingMethod                   : Unknown (0)          # 0
+    /// [XMP-exif]      SensingMethod                   : Unknown (9)          # 9
+    /// ```
+    ///
+    /// oxidex previously printed `Not defined` for 1 and a bare `6` for 6.
+    #[test]
+    fn xmp_exif_sensing_method_uses_the_xmp_schema_print_conversion() {
+        // XMP.pm:2194 -- the EXIF table (Exif.pm:2801) says "Not defined" here.
+        assert_eq!(
+            format_xmp_value("XMP-exif:SensingMethod", "1"),
+            "Monochrome area"
+        );
+        // XMP.pm:2199 -- absent entirely from the EXIF table.
+        assert_eq!(
+            format_xmp_value("XMP-exif:SensingMethod", "6"),
+            "Monochrome linear"
+        );
+        // The six codes both tables agree on.
+        for (code, label) in [
+            ("2", "One-chip color area"),
+            ("3", "Two-chip color area"),
+            ("4", "Three-chip color area"),
+            ("5", "Color sequential area"),
+            ("7", "Trilinear"),
+            ("8", "Color sequential linear"),
+        ] {
+            assert_eq!(format_xmp_value("XMP-exif:SensingMethod", code), label);
+        }
+        // Unnamed codes take ExifTool.pm:3633's generic PrintConv miss, in
+        // decimal (no PrintHex on this tag).
+        assert_eq!(
+            format_xmp_value("XMP-exif:SensingMethod", "0"),
+            "Unknown (0)"
+        );
+        assert_eq!(
+            format_xmp_value("XMP-exif:SensingMethod", "9"),
+            "Unknown (9)"
+        );
+        // XMP-exif is the only XMP schema declaring a SensingMethod in 13.59,
+        // so neither the labels nor the Unknown() wrapper may leak elsewhere.
+        assert_eq!(format_xmp_value("XMP:SensingMethod", "1"), "1");
+        assert_eq!(format_xmp_value("XMP-crs:SensingMethod", "0"), "0");
+    }
+
+    /// End-to-end through the RDF parser, matching the packet ExifTool writes
+    /// for `-XMP-exif:SensingMethod#=1`.
+    #[test]
+    fn xmp_exif_sensing_method_decodes_through_the_rdf_parser() {
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description xmlns:exif="http://ns.adobe.com/exif/1.0/"
+                exif:SensingMethod="1"/>
+            </rdf:RDF>
+        "#;
+
+        assert_eq!(
+            parse_xmp(xml).unwrap(),
+            vec![(
+                "XMP-exif:SensingMethod".to_string(),
+                "Monochrome area".to_string(),
+            )]
+        );
     }
 
     #[test]
@@ -5373,6 +5537,59 @@ mod top_level_struct_tests {
         assert_eq!(decode_xmp_flash_return("1"), "1");
     }
 
+    /// The `exif:Flash` struct's three `boolean` fields carry `%boolConv`
+    /// (XMP.pm:2139/2157/2158), whose `OTHER` sub lower-cases the value before
+    /// comparing (XMP.pm:246-257). A file that spells them the XML Schema way
+    /// -- `<exif:Fired>true</exif:Fired>` -- therefore still reports `True`,
+    /// and oxidex used to echo the file's own lowercase spelling instead.
+    ///
+    /// Ground truth, exiftool 13.59 (the release `.exiftool-version` pins) on a
+    /// JPEG whose XMP packet is the one below:
+    ///
+    /// ```text
+    /// $ exiftool -G1 -s -XMP-exif:all flash_lc.jpg
+    /// [XMP-exif]      FlashFired                      : True
+    /// [XMP-exif]      FlashFunction                   : False
+    /// [XMP-exif]      FlashRedEyeMode                 : True
+    /// ```
+    #[test]
+    fn flash_struct_booleans_normalise_case_like_exiftool() {
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/">
+                <exif:Flash rdf:parseType="Resource">
+                  <exif:Fired>true</exif:Fired>
+                  <exif:Function>false</exif:Function>
+                  <exif:RedEyeMode>true</exif:RedEyeMode>
+                </exif:Flash>
+              </rdf:Description>
+            </rdf:RDF>
+        "#;
+
+        let tags = parse_xmp(xml).unwrap();
+        assert_eq!(tag(&tags, "XMP:FlashFired"), Some("True"));
+        assert_eq!(tag(&tags, "XMP:FlashFunction"), Some("False"));
+        assert_eq!(tag(&tags, "XMP:FlashRedEyeMode"), Some("True"));
+    }
+
+    /// `%boolConv` asserted as literals, including the spelling ExifTool's own
+    /// files use (`True`/`False`, which the hash matches directly) and a
+    /// non-boolean, which `OTHER` returns unchanged rather than coercing.
+    #[test]
+    fn xmp_boolconv_matches_exiftool() {
+        assert_eq!(decode_xmp_boolean("True"), "True");
+        assert_eq!(decode_xmp_boolean("False"), "False");
+        assert_eq!(decode_xmp_boolean("true"), "True");
+        assert_eq!(decode_xmp_boolean("false"), "False");
+        assert_eq!(decode_xmp_boolean("TRUE"), "True");
+        assert_eq!(decode_xmp_boolean("FALSE"), "False");
+        // ExifTool's table has no 0/1 entry and `OTHER` returns $val, so these
+        // must not become True/False.
+        assert_eq!(decode_xmp_boolean("1"), "1");
+        assert_eq!(decode_xmp_boolean("0"), "0");
+        assert_eq!(decode_xmp_boolean(""), "");
+    }
+
     /// `Iptc4xmpCore:CreatorContactInfo` fields have concatenated tag IDs but
     /// are reported under the shorter names XMP.pm pre-defines for them.
     /// Values are the literals `exiftool -G1 -a -s Sony/SonyDSC-P2.jpg`
@@ -5499,6 +5716,38 @@ mod top_level_struct_tests {
         assert_eq!(format_xmp_plain_rational("2272000/224"), "10142.8571428571");
         // [XMP] ExposureCompensation : -1   (exif:ExposureBiasValue = -3/3)
         assert_eq!(format_exif_exposure_compensation("-3/3"), "-1");
+    }
+
+    /// `XMP-exif:ShutterSpeedValue` is APEX (`XMP.pm:2081`,
+    /// `ValueConv => 'abs($val)<100 ? 1/(2**$val) : 0'`) printed through
+    /// `Image::ExifTool::Exif::PrintExposureTime` (`Exif.pm:5701`), which ends
+    /// `$_ = sprintf("%.1f",$secs); s/\.0$//;` -- the trailing ".0" is dropped
+    /// whenever the value *rounds* to a whole number of seconds, not only when
+    /// it is exactly one. This regressed as "2.0" while the XMP path carried
+    /// its own `seconds == seconds.trunc()` copy of the function.
+    ///
+    /// Ground truth, ExifTool 13.59, on a sidecar carrying
+    /// `exif:ShutterSpeedValue='-201/200'` (APEX -1.005 -> 2.00694 s):
+    ///
+    /// ```text
+    /// $ exiftool -G1 -s apex_edge.xmp
+    /// [XMP-exif]      ShutterSpeedValue               : 2
+    /// ```
+    #[test]
+    fn xmp_apex_shutter_speed_drops_a_rounded_trailing_zero() {
+        // APEX -1.005 -> 2.00694 s. Perl: sprintf("%.1f") = "2.0", s/\.0$// = "2".
+        assert_eq!(format_xmp_apex_shutter_speed("-201/200"), "2");
+        // Exactly 2 s (APEX -1) has always printed "2"; keep it that way.
+        assert_eq!(format_xmp_apex_shutter_speed("-1/1"), "2");
+        // A value that rounds up to a whole second from below.
+        // PrintExposureTime(0.959995800571048) == "1" under ExifTool 13.59.
+        assert_eq!(print_xmp_exposure_time(0.959_995_800_571_048), "1");
+        // 30.0438959140945 s -> "30", not "30.0".
+        assert_eq!(print_xmp_exposure_time(30.043_895_914_094_5), "30");
+        // The sub-quarter-second branch is untouched: XMP.xmp's 42/32 APEX
+        // still prints "0.4", and a genuine fraction keeps one decimal.
+        assert_eq!(format_xmp_apex_shutter_speed("42/32"), "0.4");
+        assert_eq!(print_xmp_exposure_time(0.5), "0.5");
     }
 
     /// PrintFraction is what EXIF-style exposure compensation goes through;
