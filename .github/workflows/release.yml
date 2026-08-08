@@ -29,12 +29,21 @@ jobs:
             os: warp-ubuntu-latest-arm64-2x
     steps:
       - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           targets: ${{ matrix.target }}
+
+      # `key` carries the target triple: both matrix legs share a job id, so
+      # without it the x64 and arm64 caches would collide on one key.
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          cache-on-failure: true
+          cache-provider: warpbuild
+          shared-key: release
+          key: ${{ matrix.target }}
 
       - name: Install musl tools
         run: |
@@ -55,7 +64,7 @@ jobs:
           cp target/${{ matrix.target }}/release/oxidex artifacts/oxidex-${{ matrix.target }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: oxidex-${{ matrix.target }}
           path: artifacts/oxidex-${{ matrix.target }}
@@ -68,12 +77,18 @@ jobs:
     runs-on: warp-ubuntu-latest-x64-8x
     steps:
       - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           targets: x86_64-pc-windows-gnu
+
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          cache-on-failure: true
+          cache-provider: warpbuild
+          shared-key: release-windows
 
       - name: Install MinGW cross-compiler
         run: |
@@ -93,7 +108,7 @@ jobs:
           cp target/x86_64-pc-windows-gnu/release/oxidex.exe artifacts/oxidex-x86_64-pc-windows-gnu.exe
 
       - name: Upload artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: oxidex-x86_64-pc-windows-gnu
           path: artifacts/oxidex-x86_64-pc-windows-gnu.exe
@@ -106,7 +121,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Extract version from tag
         id: version
@@ -118,6 +133,14 @@ jobs:
       - name: Install dependencies
         run: |
           brew install just create-dmg
+
+      # This job has no rust-toolchain step -- it builds with the runner
+      # image's preinstalled Rust, which is what the cache key hashes.
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          cache-on-failure: true
+          cache-provider: warpbuild
+          shared-key: release-macos
 
       - name: Import signing certificate
         env:
@@ -236,14 +259,14 @@ jobs:
           cp dist/oxidex-v${{ steps.version.outputs.version }}.dmg artifacts/
 
       - name: Upload signed binary artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: oxidex-aarch64-apple-darwin
           path: artifacts/oxidex-aarch64-apple-darwin
           retention-days: 1
 
       - name: Upload DMG artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: oxidex-dmg
           path: artifacts/oxidex-v${{ steps.version.outputs.version }}.dmg
@@ -264,10 +287,10 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download all artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
 
@@ -355,7 +378,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout gh-pages branch
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: gh-pages
           fetch-depth: 0

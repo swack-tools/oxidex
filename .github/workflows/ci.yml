@@ -74,10 +74,19 @@ jobs:
     runs-on: warp-ubuntu-latest-x64-4x
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           components: rustfmt, clippy
+      # WarpBuild-native cache backend: on warp-ubuntu-* runners this reads/
+      # writes through Warp's cache infra instead of the (much slower, cross-
+      # region) GitHub Actions cache. shared-key separates this job's cache
+      # from Build & Test's so a clippy-only cache miss can't evict the other.
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          cache-on-failure: true
+          cache-provider: warpbuild
+          shared-key: lint
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-features -- -D warnings
       - uses: rustsec/audit-check@e9159ac5f7d7d873ce074ca134da2f445c0a4a61 # v1.3.2
@@ -92,36 +101,36 @@ jobs:
 
   test:
     name: Build & Test
-    # 8x: this job's ~12 minutes are almost entirely parallelisable work --
-    # cargo build --release (~2m51s, parallel across codegen units), nextest
-    # (~4m32s, test-level parallelism), the ExifTool comparison suite
-    # (~2m15s), the C FFI test (~1m16s) and doc tests (~56s).
+    # 8x: this job is almost entirely parallelisable work -- cargo build
+    # --release (parallel across codegen units), nextest (test-level
+    # parallelism) and doc tests.
+    #
+    # It used to run five cargo invocations across three different feature
+    # graphs, which cost a full nine-crate rebuild each time cargo saw a new
+    # fingerprint. It is now three invocations over ONE feature graph
+    # (--all-features), differing only where they must: release profile,
+    # test profile, rustdoc.
     runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      # WarpBuild-native cache backend (see the Lint & Audit job for why).
+      # cache-all-crates: this job also builds cargo-nextest and cbindgen via
+      # taiki-e/install-action, and default caching only covers workspace
+      # dependencies, not CI tooling.
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          cache-on-failure: true
+          cache-provider: warpbuild
+          shared-key: test
+          cache-all-crates: true
       - uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
         with:
           # Pin cbindgen: the committed api/oxidex.h is generated with 0.29.2,
           # and newer cbindgen emits extra #define macros that would fail the
           # "Verify C header is up-to-date" check non-deterministically.
           tool: cargo-nextest,cbindgen@0.29.2
-      - run: cargo build --release --all-features --features tag-comparison-binary
-      # Tests run in the (unwind) test profile: the release profile sets
-      # panic = "abort", which newer cargo refuses to mix with the unwind test
-      # harness. The release artifacts themselves are covered by the build step
-      # above and by release.yml's per-platform builds on tag pushes.
-      - run: cargo nextest run --all-features --features tag-comparison-binary
-      - name: C FFI integration test
-        run: cargo test --test ffi_c_integration -- --nocapture
-      - name: Run doc tests
-        run: cargo test --doc --all-features
-      - name: Verify C header is up-to-date
-        run: |
-          cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h.tmp
-          diff -q api/oxidex.h api/oxidex.h.tmp || (echo "C header out of date" && exit 1)
-          rm api/oxidex.h.tmp
       # Pinned, not "newest". This step used to scrape the newest
       # Image-ExifTool tarball off SourceForge's RSS feed, which meant the
       # release CI graded against changed whenever upstream published -- while
@@ -131,7 +140,8 @@ jobs:
       # regressions and fixes that have nothing to do with the diff under test.
       # The version comes from .exiftool-version, the same file the Rust and
       # Python oracles compile/read it from, so there is one source of truth.
-      - name: Install pinned ExifTool
+      - name: Resolve pinned ExifTool version
+        id: exiftool-version
         run: |
           set -euo pipefail
           V=$(tr -d '[:space:]' < .exiftool-version)
@@ -140,27 +150,101 @@ jobs:
               echo "::error::refusing non-numeric ExifTool pin '$V'"; exit 1 ;;
           esac
           echo "Pinned ExifTool: $V"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+      # Caches only the extracted tarball, not the Archive::Zip install: that
+      # one goes into system perl dirs via sudo, and restoring those from a
+      # cache is exactly the kind of half-populated perl tree that produces a
+      # confidently-wrong coverage number instead of a crash. The download is
+      # the network cost worth skipping; the cpan install stays unconditional.
+      #
+      # The key carries the resolved version and nothing else fuzzy -- no
+      # restore-keys -- so a `.exiftool-version` bump always misses and
+      # re-downloads. A loosely-matched key here would serve a stale ExifTool.
+      # restore + save as separate steps rather than the combined action: the
+      # combined one saves from a post step declared `post-if: success()`, so
+      # a later failure in this job (a flaky test, say) throws away a
+      # perfectly good ExifTool download and the next run re-fetches it. The
+      # explicit save below runs as soon as the tree is verified.
+      - name: Restore pinned ExifTool source
+        id: exiftool-cache
+        uses: WarpBuilds/cache/restore@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
+        with:
+          path: /tmp/exiftool-src
+          key: exiftool-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
+      - name: Download pinned ExifTool
+        if: steps.exiftool-cache.outputs.cache-hit != 'true'
+        env:
+          V: ${{ steps.exiftool-version.outputs.version }}
+        run: |
+          set -euo pipefail
           curl -sSL "https://github.com/exiftool/exiftool/archive/refs/tags/$V.tar.gz" \
             -o /tmp/exiftool.tar.gz
           mkdir -p /tmp/exiftool-src
           tar xzf /tmp/exiftool.tar.gz -C /tmp/exiftool-src --strip-components=1
-          # Archive::Zip gates every ZIP-container format. Without it a .docx
-          # reports FileType: ZIP and container coverage silently collapses,
-          # while -ver still prints the right release -- so install it and
-          # assert it, rather than trusting the version string alone.
+      # Archive::Zip gates every ZIP-container format. Without it a .docx
+      # reports FileType: ZIP and container coverage silently collapses,
+      # while -ver still prints the right release -- so install it and
+      # assert it, rather than trusting the version string alone.
+      #
+      # Both this and the assertions below run even on a cache hit: a
+      # corrupted or wrong-version cache entry must fail the job, not sail
+      # through into a graded comparison run.
+      - name: Install Archive::Zip and verify ExifTool
+        env:
+          V: ${{ steps.exiftool-version.outputs.version }}
+        run: |
+          set -euo pipefail
           sudo cpanm --notest Archive::Zip 2>/dev/null || sudo cpan -T Archive::Zip
           perl -MArchive::Zip -e 1
           echo "/tmp/exiftool-src" >> "$GITHUB_PATH"
           GOT=$(/tmp/exiftool-src/exiftool -ver)
           [ "$GOT" = "$V" ] || { echo "::error::installed ExifTool $GOT, expected $V"; exit 1; }
-      - name: Integration tests (ExifTool comparison)
-        # EXIFTOOL points the oracle at the pinned checkout explicitly rather
-        # than relying on PATH order, so a runner image that ships its own
-        # exiftool cannot quietly win the lookup.
-        env:
-          EXIFTOOL: /tmp/exiftool-src/exiftool
-        run: cargo test --features exiftool-comparison
-
+          # Exported for the nextest step below: EXIFTOOL points the oracle
+          # at the pinned checkout explicitly rather than relying on PATH
+          # order, so a runner image shipping its own exiftool cannot
+          # quietly win the lookup.
+          echo "EXIFTOOL=/tmp/exiftool-src/exiftool" >> "$GITHUB_ENV"
+      # Only on a miss, and only once the step above has proved the tree is
+      # the right release -- default `success()` semantics are load-bearing
+      # here, so a failed verify never persists a bad tree. Reuses the
+      # restore step's cache-primary-key rather than recomputing it.
+      - name: Save pinned ExifTool source
+        if: steps.exiftool-cache.outputs.cache-hit != 'true'
+        uses: WarpBuilds/cache/save@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
+        with:
+          path: /tmp/exiftool-src
+          key: ${{ steps.exiftool-cache.outputs.cache-primary-key }}
+      # ONE feature graph for the whole job. `--all-features` already implies
+      # tag-comparison-binary and exiftool-comparison, so naming either again
+      # is redundant -- and naming a DIFFERENT subset is expensive: every
+      # distinct feature set gets its own fingerprint, so cargo rebuilds all
+      # nine workspace crates for it. Measured on run 31274865213, that is
+      # what the old five-invocation layout cost: 406s of which ~139s was
+      # recompiling and re-running work another step had already done.
+      #
+      # If you add a step here, give it `--all-features` and nothing else.
+      - run: cargo build --release --all-features
+      # Tests run in the (unwind) test profile: the release profile sets
+      # panic = "abort", which newer cargo refuses to mix with the unwind test
+      # harness. So this is a second compile by necessity -- profile, not
+      # features. The release artifacts themselves are covered by the build
+      # step above and by release.yml's per-platform builds on tag pushes.
+      #
+      # This one invocation now covers what used to be three: the unit and
+      # integration suites, the C FFI test (oxidex::ffi_c_integration), and
+      # the exiftool-comparison suite -- the last only because ExifTool is
+      # installed ABOVE this step now. Moving that install back below here
+      # would not fail the job; it would silently skip the comparison tests.
+      - run: cargo nextest run --all-features
+      # rustdoc is a separate artifact kind, so this compiles once more no
+      # matter what. Same feature set regardless, to reuse everything else.
+      - name: Run doc tests
+        run: cargo test --doc --all-features
+      - name: Verify C header is up-to-date
+        run: |
+          cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h.tmp
+          diff -q api/oxidex.h api/oxidex.h.tmp || (echo "C header out of date" && exit 1)
+          rm api/oxidex.h.tmp
   # The generated ExifTool tables are 100k+ lines that no reviewer reads in a
   # diff, so their correctness rests entirely on verify.py -- which, until this
   # job existed, nothing ever ran. A hand-edit of binary_tables.rs, or a
@@ -172,13 +256,14 @@ jobs:
   # No Rust build is needed: verify.py reads the .rs as text.
   verify-tables:
     name: Verify Generated Tables
-    # Stock runner on purpose: this is a tarball fetch plus a perl/python pass
-    # over one file, ~30s and entirely I/O-bound. The sizing measurements above
-    # apply to compile-bound jobs and buy nothing here.
-    runs-on: ubuntu-latest
+    # 2x on purpose: this is a tarball fetch plus a perl/python pass over one
+    # file, ~30s and entirely I/O-bound. The sizing measurements above apply
+    # to compile-bound jobs and buy nothing here -- 2x is for the Warp queue
+    # (seconds, vs minutes on the GitHub-hosted pool), not for the cores.
+    runs-on: warp-ubuntu-latest-x64-2x
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The release is read from the artifact's own stamp rather than pinned
       # here. A pin in this file would be a second source of truth, and when
       # the two drifted the job would report hundreds of spurious differences
@@ -219,30 +304,34 @@ jobs:
 
   metrics:
     name: Benchmarks
-    # DELIBERATELY still ubuntu-latest -- do not "fix" this to a warp runner
-    # for consistency with the jobs above.
+    # 2x, and DELIBERATELY the same label as deploy-docs.yml's benchmark job.
     #
-    # This job publishes criterion results as a 90-day artifact, and
-    # deploy-docs.yml publishes the same benchmarks to the docs performance
-    # page. Timings are only comparable against timings measured on the same
-    # hardware, so moving the runner would silently break every historical
-    # comparison in exchange for no speedup worth having: criterion's
-    # measurement loop is single-threaded, and extra cores would only shorten
-    # the build that precedes it.
+    # These two jobs publish comparable numbers -- this one as a 90-day
+    # artifact, the other to the docs performance page -- so they must always
+    # name the SAME runner. Criterion's measurement loop is single-threaded,
+    # so cores buy nothing here beyond the build that precedes it; 2x is the
+    # cheapest label that keeps the two aligned.
     #
-    # The benchmark job in deploy-docs.yml stays on ubuntu-latest for the same
-    # reason. If these ever move, both must move together, in one commit, and
-    # the baseline discontinuity must be recorded in CHANGELOG.md.
-    runs-on: ubuntu-latest
+    # These moved off ubuntu-latest on 2026-08-08 (CHANGELOG: benchmark
+    # baseline discontinuity). Numbers from before that date were measured on
+    # GitHub-hosted hardware and are NOT comparable with numbers after it. If
+    # these ever move again, both must move together, in one commit, and the
+    # discontinuity must be recorded in CHANGELOG.md again.
+    runs-on: warp-ubuntu-latest-x64-2x
     timeout-minutes: 30
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [test]
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          cache-on-failure: true
+          cache-provider: warpbuild
+          shared-key: metrics
       - name: Run benchmarks
         run: cargo bench --bench integration_benchmarks --bench parse_benchmarks
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: benchmark-results
           path: target/criterion/

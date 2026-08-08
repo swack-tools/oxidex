@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Benchmark baseline discontinuity (2026-08-08)** - CI benchmarks moved from GitHub-hosted `ubuntu-latest` to `warp-ubuntu-latest-x64-2x`
+  - **Affects**: the 90-day benchmark artifact published by `ci.yml`, and the timings on the docs performance page published by `deploy-docs.yml`
+  - **Impact**: benchmark numbers measured before this date are **not comparable** with numbers measured after it. Criterion timings are only meaningful against a fixed hardware baseline, and the runner class changed.
+  - **Not a performance regression or improvement**: any step change in the published figures at this date reflects the hardware move, not a change in OxiDex itself.
+  - Both benchmark jobs were moved together, in one commit, and must continue to name the same runner label as each other.
+- **CI/CD caching moved to WarpBuild** - Rust, npm, Docker layer, and ExifTool-source caches now use WarpBuild's cache backend rather than the GitHub Actions cache
+
 ### Added
 - **Optional Magika AI-Powered File Detection** - Google's deep learning model for enhanced file type identification
   - **Feature**: `--features magika` cargo flag enables AI detection at build time

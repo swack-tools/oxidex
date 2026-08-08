@@ -30,14 +30,13 @@ concurrency:
 #     so splitting lets them run concurrently: the serial ~11m15s becomes
 #     roughly the length of the longest branch.
 #
-#     Measured caveat: in the first real run the two were dispatched at the
-#     same instant, but `benchmarks` then sat in the GitHub-hosted runner
-#     queue for 8 minutes while the warp runner for `comparison-report`
-#     started in 5 seconds. Concurrency is structural here; the wall-clock
-#     win is not guaranteed, because the ubuntu-latest queue is outside our
-#     control. That queue is the standing cost of keeping benchmarks on
-#     GitHub-hosted hardware for measurement comparability -- a deliberate
-#     trade, recorded so it is not mistaken for a regression.
+#     Historical note: while `benchmarks` was on ubuntu-latest it once sat in
+#     the GitHub-hosted runner queue for 8 minutes while the warp runner for
+#     `comparison-report` started in 5 seconds -- an 8-minute queue wait was
+#     the standing cost of keeping benchmarks on GitHub-hosted hardware for
+#     measurement comparability. As of 2026-08-08 both benchmark jobs run on
+#     warp-ubuntu-latest-x64-2x, so that queue is gone and the concurrency
+#     win is no longer hostage to a queue outside our control.
 #  3. `pages: write` and `id-token: write` now live only on `publish`, a job
 #     that runs no project code -- it downloads artifacts and builds the site.
 #     Previously the deploy credentials were present on a runner that had just
@@ -53,19 +52,17 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Cache Rust dependencies
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-report-${{ hashFiles('**/Cargo.lock') }}
+          cache-on-failure: true
+          cache-provider: warpbuild
+          shared-key: report
 
       # Archive::Zip is not in core perl, and ExifTool needs it to look inside
       # ZIP containers. Without it OOXML.docx reads as plain ZIP and every
@@ -94,7 +91,7 @@ jobs:
       # an artifact. if-no-files-found: error keeps a silently empty report
       # from reaching the site looking like a successful build.
       - name: Upload generated comparison report
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: comparison-report
           path: docs/reference/comparison
@@ -103,21 +100,19 @@ jobs:
 
   benchmarks:
     name: Run benchmarks
-    # DELIBERATELY still ubuntu-latest -- do not "fix" this to a warp runner
-    # for consistency with the other jobs here.
+    # 2x, and DELIBERATELY the same label as ci.yml's Benchmarks job.
     #
-    # These timings are published to the docs performance page, and ci.yml's
-    # Benchmarks job publishes the same measurements as a 90-day artifact.
-    # Benchmark numbers are only comparable against numbers measured on the
-    # same hardware, so changing the runner would break every historical
-    # comparison. There is little to gain in exchange: criterion's measurement
-    # loop is single-threaded, so extra cores would only shorten the build
-    # that precedes it.
+    # These two jobs publish comparable numbers -- these go to the docs
+    # performance page, ci.yml's go to a 90-day artifact -- so they must
+    # always name the SAME runner. Criterion's measurement loop is
+    # single-threaded, so cores buy nothing beyond the preceding build.
     #
-    # ci.yml's Benchmarks job stays on ubuntu-latest for the same reason. If
-    # these ever move, both must move together, in one commit, and the
-    # baseline discontinuity must be recorded in CHANGELOG.md.
-    runs-on: ubuntu-latest
+    # These moved off ubuntu-latest on 2026-08-08 (CHANGELOG: benchmark
+    # baseline discontinuity). Numbers from before that date were measured on
+    # GitHub-hosted hardware and are NOT comparable with numbers after it. If
+    # these ever move again, both must move together, in one commit, and the
+    # discontinuity must be recorded in CHANGELOG.md again.
+    runs-on: warp-ubuntu-latest-x64-2x
     timeout-minutes: 30
     permissions:
       contents: read
@@ -125,7 +120,7 @@ jobs:
       benchmarks_changed: ${{ steps.changes.outputs.benchmarks_changed }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # HEAD~1 must exist for the change detection below.
           fetch-depth: 2
@@ -149,13 +144,11 @@ jobs:
 
       - name: Cache Rust dependencies
         if: steps.changes.outputs.benchmarks_changed == 'true'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
+          cache-on-failure: true
+          cache-provider: warpbuild
+          shared-key: bench
 
       - name: Run benchmarks
         if: steps.changes.outputs.benchmarks_changed == 'true'
@@ -163,7 +156,7 @@ jobs:
 
       - name: Upload criterion results
         if: steps.changes.outputs.benchmarks_changed == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: criterion-results
           path: target/criterion
@@ -186,17 +179,17 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download generated comparison report
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: comparison-report
           path: docs/reference/comparison
 
       - name: Download criterion results
         if: needs.benchmarks.outputs.benchmarks_changed == 'true'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: criterion-results
           path: target/criterion
@@ -212,10 +205,12 @@ jobs:
           sed -i "s/- \*\*Date:\*\* .*/- **Date:** $DATE/" docs/performance/index.md
           sed -i "s/- \*\*Commit:\*\* .*/- **Commit:** [\`$COMMIT\`](https:\/\/github.com\/swack-tools\/oxidex\/commit\/$COMMIT)/" docs/performance/index.md
 
+      # WarpBuild-native fork: routes the npm cache through WarpBuild's cache
+      # backend on this warp-ubuntu-* runner instead of the GitHub one.
       - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: WarpBuilds/setup-node@2867cf8f859d73439e1ad18b542617e5a29f0f10 # v7.0.0
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: docs/package-lock.json
 

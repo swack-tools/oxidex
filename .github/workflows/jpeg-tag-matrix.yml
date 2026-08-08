@@ -73,7 +73,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           # Full history: the push-retry below rebases onto origin/main, and a
@@ -94,11 +94,14 @@ jobs:
         with:
           toolchain: stable
 
-      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2.9.1
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
+          cache-on-failure: true
+          cache-provider: warpbuild
           shared-key: jpeg-tag-matrix
 
-      - name: Install pinned ExifTool
+      - name: Resolve pinned ExifTool version
+        id: exiftool-version
         run: |
           set -euo pipefail
           V=$(tr -d '[:space:]' < .exiftool-version)
@@ -106,16 +109,57 @@ jobs:
             *[!0-9.]* | "" | .* | *.)
               echo "::error::refusing non-numeric ExifTool pin '$V'"; exit 1 ;;
           esac
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      # Caches only the cloned checkout, not the Archive::Zip install: that
+      # one lands in system perl dirs via sudo, and a half-restored perl tree
+      # degrades ExifTool silently rather than failing. The clone is the
+      # network cost worth skipping; the cpan install stays unconditional.
+      # No restore-keys -- a fuzzy key here would serve a stale ExifTool.
+      # restore + save as separate steps rather than the combined action,
+      # whose post-step save is declared `post-if: success()` -- a later
+      # failure in this long job would otherwise discard a good clone.
+      - name: Restore pinned ExifTool source
+        id: exiftool-cache
+        uses: WarpBuilds/cache/restore@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
+        with:
+          path: /tmp/exiftool
+          key: exiftool-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
+
+      - name: Clone pinned ExifTool
+        if: steps.exiftool-cache.outputs.cache-hit != 'true'
+        env:
+          V: ${{ steps.exiftool-version.outputs.version }}
+        run: |
+          set -euo pipefail
           git clone -q --depth 1 --branch "$V" \
             https://github.com/exiftool/exiftool /tmp/exiftool
-          # Archive::Zip gates every ZIP-container format; without it a .docx
-          # reports FileType: ZIP while -ver still prints the right release.
+
+      # Archive::Zip gates every ZIP-container format; without it a .docx
+      # reports FileType: ZIP while -ver still prints the right release.
+      # Runs even on a cache hit, as do the assertions: a corrupted or
+      # wrong-version cache entry must fail the job, not sail through.
+      - name: Install Archive::Zip and verify ExifTool
+        env:
+          V: ${{ steps.exiftool-version.outputs.version }}
+        run: |
+          set -euo pipefail
           sudo cpanm --notest Archive::Zip 2>/dev/null || sudo cpan -T Archive::Zip
           perl -MArchive::Zip -e 1
           echo "/tmp/exiftool" >> "$GITHUB_PATH"
           GOT=$(/tmp/exiftool/exiftool -ver)
           [ "$GOT" = "$V" ] || { echo "::error::installed ExifTool $GOT, expected $V"; exit 1; }
           echo "EXIFTOOL=/tmp/exiftool/exiftool" >> "$GITHUB_ENV"
+
+      # Only on a miss, and only after the verify above passed -- default
+      # `success()` semantics keep a bad tree from being persisted. Reuses
+      # the restore step's cache-primary-key rather than recomputing it.
+      - name: Save pinned ExifTool source
+        if: steps.exiftool-cache.outputs.cache-hit != 'true'
+        uses: WarpBuilds/cache/save@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
+        with:
+          path: /tmp/exiftool
+          key: ${{ steps.exiftool-cache.outputs.cache-primary-key }}
 
       - name: Build oxidex and jpeg-tag-matrix (release)
         run: |
@@ -141,7 +185,7 @@ jobs:
         run: ./target/release/jpeg-tag-matrix report --update-baseline
 
       - name: Upload raw results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: jpeg-tag-matrix-results
           path: |
