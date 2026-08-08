@@ -85,10 +85,39 @@ pub struct FormatComparison {
     /// empty for any report serialized before this field existed.
     #[serde(default)]
     pub duplicate_emissions: Vec<String>,
-    /// Coverage percentage (matched / total_exiftool)
+    /// Share of *distinct tag keys* (`matched_tags` / `total_exiftool_tags`)
+    /// this format's corpus yielded.
+    ///
+    /// This is an inventory of tag **names**, not a coverage measurement, and
+    /// it is deliberately not what the report headlines. Both sides are
+    /// deduplicated across the whole corpus before this ratio is taken, so a
+    /// key ExifTool emits on 4,000 files counts as "matched" when oxidex emits
+    /// it on one — possibly not even the same one. Use
+    /// [`Self::instance_coverage_percentage`] for what oxidex actually reads.
+    /// See CORPUS_AUDIT.md §0.
     pub coverage_percentage: f64,
-    /// Total number of tags in ExifTool for this format
+    /// Number of distinct ExifTool tag keys seen anywhere in this format's
+    /// corpus. Denominator of [`Self::coverage_percentage`].
     pub total_exiftool_tags: usize,
+    /// ExifTool tag instances — one per (source file, tag key) — that oxidex
+    /// reproduces **on that same file** with an equal value.
+    ///
+    /// Defaults to 0 for any report serialized before this field existed.
+    #[serde(default)]
+    pub matched_instances: usize,
+    /// Total ExifTool tag instances across every file of this format. Unlike
+    /// [`Self::total_exiftool_tags`] this does not deduplicate, so a tag
+    /// present on 4,000 files counts 4,000 times.
+    #[serde(default)]
+    pub total_exiftool_instances: usize,
+    /// Per-(file, tag) coverage: `matched_instances / total_exiftool_instances`.
+    ///
+    /// This is the honest extraction figure and the one the report headlines.
+    /// It answers "of every tag ExifTool read out of these files, what share
+    /// did oxidex read the same way?" — which is the question a corpus-wide
+    /// distinct-key ratio silently changes.
+    #[serde(default)]
+    pub instance_coverage_percentage: f64,
     /// Timestamp when this comparison was generated
     pub timestamp: String,
 }
@@ -107,11 +136,15 @@ impl FormatComparison {
             duplicate_emissions: Vec::new(),
             coverage_percentage: 0.0,
             total_exiftool_tags: 0,
+            matched_instances: 0,
+            total_exiftool_instances: 0,
+            instance_coverage_percentage: 0.0,
             timestamp: chrono::Utc::now().to_rfc3339(),
         }
     }
 
-    /// Calculate coverage percentage
+    /// Calculate the distinct-key ratio. See [`Self::coverage_percentage`] —
+    /// this is a name inventory, not extraction coverage.
     pub fn calculate_coverage(&mut self) {
         if self.total_exiftool_tags == 0 {
             self.coverage_percentage = 0.0;
@@ -121,14 +154,43 @@ impl FormatComparison {
         }
     }
 
+    /// Calculate per-(file, tag) coverage from the instance counts.
+    pub fn calculate_instance_coverage(&mut self) {
+        if self.total_exiftool_instances == 0 {
+            self.instance_coverage_percentage = 0.0;
+        } else {
+            self.instance_coverage_percentage =
+                (self.matched_instances as f64 / self.total_exiftool_instances as f64) * 100.0;
+        }
+    }
+
+    /// Whether this format yielded any comparable ExifTool tag at all.
+    ///
+    /// A format can score zero instances because every tag ExifTool emitted
+    /// for it lives in a skipped pseudo-family (`File`, `System`, `Composite`,
+    /// `ExifTool`) — BMP and ICO in ExifTool's own `t/images` do exactly that.
+    /// That is an absence of measurement, not a measured zero, and reporting
+    /// it as "0.0% coverage" states a result the run never produced.
+    pub fn is_measurable(&self) -> bool {
+        self.total_exiftool_instances > 0
+    }
+
     /// Get summary statistics
     pub fn summary(&self) -> String {
+        if !self.is_measurable() {
+            return format!(
+                "{}: no comparable ExifTool tags (not measurable)",
+                self.format
+            );
+        }
         format!(
-            "{}: {}/{} tags ({:.1}% coverage)",
+            "{}: {}/{} tag instances ({:.1}% coverage); {}/{} distinct keys seen",
             self.format,
+            self.matched_instances,
+            self.total_exiftool_instances,
+            self.instance_coverage_percentage,
             self.matched_tags.len(),
             self.total_exiftool_tags,
-            self.coverage_percentage
         )
     }
 }
@@ -144,8 +206,21 @@ pub struct ComparisonReport {
     pub oxidex_version: String,
     /// Comparisons indexed by format name
     pub by_format: HashMap<String, FormatComparison>,
-    /// Overall coverage across all formats
+    /// Share of distinct ExifTool tag keys, summed across formats. A name
+    /// inventory, not extraction coverage — see
+    /// [`FormatComparison::coverage_percentage`].
     pub overall_coverage: f64,
+    /// Per-(file, tag) coverage across every measurable format: the honest
+    /// extraction figure, and the one the report headlines.
+    ///
+    /// Defaults to 0 for any report serialized before this field existed.
+    #[serde(default)]
+    pub overall_instance_coverage: f64,
+    /// Formats that yielded no comparable ExifTool tag at all, and so are
+    /// excluded from [`Self::overall_instance_coverage`]. Named rather than
+    /// dropped: a format that silently contributes 0/0 reads as "covered".
+    #[serde(default)]
+    pub unmeasurable_formats: Vec<String>,
     /// Total regressions across all formats
     pub total_regressions: usize,
     /// Summary text
@@ -161,6 +236,8 @@ impl ComparisonReport {
             oxidex_version: String::new(),
             by_format: HashMap::new(),
             overall_coverage: 0.0,
+            overall_instance_coverage: 0.0,
+            unmeasurable_formats: Vec::new(),
             total_regressions: 0,
             summary: String::new(),
         }
@@ -175,6 +252,8 @@ impl ComparisonReport {
     pub fn calculate_overall_coverage(&mut self) {
         if self.by_format.is_empty() {
             self.overall_coverage = 0.0;
+            self.overall_instance_coverage = 0.0;
+            self.unmeasurable_formats = Vec::new();
             self.total_regressions = 0;
             self.summary = "No formats analyzed".to_string();
             return;
@@ -192,10 +271,46 @@ impl ComparisonReport {
             self.overall_coverage = (total_matched as f64 / total_tags as f64) * 100.0;
         }
 
+        // Instance-based totals. Summed over raw counts rather than averaging
+        // the per-format percentages, so one format's 3 tags cannot weigh the
+        // same as another's 3,000.
+        let matched_instances: usize = self.by_format.values().map(|c| c.matched_instances).sum();
+        let total_instances: usize = self
+            .by_format
+            .values()
+            .map(|c| c.total_exiftool_instances)
+            .sum();
+
+        self.overall_instance_coverage = if total_instances == 0 {
+            0.0
+        } else {
+            (matched_instances as f64 / total_instances as f64) * 100.0
+        };
+
+        self.unmeasurable_formats = {
+            let mut v: Vec<String> = self
+                .by_format
+                .values()
+                .filter(|c| !c.is_measurable())
+                .map(|c| c.format.clone())
+                .collect();
+            v.sort();
+            v
+        };
+
         let format_count = self.by_format.len();
+        let measured = format_count - self.unmeasurable_formats.len();
         self.summary = format!(
-            "Analyzed {} formats: {}/{} tags ({:.1}% overall coverage)",
-            format_count, total_matched, total_tags, self.overall_coverage
+            "Analyzed {} formats ({} measurable): {}/{} tag instances \
+             ({:.1}% coverage); {}/{} distinct ExifTool keys seen ({:.1}%)",
+            format_count,
+            measured,
+            matched_instances,
+            total_instances,
+            self.overall_instance_coverage,
+            total_matched,
+            total_tags,
+            self.overall_coverage,
         );
     }
 
@@ -286,11 +401,30 @@ mod tests {
         comp.total_exiftool_tags = 100;
         comp.matched_tags = vec!["Make".to_string(), "Model".to_string()];
         comp.calculate_coverage();
+        comp.matched_instances = 30;
+        comp.total_exiftool_instances = 200;
+        comp.calculate_instance_coverage();
 
         let summary = comp.summary();
         assert!(summary.contains("JPEG"));
-        assert!(summary.contains("2/100"));
-        assert!(summary.contains("2.0% coverage"));
+        // Headline is the per-(file, tag) figure...
+        assert!(summary.contains("30/200"));
+        assert!(summary.contains("15.0% coverage"));
+        // ...with the distinct-key inventory reported beside it, never as
+        // "coverage" on its own.
+        assert!(summary.contains("2/100 distinct keys"));
+    }
+
+    #[test]
+    fn test_format_comparison_summary_when_nothing_was_comparable() {
+        // No instances on either side: ExifTool emitted nothing this harness
+        // compares (BMP/ICO in t/images). Must not read as a measured 0%.
+        let mut comp = FormatComparison::new("BMP".to_string(), 1);
+        comp.calculate_coverage();
+        comp.calculate_instance_coverage();
+
+        assert!(!comp.is_measurable());
+        assert!(comp.summary().contains("not measurable"));
     }
 
     #[test]

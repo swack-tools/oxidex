@@ -68,6 +68,19 @@ Everything below that is labelled *per-file* comes from a separate
 measurement that keeps file identity (method in §6). Treat the harness's
 corpus numbers as an inventory of *distinct tag names*, not as coverage.
 
+> **Resolved.** The harness now computes the per-file measurement itself
+> (`matched_instances / total_exiftool_instances`), and that is what the report
+> headlines as **Overall Coverage**; the distinct-key ratio is still published
+> beside it but is labelled as a name inventory. Two other inflations were
+> fixed at the same time: `extension_to_format` returned `None` for any
+> extension it did not name, which silently dropped 83 of the 194 files in
+> `t/images` from the run — the formats with no parser first — and formats
+> where ExifTool emitted only skipped pseudo-families were printed as
+> "0.0% coverage" rather than as unmeasurable. On `t/images` the published
+> figure moved 97.1% → 79.8% as a result. The per-file method described in §6
+> is still the independent check; `tools/exiftool-tables/conformance.py` scores
+> the same corpus at 75.3%.
+
 ---
 
 ## 1. Raw per-format table (corpus run vs single sample)
