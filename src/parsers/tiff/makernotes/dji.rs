@@ -202,6 +202,95 @@ fn extract_string(entry: &IfdEntry, data: &[u8]) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
+/// Description of one bracketed diagnostic block in newer DJI MakerNotes.
+///
+/// The payload lengths and names correspond to `Image::ExifTool::DJI::Main`.
+/// Keeping the lengths here is important because the payload is arbitrary
+/// binary data and may itself contain `]` bytes.
+struct DebugPacket {
+    prefix: &'static [u8],
+    tag_name: &'static str,
+    payload_len: usize,
+}
+
+const DEBUG_PACKETS: &[DebugPacket] = &[
+    DebugPacket {
+        prefix: b"adj_dbg_info:",
+        tag_name: "ADJDebugInfo",
+        payload_len: 1024,
+    },
+    DebugPacket {
+        prefix: b"ae_dbg_info:",
+        tag_name: "AEDebugInfo",
+        payload_len: 256,
+    },
+    DebugPacket {
+        prefix: b"ae_histogram_info:",
+        tag_name: "AEHistogramInfo",
+        payload_len: 4096,
+    },
+    DebugPacket {
+        prefix: b"ae_liveview_histogram_info:",
+        tag_name: "AELiveViewHistogramInfo",
+        payload_len: 4096,
+    },
+    DebugPacket {
+        prefix: b"ae_liveview_local_histogram:",
+        tag_name: "AELiveViewLocalHistogram",
+        payload_len: 2048,
+    },
+];
+
+/// Parse the packet stream used as the complete MakerNote value by newer DJI
+/// cameras.
+///
+/// Records are `[name:<fixed-size binary payload>]`. This only searches the
+/// bounded MakerNote slice supplied by the TIFF parser, never the enclosing
+/// JPEG, and validates the closing delimiter at the table-defined payload
+/// boundary before exposing a tag.
+fn parse_debug_packets(data: &[u8], tags: &mut HashMap<String, String>) -> bool {
+    let mut found = false;
+    let mut search_from = 0usize;
+
+    while let Some(relative_start) = data
+        .get(search_from..)
+        .and_then(|remaining| remaining.iter().position(|&byte| byte == b'['))
+    {
+        let content_start = search_from + relative_start + 1;
+        let mut next_search = content_start;
+
+        for packet in DEBUG_PACKETS {
+            let Some(after_prefix) = content_start.checked_add(packet.prefix.len()) else {
+                continue;
+            };
+            if data.get(content_start..after_prefix) != Some(packet.prefix) {
+                continue;
+            }
+            let Some(payload_end) = after_prefix.checked_add(packet.payload_len) else {
+                continue;
+            };
+            if data.get(payload_end) != Some(&b']') {
+                continue;
+            }
+
+            tags.insert(
+                format!("DJI:{}", packet.tag_name),
+                format!(
+                    "(Binary data {} bytes, use -b option to extract)",
+                    packet.payload_len
+                ),
+            );
+            found = true;
+            next_search = payload_end + 1;
+            break;
+        }
+
+        search_from = next_search;
+    }
+
+    found
+}
+
 // ============================================================================
 // DJI MakerNote Parser Implementation
 // ============================================================================
@@ -308,6 +397,13 @@ impl MakerNoteParser for DjiParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
+        // Mavic 2 Enterprise and other recent models store a diagnostic packet
+        // stream here rather than a TIFF-style IFD. Detect it before treating
+        // the first two bytes as an entry count.
+        if parse_debug_packets(data, tags) {
+            return Ok(());
+        }
+
         if data.len() < 8 {
             return Err("DJI MakerNote data too short".to_string());
         }
@@ -428,6 +524,52 @@ mod tests {
         assert_eq!(GPS_SIGNAL.decode(3), "Good");
         assert_eq!(GPS_SIGNAL.decode(5), "Excellent");
         assert_eq!(GPS_SIGNAL.decode(99), "Unknown (99)");
+    }
+
+    #[test]
+    fn test_diagnostic_packet_stream() {
+        fn append_packet(data: &mut Vec<u8>, prefix: &[u8], payload_len: usize) {
+            data.push(b'[');
+            data.extend_from_slice(prefix);
+            data.resize(data.len() + payload_len, 0);
+            data.push(b']');
+        }
+
+        let mut data = Vec::new();
+        append_packet(&mut data, b"ae_dbg_info:", 256);
+        append_packet(&mut data, b"ae_histogram_info:", 4096);
+        append_packet(&mut data, b"ae_liveview_histogram_info:", 4096);
+        append_packet(&mut data, b"ae_liveview_local_histogram:", 2048);
+        append_packet(&mut data, b"adj_dbg_info:", 1024);
+
+        let mut tags = HashMap::new();
+        assert!(
+            DjiParser
+                .parse(&data, ByteOrder::LittleEndian, &mut tags)
+                .is_ok()
+        );
+
+        assert_eq!(
+            tags.get("DJI:AEDebugInfo").map(String::as_str),
+            Some("(Binary data 256 bytes, use -b option to extract)")
+        );
+        assert_eq!(
+            tags.get("DJI:AEHistogramInfo").map(String::as_str),
+            Some("(Binary data 4096 bytes, use -b option to extract)")
+        );
+        assert_eq!(
+            tags.get("DJI:AELiveViewHistogramInfo").map(String::as_str),
+            Some("(Binary data 4096 bytes, use -b option to extract)")
+        );
+        assert_eq!(
+            tags.get("DJI:AELiveViewLocalHistogram").map(String::as_str),
+            Some("(Binary data 2048 bytes, use -b option to extract)")
+        );
+        assert_eq!(
+            tags.get("DJI:ADJDebugInfo").map(String::as_str),
+            Some("(Binary data 1024 bytes, use -b option to extract)")
+        );
+        assert_eq!(tags.len(), 5);
     }
 
     #[test]

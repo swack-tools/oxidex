@@ -94,6 +94,12 @@ jobs:
           cache-provider: warpbuild
           shared-key: lint
       - run: cargo fmt --all -- --check
+      # Pure-Python, no build: catches a test reading the pinned sample corpus
+      # without gating on its presence. Such a test passes locally (the corpus
+      # is a developer cache) and panics on NotFound in CI, and because nextest
+      # is fail-fast one panic aborts the whole suite -- which is how main
+      # stayed red for two days looking like a single broken test.
+      - run: python3 tools/ci/check-corpus-guards.py
       - run: cargo clippy --all-features -- -D warnings
       - uses: rustsec/audit-check@e9159ac5f7d7d873ce074ca134da2f445c0a4a61 # v1.3.2
         with:

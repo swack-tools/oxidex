@@ -391,12 +391,162 @@ pub fn extract_metadata(root_atoms: &[Atom]) -> Result<MetadataMap, String> {
         extract_heif_metadata(meta, root_atoms, &mut metadata)?;
     }
 
+    // Canon CR3 stores its JPEG preview as a timed media sample rather than
+    // as a conventional metadata atom. Extract the first JPEG sample and its
+    // timing information by following the ISO Base Media sample tables.
+    extract_canon_cr3_sample_metadata(root_atoms, &mut metadata);
+
     // If no metadata was extracted, return error
     if metadata.is_empty() {
         Err("No metadata found in QuickTime/MP4 file".to_string())
     } else {
         Ok(metadata)
     }
+}
+
+/// Extract Canon CR3 metadata stored in ISO Base Media sample tables.
+///
+/// Canon CR3 files use the `crx ` major brand. Their embedded JPEG is a media
+/// sample whose location and length are described by `stco`/`co64` and `stsz`;
+/// `stts` supplies the sample duration in the `mdhd` time scale. Offsets in
+/// `stco` and `co64` are absolute file offsets, so top-level atom sizes are
+/// retained while locating the corresponding bytes inside an `mdat` atom.
+fn extract_canon_cr3_sample_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) {
+    let is_cr3 = root_atoms
+        .iter()
+        .find(|atom| atom.atom_type.matches("ftyp"))
+        .and_then(|ftyp| ftyp.data.get(0..4))
+        == Some(b"crx ".as_slice());
+
+    if !is_cr3 {
+        return;
+    }
+
+    let mut atom_offset = 0usize;
+    for atom in root_atoms {
+        let header_size = usize::from(atom.header_size);
+        let Some(atom_size) = header_size.checked_add(atom.data.len()) else {
+            return;
+        };
+        let Some(next_offset) = atom_offset.checked_add(atom_size) else {
+            return;
+        };
+        atom_offset = next_offset;
+    }
+
+    let Some(moov) = root_atoms
+        .iter()
+        .find(|atom| atom.atom_type.matches("moov"))
+    else {
+        return;
+    };
+    let Ok((_, moov_children)) = super::atom_parser::parse_atoms(moov.data) else {
+        return;
+    };
+
+    for trak in moov_children
+        .iter()
+        .filter(|atom| atom.atom_type.matches("trak"))
+    {
+        let Ok((_, trak_children)) = super::atom_parser::parse_atoms(trak.data) else {
+            continue;
+        };
+        let Some(mdia) = trak_children
+            .iter()
+            .find(|atom| atom.atom_type.matches("mdia"))
+        else {
+            continue;
+        };
+        let Ok((_, mdia_children)) = super::atom_parser::parse_atoms(mdia.data) else {
+            continue;
+        };
+
+        let timescale = mdia_children
+            .iter()
+            .find(|atom| atom.atom_type.matches("mdhd"))
+            .and_then(|mdhd| media_timescale(mdhd.data));
+
+        let Some(minf) = mdia_children
+            .iter()
+            .find(|atom| atom.atom_type.matches("minf"))
+        else {
+            continue;
+        };
+        let Ok((_, minf_children)) = super::atom_parser::parse_atoms(minf.data) else {
+            continue;
+        };
+        let Some(stbl) = minf_children
+            .iter()
+            .find(|atom| atom.atom_type.matches("stbl"))
+        else {
+            continue;
+        };
+        let Ok((_, sample_table)) = super::atom_parser::parse_atoms(stbl.data) else {
+            continue;
+        };
+
+        if metadata.get("QuickTime:SampleDuration").is_none()
+            && let Some(timescale) = timescale
+            && timescale != 0
+            && let Some(duration) = first_sample_duration(&sample_table)
+        {
+            let duration_seconds = duration as f64 / timescale as f64;
+            metadata.insert(
+                "QuickTime:SampleDuration".to_string(),
+                TagValue::String(format!("{duration_seconds:.2} s")),
+            );
+            metadata.set_value_form("QuickTime:SampleDuration", duration_seconds.to_string());
+
+            // The first decoding timestamp in an stts table is always zero.
+            metadata.insert(
+                "QuickTime:SampleTime".to_string(),
+                TagValue::String("0 s".to_string()),
+            );
+            metadata.set_value_form("QuickTime:SampleTime", "0".to_string());
+        }
+
+        // JpgFromRaw is deliberately NOT extracted here. The obvious approach --
+        // matching the sample-entry coding name in stsd against "jpeg"/"JPEG"/
+        // "mjpg" -- never fires on a real CR3: the coding name at that offset is
+        // "CRAW", because Canon nests the JPEG flag inside the CRAW sample-entry
+        // extension boxes rather than exposing it as the top-level coding name.
+        // Reaching the preview would mean walking those extensions, which this
+        // change does not attempt. Extracting nothing is correct; guessing which
+        // chunk is the JPEG would risk emitting a wrong payload under a real tag.
+    }
+}
+
+fn media_timescale(mdhd: &[u8]) -> Option<u32> {
+    let version = *mdhd.first()?;
+    let offset = if version == 1 { 20 } else { 12 };
+    read_be_u32(mdhd, offset)
+}
+
+fn first_sample_duration(sample_table: &[Atom]) -> Option<u32> {
+    let stts = sample_table
+        .iter()
+        .find(|atom| atom.atom_type.matches("stts"))?;
+
+    // Full-box flags, entry count, then the first sample-count/sample-delta
+    // pair. A zero sample count does not describe an actual sample.
+    if read_be_u32(stts.data, 4)? == 0 || read_be_u32(stts.data, 8)? == 0 {
+        return None;
+    }
+    read_be_u32(stts.data, 12)
+}
+
+fn read_be_u32(data: &[u8], offset: usize) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    let bytes = data.get(offset..end)?;
+    Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn read_be_u64(data: &[u8], offset: usize) -> Option<u64> {
+    let end = offset.checked_add(8)?;
+    let bytes = data.get(offset..end)?;
+    Some(u64::from_be_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ]))
 }
 
 /// Extract file-level metadata from ftyp and mdat atoms
