@@ -207,6 +207,9 @@ a measurement, not an estimate derived from source code.
 
 **Corpus:** {corpus_desc}
 
+See [Measuring Extraction Coverage](/contributing/measuring-coverage) for how to
+reproduce this, and what to do when a new file type is added.
+
 | Column | Meaning |
 |--------|---------|
 | Match | Same tag name, same value. |
@@ -517,6 +520,7 @@ Some ExifTool tags are excluded by design:
 
 ## Related Documentation
 
+- [Measuring Extraction Coverage](/contributing/measuring-coverage) - How this page is produced, and how to extend it for a new file type
 - [Tag Database Architecture](/architecture/tag-database) - Implementation details
 - [MakerNotes Reference](/reference/makernotes) - Camera manufacturer metadata
 """

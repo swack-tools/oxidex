@@ -139,33 +139,47 @@ jobs:
       - name: Build oxidex
         run: cargo build --bin oxidex
 
-      # --ext keeps the score honest: tests/fixtures doubles as a test-fixture
-      # tree and carries 18 mock .sh scripts plus .json/.md/.xml scaffolding.
-      # ExifTool scores those as ENV SCRIPT/JSON, whose "tags" are just object
-      # keys, and unfiltered they drag the total from 96.0% to 83.8% while
-      # saying nothing about metadata extraction.
+      # Two corpus roots, because neither covers what the other does:
+      #
+      #   t/images       ExifTool's own test corpus -- ~126 formats. Already on
+      #                  disk from the clone above, pinned to the same release
+      #                  the tables came from, so it costs nothing extra and
+      #                  cannot drift from the oracle.
+      #   tests/fixtures the OxiDex-specific samples (MakerNote-heavy JPEGs).
+      #
+      # Measuring only tests/fixtures reported 96.0%, which was true and
+      # misleading: it covered 6 formats. Across both roots the honest number
+      # is 77.5% over 126 formats, and the formats that drag it down (CRW 1.9%,
+      # DICOM 3.0%, FIT 0%) are ones the narrow corpus never touched.
+      #
+      # --exclude-ext, not --ext: a deny-list of things that are never metadata
+      # keeps scoring every real format including ones added later, whereas an
+      # allow-list silently omits each new format until someone extends it.
       #
       # The floors are the degraded-oracle guard. A broken oracle does not
       # crash -- it reads a fraction of the corpus and reports a confident,
-      # precisely-formatted, completely wrong percentage. 44 media files and
-      # ~1,200 ExifTool tags is the current run; the floors sit just under it,
-      # so losing the corpus or the oracle fails the job instead of quietly
-      # publishing a smaller number.
+      # precisely-formatted, completely wrong percentage. The current run is
+      # 238 files / ~12,700 ExifTool tags; the floors sit ~15% under, close
+      # enough to catch a degradation and loose enough to survive a fixture
+      # being retired. Raise them when the corpus grows.
       - name: Measure extraction coverage against pinned ExifTool
         run: |
-          uv run tools/exiftool-tables/conformance.py tests/fixtures \
+          uv run tools/exiftool-tables/conformance.py \
+            /tmp/exiftool/t/images tests/fixtures \
             --recursive \
-            --ext jpg,jpeg,tif,tiff,png,pdf,mp4,mov,dng,heic,webp,gif,bmp \
+            --exclude-ext sh,md,py,json \
             --oxidex ./target/debug/oxidex \
-            --min-files 40 \
-            --min-tags 1200 \
+            --min-files 200 \
+            --min-tags 10000 \
             --json-out "$RUNNER_TEMP/conformance.json"
 
       - name: Generate coverage report
+        env:
+          ET_VER: ${{ steps.exiftool-version.outputs.version }}
         run: |
           uv run scripts/generate_tag_coverage.py \
             --conformance "$RUNNER_TEMP/conformance.json" \
-            --corpus-desc 'tests/fixtures (recursive), media files only' \
+            --corpus-desc "ExifTool ${ET_VER} \`t/images\` + \`tests/fixtures\`" \
             --output docs/reference/tag-coverage-analysis.md
           echo "Coverage report generated"
 
