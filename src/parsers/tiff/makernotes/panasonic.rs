@@ -37,7 +37,7 @@ use nom::{
 };
 use std::collections::HashMap;
 
-use super::makernote_context::MakerNoteContext;
+use super::makernote_context::{MakerNoteContext, value_overlaps_directory};
 use super::shared::MakerNoteParser;
 use super::shared::binary_subdir::{BinaryTable, decode_binary_subdir};
 use super::shared::ifd_parser_base::resolve_byte_order_at;
@@ -588,7 +588,7 @@ impl MakerNoteParser for PanasonicParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_impl(data, byte_order, None, None, tags)
+        self.parse_impl_with_tiff(data, byte_order, None, None, tags)
     }
 
     fn parse_with_model(
@@ -598,15 +598,17 @@ impl MakerNoteParser for PanasonicParser {
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_impl(data, byte_order, model, None, tags)
+        self.parse_impl_with_tiff(data, byte_order, model, None, tags)
     }
 
     /// Panasonic's out-of-line value offsets are measured from the enclosing
     /// TIFF header, not from the MakerNote payload -- `PanasonicDC-G9.jpg`
     /// stores `LensType`'s 34 string bytes at TIFF offset 3414 while the
-    /// payload itself begins at TIFF offset 1314.  Resolving them needs the
-    /// enclosing block and the payload's position in it, which only
-    /// `parse_with_context` has; `parse`/`parse_with_model` keep the old
+    /// payload itself begins at TIFF offset 1314. `PanasonicDMC-GH4.jpg` goes
+    /// the other way: `InternalNDFilter` (0x009d) and `ClearRetouchValue`
+    /// (0x00a3) both point to TIFF offset 0x113c/0x114c, *before* the payload
+    /// at 0x1370. Resolving either direction needs the enclosing block, which
+    /// only `parse_with_context` has; `parse`/`parse_with_model` keep the old
     /// payload-relative arithmetic for a caller that holds no enclosing block.
     fn parse_with_context(
         &self,
@@ -615,26 +617,43 @@ impl MakerNoteParser for PanasonicParser {
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_impl(
-            ctx.window(),
-            byte_order,
-            model,
-            ctx.payload_tiff_offset(),
-            tags,
-        )
+        // A `detached` context (`ctx.is_located()` false) has `tiff() ==
+        // payload()` -- no wider block was ever established, e.g. the
+        // MakerNote inside `Panasonic.rw2`'s embedded `JpgFromRaw` preview
+        // document. Treating that payload-only slice as TIFF-relative and
+        // indexing `value_offset` into it directly reads the wrong bytes:
+        // `InternalSerialNumber`/`AFPointPosition`/`BabyAge` all came back
+        // wrong when this passed `Some(ctx.tiff())` unconditionally. Only a
+        // genuinely located context makes `value_offset` a TIFF-relative
+        // index; otherwise keep the old ifd_offset-relative fallback (`None`,
+        // handled the same as `parse`/`parse_with_model`). `payload_offset()`
+        // rides along so `parse_impl_with_tiff` can locate this MakerNote's
+        // own entry list within `tiff()`, for the "Suspicious offset" guard
+        // in `resolve_value_offset`.
+        let full_tiff = ctx.is_located().then(|| (ctx.tiff(), ctx.payload_offset()));
+        self.parse_impl_with_tiff(ctx.window(), byte_order, model, full_tiff, tags)
     }
 }
 
 impl PanasonicParser {
-    /// Shared implementation behind [`MakerNoteParser::parse`] and
-    /// [`MakerNoteParser::parse_with_model`].
+    /// Shared implementation behind [`MakerNoteParser::parse`],
+    /// [`MakerNoteParser::parse_with_model`] and
+    /// [`MakerNoteParser::parse_with_context`].
+    ///
+    /// `full_tiff` is the enclosing TIFF block (index 0 = the TIFF header)
+    /// paired with the payload's TIFF-relative start, when a
+    /// [`MakerNoteContext`] is available and located; `None` for a caller
+    /// that holds only the MakerNote payload. `data` is always the
+    /// payload/window used for the structural header and IFD-entry parsing
+    /// below, which is payload-relative either way; only out-of-line *value*
+    /// reads need the wider, TIFF-relative block, and only when it exists.
     #[allow(clippy::too_many_arguments)]
-    fn parse_impl(
+    fn parse_impl_with_tiff(
         &self,
         data: &[u8],
         byte_order: ByteOrder,
         model: Option<&str>,
-        data_base: Option<u32>,
+        full_tiff: Option<(&[u8], usize)>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
@@ -690,12 +709,35 @@ impl PanasonicParser {
 
         // Get registry for tag definitions
         let registry = panasonic_registry();
-        let data_base = value_base(data_base, model);
+
+        // When the enclosing TIFF block is available, out-of-line values are
+        // read from it directly (index = value_offset, plus the DC-FT7
+        // correction) rather than from the payload window: a value_offset can
+        // legitimately address bytes *before* the payload starts --
+        // `PanasonicDMC-GH4.jpg`'s InternalNDFilter/ClearRetouchValue do
+        // exactly that -- and only the whole block, not the forward-only
+        // window, can reach them. See `resolve_value_offset` and
+        // `value_offset_correction`.
+        let (value_data, data_base): (&[u8], Option<TiffValueBase>) = match full_tiff {
+            Some((tiff, payload_offset)) => {
+                let dir_start = payload_offset + ifd_offset;
+                let dir_end = dir_start + 2 + entry_count as usize * 12;
+                (
+                    tiff,
+                    Some(TiffValueBase {
+                        correction: value_offset_correction(model),
+                        dir_start,
+                        dir_end,
+                    }),
+                )
+            }
+            None => (data, None),
+        };
 
         // Extract tags from entries
         for entry in entries {
             self.parse_entry(
-                &entry, data, ifd_offset, data_base, byte_order, model, &registry, tags,
+                &entry, value_data, ifd_offset, data_base, byte_order, model, &registry, tags,
             );
         }
 
@@ -712,7 +754,7 @@ impl PanasonicParser {
         entry: &IfdEntry,
         data: &[u8],
         ifd_offset: usize,
-        data_base: Option<u32>,
+        data_base: Option<TiffValueBase>,
         byte_order: ByteOrder,
         model: Option<&str>,
         registry: &super::shared::tag_registry::TagRegistry,
@@ -1068,9 +1110,34 @@ fn parse_ifd_entry_be(input: &[u8]) -> IResult<&[u8], IfdEntry> {
 /// ExifTool resolves a MakerNote value offset against the enclosing TIFF block
 /// (`Exif.pm`'s `$base + $valuePtr`), and Panasonic's offsets are measured from
 /// the TIFF header: `PanasonicDC-G9.jpg` puts `LensType`'s 34 string bytes at
-/// TIFF offset 3414 while the MakerNote payload starts at 1314.  When
-/// `data_base` is known, `full_data` is the payload-onwards window and the
-/// value sits `value_offset - data_base` bytes into it.
+/// TIFF offset 3414 while the MakerNote payload starts at 1314, and
+/// `PanasonicDMC-GH4.jpg`'s `InternalNDFilter`/`ClearRetouchValue` point to
+/// TIFF offset 0x113c/0x114c while the payload starts at 0x1370 -- *before*
+/// it. When `data_base` is known, `full_data` is the whole enclosing TIFF
+/// block and the value sits at `value_offset + data_base.correction` bytes
+/// into it directly: no payload-relative arithmetic to underflow on a
+/// backward-pointing offset like the GH4's.
+///
+/// Two reads ExifTool calls "Suspicious" and drops rather than follows
+/// (`Exif.pm:6538-6549`), both ported here:
+///
+/// * A value below TIFF offset 8 addresses the TIFF header itself (the
+///   2-byte byte-order mark, the 2-byte magic, the 4-byte first-IFD offset)
+///   rather than real tag data -- `$valuePtr < 8 and not
+///   $$dirInfo{ZeroOffsetOK}`. `PanasonicDMC-LZ20.jpg`'s
+///   `InternalSerialNumber` resolves to TIFF offset 0, landing on the "II*\0"
+///   signature itself; read at face value that comes out as the string
+///   `"II*"`, a plausible-looking value that is actually the file's own
+///   magic bytes.
+/// * A value that lands back inside the MakerNote's own entry list is
+///   `$valuePtr < $dirEnd and $valuePtr+$size > $dirStart` --
+///   `PanasonicDMC-GH4.jpg`'s own `DataDump` points there.
+///
+/// Both are confirmed against `exiftool -G1 -s -a`, which omits the tag from
+/// non-verbose output entirely rather than printing the bytes found; reading
+/// [`TiffValueBase::dir_start`]/`dir_end` (or offset 0) at face value would
+/// report whatever those unrelated bytes happen to look like as the tag's
+/// real value, so both checks apply before any byte is read.
 ///
 /// Without an enclosing block there is nothing to measure from, so the old
 /// payload-relative arithmetic is kept rather than guessing a base: see
@@ -1078,16 +1145,37 @@ fn parse_ifd_entry_be(input: &[u8]) -> IResult<&[u8], IfdEntry> {
 fn resolve_value_offset(
     entry: &IfdEntry,
     ifd_offset: usize,
-    data_base: Option<u32>,
+    data_base: Option<TiffValueBase>,
+    value_size: usize,
 ) -> Option<usize> {
     match data_base {
-        Some(base) => entry.value_offset.checked_sub(base).map(|v| v as usize),
+        Some(base) => {
+            let value_start = entry.value_offset.checked_add(base.correction)? as usize;
+            if value_start < 8
+                || value_overlaps_directory(value_start, value_size, base.dir_start, base.dir_end)
+            {
+                return None;
+            }
+            Some(value_start)
+        }
         None => ifd_offset.checked_add(entry.value_offset as usize),
     }
 }
 
-/// The TIFF-relative start this MakerNote's out-of-line value offsets are
-/// measured from.
+/// Where an out-of-line Panasonic MakerNote value is read from, when the
+/// enclosing TIFF block is available. See [`resolve_value_offset`].
+#[derive(Clone, Copy)]
+struct TiffValueBase {
+    /// Added to `entry.value_offset` to get a TIFF-relative index -- 0 for
+    /// every body except the DC-FT7, see [`value_offset_correction`].
+    correction: u32,
+    /// This MakerNote IFD's own entry-list bounds, TIFF-relative.
+    dir_start: usize,
+    dir_end: usize,
+}
+
+/// The correction one body's out-of-line value offsets need before they can
+/// be read as TIFF-relative, in bytes.
 ///
 /// One body needs its own number. `MakerNotes.pm` gives the DC-FT7 a dispatch
 /// entry of its own, `MakerNotePanasonic3` (MakerNotes.pm:751-761), identical to
@@ -1100,14 +1188,11 @@ fn resolve_value_offset(
 /// `NumFacePositions = 320`, a number no camera would print but nothing
 /// downstream can flag, in place of the 0 ExifTool reports.
 ///
-/// The adjustment only applies to the TIFF-relative form. With no enclosing
-/// block `data_base` is `None` and the offsets are already payload-relative, so
-/// there is no base to correct.
-fn value_base(data_base: Option<u32>, model: Option<&str>) -> Option<u32> {
-    if model == Some("DC-FT7") {
-        return data_base.map(|base| base.saturating_sub(12));
-    }
-    data_base
+/// The correction only applies when reading against the TIFF-relative form
+/// (`resolve_value_offset`'s `Some` branch). With no enclosing block the
+/// offsets are already payload-relative and this is never consulted.
+fn value_offset_correction(model: Option<&str>) -> u32 {
+    if model == Some("DC-FT7") { 12 } else { 0 }
 }
 
 /// A `string` value the way ExifTool reads one.
@@ -1131,7 +1216,7 @@ fn extract_string_value(
     entry: &IfdEntry,
     full_data: &[u8],
     ifd_offset: usize,
-    data_base: Option<u32>,
+    data_base: Option<TiffValueBase>,
 ) -> Option<String> {
     let byte_count = entry.value_count as usize;
 
@@ -1142,7 +1227,7 @@ fn extract_string_value(
     }
 
     // For longer strings, read from offset
-    let abs_offset = resolve_value_offset(entry, ifd_offset, data_base)?;
+    let abs_offset = resolve_value_offset(entry, ifd_offset, data_base, byte_count)?;
 
     if abs_offset + byte_count <= full_data.len() {
         return exiftool_string(&full_data[abs_offset..abs_offset + byte_count]);
@@ -1160,7 +1245,7 @@ fn extract_raw_bytes(
     entry: &IfdEntry,
     full_data: &[u8],
     ifd_offset: usize,
-    data_base: Option<u32>,
+    data_base: Option<TiffValueBase>,
     byte_order: ByteOrder,
 ) -> Option<Vec<u8>> {
     let byte_count = entry.value_count as usize;
@@ -1175,7 +1260,7 @@ fn extract_raw_bytes(
 
     // For longer values, read from offset (relative to IFD start, as in
     // extract_string_value)
-    let abs_offset = resolve_value_offset(entry, ifd_offset, data_base)?;
+    let abs_offset = resolve_value_offset(entry, ifd_offset, data_base, byte_count)?;
     full_data
         .get(abs_offset..abs_offset + byte_count)
         .map(|b| b.to_vec())
@@ -1206,7 +1291,7 @@ fn extract_component_values(
     entry: &IfdEntry,
     full_data: &[u8],
     ifd_offset: usize,
-    data_base: Option<u32>,
+    data_base: Option<TiffValueBase>,
     byte_order: ByteOrder,
 ) -> Option<Vec<u32>> {
     let count = entry.value_count as usize;
@@ -1224,7 +1309,7 @@ fn extract_component_values(
                 };
                 field[0..byte_len].to_vec()
             } else {
-                let abs_offset = resolve_value_offset(entry, ifd_offset, data_base)?;
+                let abs_offset = resolve_value_offset(entry, ifd_offset, data_base, byte_len)?;
                 full_data.get(abs_offset..abs_offset + byte_len)?.to_vec()
             };
             Some(
@@ -1249,12 +1334,12 @@ fn extract_rational_values(
     entry: &IfdEntry,
     full_data: &[u8],
     ifd_offset: usize,
-    data_base: Option<u32>,
+    data_base: Option<TiffValueBase>,
     byte_order: ByteOrder,
 ) -> Option<Vec<(u32, u32)>> {
     let count = entry.value_count as usize;
     let byte_len = count.checked_mul(8)?;
-    let abs_offset = resolve_value_offset(entry, ifd_offset, data_base)?;
+    let abs_offset = resolve_value_offset(entry, ifd_offset, data_base, byte_len)?;
     let bytes = full_data.get(abs_offset..abs_offset + byte_len)?;
     Some(
         bytes
@@ -1991,14 +2076,12 @@ mod tests {
     }
 
     /// `MakerNotePanasonic3` applies to the DC-FT7 and to nothing else --
-    /// shifting any other body's base would move every out-of-line value.
+    /// correcting any other body's offsets would move every out-of-line value.
     #[test]
-    fn test_only_the_dc_ft7_shifts_its_value_base() {
-        assert_eq!(value_base(Some(1269), Some("DC-FT7")), Some(1257));
-        assert_eq!(value_base(Some(1368), Some("DC-S1")), Some(1368));
-        assert_eq!(value_base(Some(1368), None), Some(1368));
-        // With no enclosing block there is no TIFF-relative base to correct.
-        assert_eq!(value_base(None, Some("DC-FT7")), None);
+    fn test_only_the_dc_ft7_gets_a_value_offset_correction() {
+        assert_eq!(value_offset_correction(Some("DC-FT7")), 12);
+        assert_eq!(value_offset_correction(Some("DC-S1")), 0);
+        assert_eq!(value_offset_correction(None), 0);
     }
 
     /// `sprintf("%.*g", precision, value)` (`RoundFloat` and AFPointPosition's
