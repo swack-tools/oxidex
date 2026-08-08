@@ -473,9 +473,9 @@ impl MakerNoteParser for OlympusParser {
 // out, adding the directory's own base:
 //
 // ```text
-// Exif.pm:6856      if ($$tagInfo{IsOffset} and eval $$tagInfo{IsOffset}) {
-// Exif.pm:6857          my $offsetBase = $$tagInfo{IsOffset} eq '2' ? $firstBase : $base;
-// Exif.pm:6858          $offsetBase += $$et{BASE};
+// Exif.pm:7157      if ($$tagInfo{IsOffset} and eval $$tagInfo{IsOffset}) {
+// Exif.pm:7158          my $offsetBase = $$tagInfo{IsOffset} eq '2' ? $firstBase : $base;
+// Exif.pm:7159          $offsetBase += $$et{BASE};
 // ```
 //
 // `Flags => 'IsOffset'` sets `IsOffset => 1`, not `'2'`, so the base is `$base`
