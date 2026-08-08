@@ -140,6 +140,33 @@ pub struct IfdEntry {
     pub value_offset: u32,
 }
 
+/// Reads the on-disk entry count (the 2-byte value at `ifd_offset`) of a TIFF
+/// IFD, independent of how many entries [`parse_ifd`] goes on to return.
+///
+/// [`parse_ifd`] silently drops individual malformed entries (see its
+/// "Malformed entries" section) rather than failing the whole directory, so
+/// `parse_ifd(..)?.len()` is the *surviving* entry count, not the on-disk
+/// one. A caller that needs to locate the "next IFD offset" field
+/// immediately following the entry array -- at
+/// `ifd_offset + 2 + entry_count * 12` -- must use this function's count,
+/// not the result vector's length: using the post-skip length walks that
+/// many entries too few into the file and reads whatever bytes happen to sit
+/// there (typically the tail of a skipped entry) as if they were the next-IFD
+/// pointer, corrupting or misdirecting the rest of the chain.
+///
+/// Returns `None` when the count itself cannot be read (offset beyond the
+/// file) -- distinct from a genuine, readable directory that happens to
+/// declare zero entries.
+pub fn ifd_entry_count(
+    reader: &dyn FileReader,
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+) -> Option<u16> {
+    let data = reader.read(ifd_offset, 2).ok()?;
+    let endian_reader = EndianReader::new(data, byte_order.to_io_byte_order());
+    endian_reader.u16_at(0)
+}
+
 /// Parses a TIFF Image File Directory (IFD) and extracts tag values.
 ///
 /// This function reads an IFD structure at the specified offset and returns
