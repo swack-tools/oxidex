@@ -1900,6 +1900,9 @@ mod ifd1_tests {
 
     #[test]
     fn apple_qt_200_ifd1_strip_metadata_matches_pinned_exiftool() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let path = std::path::Path::new(
             "/tmp/oxidex-exiftool-cache/combined-samples/Apple/AppleQT-200.jpg",
         );

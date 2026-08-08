@@ -4185,6 +4185,9 @@ mod tests {
 
     #[test]
     fn photomechanic_jpeg_time_created_matches_pinned_exiftool() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let path =
             std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/PhotoMechanic.jpg");
         let metadata =

@@ -712,6 +712,9 @@ mod tests {
 
     #[test]
     fn test_real_iiq_fixture_matches_exiftool() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         // Ground truth: `exiftool -G1 -s
         // /tmp/oxidex-exiftool-cache/combined-samples/PhaseOne.iiq`, ExifTool
         // 13.55 (byte-identical PhaseOne.pm to the 13.59 corpus checkout).

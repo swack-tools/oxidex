@@ -3017,6 +3017,9 @@ mod tests {
 
     #[test]
     fn samsung_gx20_auto_bracketing_uses_pentax_two_value_print_conv() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let metadata = crate::core::operations::read_metadata(std::path::Path::new(
             "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGX20.jpg",
         ))
@@ -4083,6 +4086,9 @@ mod tests {
 
     #[test]
     fn samsung_gx20_hometown_city_uses_pentax_city_table() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let metadata = crate::core::operations::read_metadata(std::path::Path::new(
             "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGX20.jpg",
         ))

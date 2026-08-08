@@ -3443,6 +3443,9 @@ mod tests {
 
     #[test]
     fn quicktime_fixture_prefers_media_info_data_handler_class() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         // QuickTime.pm Handler: its `dhlr` PrintConv is "Data Handler".
         // The first track in QuickTime.mov has mdia/hdlr=mhlr but its
         // minf/hdlr=dhlr; ExifTool's unsuffixed reported HandlerClass is the

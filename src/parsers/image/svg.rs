@@ -865,6 +865,9 @@ mod tests {
 
     #[test]
     fn pinned_xmp_svg_dublin_core_date_matches_exiftool() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/XMP.svg");
         let reader = BufferedReader::new(path).expect("read pinned XMP.svg fixture");
         let parser = SVGParser;

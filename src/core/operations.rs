@@ -1305,6 +1305,9 @@ mod tests {
 
     #[test]
     fn samsung_i8910_scalado_app4_matches_pinned_exiftool() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let path = std::path::Path::new(
             "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGT-i8910.jpg",
         );

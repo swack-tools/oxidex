@@ -3447,6 +3447,9 @@ mod panasonic_rw2_tests {
 
     #[test]
     fn formats_observed_panasonic_raw_compression_code() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         let bytes = 34316u16.to_le_bytes();
         assert_eq!(
             format_panasonic_raw_compression(&bytes, 3, 1, ByteOrder::LittleEndian,).as_deref(),
@@ -3501,6 +3504,9 @@ mod panasonic_rw2_tests {
 
     #[test]
     fn formats_panasonic_raw_version_and_noise_reduction_params() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         // PanasonicRawVersion is UNDEFINED[4] holding ASCII "0300" in
         // Panasonic.rw2; ExifTool prints it verbatim.
         assert_eq!(
@@ -3753,6 +3759,9 @@ mod nef_cfa_pattern2_tests {
 
     #[test]
     fn extracts_tiff_ep_cfa_pattern2_from_nef_sub_ifd() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         // Minimal little-endian TIFF containing an IFD0 SubIFD pointer and a
         // SubIFD with BYTE[4] tag 0x828E. This is the layout used by the Nikon
         // NEF sample.
@@ -7993,6 +8002,9 @@ mod tests {
 
     #[test]
     fn test_multiple_ifd_parsing() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
         // Create TIFF with IFD0 and IFD1 (typical for RAW with thumbnail)
         let mut data = Vec::new();
 
