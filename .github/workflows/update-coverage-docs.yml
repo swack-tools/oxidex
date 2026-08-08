@@ -16,8 +16,28 @@ on:
       - 'tools/exiftool-tables/conformance.py'
       - '.exiftool-version'
       - '.github/workflows/update-coverage-docs.yml'
+  # Backstop against push-cancellation, not a second schedule for its own sake.
+  # See the concurrency note below: a starved run is invisible, and this is what
+  # bounds how long the published number can stay stale -- one day, worst case.
+  schedule:
+    - cron: '0 5 * * *' # daily, 05:00 UTC (an hour before jpeg-tag-matrix)
   workflow_dispatch:
 
+# cancel-in-progress is right for this job: it regenerates a report from HEAD,
+# so a superseded run's output is worthless and there is no point paying for it.
+#
+# The hazard is that it is SILENT. A cancelled run is not a failed run -- no
+# check goes red, nothing is reported -- so if main is pushed faster than this
+# job completes, the coverage doc simply stops updating and looks fine. That
+# margin used to be enormous (the job was ~22s of Python). It is now ~1.2min
+# warm and ~3.4min cold, because the job builds oxidex and diffs 238 files
+# against the pinned ExifTool. Main currently sees a push every ~6-10 minutes,
+# so the margin holds -- but it is a margin now, where it used to be a rounding
+# error, and the fix fleet can merge in bursts.
+#
+# Hence the daily cron above. It costs one extra run a day and guarantees the
+# published number converges on reality regardless of push cadence. If the doc
+# is ever observed to be days stale, look here first rather than at the script.
 concurrency:
   group: update-coverage-docs
   cancel-in-progress: true
@@ -207,8 +227,15 @@ jobs:
       # No "[skip ci]": ci.yml runs on push to main, so these commits are
       # still verified -- after landing rather than before, which is the
       # trade that comes with dropping the required checks.
+      # The ref guard is load-bearing, not boilerplate. This step ends in
+      # `git push origin HEAD:main`, and HEAD is whatever ref was checked out.
+      # push and schedule are always main, but workflow_dispatch accepts ANY
+      # ref -- so dispatching this workflow from a feature branch to test it
+      # would push that entire unreviewed branch to main, as a fast-forward,
+      # bypassing review completely. Matches jpeg-tag-matrix.yml, which guards
+      # its equivalent step the same way.
       - name: Commit coverage update
-        if: steps.changes.outputs.changed == 'true'
+        if: github.ref == 'refs/heads/main' && steps.changes.outputs.changed == 'true'
         env:
           SRC_SHA: ${{ github.sha }}
         run: |
