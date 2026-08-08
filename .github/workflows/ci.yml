@@ -78,6 +78,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           components: rustfmt, clippy
+      # WarpBuild-native cache backend: on warp-ubuntu-* runners this reads/
+      # writes through Warp's cache infra instead of the (much slower, cross-
+      # region) GitHub Actions cache. shared-key separates this job's cache
+      # from Build & Test's so a clippy-only cache miss can't evict the other.
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          cache-provider: warpbuild
+          shared-key: lint
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-features -- -D warnings
       - uses: rustsec/audit-check@e9159ac5f7d7d873ce074ca134da2f445c0a4a61 # v1.3.2
@@ -101,6 +109,15 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      # WarpBuild-native cache backend (see the Lint & Audit job for why).
+      # cache-all-crates: this job also builds cargo-nextest and cbindgen via
+      # taiki-e/install-action, and default caching only covers workspace
+      # dependencies, not CI tooling.
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          cache-provider: warpbuild
+          shared-key: test
+          cache-all-crates: true
       - uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
         with:
           # Pin cbindgen: the committed api/oxidex.h is generated with 0.29.2,
@@ -131,7 +148,8 @@ jobs:
       # regressions and fixes that have nothing to do with the diff under test.
       # The version comes from .exiftool-version, the same file the Rust and
       # Python oracles compile/read it from, so there is one source of truth.
-      - name: Install pinned ExifTool
+      - name: Resolve pinned ExifTool version
+        id: exiftool-version
         run: |
           set -euo pipefail
           V=$(tr -d '[:space:]' < .exiftool-version)
@@ -140,14 +158,45 @@ jobs:
               echo "::error::refusing non-numeric ExifTool pin '$V'"; exit 1 ;;
           esac
           echo "Pinned ExifTool: $V"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+      # Caches only the extracted tarball, not the Archive::Zip install: that
+      # one goes into system perl dirs via sudo, and restoring those from a
+      # cache is exactly the kind of half-populated perl tree that produces a
+      # confidently-wrong coverage number instead of a crash. The download is
+      # the network cost worth skipping; the cpan install stays unconditional.
+      #
+      # The key carries the resolved version and nothing else fuzzy -- no
+      # restore-keys -- so a `.exiftool-version` bump always misses and
+      # re-downloads. A loosely-matched key here would serve a stale ExifTool.
+      - name: Cache pinned ExifTool source
+        id: exiftool-cache
+        uses: WarpBuilds/cache@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
+        with:
+          path: /tmp/exiftool-src
+          key: exiftool-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
+      - name: Download pinned ExifTool
+        if: steps.exiftool-cache.outputs.cache-hit != 'true'
+        env:
+          V: ${{ steps.exiftool-version.outputs.version }}
+        run: |
+          set -euo pipefail
           curl -sSL "https://github.com/exiftool/exiftool/archive/refs/tags/$V.tar.gz" \
             -o /tmp/exiftool.tar.gz
           mkdir -p /tmp/exiftool-src
           tar xzf /tmp/exiftool.tar.gz -C /tmp/exiftool-src --strip-components=1
-          # Archive::Zip gates every ZIP-container format. Without it a .docx
-          # reports FileType: ZIP and container coverage silently collapses,
-          # while -ver still prints the right release -- so install it and
-          # assert it, rather than trusting the version string alone.
+      # Archive::Zip gates every ZIP-container format. Without it a .docx
+      # reports FileType: ZIP and container coverage silently collapses,
+      # while -ver still prints the right release -- so install it and
+      # assert it, rather than trusting the version string alone.
+      #
+      # Both this and the assertions below run even on a cache hit: a
+      # corrupted or wrong-version cache entry must fail the job, not sail
+      # through into a graded comparison run.
+      - name: Install Archive::Zip and verify ExifTool
+        env:
+          V: ${{ steps.exiftool-version.outputs.version }}
+        run: |
+          set -euo pipefail
           sudo cpanm --notest Archive::Zip 2>/dev/null || sudo cpan -T Archive::Zip
           perl -MArchive::Zip -e 1
           echo "/tmp/exiftool-src" >> "$GITHUB_PATH"
@@ -172,10 +221,11 @@ jobs:
   # No Rust build is needed: verify.py reads the .rs as text.
   verify-tables:
     name: Verify Generated Tables
-    # Stock runner on purpose: this is a tarball fetch plus a perl/python pass
-    # over one file, ~30s and entirely I/O-bound. The sizing measurements above
-    # apply to compile-bound jobs and buy nothing here.
-    runs-on: ubuntu-latest
+    # 2x on purpose: this is a tarball fetch plus a perl/python pass over one
+    # file, ~30s and entirely I/O-bound. The sizing measurements above apply
+    # to compile-bound jobs and buy nothing here -- 2x is for the Warp queue
+    # (seconds, vs minutes on the GitHub-hosted pool), not for the cores.
+    runs-on: warp-ubuntu-latest-x64-2x
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -219,27 +269,30 @@ jobs:
 
   metrics:
     name: Benchmarks
-    # DELIBERATELY still ubuntu-latest -- do not "fix" this to a warp runner
-    # for consistency with the jobs above.
+    # 2x, and DELIBERATELY the same label as deploy-docs.yml's benchmark job.
     #
-    # This job publishes criterion results as a 90-day artifact, and
-    # deploy-docs.yml publishes the same benchmarks to the docs performance
-    # page. Timings are only comparable against timings measured on the same
-    # hardware, so moving the runner would silently break every historical
-    # comparison in exchange for no speedup worth having: criterion's
-    # measurement loop is single-threaded, and extra cores would only shorten
-    # the build that precedes it.
+    # These two jobs publish comparable numbers -- this one as a 90-day
+    # artifact, the other to the docs performance page -- so they must always
+    # name the SAME runner. Criterion's measurement loop is single-threaded,
+    # so cores buy nothing here beyond the build that precedes it; 2x is the
+    # cheapest label that keeps the two aligned.
     #
-    # The benchmark job in deploy-docs.yml stays on ubuntu-latest for the same
-    # reason. If these ever move, both must move together, in one commit, and
-    # the baseline discontinuity must be recorded in CHANGELOG.md.
-    runs-on: ubuntu-latest
+    # These moved off ubuntu-latest on 2026-08-08 (CHANGELOG: benchmark
+    # baseline discontinuity). Numbers from before that date were measured on
+    # GitHub-hosted hardware and are NOT comparable with numbers after it. If
+    # these ever move again, both must move together, in one commit, and the
+    # discontinuity must be recorded in CHANGELOG.md again.
+    runs-on: warp-ubuntu-latest-x64-2x
     timeout-minutes: 30
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [test]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          cache-provider: warpbuild
+          shared-key: metrics
       - name: Run benchmarks
         run: cargo bench --bench integration_benchmarks --bench parse_benchmarks
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
