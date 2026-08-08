@@ -2456,6 +2456,37 @@ class RefreshWorktreeTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("Not possible to fast-forward", message)
 
+    @patch("model_fix_loop.subprocess.run")
+    def test_fetches_before_merging(self, mock_run):
+        # Without a fetch this is a silent no-op that LOOKS like a working
+        # refresh: origin/main only advances when something fetches it, so
+        # merging onto it fast-forwards to whatever this worktree last saw
+        # -- for a long-lived worker, the commit it started on. The merge
+        # still returns 0 and prints "Already up to date". That is how 606
+        # of 928 tracked tags ended up already merged upstream and still
+        # being retried, so the fetch is load-bearing, not hygiene.
+        mock_run.return_value = MagicMock(returncode=0, stdout="Already up to date.\n", stderr="")
+        ok, _ = refresh_worktree(Path("/fake/repo"), "origin/main")
+        self.assertTrue(ok)
+        commands = [call.args[0] for call in mock_run.call_args_list]
+        self.assertEqual(commands[0][:2], ["git", "fetch"])
+        self.assertEqual(commands[-1], ["git", "merge", "--ff-only", "origin/main"])
+
+    @patch("model_fix_loop.subprocess.run")
+    def test_fetch_failure_is_reported_but_not_fatal(self, mock_run):
+        # The network is allowed to be down; refusing to work because of it
+        # would be a worse failure than the staleness. But a refresh that
+        # silently did nothing is exactly what we are fixing, so say so.
+        def fake(cmd, **_kwargs):
+            if cmd[:2] == ["git", "fetch"]:
+                return MagicMock(returncode=1, stdout="", stderr="fatal: unable to access remote\n")
+            return MagicMock(returncode=0, stdout="Already up to date.\n", stderr="")
+        mock_run.side_effect = fake
+        ok, message = refresh_worktree(Path("/fake/repo"), "origin/main")
+        self.assertTrue(ok)
+        self.assertIn("fetch failed", message)
+        self.assertIn("may be stale", message)
+
 
 class FileContentAtHeadTests(unittest.TestCase):
     @patch("model_fix_loop.subprocess.run")

@@ -1517,12 +1517,33 @@ def refresh_worktree(repo_root, base_ref):
     rare case where that assumption doesn't hold), skip the refresh for
     this round rather than risk a real merge conflict deep inside a
     retry loop -- the next round tries again.
+
+    The fetch is not optional. A remote-tracking ref like origin/main only
+    advances when something fetches it, so merging onto it without one
+    fast-forwards to whatever this worktree last saw -- which for a
+    long-lived worker is the commit it started on. That is a silent no-op
+    that looks exactly like a working refresh in the logs: the merge
+    succeeds, reports "Already up to date", and the worker goes on
+    measuring against a snapshot that is hours stale. A fetch failure is
+    NOT fatal here -- the network is allowed to be down -- but it must be
+    reported, because a refresh that quietly did nothing is how 606 of 928
+    tracked tags ended up already-merged upstream and still being retried.
     """
+    fetch = subprocess.run(  # nosec B603
+        ["git", "fetch", "origin", "--quiet"],
+        cwd=repo_root, capture_output=True, text=True,
+    )
     result = subprocess.run(  # nosec B603
         ["git", "merge", "--ff-only", base_ref],
         cwd=repo_root, capture_output=True, text=True,
     )
-    return result.returncode == 0, (result.stdout + result.stderr).strip()
+    message = (result.stdout + result.stderr).strip()
+    if fetch.returncode != 0:
+        fetch_err = (fetch.stdout + fetch.stderr).strip()
+        message = (
+            f"{message} [warning: fetch failed, so {base_ref} may be stale: {fetch_err}]"
+        ).strip()
+    return result.returncode == 0, message
 
 
 def file_content_at_head(path, repo_root):
@@ -6534,6 +6555,17 @@ DEFAULT_MAX_TAG_FAILS = 10
 DEFAULT_CLAIM_STALE_SECONDS = 7200
 DEFAULT_HEARTBEAT_SECONDS = 60
 
+# The ref every worker fast-forwards onto before each round, and again after
+# it publishes. Defaulted, not None, because "refresh is available if you ask
+# for it" is not a property a fleet can rely on: a live run went days with
+# --base-ref unset, so refresh_worktree_fn was None and every worker kept
+# measuring against whatever commit it happened to start on. 606 of 928
+# tracked tags (65%) were already fixed and merged upstream while still being
+# re-attempted, and 99 more were blacklisted off a stale binary's output.
+# Staying current is the fleet's correctness property, so it is the default;
+# --base-ref '' opts out for a genuinely standalone run.
+DEFAULT_BASE_REF = "origin/main"
+
 # Keep in sync with parallel_tag_fix_loop.py's own copy of this default --
 # each worker (whether launched directly or via the parallel wrapper)
 # should only ever hold one tag at a time unless config.toml says
@@ -8118,13 +8150,16 @@ def main(argv=None):
              "process's prompt log (process-<id>-prompt.log).",
     )
     parser.add_argument(
-        "--base-ref", default=None,
-        help="Shared branch this worktree was forked from (parallel_tag_fix_loop.py's own "
-             "current branch at startup) -- if given, run_tag_loop fast-forwards this worktree "
-             "onto its latest commits at the start of every round, so a tag retried across many "
-             "rounds doesn't keep comparing against an increasingly stale snapshot while other "
-             "workers merge in fixes elsewhere. Omit for a standalone run with no shared branch "
-             "to refresh against.",
+        "--base-ref", default=DEFAULT_BASE_REF,
+        help="Shared branch this worktree is refreshed against. run_tag_loop fast-forwards "
+             "this worktree onto its latest commits at the start of every round, so a tag "
+             "retried across many rounds doesn't keep comparing against an increasingly stale "
+             "snapshot while other workers merge in fixes elsewhere. Defaults to "
+             f"{DEFAULT_BASE_REF}; pass --base-ref '' to disable for a standalone run with no "
+             "shared branch. Defaulting rather than leaving this None is deliberate -- a live "
+             "fleet ran for days with it unset, so refresh_worktree_fn was None and every "
+             "worker measured against the commit it started on. 606 of 928 tracked tags (65%) "
+             "went stale that way: already fixed and merged upstream, still being re-attempted.",
     )
     parser.add_argument(
         "--tag-state-path", default=str(DEFAULT_TAG_STATE_PATH),

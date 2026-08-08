@@ -147,12 +147,17 @@ DEFAULT_RECUT_STALENESS_SECONDS = 3 * 24 * 3600
 #: the squad branches still carry in pre-merge form. A branch is stale the
 #: moment its content lands upstream by another route, which is a DISTANCE
 #: question, not an age one.
-# Let two ordinary main advances settle, then re-cut before a third independent
-# change can leave every active squad doing validation against stale code.
-# The re-cut path preserves every patch-id-novel consumed commit, so this
-# modestly lower gate trades a little more cheap Git work for avoiding a whole
-# fleet of stale merge bases.
-DEFAULT_RECUT_BEHIND_COMMITS = 2
+# Re-cut on the FIRST main advance, not the second. The re-cut path preserves
+# every patch-id-novel consumed commit, so the only cost of a tighter gate is a
+# little more cheap Git work -- while the cost of a looser one is a whole fleet
+# validating against a merge base that upstream has already moved past.
+#
+# This was 2, meaning a branch could sit a full commit behind and still be
+# considered current. That window is not theoretical: a live run left 606 of 928
+# tracked tags (65%) already fixed and merged upstream while workers kept
+# re-attempting them. Being on the tip is the property that makes the fleet's
+# measurements mean anything, so 1 is the correct gate -- any drift re-cuts.
+DEFAULT_RECUT_BEHIND_COMMITS = 1
 
 ORIGIN_MAIN = "origin/main"
 
