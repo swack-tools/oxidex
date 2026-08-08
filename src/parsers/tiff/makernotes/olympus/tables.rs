@@ -525,6 +525,9 @@ pub static MAIN: &[TagDef] = &[
     TagDef::raw(0x1030, "SceneDetect"),
     TagDef::raw(0x1034, "CompressionRatio"),
     TagDef::lookup(0x1035, "PreviewImageValid", NO_YES),
+    // `IsOffset` -- the walk yields the stored number and the caller adds the
+    // MakerNote's base; see `olympus::absolutise_preview_image_start`.
+    TagDef::raw(0x1036, "PreviewImageStart"),
     TagDef::raw(0x1038, "AFResult"),
     TagDef::lookup(
         0x1039,
@@ -973,6 +976,9 @@ static CS_GRADATION_CONVS: &[ElemConv] = &[
 pub static CAMERA_SETTINGS: &[TagDef] = &[
     TagDef::text(0x0000, "CameraSettingsVersion"),
     TagDef::lookup(0x0100, "PreviewImageValid", NO_YES),
+    // `IsOffset` -- the walk yields the stored number and the caller adds the
+    // MakerNote's base; see `olympus::absolutise_preview_image_start`.
+    TagDef::raw(0x0101, "PreviewImageStart"),
     TagDef::raw(0x0102, "PreviewImageLength"),
     TagDef::lookup(
         0x0200,

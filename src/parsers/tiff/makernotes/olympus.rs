@@ -423,7 +423,11 @@ impl MakerNoteParser for OlympusParser {
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_located(data, byte_order, model, None, tags)
+        self.parse_located(data, byte_order, model, None, tags)?;
+        // The payload alone: no enclosing block, so no file base, so no
+        // reportable `PreviewImageStart`.
+        absolutise_preview_image_start(None, tags);
+        Ok(())
     }
 
     fn parse_with_context(
@@ -443,7 +447,128 @@ impl MakerNoteParser for OlympusParser {
             model,
             ctx.payload_tiff_offset(),
             tags,
+        )?;
+        absolutise_preview_image_start(preview_image_start_base(ctx), tags);
+        Ok(())
+    }
+}
+
+// ============================================================================
+// PreviewImageStart (CameraSettings 0x0101, or Main 0x1036)
+// ============================================================================
+//
+// The directory walk yields this tag as the number stored on disk. Both
+// spellings of it are `IsOffset`:
+//
+// ```text
+// Olympus.pm:1793   0x101 => { #PH                 (Olympus::CameraSettings)
+// Olympus.pm:1794       Name => 'PreviewImageStart',
+// Olympus.pm:1795       Flags => 'IsOffset',
+// Olympus.pm:1121   0x1036 => { #6                 (Olympus::Main)
+// Olympus.pm:1122       Name => 'PreviewImageStart',
+// Olympus.pm:1123       Flags => 'IsOffset',
+// ```
+//
+// so `ProcessExif` rewrites the stored number into a file offset on the way
+// out, adding the directory's own base:
+//
+// ```text
+// Exif.pm:6856      if ($$tagInfo{IsOffset} and eval $$tagInfo{IsOffset}) {
+// Exif.pm:6857          my $offsetBase = $$tagInfo{IsOffset} eq '2' ? $firstBase : $base;
+// Exif.pm:6858          $offsetBase += $$et{BASE};
+// ```
+//
+// `Flags => 'IsOffset'` sets `IsOffset => 1`, not `'2'`, so the base is `$base`
+// -- and which base that is depends on which of the three Olympus MakerNote
+// headers the file carries:
+//
+// ```text
+// MakerNotes.pm:570     Condition => '$$valPt =~ /^(OLYMP|EPSON)\0/',
+// MakerNotes.pm:573         Start => '$valuePtr + 8',    # no Base: inherits the enclosing one
+// MakerNotes.pm:580     Condition => '$$valPt =~ /^OLYMPUS\0/',
+// MakerNotes.pm:583         Start => '$valuePtr + 12',
+// MakerNotes.pm:584         Base => '$start - 12',       # == $valuePtr: the MakerNote's own start
+// MakerNotes.pm:591     Condition => '$$valPt =~ /^OM SYSTEM\0/',
+// MakerNotes.pm:594         Start => '$valuePtr + 16',
+// MakerNotes.pm:595         Base => '$start - 16',       # likewise
+// ```
+//
+// The `"OLYMP\0"` form declares no `Base` and so inherits the enclosing TIFF
+// header's file offset (`MakerNoteContext::tiff_base`); the two re-basing forms
+// resolve against the MakerNote payload's own first byte
+// (`MakerNoteContext::payload_base`). That is the same split
+// `absolutise_is_offset` documents for Pentax's "AOC\0" and "PENTAX \0"
+// headers.
+//
+// Verified against ExifTool 13.59 on all 200 sample-corpus files it reports
+// this tag for: stored value + the base above reproduces its number on every
+// one, across 179 distinct values, so no single arithmetic coincidence explains
+// it. 159 are Type 2, 35 Type 1 and 5 Type 3 ("OM SYSTEM\0"), all reaching the
+// tag through `CameraSettings` 0x0101, plus `OlympusE20.jpg`, which predates the
+// `CameraSettings` sub-directory and carries `Main` 0x1036 instead. A scan of
+// all 4,085 corpus JPEGs finds those two entries in exactly those 200 files and
+// no others, so reading them emits nothing ExifTool does not report.
+//
+// Not handled: `Olympus::Main` 0x0088 (Olympus.pm:649), a third `IsOffset`
+// spelling of the same tag. No corpus file carries it -- had one, ExifTool would
+// report the tag there and the file would be among the 200 -- so there is
+// nothing to check a base against, and an unverified third case is a guess.
+
+/// Key the two `PreviewImageStart` table entries land under.
+const PREVIEW_IMAGE_START: &str = "Olympus:PreviewImageStart";
+
+/// The file offset `PreviewImageStart` is measured from, or `None` when it
+/// cannot be established.
+///
+/// A detached context is only the MakerNote bytes -- there is no enclosing
+/// block, so both bases read 0 and neither is the file position of anything.
+/// See [`absolutise_preview_image_start`] for why that is `None` rather than a
+/// zero base.
+fn preview_image_start_base(
+    ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+) -> Option<u64> {
+    if !ctx.is_located() {
+        return None;
+    }
+    let payload = ctx.payload();
+    // The same header classification `detect_header_type_and_offsets` makes,
+    // because it is the classification that decides the base.
+    let rebases_onto_itself = payload.starts_with(OLYMPUS_HEADER)
+        || payload.starts_with(OLYMPUS_HEADER_BE)
+        || payload.starts_with(OLYMPUS_HEADER_TYPE3);
+    Some(if rebases_onto_itself {
+        ctx.payload_base()
+    } else {
+        ctx.tiff_base()
+    })
+}
+
+/// Turns the stored `PreviewImageStart` into the absolute file offset ExifTool
+/// prints, or drops it.
+///
+/// A `base` of `None` means the MakerNote's position in the file is unknown, and
+/// then the stored number is not reportable: a MakerNote-relative value printed
+/// under this name is a confidently wrong file offset rather than a missing tag,
+/// and nothing downstream can tell the two apart. `Nikon::parse_preview_ifd`
+/// withholds its own `PreviewImageStart` on the same grounds.
+///
+/// `Some(0)` is a real base, not a missing one -- a MakerNote inside a
+/// standalone TIFF has its header at file offset 0, and there the stored value
+/// already is the absolute one.
+fn absolutise_preview_image_start(base: Option<u64>, tags: &mut HashMap<String, String>) {
+    let absolute = base
+        .zip(
+            tags.get(PREVIEW_IMAGE_START)
+                .and_then(|stored| stored.parse::<u64>().ok()),
         )
+        .and_then(|(base, stored)| stored.checked_add(base));
+    match absolute {
+        Some(value) => {
+            tags.insert(PREVIEW_IMAGE_START.to_string(), value.to_string());
+        }
+        None => {
+            tags.remove(PREVIEW_IMAGE_START);
+        }
     }
 }
 
@@ -1637,6 +1762,131 @@ mod olympus_preview_image_tests {
         assert_eq!(
             metadata.get("MakerNotes:PreviewImage"),
             Some(&TagValue::new_binary(cs_bytes))
+        );
+    }
+
+    /// `OlympusE-3.jpg`, reproduced number for number.
+    ///
+    /// `exiftool -a -G1 -s` (13.59, the pinned release):
+    ///
+    /// ```text
+    /// [Olympus]       PreviewImageValid               : Yes
+    /// [Olympus]       PreviewImageStart               : 4187360
+    /// [Olympus]       PreviewImageLength              : 408906
+    /// ```
+    ///
+    /// and `exiftool -v3` on the same file shows what is actually on disk --
+    /// 0x3fd794 = 4183956, 3404 less than the number printed above:
+    ///
+    /// ```text
+    ///   | | | | 2)  PreviewImageStart = 4183956
+    ///   | | | |     - Tag 0x0101 (4 bytes, int32u[1]):
+    ///   | | | |         0eee: 94 d7 3f 00                                     [..?.]
+    /// ```
+    ///
+    /// 3404 is where the `"OLYMPUS\0II"` MakerNote starts in the file (TIFF
+    /// header at 12 + payload at 3392), which is what `Base => '$start - 12'`
+    /// resolves to. The synthetic block below places a Type 2 MakerNote at
+    /// exactly those coordinates.
+    #[test]
+    fn camera_settings_preview_image_start_is_the_absolute_file_offset() {
+        let payload_offset = 3392usize;
+        let tiff = build_tiff_with_olympus_camera_settings_preview(
+            payload_offset,
+            1,
+            408_906,
+            4_183_956,
+            None,
+            None,
+        );
+        let payload_len = tiff.len() - payload_offset;
+        let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 12);
+
+        let mut tags = HashMap::new();
+        OlympusParser
+            .parse_with_context(&ctx, ByteOrder::LittleEndian, None, &mut tags)
+            .unwrap();
+
+        assert_eq!(
+            tags.get("Olympus:PreviewImageStart").map(String::as_str),
+            Some("4187360")
+        );
+        // The sibling tags are not offsets and must be untouched by the
+        // absolutisation.
+        assert_eq!(
+            tags.get("Olympus:PreviewImageLength").map(String::as_str),
+            Some("408906")
+        );
+        assert_eq!(
+            tags.get("Olympus:PreviewImageValid").map(String::as_str),
+            Some("Yes")
+        );
+    }
+
+    /// Identical bytes with no enclosing block: the stored 4183956 is a
+    /// MakerNote-relative number, not the 4187360 ExifTool prints, so it is
+    /// withheld rather than reported 3404 bytes wrong.
+    #[test]
+    fn a_detached_makernote_withholds_preview_image_start() {
+        let payload_offset = 3392usize;
+        let tiff = build_tiff_with_olympus_camera_settings_preview(
+            payload_offset,
+            1,
+            408_906,
+            4_183_956,
+            None,
+            None,
+        );
+        let ctx = MakerNoteContext::detached(&tiff[payload_offset..]);
+
+        let mut tags = HashMap::new();
+        OlympusParser
+            .parse_with_context(&ctx, ByteOrder::LittleEndian, None, &mut tags)
+            .unwrap();
+
+        assert!(!tags.contains_key("Olympus:PreviewImageStart"));
+        // Everything that is not an offset still comes through.
+        assert_eq!(
+            tags.get("Olympus:PreviewImageLength").map(String::as_str),
+            Some("408906")
+        );
+    }
+
+    /// Which base each of the three Olympus MakerNote headers resolves against,
+    /// with the corpus file that pins each one down. The context below puts the
+    /// TIFF header at file offset 12 and the payload 3392 bytes further on, so
+    /// `tiff_base` is 12 and `payload_base` 3404 -- two numbers a wrong choice
+    /// cannot land on by accident.
+    ///
+    /// * `"OLYMPUS\0"` -- `OlympusE-3.jpg`: stored 4183956, ExifTool prints
+    ///   4187360, and the MakerNote begins at file offset 3404.
+    /// * `"OM SYSTEM\0"` -- `OlympusOM-1.jpg`: stored 10768072, ExifTool prints
+    ///   10773632, and the MakerNote begins at file offset 5560.
+    /// * `"OLYMP\0"` -- `OlympusE-400.jpg`: stored 0, ExifTool prints 12, which
+    ///   is the TIFF header's own file offset and not any MakerNote's position.
+    #[test]
+    fn preview_image_start_base_follows_the_header_form() {
+        fn base_for(signature: &[u8]) -> Option<u64> {
+            let mut tiff = vec![0u8; 3392];
+            tiff.extend_from_slice(signature);
+            tiff.resize(3392 + 64, 0);
+            let ctx = MakerNoteContext::in_tiff(&tiff, 3392, 64, 12);
+            assert_eq!(ctx.tiff_base(), 12);
+            assert_eq!(ctx.payload_base(), 3404);
+            preview_image_start_base(&ctx)
+        }
+
+        assert_eq!(base_for(b"OLYMPUS\0II\x03\x00"), Some(3404));
+        assert_eq!(base_for(b"OLYMPUS\0MM\x00\x03"), Some(3404));
+        assert_eq!(base_for(b"OM SYSTEM\0\0\0II\x03\x00"), Some(3404));
+        assert_eq!(base_for(b"OLYMP\0\x01\x00"), Some(12));
+
+        // No enclosing block means no base at all, which is not the same as a
+        // base of zero.
+        let payload = b"OLYMPUS\0II\x03\x00".to_vec();
+        assert_eq!(
+            preview_image_start_base(&MakerNoteContext::detached(&payload)),
+            None
         );
     }
 }
