@@ -5,6 +5,7 @@
 
 pub mod audio_encoding;
 pub mod cfa_pattern;
+pub mod composite_image_exposure_times;
 pub mod duration;
 pub mod exif_enums;
 pub mod exif_print_conv;
@@ -25,6 +26,7 @@ pub mod ycbcr_subsampling;
 // Re-export main formatting functions for convenience
 pub use audio_encoding::audio_encoding_name;
 pub use cfa_pattern::decode_cfa_pattern;
+pub use composite_image_exposure_times::format_composite_image_exposure_times;
 pub use duration::convert_duration;
 pub use exif_enums::{
     file_source_label, file_source_label_bytes, format_color_space,

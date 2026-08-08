@@ -4,6 +4,7 @@
 //! processing tags, and handling sub-IFDs (EXIF, GPS), MakerNotes, and GeoTiff.
 
 use super::{FileReader, MetadataMap, TagValue};
+use crate::core::formatters::composite_image_exposure_times::format_composite_image_exposure_times;
 use crate::core::operations_helpers::read_u32;
 use crate::core::tag_conversion::{
     apply_tile_offsets_value_conv, gps_coordinate_degrees, raw_bytes_to_tag_value,
@@ -559,6 +560,18 @@ fn process_tiff_ifd_tags<'a>(
         // MakerNote tables whose values are not ColorMap payloads.
         let tag_value = if tag_name.rsplit(':').next() == Some("ColorMap") {
             TagValue::Binary(bytes.to_vec())
+        } else if tag_name.rsplit(':').next() == Some("CompositeImageExposureTimes") {
+            // Exif.pm 0xa462 has no static byte layout for `find_table` to
+            // carry: its RawConv (Exif.pm:3079-3095) is a Perl closure that
+            // switches field type mid-buffer -- seven rational64u fields,
+            // then two int16u counts, then more rational64u fields -- and
+            // its PrintConv (Exif.pm:3106-3116) runs each exposure-time
+            // field through PrintExposureTime. Both steps need this IFD's
+            // byte order, which `format_tag_value` (exiftool_compat.rs)
+            // never receives, so they run fused, here, producing the final
+            // display string directly instead of leaving an opaque
+            // `TagValue::Binary` for a later stage that cannot decode it.
+            TagValue::String(format_composite_image_exposure_times(bytes, byte_order))
         } else {
             raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order)
         };
@@ -760,8 +773,22 @@ pub fn parse_exif_subifd(
                 continue;
             }
 
-            let tag_value =
-                raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order);
+            // Exif.pm 0xa462 (CompositeImageExposureTimes) has no static byte
+            // layout for `find_table` to carry: its RawConv (Exif.pm:3079-3095)
+            // is a Perl closure that switches field type mid-buffer -- seven
+            // rational64u fields, then two int16u counts, then more
+            // rational64u fields -- and its PrintConv (Exif.pm:3106-3116) runs
+            // each exposure-time field through PrintExposureTime. Both steps
+            // need this IFD's byte order, which `format_tag_value`
+            // (exiftool_compat.rs) never receives, so they run fused, here,
+            // producing the final display string directly instead of leaving
+            // an opaque `TagValue::Binary` for a later stage that cannot
+            // decode it.
+            let tag_value = if base_name == "CompositeImageExposureTimes" {
+                TagValue::String(format_composite_image_exposure_times(bytes, byte_order))
+            } else {
+                raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order)
+            };
             metadata.insert(tag_name, tag_value);
         }
 
