@@ -192,10 +192,13 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         let normalized = raw.replace(',', " ");
         let parts: Vec<_> = normalized.split_whitespace().collect();
         if parts.is_empty() {
-            return Err(invalid(
-                tag_name,
-                "Expected at least one unsigned 16-bit ISO value",
-            ));
+            // Matches the message every other malformed-integer path in this
+            // module produces (`parse_integer`'s final `Err`). Real ExifTool
+            // never reaches this case from the CLI: `-TAG=` (empty value) is
+            // intercepted as a tag deletion before `CheckValue` runs
+            // (`main.rs`'s `value.is_empty()` branch), so there is no
+            // corresponding ExifTool warning text to match here.
+            return Err(invalid(tag_name, "Not an integer"));
         }
         let values = parts
             .into_iter()
@@ -1423,7 +1426,6 @@ mod tests {
             ("+800", 800),
             ("800.4", 800),
             ("800.5", 801),
-            ("-800.5", -801),
             ("0x320", 800),
             ("320a", 0x320a), // IsHex matches bare hex digits
             ("abc", 0xabc),
@@ -1436,6 +1438,17 @@ mod tests {
                 "input {raw}"
             );
         }
+    }
+
+    #[test]
+    fn integer_rejects_out_of_range_checkvalue_rejects() {
+        // Verified against `Image::ExifTool::CheckValue(\$val, "int16u", -1)`:
+        // ISO is unsigned (`Writer.pl:238-248`'s `%intRange` for `int16u` is
+        // `[0, 0xffff]`), so a value that rounds negative is rejected even
+        // though it is a well-formed float — unlike "800.5", which rounds
+        // in-range and is covered above.
+        let err = parse("EXIF:ISO", "-800.5").unwrap_err().to_string();
+        assert!(err.contains("unsigned 16-bit"), "{err}");
     }
 
     #[test]
