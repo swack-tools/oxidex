@@ -959,35 +959,17 @@ impl PanasonicParser {
             _ => {}
         }
 
-        // Accelerometer axes: int16u on the wire, but Format => int16s
-        // overrides how the SHORT is interpreted (Panasonic.pm:1170-1187).
-        // No ValueConv/PrintConv -- the signed value prints as-is.
-        if matches!(tag_id, 0x008C | 0x008D | 0x008E) {
+        // Accelerometer axes and WBShiftAB/WBShiftGM: int16u on the wire, but
+        // Format => int16s overrides how the SHORT is interpreted
+        // (Panasonic.pm:878-889 WBShiftAB/WBShiftGM, :1170-1187 accelerometer
+        // axes). No ValueConv/PrintConv -- the signed value prints as-is. The
+        // Format override means the wire field type (SHORT, unsigned) cannot
+        // tell the generic fallback below to sign-interpret these, so they
+        // stay a hand-picked case like RollAngle/PitchAngle just below.
+        if matches!(tag_id, 0x0046 | 0x0047 | 0x008C | 0x008D | 0x008E) {
             let value = inline_u16_value(entry, byte_order) as i16;
             if let Some(tag_name) = registry.get_tag_name(tag_id) {
                 tags.insert(format!("Panasonic:{}", tag_name), value.to_string());
-            }
-            return;
-        }
-
-        // These tags are int16u. A big-endian inline SHORT occupies the high
-        // half of `value_offset`, so the generic u32 registry path would decode
-        // 1 as 65536. 0x0076 MergedImages is int16u with no PrintConv
-        // (Panasonic.pm:1089-1093), so `decode_i32` hands the number straight
-        // back -- it is here only for the byte-order-correct read. No corpus
-        // file needs it today: `MakerNotePanasonic` is `ByteOrder => 'Unknown'`
-        // and every corpus directory resolves little-endian, even in the nine
-        // files whose enclosing EXIF is big-endian. It is the cheap side of an
-        // asymmetric bet -- on a big-endian directory the u32 path would print
-        // 196608 for a reading of 3, and a wrong number under a real tag name
-        // is not detectable downstream the way a missing tag is.
-        if matches!(tag_id, 0x0027 | 0x0038 | 0x0043 | 0x0076 | 0x8002 | 0x8003) {
-            let value = i32::from(inline_u16_value(entry, byte_order));
-            if let Some(tag_name) = registry.get_tag_name(tag_id) {
-                tags.insert(
-                    format!("Panasonic:{}", tag_name),
-                    registry.decode_i32(tag_id, value),
-                );
             }
             return;
         }
@@ -1010,10 +992,48 @@ impl PanasonicParser {
 
         // Standard registry-based decoding for enumerated and simple integer tags
         if let Some(tag_name) = registry.get_tag_name(tag_id) {
-            let value = entry.value_offset as i32;
+            let value = inline_scalar_i32(entry, byte_order);
             let decoded = registry.decode_i32(tag_id, value);
             tags.insert(format!("Panasonic:{}", tag_name), decoded);
         }
+    }
+}
+
+/// Byte-order-correct scalar read for the generic registry fallback.
+///
+/// A count==1 SHORT (unsigned, field type 3) stores its 2-byte value in the
+/// first half of the IFD entry's 4-byte value field -- the high half once
+/// parsed as a big-endian u32, the low half once parsed as little-endian.
+/// Reading the whole `value_offset` unconditionally, as the fallback used to,
+/// decodes a big-endian reading of 1 as 65536: on
+/// `combined-samples/Panasonic/PanasonicDMC-LC40.jpg`, whose MakerNote
+/// directory resolves big-endian, `exiftool -G1 -s` reports
+/// `[Panasonic] WhiteBalance : Auto` (tag 0x0003, raw value 1) where the old
+/// fallback printed `Unknown (65536)`.
+///
+/// `MakerNotePanasonic` is `ByteOrder => 'Unknown'` (MakerNotes.pm:733-741),
+/// so any tag reached only through this fallback -- not one of the small set
+/// of tags with a bespoke Format-override case above -- is exposed to this
+/// bug the moment its directory resolves big-endian. Driving the read off
+/// `field_type`/`value_count` instead of a hand-maintained tag list means a
+/// newly registered int16u/int16s tag is byte-order-correct without anyone
+/// having to remember to add it anywhere.
+///
+/// SSHORT (field type 8) count==1 entries are sign-extended after the same
+/// half-selection, matching `inline_u16_value`. Every other field type/count
+/// combination -- LONG/SLONG, or any count > 1 -- already fills the whole
+/// 4-byte value field, which the IFD parser has already decoded using the
+/// directory's byte order, so `value_offset` needs no further adjustment.
+fn inline_scalar_i32(entry: &IfdEntry, byte_order: ByteOrder) -> i32 {
+    if entry.value_count == 1 && matches!(entry.field_type, 3 | 8) {
+        let raw = inline_u16_value(entry, byte_order);
+        if entry.field_type == 8 {
+            i32::from(raw as i16)
+        } else {
+            i32::from(raw)
+        }
+    } else {
+        entry.value_offset as i32
     }
 }
 
@@ -2278,11 +2298,17 @@ mod tests {
     /// and oxidex already prints BurstSpeed 6 there through the plain-u32 path,
     /// which it could only do by reading the directory little-endian.
     ///
-    /// So no corpus file exercises a big-endian Panasonic directory, and this
-    /// fixture is constructed. It is worth having anyway: on such a directory
-    /// the plain-u32 path silently yields 196608 for a reading of 3, which is
-    /// the failure mode that produces a confident wrong number rather than a
-    /// missing tag.
+    /// So no corpus file exercises a big-endian directory for *MergedImages*
+    /// specifically, and this fixture is constructed. But the underlying bug
+    /// is corpus-visible for other tags reached only through the generic
+    /// fallback: see `white_balance_reads_the_high_half_of_a_big_endian_short`
+    /// below, built from real `PanasonicDMC-LC40.jpg` bytes whose MakerNote
+    /// directory does resolve big-endian. It is worth keeping this
+    /// MergedImages case anyway, now exercising the fallback's field-type
+    /// dispatch (`inline_scalar_i32`) rather than a since-removed hand-picked
+    /// tag list: on a big-endian directory the plain-u32 path silently yields
+    /// 196608 for a reading of 3, which is the failure mode that produces a
+    /// confident wrong number rather than a missing tag.
     #[test]
     fn merged_images_reads_the_high_half_of_a_big_endian_short() {
         let mut data = Vec::new();
@@ -2297,6 +2323,144 @@ mod tests {
         let mut tags = HashMap::new();
         parse_panasonic_makernotes(&data, ByteOrder::BigEndian, &mut tags);
         assert_eq!(tags.get("Panasonic:MergedImages").unwrap(), "3");
+    }
+
+    /// `combined-samples/Panasonic/PanasonicDMC-LC40.jpg` carries a real
+    /// big-endian Panasonic MakerNote directory (its entry count, byte 0x0b,
+    /// only parses as a plausible IFD entry count -- 11 -- when read
+    /// big-endian; little-endian gives 2816). Its WhiteBalance entry is tag
+    /// 0x0003, SHORT, count 1, raw bytes `00 01` -- decoded value 1. Pinned
+    /// 13.59's `-v3` on the file shows:
+    ///
+    /// ```text
+    /// 2)  WhiteBalance = 1
+    ///     - Tag 0x0003 (2 bytes, int16u[1]):
+    ///         0424: 00 01                                           [..]
+    /// ```
+    ///
+    /// and `-G1 -s` prints `[Panasonic] WhiteBalance : Auto`.
+    ///
+    /// WhiteBalance is an enum tag (`register_enum_tag_required`), reached
+    /// only through the generic fallback -- it was never in the old
+    /// `matches!` allowlist, unlike MergedImages above. Before
+    /// `inline_scalar_i32`, the fallback read `entry.value_offset` whole:
+    /// `00 01 00 00` parsed big-endian is 65536, and
+    /// `WHITE_BALANCE.decode(65536)` has no match, so oxidex printed
+    /// `Unknown (65536)` where ExifTool prints `Auto`. This is not a
+    /// hypothetical: it is `PanasonicDMC-LC40.jpg`'s pre-fix oxidex output.
+    #[test]
+    fn white_balance_reads_the_high_half_of_a_big_endian_short() {
+        let mut data = Vec::new();
+        data.extend_from_slice(PANASONIC_HEADER);
+        data.extend_from_slice(&1u16.to_be_bytes()); // entry_count
+        data.extend_from_slice(&0x0003u16.to_be_bytes()); // WhiteBalance
+        data.extend_from_slice(&3u16.to_be_bytes()); // SHORT
+        data.extend_from_slice(&1u32.to_be_bytes()); // count
+        data.extend_from_slice(&1u16.to_be_bytes()); // high half: 1 = Auto
+        data.extend_from_slice(&[0, 0]); // low half, unused
+
+        let mut tags = HashMap::new();
+        parse_panasonic_makernotes(&data, ByteOrder::BigEndian, &mut tags);
+        assert_eq!(tags.get("Panasonic:WhiteBalance").unwrap(), "Auto");
+    }
+
+    /// WBShiftAB/WBShiftGM (0x0046/0x0047) are `Writable => 'int16u'` but
+    /// `Format => 'int16s'` overrides the read (Panasonic.pm:878-889): the
+    /// wire field type is unsigned SHORT, so the generic fallback's
+    /// field-type dispatch cannot tell them apart from a plain int16u tag --
+    /// they stay a hand-picked case (`matches!(tag_id, 0x0046 | 0x0047 | ...)`)
+    /// rather than folding into `inline_scalar_i32`.
+    ///
+    /// `combined-samples/Panasonic/PanasonicDMC-G3.jpg` (little-endian
+    /// MakerNote) has both non-zero: pinned 13.59's `-v3` shows
+    ///
+    /// ```text
+    /// 45) WBShiftAB = 6
+    ///     - Tag 0x0046 (2 bytes, int16u[1] read as int16s[1]):
+    ///         06ba: 06 00                                           [..]
+    /// 46) WBShiftGM = -3
+    ///     - Tag 0x0047 (2 bytes, int16u[1] read as int16s[1]):
+    ///         06c6: fd ff                                           [..]
+    /// ```
+    ///
+    /// and `-G1 -s` prints `WBShiftAB : 6`, `WBShiftGM : -3`. WBShiftGM's
+    /// `fd ff` is exactly the byte pattern the generic fallback would widen to
+    /// 65533 if it treated the field as unsigned, so this also proves the
+    /// sign-extension half of the fix, independent of byte order.
+    #[test]
+    fn wb_shift_reads_int16s_format_override_on_int16u_wire() {
+        let mut data = Vec::new();
+        data.extend_from_slice(PANASONIC_HEADER);
+        data.extend_from_slice(&2u16.to_le_bytes()); // entry_count
+        data.extend_from_slice(&0x0046u16.to_le_bytes()); // WBShiftAB
+        data.extend_from_slice(&3u16.to_le_bytes()); // SHORT
+        data.extend_from_slice(&1u32.to_le_bytes()); // count
+        data.extend_from_slice(&6u16.to_le_bytes());
+        data.extend_from_slice(&[0, 0]);
+        data.extend_from_slice(&0x0047u16.to_le_bytes()); // WBShiftGM
+        data.extend_from_slice(&3u16.to_le_bytes()); // SHORT
+        data.extend_from_slice(&1u32.to_le_bytes()); // count
+        data.extend_from_slice(&0xFFFDu16.to_le_bytes()); // -3 as u16
+        data.extend_from_slice(&[0, 0]);
+
+        let mut tags = HashMap::new();
+        parse_panasonic_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
+        assert_eq!(tags.get("Panasonic:WBShiftAB").unwrap(), "6");
+        assert_eq!(tags.get("Panasonic:WBShiftGM").unwrap(), "-3");
+    }
+
+    /// Unit-level coverage of `inline_scalar_i32` itself, complementing the
+    /// end-to-end fixtures above: SSHORT (field type 8) count-1 entries must
+    /// sign-extend after the same half-selection `inline_u16_value` performs,
+    /// and any entry that isn't a count-1 SHORT/SSHORT (a LONG, or a count > 1
+    /// array) must pass `value_offset` through unchanged -- the IFD parser
+    /// already decoded that full 4-byte field using the directory's byte
+    /// order, so no half-selection is needed.
+    #[test]
+    fn test_inline_scalar_i32() {
+        // Big-endian SSHORT count 1, negative: high half sign-extends.
+        let be_sshort = IfdEntry {
+            tag_id: 0x00,
+            field_type: 8,
+            value_count: 1,
+            value_offset: 0xFFFD_0000,
+        };
+        assert_eq!(inline_scalar_i32(&be_sshort, ByteOrder::BigEndian), -3);
+
+        // Little-endian SSHORT count 1, negative: low half sign-extends.
+        let le_sshort = IfdEntry {
+            tag_id: 0x00,
+            field_type: 8,
+            value_count: 1,
+            value_offset: 0x0000_FFFD,
+        };
+        assert_eq!(inline_scalar_i32(&le_sshort, ByteOrder::LittleEndian), -3);
+
+        // A LONG (field type 4) fills the whole 4-byte field regardless of
+        // count; value_offset passes through unchanged.
+        let long_entry = IfdEntry {
+            tag_id: 0x00,
+            field_type: 4,
+            value_count: 1,
+            value_offset: 0x0001_0000,
+        };
+        assert_eq!(
+            inline_scalar_i32(&long_entry, ByteOrder::BigEndian),
+            0x0001_0000
+        );
+
+        // A SHORT with count > 1 is an out-of-line array, not an inline
+        // scalar; value_offset (the pointer) passes through unchanged.
+        let short_array = IfdEntry {
+            tag_id: 0x00,
+            field_type: 3,
+            value_count: 2,
+            value_offset: 0x0000_1234,
+        };
+        assert_eq!(
+            inline_scalar_i32(&short_array, ByteOrder::BigEndian),
+            0x0000_1234
+        );
     }
 
     /// `combined-samples/Panasonic/PanasonicDC-FZ80.jpg`'s MakerNote: every
