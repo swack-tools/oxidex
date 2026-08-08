@@ -187,9 +187,15 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         return Ok(TagValue::String(value.to_string()));
     }
 
-    // Exif.pm 13.59 0x8827 declares ISO as a variable-count int16u list.
+    // Exif.pm 13.59 0x8827 declares ISO as a variable-count int16u list
+    // (`Writable => 'int16u'`, `Count => -1`), reached through
+    // `PrintConvInv => '$val=~tr/,//d'`.
     if matches!(leaf, Some("ISO")) {
-        let normalized = raw.replace(',', " ");
+        // `tr/,//d` *deletes* commas, it does not turn them into separators.
+        // "100, 200" is two values because of the space the comma left behind,
+        // but "100,200" collapses into the single value 100200, which then
+        // fails the int16u range check below.
+        let normalized: String = raw.chars().filter(|character| *character != ',').collect();
         let parts: Vec<_> = normalized.split_whitespace().collect();
         if parts.is_empty() {
             return Err(invalid(
@@ -197,10 +203,23 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
                 "Expected at least one unsigned 16-bit ISO value",
             ));
         }
+        // `CheckValue` rounds a fractional value only when it is the whole
+        // value: `return 'Not an integer' unless IsFloat($val) and $count == 1`
+        // (Writer.pl:6896-6898), and `Count => -1` sets `$count` to the number
+        // of values supplied (Writer.pl:6880). So "800.5" is stored as 801
+        // while "800.5 900" is rejected outright. `IsInt`/`IsHex` carry no such
+        // restriction.
+        let rounding_allowed = parts.len() == 1;
         let values = parts
             .into_iter()
             .map(|part| {
+                if !rounding_allowed && !is_int(part) && !is_hex(part) {
+                    return Err(invalid(tag_name, "Not an integer"));
+                }
                 let value = parse_integer(tag_name, part)?;
+                // `%intRange` int16u is [0, 0xffff] (Writer.pl:241); a value
+                // outside it is "Value below/above int16u maximum" and nothing
+                // is written.
                 if !(0..=u16::MAX as i64).contains(&value) {
                     return Err(invalid(tag_name, "ISO value does not fit unsigned 16-bit"));
                 }
@@ -1415,9 +1434,17 @@ mod tests {
 
     // -- Integer, Writer.pl:6873-6883 --------------------------------------
 
+    // These two pin the *generic* int branch, which deliberately does no range
+    // checking (see [`parse_integer`]), so the vehicle has to be a tag that
+    // adds none of its own. EXIF:ISO is not one: Exif.pm 0x8827 is int16u, so
+    // it rejects the negative half of the rounding rule. Exif.pm 0x882a
+    // TimeZoneOffset is int16s and carries no PrintConv, so every form below
+    // survives to the stored value.
+
     #[test]
     fn integer_accepts_every_form_checkvalue_accepts() {
-        // Verified against `exiftool -ExifIFD:ISO=<v>` + `-n` read-back.
+        // Verified against `exiftool -EXIF:TimeZoneOffset=<v>` + `-n`
+        // read-back, ExifTool 13.59 (the pinned .exiftool-version).
         let cases = [
             ("800", 800),
             ("+800", 800),
@@ -1430,7 +1457,7 @@ mod tests {
         ];
         for (raw, want) in cases {
             assert_eq!(
-                parse("EXIF:ISO", raw).unwrap(),
+                parse("EXIF:TimeZoneOffset", raw).unwrap(),
                 TagValue::Integer(want),
                 "input {raw}"
             );
@@ -1440,9 +1467,14 @@ mod tests {
     #[test]
     fn integer_rejects_what_checkvalue_rejects() {
         for raw in ["zz", "12:30", "1/2", "hello world"] {
-            let err = parse("EXIF:ISO", raw).unwrap_err().to_string();
+            let err = parse("EXIF:TimeZoneOffset", raw).unwrap_err().to_string();
             assert!(err.contains("Not an integer"), "input {raw}: {err}");
         }
+        // Not a CheckValue case: `-TAG=` is a delete, intercepted in `main.rs`
+        // before it reaches this module. Rejecting it is this module's own
+        // guard against an empty value arriving by another route.
+        let err = parse("EXIF:TimeZoneOffset", "").unwrap_err().to_string();
+        assert!(err.contains("Not an integer"), "empty input: {err}");
     }
 
     /// ISO is unsigned, so a negative magnitude is out of range rather than
@@ -2326,15 +2358,38 @@ mod tests {
 
     #[test]
     fn iso_accepts_variable_count_unsigned_short_lists() {
+        // Verified against `exiftool -ExifIFD:ISO=<v>` + `-n` read-back,
+        // ExifTool 13.59.
         assert_eq!(
             parse("ExifIFD:ISO", "100, 200").unwrap(),
+            TagValue::new_array(vec![TagValue::new_integer(100), TagValue::new_integer(200)])
+        );
+        assert_eq!(
+            parse("ExifIFD:ISO", "100 200").unwrap(),
             TagValue::new_array(vec![TagValue::new_integer(100), TagValue::new_integer(200)])
         );
         assert_eq!(
             parse("ExifIFD:ISO", "400").unwrap(),
             TagValue::new_integer(400)
         );
+        assert_eq!(
+            parse("ExifIFD:ISO", "65535").unwrap(),
+            TagValue::new_integer(65535)
+        );
+        // PrintConvInv is `tr/,//d`, so a comma with no space beside it joins
+        // its neighbours rather than separating them: 100200 is one value, and
+        // one that does not fit int16u.
+        assert!(parse("ExifIFD:ISO", "100,200").is_err());
+        // int16u range, both ends.
         assert!(parse("ExifIFD:ISO", "65536").is_err());
+        assert!(parse("ExifIFD:ISO", "-1").is_err());
+        assert!(parse("ExifIFD:ISO", "-800.5").is_err());
+        // CheckValue rounds a fraction only when it is the sole value.
+        assert_eq!(
+            parse("ExifIFD:ISO", "800.5").unwrap(),
+            TagValue::new_integer(801)
+        );
+        assert!(parse("ExifIFD:ISO", "800.5 900").is_err());
     }
 
     #[test]
