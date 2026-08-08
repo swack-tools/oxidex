@@ -44,6 +44,25 @@ pub fn read_signature(data: &[u8], offset: usize) -> Result<String> {
     Ok(s.trim_matches('\0').trim().to_string())
 }
 
+/// Reads a 4-byte signature exactly as ExifTool's `string[4]` format does:
+/// truncated at the first null byte, but with padding spaces preserved.
+///
+/// ExifTool's `ReadValue` only truncates string values at a null terminator
+/// (`s/\0.*//s`); it never strips trailing spaces. Several ICC signatures
+/// (e.g. `RGB `, `XYZ `) are space-padded by spec and ExifTool reports them
+/// with the padding intact.
+pub fn read_signature_raw(data: &[u8], offset: usize) -> Result<String> {
+    let reader = EndianReader::big_endian(data);
+    let bytes = reader
+        .bytes_at(offset, 4)
+        .ok_or_else(|| ExifToolError::parse_error("Offset out of bounds"))?;
+    let s = String::from_utf8_lossy(bytes);
+    Ok(match s.find('\0') {
+        Some(pos) => s[..pos].to_string(),
+        None => s.to_string(),
+    })
+}
+
 /// Reads a signed 15.16 fixed-point number and converts to f64
 ///
 /// The format stores values as a 32-bit signed integer where:

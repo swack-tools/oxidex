@@ -3,7 +3,9 @@
 //! This module contains functions for extracting metadata fields from the
 //! 128-byte ICC profile header.
 
-use super::binary::{read_s15fixed16, read_signature, read_u16_be, read_u32_be, read_u64_be};
+use super::binary::{
+    read_s15fixed16, read_signature, read_signature_raw, read_u16_be, read_u32_be, read_u64_be,
+};
 use super::registries::{
     CMM_TYPES, HeaderField, MANUFACTURERS, PLATFORMS, PROFILE_CLASSES, RENDERING_INTENTS,
     lookup_in_table,
@@ -176,12 +178,15 @@ fn extract_profile_class(
 }
 
 /// Extracts color space from header
+///
+/// ExifTool has no PrintConv for this field and reports the raw `string[4]`
+/// value verbatim, including ICC-spec space padding (e.g. `"RGB "`, `"XYZ "`).
 fn extract_color_space(
     data: &[u8],
     offset: usize,
     metadata: &mut HashMap<String, TagValue>,
 ) -> Result<()> {
-    let color_space = read_signature(data, offset)?.trim().to_string();
+    let color_space = read_signature_raw(data, offset)?;
     metadata.insert(
         "ColorSpaceData".to_string(),
         TagValue::new_string(color_space),
@@ -190,8 +195,11 @@ fn extract_color_space(
 }
 
 /// Extracts Profile Connection Space from header
+///
+/// ExifTool has no PrintConv for this field and reports the raw `string[4]`
+/// value verbatim, including ICC-spec space padding (e.g. `"RGB "`, `"XYZ "`).
 fn extract_pcs(data: &[u8], offset: usize, metadata: &mut HashMap<String, TagValue>) -> Result<()> {
-    let pcs = read_signature(data, offset)?.trim().to_string();
+    let pcs = read_signature_raw(data, offset)?;
     metadata.insert(
         "ProfileConnectionSpace".to_string(),
         TagValue::new_string(pcs),
@@ -452,10 +460,7 @@ fn extract_profile_id(
     if data.len() >= offset + 16 {
         let id_bytes = &data[offset..offset + 16];
         if id_bytes.iter().all(|&b| b == 0) {
-            metadata.insert(
-                "ProfileID".to_string(),
-                TagValue::new_string("0".to_string()),
-            );
+            metadata.insert("ProfileID".to_string(), TagValue::new_integer(0));
         } else {
             let id_hex = id_bytes
                 .iter()
