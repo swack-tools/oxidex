@@ -95,10 +95,18 @@ check-all:
     @echo "Checking project with all features..."
     cargo check --workspace --all-features
 
+# Reject tests that read the pinned sample corpus without gating on its
+# presence. The corpus is a local developer cache, absent on CI and in fresh
+# clones, so an unguarded read passes here and panics there -- and because
+# nextest is fail-fast, one panic aborts the whole suite.
+check-corpus-guards:
+    @python3 tools/ci/check-corpus-guards.py
+
 # Run clippy linter (dev profile)
 lint:
     @echo "Running clippy (dev profile)..."
     cargo clippy --all-features -- -D warnings
+    @just check-corpus-guards
 
 # Run clippy linter (release profile - shares artifacts with build-release)
 lint-release:
