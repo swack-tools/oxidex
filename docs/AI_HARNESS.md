@@ -344,7 +344,7 @@ correct; none of them substitutes for another.
 
 | Figure | Value | What it measures |
 | --- | --- | --- |
-| Repo-wide definitions count | **16,684 tag definitions** (no parity ratio — see [AGENTS.md](../AGENTS.md#closing-an-exiftool-coverage-gap)) | Tags known to the OxiDex tag database, across 140+ formats |
+| Repo-wide definitions count | **16,684 tag definitions** (no parity ratio — see AGENTS.md, "Closing an ExifTool coverage gap") | Tags known to the OxiDex tag database, across 140+ formats |
 | Live comparison snapshot | **738 of 1,511 tags = 48.8%** | 13 formats, one sample file each, `/tmp/fin_*.json` generated 2026-07-31T01:19Z |
 | Full-corpus audit (JPEG) | **60.8% of tag instances per file**, median file **84.3%** | 4,085 JPEGs, PR #203 |
 
