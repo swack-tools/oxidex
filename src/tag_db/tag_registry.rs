@@ -7202,8 +7202,8 @@ mod tests {
 
     #[test]
     fn image_number_uses_exiftools_tag_id() {
-        let tag = get_tag_descriptor("EXIF:ImageNumber")
-            .expect("ExifTool defines EXIF ImageNumber");
+        let tag =
+            get_tag_descriptor("EXIF:ImageNumber").expect("ExifTool defines EXIF ImageNumber");
         assert_eq!(tag.id(), &TagId::Numeric(0x9211));
         assert!(tag.is_writable());
         assert_eq!(tag.value_type(), ValueType::Integer);
@@ -7263,8 +7263,8 @@ mod tests {
     /// ExifTool 13.59 Exif.pm 0xa430 declares OwnerName as a writable string.
     #[test]
     fn owner_name_is_a_writable_string() {
-        let tag = get_tag_descriptor("EXIF:OwnerName")
-            .expect("EXIF:OwnerName should be registered");
+        let tag =
+            get_tag_descriptor("EXIF:OwnerName").expect("EXIF:OwnerName should be registered");
         assert!(tag.is_writable());
         assert_eq!(tag.value_type(), ValueType::String);
     }
