@@ -100,6 +100,13 @@ fn test_parse_nef_metadata() {
 
 #[test]
 fn test_nef_jpg_from_raw_is_extracted_from_sub_ifd_pair() {
+    if !std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Nikon.nef").is_file() {
+        eprintln!(
+            "skipping: corpus fixture not present at {}",
+            "/tmp/oxidex-exiftool-cache/combined-samples/Nikon.nef"
+        );
+        return;
+    }
     let fixture_path = "/tmp/oxidex-exiftool-cache/combined-samples/Nikon.nef";
     let Ok(data) = fs::read(fixture_path) else {
         eprintln!("skipping: corpus fixture not present at {fixture_path}");
@@ -142,6 +149,13 @@ fn test_rw2_af_point_position_is_relocated_from_makernote() {
 
 #[test]
 fn nikon_nef_preview_image_start_uses_the_absolute_makernote_offset() {
+    if !std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Nikon.nef").is_file() {
+        eprintln!(
+            "skipping: corpus fixture not present at {}",
+            "/tmp/oxidex-exiftool-cache/combined-samples/Nikon.nef"
+        );
+        return;
+    }
     // ExifTool 13.59: `exiftool -G1 -s -PreviewImageStart Nikon.nef` reports
     // `[PreviewIFD] PreviewImageStart : 5958`. The Nikon PreviewIFD stores
     // 4204 relative to its embedded TIFF header, so this catches dropping the
@@ -164,6 +178,13 @@ fn nikon_nef_preview_image_start_uses_the_absolute_makernote_offset() {
 
 #[test]
 fn nikon_nef_does_not_emit_synthetic_image_layer_count() {
+    if !std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Nikon.nef").is_file() {
+        eprintln!(
+            "skipping: corpus fixture not present at {}",
+            "/tmp/oxidex-exiftool-cache/combined-samples/Nikon.nef"
+        );
+        return;
+    }
     let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/Nikon.nef")
         .expect("pinned Nikon NEF fixture must be available");
 
@@ -177,6 +198,13 @@ fn nikon_nef_does_not_emit_synthetic_image_layer_count() {
 
 #[test]
 fn canon_cr3_image_unique_id_is_lowercase_makernote_hex() {
+    if !std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3").is_file() {
+        eprintln!(
+            "skipping: corpus fixture not present at {}",
+            "/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3"
+        );
+        return;
+    }
     // Canon.pm 0x28 is undef[16] with `unpack("H*", $val)`, except an
     // all-zero UUID is suppressed. This is the real wave-9 residual fixture.
     let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
@@ -192,6 +220,13 @@ fn canon_cr3_image_unique_id_is_lowercase_makernote_hex() {
 
 #[test]
 fn canon_cr3_internal_serial_number_trims_only_trailing_ff_bytes() {
+    if !std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3").is_file() {
+        eprintln!(
+            "skipping: corpus fixture not present at {}",
+            "/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3"
+        );
+        return;
+    }
     // Canon.pm 0x96 is a string; its ValueConv removes trailing 0xff bytes.
     // CanonRaw.cr3 is the wave-10 fixture with this exact value.
     let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
@@ -207,6 +242,13 @@ fn canon_cr3_internal_serial_number_trims_only_trailing_ff_bytes() {
 
 #[test]
 fn canon_cr3_shot_info_camera_temperature_uses_celsius_conversion() {
+    if !std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3").is_file() {
+        eprintln!(
+            "skipping: corpus fixture not present at {}",
+            "/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3"
+        );
+        return;
+    }
     // Canon.pm ShotInfo key 12: RawConv omits zero, then ValueConv subtracts
     // 128 and PrintConv appends ` C`. CanonRaw.cr3 stores raw value 166.
     let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
@@ -219,6 +261,13 @@ fn canon_cr3_shot_info_camera_temperature_uses_celsius_conversion() {
 
 #[test]
 fn canon_cr3_ctmd_exposure_info_masks_iso_high_bit() {
+    if !std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3").is_file() {
+        eprintln!(
+            "skipping: corpus fixture not present at {}",
+            "/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3"
+        );
+        return;
+    }
     // Canon.pm CTMD type 5 -> ExposureInfo index 2: int32u with
     // `ValueConv => '$val & 0x7fffffff'`. CanonRaw.cr3 reports 12800.
     let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
@@ -231,6 +280,13 @@ fn canon_cr3_ctmd_exposure_info_masks_iso_high_bit() {
 
 #[test]
 fn canon_cr3_ctmd_timestamp_uses_canon_pm_packed_datetime() {
+    if !std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3").is_file() {
+        eprintln!(
+            "skipping: corpus fixture not present at {}",
+            "/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3"
+        );
+        return;
+    }
     // Canon.pm CTMD type 1 RawConv is `x2vCCCCCC`: skip two bytes, then
     // little-endian year/month/day/hour/minute/second/centisecond.
     let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
@@ -246,6 +302,13 @@ fn canon_cr3_ctmd_timestamp_uses_canon_pm_packed_datetime() {
 
 #[test]
 fn canon_cr3_af_points_selected_uses_eos_afinfo2_bitset() {
+    if !std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3").is_file() {
+        eprintln!(
+            "skipping: corpus fixture not present at {}",
+            "/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3"
+        );
+        return;
+    }
     // Canon.pm AFInfo2 key 13 reads ceil(NumAFPoints / 16) int16 words after
     // AFPointsInFocus, but only for EOS bodies. CanonRaw.cr3 is an EOS fixture
     // whose selected-points bitset selects point 0, which ExifTool renders as "0".
@@ -259,6 +322,13 @@ fn canon_cr3_af_points_selected_uses_eos_afinfo2_bitset() {
 
 #[test]
 fn canon_cr3_dust_removal_data_preserves_binary_cmt3_payload() {
+    if !std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3").is_file() {
+        eprintln!(
+            "skipping: corpus fixture not present at {}",
+            "/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3"
+        );
+        return;
+    }
     // Canon.pm 0x0097 is `undef` with the Binary flag; CanonRaw.cr3 stores a
     // 1024-byte CMT3 payload, which ExifTool reports only with `-b`.
     let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")

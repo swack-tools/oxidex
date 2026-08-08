@@ -39,6 +39,13 @@ fn dji_zh20n_app4_relative_humidity_matches_exiftool() {
 /// These values are the printed output of the pinned ExifTool 13.59 oracle.
 #[test]
 fn dji_mavic2_app4_thermal_params2_matches_exiftool() {
+    if !std::path::Path::new(DJI_MAVIC2_ENTERPRISE_ADVANCED).is_file() {
+        eprintln!(
+            "skipping: corpus fixture not present at {}",
+            DJI_MAVIC2_ENTERPRISE_ADVANCED
+        );
+        return;
+    }
     let metadata = read_metadata(Path::new(DJI_MAVIC2_ENTERPRISE_ADVANCED))
         .expect("DJI Mavic 2 Enterprise Advanced parses");
 

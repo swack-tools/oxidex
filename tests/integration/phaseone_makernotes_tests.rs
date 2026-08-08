@@ -162,6 +162,13 @@ fn test_phaseone_makernote_parser_trait_implementation() {
 
 #[test]
 fn test_phaseone_iiq_fixture_reachable_via_dispatcher() {
+    if !std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/PhaseOne.iiq").is_file() {
+        eprintln!(
+            "skipping: corpus fixture not present at {}",
+            "/tmp/oxidex-exiftool-cache/combined-samples/PhaseOne.iiq"
+        );
+        return;
+    }
     // Regression: dispatch used to key strictly on Make ("phase one"/"phase
     // one a/s"), so a Leaf-branded (Make: "Leaf") .IIQ carrying this exact
     // signature matched nothing and produced zero PhaseOne: tags. Dispatch
