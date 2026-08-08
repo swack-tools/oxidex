@@ -150,7 +150,7 @@ jobs:
         with:
           cache-on-failure: true
           cache-provider: warpbuild
-          shared-key: test
+          shared-key: workspace
           cache-all-crates: true
       - uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
         with:
@@ -313,7 +313,11 @@ jobs:
         with:
           cache-on-failure: true
           cache-provider: warpbuild
-          shared-key: release-build
+          shared-key: workspace
+          # Read-only: Build & Test writes this entry. Three jobs saving
+          # under one key would race and the last writer would win at
+          # random, making what any of them restores nondeterministic.
+          save-if: false
       # If you add a step here, give it `--all-features` and nothing else.
       #
       # `fixloop`, not `release`. This step exists to prove the release-side
@@ -366,7 +370,11 @@ jobs:
         with:
           cache-on-failure: true
           cache-provider: warpbuild
-          shared-key: doc-tests
+          shared-key: workspace
+          # Read-only: Build & Test writes this entry. Three jobs saving
+          # under one key would race and the last writer would win at
+          # random, making what any of them restores nondeterministic.
+          save-if: false
       # rustdoc is a separate artifact kind, so this compiles once more no
       # matter what. Same feature set regardless, to reuse everything else.
       - name: Run doc tests
