@@ -100,6 +100,16 @@ jobs:
       # is fail-fast one panic aborts the whole suite -- which is how main
       # stayed red for two days looking like a single broken test.
       - run: python3 tools/ci/check-corpus-guards.py
+      # Also pure-Python and buildless. update-coverage-docs rewrites these
+      # numbers on every push to main, so this is not what keeps them correct
+      # -- it is what catches a rule that has STOPPED MATCHING. Each rule
+      # asserts exactly one match, so rewording "It defines N metadata tags"
+      # makes the sync a silent no-op and the number quietly goes stale again,
+      # which is the entire failure this automation replaced. Fix with
+      # `just sync-tag-stats`, or update the rule if the prose changed on
+      # purpose.
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
+      - run: uv run scripts/sync_tag_stats.py --check
       - run: cargo clippy --all-features -- -D warnings
       - uses: rustsec/audit-check@e9159ac5f7d7d873ce074ca134da2f445c0a4a61 # v1.3.2
         with:

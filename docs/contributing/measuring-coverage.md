@@ -67,13 +67,20 @@ just docs-coverage-definitions
 Three tiers, and which ones are reachable from CI is the whole design
 constraint.
 
-| Corpus | Size | Available in CI | Scored by default |
-|--------|------|-----------------|-------------------|
-| `tests/fixtures` | 44 media files | ✅ checked in | ✅ |
-| ExifTool's `t/images` | 194 files, ~126 formats | ✅ from the pinned clone | ✅ |
+| Corpus | Approx. size | Available in CI | Scored by default |
+|--------|--------------|-----------------|-------------------|
+| `tests/fixtures` | ~44 media files | ✅ checked in | ✅ |
+| ExifTool's `t/images` | ~194 files, ~126 formats | ✅ from the pinned clone | ✅ |
 | `<cache>/combined-samples` | ~4,200 files by manufacturer | ❌ local dev cache | opt-in |
 
 `<cache>` is `$EXIFTOOL_CACHE_DIR`, default `/tmp/oxidex-exiftool-cache`.
+
+The sizes above are approximate and hand-maintained — they move whenever a
+fixture is added or the ExifTool pin is bumped. The live counts are in
+[the generated report](/reference/tag-coverage-analysis#measured-extraction-coverage),
+which is regenerated on every push and is the number to trust. Prose figures
+elsewhere in the repo are kept current automatically; these are not, because
+each corpus's share of the total is not something the measurement breaks out.
 
 **ExifTool's own `t/images` is the format-breadth corpus.** It ships in the
 release tree already cloned for the oracle, so it costs nothing extra, and it
@@ -91,12 +98,18 @@ samples actually came from, because sample files change between releases and a
 corpus from the wrong version is the same skew problem as an oracle from the
 wrong version.
 
-**Why `tests/fixtures` alone is not enough.** It covers 6 formats and scored
-96.0%. That number was true and badly misleading: adding `t/images` dropped the
-honest figure to 77.5% across 126 formats, and every format dragging it down
-(CRW 1.9%, DICOM 3.0%, FIT 0%) was one the narrow corpus never touched. A
-corpus that only contains what you already handle will always report that you
-handle everything.
+**Why `tests/fixtures` alone is not enough.** These figures are a fixed record
+of what happened when `t/images` was added, not a current reading — for that,
+see [the report](/reference/tag-coverage-analysis#measured-extraction-coverage).
+
+Scoring `tests/fixtures` alone covered 6 formats and reported **96.0%**. That
+number was true and badly misleading: adding `t/images` dropped the honest
+figure to **77.5% across 126 formats**, and every format dragging it down
+(CRW 1.9%, DICOM 3.0%, FIT 0%) was one the narrow corpus never touched.
+
+A corpus that only contains what you already handle will always report that you
+handle everything. That is the reason to resist trimming the corpus when the
+score looks bad.
 
 **The deep corpus is opt-in and never feeds the committed report:**
 
@@ -109,6 +122,41 @@ on CI. Generating the committed doc from a corpus CI cannot see would make the
 published number unreproducible, so the report is always built from the two
 pinned corpora. Use the deep corpus to investigate MakerNote coverage, then
 discard the regenerated file.
+
+## Numbers quoted elsewhere
+
+The headline figures also appear in prose — README, the guide, the architecture
+pages, a Rust doc comment. Hand-maintained, they drifted badly: every one of
+them claimed **32,677 tags** and **"113% of ExifTool"** long after the databases
+held 16,684, and long after that ratio was known to be misleading.
+
+They are now derived.
+[`scripts/sync_tag_stats.py`](https://github.com/swack-tools/oxidex/blob/main/scripts/sync_tag_stats.py)
+holds one rule per quoted number — a file, a tightly anchored pattern, and which
+measured statistic fills it — and `update-coverage-docs` runs it on every push
+to `main`. A number can be wrong for at most one push.
+
+```bash
+just sync-tag-stats     # rewrite quoted stats to the measured values
+just check-tag-stats    # fail if any are stale; change nothing
+```
+
+**Each rule asserts exactly one match, and that is the load-bearing part.** If
+someone rewords `It defines N metadata tags`, the rule matches zero times, the
+sync becomes a silent no-op, and the number quietly goes stale again — the
+exact failure this replaced. So a zero-match rule is a hard error, and
+`--check` runs in CI's Lint & Audit job (pure Python, no build) to catch it at
+review time rather than after merge.
+
+If you reword prose containing one of these numbers, update its rule rather
+than deleting it.
+
+::: tip Don't put a number in ASCII art
+`docs/reference/architecture.md` had the tag count inside a fixed-width box
+diagram, where a number one digit longer silently breaks the borders. That line
+now reads "generated from ExifTool source" with no figure in it. Quote numbers
+in prose and tables, where they can grow.
+:::
 
 ## Adding a new file type
 

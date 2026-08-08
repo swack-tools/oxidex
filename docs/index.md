@@ -25,7 +25,7 @@ features:
     details: Rust eliminates buffer overflows, use-after-free bugs, and entire classes of vulnerabilities
   - icon: 🎯
     title: 16,684 Metadata Tags
-    details: Extraction measured against pinned ExifTool on every push, not estimated — per-format scores across 140+ format families
+    details: 77.5% measured extraction conformance against pinned ExifTool, across 126 format families — remeasured on every push, never estimated
     link: /reference/tag-coverage-analysis
     linkText: View Coverage
   - icon: 🤖
