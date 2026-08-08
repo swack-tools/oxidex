@@ -17,6 +17,43 @@
 use crate::core::{FileReader, MetadataMap, TagValue};
 use std::collections::BTreeMap;
 use std::io;
+use std::path::PathBuf;
+
+/// Resolves a sample-corpus fixture, or `None` when the corpus is absent.
+///
+/// The corpus (~4200 files, thirteen manufacturer tarballs pulled from
+/// exiftool.org) lives outside the repository under
+/// `<DEFAULT_CACHE_DIR>/combined-samples` and is populated by
+/// `just compare-exiftool-full` / the sample-download recipe in the justfile.
+/// CI never downloads it: the fetch is large, and the recipe explicitly
+/// tolerates a manufacturer being unavailable, so a corpus-backed assertion
+/// could not be trusted there anyway.
+///
+/// A test that hardcodes a corpus path therefore passes locally and panics in
+/// CI on a missing file. Because `cargo nextest` fail-fasts, one such panic
+/// aborts the whole run -- which is how a green-looking suite locally became a
+/// `Build & Test` job that only ever executed 143 of 4654 tests. Callers use
+///
+/// ```ignore
+/// let Some(path) = corpus_fixture("Nikon.nef") else { return };
+/// ```
+///
+/// so the assertion still runs in full wherever the corpus exists, and the
+/// test no-ops (loudly) where it does not.
+pub fn corpus_fixture(relative: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(crate::exiftool_oracle::DEFAULT_CACHE_DIR)
+        .join("combined-samples")
+        .join(relative);
+    if path.exists() {
+        return Some(path);
+    }
+    eprintln!(
+        "skipping corpus-backed assertion: `{relative}` is not present under \
+         {}/combined-samples",
+        crate::exiftool_oracle::DEFAULT_CACHE_DIR
+    );
+    None
+}
 
 /// In-memory FileReader implementation for unit testing.
 ///

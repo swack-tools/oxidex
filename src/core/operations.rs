@@ -1088,6 +1088,7 @@ pub(crate) fn parse_casio_cam_metadata(reader: &dyn FileReader) -> Result<Metada
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+    use crate::test_support::corpus_fixture;
 
     #[test]
     fn bare_gps_date_stamp_write_targets_the_gps_ifd() {
@@ -1305,10 +1306,10 @@ mod tests {
 
     #[test]
     fn samsung_i8910_scalado_app4_matches_pinned_exiftool() {
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGT-i8910.jpg",
-        );
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        let Some(path) = corpus_fixture("Samsung/SamsungGT-i8910.jpg") else {
+            return;
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Samsung GT-i8910 fixture");
         let metadata = parse_jpeg_metadata(&reader).expect("parse pinned Samsung fixture");
 

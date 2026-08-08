@@ -205,11 +205,15 @@ fn mie_data_length(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::corpus_fixture;
 
     #[test]
     fn decodes_the_pinned_exiftool_jpeg_mie_document_trailer() {
-        let file = std::fs::read("/tmp/oxidex-exiftool-cache/combined-samples/ExifTool.jpg")
-            .expect("pinned ExifTool JPEG fixture should be available");
+        let Some(file_path) = corpus_fixture("ExifTool.jpg") else {
+            return;
+        };
+        let file =
+            std::fs::read(file_path).expect("pinned ExifTool JPEG fixture should be available");
         let metadata = parse_mie_trailer(&file);
 
         assert_eq!(metadata.get_string("MIE:TrailerSignature"), Some(""));

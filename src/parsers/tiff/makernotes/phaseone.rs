@@ -503,6 +503,7 @@ impl MakerNoteParser for PhaseOneMakerNoteParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::corpus_fixture;
 
     /// Builds a minimal synthetic Phase One `Main` directory: header +
     /// entry table, entries appended in declaration order. Each entry is
@@ -715,11 +716,10 @@ mod tests {
         // Ground truth: `exiftool -G1 -s
         // /tmp/oxidex-exiftool-cache/combined-samples/PhaseOne.iiq`, ExifTool
         // 13.55 (byte-identical PhaseOne.pm to the 13.59 corpus checkout).
-        let path = "/tmp/oxidex-exiftool-cache/combined-samples/PhaseOne.iiq";
-        let Ok(file) = std::fs::read(path) else {
-            eprintln!("skipping: corpus fixture not present at {path}");
+        let Some(path) = corpus_fixture("PhaseOne.iiq") else {
             return;
         };
+        let file = std::fs::read(&path).expect("read pinned PhaseOne.iiq fixture");
         // MakerNote value starts right after the 8-byte TIFF header
         // (PutFirst => 1 places it there); this dummy fixture's directory
         // runs to the end of the small file.

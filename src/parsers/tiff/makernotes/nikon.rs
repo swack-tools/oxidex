@@ -1857,6 +1857,7 @@ pub fn is_nikon_makernote(data: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::corpus_fixture;
 
     #[test]
     fn test_nikon_tag_ids() {
@@ -2065,9 +2066,11 @@ mod tests {
 
     #[test]
     fn pinned_nef_preview_ifd_emits_the_paired_preview_image() {
-        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Nikon.nef");
+        let Some(path) = corpus_fixture("Nikon.nef") else {
+            return;
+        };
         let metadata =
-            crate::core::operations::read_metadata(path).expect("read pinned Nikon NEF fixture");
+            crate::core::operations::read_metadata(&path).expect("read pinned Nikon NEF fixture");
 
         assert_eq!(
             metadata.get_string("MakerNotes:PreviewImage"),

@@ -1740,6 +1740,7 @@ fn merge(source: MetadataMap, metadata: &mut MetadataMap) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::corpus_fixture;
 
     fn dji_thermal_params2(relative_humidity: f32) -> Vec<u8> {
         let mut payload = vec![0; 68];
@@ -1827,10 +1828,10 @@ mod tests {
 
     #[test]
     fn dji_mavic2_thermal_app_payloads_match_pinned_exiftool() {
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/DJI/DJI_MAVIC2-ENTERPRISE-ADVANCED.jpg",
-        );
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        let Some(path) = corpus_fixture("DJI/DJI_MAVIC2-ENTERPRISE-ADVANCED.jpg") else {
+            return;
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned DJI Mavic 2 Enterprise Advanced fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned DJI fixture");
@@ -1852,9 +1853,10 @@ mod tests {
 
     #[test]
     fn leica_tl2_ifd2_jpg_from_raw_pair_matches_pinned_exiftool() {
-        let path =
-            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaTL2.jpg");
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        let Some(path) = corpus_fixture("Leica/LeicaTL2.jpg") else {
+            return;
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Leica TL2 fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Leica TL2 segments");
@@ -1872,9 +1874,10 @@ mod tests {
 
     #[test]
     fn leica_cl_ifd2_preview_pair_matches_pinned_exiftool() {
-        let path =
-            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaCL.jpg");
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        let Some(path) = corpus_fixture("Leica/LeicaCL.jpg") else {
+            return;
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Leica CL fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Leica CL segments");
@@ -1898,10 +1901,10 @@ mod tests {
 
     #[test]
     fn olympus_sh25mr_gps_area_information_decodes_exif_unicode() {
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Olympus/OlympusSH-25MR.jpg",
-        );
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        let Some(path) = corpus_fixture("Olympus/OlympusSH-25MR.jpg") else {
+            return;
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Olympus SH-25MR fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Olympus SH-25MR segments");
@@ -1917,8 +1920,10 @@ mod tests {
 
     #[test]
     fn ricoh2_empty_gps_dest_distance_ref_matches_pinned_exiftool() {
-        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Ricoh2.jpg");
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        let Some(path) = corpus_fixture("Ricoh2.jpg") else {
+            return;
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Ricoh2 fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Ricoh2 segments");
@@ -1935,9 +1940,10 @@ mod tests {
 
     #[test]
     fn nikon_z7_2_lens_serial_number_stops_at_first_nul() {
-        let path =
-            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Nikon/NikonZ7_2.jpg");
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        let Some(path) = corpus_fixture("Nikon/NikonZ7_2.jpg") else {
+            return;
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Nikon Z7 II fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Nikon Z7 II segments");
@@ -1953,10 +1959,10 @@ mod tests {
 
     #[test]
     fn samsung_sdc130z_learning_opt_out_uses_exif_int16u_override() {
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungSDC-130Z.jpg",
-        );
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        let Some(path) = corpus_fixture("Samsung/SamsungSDC-130Z.jpg") else {
+            return;
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Samsung SDC-130Z fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Samsung SDC-130Z segments");
@@ -1972,10 +1978,10 @@ mod tests {
 
     #[test]
     fn panasonic_tz57_title2_uses_exif_string_format_override() {
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Panasonic/PanasonicDMC-TZ57.jpg",
-        );
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        let Some(path) = corpus_fixture("Panasonic/PanasonicDMC-TZ57.jpg") else {
+            return;
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Panasonic TZ57 fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Panasonic TZ57 segments");
@@ -2032,9 +2038,11 @@ mod tests {
 
     #[test]
     fn exiftool_jpeg_rmeta_menu_fields_match_pinned_exiftool() {
-        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/ExifTool.jpg");
+        let Some(path) = corpus_fixture("ExifTool.jpg") else {
+            return;
+        };
         let reader =
-            crate::io::buffered_reader::BufferedReader::new(path).expect("read ExifTool.jpg");
+            crate::io::buffered_reader::BufferedReader::new(&path).expect("read ExifTool.jpg");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse ExifTool.jpg segments");
         let mut metadata = MetadataMap::new();

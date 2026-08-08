@@ -1894,16 +1894,17 @@ mod exif_subifd_tests {
 mod ifd1_tests {
     use super::*;
     use crate::test_support::TestReader;
+    use crate::test_support::corpus_fixture;
 
     const SHORT: u16 = 3;
     const LONG: u16 = 4;
 
     #[test]
     fn apple_qt_200_ifd1_strip_metadata_matches_pinned_exiftool() {
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Apple/AppleQT-200.jpg",
-        );
-        let metadata = crate::core::operations::read_metadata(path).expect("AppleQT-200 parses");
+        let Some(path) = corpus_fixture("Apple/AppleQT-200.jpg") else {
+            return;
+        };
+        let metadata = crate::core::operations::read_metadata(&path).expect("AppleQT-200 parses");
 
         assert_eq!(metadata.get_integer("IFD1:StripOffsets"), Some(796));
         assert_eq!(metadata.get_integer("IFD1:RowsPerStrip"), Some(60));

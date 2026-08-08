@@ -1217,14 +1217,15 @@ fn format_gps_numeric_value(value: f64) -> String {
 mod tests {
     use super::*;
     use crate::parsers::tiff::ifd_parser::ByteOrder;
+    use crate::test_support::corpus_fixture;
 
     #[test]
     fn samsung_galaxy_a55_timezone_offset_matches_pinned_exiftool() {
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGalaxyA55_5G.jpg",
-        );
+        let Some(path) = corpus_fixture("Samsung/SamsungGalaxyA55_5G.jpg") else {
+            return;
+        };
         let metadata =
-            crate::core::operations::read_metadata(path).expect("Samsung Galaxy A55 parses");
+            crate::core::operations::read_metadata(&path).expect("Samsung Galaxy A55 parses");
 
         assert_eq!(metadata.get_integer("ExifIFD:TimeZoneOffset"), Some(2));
     }

@@ -3936,6 +3936,7 @@ fn format_photoshop_quality(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::corpus_fixture;
 
     #[test]
     fn rebound_custom_prefix_keeps_the_first_generic_xmp_tag() {
@@ -4185,10 +4186,11 @@ mod tests {
 
     #[test]
     fn photomechanic_jpeg_time_created_matches_pinned_exiftool() {
-        let path =
-            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/PhotoMechanic.jpg");
+        let Some(path) = corpus_fixture("PhotoMechanic.jpg") else {
+            return;
+        };
         let metadata =
-            crate::core::operations::read_metadata(path).expect("PhotoMechanic JPEG parses");
+            crate::core::operations::read_metadata(&path).expect("PhotoMechanic JPEG parses");
 
         assert_eq!(
             metadata.get_string("XMP:TimeCreated"),

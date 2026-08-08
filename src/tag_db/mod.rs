@@ -265,6 +265,7 @@ pub fn lookup_tag_name(tag_id: u16, ifd_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::corpus_fixture;
 
     /// `Uncompressed` is a genuine `Exif::Main` tag at 0xBC03 -- HD Photo's
     /// compression value -- but it was unreachable, because the enum-value
@@ -305,10 +306,10 @@ mod tests {
 
     #[test]
     fn fujifilm_sp_2500_legacy_exif_aliases_match_pinned_exiftool() {
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/FujiFilm/FujiSP-2500.jpg",
-        );
-        let metadata = crate::core::operations::read_metadata(path).expect("Fuji SP-2500 parses");
+        let Some(path) = corpus_fixture("FujiFilm/FujiSP-2500.jpg") else {
+            return;
+        };
+        let metadata = crate::core::operations::read_metadata(&path).expect("Fuji SP-2500 parses");
 
         assert_eq!(
             metadata.get_integer("ExifIFD:SpatialFrequencyResponse"),

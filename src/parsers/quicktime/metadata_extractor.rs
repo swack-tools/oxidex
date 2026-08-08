@@ -3440,6 +3440,7 @@ fn extract_xmp_from_atom(data: &[u8], metadata: &mut MetadataMap) -> Result<(), 
 mod tests {
     use super::*;
     use crate::parsers::quicktime::FourCC;
+    use crate::test_support::corpus_fixture;
 
     #[test]
     fn quicktime_fixture_prefers_media_info_data_handler_class() {
@@ -3447,8 +3448,10 @@ mod tests {
         // The first track in QuickTime.mov has mdia/hdlr=mhlr but its
         // minf/hdlr=dhlr; ExifTool's unsuffixed reported HandlerClass is the
         // latter.
-        let data = std::fs::read("/tmp/oxidex-exiftool-cache/combined-samples/QuickTime.mov")
-            .expect("pinned QuickTime fixture must be available");
+        let Some(data_path) = corpus_fixture("QuickTime.mov") else {
+            return;
+        };
+        let data = std::fs::read(data_path).expect("pinned QuickTime fixture must be available");
         let metadata = crate::parsers::quicktime::parse_quicktime_metadata_from_bytes(&data)
             .expect("pinned QuickTime fixture must parse");
 

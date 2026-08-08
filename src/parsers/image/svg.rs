@@ -744,6 +744,7 @@ pub fn parse_svg_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
 mod tests {
     use super::*;
     use crate::io::BufferedReader;
+    use crate::test_support::corpus_fixture;
 
     #[test]
     fn test_svg_basic_parsing() {
@@ -865,8 +866,10 @@ mod tests {
 
     #[test]
     fn pinned_xmp_svg_dublin_core_date_matches_exiftool() {
-        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/XMP.svg");
-        let reader = BufferedReader::new(path).expect("read pinned XMP.svg fixture");
+        let Some(path) = corpus_fixture("XMP.svg") else {
+            return;
+        };
+        let reader = BufferedReader::new(&path).expect("read pinned XMP.svg fixture");
         let parser = SVGParser;
         let metadata = parser.parse(&reader).expect("parse pinned XMP.svg fixture");
 
