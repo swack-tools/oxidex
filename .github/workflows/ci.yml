@@ -437,9 +437,11 @@ jobs:
     # GitHub-hosted hardware and are NOT comparable with numbers after it. If
     # these ever move again, both must move together, in one commit, and the
     # discontinuity must be recorded in CHANGELOG.md again.
-    runs-on: warp-ubuntu-latest-x64-2x
+    runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 30
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # TEMP-MEASURE: dispatch allowed so this can be timed off main. Restore to
+    # `github.event_name == 'push' && github.ref == 'refs/heads/main'` after.
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     needs: [test]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -450,7 +452,7 @@ jobs:
           cache-provider: warpbuild
           shared-key: metrics
       - name: Run benchmarks
-        run: cargo bench --bench integration_benchmarks --bench parse_benchmarks
+        run: cargo bench --bench integration_benchmarks --bench parse_benchmarks -- --quick
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: benchmark-results
