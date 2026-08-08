@@ -1503,6 +1503,24 @@ mod tests {
     }
 
     #[test]
+    fn integer_rejects_iso_out_of_16bit_range() {
+        // ISO is `Writable => 'int16u'` (Exif.pm 0x8827), so CheckValue
+        // range-checks against `%intRange{int16u}` = [0, 0xffff]
+        // (Writer.pl:238-248). Verified: `exiftool -ExifIFD:ISO=-800.5`
+        // against the pinned 13.59 build warns "Value below int16u minimum"
+        // and leaves the file untouched, and `=65536` warns "Value above
+        // int16u maximum" the same way. `-800.5` rounds to -801 first
+        // (Writer.pl:6879-6881), which is still out of range.
+        for raw in ["-800.5", "-1", "65536", "70000"] {
+            let err = parse("EXIF:ISO", raw).unwrap_err().to_string();
+            assert!(
+                err.contains("does not fit unsigned 16-bit"),
+                "input {raw}: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn flash_uses_its_print_conversion_inverse() {
         assert_eq!(parse("Flash", "Fired").unwrap(), TagValue::Integer(1));
         assert_eq!(
