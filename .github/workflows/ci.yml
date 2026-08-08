@@ -124,6 +124,23 @@ jobs:
     # else, or it will rebuild the workspace for its own feature graph.
     runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 25
+    # Cargo profile overrides, CI-only on purpose -- they are env rather than
+    # a [profile.test] edit so local dev and the OOM guards in Cargo.toml are
+    # untouched.
+    #
+    # [profile.test] carries codegen-units = 4, which caps codegen at four
+    # parallel units on a runner with eight vCPUs; that setting and the
+    # per-package opt-level = 2 overrides exist to stop the generated tag
+    # crates OOMing a small machine, and this runner has 32 GB. 16 units
+    # matches [profile.dev].
+    #
+    # line-tables-only keeps file:line in backtraces (RUST_BACKTRACE=1 is set
+    # workflow-wide) while skipping the full debuginfo this never reads.
+    #
+    # If this job starts failing on memory, this block is the first suspect.
+    env:
+      CARGO_PROFILE_TEST_CODEGEN_UNITS: 16
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
