@@ -100,7 +100,10 @@ fn is_mp_image_group(family: &str) -> bool {
 /// Normalize a tag name for comparison
 fn normalize_tag_name(name: &str) -> &str {
     match name {
-        // ICC profile tag names (ExifTool uses TRC, OxiDex uses ToneReproductionCurve)
+        // Legacy ICC spellings. The ICC registry now emits ExifTool's real tag
+        // Names (`RedTRC`, ...) rather than their `Description`s, so these arms
+        // no longer fire for oxidex output; they remain so an older baseline
+        // still lines up against a current run.
         "BlueToneReproductionCurve" => "BlueTRC",
         "GreenToneReproductionCurve" => "GreenTRC",
         "RedToneReproductionCurve" => "RedTRC",

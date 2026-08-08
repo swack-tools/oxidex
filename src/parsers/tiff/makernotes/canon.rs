@@ -1014,6 +1014,11 @@ const SHOT_INFO_AUTO_ROTATE: usize = 27;
 const SHOT_INFO_ND_FILTER: usize = 28;
 /// ExifTool `%Canon::ShotInfo` key 29 (Canon.pm:3037) — `SelfTimer2`.
 const SHOT_INFO_SELF_TIMER2: usize = 29;
+/// ExifTool `%Canon::ShotInfo` key 33 (Canon.pm:3044) — `FlashOutput`. Note the gap:
+/// keys 30-32 are undeclared, so this is slot 33 of the `int16s` record, not the one
+/// after `SelfTimer2`. Transcribed as `CANON_SHOTINFO` field index 33 with no
+/// `PrintConv`, i.e. the raw signed slot is the reported value.
+const SHOT_INFO_FLASH_OUTPUT: usize = 33;
 
 // FileInfo array indices (tag 0x0093)
 //
@@ -3182,6 +3187,21 @@ pub fn apex_to_exposure_time(apex_value: i16) -> String {
 /// file.
 fn is_eos_powershot_ixus_ixy(model: &str) -> bool {
     ["EOS", "PowerShot", "IXUS", "IXY"]
+        .iter()
+        .any(|needle| model.contains(needle))
+}
+
+/// True for the compact bodies ExifTool selects with `Model =~ /(PowerShot|IXUS|IXY)/`.
+///
+/// This gates `%Canon::ShotInfo` key 33's `FlashOutput` RawConv (Canon.pm:3046):
+/// `($$self{Model}=~/(PowerShot|IXUS|IXY)/ or $val) ? $val : undef`. Deliberately not
+/// [`is_eos_powershot_ixus_ixy`]: that alternation carries an extra `EOS`, and the
+/// difference is load-bearing here. An EOS body records a meaningless 0 in this slot,
+/// and the `or $val` arm is what keeps ExifTool from reporting it -- adding `EOS` would
+/// invent a `FlashOutput: 0` on every EOS file that has none. As with key 5, the Perl
+/// regex has no `\b` anchors, so this is a plain substring match.
+fn is_powershot_ixus_ixy(model: &str) -> bool {
+    ["PowerShot", "IXUS", "IXY"]
         .iter()
         .any(|needle| model.contains(needle))
 }
@@ -5852,6 +5872,28 @@ fn parse_canon_makernote_impl_located(
                             format_perl_number(self_timer2 as f64 / 10.0),
                         );
                     }
+
+                    // FlashOutput (index 33). ExifTool `RawConv =>
+                    // '($$self{Model}=~/(PowerShot|IXUS|IXY)/ or $val) ? $val : undef'`
+                    // (Canon.pm:3046) with no ValueConv and no PrintConv, so the raw
+                    // int16s slot is printed verbatim -- this is the compacts' flash
+                    // power code (0..~1000), NOT the `%Canon::ColorData*` `FlashOutput`
+                    // percentage. The two share a name and a body can carry both --
+                    // `exiftool -a -G1 -s CanonPowerShotV1.jpg` prints the pair, in this
+                    // order:
+                    //
+                    //     [Canon]  FlashOutput  : 0      <- ShotInfo key 33 (here)
+                    //     [Canon]  FlashOutput  : 0%     <- ColorData key 0x26b
+                    //
+                    // and collapsing that to one key keeps the later one, which is why
+                    // that file's ground truth is `0%`. ExifTool reads MakerNote tag
+                    // 0x0004 before 0x4001; the same order falls out here from IFD entry
+                    // order, since Canon writes its directory sorted by tag id.
+                    if let Some(&flash_output) = array.get(SHOT_INFO_FLASH_OUTPUT)
+                        && (flash_output != 0 || is_powershot_ixus_ixy(camera_info_model))
+                    {
+                        tags.insert("Canon:FlashOutput".to_string(), flash_output.to_string());
+                    }
                 }
             }
 
@@ -7192,6 +7234,7 @@ mod tests {
         assert_eq!(SHOT_INFO_FLASH_EXPOSURE_COMP, 15);
         assert_eq!(SHOT_INFO_AUTO_EXPOSURE_BRACKETING, 16);
         assert_eq!(SHOT_INFO_SUBJECT_DISTANCE, 19);
+        assert_eq!(SHOT_INFO_FLASH_OUTPUT, 33);
     }
 
     #[test]
@@ -7278,6 +7321,106 @@ mod tests {
         let data = canon_makernote_with_short_array(0x0004, &shot_info);
         let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
         assert_eq!(result.get("Canon:AutoRotate"), None);
+    }
+
+    /// `%Canon::ShotInfo` key 33 `FlashOutput` (Canon.pm:3044) is the compacts' raw
+    /// flash-power code -- no ValueConv, no PrintConv -- gated by `RawConv =>
+    /// '($$self{Model}=~/(PowerShot|IXUS|IXY)/ or $val) ? $val : undef'`.
+    ///
+    /// Ground truth from the pinned ExifTool 13.59
+    /// (`/tmp/oxidex-exiftool-cache/exiftool/exiftool -a -G1 -s ...`):
+    ///
+    /// ```text
+    /// ======== Canon/CanonDIGITAL_IXUS30.jpg
+    /// [IFD0]          Model                           : Canon DIGITAL IXUS 30
+    /// [Canon]         CanonImageType                  : IMG:DIGITAL IXUS 30 JPEG
+    /// [Canon]         FlashOutput                     : 22
+    /// ======== Canon/CanonPowerShotA400.jpg
+    /// [IFD0]          Model                           : Canon PowerShot A400
+    /// [Canon]         FlashOutput                     : 0
+    /// ======== Canon/CanonPowerShotG5X.jpg
+    /// [IFD0]          Model                           : Canon PowerShot G5 X
+    /// [Canon]         FlashOutput                     : 1000
+    /// ======== Canon/CanonEOS-1D_MarkIII.jpg
+    /// [IFD0]          Model                           : Canon EOS-1D Mark III
+    /// [Canon]         FlashOutput                     : 0%
+    /// ```
+    ///
+    /// The 1D Mark III line is the `%Canon::ColorData4` key 0x26b percentage, not this
+    /// one: its ShotInfo slot 33 holds a literal 0 that the RawConv throws away, which
+    /// `-v3` shows being read and then dropped (0x21 == 33):
+    ///
+    /// ```text
+    /// | | | 3)  CanonShotInfo (SubDirectory) -->
+    /// | | |     - Tag 0x0004 (68 bytes, int16u[34] read as undef[68]):
+    /// | | | | FlashOutput = 0
+    /// | | | | - Tag 0x0021 (2 bytes, int16s[1]):
+    /// ```
+    ///
+    /// So the model gate is what keeps a spurious `FlashOutput: 0` off every EOS body,
+    /// and it must not include `EOS` the way `%Canon::ShotInfo` key 5's does.
+    #[test]
+    fn test_parse_shot_info_flash_output() {
+        // 34 int16 slots / 68 bytes, exactly as the 1D Mark III writes the record.
+        let mut shot_info = vec![0i16; 34];
+        shot_info[0] = 68;
+
+        let emitted = |model: &str, slot33: i16| {
+            let mut record = shot_info.clone();
+            record[33] = slot33;
+            let data = canon_makernote_with_short_array(0x0004, &record);
+            parse_canon_makernote_impl_with_model(&data, ByteOrder::LittleEndian, Some(model))
+                .unwrap()
+                .get("Canon:FlashOutput")
+                .cloned()
+        };
+
+        // Raw slot, printed verbatim -- no percentage, no scaling.
+        assert_eq!(emitted("Canon DIGITAL IXUS 30", 22), Some("22".to_string()));
+        assert_eq!(
+            emitted("Canon PowerShot G5 X", 1000),
+            Some("1000".to_string())
+        );
+
+        // A literal 0 survives on the compacts because the model arm of the RawConv
+        // fires first -- 310 of the corpus's 409 FlashOutput values are exactly this.
+        assert_eq!(emitted("Canon PowerShot A400", 0), Some("0".to_string()));
+        assert_eq!(
+            emitted("Canon IXY DIGITAL 510 IS", 0),
+            Some("0".to_string())
+        );
+
+        // ...and is dropped on everything else, which is the only reason EOS bodies do
+        // not sprout a second, wrong FlashOutput alongside their ColorData percentage.
+        assert_eq!(emitted("Canon EOS-1D Mark III", 0), None);
+        assert_eq!(emitted("Canon EOS 5D", 0), None);
+
+        // The `or $val` arm still reports a non-zero slot on a non-compact body.
+        assert_eq!(emitted("Canon EOS-1D Mark III", 22), Some("22".to_string()));
+
+        // Slot 33, not "the one after SelfTimer2": keys 30-32 are undeclared, so a
+        // record that only fills slot 30 must report nothing.
+        let mut off_by_three = shot_info.clone();
+        off_by_three[30] = 22;
+        let data = canon_makernote_with_short_array(0x0004, &off_by_three);
+        let result = parse_canon_makernote_impl_with_model(
+            &data,
+            ByteOrder::LittleEndian,
+            Some("Canon EOS"),
+        )
+        .unwrap();
+        assert_eq!(result.get("Canon:FlashOutput"), None);
+
+        // A record too short to reach slot 33 is not an error, just an absent tag.
+        let short = vec![0i16; 30];
+        let data = canon_makernote_with_short_array(0x0004, &short);
+        let result = parse_canon_makernote_impl_with_model(
+            &data,
+            ByteOrder::LittleEndian,
+            Some("Canon PowerShot A400"),
+        )
+        .unwrap();
+        assert_eq!(result.get("Canon:FlashOutput"), None);
     }
 
     #[test]

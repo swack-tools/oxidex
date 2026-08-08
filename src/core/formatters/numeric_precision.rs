@@ -87,8 +87,16 @@ pub const THREE_DECIMAL_PRECISION_TAGS: &[&str] = &["YCbCrCoefficients"];
 /// - Color matrix columns (RedMatrixColumn, GreenMatrixColumn, BlueMatrixColumn)
 /// - White point and illuminant values (MediaWhitePoint, ConnectionSpaceIlluminant)
 /// - Viewing condition values (Luminance, ViewingCondIlluminant, ViewingCondSurround)
-/// - TRC (Tone Reproduction Curve) tags
 /// - DNG camera calibration matrices
+///
+/// The TRC tags are deliberately NOT here. `rTRC`/`gTRC`/`bTRC`/`kTRC` declare
+/// no `Format` and no `PrintConv` in ICC_Profile.pm, and `FormatICCTag` has no
+/// branch for their `curv`/`para` payloads, so ExifTool never converts them -
+/// it stores the raw bytes and prints `(Binary data N bytes, ...)`. Listing
+/// them here fed that placeholder through `format_icc_string_values`, which
+/// splits on whitespace and re-renders every token that parses as a float; the
+/// byte count survived only by luck of round-tripping through a 5-decimal
+/// formatter. Nothing about that string is a matrix value.
 pub const ICC_MATRIX_TAGS: &[&str] = &[
     "ChromaticAdaptation",
     "ColorMatrix1",
@@ -99,9 +107,6 @@ pub const ICC_MATRIX_TAGS: &[&str] = &[
     "RedMatrixColumn",
     "GreenMatrixColumn",
     "BlueMatrixColumn",
-    "RedTRC",
-    "GreenTRC",
-    "BlueTRC",
     // ICC profile white point and illuminant values
     "MediaWhitePoint",
     "ConnectionSpaceIlluminant",

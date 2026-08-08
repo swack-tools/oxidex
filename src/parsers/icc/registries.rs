@@ -158,25 +158,30 @@ pub static TAG_REGISTRY: &[TagDef] = &[
         name: "Luminance",
         tag_type: TagType::Xyz,
     },
-    // Curve tags (binary data)
+    // Curve tags (binary data).
+    //
+    // All four are `Name => '<Colour>TRC'` in ICC_Profile.pm (rTRC:449-452,
+    // gTRC:421-424, bTRC:361-364, kTRC:416-419); `<Colour> Tone Reproduction
+    // Curve` is only the `Description`, which `-s` never prints. Emitting the
+    // long form here put every one of the 135 corpus files that carry rTRC /
+    // gTRC / bTRC under a key ExifTool never writes, so the value - which was
+    // already byte-exact - counted as a miss on all of them. kTRC alone was
+    // spelled correctly, which is why GrayTRC already matched.
     TagDef {
         signature: "rTRC",
-        name: "RedToneReproductionCurve",
+        name: "RedTRC",
         tag_type: TagType::Curve,
     },
     TagDef {
         signature: "gTRC",
-        name: "GreenToneReproductionCurve",
+        name: "GreenTRC",
         tag_type: TagType::Curve,
     },
     TagDef {
         signature: "bTRC",
-        name: "BlueToneReproductionCurve",
+        name: "BlueTRC",
         tag_type: TagType::Curve,
     },
-    // ExifTool names this one `GrayTRC` outright (the long form is only its
-    // Description), so it is emitted under that name directly rather than
-    // through the `*ToneReproductionCurve` aliases the other three carry.
     TagDef {
         signature: "kTRC",
         name: "GrayTRC",

@@ -68,7 +68,9 @@ static FAMILY_MAPPINGS: LazyLock<HashMap<&'static str, &'static str>> = LazyLock
 pub fn normalize_tag_name(family: &str, name: &str) -> String {
     match (family, name) {
         // ICC Profile naming differences - ExifTool uses abbreviated "TRC" suffix
-        // instead of "ToneReproductionCurve" for tone reproduction curve tags
+        // instead of "ToneReproductionCurve" for tone reproduction curve tags.
+        // The ICC registry now emits the short names directly, so these arms are
+        // a backstop for any caller still holding the long `Description` form.
         ("ICC_Profile", "BlueToneReproductionCurve") => "BlueTRC".to_string(),
         ("ICC_Profile", "GreenToneReproductionCurve") => "GreenTRC".to_string(),
         ("ICC_Profile", "RedToneReproductionCurve") => "RedTRC".to_string(),
