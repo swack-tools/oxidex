@@ -8,9 +8,14 @@ name: Docs Build
 # ci.yml cannot catch it either: it carries `paths-ignore: docs/**`. So until this
 # workflow existed, no PR ever built the docs and a broken build looked exactly
 # like a healthy one.
+# Deliberately NOT on push to main. That trigger had no path filter, so every
+# main push rebuilt the site here while deploy-docs.yml built AND deployed the
+# same site from the same commit -- the docs were built twice per merge.
+#
+# Nothing is lost by dropping it: the cold-build break this exists to catch is
+# a property of the commit, and the pull request that introduced it already ran
+# this job. Re-running it after the merge re-tests a question already answered.
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: ['**']
     paths:
