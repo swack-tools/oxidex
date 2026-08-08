@@ -1,7 +1,7 @@
 //! ExifTool-RS Tag Database
 //!
 //! Facade crate that re-exports all domain-specific tag databases.
-//! Contains 32,677+ metadata tags for 300+ file formats.
+//! Contains 16,684 metadata tag definitions for 300+ file formats.
 //!
 //! # Architecture
 //!

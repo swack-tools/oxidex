@@ -8,7 +8,7 @@ A high-performance Rust implementation of [ExifTool](https://exiftool.org/) for 
 
 ## What is OxiDex?
 
-OxiDex is a memory-safe, drop-in replacement for the Perl-based ExifTool. It covers 16,677 metadata tags (58% ExifTool parity) across 140+ formats, with significantly better performance through Rust's zero-cost abstractions and parallel processing.
+OxiDex is a memory-safe, drop-in replacement for the Perl-based ExifTool. It defines 16,684 metadata tags across 140+ formats (see [Tag Coverage](https://oxidex.net/reference/tag-coverage-analysis) for the measured extraction-conformance score), with significantly better performance through Rust's zero-cost abstractions and parallel processing.
 
 ## Why OxiDex?
 

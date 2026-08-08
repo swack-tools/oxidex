@@ -44,7 +44,7 @@ This architecture ensures:
 │  └─────────────────────────────────────────────────────┘   │
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │  Tag Database (32,677 tags from ExifTool source)    │   │
+│  │  Tag Database (16,684 tag definitions, from ExifTool source) │   │
 │  └─────────────────────────────────────────────────────┘   │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
@@ -212,7 +212,7 @@ pub enum TagGroup {
 
 #### Tag Database
 
-32,677 metadata tags automatically synchronized with ExifTool source:
+16,684 metadata tag definitions automatically synchronized with ExifTool source (a definitions count, not an extraction-coverage measurement — see [Tag Coverage](/reference/tag-coverage-analysis)):
 
 ```rust
 pub struct TagDatabase {

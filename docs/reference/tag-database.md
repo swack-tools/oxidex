@@ -4,8 +4,7 @@ OxiDex maintains a comprehensive tag database automatically synchronized with Ex
 
 ## Coverage
 
-- **Total Tags:** 32,677 / 28,853 (113% of ExifTool)
-- **Unique Tag Names:** 32,677
+- **Total Tags:** 16,684 tag definitions (see [Tag Coverage](/reference/tag-coverage-analysis) — this is a definitions count, not a measurement of extraction coverage)
 - **Format Families:** 140+
 - **Sync:** Manual regeneration from ExifTool master (see [Synchronization](#synchronization))
 
@@ -190,7 +189,7 @@ cargo build
 The build script will:
 1. Download ExifTool source (~10MB)
 2. Extract and discover all Perl modules
-3. Parse 32,677 tag definitions
+3. Parse the tag definitions
 4. Generate optimized Rust code (~6MB source)
 5. Compile into binary (~5MB in memory)
 
@@ -198,7 +197,7 @@ The build script will:
 
 ### Code Generation Strategy
 
-To handle 32,677 tags without overwhelming the Rust compiler:
+To handle tens of thousands of tag definitions without overwhelming the Rust compiler:
 
 **File Organization:**
 - 124 format family modules in `src/tag_db/generated/tags_*.rs`

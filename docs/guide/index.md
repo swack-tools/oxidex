@@ -34,8 +34,8 @@ Automatically identify file formats using magic byte detection, even when file e
 
 **Version:** 1.1.0 (Stable Release)
 
-- ✅ 32,677 metadata tags (113% of ExifTool's 28,853 tags)
-- ✅ 140+ format families with complete ExifTool parity
+- ✅ 16,684 metadata tag definitions across 140+ format families (see [Tag Coverage](/reference/tag-coverage-analysis) for the measured extraction-conformance score)
+- ✅ 140+ format families
 - ✅ 3.7-9.7x performance improvement
 - ✅ Full CLI with backward compatibility
 - ✅ Rust library API and C FFI bindings
@@ -50,7 +50,7 @@ Automatically identify file formats using magic byte detection, even when file e
 
 ## Project Goals
 
-1. **100% ExifTool Tag Parity:** Support all 32,677+ metadata tags
+1. **ExifTool Extraction Parity:** Match ExifTool's output on every tag it reads, measured by [conformance score](/reference/tag-coverage-analysis#measured-extraction-coverage)
 2. **High Performance:** 10-100x faster than Perl implementation
 3. **Memory Safety:** Eliminate vulnerabilities through Rust's ownership system
 4. **Drop-in Replacement:** CLI compatibility for seamless migration

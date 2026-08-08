@@ -349,7 +349,7 @@ All formats process typical files in < 50ms on modern hardware.
 
 ## Tag Database Statistics
 
-**Total Tags:** 32,677 (113% of ExifTool's 28,853 tags)
+**Total Tags:** 16,684 tag definitions (see [Tag Coverage](/reference/tag-coverage-analysis) for what this counts and for the measured extraction-conformance score)
 
 **Tags by Format Family:**
 - NikonCustom: 3,512 tags
@@ -381,7 +381,7 @@ Error: Unsupported file format: unknown
 
 **v1.1 (Current):** 140+ format families with full read/write support ✅
 **v2.0 Goal:** Enhanced maker notes support for all major camera vendors
-**v3.0 Goal:** Complete ExifTool tag parity (28,853+ tags)
+**v3.0 Goal:** Complete ExifTool extraction parity, measured by [conformance score](/reference/tag-coverage-analysis#measured-extraction-coverage), not by definitions count
 
 ## Additional Resources
 
