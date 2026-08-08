@@ -237,6 +237,43 @@ lto = "thin"
 codegen-units = 1
 incremental = false
 debug = true  # Enable debug symbols for profiling
+# REQUIRED -- not a redundant restatement of the default. [profile.bench] has no
+# `inherits`, so it implicitly inherits [profile.release], and that carries
+# `panic = 'abort'` down with it. Without this line `cargo bench` compiles
+# src/lib.rs TWICE in a single invocation:
+#
+#   * once as panic=unwind, because cargo forces unwind on bench/test targets
+#     and their dependencies -- this is the rlib the benches link;
+#   * once as panic=abort, for the `oxidex` bin. Cargo builds the package's bins
+#     during `cargo bench` so benches can exec them (CARGO_BIN_EXE_*), and a bin
+#     is a final artifact, so it reads `panic` from the profile instead.
+#
+# Those two units differ only in panic strategy, and normally cargo would keep
+# them apart by filename hash -- but `crate-type = ["lib", "staticlib",
+# "cdylib"]` (see [lib]) makes cargo drop `-C extra-filename` so the C artifacts
+# get predictable names (liboxidex.a / liboxidex.so). The rlib emitted by that
+# same invocation loses its hash too, so BOTH units write
+# target/release/deps/liboxidex.rlib and clobber each other. Cargo warns
+# ("output filename collision", rust-lang/cargo#6313) and then whichever rustc
+# finishes last wins the race. When abort wins, every bench dep fails with
+# "requires panic strategy `abort` ... incompatible with ... `unwind`". It is a
+# genuine race, so it fails on maybe half of runs, on identical source and an
+# identical warm cache -- see CI runs 31279888151 and 31280299942.
+#
+# Pinning unwind here makes the two units identical, so cargo emits one lib unit
+# and the collision cannot happen. It does not change what the benchmarks
+# measure: the bench targets already linked the unwind rlib on every run that
+# passed. [profile.release] keeps panic = 'abort', so shipped binaries are
+# unaffected.
+#
+# `cargo bench` will warn "`panic` setting is ignored for `bench` profile".
+# IGNORE THAT WARNING, AND DO NOT DELETE THIS LINE ON THE STRENGTH OF IT. It is
+# true only of the bench targets, which cargo forces to unwind anyway; it says
+# nothing about the `oxidex` bin compiled in the same invocation, and that bin
+# is the whole problem -- being a final artifact, it reads `panic` from right
+# here. Measured on this manifest: with the line, one lib unit and no
+# collisions; without it, two lib units and four colliding outputs.
+panic = "unwind"
 
 [features]
 default = []
