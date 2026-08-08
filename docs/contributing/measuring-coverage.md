@@ -110,6 +110,41 @@ published number unreproducible, so the report is always built from the two
 pinned corpora. Use the deep corpus to investigate MakerNote coverage, then
 discard the regenerated file.
 
+## Numbers quoted elsewhere
+
+The headline figures also appear in prose — README, the guide, the architecture
+pages, a Rust doc comment. Hand-maintained, they drifted badly: every one of
+them claimed **32,677 tags** and **"113% of ExifTool"** long after the databases
+held 16,684, and long after that ratio was known to be misleading.
+
+They are now derived.
+[`scripts/sync_tag_stats.py`](https://github.com/swack-tools/oxidex/blob/main/scripts/sync_tag_stats.py)
+holds one rule per quoted number — a file, a tightly anchored pattern, and which
+measured statistic fills it — and `update-coverage-docs` runs it on every push
+to `main`. A number can be wrong for at most one push.
+
+```bash
+just sync-tag-stats     # rewrite quoted stats to the measured values
+just check-tag-stats    # fail if any are stale; change nothing
+```
+
+**Each rule asserts exactly one match, and that is the load-bearing part.** If
+someone rewords `It defines N metadata tags`, the rule matches zero times, the
+sync becomes a silent no-op, and the number quietly goes stale again — the
+exact failure this replaced. So a zero-match rule is a hard error, and
+`--check` runs in CI's Lint & Audit job (pure Python, no build) to catch it at
+review time rather than after merge.
+
+If you reword prose containing one of these numbers, update its rule rather
+than deleting it.
+
+::: tip Don't put a number in ASCII art
+`docs/reference/architecture.md` had the tag count inside a fixed-width box
+diagram, where a number one digit longer silently breaks the borders. That line
+now reads "generated from ExifTool source" with no figure in it. Quote numbers
+in prose and tables, where they can grow.
+:::
+
 ## Adding a new file type
 
 This is the part designed to need no configuration.

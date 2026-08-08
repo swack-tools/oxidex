@@ -203,6 +203,16 @@ jobs:
             --output docs/reference/tag-coverage-analysis.md
           echo "Coverage report generated"
 
+      # The same numbers are quoted in prose in README, the guide, the
+      # architecture pages and a Rust doc comment. Hand-maintained, they
+      # drifted to 32,677 tags and "113% of ExifTool" and stayed there through
+      # several releases. Deriving them is the only thing that actually fixes
+      # that; #609 corrected them by hand, which fixed today and not tomorrow.
+      - name: Sync quoted tag statistics
+        run: |
+          uv run scripts/sync_tag_stats.py \
+            --conformance "$RUNNER_TEMP/conformance.json"
+
       - name: Upload conformance results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -210,10 +220,16 @@ jobs:
           path: ${{ runner.temp }}/conformance.json
           retention-days: 90
 
+      # Repo-wide, not a file list. The sync step rewrites whichever files
+      # scripts/sync_tag_stats.py has rules for, and naming them here would be
+      # a second copy of that list -- so adding a rule would silently fail to
+      # commit its file, which is exactly the drift being fixed. Nothing else
+      # in this job writes to the tree.
       - name: Check for changes
         id: changes
         run: |
-          git diff --quiet docs/reference/tag-coverage-analysis.md || echo "changed=true" >> "$GITHUB_OUTPUT"
+          git diff --quiet || echo "changed=true" >> "$GITHUB_OUTPUT"
+          git diff --stat
 
       # Pushes straight to main. This used to open an auto-merging PR, because
       # main required the "Lint & Audit"/"Build & Test" checks and a bot push
@@ -242,8 +258,10 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/reference/tag-coverage-analysis.md
-          git commit -m "docs: auto-update tag coverage analysis" \
+          # -u, matching the repo-wide diff above: stages the report plus any
+          # prose file the stats sync rewrote, without duplicating that list.
+          git add -u
+          git commit -m "docs: auto-update tag coverage analysis and quoted stats" \
                      -m "Generated from commit ${SRC_SHA}"
 
           # main moves fast here (the fix fleet merges frequently), so a plain

@@ -107,6 +107,7 @@ lint:
     @echo "Running clippy (dev profile)..."
     cargo clippy --all-features -- -D warnings
     @just check-corpus-guards
+    @just check-tag-stats
 
 # Run clippy linter (release profile - shares artifacts with build-release)
 lint-release:
@@ -622,6 +623,14 @@ docs-coverage:
         --corpus-desc "ExifTool $V \`t/images\` + \`tests/fixtures\`" \
         --output docs/reference/tag-coverage-analysis.md
     echo "Tag coverage report updated"
+
+# Sync the tag statistics quoted in README/docs prose to the measured values
+sync-tag-stats:
+    uv run scripts/sync_tag_stats.py
+
+# Fail if any quoted tag statistic is stale (changes nothing)
+check-tag-stats:
+    @uv run scripts/sync_tag_stats.py --check
 
 # Tag definitions only, to stdout (no build, no ExifTool, cannot overwrite the report)
 docs-coverage-definitions:
