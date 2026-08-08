@@ -18,6 +18,7 @@ pub mod psd;
 pub mod svg;
 pub mod webp;
 pub mod wpg;
+pub mod xcf;
 
 pub use avif::AVIFParser;
 pub use bmp::BMPParser;
@@ -33,3 +34,4 @@ pub use pfm::PFMParser;
 pub use psd::PSDParser;
 pub use svg::SVGParser;
 pub use webp::WebPParser;
+pub use xcf::XCFParser;

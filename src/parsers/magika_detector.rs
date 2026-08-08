@@ -128,6 +128,7 @@ fn magika_label_to_format(label: &str) -> io::Result<FileFormat> {
         "exr" => FileFormat::EXR,
         "bpg" => FileFormat::BPG,
         "flif" => FileFormat::FLIF,
+        "xcf" => FileFormat::XCF,
 
         // Documents
         "pdf" => FileFormat::PDF,

@@ -211,6 +211,9 @@ pub enum FileFormat {
     /// Free Lossless Image Format (.flif)
     FLIF,
 
+    /// GIMP native image format (.xcf)
+    XCF,
+
     /// Magick Image File Format (.miff, .mif)
     MIFF,
 
@@ -396,6 +399,7 @@ impl FileFormat {
             FileFormat::EXR => "EXR",
             FileFormat::PFM => "PFM",
             FileFormat::FLIF => "FLIF",
+            FileFormat::XCF => "XCF",
             FileFormat::MIFF => "MIFF",
             FileFormat::SVG => "SVG",
             FileFormat::ICO => "ICO",
@@ -506,6 +510,7 @@ impl FileFormat {
             FileFormat::EXR => &["exr"],
             FileFormat::PFM => &["pfm"],
             FileFormat::FLIF => &["flif"],
+            FileFormat::XCF => &["xcf"],
             FileFormat::MIFF => &["miff", "mif"],
             FileFormat::SVG => &["svg"],
             FileFormat::ICO => &["ico"],
