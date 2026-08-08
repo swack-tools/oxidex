@@ -271,16 +271,47 @@ fn count_instance_coverage(
     oxidex_instances: &HashMap<String, Vec<TagInfo>>,
     exiftool_instances: &HashMap<String, Vec<TagInfo>>,
 ) -> (usize, usize) {
-    // (source_file, normalized key) -> oxidex value. Normalizing both sides
-    // keeps `Canon:Make` and `MakerNotes:Make` on the same footing here
-    // exactly as they are in the distinct-key path.
-    let mut ox_by_file_key: HashMap<(&str, String), &TagInfo> = HashMap::new();
+    // Two indexes, mirroring the exact-then-normalized rule the distinct-key
+    // path uses: `Canon:Make` and `MakerNotes:Make` must meet, but an exact
+    // key match is preferred over one that only survives normalization.
+    let mut ox_exact: HashMap<(&str, String), &TagInfo> = HashMap::new();
+    let mut ox_normalized: HashMap<(&str, String), &TagInfo> = HashMap::new();
     for list in oxidex_instances.values() {
         for tag in list {
-            if let Some(sf) = tag.source_file.as_deref() {
-                let norm_key = normalize_key_for_comparison(&tag.key());
-                ox_by_file_key.entry((sf, norm_key)).or_insert(tag);
+            let Some(sf) = tag.source_file.as_deref() else {
+                continue;
+            };
+            let key = tag.key();
+
+            // Deterministic tie-break, NOT `or_insert`. These maps are built by
+            // iterating a HashMap, so "whichever arrived first" is whatever
+            // order the allocator and hash seed produced that run. Distinct
+            // keys can collide after normalization (two XMP namespaces both
+            // become `XMP:`), and if their values differ, `or_insert` would let
+            // the published percentage flicker between runs over nothing.
+            // Smallest original key wins, which is stable across processes.
+            match ox_normalized.entry((sf, normalize_key_for_comparison(&key))) {
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    if key < e.get().key() {
+                        e.insert(tag);
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(tag);
+                }
             }
+
+            // Exact keys cannot collide within a file except via a genuine
+            // double emission, which `duplicate_emissions` reports separately;
+            // tie-break on value so the choice is still order-independent.
+            ox_exact
+                .entry((sf, key))
+                .and_modify(|existing| {
+                    if tag.value < existing.value {
+                        *existing = tag;
+                    }
+                })
+                .or_insert(tag);
         }
     }
 
@@ -295,8 +326,11 @@ fn count_instance_coverage(
                 continue;
             };
             total += 1;
-            let norm_key = normalize_key_for_comparison(&et.key());
-            if let Some(ox) = ox_by_file_key.get(&(sf, norm_key))
+            let key = et.key();
+            let ox = ox_exact
+                .get(&(sf, key.clone()))
+                .or_else(|| ox_normalized.get(&(sf, normalize_key_for_comparison(&key))));
+            if let Some(ox) = ox
                 && normalize_value_for_comparison(&ox.value)
                     == normalize_value_for_comparison(&et.value)
             {
@@ -1209,6 +1243,43 @@ mod tests {
         let et = instances(&[("a.jpg", "MakerNotes", "LensType", "EF 50mm")]);
         let ox = instances(&[("a.jpg", "Canon", "LensType", "EF 50mm")]);
         assert_eq!(count_instance_coverage(&ox, &et), (1, 1));
+    }
+
+    /// An exact key match beats one that only survives normalization, so a
+    /// same-named tag in a second namespace cannot displace the real one.
+    #[test]
+    fn instance_coverage_prefers_an_exact_key_over_a_normalized_one() {
+        let et = instances(&[("a.jpg", "XMP", "Title", "right")]);
+        let ox = instances(&[
+            ("a.jpg", "XMP-dc", "Title", "wrong"),
+            ("a.jpg", "XMP", "Title", "right"),
+        ]);
+        assert_eq!(count_instance_coverage(&ox, &et), (1, 1));
+    }
+
+    /// Two distinct keys collapsing onto one normalized key must resolve the
+    /// same way on every run. These maps are built by iterating a HashMap, so
+    /// an `or_insert` "first wins" would pick whichever the hash seed happened
+    /// to yield and let the published percentage flicker between deploys.
+    #[test]
+    fn instance_coverage_is_stable_when_normalized_keys_collide() {
+        let et = instances(&[("a.jpg", "XMP", "Rights", "b-value")]);
+        // Both oxidex keys normalize to XMP:Rights with different values, and
+        // neither matches ExifTool's key exactly.
+        let colliding = [
+            ("a.jpg", "XMP-dc", "Rights", "a-value"),
+            ("a.jpg", "XMP-xmpRights", "Rights", "b-value"),
+        ];
+        let forward = instances(&colliding);
+        let mut reversed_rows = colliding;
+        reversed_rows.reverse();
+        let reversed = instances(&reversed_rows);
+
+        // Insertion order must not change the verdict. `XMP-dc:Rights` sorts
+        // before `XMP-xmpRights:Rights`, so it wins both ways -- and its value
+        // disagrees with ExifTool, so both runs must report a miss.
+        assert_eq!(count_instance_coverage(&forward, &et), (0, 1));
+        assert_eq!(count_instance_coverage(&reversed, &et), (0, 1));
     }
 
     /// BMP/ICO in ExifTool's `t/images`: everything ExifTool emits is a
