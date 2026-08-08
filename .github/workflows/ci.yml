@@ -87,6 +87,7 @@ jobs:
           cache-on-failure: true
           cache-provider: warpbuild
           shared-key: lint
+          cache-workspace-crates: true
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-features -- -D warnings
       - uses: rustsec/audit-check@e9159ac5f7d7d873ce074ca134da2f445c0a4a61 # v1.3.2
@@ -114,12 +115,22 @@ jobs:
       # cache-all-crates: this job also builds cargo-nextest and cbindgen via
       # taiki-e/install-action, and default caching only covers workspace
       # dependencies, not CI tooling.
+      #
+      # cache-workspace-crates: rust-cache drops workspace members from the
+      # cache by default, on the assumption they change every commit. That is
+      # true of the root `oxidex` crate but false of the eight generated
+      # `oxidex-tags-*` crates, which are regenerated from ExifTool only when
+      # the tag tables move. Measured on run 31274063378: those eight were
+      # compiled from scratch three times in one job (build, nextest, C FFI)
+      # and cached zero times across runs. Cargo fingerprints still force a
+      # rebuild whenever their sources actually change.
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           cache-on-failure: true
           cache-provider: warpbuild
           shared-key: test
           cache-all-crates: true
+          cache-workspace-crates: true
       - uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
         with:
           # Pin cbindgen: the committed api/oxidex.h is generated with 0.29.2,
@@ -132,8 +143,14 @@ jobs:
       # harness. The release artifacts themselves are covered by the build step
       # above and by release.yml's per-platform builds on tag pushes.
       - run: cargo nextest run --all-features --features tag-comparison-binary
+      # Same feature set as the nextest step above, deliberately. Without it
+      # cargo resolves a different feature graph and rebuilds all nine
+      # workspace crates before running one test: measured at 51s on run
+      # 31274063378, of which only 11.75s was the test itself. nextest
+      # already runs this same test (as oxidex::ffi_c_integration); this step
+      # is kept for its uncaptured output, not for coverage.
       - name: C FFI integration test
-        run: cargo test --test ffi_c_integration -- --nocapture
+        run: cargo test --all-features --features tag-comparison-binary --test ffi_c_integration -- --nocapture
       - name: Run doc tests
         run: cargo test --doc --all-features
       - name: Verify C header is up-to-date
@@ -311,6 +328,7 @@ jobs:
           cache-on-failure: true
           cache-provider: warpbuild
           shared-key: metrics
+          cache-workspace-crates: true
       - name: Run benchmarks
         run: cargo bench --bench integration_benchmarks --bench parse_benchmarks
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
