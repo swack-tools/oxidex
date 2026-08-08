@@ -438,14 +438,14 @@ fn handle_special_byte_tags(tag_id: u16, bytes: &[u8]) -> Option<TagValue> {
     // The Windows Explorer XP* tags (0x9c9b-0x9c9f). Each is declared
     // `Format => 'undef', Writable => 'int8u'` with
     // `ValueConv => '$self->Decode($val,"UCS2","II")'`
-    // (Exif.pm:2586 XPTitle, :2594 XPComment, :2602 XPAuthor,
-    //  :2610 XPKeywords, :2618 XPSubject) -- the bytes are UTF-16
+    // (Exif.pm 13.59:2629 XPTitle, :2643 XPComment, :2651 XPAuthor,
+    //  :2661 XPKeywords, :2669 XPSubject) -- the bytes are UCS-2
     // little-endian text, NUL-terminated.
     const XP_TITLE: u16 = 0x9C9B;
     const XP_SUBJECT: u16 = 0x9C9F;
 
     if (XP_TITLE..=XP_SUBJECT).contains(&tag_id) {
-        return Some(TagValue::new_string(decode_utf16le_string(bytes)));
+        return Some(TagValue::new_string(decode_xp_ucs2_string(bytes)));
     }
 
     match tag_id {
@@ -484,21 +484,52 @@ fn handle_special_byte_tags(tag_id: u16, bytes: &[u8]) -> Option<TagValue> {
     }
 }
 
-/// Decodes a NUL-terminated UTF-16 little-endian byte string.
+/// Decodes a NUL-terminated UCS-2 byte string the way the XP* tags declare.
 ///
-/// This is ExifTool's `Decode($val,"UCS2","II")` for the XP* tags: pairs of
-/// bytes, low byte first, stopping at the first NUL code unit (which is the
-/// terminator ExifTool's `ValueConvInv` writes back). An odd trailing byte is
-/// dropped rather than misread as half a code unit.
+/// This is ExifTool's `Decode($val,"UCS2","II")`, which runs Charset.pm's
+/// 2-byte fixed-width branch:
+///
+/// - A leading byte-order mark overrides the declared `"II"`
+///   (`Charset.pm:203`, `$val =~ s/^(\xfe\xff|\xff\xfe)//`): the mark is
+///   removed, and `\xfe\xff` additionally switches the *rest* of the value to
+///   big-endian (`unpack 'n*'` instead of `'v*'`). `Charset.pm:147` states the
+///   rule outright -- "byte order mark observed and then removed with UCS2 and
+///   UCS4". Only one mark is consumed, and only at the start.
+/// - The decoded text is cut at the first NUL (`Charset.pm:326`,
+///   `$outVal =~ s/\0.*//s`) -- the terminator `ValueConvInv` writes back.
+///   Breaking at the first zero code unit is the same cut, because a NUL byte
+///   in the packed UTF-8 can only come from code point 0.
+/// - An odd trailing byte is dropped rather than misread as half a code unit,
+///   matching Perl's `unpack 'v*'`.
 ///
 /// An empty value decodes to the empty string, which is what
 /// `exiftool -G1 -s` prints for `[IFD0] XPTitle` on
 /// Nikon/NikonCoolpixS9900.jpg. Before this, the two NUL bytes fell through
 /// to the generic heuristic and came back as the integer `0`.
-fn decode_utf16le_string(bytes: &[u8]) -> String {
+///
+/// One case is deliberately *not* reproduced. `UCS2` does not combine
+/// surrogate pairs -- `Charset.pm:80` marks `UTF16` as "UCS2 with surrogate
+/// pairs added", and the combining loop at `Charset.pm:235` is gated on
+/// `$charset eq 'UTF16'` -- so ExifTool renders `3c d8 8c df` as two lone
+/// surrogates encoded CESU-8 style (`ed a0 bc ed be 8c`). A Rust `String` is
+/// required to hold valid UTF-8 and cannot represent a lone surrogate at all,
+/// so [`String::from_utf16_lossy`] folds the pair into U+1F38C instead. There
+/// is no rendering of that input this function could make match.
+fn decode_xp_ucs2_string(bytes: &[u8]) -> String {
+    // Honour a leading BOM over the declared "II", as Charset.pm does.
+    let (bytes, big_endian) = match bytes {
+        [0xFE, 0xFF, rest @ ..] => (rest, true),
+        [0xFF, 0xFE, rest @ ..] => (rest, false),
+        _ => (bytes, false),
+    };
+
     let mut units = Vec::with_capacity(bytes.len() / 2);
     for pair in bytes.chunks_exact(2) {
-        let unit = u16::from_le_bytes([pair[0], pair[1]]);
+        let unit = if big_endian {
+            u16::from_be_bytes([pair[0], pair[1]])
+        } else {
+            u16::from_le_bytes([pair[0], pair[1]])
+        };
         if unit == 0 {
             break;
         }
@@ -1230,6 +1261,115 @@ mod tests {
             crate::core::operations::read_metadata(path).expect("Samsung Galaxy A55 parses");
 
         assert_eq!(metadata.get_integer("ExifIFD:TimeZoneOffset"), Some(2));
+    }
+
+    /// Builds the raw bytes a Windows writer stores for an XP* tag: UCS-2
+    /// little-endian text followed by the two-byte NUL terminator that
+    /// ExifTool's `ValueConvInv` appends.
+    fn xp_bytes(text: &str) -> Vec<u8> {
+        let mut bytes: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        bytes.extend_from_slice(&[0, 0]);
+        bytes
+    }
+
+    /// The XP* tags carry `ValueConv => '$self->Decode($val,"UCS2","II")'`
+    /// (Exif.pm 13.59:2629 XPTitle, :2661 XPKeywords). Every expectation here
+    /// was produced by calling that exact code in the pinned 13.59 tree:
+    ///
+    /// ```text
+    /// perl -I/tmp/oxidex-exiftool-cache/exiftool/lib -MImage::ExifTool -e '
+    ///   printf "%s\n", unpack "H*",
+    ///     Image::ExifTool->new->Decode($ARGV[0], "UCS2", "II")'
+    /// ```
+    ///
+    /// giving, for the inputs below (hex in -> hex out):
+    ///
+    /// ```text
+    /// 480069000000          -> 4869      ("Hi")
+    /// 48006900              -> 4869      (no terminator)
+    /// 48006900000058005900  -> 4869      (truncated at first NUL)
+    /// 4800690041            -> 4869      (odd trailing byte dropped)
+    /// fffe480069000000      -> 4869      (LE BOM stripped)
+    /// feff004800690000      -> 4869      (BE BOM strips AND switches order)
+    /// e9000000              -> c3a9      ("é")
+    /// (empty)               -> (empty)
+    /// ```
+    #[test]
+    fn xp_tags_decode_ucs2_the_way_pinned_exiftool_does() {
+        let decode = |bytes: &[u8]| decode_xp_ucs2_string(bytes);
+
+        assert_eq!(decode(&[0x48, 0, 0x69, 0, 0, 0]), "Hi");
+        assert_eq!(decode(&[0x48, 0, 0x69, 0]), "Hi", "no terminator");
+        assert_eq!(
+            decode(&[0x48, 0, 0x69, 0, 0, 0, 0x58, 0, 0x59, 0]),
+            "Hi",
+            "text after the NUL is discarded (Charset.pm:326)"
+        );
+        assert_eq!(
+            decode(&[0x48, 0, 0x69, 0, 0x41]),
+            "Hi",
+            "odd trailing byte is dropped, not misread"
+        );
+        assert_eq!(decode(&[0xE9, 0, 0, 0]), "é");
+        assert_eq!(decode(&[]), "");
+
+        // Charset.pm:203 removes a leading BOM; :147 documents it for UCS2.
+        assert_eq!(
+            decode(&[0xFF, 0xFE, 0x48, 0, 0x69, 0, 0, 0]),
+            "Hi",
+            "little-endian BOM is stripped, not decoded as U+FEFF"
+        );
+        assert_eq!(
+            decode(&[0xFE, 0xFF, 0, 0x48, 0, 0x69, 0, 0]),
+            "Hi",
+            "big-endian BOM is stripped and flips the rest to big-endian"
+        );
+
+        // A BOM is only special at the start, and only one is consumed.
+        assert_eq!(
+            decode(&[0x48, 0, 0xFF, 0xFE, 0x69, 0, 0, 0]),
+            "H\u{FEFF}i",
+            "a BOM inside the text is ordinary U+FEFF"
+        );
+    }
+
+    /// End-to-end through the public entry point, on the real bytes ExifTool
+    /// 13.59 reports for these files. `exiftool -G1 -s` prints:
+    ///
+    /// ```text
+    /// $ exiftool -G1 -s -IFD0:XPKeywords Sony/SonyDSC-W810.jpg
+    /// [IFD0]          XPKeywords                      : 01.06
+    ///
+    /// $ exiftool -G1 -s -IFD0:XPKeywords DJI/DJI_FC6310.jpg
+    /// [IFD0]          XPKeywords                      : v01.05.1577;1.1.6;v1.0.0
+    /// ```
+    ///
+    /// The Sony value is stored as `30 00 31 00 2e 00 30 00 36 00 00 00`
+    /// (`exiftool -v3`), i.e. `int8u[12]` read as `undef[12]` -- field type 1.
+    /// `01.06` also has to survive as text: it must not be re-parsed as a
+    /// number. The DJI value pins the multi-value form, which ExifTool leaves
+    /// as one semicolon-joined string with no separator rewriting.
+    #[test]
+    fn xp_keywords_matches_pinned_exiftool_output() {
+        let sony = raw_bytes_to_tag_value(
+            &[0x30, 0, 0x31, 0, 0x2E, 0, 0x30, 0, 0x36, 0, 0, 0],
+            1,
+            12,
+            0x9C9E,
+            ByteOrder::LittleEndian,
+        );
+        assert_eq!(sony, TagValue::String("01.06".to_string()));
+
+        let dji_text = "v01.05.1577;1.1.6;v1.0.0";
+        let dji_bytes = xp_bytes(dji_text);
+        let dji = raw_bytes_to_tag_value(
+            &dji_bytes,
+            1,
+            dji_bytes.len() as u32,
+            0x9C9E,
+            ByteOrder::LittleEndian,
+        );
+        assert_eq!(dji, TagValue::String(dji_text.to_string()));
     }
 
     #[test]
