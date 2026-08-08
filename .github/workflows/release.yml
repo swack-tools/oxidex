@@ -40,6 +40,7 @@ jobs:
       # without it the x64 and arm64 caches would collide on one key.
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
+          cache-on-failure: true
           cache-provider: warpbuild
           shared-key: release
           key: ${{ matrix.target }}
@@ -85,6 +86,7 @@ jobs:
 
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
+          cache-on-failure: true
           cache-provider: warpbuild
           shared-key: release-windows
 
@@ -136,6 +138,7 @@ jobs:
       # image's preinstalled Rust, which is what the cache key hashes.
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
+          cache-on-failure: true
           cache-provider: warpbuild
           shared-key: release-macos
 

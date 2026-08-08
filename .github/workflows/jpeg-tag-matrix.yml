@@ -96,6 +96,7 @@ jobs:
 
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
+          cache-on-failure: true
           cache-provider: warpbuild
           shared-key: jpeg-tag-matrix
 
@@ -115,9 +116,12 @@ jobs:
       # degrades ExifTool silently rather than failing. The clone is the
       # network cost worth skipping; the cpan install stays unconditional.
       # No restore-keys -- a fuzzy key here would serve a stale ExifTool.
-      - name: Cache pinned ExifTool source
+      # restore + save as separate steps rather than the combined action,
+      # whose post-step save is declared `post-if: success()` -- a later
+      # failure in this long job would otherwise discard a good clone.
+      - name: Restore pinned ExifTool source
         id: exiftool-cache
-        uses: WarpBuilds/cache@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
+        uses: WarpBuilds/cache/restore@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
         with:
           path: /tmp/exiftool
           key: exiftool-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
@@ -146,6 +150,16 @@ jobs:
           GOT=$(/tmp/exiftool/exiftool -ver)
           [ "$GOT" = "$V" ] || { echo "::error::installed ExifTool $GOT, expected $V"; exit 1; }
           echo "EXIFTOOL=/tmp/exiftool/exiftool" >> "$GITHUB_ENV"
+
+      # Only on a miss, and only after the verify above passed -- default
+      # `success()` semantics keep a bad tree from being persisted. Reuses
+      # the restore step's cache-primary-key rather than recomputing it.
+      - name: Save pinned ExifTool source
+        if: steps.exiftool-cache.outputs.cache-hit != 'true'
+        uses: WarpBuilds/cache/save@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
+        with:
+          path: /tmp/exiftool
+          key: ${{ steps.exiftool-cache.outputs.cache-primary-key }}
 
       - name: Build oxidex and jpeg-tag-matrix (release)
         run: |

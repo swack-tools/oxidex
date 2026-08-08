@@ -84,6 +84,7 @@ jobs:
       # from Build & Test's so a clippy-only cache miss can't evict the other.
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
+          cache-on-failure: true
           cache-provider: warpbuild
           shared-key: lint
       - run: cargo fmt --all -- --check
@@ -115,6 +116,7 @@ jobs:
       # dependencies, not CI tooling.
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
+          cache-on-failure: true
           cache-provider: warpbuild
           shared-key: test
           cache-all-crates: true
@@ -168,9 +170,14 @@ jobs:
       # The key carries the resolved version and nothing else fuzzy -- no
       # restore-keys -- so a `.exiftool-version` bump always misses and
       # re-downloads. A loosely-matched key here would serve a stale ExifTool.
-      - name: Cache pinned ExifTool source
+      # restore + save as separate steps rather than the combined action: the
+      # combined one saves from a post step declared `post-if: success()`, so
+      # a later failure in this job (a flaky test, say) throws away a
+      # perfectly good ExifTool download and the next run re-fetches it. The
+      # explicit save below runs as soon as the tree is verified.
+      - name: Restore pinned ExifTool source
         id: exiftool-cache
-        uses: WarpBuilds/cache@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
+        uses: WarpBuilds/cache/restore@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
         with:
           path: /tmp/exiftool-src
           key: exiftool-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
@@ -202,6 +209,16 @@ jobs:
           echo "/tmp/exiftool-src" >> "$GITHUB_PATH"
           GOT=$(/tmp/exiftool-src/exiftool -ver)
           [ "$GOT" = "$V" ] || { echo "::error::installed ExifTool $GOT, expected $V"; exit 1; }
+      # Only on a miss, and only once the step above has proved the tree is
+      # the right release -- default `success()` semantics are load-bearing
+      # here, so a failed verify never persists a bad tree. Reuses the
+      # restore step's cache-primary-key rather than recomputing it.
+      - name: Save pinned ExifTool source
+        if: steps.exiftool-cache.outputs.cache-hit != 'true'
+        uses: WarpBuilds/cache/save@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
+        with:
+          path: /tmp/exiftool-src
+          key: ${{ steps.exiftool-cache.outputs.cache-primary-key }}
       - name: Integration tests (ExifTool comparison)
         # EXIFTOOL points the oracle at the pinned checkout explicitly rather
         # than relying on PATH order, so a runner image that ships its own
@@ -291,6 +308,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
+          cache-on-failure: true
           cache-provider: warpbuild
           shared-key: metrics
       - name: Run benchmarks

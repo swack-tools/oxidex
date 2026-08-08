@@ -60,6 +60,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
+          cache-on-failure: true
           cache-provider: warpbuild
           shared-key: report
 
@@ -145,6 +146,7 @@ jobs:
         if: steps.changes.outputs.benchmarks_changed == 'true'
         uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
+          cache-on-failure: true
           cache-provider: warpbuild
           shared-key: bench
 
