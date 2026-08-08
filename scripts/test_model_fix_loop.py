@@ -2473,6 +2473,56 @@ class RefreshWorktreeTests(unittest.TestCase):
         self.assertEqual(commands[-1], ["git", "merge", "--ff-only", "origin/main"])
 
     @patch("model_fix_loop.subprocess.run")
+    def test_diverged_worktree_resets_once_its_commits_are_upstream(self, mock_run):
+        # A worker commits its verified fix and exits (max_tags_per_process=1),
+        # so on respawn the worktree carries commits base_ref does not and
+        # --ff-only correctly refuses. Once that work has landed upstream --
+        # typically squashed under a different sha, which is why this asks
+        # `git cherry` by patch-id rather than comparing shas -- the local
+        # copy is redundant and the worker should rejoin the tip instead of
+        # measuring against its fork point forever.
+        def fake(cmd, **_kwargs):
+            if cmd[:2] == ["git", "fetch"]:
+                return MagicMock(returncode=0, stdout="", stderr="")
+            if cmd[:2] == ["git", "merge"]:
+                return MagicMock(returncode=128, stdout="",
+                                 stderr="fatal: Not possible to fast-forward, aborting.\n")
+            if cmd[:2] == ["git", "cherry"]:
+                return MagicMock(returncode=0, stdout="- abc123\n- def456\n", stderr="")
+            if cmd[:2] == ["git", "reset"]:
+                return MagicMock(returncode=0, stdout="", stderr="")
+            return MagicMock(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = fake
+        ok, message = refresh_worktree(Path("/fake/repo"), "origin/main")
+        self.assertTrue(ok)
+        self.assertIn("reconciled", message)
+        commands = [call.args[0] for call in mock_run.call_args_list]
+        self.assertIn(["git", "reset", "--hard", "origin/main"], commands)
+
+    @patch("model_fix_loop.subprocess.run")
+    def test_diverged_worktree_keeps_unpublished_work(self, mock_run):
+        # The case that makes the reset conditional. Resetting whenever
+        # --ff-only fails would be simpler and would silently destroy a
+        # verified fix that has not been published yet. Waiting on a stale
+        # base is recoverable; throwing away verified work is not.
+        def fake(cmd, **_kwargs):
+            if cmd[:2] == ["git", "fetch"]:
+                return MagicMock(returncode=0, stdout="", stderr="")
+            if cmd[:2] == ["git", "merge"]:
+                return MagicMock(returncode=128, stdout="",
+                                 stderr="fatal: Not possible to fast-forward, aborting.\n")
+            if cmd[:2] == ["git", "cherry"]:
+                # '+' == no equivalent patch upstream yet.
+                return MagicMock(returncode=0, stdout="- abc123\n+ f00baa\n", stderr="")
+            return MagicMock(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = fake
+        ok, message = refresh_worktree(Path("/fake/repo"), "origin/main")
+        self.assertFalse(ok)
+        self.assertIn("unpublished", message)
+        commands = [call.args[0] for call in mock_run.call_args_list]
+        self.assertNotIn(["git", "reset", "--hard", "origin/main"], commands)
+
+    @patch("model_fix_loop.subprocess.run")
     def test_fetch_failure_is_reported_but_not_fatal(self, mock_run):
         # The network is allowed to be down; refusing to work because of it
         # would be a worse failure than the staleness. But a refresh that
