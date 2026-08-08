@@ -507,6 +507,10 @@ impl OlympusParser {
                 OLYMPUS_IMAGE_PROCESSING_SUBIFD => tables::IMAGE_PROCESSING,
                 OLYMPUS_FOCUS_INFO_SUBIFD => tables::FOCUS_INFO,
                 OLYMPUS_RAW_INFO_SUBIFD => tables::RAW_INFO,
+                // ExifTool recurses into Olympus::Main a second time here
+                // (Olympus.pm 0x4000 `MainInfoIFD`); see tables::MAIN_INFO
+                // for why only BodyFirmwareVersion is re-declared for it.
+                OLYMPUS_MAIN_INFO_SUBIFD => tables::MAIN_INFO,
                 _ => continue,
             };
             // Sub-IFD pointers are ordinary LONG/IFD values, so the pointer
