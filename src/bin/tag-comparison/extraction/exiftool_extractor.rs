@@ -606,6 +606,7 @@ impl ExifToolExtractor {
             "SVG" => vec!["svg"],
             "EPS" => vec!["eps", "ps"],
             "FLIF" => vec!["flif"],
+            "XCF" => vec!["xcf"],
             "EXR" => vec!["exr"],
             "JXL" => vec!["jxl"],
             "AVIF" => vec!["avif"],
