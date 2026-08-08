@@ -541,11 +541,38 @@ docs-generate-tags:
     cargo run -p oxidex-tags --example render_domain -- document docs/tag-domains/document.md
     cargo run -p oxidex-tags --example render_domain -- specialty docs/tag-domains/specialty.md
 
-# Regenerate tag coverage analysis report
+# Regenerate tag coverage analysis report (measured against pinned ExifTool)
 docs-coverage:
-    @echo "Regenerating tag coverage analysis..."
-    uv run scripts/generate_tag_coverage.py --output docs/reference/tag-coverage-analysis.md
-    @echo "Tag coverage report updated"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Building oxidex..."
+    cargo build --bin oxidex
+
+    echo "Measuring extraction coverage against pinned ExifTool..."
+    # --ext: tests/fixtures doubles as a test-fixture tree and carries mock .sh
+    # scripts and .json/.md scaffolding. ExifTool scores those as ENV
+    # SCRIPT/JSON and they drag the total from 96.0% to 83.8% while saying
+    # nothing about metadata extraction.
+    # --min-*: a degraded oracle does not crash, it reports a confident wrong
+    # number over a fraction of the corpus. Fail instead.
+    uv run tools/exiftool-tables/conformance.py tests/fixtures \
+        --recursive \
+        --ext jpg,jpeg,tif,tiff,png,pdf,mp4,mov,dng,heic,webp,gif,bmp \
+        --oxidex ./target/debug/oxidex \
+        --min-files 40 \
+        --min-tags 1200 \
+        --json-out /tmp/oxidex-conformance.json
+
+    echo "Regenerating tag coverage analysis..."
+    uv run scripts/generate_tag_coverage.py \
+        --conformance /tmp/oxidex-conformance.json \
+        --corpus-desc 'tests/fixtures (recursive), media files only' \
+        --output docs/reference/tag-coverage-analysis.md
+    echo "Tag coverage report updated"
+
+# Tag definitions only, to stdout (no build, no ExifTool, cannot overwrite the report)
+docs-coverage-definitions:
+    uv run scripts/generate_tag_coverage.py --skip-conformance
 
 # ExifTool Comparison
 # -------------------

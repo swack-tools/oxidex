@@ -248,6 +248,15 @@ def main():
                          "resolved by scripts/exiftool_oracle.py")
     ap.add_argument("--oxidex", default="./target/debug/oxidex")
     ap.add_argument("--only", help="substring filter on filename")
+    ap.add_argument("--ext",
+                    help="comma-separated extension allow-list, e.g. "
+                         "'jpg,tif,png'. Corpora that double as test-fixture "
+                         "trees carry harness scaffolding -- mock .sh scripts, "
+                         ".json baselines, .md notes -- and ExifTool happily "
+                         "scores those as ENV SCRIPT/JSON, whose 'tags' are "
+                         "just object keys. Left unfiltered they swamp the "
+                         "total: tests/fixtures scores 83.8%% with them and "
+                         "97%%+ without. Default is no filter.")
     ap.add_argument("--recursive", action="store_true",
                     help="walk the corpus recursively (most sample corpora are "
                          "nested one directory per manufacturer)")
@@ -275,13 +284,27 @@ def main():
                   for root, _dirs, fs in os.walk(args.corpus) for f in fs)
     else:
         walked = (os.path.join(args.corpus, f) for f in os.listdir(args.corpus))
-    files = sorted(
-        p for p in walked
-        if os.path.isfile(p)
-        and (not args.only or args.only.lower() in os.path.basename(p).lower())
-    )
+
+    exts = None
+    if args.ext:
+        exts = {e.strip().lower().lstrip(".") for e in args.ext.split(",") if e.strip()}
+
+    def keep(p):
+        if not os.path.isfile(p):
+            return False
+        base = os.path.basename(p)
+        if args.only and args.only.lower() not in base.lower():
+            return False
+        if exts is not None and os.path.splitext(base)[1].lstrip(".").lower() not in exts:
+            return False
+        return True
+
+    files = sorted(p for p in walked if keep(p))
     if not files:
-        sys.exit(f"no files in {args.corpus}")
+        sys.exit(
+            f"no files in {args.corpus}"
+            + (f" matching --ext {args.ext}" if exts else "")
+        )
 
     per_ext = defaultdict(Counter)
     rename_votes = defaultdict(Counter)

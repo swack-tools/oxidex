@@ -24,8 +24,8 @@ features:
     title: Memory Safe
     details: Rust eliminates buffer overflows, use-after-free bugs, and entire classes of vulnerabilities
   - icon: 🎯
-    title: 16,677 Metadata Tags
-    details: 58% ExifTool tag parity across 140+ format families — tracked automatically, updated on every push
+    title: 16,684 Metadata Tags
+    details: Extraction measured against pinned ExifTool on every push, not estimated — per-format scores across 140+ format families
     link: /reference/tag-coverage-analysis
     linkText: View Coverage
   - icon: 🤖
