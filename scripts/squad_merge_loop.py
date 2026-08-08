@@ -147,12 +147,22 @@ DEFAULT_RECUT_STALENESS_SECONDS = 3 * 24 * 3600
 #: the squad branches still carry in pre-merge form. A branch is stale the
 #: moment its content lands upstream by another route, which is a DISTANCE
 #: question, not an age one.
-# Let two ordinary main advances settle, then re-cut before a third independent
-# change can leave every active squad doing validation against stale code.
-# The re-cut path preserves every patch-id-novel consumed commit, so this
-# modestly lower gate trades a little more cheap Git work for avoiding a whole
-# fleet of stale merge bases.
-DEFAULT_RECUT_BEHIND_COMMITS = 2
+# Zero tolerance: re-cut as soon as origin/main moves at all. should_recut
+# compares with a strict `>`, so 0 means "any branch even one commit behind the
+# tip is stale" -- which is the property that makes the fleet's measurements
+# mean anything. The re-cut path preserves every patch-id-novel consumed commit,
+# so the cost of a tight gate is a little more cheap Git work; the cost of a
+# loose one is a whole fleet validating against a merge base upstream has
+# already moved past.
+#
+# This was 2 (i.e. tolerate up to 3 commits of drift). That window is not
+# theoretical: a live run left 606 of 928 tracked tags (65%) already fixed and
+# merged upstream while workers kept re-attempting them.
+#
+# NOTE: 0 only behaves this way because should_recut guards on
+# `behind_commits is not None`. Under the old truthiness test, 0 disabled the
+# distance check outright -- the opposite of what it reads like.
+DEFAULT_RECUT_BEHIND_COMMITS = 0
 
 ORIGIN_MAIN = "origin/main"
 
@@ -1394,7 +1404,13 @@ def should_recut(repo_root, squad_branch, origin_ref=ORIGIN_MAIN,
             if changed.startswith("scripts/") and Path(changed).name.startswith("test_"):
                 continue
             return True
-    if behind_commits:
+    # `is not None`, not a truthiness test. behind_commits=0 is the meaningful
+    # "re-cut on any drift at all" setting, and a bare `if behind_commits:`
+    # treats it as falsy -- silently skipping the distance check entirely and
+    # leaving only the much slower time-based staleness path below. That is the
+    # exact opposite of what 0 reads like it should mean, so the guard has to
+    # distinguish "zero tolerance" from "no opinion" (None).
+    if behind_commits is not None:
         behind = _git(["rev-list", "--count", f"{sha}..{origin_ref}"], repo_root, check=False)
         if behind.returncode == 0 and behind.stdout.strip().isdigit():
             if int(behind.stdout.strip()) > behind_commits:

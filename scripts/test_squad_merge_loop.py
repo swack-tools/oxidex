@@ -1394,14 +1394,54 @@ class ShouldRecutTests(GitRepoTestCase):
         for i in range(10):
             self.commit_file(repo, f"m{i}.txt", str(i), f"main moves {i}")
         # Base is BRAND NEW by the clock -- the age clause alone says False.
+        # behind_commits=None disables the distance clause so this isolates
+        # age. (It used to be 0 here, back when 0 was the falsy "off" switch.
+        # 0 now means zero tolerance -- re-cut on any drift at all -- so the
+        # "no distance opinion" case needs its own value, and None is it.)
         self.assertFalse(sml.should_recut(
             repo, "squad/nikon", origin_ref="main", staleness_seconds=10**9,
-            now_fn=lambda: commit_ts + 1, behind_commits=0,
+            now_fn=lambda: commit_ts + 1, behind_commits=None,
         ))
         # ...but main is 10 commits past it, so the distance clause fires.
         self.assertTrue(sml.should_recut(
             repo, "squad/nikon", origin_ref="main", staleness_seconds=10**9,
             now_fn=lambda: commit_ts + 1, behind_commits=8,
+        ))
+
+    def test_zero_tolerance_recuts_on_a_single_commit_of_drift(self):
+        """behind_commits=0 means the tip, not "don't check".
+
+        The distinction is load-bearing: under the old truthiness guard 0
+        silently skipped the distance clause entirely, so a config that read
+        as "never tolerate drift" actually tolerated unlimited drift and fell
+        back to the slow age clause.
+        """
+        repo = self.make_repo()
+        git(repo, "branch", "squad/nikon")
+        base_sha = git_out(repo, "rev-parse", "main").strip()
+        commit_ts = int(git_out(repo, "log", "-1", "--format=%ct", base_sha).strip())
+        # Exactly one commit of drift, and brand new by the clock so the age
+        # clause cannot be what fires.
+        self.commit_file(repo, "m0.txt", "0", "main moves once")
+        self.assertTrue(sml.should_recut(
+            repo, "squad/nikon", origin_ref="main", staleness_seconds=10**9,
+            now_fn=lambda: commit_ts + 1, behind_commits=0,
+        ))
+
+    def test_zero_tolerance_does_not_recut_when_already_on_the_tip(self):
+        """A branch level with origin_ref is current, and 0 must not churn it.
+
+        `>` not `>=`: zero drift is not drift, so re-cutting here would mean
+        re-cutting forever on a fleet that is already exactly where it should
+        be.
+        """
+        repo = self.make_repo()
+        git(repo, "branch", "squad/nikon")
+        base_sha = git_out(repo, "rev-parse", "main").strip()
+        commit_ts = int(git_out(repo, "log", "-1", "--format=%ct", base_sha).strip())
+        self.assertFalse(sml.should_recut(
+            repo, "squad/nikon", origin_ref="main", staleness_seconds=10**9,
+            now_fn=lambda: commit_ts + 1, behind_commits=0,
         ))
 
     def test_a_branch_only_slightly_behind_is_left_alone(self):
