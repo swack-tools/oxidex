@@ -13,6 +13,7 @@ use crate::parsers::archive::sevenz::parse_7z_metadata;
 use crate::parsers::archive::tar::parse_tar_metadata;
 use crate::parsers::archive::zip::parse_zip_metadata;
 use crate::parsers::audio::aac::parse_aac_metadata;
+use crate::parsers::audio::aiff::parse_aiff_metadata;
 use crate::parsers::audio::ape::parse_ape_metadata;
 use crate::parsers::audio::dss::parse_dss_metadata;
 use crate::parsers::audio::flac::parse_flac_metadata;
@@ -136,6 +137,7 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::FLAC => convert_string_error(parse_flac_metadata(reader), "FLAC"),
         FileFormat::AAC => convert_string_error(parse_aac_metadata(reader), "AAC"),
         FileFormat::WAV => convert_string_error(parse_wav_metadata(reader), "WAV"),
+        FileFormat::AIFF => convert_string_error(parse_aiff_metadata(reader), "AIFF"),
         FileFormat::OGG => convert_string_error(parse_ogg_metadata(reader), "OGG"),
         FileFormat::OPUS => convert_string_error(parse_opus_metadata(reader), "Opus"),
         FileFormat::APE => convert_string_error(parse_ape_metadata(reader), "APE"),

@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 pub mod aac;
+pub mod aiff;
 pub mod ape;
 pub mod dss;
 pub mod flac;
@@ -15,6 +16,7 @@ pub mod ram;
 pub mod wav;
 
 pub use aac::AacParser;
+pub use aiff::AiffParser;
 pub use ape::ApeParser;
 pub use flac::FlacParser;
 pub use mp3::Mp3Parser;
