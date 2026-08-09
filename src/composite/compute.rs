@@ -618,6 +618,22 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             panasonic_advanced_scene_mode(get(i, 0)?, get(i, 1)?, get(i, 2)?)
         }
 
+        // AIFF.pm:136-145 Composite::Duration:
+        //   require:  0) AIFF:SampleRate, 1) AIFF:NumSampleFrames
+        //   RawConv:  `($val[0] and $val[1]) ? $val[1] / $val[0] : undef`
+        //   PrintConv: `ConvertDuration($val)`
+        // Both inputs must be truthy, so a zero frame count is as disqualifying
+        // as a zero rate -- a silent file has no duration rather than a
+        // duration of nothing.
+        ("AIFF", "Duration") => {
+            let (rate, frames) = (f(get(i, 0))?, f(get(i, 1))?);
+            if rate == 0.0 || frames == 0.0 {
+                return None;
+            }
+            let seconds = frames / rate;
+            Computed::new(seconds.to_string(), convert_duration(seconds))
+        }
+
         // QuickTime.pm:8653-8665:
         // `int(MediaDataSize * 8 / (Duration / TimeScale) + 0.5)` followed
         // by `ConvertBitrate`. `Duration` reaches this layer in its unrounded

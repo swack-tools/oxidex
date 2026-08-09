@@ -38,6 +38,7 @@
 use crate::core::formatters::picture_type_name;
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::exiftool_tables::{PrintConv, find_table};
 use crate::io::EndianReader;
 use nom::{
     IResult,
@@ -164,15 +165,20 @@ fn parse_id3v2(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Result<u3
     Ok(id3v2_header.size)
 }
 
+/// Parsed ID3v2 header.
+///
+/// Crate-visible because AIFF carries the same ID3v2 blob inside an `ID3 `
+/// chunk (`AIFF.pm` routes it to `ID3::ProcessID3`), and a second ID3 reader
+/// would be a second place for the frame table to drift.
 #[derive(Debug)]
-struct ID3v2Header {
-    version: u8,
-    revision: u8,
-    flags: u8,
-    size: u32, // Synchsafe integer
+pub(crate) struct ID3v2Header {
+    pub(crate) version: u8,
+    pub(crate) revision: u8,
+    pub(crate) flags: u8,
+    pub(crate) size: u32, // Synchsafe integer
 }
 
-fn parse_id3v2_header(input: &[u8]) -> IResult<&[u8], ID3v2Header> {
+pub(crate) fn parse_id3v2_header(input: &[u8]) -> IResult<&[u8], ID3v2Header> {
     let (input, _) = tag(ID3V2_SIGNATURE)(input)?;
     let (input, version) = be_u8(input)?;
     let (input, revision) = be_u8(input)?;
@@ -202,11 +208,26 @@ fn decode_synchsafe_u32(bytes: &[u8]) -> u32 {
 }
 
 /// Parse ID3v2 frames
-fn parse_id3v2_frames(data: &[u8], version: u8, metadata: &mut MetadataMap) -> Result<()> {
+///
+/// Shared with the AIFF parser, which reaches this through its `ID3 ` chunk.
+pub(crate) fn parse_id3v2_frames(
+    data: &[u8],
+    version: u8,
+    metadata: &mut MetadataMap,
+) -> Result<()> {
     let mut offset = 0;
     let reader = EndianReader::big_endian(data);
 
-    while offset + 10 < data.len() {
+    // ID3v2.2 frame headers are 6 bytes, v2.3/v2.4 headers are 10. The loop
+    // bound has to be the header size for *this* version, and it has to be
+    // inclusive: the old `offset + 10 < data.len()` demanded eleven bytes of
+    // headroom regardless, which silently discarded any frame beginning in the
+    // last ten bytes of the tag. AIFF.aif is exactly that case -- its v2.2 `TCP`
+    // (Compilation) frame starts 152 bytes into a 162-byte block, needs 9, and
+    // was dropped for want of two bytes that are not part of a v2.2 header.
+    let header_size = if version >= 3 { 10 } else { 6 };
+
+    while offset + header_size <= data.len() {
         // Frame header size depends on version
         let (frame_id, frame_size, _frame_flags) = if version >= 3 {
             // ID3v2.3 and v2.4: 10-byte header
@@ -262,8 +283,9 @@ fn parse_id3v2_frames(data: &[u8], version: u8, metadata: &mut MetadataMap) -> R
         let is_rva_frame = frame_id == "RVA2" || frame_id == "RVAD" || frame_id == "RVA";
 
         if is_text_frame && let Ok(text) = parse_text_frame(frame_data) {
-            let tag_name = format!("ID3:{}", map_frame_id_to_tag_name(&frame_id));
-            metadata.insert(tag_name, TagValue::new_string(text));
+            let name = map_frame_id_to_tag_name(&frame_id);
+            let value = apply_text_frame_print_conv(name, &text);
+            metadata.insert(format!("ID3:{name}"), TagValue::new_string(value));
         } else if is_comment_frame && let Ok(text) = parse_comment_frame(frame_data) {
             metadata.insert("ID3:Comment".to_string(), TagValue::new_string(text));
         } else if is_lyrics_frame && let Ok(text) = parse_comment_frame(frame_data) {
@@ -360,9 +382,13 @@ fn map_frame_id_to_tag_name(frame_id: &str) -> &str {
         "TRCK" => "Track",
         "TPOS" => "PartOfSet",
         "COMM" => "Comment",
+        // ID3.pm:575, in `%id3v2_common` and therefore spliced into both the
+        // v2_3 and v2_4 tables. iTunes writes it.
         "TCOM" => "Composer",
         "TPUB" => "Publisher",
         "TCOP" => "Copyright",
+        // ID3.pm:575 (%id3v2_common, so v2.3 and v2.4) -- iTunes' compilation flag.
+        "TCMP" => "Compilation",
         "TENC" => "EncodedBy",
         "TSSE" => "EncoderSettings",
         "TBPM" => "BeatsPerMinute",
@@ -401,6 +427,8 @@ fn map_frame_id_to_tag_name(frame_id: &str) -> &str {
         "TRK" => "Track",
         "TPA" => "PartOfSet",
         "COM" => "Comment",
+        // ID3.pm:471, the ID3v2.2 spelling of the iTunes compilation flag.
+        "TCP" => "Compilation",
         "TCM" => "Composer",
         "TPB" => "Publisher",
         "TCR" => "Copyright",
@@ -426,6 +454,178 @@ fn map_frame_id_to_tag_name(frame_id: &str) -> &str {
         "WPB" => "PublisherURL",
 
         _ => frame_id,
+    }
+}
+
+/// Apply the PrintConv ID3.pm declares on a text frame, if it declares one.
+///
+/// Most text frames are plain strings and pass through. The two that are not
+/// carry an encoded value that means nothing to a reader as stored: a raw `(18)`
+/// or `1` under the real tag names `Genre` and `Compilation` is not merely
+/// unhelpful, it is wrong.
+fn apply_text_frame_print_conv(tag_name: &str, value: &str) -> String {
+    match tag_name {
+        // TCO/TCON: `PrintConv => 'Image::ExifTool::ID3::PrintGenre($val)'`.
+        "Genre" => print_genre(value),
+        // TCP (ID3.pm:471) and TCMP (ID3.pm:575) both declare
+        // `PrintConv => { 0 => 'No', 1 => 'Yes' }`. A hash PrintConv that misses
+        // renders as `Unknown (val)` (ExifTool.pm:3633).
+        "Compilation" => match value {
+            "0" => "No".to_string(),
+            "1" => "Yes".to_string(),
+            other => format!("Unknown ({other})"),
+        },
+        _ => value.to_string(),
+    }
+}
+
+/// Look up one ID3 genre code.
+///
+/// The table is ExifTool's `%genre` (ID3.pm:131) -- 193 numeric codes plus the
+/// `CR`/`RX` short forms. It is *not* re-typed here: it is already transcribed
+/// into the generated tables as the `PrintConv` of the ID3v1 `Genre` field,
+/// because ExifTool reaches the same hash through `PrintConv => \%genre` there.
+/// Reading it from the generated table means the 193 strings have exactly one
+/// home, are machine-extracted rather than hand-copied, and are already covered
+/// by `just verify-tables`, which checks every enum entry back against ExifTool
+/// through an independent code path. A hand-written second copy would be a
+/// silent, permanent transcription risk with no such check behind it.
+///
+/// The codes arrive as strings because `%genre` mixes integer and string keys,
+/// so the generator emitted a `StrEnum`. That suits `PrintGenre`, which looks up
+/// the digits exactly as they were written -- `018` misses where `18` hits, in
+/// Perl and here alike.
+fn id3_genre(code: &str) -> Option<&'static str> {
+    find_table("ID3", "v1")?
+        .fields
+        .iter()
+        .find(|field| field.name == "Genre")
+        .and_then(|field| match field.print_conv {
+            PrintConv::StrEnum(entries) => entries
+                .iter()
+                .find(|(key, _)| *key == code)
+                .map(|(_, name)| *name),
+            _ => None,
+        })
+}
+
+/// A genre code's name, or ExifTool's placeholder for one it does not know.
+///
+/// `PrintGenre` pre-seeds `$genre{$1} = "Unknown ($1)"` for every number it is
+/// about to substitute, so an unlisted code is spelled out rather than dropped
+/// or left bare.
+fn genre_name(code: &str) -> String {
+    id3_genre(code).map_or_else(|| format!("Unknown ({code})"), str::to_string)
+}
+
+/// `Image::ExifTool::ID3::PrintGenre` (ID3.pm:1020), verbatim:
+///
+/// ```text
+/// while ($val =~ /\((\d+)\)/g)           { $genre{$1} or $genre{$1} = "Unknown ($1)"; }
+/// while ($val =~ /(?:^|\/)(\d+)(\/|$)/g) { $genre{$1} or $genre{$1} = "Unknown ($1)"; }
+/// $val =~ s/\((\d+)\)/\($genre{$1}\)/g;
+/// $val =~ s/(^|\/)(\d+)(?=\/|$)/$1$genre{$2}/g;
+/// $val =~ s/^\(([^)]+)\)\1?$/$1/; # clean up by removing brackets and duplicates
+/// return $val;
+/// ```
+///
+/// The two `while` loops only ensure the hash has an entry for every number the
+/// substitutions are about to interpolate, so that an unknown code cannot
+/// produce an undef; [`genre_name`] supplies the same fallback at lookup time.
+/// (Perl's version also permanently mutates the module-global `%genre`, which is
+/// a caching wart rather than behaviour worth reproducing.)
+///
+/// The three substitutions handle the three spellings that occur in the wild:
+/// `(18)` for ID3v2.2/2.3, `18` or `18/25` for ID3v2.4 (whose separating nulls
+/// `DecodeString` has already turned into slashes), and the redundant
+/// `(18)Techno` form, which the last regex collapses via its `\1?` backreference.
+fn print_genre(val: &str) -> String {
+    let bracketed = substitute_bracketed_codes(val);
+    let separated = substitute_separated_codes(&bracketed);
+    strip_brackets_and_duplicate(&separated)
+}
+
+/// `s/\((\d+)\)/\($genre{$1}\)/g` -- replace every parenthesised code in place,
+/// keeping the parentheses for the final cleanup pass to remove.
+fn substitute_bracketed_codes(val: &str) -> String {
+    let bytes = val.as_bytes();
+    let mut out = String::with_capacity(val.len());
+    let mut copied = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'(' {
+            let start = i + 1;
+            let mut end = start;
+            while end < bytes.len() && bytes[end].is_ascii_digit() {
+                end += 1;
+            }
+            if end > start && bytes.get(end) == Some(&b')') {
+                // Every index used to slice here is an ASCII byte position, so
+                // no multi-byte character can be split.
+                out.push_str(&val[copied..i]);
+                out.push('(');
+                out.push_str(&genre_name(&val[start..end]));
+                out.push(')');
+                i = end + 1;
+                copied = i;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out.push_str(&val[copied..]);
+    out
+}
+
+/// `s/(^|\/)(\d+)(?=\/|$)/$1$genre{$2}/g` -- replace a digit run that spans a
+/// whole slash-delimited field, leaving one embedded in other text alone.
+///
+/// The lookahead is what makes consecutive fields work: it does not consume the
+/// separator, so `18/25` matches twice rather than once.
+fn substitute_separated_codes(val: &str) -> String {
+    let bytes = val.as_bytes();
+    let mut out = String::with_capacity(val.len());
+    let mut copied = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let starts_field = i == 0 || bytes[i - 1] == b'/';
+        if starts_field && bytes[i].is_ascii_digit() {
+            let mut end = i;
+            while end < bytes.len() && bytes[end].is_ascii_digit() {
+                end += 1;
+            }
+            if end == bytes.len() || bytes[end] == b'/' {
+                out.push_str(&val[copied..i]);
+                out.push_str(&genre_name(&val[i..end]));
+                copied = end;
+            }
+            i = end;
+            continue;
+        }
+        i += 1;
+    }
+    out.push_str(&val[copied..]);
+    out
+}
+
+/// `s/^\(([^)]+)\)\1?$/$1/` -- unwrap a value that is entirely one parenthesised
+/// name, optionally followed by that same name repeated.
+///
+/// `[^)]+` cannot cross a `)`, so the group always ends at the *first* closing
+/// parenthesis; a nested form such as `(Unknown (200))` therefore fails to match
+/// and is returned untouched, exactly as Perl leaves it.
+fn strip_brackets_and_duplicate(val: &str) -> String {
+    let Some(rest) = val.strip_prefix('(') else {
+        return val.to_string();
+    };
+    let Some(close) = rest.find(')') else {
+        return val.to_string();
+    };
+    let (inner, tail) = (&rest[..close], &rest[close + 1..]);
+    if !inner.is_empty() && (tail.is_empty() || tail == inner) {
+        inner.to_string()
+    } else {
+        val.to_string()
     }
 }
 
@@ -474,10 +674,24 @@ fn parse_id3v1(data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
     if !comment.is_empty() {
         metadata.insert("ID3v1:Comment".to_string(), TagValue::new_string(comment));
     }
+    // ID3.pm:373-378 gives the ID3v1 Genre byte `PrintConv => \%genre`, the very
+    // hash PrintGenre uses, so the two paths must agree. Emitting the raw byte
+    // here while `ID3:Genre` resolved to a name did more than under-convert: the
+    // pair strips to the same bare `Genre` with different rendered values, which
+    // is the divergent-duplicate defect `assert_no_divergent_prefixed_duplicates`
+    // exists to catch. Verified on the corpus MP3: ExifTool reports
+    // `[ID3v1] Genre: Hip-Hop` for the byte 7.
+    //
+    // The `< 192` gate stays. ExifTool's ProcessBinaryData would emit every byte
+    // value, rendering an unlisted one as "Unknown (N)" and 255 as 'None', so the
+    // gate is almost certainly too narrow -- but no corpus sample carries a code
+    // in that range, and widening emission on reasoning alone is the move this
+    // repo warns against. Omission is the safe direction; every code the gate does
+    // admit (0..191 are all present in %genre) now renders as its real name.
     if genre < 192 {
         metadata.insert(
             "ID3v1:Genre".to_string(),
-            TagValue::new_integer(genre as i64),
+            TagValue::new_string(genre_name(&genre.to_string())),
         );
     }
 
@@ -1001,5 +1215,81 @@ mod tests {
         assert_eq!(map_frame_id_to_tag_name("TIT2"), "Title");
         assert_eq!(map_frame_id_to_tag_name("TPE1"), "Artist");
         assert_eq!(map_frame_id_to_tag_name("TALB"), "Album");
+    }
+
+    #[test]
+    fn compilation_frames_map_in_both_id3_generations() {
+        // ID3.pm:471 (v2_2) and ID3.pm:575 (%id3v2_common, so v2_3 and v2_4).
+        assert_eq!(map_frame_id_to_tag_name("TCP"), "Compilation");
+        assert_eq!(map_frame_id_to_tag_name("TCMP"), "Compilation");
+        assert_eq!(apply_text_frame_print_conv("Compilation", "1"), "Yes");
+        assert_eq!(apply_text_frame_print_conv("Compilation", "0"), "No");
+        // A hash PrintConv miss is spelled out, not dropped.
+        assert_eq!(
+            apply_text_frame_print_conv("Compilation", "2"),
+            "Unknown (2)"
+        );
+    }
+
+    #[test]
+    fn genre_lookup_reads_the_generated_exiftool_table() {
+        // Boundary and spot values of ExifTool's %genre (ID3.pm:131): the
+        // contiguous 0..191 run and the lone 255. If the generated table ever
+        // stops carrying these, the conversion must fail loudly here rather than
+        // start emitting `Unknown (N)` for known genres.
+        assert_eq!(id3_genre("0"), Some("Blues"));
+        assert_eq!(id3_genre("18"), Some("Techno"));
+        assert_eq!(id3_genre("191"), Some("Psybient"));
+        assert_eq!(id3_genre("255"), Some("None"));
+        // The two string short forms ExifTool documents as "ID3v2 only". They
+        // are unreachable through PrintGenre, whose patterns are digits-only,
+        // and belong to the ID3v1 Genre PrintConv path.
+        assert_eq!(id3_genre("CR"), Some("Cover"));
+        assert_eq!(id3_genre("RX"), Some("Remix"));
+        // 192..254 are undefined, and a code is matched as written.
+        assert_eq!(id3_genre("200"), None);
+        assert_eq!(id3_genre("018"), None);
+    }
+
+    #[test]
+    fn print_genre_matches_exiftools_three_spellings() {
+        // ID3v2.2/2.3 bracketed form -- the one AIFF.aif carries.
+        assert_eq!(print_genre("(18)"), "Techno");
+        // ID3v2.4 bare form, and the slash-separated multi-value form that
+        // DecodeString produces from null-separated codes.
+        assert_eq!(print_genre("18"), "Techno");
+        assert_eq!(print_genre("18/25"), "Techno/Euro-Techno");
+        assert_eq!(print_genre("1/2/3"), "Classic Rock/Country/Dance");
+        // The redundant form, collapsed by the trailing `\1?` backreference.
+        assert_eq!(print_genre("(18)Techno"), "Techno");
+        // A mismatched duplicate is not a duplicate, so the brackets stay.
+        assert_eq!(print_genre("(18)Trance"), "(Techno)Trance");
+        // Bracketed codes embedded in free text keep their brackets.
+        assert_eq!(print_genre("(18)(31)"), "(Techno)(Trance)");
+        assert_eq!(print_genre("mostly (18) really"), "mostly (Techno) really");
+    }
+
+    #[test]
+    fn print_genre_spells_out_codes_it_does_not_know() {
+        // `$genre{$1} or $genre{$1} = "Unknown ($1)"` -- never dropped, never
+        // left as a bare number.
+        assert_eq!(print_genre("200"), "Unknown (200)");
+        // Nested parentheses defeat the final `[^)]+` cleanup, in Perl and here.
+        assert_eq!(print_genre("(200)"), "(Unknown (200))");
+        assert_eq!(print_genre("18/200"), "Techno/Unknown (200)");
+    }
+
+    #[test]
+    fn print_genre_leaves_plain_text_alone() {
+        assert_eq!(print_genre("Techno"), "Techno");
+        assert_eq!(print_genre(""), "");
+        // A digit run that does not span a whole slash-delimited field is not a
+        // genre code: the lookahead in ExifTool's regex requires `/` or end.
+        assert_eq!(print_genre("Top 40"), "Top 40");
+        assert_eq!(print_genre("5a"), "5a");
+        assert_eq!(print_genre("a5"), "a5");
+        // Non-ASCII text must survive the byte-wise scan intact.
+        assert_eq!(print_genre("Café/18"), "Café/Techno");
+        assert_eq!(print_genre("(18) Café"), "(Techno) Café");
     }
 }

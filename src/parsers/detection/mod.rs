@@ -169,6 +169,16 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         return Ok(FileFormat::DJVU);
     }
 
+    // AIFF/AIFC is the other half of AIFF.pm's magic number,
+    // `^(FORM....AIF[FC]|AT&TFORM)`. The two alternatives cannot collide: DjVu
+    // puts its `FORM` at offset 4 behind the `AT&T` prefix, AIFF at offset 0.
+    // Testing it after the DjVu gate keeps that ordering explicit rather than
+    // resting on the offset difference alone.
+    if magic_bytes.starts_with(b"FORM") && matches!(magic_bytes.get(8..12), Some(b"AIFF" | b"AIFC"))
+    {
+        return Ok(FileFormat::AIFF);
+    }
+
     // ZIP variants require archive inspection before offset-based signatures can claim
     // bytes that happen to appear inside ZIP headers, names, or payloads.
     if magic_bytes.starts_with(&[0x50, 0x4B]) {

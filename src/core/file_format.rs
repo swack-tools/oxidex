@@ -123,6 +123,9 @@ pub enum FileFormat {
     /// WAV audio format (.wav)
     WAV,
 
+    /// AIFF/AIFC audio format (.aif, .aiff, .aifc)
+    AIFF,
+
     /// OGG Vorbis audio format (.ogg)
     OGG,
 
@@ -371,6 +374,7 @@ impl FileFormat {
             FileFormat::FLAC => "FLAC",
             FileFormat::AAC => "AAC",
             FileFormat::WAV => "WAV",
+            FileFormat::AIFF => "AIFF",
             FileFormat::OGG => "OGG",
             FileFormat::OPUS => "Opus",
             FileFormat::APE => "APE",
@@ -482,6 +486,7 @@ impl FileFormat {
             FileFormat::FLAC => &["flac"],
             FileFormat::AAC => &["aac", "m4a"],
             FileFormat::WAV => &["wav"],
+            FileFormat::AIFF => &["aif", "aiff", "aifc"],
             FileFormat::OGG => &["ogg"],
             FileFormat::OPUS => &["opus"],
             FileFormat::APE => &["ape"],
