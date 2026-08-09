@@ -16,7 +16,19 @@
 [worker]
 base_url = "https://pass.wafer.ai/v1"
 api_key = "your-api-key-here"
-max_tokens = 4096
+# max_tokens: the REPLY cap (a model's diff/plan text, NOT the prompt sent
+# to it -- see max_prompt_tokens below for that). Raised 4096 -> 8192 after
+# the 2026-08-08/09 fleet run's lesson rows (~7 of 1346) showed fixer
+# replies truncating mid-diff: real diffs run 8-11KB, and code tokenizes
+# denser than the ~4 chars/token estimate this script budgets against, so
+# a diff plus its required 2-3 sentence plan preamble could exceed 4096
+# tokens well under what its raw byte size suggested. This is a second
+# line of defense, not the fix by itself -- build_reply_shape_manifest also
+# now tells the model the correct (max_tokens, not max_prompt_tokens)
+# threshold for switching to "PATCH i/N" chunking, and attempt_build
+# retries a reply that still truncates mid-diff by demanding PATCH i/N
+# rather than failing the whole attempt outright.
+max_tokens = 8192
 # max_prompt_tokens: section 6 raised the default 4096 -> 8192 (not the
 # critiqued 12288 -- TPM economics), paired with graduated per-section
 # truncation (assemble_prompt_sections) so the extra room reaches the
