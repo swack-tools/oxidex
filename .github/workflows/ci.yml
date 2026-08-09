@@ -349,14 +349,16 @@ jobs:
       # status check, and the "Doc Tests" job this replaces was not, so a red
       # doc test never blocked a merge.
       #
-      # Cost: 22s wall clock locally against a warm target dir, because
-      # nextest has already compiled every dependency in this profile -- what
-      # is added is rustdoc's own pass plus a second, serial run of the suite.
-      # That figure is a floor, not a CI number: this runner also has ExifTool
-      # installed, so the second pass re-runs the exiftool-comparison suite
-      # too. If that ever makes this step the long pole, shrink what it runs
-      # only with a measurement in hand -- narrowing it back to `--doc` does
-      # not shrink it, it deletes it.
+      # Cost, measured on run 31339797988: 61s, against 86s for the nextest
+      # step above it. Cheap because nextest has already compiled every
+      # dependency in this profile -- what is added is rustdoc's own pass plus
+      # a second, serial run of the suite, this runner's ExifTool-backed
+      # comparison tests included. Deleting the separate Doc Tests job in the
+      # same change gave a whole 4x runner back, so CI does less work overall.
+      #
+      # If this ever becomes the long pole, shrink what it runs only with a
+      # measurement in hand -- narrowing it back to `--doc` does not shrink
+      # it, it deletes it.
       - run: cargo test --all-features
       - name: Verify C header is up-to-date
         run: |
