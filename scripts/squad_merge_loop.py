@@ -14,7 +14,7 @@ Lifecycle per poll (``poll_once``):
 1. Ensure this squad's staging worktree exists, checked out on
    ``squad/<squad>`` (cut from origin/main the first time it is needed --
    see ``ensure_staging_worktree``).
-2. Find candidate worker branches: squads.toml's ``formats`` list for
+2. Find candidate worker branches: config.toml's ``[squads.*]`` ``formats`` list for
    this squad, run through ``parallel_model_fix_loop.branch_name``,
    keeping the ones that currently exist in the repo
    (``candidate_worker_branches``) -- UNIONED with any squad-mode slot
@@ -117,7 +117,11 @@ from distill_lessons import (
 from log_sweep_review import append_from_commits, make_git_runner
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
-DEFAULT_SQUADS_TOML = SCRIPTS_DIR / "squads.toml"
+# Squad ownership/formats now live in config.toml's [squads.*] tables
+# (moved there so there is exactly one fleet config file; see the PR that
+# did the move) -- REPO_ROOT, not SCRIPTS_DIR, since config.toml sits at the
+# repo root, not inside scripts/.
+DEFAULT_CONFIG_PATH = REPO_ROOT / "config.toml"
 
 DEFAULT_STAGING_BASE = OXIDEX_HOME / "worktrees" / "squad-staging"
 DEFAULT_WORKTREE_DIR = OXIDEX_HOME / "worktrees" / "parallel-fix"
@@ -207,11 +211,12 @@ def default_staging_dir(home, squad):
 
 
 # ---------------------------------------------------------------------------
-# squads.toml
+# config.toml's [squads.*] tables
 # ---------------------------------------------------------------------------
 
-def all_squad_names(squads_toml_path):
-    """Every squad name in squads.toml, or [] if it cannot be read.
+def all_squad_names(config_path):
+    """Every squad name in config.toml's [squads.*] tables, or [] if it
+    cannot be read.
 
     Used to find which OTHER squad is already staging a file -- see
     squad_holding_any_file. Unreadable config must never BLOCK a merger, so
@@ -219,33 +224,33 @@ def all_squad_names(squads_toml_path):
     behaviour.
     """
     try:
-        with open(squads_toml_path, "rb") as f:
+        with open(config_path, "rb") as f:
             data = tomllib.load(f)
     except (OSError, ValueError):
         return []
     return sorted((data.get("squads") or {}).keys())
 
 
-def squad_formats(squads_toml_path, squad):
-    """squads.toml's advisory ``formats`` list for `squad` (spec S2) --
-    the candidate-branch source (item 3a: read literally, not narrowed to
-    a "wholly owned" subset -- that curation is an operational rollout
-    decision, made by whichever squads get a merger launched during the
-    Phase 2 pilot, not by this function)."""
-    with open(squads_toml_path, "rb") as f:
+def squad_formats(config_path, squad):
+    """config.toml's advisory ``[squads.*].formats`` list for `squad`
+    (spec S2) -- the candidate-branch source (item 3a: read literally, not
+    narrowed to a "wholly owned" subset -- that curation is an operational
+    rollout decision, made by whichever squads get a merger launched during
+    the Phase 2 pilot, not by this function)."""
+    with open(config_path, "rb") as f:
         data = tomllib.load(f)
     squads = data.get("squads") or {}
     cfg = squads.get(squad)
     if cfg is None:
-        raise ValueError(f"squad {squad!r} not found in {squads_toml_path}")
+        raise ValueError(f"squad {squad!r} not found in {config_path}")
     return list(cfg.get("formats") or [])
 
 
-def format_owner_map(squads_toml_path):
+def format_owner_map(config_path):
     """format (lowercased) -> the ONE squad that consumes that format's
     legacy per-format worker branch.
 
-    squads.toml's ``formats`` is many-to-one on purpose -- 13 of the 14
+    config.toml's [squads.*] ``formats`` is many-to-one on purpose -- 13 of the 14
     squads list "JPEG" -- and it is correct AS the advisory "which
     formats must this squad re-verify" list its own comment calls it.
     It is NOT a work partition, and candidate_worker_branches was reading
@@ -271,8 +276,9 @@ def format_owner_map(squads_toml_path):
     Ownership rule, in order:
       1. the squad whose ``modules`` names the format itself -- JPEG.pm
          belongs to standards-appn, XMP.pm to xmp, PDF.pm to ps-docs.
-         This is squads.toml's own documented routing key ("attribute_gaps
-         routes every attributed gap module -> squad through this table").
+         This is the squad manifest's own documented routing key
+         ("attribute_gaps routes every attributed gap module -> squad
+         through this table").
       2. otherwise the MOST SPECIALISED claimant: fewest formats listed,
          so RW2 goes to panasonic-leica (2) rather than exif-core (9).
       3. ties broken by squad name, so the map is stable.
@@ -280,7 +286,7 @@ def format_owner_map(squads_toml_path):
     Pure and total -- config in, mapping out. No clock, no disk state, no
     lock, so two mergers evaluating in the same instant cannot both claim.
     """
-    with open(squads_toml_path, "rb") as f:
+    with open(config_path, "rb") as f:
         squads = tomllib.load(f).get("squads") or {}
     sizes = {name: len(cfg.get("formats") or []) for name, cfg in squads.items()}
     module_owner = {}
@@ -450,9 +456,9 @@ def ensure_staging_worktree(repo_root, staging_path, squad, origin_ref=ORIGIN_MA
 # Candidate discovery
 # ---------------------------------------------------------------------------
 
-def candidate_worker_branches(repo_root, squads_toml_path, squad):
-    """(format, branch) pairs for every format squads.toml lists under
-    `squad` whose LEGACY per-format worker branch currently exists in
+def candidate_worker_branches(repo_root, config_path, squad):
+    """(format, branch) pairs for every format config.toml's [squads.*]
+    tables list under `squad` whose LEGACY per-format worker branch currently exists in
     the repo (spec M2 step (a); parallel_model_fix_loop.branch_name's
     one-branch-per-format naming, from run_round/process_format).
 
@@ -471,9 +477,9 @@ def candidate_worker_branches(repo_root, squads_toml_path, squad):
     squad_formats, is deliberate and load-bearing -- poll_once unions
     squad_formats into the batch full-corpus check, and a squad must
     still VERIFY JPEG even once it no longer CONSUMES the JPEG branch."""
-    owners = format_owner_map(squads_toml_path)
+    owners = format_owner_map(config_path)
     out = []
-    for fmt in squad_formats(squads_toml_path, squad):
+    for fmt in squad_formats(config_path, squad):
         if owners.get(fmt.lower(), squad) != squad:
             continue
         branch = worker_branch_name(fmt)
@@ -486,7 +492,7 @@ def squad_slot_branches(repo_root, squad):
     """Squad-mode worker branches (spec S2 worker identity:
     model-fix-parallel-<squad>-<n>, one per allocated slot) currently
     present in the repo -- discovered by git ref pattern rather than a
-    static squads.toml list, since a squad's slot COUNT varies round to
+    static config.toml list, since a squad's slot COUNT varies round to
     round with allocate_squad_slots and a single slot's FORMAT can also
     change round to round (squad_worker_formats round-robins a slot
     through the squad's formats). These branches carry no single fixed
@@ -840,7 +846,7 @@ def real_validate_commit(sha, repo, **kwargs):
 def squad_that_already_staged(home, squad, patch_id):
     """The OTHER squad that already green-stamped this exact patch, or None.
 
-    squads.toml deliberately lets several squads claim one format -- JPEG
+    config.toml's [squads.*] tables deliberately let several squads claim one format -- JPEG
     carries every brand's makernotes, so canon/nikon/sony all care about it --
     and squad_slot_branches discovers work by ref pattern with no ownership
     filter at all. The result is that every squad consumes the same worker
@@ -908,7 +914,7 @@ def squad_holding_any_file(repo_root, squad, files, squads, origin_ref=ORIGIN_MA
     states in its own docstring -- "one squad per shared emitter file" --
     which nothing was actually maintaining.
 
-    squads.toml deliberately lets several squads claim a format (JPEG carries
+    config.toml's [squads.*] tables deliberately let several squads claim a format (JPEG carries
     every brand's makernotes), and squad_slot_branches discovers work by ref
     pattern with no ownership filter at all. So two squads routinely fix the
     SAME tags in the SAME file with DIFFERENT code. Different code means
@@ -1555,7 +1561,7 @@ def recut_squad_branch(*, repo_root, staging_path, squad, squad_branch, home,
 # Poll cycle
 # ---------------------------------------------------------------------------
 
-def poll_once(*, repo_root, squad, home, staging_dir, squads_toml_path=DEFAULT_SQUADS_TOML,
+def poll_once(*, repo_root, squad, home, staging_dir, config_path=DEFAULT_CONFIG_PATH,
               cache_dir, batch_commits=DEFAULT_BATCH_COMMITS, batch_seconds=DEFAULT_BATCH_SECONDS,
               origin_ref=ORIGIN_MAIN, validate_fn=real_validate_commit,
               cargo_test_targeted_fn=real_cargo_test_targeted, comparison_fn=real_format_match,
@@ -1602,16 +1608,17 @@ def poll_once(*, repo_root, squad, home, staging_dir, squads_toml_path=DEFAULT_S
     status_path = squad_status_file(home, squad)
     quarantine_entries = load_quarantine(quarantine_ledger_path(home))
     # Every squad that could be racing this one for a file. Read once per
-    # poll: squads.toml is small and this is the only consumer.
-    known_squads = all_squad_names(squads_toml_path) or None
-    branches = candidate_worker_branches(repo_root, squads_toml_path, squad)
+    # poll: config.toml's [squads.*] tables are small and this is the only
+    # consumer.
+    known_squads = all_squad_names(config_path) or None
+    branches = candidate_worker_branches(repo_root, config_path, squad)
     slot_branches = squad_slot_branches(repo_root, squad)
-    # Union with squads.toml's own advisory list (not just formats seen on
+    # Union with config.toml's own advisory list (not just formats seen on
     # currently-existing branches): the batch full-corpus check must cover
     # every format this squad owns even in a round where every worker
     # branch happens to be squad-mode (no legacy per-format branch exists
     # at all to derive a format from).
-    formats = sorted(set(squad_formats(squads_toml_path, squad)) | {fmt for fmt, _ in branches})
+    formats = sorted(set(squad_formats(config_path, squad)) | {fmt for fmt, _ in branches})
 
     batch_path = batch_state_path(home, squad)
     batch_state = load_batch_state(batch_path)
@@ -1877,7 +1884,8 @@ def main(argv=None, sleep_fn=time.sleep, now_fn=time.time, kill_fn=None):
     parser.add_argument("--worktree-dir", default=str(DEFAULT_WORKTREE_DIR),
                         help="where worker branches/worktrees for this squad's formats live "
                              "(parallel_model_fix_loop.py's --worktree-dir convention)")
-    parser.add_argument("--squads-toml", default=str(DEFAULT_SQUADS_TOML))
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH),
+                        help="config.toml, for its [squads.*] tables (see config.example.toml)")
     parser.add_argument("--home", default=str(OXIDEX_HOME))
     parser.add_argument("--cache-dir", default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"))  # nosec B108
     parser.add_argument("--poll-seconds", type=float, default=DEFAULT_POLL_SECONDS)
@@ -1912,7 +1920,7 @@ def main(argv=None, sleep_fn=time.sleep, now_fn=time.time, kill_fn=None):
     validate_kwargs = {
         "perl_lib": args.perl_lib,
         "samples_cache": args.samples_cache,
-        "squads_toml": args.squads_toml,
+        "config_path": args.config,
         "comparison_fn": build_comparison_fn(args.comparison_cmd) if args.comparison_cmd else None,
     }
 
@@ -1928,7 +1936,7 @@ def main(argv=None, sleep_fn=time.sleep, now_fn=time.time, kill_fn=None):
             )
         return poll_once(
             repo_root=Path(args.repo), squad=args.squad, home=home, staging_dir=staging_dir,
-            squads_toml_path=args.squads_toml, cache_dir=args.cache_dir,
+            config_path=args.config, cache_dir=args.cache_dir,
             batch_commits=args.batch_commits, batch_seconds=args.batch_seconds,
             recut_staleness_seconds=args.recut_staleness_seconds,
             sweep_review_log_path=sweep_review_log_path, validate_kwargs=validate_kwargs,

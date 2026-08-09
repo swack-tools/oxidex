@@ -90,7 +90,7 @@ must route the commit to the human queue; flags NEVER auto-resolve --
 Usage:
     uv run scripts/validate_fix_commit.py <sha> --repo <path> \\
         [--samples-cache /tmp/oxidex-exiftool-cache] \\
-        [--squads-toml scripts/squads.toml] \\
+        [--config config.toml] \\
         [--comparison-cmd "path/to/compare-one"] \\
         [--perl-lib <dir-with-ExifTool-pm-files>] [--json]
 
@@ -1475,13 +1475,13 @@ def squad_from_worker(worker):
     return worker
 
 
-def load_squad_globs(squads_toml):
-    """{squad: [glob, ...]} from squads.toml. Lenient on shape (squads
-    may live under a [squads.*] table or at top level; globs under
-    files/globs/owns/paths or as a bare list) because ownership is
+def load_squad_globs(config_path):
+    """{squad: [glob, ...]} from config.toml's [squads.*] tables. Lenient on
+    shape (squads may live under a [squads.*] table or at top level; globs
+    under files/globs/owns/paths or as a bare list) because ownership is
     advisory routing per spec S1 -- never a gate -- and the manifest is
     owned by another phase."""
-    with open(squads_toml, "rb") as fh:
+    with open(config_path, "rb") as fh:
         data = tomllib.load(fh)
     table = data.get("squads", data) if isinstance(data, dict) else {}
     globs_by_squad = {}
@@ -1584,7 +1584,7 @@ def validate_commit(
     samples_cache=None,
     comparison_fn=None,
     perl_lib=None,
-    squads_toml=None,
+    config_path=None,
     git_run=run_git,
 ):
     """Run every check against one commit and assemble the verdict dict:
@@ -1596,7 +1596,7 @@ def validate_commit(
     ownership:* ones. All checks always run (a missing trailer must not
     hide a printconv mismatch from the human reading the queue entry).
 
-    Paths (samples_cache/perl_lib/squads_toml) may be str or Path; a
+    Paths (samples_cache/perl_lib/config_path) may be str or Path; a
     supplied-but-nonexistent path is an operational error (raises),
     never a silent skip -- a merger pointing at a wiped cache should go
     loud, not green."""
@@ -1639,7 +1639,7 @@ def validate_commit(
         trailers, perl_lib=perl_lib, samples_cache=samples_cache
     )
 
-    globs_by_squad = load_squad_globs(squads_toml) if squads_toml else {}
+    globs_by_squad = load_squad_globs(config_path) if config_path else {}
     worker = next(iter(trailers.get("Worker", [])), "")
     changed = commit_changed_files(sha, repo, git_run)
     ownership_status, ownership_flags = check_ownership(changed, worker, globs_by_squad)
@@ -1682,9 +1682,9 @@ def main(argv=None):
         "enables the multi-sample check when --comparison-cmd is also given",
     )
     parser.add_argument(
-        "--squads-toml",
-        help="squad ownership manifest (scripts/squads.toml); enables the warn-only "
-        "ownership check",
+        "--config",
+        help="config.toml, for its [squads.*] ownership manifest (see config.example.toml); "
+        "enables the warn-only ownership check",
     )
     parser.add_argument(
         "--comparison-cmd",
@@ -1705,7 +1705,7 @@ def main(argv=None):
             samples_cache=args.samples_cache,
             comparison_fn=comparison_fn,
             perl_lib=args.perl_lib,
-            squads_toml=args.squads_toml,
+            config_path=args.config,
         )
     except (GitError, OSError, tomllib.TOMLDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)

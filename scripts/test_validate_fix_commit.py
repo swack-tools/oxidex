@@ -3,7 +3,7 @@
 Real `git` is exercised against throwaway tempdir repos (the spec's
 Testing section explicitly asks for a real-git trailer round-trip), but
 nothing else is real: the comparison runner is an injected function, the
-samples cache / perl lib / squads.toml are tempdir fixtures, and no test
+samples cache / perl lib / config.toml are tempdir fixtures, and no test
 reads ~/.oxidex, /tmp/oxidex-exiftool-cache, or the live repo. Git's
 global/system config is masked so a user's hooksPath/gpgsign settings
 cannot leak into commit creation.
@@ -706,8 +706,8 @@ class PrintConvTests(unittest.TestCase):
 
 
 class OwnershipTests(unittest.TestCase):
-    def _squads_toml(self, tmp):
-        path = Path(tmp) / "squads.toml"
+    def _config_toml(self, tmp):
+        path = Path(tmp) / "config.toml"
         path.write_text(
             "[squads.canon]\n"
             'files = ["src/canon/*", "oxidex-tags-canon/*"]\n'
@@ -724,7 +724,7 @@ class OwnershipTests(unittest.TestCase):
     def test_out_of_squad_file_warns_but_never_hard_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = make_repo(tmp)
-            squads = self._squads_toml(tmp)
+            squads = self._config_toml(tmp)
             sha = commit_fix(
                 repo,
                 {
@@ -733,7 +733,7 @@ class OwnershipTests(unittest.TestCase):
                 },
                 full_trailers(),
             )
-            result = validate_commit(sha, repo, squads_toml=squads)
+            result = validate_commit(sha, repo, config_path=squads)
         self.assertIn("ownership:src/other/mod.rs", result["flags"])
         self.assertNotIn("ownership:src/canon/quality.rs", result["flags"])
         self.assertEqual(result["checks"]["ownership"], "warn")
@@ -743,11 +743,11 @@ class OwnershipTests(unittest.TestCase):
     def test_in_squad_files_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = make_repo(tmp)
-            squads = self._squads_toml(tmp)
+            squads = self._config_toml(tmp)
             sha = commit_fix(
                 repo, {"src/canon/quality.rs": "pub fn noop() {}\n"}, full_trailers()
             )
-            result = validate_commit(sha, repo, squads_toml=squads)
+            result = validate_commit(sha, repo, config_path=squads)
         self.assertEqual(result["checks"]["ownership"], "pass")
         self.assertEqual(result["flags"], [])
 

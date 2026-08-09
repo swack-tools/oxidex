@@ -74,7 +74,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from squad_merge_loop import (  # noqa: E402
-    DEFAULT_SQUADS_TOML,
+    DEFAULT_CONFIG_PATH,
     OXIDEX_HOME,
     all_squad_names,
     batch_state_path,
@@ -277,15 +277,15 @@ def blocked_state(home, squad, *, now=None, blocked_seconds=DEFAULT_BLOCKED_SECO
             "reason": f"publication held since the last batch check failed ({span} ago)"}
 
 
-def assess(home, squads_toml_path=DEFAULT_SQUADS_TOML, *, now=None,
+def assess(home, config_path=DEFAULT_CONFIG_PATH, *, now=None,
            stale_seconds=DEFAULT_STALE_SECONDS,
            blocked_seconds=DEFAULT_BLOCKED_SECONDS, kill_fn=os.kill, argv_fn=None):
     """Full health picture. `unowned` is the alarm: formats whose one
     exclusive owning squad is not publishing, whether because its merger is
     gone or because it is chronically blocked."""
     now = time.time() if now is None else now
-    owners = format_owner_map(squads_toml_path)
-    squads = all_squad_names(squads_toml_path)
+    owners = format_owner_map(config_path)
+    squads = all_squad_names(config_path)
 
     mergers = {s: merger_state(home, s, now=now, stale_seconds=stale_seconds,
                                kill_fn=kill_fn, argv_fn=argv_fn)
@@ -316,17 +316,26 @@ def assess(home, squads_toml_path=DEFAULT_SQUADS_TOML, *, now=None,
     }
 
 
-def formats_owned_by(squad, squads_toml_path=DEFAULT_SQUADS_TOML):
+def formats_owned_by(squad, config_path=DEFAULT_CONFIG_PATH):
     """Formats `squad` EXCLUSIVELY owns -- i.e. what stops flowing entirely
     if its merger dies. Used by fleet_up.sh to name the blast radius in the
     same log line that reports the death."""
-    owners = format_owner_map(squads_toml_path)
+    owners = format_owner_map(config_path)
     return sorted(f.upper() for f, s in owners.items() if s == squad)
 
 
-def render(report):
+def render(report, config_path=DEFAULT_CONFIG_PATH):
     """Operator-facing text. Leads with the alarm, because the alarm is the
-    reason to run this."""
+    reason to run this.
+
+    config_path is threaded through from the caller (main() passes
+    args.config) rather than re-derived here, because DEFAULT_CONFIG_PATH
+    is a gitignored, per-installation file -- unlike the git-tracked
+    scripts/squads.toml this used to fall back to, it is not guaranteed to
+    exist, so a caller that already resolved a real path must not have that
+    choice silently overridden by this function reaching for its own
+    default.
+    """
     lines = []
     unowned = report["unowned"]
     if not unowned:
@@ -346,7 +355,7 @@ def render(report):
         lines.append("")
         lines.append(f"mergers down ({len(down)}):")
         for m in sorted(down, key=lambda x: x["squad"]):
-            owned = ", ".join(formats_owned_by(m["squad"])) or "no exclusive format"
+            owned = ", ".join(formats_owned_by(m["squad"], config_path)) or "no exclusive format"
             lines.append(f"  {m['squad']:<16} {m['reason']}  [owns: {owned}]")
 
     if report.get("stalled"):
@@ -362,7 +371,8 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--home", default=str(OXIDEX_HOME))
-    p.add_argument("--squads-toml", default=str(DEFAULT_SQUADS_TOML))
+    p.add_argument("--config", default=str(DEFAULT_CONFIG_PATH),
+                   help="config.toml, for its [squads.*] tables (see config.example.toml)")
     p.add_argument("--stale-seconds", type=float, default=DEFAULT_STALE_SECONDS)
     p.add_argument("--blocked-seconds", type=float, default=DEFAULT_BLOCKED_SECONDS)
     p.add_argument("--formats-for", metavar="SQUAD",
@@ -373,17 +383,17 @@ def main(argv=None):
     args = p.parse_args(argv)
 
     if args.formats_for:
-        for fmt in formats_owned_by(args.formats_for, args.squads_toml):
+        for fmt in formats_owned_by(args.formats_for, args.config):
             print(fmt)
         return 0
 
-    report = assess(Path(args.home), args.squads_toml,
+    report = assess(Path(args.home), args.config,
                     stale_seconds=args.stale_seconds,
                     blocked_seconds=args.blocked_seconds)
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     elif not args.quiet:
-        print(render(report))
+        print(render(report, args.config))
     # Non-zero is the point: this is meant to be usable from a supervisor,
     # a cron line, or `watch`, without parsing anything.
     return 0 if report["healthy"] else 1

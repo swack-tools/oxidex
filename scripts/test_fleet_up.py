@@ -95,20 +95,18 @@ class ShellHarnessMixin:
 
 
 class TestParseSquads(ShellHarnessMixin, unittest.TestCase):
-    """squads.toml is the source of truth for how many mergers to run.
+    """config.toml's [squads.*] tables are the source of truth for how many
+    mergers to run.
 
     Hardcoding the list is how half the tier stayed dead: the operator brief
-    for this launcher said "7 squads", squads.toml defines 14, and on
+    for this launcher said "7 squads", the squad manifest defines 14, and on
     2026-07-26 exactly 7 mergers were alive -- exif-core, one of the 7 dead
     ones, was the 2nd-largest quarantine producer (14 of 80 ledger entries).
     """
 
     def test_returns_every_squad_and_strips_toml_quotes(self):
-        toml = self.tmp / "squads.toml"
+        toml = self.tmp / "config.toml"
         toml.write_text(textwrap.dedent("""\
-            [meta]
-            snapshot_date = "2026-07-24"
-
             [squads.canon]
             modules = ["Canon"]
 
@@ -123,9 +121,14 @@ class TestParseSquads(ShellHarnessMixin, unittest.TestCase):
         self.assertEqual(out.split(), ["canon", "sony-minolta", "tail"])
 
     def test_real_manifest_yields_fourteen_squads(self):
-        real = SCRIPT.parent / "squads.toml"
+        # config.toml is gitignored/per-installation and may not exist in a
+        # fresh checkout or CI; config.example.toml is the git-tracked
+        # template carrying the real, current [squads.*] tables verbatim
+        # (see the PR that moved scripts/squads.toml's content into
+        # config.toml).
+        real = SCRIPT.parent.parent / "config.example.toml"
         if not real.is_file():
-            self.skipTest("squads.toml not present in this checkout")
+            self.skipTest("config.example.toml not present in this checkout")
         rc, out, _ = sh(f'parse_squads "{real}"', env=self.env)
         self.assertEqual(rc, 0)
         names = out.split()
@@ -137,6 +140,47 @@ class TestParseSquads(ShellHarnessMixin, unittest.TestCase):
         rc, out, _ = sh(f'parse_squads "{self.tmp}/nope.toml"', env=self.env)
         self.assertNotEqual(rc, 0)
         self.assertEqual(out.strip(), "")
+
+
+class TestConfigMergers(ShellHarnessMixin, unittest.TestCase):
+    """config.toml's [fleet].mergers -- the config-file-driven default for
+    FLEET_MAX_MERGERS, resolved once $PINNED_CONFIG is known (see cmd_up)."""
+
+    def test_reads_the_fleet_mergers_key(self):
+        toml = self.tmp / "config.toml"
+        toml.write_text("[fleet]\nmergers = 3\n")
+        rc, out, _ = sh(f'config_mergers "{toml}"', env=self.env)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "3")
+
+    def test_absent_fleet_table_defaults_to_zero(self):
+        toml = self.tmp / "config.toml"
+        toml.write_text("[worker]\nbase_url = \"https://example.invalid\"\n")
+        rc, out, _ = sh(f'config_mergers "{toml}"', env=self.env)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "0")
+
+    def test_missing_file_defaults_to_zero(self):
+        rc, out, _ = sh(f'config_mergers "{self.tmp}/nope.toml"', env=self.env)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "0")
+
+    def test_unparseable_file_defaults_to_zero(self):
+        toml = self.tmp / "config.toml"
+        toml.write_text("this is not [ valid toml\n")
+        rc, out, _ = sh(f'config_mergers "{toml}"', env=self.env)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "0")
+
+    def test_garbage_value_passes_through_for_the_caller_to_reject(self):
+        # config_mergers itself does not validate -- cmd_up runs the same
+        # non-negative-integer check it already runs on --mergers/env, so a
+        # bad config.toml value fails loudly with one consistent message.
+        toml = self.tmp / "config.toml"
+        toml.write_text('[fleet]\nmergers = "not-a-number"\n')
+        rc, out, _ = sh(f'config_mergers "{toml}"', env=self.env)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "not-a-number")
 
 
 class GitRepoMixin(ShellHarnessMixin):
@@ -605,10 +649,9 @@ class TestSupervisorIntegration(ShellHarnessMixin, unittest.TestCase):
                 "sys.stderr.flush()\n"
                 "while True: time.sleep(0.5)\n"
             )
-        (self.fake / "scripts" / "squads.toml").write_text(
-            "[squads.canon]\nmodules = []\n\n[squads.\"exif-core\"]\nmodules = []\n"
+        (self.fake / "config.toml").write_text(
+            "[worker]\n\n[squads.canon]\nmodules = []\n\n[squads.\"exif-core\"]\nmodules = []\n"
         )
-        (self.fake / "config.toml").write_text("[worker]\n")
         self.env.update({
             "FLEET_POLL_SECONDS": str(self.POLL),
             "FLEET_BACKOFF_BASE": "1",
@@ -765,8 +808,9 @@ class TestSupervisorIntegration(ShellHarnessMixin, unittest.TestCase):
                          "the pidfile must not outlive the supervisor")
 
     def test_mergers_cap_limits_which_squads_get_a_merger(self):
-        # The fake squads.toml carries canon and exif-core, in that order --
-        # a cap of 1 must start the first and never touch the second.
+        # config.toml's fake [squads.*] tables carry canon and exif-core, in
+        # that order -- a cap of 1 must start the first and never touch the
+        # second.
         self.env["FLEET_MAX_MERGERS"] = "1"
         self.start_supervisor()
 
@@ -778,11 +822,28 @@ class TestSupervisorIntegration(ShellHarnessMixin, unittest.TestCase):
         self.assertNotIn("merger:exif-core", state)
 
         log_text = self._wait_for(
-            lambda: (lambda t: t if "WARNING: --mergers 1 covers" in t else None)(
+            lambda: (lambda t: t if "WARNING: mergers cap 1 covers" in t else None)(
                 Path(self.env["FLEET_LOG"]).read_text()),
             "the merger-cap coverage warning",
         )
         self.assertIn("1 of 2 squads", log_text)
+
+    def test_config_toml_mergers_key_applies_with_no_cli_or_env_override(self):
+        # Neither --mergers nor $FLEET_MAX_MERGERS is set here -- config.toml's
+        # own [fleet].mergers = 1 must still cap it, since config.toml is
+        # supposed to work with no flag at all.
+        (self.fake / "config.toml").write_text(
+            "[worker]\n\n[fleet]\nmergers = 1\n\n"
+            "[squads.canon]\nmodules = []\n\n[squads.\"exif-core\"]\nmodules = []\n"
+        )
+        self.start_supervisor()
+
+        state = self._wait_for(
+            lambda: self._state() if len(self._state()) == 4 else None,
+            "four state rows (merger cap active: 1 merger + dispatcher + judgment + supervisor)",
+        )
+        self.assertEqual(sorted(state), ["dispatcher", "judgment", "merger:canon", "supervisor"])
+        self.assertNotIn("merger:exif-core", state)
 
     def test_gives_up_on_a_tier_that_cannot_stay_up(self):
         """A crash-looping tier has to SURFACE. Burying it under an infinite
