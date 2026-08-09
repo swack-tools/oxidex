@@ -5764,6 +5764,52 @@ class AttemptBuildTests(unittest.TestCase):
         self.assertIn("fn a() {}", calls[1])
         self.assertIn("Reading is free", calls[1])
 
+    def test_repeat_noisy_request_is_still_charged_as_already_shown(self):
+        """A REQUEST that only became recognizable once trailing noise stopped
+        voiding it must still land in the free-read accounting correctly.
+
+        The concern this pins down: the payload-visibility rule asks whether
+        `payload in m["content"]` for prior USER messages, and the reasoning
+        fragment rides along in the ASSISTANT reply. If the two could ever mix,
+        a re-ask would read as "new content" forever and the wasted-turn
+        allowance would never bind. They cannot -- the scan is user-messages
+        only and `payload` comes from resolve_request's answer, never from the
+        reply -- and repeating the same noisy request proves it: the second one
+        is recognized as already-shown and pivoted, exactly like a clean one.
+        """
+        calls = []
+
+        def fake_call_model(messages, *a):
+            calls.append(messages[-1]["content"])
+            if len(calls) <= 2:
+                # Byte-identical path, different trailing noise each time, so
+                # anything keying on the whole reply would call these distinct.
+                return f"REQUEST: src/x.rs\n\n fragment {len(calls)}? no. exact shape."
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "x.rs").write_text("fn a() {}\n")
+            built, reason, _diff, _messages = attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, max_request_turns=4, max_request_repeats=2),
+                repo_root=repo,
+            )
+
+        self.assertTrue(built, reason)
+        # First noisy request: served free.
+        self.assertIn("fn a() {}", calls[1])
+        self.assertIn("Reading is free", calls[1])
+        # Second, identical apart from its noise: recognized as a re-ask of
+        # content still visible, so it is pivoted rather than re-served.
+        self.assertIn("already provided in full", calls[2])
+        self.assertNotIn("Reading is free", calls[2])
+
     # --- investigation-budget visibility (defect 3) -------------------------
     #
     # RW2 transcript, 2026-07-26T21:23: the model spent turn 24 on yet another
