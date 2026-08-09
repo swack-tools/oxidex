@@ -51,6 +51,7 @@ const INTEROPERABILITY_IFD_POINTER: u16 = 0xA005;
 
 /// MakerNote (0x927C): the manufacturer's private block in the EXIF IFD.
 const MAKERNOTE: u16 = 0x927C;
+const TAG_SUBFILE_TYPE: u16 = 0x00FE;
 
 // Image-carrying tags some cameras (Samsung SPH-A800/A940, Canon XL H1) write
 // into the Interoperability IFD alongside - or instead of - the DCF tags.
@@ -841,7 +842,13 @@ pub fn parse_exif_subifd(
                 continue;
             }
 
-            let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
+            let resolved_name = lookup_tag_name(*tag_id, "ExifIFD");
+            let (tag_name, special_value) = if *tag_id == MAKERNOTE {
+                special_makernote_value(&resolved_name, bytes)
+                    .map_or((resolved_name, None), |(name, value)| (name, Some(value)))
+            } else {
+                (resolved_name, None)
+            };
             let base_name = tag_name
                 .split_once(':')
                 .map_or(tag_name.as_str(), |(_, name)| name);
@@ -867,7 +874,9 @@ pub fn parse_exif_subifd(
             // producing the final display string directly instead of leaving
             // an opaque `TagValue::Binary` for a later stage that cannot
             // decode it.
-            let tag_value = if base_name == "CompositeImageExposureTimes" {
+            let tag_value = if let Some(value) = special_value {
+                value
+            } else if base_name == "CompositeImageExposureTimes" {
                 TagValue::String(format_composite_image_exposure_times(bytes, byte_order))
             } else {
                 raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order)
@@ -1105,6 +1114,73 @@ pub fn parse_gps_subifd(
 // IFD1 (Thumbnail IFD)
 // =============================================================================
 
+fn contextual_tag_name(resolved: &str, base_name: &str) -> String {
+    resolved
+        .split_once(':')
+        .map_or_else(|| base_name.to_string(), |(group, _)| format!("{group}:{base_name}"))
+}
+
+/// Applies ExifTool's condition-specific names to MakerNote values which are
+/// values themselves rather than parsed subdirectories.
+fn special_makernote_value(resolved_name: &str, data: &[u8]) -> Option<(String, TagValue)> {
+    use crate::parsers::tiff::makernotes::samsung::stmn;
+
+    if stmn::is_stmn(data) && stmn::is_binary_only(data) {
+        return Some((
+            contextual_tag_name(resolved_name, "MakerNoteSamsung1a"),
+            TagValue::new_binary(data.to_vec()),
+        ));
+    }
+
+    // MakerNotes.pm's unknown-text condition permits printable ASCII plus
+    // tab/CR/LF followed by any number of NUL padding bytes. Its RawConv
+    // removes all trailing padding, then returns values over 64 bytes by
+    // reference, causing ExifTool's ordinary output to treat them as binary.
+    let text_end = data
+        .iter()
+        .rposition(|byte| *byte != 0)
+        .map_or(0, |index| index + 1);
+    let text = &data[..text_end];
+    if !text.is_empty()
+        && text
+            .iter()
+            .all(|byte| matches!(*byte, b'\t' | b'\n' | b'\r' | 0x20..=0x7e))
+    {
+        let name = contextual_tag_name(resolved_name, "MakerNoteUnknownText");
+        let value = if text.len() > 64 {
+            TagValue::new_binary(text.to_vec())
+        } else {
+            TagValue::new_string(std::str::from_utf8(text).ok()?.to_string())
+        };
+        return Some((name, value));
+    }
+
+    // MakerNotes.pm requires the complete "LSI1\0" signature.
+    if data.starts_with(b"LSI1\0") {
+        return Some((
+            contextual_tag_name(resolved_name, "MakerNoteUnknownBinary"),
+            TagValue::new_binary(data.to_vec()),
+        ));
+    }
+    None
+}
+
+fn push_u16(out: &mut Vec<u8>, value: u16, byte_order: ByteOrder) {
+    let bytes = match byte_order {
+        ByteOrder::LittleEndian => value.to_le_bytes(),
+        ByteOrder::BigEndian => value.to_be_bytes(),
+    };
+    out.extend_from_slice(&bytes);
+}
+
+fn push_u32(out: &mut Vec<u8>, value: u32, byte_order: ByteOrder) {
+    let bytes = match byte_order {
+        ByteOrder::LittleEndian => value.to_le_bytes(),
+        ByteOrder::BigEndian => value.to_be_bytes(),
+    };
+    out.extend_from_slice(&bytes);
+}
+
 /// Compression (0x0103) - in IFD1 this describes the thumbnail encoding.
 const TAG_COMPRESSION: u16 = 0x0103;
 
@@ -1221,6 +1297,163 @@ fn read_unsigned_field(
     u64::try_from(value).ok()
 }
 
+fn read_unsigned_fields(
+    raw: &[u8],
+    field_type: u16,
+    count: u32,
+    byte_order: ByteOrder,
+) -> Option<Vec<u64>> {
+    let width = match field_type {
+        3 => 2usize,
+        4 => 4usize,
+        _ => return None,
+    };
+    let count = usize::try_from(count).ok()?;
+    let bytes = raw.get(..count.checked_mul(width)?)?;
+    let values = match (field_type, byte_order) {
+        (3, ByteOrder::LittleEndian) => bytes
+            .chunks_exact(2)
+            .map(|value| u16::from_le_bytes([value[0], value[1]]) as u64)
+            .collect(),
+        (3, ByteOrder::BigEndian) => bytes
+            .chunks_exact(2)
+            .map(|value| u16::from_be_bytes([value[0], value[1]]) as u64)
+            .collect(),
+        (4, ByteOrder::LittleEndian) => bytes
+            .chunks_exact(4)
+            .map(|value| {
+                u32::from_le_bytes([value[0], value[1], value[2], value[3]]) as u64
+            })
+            .collect(),
+        (4, ByteOrder::BigEndian) => bytes
+            .chunks_exact(4)
+            .map(|value| {
+                u32::from_be_bytes([value[0], value[1], value[2], value[3]]) as u64
+            })
+            .collect(),
+        _ => return None,
+    };
+    Some(values)
+}
+
+fn push_unsigned(
+    out: &mut Vec<u8>,
+    value: u64,
+    field_type: u16,
+    byte_order: ByteOrder,
+) -> Option<()> {
+    match field_type {
+        3 => push_u16(out, u16::try_from(value).ok()?, byte_order),
+        4 => push_u32(out, u32::try_from(value).ok()?, byte_order),
+        _ => return None,
+    }
+    Some(())
+}
+
+/// Repackages an uncompressed strip-based IFD1 image as ExifTool's
+/// self-contained `ThumbnailTIFF`, rewriting every strip offset.
+fn build_thumbnail_tiff(
+    reader: &dyn FileReader,
+    entries: &[(u16, u16, u32, std::borrow::Cow<'_, [u8]>)],
+    byte_order: ByteOrder,
+) -> Option<Vec<u8>> {
+    let compression = entries.iter().find(|entry| entry.0 == TAG_COMPRESSION)?;
+    if read_unsigned_field(
+        compression.3.as_ref(),
+        compression.1,
+        compression.2,
+        compression.0,
+        byte_order,
+    )? != 1
+    {
+        return None;
+    }
+
+    let offsets_entry = entries.iter().find(|entry| entry.0 == TAG_STRIP_OFFSETS)?;
+    let counts_entry = entries
+        .iter()
+        .find(|entry| entry.0 == TAG_STRIP_BYTE_COUNTS)?;
+    let source_offsets = read_unsigned_fields(
+        offsets_entry.3.as_ref(),
+        offsets_entry.1,
+        offsets_entry.2,
+        byte_order,
+    )?;
+    let source_counts = read_unsigned_fields(
+        counts_entry.3.as_ref(),
+        counts_entry.1,
+        counts_entry.2,
+        byte_order,
+    )?;
+    if source_offsets.is_empty() || source_offsets.len() != source_counts.len() {
+        return None;
+    }
+
+    let directory_end = 8usize
+        .checked_add(2)?
+        .checked_add(entries.len().checked_mul(12)?)?
+        .checked_add(4)?;
+    let external_len = entries
+        .iter()
+        .filter(|entry| entry.3.len() > 4)
+        .try_fold(0usize, |total, entry| total.checked_add(entry.3.len()))?;
+    let image_start = directory_end.checked_add(external_len)?;
+
+    let mut strips = Vec::with_capacity(source_offsets.len());
+    let mut new_offsets = Vec::with_capacity(source_offsets.len());
+    let mut next_offset = image_start;
+    for (&source_offset, &source_count) in source_offsets.iter().zip(&source_counts) {
+        let count = usize::try_from(source_count).ok()?;
+        let strip = reader.read(source_offset, count).ok()?;
+        if strip.len() != count {
+            return None;
+        }
+        new_offsets.push(u64::try_from(next_offset).ok()?);
+        next_offset = next_offset.checked_add(count)?;
+        strips.push(strip);
+    }
+
+    let mut out = Vec::with_capacity(next_offset);
+    out.extend_from_slice(match byte_order {
+        ByteOrder::LittleEndian => b"II",
+        ByteOrder::BigEndian => b"MM",
+    });
+    push_u16(&mut out, 42, byte_order);
+    push_u32(&mut out, 8, byte_order);
+    push_u16(&mut out, u16::try_from(entries.len()).ok()?, byte_order);
+
+    let mut external_offset = directory_end;
+    for (tag, field_type, count, raw) in entries {
+        push_u16(&mut out, *tag, byte_order);
+        push_u16(&mut out, *field_type, byte_order);
+        push_u32(&mut out, *count, byte_order);
+        if *tag == TAG_STRIP_OFFSETS && raw.len() <= 4 {
+            push_unsigned(&mut out, new_offsets[0], *field_type, byte_order)?;
+            out.resize(out.len() + 4 - raw.len(), 0);
+        } else if raw.len() <= 4 {
+            out.extend_from_slice(raw);
+            out.resize(out.len() + 4 - raw.len(), 0);
+        } else {
+            push_u32(&mut out, u32::try_from(external_offset).ok()?, byte_order);
+            external_offset = external_offset.checked_add(raw.len())?;
+        }
+    }
+    push_u32(&mut out, 0, byte_order);
+    for entry in entries.iter().filter(|entry| entry.3.len() > 4) {
+        if entry.0 == TAG_STRIP_OFFSETS {
+            for &offset in &new_offsets {
+                push_unsigned(&mut out, offset, entry.1, byte_order)?;
+            }
+        } else {
+            out.extend_from_slice(entry.3.as_ref());
+        }
+    }
+    for strip in strips {
+        out.extend_from_slice(strip);
+    }
+    Some(out)
+}
+
 /// Parses the thumbnail IFD (IFD1) that follows IFD0 and emits the thumbnail tags.
 ///
 /// A JPEG's APP1 EXIF payload is a TIFF structure whose IFD0 carries a
@@ -1275,6 +1508,18 @@ pub fn parse_ifd1_thumbnail(
 
     for (tag_id, field_type, value_count, raw_bytes) in &entries {
         match *tag_id {
+            TAG_SUBFILE_TYPE => {
+                metadata.insert(
+                    lookup_tag_name(*tag_id, "EXIF"),
+                    raw_bytes_to_tag_value(
+                        raw_bytes,
+                        *field_type,
+                        *value_count,
+                        *tag_id,
+                        byte_order,
+                    ),
+                );
+            }
             TAG_COMPRESSION => {
                 compression = raw_bytes_to_tag_value(
                     raw_bytes,
@@ -1340,6 +1585,14 @@ pub fn parse_ifd1_thumbnail(
             }
             _ => {}
         }
+    }
+
+    if let Some(tiff) = build_thumbnail_tiff(reader, &entries, byte_order) {
+        let resolved = lookup_tag_name(TAG_SUBFILE_TYPE, "EXIF");
+        metadata.insert(
+            contextual_tag_name(&resolved, "ThumbnailTIFF"),
+            TagValue::new_binary(tiff),
+        );
     }
 
     // Compression carries the standard PrintConv ("JPEG (old-style)" for a
