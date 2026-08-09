@@ -49,9 +49,32 @@ timeout = 600
 # expiry the connection is closed and the request is replayed, counting
 # against max_retries.
 deadline_seconds = 120
+# Reading files is FREE and UNLIMITED: the fixer may send as many
+# "REQUEST: <path>" turns as it likes and productive ones cost nothing.
+# max_request_turns bounds only the UNPRODUCTIVE ones -- a path that does
+# not resolve, a range starting past the end, or a re-ask of content
+# still VISIBLE in the conversation (byte-identical payloads are re-asks
+# whatever the request string looked like; content compaction has elided
+# is re-served free). The key kept its old name so existing configs keep
+# working; what changed is what it counts.
 max_request_turns = 20
+# Runaway backstop on TOTAL requests per attempt, free ones included.
+# Only a looping model ever reaches it; the model hears about it only at
+# the moment it fires, via a forced-diff demand that names the ceiling
+# rather than blaming a wasted-request allowance it never spent.
+max_request_turns_ceiling = 250
 max_request_repeats = 3
 max_verify_turns = 10
+# Repair rounds. max_repair_rounds is the base budget every candidate
+# gets; max_review_rounds is EXTRA rounds that only a SUBSTANTIVE
+# reviewer rejection unlocks, one per rejection. So a patch the reviewer
+# keeps pushing back on gets 5 + 5 = 10 rounds of fixer/reviewer
+# back-and-forth, while one that simply will not compile still gets 5 --
+# the argument is worth having more than once only when every mechanical
+# gate already passed. A reviewer that could not be reached, or whose
+# reply carried no verdict, has judged nothing and unlocks nothing.
+max_repair_rounds = 5
+max_review_rounds = 5
 compaction_trigger_tokens = 150000
 compaction_keep_recent_turns = 10
 # compaction_min_elide_tokens: once compaction triggers, only served user
