@@ -6321,6 +6321,52 @@ class AttemptBuildTests(unittest.TestCase):
         self.assertIn("safety ceiling", FORCED_DIFF_DEMAND_CEILING)
         self.assertIn("reply with a diff and nothing else", FORCED_DIFF_DEMAND_CEILING)
 
+    def test_pivot_for_a_never_served_path_does_not_claim_it_was_provided(self):
+        # The repeat pivot also fires for a path that NEVER resolved; its
+        # message must not assert the content "was already provided in
+        # full" there -- nothing was ever served.
+        seen = []
+
+        def fake_call_model(messages, *a):
+            seen.append(messages[-1]["content"])
+            if len(seen) <= 3:
+                return "REQUEST: src/nope.rs"      # never resolves
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "x.rs").write_text("fn a() {}\n")
+            attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, max_request_turns=8, max_request_repeats=3),
+                repo_root=repo,
+            )
+        pivot = [m for m in seen if "You've now requested" in m]
+        self.assertEqual(len(pivot), 1)
+        self.assertIn("has never returned content", pivot[0])
+        self.assertNotIn("provided in full", pivot[0])
+
+    def test_allowance_exhausted_on_the_ceiling_turn_reports_the_budget(self):
+        # When the wasted allowance and the total ceiling run out on the
+        # same turn, the ledger reason must tell the allowance story --
+        # the same tie-break the forced-diff demand already applies.
+        built, reason, diff, _ = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=lambda messages, *a: "REQUEST: src/nope.rs",
+            git_apply_fn=lambda diff, root: self.fail("should not apply"),
+            cargo_build_fn=lambda root: self.fail("should not build"),
+            git_checkout_clean_fn=lambda root: None,
+            config=dict(CONFIG, max_request_turns=2, max_request_turns_ceiling=2),
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertFalse(built)
+        self.assertEqual(reason, "no diff in model response (exhausted request budget)")
+
 
 class RequestAnswerServedTests(unittest.TestCase):
     """The productive/unproductive split that decides whether a REQUEST is
@@ -6386,6 +6432,45 @@ class RequestAnswerServedTests(unittest.TestCase):
             answer = resolve_request("Lines /../src/x.rs:900-901", repo, None)
             self.assertIn("starts past the end", answer)
             self.assertFalse(request_answer_served(answer))
+
+    def test_an_open_ended_range_on_a_huge_file_is_capped(self):
+        # A single free read must not be able to carry megabytes: an
+        # uncapped "path:1-" serve of a generated table file would blow
+        # the provider context for every later call in the attempt, and
+        # the resulting over-context 400 is an uncharged infra failure.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "big.rs").write_text(
+                "\n".join(f"const ROW_{i}: u32 = {i};" for i in range(5000)))
+            answer = resolve_request("src/big.rs:1-", repo, None)
+        self.assertTrue(request_answer_served(answer))   # still a served read
+        self.assertLess(len(answer), 20_000 + 200)
+        self.assertIn("truncated at 20000 characters", answer)
+        self.assertIn("narrow the range", answer)
+
+    def test_a_truncated_whole_file_serve_says_so(self):
+        # "Re-asking for content still visible" is only an honest charge
+        # if the model can tell it was NOT shown the whole file.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "big.rs").write_text("x" * 60_000)
+            answer = resolve_request("src/big.rs", repo, None)
+        self.assertTrue(request_answer_served(answer))
+        self.assertIn("truncated at 20000 of 60000 characters", answer)
+        self.assertIn("request a line range", answer)
+
+    def test_a_nul_byte_in_the_path_is_a_rejection_not_a_crash(self):
+        # Path.resolve raises ValueError (not OSError) on an embedded NUL,
+        # and nothing above attempt_build catches either -- this reply
+        # shape used to kill the whole worker.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            answer = resolve_request("src/\x00bad.rs", repo, None)
+        self.assertIn("Could not resolve", answer)
+        self.assertFalse(request_answer_served(answer))
 
 
 class CargoCheckTests(unittest.TestCase):
@@ -7358,6 +7443,58 @@ class FixGapReviewRoundExtensionTests(HermeticFixGapTestCase):
             make_gap(gap_count=1), "--- a/x\n", CONFIG, call_model_fn=raising_call_model)
         self.assertFalse(approved)
         self.assertTrue(reason.startswith(REVIEW_INFRA_PREFIXES), reason)
+
+    def test_critique_path_honors_an_extended_budget(self):
+        # A build failure INSIDE an extended round must not be treated as
+        # the last round: critique_and_continue's last-round check reads
+        # the live, extended rounds_allowed, not max_repair_rounds. A
+        # mutant substituting max_repair_rounds passes every homogeneous
+        # scenario (all-rejections or all-build-failures) -- only a mixed
+        # sequence like this one kills it.
+        attempts = []
+        reviews = []
+
+        def mixed_attempt_build(messages, **kwargs):
+            attempts.append(1)
+            if len(attempts) == 2:
+                return False, "error[E0308]: mismatched types", None, messages
+            messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
+            return True, None, "--- a/x\n+++ b/x\n", messages
+
+        def review(g, diff, config, **kw):
+            reviews.append(1)
+            if len(reviews) == 1:
+                return False, "C1 wrong value"
+            return True, ""
+
+        result = self._run(
+            review,
+            attempt_build_fn=mixed_attempt_build,
+            critique_fn=lambda *a, **k: "look closer",
+            max_repair_rounds=2, max_review_rounds=3,
+        )
+        # round 1: rejection extends 2 -> 3; round 2: build failure inside
+        # the extension; round 3: the approval lands.
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(len(attempts), 3)
+        self.assertEqual(len(reviews), 2)
+
+    def test_a_rejection_on_the_final_base_round_still_buys_a_usable_round(self):
+        # Pins the extension-BEFORE-last-round-check ordering the inline
+        # comment calls load-bearing. With the order swapped, a rejection
+        # arriving on the currently-last allowed round returns "failed"
+        # without ever using the round it just bought.
+        reviews = []
+
+        def review(g, diff, config, **kw):
+            reviews.append(1)
+            if len(reviews) == 1:
+                return False, "C5 hardcodes the sample value"
+            return True, ""
+
+        result = self._run(review, max_repair_rounds=1, max_review_rounds=1)
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(len(reviews), 2)
 
 
 class FixGapRejectionHandoffTests(HermeticFixGapTestCase):

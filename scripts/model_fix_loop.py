@@ -4556,7 +4556,9 @@ def describe_missing_path(path_part, repo_root, samples_dir, max_entries=REQUEST
         try:
             root_resolved = Path(root).resolve()
             target = (root_resolved / requested).resolve()
-        except OSError:
+        except (OSError, ValueError):
+            # ValueError: embedded NUL in the model-supplied path -- same
+            # guard as resolve_request's candidate loop.
             continue
         # Containment is checked on the RESOLVED target, never on the
         # lexical one: "../../../etc/passwd" under root has root itself in
@@ -4649,7 +4651,11 @@ def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
     for candidate, kind in candidates:
         try:
             resolved = candidate.resolve()
-        except OSError:
+        except (OSError, ValueError):
+            # ValueError: an embedded NUL in a model-supplied path.
+            # Path.resolve raises it as ValueError, not OSError, and
+            # nothing above attempt_build catches either -- without this
+            # a single "REQUEST: src/\x00.rs" reply kills the worker.
             continue
         root = (Path(samples_dir).resolve() if kind == "sample" else repo_root.resolve())
         if root not in resolved.parents and resolved != root:
@@ -4685,8 +4691,32 @@ def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
                 f"{i}: {line}"
                 for i, line in enumerate(lines[range_start - 1:clamped_end], start=range_start)
             )
+            # Same cap as the whole-file branch below. Without it a single
+            # open-ended range on a generated file is a multi-megabyte
+            # "free" read (src/exiftool_tables/ files run to 5MB+) that
+            # blows the provider context window for every later call in
+            # the attempt -- and an over-context 400 is an uncharged infra
+            # failure, so the loop would grind on it indefinitely.
+            if len(numbered) > max_text_bytes:
+                kept = numbered[:max_text_bytes]
+                if "\n" in kept:
+                    kept = kept[:kept.rfind("\n")]
+                numbered = (
+                    f"{kept}\n[... truncated at {max_text_bytes} characters -- "
+                    "narrow the range to see the rest]"
+                )
             return f"{SERVED_LINES_PREFIX}{range_start}-{clamped_end} of {path_part}:\n{numbered}"
-        return f"{SERVED_CONTENTS_PREFIX}{path_part}:\n{content[:max_text_bytes]}"
+        if len(content) > max_text_bytes:
+            # Say so out loud: the charging story ("re-asking for content
+            # still visible") only stays honest if the model can tell it
+            # was NOT shown the whole file. A ranged read of the rest is
+            # new content and stays free.
+            return (
+                f"{SERVED_CONTENTS_PREFIX}{path_part}:\n{content[:max_text_bytes]}"
+                f"\n[... truncated at {max_text_bytes} of {len(content)} characters -- "
+                "request a line range for the rest]"
+            )
+        return f"{SERVED_CONTENTS_PREFIX}{path_part}:\n{content}"
 
     rejection = f"Could not resolve {path_part!r} under the samples dir or repo root."
     listing = describe_missing_path(path_part, repo_root, samples_dir)
@@ -5125,13 +5155,23 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                     # Dead-end: the same request over and over buying
                     # nothing new. Re-serving identical content burns
                     # budget without advancing anything -- course-correct
-                    # instead.
-                    body = (
-                        f"You've now requested {normalized!r} {request_counts[normalized]} times -- "
-                        "it was already provided in full and re-reading it will not change anything. "
-                        "Pivot: request a DIFFERENT file, narrow to a line range "
-                        "(REQUEST: path:START-END), or submit your best diff now."
-                    )
+                    # instead. Two honest wordings: "provided in full" is
+                    # only true when the content was actually served.
+                    if whitelisted:
+                        body = (
+                            f"You've now requested {normalized!r} {request_counts[normalized]} times -- "
+                            "it was already provided in full and re-reading it will not change anything. "
+                            "Pivot: request a DIFFERENT file, narrow to a line range "
+                            "(REQUEST: path:START-END), or submit your best diff now."
+                        )
+                    else:
+                        body = (
+                            f"You've now requested {normalized!r} {request_counts[normalized]} times and it "
+                            "has never returned content -- the path does not resolve (or the range starts "
+                            "past the end), and asking again will not change that. Pivot: request a "
+                            "DIFFERENT file, pick a path from the directory listing shown earlier, or "
+                            "submit your best diff now."
+                        )
                     served = False
                     current_phase = "patch"
                 else:
@@ -5180,7 +5220,10 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
             # loop worth seeing in the lessons ledger as its own thing,
             # since no amount of raising max_request_turns would change it.
             # Both keep the DIFF_FORMAT_FAILURE_RE-matched prefix.
-            if request_turns_used >= max_request_turns_ceiling:
+            # Mirror the demand selection above: when BOTH ran out on the
+            # same turn, the allowance story is the true one, for the
+            # ledger reason exactly as for the model-facing message.
+            if wasted_requests_used < max_wasted_requests:
                 return (
                     False,
                     "no diff in model response (hit the "
