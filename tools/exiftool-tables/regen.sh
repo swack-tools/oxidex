@@ -13,9 +13,30 @@
 
 set -euo pipefail
 
-VERSION="${1:-13.30}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
+
+# The release comes from the repo pin, never from a literal here. A hardcoded
+# default drifted 29 releases behind `.exiftool-version` and, because verify.py
+# used to take its expected release from the generated artifact's own stamp,
+# nothing could report it: `just regen-tables` with no argument re-froze the
+# whole transcription set at the stale release and still passed verification.
+PIN_FILE="$ROOT/.exiftool-version"
+[[ -r "$PIN_FILE" ]] || { echo "no ExifTool pin at $PIN_FILE" >&2; exit 1; }
+PIN="$(tr -d '[:space:]' < "$PIN_FILE")"
+[[ -n "$PIN" ]] || { echo "$PIN_FILE is empty" >&2; exit 1; }
+
+VERSION="${1:-$PIN}"
+if [[ "$VERSION" != "$PIN" ]]; then
+    # Fail before doing the work rather than after: regen.sh writes the
+    # committed tables, so generating them from a release the repo does not
+    # grade against produces exactly the skew this pin exists to prevent.
+    # verify.py would refuse at the end anyway; saying so now costs less.
+    echo "refusing to transcribe ExifTool $VERSION while $PIN_FILE pins $PIN." >&2
+    echo "To move the repo to $VERSION, update .exiftool-version first, then" >&2
+    echo "re-run this script with no argument." >&2
+    exit 1
+fi
 CACHE="${OXIDEX_ET_CACHE:-$ROOT/target/exiftool-src}"
 LIB="$CACHE/exiftool-$VERSION/lib"
 OUT="$ROOT/src/exiftool_tables/binary_tables.rs"

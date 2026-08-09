@@ -40,7 +40,7 @@ pub mod binary_tables;
 pub mod runtime;
 
 pub use binary_tables::{
-    ALL_BINARY_TABLES, BinaryTable, EXIFTOOL_VERSION, ExprId, Field, Fmt, PrintConv,
+    ALL_BINARY_TABLES, BinaryTable, EXIFTOOL_VERSION, ExprId, Field, Fmt, Mask, Omitted, PrintConv,
 };
 pub use runtime::{DecodedField, DecodedValue, decode_binary_table};
 
@@ -69,6 +69,26 @@ mod tests {
                 .split('.')
                 .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())),
             "expected a dotted ExifTool version, found {EXIFTOOL_VERSION:?}"
+        );
+    }
+
+    /// The stamp must be the release the rest of the repo grades against.
+    ///
+    /// This is the cheap layer of a three-part guard, and the only one that
+    /// needs neither Perl nor Python: `tools/exiftool-tables/verify.py` refuses
+    /// a stamp that isn't the pin, and `regen.sh` refuses to transcribe any
+    /// other release. Before those existed the check was circular -- verify.py
+    /// took its expected release from this very stamp, and both the justfile
+    /// recipe and CI chose which ExifTool to fetch the same way -- so these
+    /// tables sat at 13.30 for 29 releases while every published coverage
+    /// number was measured against the pinned 13.59, and every check passed.
+    #[test]
+    fn tables_are_transcribed_from_the_pinned_release() {
+        let pinned = crate::exiftool_oracle::repo_pin();
+        assert_eq!(
+            EXIFTOOL_VERSION, pinned,
+            "binary_tables.rs was transcribed from ExifTool {EXIFTOOL_VERSION}, but \
+             .exiftool-version pins {pinned}; regenerate with `just regen-tables`"
         );
     }
 

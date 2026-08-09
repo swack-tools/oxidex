@@ -4099,12 +4099,24 @@
 #define GPS_INFO_IFD_POINTER 34853
 
 /*
+ Semantics ExifTool applies to a field that this schema does not reproduce.
+
+ These are Perl, so the mechanical transcription cannot run them. Recording
+ which were dropped is what lets a caller tell "the raw value is the value"
+ from "the raw value is an input to something you still have to do". Any flag
+ set means the decoded value is NOT what ExifTool would report.
+ */
+typedef struct Omitted Omitted;
+
+/*
  Opaque handle type for C API.
  C code receives a pointer to this type but cannot access its contents.
  */
 typedef struct ExifToolHandle {
     uint8_t _private[0];
 } ExifToolHandle;
+
+
 
 
 

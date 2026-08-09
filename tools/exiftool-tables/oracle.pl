@@ -11,6 +11,7 @@
 # Output columns:
 #   MODULE  TABLE  INDEX  NAME                      -- one per field
 #   MODULE  TABLE  INDEX  ENUM  KEY  VALUE          -- one per PrintConv entry
+#   MODULE  TABLE  INDEX  MASK  BITS  SHIFT         -- one per masked field
 
 use strict;
 use warnings;
@@ -73,6 +74,22 @@ for my $mod (grep { !$skip{$_} } @mods) {
             print join("\t", $mod, $sym, $k, clean($name)), "\n";
 
             next unless ref $e eq 'HASH';
+
+            # Mask/BitShift decide what the field's value even is: ExifTool
+            # reduces the word to ($val & Mask) >> BitShift before converting.
+            # BitShift is derived here the way ExifTool derives it -- lowest set
+            # bit, unless the table states one -- rather than read from
+            # dump_tables.pl's JSON, so the two paths stay independent.
+            my $mask = $e->{Mask};
+            if (defined $mask && !ref $mask && $mask) {
+                my $shift = $e->{BitShift};
+                unless (defined $shift) {
+                    $shift = 0;
+                    ++$shift until $mask & (1 << $shift);
+                }
+                print join("\t", $mod, $sym, $k, 'MASK', $mask, $shift), "\n";
+            }
+
             my $pc = $e->{PrintConv};
             next unless ref $pc eq 'HASH';
             for my $ck (sort keys %$pc) {

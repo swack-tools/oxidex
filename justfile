@@ -1153,13 +1153,16 @@ compare-exiftool-full-update:
 
 # Regenerate ExifTool binary tag tables from ExifTool's Perl sources.
 # Extracts, generates Rust, and verifies the output against ExifTool itself.
-regen-tables version="13.30":
+# The release defaults to .exiftool-version; regen.sh refuses any other.
+regen-tables version="":
     tools/exiftool-tables/regen.sh {{version}}
 
 # Verify the committed generated tables still match ExifTool exactly.
-# Defaults to the ExifTool release the tables were generated from, which is
-# recorded in the generated file itself -- a hardcoded default here would be a
-# fourth copy of the version to drift out of sync with the other three.
+# Defaults to .exiftool-version -- the pin is the only source of truth for the
+# release this repo grades against. Reading it out of the generated file
+# instead (which this recipe used to do) made the check circular: the artifact
+# named the release it was verified against, so a stale table set chose its own
+# oracle and passed forever. verify.py now refuses a stamp that isn't the pin.
 verify-tables version="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1167,9 +1170,9 @@ verify-tables version="":
     GENERATED="src/exiftool_tables/binary_tables.rs"
     VERSION="{{version}}"
     if [[ -z "$VERSION" ]]; then
-        VERSION=$(sed -n 's/^pub const EXIFTOOL_VERSION: &str = "\(.*\)";$/\1/p' "$GENERATED")
+        VERSION=$(tr -d '[:space:]' < .exiftool-version)
         [[ -n "$VERSION" ]] || {
-            echo "❌ $GENERATED has no EXIFTOOL_VERSION stamp; run 'just regen-tables'" >&2
+            echo "❌ .exiftool-version is empty; it must name one ExifTool release" >&2
             exit 1
         }
     fi

