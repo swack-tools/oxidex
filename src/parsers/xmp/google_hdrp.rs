@@ -226,7 +226,11 @@ fn read_varint(data: &[u8], mut pos: usize) -> Option<(u64, usize)> {
 /// The last record with the given field id, mirroring Protobuf's
 /// "last value wins" semantics for a non-repeated field.
 fn last_field<'a, 'b>(fields: &'b [(u32, Field<'a>)], id: u32) -> Option<&'b Field<'a>> {
-    fields.iter().rev().find(|(fid, _)| *fid == id).map(|(_, f)| f)
+    fields
+        .iter()
+        .rev()
+        .find(|(fid, _)| *fid == id)
+        .map(|(_, f)| f)
 }
 
 fn push_string_field(
