@@ -8214,7 +8214,7 @@ def main(argv=None):
              f"{DEFAULT_BASE_REF}; pass --base-ref '' to disable for a standalone run with no "
              "shared branch. Defaulting rather than leaving this None is deliberate -- a live "
              "fleet ran for days with it unset, so refresh_worktree_fn was None and every "
-             "worker measured against the commit it started on. 606 of 928 tracked tags (65%) "
+             "worker measured against the commit it started on. 606 of 928 tracked tags (65%%) "
              "went stale that way: already fixed and merged upstream, still being re-attempted.",
     )
     parser.add_argument(

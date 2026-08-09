@@ -10064,5 +10064,20 @@ class SummarizeRejectionCodesTests(unittest.TestCase):
         self.assertNotIn("How the previous attempts", rendered)
 
 
+class ArgumentParserConstructionTests(unittest.TestCase):
+    """argparse's HelpFormatter applies %-style substitution to every help
+    string, so a literal % anywhere in prose (e.g. "(65%)") raises ValueError
+    at add_argument() time -- before a single line of real work runs. This bit
+    the live fleet directly: every worker across all 14 squads crashed within
+    2 seconds of spawn because of exactly this in the --base-ref help text,
+    burning CPU on an infinite respawn loop that never produced anything."""
+
+    def test_main_constructs_its_parser_without_a_bare_percent_crashing_it(self):
+        with self.assertRaises(SystemExit) as ctx:
+            with patch("sys.stdout", new=io.StringIO()):
+                model_fix_loop.main(["--help"])
+        self.assertEqual(ctx.exception.code, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
