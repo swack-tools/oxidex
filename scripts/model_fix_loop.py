@@ -491,8 +491,52 @@ def _reply_has_unterminated_diff_fence(reply):
     a diff at all (plain prose, a REQUEST, etc). attempt_build uses this
     to tell the two apart: the first is worth one targeted retry asking
     for PATCH i/N chunking instead of failing the whole attempt outright,
-    the second is not."""
+    the second is not.
+
+    On its own this does NOT mean the content is incomplete -- see
+    _reply_ends_in_unresolved_diff_content, which attempt_build always
+    checks alongside this one before ever deciding to trust or discard the
+    recovered content."""
     return "```diff" in reply and not DIFF_BLOCK_RE.search(reply)
+
+
+#: A line that still LOOKS like diff content: a hunk/file header (diff
+#: --git, index, ---, +++, @@) or a context/added/removed line (leading
+#: space, +, or -).
+_DIFF_LINE_RE = re.compile(r"^(diff --git|index |--- |\+\+\+ |@@ |[ +-])")
+
+
+def _reply_ends_in_unresolved_diff_content(reply):
+    """True when the LAST non-blank line of `reply` still looks like diff
+    content -- i.e. the reply was cut off DEAD INSIDE the diff, never
+    reaching anything past it, as opposed to a reply that finished writing
+    the diff and then (for whatever reason) failed to close the fence.
+
+    This is the discriminator attempt_build combines with
+    _reply_has_unterminated_diff_fence before ever deciding a diff
+    salvaged by extract_diff's DIFF_BLOCK_UNCLOSED_RE fallback (see #633)
+    is safe to hand to git_apply_fn. An unclosed fence alone is NOT
+    sufficient signal: measured on the 2026-08-08/09 fleet run's 14
+    unclosed-fence replies, 5 are genuinely complete diffs that just never
+    closed their fence (the model wrote a trailing "*** End Patch" line --
+    #633's own recovery case, safe to apply) while 2 are genuine
+    config["max_tokens"] mid-token cuts that ALSO structurally succeed
+    against the real git-apply ladder (--ignore-whitespace/-C1 rungs),
+    silently dropping the tail -- the exact plausible-but-wrong hazard
+    AGENTS.md warns about. Both shapes have an unclosed fence; only this
+    check tells them apart: the 5 safe recoveries all end on trailing
+    NON-diff content (the sentinel line, or trailing prose), while both
+    dangerous cuts end dead on a diff/hunk line with nothing after.
+
+    The ambiguous residual case -- a complete diff with NO trailing
+    marker at all, fence just never closed -- is indistinguishable from a
+    genuine cut this way and deliberately lands on the safe side (treated
+    as unresolved): one extra retry turn costs far less than a silently
+    partial fix landing as a false "success"."""
+    lines = [line for line in reply.rstrip("\n").split("\n") if line.strip()]
+    if not lines:
+        return False
+    return bool(_DIFF_LINE_RE.match(lines[-1]))
 
 
 def estimate_tokens(text):
@@ -5179,19 +5223,26 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     A model that ignores that instruction and submits a plain (non-PATCH)
     diff anyway can still get truncated mid-reply by the same cap: the
     reply's ```diff fence opens and never closes. extract_diff's
-    DIFF_BLOCK_UNCLOSED_RE fallback recovers what content there is, but a
-    diff cut off by a hard length cap is incomplete BY CONSTRUCTION -- and
-    that incomplete content can look like a perfectly valid, COMPLETE diff
-    if the cut happened to land on a hunk boundary (measured directly: a
-    2-hunk diff truncated at the start of hunk 2 applies cleanly as a
-    1-hunk diff, silently dropping the rest -- worse than an outright
-    apply failure, since nothing downstream can tell). So a diff salvaged
-    from a reply matching _reply_has_unterminated_diff_fence(reply) is
-    NEVER handed to git_apply_fn: TRUNCATED_DIFF_RETRY_DEMAND fires
-    instead, bounded by DEFAULT_MAX_TRUNCATION_RETRIES turns (free of
-    diff_attempts_used, since nothing was ever applied) before the attempt
-    fails outright rather than falling through to try the salvage anyway.
-    The same guard applies to a truncated PATCH i/N chunk and a truncated
+    DIFF_BLOCK_UNCLOSED_RE fallback recovers what content there is (see
+    #633), but an unclosed fence alone doesn't mean the content is
+    incomplete -- some replies simply finish the diff and then fail to
+    close the fence (a trailing "*** End Patch" line, #633's own recovery
+    case), which is perfectly safe to apply. What's dangerous is a reply
+    cut off DEAD INSIDE the diff by config["max_tokens"]: that salvage can
+    look like a perfectly valid, COMPLETE diff if the cut landed on a
+    hunk boundary, and git apply then accepts it and silently drops
+    everything after the cut (measured directly on two real fleet replies
+    -- see _reply_ends_in_unresolved_diff_content's docstring). A
+    plausible-but-wrong partial application is worse than an outright
+    apply failure, since nothing downstream can tell, so attempt_build
+    combines BOTH _reply_has_unterminated_diff_fence(reply) AND
+    _reply_ends_in_unresolved_diff_content(reply): only a diff salvaged
+    from a reply matching both is NEVER handed to git_apply_fn --
+    TRUNCATED_DIFF_RETRY_DEMAND fires instead, bounded by
+    DEFAULT_MAX_TRUNCATION_RETRIES turns (free of diff_attempts_used,
+    since nothing was ever applied) before the attempt fails outright
+    rather than falling through to try the salvage anyway. The same
+    combined guard applies to a truncated PATCH i/N chunk and a truncated
     VERIFY trial diff -- see the matching checks at PATCH_HEADER_RE and
     VERIFY_RE below.
 
@@ -5424,12 +5475,18 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                 current_phase = "explore"
                 continue
             verify_turns_used += 1
-            # Checked BEFORE extract_diff: DIFF_BLOCK_UNCLOSED_RE (see
-            # extract_diff) can recover something from an unclosed fence,
-            # but content cut off by config["max_tokens"] is incomplete by
-            # construction and must never reach git_apply_fn -- see the
-            # matching check on the final-diff path below for why.
-            if _reply_has_unterminated_diff_fence(reply):
+            # Checked BEFORE extract_diff, combining BOTH signals -- see
+            # _reply_ends_in_unresolved_diff_content for why an unclosed
+            # fence alone isn't enough: it also matches a reply that
+            # finished the diff and just failed to close the fence (#633's
+            # own recovery case), which is safe to apply. Only a reply
+            # that ALSO ends dead inside diff content must never reach
+            # git_apply_fn -- see the matching check on the final-diff
+            # path below for the measured hazard this guards against.
+            if (
+                _reply_has_unterminated_diff_fence(reply)
+                and _reply_ends_in_unresolved_diff_content(reply)
+            ):
                 messages.append({
                     "role": "user",
                     "content": (
@@ -5496,9 +5553,13 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
             # DIFF_BLOCK_UNCLOSED_RE's fallback (see extract_diff) silently
             # accept a partial chunk body -- corrupting the reassembled
             # diff the same way an unterminated final diff would (see the
-            # check on that path below). Reject it exactly like a chunk
-            # with no fence at all, rather than accepting a truncated one.
-            if _reply_has_unterminated_diff_fence(reply):
+            # check on that path below). Combine both signals exactly as
+            # that path does: a chunk that finished its content and just
+            # lacks a closing fence is still safe to accept.
+            if (
+                _reply_has_unterminated_diff_fence(reply)
+                and _reply_ends_in_unresolved_diff_content(reply)
+            ):
                 messages.append({
                     "role": "user",
                     "content": (
@@ -5545,21 +5606,31 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                 continue
             diff = "".join(patch_chunks[i] for i in range(1, chunk_total + 1))
         else:
-            # Checked BEFORE extract_diff, unconditionally -- never after.
-            # extract_diff's DIFF_BLOCK_UNCLOSED_RE fallback (see #633) can
-            # recover something from a reply whose ```diff fence never
-            # closed, but content cut off by config["max_tokens"] is
-            # incomplete BY CONSTRUCTION, and that something can look like
-            # a perfectly valid, complete diff if the cut happened to land
-            # on a hunk boundary: git apply then accepts it and silently
-            # drops everything after the cut (measured directly -- a
-            # 2-hunk diff truncated at the start of hunk 2 applies cleanly
-            # as a 1-hunk diff). A plausible-but-wrong partial application
-            # is worse than an outright apply failure, so a diff salvaged
-            # from a truncated reply must NEVER reach git_apply_fn, and
-            # exhausting the retry budget below fails the attempt outright
-            # rather than falling through to try applying the salvage.
-            if _reply_has_unterminated_diff_fence(reply):
+            # Checked BEFORE extract_diff, never after -- and combining
+            # BOTH _reply_has_unterminated_diff_fence AND
+            # _reply_ends_in_unresolved_diff_content, not the fence signal
+            # alone. extract_diff's DIFF_BLOCK_UNCLOSED_RE fallback (see
+            # #633) recovers something from any unclosed fence, but that
+            # something is only DANGEROUS when the reply was cut off DEAD
+            # INSIDE the diff (ends on a hunk/context/+/- line): such a
+            # salvage can look like a perfectly valid, complete diff if the
+            # cut landed on a hunk boundary, and git apply then accepts it
+            # and silently drops everything after the cut (measured
+            # directly on real fleet replies -- see
+            # _reply_ends_in_unresolved_diff_content's docstring for the
+            # exact two). A plausible-but-wrong partial application is
+            # worse than an outright apply failure, so that combination
+            # must NEVER reach git_apply_fn, and exhausting the retry
+            # budget below fails the attempt outright rather than falling
+            # through to try applying the salvage. A reply that instead
+            # finished the diff and merely failed to close the fence
+            # (trailing non-diff content, e.g. a stray "*** End Patch"
+            # line) is NOT this case and is left to extract_diff's normal
+            # recovery below, same as #633 intended.
+            if (
+                _reply_has_unterminated_diff_fence(reply)
+                and _reply_ends_in_unresolved_diff_content(reply)
+            ):
                 if truncation_retries_used < DEFAULT_MAX_TRUNCATION_RETRIES:
                     truncation_retries_used += 1
                     messages.append({

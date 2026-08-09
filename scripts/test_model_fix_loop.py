@@ -118,6 +118,7 @@ from model_fix_loop import (
     squad_from_worker,
     describe_missing_path,
     _reply_has_unterminated_diff_fence,
+    _reply_ends_in_unresolved_diff_content,
     DEFAULT_MAX_TOKENS,
     DEFAULT_MAX_TRUNCATION_RETRIES,
     TRUNCATED_DIFF_RETRY_DEMAND,
@@ -795,6 +796,45 @@ class ReplyHasUnterminatedDiffFenceTests(unittest.TestCase):
     def test_false_for_an_unrelated_unclosed_fence(self):
         # A stray ``` with no "diff" tag is not this signature.
         self.assertFalse(_reply_has_unterminated_diff_fence("```\nsome text\n"))
+
+
+class ReplyEndsInUnresolvedDiffContentTests(unittest.TestCase):
+    """The discriminator combined with _reply_has_unterminated_diff_fence
+    before attempt_build trusts a diff salvaged from an unclosed fence --
+    see that combination's docstring in model_fix_loop.py for the two real
+    fleet replies (a mid-token cut and a mid-token cut) that motivate it:
+    an unclosed fence alone doesn't mean truncated content, since some
+    replies just forget to close the fence AFTER finishing the diff."""
+
+    def test_true_for_a_diff_that_ends_on_a_hunk_boundary(self):
+        # The dangerous shape: cut off right after a complete hunk, ending
+        # on an ordinary context line -- looks exactly like a genuinely
+        # finished 1-hunk diff, which is precisely why it's dangerous.
+        text = "```diff\n--- a/x.rs\n+++ b/x.rs\n@@ -1,3 +1,4 @@\n fn a() {\n+    // add\n }\n"
+        self.assertTrue(_reply_ends_in_unresolved_diff_content(text))
+
+    def test_true_for_a_mid_token_cut(self):
+        # Cut off mid-statement, inside an added line -- no trailing
+        # marker, nothing after the diff content.
+        text = "```diff\n--- a/x.rs\n+++ b/x.rs\n@@ -1 +1 @@\n+    let parsed = if as_float {"
+        self.assertTrue(_reply_ends_in_unresolved_diff_content(text))
+
+    def test_true_for_a_cut_hunk_header(self):
+        text = "```diff\n--- a/x.rs\n+++ b/x.rs\n@@ -10,3 +10,4 @@"
+        self.assertTrue(_reply_ends_in_unresolved_diff_content(text))
+
+    def test_false_when_a_trailing_sentinel_follows_the_diff(self):
+        # #633's own recovery case: the model finished the diff and then
+        # wrote a stray "*** End Patch" line instead of closing the fence.
+        text = "```diff\n--- a/x.rs\n+++ b/x.rs\n@@ -1 +1 @@\n-old\n+new\n*** End Patch\n"
+        self.assertFalse(_reply_ends_in_unresolved_diff_content(text))
+
+    def test_false_when_trailing_prose_follows_the_diff(self):
+        text = "```diff\n--- a/x.rs\n+++ b/x.rs\n@@ -1 +1 @@\n-old\n+new\nThat should do it.\n"
+        self.assertFalse(_reply_ends_in_unresolved_diff_content(text))
+
+    def test_false_for_empty_reply(self):
+        self.assertFalse(_reply_ends_in_unresolved_diff_content(""))
 
 
 class ExtractTestFailureContextTests(unittest.TestCase):
@@ -5653,37 +5693,61 @@ class AttemptBuildTests(unittest.TestCase):
         self.assertFalse(built)
         self.assertEqual(reason, "no diff in model response")
 
-    def test_diff_fence_never_closing_is_never_silently_applied_even_when_content_looks_complete(self):
-        """Supersedes the earlier "builds on the first attempt" expectation
-        for this exact shape (a "Plan + diff" reply whose ```diff fence is
-        terminated by a stray "*** End Patch" line instead of a closing
-        ```, recovered by extract_diff's DIFF_BLOCK_UNCLOSED_RE fallback --
-        see ExtractDiffTests.test_recovers_diff_from_a_fence_that_never_closes).
-
-        That fallback cannot tell "the model forgot the closing fence but
-        the diff is complete" apart from "the reply got cut off by
-        max_tokens mid-diff" -- both look identical from the fence alone.
-        A diff truncated at a hunk boundary can still git-apply CLEANLY,
-        silently dropping everything after the cut (measured directly: a
-        2-hunk diff truncated at the start of hunk 2 applies as a 1-hunk
-        diff with no error). That plausible-but-wrong partial application
-        is worse than never applying at all, so attempt_build now refuses
-        to ever hand git_apply_fn a diff salvaged from an unclosed fence,
-        REGARDLESS of whether the recovered content happens to be complete
-        -- there is no reply-shape signal that can safely distinguish the
-        two cases before applying."""
-        apply_calls = []
-
-        def fake_git_apply(diff, root):
-            apply_calls.append(diff)
-            return True, "ok"
-
+    def test_builds_when_diff_fence_never_closes_but_content_is_real(self):
+        """End-to-end witness for the extract_diff fallback (see
+        ExtractDiffTests.test_recovers_diff_from_a_fence_that_never_closes):
+        a "Plan + diff" reply whose ```diff fence is terminated by a stray
+        "*** End Patch" line instead of a closing ```. This is the safe
+        case _reply_ends_in_unresolved_diff_content is specifically for:
+        the reply's last non-blank line is that sentinel, NOT diff content,
+        so it's evidence the model finished writing before failing to
+        close the fence -- distinct from a genuine config["max_tokens"]
+        cut, which ends dead inside the diff with nothing after it (see
+        test_never_applies_a_diff_truncated_at_a_hunk_boundary below for
+        that dangerous shape). Builds on the first attempt, same as a
+        properly closed fence would."""
         built, reason, diff, messages = attempt_build(
             [{"role": "user", "content": "fix format X"}],
             call_model_fn=lambda messages, *a: (
                 "Plan + diff: adds the missing tag.\n\n"
                 "```diff\n--- a/src/x.rs\n+++ b/src/x.rs\n"
                 "@@ -1 +1 @@\n-old\n+new\n*** End Patch\n"
+            ),
+            git_apply_fn=lambda diff, root: (True, "ok"),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertTrue(built, reason)
+        self.assertIsNone(reason)
+        self.assertIn("+new", diff)
+        self.assertNotIn("End Patch", diff)
+
+    def test_never_applies_a_diff_truncated_at_a_hunk_boundary(self):
+        """The dangerous shape a trailing-marker check alone would miss:
+        a genuine 2-hunk diff cut off by config["max_tokens"] at the exact
+        start of hunk 2 -- the reply ends dead on hunk 1's last context
+        line, no marker, nothing after. extract_diff's DIFF_BLOCK_UNCLOSED_RE
+        fallback recovers hunk 1 alone, which is a perfectly well-formed,
+        COMPLETE-LOOKING 1-hunk diff -- git apply accepts it with no error,
+        silently dropping hunk 2 entirely (reproduced directly against a
+        real repo with this exact shape). _reply_ends_in_unresolved_diff_content
+        catches this because the reply's last line (" }", plain context)
+        still looks like diff content, unlike the trailing-marker case
+        above -- so this must never reach git_apply_fn at all."""
+        apply_calls = []
+
+        def fake_git_apply(diff, root):
+            apply_calls.append(diff)
+            return True, "ok"  # would silently "succeed" if ever called
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=lambda messages, *a: (
+                "Plan + diff: fix two spots.\n\n"
+                "```diff\n--- a/src/core/mod.rs\n+++ b/src/core/mod.rs\n"
+                "@@ -10,3 +10,4 @@\n fn a() {\n+    // hunk 1 addition\n }\n"
             ),
             git_apply_fn=fake_git_apply,
             git_checkout_clean_fn=lambda root: None,
