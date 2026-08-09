@@ -1567,17 +1567,23 @@ impl PentaxParser {
                 // Pentax.pm:5202-5227's `%Pentax::CAFPointInfo` table, byte 1
                 // (`FIRST_ENTRY => 0`). `NumCAFPoints`'s `RawConv` packs the
                 // AF grid's width and height into one byte's nibbles and
-                // multiplies them: `($val & 0x0f) * ($val >> 4)`. Only this
-                // one field is decoded here -- `CAFPointsInFocus`/
-                // `CAFPointsSelected` need `DecodeAFPoints`, a bitmask walk
-                // over a grid whose size this byte determines, and neither is
-                // in the assigned tag set.
+                // multiplies them: `($val & 0x0f) * ($val >> 4)`. `CAFGridSize`
+                // (key 1.1) reads the same byte as "WxH" instead of
+                // multiplying: `ValueConv => '($val>>4)." ".($val&0x0f)'` then
+                // `PrintConv => '$val =~ tr/ /x/; $val'` turns the space into
+                // an "x". `CAFPointsInFocus`/`CAFPointsSelected` need
+                // `DecodeAFPoints`, a bitmask walk over a grid whose size this
+                // byte determines, and neither is decoded here.
                 PENTAX_CAF_POINT_INFO => {
                     let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if raw.len() >= 2 {
                         let b = raw[1];
                         let n = (b & 0x0f) as u32 * (b >> 4) as u32;
                         tags.insert("Pentax:NumCAFPoints".to_string(), n.to_string());
+                        tags.insert(
+                            "Pentax:CAFGridSize".to_string(),
+                            format!("{}x{}", b >> 4, b & 0x0f),
+                        );
                     }
                 }
                 // Pentax.pm:2347-2364: `undef`/`int8u`, declared `Count => 4`
@@ -1912,6 +1918,74 @@ impl PentaxParser {
                                 },
                             );
                         }
+                    } else if raw.len() == 21 {
+                        // Pentax.pm:3993-4108 `%Pentax::AEInfo2`, the K-01's
+                        // 21-byte alternative to `AEInfo` (Condition => '$count
+                        // == 21', Pentax.pm:2806-2811). Same field formulas as
+                        // `AEInfo` above (`AEExposureTime`/`AEAperture`/
+                        // `AE_ISO`/`AEXv`/`AEBXv`/`AEApertureSteps`/
+                        // `AEMaxAperture`/`AEMaxAperture2`/`AEMinAperture`/
+                        // `AEMinExposureTime`) but at different byte offsets,
+                        // plus `AEError` (int8s, Pentax.pm:4036-4043:
+                        // `-($val-64)/8`) and `SceneMode` (an enum PrintConv,
+                        // Pentax.pm:4051-4076), neither of which `AEInfo` has.
+                        let exposure_time = |b: u8| {
+                            print_exposure_time(
+                                24.0 * (-((b as f64) - 32.0) * std::f64::consts::LN_2 / 8.0).exp(),
+                            )
+                        };
+                        tags.insert("Pentax:AEExposureTime".to_string(), exposure_time(raw[2]));
+                        tags.insert(
+                            "Pentax:AEAperture".to_string(),
+                            format!("{:.1}", ae_aperture_from_raw(raw[3] as i32)),
+                        );
+                        let iso =
+                            100.0 * ((raw[4] as f64 - 32.0) * std::f64::consts::LN_2 / 8.0).exp();
+                        tags.insert(
+                            "Pentax:AE_ISO".to_string(),
+                            format!("{}", (iso + 0.5) as i64),
+                        );
+                        tags.insert(
+                            "Pentax:AEXv".to_string(),
+                            format_pentax_float((raw[5] as f64 - 64.0) / 8.0),
+                        );
+                        tags.insert(
+                            "Pentax:AEBXv".to_string(),
+                            format_pentax_float((raw[6] as i8) as f64 / 8.0),
+                        );
+                        let ae_error_raw = raw[8] as i8 as f64;
+                        tags.insert(
+                            "Pentax:AEError".to_string(),
+                            format_pentax_float(-(ae_error_raw - 64.0) / 8.0),
+                        );
+                        let v11 = raw[11];
+                        tags.insert(
+                            "Pentax:AEApertureSteps".to_string(),
+                            if v11 == 255 {
+                                "n/a".to_string()
+                            } else {
+                                v11.to_string()
+                            },
+                        );
+                        if let Some(scene_mode) = decode_ae_info2_scene_mode(raw[15]) {
+                            tags.insert("Pentax:SceneMode".to_string(), scene_mode);
+                        }
+                        tags.insert(
+                            "Pentax:AEMaxAperture".to_string(),
+                            format!("{:.1}", ae_aperture_from_raw(raw[16] as i32)),
+                        );
+                        tags.insert(
+                            "Pentax:AEMaxAperture2".to_string(),
+                            format!("{:.1}", ae_aperture_from_raw(raw[17] as i32)),
+                        );
+                        tags.insert(
+                            "Pentax:AEMinAperture".to_string(),
+                            format!("{:.0}", ae_aperture_from_raw(raw[18] as i32)),
+                        );
+                        tags.insert(
+                            "Pentax:AEMinExposureTime".to_string(),
+                            exposure_time(raw[19]),
+                        );
                     }
                 }
 
@@ -2572,6 +2646,39 @@ fn format_pentax_float(v: f64) -> String {
 /// AEMinAperture: `2**((raw-68)/16)`.
 fn ae_aperture_from_raw(raw: i32) -> f64 {
     2f64.powf((raw as f64 - 68.0) / 16.0)
+}
+
+/// `%Pentax::AEInfo2` key 15 `SceneMode` (Pentax.pm:4051-4076), a sparse enum
+/// with no default -- an unlisted value reports nothing, matching ExifTool's
+/// plain-hash `PrintConv` (no `OTHER`/`BITMASK`).
+fn decode_ae_info2_scene_mode(raw: u8) -> Option<String> {
+    let s = match raw {
+        0 => "Off",
+        1 => "HDR",
+        4 => "Auto PICT",
+        5 => "Portrait",
+        6 => "Landscape",
+        7 => "Macro",
+        8 => "Sport",
+        9 => "Night Scene Portrait",
+        10 => "No Flash",
+        11 => "Night Scene",
+        12 => "Surf & Snow",
+        14 => "Sunset",
+        15 => "Kids",
+        16 => "Pet",
+        17 => "Candlelight",
+        18 => "Museum",
+        20 => "Food",
+        21 => "Stage Lighting",
+        22 => "Night Snap",
+        25 => "Night Scene HDR",
+        26 => "Blue Sky",
+        27 => "Forest",
+        29 => "Backlight Silhouette",
+        _ => return None,
+    };
+    Some(s.to_string())
 }
 
 fn decode_hue(raw: i32) -> String {

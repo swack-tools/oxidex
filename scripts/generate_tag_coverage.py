@@ -97,7 +97,10 @@ def parse_yaml_tags(project_root: Path) -> dict:
             print(f"Warning: Failed to parse {yaml_file}: {e}")
             continue
 
-        if not data or "tables" not in data:
+        # `not data.get("tables")` also covers the empty-domain shape the
+        # Rust writer produces (a `tables:` key holding null), which the
+        # previous `"tables" not in data` guard let through to a TypeError.
+        if not data or not data.get("tables"):
             continue
 
         domain_data = domains.setdefault(domain, {
@@ -227,10 +230,15 @@ reproduce this, and what to do when a new file type is added.
     for fmt in sorted(per_format):
         counts = per_format[fmt]
         total, score, ceiling = score_row(counts)
-        if not total:
-            continue
         for k in ("files", "matched", "value_diff", "missing", "renames", "extra"):
             grand[k] += counts.get(k, 0)
+        if not total:
+            # A format whose files produced no scoreable tag instances is
+            # unmeasurable, not perfect and not absent: name it and say n/a
+            # (the rule #615 established), instead of silently dropping the
+            # row and its file count from the Total line.
+            md += f"| {fmt} | {counts.get('files', 0)} | 0 | 0 | 0 | 0 | n/a | n/a |\n"
+            continue
         md += (
             f"| {fmt} | {counts.get('files', 0)} | {counts.get('matched', 0)} "
             f"| {counts.get('renames', 0)} | {counts.get('value_diff', 0)} "

@@ -51,6 +51,24 @@ fn main() -> Result<()> {
     }
     println!("Using exiftool {version}");
 
+    // `.exiftool-version` is the repo's single source of truth for which
+    // ExifTool release everything is graded against (see AGENTS.md). A sync
+    // must run against that pin, not quietly move it to whatever `exiftool`
+    // happens to resolve to on this machine -- PATH skew is exactly the
+    // failure mode the pin exists to prevent. Check before any work happens
+    // so a mismatched binary can never touch the YAML files.
+    let pin_path = Path::new(".exiftool-version");
+    let pin_missing = match fs::read_to_string(pin_path) {
+        Ok(pinned) if pinned.trim() != version => bail!(
+            ".exiftool-version pins {} but this exiftool is {version}. Refusing to sync \
+             against an unpinned release: if the upgrade is intentional, update \
+             .exiftool-version first and re-run against that release.",
+            pinned.trim()
+        ),
+        Ok(_) => false,
+        Err(_) => true,
+    };
+
     let listx = run_exiftool(&["-f", "-listx"])?;
     let tags = parse_listx(&listx).context("failed to parse exiftool -listx output")?;
     if tags.is_empty() {
@@ -79,15 +97,22 @@ fn main() -> Result<()> {
         // oxidex needs to find anything at all -- ExifOffset (0x8769),
         // GPSInfo (0x8825), InteropOffset (0xA005) -- and tags ExifTool names
         // at runtime. Carry forward anything the fresh parse does not cover,
-        // keyed by (table, name), so a sync adds without destroying.
+        // keyed by (table, id, name), so a sync adds without destroying.
+        //
+        // The id MUST be part of the key: real -listx output routinely lists
+        // one (table, name) pair under several ids (Canon binary tables ship
+        // the same display name at five different byte offsets), and a
+        // (table, name)-only key made both this filter and the `lost` check
+        // below blind to a dropped id variant -- `covered` claimed the name
+        // was still present while a differently-numbered record vanished.
         let previous = parse_domain_yaml(&existing);
-        let covered: HashSet<(&str, &str)> = tags
+        let covered: HashSet<(&str, &str, &str)> = tags
             .iter()
-            .map(|t| (t.table.as_str(), t.name.as_str()))
+            .map(|t| (t.table.as_str(), t.id.as_str(), t.name.as_str()))
             .collect();
         let preserved: Vec<TagRecord> = previous
             .iter()
-            .filter(|r| !covered.contains(&(r.table.as_str(), r.name.as_str())))
+            .filter(|r| !covered.contains(&(r.table.as_str(), r.id.as_str(), r.name.as_str())))
             .cloned()
             .collect();
 
@@ -98,14 +123,20 @@ fn main() -> Result<()> {
 
         // A count check cannot see this: regeneration RAISES the total while
         // dropping the few structural tags that matter most. Name the losses.
-        let now: HashSet<(&str, &str)> = merged
+        // This guard is only meaningful because generate_domain_yaml can
+        // deduplicate or refuse records: with the (table, id, name) key above,
+        // every `previous` record is either covered by the fresh parse or
+        // carried into `merged` verbatim, so a loss here means round-tripping
+        // through generate/parse dropped it.
+        let reparsed = parse_domain_yaml(&new_yaml);
+        let now: HashSet<(&str, &str, &str)> = reparsed
             .iter()
-            .map(|t| (t.table.as_str(), t.name.as_str()))
+            .map(|t| (t.table.as_str(), t.id.as_str(), t.name.as_str()))
             .collect();
         let lost: Vec<String> = previous
             .iter()
-            .filter(|r| !now.contains(&(r.table.as_str(), r.name.as_str())))
-            .map(|r| format!("{}:{}", r.table, r.name))
+            .filter(|r| !now.contains(&(r.table.as_str(), r.id.as_str(), r.name.as_str())))
+            .map(|r| format!("{}:{}:{}", r.table, r.id, r.name))
             .collect();
         if !lost.is_empty() {
             bail!(
@@ -145,9 +176,12 @@ fn main() -> Result<()> {
         println!("  {domain:12} -> {path_str} ({previous_count} -> {new_count} tags)");
     }
 
-    fs::write(".exiftool-version", format!("{version}\n"))
-        .context("failed to write .exiftool-version")?;
-    println!("Recorded exiftool version {version} in .exiftool-version");
+    // The pin was checked against this binary before any work began; record
+    // it only when the repo had none at all.
+    if pin_missing {
+        fs::write(pin_path, format!("{version}\n")).context("failed to write .exiftool-version")?;
+        println!("Recorded exiftool version {version} in .exiftool-version");
+    }
 
     Ok(())
 }

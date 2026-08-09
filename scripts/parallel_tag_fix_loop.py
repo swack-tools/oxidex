@@ -38,6 +38,7 @@ from find_tag_gaps import OXIDEX_HOME, REPO_ROOT
 from model_fix_loop import DEFAULT_CONFIG_PATH, DEFAULT_TAG_STATE_PATH
 
 from parallel_model_fix_loop import (
+    acquire_dispatcher_lock,
     commits_on_branch,
     create_worktree,
     delete_branch,
@@ -46,6 +47,11 @@ from parallel_model_fix_loop import (
 )
 
 DEFAULT_LOG_DIR = OXIDEX_HOME / "logs" / "parallel-tag-fix"
+# Singleton flock for THIS dispatcher (separate from parallel_model_fix_loop's
+# dispatcher.lock -- different loop, same reasoning): worker ids, branch names
+# and worktree paths are fixed literals shared through OXIDEX_HOME, so two
+# live instances would create/merge/delete each other's worktrees and branches.
+TAG_DISPATCHER_LOCK_PATH = OXIDEX_HOME / "logs" / "tag-dispatcher.lock"
 DEFAULT_PROMPT_LOG_DIR = OXIDEX_HOME / "logs" / "tag-fix-prompts"
 DEFAULT_TAGS_FOUND_LOG = OXIDEX_HOME / "logs" / "tags-found.log"
 
@@ -179,18 +185,62 @@ def wait_for_process_group_exit(pgid, poll_interval=0.5, force_after=30, sleep_f
             break
 
 
-def merge_worker_progress(repo_root, base_ref, branch, merged_up_to):
-    """Merge any commits on branch beyond merged_up_to into repo_root's
-    current branch. Returns (new_commit_count, ok, message) -- new_commit_count
-    is how many commits existed on branch at all (used to detect "nothing
-    new since last check" without re-merging), ok/message describe the
-    merge attempt only when there was something new to merge.
+def branch_tip(repo_root, branch):
+    """The commit hash branch currently points at."""
+    return subprocess.run(  # nosec B603
+        ["git", "rev-parse", branch],
+        cwd=repo_root, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
+def merge_worker_progress(repo_root, base_ref, branch, merged_tip):
+    """Merge any commits on branch that base_ref does not already contain.
+
+    Returns (tip, new_commit_count, ok, message) -- tip is the branch head
+    this call observed (store it back as merged_tip once handled), and
+    new_commit_count is how many commits base_ref lacked. ok/message describe
+    the merge attempt only when there was something to merge.
+
+    "Nothing new" is decided by comparing branch TIPS, never by comparing
+    commit counts: `git log base_ref..branch | wc -l` is not monotonic. A
+    worker's own --base-ref refresh fast-forwards its branch onto the
+    already-merged tip, dropping that count back toward zero, and a stored
+    high-water count then made every genuinely new commit read as "nothing
+    new" forever -- silently discarding the worker's remaining output.
     """
+    tip = branch_tip(repo_root, branch)
+    if tip == merged_tip:
+        return tip, 0, True, "nothing new"
     commits = commits_on_branch(repo_root, base_ref, branch)
-    if len(commits) <= merged_up_to:
-        return len(commits), True, "nothing new"
+    if not commits:
+        # The branch moved but carries nothing base_ref lacks (e.g. it was
+        # just refreshed onto already-merged work) -- record the new tip so
+        # the next tick can short-circuit on it.
+        return tip, 0, True, "nothing new"
     ok, message = merge_branch(repo_root, branch)
-    return len(commits), ok, message
+    return tip, len(commits), ok, message
+
+
+def _cleanup_slot(worker_id, w, retired_for_review):
+    """Remove a finished worker's worktree and branch without letting a
+    cleanup failure take down the whole run: remove_worktree and
+    delete_branch are check=True, and an unhandled CalledProcessError from
+    here would reach the BaseException handler that SIGKILLs every other
+    still-running worker.
+    """
+    try:
+        remove_worktree(REPO_ROOT, w["path"])
+        delete_branch(REPO_ROOT, w["branch"])
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr.strip() if isinstance(e.stderr, str) else str(e)
+        print(
+            f"[worker {worker_id}] cleanup failed ({stderr or e}) -- "
+            f"worktree/branch left for manual removal: {w['path']}",
+            file=sys.stderr,
+        )
+        retired_for_review.append(
+            f"worker {worker_id}: cleanup failed, stale worktree/branch at {w['path']}"
+        )
 
 
 FIXED_COUNT_RE = re.compile(r"^\s*fixed:\s+(\d+) tags", re.MULTILINE)
@@ -313,6 +363,18 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
 
+    # Keep the returned file object alive for the whole run -- closing it (or
+    # this process dying) is what releases the flock.
+    dispatcher_lock = acquire_dispatcher_lock(TAG_DISPATCHER_LOCK_PATH)  # noqa: F841
+    if dispatcher_lock is None:
+        print(
+            f"another parallel_tag_fix_loop dispatcher already holds "
+            f"{TAG_DISPATCHER_LOCK_PATH} -- two instances would fight over the "
+            "same fixed worktree paths and branch names; refusing to start",
+            file=sys.stderr,
+        )
+        return 1
+
     config_path = Path(args.config)
     if not config_path.is_file():
         print(f"{config_path} not found -- see config.example.toml", file=sys.stderr)
@@ -374,12 +436,12 @@ def main(argv=None):
         print(f"[worker {worker_id}] started (pid {proc.pid}), worktree {path}")
         return {
             "path": path, "branch": branch, "log_path": log_path,
-            "proc": proc, "log_file": log_file, "pgid": pgid, "merged_up_to": 0,
+            "proc": proc, "log_file": log_file, "pgid": pgid, "merged_tip": None,
             "merge_broken": False,
         }
 
     # worker_id -> {"path", "branch", "log_path", "proc", "log_file", "pgid",
-    # "merged_up_to", "merge_broken"}
+    # "merged_tip", "merge_broken"}
     workers = {}
     # worker_id -> count of consecutive crashes on this slot (reset to 0 by
     # any exit that isn't itself a crash) -- see classify_worker_exit and
@@ -393,6 +455,13 @@ def main(argv=None):
         entry = spawn_worker(worker_id)
         if entry:
             workers[worker_id] = entry
+        else:
+            # A slot that never started is work that never happened -- it must
+            # reach the final summary, or the run ends claiming a completeness
+            # it can't back up.
+            retired_for_review.append(
+                f"worker {worker_id}: worktree setup failed at startup, slot never ran"
+            )
 
     if not workers:
         print("No workers started.", file=sys.stderr)
@@ -417,13 +486,15 @@ def main(argv=None):
             for worker_id in list(workers):
                 w = workers[worker_id]
                 if not w["merge_broken"]:
-                    count, ok, message = merge_worker_progress(REPO_ROOT, base_ref, w["branch"], w["merged_up_to"])
-                    if count > w["merged_up_to"]:
+                    tip, count, ok, message = merge_worker_progress(REPO_ROOT, base_ref, w["branch"], w["merged_tip"])
+                    if not count:
+                        w["merged_tip"] = tip
+                    else:
                         if ok:
-                            print(f"[worker {worker_id}] {count - w['merged_up_to']} new commit(s) -> merged")
-                            w["merged_up_to"] = count
+                            print(f"[worker {worker_id}] {count} new commit(s) -> merged")
+                            w["merged_tip"] = tip
                         else:
-                            print(f"[worker {worker_id}] {count - w['merged_up_to']} new commit(s) -> MERGE FAILED: {message}")
+                            print(f"[worker {worker_id}] {count} new commit(s) -> MERGE FAILED: {message}")
                             # A conflict here won't resolve itself on a later
                             # tick -- nothing about this worker's commits or
                             # the target branch changes between retries, so
@@ -451,14 +522,14 @@ def main(argv=None):
                 # check and the process actually exiting (skipped once a
                 # merge has already failed once -- see pass 1 above).
                 if not w["merge_broken"]:
-                    count, ok, message = merge_worker_progress(REPO_ROOT, base_ref, w["branch"], w["merged_up_to"])
-                    if count > w["merged_up_to"]:
-                        if ok:
-                            new_commits = count - w["merged_up_to"]
-                            w["merged_up_to"] = count
-                            print(f"[worker {worker_id}] final merge: {new_commits} commit(s)")
-                        else:
-                            w["merge_broken"] = True
+                    tip, count, ok, message = merge_worker_progress(REPO_ROOT, base_ref, w["branch"], w["merged_tip"])
+                    if not count:
+                        w["merged_tip"] = tip
+                    elif ok:
+                        w["merged_tip"] = tip
+                        print(f"[worker {worker_id}] final merge: {count} commit(s)")
+                    else:
+                        w["merge_broken"] = True
                 print(f"[worker {worker_id}] exited (code {w['proc'].returncode}) -- {w['log_path']}")
 
                 if w["merge_broken"]:
@@ -480,8 +551,7 @@ def main(argv=None):
                     # don't let a genuinely broken environment masquerade as
                     # slow progress forever.
                     crash_counts[worker_id] = crash_counts.get(worker_id, 0) + 1
-                    remove_worktree(REPO_ROOT, w["path"])
-                    delete_branch(REPO_ROOT, w["branch"])
+                    _cleanup_slot(worker_id, w, retired_for_review)
                     if crash_counts[worker_id] >= DEFAULT_MAX_CONSECUTIVE_CRASHES:
                         print(
                             f"[worker {worker_id}] CRASHED {crash_counts[worker_id]} times in a row "
@@ -500,6 +570,10 @@ def main(argv=None):
                         if entry:
                             workers[worker_id] = entry
                         else:
+                            retired_for_review.append(
+                                f"worker {worker_id}: respawn after crash failed "
+                                f"(worktree setup), slot abandoned -- see {w['log_path']}"
+                            )
                             del workers[worker_id]
                             crash_counts.pop(worker_id, None)
                 elif outcome == "no_work":
@@ -510,8 +584,7 @@ def main(argv=None):
                     # forever; let this slot end.
                     crash_counts.pop(worker_id, None)
                     print(f"[worker {worker_id}] found no work available -- not respawning this slot")
-                    remove_worktree(REPO_ROOT, w["path"])
-                    delete_branch(REPO_ROOT, w["branch"])
+                    _cleanup_slot(worker_id, w, retired_for_review)
                     del workers[worker_id]
                 else:  # "respawn"
                     # Did real work and hit --max-tags-per-process, not
@@ -520,12 +593,15 @@ def main(argv=None):
                     # other worker that also just exited), so this fresh
                     # worktree can't redo work another slot just landed.
                     crash_counts.pop(worker_id, None)
-                    remove_worktree(REPO_ROOT, w["path"])
-                    delete_branch(REPO_ROOT, w["branch"])
+                    _cleanup_slot(worker_id, w, retired_for_review)
                     entry = spawn_worker(worker_id)
                     if entry:
                         workers[worker_id] = entry
                     else:
+                        retired_for_review.append(
+                            f"worker {worker_id}: respawn failed (worktree setup), "
+                            f"slot abandoned -- see {w['log_path']}"
+                        )
                         del workers[worker_id]
     except BaseException:
         for w in workers.values():

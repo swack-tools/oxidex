@@ -122,7 +122,10 @@ def main():
             des = dep_list(tag.get("Desire"))
             if not req and not des:
                 continue
-            if any(d in INTERNAL_STATE for _i, d in req):
+            # Desire entries are inputs too -- a composite that merely
+            # *prefers* internal parser state can still half-fire on the
+            # wrong inputs, which is exactly what INTERNAL_STATE refuses.
+            if any(d in INTERNAL_STATE for _i, d in (*req, *des)):
                 skipped_internal += 1
                 continue
             # First definition wins, matching ExifTool's module load order for
