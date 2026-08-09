@@ -545,6 +545,13 @@ class TestArgParsing(ShellHarnessMixin, unittest.TestCase):
             self.assertEqual(rc, 64, f"--workers {bad} should be rejected")
             self.assertIn("--workers", err)
 
+    def test_mergers_must_be_a_non_negative_integer(self):
+        # Unlike --workers, 0 is a legal value here (means "no cap").
+        for bad in ("abc", "-1", "-4"):
+            rc, _, err = self.run_script("--mergers", bad)
+            self.assertEqual(rc, 64, f"--mergers {bad} should be rejected")
+            self.assertIn("--mergers", err)
+
     def test_help_exits_zero(self):
         rc, out, _ = self.run_script("--help")
         self.assertEqual(rc, 0)
@@ -756,6 +763,26 @@ class TestSupervisorIntegration(ShellHarnessMixin, unittest.TestCase):
         self.assertEqual(survivors, [], "SIGTERM must not orphan tier processes")
         self.assertFalse(Path(self.env["FLEET_PIDFILE"]).exists(),
                          "the pidfile must not outlive the supervisor")
+
+    def test_mergers_cap_limits_which_squads_get_a_merger(self):
+        # The fake squads.toml carries canon and exif-core, in that order --
+        # a cap of 1 must start the first and never touch the second.
+        self.env["FLEET_MAX_MERGERS"] = "1"
+        self.start_supervisor()
+
+        state = self._wait_for(
+            lambda: self._state() if len(self._state()) == 4 else None,
+            "four state rows (merger cap active: 1 merger + dispatcher + judgment + supervisor)",
+        )
+        self.assertEqual(sorted(state), ["dispatcher", "judgment", "merger:canon", "supervisor"])
+        self.assertNotIn("merger:exif-core", state)
+
+        log_text = self._wait_for(
+            lambda: (lambda t: t if "WARNING: --mergers 1 covers" in t else None)(
+                Path(self.env["FLEET_LOG"]).read_text()),
+            "the merger-cap coverage warning",
+        )
+        self.assertIn("1 of 2 squads", log_text)
 
     def test_gives_up_on_a_tier_that_cannot_stay_up(self):
         """A crash-looping tier has to SURFACE. Burying it under an infinite
