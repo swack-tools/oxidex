@@ -1840,12 +1840,25 @@ def classify_exception(exc):
     wraps it in a domain exception must not silently reclassify a full disk
     as a bug. ``KeyboardInterrupt``/``SystemExit`` never reach here -- the
     caller re-raises them before classifying.
+
+    A subprocess TIMEOUT is the same statement as ENOSPC, in a different
+    exception hierarchy: the command did not fail, the machine was too
+    loaded to finish it in the budget. Every subprocess this daemon runs is
+    a git/cargo call whose wall time is a function of how many workers are
+    hammering the same disk, so a timeout says nothing about the squad, the
+    branch or the commits. It killed the canon merger outright on
+    2026-08-08 (see distill_lessons.compute_script_sha, which no longer
+    lets that particular one out); classifying it here is the general
+    guard, so the next one to escape gets the bounded retry it deserves
+    instead of ending the tier.
     """
     seen = set()
     cur = exc
     while cur is not None and id(cur) not in seen:
         seen.add(id(cur))
         if isinstance(cur, OSError) and cur.errno in TRANSIENT_ERRNOS:
+            return "transient"
+        if isinstance(cur, subprocess.TimeoutExpired):
             return "transient"
         cur = cur.__cause__ or cur.__context__
     return "fatal"
