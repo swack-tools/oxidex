@@ -37,6 +37,47 @@ static COMPILED: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
         .collect()
 });
 
+/// Formats whose magic number [`tables::MAGIC`] files under a different name.
+///
+/// [`identify`] corroborates a header against the *formats* `%fileTypeLookup`
+/// names, but `%magicNumber` is keyed by *file type*, and for one entry the two
+/// disagree. `PFM => [['Font','PFM2'], 'Printer Font Metrics']` names the
+/// processing format `PFM2` -- `Other.pm`'s `ProcessPFM2` -- while the pattern
+/// that routine validates is filed under `PFM` (ExifTool.pm:1012):
+///
+/// ```text
+///     PFM  => 'P[Ff]\x0a\d+ \d+\x0a[-+0-9.]+\x0a',
+/// ```
+///
+/// ExifTool never has to reconcile the two, because a format with no
+/// `%magicNumber` entry is not skipped by its pre-filter -- it is handed to its
+/// module, and `ProcessPFM2` runs the same test itself (ExifTool.pm:3024-3030).
+/// OxiDex has no module to load, so the pattern has to be reachable under the
+/// name the format list actually uses, or the corroboration step declines a
+/// file ExifTool identifies.
+///
+/// `pfm` is the only extension in [`tables::EXT_TO_TYPE`] whose format list
+/// mixes a magic-bearing format with a magic-less one;
+/// `magic_alias_reaches_every_format_in_a_mixed_list` fails if a regeneration
+/// introduces another.
+static MAGIC_ALIAS: &[(&str, &str)] = &[("PFM2", "PFM")];
+
+/// The [`tables::MAGIC`] key that carries `format`'s pattern.
+fn magic_key(format: &str) -> &str {
+    MAGIC_ALIAS
+        .iter()
+        .find_map(|(from, to)| (*from == format).then_some(*to))
+        .unwrap_or(format)
+}
+
+/// Whether the header satisfies the pattern filed under one specific key.
+fn magic_matches(key: &str, header: &[u8]) -> bool {
+    let head = &header[..header.len().min(HEADER_LEN)];
+    COMPILED
+        .iter()
+        .any(|(k, re)| *k == key && re.is_match(head))
+}
+
 /// What a file was identified as.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
@@ -113,6 +154,22 @@ fn refine(mut id: Identity, header: &[u8]) -> Identity {
     if id.file_type == "DJVU" && header.get(12..16) == Some(b"DJVM") {
         id.file_type = Cow::Owned(format!("{} (multi-page)", id.file_type));
     }
+    // `.pfm` is two unrelated formats sharing one FileType. The Font module
+    // claims Windows Printer Font Metrics and inherits its root's MIME type,
+    // `application/x-font-type1`; `ProcessPFM2` claims Portable FloatMap HDR
+    // images and hardcodes the MIME type `%mimeType` does not carry for either
+    // (Other.pm:44):
+    //
+    // ```text
+    //     $et->SetFileType('PFM', 'image/x-pfm');
+    // ```
+    //
+    // That literal is the *only* source of `image/x-pfm` in ExifTool, which is
+    // why the generated MIME table has no PFM row to look it up in. Both forms
+    // report `FileType: PFM`, so the header is the only thing separating them.
+    if id.file_type == "PFM" && magic_matches("PFM", header) {
+        id.mime_type = Some("image/x-pfm");
+    }
     id
 }
 
@@ -132,8 +189,8 @@ fn refine(mut id: Identity, header: &[u8]) -> Identity {
 fn magic_accepts(formats: &[&str], header: &[u8]) -> Option<bool> {
     let head = &header[..header.len().min(HEADER_LEN)];
     let mut declared = false;
-    for (format, re) in COMPILED.iter() {
-        if !formats.contains(format) {
+    for (key, re) in COMPILED.iter() {
+        if !formats.iter().any(|f| magic_key(f) == *key) {
             continue;
         }
         declared = true;
@@ -267,6 +324,72 @@ mod tests {
         assert_eq!(arw.file_type, "ARW");
         // The header still has to agree with *something* the extension claims.
         assert!(identify(b"BM\x00\x00", Some("arw")).is_none());
+    }
+
+    #[test]
+    fn pfm_is_two_formats_told_apart_by_the_header() {
+        // `.pfm` resolves to one FileType and two MIME types. Both rows below
+        // are what the pinned ExifTool 13.59 reports for the two `.pfm` files
+        // in its own distribution, t/images/PFM.pfm and t/images/Font.pfm.
+        let float = identify(
+            b"PF\x0a512 768\x0a-1.000000\x0a\x00\x00\x00\x00",
+            Some("pfm"),
+        )
+        .expect("a Portable FloatMap is identified");
+        assert_eq!(float.file_type, "PFM");
+        assert_eq!(float.extension, "pfm");
+        assert_eq!(float.mime_type, Some("image/x-pfm"));
+
+        // A Printer Font Metrics file opens with its version field, 0x0100
+        // little-endian, which is what the Font module's magic number matches.
+        // It takes the root module's MIME type, and must *not* pick up the
+        // FloatMap one: adding a plain `PFM => image/x-pfm` row to the MIME
+        // table is the intuitive fix for the case above and silently breaks
+        // this one, because `identity` would then find it for both.
+        let font = identify(b"\x00\x01\xf0\x00\x00\x00Copyright (c)", Some("pfm"))
+            .expect("a Printer Font Metrics file is identified");
+        assert_eq!(font.file_type, "PFM");
+        assert_eq!(font.extension, "pfm");
+        assert_eq!(font.mime_type, Some("application/x-font-type1"));
+    }
+
+    #[test]
+    fn a_pfm_matching_neither_form_is_declined() {
+        // ExifTool falls through to its plain-text fallback and reports TXT
+        // for this, so answering PFM would be confidently wrong rather than
+        // merely incomplete.
+        assert!(identify(b"this is not a font and not a floatmap\n", Some("pfm")).is_none());
+    }
+
+    #[test]
+    fn magic_alias_reaches_every_format_in_a_mixed_list() {
+        // `magic_accepts` reads "some format here declares a magic number and
+        // none of them matched" as a contradiction and declines. That is sound
+        // only while every format in such a list is reachable in the magic
+        // table: a magic-less one is a format ExifTool would still hand to its
+        // module rather than skip, so declining on its behalf is a guess.
+        //
+        // `pfm`/`PFM2` is the only such entry in 13.59, and `MAGIC_ALIAS` makes
+        // it reachable. This fails if a regeneration introduces another, rather
+        // than letting it surface the way `.pfm` did -- as `FileType: Unknown`
+        // on a file whose parser was working perfectly.
+        let keys: std::collections::HashSet<&str> = tables::MAGIC.iter().map(|(t, _)| *t).collect();
+        let unreachable: Vec<(&str, Vec<&str>)> = tables::EXT_TO_TYPE
+            .iter()
+            .filter(|(_, _, formats)| formats.iter().any(|f| keys.contains(magic_key(f))))
+            .filter_map(|(ext, _, formats)| {
+                let missing: Vec<&str> = formats
+                    .iter()
+                    .copied()
+                    .filter(|f| !keys.contains(magic_key(f)))
+                    .collect();
+                (!missing.is_empty()).then_some((*ext, missing))
+            })
+            .collect();
+        assert!(
+            unreachable.is_empty(),
+            "extension format lists mixing magic-bearing and unreachable formats: {unreachable:?}"
+        );
     }
 
     #[test]
