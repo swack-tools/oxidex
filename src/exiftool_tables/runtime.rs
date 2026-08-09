@@ -66,25 +66,40 @@ pub struct DecodedField {
 impl DecodedField {
     /// Apply this field's generated `PrintConv` directly to its raw value.
     ///
-    /// This is deliberately explicit. The generated schema does not yet say
-    /// whether an unsupported `ValueConv` was omitted, so the decoder cannot
-    /// soundly compose `PrintConv` with raw decoding on a caller's behalf.
-    /// Call this only after verifying that the field has no intervening
-    /// `ValueConv`, or after applying that conversion separately.
+    /// Refuses when the transcription recorded an omitted `ValueConv`. ExifTool
+    /// runs `ValueConv` before `PrintConv`, so on such a field the generated
+    /// enum is keyed on values the raw bytes never produce: `Minolta`'s
+    /// Sharpness/Contrast/Saturation (`$val - 10`) would be looked up ten steps
+    /// off, and `Nikon`'s `ISOAutoShutterTime` (`$val / 8`) eight times high.
+    /// That yields either a wrong string or a silent fall-through to a wrong
+    /// raw number, under a real ExifTool tag name.
+    ///
+    /// This precondition was documented before, as something the caller had to
+    /// check -- but the schema carried no way to check it, so no caller could.
+    /// Now that `Field::omitted` records it, the refusal happens here.
     #[must_use]
     pub fn apply_print_conv_to_raw(&self) -> Option<String> {
+        if self.field.omitted.value_conv {
+            return None;
+        }
         apply_print_conv(self.field.print_conv, &self.raw)
     }
 }
 
 /// Decode the fields whose layouts are completely described by `table`.
 ///
-/// Out-of-range fields and fractional bit-field indices are refused. The
-/// latter need ExifTool's bit-mask semantics, which the generated schema does
-/// not yet carry. Repeated scalar fields decode as [`DecodedValue::Array`].
-/// This function performs raw decoding only. Callers must opt into `PrintConv`
-/// with [`DecodedField::apply_print_conv_to_raw`] after checking whether an
-/// intervening `ValueConv` is required.
+/// Out-of-range fields are refused, as are fractional bit-field indices. The
+/// latter is now a deliberate under-claim rather than a missing capability:
+/// since the schema carries [`Mask`], a fractional field that declares one is
+/// fully described, but decoding those would add several hundred tags to what
+/// every caller of this function reports. That is a coverage change, and it
+/// belongs in a change that measures it, not in one that regenerates tables.
+///
+/// A field carrying a [`Mask`] is reduced to `(val & bits) >> shift` here,
+/// which is what ExifTool does before any conversion runs. Repeated scalar
+/// fields decode as [`DecodedValue::Array`]. This function performs raw
+/// decoding only; opt into `PrintConv` with
+/// [`DecodedField::apply_print_conv_to_raw`].
 #[must_use]
 pub fn decode_binary_table(
     table: &'static BinaryTable,
@@ -95,8 +110,6 @@ pub fn decode_binary_table(
         .fields
         .iter()
         .filter_map(|field| {
-            // ExifTool's fractional indices describe bit fields. Their masks
-            // are not present in the generated runtime schema yet.
             if field.sub.is_some() {
                 return None;
             }
@@ -113,6 +126,12 @@ pub fn decode_binary_table(
                     .map(|chunk| decode_value(chunk, format, byte_order))
                     .collect::<Option<Vec<_>>>()?;
                 DecodedValue::Array(values)
+            };
+            let raw = match field.mask {
+                None => raw,
+                // A mask on a non-integer is a construct this schema cannot
+                // express; refuse rather than report the unmasked value.
+                Some(mask) => DecodedValue::Integer(mask.apply(raw.integer()?)),
             };
             Some(DecodedField { field, raw })
         })
@@ -218,7 +237,7 @@ fn read_f64(bytes: &[u8], order: ByteOrder) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exiftool_tables::{ExprId, find_table};
+    use crate::exiftool_tables::{ExprId, Mask, Omitted, find_table};
 
     #[test]
     fn generated_pentax_layout_decodes_offsets_types_and_conversions() {
@@ -270,6 +289,8 @@ mod tests {
                 name: "Reversed",
                 format: Some(Fmt::Int16uRev),
                 count: 1,
+                mask: None,
+                omitted: Omitted::NONE,
                 print_conv: PrintConv::None,
             },
             Field {
@@ -278,6 +299,8 @@ mod tests {
                 name: "BitField",
                 format: None,
                 count: 1,
+                mask: None,
+                omitted: Omitted::NONE,
                 print_conv: PrintConv::Expr(ExprId::Sprintf0fValB74070),
             },
             Field {
@@ -286,6 +309,8 @@ mod tests {
                 name: "ThreeValues",
                 format: Some(Fmt::Int16u),
                 count: 3,
+                mask: None,
+                omitted: Omitted::NONE,
                 print_conv: PrintConv::None,
             },
         ];
@@ -313,6 +338,83 @@ mod tests {
                 DecodedValue::Integer(2),
                 DecodedValue::Integer(3),
             ]),
+        );
+    }
+
+    /// ExifTool reduces a masked field to `(val & Mask) >> BitShift` before any
+    /// conversion, so both the value and the enum lookup depend on it. Before
+    /// the schema carried `Mask`, these fields reported the whole word and then
+    /// looked the enum up with it, which usually matched nothing.
+    #[test]
+    fn masked_fields_are_reduced_before_print_conv() {
+        static FIELDS: &[Field] = &[
+            Field {
+                index: 0,
+                sub: None,
+                name: "Orientation",
+                format: Some(Fmt::Int8u),
+                count: 1,
+                mask: Some(Mask {
+                    bits: 0x7,
+                    shift: 0,
+                }),
+                omitted: Omitted::NONE,
+                print_conv: PrintConv::IntEnum(&[(1, "Upright"), (5, "Rotated")]),
+            },
+            // A high slice: shift is what makes the enum keys mean anything.
+            Field {
+                index: 1,
+                sub: None,
+                name: "Slice",
+                format: Some(Fmt::Int8u),
+                count: 1,
+                mask: Some(Mask {
+                    bits: 0xf0,
+                    shift: 4,
+                }),
+                omitted: Omitted::NONE,
+                print_conv: PrintConv::None,
+            },
+            // A PrintConv keyed on post-ValueConv values must not be applied
+            // to the raw one.
+            Field {
+                index: 2,
+                sub: None,
+                name: "Converted",
+                format: Some(Fmt::Int8u),
+                count: 1,
+                mask: None,
+                omitted: Omitted {
+                    value_conv: true,
+                    raw_conv: false,
+                    condition: false,
+                },
+                print_conv: PrintConv::IntEnum(&[(0, "Wrong")]),
+            },
+        ];
+        static TABLE: BinaryTable = BinaryTable {
+            module: "Test",
+            table: "Masked",
+            group0: "",
+            group2: "",
+            first_entry: 0,
+            default_format: Fmt::Int8u,
+            fields: FIELDS,
+        };
+
+        // 0xFD & 0x7 == 5; the unmasked 0xFD matches no enum key at all.
+        let fields = decode_binary_table(&TABLE, &[0xFD, 0xA3, 0x00], ByteOrder::Big);
+        assert_eq!(fields[0].raw, DecodedValue::Integer(5));
+        assert_eq!(
+            fields[0].apply_print_conv_to_raw().as_deref(),
+            Some("Rotated")
+        );
+        assert_eq!(fields[1].raw, DecodedValue::Integer(0xA));
+        assert_eq!(fields[2].raw, DecodedValue::Integer(0));
+        assert_eq!(
+            fields[2].apply_print_conv_to_raw(),
+            None,
+            "a PrintConv behind an omitted ValueConv must not be applied"
         );
     }
 }

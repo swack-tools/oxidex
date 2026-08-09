@@ -2,14 +2,21 @@
 """Generate Rust binary-table definitions from extracted ExifTool tables.
 
 Scope is deliberately narrow: ExifTool's ProcessBinaryData tables -- the ones
-carrying FORMAT/FIRST_ENTRY and a field per byte offset.  Those 557 tables hold
-~8,000 tags and are where the maker-note coverage gap lives, because they are
-the part `exiftool -listx` cannot express.  `-listx` gives names; these give
-layout, and layout is what you need to actually read bytes out of a MakerNote.
+carrying FORMAT/FIRST_ENTRY and a field per byte offset.  They are where the
+maker-note coverage gap lives, because they are the part `exiftool -listx`
+cannot express.  `-listx` gives names; these give layout, and layout is what you
+need to actually read bytes out of a MakerNote.  Membership is decided by
+PROCESS_PROC alone: a table ExifTool reads some other way (deciphered first,
+or keyed by sequence rather than offset) is not a flat byte record, and
+emitting it as one yields plausible integers at meaningless offsets.
 
-Every skipped tag is counted and reported.  A generator that silently drops
-what it cannot handle produces a coverage number that is a lie, and the whole
-argument for doing this mechanically rests on the numbers being trustworthy.
+Every skipped tag is counted and reported, and `REPORT` is asserted to cover
+every counter the code keeps.  A generator that silently drops what it cannot
+handle produces a coverage number that is a lie, and the whole argument for
+doing this mechanically rests on the numbers being trustworthy.  The same rule
+governs the semantics it cannot reproduce: `Mask` is transcribed, and an
+omitted `ValueConv`/`RawConv`/`Condition` is recorded in the emitted schema so
+that a caller can tell the raw value from the reported one.
 """
 
 import argparse
@@ -62,6 +69,20 @@ def parse_index(key):
         return None, None
 
 
+# PrintConv directives that change only how an unmatched value is displayed,
+# never which string a matched key maps to. Dropping these leaves every emitted
+# entry exactly right, so they cost nothing but are still counted.
+#
+# BITMASK and OTHER are different in kind: both add a fallback that produces a
+# rendering for values the plain map does not contain (DecodeBits for the
+# former, a Perl sub for the latter), so an enum carrying one is genuinely
+# partial. The exact-match entries stay -- they are verified against ExifTool
+# and are what it would print -- but they are counted apart from complete
+# enums, because reporting a partial transcription as a whole one is how the
+# coverage number stops meaning anything.
+BENIGN_PC_DIRECTIVES = {"Notes", "PrintHex", "PrintSort", "SeparateTable"}
+
+
 def conv_for(tag, stats):
     """Return Rust PrintConv construction, or None if this tag must lose it."""
     pc = tag.get("PrintConv")
@@ -73,6 +94,17 @@ def conv_for(tag, stats):
         m = pc.get("map") or {}
         if not m:
             return "PrintConv::None"
+        # `enum_partial` means dump_tables.pl saw directive keys alongside the
+        # map; `directives` is a dict of them (null when there are none).
+        # Record which, so the accounting says what was lost rather than
+        # scoring the result as a complete enum.
+        directives = sorted(
+            d for d in (pc.get("directives") or {})
+            if d not in BENIGN_PC_DIRECTIVES
+        )
+        partial = bool(directives)
+        for d in directives:
+            stats["pc_directives_dropped"][d] += 1
         # An enum whose keys are all integers becomes a sorted i64 table so the
         # runtime can binary-search it; otherwise fall back to string keys.
         pairs = []
@@ -84,11 +116,11 @@ def conv_for(tag, stats):
                 all_int = False
                 break
         if all_int:
-            stats["enum_int"] += 1
+            stats["enum_int_partial" if partial else "enum_int"] += 1
             pairs.sort()
             body = ", ".join(f'({k}, "{rust_str(v)}")' for k, v in pairs)
             return f"PrintConv::IntEnum(&[{body}])"
-        stats["enum_str"] += 1
+        stats["enum_str_partial" if partial else "enum_str"] += 1
         body = ", ".join(
             f'("{rust_str(k)}", "{rust_str(v)}")' for k, v in sorted(m.items())
         )
@@ -147,14 +179,102 @@ def is_binary_table(meta):
     return (pp.get("__name") or "").endswith("ProcessBinaryData")
 
 
+def mask_for(tag, stats):
+    """Return the Rust `mask:` member for a tag, honouring ExifTool's BitShift.
+
+    ExifTool reduces a masked field to `($val & Mask) >> BitShift` before any
+    conversion runs, so a table that declares a Mask is describing a slice of
+    the word, not the word. Ignoring the key -- which this generator used to do,
+    with no counter and no slot in the emitted schema -- reported the whole word
+    under the real tag name and then looked the enum up with it, so a field like
+    `DjVu::Info` Orientation (Mask 0x7, enum keyed 1/2/5/6) usually matched
+    nothing and printed a raw number instead.
+
+    BitShift is taken from the table when stated and derived from the lowest set
+    bit otherwise, exactly as ExifTool does; see the note in dump_tables.pl for
+    why deriving it unconditionally is wrong.
+    """
+    raw = tag.get("Mask")
+    if raw is None:
+        return "None"
+    try:
+        mask = int(str(raw), 0)
+    except (TypeError, ValueError):
+        stats["tag_mask_unreadable"] += 1
+        return None
+    if mask == 0:
+        # ExifTool guards both the BitShift derivation and the application with
+        # `if $mask`, so a zero mask is no mask -- not a dropped field.
+        return "None"
+    if mask < 0 or mask > 0xFFFF_FFFF_FFFF_FFFF:
+        stats["tag_mask_unreadable"] += 1
+        return None
+
+    declared = tag.get("BitShift")
+    if declared is None:
+        shift = (mask & -mask).bit_length() - 1
+    else:
+        try:
+            shift = int(str(declared), 0)
+        except (TypeError, ValueError):
+            stats["tag_mask_unreadable"] += 1
+            return None
+        if shift < 0 or shift > 63:
+            stats["tag_mask_unreadable"] += 1
+            return None
+    stats["tag_masked"] += 1
+    return f"Some(Mask {{ bits: {mask:#x}, shift: {shift} }})"
+
+
+def omitted_for(tag, stats):
+    """Flag the semantics ExifTool applies that this schema does not reproduce.
+
+    `ValueConv`, `RawConv` and `Condition` are Perl, so the mechanical pass
+    cannot run them. It used to drop them without a counter and without a slot
+    in the emitted schema, which made the omission unknowable downstream:
+    `DecodedField::apply_print_conv_to_raw` documented a precondition ("only
+    after verifying that the field has no intervening ValueConv") that no caller
+    could actually check, and a field whose PrintConv is keyed on post-ValueConv
+    values then rendered a confident wrong string from the raw one.
+
+    Refusing these fields outright is not an option -- around a third of the
+    emitted set carries one, including tables parsers already read for layout --
+    so the omission is recorded instead. A caller that sees `value_conv` set
+    knows the raw value is not the reported value, which is the whole point.
+    """
+    flags = []
+    for key, member in (
+        ("ValueConv", "value_conv"),
+        ("RawConv", "raw_conv"),
+        ("Condition", "condition"),
+    ):
+        if tag.get(key) is not None:
+            flags.append(member)
+            stats[f"omitted_{member}"] += 1
+    if not flags:
+        return "Omitted::NONE"
+    return "Omitted { " + ", ".join(
+        f"{m}: {'true' if m in flags else 'false'}"
+        for m in ("value_conv", "raw_conv", "condition")
+    ) + " }"
+
+
 def gen_table(mod_name, tbl_name, tbl, stats):
     meta = tbl.get("meta") or {}
+    # PROCESS_PROC is the only honest signal for "this is a flat byte record".
+    # Checking it only when FORMAT is absent -- which this generator used to do
+    # -- let 46 tables through that ExifTool does not read with
+    # ProcessBinaryData: 31 Sony tables deciphered before parsing, 7 read with
+    # ProcessSerialData (Canon::AFInfo's keys are sequence numbers, not
+    # offsets), and a handful of bespoke parsers. Emitted as flat records they
+    # yield plausible integers at offsets that mean nothing, under real ExifTool
+    # tag names. codegen_subdirs.py hard-errors on this same construct.
+    if not is_binary_table(meta):
+        stats["table_not_binary"] += 1
+        return None
     fmt_name = meta.get("FORMAT")
     if not isinstance(fmt_name, str):
-        # No table-level FORMAT: only valid for a real ProcessBinaryData table,
-        # where ExifTool falls back to int8u.
-        if not is_binary_table(meta):
-            return None
+        # ExifTool's ProcessBinaryData does `$$tagTablePtr{FORMAT} || 'int8u'`.
         fmt_name = "int8u"
     default_fmt = SCALAR_FORMATS.get(fmt_name)
     if not default_fmt:
@@ -214,11 +334,18 @@ def gen_table(mod_name, tbl_name, tbl, stats):
                 stats["tag_fmt_unsupported"] += 1
                 continue
 
+        mask = mask_for(tag, stats)
+        if mask is None:
+            # A Mask this schema cannot express means the field's value is not
+            # the word at that offset. Omit it rather than report the word.
+            continue
+
         pc = conv_for(tag, stats)
         sub_s = "None" if sub is None else f"Some({sub})"
         rows.append(
             f'    Field {{ index: {idx}, sub: {sub_s}, name: "{rust_str(name)}", '
-            f"format: {fmt_expr}, count: {count}, print_conv: {pc} }},"
+            f"format: {fmt_expr}, count: {count}, mask: {mask}, "
+            f"omitted: {omitted_for(tag, stats)}, print_conv: {pc} }},"
         )
         stats["tag_emitted"] += 1
 
@@ -317,6 +444,60 @@ pub enum PrintConv {
     Expr(ExprId),
 }
 
+/// ExifTool's `Mask`/`BitShift` pair: the field is a slice of the word.
+///
+/// `ProcessBinaryData` reduces the value to `(val & bits) >> shift` before any
+/// conversion runs, so a `PrintConv` on a masked field is keyed on the reduced
+/// value, never on the whole word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Mask {
+    pub bits: u64,
+    /// Taken from the table's `BitShift` when it states one, otherwise the
+    /// lowest set bit of `bits` -- the same rule ExifTool applies.
+    pub shift: u32,
+}
+
+impl Mask {
+    /// Reduce a raw word to the field's value.
+    #[must_use]
+    pub const fn apply(self, val: i64) -> i64 {
+        ((val as u64 & self.bits) >> self.shift) as i64
+    }
+}
+
+/// Semantics ExifTool applies to a field that this schema does not reproduce.
+///
+/// These are Perl, so the mechanical transcription cannot run them. Recording
+/// which were dropped is what lets a caller tell "the raw value is the value"
+/// from "the raw value is an input to something you still have to do". Any flag
+/// set means the decoded value is NOT what ExifTool would report.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Omitted {
+    /// A `ValueConv` stood between the raw bytes and the value. A `PrintConv`
+    /// on such a field is keyed on the converted value, so applying it to the
+    /// raw one renders a confident wrong string.
+    pub value_conv: bool,
+    /// A `RawConv` ran first. ExifTool's common idioms (`$val ? $val : undef`)
+    /// suppress the tag entirely for some inputs.
+    pub raw_conv: bool,
+    /// The field is gated on a `Condition`; ExifTool may not report it at all.
+    pub condition: bool,
+}
+
+impl Omitted {
+    pub const NONE: Self = Self {
+        value_conv: false,
+        raw_conv: false,
+        condition: false,
+    };
+
+    /// True when anything was dropped, i.e. the raw value stands alone.
+    #[must_use]
+    pub const fn any(self) -> bool {
+        self.value_conv || self.raw_conv || self.condition
+    }
+}
+
 /// One field within a binary table.
 #[derive(Clone, Copy, Debug)]
 pub struct Field {
@@ -330,6 +511,10 @@ pub struct Field {
     /// Number of repetitions of `format` (ExifTool's `format[N]` array
     /// syntax), e.g. 4 for `int16u[4]`. 1 for scalar fields.
     pub count: usize,
+    /// Present when the field is a slice of the word at `index`.
+    pub mask: Option<Mask>,
+    /// What ExifTool does to this field that the transcription does not.
+    pub omitted: Omitted,
     pub print_conv: PrintConv,
 }
 
@@ -434,6 +619,45 @@ impl ExprId {{
 """
 
 
+# Every counter the generator keeps, and the heading it prints under. The run
+# summary is the only evidence anyone sees that the transcription under-claims
+# rather than guesses, so the grouping matters as much as the numbers: an enum
+# that lost its BITMASK fallback is not a failure, but it is not a complete
+# enum either, and filing it under the same heading as one is what turned a
+# partial transcription into a reported success.
+REPORT = (
+    ("transcribed", (
+        ("tables emitted", "table_emitted"),
+        ("tags emitted", "tag_emitted"),
+        ("int enums", "enum_int"),
+        ("string enums", "enum_str"),
+        ("exprs translated", "expr_translated"),
+        ("masked fields", "tag_masked"),
+    )),
+    ("partial -- exact matches kept, fallback dropped", (
+        ("int enums", "enum_int_partial"),
+        ("string enums", "enum_str_partial"),
+    )),
+    ("emitted with semantics recorded but not applied", (
+        ("ValueConv", "omitted_value_conv"),
+        ("RawConv", "omitted_raw_conv"),
+        ("Condition", "omitted_condition"),
+    )),
+    ("refused, not approximated", (
+        ("exprs unsupported", "expr_unsupported"),
+        ("other PrintConv", "conv_dropped"),
+        ("variant tags", "tag_variant_skipped"),
+        ("Unknown tags", "tag_unknown_skipped"),
+        ("unsupported format", "tag_fmt_unsupported"),
+        ("unreadable Mask", "tag_mask_unreadable"),
+        ("unreadable index", "tag_bad_index"),
+        ("unnamed tags", "tag_no_name"),
+        ("tables not ProcessBinaryData", "table_not_binary"),
+        ("tables bad FORMAT", "table_bad_format"),
+    )),
+)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("tables_json")
@@ -446,6 +670,7 @@ def main():
 
     stats = Counter()
     stats["unsupported_exprs"] = Counter()
+    stats["pc_directives_dropped"] = Counter()
     chunks = []
     index_rows = []
 
@@ -512,17 +737,33 @@ def main():
         fh.write(index)
 
     ue = stats.pop("unsupported_exprs")
+    pcd = stats.pop("pc_directives_dropped")
     print(f"wrote {args.out}")
-    print(f"  tables emitted      {stats['table_emitted']}")
-    print(f"  tags emitted        {stats['tag_emitted']}")
-    print(f"  int enums           {stats['enum_int']}")
-    print(f"  string enums        {stats['enum_str']}")
-    print(f"  exprs translated    {stats['expr_translated']}")
-    print("  --- refused, not approximated ---")
-    print(f"  exprs unsupported   {stats['expr_unsupported']}")
-    print(f"  variant tags        {stats['tag_variant_skipped']}")
-    print(f"  Unknown tags        {stats['tag_unknown_skipped']}")
-    print(f"  unsupported format  {stats['tag_fmt_unsupported']}")
+    printed = set()
+    for heading, rows in REPORT:
+        if heading:
+            print(f"  --- {heading} ---")
+        for label, key in rows:
+            printed.add(key)
+            print(f"  {label:<30}{stats[key]}")
+
+    # The completeness argument for this whole pipeline rests on the refusal
+    # count being trustworthy, and four counters were incremented but never
+    # printed -- a run reported 2301 refusals against a true 2393 plus 11
+    # dropped tables. Asserting that the report covers every key the code
+    # touches is what makes the next added counter impossible to forget.
+    missed = sorted(set(stats) - printed)
+    if missed:
+        raise SystemExit(
+            "these counters were recorded but not reported: "
+            + ", ".join(missed)
+            + " -- add them to REPORT; an unreported refusal is a coverage lie"
+        )
+
+    if pcd:
+        print("\n  PrintConv directives dropped from partial enums:")
+        for d, n in pcd.most_common():
+            print(f"    {n:>4}  {d}")
     if ue:
         print("\n  top unsupported expressions (translate these next):")
         for e, n in ue.most_common(10):

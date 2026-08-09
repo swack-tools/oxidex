@@ -42,8 +42,8 @@ def rust_str(s):
 def priority(tag):
     """ExifTool's effective priority for a Composite tag, as FoundTag computes it.
 
-    ExifTool.pm:9347-9351 (line numbers throughout are ExifTool 13.30, the
-    release this generator reads):
+    ExifTool.pm:9347-9351 (line numbers throughout are from the release named
+    by `.exiftool-version`, which is the only release this generator reads):
 
         my $priority = $$tagInfo{Priority};
         unless (defined $priority) {
@@ -107,6 +107,7 @@ def main():
     rows = []
     seen = set()
     skipped_internal = 0
+    dropped_internal = 0
 
     for mod_name in sorted(doc["modules"]):
         tables = doc["modules"][mod_name]["tables"]
@@ -122,12 +123,28 @@ def main():
             des = dep_list(tag.get("Desire"))
             if not req and not des:
                 continue
-            # Desire entries are inputs too -- a composite that merely
-            # *prefers* internal parser state can still half-fire on the
-            # wrong inputs, which is exactly what INTERNAL_STATE refuses.
-            if any(d in INTERNAL_STATE for _i, d in (*req, *des)):
+            # A REQUIRED input we cannot see means the composite can never fire
+            # correctly, so refuse it outright.
+            if any(d in INTERNAL_STATE for _i, d in req):
                 skipped_internal += 1
                 continue
+            # A merely DESIRED one is different in kind: the composite still
+            # computes from its required inputs, and ExifTool itself treats the
+            # input as optional. Only that entry is dropped, so the emitted
+            # definition claims no input this project cannot supply.
+            #
+            # Refusing the whole composite here instead -- which this generator
+            # did until the rule was made precise -- silently deleted
+            # `Exif::ImageSize`, whose ValueConv opens `return $val[4] if
+            # $val[4]` on RawImageCroppedSize but otherwise derives the size
+            # from ImageWidth/ImageHeight. That cost ImageSize on every file,
+            # and Megapixels with it (it requires ImageSize), to avoid
+            # disagreeing with ExifTool on raw files that carry a crop. The
+            # drop went unnoticed because the committed tables predated the
+            # rule; nothing regenerated them, so nothing ever applied it.
+            kept_des = [(i, d) for i, d in des if d not in INTERNAL_STATE]
+            dropped_internal += len(des) - len(kept_des)
+            des = kept_des
             # First definition wins, matching ExifTool's module load order for
             # the common tags; later modules override only for their own files,
             # which we do not model.
@@ -190,6 +207,7 @@ pub static COMPOSITES: &[Composite] = &[
     print(f"wrote {args.out}")
     print(f"  composites emitted   {len(rows)}")
     print(f"  skipped (internal)   {skipped_internal}")
+    print(f"  desires dropped      {dropped_internal}")
 
 
 if __name__ == "__main__":

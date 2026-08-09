@@ -90,8 +90,18 @@ my %TABLE_META = map { $_ => 1 } qw(
 
 # Per-tag keys worth carrying across.  Anything not listed is dropped rather
 # than half-understood; add deliberately, after checking what it means.
+#
+# BitShift travels with Mask and is not optional.  ExifTool reduces a masked
+# field to `($val & Mask) >> BitShift` (ExifTool.pm ProcessBinaryData), and
+# derives BitShift from the lowest set bit of Mask only when the table does not
+# state one (ExifTool.pm, "calculate BitShift from Mask if necessary").  A
+# generator that always derives it is right almost everywhere and quietly wrong
+# where a table overrides it -- BPG::Main 4.1 `Alpha` declares Mask 0x1004 with
+# BitShift 0, where deriving would give 2 and shift every enum key off its
+# meaning.  Carrying the key is what keeps the transcription exact instead of
+# merely plausible.
 my @TAG_KEYS = qw(
-    Name Description Format Writable Count Groups Notes Mask Condition
+    Name Description Format Writable Count Groups Notes Mask BitShift Condition
     PrintConv ValueConv RawConv PrintConvInv ValueConvInv Hook
     SubDirectory Flags Unknown Hidden Avoid Binary Protected List
     Priority ByteOrder DataMember RelatedTag SeparateTable PrintHex

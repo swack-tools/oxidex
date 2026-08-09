@@ -306,11 +306,7 @@ pub static COMPOSITES: &[Composite] = &[
         group2: "Image",
         priority: 1,
         require: &[(0, "ImageWidth"), (1, "ImageHeight")],
-        desire: &[
-            (2, "ExifImageWidth"),
-            (3, "ExifImageHeight"),
-            (4, "RawImageCroppedSize"),
-        ],
+        desire: &[(2, "ExifImageWidth"), (3, "ExifImageHeight")],
     },
     Composite {
         name: "JpgFromRaw",
@@ -456,7 +452,10 @@ pub static COMPOSITES: &[Composite] = &[
         group2: "Time",
         priority: 1,
         require: &[(0, "EXIF:CreateDate")],
-        desire: &[(1, "SubSecTimeDigitized"), (2, "OffsetTimeDigitized")],
+        desire: &[
+            (1, "EXIF:SubSecTimeDigitized"),
+            (2, "EXIF:OffsetTimeDigitized"),
+        ],
     },
     Composite {
         name: "SubSecDateTimeOriginal",
@@ -464,7 +463,10 @@ pub static COMPOSITES: &[Composite] = &[
         group2: "Time",
         priority: 1,
         require: &[(0, "EXIF:DateTimeOriginal")],
-        desire: &[(1, "SubSecTimeOriginal"), (2, "OffsetTimeOriginal")],
+        desire: &[
+            (1, "EXIF:SubSecTimeOriginal"),
+            (2, "EXIF:OffsetTimeOriginal"),
+        ],
     },
     Composite {
         name: "SubSecModifyDate",
@@ -472,7 +474,7 @@ pub static COMPOSITES: &[Composite] = &[
         group2: "Time",
         priority: 1,
         require: &[(0, "EXIF:ModifyDate")],
-        desire: &[(1, "SubSecTime"), (2, "OffsetTime")],
+        desire: &[(1, "EXIF:SubSecTime"), (2, "EXIF:OffsetTime")],
     },
     Composite {
         name: "ThumbnailImage",

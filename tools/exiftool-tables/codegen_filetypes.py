@@ -8,13 +8,15 @@ hashes, so this is transcription rather than reimplementation, and it cannot
 drift from ExifTool because it *is* ExifTool's table.
 
 Magic numbers are Perl regexes over raw bytes. They are translated here rather
-than reused verbatim, because Rust's regex crate differs in two ways that
+than reused verbatim, because Rust's regex crate differs in three ways that
 matter:
 
   * `\\0` is not a valid escape, so it becomes `\\x00`.
   * Unicode mode must be off (`(?-u)`) for byte classes above 0x7F to compile
     against a `&[u8]`, and `(?s)` is needed so `.` matches a newline byte --
     ExifTool's AIFF pattern `FORM....AIF[FC]` relies on that.
+  * A `[` inside a character class is a literal in Perl, but opens a *nested*
+    class in Rust, which supports set notation. It is escaped here.
 
 Anything that fails to translate is dropped and counted, never approximated:
 a magic number that matches too eagerly would mislabel files, which is worse
@@ -34,8 +36,64 @@ UNSUPPORTED = (
     r"(?<",     # lookbehind (Rust regex has none)
     r"(?=",     # lookahead
     r"(?!",     # negative lookahead
+    # Two characters, not three: this was written `r"\\G"`, which is a raw
+    # string holding *two* backslashes and a G, so it could never match the
+    # one-backslash construct it was meant to reject.
     r"\G",      # anchor to previous match
 )
+
+
+def escape_literal_brackets_in_classes(text):
+    """Escape `[` inside a character class: Perl literal, Rust nested class.
+
+    Rust's regex crate supports set notation, so `[abc[de]]` is a *nested*
+    class; Perl has no such syntax and reads the inner `[` as an ordinary
+    character. ExifTool 13.59 added exactly this shape to the LNK magic number
+    when it taught it to recognise `.url` shortcuts:
+
+        \\[[InternetShortcut\\][\\x0d\\x0a]
+
+    which Perl reads as a literal `[` followed by one character from the class
+    `InternetShortcut][\\x0d\\x0a` -- verified against Perl directly. Rust
+    instead opens a nested class at the second `[`, consumes the closing `]`
+    for it, and then rejects the whole pattern as an unclosed class.
+
+    Escaping is an exact translation rather than an approximation: `\\[` inside
+    a Rust class is the same literal Perl already meant. Passing the pattern
+    through untouched emitted Rust that does not compile, which the runtime
+    then dropped silently -- so a `.lnk` fell back to extension matching and a
+    `.url` was not identified at all.
+    """
+    out = []
+    i, n = 0, len(text)
+    in_class = False
+    class_start = -1
+    while i < n:
+        c = text[i]
+        if c == "\\" and i + 1 < n:
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if not in_class:
+            if c == "[":
+                in_class = True
+                class_start = len(out)
+            out.append(c)
+        elif c == "[":
+            out.append("\\[")
+        elif c == "]":
+            # A `]` immediately after `[` or `[^` is a literal in both
+            # dialects, not a terminator.
+            leading = len(out) - class_start
+            if leading == 1 or (leading == 2 and out[-1] == "^"):
+                out.append(c)
+            else:
+                in_class = False
+                out.append(c)
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def rust_bytes_literal(b):
@@ -74,6 +132,7 @@ def translate(pattern_bytes):
             return None
     # `\0` -> `\x00`. Only when the backslash is not itself escaped.
     text = re.sub(r"(?<!\\)((?:\\\\)*)\\0(?![0-7])", r"\1\\x00", text)
+    text = escape_literal_brackets_in_classes(text)
     return text.encode("latin-1")
 
 

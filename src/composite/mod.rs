@@ -182,8 +182,9 @@ struct Derived {
 /// not the `0.019 mm` that gets printed.
 ///
 /// An unqualified dependency is not a search across groups in ExifTool: it
-/// reads exactly one entry, the *bare* tag key. All line numbers below are
-/// ExifTool 13.30, the release these tables are generated from.
+/// reads exactly one entry, the *bare* tag key. All line numbers below are from
+/// the release named by `.exiftool-version`, which these tables are generated
+/// from and verified against.
 ///
 /// ```text
 /// ExifTool.pm:4008 (BuildCompositeTags)
