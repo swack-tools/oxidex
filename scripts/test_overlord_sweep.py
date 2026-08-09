@@ -1029,8 +1029,8 @@ class FormatSweepBranchTests(GitRepoTestCase):
 # ---------------------------------------------------------------------------
 
 class RunSweepIntegrationTests(GitRepoTestCase):
-    def _squads_toml(self, tmp, squads):
-        path = tmp / "squads.toml"
+    def _config_toml(self, tmp, squads):
+        path = tmp / "config.toml"
         body = []
         for squad in squads:
             body.append(f'[squads.{squad}]\nmodules = []\nformats = ["JPEG"]\nownership_globs = []\n')
@@ -1072,10 +1072,10 @@ class RunSweepIntegrationTests(GitRepoTestCase):
         repo = self.make_repo()
         with tempfile.TemporaryDirectory() as tmpdir:
             home = Path(tmpdir) / "home"
-            squads_toml = self._squads_toml(Path(tmpdir), ["canon"])
+            config_toml = self._config_toml(Path(tmpdir), ["canon"])
             result = overlord_sweep.run_sweep(
                 repo_root=repo, home=home, cache_dir="/unused", comparison_fn=self._passing_comparison_fn,
-                checkout_fn=self._checkout_fn, squads_toml_path=squads_toml,
+                checkout_fn=self._checkout_fn, config_path=config_toml,
                 sweep_state_path=home / "sweep-state.json", origin_ref="main",
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
             )
@@ -1097,7 +1097,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             home = Path(tmpdir) / "home"
-            squads_toml = self._squads_toml(Path(tmpdir), ["canon"])
+            config_toml = self._config_toml(Path(tmpdir), ["canon"])
             status_path = squad_merge_loop.squad_status_file(home, "canon")
             squad_merge_loop.record_head(
                 status_path, "workerheadsha", status="consumed", patch_id="p1", format_name="JPEG",
@@ -1121,7 +1121,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
 
             result = overlord_sweep.run_sweep(
                 repo_root=repo, home=home, cache_dir="/unused", comparison_fn=self._passing_comparison_fn,
-                checkout_fn=self._checkout_fn, squads_toml_path=squads_toml,
+                checkout_fn=self._checkout_fn, config_path=config_toml,
                 sweep_state_path=home / "sweep-state.json", origin_ref="main",
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
@@ -1203,7 +1203,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             home = Path(tmpdir) / "home"
-            squads_toml = self._squads_toml(Path(tmpdir), ["canon", "nikon"])
+            config_toml = self._config_toml(Path(tmpdir), ["canon", "nikon"])
             for squad, sha in (("canon", canon_sha), ("nikon", nikon_sha)):
                 squad_merge_loop.record_head(
                     squad_merge_loop.squad_status_file(home, squad), f"{squad}head", status="consumed",
@@ -1213,7 +1213,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
 
             result = overlord_sweep.run_sweep(
                 repo_root=repo, home=home, cache_dir="/unused", comparison_fn=comparison_fn,
-                checkout_fn=self._checkout_fn, squads_toml_path=squads_toml,
+                checkout_fn=self._checkout_fn, config_path=config_toml,
                 sweep_state_path=home / "sweep-state.json", origin_ref="main",
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 quarantine_path=home / "quarantine.jsonl",
@@ -1247,7 +1247,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             home = Path(tmpdir) / "home"
-            squads_toml = self._squads_toml(Path(tmpdir), ["canon"])
+            config_toml = self._config_toml(Path(tmpdir), ["canon"])
             status_path = squad_merge_loop.squad_status_file(home, "canon")
             squad_merge_loop.record_head(
                 status_path, "workerheadsha", status="consumed", patch_id="p1", format_name="JPEG",
@@ -1258,7 +1258,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
 
             result = overlord_sweep.run_sweep(
                 repo_root=repo, home=home, cache_dir="/unused", comparison_fn=self._passing_comparison_fn,
-                checkout_fn=self._checkout_fn, squads_toml_path=squads_toml,
+                checkout_fn=self._checkout_fn, config_path=config_toml,
                 sweep_state_path=sweep_state_path, origin_ref="main",
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 cargo_test_workspace_fn=lambda repo_root: (False, "boom"),
@@ -1273,7 +1273,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
             # -- a later sweep must still find and retry the same stamp
             # (spec M4's "never silently skip"), not report "no_news".
             self.assertEqual(overlord_sweep.load_sweep_state(sweep_state_path), {"squads": {}})
-            squads = overlord_sweep.squads_from_toml(squads_toml)
+            squads = overlord_sweep.squads_from_toml(config_toml)
             cursor = overlord_sweep.load_sweep_state(sweep_state_path)
             stamps, _new_cursor = overlord_sweep.collect_green_stamps(home, squads, cursor)
             self.assertIn("canon", stamps)
@@ -1290,7 +1290,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             home = Path(tmpdir) / "home"
-            squads_toml = self._squads_toml(Path(tmpdir), ["canon"])
+            config_toml = self._config_toml(Path(tmpdir), ["canon"])
             status_path = squad_merge_loop.squad_status_file(home, "canon")
             squad_merge_loop.record_head(
                 status_path, "workerheadsha", status="consumed", patch_id="p1", format_name="JPEG",
@@ -1305,7 +1305,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
 
             result = overlord_sweep.run_sweep(
                 repo_root=repo, home=home, cache_dir="/unused", comparison_fn=self._passing_comparison_fn,
-                checkout_fn=self._checkout_fn, squads_toml_path=squads_toml,
+                checkout_fn=self._checkout_fn, config_path=config_toml,
                 sweep_state_path=sweep_state_path, origin_ref="main",
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock", run_git=failing_run_git,
             )
@@ -1313,7 +1313,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
             self.assertEqual(result["status"], "branch_cut_failed")
             # Nothing was persisted at all -- collect_green_stamps must
             # find canon's stamp exactly as before, ready for a clean retry.
-            squads = overlord_sweep.squads_from_toml(squads_toml)
+            squads = overlord_sweep.squads_from_toml(config_toml)
             cursor = overlord_sweep.load_sweep_state(sweep_state_path)
             self.assertEqual(cursor, {"squads": {}})
             stamps, _new_cursor = overlord_sweep.collect_green_stamps(home, squads, cursor)
@@ -1336,7 +1336,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             home = Path(tmpdir) / "home"
-            squads_toml = self._squads_toml(Path(tmpdir), ["canon"])
+            config_toml = self._config_toml(Path(tmpdir), ["canon"])
             status_path = squad_merge_loop.squad_status_file(home, "canon")
             squad_merge_loop.record_head(
                 status_path, "workerheadsha", status="consumed", patch_id="p1", format_name="JPEG",
@@ -1346,13 +1346,13 @@ class RunSweepIntegrationTests(GitRepoTestCase):
 
             result = overlord_sweep.run_sweep(
                 repo_root=repo, home=home, cache_dir="/unused", comparison_fn=self._passing_comparison_fn,
-                checkout_fn=self._checkout_fn, squads_toml_path=squads_toml,
+                checkout_fn=self._checkout_fn, config_path=config_toml,
                 sweep_state_path=sweep_state_path, origin_ref="main",
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
             )
 
             self.assertEqual(result["status"], "nothing_merged")
-            squads = overlord_sweep.squads_from_toml(squads_toml)
+            squads = overlord_sweep.squads_from_toml(config_toml)
             cursor = overlord_sweep.load_sweep_state(sweep_state_path)
             self.assertEqual(cursor, {"squads": {}})
             stamps, _new_cursor = overlord_sweep.collect_green_stamps(home, squads, cursor)
@@ -1360,7 +1360,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
 
     def _one_squad_fixture(self, repo, tmpdir):
         """One green-stamped squad on `repo`, its home under `tmpdir`.
-        Returns (home, squads_toml, sweep_state_path)."""
+        Returns (home, config_toml, sweep_state_path)."""
         git(repo, "branch", "squad/canon", "main")
         git(repo, "checkout", "-q", "squad/canon")
         canon_sha = self.commit_file(
@@ -1369,12 +1369,12 @@ class RunSweepIntegrationTests(GitRepoTestCase):
         )
         git(repo, "checkout", "-q", "main")
         home = Path(tmpdir) / "home"
-        squads_toml = self._squads_toml(Path(tmpdir), ["canon"])
+        config_toml = self._config_toml(Path(tmpdir), ["canon"])
         squad_merge_loop.record_head(
             squad_merge_loop.squad_status_file(home, "canon"), "workerheadsha", status="consumed",
             patch_id="p1", format_name="JPEG", squad_sha=canon_sha, now_fn=lambda: 100,
         )
-        return home, squads_toml, home / "sweep-state.json"
+        return home, config_toml, home / "sweep-state.json"
 
     def test_a_failed_gh_pr_create_is_its_own_status_not_ok(self):
         """`gh pr create` fails for entirely routine reasons -- expired
@@ -1386,10 +1386,10 @@ class RunSweepIntegrationTests(GitRepoTestCase):
         repo = self.make_repo()
         logged = []
         with tempfile.TemporaryDirectory() as tmpdir:
-            home, squads_toml, sweep_state_path = self._one_squad_fixture(repo, tmpdir)
+            home, config_toml, sweep_state_path = self._one_squad_fixture(repo, tmpdir)
             result = overlord_sweep.run_sweep(
                 repo_root=repo, home=home, cache_dir="/unused", comparison_fn=self._passing_comparison_fn,
-                checkout_fn=self._checkout_fn, squads_toml_path=squads_toml,
+                checkout_fn=self._checkout_fn, config_path=config_toml,
                 sweep_state_path=sweep_state_path, origin_ref="main",
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
@@ -1441,7 +1441,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             home = Path(tmpdir) / "home"
-            squads_toml = self._squads_toml(Path(tmpdir), ["canon"])
+            config_toml = self._config_toml(Path(tmpdir), ["canon"])
             status_path = squad_merge_loop.squad_status_file(home, "canon")
             squad_merge_loop.record_head(
                 status_path, "workerheadsha", status="consumed", patch_id="p1", format_name="JPEG",
@@ -1452,7 +1452,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
 
             result = overlord_sweep.run_sweep(
                 repo_root=repo, home=home, cache_dir="/unused", comparison_fn=self._passing_comparison_fn,
-                checkout_fn=self._checkout_fn, squads_toml_path=squads_toml,
+                checkout_fn=self._checkout_fn, config_path=config_toml,
                 sweep_state_path=sweep_state_path, origin_ref="main",
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
@@ -1465,7 +1465,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
             self.assertEqual(pr_calls, [])
             cursor = overlord_sweep.load_sweep_state(sweep_state_path)
             self.assertEqual(cursor, {"squads": {}})
-            squads = overlord_sweep.squads_from_toml(squads_toml)
+            squads = overlord_sweep.squads_from_toml(config_toml)
             stamps, _new_cursor = overlord_sweep.collect_green_stamps(home, squads, cursor)
             self.assertIn("canon", stamps)
 
@@ -1490,11 +1490,11 @@ class RunSweepIntegrationTests(GitRepoTestCase):
         """
         repo = self.make_repo()
         with tempfile.TemporaryDirectory() as tmpdir:
-            home, squads_toml, sweep_state_path = self._one_squad_fixture(repo, tmpdir)
+            home, config_toml, sweep_state_path = self._one_squad_fixture(repo, tmpdir)
             result = overlord_sweep.run_sweep(
                 repo_root=repo, home=home, cache_dir="/unused",
                 comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
-                squads_toml_path=squads_toml, sweep_state_path=sweep_state_path,
+                config_path=config_toml, sweep_state_path=sweep_state_path,
                 origin_ref="main",
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
@@ -1516,11 +1516,11 @@ class RunSweepIntegrationTests(GitRepoTestCase):
         the identical stamp and actually land it."""
         repo = self.make_repo()
         with tempfile.TemporaryDirectory() as tmpdir:
-            home, squads_toml, sweep_state_path = self._one_squad_fixture(repo, tmpdir)
+            home, config_toml, sweep_state_path = self._one_squad_fixture(repo, tmpdir)
             common = dict(
                 repo_root=repo, home=home, cache_dir="/unused",
                 comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
-                squads_toml_path=squads_toml, sweep_state_path=sweep_state_path, origin_ref="main",
+                config_path=config_toml, sweep_state_path=sweep_state_path, origin_ref="main",
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
                 fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
@@ -1569,7 +1569,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             home = Path(tmpdir) / "home"
-            squads_toml = self._squads_toml(Path(tmpdir), ["canon"])
+            config_toml = self._config_toml(Path(tmpdir), ["canon"])
             squad_merge_loop.record_head(
                 squad_merge_loop.squad_status_file(home, "canon"), "workerhead", status="consumed",
                 patch_id="p1", format_name="JPEG", squad_sha=canon_sha, now_fn=lambda: 100,
@@ -1580,7 +1580,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
             result = overlord_sweep.run_sweep(
                 repo_root=repo, home=home, cache_dir="/unused",
                 comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
-                squads_toml_path=squads_toml, sweep_state_path=sweep_state_path, origin_ref="main",
+                config_path=config_toml, sweep_state_path=sweep_state_path, origin_ref="main",
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 cargo_test_workspace_fn=lambda repo_root: tested.append(1) or (True, "ok"),
                 push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
@@ -1614,7 +1614,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             home = Path(tmpdir) / "home"
-            squads_toml = self._squads_toml(Path(tmpdir), ["canon"])
+            config_toml = self._config_toml(Path(tmpdir), ["canon"])
             squad_merge_loop.record_head(
                 squad_merge_loop.squad_status_file(home, "canon"), "workerhead", status="consumed",
                 patch_id="p1", format_name="JPEG", squad_sha=landed, now_fn=lambda: 100,
@@ -1623,7 +1623,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
             result = overlord_sweep.run_sweep(
                 repo_root=repo, home=home, cache_dir="/unused",
                 comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
-                squads_toml_path=squads_toml, sweep_state_path=home / "sweep-state.json",
+                config_path=config_toml, sweep_state_path=home / "sweep-state.json",
                 origin_ref="main", dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 cargo_test_workspace_fn=lambda repo_root: tested.append(1) or (True, "ok"),
                 push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
@@ -1700,8 +1700,8 @@ class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
     def _checkout_fn(repo_root, ref):
         git(repo_root, "checkout", "--detach", ref)
 
-    def _squads_toml(self, tmp, squads):
-        path = tmp / "squads.toml"
+    def _config_toml(self, tmp, squads):
+        path = tmp / "config.toml"
         path.write_text("\n".join(
             f'[squads.{s}]\nmodules = []\nformats = ["JPEG"]\nownership_globs = []\n' for s in squads
         ))
@@ -1747,7 +1747,7 @@ class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
         git(repo, "checkout", "-q", "main")
         with tempfile.TemporaryDirectory() as tmpdir:
             home = Path(tmpdir) / "home"
-            squads_toml = self._squads_toml(Path(tmpdir), ["canon"])
+            config_toml = self._config_toml(Path(tmpdir), ["canon"])
             squad_merge_loop.record_head(
                 squad_merge_loop.squad_status_file(home, "canon"), "workerhead",
                 status="consumed", patch_id="p1", format_name="JPEG",
@@ -1757,7 +1757,7 @@ class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
             result = overlord_sweep.run_sweep(
                 repo_root=repo, home=home, cache_dir="/unused",
                 comparison_fn=self._inherited_dup_comparison_fn,
-                checkout_fn=self._checkout_fn, squads_toml_path=squads_toml,
+                checkout_fn=self._checkout_fn, config_path=config_toml,
                 sweep_state_path=home / "sweep-state.json", origin_ref="main",
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 quarantine_path=home / "quarantine.jsonl",
@@ -1797,7 +1797,7 @@ class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             home = Path(tmpdir) / "home"
-            squads_toml = self._squads_toml(Path(tmpdir), ["canon"])
+            config_toml = self._config_toml(Path(tmpdir), ["canon"])
             squad_merge_loop.record_head(
                 squad_merge_loop.squad_status_file(home, "canon"), "workerhead", status="consumed",
                 patch_id="p1", format_name="JPEG", squad_sha=canon_sha, now_fn=lambda: 100,
@@ -1808,7 +1808,7 @@ class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
             result = overlord_sweep.run_sweep(
                 repo_root=repo, home=home, cache_dir="/unused",
                 comparison_fn=self._failing_comparison_fn, checkout_fn=self._checkout_fn,
-                squads_toml_path=squads_toml, sweep_state_path=sweep_state_path, origin_ref="main",
+                config_path=config_toml, sweep_state_path=sweep_state_path, origin_ref="main",
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 quarantine_path=home / "quarantine.jsonl",
                 cargo_test_workspace_fn=lambda repo_root: tested.append(1) or (True, "ok"),
@@ -1867,7 +1867,7 @@ class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             home = Path(tmpdir) / "home"
-            squads_toml = self._squads_toml(Path(tmpdir), ["canon", "nikon"])
+            config_toml = self._config_toml(Path(tmpdir), ["canon", "nikon"])
             for squad in ("canon", "nikon"):
                 squad_merge_loop.record_head(
                     squad_merge_loop.squad_status_file(home, squad), f"{squad}head",
@@ -1877,7 +1877,7 @@ class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
             pushed, prs = [], []
             result = overlord_sweep.run_sweep(
                 repo_root=repo, home=home, cache_dir="/unused", comparison_fn=comparison_fn,
-                checkout_fn=self._checkout_fn, squads_toml_path=squads_toml,
+                checkout_fn=self._checkout_fn, config_path=config_toml,
                 sweep_state_path=home / "sweep-state.json", origin_ref="main",
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 quarantine_path=home / "quarantine.jsonl",

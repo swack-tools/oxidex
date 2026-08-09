@@ -1530,8 +1530,8 @@ class SquadOpenGapsFromAttributionTests(unittest.TestCase):
 
 
 class SquadWorkerFormatsTests(unittest.TestCase):
-    def _squads_toml(self, tmp):
-        path = tmp / "squads.toml"
+    def _config_toml(self, tmp):
+        path = tmp / "config.toml"
         path.write_text(
             '[squads.canon]\nmodules = ["Canon"]\nformats = ["JPEG", "CR2"]\nownership_globs = []\n'
         )
@@ -1540,23 +1540,23 @@ class SquadWorkerFormatsTests(unittest.TestCase):
     def test_prefers_live_attribution_formats(self):
         attribution = {"squads": {"canon": {"formats": ["JPEG", "DNG"]}}}
         with tempfile.TemporaryDirectory() as tmpdir:
-            formats = squad_worker_formats("canon", attribution, self._squads_toml(Path(tmpdir)))
+            formats = squad_worker_formats("canon", attribution, self._config_toml(Path(tmpdir)))
         self.assertEqual(formats, ["JPEG", "DNG"])
 
-    def test_falls_back_to_squads_toml_when_attribution_has_nothing(self):
+    def test_falls_back_to_config_toml_when_attribution_has_nothing(self):
         attribution = {"squads": {"canon": {"formats": []}}}
         with tempfile.TemporaryDirectory() as tmpdir:
-            formats = squad_worker_formats("canon", attribution, self._squads_toml(Path(tmpdir)))
+            formats = squad_worker_formats("canon", attribution, self._config_toml(Path(tmpdir)))
         self.assertEqual(formats, ["JPEG", "CR2"])
 
-    def test_none_attribution_falls_back_to_squads_toml(self):
+    def test_none_attribution_falls_back_to_config_toml(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            formats = squad_worker_formats("canon", None, self._squads_toml(Path(tmpdir)))
+            formats = squad_worker_formats("canon", None, self._config_toml(Path(tmpdir)))
         self.assertEqual(formats, ["JPEG", "CR2"])
 
-    def test_unknown_squad_in_squads_toml_returns_empty_not_raise(self):
+    def test_unknown_squad_in_config_toml_returns_empty_not_raise(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            formats = squad_worker_formats("nonexistent-squad", None, self._squads_toml(Path(tmpdir)))
+            formats = squad_worker_formats("nonexistent-squad", None, self._config_toml(Path(tmpdir)))
         self.assertEqual(formats, [])
 
 
@@ -1689,7 +1689,11 @@ class RunSquadRoundTests(unittest.TestCase):
         base = dict(
             max_parallel=3, cache_dir="/unused",
             worktree_dir=str(tmp / "wt"), log_dir=str(tmp / "log"), timeout=None,
-            squads_toml=str(parallel_model_fix_loop.DEFAULT_SQUADS_TOML), home=str(tmp / "home"),
+            # No squads/config attribute here: run_squad_round now takes
+            # config_path as its own explicit second positional argument
+            # (see every run_squad_round(args, Path(...), ...) call below)
+            # rather than reading it off args, so args needs none.
+            home=str(tmp / "home"),
             gap_attribution_path=str(tmp / "gap-attribution.json"),
         )
         base.update(overrides)
@@ -3325,8 +3329,8 @@ class AutoPublishNoNewsIsATrueNoOpTests(GitRepoTestCase):
     def test_real_run_sweep_with_no_green_stamps_creates_no_refs_and_no_gh_writes(self):
         repo = self.make_repo()
         home = self.tmp / "home"
-        squads_toml = self.tmp / "squads.toml"
-        squads_toml.write_text('[squads.canon]\nmodules = []\nformats = ["JPEG"]\nownership_globs = []\n')
+        config_toml = self.tmp / "config.toml"
+        config_toml.write_text('[squads.canon]\nmodules = []\nformats = ["JPEG"]\nownership_globs = []\n')
         refs_before = git_out(repo, "for-each-ref", "--format=%(refname)")
         head_before = git_out(repo, "rev-parse", "HEAD").strip()
         gh_calls, sync_calls = [], []
@@ -3343,7 +3347,7 @@ class AutoPublishNoNewsIsATrueNoOpTests(GitRepoTestCase):
             )
 
         result = auto_publish_round(
-            repo_root=repo, cache_dir="/unused", home=home, squads_toml_path=squads_toml,
+            repo_root=repo, cache_dir="/unused", home=home, config_path=config_toml,
             fmt_fn=lambda repo_root: self.fail("no-news round ran cargo fmt"),
             sweep_fn=sweep_fn, ensure_worktree_fn=lambda repo_root, path, **kw: (repo, "reused"),
             sync_fn=lambda **kw: sync_calls.append(kw),
@@ -3395,8 +3399,8 @@ class AutoPublishEndToEndTests(GitRepoTestCase):
             squad_merge_loop.squad_status_file(home, "canon"), "workerhead", status="consumed",
             patch_id="p1", format_name="JPEG", squad_sha=squad_sha, now_fn=lambda: 100,
         )
-        squads_toml = self.tmp / "squads.toml"
-        squads_toml.write_text('[squads.canon]\nmodules = []\nformats = ["JPEG"]\nownership_globs = []\n')
+        config_toml = self.tmp / "config.toml"
+        config_toml.write_text('[squads.canon]\nmodules = []\nformats = ["JPEG"]\nownership_globs = []\n')
 
         # A worker worktree sitting on an older main: the thing that has
         # to end up updated once the fix lands.
@@ -3463,7 +3467,7 @@ class AutoPublishEndToEndTests(GitRepoTestCase):
             )
 
         result = auto_publish_round(
-            repo_root=repo, cache_dir="/unused", home=home, squads_toml_path=squads_toml,
+            repo_root=repo, cache_dir="/unused", home=home, config_path=config_toml,
             sweep_fn=sweep_fn,
             # The repo itself doubles as the sweep worktree here; the
             # dedicated-worktree provisioning has its own tests above.
