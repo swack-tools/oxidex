@@ -44,6 +44,29 @@ pub fn resolve_cache_dir(
         .join(cache_kind)
 }
 
+/// Serialises every test that reads or writes `OXIDEX_TAG_CACHE_DIR`.
+///
+/// The variable is process-global and six tests across three modules
+/// (`cache_dir`, `oxidex_extractor`, `exiftool_extractor`) set and clear it.
+/// `cargo nextest run` -- the command CI uses -- gives each test its own
+/// process, so the collision is invisible there; plain `cargo test` runs them
+/// on threads of one process, where one test's `remove_var` lands in the
+/// middle of another's assertion. Take this guard before touching the
+/// variable, and hold it until the test has finished asserting.
+///
+/// Poisoning is deliberately ignored: a panic in one env test must not cascade
+/// into unrelated failures in the others.
+#[cfg(test)]
+pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Take [`ENV_LOCK`], recovering from a previous test's panic.
+#[cfg(test)]
+pub fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+    ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,8 +77,9 @@ mod tests {
     /// parent (mirroring `combined-samples` itself, the read-only corpus).
     #[test]
     fn resolved_cache_dir_never_lands_under_fixture_parent() {
-        // SAFETY: single-threaded assertion within this test; no other test
-        // in this process reads OXIDEX_TAG_CACHE_DIR concurrently.
+        let _env = lock_env();
+        // SAFETY: `_env` holds ENV_LOCK, so no other test in this process is
+        // reading or writing OXIDEX_TAG_CACHE_DIR for the rest of this test.
         unsafe {
             std::env::remove_var(OXIDEX_TAG_CACHE_DIR_ENV);
         }
@@ -83,6 +107,7 @@ mod tests {
 
     #[test]
     fn explicit_override_wins_over_everything() {
+        let _env = lock_env();
         unsafe {
             std::env::set_var(OXIDEX_TAG_CACHE_DIR_ENV, "/should/not/be/used");
         }
@@ -104,6 +129,7 @@ mod tests {
 
     #[test]
     fn env_var_wins_over_fixture_derived_default() {
+        let _env = lock_env();
         let fixture = tempfile::tempdir().unwrap();
         let env_dir = tempfile::tempdir().unwrap();
         unsafe {
@@ -121,6 +147,7 @@ mod tests {
 
     #[test]
     fn same_fixture_path_resolves_deterministically() {
+        let _env = lock_env();
         unsafe {
             std::env::remove_var(OXIDEX_TAG_CACHE_DIR_ENV);
         }
