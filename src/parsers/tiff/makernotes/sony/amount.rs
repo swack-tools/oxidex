@@ -629,6 +629,106 @@ pub fn extract_focus_info(
     true
 }
 
+// ============================================================================
+// Panorama (tag 0x1003)
+// ============================================================================
+
+/// Decodes tag 0x1003's `Panorama` sub-directory (Sony.pm's `Panorama` table,
+/// 11 `int32u` scalars starting at the sub-directory's first byte).
+///
+/// The caller only reaches this once it has confirmed the panorama flag bytes
+/// matched -- Sony.pm's own `Condition` on 0x1003 is what gates whether this
+/// sub-directory is processed at all (non-panorama images write all zeros
+/// here and ExifTool skips it).
+pub fn extract_panorama(data: &[u8], byte_order: IoByteOrder, tags: &mut HashMap<String, String>) {
+    let Some(table) = exiftool_tables::find_table("Sony", "Panorama") else {
+        return;
+    };
+    for decoded in exiftool_tables::decode_binary_table(table, data, byte_order) {
+        let name = decoded.field.name;
+        if let Some(printed) = decoded.apply_print_conv_to_raw() {
+            tags.insert(format!("Sony:{name}"), printed);
+        } else if let DecodedValue::Integer(v) = decoded.raw {
+            tags.insert(format!("Sony:{name}"), v.to_string());
+        }
+    }
+}
+
+// ============================================================================
+// ExtraInfo / ExtraInfo2 / ExtraInfo3 (tag 0x0116)
+// ============================================================================
+
+/// `$$self{Model} =~ /^DSLR-A(850|900)\b/` (Sony.pm:855-859): selects the
+/// `ExtraInfo` layout, always decoded big-endian regardless of the file's
+/// normal byte order.
+const EXTRA_INFO_MODELS: [&str; 2] = ["DSLR-A850", "DSLR-A900"];
+
+/// `$$self{Model} =~ /^DSLR-A(230|290|330|380|390)\b/` (Sony.pm:865-867):
+/// selects the `ExtraInfo2` layout.
+const EXTRA_INFO2_MODELS: [&str; 5] =
+    ["DSLR-A230", "DSLR-A290", "DSLR-A330", "DSLR-A380", "DSLR-A390"];
+
+/// Decodes tag 0x0116, whose layout Sony.pm picks by model: `ExtraInfo`
+/// (A850/A900, forced big-endian), `ExtraInfo2` (A230/A290/A330/A380/A390),
+/// or `ExtraInfo3` (every other body that writes this tag, Sony.pm:868-871).
+pub fn extract_extra_info(
+    data: &[u8],
+    model: Option<&str>,
+    byte_order: IoByteOrder,
+    tags: &mut HashMap<String, String>,
+) {
+    let model = model.unwrap_or("");
+    let (table_name, order) = if EXTRA_INFO_MODELS.contains(&model) {
+        ("ExtraInfo", IoByteOrder::Big)
+    } else if EXTRA_INFO2_MODELS.contains(&model) {
+        ("ExtraInfo2", byte_order)
+    } else {
+        ("ExtraInfo3", byte_order)
+    };
+    let Some(table) = exiftool_tables::find_table("Sony", table_name) else {
+        return;
+    };
+    for decoded in exiftool_tables::decode_binary_table(table, data, order) {
+        let name = decoded.field.name;
+        match name {
+            // Sony.pm: `PrintConv => '$val=~tr/ /./; $val'` -- a raw string
+            // substitution on the default space-joined `int8u[4]` rendering,
+            // which the generated schema has no PrintConv form for. Joining
+            // the decoded array with '.' directly reproduces it exactly.
+            "ExtraInfoVersion" => {
+                if let DecodedValue::Array(values) = &decoded.raw {
+                    let mut parts = Vec::with_capacity(values.len());
+                    for v in values {
+                        let DecodedValue::Integer(n) = v else {
+                            parts.clear();
+                            break;
+                        };
+                        parts.push(n.to_string());
+                    }
+                    if !parts.is_empty() {
+                        tags.insert("Sony:ExtraInfoVersion".to_string(), parts.join("."));
+                    }
+                }
+            }
+            // Sony.pm (ExtraInfo3, 0x0006/0x0008): `ValueConv => '$val / 128'`,
+            // `PrintConv => 'sprintf("%.2f V",$val)'`.
+            "BatteryVoltage1" | "BatteryVoltage2" => {
+                if let DecodedValue::Integer(v) = decoded.raw {
+                    tags.insert(
+                        format!("Sony:{name}"),
+                        format!("{:.2} V", v as f64 / 128.0),
+                    );
+                }
+            }
+            _ => {
+                if let Some(printed) = decoded.apply_print_conv_to_raw() {
+                    tags.insert(format!("Sony:{name}"), printed);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
