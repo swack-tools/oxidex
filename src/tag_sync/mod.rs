@@ -198,10 +198,16 @@ pub fn parse_listx_print_conv_values(xml: &str) -> Result<HashMap<String, HashSe
 /// `lookup_tag_name`.
 pub fn parse_domain_yaml(yaml: &str) -> Vec<TagRecord> {
     fn unquote(rest: &str) -> String {
-        rest.trim()
-            .trim_matches('"')
-            .replace("\\\"", "\"")
-            .replace("\\\\", "\\")
+        // Strip exactly one delimiter quote per side. `trim_matches('"')` is
+        // greedy: a value ending in an escaped quote renders as `...\""`, and
+        // trimming both trailing quote bytes corrupted it to `...\` before
+        // the unescape pass could pair them back up.
+        let trimmed = rest.trim();
+        let inner = trimmed
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .unwrap_or(trimmed);
+        inner.replace("\\\"", "\"").replace("\\\\", "\\")
     }
 
     let mut out: Vec<TagRecord> = Vec::new();
@@ -736,6 +742,50 @@ mod tests {
         assert_eq!(
             desc.description.as_deref(),
             Some(r#"a "quoted" description"#)
+        );
+    }
+
+    /// A quote at either boundary of the value renders as an escaped quote
+    /// adjacent to the delimiter quote (`"...\""`). The old greedy
+    /// `trim_matches('"')` stripped both trailing quote bytes and corrupted
+    /// the value to `...\` on every resync of the shipped registry.
+    #[test]
+    fn domain_yaml_round_trips_values_with_boundary_quotes() {
+        let tags = vec![
+            TagRecord {
+                table: "Exif::Main".into(),
+                id: "0x9999".into(),
+                name: "BoundaryQuotes".into(),
+                writable: false,
+                type_name: None,
+                description: Some(r#"Value is "N/A""#.into()),
+            },
+            TagRecord {
+                table: "Exif::Main".into(),
+                id: "0x999a".into(),
+                name: "LeadingQuote".into(),
+                writable: false,
+                type_name: None,
+                description: Some(r#""quoted" from the very first byte"#.into()),
+            },
+        ];
+        let back = parse_domain_yaml(&generate_domain_yaml("core", &tags));
+        assert_eq!(back.len(), 2);
+        assert_eq!(
+            back.iter()
+                .find(|r| r.name == "BoundaryQuotes")
+                .unwrap()
+                .description
+                .as_deref(),
+            Some(r#"Value is "N/A""#)
+        );
+        assert_eq!(
+            back.iter()
+                .find(|r| r.name == "LeadingQuote")
+                .unwrap()
+                .description
+                .as_deref(),
+            Some(r#""quoted" from the very first byte"#)
         );
     }
 }

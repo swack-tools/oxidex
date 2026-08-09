@@ -347,9 +347,16 @@ pub struct BinaryTable {
 
 impl BinaryTable {
     /// Byte offset of `field` from the start of the record.
+    ///
+    /// ExifTool's `ProcessBinaryData` computes `$entry = int($index) *
+    /// $increment` (ExifTool.pm) -- the tag index scales from the start of
+    /// the data block unconditionally. `FIRST_ENTRY` never enters that
+    /// arithmetic; it only bounds the `Unknown > 1` auto-scan range, so
+    /// subtracting it here shifted every field of a `FIRST_ENTRY 1` table
+    /// one format-width early.
     #[must_use]
     pub fn byte_offset(&self, field: &Field) -> i64 {
-        (field.index - self.first_entry) * i64::from(self.default_format.size())
+        field.index * i64::from(self.default_format.size())
     }
 
     #[must_use]

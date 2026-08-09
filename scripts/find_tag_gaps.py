@@ -288,7 +288,11 @@ FORMAT_TO_DIR = {
     "EXIF": ["parsers/tiff"],
     "BMP": ["parsers/image"],
     "GIF": ["parsers/image"],
-    "WebP": ["parsers/image"],
+    # Spelled exactly as tag-comparison's extension_to_format emits them
+    # ("WEBP", "MachO", and the ext.to_uppercase() fallback for opus) --
+    # the mixed-case spellings never matched, so these formats silently
+    # fell through to an empty parser-file hint list.
+    "WEBP": ["parsers/image"],
     "PDF": ["parsers/pdf"],
     "QuickTime": ["parsers/quicktime"],
     "MP4": ["parsers/quicktime"],
@@ -298,7 +302,7 @@ FORMAT_TO_DIR = {
     "RIFF": ["parsers/video"],
     "PE": ["parsers/pe"],
     "ELF": ["parsers/elf"],
-    "Mach-O": ["parsers/macho"],
+    "MachO": ["parsers/macho"],
     "ZIP": ["parsers/archive"],
     "DOCX": ["parsers/document"],
     "XLSX": ["parsers/document"],
@@ -317,7 +321,7 @@ FORMAT_TO_DIR = {
     "MP3": ["parsers/audio"],
     "AAC": ["parsers/audio"],
     "APE": ["parsers/audio"],
-    "Opus": ["parsers/audio"],
+    "OPUS": ["parsers/audio"],
     "OGG": ["parsers/audio"],
     "WAV": ["parsers/audio"],
     # FlashPix property sets are MS-OLEPS, parsed by the OLE compound-file
