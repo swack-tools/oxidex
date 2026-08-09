@@ -665,8 +665,13 @@ const EXTRA_INFO_MODELS: [&str; 2] = ["DSLR-A850", "DSLR-A900"];
 
 /// `$$self{Model} =~ /^DSLR-A(230|290|330|380|390)\b/` (Sony.pm:865-867):
 /// selects the `ExtraInfo2` layout.
-const EXTRA_INFO2_MODELS: [&str; 5] =
-    ["DSLR-A230", "DSLR-A290", "DSLR-A330", "DSLR-A380", "DSLR-A390"];
+const EXTRA_INFO2_MODELS: [&str; 5] = [
+    "DSLR-A230",
+    "DSLR-A290",
+    "DSLR-A330",
+    "DSLR-A380",
+    "DSLR-A390",
+];
 
 /// Decodes tag 0x0116, whose layout Sony.pm picks by model: `ExtraInfo`
 /// (A850/A900, forced big-endian), `ExtraInfo2` (A230/A290/A330/A380/A390),
@@ -714,10 +719,7 @@ pub fn extract_extra_info(
             // `PrintConv => 'sprintf("%.2f V",$val)'`.
             "BatteryVoltage1" | "BatteryVoltage2" => {
                 if let DecodedValue::Integer(v) = decoded.raw {
-                    tags.insert(
-                        format!("Sony:{name}"),
-                        format!("{:.2} V", v as f64 / 128.0),
-                    );
+                    tags.insert(format!("Sony:{name}"), format!("{:.2} V", v as f64 / 128.0));
                 }
             }
             _ => {
