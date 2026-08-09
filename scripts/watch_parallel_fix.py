@@ -152,9 +152,23 @@ TAGCMP_FILENAME_RE = re.compile(r"^tagcmp-.+\.json$")
 # before -- see parse_manifest_log (which ignores the tier group
 # entirely, unaffected) vs parse_manifest_log_tiered (which reads it,
 # defaulting a missing token to "T1").
+#
+# `provider=<slug>` is OPTIONAL for the same reason, and is why this
+# pattern is written the way it is rather than as a fixed token sequence.
+# The provider scoreboard (#218) started writing it between `tier=` and
+# `model=` and this reader was never widened, so from that commit on the
+# structured parse matched NOTHING -- measured 2026-08-09 against a live
+# fleet: 30038 manifest lines, parse_manifest_log 0, and
+# parse_manifest_log_tiered 0, i.e. the dashboard's latency panel and
+# tier_kpi_stats' calls-per-landed-tag KPI had both been blind since.
+# Nothing here reads the provider value; the token only has to be allowed
+# through. Note what did NOT catch it: every fixture in
+# test_watch_parallel_fix.py predates the token, so the suite stayed green
+# against a format the fleet had stopped emitting. New tokens belong in
+# this alternation AND in a fixture copied from a real manifest line.
 MANIFEST_ENTRY_RE = re.compile(
     r"^(?P<ts>\S+) phase=(?P<phase>fixer|reviewer|critique) worker=(?P<worker>\S+)"
-    r"(?: tier=(?P<tier>\S+))? model=(?P<model>\S+) "
+    r"(?: tier=(?P<tier>\S+))?(?: provider=(?P<provider>\S+))? model=(?P<model>\S+) "
     r"prompt_chars=(?P<prompt_chars>\d+) elapsed=(?P<elapsed>[\d.]+)s "
     r"(?:reply_chars=\d+ )?(?P<rest>OK|ERROR=.*)$"
 )

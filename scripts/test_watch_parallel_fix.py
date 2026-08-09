@@ -981,6 +981,80 @@ class ParseManifestLogTieredTests(unittest.TestCase):
             self.assertEqual(entries, [("2026-07-21T10:00:00", "critique", 12.3, True, "1", "T3")])
 
 
+class ManifestProviderTokenTests(unittest.TestCase):
+    """Copied verbatim from a live manifest.log, which is the only fixture
+    that would have caught this: the provider scoreboard (#218) added a
+    `provider=` token between `tier=` and `model=`, MANIFEST_ENTRY_RE was
+    never widened, and every fixture in this file predated the token -- so
+    the suite stayed green while the structured parse matched 0 of 30038
+    real lines and both dashboard panels reading it went blind."""
+
+    LIVE_OK = ("2026-08-09T13:11:42 phase=fixer worker=JPEG tier=T1 provider=theclawbay "
+               "model=gpt-5.6-sol prompt_chars=306221 elapsed=14.9s reply_chars=46 OK")
+    LIVE_ERROR = ("2026-08-09T13:12:00 phase=reviewer worker=CRW tier=T2 provider=theclawbay "
+                  "model=gpt-5.6-sol prompt_chars=900 elapsed=45.0s ERROR=<urlopen error>")
+
+    def _write(self, tmpdir, *lines):
+        path = Path(tmpdir) / "manifest.log"
+        path.write_text("".join(line + "\n" for line in lines))
+        return path
+
+    def test_live_line_with_provider_token_parses(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write(tmpdir, self.LIVE_OK)
+            self.assertEqual(
+                parse_manifest_log(path),
+                [("2026-08-09T13:11:42", "fixer", 14.9, True, "JPEG")])
+
+    def test_live_line_keeps_its_tier(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write(tmpdir, self.LIVE_OK)
+            self.assertEqual(
+                parse_manifest_log_tiered(path),
+                [("2026-08-09T13:11:42", "fixer", 14.9, True, "JPEG", "T1")])
+
+    def test_error_line_with_provider_token_parses(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write(tmpdir, self.LIVE_ERROR)
+            self.assertEqual(
+                parse_manifest_log_tiered(path),
+                [("2026-08-09T13:12:00", "reviewer", 45.0, False, "CRW", "T2")])
+
+    def test_provider_without_tier_still_parses(self):
+        # The two tokens are independently optional; nothing guarantees a
+        # writer emits both.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write(
+                tmpdir,
+                "2026-08-09T13:11:42 phase=fixer worker=JPEG provider=theclawbay "
+                "model=gpt-5.6-sol prompt_chars=306221 elapsed=14.9s reply_chars=46 OK")
+            self.assertEqual(
+                parse_manifest_log_tiered(path),
+                [("2026-08-09T13:11:42", "fixer", 14.9, True, "JPEG", "T1")])
+
+    def test_pre_provider_lines_still_parse(self):
+        # 30038 lines of history have no provider token. Widening the
+        # pattern may not orphan them.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write(
+                tmpdir,
+                "2026-07-21T10:00:00 phase=fixer worker=1 model=gpt-5.6-sol prompt_chars=1200 "
+                "elapsed=12.3s reply_chars=500 OK")
+            self.assertEqual(
+                parse_manifest_log_tiered(path),
+                [("2026-07-21T10:00:00", "fixer", 12.3, True, "1", "T1")])
+
+    def test_retry_lines_stay_excluded(self):
+        # RETRY carries no elapsed of its own and is deliberately not a
+        # settled outcome -- the provider token must not smuggle it in.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write(
+                tmpdir,
+                "2026-08-09T13:11:00 phase=fixer worker=JPEG tier=T1 provider=theclawbay "
+                "model=gpt-5.6-sol RETRY connection reset")
+            self.assertEqual(parse_manifest_log(path), [])
+
+
 class TierKpiStatsTests(unittest.TestCase):
     def test_empty_inputs_yield_empty_stats(self):
         self.assertEqual(tier_kpi_stats([], []), {})
