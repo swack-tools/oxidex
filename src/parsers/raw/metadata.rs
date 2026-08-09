@@ -428,6 +428,10 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     // StripOffsets, and this parser folds every IFD past IFD1 into the IFD0 namespace.
     let mut cr2_preview_image_start: Option<u32> = None;
 
+    // Priority and pixel area of the CR2 IFD whose dimensions are currently
+    // published. This keeps selection in the normal IFD tag-emission path.
+    let mut cr2_image_dimensions_rank: Option<(u8, u64)> = None;
+
     // Add format-specific tag to identify file type
     metadata.insert(
         "File:FileType".to_string(),
@@ -465,6 +469,61 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 let mut camera_make: Option<String> = None;
                 let mut dng_adobe_private_data: Option<Vec<u8>> = None;
 
+                // ImageWidth and ImageHeight occur in multiple CR2 IFDs.
+                // Compute this IFD's complete pair and its TIFF subfile
+                // priority before emitting either component, so the pair
+                // cannot be assembled from two different directories.
+                let cr2_ifd_dimensions = if format == RawFormat::CanonCR2 {
+                    let mut width = None;
+                    let mut height = None;
+                    let mut new_subfile_type = None;
+                    let mut subfile_type = None;
+
+                    for (tag_id, field_type, _value_count, raw_bytes) in &tags {
+                        let bytes = raw_bytes.as_ref();
+                        let scalar = match *field_type {
+                            3 => read_tiff_u16(bytes, byte_order).map(u32::from),
+                            4 => read_tiff_u32(bytes, byte_order),
+                            _ => None,
+                        };
+                        match *tag_id {
+                            0x0100 => width = scalar,
+                            0x0101 => height = scalar,
+                            0x00FE => new_subfile_type = scalar,
+                            0x00FF => subfile_type = scalar,
+                            _ => {}
+                        }
+                    }
+
+                    match (width, height) {
+                        (Some(width), Some(height)) if width != 0 && height != 0 => {
+                            // NewSubfileType bit 0 identifies a reduced image.
+                            // Legacy SubfileType uses 1 for full resolution and
+                            // 2 for reduced resolution.
+                            let priority = if let Some(value) = new_subfile_type {
+                                if value & 1 == 0 { 2 } else { 0 }
+                            } else if let Some(value) = subfile_type {
+                                match value {
+                                    1 => 2,
+                                    2 => 0,
+                                    _ => 1,
+                                }
+                            } else {
+                                1
+                            };
+                            Some((
+                                priority,
+                                u64::from(width) * u64::from(height),
+                                width,
+                                height,
+                            ))
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+
                 // Convert tags to metadata
                 if format == RawFormat::AdobeDNG && ifd_index == 0 {
                     if let Some(thumbnail) = rebuild_dng_thumbnail_tiff(data, &tags, byte_order) {
@@ -476,6 +535,33 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 }
                 for (tag_id, field_type, value_count, raw_bytes) in &tags {
                     let bytes = raw_bytes.as_ref();
+
+                    if format == RawFormat::CanonCR2
+                        && matches!(*tag_id, 0x0100 | 0x0101)
+                        && let Some((priority, area, width, height)) = cr2_ifd_dimensions
+                    {
+                        if cr2_image_dimensions_rank
+                            .is_none_or(|current| (priority, area) > current)
+                        {
+                            metadata.insert(
+                                lookup_tag_name(0x0100, "EXIF"),
+                                TagValue::new_integer(i64::from(width)),
+                            );
+                            metadata.insert(
+                                lookup_tag_name(0x0101, "EXIF"),
+                                TagValue::new_integer(i64::from(height)),
+                            );
+                            cr2_image_dimensions_rank = Some((priority, area));
+                        }
+                        // Both dimensions were handled as one candidate above.
+                        // Never let generic per-tag insertion split the pair or
+                        // let a later reduced-resolution IFD overwrite it.
+                        //
+                        // Only skip when this IFD actually yielded a pair: an IFD
+                        // carrying just one of the two still has to reach the
+                        // normal path below, or that lone dimension is dropped.
+                        continue;
+                    }
 
                     // RW2 tag 0x002e contains the JPEG preview whose EXIF IFD
                     // carries a handful of standard EXIF tags omitted from the
@@ -9475,6 +9561,77 @@ mod rational_array_tests {
         assert_eq!(
             metadata.get("EXIF:PreviewImage"),
             Some(&TagValue::new_binary(jpeg.to_vec()))
+        );
+    }
+
+    #[test]
+    fn cr2_publishes_the_primary_ifd_dimensions_and_no_dummy_preview() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
+        let path = concat!(
+            "/tmp/oxidex-exiftool-cache/combined-samples/",
+            "CanonRaw.cr2"
+        );
+        let data = std::fs::read(path).expect("read pinned CR2 fixture");
+        let metadata =
+            parse_raw_metadata(&data, RawFormat::CanonCR2).expect("parse pinned CR2 fixture");
+
+        // Ground truth, ExifTool 13.59: `EXIF:ImageWidth` 1536, `EXIF:ImageHeight`
+        // 1024 -- the full-resolution IFD, not the 384x256 reduced one this file
+        // also carries and which the per-tag emission path used to publish last.
+        assert_eq!(
+            metadata.get("EXIF:ImageWidth"),
+            Some(&TagValue::new_integer(1536))
+        );
+        assert_eq!(
+            metadata.get("EXIF:ImageHeight"),
+            Some(&TagValue::new_integer(1024))
+        );
+
+        // The offsets stay visible, but the 26 bytes they point at are the
+        // literal text `<Dummy preview image data>`. ExifTool refuses it --
+        // `-b -PreviewImage` returns "[minor] PreviewImage is not a valid JPEG
+        // image" -- so publishing those bytes under the real tag name would be
+        // a plausible-looking lie. Absence is the correct answer.
+        assert_eq!(
+            metadata.get("EXIF:PreviewImageStart"),
+            Some(&TagValue::new_integer(8680))
+        );
+        assert_eq!(
+            metadata.get("EXIF:PreviewImageLength"),
+            Some(&TagValue::new_integer(26))
+        );
+        assert_eq!(metadata.get("EXIF:PreviewImage"), None);
+    }
+
+    /// A CR2 IFD carrying only ONE of the two dimensions must still emit it.
+    ///
+    /// Pair selection deliberately skips the generic per-tag insertion so the
+    /// two halves can never come from different directories -- but skipping
+    /// unconditionally, including when this IFD yielded no pair at all, silently
+    /// dropped the lone tag instead.
+    #[test]
+    fn cr2_ifd_with_only_a_width_still_emits_it() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II");
+        data.extend_from_slice(&42u16.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes());
+        data.extend_from_slice(&1u16.to_le_bytes()); // one entry
+        data.extend_from_slice(&0x0100u16.to_le_bytes()); // ImageWidth, no height
+        data.extend_from_slice(&3u16.to_le_bytes()); // SHORT
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&1600u16.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
+
+        // The generic per-tag path namespaces by directory, so a lone dimension
+        // keeps landing under IFD0: exactly as it did before pair selection
+        // existed. Only a complete pair is republished under EXIF:.
+        let metadata = parse_raw_metadata(&data, RawFormat::CanonCR2).expect("parse synthetic CR2");
+        assert_eq!(
+            metadata.get("IFD0:ImageWidth"),
+            Some(&TagValue::new_integer(1600))
         );
     }
 
