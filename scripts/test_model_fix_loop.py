@@ -1,3 +1,4 @@
+import contextlib
 import datetime
 import difflib
 import email.utils
@@ -16,6 +17,7 @@ import urllib.error
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
+import exiftool_oracle
 import model_fix_loop
 from model_fix_loop import (
     ARCHITECTURE_PRIMER,
@@ -122,6 +124,10 @@ from model_fix_loop import (
     git_checkout_clean,
     git_commit,
     render_request_budget_footer,
+    REQUEST_FREE_FOOTER,
+    request_answer_served,
+    DEFAULT_MAX_REVIEW_ROUNDS,
+    DEFAULT_MAX_REQUEST_TURNS_CEILING,
     endpoint_park,
     endpoint_park_clear,
     endpoint_park_remaining,
@@ -4613,6 +4619,7 @@ class AdaptiveDiffFormatGuidanceTests(unittest.TestCase):
     NO_DIFF_SPELLINGS = (
         "no diff in model response",
         "no diff in model response (exhausted request budget)",
+        "no diff in model response (hit the 250-REQUEST safety ceiling)",
         "no diff in model response (exhausted verify budget)",
         "no diff in model response (patch chunking exceeded safety limit)",
     )
@@ -5505,15 +5512,89 @@ class AttemptBuildTests(unittest.TestCase):
     # REQUEST because nothing in the conversation ever told it how many
     # investigation turns it had or how many were left, and the one
     # "stop investigating" message only arrived AFTER the budget was gone.
+    #
+    # Reading is now free and unlimited, so the visibility requirement
+    # INVERTED: the model must be told the reads are free, in words. Staying
+    # silent would leave it rationing against the cap it used to have, which
+    # is the same defect wearing the opposite sign.
 
-    def test_every_request_answer_ends_with_the_remaining_budget(self):
+    def test_reading_real_files_is_free_and_unlimited(self):
+        # Far more distinct REQUESTs than max_request_turns, every one of
+        # them resolving. None may be charged, and the attempt must still
+        # reach a diff rather than dying on an exhausted budget.
+        seen = []
+        reads = 0
+
+        def fake_call_model(messages, *a):
+            nonlocal reads
+            seen.append(messages[-1]["content"])
+            if reads < 12:
+                reads += 1
+                return f"REQUEST: src/f{reads}.rs"
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            for i in range(1, 13):
+                (repo / "src" / f"f{i}.rs").write_text(f"fn f{i}() {{}}\n")
+            built, reason, diff, _ = attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, max_request_turns=3),   # 12 reads >> 3
+                repo_root=repo,
+            )
+        self.assertTrue(built, reason)
+        answers = seen[1:13]
+        self.assertEqual(len(answers), 12)
+        for i, answer in enumerate(answers, start=1):
+            self.assertIn(f"fn f{i}() {{}}", answer)          # content came first
+            self.assertIn("Reading is free", answer)
+            self.assertNotIn("wasted-request", answer)
+
+    def test_served_answers_end_with_the_free_notice(self):
         seen = []
 
         def fake_call_model(messages, *a):
-            if messages[-1]["role"] == "user" and len(seen) < 3:
-                seen.append(messages[-1]["content"])
+            seen.append(messages[-1]["content"])
             if len(seen) < 3:
-                return "REQUEST: src/x.rs"
+                return f"REQUEST: src/x{len(seen)}.rs"
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "x1.rs").write_text("fn a() {}\n")
+            (repo / "src" / "x2.rs").write_text("fn b() {}\n")
+            attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, max_request_turns=5),
+                repo_root=repo,
+            )
+        # seen[0] is the original prompt; seen[1..] are REQUEST answers.
+        self.assertIn("fn a() {}", seen[1])   # the answer itself still comes first
+        # ...and the notice must be the LAST thing in the message, same
+        # prompt-cache reasoning as the old counter.
+        self.assertTrue(seen[1].rstrip().endswith("than another read.)"), seen[1])
+        self.assertIn("do not count against any budget", seen[1])
+
+    def test_a_repeat_of_an_already_served_path_is_charged(self):
+        # Resolving is not enough to be free: re-serving content the model
+        # already has advances nothing, and an A/B/A/B ping-pong would
+        # otherwise never terminate below the max_request_repeats threshold.
+        seen = []
+
+        def fake_call_model(messages, *a):
+            seen.append(messages[-1]["content"])
+            if len(seen) < 3:
+                return "REQUEST: src/x.rs"     # the SAME path twice
             return "```diff\n--- a/x\n+++ b/x\n```\n"
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -5529,22 +5610,46 @@ class AttemptBuildTests(unittest.TestCase):
                 config=dict(CONFIG, max_request_turns=5),
                 repo_root=repo,
             )
-        # seen[0] is the original prompt; seen[1..] are REQUEST answers.
-        self.assertIn("(investigation turn 1 of 5 -- 4 left)", seen[1])
-        self.assertIn("(investigation turn 2 of 5 -- 3 left)", seen[2])
-        # ...and the counter must be the LAST thing in the message: it changes
-        # every turn, so anywhere but the tail it would break the provider's
-        # cached prefix for every later call in the attempt.
-        self.assertTrue(seen[1].rstrip().endswith("4 left)"), seen[1])
-        self.assertIn("fn a() {}", seen[1])   # the answer itself still comes first
+        self.assertIn("Reading is free", seen[1])              # first ask: free
+        self.assertIn("wasted-request 1 of 5", seen[2])        # second ask: charged
 
-    def test_final_investigation_turn_is_told_so_before_it_is_spent(self):
+    def test_distinct_line_ranges_of_one_file_stay_free(self):
+        # Different ranges are different content, so they must NOT be
+        # charged as repeats even though the path is identical.
+        seen = []
+
+        def fake_call_model(messages, *a):
+            seen.append(messages[-1]["content"])
+            if len(seen) == 1:
+                return "REQUEST: src/x.rs:1-2"
+            if len(seen) == 2:
+                return "REQUEST: src/x.rs:3-4"
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "x.rs").write_text("l1\nl2\nl3\nl4\n")
+            attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, max_request_turns=5),
+                repo_root=repo,
+            )
+        self.assertIn("Reading is free", seen[1])
+        self.assertIn("Reading is free", seen[2])
+        self.assertNotIn("wasted-request", seen[2])
+
+    def test_final_wasted_turn_is_told_so_before_it_is_spent(self):
         answers = []
 
         def fake_call_model(messages, *a):
             if len(answers) < 2:
                 answers.append(messages[-1]["content"])
-                return "REQUEST: src/x.rs"
+                return "REQUEST: src/nope.rs"   # never resolves -> charged
             return "```diff\n--- a/x\n+++ b/x\n```\n"
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -5560,15 +5665,24 @@ class AttemptBuildTests(unittest.TestCase):
                 config=dict(CONFIG, max_request_turns=1),
                 repo_root=repo,
             )
-        final = answers[1]   # the answer to the one and only allowed REQUEST
+        final = answers[1]   # the answer to the one and only allowed waste
         self.assertIn("this was your LAST", final)
-        self.assertIn("another REQUEST will be discarded", final)
+        self.assertIn("will be discarded", final)
         self.assertIn("best-effort diff", final)
 
     def test_budget_footer_wording(self):
-        self.assertEqual(render_request_budget_footer(3, 5),
-                         "(investigation turn 3 of 5 -- 2 left)")
-        last = render_request_budget_footer(5, 5)
+        served = render_request_budget_footer(True, 0, 5)
+        self.assertIs(served, REQUEST_FREE_FOOTER)
+        self.assertIn("no limit", served)
+        # The free footer is a CONSTANT -- a counter here would invalidate
+        # the provider's cached prefix on every read, and reads are now the
+        # thing we want to be cheapest.
+        self.assertEqual(served, render_request_budget_footer(True, 4, 5))
+
+        mid = render_request_budget_footer(False, 3, 5)
+        self.assertIn("wasted-request 3 of 5", mid)
+        self.assertIn("2 left", mid)
+        last = render_request_budget_footer(False, 5, 5)
         self.assertIn("this was your LAST", last)
         self.assertNotIn("2 left", last)
 
@@ -5598,7 +5712,97 @@ class AttemptBuildTests(unittest.TestCase):
             )
         pivot = [m for m in seen if "requested 'src/x.rs' 3 times" in m]
         self.assertEqual(len(pivot), 1)
-        self.assertIn("(investigation turn 3 of 8 -- 5 left)", pivot[0])
+        # A dead-end repeat is unproductive by definition, so it is charged
+        # and shows the wasted-request counter. It is the SECOND charge, not
+        # the third: the very first ask for this path served real content
+        # and so cost nothing.
+        self.assertIn("wasted-request 2 of 8", pivot[0])
+
+    def test_total_requests_stop_at_the_runaway_safety_ceiling(self):
+        # Free is not infinite. A model reading real file after real file
+        # without ever writing a diff is a loop, and no amount of raising
+        # max_request_turns would stop it -- these reads are not charged
+        # against that budget at all. The ceiling is the only thing that
+        # ends it, and it must say so distinguishably in the reason.
+        calls = []
+
+        def fake_call_model(messages, *a):
+            calls.append(1)
+            return f"REQUEST: src/f{len(calls)}.rs"   # always novel, always resolves
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            for i in range(1, 20):
+                (repo / "src" / f"f{i}.rs").write_text(f"fn f{i}() {{}}\n")
+            built, reason, diff, _ = attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: self.fail("should not apply"),
+                cargo_build_fn=lambda root: self.fail("should not build"),
+                git_checkout_clean_fn=lambda root: None,
+                config=dict(CONFIG, max_request_turns=99, max_request_turns_ceiling=5),
+                repo_root=repo,
+            )
+        self.assertFalse(built)
+        # 5 served turns + the one that overran + exactly ONE forced retry.
+        self.assertEqual(len(calls), 7)
+        self.assertIn("safety ceiling", reason)
+        self.assertNotIn("exhausted request budget", reason)
+        # Still classified as a response-format failure by the lessons
+        # ranker, which keys off this prefix.
+        self.assertTrue(reason.startswith("no diff in model response"), reason)
+
+    def test_default_request_ceiling_is_far_above_real_investigation(self):
+        # A backstop, not a budget: the longest genuine transcripts read on
+        # the order of 30 files, so a default anywhere near that would be a
+        # cap on reading wearing a different name.
+        self.assertGreaterEqual(DEFAULT_MAX_REQUEST_TURNS_CEILING, 100)
+
+
+class RequestAnswerServedTests(unittest.TestCase):
+    """The productive/unproductive split that decides whether a REQUEST is
+    free. A whitelist of the three shapes resolve_request uses for a real
+    answer -- anything unrecognized is charged, which is the side that
+    stays bounded."""
+
+    def test_the_three_served_shapes_are_free(self):
+        self.assertTrue(request_answer_served("Contents of src/x.rs:\nfn a() {}"))
+        self.assertTrue(request_answer_served("Lines 40-120 of src/x.rs:\n40: fn a() {}"))
+        self.assertTrue(request_answer_served("Hex dump of a.jpg (12 bytes total, showing first 12):\n..."))
+
+    def test_a_rejection_is_charged(self):
+        self.assertFalse(request_answer_served(
+            "Could not resolve 'src/nope.rs' under the samples dir or repo root."))
+
+    def test_a_past_the_end_range_is_charged(self):
+        self.assertFalse(request_answer_served(
+            "src/x.rs has only 12 lines -- the requested range 400-EOF starts past the end. "
+            "Request a range within the file."))
+
+    def test_an_unrecognized_shape_is_charged_not_waved_through(self):
+        self.assertFalse(request_answer_served("Something nobody anticipated"))
+        self.assertFalse(request_answer_served(""))
+
+    def test_resolve_request_really_produces_the_whitelisted_shapes(self):
+        # The whitelist and resolve_request must not drift: if a fourth
+        # success shape is ever added without being registered, reads of it
+        # silently start costing budget.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            samples = repo / "samples"
+            samples.mkdir()
+            (repo / "src").mkdir()
+            (repo / "src" / "x.rs").write_text("l1\nl2\nl3\n")
+            (samples / "a.jpg").write_bytes(b"\xff\xd8\xff\xe0")
+            self.assertTrue(request_answer_served(
+                resolve_request("src/x.rs", repo, samples)))
+            self.assertTrue(request_answer_served(
+                resolve_request("src/x.rs:2-3", repo, samples)))
+            self.assertTrue(request_answer_served(
+                resolve_request("a.jpg", repo, samples)))
+            self.assertFalse(request_answer_served(
+                resolve_request("src/nope.rs", repo, samples)))
 
     def test_request_with_no_turns_left_forces_exactly_one_diff_only_retry(self):
         calls = []
@@ -6521,13 +6725,170 @@ class FixGapReviewTests(HermeticFixGapTestCase):
             cargo_test_workspace_fn=lambda root: (True, ""),
             recheck_fn=lambda fmt: 0,
             repo_root=Path("/fake/repo"),
-            max_repair_rounds=2,
+            max_repair_rounds=2, max_review_rounds=0,
         )
 
         self.assertEqual(result["status"], "failed")
         self.assertIn("rejected by review", result["reason"])
         self.assertIn("hardcodes the sample value", result["reason"])
         self.assertEqual(len(result["rounds"]), 2)
+
+
+class FixGapReviewRoundExtensionTests(HermeticFixGapTestCase):
+    """A reviewer rejection is not like a build failure. The patch already
+    compiled, closed gaps and passed the workspace tests -- every mechanical
+    gate agreed, and what is left is a specific, actionable argument about
+    genuineness. That argument is worth having more than once, so each
+    rejection buys one extra round (up to max_review_rounds) on top of
+    max_repair_rounds, while failures that never got past the machine
+    gates stay capped at max_repair_rounds."""
+
+    @staticmethod
+    def _always_builds(messages, **kwargs):
+        messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
+        return True, None, "--- a/x\n+++ b/x\n", messages
+
+    def _run(self, review_fn, **overrides):
+        kwargs = dict(
+            attempt_build_fn=self._always_builds,
+            review_fn=review_fn,
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root, **_kw: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+        kwargs.update(overrides)
+        return fix_gap(make_gap(gap_count=2), CONFIG, **kwargs)
+
+    def test_rejections_extend_the_budget_to_repair_plus_review_rounds(self):
+        result = self._run(
+            lambda g, diff, config, **kw: (False, "hardcodes the sample value"),
+            max_repair_rounds=5, max_review_rounds=5,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(len(result["rounds"]), 10)
+
+    def test_the_default_is_five_extra_review_rounds(self):
+        self.assertEqual(DEFAULT_MAX_REVIEW_ROUNDS, 5)
+        # No max_review_rounds override -- the shipped default must be what
+        # actually reaches the loop, not just what the constant says.
+        result = self._run(
+            lambda g, diff, config, **kw: (False, "hardcodes the sample value"),
+            max_repair_rounds=2,
+        )
+        self.assertEqual(len(result["rounds"]), 7)   # 2 base + 5 extra
+
+    def test_build_failures_do_not_earn_extra_rounds(self):
+        # The whole point of a separate budget: a candidate that never
+        # compiles stays capped at max_repair_rounds however many times it
+        # fails, so doubling the reviewer's patience does not double the
+        # cost of every doomed target in the fleet.
+        def never_builds(messages, **kwargs):
+            return False, "error[E0308]: mismatched types", None, messages
+
+        result = self._run(
+            lambda *a, **k: self.fail("review must not run without a build"),
+            attempt_build_fn=never_builds,
+            critique_fn=lambda *a, **k: "try harder",
+            max_repair_rounds=3, max_review_rounds=5,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(len(result["rounds"]), 3)
+
+    def test_an_extra_round_can_actually_land_the_fix(self):
+        # The extension must buy a USED round, not just a longer count:
+        # rejection 5 comes after the base budget of 3 is spent, and the
+        # approval on round 6 still has to commit.
+        commits = []
+        calls = []
+
+        def review(g, diff, config, **kw):
+            calls.append(1)
+            if len(calls) <= 5:
+                return False, f"C1 wrong value (objection {len(calls)})"
+            return True, ""
+
+        result = self._run(
+            review,
+            git_commit_fn=lambda msg, root, **_kw: commits.append(msg),
+            max_repair_rounds=3, max_review_rounds=5,
+        )
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(len(calls), 6)
+        self.assertEqual(len(commits), 1)
+
+    def test_max_review_rounds_zero_restores_the_old_flat_budget(self):
+        result = self._run(
+            lambda g, diff, config, **kw: (False, "nope"),
+            max_repair_rounds=4, max_review_rounds=0,
+        )
+        self.assertEqual(len(result["rounds"]), 4)
+
+
+class FixGapRejectionHandoffTests(HermeticFixGapTestCase):
+    """What the fixer is actually told when the reviewer pushes back.
+
+    Across ten rounds a fixer shown only the LATEST objection will satisfy
+    it by reintroducing whatever it was rejected for three rounds ago, then
+    oscillate until the budget is gone. Every rejection so far therefore
+    goes back verbatim, marked as still binding."""
+
+    def _collect_handoffs(self, reasons):
+        handoffs = []
+        calls = []
+
+        def fake_attempt_build(messages, **kwargs):
+            if messages[-1]["role"] == "user" and len(messages) > 1:
+                handoffs.append(messages[-1]["content"])
+            messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
+            return True, None, "--- a/x\n+++ b/x\n", messages
+
+        def review(g, diff, config, **kw):
+            calls.append(1)
+            return False, reasons[min(len(calls), len(reasons)) - 1]
+
+        fix_gap(
+            make_gap(gap_count=2), CONFIG,
+            attempt_build_fn=fake_attempt_build,
+            review_fn=review,
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root, **_kw: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+            max_repair_rounds=len(reasons) + 1, max_review_rounds=0,
+        )
+        return handoffs
+
+    def test_first_rejection_is_stated_plainly(self):
+        first = self._collect_handoffs(["C5 hardcodes the sample value"])[0]
+        self.assertIn("A reviewer rejected this fix: C5 hardcodes the sample value", first)
+        self.assertNotIn("still binding", first)
+
+    def test_later_rejections_carry_every_earlier_objection(self):
+        handoffs = self._collect_handoffs([
+            "C5 hardcodes the sample value",
+            "C3 emits the tag twice",
+            "C4 invents a fixture",
+        ])
+        third = handoffs[2]
+        self.assertIn("rejection 3", third)
+        self.assertIn("C4 invents a fixture", third)          # the newest
+        self.assertIn("1. C5 hardcodes the sample value", third)   # and the older two
+        self.assertIn("2. C3 emits the tag twice", third)
+        self.assertIn("still binding", third)
+
+    def test_handoff_says_the_tree_was_reverted_and_reads_are_free(self):
+        # Both are things the fixer gets wrong without being told: it will
+        # otherwise write a diff against its own rejected patch, and it will
+        # resend from memory rather than re-reading.
+        first = self._collect_handoffs(["C1 wrong value"])[0]
+        self.assertIn("reverted", first)
+        self.assertIn("ORIGINAL files", first)
+        self.assertIn("REQUEST any files you need", first)
 
     def test_review_uses_fix_gaps_injected_call_model_fn(self):
         gap = make_gap(gap_count=2)
@@ -6942,7 +7303,11 @@ class FixGapK1LessonTests(HermeticFixGapTestCase):
                 cargo_test_targeted_fn=lambda root, f: (True, ""),
                 git_checkout_clean_fn=lambda root: None,
                 recheck_fn=lambda fmt: 0,
-                max_repair_rounds=1,
+                # max_review_rounds=0 pins this to a single round: this test
+                # is about the SHAPE of the lesson row, and the extra
+                # reviewer rounds (DEFAULT_MAX_REVIEW_ROUNDS) would
+                # otherwise write one row per rejection.
+                max_repair_rounds=1, max_review_rounds=0,
                 knowledge_home=tmpdir, worker_label="w1",
             )
             events = [e for e in _read_lessons(tmpdir) if e["event"] == "review_rejected"]
@@ -7231,6 +7596,29 @@ class FixGapK5EvidenceTests(HermeticFixGapTestCase):
         self.assertEqual(result["review_flags"], ["UNVERIFIABLE:UNKNOWN"])
 
 
+#: A resolved oracle that needs no perl, no ExifTool checkout and no
+#: subprocess. Tests below patch model_fix_loop.shared_exiftool_oracle with
+#: this rather than letting the real one resolve, because they ALSO patch
+#: subprocess.run -- and `model_fix_loop.subprocess` and
+#: `exiftool_oracle.subprocess` are the same module object, so patching
+#: "model_fix_loop.subprocess.run" replaces subprocess.run for the whole
+#: process. exiftool_oracle.choose_perl() shells out to probe each candidate
+#: interpreter for its required modules; handed a MagicMock it concludes no
+#: perl is capable and raises OracleError, which
+#: default_extract_live_evidence correctly degrades to "".
+#:
+#: That made the rendering test depend on exiftool_oracle._SHARED already
+#: being memoized by some earlier unmocked resolution: with the memo warm it
+#: passed, cold it silently asserted against "". Order-dependent either way,
+#: so the oracle is stubbed here and its failure mode tested explicitly
+#: instead (see test_degrades_to_empty_when_the_oracle_is_unresolvable).
+FAKE_ORACLE = exiftool_oracle.Oracle(
+    argv=["/fake/perl", "/fake/exiftool"],
+    version="13.59", pinned_version="13.59",
+    source="test stub", interpreter="/fake/perl", missing_modules=[],
+)
+
+
 class DefaultExtractLiveEvidenceTests(unittest.TestCase):
     def test_returns_empty_when_no_sample_path(self):
         from model_fix_loop import default_extract_live_evidence
@@ -7242,19 +7630,64 @@ class DefaultExtractLiveEvidenceTests(unittest.TestCase):
             self.assertEqual(
                 default_extract_live_evidence(Path(tmpdir), "sample.jpg", ["EXIF:Make"]), "")
 
-    @patch("model_fix_loop.shutil.which", return_value="/usr/bin/exiftool")
-    @patch("model_fix_loop.subprocess.run")
-    def test_renders_matched_tag_values(self, mock_run, mock_which):
-        from model_fix_loop import default_extract_live_evidence
+    @contextlib.contextmanager
+    def _built_repo(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             binary_dir = repo / "target" / "debug"
             binary_dir.mkdir(parents=True)
             (binary_dir / "oxidex").write_text("#!/bin/sh\n")
+            yield repo
+
+    @patch("model_fix_loop.shared_exiftool_oracle", return_value=FAKE_ORACLE)
+    @patch("model_fix_loop.subprocess.run")
+    def test_renders_matched_tag_values(self, mock_run, mock_oracle):
+        from model_fix_loop import default_extract_live_evidence
+        with self._built_repo() as repo:
             mock_run.return_value = MagicMock(stdout='[{"EXIF:Make": "Canon"}]')
             result = default_extract_live_evidence(repo, "sample.jpg", ["EXIF:Make"])
         self.assertIn("EXIF:Make", result)
         self.assertIn("Canon", result)
+
+    @patch("model_fix_loop.shared_exiftool_oracle", return_value=FAKE_ORACLE)
+    @patch("model_fix_loop.subprocess.run")
+    def test_grades_against_the_pinned_oracle_not_a_path_exiftool(self, mock_run, mock_oracle):
+        # AGENTS.md: a PATH exiftool is a different release from the one the
+        # tables were transcribed from, and the skew manufactures phantom
+        # regressions AND phantom fixes. The exiftool half of this evidence
+        # must come from the oracle's own argv.
+        from model_fix_loop import default_extract_live_evidence
+        with self._built_repo() as repo:
+            mock_run.return_value = MagicMock(stdout='[{"EXIF:Make": "Canon"}]')
+            default_extract_live_evidence(repo, "sample.jpg", ["EXIF:Make"])
+        exiftool_argv = mock_run.call_args_list[0].args[0]
+        self.assertEqual(exiftool_argv[:2], ["/fake/perl", "/fake/exiftool"])
+
+    @patch("model_fix_loop.shared_exiftool_oracle", return_value=FAKE_ORACLE)
+    @patch("model_fix_loop.subprocess.run")
+    def test_float_values_are_not_normalized_on_one_side_only(self, mock_run, mock_oracle):
+        # parse_float=str on BOTH sides: ExifTool's "1.80" becoming 1.8 under
+        # default float handling would render `exiftool='1.80' oxidex=1.8`
+        # for a byte-identical pair and invite the reviewer to reject a
+        # correct fix.
+        from model_fix_loop import default_extract_live_evidence
+        with self._built_repo() as repo:
+            mock_run.return_value = MagicMock(stdout='[{"EXIF:FNumber": 1.80}]')
+            result = default_extract_live_evidence(repo, "sample.jpg", ["EXIF:FNumber"])
+        self.assertIn("exiftool='1.80' oxidex='1.80'", result)
+
+    @patch("model_fix_loop.shared_exiftool_oracle",
+           side_effect=exiftool_oracle.OracleError("no usable perl"))
+    @patch("model_fix_loop.subprocess.run")
+    def test_degrades_to_empty_when_the_oracle_is_unresolvable(self, mock_run, mock_oracle):
+        # Reviewer evidence is advisory, never a hard dependency of the
+        # review call -- an unresolvable/skewed/degraded oracle must yield
+        # "" rather than raising and sinking an otherwise good patch.
+        from model_fix_loop import default_extract_live_evidence
+        with self._built_repo() as repo:
+            mock_run.return_value = MagicMock(stdout='[{"EXIF:Make": "Canon"}]')
+            self.assertEqual(
+                default_extract_live_evidence(repo, "sample.jpg", ["EXIF:Make"]), "")
 
 
 class DefaultEmissionScanTests(unittest.TestCase):

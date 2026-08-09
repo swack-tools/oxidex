@@ -86,7 +86,12 @@ that parser can change the output.
 
 ### Per repair round
 
-The worker runs up to `max_repair_rounds` (default 5) rounds. Each round:
+The round budget is **not fixed**. It starts at `max_repair_rounds` (default 5) and each
+*reviewer rejection* extends it by one, up to `max_review_rounds` (default 5) extra — so a
+candidate the reviewer keeps arguing with gets up to **10** rounds of back-and-forth, while one
+that merely fails to compile still gets 5. See "Why the reviewer gets a bigger budget" below.
+
+Each round:
 
 | # | Gate | Where | Rejects with |
 | --- | --- | --- | --- |
@@ -99,7 +104,7 @@ The worker runs up to `max_repair_rounds` (default 5) rounds. Each round:
 | 7 | **Targeted tests** (`cargo test --lib` for the format) | 5528–5537 | `targeted tests (…) regressed` |
 | 8 | **Duplicate-insertion check** | 5539–5545, `detect_duplicate_tag_insertion` 1238 | `duplicate: a handler for … already exists elsewhere` |
 | 9 | Evidence gathering (live re-extraction + emission scan) | 5550–5557 | *never rejects* — wrapped in `try/except`, degrades to empty |
-| 10 | **Reviewer model call** (APPROVE / REJECT / UNVERIFIABLE) | 5559–5562 | `rejected by review: …` |
+| 10 | **Reviewer model call** (APPROVE / REJECT / UNVERIFIABLE) | 5559–5562 | `rejected by review: …` — **and buys one extra round** |
 | 11 | **Full `cargo test --workspace`** | 5564–5578 | `cargo test --workspace regressed` |
 | 12 | Build evidence trailers | `_build_fix_gap_trailers` 5130 | — |
 | 13 | **`git commit`** | 5610–5614 | — |
@@ -115,6 +120,59 @@ Two ordering decisions are deliberate and worth naming:
 Gate 9 is intentionally not a gate. Evidence gathering feeds the reviewer better context, but a
 failure to collect it must not sink an otherwise good patch, so both collectors degrade to an
 empty string.
+
+### Why the reviewer gets a bigger budget
+
+`max_review_rounds` is a separate budget rather than a larger `max_repair_rounds`, because the
+two failure populations are not alike:
+
+- A **build failure, gap-count miss or test regression** is the model failing against a machine
+  that already told it exactly what was wrong. Five tries at that is generous; a sixth is usually
+  the same wrong idea again, and raising the shared budget would double the cost of every doomed
+  target in the fleet.
+- A **reviewer rejection** is different in kind. The patch compiled, the gap count moved, and the
+  targeted tests passed — every mechanical gate agreed. What is left is a judgment call about
+  genuineness (hardcoded sample values, double emission, invented fixtures — the `REVIEW_CHECKLIST`
+  C1–C5 items), and that is exactly the argument worth having more than once: the fixer is close,
+  and the objection is specific enough to act on.
+
+So the extra rounds are spent where the conversation is productive rather than spread evenly over
+failures that are not.
+
+Each retry hands back **every rejection so far**, not just the newest, explicitly marked as still
+binding. Without that, a fixer shown only the latest objection satisfies it by reintroducing
+whatever it was rejected for three rounds ago, and then oscillates between the two until the
+budget is gone — a failure mode that a longer loop makes worse, not better. The retry message also
+states that the working tree was reverted (so the next diff must apply to the original files, not
+to the rejected patch) and reminds the fixer that re-reading files is free.
+
+### Reading files is free
+
+The fixer may send as many `REQUEST: <path>` turns as it likes; productive ones cost it nothing
+and it is told so, in words, on every answer. This matters in both directions — a model that
+cannot see a budget cannot ration it, but a model that *can* see one **will** ration against it,
+so staying silent about the change would leave the fixer under-investigating against a cap that no
+longer exists.
+
+What is still bounded is *unproductive* investigation:
+
+| Knob | Default | Counts |
+| --- | --- | --- |
+| `max_request_turns` | 20 | REQUESTs whose path did not resolve, or that re-ask for something already served in full |
+| `max_request_repeats` | 3 | Identical REQUESTs before the answer is replaced by a pivot nudge |
+| `max_request_turns_ceiling` | 250 | **Total** REQUESTs per attempt, free ones included — a runaway backstop, never surfaced to the model |
+
+`max_request_turns` kept its name so existing `config.toml` files keep working; what changed is
+what it counts. The split is decided by `request_answer_served`, a whitelist of the three answer
+shapes `resolve_request` uses for real content — an unrecognized shape is charged rather than
+waved through, which is the side that stays bounded. Distinct line ranges of one file count as
+distinct reads (they are new content); a second ask for the identical request string does not.
+
+The ceiling exists because "free" is not "infinite": a model walking a generated directory file by
+file would otherwise spend an unbounded number of paid calls, and no amount of raising
+`max_request_turns` would stop it, since those reads are not charged against it at all. Hitting it
+produces its own reason string (`… (hit the 250-REQUEST safety ceiling)`) so it is distinguishable
+in the lessons ledger from an exhausted wasted-request budget.
 
 ### The `git apply` tolerance ladder
 

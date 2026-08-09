@@ -111,11 +111,22 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           (measured 2118s against timeout=1200). On expiry
                           the connection is closed and the request is
                           replayed, counting against max_retries.
-    max_request_turns      default 20 (worker only; how many REQUEST:
-                          <path> investigation turns -- see
-                          attempt_build/resolve_request -- the fixer gets
-                          before it's nudged, then required, to submit a
-                          diff instead of continuing to investigate)
+    max_request_turns      default 20 (worker only; how many UNPRODUCTIVE
+                          REQUEST: <path> turns -- a path that doesn't
+                          resolve, or a repeat of one already served -- the
+                          fixer gets before it's nudged, then required, to
+                          submit a diff. REQUESTs that actually serve it
+                          something new are FREE and unlimited; see
+                          attempt_build/resolve_request/request_answer_served)
+    max_request_turns_ceiling  default 250 (worker only; runaway backstop on
+                          TOTAL REQUESTs per attempt, free ones included --
+                          never shown to the model, reached only by a loop)
+    max_review_rounds      default 5 (worker only; EXTRA fix_gap rounds, on
+                          top of max_repair_rounds, that only a reviewer
+                          rejection can unlock -- one per rejection. A fix
+                          the reviewer keeps arguing with gets 5 + 5 = 10
+                          rounds of back-and-forth; one that won't compile
+                          still gets 5. See DEFAULT_MAX_REVIEW_ROUNDS.)
     max_retries            default 1000 (retries on a transient upstream
                           failure -- 5xx HTTPError, a connection-level
                           URLError (DNS/refused/TLS/stalled read), or a
@@ -2713,11 +2724,11 @@ def build_reply_shape_manifest(max_prompt_tokens):
     survives truncate_to_token_budget, which keeps the head)."""
     return f"""You are operating in an ephemeral, isolated git worktree; broken builds during investigation are expected and cost nothing -- probe aggressively with VERIFY rather than guessing.
 
-STRATEGY: bias toward attempting a real patch early rather than open-ended exploration. If the parser file(s) shown below already give you enough to sketch a plausible fix, send a VERIFY of your best-guess diff on turn 1 or 2 -- do not chain many REQUESTs first "just to be thorough" when you already have a workable hypothesis. Use the `cargo check` feedback from each VERIFY to correct course, and expect to iterate 2-3 VERIFY rounds (wrong field offset, wrong PrintConv string, missing import, etc.) before your final Plan + diff -- that loop is cheap and expected, and converges faster than exhaustive REQUEST-based investigation up front. Only REQUEST when you are genuinely missing information a VERIFY attempt can't surface (e.g. you don't know a sample's raw byte layout at all, or the relevant source file wasn't included below).
+STRATEGY: REQUEST is free -- reading real files costs you nothing and there is no limit on how many you read, so never submit a diff written from a guess about code you could simply have looked at. What you should not do is read AIMLESSLY: prefer the read that resolves a specific uncertainty over another one "just to be thorough". Alongside that, bias toward putting a real candidate in front of the compiler early: if the parser file(s) shown below already give you enough to sketch a plausible fix, send a VERIFY of your best-guess diff rather than continuing to investigate. Use the `cargo check` feedback from each VERIFY to correct course, and expect to iterate 2-3 VERIFY rounds (wrong field offset, wrong PrintConv string, missing import, etc.) before your final Plan + diff -- that loop is cheap and expected. REQUEST and VERIFY are complementary, not competing: REQUEST answers "what does this code/byte layout actually say", VERIFY answers "does my change compile and typecheck". Reach for whichever your current uncertainty calls for.
 
 Every reply must be exactly one of these four shapes:
 
-1. REQUEST: <path> -- see a source file or a sample file (a bare line, nothing else in the reply). Add a 1-indexed line range after a source path -- prefer one for anything large. All four shapes work: `:40-120` (that range), `:400-` (line 400 to end of file), `:-120` (start through line 120), `:400` (a window around line 400). You have a limited number of REQUEST turns per attempt and each answer tells you how many are left; when none are left you MUST reply with a diff.
+1. REQUEST: <path> -- see a source file or a sample file (a bare line, nothing else in the reply). Add a 1-indexed line range after a source path -- prefer one for anything large. All four shapes work: `:40-120` (that range), `:400-` (line 400 to end of file), `:-120` (start through line 120), `:400` (a window around line 400). These are UNLIMITED and free: read as many files as you need. Only two kinds of REQUEST are charged against a small allowance -- a path that does not resolve, and re-asking for something you were already shown in full -- and an answer tells you only when it charged you. So check the directory listing an unresolved path comes back with instead of guessing again, and re-read your own earlier answers instead of re-requesting them. Distinct line ranges of the same file are distinct reads and stay free.
 2. VERIFY -- trial-compile a candidate change without committing to it: the line "VERIFY" followed by exactly ONE ```diff fenced block. The diff is applied, `cargo check` runs, the tail of its output comes back, and the change is REVERTED -- your final diff must still contain the complete change.
 3. PATCH 1/N -- if your finished diff would exceed roughly {max_prompt_tokens} tokens (~{max_prompt_tokens * 4} characters) in one reply, split it into N consecutive chunks and send the first as the line "PATCH 1/N" followed by ONE ```diff fenced chunk; you'll be prompted for each next chunk. Chunks are concatenated in order before applying, so split anywhere (mid-hunk is fine) -- never repeat or skip lines across a boundary.
 4. Plan + diff -- first, 2-3 sentences: which tag(s) you're fixing, where in the code, what you learned from the previous turn's output, and (on a retry) what you're doing differently from the failed attempt(s) above and why. Then exactly ONE ```diff fenced block containing the complete unified diff.
@@ -4260,8 +4271,33 @@ def critique_failed_attempt(gap, diff, failure_kind, failure_detail, config,
 
 
 REQUEST_RE = re.compile(r"^REQUEST:\s*(.+)$", re.IGNORECASE)
-DEFAULT_MAX_REQUEST_TURNS = 20  # investigation turns before a diff is still required
+
+#: Reading files is FREE. A REQUEST that actually serves the fixer
+#: something it has not already seen does not consume any budget, however
+#: many of them it sends -- a fixer that wants to read thirty files before
+#: writing a line of Rust is a fixer doing its job, and the old flat cap of
+#: 20 investigation turns was rationing the cheapest thing in the loop.
+#: (The three answer shapes that count as "served" are the SERVED_* prefixes
+#: below; resolve_request builds every one of its successful answers from
+#: them, so the two cannot drift apart.)
+#:
+#: What is still budgeted is an UNPRODUCTIVE request: one whose path did
+#: not resolve, or one re-asking for a path already served in full. Those
+#: buy nothing, and they are the only shape a model can emit forever -- the
+#: repo has a finite number of real files, so free-but-productive requests
+#: terminate on their own while free-and-unproductive ones do not. The
+#: budget below is therefore a wasted-turn allowance, NOT a reading limit.
+DEFAULT_MAX_REQUEST_TURNS = 20  # unproductive (unresolved/repeat) REQUESTs before a diff is required
 DEFAULT_MAX_REQUEST_REPEATS = 3  # identical REQUESTs before a pivot nudge replaces the content
+
+#: Absolute ceiling on TOTAL REQUEST turns in one attempt_build, productive
+#: ones included. Same role as DEFAULT_MAX_PATCH_CHUNKS: not a budget the
+#: model is meant to feel, but a backstop so a pathological loop (a model
+#: walking a generated directory file by file, say) cannot spend an
+#: unbounded number of paid calls. Set far above any real investigation --
+#: the longest genuine transcripts read on the order of 30 files.
+DEFAULT_MAX_REQUEST_TURNS_CEILING = 250
+
 DEFAULT_HEXDUMP_BYTES = 2048
 
 PATCH_HEADER_RE = re.compile(r"^PATCH\s+(\d+)\s*/\s*(\d+)\b", re.IGNORECASE)
@@ -4273,10 +4309,29 @@ DEFAULT_MAX_VERIFY_TURNS = 10   # trial-compile turns per attempt_build invocati
 DEFAULT_MAX_CHECK_OUTPUT_CHARS = 3000  # tail-trim: Rust errors summarize at the end
 
 
-def render_request_budget_footer(turns_used, max_turns):
-    """The one-line investigation-budget notice appended to the END of every
-    REQUEST answer. `turns_used` is the count INCLUDING the turn being
-    answered.
+#: Footer on every REQUEST answer that actually served something. A
+#: CONSTANT string, deliberately: see rule 1 in render_request_budget_footer
+#: about the prompt cache. A per-turn counter here would invalidate the
+#: cached prefix on every read, which is exactly the cost we do not want to
+#: attach to reading now that reading is unlimited.
+REQUEST_FREE_FOOTER = (
+    "(Reading is free -- REQUEST as many files as you need, there is no limit on them "
+    "and they do not count against any budget. Only a path that does not resolve, or a "
+    "re-request of something already served in full, is charged. Keep investigating "
+    "until you actually understand the layout; a diff written from a guess costs far "
+    "more than another read.)"
+)
+
+
+def render_request_budget_footer(served, wasted_used, max_wasted):
+    """The one-line notice appended to the END of every REQUEST answer.
+
+    `served` is whether the answer carried real content. A served answer
+    gets REQUEST_FREE_FOOTER and is charged nothing -- reading files is
+    unlimited (see DEFAULT_MAX_REQUEST_TURNS). Only an unproductive
+    answer -- a path that did not resolve, or a repeat of one already
+    served -- gets a counter, and `wasted_used` is the count of those
+    INCLUDING the turn being answered.
 
     Two rules encoded here, both learned the hard way:
 
@@ -4287,35 +4342,57 @@ def render_request_budget_footer(turns_used, max_turns):
        invalidate the cached prefix for every subsequent call in the
        attempt. At the very end it only ever invalidates itself.
 
-    2. On the LAST allowed turn it stops being a counter and becomes a
-       pre-emptive instruction. The old `nudged_to_stop_investigating`
+    2. On the LAST allowed wasted turn it stops being a counter and becomes
+       a pre-emptive instruction. The old `nudged_to_stop_investigating`
        message only arrived AFTER the budget was already spent -- in the
        RW2 transcript (2026-07-26T21:23) the model, never told what its
        budget was, spent turn 24 of 25 on another REQUEST. A model that
        cannot see the budget cannot ration it.
+
+       The inverse now matters just as much: a model that sees a budget
+       WILL ration against it. That is why a served read says "free" in so
+       many words instead of staying silent -- silence reads as the old cap
+       still being in force, and the fixer keeps under-investigating.
     """
-    remaining = max_turns - turns_used
+    if served:
+        return REQUEST_FREE_FOOTER
+    remaining = max_wasted - wasted_used
     if remaining > 0:
-        return f"(investigation turn {turns_used} of {max_turns} -- {remaining} left)"
+        return (
+            f"(That REQUEST bought nothing -- wasted-request {wasted_used} of {max_wasted}, "
+            f"{remaining} left. Reading files that EXIST is still free and unlimited; only "
+            "unresolvable paths and repeats are charged. Check the listing above and "
+            "request a real path.)"
+        )
     return (
-        f"(investigation turn {turns_used} of {max_turns} -- this was your LAST. "
-        "No investigation turns remain: another REQUEST will be discarded unanswered. "
-        "Your next reply must be your best-effort diff -- a plan plus one ```diff "
-        "block, or VERIFY plus one ```diff block -- based on what you have already "
-        "seen, even if you are not fully certain.)"
+        f"(That REQUEST bought nothing -- wasted-request {wasted_used} of {max_wasted}, "
+        "and this was your LAST. No wasted-request allowance remains: another REQUEST "
+        "that fails to resolve, or repeats a path already served, will be discarded "
+        "unanswered. Your next reply must be your best-effort diff -- a plan plus one "
+        "```diff block, or VERIFY plus one ```diff block -- based on what you have "
+        "already seen, even if you are not fully certain.)"
     )
 
 
 #: The one forced retry attempt_build allows itself when a model replies
-#: REQUEST with no investigation turns left. Deliberately absolute: by this
-#: point the model has already been told, on its previous turn, that this
-#: exact thing would happen. Anything softer ("...or a REQUEST if you must")
-#: is how the transcript ended up spending its last turns on investigation.
+#: REQUEST with no wasted-request allowance left (or having hit the total
+#: ceiling). Deliberately absolute: by this point the model has already
+#: been told, on its previous turn, that this exact thing would happen.
+#: Anything softer ("...or a REQUEST if you must") is how the transcript
+#: ended up spending its last turns on investigation.
+#:
+#: It names WHICH budget ran out, because the honest answer is no longer
+#: "you read too much" -- reading was free and unlimited. What the model
+#: spent was its allowance for guessing at paths and re-reading what it
+#: already had, and a message that blamed investigation in general would
+#: teach exactly the wrong lesson for the next attempt.
 FORCED_DIFF_DEMAND = (
-    "Your investigation budget is gone and that REQUEST was DISCARDED unanswered -- "
-    "no file contents are coming. This is your final turn of this attempt: reply with "
-    "a diff and nothing else. Send 2-3 sentences of plan followed by exactly ONE "
-    "```diff fenced block containing your best-effort change, however uncertain. "
+    "Your wasted-request allowance is gone and that REQUEST was DISCARDED unanswered -- "
+    "no file contents are coming. Reading real files was free and unlimited; what ran "
+    "out was the allowance for paths that do not resolve and for re-reading what you "
+    "were already shown, and you spent it. This is your final turn of this attempt: "
+    "reply with a diff and nothing else. Send 2-3 sentences of plan followed by exactly "
+    "ONE ```diff fenced block containing your best-effort change, however uncertain. "
     "Another REQUEST, VERIFY or PATCH reply ends the attempt with no fix at all, so a "
     "guess that might be wrong is strictly better than another question."
 )
@@ -4491,6 +4568,31 @@ def describe_missing_path(path_part, repo_root, samples_dir, max_entries=REQUEST
     return "\n".join(lines)
 
 
+#: The three shapes resolve_request uses for an answer that actually
+#: carried content. attempt_build charges a REQUEST turn against the
+#: wasted-request budget unless the answer starts with one of these, so
+#: every successful return below is built from one of these constants
+#: rather than an inline literal -- if a fourth success shape is ever
+#: added it must be added here too, or reads of it start costing budget.
+#:
+#: A whitelist, not a blacklist of failures, and deliberately so: an
+#: answer shape nobody anticipated is charged rather than waved through,
+#: which is the side that stays bounded.
+SERVED_HEXDUMP_PREFIX = "Hex dump of "
+SERVED_LINES_PREFIX = "Lines "
+SERVED_CONTENTS_PREFIX = "Contents of "
+_SERVED_PREFIXES = (SERVED_HEXDUMP_PREFIX, SERVED_LINES_PREFIX, SERVED_CONTENTS_PREFIX)
+
+
+def request_answer_served(body):
+    """True when a resolve_request answer carried real file content, i.e.
+    when the REQUEST that produced it was productive and must therefore be
+    free (see DEFAULT_MAX_REQUEST_TURNS). False for a could-not-resolve
+    rejection or a past-the-end range, both of which buy the fixer
+    nothing and are what the wasted-request budget exists to bound."""
+    return str(body).startswith(_SERVED_PREFIXES)
+
+
 def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
     """Answer a model's "REQUEST: <path>" turn -- a hex dump if the path
     resolves under samples_dir (real binary sample data), the raw text if
@@ -4525,7 +4627,7 @@ def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
         if kind == "sample":
             data = resolved.read_bytes()
             return (
-                f"Hex dump of {path_part} ({len(data)} bytes total, "
+                f"{SERVED_HEXDUMP_PREFIX}{path_part} ({len(data)} bytes total, "
                 f"showing first {min(len(data), DEFAULT_HEXDUMP_BYTES)}):\n"
                 f"{hex_dump(data)}"
             )
@@ -4545,8 +4647,8 @@ def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
                 f"{i}: {line}"
                 for i, line in enumerate(lines[range_start - 1:clamped_end], start=range_start)
             )
-            return f"Lines {range_start}-{clamped_end} of {path_part}:\n{numbered}"
-        return f"Contents of {path_part}:\n{content[:max_text_bytes]}"
+            return f"{SERVED_LINES_PREFIX}{range_start}-{clamped_end} of {path_part}:\n{numbered}"
+        return f"{SERVED_CONTENTS_PREFIX}{path_part}:\n{content[:max_text_bytes]}"
 
     rejection = f"Could not resolve {path_part!r} under the samples dir or repo root."
     listing = describe_missing_path(path_part, repo_root, samples_dir)
@@ -4820,15 +4922,24 @@ def classify_recheck_rejection(base_reason, pre_report, post_report, tag_verdict
 def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_fn,
                    cargo_build_fn, config, repo_root, pick_model_fn=random.choice,
                    samples_dir=None, cargo_check_fn=None):
-    """Try to get a working build via a bounded conversation: up to
-    config["max_request_turns"] turns where the model can ask to see more
-    context (REQUEST: <path> -- see resolve_request) before it must submit
-    a diff, then up to 2 diff attempts (initial + one apply/build repair
-    round-trip). Every REQUEST answer ends with the remaining investigation
-    budget (render_request_budget_footer), the last one pre-emptively
-    demanding a diff; a REQUEST sent after the budget is gone buys exactly
-    one forced-diff retry (FORCED_DIFF_DEMAND) and never more. Extends the
-    given messages conversation in place. Returns
+    """Try to get a working build via a conversation with UNLIMITED
+    reading: the model may send as many REQUEST: <path> turns as it likes
+    (see resolve_request) and none of them cost it anything, then up to 2
+    diff attempts (initial + one apply/build repair round-trip).
+
+    What is bounded is unproductive investigation, not investigation.
+    config["max_request_turns"] is a wasted-request allowance, spent only
+    by a REQUEST whose path did not resolve or that re-asks for something
+    already served in full (see request_answer_served); a productive read
+    is free and is told so, in words, by REQUEST_FREE_FOOTER -- silence
+    would leave the model rationing against a cap that no longer exists.
+    Every REQUEST answer ends with that footer or with the wasted-request
+    counter (render_request_budget_footer), the last one pre-emptively
+    demanding a diff; a REQUEST sent after the allowance is gone buys
+    exactly one forced-diff retry (FORCED_DIFF_DEMAND) and never more.
+    config["max_request_turns_ceiling"] is the runaway backstop on TOTAL
+    requests -- never surfaced to the model, and reached only by a loop.
+    Extends the given messages conversation in place. Returns
     (built, reason, diff, messages) -- reason is None when built is True;
     diff is the successfully-applied diff (None if not built).
 
@@ -4871,8 +4982,17 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     classify_build_rejection maps the unmarked string to
     REJECT_BUILD_FAILED for readers that want a code for it.
     """
-    max_request_turns = config.get("max_request_turns", DEFAULT_MAX_REQUEST_TURNS)
+    # Reading is free: `max_request_turns` bounds only the UNPRODUCTIVE
+    # REQUESTs (unresolved path, or a repeat of one already served), never
+    # the productive ones. The config key keeps its old name so existing
+    # config.toml files keep working; what changed is what it counts.
+    max_wasted_requests = config.get("max_request_turns", DEFAULT_MAX_REQUEST_TURNS)
+    wasted_requests_used = 0
+    # Total REQUESTs including the free ones -- only ever checked against
+    # the runaway-loop ceiling, never shown to the model.
     request_turns_used = 0
+    max_request_turns_ceiling = config.get(
+        "max_request_turns_ceiling", DEFAULT_MAX_REQUEST_TURNS_CEILING)
     max_request_repeats = config.get("max_request_repeats", DEFAULT_MAX_REQUEST_REPEATS)
     request_counts = {}
     max_verify_turns = config.get("max_verify_turns", DEFAULT_MAX_VERIFY_TURNS)
@@ -4928,7 +5048,8 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
         if request_match:
             normalized = request_match.group(1).strip()
             request_counts[normalized] = request_counts.get(normalized, 0) + 1
-            if request_turns_used < max_request_turns:
+            if (wasted_requests_used < max_wasted_requests
+                    and request_turns_used < max_request_turns_ceiling):
                 request_turns_used += 1
                 if request_counts[normalized] >= max_request_repeats:
                     # Dead-end: the same path over and over. Re-serving
@@ -4940,14 +5061,28 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                         "Pivot: request a DIFFERENT file, narrow to a line range "
                         "(REQUEST: path:START-END), or submit your best diff now."
                     )
+                    served = False
                     current_phase = "patch"
                 else:
                     body = resolve_request(request_match.group(1), repo_root, samples_dir)
+                    # Free only if it BOTH resolved and is new. A second ask
+                    # for the identical request string re-serves content the
+                    # model already has, so it resolves happily but advances
+                    # nothing -- charging it is what keeps a two-path
+                    # ping-pong (A, B, A, B, ...) from running forever below
+                    # the max_request_repeats pivot threshold. Distinct line
+                    # ranges of one file normalize differently and so stay
+                    # free, which is correct: that is new content.
+                    served = request_answer_served(body) and request_counts[normalized] == 1
                     current_phase = "explore"
-                # Budget footer on BOTH branches, and always LAST in the
-                # message -- see render_request_budget_footer for why it's a
-                # footer and why the final turn's wording is pre-emptive.
-                footer = render_request_budget_footer(request_turns_used, max_request_turns)
+                if not served:
+                    wasted_requests_used += 1
+                # Footer on BOTH branches, and always LAST in the message --
+                # see render_request_budget_footer for why it's a footer, why
+                # a served read gets a constant string, and why the last
+                # wasted turn's wording is pre-emptive.
+                footer = render_request_budget_footer(
+                    served, wasted_requests_used, max_wasted_requests)
                 messages.append({"role": "user", "content": f"{body}\n\n{footer}"})
                 continue
             if not forced_diff_retry_used:
@@ -4968,6 +5103,19 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                 messages.append({"role": "user", "content": FORCED_DIFF_DEMAND})
                 current_phase = "patch"
                 continue
+            # Two very different situations wearing one string until now.
+            # The budget case is a model guessing at paths; the ceiling case
+            # is a model reading real files without end -- the second is a
+            # loop worth seeing in the lessons ledger as its own thing,
+            # since no amount of raising max_request_turns would change it.
+            # Both keep the DIFF_FORMAT_FAILURE_RE-matched prefix.
+            if request_turns_used >= max_request_turns_ceiling:
+                return (
+                    False,
+                    "no diff in model response (hit the "
+                    f"{max_request_turns_ceiling}-REQUEST safety ceiling)",
+                    None, messages,
+                )
             return False, "no diff in model response (exhausted request budget)", None, messages
 
         if VERIFY_RE.match(reply.strip()):
@@ -5137,6 +5285,32 @@ def provider_slug(base_url):
 
 
 DEFAULT_MAX_REPAIR_ROUNDS = 5
+
+#: EXTRA rounds, on top of max_repair_rounds, that only a reviewer
+#: rejection can unlock -- each rejection buys one more, up to this many.
+#: A fix the reviewer keeps pushing back on therefore gets up to
+#: 5 + 5 = 10 rounds of genuine back-and-forth, while a fix that cannot
+#: compile still gets exactly max_repair_rounds.
+#:
+#: Not simply "raise max_repair_rounds to 10", and the distinction is the
+#: whole point. The two failure populations are not alike:
+#:
+#:   - A build failure, a gap-count miss or a test regression is the model
+#:     failing against a machine that already told it exactly what was
+#:     wrong. Five tries at that is generous; a sixth is usually the same
+#:     wrong idea again, and doubling the allowance doubles the cost of
+#:     every doomed target in the fleet.
+#:   - A reviewer rejection is different in kind: the patch COMPILED, the
+#:     gap count moved and the workspace tests passed. Every mechanical
+#:     gate agreed. What is left is a judgment call about genuineness
+#:     (hardcoded sample values, double emission, invented fixtures --
+#:     see REVIEW_CHECKLIST), and that is exactly the argument worth
+#:     having more than once, because the fixer is close and the
+#:     disagreement is specific enough to act on.
+#:
+#: So the budget is spent where the conversation is productive rather than
+#: spread evenly over failures that are not.
+DEFAULT_MAX_REVIEW_ROUNDS = 5
 
 #: fix_gap gives up on a target after this many CONSECUTIVE rounds whose
 #: patch left the format's gap set byte-identical (see
@@ -5658,13 +5832,27 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             perl_lib_dir=None, sweep_review_log_path=None,
             neighbor_precedent_block="",
             max_repair_rounds=DEFAULT_MAX_REPAIR_ROUNDS,
+            max_review_rounds=DEFAULT_MAX_REVIEW_ROUNDS,
             knowledge_home=None, module_name=None, table_name=None, worker_label=None,
             recheck_baseline=None, extract_evidence_fn=None, scan_fn=None):
-    """Attempt to close one format's gaps via up to max_repair_rounds
-    candidates, each round feeding the previous round's outcome -- build
-    error, gap count, test regression, or review rejection -- plus a
+    """Attempt to close one format's gaps over a series of candidates,
+    each round feeding the previous round's outcome -- build error, gap
+    count, test regression, or review rejection -- plus a
     critique_fn-generated critique back into the conversation before
-    trying again. Returns a result dict whose "rounds" key is the full
+    trying again.
+
+    The round budget starts at max_repair_rounds and is EXTENDED by one
+    per reviewer rejection, up to max_review_rounds extra: a candidate the
+    reviewer keeps arguing with gets up to max_repair_rounds +
+    max_review_rounds (5 + 5 = 10 by default) rounds of back-and-forth,
+    while one that merely fails to compile still gets max_repair_rounds.
+    See DEFAULT_MAX_REVIEW_ROUNDS for why the two are budgeted separately
+    rather than by just doubling max_repair_rounds. Each retry carries the
+    full accumulated list of rejections, not only the newest, and reminds
+    the fixer that reading files is free (see attempt_build) so it can
+    re-read before resending instead of guessing.
+
+    Returns a result dict whose "rounds" key is the full
     per-round history (diff attempted, failure reason, critique), not
     just the last one, so run_tag_loop can persist all of it for future
     rounds targeting this same tag (see format_previous_attempts).
@@ -5843,6 +6031,23 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
     # (recheck_baseline + post_match both present) -- see the gate below.
     gap_set_unchanged_rounds = 0
 
+    # The round budget is not fixed: it STARTS at max_repair_rounds and
+    # each reviewer rejection extends it by one, up to max_review_rounds
+    # extra (see DEFAULT_MAX_REVIEW_ROUNDS). Only rejections extend it --
+    # a build failure or test regression consumes a round without buying
+    # another -- so `rounds_allowed` is read, never assumed, by every
+    # last-round check below including critique_and_continue's.
+    rounds_allowed = max_repair_rounds
+    review_extensions_used = 0
+    # Every reviewer rejection so far, oldest first. Fed back verbatim on
+    # each retry: across ten rounds a fixer shown only the LATEST objection
+    # will happily reintroduce the thing it was rejected for in round 2 to
+    # satisfy the objection from round 7, and then oscillate between the
+    # two until the budget is gone. Observed on the 5-round loop already;
+    # doubling the rounds without doubling the memory would only make it a
+    # longer oscillation.
+    review_rejections = []
+
     def lesson(event, reason, **kwargs):
         """K1 writer shorthand bound to this call's fixed identity
         fields (best-effort -- see _write_fix_gap_lesson)."""
@@ -5879,7 +6084,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
             )
             lesson("critique", critique, tag_key=_gap_primary_tag_key(gap))
         rounds.append({"diff": diff, "reason": reason, "critique": critique})
-        if round_index == max_repair_rounds - 1:
+        if round_index >= rounds_allowed - 1:
             return {"format": fmt, "status": "failed", "reason": reason, "diff": diff, "rounds": rounds}
         messages.append({
             "role": "user",
@@ -5891,7 +6096,12 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         })
         return None
 
-    for round_index in range(max_repair_rounds):
+    # while, not `for ... in range(max_repair_rounds)`: rounds_allowed
+    # grows as the reviewer rejects (see DEFAULT_MAX_REVIEW_ROUNDS), and a
+    # range() snapshots its bound at loop entry.
+    round_index = -1
+    while round_index + 1 < rounds_allowed:
+        round_index += 1
         built, reason, diff, messages = attempt_build_fn(
             messages,
             call_model_fn=call_model_fn, git_apply_fn=git_apply_fn,
@@ -6106,18 +6316,59 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         lesson("review_rejected", review_reason, checklist_id=parse_checklist_id(review_reason),
               tag_key=_gap_primary_tag_key(gap))
         rounds.append({"diff": diff, "reason": f"rejected by review: {review_reason}", "critique": review_reason})
-        if round_index == max_repair_rounds - 1:
+        review_rejections.append(review_reason)
+
+        # The rejection buys one extra round, up to max_review_rounds --
+        # BEFORE the last-round check below, so the round this rejection
+        # pays for is a round that actually gets used. Doing it after would
+        # extend a budget the function has already returned on.
+        if review_extensions_used < max_review_rounds:
+            review_extensions_used += 1
+            rounds_allowed += 1
+            log_fn(
+                f"[{fmt}] review round {len(review_rejections)}: "
+                f"{review_extensions_used}/{max_review_rounds} extra rounds used, "
+                f"{rounds_allowed - round_index - 1} left"
+            )
+
+        if round_index >= rounds_allowed - 1:
             return {
                 "format": fmt, "status": "failed",
                 "reason": f"rejected by review: {review_reason}", "diff": diff, "rounds": rounds,
             }
+
+        # Hand back the WHOLE argument so far, not just the latest turn of
+        # it (see review_rejections). The older objections are numbered and
+        # explicitly still binding, because the failure mode this replaces
+        # is a fixer that treats each rejection as a fresh instruction and
+        # un-fixes the previous one to satisfy it.
+        if len(review_rejections) == 1:
+            history = f"A reviewer rejected this fix: {review_reason}"
+        else:
+            prior = "\n".join(
+                f"  {i}. {r}" for i, r in enumerate(review_rejections[:-1], start=1)
+            )
+            history = (
+                f"A reviewer rejected this fix again (rejection {len(review_rejections)}): "
+                f"{review_reason}\n\n"
+                f"It also rejected your earlier attempts for these reasons:\n{prior}\n\n"
+                "Every one of those is still binding. Your next diff must satisfy ALL of "
+                "them at once -- fixing the newest objection by reintroducing something "
+                "you were already rejected for is the most common way this loop is wasted."
+            )
         messages.append({
             "role": "user",
-            "content": f"A reviewer rejected this fix: {review_reason}\nPlease resend a corrected diff.",
+            "content": (
+                f"{history}\n\nThe working tree has been reverted, so your next diff must "
+                "apply to the ORIGINAL files, not to your rejected patch. Investigation is "
+                "still free: REQUEST any files you need to re-read before resending, as "
+                "many as you want. Then send a corrected diff."
+            ),
         })
 
     # Unreachable: the loop above always returns by its last iteration
-    # (round_index == max_repair_rounds - 1 is covered by every branch).
+    # (round_index >= rounds_allowed - 1 is covered by every branch, and
+    # rounds_allowed only ever grows on a path that re-checks it).
     return {"format": fmt, "status": "failed", "reason": "exhausted repair rounds", "diff": diff, "rounds": rounds}
 
 
@@ -8107,7 +8358,10 @@ def _normalize_model_config(table):
         "timeout": table.get("timeout", 120),
         "deadline_seconds": table.get("deadline_seconds", DEFAULT_DEADLINE_SECONDS),
         "max_request_turns": table.get("max_request_turns", DEFAULT_MAX_REQUEST_TURNS),
+        "max_request_turns_ceiling": table.get(
+            "max_request_turns_ceiling", DEFAULT_MAX_REQUEST_TURNS_CEILING),
         "max_repair_rounds": table.get("max_repair_rounds", DEFAULT_MAX_REPAIR_ROUNDS),
+        "max_review_rounds": table.get("max_review_rounds", DEFAULT_MAX_REVIEW_ROUNDS),
         "max_request_repeats": table.get("max_request_repeats", DEFAULT_MAX_REQUEST_REPEATS),
         "max_verify_turns": table.get("max_verify_turns", DEFAULT_MAX_VERIFY_TURNS),
         "compaction_trigger_tokens": table.get("compaction_trigger_tokens", DEFAULT_COMPACTION_TRIGGER_TOKENS),
@@ -8692,6 +8946,7 @@ def main(argv=None):
             sweep_review_log_path=sweep_review_log_path,
             neighbor_precedent_block=precedent,
             max_repair_rounds=cfg.get("max_repair_rounds", DEFAULT_MAX_REPAIR_ROUNDS),
+            max_review_rounds=cfg.get("max_review_rounds", DEFAULT_MAX_REVIEW_ROUNDS),
             knowledge_home=knowledge_home, module_name=None, table_name=None,
             worker_label=worker_label,
             cargo_build_fn=cargo_build_fn, cargo_check_fn=cargo_check_fn,
