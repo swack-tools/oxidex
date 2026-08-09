@@ -256,6 +256,16 @@ pub static EXT_TO_TYPE: &[(&str, &str, &[&str])] = &[
 ];
 
 /// File type -> MIME type.
+///
+/// This is `%mimeType` and nothing else, so a MIME type a module passes to
+/// `SetFileType` as a literal will not appear here. `PFM` is the one that
+/// matters: `Other.pm`'s `ProcessPFM2` hardcodes `image/x-pfm` for Portable
+/// FloatMap images, and the same extension's Printer Font Metrics form takes
+/// `application/x-font-type1` from the Font module, so `%mimeType` carries
+/// neither and a `PFM` row here would be wrong for one of the two. The header
+/// tells them apart, in `filetype::refine`. Adding the row by hand is the
+/// intuitive fix and breaks the font case silently -- #455 did exactly that,
+/// and #636 regenerated over it.
 pub static MIME_TYPE: &[(&str, &str)] = &[
 {chr(10).join(mime_rows)}
 ];

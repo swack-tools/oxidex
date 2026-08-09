@@ -107,6 +107,19 @@ impl FormatParser for PFMParser {
             parse_header(probe).ok_or_else(|| ExifToolError::parse_error("Invalid PFM header"))?;
 
         let mut metadata = MetadataMap::new();
+        // Hardcoded because ExifTool hardcodes them, in the same place and for
+        // the same reason. `%mimeType` has no PFM entry: the extension is
+        // shared with Windows Printer Font Metrics, which takes the Font
+        // module's `application/x-font-type1`, so `ProcessPFM2` supplies the
+        // image MIME type itself (Other.pm:44):
+        //
+        // ```text
+        //     $et->SetFileType('PFM', 'image/x-pfm');
+        // ```
+        //
+        // `crate::filetype::refine` makes the same distinction for the
+        // `File:`-grouped tags, which is where a `.pfm` that OxiDex cannot
+        // parse still gets identified.
         metadata.insert("FileType".to_string(), TagValue::String("PFM".to_string()));
         metadata.insert(
             "MIMEType".to_string(),
@@ -200,6 +213,24 @@ mod tests {
         assert_eq!(
             meta.get("ByteOrder"),
             Some(&TagValue::String("Little-endian".to_string()))
+        );
+    }
+
+    #[test]
+    fn reports_the_image_file_type_not_the_font_one() {
+        // The `.pfm` extension is shared with Windows Printer Font Metrics,
+        // which ExifTool reports as the same FileType `PFM` but with MIMEType
+        // `application/x-font-type1`. Both values here are what the pinned
+        // 13.59 reports for t/images/PFM.pfm in its own distribution.
+        let reader = make_reader("PF\n4 2\n1.0\n", 4 * 2 * 3 * 4);
+        let meta = parse_pfm_metadata(&reader).expect("parse should succeed");
+        assert_eq!(
+            meta.get("FileType"),
+            Some(&TagValue::String("PFM".to_string()))
+        );
+        assert_eq!(
+            meta.get("MIMEType"),
+            Some(&TagValue::String("image/x-pfm".to_string()))
         );
     }
 
