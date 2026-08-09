@@ -322,6 +322,11 @@ registry grows. Protect that property.
 - The generator currently emits only `ProcessBinaryData` tables. The extractor
   already captures the subdirectory graph, conditions and value conversions
   needed to extend it to IFD-style tables; that work has not been done.
+- 11 of the 1004 fractional keys (`12.1`, a slice of the word at 12) declare no
+  `Mask`, so which bits they name is unrecorded and `decode_binary_table`
+  refuses them; the other 993 decode. The runtime counts both halves
+  (`all_fractional_census`) and the generator reports them, because an
+  under-claim nobody measures reads exactly like a complete transcription.
 - Some inferred renames still want human confirmation — `LNK
   TargetFileAttributes -> RunWindow` looks doubtful.
 - **What remains is genuinely not transcription.** CR3 (250 missing tags in the

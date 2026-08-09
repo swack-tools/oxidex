@@ -2,12 +2,13 @@
 //!
 //! The generated registry describes byte layout and the conversions that the
 //! transcription pipeline can reproduce exactly. This module is deliberately
-//! smaller than ExifTool's full `ProcessBinaryData`: bit fields and unsupported
-//! conversions are left for format-specific code instead of being guessed.
+//! smaller than ExifTool's full `ProcessBinaryData`: a bit field whose slice
+//! the schema does not record, and conversions the generator refused to
+//! approximate, are left for format-specific code instead of being guessed.
 
 use crate::io::ByteOrder;
 
-use super::{BinaryTable, Field, Fmt, PrintConv};
+use super::{ALL_BINARY_TABLES, BinaryTable, Field, Fmt, PrintConv};
 
 /// A value read directly from a generated binary-table field.
 #[derive(Clone, Debug, PartialEq)]
@@ -86,20 +87,77 @@ impl DecodedField {
     }
 }
 
+/// How many of a table's fractional (bit-field) entries [`decode_binary_table`]
+/// can read, and how many it still refuses.
+///
+/// The refusal is an under-claim, not a bug, and the point of counting it is
+/// that an under-claim nobody measures is indistinguishable from a complete
+/// one. Regenerating the tables against a later ExifTool can move either
+/// number; a test pins both.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FractionalCensus {
+    /// Fractional entries declaring a [`Mask`], so their bit slice is known.
+    pub decoded: usize,
+    /// Fractional entries with no `Mask`: which bits they name is unrecorded.
+    pub refused: usize,
+}
+
+impl FractionalCensus {
+    /// Fold another table's census into this one.
+    #[must_use]
+    pub const fn merge(self, other: Self) -> Self {
+        Self {
+            decoded: self.decoded + other.decoded,
+            refused: self.refused + other.refused,
+        }
+    }
+}
+
+/// Split `table`'s fractional entries by whether their bit semantics are known.
+#[must_use]
+pub fn fractional_census(table: &BinaryTable) -> FractionalCensus {
+    let mut census = FractionalCensus::default();
+    for field in table.fields {
+        if field.sub.is_none() {
+            continue;
+        }
+        if field.mask.is_some() {
+            census.decoded += 1;
+        } else {
+            census.refused += 1;
+        }
+    }
+    census
+}
+
+/// The same split across every generated table.
+#[must_use]
+pub fn all_fractional_census() -> FractionalCensus {
+    ALL_BINARY_TABLES
+        .iter()
+        .fold(FractionalCensus::default(), |total, table| {
+            total.merge(fractional_census(table))
+        })
+}
+
 /// Decode the fields whose layouts are completely described by `table`.
 ///
-/// Out-of-range fields are refused, as are fractional bit-field indices. The
-/// latter is now a deliberate under-claim rather than a missing capability:
-/// since the schema carries [`Mask`], a fractional field that declares one is
-/// fully described, but decoding those would add several hundred tags to what
-/// every caller of this function reports. That is a coverage change, and it
-/// belongs in a change that measures it, not in one that regenerates tables.
+/// Out-of-range fields are refused, and so are fractional bit-field indices
+/// that declare no [`Mask`] -- see [`fractional_census`] for that split.
+///
+/// A fractional key is ExifTool's `12.1` notation: several tags share the word
+/// at index 12, each naming a slice of it. `Mask` is what says *which* slice,
+/// so a fractional field that declares one is fully described and decodes
+/// here; one that does not leaves its bit semantics undetermined, and
+/// reporting the whole word under its name would be a confident wrong value
+/// rather than a missing tag.
 ///
 /// A field carrying a [`Mask`] is reduced to `(val & bits) >> shift` here,
-/// which is what ExifTool does before any conversion runs. Repeated scalar
-/// fields decode as [`DecodedValue::Array`]. This function performs raw
-/// decoding only; opt into `PrintConv` with
-/// [`DecodedField::apply_print_conv_to_raw`].
+/// which is what ExifTool does before any conversion runs
+/// (`$val = ($val & $mask) >> $$tagInfo{BitShift} if $mask`, ExifTool.pm's
+/// `ProcessBinaryData`). Repeated scalar fields decode as
+/// [`DecodedValue::Array`]. This function performs raw decoding only; opt into
+/// `PrintConv` with [`DecodedField::apply_print_conv_to_raw`].
 #[must_use]
 pub fn decode_binary_table(
     table: &'static BinaryTable,
@@ -110,7 +168,7 @@ pub fn decode_binary_table(
         .fields
         .iter()
         .filter_map(|field| {
-            if field.sub.is_some() {
+            if field.sub.is_some() && field.mask.is_none() {
                 return None;
             }
             let offset = usize::try_from(table.byte_offset(field)).ok()?;
@@ -237,7 +295,7 @@ fn read_f64(bytes: &[u8], order: ByteOrder) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exiftool_tables::{ExprId, Mask, Omitted, find_table};
+    use crate::exiftool_tables::{ALL_BINARY_TABLES, ExprId, Mask, Omitted, find_table};
 
     #[test]
     fn generated_pentax_layout_decodes_offsets_types_and_conversions() {
@@ -280,8 +338,12 @@ mod tests {
         );
     }
 
+    /// A fractional key without a `Mask` says a tag is a slice of the word
+    /// without saying which bits, so it stays refused. `BitField` below is
+    /// that case: the whole word 0xFF under an ExifTool tag name would be a
+    /// wrong value, and a wrong value is worse than an absent one.
     #[test]
-    fn reversed_endian_and_unsupported_bit_fields_are_explicit() {
+    fn reversed_endian_and_maskless_bit_fields_are_explicit() {
         static FIELDS: &[Field] = &[
             Field {
                 index: 0,
@@ -339,6 +401,127 @@ mod tests {
                 DecodedValue::Integer(3),
             ]),
         );
+    }
+
+    /// The whole point of a fractional key: several tags share one word, and
+    /// each `Mask` picks a different slice of it. `byte_offset` uses only the
+    /// integer part, which is ExifTool's `int($index) * $increment`, so all
+    /// three of these read the same `int16u` and differ only in their mask.
+    #[test]
+    fn fractional_entries_sharing_a_word_decode_to_their_own_slices() {
+        static FIELDS: &[Field] = &[
+            Field {
+                index: 4,
+                sub: Some(1),
+                name: "Low",
+                format: Some(Fmt::Int16u),
+                count: 1,
+                mask: Some(Mask {
+                    bits: 0xf,
+                    shift: 0,
+                }),
+                omitted: Omitted::NONE,
+                print_conv: PrintConv::None,
+            },
+            Field {
+                index: 4,
+                sub: Some(2),
+                name: "Middle",
+                format: Some(Fmt::Int16u),
+                count: 1,
+                mask: Some(Mask {
+                    bits: 0xf00,
+                    shift: 8,
+                }),
+                omitted: Omitted::NONE,
+                print_conv: PrintConv::IntEnum(&[(0xB, "Eleven")]),
+            },
+            Field {
+                index: 4,
+                sub: Some(3),
+                name: "Top",
+                format: Some(Fmt::Int16u),
+                count: 1,
+                mask: Some(Mask {
+                    bits: 0xf000,
+                    shift: 12,
+                }),
+                omitted: Omitted::NONE,
+                print_conv: PrintConv::None,
+            },
+            // Same word, no mask: which bits it names is unrecorded.
+            Field {
+                index: 4,
+                sub: Some(4),
+                name: "Undetermined",
+                format: Some(Fmt::Int16u),
+                count: 1,
+                mask: None,
+                omitted: Omitted::NONE,
+                print_conv: PrintConv::None,
+            },
+        ];
+        static TABLE: BinaryTable = BinaryTable {
+            module: "Test",
+            table: "Fractional",
+            group0: "",
+            group2: "",
+            first_entry: 0,
+            default_format: Fmt::Int8u,
+            fields: FIELDS,
+        };
+
+        // int8u FORMAT, so index 4 is byte 4: the big-endian word 0xABCD.
+        let data = [0, 0, 0, 0, 0xAB, 0xCD];
+        let fields = decode_binary_table(&TABLE, &data, ByteOrder::Big);
+        let get = |name: &str| fields.iter().find(|decoded| decoded.field.name == name);
+
+        assert_eq!(
+            get("Low").map(|d| &d.raw),
+            Some(&DecodedValue::Integer(0xD))
+        );
+        assert_eq!(
+            get("Middle").map(|d| &d.raw),
+            Some(&DecodedValue::Integer(0xB))
+        );
+        assert_eq!(
+            get("Middle").and_then(DecodedField::apply_print_conv_to_raw),
+            Some("Eleven".to_string()),
+            "the enum is keyed on the slice, not on the 0xABCD word"
+        );
+        assert_eq!(
+            get("Top").map(|d| &d.raw),
+            Some(&DecodedValue::Integer(0xA))
+        );
+        assert!(
+            get("Undetermined").is_none(),
+            "a fractional entry with no Mask has no defined slice to report"
+        );
+    }
+
+    /// The generated tables are overwhelmingly the decodable case, which is
+    /// why lifting the refusal was worth measuring. Pinning both halves makes
+    /// a regeneration that changes the balance visible instead of silent.
+    #[test]
+    fn generated_fractional_entries_are_almost_all_masked() {
+        let census = all_fractional_census();
+        assert_eq!(
+            census,
+            FractionalCensus {
+                decoded: 993,
+                refused: 11,
+            },
+            "fractional-entry split moved; if `just regen-tables` caused this, \
+             re-measure coverage before updating the numbers"
+        );
+
+        // Every counted entry is reachable through the same predicate the
+        // decoder uses, so the census cannot drift from the refusal it counts.
+        let per_table: usize = ALL_BINARY_TABLES
+            .iter()
+            .map(|table| fractional_census(table).decoded)
+            .sum();
+        assert_eq!(per_table, census.decoded);
     }
 
     /// ExifTool reduces a masked field to `(val & Mask) >> BitShift` before any
