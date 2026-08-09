@@ -291,6 +291,13 @@ def append_lesson(home_or_path, event):
 DIFF_BLOCK_RE = re.compile(r"```diff[ \t]*\r?\n(.*?)```", re.DOTALL)
 
 
+#: Fallback for a ```diff fence that opens and never closes -- see
+#: extract_diff. Only tried once DIFF_BLOCK_RE has already failed to find a
+#: closing ``` anywhere in the reply, so a well-formed fenced block is always
+#: matched by DIFF_BLOCK_RE first and this never fires on it.
+DIFF_BLOCK_UNCLOSED_RE = re.compile(r"```diff[ \t]*\r?\n(.*)", re.DOTALL)
+
+
 PATCH_SENTINEL_RE = re.compile(r"^\*{3}\s*(Begin|End)\s+Patch\s*$", re.MULTILINE)
 
 
@@ -420,14 +427,47 @@ def synthesize_git_headers(diff_text):
 def extract_diff(response_text):
     """Pull a unified diff out of a chat response.
 
-    Prefers a fenced ```diff block; falls back to treating the whole
-    response as a diff if it looks like one (starts with "diff --git" or
-    "--- "). Returns None if nothing diff-shaped is found.
+    Prefers a fenced ```diff block; if that fence never closes, falls back
+    to everything after the opening fence (see DIFF_BLOCK_UNCLOSED_RE);
+    finally falls back to treating the whole response as a diff if it looks
+    like one (starts with "diff --git" or "--- "). Returns None if nothing
+    diff-shaped is found.
+
+    The unclosed-fence fallback exists for a real, measured failure mode,
+    not a hypothetical one: of 361 finalized "no diff in model response"
+    replies salvaged from the 2026-08-08/09 fleet run, 8 opened a ```diff
+    fence around a real, complete, correctly `--- a/`/`+++ b/`-headed
+    unified diff and then never closed it -- instead of a plain closing
+    ```, the reply ended on a bare `*** End Patch` line (bled in from the
+    unrelated OpenAI apply_patch convention). None of the 8 carried a
+    `*** Begin Patch` line or an `*** Update File:` section header -- i.e.
+    there is no full apply_patch ENVELOPE anywhere in that corpus to
+    translate, only this one sentinel substituting for the fence's closing
+    ```. Before this fallback, DIFF_BLOCK_RE's required closing ``` never
+    matched, the unfenced fallback below never matched either (the reply
+    opens with prose, not "diff --git"/"--- "), and attempt_build treated
+    the whole attempt as if no diff had been sent at all -- discarding a
+    complete, appliable patch and returning immediately with no repair
+    round-trip (contrast the PATCH-chunk and VERIFY paths, which both give
+    the model a chance to resend before giving up).
+
+    strip_patch_sentinels (already applied to every branch below) is what
+    actually removes the stray `*** End Patch`/`*** Begin Patch` line from
+    the captured text, so this fallback only has to worry about WHERE the
+    diff content ends -- not what leftover sentinel text needs cleaning
+    out of it. Content recovered this way is still passed through the same
+    git-apply ladder as any other diff, so a reply that merely LOOKS like
+    it opened a diff fence but never wrote real diff content simply fails
+    to apply -- exactly as a closed-fence diff that doesn't apply already
+    does -- rather than being trusted blindly.
 
     The result is normalized by synthesize_git_headers so a multi-file diff
     survives --recount; see that function for the measurement behind it.
     """
     match = DIFF_BLOCK_RE.search(response_text)
+    if match:
+        return synthesize_git_headers(strip_patch_sentinels(match.group(1)))
+    match = DIFF_BLOCK_UNCLOSED_RE.search(response_text)
     if match:
         return synthesize_git_headers(strip_patch_sentinels(match.group(1)))
     stripped = response_text.strip()
