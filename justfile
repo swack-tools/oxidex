@@ -759,6 +759,10 @@ compare-exiftool-update:
     echo ""
     echo "✅ Comparison complete! Docs updated in docs/reference/comparison/"
 
+# Diff ONE file against the pinned oracle (fast, no re-download; exits non-zero on any difference)
+compare-file path *args:
+    uv run scripts/compare_file.py {{path}} {{args}}
+
 # Run comparison for a specific format only
 compare-exiftool-format format:
     #!/usr/bin/env bash

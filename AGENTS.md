@@ -78,6 +78,41 @@ downstream can tell. Omit and count it instead — that is the rule the generato
 follows, and `just verify-tables` (also a CI job) enforces it for the generated
 tables against an independent oracle.
 
+**A gap in a transcribed table is not evidence the tag does not exist.** The
+generator obeys the rule above, so a field it cannot model is simply absent —
+its silence means "not transcribed", never "not a tag". `AIFF::Common` carries
+NumChannels, NumSampleFrames, SampleSize and CompressionType but no
+`SampleRate`, because SampleRate is an 80-bit IEEE `extended` and the generator
+will not guess at one. Reading the table alone concludes AIFF has no sample
+rate; ExifTool reports 22050. When a table looks short, diff it against the
+`%Image::ExifTool::<Module>::<Table>` hash in the pinned tree — what is missing
+there is a pointer to hand-implement against the Perl, with a test pinning the
+decode, not a stop sign.
+
+**Detected is not parsed.** A format can produce a perfectly correct
+`File:FileType`, `FileTypeExtension` and `MIMEType` and still extract nothing:
+`read_metadata` falls back to `add_identity_tags` for the ~40 formats with no
+parser, which emits those three and the filesystem tags and returns success.
+`oxidex -j` on such a file looks healthy while 100% of its real tags are
+missing, and no error is raised anywhere. Six formats sat in exactly that state
+— AIFF was 21 missing tags behind a correct `FileType: AIFF`. Grep
+`format_dispatch` for the variant before assuming a format is covered, or run
+`just compare-file` on one of its samples and read the MISSING count.
+
+**Name the instrument, or the measurement is not evidence.** Every number here
+is a claim about the tool that produced it, and the wrong tool fails silently
+and confidently in whichever direction you were already leaning. Three in one
+afternoon: bare `git apply --check` rejected all 14 truncated diffs while
+`git_apply_with_rung` — which normalizes headers and passes `--recount` on
+every rung — accepted 7 of them, so "they can never apply" was exactly backwards;
+`cargo test --lib <filter>` matched a neighbouring test and passed green while
+the full suite would have failed; and a bare-name comparison scored
+`AIFF:Comment` against `ID3:Comment` as a defect when both tools emit both. So
+state the instrument alongside the number in commits, PRs and review comments —
+"MISSING 2 under `just compare-file`" rather than "2 tags missing" — and when a
+result argues *against* adding a safety check, re-run it with the tool the
+harness itself uses before believing it.
+
 ## Architecture
 Hexagonal (ports/adapters) with three layers:
 - **Application**: CLI, C FFI bindings
