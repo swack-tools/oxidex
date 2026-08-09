@@ -113,17 +113,21 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           replayed, counting against max_retries.
     max_request_turns      default 20 (worker only; how many UNPRODUCTIVE
                           REQUEST: <path> turns -- a path that doesn't
-                          resolve, or a repeat of one already served -- the
+                          resolve, a range past the end, or a re-ask of
+                          content still visible in the conversation -- the
                           fixer gets before it's nudged, then required, to
                           submit a diff. REQUESTs that actually serve it
                           something new are FREE and unlimited; see
                           attempt_build/resolve_request/request_answer_served)
     max_request_turns_ceiling  default 250 (worker only; runaway backstop on
                           TOTAL REQUESTs per attempt, free ones included --
-                          never shown to the model, reached only by a loop)
+                          reached only by a loop, named to the model only
+                          when it fires)
     max_review_rounds      default 5 (worker only; EXTRA fix_gap rounds, on
-                          top of max_repair_rounds, that only a reviewer
-                          rejection can unlock -- one per rejection. A fix
+                          top of max_repair_rounds, that only a substantive
+                          reviewer rejection can unlock -- one per
+                          rejection, none for a reviewer outage or an
+                          unparseable verdict. A fix
                           the reviewer keeps arguing with gets 5 + 5 = 10
                           rounds of back-and-forth; one that won't compile
                           still gets 5. See DEFAULT_MAX_REVIEW_ROUNDS.)
@@ -2728,7 +2732,7 @@ STRATEGY: REQUEST is free -- reading real files costs you nothing and there is n
 
 Every reply must be exactly one of these four shapes:
 
-1. REQUEST: <path> -- see a source file or a sample file (a bare line, nothing else in the reply). Add a 1-indexed line range after a source path -- prefer one for anything large. All four shapes work: `:40-120` (that range), `:400-` (line 400 to end of file), `:-120` (start through line 120), `:400` (a window around line 400). These are UNLIMITED and free: read as many files as you need. Only two kinds of REQUEST are charged against a small allowance -- a path that does not resolve, and re-asking for something you were already shown in full -- and an answer tells you only when it charged you. So check the directory listing an unresolved path comes back with instead of guessing again, and re-read your own earlier answers instead of re-requesting them. Distinct line ranges of the same file are distinct reads and stay free.
+1. REQUEST: <path> -- see a source file or a sample file (a bare line, nothing else in the reply). Add a 1-indexed line range after a source path -- prefer one for anything large. All four shapes work: `:40-120` (that range), `:400-` (line 400 to end of file), `:-120` (start through line 120), `:400` (a window around line 400). These are UNLIMITED and free: read as many files as you need. Only a REQUEST that buys you nothing is charged against a small allowance -- a path that does not resolve, a range starting past the end of a file, or re-asking for content still visible in this conversation -- and an answer tells you only when it charged you. So check the directory listing an unresolved path comes back with instead of guessing again, and re-read your own earlier answers instead of re-requesting them (if an earlier answer was elided to save space, re-REQUESTing it is free). Distinct line ranges of the same file are distinct reads and stay free when they show new lines; a range that resolves to exactly what you were already shown counts as a re-ask.
 2. VERIFY -- trial-compile a candidate change without committing to it: the line "VERIFY" followed by exactly ONE ```diff fenced block. The diff is applied, `cargo check` runs, the tail of its output comes back, and the change is REVERTED -- your final diff must still contain the complete change.
 3. PATCH 1/N -- if your finished diff would exceed roughly {max_prompt_tokens} tokens (~{max_prompt_tokens * 4} characters) in one reply, split it into N consecutive chunks and send the first as the line "PATCH 1/N" followed by ONE ```diff fenced chunk; you'll be prompted for each next chunk. Chunks are concatenated in order before applying, so split anywhere (mid-hunk is fine) -- never repeat or skip lines across a boundary.
 4. Plan + diff -- first, 2-3 sentences: which tag(s) you're fixing, where in the code, what you learned from the previous turn's output, and (on a retry) what you're doing differently from the failed attempt(s) above and why. Then exactly ONE ```diff fenced block containing the complete unified diff.
@@ -4282,7 +4286,9 @@ REQUEST_RE = re.compile(r"^REQUEST:\s*(.+)$", re.IGNORECASE)
 #: them, so the two cannot drift apart.)
 #:
 #: What is still budgeted is an UNPRODUCTIVE request: one whose path did
-#: not resolve, or one re-asking for a path already served in full. Those
+#: not resolve, one whose range starts past the end of the file, or one
+#: re-asking for content still visible in the conversation (a re-ask of
+#: content compaction has elided is served again, free). Those
 #: buy nothing, and they are the only shape a model can emit forever -- the
 #: repo has a finite number of real files, so free-but-productive requests
 #: terminate on their own while free-and-unproductive ones do not. The
@@ -4316,10 +4322,12 @@ DEFAULT_MAX_CHECK_OUTPUT_CHARS = 3000  # tail-trim: Rust errors summarize at the
 #: attach to reading now that reading is unlimited.
 REQUEST_FREE_FOOTER = (
     "(Reading is free -- REQUEST as many files as you need, there is no limit on them "
-    "and they do not count against any budget. Only a path that does not resolve, or a "
-    "re-request of something already served in full, is charged. Keep investigating "
-    "until you actually understand the layout; a diff written from a guess costs far "
-    "more than another read.)"
+    "and they do not count against any budget. Only a REQUEST that buys nothing is "
+    "charged: a path that does not resolve, a range starting past the end, or a re-ask "
+    "of content still visible earlier in this conversation. If an earlier answer was "
+    "elided to save space, re-REQUESTing it is free. Keep investigating until you "
+    "actually understand the layout; a diff written from a guess costs far more "
+    "than another read.)"
 )
 
 
@@ -4329,9 +4337,10 @@ def render_request_budget_footer(served, wasted_used, max_wasted):
     `served` is whether the answer carried real content. A served answer
     gets REQUEST_FREE_FOOTER and is charged nothing -- reading files is
     unlimited (see DEFAULT_MAX_REQUEST_TURNS). Only an unproductive
-    answer -- a path that did not resolve, or a repeat of one already
-    served -- gets a counter, and `wasted_used` is the count of those
-    INCLUDING the turn being answered.
+    answer -- a path that did not resolve, a range past the end, or a
+    re-ask of content still visible in the conversation -- gets a
+    counter, and `wasted_used` is the count of those INCLUDING the turn
+    being answered.
 
     Two rules encoded here, both learned the hard way:
 
@@ -4360,24 +4369,28 @@ def render_request_budget_footer(served, wasted_used, max_wasted):
     if remaining > 0:
         return (
             f"(That REQUEST bought nothing -- wasted-request {wasted_used} of {max_wasted}, "
-            f"{remaining} left. Reading files that EXIST is still free and unlimited; only "
-            "unresolvable paths and repeats are charged. Check the listing above and "
-            "request a real path.)"
+            f"{remaining} left. Reading NEW content is still free and unlimited; what is "
+            "charged is a path that does not resolve, a range past the end, or a re-ask "
+            "of content still visible above. If a directory listing came back with this "
+            "answer, request a real path from it; if this was a re-read, the content is "
+            "already in this conversation -- reuse it from there.)"
         )
     return (
         f"(That REQUEST bought nothing -- wasted-request {wasted_used} of {max_wasted}, "
-        "and this was your LAST. No wasted-request allowance remains: another REQUEST "
-        "that fails to resolve, or repeats a path already served, will be discarded "
-        "unanswered. Your next reply must be your best-effort diff -- a plan plus one "
-        "```diff block, or VERIFY plus one ```diff block -- based on what you have "
-        "already seen, even if you are not fully certain.)"
+        "and this was your LAST. No wasted-request allowance remains: ANY further "
+        "REQUEST will be discarded unanswered. Your next reply must be your best-effort "
+        "diff -- a plan plus one ```diff block, or VERIFY plus one ```diff block -- "
+        "based on what you have already seen, even if you are not fully certain.)"
     )
 
 
 #: The one forced retry attempt_build allows itself when a model replies
-#: REQUEST with no wasted-request allowance left (or having hit the total
-#: ceiling). Deliberately absolute: by this point the model has already
-#: been told, on its previous turn, that this exact thing would happen.
+#: REQUEST with no wasted-request allowance left. (Hitting the total
+#: ceiling instead gets FORCED_DIFF_DEMAND_CEILING below -- the two paths
+#: ran out of DIFFERENT things, and naming the wrong one teaches the
+#: wrong lesson.) Deliberately absolute: by this point the model has
+#: already been told, on its previous turn, that this exact thing would
+#: happen.
 #: Anything softer ("...or a REQUEST if you must") is how the transcript
 #: ended up spending its last turns on investigation.
 #:
@@ -4391,6 +4404,25 @@ FORCED_DIFF_DEMAND = (
     "no file contents are coming. Reading real files was free and unlimited; what ran "
     "out was the allowance for paths that do not resolve and for re-reading what you "
     "were already shown, and you spent it. This is your final turn of this attempt: "
+    "reply with a diff and nothing else. Send 2-3 sentences of plan followed by exactly "
+    "ONE ```diff fenced block containing your best-effort change, however uncertain. "
+    "Another REQUEST, VERIFY or PATCH reply ends the attempt with no fix at all, so a "
+    "guess that might be wrong is strictly better than another question."
+)
+
+
+#: The ceiling variant. On this path nothing the model was promised ran
+#: out -- every read may have resolved and been served free -- it hit
+#: max_request_turns_ceiling, the runaway backstop on TOTAL REQUESTs.
+#: Claiming the wasted-request allowance was spent here (the old, shared
+#: wording) was confidently false: wasted_requests_used can be exactly 0
+#: on this path, and it contradicted REQUEST_FREE_FOOTER's "no limit"
+#: promise shown on every preceding served read.
+FORCED_DIFF_DEMAND_CEILING = (
+    "You have hit this attempt's safety ceiling on TOTAL REQUESTs, and that REQUEST was "
+    "DISCARDED unanswered -- no file contents are coming. Nothing you were told was "
+    "limited ran out: reading was free, but one attempt only gets so many turns of any "
+    "kind before it must produce a change. This is your final turn of this attempt: "
     "reply with a diff and nothing else. Send 2-3 sentences of plan followed by exactly "
     "ONE ```diff fenced block containing your best-effort change, however uncertain. "
     "Another REQUEST, VERIFY or PATCH reply ends the attempt with no fix at all, so a "
@@ -4636,9 +4668,15 @@ def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
             lines = content.splitlines()
             if range_start > len(lines):
                 asked = f"{range_start}-{range_end}" if range_end is not None else f"{range_start}-EOF"
+                # Starts with a CONSTANT, never with path_part: this answer
+                # is unproductive and must fail the SERVED_* whitelist, but
+                # path_part is model-controlled, and a resolvable path
+                # spelled to begin with "Lines " or "Contents of " (e.g.
+                # "Lines /../src/x.rs") would smuggle it past
+                # request_answer_served at character 0.
                 return (
-                    f"{path_part} has only {len(lines)} lines -- the requested range "
-                    f"{asked} starts past the end. Request a range within the file."
+                    f"Requested range {asked} starts past the end -- {path_part} has "
+                    f"only {len(lines)} lines. Request a range within the file."
                 )
             # range_end None is the "path:400-" open-ended form: everything
             # from start to EOF.
@@ -4929,16 +4967,19 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
 
     What is bounded is unproductive investigation, not investigation.
     config["max_request_turns"] is a wasted-request allowance, spent only
-    by a REQUEST whose path did not resolve or that re-asks for something
-    already served in full (see request_answer_served); a productive read
-    is free and is told so, in words, by REQUEST_FREE_FOOTER -- silence
-    would leave the model rationing against a cap that no longer exists.
+    by a REQUEST whose path did not resolve, whose range starts past the
+    end, or whose answer's payload is still visible in the conversation
+    (see request_answer_served and the visibility check below -- content
+    compaction has elided is re-served free); a productive read is free
+    and is told so, in words, by REQUEST_FREE_FOOTER -- silence would
+    leave the model rationing against a cap that no longer exists.
     Every REQUEST answer ends with that footer or with the wasted-request
     counter (render_request_budget_footer), the last one pre-emptively
     demanding a diff; a REQUEST sent after the allowance is gone buys
     exactly one forced-diff retry (FORCED_DIFF_DEMAND) and never more.
     config["max_request_turns_ceiling"] is the runaway backstop on TOTAL
-    requests -- never surfaced to the model, and reached only by a loop.
+    requests -- reached only by a loop, and named to the model only at
+    the moment it fires (FORCED_DIFF_DEMAND_CEILING).
     Extends the given messages conversation in place. Returns
     (built, reason, diff, messages) -- reason is None when built is True;
     diff is the successfully-applied diff (None if not built).
@@ -5051,10 +5092,40 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
             if (wasted_requests_used < max_wasted_requests
                     and request_turns_used < max_request_turns_ceiling):
                 request_turns_used += 1
-                if request_counts[normalized] >= max_request_repeats:
-                    # Dead-end: the same path over and over. Re-serving
-                    # identical content burns budget without advancing
-                    # anything -- course-correct instead.
+                body = resolve_request(request_match.group(1), repo_root, samples_dir)
+                # Free means it bought NEW content, and "new" is judged on
+                # the ANSWER, not the request string: a clamped range, a
+                # ./-prefixed path or a re-ranged sample (ranges on samples
+                # are ignored) all reach byte-identical payloads through
+                # distinct strings, and each used to look "new" and be free
+                # forever -- the wasted allowance never bound, and the
+                # 250-REQUEST ceiling became the real per-attempt cost. The
+                # question that matters is whether this exact payload is
+                # still VISIBLE in the conversation. That also makes
+                # compaction self-consistent: the elision stub says
+                # "Re-REQUEST it if still needed", and once the payload is
+                # stubbed out it is no longer visible, so obeying that
+                # instruction is free instead of charged.
+                whitelisted = request_answer_served(body)
+                payload = body.partition("\n")[2]
+                if whitelisted and payload.strip():
+                    already_shown = any(
+                        payload in m["content"]
+                        for m in messages if m["role"] == "user"
+                    )
+                else:
+                    # Rejections and payload-less answers (an empty file)
+                    # fall back to the request-string rule.
+                    already_shown = request_counts[normalized] > 1
+                # A read that would serve content NOT currently visible is
+                # never pivoted away -- either it is genuinely new, or the
+                # compaction stub itself told the model to re-REQUEST it.
+                fresh_serve = whitelisted and bool(payload.strip()) and not already_shown
+                if request_counts[normalized] >= max_request_repeats and not fresh_serve:
+                    # Dead-end: the same request over and over buying
+                    # nothing new. Re-serving identical content burns
+                    # budget without advancing anything -- course-correct
+                    # instead.
                     body = (
                         f"You've now requested {normalized!r} {request_counts[normalized]} times -- "
                         "it was already provided in full and re-reading it will not change anything. "
@@ -5064,16 +5135,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                     served = False
                     current_phase = "patch"
                 else:
-                    body = resolve_request(request_match.group(1), repo_root, samples_dir)
-                    # Free only if it BOTH resolved and is new. A second ask
-                    # for the identical request string re-serves content the
-                    # model already has, so it resolves happily but advances
-                    # nothing -- charging it is what keeps a two-path
-                    # ping-pong (A, B, A, B, ...) from running forever below
-                    # the max_request_repeats pivot threshold. Distinct line
-                    # ranges of one file normalize differently and so stay
-                    # free, which is correct: that is new content.
-                    served = request_answer_served(body) and request_counts[normalized] == 1
+                    served = whitelisted and not already_shown
                     current_phase = "explore"
                 if not served:
                     wasted_requests_used += 1
@@ -5100,7 +5162,16 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                 # requests yet again falls through to the return below
                 # instead of earning itself unbounded extra calls.
                 forced_diff_retry_used = True
-                messages.append({"role": "user", "content": FORCED_DIFF_DEMAND})
+                # Name the budget that actually ran out: the wasted-request
+                # allowance if it is spent, otherwise the total-REQUEST
+                # ceiling. (When both are gone the allowance story is still
+                # true, so it wins.)
+                demand = (
+                    FORCED_DIFF_DEMAND
+                    if wasted_requests_used >= max_wasted_requests
+                    else FORCED_DIFF_DEMAND_CEILING
+                )
+                messages.append({"role": "user", "content": demand})
                 current_phase = "patch"
                 continue
             # Two very different situations wearing one string until now.
@@ -5286,8 +5357,11 @@ def provider_slug(base_url):
 
 DEFAULT_MAX_REPAIR_ROUNDS = 5
 
-#: EXTRA rounds, on top of max_repair_rounds, that only a reviewer
-#: rejection can unlock -- each rejection buys one more, up to this many.
+#: EXTRA rounds, on top of max_repair_rounds, that only a substantive
+#: reviewer rejection can unlock -- each rejection buys one more, up to
+#: this many. (A reviewer that could not be reached, or whose reply
+#: carried no verdict, has not rejected anything and buys nothing -- see
+#: REVIEW_INFRA_PREFIXES.)
 #: A fix the reviewer keeps pushing back on therefore gets up to
 #: 5 + 5 = 10 rounds of genuine back-and-forth, while a fix that cannot
 #: compile still gets exactly max_repair_rounds.
@@ -5301,8 +5375,9 @@ DEFAULT_MAX_REPAIR_ROUNDS = 5
 #:     wrong idea again, and doubling the allowance doubles the cost of
 #:     every doomed target in the fleet.
 #:   - A reviewer rejection is different in kind: the patch COMPILED, the
-#:     gap count moved and the workspace tests passed. Every mechanical
-#:     gate agreed. What is left is a judgment call about genuineness
+#:     gap count moved and the targeted tests passed (the full workspace
+#:     suite runs only after approval -- see fix_gap's approved branch).
+#:     Every mechanical gate that has run agreed. What is left is a judgment call about genuineness
 #:     (hardcoded sample values, double emission, invented fixtures --
 #:     see REVIEW_CHECKLIST), and that is exactly the argument worth
 #:     having more than once, because the fixer is close and the
@@ -5389,6 +5464,15 @@ DEFAULT_TABLE_JOB_MAX_REPAIR_ROUNDS = 8
 # (rate-limit/network/provider) failures that say nothing about the tag
 # or the diff.
 INFRA_FAILURE_PREFIX = "model call failed:"
+
+#: The reviewer-side counterparts: review_verdict's exception path
+#: produces "review call failed: ..." and extract_review_verdict_full's
+#: no-usable-verdict fallback produces "unparseable review verdict: ...".
+#: Both reach fix_gap as a falsy verdict, but neither is a judgment about
+#: the diff, so fix_gap must not let them extend the round budget or
+#: enter the "still binding" rejection history (see its review_infra
+#: branch).
+REVIEW_INFRA_PREFIXES = ("review call failed:", "unparseable review verdict:")
 
 
 # --- K5: reviewer evidence defaults -----------------------------------------
@@ -6316,26 +6400,56 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         lesson("review_rejected", review_reason, checklist_id=parse_checklist_id(review_reason),
               tag_key=_gap_primary_tag_key(gap))
         rounds.append({"diff": diff, "reason": f"rejected by review: {review_reason}", "critique": review_reason})
-        review_rejections.append(review_reason)
 
-        # The rejection buys one extra round, up to max_review_rounds --
-        # BEFORE the last-round check below, so the round this rejection
-        # pays for is a round that actually gets used. Doing it after would
-        # extend a budget the function has already returned on.
-        if review_extensions_used < max_review_rounds:
-            review_extensions_used += 1
-            rounds_allowed += 1
-            log_fn(
-                f"[{fmt}] review round {len(review_rejections)}: "
-                f"{review_extensions_used}/{max_review_rounds} extra rounds used, "
-                f"{rounds_allowed - round_index - 1} left"
-            )
+        # Not every falsy verdict is a judgment. review_verdict returns
+        # "review call failed: ..." when the reviewer ENDPOINT was down or
+        # over a cost cap, and "unparseable review verdict: ..." when the
+        # reply carried no usable verdict -- neither says anything about
+        # the diff. They must not buy an extra round (a reviewer outage
+        # would otherwise double every candidate's budget fleet-wide, each
+        # extra round a full attempt_build + build + recheck that no
+        # reviewer ever sees) and must not enter review_rejections (the
+        # "still binding" handoff below would demand the fixer satisfy a
+        # connection error with a diff). Same species as
+        # INFRA_FAILURE_PREFIX on the build path.
+        review_infra = review_reason.startswith(REVIEW_INFRA_PREFIXES)
+        if not review_infra:
+            review_rejections.append(review_reason)
+
+            # The rejection buys one extra round, up to max_review_rounds --
+            # BEFORE the last-round check below, so the round this rejection
+            # pays for is a round that actually gets used. Doing it after
+            # would extend a budget the function has already returned on.
+            if review_extensions_used < max_review_rounds:
+                review_extensions_used += 1
+                rounds_allowed += 1
+                log_fn(
+                    f"[{fmt}] review round {len(review_rejections)}: "
+                    f"{review_extensions_used}/{max_review_rounds} extra rounds used, "
+                    f"{rounds_allowed - round_index - 1} left"
+                )
 
         if round_index >= rounds_allowed - 1:
             return {
                 "format": fmt, "status": "failed",
                 "reason": f"rejected by review: {review_reason}", "diff": diff, "rounds": rounds,
             }
+
+        if review_infra:
+            # No judgment happened, so there is no objection to relay --
+            # and provider noise must never reach a prompt (the ledger-side
+            # twin of this rule is InfraNoiseNeverReachesAPromptTests).
+            messages.append({
+                "role": "user",
+                "content": (
+                    "The reviewer could not be reached for that diff, so it was not "
+                    "judged on its merits. The working tree has been reverted, so your "
+                    "next diff must apply to the ORIGINAL files, not to your previous "
+                    "patch. Resend your fix -- improved if you can see a weakness, "
+                    "otherwise as it was."
+                ),
+            })
+            continue
 
         # Hand back the WHOLE argument so far, not just the latest turn of
         # it (see review_rejections). The older objections are numbered and

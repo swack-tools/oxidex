@@ -118,6 +118,7 @@ from model_fix_loop import (
     squad_from_worker,
     describe_missing_path,
     FORCED_DIFF_DEMAND,
+    FORCED_DIFF_DEMAND_CEILING,
     git_apply,
     git_apply_with_rung,
     GIT_APPLY_LADDER,
@@ -126,6 +127,7 @@ from model_fix_loop import (
     render_request_budget_footer,
     REQUEST_FREE_FOOTER,
     request_answer_served,
+    REVIEW_INFRA_PREFIXES,
     DEFAULT_MAX_REVIEW_ROUNDS,
     DEFAULT_MAX_REQUEST_TURNS_CEILING,
     endpoint_park,
@@ -3020,6 +3022,26 @@ class BuildPromptOrderingTests(unittest.TestCase):
                        "roughly 4096 tokens", "ephemeral"):
             self.assertIn(needle, manifest)
 
+    def test_manifest_says_reading_is_free_and_never_rations_it(self):
+        # The free-read promise lives in TWO places that must agree: the
+        # runtime footer (REQUEST_FREE_FOOTER, pinned elsewhere) and this
+        # manifest, which is what the model reads BEFORE its first
+        # REQUEST. Reverting either to the old ration-your-reads wording
+        # while the other says "free" ships a self-contradictory prompt --
+        # the exact under-investigation failure the feature removes.
+        manifest = build_reply_shape_manifest(4096)
+        self.assertIn("REQUEST is free", manifest)
+        self.assertIn("no limit on how many you read", manifest)
+        self.assertIn("UNLIMITED and free", manifest)
+        # The charged shapes, spelled out -- and no per-attempt read quota.
+        self.assertIn("a path that does not resolve", manifest)
+        self.assertIn("range starting past the end", manifest)
+        self.assertIn("still visible in this conversation", manifest)
+        for stale in ("limited number of REQUEST turns",
+                      "do not chain many REQUESTs",
+                      "you MUST reply with a diff"):
+            self.assertNotIn(stale, manifest)
+
 
 # --- prompt-cache prefix ordering ------------------------------------------
 #
@@ -5759,51 +5781,6 @@ class AttemptBuildTests(unittest.TestCase):
         # cap on reading wearing a different name.
         self.assertGreaterEqual(DEFAULT_MAX_REQUEST_TURNS_CEILING, 100)
 
-
-class RequestAnswerServedTests(unittest.TestCase):
-    """The productive/unproductive split that decides whether a REQUEST is
-    free. A whitelist of the three shapes resolve_request uses for a real
-    answer -- anything unrecognized is charged, which is the side that
-    stays bounded."""
-
-    def test_the_three_served_shapes_are_free(self):
-        self.assertTrue(request_answer_served("Contents of src/x.rs:\nfn a() {}"))
-        self.assertTrue(request_answer_served("Lines 40-120 of src/x.rs:\n40: fn a() {}"))
-        self.assertTrue(request_answer_served("Hex dump of a.jpg (12 bytes total, showing first 12):\n..."))
-
-    def test_a_rejection_is_charged(self):
-        self.assertFalse(request_answer_served(
-            "Could not resolve 'src/nope.rs' under the samples dir or repo root."))
-
-    def test_a_past_the_end_range_is_charged(self):
-        self.assertFalse(request_answer_served(
-            "src/x.rs has only 12 lines -- the requested range 400-EOF starts past the end. "
-            "Request a range within the file."))
-
-    def test_an_unrecognized_shape_is_charged_not_waved_through(self):
-        self.assertFalse(request_answer_served("Something nobody anticipated"))
-        self.assertFalse(request_answer_served(""))
-
-    def test_resolve_request_really_produces_the_whitelisted_shapes(self):
-        # The whitelist and resolve_request must not drift: if a fourth
-        # success shape is ever added without being registered, reads of it
-        # silently start costing budget.
-        with tempfile.TemporaryDirectory() as tmpdir:
-            repo = Path(tmpdir)
-            samples = repo / "samples"
-            samples.mkdir()
-            (repo / "src").mkdir()
-            (repo / "src" / "x.rs").write_text("l1\nl2\nl3\n")
-            (samples / "a.jpg").write_bytes(b"\xff\xd8\xff\xe0")
-            self.assertTrue(request_answer_served(
-                resolve_request("src/x.rs", repo, samples)))
-            self.assertTrue(request_answer_served(
-                resolve_request("src/x.rs:2-3", repo, samples)))
-            self.assertTrue(request_answer_served(
-                resolve_request("a.jpg", repo, samples)))
-            self.assertFalse(request_answer_served(
-                resolve_request("src/nope.rs", repo, samples)))
-
     def test_request_with_no_turns_left_forces_exactly_one_diff_only_retry(self):
         calls = []
 
@@ -6142,6 +6119,273 @@ class RequestAnswerServedTests(unittest.TestCase):
                 repo_root=repo,
             )
         self.assertTrue(built)
+
+    def test_a_clamped_range_variant_is_charged_as_a_reread(self):
+        # request_counts used to be keyed on the raw request string, so
+        # ranges that clamp to the same bytes ("1-100001", "1-100002", ...)
+        # were each "new" and free forever: the wasted allowance never
+        # bound, and the 250-REQUEST ceiling became the operative
+        # per-attempt cost. Byte-identical payloads must charge from the
+        # second serving on, whatever the request string said.
+        seen = []
+
+        def fake_call_model(messages, *a):
+            seen.append(messages[-1]["content"])
+            if len(seen) == 1:
+                return "REQUEST: src/x.rs:1-100001"
+            if len(seen) == 2:
+                return "REQUEST: src/x.rs:1-100002"
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "x.rs").write_text("l1\nl2\nl3\n")
+            attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, max_request_turns=5),
+                repo_root=repo,
+            )
+        self.assertIn("Reading is free", seen[1])
+        self.assertIn("wasted-request 1 of 5", seen[2])
+
+    def test_a_path_spelling_variant_is_charged_as_a_reread(self):
+        # "./src/x.rs" resolves to the same bytes as "src/x.rs"; only the
+        # echo line differs, and the echo is not the payload.
+        seen = []
+
+        def fake_call_model(messages, *a):
+            seen.append(messages[-1]["content"])
+            if len(seen) == 1:
+                return "REQUEST: src/x.rs"
+            if len(seen) == 2:
+                return "REQUEST: ./src/x.rs"
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "x.rs").write_text("fn a() {}\n")
+            attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, max_request_turns=5),
+                repo_root=repo,
+            )
+        self.assertIn("Reading is free", seen[1])
+        self.assertIn("wasted-request 1 of 5", seen[2])
+
+    def test_a_re_ranged_sample_is_charged_as_a_reread(self):
+        # Samples always get the whole-file hex dump -- the range is
+        # ignored -- so a re-ranged sample request buys the same bytes.
+        seen = []
+
+        def fake_call_model(messages, *a):
+            seen.append(messages[-1]["content"])
+            if len(seen) == 1:
+                return "REQUEST: a.jpg:1-2"
+            if len(seen) == 2:
+                return "REQUEST: a.jpg:500-900"
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            samples = repo / "samples"
+            samples.mkdir()
+            (samples / "a.jpg").write_bytes(b"\xff\xd8\xff\xe0")
+            attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, max_request_turns=5),
+                repo_root=repo, samples_dir=samples,
+            )
+        self.assertIn("Reading is free", seen[1])
+        self.assertIn("wasted-request 1 of 5", seen[2])
+
+    def test_re_requesting_elided_content_is_free(self):
+        # The compaction stub says "Re-REQUEST it if still needed"; a
+        # model that obeys must not be charged for obeying. Once the
+        # payload is elided it is no longer visible, so re-serving it is
+        # buying real content again.
+        seen = []
+        outer = self
+
+        def fake_call_model(messages, *a):
+            seen.append(messages[-1]["content"])
+            if len(seen) == 1:
+                return "REQUEST: src/a1.rs"
+            if len(seen) == 2:
+                return "REQUEST: src/a2.rs"
+            if len(seen) == 3:
+                outer.assertTrue(any(
+                    "[earlier content elided for space:" in m["content"]
+                    for m in messages))
+                return "REQUEST: src/a1.rs"
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "a1.rs").write_text("x" * 60_000)
+            (repo / "src" / "a2.rs").write_text("y" * 60_000)
+            built, reason, diff, messages = attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, max_request_turns=5,
+                            compaction_trigger_tokens=5000, compaction_keep_recent_turns=1),
+                repo_root=repo,
+            )
+        self.assertTrue(built, reason)
+        self.assertIn("x" * 100, seen[3])            # re-served in full
+        self.assertIn("Reading is free", seen[3])    # and free
+        self.assertNotIn("wasted-request", seen[3])
+
+    def test_elided_content_is_reserved_not_pivoted_at_the_repeat_threshold(self):
+        # The pivot exists for a model re-asking for content it can still
+        # see. After compaction elided that content, the harness itself
+        # invited the re-request -- refusing to serve it ("it was already
+        # provided in full") would be false and would strand the fixer
+        # without the bytes.
+        seen = []
+
+        def fake_call_model(messages, *a):
+            seen.append(messages[-1]["content"])
+            if len(seen) >= 6:
+                return "```diff\n--- a/x\n+++ b/x\n```\n"
+            if len(seen) % 2 == 1:
+                return "REQUEST: src/a1.rs"      # asks 1, 3, 5 -- a1 over and over
+            return "REQUEST: src/a2.rs"          # asks 2, 4 -- filler forcing elision
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "a1.rs").write_text("x" * 60_000)
+            (repo / "src" / "a2.rs").write_text("y" * 60_000)
+            built, reason, diff, messages = attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, max_request_turns=5, max_request_repeats=3,
+                            compaction_trigger_tokens=5000, compaction_keep_recent_turns=1),
+                repo_root=repo,
+            )
+        self.assertTrue(built, reason)
+        self.assertEqual([m for m in seen if "You've now requested" in m], [])
+        self.assertIn("x" * 100, seen[5])            # 3rd ask still served
+        self.assertIn("Reading is free", seen[5])
+
+    def test_ceiling_forced_retry_names_the_ceiling_not_the_allowance(self):
+        # The wasted-allowance wording is confidently false on this path:
+        # every read resolved and was served free, wasted_requests_used
+        # is 0 -- the model must not be taught it overspent a budget it
+        # never touched.
+        calls = []
+
+        def fake_call_model(messages, *a):
+            calls.append(messages[-1]["content"])
+            return f"REQUEST: src/f{len(calls)}.rs"   # always novel, always resolves
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            for i in range(1, 10):
+                (repo / "src" / f"f{i}.rs").write_text(f"fn f{i}() {{}}\n")
+            built, reason, diff, _ = attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: self.fail("should not apply"),
+                cargo_build_fn=lambda root: self.fail("should not build"),
+                git_checkout_clean_fn=lambda root: None,
+                config=dict(CONFIG, max_request_turns=99, max_request_turns_ceiling=3),
+                repo_root=repo,
+            )
+        self.assertFalse(built)
+        self.assertEqual(calls.count(FORCED_DIFF_DEMAND_CEILING), 1)
+        self.assertNotIn(FORCED_DIFF_DEMAND, calls)
+        self.assertNotIn("wasted-request allowance", FORCED_DIFF_DEMAND_CEILING)
+        self.assertIn("safety ceiling", FORCED_DIFF_DEMAND_CEILING)
+        self.assertIn("reply with a diff and nothing else", FORCED_DIFF_DEMAND_CEILING)
+
+
+class RequestAnswerServedTests(unittest.TestCase):
+    """The productive/unproductive split that decides whether a REQUEST is
+    free. A whitelist of the three shapes resolve_request uses for a real
+    answer -- anything unrecognized is charged, which is the side that
+    stays bounded."""
+
+    def test_the_three_served_shapes_are_free(self):
+        self.assertTrue(request_answer_served("Contents of src/x.rs:\nfn a() {}"))
+        self.assertTrue(request_answer_served("Lines 40-120 of src/x.rs:\n40: fn a() {}"))
+        self.assertTrue(request_answer_served("Hex dump of a.jpg (12 bytes total, showing first 12):\n..."))
+
+    def test_a_rejection_is_charged(self):
+        self.assertFalse(request_answer_served(
+            "Could not resolve 'src/nope.rs' under the samples dir or repo root."))
+
+    def test_a_past_the_end_range_is_charged(self):
+        self.assertFalse(request_answer_served(
+            "Requested range 400-EOF starts past the end -- src/x.rs has "
+            "only 12 lines. Request a range within the file."))
+
+    def test_an_unrecognized_shape_is_charged_not_waved_through(self):
+        self.assertFalse(request_answer_served("Something nobody anticipated"))
+        self.assertFalse(request_answer_served(""))
+
+    def test_resolve_request_really_produces_the_whitelisted_shapes(self):
+        # The whitelist and resolve_request must not drift, in EITHER
+        # direction: a fourth success shape added without being registered
+        # silently starts costing budget, and an unproductive shape that
+        # drifts to open with a served prefix makes wasted reads free.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            samples = repo / "samples"
+            samples.mkdir()
+            (repo / "src").mkdir()
+            (repo / "src" / "x.rs").write_text("l1\nl2\nl3\n")
+            (samples / "a.jpg").write_bytes(b"\xff\xd8\xff\xe0")
+            self.assertTrue(request_answer_served(
+                resolve_request("src/x.rs", repo, samples)))
+            self.assertTrue(request_answer_served(
+                resolve_request("src/x.rs:2-3", repo, samples)))
+            self.assertTrue(request_answer_served(
+                resolve_request("a.jpg", repo, samples)))
+            self.assertFalse(request_answer_served(
+                resolve_request("src/nope.rs", repo, samples)))
+            # The past-the-end rejection, round-tripped through the REAL
+            # function: previously pinned only as a hand-copied literal,
+            # which a rewording of resolve_request silently orphans.
+            self.assertFalse(request_answer_served(
+                resolve_request("src/x.rs:400-500", repo, samples)))
+
+    def test_a_served_prefix_smuggled_into_the_path_is_still_charged(self):
+        # path_part is model-controlled and lands inside the past-the-end
+        # message. "Lines /../src/x.rs" resolves to src/x.rs through the
+        # nonexistent "Lines " component, so before that message was
+        # restructured to open with a constant, the rejection began with
+        # the model's own "Lines " and passed the whitelist -- an
+        # unproductive read served free.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "x.rs").write_text("l1\nl2\n")
+            answer = resolve_request("Lines /../src/x.rs:900-901", repo, None)
+            self.assertIn("starts past the end", answer)
+            self.assertFalse(request_answer_served(answer))
 
 
 class CargoCheckTests(unittest.TestCase):
@@ -6733,163 +6977,6 @@ class FixGapReviewTests(HermeticFixGapTestCase):
         self.assertIn("hardcodes the sample value", result["reason"])
         self.assertEqual(len(result["rounds"]), 2)
 
-
-class FixGapReviewRoundExtensionTests(HermeticFixGapTestCase):
-    """A reviewer rejection is not like a build failure. The patch already
-    compiled, closed gaps and passed the workspace tests -- every mechanical
-    gate agreed, and what is left is a specific, actionable argument about
-    genuineness. That argument is worth having more than once, so each
-    rejection buys one extra round (up to max_review_rounds) on top of
-    max_repair_rounds, while failures that never got past the machine
-    gates stay capped at max_repair_rounds."""
-
-    @staticmethod
-    def _always_builds(messages, **kwargs):
-        messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
-        return True, None, "--- a/x\n+++ b/x\n", messages
-
-    def _run(self, review_fn, **overrides):
-        kwargs = dict(
-            attempt_build_fn=self._always_builds,
-            review_fn=review_fn,
-            git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root, **_kw: None,
-            cargo_test_targeted_fn=lambda root, f: (True, ""),
-            cargo_test_workspace_fn=lambda root: (True, ""),
-            recheck_fn=lambda fmt: 0,
-            repo_root=Path("/fake/repo"),
-        )
-        kwargs.update(overrides)
-        return fix_gap(make_gap(gap_count=2), CONFIG, **kwargs)
-
-    def test_rejections_extend_the_budget_to_repair_plus_review_rounds(self):
-        result = self._run(
-            lambda g, diff, config, **kw: (False, "hardcodes the sample value"),
-            max_repair_rounds=5, max_review_rounds=5,
-        )
-        self.assertEqual(result["status"], "failed")
-        self.assertEqual(len(result["rounds"]), 10)
-
-    def test_the_default_is_five_extra_review_rounds(self):
-        self.assertEqual(DEFAULT_MAX_REVIEW_ROUNDS, 5)
-        # No max_review_rounds override -- the shipped default must be what
-        # actually reaches the loop, not just what the constant says.
-        result = self._run(
-            lambda g, diff, config, **kw: (False, "hardcodes the sample value"),
-            max_repair_rounds=2,
-        )
-        self.assertEqual(len(result["rounds"]), 7)   # 2 base + 5 extra
-
-    def test_build_failures_do_not_earn_extra_rounds(self):
-        # The whole point of a separate budget: a candidate that never
-        # compiles stays capped at max_repair_rounds however many times it
-        # fails, so doubling the reviewer's patience does not double the
-        # cost of every doomed target in the fleet.
-        def never_builds(messages, **kwargs):
-            return False, "error[E0308]: mismatched types", None, messages
-
-        result = self._run(
-            lambda *a, **k: self.fail("review must not run without a build"),
-            attempt_build_fn=never_builds,
-            critique_fn=lambda *a, **k: "try harder",
-            max_repair_rounds=3, max_review_rounds=5,
-        )
-        self.assertEqual(result["status"], "failed")
-        self.assertEqual(len(result["rounds"]), 3)
-
-    def test_an_extra_round_can_actually_land_the_fix(self):
-        # The extension must buy a USED round, not just a longer count:
-        # rejection 5 comes after the base budget of 3 is spent, and the
-        # approval on round 6 still has to commit.
-        commits = []
-        calls = []
-
-        def review(g, diff, config, **kw):
-            calls.append(1)
-            if len(calls) <= 5:
-                return False, f"C1 wrong value (objection {len(calls)})"
-            return True, ""
-
-        result = self._run(
-            review,
-            git_commit_fn=lambda msg, root, **_kw: commits.append(msg),
-            max_repair_rounds=3, max_review_rounds=5,
-        )
-        self.assertEqual(result["status"], "fixed")
-        self.assertEqual(len(calls), 6)
-        self.assertEqual(len(commits), 1)
-
-    def test_max_review_rounds_zero_restores_the_old_flat_budget(self):
-        result = self._run(
-            lambda g, diff, config, **kw: (False, "nope"),
-            max_repair_rounds=4, max_review_rounds=0,
-        )
-        self.assertEqual(len(result["rounds"]), 4)
-
-
-class FixGapRejectionHandoffTests(HermeticFixGapTestCase):
-    """What the fixer is actually told when the reviewer pushes back.
-
-    Across ten rounds a fixer shown only the LATEST objection will satisfy
-    it by reintroducing whatever it was rejected for three rounds ago, then
-    oscillate until the budget is gone. Every rejection so far therefore
-    goes back verbatim, marked as still binding."""
-
-    def _collect_handoffs(self, reasons):
-        handoffs = []
-        calls = []
-
-        def fake_attempt_build(messages, **kwargs):
-            if messages[-1]["role"] == "user" and len(messages) > 1:
-                handoffs.append(messages[-1]["content"])
-            messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
-            return True, None, "--- a/x\n+++ b/x\n", messages
-
-        def review(g, diff, config, **kw):
-            calls.append(1)
-            return False, reasons[min(len(calls), len(reasons)) - 1]
-
-        fix_gap(
-            make_gap(gap_count=2), CONFIG,
-            attempt_build_fn=fake_attempt_build,
-            review_fn=review,
-            git_checkout_clean_fn=lambda root: None,
-            git_commit_fn=lambda msg, root, **_kw: None,
-            cargo_test_targeted_fn=lambda root, f: (True, ""),
-            cargo_test_workspace_fn=lambda root: (True, ""),
-            recheck_fn=lambda fmt: 0,
-            repo_root=Path("/fake/repo"),
-            max_repair_rounds=len(reasons) + 1, max_review_rounds=0,
-        )
-        return handoffs
-
-    def test_first_rejection_is_stated_plainly(self):
-        first = self._collect_handoffs(["C5 hardcodes the sample value"])[0]
-        self.assertIn("A reviewer rejected this fix: C5 hardcodes the sample value", first)
-        self.assertNotIn("still binding", first)
-
-    def test_later_rejections_carry_every_earlier_objection(self):
-        handoffs = self._collect_handoffs([
-            "C5 hardcodes the sample value",
-            "C3 emits the tag twice",
-            "C4 invents a fixture",
-        ])
-        third = handoffs[2]
-        self.assertIn("rejection 3", third)
-        self.assertIn("C4 invents a fixture", third)          # the newest
-        self.assertIn("1. C5 hardcodes the sample value", third)   # and the older two
-        self.assertIn("2. C3 emits the tag twice", third)
-        self.assertIn("still binding", third)
-
-    def test_handoff_says_the_tree_was_reverted_and_reads_are_free(self):
-        # Both are things the fixer gets wrong without being told: it will
-        # otherwise write a diff against its own rejected patch, and it will
-        # resend from memory rather than re-reading.
-        first = self._collect_handoffs(["C1 wrong value"])[0]
-        self.assertIn("reverted", first)
-        self.assertIn("ORIGINAL files", first)
-        self.assertIn("REQUEST any files you need", first)
-
     def test_review_uses_fix_gaps_injected_call_model_fn(self):
         gap = make_gap(gap_count=2)
         review_call_model_calls = []
@@ -7143,6 +7230,226 @@ class FixGapRejectionHandoffTests(HermeticFixGapTestCase):
 
         self.assertEqual(result["status"], "fixed")
         self.assertEqual(seen_review_config[0], CONFIG)
+
+
+class FixGapReviewRoundExtensionTests(HermeticFixGapTestCase):
+    """A reviewer rejection is not like a build failure. The patch already
+    compiled, closed gaps and passed the targeted tests -- every mechanical
+    gate that has run agreed, and what is left is a specific, actionable argument about
+    genuineness. That argument is worth having more than once, so each
+    rejection buys one extra round (up to max_review_rounds) on top of
+    max_repair_rounds, while failures that never got past the machine
+    gates stay capped at max_repair_rounds."""
+
+    @staticmethod
+    def _always_builds(messages, **kwargs):
+        messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
+        return True, None, "--- a/x\n+++ b/x\n", messages
+
+    def _run(self, review_fn, **overrides):
+        kwargs = dict(
+            attempt_build_fn=self._always_builds,
+            review_fn=review_fn,
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root, **_kw: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+        )
+        kwargs.update(overrides)
+        return fix_gap(make_gap(gap_count=2), CONFIG, **kwargs)
+
+    def test_rejections_extend_the_budget_to_repair_plus_review_rounds(self):
+        result = self._run(
+            lambda g, diff, config, **kw: (False, "hardcodes the sample value"),
+            max_repair_rounds=5, max_review_rounds=5,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(len(result["rounds"]), 10)
+
+    def test_the_default_is_five_extra_review_rounds(self):
+        self.assertEqual(DEFAULT_MAX_REVIEW_ROUNDS, 5)
+        # No max_review_rounds override -- the shipped default must be what
+        # actually reaches the loop, not just what the constant says.
+        result = self._run(
+            lambda g, diff, config, **kw: (False, "hardcodes the sample value"),
+            max_repair_rounds=2,
+        )
+        self.assertEqual(len(result["rounds"]), 7)   # 2 base + 5 extra
+
+    def test_build_failures_do_not_earn_extra_rounds(self):
+        # The whole point of a separate budget: a candidate that never
+        # compiles stays capped at max_repair_rounds however many times it
+        # fails, so doubling the reviewer's patience does not double the
+        # cost of every doomed target in the fleet.
+        def never_builds(messages, **kwargs):
+            return False, "error[E0308]: mismatched types", None, messages
+
+        result = self._run(
+            lambda *a, **k: self.fail("review must not run without a build"),
+            attempt_build_fn=never_builds,
+            critique_fn=lambda *a, **k: "try harder",
+            max_repair_rounds=3, max_review_rounds=5,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(len(result["rounds"]), 3)
+
+    def test_an_extra_round_can_actually_land_the_fix(self):
+        # The extension must buy a USED round, not just a longer count:
+        # rejection 5 comes after the base budget of 3 is spent, and the
+        # approval on round 6 still has to commit.
+        commits = []
+        calls = []
+
+        def review(g, diff, config, **kw):
+            calls.append(1)
+            if len(calls) <= 5:
+                return False, f"C1 wrong value (objection {len(calls)})"
+            return True, ""
+
+        result = self._run(
+            review,
+            git_commit_fn=lambda msg, root, **_kw: commits.append(msg),
+            max_repair_rounds=3, max_review_rounds=5,
+        )
+        self.assertEqual(result["status"], "fixed")
+        self.assertEqual(len(calls), 6)
+        self.assertEqual(len(commits), 1)
+
+    def test_max_review_rounds_zero_restores_the_old_flat_budget(self):
+        result = self._run(
+            lambda g, diff, config, **kw: (False, "nope"),
+            max_repair_rounds=4, max_review_rounds=0,
+        )
+        self.assertEqual(len(result["rounds"]), 4)
+
+    def test_a_reviewer_outage_buys_no_extra_rounds(self):
+        # (False, "review call failed: ...") is review_verdict's
+        # infrastructure return -- the reviewer never judged the diff.
+        # Extending on it would double every candidate's budget for the
+        # duration of a reviewer-side outage, each extra round a full
+        # attempt_build + build + recheck that no reviewer ever sees.
+        result = self._run(
+            lambda g, diff, config, **kw: (
+                False, "review call failed: HTTP Error 429: Too Many Requests"),
+            max_repair_rounds=3, max_review_rounds=5,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(len(result["rounds"]), 3)
+
+    def test_an_unparseable_verdict_buys_no_extra_rounds(self):
+        # extract_review_verdict_full's fallback is a formatting problem
+        # on the reviewer's side, not an objection to the diff.
+        result = self._run(
+            lambda g, diff, config, **kw: (
+                False, "unparseable review verdict: 'i cannot decide'"),
+            max_repair_rounds=3, max_review_rounds=5,
+        )
+        self.assertEqual(len(result["rounds"]), 3)
+
+    def test_the_infra_prefixes_match_what_review_verdict_actually_returns(self):
+        # The classifier is a prefix tuple; if review_verdict's wording
+        # ever drifts, outages silently start extending again.
+        def raising_call_model(*a, **k):
+            raise OSError("boom")
+
+        approved, reason = review_verdict(
+            make_gap(gap_count=1), "--- a/x\n", CONFIG, call_model_fn=raising_call_model)
+        self.assertFalse(approved)
+        self.assertTrue(reason.startswith(REVIEW_INFRA_PREFIXES), reason)
+
+
+class FixGapRejectionHandoffTests(HermeticFixGapTestCase):
+    """What the fixer is actually told when the reviewer pushes back.
+
+    Across ten rounds a fixer shown only the LATEST objection will satisfy
+    it by reintroducing whatever it was rejected for three rounds ago, then
+    oscillate until the budget is gone. Every rejection so far therefore
+    goes back verbatim, marked as still binding."""
+
+    def _collect_handoffs(self, reasons):
+        handoffs = []
+        calls = []
+
+        def fake_attempt_build(messages, **kwargs):
+            if messages[-1]["role"] == "user" and len(messages) > 1:
+                handoffs.append(messages[-1]["content"])
+            messages.append({"role": "assistant", "content": "```diff\n--- a/x\n+++ b/x\n```\n"})
+            return True, None, "--- a/x\n+++ b/x\n", messages
+
+        def review(g, diff, config, **kw):
+            calls.append(1)
+            return False, reasons[min(len(calls), len(reasons)) - 1]
+
+        fix_gap(
+            make_gap(gap_count=2), CONFIG,
+            attempt_build_fn=fake_attempt_build,
+            review_fn=review,
+            git_checkout_clean_fn=lambda root: None,
+            git_commit_fn=lambda msg, root, **_kw: None,
+            cargo_test_targeted_fn=lambda root, f: (True, ""),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            recheck_fn=lambda fmt: 0,
+            repo_root=Path("/fake/repo"),
+            max_repair_rounds=len(reasons) + 1, max_review_rounds=0,
+        )
+        return handoffs
+
+    def test_first_rejection_is_stated_plainly(self):
+        first = self._collect_handoffs(["C5 hardcodes the sample value"])[0]
+        self.assertIn("A reviewer rejected this fix: C5 hardcodes the sample value", first)
+        self.assertNotIn("still binding", first)
+
+    def test_later_rejections_carry_every_earlier_objection(self):
+        handoffs = self._collect_handoffs([
+            "C5 hardcodes the sample value",
+            "C3 emits the tag twice",
+            "C4 invents a fixture",
+        ])
+        third = handoffs[2]
+        self.assertIn("rejection 3", third)
+        self.assertIn("C4 invents a fixture", third)          # the newest
+        self.assertIn("1. C5 hardcodes the sample value", third)   # and the older two
+        self.assertIn("2. C3 emits the tag twice", third)
+        self.assertIn("still binding", third)
+
+    def test_handoff_says_the_tree_was_reverted_and_reads_are_free(self):
+        # Both are things the fixer gets wrong without being told: it will
+        # otherwise write a diff against its own rejected patch, and it will
+        # resend from memory rather than re-reading.
+        first = self._collect_handoffs(["C1 wrong value"])[0]
+        self.assertIn("reverted", first)
+        self.assertIn("ORIGINAL files", first)
+        self.assertIn("REQUEST any files you need", first)
+
+    def test_reviewer_infra_noise_never_reaches_the_prompt(self):
+        # A connection error is not an objection: the handoff must not
+        # relay it, must not number it, and must not call it binding --
+        # the prompt-side twin of InfraNoiseNeverReachesAPromptTests.
+        handoffs = self._collect_handoffs(
+            ["review call failed: [Errno 54] Connection reset by peer"] * 2)
+        self.assertGreaterEqual(len(handoffs), 1)
+        for handoff in handoffs:
+            self.assertIn("could not be reached", handoff)
+            self.assertIn("reverted", handoff)
+            self.assertNotIn("review call failed", handoff)
+            self.assertNotIn("Errno 54", handoff)
+            self.assertNotIn("still binding", handoff)
+            self.assertNotIn("A reviewer rejected this fix", handoff)
+
+    def test_a_real_rejection_after_an_outage_is_numbered_first(self):
+        # The outage round must leave no trace in the rejection history:
+        # the first REAL objection reads "rejected this fix", not
+        # "rejection 2", and no phantom earlier objection is listed.
+        handoffs = self._collect_handoffs([
+            "review call failed: HTTP Error 429: Too Many Requests",
+            "C5 hardcodes the sample value",
+        ])
+        real = handoffs[1]
+        self.assertIn("A reviewer rejected this fix: C5 hardcodes the sample value", real)
+        self.assertNotIn("rejection 2", real)
+        self.assertNotIn("still binding", real)
 
 
 class FixGapDuplicateDetectionTests(HermeticFixGapTestCase):

@@ -87,9 +87,13 @@ that parser can change the output.
 ### Per repair round
 
 The round budget is **not fixed**. It starts at `max_repair_rounds` (default 5) and each
-*reviewer rejection* extends it by one, up to `max_review_rounds` (default 5) extra — so a
-candidate the reviewer keeps arguing with gets up to **10** rounds of back-and-forth, while one
-that merely fails to compile still gets 5. See "Why the reviewer gets a bigger budget" below.
+*substantive reviewer rejection* extends it by one, up to `max_review_rounds` (default 5) extra —
+so a candidate the reviewer keeps arguing with gets up to **10** rounds of back-and-forth, while
+one that merely fails to compile still gets 5. A reviewer that could not be reached (`review call
+failed: …`) or whose reply carried no verdict (`unparseable review verdict: …`) has not judged
+anything: those rounds extend nothing and leave no trace in the rejection history
+(`REVIEW_INFRA_PREFIXES`), so a reviewer-side outage cannot double the fleet's per-candidate
+spend. See "Why the reviewer gets a bigger budget" below.
 
 Each round:
 
@@ -104,7 +108,7 @@ Each round:
 | 7 | **Targeted tests** (`cargo test --lib` for the format) | 5528–5537 | `targeted tests (…) regressed` |
 | 8 | **Duplicate-insertion check** | 5539–5545, `detect_duplicate_tag_insertion` 1238 | `duplicate: a handler for … already exists elsewhere` |
 | 9 | Evidence gathering (live re-extraction + emission scan) | 5550–5557 | *never rejects* — wrapped in `try/except`, degrades to empty |
-| 10 | **Reviewer model call** (APPROVE / REJECT / UNVERIFIABLE) | 5559–5562 | `rejected by review: …` — **and buys one extra round** |
+| 10 | **Reviewer model call** (APPROVE / REJECT / UNVERIFIABLE) | 5559–5562 | `rejected by review: …` — **and a substantive rejection buys one extra round** (an unreachable reviewer or unparseable verdict buys none) |
 | 11 | **Full `cargo test --workspace`** | 5564–5578 | `cargo test --workspace regressed` |
 | 12 | Build evidence trailers | `_build_fix_gap_trailers` 5130 | — |
 | 13 | **`git commit`** | 5610–5614 | — |
@@ -144,7 +148,10 @@ binding. Without that, a fixer shown only the latest objection satisfies it by r
 whatever it was rejected for three rounds ago, and then oscillates between the two until the
 budget is gone — a failure mode that a longer loop makes worse, not better. The retry message also
 states that the working tree was reverted (so the next diff must apply to the original files, not
-to the rejected patch) and reminds the fixer that re-reading files is free.
+to the rejected patch) and reminds the fixer that re-reading files is free. Reviewer infrastructure
+failures are excluded from that history: relaying `review call failed: [Errno 54] …` as a "still
+binding" objection would demand the fixer satisfy a connection error with a diff, so those rounds
+get a plain "the reviewer could not be reached, resend" handoff instead.
 
 ### Reading files is free
 
@@ -158,15 +165,21 @@ What is still bounded is *unproductive* investigation:
 
 | Knob | Default | Counts |
 | --- | --- | --- |
-| `max_request_turns` | 20 | REQUESTs whose path did not resolve, or that re-ask for something already served in full |
-| `max_request_repeats` | 3 | Identical REQUESTs before the answer is replaced by a pivot nudge |
-| `max_request_turns_ceiling` | 250 | **Total** REQUESTs per attempt, free ones included — a runaway backstop, never surfaced to the model |
+| `max_request_turns` | 20 | REQUESTs that bought nothing: an unresolvable path, a range starting past the end, or a re-ask of content still **visible** in the conversation |
+| `max_request_repeats` | 3 | Identical REQUESTs before the answer is replaced by a pivot nudge (unless compaction elided the content — then it is simply re-served, free) |
+| `max_request_turns_ceiling` | 250 | **Total** REQUESTs per attempt, free ones included — a runaway backstop, surfaced to the model only at the moment it fires |
 
 `max_request_turns` kept its name so existing `config.toml` files keep working; what changed is
-what it counts. The split is decided by `request_answer_served`, a whitelist of the three answer
-shapes `resolve_request` uses for real content — an unrecognized shape is charged rather than
-waved through, which is the side that stays bounded. Distinct line ranges of one file count as
-distinct reads (they are new content); a second ask for the identical request string does not.
+what it counts. The split is decided in two steps: `request_answer_served`, a whitelist of the
+three answer shapes `resolve_request` uses for real content (an unrecognized shape is charged
+rather than waved through, which is the side that stays bounded), and then a **visibility check
+on the payload itself** — a served answer is charged as a re-ask when those exact bytes are
+already in the conversation, whatever the request string looked like. That closes the
+string-variant hole (clamped ranges, `./`-prefixed paths and re-ranged samples all reach
+byte-identical payloads through distinct strings) and it makes compaction self-consistent: the
+elision stub says "Re-REQUEST it if still needed", and once the payload is stubbed out it is no
+longer visible, so obeying that instruction is free. Distinct line ranges of one file stay free
+when they show new lines; a range that resolves to exactly what was already shown does not.
 
 The ceiling exists because "free" is not "infinite": a model walking a generated directory file by
 file would otherwise spend an unbounded number of paid calls, and no amount of raising
