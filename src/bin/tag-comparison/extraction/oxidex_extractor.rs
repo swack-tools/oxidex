@@ -1359,6 +1359,7 @@ mod tests {
     /// used to resolve to.
     #[test]
     fn test_disk_cache_dir_never_lands_inside_fixture_parent() {
+        let _env = super::super::cache_dir::lock_env();
         unsafe {
             std::env::remove_var(super::super::cache_dir::OXIDEX_TAG_CACHE_DIR_ENV);
         }
