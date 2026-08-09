@@ -251,7 +251,7 @@ fn format_system_time(time: SystemTime) -> String {
 ///
 /// ExifTool.pm:6787 short-circuits the epoch itself:
 /// `return '0000:00:00 00:00:00' if $time == 0;`
-fn format_unix_time_local(secs: i64) -> String {
+pub(crate) fn format_unix_time_local(secs: i64) -> String {
     if secs == 0 {
         return "0000:00:00 00:00:00".to_string();
     }
