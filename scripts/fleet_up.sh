@@ -47,6 +47,8 @@
 #   ./scripts/fleet_up.sh --status        # exactly what is alive, from the pidfile
 #   ./scripts/fleet_up.sh --down          # stop everything THIS launcher started
 #   ./scripts/fleet_up.sh --workers 24    # dispatcher --max-parallel
+#   ./scripts/fleet_up.sh --mergers 1     # only the first N config.toml squads get a merger
+#                                          # (overrides config.toml's [fleet].mergers, if set)
 #   ./scripts/fleet_up.sh --squad-mode     # allocate real per-squad worker slots
 #   ./scripts/fleet_up.sh --dry-run       # preflight + plan only; mutates nothing
 #   ./scripts/fleet_up.sh --no-judgment   # start WITHOUT the quarantine tier (see below)
@@ -137,6 +139,22 @@ FLEET_PERL_LIB="${FLEET_PERL_LIB:-}"
 
 FLEET_WORKERS="${FLEET_WORKERS:-32}"
 FLEET_SQUAD_MODE="${FLEET_SQUAD_MODE:-0}"
+
+# Cap on how many of config.toml's [squads.*] squads get their own merger
+# tier. 0 (the default) means "all of them" -- unchanged behaviour for every
+# existing caller. A positive N takes the first N squads in config.toml's own
+# order; the rest simply get no merger this run, same as if they'd been
+# deleted from config.toml, and their branches sit unconsumed until a future
+# run raises the cap or covers them directly.
+#
+# Precedence: --mergers (CLI) > $FLEET_MAX_MERGERS (env) > config.toml's
+# [fleet].mergers > 0. Left UNSET here (not defaulted to 0) so cmd_up can
+# tell "nothing said anything" apart from an explicit 0 and fall through to
+# config.toml -- resolved once $PINNED_CONFIG is known, see config_mergers().
+# NOTE: this is the first fleet_up.sh setting config.toml drives at all --
+# FLEET_WORKERS has no config.toml source today (env/--workers only), and
+# this deliberately does not retrofit one; see the PR description.
+FLEET_MAX_MERGERS="${FLEET_MAX_MERGERS:-}"
 FLEET_CONFIG="${FLEET_CONFIG:-}"
 FLEET_REPO="${OXIDEX_FLEET_REPO:-}"
 
@@ -319,7 +337,7 @@ pin_repo() {
     # REPO_ROOT = Path(__file__).resolve().parent.parent from the SCRIPT FILE,
     # and python puts the script's own directory at sys.path[0], so the
     # absolute path pins REPO_ROOT, every `from find_tag_gaps import ...`, and
-    # DEFAULT_SQUADS_TOML together. We cd anyway so that any relative path a
+    # DEFAULT_CONFIG_PATH together. We cd anyway so that any relative path a
     # tier resolves internally lands in the same place.
     local here=$1 candidate
 
@@ -389,17 +407,50 @@ pin_repo() {
 # ---------------------------------------------------------------------------
 
 parse_squads() {
-    # Read squad names out of squads.toml rather than hardcoding them. The
-    # hand-maintained lists drift: the operator brief for this launcher said
-    # "7 squads", scripts/squads.toml defines FOURTEEN, and on 2026-07-26
-    # exactly 7 mergers were alive -- the other 7 had been dead since the
-    # previous night. exif-core, one of the dead ones, was the 2nd-largest
-    # producer in the quarantine ledger (14 of 80 entries). A hardcoded "the 7
-    # that happen to be running" would have cemented that outage forever.
-    # TOML quotes names containing '-' ([squads."sony-minolta"]), so strip them.
+    # Read squad names out of config.toml's [squads.*] tables rather than
+    # hardcoding them. The hand-maintained lists drift: the operator brief
+    # for this launcher said "7 squads", the squad manifest defines FOURTEEN,
+    # and on 2026-07-26 exactly 7 mergers were alive -- the other 7 had been
+    # dead since the previous night. exif-core, one of the dead ones, was the
+    # 2nd-largest producer in the quarantine ledger (14 of 80 entries). A
+    # hardcoded "the 7 that happen to be running" would have cemented that
+    # outage forever.
+    #
+    # Generic over "a TOML file with [squads.*] tables" -- it used to be
+    # pointed at the now-deleted scripts/squads.toml and is now pointed at
+    # config.toml instead, which carries the identical tables verbatim
+    # (moved there so there is exactly one fleet config file; see the PR
+    # that did the move). TOML quotes names containing '-'
+    # ([squads."sony-minolta"]), so strip them.
     local toml=$1
     [ -f "$toml" ] || return 1
     sed -n 's/^\[squads\.\(.*\)\]$/\1/p' "$toml" | tr -d '"'
+}
+
+config_mergers() {
+    # [fleet].mergers from config.toml, as raw TOML text -- NOT coerced or
+    # validated here, so a garbage value (negative, float, string) flows
+    # through to the exact same non-negative-integer check main() already
+    # runs on --mergers/$FLEET_MAX_MERGERS, with the same error message,
+    # rather than a second, differently-worded validator living here.
+    #
+    # Prints "0" ("all squads", matching --mergers 0 / FLEET_MAX_MERGERS's
+    # pre-existing default) when the key, the [fleet] table, or the file
+    # itself is absent or unparseable -- a config.toml written before this
+    # key existed silently keeps today's behaviour.
+    local toml=$1
+    [ -f "$toml" ] || { printf '0'; return 0; }
+    python3 -c '
+import sys, tomllib
+try:
+    with open(sys.argv[1], "rb") as f:
+        data = tomllib.load(f)
+except Exception:
+    print(0)
+else:
+    fleet = data.get("fleet")
+    print(fleet.get("mergers", 0) if isinstance(fleet, dict) else 0)
+' "$toml" 2>/dev/null || printf '0'
 }
 
 # ---------------------------------------------------------------------------
@@ -819,12 +870,22 @@ tier_start() {
                 --infinite --round-delay 0 --auto-publish
             ;;
         merger)
-            # squad_merge_loop has NO --config (verified against its --help);
-            # passing one is an immediate parse error.
+            # squad_merge_loop now DOES take --config (it reads this squad's
+            # ownership/formats out of config.toml's [squads.*] tables) --
+            # pass the already-resolved $PINNED_CONFIG explicitly rather than
+            # relying on squad_merge_loop.py's own default. Its default only
+            # checks "next to the checkout" (repo_root/config.toml), but
+            # config.toml is gitignored/per-installation and resolve_config
+            # already searched the REAL set of candidate locations (it can
+            # just as easily be $OXIDEX_HOME/config.toml) -- relying on the
+            # narrower built-in default here would silently degrade a merger
+            # to "no squads found" on exactly the installations where
+            # config.toml is NOT next to the checkout.
             spawn "${TIER_TAG[i]}" \
                 python3 -u "$PINNED_REPO/scripts/squad_merge_loop.py" \
                 --squad "${TIER_ARG[i]}" \
                 --repo "$PINNED_REPO" \
+                --config "$PINNED_CONFIG" \
                 --home "$OXIDEX_HOME" \
                 --cache-dir "$EXIFTOOL_CACHE_DIR" \
                 --perl-lib "$FLEET_PERL_LIB" \
@@ -835,9 +896,15 @@ tier_start() {
             # read-only dry run, on purpose. Without it the quarantine tier
             # runs, reports, and changes nothing -- which is indistinguishable
             # from the dead end it was written to replace.
+            #
+            # --config: same reasoning as the merger case above -- the
+            # daemon's re-admission path validates against squad ownership
+            # globs read from config.toml, and its own built-in default must
+            # not be trusted to find a gitignored, per-installation file.
             spawn "${TIER_TAG[i]}" \
                 python3 -u "$PINNED_REPO/scripts/judgment_queue_daemon.py" \
                 --repo "$PINNED_REPO" \
+                --config "$PINNED_CONFIG" \
                 --home "$OXIDEX_HOME" \
                 --cache-dir "$EXIFTOOL_CACHE_DIR" \
                 --perl-lib "$FLEET_PERL_LIB" \
@@ -861,15 +928,17 @@ owned_formats() {
     # format_owner_map. Asked of fleet_health.py rather than reimplemented in
     # bash on purpose: the ownership rules (module-name match, then most
     # specialised claimant, then name order) live in exactly one place, and a
-    # second copy here would drift the first time squads.toml changes.
+    # second copy here would drift the first time config.toml's squad
+    # manifest changes.
     #
     # Best-effort and always rc 0 -- a supervisor must not die because it
     # could not enrich a log line.
     local squad=$1 out
     [ -n "$squad" ] || return 0
     [ -n "${PINNED_REPO:-}" ] || return 0
+    [ -n "${PINNED_CONFIG:-}" ] || return 0
     out=$(python3 "$PINNED_REPO/scripts/fleet_health.py" \
-            --squads-toml "$PINNED_REPO/scripts/squads.toml" \
+            --config "$PINNED_CONFIG" \
             --formats-for "$squad" 2>/dev/null | tr '\n' ' ') || out=""
     printf '%s' "${out% }"
     return 0
@@ -1294,10 +1363,23 @@ cmd_up() {
     [ "$pin_rc" -eq 0 ] || return "$pin_rc"
     run_preflight || exit 2
 
+    # Resolve the mergers cap now that $PINNED_CONFIG is known: CLI --mergers
+    # and env $FLEET_MAX_MERGERS were already applied (both non-empty at this
+    # point iff one of them fired) BEFORE config.toml could even be found, so
+    # only fall through to config.toml's [fleet].mergers when NEITHER set it.
+    # See the FLEET_MAX_MERGERS declaration up top for the full precedence.
+    if [ -z "$FLEET_MAX_MERGERS" ]; then
+        FLEET_MAX_MERGERS=$(config_mergers "$PINNED_CONFIG")
+        case "$FLEET_MAX_MERGERS" in
+            ''|*[!0-9]*) die "config.toml's [fleet].mergers is not a non-negative integer: " \
+                "'$FLEET_MAX_MERGERS' ($PINNED_CONFIG)" ;;
+        esac
+    fi
+
     local squads squad n=0
-    squads=$(parse_squads "$PINNED_REPO/scripts/squads.toml") \
-        || die "cannot read $PINNED_REPO/scripts/squads.toml"
-    [ -n "$squads" ] || die "squads.toml defined no squads"
+    squads=$(parse_squads "$PINNED_CONFIG") \
+        || die "cannot read [squads.*] tables from $PINNED_CONFIG"
+    [ -n "$squads" ] || die "$PINNED_CONFIG defined no squads"
 
     # Tier 2 before tier 1: a merger that starts after the dispatcher has
     # already produced commits just picks them up on its first poll, but a
@@ -1305,9 +1387,20 @@ cmd_up() {
     # which is the shape of the original outage.
     while read -r squad; do
         [ -n "$squad" ] || continue
+        if [ "$FLEET_MAX_MERGERS" -gt 0 ] && [ "$n" -ge "$FLEET_MAX_MERGERS" ]; then
+            break
+        fi
         tier_add "merger:$squad" merger "$squad" "squad_merge_loop.py --squad $squad "
         n=$((n + 1))
     done <<<"$squads"
+    if [ "$FLEET_MAX_MERGERS" -gt 0 ]; then
+        local total_squads
+        total_squads=$(printf '%s\n' "$squads" | grep -c .)
+        if [ "$n" -lt "$total_squads" ]; then
+            log "fleet-up" "WARNING: mergers cap $FLEET_MAX_MERGERS covers $n of $total_squads squads --" \
+                "the rest are not being merged this run"
+        fi
+    fi
     tier_add "dispatcher" dispatcher "" "parallel_model_fix_loop.py"
     if [ "$WITH_JUDGMENT" -eq 1 ]; then
         tier_add "judgment" judgment "" "judgment_queue_daemon.py"
@@ -1378,6 +1471,8 @@ main() {
             --squad-mode) FLEET_SQUAD_MODE=1 ;;
             --workers) FLEET_WORKERS=${2:?--workers needs a number}; shift ;;
             --workers=*) FLEET_WORKERS=${1#*=} ;;
+            --mergers) FLEET_MAX_MERGERS=${2:?--mergers needs a number}; shift ;;
+            --mergers=*) FLEET_MAX_MERGERS=${1#*=} ;;
             --repo) FLEET_REPO=${2:?--repo needs a path}; shift ;;
             --repo=*) FLEET_REPO=${1#*=} ;;
             --config) FLEET_CONFIG=${2:?--config needs a path}; shift ;;
@@ -1393,6 +1488,10 @@ main() {
         ''|*[!0-9]*) printf 'fleet_up.sh: --workers must be a positive integer\n' >&2; return 64 ;;
     esac
     [ "$FLEET_WORKERS" -gt 0 ] || { printf 'fleet_up.sh: --workers must be > 0\n' >&2; return 64; }
+    case "$FLEET_MAX_MERGERS" in
+        '') ;;  # unset: cmd_up resolves it from config.toml's [fleet].mergers, default 0
+        *[!0-9]*) printf 'fleet_up.sh: --mergers must be a non-negative integer\n' >&2; return 64 ;;
+    esac
     case "$FLEET_SQUAD_MODE" in
         0|1) ;;
         *) printf 'fleet_up.sh: FLEET_SQUAD_MODE must be 0 or 1\n' >&2; return 64 ;;

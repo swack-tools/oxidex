@@ -189,7 +189,10 @@ import validate_fix_commit
 import verify_enum_maps
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
-DEFAULT_SQUADS_TOML = SCRIPTS_DIR / "squads.toml"
+# Squad ownership/formats live in config.toml's [squads.*] tables (moved
+# there so there is exactly one fleet config file); REPO_ROOT, not
+# SCRIPTS_DIR, since config.toml sits at the repo root, not inside scripts/.
+DEFAULT_CONFIG_PATH = REPO_ROOT / "config.toml"
 
 ORIGIN_MAIN = "origin/main"
 
@@ -1078,7 +1081,7 @@ def already_present(repo_root, sha, refs):
 # ---------------------------------------------------------------------------
 
 def adjudicate(*, repo_root, home, entry, squad, klass, worktree_path, slot=DEFAULT_SLOT,
-               perl_lib=None, cache_dir=None, squads_toml=DEFAULT_SQUADS_TOML,
+               perl_lib=None, cache_dir=None, config_path=DEFAULT_CONFIG_PATH,
                apply=False, verify_fn=None, validate_fn=None, recheck_fn=None,
                resolve_pm_fn=None, now_fn=time.time, log_fn=print):
     """Decide, and if the decision is "promote", carry it out.
@@ -1412,7 +1415,7 @@ def adjudicate(*, repo_root, home, entry, squad, klass, worktree_path, slot=DEFA
     new_sha = squad_merge_loop.head_sha(worktree_path)
 
     # --- 6: pre-flight against the real validator -------------------------
-    validation = validate_fn(new_sha, repo_root, perl_lib=perl_lib, squads_toml=str(squads_toml))
+    validation = validate_fn(new_sha, repo_root, perl_lib=perl_lib, config_path=str(config_path))
     if not validation.get("ok", False):
         return decide("queued",
                       f"still flagged after re-admission work: {', '.join(validation.get('flags') or [])}",
@@ -1450,7 +1453,7 @@ def squad_of(entry, *, squads=()):
 
 
 def poll_once(*, repo_root=REPO_ROOT, home=OXIDEX_HOME, slot=DEFAULT_SLOT, perl_lib=None,
-              cache_dir=None, squads_toml=DEFAULT_SQUADS_TOML, apply=False, limit=None,
+              cache_dir=None, config_path=DEFAULT_CONFIG_PATH, apply=False, limit=None,
               verify_fn=None, validate_fn=None, recheck_fn=None, resolve_pm_fn=None,
               adjudicate_fn=None, now_fn=time.time, log_fn=print, heartbeat_fn=None):
     """One full pass over the quarantine ledger.
@@ -1501,7 +1504,7 @@ def poll_once(*, repo_root=REPO_ROOT, home=OXIDEX_HOME, slot=DEFAULT_SLOT, perl_
                 decision = adjudicate_fn(
                     repo_root=repo_root, home=home, entry=entry, squad=squad, klass=klass,
                     worktree_path=judgment_worktree_dir(home, squad), slot=slot,
-                    perl_lib=perl_lib, cache_dir=cache_dir, squads_toml=squads_toml,
+                    perl_lib=perl_lib, cache_dir=cache_dir, config_path=config_path,
                     apply=apply, verify_fn=verify_fn, validate_fn=validate_fn,
                     recheck_fn=recheck_fn, resolve_pm_fn=resolve_pm_fn,
                     now_fn=now_fn, log_fn=log_fn,
@@ -1608,7 +1611,8 @@ def main(argv=None, sleep_fn=time.sleep, now_fn=time.time, poll_fn=poll_once):
     )
     parser.add_argument("--repo", default=str(REPO_ROOT))
     parser.add_argument("--home", default=str(OXIDEX_HOME))
-    parser.add_argument("--squads-toml", default=str(DEFAULT_SQUADS_TOML))
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH),
+                        help="config.toml, for its [squads.*] tables (see config.example.toml)")
     parser.add_argument("--perl-lib", default=None,
                         help="Image/ExifTool Perl lib root (default: resolved from the "
                              "exiftool on PATH, as the rest of the fleet does)")
@@ -1652,7 +1656,7 @@ def main(argv=None, sleep_fn=time.sleep, now_fn=time.time, poll_fn=poll_once):
 
     kwargs = {
         "repo_root": Path(args.repo), "home": Path(args.home), "slot": args.slot,
-        "perl_lib": perl_lib, "cache_dir": args.cache_dir, "squads_toml": args.squads_toml,
+        "perl_lib": perl_lib, "cache_dir": args.cache_dir, "config_path": args.config,
         "apply": apply, "limit": args.limit, "now_fn": now_fn,
     }
     while True:

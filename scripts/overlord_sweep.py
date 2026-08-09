@@ -94,7 +94,10 @@ from model_fix_loop import new_oxidex_only_keys, newly_duplicated_emissions
 from distill_lessons import STALE_HEARTBEAT_SECONDS
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
-DEFAULT_SQUADS_TOML = SCRIPTS_DIR / "squads.toml"
+# Squad ownership/formats live in config.toml's [squads.*] tables (moved
+# there so there is exactly one fleet config file); REPO_ROOT, not
+# SCRIPTS_DIR, since config.toml sits at the repo root, not inside scripts/.
+DEFAULT_CONFIG_PATH = REPO_ROOT / "config.toml"
 DEFAULT_SWEEP_STATE_PATH = OXIDEX_HOME / "logs" / "sweep-state.json"
 
 ORIGIN_MAIN = "origin/main"
@@ -225,8 +228,8 @@ def preflight(home, squads, dispatcher_lock_path=None, now_fn=time.time,
 # Step 2: green-stamp collection (sweep-state.json cursor)
 # ---------------------------------------------------------------------------
 
-def squads_from_toml(squads_toml_path):
-    with open(squads_toml_path, "rb") as f:
+def squads_from_toml(config_path):
+    with open(config_path, "rb") as f:
         data = tomllib.load(f)
     return list((data.get("squads") or {}).keys())
 
@@ -439,7 +442,7 @@ def merged_content_tree(repo_root, ref, run_git, origin_ref=ORIGIN_MAIN):
 
 
 def branch_formats(repo_root, ref, run_git, origin_ref=ORIGIN_MAIN,
-                   squads_toml_path=None, squad=None):
+                   config_path=None, squad=None):
     """Formats the commits on `ref` claim to touch, read from the
     ``Format:`` trailer every fleet commit carries, e.g.
 
@@ -450,7 +453,7 @@ def branch_formats(repo_root, ref, run_git, origin_ref=ORIGIN_MAIN,
 
     These drive run_post_merge_recheck, so an empty list would make the
     semantic recheck vacuous -- hence the fall back to the squad's
-    advisory squads.toml list when no commit declared one.
+    advisory config.toml [squads.*] list when no commit declared one.
     """
     formats = set()
     rc, out, _err = run_git(["log", f"{origin_ref}..{ref}", "--format=%B"], repo_root)
@@ -461,16 +464,16 @@ def branch_formats(repo_root, ref, run_git, origin_ref=ORIGIN_MAIN,
                 value = line.split(":", 1)[1].strip()
                 if value:
                     formats.add(value)
-    if not formats and squads_toml_path and squad:
+    if not formats and config_path and squad:
         try:
-            formats.update(squad_merge_loop.squad_formats(squads_toml_path, squad))
+            formats.update(squad_merge_loop.squad_formats(config_path, squad))
         except (OSError, ValueError):
             pass
     return sorted(formats)
 
 
 def collect_branch_news(repo_root, squads, run_git, *, origin_ref=ORIGIN_MAIN,
-                        parks=None, squads_toml_path=None, log_fn=print,
+                        parks=None, config_path=None, log_fn=print,
                         max_attempts=DEFAULT_BRANCH_PARK_ATTEMPTS):
     """Every squad branch carrying content origin_ref does not already
     have, keyed by the tree it would produce once integrated.
@@ -519,7 +522,7 @@ def collect_branch_news(repo_root, squads, run_git, *, origin_ref=ORIGIN_MAIN,
             "squad_sha": tip,
             "tree": tree,
             "formats": branch_formats(repo_root, branch, run_git, origin_ref=origin_ref,
-                                      squads_toml_path=squads_toml_path, squad=squad),
+                                      config_path=config_path, squad=squad),
         }
     return news
 
@@ -532,7 +535,7 @@ def dedupe_by_tree(candidates, log_fn=print):
     2026-07-30, ten squads carried the same 28-line change to
     src/parsers/jpeg/app_segments/app12_olympus.rs and produced the
     byte-identical merged tree 8205143145654711 -- because 13 of the 14
-    squads in squads.toml list the format "JPEG", so every one of their
+    squads in config.toml's [squads.*] tables list the format "JPEG", so every one of their
     workers independently derived the same fix. Merging all ten is not
     wrong (nine are no-ops) but it inflates the PR body, multiplies the
     per-squad semantic recheck, and makes bisection attribute a failure to
@@ -1035,7 +1038,7 @@ def bisect_sweep_failure(*, repo_root, merge_infos, formats, cache_dir, comparis
     (undo_last_revert) and the next candidate is tried.
 
     If no single squad's removal clears the check (a genuine multi-
-    squad combination effect, or the squads.toml-scale search space this
+    squad combination effect, or the squad-manifest-scale search space this
     single pass does not attempt), every remaining squad is quarantined
     and reverted -- a fully-aborted sweep round rather than a silently
     shipped bad merge.
@@ -1400,7 +1403,7 @@ def real_create_pr(title, body, branch, base="main", repo_root=REPO_ROOT):
 # ---------------------------------------------------------------------------
 
 def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn=None,
-             squads_toml_path=DEFAULT_SQUADS_TOML, cargo_test_workspace_fn=None, create_pr_fn=None,
+             config_path=DEFAULT_CONFIG_PATH, cargo_test_workspace_fn=None, create_pr_fn=None,
              push_branch_fn=None, fmt_fn=None, run_git=None, now_fn=time.time, log_fn=print,
              sweep_state_path=None, quarantine_path=None, sweep_review_log_path=None,
              origin_ref=ORIGIN_MAIN, dispatcher_lock_path=None):
@@ -1424,7 +1427,7 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
         else Path(home) / "logs" / "sweep-review-history.jsonl"
     )
 
-    squads = squads_from_toml(squads_toml_path)
+    squads = squads_from_toml(config_path)
 
     health = preflight(home, squads, dispatcher_lock_path=dispatcher_lock_path, now_fn=now_fn)
     if not health["ok"]:
@@ -1444,7 +1447,7 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
     parks = dict(cursor.get("branch_parks") or {})
     branch_news = collect_branch_news(
         repo_root, [s for s in squads if s not in stamps], run_git,
-        origin_ref=origin_ref, parks=parks, squads_toml_path=squads_toml_path, log_fn=log_fn)
+        origin_ref=origin_ref, parks=parks, config_path=config_path, log_fn=log_fn)
     if branch_news:
         log_fn(f"branch scan: {len(branch_news)} squad(s) carry unpublished content "
                f"the stamp ledger did not report: {sorted(branch_news)}")
@@ -1873,7 +1876,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", default=str(REPO_ROOT))
     parser.add_argument("--home", default=str(OXIDEX_HOME))
-    parser.add_argument("--squads-toml", default=str(DEFAULT_SQUADS_TOML))
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH),
+                        help="config.toml, for its [squads.*] tables (see config.example.toml)")
     parser.add_argument("--cache-dir", default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"))  # nosec B108
     args = parser.parse_args(argv)
 
@@ -1885,7 +1889,7 @@ def main(argv=None):
 
     result = run_sweep(
         repo_root=repo_root, home=home, cache_dir=args.cache_dir, comparison_fn=comparison_fn,
-        checkout_fn=real_checkout, squads_toml_path=args.squads_toml,
+        checkout_fn=real_checkout, config_path=args.config,
     )
     printable = {k: v for k, v in result.items() if k != "pr"}
     print(json.dumps(printable, indent=2, default=str))

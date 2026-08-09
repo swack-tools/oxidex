@@ -240,3 +240,135 @@ max_repair_rounds = 8
 # token for exits 1 at startup rather than failing mid-sweep.
 [publish]
 github_user = "your-github-username"
+
+# Optional: scripts/fleet_up.sh knobs. Omit the table (or the key) entirely
+# to keep every existing default.
+[fleet]
+# mergers: cap on how many of the squads below get their own merger tier.
+# 0 or absent means "all of them" -- unchanged behaviour for every existing
+# installation. A positive N takes the first N squads in the order they
+# appear below; the rest simply get no merger this run. Precedence:
+# fleet_up.sh's --mergers CLI flag, then its FLEET_MAX_MERGERS env var,
+# then this key, then 0. See fleet_up.sh's FLEET_MAX_MERGERS comment for
+# the full reasoning.
+mergers = 0
+
+# Squad manifest -- spec S2 of
+# docs/plans/specs/2026-07-24-fleet-knowledge-and-scaling-design.md.
+#
+# Squads own ExifTool .pm modules, and therefore ALL container formats those
+# modules serve.  The shared Rust emitter files (canon.rs, nikon.rs, registry
+# const blocks, ...) get exactly one owning squad each, which is what keeps
+# squad merges structurally conflict-free.
+#
+# This table snapshot was taken from the gap census on 2026-07-24. Gap
+# counts are deliberately NOT stored anywhere here -- they are derived live,
+# every round, by attribute_gaps.py (see the "squads" summary in
+# gap-attribution.json). The S2 "Gaps" / "of which JPEG" columns are
+# snapshot values for that date, not config.
+#
+# Fields per squad:
+#   modules         ExifTool .pm module names (basename, no .pm suffix) the
+#                   squad owns.  attribute_gaps.py routes every attributed gap
+#                   module -> squad through this table; a module listed in no
+#                   squad falls through to "tail".
+#   formats         Container formats from the S2 table.  Informational /
+#                   advisory -- live per-squad format lists are re-derived
+#                   from actual gap attribution every round.
+#   ownership_globs Rust source globs the squad owns.  Deliberately empty for
+#                   now: ownership enforcement is warn-only and arrives in a
+#                   later phase (see spec YAGNI notes); nothing may treat
+#                   these as a gate.
+#
+# NOTE: this table used to live in a separate, git-tracked scripts/squads.toml
+# so every installation shared one copy. It now lives here, in the
+# gitignored, per-installation config.toml, so there is exactly one fleet
+# config file -- which means it is NO LONGER version-tracked. If you edit
+# squad ownership, the change is local to this machine (and to `server`, or
+# wherever else you copy config.toml) until someone manually applies the same
+# edit everywhere config.toml lives.
+
+[squads.canon]
+# "CR3-QuickTime" in the S2 table: CR3 metadata boxes live in QuickTime.pm.
+modules = ["Canon", "CanonCustom", "CanonRaw", "CanonVRD", "QuickTime"]
+formats = ["JPEG", "CR2", "CR3", "DNG"]
+ownership_globs = []
+
+[squads.nikon]
+modules = ["Nikon", "NikonCustom", "NikonSettings", "NikonCapture"]
+formats = ["JPEG", "NEF"]
+ownership_globs = []
+
+[squads."sony-minolta"]
+modules = ["Sony", "Minolta", "MinoltaRaw"]
+formats = ["JPEG", "MRW"]
+ownership_globs = []
+
+[squads.xmp]
+# XMP.pm and XMP2.pl both define %Image::ExifTool::XMP::* tables, so the
+# single module name "XMP" covers both files.
+modules = ["XMP"]
+formats = ["JPEG", "XMP", "DNG", "PDF", "PSD", "CR2"]
+ownership_globs = []
+
+[squads."exif-core"]
+# "Exif.pm IFD wiring" in the S2 table.  The S2 formats column says
+# "9 formats" without enumerating; these are the nine containers whose
+# IFD wiring routes through Exif.pm in the census.
+modules = ["Exif"]
+formats = ["JPEG", "TIFF", "NEF", "CR2", "CR3", "DNG", "RW2", "MRW", "X3F"]
+ownership_globs = []
+
+[squads.olympus]
+modules = ["Olympus"]
+formats = ["JPEG"]
+ownership_globs = []
+
+[squads."pentax-samsung"]
+modules = ["Pentax", "Samsung"]
+formats = ["JPEG"]
+ownership_globs = []
+
+[squads."panasonic-leica"]
+modules = ["Panasonic", "PanasonicRaw"]
+formats = ["JPEG", "RW2"]
+ownership_globs = []
+
+[squads.mobile]
+modules = ["Google", "GoPro", "Apple", "DJI", "Qualcomm"]
+formats = ["JPEG"]
+ownership_globs = []
+
+[squads.thermal]
+modules = ["FLIR", "InfiRay"]
+formats = ["JPEG"]
+ownership_globs = []
+
+[squads."sigma-c2pa"]
+# "Jpeg2000/JUMBF" in the S2 table: JUMBF/C2PA boxes are parsed by
+# Jpeg2000.pm (family "JUMBF" in comparison reports).
+modules = ["Sigma", "SigmaRaw", "Jpeg2000"]
+formats = ["X3F", "JPEG"]
+ownership_globs = []
+
+[squads."ps-docs"]
+modules = ["Photoshop", "IPTC", "PhotoMechanic", "FotoStation", "PDF"]
+formats = ["PSD", "PDF", "JPEG"]
+ownership_globs = []
+
+[squads."standards-appn"]
+# "JPEG.pm APPn" -> module JPEG.  "Meta" is the Kodak Meta APP3 family
+# (no Meta.pm exists; attribution routes the family name here directly).
+modules = ["ICC_Profile", "JPEG", "APP12", "Meta", "MPF"]
+formats = ["JPEG", "NEF"]
+ownership_globs = []
+
+[squads.tail]
+# Catch-all squad: "FlashPix/OLE, Kodak/Sanyo/Ricoh/Casio, FujiFilm, small
+# formats" per S2.  OLE parsing lives inside FlashPix.pm.  Formats column in
+# S2 reads "rest" -- every format not owned above -- so no fixed list here.
+# Any attributed module listed in no squad (including module "unknown")
+# also rolls up to tail.
+modules = ["FlashPix", "Kodak", "Sanyo", "Ricoh", "Casio", "FujiFilm"]
+formats = []
+ownership_globs = []

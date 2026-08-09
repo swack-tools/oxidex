@@ -3307,11 +3307,11 @@ def read_own_quarantine(quarantine_path, worker_label, format_name,
     got it wrong. It is NOT true that a legacy worker owns no ledger
     entries: squad_merge_loop.candidate_worker_branches returns the legacy
     per-format branch model-fix-parallel-<fmt> for every format
-    squads.toml lists under a squad, and poll_once feeds those to
+    config.toml's [squads.*] tables list under a squad, and poll_once feeds those to
     process_commit(squad=<squad>, fmt=<fmt>), whose quarantine() records
     squad=<the CONSUMING squad>. So a legacy worker's commits do become
     entries -- filed under whichever squad consumed them, and since
-    squads.toml lists JPEG under 12 of 14 squads, potentially under many
+    config.toml lists JPEG under 12 of 14 squads, potentially under many
     squad names at once. Nothing in the ledger ties them back to the
     legacy label the worker was given, so this function cannot claim them
     and returns [] on that path: the quarantine section is inert for

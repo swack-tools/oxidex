@@ -31,8 +31,8 @@ parsing knowledge clusters and where the shared Rust emitter files map
    nowhere become module ``"unknown"`` -- acceptable advisory noise per
    the spec; attribution routes claims/memory/warnings, it is never a
    gate.
-3. Roll up per squad via scripts/squads.toml (module listed in no squad
-   -> squad "tail") and write ``gap-attribution.json`` atomically
+3. Roll up per squad via config.toml's [squads.*] tables (module listed in
+   no squad -> squad "tail") and write ``gap-attribution.json`` atomically
    (tempfile + os.replace) for the dispatcher's slot formula
    (``slots_i = max(1, round(total x open_gaps_i / total_gaps))``).
 
@@ -81,10 +81,13 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 # which worktree the dispatcher happens to run from.
 OXIDEX_HOME = Path(os.environ.get("OXIDEX_HOME", str(Path.home() / ".oxidex")))
 DEFAULT_OUT = OXIDEX_HOME / "logs" / "gap-attribution.json"
-DEFAULT_SQUADS_TOML = SCRIPTS_DIR / "squads.toml"
+# Squad ownership lives in config.toml's [squads.*] tables (moved there so
+# there is exactly one fleet config file); SCRIPTS_DIR.parent, since
+# config.toml sits at the repo root, not inside scripts/.
+DEFAULT_CONFIG_PATH = SCRIPTS_DIR.parent / "config.toml"
 
 # Squad every unmapped module (and module "unknown") rolls up to; must
-# exist in squads.toml.
+# exist in config.toml's [squads.*] tables.
 FALLBACK_SQUAD = "tail"
 
 # Module name used when a gap's tag name appears nowhere in the Perl
@@ -230,9 +233,9 @@ FAMILY_MODULE_OVERRIDES = {
     "GlobParamIFD": "Exif",
     # JUMBF/C2PA boxes are parsed by Jpeg2000.pm.
     "JUMBF": "Jpeg2000",
-    # Kodak Meta APP3: no Meta.pm exists; squads.toml lists module
-    # "Meta" (standards-appn) and attribution routes the family name
-    # through directly, per the squads.toml comment.
+    # Kodak Meta APP3: no Meta.pm exists; config.toml's squad manifest lists
+    # module "Meta" (standards-appn) and attribution routes the family name
+    # through directly, per that manifest's comment.
     "Meta": "Meta",
     # JFIF/Trailer segments are handled by JPEG.pm itself.
     "JFIF": "JPEG",
@@ -345,14 +348,14 @@ def attribute_gap(fmt, family, name, index, module_lookup, sample_dirs=()):
 # Squads manifest
 # ---------------------------------------------------------------------------
 
-def load_squads(squads_toml_path):
-    """Read squads.toml -> (module_to_squad, squad_names).
+def load_squads(config_path):
+    """Read config.toml's [squads.*] tables -> (module_to_squad, squad_names).
 
     First squad to list a module owns it (the manifest should never
     list one module twice; setdefault makes duplicates deterministic
     rather than order-of-dict surprising).
     """
-    with open(squads_toml_path, "rb") as f:
+    with open(config_path, "rb") as f:
         data = tomllib.load(f)
     squads = data.get("squads") or {}
     module_to_squad = {}
@@ -518,7 +521,8 @@ def main(argv=None):
                         help="Image/ExifTool Perl module dir (default: "
                              "resolved from the exiftool on PATH, as "
                              "model_fix_loop does)")
-    parser.add_argument("--squads-toml", default=str(DEFAULT_SQUADS_TOML))
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH),
+                        help="config.toml, for its [squads.*] tables (see config.example.toml)")
     parser.add_argument("--out", default=str(DEFAULT_OUT))
     parser.add_argument("--formats", default=None,
                         help="comma-separated format filter, e.g. JPEG,NEF")
@@ -539,7 +543,7 @@ def main(argv=None):
     with open(args.comparison) as f:
         report = json.load(f)
     index, modules = build_tag_index(perl_lib)
-    module_to_squad, squad_names = load_squads(args.squads_toml)
+    module_to_squad, squad_names = load_squads(args.config)
     attribution = build_attribution(
         report, index, modules, module_to_squad, squad_names, formats=formats)
     write_atomic(args.out, attribution)
