@@ -649,6 +649,124 @@ class ExtractDiffTests(unittest.TestCase):
         # synthesize_git_headers deliberately leaves it alone.
         self.assertTrue(diff.startswith("--- a/foo.rs"))
 
+    def test_recovers_diff_from_a_fence_that_never_closes(self):
+        """The exact real-world shape: a well-formed ```diff fence around
+        a complete, correctly-headed unified diff, but the reply ends on a
+        bare "*** End Patch" line instead of a closing ``` -- bled in from
+        the unrelated OpenAI apply_patch convention, and observed on 8 of
+        361 finalized "no diff in model response" replies salvaged from
+        the 2026-08-08/09 fleet run. Before DIFF_BLOCK_UNCLOSED_RE existed,
+        DIFF_BLOCK_RE never matched (no closing ```), the unfenced
+        fallback never matched either (the reply opens with prose), and
+        this reply -- despite carrying a complete, appliable patch -- was
+        discarded outright."""
+        text = (
+            "Plan + diff: bounded CIFF directory traversal for CRW.\n\n"
+            "```diff\n"
+            "--- a/src/parsers/raw/metadata.rs\n"
+            "+++ b/src/parsers/raw/metadata.rs\n"
+            "@@ -6254,3 +6254,5 @@ fn parse_canon_crw(data: &[u8]) -> Result<MetadataMap> {\n"
+            "     Ok(metadata)\n"
+            " }\n"
+            "+\n"
+            "+fn crw_u16(data: &[u8], offset: usize) -> Option<u16> { None }\n"
+            "*** End Patch\n"
+        )
+        diff = extract_diff(text)
+        self.assertIsNotNone(diff)
+        self.assertIn("--- a/src/parsers/raw/metadata.rs", diff)
+        self.assertIn("+fn crw_u16", diff)
+        # The sentinel line must not leak into the diff handed to git apply.
+        self.assertNotIn("End Patch", diff)
+
+    def test_recovers_multi_file_diff_from_an_unclosed_fence(self):
+        """Same shape, multiple files -- synthesize_git_headers must still
+        run on the recovered content so a multi-file diff survives
+        --recount (see that function's docstring)."""
+        text = (
+            "Plan + diff\n\n```diff\n"
+            "--- a/src/core/file_format.rs\n"
+            "+++ b/src/core/file_format.rs\n"
+            "@@ -64,3 +64,4 @@ pub enum FileFormat {\n"
+            "     DPX,\n"
+            "+    JP2,\n"
+            "     QuickTime,\n"
+            "--- a/src/core/format_dispatch.rs\n"
+            "+++ b/src/core/format_dispatch.rs\n"
+            "@@ -11,3 +11,4 @@\n"
+            " use crate::parsers::archive::tar::parse_tar_metadata;\n"
+            "+use crate::parsers::image::embedded::parse_jp2_metadata;\n"
+            " use crate::parsers::audio::aac::parse_aac_metadata;\n"
+            "*** End Patch\n"
+        )
+        diff = extract_diff(text)
+        self.assertIsNotNone(diff)
+        self.assertIn("diff --git a/src/core/file_format.rs b/src/core/file_format.rs",
+                       diff)
+        self.assertIn("diff --git a/src/core/format_dispatch.rs b/src/core/format_dispatch.rs",
+                       diff)
+        self.assertNotIn("End Patch", diff)
+
+    def test_unclosed_fence_fallback_also_strips_a_leading_begin_patch_line(self):
+        """No real fleet reply carried "*** Begin Patch" (all 8 observed
+        cases had only the trailing "*** End Patch"), but strip_patch_
+        sentinels already strips both, and the fallback must not special-
+        case which sentinel it tolerates -- that would silently reintroduce
+        exactly the gap this fallback exists to close the day a reply
+        includes both."""
+        text = (
+            "```diff\n"
+            "*** Begin Patch\n"
+            "--- a/foo.rs\n"
+            "+++ b/foo.rs\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+            "*** End Patch\n"
+        )
+        diff = extract_diff(text)
+        self.assertIsNotNone(diff)
+        self.assertIn("+new", diff)
+        self.assertNotIn("Begin Patch", diff)
+        self.assertNotIn("End Patch", diff)
+
+    def test_closed_fence_still_wins_over_the_unclosed_fallback(self):
+        """A properly closed fence must keep using DIFF_BLOCK_RE, not the
+        new fallback -- e.g. trailing prose after the closing ``` must
+        still be excluded from the diff, exactly like before this
+        fallback existed (see test_extracts_fenced_diff_block)."""
+        text = (
+            "```diff\n--- a/foo.rs\n+++ b/foo.rs\n@@ -1 +1 @@\n-old\n+new\n```\n"
+            "*** End Patch\n"  # garbage OUTSIDE the fence -- must be ignored
+        )
+        diff = extract_diff(text)
+        self.assertIsNotNone(diff)
+        self.assertIn("+new", diff)
+        self.assertNotIn("End Patch", diff)
+
+    def test_unclosed_fence_with_no_diff_shaped_content_still_yields_something_git_apply_can_reject(self):
+        """A ```diff fence opened around pure prose (no real diff content,
+        never closed) is still recovered as "the fence's contents" by this
+        fallback -- extract_diff does not validate diff shape, the same as
+        every other branch. The safety net is downstream: git_apply_fn
+        (see AttemptBuildTests) rejects non-diff content the same way it
+        already rejects a syntactically-broken CLOSED-fence diff, so this
+        is never worse than today's handling of a diff that doesn't
+        apply -- it is strictly better than the previous behavior of
+        discarding the reply outright with zero repair round-trip."""
+        text = "```diff\nI'm not actually sure how to express this as a diff.\n"
+        diff = extract_diff(text)
+        self.assertIsNotNone(diff)
+        self.assertIn("not actually sure", diff)
+
+    def test_still_returns_none_for_a_reply_with_no_diff_fence_at_all(self):
+        """Regression guard: a reply that never opens a ```diff fence (the
+        overwhelming majority of genuine "no diff" replies) must still
+        return None -- the new fallback is anchored to an opening
+        ```diff literal and must never fire without one."""
+        text = "I don't know how to fix this. *** End Patch"
+        self.assertIsNone(extract_diff(text))
+
 
 class ExtractTestFailureContextTests(unittest.TestCase):
     def test_surfaces_panic_pushed_past_tail_window_by_later_binaries(self):
@@ -5494,6 +5612,35 @@ class AttemptBuildTests(unittest.TestCase):
         )
         self.assertFalse(built)
         self.assertEqual(reason, "no diff in model response")
+
+    def test_builds_when_diff_fence_never_closes_but_content_is_real(self):
+        """End-to-end witness for the extract_diff fallback (see
+        ExtractDiffTests.test_recovers_diff_from_a_fence_that_never_closes):
+        a "Plan + diff" reply whose ```diff fence is terminated by a stray
+        "*** End Patch" line instead of a closing ``` used to make this
+        whole attempt_build call return "no diff in model response"
+        immediately -- diff_attempts_used never even incremented, so no
+        repair round-trip was offered, unlike every other malformed-reply
+        shape (PATCH chunk, VERIFY) which all get a chance to resend. Now
+        the same reply builds on the first attempt, exactly like a
+        properly closed fence would."""
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=lambda messages, *a: (
+                "Plan + diff: adds the missing tag.\n\n"
+                "```diff\n--- a/src/x.rs\n+++ b/src/x.rs\n"
+                "@@ -1 +1 @@\n-old\n+new\n*** End Patch\n"
+            ),
+            git_apply_fn=lambda diff, root: (True, "ok"),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertTrue(built, reason)
+        self.assertIsNone(reason)
+        self.assertIn("+new", diff)
+        self.assertNotIn("End Patch", diff)
 
     def test_fails_gracefully_when_model_call_raises(self):
         def raising_call_model(messages, *a):
