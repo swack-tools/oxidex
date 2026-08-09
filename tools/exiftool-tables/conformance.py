@@ -25,6 +25,7 @@ get a confident wrong mapping.
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -120,6 +121,12 @@ def distinctive(v):
         return False
     try:
         f = float(s)
+        # Infinities parse ("float('-inf')" succeeds for -inf, Infinity,
+        # +inf...) but int(f) below raises OverflowError, and an infinite
+        # reading identifies nothing anyway -- same verdict as "inf" above.
+        # NaN (int() -> ValueError) matches nothing including itself.
+        if not math.isfinite(f):
+            return False
         # Small round numbers are the worst offenders.
         return abs(f) >= 1000 and f != int(f) or abs(f) >= 10000
     except ValueError:

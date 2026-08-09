@@ -138,9 +138,6 @@ flate2 = "1.1"
 # ZIP Archive Support (for Office and document formats)
 zip = "8.6"
 
-# Async Runtime (for tag-comparison binary)
-tokio = { version = "1.53", features = ["full"] }
-
 # CLI Argument Parsing (for tag-comparison binary)
 clap = { version = "4.6", features = ["derive"] }
 

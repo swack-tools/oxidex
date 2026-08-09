@@ -3,8 +3,10 @@
 Everything runs against a synthetic Perl lib and synthetic comparison
 JSON built in tempdirs -- no dependency on the real ExifTool install,
 the real corpus, or ~/.oxidex. The one repo file exercised is the
-checked-in scripts/squads.toml, asserted against the spec S2 squad
-table it must encode.
+checked-in config.example.toml's [squads.*] tables, asserted against the
+spec S2 squad table they must encode (config.example.toml, not config.toml,
+because config.toml is gitignored/per-installation and may not exist in a
+fresh checkout -- see CheckedInSquadsTomlTests).
 """
 import json
 import tempfile
@@ -71,7 +73,7 @@ EXTRA_PL = """\
 );
 """
 
-SQUADS_TOML = """\
+CONFIG_TOML = """\
 [meta]
 snapshot_date = "2026-07-24"
 
@@ -102,8 +104,8 @@ def make_perl_lib(tmpdir):
     return lib
 
 
-def make_squads_toml(tmpdir, content=SQUADS_TOML):
-    path = Path(tmpdir) / "squads.toml"
+def make_config_toml(tmpdir, content=CONFIG_TOML):
+    path = Path(tmpdir) / "config.toml"
     path.write_text(content)
     return path
 
@@ -266,7 +268,7 @@ class BuildAttributionTests(unittest.TestCase):
         self.index, self.modules = build_tag_index(
             make_perl_lib(self._tmp.name))
         self.module_to_squad, self.squad_names = load_squads(
-            make_squads_toml(self._tmp.name))
+            make_config_toml(self._tmp.name))
 
     def build(self, formats=None):
         return build_attribution(
@@ -355,14 +357,14 @@ class MainCliTests(unittest.TestCase):
     def run_main(self, extra_args=()):
         with tempfile.TemporaryDirectory() as tmpdir:
             lib = make_perl_lib(tmpdir)
-            squads = make_squads_toml(tmpdir)
+            squads = make_config_toml(tmpdir)
             comparison = Path(tmpdir) / "comparison.json"
             comparison.write_text(json.dumps(make_report()))
             out = Path(tmpdir) / "gap-attribution.json"
             rc = main([
                 "--comparison", str(comparison),
                 "--perl-lib", str(lib),
-                "--squads-toml", str(squads),
+                "--config", str(squads),
                 "--out", str(out),
                 *extra_args,
             ])
@@ -384,13 +386,21 @@ class MainCliTests(unittest.TestCase):
             comparison.write_text("{}")
             rc = main(["--comparison", str(comparison),
                        "--perl-lib", str(Path(tmpdir) / "nope"),
-                       "--squads-toml", str(make_squads_toml(tmpdir)),
+                       "--config", str(make_config_toml(tmpdir)),
                        "--out", str(Path(tmpdir) / "o.json")])
             self.assertEqual(rc, 1)
 
 
 class CheckedInSquadsTomlTests(unittest.TestCase):
-    """Guard the checked-in squads.toml against the spec S2 table."""
+    """Guard the checked-in squad manifest against the spec S2 table.
+
+    Reads config.example.toml, not config.toml: config.toml is gitignored
+    and per-installation (it may not exist at all in a fresh checkout or
+    CI), while config.example.toml is the git-tracked template that carries
+    the real, current [squads.*] tables verbatim (see the PR that moved
+    scripts/squads.toml's content into config.toml) -- exactly the "checked
+    -in" file this test class name promises to guard.
+    """
 
     SPEC_SQUADS = {
         "canon": ["Canon", "CanonCustom", "CanonRaw", "CanonVRD", "QuickTime"],
@@ -411,7 +421,8 @@ class CheckedInSquadsTomlTests(unittest.TestCase):
 
     def setUp(self):
         import tomllib
-        with open(SCRIPTS_DIR / "squads.toml", "rb") as f:
+        self.manifest_path = SCRIPTS_DIR.parent / "config.example.toml"
+        with open(self.manifest_path, "rb") as f:
             self.data = tomllib.load(f)
 
     def test_fourteen_squads_with_spec_modules(self):
@@ -425,14 +436,20 @@ class CheckedInSquadsTomlTests(unittest.TestCase):
             self.assertEqual(cfg["ownership_globs"], [], name)
             self.assertIn("formats", cfg, name)
 
-    def test_meta_snapshot_date_and_no_stored_gap_counts(self):
-        self.assertEqual(self.data["meta"]["snapshot_date"], "2026-07-24")
+    def test_no_stored_gap_counts(self):
+        # Gap counts are deliberately NOT stored in the squad manifest --
+        # they are derived live, every round, by attribute_gaps.py itself
+        # (see the "squads" summary in gap-attribution.json). [meta] /
+        # snapshot_date used to record the census date this table was taken
+        # from; it was dropped when the manifest moved into config.toml
+        # (comment-equivalent, consumed by no code) -- see the manifest's
+        # own header comment in config.example.toml for the same date.
         for name, cfg in self.data["squads"].items():
             self.assertNotIn("gaps", cfg, name)
             self.assertNotIn("open_gaps", cfg, name)
 
     def test_loader_maps_modules_and_defaults_to_tail(self):
-        module_to_squad, squad_names = load_squads(SCRIPTS_DIR / "squads.toml")
+        module_to_squad, squad_names = load_squads(self.manifest_path)
         self.assertEqual(len(squad_names), 14)
         self.assertEqual(module_to_squad["CanonCustom"], "canon")
         self.assertEqual(module_to_squad["Jpeg2000"], "sigma-c2pa")

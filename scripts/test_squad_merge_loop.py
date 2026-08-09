@@ -148,12 +148,12 @@ class RunLockedTests(GitRepoTestCase):
 
 
 # ---------------------------------------------------------------------------
-# squads.toml + candidate branch discovery
+# config.toml's [squads.*] tables + candidate branch discovery
 # ---------------------------------------------------------------------------
 
 class CandidateDiscoveryTests(GitRepoTestCase):
-    def _squads_toml(self):
-        path = self.tmp / "squads.toml"
+    def _config_toml(self):
+        path = self.tmp / "config.toml"
         path.write_text(
             '[squads.nikon]\nformats = ["NEF", "JPEG"]\n'
             '[squads.canon]\nformats = ["CR2"]\n'
@@ -161,22 +161,22 @@ class CandidateDiscoveryTests(GitRepoTestCase):
         return path
 
     def test_squad_formats_reads_the_advisory_list(self):
-        self.assertEqual(sml.squad_formats(self._squads_toml(), "nikon"), ["NEF", "JPEG"])
+        self.assertEqual(sml.squad_formats(self._config_toml(), "nikon"), ["NEF", "JPEG"])
 
     def test_unknown_squad_raises(self):
         with self.assertRaises(ValueError):
-            sml.squad_formats(self._squads_toml(), "nonexistent")
+            sml.squad_formats(self._config_toml(), "nonexistent")
 
     def test_candidate_branches_keeps_only_existing_ones(self):
         repo = self.make_repo()
         git(repo, "branch", "model-fix-parallel-nef")
         # model-fix-parallel-jpeg deliberately never created
-        branches = sml.candidate_worker_branches(repo, self._squads_toml(), "nikon")
+        branches = sml.candidate_worker_branches(repo, self._config_toml(), "nikon")
         self.assertEqual(branches, [("NEF", "model-fix-parallel-nef")])
 
     def test_no_candidate_branches_when_none_exist(self):
         repo = self.make_repo()
-        self.assertEqual(sml.candidate_worker_branches(repo, self._squads_toml(), "nikon"), [])
+        self.assertEqual(sml.candidate_worker_branches(repo, self._config_toml(), "nikon"), [])
 
 
 class SquadSlotBranchDiscoveryTests(GitRepoTestCase):
@@ -776,7 +776,7 @@ class OneSquadPerEmitterFileTests(SquadProcessFixture):
 
     Its own docstring says a content conflict is "structurally
     near-impossible given one squad per shared emitter file" -- but
-    squads.toml lets several squads claim a format, and squad_slot_branches
+    config.toml's [squads.*] tables let several squads claim a format, and squad_slot_branches
     filters ownership not at all. So two squads fix the SAME tags in the
     SAME file with DIFFERENT code, which patch-id dedup cannot see.
 
@@ -823,7 +823,7 @@ class OneSquadPerEmitterFileTests(SquadProcessFixture):
         self.assertEqual(result["outcome"], "consumed")
 
     def test_without_all_squads_the_check_is_inert(self):
-        """Opt-in: an unreadable squads.toml must never block a merger."""
+        """Opt-in: an unreadable config.toml must never block a merger."""
         repo, staging, home, sha = self._setup_squad()
         touched = git_out(repo, "show", "--name-only", "--format=", sha).split()
         self._stage_on_other_squad(repo, "canon", touched[0], "// canon's version\n")
@@ -1014,8 +1014,8 @@ class RunBatchCheckTests(unittest.TestCase):
 
 
 class PollOnceBatchIntegrationTests(GitRepoTestCase):
-    def _squads_toml(self):
-        path = self.tmp / "squads.toml"
+    def _config_toml(self):
+        path = self.tmp / "config.toml"
         path.write_text('[squads.nikon]\nformats = ["NEF"]\n')
         return path
 
@@ -1038,7 +1038,7 @@ class PollOnceBatchIntegrationTests(GitRepoTestCase):
         )
         result = sml.poll_once(
             repo_root=repo, squad="nikon", home=home, staging_dir=self.tmp / "staging-nikon",
-            squads_toml_path=self._squads_toml(), cache_dir="/unused", origin_ref="main",
+            config_path=self._config_toml(), cache_dir="/unused", origin_ref="main",
             batch_commits=10, batch_seconds=900, now_fn=lambda: 1001,  # not yet due
             check_recut=False, log_fn=lambda *a: None,
         )
@@ -1059,7 +1059,7 @@ class PollOnceBatchIntegrationTests(GitRepoTestCase):
         )
         result = sml.poll_once(
             repo_root=repo, squad="nikon", home=home, staging_dir=self.tmp / "staging-nikon",
-            squads_toml_path=self._squads_toml(), cache_dir="/unused", origin_ref="main",
+            config_path=self._config_toml(), cache_dir="/unused", origin_ref="main",
             batch_commits=10, batch_seconds=900, now_fn=lambda: 10_000,  # well past due
             validate_fn=lambda sha, repo, **kw: {"ok": True, "flags": [], "patch_id": "p1"},
             cargo_test_targeted_fn=lambda *a: (True, ""),
@@ -1096,7 +1096,7 @@ class PollOnceBatchIntegrationTests(GitRepoTestCase):
 
         result = sml.poll_once(
             repo_root=repo, squad="nikon", home=home, staging_dir=self.tmp / "staging-nikon",
-            squads_toml_path=self._squads_toml(), cache_dir="/unused", origin_ref="main",
+            config_path=self._config_toml(), cache_dir="/unused", origin_ref="main",
             batch_commits=10, batch_seconds=900, now_fn=lambda: 10_000,  # well past due
             comparison_fn=comparison_fn, check_recut=False, log_fn=lambda *a: None,
         )
@@ -1119,7 +1119,7 @@ class PollOnceBatchIntegrationTests(GitRepoTestCase):
         )
         result = sml.poll_once(
             repo_root=repo, squad="nikon", home=home, staging_dir=self.tmp / "staging-nikon",
-            squads_toml_path=self._squads_toml(), cache_dir="/unused", origin_ref="main",
+            config_path=self._config_toml(), cache_dir="/unused", origin_ref="main",
             batch_commits=10, batch_seconds=900, now_fn=lambda: 10_000,  # not yet due
             check_recut=False, log_fn=lambda *a: None,
         )
@@ -1159,7 +1159,7 @@ class PollOnceBatchIntegrationTests(GitRepoTestCase):
         result = sml.poll_once(
             repo_root=repo, squad="nikon", home=home,
             staging_dir=self.tmp / "staging-nikon",
-            squads_toml_path=self._squads_toml(), cache_dir="/unused",
+            config_path=self._config_toml(), cache_dir="/unused",
             origin_ref="main", batch_commits=10, batch_seconds=900,
             now_fn=lambda: 1001, comparison_fn=comparison_fn,
             check_recut=False, log_fn=lambda *a: None,
@@ -1210,7 +1210,7 @@ class PollOnceBatchIntegrationTests(GitRepoTestCase):
         result = sml.poll_once(
             repo_root=repo, squad="nikon", home=home,
             staging_dir=self.tmp / "staging-nikon",
-            squads_toml_path=self._squads_toml(), cache_dir="/unused",
+            config_path=self._config_toml(), cache_dir="/unused",
             origin_ref="main", batch_commits=10, batch_seconds=900,
             now_fn=lambda: 1001, comparison_fn=comparison_fn,
             check_recut=False, log_fn=lambda *a: None,
@@ -1248,8 +1248,8 @@ class PollOnceMissingStagingWorktreeTests(GitRepoTestCase):
     ordering survived: the crashing path was never exercised.
     """
 
-    def _squads_toml(self):
-        path = self.tmp / "squads.toml"
+    def _config_toml(self):
+        path = self.tmp / "config.toml"
         path.write_text('[squads.nikon]\nformats = ["NEF"]\n')
         return path
 
@@ -1264,7 +1264,7 @@ class PollOnceMissingStagingWorktreeTests(GitRepoTestCase):
 
         sml.poll_once(
             repo_root=repo, squad="nikon", home=home, staging_dir=staging,
-            squads_toml_path=self._squads_toml(), cache_dir="/unused", origin_ref="main",
+            config_path=self._config_toml(), cache_dir="/unused", origin_ref="main",
             batch_commits=10, batch_seconds=900,
             now_fn=lambda: commit_ts + 10_000,
             recut_staleness_seconds=10, check_recut=True,
@@ -1282,8 +1282,8 @@ class PollOnceSquadSlotBranchIntegrationTests(GitRepoTestCase):
     commit's format from its own Format: trailer since a slot has no
     single fixed format the way a legacy branch does."""
 
-    def _squads_toml(self):
-        path = self.tmp / "squads.toml"
+    def _config_toml(self):
+        path = self.tmp / "config.toml"
         path.write_text('[squads.canon]\nformats = ["JPEG", "CR2"]\n')
         return path
 
@@ -1300,7 +1300,7 @@ class PollOnceSquadSlotBranchIntegrationTests(GitRepoTestCase):
 
         result = sml.poll_once(
             repo_root=repo, squad="canon", home=home, staging_dir=self.tmp / "staging-canon",
-            squads_toml_path=self._squads_toml(), cache_dir="/unused", origin_ref="main",
+            config_path=self._config_toml(), cache_dir="/unused", origin_ref="main",
             batch_commits=10, batch_seconds=900, now_fn=lambda: 1,
             validate_fn=lambda sha, repo, **kw: {"ok": True, "flags": [], "patch_id": "p1"},
             cargo_test_targeted_fn=lambda *a: (True, ""),
@@ -1330,7 +1330,7 @@ class PollOnceSquadSlotBranchIntegrationTests(GitRepoTestCase):
 
         result = sml.poll_once(
             repo_root=repo, squad="canon", home=home, staging_dir=self.tmp / "staging-canon",
-            squads_toml_path=self._squads_toml(), cache_dir="/unused", origin_ref="main",
+            config_path=self._config_toml(), cache_dir="/unused", origin_ref="main",
             batch_commits=10, batch_seconds=900, now_fn=lambda: 1,
             validate_fn=lambda sha, repo, **kw: {"ok": True, "flags": [], "patch_id": "p1"},
             cargo_test_targeted_fn=lambda *a: (True, ""),
@@ -1788,14 +1788,14 @@ class PolicyVersionProcessCommitTests(SquadProcessFixture):
 # ---------------------------------------------------------------------------
 
 class FormatOwnerMapTests(GitRepoTestCase):
-    """squads.toml's `formats` is many-to-one by design (13 of 14 squads
+    """config.toml's [squads.*] `formats` is many-to-one by design (13 of 14 squads
     list JPEG). Read as a work partition it handed the single
     model-fix-parallel-jpeg branch to all 13 mergers, which each
     cherry-picked the same commits: 22 commits carrying 7 distinct
     patch-ids, one of them (5703eaa44c114f4c) copied 13 times."""
 
     def _toml(self, text):
-        path = self.tmp / "squads.toml"
+        path = self.tmp / "config.toml"
         path.write_text(text)
         return path
 
@@ -1815,8 +1815,15 @@ class FormatOwnerMapTests(GitRepoTestCase):
         self.assertEqual(sml.format_owner_map(path)["rw2"], "panasonic-leica")
 
     def test_the_real_manifest_yields_an_exclusive_partition(self):
-        owners = sml.format_owner_map(sml.DEFAULT_SQUADS_TOML)
-        with open(sml.DEFAULT_SQUADS_TOML, "rb") as fh:
+        # DEFAULT_CONFIG_PATH (REPO_ROOT/config.toml) is gitignored and
+        # per-installation -- may not exist in a fresh checkout/CI at all --
+        # so the REAL, git-tracked squad manifest to guard against is the one
+        # committed in config.example.toml (see the PR that moved squads.toml
+        # into config.toml: config.example.toml carries the real, current
+        # squad data verbatim so a fresh install starts correct).
+        real_manifest = sml.REPO_ROOT / "config.example.toml"
+        owners = sml.format_owner_map(real_manifest)
+        with open(real_manifest, "rb") as fh:
             squads = tomllib.load(fh)["squads"]
         consumers = {}
         for squad in sorted(squads):
@@ -1830,13 +1837,14 @@ class FormatOwnerMapTests(GitRepoTestCase):
         self.assertEqual(owners["jpeg"], "standards-appn")
 
     def test_owner_map_is_pure_and_stable(self):
-        self.assertEqual(sml.format_owner_map(sml.DEFAULT_SQUADS_TOML),
-                         sml.format_owner_map(sml.DEFAULT_SQUADS_TOML))
+        real_manifest = sml.REPO_ROOT / "config.example.toml"
+        self.assertEqual(sml.format_owner_map(real_manifest),
+                         sml.format_owner_map(real_manifest))
 
 
 class CandidateBranchExclusivityTests(GitRepoTestCase):
     def _toml(self):
-        path = self.tmp / "squads.toml"
+        path = self.tmp / "config.toml"
         path.write_text(
             '[squads."standards-appn"]\nmodules = ["JPEG"]\nformats = ["JPEG"]\n'
             '[squads.olympus]\nmodules = ["Olympus"]\nformats = ["JPEG"]\n'

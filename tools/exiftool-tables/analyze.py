@@ -22,6 +22,8 @@ import json
 import sys
 from collections import Counter, defaultdict
 
+from exprs import normalize
+
 CONV_FIELDS = ("PrintConv", "ValueConv", "RawConv")
 
 
@@ -73,7 +75,11 @@ def main(path):
                     if not isinstance(c, dict):
                         continue
                     if c.get("kind") == "expr" and c.get("expr"):
-                        exprs[c["expr"].strip()] += 1
+                        # Tally under the same normalization the translation
+                        # registry uses (exprs.normalize), or expressions
+                        # differing only in internal whitespace split into
+                        # separate rows and misstate what a translation covers.
+                        exprs[normalize(c["expr"])] += 1
                     if c.get("kind") in ("enum", "enum_partial"):
                         enum_sizes.append(len(c.get("map") or {}))
 

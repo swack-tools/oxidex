@@ -5,7 +5,7 @@
 # ///
 """Hermetic tests for fleet_health.py -- no live processes are probed
 (kill_fn/argv_fn are always injected), no real ~/.oxidex is read, and the
-squads.toml under test is a throwaway tempdir file.
+config.toml under test is a throwaway tempdir file.
 
 The invariants that matter most here are the negative ones, because this
 tool's whole reason to exist is that every earlier liveness check lied:
@@ -37,7 +37,7 @@ NOW = 1_000_000.0
 
 #: Two squads, disjoint ownership: canon owns cr2 by module claim, xmp owns
 #: xmp/svg. No format is contested, so the owner map is trivially stable.
-SQUADS_TOML = """
+CONFIG_TOML = """
 [squads.canon]
 modules = ["Canon", "CanonRaw"]
 formats = ["CR2"]
@@ -61,8 +61,8 @@ class FleetHealthTestCase(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.home = Path(self._tmp.name)
-        self.squads_toml = self.home / "squads.toml"
-        self.squads_toml.write_text(SQUADS_TOML)
+        self.config_toml = self.home / "config.toml"
+        self.config_toml.write_text(CONFIG_TOML)
 
     def write_lock(self, squad, pid=4242, heartbeat_age=10.0, raw=None):
         path = sml.merger_lock_path(self.home, squad)
@@ -232,7 +232,7 @@ class AssessTests(FleetHealthTestCase):
         kw.setdefault("now", NOW)
         kw.setdefault("kill_fn", alive_kill)
         kw.setdefault("argv_fn", lambda p: None)
-        return fh.assess(self.home, self.squads_toml, **kw)
+        return fh.assess(self.home, self.config_toml, **kw)
 
     def test_all_mergers_up_is_healthy(self):
         self.write_lock("canon")
@@ -271,28 +271,28 @@ class AssessTests(FleetHealthTestCase):
 
 class FormatsOwnedByTests(FleetHealthTestCase):
     def test_exclusive_ownership_follows_the_owner_map(self):
-        self.assertEqual(fh.formats_owned_by("canon", self.squads_toml), ["CR2"])
-        self.assertEqual(fh.formats_owned_by("xmp", self.squads_toml), ["SVG", "XMP"])
+        self.assertEqual(fh.formats_owned_by("canon", self.config_toml), ["CR2"])
+        self.assertEqual(fh.formats_owned_by("xmp", self.config_toml), ["SVG", "XMP"])
 
     def test_unknown_squad_owns_nothing(self):
-        self.assertEqual(fh.formats_owned_by("nope", self.squads_toml), [])
+        self.assertEqual(fh.formats_owned_by("nope", self.config_toml), [])
 
 
 class RenderAndMainTests(FleetHealthTestCase):
     def test_render_leads_with_the_alarm(self):
         self.write_lock("xmp")
-        report = fh.assess(self.home, self.squads_toml, now=NOW,
+        report = fh.assess(self.home, self.config_toml, now=NOW,
                            kill_fn=alive_kill, argv_fn=lambda p: None)
-        text = fh.render(report)
+        text = fh.render(report, self.config_toml)
         self.assertIn("ALARM", text.splitlines()[0])
         self.assertIn("CR2", text)
 
     def test_render_healthy_says_ok(self):
         self.write_lock("canon")
         self.write_lock("xmp")
-        report = fh.assess(self.home, self.squads_toml, now=NOW,
+        report = fh.assess(self.home, self.config_toml, now=NOW,
                            kill_fn=alive_kill, argv_fn=lambda p: None)
-        self.assertTrue(fh.render(report).startswith("OK"))
+        self.assertTrue(fh.render(report, self.config_toml).startswith("OK"))
 
     def test_main_formats_for_prints_and_exits_zero(self):
         import contextlib
@@ -300,7 +300,7 @@ class RenderAndMainTests(FleetHealthTestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             rc = fh.main(["--formats-for", "canon",
-                          "--squads-toml", str(self.squads_toml),
+                          "--config", str(self.config_toml),
                           "--home", str(self.home)])
         self.assertEqual(rc, 0)
         self.assertEqual(out.getvalue().split(), ["CR2"])
@@ -312,7 +312,7 @@ class RenderAndMainTests(FleetHealthTestCase):
         import io
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            rc = fh.main(["--json", "--squads-toml", str(self.squads_toml),
+            rc = fh.main(["--json", "--config", str(self.config_toml),
                           "--home", str(self.home)])
         self.assertEqual(rc, 1)
         report = json.loads(out.getvalue())

@@ -45,6 +45,11 @@ enum CanonBinaryConv {
     Raw,
     /// A lookup hash. An unlisted value prints as ExifTool's `Unknown (n)`.
     Map(&'static [(i64, &'static str)]),
+    /// A lookup hash whose Perl `PrintConv` declares an `OTHER => sub { shift }` fallback:
+    /// an unlisted value prints as the bare raw number instead of `Unknown (n)`. Used by
+    /// `%Canon::AFConfig` keys 2-4 (Canon.pm:9336-9362), which each name one or two
+    /// sentinel values and otherwise pass the raw `int32s` through untouched.
+    MapOrRaw(&'static [(i64, &'static str)]),
     /// A `BITMASK` hash: set bit names (or `[n]` for unknown bits) joined with ", ".
     Bitmask(&'static [(i64, &'static str)]),
     /// ExifTool's shared `%printParameter`: 0 prints "Normal", positives carry a "+".
@@ -744,7 +749,34 @@ const TABLE_HDR_INFO: &[CanonBinaryField] = &[
 ];
 
 /// `%Canon::AFConfig` (MakerNote tag 0x4028), transcribed from ExifTool.
+///
+/// Key 1 (`AFConfigTool`) is left out: its `PrintConv` sits behind a `ValueConv => '$val +
+/// 1'` (Canon.pm:9322-9332), and this module only reproduces fields with no `ValueConv`.
 const TABLE_AF_CONFIG: &[CanonBinaryField] = &[
+    CanonBinaryField {
+        index: 2,
+        name: "AFTrackingSensitivity",
+        format: CanonBinaryFormat::Int32s,
+        count: 1,
+        // Canon.pm:9336-9343: 127 => 'Auto', 0x7fffffff => 'n/a', else the raw value.
+        conv: CanonBinaryConv::MapOrRaw(&[(127, "Auto"), (0x7fffffff, "n/a")]),
+    },
+    CanonBinaryField {
+        index: 3,
+        name: "AFAccelDecelTracking",
+        format: CanonBinaryFormat::Int32s,
+        count: 1,
+        // Canon.pm:9345-9353: same sentinel pair as AFTrackingSensitivity.
+        conv: CanonBinaryConv::MapOrRaw(&[(127, "Auto"), (0x7fffffff, "n/a")]),
+    },
+    CanonBinaryField {
+        index: 4,
+        name: "AFPointSwitching",
+        format: CanonBinaryFormat::Int32s,
+        count: 1,
+        // Canon.pm:9355-9362: only 0x7fffffff is named; everything else passes through.
+        conv: CanonBinaryConv::MapOrRaw(&[(0x7fffffff, "n/a")]),
+    },
     CanonBinaryField {
         index: 5,
         name: "AIServoFirstImage",
@@ -1365,6 +1397,11 @@ fn render_value(conv: CanonBinaryConv, value: i64) -> String {
             .find(|(key, _)| *key == value)
             .map(|(_, label)| (*label).to_string())
             .unwrap_or_else(|| format!("Unknown ({})", value)),
+        CanonBinaryConv::MapOrRaw(table) => table
+            .iter()
+            .find(|(key, _)| *key == value)
+            .map(|(_, label)| (*label).to_string())
+            .unwrap_or_else(|| value.to_string()),
         CanonBinaryConv::PrintParameter => {
             // `%Image::ExifTool::Exif::printParameter` (Exif.pm:317) plus
             // `Exif::PrintParameter` (Exif.pm:5533): zero prints "Normal", a positive

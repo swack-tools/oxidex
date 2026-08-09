@@ -52,10 +52,47 @@ FIELD_RE = re.compile(
 )
 FIELD_COUNT_RE = re.compile(r'Field\s*\{\s*index:')
 VERSION_RE = re.compile(r'pub const EXIFTOOL_VERSION: &str = "([^"]+)";')
-INT_ENUM_RE = re.compile(r'PrintConv::IntEnum\(&\[(.*)\]\)$', re.S)
-STR_ENUM_RE = re.compile(r'PrintConv::StrEnum\(&\[(.*)\]\)$', re.S)
-INT_PAIR_RE = re.compile(r'\(\s*(-?\d+),\s*"((?:[^"\\]|\\.)*)"\s*\)')
-STR_PAIR_RE = re.compile(r'\(\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"\s*\)')
+# The `,?` before the closing paren matters: rustfmt wraps long tuples onto
+# multiple lines and leaves a trailing comma before `)`, and a pattern that
+# refuses that comma silently skips every wrapped entry.
+INT_PAIR_RE = re.compile(r'\(\s*(-?\d+),\s*"((?:[^"\\]|\\.)*)"\s*,?\s*\)')
+STR_PAIR_RE = re.compile(r'\(\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"\s*,?\s*\)')
+
+
+def _enum_body(src, open_bracket):
+    """The text between `[` at open_bracket and its true matching `]`.
+
+    Also returns the number of top-level `(..)` tuples inside it. A regex
+    cannot do this job: enum descriptions may contain `])`, which truncated
+    the lazy `.*?\\]\\)` capture and silently dropped the rest of that enum
+    from verification. This scan honors string literals and escapes.
+    """
+    i = open_bracket + 1
+    depth, paren_depth, tuples, in_str = 1, 0, 0, False
+    while i < len(src):
+        c = src[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == "(":
+            if paren_depth == 0:
+                tuples += 1
+            paren_depth += 1
+        elif c == ")":
+            paren_depth -= 1
+        elif c == "[":
+            depth += 1
+        elif c == "]":
+            depth -= 1
+            if depth == 0:
+                return src[open_bracket + 1:i], tuples
+        i += 1
+    raise SystemExit("unterminated enum body in generated file")
 
 
 def unescape(s):
@@ -89,15 +126,33 @@ def parse_rust(path):
             fields[k] = unescape(f.group("name"))
 
             pc = f.group("pc")
-            m = INT_ENUM_RE.search(pc)
-            if m:
-                for kk, vv in INT_PAIR_RE.findall(m.group(1)):
-                    enums[k][kk] = unescape(vv)
-                continue
-            m = STR_ENUM_RE.search(pc)
-            if m:
-                for kk, vv in STR_PAIR_RE.findall(m.group(1)):
-                    enums[k][unescape(kk)] = unescape(vv)
+            # Rescan the enum body from the source itself rather than
+            # trusting the regex capture -- see _enum_body for why.
+            for marker, pair_re, int_keys in (
+                ("PrintConv::IntEnum(&[", INT_PAIR_RE, True),
+                ("PrintConv::StrEnum(&[", STR_PAIR_RE, False),
+            ):
+                if not pc.startswith(marker):
+                    continue
+                body, expected_pairs = _enum_body(
+                    src, f.start("pc") + len(marker) - 1
+                )
+                pairs = pair_re.findall(body)
+                # Exact per-enum accounting, the same discipline the field
+                # count gets below: a pair the pattern cannot read must fail
+                # the run, not silently shrink the verified surface.
+                if len(pairs) != expected_pairs:
+                    raise SystemExit(
+                        f"enum for {k}: parsed {len(pairs)} of "
+                        f"{expected_pairs} entries -- the verifier's pair "
+                        "pattern is out of date; fix it before trusting a PASS"
+                    )
+                for kk, vv in pairs:
+                    if int_keys:
+                        enums[k][kk] = unescape(vv)
+                    else:
+                        enums[k][unescape(kk)] = unescape(vv)
+                break
 
     # Every Field in the file must have been parsed. Without this, a formatting
     # change that defeats the pattern degrades into a silent partial check.

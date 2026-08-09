@@ -1,0 +1,340 @@
+//! Decoder for Google's `HdrPlusMakernote` XMP property
+//! (`Image::ExifTool::Google::HDRPlusMakerNote`, Google.pm).
+//!
+//! Google's camera app (GCamera) stores per-shot debug metadata as a
+//! base64-encoded, encrypted, gzipped Protobuf blob under the
+//! `GCamera:HdrPlusMakernote` XMP property. ExifTool decodes it in
+//! `Google::ProcessHDRP` and re-files the extracted fields under the
+//! `MakerNotes` group (`Google::HDRPlusMakerNote`'s `GROUPS => { 0 =>
+//! 'MakerNotes' }`), even though the bytes never pass through a TIFF
+//! MakerNote IFD -- there is no numeric-tag `google` MakerNote parser in
+//! `src/parsers/tiff/makernotes` for exactly this reason (see
+//! `tiff/makernote_dispatcher.rs` and `tiff/makernotes/mod.rs`).
+//!
+//! Only the scalar device/app identification fields are decoded here
+//! (`Google.pm:547-561` plus `FrameCount`/`CreateDate` at `9-3`/`9-36-1`).
+//! The large binary payloads under the same table (`ImageData`,
+//! `TimeLogText`, `SummaryText`, per-frame `PayloadFrame*`, ...) are left
+//! unimplemented -- getting their exact ExifTool-reported byte counts and
+//! binary framing right is a separate, larger effort, and a wrong value
+//! under a real tag name is worse than an absent tag.
+
+use std::io::Read;
+
+/// Decodes a `GCamera:HdrPlusMakernote` XMP property value (still
+/// base64-encoded, exactly as read from the XMP packet) into the
+/// `MakerNotes:*` tags ExifTool reports for it.
+///
+/// Returns an empty `Vec` if the value cannot be base64-decoded, does not
+/// start with the expected `HDRP` signature, is not the protobuf-framed
+/// version 3 (`Google.pm:697,763`: version 2 is the older text-based
+/// format handled by a different, unimplemented code path), or fails to
+/// decrypt/gunzip -- rather than fabricating a value.
+pub fn decode_hdrp_plus_makernote(raw_value: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Some(inflated) = decrypt_and_inflate(raw_value) else {
+        return out;
+    };
+
+    let top = parse_fields(&inflated);
+
+    // `9-36-1`: HDR-Plus frame CreateDate (Google.pm:539-546).
+    if let Some(Field::Bytes(sub9)) = last_field(&top, 9) {
+        let f9 = parse_fields(sub9);
+        if let Some(Field::Bytes(sub36)) = last_field(&f9, 36) {
+            let f36 = parse_fields(sub36);
+            if let Some(Field::Varint(secs)) = last_field(&f36, 1) {
+                out.push((
+                    "MakerNotes:CreateDate".to_string(),
+                    crate::core::file_metadata::format_unix_time_local(*secs as i64),
+                ));
+            }
+        }
+        // `9-3`: FrameCount (Google.pm:537).
+        if let Some(Field::Varint(n)) = last_field(&f9, 3) {
+            out.push(("MakerNotes:FrameCount".to_string(), n.to_string()));
+        }
+    }
+
+    // `12-*`: device/software identification (Google.pm:547-561).
+    if let Some(Field::Bytes(sub12)) = last_field(&top, 12) {
+        let f12 = parse_fields(sub12);
+        push_string_field(&f12, 1, "MakerNotes:DeviceMake", &mut out);
+        push_string_field(&f12, 2, "MakerNotes:DeviceModel", &mut out);
+        push_string_field(&f12, 3, "MakerNotes:DeviceCodename", &mut out);
+        push_string_field(&f12, 4, "MakerNotes:DeviceHardwareRevision", &mut out);
+        push_string_field(&f12, 6, "MakerNotes:HDRPSoftware", &mut out);
+        push_string_field(&f12, 7, "MakerNotes:AndroidRelease", &mut out);
+        push_string_field(&f12, 9, "MakerNotes:Application", &mut out);
+        push_string_field(&f12, 10, "MakerNotes:AppVersion", &mut out);
+    }
+
+    out
+}
+
+/// Base64-decodes, decrypts, and gunzips a `HdrPlusMakernote` value,
+/// mirroring `Google::ProcessHDRP` (Google.pm:670-780). Returns `None` on
+/// any failure, or if the decoded version isn't 3 (protobuf-framed).
+fn decrypt_and_inflate(raw_value: &str) -> Option<Vec<u8>> {
+    let decoded = decode_base64_flexible(raw_value)?;
+    if decoded.len() < 5 || &decoded[0..4] != b"HDRP" {
+        return None;
+    }
+    let version = decoded[4];
+    if version != 3 {
+        // Version 2 is the older text-based HDRPMakerNote format
+        // (`ProcessHDRPMakerNote`, Google.pm:630-663) -- not implemented.
+        return None;
+    }
+
+    let mut payload = decoded[5..].to_vec();
+    let pad = (8 - (payload.len() % 8)) % 8;
+    if pad > 0 {
+        payload.extend(std::iter::repeat_n(0u8, pad));
+    }
+
+    // xorshift64* keystream, applied 64 bits (two little-endian u32 words)
+    // at a time (Google.pm:703-748). The Perl implementation does this
+    // arithmetic in 16-bit chunks for 32-bit-Perl compatibility; plain u64
+    // wrapping arithmetic is equivalent.
+    let mut state: u64 = 0x2515_606b_4a77_91cd;
+    let mut i = 0;
+    while i < payload.len() {
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        state = state.wrapping_mul(0x2545_F491_4F6C_DD1D);
+        let lo = (state & 0xffff_ffff) as u32;
+        let hi = (state >> 32) as u32;
+        xor_word(&mut payload, i, lo);
+        xor_word(&mut payload, i + 4, hi);
+        i += 8;
+    }
+    if pad > 0 {
+        let new_len = payload.len() - pad;
+        payload.truncate(new_len);
+    }
+
+    let mut gz = flate2::read::GzDecoder::new(&payload[..]);
+    let mut buf = Vec::new();
+    gz.read_to_end(&mut buf).ok()?;
+    Some(buf)
+}
+
+/// XORs the little-endian `u32` at `buf[offset..offset+4]` with `word`.
+/// A no-op if the slice would run past the end (only possible on the
+/// trailing half-word of an odd-length padded buffer, which never happens
+/// here since padding always brings the length to a multiple of 8).
+fn xor_word(buf: &mut [u8], offset: usize, word: u32) {
+    if offset + 4 > buf.len() {
+        return;
+    }
+    let bytes = word.to_le_bytes();
+    for (b, x) in buf[offset..offset + 4].iter_mut().zip(bytes.iter()) {
+        *b ^= x;
+    }
+}
+
+fn decode_base64_flexible(value: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    let compact: String = value.chars().filter(|c| !c.is_whitespace()).collect();
+    base64::engine::general_purpose::STANDARD
+        .decode(&compact)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(&compact))
+        .ok()
+}
+
+/// One decoded Protobuf record's payload (`Protobuf.pm:76-107`).
+enum Field<'a> {
+    /// Wire type 0.
+    Varint(u64),
+    /// Wire type 2 (string, bytes, or embedded message).
+    Bytes(&'a [u8]),
+}
+
+/// Parses top-level Protobuf records from `data`, stopping (and keeping
+/// whatever was already decoded) at the first malformed record rather than
+/// guessing at a resync point. Only wire types 0 (varint) and 2
+/// (length-delimited) are needed for the fields this module reads; a
+/// fixed32/fixed64 record is skipped over (kept out of the result) since
+/// none of the target fields use them.
+fn parse_fields(data: &[u8]) -> Vec<(u32, Field<'_>)> {
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    while pos < data.len() {
+        let Some((key, next)) = read_varint(data, pos) else {
+            break;
+        };
+        pos = next;
+        let id = (key >> 3) as u32;
+        let wire_type = key & 0x7;
+        match wire_type {
+            0 => {
+                let Some((val, next)) = read_varint(data, pos) else {
+                    break;
+                };
+                pos = next;
+                out.push((id, Field::Varint(val)));
+            }
+            1 => {
+                if pos + 8 > data.len() {
+                    break;
+                }
+                pos += 8;
+            }
+            2 => {
+                let Some((len, next)) = read_varint(data, pos) else {
+                    break;
+                };
+                pos = next;
+                let len = len as usize;
+                if pos + len > data.len() {
+                    break;
+                }
+                out.push((id, Field::Bytes(&data[pos..pos + len])));
+                pos += len;
+            }
+            5 => {
+                if pos + 4 > data.len() {
+                    break;
+                }
+                pos += 4;
+            }
+            _ => break, // deprecated group start/end (3/4) or invalid type
+        }
+    }
+    out
+}
+
+fn read_varint(data: &[u8], mut pos: usize) -> Option<(u64, usize)> {
+    let mut val: u64 = 0;
+    let mut shift = 0u32;
+    loop {
+        let byte = *data.get(pos)?;
+        pos += 1;
+        val |= ((byte & 0x7f) as u64) << shift;
+        if byte & 0x80 == 0 {
+            return Some((val, pos));
+        }
+        shift += 7;
+        if shift > 63 {
+            return None;
+        }
+    }
+}
+
+/// The last record with the given field id, mirroring Protobuf's
+/// "last value wins" semantics for a non-repeated field.
+fn last_field<'a, 'b>(fields: &'b [(u32, Field<'a>)], id: u32) -> Option<&'b Field<'a>> {
+    fields
+        .iter()
+        .rev()
+        .find(|(fid, _)| *fid == id)
+        .map(|(_, f)| f)
+}
+
+fn push_string_field(
+    fields: &[(u32, Field<'_>)],
+    id: u32,
+    tag: &str,
+    out: &mut Vec<(String, String)>,
+) {
+    if let Some(Field::Bytes(bytes)) = last_field(fields, id)
+        && let Ok(s) = std::str::from_utf8(bytes)
+    {
+        out.push((tag.to_string(), s.to_string()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Round-trips the encryption in `decrypt_and_inflate` against its own
+    /// inverse to pin the xorshift64* keystream and padding handling
+    /// without depending on a real sample file.
+    #[test]
+    fn xorshift_keystream_round_trips() {
+        // Build a small "HDRP\x03" + gzipped-protobuf payload, encrypt it
+        // with the same keystream `decrypt_and_inflate` un-applies, base64
+        // it, and confirm the fields survive the round trip.
+        let mut inner = Vec::new();
+        // field 12 (LEN), containing field 3 (LEN) = "codename"
+        let mut f12 = Vec::new();
+        push_len_field(&mut f12, 3, b"codename");
+        push_len_field(&mut inner, 12, &f12);
+
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        use std::io::Write;
+        gz.write_all(&inner).unwrap();
+        let gzipped = gz.finish().unwrap();
+
+        let mut plaintext = b"HDRP\x03".to_vec();
+        plaintext.extend_from_slice(&gzipped);
+
+        let payload_start = 5;
+        let mut encrypted = plaintext.clone();
+        let mut payload = encrypted[payload_start..].to_vec();
+        let pad = (8 - (payload.len() % 8)) % 8;
+        payload.extend(std::iter::repeat_n(0u8, pad));
+
+        let mut state: u64 = 0x2515_606b_4a77_91cd;
+        let mut i = 0;
+        while i < payload.len() {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            state = state.wrapping_mul(0x2545_F491_4F6C_DD1D);
+            let lo = (state & 0xffff_ffff) as u32;
+            let hi = (state >> 32) as u32;
+            xor_word(&mut payload, i, lo);
+            xor_word(&mut payload, i + 4, hi);
+            i += 8;
+        }
+
+        encrypted.truncate(payload_start);
+        encrypted.extend_from_slice(&payload);
+
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&encrypted);
+
+        let tags = decode_hdrp_plus_makernote(&b64);
+        assert!(
+            tags.contains(&(
+                "MakerNotes:DeviceCodename".to_string(),
+                "codename".to_string()
+            )),
+            "{tags:?}"
+        );
+    }
+
+    fn push_len_field(buf: &mut Vec<u8>, id: u32, value: &[u8]) {
+        write_varint(buf, ((id as u64) << 3) | 2);
+        write_varint(buf, value.len() as u64);
+        buf.extend_from_slice(value);
+    }
+
+    fn write_varint(buf: &mut Vec<u8>, mut val: u64) {
+        loop {
+            let mut byte = (val & 0x7f) as u8;
+            val >>= 7;
+            if val != 0 {
+                byte |= 0x80;
+            }
+            buf.push(byte);
+            if val == 0 {
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_non_hdrp_input() {
+        assert!(decode_hdrp_plus_makernote("bm90aGRycA==").is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_base64() {
+        assert!(decode_hdrp_plus_makernote("not valid base64!!!").is_empty());
+    }
+}

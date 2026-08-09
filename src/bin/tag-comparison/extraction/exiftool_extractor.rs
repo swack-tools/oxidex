@@ -154,7 +154,16 @@ impl ExifToolExtractor {
     /// ExtractionResult with tags and file count
     ///
     /// OPTIMIZED: Uses batch mode to process multiple files per exiftool invocation
-    pub async fn extract_format_tags(
+    ///
+    /// Plain `fn`, not `async fn`: every operation in this body (subprocess
+    /// spawn/wait, `std::fs` reads/writes) is already blocking, so the
+    /// `async` this signature carried until 2026-08-08 never actually
+    /// yielded -- `main`'s single `.await` per call ran it to completion
+    /// inline, same as a direct call. Synchronous throughout lets the
+    /// per-format loop in `main.rs` parallelize with `rayon` (each format's
+    /// extraction runs on its own OS thread) without dragging a second
+    /// (unused) concurrency model -- tokio -- along for the ride.
+    pub fn extract_format_tags(
         &mut self,
         format: &str,
         fixture_path: &Path,

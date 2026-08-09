@@ -41,7 +41,6 @@ from parallel_model_fix_loop import (
     list_open_sweep_prs,
     main,
     merge_branch,
-    merge_pr,
     novel_commits,
     parse_worktree_list,
     pr_checks_state,
@@ -1531,8 +1530,8 @@ class SquadOpenGapsFromAttributionTests(unittest.TestCase):
 
 
 class SquadWorkerFormatsTests(unittest.TestCase):
-    def _squads_toml(self, tmp):
-        path = tmp / "squads.toml"
+    def _config_toml(self, tmp):
+        path = tmp / "config.toml"
         path.write_text(
             '[squads.canon]\nmodules = ["Canon"]\nformats = ["JPEG", "CR2"]\nownership_globs = []\n'
         )
@@ -1541,23 +1540,23 @@ class SquadWorkerFormatsTests(unittest.TestCase):
     def test_prefers_live_attribution_formats(self):
         attribution = {"squads": {"canon": {"formats": ["JPEG", "DNG"]}}}
         with tempfile.TemporaryDirectory() as tmpdir:
-            formats = squad_worker_formats("canon", attribution, self._squads_toml(Path(tmpdir)))
+            formats = squad_worker_formats("canon", attribution, self._config_toml(Path(tmpdir)))
         self.assertEqual(formats, ["JPEG", "DNG"])
 
-    def test_falls_back_to_squads_toml_when_attribution_has_nothing(self):
+    def test_falls_back_to_config_toml_when_attribution_has_nothing(self):
         attribution = {"squads": {"canon": {"formats": []}}}
         with tempfile.TemporaryDirectory() as tmpdir:
-            formats = squad_worker_formats("canon", attribution, self._squads_toml(Path(tmpdir)))
+            formats = squad_worker_formats("canon", attribution, self._config_toml(Path(tmpdir)))
         self.assertEqual(formats, ["JPEG", "CR2"])
 
-    def test_none_attribution_falls_back_to_squads_toml(self):
+    def test_none_attribution_falls_back_to_config_toml(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            formats = squad_worker_formats("canon", None, self._squads_toml(Path(tmpdir)))
+            formats = squad_worker_formats("canon", None, self._config_toml(Path(tmpdir)))
         self.assertEqual(formats, ["JPEG", "CR2"])
 
-    def test_unknown_squad_in_squads_toml_returns_empty_not_raise(self):
+    def test_unknown_squad_in_config_toml_returns_empty_not_raise(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            formats = squad_worker_formats("nonexistent-squad", None, self._squads_toml(Path(tmpdir)))
+            formats = squad_worker_formats("nonexistent-squad", None, self._config_toml(Path(tmpdir)))
         self.assertEqual(formats, [])
 
 
@@ -1690,7 +1689,11 @@ class RunSquadRoundTests(unittest.TestCase):
         base = dict(
             max_parallel=3, cache_dir="/unused",
             worktree_dir=str(tmp / "wt"), log_dir=str(tmp / "log"), timeout=None,
-            squads_toml=str(parallel_model_fix_loop.DEFAULT_SQUADS_TOML), home=str(tmp / "home"),
+            # No squads/config attribute here: run_squad_round now takes
+            # config_path as its own explicit second positional argument
+            # (see every run_squad_round(args, Path(...), ...) call below)
+            # rather than reading it off args, so args needs none.
+            home=str(tmp / "home"),
             gap_attribution_path=str(tmp / "gap-attribution.json"),
         )
         base.update(overrides)
@@ -2663,54 +2666,6 @@ class WaitForPrChecksTests(unittest.TestCase):
         self.assertEqual(len(slept), 2)
 
 
-class MergePrTests(unittest.TestCase):
-    def test_squash_merges_and_deletes_the_branch(self):
-        calls = []
-
-        def run_gh(args, repo_root):
-            calls.append(args)
-            return 0, "Merged\n", ""
-
-        ok, message = merge_pr("https://example/pr/1", "/repo", run_gh=run_gh)
-        self.assertTrue(ok)
-        self.assertIn("Merged", message)
-        # --auto is deliberately absent: repo-level auto-merge is
-        # disabled, so `gh pr merge --auto` is rejected outright.
-        self.assertEqual(calls, [["pr", "merge", "https://example/pr/1", "--squash", "--delete-branch"]])
-        self.assertNotIn("--auto", calls[0])
-
-    def test_failure_is_reported_not_raised(self):
-        def run_gh(args, repo_root):
-            if args[:2] == ["pr", "view"]:
-                return 0, json.dumps({"state": "OPEN"}), ""
-            return 1, "", "not mergeable"
-
-        ok, message = merge_pr("pr", "/repo", run_gh=run_gh)
-        self.assertFalse(ok)
-        self.assertIn("not mergeable", message)
-
-    def test_post_merge_cleanup_failure_still_counts_as_merged(self):
-        # gh deletes the local branch AFTER the API merge; in a
-        # multi-worktree repo that step can fail on its own ("main is
-        # already checked out at ..."). Reporting merge_failed there
-        # would skip the worktree sync for a main that really advanced.
-        def run_gh(args, repo_root):
-            if args[:2] == ["pr", "view"]:
-                return 0, json.dumps({"state": "MERGED"}), ""
-            return 1, "", "failed to delete local branch: main is already checked out"
-
-        ok, message = merge_pr("pr", "/repo", run_gh=run_gh)
-        self.assertTrue(ok)
-        self.assertIn("MERGED", message)
-
-    def test_unreadable_pr_state_does_not_upgrade_a_failure(self):
-        ok, _message = merge_pr(
-            "pr", "/repo",
-            run_gh=lambda args, repo: (1, "", "gh: could not reach github.com"),
-        )
-        self.assertFalse(ok)
-
-
 def _gh_pr_entry(number, head, **overrides):
     """One `gh pr list --json ...` record carrying the same field set the
     production query asks for.
@@ -2878,12 +2833,12 @@ class AdoptOpenSweepPrsTests(unittest.TestCase):
                      "author": {"login": "reviewer"}, "commit": {"oid": "a" * 40}}],
     })
 
-    def test_a_since_green_abandoned_pr_is_merged(self):
+    def test_a_since_green_abandoned_pr_is_surfaced_for_review(self):
         url = "https://github.com/o/r/pull/126"
         run_gh, calls = self._run_gh(_gh_pr_list((126, "sweep/tags-2026-07-25-2")), {url: self.GREEN})
         adopted = adopt_open_sweep_prs(repo_root="/repo", run_gh=run_gh, log_fn=lambda *a: None)
-        self.assertEqual([(a["pr"], a["action"]) for a in adopted], [(url, "merged")])
-        self.assertIn(["pr", "merge", url, "--squash", "--delete-branch"], calls)
+        self.assertEqual([(a["pr"], a["action"]) for a in adopted], [(url, "left_open_awaiting_review")])
+        self.assertNotIn(["pr", "merge", url, "--squash", "--delete-branch"], calls)
 
     def test_a_still_red_pr_is_left_open_and_never_merged(self):
         url = "https://github.com/o/r/pull/126"
@@ -2933,9 +2888,8 @@ class AdoptOpenSweepPrsTests(unittest.TestCase):
         --workspace`; also FileNotFoundError when `gh` is unlinked
         mid-round by a `brew upgrade` during a weeks-long --infinite run)
         aborted the whole adoption pass from inside the per-PR loop.
-        Measured cost: PR #10 merged, #11 raised, #12 never looked at,
-        the adoption record discarded, and the post-merge worktree sync
-        skipped for a merge that had already landed."""
+        Measured cost: PR #10 accounted for, #11 raised, #12 never
+        looked at, and the adoption record discarded entirely."""
         payloads = {f"https://github.com/o/r/pull/{n}": self.GREEN for n in (10, 11, 12)}
         run_gh, calls = self._run_gh(
             _gh_pr_list((10, "sweep/tags-2026-07-26-1"), (11, "sweep/tags-2026-07-26-2"),
@@ -2951,11 +2905,10 @@ class AdoptOpenSweepPrsTests(unittest.TestCase):
         adopted = adopt_open_sweep_prs(repo_root="/repo", run_gh=flaky_gh, log_fn=lambda *a: None)
         self.assertEqual([a["pr"].rsplit("/", 1)[-1] for a in adopted], ["10", "11", "12"])
         actions = {a["pr"].rsplit("/", 1)[-1]: a["action"] for a in adopted}
-        self.assertEqual(actions["10"], "merged")
-        self.assertEqual(actions["12"], "merged")
-        self.assertNotEqual(actions["11"], "merged")
-        self.assertNotIn(["pr", "merge", "https://github.com/o/r/pull/11", "--squash",
-                          "--delete-branch"], calls)
+        self.assertEqual(actions["10"], "left_open_awaiting_review")
+        self.assertEqual(actions["12"], "left_open_awaiting_review")
+        self.assertEqual(actions["11"], "check_failed")
+        self.assertFalse(any(a[:2] == ["pr", "merge"] for a in calls))
 
 
 class PrReviewStateTests(unittest.TestCase):
@@ -2997,11 +2950,10 @@ class PrReviewStateTests(unittest.TestCase):
 
 class DefaultRunGhNeverRaisesTests(unittest.TestCase):
     """Every consumer of a gh runner already copes with a failure tuple
-    (pr_checks_state -> "unknown", merge_pr -> merge_failed with the PR
-    left open, list_open_sweep_prs -> []), and exactly one of them --
-    list_open_sweep_prs -- had its own `except OSError`. Putting the
-    guard in the runner instead makes that redundant rather than
-    load-bearing."""
+    (pr_checks_state -> "unknown", list_open_sweep_prs -> []), and
+    exactly one of them -- list_open_sweep_prs -- had its own
+    `except OSError`. Putting the guard in the runner instead makes
+    that redundant rather than load-bearing."""
 
     def _run(self, exc):
         with patch("parallel_model_fix_loop.subprocess.run", side_effect=exc):
@@ -3160,15 +3112,14 @@ class AutoPublishRoundTests(unittest.TestCase):
                      "author": {"login": "reviewer"}, "commit": {"oid": "a" * 40}}],
     })
 
-    def test_all_green_squash_merges_and_then_syncs_worktrees(self):
+    def test_all_green_and_approved_publishes_without_merging(self):
         result = self._publish(self.OK_SWEEP, self._run_gh(self.GREEN))
-        self.assertEqual(result["status"], "merged")
-        self.assertIn(["pr", "merge", "https://github.com/o/r/pull/125", "--squash", "--delete-branch"],
-                      self.gh_calls)
-        # Sync runs only after a real merge, and against the DISPATCHER's
-        # repo (not the sweep worktree) so it enumerates every worktree.
-        self.assertEqual(len(self.sync_calls), 1)
-        self.assertEqual(self.sync_calls[0]["repo_root"], self.tmp / "repo")
+        self.assertEqual(result["status"], "published_awaiting_review")
+        self.assertNotIn(["pr", "merge", "https://github.com/o/r/pull/125", "--squash", "--delete-branch"],
+                         self.gh_calls)
+        # The fleet never merges, so nothing ever triggers a sync from
+        # this path.
+        self.assertEqual(self.sync_calls, [])
 
     def test_red_checks_leave_the_pr_open_and_never_merge(self):
         result = self._publish(self.OK_SWEEP, self._run_gh(self.RED))
@@ -3184,11 +3135,6 @@ class AutoPublishRoundTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "checks_timeout")
         self.assertFalse(any(args[:2] == ["pr", "merge"] for args in self.gh_calls))
-        self.assertEqual(self.sync_calls, [])
-
-    def test_a_failing_gh_merge_leaves_the_pr_open(self):
-        result = self._publish(self.OK_SWEEP, self._run_gh(self.GREEN, merge_rc=1))
-        self.assertEqual(result["status"], "merge_failed")
         self.assertEqual(self.sync_calls, [])
 
     def test_a_check_that_flips_red_between_the_green_poll_and_the_merge_is_not_merged(self):
@@ -3230,20 +3176,19 @@ class AutoPublishRoundTests(unittest.TestCase):
         self.assertFalse(any(args[:2] == ["pr", "merge"] for args in self.gh_calls))
         self.assertEqual(self.sync_calls, [])
 
-    def test_an_abandoned_sweep_pr_from_an_earlier_round_is_adopted_and_merged(self):
+    def test_an_abandoned_sweep_pr_from_an_earlier_round_is_adopted_and_surfaced(self):
         # MAJOR 4: nothing revisited an already-open sweep PR, and the
         # sweep cursor had already consumed its stamps -- so a PR that
         # went green one minute after the checks timeout was stranded on
-        # origin forever.
+        # origin forever, never even noticed again.
         run_gh = self._run_gh(self.GREEN, list_payload=_gh_pr_list((126, "sweep/tags-2026-07-25-2")))
         result = self._publish({"status": "no_news"}, run_gh)
         self.assertEqual(result["status"], "no_news")
-        self.assertEqual([a["action"] for a in result["adopted"]], ["merged"])
-        self.assertIn(["pr", "merge", "https://github.com/o/r/pull/126", "--squash", "--delete-branch"],
-                      self.gh_calls)
-        # A merge -- from ANY source -- has to be followed by the
-        # worktree fast-forward, or ~100 worktrees sit behind main.
-        self.assertEqual(len(self.sync_calls), 1)
+        self.assertEqual([a["action"] for a in result["adopted"]], ["left_open_awaiting_review"])
+        self.assertNotIn(["pr", "merge", "https://github.com/o/r/pull/126", "--squash", "--delete-branch"],
+                         self.gh_calls)
+        # The fleet never merges, so nothing ever triggers a sync.
+        self.assertEqual(self.sync_calls, [])
 
     def test_adoption_runs_before_the_sweep_cuts_a_new_branch(self):
         order = []
@@ -3255,7 +3200,7 @@ class AutoPublishRoundTests(unittest.TestCase):
 
         self._publish({"status": "no_news"}, watching_gh,
                       sweep_fn=lambda **kw: order.append(["sweep"]) or {"status": "no_news"})
-        self.assertLess(order.index(["pr", "merge"]), order.index(["sweep"]))
+        self.assertLess(order.index(["pr", "checks"]), order.index(["sweep"]))
 
     def test_a_sweep_with_no_news_and_no_open_pr_touches_nothing_at_all(self):
         result = self._publish({"status": "no_news"}, self._run_gh(self.GREEN))
@@ -3281,21 +3226,21 @@ class AutoPublishRoundTests(unittest.TestCase):
     def test_an_unavailable_sweep_worktree_still_adopts_a_stale_green_pr(self):
         # The worktree is what the SWEEP needs; an already-open PR from
         # an earlier round needs nothing but gh, so a provisioning
-        # failure must not strand it too.
+        # failure must not stop it from being noticed too.
         result = self._publish(
             self.OK_SWEEP,
             self._run_gh(self.GREEN, list_payload=_gh_pr_list((126, "sweep/tags-2026-07-25-2"))),
             ensure_worktree_fn=lambda repo_root, path, **kw: (None, "worktree add failed"),
         )
         self.assertEqual(result["status"], "no_worktree")
-        self.assertEqual([a["action"] for a in result["adopted"]], ["merged"])
-        self.assertEqual(len(self.sync_calls), 1)
+        self.assertEqual([a["action"] for a in result["adopted"]], ["left_open_awaiting_review"])
+        self.assertEqual(self.sync_calls, [])
 
-    def test_a_raising_gh_mid_adoption_still_syncs_and_still_sweeps(self):
+    def test_a_raising_gh_mid_adoption_does_not_abort_the_round(self):
         # DEFECT 6, at the round level: the abort discarded the adoption
-        # record, so `adopted_sync = sync() if adopted_merges else None`
-        # (which sits AFTER the loop) never ran for a merge that HAD
-        # landed, and the round's own sweep never got a chance either.
+        # record entirely, so a PR that was accounted for before the
+        # raise disappeared from the result, and the round's own sweep
+        # never got a chance either.
         swept = []
         payloads = {f"https://github.com/o/r/pull/{n}": self.GREEN for n in (10, 11, 12)}
         base = self._run_gh(self.GREEN,
@@ -3317,7 +3262,7 @@ class AutoPublishRoundTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "no_news")
         self.assertEqual(len(result["adopted"]), 3)
-        self.assertEqual(len(self.sync_calls), 1)
+        self.assertEqual(self.sync_calls, [])
         self.assertEqual(swept, [1])
 
     def test_a_sweep_whose_bisection_left_the_recheck_failing_is_not_merged(self):
@@ -3333,11 +3278,12 @@ class AutoPublishRoundTests(unittest.TestCase):
         self.assertFalse(any(args[:2] == ["pr", "merge"] for args in self.gh_calls))
         self.assertEqual(self.sync_calls, [])
 
-    def test_a_sweep_whose_bisection_cleared_the_recheck_still_merges(self):
+    def test_a_sweep_whose_bisection_cleared_the_recheck_still_publishes(self):
         sweep = dict(self.OK_SWEEP,
                      bisection={"offenders": ["nikon"], "surviving_squads": ["canon"],
                                 "unrevertable": [], "recheck_passed": True})
-        self.assertEqual(self._publish(sweep, self._run_gh(self.GREEN))["status"], "merged")
+        self.assertEqual(self._publish(sweep, self._run_gh(self.GREEN))["status"],
+                         "published_awaiting_review")
 
     def test_an_empty_diff_branch_is_not_polled_or_merged(self):
         # The repo's DURABLE idempotency rule, applied at the consumer:
@@ -3383,8 +3329,8 @@ class AutoPublishNoNewsIsATrueNoOpTests(GitRepoTestCase):
     def test_real_run_sweep_with_no_green_stamps_creates_no_refs_and_no_gh_writes(self):
         repo = self.make_repo()
         home = self.tmp / "home"
-        squads_toml = self.tmp / "squads.toml"
-        squads_toml.write_text('[squads.canon]\nmodules = []\nformats = ["JPEG"]\nownership_globs = []\n')
+        config_toml = self.tmp / "config.toml"
+        config_toml.write_text('[squads.canon]\nmodules = []\nformats = ["JPEG"]\nownership_globs = []\n')
         refs_before = git_out(repo, "for-each-ref", "--format=%(refname)")
         head_before = git_out(repo, "rev-parse", "HEAD").strip()
         gh_calls, sync_calls = [], []
@@ -3401,7 +3347,7 @@ class AutoPublishNoNewsIsATrueNoOpTests(GitRepoTestCase):
             )
 
         result = auto_publish_round(
-            repo_root=repo, cache_dir="/unused", home=home, squads_toml_path=squads_toml,
+            repo_root=repo, cache_dir="/unused", home=home, config_path=config_toml,
             fmt_fn=lambda repo_root: self.fail("no-news round ran cargo fmt"),
             sweep_fn=sweep_fn, ensure_worktree_fn=lambda repo_root, path, **kw: (repo, "reused"),
             sync_fn=lambda **kw: sync_calls.append(kw),
@@ -3427,7 +3373,7 @@ class AutoPublishEndToEndTests(GitRepoTestCase):
     and the fake `gh pr merge` advances origin/main the way GitHub's own
     squash-merge would."""
 
-    def test_a_green_round_lands_the_fix_on_origin_main_and_syncs_worktrees(self):
+    def test_a_green_and_approved_round_pushes_the_fix_but_never_merges_it(self):
         import squad_merge_loop
 
         origin = self.tmp / "origin.git"
@@ -3435,6 +3381,7 @@ class AutoPublishEndToEndTests(GitRepoTestCase):
         repo = self.make_repo()
         git(repo, "remote", "add", "origin", str(origin))
         git(repo, "push", "-q", "-u", "origin", "main")
+        origin_main_before = git_out(origin, "rev-parse", "main").strip()
 
         # A worker's fix, validated onto its squad branch -- and, as
         # every worker-authored fix has been, not cargo-fmt clean.
@@ -3452,8 +3399,8 @@ class AutoPublishEndToEndTests(GitRepoTestCase):
             squad_merge_loop.squad_status_file(home, "canon"), "workerhead", status="consumed",
             patch_id="p1", format_name="JPEG", squad_sha=squad_sha, now_fn=lambda: 100,
         )
-        squads_toml = self.tmp / "squads.toml"
-        squads_toml.write_text('[squads.canon]\nmodules = []\nformats = ["JPEG"]\nownership_globs = []\n')
+        config_toml = self.tmp / "config.toml"
+        config_toml.write_text('[squads.canon]\nmodules = []\nformats = ["JPEG"]\nownership_globs = []\n')
 
         # A worker worktree sitting on an older main: the thing that has
         # to end up updated once the fix lands.
@@ -3520,7 +3467,7 @@ class AutoPublishEndToEndTests(GitRepoTestCase):
             )
 
         result = auto_publish_round(
-            repo_root=repo, cache_dir="/unused", home=home, squads_toml_path=squads_toml,
+            repo_root=repo, cache_dir="/unused", home=home, config_path=config_toml,
             sweep_fn=sweep_fn,
             # The repo itself doubles as the sweep worktree here; the
             # dedicated-worktree provisioning has its own tests above.
@@ -3537,32 +3484,27 @@ class AutoPublishEndToEndTests(GitRepoTestCase):
             run_gh=fake_gh, sleep_fn=lambda s: None, log_fn=lambda *a: None,
         )
 
-        self.assertEqual(result["status"], "merged")
+        self.assertEqual(result["status"], "published_awaiting_review")
         self.assertTrue(result["sweep"]["fmt"]["committed"])
 
-        # What origin ACTUALLY received on the head branch -- the only
-        # thing GitHub could ever squash-merge -- has to be the formatted
-        # tree, fmt commit included. Asserted on the branch as it exists
-        # in the bare origin repo, not on any local ref.
+        # What origin ACTUALLY received on the head branch -- the fix
+        # still has to reach the PR's branch, fmt commit included, even
+        # though the fleet never merges it itself. Asserted on the branch
+        # as it exists in the bare origin repo, not on any local ref.
         pushed_branch = pr_head_branch["branch"]
         self.assertEqual(git_out(origin, "show", f"refs/heads/{pushed_branch}:src/fix.rs"),
                          "fn fixed() {}\n")
         self.assertIn("style: cargo fmt --all (sweep publish)",
                       git_out(origin, "log", f"refs/heads/{pushed_branch}", "--format=%s").splitlines())
 
-        # The fix reached origin/main, and so did the fmt commit that
-        # keeps CI's Lint & Audit job green.
-        landed = git_out(repo, "show", "origin/main:src/fix.rs")
-        self.assertEqual(landed, "fn fixed() {}\n")
-        subjects = git_out(repo, "log", "origin/main", "--format=%s").splitlines()
-        self.assertIn("fix JPEG:Foo", subjects)
-        self.assertIn("style: cargo fmt --all (sweep publish)", subjects)
-
-        # And every clean, behind worktree followed origin/main.
-        target = git_out(repo, "rev-parse", "origin/main").strip()
-        self.assertEqual(git_out(worker_wt, "rev-parse", "HEAD").strip(), target)
-        self.assertIn(worker_wt.resolve(), [p.resolve() for p in result["sync"]["updated"]])
-        self.assertTrue(any(a[:2] == ["pr", "merge"] for a in gh_calls))
+        # The fleet publishes; it never merges. origin/main must be
+        # exactly where it started, no worktree gets fast-forwarded, and
+        # `gh pr merge` is never even attempted -- a human merges the
+        # [needs review] PR by hand.
+        self.assertEqual(git_out(origin, "rev-parse", "main").strip(), origin_main_before)
+        self.assertEqual(git_out(worker_wt, "rev-parse", "HEAD").strip(), origin_main_before)
+        self.assertIsNone(result.get("sync"))
+        self.assertFalse(any(a[:2] == ["pr", "merge"] for a in gh_calls))
 
 
 class AutoPublishFormattingTests(GitRepoTestCase):
@@ -3706,7 +3648,7 @@ class MainAutoPublishGatingTests(unittest.TestCase):
         every failure each round and adoption already retries, but a
         one-shot operator/CI invocation has nothing else to read."""
         for status in ("no_worktree", "push_failed", "pr_create_failed", "checks_red",
-                       "checks_timeout", "checks_unknown", "merge_failed",
+                       "checks_timeout", "checks_unknown",
                        "branch_cut_failed", "sweep_aborted", "reattach_failed",
                        "workspace_tests_failed", "bisection_unverified", "raised"):
             with self.subTest(status=status):
@@ -3714,7 +3656,7 @@ class MainAutoPublishGatingTests(unittest.TestCase):
                 self.assertEqual(rc, 1)
 
     def test_a_one_shot_round_that_published_or_had_nothing_to_do_exits_zero(self):
-        for status in ("merged", "no_news", "zero_delta"):
+        for status in ("published_awaiting_review", "no_news", "zero_delta"):
             with self.subTest(status=status):
                 self.assertEqual(
                     self._main_rc(["--auto-publish"], lambda **kw: {"status": status}), 0,
@@ -3726,7 +3668,7 @@ class MainAutoPublishGatingTests(unittest.TestCase):
         self.assertEqual(self._main_rc([], lambda **kw: self.fail("must not publish")), 0)
 
     def test_a_dispatch_failure_still_dominates_a_successful_publish(self):
-        rc = self._main_rc(["--auto-publish"], lambda **kw: {"status": "merged"},
+        rc = self._main_rc(["--auto-publish"], lambda **kw: {"status": "published_awaiting_review"},
                            run_round_fn=lambda args, cfg: False)
         self.assertEqual(rc, 1)
 
@@ -3743,20 +3685,21 @@ class MainAutoPublishGatingTests(unittest.TestCase):
         self.assertIn("no_worktree", banners[0])
 
     def test_a_healthy_round_resets_the_stall_counter(self):
-        statuses = iter(["no_worktree", "no_worktree", "merged", "no_worktree", "no_worktree"])
+        statuses = iter(["no_worktree", "no_worktree", "published_awaiting_review",
+                         "no_worktree", "no_worktree"])
         printed = []
         with patch("builtins.print", side_effect=lambda *a, **kw: printed.append(" ".join(map(str, a)))):
             self._main(["--infinite"], rounds=6, publish_fn=lambda **kw: {"status": next(statuses)})
         self.assertEqual([line for line in printed if "AUTO-PUBLISH STALLED" in line], [])
 
-    def test_an_adopted_merge_counts_as_publishing_even_on_a_pass_through_status(self):
-        # A round whose own sweep found nothing but which merged a
-        # stranded PR from an earlier round DID publish -- it must not
-        # count toward a stall.
+    def test_an_adopted_review_ready_pr_counts_as_publishing_even_on_a_pass_through_status(self):
+        # A round whose own sweep found nothing but which surfaced a
+        # stranded PR from an earlier round for review DID publish -- it
+        # must not count toward a stall.
         printed = []
         with patch("builtins.print", side_effect=lambda *a, **kw: printed.append(" ".join(map(str, a)))):
             self._main(["--infinite"], rounds=6, publish_fn=lambda **kw: {
-                "status": "push_failed", "adopted": [{"action": "merged"}],
+                "status": "push_failed", "adopted": [{"action": "left_open_awaiting_review"}],
             })
         self.assertEqual([line for line in printed if "AUTO-PUBLISH STALLED" in line], [])
 
@@ -3833,7 +3776,7 @@ class IdleRoundMustBackOffTests(unittest.TestCase):
         # A failure should keep the configured cadence so a transient fault is
         # retried promptly -- backing off on failure would slow recovery.
         import parallel_model_fix_loop as p
-        for status in ("lint_failed", "sweep_aborted", "merged"):
+        for status in ("lint_failed", "sweep_aborted", "published_awaiting_review"):
             self.assertNotIn(status, p.IDLE_STATUSES)
 
 
