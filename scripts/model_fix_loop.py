@@ -4402,6 +4402,17 @@ PATCH_HEADER_RE = re.compile(r"^PATCH\s+(\d+)\s*/\s*(\d+)\b", re.IGNORECASE)
 DEFAULT_MAX_PATCH_CHUNKS = 40  # hard safety cap, independent of the declared N -- a
 # misbehaving/looping model must not be able to stall an attempt forever
 
+#: Ceiling on how many times attempt_build will nudge a model that keeps
+#: submitting a diff whose ```diff fence never closes (see
+#: _reply_has_unterminated_diff_fence) instead of switching to PATCH i/N.
+#: This path never applies anything (a salvaged-from-truncation diff must
+#: never reach git_apply_fn -- see the check on the final-diff path), so
+#: nothing else bounds it; without this ceiling a model that keeps
+#: truncating even after being told to chunk could spin the while loop
+#: forever. One retry is the expected case; a second covers a first
+#: PATCH 1/N chunk that ALSO ran long.
+DEFAULT_MAX_TRUNCATION_RETRIES = 2
+
 VERIFY_RE = re.compile(r"^VERIFY\b", re.IGNORECASE)
 DEFAULT_MAX_VERIFY_TURNS = 10   # trial-compile turns per attempt_build invocation
 DEFAULT_MAX_CHECK_OUTPUT_CHARS = 3000  # tail-trim: Rust errors summarize at the end
@@ -4539,21 +4550,26 @@ FORCED_DIFF_DEMAND_CEILING = (
 )
 
 
-#: Appended after "That diff did not apply: <apply_msg>" (see attempt_build)
-#: when the reply that produced it had an unclosed ```diff fence (see
-#: _reply_has_unterminated_diff_fence) -- i.e. it hit config["max_tokens"]
-#: mid-diff rather than writing a genuinely wrong diff. Names the actual
-#: cause and points at the shape the manifest already promised for exactly
-#: this case, instead of the generic "resend a corrected diff", which
-#: invites repeating the exact same oversized single-reply attempt.
+#: Sent in place of ever calling git_apply_fn on a diff extract_diff
+#: salvaged (via DIFF_BLOCK_UNCLOSED_RE) from a reply with an unclosed
+#: ```diff fence (see _reply_has_unterminated_diff_fence) -- the reply hit
+#: config["max_tokens"] mid-diff. Such content is incomplete BY
+#: CONSTRUCTION and can look like a perfectly valid, complete diff if the
+#: cut landed on a hunk boundary (measured: a 2-hunk diff truncated at the
+#: start of hunk 2 applies cleanly as a 1-hunk diff, silently dropping the
+#: rest) -- never worth the risk of applying, so this fires instead,
+#: naming the real cause and pointing at the shape the manifest already
+#: promised for exactly this case.
 TRUNCATED_DIFF_RETRY_DEMAND = (
     "That reply cut off mid-diff -- a ```diff fence was opened but never closed, which "
-    "means it hit the maximum reply length before the diff was complete; that's why it "
-    "didn't apply, not a wrong edit. Resend using the PATCH i/N chunking protocol "
-    "described at the top of this conversation: send everything you already had, cut at "
-    "a clean point (mid-hunk is fine), as the line \"PATCH 1/N\" followed by ONE ```diff "
-    "fenced chunk -- you'll be prompted for each next chunk. Do not restart the diff from "
-    "scratch inside that chunk; keep exactly what you had and continue from there."
+    "means it hit the maximum reply length before the diff was complete. What was captured "
+    "is incomplete and was NOT applied (a partial diff can look complete enough to apply "
+    "cleanly while silently missing everything after the cut, which is worse than not "
+    "applying at all). Resend using the PATCH i/N chunking protocol described at the top "
+    "of this conversation: send everything you already had, cut at a clean point (mid-hunk "
+    "is fine), as the line \"PATCH 1/N\" followed by ONE ```diff fenced chunk -- you'll be "
+    "prompted for each next chunk. Do not restart the diff from scratch inside that chunk; "
+    "keep exactly what you had and continue from there."
 )
 
 
@@ -5164,16 +5180,20 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     diff anyway can still get truncated mid-reply by the same cap: the
     reply's ```diff fence opens and never closes. extract_diff's
     DIFF_BLOCK_UNCLOSED_RE fallback recovers what content there is, but a
-    diff cut off by a hard length cap is missing its tail -- every such
-    case sampled from a real fleet run failed `git apply` outright. When
-    that happens, _reply_has_unterminated_diff_fence(reply) is checked
-    against the ORIGINAL reply (not the recovered/partial diff), and the
-    apply-failure retry message is TRUNCATED_DIFF_RETRY_DEMAND -- naming
-    the real cause and demanding PATCH i/N -- instead of the generic
-    "resend a corrected diff", which invites repeating the exact same
-    oversized single-reply attempt. This still spends one of the 2 real
-    diff_attempts_used slots, same as any other apply failure; a
-    subsequent PATCH i/N sequence remains free per chunk as always.
+    diff cut off by a hard length cap is incomplete BY CONSTRUCTION -- and
+    that incomplete content can look like a perfectly valid, COMPLETE diff
+    if the cut happened to land on a hunk boundary (measured directly: a
+    2-hunk diff truncated at the start of hunk 2 applies cleanly as a
+    1-hunk diff, silently dropping the rest -- worse than an outright
+    apply failure, since nothing downstream can tell). So a diff salvaged
+    from a reply matching _reply_has_unterminated_diff_fence(reply) is
+    NEVER handed to git_apply_fn: TRUNCATED_DIFF_RETRY_DEMAND fires
+    instead, bounded by DEFAULT_MAX_TRUNCATION_RETRIES turns (free of
+    diff_attempts_used, since nothing was ever applied) before the attempt
+    fails outright rather than falling through to try the salvage anyway.
+    The same guard applies to a truncated PATCH i/N chunk and a truncated
+    VERIFY trial diff -- see the matching checks at PATCH_HEADER_RE and
+    VERIFY_RE below.
 
     cargo_check_fn(repo_root) -> (success, output), if provided, enables
     the VERIFY protocol: a reply of "VERIFY" plus one ```diff fenced
@@ -5216,6 +5236,15 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     forced_diff_retry_used = False
     patch_chunks = {}
     patch_turns_used = 0
+    # A reply whose ```diff fence never closed hit config["max_tokens"]
+    # mid-diff rather than never attempting one -- worth a targeted nudge
+    # toward PATCH i/N (see the check on the final-diff path below, which
+    # never lets a diff salvaged from such a reply reach git_apply_fn).
+    # Bounded independently of diff_attempts_used: this path never applies
+    # anything, so diff_attempts_used never advances on it, and without its
+    # own ceiling a model that keeps truncating even after being told to
+    # chunk could spin the while loop forever.
+    truncation_retries_used = 0
     # None until a real diff attempt fails; then ("apply", msg) or
     # ("build", msg) -- the only place in this module that can still tell
     # those two apart once the loop is over (see the return below).
@@ -5395,6 +5424,23 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                 current_phase = "explore"
                 continue
             verify_turns_used += 1
+            # Checked BEFORE extract_diff: DIFF_BLOCK_UNCLOSED_RE (see
+            # extract_diff) can recover something from an unclosed fence,
+            # but content cut off by config["max_tokens"] is incomplete by
+            # construction and must never reach git_apply_fn -- see the
+            # matching check on the final-diff path below for why.
+            if _reply_has_unterminated_diff_fence(reply):
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "That VERIFY reply cut off mid-diff -- its ```diff fence never closed, "
+                        "so the trial diff is incomplete and was not applied. Resend \"VERIFY\" "
+                        "followed by exactly one COMPLETE fenced diff, small enough to fit in "
+                        "one reply."
+                    ),
+                })
+                current_phase = "explore"
+                continue
             trial_diff = extract_diff(reply)
             if trial_diff is None:
                 messages.append({
@@ -5445,6 +5491,25 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                     None, messages,
                 )
             patch_turns_used += 1
+            # A chunk whose OWN ```diff fence never closed (this chunk's
+            # reply hit config["max_tokens"] before it finished) would let
+            # DIFF_BLOCK_UNCLOSED_RE's fallback (see extract_diff) silently
+            # accept a partial chunk body -- corrupting the reassembled
+            # diff the same way an unterminated final diff would (see the
+            # check on that path below). Reject it exactly like a chunk
+            # with no fence at all, rather than accepting a truncated one.
+            if _reply_has_unterminated_diff_fence(reply):
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"That \"PATCH {chunk_index}/{chunk_total}\" chunk cut off mid-diff -- its "
+                        "```diff fence never closed, so what's captured is incomplete and would "
+                        "corrupt the reassembled patch. Resend just this chunk, complete -- cut it "
+                        "at an earlier point if it's still too long for one reply."
+                    ),
+                })
+                current_phase = "patch"
+                continue
             chunk_diff = extract_diff(reply)
             if chunk_diff is None:
                 messages.append({
@@ -5480,6 +5545,35 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                 continue
             diff = "".join(patch_chunks[i] for i in range(1, chunk_total + 1))
         else:
+            # Checked BEFORE extract_diff, unconditionally -- never after.
+            # extract_diff's DIFF_BLOCK_UNCLOSED_RE fallback (see #633) can
+            # recover something from a reply whose ```diff fence never
+            # closed, but content cut off by config["max_tokens"] is
+            # incomplete BY CONSTRUCTION, and that something can look like
+            # a perfectly valid, complete diff if the cut happened to land
+            # on a hunk boundary: git apply then accepts it and silently
+            # drops everything after the cut (measured directly -- a
+            # 2-hunk diff truncated at the start of hunk 2 applies cleanly
+            # as a 1-hunk diff). A plausible-but-wrong partial application
+            # is worse than an outright apply failure, so a diff salvaged
+            # from a truncated reply must NEVER reach git_apply_fn, and
+            # exhausting the retry budget below fails the attempt outright
+            # rather than falling through to try applying the salvage.
+            if _reply_has_unterminated_diff_fence(reply):
+                if truncation_retries_used < DEFAULT_MAX_TRUNCATION_RETRIES:
+                    truncation_retries_used += 1
+                    messages.append({
+                        "role": "user",
+                        "content": TRUNCATED_DIFF_RETRY_DEMAND,
+                    })
+                    current_phase = "patch"
+                    continue
+                return (
+                    False,
+                    "no diff in model response (reply truncated mid-diff even after "
+                    "being told to use PATCH i/N chunking)",
+                    None, messages,
+                )
             diff = extract_diff(reply)
             if diff is None:
                 return False, "no diff in model response", None, messages
@@ -5490,24 +5584,10 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
             git_checkout_clean_fn(repo_root)
             last_diff_failure = ("apply", apply_msg)
             patch_chunks = {}  # a resend may be a fresh single diff or a fresh chunk sequence
-            # An unclosed ```diff fence (extract_diff's DIFF_BLOCK_UNCLOSED_RE
-            # fallback recovers SOMETHING from these, but per the fleet
-            # sample every one of them is structurally incomplete -- see
-            # TRUNCATED_DIFF_RETRY_DEMAND) failing to apply almost always
-            # means the reply hit config["max_tokens"] mid-diff, not that
-            # the diff itself is wrong. Point the model at PATCH i/N instead
-            # of the generic "resend a corrected diff", which invites
-            # repeating the exact same oversized attempt.
-            if _reply_has_unterminated_diff_fence(reply):
-                messages.append({
-                    "role": "user",
-                    "content": f"That diff did not apply: {apply_msg}\n{TRUNCATED_DIFF_RETRY_DEMAND}",
-                })
-            else:
-                messages.append({
-                    "role": "user",
-                    "content": f"That diff did not apply: {apply_msg}\nPlease resend a corrected diff.",
-                })
+            messages.append({
+                "role": "user",
+                "content": f"That diff did not apply: {apply_msg}\nPlease resend a corrected diff.",
+            })
             current_phase = "patch"
             continue
 
