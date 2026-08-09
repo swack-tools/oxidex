@@ -47,6 +47,7 @@
 #   ./scripts/fleet_up.sh --status        # exactly what is alive, from the pidfile
 #   ./scripts/fleet_up.sh --down          # stop everything THIS launcher started
 #   ./scripts/fleet_up.sh --workers 24    # dispatcher --max-parallel
+#   ./scripts/fleet_up.sh --mergers 1     # only the first N squads.toml squads get a merger
 #   ./scripts/fleet_up.sh --squad-mode     # allocate real per-squad worker slots
 #   ./scripts/fleet_up.sh --dry-run       # preflight + plan only; mutates nothing
 #   ./scripts/fleet_up.sh --no-judgment   # start WITHOUT the quarantine tier (see below)
@@ -137,6 +138,14 @@ FLEET_PERL_LIB="${FLEET_PERL_LIB:-}"
 
 FLEET_WORKERS="${FLEET_WORKERS:-32}"
 FLEET_SQUAD_MODE="${FLEET_SQUAD_MODE:-0}"
+
+# Cap on how many of squads.toml's squads get their own merger tier. 0 (the
+# default) means "all of them" -- unchanged behaviour for every existing
+# caller. A positive N takes the first N squads in squads.toml's own order;
+# the rest simply get no merger this run, same as if they'd been deleted
+# from squads.toml, and their branches sit unconsumed until a future run
+# raises the cap or covers them directly.
+FLEET_MAX_MERGERS="${FLEET_MAX_MERGERS:-0}"
 FLEET_CONFIG="${FLEET_CONFIG:-}"
 FLEET_REPO="${OXIDEX_FLEET_REPO:-}"
 
@@ -1305,9 +1314,20 @@ cmd_up() {
     # which is the shape of the original outage.
     while read -r squad; do
         [ -n "$squad" ] || continue
+        if [ "$FLEET_MAX_MERGERS" -gt 0 ] && [ "$n" -ge "$FLEET_MAX_MERGERS" ]; then
+            break
+        fi
         tier_add "merger:$squad" merger "$squad" "squad_merge_loop.py --squad $squad "
         n=$((n + 1))
     done <<<"$squads"
+    if [ "$FLEET_MAX_MERGERS" -gt 0 ]; then
+        local total_squads
+        total_squads=$(printf '%s\n' "$squads" | grep -c .)
+        if [ "$n" -lt "$total_squads" ]; then
+            log "fleet-up" "WARNING: --mergers $FLEET_MAX_MERGERS covers $n of $total_squads squads --" \
+                "the rest are not being merged this run"
+        fi
+    fi
     tier_add "dispatcher" dispatcher "" "parallel_model_fix_loop.py"
     if [ "$WITH_JUDGMENT" -eq 1 ]; then
         tier_add "judgment" judgment "" "judgment_queue_daemon.py"
@@ -1378,6 +1398,8 @@ main() {
             --squad-mode) FLEET_SQUAD_MODE=1 ;;
             --workers) FLEET_WORKERS=${2:?--workers needs a number}; shift ;;
             --workers=*) FLEET_WORKERS=${1#*=} ;;
+            --mergers) FLEET_MAX_MERGERS=${2:?--mergers needs a number}; shift ;;
+            --mergers=*) FLEET_MAX_MERGERS=${1#*=} ;;
             --repo) FLEET_REPO=${2:?--repo needs a path}; shift ;;
             --repo=*) FLEET_REPO=${1#*=} ;;
             --config) FLEET_CONFIG=${2:?--config needs a path}; shift ;;
@@ -1393,6 +1415,9 @@ main() {
         ''|*[!0-9]*) printf 'fleet_up.sh: --workers must be a positive integer\n' >&2; return 64 ;;
     esac
     [ "$FLEET_WORKERS" -gt 0 ] || { printf 'fleet_up.sh: --workers must be > 0\n' >&2; return 64; }
+    case "$FLEET_MAX_MERGERS" in
+        ''|*[!0-9]*) printf 'fleet_up.sh: --mergers must be a non-negative integer\n' >&2; return 64 ;;
+    esac
     case "$FLEET_SQUAD_MODE" in
         0|1) ;;
         *) printf 'fleet_up.sh: FLEET_SQUAD_MODE must be 0 or 1\n' >&2; return 64 ;;
