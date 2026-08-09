@@ -519,8 +519,19 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
     let mut emitted_tags = std::collections::HashSet::new();
     results.retain(|(tag, _)| emitted_tags.insert(tag.clone()));
 
+    // Google's `GCamera:HdrPlusMakernote` property carries a base64,
+    // encrypted, gzipped Protobuf blob (Google.pm's `ProcessHDRP`). ExifTool
+    // re-files the fields it extracts from that blob under the `MakerNotes`
+    // group rather than `XMP` (`Google::HDRPlusMakerNote`'s `GROUPS => { 0
+    // => 'MakerNotes' }`), so decode it here, before `format_xmp_value` gets
+    // a chance to see -- and rewrite -- the raw base64 text.
+    let raw_hdrp_makernote = results
+        .iter()
+        .find(|(tag, _)| tag == "XMP:HDRPlusMakerNote")
+        .map(|(_, value)| value.clone());
+
     // Post-process results to apply formatting for specific tags
-    Ok(results
+    let mut formatted: Vec<(String, XmpValue)> = results
         .into_iter()
         .map(
             |(tag, value)| match list_elements.iter().find(|(t, _)| *t == tag) {
@@ -537,7 +548,17 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
                 }
             },
         )
-        .collect())
+        .collect();
+
+    if let Some(raw) = raw_hdrp_makernote {
+        for (tag, value) in super::google_hdrp::decode_hdrp_plus_makernote(&raw) {
+            if !formatted.iter().any(|(t, _)| *t == tag) {
+                formatted.push((tag, XmpValue::Scalar(value)));
+            }
+        }
+    }
+
+    Ok(formatted)
 }
 
 /// Extracts flattened fields from the IPTC Extension AboutCvTerm structured bag.
