@@ -99,6 +99,12 @@ DEFAULT_SWEEP_STATE_PATH = OXIDEX_HOME / "logs" / "sweep-state.json"
 
 ORIGIN_MAIN = "origin/main"
 
+#: Leading marker on every sweep PR title. The publisher opens PRs; it does
+#: not merge them. A human sweep selects on this marker
+#: (`gh pr list --search "[needs review] in:title"`) and audits with a
+#: stronger model before anything lands on main.
+NEEDS_REVIEW_PREFIX = "[needs review]"
+
 # spec M4(e) judgment-queue classification: files no commit may touch
 # and still auto-ship.
 COMMONS_FILES = {"src/core/format_dispatch.rs"}
@@ -1267,6 +1273,13 @@ def build_pr_body(*, evidence_rows, judgment_entries, branch):
     ])
 
 
+def build_sweep_pr_title(branch, all_shas, merge_infos):
+    return (
+        f"{NEEDS_REVIEW_PREFIX} sweep {branch}: "
+        f"{len(all_shas)} tag fix(es) across {len(merge_infos)} squad(s)"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Step 7b: cargo fmt the sweep branch before it is ever pushed
 # ---------------------------------------------------------------------------
@@ -1682,7 +1695,7 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
     ]
     evidence_rows = build_evidence_rows(all_shas, repo_root, run_git)
     body = build_pr_body(evidence_rows=evidence_rows, judgment_entries=judgment_entries, branch=branch)
-    title = f"sweep {branch}: {len(all_shas)} tag fix(es) across {len(merge_infos)} squad(s)"
+    title = build_sweep_pr_title(branch, all_shas, merge_infos)
 
     # Formatting is deliberately the LAST thing to touch the branch.
     # all_shas / the evidence table / the judgment queue above are the
