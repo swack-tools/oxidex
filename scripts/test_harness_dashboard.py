@@ -178,6 +178,22 @@ class DashboardParserTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             dashboard.safe_process(data, "bad")
 
+    def test_safe_process_requires_a_harness_script_path_not_a_bare_mention(self):
+        # A process that merely names a harness script (a reused PID showing an
+        # editor/log line) is refused; a real invocation of scripts/<name> is allowed.
+        for command in ("less model_fix_loop.py", "rg fleet_up.sh logs/", "python model_fix_loop.py"):
+            data = {"components": [{"id": "fleet", "process": {"pid": 9, "command": command}}]}
+            with self.assertRaises(ValueError):
+                dashboard.safe_process(data, "fleet")
+        real = {"components": [{"id": "fleet", "process": {"pid": 9, "command": "/opt/homebrew/bin/bash /x/scripts/fleet_up.sh --workers 3"}}]}
+        component, process = dashboard.safe_process(real, "fleet")
+        self.assertEqual(process["pid"], 9)
+        worker = {"components": [{"id": "worker:c", "process": {"pid": 10, "command": "python -u /x/scripts/model_fix_loop.py --worker-id c"}}]}
+        _, process = dashboard.safe_process(worker, "worker:c")
+        self.assertEqual(process["pid"], 10)
+        # A component with no live process is fine (returns None, no guard tripped).
+        self.assertEqual(dashboard.safe_process({"components": [{"id": "fleet", "process": None}]}, "fleet")[1], None)
+
     def test_queue_stats_keeps_only_latest_verdict_for_a_patch(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
@@ -260,6 +276,13 @@ class DashboardParserTests(unittest.TestCase):
         self.assertIn("readableStatCards", page)
         read_only = dashboard.page("other-token", False).decode()
         self.assertIn("CONTROLS=false", read_only)
+
+    def test_escape_helper_also_escapes_quote_characters(self):
+        # e() output is interpolated inside double-quoted HTML attributes, so it
+        # MUST escape " and ' (innerHTML text serialization alone does not),
+        # else attacker-controlled tag/PR-title strings break out of attributes.
+        page = dashboard.page("test-token", True).decode()
+        self.assertIn(".replace(/\"/g,'&quot;').replace(/'/g,'&#39;')", page)
 
 
 class ManifestFeedTests(unittest.TestCase):
@@ -639,6 +662,12 @@ class HandlerRoutingTests(unittest.TestCase):
     def test_unknown_action_is_rejected(self):
         status, payload = self.post({"id": "fleet", "action": "enable"})
         self.assertEqual(status, HTTPStatus.BAD_REQUEST)
+
+    def test_non_object_json_body_gets_a_clean_400_not_a_dropped_connection(self):
+        for body in ([1, 2], "hello", 5, None):
+            status, payload = self.post(body)
+            self.assertEqual(status, HTTPStatus.BAD_REQUEST, repr(body))
+            self.assertIn("must be a JSON object", payload["error"])
 
     def test_start_rejects_extra_fields(self):
         status, payload = self.post({"id": "fleet", "action": "start", "workers": 5})
