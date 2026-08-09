@@ -170,7 +170,61 @@ fn refine(mut id: Identity, header: &[u8]) -> Identity {
     if id.file_type == "PFM" && magic_matches("PFM", header) {
         id.mime_type = Some("image/x-pfm");
     }
+    // An ISO base-media file's `ftyp` major brand outranks its extension, and
+    // for the HEIF family the two routinely disagree: `QuickTime.heic` is brand
+    // `mif1`, which ExifTool reports as `HEIF` / `image/heif` / `heif` while
+    // `%fileTypeLookup` maps the `.heic` extension to `HEIC`.
+    //
+    // ExifTool reads the brand and takes the FileType from the extension named
+    // in its `%ftypLookup` description (QuickTime.pm:9993):
+    //
+    // ```text
+    //     if ($ftypLookup{$type} and $ftypLookup{$type} =~ /\(\.(\w+)/) {
+    //         $fileType = $1;
+    //     ...
+    //     $et->SetFileType($fileType, $mimeLookup{$fileType} || 'video/mp4');
+    // ```
+    //
+    // Only the HEIF/AVIF brands are decoded here, because they are the ones
+    // whose brand contradicts the extension. The rest of `%ftypLookup` resolves
+    // to the same answer the extension already gave, and transcribing 200 rows
+    // to confirm what is already correct would be the expensive way to change
+    // nothing. `%useExt` is not consulted: its sole entry is `GLV => 'MP4'`,
+    // which no brand here can produce.
+    if let Some((file_type, mime)) = heif_family_brand(header) {
+        id.file_type = Cow::Borrowed(file_type);
+        id.extension = extension_for(file_type);
+        id.mime_type = Some(mime);
+    }
     id
+}
+
+/// FileType and MIME type for an ISO base-media `ftyp` major brand, for the
+/// HEIF/AVIF family only.
+///
+/// Transcribed from `%ftypLookup` (QuickTime.pm:227-235) paired with
+/// `%mimeLookup` (QuickTime.pm:104-127) in the pinned 13.59 tree. A brand this
+/// does not name returns `None`, leaving the extension's answer in place --
+/// the rule the generator follows, and the reason no MP4/MOV brand is guessed
+/// at here.
+fn heif_family_brand(header: &[u8]) -> Option<(&'static str, &'static str)> {
+    // `[size:4]["ftyp"]["brand":4]`, so the brand is bytes 8..12 and the atom
+    // must declare at least 12 bytes (QuickTime.pm's `$size >= 12`).
+    if header.get(4..8) != Some(b"ftyp") {
+        return None;
+    }
+    let size = u32::from_be_bytes(header.get(0..4)?.try_into().ok()?);
+    if size < 12 {
+        return None;
+    }
+    Some(match header.get(8..12)? {
+        b"heic" => ("HEIC", "image/heic"),
+        b"hevc" => ("HEICS", "image/heic-sequence"),
+        b"mif1" | b"heix" => ("HEIF", "image/heif"),
+        b"msf1" => ("HEIFS", "image/heif-sequence"),
+        b"avif" | b"avis" | b"avio" | b"miaf" => ("AVIF", "image/avif"),
+        _ => return None,
+    })
 }
 
 /// Whether the header satisfies the magic number of one of `formats`.
