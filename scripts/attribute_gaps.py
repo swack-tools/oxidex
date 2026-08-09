@@ -171,6 +171,12 @@ def index_perl_file(path, index, modules):
                     in_table = None
             continue
         module, table = in_table
+        # Perl comments hold plenty of `Name => '...'` text -- Canon.pm alone
+        # carries a dozen commented-out definitions -- and NAME_RE.search has
+        # no line anchor to refuse them, so drop comment lines outright.
+        if raw.lstrip().startswith("#"):
+            depth += _nesting_delta(raw)
+            continue
         name_match = NAME_RE.search(raw)
         if name_match:
             # Legit at any depth: conditional tag variants nest the

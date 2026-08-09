@@ -34,7 +34,7 @@ UNSUPPORTED = (
     r"(?<",     # lookbehind (Rust regex has none)
     r"(?=",     # lookahead
     r"(?!",     # negative lookahead
-    r"\\G",     # anchor to previous match
+    r"\G",      # anchor to previous match
 )
 
 

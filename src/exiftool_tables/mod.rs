@@ -84,8 +84,11 @@ mod tests {
     #[test]
     fn canon_camera_settings_matches_exiftool() {
         // Spot-check against Canon.pm: MacroMode sits at index 1 of a table
-        // whose FORMAT is int16s and whose FIRST_ENTRY is 1, so it is the
-        // first field and therefore at byte offset 0.
+        // whose FORMAT is int16s, so ProcessBinaryData reads it at byte
+        // offset 1 * 2 = 2 (the int16u at offset 0 is the record length,
+        // which the table deliberately defines no tag for). FIRST_ENTRY is
+        // 1, but ExifTool only uses that to bound the Unknown>1 auto-scan
+        // -- it never shifts the index-to-offset arithmetic.
         let t = find_table("Canon", "CameraSettings").expect("Canon::CameraSettings");
         assert_eq!(t.default_format, Fmt::Int16s);
         assert_eq!(t.first_entry, 1);
@@ -96,7 +99,7 @@ mod tests {
             .find(|f| f.name == "MacroMode")
             .expect("MacroMode");
         assert_eq!(f.index, 1);
-        assert_eq!(t.byte_offset(f), 0);
+        assert_eq!(t.byte_offset(f), 2);
         assert_eq!(f.print_conv.apply(1).as_deref(), Some("Macro"));
         assert_eq!(f.print_conv.apply(2).as_deref(), Some("Normal"));
         // A value absent from the enum must not invent a rendering.
