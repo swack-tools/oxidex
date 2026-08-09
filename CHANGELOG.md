@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **`tag-comparison`'s full-corpus sweep now processes formats concurrently** - the per-format loop in `src/bin/tag-comparison/main.rs` (used by `just compare-exiftool-full` and the fix-loop dispatcher's per-round attribution rebuild) now runs on a `rayon` thread pool instead of one format at a time in a single thread; measured 1.2-1.7x faster wall-clock on a full ~4,200-file/126-format corpus sweep depending on cache warmth, with byte-for-byte identical output. What gets measured and how gaps are attributed is unchanged
 - **Benchmark baseline discontinuity (2026-08-08)** - CI benchmarks moved from GitHub-hosted `ubuntu-latest` to `warp-ubuntu-latest-x64-8x`, and are now tuned for throughput over measurement fidelity
   - **Affects**: the 90-day benchmark artifact published by `ci.yml`, and the timings on the docs performance page published by `deploy-docs.yml`
   - **What changed**: runner class; `--quick` (fewer criterion samples — `deploy-docs.yml` already used it and `ci.yml` did not, so the two had been publishing different methodologies); `lto = false` and `codegen-units = 16` on the bench profile, applied via CI env so `Cargo.toml` is unchanged

@@ -82,7 +82,14 @@ impl OxiDexExtractor {
     }
 
     /// Extract tags from all fixtures of a specific format
-    pub async fn extract_format_tags(
+    ///
+    /// Plain `fn`, not `async fn`: this body is entirely blocking
+    /// (per-file reads and in-memory formatting, no I/O that ever
+    /// suspends), so the `async` this signature carried until 2026-08-08
+    /// never actually yielded -- see `ExifToolExtractor::extract_format_tags`
+    /// for the fuller version of this note. Synchronous throughout lets
+    /// `main.rs` parallelize the per-format loop with `rayon` instead.
+    pub fn extract_format_tags(
         &mut self,
         format: &str,
     ) -> Result<ExtractionResult, Box<dyn std::error::Error>> {

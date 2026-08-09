@@ -4,7 +4,8 @@
 
 use clap::Parser;
 use oxidex::exiftool_oracle;
-use std::path::PathBuf;
+use rayon::prelude::*;
+use std::path::{Path, PathBuf};
 
 mod comparison;
 mod extraction;
@@ -12,7 +13,7 @@ mod models;
 
 use comparison::{ComparisonEngine, generate_markdown_reports};
 use extraction::{ExifToolExtractor, OxiDexExtractor};
-use models::ComparisonReport;
+use models::{ComparisonReport, FormatComparison};
 
 #[derive(Parser, Debug)]
 #[command(name = "tag-comparison")]
@@ -64,8 +65,7 @@ struct Args {
     tag_cache_dir: Option<PathBuf>,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     // Resolve *before* anything else: a run graded by the wrong ExifTool
@@ -114,84 +114,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Found {} formats to process\n", formats.len());
 
-    // Process each format
-    for format in formats {
-        println!("Processing format: {}", format);
-
-        // Extract OxiDex tags
-        let t_oxidex = std::time::Instant::now();
-        let mut oxidex_extractor = OxiDexExtractor::new(args.samples.clone());
-        if let Some(dir) = &args.tag_cache_dir {
-            oxidex_extractor = oxidex_extractor.with_cache_dir_override(dir.clone());
-        }
-        match oxidex_extractor.extract_format_tags(&format).await {
-            Ok(oxidex_result) => {
-                println!(
-                    "  OxiDex found {} tags from {} files [{:.2}s]",
-                    oxidex_result.tags.len(),
-                    oxidex_result.files_processed,
-                    t_oxidex.elapsed().as_secs_f64()
-                );
-
-                // Extract ExifTool tags
-                let t_exiftool = std::time::Instant::now();
-                let mut exiftool_extractor = ExifToolExtractor::new(exiftool_argv.clone());
-                if let Some(dir) = &args.tag_cache_dir {
-                    exiftool_extractor = exiftool_extractor.with_cache_dir_override(dir.clone());
-                }
-                match exiftool_extractor
-                    .extract_format_tags(&format, &args.samples)
-                    .await
-                {
-                    Ok(exiftool_result) => {
-                        println!(
-                            "  ExifTool found {} tags from {} files [{:.2}s]",
-                            exiftool_result.tags.len(),
-                            exiftool_result.files_processed,
-                            t_exiftool.elapsed().as_secs_f64()
-                        );
-
-                        // Use the max files processed from both extractors
-                        let files_tested = oxidex_result
-                            .files_processed
-                            .max(exiftool_result.files_processed);
-
-                        // Compare with baseline for regression detection
-                        let t_compare = std::time::Instant::now();
-                        let previous = baseline.as_ref().and_then(|b| b.by_format.get(&format));
-                        let extractor_duplicates = oxidex_result.duplicate_emissions.clone();
-                        let mut comparison = ComparisonEngine::compare_with_instances(
-                            oxidex_result.tags,
-                            exiftool_result.tags,
-                            &format,
-                            files_tested,
-                            previous,
-                            &oxidex_result.all_instances,
-                            &exiftool_result.all_instances,
-                        );
-                        // Union, not assignment. `compare` keeps its own
-                        // per-(source_file, key) distinct-value check for
-                        // duplicates that reach it through `tags`; the
-                        // extractor reports the ones `flatten_metadata`
-                        // already collapsed, which `compare` cannot see at
-                        // all (2026-07-26 -- this is the channel that made
-                        // duplicate_emissions permanently empty).
-                        comparison.duplicate_emissions.extend(extractor_duplicates);
-                        comparison.duplicate_emissions.sort();
-                        comparison.duplicate_emissions.dedup();
-                        println!(
-                            "  Result: {} [compare {:.2}s]",
-                            comparison.summary(),
-                            t_compare.elapsed().as_secs_f64()
-                        );
-
-                        report.add_format(format, comparison);
-                    }
-                    Err(e) => eprintln!("  Error extracting ExifTool tags: {}", e),
-                }
-            }
-            Err(e) => eprintln!("  Error extracting OxiDex tags: {}", e),
-        }
+    // Process every format concurrently -- one rayon task per format, up to
+    // `rayon::current_num_threads()` (defaults to the host's logical CPU
+    // count) running at once. This used to be one sequential `for format in
+    // formats` loop; a full-corpus sweep (~4,200 files across ~90 formats)
+    // walked every format one after another in a single thread, which is
+    // exactly why it took 6+ minutes and blocked the fix-loop dispatcher's
+    // entire round on both fleet hosts.
+    //
+    // Safe to parallelize: each format's work (find its files, extract with
+    // OxiDex, extract with ExifTool, compare) depends only on that format's
+    // own files, `args.samples`/`args.tag_cache_dir` (read-only), the
+    // shared `exiftool_argv` (the SAME pinned oracle argv resolved once
+    // above, cloned per call exactly as the sequential loop already did),
+    // and `baseline` (read-only). The on-disk tag caches
+    // (oxidex-tag-cache/, exiftool-tag-cache/) live in one shared directory
+    // but write to a PER-FORMAT file (`{format}.json`), so two formats
+    // never touch the same cache file, and concurrent `create_dir_all` on
+    // the shared parent is race-safe (std treats a losing AlreadyExists as
+    // success once it confirms the path is a directory). The only mutation
+    // shared across formats in the old loop was `report.add_format`, moved
+    // below to run after every format has finished, sequentially, so it's
+    // never called from more than one thread. `ComparisonReport::by_format`
+    // is a plain `HashMap` keyed by format name and
+    // `calculate_overall_coverage` only sums over its values, so the
+    // result is identical regardless of insertion order -- this changes
+    // how fast the report is built, never what it contains.
+    //
+    // Concurrent `exiftool` subprocess spawning is already proven safe at a
+    // coarser grain: squad_merge_loop.py already runs 14 of these `--format`
+    // invocations as separate concurrent OS processes today. This is the
+    // same thing one level down -- concurrent OS threads within one process
+    // instead of concurrent processes -- and rayon's default pool size
+    // keeps the number of formats in flight at once no larger than what
+    // already runs safely today.
+    let format_results: Vec<(String, FormatComparison)> = formats
+        .par_iter()
+        .filter_map(|format| {
+            process_format(
+                format,
+                &args.samples,
+                args.tag_cache_dir.as_deref(),
+                &exiftool_argv,
+                baseline.as_ref(),
+            )
+        })
+        .collect();
+    for (format, comparison) in format_results {
+        report.add_format(format, comparison);
     }
 
     // Calculate overall coverage
@@ -232,6 +202,115 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Extract, then compare, one format's tags -- the entire per-format body
+/// the old sequential loop ran inline in `main`, unchanged in what it does,
+/// only moved out so `main` can run it from a `rayon` `par_iter` closure
+/// (see the call site above).
+///
+/// Every parameter is either `format` itself or read-only/shared data
+/// (`samples`, `tag_cache_dir`, `exiftool_argv`, `baseline`), so this is
+/// safe to call concurrently for different formats from different threads
+/// -- it touches nothing outside its own arguments and its own two fresh
+/// extractor instances.
+///
+/// Returns `None` (after printing why, exactly as the sequential loop's
+/// `eprintln!` + implicit "fall out of the match, move to the next
+/// format" did) when either extractor errors, so one format's failure
+/// still can't take the rest of the run down or contribute a half-built
+/// entry to the report.
+///
+/// Every log line is prefixed with `[{format}]`: with formats now
+/// processing concurrently, lines from different formats interleave in
+/// stdout (each individual `println!` call is still atomic -- Rust's
+/// `Stdout` locks per call -- so lines never tear mid-write, only their
+/// *order* across formats is no longer sequential), and the prefix is what
+/// keeps that interleaved stream attributable while it's being watched
+/// live, the same way the fleet dispatcher's operators were watching the
+/// old sequential "Processing format: X" stream.
+fn process_format(
+    format: &str,
+    samples: &Path,
+    tag_cache_dir: Option<&Path>,
+    exiftool_argv: &[String],
+    baseline: Option<&ComparisonReport>,
+) -> Option<(String, FormatComparison)> {
+    println!("[{format}] Processing");
+
+    // Extract OxiDex tags
+    let t_oxidex = std::time::Instant::now();
+    let mut oxidex_extractor = OxiDexExtractor::new(samples.to_path_buf());
+    if let Some(dir) = tag_cache_dir {
+        oxidex_extractor = oxidex_extractor.with_cache_dir_override(dir.to_path_buf());
+    }
+    let oxidex_result = match oxidex_extractor.extract_format_tags(format) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[{format}] Error extracting OxiDex tags: {}", e);
+            return None;
+        }
+    };
+    println!(
+        "[{format}] OxiDex found {} tags from {} files [{:.2}s]",
+        oxidex_result.tags.len(),
+        oxidex_result.files_processed,
+        t_oxidex.elapsed().as_secs_f64()
+    );
+
+    // Extract ExifTool tags
+    let t_exiftool = std::time::Instant::now();
+    let mut exiftool_extractor = ExifToolExtractor::new(exiftool_argv.to_vec());
+    if let Some(dir) = tag_cache_dir {
+        exiftool_extractor = exiftool_extractor.with_cache_dir_override(dir.to_path_buf());
+    }
+    let exiftool_result = match exiftool_extractor.extract_format_tags(format, samples) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[{format}] Error extracting ExifTool tags: {}", e);
+            return None;
+        }
+    };
+    println!(
+        "[{format}] ExifTool found {} tags from {} files [{:.2}s]",
+        exiftool_result.tags.len(),
+        exiftool_result.files_processed,
+        t_exiftool.elapsed().as_secs_f64()
+    );
+
+    // Use the max files processed from both extractors
+    let files_tested = oxidex_result
+        .files_processed
+        .max(exiftool_result.files_processed);
+
+    // Compare with baseline for regression detection
+    let t_compare = std::time::Instant::now();
+    let previous = baseline.and_then(|b| b.by_format.get(format));
+    let extractor_duplicates = oxidex_result.duplicate_emissions.clone();
+    let mut comparison = ComparisonEngine::compare_with_instances(
+        oxidex_result.tags,
+        exiftool_result.tags,
+        format,
+        files_tested,
+        previous,
+        &oxidex_result.all_instances,
+        &exiftool_result.all_instances,
+    );
+    // Union, not assignment. `compare` keeps its own per-(source_file,
+    // key) distinct-value check for duplicates that reach it through
+    // `tags`; the extractor reports the ones `flatten_metadata` already
+    // collapsed, which `compare` cannot see at all (2026-07-26 -- this is
+    // the channel that made duplicate_emissions permanently empty).
+    comparison.duplicate_emissions.extend(extractor_duplicates);
+    comparison.duplicate_emissions.sort();
+    comparison.duplicate_emissions.dedup();
+    println!(
+        "[{format}] Result: {} [compare {:.2}s]",
+        comparison.summary(),
+        t_compare.elapsed().as_secs_f64()
+    );
+
+    Some((format.to_string(), comparison))
 }
 
 fn detect_formats(
