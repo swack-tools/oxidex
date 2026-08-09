@@ -70,19 +70,13 @@ jobs:
     # benchmark before changing this; do not adjust it by intuition.
     runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 90
-    # Only contents:write is needed now that this pushes to main directly.
-    # pull-requests:write and actions:write were for the PR/dispatch dance
-    # this no longer does.
+    # Read-only. This job no longer pushes to main -- see the "Report docs
+    # changes" step below for why -- so it needs nothing more than checkout.
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          # Full history: the push-retry below rebases onto origin/main, and a
-          # shallow clone has no common ancestor to rebase against.
-          fetch-depth: 0
 
       # The `runner` context (runner.temp) is only available inside a step,
       # not in any `env:` block (workflow- or job-level) -- referencing it
@@ -217,54 +211,53 @@ jobs:
 
       - name: Check for docs changes
         id: changes
-        if: github.ref == 'refs/heads/main'
         run: |
           git diff --quiet docs/reference/jpeg-tag-support.md \
             docs/reference/jpeg-tag-matrix.md \
             docs/reference/jpeg-tag-baseline.json || echo "changed=true" >> "$GITHUB_OUTPUT"
 
-      # Pushes straight to main. This used to open an auto-merging PR, because
-      # main required the "Lint & Audit"/"Build & Test" checks and a bot push
-      # could not satisfy them. That PR route then broke for a different
-      # reason: an ENTERPRISE policy forbids GitHub Actions from creating pull
-      # requests at all ("GitHub Actions is not permitted to create or approve
-      # pull requests"), which no repo or org setting can override. The
-      # required checks have since been removed from main, so the direct push
-      # works and the whole PR dance is unnecessary.
+      # This used to push straight to main, then (briefly) to open an
+      # auto-merging PR. Both are closed off now: a repository ruleset on
+      # main requires every change to land through a pull request with a
+      # verified signature, and a separate ENTERPRISE policy forbids GitHub
+      # Actions from creating pull requests at all ("GitHub Actions is not
+      # permitted to create or approve pull requests"), which no repo or org
+      # setting can override. There is no unattended path left from this
+      # token to main, so the job stops trying and instead hands the diff to
+      # a human: a job summary for a quick look, and a patch artifact for
+      # `git apply` if someone wants to land it via a normal PR.
       #
-      # Note this commit carries jpeg-tag-baseline.json, which is not a doc
-      # but the regression ratchet `report --check-baseline` reads on the next
-      # run. If this step stops landing, the gate silently stops tightening.
-      #
-      # No "[skip ci]": ci.yml runs on push to main, so these commits are
-      # still verified -- after landing rather than before, which is the
-      # trade that comes with dropping the required checks.
-      - name: Commit docs and baseline updates
-        if: github.ref == 'refs/heads/main' && steps.changes.outputs.changed == 'true'
-        env:
-          SRC_SHA: ${{ github.sha }}
+      # Note the patch carries jpeg-tag-baseline.json, which is not a doc but
+      # the regression ratchet `report --check-baseline` reads on the next
+      # run. Until someone applies the patch, the gate stops tightening (it
+      # still enforces the last-landed baseline -- it just doesn't ratchet
+      # further on new improvements).
+      - name: Report docs changes
+        if: steps.changes.outputs.changed == 'true'
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/reference/jpeg-tag-support.md \
+          git diff -u -- docs/reference/jpeg-tag-support.md \
             docs/reference/jpeg-tag-matrix.md \
-            docs/reference/jpeg-tag-baseline.json
-          ET_VER=$(tr -d '[:space:]' < .exiftool-version)
-          git commit -m "docs: auto-update JPEG tag matrix (exiftool ${ET_VER})" \
-                     -m "Generated from commit ${SRC_SHA}"
+            docs/reference/jpeg-tag-baseline.json > "$RUNNER_TEMP/jpeg-tag-matrix.patch"
+          {
+            echo "## JPEG tag matrix docs changed"
+            echo
+            echo "This job can no longer push to main directly (main requires"
+            echo "pull requests with verified signatures, and Actions cannot"
+            echo "open PRs here). Download the \`jpeg-tag-matrix-patch\` artifact"
+            echo "and apply it via a normal PR:"
+            echo
+            echo '```'
+            git diff --stat -- docs/reference/jpeg-tag-support.md \
+              docs/reference/jpeg-tag-matrix.md \
+              docs/reference/jpeg-tag-baseline.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
-          # main moves fast here (the fix fleet merges frequently), so a plain
-          # push loses a race often enough to matter. Rebase onto whatever
-          # landed meanwhile and retry rather than failing the run.
-          for attempt in 1 2 3; do
-            if git push origin HEAD:main; then
-              echo "pushed on attempt $attempt"
-              exit 0
-            fi
-            echo "push rejected (main moved); rebasing and retrying"
-            git fetch origin main
-            git rebase origin/main
-          done
-          echo "::error::could not push after 3 attempts"
-          exit 1
+      - name: Upload docs patch
+        if: steps.changes.outputs.changed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: jpeg-tag-matrix-patch
+          path: ${{ runner.temp }}/jpeg-tag-matrix.patch
+          retention-days: 90
