@@ -6306,6 +6306,211 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     Ok(metadata)
 }
 
+fn read_ciff_u16(data: &[u8], offset: usize) -> Option<u16> {
+    let end = offset.checked_add(2)?;
+    let bytes: [u8; 2] = data.get(offset..end)?.try_into().ok()?;
+    Some(u16::from_le_bytes(bytes))
+}
+
+fn read_ciff_u32(data: &[u8], offset: usize) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    let bytes: [u8; 4] = data.get(offset..end)?.try_into().ok()?;
+    Some(u32::from_le_bytes(bytes))
+}
+
+fn canon_crw_tag_key(table_name: &str, field_name: &str) -> Option<String> {
+    let requested_table = find_table("Canon", table_name);
+    let group = requested_table
+        .or_else(|| find_table("Canon", "ShotInfo"))?
+        .group0;
+    let registered_name = requested_table
+        .and_then(|table| {
+            table
+                .fields
+                .iter()
+                .find(|field| field.name == field_name)
+        })
+        .map(|field| field.name)
+        .unwrap_or(field_name);
+    Some(format!("{group}:{registered_name}"))
+}
+
+fn insert_canon_crw_tag(
+    metadata: &mut MetadataMap,
+    table_name: &str,
+    field_name: &str,
+    value: TagValue,
+) {
+    if let Some(key) = canon_crw_tag_key(table_name, field_name) {
+        metadata.insert(key, value);
+    }
+}
+
+fn canon_ev(raw: i16) -> f64 {
+    let sign = if raw < 0 { -1.0 } else { 1.0 };
+    let value = i32::from(raw).unsigned_abs();
+    let fraction = value & 0x1f;
+    let whole = value - fraction;
+    let fraction = match fraction {
+        0x0c => 32.0 / 3.0,
+        0x14 => 64.0 / 3.0,
+        other => f64::from(other),
+    };
+    sign * (f64::from(whole) + fraction) / 32.0
+}
+
+fn parse_ciff_record(tag: u16, record: &[u8], metadata: &mut MetadataMap) {
+    match tag {
+        // CanonRaw.pm tag 0x102a -> Canon::ShotInfo. The generated table
+        // identifies AEBBracketValue as int16 index 17.
+        0x102A => {
+            if let Some(raw) = read_ciff_u16(record, 17 * 2).map(|value| value as i16) {
+                insert_canon_crw_tag(
+                    metadata,
+                    "ShotInfo",
+                    "AEBBracketValue",
+                    TagValue::new_string(print_fraction(canon_ev(raw))),
+                );
+            }
+        }
+        // CanonRaw.pm tag 0x1038 -> Canon::AFInfo. This serial record has no
+        // leading length word; NumAFPoints at index zero controls both arrays.
+        0x1038 => {
+            let values = record
+                .chunks_exact(2)
+                .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
+                .collect::<Vec<_>>();
+
+            for (index, name) in [
+                (5usize, "AFImageHeight"),
+                (6, "AFAreaWidth"),
+                (7, "AFAreaHeight"),
+            ] {
+                if let Some(&value) = values.get(index) {
+                    insert_canon_crw_tag(
+                        metadata,
+                        "AFInfo",
+                        name,
+                        TagValue::new_integer(i64::from(value)),
+                    );
+                }
+            }
+
+            let Some(&point_count) = values.first() else {
+                return;
+            };
+            if point_count <= 0 {
+                return;
+            }
+            let point_count = point_count as usize;
+            let x_start = 8usize;
+            let Some(y_start) = x_start.checked_add(point_count) else {
+                return;
+            };
+            let Some(end) = y_start.checked_add(point_count) else {
+                return;
+            };
+
+            for (name, range) in [
+                ("AFAreaXPositions", x_start..y_start),
+                ("AFAreaYPositions", y_start..end),
+            ] {
+                if let Some(positions) = values.get(range) {
+                    let display = positions
+                        .iter()
+                        .map(i16::to_string)
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    insert_canon_crw_tag(
+                        metadata,
+                        "AFInfo",
+                        name,
+                        TagValue::new_string(display),
+                    );
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn parse_ciff_directory(
+    data: &[u8],
+    container_start: usize,
+    container_end: usize,
+    directory_offset: usize,
+    metadata: &mut MetadataMap,
+    depth: usize,
+) {
+    if depth > 16 {
+        return;
+    }
+    let Some(entry_count) = read_ciff_u16(data, directory_offset).map(usize::from) else {
+        return;
+    };
+    if entry_count > 256 {
+        return;
+    }
+    let Some(directory_end) = entry_count
+        .checked_mul(10)
+        .and_then(|size| directory_offset.checked_add(2 + size + 4))
+    else {
+        return;
+    };
+    if directory_end > container_end || directory_end > data.len() {
+        return;
+    }
+
+    for index in 0..entry_count {
+        let Some(entry_offset) = index
+            .checked_mul(10)
+            .and_then(|offset| directory_offset.checked_add(2 + offset))
+        else {
+            continue;
+        };
+        let Some(tag) = read_ciff_u16(data, entry_offset) else {
+            continue;
+        };
+        let Some(size) = read_ciff_u32(data, entry_offset + 2).map(|value| value as usize) else {
+            continue;
+        };
+        let Some(relative) = read_ciff_u32(data, entry_offset + 6).map(|value| value as usize)
+        else {
+            continue;
+        };
+        let Some(value_start) = container_start.checked_add(relative) else {
+            continue;
+        };
+        let Some(value_end) = value_start.checked_add(size) else {
+            continue;
+        };
+        let Some(value) = data.get(value_start..value_end) else {
+            continue;
+        };
+
+        parse_ciff_record(tag, value, metadata);
+
+        if tag & 0x3800 == 0x3000 && value.len() >= 4 {
+            let Some(relative_directory) =
+                read_ciff_u32(value, value.len() - 4).map(|value| value as usize)
+            else {
+                continue;
+            };
+            let Some(nested_directory) = value_start.checked_add(relative_directory) else {
+                continue;
+            };
+            parse_ciff_directory(
+                data,
+                value_start,
+                value_end,
+                nested_directory,
+                metadata,
+                depth + 1,
+            );
+        }
+    }
+}
+
 /// Parse Canon CRW format
 ///
 /// CRW is Canon's older proprietary raw format used before CR2.
@@ -6325,7 +6530,7 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 ///
 /// - Implement CRW format parser
 /// - Extract Canon-specific metadata from CRW structure
-fn parse_canon_crw(_data: &[u8], format: RawFormat) -> Result<MetadataMap> {
+fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
     metadata.insert(
         "File:FileType".to_string(),
@@ -6338,8 +6543,37 @@ fn parse_canon_crw(_data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         );
     }
 
-    // TODO: Implement CRW specific parsing
-    // CRW is Canon's older proprietary format
+    // CIFF stores its heap start in the header. Canon CRW uses little-endian
+    // CIFF, and the final heap word is the root-directory offset relative to
+    // that start.
+    if data.get(..2) != Some(b"II") || data.get(6..14) != Some(b"HEAPCCDR") {
+        return Ok(metadata);
+    }
+    let Some(heap_start) = read_ciff_u32(data, 2).map(|value| value as usize) else {
+        return Ok(metadata);
+    };
+    if heap_start >= data.len() || data.len().saturating_sub(heap_start) < 4 {
+        return Ok(metadata);
+    }
+    let Some(root_relative) = read_ciff_u32(data, data.len() - 4).map(|value| value as usize)
+    else {
+        return Ok(metadata);
+    };
+    let Some(root_directory) = heap_start.checked_add(root_relative) else {
+        return Ok(metadata);
+    };
+    if root_directory >= data.len() {
+        return Ok(metadata);
+    }
+
+    parse_ciff_directory(
+        data,
+        heap_start,
+        data.len(),
+        root_directory,
+        &mut metadata,
+        0,
+    );
 
     Ok(metadata)
 }
