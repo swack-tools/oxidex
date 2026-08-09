@@ -1906,14 +1906,12 @@ def default_run_gh(args, repo_root):
     failure tuple and none of them coped with an exception:
     pr_checks_state's json.loads fails -> ("unknown", detail) -> adoption
     logs "left_open" and moves to the next PR; wait_for_pr_checks counts
-    it toward max_unknown_polls; merge_pr's pr_state re-ask returns None
-    -> merge_failed with the PR left open. Measured before this guard: a
-    raise on the SECOND of three open sweep PRs' `gh pr checks` aborted
-    the whole adoption pass -- PR #1 merged, #2 raised, #3 never looked
-    at, the adoption record discarded, the post-merge worktree sync
-    skipped for a merge that had landed, and the round's own sweep never
-    run. list_open_sweep_prs's own `except OSError` becomes redundant
-    rather than the only guard, which is the point.
+    it toward max_unknown_polls. Measured before this guard: a raise on
+    the SECOND of three open sweep PRs' `gh pr checks` aborted the whole
+    adoption pass -- PR #1 adopted, #2 raised, #3 never looked at, the
+    adoption record discarded, and the round's own sweep never run.
+    list_open_sweep_prs's own `except OSError` becomes redundant rather
+    than the only guard, which is the point.
     """
     try:
         result = subprocess.run(  # nosec B603
@@ -2417,49 +2415,6 @@ def wait_for_pr_checks(pr_ref, repo_root, run_gh=default_run_gh, sleep_fn=time.s
         sleep_fn(interval_seconds)
 
 
-def pr_state(pr_ref, repo_root, run_gh=default_run_gh):
-    """GitHub's own view of a PR: "OPEN"/"MERGED"/"CLOSED", or None when
-    that can't be determined."""
-    rc, out, _err = run_gh(["pr", "view", pr_ref, "--json", "state"], repo_root)
-    if rc != 0:
-        return None
-    try:
-        data = json.loads(out)
-    except ValueError:
-        return None
-    state = data.get("state") if isinstance(data, dict) else None
-    return str(state).upper() if state else None
-
-
-def merge_pr(pr_ref, repo_root, run_gh=default_run_gh):
-    """Squash-merge a PR whose checks are already green. Returns
-    (ok, message).
-
-    `gh pr merge --auto` is deliberately NOT used: repository-level
-    auto-merge is DISABLED on this repo, so --auto is rejected outright
-    ("Auto merge is not allowed for this repository") and the poll-then-
-    merge path above is the only one that works here. --delete-branch
-    keeps origin clean, which costs nothing: next_sweep_branch_name
-    never reuses a branch name anyway.
-
-    A non-zero exit is NOT taken as proof the PR is unmerged. gh does
-    its branch cleanup AFTER the API merge call -- deleting the local
-    branch, moving the checkout to the default branch -- and in a
-    multi-worktree repo like this fleet's that cleanup can legitimately
-    fail on its own (`git checkout main` refuses while main is checked
-    out in another worktree). Believing it would report merge_failed for
-    a main that really did advance, and skip the worktree sync that
-    should follow. So a failure re-asks GitHub what actually happened.
-    """
-    rc, out, err = run_gh(["pr", "merge", pr_ref, "--squash", "--delete-branch"], repo_root)
-    message = (out + err).strip()
-    if rc == 0:
-        return True, message
-    if pr_state(pr_ref, repo_root, run_gh) == "MERGED":
-        return True, f"gh exited {rc} during post-merge cleanup, but the PR reports MERGED: {message}"
-    return False, message
-
-
 # Sweep branches are cut by overlord_sweep.next_sweep_branch_name as
 # "sweep/tags-<date>-<n>"; adoption only ever touches this automation's
 # own namespace.
@@ -2560,10 +2515,11 @@ def list_open_sweep_prs(repo_root, run_gh=default_run_gh, base_ref="main"):
 
 
 def adopt_open_sweep_prs(*, repo_root, run_gh=default_run_gh, log_fn=print):
-    """Merge any ALREADY-OPEN sweep PR that is green and reviewed now.
-    Returns one dict per open sweep PR:
-    {"pr", "branch", "checks", "action": "merged"|"left_open"|"merge_failed",
-     "message"}.
+    """Re-check any ALREADY-OPEN sweep PR and surface the ones that are
+    green and reviewed now, ready for a human to merge. Returns one dict
+    per open sweep PR:
+    {"pr", "branch", "checks", "action": "left_open"|"left_open_awaiting_review"|
+     "check_failed", "message"}.
 
     Without this, an abandoned sweep PR was abandoned forever. Nothing
     ever revisited a PR after the round that created it moved on, and
@@ -2624,20 +2580,21 @@ def adopt_open_sweep_prs(*, repo_root, run_gh=default_run_gh, log_fn=print):
             adopted.append({"pr": ref, "branch": branch, "checks": state, "reviews": review_state,
                             "action": "left_open", "message": review_detail})
             continue
-        log_fn(f"auto-publish: adopting {ref} ({branch}) from an earlier round -- checks are green, "
-               "and it is approved, merging it now")
-        try:
-            merged, message = merge_pr(ref, repo_root, run_gh=run_gh)
-        except OSError as e:
-            log_fn(f"auto-publish: could not run the merge for {ref} ({branch}): {e!r} -- leaving it "
-                   "open and moving on to the next PR")
-            adopted.append({"pr": ref, "branch": branch, "checks": state,
-                            "action": "merge_failed", "message": repr(e)})
-            continue
-        adopted.append({"pr": ref, "branch": branch, "checks": state,
-                        "action": "merged" if merged else "merge_failed", "message": message})
-        if not merged:
-            log_fn(f"AUTO-PUBLISH: could not merge adopted PR {ref}: {message} -- left open")
+        # Green + approved is still not enough to merge. The fleet publishes;
+        # it does not merge -- not even here, where a human already approved
+        # the PR. AGENTS.md's own doctrine ("a plausible-but-wrong value...
+        # is worse than an absent tag") is exactly why a mechanically-passing
+        # check suite plus one approval isn't sufficient authority to land
+        # unattended: this session alone produced three examples of fixes
+        # that were green, looked right, and were wrong (a spurious Canon
+        # duplicate-emission "fix" for a value ExifTool's own Priority
+        # mechanism suppresses by design; an abandoned Pentax patch with a
+        # 0-indexed/1-indexed enum mismatch that still built and ran). A
+        # human sweep reviews every [needs review] PR before anything lands.
+        log_fn(f"auto-publish: adopting {ref} ({branch}) from an earlier round -- checks are green "
+               "and it is approved; leaving it OPEN for review (the fleet never merges)")
+        adopted.append({"pr": ref, "branch": branch, "checks": state, "reviews": review_state,
+                        "action": "left_open_awaiting_review", "message": review_detail})
     return adopted
 
 
@@ -2751,8 +2708,8 @@ def auto_publish_round(*, repo_root=REPO_ROOT, cache_dir, home=None, squads_toml
                        checks_interval_seconds=DEFAULT_PR_CHECKS_INTERVAL_SECONDS,
                        origin_ref=ORIGIN_MAIN_REF, log_fn=print):
     """One end-to-end publish pass: adopt any stale sweep PR -> sweep ->
-    cargo fmt -> push -> PR -> merge on green -> fast-forward every
-    worktree.
+    cargo fmt -> push -> PR -> leave it OPEN on green for a human to
+    merge -> nothing else.
 
     Returns a summary dict whose "status" is either one of run_sweep's
     own statuses passed straight through ("no_news",
@@ -2760,41 +2717,46 @@ def auto_publish_round(*, repo_root=REPO_ROOT, cache_dir, home=None, squads_toml
     "reattach_failed", "zero_delta", "workspace_tests_failed",
     "push_failed", "pr_create_failed"), or one of this function's own:
     "no_worktree", "bisection_unverified", "zero_delta", "checks_red",
-    "checks_timeout", "checks_unknown", "merge_failed", "merged". Every
-    status also carries "adopted": what the round-start adoption pass did
-    with each already-open sweep PR.
+    "checks_timeout", "checks_unknown", "reviews_<state>",
+    "published_awaiting_review". Every status also carries "adopted":
+    what the round-start adoption pass did with each already-open sweep
+    PR.
 
     A round that produced nothing new writes nothing: run_sweep's
     sweep-state.json cursor reports "no_news" and returns before cutting
     a branch, before touching a single ref -- so nothing is committed,
     nothing is pushed, and no PR of this round's is touched. The one
     thing such a round still does is the read-only `gh pr list` adoption
-    pass below, which can merge an ALREADY-OPEN sweep PR that has since
-    gone green; that is the point of it, and it is the only way a
-    stranded PR ever lands (see adopt_open_sweep_prs).
+    pass below, which can surface an ALREADY-OPEN sweep PR that has since
+    gone green and approved, ready for a human to merge; that is the
+    point of it, and it is the only way a stranded PR ever gets noticed
+    again (see adopt_open_sweep_prs).
 
     Red or timed-out checks leave the PR OPEN and return normally: the
-    dispatcher loop must never block forever on CI, and must never merge
-    a PR whose checks are failing or still pending.
+    dispatcher loop must never block forever on CI. Green and approved
+    ALSO leaves the PR open, by design -- the fleet publishes, it never
+    merges (see adopt_open_sweep_prs and the comment at its own merge
+    branch for why).
     """
     home = Path(home) if home else OXIDEX_HOME
     sweep_worktree_dir = Path(sweep_worktree_dir) if sweep_worktree_dir else DEFAULT_SWEEP_WORKTREE_DIR
     sweep_fn = sweep_fn or default_sweep_fn
     ensure_worktree_fn = ensure_worktree_fn or ensure_sweep_worktree
-    sync_fn = sync_fn or sync_worktrees_to_origin_main
-
-    def sync():
-        return sync_fn(repo_root=repo_root, run_git=run_git, origin_ref=origin_ref, log_fn=log_fn)
 
     # Round start, BEFORE the sweep cuts anything: a sweep PR left open
     # by an earlier round may have gone green since, and nothing else in
     # this system will ever look at it again. Runs against the
     # dispatcher's own repo_root rather than the sweep worktree so that
     # a worktree this round cannot provision (below) does not also
-    # strand every previously-open PR.
+    # strand every previously-open PR from being noticed.
+    #
+    # adopted_sync is always None: it used to fire a worktree
+    # fast-forward when this pass merged a stranded PR, but the fleet
+    # never merges anymore (see adopt_open_sweep_prs), so main never
+    # advances here. Kept in the return shape rather than removed --
+    # existing callers key off its presence, not just its truthiness.
     adopted = adopt_open_sweep_prs(repo_root=repo_root, run_gh=run_gh, log_fn=log_fn)
-    adopted_merges = [a for a in adopted if a["action"] == "merged"]
-    adopted_sync = sync() if adopted_merges else None
+    adopted_sync = None
 
     sweep_repo, message = ensure_worktree_fn(
         repo_root, sweep_worktree_dir, run_git=run_git, origin_ref=origin_ref, log_fn=log_fn,
@@ -2903,20 +2865,18 @@ def auto_publish_round(*, repo_root=REPO_ROOT, cache_dir, home=None, squads_toml
         return {"status": f"reviews_{review_state}", "pr_ref": pr_ref,
                 "reviews": review_detail, **common}
 
-    merged, merge_message = merge_pr(pr_ref, sweep_repo, run_gh=run_gh)
-    if not merged:
-        log_fn(f"AUTO-PUBLISH: `gh pr merge --squash` failed for {pr_ref}: {merge_message} -- "
-               "PR left open")
-        return {"status": "merge_failed", "pr_ref": pr_ref, "message": merge_message, **common}
-
-    log_fn(f"auto-publish: squash-merged {pr_ref} into main -- fast-forwarding worktrees")
-    return {"status": "merged", "pr_ref": pr_ref, "sync": sync(), **common}
+    # Green + approved is still not enough to merge -- see the matching
+    # comment in adopt_open_sweep_prs. The fleet publishes; it never merges.
+    log_fn(f"auto-publish: {pr_ref} is GREEN and approved -- leaving it OPEN by design "
+           "(the fleet never merges); a human sweep merges [needs review] PRs by hand")
+    return {"status": "published_awaiting_review", "pr_ref": pr_ref,
+            "reviews": review_detail, **common}
 
 
 # A publish that either landed something or had nothing to land. Every
 # other status is a round that did NOT publish, which is what the one-shot
 # exit code and the --infinite stall counter both key off.
-PUBLISH_OK_STATUSES = frozenset({"merged", "no_news", "zero_delta"})
+PUBLISH_OK_STATUSES = frozenset({"published_awaiting_review", "no_news", "zero_delta"})
 
 # Sweep statuses meaning "there was nothing to publish", as opposed to
 # "publishing was attempted and failed". Only these earn the idle backoff:
@@ -2933,17 +2893,18 @@ PUBLISH_STALL_ROUNDS = 3
 
 def _publish_landed_something(publish_result):
     """True when this round published, by either route: its own sweep
-    reached a terminal success, or the round-start adoption pass merged a
-    PR stranded by an earlier round. The second route matters -- a round
-    can report a pass-through failure status for its OWN sweep while
-    having just squash-merged someone else's stranded sweep PR, and
-    counting that as a stall would be a false alarm."""
+    reached a terminal success (a PR is open, awaiting human review), or
+    the round-start adoption pass found an already-open sweep PR that is
+    now green and approved, ready for a human to merge. The second route
+    matters -- a round can report a pass-through failure status for its
+    OWN sweep while having just surfaced someone else's stranded sweep PR
+    for review, and counting that as a stall would be a false alarm."""
     if not isinstance(publish_result, dict):
         return False
     if publish_result.get("status") in PUBLISH_OK_STATUSES:
         return True
     adopted = publish_result.get("adopted") or []
-    return any(isinstance(a, dict) and a.get("action") == "merged" for a in adopted)
+    return any(isinstance(a, dict) and a.get("action") == "left_open_awaiting_review" for a in adopted)
 
 
 def _run_auto_publish_safely(publish_fn=auto_publish_round, publish_kwargs=None, log_fn=print):

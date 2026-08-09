@@ -2142,3 +2142,25 @@ class DedupeByTreeTests(unittest.TestCase):
         candidates = {"a": {"squad_sha": "1", "formats": []}, "b": {"squad_sha": "2", "formats": []}}
         self.assertEqual(sorted(overlord_sweep.dedupe_by_tree(candidates, log_fn=lambda *_: None)),
                          ["a", "b"])
+
+
+class BuildSweepPrTitleTests(unittest.TestCase):
+    """The publisher opens sweep PRs; it never merges them. The [needs
+    review] marker is how a human sweep finds them
+    (`gh pr list --search "[needs review] in:title"`) before anything
+    lands on main -- losing the marker silently would mean nothing gets
+    reviewed."""
+
+    def test_title_starts_with_the_needs_review_marker(self):
+        title = overlord_sweep.build_sweep_pr_title(
+            "sweep-2026-08-08", ["a" * 40, "b" * 40], {"canon": {}, "nikon": {}},
+        )
+        self.assertTrue(title.startswith(overlord_sweep.NEEDS_REVIEW_PREFIX + " "))
+
+    def test_title_reports_sha_and_squad_counts(self):
+        title = overlord_sweep.build_sweep_pr_title(
+            "sweep-2026-08-08", ["a" * 40, "b" * 40, "c" * 40], {"canon": {}, "nikon": {}},
+        )
+        self.assertIn("3 tag fix(es)", title)
+        self.assertIn("2 squad(s)", title)
+        self.assertIn("sweep-2026-08-08", title)
