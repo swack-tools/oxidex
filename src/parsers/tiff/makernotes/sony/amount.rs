@@ -165,10 +165,19 @@ pub fn extract_camera_info(
                     tags.insert("Sony:LensSpec".to_string(), printed);
                 }
             }
-            // The AF micro-adjust group needs a ValueConv and bit masks the
-            // generated schema does not carry (see the block below); skip the
-            // generic path so it is not rendered as an unmasked raw byte.
-            "AFMicroAdjValue" | "AFMicroAdjMode" => {}
+            // All three are `Condition => '$$self{Model} =~ /^DSLR-A(850|900)\b/'`
+            // (Sony.pm:2874-2894), which this table's schema records but cannot
+            // evaluate, so the generic path would report them on an A700 too.
+            // The block below applies the model gate and the `$val - 20`
+            // ValueConv the schema also declines to run.
+            //
+            // `AFMicroAdjRegisteredLenses` is 305.1, a bit-field sharing byte
+            // 0x131 with `AFMicroAdjMode`; it reached this match only once
+            // masked fractional entries began decoding. Until then it was
+            // filtered out upstream, and it survived the generic arm merely
+            // because its `PrintConv` is empty -- name it rather than rest on
+            // that.
+            "AFMicroAdjValue" | "AFMicroAdjMode" | "AFMicroAdjRegisteredLenses" => {}
             // `afStatusInfo`'s `OTHER` sub formats every value the two literal
             // enum entries do not cover ("Front Focus (N)" / "Back Focus
             // (+N)"); the generated IntEnum can only carry the two literals,
