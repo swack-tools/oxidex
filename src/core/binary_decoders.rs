@@ -226,52 +226,102 @@ pub fn decode_user_comment(data: &[u8]) -> Option<String> {
     let encoding = &data[0..8];
     let text_data = &data[8..];
 
-    match encoding {
-        b"ASCII\0\0\0" => {
-            // ASCII encoding - simple UTF-8 conversion with null trimming
-            Some(
-                String::from_utf8_lossy(text_data)
-                    .trim_end_matches('\0')
-                    .to_string(),
-            )
-        }
-        b"UNICODE\0" => {
-            // UTF-16 encoding - try little-endian first (most common on Windows)
-            let u16_data: Vec<u16> = text_data
-                .chunks(2)
-                .filter_map(|c| {
-                    if c.len() == 2 {
-                        Some(u16::from_le_bytes([c[0], c[1]]))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            Some(
-                String::from_utf16_lossy(&u16_data)
-                    .trim_end_matches('\0')
-                    .to_string(),
-            )
-        }
-        b"JIS\0\0\0\0\0" => {
-            // JIS encoding - use lossy UTF-8 conversion as a fallback
-            // Note: Proper JIS decoding would require an external crate
-            Some(
-                String::from_utf8_lossy(text_data)
-                    .trim_end_matches('\0')
-                    .to_string(),
-            )
-        }
-        _ => {
-            // ExifTool's ConvertExifText retains an invalid identifier in the
-            // printable value (rather than discarding the first eight bytes).
-            Some(
-                String::from_utf8_lossy(data)
-                    .trim_end_matches('\0')
-                    .to_string(),
-            )
-        }
+    // ExifTool matches the identifier with a *regex*, not an equality test, and
+    // the difference is the whole defect below. See `is_ascii_text_id`.
+    if is_ascii_text_id(encoding) {
+        // `$str =~ s/\0.*//s` -- truncate at the FIRST null, not merely strip
+        // trailing ones. Ricoh2.jpg's comment is
+        // `GCM_TAG\0Information\0Roundabout\0No\0Good\0E`, of which ExifTool
+        // reports `GCM_TAG`.
+        let text = String::from_utf8_lossy(text_data);
+        let truncated = match text.find('\0') {
+            Some(end) => &text[..end],
+            None => &text,
+        };
+        return Some(trim_trailing_blanks(truncated));
     }
+
+    // `/^(UNICODE)[\0 ]$/` and `/^(JIS)[\0 ]{5}$/`. The trailing byte(s) may be
+    // spaces rather than nulls -- ExifTool allows it explicitly "because it is
+    // fairly common for camera manufacturers to get this wrong". Note the
+    // uppercase-only test is deliberate on ExifTool's part: Ricoh's RR30 writes
+    // `Unicode\0` over text that is really ASCII, so that spelling must fall
+    // through to the invalid-identifier arm rather than be decoded as UTF-16.
+    if encoding.starts_with(b"UNICODE") && is_null_or_space(encoding[7]) {
+        // UTF-16 encoding - try little-endian first (most common on Windows)
+        let u16_data: Vec<u16> = text_data
+            .chunks(2)
+            .filter_map(|c| {
+                if c.len() == 2 {
+                    Some(u16::from_le_bytes([c[0], c[1]]))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        return Some(trim_trailing_blanks(
+            String::from_utf16_lossy(&u16_data).trim_end_matches('\0'),
+        ));
+    }
+
+    if encoding.starts_with(b"JIS") && encoding[3..8].iter().all(|&b| is_null_or_space(b)) {
+        // JIS encoding - use lossy UTF-8 conversion as a fallback
+        // Note: Proper JIS decoding would require an external crate
+        return Some(trim_trailing_blanks(
+            String::from_utf8_lossy(text_data).trim_end_matches('\0'),
+        ));
+    }
+
+    // ExifTool's ConvertExifText retains an invalid identifier in the
+    // printable value (rather than discarding the first eight bytes).
+    Some(trim_trailing_blanks(
+        String::from_utf8_lossy(data).trim_end_matches('\0'),
+    ))
+}
+
+/// Whether the 8-byte UserComment identifier selects ExifTool's ASCII branch.
+///
+/// This is `ConvertExifText`'s `/^(ASCII)?(\0|[\0 ]+$)/` (Exif.pm), and it is
+/// far wider than the literal `b"ASCII\0\0\0"` this module used to compare
+/// against. Three shapes reach the branch that an equality test rejects:
+///
+/// * **All nulls.** An identifier of eight `\0` matches the bare `\0`
+///   alternative. Ricoh2.jpg is exactly this, and the equality test sent it to
+///   the invalid-identifier arm, which prepends the identifier -- so the tag
+///   printed `\0\0\0\0\0\0\0\0GCM_TAG\0Information\0...` where ExifTool prints
+///   `GCM_TAG`. A confident, precisely-formatted, completely wrong value under
+///   a real tag name.
+/// * **Spaces for nulls.** `ASCII` followed by three spaces, or eight spaces,
+///   match `[\0 ]+$`. ExifTool accepts these deliberately.
+/// * **A null then garbage.** `\0` followed by seven arbitrary bytes matches
+///   the first alternative; ExifTool names Canon ZoomBrowser EX 4.5 as the
+///   writer that does this.
+///
+/// `Unicode\0` (Ricoh RR30) matches none of them and correctly does not reach
+/// here.
+fn is_ascii_text_id(id: &[u8]) -> bool {
+    // `(ASCII)?` is optional; when it matches, the alternation applies to what
+    // follows it. No backtracking case can flip the result: the empty-match
+    // branch only succeeds when the identifier begins with a null or is all
+    // nulls/spaces, and neither can also begin with `ASCII`.
+    let rest = id.strip_prefix(b"ASCII".as_slice()).unwrap_or(id);
+
+    // `\0` -- a null right at the match position.
+    if rest.first() == Some(&0) {
+        return true;
+    }
+    // `[\0 ]+$` -- one or more nulls/spaces running to the end.
+    !rest.is_empty() && rest.iter().all(|&b| is_null_or_space(b))
+}
+
+const fn is_null_or_space(byte: u8) -> bool {
+    byte == 0 || byte == b' '
+}
+
+/// ExifTool's closing `$str =~ s/ +$//` -- trailing spaces only, not all
+/// whitespace. A trailing newline is content and ExifTool keeps it.
+fn trim_trailing_blanks(text: &str) -> String {
+    text.trim_end_matches(' ').to_string()
 }
 
 /// Decode ComponentsConfiguration tag (0x9101) to a human-readable string.

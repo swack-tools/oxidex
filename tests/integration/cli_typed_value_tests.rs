@@ -71,8 +71,20 @@ fn write_to_copy(fixture: &str, suffix: &str, spec: &str) -> NamedTempFile {
 }
 
 /// The value as the CLI's own reader renders it, e.g. "ExifIFD:ISO: 1600".
+///
+/// Read with `--no-print-conv`, because what these tests assert is the *stored*
+/// value: `-IFD0:XResolution=300` must land as the rational `300/1` and not the
+/// ASCII string `300`, which is a claim about the writer. Applying PrintConv
+/// here would print `300` for both and the test would pass on the wrong bytes --
+/// exactly the type-blind assertion this file's header warns against. These
+/// reads were raw when the flag was opt-in; naming it keeps them raw now that
+/// conversion is the default.
+///
+/// Assertions that do expect a converted form (`Rotate 90 CW`, ApertureValue's
+/// `1.5`) are unaffected: those come from `output_formatter::friendly_enum_name`,
+/// which runs in the raw renderer too.
 fn read_tag(path: &Path, key: &str) -> Option<String> {
-    let output = oxidex(&[path.to_str().expect("utf-8 path")]);
+    let output = oxidex(&["--no-print-conv", path.to_str().expect("utf-8 path")]);
     assert!(output.status.success(), "read-back failed");
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let prefix = format!("{key}: ");

@@ -884,17 +884,37 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
 
     // ---------------------------------------------------------------------
     // Rule 18: XMP Boolean Formatting
-    // ExifTool uses lowercase 'true'/'false' for XMP boolean values
-    // Some parsers output title-case 'True'/'False' which we normalize here
+    //
+    // ExifTool capitalizes; this rule used to do the exact opposite, under a
+    // comment asserting "ExifTool uses lowercase 'true'/'false'". XMP.pm's
+    // `%boolConv` is the authority, and it case-folds *up*:
+    //
+    //     return 'False' if lc $val eq 'false';
+    //     return 'True'  if lc $val eq 'true';
+    //     True => 'True', False => 'False',
+    //
+    // and XMP.pm:3690 warns "Boolean value ... should be capitalized" when a
+    // file stores the lowercase form -- ExifTool treats lowercase as the
+    // malformed input, not the output.
+    //
+    // Scope matters as much as direction. `%boolConv` is attached to exactly
+    // three tags (XMP-exif Flash Fired/Function/RedEyeMode, XMP.pm:2139-2158);
+    // the other 51 `Writable => 'boolean'` XMP tags carry no PrintConv at all,
+    // so ExifTool prints whatever literal the file holds. That is why `Marked`
+    // reads `True`: PLUS.xmp contains `<xmpRights:Marked>True`, and ExifTool
+    // passes it through. Blanket-lowercasing every XMP string therefore did not
+    // merely mis-case the three converted tags -- it destroyed the stored value
+    // of every boolean tag that was already right, and would corrupt a
+    // legitimate `XMP-dc:Description` of "True" for good measure.
     // ---------------------------------------------------------------------
-    if tag_name.starts_with("XMP")
+    if is_xmp_bool_conv_tag(tag_name, base_name)
         && let Some(s) = value.as_string()
     {
-        if s == "True" {
-            return TagValue::String("true".to_string());
+        if s.eq_ignore_ascii_case("true") {
+            return TagValue::String("True".to_string());
         }
-        if s == "False" {
-            return TagValue::String("false".to_string());
+        if s.eq_ignore_ascii_case("false") {
+            return TagValue::String("False".to_string());
         }
     }
 
@@ -1554,6 +1574,36 @@ pub fn is_version_tag(base_name: &str) -> bool {
         base_name,
         "InteropVersion" | "ExifVersion" | "FlashpixVersion"
     )
+}
+
+/// Checks if the tag is one ExifTool converts with XMP.pm's `%boolConv`.
+///
+/// `%boolConv` (XMP.pm:246) case-folds a boolean *up* -- `'True' if lc $val eq
+/// 'true'` -- and it is attached to exactly three tags, the XMP-exif `Flash`
+/// struct's `Fired`, `Function` and `RedEyeMode` members (XMP.pm:2139-2158),
+/// which ExifTool flattens to `FlashFired` / `FlashFunction` /
+/// `FlashRedEyeMode`.
+///
+/// The 51 other `Writable => 'boolean'` XMP tags -- `Marked` among them --
+/// declare no `PrintConv`, so ExifTool reports the literal the file stores and
+/// this predicate deliberately excludes them. Widening it to "any XMP string
+/// that looks boolean" would re-introduce the defect it replaced from the other
+/// side: rewriting values ExifTool passes through untouched.
+///
+/// # Arguments
+///
+/// * `tag_name` - The full tag name, used to confirm the XMP family
+/// * `base_name` - The tag name without family prefix
+///
+/// # Returns
+///
+/// `true` if ExifTool applies `%boolConv` to this tag
+pub fn is_xmp_bool_conv_tag(tag_name: &str, base_name: &str) -> bool {
+    tag_name.starts_with("XMP")
+        && matches!(
+            base_name,
+            "FlashFired" | "FlashFunction" | "FlashRedEyeMode"
+        )
 }
 
 /// Checks if the tag is `GPSVersionID`.
@@ -2353,26 +2403,71 @@ mod tests {
         assert_eq!(formatted.as_string(), Some("Unknown (99)"));
     }
 
+    /// `%boolConv` capitalizes, and applies to three tags.
+    ///
+    /// The version of this test that shipped with the inverted rule asserted
+    /// `XMP:AlreadyApplied` of `"True"` should print `"true"`. It was wrong
+    /// twice over: ExifTool's `%boolConv` folds *up*, and `AlreadyApplied`
+    /// (XMP.pm:1416) is a bare `Writable => 'boolean'` with no `PrintConv` at
+    /// all, so ExifTool reports the file's own literal and converts nothing.
+    /// Picking two pass-through tags to demonstrate a conversion is what let
+    /// the rule read as tested while it corrupted 10 corpus values.
     #[test]
-    fn test_xmp_boolean_formatting() {
-        // XMP boolean values should be lowercase to match ExifTool
-        let value = TagValue::String("True".to_string());
-        let formatted = format_tag_value("XMP:AlreadyApplied", &value);
-        assert_eq!(formatted.as_string(), Some("true"));
+    fn xmp_bool_conv_capitalizes_its_three_tags() {
+        for tag in ["XMP:FlashFired", "XMP:FlashFunction", "XMP:FlashRedEyeMode"] {
+            // The form files actually store -- passed through, not folded down.
+            let value = TagValue::String("False".to_string());
+            assert_eq!(
+                format_tag_value(tag, &value).as_string(),
+                Some("False"),
+                "{tag}"
+            );
 
-        let value = TagValue::String("False".to_string());
-        let formatted = format_tag_value("XMP-crs:HasCrop", &value);
-        assert_eq!(formatted.as_string(), Some("false"));
+            // XMP.pm:3690 calls the lowercase form malformed input; `%boolConv`
+            // repairs it upward rather than adopting it.
+            let value = TagValue::String("true".to_string());
+            assert_eq!(
+                format_tag_value(tag, &value).as_string(),
+                Some("True"),
+                "{tag}"
+            );
+        }
+    }
 
-        // Already lowercase should stay unchanged
-        let value = TagValue::String("true".to_string());
-        let formatted = format_tag_value("XMP:Tagged", &value);
-        assert_eq!(formatted.as_string(), Some("true"));
+    /// Boolean-looking XMP tags without `%boolConv` keep the stored literal.
+    ///
+    /// `Marked` is the one the corpus caught: PLUS.xmp stores
+    /// `<xmpRights:Marked>True`, ExifTool prints `True`, and the blanket rule
+    /// rewrote it to `true` on 4 files.
+    #[test]
+    fn xmp_booleans_without_bool_conv_are_passed_through() {
+        for (tag, stored) in [
+            ("XMP-xmpRights:Marked", "True"),
+            ("XMP:AlreadyApplied", "True"),
+            ("XMP-crs:HasCrop", "False"),
+            // A free-text tag that merely happens to read as a boolean.
+            ("XMP-dc:Description", "True"),
+        ] {
+            let value = TagValue::String(stored.to_string());
+            assert_eq!(
+                format_tag_value(tag, &value).as_string(),
+                Some(stored),
+                "{tag}"
+            );
+        }
 
         // Non-boolean XMP values should be unchanged
         let value = TagValue::String("Normal".to_string());
         let formatted = format_tag_value("XMP:ProcessVersion", &value);
         assert_eq!(formatted.as_string(), Some("Normal"));
+    }
+
+    /// `%boolConv` is XMP-only; an EXIF tag of the same base name is untouched.
+    #[test]
+    fn bool_conv_does_not_reach_outside_xmp() {
+        assert!(is_xmp_bool_conv_tag("XMP:FlashFired", "FlashFired"));
+        assert!(!is_xmp_bool_conv_tag("EXIF:FlashFired", "FlashFired"));
+        assert!(!is_xmp_bool_conv_tag("XMP-xmpRights:Marked", "Marked"));
     }
 
     #[test]
