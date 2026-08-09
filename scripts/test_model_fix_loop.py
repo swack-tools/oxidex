@@ -117,6 +117,10 @@ from model_fix_loop import (
     select_module_lessons,
     squad_from_worker,
     describe_missing_path,
+    _reply_has_unterminated_diff_fence,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_MAX_TRUNCATION_RETRIES,
+    TRUNCATED_DIFF_RETRY_DEMAND,
     FORCED_DIFF_DEMAND,
     FORCED_DIFF_DEMAND_CEILING,
     git_apply,
@@ -766,6 +770,31 @@ class ExtractDiffTests(unittest.TestCase):
         ```diff literal and must never fire without one."""
         text = "I don't know how to fix this. *** End Patch"
         self.assertIsNone(extract_diff(text))
+
+
+class ReplyHasUnterminatedDiffFenceTests(unittest.TestCase):
+    def test_true_when_fence_opened_but_never_closed(self):
+        # The signature of a reply that hit config["max_tokens"] mid-diff:
+        # an opening ```diff fence with no closing ``` anywhere after it.
+        text = (
+            "Plan: fix the LensModel tag.\n```diff\n--- a/x.rs\n+++ b/x.rs\n"
+            "@@ -1,3 +1,3 @@\n-old line one\n-old line two\n+new line one"
+        )
+        self.assertTrue(_reply_has_unterminated_diff_fence(text))
+
+    def test_false_when_fence_is_properly_closed(self):
+        text = "Plan: fix it.\n```diff\n--- a/x.rs\n+++ b/x.rs\n```\n"
+        self.assertFalse(_reply_has_unterminated_diff_fence(text))
+
+    def test_false_when_no_diff_fence_at_all(self):
+        # No ```diff opener anywhere -- this is a reply that never
+        # attempted a diff, not one truncated mid-diff, so it must not be
+        # mistaken for the truncation case.
+        self.assertFalse(_reply_has_unterminated_diff_fence("I could not find a fix."))
+
+    def test_false_for_an_unrelated_unclosed_fence(self):
+        # A stray ``` with no "diff" tag is not this signature.
+        self.assertFalse(_reply_has_unterminated_diff_fence("```\nsome text\n"))
 
 
 class ExtractTestFailureContextTests(unittest.TestCase):
@@ -3061,9 +3090,20 @@ class BuildPromptTokenBudgetTests(unittest.TestCase):
         self.assertIn("PATCH 1/N", prompt)
         self.assertIn("```diff", prompt)
 
-    def test_mentions_the_configured_token_budget(self):
-        prompt = build_prompt(make_gap(gap_count=2), max_prompt_tokens=4096)
+    def test_mentions_the_configured_reply_token_budget(self):
+        prompt = build_prompt(make_gap(gap_count=2), max_reply_tokens=4096)
         self.assertIn("roughly 4096 tokens", prompt)
+
+    def test_patch_threshold_is_the_reply_cap_not_the_prompt_budget(self):
+        # Regression: the PATCH-chunking threshold used to quote
+        # max_prompt_tokens (the INPUT budget, config["max_prompt_tokens"])
+        # instead of max_reply_tokens (the REPLY cap, config["max_tokens"]
+        # -- what actually truncates a reply mid-diff). Pick deliberately
+        # different values so a manifest that still leaks the prompt budget
+        # here is caught.
+        prompt = build_prompt(make_gap(gap_count=2), max_prompt_tokens=99999, max_reply_tokens=1234)
+        self.assertIn("roughly 1234 tokens", prompt)
+        self.assertNotIn("99999", prompt)
 
     def test_default_prompt_fits_within_the_default_token_budget(self):
         gap = make_gap(gap_count=2)
@@ -5641,6 +5681,76 @@ class AttemptBuildTests(unittest.TestCase):
         self.assertIsNone(reason)
         self.assertIn("+new", diff)
         self.assertNotIn("End Patch", diff)
+
+    def test_apply_failure_on_a_truncated_diff_demands_patch_chunking(self):
+        # The reply's ```diff fence never closed -- extract_diff's
+        # DIFF_BLOCK_UNCLOSED_RE fallback (see #633) recovers what content
+        # there is, but a diff cut off by the max_tokens cap is missing its
+        # tail and git apply rejects it (every case sampled from a real
+        # fleet run did). The retry message must name the real cause and
+        # demand PATCH i/N, not the generic "resend a corrected diff" --
+        # which would just invite repeating the same oversized attempt.
+        replies = [
+            "Plan: fix LensModel.\n```diff\n--- a/x.rs\n+++ b/x.rs\n@@ -1 +1 @@\n-old",
+            "PATCH 1/1\n```diff\n--- a/x.rs\n+++ b/x.rs\n@@ -1 +1 @@\n-old\n+new\n```\n",
+        ]
+        calls = []
+
+        def fake_call_model(messages, *a):
+            calls.append(1)
+            if len(calls) == 2:
+                self.assertIn(TRUNCATED_DIFF_RETRY_DEMAND, messages[-1]["content"])
+                self.assertNotIn("Please resend a corrected diff.", messages[-1]["content"])
+            return replies[len(calls) - 1]
+
+        apply_attempts = []
+
+        def fake_git_apply(diff, root):
+            apply_attempts.append(1)
+            if len(apply_attempts) == 1:
+                return False, "corrupt patch"
+            return True, "ok"
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=fake_git_apply,
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertTrue(built)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(apply_attempts), 2)
+
+    def test_apply_failure_on_a_properly_closed_diff_keeps_the_generic_message(self):
+        # Regression guard: the truncation-specific message must not leak
+        # into an ordinary (non-truncated) apply failure.
+        def fake_call_model(messages, *a):
+            if len(messages) > 1:
+                self.assertIn("Please resend a corrected diff.", messages[-1]["content"])
+                self.assertNotIn(TRUNCATED_DIFF_RETRY_DEMAND, messages[-1]["content"])
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        apply_attempts = []
+
+        def fake_git_apply(diff, root):
+            apply_attempts.append(1)
+            if len(apply_attempts) == 1:
+                return False, "patch does not apply"
+            return True, "ok"
+
+        built, reason, diff, messages = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=fake_call_model,
+            git_apply_fn=fake_git_apply,
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (True, ""),
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertTrue(built)
 
     def test_fails_gracefully_when_model_call_raises(self):
         def raising_call_model(messages, *a):

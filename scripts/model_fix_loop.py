@@ -19,7 +19,18 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           turns it serves -- see models_for_phase) and
                           reasoning_effort (per-model override of the
                           table default).
-    max_tokens           default 4096 (cap on the model's own reply length)
+    max_tokens           default 4096 (cap on the model's own reply length --
+                          if the model's own diff would exceed this in one
+                          reply, the prompt tells it to split into
+                          "PATCH i/N" chunks instead; see attempt_build and
+                          build_reply_shape_manifest. This is the REPLY cap,
+                          not max_prompt_tokens below -- the two used to be
+                          conflated in the manifest text handed to the model,
+                          which quoted max_prompt_tokens (the INPUT budget,
+                          usually double this) as the PATCH-chunking
+                          threshold, so a diff sized to fit under the real
+                          cap still looked "safely under budget" to the
+                          model and got silently truncated mid-diff instead.)
     max_prompt_tokens     default 8192 (worker only; hard cap on the built
                           prompt itself -- see estimate_tokens/
                           assemble_prompt_sections -- a ~4 chars/token
@@ -27,10 +38,7 @@ variables. Each of the [worker] and [reviewer] tables takes:
                           is shed via graduated per-section truncation
                           (attempts, then samples, then neighbor precedent,
                           then perl_block, then parser files down to
-                          parser_floor_tokens), not plain head-keeping. If
-                          the model's own diff would exceed this in one
-                          reply, the prompt tells it to split into
-                          "PATCH i/N" chunks instead -- see attempt_build.)
+                          parser_floor_tokens), not plain head-keeping.)
     reviewer_max_prompt_tokens default 8192 (reviewer only; independent cap
                           on build_review_prompt's own prompt, which now
                           carries the Perl reference, live post-fix
@@ -476,6 +484,17 @@ def extract_diff(response_text):
     return None
 
 
+def _reply_has_unterminated_diff_fence(reply):
+    """True when `reply` opened a ```diff fence but DIFF_BLOCK_RE never
+    found a closing ``` -- the signature of a reply that hit config's
+    max_tokens reply cap mid-diff, as opposed to one that never attempted
+    a diff at all (plain prose, a REQUEST, etc). attempt_build uses this
+    to tell the two apart: the first is worth one targeted retry asking
+    for PATCH i/N chunking instead of failing the whole attempt outright,
+    the second is not."""
+    return "```diff" in reply and not DIFF_BLOCK_RE.search(reply)
+
+
 def estimate_tokens(text):
     """Rough token-count estimate (~4 chars/token, the standard rule of
     thumb for English/code with GPT-style BPE tokenizers). This script
@@ -492,6 +511,12 @@ def estimate_tokens(text):
 #: learning block instead of just extending how much parser-file text
 #: survives.
 DEFAULT_MAX_PROMPT_TOKENS = 8192
+
+#: Fallback for config["max_tokens"] (the REPLY cap -- see the module
+#: docstring) when a caller doesn't have a config dict to read it from
+#: (e.g. the manifest/preview builders). Matches _normalize_model_config's
+#: own default so the two can never silently drift apart.
+DEFAULT_MAX_TOKENS = 4096
 
 
 def truncate_to_token_budget(text, max_tokens=DEFAULT_MAX_PROMPT_TOKENS):
@@ -2762,10 +2787,21 @@ Lessons from mistakes a human reviewer previously caught in this loop's own outp
 """.strip()
 
 
-def build_reply_shape_manifest(max_prompt_tokens):
+def build_reply_shape_manifest(max_prompt_tokens, max_reply_tokens=DEFAULT_MAX_TOKENS):
     """The complete reply protocol, stated once near the top of the
     prompt (stable text -> provider prompt-cache friendly; early text ->
-    survives truncate_to_token_budget, which keeps the head)."""
+    survives truncate_to_token_budget, which keeps the head).
+
+    max_prompt_tokens is the built-PROMPT budget (config["max_prompt_tokens"],
+    default 8192) -- unused by the text below, kept as this function's
+    first/positional arg for call-site compatibility. max_reply_tokens is
+    the actual constraint shape 3 (PATCH i/N) is about: config["max_tokens"],
+    the cap on the model's own REPLY (default 4096, usually about half of
+    max_prompt_tokens). Quoting max_prompt_tokens there instead -- as this
+    function used to, unconditionally -- told the model a diff was "safely
+    under budget" at roughly double the size that would actually get it
+    truncated mid-diff, which is exactly why models weren't electing PATCH
+    chunking before hitting the real cap."""
     return f"""You are operating in an ephemeral, isolated git worktree; broken builds during investigation are expected and cost nothing -- probe aggressively with VERIFY rather than guessing.
 
 STRATEGY: REQUEST is free -- reading real files costs you nothing and there is no limit on how many you read, so never submit a diff written from a guess about code you could simply have looked at. What you should not do is read AIMLESSLY: prefer the read that resolves a specific uncertainty over another one "just to be thorough". Alongside that, bias toward putting a real candidate in front of the compiler early: if the parser file(s) shown below already give you enough to sketch a plausible fix, send a VERIFY of your best-guess diff rather than continuing to investigate. Use the `cargo check` feedback from each VERIFY to correct course, and expect to iterate 2-3 VERIFY rounds (wrong field offset, wrong PrintConv string, missing import, etc.) before your final Plan + diff -- that loop is cheap and expected. REQUEST and VERIFY are complementary, not competing: REQUEST answers "what does this code/byte layout actually say", VERIFY answers "does my change compile and typecheck". Reach for whichever your current uncertainty calls for.
@@ -2774,7 +2810,7 @@ Every reply must be exactly one of these four shapes:
 
 1. REQUEST: <path> -- see a source file or a sample file (a bare line, nothing else in the reply). Add a 1-indexed line range after a source path -- prefer one for anything large. All four shapes work: `:40-120` (that range), `:400-` (line 400 to end of file), `:-120` (start through line 120), `:400` (a window around line 400). These are UNLIMITED and free: read as many files as you need. Only a REQUEST that buys you nothing is charged against a small allowance -- a path that does not resolve, a range starting past the end of a file, or re-asking for content still visible in this conversation -- and an answer tells you only when it charged you. So check the directory listing an unresolved path comes back with instead of guessing again, and re-read your own earlier answers instead of re-requesting them (if an earlier answer was elided to save space, re-REQUESTing it is free). Distinct line ranges of the same file are distinct reads and stay free when they show new lines; a range that resolves to exactly what you were already shown counts as a re-ask.
 2. VERIFY -- trial-compile a candidate change without committing to it: the line "VERIFY" followed by exactly ONE ```diff fenced block. The diff is applied, `cargo check` runs, the tail of its output comes back, and the change is REVERTED -- your final diff must still contain the complete change.
-3. PATCH 1/N -- if your finished diff would exceed roughly {max_prompt_tokens} tokens (~{max_prompt_tokens * 4} characters) in one reply, split it into N consecutive chunks and send the first as the line "PATCH 1/N" followed by ONE ```diff fenced chunk; you'll be prompted for each next chunk. Chunks are concatenated in order before applying, so split anywhere (mid-hunk is fine) -- never repeat or skip lines across a boundary.
+3. PATCH 1/N -- your ENTIRE reply, including this plan text and the diff, is capped at roughly {max_reply_tokens} tokens (~{max_reply_tokens * 4} characters); a reply that runs longer gets cut off mid-diff and the whole attempt is wasted. If your finished diff would come anywhere close to that on its own, don't risk it -- split it into N consecutive chunks and send the first as the line "PATCH 1/N" followed by ONE ```diff fenced chunk; you'll be prompted for each next chunk. Chunks are concatenated in order before applying, so split anywhere (mid-hunk is fine) -- never repeat or skip lines across a boundary.
 4. Plan + diff -- first, 2-3 sentences: which tag(s) you're fixing, where in the code, what you learned from the previous turn's output, and (on a retry) what you're doing differently from the failed attempt(s) above and why. Then exactly ONE ```diff fenced block containing the complete unified diff.
 
 Shapes 1-3 are control signals: the control line must be the VERY FIRST line of the reply, with no narrative before it."""
@@ -3763,6 +3799,7 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
                   max_samples_listed=DEFAULT_MAX_SAMPLE_FILES_LISTED, previous_attempts=None,
                   perl_lib_dir=None, sweep_review_log_path=None,
                   max_prompt_tokens=DEFAULT_MAX_PROMPT_TOKENS,
+                  max_reply_tokens=DEFAULT_MAX_TOKENS,
                   neighbor_precedent_block="",
                   knowledge_home=None, module_name=None,
                   learning_budget_tokens=DEFAULT_LEARNING_BUDGET_TOKENS,
@@ -3781,6 +3818,12 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
     the model can ask to see one's actual raw bytes via the REQUEST:
     protocol (see attempt_build) instead of guessing at binary layout from
     tag names/values alone.
+
+    max_prompt_tokens bounds THIS prompt (the input); max_reply_tokens is
+    the separate config["max_tokens"] cap on the model's own REPLY, passed
+    through to build_reply_shape_manifest so the PATCH-i/N-chunking
+    threshold it states matches the cap that will actually truncate a
+    reply, rather than the input budget above.
 
     previous_attempts, if given, is this tag's persisted attempt history
     (run_tag_loop's per-tag "attempts" list) -- see format_previous_attempts.
@@ -3986,7 +4029,7 @@ def build_prompt(gap, repo_root=REPO_ROOT, max_tags=DEFAULT_MAX_PROMPT_TAGS,
 
     attempts_block = format_previous_attempts(previous_attempts)
 
-    manifest = build_reply_shape_manifest(max_prompt_tokens)
+    manifest = build_reply_shape_manifest(max_prompt_tokens, max_reply_tokens)
     texts = {
         # Tier 0 -- byte-identical for every worker, every format, every
         # tag, forever. Everything downstream of a single varying byte is
@@ -4493,6 +4536,24 @@ FORCED_DIFF_DEMAND_CEILING = (
     "ONE ```diff fenced block containing your best-effort change, however uncertain. "
     "Another REQUEST, VERIFY or PATCH reply ends the attempt with no fix at all, so a "
     "guess that might be wrong is strictly better than another question."
+)
+
+
+#: Appended after "That diff did not apply: <apply_msg>" (see attempt_build)
+#: when the reply that produced it had an unclosed ```diff fence (see
+#: _reply_has_unterminated_diff_fence) -- i.e. it hit config["max_tokens"]
+#: mid-diff rather than writing a genuinely wrong diff. Names the actual
+#: cause and points at the shape the manifest already promised for exactly
+#: this case, instead of the generic "resend a corrected diff", which
+#: invites repeating the exact same oversized single-reply attempt.
+TRUNCATED_DIFF_RETRY_DEMAND = (
+    "That reply cut off mid-diff -- a ```diff fence was opened but never closed, which "
+    "means it hit the maximum reply length before the diff was complete; that's why it "
+    "didn't apply, not a wrong edit. Resend using the PATCH i/N chunking protocol "
+    "described at the top of this conversation: send everything you already had, cut at "
+    "a clean point (mid-hunk is fine), as the line \"PATCH 1/N\" followed by ONE ```diff "
+    "fenced chunk -- you'll be prompted for each next chunk. Do not restart the diff from "
+    "scratch inside that chunk; keep exactly what you had and continue from there."
 )
 
 
@@ -5087,16 +5148,32 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     attempt. Each spec is a {"name", "base_url", "api_key"} dict.
 
     A single reply is capped at config["max_tokens"] (see build_prompt's
-    matching config["max_prompt_tokens"] on the request side), so a large
-    diff may not fit in one turn. build_prompt tells the model to split
-    such a diff into "PATCH i/N" chunks instead of truncating it silently
-    -- see PATCH_HEADER_RE below. Each chunk is accumulated (up to
+    separate config["max_prompt_tokens"] on the request side -- the two are
+    independent budgets), so a large diff may not fit in one turn.
+    build_reply_shape_manifest tells the model to split such a diff into
+    "PATCH i/N" chunks instead of truncating it silently -- see
+    PATCH_HEADER_RE below. Each chunk is accumulated (up to
     DEFAULT_MAX_PATCH_CHUNKS turns, a safety ceiling independent of N, in
     case of a misbehaving/looping model) and, once chunk N/N arrives with
     every chunk 1..N present, concatenated back into one diff and applied
     exactly like a normal single-reply diff -- this doesn't consume a
     separate diff_attempts_used slot per chunk, only once the full diff is
     assembled and ready to apply.
+
+    A model that ignores that instruction and submits a plain (non-PATCH)
+    diff anyway can still get truncated mid-reply by the same cap: the
+    reply's ```diff fence opens and never closes. extract_diff's
+    DIFF_BLOCK_UNCLOSED_RE fallback recovers what content there is, but a
+    diff cut off by a hard length cap is missing its tail -- every such
+    case sampled from a real fleet run failed `git apply` outright. When
+    that happens, _reply_has_unterminated_diff_fence(reply) is checked
+    against the ORIGINAL reply (not the recovered/partial diff), and the
+    apply-failure retry message is TRUNCATED_DIFF_RETRY_DEMAND -- naming
+    the real cause and demanding PATCH i/N -- instead of the generic
+    "resend a corrected diff", which invites repeating the exact same
+    oversized single-reply attempt. This still spends one of the 2 real
+    diff_attempts_used slots, same as any other apply failure; a
+    subsequent PATCH i/N sequence remains free per chunk as always.
 
     cargo_check_fn(repo_root) -> (success, output), if provided, enables
     the VERIFY protocol: a reply of "VERIFY" plus one ```diff fenced
@@ -5413,10 +5490,24 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
             git_checkout_clean_fn(repo_root)
             last_diff_failure = ("apply", apply_msg)
             patch_chunks = {}  # a resend may be a fresh single diff or a fresh chunk sequence
-            messages.append({
-                "role": "user",
-                "content": f"That diff did not apply: {apply_msg}\nPlease resend a corrected diff.",
-            })
+            # An unclosed ```diff fence (extract_diff's DIFF_BLOCK_UNCLOSED_RE
+            # fallback recovers SOMETHING from these, but per the fleet
+            # sample every one of them is structurally incomplete -- see
+            # TRUNCATED_DIFF_RETRY_DEMAND) failing to apply almost always
+            # means the reply hit config["max_tokens"] mid-diff, not that
+            # the diff itself is wrong. Point the model at PATCH i/N instead
+            # of the generic "resend a corrected diff", which invites
+            # repeating the exact same oversized attempt.
+            if _reply_has_unterminated_diff_fence(reply):
+                messages.append({
+                    "role": "user",
+                    "content": f"That diff did not apply: {apply_msg}\n{TRUNCATED_DIFF_RETRY_DEMAND}",
+                })
+            else:
+                messages.append({
+                    "role": "user",
+                    "content": f"That diff did not apply: {apply_msg}\nPlease resend a corrected diff.",
+                })
             current_phase = "patch"
             continue
 
@@ -6207,6 +6298,7 @@ def fix_gap(gap, config, *, call_model_fn=call_model, review_call_model_fn=None,
         sweep_review_log_path=sweep_review_log_path,
         previous_attempts=previous_attempts,
         max_prompt_tokens=config.get("max_prompt_tokens", DEFAULT_MAX_PROMPT_TOKENS),
+        max_reply_tokens=config.get("max_tokens", DEFAULT_MAX_TOKENS),
         neighbor_precedent_block=neighbor_precedent_block,
         knowledge_home=knowledge_home, module_name=module_name,
         learning_budget_tokens=config.get("learning_budget_tokens", DEFAULT_LEARNING_BUDGET_TOKENS),
@@ -7433,7 +7525,8 @@ def _foundation_job_pseudo_gap(job):
 
 
 def build_foundation_job_prompt(job, perl_lib_dir=None, neighbor_precedent_block="",
-                                 max_prompt_tokens=DEFAULT_TABLE_JOB_MAX_PROMPT_TOKENS):
+                                 max_prompt_tokens=DEFAULT_TABLE_JOB_MAX_PROMPT_TOKENS,
+                                 max_reply_tokens=DEFAULT_MAX_TOKENS):
     """T4 FOUNDATION-UNLOCK prompt (spec S3 item 2(a)). A foundation job
     targets a whole table/module dispatch path -- e.g. "CR3 QuickTime-box
     -> Canon CMT dispatch" -- rather than one tag, so there is no
@@ -7444,7 +7537,7 @@ def build_foundation_job_prompt(job, perl_lib_dir=None, neighbor_precedent_block
     build_neighbor_precedent_block via _foundation_job_pseudo_gap."""
     gap = _foundation_job_pseudo_gap(job)
     perl_block = build_perl_reference_block(gap, perl_lib_dir) if perl_lib_dir else ""
-    manifest = build_reply_shape_manifest(max_prompt_tokens)
+    manifest = build_reply_shape_manifest(max_prompt_tokens, max_reply_tokens)
     targets = ", ".join(job.get("target_formats") or [job.get("target_module") or "?"])
     sections = [
         ("intro", (
@@ -7598,6 +7691,7 @@ def attempt_foundation_job(job, repo_root, config, *, call_model_fn=call_model,
     messages = [{"role": "user", "content": build_foundation_job_prompt(
         job, perl_lib_dir=perl_lib_dir, neighbor_precedent_block=neighbor_precedent_block,
         max_prompt_tokens=job_config["max_prompt_tokens"],
+        max_reply_tokens=job_config.get("max_tokens", DEFAULT_MAX_TOKENS),
     )}]
 
     rounds = []
@@ -7740,14 +7834,15 @@ def _table_port_pseudo_gap(table_name, module, repo_root, table_members=None):
 
 def build_table_port_prompt(table_name, module, perl_table_source, registry_skeleton,
                             neighbor_precedent_block="",
-                            max_prompt_tokens=DEFAULT_TABLE_JOB_MAX_PROMPT_TOKENS):
+                            max_prompt_tokens=DEFAULT_TABLE_JOB_MAX_PROMPT_TOKENS,
+                            max_reply_tokens=DEFAULT_MAX_TOKENS):
     """T3 TABLE-PORT prompt (spec S3 item 3): the FULL Perl table source
     (extract_perl_table_source -- ground truth), the oxidex-side
     id-to-name skeleton (build_table_port_registry_skeleton --
     SCAFFOLDING ONLY, labelled unambiguously as such and never as value
     ground truth), and registry precedent (neighbor_precedent_block,
     pre-rendered by the caller -- see attempt_table_port)."""
-    manifest = build_reply_shape_manifest(max_prompt_tokens)
+    manifest = build_reply_shape_manifest(max_prompt_tokens, max_reply_tokens)
     perl_section = (
         f"\n\nExifTool's own COMPLETE table source (ground truth -- port this table's "
         f"full membership, not a guess at it):\n\n{perl_table_source}"
@@ -7846,6 +7941,7 @@ def attempt_table_port(table_name, module, repo_root, config, *, call_model_fn=c
         table_name, module, perl_table_source, registry_skeleton,
         neighbor_precedent_block=neighbor_precedent_block,
         max_prompt_tokens=job_config["max_prompt_tokens"],
+        max_reply_tokens=job_config.get("max_tokens", DEFAULT_MAX_TOKENS),
     )}]
 
     rounds = []
@@ -8569,7 +8665,7 @@ def _normalize_model_config(table):
             _normalize_model_spec(m, default_base_url, default_api_key)
             for m in (table.get("models") or [])
         ],
-        "max_tokens": table.get("max_tokens", 4096),
+        "max_tokens": table.get("max_tokens", DEFAULT_MAX_TOKENS),
         "max_prompt_tokens": table.get("max_prompt_tokens", DEFAULT_MAX_PROMPT_TOKENS),
         "reasoning_effort": table.get("reasoning_effort", "max"),
         "max_prompt_tags": table.get("max_prompt_tags", DEFAULT_MAX_PROMPT_TAGS),
@@ -9141,6 +9237,7 @@ def main(argv=None):
             perl_lib_dir=perl_lib_dir,
             sweep_review_log_path=sweep_review_log_path,
             max_prompt_tokens=cfg.get("max_prompt_tokens", DEFAULT_MAX_PROMPT_TOKENS),
+            max_reply_tokens=cfg.get("max_tokens", DEFAULT_MAX_TOKENS),
             neighbor_precedent_block=precedent,
             knowledge_home=knowledge_home, module_name=None,
             learning_budget_tokens=cfg.get("learning_budget_tokens", DEFAULT_LEARNING_BUDGET_TOKENS),
