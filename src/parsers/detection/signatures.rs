@@ -111,6 +111,7 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     signature!(b"\x7FELF", 0, FileFormat::ELF),
     signature!(b"\x89HDF\x0D\x0A\x1A\x0A", 0, FileFormat::HDF5),
     signature!(b"SIMPLE", 0, FileFormat::FITS),
+    signature!(b"DICM", 128, FileFormat::DICOM),
     signature!(b"BEGIN:VCARD", 0, FileFormat::VCF),
     signature!(b"\x4C\x00\x00\x00", 0, FileFormat::LNK),
     signature!(b"SQLite format 3\0", 0, FileFormat::SQLite),

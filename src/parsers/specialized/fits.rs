@@ -4,6 +4,7 @@
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::io::{ByteOrder, EndianReader};
 
 mod tables;
 
@@ -262,6 +263,298 @@ pub fn parse_fits_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
     parser.parse(reader).map_err(|e| e.to_string())
 }
 
+const DICOM_MAGIC_OFFSET: usize = 128;
+const DICOM_DATA_OFFSET: usize = 132;
+
+#[derive(Clone, Copy)]
+struct DicomEncoding {
+    order: ByteOrder,
+    explicit_vr: bool,
+}
+
+impl DicomEncoding {
+    const EXPLICIT_LE: Self = Self {
+        order: ByteOrder::Little,
+        explicit_vr: true,
+    };
+}
+
+struct DicomElement<'a> {
+    group: u16,
+    element: u16,
+    value: &'a [u8],
+    next_offset: usize,
+}
+
+fn dicom_long_vr(vr: [u8; 2]) -> bool {
+    matches!(
+        &vr,
+        b"OB" | b"OD" | b"OF" | b"OL" | b"OV" | b"OW" | b"SQ" | b"UC" | b"UN" | b"UR" | b"UT"
+    )
+}
+
+fn parse_dicom_element<'a>(
+    data: &'a [u8],
+    offset: usize,
+    encoding: DicomEncoding,
+) -> Result<DicomElement<'a>> {
+    let reader = EndianReader::new(data, encoding.order);
+    let group = reader
+        .u16_at(offset)
+        .ok_or_else(|| ExifToolError::parse_error_at("truncated DICOM tag group", offset))?;
+    let element = reader
+        .u16_at(offset + 2)
+        .ok_or_else(|| ExifToolError::parse_error_at("truncated DICOM tag element", offset))?;
+
+    let (header_len, value_len) = if encoding.explicit_vr {
+        let vr_bytes = data.get(offset + 4..offset + 6).ok_or_else(|| {
+            ExifToolError::parse_error_at("truncated DICOM value representation", offset)
+        })?;
+        let vr = [vr_bytes[0], vr_bytes[1]];
+        if dicom_long_vr(vr) {
+            (
+                12usize,
+                reader.u32_at(offset + 8).ok_or_else(|| {
+                    ExifToolError::parse_error_at("truncated DICOM value length", offset)
+                })?,
+            )
+        } else {
+            (
+                8usize,
+                u32::from(reader.u16_at(offset + 6).ok_or_else(|| {
+                    ExifToolError::parse_error_at("truncated DICOM value length", offset)
+                })?),
+            )
+        }
+    } else {
+        (
+            8usize,
+            reader.u32_at(offset + 4).ok_or_else(|| {
+                ExifToolError::parse_error_at("truncated DICOM value length", offset)
+            })?,
+        )
+    };
+
+    if value_len == u32::MAX {
+        return Err(ExifToolError::parse_error_at(
+            "undefined-length DICOM element is not supported",
+            offset,
+        ));
+    }
+    let value_len = usize::try_from(value_len)
+        .map_err(|_| ExifToolError::parse_error_at("DICOM value is too large", offset))?;
+    let value_start = offset
+        .checked_add(header_len)
+        .ok_or_else(|| ExifToolError::parse_error_at("DICOM offset overflow", offset))?;
+    let next_offset = value_start
+        .checked_add(value_len)
+        .ok_or_else(|| ExifToolError::parse_error_at("DICOM value length overflow", offset))?;
+    let value = data.get(value_start..next_offset).ok_or_else(|| {
+        ExifToolError::parse_error_at("DICOM value extends beyond file", offset)
+    })?;
+
+    Ok(DicomElement {
+        group,
+        element,
+        value,
+        next_offset,
+    })
+}
+
+fn dicom_text(value: &[u8]) -> String {
+    String::from_utf8_lossy(value)
+        .trim_end_matches(['\0', ' '])
+        .to_string()
+}
+
+fn dicom_date(value: &[u8]) -> String {
+    let text = dicom_text(value);
+    if text.len() == 8 && text.bytes().all(|byte| byte.is_ascii_digit()) {
+        format!("{}:{}:{}", &text[..4], &text[4..6], &text[6..])
+    } else {
+        text
+    }
+}
+
+fn dicom_time(value: &[u8]) -> String {
+    let text = dicom_text(value);
+    let main_len = text.find('.').unwrap_or(text.len()).min(6);
+    let main = &text[..main_len];
+    if main.len() < 2 || !main.bytes().all(|byte| byte.is_ascii_digit()) {
+        return text;
+    }
+
+    let mut result = main[..2].to_string();
+    if main.len() >= 4 {
+        result.push(':');
+        result.push_str(&main[2..4]);
+    }
+    if main.len() >= 6 {
+        result.push(':');
+        result.push_str(&main[4..6]);
+    }
+    result.push_str(&text[main_len..]);
+    result
+}
+
+fn dicom_us(value: &[u8], order: ByteOrder) -> Result<String> {
+    if value.len() % 2 != 0 {
+        return Err(ExifToolError::parse_error(
+            "odd byte count for DICOM unsigned-short value",
+        ));
+    }
+    let reader = EndianReader::new(value, order);
+    let mut values = Vec::with_capacity(value.len() / 2);
+    for offset in (0..value.len()).step_by(2) {
+        let number = reader.u16_at(offset).ok_or_else(|| {
+            ExifToolError::parse_error_at("truncated DICOM unsigned-short value", offset)
+        })?;
+        values.push(number.to_string());
+    }
+    Ok(values.join(" "))
+}
+
+fn dicom_tag_name(group: u16, element: u16) -> Option<String> {
+    let name = match (group, element) {
+        (0x0008, 0x0050) => "AccessionNumber",
+        (0x0008, 0x0022) => "AcquisitionDate",
+        (0x0008, 0x0032) => "AcquisitionTime",
+        (0x0010, 0x21B0) => "AdditionalPatientHistory",
+        (0x0018, 0x1310) => "AcquisitionMatrix",
+        (0x0020, 0x0012) => "AcquisitionNumber",
+        _ => return None,
+    };
+
+    let table = oxidex_tags::specialty::get_tag_table("DICOM::Main")?;
+    let tag = table.tags.iter().find(|tag| tag.name == name)?;
+    let group = table.name.split("::").next()?;
+    Some(format!("{group}:{}", tag.name))
+}
+
+fn dicom_value(element: &DicomElement<'_>, encoding: DicomEncoding) -> Result<TagValue> {
+    let value = match (element.group, element.element) {
+        (0x0008, 0x0022) => dicom_date(element.value),
+        (0x0008, 0x0032) => dicom_time(element.value),
+        (0x0018, 0x1310) => dicom_us(element.value, encoding.order)?,
+        _ => dicom_text(element.value),
+    };
+    Ok(TagValue::String(value))
+}
+
+/// Parses DICOM Part 10 metadata using this existing specialty parser module.
+pub fn parse_dicom_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
+    let size = usize::try_from(reader.size())
+        .map_err(|_| ExifToolError::parse_error("DICOM file is too large"))?;
+    let data = reader.read(0, size)?;
+
+    if data.get(DICOM_MAGIC_OFFSET..DICOM_DATA_OFFSET) != Some(b"DICM") {
+        return Err(ExifToolError::parse_error("invalid DICOM signature"));
+    }
+
+    let mut metadata = MetadataMap::new();
+    let mut offset = DICOM_DATA_OFFSET;
+    let mut data_encoding = DicomEncoding::EXPLICIT_LE;
+    let mut file_meta = true;
+
+    while offset < data.len() {
+        if data.len() - offset < 8 {
+            break;
+        }
+        if file_meta {
+            let little = EndianReader::little_endian(data);
+            let group = little.u16_at(offset).ok_or_else(|| {
+                ExifToolError::parse_error_at("truncated DICOM group", offset)
+            })?;
+            if group != 0x0002 {
+                file_meta = false;
+            }
+        }
+
+        let encoding = if file_meta {
+            DicomEncoding::EXPLICIT_LE
+        } else {
+            data_encoding
+        };
+        let element = parse_dicom_element(data, offset, encoding)?;
+
+        if element.group == 0x0002 && element.element == 0x0010 {
+            data_encoding = match dicom_text(element.value).as_str() {
+                "1.2.840.10008.1.2" => DicomEncoding {
+                    order: ByteOrder::Little,
+                    explicit_vr: false,
+                },
+                "1.2.840.10008.1.2.2" => DicomEncoding {
+                    order: ByteOrder::Big,
+                    explicit_vr: true,
+                },
+                _ => DicomEncoding::EXPLICIT_LE,
+            };
+        }
+
+        if let Some(name) = dicom_tag_name(element.group, element.element) {
+            metadata.insert(name, dicom_value(&element, encoding)?);
+        }
+        if element.next_offset <= offset {
+            return Err(ExifToolError::parse_error_at(
+                "DICOM element did not advance",
+                offset,
+            ));
+        }
+        offset = element.next_offset;
+    }
+
+    metadata.insert("File:FileType", TagValue::new_string("DICOM"));
+    metadata.insert("File:FileTypeExtension", TagValue::new_string("dcm"));
+    metadata.insert(
+        "File:MIMEType",
+        TagValue::new_string("application/dicom"),
+    );
+    Ok(metadata)
+}
+
+#[cfg(test)]
+mod dicom_tests {
+    use super::*;
+
+    #[test]
+    fn parses_requested_tags_from_real_dicom_sample() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
+        let path = format!(
+            "{}/DICOM.dcm",
+            crate::test_support::PINNED_CORPUS_ROOT
+        );
+        let data = std::fs::read(path).expect("pinned DICOM sample should be readable");
+        let metadata = parse_dicom_metadata(&crate::test_support::TestReader::new(data))
+            .expect("pinned DICOM sample should parse");
+
+        assert_eq!(
+            metadata.get("DICOM:AccessionNumber"),
+            Some(&TagValue::String(String::new()))
+        );
+        assert_eq!(
+            metadata.get("DICOM:AcquisitionDate"),
+            Some(&TagValue::String("2001:03:16".to_string()))
+        );
+        assert_eq!(
+            metadata.get("DICOM:AcquisitionMatrix"),
+            Some(&TagValue::String("0 256 256 0".to_string()))
+        );
+        assert_eq!(
+            metadata.get("DICOM:AcquisitionNumber"),
+            Some(&TagValue::String("31763".to_string()))
+        );
+        assert_eq!(
+            metadata.get("DICOM:AcquisitionTime"),
+            Some(&TagValue::String("14:34:15".to_string()))
+        );
+        assert_eq!(
+            metadata.get("DICOM:AdditionalPatientHistory"),
+            Some(&TagValue::String(String::new()))
+        );
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

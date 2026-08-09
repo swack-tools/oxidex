@@ -65,7 +65,7 @@ use crate::parsers::quicktime::parse_quicktime_metadata;
 use crate::parsers::specialized::dwg::parse_dwg_metadata;
 use crate::parsers::specialized::dxf::parse_dxf_metadata;
 use crate::parsers::specialized::evtx::parse_evtx_metadata;
-use crate::parsers::specialized::fits::parse_fits_metadata;
+use crate::parsers::specialized::fits::{parse_dicom_metadata, parse_fits_metadata};
 use crate::parsers::specialized::gltf::parse_gltf_metadata;
 use crate::parsers::specialized::hdf5::parse_hdf5_metadata;
 use crate::parsers::specialized::lnk::parse_lnk_metadata;
@@ -188,6 +188,7 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::OBJ => convert_string_error(parse_obj_metadata(reader), "OBJ"),
         FileFormat::GLTF => convert_string_error(parse_gltf_metadata(reader), "glTF"),
         FileFormat::FITS => convert_string_error(parse_fits_metadata(reader), "FITS"),
+        FileFormat::DICOM => parse_dicom_metadata(reader),
         FileFormat::HDF5 => convert_string_error(parse_hdf5_metadata(reader), "HDF5"),
         FileFormat::VCF => convert_string_error(parse_vcf_metadata(reader), "VCF"),
         FileFormat::TXT => convert_string_error(parse_txt_metadata(reader), "TXT"),
