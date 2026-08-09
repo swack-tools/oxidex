@@ -7,15 +7,19 @@ fns -- no network, no cargo, no real ~/.oxidex. Run from scripts/:
 """
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import distill_lessons
 from distill_lessons import (
     PITFALLS_BULLET_CAP,
     PITFALLS_CHAR_CAP,
     append_lesson,
     classify_event,
+    compute_script_sha,
     distill_once,
     encode_lesson_line,
     event_fingerprint_scoped,
@@ -377,6 +381,42 @@ class MultilineReasonTests(unittest.TestCase):
         # Module playbooks flatten the same way (one "- " line per cluster).
         playbook_bullets = [l for l in playbook.splitlines() if l.startswith("- ")]
         self.assertEqual(len(playbook_bullets), 1)
+
+
+class ComputeScriptShaTests(unittest.TestCase):
+    """Provenance for a lock file. Three daemons call this before doing any
+    work, so no way of failing to read it may reach the caller -- the
+    content-hash fallback is always available."""
+
+    def test_timeout_falls_back_to_the_content_hash(self):
+        # 2026-08-08 19:30:54: git took >10s under worker cargo load,
+        # TimeoutExpired is a SubprocessError rather than an OSError, and
+        # the canon merger exited on "a fatal error".
+        with patch("distill_lessons.subprocess.run",
+                   side_effect=subprocess.TimeoutExpired(["git"], 10)):
+            self.assertEqual(compute_script_sha(), self._content_hash())
+
+    def test_missing_git_falls_back_to_the_content_hash(self):
+        with patch("distill_lessons.subprocess.run",
+                   side_effect=FileNotFoundError("git")):
+            self.assertEqual(compute_script_sha(), self._content_hash())
+
+    def test_non_zero_exit_falls_back_to_the_content_hash(self):
+        # An exported tree is not a git checkout; the mechanism still works.
+        completed = subprocess.CompletedProcess(["git"], 128, stdout="", stderr="")
+        with patch("distill_lessons.subprocess.run", return_value=completed):
+            self.assertEqual(compute_script_sha(), self._content_hash())
+
+    def test_git_head_is_used_when_git_answers(self):
+        completed = subprocess.CompletedProcess(["git"], 0, stdout="deadbeef\n", stderr="")
+        with patch("distill_lessons.subprocess.run", return_value=completed):
+            self.assertEqual(compute_script_sha(), "deadbeef")
+
+    @staticmethod
+    def _content_hash():
+        import hashlib
+        return hashlib.sha1(
+            Path(distill_lessons.__file__).resolve().read_bytes()).hexdigest()
 
 
 class LockTests(unittest.TestCase):

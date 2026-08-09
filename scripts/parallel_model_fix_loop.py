@@ -44,6 +44,7 @@ Usage:
 import argparse
 import concurrent.futures
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -441,6 +442,22 @@ def ensure_integration_branch(repo_root, log_fn=print):
     integration target, skip this round entirely" (dispatching workers
     just to refuse to merge them would waste a full round of API budget).
 
+    One flavour of that failure IS recoverable here, and must be: a
+    branch lives in exactly one worktree, and SWEEP_LOCAL_BRANCH is a
+    single ref shared by every worktree of the repo -- including the
+    operator's own checkout, which is precisely where an earlier fleet
+    run leaves it. Measured 2026-08-09 on a local `fleet_up.sh --workers
+    2`: /Users/allen/git/oxidex sat on SWEEP_LOCAL_BRANCH, so the pinned
+    dispatcher checkout could never take it, and EVERY round skipped --
+    eleven consecutive rounds, zero workers dispatched, one WARNING
+    apiece. That is a permanent deadlock, not a stall: nothing in the
+    fleet ever detaches the other worktree, so waiting cannot clear it,
+    and the logged remedy asks an operator to detach a checkout that
+    (there) held 156 files of their own uncommitted work. So when git
+    reports that specific cause, retarget to a per-checkout branch --
+    see _sweep_branch_for_worktree -- instead of skipping forever. Every
+    other checkout failure still skips the round as described above.
+
     Rollout notes (spec M5, Phase 0 -- operator-facing, land these
     expectations with the rollout-ops pass):
       * The dispatcher repo's checkout silently moves from main to
@@ -458,29 +475,34 @@ def ensure_integration_branch(repo_root, log_fn=print):
     current = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo_root, check=True).stdout.strip()
     if current != "main":
         return current
-    if not _branch_exists(repo_root, SWEEP_LOCAL_BRANCH):
-        created = _git(["branch", SWEEP_LOCAL_BRANCH, "main"], repo_root)
-        if created.returncode != 0:
-            log_fn(
-                f"WARNING: could not create {SWEEP_LOCAL_BRANCH!r} from main "
-                f"({created.stderr.strip()}) -- refusing to integrate on main (M5); "
-                "this round will be skipped"
-            )
-            return None
-    checkout = _git(["checkout", SWEEP_LOCAL_BRANCH], repo_root)
-    if checkout.returncode != 0:
-        stderr = checkout.stderr.strip()
+
+    branch = SWEEP_LOCAL_BRANCH
+    ok, stderr, verb = _cut_and_checkout(repo_root, branch)
+    where = None if ok else _worktree_holding(stderr)
+    if where is not None:
+        # THE recoverable case, and the only one this function can clear on
+        # its own: another worktree holds the shared name. Retarget rather
+        # than skip -- see the docstring's 2026-08-09 measurement.
+        branch = _sweep_branch_for_worktree(repo_root)
+        log_fn(
+            f"{SWEEP_LOCAL_BRANCH!r} is held by the worktree at {where}, and git "
+            f"allows a branch in only one worktree -- integrating on {branch!r} "
+            "instead. That worktree is left exactly as it is."
+        )
+        ok, stderr, verb = _cut_and_checkout(repo_root, branch)
+    if not ok:
         # git already said WHY. Guessing over the top of it sends the reader
         # somewhere else entirely: on 2026-07-28 this printed "likely
         # uncommitted changes" for every round while git was plainly saying
         # the branch was checked out in ANOTHER worktree, and the dispatcher
         # checkout was spotlessly clean. The remedy differs completely, so
         # name the case git reported.
-        if "already used by worktree" in stderr:
-            holder = re.search(r"worktree at '([^']+)'", stderr)
-            where = holder.group(1) if holder else "another worktree"
+        where = _worktree_holding(stderr)
+        if where is not None:
+            # Reached only when the per-checkout fallback is ALSO held --
+            # someone checked it out by hand. Detaching is the remedy again.
             remedy = (
-                f"{SWEEP_LOCAL_BRANCH!r} is checked out at {where}. Git allows a "
+                f"{branch!r} is checked out at {where}. Git allows a "
                 "branch in only one worktree, so no amount of stashing here helps "
                 f"-- detach that worktree (git -C {where} checkout --detach HEAD) "
                 "or remove it."
@@ -491,15 +513,57 @@ def ensure_integration_branch(repo_root, log_fn=print):
                 "with it. Commit/stash those changes to unblock the next round."
             )
         log_fn(
-            f"WARNING: could not check out {SWEEP_LOCAL_BRANCH!r} ({stderr}) -- "
+            f"WARNING: could not {verb} {branch!r} ({stderr}) -- "
             f"{remedy} Refusing to integrate on main (M5); this round will be "
             "skipped."
         )
         return None
     log_fn(
-        f"local main is a mirror (M5) -- integrating this round on {SWEEP_LOCAL_BRANCH!r} instead"
+        f"local main is a mirror (M5) -- integrating this round on {branch!r} instead"
     )
-    return SWEEP_LOCAL_BRANCH
+    return branch
+
+
+def _worktree_holding(stderr):
+    """The worktree path git named as already holding the branch, or None
+    when that is not what git complained about. "another worktree" when git
+    reported the collision without a parseable path.
+    """
+    if "already used by worktree" not in stderr:
+        return None
+    holder = re.search(r"worktree at '([^']+)'", stderr)
+    return holder.group(1) if holder else "another worktree"
+
+
+def _sweep_branch_for_worktree(repo_root):
+    """Per-checkout integration branch, used only when another worktree of
+    the same repo already holds SWEEP_LOCAL_BRANCH.
+
+    Suffixed with a digest of the resolved dispatcher path so the name is
+    collision-free without being random: the same checkout resolves to the
+    same branch across restarts, so its unswept merges survive one exactly
+    the way SWEEP_LOCAL_BRANCH's do. Nothing outside this module looks the
+    integration branch up by name -- run_round only ever passes it on as a
+    git ref -- so a suffixed name is a drop-in.
+    """
+    digest = hashlib.sha256(str(Path(repo_root).resolve()).encode()).hexdigest()[:8]
+    return f"{SWEEP_LOCAL_BRANCH}-{digest}"
+
+
+def _cut_and_checkout(repo_root, branch):
+    """(ok, stderr, verb) for "cut `branch` from main if it does not exist
+    yet, then check it out AS-IS". Plain checkout on purpose -- never -B,
+    never a reset -- so a prior round's unswept merges on an existing branch
+    survive (the no-discard invariant, M5). `verb` names whichever step
+    failed, so the caller's WARNING says "create" or "check out" rather than
+    guessing; it is meaningless when ok.
+    """
+    if not _branch_exists(repo_root, branch):
+        created = _git(["branch", branch, "main"], repo_root)
+        if created.returncode != 0:
+            return False, created.stderr.strip(), "create"
+    checkout = _git(["checkout", branch], repo_root)
+    return checkout.returncode == 0, checkout.stderr.strip(), "check out"
 
 
 def _branch_exists(repo_root, branch):

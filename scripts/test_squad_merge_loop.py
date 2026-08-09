@@ -1915,6 +1915,30 @@ class ClassifyExceptionTests(unittest.TestCase):
         exc.__cause__ = exc
         self.assertEqual(sml.classify_exception(exc), "fatal")
 
+    def test_subprocess_timeout_is_transient(self):
+        # 2026-08-08 19:30:54: `git rev-parse HEAD` took >10s on a machine
+        # full of worker cargo builds and the canon merger exited "fatal".
+        # A timeout is ENOSPC's statement in another hierarchy -- the
+        # machine was too loaded, not the squad broken.
+        exc = subprocess.TimeoutExpired(["git", "rev-parse", "HEAD"], 10)
+        self.assertEqual(sml.classify_exception(exc), "transient")
+
+    def test_timeout_is_found_through_a_wrapping_chain(self):
+        try:
+            try:
+                raise subprocess.TimeoutExpired(["git", "rev-parse", "HEAD"], 10)
+            except subprocess.TimeoutExpired as inner:
+                raise RuntimeError("provenance lookup failed") from inner
+        except RuntimeError as exc:
+            self.assertEqual(sml.classify_exception(exc), "transient")
+
+    def test_a_failed_command_is_still_fatal(self):
+        # Only the TIMEOUT is a machine statement. A command that ran and
+        # exited non-zero said something about the work, and retrying it
+        # unchanged is the stall this classifier exists to prevent.
+        exc = subprocess.CalledProcessError(1, ["git", "merge", "squad/canon"])
+        self.assertEqual(sml.classify_exception(exc), "fatal")
+
 
 class TransientBackoffTests(unittest.TestCase):
     def test_exponential_from_base(self):

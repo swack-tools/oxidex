@@ -1188,23 +1188,75 @@ class EnsureIntegrationBranchTests(unittest.TestCase):
         self.assertIn(["git", "branch", "model-fix-sweep-local", "main"], argvs)
         self.assertIn(["git", "checkout", "model-fix-sweep-local"], argvs)
 
+    @staticmethod
+    def _held_by(path, branch="model-fix-sweep-local"):
+        return f"fatal: '{branch}' is already used by worktree at '{path}'"
+
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_shared_branch_held_elsewhere_falls_back_per_checkout(self, mock_run):
+        # The local-fleet deadlock, measured 2026-08-09: the operator's own
+        # checkout sat on the shared sweep branch, so the pinned dispatcher
+        # could never take it and EVERY round skipped -- forever, since
+        # nothing in the fleet detaches that worktree. A branch lives in one
+        # worktree, so the fix is a different branch, not a different
+        # operator: retarget to a per-checkout name and keep working.
+        held = self._held_by("/Users/allen/git/oxidex")
+        fallback = parallel_model_fix_loop._sweep_branch_for_worktree(Path("/fake/repo"))
+
+        def fake_run(argv, **kwargs):
+            if argv == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+                return MagicMock(returncode=0, stdout="main\n", stderr="")
+            if argv[:4] == ["git", "rev-parse", "--verify", "--quiet"]:
+                # the shared branch exists; the per-checkout one does not yet
+                exists = argv[4] != f"refs/heads/{fallback}"
+                return MagicMock(returncode=0 if exists else 1, stdout="", stderr="")
+            if argv == ["git", "checkout", "model-fix-sweep-local"]:
+                return MagicMock(returncode=1, stdout="", stderr=held)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = fake_run
+        logged = []
+        branch = ensure_integration_branch(Path("/fake/repo"), log_fn=logged.append)
+        self.assertEqual(branch, fallback)
+        argvs = [c.args[0] for c in mock_run.call_args_list]
+        self.assertIn(["git", "branch", fallback, "main"], argvs)
+        self.assertIn(["git", "checkout", fallback], argvs)
+        message = " ".join(logged)
+        # names the holder, and does NOT order anyone to detach a checkout
+        # that is very probably full of their own uncommitted work
+        self.assertIn("/Users/allen/git/oxidex", message)
+        self.assertNotIn("checkout --detach", message)
+        self.assertNotIn("skipped", message)
+        # no round was skipped, and nothing reset the fallback's tip
+        self.assertFalse(any(argv[:3] == ["git", "checkout", "-B"] for argv in argvs))
+
+    def test_the_per_checkout_branch_is_stable_and_checkout_specific(self):
+        # Stable across restarts (else each restart orphans the previous
+        # round's unswept merges) and distinct per checkout (the whole point).
+        first = parallel_model_fix_loop._sweep_branch_for_worktree(Path("/fake/repo"))
+        self.assertEqual(first, parallel_model_fix_loop._sweep_branch_for_worktree(Path("/fake/repo")))
+        self.assertNotEqual(first, parallel_model_fix_loop._sweep_branch_for_worktree(Path("/fake/other")))
+        self.assertTrue(first.startswith("model-fix-sweep-local-"))
+
     @patch("parallel_model_fix_loop.subprocess.run")
     def test_branch_held_by_another_worktree_is_diagnosed_as_such(self, mock_run):
         # Git says exactly why. Guessing over the top of it sends the reader
         # to the wrong remedy: on 2026-07-28 every round logged "likely
         # uncommitted changes" while the dispatcher checkout was clean and
         # the real cause was a second worktree holding the branch. Stashing
-        # cannot fix that; detaching the other worktree can.
-        held = ("fatal: 'model-fix-sweep-local' is already used by worktree "
-                "at '/Users/allen/.oxidex/worktrees/fleet-main'")
-
+        # cannot fix that; detaching the other worktree can. Reaching that
+        # advice now takes BOTH names being held -- someone checked the
+        # per-checkout fallback out by hand -- since the ordinary collision
+        # is handled above without bothering a human at all.
         def fake_run(argv, **kwargs):
             if argv == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
                 return MagicMock(returncode=0, stdout="main\n", stderr="")
             if argv[:4] == ["git", "rev-parse", "--verify", "--quiet"]:
-                return MagicMock(returncode=0, stdout="", stderr="")  # exists
+                return MagicMock(returncode=0, stdout="", stderr="")  # both exist
             if argv[:2] == ["git", "checkout"]:
-                return MagicMock(returncode=1, stdout="", stderr=held)
+                return MagicMock(
+                    returncode=1, stdout="",
+                    stderr=self._held_by("/Users/allen/.oxidex/worktrees/fleet-main", argv[2]))
             return MagicMock(returncode=0, stdout="", stderr="")
 
         mock_run.side_effect = fake_run

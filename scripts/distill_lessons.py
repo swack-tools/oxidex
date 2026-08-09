@@ -825,7 +825,20 @@ def compute_script_sha():
     """git HEAD of the checkout this script lives in (what the lock's
     sha-mismatch takeover compares); content hash as a fallback so the
     mechanism still works from an exported tree. Tests always inject
-    --script-sha and never reach this."""
+    --script-sha and never reach this.
+
+    EVERY way git can fail to answer takes the fallback -- this is
+    provenance for a lock file, and no failure to read it is worth the
+    caller's life. The timeout used not to: TimeoutExpired is a
+    SubprocessError, not an OSError, so it sailed past the handler and out
+    through three daemons that call this before doing any work
+    (squad_merge_loop.run_locked, judgment_queue_daemon, distill_once).
+    On 2026-08-08 at 19:30:54 `git rev-parse HEAD` took longer than ten
+    seconds on a machine full of worker cargo builds, and the canon merger
+    exited on "a fatal error -- this will not fix itself by retrying". A
+    ten-second git timeout is the most retryable thing there is, and the
+    content hash right below was available the whole time.
+    """
     script = Path(__file__).resolve()
     try:
         proc = subprocess.run(
@@ -834,7 +847,7 @@ def compute_script_sha():
         )
         if proc.returncode == 0 and proc.stdout.strip():
             return proc.stdout.strip()
-    except OSError:
+    except (OSError, subprocess.SubprocessError):
         pass
     return hashlib.sha1(script.read_bytes()).hexdigest()
 
