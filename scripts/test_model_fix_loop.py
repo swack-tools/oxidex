@@ -139,6 +139,7 @@ from model_fix_loop import (
     load_toml_config,
     make_cluster_gap,
     make_single_tag_gap,
+    match_request_directive,
     models_for_phase,
     new_oxidex_only_keys,
     newly_duplicated_emissions,
@@ -3364,6 +3365,62 @@ class BuildPromptNeighborPrecedentTests(unittest.TestCase):
                         else len(prompt))
 
 
+class MatchRequestDirectiveTests(unittest.TestCase):
+    """A REQUEST must survive trailing reasoning noise.
+
+    Measured on the 2026-08-08 fleet run: 345 of the 362 attempts that died
+    on the bare reason "no diff in model response" ended with a reply whose
+    FIRST line was a perfectly well-formed REQUEST, followed by a leaked
+    fragment of the model's own reasoning. The old pattern anchored `$` to
+    the end of the WHOLE reply, so every one of them matched nothing, fell
+    through to extract_diff and burned the entire attempt -- 95% of that
+    failure class, and ~27% of all lesson rows in the run.
+    """
+
+    def test_bare_request_still_matches(self):
+        self.assertEqual(
+            match_request_directive("REQUEST: src/parsers/x.rs").group(1),
+            "src/parsers/x.rs",
+        )
+
+    def test_trailing_reasoning_noise_no_longer_voids_the_request(self):
+        # Verbatim from 2026-08-08T19:44:12-xmp-1.
+        reply = ("REQUEST: src/parsers/image/embedded.rs\n\n audiencia? no. "
+                 "Must exact shape. I accidentally? final should only request.")
+        self.assertEqual(
+            match_request_directive(reply).group(1),
+            "src/parsers/image/embedded.rs",
+        )
+
+    def test_line_ranges_survive_the_noise(self):
+        # Every range shape the manifest advertises, each seen live.
+        for target in ("src/parsers/detection/mod.rs:1-400",
+                       "src/parsers/detection/text.rs:-320",
+                       "src/parsers/raw/metadata.rs:400-",
+                       "src/core/format_dispatch.rs:900"):
+            reply = f"REQUEST: {target}\n\n wait, typo? Need exact shape."
+            self.assertEqual(match_request_directive(reply).group(1), target, target)
+
+    def test_a_reply_carrying_a_real_diff_is_never_a_request(self):
+        """The diff is the more advanced move, so it must win. Otherwise a
+        stray leading REQUEST line would strand a complete patch."""
+        reply = ("REQUEST: src/parsers/x.rs\n\n"
+                 "on reflection, here it is:\n"
+                 "```diff\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n```\n")
+        self.assertIsNone(match_request_directive(reply))
+
+    def test_prose_before_the_request_is_still_not_a_request(self):
+        """Only the FIRST line is read. Matching anywhere would let the word
+        appear inside a diff body or a Rust string and hijack the reply."""
+        self.assertIsNone(match_request_directive(
+            "We need more source because archive handling."
+            "REQUEST: src/parsers/macho/mod.rs:258-430"))
+
+    def test_verify_and_patch_shapes_are_not_requests(self):
+        self.assertIsNone(match_request_directive("VERIFY\n```diff\n--- a/x\n```"))
+        self.assertIsNone(match_request_directive("PATCH 1/2\n```diff\n--- a/x\n```"))
+
+
 class ParseRequestRangeTests(unittest.TestCase):
     def test_plain_path_has_no_range(self):
         self.assertEqual(parse_request_range("src/parsers/x.rs"), ("src/parsers/x.rs", None, None))
@@ -5527,6 +5584,38 @@ class AttemptBuildTests(unittest.TestCase):
         )
         self.assertTrue(built)
         self.assertEqual(len(calls), 6)
+
+    def test_a_noisy_request_is_served_instead_of_ending_the_attempt(self):
+        """End-to-end proof of the 2026-08-08 regression: the attempt must
+        answer the request and go on to build, not die on "no diff"."""
+        calls = []
+
+        def fake_call_model(messages, *a):
+            calls.append(messages[-1]["content"])
+            if len(calls) == 1:
+                return ("REQUEST: src/x.rs\n\n"
+                        " audiencia? no. Must exact shape.")
+            return "```diff\n--- a/x\n+++ b/x\n```\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            (repo / "src").mkdir()
+            (repo / "src" / "x.rs").write_text("fn a() {}\n")
+            built, reason, diff, messages = attempt_build(
+                [{"role": "user", "content": "fix format X"}],
+                call_model_fn=fake_call_model,
+                git_apply_fn=lambda diff, root: (True, "ok"),
+                git_checkout_clean_fn=lambda root: None,
+                cargo_build_fn=lambda root: (True, ""),
+                config=dict(CONFIG, max_request_turns=4),
+                repo_root=repo,
+            )
+
+        self.assertTrue(built, reason)
+        # The second call actually received the file, not a failure notice,
+        # and the read was served free like any other productive one.
+        self.assertIn("fn a() {}", calls[1])
+        self.assertIn("Reading is free", calls[1])
 
     # --- investigation-budget visibility (defect 3) -------------------------
     #

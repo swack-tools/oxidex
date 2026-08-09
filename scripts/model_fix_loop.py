@@ -4274,7 +4274,16 @@ def critique_failed_attempt(gap, diff, failure_kind, failure_detail, config,
         return failure_detail
 
 
-REQUEST_RE = re.compile(r"^REQUEST:\s*(.+)$", re.IGNORECASE)
+#: Matched against the FIRST LINE of a reply (see match_request_directive),
+#: never the whole reply. The manifest asks for a bare line and nothing else,
+#: but a thinking model routinely leaks a fragment of its reasoning after it
+#: ("REQUEST: src/x.rs\n\n audiencia? no. Must exact shape."). Anchored to the
+#: end of the WHOLE reply, those matched nothing, fell through to extract_diff
+#: and ended the attempt on "no diff in model response": 345 of the 362 such
+#: failures in the 2026-08-08 fleet run were a well-formed REQUEST thrown away
+#: for its trailing noise, each one costing a whole attempt. Free reads do not
+#: help a request that is never recognized as one in the first place.
+REQUEST_RE = re.compile(r"^REQUEST:\s*(.+?)\s*$", re.IGNORECASE)
 
 #: Reading files is FREE. A REQUEST that actually serves the fixer
 #: something it has not already seen does not consume any budget, however
@@ -4313,6 +4322,23 @@ DEFAULT_MAX_PATCH_CHUNKS = 40  # hard safety cap, independent of the declared N 
 VERIFY_RE = re.compile(r"^VERIFY\b", re.IGNORECASE)
 DEFAULT_MAX_VERIFY_TURNS = 10   # trial-compile turns per attempt_build invocation
 DEFAULT_MAX_CHECK_OUTPUT_CHARS = 3000  # tail-trim: Rust errors summarize at the end
+
+
+def match_request_directive(reply):
+    """The REQUEST match for `reply`, or None if it isn't one.
+
+    Only the first line is considered, so trailing reasoning noise cannot
+    void an otherwise valid request. A reply carrying a real diff is never
+    read as a REQUEST -- the diff is the more advanced move and must win,
+    which also means a stray leading REQUEST line can't strand one.
+
+    VERIFY_RE and PATCH_HEADER_RE need no equivalent: neither anchors to
+    the end of the reply, so both already tolerate a trailing fragment.
+    """
+    match = REQUEST_RE.match(reply.strip().split("\n", 1)[0])
+    if match is None or extract_diff(reply) is not None:
+        return None
+    return match
 
 
 #: Footer on every REQUEST answer that actually served something. A
@@ -5115,7 +5141,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
 
         messages.append({"role": "assistant", "content": reply})
 
-        request_match = REQUEST_RE.match(reply.strip())
+        request_match = match_request_directive(reply)
         if request_match:
             normalized = request_match.group(1).strip()
             request_counts[normalized] = request_counts.get(normalized, 0) + 1
