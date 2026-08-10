@@ -40,6 +40,7 @@ pub mod photo_mechanic;
 pub mod png;
 pub mod quicktime;
 pub mod raw;
+pub mod real;
 pub mod specialized;
 pub mod text;
 pub mod tiff;

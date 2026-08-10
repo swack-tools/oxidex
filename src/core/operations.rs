@@ -235,6 +235,19 @@ fn add_identity_tags(metadata: &mut MetadataMap, reader: &dyn FileReader, path: 
     {
         metadata.insert("File:MIMEType", TagValue::new_string(mime));
     }
+
+    // RealMedia's own MIME type is generic too, and is overridden the same
+    // way when the file wraps exactly one stream -- ExifTool reports that
+    // stream's own MIME type instead. See `real::single_stream_mime_type`.
+    // RM, RV and RMVB share the format and the one Perl function that reads
+    // it, so all three are covered even though only RM is in the corpus.
+    if matches!(id.file_type.as_ref(), "RM" | "RV" | "RMVB")
+        && ours_is_authoritative
+        && let Ok(whole) = reader.read(0, (reader.size() as usize).min(4 << 20))
+        && let Some(mime) = crate::parsers::real::single_stream_mime_type(whole)
+    {
+        metadata.insert("File:MIMEType", TagValue::new_string(mime));
+    }
     true
 }
 
