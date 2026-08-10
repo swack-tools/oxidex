@@ -48,7 +48,7 @@ mod camera;
 mod helpers;
 mod riff;
 mod signatures;
-mod text;
+pub(crate) mod text;
 mod tiff;
 mod video;
 mod x509_der;
