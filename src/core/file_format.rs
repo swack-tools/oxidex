@@ -66,6 +66,9 @@ pub enum FileFormat {
     /// Digital Picture Exchange image format (.dpx)
     DPX,
 
+    /// Kodak Photo CD Image Pac (.pcd)
+    PCD,
+
     /// QuickTime/MP4 video format (.mov, .mp4)
     QuickTime,
 
@@ -365,6 +368,7 @@ impl FileFormat {
             FileFormat::GIF => "GIF",
             FileFormat::BMP => "BMP",
             FileFormat::DPX => "DPX",
+            FileFormat::PCD => "PCD",
             FileFormat::QuickTime => "QuickTime",
             FileFormat::HEIF => "HEIF",
             FileFormat::WebP => "WebP",
@@ -476,6 +480,7 @@ impl FileFormat {
             FileFormat::GIF => &["gif"],
             FileFormat::BMP => &["bmp"],
             FileFormat::DPX => &["dpx"],
+            FileFormat::PCD => &["pcd"],
             FileFormat::QuickTime => &["mov", "mp4", "m4v"],
             FileFormat::HEIF => &["heif", "heic"],
             FileFormat::WebP => &["webp"],

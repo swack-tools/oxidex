@@ -45,6 +45,7 @@ use crate::parsers::image::flif::parse_flif_metadata;
 use crate::parsers::image::gif::parse_gif_metadata;
 use crate::parsers::image::miff::parse_miff_metadata;
 use crate::parsers::image::pfm::parse_pfm_metadata;
+use crate::parsers::image::photocd::parse_pcd_metadata;
 use crate::parsers::image::radiance::parse_radiance_metadata;
 use crate::parsers::image::xcf::parse_xcf_metadata;
 // Note: HEIF uses parse_quicktime_metadata since HEIF is ISOBMFF-based
@@ -172,6 +173,7 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::BPG => convert_string_error(parse_bpg_metadata(reader), "BPG"),
         FileFormat::EXR => convert_string_error(parse_exr_metadata(reader), "EXR"),
         FileFormat::DPX => convert_string_error(parse_dpx_metadata(reader), "DPX"),
+        FileFormat::PCD => convert_string_error(parse_pcd_metadata(reader), "PCD"),
         FileFormat::PFM => convert_string_error(parse_pfm_metadata(reader), "PFM"),
         FileFormat::HDR => convert_string_error(parse_radiance_metadata(reader), "HDR"),
         FileFormat::FLIF => convert_string_error(parse_flif_metadata(reader), "FLIF"),
