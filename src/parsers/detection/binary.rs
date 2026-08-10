@@ -5,8 +5,6 @@
 use crate::core::{FileFormat, FileReader};
 use crate::io::EndianReader;
 
-use super::helpers::matches_at_offset;
-
 /// Detect Portable Executable (PE) format
 ///
 /// PE files start with MZ (DOS stub) followed by PE signature.
@@ -94,5 +92,13 @@ pub fn is_macho(data: &[u8]) -> bool {
 ///
 /// `true` if DWG signature detected
 pub fn is_dwg(data: &[u8]) -> bool {
-    data.len() >= 6 && matches_at_offset(data, b"AC", 0) && data[2] >= b'1' && data[3] >= b'0'
+    // ExifTool's magic is `^AC10\d{2}\x00` (nine bytes: "AC10" + two digits +
+    // a NUL). The hand-written version this replaced tested only
+    // `data[2] >= b'1' && data[3] >= b'0'`, which accepts any byte at or past
+    // those values -- a plain-text file opening "ACTION", "ACCESS" or
+    // "ACQUIRE" satisfied it and was dispatched to `DWGParser` ahead of every
+    // text rule, while the magic table (and so `File:FileType`) correctly
+    // declined it. `matches_magic` is also what `DWGParser::verify_signature`
+    // asks now, so the two cannot drift apart again.
+    crate::filetype::matches_magic("DWG", data)
 }

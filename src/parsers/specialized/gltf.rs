@@ -15,21 +15,50 @@ pub struct GLTFParser;
 impl GLTFParser {
     /// Verifies the glTF file by checking for JSON structure with "asset" field
     /// or GLB binary signature
+    ///
+    /// The JSON half used to be `contains("{") && contains("\"asset\"")` --
+    /// unanchored, so any document that merely mentioned both tokens, in
+    /// either order and at any depth, passed. It now shares the detector's
+    /// `looks_like_gltf`, which requires the probe to *open* a JSON object
+    /// and `"asset"` to be a real key.
+    ///
+    /// The GLB half checked only the four-byte magic. GLB has no ExifTool
+    /// magic number to defer to (ExifTool does not support glTF at all), but
+    /// the format's own header carries three more checkable invariants --
+    /// `version == 2`, `length == file size`, and the first chunk's declared
+    /// type is `JSON` -- which `looks_like_glb` now checks instead of
+    /// trusting the four-byte prefix alone.
     pub fn verify_signature(reader: &dyn FileReader) -> Result<bool> {
         if reader.size() < 12 {
             return Ok(false);
         }
 
-        // Check for GLB binary format (magic: "glTF")
-        let header = reader.read(0, 12)?;
-        if header.len() >= 4 && &header[0..4] == b"glTF" {
+        if Self::looks_like_glb(reader)? {
             return Ok(true);
         }
 
-        // Check for JSON-based glTF
-        let preview = reader.read(0, 100.min(reader.size() as usize))?;
-        let text = std::str::from_utf8(preview).unwrap_or("");
-        Ok(text.contains("\"asset\"") && text.contains("{"))
+        let probe_len = reader.size().min(64 * 1024) as usize;
+        let text = String::from_utf8_lossy(reader.read(0, probe_len)?);
+        Ok(crate::parsers::detection::text::looks_like_gltf(&text))
+    }
+
+    /// Whether the file opens a well-formed GLB (binary glTF) container:
+    /// magic `glTF`, `version == 2`, `length` equal to the file's own size,
+    /// and a first chunk whose declared type is `JSON` (the only chunk type
+    /// this parser reads).
+    fn looks_like_glb(reader: &dyn FileReader) -> Result<bool> {
+        if reader.size() < 20 {
+            return Ok(false);
+        }
+        let header = reader.read(0, 20)?;
+        if &header[0..4] != b"glTF" {
+            return Ok(false);
+        }
+        let header_reader = EndianReader::little_endian(header);
+        let version = header_reader.u32_at(4).unwrap_or(0);
+        let length = header_reader.u32_at(8).unwrap_or(0);
+        let chunk_type = &header[16..20];
+        Ok(version == 2 && u64::from(length) == reader.size() && chunk_type == b"JSON")
     }
 
     /// Detects whether the file is JSON-based glTF or binary GLB
@@ -240,4 +269,72 @@ impl FormatParser for GLTFParser {
 pub fn parse_gltf_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
     let parser = GLTFParser;
     parser.parse(reader).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TestReader;
+
+    fn glb(version: u32, length_override: Option<u32>, chunk_type: &[u8; 4]) -> Vec<u8> {
+        let json = br#"{"asset":{"version":"2.0"}}"#;
+        let mut chunk_data = json.to_vec();
+        while chunk_data.len() % 4 != 0 {
+            chunk_data.push(b' ');
+        }
+        let total_len = 12 + 8 + chunk_data.len();
+        let mut data = Vec::new();
+        data.extend_from_slice(b"glTF");
+        data.extend_from_slice(&version.to_le_bytes());
+        data.extend_from_slice(&length_override.unwrap_or(total_len as u32).to_le_bytes());
+        data.extend_from_slice(&(chunk_data.len() as u32).to_le_bytes());
+        data.extend_from_slice(chunk_type);
+        data.extend_from_slice(&chunk_data);
+        data
+    }
+
+    #[test]
+    fn a_well_formed_glb_is_accepted() {
+        let reader = TestReader::new(glb(2, None, b"JSON"));
+        assert!(GLTFParser::verify_signature(&reader).unwrap());
+    }
+
+    /// The old gate accepted any file whose first four bytes were `glTF`,
+    /// with no regard for the version, declared length, or chunk type the
+    /// rest of the 20-byte header carries.
+    #[test]
+    fn a_wrong_version_glb_is_rejected() {
+        let reader = TestReader::new(glb(1, None, b"JSON"));
+        assert!(!GLTFParser::verify_signature(&reader).unwrap());
+    }
+
+    #[test]
+    fn a_glb_whose_declared_length_disagrees_with_the_file_is_rejected() {
+        let reader = TestReader::new(glb(2, Some(9999), b"JSON"));
+        assert!(!GLTFParser::verify_signature(&reader).unwrap());
+    }
+
+    #[test]
+    fn a_glb_whose_first_chunk_is_not_json_is_rejected() {
+        let reader = TestReader::new(glb(2, None, b"BIN\0"));
+        assert!(!GLTFParser::verify_signature(&reader).unwrap());
+    }
+
+    /// `contains("{") && contains("\"asset\"")` accepted any document that
+    /// merely mentioned both, in either order and at any depth -- including
+    /// prose that never opens a JSON object at all.
+    #[test]
+    fn prose_mentioning_asset_and_braces_is_not_gltf() {
+        let reader = TestReader::new(
+            b"the \"asset\" register lists { and } counts for this quarter.\n".to_vec(),
+        );
+        assert!(!GLTFParser::verify_signature(&reader).unwrap());
+    }
+
+    #[test]
+    fn a_real_json_gltf_is_still_gltf() {
+        let data = br#"{"asset":{"version":"2.0","generator":"test"},"scene":0}"#;
+        let reader = TestReader::new(data.to_vec());
+        assert!(GLTFParser::verify_signature(&reader).unwrap());
+    }
 }

@@ -6,7 +6,7 @@
 use crate::core::FileFormat;
 use chrono::{DateTime, FixedOffset};
 
-fn looks_like_ics(text: &str) -> bool {
+pub(crate) fn looks_like_ics(text: &str) -> bool {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text).trim_start();
     let mut lines = text.lines();
     let Some(first_line) = lines.next() else {
@@ -24,7 +24,7 @@ fn looks_like_ics(text: &str) -> bool {
     })
 }
 
-fn looks_like_eml(text: &str) -> bool {
+pub(crate) fn looks_like_eml(text: &str) -> bool {
     let header_end = text
         .find("\r\n\r\n")
         .or_else(|| text.find("\n\n"))
@@ -90,7 +90,7 @@ fn looks_like_eml(text: &str) -> bool {
             || (has_address_like_from && has_address_like_recipient && has_subject))
 }
 
-fn eml_header_bytes(data: &[u8]) -> &[u8] {
+pub(crate) fn eml_header_bytes(data: &[u8]) -> &[u8] {
     if let Some(index) = data.windows(4).position(|window| window == b"\r\n\r\n") {
         return &data[..index];
     }
@@ -200,7 +200,7 @@ fn looks_like_dxf(data: &[u8]) -> bool {
 /// glTF is a JSON *object* carrying a required `asset` key, so the probe has
 /// to open one: `contains("{") && contains("\"asset\"")` also accepts any
 /// document that merely mentions both, in either order and at any depth.
-fn looks_like_gltf(text: &str) -> bool {
+pub(crate) fn looks_like_gltf(text: &str) -> bool {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text).trim_start();
     if !text.starts_with('{') {
         return false;
@@ -224,7 +224,7 @@ fn looks_like_gltf(text: &str) -> bool {
 /// The corroborating directive is looked for across the whole probe rather
 /// than the 100-byte window: a facet line is the *second* line of every real
 /// STL, but only once the solid's name has ended.
-fn looks_like_stl(text: &str) -> bool {
+pub(crate) fn looks_like_stl(text: &str) -> bool {
     let Some(rest) = text.strip_prefix("solid") else {
         return false;
     };

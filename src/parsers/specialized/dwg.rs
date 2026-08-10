@@ -12,14 +12,25 @@ use crate::io::EndianReader;
 pub struct DWGParser;
 
 impl DWGParser {
-    /// Verifies the DWG file signature by checking for "AC" prefix followed by version number
+    /// Verifies the DWG file signature against ExifTool's magic number
+    ///
+    /// Asks the magic table rather than restating the pattern: the
+    /// hand-written version here required only `header[2] >= b'1' &&
+    /// header[3] >= b'0'`, which accepts any byte at or past those values --
+    /// a plain-text file opening "ACTION" or "ACCESS" passed. Detection's
+    /// `is_dwg` carried the identical loose rule, so a file like that was
+    /// dispatched to this parser and this gate agreed, even though
+    /// `File:FileType` (read from the same magic table this now asks) never
+    /// called it DWG.
     pub fn verify_signature(reader: &dyn FileReader) -> Result<bool> {
         if reader.size() < 6 {
             return Ok(false);
         }
-        let header = reader.read(0, 6)?;
-        // DWG versions: AC1012, AC1014, AC1015, AC1018, AC1021, AC1024, AC1027, AC1032
-        Ok(&header[0..2] == b"AC" && header[2] >= b'1' && header[3] >= b'0')
+        let probe_len = reader.size().min(1024) as usize;
+        Ok(crate::filetype::matches_magic(
+            "DWG",
+            reader.read(0, probe_len)?,
+        ))
     }
 
     /// Reads the AutoCAD version string from the file header
@@ -172,4 +183,82 @@ impl FormatParser for DWGParser {
 pub fn parse_dwg_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
     let parser = DWGParser;
     parser.parse(reader).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TestReader;
+
+    fn dwg_header(version: &[u8; 6]) -> Vec<u8> {
+        let mut data = version.to_vec();
+        data.push(0); // the magic's trailing NUL
+        data.resize(64, 0);
+        data
+    }
+
+    #[test]
+    fn accepts_every_documented_version_string() {
+        for version in [
+            b"AC1012", b"AC1014", b"AC1015", b"AC1018", b"AC1021", b"AC1024", b"AC1027", b"AC1032",
+        ] {
+            let reader = TestReader::new(dwg_header(version));
+            assert!(
+                DWGParser::verify_signature(&reader).unwrap(),
+                "{:?} should be accepted",
+                std::str::from_utf8(version)
+            );
+        }
+    }
+
+    /// `header[2] >= b'1' && header[3] >= b'0'` accepted any byte at or past
+    /// those values, so a plain-text file whose first six bytes happened to
+    /// be "ACTION" or "ACCESS" passed as DWG. ExifTool's magic requires two
+    /// ASCII *digits* followed by a NUL, which none of these have.
+    #[test]
+    fn rejects_prose_that_the_old_range_check_accepted() {
+        for opening in [
+            b"ACTION" as &[u8],
+            b"ACCESS",
+            b"ACQUIRE",
+            b"ACME12",
+            b"AC1015x", // right prefix, but no trailing NUL
+        ] {
+            let mut data = opening.to_vec();
+            data.resize(64, 0);
+            let reader = TestReader::new(data);
+            assert!(
+                !DWGParser::verify_signature(&reader).unwrap(),
+                "{:?} should be rejected",
+                std::str::from_utf8(opening)
+            );
+        }
+    }
+
+    /// The detector's `is_dwg` and this gate now both ask the magic table, so
+    /// they cannot answer a given header two different ways.
+    #[test]
+    fn signature_check_agrees_with_the_magic_table() {
+        for header in [
+            dwg_header(b"AC1015"),
+            {
+                let mut data = b"ACTION".to_vec();
+                data.resize(64, 0);
+                data
+            },
+            {
+                let mut data = b"AC9999".to_vec();
+                data.push(0);
+                data.resize(64, 0);
+                data
+            },
+        ] {
+            let reader = TestReader::new(header.clone());
+            assert_eq!(
+                DWGParser::verify_signature(&reader).unwrap(),
+                crate::filetype::matches_magic("DWG", &header),
+                "gate and magic table disagree about {header:?}"
+            );
+        }
+    }
 }
