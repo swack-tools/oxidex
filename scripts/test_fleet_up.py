@@ -481,6 +481,31 @@ class TestLiveness(ShellHarnessMixin, unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn(str(p.pid), out)
 
+    def test_scan_ignores_a_sibling_shell_that_merely_names_a_tier(self):
+        """A SIBLING shell -- not an ancestor -- whose command text contains a
+        tier's name is not a fleet.
+
+        Reproduces 2026-08-10: the fleet was down, an operator ran a monitoring
+        command containing `pgrep -f "parallel_model_fix_loop.py"`, and the next
+        launchd start refused with "a fleet is ALREADY running", quoting that
+        diagnostic back as the culprit. The ancestor-chain exclusion does not
+        help -- the shell is a sibling of the launcher, not a parent -- so any
+        agent or human grepping for a tier while the fleet is down blocks it
+        from starting.
+        """
+        marker = "parallel_model_fix_loop.py"
+        p = subprocess.Popen(  # nosec B603 B607
+            ["/bin/sh", "-c", f'echo "pgrep -f {marker}" >/dev/null; sleep 30']
+        )
+        self.addCleanup(self._reap, p)
+        time.sleep(0.4)
+        rc, out, _ = sh(f'scan_foreign_pids "{marker}"', env=self.env)
+        self.assertEqual(rc, 0)
+        self.assertNotIn(
+            str(p.pid), out,
+            "a sibling shell whose -c text names a tier must not read as a running fleet",
+        )
+
 
 class TestBackoff(ShellHarnessMixin, unittest.TestCase):
     def test_doubles_then_caps(self):
