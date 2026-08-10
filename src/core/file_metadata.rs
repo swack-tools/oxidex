@@ -445,6 +445,19 @@ fn module_mime_type(file_type: &str) -> Option<&'static str> {
         "HEIFS" => "image/heif-sequence",
         "AVIF" => "image/avif",
         "CRX" => "video/x-canon-crx",
+        // Font.pm:598. `$ftyp` is one of three depending on which
+        // `Start(Comp|Master)?FontMetrics` line opens the file, and all three
+        // share the one MIME type:
+        //   my $ftyp = $1 ? ($1 eq 'Comp' ? 'ACFM' : 'AMFM') : 'AFM';
+        //   $et->SetFileType($ftyp, 'application/x-font-afm');
+        // Without this, `%mimeType` answers for the PostScript font family
+        // that AFM's root type belongs to -- `application/x-font-type1`.
+        "AFM" | "ACFM" | "AMFM" => "application/x-font-afm",
+        // LNK.pm:1733 -- `%mimeType` carries no URL row at all, so the
+        // generated table leaves a Windows shortcut at `application/octet-
+        // stream`:
+        //   $et->SetFileType('URL', 'application/x-mswinurl');
+        "URL" => "application/x-mswinurl",
         _ => return None,
     })
 }
@@ -518,8 +531,25 @@ mod tests {
             ("m4v", "video/x-m4v"),
             ("mov", "video/quicktime"),
             ("heif", "image/heif"),
+            // Font.pm and LNK.pm declare these the same way RIFF and
+            // QuickTime do -- in the module, so `%mimeType` has no row.
+            ("afm", "application/x-font-afm"),
+            ("url", "application/x-mswinurl"),
         ] {
             assert_eq!(identify_extension(ext, b"").2, want, "MIMEType for .{ext}");
+        }
+    }
+
+    /// AFM's two siblings share its MIME type but have no extension of their
+    /// own, so they are only reachable by file type.
+    #[test]
+    fn the_composite_font_metrics_types_share_afms_mime() {
+        for file_type in ["AFM", "ACFM", "AMFM"] {
+            assert_eq!(
+                module_mime_type(file_type),
+                Some("application/x-font-afm"),
+                "{file_type}"
+            );
         }
     }
 
