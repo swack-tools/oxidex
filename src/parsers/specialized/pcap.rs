@@ -974,10 +974,6 @@ impl FormatParser for PCAPParser {
             "FileType".to_string(),
             TagValue::String(format_name.to_string()),
         );
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         // Parse format-specific metadata
         let format_metadata = if format_name == "PCAP-NG" {

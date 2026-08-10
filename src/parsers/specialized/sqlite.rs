@@ -268,10 +268,6 @@ impl FormatParser for SQLiteParser {
             "FileType".to_string(),
             TagValue::String("SQLite".to_string()),
         );
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         // File identification
         let page_size = Self::read_page_size(reader)?;

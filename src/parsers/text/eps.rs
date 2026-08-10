@@ -526,11 +526,6 @@ impl FormatParser for EPSParser {
 
         // Set basic file info
         metadata.insert("FileType".to_string(), TagValue::String("EPS".to_string()));
-        metadata.insert("FileSize".to_string(), TagValue::Integer(file_size as i64));
-        metadata.insert(
-            "MIMEType".to_string(),
-            TagValue::String("application/postscript".to_string()),
-        );
 
         // Handle binary EPS (DOS EPS) header
         let ps_data = if data.starts_with(&[0xC5, 0xD0, 0xD3, 0xC6]) && data.len() >= 30 {

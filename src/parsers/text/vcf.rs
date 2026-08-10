@@ -323,10 +323,6 @@ impl FormatParser for VCFParser {
             "FileType".to_string(),
             TagValue::String("vCard".to_string()),
         );
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         // Parse vCard content and merge with basic metadata
         let vcard_metadata = Self::parse_vcard_content(reader)?;

@@ -446,9 +446,15 @@ fn test_elf_signature_verification() {
 
 #[test]
 fn test_elf_file_size_tracking() {
-    // Test that file size is properly tracked in metadata
+    // Size is `File:FileSize`'s to report. The parser used to record
+    // `reader.size()` raw beside it, which `drop_redundant_file_size` then threw
+    // away on every read -- so the value never reached output and the parser has
+    // stopped computing it.
+    //
+    // `FileType` is the one identity tag the parser still names, because
+    // `normalize_identity_tags` promotes it when ExifTool's tables cannot: that
+    // fallback is the only reason an ELF reports `ELF` rather than `Unknown`.
     let data = create_elf_header(ELFCLASS64, ELFDATA2LSB, ET_EXEC, EM_X86_64);
-    let expected_size = data.len();
     let reader = TestReader::new(data);
     let parser = ELFParser;
 
@@ -456,8 +462,10 @@ fn test_elf_file_size_tracking() {
     assert!(result.is_ok(), "Failed to parse ELF file");
 
     let metadata = result.unwrap();
-    assert_eq!(
-        metadata.get("FileSize"),
-        Some(&TagValue::Integer(expected_size as i64))
-    );
+    for ungrouped in ["FileSize", "FileTypeExtension", "MIMEType"] {
+        assert!(
+            metadata.get(ungrouped).is_none(),
+            "{ungrouped} belongs to the File: group, not the ELF parser"
+        );
+    }
 }

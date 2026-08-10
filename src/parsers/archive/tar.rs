@@ -207,10 +207,6 @@ impl FormatParser for TARParser {
 
         // Basic file info
         metadata.insert("FileType".to_string(), TagValue::String("TAR".to_string()));
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         let version = Self::read_version(reader)?;
         metadata.insert("TARFormat".to_string(), TagValue::String(version.clone()));

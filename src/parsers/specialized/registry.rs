@@ -253,10 +253,6 @@ impl FormatParser for RegistryParser {
             TagValue::String("Registry Hive".to_string()),
         );
         metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
-        metadata.insert(
             "Registry:Signature".to_string(),
             TagValue::String("regf".to_string()),
         );

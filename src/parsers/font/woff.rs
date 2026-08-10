@@ -216,10 +216,6 @@ impl FormatParser for WOFFParser {
 
         // Basic file info
         metadata.insert("FileType".to_string(), TagValue::String("WOFF".to_string()));
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         let flavor = Self::read_flavor(reader)?;
         metadata.insert("FontFlavor".to_string(), TagValue::String(flavor));

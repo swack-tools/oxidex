@@ -459,10 +459,6 @@ impl FormatParser for GIFParser {
 
         // Basic file information
         metadata.insert("FileType".to_string(), TagValue::String("GIF".to_string()));
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         let version = Self::read_version(reader)?;
         metadata.insert(

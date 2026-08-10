@@ -74,7 +74,6 @@ impl FormatParser for SevenZParser {
         }
 
         let mut metadata = MetadataMap::new();
-        let file_size = reader.size();
 
         // Parse start header
         let start_header = StartHeader::parse(reader)?;
@@ -87,10 +86,6 @@ impl FormatParser for SevenZParser {
                 "{}.{}",
                 start_header.major_version, start_header.minor_version
             )),
-        );
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(file_size.to_string()),
         );
 
         // Start header metadata

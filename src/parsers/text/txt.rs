@@ -431,10 +431,6 @@ impl FormatParser for TXTParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
         let mut metadata = MetadataMap::new();
         metadata.insert("FileType".to_string(), TagValue::String("TXT".to_string()));
-        metadata.insert(
-            "MIMEType".to_string(),
-            TagValue::String("text/plain".to_string()),
-        );
         // No `FileSize` here. `extract_file_metadata` already records the file's
         // length as `File:FileSize`, formatted the way ExifTool prints it
         // ("785 bytes"); a raw byte count under a second, ungrouped key added a

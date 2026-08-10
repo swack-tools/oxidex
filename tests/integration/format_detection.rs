@@ -233,7 +233,11 @@ fn test_parse_dpx_direct_table_fields() {
         .expect("DPX header should parse");
 
     assert_eq!(metadata.get_string("FileType"), Some("DPX"));
-    assert_eq!(metadata.get_string("MIMEType"), Some("image/x-dpx"));
+    // `image/x-dpx` reaches output as `File:MIMEType`, from the generated MIME
+    // table via `add_identity_tags`. The parser's ungrouped copy was a second
+    // answer that `normalize_identity_tags` dropped on every read, since it
+    // never promotes a parser's MIMEType.
+    assert!(metadata.get_string("MIMEType").is_none());
     assert_eq!(metadata.get_string("ByteOrder"), Some("Big-endian"));
     assert_eq!(metadata.get_string("HeaderVersion"), Some("V2.0"));
     assert_eq!(metadata.get_integer("DPXFileSize"), Some(2080));

@@ -736,10 +736,6 @@ impl FormatParser for PSDParser {
         }
 
         let mut metadata = MetadataMap::new();
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::Integer(reader.size() as i64),
-        );
 
         // Parse header
         Self::parse_header(reader, &mut metadata)?;

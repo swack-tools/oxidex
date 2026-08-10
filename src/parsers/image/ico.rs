@@ -153,10 +153,6 @@ impl FormatParser for ICOParser {
             "FileType".to_string(),
             TagValue::String(type_name.to_string()),
         );
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         let image_count = Self::read_image_count(reader)?;
         metadata.insert(

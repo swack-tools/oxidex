@@ -242,10 +242,6 @@ impl FormatParser for BPGParser {
 
         let mut metadata = MetadataMap::new();
         metadata.insert("FileType".to_string(), TagValue::String("BPG".to_string()));
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::Integer(reader.size() as i64),
-        );
 
         let file_size = reader.size();
         let header_len = (file_size as usize).min(BPG_MAX_HEADER_LEN);

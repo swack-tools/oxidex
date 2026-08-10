@@ -368,11 +368,6 @@ impl FormatParser for ICSParser {
 
         // Set basic file info
         metadata.insert("FileType".to_string(), TagValue::String("ICS".to_string()));
-        metadata.insert("FileSize".to_string(), TagValue::Integer(file_size as i64));
-        metadata.insert(
-            "MIMEType".to_string(),
-            TagValue::String("text/calendar".to_string()),
-        );
 
         // Extract VERSION (ICS:Version) - Worker 27 requirement
         if let Some(version) = Self::extract_value(text, "VERSION") {

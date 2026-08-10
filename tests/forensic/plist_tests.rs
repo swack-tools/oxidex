@@ -605,7 +605,7 @@ fn test_too_small_binary_plist() {
 
 /// Test 20: File size metadata
 ///
-/// Verifies that file size is correctly reported in metadata.
+/// Verifies that file size is the `File:` group's to report, not the parser's.
 #[test]
 fn test_file_size_metadata() {
     let xml_content = r#"<dict>
@@ -613,16 +613,18 @@ fn test_file_size_metadata() {
     <string>Value</string>
 </dict>"#;
     let data = create_xml_plist(xml_content);
-    let file_size = data.len();
     let reader = TestReader::new(data);
 
     let result = parse_plist_metadata(&reader);
     assert!(result.is_ok(), "Parsing should succeed");
 
     let metadata = result.unwrap();
-    assert_eq!(
-        metadata.get("FileSize"),
-        Some(&TagValue::String(file_size.to_string())),
-        "FileSize should match actual size"
+    // `File:FileSize` is written once, by `extract_file_metadata`, formatted the
+    // way ExifTool formats it. This parser's raw byte count sat beside it under
+    // the ungrouped name until `drop_redundant_file_size` discarded it on every
+    // read, so it is no longer computed.
+    assert!(
+        metadata.get("FileSize").is_none(),
+        "FileSize belongs to the File: group, not the Plist parser"
     );
 }

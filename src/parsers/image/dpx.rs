@@ -61,7 +61,6 @@ impl FormatParser for DPXParser {
 
         let mut metadata = MetadataMap::new();
         metadata.insert("FileType", TagValue::String("DPX".to_string()));
-        metadata.insert("MIMEType", TagValue::String("image/x-dpx".to_string()));
         metadata.insert(
             "ByteOrder",
             TagValue::String(
