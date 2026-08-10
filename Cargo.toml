@@ -151,14 +151,6 @@ anyhow = "1.0"
 magika = { version = "1.0", optional = true }
 ort = { version = "2.0.0-rc.10", optional = true }
 
-[build-dependencies]
-# HTTP client for downloading ExifTool source
-ureq = { version = "3.3", default-features = false, features = ["rustls"] }
-# Regex for parsing Perl tag definitions
-regex = "1.13"
-# Error handling
-anyhow = "1.0"
-
 [dev-dependencies]
 # Testing
 proptest = "1.11"
