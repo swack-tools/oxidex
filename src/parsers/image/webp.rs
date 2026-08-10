@@ -83,6 +83,23 @@ fn parse_webp_chunks(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Res
 
         match chunk_type {
             b"VP8X" => {
+                // A VP8X chunk is what makes a WebP an *extended* WebP, and
+                // ExifTool renames the file on seeing one (RIFF.pm:2106):
+                //
+                //     $et->OverrideFileType('Extended WEBP',undef,'webp')
+                //         if $tag eq 'VP8X' and $type eq 'WEBP';
+                //
+                // The rename keys on the chunk's presence, not on its
+                // contents, so it happens here rather than inside the size
+                // check below. Into the `File` group to outrank
+                // `%fileTypeLookup`, which answers plain `WEBP` for the
+                // extension. Extension and MIME are unchanged -- ExifTool
+                // passes `undef` and `'webp'`.
+                metadata.insert(
+                    "File:FileType".to_string(),
+                    TagValue::String("Extended WEBP".to_string()),
+                );
+
                 // Extended WebP header with flags
                 if chunk_size >= 10 {
                     let vp8x_data = reader.read(chunk_data_offset, 10)?;
@@ -578,4 +595,64 @@ fn raw_bytes_to_tag_value(
         }
     }
     TagValue::Binary(bytes.to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TestReader;
+
+    /// A RIFF/WEBP container holding one chunk.
+    fn webp(chunk_type: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(WEBP_SIGNATURE);
+        body.extend_from_slice(chunk_type);
+        body.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        body.extend_from_slice(payload);
+        if body.len() % 2 == 1 {
+            body.push(0);
+        }
+        let mut data = Vec::from(RIFF_SIGNATURE);
+        data.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        data.extend_from_slice(&body);
+        data
+    }
+
+    #[test]
+    fn a_vp8x_chunk_makes_it_an_extended_webp() {
+        // 10 bytes: flags, 3 reserved, 24-bit width-1, 24-bit height-1.
+        let payload = [0x10, 0, 0, 0, 0x3F, 0, 0, 0x2F, 0, 0];
+        let metadata = WebPParser
+            .parse(&TestReader::new(webp(b"VP8X", &payload)))
+            .unwrap();
+        assert_eq!(metadata.get_string("File:FileType"), Some("Extended WEBP"));
+    }
+
+    #[test]
+    fn a_short_vp8x_still_renames_the_file() {
+        // ExifTool's rename keys on the chunk tag, not on its contents, so a
+        // VP8X too short to read dimensions from still makes the file
+        // extended.
+        let metadata = WebPParser
+            .parse(&TestReader::new(webp(b"VP8X", &[0x10, 0])))
+            .unwrap();
+        assert_eq!(metadata.get_string("File:FileType"), Some("Extended WEBP"));
+    }
+
+    #[test]
+    fn a_simple_webp_keeps_the_plain_name() {
+        let metadata = WebPParser
+            .parse(&TestReader::new(webp(b"VP8 ", &[0u8; 16])))
+            .unwrap();
+        // No `File:FileType` -- the identification layer's `WEBP` stands.
+        assert_eq!(metadata.get_string("File:FileType"), None);
+    }
+
+    #[test]
+    fn a_non_webp_riff_is_rejected() {
+        let mut data = Vec::from(RIFF_SIGNATURE);
+        data.extend_from_slice(&16u32.to_le_bytes());
+        data.extend_from_slice(b"AVI LIST\0\0\0\0");
+        assert!(WebPParser.parse(&TestReader::new(data)).is_err());
+    }
 }
