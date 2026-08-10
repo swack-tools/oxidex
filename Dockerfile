@@ -47,11 +47,17 @@ RUN cargo build --release --locked --bin oxidex \
 # ---------------------------------------------------------------------------
 FROM alpine:${ALPINE_VERSION} AS runtime
 
-# Required, not cosmetic: oxidex fetches over HTTPS through ureq/rustls, which
-# carries no trust store of its own and fails with an unknown-issuer error on
-# an image that has no CA bundle.
-RUN apk add --no-cache ca-certificates
-
+# No explicit `apk add ca-certificates` on purpose. The one that stood here
+# justified itself as "oxidex fetches over HTTPS through ureq/rustls" -- it
+# does not. `default = []` in Cargo.toml plus the `--bin oxidex` build above
+# mean neither ureq nor ort is in this binary, and nothing in the library or
+# CLI opens a socket. That claim traced back to reading the root package's
+# (since removed) dead [build-dependencies] as a runtime dependency.
+#
+# Alpine's base image still ships ca-certificates-bundle, which owns
+# /etc/ssl/certs/ca-certificates.crt -- so a trust store is present anyway
+# should a future network-facing feature need one. What is gone is only the
+# larger ca-certificates package and its update-ca-certificates tooling.
 COPY --from=builder /src/target/release/oxidex /usr/local/bin/oxidex
 
 # /data is where callers are expected to mount their files:
