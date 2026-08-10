@@ -78,7 +78,7 @@ pub fn is_stmn(data: &[u8]) -> bool {
 /// A block shorter than 12 bytes cannot match the regex, so it stays `1b` --
 /// and `decode_binary_table` then simply yields no `PreviewImageStart`, which
 /// is what ExifTool's `ProcessBinaryData` does with a short block too.
-fn is_binary_only(data: &[u8]) -> bool {
+pub(crate) fn is_binary_only(data: &[u8]) -> bool {
     data.len() >= PREVIEW_START.end && data[PREVIEW_START].iter().all(|byte| *byte == 0)
 }
 

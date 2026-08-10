@@ -257,6 +257,9 @@ pub enum FileFormat {
     /// glTF 3D model format
     GLTF,
 
+    /// Garmin FIT activity file format
+    FIT,
+
     /// FITS astronomy format
     FITS,
 
@@ -330,6 +333,9 @@ pub enum FileFormat {
 
     /// FLIR Public image Format (.fpf) -- thermal camera raw image
     FPF,
+
+    /// DICOM medical image (.dcm)
+    DICOM,
 
     /// Unknown or unsupported format
     Unknown,
@@ -417,6 +423,7 @@ impl FileFormat {
             FileFormat::STL => "STL",
             FileFormat::OBJ => "OBJ",
             FileFormat::GLTF => "glTF",
+            FileFormat::FIT => "FIT",
             FileFormat::FITS => "FITS",
             FileFormat::HDF5 => "HDF5",
             FileFormat::VCF => "vCard",
@@ -441,6 +448,7 @@ impl FileFormat {
             FileFormat::VRD => "VRD",
             FileFormat::DR4 => "DR4",
             FileFormat::FPF => "FPF",
+            FileFormat::DICOM => "DICOM",
             FileFormat::Unknown => "Unknown",
         }
     }
@@ -529,7 +537,8 @@ impl FileFormat {
             FileFormat::STL => &["stl"],
             FileFormat::OBJ => &["obj"],
             FileFormat::GLTF => &["gltf", "glb"],
-            FileFormat::FITS => &["fits", "fit"],
+            FileFormat::FIT => &["fit"],
+            FileFormat::FITS => &["fits"],
             FileFormat::HDF5 => &["h5", "hdf5"],
             FileFormat::VCF => &["vcf", "vcard"],
             FileFormat::ICS => &["ics", "ical"],
@@ -553,6 +562,7 @@ impl FileFormat {
             FileFormat::VRD => &["vrd"],
             FileFormat::DR4 => &["dr4"],
             FileFormat::FPF => &["fpf"],
+            FileFormat::DICOM => &["dcm", "dicom"],
             FileFormat::Unknown => &[],
         }
     }
