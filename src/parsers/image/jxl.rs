@@ -21,6 +21,38 @@ const JXL_CODESTREAM_SIGNATURE: &[u8] = &[0xFF, 0x0A];
 /// Container signature: size (4) + "JXL " (4) + ftyp header
 const JXL_CONTAINER_SIGNATURE: &[u8] = b"JXL ";
 
+/// Reads bits LSB-first across a byte slice, per the JPEG XL bitstream spec.
+struct JxlBitReader<'a> {
+    data: &'a [u8],
+    byte_pos: usize,
+    bit_pos: u8,
+}
+
+impl<'a> JxlBitReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self {
+            data,
+            byte_pos: 0,
+            bit_pos: 0,
+        }
+    }
+
+    fn get_bits(&mut self, n: u32) -> Option<u32> {
+        let mut value: u32 = 0;
+        for i in 0..n {
+            let byte = *self.data.get(self.byte_pos)?;
+            let bit = (byte >> self.bit_pos) & 1;
+            value |= (bit as u32) << i;
+            self.bit_pos += 1;
+            if self.bit_pos == 8 {
+                self.bit_pos = 0;
+                self.byte_pos += 1;
+            }
+        }
+        Some(value)
+    }
+}
+
 /// Parser for JPEG XL (JXL) next-generation image files
 ///
 /// Extracts metadata from JPEG XL format images including dimensions, bit depth,
@@ -57,6 +89,10 @@ impl JXLParser {
     }
 
     /// Parse bare codestream header for dimensions
+    ///
+    /// Mirrors ExifTool's `ProcessJXLCodestream` (lib/Image/ExifTool/Jpeg2000.pm):
+    /// the SizeHeader is a bitstream read LSB-first, byte by byte, per the
+    /// JPEG XL spec (ISO/IEC 18181-1).
     fn parse_codestream_header(
         data: &[u8],
         metadata: &mut MetadataMap,
@@ -65,91 +101,47 @@ impl JXLParser {
             return Err("Invalid codestream header".to_string());
         }
 
-        // Skip signature (2 bytes)
-        let mut pos = 2;
-        if data.len() < pos + 1 {
-            return Ok(());
-        }
+        let mut bits = JxlBitReader::new(&data[2..]);
 
-        // Parse SizeHeader using variable-length encoding
-        // First byte contains flags
-        let size_header = data[pos];
-        let small = (size_header & 0x01) != 0;
-
-        if small {
-            // Small image: 5 bits height div 8, 5 bits width div 8
-            if data.len() < pos + 2 {
-                return Ok(());
-            }
-            let h5 = ((size_header >> 1) & 0x1F) as u32;
-            let w5 = (((size_header >> 6) & 0x03) | ((data[pos + 1] & 0x07) << 2)) as u32;
-            let height = (h5 + 1) * 8;
-            let width = (w5 + 1) * 8;
-            metadata.insert("ImageWidth".to_string(), TagValue::Integer(width as i64));
-            metadata.insert("ImageHeight".to_string(), TagValue::Integer(height as i64));
-        } else {
-            // Large image: parse variable-length integers
-            pos += 1;
-            if let Some((height, new_pos)) = Self::read_u32_varint(data, pos) {
-                pos = new_pos;
-                if let Some((width, _)) = Self::read_u32_varint(data, pos) {
-                    // Height and width are encoded as (value + 1)
-                    metadata.insert(
-                        "ImageHeight".to_string(),
-                        TagValue::Integer((height + 1) as i64),
-                    );
-                    metadata.insert(
-                        "ImageWidth".to_string(),
-                        TagValue::Integer((width + 1) as i64),
-                    );
+        let dims = (|| -> Option<(u32, u32)> {
+            let small = bits.get_bits(1)? != 0;
+            let y = if small {
+                (bits.get_bits(5)? + 1) * 8
+            } else {
+                let sel = bits.get_bits(2)?;
+                let nbits = [9u32, 13, 18, 30][sel as usize];
+                bits.get_bits(nbits)? + 1
+            };
+            let ratio = bits.get_bits(3)?;
+            let x = if ratio == 0 {
+                if small {
+                    (bits.get_bits(5)? + 1) * 8
+                } else {
+                    let sel = bits.get_bits(2)?;
+                    let nbits = [9u32, 13, 18, 30][sel as usize];
+                    bits.get_bits(nbits)? + 1
                 }
-            }
+            } else {
+                const RATIOS: [(u32, u32); 7] =
+                    [(1, 1), (12, 10), (4, 3), (3, 2), (16, 9), (5, 4), (2, 1)];
+                let (rn, rd) = RATIOS[(ratio - 1) as usize];
+                (y * rn) / rd
+            };
+            Some((x, y))
+        })();
+
+        if let Some((width, height)) = dims {
+            metadata.insert(
+                "File:ImageWidth".to_string(),
+                TagValue::Integer(width as i64),
+            );
+            metadata.insert(
+                "File:ImageHeight".to_string(),
+                TagValue::Integer(height as i64),
+            );
         }
 
         Ok(())
-    }
-
-    /// Read variable-length u32 (JXL encoding)
-    fn read_u32_varint(data: &[u8], pos: usize) -> Option<(u32, usize)> {
-        if pos >= data.len() {
-            return None;
-        }
-
-        let selector = data[pos] & 0x03;
-        match selector {
-            0 => {
-                // 0-3: 2 bits
-                Some((((data[pos] >> 2) & 0x03) as u32, pos + 1))
-            }
-            1 => {
-                // 4-19: 4 bits + 4
-                if pos + 1 >= data.len() {
-                    return None;
-                }
-                let val = ((data[pos] >> 2) & 0x0F) as u32 + 4;
-                Some((val, pos + 1))
-            }
-            2 => {
-                // 20-275: 8 bits + 20
-                if pos + 1 >= data.len() {
-                    return None;
-                }
-                let val = ((data[pos] >> 2) as u32) | ((((data[pos + 1] & 0x3F) as u32) << 6) + 20);
-                Some((val, pos + 2))
-            }
-            3 => {
-                // 276+: 12-28 bits
-                if pos + 3 >= data.len() {
-                    return None;
-                }
-                let val = ((data[pos] >> 2) as u32)
-                    | ((data[pos + 1] as u32) << 6)
-                    | ((data[pos + 2] as u32) << 14)
-                    | ((((data[pos + 3] & 0x0F) as u32) << 22) + 276);
-                Some((val, pos + 4))
-            }
-            _ => None,
-        }
     }
 
     /// Decode ISOBMFF brand code to human-readable name
@@ -562,6 +554,10 @@ mod tests {
         let metadata = JXLParser.parse(&TestReader::new(codestream())).unwrap();
         assert_eq!(metadata.get_string("JXLFormat"), Some("Codestream"));
         assert_eq!(metadata.get_string("File:FileType"), Some("JXL Codestream"));
+        // These SizeHeader bytes are ExifTool's own t/images/JXL.jxl sample,
+        // which real ExifTool reports as File:ImageWidth=200, File:ImageHeight=130.
+        assert_eq!(metadata.get_integer("File:ImageWidth"), Some(200));
+        assert_eq!(metadata.get_integer("File:ImageHeight"), Some(130));
     }
 
     #[test]
