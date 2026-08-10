@@ -205,6 +205,54 @@ fn add_identity_tags(metadata: &mut MetadataMap, reader: &dyn FileReader, path: 
     true
 }
 
+/// The three tags that answer "what is this file?".
+const IDENTITY_TAGS: [&str; 3] = ["FileType", "FileTypeExtension", "MIMEType"];
+
+/// Leave exactly one answer per identity tag, in the group ExifTool uses.
+///
+/// ExifTool emits `FileType`, `FileTypeExtension` and `MIMEType` once each,
+/// under `File`. Roughly forty parsers insert them ungrouped as well, so any
+/// file that reached a parser carried two answers to the same question -- and
+/// on 21 of the 194 files in ExifTool's own `t/images` the two disagreed.
+/// `Geotag.log` reported `File:FileType "TXT"` beside a bare `FileType "TXT"`;
+/// `Font.dfont` reported `File:FileType "DFONT"` beside a bare `FileType
+/// "ICO"`, left there by the ICO parser, which the file reaches because
+/// ExifTool's `Font` magic number matches anything starting `\0\x01`. Nothing
+/// downstream could say which of the two was meant.
+///
+/// The `File:` value is the one kept. [`add_identity_tags`] and
+/// `extract_file_metadata` both resolve it from `crate::filetype`, which is
+/// generated from ExifTool's `%fileTypeLookup`, `%fileTypeExt` and `%mimeType`;
+/// a parser's own string is its private spelling of the same fact at best
+/// (`WebP` where ExifTool says `WEBP`, `Plist` where it says `PLIST`) and a
+/// loose magic match at worst. Across those 21 disagreements the `File:` value
+/// is ExifTool's answer 20 times.
+///
+/// The one thing a parser can still contribute is a name where the tables
+/// produced none, so a bare `FileType` fills an absent or `Unknown` one before
+/// being dropped. `MIMEType` is deliberately not treated the same way:
+/// `application/octet-stream` reads like a placeholder but is ExifTool's real
+/// answer for DR4, VRD, LNK, MOI and the Mach-O family, and overwriting it with
+/// a parser's guess would replace a correct value rather than fill a gap.
+fn normalize_identity_tags(metadata: &mut MetadataMap) {
+    let parser_type = metadata.remove("FileType");
+    metadata.remove("FileTypeExtension");
+    metadata.remove("MIMEType");
+
+    let unnamed = matches!(
+        metadata.get_string("File:FileType"),
+        None | Some("") | Some("Unknown") | Some("unknown")
+    );
+    if unnamed && let Some(name) = parser_type.as_ref().and_then(TagValue::as_string) {
+        metadata.insert("File:FileType", TagValue::new_string(name));
+    }
+
+    debug_assert!(
+        IDENTITY_TAGS.iter().all(|t| !metadata.contains_key(*t)),
+        "identity tags must be emitted only under the File group"
+    );
+}
+
 /// Detect file format using the specified detection mode.
 ///
 /// This helper function wraps format detection to support both signature-based
@@ -333,6 +381,13 @@ pub fn read_metadata_with_detector(
     // parsed fine and still reported `FileType: Unknown`. Only placeholders are
     // filled, so a parser that names the type itself still wins.
     add_identity_tags(&mut metadata, &reader, path);
+
+    // Step 5a': One answer per identity tag, under the group ExifTool uses.
+    //
+    // Runs after Step 5a, not before: the tables get first refusal on naming
+    // the file, and only what they decline is filled from the parser's own
+    // ungrouped copy before that copy is dropped.
+    normalize_identity_tags(&mut metadata);
 
     // Step 5b: Backstop for ExifByteOrder on TIFF-based files.
     //
@@ -1129,6 +1184,82 @@ pub(crate) fn parse_casio_cam_metadata(reader: &dyn FileReader) -> Result<Metada
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+
+    /// A map as it reaches `normalize_identity_tags`: the `File:` group as the
+    /// generated tables left it, plus whatever the parser inserted ungrouped.
+    fn identity_map(grouped: &[(&str, &str)], bare: &[(&str, &str)]) -> MetadataMap {
+        let mut map = MetadataMap::new();
+        for (k, v) in grouped {
+            map.insert(format!("File:{k}"), TagValue::new_string(*v));
+        }
+        for (k, v) in bare {
+            map.insert((*k).to_string(), TagValue::new_string(*v));
+        }
+        map
+    }
+
+    #[test]
+    fn identity_tags_are_emitted_once_under_the_file_group() {
+        // Geotag.log: the tables and the TXT parser agree, and the output
+        // still carried the answer twice.
+        let mut map = identity_map(
+            &[
+                ("FileType", "TXT"),
+                ("FileTypeExtension", "txt"),
+                ("MIMEType", "text/plain"),
+            ],
+            &[("FileType", "TXT"), ("MIMEType", "text/plain")],
+        );
+        normalize_identity_tags(&mut map);
+
+        for tag in IDENTITY_TAGS {
+            assert!(!map.contains_key(tag), "{tag} must not survive ungrouped");
+        }
+        assert_eq!(map.get_string("File:FileType"), Some("TXT"));
+        assert_eq!(map.get_string("File:MIMEType"), Some("text/plain"));
+    }
+
+    #[test]
+    fn the_tables_outrank_a_contradicting_parser() {
+        // Font.dfont reaches the ICO parser because ExifTool's `Font` magic
+        // number matches any file starting `\0\x01`. DFONT is ExifTool's
+        // answer, and it is the one already in the `File:` group.
+        let mut map = identity_map(&[("FileType", "DFONT")], &[("FileType", "ICO")]);
+        normalize_identity_tags(&mut map);
+
+        assert_eq!(map.get_string("File:FileType"), Some("DFONT"));
+        assert!(!map.contains_key("FileType"));
+    }
+
+    #[test]
+    fn a_parser_name_fills_an_unnamed_file_type() {
+        // EXE.elf: the tables decline, so the parser's name is all there is.
+        let mut map = identity_map(&[("FileType", "Unknown")], &[("FileType", "ELF")]);
+        normalize_identity_tags(&mut map);
+
+        assert_eq!(map.get_string("File:FileType"), Some("ELF"));
+    }
+
+    #[test]
+    fn octet_stream_is_an_answer_not_a_gap_to_fill() {
+        // ExifTool really does report `application/octet-stream` for LNK, DR4,
+        // VRD, MOI and the Mach-O family. A parser's `text/plain` must not
+        // overwrite it.
+        let mut map = identity_map(
+            &[
+                ("FileType", "URL"),
+                ("MIMEType", "application/octet-stream"),
+            ],
+            &[("FileType", "TXT"), ("MIMEType", "text/plain")],
+        );
+        normalize_identity_tags(&mut map);
+
+        assert_eq!(map.get_string("File:FileType"), Some("URL"));
+        assert_eq!(
+            map.get_string("File:MIMEType"),
+            Some("application/octet-stream")
+        );
+    }
 
     #[test]
     fn ungrouped_file_size_is_dropped_when_the_grouped_one_exists() {
