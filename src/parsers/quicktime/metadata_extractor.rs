@@ -11,7 +11,7 @@ use super::atom_parser::Atom;
 use super::tag_mapping::atom_to_exiftool_tag;
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::exiftool_tables::{DecodedValue, decode_binary_table, find_table};
-use crate::io::timestamp::mac_time_to_iso8601;
+use crate::io::timestamp::mac_time_to_exif_datetime;
 use crate::io::{ByteOrder, EndianReader};
 use crate::parsers::tiff::ifd_parser::{ByteOrder as TiffByteOrder, parse_ifd};
 use crate::tag_db::lookup_tag_name;
@@ -696,9 +696,9 @@ fn extract_movie_header(mvhd: &Atom, metadata: &mut MetadataMap) -> Result<(), S
 
     // Add both legacy CreateDate/ModifyDate and new MediaCreateDate/MediaModifyDate
     // Use shared timestamp utility for dates after 1970, fallback to legacy for older dates
-    let create_date_str =
-        mac_time_to_iso8601(creation_time).unwrap_or_else(|| format_mac_time_legacy(creation_time));
-    let modify_date_str = mac_time_to_iso8601(modification_time)
+    let create_date_str = mac_time_to_exif_datetime(creation_time)
+        .unwrap_or_else(|| format_mac_time_legacy(creation_time));
+    let modify_date_str = mac_time_to_exif_datetime(modification_time)
         .unwrap_or_else(|| format_mac_time_legacy(modification_time));
 
     metadata.insert(
@@ -867,9 +867,9 @@ fn extract_track_header(
 
     // Add track-specific timestamp tags
     // Use shared timestamp utility for dates after 1970, fallback to legacy for older dates
-    let create_date_str =
-        mac_time_to_iso8601(creation_time).unwrap_or_else(|| format_mac_time_legacy(creation_time));
-    let modify_date_str = mac_time_to_iso8601(modification_time)
+    let create_date_str = mac_time_to_exif_datetime(creation_time)
+        .unwrap_or_else(|| format_mac_time_legacy(creation_time));
+    let modify_date_str = mac_time_to_exif_datetime(modification_time)
         .unwrap_or_else(|| format_mac_time_legacy(modification_time));
 
     metadata.insert(
@@ -1005,9 +1005,9 @@ fn extract_media_header(
 
     // Media timestamps
     // Use shared timestamp utility for dates after 1970, fallback to legacy for older dates
-    let create_date_str =
-        mac_time_to_iso8601(creation_time).unwrap_or_else(|| format_mac_time_legacy(creation_time));
-    let modify_date_str = mac_time_to_iso8601(modification_time)
+    let create_date_str = mac_time_to_exif_datetime(creation_time)
+        .unwrap_or_else(|| format_mac_time_legacy(creation_time));
+    let modify_date_str = mac_time_to_exif_datetime(modification_time)
         .unwrap_or_else(|| format_mac_time_legacy(modification_time));
 
     metadata.insert(
@@ -3900,19 +3900,21 @@ mod tests {
     }
 
     #[test]
-    fn test_mac_time_to_iso8601_integration() {
-        // Test that the shared timestamp utility works for dates after 1970
+    fn test_mac_time_to_exif_datetime_integration() {
+        // The movie/track/media header dates must carry ExifTool's rendering:
+        // `exiftool -json -G QuickTime.mov` (13.59) prints
+        // "QuickTime:CreateDate": "2005:08:11 14:03:54" -- colon-separated,
+        // space instead of 'T', no zone suffix.
         const MAC_EPOCH_OFFSET: u64 = 2082844800;
 
         // Unix timestamp for 2024-01-01: 1704067200
         let mac_time = 1704067200 + MAC_EPOCH_OFFSET;
-        let result = mac_time_to_iso8601(mac_time);
-        assert!(result.is_some());
-        assert!(result.unwrap().starts_with("2024-01-01"));
+        let result = mac_time_to_exif_datetime(mac_time);
+        assert_eq!(result.as_deref(), Some("2024:01:01 00:00:00"));
 
-        // Test that dates before 1970 return None
+        // Dates before 1970 fall back to format_mac_time_legacy
         let old_mac_time = 100u64; // Very early date (1904)
-        assert!(mac_time_to_iso8601(old_mac_time).is_none());
+        assert!(mac_time_to_exif_datetime(old_mac_time).is_none());
     }
 
     #[test]

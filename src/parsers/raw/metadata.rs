@@ -2357,6 +2357,21 @@ fn format_exif_display_value(
                 Some(format!("Unknown ({values})"))
             }
         }
+        // Copyright: Exif.pm 0x8298's RawConv splits photographer\0editor,
+        // strips the blanks before each NUL, and drops a trailing newline --
+        // FujiFilm.raf stores 510 spaces + NUL, which 13.59 reports as "".
+        // The shared TIFF converter owns that conversion; without this arm
+        // the RAW fallback's generic string path kept the NUL and ExifTool's
+        // "" surfaced as a value difference.
+        0x8298 => crate::core::tag_conversion::raw_bytes_to_tag_value(
+            bytes,
+            field_type,
+            value_count,
+            tag_id,
+            byte_order,
+        )
+        .as_string()
+        .map(str::to_string),
         // LensInfo: RATIONAL[4]. Exif.pm 0xa432 PrintConv is PrintLensInfo.
         0xA432 if field_type == 5 && value_count == 4 => {
             crate::core::tag_conversion::raw_bytes_to_tag_value(
@@ -6749,14 +6764,31 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                         continue;
                                     }
 
-                                    // Convert tag to metadata
+                                    // Convert tag to metadata, consulting the
+                                    // same tag-aware display conversions the
+                                    // main TIFF-based walker applies before
+                                    // falling back to the generic converter.
+                                    // FujiFilm.raf's IFD0 Copyright is 510
+                                    // blanks + NUL, which Exif.pm 0x8298's
+                                    // RawConv collapses to "" -- the simple
+                                    // converter alone kept the interior NUL.
                                     let tag_name = lookup_tag_name(*tag_id, "IFD0");
-                                    let tag_value = raw_bytes_to_simple_tag_value(
+                                    let tag_value = format_exif_display_value(
+                                        *tag_id,
                                         bytes,
                                         *field_type,
                                         *value_count,
                                         byte_order,
-                                    );
+                                    )
+                                    .map(TagValue::new_string)
+                                    .unwrap_or_else(|| {
+                                        raw_bytes_to_simple_tag_value(
+                                            bytes,
+                                            *field_type,
+                                            *value_count,
+                                            byte_order,
+                                        )
+                                    });
                                     metadata.insert(tag_name, tag_value);
                                 }
 

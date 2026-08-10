@@ -21,12 +21,6 @@ use oxidex::core::tag_normalization::normalize_tag_family;
 // `core::formatters::unit_suffixes::format_with_unit`, so importing a
 // second implementation here would score oxidex against a formatter it does
 // not use.
-use oxidex::core::formatters::exif_enums::file_source_label_bytes;
-use oxidex::core::formatters::unit_suffixes::{format_with_unit, needs_unit_suffix};
-use oxidex::core::value_formatter::{
-    format_date_exif_style, format_rational_as_decimal, is_decimal_rational_tag,
-};
-use oxidex::parsers::tiff::tiff_enums::tiff_enum_to_string;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -346,118 +340,26 @@ impl OxiDexExtractor {
         Ok((tags, collisions))
     }
 
-    /// Format a tag value to match ExifTool's output format
-    fn format_value(&self, key: &str, name: &str, value: &TagValue) -> String {
+    /// Flatten an already-formatted library value to its comparison string.
+    ///
+    /// `format_for_exiftool` has run before this (`extract_tags_from_file`
+    /// step 2), so every ExifTool rendering rule the library knows has
+    /// already been applied. This function is deliberately tag-blind: it
+    /// only maps `TagValue` variants to text. Any per-tag conversion added
+    /// here scores the library as matching ExifTool when the library's own
+    /// rendering is wrong -- that is how the pre-#655 UserComment defect
+    /// stayed invisible for months. A branch census over the 4,238-file
+    /// sample corpus confirmed every tag-conditional branch this function
+    /// used to carry was either dead (the library had already formatted the
+    /// value), a no-op (ExposureTime ratios arrived pre-simplified), or a
+    /// mask over a library gap that is now fixed in the library itself
+    /// (SensitivityType-family enums, QuickTime dates, HDRGainCurve,
+    /// XMP timestamp auto-conversion).
+    fn format_value(value: &TagValue) -> String {
         match value {
-            TagValue::String(s) => {
-                // ExifTool marks AROT's int32uRev gain-curve array as Binary
-                // and its ordinary output reports the rendered `-b` payload
-                // length. OxiDex retains that payload as the same
-                // space-separated decimal string, so its UTF-8 byte length is
-                // exactly the size ExifTool displays (1160 bytes for
-                // Apple_iPadAir_3rd_generation.jpg).
-                if key == "APP10:HDRGainCurve" {
-                    return format!("(Binary data {} bytes, use -b option to extract)", s.len());
-                }
-
-                // ColorMap is a large array of color values stored as space-separated string
-                // ExifTool shows it as "(Binary data N bytes, use -b option to extract)"
-                if name == "ColorMap" {
-                    // Count entries to estimate byte size (each value is 2 bytes for SHORT)
-                    let entry_count = s.split_whitespace().count();
-                    if entry_count > 10 {
-                        let byte_size = entry_count * 2;
-                        return format!(
-                            "(Binary data {} bytes, use -b option to extract)",
-                            byte_size
-                        );
-                    }
-                }
-
-                // ImageDescription has no Exif.pm RawConv: normal ExifTool
-                // display retains meaningful leading whitespace while
-                // suppressing trailing ASCII padding.
-                if name == "ImageDescription" {
-                    return s
-                        .trim_end_matches('\0')
-                        .trim_end()
-                        .trim_end_matches('\0')
-                        .to_string();
-                }
-
-                // Copyright and Artist text tags - trim whitespace and null
-                // bytes to match ExifTool. ExifTool trims empty copyright
-                // strings to empty.
-                if name == "Copyright" || name == "Artist" {
-                    // Trim null bytes and whitespace
-                    let trimmed = s
-                        .trim_end_matches('\0')
-                        .trim()
-                        .trim_end_matches('\0')
-                        .trim();
-                    if trimmed.is_empty() {
-                        return String::new();
-                    }
-                    return trimmed.to_string();
-                }
-
-                // ExposureTime might come as a string ratio like "10/2500" - simplify to "1/250"
-                if name == "ExposureTime"
-                    && let Some(slash_pos) = s.find('/')
-                    && let (Ok(num), Ok(den)) = (
-                        s[..slash_pos].parse::<i64>(),
-                        s[slash_pos + 1..].parse::<i64>(),
-                    )
-                    && den > 0
-                    && num > 0
-                {
-                    // Find GCD to simplify the fraction
-                    fn gcd(a: i64, b: i64) -> i64 {
-                        if b == 0 { a } else { gcd(b, a % b) }
-                    }
-                    let g = gcd(num, den);
-                    let simplified_num = num / g;
-                    let simplified_den = den / g;
-                    if simplified_num == 1 {
-                        return format!("1/{}", simplified_den);
-                    } else if simplified_den == 1 {
-                        return simplified_num.to_string();
-                    }
-                    return format!("{}/{}", simplified_num, simplified_den);
-                }
-
-                // Try to format dates in EXIF style
-                // PNG date:* tEXt keywords are ISO-8601 text fields. ExifTool
-                // preserves their spelling, unlike EXIF date tags.
-                if key.starts_with("PNG:Datecreate")
-                    || key.starts_with("PNG:Datemodify")
-                    || key.starts_with("PNG:Datetimestamp")
-                {
-                    return s.clone();
-                }
-                if (key.contains("Date") || key.contains("Time"))
-                    && (s.contains('T') || s.contains('-'))
-                {
-                    return format_date_exif_style(s, false);
-                }
-                s.clone()
-            }
-            TagValue::Integer(i) => {
-                // Try enum decoding for known tags
-                if let Some(decoded) = self.decode_enum(name, *i as u32) {
-                    return decoded;
-                }
-                i.to_string()
-            }
+            TagValue::String(s) => s.clone(),
+            TagValue::Integer(i) => i.to_string(),
             TagValue::Float(f) => {
-                // ExposureTime should be formatted as a fraction (e.g., "1/250") for sub-second values
-                if name == "ExposureTime" && *f > 0.0 && *f < 1.0 {
-                    // Convert to fraction: find closest 1/N form
-                    let denominator = (1.0 / f).round() as i64;
-                    return format!("1/{}", denominator);
-                }
-
-                // Format floats with reasonable precision
                 let formatted = format!("{:.5}", f);
                 formatted
                     .trim_end_matches('0')
@@ -471,311 +373,23 @@ impl OxiDexExtractor {
                 if *denominator == 0 {
                     return "inf".to_string();
                 }
-
-                // Special handling for FocalLength - round to 1 decimal
-                if name == "FocalLength" {
-                    let value = *numerator as f64 / *denominator as f64;
-                    return format!("{:.1} mm", value);
-                }
-
-                // Handle APEX (Additive System of Photographic Exposure) tags
-                // These require conversion from APEX units to human-readable values
-                // ApertureValue/MaxApertureValue: F-number = 2^(APEX/2)
-                if name == "ApertureValue" || name == "MaxApertureValue" {
-                    let apex = *numerator as f64 / *denominator as f64;
-                    let f_number = (2.0_f64).powf(apex / 2.0);
-                    return format!("{:.1}", f_number);
-                }
-
-                // ShutterSpeedValue: Exposure time = 2^(-APEX)
-                // Format as fraction (e.g., "1/501") for times < 1 second
-                if name == "ShutterSpeedValue" {
-                    let apex = *numerator as f64 / *denominator as f64;
-                    let exposure_time = (2.0_f64).powf(-apex);
-                    // Format as fraction for sub-second exposures
-                    if exposure_time < 1.0 {
-                        let denominator = (1.0 / exposure_time).round() as i64;
-                        return format!("1/{}", denominator);
-                    } else {
-                        return format!("{:.1}", exposure_time);
-                    }
-                }
-
-                // ExposureTime: format as simplified fraction (e.g., "1/250") for times < 1 second
-                if name == "ExposureTime" {
-                    let value = *numerator as f64 / *denominator as f64;
-                    if value < 1.0 && value > 0.0 {
-                        // Find GCD to simplify first
-                        fn gcd_i32(a: i32, b: i32) -> i32 {
-                            if b == 0 { a.abs() } else { gcd_i32(b, a % b) }
-                        }
-                        let g = gcd_i32(*numerator, *denominator);
-                        let simplified_num = numerator / g;
-                        let simplified_den = denominator / g;
-                        if simplified_num == 1 {
-                            return format!("1/{}", simplified_den);
-                        } else {
-                            // Approximate to 1/N form like ExifTool does
-                            let approx_denom = (1.0 / value).round() as i64;
-                            return format!("1/{}", approx_denom);
-                        }
-                    } else if value >= 1.0 {
-                        return format!("{:.1}", value);
-                    }
-                }
-
-                // For tags that should be decimal values
-                if is_decimal_rational_tag(key) || is_decimal_rational_tag(name) {
-                    let decimal =
-                        format_rational_as_decimal(*numerator as i64, *denominator as i64);
-                    // `key` and not `name`: EXIF 0x920a's `sprintf("%.1f mm")`
-                    // (Exif.pm:2401) applies to `ExifIFD:FocalLength` but not to
-                    // the maker-note tables that reuse the bare name, so the
-                    // group has to stay visible to the formatter.
-                    if needs_unit_suffix(key) || needs_unit_suffix(name) {
-                        return format_with_unit(key, &decimal);
-                    }
-                    return decimal;
-                }
-
-                // Default: compute decimal value
-                // Use 9 decimal places for ExifTool compatibility
                 let value = *numerator as f64 / *denominator as f64;
                 let formatted = format!("{:.9}", value);
-                let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');
-
-                // Add unit suffix if needed (group-qualified, as above)
-                if needs_unit_suffix(key) || needs_unit_suffix(name) {
-                    format_with_unit(key, trimmed)
-                } else {
-                    trimmed.to_string()
-                }
+                formatted
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_string()
             }
-            TagValue::Binary(bytes) => {
-                // FileSource. This arm existed because the library handed the
-                // harness a 1-byte blob; it no longer does -- `ProcessExif`
-                // reads a format-7 count-1 value as int8u (Exif.pm:6682) and
-                // the Integer path above resolves it. What can still arrive as
-                // a blob is Sigma's four-byte form, so the lookup stays, now
-                // against the single copy of Exif.pm 0xa300's PrintConv.
-                if name == "FileSource"
-                    && let Some(label) = file_source_label_bytes(bytes)
-                {
-                    return label.to_string();
-                }
-
-                // FlashpixVersion - 4 ASCII bytes representing version (e.g., "0100")
-                if name == "FlashpixVersion"
-                    && bytes.len() == 4
-                    && let Ok(s) = std::str::from_utf8(bytes)
-                {
-                    return s.to_string();
-                }
-
-                // ExifVersion - 4 ASCII bytes representing version (e.g., "0232")
-                if name == "ExifVersion"
-                    && bytes.len() == 4
-                    && let Ok(s) = std::str::from_utf8(bytes)
-                {
-                    return s.to_string();
-                }
-
-                // ComponentsConfiguration - 4 bytes indicating component order
-                // Values: 0=doesn't exist, 1=Y, 2=Cb, 3=Cr, 4=R, 5=G, 6=B
-                if name == "ComponentsConfiguration" && bytes.len() == 4 {
-                    let components: Vec<&str> = bytes
-                        .iter()
-                        .map(|&b| match b {
-                            0 => "-",
-                            1 => "Y",
-                            2 => "Cb",
-                            3 => "Cr",
-                            4 => "R",
-                            5 => "G",
-                            6 => "B",
-                            _ => "?",
-                        })
-                        .collect();
-                    return components.join(", ");
-                }
-
-                // SRATIONAL tags stored as binary (8 bytes = numerator + denominator, both i32)
-                // BrightnessValue, ExposureCompensation, ShutterSpeedValue
-                if (name == "BrightnessValue"
-                    || name == "ExposureCompensation"
-                    || name == "ShutterSpeedValue"
-                    || name == "ExposureBiasValue")
-                    && bytes.len() == 8
-                {
-                    // Try both little-endian and big-endian
-                    let num_le = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-                    let den_le = i32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-                    let num_be = i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-                    let den_be = i32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-
-                    // Use whichever gives a reasonable denominator (positive, non-zero)
-                    let (num, den) = if den_le > 0 && den_le < 1_000_000 {
-                        (num_le, den_le)
-                    } else if den_be > 0 && den_be < 1_000_000 {
-                        (num_be, den_be)
-                    } else {
-                        // Fallback to default binary display
-                        return format!(
-                            "(Binary data {} bytes, use -b option to extract)",
-                            bytes.len()
-                        );
-                    };
-
-                    if den != 0 {
-                        // ShutterSpeedValue requires APEX conversion
-                        if name == "ShutterSpeedValue" {
-                            let apex = num as f64 / den as f64;
-                            let exposure_time = (2.0_f64).powf(-apex);
-                            if exposure_time < 1.0 {
-                                let denominator = (1.0 / exposure_time).round() as i64;
-                                return format!("1/{}", denominator);
-                            } else {
-                                return format!("{:.1}", exposure_time);
-                            }
-                        }
-
-                        // Other tags: just format as decimal
-                        let value = num as f64 / den as f64;
-                        let formatted = format!("{:.9}", value);
-                        return formatted
-                            .trim_end_matches('0')
-                            .trim_end_matches('.')
-                            .to_string();
-                    }
-                }
-
-                // UserComment never reaches this arm decoded-by-hand:
-                // `format_for_exiftool` (extract_tags_from_file step 2) already
-                // ran `decode_user_comment` on every >=8-byte Binary carrying
-                // that name (exiftool_compat Rule 13). Re-decoding here would
-                // let the instrument paper over library rendering defects, so
-                // whatever is still Binary falls through to the placeholder.
-
-                // Default fallback for unrecognized binary data
-                // Format to match ExifTool: "(Binary data N bytes, use -b option to extract)"
-                format!(
-                    "(Binary data {} bytes, use -b option to extract)",
-                    bytes.len()
-                )
-            }
-            TagValue::DateTime(dt) => {
-                // Format in EXIF style: YYYY:MM:DD HH:MM:SS
-                dt.format("%Y:%m:%d %H:%M:%S").to_string()
-            }
+            TagValue::Binary(bytes) => format!(
+                "(Binary data {} bytes, use -b option to extract)",
+                bytes.len()
+            ),
+            TagValue::DateTime(dt) => dt.format("%Y:%m:%d %H:%M:%S").to_string(),
             TagValue::Struct(_) => "[Structured data]".to_string(),
             TagValue::Array(arr) => {
-                // ColorMap and similar large numeric arrays are shown as binary data by ExifTool
-                // ColorMap is 256 entries × 3 colors × 2 bytes = 1536 bytes
-                if name == "ColorMap" {
-                    // Calculate the size: each value is 2 bytes (SHORT)
-                    let byte_size = arr.len() * 2;
-                    return format!(
-                        "(Binary data {} bytes, use -b option to extract)",
-                        byte_size
-                    );
-                }
-
-                // Format array elements
-                let parts: Vec<String> = arr
-                    .iter()
-                    .map(|v| self.format_value(key, name, v))
-                    .collect();
+                let parts: Vec<String> = arr.iter().map(Self::format_value).collect();
                 parts.join(" ")
             }
-        }
-    }
-
-    /// Decode enum values for known EXIF tags
-    fn decode_enum(&self, tag_name: &str, value: u32) -> Option<String> {
-        // Map tag names to TIFF tag IDs for enum lookup
-        let tag_id = match tag_name {
-            "ColorSpace" => 0xA001,
-            "MeteringMode" => 0x9207,
-            "ExposureMode" => 0xA402,
-            "WhiteBalance" => 0xA403,
-            "SceneCaptureType" => 0xA406,
-            "Contrast" => 0xA408,
-            "Saturation" => 0xA409,
-            "Sharpness" => 0xA40A,
-            "SubjectDistanceRange" => 0xA40C,
-            "SensingMethod" => 0xA217,
-            "CustomRendered" => 0xA401,
-            "FocalPlaneResolutionUnit" | "ResolutionUnit" => 0x0128,
-            "Orientation" => 0x0112,
-            "YCbCrPositioning" => 0x0213,
-            "Compression" => 0x0103,
-            "ExposureProgram" => 0x8822,
-            "LightSource" => 0x9208,
-            "Flash" => 0x9209,
-            "GainControl" => 0xA407,
-            "ExtraSamples" => 0x0152,
-            "FillOrder" => 0x010A,
-            "PlanarConfiguration" => 0x011C,
-            "Predictor" => 0x013D,
-            "SubfileType" => 0x00FE,
-            "SceneType" => 0xA301,
-            "SensitivityType" => 0x8830,
-            "CompositeImage" => 0xA460,
-            "MakerNoteSafety" => 0xC635,
-            "PhotometricInterpretation" => 0x0106,
-            _ => return None,
-        };
-
-        // Special handling for Flash tag (bitmask)
-        if tag_name == "Flash" {
-            return Some(oxidex::core::exif_enums::decode_flash(value));
-        }
-
-        // Use TIFF enum decoder
-        tiff_enum_to_string(tag_id, value as i64)
-    }
-
-    /// Add computed Composite tags
-    fn add_composite_tags(&self, tag_map: &mut HashMap<String, String>) {
-        // ImageSize
-        if let (Some(w), Some(h)) = (
-            tag_map
-                .get("EXIF:ImageWidth")
-                .or(tag_map.get("File:ImageWidth")),
-            tag_map
-                .get("EXIF:ImageHeight")
-                .or(tag_map.get("File:ImageHeight")),
-        ) {
-            tag_map.insert("Composite:ImageSize".to_string(), format!("{}x{}", w, h));
-        }
-
-        // Megapixels
-        if let (Some(w), Some(h)) = (
-            tag_map
-                .get("EXIF:ImageWidth")
-                .or(tag_map.get("File:ImageWidth")),
-            tag_map
-                .get("EXIF:ImageHeight")
-                .or(tag_map.get("File:ImageHeight")),
-        ) && let (Ok(width), Ok(height)) = (w.parse::<f64>(), h.parse::<f64>())
-        {
-            let mp = (width * height) / 1_000_000.0;
-            tag_map.insert("Composite:Megapixels".to_string(), format!("{:.3}", mp));
-        }
-
-        // Aperture - copy from FNumber
-        if let Some(f) = tag_map.get("EXIF:FNumber") {
-            tag_map.insert("Composite:Aperture".to_string(), f.clone());
-        }
-
-        // ShutterSpeed - copy from ExposureTime
-        if let Some(e) = tag_map.get("EXIF:ExposureTime") {
-            tag_map.insert("Composite:ShutterSpeed".to_string(), e.clone());
-        }
-
-        // ISO
-        if let Some(iso) = tag_map.get("EXIF:ISO") {
-            tag_map.insert("Composite:ISO".to_string(), iso.clone());
         }
     }
 
@@ -831,6 +445,14 @@ impl OxiDexExtractor {
                 // group, and folding these aliases into APP11 manufactured
                 // three oxidex-only tags on every AROT sample.
                 | "HDR"
+                // Mirrors ExifToolExtractor::should_skip_family: the ExifTool
+                // side never extracts family Composite, so an oxidex-side
+                // Composite tag can only ever land in extra_in_oxidex --
+                // 40 permanently-uncomparable keys on the JPEG corpus alone.
+                // Skipping both sides keeps the family unmeasured instead of
+                // half-measured. The library's composite derivations are NOT
+                // graded by this harness either way.
+                | "Composite"
         )
     }
 
@@ -1067,11 +689,10 @@ impl OxiDexExtractor {
                 continue;
             }
 
-            let (family, name) = if let Some(colon_pos) = normalized_key.find(':') {
-                let (fam, nam) = normalized_key.split_at(colon_pos);
-                (fam.to_string(), nam[1..].to_string())
+            let family = if let Some(colon_pos) = normalized_key.find(':') {
+                normalized_key[..colon_pos].to_string()
             } else {
-                ("UNKNOWN".to_string(), normalized_key.clone())
+                "UNKNOWN".to_string()
             };
 
             // Skip if normalized family should be skipped
@@ -1080,31 +701,8 @@ impl OxiDexExtractor {
             }
             let _family = family; // Keep for later use
 
-            // Special handling for Canon FileNumber (check original key since family is normalized)
-            if name == "FileNumber" && key.starts_with("Canon:") {
-                let formatted = match value {
-                    TagValue::Integer(val) => {
-                        let directory = (*val >> 16) & 0xFFFF;
-                        let file = *val & 0xFFFF;
-                        format!("{}-{}", directory, file)
-                    }
-                    TagValue::String(s) => {
-                        if let Ok(val) = s.parse::<i64>() {
-                            let directory = (val >> 16) & 0xFFFF;
-                            let file = val & 0xFFFF;
-                            format!("{}-{}", directory, file)
-                        } else {
-                            s.clone()
-                        }
-                    }
-                    _ => continue,
-                };
-                Self::record_write(&mut tag_map, &mut collisions, normalized_key, formatted);
-                continue;
-            }
-
             // Format the value
-            let value_str = self.format_value(&normalized_key, &name, value);
+            let value_str = Self::format_value(value);
             if Self::is_exiftool_family0_xmp_overlap(&normalized_key)
                 || Self::is_exiftool_family0_mp_image_peer(&normalized_key)
             {
@@ -1116,9 +714,6 @@ impl OxiDexExtractor {
                 Self::record_write(&mut tag_map, &mut collisions, normalized_key, value_str);
             }
         }
-
-        // Add composite tags
-        self.add_composite_tags(&mut tag_map);
 
         // Handle QuickTime track suffix normalization for ExifTool comparison
         // ExifTool outputs audio track tags without suffix, OxiDex uses _2 suffix
@@ -1352,27 +947,23 @@ mod tests {
         assert!(collisions.is_empty());
     }
 
-    /// ExifTool 13.59 preserves leading whitespace in IFD0:ImageDescription.
-    /// Its normal display path suppresses only trailing ASCII padding.
+    /// The flattener is tag-blind: whatever string the library produced is
+    /// the string the comparison sees. `exiftool -json` keeps trailing EXIF
+    /// padding too, and `normalize_value_for_comparison` trims both sides,
+    /// so padding must NOT be scrubbed here -- an extractor-side trim is
+    /// indistinguishable from library behavior in the results.
     #[test]
-    fn image_description_preserves_leading_whitespace() {
-        let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
+    fn format_value_passes_strings_through_verbatim() {
         assert_eq!(
-            extractor.format_value(
-                "IFD0:ImageDescription",
-                "ImageDescription",
-                &TagValue::String("  leading description  ".to_string()),
-            ),
-            "  leading description"
+            OxiDexExtractor::format_value(&TagValue::String(
+                "OLYMPUS DIGITAL CAMERA         ".to_string()
+            )),
+            "OLYMPUS DIGITAL CAMERA         "
         );
-    }
-
-    #[test]
-    fn png_date_text_preserves_iso8601_spelling() {
-        let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
-        let value = TagValue::String("2025-11-09T15:06:20+00:00".to_string());
         assert_eq!(
-            extractor.format_value("PNG:Datecreate", "Datecreate", &value),
+            OxiDexExtractor::format_value(&TagValue::String(
+                "2025-11-09T15:06:20+00:00".to_string()
+            )),
             "2025-11-09T15:06:20+00:00"
         );
     }
@@ -1443,6 +1034,10 @@ mod tests {
             TagValue::String("AROT".to_string()),
         );
 
+        // Production applies format_for_exiftool before flattening
+        // (extract_tags_from_file step 2); the HDRGainCurve binary-placeholder
+        // rendering lives there now, not in the tag-blind flattener.
+        let metadata = format_for_exiftool(&metadata);
         let (tags, collisions) = extractor.flatten_metadata(&metadata, Some("JPEG"));
         assert_eq!(tags.len(), 2);
         assert_eq!(tags[0].key(), "APP10:HDRGainCurve");
@@ -1459,10 +1054,20 @@ mod tests {
     }
 
     #[test]
-    fn test_canon_file_number_formatting() {
+    /// Canon:FileNumber arrives from the Canon parser already rendered as
+    /// `directory-file` (`format_canon_file_number`, Canon.pm:1260); the
+    /// extractor must not re-derive it. The old bit-shift re-derivation here
+    /// disagreed with ExifTool's decimal-digit split for any value it ever
+    /// touched, so it only worked by never firing on the String the parser
+    /// actually emits.
+    #[test]
+    fn test_canon_file_number_passes_through_parser_rendering() {
         let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
         let mut metadata = oxidex::core::MetadataMap::new();
-        metadata.insert("Canon:FileNumber".to_string(), TagValue::Integer(7669483));
+        metadata.insert(
+            "Canon:FileNumber".to_string(),
+            TagValue::String("117-1771".to_string()),
+        );
         let (tags, collisions) = extractor.flatten_metadata(&metadata, None);
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].value, "117-1771");
