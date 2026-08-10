@@ -99,7 +99,7 @@ fn generate_index(
         content.push_str(&format!(
             "::: info {} format(s) not measurable\n\
              Every tag ExifTool emitted for {} fell in a pseudo-family this \
-             harness skips (`File`, `System`, `Composite`, `ExifTool`), so \
+             harness skips (`File`, `System`, `ExifTool`), so \
              there was nothing to compare. These are excluded from **Overall \
              Coverage** and listed as `n/a` below rather than scored 0% — an \
              absent measurement is not a measured zero.\n\

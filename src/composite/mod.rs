@@ -320,12 +320,17 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             for &(index, dep) in comp.desire {
                 owned[index] = resolve(map, &values, dep);
             }
-            // Exif.pm ImageSize ValueConv uses ExifImageWidth/Height for CR2
-            // instead of the required IFD0 ImageWidth/Height pair. CanonRaw.cr2
-            // carries both as 3456x2304 and 384x256 respectively.
+            // Exif.pm ImageSize ValueConv (Exif.pm:4384-4390) prefers
+            // ExifImageWidth/Height over the required IFD0 ImageWidth/Height
+            // pair, but only for these four TIFF-based RAW types:
+            // `$$self{TIFF_TYPE} =~ /^(CR2|Canon 1D RAW|IIQ|EIP)$/`. CanonRaw.cr2
+            // carries both pairs as 3456x2304 and 384x256; PhaseOne.iiq's IFD0
+            // pair is a 1x1 placeholder next to a real 7320x5484 ExifIFD pair.
+            // "Canon 1D RAW" is a Model string, not a FileType, and is not
+            // reachable from `file_type` here.
             if comp.module == "Exif"
                 && comp.name == "ImageSize"
-                && file_type.as_deref() == Some("CR2")
+                && matches!(file_type.as_deref(), Some("CR2" | "IIQ" | "EIP"))
                 && owned.get(2).and_then(Option::as_ref).is_some()
                 && owned.get(3).and_then(Option::as_ref).is_some()
             {
@@ -408,6 +413,30 @@ mod tests {
         apply(&mut m);
 
         assert_eq!(m.get_string("Composite:ImageSize"), Some("3456x2304"));
+    }
+
+    #[test]
+    fn iiq_and_eip_image_size_also_prefer_exif_dimensions() {
+        // Exif.pm:4384-4390's ValueConv checks
+        // `$$self{TIFF_TYPE} =~ /^(CR2|Canon 1D RAW|IIQ|EIP)$/`, not just CR2.
+        // PhaseOne.iiq's IFD0 pair is a 1x1 placeholder next to the real
+        // 7320x5484 ExifIFD pair -- exactly the shape CR2's placeholder-IFD0
+        // case already covered, just under a different FileType.
+        for file_type in ["IIQ", "EIP"] {
+            let mut m = map_of(&[
+                ("File:FileType", file_type),
+                ("IFD0:ImageWidth", "1"),
+                ("IFD0:ImageHeight", "1"),
+                ("ExifIFD:ExifImageWidth", "7320"),
+                ("ExifIFD:ExifImageHeight", "5484"),
+            ]);
+            apply(&mut m);
+            assert_eq!(
+                m.get_string("Composite:ImageSize"),
+                Some("7320x5484"),
+                "{file_type} should prefer the ExifIFD pair"
+            );
+        }
     }
 
     #[test]
