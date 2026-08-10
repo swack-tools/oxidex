@@ -182,6 +182,9 @@ pub enum FileFormat {
     /// TAR archive format (.tar)
     TAR,
 
+    /// `ar` archive, the Unix static library container (.a)
+    AR,
+
     /// GZIP compressed file (.gz)
     GZ,
 
@@ -405,6 +408,7 @@ impl FileFormat {
             FileFormat::SevenZ => "7z",
             FileFormat::ISO => "ISO",
             FileFormat::TAR => "TAR",
+            FileFormat::AR => "AR",
             FileFormat::GZ => "GZIP",
             FileFormat::TTF => "TTF",
             FileFormat::OTF => "OTF",
@@ -521,6 +525,7 @@ impl FileFormat {
             FileFormat::SevenZ => &["7z"],
             FileFormat::ISO => &["iso"],
             FileFormat::TAR => &["tar"],
+            FileFormat::AR => &["a"],
             FileFormat::GZ => &["gz"],
             FileFormat::TTF => &["ttf"],
             FileFormat::OTF => &["otf"],

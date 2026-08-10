@@ -1,5 +1,6 @@
 //! Archive format parsers
 
+pub mod ar;
 pub mod gz;
 pub mod iso;
 pub mod ole;
@@ -9,6 +10,7 @@ pub mod sevenz;
 pub mod tar;
 pub mod zip;
 
+pub use ar::ARParser;
 pub use gz::GZParser;
 pub use iso::ISOParser;
 pub use ole::OLEParser;

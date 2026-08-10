@@ -58,6 +58,9 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
         FileFormat::CameraRaw(raw::RawFormat::MinoltaMRW)
     ),
     // Image formats
+    // `!<arch>\x0a` is EXE.pm's static-library branch; the reported FileType
+    // depends on whether a member is Mach-O, which `ARParser` decides.
+    signature!(b"!<arch>\n", 0, FileFormat::AR),
     signature!(b"\x89PNG", 0, FileFormat::PNG),
     signature!(b"GIF87a", 0, FileFormat::GIF),
     signature!(b"GIF89a", 0, FileFormat::GIF),
