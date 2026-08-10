@@ -182,7 +182,7 @@ fn parse_mac_audio_header(
         let samples = u64::from(total_frames - 1) * u64::from(blocks_per_frame)
             + u64::from(final_frame_blocks);
         metadata.insert(
-            "APE:Duration".to_string(),
+            "Composite:Duration".to_string(),
             TagValue::new_string(convert_duration(samples as f64 / f64::from(sample_rate))),
         );
     }
@@ -429,6 +429,7 @@ mod tests {
             metadata.get("APE:SampleRate").unwrap().as_integer(),
             Some(44100)
         );
+        assert_eq!(text(&metadata, "Composite:Duration"), "2.64 s");
     }
 
     #[test]
