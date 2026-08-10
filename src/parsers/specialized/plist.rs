@@ -419,6 +419,28 @@ impl FormatParser for PlistParser {
             TagValue::String(format.to_string()),
         );
 
+        // The two encodings of a plist have different MIME types, and only the
+        // XML one is in `%mimeType` -- `PLIST => 'application/xml'`, whose own
+        // comment says so (ExifTool.pm:772):
+        //
+        //     PLIST=> 'application/xml', # (binary PLIST format is
+        //             'application/x-plist', recognized at run time)
+        //
+        // "at run time" is `ProcessPLIST`, which is reached only for the binary
+        // encoding and passes the MIME type itself (PLIST.pm:483):
+        //
+        //     $et->SetFileType('PLIST', 'application/x-plist');
+        //
+        // Only the MIME type is set here. The file type is left to the
+        // identification layer, which already reports `PLIST` -- and reports
+        // `AAE` for the Apple edit sidecars that are also plists.
+        if format == "Binary" {
+            metadata.insert(
+                "File:MIMEType".to_string(),
+                TagValue::String("application/x-plist".to_string()),
+            );
+        }
+
         // Add format version
         let version = Self::extract_format_version(reader)?;
         metadata.insert("Plist:FormatVersion".to_string(), TagValue::String(version));
