@@ -374,16 +374,6 @@ impl OxiDexExtractor {
                     }
                 }
 
-                // Olympus D450Z stores an all-zero UserComment prefix followed
-                // only by ASCII padding. ExifTool renders that as an empty
-                // comment rather than exposing the raw NULs and spaces.
-                if name == "UserComment"
-                    && s.bytes()
-                        .all(|byte| byte == 0 || byte.is_ascii_whitespace())
-                {
-                    return String::new();
-                }
-
                 // ImageDescription has no Exif.pm RawConv: normal ExifTool
                 // display retains meaningful leading whitespace while
                 // suppressing trailing ASCII padding.
@@ -659,38 +649,12 @@ impl OxiDexExtractor {
                     }
                 }
 
-                // UserComment - starts with 8-byte encoding identifier followed by data
-                // Encoding prefixes: "ASCII\0\0\0", "UNICODE\0", "JIS\0\0\0\0\0", etc.
-                if name == "UserComment" && bytes.len() > 8 {
-                    let encoding = &bytes[0..8];
-                    let data = &bytes[8..];
-
-                    // Check for ASCII encoding
-                    if encoding.starts_with(b"ASCII\0\0\0") {
-                        return String::from_utf8_lossy(data)
-                            .trim_end_matches('\0')
-                            .trim()
-                            .to_string();
-                    }
-
-                    // Check for Unicode encoding (UTF-16)
-                    if encoding.starts_with(b"UNICODE\0") {
-                        // Decode as UTF-16 little-endian
-                        let u16_data: Vec<u16> = data
-                            .chunks_exact(2)
-                            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                            .collect();
-                        return String::from_utf16_lossy(&u16_data)
-                            .trim_end_matches('\0')
-                            .trim()
-                            .to_string();
-                    }
-
-                    // Empty or null-padded data - return empty string
-                    if data.iter().all(|&b| b == 0) {
-                        return String::new();
-                    }
-                }
+                // UserComment never reaches this arm decoded-by-hand:
+                // `format_for_exiftool` (extract_tags_from_file step 2) already
+                // ran `decode_user_comment` on every >=8-byte Binary carrying
+                // that name (exiftool_compat Rule 13). Re-decoding here would
+                // let the instrument paper over library rendering defects, so
+                // whatever is still Binary falls through to the placeholder.
 
                 // Default fallback for unrecognized binary data
                 // Format to match ExifTool: "(Binary data N bytes, use -b option to extract)"
