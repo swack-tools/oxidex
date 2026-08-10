@@ -685,10 +685,11 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
         && let TagValue::Binary(data) = value
         && let Some(decoded) = decode_user_comment(data)
     {
-        // Only return if we got meaningful text (not empty or just nulls)
-        if !decoded.is_empty() {
-            return TagValue::String(decoded);
-        }
+        // ConvertExifText returns the trimmed string unconditionally -- empty
+        // included. OlympusD450Z.jpg stores an all-NUL identifier plus 117
+        // spaces of padding; ExifTool prints an empty UserComment, so an empty
+        // decode must not fall through to the binary placeholder.
+        return TagValue::String(decoded);
     }
 
     // ---------------------------------------------------------------------
@@ -2977,13 +2978,26 @@ mod tests {
     }
 
     #[test]
-    fn test_user_comment_empty_stays_binary() {
-        // Empty UserComment should not produce a string result
+    fn test_user_comment_empty_renders_empty() {
+        // ConvertExifText returns the trimmed string even when it is empty, so
+        // a prefix-only UserComment prints as "" -- never as the
+        // "(Binary data N bytes...)" placeholder.
         let data = b"ASCII\0\0\0".to_vec();
         let value = TagValue::Binary(data);
         let formatted = format_tag_value("EXIF:UserComment", &value);
-        // Empty decoded content falls through to default (binary returned as-is)
-        assert!(matches!(formatted, TagValue::Binary(_)));
+        assert_eq!(formatted.as_string(), Some(""));
+    }
+
+    #[test]
+    fn test_user_comment_nul_id_space_padding_renders_empty() {
+        // OlympusD450Z.jpg: 8 NUL identifier bytes + 117 spaces. The all-NUL
+        // identifier selects ConvertExifText's ASCII branch and the trailing
+        // blanks trim to nothing; ExifTool 13.59 prints an empty string.
+        let mut data = vec![0u8; 8];
+        data.extend(std::iter::repeat_n(b' ', 117));
+        let value = TagValue::Binary(data);
+        let formatted = format_tag_value("EXIF:UserComment", &value);
+        assert_eq!(formatted.as_string(), Some(""));
     }
 
     #[test]
