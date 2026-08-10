@@ -12,13 +12,19 @@ use crate::error::{ExifToolError, Result};
 pub struct ICSParser;
 
 impl ICSParser {
-    /// Verifies the ICS file by checking for "BEGIN:VCALENDAR" and "VERSION:" markers
+    /// Verifies the ICS file by checking for a `BEGIN:VCALENDAR` opening line
+    /// and a later `VERSION:` line
+    ///
+    /// Shares the detector's `looks_like_ics`. The `contains` pair this
+    /// replaced contradicted its own comment ("must start with"): it matched
+    /// `BEGIN:VCALENDAR` anywhere in the probe, not only as the first line,
+    /// and `VERSION:` anywhere rather than at the start of a line. The
+    /// shared predicate requires the first line, after a BOM and leading
+    /// whitespace are stripped, to equal `BEGIN:VCALENDAR` exactly.
     pub fn verify_signature(data: &[u8]) -> bool {
-        if let Ok(text) = std::str::from_utf8(data) {
-            // ICS files must start with BEGIN:VCALENDAR and contain VERSION
-            text.contains("BEGIN:VCALENDAR") && text.contains("VERSION:")
-        } else {
-            false
+        match std::str::from_utf8(data) {
+            Ok(text) => crate::parsers::detection::text::looks_like_ics(text),
+            Err(_) => false,
         }
     }
 
@@ -545,5 +551,22 @@ mod tests {
                 "This is a long calendar name that would foldacross multiple content lines per RFC 5545 section 3.1because it exceeds the seventy-five octet limit."
             )
         );
+    }
+
+    /// The old gate was `contains("BEGIN:VCALENDAR") && contains("VERSION:")`
+    /// -- unanchored, despite its own comment claiming the file "must start
+    /// with" the marker. A document that only mentions both tokens, not as
+    /// its opening line, satisfied it.
+    #[test]
+    fn mentioning_the_markers_without_opening_with_them_is_not_ics() {
+        let text = b"See BEGIN:VCALENDAR in the spec appendix. VERSION:2.0 is the \
+                      current iCalendar revision as of this writing.";
+        assert!(!ICSParser::verify_signature(text));
+    }
+
+    #[test]
+    fn a_real_calendar_is_still_ics() {
+        let text = b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n";
+        assert!(ICSParser::verify_signature(text));
     }
 }

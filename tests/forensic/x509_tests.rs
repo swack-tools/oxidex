@@ -11,6 +11,35 @@ use common::TestReader;
 use oxidex::core::TagValue;
 use oxidex::parsers::specialized::x509::{X509Parser, parse_x509_metadata};
 
+/// A real self-signed certificate (`openssl req -x509 -newkey rsa:512
+/// -outform DER -days 1 -nodes -subj "/CN=test"`), hex-embedded rather than
+/// checked in as a binary file.
+///
+/// Several tests below used to build a "minimal" or "more complete" DER
+/// structure by hand and then zero-pad it out to a claimed length --
+/// `SEQUENCE > TBSCertificate SEQUENCE > Version/Serial`, at most. Now that
+/// `X509Parser::verify_signature` shares the detector's `looks_like_der_x509`
+/// (see `src/parsers/specialized/x509.rs`), that gate additionally requires
+/// two AlgorithmIdentifiers with real OIDs, a Validity with two time values,
+/// and a certificate-shaped SubjectPublicKeyInfo -- fields the padding was
+/// standing in for. A real certificate carries all of them.
+fn real_der_certificate() -> Vec<u8> {
+    const HEX: &str = concat!(
+        "308201753082011fa00302010202144c8bb315eb3438de66656d2ee05e3e2af99adf74300d06092a864886f70d01010b",
+        "0500300f310d300b06035504030c0474657374301e170d3236303831303137343534325a170d32363038313131373435",
+        "34325a300f310d300b06035504030c0474657374305c300d06092a864886f70d0101010500034b003048024100aa74bf",
+        "c7e15a1ed8844538f03b49ead0c1eccc1b12e08b8ed0a293595e87957b6d5ede1f57c120f05ba1f6aac38f3647e3fe29",
+        "7f3a18de34f1e6a8eb509c87a70203010001a3533051301d0603551d0e041604148d70ffcbcc3c76c07df7271cb06a06",
+        "8429dee9d0301f0603551d230418301680148d70ffcbcc3c76c07df7271cb06a068429dee9d0300f0603551d130101ff",
+        "040530030101ff300d06092a864886f70d01010b050003410084e1f389c119ac3547b8a87b537e7d11beaf156ad6e09e",
+        "bcb58005276cc18ba795dbaf4b330442296409ef6b5ad349c8cbd09430a4e243d814f7b9befa2e7c36",
+    );
+    (0..HEX.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&HEX[i..i + 2], 16).expect("fixture is valid hex"))
+        .collect()
+}
+
 /// Test 1: PEM format detection
 ///
 /// Verifies that certificates with "-----BEGIN CERTIFICATE-----" header
@@ -38,11 +67,7 @@ fn test_x509_pem_detection() {
 /// proper length encoding are identified as DER format.
 #[test]
 fn test_x509_der_detection() {
-    // Construct minimal DER certificate header
-    // SEQUENCE tag (0x30) + long form length encoding (0x82 = 2 length bytes)
-    let mut der = vec![0x30, 0x82, 0x01, 0x00]; // SEQUENCE, long form (256 bytes)
-    der.extend_from_slice(&[0x30, 0x03, 0x02, 0x01, 0x00, 0x00]);
-    let reader = TestReader::new(der);
+    let reader = TestReader::new(real_der_certificate());
 
     // Verify signature detection works for DER
     let result = X509Parser::verify_signature(&reader);
@@ -85,19 +110,7 @@ fn test_x509_invalid_data() {
 /// and validation in forensic analysis.
 #[test]
 fn test_x509_fingerprints() {
-    // Create a minimal valid-ish DER certificate structure
-    // that can pass basic validation
-    let mut der = Vec::new();
-    der.push(0x30); // SEQUENCE
-    der.push(0x10); // Length 16 bytes
-    der.push(0x30); // TBS SEQUENCE
-    der.push(0x0E); // Length 14 bytes
-    // Minimal certificate content
-    der.extend_from_slice(&[0x02, 0x01, 0x01]); // INTEGER 1 (version)
-    der.extend_from_slice(&[0x02, 0x04, 0x12, 0x34, 0x56, 0x78]); // Serial number
-    der.extend_from_slice(&[0x30, 0x03, 0x06, 0x01, 0x00]); // AlgorithmID
-
-    let reader = TestReader::new(der);
+    let reader = TestReader::new(real_der_certificate());
     let result = parse_x509_metadata(&reader);
 
     assert!(result.is_ok(), "parse_x509_metadata should succeed");
@@ -161,54 +174,34 @@ fn test_x509_pem_parsing() {
 /// are properly parsed, including extraction of basic metadata fields.
 #[test]
 fn test_x509_der_complete_structure() {
-    // Create a more complete DER structure
-    let mut der = Vec::new();
-
-    // Outer SEQUENCE (Certificate)
-    der.push(0x30); // SEQUENCE tag
-    der.push(0x82); // Long form length (2 bytes follow)
-    der.push(0x01); // 256+ bytes
-    der.push(0x00);
-
-    // TBSCertificate SEQUENCE
-    der.push(0x30); // SEQUENCE tag
-    der.push(0x81); // Long form length (1 byte follows)
-    der.push(0xF0); // 240 bytes
-
-    // Version [0] EXPLICIT (v3)
-    der.push(0xA0); // Context-specific constructed
-    der.push(0x03); // Length 3
-    der.push(0x02); // INTEGER tag
-    der.push(0x01); // Length 1
-    der.push(0x02); // Value 2 (v3)
-
-    // Serial number INTEGER
-    der.push(0x02); // INTEGER tag
-    der.push(0x08); // Length 8
-    der.extend_from_slice(&[0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF]);
-
-    // Signature algorithm SEQUENCE
-    der.push(0x30); // SEQUENCE tag
-    der.push(0x0D); // Length 13
-    der.push(0x06); // OID tag
-    der.push(0x09); // Length 9
-    // OID: 1.2.840.113549.1.1.11 (SHA256withRSA)
-    der.extend_from_slice(&[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B]);
-    der.push(0x05); // NULL tag
-    der.push(0x00); // NULL length
-
-    // Pad to the expected length
-    while der.len() < 260 {
-        der.push(0x00);
-    }
-
-    let reader = TestReader::new(der);
+    let reader = TestReader::new(real_der_certificate());
 
     // Verify the certificate is recognized
     let is_valid = X509Parser::verify_signature(&reader);
     assert!(
         is_valid.is_ok() && is_valid.unwrap(),
         "Complete DER structure should be recognized as valid certificate"
+    );
+}
+
+/// Test 6b: A SEQUENCE tag with a length claim but no certificate structure
+/// behind it is rejected
+///
+/// `ASN1_SEQUENCE` (`0x30`) is also ASCII `'0'`, and the gate this replaced
+/// accepted any second byte under 0x80 with its length result discarded --
+/// so a bare tag claiming 256 bytes, like this one, used to pass. It is
+/// exactly the shape of a DXF file, which opens with the group code `0`.
+#[test]
+fn test_x509_bare_sequence_tag_is_rejected() {
+    let mut der = vec![0x30, 0x82, 0x01, 0x00]; // SEQUENCE, claims 256 bytes
+    der.extend_from_slice(&[0x30, 0x03, 0x02, 0x01, 0x00, 0x00]);
+    let reader = TestReader::new(der);
+
+    let result = X509Parser::verify_signature(&reader);
+    assert!(result.is_ok());
+    assert!(
+        !result.unwrap(),
+        "a SEQUENCE tag with no real certificate structure should be rejected"
     );
 }
 
@@ -235,14 +228,7 @@ fn test_x509_too_small_data() {
 /// certificate data. This is important for certificate tracking.
 #[test]
 fn test_x509_fingerprint_consistency() {
-    let mut der = Vec::new();
-    der.push(0x30); // SEQUENCE
-    der.push(0x10); // Length 16 bytes
-    der.push(0x30); // TBS SEQUENCE
-    der.push(0x0E); // Length 14 bytes
-    der.extend_from_slice(&[0x02, 0x01, 0x01]); // INTEGER 1
-    der.extend_from_slice(&[0x02, 0x04, 0x12, 0x34, 0x56, 0x78]); // Serial
-    der.extend_from_slice(&[0x30, 0x03, 0x06, 0x01, 0x00]); // AlgID
+    let der = real_der_certificate();
 
     // Parse the certificate twice
     let reader1 = TestReader::new(der.clone());
@@ -310,16 +296,7 @@ fn test_x509_der_invalid_length() {
 /// indicating the format as X.509.
 #[test]
 fn test_x509_filetype_metadata() {
-    let mut der = Vec::new();
-    der.push(0x30); // SEQUENCE
-    der.push(0x10); // Length 16
-    der.push(0x30); // TBS SEQUENCE
-    der.push(0x0E); // Length 14
-    der.extend_from_slice(&[0x02, 0x01, 0x01]);
-    der.extend_from_slice(&[0x02, 0x04, 0x12, 0x34, 0x56, 0x78]);
-    der.extend_from_slice(&[0x30, 0x03, 0x06, 0x01, 0x00]);
-
-    let reader = TestReader::new(der);
+    let reader = TestReader::new(real_der_certificate());
     let result = parse_x509_metadata(&reader);
 
     assert!(result.is_ok());
@@ -339,9 +316,7 @@ fn test_x509_filetype_metadata() {
 /// with the same reader.
 #[test]
 fn test_x509_multiple_verifications() {
-    let mut der = vec![0x30, 0x82, 0x01, 0x00];
-    der.extend_from_slice(&[0x30, 0x03, 0x02, 0x01, 0x00, 0x00]);
-    let reader = TestReader::new(der);
+    let reader = TestReader::new(real_der_certificate());
 
     // Multiple verification calls should all succeed
     for _ in 0..3 {
@@ -375,16 +350,7 @@ fn test_x509_pem_standard_markers() {
 /// Verifies that FileSize metadata is properly extracted and present.
 #[test]
 fn test_x509_filesize_metadata() {
-    let mut der = Vec::new();
-    der.push(0x30); // SEQUENCE
-    der.push(0x10); // Length 16
-    der.push(0x30); // TBS SEQUENCE
-    der.push(0x0E); // Length 14
-    der.extend_from_slice(&[0x02, 0x01, 0x01]);
-    der.extend_from_slice(&[0x02, 0x04, 0x12, 0x34, 0x56, 0x78]);
-    der.extend_from_slice(&[0x30, 0x03, 0x06, 0x01, 0x00]);
-
-    let reader = TestReader::new(der);
+    let reader = TestReader::new(real_der_certificate());
     let result = parse_x509_metadata(&reader);
 
     assert!(result.is_ok());
@@ -405,16 +371,7 @@ fn test_x509_filesize_metadata() {
 /// formatted as part of metadata.
 #[test]
 fn test_x509_version_extraction() {
-    let mut der = Vec::new();
-    der.push(0x30); // SEQUENCE
-    der.push(0x10); // Length 16
-    der.push(0x30); // TBS SEQUENCE
-    der.push(0x0E); // Length 14
-    der.extend_from_slice(&[0x02, 0x01, 0x01]);
-    der.extend_from_slice(&[0x02, 0x04, 0x12, 0x34, 0x56, 0x78]);
-    der.extend_from_slice(&[0x30, 0x03, 0x06, 0x01, 0x00]);
-
-    let reader = TestReader::new(der);
+    let reader = TestReader::new(real_der_certificate());
     let result = parse_x509_metadata(&reader);
 
     assert!(result.is_ok());

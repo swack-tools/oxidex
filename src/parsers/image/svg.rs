@@ -18,15 +18,21 @@ const MAX_READ_SIZE: usize = 65536; // 64KB
 pub struct SVGParser;
 
 impl SVGParser {
-    /// Verifies the SVG file by checking for the presence of "<svg" tag in the header
+    /// Verifies the SVG file by checking for an `<svg` root element
+    ///
+    /// Shares the detector's `looks_like_svg_root` rather than the bare
+    /// `contains("<svg")` this replaced, which matched the four characters
+    /// anywhere in the probe -- including inside an HTML document that
+    /// embeds an `<svg>` element, or an email body that mentions one. The
+    /// shared predicate strips a BOM and skips a leading `<?xml…?>`,
+    /// `<!--…-->` or `<!DOCTYPE…>` to require `<svg` as the actual root.
     pub fn verify_signature(reader: &dyn FileReader) -> Result<bool> {
-        let read_size = (reader.size() as usize).min(1000);
+        let read_size = (reader.size() as usize).min(MAX_READ_SIZE);
         if read_size < 4 {
             return Ok(false);
         }
         let header = reader.read(0, read_size)?;
-        let text = std::str::from_utf8(header).unwrap_or("");
-        Ok(text.contains("<svg"))
+        Ok(crate::parsers::detection::looks_like_svg_root(header))
     }
 
     /// Extracts an attribute value from an XML tag
@@ -919,5 +925,22 @@ mod tests {
             metadata.get("ImageHeight").unwrap().as_string(),
             Some("200")
         );
+    }
+
+    /// The old gate was a bare `contains("<svg")`, so an HTML document that
+    /// merely embeds an `<svg>` element passed as SVG. The shared
+    /// `looks_like_svg_root` requires `<svg` to be the actual root.
+    #[test]
+    fn html_embedding_an_svg_element_is_not_svg() {
+        let html = b"<!DOCTYPE html>\n<html><body><p>chart:</p><svg width='1' height='1'></svg></body></html>";
+        let reader = BufferedReader::from_bytes(html);
+        assert!(!SVGParser::verify_signature(&reader).unwrap());
+    }
+
+    #[test]
+    fn a_real_svg_root_is_still_svg() {
+        let svg = b"<?xml version=\"1.0\"?>\n<svg width=\"1\" height=\"1\"></svg>";
+        let reader = BufferedReader::from_bytes(svg);
+        assert!(SVGParser::verify_signature(&reader).unwrap());
     }
 }

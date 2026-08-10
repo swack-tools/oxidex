@@ -10,7 +10,6 @@ mod tables;
 
 use tables::FITS_TAG_NAMES;
 
-const FITS_SIGNATURE: &[u8] = b"SIMPLE";
 const FITS_RECORD_SIZE: usize = 80;
 const FITS_BLOCK_SIZE: usize = 2880;
 
@@ -20,13 +19,22 @@ const FITS_BLOCK_SIZE: usize = 2880;
 pub struct FITSParser;
 
 impl FITSParser {
-    /// Verifies the FITS file signature ("SIMPLE")
+    /// Verifies the FITS file signature against ExifTool's magic number
+    ///
+    /// Asks the magic table rather than restating the pattern: the six-byte
+    /// literal `b"SIMPLE"` this replaced matched any text opening those six
+    /// letters, e.g. "SIMPLE ANSWER:". ExifTool's actual magic is the full
+    /// 30-byte keyword record `^SIMPLE  = {20}T`, which `matches_magic`
+    /// tests and which `detect_format` now asks the same way.
     pub fn verify_signature(reader: &dyn FileReader) -> Result<bool> {
         if reader.size() < 6 {
             return Ok(false);
         }
-        let header = reader.read(0, 6)?;
-        Ok(header == FITS_SIGNATURE)
+        let probe_len = reader.size().min(1024) as usize;
+        Ok(crate::filetype::matches_magic(
+            "FITS",
+            reader.read(0, probe_len)?,
+        ))
     }
 
     /// Parses a FITS header record (80-character fixed-width)
@@ -1070,5 +1078,38 @@ mod tests {
         assert_eq!(metadata.get_string("Timversn"), Some("XFF/95-004"));
         assert_eq!(metadata.get_string("Datasum"), Some("         0"));
         assert!(!metadata.keys().any(|name| name.ends_with("Comment")));
+    }
+
+    /// The gate used to be a bare six-byte `b"SIMPLE"` comparison, which
+    /// accepted any text opening those six letters. ExifTool's magic is the
+    /// full 30-byte keyword record `SIMPLE  = {20}T`.
+    #[test]
+    fn rejects_prose_that_merely_opens_with_simple() {
+        let reader = TestReader::new(b"SIMPLE ANSWER: 42. Not a FITS file.".to_vec());
+        assert!(!FITSParser::verify_signature(&reader).unwrap());
+    }
+
+    #[test]
+    fn accepts_a_real_simple_keyword_record() {
+        let reader = TestReader::new(fits(&["SIMPLE  =                    T", "END"]));
+        assert!(FITSParser::verify_signature(&reader).unwrap());
+    }
+
+    /// The detector's dedicated FITS check and this gate now both ask the
+    /// magic table, so they cannot answer a given header two different ways.
+    #[test]
+    fn signature_check_agrees_with_the_magic_table() {
+        for header in [
+            fits(&["SIMPLE  =                    T", "END"]),
+            b"SIMPLE ANSWER: 42. Not a FITS file.".to_vec(),
+            b"SIMPLEX is a linear-programming method.".to_vec(),
+        ] {
+            let reader = TestReader::new(header.clone());
+            assert_eq!(
+                FITSParser::verify_signature(&reader).unwrap(),
+                crate::filetype::matches_magic("FITS", &header),
+                "gate and magic table disagree about {header:?}"
+            );
+        }
     }
 }

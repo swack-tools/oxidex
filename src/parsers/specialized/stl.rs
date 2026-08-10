@@ -54,12 +54,47 @@ pub struct STLParser;
 
 impl STLParser {
     /// Verifies the STL file signature (supports both ASCII and binary formats)
+    ///
+    /// The binary half of this used to be `reader.size() >= 84`, a pure
+    /// length test with no content bearing at all: every file of 84+ bytes
+    /// passed as binary STL, and `parse_binary` then read arbitrary bytes as
+    /// a solid name, a triangle count up to 4.29 billion, and `f32` vertex
+    /// coordinates (NaN/Inf included) for whatever the file actually was.
+    /// The real invariant was already being computed one function away, into
+    /// a `FileSizeValid` *tag* rather than used as a gate -- promoted here.
+    ///
+    /// The ASCII half now shares the detector's `looks_like_stl`, which is
+    /// the anchored, facet-corroborated version of the same
+    /// `starts_with(b"solid")` check this parser had by itself before -- see
+    /// that function's docs for why an unadorned "solid ..." is not enough.
     pub fn verify_signature(reader: &dyn FileReader) -> Result<bool> {
         if reader.size() < 6 {
             return Ok(false);
         }
-        let header = reader.read(0, 6)?;
-        Ok(&header[0..5] == b"solid" || reader.size() >= 84)
+        let text_probe_len = reader.size().min(64 * 1024) as usize;
+        let text_probe = reader.read(0, text_probe_len)?;
+        if crate::parsers::detection::text::looks_like_stl(&String::from_utf8_lossy(text_probe)) {
+            return Ok(true);
+        }
+        Self::looks_like_binary(reader)
+    }
+
+    /// Whether the file's length matches the triangle count its own binary
+    /// STL header declares: `84 + 50 * count`. STL has no ExifTool magic
+    /// number to defer to (ExifTool does not support the format at all), so
+    /// this is the strongest content check available -- it is what
+    /// `parse_binary` already computed as `FileSizeValid`.
+    fn looks_like_binary(reader: &dyn FileReader) -> Result<bool> {
+        if reader.size() < 84 {
+            return Ok(false);
+        }
+        let count_bytes = reader.read(80, 4)?;
+        let count_reader = EndianReader::little_endian(count_bytes);
+        let Some(triangle_count) = count_reader.u32_at(0) else {
+            return Ok(false);
+        };
+        let expected_size = 84 + (u64::from(triangle_count) * 50);
+        Ok(reader.size() == expected_size)
     }
 
     fn detect_format(reader: &dyn FileReader) -> Result<bool> {
@@ -262,4 +297,71 @@ impl FormatParser for STLParser {
 pub fn parse_stl_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
     let parser = STLParser;
     parser.parse(reader).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TestReader;
+
+    fn binary_stl(triangle_count: u32) -> Vec<u8> {
+        let mut data = vec![0u8; 80];
+        data.extend_from_slice(&triangle_count.to_le_bytes());
+        data.extend(std::iter::repeat_n(0u8, triangle_count as usize * 50));
+        data
+    }
+
+    /// The old gate was `reader.size() >= 84`, a pure length test: every file
+    /// of 84+ bytes -- including an arbitrary binary blob with no relation to
+    /// STL at all -- passed as binary STL and had its bytes reinterpreted as
+    /// a triangle count and vertex floats.
+    #[test]
+    fn arbitrary_bytes_past_84_are_not_stl() {
+        let mut data = vec![0xABu8; 200];
+        // Whatever u32 happens to sit at offset 80..84 in this junk, it will
+        // essentially never satisfy `84 + 50*count == size`.
+        data[80..84].copy_from_slice(&0x41414141u32.to_le_bytes());
+        let reader = TestReader::new(data);
+        assert!(!STLParser::verify_signature(&reader).unwrap());
+    }
+
+    #[test]
+    fn a_binary_stl_whose_size_matches_its_triangle_count_is_stl() {
+        let reader = TestReader::new(binary_stl(3));
+        assert!(STLParser::verify_signature(&reader).unwrap());
+    }
+
+    #[test]
+    fn a_truncated_binary_stl_is_rejected() {
+        let mut data = binary_stl(3);
+        data.truncate(data.len() - 10); // one triangle short
+        let reader = TestReader::new(data);
+        assert!(!STLParser::verify_signature(&reader).unwrap());
+    }
+
+    /// The ASCII half now shares the detector's `looks_like_stl`, so prose
+    /// merely opening "solid " -- previously accepted by `header[0..5] ==
+    /// b"solid"` -- needs the same facet/endsolid corroboration to pass.
+    #[test]
+    fn prose_opening_solid_without_a_facet_is_not_ascii_stl() {
+        let reader = TestReader::new(
+            b"solid state drives were bought in bulk this year for the new fleet.\n".to_vec(),
+        );
+        assert!(!STLParser::verify_signature(&reader).unwrap());
+    }
+
+    #[test]
+    fn a_real_ascii_stl_is_still_stl() {
+        let data = concat!(
+            "solid cube\n",
+            "  facet normal 0.0 0.0 1.0\n",
+            "    outer loop\n",
+            "      vertex 0.0 0.0 0.0\n",
+            "    endloop\n",
+            "  endfacet\n",
+            "endsolid cube\n",
+        );
+        let reader = TestReader::new(data.as_bytes().to_vec());
+        assert!(STLParser::verify_signature(&reader).unwrap());
+    }
 }

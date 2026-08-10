@@ -122,7 +122,11 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     // Binary formats
     signature!(b"\x7FELF", 0, FileFormat::ELF),
     signature!(b"\x89HDF\x0D\x0A\x1A\x0A", 0, FileFormat::HDF5),
-    signature!(b"SIMPLE", 0, FileFormat::FITS),
+    // FITS is not a simple byte match: ExifTool's magic is
+    // `^SIMPLE  = {20}T` (the full 30-byte keyword record), not the bare
+    // word "SIMPLE". A `signature!` entry can only test a literal, so this
+    // one is checked separately in `detect_format` via `matches_magic`,
+    // ahead of this table -- see the comment there.
     signature!(b"DICM", 128, FileFormat::DICOM),
     signature!(b".FIT", 8, FileFormat::FIT),
     signature!(b"BEGIN:VCARD", 0, FileFormat::VCF),

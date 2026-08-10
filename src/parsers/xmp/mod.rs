@@ -54,6 +54,19 @@ pub use rdf_parser::parse_xmp;
 pub fn parse_xmp_file(reader: &dyn FileReader) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
 
+    // A sidecar is XMP whatever it is called. `%fileTypeLookup` answers for
+    // the `.xmp` extension, but an RDF-rooted sidecar named `.xml` reaches
+    // this parser by content, and the identification layer has already called
+    // it TXT or XML by then -- `filetype::identify_text` deliberately declines
+    // to claim XMP, leaving the naming to this parser.
+    //
+    // The values are the ones `SetFileType` produces for the RDF branch, where
+    // both its arguments are undefined: the file type falls back to XMP.pm's
+    // own, and the MIME type to `$mimeType{XMP}` (XMP.pm:4430).
+    metadata.insert("File:FileType", TagValue::new_string("XMP"));
+    metadata.insert("File:FileTypeExtension", TagValue::new_string("xmp"));
+    metadata.insert("File:MIMEType", TagValue::new_string("application/rdf+xml"));
+
     // Read the entire XMP file
     let size = reader.size() as usize;
     let xmp_data = reader.read(0, size)?;
