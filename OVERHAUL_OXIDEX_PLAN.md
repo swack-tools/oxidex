@@ -6,15 +6,16 @@
 
 1. **Read `AGENTS.md` at the repo root first.** The four rules that most often bite: (a) never invoke bare `exiftool` from PATH — always the tree pinned by `.exiftool-version` via the oracle plumbing (`scripts/exiftool_oracle.py` / a capability-probed explicit-perl invocation); (b) never approximate a conversion — omit and count; (c) name the instrument next to every number in commits/PRs ("VALUE 0 under group-qualified `just compare-file`", never bare counts); (d) bare-name comparison is group-blind — always compare group-qualified, per file.
 2. **Line numbers below are pinned at commit `d4456ebc`.** They will drift; locate code by content (`rg`), not by trusting the line number.
-3. **One PR per step.** Steps within Stage 1 are independent and parallelizable across agents (but the Pentax seven are one file — one agent). Later stages have explicit `Deps:`; do not start a step whose deps or whose stage's entry conditions aren't met. Do not start Stage N+1's gated work before Stage N's exit criteria hold.
+3. **One step branch per step, squash-merged into the integration branch after the local gates pass (rule 9).** Steps within Stage 1 are independent and parallelizable across agents (but the Pentax seven are one file — one agent). Later stages have explicit `Deps:`; do not start a step whose deps or whose stage's entry conditions aren't met. Do not start Stage N+1's gated work before Stage N's exit criteria hold.
 4. **Gates are hard.** No step is done because the diff "looks right" — it is done when its named *Verify* instrument passes and the acceptance-gate checklist (bottom of this file) is satisfied. When a measurement argues against adding a safety check, re-run it with the instrument the harness itself uses before believing it.
 5. **Supporting artifacts.** The full merged review: `~/git/MERGED_EXIFTOOL_OXIDEX_TAG_REVIEW.md`. Raw verification memos (commands, outputs, per-claim rationale): `.claude/worktrees/exiftool-oxidex-tag-review-4ea82c/target/tag-review/verify-*.md` — worktree-local and gitignored, may not survive; Part V of the merged review preserves their substance. The pinned ExifTool 13.59 source: fetchable per `.exiftool-version` (see `tools/exiftool-tables/regen.sh` for the cache layout); oracle samples at `<exiftool-tree>/t/images/`.
 6. **Sequencing intent.** Stage 1 stops active data corruption (small independent fixes). Stage 2 is the heart of the plan — it makes coverage a computable ledger. Stage 3 builds the version-bump machinery and executes a real bump. Stage 4 is the occurrence-store refactor. Stage 5 is the schema/engine build. Stage 6 is routing, retirement, and evidence-driven coverage. Design-review checkpoints (maintainer sign-off before proceeding): Step 10's bypass-proof API shape, Step 15's grammar scope + its decision gate, Step 18's `TagOccurrence` type design, Step 28's enablement policy.
 7. **Session topology and models.** One orchestrator session per stage — Fable 5 (or Opus) at high effort — and never two orchestrator sessions running this plan concurrently (the progress ledger is the race point; parallelism lives *inside* a session as subagents). Implementation steps are delegated to Sonnet subagents (pass the model override on the agent call; reasoning effort inherits from the session). The design checkpoints in rule 6 are produced by the orchestrator itself — never delegated to an implementation subagent — and stop for maintainer sign-off before any implementation begins.
 8. **Progress ledger.** `OVERHAUL_PROGRESS.md` at the repo root, local and deliberately untracked: one line per step — status, branch, PR #, instrument result. Every session reads it before starting and updates it after every step and at stage end. Keep it out of step PRs (it would conflict across parallel branches).
-9. **Ship flow per step.** Branch off latest origin/main → implement → run the step's named Verify instrument → merge origin/main and re-verify → PR with the instrument result quoted in the body → CI green → squash-merge. Note: `gh pr merge` can print a cosmetic `fatal: 'main' is already used by worktree` checkout error *after* a successful merge — verify with `gh pr view --json state,mergedAt`, do not retry the merge.
-10. **Session prerequisites.** A permission mode that auto-accepts edits (a multi-PR stage stalls on prompts otherwise); `gh` authenticated; `RUSTC_WRAPPER=sccache` for builds; never `git stash` in worktrees (the stash ref is shared across all worktrees and a parallel session can silently clobber it).
-11. **Work from a clean tree at origin/main.** If the session's checkout is on another branch or has uncommitted/staged changes (the maintainer's main checkout often carries WIP — e.g. `model-fix-sweep-local`), do NOT switch branches there and do NOT commit files you did not author: create a fresh `git worktree` off latest `origin/main` and do all work in it.
+9. **Ship flow per step — all work lands on the integration branch, never on main; gating is LOCAL.** The refactor integrates on the long-lived branch **`refactor/tag-machinery`** (created from `origin/main`; create and push it if it does not exist). Per step: sync the integration branch first (merge latest `origin/main` *into* `refactor/tag-machinery` — plain merge, never rebase the shared branch — resolve, push) → fork the step branch off latest `refactor/tag-machinery` → implement → run the **local gate suite** (below) plus the step's named Verify instrument → merge latest `refactor/tag-machinery` back into the step branch and re-run the gates → squash-merge locally (`git merge --squash`) into `refactor/tag-machinery`, with a commit message that quotes every instrument and its result → push. Do NOT open step PRs and do NOT wait on or rely on GitHub CI: every gate runs locally (CI still fires where configured; treat it as advisory for this refactor). Wherever the plan text below says "PR", read "step squash-merge commit on the integration branch", and put what would have been the PR body into the commit message and `OVERHAUL_PROGRESS.md`. **Never push to or merge into `main`** — the final `refactor/tag-machinery` → `main` merge, as one reviewed PR, is the maintainer's explicit decision alone.
+    **The local gate suite** (run in this order; all must pass): (a) `just ci-standard` — fmt-check, cbindgen-check, lint-release, build-release, test, test-ffi-c; (b) `just verify-tables`; (c) the step's conformance instrument — group-qualified `just compare-file <sample>` and/or `tools/exiftool-tables/conformance.py` with `--min-files`/`--min-tags` floors against the pinned oracle; (d) when the step touches JPEG-visible tags or the write path, the jpeg-tag-matrix ratchet locally: `cargo build --release --features jpeg-tag-matrix-binary --bin oxidex --bin jpeg-tag-matrix`, then `./target/release/jpeg-tag-matrix manifest --flag-noops`, `./target/release/jpeg-tag-matrix run --workers <cores>`, `./target/release/jpeg-tag-matrix report --check-baseline` (ratchet vs `docs/reference/jpeg-tag-baseline.json`; re-baseline only when the step legitimately moves it, in the same squash commit).
+10. **Session prerequisites.** A permission mode that auto-accepts edits (a multi-step stage stalls on prompts otherwise); `RUSTC_WRAPPER=sccache` for builds; the pinned ExifTool oracle reachable and capability-probed before any conformance run; never `git stash` in worktrees (the stash ref is shared across all worktrees and a parallel session can silently clobber it).
+11. **Work from a clean tree on the integration branch.** If the session's checkout is on another branch or has uncommitted/staged changes (the maintainer's main checkout often carries WIP — e.g. `model-fix-sweep-local`), do NOT switch branches there and do NOT commit files you did not author: create a fresh `git worktree` off latest `refactor/tag-machinery` (after syncing it with `origin/main` per rule 9) and do all work in it.
 
 ---
 ## Organizing principle: static accounting, not corpus sampling
@@ -192,7 +193,7 @@ The end state replaces "run the corpus and eyeball the score" with a closed set 
 
 ## Appendix: session brief (paste into a new orchestrator session)
 
-Recommended session setup: **Fable 5, high effort**, auto-accept-edits permission mode, `gh` authenticated. Paste the block below verbatim; edit only the `STAGE =` line on later sessions.
+Recommended session setup: **Fable 5, high effort**, auto-accept-edits permission mode. Paste the block below verbatim; edit only the `STAGE =` line on later sessions.
 
 ```text
 Read these two files in full before doing anything else:
@@ -204,11 +205,14 @@ You are the orchestrator for executing this plan. The plan's "Execution rules fo
 agent sessions" section is binding in full; the load-bearing points:
 
 STAGE = 1
-- First, secure a clean base: fetch origin. If this checkout is on a branch other
-  than main or has uncommitted/staged changes, do NOT switch branches or commit
-  anything here — create a fresh git worktree off latest origin/main and do ALL
-  work there (the maintainer's checkout may carry unrelated WIP; never mix it
-  into a PR).
+- First, secure a clean base: fetch origin. ALL refactor work lives on the
+  long-lived integration branch refactor/tag-machinery — never on main. If that
+  branch does not exist, create it from latest origin/main and push it; then
+  merge latest origin/main into it and push. If this checkout is on a branch
+  other than main or has uncommitted/staged changes, do NOT switch branches or
+  commit anything here — create a fresh git worktree off latest
+  refactor/tag-machinery and do ALL work there (the maintainer's checkout may
+  carry unrelated WIP; never mix it into the refactor).
 - Execute the stage above, step by step. If every one of its exit criteria passes
   and no question is pending for me, roll into the next stage — but STOP at the
   first design checkpoint you reach (Steps 10, 15, 18, 28, and Step 15's decision
@@ -218,10 +222,17 @@ STAGE = 1
   Parallelize only steps that touch disjoint files; the Pentax seven-tag fix
   (Step 1) is one file, so one agent. Never two agents in the same file; never
   use git stash in worktrees.
-- One step = one branch off latest origin/main = one PR = squash-merge after CI
-  green. Quote the step's Verify instrument and its result in every PR body
-  ("VALUE 0 under group-qualified `just compare-file` on Pentax.jpg" — never
-  bare counts).
+- One step = one branch off latest refactor/tag-machinery = local gate suite
+  green = squash-merge locally back into refactor/tag-machinery, then push.
+  Gating is LOCAL — do not open step PRs and do not wait on or rely on GitHub
+  CI. The gate suite (plan rule 9): `just ci-standard`, `just verify-tables`,
+  the step's conformance instrument (group-qualified `just compare-file` /
+  conformance.py with floors, pinned oracle), and the local jpeg-tag-matrix
+  ratchet when JPEG-visible tags or the write path are touched. Quote every
+  instrument and its result in the squash commit message ("VALUE 0 under
+  group-qualified `just compare-file` on Pentax.jpg" — never bare counts).
+- Never push to or merge into main. The final refactor/tag-machinery → main
+  merge is the maintainer's decision alone, made outside these sessions.
 - Never invoke bare `exiftool` from PATH — only the tree pinned by
   .exiftool-version, capability-probed; a matching -ver is not a working oracle.
   Never approximate a conversion: if a required semantic (format/count/
