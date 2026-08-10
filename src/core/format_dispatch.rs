@@ -5,6 +5,7 @@
 
 use super::{FileFormat, FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
+use crate::parsers::archive::ar::parse_ar_metadata;
 use crate::parsers::archive::gz::parse_gz_metadata;
 use crate::parsers::archive::iso::parse_iso_metadata;
 use crate::parsers::archive::ole::parse_ole_metadata;
@@ -158,6 +159,7 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::SevenZ => convert_string_error(parse_7z_metadata(reader), "7z"),
         FileFormat::ISO => convert_string_error(parse_iso_metadata(reader), "ISO"),
         FileFormat::TAR => convert_string_error(parse_tar_metadata(reader), "TAR"),
+        FileFormat::AR => convert_string_error(parse_ar_metadata(reader), "AR"),
         FileFormat::GZ => convert_string_error(parse_gz_metadata(reader), "GZ"),
         // Font formats
         FileFormat::TTF => convert_string_error(parse_ttf_metadata(reader), "TTF"),
