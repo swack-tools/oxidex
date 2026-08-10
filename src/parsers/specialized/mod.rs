@@ -8,6 +8,7 @@
 pub mod dwg;
 pub mod dxf;
 pub mod evtx;
+pub mod fit;
 pub mod fits;
 pub mod gltf;
 pub mod hdf5;
@@ -25,6 +26,7 @@ pub mod x509;
 pub use dwg::DWGParser;
 pub use dxf::DXFParser;
 pub use evtx::EVTXParser;
+pub use fit::FITParser;
 pub use fits::FITSParser;
 pub use gltf::GLTFParser;
 pub use hdf5::HDF5Parser;
