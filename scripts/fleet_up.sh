@@ -270,14 +270,27 @@ ancestor_pids() {
 scan_foreign_pids() {
     # Search-by-pattern, used ONLY to detect a fleet somebody else started.
     # $1 = extended regex matched against the full argv.
-    # Excludes our own process, our whole ancestor chain, and anything whose
-    # argv mentions this script -- the three ways the 2026-07-26 false
-    # positive was manufactured.
+    # Excludes our own process, our whole ancestor chain, anything whose argv
+    # mentions this script, and shell `-c` wrappers -- the four ways this false
+    # positive has been manufactured.
     local pattern=$1 excl pid argv
     excl=$(ancestor_pids)
     ps -axo pid=,command= | while read -r pid argv; do
         [[ " $excl " == *" $pid "* ]] && continue
         [[ $argv == *fleet_up.sh* ]] && continue
+        # A SHELL invoked with -c is a wrapper whose command TEXT happens to
+        # contain the daemon's name; it is never the daemon. The ancestor-chain
+        # exclusion above only covers our OWN launching shell, so a SIBLING
+        # shell was still a false positive: on 2026-08-10 an unrelated
+        # monitoring command (`... pgrep -f "parallel_model_fix_loop.py" ...`)
+        # made preflight report "a fleet is ALREADY running" and refused to
+        # start, with the operator's own diagnostic quoted back as the culprit.
+        # Any agent or human grepping for a tier while the fleet is down
+        # reproduces it. Note this must NOT skip every `-c`: the daemons a real
+        # foreign fleet runs are interpreters, and `python3 -c` is exactly how
+        # test_scan_finds_a_genuine_foreign_process spawns one -- so the shell
+        # name is load-bearing, not the flag.
+        [[ $argv =~ ^(/[^[:space:]]*/)?(sh|bash|zsh|dash|ksh|fish)[[:space:]]+-[[:alnum:]]*c([[:space:]]|$) ]] && continue
         [[ $argv =~ $pattern ]] && printf '%s\t%s\n' "$pid" "$argv"
     done || true
 }
