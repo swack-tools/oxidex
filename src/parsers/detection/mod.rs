@@ -312,6 +312,14 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         return Ok(FileFormat::HTML);
     }
 
+    // An XMP sidecar written without the `x:xmpmeta` wrapper. The signature
+    // table catches `<?xpacket` and `<x:xmpmeta` roots, but not this one, so
+    // `XMP.xml` fell through to the plain-text fallback: 14 tags where
+    // ExifTool reports 82, under `FileType: TXT`.
+    if looks_like_rdf_root(magic_bytes) {
+        return Ok(FileFormat::XMP);
+    }
+
     // Text-based formats need a wider bounded probe for long ICS bodies and EML header blocks.
     let text_probe_len = reader
         .size()
@@ -365,7 +373,12 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
     Ok(FileFormat::Unknown)
 }
 
-fn looks_like_svg_root(data: &[u8]) -> bool {
+/// Advance past the XML declaration, comments and DOCTYPE to the root element.
+///
+/// `None` when one of those is unterminated inside the probe. That is not the
+/// same as "no root element": it means the root is not visible from here, and
+/// the callers all treat it as a decline.
+fn xml_root_element(data: &[u8]) -> Option<&str> {
     // The probe may cut a trailing multibyte character; judge the valid prefix.
     let mut text = utf8_prefix(data);
     text = text.strip_prefix('\u{feff}').unwrap_or(text);
@@ -374,39 +387,65 @@ fn looks_like_svg_root(data: &[u8]) -> bool {
         text = text.trim_start();
 
         if let Some(rest) = text.strip_prefix("<?xml") {
-            let Some(end) = rest.find("?>") else {
-                return false;
-            };
+            let end = rest.find("?>")?;
             text = &rest[end + 2..];
             continue;
         }
 
         if let Some(rest) = text.strip_prefix("<!--") {
-            let Some(end) = rest.find("-->") else {
-                return false;
-            };
+            let end = rest.find("-->")?;
             text = &rest[end + 3..];
             continue;
         }
 
         if text.starts_with("<!DOCTYPE") {
-            let Some(end) = xml_doctype_end(text) else {
-                return false;
-            };
+            let end = xml_doctype_end(text)?;
             text = &text[end + 1..];
             continue;
         }
 
-        break;
+        return Some(text);
     }
+}
 
-    let Some(after_svg) = text.strip_prefix("<svg") else {
+/// Whether `name` opens the root element, followed by a real name terminator.
+fn root_element_is(data: &[u8], name: &str) -> bool {
+    let Some(text) = xml_root_element(data) else {
         return false;
     };
-    after_svg
-        .chars()
+    let Some(rest) = text.strip_prefix(name) else {
+        return false;
+    };
+    rest.chars()
         .next()
         .is_none_or(|character| character.is_whitespace() || matches!(character, '>' | '/'))
+}
+
+fn looks_like_svg_root(data: &[u8]) -> bool {
+    root_element_is(data, "<svg")
+}
+
+/// Whether the document's root element is `<rdf:RDF>`.
+///
+/// XMP.pm recognises this as XMP in its own right (XMP.pm:4393-4394):
+///
+/// ```text
+///     } elsif ($buf2 =~ /<rdf:RDF/) {
+///         $isRDF = 1;     # recognize XMP without x:xmpmeta element
+/// ```
+///
+/// ExifTool searches its whole read-ahead buffer, while this requires the RDF
+/// element to be the document root. The difference is a deliberate
+/// under-claim: an arbitrary XML document that merely *contains* an RDF island
+/// deeper down stays XML here rather than being renamed XMP on the strength of
+/// a substring. `XMP.xml` -- the file this exists for -- opens `<?xml ...?>`
+/// then `<rdf:RDF`, and is XMP by either reading.
+///
+/// Runs after the SVG, plist and HTML roots, which is ExifTool's order too:
+/// all four share the `<?xml` opening, and the RDF test is the last `elsif` in
+/// XMP.pm's chain.
+fn looks_like_rdf_root(data: &[u8]) -> bool {
+    root_element_is(data, "<rdf:RDF")
 }
 
 fn looks_like_xml_plist_root(data: &[u8]) -> bool {
@@ -621,11 +660,22 @@ mod tests {
                 FileFormat::XMP,
             ),
             (
-                // A plain XML document names no HTML element, so it must stay
-                // on the plain-text path rather than being claimed as HTML.
+                // Names no HTML element, so it must not be claimed as HTML --
+                // and an RDF root is XMP written without the `x:xmpmeta`
+                // wrapper, which XMP.pm recognises in its own right. This
+                // shape is `XMP.xml`, which used to land on the plain-text
+                // path and report 14 tags where ExifTool reports 82.
                 b"<?xml version='1.0' encoding='UTF-8'?>\n\
                   <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\n\
                   </rdf:RDF>\n",
+                FileFormat::XMP,
+            ),
+            (
+                // An RDF island *inside* another document is not an XMP
+                // sidecar: the root element decides.
+                b"<?xml version='1.0'?>\n<catalog>\n\
+                  <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>\n\
+                  </catalog>\n",
                 FileFormat::TXT,
             ),
         ];
