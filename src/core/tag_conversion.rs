@@ -1526,6 +1526,16 @@ mod tests {
         assert_eq!(value.as_string(), Some("Photographer\nEditor"));
     }
 
+    /// FujiFilm.raf stores Copyright as 510 spaces + NUL; Exif.pm 0x8298's
+    /// RawConv strips the blanks before the NUL and 13.59 reports "".
+    #[test]
+    fn copyright_blank_padding_before_nul_collapses_to_empty() {
+        let mut bytes = vec![b' '; 510];
+        bytes.push(0);
+        let value = raw_bytes_to_tag_value(&bytes, 2, 511, 0x8298, ByteOrder::LittleEndian);
+        assert_eq!(value.as_string(), Some(""));
+    }
+
     #[test]
     fn make_discards_trailing_whitespace_like_exiftool_rawconv() {
         let value =
