@@ -26,8 +26,70 @@ pub fn extract_dos_metadata(header: &DosHeader, metadata: &mut MetadataMap) {
     );
 }
 
+/// `IMAGE_FILE_DLL` -- the characteristics bit that makes a PE image a DLL.
+const IMAGE_FILE_DLL: u16 = 0x2000;
+
+/// Name the file the way `EXE.pm` names it, in the group ExifTool reports.
+///
+/// A Windows executable's type is `"$winType $ext"`, built from two fields of
+/// the COFF header rather than from the filename (EXE.pm:1286-1292):
+///
+/// ```text
+///     my $mach = Get16u(\$buff, 4);   # MachineType
+///     my $flags = Get16u(\$buff, 22); # ImageFileCharacteristics
+///     my $machine = $Image::ExifTool::EXE::Main{0}{PrintConv}{$mach} || '';
+///     my $winType = $machine =~ /64/ ? 'Win64' : 'Win32';
+///     $ext = $flags & 0x2000 ? 'DLL' : 'EXE';
+///     $et->SetFileType("$winType $ext", undef, $ext);
+/// ```
+///
+/// The bitness test is a substring match on the *PrintConv string*, not on the
+/// PE32/PE32+ magic, so it is reproduced literally against the same table
+/// ExifTool reads: `EXE::Main` field 0, from the generated transcription. That
+/// matters -- this module's own `machine_name` list below is a short
+/// hand-written one whose wording differs (`Intel Itanium` where ExifTool says
+/// `Intel IA64`, and nothing at all for `Alpha AXP 64-bit`), and running the
+/// `/64/` test against those spellings would report a 64-bit image as `Win32`.
+///
+/// Only the PE branch is modelled here. EXE.pm also names Win16 NE images
+/// (`Win16 EXE`/`Win16 DLL`) and several other executable families; those
+/// reach different parsers in OxiDex and are untouched.
+fn set_pe_file_type(header: &CoffHeader, metadata: &mut MetadataMap) {
+    let machine = crate::exiftool_tables::find_table("EXE", "Main")
+        .and_then(|t| t.fields.iter().find(|f| f.index == 0))
+        .and_then(|f| match f.print_conv {
+            crate::exiftool_tables::PrintConv::IntEnum(map) => map
+                .binary_search_by_key(&i64::from(header.machine), |(k, _)| *k)
+                .ok()
+                .map(|i| map[i].1),
+            _ => None,
+        })
+        .unwrap_or("");
+
+    let win_type = if machine.contains("64") {
+        "Win64"
+    } else {
+        "Win32"
+    };
+    let ext = if header.characteristics & IMAGE_FILE_DLL != 0 {
+        "DLL"
+    } else {
+        "EXE"
+    };
+    metadata.insert(
+        "File:FileType".to_string(),
+        TagValue::String(format!("{win_type} {ext}")),
+    );
+    metadata.insert(
+        "File:FileTypeExtension".to_string(),
+        TagValue::String(ext.to_ascii_lowercase()),
+    );
+}
+
 /// Extract metadata from COFF header
 pub fn extract_coff_metadata(header: &CoffHeader, metadata: &mut MetadataMap) {
+    set_pe_file_type(header, metadata);
+
     // Machine type
     let machine_name = match header.machine {
         machine_types::IMAGE_FILE_MACHINE_I386 => "Intel 386 or later, and compatibles",
@@ -910,6 +972,61 @@ mod tests {
 
         assert!(metadata.contains_key("EXE:DOSSignature"));
         assert!(metadata.contains_key("EXE:PEHeaderOffset"));
+    }
+
+    fn coff_header(machine: u16, characteristics: u16) -> CoffHeader {
+        CoffHeader {
+            machine,
+            number_of_sections: 1,
+            time_date_stamp: 0,
+            pointer_to_symbol_table: 0,
+            number_of_symbols: 0,
+            size_of_optional_header: 0xF0,
+            characteristics,
+        }
+    }
+
+    fn file_type_of(machine: u16, characteristics: u16) -> (String, String) {
+        let mut metadata = MetadataMap::new();
+        set_pe_file_type(&coff_header(machine, characteristics), &mut metadata);
+        (
+            metadata.get_string("File:FileType").unwrap().to_string(),
+            metadata
+                .get_string("File:FileTypeExtension")
+                .unwrap()
+                .to_string(),
+        )
+    }
+
+    #[test]
+    fn pe_file_type_combines_machine_bitness_and_the_dll_bit() {
+        let (ty, ext) = file_type_of(machine_types::IMAGE_FILE_MACHINE_I386, 0x030F);
+        assert_eq!((ty.as_str(), ext.as_str()), ("Win32 EXE", "exe"));
+
+        let (ty, ext) = file_type_of(machine_types::IMAGE_FILE_MACHINE_AMD64, 0x0022);
+        assert_eq!((ty.as_str(), ext.as_str()), ("Win64 EXE", "exe"));
+
+        // 0x2000 is IMAGE_FILE_DLL.
+        let (ty, ext) = file_type_of(machine_types::IMAGE_FILE_MACHINE_I386, 0x2102);
+        assert_eq!((ty.as_str(), ext.as_str()), ("Win32 DLL", "dll"));
+
+        let (ty, ext) = file_type_of(machine_types::IMAGE_FILE_MACHINE_AMD64, 0x2022);
+        assert_eq!((ty.as_str(), ext.as_str()), ("Win64 DLL", "dll"));
+    }
+
+    #[test]
+    fn pe_bitness_reads_exiftools_wording_not_this_modules() {
+        // `$machine =~ /64/` runs against `EXE::Main`'s PrintConv, where 0x200
+        // is `Intel IA64`. This module's own `machine_name` list calls it
+        // `Intel Itanium`, which has no `64` in it -- testing that spelling
+        // would report a 64-bit image as Win32.
+        assert_eq!(
+            file_type_of(machine_types::IMAGE_FILE_MACHINE_IA64, 0x0022).0,
+            "Win64 EXE"
+        );
+        // An unknown machine has no PrintConv entry at all; ExifTool's `|| ''`
+        // makes that Win32 rather than an error.
+        assert_eq!(file_type_of(0xBEEF, 0x0022).0, "Win32 EXE");
     }
 
     #[test]
