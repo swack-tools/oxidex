@@ -3063,9 +3063,18 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         }
         "FocalLength" => format_exif_focal_length(value),
 
-        // XMP.pm:2088/2102 -- ApertureValue and MaxApertureValue are APEX,
-        // ValueConv 'sqrt(2) ** $val', PrintConv sprintf("%.1f").
-        "ApertureValue" | "MaxApertureValue" => format_xmp_apex_aperture(value),
+        // XMP.pm:2088/2102 (%Image::ExifTool::XMP::exif, XMP.pm:1988) --
+        // ApertureValue and MaxApertureValue are APEX, ValueConv
+        // 'sqrt(2) ** $val', PrintConv sprintf("%.1f") -- in the exif
+        // namespace only. ExifTool's own -X RDF dump re-imports the same
+        // names under per-IFD namespaces (ExifIFD:MaxApertureValue) already
+        // print-converted ("3.4"), and crs structs declare a plain-real
+        // ApertureValue (XMP.pm:1367); re-applying APEX there is wrong in
+        // kind (3.4 -> 3.2), same class as MSImagingV1:ExposureCompensation
+        // above.
+        "ApertureValue" | "MaxApertureValue" if tag.starts_with("XMP-exif:") => {
+            format_xmp_apex_aperture(value)
+        }
 
         // XMP.pm:2081 -- ShutterSpeedValue is APEX,
         // ValueConv 'abs($val)<100 ? 1/(2**$val) : 0', PrintConv
@@ -3080,9 +3089,12 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
         // Exif::PrintFNumber.
         "FNumber" => format_xmp_fnumber(value),
 
-        // XMP.pm:2042-2046 -- ExposureTime is a rational whose PrintConv is
-        // Exif::PrintExposureTime.
-        "ExposureTime" => match parse_xmp_number(value) {
+        // XMP.pm:2042-2046 (%Image::ExifTool::XMP::exif) -- ExposureTime is a
+        // rational whose PrintConv is Exif::PrintExposureTime, in the exif
+        // namespace only. -X dump namespaces (ExifIFD:ExposureTime =
+        // "0.00469483568075117") are reported verbatim by ExifTool, never
+        // re-converted to "1/213".
+        "ExposureTime" if tag.starts_with("XMP-exif:") => match parse_xmp_number(value) {
             Some(seconds) => print_xmp_exposure_time(seconds),
             None => value.to_string(),
         },
@@ -4328,6 +4340,24 @@ mod tests {
         assert_eq!(format_xmp_value("XMP-exif:ExposureTime", "1/125"), "1/125");
         assert_eq!(format_xmp_value("XMP-exif:ExposureTime", "4/10"), "0.4");
         assert_eq!(format_xmp_value("XMP-exif:ExposureTime", "30/1"), "30");
+    }
+
+    #[test]
+    fn apex_and_exposure_conversions_are_exif_namespace_scoped() {
+        // ExifTool's -X RDF dump stores per-IFD namespaces already
+        // print-converted; `exiftool -G1 -s t/images/XMP.xml` (pinned 13.59)
+        // reports both verbatim. Re-applying the XMP-exif PrintConvs turned
+        // 3.4 into 3.2 (sqrt(2)**3.4) and 0.00469... into 1/213.
+        assert_eq!(format_xmp_value("ExifIFD:MaxApertureValue", "3.4"), "3.4");
+        assert_eq!(
+            format_xmp_value("ExifIFD:ExposureTime", "0.00469483568075117"),
+            "0.00469483568075117"
+        );
+        assert_eq!(format_xmp_value("ExifIFD:ApertureValue", "8.0"), "8.0");
+        // The genuine exif-namespace declarations keep their conversions
+        // (XMP.pm:2042/2088/2102 under %Image::ExifTool::XMP::exif).
+        assert_eq!(format_xmp_value("XMP-exif:MaxApertureValue", "3.4"), "3.2");
+        assert_eq!(format_xmp_value("XMP-exif:ApertureValue", "95/32"), "2.8");
     }
 
     #[test]
