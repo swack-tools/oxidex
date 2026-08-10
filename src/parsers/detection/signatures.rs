@@ -58,12 +58,24 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
         FileFormat::CameraRaw(raw::RawFormat::MinoltaMRW)
     ),
     // Image formats
+    // `!<arch>\x0a` is EXE.pm's static-library branch; the reported FileType
+    // depends on whether a member is Mach-O, which `ARParser` decides.
+    signature!(b"!<arch>\n", 0, FileFormat::AR),
     signature!(b"\x89PNG", 0, FileFormat::PNG),
     signature!(b"GIF87a", 0, FileFormat::GIF),
     signature!(b"GIF89a", 0, FileFormat::GIF),
     signature!(b"BM", 0, FileFormat::BMP),
     signature!(b"SDPX", 0, FileFormat::DPX),
     signature!(b"XPDS", 0, FileFormat::DPX),
+    // Kodak Photo CD keeps its only marker in the Image Pac info block, which
+    // PhotoCD.pm:454 seeks to. ExifTool has no `%magicNumber` entry for PCD,
+    // but this is still content detection rather than an over-claim: a copy of
+    // a PCD renamed `.dat`, or with no extension at all, is reported as
+    // `FileType: PCD` by the pinned 13.59, because ProcessPCD is what confirms
+    // the type. The offset is past the 1 KiB probe, so `detect_format` reaches
+    // it through the same short-read fallback that ISO 9660's `CD001` at 32769
+    // needs.
+    signature!(b"PCD_IPI", 2048, FileFormat::PCD),
     signature!(b"8BPS", 0, FileFormat::PSD),
     signature!(b"\xFFWPC", 0, FileFormat::WPG),
     signature!(b"\x00\x00\x01\x00", 0, FileFormat::ICO),

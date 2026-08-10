@@ -177,8 +177,8 @@ fn test_elf64_little_endian_x86_64() {
 
     let metadata = result.unwrap();
     assert_eq!(
-        metadata.get("FileType"),
-        Some(&TagValue::String("ELF".to_string()))
+        metadata.get("File:FileType"),
+        Some(&TagValue::String("ELF executable".to_string()))
     );
     assert_eq!(
         metadata.get("EXE:Class"),
@@ -206,8 +206,8 @@ fn test_elf32_little_endian_x86() {
 
     let metadata = result.unwrap();
     assert_eq!(
-        metadata.get("FileType"),
-        Some(&TagValue::String("ELF".to_string()))
+        metadata.get("File:FileType"),
+        Some(&TagValue::String("ELF executable".to_string()))
     );
     assert_eq!(
         metadata.get("EXE:Class"),
@@ -235,8 +235,8 @@ fn test_elf64_big_endian_arm() {
 
     let metadata = result.unwrap();
     assert_eq!(
-        metadata.get("FileType"),
-        Some(&TagValue::String("ELF".to_string()))
+        metadata.get("File:FileType"),
+        Some(&TagValue::String("ELF executable".to_string()))
     );
     assert_eq!(
         metadata.get("EXE:Class"),
@@ -257,8 +257,8 @@ fn test_elf32_big_endian_mips() {
 
     let metadata = result.unwrap();
     assert_eq!(
-        metadata.get("FileType"),
-        Some(&TagValue::String("ELF".to_string()))
+        metadata.get("File:FileType"),
+        Some(&TagValue::String("ELF executable".to_string()))
     );
     assert_eq!(
         metadata.get("EXE:Class"),
@@ -281,8 +281,8 @@ fn test_elf64_shared_object_aarch64() {
 
     let metadata = result.unwrap();
     assert_eq!(
-        metadata.get("FileType"),
-        Some(&TagValue::String("ELF".to_string()))
+        metadata.get("File:FileType"),
+        Some(&TagValue::String("ELF shared library".to_string()))
     );
     assert_eq!(
         metadata.get("EXE:Class"),
@@ -302,8 +302,8 @@ fn test_elf32_relocatable_arm() {
 
     let metadata = result.unwrap();
     assert_eq!(
-        metadata.get("FileType"),
-        Some(&TagValue::String("ELF".to_string()))
+        metadata.get("File:FileType"),
+        Some(&TagValue::String("ELF object file".to_string()))
     );
     assert_eq!(
         metadata.get("EXE:Class"),
@@ -323,8 +323,8 @@ fn test_elf64_core_dump() {
 
     let metadata = result.unwrap();
     assert_eq!(
-        metadata.get("FileType"),
-        Some(&TagValue::String("ELF".to_string()))
+        metadata.get("File:FileType"),
+        Some(&TagValue::String("ELF executable".to_string()))
     );
     assert_eq!(
         metadata.get("EXE:Class"),
@@ -344,8 +344,8 @@ fn test_elf64_riscv() {
 
     let metadata = result.unwrap();
     assert_eq!(
-        metadata.get("FileType"),
-        Some(&TagValue::String("ELF".to_string()))
+        metadata.get("File:FileType"),
+        Some(&TagValue::String("ELF executable".to_string()))
     );
     assert_eq!(
         metadata.get("EXE:Class"),

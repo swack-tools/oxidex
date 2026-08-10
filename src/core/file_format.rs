@@ -66,6 +66,9 @@ pub enum FileFormat {
     /// Digital Picture Exchange image format (.dpx)
     DPX,
 
+    /// Kodak Photo CD Image Pac (.pcd)
+    PCD,
+
     /// QuickTime/MP4 video format (.mov, .mp4)
     QuickTime,
 
@@ -179,6 +182,9 @@ pub enum FileFormat {
     /// TAR archive format (.tar)
     TAR,
 
+    /// `ar` archive, the Unix static library container (.a)
+    AR,
+
     /// GZIP compressed file (.gz)
     GZ,
 
@@ -210,6 +216,9 @@ pub enum FileFormat {
 
     /// Portable FloatMap image format (.pfm)
     PFM,
+
+    /// Radiance RGBE high dynamic range image (.hdr)
+    HDR,
 
     /// Free Lossless Image Format (.flif)
     FLIF,
@@ -362,6 +371,7 @@ impl FileFormat {
             FileFormat::GIF => "GIF",
             FileFormat::BMP => "BMP",
             FileFormat::DPX => "DPX",
+            FileFormat::PCD => "PCD",
             FileFormat::QuickTime => "QuickTime",
             FileFormat::HEIF => "HEIF",
             FileFormat::WebP => "WebP",
@@ -398,6 +408,7 @@ impl FileFormat {
             FileFormat::SevenZ => "7z",
             FileFormat::ISO => "ISO",
             FileFormat::TAR => "TAR",
+            FileFormat::AR => "AR",
             FileFormat::GZ => "GZIP",
             FileFormat::TTF => "TTF",
             FileFormat::OTF => "OTF",
@@ -408,6 +419,7 @@ impl FileFormat {
             FileFormat::BPG => "BPG",
             FileFormat::EXR => "EXR",
             FileFormat::PFM => "PFM",
+            FileFormat::HDR => "HDR",
             FileFormat::FLIF => "FLIF",
             FileFormat::XCF => "XCF",
             FileFormat::MIFF => "MIFF",
@@ -472,6 +484,7 @@ impl FileFormat {
             FileFormat::GIF => &["gif"],
             FileFormat::BMP => &["bmp"],
             FileFormat::DPX => &["dpx"],
+            FileFormat::PCD => &["pcd"],
             FileFormat::QuickTime => &["mov", "mp4", "m4v"],
             FileFormat::HEIF => &["heif", "heic"],
             FileFormat::WebP => &["webp"],
@@ -512,6 +525,7 @@ impl FileFormat {
             FileFormat::SevenZ => &["7z"],
             FileFormat::ISO => &["iso"],
             FileFormat::TAR => &["tar"],
+            FileFormat::AR => &["a"],
             FileFormat::GZ => &["gz"],
             FileFormat::TTF => &["ttf"],
             FileFormat::OTF => &["otf"],
@@ -522,6 +536,7 @@ impl FileFormat {
             FileFormat::BPG => &["bpg"],
             FileFormat::EXR => &["exr"],
             FileFormat::PFM => &["pfm"],
+            FileFormat::HDR => &["hdr"],
             FileFormat::FLIF => &["flif"],
             FileFormat::XCF => &["xcf"],
             FileFormat::MIFF => &["miff", "mif"],

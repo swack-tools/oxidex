@@ -46,9 +46,6 @@ const MAX_IMPORTED_FUNCTIONS: usize = 50;
 pub fn extract_elf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
 
-    // Add basic file info
-    metadata.insert("FileType".to_string(), TagValue::String("ELF".to_string()));
-
     // Step 1: Parse ELF header
     // The header is always at offset 0 and is 52 bytes (ELF32) or 64 bytes (ELF64)
     let header_size = if reader.size() >= 64 { 64 } else { 52 };
@@ -63,6 +60,8 @@ pub fn extract_elf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
             )));
         }
     };
+
+    set_elf_file_type(&header, &mut metadata);
 
     // Extract header metadata
     extract_header_metadata(&header, &mut metadata);
@@ -268,6 +267,48 @@ pub fn extract_elf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 }
 
 /// Extracts metadata from the ELF header
+/// Name the file the way `EXE.pm` names it, in the group ExifTool reports.
+///
+/// ExifTool does not take an ELF file's type from its extension -- `.so` and
+/// `.elf` only select the module. `ProcessEXE` sets a base type and then
+/// overrides it from `e_type`, which this parser has already read
+/// (EXE.pm:1456-1471):
+///
+/// ```text
+///     $et->SetFileType('ELF executable', undef, '');
+///     ...
+///     my $override = {
+///         1 => [ 'ELF object file', 'O' ],
+///         3 => [ 'ELF shared library', 'SO' ],
+///     }->{$$et{VALUE}{ObjectFileType} || 0};
+///     $et->OverrideFileType($$override[0], undef, $$override[1]) if $override;
+/// ```
+///
+/// Written into the `File` group rather than left ungrouped, because this is
+/// ExifTool's answer and not a parser's private name for itself: the header
+/// outranks `%fileTypeLookup`, which otherwise reports `EXE.so` as plain `SO`.
+/// `normalize_identity_tags` leaves a named `File:FileType` alone.
+///
+/// `FileTypeExtension` is genuinely empty for a bare executable -- ExifTool
+/// passes `''`, and emits the tag with no value rather than omitting it. The
+/// MIME type is left to the caller: `SetFileType` is given `undef` for all
+/// three forms, so they all end up at `application/octet-stream`.
+fn set_elf_file_type(header: &ElfHeader, metadata: &mut MetadataMap) {
+    let (file_type, extension) = match header.e_type {
+        elf_type::ET_REL => ("ELF object file", "o"),
+        elf_type::ET_DYN => ("ELF shared library", "so"),
+        _ => ("ELF executable", ""),
+    };
+    metadata.insert(
+        "File:FileType".to_string(),
+        TagValue::String(file_type.to_string()),
+    );
+    metadata.insert(
+        "File:FileTypeExtension".to_string(),
+        TagValue::String(extension.to_string()),
+    );
+}
+
 fn extract_header_metadata(header: &ElfHeader, metadata: &mut MetadataMap) {
     // ELF class (32-bit or 64-bit)
     metadata.insert(
@@ -683,6 +724,55 @@ fn find_section_by_addr(sections: &[SectionHeader], addr: u64) -> Option<&Sectio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `set_elf_file_type` reads `e_type` alone; the rest is filler.
+    fn header_with_type(e_type: u16) -> ElfHeader {
+        ElfHeader {
+            e_ident: [0; 16],
+            e_type,
+            e_machine: 0,
+            e_version: 1,
+            e_entry: 0,
+            e_phoff: 0,
+            e_shoff: 0,
+            e_flags: 0,
+            e_ehsize: 64,
+            e_phentsize: 0,
+            e_phnum: 0,
+            e_shentsize: 0,
+            e_shnum: 0,
+            e_shstrndx: 0,
+            is_64bit: true,
+            is_little_endian: true,
+        }
+    }
+
+    #[test]
+    fn elf_file_type_follows_e_type_not_the_extension() {
+        // EXE.so is `SO` by extension and `ELF shared library` by header, and
+        // ExifTool reports the header's answer. Emitting into the `File` group
+        // is what lets it outrank `%fileTypeLookup`.
+        for (e_type, want_type, want_ext) in [
+            (elf_type::ET_EXEC, "ELF executable", ""),
+            (elf_type::ET_DYN, "ELF shared library", "so"),
+            (elf_type::ET_REL, "ELF object file", "o"),
+            // No override for ET_CORE: EXE.pm's table has only 1 and 3.
+            (elf_type::ET_CORE, "ELF executable", ""),
+        ] {
+            let mut metadata = MetadataMap::new();
+            set_elf_file_type(&header_with_type(e_type), &mut metadata);
+            assert_eq!(
+                metadata.get_string("File:FileType"),
+                Some(want_type),
+                "e_type {e_type}"
+            );
+            assert_eq!(
+                metadata.get_string("File:FileTypeExtension"),
+                Some(want_ext),
+                "e_type {e_type}"
+            );
+        }
+    }
 
     #[test]
     fn test_find_section_by_type() {

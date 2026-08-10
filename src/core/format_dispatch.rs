@@ -5,6 +5,7 @@
 
 use super::{FileFormat, FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
+use crate::parsers::archive::ar::parse_ar_metadata;
 use crate::parsers::archive::gz::parse_gz_metadata;
 use crate::parsers::archive::iso::parse_iso_metadata;
 use crate::parsers::archive::ole::parse_ole_metadata;
@@ -45,6 +46,8 @@ use crate::parsers::image::flif::parse_flif_metadata;
 use crate::parsers::image::gif::parse_gif_metadata;
 use crate::parsers::image::miff::parse_miff_metadata;
 use crate::parsers::image::pfm::parse_pfm_metadata;
+use crate::parsers::image::photocd::parse_pcd_metadata;
+use crate::parsers::image::radiance::parse_radiance_metadata;
 use crate::parsers::image::xcf::parse_xcf_metadata;
 // Note: HEIF uses parse_quicktime_metadata since HEIF is ISOBMFF-based
 use crate::parsers::canon_vrd::{parse_dr4_file, parse_vrd_file};
@@ -156,6 +159,7 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::SevenZ => convert_string_error(parse_7z_metadata(reader), "7z"),
         FileFormat::ISO => convert_string_error(parse_iso_metadata(reader), "ISO"),
         FileFormat::TAR => convert_string_error(parse_tar_metadata(reader), "TAR"),
+        FileFormat::AR => convert_string_error(parse_ar_metadata(reader), "AR"),
         FileFormat::GZ => convert_string_error(parse_gz_metadata(reader), "GZ"),
         // Font formats
         FileFormat::TTF => convert_string_error(parse_ttf_metadata(reader), "TTF"),
@@ -171,7 +175,9 @@ pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Re
         FileFormat::BPG => convert_string_error(parse_bpg_metadata(reader), "BPG"),
         FileFormat::EXR => convert_string_error(parse_exr_metadata(reader), "EXR"),
         FileFormat::DPX => convert_string_error(parse_dpx_metadata(reader), "DPX"),
+        FileFormat::PCD => convert_string_error(parse_pcd_metadata(reader), "PCD"),
         FileFormat::PFM => convert_string_error(parse_pfm_metadata(reader), "PFM"),
+        FileFormat::HDR => convert_string_error(parse_radiance_metadata(reader), "HDR"),
         FileFormat::FLIF => convert_string_error(parse_flif_metadata(reader), "FLIF"),
         FileFormat::XCF => convert_string_error(parse_xcf_metadata(reader), "XCF"),
         FileFormat::MIFF => convert_string_error(parse_miff_metadata(reader), "MIFF"),

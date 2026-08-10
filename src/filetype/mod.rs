@@ -78,6 +78,20 @@ fn magic_matches(key: &str, header: &[u8]) -> bool {
         .any(|(k, re)| *k == key && re.is_match(head))
 }
 
+/// Whether `header` satisfies the magic number ExifTool files under `file_type`.
+///
+/// The identity tags and the parser dispatch are two different code paths
+/// asking the same question, and when they answer it from two different
+/// hand-written approximations they drift. They did: `File:FileType` read
+/// this table and reported `DXF` for the `  0\r\n` group codes real AutoCAD
+/// writers emit, while `detect_format` tested `starts_with("0\n")`, missed
+/// them, and sent the file to the plain-text parser. Detection asks here
+/// instead, so a format's magic number has exactly one definition.
+#[must_use]
+pub fn matches_magic(file_type: &str, header: &[u8]) -> bool {
+    magic_matches(magic_key(file_type), header)
+}
+
 /// What a file was identified as.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {

@@ -48,7 +48,7 @@ mod camera;
 mod helpers;
 mod riff;
 mod signatures;
-mod text;
+pub(crate) mod text;
 mod tiff;
 mod video;
 mod x509_der;
@@ -280,6 +280,14 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
     // ^P[Ff]\x0a\d+ \d+\x0a[-+0-9.]+\x0a
     if crate::parsers::image::pfm::looks_like_pfm(magic_bytes) {
         return Ok(FileFormat::PFM);
+    }
+
+    // Radiance RGBE (HDR): `#?RADIANCE` or `#?RGBE` on the first line. It has
+    // to outrank the text rules below and the plain-text fallback -- the
+    // header is ASCII, so `is_likely_text` accepts it, and the file reported
+    // TEXT statistics ExifTool never reports for an image.
+    if crate::parsers::image::radiance::looks_like_radiance(magic_bytes) {
+        return Ok(FileFormat::HDR);
     }
 
     // SVG must outrank ICS/EML text heuristics, but only when SVG is the XML

@@ -12,13 +12,18 @@ pub struct OBJParser;
 
 impl OBJParser {
     /// Verifies the OBJ file by checking for vertex/normal/texture coordinate definitions
+    ///
+    /// Shares the detector's predicate rather than restating it: this gate is
+    /// the second copy of the same rule, and the copies disagreeing is how a
+    /// Radiance HDR image reached this parser and was accepted by it.
     pub fn verify_signature(reader: &dyn FileReader) -> Result<bool> {
         if reader.size() < 10 {
             return Ok(false);
         }
         let header = reader.read(0, 100.min(reader.size() as usize))?;
-        let text = std::str::from_utf8(header).unwrap_or("");
-        Ok(text.contains("v ") || text.contains("vn ") || text.contains("vt "))
+        Ok(crate::parsers::detection::text::looks_like_obj(
+            std::str::from_utf8(header).unwrap_or(""),
+        ))
     }
 }
 
