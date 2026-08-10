@@ -1,4 +1,9 @@
 //! Garmin FIT activity-file parser.
+//!
+//! Modeled on ExifTool 13.59 Garmin.pm ProcessFIT. Divergences are always
+//! omissions, never approximations: fields whose exact ExifTool rendering
+//! cannot be reproduced (string/byte/float base types, oversized values fed
+//! through Perl numeric stringification) are skipped, not guessed.
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
@@ -29,18 +34,18 @@ impl FITParser {
         Ok(reader.read(8, 4)? == b".FIT")
     }
 
-    fn byte(data: &[u8], offset: usize, context: &str) -> Result<u8> {
-        data.get(offset)
-            .copied()
-            .ok_or_else(|| ExifToolError::parse_error(format!("truncated FIT {context}")))
-    }
-
-    fn parse_records(data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
+    /// Walk the record stream. A mid-stream malformation (missing local
+    /// definition, truncated record, ...) ends the walk but keeps everything
+    /// already extracted, matching ExifTool's warn-and-return-1 tolerance.
+    fn parse_records(data: &[u8], metadata: &mut MetadataMap) {
         let mut definitions: [Option<Definition>; 16] = std::array::from_fn(|_| None);
         let mut offset = 0usize;
+        // ExifTool without ExtractEmbedded processes only the FIRST data
+        // message of each global message number (the %done gate).
+        let mut session_done = false;
 
         while offset < data.len() {
-            let header = Self::byte(data, offset, "record header")?;
+            let header = data[offset];
             offset += 1;
             let compressed = header & 0x80 != 0;
             let local = if compressed {
@@ -50,33 +55,27 @@ impl FITParser {
             };
 
             if !compressed && header & 0x40 != 0 {
-                let architecture = Self::byte(data, offset + 1, "definition")?;
-                let big_endian = match architecture {
-                    0 => false,
-                    1 => true,
-                    _ => return Err(ExifToolError::parse_error("invalid FIT architecture")),
+                // Definition message: reserved, architecture, global number,
+                // field count, then 3 bytes per field.
+                let Some(fixed) = data.get(offset..offset + 5) else {
+                    break;
                 };
-                let number = data
-                    .get(offset + 2..offset + 4)
-                    .ok_or_else(|| ExifToolError::parse_error("truncated FIT definition"))?;
+                // ExifTool: SetByteOrder(Get8u(..) ? 'MM' : 'II') -- any
+                // non-zero architecture byte selects big-endian.
+                let big_endian = fixed[1] != 0;
                 let global_number = if big_endian {
-                    u16::from_be_bytes([number[0], number[1]])
+                    u16::from_be_bytes([fixed[2], fixed[3]])
                 } else {
-                    u16::from_le_bytes([number[0], number[1]])
+                    u16::from_le_bytes([fixed[2], fixed[3]])
                 };
-                let count = usize::from(Self::byte(data, offset + 4, "definition")?);
-                offset = offset
-                    .checked_add(5)
-                    .ok_or_else(|| ExifToolError::parse_error("FIT offset overflow"))?;
-                let definitions_len = count
-                    .checked_mul(3)
-                    .ok_or_else(|| ExifToolError::parse_error("FIT field count overflow"))?;
-                let end = offset
-                    .checked_add(definitions_len)
-                    .ok_or_else(|| ExifToolError::parse_error("FIT offset overflow"))?;
-                let bytes = data
-                    .get(offset..end)
-                    .ok_or_else(|| ExifToolError::parse_error("truncated FIT field definitions"))?;
+                let count = usize::from(fixed[4]);
+                offset += 5;
+                let Some(bytes) = data.get(offset..offset + count * 3) else {
+                    break;
+                };
+                // Fields with base types ExifTool does not know still count
+                // toward the record size (only extraction skips them), so
+                // keep every declared field here.
                 let fields = bytes
                     .chunks_exact(3)
                     .map(|field| Field {
@@ -85,25 +84,23 @@ impl FITParser {
                         base_type: field[2],
                     })
                     .collect();
-                offset = end;
+                offset += count * 3;
 
                 let mut developer_size = 0usize;
                 if header & 0x20 != 0 {
-                    let count = usize::from(Self::byte(data, offset, "developer definition")?);
+                    let Some(&dev_count) = data.get(offset) else {
+                        break;
+                    };
                     offset += 1;
-                    let length = count.checked_mul(3).ok_or_else(|| {
-                        ExifToolError::parse_error("FIT developer field count overflow")
-                    })?;
-                    let end = offset.checked_add(length).ok_or_else(|| {
-                        ExifToolError::parse_error("FIT developer definition overflow")
-                    })?;
-                    let bytes = data.get(offset..end).ok_or_else(|| {
-                        ExifToolError::parse_error("truncated FIT developer definition")
-                    })?;
-                    developer_size = bytes.chunks_exact(3).try_fold(0usize, |size, field| {
-                        size.checked_add(usize::from(field[1]))
-                    }).ok_or_else(|| ExifToolError::parse_error("FIT record size overflow"))?;
-                    offset = end;
+                    let length = usize::from(dev_count) * 3;
+                    let Some(bytes) = data.get(offset..offset + length) else {
+                        break;
+                    };
+                    developer_size = bytes
+                        .chunks_exact(3)
+                        .map(|field| usize::from(field[1]))
+                        .sum();
+                    offset += length;
                 }
                 definitions[local] = Some(Definition {
                     global_number,
@@ -114,126 +111,151 @@ impl FITParser {
                 continue;
             }
 
-            let definition = definitions[local].as_ref().ok_or_else(|| {
-                ExifToolError::parse_error("FIT data record has no local definition")
-            })?;
-            let native_size = definition.fields.iter().try_fold(0usize, |size, field| {
-                if compressed && field.number == 253 {
-                    Ok(size)
-                } else {
-                    size.checked_add(field.size)
-                        .ok_or_else(|| ExifToolError::parse_error("FIT record size overflow"))
-                }
-            })?;
-            let record_size = native_size
-                .checked_add(definition.developer_size)
-                .ok_or_else(|| ExifToolError::parse_error("FIT record size overflow"))?;
-            let end = offset
-                .checked_add(record_size)
-                .ok_or_else(|| ExifToolError::parse_error("FIT record offset overflow"))?;
-            let record = data
-                .get(offset..end)
-                .ok_or_else(|| ExifToolError::parse_error("truncated FIT data record"))?;
-            if definition.global_number == SESSION_MESSAGE {
-                Self::extract_session(definition, record, compressed, metadata)?;
+            // Data message (normal or compressed-timestamp header). ExifTool
+            // reads the full defined size in both cases -- field 253 is NOT
+            // elided from compressed-header records.
+            let Some(definition) = definitions[local].as_ref() else {
+                break; // "Missing definition for local message"
+            };
+            let record_size: usize = definition
+                .fields
+                .iter()
+                .map(|field| field.size)
+                .sum::<usize>()
+                + definition.developer_size;
+            let Some(record) = data.get(offset..offset + record_size) else {
+                break; // "Truncated data message"
+            };
+            if definition.global_number == SESSION_MESSAGE && !session_done {
+                session_done = true;
+                Self::extract_session(definition, record, metadata);
             }
-            offset = end;
+            offset += record_size;
         }
-        Ok(())
     }
 
-    fn extract_session(
-        definition: &Definition,
-        record: &[u8],
-        compressed: bool,
-        metadata: &mut MetadataMap,
-    ) -> Result<()> {
+    fn extract_session(definition: &Definition, record: &[u8], metadata: &mut MetadataMap) {
         let mut offset = 0usize;
         for field in &definition.fields {
-            if compressed && field.number == 253 {
+            let Some(value) = record.get(offset..offset + field.size) else {
+                return;
+            };
+            offset += field.size;
+            if !matches!(field.number, 16 | 18 | 92 | 116..=119 | 122) {
                 continue;
             }
-            let end = offset
-                .checked_add(field.size)
-                .ok_or_else(|| ExifToolError::parse_error("FIT session offset overflow"))?;
-            let value = record
-                .get(offset..end)
-                .ok_or_else(|| ExifToolError::parse_error("truncated FIT session field"))?;
+            let Some(text) = Self::read_value(value, field.base_type, definition.big_endian) else {
+                continue; // invalid sentinel, unknown type, or bad count
+            };
+            // Garmin.pm %Image::ExifTool::Garmin::Session (13.59):
+            //   16  => AvgHeartRate            PrintConv '"$val bpm"'
+            //   18  => AvgCadence              PrintConv '"$val rpm"'
+            //   92  => AvgFractionalCadence    ValueConv '$val / 128', PrintConv '"$val rpm"'
+            //   116 => AvgLeftPowerPhase       117 => AvgLeftPowerPhasePeak
+            //   118 => AvgRightPowerPhase      119 => AvgRightPowerPhasePeak
+            //   122 => AvgCadencePosition
             match field.number {
-                16 => Self::insert_unit(
-                    metadata,
-                    "AvgHeartRate",
-                    value,
-                    field,
-                    definition.big_endian,
-                    "bpm",
-                )?,
-                18 => Self::insert_unit(
-                    metadata,
-                    "AvgCadence",
-                    value,
-                    field,
-                    definition.big_endian,
-                    "rpm",
-                )?,
-                92 => {
-                    let raw = Self::unsigned(value, field, definition.big_endian)?;
+                16 => {
                     metadata.insert(
-                        "Garmin:AvgFractionalCadence",
-                        TagValue::String(format!("{} rpm", raw as f64 / 128.0)),
+                        "Garmin:AvgHeartRate",
+                        TagValue::String(format!("{text} bpm")),
                     );
                 }
-                118 => Self::insert_array(metadata, "AvgLeftPowerPhase", value),
-                119 => Self::insert_array(metadata, "AvgLeftPowerPhasePeak", value),
-                122 => Self::insert_array(metadata, "AvgCadencePosition", value),
+                18 => {
+                    metadata.insert("Garmin:AvgCadence", TagValue::String(format!("{text} rpm")));
+                }
+                92 => {
+                    // ValueConv '$val / 128': Perl numifies the value string,
+                    // i.e. uses its leading number even for arrays. Restrict
+                    // to magnitudes below 2^32 so the quotient needs at most
+                    // 15 significant digits and Rust's float formatting is
+                    // guaranteed to match Perl's %.15g; larger values are
+                    // omitted rather than approximated.
+                    let first = text.split(' ').next().unwrap_or("");
+                    if let Ok(raw) = first.parse::<i64>() {
+                        if raw.unsigned_abs() < 1 << 32 {
+                            metadata.insert(
+                                "Garmin:AvgFractionalCadence",
+                                TagValue::String(format!("{} rpm", raw as f64 / 128.0)),
+                            );
+                        }
+                    }
+                }
+                116 => {
+                    metadata.insert("Garmin:AvgLeftPowerPhase", TagValue::String(text));
+                }
+                117 => {
+                    metadata.insert("Garmin:AvgLeftPowerPhasePeak", TagValue::String(text));
+                }
+                118 => {
+                    metadata.insert("Garmin:AvgRightPowerPhase", TagValue::String(text));
+                }
+                119 => {
+                    metadata.insert("Garmin:AvgRightPowerPhasePeak", TagValue::String(text));
+                }
+                122 => {
+                    metadata.insert("Garmin:AvgCadencePosition", TagValue::String(text));
+                }
                 _ => {}
             }
-            offset = end;
         }
-        Ok(())
     }
 
-    fn unsigned(value: &[u8], field: &Field, big_endian: bool) -> Result<u64> {
-        let result = match (field.base_type & 0x1f, value) {
-            (0 | 2 | 10 | 13, [byte]) => u64::from(*byte),
-            (3 | 4 | 11, [a, b]) => u64::from(if big_endian {
-                u16::from_be_bytes([*a, *b])
-            } else {
-                u16::from_le_bytes([*a, *b])
-            }),
-            (5 | 6 | 12, [a, b, c, d]) => u64::from(if big_endian {
-                u32::from_be_bytes([*a, *b, *c, *d])
-            } else {
-                u32::from_le_bytes([*a, *b, *c, *d])
-            }),
-            _ => return Err(ExifToolError::parse_error("invalid FIT unsigned field")),
+    /// Decode one field the way ExifTool's ReadValue + invalid-sentinel check
+    /// does (Garmin.pm %baseType), returning the space-joined value string.
+    ///
+    /// Returns None when ExifTool would skip the field (base type not in
+    /// %baseType, non-integral count, single value equal to the type's
+    /// invalid sentinel -- multi-element arrays of sentinels are kept, per
+    /// the string comparison `lc $val eq $baseType{$type}[2]`) and for the
+    /// string/byte/float base types, whose Perl rendering we cannot
+    /// reproduce exactly and therefore omit rather than approximate.
+    fn read_value(value: &[u8], base_type: u8, big_endian: bool) -> Option<String> {
+        let (width, signed, sentinel): (usize, bool, &str) = match base_type {
+            0x00 | 0x02 => (1, false, "255"),           // enum, uint8
+            0x01 => (1, true, "127"),                   // sint8
+            0x83 => (2, true, "32767"),                 // sint16
+            0x84 => (2, false, "65535"),                // uint16
+            0x85 => (4, true, "2147483647"),            // sint32
+            0x86 => (4, false, "4294967295"),           // uint32
+            0x0a => (1, false, "0"),                    // uint8z
+            0x8b => (2, false, "0"),                    // uint16z
+            0x8c => (4, false, "0"),                    // uint32z
+            0x8e => (8, true, "9223372036854775807"),   // sint64
+            0x8f => (8, false, "18446744073709551615"), // uint64
+            0x90 => (8, false, "0"),                    // uint64z
+            // 0x07 string, 0x0d byte, 0x88 float32, 0x89 float64: omitted
+            // (cannot guarantee ExifTool's exact formatting); anything else
+            // is not in %baseType and ExifTool never extracts it.
+            _ => return None,
         };
-        Ok(result)
-    }
-
-    fn insert_unit(
-        metadata: &mut MetadataMap,
-        name: &str,
-        value: &[u8],
-        field: &Field,
-        big_endian: bool,
-        unit: &str,
-    ) -> Result<()> {
-        let value = Self::unsigned(value, field, big_endian)?;
-        metadata.insert(
-            format!("Garmin:{name}"),
-            TagValue::String(format!("{value} {unit}")),
-        );
-        Ok(())
-    }
-
-    fn insert_array(metadata: &mut MetadataMap, name: &str, value: &[u8]) {
-        let value = value
-            .iter()
-            .map(u8::to_string)
-            .collect::<Vec<_>>()
-            .join(" ");
-        metadata.insert(format!("Garmin:{name}"), TagValue::String(value));
+        if value.is_empty() || value.len() % width != 0 {
+            return None; // ExifTool: "Bad count" warning, field skipped
+        }
+        let mut parts = Vec::with_capacity(value.len() / width);
+        for chunk in value.chunks_exact(width) {
+            let mut raw = 0u64;
+            if big_endian {
+                for &byte in chunk {
+                    raw = raw << 8 | u64::from(byte);
+                }
+            } else {
+                for &byte in chunk.iter().rev() {
+                    raw = raw << 8 | u64::from(byte);
+                }
+            }
+            if signed {
+                let shift = 64 - width * 8;
+                parts.push((((raw << shift) as i64) >> shift).to_string());
+            } else {
+                parts.push(raw.to_string());
+            }
+        }
+        let text = parts.join(" ");
+        if text == sentinel {
+            return None; // invalid value, suppressed by ExifTool
+        }
+        Some(text)
     }
 }
 
@@ -242,25 +264,22 @@ impl FormatParser for FITParser {
         if !Self::verify_signature(reader)? {
             return Err(ExifToolError::parse_error("invalid FIT signature"));
         }
-        let header_size = usize::from(reader.read(0, 1)?[0]);
-        if header_size < 12 {
-            return Err(ExifToolError::parse_error("invalid FIT header size"));
-        }
-        let header = reader.read(0, header_size)?;
-        let size_bytes = header
-            .get(4..8)
-            .ok_or_else(|| ExifToolError::parse_error("truncated FIT header"))?;
-        let data_size =
-            u32::from_le_bytes([size_bytes[0], size_bytes[1], size_bytes[2], size_bytes[3]]) as usize;
-        let end = header_size
-            .checked_add(data_size)
-            .ok_or_else(|| ExifToolError::parse_error("FIT data size overflow"))?;
-        if end > reader.size() as usize {
-            return Err(ExifToolError::parse_error("truncated FIT data section"));
-        }
-        let data = reader.read(header_size as u64, data_size)?;
+        // ExifTool reads 12 header bytes (so data never starts before offset
+        // 12), takes the data length from bytes 4..8, and stops at
+        // header_size + data_size without pre-validating it against the file
+        // size -- a truncated file still yields the tags read so far.
+        let header = reader.read(0, 12)?;
+        let header_size = usize::from(header[0]);
+        let data_size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
+        let start = header_size.max(12);
+        let limit = header_size
+            .saturating_add(data_size)
+            .min(reader.size() as usize);
         let mut metadata = MetadataMap::new();
-        Self::parse_records(data, &mut metadata)?;
+        if limit > start {
+            let data = reader.read(start as u64, limit - start)?;
+            Self::parse_records(data, &mut metadata);
+        }
         Ok(metadata)
     }
 

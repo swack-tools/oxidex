@@ -17,8 +17,8 @@
 //! value is the profile's byte length; the profile bytes immediately follow
 //! the text header in the file.
 
-use crate::core::{FileReader, MetadataMap, TagValue};
 use super::embedded::parse_embedded_exif;
+use crate::core::{FileReader, MetadataMap, TagValue};
 
 const MIFF_HEADER: &[u8] = b"id=ImageMagick";
 /// New-style MIFF text section terminator.
@@ -186,9 +186,15 @@ pub fn parse_miff_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
     }
 
     // MIFF stores profile payloads consecutively after the text terminator in
-    // declaration order. Parse APP1 EXIF into a temporary typed map so this
-    // container can expose only the EXIF fields confirmed for MIFF instead of
-    // treating the profile as an ordinary top-level TIFF directory.
+    // declaration order. ExifTool's ProcessMIFF() runs the full processors on
+    // each profile it recognizes: ProcessTIFF on an APP1 EXIF payload,
+    // Photoshop on profile-iptc, XMP on an APP1 XMP payload. This parser does
+    // not yet wire most of that; the whitelist below names the only EXIF tags
+    // this iteration extracts, and every other tag ExifTool would emit from
+    // the profiles (remaining EXIF, IPTC/Photoshop, XMP) is deliberately
+    // omitted rather than approximated. Note before growing the list:
+    // ExifTool processes the embedded TIFF with Base => 12, so offset-bearing
+    // tags (e.g. ThumbnailOffset) need that base applied to match the oracle.
     const MIFF_EXIF_TAGS: [&str; 6] = [
         "ApertureValue",
         "Artist",
@@ -223,15 +229,19 @@ pub fn parse_miff_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
                 Err(_) => break,
             };
 
-            if profile_name.eq_ignore_ascii_case("profile-app1")
+            // ExifTool dispatches case-sensitively on the text after
+            // "profile-": `$type eq 'APP1' or $type eq 'exif' or $type eq
+            // 'xmp'` selects the Exif-header check. Only the observed
+            // 'profile-APP1' spelling is wired here; 'profile-exif' and
+            // 'profile-xmp' (never seen per MIFF.pm) remain unhandled, and a
+            // lowercase 'profile-app1' is skipped exactly as ExifTool skips it.
+            if profile_name == "profile-APP1"
                 && let Some(tiff_data) = profile.strip_prefix(b"Exif\0\0")
             {
                 let mut embedded = MetadataMap::new();
                 if parse_embedded_exif(tiff_data, &mut embedded) {
                     for (key, value) in embedded {
-                        let base_name = key
-                            .split_once(':')
-                            .map_or(key.as_str(), |(_, name)| name);
+                        let base_name = key.split_once(':').map_or(key.as_str(), |(_, name)| name);
                         if MIFF_EXIF_TAGS.contains(&base_name) {
                             metadata.insert(key, value);
                         }

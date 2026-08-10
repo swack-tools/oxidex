@@ -822,6 +822,12 @@ pub fn parse_exif_subifd(
         let mut exif_makernote_data: Vec<&[u8]> = Vec::new();
         let mut interop_ifd_offset: Option<u64> = None;
 
+        // ExifTool's MakerNote Condition list reads `$$self{Make}` and
+        // `$$self{Model}`, DataMembers set while walking IFD0 (before this
+        // sub-IFD) with trailing whitespace stripped (Exif.pm:585,595).
+        let make = trimmed_data_member(metadata, "IFD0:Make");
+        let model = trimmed_data_member(metadata, "IFD0:Model");
+
         // First pass: convert tags and capture special pointers
         for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
             // Convert Cow<[u8]> to &[u8] for processing
@@ -844,7 +850,7 @@ pub fn parse_exif_subifd(
 
             let resolved_name = lookup_tag_name(*tag_id, "ExifIFD");
             let (tag_name, special_value) = if *tag_id == MAKERNOTE {
-                special_makernote_value(&resolved_name, bytes)
+                special_makernote_value(&resolved_name, bytes, &make, &model)
                     .map_or((resolved_name, None), |(name, value)| (name, Some(value)))
             } else {
                 (resolved_name, None)
@@ -1115,54 +1121,782 @@ pub fn parse_gps_subifd(
 // =============================================================================
 
 fn contextual_tag_name(resolved: &str, base_name: &str) -> String {
-    resolved
-        .split_once(':')
-        .map_or_else(|| base_name.to_string(), |(group, _)| format!("{group}:{base_name}"))
+    resolved.split_once(':').map_or_else(
+        || base_name.to_string(),
+        |(group, _)| format!("{group}:{base_name}"),
+    )
 }
 
-/// Applies ExifTool's condition-specific names to MakerNote values which are
-/// values themselves rather than parsed subdirectories.
-fn special_makernote_value(resolved_name: &str, data: &[u8]) -> Option<(String, TagValue)> {
+/// Reads a string tag the way ExifTool keeps its `Make`/`Model` DataMembers:
+/// trailing whitespace stripped (`RawConv => '$val =~ s/\s+$//; ...'`,
+/// Exif.pm:585,595). Trailing NULs are also dropped defensively; an absent
+/// tag reads as the empty string, which fails every `eq`/prefix test below
+/// exactly as Perl's `undef` fails them.
+fn trimmed_data_member(metadata: &MetadataMap, key: &str) -> String {
+    metadata.get_string(key).map_or_else(String::new, |value| {
+        value
+            .trim_end_matches(['\0', ' ', '\t', '\n', '\r', '\x0b', '\x0c'])
+            .to_string()
+    })
+}
+
+/// Does `val` start with any of `prefixes`?
+fn any_prefix(val: &[u8], prefixes: &[&[u8]]) -> bool {
+    prefixes.iter().any(|prefix| val.starts_with(prefix))
+}
+
+/// ASCII-case-insensitive `starts_with` over a string (Perl `=~ /^.../i`).
+fn ci_starts_with(text: &str, prefix: &str) -> bool {
+    let text = text.as_bytes();
+    let prefix = prefix.as_bytes();
+    text.len() >= prefix.len() && text[..prefix.len()].eq_ignore_ascii_case(prefix)
+}
+
+/// ASCII-case-insensitive `starts_with` over value bytes.
+fn ci_val_prefix(val: &[u8], prefix: &[u8]) -> bool {
+    val.len() >= prefix.len() && val[..prefix.len()].eq_ignore_ascii_case(prefix)
+}
+
+/// `MakerNoteKodak7`'s serial-number shape,
+/// `/^[CK][A-Z\d]{3} ?[A-Z\d]{1,2}\d{2}[A-Z\d]\d{4}[ \0]/` (MakerNotes.pm).
+/// The optional space and the one-or-two alphanumerics are tried in every
+/// combination, as the regex engine's backtracking would.
+fn kodak7_serial(val: &[u8]) -> bool {
+    fn alnum(byte: u8) -> bool {
+        byte.is_ascii_uppercase() || byte.is_ascii_digit()
+    }
+    if val.len() < 12
+        || !(val[0] == b'C' || val[0] == b'K')
+        || !val[1..4].iter().copied().all(alnum)
+    {
+        return false;
+    }
+    for with_space in [true, false] {
+        let start = if with_space {
+            if val.get(4) != Some(&b' ') {
+                continue;
+            }
+            5
+        } else {
+            4
+        };
+        for id_len in [2usize, 1] {
+            let Some(id) = val.get(start..start + id_len) else {
+                continue;
+            };
+            if !id.iter().copied().all(alnum) {
+                continue;
+            }
+            let Some(rest) = val.get(start + id_len..start + id_len + 8) else {
+                continue;
+            };
+            if rest[0].is_ascii_digit()
+                && rest[1].is_ascii_digit()
+                && alnum(rest[2])
+                && rest[3..7].iter().all(u8::is_ascii_digit)
+                && (rest[7] == b' ' || rest[7] == 0)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// True when ExifTool's `@MakerNotes::Main` (pinned 13.59) resolves the note
+/// to an entry *before* `MakerNoteSamsung1a`: everything from `MakerNoteApple`
+/// (MakerNotes.pm:38) through `MakerNoteRicohText` (:942). `GetTagInfo` walks
+/// the list in order and takes the first entry whose `Condition` holds, so
+/// the value-typed entries this module emits are reachable only when every
+/// one of these fails. Conditions are transcribed verbatim; entries whose
+/// union is order-independent (a bare Make catch-all following narrower
+/// tests of the same Make) are collapsed, which cannot change the OR.
+///
+/// `val` must be the condition prefix - the first `min(size, 128)` bytes of
+/// the value (Exif.pm:6717) - and `make`/`model` the trimmed DataMembers.
+#[allow(clippy::too_many_lines)]
+fn claimed_before_samsung1a(make: &str, model: &str, val: &[u8]) -> bool {
+    // MakerNoteApple: $$valPt =~ /^Apple iOS\0/
+    if val.starts_with(b"Apple iOS\0") {
+        return true;
+    }
+    // MakerNoteNikon: $$valPt=~/^Nikon\x00\x02/; MakerNoteNikon2: /^Nikon\x00\x01/
+    if val.starts_with(b"Nikon\x00\x02") || val.starts_with(b"Nikon\x00\x01") {
+        return true;
+    }
+    // MakerNoteCanon: $$self{Make} =~ /^Canon/
+    if make.starts_with("Canon") {
+        return true;
+    }
+    // MakerNoteCasio ($$self{Make}=~/^CASIO/ and $$valPt!~/^(QVC|DCI)\0/) and
+    // MakerNoteCasio2 ($$valPt =~ /^(QVC|DCI)\0/) jointly claim either way.
+    if make.starts_with("CASIO") || val.starts_with(b"QVC\0") || val.starts_with(b"DCI\0") {
+        return true;
+    }
+    // MakerNoteDJIInfo: $$valPt =~ /^\[ae_dbg_info:/
+    if val.starts_with(b"[ae_dbg_info:") {
+        return true;
+    }
+    // MakerNoteDJI: $$self{Make} eq "DJI" and $$valPt !~ /^(...\@AMBA|DJI)/s
+    if make == "DJI" && !(val.len() >= 8 && &val[3..8] == b"@AMBA") && !val.starts_with(b"DJI") {
+        return true;
+    }
+    // MakerNoteFLIR: $$self{Make} =~ /^(FLIR Systems|Teledyne FLIR)/
+    if make.starts_with("FLIR Systems") || make.starts_with("Teledyne FLIR") {
+        return true;
+    }
+    // MakerNoteFujiFilm: $$valPt =~ /^(FUJIFILM|GENERALE)/
+    if val.starts_with(b"FUJIFILM") || val.starts_with(b"GENERALE") {
+        return true;
+    }
+    // MakerNoteGE: $$valPt =~ /^GE(\0\0|NIC\0)/; MakerNoteGE2: /^GE\x0c\0\0\0\x16\0\0\0/
+    if any_prefix(val, &[b"GE\0\0", b"GENIC\0", b"GE\x0c\0\0\0\x16\0\0\0"]) {
+        return true;
+    }
+    // MakerNoteGoogle: $$valPt =~ /^HDRP[\x02\x03]/
+    if val.starts_with(b"HDRP\x02") || val.starts_with(b"HDRP\x03") {
+        return true;
+    }
+    // MakerNoteHasselblad: $$self{Make} eq "Hasselblad"
+    if make == "Hasselblad" {
+        return true;
+    }
+    // MakerNoteHP: $$valPt =~ /^(Hewlett-Packard|Vivitar)/
+    if val.starts_with(b"Hewlett-Packard") || val.starts_with(b"Vivitar") {
+        return true;
+    }
+    // MakerNoteHP2: $$valPt =~ /^610[\0-\4]/
+    if val.len() >= 4 && val.starts_with(b"610") && val[3] <= 0x04 {
+        return true;
+    }
+    // MakerNoteHP4: $$valPt =~ /^IIII[\x04|\x05]\0/ (the class holds a literal '|')
+    if val.len() >= 6
+        && val.starts_with(b"IIII")
+        && matches!(val[4], 0x04 | 0x05 | b'|')
+        && val[5] == 0
+    {
+        return true;
+    }
+    // MakerNoteHP6: $$valPt =~ /^IIII\x06\0/
+    if val.starts_with(b"IIII\x06\0") {
+        return true;
+    }
+    // MakerNoteISL: $$valPt =~ /^ISLMAKERNOTE000\0/
+    if val.starts_with(b"ISLMAKERNOTE000\0") {
+        return true;
+    }
+    // MakerNoteJVC: $$valPt=~/^JVC /
+    if val.starts_with(b"JVC ") {
+        return true;
+    }
+    // MakerNoteJVCText: $$self{Make}=~/^(JVC|Victor)/ and $$valPt=~/^VER:/
+    if (make.starts_with("JVC") || make.starts_with("Victor")) && val.starts_with(b"VER:") {
+        return true;
+    }
+    // MakerNoteKodak1a (/^KDK INFO/) and MakerNoteKodak1b (/^KDK/), both
+    // gated on $$self{Make}=~/^EASTMAN KODAK/: the 1b prefix covers 1a.
+    if make.starts_with("EASTMAN KODAK") && val.starts_with(b"KDK") {
+        return true;
+    }
+    // MakerNoteKodak2: $$valPt =~ /^.{8}Eastman Kodak/s or
+    //                  $$valPt =~ /^\x01\0[\0\x01]\0\0\0\x04\0[a-zA-Z]{4}/
+    if val.len() >= 21 && &val[8..21] == b"Eastman Kodak" {
+        return true;
+    }
+    if val.len() >= 12
+        && val[0] == 0x01
+        && val[1] == 0
+        && (val[2] == 0 || val[2] == 0x01)
+        && val[3] == 0
+        && val[4] == 0
+        && val[5] == 0
+        && val[6] == 0x04
+        && val[7] == 0
+        && val[8..12].iter().all(u8::is_ascii_alphabetic)
+    {
+        return true;
+    }
+    let mm_ii_aoc = val.starts_with(b"MM") || val.starts_with(b"II") || val.starts_with(b"AOC");
+    // MakerNoteKodak3: /^EASTMAN KODAK/, $$valPt =~ /^(?!MM|II).{12}\x07/s
+    // and !~ /^(MM|II|AOC)/ (the lookahead is subsumed by the negative)
+    if make.starts_with("EASTMAN KODAK") && val.len() >= 13 && val[12] == 0x07 && !mm_ii_aoc {
+        return true;
+    }
+    // MakerNoteKodak4: /^Eastman Kodak/, $$valPt =~ /^.{41}JPG/s, !^(MM|II|AOC)
+    if make.starts_with("Eastman Kodak") && val.len() >= 44 && &val[41..44] == b"JPG" && !mm_ii_aoc
+    {
+        return true;
+    }
+    // MakerNoteKodak5: /^EASTMAN KODAK/ and (Model CX-list or the byte probe)
+    if make.starts_with("EASTMAN KODAK")
+        && (["CX4200", "CX4230", "CX4300", "CX4310", "CX6200", "CX6230"]
+            .iter()
+            .any(|cx| model.contains(cx))
+            || (val.len() >= 4
+                && val[0] == 0
+                && matches!(
+                    (val[1], val[2]),
+                    (0x1a, 0x18) | (0x3a, 0x08) | (0x59, 0xf8) | (0x14, 0x80)
+                )
+                && val[3] == 0))
+    {
+        return true;
+    }
+    // MakerNoteKodak6a (Model DX3215) / MakerNoteKodak6b (Model DX3700)
+    if make.starts_with("EASTMAN KODAK") && (model.contains("DX3215") || model.contains("DX3700")) {
+        return true;
+    }
+    let kodak_make = make.to_ascii_lowercase().contains("kodak");
+    // MakerNoteKodak7: /Kodak/i and the serial-number probe
+    if kodak_make && kodak7_serial(val) {
+        return true;
+    }
+    // MakerNoteKodak8a: /Kodak/i and either IFD-entry probe
+    if kodak_make
+        && ((val.len() >= 8
+            && val[0] == 0
+            && (0x02..=0x7f).contains(&val[1])
+            && val[4] == 0
+            && (0x01..=0x0c).contains(&val[5])
+            && val[6] == 0
+            && val[7] == 0)
+            || (val.len() >= 10
+                && (0x02..=0x7f).contains(&val[0])
+                && val[1] == 0
+                && (0x01..=0x0c).contains(&val[4])
+                && val[5] == 0
+                && val[8] == 0
+                && val[9] == 0))
+    {
+        return true;
+    }
+    // MakerNoteKodak8b: /Kodak/i and /^MM\0\x2a\0\0\0\x08\0.\0\0/ (no /s:
+    // the wildcard byte may not be "\n")
+    if kodak_make
+        && val.len() >= 12
+        && val.starts_with(b"MM\0\x2a\0\0\0\x08\0")
+        && val[9] != b'\n'
+        && val[10] == 0
+        && val[11] == 0
+    {
+        return true;
+    }
+    // MakerNoteKodak8c: /Kodak/i and /^(MM\0\x2a\0\0\0\x08|II\x2a\0\x08\0\0\0)/
+    if kodak_make
+        && (val.starts_with(b"MM\0\x2a\0\0\0\x08") || val.starts_with(b"II\x2a\0\x08\0\0\0"))
+    {
+        return true;
+    }
+    // MakerNoteKodak9: m{^IIII[\x02\x03]\0.{14}\d{4}/\d{2}/\d{2} }s
+    if val.len() >= 31
+        && val.starts_with(b"IIII")
+        && matches!(val[4], 0x02 | 0x03)
+        && val[5] == 0
+        && val[20..24].iter().all(u8::is_ascii_digit)
+        && val[24] == b'/'
+        && val[25..27].iter().all(u8::is_ascii_digit)
+        && val[27] == b'/'
+        && val[28..30].iter().all(u8::is_ascii_digit)
+        && val[30] == b' '
+    {
+        return true;
+    }
+    // MakerNoteKodak10: /Kodak/i and /^(MM\0[\x02-\x7f]|II[\x02-\x7f]\0)/
+    if kodak_make
+        && val.len() >= 4
+        && ((val.starts_with(b"MM\0") && (0x02..=0x7f).contains(&val[3]))
+            || (val.starts_with(b"II") && (0x02..=0x7f).contains(&val[2]) && val[3] == 0))
+    {
+        return true;
+    }
+    // MakerNoteKodak11 and MakerNoteKodak12 key on Model =~ /(Kodak|PixPro)/i
+    let kodak_model = {
+        let lower = model.to_ascii_lowercase();
+        lower.contains("kodak") || lower.contains("pixpro")
+    };
+    if kodak_model
+        && val.len() >= 12
+        && ((val.starts_with(b"II\x2a\0\x08\0\0\0") && val[9] == 0 && val[10] == 0 && val[11] == 0)
+            || (val.starts_with(b"MM\0\x2a\0\0\0\x08")
+                && val[8] == 0
+                && val[9] == 0
+                && val[10] == 0))
+    {
+        return true;
+    }
+    // MakerNoteKodakUnknown: $$self{Make}=~/Kodak/i and $$valPt!~/^AOC\0/
+    if kodak_make && !val.starts_with(b"AOC\0") {
+        return true;
+    }
+    // MakerNoteKyocera: $$valPt =~ /^KYOCERA/
+    if val.starts_with(b"KYOCERA") {
+        return true;
+    }
+    // MakerNoteMinolta (Make and !^(MINOL|CAMER|MLY0|KC|\+M\+M|\xd7)) plus the
+    // MakerNoteMinolta3 catch-all on the same /^(Konica Minolta|Minolta)/i.
+    if ci_starts_with(make, "Konica Minolta") || ci_starts_with(make, "Minolta") {
+        return true;
+    }
+    // MakerNoteMinolta2: $$valPt =~ /^(MINOL|CAMER)\0/
+    if val.starts_with(b"MINOL\0") || val.starts_with(b"CAMER\0") {
+        return true;
+    }
+    // MakerNoteMotorola: $$valPt=~/^MOT\0/
+    if val.starts_with(b"MOT\0") {
+        return true;
+    }
+    // MakerNoteNikon3: $$self{Make}=~/^NIKON/i
+    if ci_starts_with(make, "NIKON") {
+        return true;
+    }
+    // MakerNoteNintendo: $$self{Make} eq "Nintendo"
+    if make == "Nintendo" {
+        return true;
+    }
+    // MakerNoteOlympus (/^(OLYMP|EPSON)\0/), MakerNoteOlympus2 (/^OLYMPUS\0/),
+    // MakerNoteOlympus3 (/^OM SYSTEM\0/)
+    if any_prefix(val, &[b"OLYMP\0", b"EPSON\0", b"OLYMPUS\0", b"OM SYSTEM\0"]) {
+        return true;
+    }
+    // MakerNoteLeica: $$self{Make} eq "LEICA"
+    if make == "LEICA" {
+        return true;
+    }
+    let leica_ag = make.starts_with("Leica Camera AG");
+    // MakerNoteLeica2: Make and $$valPt =~ /^LEICA\0\0\0/
+    if leica_ag && val.starts_with(b"LEICA\0\0\0") {
+        return true;
+    }
+    // MakerNoteLeica3: Make, $$valPt !~ /^LEICA/, Model ne S2 / M (Typ 240)
+    if leica_ag && !val.starts_with(b"LEICA") && model != "S2" && model != "LEICA M (Typ 240)" {
+        return true;
+    }
+    // MakerNoteLeica4: Make and $$valPt =~ /^LEICA0/ (a literal '0': the
+    // M9/M-Monochrom header is "LEICA0\x03\0")
+    if leica_ag && val.starts_with(b"LEICA0") {
+        return true;
+    }
+    // MakerNoteLeica5: $$valPt =~ /^LEICA\0[\x01\x04\x05\x06\x07\x10\x1a]\0/
+    if val.len() >= 8
+        && val.starts_with(b"LEICA\0")
+        && matches!(val[6], 0x01 | 0x04..=0x07 | 0x10 | 0x1a)
+        && val[7] == 0
+    {
+        return true;
+    }
+    // MakerNoteLeica6: Make eq 'Leica Camera AG' and the three Model names
+    if make == "Leica Camera AG"
+        && matches!(model, "S2" | "LEICA M (Typ 240)" | "LEICA S (Typ 006)")
+    {
+        return true;
+    }
+    // MakerNoteLeica7: $$valPt =~ /^LEICA\0\x02\xff/
+    if val.starts_with(b"LEICA\0\x02\xff") {
+        return true;
+    }
+    // MakerNoteLeica8: $$valPt =~ /^LEICA\0[\x08\x09\x0a]\0/
+    if val.len() >= 8 && val.starts_with(b"LEICA\0") && matches!(val[6], 0x08..=0x0a) && val[7] == 0
+    {
+        return true;
+    }
+    // MakerNoteLeica9: Make and $$valPt =~ /^LEICA\0\x02\0/
+    if leica_ag && val.starts_with(b"LEICA\0\x02\0") {
+        return true;
+    }
+    // MakerNoteLeica10: $$valPt =~ /^LEICA CAMERA AG\0/
+    if val.starts_with(b"LEICA CAMERA AG\0") {
+        return true;
+    }
+    // MakerNotePanasonic (Model ne "DC-FT7") and MakerNotePanasonic3 (no
+    // Model test) claim every /^Panasonic/ value between them.
+    if val.starts_with(b"Panasonic") {
+        return true;
+    }
+    // MakerNotePanasonic2: $$self{Make}=~/^Panasonic/ and $$valPt=~/^MKE/
+    if make.starts_with("Panasonic") && val.starts_with(b"MKE") {
+        return true;
+    }
+    // MakerNotePentax: /^AOC\0/ and Model !~ /^PENTAX Optio ?[34]30RS\s*$/
+    // (trailing whitespace is already stripped from the member)
+    if val.starts_with(b"AOC\0")
+        && !matches!(
+            model,
+            "PENTAX Optio 330RS" | "PENTAX Optio330RS" | "PENTAX Optio 430RS" | "PENTAX Optio430RS"
+        )
+    {
+        return true;
+    }
+    // MakerNotePentax2 (/^Asahi/ and !^AOC\0) plus the MakerNotePentax3
+    // catch-all on the same /^Asahi/.
+    if make.starts_with("Asahi") {
+        return true;
+    }
+    // MakerNotePentax4: $$self{Make}=~/^PENTAX/ and $$valPt=~/^\d{3}/
+    if make.starts_with("PENTAX") && val.len() >= 3 && val[..3].iter().all(u8::is_ascii_digit) {
+        return true;
+    }
+    // MakerNotePentax5: $$valPt=~/^PENTAX \0/
+    if val.starts_with(b"PENTAX \0") {
+        return true;
+    }
+    // MakerNotePentax6: $$valPt=~/^S1\0{6}\x0c\0{3}/
+    if val.starts_with(b"S1\0\0\0\0\0\0\x0c\0\0\0") {
+        return true;
+    }
+    // MakerNotePhaseOne: $$valPt =~ /^(IIII.waR|MMMMRaw.)/s
+    if val.len() >= 8
+        && ((val.starts_with(b"IIII") && &val[5..8] == b"waR") || val.starts_with(b"MMMMRaw"))
+    {
+        return true;
+    }
+    // MakerNoteReconyxHyperFire: $$valPt =~ /^\x01\xf1([\x02\x03]\x00)?/ and
+    // ($1 or $$self{Make} eq "RECONYX")
+    if val.starts_with(b"\x01\xf1\x02\x00")
+        || val.starts_with(b"\x01\xf1\x03\x00")
+        || (val.starts_with(b"\x01\xf1") && make == "RECONYX")
+    {
+        return true;
+    }
+    // MakerNoteReconyxUltraFire / HyperFire2 / MicroFire / HyperFire4K
+    if any_prefix(
+        val,
+        &[
+            b"RECONYXUF\0",
+            b"RECONYXH2\0",
+            b"RECONYXMF\0",
+            b"RECONYXHF4K\0",
+        ],
+    ) {
+        return true;
+    }
+    // MakerNoteRicohPentax: $$valPt=~/^RICOH\0(II|MM)/
+    if val.starts_with(b"RICOH\0II") || val.starts_with(b"RICOH\0MM") {
+        return true;
+    }
+    // MakerNoteRicohText's bare /^RICOH/ catch-all claims every remaining
+    // RICOH-made note; a "PENTAX RICOH" Make reaches only MakerNoteRicoh and
+    // MakerNoteRicoh2, whose conditions are tested verbatim below.
+    if make.starts_with("RICOH") {
+        return true;
+    }
+    if make.starts_with("PENTAX RICOH") {
+        // The /s-mode probe shared by MakerNoteRicoh (negated) and
+        // MakerNoteRicoh2: /^(MM\0\x2a\0\0\0\x08\0.\0\0|II\x2a\0\x08\0\0\0.\0\0\0)/s
+        let ricoh2_probe = (val.len() >= 12
+            && val.starts_with(b"MM\0\x2a\0\0\0\x08\0")
+            && val[10] == 0
+            && val[11] == 0)
+            || (val.len() >= 12
+                && val.starts_with(b"II\x2a\0\x08\0\0\0")
+                && val[9] == 0
+                && val[10] == 0
+                && val[11] == 0);
+        // MakerNoteRicoh: /^(Ricoh|      |MM\0\x2a|II\x2a\0)/i, not the
+        // probe, Model ne 'RICOH WG-M1'
+        if (ci_val_prefix(val, b"Ricoh")
+            || val.starts_with(b"      ")
+            || ci_val_prefix(val, b"MM\0\x2a")
+            || ci_val_prefix(val, b"II\x2a\0"))
+            && !ricoh2_probe
+            && model != "RICOH WG-M1"
+        {
+            return true;
+        }
+        // MakerNoteRicoh2: Model eq 'RICOH WG-M1' or the probe
+        if model == "RICOH WG-M1" || ricoh2_probe {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when an entry *between* `MakerNoteSamsung1b` and the
+/// `MakerNoteUnknown*` fallbacks claims the note (MakerNotes.pm:966-1101:
+/// Samsung2, the Sanyo and Sony families, Sigma). `MakerNoteSamsung1b`
+/// itself is handled by the caller's STMN branch.
+fn claimed_between_samsung1b_and_unknown(make: &str, model: &str, val: &[u8]) -> bool {
+    // MakerNoteSamsung2: uc $$self{Make} eq 'SAMSUNG' and ($$self{TIFF_TYPE}
+    // eq 'SRW' or $$valPt=~/^(\0.\0\x01\0\x07\0{3}\x04|.\0\x01\0\x07\0\x04\0{3})0100/s).
+    // The TIFF_TYPE arm is unavailable here (no container context reaches
+    // this helper), but an SRW's EXIF-format maker note is a binary IFD that
+    // can never satisfy the text/LSI1 fallbacks below, so the byte probe
+    // alone is exact for every value those fallbacks could otherwise take.
+    if make.eq_ignore_ascii_case("SAMSUNG")
+        && val.len() >= 14
+        && &val[10..14] == b"0100"
+        && ((val[0] == 0
+            && val[2] == 0
+            && val[3] == 0x01
+            && val[4] == 0
+            && val[5] == 0x07
+            && val[6] == 0
+            && val[7] == 0
+            && val[8] == 0
+            && val[9] == 0x04)
+            || (val[1] == 0
+                && val[2] == 0x01
+                && val[3] == 0
+                && val[4] == 0x07
+                && val[5] == 0
+                && val[6] == 0x04
+                && val[7] == 0
+                && val[8] == 0
+                && val[9] == 0))
+    {
+        return true;
+    }
+    // MakerNoteSanyo / SanyoC4 / SanyoPatch: SanyoPatch is a bare
+    // $$self{Make}=~/^SANYO/ catch-all, so the Make alone decides.
+    if make.starts_with("SANYO") {
+        return true;
+    }
+    // MakerNoteSigma: $$self{Make}=~/^(SIGMA|FOVEON)/i
+    if ci_starts_with(make, "SIGMA") || ci_starts_with(make, "FOVEON") {
+        return true;
+    }
+    // MakerNoteSony: /^(SONY (DSC|CAM|MOBILE)|\0\0SONY PIC\0|VHAB     \0)/,
+    // MakerNoteSony2 (/^SONY PI\0/), MakerNoteSony3 (/^(PREMI)\0/),
+    // MakerNoteSony4 (/^SONY PIC\0/)
+    if any_prefix(
+        val,
+        &[
+            b"SONY DSC",
+            b"SONY CAM",
+            b"SONY MOBILE",
+            b"\0\0SONY PIC\0",
+            b"VHAB     \0",
+            b"SONY PI\0",
+            b"PREMI\0",
+            b"SONY PIC\0",
+        ],
+    ) {
+        return true;
+    }
+    // MakerNoteSony5 plus the MakerNoteSonySRF catch-all: /^SONY/ claims
+    // regardless, and Sony5's Hasselblad-rebadge arm adds
+    // (Make ^HASSELBLAD, Model ^(HV|Stellar|Lusso|Lunar), val !^\x01\x00).
+    if make.starts_with("SONY") {
+        return true;
+    }
+    if make.starts_with("HASSELBLAD")
+        && (model.starts_with("HV")
+            || model.starts_with("Stellar")
+            || model.starts_with("Lusso")
+            || model.starts_with("Lunar"))
+        && !val.starts_with(b"\x01\x00")
+    {
+        return true;
+    }
+    // MakerNoteSonyEricsson: $$valPt =~ /^SEMC MS\0/
+    if val.starts_with(b"SEMC MS\0") {
+        return true;
+    }
+    false
+}
+
+/// `MakerNoteUnknownText`'s Condition,
+/// `$$valPt =~ /^[\x09\x0d\x0a\x20-\x7e]+\0*$/` (MakerNotes.pm:1102-1108),
+/// applied as Perl applies it: with no `/m`, `$` also matches just before a
+/// string-final `"\n"`, so `text NULs "\n"` passes too. Nothing is
+/// NUL-trimmed before the test.
+fn unknown_text_condition(prefix: &[u8]) -> bool {
+    fn text_then_nuls(bytes: &[u8]) -> bool {
+        let text_len = bytes
+            .iter()
+            .take_while(|byte| matches!(**byte, b'\t' | b'\n' | b'\r' | 0x20..=0x7e))
+            .count();
+        text_len > 0 && bytes[text_len..].iter().all(|byte| *byte == 0)
+    }
+    text_then_nuls(prefix)
+        || matches!(prefix.split_last(), Some((b'\n', body)) if text_then_nuls(body))
+}
+
+/// Applies ExifTool's condition-specific names to the MakerNote (0x927C)
+/// values it stores as plain values rather than parsed subdirectories:
+/// `MakerNoteSamsung1a`, `MakerNoteUnknownText` and `MakerNoteUnknownBinary`
+/// (MakerNotes.pm, pinned 13.59).
+///
+/// ExifTool resolves the name by walking `@MakerNotes::Main` in order and
+/// taking the first entry whose `Condition` holds; a Condition sees
+/// `$$self{Make}`/`$$self{Model}` and only the first `min(size, 128)` bytes
+/// of the value (Exif.pm:6717). The three names above are reachable only
+/// when every maker-specific entry before them fails, so when a preceding
+/// entry claims the note this returns `None` - oxidex may lack that maker's
+/// parser, and a `MakerNoteUnknown*` name for a claimed note would be a
+/// wrong name, not a fallback.
+fn special_makernote_value(
+    resolved_name: &str,
+    data: &[u8],
+    make: &str,
+    model: &str,
+) -> Option<(String, TagValue)> {
     use crate::parsers::tiff::makernotes::samsung::stmn;
 
-    if stmn::is_stmn(data) && stmn::is_binary_only(data) {
+    let condition_prefix = &data[..data.len().min(128)];
+
+    if claimed_before_samsung1a(make, model, condition_prefix) {
+        return None;
+    }
+
+    // MakerNoteSamsung1a (`/^STMN\d{3}.\0{4}/s`) stores the note as a bare
+    // binary value; MakerNoteSamsung1b (`/^STMN\d{3}/`) is a subdirectory
+    // the second pass parses, and it must not fall through to the fallbacks.
+    if stmn::is_stmn(condition_prefix) {
+        if stmn::is_binary_only(condition_prefix) {
+            return Some((
+                contextual_tag_name(resolved_name, "MakerNoteSamsung1a"),
+                TagValue::new_binary(data.to_vec()),
+            ));
+        }
+        return None;
+    }
+
+    if claimed_between_samsung1b_and_unknown(make, model, condition_prefix) {
+        return None;
+    }
+
+    // MakerNoteUnknownText. The Condition sees only the 128-byte prefix and
+    // nothing is NUL-trimmed anywhere: its ValueConv
+    // `length($val) > 64 ? \$val : $val` measures the FULL untrimmed value,
+    // so a short text note NUL-padded past 64 bytes is reported as binary
+    // with the padded length.
+    if unknown_text_condition(condition_prefix) {
+        let name = contextual_tag_name(resolved_name, "MakerNoteUnknownText");
+        if data.len() > 64 {
+            return Some((name, TagValue::new_binary(data.to_vec())));
+        }
+        // The stored value is the untrimmed text, which the exiftool
+        // application prints through its output filter (exiftool:3007-3009):
+        // \x01-\x1f and \x7f become '.', NULs are deleted, trailing spaces
+        // are trimmed. oxidex stores display strings, so the same filter is
+        // fused here; a value this short (<= 64 bytes) was covered by the
+        // condition in full, so every byte is ASCII and the mapping is total.
+        let rendered: String = data
+            .iter()
+            .filter_map(|byte| match *byte {
+                0 => None,
+                0x01..=0x1f | 0x7f => Some('.'),
+                printable => Some(printable as char),
+            })
+            .collect();
         return Some((
-            contextual_tag_name(resolved_name, "MakerNoteSamsung1a"),
-            TagValue::new_binary(data.to_vec()),
+            name,
+            TagValue::new_string(rendered.trim_end_matches(' ').to_string()),
         ));
     }
 
-    // MakerNotes.pm's unknown-text condition permits printable ASCII plus
-    // tab/CR/LF followed by any number of NUL padding bytes. Its RawConv
-    // removes all trailing padding, then returns values over 64 bytes by
-    // reference, causing ExifTool's ordinary output to treat them as binary.
-    let text_end = data
-        .iter()
-        .rposition(|byte| *byte != 0)
-        .map_or(0, |index| index + 1);
-    let text = &data[..text_end];
-    if !text.is_empty()
-        && text
-            .iter()
-            .all(|byte| matches!(*byte, b'\t' | b'\n' | b'\r' | 0x20..=0x7e))
-    {
-        let name = contextual_tag_name(resolved_name, "MakerNoteUnknownText");
-        let value = if text.len() > 64 {
-            TagValue::new_binary(text.to_vec())
-        } else {
-            TagValue::new_string(std::str::from_utf8(text).ok()?.to_string())
-        };
-        return Some((name, value));
-    }
-
-    // MakerNotes.pm requires the complete "LSI1\0" signature.
-    if data.starts_with(b"LSI1\0") {
+    // MakerNoteUnknownBinary: $$valPt =~ /^LSI1\0/ (SilverFast).
+    if condition_prefix.starts_with(b"LSI1\0") {
         return Some((
             contextual_tag_name(resolved_name, "MakerNoteUnknownBinary"),
             TagValue::new_binary(data.to_vec()),
         ));
     }
     None
+}
+
+#[cfg(test)]
+mod makernote_fallback_tests {
+    use super::*;
+
+    const RESOLVED: &str = "ExifIFD:MakerNote";
+
+    fn fallback(data: &[u8], make: &str, model: &str) -> Option<(String, TagValue)> {
+        special_makernote_value(RESOLVED, data, make, model)
+    }
+
+    /// Exif.pm:6717 hands the Condition only the first min(size, 128) bytes,
+    /// so binary garbage past byte 128 cannot defeat the text match.
+    #[test]
+    fn text_condition_examines_only_the_first_128_bytes() {
+        let mut data = vec![b'A'; 128];
+        data.extend_from_slice(&[0xFF, 0x00, 0x13]);
+        let (name, value) = fallback(&data, "", "").expect("prefix is pure text");
+        assert_eq!(name, "ExifIFD:MakerNoteUnknownText");
+        assert!(
+            matches!(value, TagValue::Binary(ref bytes) if bytes.len() == 131),
+            "the >64 branch must carry the FULL value"
+        );
+    }
+
+    /// The `length($val) > 64` split measures the untrimmed value: 14 text
+    /// bytes NUL-padded to 70 report as 70 bytes of binary, never as the
+    /// trimmed string (SamsungDigimaxA4.jpg does this with 460 bytes).
+    #[test]
+    fn text_binary_split_measures_the_untrimmed_value() {
+        let mut data = b"Unknown Format".to_vec();
+        data.resize(70, 0);
+        let (name, value) = fallback(&data, "SAMSUNG TECHWIN CO.", "").expect("text plus NULs");
+        assert_eq!(name, "ExifIFD:MakerNoteUnknownText");
+        assert_eq!(value, TagValue::new_binary(data));
+    }
+
+    /// A value at or under 64 bytes stays a string, rendered as the exiftool
+    /// application renders it (NULs deleted, trailing spaces trimmed).
+    #[test]
+    fn short_text_value_renders_like_the_exiftool_app() {
+        let mut data = b"FINE".to_vec();
+        data.resize(10, 0);
+        let (_, value) = fallback(&data, "Samsung", "SPH-A940").expect("short text");
+        assert_eq!(value.as_string(), Some("FINE"));
+    }
+
+    /// `/^[\x09\x0d\x0a\x20-\x7e]+\0*$/` rejects text resuming after a NUL.
+    #[test]
+    fn nul_interrupted_text_is_not_text() {
+        assert_eq!(fallback(b"AB\0CD", "", ""), None);
+    }
+
+    /// Perl's `$` (no /m) also matches just before a string-final "\n".
+    #[test]
+    fn trailing_newline_after_nuls_still_matches() {
+        let (name, _) = fallback(b"AB\0\0\n", "", "").expect("Perl-$ newline form");
+        assert_eq!(name, "ExifIFD:MakerNoteUnknownText");
+    }
+
+    /// @MakerNotes::Main entries preceding the fallbacks claim the note
+    /// first: MakerNoteRicohText takes any RICOH-made note,
+    /// MakerNoteJVCText takes a JVC "VER:" note, MakerNoteCanon takes
+    /// everything Canon-made. No MakerNoteUnknown* may fire for them, and
+    /// oxidex emits nothing in their place.
+    #[test]
+    fn preceding_maker_conditions_claim_the_note() {
+        assert_eq!(
+            fallback(b"Text note\0\0", "RICOH IMAGING COMPANY, LTD.", ""),
+            None
+        );
+        assert_eq!(fallback(b"VER:1.0\0", "JVC", "GR-D230"), None);
+        assert_eq!(fallback(b"LSI1\0abc", "Canon", "EOS"), None);
+    }
+
+    /// Makes that defeat their maker's Condition fall through to the
+    /// fallbacks: "FS-Nikon" fails /^NIKON/i (NikonLS-50.jpg), and a note
+    /// starting "DJI" fails MakerNoteDJI's `$$valPt !~ /^(...\@AMBA|DJI)/s`
+    /// (DJI_M3T.jpg).
+    #[test]
+    fn non_claimed_makes_reach_the_fallbacks() {
+        let (name, _) = fallback(b"LSI1\0data", "FS-Nikon", "LS-50").expect("LSI1 note");
+        assert_eq!(name, "ExifIFD:MakerNoteUnknownBinary");
+
+        let (name, value) = fallback(b"DJI MakerNotes\0\0", "DJI", "M3T").expect("DJI text note");
+        assert_eq!(name, "ExifIFD:MakerNoteUnknownText");
+        assert_eq!(value.as_string(), Some("DJI MakerNotes"));
+    }
+
+    /// STMN with a zeroed PreviewImageStart is MakerNoteSamsung1a; with a
+    /// nonzero one it is the MakerNoteSamsung1b subdirectory, which the
+    /// second pass parses - not a fallback value.
+    #[test]
+    fn stmn_splits_between_samsung1a_and_samsung1b() {
+        let mut binary_only = b"STMN010\0".to_vec();
+        binary_only.extend_from_slice(&[0, 0, 0, 0, 0xAA]);
+        let (name, _) = fallback(&binary_only, "SAMSUNG", "").expect("1a note");
+        assert_eq!(name, "ExifIFD:MakerNoteSamsung1a");
+
+        let mut with_preview = b"STMN010\0".to_vec();
+        with_preview.extend_from_slice(&[1, 2, 3, 4, 0xAA]);
+        assert_eq!(fallback(&with_preview, "SAMSUNG", ""), None);
+    }
 }
 
 fn push_u16(out: &mut Vec<u8>, value: u16, byte_order: ByteOrder) {
@@ -1321,137 +2055,232 @@ fn read_unsigned_fields(
             .collect(),
         (4, ByteOrder::LittleEndian) => bytes
             .chunks_exact(4)
-            .map(|value| {
-                u32::from_le_bytes([value[0], value[1], value[2], value[3]]) as u64
-            })
+            .map(|value| u32::from_le_bytes([value[0], value[1], value[2], value[3]]) as u64)
             .collect(),
         (4, ByteOrder::BigEndian) => bytes
             .chunks_exact(4)
-            .map(|value| {
-                u32::from_be_bytes([value[0], value[1], value[2], value[3]]) as u64
-            })
+            .map(|value| u32::from_be_bytes([value[0], value[1], value[2], value[3]]) as u64)
             .collect(),
         _ => return None,
     };
     Some(values)
 }
 
-fn push_unsigned(
-    out: &mut Vec<u8>,
-    value: u64,
-    field_type: u16,
-    byte_order: ByteOrder,
-) -> Option<()> {
-    match field_type {
-        3 => push_u16(out, u16::try_from(value).ok()?, byte_order),
-        4 => push_u32(out, u32::try_from(value).ok()?, byte_order),
-        _ => return None,
-    }
-    Some(())
+/// ImageWidth (0x0100), ImageHeight (0x0101), BitsPerSample (0x0102),
+/// PhotometricInterpretation (0x0106), Orientation (0x0112),
+/// SamplesPerPixel (0x0115) and PlanarConfiguration (0x011C), the IFD1
+/// fields `RebuildTIFF` consumes.
+const TAG_IMAGE_WIDTH: u16 = 0x0100;
+const TAG_IMAGE_HEIGHT: u16 = 0x0101;
+const TAG_BITS_PER_SAMPLE: u16 = 0x0102;
+const TAG_PHOTOMETRIC_INTERPRETATION: u16 = 0x0106;
+const TAG_ORIENTATION: u16 = 0x0112;
+const TAG_SAMPLES_PER_PIXEL: u16 = 0x0115;
+const TAG_PLANAR_CONFIGURATION: u16 = 0x011C;
+
+/// A value slot in the rebuilt directory, carrying its TIFF type.
+enum RebuiltValue {
+    /// int16u (TIFF SHORT, type 3); may hold several values (BitsPerSample).
+    Short(Vec<u16>),
+    /// int32u (TIFF LONG, type 4).
+    Long(u32),
+    /// rational64u (TIFF RATIONAL, type 5) as numerator/denominator.
+    Rational(u32, u32),
 }
 
-/// Repackages an uncompressed strip-based IFD1 image as ExifTool's
-/// self-contained `ThumbnailTIFF`, rewriting every strip offset.
-fn build_thumbnail_tiff(
+/// Rebuilds an uncompressed strip-based IFD1 image as ExifTool's
+/// self-contained `ThumbnailTIFF`/`PreviewTIFF`, replicating `RebuildTIFF`
+/// and `GenerateTIFF` (Exif.pm:6139-6208 and 6101-6130, pinned 13.59) byte
+/// for byte:
+///
+/// * gates: `SubfileType == 1` (reduced-resolution image) and
+///   `Compression == 1` (uncompressed); ImageWidth, ImageHeight,
+///   BitsPerSample, PhotometricInterpretation, StripOffsets,
+///   SamplesPerPixel, RowsPerStrip and StripByteCounts must all be present
+///   in this IFD, while PlanarConfiguration and Orientation default to 1;
+/// * validation: every strip's byte count must equal
+///   `rowBytes * RowsPerStrip`, where `rowBytes` is
+///   `sum(ImageWidth * int((bits + 7) / 8))` over the BitsPerSample values,
+///   and every strip must read back in full;
+/// * layout: a fixed 15-entry directory (0x00FE..0x0128) in this IFD's byte
+///   order and ascending tag order, SubfileType rewritten to 0, a single
+///   strip (`RowsPerStrip = ImageHeight`,
+///   `StripByteCounts = ImageHeight * rowBytes`), XResolution/YResolution 72
+///   and ResolutionUnit inches, each tag in its `Exif::Main` Writable format
+///   (the conditional-list tags 0x0111/0x0117 fall back to int32u),
+///   out-of-line values appended after the directory in entry order, and the
+///   concatenated strip data last;
+/// * naming: `PreviewTIFF` when ImageWidth > 256, else `ThumbnailTIFF`
+///   (Exif.pm:6199-6203).
+fn rebuild_thumbnail_tiff(
     reader: &dyn FileReader,
     entries: &[(u16, u16, u32, std::borrow::Cow<'_, [u8]>)],
     byte_order: ByteOrder,
-) -> Option<Vec<u8>> {
-    let compression = entries.iter().find(|entry| entry.0 == TAG_COMPRESSION)?;
-    if read_unsigned_field(
-        compression.3.as_ref(),
-        compression.1,
-        compression.2,
-        compression.0,
-        byte_order,
-    )? != 1
-    {
+) -> Option<(&'static str, Vec<u8>)> {
+    let field = |tag: u16| entries.iter().find(|entry| entry.0 == tag);
+    let scalar = |tag: u16| {
+        let entry = field(tag)?;
+        read_unsigned_field(entry.3.as_ref(), entry.1, entry.2, entry.0, byte_order)
+    };
+    let vector = |tag: u16| {
+        let entry = field(tag)?;
+        read_unsigned_fields(entry.3.as_ref(), entry.1, entry.2, byte_order)
+    };
+
+    // RebuildTIFF only processes a SubfileType == 1 (reduced-resolution)
+    // directory whose Compression is 1 (uncompressed).
+    if scalar(TAG_SUBFILE_TYPE)? != 1 || scalar(TAG_COMPRESSION)? != 1 {
+        return None;
+    }
+    let width = scalar(TAG_IMAGE_WIDTH)?;
+    let height = scalar(TAG_IMAGE_HEIGHT)?;
+    let photometric = scalar(TAG_PHOTOMETRIC_INTERPRETATION)?;
+    let samples_per_pixel = scalar(TAG_SAMPLES_PER_PIXEL)?;
+    let rows_per_strip = scalar(TAG_ROWS_PER_STRIP)?;
+    let bits = vector(TAG_BITS_PER_SAMPLE)?;
+    let offsets = vector(TAG_STRIP_OFFSETS)?;
+    let counts = vector(TAG_STRIP_BYTE_COUNTS)?;
+    let planar_configuration = scalar(TAG_PLANAR_CONFIGURATION).unwrap_or(1);
+    let orientation = scalar(TAG_ORIENTATION).unwrap_or(1);
+    if bits.is_empty() {
         return None;
     }
 
-    let offsets_entry = entries.iter().find(|entry| entry.0 == TAG_STRIP_OFFSETS)?;
-    let counts_entry = entries
-        .iter()
-        .find(|entry| entry.0 == TAG_STRIP_BYTE_COUNTS)?;
-    let source_offsets = read_unsigned_fields(
-        offsets_entry.3.as_ref(),
-        offsets_entry.1,
-        offsets_entry.2,
-        byte_order,
-    )?;
-    let source_counts = read_unsigned_fields(
-        counts_entry.3.as_ref(),
-        counts_entry.1,
-        counts_entry.2,
-        byte_order,
-    )?;
-    if source_offsets.is_empty() || source_offsets.len() != source_counts.len() {
-        return None;
+    // $rowBytes += $w * int(($_+7)/8) foreach @bits;
+    let mut row_bytes: u64 = 0;
+    for bit in &bits {
+        row_bytes = row_bytes.checked_add(width.checked_mul(bit.checked_add(7)? / 8)?)?;
     }
+    let expected_strip_len = row_bytes.checked_mul(rows_per_strip)?;
 
-    let directory_end = 8usize
-        .checked_add(2)?
-        .checked_add(entries.len().checked_mul(12)?)?
-        .checked_add(4)?;
-    let external_len = entries
-        .iter()
-        .filter(|entry| entry.3.len() > 4)
-        .try_fold(0usize, |total, entry| total.checked_add(entry.3.len()))?;
-    let image_start = directory_end.checked_add(external_len)?;
-
-    let mut strips = Vec::with_capacity(source_offsets.len());
-    let mut new_offsets = Vec::with_capacity(source_offsets.len());
-    let mut next_offset = image_start;
-    for (&source_offset, &source_count) in source_offsets.iter().zip(&source_counts) {
-        let count = usize::try_from(source_count).ok()?;
-        let strip = reader.read(source_offset, count).ok()?;
-        if strip.len() != count {
+    // Read and concatenate the strips; any short or failed read aborts, as
+    // ExtractBinary's failure does.
+    let mut data = Vec::new();
+    for (index, &offset) in offsets.iter().enumerate() {
+        if *counts.get(index)? != expected_strip_len {
             return None;
         }
-        new_offsets.push(u64::try_from(next_offset).ok()?);
-        next_offset = next_offset.checked_add(count)?;
-        strips.push(strip);
+        let len = usize::try_from(expected_strip_len).ok()?;
+        let strip = reader.read(offset, len).ok()?;
+        if strip.len() != len {
+            return None;
+        }
+        data.extend_from_slice(strip);
     }
 
-    let mut out = Vec::with_capacity(next_offset);
+    // GenerateTIFF's fixed entry set, ascending tag order.
+    let directory: [(u16, RebuiltValue); 15] = [
+        (TAG_SUBFILE_TYPE, RebuiltValue::Long(0)),
+        (TAG_IMAGE_WIDTH, RebuiltValue::Long(width as u32)),
+        (TAG_IMAGE_HEIGHT, RebuiltValue::Long(height as u32)),
+        (
+            TAG_BITS_PER_SAMPLE,
+            RebuiltValue::Short(bits.iter().map(|bit| *bit as u16).collect()),
+        ),
+        (TAG_COMPRESSION, RebuiltValue::Short(vec![1])),
+        (
+            TAG_PHOTOMETRIC_INTERPRETATION,
+            RebuiltValue::Short(vec![photometric as u16]),
+        ),
+        (TAG_STRIP_OFFSETS, RebuiltValue::Long(0)), // fixed up below
+        (
+            TAG_ORIENTATION,
+            RebuiltValue::Short(vec![orientation as u16]),
+        ),
+        (
+            TAG_SAMPLES_PER_PIXEL,
+            RebuiltValue::Short(vec![samples_per_pixel as u16]),
+        ),
+        (TAG_ROWS_PER_STRIP, RebuiltValue::Long(height as u32)),
+        (
+            TAG_STRIP_BYTE_COUNTS,
+            RebuiltValue::Long(height.checked_mul(row_bytes)? as u32),
+        ),
+        (0x011A, RebuiltValue::Rational(72, 1)), // XResolution
+        (0x011B, RebuiltValue::Rational(72, 1)), // YResolution
+        (
+            TAG_PLANAR_CONFIGURATION,
+            RebuiltValue::Short(vec![planar_configuration as u16]),
+        ),
+        (0x0128, RebuiltValue::Short(vec![2])), // ResolutionUnit = inches
+    ];
+
+    // Header (10 bytes) + entries + the next-IFD terminator.
+    let directory_end = 10 + 12 * directory.len() + 4;
+    let mut out = Vec::with_capacity(directory_end);
     out.extend_from_slice(match byte_order {
         ByteOrder::LittleEndian => b"II",
         ByteOrder::BigEndian => b"MM",
     });
     push_u16(&mut out, 42, byte_order);
     push_u32(&mut out, 8, byte_order);
-    push_u16(&mut out, u16::try_from(entries.len()).ok()?, byte_order);
+    push_u16(&mut out, directory.len() as u16, byte_order);
 
-    let mut external_offset = directory_end;
-    for (tag, field_type, count, raw) in entries {
+    let mut out_of_line = Vec::new();
+    let mut strip_offset_position = None;
+    for (tag, value) in &directory {
         push_u16(&mut out, *tag, byte_order);
-        push_u16(&mut out, *field_type, byte_order);
-        push_u32(&mut out, *count, byte_order);
-        if *tag == TAG_STRIP_OFFSETS && raw.len() <= 4 {
-            push_unsigned(&mut out, new_offsets[0], *field_type, byte_order)?;
-            out.resize(out.len() + 4 - raw.len(), 0);
-        } else if raw.len() <= 4 {
-            out.extend_from_slice(raw);
-            out.resize(out.len() + 4 - raw.len(), 0);
-        } else {
-            push_u32(&mut out, u32::try_from(external_offset).ok()?, byte_order);
-            external_offset = external_offset.checked_add(raw.len())?;
-        }
-    }
-    push_u32(&mut out, 0, byte_order);
-    for entry in entries.iter().filter(|entry| entry.3.len() > 4) {
-        if entry.0 == TAG_STRIP_OFFSETS {
-            for &offset in &new_offsets {
-                push_unsigned(&mut out, offset, entry.1, byte_order)?;
+        let (tiff_type, size, bytes) = match value {
+            RebuiltValue::Short(items) => {
+                let mut encoded = Vec::with_capacity(items.len() * 2);
+                for item in items {
+                    push_u16(&mut encoded, *item, byte_order);
+                }
+                (3u16, 2usize, encoded)
             }
+            RebuiltValue::Long(item) => {
+                let mut encoded = Vec::with_capacity(4);
+                push_u32(&mut encoded, *item, byte_order);
+                (4, 4, encoded)
+            }
+            RebuiltValue::Rational(numerator, denominator) => {
+                let mut encoded = Vec::with_capacity(8);
+                push_u32(&mut encoded, *numerator, byte_order);
+                push_u32(&mut encoded, *denominator, byte_order);
+                (5, 8, encoded)
+            }
+        };
+        push_u16(&mut out, tiff_type, byte_order);
+        push_u32(&mut out, (bytes.len() / size) as u32, byte_order);
+        if *tag == TAG_STRIP_OFFSETS {
+            strip_offset_position = Some(out.len());
+        }
+        if bytes.len() > 4 {
+            push_u32(
+                &mut out,
+                (directory_end + out_of_line.len()) as u32,
+                byte_order,
+            );
+            out_of_line.extend_from_slice(&bytes);
         } else {
-            out.extend_from_slice(entry.3.as_ref());
+            // Inline values are right-padded with NULs regardless of byte
+            // order, as Set-then-pad does in GenerateTIFF.
+            out.extend_from_slice(&bytes);
+            out.resize(out.len() + 4 - bytes.len(), 0);
         }
     }
-    for strip in strips {
-        out.extend_from_slice(strip);
-    }
-    Some(out)
+    push_u32(&mut out, 0, byte_order); // no IFD1 in the rebuilt file
+
+    // StripOffsets points at the strip data, which follows the out-of-line
+    // values.
+    let data_offset = (directory_end + out_of_line.len()) as u32;
+    let position = strip_offset_position?;
+    let patched = match byte_order {
+        ByteOrder::LittleEndian => data_offset.to_le_bytes(),
+        ByteOrder::BigEndian => data_offset.to_be_bytes(),
+    };
+    out[position..position + 4].copy_from_slice(&patched);
+
+    out.extend_from_slice(&out_of_line);
+    out.extend_from_slice(&data);
+    Some((
+        if width > 256 {
+            "PreviewTIFF"
+        } else {
+            "ThumbnailTIFF"
+        },
+        out,
+    ))
 }
 
 /// Parses the thumbnail IFD (IFD1) that follows IFD0 and emits the thumbnail tags.
@@ -1509,8 +2338,10 @@ pub fn parse_ifd1_thumbnail(
     for (tag_id, field_type, value_count, raw_bytes) in &entries {
         match *tag_id {
             TAG_SUBFILE_TYPE => {
+                // Family 1 is IFD1 here, like every sibling in this
+                // directory: `exiftool -G1` prints `[IFD1] SubfileType`.
                 metadata.insert(
-                    lookup_tag_name(*tag_id, "EXIF"),
+                    lookup_tag_name(*tag_id, "IFD1"),
                     raw_bytes_to_tag_value(
                         raw_bytes,
                         *field_type,
@@ -1587,12 +2418,11 @@ pub fn parse_ifd1_thumbnail(
         }
     }
 
-    if let Some(tiff) = build_thumbnail_tiff(reader, &entries, byte_order) {
-        let resolved = lookup_tag_name(TAG_SUBFILE_TYPE, "EXIF");
-        metadata.insert(
-            contextual_tag_name(&resolved, "ThumbnailTIFF"),
-            TagValue::new_binary(tiff),
-        );
+    if let Some((name, tiff)) = rebuild_thumbnail_tiff(reader, &entries, byte_order) {
+        // RebuildTIFF names the rebuilt image after the SubfileType tag's
+        // groups (family 1 = IFD1), calling it PreviewTIFF above 256 pixels
+        // wide (Exif.pm:6199-6203).
+        metadata.insert(format!("IFD1:{name}"), TagValue::new_binary(tiff));
     }
 
     // Compression carries the standard PrintConv ("JPEG (old-style)" for a
@@ -2371,6 +3201,173 @@ mod ifd1_tests {
                 .and_then(|v| v.as_integer()),
             Some(thumb_offset as i64 + 30)
         );
+    }
+
+    /// A minimal uncompressed reduced-resolution IFD1 (2x1 grayscale, one
+    /// strip of "AB") must rebuild into the exact byte stream ExifTool's
+    /// GenerateTIFF produces: 10-byte header, the fixed 15 entries in
+    /// ascending tag order, no next IFD, XResolution/YResolution 72/1
+    /// out-of-line, then the strip data at offset 210.
+    #[test]
+    fn rebuilt_thumbnail_tiff_matches_generate_tiff_byte_layout() {
+        let thumb = *b"AB";
+        // IFD1 sits at 14; ten 12-byte entries + count + next pointer put the
+        // strip data at 14 + 2 + 120 + 4 = 140.
+        let strip_offset = 140u32;
+        let metadata = run(
+            &[
+                (TAG_SUBFILE_TYPE, LONG, 1),
+                (TAG_IMAGE_WIDTH, LONG, 2),
+                (TAG_IMAGE_HEIGHT, LONG, 1),
+                (TAG_BITS_PER_SAMPLE, SHORT, 8),
+                (TAG_COMPRESSION, SHORT, 1),
+                (TAG_PHOTOMETRIC_INTERPRETATION, SHORT, 1),
+                (TAG_STRIP_OFFSETS, LONG, strip_offset),
+                (TAG_SAMPLES_PER_PIXEL, SHORT, 1),
+                (TAG_ROWS_PER_STRIP, LONG, 1),
+                (TAG_STRIP_BYTE_COUNTS, LONG, 2),
+            ],
+            &thumb,
+            0,
+        );
+
+        let mut expected: Vec<u8> = Vec::new();
+        expected.extend_from_slice(b"II");
+        expected.extend_from_slice(&42u16.to_le_bytes());
+        expected.extend_from_slice(&8u32.to_le_bytes());
+        expected.extend_from_slice(&15u16.to_le_bytes());
+        // (tag, type, count, value-field) per GenerateTIFF; SHORT values are
+        // right-padded to four bytes.
+        let entries: [(u16, u16, u32, [u8; 4]); 15] = [
+            (0x00FE, 4, 1, 0u32.to_le_bytes()),   // SubfileType = 0
+            (0x0100, 4, 1, 2u32.to_le_bytes()),   // ImageWidth
+            (0x0101, 4, 1, 1u32.to_le_bytes()),   // ImageHeight
+            (0x0102, 3, 1, [8, 0, 0, 0]),         // BitsPerSample
+            (0x0103, 3, 1, [1, 0, 0, 0]),         // Compression
+            (0x0106, 3, 1, [1, 0, 0, 0]),         // PhotometricInterpretation
+            (0x0111, 4, 1, 210u32.to_le_bytes()), // StripOffsets -> data
+            (0x0112, 3, 1, [1, 0, 0, 0]),         // Orientation (default)
+            (0x0115, 3, 1, [1, 0, 0, 0]),         // SamplesPerPixel
+            (0x0116, 4, 1, 1u32.to_le_bytes()),   // RowsPerStrip = height
+            (0x0117, 4, 1, 2u32.to_le_bytes()),   // StripByteCounts
+            (0x011A, 5, 1, 194u32.to_le_bytes()), // XResolution, out-of-line
+            (0x011B, 5, 1, 202u32.to_le_bytes()), // YResolution, out-of-line
+            (0x011C, 3, 1, [1, 0, 0, 0]),         // PlanarConfiguration (default)
+            (0x0128, 3, 1, [2, 0, 0, 0]),         // ResolutionUnit = inches
+        ];
+        for (tag, tiff_type, count, value) in entries {
+            expected.extend_from_slice(&tag.to_le_bytes());
+            expected.extend_from_slice(&tiff_type.to_le_bytes());
+            expected.extend_from_slice(&count.to_le_bytes());
+            expected.extend_from_slice(&value);
+        }
+        expected.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
+        expected.extend_from_slice(&72u32.to_le_bytes()); // XResolution 72/1
+        expected.extend_from_slice(&1u32.to_le_bytes());
+        expected.extend_from_slice(&72u32.to_le_bytes()); // YResolution 72/1
+        expected.extend_from_slice(&1u32.to_le_bytes());
+        expected.extend_from_slice(&thumb);
+
+        assert_eq!(
+            metadata.get("IFD1:ThumbnailTIFF"),
+            Some(&TagValue::new_binary(expected))
+        );
+    }
+
+    /// RebuildTIFF proceeds only for SubfileType == 1 with Compression == 1
+    /// and strips whose byte count equals rowBytes * RowsPerStrip; anything
+    /// else is omitted, never approximated.
+    #[test]
+    fn rebuilt_thumbnail_tiff_honours_exiftool_gates() {
+        let thumb = *b"AB";
+        let base: [(u16, u16, u32); 10] = [
+            (TAG_SUBFILE_TYPE, LONG, 1),
+            (TAG_IMAGE_WIDTH, LONG, 2),
+            (TAG_IMAGE_HEIGHT, LONG, 1),
+            (TAG_BITS_PER_SAMPLE, SHORT, 8),
+            (TAG_COMPRESSION, SHORT, 1),
+            (TAG_PHOTOMETRIC_INTERPRETATION, SHORT, 1),
+            (TAG_STRIP_OFFSETS, LONG, 140),
+            (TAG_SAMPLES_PER_PIXEL, SHORT, 1),
+            (TAG_ROWS_PER_STRIP, LONG, 1),
+            (TAG_STRIP_BYTE_COUNTS, LONG, 2),
+        ];
+
+        // SubfileType 0 (full-resolution image): not a thumbnail.
+        let mut wrong_subfile = base;
+        wrong_subfile[0].2 = 0;
+        assert_eq!(
+            run(&wrong_subfile, &thumb, 0).get("IFD1:ThumbnailTIFF"),
+            None
+        );
+
+        // Compression 6 (JPEG): RebuildTIFF requires uncompressed data.
+        let mut compressed = base;
+        compressed[4].2 = 6;
+        assert_eq!(run(&compressed, &thumb, 0).get("IFD1:ThumbnailTIFF"), None);
+
+        // StripByteCounts != rowBytes * RowsPerStrip: invalid strip, omitted.
+        let mut bad_strip = base;
+        bad_strip[9].2 = 3;
+        assert_eq!(run(&bad_strip, &thumb, 0).get("IFD1:ThumbnailTIFF"), None);
+
+        // A missing required field (no PhotometricInterpretation) also omits.
+        let missing: Vec<_> = base
+            .iter()
+            .copied()
+            .filter(|entry| entry.0 != TAG_PHOTOMETRIC_INTERPRETATION)
+            .collect();
+        assert_eq!(run(&missing, &thumb, 0).get("IFD1:ThumbnailTIFF"), None);
+    }
+
+    /// Above 256 pixels wide, RebuildTIFF files the image as PreviewTIFF
+    /// (Exif.pm:6199-6203), still under IFD1.
+    #[test]
+    fn wide_rebuilt_image_is_named_preview_tiff() {
+        let thumb = [0x55u8; 300];
+        let metadata = run(
+            &[
+                (TAG_SUBFILE_TYPE, LONG, 1),
+                (TAG_IMAGE_WIDTH, LONG, 300),
+                (TAG_IMAGE_HEIGHT, LONG, 1),
+                (TAG_BITS_PER_SAMPLE, SHORT, 8),
+                (TAG_COMPRESSION, SHORT, 1),
+                (TAG_PHOTOMETRIC_INTERPRETATION, SHORT, 1),
+                (TAG_STRIP_OFFSETS, LONG, 140),
+                (TAG_SAMPLES_PER_PIXEL, SHORT, 1),
+                (TAG_ROWS_PER_STRIP, LONG, 1),
+                (TAG_STRIP_BYTE_COUNTS, LONG, 300),
+            ],
+            &thumb,
+            0,
+        );
+        assert_eq!(metadata.get("IFD1:ThumbnailTIFF"), None);
+        assert!(matches!(
+            metadata.get("IFD1:PreviewTIFF"),
+            Some(TagValue::Binary(bytes)) if bytes.len() == 210 + 300
+        ));
+    }
+
+    /// The pinned Leica sample carries the one JPEG-path ThumbnailTIFF in the
+    /// corpus; the rebuilt stream was verified byte-identical to
+    /// `exiftool -b -ThumbnailTIFF` (47952 bytes), so pin its shape.
+    #[test]
+    fn leica_r9_dmr_thumbnail_tiff_matches_pinned_exiftool() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
+        let path = std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaR9-DigitalBackDMR.jpg",
+        );
+        let metadata = crate::core::operations::read_metadata(path).expect("Leica R9 DMR parses");
+        let Some(TagValue::Binary(tiff)) = metadata.get("IFD1:ThumbnailTIFF") else {
+            panic!("IFD1:ThumbnailTIFF must be emitted");
+        };
+        assert_eq!(tiff.len(), 47952);
+        // Header, entry count, and the strip data offset (216 = 194 + the
+        // 22 out-of-line bytes: BitsPerSample "8 8 8" plus two rationals).
+        assert_eq!(&tiff[..10], b"II\x2a\0\x08\0\0\0\x0f\0");
+        assert_eq!(&tiff[90..94], &216u32.to_le_bytes());
     }
 
     #[test]

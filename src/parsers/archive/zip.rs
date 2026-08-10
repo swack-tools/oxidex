@@ -2,7 +2,7 @@
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
-use crate::parsers::raw::{parse_raw_metadata, RawFormat};
+use crate::parsers::raw::{RawFormat, parse_raw_metadata};
 use crate::tag_db::lookup_tag_name;
 use std::io::{Cursor, Read};
 use zip::ZipArchive;
@@ -16,6 +16,13 @@ const ZIP_LOCAL_FILE_COMPRESSION_FIELD_END: usize = ZIP_LOCAL_FILE_COMPRESSION_O
 const ZIP_LOCAL_FILE_BIT_FLAG_OFFSET: usize = 6;
 const ZIP_LOCAL_FILE_CRC_OFFSET: usize = 14;
 const ZIP_LOCAL_FILE_CRC_FIELD_END: usize = ZIP_LOCAL_FILE_CRC_OFFSET + 4;
+/// Ceiling for an embedded EIP raw member's uncompressed size.
+///
+/// The declared size comes straight from the attacker-controlled central
+/// directory, so it must never drive an allocation. Real Phase One IIQ
+/// members top out in the low hundreds of megabytes; 1 GiB leaves ample
+/// headroom while keeping a hostile declaration from forcing a huge read.
+const EIP_RAW_MEMBER_MAX_SIZE: u64 = 1 << 30;
 
 /// Parser for ZIP archive files
 ///
@@ -180,16 +187,26 @@ impl ZipParser {
             return Ok(None);
         };
 
-        let mut raw_file = archive.by_name(&raw_name).map_err(|error| {
+        let raw_file = archive.by_name(&raw_name).map_err(|error| {
             ExifToolError::parse_error(format!("Failed to read EIP raw member: {error}"))
         })?;
-        let raw_size = usize::try_from(raw_file.size())
-            .map_err(|_| ExifToolError::parse_error("EIP raw member is too large"))?;
-        let mut raw_data = Vec::with_capacity(raw_size);
-        raw_file.read_to_end(&mut raw_data).map_err(|error| {
-            ExifToolError::parse_error(format!("Failed to extract EIP raw member: {error}"))
-        })?;
-        if raw_data.len() != raw_size {
+        // The declared uncompressed size is attacker-controlled central
+        // directory data: reject absurd declarations up front and bound the
+        // read with `take` instead of pre-allocating from the header. Reading
+        // one byte past the declared size keeps the original mismatch checks:
+        // a stream shorter *or* longer than declared still errors below.
+        let declared_size = raw_file.size();
+        if declared_size > EIP_RAW_MEMBER_MAX_SIZE {
+            return Err(ExifToolError::parse_error("EIP raw member is too large"));
+        }
+        let mut raw_data = Vec::new();
+        raw_file
+            .take(declared_size + 1)
+            .read_to_end(&mut raw_data)
+            .map_err(|error| {
+                ExifToolError::parse_error(format!("Failed to extract EIP raw member: {error}"))
+            })?;
+        if raw_data.len() as u64 != declared_size {
             return Err(ExifToolError::parse_error(
                 "EIP raw member is shorter than its declared size",
             ));

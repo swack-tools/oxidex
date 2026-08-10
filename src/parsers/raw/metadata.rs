@@ -6324,12 +6324,7 @@ fn canon_crw_tag_key(table_name: &str, field_name: &str) -> Option<String> {
         .or_else(|| find_table("Canon", "ShotInfo"))?
         .group0;
     let registered_name = requested_table
-        .and_then(|table| {
-            table
-                .fields
-                .iter()
-                .find(|field| field.name == field_name)
-        })
+        .and_then(|table| table.fields.iter().find(|field| field.name == field_name))
         .map(|field| field.name)
         .unwrap_or(field_name);
     Some(format!("{group}:{registered_name}"))
@@ -6375,10 +6370,13 @@ fn parse_ciff_record(tag: u16, record: &[u8], metadata: &mut MetadataMap) {
         }
         // CanonRaw.pm tag 0x1038 -> Canon::AFInfo. This serial record has no
         // leading length word; NumAFPoints at index zero controls both arrays.
+        // The table's default FORMAT is int16u (Canon.pm 13.59), so scalar
+        // entries decode unsigned; only the per-entry int16s[$val{0}] arrays
+        // (AFAreaXPositions/AFAreaYPositions) are signed.
         0x1038 => {
             let values = record
                 .chunks_exact(2)
-                .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
+                .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
                 .collect::<Vec<_>>();
 
             for (index, name) in [
@@ -6399,10 +6397,10 @@ fn parse_ciff_record(tag: u16, record: &[u8], metadata: &mut MetadataMap) {
             let Some(&point_count) = values.first() else {
                 return;
             };
-            if point_count <= 0 {
+            if point_count == 0 {
                 return;
             }
-            let point_count = point_count as usize;
+            let point_count = usize::from(point_count);
             let x_start = 8usize;
             let Some(y_start) = x_start.checked_add(point_count) else {
                 return;
@@ -6418,15 +6416,10 @@ fn parse_ciff_record(tag: u16, record: &[u8], metadata: &mut MetadataMap) {
                 if let Some(positions) = values.get(range) {
                     let display = positions
                         .iter()
-                        .map(i16::to_string)
+                        .map(|&value| (value as i16).to_string())
                         .collect::<Vec<_>>()
                         .join(" ");
-                    insert_canon_crw_tag(
-                        metadata,
-                        "AFInfo",
-                        name,
-                        TagValue::new_string(display),
-                    );
+                    insert_canon_crw_tag(metadata, "AFInfo", name, TagValue::new_string(display));
                 }
             }
         }

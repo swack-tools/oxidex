@@ -271,15 +271,6 @@ pub fn apply(map: &mut MetadataMap) -> usize {
         let mut added_this_pass = 0;
 
         for comp in COMPOSITES {
-            // MIFF's profile-APP1 EXIF is embedded Photoshop metadata rather
-            // than an ordinary top-level EXIF source. ExifTool exposes its
-            // ApertureValue but does not use it to emit Composite:Aperture.
-            // Other container-derived composites such as ImageSize remain
-            // eligible.
-            if file_type.as_deref() == Some("MIFF") && comp.name == "Aperture" {
-                continue;
-            }
-
             let key = format!("Composite:{}", comp.name);
             let already_ours = ours.contains(comp.name);
             // Exif.pm guards this join with
