@@ -415,6 +415,20 @@ impl FormatParser for JXLParser {
                 "JXLFormat".to_string(),
                 TagValue::String("Codestream".to_string()),
             );
+            // ExifTool names the two encodings differently. Only the ISO BMFF
+            // container is plain `JXL`; a bare codestream gets its own type
+            // (Jpeg2000.pm:1628):
+            //
+            //     $et->SetFileType('JXL Codestream','image/jxl', 'jxl');
+            //
+            // Into the `File` group because it has to outrank
+            // `%fileTypeLookup`, which answers `JXL` for the `.jxl` extension
+            // whichever encoding is inside. The MIME type and extension are
+            // the same either way, so only the type is set here.
+            metadata.insert(
+                "File:FileType".to_string(),
+                TagValue::String("JXL Codestream".to_string()),
+            );
             // Read codestream header (first 64 bytes should be enough)
             let header_size = (reader.size() as usize).min(64);
             let header = reader.read(0, header_size)?;
@@ -515,5 +529,52 @@ fn raw_bytes_to_tag_value(
         TagValue::String(text.trim_end_matches('\0').to_string())
     } else {
         TagValue::Binary(bytes.to_vec())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TestReader;
+
+    /// The bare codestream: `%magicNumber{JXL}`'s first alternative.
+    fn codestream() -> Vec<u8> {
+        let mut data = vec![0xFF, 0x0A];
+        data.extend_from_slice(&[0x08, 0x04, 0x8E, 0x81, 0x3C]);
+        data.resize(64, 0);
+        data
+    }
+
+    /// The ISO BMFF container: a `JXL ` signature box then an `ftyp` box, the
+    /// second alternative of the same pattern.
+    fn container() -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"\0\0\0\x0cJXL \x0d\x0a\x87\x0a");
+        data.extend_from_slice(b"\0\0\0\x14ftypjxl \0\0\0\0jxl ");
+        data
+    }
+
+    #[test]
+    fn a_bare_codestream_is_not_named_plain_jxl() {
+        // Jpeg2000.pm:1628 gives the codestream its own file type;
+        // `%fileTypeLookup` answers `JXL` for the extension either way, so the
+        // distinction can only come from the content.
+        let metadata = JXLParser.parse(&TestReader::new(codestream())).unwrap();
+        assert_eq!(metadata.get_string("JXLFormat"), Some("Codestream"));
+        assert_eq!(metadata.get_string("File:FileType"), Some("JXL Codestream"));
+    }
+
+    #[test]
+    fn a_container_keeps_the_plain_jxl_name() {
+        let metadata = JXLParser.parse(&TestReader::new(container())).unwrap();
+        assert_eq!(metadata.get_string("JXLFormat"), Some("Container"));
+        // No `File:FileType` -- the identification layer's `JXL` stands.
+        assert_eq!(metadata.get_string("File:FileType"), None);
+    }
+
+    #[test]
+    fn a_non_jxl_file_is_rejected() {
+        let err = JXLParser.parse(&TestReader::new(vec![0u8; 32]));
+        assert!(err.is_err());
     }
 }
