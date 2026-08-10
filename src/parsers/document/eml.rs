@@ -39,16 +39,20 @@ impl EmlParser {
     fn read_header_text(reader: &dyn FileReader) -> Result<String> {
         let size = (reader.size() as usize).min(TEXT_FORMAT_PROBE_SIZE);
         let content = reader.read(0, size)?;
-        let header_end = content
-            .windows(4)
-            .position(|window| window == b"\r\n\r\n")
-            .or_else(|| content.windows(2).position(|window| window == b"\n\n"))
-            .unwrap_or(content.len());
+        let headers = crate::parsers::detection::text::eml_header_bytes(content);
 
-        Ok(String::from_utf8_lossy(&content[..header_end]).into_owned())
+        Ok(String::from_utf8_lossy(headers).into_owned())
     }
 
     /// Verifies EML format by checking for common email headers
+    ///
+    /// Shares the detector's `looks_like_eml`, which walks actual header
+    /// lines -- rejecting a continuation line before any header and a line
+    /// without a `:` -- and requires a valid Date plus an address-like From.
+    /// The "2 of 4 tokens anywhere in the probe" check this replaced matched
+    /// those substrings inside prose or a URL query string just as readily
+    /// as inside a real header, and `has_to` (`"to:"`) is not a distinctive
+    /// substring at all.
     ///
     /// # Arguments
     ///
@@ -66,21 +70,7 @@ impl EmlParser {
 
         // Match the bounded text detection window so long header blocks remain parseable.
         let text = Self::read_header_text(reader)?;
-
-        // Check for common email headers (case-insensitive)
-        let text_lower = text.to_lowercase();
-        let has_from = text_lower.contains("from:");
-        let has_to = text_lower.contains("to:");
-        let has_date = text_lower.contains("date:");
-        let has_subject = text_lower.contains("subject:");
-
-        // Must have at least 2 of these common headers
-        let header_count = [has_from, has_to, has_date, has_subject]
-            .iter()
-            .filter(|&&x| x)
-            .count();
-
-        Ok(header_count >= 2)
+        Ok(crate::parsers::detection::text::looks_like_eml(&text))
     }
 
     /// Parse email headers and extract forensic metadata
@@ -521,8 +511,13 @@ This is the email body.";
 
     #[test]
     fn test_parse_routing_headers() {
+        // Date is an RFC 5322-required header, and now that `verify_signature`
+        // shares the detector's `looks_like_eml`, a from/to pair alone is not
+        // enough without one -- see `prose_containing_header_words_as_substrings_is_not_eml`
+        // for what the substring gate this replaced let through.
         let eml_data = b"From: sender@example.com\r\n\
 To: recipient@example.com\r\n\
+Date: Mon, 1 Jan 2024 12:00:00 +0000\r\n\
 Received: from mail1.example.com by mail2.example.com\r\n\
 Received: from [192.168.1.100] by mail1.example.com\r\n\
 Return-Path: <sender@example.com>\r\n\
@@ -560,6 +555,7 @@ Body";
     fn test_parse_authentication_headers() {
         let eml_data = b"From: sender@example.com\r\n\
 To: recipient@example.com\r\n\
+Date: Mon, 1 Jan 2024 12:00:00 +0000\r\n\
 Authentication-Results: example.com; spf=pass\r\n\
 DKIM-Signature: v=1; a=rsa-sha256; d=example.com\r\n\
 Received-SPF: pass\r\n\
@@ -590,6 +586,7 @@ Body";
     fn test_parse_client_headers() {
         let eml_data = b"From: sender@example.com\r\n\
 To: recipient@example.com\r\n\
+Date: Mon, 1 Jan 2024 12:00:00 +0000\r\n\
 User-Agent: Mozilla Thunderbird\r\n\
 X-Mailer: Microsoft Outlook 16.0\r\n\
 \r\n\
@@ -616,6 +613,7 @@ Body";
     fn test_parse_content_headers() {
         let eml_data = b"From: sender@example.com\r\n\
 To: recipient@example.com\r\n\
+Date: Mon, 1 Jan 2024 12:00:00 +0000\r\n\
 Content-Type: text/plain; charset=utf-8\r\n\
 MIME-Version: 1.0\r\n\
 Content-Transfer-Encoding: quoted-printable\r\n\
@@ -649,6 +647,7 @@ Body";
     fn test_parse_threading_headers() {
         let eml_data = b"From: sender@example.com\r\n\
 To: recipient@example.com\r\n\
+Date: Mon, 1 Jan 2024 12:00:00 +0000\r\n\
 In-Reply-To: <previous@example.com>\r\n\
 References: <ref1@example.com> <ref2@example.com>\r\n\
 Thread-Index: AQHabc123\r\n\
@@ -723,5 +722,26 @@ Body";
             metadata.get("EML:Subject").and_then(|v| v.as_string()),
             Some("This is a long subject that continues on the next line")
         );
+    }
+
+    /// The old gate needed only 2 of {"from:", "to:", "date:", "subject:"}
+    /// anywhere in the probe, with no requirement that they sit in a real
+    /// header line. This one-line memo contains "from:", "to:" and
+    /// "subject:" as plain substrings -- 3 of 4, well past the old
+    /// threshold -- but is not RFC 5322 headers at all.
+    #[test]
+    fn prose_containing_header_words_as_substrings_is_not_eml() {
+        let text = b"Please review the attached quote: pricing valid from: \
+                      Jan 1 to: Feb 1. Subject: budget approval. See details inline.";
+        let reader = MockFileReader::new(text.to_vec());
+        assert!(!EmlParser::verify_signature(&reader).unwrap());
+    }
+
+    #[test]
+    fn a_real_email_header_block_is_still_eml() {
+        let eml_data = b"From: sender@example.com\r\nTo: recipient@example.com\r\n\
+                          Subject: Hello\r\nDate: Mon, 1 Jan 2024 12:00:00 +0000\r\n\r\nBody";
+        let reader = MockFileReader::new(eml_data.to_vec());
+        assert!(EmlParser::verify_signature(&reader).unwrap());
     }
 }

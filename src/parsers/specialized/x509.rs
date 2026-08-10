@@ -120,6 +120,18 @@ impl X509Parser {
     /// * `Ok(true)` - Valid certificate signature detected
     /// * `Ok(false)` - Invalid or missing signature
     /// * `Err` - I/O error reading the file
+    /// The DER branch used to accept any file whose second byte was under
+    /// 0x80: `ASN1_SEQUENCE` is `0x30`, which is also ASCII `'0'`, so any
+    /// text file opening `0` followed by an ordinary ASCII character --
+    /// including every DXF file, which opens with the group code `0` --
+    /// passed. `parse_asn1_length`'s result was bound to `_length` and
+    /// discarded rather than checked against anything.
+    ///
+    /// Now shares the detector's `looks_like_der_x509`, which walks the full
+    /// structure: the outer SEQUENCE, tbsCertificate, a serial INTEGER, two
+    /// AlgorithmIdentifiers with OIDs, a Validity with two time values, and
+    /// SubjectPublicKeyInfo -- and, matching the detector, requires the
+    /// declared top-level object length to equal the file's own size.
     pub fn verify_signature(reader: &dyn FileReader) -> Result<bool> {
         if reader.size() < 10 {
             return Ok(false);
@@ -132,11 +144,17 @@ impl X509Parser {
         }
 
         // Check for DER format (ASN.1 SEQUENCE)
-        let der_header = reader.read(0, 2)?;
-        if der_header[0] == ASN1_SEQUENCE {
-            // Verify it looks like a valid certificate structure
-            let mut offset = 1;
-            if let Some(_length) = Self::parse_asn1_length(reader.read(0, 10)?, &mut offset) {
+        if header.first() == Some(&ASN1_SEQUENCE) {
+            let probe_len = reader
+                .size()
+                .min(crate::parsers::detection::DER_X509_MAX_PROBE_SIZE as u64)
+                as usize;
+            let probe = reader.read(0, probe_len)?;
+            if let Some(der_object_len) =
+                crate::parsers::detection::x509_der::top_level_der_object_len(probe)
+                && der_object_len as u64 == reader.size()
+                && crate::parsers::detection::x509_der::looks_like_der_x509(probe)
+            {
                 return Ok(true);
             }
         }
@@ -925,13 +943,22 @@ mod tests {
 
     #[test]
     fn test_verify_signature_der() {
-        // Minimal valid DER certificate header: SEQUENCE with length
-        // Need at least 10 bytes for verify_signature to work
-        let mut data = vec![0x30, 0x82, 0x01, 0x00]; // SEQUENCE, long form length (256 bytes)
-        // Add padding to reach minimum 10 bytes
+        let reader = TestReader::new(create_test_der_certificate());
+        assert!(X509Parser::verify_signature(&reader).unwrap());
+    }
+
+    /// `ASN1_SEQUENCE` (`0x30`) is also ASCII `'0'`, and the old gate's
+    /// length check (`parse_asn1_length`'s result bound to `_length` and
+    /// discarded) accepted any second byte under 0x80 -- so a SEQUENCE tag
+    /// claiming a length nothing in the buffer backs up, like this one, used
+    /// to pass. It is exactly the shape of a DXF file, which opens with the
+    /// group code `0`.
+    #[test]
+    fn a_bare_sequence_tag_with_no_real_structure_behind_it_is_not_x509() {
+        let mut data = vec![0x30, 0x82, 0x01, 0x00]; // SEQUENCE, claims 256 bytes
         data.extend_from_slice(&[0x30, 0x03, 0x02, 0x01, 0x00, 0x00]);
         let reader = TestReader::new(data);
-        assert!(X509Parser::verify_signature(&reader).unwrap());
+        assert!(!X509Parser::verify_signature(&reader).unwrap());
     }
 
     #[test]
@@ -1054,36 +1081,34 @@ MIIBIjANBgk=
     }
 
     /// Creates a minimal valid DER certificate for testing
+    /// A real self-signed certificate (`openssl req -x509 -newkey rsa:512
+    /// ... -outform DER`, CN=test), base64-embedded rather than checked in as
+    /// a binary file -- there is no `include_bytes!` fixture convention
+    /// elsewhere in this crate.
+    ///
+    /// The version this replaced stopped after `SEQUENCE > TBSCertificate
+    /// SEQUENCE > Version > SerialNumber`, then padded with zero bytes to
+    /// reach its claimed length. `verify_signature` now shares the
+    /// detector's `looks_like_der_x509`, which additionally requires two
+    /// AlgorithmIdentifiers (each with an OID), a Validity with two time
+    /// values, and a certificate-shaped SubjectPublicKeyInfo -- exactly the
+    /// fields the padding was standing in for. A real certificate has all of
+    /// them; a synthetic one has to build them by hand or fail the gate this
+    /// fix put in place.
     fn create_test_der_certificate() -> Vec<u8> {
-        let mut cert = Vec::new();
-
-        // Certificate SEQUENCE
-        cert.push(0x30); // SEQUENCE
-        cert.push(0x82); // Long form length
-        cert.push(0x01); // 256+ bytes
-        cert.push(0x00);
-
-        // TBSCertificate SEQUENCE
-        cert.push(0x30);
-        cert.push(0x81);
-        cert.push(0xF0);
-
-        // Version [0] EXPLICIT (v3 = 2)
-        cert.push(0xA0); // Context-specific constructed
-        cert.push(0x03);
-        cert.push(0x02); // INTEGER
-        cert.push(0x01);
-        cert.push(0x02); // Version 3
-
-        // Serial number INTEGER
-        cert.push(0x02); // INTEGER
-        cert.push(0x08); // 8 bytes
-        cert.extend_from_slice(&[0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF]);
-
-        // Pad to expected length
-        cert.resize(260, 0);
-
-        cert
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        STANDARD
+            .decode(concat!(
+                "MIIBdTCCAR+gAwIBAgIUTIuzFes0ON5mZW0u4F4+Kvma33QwDQYJKoZIhvcNAQEL",
+                "BQAwDzENMAsGA1UEAwwEdGVzdDAeFw0yNjA4MTAxNzQ1NDJaFw0yNjA4MTExNzQ1",
+                "NDJaMA8xDTALBgNVBAMMBHRlc3QwXDANBgkqhkiG9w0BAQEFAANLADBIAkEAqnS/",
+                "x+FaHtiERTjwO0nq0MHszBsS4IuO0KKTWV6HlXttXt4fV8Eg8Fuh9qrDjzZH4/4p",
+                "fzoY3jTx5qjrUJyHpwIDAQABo1MwUTAdBgNVHQ4EFgQUjXD/y8w8dsB99yccsGoG",
+                "hCne6dAwHwYDVR0jBBgwFoAUjXD/y8w8dsB99yccsGoGhCne6dAwDwYDVR0TAQH/",
+                "BAUwAwEB/zANBgkqhkiG9w0BAQsFAANBAITh84nBGaw1R7ioe1N+fRG+rxVq1uCe",
+                "vLWABSdswYunlduvSzMEQilkCe9rWtNJyMvQlDCk4kPYFPe5vvoufDY=",
+            ))
+            .expect("fixture is valid base64")
     }
 
     #[test]

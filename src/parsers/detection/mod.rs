@@ -51,7 +51,7 @@ mod signatures;
 pub(crate) mod text;
 mod tiff;
 mod video;
-mod x509_der;
+pub(crate) mod x509_der;
 
 use crate::core::{FileFormat, FileReader};
 use std::io;
@@ -70,7 +70,7 @@ use tiff::detect_tiff_variants;
 use video::is_mts_stream;
 use x509_der::{looks_like_der_x509, top_level_der_object_len};
 
-const DER_X509_MAX_PROBE_SIZE: usize = 1024 * 1024;
+pub(crate) const DER_X509_MAX_PROBE_SIZE: usize = 1024 * 1024;
 pub(crate) const TEXT_FORMAT_PROBE_SIZE: usize = 64 * 1024;
 
 /// Detects the file format by examining magic bytes.
@@ -183,6 +183,16 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
     // bytes that happen to appear inside ZIP headers, names, or payloads.
     if magic_bytes.starts_with(&[0x50, 0x4B]) {
         return Ok(detect_zip_variant(reader));
+    }
+
+    // FITS: `^SIMPLE  = {20}T`, the full 30-byte keyword record. This used to
+    // be a `SIMPLE_SIGNATURES` entry testing the bare word "SIMPLE" (six
+    // bytes) -- a plain-text file opening "SIMPLE ANSWER:" satisfied it and
+    // was dispatched to `FITSParser` ahead of every other rule, since Phase 2
+    // runs first. `matches_magic` reads the real 30-byte pattern, so it has
+    // to run as its own check rather than live in the byte-literal table.
+    if crate::filetype::matches_magic("FITS", magic_bytes) {
+        return Ok(FileFormat::FITS);
     }
 
     // Phase 2: Check simple signatures from lookup table
@@ -421,7 +431,7 @@ fn root_element_is(data: &[u8], name: &str) -> bool {
         .is_none_or(|character| character.is_whitespace() || matches!(character, '>' | '/'))
 }
 
-fn looks_like_svg_root(data: &[u8]) -> bool {
+pub(crate) fn looks_like_svg_root(data: &[u8]) -> bool {
     root_element_is(data, "<svg")
 }
 
@@ -626,6 +636,53 @@ mod tests {
         data[0..5].copy_from_slice(b"CD001"); // right bytes, wrong offset
         let reader = TestReader::new(data);
         assert_ne!(detect_format(&reader).unwrap(), FileFormat::ISO);
+    }
+
+    /// `is_dwg`'s old range check (`header[2] >= b'1' && header[3] >= b'0'`)
+    /// accepted any byte at or past those values, so plain text opening
+    /// "ACTION" or "ACCESS" was dispatched to `DWGParser` ahead of every text
+    /// rule -- and `File:FileType`, read from the same magic table
+    /// `is_dwg` now asks, never agreed it was DWG.
+    #[test]
+    fn prose_opening_action_is_not_dwg() {
+        let mut data = b"ACTION_ITEMS: buy milk, walk the dog, review the PR by Friday.\n".to_vec();
+        data.resize(64, b'\n');
+        let reader = TestReader::new(data);
+        assert_ne!(detect_format(&reader).unwrap(), FileFormat::DWG);
+    }
+
+    #[test]
+    fn a_real_dwg_version_string_is_still_dwg() {
+        let mut data = b"AC1015".to_vec();
+        data.push(0);
+        data.resize(64, 0);
+        let reader = TestReader::new(data);
+        assert_eq!(detect_format(&reader).unwrap(), FileFormat::DWG);
+    }
+
+    /// The old `SIMPLE_SIGNATURES` entry tested the bare word "SIMPLE" (six
+    /// bytes) rather than ExifTool's full 30-byte keyword record, so a
+    /// plain-text file opening "SIMPLE ANSWER:" was dispatched to
+    /// `FITSParser` -- and Phase 2's simple-signature scan runs ahead of
+    /// every text rule, so nothing downstream could correct it.
+    #[test]
+    fn prose_opening_simple_is_not_fits() {
+        let mut data = b"SIMPLE ANSWER: always test your assumptions before shipping.\n".to_vec();
+        data.resize(64, b'\n');
+        let reader = TestReader::new(data);
+        assert_ne!(detect_format(&reader).unwrap(), FileFormat::FITS);
+    }
+
+    #[test]
+    fn a_real_fits_keyword_record_is_still_fits() {
+        // ExifTool's magic: `^SIMPLE  = {20}T` -- "SIMPLE", two spaces, "=",
+        // twenty spaces, "T". `matches_magic` reads this straight from the
+        // pattern rather than the record's 80-column card layout, so a
+        // shorter buffer that merely opens with it is enough.
+        let mut data = b"SIMPLE  =                    T".to_vec();
+        data.resize(80, b' ');
+        let reader = TestReader::new(data);
+        assert_eq!(detect_format(&reader).unwrap(), FileFormat::FITS);
     }
 
     /// HTML shares the `<?xml` opening with SVG, XMP and XML plists, so the
