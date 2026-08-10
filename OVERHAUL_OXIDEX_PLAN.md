@@ -14,6 +14,7 @@
 8. **Progress ledger.** `OVERHAUL_PROGRESS.md` at the repo root, local and deliberately untracked: one line per step — status, branch, PR #, instrument result. Every session reads it before starting and updates it after every step and at stage end. Keep it out of step PRs (it would conflict across parallel branches).
 9. **Ship flow per step.** Branch off latest origin/main → implement → run the step's named Verify instrument → merge origin/main and re-verify → PR with the instrument result quoted in the body → CI green → squash-merge. Note: `gh pr merge` can print a cosmetic `fatal: 'main' is already used by worktree` checkout error *after* a successful merge — verify with `gh pr view --json state,mergedAt`, do not retry the merge.
 10. **Session prerequisites.** A permission mode that auto-accepts edits (a multi-PR stage stalls on prompts otherwise); `gh` authenticated; `RUSTC_WRAPPER=sccache` for builds; never `git stash` in worktrees (the stash ref is shared across all worktrees and a parallel session can silently clobber it).
+11. **Work from a clean tree at origin/main.** If the session's checkout is on another branch or has uncommitted/staged changes (the maintainer's main checkout often carries WIP — e.g. `model-fix-sweep-local`), do NOT switch branches there and do NOT commit files you did not author: create a fresh `git worktree` off latest `origin/main` and do all work in it.
 
 ---
 ## Organizing principle: static accounting, not corpus sampling
@@ -203,6 +204,11 @@ You are the orchestrator for executing this plan. The plan's "Execution rules fo
 agent sessions" section is binding in full; the load-bearing points:
 
 STAGE = 1
+- First, secure a clean base: fetch origin. If this checkout is on a branch other
+  than main or has uncommitted/staged changes, do NOT switch branches or commit
+  anything here — create a fresh git worktree off latest origin/main and do ALL
+  work there (the maintainer's checkout may carry unrelated WIP; never mix it
+  into a PR).
 - Execute the stage above, step by step. If every one of its exit criteria passes
   and no question is pending for me, roll into the next stage — but STOP at the
   first design checkpoint you reach (Steps 10, 15, 18, 28, and Step 15's decision
