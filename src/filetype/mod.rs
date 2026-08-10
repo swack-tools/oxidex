@@ -445,6 +445,27 @@ fn is_plain_xml(header: &[u8]) -> bool {
     !body.contains("<svg ") && !body.contains("<svg>") && !body.contains("<svg\n")
 }
 
+/// `%mimeType` for one file type, with no root-type fallback.
+///
+/// Exposed for the parsers that name a file themselves. `SetFileType` resolves
+/// the MIME type in three steps (ExifTool.pm:9704-9715):
+///
+/// ```text
+///     $mimeType or $mimeType = $mimeType{$fileType};
+///     $mimeType = $mimeType{$baseType} unless $mimeType or $baseType eq 'TIFF';
+///     ...
+///     $self->FoundTag('MIMEType', $mimeType || 'application/unknown');
+/// ```
+///
+/// [`Identity::mime_type`] collapses the first two, which is right when the
+/// extension resolved the type. A parser that names the file from its content
+/// -- `ELF shared library`, `Mach-O executable` -- has a name `%mimeType` will
+/// never carry, and has to ask for its base type's row itself.
+#[must_use]
+pub fn mime_for_type(file_type: &str) -> Option<&'static str> {
+    mime_for(file_type)
+}
+
 /// Identify by filename extension, for formats with no distinctive header.
 #[must_use]
 pub fn identify_by_extension(ext: &str) -> Option<Identity> {
