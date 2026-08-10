@@ -116,8 +116,8 @@ pub fn extract_macho_metadata(info: &MachOInfo) -> MetadataMap {
 /// leaves the extensionless `EXE.macho` as `Unknown`.
 ///
 /// `FileTypeExtension` is empty for an executable: ExifTool passes `''` and
-/// emits the tag with no value. MIME is left alone -- every form is given
-/// `undef` and lands on `application/octet-stream`.
+/// emits the tag with no value. Every form is given `undef` for the MIME type,
+/// so all of them resolve through the base type below.
 fn set_macho_file_type(header: &MachHeader, is_fat: bool, metadata: &mut MetadataMap) {
     use super::structures::file_type;
 
@@ -140,6 +140,16 @@ fn set_macho_file_type(header: &MachHeader, is_fat: bool, metadata: &mut Metadat
         "File:FileTypeExtension".to_string(),
         TagValue::String(extension.to_string()),
     );
+    // `%mimeType` has no row for a name like this -- ExifTool reaches
+    // `application/octet-stream` through `$mimeType{$baseType}`, and EXE is
+    // the base type `%fileTypeLookup` routes this family to. Without it the
+    // file falls through to `application/unknown`.
+    if let Some(mime) = crate::filetype::mime_for_type("EXE") {
+        metadata.insert(
+            "File:MIMEType".to_string(),
+            TagValue::String(mime.to_string()),
+        );
+    }
 }
 
 /// Extract metadata from the Mach-O header

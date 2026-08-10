@@ -50,6 +50,23 @@ use std::time::SystemTime;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+/// What ExifTool reports when nothing declares a MIME type for the file.
+///
+/// `%mimeType`'s own header comment (ExifTool.pm:614-616) and `SetFileType`
+/// (ExifTool.pm:9715) agree:
+///
+/// ```text
+///     # (missing entries default to 'application/unknown', ...)
+///     ...
+///     $self->FoundTag('MIMEType', $mimeType || 'application/unknown');
+/// ```
+///
+/// Not `application/octet-stream` -- that is a real answer `%mimeType` gives
+/// explicitly for DR4, VRD, LNK, MOI and the EXE family, and using it as the
+/// fallback made "we have no idea" indistinguishable from ExifTool's actual
+/// value for those types.
+pub(crate) const UNKNOWN_MIME_TYPE: &str = "application/unknown";
+
 /// Extracts file system metadata from a file path.
 ///
 /// This function reads metadata from the file system (not from the file content)
@@ -328,8 +345,8 @@ fn format_unix_permissions(mode: u32) -> String {
 /// there is no case where a 50-entry copy beats the 300-entry generated table
 /// it was copied from.
 ///
-/// Unrecognised extensions keep the previous placeholders (`Unknown` /
-/// `application/octet-stream`), which `add_identity_tags` is free to replace.
+/// Unrecognised extensions keep the placeholders (`Unknown` /
+/// [`UNKNOWN_MIME_TYPE`]), which `add_identity_tags` is free to replace.
 fn identify_extension(extension: &str, header: &[u8]) -> (String, String, &'static str) {
     // `.ts` is a deliberate deviation from ExifTool, and the one place the hand
     // table was right to disagree. `%fileTypeLookup` maps it to M2TS, but a
@@ -341,7 +358,7 @@ fn identify_extension(extension: &str, header: &[u8]) -> (String, String, &'stat
         return (
             "Unknown".to_string(),
             extension.to_string(),
-            "application/octet-stream",
+            UNKNOWN_MIME_TYPE,
         );
     }
 
@@ -367,15 +384,26 @@ fn identify_extension(extension: &str, header: &[u8]) -> (String, String, &'stat
             // for it with the MOV root's `video/quicktime` -- a non-`None` wrong
             // answer that an `or_else` after it can never correct. ExifTool says
             // `audio/mp4`.
+            // `application/unknown` rather than `application/octet-stream`
+            // is ExifTool's fallback for a type `%mimeType` does not carry
+            // (ExifTool.pm:9715, and the hash's own header comment at 614):
+            //
+            //     $self->FoundTag('MIMEType', $mimeType || 'application/unknown');
+            //
+            // The two are not interchangeable. `application/octet-stream` is a
+            // real answer that %mimeType gives explicitly for DR4, VRD, LNK,
+            // MOI and the whole EXE family; `application/unknown` is what is
+            // left when nothing answered. Conflating them reported the wrong
+            // one of the pair for `MacOS.macos`.
             let mime = module_mime_type(&id.file_type)
                 .or(id.mime_type)
-                .unwrap_or("application/octet-stream");
+                .unwrap_or(UNKNOWN_MIME_TYPE);
             (id.file_type.into_owned(), id.extension.into_owned(), mime)
         }
         None => (
             "Unknown".to_string(),
             extension.to_string(),
-            "application/octet-stream",
+            UNKNOWN_MIME_TYPE,
         ),
     }
 }
@@ -508,10 +536,10 @@ mod tests {
         ] {
             assert_eq!(identify_extension(ext, b"").2, want, "MIMEType for .{ext}");
         }
-        assert_eq!(
-            identify_extension("nosuchext", b"").2,
-            "application/octet-stream"
-        );
+        // `application/unknown`, not `application/octet-stream`: the latter
+        // is a real `%mimeType` value for DR4, VRD, LNK and the EXE family,
+        // and using it here made "nothing answered" look like one of them.
+        assert_eq!(identify_extension("nosuchext", b"").2, UNKNOWN_MIME_TYPE);
     }
 
     /// The RIFF/QuickTime MIME types `%mimeType` does not carry.
@@ -611,7 +639,7 @@ mod tests {
     fn test_ts_extension_is_not_claimed_as_m2ts() {
         let (file_type, _, mime) = identify_extension("ts", b"");
         assert_eq!(file_type, "Unknown");
-        assert_eq!(mime, "application/octet-stream");
+        assert_eq!(mime, UNKNOWN_MIME_TYPE);
     }
 
     /// End-to-end regression for the reported bug: a `.mts` file reported

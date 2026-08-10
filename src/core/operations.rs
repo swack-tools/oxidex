@@ -5,6 +5,7 @@
 //! following the hexagonal architecture pattern.
 
 use super::{FileFormat, FileReader, MetadataMap, TagValue};
+use crate::core::file_metadata::UNKNOWN_MIME_TYPE;
 use crate::core::format_dispatch::dispatch_format_parser;
 use crate::core::jpeg_helpers::{
     extract_direct_preview_image, process_app3_segments, process_app6_segments,
@@ -103,13 +104,24 @@ pub(crate) fn is_unsupported(e: &ExifToolError) -> bool {
 /// Whether a `File:` identity value is `extract_file_metadata`'s optimistic
 /// placeholder rather than a real answer.
 ///
-/// `extract_file_metadata` fills these in from a small extension table before
-/// the format is known, so a file it does not cover arrives here carrying
-/// "Unknown" and "application/octet-stream".
+/// `extract_file_metadata` resolves these before the format is known, so a
+/// file whose extension answers for neither arrives here carrying "Unknown"
+/// and [`UNKNOWN_MIME_TYPE`].
+///
+/// `application/octet-stream` stays on the list even though it is now no
+/// longer the fallback. It remains a *weak* answer: `extract_file_metadata`
+/// can reach it from the root type of a sub-type `%mimeType` does not carry,
+/// and `add_identity_tags` should still be free to improve on that from the
+/// header. Where it is the real answer -- DR4, VRD, LNK, MOI, the EXE family
+/// -- the header-derived value agrees, so replacing it changes nothing.
 fn is_placeholder(v: Option<&str>) -> bool {
     matches!(
         v,
-        None | Some("") | Some("Unknown") | Some("unknown") | Some("application/octet-stream")
+        None | Some("")
+            | Some("Unknown")
+            | Some("unknown")
+            | Some("application/octet-stream")
+            | Some(UNKNOWN_MIME_TYPE)
     )
 }
 

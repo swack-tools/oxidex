@@ -168,6 +168,16 @@ impl FormatParser for ARParser {
             "File:FileTypeExtension".to_string(),
             TagValue::String("a".to_string()),
         );
+        // `%mimeType` has no row for a name like this -- ExifTool reaches
+        // `application/octet-stream` through `$mimeType{$baseType}`, and EXE is
+        // the base type `%fileTypeLookup` routes this family to. Without it the
+        // file falls through to `application/unknown`.
+        if let Some(mime) = crate::filetype::mime_for_type("EXE") {
+            metadata.insert(
+                "File:MIMEType".to_string(),
+                TagValue::String(mime.to_string()),
+            );
+        }
         Ok(metadata)
     }
 
