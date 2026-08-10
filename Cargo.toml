@@ -141,7 +141,9 @@ zip = "8.6"
 # CLI Argument Parsing (for tag-comparison binary)
 clap = { version = "4.6", features = ["derive"] }
 
-# Regular expressions (for jpeg-tag-matrix binary and build scripts)
+# Regular expressions. Library code, not just tooling: filetype detection
+# (src/filetype/mod.rs), CLI value parsing, and the Nikon/Sony makernote
+# binary-data conditions all use it, as does the jpeg-tag-matrix binary.
 regex = "1.13"
 
 # Error handling
