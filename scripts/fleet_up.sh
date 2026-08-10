@@ -54,7 +54,7 @@
 #                                          # the size the next start will use.
 #                                          # NOT free -- see cmd_scale: a dispatcher
 #                                          # restart re-runs its whole startup and
-#                                          # no work happens for 5-11 minutes.
+#                                          # no work happens for 5-30+ minutes.
 #   ./scripts/fleet_up.sh --mergers 1     # only the first N config.toml squads get a merger
 #                                          # (overrides config.toml's [fleet].mergers, if set)
 #   ./scripts/fleet_up.sh --squad-mode     # allocate real per-squad worker slots
@@ -1387,12 +1387,17 @@ cmd_scale() {
     # codegen-units=1, so ONE long rustc, not a parallel build -- this is the
     # bulk of it), then a full per-format comparison sweep over ~4200 files.
     #
-    # Measured twice on 2026-08-10, and the spread is the point: 5 minutes on
-    # an otherwise-idle machine, 10.8 minutes while a second checkout was also
-    # building (11:38:55 scale request -> 11:49:43 sweep complete). Quote the
-    # range, not the low end -- someone told "~5 minutes" who is nine minutes
-    # in will conclude the fleet has hung, which is exactly the misdiagnosis
-    # the note below exists to prevent.
+    # Measured three times on 2026-08-10, and the spread is the point: 5
+    # minutes on an otherwise-idle machine, 10.8 minutes while a second
+    # checkout was also building, 27 minutes scaling 6->24 while EVERY new
+    # slot's dispatcher-owned worktree needed a build at once -- rustc pinned
+    # near 92% CPU across all 8 semaphore holders for the entire window, not
+    # stalled, just genuinely that contended (12:52:28 scale request -> first
+    # post-restart model call ~13:19). The low end is the exception, not the
+    # default: quote "5 to 30+ minutes, worse with more workers or a busier
+    # box" -- someone told "~5 minutes" who is twenty minutes in will conclude
+    # the fleet has hung, which is exactly the misdiagnosis the note below
+    # exists to prevent.
     #
     # SCALING UP COSTS N FULL CARGO BUILDS, NOT JUST THE RESTART. Every worker
     # runs in its OWN worktree under $FLEET_WORKTREE_BASE with its own target/
