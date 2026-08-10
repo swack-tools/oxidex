@@ -47,6 +47,11 @@
 #   ./scripts/fleet_up.sh --status        # exactly what is alive, from the pidfile
 #   ./scripts/fleet_up.sh --down          # stop everything THIS launcher started
 #   ./scripts/fleet_up.sh --workers 24    # dispatcher --max-parallel
+#   ./scripts/fleet_up.sh --scale 10      # resize a RUNNING fleet: restarts only
+#                                          # the dispatcher, leaves mergers and the
+#                                          # judgment queue (and their batch state)
+#                                          # alone. On a stopped fleet it records
+#                                          # the size the next start will use.
 #   ./scripts/fleet_up.sh --mergers 1     # only the first N config.toml squads get a merger
 #                                          # (overrides config.toml's [fleet].mergers, if set)
 #   ./scripts/fleet_up.sh --squad-mode     # allocate real per-squad worker slots
@@ -95,6 +100,12 @@ FLEET_LOG_DIR="${FLEET_LOG_DIR:-$OXIDEX_HOME/logs}"
 FLEET_LOG="${FLEET_LOG:-$FLEET_LOG_DIR/fleet-up.log}"
 FLEET_PIDFILE="${FLEET_PIDFILE:-$FLEET_LOG_DIR/fleet-up.pid}"
 FLEET_STATEFILE="${FLEET_STATEFILE:-$FLEET_LOG_DIR/fleet-up.state}"
+# Desired worker count, as a number on one line. `--scale N` writes it; the
+# running supervisor reads it every tick and restarts ONLY the dispatcher when
+# it changes. A file rather than a signal because the count has to survive the
+# supervisor restarting, and because `--scale` is often run when no fleet is up
+# at all -- in which case it is simply the count the next start will use.
+FLEET_SCALEFILE="${FLEET_SCALEFILE:-$FLEET_LOG_DIR/fleet-up.scale}"
 FLEET_WORKTREE_BASE="${FLEET_WORKTREE_BASE:-$OXIDEX_HOME/worktrees/parallel-fix}"
 FLEET_DISPATCHER_PGIDS="${FLEET_DISPATCHER_PGIDS:-$FLEET_LOG_DIR/dispatcher-pgids.json}"
 
@@ -1118,11 +1129,72 @@ raise SystemExit(1)
 PY
 }
 
+read_scale_request() {
+    # The desired worker count, or empty when there is no valid request.
+    # Deliberately silent on garbage: a corrupt scale file must never take the
+    # supervisor down, it must just leave the fleet at its current size.
+    local want
+    [ -f "$FLEET_SCALEFILE" ] || return 0
+    # First line, trimmed at the EDGES only. Stripping all whitespace instead
+    # would silently reinterpret a malformed "3 4" as a request for 34 workers
+    # -- a garbage file must be ignored, never quietly turned into a plausible
+    # number the operator never asked for.
+    want=$(head -n 1 "$FLEET_SCALEFILE" 2>/dev/null || true)
+    want=${want#"${want%%[![:space:]]*}"}
+    want=${want%"${want##*[![:space:]]}"}
+    case "$want" in
+        ''|*[!0-9]*) return 0 ;;
+    esac
+    [ "$want" -gt 0 ] 2>/dev/null || return 0
+    printf '%s' "$want"
+}
+
+apply_scale_request() {
+    # Restart ONLY the dispatcher when the requested worker count changes.
+    # The mergers and the judgment queue are untouched: they do not carry the
+    # worker count, and bouncing them would throw away a merger's in-progress
+    # batch check for no reason.
+    local want i pid waited
+    want=$(read_scale_request)
+    [ -n "$want" ] || return 0
+    [ "$want" != "$FLEET_WORKERS" ] || return 0
+    log "fleet-up" "scale: workers $FLEET_WORKERS -> $want (restarting dispatcher only)"
+    FLEET_WORKERS=$want
+    for i in "${!TIER_TAG[@]}"; do
+        [ "${TIER_KIND[i]}" = dispatcher ] || continue
+        pid=${TIER_PID[i]}
+        if [ "$pid" -gt 0 ] 2>/dev/null; then
+            # Drain rather than race: the dispatcher's own SIGTERM handler is
+            # what kills its workers. Starting the replacement while the old
+            # one still owns worker process groups gives two dispatchers the
+            # same worktrees, which is the "mergers SIGTERM each other" failure
+            # one tier down.
+            kill -TERM "$pid" 2>/dev/null || true
+            waited=0
+            while [ "$waited" -lt "$FLEET_GRACE_SECONDS" ] && kill -0 "$pid" 2>/dev/null; do
+                sleep 1
+                waited=$((waited + 1))
+            done
+            kill -0 "$pid" 2>/dev/null && { log "fleet-up" "SIGKILL dispatcher (pid $pid) after ${waited}s"; kill -KILL "$pid" 2>/dev/null || true; }
+        fi
+        # A deliberate scale is NOT a crash: leave TIER_RESTARTS alone so a
+        # fleet that is resized a few times does not exhaust FLEET_MAX_RESTARTS
+        # and give up on a tier that never actually failed.
+        TIER_PID[i]=0
+        TIER_STATE[i]=stopped
+        tier_start "$i"
+    done
+    write_state
+}
+
 supervise() {
     local i now uptime delay last_resync resync_deferred=0
     last_resync=$(now_epoch)
     while [ "$SHUTTING_DOWN" -eq 0 ]; do
         now=$(now_epoch)
+        # Before liveness: a scaled dispatcher is stopped and restarted here,
+        # so the loop below must not also see it "dead" and bill it a restart.
+        apply_scale_request
 
         # Keep the bases fresh. Work written against a stale base conflicts
         # with everything that landed since, and the fleet has no other path
@@ -1296,6 +1368,32 @@ read_state() {
     cat "$FLEET_STATEFILE"
 }
 
+cmd_scale() {
+    # Resize a RUNNING fleet without a full down/up. Writes the desired count;
+    # the supervisor picks it up on its next poll and restarts only the
+    # dispatcher. Without this, changing the worker count meant --down + --up,
+    # which throws away every in-flight worker and the mergers' batch state
+    # too -- and, on a launchd-managed fleet, silently did nothing at all
+    # unless you also knew to bootout+bootstrap (kickstart re-runs the OLD
+    # cached spec).
+    local want=$1
+    case "$want" in
+        ''|*[!0-9]*) printf 'fleet_up.sh: --scale needs a positive integer\n' >&2; return 64 ;;
+    esac
+    [ "$want" -gt 0 ] || { printf 'fleet_up.sh: --scale must be > 0\n' >&2; return 64; }
+    mkdir -p "$(dirname "$FLEET_SCALEFILE")"
+    printf '%s\n' "$want" > "$FLEET_SCALEFILE"
+    if read_state >/dev/null 2>&1; then
+        printf 'scale requested: %s workers -- the supervisor applies it within %ss (watch %s)\n' \
+            "$want" "$FLEET_POLL_SECONDS" "$FLEET_LOG"
+    else
+        # Deliberately still written: --scale on a stopped fleet is how you set
+        # the size the next start will use, and silently doing nothing here
+        # would be the launchd trap all over again.
+        printf 'scale saved: %s workers -- no fleet is running, so it takes effect on the next start\n' "$want"
+    fi
+}
+
 cmd_status() {
     local state
     if ! state=$(read_state); then
@@ -1454,6 +1552,11 @@ cmd_up() {
     local i
     for i in "${!TIER_TAG[@]}"; do tier_start "$i"; done
     write_state
+    # Seed the scale file with the size we actually started at. Without this a
+    # stale request from a previous run -- or from a `--scale` issued while the
+    # fleet was down -- would fire on the first tick and pointlessly bounce a
+    # dispatcher that is already the right size.
+    printf '%s\n' "$FLEET_WORKERS" > "$FLEET_SCALEFILE" 2>/dev/null || true
     log "fleet-up" "fleet up. consolidated log: $FLEET_LOG ; state: $FLEET_STATEFILE"
     supervise
 }
@@ -1472,6 +1575,7 @@ usage() {
 SCRIPT_REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 DRY_RUN=0
 WITH_JUDGMENT=1
+SCALE_TO=
 
 main() {
     local action=up
@@ -1479,6 +1583,8 @@ main() {
         case "$1" in
             --status) action=status ;;
             --down|--stop) action=down ;;
+            --scale) action=scale; SCALE_TO=${2:?--scale needs a number}; shift ;;
+            --scale=*) action=scale; SCALE_TO=${1#*=} ;;
             --dry-run) DRY_RUN=1 ;;
             --no-judgment) WITH_JUDGMENT=0 ;;
             --squad-mode) FLEET_SQUAD_MODE=1 ;;
@@ -1512,6 +1618,7 @@ main() {
     case "$action" in
         status) cmd_status ;;
         down)   cmd_down ;;
+        scale)  cmd_scale "$SCALE_TO" ;;
         up)     cmd_up ;;
     esac
 }
