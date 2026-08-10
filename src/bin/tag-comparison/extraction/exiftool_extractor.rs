@@ -487,10 +487,8 @@ impl ExifToolExtractor {
     fn should_skip_family(family: &str) -> bool {
         matches!(
             family,
-            // Composite tags are calculated/derived from other tags
-            "Composite"
             // ExifTool version info
-            | "ExifTool"
+            "ExifTool"
             // File system metadata (varies by environment)
             | "System"
             | "File"

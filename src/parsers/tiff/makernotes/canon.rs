@@ -4915,6 +4915,38 @@ impl MakerNoteParser for CanonParser {
         }
     }
 
+    /// Same as [`Self::parse_with_context`], plus the unrounded
+    /// `Canon:AutoISO`/`Canon:BaseISO` forms `Composite:ISO` needs -- see
+    /// [`parse_canon_makernote_impl_located_with_values`].
+    fn parse_with_context_and_values(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        match parse_canon_makernote_impl_located_with_values(
+            ctx.window(),
+            ctx.payload(),
+            byte_order,
+            model,
+            ctx.payload_tiff_offset(),
+            Some(value_forms),
+        ) {
+            Ok(parsed_tags) => {
+                tags.extend(parsed_tags);
+                crate::parsers::tiff::makernotes::makernote_context::absolutise_is_offset(
+                    tags,
+                    ctx.tiff_base(),
+                    &["Canon:PreviewImageStart"],
+                );
+                Ok(())
+            }
+            Err(e) => Err(format!("Canon MakerNote parse error: {}", e)),
+        }
+    }
+
     fn lookup_lens(&self, lens_id: u16) -> Option<String> {
         lookup_lens_name(lens_id)
     }
@@ -5016,6 +5048,36 @@ fn parse_canon_makernote_impl_located(
     byte_order: ByteOrder,
     exif_model: Option<&str>,
     dir_tiff_offset: Option<u32>,
+) -> Result<HashMap<String, String>> {
+    parse_canon_makernote_impl_located_with_values(
+        data,
+        declared,
+        byte_order,
+        exif_model,
+        dir_tiff_offset,
+        None,
+    )
+}
+
+/// [`parse_canon_makernote_impl_located`], plus the unrounded `ValueConv`
+/// forms of tags whose printed string alone is not enough for a downstream
+/// Composite to reproduce ExifTool's arithmetic.
+///
+/// `Canon:AutoISO`/`Canon:BaseISO` are stored print-rounded to match
+/// `PrintConv => 'sprintf("%.0f",$val)'` (Canon.pm:2780-2793), but
+/// `Composite:ISO`'s `ValueConv => 'return $val[1] * $val[2] / 100'`
+/// (Canon.pm:10062-10066) multiplies the *unrounded* pair -- feeding it the
+/// printed integers compounds two roundings into one and drifts the result by
+/// a whole ISO step on ordinary files (CanonIXUS275HS.jpg: BaseISO 200 exact
+/// x AutoISO 37.7423 / 100 = 75.48 -> "75", not the 200 x 38 / 100 = "76" the
+/// rounded pair gives).
+fn parse_canon_makernote_impl_located_with_values(
+    data: &[u8],
+    declared: &[u8],
+    byte_order: ByteOrder,
+    exif_model: Option<&str>,
+    dir_tiff_offset: Option<u32>,
+    mut value_forms: Option<&mut HashMap<String, String>>,
 ) -> Result<HashMap<String, String>> {
     if data.is_empty() {
         return Ok(HashMap::new());
@@ -5599,6 +5661,9 @@ fn parse_canon_makernote_impl_located(
                     if let Some(&auto_iso) = array.get(SHOT_INFO_AUTO_ISO) {
                         let value = (auto_iso as f64 / 32.0 * std::f64::consts::LN_2).exp() * 100.0;
                         tags.insert("Canon:AutoISO".to_string(), format!("{:.0}", value));
+                        if let Some(forms) = value_forms.as_deref_mut() {
+                            forms.insert("Canon:AutoISO".to_string(), value.to_string());
+                        }
                     }
 
                     // BaseISO (index 2). `RawConv => '$val ? $val : undef'`,
@@ -5609,6 +5674,9 @@ fn parse_canon_makernote_impl_located(
                         let value =
                             (base_iso as f64 / 32.0 * std::f64::consts::LN_2).exp() * 100.0 / 32.0;
                         tags.insert("Canon:BaseISO".to_string(), format!("{:.0}", value));
+                        if let Some(forms) = value_forms.as_deref_mut() {
+                            forms.insert("Canon:BaseISO".to_string(), value.to_string());
+                        }
                     }
 
                     // MeasuredEV (index 3). ExifTool `%Canon::ShotInfo` key 3
@@ -7281,6 +7349,65 @@ mod tests {
             result.get("Canon:FocusDistanceUpper"),
             Some(&"10 m".to_string())
         );
+    }
+
+    /// `Composite:ISO`'s `ValueConv => 'return $val[1] * $val[2] / 100'`
+    /// (Canon.pm:10062-10066) multiplies the *unrounded* AutoISO/BaseISO
+    /// ValueConv pair, not the `sprintf("%.0f",$val)`-rounded strings the
+    /// visible tags print -- see
+    /// [`parse_canon_makernote_impl_located_with_values`]. Feeding the
+    /// rounded pair back in compounds two roundings into one and drifts a
+    /// whole ISO step on real files (CanonIXUS275HS.jpg: BaseISO 200 exact x
+    /// AutoISO 37.7423 / 100 = 75.48 -> ExifTool's "75", not the 200 x 38 /
+    /// 100 = "76" the rounded pair gives).
+    #[test]
+    fn shot_info_reports_unrounded_auto_and_base_iso_value_forms() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&[0x04, 0x00]); // ShotInfo tag (0x0004)
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x14, 0x00, 0x00, 0x00]); // Count: 20
+        data.extend_from_slice(&[0x12, 0x00, 0x00, 0x00]); // Offset: 18
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
+
+        let mut shot_info = vec![0i16; 20];
+        shot_info[0] = 20; // Array length
+        shot_info[1] = -45; // AutoISO raw (CanonIXUS275HS.jpg)
+        shot_info[2] = 192; // BaseISO raw (CanonIXUS275HS.jpg)
+        for value in shot_info {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+
+        let mut tags = HashMap::new();
+        let mut value_forms = HashMap::new();
+        parse_canon_makernote_impl_located_with_values(
+            &data,
+            &data,
+            ByteOrder::LittleEndian,
+            None,
+            None,
+            Some(&mut value_forms),
+        )
+        .unwrap()
+        .into_iter()
+        .for_each(|(k, v)| {
+            tags.insert(k, v);
+        });
+
+        // Printed forms stay rounded, matching `PrintConv => 'sprintf("%.0f",$val)'`.
+        assert_eq!(tags.get("Canon:AutoISO"), Some(&"38".to_string()));
+        assert_eq!(tags.get("Canon:BaseISO"), Some(&"200".to_string()));
+
+        // The private value forms carry the full precision Composite:ISO needs:
+        // exp(-45/32*log(2))*100 and exp(192/32*log(2))*100/32, matching
+        // Canon.pm:2780-2793's ValueConv exactly rather than an approximation.
+        let auto: f64 = value_forms["Canon:AutoISO"].parse().unwrap();
+        let base: f64 = value_forms["Canon:BaseISO"].parse().unwrap();
+        let expected_auto = (-45.0f64 / 32.0 * std::f64::consts::LN_2).exp() * 100.0;
+        let expected_base = (192.0f64 / 32.0 * std::f64::consts::LN_2).exp() * 100.0 / 32.0;
+        assert!((auto - expected_auto).abs() < f64::EPSILON, "got {auto}");
+        assert!((base - expected_base).abs() < f64::EPSILON, "got {base}");
+        assert_eq!(format!("{:.0}", base * auto / 100.0), "75");
     }
 
     /// `%Canon::ShotInfo` key 27 is AutoRotate; keys 26 and 28 are CameraType and

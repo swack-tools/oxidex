@@ -167,7 +167,7 @@ impl FormatComparison {
     /// Whether this format yielded any comparable ExifTool tag at all.
     ///
     /// A format can score zero instances because every tag ExifTool emitted
-    /// for it lives in a skipped pseudo-family (`File`, `System`, `Composite`,
+    /// for it lives in a skipped pseudo-family (`File`, `System`,
     /// `ExifTool`) — BMP and ICO in ExifTool's own `t/images` do exactly that.
     /// That is an absence of measurement, not a measured zero, and reporting
     /// it as "0.0% coverage" states a result the run never produced.

@@ -445,14 +445,6 @@ impl OxiDexExtractor {
                 // group, and folding these aliases into APP11 manufactured
                 // three oxidex-only tags on every AROT sample.
                 | "HDR"
-                // Mirrors ExifToolExtractor::should_skip_family: the ExifTool
-                // side never extracts family Composite, so an oxidex-side
-                // Composite tag can only ever land in extra_in_oxidex --
-                // 40 permanently-uncomparable keys on the JPEG corpus alone.
-                // Skipping both sides keeps the family unmeasured instead of
-                // half-measured. The library's composite derivations are NOT
-                // graded by this harness either way.
-                | "Composite"
         )
     }
 
