@@ -446,16 +446,22 @@ fn test_macho32_arm_executable() {
 }
 
 #[test]
-fn test_macho_file_size() {
-    // Test that file size is correctly extracted
+fn test_macho_does_not_report_its_own_file_size() {
+    // The parser used to record `reader.size()` as `EXE:FileSize`. ExifTool
+    // 13.59 emits no such tag for a Mach-O -- on EXE.dylib and EXE.macho the
+    // pinned oracle reports the file's length once, as `File:FileSize`, which
+    // `extract_file_metadata` already supplies. Reporting it a second time under
+    // a parser-owned group made one fact arrive under two keys.
     let data = create_macho64_header(MH_MAGIC_64, CPU_TYPE_X86_64, 3, MH_EXECUTE, 0, 0, 0);
 
-    let expected_size = data.len() as i64;
     let reader = TestReader::new(data);
     let parser = MachOParser;
     let metadata = parser.parse(&reader).expect("Failed to parse Mach-O");
 
-    assert_eq!(metadata.get_integer("EXE:FileSize").unwrap(), expected_size);
+    assert!(
+        !metadata.contains_key("EXE:FileSize"),
+        "file size belongs to File:FileSize alone"
+    );
 }
 
 #[test]

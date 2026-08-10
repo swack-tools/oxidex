@@ -113,6 +113,45 @@ fn is_placeholder(v: Option<&str>) -> bool {
     )
 }
 
+/// Drop a parser's ungrouped copy of the file size.
+///
+/// `extract_file_metadata` owns `File:FileSize` and renders it the way ExifTool
+/// prints it -- `"785 bytes"`. 41 parsers *also* record `reader.size()` under a
+/// bare `FileSize`, and the text parser mirrored that into `TEXT:FileSize`, so
+/// one fact reached the output under three keys carrying two different
+/// spellings: `"File:FileSize": "785 bytes"` beside `"FileSize": "785"`.
+/// ExifTool emits one. On ExifTool's own `t/images` corpus 51 of 194 files
+/// showed the duplicate, 20 of them all three keys at once.
+///
+/// Only the exactly-ungrouped key is removed, and only once the authoritative
+/// `File:FileSize` is present -- absent that, dropping the parser's value would
+/// trade a badly-formatted answer for no answer.
+///
+/// Grouping is not by itself proof of a distinct fact, so this does not try to
+/// judge grouped keys. The ones in the corpus divide both ways and each was
+/// checked against the oracle rather than inferred from its name: `XML:FileSize`
+/// is a size recorded *inside* an XML document, `File:DPXFileSize` is the length
+/// the DPX header declares (12812288 against a 2.1 kB file), `Prefetch:FileSize`
+/// comes from the prefetch header and `LNK:TargetFileSize` describes a
+/// shortcut's target -- all real, all left alone. `EXE:FileSize` was the
+/// opposite: `reader.size()` again, under a group prefix that hid it from the
+/// `insert("FileSize"` search, and a tag ExifTool emits for no Mach-O. It was
+/// removed at its source in the Mach-O parser instead of here.
+///
+/// [`normalize_identity_tags`] is the sibling of this for `FileType`,
+/// `FileTypeExtension` and `MIMEType`, and stays separate because the two cases
+/// differ in kind. There, a parser's ungrouped string is a rival *answer* to
+/// "what is this file?", so that function has to arbitrate, and a parser can
+/// still name a type the tables left `Unknown`. Here there is nothing to
+/// arbitrate: both keys report the same byte count, and the parser's spelling of
+/// it is simply the unformatted one, so it can never fill a gap in
+/// `File:FileSize` the way a parser's `FileType` can.
+fn drop_redundant_file_size(metadata: &mut MetadataMap) {
+    if metadata.contains_key("File:FileSize") {
+        metadata.remove("FileSize");
+    }
+}
+
 /// Fill in `FileType`, `FileTypeExtension` and `MIMEType` from ExifTool's
 /// identification tables. Returns whether the file was recognised.
 ///
@@ -332,6 +371,11 @@ pub fn read_metadata_with_detector(
     // Format-specific metadata takes precedence over file metadata in case of conflicts
     // Use into_iter() to consume format_metadata and avoid cloning keys and values
     metadata.merge(format_metadata);
+
+    // Step 5a0: One key per fact for file size. The merge above is the only
+    // place a parser's tags enter, so this is the one point that sees both the
+    // authoritative `File:FileSize` and a parser's ungrouped duplicate.
+    drop_redundant_file_size(&mut metadata);
 
     // Step 5a: Identity tags, from ExifTool's own tables.
     //
@@ -1217,6 +1261,78 @@ mod tests {
         assert_eq!(
             map.get_string("File:MIMEType"),
             Some("application/octet-stream")
+        );
+    }
+
+    #[test]
+    fn ungrouped_file_size_is_dropped_when_the_grouped_one_exists() {
+        let mut m = MetadataMap::new();
+        m.insert("File:FileSize", TagValue::new_string("785 bytes"));
+        m.insert("FileSize", TagValue::new_string("785"));
+        drop_redundant_file_size(&mut m);
+        assert_eq!(m.get_string("File:FileSize"), Some("785 bytes"));
+        assert!(
+            !m.contains_key("FileSize"),
+            "the ungrouped duplicate should be gone"
+        );
+    }
+
+    #[test]
+    fn ungrouped_file_size_survives_when_there_is_no_grouped_one() {
+        // `extract_file_metadata` failing is the only way here; a badly
+        // formatted answer still beats no answer at all.
+        let mut m = MetadataMap::new();
+        m.insert("FileSize", TagValue::new_string("785"));
+        drop_redundant_file_size(&mut m);
+        assert_eq!(m.get_string("FileSize"), Some("785"));
+    }
+
+    #[test]
+    fn grouped_tags_merely_ending_in_file_size_are_left_alone() {
+        // Each of these is a different fact from the file's length on disk.
+        let mut m = MetadataMap::new();
+        m.insert("File:FileSize", TagValue::new_string("785 bytes"));
+        m.insert("XML:FileSize", TagValue::new_string("1234"));
+        m.insert("File:DPXFileSize", TagValue::new_string("2048"));
+        m.insert("LNK:TargetFileSize", TagValue::new_string("4096"));
+        drop_redundant_file_size(&mut m);
+        assert_eq!(m.get_string("XML:FileSize"), Some("1234"));
+        assert_eq!(m.get_string("File:DPXFileSize"), Some("2048"));
+        assert_eq!(m.get_string("LNK:TargetFileSize"), Some("4096"));
+    }
+
+    /// One fact, one key -- end to end through `read_metadata`.
+    ///
+    /// A plain-text file used to come back with `File:FileSize` ("785 bytes"),
+    /// a bare `FileSize` ("785") and a `TEXT:FileSize` ("785"): three keys for
+    /// one fact, two of which contradict ExifTool, which reports only
+    /// `File:FileSize`.
+    #[test]
+    fn a_text_file_reports_its_size_exactly_once() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("sample.txt");
+        let mut f = std::fs::File::create(&path).expect("create");
+        f.write_all(b"this is plain ASCII text\n").expect("write");
+        f.sync_all().expect("sync");
+
+        let metadata = read_metadata(&path).expect("read");
+
+        let size_keys: Vec<&String> = metadata
+            .keys()
+            .filter(|k| k.rsplit(':').next() == Some("FileSize"))
+            .collect();
+        assert_eq!(
+            size_keys,
+            vec!["File:FileSize"],
+            "exactly one key should describe the file size"
+        );
+        assert_eq!(metadata.get_string("File:FileSize"), Some("25 bytes"));
+
+        let text_group: Vec<&String> = metadata.keys().filter(|k| k.starts_with("TEXT:")).collect();
+        assert!(
+            text_group.is_empty(),
+            "ExifTool has no TEXT group; found {text_group:?}"
         );
     }
 
