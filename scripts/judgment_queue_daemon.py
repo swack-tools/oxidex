@@ -1531,7 +1531,51 @@ def poll_once(*, repo_root=REPO_ROOT, home=OXIDEX_HOME, slot=DEFAULT_SLOT, perl_
         if limit is not None and len(out) >= limit:
             break
     return {"considered": considered, "adjudicated": len(out), "skipped": skipped,
-            "decisions": out}
+            "decisions": out, "stalled": stalled_decisions(entries, prior, now_fn=now_fn)}
+
+
+#: How long a "queued" verdict may sit before this daemon starts shouting about
+#: it. `queued` means the adjudicator could not decide and a HUMAN must -- but
+#: nothing was telling the human. Measured 2026-08-10: three patches (canon/VRD
+#: "verify_enum_maps could not adjudicate (no-such-table)",
+#: sony-minolta/JPEG printconv-mismatch, xmp/PDF perl-ref-documents-none) had
+#: been queued since 2026-08-02 and re-examined roughly 2,300 times, and every
+#: poll reported `considered=3 adjudicated=0 skipped=3` -- which reads as a
+#: healthy no-op. Eight days of real work sat invisible behind a confident line.
+STALLED_QUEUED_SECONDS = 24 * 3600
+
+
+def stalled_decisions(entries, prior, now_fn=time.time, older_than=STALLED_QUEUED_SECONDS):
+    """Ledger entries whose newest decision is a `queued` verdict older than
+    `older_than` seconds -- i.e. waiting on a human who has not been told.
+
+    Deliberately derived from the SAME `prior` map poll_once already loaded,
+    not a second read: a summary that disagrees with the decisions the poll
+    actually acted on would be worse than no summary at all.
+    """
+    now = now_fn()
+    stalled = []
+    for patch_id in entries:
+        decision = prior.get(patch_id)
+        if not decision or decision.get("verdict") != "queued":
+            continue
+        stamped = decision.get("ts_epoch")
+        if not isinstance(stamped, (int, float)):
+            # Pre-ts_epoch rows: age is unknowable, so treat them as stalled
+            # rather than silently dropping them -- the same lenient-reader
+            # discipline as load_decisions, erring toward being seen.
+            stalled.append({"patch_id": patch_id, "age_days": None,
+                            "squad": entries[patch_id].get("squad"),
+                            "format": entries[patch_id].get("format"),
+                            "reason": decision.get("reason")})
+            continue
+        age = now - stamped
+        if age >= older_than:
+            stalled.append({"patch_id": patch_id, "age_days": age / 86400.0,
+                            "squad": entries[patch_id].get("squad"),
+                            "format": entries[patch_id].get("format"),
+                            "reason": decision.get("reason")})
+    return stalled
 
 
 def _run_poll_safely(poll_fn=poll_once, poll_kwargs=None, log_fn=print):
@@ -1678,7 +1722,16 @@ def main(argv=None, sleep_fn=time.sleep, now_fn=time.time, poll_fn=poll_once):
             result = _run_poll_safely(poll_fn=poll_fn, poll_kwargs=kwargs)
         print(f"judgment-queue: considered={result['considered']} "
               f"adjudicated={result['adjudicated']} skipped={result['skipped']}"
+              + (f" stalled={len(result['stalled'])}" if result.get("stalled") else "")
               + (f" status={result['status']}" if result.get("status") else ""))
+        # Named, not just counted. "stalled=3" still lets an operator skim past
+        # it; the whole failure being fixed here is a summary that LOOKS fine.
+        for item in result.get("stalled") or []:
+            age = item.get("age_days")
+            age_str = f"{age:.1f}d" if isinstance(age, float) else "unknown age"
+            print(f"  ALARM queued {age_str}: {item.get('squad')}/{item.get('format')} "
+                  f"-- {item.get('reason')} (no human has been told; this daemon "
+                  f"cannot adjudicate it)")
         if not args.infinite:
             return 0
         sleep_fn(args.poll_seconds)
