@@ -583,10 +583,6 @@ impl FormatParser for SVGParser {
 
         let mut metadata = MetadataMap::new();
         metadata.insert("FileType".to_string(), TagValue::String("SVG".to_string()));
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         // Read up to 64KB for parsing (SVG metadata is in the header)
         let read_size = std::cmp::min(reader.size() as usize, MAX_READ_SIZE);

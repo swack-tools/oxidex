@@ -48,10 +48,6 @@ pub fn extract_elf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
 
     // Add basic file info
     metadata.insert("FileType".to_string(), TagValue::String("ELF".to_string()));
-    metadata.insert(
-        "FileSize".to_string(),
-        TagValue::Integer(reader.size() as i64),
-    );
 
     // Step 1: Parse ELF header
     // The header is always at offset 0 and is 52 bytes (ELF32) or 64 bytes (ELF64)

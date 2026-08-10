@@ -319,10 +319,6 @@ impl FormatParser for RARParser {
             "RARVersion".to_string(),
             TagValue::String(version.to_string()),
         );
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         // Parse format-specific metadata
         match version {

@@ -220,10 +220,6 @@ impl FormatParser for GZParser {
         let mut metadata = MetadataMap::new();
 
         metadata.insert("FileType".to_string(), TagValue::String("GZIP".to_string()));
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         // Parse header fields including optional fields
         Self::parse_header(reader, &mut metadata)?;

@@ -99,7 +99,6 @@ pub fn parse_miff_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
 
     let mut metadata = MetadataMap::new();
     metadata.insert("FileType".to_string(), TagValue::String("MIFF".to_string()));
-    metadata.insert("FileSize".to_string(), TagValue::Integer(size as i64));
 
     let mut entries = split_ws(text);
     // Put the id= header token back at the front, matching ExifTool

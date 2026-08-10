@@ -172,10 +172,6 @@ impl FormatParser for BMPParser {
         let mut metadata = MetadataMap::new();
 
         metadata.insert("FileType".to_string(), TagValue::String("BMP".to_string()));
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         let bmp_version = Self::read_bmp_version(reader)?;
         if bmp_version >= 40 {

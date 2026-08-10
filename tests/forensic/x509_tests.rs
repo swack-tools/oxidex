@@ -384,18 +384,18 @@ fn test_x509_filesize_metadata() {
     der.extend_from_slice(&[0x02, 0x04, 0x12, 0x34, 0x56, 0x78]);
     der.extend_from_slice(&[0x30, 0x03, 0x06, 0x01, 0x00]);
 
-    let expected_size = der.len() as u64;
     let reader = TestReader::new(der);
     let result = parse_x509_metadata(&reader);
 
     assert!(result.is_ok());
     let metadata = result.unwrap();
 
-    // Verify FileSize is present and correct
-    assert_eq!(
-        metadata.get_string("FileSize"),
-        Some(expected_size.to_string().as_str()),
-        "FileSize should be present and accurate"
+    // Size is reported once, as `File:FileSize`, formatted the way ExifTool
+    // formats it. This parser's raw copy was discarded on every read by
+    // `drop_redundant_file_size`, so it is no longer computed.
+    assert!(
+        metadata.get("FileSize").is_none(),
+        "FileSize belongs to the File: group, not the X.509 parser"
     );
 }
 

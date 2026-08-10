@@ -122,12 +122,9 @@ fn test_evtx_basic_parsing() {
         "ChunkCount should be 5"
     );
 
-    // Verify file size is calculated
-    assert_eq!(
-        metadata.get("FileSize"),
-        Some(&TagValue::String("4096".to_string())),
-        "FileSize should be 4096"
-    );
+    // Size is `File:FileSize`'s to report; `drop_redundant_file_size` discarded
+    // this parser's raw copy on every read, so it is no longer computed.
+    assert!(metadata.get("FileSize").is_none());
 
     // Verify version extraction
     assert_eq!(
@@ -417,9 +414,11 @@ fn test_evtx_comprehensive_forensic_data() {
     let reader = TestReader::new(data);
     let metadata = parse_evtx_metadata(&reader).expect("Failed to parse EVTX");
 
-    // Verify file identification
+    // The parser names the type -- `normalize_identity_tags` promotes it into
+    // `File:FileType`, which is the only reason an EVTX file reports
+    // "Windows Event Log" rather than Unknown. Size belongs to the File group.
     assert!(metadata.contains_key("FileType"));
-    assert!(metadata.contains_key("FileSize"));
+    assert!(metadata.get("FileSize").is_none());
 
     // Verify version info
     assert_eq!(

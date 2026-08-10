@@ -262,10 +262,6 @@ impl FormatParser for OTFParser {
         let mut metadata = MetadataMap::new();
 
         metadata.insert("FileType".to_string(), TagValue::String("OTF".to_string()));
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         let num_tables = Self::read_num_tables(reader)?;
         metadata.insert(

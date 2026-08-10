@@ -391,10 +391,6 @@ impl FormatParser for EmlParser {
 
         let mut metadata = MetadataMap::new();
         metadata.insert("FileType".to_string(), TagValue::String("EML".to_string()));
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::Integer(reader.size() as i64),
-        );
 
         // Parse email content and merge with basic metadata
         let email_metadata = Self::parse_email_content(reader)?;

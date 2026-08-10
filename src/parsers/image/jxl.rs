@@ -401,10 +401,6 @@ impl FormatParser for JXLParser {
 
         let mut metadata = MetadataMap::new();
         metadata.insert("FileType".to_string(), TagValue::String("JXL".to_string()));
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::Integer(reader.size() as i64),
-        );
 
         if Self::is_container_format(reader)? {
             // Container format (ISOBMFF-based)

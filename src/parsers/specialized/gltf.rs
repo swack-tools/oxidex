@@ -161,10 +161,6 @@ impl FormatParser for GLTFParser {
 
         let mut metadata = MetadataMap::new();
         metadata.insert("FileType".to_string(), TagValue::String("GLTF".to_string()));
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         // Detect and add format
         let format = Self::detect_format(reader)?;

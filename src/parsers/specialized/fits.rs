@@ -233,21 +233,19 @@ impl FormatParser for FITSParser {
             return Err(ExifToolError::parse_error("Invalid FITS signature"));
         }
 
-        let mut metadata = Self::parse_header(reader)?;
-
-        // Add basic file info
-        metadata.insert("File:FileType", TagValue::String("FITS".to_string()));
-        metadata.insert(
-            "File:FileTypeExtension",
-            TagValue::String("fits".to_string()),
-        );
-        metadata.insert("File:MIMEType", TagValue::String("image/fits".to_string()));
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
-
-        Ok(metadata)
+        // Identity is not this parser's to report, even correctly prefixed.
+        // `add_identity_tags` resolves all three from the generated tables,
+        // which carry FITS in full -- the `SIMPLE  = {20}T` magic number, the
+        // `fits` extension row, and `("FITS", "image/fits")` -- and answer
+        // exactly as these literals did, verified on the corpus FITS.fits.
+        //
+        // Being hardcoded rather than looked up is what made them a second
+        // detector, and being already in the `File:` group is what put them out
+        // of `normalize_identity_tags`' reach: it drops the *ungrouped* copies,
+        // so this was the last place a parser could still outrank the tables.
+        // `merge` gives format metadata precedence over the `File:` group, so
+        // had the two ever drifted, this copy would have won silently.
+        Self::parse_header(reader)
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

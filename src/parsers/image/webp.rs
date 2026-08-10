@@ -43,10 +43,6 @@ impl FormatParser for WebPParser {
         let mut metadata = MetadataMap::new();
 
         metadata.insert("FileType".to_string(), TagValue::String("WebP".to_string()));
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         // Parse RIFF chunks to find EXIF, XMP, and VP8X data
         parse_webp_chunks(reader, &mut metadata)?;

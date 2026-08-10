@@ -290,10 +290,6 @@ impl FormatParser for ISOParser {
         let mut metadata = MetadataMap::new();
 
         metadata.insert("FileType".to_string(), TagValue::String("ISO".to_string()));
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         // Descriptor type: 1=Primary, 2=Supplementary, 255=Terminator
         let descriptor_type = Self::read_descriptor_type(reader)?;

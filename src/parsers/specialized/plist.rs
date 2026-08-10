@@ -411,10 +411,6 @@ impl FormatParser for PlistParser {
             "FileType".to_string(),
             TagValue::String("Plist".to_string()),
         );
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         // Detect and add format
         let format = Self::detect_format(reader)?;

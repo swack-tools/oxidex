@@ -119,10 +119,6 @@ impl FormatParser for DWGParser {
         }
         let mut metadata = MetadataMap::new();
         metadata.insert("FileType".to_string(), TagValue::String("DWG".to_string()));
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         // Extract version information
         let version = Self::read_version(reader)?;

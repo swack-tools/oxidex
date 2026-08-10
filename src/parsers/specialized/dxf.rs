@@ -179,10 +179,6 @@ impl FormatParser for DXFParser {
 
         let mut metadata = MetadataMap::new();
         metadata.insert("FileType".to_string(), TagValue::String("DXF".to_string()));
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         let content = Self::parse_content(reader)?;
 

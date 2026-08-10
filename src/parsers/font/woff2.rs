@@ -99,10 +99,6 @@ impl FormatParser for WOFF2Parser {
             "FileType".to_string(),
             TagValue::String("WOFF2".to_string()),
         );
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
         metadata.insert("FontFlavor".to_string(), TagValue::String(header.flavor));
 
         // WOFF2 header fields

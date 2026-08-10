@@ -313,10 +313,6 @@ impl FormatParser for EXRParser {
 
         // Basic file info
         metadata.insert("FileType".to_string(), TagValue::String("EXR".to_string()));
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         // Parse version and flags
         let (version, tiled, long_names, deep_data, multipart) = Self::read_version_flags(reader)?;

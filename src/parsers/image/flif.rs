@@ -53,10 +53,6 @@ impl FormatParser for FLIFParser {
 
         let mut metadata = MetadataMap::new();
         metadata.insert("FileType".to_string(), TagValue::String("FLIF".to_string()));
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         // Parse FLIF header and metadata chunks
         parse_flif_header(reader, &mut metadata)?;

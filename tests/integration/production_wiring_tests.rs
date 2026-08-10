@@ -2149,3 +2149,66 @@ fn png_write_carries_xmp_chunk_but_still_removes_dropped_text_chunks() {
         "removing a surfaced PNG: key must still drop its chunk"
     );
 }
+
+/// No parser computes an identity tag it is not allowed to answer.
+///
+/// `normalize_identity_tags` and `drop_redundant_file_size` already guarantee
+/// the *output* carries one answer per fact, under `File`. They did it by
+/// discarding what the parsers wrote, which left ~45 inserts across 40 parsers
+/// computing values that could never reach a caller, and made the parsers read
+/// as though `FileSize` and `MIMEType` were theirs to report.
+///
+/// This pins the source-level half: a parser hands back neither. `FileType` is
+/// the deliberate exception -- `normalize_identity_tags` promotes it into an
+/// absent or `Unknown` `File:FileType`, which is the only reason SQLite, EVTX,
+/// Registry Hive, HDF5, X.509 and ELF are named at all, ExifTool's own tables
+/// having no row for any of them.
+///
+/// The `File:` values below all come from `crate::filetype`. FITS is in the list
+/// because its parser was the last one writing identity tags in the `File:`
+/// group directly -- hardcoded, not looked up, and therefore invisible to both
+/// normalizers, which only ever removed the ungrouped spellings.
+#[test]
+fn parsers_do_not_answer_identity_tags_the_file_group_owns() {
+    const NOT_A_PARSERS_TO_ANSWER: [&str; 3] = ["FileSize", "FileTypeExtension", "MIMEType"];
+
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>"#;
+    let mut fits = b"SIMPLE  =                    T".to_vec();
+    fits.resize(2880, b' ');
+
+    let cases: Vec<(&str, Vec<u8>, &str)> = vec![
+        (".txt", b"plain text, several words long\n".to_vec(), "TXT"),
+        (".svg", svg.to_vec(), "SVG"),
+        (".fits", fits, "FITS"),
+        (".evtx", evtx_fixture(), "Windows Event Log"),
+        (".reg", registry_fixture(), "Registry Hive"),
+        (".plist", xml_plist_fixture(), "PLIST"),
+        (".pcap", pcap_fixture(), "PCAP"),
+        (".ics", long_body_ics_fixture(), "ICS"),
+    ];
+
+    for (suffix, bytes, want_type) in cases {
+        let metadata = read_temp_file(&bytes, suffix);
+        for tag in NOT_A_PARSERS_TO_ANSWER {
+            assert!(
+                metadata.get(tag).is_none(),
+                "{suffix} published {tag} outside the File group"
+            );
+        }
+        // A cleanup, not a removal: every fact still reaches output, once, in
+        // the File group -- and the size keeps ExifTool's formatting rather
+        // than the raw byte count the parsers used to publish beside it.
+        assert_eq!(
+            metadata.get_string("File:FileType"),
+            Some(want_type),
+            "{suffix} lost or changed File:FileType"
+        );
+        let size = metadata
+            .get_string("File:FileSize")
+            .unwrap_or_else(|| panic!("{suffix} lost File:FileSize"));
+        assert!(
+            size.contains(' '),
+            "{suffix} reported File:FileSize as {size:?}, not an ExifTool-formatted size"
+        );
+    }
+}

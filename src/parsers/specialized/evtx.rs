@@ -298,10 +298,6 @@ impl FormatParser for EVTXParser {
             "FileType".to_string(),
             TagValue::String("Windows Event Log".to_string()),
         );
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         // Version information
         let major_version = Self::read_major_version(reader)?;

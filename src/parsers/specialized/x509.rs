@@ -856,10 +856,6 @@ impl FormatParser for X509Parser {
             "X509:Format".to_string(),
             TagValue::String(format.to_string()),
         );
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
 
         Ok(metadata)
     }
