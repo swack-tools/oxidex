@@ -15,14 +15,14 @@
 //! # Usage
 //!
 //! ```no_run
-//! # #[cfg(feature = "magika")]
-//! # {
+//! # // No `#[cfg(feature = "magika")]` guard here: the Feature Gate above is
+//! # // the guard. `parsers::magika_detector` is declared behind that cfg, so
+//! # // rustdoc only ever extracts this example when the feature is on.
 //! use oxidex::parsers::magika_detector::detect_with_magika;
 //!
 //! let data = std::fs::read("image.jpg")?;
 //! let format = detect_with_magika(&data)?;
 //! println!("Detected format: {:?}", format);
-//! # }
 //! # Ok::<(), std::io::Error>(())
 //! ```
 
@@ -56,15 +56,13 @@ use crate::core::FileFormat;
 /// # Examples
 ///
 /// ```no_run
-/// # #[cfg(feature = "magika")]
-/// # {
+/// # // Unguarded on purpose -- see the module docs' Feature Gate section.
 /// use oxidex::core::FileFormat;
 /// use oxidex::parsers::magika_detector::detect_with_magika;
 ///
 /// let jpeg_data = std::fs::read("photo.jpg")?;
 /// let format = detect_with_magika(&jpeg_data)?;
 /// assert_eq!(format, FileFormat::JPEG);
-/// # }
 /// # Ok::<(), std::io::Error>(())
 /// ```
 #[cfg(feature = "magika")]

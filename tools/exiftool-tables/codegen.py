@@ -341,6 +341,14 @@ def gen_table(mod_name, tbl_name, tbl, stats):
             continue
 
         pc = conv_for(tag, stats)
+        if sub is not None:
+            # A fractional key names a slice of the word at int(key); `Mask` is
+            # what says which bits. The runtime decodes the ones that declare
+            # one and refuses the rest, so the split is the honest measure of
+            # how much of ExifTool's bit-field notation this schema reaches.
+            # Both halves are emitted either way -- this counts, it does not
+            # gate.
+            stats["tag_fractional_masked" if mask != "None" else "tag_fractional_bare"] += 1
         sub_s = "None" if sub is None else f"Some({sub})"
         rows.append(
             f'    Field {{ index: {idx}, sub: {sub_s}, name: "{rust_str(name)}", '
@@ -633,6 +641,7 @@ REPORT = (
         ("string enums", "enum_str"),
         ("exprs translated", "expr_translated"),
         ("masked fields", "tag_masked"),
+        ("bit fields (frac + Mask)", "tag_fractional_masked"),
     )),
     ("partial -- exact matches kept, fallback dropped", (
         ("int enums", "enum_int_partial"),
@@ -642,6 +651,7 @@ REPORT = (
         ("ValueConv", "omitted_value_conv"),
         ("RawConv", "omitted_raw_conv"),
         ("Condition", "omitted_condition"),
+        ("bit fields, no Mask", "tag_fractional_bare"),
     )),
     ("refused, not approximated", (
         ("exprs unsupported", "expr_unsupported"),

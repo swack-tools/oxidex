@@ -37,6 +37,47 @@ static COMPILED: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
         .collect()
 });
 
+/// Formats whose magic number [`tables::MAGIC`] files under a different name.
+///
+/// [`identify`] corroborates a header against the *formats* `%fileTypeLookup`
+/// names, but `%magicNumber` is keyed by *file type*, and for one entry the two
+/// disagree. `PFM => [['Font','PFM2'], 'Printer Font Metrics']` names the
+/// processing format `PFM2` -- `Other.pm`'s `ProcessPFM2` -- while the pattern
+/// that routine validates is filed under `PFM` (ExifTool.pm:1012):
+///
+/// ```text
+///     PFM  => 'P[Ff]\x0a\d+ \d+\x0a[-+0-9.]+\x0a',
+/// ```
+///
+/// ExifTool never has to reconcile the two, because a format with no
+/// `%magicNumber` entry is not skipped by its pre-filter -- it is handed to its
+/// module, and `ProcessPFM2` runs the same test itself (ExifTool.pm:3024-3030).
+/// OxiDex has no module to load, so the pattern has to be reachable under the
+/// name the format list actually uses, or the corroboration step declines a
+/// file ExifTool identifies.
+///
+/// `pfm` is the only extension in [`tables::EXT_TO_TYPE`] whose format list
+/// mixes a magic-bearing format with a magic-less one;
+/// `magic_alias_reaches_every_format_in_a_mixed_list` fails if a regeneration
+/// introduces another.
+static MAGIC_ALIAS: &[(&str, &str)] = &[("PFM2", "PFM")];
+
+/// The [`tables::MAGIC`] key that carries `format`'s pattern.
+fn magic_key(format: &str) -> &str {
+    MAGIC_ALIAS
+        .iter()
+        .find_map(|(from, to)| (*from == format).then_some(*to))
+        .unwrap_or(format)
+}
+
+/// Whether the header satisfies the pattern filed under one specific key.
+fn magic_matches(key: &str, header: &[u8]) -> bool {
+    let head = &header[..header.len().min(HEADER_LEN)];
+    COMPILED
+        .iter()
+        .any(|(k, re)| *k == key && re.is_match(head))
+}
+
 /// What a file was identified as.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
@@ -113,7 +154,77 @@ fn refine(mut id: Identity, header: &[u8]) -> Identity {
     if id.file_type == "DJVU" && header.get(12..16) == Some(b"DJVM") {
         id.file_type = Cow::Owned(format!("{} (multi-page)", id.file_type));
     }
+    // `.pfm` is two unrelated formats sharing one FileType. The Font module
+    // claims Windows Printer Font Metrics and inherits its root's MIME type,
+    // `application/x-font-type1`; `ProcessPFM2` claims Portable FloatMap HDR
+    // images and hardcodes the MIME type `%mimeType` does not carry for either
+    // (Other.pm:44):
+    //
+    // ```text
+    //     $et->SetFileType('PFM', 'image/x-pfm');
+    // ```
+    //
+    // That literal is the *only* source of `image/x-pfm` in ExifTool, which is
+    // why the generated MIME table has no PFM row to look it up in. Both forms
+    // report `FileType: PFM`, so the header is the only thing separating them.
+    if id.file_type == "PFM" && magic_matches("PFM", header) {
+        id.mime_type = Some("image/x-pfm");
+    }
+    // An ISO base-media file's `ftyp` major brand outranks its extension, and
+    // for the HEIF family the two routinely disagree: `QuickTime.heic` is brand
+    // `mif1`, which ExifTool reports as `HEIF` / `image/heif` / `heif` while
+    // `%fileTypeLookup` maps the `.heic` extension to `HEIC`.
+    //
+    // ExifTool reads the brand and takes the FileType from the extension named
+    // in its `%ftypLookup` description (QuickTime.pm:9993):
+    //
+    // ```text
+    //     if ($ftypLookup{$type} and $ftypLookup{$type} =~ /\(\.(\w+)/) {
+    //         $fileType = $1;
+    //     ...
+    //     $et->SetFileType($fileType, $mimeLookup{$fileType} || 'video/mp4');
+    // ```
+    //
+    // Only the HEIF/AVIF brands are decoded here, because they are the ones
+    // whose brand contradicts the extension. The rest of `%ftypLookup` resolves
+    // to the same answer the extension already gave, and transcribing 200 rows
+    // to confirm what is already correct would be the expensive way to change
+    // nothing. `%useExt` is not consulted: its sole entry is `GLV => 'MP4'`,
+    // which no brand here can produce.
+    if let Some((file_type, mime)) = heif_family_brand(header) {
+        id.file_type = Cow::Borrowed(file_type);
+        id.extension = extension_for(file_type);
+        id.mime_type = Some(mime);
+    }
     id
+}
+
+/// FileType and MIME type for an ISO base-media `ftyp` major brand, for the
+/// HEIF/AVIF family only.
+///
+/// Transcribed from `%ftypLookup` (QuickTime.pm:227-235) paired with
+/// `%mimeLookup` (QuickTime.pm:104-127) in the pinned 13.59 tree. A brand this
+/// does not name returns `None`, leaving the extension's answer in place --
+/// the rule the generator follows, and the reason no MP4/MOV brand is guessed
+/// at here.
+fn heif_family_brand(header: &[u8]) -> Option<(&'static str, &'static str)> {
+    // `[size:4]["ftyp"]["brand":4]`, so the brand is bytes 8..12 and the atom
+    // must declare at least 12 bytes (QuickTime.pm's `$size >= 12`).
+    if header.get(4..8) != Some(b"ftyp") {
+        return None;
+    }
+    let size = u32::from_be_bytes(header.get(0..4)?.try_into().ok()?);
+    if size < 12 {
+        return None;
+    }
+    Some(match header.get(8..12)? {
+        b"heic" => ("HEIC", "image/heic"),
+        b"hevc" => ("HEICS", "image/heic-sequence"),
+        b"mif1" | b"heix" => ("HEIF", "image/heif"),
+        b"msf1" => ("HEIFS", "image/heif-sequence"),
+        b"avif" | b"avis" | b"avio" | b"miaf" => ("AVIF", "image/avif"),
+        _ => return None,
+    })
 }
 
 /// Whether the header satisfies the magic number of one of `formats`.
@@ -132,8 +243,8 @@ fn refine(mut id: Identity, header: &[u8]) -> Identity {
 fn magic_accepts(formats: &[&str], header: &[u8]) -> Option<bool> {
     let head = &header[..header.len().min(HEADER_LEN)];
     let mut declared = false;
-    for (format, re) in COMPILED.iter() {
-        if !formats.contains(format) {
+    for (key, re) in COMPILED.iter() {
+        if !formats.iter().any(|f| magic_key(f) == *key) {
             continue;
         }
         declared = true;
@@ -156,9 +267,18 @@ fn magic_accepts(formats: &[&str], header: &[u8]) -> Option<bool> {
 /// extension, is not identified here even though ExifTool would identify it by
 /// parsing. That is the intended trade: refusing to answer is recoverable,
 /// mislabelling is not.
+///
+/// The one exception is text. When the extension is unrecognised entirely,
+/// [`identify_text`] gets a look, because `TXT` and `XML` are the two types
+/// whose confirming step OxiDex *can* run -- see its docs. `.gpx`, `.kml`,
+/// `.igc` and `.log` are in no lookup table, in ExifTool either; ExifTool
+/// identifies them purely by content, and without this they reported
+/// `FileType: Unknown`.
 #[must_use]
 pub fn identify(header: &[u8], ext: Option<&str>) -> Option<Identity> {
-    let (file_type, formats) = ext.and_then(lookup_extension)?;
+    let Some((file_type, formats)) = ext.and_then(lookup_extension) else {
+        return identify_text(header);
+    };
     let root_type = *formats.first()?;
     // The magic-number table is keyed by *format*, not by file type: `.djvu`
     // is FileType DJVU processed by the AIFF module, so its header matches the
@@ -183,41 +303,132 @@ fn lookup_extension(ext: &str) -> Option<(&'static str, &'static [&'static str])
         })
 }
 
-/// Whether ExifTool's tables carry this `FileType` name at all.
+/// Identify a file with no recognised extension as `XML` or `TXT`.
 ///
-/// The three generated tables are each partial -- `%mimeType` has 216 entries,
-/// `%fileTypeExt` only 9 -- so membership in any one of them is what makes a
-/// name ExifTool's rather than a parser's own spelling.
-fn known_file_type(file_type: &str) -> bool {
-    tables::MIME_TYPE
-        .binary_search_by_key(&file_type, |(t, _)| t)
-        .is_ok()
-        || tables::FILE_TYPE_EXT
-            .binary_search_by_key(&file_type, |(t, _)| t)
-            .is_ok()
-        || tables::EXT_TO_TYPE.iter().any(|(_, t, _)| *t == file_type)
+/// These are the two types [`identify`]'s "recognised extension" rule can
+/// safely be relaxed for, and the reason is the rule's own: it exists because
+/// OxiDex cannot run the confirming parse that ExifTool runs after a loose
+/// magic number matches. For `TXT` and `XML` there is nothing left to confirm.
+/// `%magicNumber{TXT}` *is* the whole test -- every byte in the tested buffer
+/// is printable or whitespace -- and XML's confirming step is reading the first
+/// tag, which is done here in full.
+///
+/// Order follows `@fileTypes` (ExifTool.pm:198-206), whose own comment is
+/// "put types with weak file signatures at end of list to avoid false matches":
+/// `XMP` sits near the front and `TXT` second from the end. That ordering is
+/// load-bearing rather than cosmetic -- an XML document is printable text, so
+/// it matches the `TXT` pattern too, and testing `TXT` first would report every
+/// `.gpx` and `.kml` in the corpus as `TXT`.
+///
+/// Only `XML` and `TXT` are ever claimed. A header that turns out to be XMP,
+/// RDF, SVG, PLIST, INX or RMD is *declined*, not guessed at: OxiDex has real
+/// parsers for those reached by their own extensions, and a second, weaker
+/// content-only route to the same types could only disagree with them.
+#[must_use]
+fn identify_text(header: &[u8]) -> Option<Identity> {
+    // `%magicNumber{TXT}` ends `[...]*$` -- a star, so it matches the empty
+    // string, and an empty buffer would be reported as a text file. ExifTool
+    // never gets that far: it fails an empty file with `Error: File is empty`
+    // and assigns no `FileType` at all. An empty buffer here also means "the
+    // header could not be read", which is not evidence of anything.
+    if header.is_empty() {
+        return None;
+    }
+    if is_plain_xml(header) {
+        // XML is absent from `%magicNumber` -- it is not a magic-number type at
+        // all. ExifTool reaches it through XMP's pattern and then *names* it in
+        // the XMP module (XMP.pm:4424), so there is no generated row to consult
+        // and `identity()` cannot build this one.
+        return Some(Identity {
+            file_type: Cow::Borrowed("XML"),
+            root_type: "XMP",
+            extension: Cow::Borrowed("xml"),
+            mime_type: Some("application/xml"),
+        });
+    }
+    if magic_matches("TXT", header) {
+        return Some(identity("TXT", "TXT"));
+    }
+    None
 }
 
-/// ExifTool's `FileTypeExtension` for a `FileType`, when it knows the name.
+/// Whether the header is XML that carries no XMP, RDF, SVG or PLIST payload.
 ///
-/// Declining on an unknown name is the whole point of the guard: asked about a
-/// parser's private spelling, [`extension_for`] does not fail, it lowercases
-/// what it was handed. `WebP` is not one of ExifTool's file types (`WEBP` is),
-/// and answering `webp` for it would be a guess wearing a real tag's name.
-#[must_use]
-pub fn canonical_extension(file_type: &str) -> Option<Cow<'static, str>> {
-    known_file_type(file_type).then(|| extension_for(file_type))
-}
+/// This is `ProcessXMP`'s type decision (XMP.pm:4360-4424) restricted to the
+/// arm that yields `XML`:
+///
+/// ```text
+///     if ($2 eq '<?xml') {
+///         if (... '<?aid ')                 { $type = 'INX' }
+///         elsif ($buf2 =~ /<x(mp)?:x[ma]pmeta/) { $hasXMP = 1 }
+///         else {
+///             if ($buf2 =~ /<!DOCTYPE\s+(\w+)/) { svg / plist / REDXIF / ... }
+///             elsif ($buf2 =~ /<svg[\s>]/)      { $isSVG = 1 }
+///             elsif ($buf2 =~ /<rdf:RDF/)       { $isRDF = 1 }
+///             elsif ($buf2 =~ /<plist[\s>]/)    { $type  = 'PLIST' }
+///         }
+///         $isXML = 1;
+///     }
+///     ...
+///     } elsif ($isXML and not $hasXMP and not $isRDF) { $type = 'XML' }
+/// ```
+///
+/// Every branch that sets one of those flags is a branch this returns `false`
+/// for, so the caller declines rather than mislabelling an XMP sidecar or an
+/// SVG as a bare `XML` document.
+///
+/// UTF-16/32 XML is declined too. ExifTool decodes the buffer first and this
+/// does not, so the honest answer for a byte string it cannot read as UTF-8 is
+/// "no", not a guess. The leading nulls of a UTF-16BE document are excluded by
+/// the BOM/whitespace skip below and never reach the `<?xml` test.
+fn is_plain_xml(header: &[u8]) -> bool {
+    // `\0{0,3}(\xfe\xff|\xff\xfe|\xef\xbb\xbf)?\0{0,3}\s*<` -- the XMP magic
+    // number's own preamble. Only the UTF-8 BOM is stepped over; a UTF-16 BOM
+    // means the document is not the UTF-8 this function goes on to read.
+    let body = header
+        .strip_prefix(b"\xef\xbb\xbf".as_slice())
+        .unwrap_or(header);
+    let body = match std::str::from_utf8(body) {
+        Ok(text) => text,
+        // A truncated multi-byte sequence at the 1 KiB boundary is normal, and
+        // is not a reason to refuse to classify the tag that opens the file.
+        Err(error) => match std::str::from_utf8(&body[..error.valid_up_to()]) {
+            Ok(text) => text,
+            Err(_) => return false,
+        },
+    };
+    let body = body.trim_start();
 
-/// ExifTool's `MIMEType` for a `FileType`.
-///
-/// Needs no membership guard -- `%mimeType` is consulted directly and simply
-/// has no entry for a name it does not carry. Many real file types are among
-/// those: ExifTool sets `URL` and `PFM` MIME types inline in their modules
-/// rather than in the table.
-#[must_use]
-pub fn canonical_mime(file_type: &str) -> Option<&'static str> {
-    mime_for(file_type)
+    // `<svg` and `<rdf:RDF` are the other two openings `%magicNumber{XMP}`
+    // admits; both set a flag that rules `XML` out, so neither is XML here.
+    if !body.starts_with("<?xml") {
+        return false;
+    }
+    // `$buf2` is ExifTool's own read-ahead buffer, so these searches are over
+    // the same window: the header this function was handed.
+    if body.contains("<x:xmpmeta")
+        || body.contains("<xmp:xmpmeta")
+        || body.contains("<x:xapmeta")
+        || body.contains("<xmp:xapmeta")
+        || body.contains("<rdf:RDF")
+        || body.contains("<plist")
+        || body.contains("<?aid ")
+    {
+        return false;
+    }
+    if let Some(rest) = body.split("<!DOCTYPE").nth(1) {
+        // `<!DOCTYPE\s+(\w+)` -- only `fcpxml` continues on to be plain XML;
+        // svg, plist and REDXIF each select a type, and anything else makes
+        // ExifTool abandon the file entirely (`return 0`).
+        let doctype = rest
+            .trim_start()
+            .split(|c: char| !c.is_alphanumeric() && c != '_');
+        if doctype.into_iter().next() != Some("fcpxml") {
+            return false;
+        }
+    }
+    // `<svg[\s>]` anywhere in the buffer, per the elsif chain above.
+    !body.contains("<svg ") && !body.contains("<svg>") && !body.contains("<svg\n")
 }
 
 /// Identify by filename extension, for formats with no distinctive header.
@@ -304,6 +515,72 @@ mod tests {
         assert_eq!(arw.file_type, "ARW");
         // The header still has to agree with *something* the extension claims.
         assert!(identify(b"BM\x00\x00", Some("arw")).is_none());
+    }
+
+    #[test]
+    fn pfm_is_two_formats_told_apart_by_the_header() {
+        // `.pfm` resolves to one FileType and two MIME types. Both rows below
+        // are what the pinned ExifTool 13.59 reports for the two `.pfm` files
+        // in its own distribution, t/images/PFM.pfm and t/images/Font.pfm.
+        let float = identify(
+            b"PF\x0a512 768\x0a-1.000000\x0a\x00\x00\x00\x00",
+            Some("pfm"),
+        )
+        .expect("a Portable FloatMap is identified");
+        assert_eq!(float.file_type, "PFM");
+        assert_eq!(float.extension, "pfm");
+        assert_eq!(float.mime_type, Some("image/x-pfm"));
+
+        // A Printer Font Metrics file opens with its version field, 0x0100
+        // little-endian, which is what the Font module's magic number matches.
+        // It takes the root module's MIME type, and must *not* pick up the
+        // FloatMap one: adding a plain `PFM => image/x-pfm` row to the MIME
+        // table is the intuitive fix for the case above and silently breaks
+        // this one, because `identity` would then find it for both.
+        let font = identify(b"\x00\x01\xf0\x00\x00\x00Copyright (c)", Some("pfm"))
+            .expect("a Printer Font Metrics file is identified");
+        assert_eq!(font.file_type, "PFM");
+        assert_eq!(font.extension, "pfm");
+        assert_eq!(font.mime_type, Some("application/x-font-type1"));
+    }
+
+    #[test]
+    fn a_pfm_matching_neither_form_is_declined() {
+        // ExifTool falls through to its plain-text fallback and reports TXT
+        // for this, so answering PFM would be confidently wrong rather than
+        // merely incomplete.
+        assert!(identify(b"this is not a font and not a floatmap\n", Some("pfm")).is_none());
+    }
+
+    #[test]
+    fn magic_alias_reaches_every_format_in_a_mixed_list() {
+        // `magic_accepts` reads "some format here declares a magic number and
+        // none of them matched" as a contradiction and declines. That is sound
+        // only while every format in such a list is reachable in the magic
+        // table: a magic-less one is a format ExifTool would still hand to its
+        // module rather than skip, so declining on its behalf is a guess.
+        //
+        // `pfm`/`PFM2` is the only such entry in 13.59, and `MAGIC_ALIAS` makes
+        // it reachable. This fails if a regeneration introduces another, rather
+        // than letting it surface the way `.pfm` did -- as `FileType: Unknown`
+        // on a file whose parser was working perfectly.
+        let keys: std::collections::HashSet<&str> = tables::MAGIC.iter().map(|(t, _)| *t).collect();
+        let unreachable: Vec<(&str, Vec<&str>)> = tables::EXT_TO_TYPE
+            .iter()
+            .filter(|(_, _, formats)| formats.iter().any(|f| keys.contains(magic_key(f))))
+            .filter_map(|(ext, _, formats)| {
+                let missing: Vec<&str> = formats
+                    .iter()
+                    .copied()
+                    .filter(|f| !keys.contains(magic_key(f)))
+                    .collect();
+                (!missing.is_empty()).then_some((*ext, missing))
+            })
+            .collect();
+        assert!(
+            unreachable.is_empty(),
+            "extension format lists mixing magic-bearing and unreachable formats: {unreachable:?}"
+        );
     }
 
     #[test]
@@ -508,5 +785,128 @@ mod tests {
         let mut big = vec![0u8; 1 << 20];
         big[..2].copy_from_slice(b"BM");
         assert_eq!(identify(&big, Some("bmp")).unwrap().file_type, "BMP");
+    }
+
+    /// The four corpus extensions no lookup table carries, in either tool.
+    #[test]
+    fn unlisted_text_extensions_identify_by_content() {
+        let xml = br#"<?xml version="1.0"?><gpx version="1.0"></gpx>"#;
+        for ext in ["gpx", "kml", "xml", "nosuchext"] {
+            let id = identify(xml, Some(ext)).expect(ext);
+            assert_eq!(id.file_type, "XML", "{ext}");
+            assert_eq!(id.extension, "xml", "{ext}");
+            assert_eq!(id.mime_type, Some("application/xml"), "{ext}");
+        }
+
+        let text = b"$PMGNTRK,4415.163,N,07631.126,W,00095,M,110833.53,A,,030409*68\r\n";
+        for ext in ["log", "igc", "nosuchext"] {
+            let id = identify(text, Some(ext)).expect(ext);
+            assert_eq!(id.file_type, "TXT", "{ext}");
+            assert_eq!(id.extension, "txt", "{ext}");
+            assert_eq!(id.mime_type, Some("text/plain"), "{ext}");
+        }
+    }
+
+    /// XML is tested before TXT, because XML *is* printable text.
+    ///
+    /// `@fileTypes` puts XMP near the front and TXT second from the end, under
+    /// the comment "put types with weak file signatures at end of list to avoid
+    /// false matches". Reversing the two here reports every `.gpx` as TXT.
+    #[test]
+    fn xml_is_tested_before_the_weaker_txt_pattern() {
+        let xml = br#"<?xml version="1.0"?><kml></kml>"#;
+        assert!(magic_matches("TXT", xml), "precondition: XML is also TXT");
+        assert_eq!(identify(xml, Some("kml")).unwrap().file_type, "XML");
+    }
+
+    /// Everything `ProcessXMP` gives a name other than `XML` is declined.
+    ///
+    /// OxiDex reaches XMP, SVG and PLIST through their own extensions and real
+    /// parsers; a second, weaker content-only route to the same types could
+    /// only disagree with them, so this path answers `XML` or nothing.
+    #[test]
+    fn non_xml_markup_is_declined_rather_than_guessed_at() {
+        for (label, body) in [
+            (
+                "xmpmeta",
+                r#"<?xml version="1.0"?><x:xmpmeta xmlns:x="adobe:ns:meta/">"#,
+            ),
+            (
+                "xapmeta",
+                r#"<?xml version="1.0"?><x:xapmeta xmlns:x="adobe:ns:meta/">"#,
+            ),
+            (
+                "bare rdf",
+                r#"<?xml version="1.0"?><rdf:RDF xmlns:rdf="x"></rdf:RDF>"#,
+            ),
+            ("svg tag", r#"<?xml version="1.0"?><svg width="1"></svg>"#),
+            (
+                "svg doctype",
+                r#"<?xml version="1.0"?><!DOCTYPE svg PUBLIC "x">"#,
+            ),
+            ("plist tag", r#"<?xml version="1.0"?><plist version="1.0">"#),
+            (
+                "plist doctype",
+                r#"<?xml version="1.0"?><!DOCTYPE plist PUBLIC "x">"#,
+            ),
+            ("inx", "<?xml version=\"1.0\"?>\n<?aid style=\"50\"?>"),
+            (
+                "unknown doctype",
+                r#"<?xml version="1.0"?><!DOCTYPE REDXIF><a/>"#,
+            ),
+        ] {
+            assert!(
+                !is_plain_xml(body.as_bytes()),
+                "{label} must not be claimed as plain XML"
+            );
+        }
+
+        // Final Cut Pro XML is the one DOCTYPE that stays plain XML.
+        assert!(is_plain_xml(
+            br#"<?xml version="1.0"?><!DOCTYPE fcpxml><fcpxml/>"#
+        ));
+    }
+
+    /// A UTF-8 BOM is stepped over; a UTF-16 BOM means "not the UTF-8 we read".
+    #[test]
+    fn byte_order_marks_are_handled_conservatively() {
+        let mut bom_xml = b"\xef\xbb\xbf".to_vec();
+        bom_xml.extend_from_slice(br#"<?xml version="1.0"?><a/>"#);
+        assert!(is_plain_xml(&bom_xml));
+
+        // UTF-16LE `<?xml`. ExifTool decodes first and this does not, so the
+        // honest answer is to decline rather than guess.
+        let utf16 = b"\xff\xfe<\0?\0x\0m\0l\0";
+        assert!(!is_plain_xml(utf16));
+    }
+
+    /// Binary content is not text, and a recognised extension still wins.
+    #[test]
+    fn binary_content_is_not_claimed_as_text() {
+        // \x00 and \x01 are outside TXT's `[\x07-\x0d\x20-\x7e\x80-\xfe]`.
+        assert!(identify(b"\x00\x01\x02\x03rest of file", Some("nosuchext")).is_none());
+        assert!(identify(b"\x00\x01\x02\x03rest of file", None).is_none());
+
+        // A known extension that agrees with its magic number is unaffected by
+        // the fallback: it never reaches it.
+        assert_eq!(identify(b"BM....", Some("bmp")).unwrap().file_type, "BMP");
+    }
+
+    /// An empty buffer is not a text file.
+    ///
+    /// `%magicNumber{TXT}` ends `[...]*$`, and the star matches the empty
+    /// string -- so the pattern alone calls a zero-byte file TXT. ExifTool
+    /// never consults it: an empty file fails with `Error: File is empty` and
+    /// gets no `FileType` at all. `unknown_content_is_not_guessed` caught this
+    /// when the content fallback was added.
+    #[test]
+    fn an_empty_buffer_is_not_a_text_file() {
+        assert!(
+            magic_matches("TXT", b""),
+            "precondition: the pattern matches"
+        );
+        assert!(identify_text(b"").is_none());
+        assert!(identify(b"", None).is_none());
+        assert!(identify(b"", Some("nosuchext")).is_none());
     }
 }

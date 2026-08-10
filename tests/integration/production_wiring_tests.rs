@@ -1038,9 +1038,13 @@ fn read_metadata_routes_parser_supported_eml_without_date() {
     let eml = b"From: sender@example.com\r\nTo: recipient@example.com\r\nSubject: Test\r\n\r\nBody";
     let metadata = read_temp_file(eml, ".eml");
 
+    // `TXT`, not `EML`: ExifTool has no EML file type -- `.eml` is absent from
+    // `%fileTypeLookup`, and 13.59 reports an email as TXT/txt/text/plain.
+    // `EML` is OxiDex's name for the parser, not a value ExifTool ever emits,
+    // and the `EML:` tags below are what show the routing worked.
     assert_eq!(
         metadata.get("File:FileType"),
-        Some(&TagValue::String("EML".to_string()))
+        Some(&TagValue::String("TXT".to_string()))
     );
     assert_eq!(
         metadata.get("EML:Subject"),
@@ -1166,9 +1170,12 @@ fn read_metadata_routes_eml_with_svg_body_as_eml() {
     let eml = b"From: a@example.com\r\nTo: b@example.com\r\nDate: Wed, 10 Jun 2026 12:00:00 +0000\r\n\r\n<svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>";
     let metadata = read_temp_file(eml, ".eml");
 
+    // See `read_metadata_routes_parser_supported_eml_without_date`: ExifTool
+    // reports an email as TXT. `EML:From` is what shows the EML parser, not
+    // the SVG one, claimed the body.
     assert_eq!(
         metadata.get("File:FileType"),
-        Some(&TagValue::String("EML".to_string()))
+        Some(&TagValue::String("TXT".to_string()))
     );
     assert_eq!(
         metadata.get("EML:From"),

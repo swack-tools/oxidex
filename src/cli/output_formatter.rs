@@ -547,18 +547,36 @@ fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String {
         TagValue::Binary(bytes) => binary_placeholder(bytes.len()),
         TagValue::DateTime(dt) => dt.format("%Y:%m:%d %H:%M:%S").to_string(),
         TagValue::Struct(_) => "(struct)".to_string(),
-        TagValue::Array(values) => {
-            if values.len() > 3 {
-                format!("[{} items]", values.len())
-            } else {
-                let formatted: Vec<String> = values
-                    .iter()
-                    .map(|v| format_tag_value_short(tag_name, v))
-                    .collect();
-                format!("[{}]", formatted.join(", "))
-            }
-        }
+        // `[4 items]` was the one place this renderer still shortened a value,
+        // contradicting the rule stated above -- and it was unrecoverable, since
+        // the items themselves never reached the output. PhotoMechanic.jpg's
+        // IPTC Keywords printed `[4 items]` where ExifTool prints
+        // `Keywords, one, three, two`.
+        TagValue::Array(values) => join_list(
+            values
+                .iter()
+                .map(|v| format_tag_value_short(tag_name, v))
+                .collect(),
+        ),
     }
+}
+
+/// ExifTool's rendering of a list-valued tag: the items, joined, unbracketed.
+///
+/// `ListSep` defaults to `', '` (ExifTool.pm:1173) and is applied as a plain
+/// `join $$self{OPTIONS}{ListSep}, @$value` (ExifTool.pm:3736). There are no
+/// enclosing brackets and no element count -- `XMP-dc:Subject` of three items
+/// prints `ExifTool, Test, XMP`, not `[ExifTool, Test, XMP]`.
+///
+/// The bracketed form was a debug rendering of the `TagValue::Array` variant
+/// that reached real output: every list tag in the corpus (`Subject`,
+/// `Keywords`, `Creator`, `SupplementalCategories`) carried the brackets, and
+/// each one is a value no consumer could parse back into what ExifTool reports.
+///
+/// This is display only. `-j` still emits a JSON array via `tag_value_to_json`,
+/// which is what `exiftool -j` does for a list tag.
+fn join_list(items: Vec<String>) -> String {
+    items.join(", ")
 }
 
 /// Helper function to format a TagValue for human-readable display
@@ -595,13 +613,12 @@ fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
         // number moved.
         TagValue::DateTime(dt) => dt.format("%Y:%m:%d %H:%M:%S").to_string(),
         TagValue::Struct(_) => "(Structured data)".to_string(),
-        TagValue::Array(values) => {
-            let formatted: Vec<String> = values
+        TagValue::Array(values) => join_list(
+            values
                 .iter()
                 .map(|v| format_tag_value(tag_name, v))
-                .collect();
-            format!("[{}]", formatted.join(", "))
-        }
+                .collect(),
+        ),
     }
 }
 
@@ -1167,6 +1184,64 @@ mod tests {
             format_tag_value("XMP-dc:Subject", &value),
             "(Structured data)"
         );
+    }
+
+    /// A list tag prints its items joined by `, `, with no brackets.
+    ///
+    /// `TagValue::Array` had no test at all, which is how a debug rendering of
+    /// the enum variant reached real output and stayed there: every list tag in
+    /// the corpus printed `[ExifTool, Test, XMP]` against ExifTool's
+    /// `ExifTool, Test, XMP` (`ListSep` defaults to `', '`, ExifTool.pm:1173).
+    #[test]
+    fn list_values_join_without_brackets() {
+        let value = TagValue::Array(vec![
+            TagValue::new_string("ExifTool"),
+            TagValue::new_string("Test"),
+            TagValue::new_string("XMP"),
+        ]);
+        assert_eq!(
+            format_tag_value("XMP-dc:Subject", &value),
+            "ExifTool, Test, XMP"
+        );
+        assert_eq!(
+            format_tag_value_short("XMP-dc:Subject", &value),
+            "ExifTool, Test, XMP"
+        );
+    }
+
+    /// `-s` shortens tag *names*, never tag *values* -- including long lists.
+    ///
+    /// The short renderer collapsed any list of more than three items to
+    /// `[N items]`, discarding the items entirely. PhotoMechanic.jpg's IPTC
+    /// Keywords printed `[4 items]` where ExifTool prints all four.
+    #[test]
+    fn long_lists_are_not_abbreviated_to_a_count() {
+        let value = TagValue::Array(
+            ["Keywords", "one", "three", "two"]
+                .iter()
+                .map(|s| TagValue::new_string(*s))
+                .collect(),
+        );
+        assert_eq!(
+            format_tag_value_short("IPTC:Keywords", &value),
+            "Keywords, one, three, two"
+        );
+        assert_eq!(
+            format_tag_value("IPTC:Keywords", &value),
+            "Keywords, one, three, two"
+        );
+    }
+
+    /// A single-item list is just the item, and an empty list is empty.
+    #[test]
+    fn degenerate_lists_render_without_separators() {
+        let one = TagValue::Array(vec![TagValue::new_string("solo")]);
+        assert_eq!(format_tag_value("XMP-dc:Subject", &one), "solo");
+        assert_eq!(format_tag_value_short("XMP-dc:Subject", &one), "solo");
+
+        let none = TagValue::Array(vec![]);
+        assert_eq!(format_tag_value("XMP-dc:Subject", &none), "");
+        assert_eq!(format_tag_value_short("XMP-dc:Subject", &none), "");
     }
 
     // CSV Formatter Tests

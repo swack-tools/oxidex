@@ -65,11 +65,15 @@ env:
 # splitting these jobs is NOT safe -- a required check that never reports
 # leaves every PR permanently unmergeable (see the paths-ignore note above).
 #
-# "Release Build" and "Doc Tests" were split OUT of Build & Test, which kept
-# its name and so kept reporting. They are new check names, so they are not
-# required until someone with admin rights adds them to branch protection.
-# Until that happens a release-profile break or a failing doc test does not
-# block a merge, even though the job goes red.
+# "Release Build" was split OUT of Build & Test, which kept its name and so
+# kept reporting. It is a new check name, so it is not required until someone
+# with admin rights adds it to branch protection. Until that happens a
+# release-profile break does not block a merge, even though the job goes red.
+#
+# A "Doc Tests" job was split out the same way and has since been folded back
+# INTO Build & Test -- see the doc-test step there for why. Deleting it was
+# safe precisely because it was never a required check; the reverse move, and
+# the reason the doc tests now block merges again, is the point of the change.
 jobs:
   lint:
     name: Lint & Audit
@@ -124,8 +128,8 @@ jobs:
   test:
     name: Build & Test
     # 8x: nextest parallelises across tests, and this is the long pole of
-    # the three compile jobs -- Release Build and Doc Tests are sized to
-    # finish inside it, not to race it.
+    # the two compile jobs -- Release Build is sized to finish inside it,
+    # not to race it.
     #
     # History, because both steps mattered: this job once ran five cargo
     # invocations across three feature graphs, and cargo fingerprints per
@@ -135,6 +139,12 @@ jobs:
     # nothing -- release-side profile, test profile, rustdoc are three
     # distinct fingerprints -- so they were split into three concurrent jobs
     # rather than summed on one runner.
+    #
+    # The rustdoc third has since come back, on purpose: doc tests only catch
+    # what they are meant to catch when they run in the SAME cargo invocation
+    # as the rest of the suite, which means a plain `cargo test` step here
+    # rather than a `cargo test --doc` job of its own. The step below carries
+    # the evidence and its measured cost.
     #
     # If you add a cargo step here, give it `--all-features` and nothing
     # else, or it will rebuild the workspace for its own feature graph.
@@ -310,6 +320,46 @@ jobs:
       # installed ABOVE this step now. Moving that install back below here
       # would not fail the job; it would silently skip the comparison tests.
       - run: cargo nextest run --all-features
+      # The doc tests, run through plain `cargo test` on purpose. This looks
+      # like it duplicates the nextest step above; it does not, and the exact
+      # spelling is load-bearing. Do not "simplify" it to
+      # `cargo test --doc --all-features`.
+      #
+      # What it guards: `cargo test` compiles doc tests LAST, inside ONE
+      # invocation, against whatever target/debug/deps/liboxidex.rlib the rest
+      # of the suite left on disk. `[lib] crate-type = ["lib", "staticlib",
+      # "cdylib"]` makes cargo emit the lib with no `-C extra-filename` hash,
+      # so ONE filename is shared by every feature graph -- and
+      # tests/ffi_c_integration.rs shells out to a nested `cargo build --lib`.
+      # While that nested build did not match the outer feature graph it
+      # replaced the rlib mid-run, and `cargo test --all-features` failed with
+      # E0432 on the parsers::magika_detector examples.
+      #
+      # Why neither previous command saw it, and why `--doc` will not either:
+      # nextest runs no doc tests at all, and a SEPARATE
+      # `cargo test --doc --all-features` self-heals -- cargo re-checks
+      # fingerprints at the start of every invocation, notices the artifact
+      # changed, and rebuilds the lib before rustdoc runs. Measured: with the
+      # defect reintroduced, the separate `--doc` invocation reports 221
+      # passed, and only the single `cargo test --all-features` invocation
+      # fails. Splitting this step back out would restore a green CI over a
+      # broken contributor command.
+      #
+      # Enforcement matters as much as coverage: Build & Test is a required
+      # status check, and the "Doc Tests" job this replaces was not, so a red
+      # doc test never blocked a merge.
+      #
+      # Cost, measured on run 31339797988: 61s, against 86s for the nextest
+      # step above it. Cheap because nextest has already compiled every
+      # dependency in this profile -- what is added is rustdoc's own pass plus
+      # a second, serial run of the suite, this runner's ExifTool-backed
+      # comparison tests included. Deleting the separate Doc Tests job in the
+      # same change gave a whole 4x runner back, so CI does less work overall.
+      #
+      # If this ever becomes the long pole, shrink what it runs only with a
+      # measurement in hand -- narrowing it back to `--doc` does not shrink
+      # it, it deletes it.
+      - run: cargo test --all-features
       - name: Verify C header is up-to-date
         run: |
           cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h.tmp
@@ -354,32 +404,6 @@ jobs:
       # The gap this accepts: an LTO-only failure would now surface at tag
       # time in release.yml rather than here.
       - run: cargo build --profile fixloop --all-features
-
-  doc-tests:
-    name: Doc Tests
-    # Split out for the same reason as Release Build. rustdoc is its own
-    # artifact kind, so this never shared a compile with the other two.
-    #
-    # No ExifTool here on purpose: doc tests are the examples in ///, none
-    # of which shell out to the oracle. If a doc test ever does, it belongs
-    # in Build & Test rather than having the install duplicated here.
-    runs-on: warp-ubuntu-latest-x64-4x
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-      # WarpBuild-native cache backend. Its own shared-key on purpose:
-      # this job compiles a different profile from Build & Test, and a
-      # shared entry was measured slower (see that job's note).
-      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
-        with:
-          cache-on-failure: true
-          cache-provider: warpbuild
-          shared-key: doc-tests
-      # rustdoc is a separate artifact kind, so this compiles once more no
-      # matter what. Same feature set regardless, to reuse everything else.
-      - name: Run doc tests
-        run: cargo test --doc --all-features
 
   # The generated ExifTool tables are 100k+ lines that no reviewer reads in a
   # diff, so their correctness rests entirely on verify.py -- which, until this

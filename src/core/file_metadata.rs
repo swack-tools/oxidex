@@ -186,24 +186,27 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
         && let Some(ext_str) = extension.to_str()
     {
         let ext_lower = ext_str.to_lowercase();
+        // The header is what lets `filetype::refine` run, and three formats in
+        // the corpus need it: a multi-page DjVu, Portable FloatMap's
+        // `image/x-pfm`, and any HEIF whose `ftyp` brand contradicts its
+        // extension. Reading it here rather than trusting the extension alone
+        // is also what keeps this resolver from *out-ranking*
+        // `operations::add_identity_tags`, which sees the same bytes.
+        let header = read_header(path);
+        let (file_type, file_type_ext, mime_type) = identify_extension(&ext_lower, &header);
 
         // File type extension. ExifTool reports the format's canonical
         // extension rather than echoing the filename, so `clip.m2ts` reports
         // `mts`.
         metadata.insert(
             "File:FileTypeExtension".to_string(),
-            TagValue::new_string(get_file_type_extension(&ext_lower).to_string()),
+            TagValue::new_string(file_type_ext),
         );
 
         // File type (human-readable)
-        let file_type = get_file_type(&ext_lower);
-        metadata.insert(
-            "File:FileType".to_string(),
-            TagValue::new_string(file_type.to_string()),
-        );
+        metadata.insert("File:FileType".to_string(), TagValue::new_string(file_type));
 
         // MIME type
-        let mime_type = get_mime_type(&ext_lower);
         metadata.insert(
             "File:MIMEType".to_string(),
             TagValue::new_string(mime_type.to_string()),
@@ -302,116 +305,148 @@ fn format_unix_permissions(mode: u32) -> String {
     )
 }
 
-/// Determines the file type description from file extension.
-fn get_file_type(extension: &str) -> &'static str {
-    match extension {
-        "pdf" => "PDF",
-        "jpg" | "jpeg" => "JPEG",
-        "png" => "PNG",
-        "gif" => "GIF",
-        "tif" | "tiff" => "TIFF",
-        "bmp" => "BMP",
-        "webp" => "WEBP",
-        "heic" | "heif" => "HEIF",
-        "svg" => "SVG",
-        "cam" => "CAM",
-        "mp4" => "MP4",
-        "mov" => "MOV",
-        // MPEG-4 audio/video variants of the QuickTime container. ExifTool
-        // derives these from the `ftyp` major brand; keyed here on extension
-        // to match how this table resolves every other format.
-        "m4a" => "M4A",
-        "m4b" => "M4B",
-        "m4p" => "M4P",
-        "m4v" => "M4V",
-        "avi" => "AVI",
-        "mkv" => "MKV",
-        "flv" => "FLV",
-        // MPEG-2 Transport Stream. ExifTool maps m2t/m2ts/mts (and ts) to the
-        // M2TS file type. `ts` is deliberately excluded here: this lookup is
-        // keyed on the extension alone with no content check, and `.ts` also
-        // means TypeScript source, which would be confidently mislabelled.
-        "mts" | "m2ts" | "m2t" => "M2TS",
-        "wmv" | "asf" => "ASF",
-        "mp3" => "MP3",
-        "wav" => "WAV",
-        "flac" => "FLAC",
-        "ogg" => "OGG",
-        "txt" => "TXT",
-        "doc" | "docx" => "DOC",
-        "xls" | "xlsx" => "XLS",
-        "ppt" | "pptx" => "PPT",
-        "zip" => "ZIP",
-        "rar" => "RAR",
-        "7z" => "7Z",
-        // `.gz` is deliberately absent: it was mapped to TAR here, which is
-        // wrong -- a gzip stream is not a tar archive, and ExifTool calls it
-        // GZIP. The error was invisible while the GZIP parser published a
-        // second, ungrouped `FileType`, because the output carried both
-        // answers; with one answer per tag the wrong one is all that is left.
-        // Declining lets `add_identity_tags` resolve it from ExifTool's
-        // generated tables instead of this hand-written one.
-        "tar" => "TAR",
-        _ => "Unknown",
-    }
-}
-
-/// Maps a raw filename extension to ExifTool's canonical `FileTypeExtension`.
+/// Resolves `FileType`, `FileTypeExtension` and `MIMEType` for an extension.
 ///
-/// ExifTool reports the format's preferred extension (its `%fileTypeExt`
-/// table) rather than echoing the filename, so a `.m2ts` file reports `mts`.
-/// Extensions with no such override are returned unchanged.
-fn get_file_type_extension(extension: &str) -> &str {
-    match extension {
-        "m2ts" | "m2t" => "mts",
-        other => other,
+/// Delegates to `crate::filetype`, which is generated from ExifTool's own
+/// `%fileTypeLookup`, `%fileTypeExt` and `%mimeType` hashes. This used to be
+/// three hand-written `match` blocks covering ~50 extensions, and they had
+/// drifted from ExifTool on every format where the two disagreed:
+///
+/// ```text
+///     "gz" | "tar"    => "TAR"    ExifTool: gz is GZIP, a different format
+///     "doc" | "docx"  => "DOC"    ExifTool: DOCX  (likewise XLSX, PPTX)
+///     "wmv" | "asf"   => "ASF"    ExifTool: WMV
+///     "gz"  => "application/gzip"         ExifTool: application/x-gzip
+///     "wav" => "audio/wav"                ExifTool: audio/x-wav
+/// ```
+///
+/// Those answers were not merely wrong, they were *unrecoverable*:
+/// `operations::add_identity_tags` repairs `FileType` from these same
+/// generated tables on every read, but only where it finds a placeholder, and
+/// a confident `TAR` is not a placeholder. The hand table's wrongness was
+/// precisely what protected it from the correction. Deleting it is the fix;
+/// there is no case where a 50-entry copy beats the 300-entry generated table
+/// it was copied from.
+///
+/// Unrecognised extensions keep the previous placeholders (`Unknown` /
+/// `application/octet-stream`), which `add_identity_tags` is free to replace.
+fn identify_extension(extension: &str, header: &[u8]) -> (String, String, &'static str) {
+    // `.ts` is a deliberate deviation from ExifTool, and the one place the hand
+    // table was right to disagree. `%fileTypeLookup` maps it to M2TS, but a
+    // `.ts` file is overwhelmingly TypeScript source, and claiming it here
+    // would confidently mislabel every one in a directory scan.
+    // `add_identity_tags` may still identify a real transport stream, because
+    // it requires the magic number to match as well.
+    if extension == "ts" {
+        return (
+            "Unknown".to_string(),
+            extension.to_string(),
+            "application/octet-stream",
+        );
+    }
+
+    // `identify` declines when the header contradicts the extension, which is
+    // the answer we want: a `.gz` that is not gzip should not be called GZIP.
+    // Falling back to the extension alone keeps the previous behaviour for a
+    // file too short to carry a header.
+    let identified = crate::filetype::identify(header, Some(extension))
+        .or_else(|| crate::filetype::identify_by_extension(extension));
+
+    match identified {
+        Some(id) => {
+            // Order matters, and it is ExifTool's (SetFileType, ExifTool.pm):
+            //
+            //     $mimeType or $mimeType = $mimeType{$fileType};
+            //     $mimeType = $mimeType{$baseType} unless $mimeType ...
+            //
+            // `$mimeType` is the argument the *module* passed, so a module's own
+            // lookup outranks `%mimeType`, which in turn outranks the root
+            // type's. `Identity::mime_type` already collapses the last two, and
+            // that collapse is why the module overlay has to be consulted
+            // first: `%mimeType` has no M4A row, so the generated table answers
+            // for it with the MOV root's `video/quicktime` -- a non-`None` wrong
+            // answer that an `or_else` after it can never correct. ExifTool says
+            // `audio/mp4`.
+            let mime = module_mime_type(&id.file_type)
+                .or(id.mime_type)
+                .unwrap_or("application/octet-stream");
+            (id.file_type.into_owned(), id.extension.into_owned(), mime)
+        }
+        None => (
+            "Unknown".to_string(),
+            extension.to_string(),
+            "application/octet-stream",
+        ),
     }
 }
 
-/// Determines the MIME type from file extension.
-fn get_mime_type(extension: &str) -> &'static str {
-    match extension {
-        "pdf" => "application/pdf",
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "gif" => "image/gif",
-        "tif" | "tiff" => "image/tiff",
-        "bmp" => "image/bmp",
-        "webp" => "image/webp",
-        "heic" | "heif" => "image/heif",
-        "svg" => "image/svg+xml",
-        "cam" => "image/x-casio-cam",
-        "mp4" => "video/mp4",
-        "mov" => "video/quicktime",
-        // ExifTool QuickTime.pm %mimeLookup
-        "m4a" | "m4b" | "m4p" => "audio/mp4",
-        "m4v" => "video/x-m4v",
-        "avi" => "video/x-msvideo",
-        "mkv" => "video/x-matroska",
-        "flv" => "video/x-flv",
-        // See `get_file_type` for why `ts` is excluded.
-        "mts" | "m2ts" | "m2t" => "video/m2ts",
-        "wmv" | "asf" => "video/x-ms-wmv",
-        "mp3" => "audio/mpeg",
-        "wav" => "audio/wav",
-        "flac" => "audio/flac",
-        "ogg" => "audio/ogg",
-        "txt" => "text/plain",
-        "doc" => "application/msword",
-        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "xls" => "application/vnd.ms-excel",
-        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "ppt" => "application/vnd.ms-powerpoint",
-        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "zip" => "application/zip",
-        "rar" => "application/x-rar-compressed",
-        "7z" => "application/x-7z-compressed",
-        // See `get_file_type`: `.gz` defers to ExifTool's `%mimeType`, which
-        // says `application/x-gzip` rather than the `application/gzip` this
-        // table asserted.
-        "tar" => "application/x-tar",
-        _ => "application/octet-stream",
+/// The first KiB of `path`, or empty when it cannot be read.
+///
+/// 1 KiB is what the magic-number patterns are written against, matching
+/// `operations::add_identity_tags`. An unreadable file is not an error here:
+/// the caller already has the `fs::metadata` it needs, and an empty header
+/// simply means the extension answers alone.
+fn read_header(path: &Path) -> Vec<u8> {
+    use std::io::Read;
+
+    let Ok(mut file) = fs::File::open(path) else {
+        return Vec::new();
+    };
+    let mut header = vec![0u8; 1024];
+    match file.read(&mut header) {
+        Ok(n) => {
+            header.truncate(n);
+            header
+        }
+        Err(_) => Vec::new(),
     }
+}
+
+/// MIME types ExifTool declares in a format module rather than in `%mimeType`.
+///
+/// The generated `MIME_TYPE` table transcribes `ExifTool.pm`'s `%mimeType`,
+/// which is the only hash the generator reads. RIFF and QuickTime keep their
+/// own lookups and pass the result to `SetFileType`, so ExifTool answers for
+/// these types while the generated table has no row at all -- exactly the case
+/// AGENTS.md names: a gap in a transcribed table means "not transcribed", not
+/// "no such value". Without this overlay, delegating to the generated table
+/// alone would have reported `application/octet-stream` for every WAV, AVI,
+/// WEBP and M4A -- trading the old hand table's wrong answers for no answer.
+///
+/// Transcribed verbatim from the pinned 13.59 tree: `%riffMimeType`
+/// (RIFF.pm:56-64) and `%mimeLookup` (QuickTime.pm:104-127). Verified against
+/// the oracle on the corpus files that carry them: RIFF.wav `audio/x-wav`,
+/// RIFF.avi and Pentax.avi `video/x-msvideo`, RIFF.webp `image/webp`,
+/// QuickTime.m4a `audio/mp4`, QuickTime.heic `image/heif`.
+fn module_mime_type(file_type: &str) -> Option<&'static str> {
+    Some(match file_type {
+        // RIFF.pm %riffMimeType
+        "WAV" => "audio/x-wav",
+        "AVI" => "video/x-msvideo",
+        "WEBP" => "image/webp",
+        "LA" => "audio/x-nspaudio",
+        "OFR" => "audio/x-ofr",
+        "PAC" => "audio/x-lpac",
+        "WV" => "audio/x-wavpack",
+        // QuickTime.pm %mimeLookup
+        "3G2" => "video/3gpp2",
+        "3GP" => "video/3gpp",
+        "AAX" => "audio/vnd.audible.aax",
+        "DVB" => "video/vnd.dvb.file",
+        "F4A" | "F4B" | "M4A" | "M4B" | "M4P" => "audio/mp4",
+        "JP2" => "image/jp2",
+        "JPM" => "image/jpm",
+        "JPX" => "image/jpx",
+        "M4V" => "video/x-m4v",
+        "MOV" | "MQV" => "video/quicktime",
+        "HEIC" => "image/heic",
+        "HEVC" | "HEICS" => "image/heic-sequence",
+        "HEIF" => "image/heif",
+        "HEIFS" => "image/heif-sequence",
+        "AVIF" => "image/avif",
+        "CRX" => "video/x-canon-crx",
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
@@ -420,20 +455,72 @@ mod tests {
 
     // File size tests moved to core::value_formatter module
 
+    /// The generated tables answer, and they answer as ExifTool does.
+    ///
+    /// The `match` blocks these replaced got `gz`, `docx`, `xlsx`, `pptx` and
+    /// `wmv` wrong -- and wrong in the one way that could not be repaired
+    /// downstream, because `add_identity_tags` only overwrites placeholders and
+    /// a confident `TAR` is not a placeholder.
     #[test]
-    fn test_get_file_type() {
-        assert_eq!(get_file_type("pdf"), "PDF");
-        assert_eq!(get_file_type("jpg"), "JPEG");
-        assert_eq!(get_file_type("png"), "PNG");
-        assert_eq!(get_file_type("unknown"), "Unknown");
+    fn file_type_comes_from_the_generated_tables() {
+        for (ext, want) in [
+            ("pdf", "PDF"),
+            ("jpg", "JPEG"),
+            ("png", "PNG"),
+            // Each of these was wrong under the hand-written table.
+            ("gz", "GZIP"),
+            ("tar", "TAR"),
+            ("docx", "DOCX"),
+            ("doc", "DOC"),
+            ("xlsx", "XLSX"),
+            ("pptx", "PPTX"),
+            ("wmv", "WMV"),
+            ("asf", "ASF"),
+        ] {
+            assert_eq!(identify_extension(ext, b"").0, want, "FileType for .{ext}");
+        }
+        assert_eq!(identify_extension("nosuchext", b"").0, "Unknown");
     }
 
     #[test]
-    fn test_get_mime_type() {
-        assert_eq!(get_mime_type("pdf"), "application/pdf");
-        assert_eq!(get_mime_type("jpg"), "image/jpeg");
-        assert_eq!(get_mime_type("png"), "image/png");
-        assert_eq!(get_mime_type("unknown"), "application/octet-stream");
+    fn mime_type_comes_from_the_generated_tables() {
+        for (ext, want) in [
+            ("pdf", "application/pdf"),
+            ("jpg", "image/jpeg"),
+            ("png", "image/png"),
+            // `application/gzip` under the hand table; ExifTool says x-gzip.
+            ("gz", "application/x-gzip"),
+            ("tar", "application/x-tar"),
+            ("wmv", "video/x-ms-wmv"),
+        ] {
+            assert_eq!(identify_extension(ext, b"").2, want, "MIMEType for .{ext}");
+        }
+        assert_eq!(
+            identify_extension("nosuchext", b"").2,
+            "application/octet-stream"
+        );
+    }
+
+    /// The RIFF/QuickTime MIME types `%mimeType` does not carry.
+    ///
+    /// Each is pinned to the value the pinned oracle reports for the corpus
+    /// file named in `module_mime_type`'s docs, not to the old hand table --
+    /// which had `audio/wav` for WAV where ExifTool says `audio/x-wav`.
+    #[test]
+    fn module_declared_mime_types_survive_the_generated_table_gap() {
+        for (ext, want) in [
+            ("wav", "audio/x-wav"),
+            ("avi", "video/x-msvideo"),
+            ("webp", "image/webp"),
+            ("m4a", "audio/mp4"),
+            ("m4b", "audio/mp4"),
+            ("m4p", "audio/mp4"),
+            ("m4v", "video/x-m4v"),
+            ("mov", "video/quicktime"),
+            ("heif", "image/heif"),
+        ] {
+            assert_eq!(identify_extension(ext, b"").2, want, "MIMEType for .{ext}");
+        }
     }
 
     /// The File group is excluded from the tag-comparison harness, so these
@@ -441,53 +528,60 @@ mod tests {
     #[test]
     fn test_m2ts_file_type_and_mime() {
         for ext in ["mts", "m2ts", "m2t"] {
-            assert_eq!(get_file_type(ext), "M2TS", "FileType for .{ext}");
-            assert_eq!(get_mime_type(ext), "video/m2ts", "MIMEType for .{ext}");
+            let (file_type, _, mime) = identify_extension(ext, b"");
+            assert_eq!(file_type, "M2TS", "FileType for .{ext}");
+            assert_eq!(mime, "video/m2ts", "MIMEType for .{ext}");
         }
     }
 
     /// ExifTool reports the format's canonical extension, not the filename's.
     #[test]
     fn test_m2ts_file_type_extension_is_canonicalised() {
-        assert_eq!(get_file_type_extension("m2ts"), "mts");
-        assert_eq!(get_file_type_extension("m2t"), "mts");
-        assert_eq!(get_file_type_extension("mts"), "mts");
+        assert_eq!(identify_extension("m2ts", b"").1, "mts");
+        assert_eq!(identify_extension("m2t", b"").1, "mts");
+        assert_eq!(identify_extension("mts", b"").1, "mts");
         // Extensions without an override pass through untouched.
-        assert_eq!(get_file_type_extension("jpg"), "jpg");
-        assert_eq!(get_file_type_extension("mov"), "mov");
+        assert_eq!(identify_extension("jpg", b"").1, "jpg");
+        assert_eq!(identify_extension("mov", b"").1, "mov");
     }
 
     #[test]
     fn test_m4a_family_file_type_and_mime() {
-        assert_eq!(get_file_type("m4a"), "M4A");
-        assert_eq!(get_file_type("m4b"), "M4B");
-        assert_eq!(get_file_type("m4p"), "M4P");
-        assert_eq!(get_file_type("m4v"), "M4V");
-        assert_eq!(get_mime_type("m4a"), "audio/mp4");
-        assert_eq!(get_mime_type("m4b"), "audio/mp4");
-        assert_eq!(get_mime_type("m4p"), "audio/mp4");
-        assert_eq!(get_mime_type("m4v"), "video/x-m4v");
+        for (ext, want) in [
+            ("m4a", "M4A"),
+            ("m4b", "M4B"),
+            ("m4p", "M4P"),
+            ("m4v", "M4V"),
+        ] {
+            assert_eq!(identify_extension(ext, b"").0, want, "FileType for .{ext}");
+        }
     }
 
     /// Neighbouring container formats must be undisturbed by the additions
     /// above -- an over-eager mapping is worse than a missing one.
     #[test]
     fn test_neighbouring_video_formats_unchanged() {
-        assert_eq!(get_file_type("mov"), "MOV");
-        assert_eq!(get_mime_type("mov"), "video/quicktime");
-        assert_eq!(get_file_type("mp4"), "MP4");
-        assert_eq!(get_mime_type("mp4"), "video/mp4");
-        assert_eq!(get_file_type("avi"), "AVI");
-        assert_eq!(get_mime_type("avi"), "video/x-msvideo");
+        for (ext, file_type, mime) in [
+            ("mov", "MOV", "video/quicktime"),
+            ("mp4", "MP4", "video/mp4"),
+            ("avi", "AVI", "video/x-msvideo"),
+        ] {
+            let (got_type, _, got_mime) = identify_extension(ext, b"");
+            assert_eq!(got_type, file_type, "FileType for .{ext}");
+            assert_eq!(got_mime, mime, "MIMEType for .{ext}");
+        }
     }
 
-    /// `.ts` is an M2TS extension for ExifTool, but this table has no content
-    /// check and `.ts` is overwhelmingly TypeScript source. Claiming it here
-    /// would confidently mislabel every TypeScript file.
+    /// `.ts` is an M2TS extension for ExifTool, but this resolver has no
+    /// content check and `.ts` is overwhelmingly TypeScript source. Claiming it
+    /// here would confidently mislabel every TypeScript file. This is the one
+    /// entry the hand-written table got right that the generated table does
+    /// not, so it is carried forward explicitly.
     #[test]
     fn test_ts_extension_is_not_claimed_as_m2ts() {
-        assert_eq!(get_file_type("ts"), "Unknown");
-        assert_eq!(get_mime_type("ts"), "application/octet-stream");
+        let (file_type, _, mime) = identify_extension("ts", b"");
+        assert_eq!(file_type, "Unknown");
+        assert_eq!(mime, "application/octet-stream");
     }
 
     /// End-to-end regression for the reported bug: a `.mts` file reported

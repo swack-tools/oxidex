@@ -60,11 +60,21 @@ pub struct CliArgs {
     /// measure to prevent accidental modifications.
     pub readonly: bool,
 
-    /// Format output for ExifTool compatibility.
+    /// Apply ExifTool's PrintConv layer to tag values. **Defaults to `true`.**
+    ///
     /// When enabled, tag values are formatted to match ExifTool's output format,
     /// including enum descriptions, unit suffixes, and precision formatting.
-    /// This is useful for comparing OxiDex output with ExifTool or for scripts
-    /// that expect ExifTool-compatible output.
+    ///
+    /// This was opt-in (`-e`) until it was found to be the single largest source
+    /// of wrong values in the product: ExifTool applies PrintConv by *default*
+    /// and takes `-n` to turn it off, so an OxiDex that defaulted to raw values
+    /// disagreed with it on 401 tags across the 207-file pinned corpus while
+    /// every one of those conversions was already implemented and tested in
+    /// `core::exiftool_compat`. The wrong ones were not obviously wrong, either
+    /// -- `Flash: 24`, `FNumber: 8`, `FocalLength: 55 mm` all read like answers.
+    ///
+    /// `--no-print-conv` restores the raw form. It is spelled long because
+    /// OxiDex's `-n` already means dry-run; ExifTool's `-n` is unavailable here.
     pub exiftool_compat: bool,
 
     /// Copy metadata from source file (ExifTool -TagsFromFile syntax).
@@ -100,6 +110,7 @@ fn normalize_exiftool_option(arg: String) -> String {
         "-backup" => "--backup".to_string(),
         "-readonly" => "--readonly".to_string(),
         "-exiftool-compat" => "--exiftool-compat".to_string(),
+        "-no-print-conv" => "--no-print-conv".to_string(),
         "-TagsFromFile" => "--TagsFromFile".to_string(),
         _ => arg,
     }
@@ -198,7 +209,8 @@ impl CliArgs {
         let mut preserve_file_times = false;
         let mut backup = false;
         let mut readonly = false;
-        let mut exiftool_compat = false;
+        // ExifTool's default, and now OxiDex's. See the field's own docs.
+        let mut exiftool_compat = true;
         let mut tags_from_file = None;
         let mut date_format = None;
         let mut dry_run = false;
@@ -335,9 +347,17 @@ impl CliArgs {
                 Long("readonly") => {
                     readonly = true;
                 }
-                // ExifTool compatibility mode
+                // ExifTool compatibility mode. Now the default, so this is a
+                // no-op; it stays accepted because scripts pass it, and because
+                // silently rejecting a flag that used to matter is worse than
+                // honouring one that no longer needs to.
                 Short('e') | Long("exiftool-compat") => {
                     exiftool_compat = true;
+                }
+                // ExifTool's `-n`, which OxiDex cannot spell that way: `-n` is
+                // already dry-run here.
+                Long("no-print-conv") => {
+                    exiftool_compat = false;
                 }
                 // TagsFromFile (copy metadata from source file)
                 Long("TagsFromFile") => {
@@ -620,15 +640,16 @@ impl CliArgs {
         })
     }
 
-    /// Returns whether ExifTool compatibility mode is enabled.
+    /// Returns whether ExifTool's PrintConv layer is applied. Default: `true`.
     ///
     /// When enabled, tag values are formatted to match ExifTool's output format,
     /// including enum descriptions, unit suffixes, and precision formatting.
     ///
     /// # Examples
     ///
-    /// - `oxidex -e photo.jpg` → ExifTool-compatible output
-    /// - `oxidex --exiftool-compat photo.jpg` → ExifTool-compatible output
+    /// - `oxidex photo.jpg` → ExifTool-compatible output (the default)
+    /// - `oxidex -e photo.jpg` → same; `-e` is retained but no longer needed
+    /// - `oxidex --no-print-conv photo.jpg` → raw stored values
     pub fn exiftool_compat(&self) -> bool {
         self.exiftool_compat
     }
@@ -858,7 +879,12 @@ fn print_help() {
     println!(
         "        --detector VALUE        File detection mode: signature (default) or magika (AI-powered)"
     );
-    println!("    -e, --exiftool-compat       Format output for ExifTool compatibility");
+    println!(
+        "    -e, --exiftool-compat       Format output for ExifTool compatibility (now the default)"
+    );
+    println!(
+        "        --no-print-conv         Report raw stored values (ExifTool's -n; -n is dry-run here)"
+    );
     println!("        --TagsFromFile VALUE    Copy metadata from source file");
     println!(
         "    -d VALUE                    Date format string for DateTime tags in filename patterns"
