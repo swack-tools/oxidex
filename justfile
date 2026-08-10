@@ -2,6 +2,41 @@
 # Run `just` to see available commands
 # Run `just <command>` to execute a command
 
+# Prefix for every --release invocation whose unit graph also contains test
+# targets. REQUIRED -- without it those invocations compile src/lib.rs TWICE:
+#
+#   * once panic=unwind, because cargo forces unwind on test targets and their
+#     dependencies -- this is the rlib the test binaries link;
+#   * once panic=abort, for the `oxidex`, `tag-comparison` and `jpeg-tag-matrix`
+#     bins. Cargo builds the package's bins alongside its tests, and a bin is a
+#     final artifact, so it reads `panic` from [profile.release].
+#
+# Those two units differ only in panic strategy, and `[lib] crate-type =
+# ["lib", "staticlib", "cdylib"]` makes cargo drop `-C extra-filename` (see the
+# [profile.bench] comment in Cargo.toml), so BOTH write
+# target/release/deps/liboxidex.{rlib,a,dylib} and whichever rustc finishes
+# last wins. Cargo warns "output filename collision" (rust-lang/cargo#6313)
+# four times and then races; when abort wins, the test binaries fail with
+# "requires panic strategy `abort` ... incompatible with ... `unwind`" on
+# unchanged source.
+#
+# Cargo.toml cures the identical collision for `cargo bench` by pinning
+# panic = "unwind" in [profile.bench]. That remedy does NOT transfer here:
+# [profile.release]'s panic = 'abort' is what shipped binaries want, so it
+# cannot be pinned in the manifest. Overriding it per-invocation is the scoped
+# equivalent -- the bins these recipes build are throwaway test-run artifacts,
+# and `just build-bin-release` / `cargo build --release` / the Release Build CI
+# job do not carry this prefix, so released binaries still abort.
+#
+# Measured on `cargo test --release --all-features --features
+# tag-comparison-binary --test ffi_c_integration --no-run -v`: without it, 4
+# collision warnings and two `--crate-type lib` rustc invocations, one
+# `-C panic=abort` and one not; with it, 0 warnings and a single lib unit.
+#
+# CI is unaffected either way -- it runs no --release test step (`cargo nextest
+# run --all-features` and `cargo test --all-features` are both test-profile).
+unwind := "CARGO_PROFILE_RELEASE_PANIC=unwind"
+
 # Default command when running `just` with no arguments
 default:
     @just --list
@@ -10,14 +45,14 @@ default:
 # Note: Doctests are run separately without --release due to panic='abort' incompatibility
 test:
     @echo "Running all tests (matching CI)..."
-    cargo test --release --all-features --features tag-comparison-binary --lib --bins --tests
+    {{unwind}} cargo test --release --all-features --features tag-comparison-binary --lib --bins --tests
     @echo "Running doctests (requires panic=unwind)..."
     cargo test --all-features --features tag-comparison-binary --doc
 
 # Run all tests with cargo-nextest (faster parallel execution)
 test-nextest:
     @echo "Running all tests with nextest..."
-    cargo nextest run --release --all-features
+    {{unwind}} cargo nextest run --release --all-features
 
 # Run tests in debug mode
 test-debug:
@@ -27,7 +62,7 @@ test-debug:
 # Run tests with output capture disabled
 test-nocapture:
     @echo "Running all tests with output..."
-    cargo test --release --verbose --all-features -- --nocapture --test-threads=1
+    {{unwind}} cargo test --release --verbose --all-features -- --nocapture --test-threads=1
 
 # Run only unit tests
 test-unit:
@@ -37,7 +72,7 @@ test-unit:
 # Run only integration tests (excludes comparison tests)
 test-integration:
     @echo "Running integration tests..."
-    cargo test --test integration --release
+    {{unwind}} cargo test --test integration --release
 
 # Run C FFI integration test
 test-ffi-c:
@@ -48,7 +83,7 @@ test-ffi-c:
 test-comparison:
     @echo "Running ExifTool comparison tests..."
     @echo "Note: Requires 'exiftool' command to be available"
-    cargo test --release --features exiftool-comparison -- --nocapture
+    {{unwind}} cargo test --release --features exiftool-comparison -- --nocapture
 
 # Run only doc tests
 test-doc:
@@ -299,7 +334,7 @@ ci:
     # Step 4: Build all targets including test binaries
     echo ""
     echo "🔨 Building all targets (release)..."
-    cargo build --release --all-features --all-targets
+    {{unwind}} cargo build --release --all-features --all-targets
 
     # Step 5: Run nextest and doc tests in PARALLEL
     # Edition 2024 merges doctests into single binary (~36s vs ~3min in 2021)
@@ -311,11 +346,11 @@ ci:
     trap "rm -f $DOC_OUTPUT" EXIT
 
     # Start doc tests in background (fast with edition 2024 merged doctests)
-    cargo test --doc --release --all-features > "$DOC_OUTPUT" 2>&1 &
+    {{unwind}} cargo test --doc --release --all-features > "$DOC_OUTPUT" 2>&1 &
     DOC_PID=$!
 
     # Run nextest in foreground
-    cargo nextest run --release --all-features --no-fail-fast
+    {{unwind}} cargo nextest run --release --all-features --no-fail-fast
 
     # Wait for doc tests
     echo ""

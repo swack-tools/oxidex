@@ -262,6 +262,13 @@ debug = true  # Enable debug symbols for profiling
 # is the whole problem -- being a final artifact, it reads `panic` from right
 # here. Measured on this manifest: with the line, one lib unit and no
 # collisions; without it, two lib units and four colliding outputs.
+#
+# [profile.release] below carries the SAME collision, and deliberately keeps
+# it: `cargo test --release` builds the three bins as final artifacts, so they
+# read panic = 'abort' from there while the test targets force unwind -- two
+# lib units, four colliding outputs, again. It cannot be cured the same way,
+# because pinning unwind there would change shipped binaries. The override is
+# scoped to the invocations that need it instead; see `unwind` in the justfile.
 panic = "unwind"
 
 [features]
