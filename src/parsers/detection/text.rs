@@ -179,13 +179,20 @@ pub(crate) fn looks_like_obj(text: &str) -> bool {
 
 /// Whether the probe opens an AutoCAD DXF section table
 ///
-/// ExifTool's magic is `^\s*0\s+\x00?\s*SECTION\s+2\s+HEADER`: the group code
-/// and its `SECTION` value are consecutive records, never a keyword loose in
-/// the header. Only the anchoring is tightened here -- requiring the
-/// `2`/`HEADER` records too would reject the ENTITIES-first files this has
-/// always accepted.
-fn looks_like_dxf(text: &str) -> bool {
-    text.starts_with("0\n") && indented_lines(text).any(|line| line.trim_end() == "SECTION")
+/// Asks the magic table rather than restating its pattern, so dispatch cannot
+/// disagree with the `File:FileType` the same table produces. The hand-written
+/// rule this replaces was wrong in both directions at once: `starts_with("0\n")`
+/// missed the right-aligned `  0\r\n` group codes real AutoCAD writers emit --
+/// those files reported `File:FileType: DXF` and were parsed as plain text --
+/// while `contains("SECTION")` accepted the keyword anywhere in the first 100
+/// bytes.
+///
+/// ExifTool's pattern is `^\s*0\s+\x00?\s*SECTION\s+2\s+HEADER` (ExifTool.pm's
+/// `%magicNumber`), which does require the `2`/`HEADER` records: a file whose
+/// first section is ENTITIES is not DXF to ExifTool and is no longer DXF here,
+/// which is the same answer its identity tags were already giving.
+fn looks_like_dxf(data: &[u8]) -> bool {
+    crate::filetype::matches_magic("DXF", data)
 }
 
 /// Whether the probe is a JSON glTF asset
@@ -278,8 +285,8 @@ pub fn detect_text_formats(data: &[u8]) -> Option<FileFormat> {
         return None;
     }
 
-    // DXF: group code 0 opening a SECTION record
-    if looks_like_dxf(text) {
+    // DXF: group code 0 opening a SECTION record, per the magic table
+    if looks_like_dxf(data) {
         return Some(FileFormat::DXF);
     }
 
@@ -332,6 +339,22 @@ mod tests {
         assert_eq!(detect_text_formats(&probe(RADIANCE_HEADER)), None);
     }
 
+    /// Not being OBJ is only half the fix: `detect_format` has to name the
+    /// file HDR before the text rules and the plain-text fallback see it, or
+    /// a Radiance image is parsed as a text document instead.
+    #[test]
+    fn radiance_header_detects_as_hdr() {
+        use crate::test_support::TestReader;
+
+        let mut data = RADIANCE_HEADER.as_bytes().to_vec();
+        data.extend_from_slice(b"\n-Y 1 +X 1\n");
+        data.extend_from_slice(&[0x02, 0x02, 0x00, 0x01]);
+        assert_eq!(
+            super::super::detect_format(&TestReader::new(data)).unwrap(),
+            FileFormat::HDR
+        );
+    }
+
     #[test]
     fn vertex_directive_at_a_line_start_is_obj() {
         let obj = concat!(
@@ -368,11 +391,44 @@ mod tests {
     #[test]
     fn dxf_section_must_be_its_own_record() {
         let dxf = "0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1015\n";
-        assert!(looks_like_dxf(dxf));
+        assert!(looks_like_dxf(dxf.as_bytes()));
         assert_eq!(detect_text_formats(&probe(dxf)), Some(FileFormat::DXF));
 
-        assert!(!looks_like_dxf("0\ndescribing a SECTION of the plan\n"));
-        assert!(!looks_like_dxf("1\nSECTION\n"));
+        assert!(!looks_like_dxf(b"0\ndescribing a SECTION of the plan\n"));
+        assert!(!looks_like_dxf(b"1\nSECTION\n"));
+    }
+
+    /// Real AutoCAD writers right-align the group code in three columns and
+    /// end lines with CRLF. `starts_with("0\n")` missed every one of them, so
+    /// the file reported `File:FileType: DXF` from the magic table and was
+    /// then parsed as plain text -- the identity was right and the content
+    /// came from the wrong parser.
+    #[test]
+    fn dxf_written_with_padded_crlf_group_codes_is_dxf() {
+        let dxf = "  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n  1\r\nAC1015\r\n";
+        assert!(looks_like_dxf(dxf.as_bytes()));
+        assert_eq!(detect_text_formats(&probe(dxf)), Some(FileFormat::DXF));
+    }
+
+    /// Detection and the identity tags now read one table, so they cannot
+    /// give a file two different answers.
+    #[test]
+    fn dxf_detection_agrees_with_the_magic_table() {
+        for candidate in [
+            "  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n",
+            "0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n",
+            // First section is ENTITIES: not DXF to ExifTool, and the old
+            // rule's `contains("SECTION")` said it was.
+            "0\nSECTION\n  2\nENTITIES\n  0\nLINE\n",
+            "0\ndescribing a SECTION of the plan\n",
+        ] {
+            let bytes = probe(candidate);
+            assert_eq!(
+                detect_text_formats(&bytes) == Some(FileFormat::DXF),
+                crate::filetype::matches_magic("DXF", &bytes),
+                "detection and the magic table disagree about {candidate:?}"
+            );
+        }
     }
 
     #[test]

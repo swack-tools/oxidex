@@ -211,6 +211,9 @@ pub enum FileFormat {
     /// Portable FloatMap image format (.pfm)
     PFM,
 
+    /// Radiance RGBE high dynamic range image (.hdr)
+    HDR,
+
     /// Free Lossless Image Format (.flif)
     FLIF,
 
@@ -408,6 +411,7 @@ impl FileFormat {
             FileFormat::BPG => "BPG",
             FileFormat::EXR => "EXR",
             FileFormat::PFM => "PFM",
+            FileFormat::HDR => "HDR",
             FileFormat::FLIF => "FLIF",
             FileFormat::XCF => "XCF",
             FileFormat::MIFF => "MIFF",
@@ -522,6 +526,7 @@ impl FileFormat {
             FileFormat::BPG => &["bpg"],
             FileFormat::EXR => &["exr"],
             FileFormat::PFM => &["pfm"],
+            FileFormat::HDR => &["hdr"],
             FileFormat::FLIF => &["flif"],
             FileFormat::XCF => &["xcf"],
             FileFormat::MIFF => &["miff", "mif"],

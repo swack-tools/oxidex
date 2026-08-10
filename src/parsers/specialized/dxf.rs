@@ -12,14 +12,25 @@ use std::collections::HashMap;
 pub struct DXFParser;
 
 impl DXFParser {
-    /// Verifies the DXF file signature by checking for the characteristic "0\nSECTION" header
+    /// Verifies the DXF file signature against ExifTool's magic number
+    ///
+    /// Asks the magic table, like the detector does, rather than restating the
+    /// pattern a third time. The hand-written version here read 20 bytes and
+    /// required `0\nSECTION`, so the right-aligned `  0\r\n` group codes real
+    /// AutoCAD writers emit failed it -- and once detection started routing
+    /// those files correctly, this gate turned the fix into a hard parse
+    /// error. `parse_content` below trims every group code and reads lines
+    /// through `str::lines`, so the padding and the CRLF were never the
+    /// parser's problem, only this check's.
     pub fn verify_signature(reader: &dyn FileReader) -> Result<bool> {
         if reader.size() < 20 {
             return Ok(false);
         }
-        let header = reader.read(0, 20)?;
-        let text = std::str::from_utf8(header).unwrap_or("");
-        Ok(text.starts_with("0\n") && text.contains("SECTION"))
+        let probe_len = reader.size().min(1024) as usize;
+        Ok(crate::filetype::matches_magic(
+            "DXF",
+            reader.read(0, probe_len)?,
+        ))
     }
 
     fn parse_content(reader: &dyn FileReader) -> Result<DXFContent> {
@@ -266,4 +277,60 @@ struct DXFContent {
 pub fn parse_dxf_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
     let parser = DXFParser;
     parser.parse(reader).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TestReader;
+
+    /// AutoCAD right-aligns group codes in three columns and ends lines with
+    /// CRLF. Both spellings have to reach the parser, and both have to reach
+    /// the same values out of it -- the body already trims, so the only thing
+    /// that ever rejected the real-world spelling was the signature check.
+    #[test]
+    fn reads_padded_crlf_and_bare_group_codes_alike() {
+        let padded = "  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n  1\r\nAC1015\r\n  9\r\n\
+                      $INSUNITS\r\n 70\r\n     4\r\n  0\r\nENDSEC\r\n  0\r\nEOF\r\n";
+        let bare = padded.replace("\r\n", "\n").replace("  0\n", "0\n");
+
+        for (label, source) in [("padded CRLF", padded), ("bare LF", bare.as_str())] {
+            let reader = TestReader::new(source.as_bytes().to_vec());
+            assert!(
+                DXFParser::verify_signature(&reader).unwrap(),
+                "{label} failed the signature check"
+            );
+            let metadata = parse_dxf_metadata(&reader).expect("parse should succeed");
+            assert_eq!(
+                metadata.get("AutoCADVersion"),
+                Some(&TagValue::String("AutoCAD 2000".to_string())),
+                "{label}"
+            );
+            assert_eq!(
+                metadata.get("DrawingUnits"),
+                Some(&TagValue::String("Millimeters".to_string())),
+                "{label}"
+            );
+        }
+    }
+
+    /// The gate and the detector read one table, so a file cannot be dispatched
+    /// as DXF and then rejected by the parser it was dispatched to.
+    #[test]
+    fn signature_check_agrees_with_the_magic_table() {
+        for source in [
+            "  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n  1\r\nAC1015\r\n",
+            "0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1015\n",
+            "0\nSECTION\n  2\nENTITIES\n  0\nLINE\n  8\n0\n  0\nENDSEC\n",
+            "This document has a SECTION 2 HEADER in its table of contents.\n",
+        ] {
+            let bytes = source.as_bytes().to_vec();
+            let reader = TestReader::new(bytes.clone());
+            assert_eq!(
+                DXFParser::verify_signature(&reader).unwrap(),
+                crate::filetype::matches_magic("DXF", &bytes),
+                "the gate and the magic table disagree about {source:?}"
+            );
+        }
+    }
 }
