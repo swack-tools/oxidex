@@ -1367,6 +1367,58 @@ class PollTests(unittest.TestCase):
         self.assertEqual(self.poll()["decisions"][0]["class"], "cherry-pick-conflict")
 
 
+class StalledDecisionsTests(unittest.TestCase):
+    """A `queued` verdict means the adjudicator could NOT decide and a human
+    must -- but nothing was telling the human.
+
+    Measured 2026-08-10: three patches had been queued since 2026-08-02 and
+    re-examined roughly 2,300 times, while every poll printed
+    `considered=3 adjudicated=0 skipped=3` -- a line that reads as a healthy
+    no-op. Eight days of real work sat invisible behind it.
+    """
+
+    DAY = 24 * 3600
+
+    def entries(self, *ids):
+        return {i: {"squad": "canon", "format": "VRD"} for i in ids}
+
+    def test_fresh_queued_is_not_stalled(self):
+        prior = {"p1": {"verdict": "queued", "ts_epoch": 1000.0}}
+        out = jq.stalled_decisions(self.entries("p1"), prior, now_fn=lambda: 1000.0 + 60)
+        self.assertEqual(out, [])
+
+    def test_old_queued_is_stalled_with_its_age(self):
+        prior = {"p1": {"verdict": "queued", "ts_epoch": 0.0, "reason": "no-such-table"}}
+        out = jq.stalled_decisions(self.entries("p1"), prior, now_fn=lambda: 8 * self.DAY)
+        self.assertEqual(len(out), 1)
+        self.assertAlmostEqual(out[0]["age_days"], 8.0, places=3)
+        self.assertEqual(out[0]["reason"], "no-such-table")
+        self.assertEqual(out[0]["squad"], "canon")
+
+    def test_a_decided_verdict_is_never_stalled(self):
+        """Only `queued` waits on a human. An admitted or rejected patch is
+        finished business no matter how old the decision is."""
+        for verdict in ("admitted", "rejected", "promoted"):
+            prior = {"p1": {"verdict": verdict, "ts_epoch": 0.0}}
+            out = jq.stalled_decisions(self.entries("p1"), prior, now_fn=lambda: 99 * self.DAY)
+            self.assertEqual(out, [], f"{verdict} must not be reported as stalled")
+
+    def test_entry_with_no_decision_is_not_stalled(self):
+        """It has never been adjudicated, so it is the queue's normal work --
+        poll_once will pick it up. Reporting it would cry wolf every poll."""
+        out = jq.stalled_decisions(self.entries("p1"), {}, now_fn=lambda: 99 * self.DAY)
+        self.assertEqual(out, [])
+
+    def test_missing_ts_epoch_errs_toward_being_seen(self):
+        """77 of 80 live quarantine rows predate a schema addition (see
+        load_decisions). An unknowable age must not silently drop the row --
+        that is the exact failure being fixed."""
+        prior = {"p1": {"verdict": "queued"}}
+        out = jq.stalled_decisions(self.entries("p1"), prior, now_fn=lambda: 5.0)
+        self.assertEqual(len(out), 1)
+        self.assertIsNone(out[0]["age_days"])
+
+
 class RunPollSafelyTests(unittest.TestCase):
     def test_a_raising_poll_does_not_propagate(self):
         logs = []

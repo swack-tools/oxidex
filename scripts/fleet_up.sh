@@ -52,6 +52,9 @@
 #                                          # judgment queue (and their batch state)
 #                                          # alone. On a stopped fleet it records
 #                                          # the size the next start will use.
+#                                          # NOT free -- see cmd_scale: a dispatcher
+#                                          # restart re-runs its whole startup and
+#                                          # no work happens for 5-11 minutes.
 #   ./scripts/fleet_up.sh --mergers 1     # only the first N config.toml squads get a merger
 #                                          # (overrides config.toml's [fleet].mergers, if set)
 #   ./scripts/fleet_up.sh --squad-mode     # allocate real per-squad worker slots
@@ -1376,6 +1379,52 @@ cmd_scale() {
     # too -- and, on a launchd-managed fleet, silently did nothing at all
     # unless you also knew to bootout+bootstrap (kickstart re-runs the OLD
     # cached spec).
+    #
+    # CHEAPER THAN --down/--up, BUT NOT FREE, and the cost is invisible while
+    # you pay it. A dispatcher restart re-runs the dispatcher's entire startup
+    # before it dispatches anything: verify the ~4200-file corpus (cheap --
+    # 0.8s, the tarballs are cached), build tag-comparison at --release (LTO +
+    # codegen-units=1, so ONE long rustc, not a parallel build -- this is the
+    # bulk of it), then a full per-format comparison sweep over ~4200 files.
+    #
+    # Measured twice on 2026-08-10, and the spread is the point: 5 minutes on
+    # an otherwise-idle machine, 10.8 minutes while a second checkout was also
+    # building (11:38:55 scale request -> 11:49:43 sweep complete). Quote the
+    # range, not the low end -- someone told "~5 minutes" who is nine minutes
+    # in will conclude the fleet has hung, which is exactly the misdiagnosis
+    # the note below exists to prevent.
+    #
+    # SCALING UP COSTS N FULL CARGO BUILDS, NOT JUST THE RESTART. Every worker
+    # runs in its OWN worktree under $FLEET_WORKTREE_BASE with its own target/
+    # (~490 MB each; 45 of them is ~22 GB). sync_worktrees resets each one to
+    # origin/main on start and periodically after, which invalidates that
+    # worktree's build cache -- so after a restart or a sync EVERY worker
+    # rebuilds oxidex and its dependencies from scratch, and the build
+    # semaphore lets only config.toml's [worker].build_semaphore of them (5 by
+    # default) proceed at a time.
+    #
+    # Measured 2026-08-10 scaling 10 -> 24 with build_semaphore = 8: the
+    # semaphore sat at 8/8 holders with 17 waiters, aggregate CPU pinned near
+    # 942% of 1000%, and ZERO model calls happened for 16+ minutes while the
+    # queue drained -- worker logs showed `Compiling rustix / tempfile /
+    # oxidex` in each worktree. The fleet is build-bound, not API-bound, for
+    # that whole window. Raising build_semaphore shortens the stampede; it does
+    # not remove it.
+    #
+    # Two consequences worth knowing before you type this:
+    #
+    #   * Scaling twice in quick succession restarts that clock twice and the
+    #     fleet does no work at all in between. Two --scale calls four minutes
+    #     apart produced ZERO workers for nine minutes -- each restart landed
+    #     mid-startup of the previous one.
+    #   * During startup every tier legitimately sits near 0% CPU with the log
+    #     unmoving, which looks exactly like a hang. It is not. Before
+    #     concluding the fleet is wedged, check whether the dispatcher has a
+    #     live `just compare-exiftool-full` or `cargo build` descendant -- that
+    #     is startup, and it ends on its own.
+    #
+    # So: scale when the size is actually wrong, not to probe throughput, and
+    # give a resize five quiet minutes before judging the result.
     local want=$1
     case "$want" in
         ''|*[!0-9]*) printf 'fleet_up.sh: --scale needs a positive integer\n' >&2; return 64 ;;
