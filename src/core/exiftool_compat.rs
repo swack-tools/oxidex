@@ -474,6 +474,31 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
         return TagValue::String(format_gain_control(i));
     }
 
+    // TIFF/EXIF enums whose PrintConv lives in tiff_enum_to_string but which
+    // no parser decodes at read time, so their integers used to reach the
+    // output raw (13.59 prints "Standard Output Sensitivity" where oxidex
+    // printed 1; 1017 instances across the sample corpus, 900 of them
+    // SensitivityType). Exif.pm sources: SubfileType 0x00fe,
+    // PhotometricInterpretation 0x0106, PlanarConfiguration 0x011c,
+    // Predictor 0x013d, SensitivityType 0x8830, CompositeImage 0xa460,
+    // MakerNoteSafety 0xc635. A value outside the PrintConv map keeps its
+    // integer form: no observed carrier file pins ExifTool's "Unknown (N)"
+    // fallback rendering, so it is left unmodeled rather than approximated.
+    if let Some(tag_id) = match base_name {
+        "SubfileType" => Some(0x00FEu16),
+        "PhotometricInterpretation" => Some(0x0106),
+        "PlanarConfiguration" => Some(0x011C),
+        "Predictor" => Some(0x013D),
+        "SensitivityType" => Some(0x8830),
+        "CompositeImage" => Some(0xA460),
+        "MakerNoteSafety" => Some(0xC635),
+        _ => None,
+    } && let Some(i) = value.as_integer()
+        && let Some(label) = crate::parsers::tiff::tiff_enums::tiff_enum_to_string(tag_id, i)
+    {
+        return TagValue::String(label);
+    }
+
     // SecurityClassification (Exif.pm:2453-2463) is an ASCII PrintConv, not
     // a numeric TIFF enum. Preserve codes not present in ExifTool's table.
     if base_name == "SecurityClassification"
@@ -714,6 +739,21 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     // before applying the Binary flag, so its reported byte count is the UTF-8
     // length of that rendered payload rather than the raw TIFF value length.
     if matches!(base_name, "TransferFunction" | "LinearizationTable")
+        && let Some(payload) = value.as_string()
+    {
+        return TagValue::String(format!(
+            "(Binary data {} bytes, use -b option to extract)",
+            payload.len()
+        ));
+    }
+
+    // APP10 AROT's int32uRev gain curve carries `Binary => 1` the same way:
+    // ExifTool's ordinary output reports the rendered payload length, and
+    // oxidex keeps that payload as the identical space-separated decimal
+    // string, so its UTF-8 byte length is exactly the size ExifTool displays
+    // (13.59 prints "(Binary data 1160 bytes, use -b option to extract)" for
+    // Apple_iPadAir_3rd_generation.jpg).
+    if base_name == "HDRGainCurve"
         && let Some(payload) = value.as_string()
     {
         return TagValue::String(format!(
@@ -2402,6 +2442,51 @@ mod tests {
         let value = TagValue::Integer(99);
         let formatted = format_tag_value("ExposureProgram", &value);
         assert_eq!(formatted.as_string(), Some("Unknown (99)"));
+    }
+
+    /// The tiff_enum_to_string-backed arm: enums no parser decodes at read
+    /// time. Values quoted from `exiftool -json -G` 13.59 over the sample
+    /// corpus (e.g. OlympusSH-1.jpg prints SensitivityType
+    /// "Standard Output Sensitivity" where oxidex printed 1).
+    #[test]
+    fn test_undecoded_tiff_enums_render_via_shared_table() {
+        let cases: &[(&str, i64, &str)] = &[
+            ("EXIF:SensitivityType", 1, "Standard Output Sensitivity"),
+            ("EXIF:CompositeImage", 2, "General Composite Image"),
+            ("TIFF:PhotometricInterpretation", 2, "RGB"),
+            ("SubIFD0:PlanarConfiguration", 1, "Chunky"),
+            ("EXIF:SubfileType", 1, "Reduced-resolution image"),
+            ("EXIF:Predictor", 2, "Horizontal differencing"),
+            ("EXIF:MakerNoteSafety", 1, "Safe"),
+        ];
+        for (tag, raw, label) in cases {
+            let formatted = format_tag_value(tag, &TagValue::Integer(*raw));
+            assert_eq!(
+                formatted.as_string(),
+                Some(*label),
+                "{tag} {raw} did not reach its PrintConv"
+            );
+        }
+
+        // A value outside the PrintConv map keeps its integer form: ExifTool's
+        // "Unknown (N)" fallback is unmodeled here (no carrier file pins it),
+        // and a plausible-but-unverified rendering is worse than the raw int.
+        let formatted = format_tag_value("EXIF:SensitivityType", &TagValue::Integer(42));
+        assert_eq!(formatted, TagValue::Integer(42));
+    }
+
+    /// APP10 AROT gain curve: `Binary => 1` semantics over the rendered
+    /// payload. 13.59 prints "(Binary data 1160 bytes, use -b option to
+    /// extract)" for Apple_iPadAir_3rd_generation.jpg, and oxidex's
+    /// space-separated decimal payload for that file is 1160 UTF-8 bytes.
+    #[test]
+    fn test_hdr_gain_curve_reports_payload_length() {
+        let payload = "0 1024 2048 4096";
+        let formatted = format_tag_value("APP10:HDRGainCurve", &TagValue::new_string(payload));
+        assert_eq!(
+            formatted.as_string(),
+            Some("(Binary data 16 bytes, use -b option to extract)")
+        );
     }
 
     /// `%boolConv` capitalizes, and applies to three tags.

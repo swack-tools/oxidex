@@ -3464,6 +3464,17 @@ fn is_xmp_date_tag(local_name: &str) -> bool {
             | "ModDate"
             | "ModificationDate"
             | "ModifyDate"
+            // XMP-drone-dji:UTCAtExposure has no 13.59 tag definition at all;
+            // ExifTool still prints it as a datetime because XMPAutoConv
+            // (XMP.pm:3676-3682) runs ConvertXMPDate over every UNKNOWN
+            // property whose value matches the full-timestamp shape --
+            // DJI_M3T.jpg prints "2022:10:27 05:08:32.100476". oxidex has no
+            // is-known-to-ExifTool index to reproduce that trigger exactly
+            // (a known non-date tag like dc:Description must NOT convert), so
+            // the oracle-verified carrier is named here instead. A future
+            // unknown timestamp-shaped property will surface as an honest
+            // value difference rather than being converted on a guess.
+            | "UTCAtExposure"
     ) || local_name.starts_with("HistoryWhen")
 }
 
@@ -4466,6 +4477,13 @@ mod tests {
         assert_eq!(
             format_xmp_value("XMP-dc:Description", "2021-10-01T14:18:11Z"),
             "2021-10-01T14:18:11Z"
+        );
+        // XMPAutoConv territory: 13.59 has no definition for UTCAtExposure,
+        // yet `exiftool -json -G DJI_M3T.jpg` prints
+        // "2022:10:27 05:08:32.100476" -- subseconds survive, no zone.
+        assert_eq!(
+            format_xmp_value("XMP-drone-dji:UTCAtExposure", "2022-10-27T05:08:32.100476"),
+            "2022:10:27 05:08:32.100476"
         );
     }
 

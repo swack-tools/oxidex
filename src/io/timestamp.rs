@@ -99,6 +99,21 @@ pub fn unix_to_iso8601(unix_time: i64) -> String {
     )
 }
 
+/// Converts a Mac/QuickTime timestamp to ExifTool's datetime rendering.
+///
+/// QuickTime.pm renders mvhd/tkhd/mdhd timestamps through `ConvertUnixTime`,
+/// whose normal display form is `YYYY:MM:DD HH:MM:SS` in UTC with no zone
+/// suffix (13.59 prints `2005:08:11 14:03:54` for QuickTime.mov). Returns
+/// `None` for dates before 1970-01-01, mirroring [`mac_time_to_iso8601`].
+pub fn mac_time_to_exif_datetime(mac_time: u64) -> Option<String> {
+    let unix = mac_time_to_unix(mac_time)?;
+    let (year, month, day, hour, minute, second) = unix_to_datetime(unix);
+    Some(format!(
+        "{:04}:{:02}:{:02} {:02}:{:02}:{:02}",
+        year, month, day, hour, minute, second
+    ))
+}
+
 /// Converts Unix timestamp to date/time components.
 /// Returns (year, month, day, hour, minute, second).
 fn unix_to_datetime(unix_time: i64) -> (i32, u32, u32, u32, u32, u32) {
