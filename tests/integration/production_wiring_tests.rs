@@ -747,7 +747,7 @@ fn pages_zip_with_acsp_decoy_fixture() -> tempfile::NamedTempFile {
 #[test]
 fn read_metadata_routes_evtx() {
     assert_eq!(
-        read_temp_file(&evtx_fixture(), ".evtx").get("FileType"),
+        read_temp_file(&evtx_fixture(), ".evtx").get("File:FileType"),
         Some(&TagValue::String("Windows Event Log".to_string()))
     );
 }
@@ -980,9 +980,11 @@ fn read_metadata_routes_binary_plist() {
 fn read_metadata_routes_xml_plist() {
     let metadata = read_temp_file(&xml_plist_fixture(), ".plist");
 
+    // `PLIST`, not the parser's own `Plist`: the identity tags are reported
+    // once, in the `File` group, spelled the way ExifTool spells them.
     assert_eq!(
-        metadata.get("FileType"),
-        Some(&TagValue::String("Plist".to_string()))
+        metadata.get("File:FileType"),
+        Some(&TagValue::String("PLIST".to_string()))
     );
     assert_eq!(
         metadata.get("Plist:Format"),
@@ -1006,7 +1008,7 @@ fn read_metadata_routes_long_root_ics_before_txt() {
     let metadata = read_temp_file(&long_body_ics_fixture(), ".ics");
 
     assert_eq!(
-        metadata.get("FileType"),
+        metadata.get("File:FileType"),
         Some(&TagValue::String("ICS".to_string()))
     );
     assert_eq!(metadata.get("ICS:EventCount"), Some(&TagValue::Integer(1)));
@@ -1037,7 +1039,7 @@ fn read_metadata_routes_parser_supported_eml_without_date() {
     let metadata = read_temp_file(eml, ".eml");
 
     assert_eq!(
-        metadata.get("FileType"),
+        metadata.get("File:FileType"),
         Some(&TagValue::String("EML".to_string()))
     );
     assert_eq!(
@@ -1052,7 +1054,7 @@ fn read_metadata_routes_embedded_vcalendar_example_as_txt() {
     let metadata = read_temp_file(text, ".txt");
 
     assert_eq!(
-        metadata.get("FileType"),
+        metadata.get("File:FileType"),
         Some(&TagValue::String("TXT".to_string()))
     );
     assert!(!metadata.contains_key("ICS:EventCount"));
@@ -1064,7 +1066,7 @@ fn read_metadata_routes_letter_with_from_to_labels_as_txt() {
     let metadata = read_temp_file(text, ".txt");
 
     assert_eq!(
-        metadata.get("FileType"),
+        metadata.get("File:FileType"),
         Some(&TagValue::String("TXT".to_string()))
     );
     assert!(!metadata.contains_key("EML:From"));
@@ -1077,7 +1079,7 @@ fn read_metadata_routes_letter_with_invalid_date_as_txt() {
     let metadata = read_temp_file(text, ".txt");
 
     assert_eq!(
-        metadata.get("FileType"),
+        metadata.get("File:FileType"),
         Some(&TagValue::String("TXT".to_string()))
     );
     assert!(!metadata.contains_key("EML:From"));
@@ -1089,7 +1091,7 @@ fn read_metadata_routes_letter_with_iso_date_as_txt() {
     let metadata = read_temp_file(text, ".txt");
 
     assert_eq!(
-        metadata.get("FileType"),
+        metadata.get("File:FileType"),
         Some(&TagValue::String("TXT".to_string()))
     );
     assert!(!metadata.contains_key("EML:From"));
@@ -1101,7 +1103,7 @@ fn read_metadata_routes_letter_with_address_like_labels_and_iso_date_as_txt() {
     let metadata = read_temp_file(text, ".txt");
 
     assert_eq!(
-        metadata.get("FileType"),
+        metadata.get("File:FileType"),
         Some(&TagValue::String("TXT".to_string()))
     );
     assert!(!metadata.contains_key("EML:From"));
@@ -1113,7 +1115,7 @@ fn read_metadata_routes_letter_with_rfc_date_and_non_address_labels_as_txt() {
     let metadata = read_temp_file(text, ".txt");
 
     assert_eq!(
-        metadata.get("FileType"),
+        metadata.get("File:FileType"),
         Some(&TagValue::String("TXT".to_string()))
     );
     assert!(!metadata.contains_key("EML:From"));
@@ -1150,7 +1152,7 @@ fn read_metadata_routes_eml_with_non_utf8_body() {
     let metadata = read_temp_file(&eml_with_non_utf8_body_fixture(), ".eml");
 
     assert_eq!(
-        metadata.get("FileType"),
+        metadata.get("File:FileType"),
         Some(&TagValue::String("EML".to_string()))
     );
     assert_eq!(
@@ -1165,7 +1167,7 @@ fn read_metadata_routes_eml_with_svg_body_as_eml() {
     let metadata = read_temp_file(eml, ".eml");
 
     assert_eq!(
-        metadata.get("FileType"),
+        metadata.get("File:FileType"),
         Some(&TagValue::String("EML".to_string()))
     );
     assert_eq!(
@@ -1180,7 +1182,7 @@ fn read_metadata_routes_lone_subject_text_as_txt() {
     let metadata = read_temp_file(text, ".txt");
 
     assert_eq!(
-        metadata.get("FileType"),
+        metadata.get("File:FileType"),
         Some(&TagValue::String("TXT".to_string()))
     );
     assert!(!metadata.contains_key("EML:Subject"));
@@ -1192,7 +1194,7 @@ fn read_metadata_routes_indented_email_header_text_as_txt() {
     let metadata = read_temp_file(text, ".txt");
 
     assert_eq!(
-        metadata.get("FileType"),
+        metadata.get("File:FileType"),
         Some(&TagValue::String("TXT".to_string()))
     );
     assert!(!metadata.contains_key("EML:From"));
@@ -1205,7 +1207,7 @@ fn read_metadata_routes_vcalendar_without_version_as_txt() {
     let metadata = read_temp_file(text, ".txt");
 
     assert_eq!(
-        metadata.get("FileType"),
+        metadata.get("File:FileType"),
         Some(&TagValue::String("TXT".to_string()))
     );
     assert!(!metadata.contains_key("ICS:EventCount"));
@@ -1221,7 +1223,7 @@ To: b@example.com
     let metadata = read_temp_file(svg, ".svg");
 
     assert_eq!(
-        metadata.get("FileType"),
+        metadata.get("File:FileType"),
         Some(&TagValue::String("SVG".to_string()))
     );
     assert!(!metadata.contains_key("EML:From"));
@@ -1237,7 +1239,7 @@ END:VCALENDAR</text>
     let metadata = read_temp_file(svg, ".svg");
 
     assert_eq!(
-        metadata.get("FileType"),
+        metadata.get("File:FileType"),
         Some(&TagValue::String("SVG".to_string()))
     );
     assert!(!metadata.contains_key("ICS:EventCount"));

@@ -45,7 +45,7 @@ mod audio;
 mod binary;
 mod bmff;
 mod camera;
-mod helpers;
+pub(crate) mod helpers;
 mod riff;
 mod signatures;
 mod text;

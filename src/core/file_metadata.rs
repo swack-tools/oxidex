@@ -344,7 +344,14 @@ fn get_file_type(extension: &str) -> &'static str {
         "zip" => "ZIP",
         "rar" => "RAR",
         "7z" => "7Z",
-        "gz" | "tar" => "TAR",
+        // `.gz` is deliberately absent: it was mapped to TAR here, which is
+        // wrong -- a gzip stream is not a tar archive, and ExifTool calls it
+        // GZIP. The error was invisible while the GZIP parser published a
+        // second, ungrouped `FileType`, because the output carried both
+        // answers; with one answer per tag the wrong one is all that is left.
+        // Declining lets `add_identity_tags` resolve it from ExifTool's
+        // generated tables instead of this hand-written one.
+        "tar" => "TAR",
         _ => "Unknown",
     }
 }
@@ -399,7 +406,9 @@ fn get_mime_type(extension: &str) -> &'static str {
         "zip" => "application/zip",
         "rar" => "application/x-rar-compressed",
         "7z" => "application/x-7z-compressed",
-        "gz" => "application/gzip",
+        // See `get_file_type`: `.gz` defers to ExifTool's `%mimeType`, which
+        // says `application/x-gzip` rather than the `application/gzip` this
+        // table asserted.
         "tar" => "application/x-tar",
         _ => "application/octet-stream",
     }

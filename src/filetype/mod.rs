@@ -183,6 +183,43 @@ fn lookup_extension(ext: &str) -> Option<(&'static str, &'static [&'static str])
         })
 }
 
+/// Whether ExifTool's tables carry this `FileType` name at all.
+///
+/// The three generated tables are each partial -- `%mimeType` has 216 entries,
+/// `%fileTypeExt` only 9 -- so membership in any one of them is what makes a
+/// name ExifTool's rather than a parser's own spelling.
+fn known_file_type(file_type: &str) -> bool {
+    tables::MIME_TYPE
+        .binary_search_by_key(&file_type, |(t, _)| t)
+        .is_ok()
+        || tables::FILE_TYPE_EXT
+            .binary_search_by_key(&file_type, |(t, _)| t)
+            .is_ok()
+        || tables::EXT_TO_TYPE.iter().any(|(_, t, _)| *t == file_type)
+}
+
+/// ExifTool's `FileTypeExtension` for a `FileType`, when it knows the name.
+///
+/// Declining on an unknown name is the whole point of the guard: asked about a
+/// parser's private spelling, [`extension_for`] does not fail, it lowercases
+/// what it was handed. `WebP` is not one of ExifTool's file types (`WEBP` is),
+/// and answering `webp` for it would be a guess wearing a real tag's name.
+#[must_use]
+pub fn canonical_extension(file_type: &str) -> Option<Cow<'static, str>> {
+    known_file_type(file_type).then(|| extension_for(file_type))
+}
+
+/// ExifTool's `MIMEType` for a `FileType`.
+///
+/// Needs no membership guard -- `%mimeType` is consulted directly and simply
+/// has no entry for a name it does not carry. Many real file types are among
+/// those: ExifTool sets `URL` and `PFM` MIME types inline in their modules
+/// rather than in the table.
+#[must_use]
+pub fn canonical_mime(file_type: &str) -> Option<&'static str> {
+    mime_for(file_type)
+}
+
 /// Identify by filename extension, for formats with no distinctive header.
 #[must_use]
 pub fn identify_by_extension(ext: &str) -> Option<Identity> {

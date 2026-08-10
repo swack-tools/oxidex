@@ -169,6 +169,104 @@ fn add_identity_tags(metadata: &mut MetadataMap, reader: &dyn FileReader, path: 
     true
 }
 
+/// The three tags that answer "what is this file?".
+const IDENTITY_TAGS: [&str; 3] = ["FileType", "FileTypeExtension", "MIMEType"];
+
+/// Fold a parser's ungrouped identity tags into the `File` group, leaving one
+/// answer per question.
+///
+/// ExifTool emits `FileType`, `FileTypeExtension` and `MIMEType` once each, in
+/// the `File` group. Roughly forty parsers insert them ungrouped instead, so
+/// any file that reached a parser carried two answers to the same question --
+/// and where [`add_identity_tags`] could not corroborate the extension, the two
+/// contradicted each other. `Geotag.log` emitted `File:FileType "Unknown"` and
+/// `File:MIMEType "application/octet-stream"` beside a bare `FileType "TXT"`
+/// and `MIMEType "text/plain"`, with nothing downstream able to say which was
+/// meant. `crate::filetype::identify` declines for any extension it cannot
+/// corroborate -- `.log`, `.xml`, `.gpx` and `.kml` are not in `%fileTypeLookup`
+/// at all -- so on those files the parser held the only real answer and no
+/// route existed for it to reach the group ExifTool reports it under.
+///
+/// A real `File:` value is kept rather than replaced: it came from ExifTool's
+/// own tables, which outrank a parser's private spelling (`WebP` where ExifTool
+/// says `WEBP`). The parser's value is taken only where a placeholder remains,
+/// so this never invents a value -- it decides which of two the output already
+/// contained survives, and drops the other.
+fn normalize_identity_tags(metadata: &mut MetadataMap, path: &Path) {
+    let parser_type = metadata.remove("FileType");
+    let parser_ext = metadata.remove("FileTypeExtension");
+    let parser_mime = metadata.remove("MIMEType");
+
+    // Two fallbacks, and ExifTool's own `%fileTypeLookup` is the better one.
+    // [`identify`] declined only because it could not corroborate the extension
+    // against a magic number, which is no reason to prefer a parser that
+    // reached the file through a *loose* one: the `Font` pattern matches any
+    // file starting `\0\x01`, and that is what delivers `Font.dfont` here
+    // carrying the parser's `FileType "ICO"` while the extension table says
+    // DFONT, which is ExifTool's answer.
+    let by_ext = is_placeholder(metadata.get_string("File:FileType"))
+        .then(|| {
+            path.extension()
+                .and_then(|e| e.to_str())
+                .and_then(crate::filetype::identify_by_extension)
+        })
+        .flatten();
+
+    // Whichever source answers owns all three tags: ExifTool derives the
+    // extension and the MIME type *from* the file type, so mixing sources is
+    // what produced `Geotag.log`'s `TXT` / `log` / `application/octet-stream`
+    // in the first place.
+    let promoted = by_ext
+        .as_ref()
+        .map(|id| id.file_type.to_string())
+        .or_else(|| {
+            parser_type
+                .as_ref()
+                .and_then(TagValue::as_string)
+                .filter(|_| is_placeholder(metadata.get_string("File:FileType")))
+                .map(str::to_owned)
+        });
+    if let Some(file_type) = &promoted {
+        metadata.insert("File:FileType", TagValue::new_string(file_type.clone()));
+    }
+
+    // `extract_file_metadata` echoes the on-disk extension, which is only
+    // ExifTool's answer by coincidence: ExifTool reports the canonical
+    // extension of the *file type*, so a `.log` file that is TXT reports `txt`.
+    // Having just established the type, take its extension from the same table.
+    let canonical = by_ext.as_ref().map(|id| id.extension.clone()).or_else(|| {
+        promoted
+            .as_deref()
+            .and_then(crate::filetype::canonical_extension)
+    });
+    if let Some(ext) = canonical {
+        metadata.insert("File:FileTypeExtension", TagValue::new_string(ext.as_ref()));
+    } else if let Some(ext) = parser_ext
+        && is_placeholder(metadata.get_string("File:FileTypeExtension"))
+    {
+        metadata.insert("File:FileTypeExtension", ext);
+    }
+
+    if is_placeholder(metadata.get_string("File:MIMEType")) {
+        // ExifTool's `%mimeType` is keyed on file type, so prefer it for
+        // whichever type ended up reported. It is partial -- PFM and URL carry
+        // no entry -- and the parser's own value covers that gap.
+        let mime = metadata
+            .get_string("File:FileType")
+            .and_then(crate::filetype::canonical_mime)
+            .map(TagValue::new_string)
+            .or(parser_mime);
+        if let Some(mime) = mime {
+            metadata.insert("File:MIMEType", mime);
+        }
+    }
+
+    debug_assert!(
+        IDENTITY_TAGS.iter().all(|t| !metadata.contains_key(*t)),
+        "identity tags must be emitted only under the File group"
+    );
+}
+
 /// Detect file format using the specified detection mode.
 ///
 /// This helper function wraps format detection to support both signature-based
@@ -292,6 +390,14 @@ pub fn read_metadata_with_detector(
     // parsed fine and still reported `FileType: Unknown`. Only placeholders are
     // filled, so a parser that names the type itself still wins.
     add_identity_tags(&mut metadata, &reader, path);
+
+    // Step 5a': One answer per identity tag, under the group ExifTool uses.
+    //
+    // Runs after Step 5a, not before: `add_identity_tags` resolves the type
+    // from ExifTool's tables and is the better source, so it gets first refusal
+    // on the placeholders. What it declines to answer is what the parser's own
+    // value is promoted into.
+    normalize_identity_tags(&mut metadata, path);
 
     // Step 5b: Backstop for ExifByteOrder on TIFF-based files.
     //
@@ -1088,6 +1194,100 @@ pub(crate) fn parse_casio_cam_metadata(reader: &dyn FileReader) -> Result<Metada
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+
+    /// A map as it reaches `normalize_identity_tags`: the `File:` group as
+    /// `extract_file_metadata` and `add_identity_tags` left it, plus whatever
+    /// the parser inserted ungrouped.
+    fn identity_map(grouped: &[(&str, &str)], bare: &[(&str, &str)]) -> MetadataMap {
+        let mut map = MetadataMap::new();
+        for (k, v) in grouped {
+            map.insert(format!("File:{k}"), TagValue::new_string(*v));
+        }
+        for (k, v) in bare {
+            map.insert((*k).to_string(), TagValue::new_string(*v));
+        }
+        map
+    }
+
+    #[test]
+    fn parser_identity_fills_a_placeholder_file_group() {
+        // Geotag.log: `identify` declines because `.log` is not in
+        // `%fileTypeLookup`, so the TXT parser holds the only real answer.
+        let mut map = identity_map(
+            &[
+                ("FileType", "Unknown"),
+                ("FileTypeExtension", "log"),
+                ("MIMEType", "application/octet-stream"),
+            ],
+            &[("FileType", "TXT"), ("MIMEType", "text/plain")],
+        );
+        normalize_identity_tags(&mut map, Path::new("/tmp/Geotag.log"));
+
+        assert_eq!(map.get_string("File:FileType"), Some("TXT"));
+        // Not `log`: ExifTool reports the canonical extension of the type.
+        assert_eq!(map.get_string("File:FileTypeExtension"), Some("txt"));
+        assert_eq!(map.get_string("File:MIMEType"), Some("text/plain"));
+    }
+
+    #[test]
+    fn identity_tags_are_emitted_once_under_the_file_group() {
+        let mut map = identity_map(
+            &[("FileType", "Unknown")],
+            &[("FileType", "TXT"), ("MIMEType", "text/plain")],
+        );
+        normalize_identity_tags(&mut map, Path::new("/tmp/Geotag.log"));
+
+        for tag in IDENTITY_TAGS {
+            assert!(!map.contains_key(tag), "{tag} must not survive ungrouped");
+        }
+    }
+
+    #[test]
+    fn a_real_file_group_answer_outranks_the_parser() {
+        // RIFF.webp: the parser spells it `WebP`, ExifTool's tables `WEBP`.
+        // Two spellings of one answer is what this is meant to collapse.
+        let mut map = identity_map(&[("FileType", "WEBP")], &[("FileType", "WebP")]);
+        normalize_identity_tags(&mut map, Path::new("/tmp/RIFF.webp"));
+
+        assert_eq!(map.get_string("File:FileType"), Some("WEBP"));
+        assert!(!map.contains_key("FileType"));
+    }
+
+    #[test]
+    fn exiftool_extension_table_outranks_a_loose_magic_match() {
+        // Font.dfont reaches the ICO parser because ExifTool's `Font` magic
+        // number matches any file starting `\0\x01`. `%fileTypeLookup` knows
+        // `.dfont` is DFONT, and that is the better of the two fallbacks.
+        let mut map = identity_map(
+            &[
+                ("FileType", "Unknown"),
+                ("MIMEType", "application/octet-stream"),
+            ],
+            &[("FileType", "ICO")],
+        );
+        normalize_identity_tags(&mut map, Path::new("/tmp/Font.dfont"));
+
+        assert_eq!(map.get_string("File:FileType"), Some("DFONT"));
+        assert_eq!(map.get_string("File:FileTypeExtension"), Some("dfont"));
+        assert_eq!(map.get_string("File:MIMEType"), Some("application/x-dfont"));
+    }
+
+    #[test]
+    fn parser_mime_covers_a_type_the_mime_table_omits() {
+        // `%mimeType` has no PFM entry -- ExifTool sets it in the module -- so
+        // the parser's own value is the only source for it.
+        let mut map = identity_map(
+            &[
+                ("FileType", "Unknown"),
+                ("MIMEType", "application/octet-stream"),
+            ],
+            &[("FileType", "PFM"), ("MIMEType", "image/x-pfm")],
+        );
+        normalize_identity_tags(&mut map, Path::new("/tmp/PFM.pfm"));
+
+        assert_eq!(map.get_string("File:FileType"), Some("PFM"));
+        assert_eq!(map.get_string("File:MIMEType"), Some("image/x-pfm"));
+    }
 
     #[test]
     fn bare_gps_date_stamp_write_targets_the_gps_ifd() {

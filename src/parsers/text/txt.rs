@@ -418,6 +418,64 @@ impl TXTParser {
     }
 }
 
+/// How far in to look for an XML root element, past the prolog.
+const XML_PROBE_BYTES: usize = 4096;
+
+/// The four spellings ExifTool's `<x(mp)?:x[ma]pmeta` pattern accepts.
+const XMP_META_ROOTS: [&str; 4] = ["<x:xmpmeta", "<x:xapmeta", "<xmp:xmpmeta", "<xmp:xapmeta"];
+
+/// ExifTool's name for a text file whose content is XML, if it is.
+///
+/// This fallback catches anything that looks like text, and XML documents look
+/// like text -- but ExifTool names them for their root element rather than
+/// calling them TXT, which is why `Geotag.gpx`, `Geotag.kml` and `Geotag.xml`
+/// are all `XML` and an RDF root is `XMP`. XMP.pm:4344-4426 decides it:
+///
+/// ```text
+///     } elsif ($isXML and not $hasXMP and not $isRDF) {
+///         $type = 'XML';
+/// ```
+///
+/// The XMP branches leave `$type` undefined, so `SetFileType` falls back to
+/// XMP.pm's own file type -- hence `XMP`, not `XML`.
+///
+/// `None` means "not XML, leave it TXT", which also covers the cases this
+/// deliberately does not model rather than guess at:
+///
+/// - A `<!DOCTYPE` other than `fcpxml`. ExifTool answers those from the
+///   doctype name -- `svg`, `plist` and `REDXIF` become SVG, PLIST and RMD,
+///   and anything else is `return 0`, not XML. The first three reach their own
+///   parsers before this one, so the remaining honest answer is the last.
+/// - An `<?aid` instruction, which makes the file INX.
+fn xml_file_type(head: &[u8]) -> Option<&'static str> {
+    let text = crate::parsers::detection::helpers::utf8_prefix(head);
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+
+    // ExifTool allows leading whitespace before an XMP packet, but requires
+    // the `<?xml` prolog itself to be first.
+    if text.trim_start().starts_with("<?xpacket begin=")
+        || XMP_META_ROOTS
+            .iter()
+            .any(|r| text.trim_start().starts_with(r))
+        || text.starts_with("<rdf:RDF")
+    {
+        return Some("XMP");
+    }
+    if !text.starts_with("<?xml") {
+        return None;
+    }
+    if XMP_META_ROOTS.iter().any(|r| text.contains(r)) || text.contains("<rdf:RDF") {
+        return Some("XMP");
+    }
+    if text.contains("<!DOCTYPE") && !text.contains("<!DOCTYPE fcpxml") {
+        return None;
+    }
+    if text.contains("<?aid ") {
+        return None;
+    }
+    Some("XML")
+}
+
 impl FormatParser for TXTParser {
     /// Parses a TXT file and extracts metadata
     ///
@@ -431,11 +489,17 @@ impl FormatParser for TXTParser {
     /// * `Err(ExifToolError)` - Parse error
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
         let mut metadata = MetadataMap::new();
-        metadata.insert("FileType".to_string(), TagValue::String("TXT".to_string()));
-        metadata.insert(
-            "MIMEType".to_string(),
-            TagValue::String("text/plain".to_string()),
-        );
+
+        // The MIME type follows from the file type, so both come from
+        // ExifTool's tables rather than being asserted separately here.
+        let probe = reader
+            .read(0, (reader.size() as usize).min(XML_PROBE_BYTES))
+            .unwrap_or_default();
+        let file_type = xml_file_type(probe).unwrap_or("TXT");
+        metadata.insert("FileType".to_string(), TagValue::String(file_type.into()));
+        if let Some(mime) = crate::filetype::canonical_mime(file_type) {
+            metadata.insert("MIMEType".to_string(), TagValue::String(mime.to_string()));
+        }
         metadata.insert(
             "FileSize".to_string(),
             TagValue::String(reader.size().to_string()),
@@ -517,6 +581,50 @@ fn add_text_tag_aliases(metadata: &mut MetadataMap) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xml_documents_are_not_named_txt() {
+        // ExifTool names these XML, not TXT, and the plain-text fallback is
+        // the only thing that looks at them: `.gpx`, `.kml` and `.xml` are
+        // absent from `%fileTypeLookup`, so nothing else can answer.
+        for head in [
+            &b"<?xml version=\"1.0\" ?><History xmlns=\"http://x\">"[..],
+            &b"<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><gpx>"[..],
+            &b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><kml xmlns=\"x\">"[..],
+            // A UTF-8 BOM is stripped before the prolog is judged.
+            &b"\xef\xbb\xbf<?xml version=\"1.0\"?><doc/>"[..],
+        ] {
+            assert_eq!(xml_file_type(head), Some("XML"));
+        }
+    }
+
+    #[test]
+    fn an_rdf_or_xmpmeta_root_is_xmp_not_xml() {
+        for head in [
+            &b"<?xml version='1.0' encoding='UTF-8'?><rdf:RDF xmlns=\"x\">"[..],
+            &b"<rdf:RDF xmlns=\"x\">"[..],
+            &b"<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?>"[..],
+            &b"<?xml version='1.0'?><x:xmpmeta xmlns:x='adobe:ns:meta/'>"[..],
+            &b"<xmp:xapmeta xmlns:xmp='adobe:ns:meta/'>"[..],
+        ] {
+            assert_eq!(xml_file_type(head), Some("XMP"));
+        }
+    }
+
+    #[test]
+    fn plain_text_and_unmodelled_xml_stay_txt() {
+        for head in [
+            // Not XML at all -- Geotag.log and Geotag.igc.
+            &b"$PMGNTRK,4415.163,N,07631.126,W,00095,M,110833.5"[..],
+            &b"AXMP eTrex Venture HC Software Version 3.10"[..],
+            // A DOCTYPE ExifTool answers from the doctype name rather than
+            // calling XML, and an `<?aid` instruction, which makes it INX.
+            &b"<?xml version=\"1.0\"?><!DOCTYPE html PUBLIC \"-//W3C\"><html>"[..],
+            &b"<?xml version=\"1.0\" standalone=\"yes\"?>\n<?aid style=\"50\"?>"[..],
+        ] {
+            assert_eq!(xml_file_type(head), None);
+        }
+    }
 
     #[test]
     fn test_encoding_detection_ascii() {
