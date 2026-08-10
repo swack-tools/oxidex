@@ -14,7 +14,6 @@
 //! # Supported Metadata
 //!
 //! - FileType: Always "TXT"
-//! - FileSize: Size of the file in bytes
 //! - MIMEType: "text/plain"
 //! - MIMEEncoding: Detected encoding (utf-8, utf-16le, utf-16be, us-ascii, etc.)
 //! - ByteOrderMark: "Yes" or "No"
@@ -436,19 +435,18 @@ impl FormatParser for TXTParser {
             "MIMEType".to_string(),
             TagValue::String("text/plain".to_string()),
         );
-        metadata.insert(
-            "FileSize".to_string(),
-            TagValue::String(reader.size().to_string()),
-        );
+        // No `FileSize` here. `extract_file_metadata` already records the file's
+        // length as `File:FileSize`, formatted the way ExifTool prints it
+        // ("785 bytes"); a raw byte count under a second, ungrouped key added a
+        // third spelling of one fact and disagreed with the oracle.
+        // `operations::drop_redundant_file_size` is the backstop for the other
+        // parsers that still do this.
 
         // Parse text content and merge with basic metadata
         let text_metadata = Self::parse_text_content(reader)?;
         for (key, value) in text_metadata {
             metadata.insert(key, value);
         }
-
-        // Add TEXT-specific tag aliases for Worker 23 requirements
-        add_text_tag_aliases(&mut metadata);
 
         Ok(metadata)
     }
@@ -485,34 +483,25 @@ pub fn parse_txt_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
     parser.parse(reader).map_err(|e| e.to_string())
 }
 
-/// Adds TEXT-specific tag aliases to metadata (Worker 23 requirements)
-///
-/// Maps generic text metadata to TEXT-specific tags for ExifTool compatibility
-/// Worker 23 requires: TEXT:Encoding, TEXT:LineCount, TEXT:CharacterCount,
-/// TEXT:WordCount, TEXT:FileSize, TEXT:LastModified, TEXT:HasBOM, TEXT:LineEnding
-fn add_text_tag_aliases(metadata: &mut MetadataMap) {
-    // Create aliases with TEXT prefix
-    let mappings = [
-        ("MIMEEncoding", "TEXT:Encoding"),
-        ("LineCount", "TEXT:LineCount"),
-        ("CharacterCount", "TEXT:CharacterCount"),
-        ("WordCount", "TEXT:WordCount"),
-        ("FileSize", "TEXT:FileSize"),
-        ("ByteOrderMark", "TEXT:HasBOM"),
-        ("Newlines", "TEXT:LineEnding"),
-    ];
-
-    let mut text_tags = Vec::new();
-    for (source, text_tag) in &mappings {
-        if let Some(value) = metadata.get(source) {
-            text_tags.push((text_tag.to_string(), value.clone()));
-        }
-    }
-
-    for (key, value) in text_tags {
-        metadata.insert(key, value);
-    }
-}
+// There is deliberately no `add_text_tag_aliases` here any more.
+//
+// It mirrored seven already-extracted facts into a `TEXT:` group -- TEXT:Encoding,
+// TEXT:LineCount, TEXT:CharacterCount, TEXT:WordCount, TEXT:FileSize,
+// TEXT:HasBOM, TEXT:LineEnding -- so every one of them was emitted twice, once
+// bare and once prefixed. ExifTool 13.59 has no `TEXT` group at all: the family-0
+// group for `Image::ExifTool::Text::Main` is `File`, so the oracle reports
+// `File:MIMEEncoding`, `File:Newlines`, `File:LineCount`, `File:WordCount` and
+// `File:ByteOrderMark`. Across the 20 text-family files in ExifTool's `t/images`
+// the aliases produced 101 keys that the oracle never emits under any group, and
+// the names it *does* use (`Newlines`, `ByteOrderMark`, `MIMEEncoding`) are not
+// even the names they aliased to (`LineEnding`, `HasBOM`, `Encoding`).
+//
+// Filing these facts under `File:` instead is a separate change: the oracle emits
+// them only for its TXT and CSV file types, and OxiDex currently routes XML, XMP,
+// JSON, RTF, AFM, URL and INX files through this parser too, so an unconditional
+// move would invent `File:LineCount` on nine corpus files that ExifTool gives no
+// such tag. Removing the duplicate is correct on its own; the relocation needs
+// the FileType gate first.
 
 #[cfg(test)]
 mod tests {

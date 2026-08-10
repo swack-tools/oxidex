@@ -241,11 +241,11 @@ impl FormatParser for MachOParser {
             );
         }
 
-        // Add file size
-        metadata.insert(
-            "EXE:FileSize".to_string(),
-            TagValue::Integer(reader.size() as i64),
-        );
+        // No file size here. `extract_file_metadata` already reports the file's
+        // length as `File:FileSize`, and ExifTool 13.59 emits no `EXE:FileSize`
+        // for a Mach-O -- on EXE.dylib and EXE.macho the oracle reports only
+        // `File:FileSize`. This was the same duplicate the ungrouped `FileSize`
+        // inserts were, hidden from that grep by an `EXE:` prefix.
 
         Ok(metadata)
     }
