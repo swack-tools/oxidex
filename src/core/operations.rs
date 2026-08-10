@@ -217,6 +217,24 @@ fn add_identity_tags(metadata: &mut MetadataMap, reader: &dyn FileReader, path: 
     {
         metadata.insert("File:MIMEType", TagValue::new_string(mime));
     }
+
+    // A MIE file's own MIME type is generic; ExifTool sharpens it to name the
+    // subfile the container wraps (`application/x-mie-jpeg`, not just
+    // `application/x-mie`), which `%mimeType` cannot express as a table row --
+    // it is assembled at read time from the file's own top-level tags. See
+    // `mie::document_mime_type` for the derivation.
+    //
+    // Bounded to 4 MiB: real `.mie` files carry their identifying tags in the
+    // first few dozen bytes, and this exists to sharpen a MIME type, not to
+    // extract the file -- a multi-gigabyte MIE should not be read whole for
+    // that.
+    if id.file_type == "MIE"
+        && ours_is_authoritative
+        && let Ok(whole) = reader.read(0, (reader.size() as usize).min(4 << 20))
+        && let Some(mime) = crate::parsers::mie::document_mime_type(whole)
+    {
+        metadata.insert("File:MIMEType", TagValue::new_string(mime));
+    }
     true
 }
 
