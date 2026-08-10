@@ -138,11 +138,14 @@ fn is_placeholder(v: Option<&str>) -> bool {
 /// `insert("FileSize"` search, and a tag ExifTool emits for no Mach-O. It was
 /// removed at its source in the Mach-O parser instead of here.
 ///
-/// The bare `FileType` and `MIMEType` duplicates are *not* folded away here.
-/// They look like the same defect and are not: for a `.log` file the parser's
-/// ungrouped `FileType: TXT` is the correct answer while `File:FileType` still
-/// reads `Unknown`, so dropping it would delete the only right copy. That is a
-/// detection gap, tracked separately.
+/// [`normalize_identity_tags`] is the sibling of this for `FileType`,
+/// `FileTypeExtension` and `MIMEType`, and stays separate because the two cases
+/// differ in kind. There, a parser's ungrouped string is a rival *answer* to
+/// "what is this file?", so that function has to arbitrate, and a parser can
+/// still name a type the tables left `Unknown`. Here there is nothing to
+/// arbitrate: both keys report the same byte count, and the parser's spelling of
+/// it is simply the unformatted one, so it can never fill a gap in
+/// `File:FileSize` the way a parser's `FileType` can.
 fn drop_redundant_file_size(metadata: &mut MetadataMap) {
     if metadata.contains_key("File:FileSize") {
         metadata.remove("FileSize");

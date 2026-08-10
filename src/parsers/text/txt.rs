@@ -496,12 +496,17 @@ pub fn parse_txt_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
 // the names it *does* use (`Newlines`, `ByteOrderMark`, `MIMEEncoding`) are not
 // even the names they aliased to (`LineEnding`, `HasBOM`, `Encoding`).
 //
-// Filing these facts under `File:` instead is a separate change: the oracle emits
-// them only for its TXT and CSV file types, and OxiDex currently routes XML, XMP,
-// JSON, RTF, AFM, URL and INX files through this parser too, so an unconditional
-// move would invent `File:LineCount` on nine corpus files that ExifTool gives no
-// such tag. Removing the duplicate is correct on its own; the relocation needs
-// the FileType gate first.
+// Filing these facts under `File:` instead is a separate change, and it now has
+// what it was missing. The oracle emits them only for its TXT and CSV types, and
+// format dispatch still routes XML, XMP, JSON, RTF, AFM, URL and INX files here,
+// so an unconditional move would invent `File:LineCount` on the nine corpus files
+// ExifTool gives no such tag. What changed is that the gate is available: since
+// #648 and #650 resolved identity from the generated tables, `File:FileType` is
+// the oracle's answer on 12 of those 13 files (XMP.xml still reads TXT), so a
+// relocation can condition on it. ExifTool's own rule, from `Text.pm`
+// `ProcessTXT`: `MIMEEncoding`, `Newlines` and `ByteOrderMark` for TXT *and* CSV;
+// `LineCount`/`WordCount` only for TXT, skipped for UTF-16 (`Text5.txt` has none)
+// and above 20 MB. Removing the duplicate is correct on its own.
 
 #[cfg(test)]
 mod tests {
