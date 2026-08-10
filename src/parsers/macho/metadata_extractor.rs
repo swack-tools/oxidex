@@ -32,6 +32,7 @@ pub fn extract_macho_metadata(info: &MachOInfo) -> MetadataMap {
 
     // Extract header metadata
     if let Some(ref header) = info.header {
+        set_macho_file_type(header, info.is_from_fat, &mut metadata);
         extract_header_metadata(header, &mut metadata);
     }
 
@@ -84,6 +85,61 @@ pub fn extract_macho_metadata(info: &MachOInfo) -> MetadataMap {
     }
 
     metadata
+}
+
+/// Name the file the way `EXE.pm` names it, in the group ExifTool reports.
+///
+/// A Mach-O file's type comes from the `filetype` word in its header, not from
+/// its extension. `ProcessEXE` sets a base name and `MachOverride` replaces it
+/// for the four types that are not executables (EXE.pm:1154-1168):
+///
+/// ```text
+///     my %machOverride = (
+///         1 => [ 'object file', 'O' ],
+///         6 => [ 'dynamic link library', 'DYLIB' ],
+///         8 => [ 'dynamic bound bundle', 'DYLIB' ],
+///         9 => [ 'dynamic link library stub', 'DYLIB' ],
+///     );
+///     ...
+///     my $desc = 'Mach-O ' . ($fat ? 'fat ' : '') . $$override[0];
+///     $et->OverrideFileType($desc, undef, $$override[1]);
+/// ```
+///
+/// The `fat ` infix belongs to the whole family, base name included: a
+/// universal binary is a `Mach-O fat binary executable` (EXE.pm:1391) and its
+/// first architecture's `filetype` then names it `Mach-O fat dynamic link
+/// library` and so on.
+///
+/// Written into the `File` group because it is ExifTool's answer for the
+/// format rather than a parser's private name -- the header outranks
+/// `%fileTypeLookup`, which otherwise reports `EXE.dylib` as plain `DYLIB` and
+/// leaves the extensionless `EXE.macho` as `Unknown`.
+///
+/// `FileTypeExtension` is empty for an executable: ExifTool passes `''` and
+/// emits the tag with no value. MIME is left alone -- every form is given
+/// `undef` and lands on `application/octet-stream`.
+fn set_macho_file_type(header: &MachHeader, is_fat: bool, metadata: &mut MetadataMap) {
+    use super::structures::file_type;
+
+    let (name, extension) = match header.filetype {
+        file_type::MH_OBJECT => ("object file", "o"),
+        file_type::MH_DYLIB => ("dynamic link library", "dylib"),
+        file_type::MH_BUNDLE => ("dynamic bound bundle", "dylib"),
+        file_type::MH_DYLIB_STUB => ("dynamic link library stub", "dylib"),
+        // EXE.pm overrides only those four; everything else keeps the base
+        // name, which for a fat container is `fat binary executable`.
+        _ if is_fat => ("binary executable", ""),
+        _ => ("executable", ""),
+    };
+    let fat = if is_fat { "fat " } else { "" };
+    metadata.insert(
+        "File:FileType".to_string(),
+        TagValue::String(format!("Mach-O {fat}{name}")),
+    );
+    metadata.insert(
+        "File:FileTypeExtension".to_string(),
+        TagValue::String(extension.to_string()),
+    );
 }
 
 /// Extract metadata from the Mach-O header
@@ -854,6 +910,62 @@ mod tests {
             is_64bit: true,
             is_swapped: false,
         }
+    }
+
+    #[test]
+    fn macho_file_type_follows_the_header_not_the_extension() {
+        // EXE.dylib is `DYLIB` by extension and `Mach-O dynamic link library`
+        // by header; EXE.macho has no extension at all and was `Unknown`.
+        for (filetype, want_type, want_ext) in [
+            (file_type::MH_EXECUTE, "Mach-O executable", ""),
+            (file_type::MH_OBJECT, "Mach-O object file", "o"),
+            (file_type::MH_DYLIB, "Mach-O dynamic link library", "dylib"),
+            (file_type::MH_BUNDLE, "Mach-O dynamic bound bundle", "dylib"),
+            (
+                file_type::MH_DYLIB_STUB,
+                "Mach-O dynamic link library stub",
+                "dylib",
+            ),
+            // EXE.pm overrides only those four, so a core file keeps the base
+            // name rather than gaining one of its own.
+            (file_type::MH_CORE, "Mach-O executable", ""),
+        ] {
+            let mut header = create_test_header();
+            header.filetype = filetype;
+            let mut metadata = MetadataMap::new();
+            set_macho_file_type(&header, false, &mut metadata);
+            assert_eq!(
+                metadata.get_string("File:FileType"),
+                Some(want_type),
+                "filetype {filetype}"
+            );
+            assert_eq!(
+                metadata.get_string("File:FileTypeExtension"),
+                Some(want_ext),
+                "filetype {filetype}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fat_container_carries_the_fat_infix() {
+        // `'Mach-O ' . ($fat ? 'fat ' : '') . $$override[0]` -- the infix sits
+        // between the family and the type, base name included.
+        let mut header = create_test_header();
+        let mut metadata = MetadataMap::new();
+        set_macho_file_type(&header, true, &mut metadata);
+        assert_eq!(
+            metadata.get_string("File:FileType"),
+            Some("Mach-O fat binary executable")
+        );
+
+        header.filetype = file_type::MH_DYLIB;
+        let mut metadata = MetadataMap::new();
+        set_macho_file_type(&header, true, &mut metadata);
+        assert_eq!(
+            metadata.get_string("File:FileType"),
+            Some("Mach-O fat dynamic link library")
+        );
     }
 
     #[test]
