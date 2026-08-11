@@ -43,7 +43,12 @@ PIN_FILE = REPO_ROOT / ".exiftool-version"
 TABLE_RE = re.compile(
     r'pub static \w+: BinaryTable = BinaryTable \{\s*'
     r'module:\s*"(?P<module>[^"]*)",\s*'
-    r'table:\s*"(?P<table>[^"]*)",',
+    r'table:\s*"(?P<table>[^"]*)",\s*'
+    r'group0:\s*"[^"]*",\s*'
+    r'group2:\s*"[^"]*",\s*'
+    r'first_entry:\s*-?\d+,\s*'
+    r'default_format:\s*Fmt::\w+,\s*'
+    r'offsets_sound_until:\s*(?P<sound_until>None|Some\(-?\d+\)),',
 )
 FIELD_RE = re.compile(
     r'Field\s*\{\s*'
@@ -55,7 +60,7 @@ FIELD_RE = re.compile(
     r'mask:\s*(?:None'
     r'|Some\(\s*Mask\s*\{\s*bits:\s*(?P<mask_bits>0[xX][0-9a-fA-F_]+|\d+),\s*'
     r'shift:\s*(?P<mask_shift>\d+),?\s*\}\s*,?\s*\)),\s*'
-    r'omitted:\s*(?:Omitted::NONE|Omitted\s*\{[^{}]*\}),\s*'
+    r'omitted:\s*(?P<omitted>Omitted::NONE|Omitted\s*\{[^{}]*\}),\s*'
     r'print_conv:\s*(?P<pc>PrintConv::(?:None'
     r'|Expr\(ExprId::\w+\)'
     r'|IntEnum\(&\[.*?\]\)'
@@ -115,14 +120,24 @@ def unescape(s):
 
 
 def parse_rust(path):
-    """-> (fields{k->name}, enums{k->{key:val}}, masks{k->(bits,shift)})"""
+    """-> (fields, enums, masks, hooks, subdirs, sound_until)
+
+    fields{k->name}, enums{k->{key:val}}, masks{k->(bits,shift)},
+    hooks{k}, subdirs{k} (sets of field keys with that Omitted flag set),
+    sound_until{(mod,tbl)->int|None} (the table's offsets_sound_until).
+    """
     with open(path, encoding="utf-8") as fh:
         src = fh.read()
 
     fields, enums, masks = {}, defaultdict(dict), {}
+    hooks, subdirs = set(), set()
+    sound_until = {}
     expected = len(FIELD_COUNT_RE.findall(src))
-    bounds = [(m.start(), m.group("module"), m.group("table"))
+    bounds = [(m.start(), m.group("module"), m.group("table"), m.group("sound_until"))
               for m in TABLE_RE.finditer(src)]
+    for start, mod, tbl, su in bounds:
+        sound_until[(mod, tbl)] = None if su == "None" else int(su[len("Some("):-1])
+    bounds = [(start, mod, tbl) for start, mod, tbl, _su in bounds]
     bounds.append((len(src), None, None))
 
     for i in range(len(bounds) - 1):
@@ -140,6 +155,12 @@ def parse_rust(path):
             bits = f.group("mask_bits")
             if bits is not None:
                 masks[k] = (int(bits, 0), int(f.group("mask_shift")))
+
+            omitted = f.group("omitted")
+            if "hook: true" in omitted:
+                hooks.add(k)
+            if "subdirectory: true" in omitted:
+                subdirs.add(k)
 
             pc = f.group("pc")
             # Rescan the enum body from the source itself rather than
@@ -177,7 +198,7 @@ def parse_rust(path):
             f"parsed {len(fields)} fields but the file contains {expected} "
             "-- the verifier's pattern is out of date; fix it before trusting a PASS"
         )
-    return fields, enums, masks
+    return fields, enums, masks, hooks, subdirs, sound_until
 
 
 def load_oracle(lib, oracle_pl):
@@ -186,6 +207,7 @@ def load_oracle(lib, oracle_pl):
         capture_output=True, check=True, text=True, encoding="utf-8",
     ).stdout
     names, enums, masks = {}, defaultdict(dict), {}
+    hooks, subdirs, varfmts = set(), set(), set()
     for line in out.splitlines():
         p = line.split("\t")
         if len(p) == 4:
@@ -194,7 +216,13 @@ def load_oracle(lib, oracle_pl):
             enums[(p[0], p[1], p[2])][p[4]] = p[5]
         elif len(p) == 6 and p[3] == "MASK":
             masks[(p[0], p[1], p[2])] = (int(p[4], 0), int(p[5]))
-    return names, enums, masks
+        elif len(p) == 5 and p[3] == "HOOK":
+            hooks.add((p[0], p[1], p[2]))
+        elif len(p) == 5 and p[3] == "SUBDIR":
+            subdirs.add((p[0], p[1], p[2]))
+        elif len(p) == 5 and p[3] == "VARFMT":
+            varfmts.add((p[0], p[1], p[2]))
+    return names, enums, masks, hooks, subdirs, varfmts
 
 
 def oracle_version(lib):
@@ -286,8 +314,12 @@ def main():
 
     version = check_version(args.generated_rs, args.exiftool_lib)
     print(f"ExifTool {version}")
-    gen_fields, gen_enums, gen_masks = parse_rust(args.generated_rs)
-    or_names, or_enums, or_masks = load_oracle(args.exiftool_lib, args.oracle)
+    gen_fields, gen_enums, gen_masks, gen_hooks, gen_subdirs, gen_sound_until = parse_rust(
+        args.generated_rs
+    )
+    or_names, or_enums, or_masks, or_hooks, or_subdirs, or_varfmts = load_oracle(
+        args.exiftool_lib, args.oracle
+    )
 
     if not gen_fields:
         sys.exit("parsed 0 fields from generated Rust -- verifier is broken, "
@@ -337,6 +369,73 @@ def main():
             if len(mask_examples) < args.show:
                 mask_examples.append((k, got, want))
 
+    # Hook and SubDirectory are presence flags, not values: `codegen.py`'s
+    # `omitted_for` sets them exactly when ExifTool's own hash carries the
+    # corresponding key. Checked over every field the generator actually
+    # emitted -- a flag on a field ExifTool does not carry is a false
+    # positive (a caller refuses a field for no reason); a flag ExifTool
+    # carries but the schema does not record is the silent drop Step 9
+    # exists to close.
+    hook_ok = hook_bad = 0
+    subdir_ok = subdir_bad = 0
+    hook_examples, subdir_examples = [], []
+    for k in gen_fields:
+        got, want = k in gen_hooks, k in or_hooks
+        if got == want:
+            hook_ok += 1
+        else:
+            hook_bad += 1
+            if len(hook_examples) < args.show:
+                hook_examples.append((k, got, want))
+        got, want = k in gen_subdirs, k in or_subdirs
+        if got == want:
+            subdir_ok += 1
+        else:
+            subdir_bad += 1
+            if len(subdir_examples) < args.show:
+                subdir_examples.append((k, got, want))
+
+    # `offsets_sound_until` is a per-table derived fact: the index of the
+    # first refused `var_*` field, recorded only when some emitted field of
+    # that table actually sits past it (see codegen.py's `gen_table`).
+    # Reconstructed here independently from the oracle's VARFMT rows plus the
+    # field set this same parse just read back from the generated Rust --
+    # not from codegen.py's own arithmetic, so a bug in that arithmetic
+    # cannot cancel itself out here.
+    or_var_min = {}
+    for m, t, idx in or_varfmts:
+        try:
+            i = int(idx.split(".")[0])
+        except ValueError:
+            continue
+        key = (m, t)
+        if key not in or_var_min or i < or_var_min[key]:
+            or_var_min[key] = i
+
+    fields_by_table = defaultdict(list)
+    for m, t, idx in gen_fields:
+        try:
+            fields_by_table[(m, t)].append(int(idx.split(".")[0]))
+        except ValueError:
+            continue
+
+    sound_ok = sound_bad = 0
+    sound_examples = []
+    for table_key, or_min in or_var_min.items():
+        if table_key not in gen_sound_until:
+            # codegen.py never emitted this table at all (e.g. no field
+            # survived every other filter) -- nothing to check here.
+            continue
+        affected = any(idx > or_min for idx in fields_by_table.get(table_key, ()))
+        want = or_min if affected else None
+        got = gen_sound_until[table_key]
+        if got == want:
+            sound_ok += 1
+        else:
+            sound_bad += 1
+            if len(sound_examples) < args.show:
+                sound_examples.append((table_key, got, want))
+
     print(f"fields checked   {name_ok + name_bad}")
     print(f"  match          {name_ok}")
     print(f"  MISMATCH       {name_bad}")
@@ -347,6 +446,15 @@ def main():
     print(f"masked fields    {mask_ok + mask_bad}")
     print(f"  match          {mask_ok}")
     print(f"  MISMATCH       {mask_bad}")
+    print(f"hook flags       {hook_ok + hook_bad}")
+    print(f"  match          {hook_ok}")
+    print(f"  MISMATCH       {hook_bad}")
+    print(f"subdirectory flags {subdir_ok + subdir_bad}")
+    print(f"  match          {subdir_ok}")
+    print(f"  MISMATCH       {subdir_bad}")
+    print(f"offsets_sound_until tables {sound_ok + sound_bad}")
+    print(f"  match          {sound_ok}")
+    print(f"  MISMATCH       {sound_bad}")
 
     for k, got, want in bad_examples:
         print(f"  name  {k}: generated {got!r} != exiftool {want!r}")
@@ -356,8 +464,17 @@ def main():
         print(f"  enum  {k} key {kk}: generated {got!r} != exiftool {want!r}")
     for k, got, want in mask_examples:
         print(f"  mask  {k}: generated {got!r} != exiftool {want!r}")
+    for k, got, want in hook_examples:
+        print(f"  hook  {k}: generated {got!r} != exiftool {want!r}")
+    for k, got, want in subdir_examples:
+        print(f"  subdirectory  {k}: generated {got!r} != exiftool {want!r}")
+    for k, got, want in sound_examples:
+        print(f"  offsets_sound_until  {k}: generated {got!r} != expected {want!r}")
 
-    failed = name_bad + enum_bad + orphan + mask_bad
+    failed = (
+        name_bad + enum_bad + orphan + mask_bad
+        + hook_bad + subdir_bad + sound_bad
+    )
     print("\nRESULT:", "PASS" if failed == 0 else f"FAIL ({failed} discrepancies)")
     sys.exit(1 if failed else 0)
 

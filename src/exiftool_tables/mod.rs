@@ -170,4 +170,89 @@ mod tests {
             }
         }
     }
+
+    /// `Omitted::any()` is the single gate a caller is meant to check before
+    /// trusting a decoded value; if it stops noticing a flag, that flag's
+    /// semantic starts leaking through as if it were reproduced.
+    #[test]
+    fn omitted_any_covers_hook_and_subdirectory() {
+        assert!(
+            Omitted {
+                hook: true,
+                ..Omitted::NONE
+            }
+            .any()
+        );
+        assert!(
+            Omitted {
+                subdirectory: true,
+                ..Omitted::NONE
+            }
+            .any()
+        );
+        assert!(!Omitted::NONE.any());
+    }
+
+    /// Step 9's accounting identity: the count of fields the generator flags
+    /// `hook`/`subdirectory` must equal what a census of the ExifTool 13.59
+    /// dump found (measured independently with `tools/exiftool-tables/
+    /// codegen.py`'s own report, and cross-checked again by `verify.py`
+    /// against the live Perl hashes). Pinning the numbers here means a future
+    /// regen that silently stops reading `Hook`/`SubDirectory` -- reopening
+    /// the exact silent-drop class this step closed -- fails a test instead
+    /// of only showing up as a diff nobody reads.
+    #[test]
+    fn hook_and_subdirectory_census_matches_the_13_59_dump() {
+        let (mut hooks, mut subdirs) = (0usize, 0usize);
+        for t in ALL_BINARY_TABLES {
+            for f in t.fields {
+                hooks += usize::from(f.omitted.hook);
+                subdirs += usize::from(f.omitted.subdirectory);
+            }
+        }
+        assert_eq!(hooks, 35, "Hook-carrying emitted fields");
+        assert_eq!(subdirs, 63, "SubDirectory-carrying emitted fields");
+    }
+
+    /// `offsets_sound_until` must be set on exactly the tables where a
+    /// refused `var_*` field actually sits before an emitted one -- not on
+    /// every table that merely contains a `var_*` field ExifTool declares.
+    /// At 13.59 that is 4 tables covering 81 already-emitted fields whose
+    /// static `index * increment` offset is no longer trustworthy.
+    #[test]
+    fn offsets_sound_until_marks_exactly_the_tables_with_a_live_hazard() {
+        let mut affected_tables = 0usize;
+        let mut affected_fields = 0usize;
+        for t in ALL_BINARY_TABLES {
+            let Some(bound) = t.offsets_sound_until else {
+                continue;
+            };
+            affected_tables += 1;
+            let hit = t.fields.iter().filter(|f| f.index > bound).count();
+            assert!(
+                hit > 0,
+                "{}::{} sets offsets_sound_until but no field sits past it",
+                t.module,
+                t.table
+            );
+            affected_fields += hit;
+        }
+        assert_eq!(affected_tables, 4, "tables with a live var_* offset hazard");
+        assert_eq!(affected_fields, 81, "fields past the hazard boundary");
+
+        let expect = [
+            ("CanonVRD", "Ver2", 88),
+            ("DNG", "ImageSeq", 0),
+            ("FLAC", "Picture", 1),
+            ("Photoshop", "SliceInfo", 20),
+        ];
+        for (module, table, bound) in expect {
+            let t = find_table(module, table).unwrap_or_else(|| panic!("{module}::{table}"));
+            assert_eq!(
+                t.offsets_sound_until,
+                Some(bound),
+                "{module}::{table} offsets_sound_until"
+            );
+        }
+    }
 }

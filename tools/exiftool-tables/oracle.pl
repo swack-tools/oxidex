@@ -9,9 +9,17 @@
 # ExifTool independently is what makes a disagreement meaningful.
 #
 # Output columns:
-#   MODULE  TABLE  INDEX  NAME                      -- one per field
-#   MODULE  TABLE  INDEX  ENUM  KEY  VALUE          -- one per PrintConv entry
-#   MODULE  TABLE  INDEX  MASK  BITS  SHIFT         -- one per masked field
+#   MODULE  TABLE  INDEX  NAME                      -- one per field (4 columns)
+#   MODULE  TABLE  INDEX  ENUM    KEY  VALUE        -- one per PrintConv entry (6)
+#   MODULE  TABLE  INDEX  MASK    BITS  SHIFT       -- one per masked field (6)
+#   MODULE  TABLE  INDEX  HOOK    (empty)           -- field carries a Hook (5)
+#   MODULE  TABLE  INDEX  SUBDIR  (empty)           -- field carries a SubDirectory (5)
+#   MODULE  TABLE  INDEX  VARFMT  (empty)           -- field's Format is var_* (5)
+#
+# The trailing empty column on HOOK/SUBDIR/VARFMT lines is not decorative: it
+# is what keeps them from colliding with a NAME line on column count (both
+# would otherwise be 4 columns, and a tag genuinely named "Hook" is not
+# impossible).
 
 use strict;
 use warnings;
@@ -89,6 +97,23 @@ for my $mod (grep { !$skip{$_} } @mods) {
                 }
                 print join("\t", $mod, $sym, $k, 'MASK', $mask, $shift), "\n";
             }
+
+            # Hook and SubDirectory are the two constructs codegen.py records
+            # but cannot execute (see tools/exiftool-tables/codegen.py's
+            # `omitted_for`). Presence, not content, is what a caller needs to
+            # know -- a Hook can rewrite later fields' format/byte order
+            # in ways this generator does not run, and a SubDirectory means the
+            # bytes are the entry to a nested table, not this field's value.
+            print join("\t", $mod, $sym, $k, 'HOOK', ''), "\n" if defined $e->{Hook};
+            print join("\t", $mod, $sym, $k, 'SUBDIR', ''), "\n" if defined $e->{SubDirectory};
+
+            # A `var_*` Format is data-dependent width: ExifTool computes the
+            # real byte offset by walking the bytes, so the generator's static
+            # `index * increment` formula is unsound for every field at or
+            # past this one (`offsets_sound_until`).
+            my $fmt = $e->{Format};
+            print join("\t", $mod, $sym, $k, 'VARFMT', ''), "\n"
+                if defined $fmt && !ref $fmt && $fmt =~ /^var_/;
 
             my $pc = $e->{PrintConv};
             next unless ref $pc eq 'HASH';

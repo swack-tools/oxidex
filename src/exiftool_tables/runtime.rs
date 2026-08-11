@@ -383,6 +383,7 @@ mod tests {
             group2: "",
             first_entry: 0,
             default_format: Fmt::Int8u,
+            offsets_sound_until: None,
             fields: FIELDS,
         };
 
@@ -468,6 +469,7 @@ mod tests {
             group2: "",
             first_entry: 0,
             default_format: Fmt::Int8u,
+            offsets_sound_until: None,
             fields: FIELDS,
         };
 
@@ -571,6 +573,8 @@ mod tests {
                     value_conv: true,
                     raw_conv: false,
                     condition: false,
+                    hook: false,
+                    subdirectory: false,
                 },
                 print_conv: PrintConv::IntEnum(&[(0, "Wrong")]),
             },
@@ -582,6 +586,7 @@ mod tests {
             group2: "",
             first_entry: 0,
             default_format: Fmt::Int8u,
+            offsets_sound_until: None,
             fields: FIELDS,
         };
 

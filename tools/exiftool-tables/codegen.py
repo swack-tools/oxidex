@@ -241,12 +241,23 @@ def omitted_for(tag, stats):
     emitted set carries one, including tables parsers already read for layout --
     so the omission is recorded instead. A caller that sees `value_conv` set
     knows the raw value is not the reported value, which is the whole point.
+
+    `Hook` and `SubDirectory` are the same kind of breach and were, until now,
+    not even read from the dump: a field carrying either was emitted as an
+    ordinary scalar with no record that a semantic was dropped. `Hook` is a
+    Perl closure that can rewrite the format or byte order of *later* fields
+    mid-table (ExifTool.pm's ProcessBinaryData `#[...]` Hook mechanism) --
+    unrunnable here, same as RawConv. `SubDirectory` means the bytes are not
+    this field's value at all but the entry point to a nested table -- readable
+    as a scalar, but the scalar is not what ExifTool reports for the tag.
     """
     flags = []
     for key, member in (
         ("ValueConv", "value_conv"),
         ("RawConv", "raw_conv"),
         ("Condition", "condition"),
+        ("Hook", "hook"),
+        ("SubDirectory", "subdirectory"),
     ):
         if tag.get(key) is not None:
             flags.append(member)
@@ -255,7 +266,7 @@ def omitted_for(tag, stats):
         return "Omitted::NONE"
     return "Omitted { " + ", ".join(
         f"{m}: {'true' if m in flags else 'false'}"
-        for m in ("value_conv", "raw_conv", "condition")
+        for m in ("value_conv", "raw_conv", "condition", "hook", "subdirectory")
     ) + " }"
 
 
@@ -287,6 +298,19 @@ def gen_table(mod_name, tbl_name, tbl, stats):
         first_entry = 0
 
     rows = []
+    # ProcessBinaryData computes every field's byte offset as `int(index) *
+    # increment` -- a static formula that assumes every preceding field is a
+    # fixed width. A `var_*` Format (`var_string`, `var_int16u`, ...) breaks
+    # that assumption: ExifTool reads it by walking the actual bytes and shifts
+    # every later field by however many bytes that field consumed, which this
+    # generator cannot compute (the width is data-dependent) and does not try
+    # to. The first such field we refuse marks the offset above which the
+    # static formula is no longer trustworthy for anything still emitted in
+    # this table; `var_sound_until` is that field's index, `var_sound_hit`
+    # records whether any emitted field actually lands past it (a table can
+    # refuse a var_* field and still have nothing after it to protect).
+    var_sound_until = None
+    var_sound_hit = False
     for key, tag in sorted(tbl["tags"].items(), key=lambda kv: parse_index(kv[0])[0] or 0):
         idx, sub = parse_index(key)
         if idx is None:
@@ -331,6 +355,13 @@ def gen_table(mod_name, tbl_name, tbl, stats):
                 fmt_expr = f"Some(Fmt::{SCALAR_FORMATS[f][0]})"
             else:
                 # Variable-length or expression-sized format -- not mechanical.
+                if f.startswith("var_"):
+                    stats["tag_var_format"] += 1
+                    if var_sound_until is None:
+                        # Only the first one anchors the table's soundness
+                        # boundary; a second var_* field past it is already
+                        # inside the region the first one made unsound.
+                        var_sound_until = idx
                 stats["tag_fmt_unsupported"] += 1
                 continue
 
@@ -349,6 +380,9 @@ def gen_table(mod_name, tbl_name, tbl, stats):
             # Both halves are emitted either way -- this counts, it does not
             # gate.
             stats["tag_fractional_masked" if mask != "None" else "tag_fractional_bare"] += 1
+        if var_sound_until is not None and idx > var_sound_until:
+            var_sound_hit = True
+            stats["tag_offset_unsound"] += 1
         sub_s = "None" if sub is None else f"Some({sub})"
         rows.append(
             f'    Field {{ index: {idx}, sub: {sub_s}, name: "{rust_str(name)}", '
@@ -366,6 +400,16 @@ def gen_table(mod_name, tbl_name, tbl, stats):
     g0 = groups.get("0", "") if isinstance(groups, dict) else ""
     g2 = groups.get("2", "") if isinstance(groups, dict) else ""
 
+    # Only record the flag when it actually protects a currently-emitted
+    # field. A table that refuses a var_* field with nothing emitted after it
+    # (the field was trailing, or everything past it was refused for other
+    # reasons too) has no live hazard for this schema to guard against.
+    if var_sound_hit:
+        stats["table_offsets_unsound"] += 1
+        sound_until_expr = f"Some({var_sound_until})"
+    else:
+        sound_until_expr = "None"
+
     body = "\n".join(rows)
     return f"""
 /// `Image::ExifTool::{mod_name}::{tbl_name}` -- {len(rows)} fields.
@@ -377,6 +421,7 @@ pub static {ident}: BinaryTable = BinaryTable {{
     group2: "{rust_str(g2)}",
     first_entry: {first_entry},
     default_format: Fmt::{default_fmt[0]},
+    offsets_sound_until: {sound_until_expr},
     fields: &[
 {body}
     ],
@@ -490,6 +535,18 @@ pub struct Omitted {
     pub raw_conv: bool,
     /// The field is gated on a `Condition`; ExifTool may not report it at all.
     pub condition: bool,
+    /// A `Hook` ran before this field was read. ExifTool's ProcessBinaryData
+    /// `Hook` is a Perl closure that can rewrite the format, byte order or
+    /// size of fields *after* this one mid-table; the mechanical pass cannot
+    /// run it, so the field it decorates -- and everything downstream that a
+    /// live Hook could have altered -- is only as trustworthy as an
+    /// unconditional read at this offset.
+    pub hook: bool,
+    /// The bytes at this offset are not this field's value: they are the
+    /// entry point to a nested `SubDirectory` table. Decoding them as a
+    /// scalar yields a plausible integer that is not what ExifTool reports
+    /// for this tag.
+    pub subdirectory: bool,
 }
 
 impl Omitted {
@@ -497,12 +554,14 @@ impl Omitted {
         value_conv: false,
         raw_conv: false,
         condition: false,
+        hook: false,
+        subdirectory: false,
     };
 
     /// True when anything was dropped, i.e. the raw value stands alone.
     #[must_use]
     pub const fn any(self) -> bool {
-        self.value_conv || self.raw_conv || self.condition
+        self.value_conv || self.raw_conv || self.condition || self.hook || self.subdirectory
     }
 }
 
@@ -535,6 +594,17 @@ pub struct BinaryTable {
     pub group2: &'static str,
     pub first_entry: i64,
     pub default_format: Fmt,
+    /// `ProcessBinaryData` computes every field's byte offset as `int(index) *
+    /// increment`, which assumes every preceding field is a fixed width. A
+    /// refused `var_*` field (data-dependent width, e.g. a length-prefixed
+    /// string) breaks that assumption: ExifTool shifts every later field by
+    /// however many bytes the variable one actually consumed, an amount this
+    /// schema cannot compute. `Some(n)` means the static formula is sound only
+    /// for fields with `index < n`; a field at or past `n` is at a nominal
+    /// offset that may not be its real one. `None` means either no refused
+    /// `var_*` field exists in this table, or none of the emitted fields fall
+    /// after it.
+    pub offsets_sound_until: Option<i64>,
     pub fields: &'static [Field],
 }
 
@@ -651,6 +721,8 @@ REPORT = (
         ("ValueConv", "omitted_value_conv"),
         ("RawConv", "omitted_raw_conv"),
         ("Condition", "omitted_condition"),
+        ("Hook", "omitted_hook"),
+        ("SubDirectory", "omitted_subdirectory"),
         ("bit fields, no Mask", "tag_fractional_bare"),
     )),
     ("refused, not approximated", (
@@ -659,11 +731,16 @@ REPORT = (
         ("variant tags", "tag_variant_skipped"),
         ("Unknown tags", "tag_unknown_skipped"),
         ("unsupported format", "tag_fmt_unsupported"),
+        ("  of which var_* (data-dep. width)", "tag_var_format"),
         ("unreadable Mask", "tag_mask_unreadable"),
         ("unreadable index", "tag_bad_index"),
         ("unnamed tags", "tag_no_name"),
         ("tables not ProcessBinaryData", "table_not_binary"),
         ("tables bad FORMAT", "table_bad_format"),
+    )),
+    ("offsets unsound past a refused var_* field (fields also counted above)", (
+        ("tables affected", "table_offsets_unsound"),
+        ("fields affected", "tag_offset_unsound"),
     )),
 )
 
