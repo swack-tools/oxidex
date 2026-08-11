@@ -98,12 +98,15 @@ impl CasioParser {
     /// * `entry` - IFD entry to parse
     /// * `data` - Full MakerNote data buffer
     /// * `byte_order` - Byte order for multi-byte values
+    /// * `model` - Camera model string (EXIF `Model`), if available. Only
+    ///   `FlashMode` (Casio.pm:63-86) branches on it.
     /// * `tags` - HashMap to insert extracted tags into
     fn parse_entry(
         &self,
         entry: &IfdEntry,
         data: &[u8],
         byte_order: ByteOrder,
+        model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) {
         // Get tag name from registry
@@ -156,6 +159,158 @@ impl CasioParser {
                 }
                 format!("{} m", perl_number(entry.value_offset as f64 / 1000.0))
             }
+            // Casio.pm:47-51 (Main::0x0002) -- plain hash PrintConv, no
+            // OTHER/BITMASK. An unmapped value falls through to ExifTool's
+            // generic hash-PrintConv default (ExifTool.pm ~3624-3630):
+            // `"Unknown ($val)"`, not the raw number.
+            CASIO_QUALITY => {
+                let Some(value) = extract_u16_value(entry, data, byte_order) else {
+                    return;
+                };
+                match value {
+                    1 => "Economy".to_string(),
+                    2 => "Normal".to_string(),
+                    3 => "Fine".to_string(),
+                    other => format!("Unknown ({other})"),
+                }
+            }
+            // Casio.pm:52-62 (Main::0x0003).
+            CASIO_FOCUS_MODE => {
+                let Some(value) = extract_u16_value(entry, data, byte_order) else {
+                    return;
+                };
+                match value {
+                    2 => "Macro".to_string(),
+                    3 => "Auto".to_string(),
+                    4 => "Manual".to_string(),
+                    5 => "Infinity".to_string(),
+                    7 => "Spot AF".to_string(),
+                    other => format!("Unknown ({other})"),
+                }
+            }
+            // Casio.pm:63-86 (Main::0x0004) -- a two-entry Condition list.
+            // The first entry (Casio.pm:65-76) applies only when
+            // `$self->{Model} =~ /^QV-(3500EX|8000SX)/`; every other model
+            // (including this sample's QV-3000EX, and any file whose Model
+            // wasn't available to this parser) falls to the unconditioned
+            // second entry (Casio.pm:77-85), which is what ExifTool's own
+            // Condition-list fallthrough does when nothing before it matches.
+            CASIO_FLASH_MODE => {
+                let Some(value) = extract_u16_value(entry, data, byte_order) else {
+                    return;
+                };
+                let is_qv3500ex_or_8000sx = model
+                    .map(|m| m.starts_with("QV-3500EX") || m.starts_with("QV-8000SX"))
+                    .unwrap_or(false);
+                match (is_qv3500ex_or_8000sx, value) {
+                    (true, 1) => "Auto".to_string(),
+                    (true, 2) => "On".to_string(),
+                    (true, 3) => "Off".to_string(),
+                    (true, 4) => "Off".to_string(),
+                    (true, 5) => "Red-eye Reduction".to_string(),
+                    (false, 1) => "Auto".to_string(),
+                    (false, 2) => "On".to_string(),
+                    (false, 3) => "Off".to_string(),
+                    (false, 4) => "Red-eye Reduction".to_string(),
+                    (_, other) => format!("Unknown ({other})"),
+                }
+            }
+            // Casio.pm:87-97 (Main::0x0005).
+            CASIO_FLASH_INTENSITY => {
+                let Some(value) = extract_u16_value(entry, data, byte_order) else {
+                    return;
+                };
+                match value {
+                    11 => "Weak".to_string(),
+                    12 => "Low".to_string(),
+                    13 => "Normal".to_string(),
+                    14 => "High".to_string(),
+                    15 => "Strong".to_string(),
+                    other => format!("Unknown ({other})"),
+                }
+            }
+            // Casio.pm:106-118 (Main::0x0007).
+            CASIO_WHITE_BALANCE => {
+                let Some(value) = extract_u16_value(entry, data, byte_order) else {
+                    return;
+                };
+                match value {
+                    1 => "Auto".to_string(),
+                    2 => "Tungsten".to_string(),
+                    3 => "Daylight".to_string(),
+                    4 => "Fluorescent".to_string(),
+                    5 => "Shade".to_string(),
+                    129 => "Manual".to_string(),
+                    other => format!("Unknown ({other})"),
+                }
+            }
+            // Casio.pm:119-131 (Main::0x000a) -- int32u, `PrintHex => 1`, so
+            // the fallback for a value outside the map is ExifTool's
+            // PrintHex branch (ExifTool.pm ~3625-3627): `Unknown (0x%x)`, not
+            // the decimal form the other eight tags use. Count is 1, so the
+            // full 4-byte value already lives in `value_offset`, matching how
+            // CASIO_OBJECT_DISTANCE (also int32u/count 1) reads it above --
+            // `extract_u16_value` would only see the low/high 16 bits.
+            CASIO_DIGITAL_ZOOM => {
+                if entry.value_count != 1 {
+                    return;
+                }
+                let value = entry.value_offset;
+                match value {
+                    0x10000 => "Off".to_string(),
+                    0x10001 => "2x".to_string(),
+                    0x19999 => "1.6x".to_string(),
+                    0x20000 => "2x".to_string(),
+                    0x33333 => "3.2x".to_string(),
+                    0x40000 => "4x".to_string(),
+                    other => format!("Unknown (0x{other:x})"),
+                }
+            }
+            // Casio.pm:132-143 (Main::0x000b).
+            CASIO_SHARPNESS => {
+                let Some(value) = extract_u16_value(entry, data, byte_order) else {
+                    return;
+                };
+                match value {
+                    0 => "Normal".to_string(),
+                    1 => "Soft".to_string(),
+                    2 => "Hard".to_string(),
+                    16 => "Normal".to_string(),
+                    17 => "+1".to_string(),
+                    18 => "-1".to_string(),
+                    other => format!("Unknown ({other})"),
+                }
+            }
+            // Casio.pm:144-155 (Main::0x000c).
+            CASIO_CONTRAST => {
+                let Some(value) = extract_u16_value(entry, data, byte_order) else {
+                    return;
+                };
+                match value {
+                    0 => "Normal".to_string(),
+                    1 => "Low".to_string(),
+                    2 => "High".to_string(),
+                    16 => "Normal".to_string(),
+                    17 => "+1".to_string(),
+                    18 => "-1".to_string(),
+                    other => format!("Unknown ({other})"),
+                }
+            }
+            // Casio.pm:156-167 (Main::0x000d).
+            CASIO_SATURATION => {
+                let Some(value) = extract_u16_value(entry, data, byte_order) else {
+                    return;
+                };
+                match value {
+                    0 => "Normal".to_string(),
+                    1 => "Low".to_string(),
+                    2 => "High".to_string(),
+                    16 => "Normal".to_string(),
+                    17 => "+1".to_string(),
+                    18 => "-1".to_string(),
+                    other => format!("Unknown ({other})"),
+                }
+            }
             // All other tags use raw value as string
             _ => {
                 if let Some(value) = extract_u16_value(entry, data, byte_order) {
@@ -185,6 +340,35 @@ impl MakerNoteParser for CasioParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
+        // No model available through this entry point (see `parse_with_model`
+        // below); `FlashMode` (Casio.pm:63-86) then falls to its unconditioned
+        // fallback arm, matching ExifTool's own Condition-list fallthrough
+        // when `$self->{Model}` can't be evaluated.
+        self.parse_casio(data, byte_order, None, tags)
+    }
+
+    fn parse_with_model(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
+        self.parse_casio(data, byte_order, model, tags)
+    }
+}
+
+impl CasioParser {
+    /// Shared implementation behind `parse`/`parse_with_model`: `model` is
+    /// `None` from the former, `Some` from the latter, and only
+    /// `CASIO_FLASH_MODE`'s Condition (Casio.pm:63-86) reads it.
+    fn parse_casio(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
         // `MakerNoteCasio2` ("QVC\0"/"DCI\0"-signed, `Casio::Type2`) is a
         // completely different tag table from `Casio::Main` (headerless
         // "Type1") this registry/TAG_REGISTRY was built for -- its own 0x0002
@@ -210,7 +394,7 @@ impl MakerNoteParser for CasioParser {
 
         // Parse IFD entries using the shared parser
         parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
-            self.parse_entry(entry, parse_data, byte_order, tags);
+            self.parse_entry(entry, parse_data, byte_order, model, tags);
         })
     }
 }
@@ -519,6 +703,7 @@ mod tests {
 
     #[test]
     fn test_parse_quality_tag() {
+        // Casio.pm:47-51 (Main::0x0002): 2 => 'Normal'.
         let parser = CasioParser::new();
         let mut data = Vec::new();
 
@@ -533,11 +718,13 @@ mod tests {
         let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
 
         assert!(result.is_ok());
-        assert_eq!(tags.get("Casio:Quality"), Some(&"2".to_string()));
+        assert_eq!(tags.get("Casio:Quality"), Some(&"Normal".to_string()));
     }
 
     #[test]
     fn test_parse_focus_mode_tag() {
+        // Casio.pm:52-62 (Main::0x0003): 3 => 'Auto'. This is the exact
+        // decode `Casio.jpg` (Make=CASIO, Model=QV-3000EX) exercises.
         let parser = CasioParser::new();
         let mut data = Vec::new();
 
@@ -546,13 +733,258 @@ mod tests {
         data.extend_from_slice(&[0x03, 0x00]); // Tag: CASIO_FOCUS_MODE (0x0003)
         data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
         data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x03, 0x00, 0x00, 0x00]); // Value: 3 (inline)
+
+        let mut tags = HashMap::new();
+        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
+
+        assert!(result.is_ok());
+        assert_eq!(tags.get("Casio:FocusMode"), Some(&"Auto".to_string()));
+    }
+
+    #[test]
+    fn test_parse_focus_mode_unmapped_value_uses_exiftool_unknown_fallback() {
+        // Casio.pm:52-62 has no entry for 1 -- ExifTool's generic hash
+        // PrintConv fallback for a value missing from the map (no
+        // OTHER/BITMASK on this conversion) is `"Unknown ($val)"`
+        // (ExifTool.pm ~3624-3630), not a guessed label and not the bare
+        // number passed through unconverted.
+        let parser = CasioParser::new();
+        let mut data = Vec::new();
+
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&[0x03, 0x00]); // Tag: CASIO_FOCUS_MODE (0x0003)
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Value: 1 (unmapped)
+
+        let mut tags = HashMap::new();
+        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
+
+        assert!(result.is_ok());
+        assert_eq!(
+            tags.get("Casio:FocusMode"),
+            Some(&"Unknown (1)".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_flash_intensity_normal() {
+        // Casio.pm:87-97 (Main::0x0005): 13 => 'Normal', the exact decode
+        // `Casio.jpg` exercises.
+        let parser = CasioParser::new();
+        let mut data = Vec::new();
+
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&[0x05, 0x00]); // Tag: CASIO_FLASH_INTENSITY (0x0005)
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x0D, 0x00, 0x00, 0x00]); // Value: 13 (inline)
+
+        let mut tags = HashMap::new();
+        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
+
+        assert!(result.is_ok());
+        assert_eq!(
+            tags.get("Casio:FlashIntensity"),
+            Some(&"Normal".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_white_balance_auto() {
+        // Casio.pm:106-118 (Main::0x0007): 1 => 'Auto', the exact decode
+        // `Casio.jpg` exercises.
+        let parser = CasioParser::new();
+        let mut data = Vec::new();
+
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&[0x07, 0x00]); // Tag: CASIO_WHITE_BALANCE (0x0007)
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
         data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Value: 1 (inline)
 
         let mut tags = HashMap::new();
         let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
 
         assert!(result.is_ok());
-        assert_eq!(tags.get("Casio:FocusMode"), Some(&"1".to_string()));
+        assert_eq!(tags.get("Casio:WhiteBalance"), Some(&"Auto".to_string()));
+    }
+
+    #[test]
+    fn test_parse_sharpness_normal() {
+        // Casio.pm:132-143 (Main::0x000b): 0 => 'Normal'.
+        let parser = CasioParser::new();
+        let mut data = Vec::new();
+
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&[0x0B, 0x00]); // Tag: CASIO_SHARPNESS (0x000b)
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Value: 0
+
+        let mut tags = HashMap::new();
+        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
+
+        assert!(result.is_ok());
+        assert_eq!(tags.get("Casio:Sharpness"), Some(&"Normal".to_string()));
+    }
+
+    #[test]
+    fn test_parse_contrast_normal() {
+        // Casio.pm:144-155 (Main::0x000c): 0 => 'Normal'.
+        let parser = CasioParser::new();
+        let mut data = Vec::new();
+
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&[0x0C, 0x00]); // Tag: CASIO_CONTRAST (0x000c)
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Value: 0
+
+        let mut tags = HashMap::new();
+        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
+
+        assert!(result.is_ok());
+        assert_eq!(tags.get("Casio:Contrast"), Some(&"Normal".to_string()));
+    }
+
+    #[test]
+    fn test_parse_saturation_normal() {
+        // Casio.pm:156-167 (Main::0x000d): 0 => 'Normal'.
+        let parser = CasioParser::new();
+        let mut data = Vec::new();
+
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&[0x0D, 0x00]); // Tag: CASIO_SATURATION (0x000d)
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Value: 0
+
+        let mut tags = HashMap::new();
+        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
+
+        assert!(result.is_ok());
+        assert_eq!(tags.get("Casio:Saturation"), Some(&"Normal".to_string()));
+    }
+
+    #[test]
+    fn test_parse_digital_zoom_off() {
+        // Casio.pm:119-131 (Main::0x000a): int32u, `PrintHex => 1`,
+        // 0x10000 => 'Off' -- the exact decode `Casio.jpg` exercises. Type 4
+        // is LONG; the full 4-byte value lives inline since count is 1.
+        let parser = CasioParser::new();
+        let mut data = Vec::new();
+
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&[0x0A, 0x00]); // Tag: CASIO_DIGITAL_ZOOM (0x000a)
+        data.extend_from_slice(&[0x04, 0x00]); // Type: LONG
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x00, 0x00, 0x01, 0x00]); // Value: 0x00010000 (LE)
+
+        let mut tags = HashMap::new();
+        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
+
+        assert!(result.is_ok());
+        assert_eq!(tags.get("Casio:DigitalZoom"), Some(&"Off".to_string()));
+    }
+
+    #[test]
+    fn test_parse_digital_zoom_unmapped_value_uses_printhex_unknown_fallback() {
+        // Casio.pm:119-131 sets `PrintHex => 1`, so ExifTool's fallback for a
+        // value missing from the map is the hex form
+        // `sprintf('Unknown (0x%x)', $val)` (ExifTool.pm ~3625-3627), not the
+        // decimal form the other eight tags use, and not the bare number.
+        let parser = CasioParser::new();
+        let mut data = Vec::new();
+
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&[0x0A, 0x00]); // Tag: CASIO_DIGITAL_ZOOM (0x000a)
+        data.extend_from_slice(&[0x04, 0x00]); // Type: LONG
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x45, 0x23, 0x01, 0x00]); // Value: 0x00012345 (LE)
+
+        let mut tags = HashMap::new();
+        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
+
+        assert!(result.is_ok());
+        assert_eq!(
+            tags.get("Casio:DigitalZoom"),
+            Some(&"Unknown (0x12345)".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_flash_mode_default_model_uses_unconditioned_fallback() {
+        // Casio.pm:63-86: the plain `parse()` entry point has no Model, so
+        // `CASIO_FLASH_MODE`'s Condition (`$self->{Model} =~
+        // /^QV-(3500EX|8000SX)/`) can't be evaluated and falls to the
+        // unconditioned second list entry (Casio.pm:77-85), where
+        // 4 => 'Red-eye Reduction'. This is the exact decode `Casio.jpg`
+        // (Model=QV-3000EX, which also doesn't match the condition)
+        // exercises.
+        let parser = CasioParser::new();
+        let mut data = Vec::new();
+
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&[0x04, 0x00]); // Tag: CASIO_FLASH_MODE (0x0004)
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x04, 0x00, 0x00, 0x00]); // Value: 4 (inline)
+
+        let mut tags = HashMap::new();
+        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
+
+        assert!(result.is_ok());
+        assert_eq!(
+            tags.get("Casio:FlashMode"),
+            Some(&"Red-eye Reduction".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_flash_mode_qv3500ex_uses_conditioned_map() {
+        // Casio.pm:63-76: when `Model =~ /^QV-(3500EX|8000SX)/` matches, the
+        // *first* Condition-list entry applies instead, where 4 => 'Off'
+        // rather than 'Red-eye Reduction'.
+        let parser = CasioParser::new();
+        let mut data = Vec::new();
+
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&[0x04, 0x00]); // Tag: CASIO_FLASH_MODE (0x0004)
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x04, 0x00, 0x00, 0x00]); // Value: 4 (inline)
+
+        let mut tags = HashMap::new();
+        let result =
+            parser.parse_with_model(&data, ByteOrder::LittleEndian, Some("QV-3500EX"), &mut tags);
+
+        assert!(result.is_ok());
+        assert_eq!(tags.get("Casio:FlashMode"), Some(&"Off".to_string()));
+    }
+
+    #[test]
+    fn test_parse_iso_tag_uses_exiftool_name_not_ccd_sensitivity() {
+        // Casio.pm:168-172 (Main::0x0014): `Name => 'ISO'`. There is no
+        // `CCDSensitivity` tag in `Casio::Main`; a prior version of this
+        // registry invented that name, which also hid this value from
+        // `Composite:LightValue`'s `require: ISO` dependency.
+        let parser = CasioParser::new();
+        let mut data = Vec::new();
+
+        data.extend_from_slice(&[0x01, 0x00]); // 1 entry
+        data.extend_from_slice(&[0x14, 0x00]); // Tag: 0x0014
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // Count: 1
+        data.extend_from_slice(&[0x40, 0x00, 0x00, 0x00]); // Value: 64 (inline)
+
+        let mut tags = HashMap::new();
+        let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
+
+        assert!(result.is_ok());
+        assert_eq!(tags.get("Casio:ISO"), Some(&"64".to_string()));
+        assert_eq!(tags.get("Casio:CCDSensitivity"), None);
     }
 
     #[test]

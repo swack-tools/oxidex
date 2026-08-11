@@ -42,7 +42,15 @@ pub fn casio_registry() -> TagRegistry {
         .register_raw(0x000C, "Contrast")
         .register_raw(0x000D, "Saturation")
         // Camera Settings
-        .register_raw(0x0014, "CCDSensitivity")
+        //
+        // Casio.pm:168-172 (Main::0x0014) names this `ISO`, not
+        // `CCDSensitivity` -- there is no `CCDSensitivity` tag anywhere in
+        // `Casio::Main`. The wrong name here doubly hid the value: the
+        // Composite:LightValue formula (`src/composite/tables.rs`) resolves
+        // its `require: ISO` dependency by scanning for a `*:ISO` key, so a
+        // Casio file with no separate EXIF ISO tag lost both `ISO` and the
+        // `LightValue` composite derived from it.
+        .register_raw(0x0014, "ISO")
 }
 
 #[cfg(test)]
