@@ -1634,6 +1634,116 @@ class RunSweepIntegrationTests(GitRepoTestCase):
         self.assertEqual(tested, [])
         self.assertEqual(pushed, [])
 
+    def test_content_identical_to_an_already_open_pr_is_a_duplicate_not_a_second_pr(self):
+        """Measured 2026-08-11: nine open sweep PRs, the last seven of them
+        with byte-identical diffs. As long as nobody merges a sweep PR,
+        origin_ref never advances, so the next round's gap detection --
+        which only ever compares against origin_ref -- rediscovers the
+        exact same gap, re-fixes it under a fresh sha, and stamps it as
+        genuine news (it IS a new commit). The origin_ref zero-delta check
+        just above cannot catch this: the branch really is different from
+        origin_ref, just not from a PR still open from an earlier round.
+        This is the second gate: compare against every already-open sweep
+        PR's branch content too, before paying for the workspace suite, a
+        push, and a PR that would just be one more duplicate.
+        """
+        repo = self.make_repo()
+        # An earlier round already published this exact fix as an open PR.
+        git(repo, "branch", "sweep/tags-earlier", "main")
+        git(repo, "checkout", "-q", "sweep/tags-earlier")
+        self.commit_file(repo, "src/a.rs", "fn a() {}\n", "sweep: fix JPEG:Foo")
+        git(repo, "checkout", "-q", "main")
+
+        # THIS round's squad branch produces the identical fix under a
+        # fresh sha, still never merged to main -- exactly what a worker
+        # produces when gap detection rediscovers a gap only main's own
+        # (unchanged) content still has.
+        git(repo, "branch", "squad/canon", "main")
+        git(repo, "checkout", "-q", "squad/canon")
+        canon_sha = self.commit_file(
+            repo, "src/a.rs", "fn a() {}\n", "fix JPEG:Foo",
+            trailers=[("Format", "JPEG"), ("Tag", "MakerNotes:Foo")],
+        )
+        git(repo, "checkout", "-q", "main")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            config_toml = self._config_toml(Path(tmpdir), ["canon"])
+            squad_merge_loop.record_head(
+                squad_merge_loop.squad_status_file(home, "canon"), "workerhead", status="consumed",
+                patch_id="p1", format_name="JPEG", squad_sha=canon_sha, now_fn=lambda: 100,
+            )
+            sweep_state_path = home / "sweep-state.json"
+            tested, pushed, prs = [], [], []
+
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused",
+                comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+                config_path=config_toml, sweep_state_path=sweep_state_path, origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                cargo_test_workspace_fn=lambda repo_root: tested.append(1) or (True, "ok"),
+                push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
+                create_pr_fn=lambda *a, **kw: prs.append(a) or {"ok": True, "url": "u"},
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
+                open_sweep_prs_fn=lambda: [
+                    {"headRefName": "sweep/tags-earlier", "number": 42, "url": "https://example/pull/42"},
+                ],
+            )
+            cursor = overlord_sweep.load_sweep_state(sweep_state_path)
+
+        self.assertEqual(result["status"], "duplicate_of_open_pr")
+        self.assertEqual(result["duplicate_of"], "https://example/pull/42")
+        self.assertEqual(tested, [])
+        self.assertEqual(pushed, [])
+        self.assertEqual(prs, [])
+        # Advancing here is correct and required, same as zero_delta: the
+        # content IS already published (under someone else's open PR), so
+        # re-collecting the stamp forever would spin every round.
+        self.assertIn("canon", cursor["squads"])
+
+    def test_a_content_DIFFERENT_open_pr_does_not_veto_a_genuinely_new_fix(self):
+        """The duplicate gate must not become a second, accidental
+        zero_delta check: an open sweep PR fixing a DIFFERENT tag must
+        never block this round's own, different content from publishing."""
+        repo = self.make_repo()
+        git(repo, "branch", "sweep/tags-earlier", "main")
+        git(repo, "checkout", "-q", "sweep/tags-earlier")
+        self.commit_file(repo, "src/b.rs", "fn b() {}\n", "sweep: fix JPEG:Bar")
+        git(repo, "checkout", "-q", "main")
+
+        git(repo, "branch", "squad/canon", "main")
+        git(repo, "checkout", "-q", "squad/canon")
+        canon_sha = self.commit_file(
+            repo, "src/a.rs", "fn a() {}\n", "fix JPEG:Foo",
+            trailers=[("Format", "JPEG"), ("Tag", "MakerNotes:Foo")],
+        )
+        git(repo, "checkout", "-q", "main")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            config_toml = self._config_toml(Path(tmpdir), ["canon"])
+            squad_merge_loop.record_head(
+                squad_merge_loop.squad_status_file(home, "canon"), "workerhead", status="consumed",
+                patch_id="p1", format_name="JPEG", squad_sha=canon_sha, now_fn=lambda: 100,
+            )
+            pushed, prs = [], []
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused",
+                comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+                config_path=config_toml, sweep_state_path=home / "sweep-state.json", origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
+                push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
+                create_pr_fn=lambda *a, **kw: prs.append(a) or {"ok": True, "url": "u"},
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
+                open_sweep_prs_fn=lambda: [
+                    {"headRefName": "sweep/tags-earlier", "number": 42, "url": "https://example/pull/42"},
+                ],
+            )
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(pushed), 1)
+        self.assertEqual(len(prs), 1)
+
 
 class EmptyRevertIsNotAFailureTests(unittest.TestCase):
     """"Nothing to revert" and "cannot revert" are opposites.

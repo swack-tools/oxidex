@@ -1406,7 +1406,7 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
              config_path=DEFAULT_CONFIG_PATH, cargo_test_workspace_fn=None, create_pr_fn=None,
              push_branch_fn=None, fmt_fn=None, run_git=None, now_fn=time.time, log_fn=print,
              sweep_state_path=None, quarantine_path=None, sweep_review_log_path=None,
-             origin_ref=ORIGIN_MAIN, dispatcher_lock_path=None):
+             origin_ref=ORIGIN_MAIN, dispatcher_lock_path=None, open_sweep_prs_fn=None):
     """One full overlord sweep pass (spec M4). See module docstring for
     the step-by-step breakdown. Returns a summary dict whose "status"
     is one of: "no_news", "branch_cut_failed", "nothing_merged",
@@ -1414,7 +1414,9 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
     revert a candidate, or ended without a passing recheck -- see
     bisect_sweep_failure), "reattach_failed", "zero_delta" (the assembled
     branch is tree-identical to origin_ref: nothing to publish),
-    "workspace_tests_failed", "push_failed", "pr_create_failed", "ok".
+    "duplicate_of_open_pr" (tree-identical to an ALREADY-OPEN sweep PR --
+    see the check below), "workspace_tests_failed", "push_failed",
+    "pr_create_failed", "ok".
     """
     run_git = run_git or default_run_git
     cargo_test_workspace_fn = cargo_test_workspace_fn or _real_cargo_test_workspace
@@ -1669,6 +1671,66 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
             "failed_squads": failed_squads, "bisection": bisection_result, "preflight": health,
         }
 
+    # A second idempotency gate, same placement and same reasoning as the
+    # origin_ref check just above, for the content this repo's own
+    # "the fleet publishes, it never merges" design leaves sitting on
+    # origin: as long as nobody merges a sweep PR, origin_ref never
+    # advances, so the NEXT round's gap detection (which only ever
+    # compares against origin_ref) rediscovers the exact same gap,
+    # re-fixes it, and produces a genuinely NEW stamp (new sha, new ts --
+    # collect_green_stamps correctly treats it as news) whose tree is
+    # nonetheless byte-identical to a PR still sitting open from an
+    # earlier round. Measured 2026-08-11: nine open PRs
+    # (sweep/tags-2026-08-10-1 through sweep/tags-2026-08-11-8), the last
+    # seven of them with IDENTICAL diffs -- the same three tags
+    # (Composite:Duration, DjVu:Note, XMP:ComponentsConfiguration)
+    # re-solved and re-published every round for hours, each one costing
+    # a full workspace suite, a push and a CI cycle for a reviewer to
+    # eventually discover duplicates each other.
+    #
+    # open_sweep_prs_fn is optional (None in every existing test and any
+    # caller that predates this check) so this is additive: skip
+    # entirely rather than fail a sweep over a `gh` hiccup.
+    if open_sweep_prs_fn is not None:
+        # origin_ref is "<remote>/<branch>" in production (ORIGIN_MAIN =
+        # "origin/main") and a bare local branch name ("main") in tests
+        # that want no real remote at all -- same split every other
+        # remote-touching test in this suite avoids by construction. Mirror
+        # that here: only fetch when origin_ref actually names a remote,
+        # otherwise compare directly against a same-named local ref (what a
+        # test can set up with a plain `git branch <head> <sha>`).
+        remote = origin_ref.split("/", 1)[0] if "/" in origin_ref else None
+        open_prs = open_sweep_prs_fn() or []
+        for pr in open_prs:
+            head = pr.get("headRefName") if isinstance(pr, dict) else None
+            if not head or head == branch:
+                continue
+            candidate_ref = head
+            if remote:
+                fetch_rc, _out, _err = run_git(
+                    ["fetch", remote, f"{head}:refs/remotes/{remote}/{head}"], repo_root)
+                if fetch_rc != 0:
+                    # The PR's branch may have been deleted, renamed, or this
+                    # worktree's remote may be unreachable this round --
+                    # either way, one unfetchable candidate must cost
+                    # checking that candidate, never the whole duplicate scan.
+                    continue
+                candidate_ref = f"refs/remotes/{remote}/{head}"
+            cmp_rc, _out2, _err2 = run_git(["diff", "--quiet", f"{candidate_ref}..HEAD"], repo_root)
+            if cmp_rc == 0:
+                pr_ref = pr.get("url") or pr.get("number") or head
+                log_fn(f"{branch} is tree-identical to already-open {pr_ref} ({head}) -- skipping "
+                       "the workspace suite, the fmt commit, the push and a duplicate PR; advancing "
+                       "the cursor so these stamps do not resurface next round")
+                durable_squads.update(merge_infos.keys())
+                persist_cursor(durable_squads)
+                clear_parks(merge_infos.keys())
+                return {
+                    "status": "duplicate_of_open_pr", "branch": branch, "duplicate_of": pr_ref,
+                    "merged_squads": sorted(merge_infos), "failed_squads": failed_squads,
+                    "bisection": bisection_result, "preflight": health,
+                }
+
     all_shas = []
     for squad, info in merge_infos.items():
         all_shas.extend(commits_contributed(repo_root, info, run_git))
@@ -1902,10 +1964,11 @@ def main(argv=None):
         print(f"  retry with: gh pr create --head {result.get('branch')} --base main")
     elif result.get("pr") is not None:
         print(f"PR: {result['pr']}")
-    # "zero_delta" joins the success set: the branch was tree-identical to
-    # origin/main, so there was genuinely nothing to publish -- the same
-    # kind of legitimate no-op as "no_news", not a failure to report.
-    return 0 if result.get("status") in ("ok", "no_news", "zero_delta") else 1
+    # "zero_delta" and "duplicate_of_open_pr" join the success set: both
+    # mean the branch had genuinely nothing NEW to publish (tree-identical
+    # to origin/main, or to an already-open sweep PR) -- the same kind of
+    # legitimate no-op as "no_news", not a failure to report.
+    return 0 if result.get("status") in ("ok", "no_news", "zero_delta", "duplicate_of_open_pr") else 1
 
 
 if __name__ == "__main__":
