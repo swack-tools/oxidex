@@ -11,7 +11,7 @@ use super::atom_parser::Atom;
 use super::tag_mapping::atom_to_exiftool_tag;
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::exiftool_tables::{DecodedValue, decode_binary_table, find_table};
-use crate::io::timestamp::mac_time_to_exif_datetime;
+use crate::io::timestamp::{mac_time_to_exif_datetime, mac_time_to_local_exif_datetime};
 use crate::io::{ByteOrder, EndianReader};
 use crate::parsers::tiff::ifd_parser::{ByteOrder as TiffByteOrder, parse_ifd};
 use crate::tag_db::lookup_tag_name;
@@ -48,6 +48,24 @@ fn tiff_to_byte_order(order: TiffByteOrder) -> ByteOrder {
     }
 }
 
+/// Renders an mvhd/tkhd/mdhd Mac timestamp the way QuickTime.pm's shared
+/// `%timeInfo` PrintConv does (QuickTime.pm:242-291): local time with a UTC
+/// offset suffix when `is_cr3` (i.e. `$$self{FileType} eq "CR3"`,
+/// QuickTime.pm:271,280), otherwise the zone-less UTC rendering every other
+/// QuickTime-family container gets. See
+/// [`mac_time_to_local_exif_datetime`] for the CR3 citation in full.
+///
+/// The raw `mac_time` instant is never altered -- only which string it is
+/// rendered to changes.
+fn render_quicktime_datetime(mac_time: u64, is_cr3: bool) -> String {
+    if is_cr3 {
+        mac_time_to_local_exif_datetime(mac_time)
+            .unwrap_or_else(|| format_mac_time_legacy(mac_time))
+    } else {
+        mac_time_to_exif_datetime(mac_time).unwrap_or_else(|| format_mac_time_legacy(mac_time))
+    }
+}
+
 /// Extract metadata from a single track atom
 ///
 /// Returns Err if required container atoms (mdia, minf, stbl) are missing.
@@ -57,10 +75,11 @@ fn extract_track_metadata(
     trak: &Atom,
     metadata: &mut MetadataMap,
     index: usize,
+    is_cr3: bool,
 ) -> Result<(), String> {
     // Extract track header - optional
     if let Some(tkhd) = trak.find_child("tkhd") {
-        let _ = extract_track_header(&tkhd, metadata, index);
+        let _ = extract_track_header(&tkhd, metadata, index, is_cr3);
     }
 
     // Extract track aperture mode dimensions (tapt) - optional
@@ -86,7 +105,7 @@ fn extract_track_metadata(
 
     // Extract media header - optional
     if let Some(mdhd) = mdia.find_child("mdhd") {
-        let _ = extract_media_header(&mdhd, metadata, index);
+        let _ = extract_media_header(&mdhd, metadata, index, is_cr3);
     }
 
     // Media information - required for sample table access
@@ -301,8 +320,13 @@ fn extract_track_aperture(
     Ok(())
 }
 
-/// Extract all metadata from QuickTime/MP4 atoms
-pub fn extract_metadata(root_atoms: &[Atom]) -> Result<MetadataMap, String> {
+/// Extract all metadata from QuickTime/MP4 atoms.
+///
+/// `is_cr3` selects ExifTool's CR3-only local-time rendering for
+/// mvhd/tkhd/mdhd timestamps (QuickTime.pm:242-291; see
+/// [`render_quicktime_datetime`]). Every other caller -- plain MOV/MP4/AVIF/
+/// HEIF -- passes `false` and keeps today's zone-less UTC rendering.
+pub fn extract_metadata(root_atoms: &[Atom], is_cr3: bool) -> Result<MetadataMap, String> {
     let mut metadata = MetadataMap::with_capacity(50);
 
     // Extract file-level metadata from ftyp and mdat atoms
@@ -317,7 +341,7 @@ pub fn extract_metadata(root_atoms: &[Atom]) -> Result<MetadataMap, String> {
     if let Some(moov) = moov {
         // Extract movie header metadata (mvhd)
         if let Some(mvhd) = moov.find_child("mvhd") {
-            extract_movie_header(&mvhd, &mut metadata)?;
+            extract_movie_header(&mvhd, &mut metadata, is_cr3)?;
         }
 
         // Extract track headers (tkhd) from all trak atoms
@@ -330,7 +354,7 @@ pub fn extract_metadata(root_atoms: &[Atom]) -> Result<MetadataMap, String> {
             for (index, trak) in trak_atoms.iter().enumerate() {
                 // Ignore errors - missing atoms in a track should not prevent
                 // processing other tracks (preserves original behavior)
-                let _ = extract_track_metadata(trak, &mut metadata, index);
+                let _ = extract_track_metadata(trak, &mut metadata, index, is_cr3);
             }
         }
 
@@ -659,7 +683,11 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
 }
 
 /// Extract movie header metadata from mvhd atom
-fn extract_movie_header(mvhd: &Atom, metadata: &mut MetadataMap) -> Result<(), String> {
+fn extract_movie_header(
+    mvhd: &Atom,
+    metadata: &mut MetadataMap,
+    is_cr3: bool,
+) -> Result<(), String> {
     if mvhd.data.len() < 100 {
         return Ok(());
     }
@@ -694,12 +722,10 @@ fn extract_movie_header(mvhd: &Atom, metadata: &mut MetadataMap) -> Result<(), S
         TagValue::Integer(version as i64),
     );
 
-    // Add both legacy CreateDate/ModifyDate and new MediaCreateDate/MediaModifyDate
-    // Use shared timestamp utility for dates after 1970, fallback to legacy for older dates
-    let create_date_str = mac_time_to_exif_datetime(creation_time)
-        .unwrap_or_else(|| format_mac_time_legacy(creation_time));
-    let modify_date_str = mac_time_to_exif_datetime(modification_time)
-        .unwrap_or_else(|| format_mac_time_legacy(modification_time));
+    // Add both legacy CreateDate/ModifyDate and new MediaCreateDate/MediaModifyDate.
+    // Local-time-with-offset for CR3, zone-less UTC otherwise (QuickTime.pm:242-291).
+    let create_date_str = render_quicktime_datetime(creation_time, is_cr3);
+    let modify_date_str = render_quicktime_datetime(modification_time, is_cr3);
 
     metadata.insert(
         "QuickTime:CreateDate".to_string(),
@@ -814,6 +840,7 @@ fn extract_track_header(
     tkhd: &Atom,
     metadata: &mut MetadataMap,
     track_index: usize,
+    is_cr3: bool,
 ) -> Result<(), String> {
     if tkhd.data.len() < 84 {
         return Ok(());
@@ -865,12 +892,11 @@ fn extract_track_header(
         TagValue::Integer(version as i64),
     );
 
-    // Add track-specific timestamp tags
-    // Use shared timestamp utility for dates after 1970, fallback to legacy for older dates
-    let create_date_str = mac_time_to_exif_datetime(creation_time)
-        .unwrap_or_else(|| format_mac_time_legacy(creation_time));
-    let modify_date_str = mac_time_to_exif_datetime(modification_time)
-        .unwrap_or_else(|| format_mac_time_legacy(modification_time));
+    // Add track-specific timestamp tags. TrackCreateDate/TrackModifyDate share
+    // QuickTime.pm's %timeInfo (QuickTime.pm:1507-1518) with mvhd/mdhd, so they
+    // get the same CR3-only local-time rendering.
+    let create_date_str = render_quicktime_datetime(creation_time, is_cr3);
+    let modify_date_str = render_quicktime_datetime(modification_time, is_cr3);
 
     metadata.insert(
         format!("QuickTime:TrackCreateDate{}", track_suffix),
@@ -960,6 +986,7 @@ fn extract_media_header(
     mdhd: &Atom,
     metadata: &mut MetadataMap,
     track_index: usize,
+    is_cr3: bool,
 ) -> Result<(), String> {
     if mdhd.data.len() < 24 {
         return Ok(());
@@ -1003,12 +1030,10 @@ fn extract_media_header(
         )
     };
 
-    // Media timestamps
-    // Use shared timestamp utility for dates after 1970, fallback to legacy for older dates
-    let create_date_str = mac_time_to_exif_datetime(creation_time)
-        .unwrap_or_else(|| format_mac_time_legacy(creation_time));
-    let modify_date_str = mac_time_to_exif_datetime(modification_time)
-        .unwrap_or_else(|| format_mac_time_legacy(modification_time));
+    // Media timestamps. mdhd's CreateDate/ModifyDate reuse %timeInfo too
+    // (QuickTime.pm:1358), so they get the same CR3-only local-time rendering.
+    let create_date_str = render_quicktime_datetime(creation_time, is_cr3);
+    let modify_date_str = render_quicktime_datetime(modification_time, is_cr3);
 
     metadata.insert(
         format!("QuickTime:MediaCreateDate{}", track_suffix),

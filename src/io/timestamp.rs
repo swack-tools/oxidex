@@ -114,6 +114,82 @@ pub fn mac_time_to_exif_datetime(mac_time: u64) -> Option<String> {
     ))
 }
 
+/// Converts a Mac/QuickTime timestamp to ExifTool's *local-time* datetime
+/// rendering, used only for Canon CR3 files.
+///
+/// QuickTime.pm's shared `%timeInfo` block (QuickTime.pm:242-291, reused
+/// verbatim for CreateDate/ModifyDate/MediaCreateDate/MediaModifyDate/
+/// TrackCreateDate/TrackModifyDate) renders mvhd/tkhd/mdhd timestamps as:
+/// ```text
+/// ValueConv => 'ConvertUnixTime($val, $self->Options("QuickTimeUTC") || $$self{FileType} eq "CR3")',
+/// PrintConv => '$self->ConvertDateTime($val)',
+/// ```
+/// (QuickTime.pm:280,287). `ConvertUnixTime`'s second argument selects
+/// `localtime` over `gmtime` and appends a `TimeZoneString` offset suffix
+/// (ExifTool.pm:6784-6810); with no `QuickTimeUTC` option set, that argument
+/// is `$$self{FileType} eq "CR3"` -- true only when Canon's `CNCV` box
+/// (Canon.pm's `%Canon::uuid` `CNCV` entry, `OverrideFileType($1) if $val =~
+/// /^Canon(\w{3})/i`) resolved the file to `CR3`, never `CRM` (Canon RAW
+/// movie) and never a generic QuickTime/MP4 container. All CR3 files store
+/// this field as a real UTC instant (`# (all CR3 files store UTC times -
+/// PH)`, QuickTime.pm:279) -- it is the *rendering*, not the stored value,
+/// that changes with file type.
+///
+/// The stored instant itself is left untouched: this only changes which
+/// string the same Unix time formats to, mirroring
+/// [`mac_time_to_exif_datetime`] but through the local system time zone.
+pub fn mac_time_to_local_exif_datetime(mac_time: u64) -> Option<String> {
+    let unix = mac_time_to_unix(mac_time)?;
+    use chrono::{Datelike, Offset, Timelike};
+    let utc = chrono::DateTime::from_timestamp(unix, 0)?;
+    let local = utc.with_timezone(&chrono::Local);
+    let offset_secs = local.offset().fix().local_minus_utc();
+    Some(format_local_datetime(
+        local.year(),
+        local.month(),
+        local.day(),
+        local.hour(),
+        local.minute(),
+        local.second(),
+        offset_secs,
+    ))
+}
+
+/// Pure formatter behind [`mac_time_to_local_exif_datetime`]: date/time
+/// components plus a UTC offset in seconds -> ExifTool's
+/// `YYYY:MM:DD HH:MM:SS±ZZ:ZZ` rendering. Split out from the system-timezone
+/// lookup so the CR3 rendering rule can be unit tested with an explicit,
+/// hardcoded offset instead of depending on (and mutating) the process's TZ.
+fn format_local_datetime(
+    y: i32,
+    mo: u32,
+    d: u32,
+    h: u32,
+    mi: u32,
+    s: u32,
+    offset_secs: i32,
+) -> String {
+    format!(
+        "{:04}:{:02}:{:02} {:02}:{:02}:{:02}{}",
+        y,
+        mo,
+        d,
+        h,
+        mi,
+        s,
+        timezone_string(offset_secs)
+    )
+}
+
+/// Formats a UTC-offset suffix the way ExifTool's `TimeZoneString`
+/// (ExifTool.pm:6764) does: sign, then `HH:MM`, rounded to the nearest whole
+/// minute.
+fn timezone_string(offset_secs: i32) -> String {
+    let sign = if offset_secs < 0 { '-' } else { '+' };
+    let offset_min = (offset_secs.unsigned_abs() + 30) / 60;
+    format!("{}{:02}:{:02}", sign, offset_min / 60, offset_min % 60)
+}
+
 /// Converts Unix timestamp to date/time components.
 /// Returns (year, month, day, hour, minute, second).
 fn unix_to_datetime(unix_time: i64) -> (i32, u32, u32, u32, u32, u32) {
@@ -355,6 +431,32 @@ mod tests {
             assert!(iso.contains("2024-12-31"));
             assert!(iso.contains("23:59:59"));
         }
+    }
+
+    #[test]
+    fn test_format_local_datetime_matches_cr3_ground_truth() {
+        // Ground truth: pinned oracle (`/usr/bin/perl5.34 -I
+        // /tmp/oxidex-exiftool-cache/exiftool/lib
+        // /tmp/oxidex-exiftool-cache/exiftool/exiftool`, ExifTool 13.59),
+        // `TZ=America/Chicago exiftool -a -G1 -s
+        // t/images/CanonRaw.cr3` reports `QuickTime:CreateDate =
+        // 2018:02:21 06:08:56-06:00`. America/Chicago is CST (UTC-6, no DST)
+        // in February, so this pins the pure formatter against that exact
+        // offset without touching the process's TZ.
+        assert_eq!(
+            format_local_datetime(2018, 2, 21, 6, 8, 56, -21600),
+            "2018:02:21 06:08:56-06:00"
+        );
+    }
+
+    #[test]
+    fn test_timezone_string_rounds_to_nearest_minute() {
+        assert_eq!(timezone_string(-21600), "-06:00");
+        assert_eq!(timezone_string(0), "+00:00");
+        // 30s over a whole minute rounds up (matches ExifTool.pm:6764's
+        // `int(($tz>=0 ? $tz+30 : $tz-30) / 60)` style rounding).
+        assert_eq!(timezone_string(31 * 60), "+00:31");
+        assert_eq!(timezone_string(-(19800)), "-05:30"); // e.g. IST-style half-hour offset
     }
 
     #[test]

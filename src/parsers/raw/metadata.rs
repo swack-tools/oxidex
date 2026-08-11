@@ -4702,17 +4702,6 @@ fn subslice_offset(whole: &[u8], part: &[u8]) -> Option<usize> {
 /// `_format` is unused: a CR3 names its own file type in the CNCV box (CR3 vs
 /// CRM), which is more specific than the RawFormat variant that got us here.
 fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
-    // CR3 is an ISO Base Media container, so every `ftyp`/`moov`/`trak` box in
-    // it is the same box an MP4 carries. Walk it with the QuickTime box parser
-    // before touching the Canon boxes: this is the whole QuickTime tag group,
-    // and none of it needed new code.
-    let mut metadata = match crate::parsers::quicktime::parse_quicktime_metadata_from_bytes(data) {
-        Ok(map) => map,
-        // A CR3 whose box tree does not parse still has readable CMT boxes
-        // below (find_cr3_box scans rather than walks), so this is not fatal.
-        Err(_) => MetadataMap::new(),
-    };
-
     // File type. ExifTool starts from the `ftyp` major brand `crx ` -- which on
     // its own only says "Canon Raw", shared by CR3 and CRM -- and then lets the
     // CNCV box override it: Canon.pm's %Canon::uuid CNCV entry is
@@ -4723,6 +4712,13 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
     // all, and left MIMEType at the extension table's "application/octet-stream"
     // fallback. The tag-comparison harness skips the File group entirely, so
     // none of that was visible in coverage numbers.
+    //
+    // This has to run *before* the QuickTime box walk below: QuickTime.pm's
+    // %timeInfo PrintConv (QuickTime.pm:242-291) renders mvhd/tkhd/mdhd
+    // timestamps in local time with a UTC offset suffix only when
+    // `$$self{FileType} eq 'CR3'` (QuickTime.pm:271,280) -- never for CRM, and
+    // never for a generic QuickTime/MP4 container -- so the extractor needs to
+    // know CR3-vs-CRM before it renders a single CreateDate/ModifyDate string.
     let compressor_version = find_cr3_box(data, b"CNCV").and_then(|payload| {
         let text = String::from_utf8_lossy(payload)
             .trim_end_matches('\0')
@@ -4730,16 +4726,32 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
             .to_string();
         if text.is_empty() { None } else { Some(text) }
     });
+    let file_type = compressor_version
+        .as_deref()
+        .and_then(cr3_file_type_from_compressor_version)
+        .unwrap_or("CR3");
+    let is_cr3 = file_type == "CR3";
+
+    // CR3 is an ISO Base Media container, so every `ftyp`/`moov`/`trak` box in
+    // it is the same box an MP4 carries. Walk it with the QuickTime box parser
+    // before touching the Canon boxes: this is the whole QuickTime tag group,
+    // and none of it needed new code.
+    let mut metadata =
+        match crate::parsers::quicktime::parse_quicktime_metadata_from_bytes_with_options(
+            data, is_cr3,
+        ) {
+            Ok(map) => map,
+            // A CR3 whose box tree does not parse still has readable CMT boxes
+            // below (find_cr3_box scans rather than walks), so this is not fatal.
+            Err(_) => MetadataMap::new(),
+        };
+
     if let Some(version) = &compressor_version {
         metadata.insert(
             "Canon:CompressorVersion".to_string(),
             TagValue::new_string(version.clone()),
         );
     }
-    let file_type = compressor_version
-        .as_deref()
-        .and_then(cr3_file_type_from_compressor_version)
-        .unwrap_or("CR3");
     metadata.insert(
         "File:FileType".to_string(),
         TagValue::new_string(file_type.to_string()),

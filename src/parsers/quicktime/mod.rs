@@ -113,13 +113,35 @@ pub fn parse_quicktime_metadata(reader: &dyn FileReader) -> Result<MetadataMap, 
 ///
 /// No signature check: the caller has already identified the container.
 pub fn parse_quicktime_metadata_from_bytes(data: &[u8]) -> Result<MetadataMap, String> {
+    parse_quicktime_metadata_from_bytes_with_options(data, false)
+}
+
+/// Same as [`parse_quicktime_metadata_from_bytes`], with `is_cr3` selecting
+/// ExifTool's Canon CR3-only local-time rendering for mvhd/tkhd/mdhd
+/// timestamps.
+///
+/// QuickTime.pm's shared `%timeInfo` PrintConv (QuickTime.pm:242-291) renders
+/// CreateDate/ModifyDate/MediaCreateDate/MediaModifyDate/TrackCreateDate/
+/// TrackModifyDate through `ConvertUnixTime($val, ... || $$self{FileType} eq
+/// "CR3")` (QuickTime.pm:280) -- local time with a UTC offset suffix only
+/// when the file resolved to `CR3` (never `CRM`, the Canon RAW movie sibling,
+/// and never a generic QuickTime/MP4 container). The raw stored instant is
+/// unchanged either way; only the rendered string differs. The caller
+/// (`parse_cr3` in `crate::parsers::raw::metadata`) determines `CR3` vs `CRM`
+/// from the `CNCV` box the same way ExifTool does (Canon.pm's `%Canon::uuid`
+/// `CNCV` entry, `OverrideFileType($1) if $val =~ /^Canon(\w{3})/i`), so it
+/// is passed in rather than re-derived here from the `ftyp` brand alone.
+pub fn parse_quicktime_metadata_from_bytes_with_options(
+    data: &[u8],
+    is_cr3: bool,
+) -> Result<MetadataMap, String> {
     // Parse top-level atoms
     let atoms = atom_parser::parse_atoms(data)
         .map_err(|e| format!("Failed to parse atoms: {}", e))?
         .1;
 
     // Extract metadata from the atoms
-    metadata_extractor::extract_metadata(&atoms)
+    metadata_extractor::extract_metadata(&atoms, is_cr3)
 }
 
 /// Validate QuickTime/MP4 file signature.
