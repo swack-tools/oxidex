@@ -47,6 +47,30 @@ use crate::error::{ExifToolError, Result};
 /// (`XMP.pm`, `%ignoreNamespace`).
 const IGNORED_PREFIXES: [&str; 6] = ["x", "rdf", "xmlns", "xml", "svg", "office"];
 
+/// ExifTool's own namespace URI (`XMP.pm`'s `%nsURI`: `et => 'http://ns.exiftool.org/1.0/'`).
+/// The `.ca` alternate is honored too -- `%uri2ns`'s own comment is "(allow
+/// exiftool.ca as well as exiftool.org)" -- since a document can bind either
+/// one to the `et` prefix and ExifTool treats both as itself.
+const ET_NAMESPACE_URIS: [&str; 2] = ["http://ns.exiftool.org/1.0/", "http://ns.exiftool.ca/1.0/"];
+
+/// ExifTool's own control properties in its RDF/XML (`-X`) output (`XMP.pm`
+/// lines 264-265, `%ignoreEtProp`; `et:tagid` is called out there as historic).
+/// These annotate a real property -- `et:id`, generated alongside every tag in
+/// ExifTool's own RDF dump, carries that tag's original numeric/string ID --
+/// and must never themselves generate a tag name, nor make the property they
+/// annotate look like a struct merely because it carries a "foreign" prefixed
+/// attribute.
+const ET_IGNORED_PROPS: [&str; 8] = [
+    "desc", "prt", "val", "id", "tagid", "toolkit", "table", "index",
+];
+
+/// Whether `local` in the ExifTool namespace (resolved via `uri`, not the
+/// literal `et` prefix -- a document may bind any prefix to that URI) is one
+/// of `%ignoreEtProp`'s control properties.
+pub(super) fn is_ignored_et_attr(uri: Option<&str>, local: &str) -> bool {
+    uri.is_some_and(|uri| ET_NAMESPACE_URIS.contains(&uri)) && ET_IGNORED_PROPS.contains(&local)
+}
+
 const MWG_REGIONS_NS: &str = "http://www.metadataworkinggroup.com/schemas/regions/";
 const MWG_COLLECTIONS_NS: &str = "http://www.metadataworkinggroup.com/schemas/collections/";
 const MWG_KEYWORDS_NS: &str = "http://www.metadataworkinggroup.com/schemas/keywords/";
@@ -288,18 +312,16 @@ fn push_frame(
         ExifToolError::parse_error(format!("Invalid UTF-8 in XMP element name: {}", e))
     })?;
     let prefix = NamespaceResolver::extract_prefix(qname).unwrap_or("");
-    let ignored = IGNORED_PREFIXES.contains(&prefix);
+    let uri = resolver.resolve_prefix(prefix).map(str::to_string);
+    let local = NamespaceResolver::extract_local_name(qname);
+    let ignored = IGNORED_PREFIXES.contains(&prefix) || is_ignored_et_attr(uri.as_deref(), local);
 
     if let Some(parent) = stack.last_mut() {
         parent.child_elements += 1;
     }
 
-    let uri = resolver.resolve_prefix(prefix).map(str::to_string);
     Ok(Frame {
-        part: (!ignored).then(|| {
-            let local = NamespaceResolver::extract_local_name(qname);
-            tag_id_segment(rename_field(uri.as_deref(), local))
-        }),
+        part: (!ignored).then(|| tag_id_segment(rename_field(uri.as_deref(), local))),
         uri,
         lang: lang_attribute(element)?,
         // An element with no content of its own takes its value from
@@ -312,7 +334,10 @@ fn push_frame(
             std::str::from_utf8(attr.key.as_ref())
                 .ok()
                 .and_then(|key| key.split_once(':'))
-                .is_some_and(|(prefix, _)| !IGNORED_PREFIXES.contains(&prefix))
+                .is_some_and(|(prefix, local)| {
+                    !IGNORED_PREFIXES.contains(&prefix)
+                        && !is_ignored_et_attr(resolver.resolve_prefix(prefix), local)
+                })
         }),
     })
 }
@@ -362,6 +387,10 @@ fn emit_attributes(
         if IGNORED_PREFIXES.contains(&prefix) {
             continue;
         }
+        let uri = resolver.resolve_prefix(prefix);
+        if is_ignored_et_attr(uri, local) {
+            continue; // et:desc/et:prt/et:val/et:id/et:tagid/et:toolkit/et:table/et:index
+        }
         let Ok(value) = std::str::from_utf8(&attr.value) else {
             continue;
         };
@@ -369,7 +398,6 @@ fn emit_attributes(
         if value.is_empty() {
             continue;
         }
-        let uri = resolver.resolve_prefix(prefix);
         let leaf = rename_field(uri, local);
         if let Some(tag) = flat_tag_name(stack, Some(&tag_id_segment(leaf))) {
             record(collected, tag, value.to_string());
@@ -660,6 +688,10 @@ fn shorthand_fields(
         if IGNORED_PREFIXES.contains(&prefix) {
             continue;
         }
+        let uri = resolver.resolve_prefix(prefix);
+        if is_ignored_et_attr(uri, local) {
+            continue;
+        }
         let Ok(value) = std::str::from_utf8(&attr.value) else {
             continue;
         };
@@ -667,7 +699,6 @@ fn shorthand_fields(
         if value.is_empty() {
             continue;
         }
-        let uri = resolver.resolve_prefix(prefix);
         out.push((tag_id_segment(rename_field(uri, local)), value.to_string()));
     }
     Ok(out)
@@ -935,6 +966,38 @@ mod tests {
         assert_eq!(
             value_of(&tags, "XMP:LookName-de-DE").as_deref(),
             Some("Adobe Farbe")
+        );
+    }
+
+    /// `XMP.pm`:264-265, `%ignoreEtProp` -- ExifTool's own `et:id`/`et:desc`/
+    /// etc. control attributes never generate a tag, even when they sit on a
+    /// genuine struct field (as opposed to the top-level leaf case covered by
+    /// `rdf_parser`'s own test, where they also must not make the leaf look
+    /// like a struct in the first place). Keyed on the resolved namespace URI
+    /// (`http://ns.exiftool.org/1.0/`), so an arbitrary prefix (`zz` here,
+    /// not the conventional `et`) is still recognized.
+    #[test]
+    fn et_control_attributes_inside_a_struct_are_ignored() {
+        const XMP: &[u8] = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+ <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+     xmlns:zz="http://ns.exiftool.org/1.0/">
+  <crs:Look rdf:parseType="Resource">
+   <crs:Name zz:id="9" zz:desc="the look name">Adobe Color</crs:Name>
+  </crs:Look>
+ </rdf:Description>
+</rdf:RDF>"#;
+        let tags = extract_flattened_struct_fields(XMP).unwrap();
+        assert_eq!(
+            value_of(&tags, "XMP:LookName").as_deref(),
+            Some("Adobe Color")
+        );
+        assert!(
+            value_of(&tags, "XMP:LookNameId").is_none(),
+            "et:id must not invent a field: {tags:?}"
+        );
+        assert!(
+            value_of(&tags, "XMP:LookNameDesc").is_none(),
+            "et:desc must not invent a field: {tags:?}"
         );
     }
 }

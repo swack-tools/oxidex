@@ -220,7 +220,7 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
                         collection_values.clear();
                         collection_langs.clear();
                         inside_collection = false;
-                        property_is_struct = has_shorthand_fields(&e);
+                        property_is_struct = has_shorthand_fields(&e, &resolver);
                         property_depth = depth;
                     }
                 } else if current_property.is_some() {
@@ -2215,12 +2215,26 @@ const FLAT_NAME_SUPPRESSED: &[&str] = &[
 /// Reports whether a structure property's name is dropped from flattened IDs.
 /// Whether `element` carries RDF shorthand attributes -- namespaced attributes
 /// that are structure fields rather than XML bookkeeping.
-fn has_shorthand_fields(element: &BytesStart) -> bool {
+///
+/// ExifTool's own `et:desc`/`et:prt`/`et:val`/`et:id`/`et:tagid`/`et:toolkit`/
+/// `et:table`/`et:index` control attributes (`XMP.pm`:264-265, `%ignoreEtProp`)
+/// don't count: ExifTool's own `-X` output stamps an `et:id` on every single
+/// property it writes, and without this exclusion every one of those
+/// properties looks like a struct and its real leaf value is swallowed
+/// (`property_is_struct` below reports only flattened fields for a struct, and
+/// there is no flattened field to report -- `et:id` itself is ignored too).
+fn has_shorthand_fields(element: &BytesStart, resolver: &NamespaceResolver) -> bool {
     element.attributes().flatten().any(|attr| {
         std::str::from_utf8(attr.key.as_ref())
             .ok()
             .and_then(|key| key.split_once(':'))
-            .is_some_and(|(prefix, _)| !matches!(prefix, "rdf" | "xml" | "xmlns" | "x"))
+            .is_some_and(|(prefix, local)| {
+                !matches!(prefix, "rdf" | "xml" | "xmlns" | "x")
+                    && !super::struct_flatten::is_ignored_et_attr(
+                        resolver.resolve_prefix(prefix),
+                        local,
+                    )
+            })
     })
 }
 
@@ -2594,7 +2608,16 @@ fn extract_description_attributes(
         // These are namespace-prefixed attributes like xmp:Rating="5".
         // An EMPTY one is still a property ExifTool reports (with an empty
         // value) -- GCamera:GFileMetadata="" on GooglePixel10.jpg.
-        if key.contains(':') {
+        if let Some((prefix, local)) = key.split_once(':') {
+            // ExifTool's own control attributes (`XMP.pm`:264-265,
+            // `%ignoreEtProp`) never become a tag, wherever they sit --
+            // including directly on `rdf:Description` like `et:toolkit` in
+            // ExifTool's own `-X` dump (`t/images/XMP.xml`), where
+            // `%recognizedAttrs{'et:toolkit'} = 1` (not a `[tbl,id,name]`
+            // triple) marks it recognized-but-silent rather than a tag.
+            if super::struct_flatten::is_ignored_et_attr(resolver.resolve_prefix(prefix), local) {
+                continue;
+            }
             let prefixed_name = format_tag_name(key, resolver);
             results.push((prefixed_name, value.trim().to_string()));
         }
@@ -6040,5 +6063,65 @@ mod top_level_struct_tests {
                 .map(|(_, values)| values.as_slice()),
             Some([r"C:\some path\file.ext".to_string()].as_slice())
         );
+    }
+
+    /// ExifTool's own `-X` RDF dump (`t/images/XMP.xml` is exactly this,
+    /// generated from `exiftool -X Nikon.jpg`) stamps `et:id` -- and
+    /// sometimes `et:desc`/`et:toolkit`/etc. -- on essentially every property
+    /// it writes. `XMP.pm` lines 264-265 (`%ignoreEtProp`) list exactly the
+    /// eight control attributes that must never become a tag of their own:
+    /// `et:desc`, `et:prt`, `et:val`, `et:id`, `et:tagid` ("historic" per
+    /// ExifTool's own comment), `et:toolkit`, `et:table`, `et:index`. Before
+    /// this test's fix, `MakeId`, `FileTypeId`, etc. were invented from every
+    /// `et:id` (`~80` of them on the real `XMP.xml`, one per property), and
+    /// the real leaf (`Make`) vanished entirely: an element carrying any
+    /// "foreign" prefixed attribute looked like a struct, and a struct
+    /// reports only its flattened fields -- which for `et:id` don't exist
+    /// once it's correctly ignored.
+    ///
+    /// ExifTool keys the ignore on the property's RESOLVED namespace URI
+    /// (`XMP.pm`'s `%nsURI`: `et => 'http://ns.exiftool.org/1.0/'`), not the
+    /// literal `et` prefix -- a document is free to bind any prefix to that
+    /// URI. This fixture uses the arbitrary prefix `zz` to prove the ignore
+    /// follows the URI.
+    #[test]
+    fn exiftool_control_attributes_are_ignored_by_resolved_uri_not_prefix() {
+        let xml = br#"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+ <rdf:Description rdf:about=''
+     xmlns:zz='http://ns.exiftool.org/1.0/'
+     xmlns:IFD0='http://ns.exiftool.org/EXIF/IFD0/1.0/'
+     zz:toolkit='Image::ExifTool 12.61'>
+  <IFD0:Make zz:id='271' zz:desc='Manufacturer' zz:val='NIKON' zz:tagid='271'>NIKON</IFD0:Make>
+ </rdf:Description>
+</rdf:RDF>"#;
+        let typed = parse_xmp_typed(xml).unwrap();
+
+        // The leaf survives: et:* attributes must not make IFD0:Make look
+        // like a struct that only reports flattened fields.
+        assert_eq!(
+            typed
+                .iter()
+                .find(|(tag, _)| tag == "XMP:Make")
+                .map(|(_, value)| value.clone()),
+            Some(XmpValue::Scalar("NIKON".to_string())),
+            "real leaf missing or wrong: {typed:?}"
+        );
+
+        // None of the ignored et: control attributes invented a tag of their
+        // own (an unfixed build reports XMP:MakeId = "271" here, and
+        // XMP:Toolkit = "Image::ExifTool 12.61" from the rdf:Description
+        // attribute).
+        for bogus in [
+            "XMP:MakeId",
+            "XMP:MakeDesc",
+            "XMP:MakeVal",
+            "XMP:MakeTagid",
+            "XMP:Toolkit",
+        ] {
+            assert!(
+                !typed.iter().any(|(tag, _)| tag == bogus),
+                "et: control attribute leaked into a tag: {bogus} in {typed:?}"
+            );
+        }
     }
 }
