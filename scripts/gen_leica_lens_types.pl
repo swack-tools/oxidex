@@ -16,13 +16,16 @@
 #   * a name for which no source line can be found
 #
 # Usage: perl scripts/gen_leica_lens_types.pl [path/to/Image/ExifTool]
+#
+# With no argument, resolves the pinned ExifTool tree via ExiftoolPin (never a
+# PATH or Homebrew fallback -- see scripts/lib/ExiftoolPin.pm).
 use strict;
 use warnings;
+use FindBin;
+use lib "$FindBin::Bin/lib";
+use ExiftoolPin;
 
-my $LIB = $ARGV[0]
-    || (-d '/tmp/oxidex-exiftool-cache/exiftool/lib'
-        ? '/tmp/oxidex-exiftool-cache/exiftool/lib'
-        : '/opt/homebrew/Cellar/exiftool/13.55/libexec/lib/perl5');
+my $LIB = $ARGV[0] || ExiftoolPin::resolve();
 eval "use lib '$LIB'; use Image::ExifTool::Panasonic; 1" or die $@;
 
 my $PM = "$LIB/Image/ExifTool/Panasonic.pm";

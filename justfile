@@ -1196,6 +1196,18 @@ compare-exiftool-full-update:
 regen-tables version="":
     tools/exiftool-tables/regen.sh {{version}}
 
+# Regenerate EVERY committed ExifTool-table generator, tier 1 and tier 2 --
+# the second generation tier (MakerNote sub-directory tables, Nikon AF-point
+# grids, the six scripts/gen_*.pl transcriptions) that `regen-tables` alone
+# never touches. Always the pin; see tools/exiftool-tables/regen-all.sh.
+regen-tables-all:
+    tools/exiftool-tables/regen-all.sh
+
+# Tier 2 only, against an already-current tier 1 -- what CI's verify-tables
+# job runs to catch a stale or hand-edited generated file.
+regen-tables-tier2:
+    tools/exiftool-tables/regen-all.sh --tier2-only
+
 # Verify the committed generated tables still match ExifTool exactly.
 # Defaults to .exiftool-version -- the pin is the only source of truth for the
 # release this repo grades against. Reading it out of the generated file

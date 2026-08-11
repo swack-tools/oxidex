@@ -25,10 +25,15 @@
 
 use strict;
 use warnings;
-use lib '/opt/homebrew/Cellar/exiftool/13.55/libexec/lib/perl5';
-use lib '/tmp/oxidex-exiftool-cache/exiftool/lib';
-use Image::ExifTool;
-use Image::ExifTool::CanonCustom;
+use FindBin;
+use lib "$FindBin::Bin/lib";
+use ExiftoolPin;
+
+# Resolves the pinned ExifTool tree via ExiftoolPin (never a PATH or Homebrew
+# fallback -- see scripts/lib/ExiftoolPin.pm).
+my $EXIFTOOL_LIB = ExiftoolPin::resolve();
+eval "use lib '$EXIFTOOL_LIB'; use Image::ExifTool; use Image::ExifTool::CanonCustom; 1"
+    or die $@;
 
 my $TABLE = \%Image::ExifTool::CanonCustom::Functions2;
 

@@ -333,6 +333,55 @@ registry grows. Protect that property.
   corpus), CRW (156) and DICOM (101) need real format implementations. This
   methodology has no shortcut for them, and claiming otherwise would repeat the
   mistake this document is written to avoid.
+- **Six generated files have no committed generator** (found while wiring the
+  second generation tier, tag-machinery overhaul Step 14):
+  `sony/{enciphered,plain,main_extra}_tables.rs`,
+  `nikon/{encrypted,settings}_tables.rs`, `minolta_a100_tables.rs`. Each file's
+  own header already names its source hash (`%Image::ExifTool::Sony::*`,
+  `%Image::ExifTool::Nikon::*`/`NikonCustom::*`, `%NikonSettings::Main`,
+  `%Image::ExifTool::Minolta::*`) and states it was "read out of ExifTool's own
+  ... hash in-process (13.59) rather than retyped" — but no script that does
+  that reading is checked in anywhere, so a bump cannot refresh these six
+  without someone re-deriving the translation by hand, and nothing would
+  report it if that never happened. That is the exact mixed-release-skew risk
+  this step exists to close, just one layer further down than the five
+  generators that *did* get wired (`codegen_subdirs.py`'s three outputs, the
+  Nikon AF-point grids, the six `scripts/gen_*.pl` one-offs — see
+  `tools/exiftool-tables/regen-all.sh`).
+
+  These six were deliberately **not** reconstructed in Step 14, and the
+  distinction from the five that were matters: `dump_tables.pl` already
+  carries every one of these tables' raw fields (they are ordinary
+  `ProcessBinaryData`/IFD hashes, no array-lexical problem like the AF-point
+  grids), so the missing piece is not extraction. It is that each of these six
+  files targets a **bespoke, per-file Rust DSL** (`sony::binary_data::{Cond,
+  Raw, Vc, Pc, ...}`, `nikon::binary_data`'s superset adding `Encrypted,
+  Filter, Root, StrCmp, SubDir, SubStart`, `nikon::settings`'s distinct
+  `SettingsTag` shape) whose variants were hand-matched, tag by tag, against
+  ExifTool's exact `Condition`/`RawConv`/`ValueConv`/`PrintConv` Perl text —
+  the same technique `scripts/gen_canon_custom_functions2.pl` uses (a
+  hard-coded dictionary keyed on literal Perl expression strings, hard-erroring
+  on anything unregistered), but with a translation vocabulary sized to each
+  file instead of one table. Measured directly from the committed files:
+
+  | file                         | lines | distinct DSL variants used |
+  | ----------------------------- | ----: | --------------------------: |
+  | `sony/main_extra_tables.rs`  |    85 |                           22 |
+  | `minolta_a100_tables.rs`     |   333 |                           20 |
+  | `sony/plain_tables.rs`       |   415 |                           30 |
+  | `nikon/settings_tables.rs`   |   475 |                           18 |
+  | `sony/enciphered_tables.rs`  |  1131 |                           50 |
+  | `nikon/encrypted_tables.rs`  |  3539 |                           67 |
+
+  A generator for any one of these is realistically its own
+  `codegen_subdirs.py`-sized project (a new hard-erroring parser plus a
+  from-scratch translation dictionary, verified variant by variant against
+  the Perl it claims to mirror) — not a parameterization of an existing
+  script. Faking it — emitting *something* that compiles against the same
+  struct shapes without that verification — is exactly the "plausible but
+  wrong under a real tag name" failure this whole methodology exists to
+  refuse, so the honest state to leave this in is: unreconstructed, the gap
+  measured and named here, rather than a generator nobody can trust.
 
 ## Relationship to the AI harness
 

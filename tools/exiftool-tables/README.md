@@ -4,9 +4,23 @@ Generates Rust binary tag tables directly from ExifTool's own Perl data
 structures, verified back against ExifTool.
 
 ```sh
-just regen-tables          # fetch + extract + generate + verify
-just verify-tables         # re-check committed output against ExifTool
+just regen-tables          # fetch + extract + generate + verify (tier 1 only)
+just verify-tables         # re-check committed tier-1 output against ExifTool
+just regen-tables-all      # tier 1 AND tier 2, from one resolved ExifTool tree
+just regen-tables-tier2    # tier 2 only -- what CI's verify-tables job runs
 ```
+
+`regen-tables` (this directory's `regen.sh`) only ever produced
+`binary_tables.rs` and its three siblings. A second generation tier sits
+downstream of it and `regen-tables` never called it: the MakerNote
+sub-directory tables (`codegen_subdirs.py`), the Nikon AF-point name grids
+(`dump_af_points.pl` + `codegen_af_points.py`), and six one-off
+`scripts/gen_*.pl` transcriptions. `regen-all.sh` is the sibling that invokes
+both tiers against the SAME resolved ExifTool tree, so a bump cannot refresh
+one tier and silently leave the other on an older release -- see its own
+header for the full rationale, and `docs/TRANSCRIPTION.md`'s "Honest limits"
+section for six further files (Sony/Nikon/Minolta binary-data tables) that
+are generated but still have no committed generator at all.
 
 ## Why
 

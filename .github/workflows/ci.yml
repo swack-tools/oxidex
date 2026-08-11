@@ -465,6 +465,43 @@ jobs:
             src/exiftool_tables/binary_tables.rs \
             "exiftool-${ET_VERSION}/lib" \
             --oracle tools/exiftool-tables/oracle.pl
+      # Step 14 (tag-machinery overhaul): tier 1 above is binary_tables.rs;
+      # tier 2 is everything downstream of it that regen.sh never touches --
+      # the MakerNote sub-directory tables, the Nikon AF-point grids and the
+      # six scripts/gen_*.pl one-off transcriptions. Until this step existed,
+      # nothing re-ran tier 2 in CI at all, so a bump could refresh tier 1 to
+      # a new ExifTool release while every tier-2 file quietly stayed on the
+      # old one -- intra-repo mixed-release skew invisible from either tier
+      # alone (see tools/exiftool-tables/regen-all.sh's header). Re-running
+      # every tier-2 generator against the SAME fetched tree as the verify
+      # step above and diffing the result against what is committed is the
+      # tier-2 analogue of verify.py: it fails on a stale or hand-edited
+      # generated file instead of on a formatting guess.
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: rustfmt
+      - name: Rerun tier-2 generators and diff against committed output
+        env:
+          ET_VERSION: ${{ steps.stamp.outputs.version }}
+        run: |
+          set -euo pipefail
+          export OXIDEX_EXIFTOOL_LIB="$PWD/exiftool-${ET_VERSION}/lib"
+          tools/exiftool-tables/regen-all.sh --tier2-only
+          if ! git diff --exit-code -- \
+              src/parsers/tiff/makernotes/fujifilm/settings_tables.rs \
+              src/parsers/tiff/makernotes/panasonic/face_tables.rs \
+              src/parsers/tiff/makernotes/pentax/subdir_tables.rs \
+              src/parsers/tiff/makernotes/nikon/af_points.rs \
+              src/parsers/tiff/makernotes/canon/custom_functions2_tables.rs \
+              src/parsers/jpeg/app_segments/infiray_tables.rs \
+              src/parsers/jpeg/app_segments/qualcomm_tables.rs \
+              src/parsers/tiff/makernotes/samsung/lookups.rs \
+              src/parsers/tiff/makernotes/olympus/lookups.rs \
+              src/parsers/tiff/makernotes/lens_data.rs \
+              tools/exiftool-tables/af_points.json; then
+            echo "::error::a committed tier-2 generated file does not match what its generator produces against ExifTool ${ET_VERSION}. Either the file was hand-edited, or it is stale relative to the pin -- re-run 'tools/exiftool-tables/regen-all.sh --tier2-only' and commit the result." >&2
+            exit 1
+          fi
 
   metrics:
     name: Benchmarks

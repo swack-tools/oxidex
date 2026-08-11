@@ -4,8 +4,14 @@
 # cannot drift from the Perl one through transcription.
 use strict;
 use warnings;
-use lib '/tmp/oxidex-exiftool-cache/exiftool/lib';
-use Image::ExifTool::Olympus;
+use FindBin;
+use lib "$FindBin::Bin/lib";
+use ExiftoolPin;
+
+# Resolves the pinned ExifTool tree via ExiftoolPin (never a PATH or Homebrew
+# fallback -- see scripts/lib/ExiftoolPin.pm).
+my $EXIFTOOL_LIB = ExiftoolPin::resolve();
+eval "use lib '$EXIFTOOL_LIB'; use Image::ExifTool::Olympus; 1" or die $@;
 
 sub esc {
     my $s = shift;

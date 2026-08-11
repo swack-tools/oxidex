@@ -32,9 +32,15 @@
 
 use strict;
 use warnings;
+use FindBin;
+use lib "$FindBin::Bin/lib";
+use ExiftoolPin;
 
-my $EXIFTOOL_LIB = $ENV{OXIDEX_EXIFTOOL_LIB} || '/tmp/oxidex-exiftool-cache/exiftool/lib';
-use lib map { $_ } ($ENV{OXIDEX_EXIFTOOL_LIB} || '/tmp/oxidex-exiftool-cache/exiftool/lib');
+# Resolves the pinned ExifTool tree via ExiftoolPin (never a PATH or Homebrew
+# fallback -- see scripts/lib/ExiftoolPin.pm). $OXIDEX_EXIFTOOL_LIB still
+# works as an explicit override; it is just no longer trusted unverified.
+my $EXIFTOOL_LIB = ExiftoolPin::resolve();
+eval "use lib '$EXIFTOOL_LIB'; 1" or die $@;
 
 require Image::ExifTool;
 require Image::ExifTool::Qualcomm;
