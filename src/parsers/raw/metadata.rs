@@ -6730,8 +6730,21 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
     // Use the existing JPEG segment parser to extract EXIF
     if let Ok(segments) = crate::parsers::jpeg::segment_parser::parse_segments(&jpeg_reader) {
+        // ExifTool reads the embedded JPEG's own SOF0 frame header for the
+        // File-group dimensions it reports on RAF files -- FujiFilm.raf's
+        // preview happens to declare 8x8 (`[File] ImageWidth : 8`), and that
+        // File:ImageWidth/ImageHeight pair is what Exif.pm:4747-4766's
+        // Composite:ImageSize Require gate (`0 => 'ImageWidth', 1 =>
+        // 'ImageHeight'`) checks before its ValueConv ever looks at
+        // RawImageCroppedSize. Without it the Require never resolves and the
+        // composite cannot fire at all, no matter what Desire index 4
+        // supplies -- so this call is load-bearing for that fix, not a
+        // drive-by. `process_sof_segments` also recovers the sibling
+        // File:BitsPerSample/ColorComponents/EncodingProcess tags ExifTool
+        // reports alongside it, for free.
+        crate::core::jpeg_helpers::process_sof_segments(&segments, &mut metadata);
         // Look for APP1 segments containing EXIF data
-        for segment in segments {
+        for segment in &segments {
             if segment.marker == 0xFFE1 && segment.data.len() > 6 {
                 // Check for EXIF header "Exif\0\0"
                 if &segment.data[0..6] == b"Exif\x00\x00" {
@@ -7049,6 +7062,134 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     }
 
     Ok(metadata)
+}
+
+#[cfg(test)]
+mod fujifilm_raf_image_size_tests {
+    use super::*;
+
+    /// Builds a minimal, self-contained RAF byte buffer: the 16-byte
+    /// signature, a JPEG offset/length pair at header bytes 84/88, a RAF
+    /// directory offset/length pair at bytes 0x5c/0x60 (`ProcessFujiDir`,
+    /// see `raf_parser::parse_raf_container_metadata`'s doc comment), a
+    /// tiny embedded JPEG whose SOF0 declares `width`x`height`, and one RAF
+    /// directory entry for tag 0x0111 (`RawImageCroppedSize`) whose value is
+    /// `[height_hi, height_lo, width_hi, width_lo]` -- FujiFilm.pm stores
+    /// height before width, reversed on read (see `raf_parser.rs`'s
+    /// `0x0100 | 0x0111` arm).
+    fn synthetic_raf(
+        sof_width: u16,
+        sof_height: u16,
+        cropped_width: u16,
+        cropped_height: u16,
+    ) -> Vec<u8> {
+        let mut data = vec![0u8; 100];
+        data[0..16].copy_from_slice(b"FUJIFILMCCD-RAW ");
+
+        // Embedded JPEG: SOI, SOF0 (precision=8, height, width, 1 grayscale
+        // component), EOI. `parse_sof_segment` only reads through byte 5
+        // (num_components), so no scan data is needed.
+        let mut jpeg = vec![0xFFu8, 0xD8]; // SOI
+        jpeg.extend_from_slice(&[0xFF, 0xC0]); // SOF0 marker
+        jpeg.extend_from_slice(&11u16.to_be_bytes()); // segment length (self-inclusive)
+        jpeg.push(8); // precision
+        jpeg.extend_from_slice(&sof_height.to_be_bytes());
+        jpeg.extend_from_slice(&sof_width.to_be_bytes());
+        jpeg.push(1); // 1 component
+        jpeg.extend_from_slice(&[1, 0x11, 0]); // component id, sampling, qtable
+        jpeg.extend_from_slice(&[0xFF, 0xD9]); // EOI
+        assert_eq!(jpeg.len(), 17);
+
+        let jpeg_offset = data.len() as u32;
+        data.extend_from_slice(&jpeg);
+
+        // RAF directory: entry_count(u32 BE) + [tag(u16) len(u16) value].
+        let mut dir = 1u32.to_be_bytes().to_vec();
+        dir.extend_from_slice(&0x0111u16.to_be_bytes()); // RawImageCroppedSize
+        dir.extend_from_slice(&4u16.to_be_bytes());
+        dir.extend_from_slice(&cropped_height.to_be_bytes());
+        dir.extend_from_slice(&cropped_width.to_be_bytes());
+
+        let dir_offset = data.len() as u32;
+        data.extend_from_slice(&dir);
+        let dir_length = dir.len() as u32;
+
+        data[84..88].copy_from_slice(&jpeg_offset.to_be_bytes());
+        data[88..92].copy_from_slice(&(jpeg.len() as u32).to_be_bytes());
+        data[0x5c..0x60].copy_from_slice(&dir_offset.to_be_bytes());
+        data[0x60..0x64].copy_from_slice(&dir_length.to_be_bytes());
+
+        data
+    }
+
+    /// Locks in the fix this file's `parse_fujifilm_raf` needed for
+    /// Composite:ImageSize on FujiFilm.raf to stop being MISSING outright:
+    /// without a `File:ImageWidth`/`File:ImageHeight` pair from the embedded
+    /// preview JPEG's own SOF0 header, Exif.pm:4747-4766's Require gate
+    /// (`0 => 'ImageWidth', 1 => 'ImageHeight'`) never resolves and
+    /// Composite:ImageSize cannot fire at all -- no matter what Desire index
+    /// 4 (RawImageCroppedSize) supplies. `process_sof_segments` closes that.
+    #[test]
+    fn embedded_preview_sof_supplies_the_required_image_size_pair() {
+        let data = synthetic_raf(20, 15, 4256, 1424);
+        let mut metadata =
+            parse_fujifilm_raf(&data, RawFormat::FujifilmRAF).expect("parse_fujifilm_raf");
+
+        assert_eq!(metadata.get_integer("File:ImageWidth"), Some(20));
+        assert_eq!(metadata.get_integer("File:ImageHeight"), Some(15));
+        assert_eq!(
+            metadata.get_string("RAF:RawImageCroppedSize"),
+            Some("4256x1424")
+        );
+
+        crate::composite::apply(&mut metadata);
+
+        // Exif.pm:4747-4766: `return $val[4] if $val[4]` -- RawImageCroppedSize
+        // (4256x1424) must win outright over the required-but-irrelevant
+        // preview dimensions (20x15) that only exist to satisfy the Require
+        // gate.
+        assert_eq!(
+            metadata.get_string("Composite:ImageSize"),
+            Some("4256x1424")
+        );
+        assert_eq!(metadata.get_string("Composite:Megapixels"), Some("6.1"));
+    }
+
+    /// Without a RAF directory entry for RawImageCroppedSize (0x0111) at
+    /// all, ImageSize must still compute from the required
+    /// ImageWidth/ImageHeight pair -- the absent-val4 fallback, exercised
+    /// here through the real RAF parsing path rather than `compute()`
+    /// directly.
+    #[test]
+    fn image_size_falls_back_to_sof_pair_without_a_raf_directory_entry() {
+        let mut data = vec![0u8; 100];
+        data[0..16].copy_from_slice(b"FUJIFILMCCD-RAW ");
+
+        let mut jpeg = vec![0xFFu8, 0xD8];
+        jpeg.extend_from_slice(&[0xFF, 0xC0]);
+        jpeg.extend_from_slice(&11u16.to_be_bytes());
+        jpeg.push(8);
+        jpeg.extend_from_slice(&30u16.to_be_bytes()); // height
+        jpeg.extend_from_slice(&40u16.to_be_bytes()); // width
+        jpeg.push(1);
+        jpeg.extend_from_slice(&[1, 0x11, 0]);
+        jpeg.extend_from_slice(&[0xFF, 0xD9]);
+
+        let jpeg_offset = data.len() as u32;
+        data.extend_from_slice(&jpeg);
+        // No RAF directory: leave the 0x5c/0x60 offset/length fields zero,
+        // matching `parse_raf_container_metadata`'s `dir_offset == 0` guard.
+        data[84..88].copy_from_slice(&jpeg_offset.to_be_bytes());
+        data[88..92].copy_from_slice(&(jpeg.len() as u32).to_be_bytes());
+
+        let mut metadata =
+            parse_fujifilm_raf(&data, RawFormat::FujifilmRAF).expect("parse_fujifilm_raf");
+        assert!(metadata.get_string("RAF:RawImageCroppedSize").is_none());
+
+        crate::composite::apply(&mut metadata);
+
+        assert_eq!(metadata.get_string("Composite:ImageSize"), Some("40x30"));
+    }
 }
 
 /// Map NEF SubIFD tags to EXIF group names and apply format-specific decoding.

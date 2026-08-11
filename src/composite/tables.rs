@@ -306,7 +306,11 @@ pub static COMPOSITES: &[Composite] = &[
         group2: "Image",
         priority: 1,
         require: &[(0, "ImageWidth"), (1, "ImageHeight")],
-        desire: &[(2, "ExifImageWidth"), (3, "ExifImageHeight")],
+        desire: &[
+            (2, "ExifImageWidth"),
+            (3, "ExifImageHeight"),
+            (4, "RawImageCroppedSize"),
+        ],
     },
     Composite {
         name: "JpgFromRaw",

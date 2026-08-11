@@ -31,7 +31,14 @@ import re
 # Composites whose inputs ExifTool populates from internal parser state rather
 # than from a named tag. We cannot see that state, so we refuse them outright
 # instead of emitting a definition that could half-fire on the wrong inputs.
-INTERNAL_STATE = {"RawImageCroppedSize"}
+#
+# RawImageCroppedSize used to live here, but it no longer belongs: it is not
+# internal Perl state, it is a named FujiFilm RAF tag (0x0111,
+# FujiFilm.pm:1289) that src/parsers/raw/raf_parser.rs emits as
+# `RAF:RawImageCroppedSize`. Filtering it out of Composite:ImageSize's Desire
+# list here silently dropped Exif.pm:4747-4766's `return $val[4] if $val[4]`
+# branch -- see Step 8 of OVERHAUL_OXIDEX_PLAN.md.
+INTERNAL_STATE = set()
 
 
 def rust_str(s):

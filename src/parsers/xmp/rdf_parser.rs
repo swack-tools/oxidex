@@ -151,6 +151,38 @@ impl PartialEq<&str> for XmpValue {
 /// `["ExifTool","Test","XMP"]`, and a caller that stores one joined string can
 /// never reproduce that. Callers that build a `TagValue` should use this.
 pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
+    Ok(parse_xmp_typed_with_rational_forms(xml_bytes)?.0)
+}
+
+/// [`parse_xmp_typed`], plus the unreduced `n/d` text of any
+/// FocalPlaneXResolution/FocalPlaneYResolution property, keyed the same way as
+/// the first return value.
+///
+/// XMP.pm:2173-2174 declares these `Writable => 'rational'` with no
+/// `PrintConv`, so [`format_xmp_value`] reduces them to a decimal string
+/// (`format_xmp_plain_rational`) before this function returns -- ExifTool
+/// reports `exif:FocalPlaneXResolution` as "10142.8571428571", not
+/// "2272000/224". That is correct for display, but
+/// `Image::ExifTool::Canon::CalcSensorDiag` (Canon.pm:10145-10175) needs the
+/// original numerator/denominator pair, because most Canon cameras encode the
+/// sensor size in the denominator and the divided float has thrown that away
+/// (`$$et{TAG_EXTRA}{FocalPlaneXResolution}{Rational}`, Canon.pm:10152-10153).
+/// Losing it does not make `canon_sensor_diag`
+/// (`src/composite/compute.rs`) fail closed -- it falls through to a
+/// generic focal-plane path that produces a confidently wrong
+/// ScaleFactor35efl, which then corrupts CircleOfConfusion, FOV,
+/// FocalLength35efl and HyperfocalDistance in turn.
+///
+/// This is a tactical carriage: it plumbs exactly the two tags the composite
+/// layer currently needs, through exactly the standalone `.xmp`/`.xml`
+/// sidecar path (`super::parse_xmp_file`), not the generic embedded-XMP paths
+/// (JPEG, PDF, DjVu). Stage 4's value-form retention (Step 18) is meant to
+/// replace this with a general ValueConv/PrintConv split for every XMP
+/// property, at which point this function and its caller-side wiring in
+/// `src/parsers/xmp/mod.rs` should be deleted.
+pub(crate) fn parse_xmp_typed_with_rational_forms(
+    xml_bytes: &[u8],
+) -> Result<(Vec<(String, XmpValue)>, Vec<(String, String)>)> {
     let mut reader = Reader::from_reader(xml_bytes);
     reader.config_mut().trim_text(true); // Trim whitespace from text nodes
 
@@ -530,6 +562,13 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
         .find(|(tag, _)| tag == "XMP:HDRPlusMakerNote")
         .map(|(_, value)| value.clone());
 
+    // Tactical carriage for Canon.pm:10145-10175's CalcSensorDiag: the
+    // unreduced `n/d` text of FocalPlaneXResolution/FocalPlaneYResolution,
+    // captured here (before `format_xmp_plain_rational` reduces it to a
+    // decimal string below) and handed back separately. See the doc comment
+    // on this function.
+    let mut rational_forms: Vec<(String, String)> = Vec::new();
+
     // Post-process results to apply formatting for specific tags
     let mut formatted: Vec<(String, XmpValue)> = results
         .into_iter()
@@ -543,6 +582,12 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
                     (tag, XmpValue::List(formatted))
                 }
                 None => {
+                    if matches!(
+                        tag.rsplit(':').next(),
+                        Some("FocalPlaneXResolution" | "FocalPlaneYResolution")
+                    ) {
+                        rational_forms.push((tag.clone(), value.clone()));
+                    }
                     let formatted = format_xmp_value(&tag, &value);
                     (tag, XmpValue::Scalar(formatted))
                 }
@@ -558,7 +603,7 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
         }
     }
 
-    Ok(formatted)
+    Ok((formatted, rational_forms))
 }
 
 /// Extracts flattened fields from the IPTC Extension AboutCvTerm structured bag.

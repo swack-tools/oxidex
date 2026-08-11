@@ -653,7 +653,43 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
         // we do not track TIFF_TYPE, so we take the required pair, which is
         // what ExifTool does for every other format.
         // PrintConv: `$val =~ tr/ /x/`
+        //
+        // Exif.pm:4747-4766:
+        //   ImageSize => {
+        //       Require => { 0 => 'ImageWidth', 1 => 'ImageHeight' },
+        //       Desire  => {
+        //           2 => 'ExifImageWidth', 3 => 'ExifImageHeight',
+        //           4 => 'RawImageCroppedSize', # (FujiFilm RAF images)
+        //       },
+        //       ValueConv => q{
+        //           return $val[4] if $val[4];
+        //           return "$val[2] $val[3]" if $val[2] and $val[3] and
+        //                   $$self{TIFF_TYPE} =~ /^(CR2|Canon 1D RAW|IIQ|EIP)$/;
+        //           return "$val[0] $val[1]" if IsFloat($val[0]) and IsFloat($val[1]);
+        //           return undef;
+        //       },
+        //       PrintConv => '$val =~ tr/ /x/; $val',
+        //   },
+        //
+        // `return $val[4] if $val[4]` is checked FIRST, before the required
+        // ImageWidth/ImageHeight pair is even consulted: a FujiFilm RAF's
+        // sensor read includes border pixels ImageWidth/Height do not
+        // exclude, so RawImageCroppedSize (0x0111, FujiFilm.pm:1289) must
+        // win outright when present. The RAF parser
+        // (src/parsers/raw/raf_parser.rs) already applies FujiFilm.pm's own
+        // `tr/ /x/` PrintConv when it emits `RAF:RawImageCroppedSize`, so
+        // val[4] arrives pre-joined ("4256x1424"); this ImageSize PrintConv's
+        // `tr/ /x/` is then a no-op, and the same string works for `.value`
+        // because Megapixels' `/\d+/g` extraction does not care which
+        // separator it crosses.
         ("Exif", "ImageSize") => {
+            if let Some(v4) = get(i, 4) {
+                // Perl truthiness: "" and "0" are false, everything else
+                // (including "0.0") is true.
+                if !v4.is_empty() && v4 != "0" {
+                    return Computed::new(v4.to_string(), v4.to_string());
+                }
+            }
             let (w, h) = (f(get(i, 0))?, f(get(i, 1))?);
             // ValueConv yields "W H"; PrintConv is `$val =~ tr/ /x/`.
             Computed::new(
@@ -1324,6 +1360,56 @@ mod tests {
         );
         // A tiny image drops into the 6-decimal branch.
         assert_eq!(c("Megapixels", &[Some("2x2")]).as_deref(), Some("0.000004"));
+    }
+
+    #[test]
+    fn image_size_prefers_raw_image_cropped_size_over_required_pair() {
+        // Exif.pm:4747-4766: `return $val[4] if $val[4]` is checked before
+        // the required ImageWidth/ImageHeight pair is even consulted.
+        // FujiFilm.raf's required pair comes from the embedded preview JPEG
+        // (8x8, a test-fixture artifact of that preview's own SOF0 header),
+        // which must lose outright to desire index 4.
+        assert_eq!(
+            c(
+                "ImageSize",
+                &[Some("8"), Some("8"), None, None, Some("4256x1424")]
+            )
+            .as_deref(),
+            Some("4256x1424")
+        );
+    }
+
+    #[test]
+    fn image_size_falls_back_to_required_pair_when_val4_absent() {
+        // No desire index 4 at all (the common case: every non-FujiFilm
+        // format never populates RawImageCroppedSize).
+        assert_eq!(
+            c("ImageSize", &[Some("4000"), Some("3000")]).as_deref(),
+            Some("4000x3000")
+        );
+        // Desire index 4 present but empty/falsy -- Perl's `if $val[4]` is
+        // false for "" and "0", so the required pair still wins.
+        assert_eq!(
+            c(
+                "ImageSize",
+                &[Some("4000"), Some("3000"), None, None, Some("")]
+            )
+            .as_deref(),
+            Some("4000x3000")
+        );
+        assert_eq!(
+            c(
+                "ImageSize",
+                &[Some("4000"), Some("3000"), None, None, Some("0")]
+            )
+            .as_deref(),
+            Some("4000x3000")
+        );
+        // val[4] absent (None) also falls back, same as ExifTool's undef.
+        assert_eq!(
+            c("ImageSize", &[Some("4000"), Some("3000"), None, None, None]).as_deref(),
+            Some("4000x3000")
+        );
     }
 
     #[test]
