@@ -2330,8 +2330,12 @@ def default_sweep_fn(**kwargs):
     def comparison_fn(repo, cache_dir, fmt, suffix):
         return squad_merge_loop.real_format_match(repo, cache_dir, fmt, suffix)
 
+    def open_sweep_prs_fn():
+        return list_open_sweep_prs(kwargs.get("repo_root"))
+
     return overlord_sweep.run_sweep(
-        comparison_fn=comparison_fn, checkout_fn=overlord_sweep.real_checkout, **kwargs,
+        comparison_fn=comparison_fn, checkout_fn=overlord_sweep.real_checkout,
+        open_sweep_prs_fn=open_sweep_prs_fn, **kwargs,
     )
 
 
@@ -2784,8 +2788,9 @@ def auto_publish_round(*, repo_root=REPO_ROOT, cache_dir, home=None, config_path
     Returns a summary dict whose "status" is either one of run_sweep's
     own statuses passed straight through ("no_news",
     "branch_cut_failed", "nothing_merged", "sweep_aborted",
-    "reattach_failed", "zero_delta", "workspace_tests_failed",
-    "push_failed", "pr_create_failed"), or one of this function's own:
+    "reattach_failed", "zero_delta", "duplicate_of_open_pr",
+    "workspace_tests_failed", "push_failed", "pr_create_failed"), or one
+    of this function's own:
     "no_worktree", "bisection_unverified", "zero_delta", "checks_red",
     "checks_timeout", "checks_unknown", "reviews_<state>",
     "published_awaiting_review". Every status also carries "adopted":
@@ -2946,13 +2951,18 @@ def auto_publish_round(*, repo_root=REPO_ROOT, cache_dir, home=None, config_path
 # A publish that either landed something or had nothing to land. Every
 # other status is a round that did NOT publish, which is what the one-shot
 # exit code and the --infinite stall counter both key off.
-PUBLISH_OK_STATUSES = frozenset({"published_awaiting_review", "no_news", "zero_delta"})
+PUBLISH_OK_STATUSES = frozenset({
+    "published_awaiting_review", "no_news", "zero_delta", "duplicate_of_open_pr",
+})
 
 # Sweep statuses meaning "there was nothing to publish", as opposed to
 # "publishing was attempted and failed". Only these earn the idle backoff:
 # a failing round should keep its configured cadence so a transient fault
-# is retried promptly.
-IDLE_STATUSES = frozenset({"no_news", "nothing_merged", "zero_delta"})
+# is retried promptly. "duplicate_of_open_pr" belongs here for the same
+# reason as "zero_delta": the round correctly found nothing NEW to publish
+# (this round's content already sits on an earlier round's open PR), so
+# hammering at full cadence just re-discovers the same duplicate.
+IDLE_STATUSES = frozenset({"no_news", "nothing_merged", "zero_delta", "duplicate_of_open_pr"})
 IDLE_ROUND_DELAY_SECONDS = 60.0
 
 # How many consecutive non-publishing rounds before the loop says so out
