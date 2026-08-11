@@ -2,9 +2,14 @@
 //!
 //! The generated registry describes byte layout and the conversions that the
 //! transcription pipeline can reproduce exactly. This module is deliberately
-//! smaller than ExifTool's full `ProcessBinaryData`: a bit field whose slice
-//! the schema does not record, and conversions the generator refused to
-//! approximate, are left for format-specific code instead of being guessed.
+//! smaller than ExifTool's full `ProcessBinaryData`: conversions the generator
+//! refused to approximate are left for format-specific code instead of being
+//! guessed. A fractional index with no `Mask` is not in that category --
+//! ExifTool.pm:9957's `$entry = int($index) * $increment + $varSize` reads the
+//! whole word at the integer part regardless of `Mask`, so a maskless
+//! fractional field decodes the same way (Step 11, `OVERHAUL_OXIDEX_PLAN.md`
+//! D4): the fractional suffix is retained on [`Field::sub`] as logical
+//! identity/order metadata, not as a bit slice.
 
 use crate::core::TagValue;
 use crate::io::ByteOrder;
@@ -250,15 +255,29 @@ impl<'a> RawAccess<'a> {
 /// How many of a table's fractional (bit-field) entries [`decode_binary_table`]
 /// can read, and how many it still refuses.
 ///
-/// The refusal is an under-claim, not a bug, and the point of counting it is
-/// that an under-claim nobody measures is indistinguishable from a complete
-/// one. Regenerating the tables against a later ExifTool can move either
-/// number; a test pins both.
+/// Before Step 11, a maskless fractional entry was refused outright: which
+/// bits it named was unrecorded, and reporting the whole word under its name
+/// would have been a confident wrong value. ExifTool.pm:9957 settled that --
+/// `$entry = int($index) * $increment + $varSize` computes the same byte
+/// offset regardless of `Mask`, and `Mask`'s absence just means ExifTool never
+/// reduces the word (`ExifTool.pm`'s `$val = ($val & $mask) >> $BitShift if
+/// $mask`), so the *whole word* is the value, not an unknown slice of one. So
+/// `decoded` now counts every fractional entry -- masked ones as their bit
+/// slice, maskless ones as the floor-indexed whole word -- and `refused` is
+/// the count of fractional entries `decode_binary_table` still cannot place
+/// (currently none: the one historical reason was this refusal). The split is
+/// still pinned by a test, both because it is cheap insurance against a
+/// regeneration silently reintroducing a refusal, and because a census nobody
+/// measures is indistinguishable from a complete one.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FractionalCensus {
-    /// Fractional entries declaring a [`Mask`], so their bit slice is known.
+    /// Fractional entries [`decode_binary_table`] produces a value for: a
+    /// [`Mask`] makes it a bit slice, no `Mask` makes it the whole word read
+    /// at `floor(index)` (Step 11).
     pub decoded: usize,
-    /// Fractional entries with no `Mask`: which bits they name is unrecorded.
+    /// Fractional entries `decode_binary_table` still cannot place. Always 0
+    /// today -- kept so a future refusal reason has somewhere to land without
+    /// changing this type's shape.
     pub refused: usize,
 }
 
@@ -273,7 +292,9 @@ impl FractionalCensus {
     }
 }
 
-/// Split `table`'s fractional entries by whether their bit semantics are known.
+/// Split `table`'s fractional entries by whether [`decode_binary_table`] can
+/// place them. Step 11 lifted the maskless refusal, so every fractional entry
+/// counts as decoded; `refused` stays for shape (see [`FractionalCensus`]).
 #[must_use]
 pub fn fractional_census(table: &BinaryTable) -> FractionalCensus {
     let mut census = FractionalCensus::default();
@@ -281,11 +302,7 @@ pub fn fractional_census(table: &BinaryTable) -> FractionalCensus {
         if field.sub.is_none() {
             continue;
         }
-        if field.mask.is_some() {
-            census.decoded += 1;
-        } else {
-            census.refused += 1;
-        }
+        census.decoded += 1;
     }
     census
 }
@@ -394,18 +411,25 @@ impl TableDecode {
 
 /// Decode the fields whose layouts are completely described by `table`.
 ///
-/// Out-of-range fields are silently absent (never enough bytes to decode
-/// at all), and so are fractional bit-field indices that declare no
-/// [`Mask`] -- see [`fractional_census`] for that split; neither is part of
-/// [`RefusalCounts`], which is specifically about resolved-but-withheld
-/// fields (D1).
+/// Out-of-range fields are silently absent (never enough bytes to decode at
+/// all); that is not part of [`RefusalCounts`], which is specifically about
+/// resolved-but-withheld fields (D1).
 ///
 /// A fractional key is ExifTool's `12.1` notation: several tags share the word
 /// at index 12, each naming a slice of it. `Mask` is what says *which* slice,
-/// so a fractional field that declares one is fully described and decodes
-/// here; one that does not leaves its bit semantics undetermined, and
-/// reporting the whole word under its name would be a confident wrong value
-/// rather than a missing tag.
+/// so a fractional field that declares one is reduced to that slice; one that
+/// does not still decodes -- Step 11 (`OVERHAUL_OXIDEX_PLAN.md` D4):
+/// ExifTool.pm:9957's `$entry = int($index) * $increment + $varSize` computes
+/// the byte offset the same way whether or not the tag has a `Mask`, and
+/// further down `$val = ($val & $mask) >> $$tagInfo{BitShift} if $mask` only
+/// reduces the word when `Mask` is set -- with no `Mask`, ExifTool reports the
+/// whole word at `floor(index)` under the fractional tag's name. So a
+/// maskless fractional field decodes here too, as the unreduced word at
+/// `field.index` (the generator already stores only the integer part of a
+/// `12.1`-style key there, with the fraction in [`Field::sub`]); `sub` is
+/// retained on the decoded field only as the logical identity/order that
+/// distinguishes it from sibling entries sharing the same word, never as a
+/// bit slice.
 ///
 /// A field carrying a [`Mask`] is reduced to `(val & bits) >> shift` here,
 /// which is what ExifTool does before any conversion runs
@@ -423,9 +447,6 @@ pub fn decode_binary_table(
     let mut refusals = RefusalCounts::default();
 
     for field in table.fields {
-        if field.sub.is_some() && field.mask.is_none() {
-            continue;
-        }
         // D1: past this bound, `index * increment` is a nominal offset, not a
         // trustworthy one -- there is no `raw` here to hand a caller at all.
         if let Some(bound) = table.offsets_sound_until
@@ -640,12 +661,13 @@ mod tests {
         assert_eq!(get("ExposureTime").and_then(DecodedField::emit), None);
     }
 
-    /// A fractional key without a `Mask` says a tag is a slice of the word
-    /// without saying which bits, so it stays refused. `BitField` below is
-    /// that case: the whole word 0xFF under an ExifTool tag name would be a
-    /// wrong value, and a wrong value is worse than an absent one.
+    /// A fractional key without a `Mask` no longer stays refused (Step 11):
+    /// ExifTool.pm:9957 reads the whole word at `floor(index)` regardless of
+    /// `Mask`, so `BitField` below decodes the whole byte at index 2 -- 0xFF,
+    /// i.e. 255 -- and its `PrintConv` renders that word, not a bit slice of
+    /// it.
     #[test]
-    fn reversed_endian_and_maskless_bit_fields_are_explicit() {
+    fn reversed_endian_and_maskless_fractional_fields_decode() {
         static FIELDS: &[Field] = &[
             Field {
                 index: 0,
@@ -695,10 +717,16 @@ mod tests {
             ByteOrder::Big,
         );
         let fields = decode.fields();
-        assert_eq!(fields.len(), 2);
+        assert_eq!(fields.len(), 3);
         assert_eq!(fields[0].emit(), Some(TagValue::Integer(0x3412)));
         assert_eq!(
             fields[1].emit(),
+            Some(TagValue::String("255".to_string())),
+            "BitField has no Mask, so it reports the whole byte at index 2 \
+             (0xFF), rendered through its PrintConv"
+        );
+        assert_eq!(
+            fields[2].emit(),
             Some(TagValue::Array(vec![
                 TagValue::Integer(1),
                 TagValue::Integer(2),
@@ -710,7 +738,9 @@ mod tests {
     /// The whole point of a fractional key: several tags share one word, and
     /// each `Mask` picks a different slice of it. `byte_offset` uses only the
     /// integer part, which is ExifTool's `int($index) * $increment`, so all
-    /// three of these read the same `int16u` and differ only in their mask.
+    /// four of these read the same `int16u` and differ only in their mask --
+    /// or, for `WholeWord`, in having none at all (Step 11: the maskless
+    /// sibling reports the entire word, not a slice of it).
     #[test]
     fn fractional_entries_sharing_a_word_decode_to_their_own_slices() {
         static FIELDS: &[Field] = &[
@@ -753,11 +783,11 @@ mod tests {
                 omitted: Omitted::NONE,
                 print_conv: PrintConv::None,
             },
-            // Same word, no mask: which bits it names is unrecorded.
+            // Same word, no mask: Step 11 reports the whole word, not a slice.
             Field {
                 index: 4,
                 sub: Some(4),
-                name: "Undetermined",
+                name: "WholeWord",
                 format: Some(Fmt::Int16u),
                 count: 1,
                 mask: None,
@@ -799,23 +829,29 @@ mod tests {
             get("Top").and_then(DecodedField::emit),
             Some(TagValue::Integer(0xA))
         );
-        assert!(
-            get("Undetermined").is_none(),
-            "a fractional entry with no Mask has no defined slice to report"
+        assert_eq!(
+            get("WholeWord").and_then(DecodedField::emit),
+            Some(TagValue::Integer(0xABCD)),
+            "a fractional entry with no Mask reports the whole word at \
+             floor(index), per ExifTool.pm:9957 (Step 11)"
         );
     }
 
-    /// The generated tables are overwhelmingly the decodable case, which is
-    /// why lifting the refusal was worth measuring. Pinning both halves makes
-    /// a regeneration that changes the balance visible instead of silent.
+    /// Before Step 11 this was 993 decoded / 11 refused: 11 fractional
+    /// entries declared no `Mask`, and the runtime withheld them entirely.
+    /// ExifTool.pm:9957 says otherwise -- it reads the whole word at
+    /// `floor(index)` whether or not `Mask` is set -- so all 1004 fractional
+    /// entries across the generated tables are decodable now, and none are
+    /// refused. Pinning both halves makes a regeneration that changes the
+    /// balance visible instead of silent.
     #[test]
-    fn generated_fractional_entries_are_almost_all_masked() {
+    fn generated_fractional_entries_are_all_decodable() {
         let census = all_fractional_census();
         assert_eq!(
             census,
             FractionalCensus {
-                decoded: 993,
-                refused: 11,
+                decoded: 1004,
+                refused: 0,
             },
             "fractional-entry split moved; if `just regen-tables` caused this, \
              re-measure coverage before updating the numbers"
@@ -828,6 +864,146 @@ mod tests {
             .map(|table| fractional_census(table).decoded)
             .sum();
         assert_eq!(per_table, census.decoded);
+    }
+
+    /// Named example 1 of 2 (Step 11, `OVERHAUL_OXIDEX_PLAN.md` D4):
+    /// `Image::ExifTool::Pentax::AFInfoK3III`'s `0.1 => { Name => 'AFMode', ...
+    /// }` (Pentax.pm) declares no `Mask`. `FORMAT => 'int16u'` at the table
+    /// level and no per-field `Format` override means AFMode reads as the
+    /// default `int16u`; `index: 0` is `floor(0.1)`, so ExifTool.pm:9957's
+    /// `$entry = int($index) * $increment` places it at byte offset 0 -- the
+    /// same word AFInfoK3III's own whole-array entry (key `0`) covers, read
+    /// here as a lone `int16u` instead of an array. `PrintConv => { 0 =>
+    /// 'Phase Detect', 2 => 'Contrast Detect', 255 => 'Manual Focus' }` keys
+    /// on that whole word.
+    #[test]
+    fn pentax_afinfok3iii_afmode_decodes_the_maskless_fractional_word() {
+        let table = find_table("Pentax", "AFInfoK3III").expect("generated Pentax::AFInfoK3III");
+        let field = table
+            .fields
+            .iter()
+            .find(|f| f.name == "AFMode")
+            .expect("AFInfoK3III declares AFMode");
+        assert_eq!(field.index, 0, "0.1's integer part is 0");
+        assert_eq!(field.sub, Some(1), "0.1's fractional part is 1");
+        assert_eq!(field.mask, None, "AFMode declares no Mask in Pentax.pm");
+
+        // int16u big-endian 0x0002 at offset 0 -- ExifTool's "Contrast Detect".
+        let data = [0x00, 0x02];
+        let decode = decode_binary_table(table, &data, ByteOrder::Big);
+        let afmode = decode
+            .fields()
+            .iter()
+            .find(|decoded| decoded.field.name == "AFMode")
+            .expect("AFMode decodes at floor(0.1) == byte offset 0");
+        assert_eq!(
+            afmode.emit(),
+            Some(TagValue::String("Contrast Detect".to_string()))
+        );
+    }
+
+    /// Named example 2 of 2 (Step 11, `OVERHAUL_OXIDEX_PLAN.md` D4):
+    /// `Image::ExifTool::NikonCustom::SettingsD5`'s `12.1 => { # CSd2 Name =>
+    /// 'MaxContinuousRelease' }` (NikonCustom.pm) declares no `Mask` and no
+    /// `PrintConv` -- ExifTool comments it `# values: 1-100`, i.e. the raw
+    /// byte is the value. The table's `FORMAT` is `int8u` and MaxContinuousRelease
+    /// has no per-field `Format`, so `index: 12` (`floor(12.1)`) places it at
+    /// byte offset 12 via ExifTool.pm:9957's `int($index) * $increment` (here
+    /// `increment` is the int8u width, 1).
+    #[test]
+    fn nikoncustom_settingsd5_maxcontinuousrelease_decodes_the_maskless_fractional_word() {
+        let table =
+            find_table("NikonCustom", "SettingsD5").expect("generated NikonCustom::SettingsD5");
+        let field = table
+            .fields
+            .iter()
+            .find(|f| f.name == "MaxContinuousRelease")
+            .expect("SettingsD5 declares MaxContinuousRelease");
+        assert_eq!(field.index, 12, "12.1's integer part is 12");
+        assert_eq!(field.sub, Some(1), "12.1's fractional part is 1");
+        assert_eq!(
+            field.mask, None,
+            "MaxContinuousRelease declares no Mask in NikonCustom.pm"
+        );
+
+        let mut data = vec![0u8; 13];
+        data[12] = 42; // within ExifTool's documented "values: 1-100" range
+        let decode = decode_binary_table(table, &data, ByteOrder::Big);
+        let max_release = decode
+            .fields()
+            .iter()
+            .find(|decoded| decoded.field.name == "MaxContinuousRelease")
+            .expect("MaxContinuousRelease decodes at floor(12.1) == byte offset 12");
+        assert_eq!(max_release.emit(), Some(TagValue::Integer(42)));
+    }
+
+    /// Step 11 makes a maskless fractional field's bytes readable, but
+    /// readable is not reportable: Step 10's five `Omitted` flags apply
+    /// independently of *why* a field was previously withheld. A fractional
+    /// field gated on a `Condition` (or any other flag) must stay refused by
+    /// `emit`, exactly as a masked field with the same flag would, and must
+    /// still be counted in `RefusalCounts` -- lifting one refusal reason must
+    /// not silently lift the others.
+    #[test]
+    fn maskless_fractional_field_with_another_flag_still_refuses() {
+        static FIELDS: &[Field] = &[Field {
+            index: 0,
+            sub: Some(1),
+            name: "GatedWholeWord",
+            format: None,
+            count: 1,
+            mask: None,
+            omitted: Omitted {
+                value_conv: false,
+                raw_conv: false,
+                condition: true,
+                hook: false,
+                subdirectory: false,
+            },
+            print_conv: PrintConv::None,
+        }];
+        static TABLE: BinaryTable = BinaryTable {
+            module: "Test",
+            table: "GatedFractional",
+            group0: "",
+            group2: "",
+            first_entry: 0,
+            default_format: Fmt::Int8u,
+            offsets_sound_until: None,
+            fields: FIELDS,
+        };
+
+        let decode = decode_binary_table(&TABLE, &[0x42], ByteOrder::Big);
+        let fields = decode.fields();
+        assert_eq!(
+            fields.len(),
+            1,
+            "the bytes decode fine -- Step 11 makes a maskless fractional \
+             field's offset and format decodable regardless of Omitted flags"
+        );
+        assert_eq!(
+            fields[0].emit(),
+            None,
+            "but Condition is still set, so emit still refuses it, the same \
+             as it would for a masked field carrying the same flag"
+        );
+        assert_eq!(
+            decode.refusals().condition,
+            1,
+            "the refusal is still counted in RefusalCounts"
+        );
+
+        // The Step 10 escape hatch still works, unchanged by Step 11.
+        const CITATION: PerlCitation = PerlCitation {
+            module: "Test",
+            table: "GatedFractional",
+            tag: "GatedWholeWord",
+            lines: "n/a (unit test fixture)",
+        };
+        assert!(RawAccess::new(&fields[0], Acknowledged::NONE, &CITATION).is_none());
+        let access = RawAccess::new(&fields[0], Acknowledged::CONDITION, &CITATION)
+            .expect("condition acknowledged");
+        assert_eq!(access.raw(), &DecodedValue::Integer(0x42));
     }
 
     /// ExifTool reduces a masked field to `(val & Mask) >> BitShift` before any
