@@ -1157,7 +1157,13 @@ class RunSweepIntegrationTests(GitRepoTestCase):
         # branch ref -- the only thing `git push origin <branch>` and
         # `gh pr create --head <branch>` ever see -- stays behind.
         branch = result["branch"]
-        self.assertTrue(result["fmt"]["committed"])
+        # result["fmt"] reflects the LATE format_sweep_branch call -- by
+        # design usually a no-op now, since the idempotency-check section
+        # runs the same helper once, earlier, so both the origin_ref and
+        # the open-PR duplicate check compare already-formatted content
+        # (see the comment above that first call). The commit itself is
+        # what matters here, not which of the two calls made it.
+        self.assertFalse(result["fmt"]["committed"])
         self.assertEqual(git_out(repo, "rev-parse", "HEAD").strip(),
                          git_out(repo, "rev-parse", branch).strip())
         self.assertIn("style: cargo fmt --all (sweep publish)",
@@ -1733,6 +1739,65 @@ class RunSweepIntegrationTests(GitRepoTestCase):
         git(repo, "checkout", "-q", "squad/canon")
         canon_sha = self.commit_file(
             repo, "src/a.rs", "fn a() {}\n", "fix JPEG:Foo",
+            trailers=[("Format", "JPEG"), ("Tag", "MakerNotes:Foo")],
+        )
+        git(repo, "checkout", "-q", "main")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            config_toml = self._config_toml(Path(tmpdir), ["canon"])
+            squad_merge_loop.record_head(
+                squad_merge_loop.squad_status_file(home, "canon"), "workerhead", status="consumed",
+                patch_id="p1", format_name="JPEG", squad_sha=canon_sha, now_fn=lambda: 100,
+            )
+            tested, pushed, prs = [], [], []
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused",
+                comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+                config_path=config_toml, sweep_state_path=home / "sweep-state.json", origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                cargo_test_workspace_fn=lambda repo_root: tested.append(1) or (True, "ok"),
+                push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
+                create_pr_fn=lambda *a, **kw: prs.append(a) or {"ok": True, "url": "u"},
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
+                open_sweep_prs_fn=lambda: [
+                    {"headRefName": "sweep/tags-earlier", "number": 42, "url": "https://example/pull/42"},
+                ],
+            )
+        self.assertEqual(result["status"], "duplicate_of_open_pr")
+        self.assertEqual(tested, [])
+        self.assertEqual(pushed, [])
+        self.assertEqual(prs, [])
+
+    def test_formatting_alone_does_not_defeat_the_duplicate_check(self):
+        """Measured 2026-08-11: PR #694 duplicated #692 (byte-identical
+        diffs, md5-verified) despite the path-scoped fix from #693. The
+        ONLY difference the scoped diff found was rustfmt whitespace: #692's
+        branch had already been through format_sweep_branch's fmt-and-commit
+        step (it published in an earlier round), while THIS round's
+        comparison ran on raw, pre-fmt worker output -- since both
+        idempotency checks are commit-to-commit diffs, unformatted content
+        can never tree-match a PR that already went through fmt, no matter
+        how many times the same gap gets re-solved with functionally
+        identical code. Fix: run format_sweep_branch once, early, before
+        either check, so both compare already-formatted content.
+        """
+        repo = self.make_repo()
+        # An earlier round already published this fix, POST-fmt (the "( )"
+        # -> "()" normalization _reformatting_fmt_fn performs, matching
+        # what format_sweep_branch already committed for that round).
+        git(repo, "branch", "sweep/tags-earlier", "main")
+        git(repo, "checkout", "-q", "sweep/tags-earlier")
+        self.commit_file(repo, "src/a.rs", "fn a() {}\n", "sweep: fix JPEG:Foo")
+        git(repo, "checkout", "-q", "main")
+
+        # THIS round's squad branch contributes the identical fix, but as
+        # raw worker output -- PRE-fmt, exactly like every real worker
+        # patch before format_sweep_branch ever touches it.
+        git(repo, "branch", "squad/canon", "main")
+        git(repo, "checkout", "-q", "squad/canon")
+        canon_sha = self.commit_file(
+            repo, "src/a.rs", "fn a( ) {}\n", "fix JPEG:Foo",
             trailers=[("Format", "JPEG"), ("Tag", "MakerNotes:Foo")],
         )
         git(repo, "checkout", "-q", "main")
