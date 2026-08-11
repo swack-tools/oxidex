@@ -40,7 +40,7 @@
 //! `CustomPictureStyleData` at 0x58, none of which ExifTool reports by default.
 
 use crate::core::{MetadataMap, TagValue};
-use crate::exiftool_tables::{DecodedValue, PrintConv, decode_binary_table, find_table};
+use crate::exiftool_tables::{PrintConv, decode_binary_table, find_table};
 use crate::io::ByteOrder;
 
 /// Last `%Ver2` index whose value the generated table describes losslessly.
@@ -60,30 +60,35 @@ pub(super) fn parse_ver2(record: &[u8], metadata: &mut MetadataMap) {
     let Some(table) = find_table("CanonVRD", "Ver2") else {
         return;
     };
-    for decoded in decode_binary_table(table, record, ByteOrder::Big) {
+    // Every entry at or below `LAST_LOSSLESS_INDEX` is `Omitted::NONE` in the
+    // generated table (verified against `src/exiftool_tables`), so `emit`
+    // never refuses here.
+    for decoded in decode_binary_table(table, record, ByteOrder::Big).fields() {
         let field = decoded.field;
         if field.index > LAST_LOSSLESS_INDEX {
             continue;
         }
         // Every in-scope entry takes the record's int16s FORMAT; anything else
         // would mean the table moved under us.
-        let DecodedValue::Integer(raw) = &decoded.raw else {
+        let Some(value) = decoded.emit() else {
             continue;
         };
-        let raw = *raw;
-        let value = match field.print_conv {
+        let value = match (field.print_conv, &value) {
             // No conversion: ExifTool prints the int16s as it stands.
-            PrintConv::None => TagValue::Integer(raw),
-            PrintConv::IntEnum(_) => TagValue::String(
-                decoded
-                    .apply_print_conv_to_raw()
-                    // ExifTool's fallback for a value the hash does not list.
-                    .unwrap_or_else(|| format!("Unknown ({raw})")),
-            ),
+            (PrintConv::None, TagValue::Integer(_)) => value,
+            // The enum matched: `emit` already rendered its string.
+            (PrintConv::IntEnum(_), TagValue::String(_)) => value,
+            // `emit` fell back to the raw value because the enum lookup
+            // missed -- ExifTool's fallback for a value the hash does not
+            // list.
+            (PrintConv::IntEnum(_), TagValue::Integer(raw)) => {
+                TagValue::String(format!("Unknown ({raw})"))
+            }
             // Unreachable below LAST_LOSSLESS_INDEX, and guessing at a
             // conversion this module has not accounted for is exactly what the
             // index bound exists to prevent.
-            PrintConv::StrEnum(_) | PrintConv::Expr(_) => continue,
+            (PrintConv::StrEnum(_) | PrintConv::Expr(_), _) => continue,
+            (PrintConv::None | PrintConv::IntEnum(_), _) => continue,
         };
         metadata.insert(format!("CanonVRD:{}", field.name), value);
     }

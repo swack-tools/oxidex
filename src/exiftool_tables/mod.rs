@@ -43,8 +43,8 @@ pub use binary_tables::{
     ALL_BINARY_TABLES, BinaryTable, EXIFTOOL_VERSION, ExprId, Field, Fmt, Mask, Omitted, PrintConv,
 };
 pub use runtime::{
-    DecodedField, DecodedValue, FractionalCensus, all_fractional_census, decode_binary_table,
-    fractional_census,
+    Acknowledged, DecodedField, DecodedValue, FractionalCensus, PerlCitation, RawAccess,
+    RefusalCounts, TableDecode, all_fractional_census, decode_binary_table, fractional_census,
 };
 
 /// Look up a generated table by ExifTool module and table name,

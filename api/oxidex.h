@@ -4099,6 +4099,17 @@
 #define GPS_INFO_IFD_POINTER 34853
 
 /*
+ A caller's acknowledgment of which of a field's [`Omitted`] semantics it
+ has independently supplied, one bit per flag.
+
+ Bitflag-style and deliberately not a `bool`: acknowledging `condition` on
+ a field that also has `value_conv` set must not unlock it, so a single
+ "yes, I checked" flag would be the wrong shape for this. Combine flags
+ with `|`, e.g. `Acknowledged::CONDITION | Acknowledged::VALUE_CONV`.
+ */
+typedef struct Acknowledged Acknowledged;
+
+/*
  Semantics ExifTool applies to a field that this schema does not reproduce.
 
  These are Perl, so the mechanical transcription cannot run them. Recording
@@ -4115,6 +4126,18 @@ typedef struct Omitted Omitted;
 typedef struct ExifToolHandle {
     uint8_t _private[0];
 } ExifToolHandle;
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

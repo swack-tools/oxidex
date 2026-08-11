@@ -7,7 +7,7 @@
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
-use crate::exiftool_tables::{DecodedValue, decode_binary_table, find_table};
+use crate::exiftool_tables::{decode_binary_table, find_table};
 use crate::io::ByteOrder;
 
 const DPX_HEADER_LEN: usize = 2080;
@@ -72,23 +72,29 @@ impl FormatParser for DPXParser {
             ),
         );
 
-        for decoded in decode_binary_table(table, header, byte_order) {
+        // Every field this parser reads is `Omitted::NONE` in the generated
+        // `DPX::Main` table (verified against `src/exiftool_tables`), so
+        // `emit` never refuses here; it either renders the `PrintConv` or
+        // falls back to the raw value, matching the two print_conv shapes
+        // (`None`, `IntEnum`) this whitelist actually contains.
+        for decoded in decode_binary_table(table, header, byte_order).fields() {
             if !Self::direct_field(decoded.field.name) {
                 continue;
             }
             let value = match decoded.field.print_conv {
-                crate::exiftool_tables::PrintConv::None => match decoded.raw {
-                    DecodedValue::Integer(value) => TagValue::Integer(value),
-                    DecodedValue::Float(value) => TagValue::Float(value),
-                    DecodedValue::String(value) => TagValue::String(value),
+                crate::exiftool_tables::PrintConv::None => match decoded.emit() {
+                    Some(
+                        value @ (TagValue::Integer(_) | TagValue::Float(_) | TagValue::String(_)),
+                    ) => value,
                     _ => continue,
                 },
-                crate::exiftool_tables::PrintConv::IntEnum(_) => {
-                    let Some(value) = decoded.apply_print_conv_to_raw() else {
-                        continue;
-                    };
-                    TagValue::String(value)
-                }
+                crate::exiftool_tables::PrintConv::IntEnum(_) => match decoded.emit() {
+                    Some(value @ TagValue::String(_)) => value,
+                    // A raw fallback here means the enum lookup missed;
+                    // ExifTool's own DPX PrintConv hashes have no default, so
+                    // the tag is skipped exactly as it was before.
+                    _ => continue,
+                },
                 crate::exiftool_tables::PrintConv::StrEnum(_)
                 | crate::exiftool_tables::PrintConv::Expr(_) => {
                     continue;

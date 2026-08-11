@@ -8,7 +8,7 @@ use crate::core::operations_helpers::read_u32;
 use crate::core::read_report::{Diagnostic, DiagnosticSink};
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
 use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd};
-use crate::exiftool_tables::{DecodedValue, decode_binary_table, find_table};
+use crate::exiftool_tables::{decode_binary_table, find_table};
 use crate::io::EndianReader;
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::jpeg::app_segments::app8_isothermal::INFIRAY_ISOTHERMAL_MIN_LENGTH;
@@ -1666,7 +1666,11 @@ pub fn process_dji_dbg_segments(segments: &[Segment], metadata: &mut MetadataMap
 /// table offset 0, rendered by DJI.pm as `sprintf("%.1f C", $val)`. Relative
 /// humidity is a float at table offset 12, rendered as
 /// `sprintf("%g %%", $val * 100)`.
-pub fn process_dji_thermal_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+pub fn process_dji_thermal_segments(
+    segments: &[Segment],
+    metadata: &mut MetadataMap,
+    diagnostics: &mut DiagnosticSink,
+) {
     if metadata.get_string("IFD0:Make") != Some("DJI") {
         return;
     }
@@ -1728,16 +1732,23 @@ pub fn process_dji_thermal_segments(segments: &[Segment], metadata: &mut Metadat
             continue;
         };
 
-        for decoded in
-            decode_binary_table(table, &data[table_offset..], crate::io::ByteOrder::Little)
-        {
-            let value = match (decoded.field.name, &decoded.raw) {
-                ("AmbientTemperature" | "ReflectedTemperature", DecodedValue::Float(value)) => {
+        // Every `DJI::ThermalParams2` field is `Omitted::NONE` in the
+        // generated table, so `emit` never refuses here -- `refusals` below
+        // is expected to stay empty for this table, but the wiring is the
+        // same for any table that does withhold fields (Step 10/13 seam).
+        let decode =
+            decode_binary_table(table, &data[table_offset..], crate::io::ByteOrder::Little);
+        if let Some(diagnostic) = Diagnostic::refusals("DJI", "ThermalParams2", decode.refusals()) {
+            diagnostics.push(diagnostic);
+        }
+        for decoded in decode.fields() {
+            let value = match (decoded.field.name, decoded.emit()) {
+                ("AmbientTemperature" | "ReflectedTemperature", Some(TagValue::Float(value))) => {
                     Some(format!("{value:.1} C"))
                 }
-                ("ObjectDistance", DecodedValue::Float(value)) => Some(format!("{value:.1} m")),
-                ("Emissivity", _) => decoded.apply_print_conv_to_raw(),
-                ("IDString", DecodedValue::String(value)) => Some(value.clone()),
+                ("ObjectDistance", Some(TagValue::Float(value))) => Some(format!("{value:.1} m")),
+                ("Emissivity", Some(TagValue::String(rendered))) => Some(rendered),
+                ("IDString", Some(TagValue::String(value))) => Some(value),
                 _ => None,
             };
             if let Some(value) = value {
@@ -1748,14 +1759,14 @@ pub fn process_dji_thermal_segments(segments: &[Segment], metadata: &mut Metadat
             }
         }
 
-        let humidity =
-            decode_binary_table(table, &data[table_offset..], crate::io::ByteOrder::Little)
-                .into_iter()
-                .find(|field| field.field.name == "RelativeHumidity")
-                .and_then(|field| match field.raw {
-                    DecodedValue::Float(value) => Some(value),
-                    _ => None,
-                });
+        let humidity = decode
+            .fields()
+            .iter()
+            .find(|field| field.field.name == "RelativeHumidity")
+            .and_then(|field| match field.emit() {
+                Some(TagValue::Float(value)) => Some(value),
+                _ => None,
+            });
         if let Some(humidity) = humidity {
             metadata.insert(
                 "APP4:RelativeHumidity".to_string(),
@@ -1877,7 +1888,7 @@ mod tests {
             let segment = Segment::new(APP4_MARKER, 0, &payload);
             let mut metadata = dji_metadata();
 
-            process_dji_thermal_segments(&[segment], &mut metadata);
+            process_dji_thermal_segments(&[segment], &mut metadata, &mut Vec::new());
 
             assert_eq!(
                 metadata.get_string("APP4:RelativeHumidity"),
@@ -1894,7 +1905,7 @@ mod tests {
         let segment = Segment::new(APP4_MARKER, 0, &payload);
         let mut metadata = dji_metadata();
 
-        process_dji_thermal_segments(&[segment], &mut metadata);
+        process_dji_thermal_segments(&[segment], &mut metadata, &mut Vec::new());
 
         assert_eq!(metadata.get_string("APP4:RelativeHumidity"), None);
         assert_eq!(metadata.get_string("APP4:AmbientTemperature"), None);
@@ -1913,7 +1924,7 @@ mod tests {
         let mut metadata = dji_metadata();
 
         process_infiray_segments(&segments, &mut metadata);
-        process_dji_thermal_segments(&segments, &mut metadata);
+        process_dji_thermal_segments(&segments, &mut metadata, &mut Vec::new());
 
         assert_eq!(metadata.get_string("APP4:RelativeHumidity"), Some("50 %"));
         assert_eq!(metadata.get_string("APP4:IJPEGTempVersion"), None);
@@ -1956,7 +1967,7 @@ mod tests {
         let mut metadata = MetadataMap::new();
 
         process_exif_segments(&segments, &reader, &mut metadata, &mut Vec::new());
-        process_dji_thermal_segments(&segments, &mut metadata);
+        process_dji_thermal_segments(&segments, &mut metadata, &mut Vec::new());
 
         assert_eq!(metadata.get_string("IFD0:Make"), Some("DJI"));
         assert_eq!(

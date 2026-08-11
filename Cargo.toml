@@ -159,6 +159,10 @@ proptest = "1.11"
 criterion = "0.8"
 cc = "1.3"
 serde_yaml = "0.9"
+# Compile-fail fixtures proving Step 10's bypass-proof API actually refuses
+# to compile without `RawAccess` -- see tests/compile_fail/README or the
+# fixtures under `tests/compile_fail/`.
+trybuild = "1"
 
 [profile.release]
 opt-level = 3

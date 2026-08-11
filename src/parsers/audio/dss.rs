@@ -5,7 +5,9 @@
 //! reads only that assigned field.
 
 use crate::core::{FileReader, MetadataMap, TagValue};
-use crate::exiftool_tables::{DecodedValue, decode_binary_table, find_table};
+use crate::exiftool_tables::{
+    Acknowledged, DecodedValue, PerlCitation, RawAccess, decode_binary_table, find_table,
+};
 use crate::io::ByteOrder;
 
 const DSS_SIGNATURE: &[u8] = b"\x02dss";
@@ -28,12 +30,27 @@ pub fn parse_dss_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
         return Err("invalid DSS signature".to_string());
     }
 
+    // Olympus.pm's `EndTime` carries a `ValueConv` this schema does not
+    // reproduce (12-digit `YYMMDDhhmmss` -> `20YY:MM:DD hh:mm:ss`), so
+    // `Field::omitted.value_conv` is set; `format_dss_datetime` below is the
+    // hand-verified equivalent, and this citation is RawAccess's required
+    // acknowledgment.
+    const END_TIME_CITATION: PerlCitation = PerlCitation {
+        module: "Olympus",
+        table: "DSS",
+        tag: "EndTime",
+        lines: "ValueConv, Olympus.pm",
+    };
+
     let table = find_table("Olympus", "DSS").ok_or("missing Olympus::DSS table")?;
-    let end_time = decode_binary_table(table, &data, ByteOrder::Little)
-        .into_iter()
+    let decode = decode_binary_table(table, &data, ByteOrder::Little);
+    let end_time = decode
+        .fields()
+        .iter()
         .find(|decoded| decoded.field.name == "EndTime")
-        .and_then(|decoded| match decoded.raw {
-            DecodedValue::String(value) => Some(value),
+        .and_then(|decoded| RawAccess::new(decoded, Acknowledged::VALUE_CONV, &END_TIME_CITATION))
+        .and_then(|access| match access.raw() {
+            DecodedValue::String(value) => Some(value.clone()),
             _ => None,
         });
 

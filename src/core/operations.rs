@@ -1288,7 +1288,7 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
     process_infiray_segments(&segments, &mut metadata);
     process_qualcomm_segments(&segments, &mut metadata);
     process_dji_dbg_segments(&segments, &mut metadata);
-    process_dji_thermal_segments(&segments, &mut metadata);
+    process_dji_thermal_segments(&segments, &mut metadata, diagnostics);
     process_app6_segments(&segments, &mut metadata);
     process_app10_segments(&segments, &mut metadata);
     process_app11_segments(&segments, &mut metadata);

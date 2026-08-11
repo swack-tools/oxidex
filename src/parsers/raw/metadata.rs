@@ -31,7 +31,7 @@ use crate::core::formatters::{
 use crate::core::tag_conversion::apply_tile_offsets_value_conv;
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
-use crate::exiftool_tables::{DecodedValue, decode_binary_table, find_table};
+use crate::exiftool_tables::{decode_binary_table, find_table};
 use crate::io::ByteOrder as TableByteOrder;
 use crate::io::EndianReader;
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
@@ -4661,8 +4661,10 @@ fn parse_cr3_cmp1(data: &[u8], metadata: &mut MetadataMap) {
         return;
     };
 
-    for decoded in decode_binary_table(table, record, TableByteOrder::Big) {
-        let DecodedValue::Integer(value) = decoded.raw else {
+    // Both of `Canon::CMP1`'s generated fields are `Omitted::NONE`, so `emit`
+    // never refuses here.
+    for decoded in decode_binary_table(table, record, TableByteOrder::Big).fields() {
+        let Some(TagValue::Integer(value)) = decoded.emit() else {
             continue;
         };
         metadata.insert(

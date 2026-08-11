@@ -10,7 +10,8 @@ use super::binary::{
 };
 use super::binary_data::model_matches;
 use super::lens_spec::print_lens_spec;
-use crate::exiftool_tables::{self, DecodedValue};
+use crate::core::TagValue;
+use crate::exiftool_tables::{self, Acknowledged, DecodedValue, PerlCitation, RawAccess};
 use crate::io::{ByteOrder as IoByteOrder, EndianReader};
 use std::collections::HashMap;
 
@@ -154,9 +155,12 @@ pub fn extract_camera_info(
         return false;
     };
 
-    for decoded in exiftool_tables::decode_binary_table(table, data, IoByteOrder::Big) {
+    for decoded in exiftool_tables::decode_binary_table(table, data, IoByteOrder::Big).fields() {
         let name = decoded.field.name;
         match name {
+            // `LensSpec` (`Omitted.value_conv`) is never read through the
+            // decoded field at all -- the byte-swap it needs is read directly
+            // from `data` below, so there is no `RawAccess` call site for it.
             "LensSpec" => {
                 if let Some(printed) = data
                     .get(..8)
@@ -181,19 +185,23 @@ pub fn extract_camera_info(
             "AFMicroAdjValue" | "AFMicroAdjMode" | "AFMicroAdjRegisteredLenses" => {}
             // `afStatusInfo`'s `OTHER` sub formats every value the two literal
             // enum entries do not cover ("Front Focus (N)" / "Back Focus
-            // (+N)"); the generated IntEnum can only carry the two literals,
-            // so apply the hand-verified `af_status` helper instead of the
-            // generic PrintConv, which would silently omit every non-zero
-            // reading.
+            // (+N)"); the generated IntEnum can only carry the two literals
+            // (`Omitted::NONE`, so `emit` never refuses), so apply the
+            // hand-verified `af_status` helper to whichever `TagValue` `emit`
+            // produced instead of the generic PrintConv, which would silently
+            // omit every non-zero reading.
             _ if name.starts_with("AFStatus") => {
-                if let DecodedValue::Integer(v) = decoded.raw
-                    && let Some(printed) = af_status(v)
-                {
+                let value = match decoded.emit() {
+                    Some(TagValue::Integer(v)) => af_status(v),
+                    Some(TagValue::String(s)) => Some(s),
+                    _ => None,
+                };
+                if let Some(printed) = value {
                     tags.insert(format!("Sony:{name}"), printed);
                 }
             }
             _ => {
-                if let Some(printed) = decoded.apply_print_conv_to_raw() {
+                if let Some(TagValue::String(printed)) = decoded.emit() {
                     tags.insert(format!("Sony:{name}"), printed);
                 }
             }
@@ -654,12 +662,18 @@ pub fn extract_panorama(data: &[u8], byte_order: IoByteOrder, tags: &mut HashMap
     let Some(table) = exiftool_tables::find_table("Sony", "Panorama") else {
         return;
     };
-    for decoded in exiftool_tables::decode_binary_table(table, data, byte_order) {
+    // Every `Sony::Panorama` field is `Omitted::NONE`, so `emit` never
+    // refuses here.
+    for decoded in exiftool_tables::decode_binary_table(table, data, byte_order).fields() {
         let name = decoded.field.name;
-        if let Some(printed) = decoded.apply_print_conv_to_raw() {
-            tags.insert(format!("Sony:{name}"), printed);
-        } else if let DecodedValue::Integer(v) = decoded.raw {
-            tags.insert(format!("Sony:{name}"), v.to_string());
+        match decoded.emit() {
+            Some(TagValue::String(printed)) => {
+                tags.insert(format!("Sony:{name}"), printed);
+            }
+            Some(TagValue::Integer(v)) => {
+                tags.insert(format!("Sony:{name}"), v.to_string());
+            }
+            _ => {}
         }
     }
 }
@@ -726,11 +740,34 @@ pub fn extract_extra_info(
         return;
     };
 
+    // Every `RawAccess` below acknowledges exactly `condition` and/or
+    // `value_conv` -- the two flags `ExtraInfo3`'s gated fields actually set
+    // (verified against `src/exiftool_tables`) -- and cites the Sony.pm lines
+    // the surrounding gate logic reproduces by hand.
+    const BATTERY_VOLTAGE_CITATION: PerlCitation = PerlCitation {
+        module: "Sony",
+        table: "ExtraInfo3",
+        tag: "BatteryVoltage1/BatteryVoltage2",
+        lines: "5951-5967 (ValueConv, PrintConv); NEX model gate 5951-5988",
+    };
+    const IMAGE_STABILIZATION_CITATION: PerlCitation = PerlCitation {
+        module: "Sony",
+        table: "ExtraInfo3",
+        tag: "ImageStabilization",
+        lines: "5951-5988 (NEX model gate)",
+    };
+    const CAMERA_ORIENTATION_CITATION: PerlCitation = PerlCitation {
+        module: "Sony",
+        table: "ExtraInfo3",
+        tag: "CameraOrientation",
+        lines: "6070-6079 (non-NEX variant, mask 0x30)",
+    };
+
     // `ExtraInfo3` fields Sony.pm gates on `$$self{Model}`
     // (Sony.pm:5951-5988, 6070-6079). `Field::omitted.condition` records that
-    // a `Condition` exists but not what it tests, so `apply_print_conv_to_raw`
-    // cannot evaluate it -- the generic `_` arm below must not run for these,
-    // or a NEX body gets DSLR/SLT-only fields it never carries. That includes
+    // a `Condition` exists but not what it tests, so `emit` always refuses
+    // these -- the generic `_` arm below must not run for them, or a NEX body
+    // gets DSLR/SLT-only fields it never carries. That includes
     // `CameraOrientation`: its masked byte at 0x18 happened to read 0 on the
     // one NEX-VG10E sample this was checked against, coincidentally matching
     // the *real* NEX-only reading at a different offset (0x16) -- a wrong
@@ -739,21 +776,23 @@ pub fn extract_extra_info(
     // model predicate has actually been evaluated.
     let mut battery_voltage1: Option<i64> = None;
     let mut battery_voltage2: Option<i64> = None;
-    let mut image_stabilization_gated: Option<String> = None;
-    let mut camera_orientation_non_nex: Option<String> = None;
+    let mut image_stabilization_gated: Option<TagValue> = None;
+    let mut camera_orientation_non_nex: Option<TagValue> = None;
 
-    for decoded in exiftool_tables::decode_binary_table(table, data, order) {
+    for decoded in exiftool_tables::decode_binary_table(table, data, order).fields() {
         let name = decoded.field.name;
         match name {
             // Sony.pm: `PrintConv => '$val=~tr/ /./; $val'` -- a raw string
             // substitution on the default space-joined `int8u[4]` rendering,
-            // which the generated schema has no PrintConv form for. Joining
-            // the decoded array with '.' directly reproduces it exactly.
+            // which the generated schema has no PrintConv form for.
+            // `Omitted::NONE`, so `emit`'s raw fallback (`TagValue::Array`) is
+            // exactly what this arm needs; joining it with '.' directly
+            // reproduces the substitution.
             "ExtraInfoVersion" => {
-                if let DecodedValue::Array(values) = &decoded.raw {
+                if let Some(TagValue::Array(values)) = decoded.emit() {
                     let mut parts = Vec::with_capacity(values.len());
-                    for v in values {
-                        let DecodedValue::Integer(n) = v else {
+                    for v in &values {
+                        let TagValue::Integer(n) = v else {
                             parts.clear();
                             break;
                         };
@@ -765,20 +804,30 @@ pub fn extract_extra_info(
                 }
             }
             // Sony.pm:5951-5967: `ValueConv => '$val / 128'`, `PrintConv =>
-            // 'sprintf("%.2f V",$val)'`. `Field::omitted.value_conv` is set
-            // (the schema has no PrintConv form for a value the ValueConv
-            // already transformed), so `apply_print_conv_to_raw` always
-            // refuses this field; the ValueConv+PrintConv pair is applied by
+            // 'sprintf("%.2f V",$val)'`. Both fields exist only in
+            // `ExtraInfo3` (verified against `src/exiftool_tables`), where
+            // `Field::omitted` sets `value_conv` and `condition`, so `emit`
+            // always refuses them; the ValueConv+PrintConv pair is applied by
             // hand below, but ONLY once the model condition captured here has
             // been checked -- never unconditionally.
             "BatteryVoltage1" => {
-                if let DecodedValue::Integer(v) = decoded.raw {
-                    battery_voltage1 = Some(v);
+                if let Some(access) = RawAccess::new(
+                    decoded,
+                    Acknowledged::VALUE_CONV | Acknowledged::CONDITION,
+                    &BATTERY_VOLTAGE_CITATION,
+                ) && let DecodedValue::Integer(v) = access.raw()
+                {
+                    battery_voltage1 = Some(*v);
                 }
             }
             "BatteryVoltage2" => {
-                if let DecodedValue::Integer(v) = decoded.raw {
-                    battery_voltage2 = Some(v);
+                if let Some(access) = RawAccess::new(
+                    decoded,
+                    Acknowledged::VALUE_CONV | Acknowledged::CONDITION,
+                    &BATTERY_VOLTAGE_CITATION,
+                ) && let DecodedValue::Integer(v) = access.raw()
+                {
+                    battery_voltage2 = Some(*v);
                 }
             }
             // `ExtraInfo2`'s `ImageStabilization` (A230/290/330/380/390) has
@@ -787,13 +836,25 @@ pub fn extract_extra_info(
             // `ExtraInfo2` field on the unconditional `_` path below and
             // diverts only the gated one.
             "ImageStabilization" if decoded.field.omitted.condition => {
-                image_stabilization_gated = decoded.apply_print_conv_to_raw();
+                if let Some(access) = RawAccess::new(
+                    decoded,
+                    Acknowledged::CONDITION,
+                    &IMAGE_STABILIZATION_CITATION,
+                ) {
+                    image_stabilization_gated = Some(access.emit_raw());
+                }
             }
             "CameraOrientation" => {
-                camera_orientation_non_nex = decoded.apply_print_conv_to_raw();
+                if let Some(access) = RawAccess::new(
+                    decoded,
+                    Acknowledged::CONDITION,
+                    &CAMERA_ORIENTATION_CITATION,
+                ) {
+                    camera_orientation_non_nex = Some(access.emit_raw());
+                }
             }
             _ => {
-                if let Some(printed) = decoded.apply_print_conv_to_raw() {
+                if let Some(TagValue::String(printed)) = decoded.emit() {
                     tags.insert(format!("Sony:{name}"), printed);
                 }
             }
@@ -821,10 +882,10 @@ pub fn extract_extra_info(
                 format!("{:.2} V", v as f64 / 128.0),
             );
         }
-        if let Some(printed) = image_stabilization_gated {
+        if let Some(TagValue::String(printed)) = image_stabilization_gated {
             tags.insert("Sony:ImageStabilization".to_string(), printed);
         }
-        if let Some(printed) = camera_orientation_non_nex {
+        if let Some(TagValue::String(printed)) = camera_orientation_non_nex {
             tags.insert("Sony:CameraOrientation".to_string(), printed);
         }
     } else if let Some(&raw) = data.get(0x16) {

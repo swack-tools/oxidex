@@ -49,7 +49,8 @@
 
 use std::collections::HashMap;
 
-use crate::exiftool_tables::{DecodedValue, decode_binary_table, find_table};
+use crate::core::TagValue;
+use crate::exiftool_tables::{decode_binary_table, find_table};
 use crate::io::ByteOrder as IoByteOrder;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
@@ -103,20 +104,22 @@ pub fn parse(data: &[u8], byte_order: ByteOrder, tags: &mut HashMap<String, Stri
     let Some(table) = find_table("Samsung", "Main") else {
         return;
     };
-    for decoded in decode_binary_table(table, data, io_order(byte_order)) {
-        let rendered = match (decoded.field.name, &decoded.raw) {
+    // All three fields `Samsung::Main` declares are `Omitted::NONE`, so
+    // `emit` never refuses here.
+    for decoded in decode_binary_table(table, data, io_order(byte_order)).fields() {
+        let rendered = match (decoded.field.name, decoded.emit()) {
             // `undef[8]`. The version is NUL-padded to the full eight bytes on
             // the models that spell it with seven characters ("STMN100",
             // "STMN010"); ExifTool carries the padding in the value and drops
             // it at the output layer (exiftool:3819, `tr/\0//d`). Refuse a
             // block that is not text rather than render one approximately.
-            ("MakerNoteVersion", DecodedValue::Undefined(bytes)) => {
-                match std::str::from_utf8(bytes) {
+            ("MakerNoteVersion", Some(TagValue::Binary(bytes))) => {
+                match std::str::from_utf8(&bytes) {
                     Ok(text) => text.trim_end_matches('\0').to_string(),
                     Err(_) => continue,
                 }
             }
-            ("PreviewImageStart" | "PreviewImageLength", DecodedValue::Integer(value)) => {
+            ("PreviewImageStart" | "PreviewImageLength", Some(TagValue::Integer(value))) => {
                 value.to_string()
             }
             _ => continue,

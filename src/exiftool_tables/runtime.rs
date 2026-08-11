@@ -6,9 +6,10 @@
 //! the schema does not record, and conversions the generator refused to
 //! approximate, are left for format-specific code instead of being guessed.
 
+use crate::core::TagValue;
 use crate::io::ByteOrder;
 
-use super::{ALL_BINARY_TABLES, BinaryTable, Field, Fmt, PrintConv};
+use super::{ALL_BINARY_TABLES, BinaryTable, Field, Fmt, Omitted, PrintConv};
 
 /// A value read directly from a generated binary-table field.
 #[derive(Clone, Debug, PartialEq)]
@@ -58,32 +59,191 @@ impl DecodedValue {
 }
 
 /// One successfully decoded generated field.
+///
+/// `raw` is private (Step 10, `OVERHAUL_OXIDEX_PLAN.md`'s bypass-proof API):
+/// the only way to a value is [`DecodedField::emit`], which consults every
+/// [`Omitted`] flag, or [`RawAccess`], which requires acknowledging each flag
+/// the field actually sets plus a citation into the Perl being reproduced by
+/// hand. There is no third way to reach `raw`.
 #[derive(Clone, Debug)]
 pub struct DecodedField {
     pub field: &'static Field,
-    pub raw: DecodedValue,
+    raw: DecodedValue,
 }
 
 impl DecodedField {
-    /// Apply this field's generated `PrintConv` directly to its raw value.
+    /// The value ExifTool would report for this field, or `None` when any of
+    /// `Field::omitted`'s five flags is set.
     ///
-    /// Refuses when the transcription recorded an omitted `ValueConv`. ExifTool
-    /// runs `ValueConv` before `PrintConv`, so on such a field the generated
-    /// enum is keyed on values the raw bytes never produce: `Minolta`'s
-    /// Sharpness/Contrast/Saturation (`$val - 10`) would be looked up ten steps
-    /// off, and `Nikon`'s `ISOAutoShutterTime` (`$val / 8`) eight times high.
-    /// That yields either a wrong string or a silent fall-through to a wrong
-    /// raw number, under a real ExifTool tag name.
-    ///
-    /// This precondition was documented before, as something the caller had to
-    /// check -- but the schema carried no way to check it, so no caller could.
-    /// Now that `Field::omitted` records it, the refusal happens here.
+    /// A clean field (no flag set) renders its generated `PrintConv`; when
+    /// that yields nothing -- `PrintConv::None`, or a hash/expression that
+    /// does not cover this value -- the raw decoded value stands in, which is
+    /// the same "no conversion is honest, a guess is not" rule
+    /// [`PrintConv`]'s own doc comment states. A flagged field always
+    /// refuses: ExifTool ran a `ValueConv`/`RawConv`/`Condition`/`Hook`/
+    /// `SubDirectory` this schema does not reproduce, and reporting the raw
+    /// bytes under the real tag name would be a confident wrong value
+    /// (AGENTS.md, "never approximate a conversion").
     #[must_use]
-    pub fn apply_print_conv_to_raw(&self) -> Option<String> {
-        if self.field.omitted.value_conv {
+    pub fn emit(&self) -> Option<TagValue> {
+        if self.field.omitted.any() {
             return None;
         }
-        apply_print_conv(self.field.print_conv, &self.raw)
+        Some(match apply_print_conv(self.field.print_conv, &self.raw) {
+            Some(rendered) => TagValue::String(rendered),
+            None => decoded_value_to_tag_value(&self.raw),
+        })
+    }
+}
+
+/// Render a [`DecodedValue`] as a [`TagValue`] with no conversion applied.
+///
+/// The fallback [`DecodedField::emit`] and [`RawAccess::emit_raw`] both use
+/// when a `PrintConv` does not apply (absent, or a hash/expression that does
+/// not cover this value) -- the raw value stands in, honestly, rather than a
+/// guessed string.
+fn decoded_value_to_tag_value(value: &DecodedValue) -> TagValue {
+    match value {
+        DecodedValue::Integer(v) => TagValue::Integer(*v),
+        DecodedValue::Float(v) => TagValue::Float(*v),
+        DecodedValue::UnsignedRational(n, d) => TagValue::Rational {
+            numerator: *n as i32,
+            denominator: *d as i32,
+        },
+        DecodedValue::SignedRational(n, d) => TagValue::Rational {
+            numerator: *n,
+            denominator: *d,
+        },
+        DecodedValue::String(s) => TagValue::String(s.clone()),
+        DecodedValue::Undefined(bytes) => TagValue::Binary(bytes.clone()),
+        DecodedValue::Array(values) => {
+            TagValue::Array(values.iter().map(decoded_value_to_tag_value).collect())
+        }
+    }
+}
+
+/// A caller's acknowledgment of which of a field's [`Omitted`] semantics it
+/// has independently supplied, one bit per flag.
+///
+/// Bitflag-style and deliberately not a `bool`: acknowledging `condition` on
+/// a field that also has `value_conv` set must not unlock it, so a single
+/// "yes, I checked" flag would be the wrong shape for this. Combine flags
+/// with `|`, e.g. `Acknowledged::CONDITION | Acknowledged::VALUE_CONV`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Acknowledged(u8);
+
+impl Acknowledged {
+    pub const NONE: Self = Self(0);
+    pub const VALUE_CONV: Self = Self(1 << 0);
+    pub const RAW_CONV: Self = Self(1 << 1);
+    pub const CONDITION: Self = Self(1 << 2);
+    pub const HOOK: Self = Self(1 << 3);
+    pub const SUBDIRECTORY: Self = Self(1 << 4);
+
+    #[must_use]
+    const fn contains(self, flag: Self) -> bool {
+        self.0 & flag.0 == flag.0
+    }
+
+    /// True when every flag `omitted` sets is also set here. An omitted flag
+    /// that is `false` imposes no requirement, so a field with nothing set at
+    /// all is trivially covered by [`Acknowledged::NONE`].
+    #[must_use]
+    const fn covers(self, omitted: Omitted) -> bool {
+        (!omitted.value_conv || self.contains(Self::VALUE_CONV))
+            && (!omitted.raw_conv || self.contains(Self::RAW_CONV))
+            && (!omitted.condition || self.contains(Self::CONDITION))
+            && (!omitted.hook || self.contains(Self::HOOK))
+            && (!omitted.subdirectory || self.contains(Self::SUBDIRECTORY))
+    }
+}
+
+impl std::ops::BitOr for Acknowledged {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
+/// A citation into the pinned ExifTool Perl source (`.exiftool-version`) that
+/// a [`RawAccess`] construction reproduces by hand.
+///
+/// Required on every call (D2 of Step 10's design: no exceptions) so a
+/// reviewer -- or a future regeneration that moves the cited lines -- has
+/// something concrete to check the hand-written conversion against, instead
+/// of trusting a bare `raw` read on faith.
+#[derive(Clone, Copy, Debug)]
+pub struct PerlCitation {
+    pub module: &'static str,
+    pub table: &'static str,
+    pub tag: &'static str,
+    /// Human-readable line reference, e.g. `"5951-5967"`.
+    pub lines: &'static str,
+}
+
+/// The sole escape hatch past [`DecodedField::emit`]'s refusal.
+///
+/// Constructing one requires covering *every* flag the field's
+/// [`Field::omitted`] sets (acknowledging `condition` alone does not unlock a
+/// field that also has `value_conv` set) and citing the Perl this call site
+/// reproduces by hand. There is no other way to reach a flagged field's raw
+/// value: `DecodedField::raw` is private, and [`RawAccess::new`] is the only
+/// function in this crate that reads it from outside this module.
+pub struct RawAccess<'a> {
+    field: &'a DecodedField,
+    /// Carried for provenance -- a call site exists because this was set,
+    /// even though nothing here reads it back at runtime.
+    #[allow(dead_code)]
+    justification: &'static PerlCitation,
+}
+
+impl<'a> RawAccess<'a> {
+    /// `None` when `acknowledged` does not cover every flag `field.field.omitted`
+    /// sets -- acknowledging a subset is the same as acknowledging none.
+    #[must_use]
+    pub fn new(
+        field: &'a DecodedField,
+        acknowledged: Acknowledged,
+        justification: &'static PerlCitation,
+    ) -> Option<Self> {
+        if acknowledged.covers(field.field.omitted) {
+            Some(Self {
+                field,
+                justification,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// The field this access covers.
+    #[must_use]
+    pub fn field(&self) -> &'static Field {
+        self.field.field
+    }
+
+    /// The decoded value before any conversion -- what the caller
+    /// acknowledged reading past `Field::omitted` to reach.
+    #[must_use]
+    pub fn raw(&self) -> &DecodedValue {
+        &self.field.raw
+    }
+
+    /// Render the field's generated `PrintConv` against the raw value, or
+    /// fall back to the raw value itself when the conversion does not apply.
+    ///
+    /// This is [`DecodedField::emit`]'s rendering step made available to a
+    /// caller who has already supplied the semantics `emit` itself refuses to
+    /// assume -- e.g. a `Condition`-gated field the call site has verified the
+    /// gate for, whose `PrintConv` is otherwise exactly what the schema
+    /// records.
+    #[must_use]
+    pub fn emit_raw(&self) -> TagValue {
+        match apply_print_conv(self.field.field.print_conv, self.raw()) {
+            Some(rendered) => TagValue::String(rendered),
+            None => decoded_value_to_tag_value(self.raw()),
+        }
     }
 }
 
@@ -140,10 +300,105 @@ pub fn all_fractional_census() -> FractionalCensus {
         })
 }
 
+/// How many fields [`decode_binary_table`] withheld from
+/// [`DecodedField::emit`], broken out by reason.
+///
+/// Step 10 (`OVERHAUL_OXIDEX_PLAN.md`, D1): a field is withheld when any of
+/// `Field::omitted`'s five flags is set, or when its offset falls past the
+/// table's [`BinaryTable::offsets_sound_until`] boundary. A field can trip
+/// more than one flag at once (e.g. both `condition` and `value_conv`), and
+/// each is counted independently -- this is a census of *reasons*, not of
+/// distinct fields, so the total can exceed the number of fields a table
+/// actually withholds. The point of counting at all is that a withheld field
+/// is not a silently dropped one: [`TableDecode::refusals`] is the seam Step
+/// 13's diagnostic sink reads.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RefusalCounts {
+    pub value_conv: usize,
+    pub raw_conv: usize,
+    pub condition: usize,
+    pub hook: usize,
+    pub subdirectory: usize,
+    /// Fields whose offset sits past `offsets_sound_until` -- unlike the five
+    /// flags above, there is no [`RawAccess`] escape for this one: the static
+    /// `index * increment` formula is not just unmodeled here, it is not
+    /// reliably the field's real byte offset at all, so there is no `raw` to
+    /// acknowledge reading.
+    pub offset_unsound: usize,
+}
+
+impl RefusalCounts {
+    /// Sum across all six reasons.
+    #[must_use]
+    pub const fn total(self) -> usize {
+        self.value_conv
+            + self.raw_conv
+            + self.condition
+            + self.hook
+            + self.subdirectory
+            + self.offset_unsound
+    }
+
+    /// Fold another table's counts into this one.
+    #[must_use]
+    pub const fn merge(self, other: Self) -> Self {
+        Self {
+            value_conv: self.value_conv + other.value_conv,
+            raw_conv: self.raw_conv + other.raw_conv,
+            condition: self.condition + other.condition,
+            hook: self.hook + other.hook,
+            subdirectory: self.subdirectory + other.subdirectory,
+            offset_unsound: self.offset_unsound + other.offset_unsound,
+        }
+    }
+}
+
+/// The result of [`decode_binary_table`]: every field it could place bytes
+/// for, plus a census of why any of them were withheld from
+/// [`DecodedField::emit`].
+///
+/// `fields` deliberately still carries a withheld field's [`DecodedField`] --
+/// its bytes decoded fine, only its *meaning* is unresolved -- so
+/// [`RawAccess`] has something to acknowledge its way into. Only
+/// `offset_unsound` fields are absent from `fields` entirely, because there is
+/// no [`RawAccess`] path for those (see [`RefusalCounts::offset_unsound`]).
+#[derive(Clone, Debug, Default)]
+pub struct TableDecode {
+    fields: Vec<DecodedField>,
+    refusals: RefusalCounts,
+}
+
+impl TableDecode {
+    /// Every field this table's bytes were long enough to decode, withheld or
+    /// not. Call [`DecodedField::emit`] on each, or construct a [`RawAccess`]
+    /// for one whose flags a caller can justify.
+    #[must_use]
+    pub fn fields(&self) -> &[DecodedField] {
+        &self.fields
+    }
+
+    /// Why fields in this decode were withheld from `emit`, broken out by
+    /// reason. See [`RefusalCounts`].
+    #[must_use]
+    pub fn refusals(&self) -> RefusalCounts {
+        self.refusals
+    }
+
+    /// Consume this decode into its parts, for a caller that wants to fold
+    /// `refusals` into a diagnostic sink alongside iterating `fields`.
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<DecodedField>, RefusalCounts) {
+        (self.fields, self.refusals)
+    }
+}
+
 /// Decode the fields whose layouts are completely described by `table`.
 ///
-/// Out-of-range fields are refused, and so are fractional bit-field indices
-/// that declare no [`Mask`] -- see [`fractional_census`] for that split.
+/// Out-of-range fields are silently absent (never enough bytes to decode
+/// at all), and so are fractional bit-field indices that declare no
+/// [`Mask`] -- see [`fractional_census`] for that split; neither is part of
+/// [`RefusalCounts`], which is specifically about resolved-but-withheld
+/// fields (D1).
 ///
 /// A fractional key is ExifTool's `12.1` notation: several tags share the word
 /// at index 12, each naming a slice of it. `Mask` is what says *which* slice,
@@ -156,44 +411,85 @@ pub fn all_fractional_census() -> FractionalCensus {
 /// which is what ExifTool does before any conversion runs
 /// (`$val = ($val & $mask) >> $$tagInfo{BitShift} if $mask`, ExifTool.pm's
 /// `ProcessBinaryData`). Repeated scalar fields decode as
-/// [`DecodedValue::Array`]. This function performs raw decoding only; opt into
-/// `PrintConv` with [`DecodedField::apply_print_conv_to_raw`].
+/// [`DecodedValue::Array`]. This function performs raw decoding only; get a
+/// value out with [`DecodedField::emit`] or [`RawAccess`].
 #[must_use]
 pub fn decode_binary_table(
     table: &'static BinaryTable,
     data: &[u8],
     byte_order: ByteOrder,
-) -> Vec<DecodedField> {
-    table
-        .fields
-        .iter()
-        .filter_map(|field| {
-            if field.sub.is_some() && field.mask.is_none() {
-                return None;
-            }
-            let offset = usize::try_from(table.byte_offset(field)).ok()?;
-            let format = table.field_format(field);
-            let width = usize::try_from(format.size()).ok()?;
-            let byte_count = width.checked_mul(field.count)?;
-            let bytes = data.get(offset..offset.checked_add(byte_count)?)?;
-            let raw = if field.count == 1 {
-                decode_value(bytes, format, byte_order)?
-            } else {
-                let values = bytes
-                    .chunks_exact(width)
-                    .map(|chunk| decode_value(chunk, format, byte_order))
-                    .collect::<Option<Vec<_>>>()?;
-                DecodedValue::Array(values)
-            };
-            let raw = match field.mask {
-                None => raw,
-                // A mask on a non-integer is a construct this schema cannot
-                // express; refuse rather than report the unmasked value.
-                Some(mask) => DecodedValue::Integer(mask.apply(raw.integer()?)),
-            };
-            Some(DecodedField { field, raw })
-        })
-        .collect()
+) -> TableDecode {
+    let mut fields = Vec::new();
+    let mut refusals = RefusalCounts::default();
+
+    for field in table.fields {
+        if field.sub.is_some() && field.mask.is_none() {
+            continue;
+        }
+        // D1: past this bound, `index * increment` is a nominal offset, not a
+        // trustworthy one -- there is no `raw` here to hand a caller at all.
+        if let Some(bound) = table.offsets_sound_until
+            && field.index > bound
+        {
+            refusals.offset_unsound += 1;
+            continue;
+        }
+
+        let Some(decoded) = decode_field(table, field, data, byte_order) else {
+            continue;
+        };
+
+        let omitted = field.omitted;
+        if omitted.value_conv {
+            refusals.value_conv += 1;
+        }
+        if omitted.raw_conv {
+            refusals.raw_conv += 1;
+        }
+        if omitted.condition {
+            refusals.condition += 1;
+        }
+        if omitted.hook {
+            refusals.hook += 1;
+        }
+        if omitted.subdirectory {
+            refusals.subdirectory += 1;
+        }
+        fields.push(decoded);
+    }
+
+    TableDecode { fields, refusals }
+}
+
+/// Decode one field's bytes, applying its [`Mask`] if it has one. `None` means
+/// the field's bytes did not fit in `data` -- a short read, not a refusal.
+fn decode_field(
+    table: &'static BinaryTable,
+    field: &'static Field,
+    data: &[u8],
+    byte_order: ByteOrder,
+) -> Option<DecodedField> {
+    let offset = usize::try_from(table.byte_offset(field)).ok()?;
+    let format = table.field_format(field);
+    let width = usize::try_from(format.size()).ok()?;
+    let byte_count = width.checked_mul(field.count)?;
+    let bytes = data.get(offset..offset.checked_add(byte_count)?)?;
+    let raw = if field.count == 1 {
+        decode_value(bytes, format, byte_order)?
+    } else {
+        let values = bytes
+            .chunks_exact(width)
+            .map(|chunk| decode_value(chunk, format, byte_order))
+            .collect::<Option<Vec<_>>>()?;
+        DecodedValue::Array(values)
+    };
+    let raw = match field.mask {
+        None => raw,
+        // A mask on a non-integer is a construct this schema cannot
+        // express; refuse rather than report the unmasked value.
+        Some(mask) => DecodedValue::Integer(mask.apply(raw.integer()?)),
+    };
+    Some(DecodedField { field, raw })
 }
 
 fn decode_value(bytes: &[u8], format: Fmt, byte_order: ByteOrder) -> Option<DecodedValue> {
@@ -309,33 +605,39 @@ mod tests {
         data[175..177].copy_from_slice(&200_u16.to_le_bytes());
 
         let table = find_table("Pentax", "MOV").expect("generated Pentax::MOV table");
-        let fields = decode_binary_table(table, &data, ByteOrder::Little);
-        let get = |name: &str| fields.iter().find(|decoded| decoded.field.name == name);
+        let decode = decode_binary_table(table, &data, ByteOrder::Little);
+        let get = |name: &str| {
+            decode
+                .fields()
+                .iter()
+                .find(|decoded| decoded.field.name == name)
+        };
 
         assert_eq!(
-            get("Make").map(|decoded| &decoded.raw),
-            Some(&DecodedValue::String("PENTAX DIGITAL CAMERA".into()))
+            get("Make").and_then(DecodedField::emit),
+            Some(TagValue::String("PENTAX DIGITAL CAMERA".into()))
         );
         assert_eq!(
-            get("FNumber").map(|decoded| &decoded.raw),
-            Some(&DecodedValue::UnsignedRational(28, 10))
+            get("FNumber").and_then(DecodedField::emit),
+            Some(TagValue::String("2.8".to_string()))
         );
         assert_eq!(
-            get("FNumber").and_then(DecodedField::apply_print_conv_to_raw),
-            Some("2.8".to_string())
+            get("WhiteBalance").and_then(DecodedField::emit),
+            Some(TagValue::String("Shade".to_string()))
         );
         assert_eq!(
-            get("WhiteBalance").and_then(DecodedField::apply_print_conv_to_raw),
-            Some("Shade".to_string())
+            get("FocalLength").and_then(DecodedField::emit),
+            Some(TagValue::String("7.1 mm".to_string()))
         );
         assert_eq!(
-            get("FocalLength").and_then(DecodedField::apply_print_conv_to_raw),
-            Some("7.1 mm".to_string())
+            get("ISO").and_then(DecodedField::emit),
+            Some(TagValue::Integer(200))
         );
-        assert_eq!(
-            get("ISO").map(|decoded| &decoded.raw),
-            Some(&DecodedValue::Integer(200))
-        );
+        // `ExposureTime` (Pentax.pm's `%MOV` key 38) carries a `ValueConv` this
+        // schema does not reproduce, so `emit` refuses it -- the field is not
+        // simply absent; it decoded fine and is withheld.
+        assert!(get("ExposureTime").unwrap().field.omitted.value_conv);
+        assert_eq!(get("ExposureTime").and_then(DecodedField::emit), None);
     }
 
     /// A fractional key without a `Mask` says a tag is a slice of the word
@@ -387,20 +689,21 @@ mod tests {
             fields: FIELDS,
         };
 
-        let fields = decode_binary_table(
+        let decode = decode_binary_table(
             &TABLE,
             &[0x12, 0x34, 0xff, 0, 0, 1, 0, 2, 0, 3],
             ByteOrder::Big,
         );
+        let fields = decode.fields();
         assert_eq!(fields.len(), 2);
-        assert_eq!(fields[0].raw, DecodedValue::Integer(0x3412));
+        assert_eq!(fields[0].emit(), Some(TagValue::Integer(0x3412)));
         assert_eq!(
-            fields[1].raw,
-            DecodedValue::Array(vec![
-                DecodedValue::Integer(1),
-                DecodedValue::Integer(2),
-                DecodedValue::Integer(3),
-            ]),
+            fields[1].emit(),
+            Some(TagValue::Array(vec![
+                TagValue::Integer(1),
+                TagValue::Integer(2),
+                TagValue::Integer(3),
+            ])),
         );
     }
 
@@ -475,25 +778,26 @@ mod tests {
 
         // int8u FORMAT, so index 4 is byte 4: the big-endian word 0xABCD.
         let data = [0, 0, 0, 0, 0xAB, 0xCD];
-        let fields = decode_binary_table(&TABLE, &data, ByteOrder::Big);
-        let get = |name: &str| fields.iter().find(|decoded| decoded.field.name == name);
+        let decode = decode_binary_table(&TABLE, &data, ByteOrder::Big);
+        let get = |name: &str| {
+            decode
+                .fields()
+                .iter()
+                .find(|decoded| decoded.field.name == name)
+        };
 
         assert_eq!(
-            get("Low").map(|d| &d.raw),
-            Some(&DecodedValue::Integer(0xD))
+            get("Low").and_then(DecodedField::emit),
+            Some(TagValue::Integer(0xD))
         );
         assert_eq!(
-            get("Middle").map(|d| &d.raw),
-            Some(&DecodedValue::Integer(0xB))
-        );
-        assert_eq!(
-            get("Middle").and_then(DecodedField::apply_print_conv_to_raw),
-            Some("Eleven".to_string()),
+            get("Middle").and_then(DecodedField::emit),
+            Some(TagValue::String("Eleven".to_string())),
             "the enum is keyed on the slice, not on the 0xABCD word"
         );
         assert_eq!(
-            get("Top").map(|d| &d.raw),
-            Some(&DecodedValue::Integer(0xA))
+            get("Top").and_then(DecodedField::emit),
+            Some(TagValue::Integer(0xA))
         );
         assert!(
             get("Undetermined").is_none(),
@@ -591,18 +895,189 @@ mod tests {
         };
 
         // 0xFD & 0x7 == 5; the unmasked 0xFD matches no enum key at all.
-        let fields = decode_binary_table(&TABLE, &[0xFD, 0xA3, 0x00], ByteOrder::Big);
-        assert_eq!(fields[0].raw, DecodedValue::Integer(5));
+        let decode = decode_binary_table(&TABLE, &[0xFD, 0xA3, 0x00], ByteOrder::Big);
+        let fields = decode.fields();
         assert_eq!(
-            fields[0].apply_print_conv_to_raw().as_deref(),
-            Some("Rotated")
+            fields[0].emit(),
+            Some(TagValue::String("Rotated".to_string()))
         );
-        assert_eq!(fields[1].raw, DecodedValue::Integer(0xA));
-        assert_eq!(fields[2].raw, DecodedValue::Integer(0));
+        assert_eq!(fields[1].emit(), Some(TagValue::Integer(0xA)));
         assert_eq!(
-            fields[2].apply_print_conv_to_raw(),
+            fields[2].emit(),
             None,
             "a PrintConv behind an omitted ValueConv must not be applied"
         );
+
+        // The escape hatch: acknowledging `value_conv` reaches the raw value
+        // RawAccess::new refuses without it.
+        const CITATION: PerlCitation = PerlCitation {
+            module: "Test",
+            table: "Masked",
+            tag: "Converted",
+            lines: "n/a (unit test fixture)",
+        };
+        assert!(RawAccess::new(&fields[2], Acknowledged::NONE, &CITATION).is_none());
+        let access = RawAccess::new(&fields[2], Acknowledged::VALUE_CONV, &CITATION)
+            .expect("value_conv acknowledged");
+        assert_eq!(access.raw(), &DecodedValue::Integer(0));
+    }
+
+    #[test]
+    fn raw_access_requires_covering_every_set_flag_at_once() {
+        static FIELD: Field = Field {
+            index: 0,
+            sub: None,
+            name: "DoubleFlagged",
+            format: Some(Fmt::Int8u),
+            count: 1,
+            mask: None,
+            omitted: Omitted {
+                value_conv: true,
+                raw_conv: false,
+                condition: true,
+                hook: false,
+                subdirectory: false,
+            },
+            print_conv: PrintConv::None,
+        };
+        let decoded = DecodedField {
+            field: &FIELD,
+            raw: DecodedValue::Integer(1),
+        };
+        const CITATION: PerlCitation = PerlCitation {
+            module: "Test",
+            table: "Masked",
+            tag: "DoubleFlagged",
+            lines: "n/a (unit test fixture)",
+        };
+
+        // Acknowledging one of the two set flags is not the same as
+        // acknowledging both (D1: "all six at once").
+        assert!(RawAccess::new(&decoded, Acknowledged::CONDITION, &CITATION).is_none());
+        assert!(RawAccess::new(&decoded, Acknowledged::VALUE_CONV, &CITATION).is_none());
+        assert!(
+            RawAccess::new(
+                &decoded,
+                Acknowledged::CONDITION | Acknowledged::VALUE_CONV,
+                &CITATION
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn refusal_counts_tally_every_set_flag_independently() {
+        static FIELDS: &[Field] = &[
+            Field {
+                index: 0,
+                sub: None,
+                name: "OnlyCondition",
+                format: Some(Fmt::Int8u),
+                count: 1,
+                mask: None,
+                omitted: Omitted {
+                    value_conv: false,
+                    raw_conv: false,
+                    condition: true,
+                    hook: false,
+                    subdirectory: false,
+                },
+                print_conv: PrintConv::None,
+            },
+            Field {
+                index: 1,
+                sub: None,
+                name: "BothConditionAndValueConv",
+                format: Some(Fmt::Int8u),
+                count: 1,
+                mask: None,
+                omitted: Omitted {
+                    value_conv: true,
+                    raw_conv: false,
+                    condition: true,
+                    hook: false,
+                    subdirectory: false,
+                },
+                print_conv: PrintConv::None,
+            },
+            Field {
+                index: 2,
+                sub: None,
+                name: "Clean",
+                format: Some(Fmt::Int8u),
+                count: 1,
+                mask: None,
+                omitted: Omitted::NONE,
+                print_conv: PrintConv::None,
+            },
+        ];
+        static TABLE: BinaryTable = BinaryTable {
+            module: "Test",
+            table: "Refusals",
+            group0: "",
+            group2: "",
+            first_entry: 0,
+            default_format: Fmt::Int8u,
+            offsets_sound_until: None,
+            fields: FIELDS,
+        };
+
+        let decode = decode_binary_table(&TABLE, &[1, 2, 3], ByteOrder::Big);
+        // Both flagged fields still decode into `fields()` -- withheld from
+        // `emit`, but present for `RawAccess` and counted, never dropped.
+        assert_eq!(decode.fields().len(), 3);
+        assert_eq!(
+            decode.refusals(),
+            RefusalCounts {
+                value_conv: 1,
+                raw_conv: 0,
+                condition: 2,
+                hook: 0,
+                subdirectory: 0,
+                offset_unsound: 0,
+            }
+        );
+        assert_eq!(decode.refusals().total(), 3);
+    }
+
+    #[test]
+    fn offset_unsound_fields_are_withheld_with_no_raw_access_path() {
+        static FIELDS: &[Field] = &[
+            Field {
+                index: 0,
+                sub: None,
+                name: "BeforeBound",
+                format: Some(Fmt::Int8u),
+                count: 1,
+                mask: None,
+                omitted: Omitted::NONE,
+                print_conv: PrintConv::None,
+            },
+            Field {
+                index: 5,
+                sub: None,
+                name: "PastBound",
+                format: Some(Fmt::Int8u),
+                count: 1,
+                mask: None,
+                omitted: Omitted::NONE,
+                print_conv: PrintConv::None,
+            },
+        ];
+        static TABLE: BinaryTable = BinaryTable {
+            module: "Test",
+            table: "Unsound",
+            group0: "",
+            group2: "",
+            first_entry: 0,
+            default_format: Fmt::Int8u,
+            offsets_sound_until: Some(3),
+            fields: FIELDS,
+        };
+
+        let decode = decode_binary_table(&TABLE, &[0, 0, 0, 0, 0, 9], ByteOrder::Big);
+        assert_eq!(decode.fields().len(), 1, "only the sound field decodes");
+        assert_eq!(decode.fields()[0].field.name, "BeforeBound");
+        assert_eq!(decode.refusals().offset_unsound, 1);
     }
 }

@@ -1,0 +1,15 @@
+error[E0061]: this function takes 3 arguments but 2 arguments were supplied
+  --> tests/compile_fail/raw_access_requires_a_citation.rs:12:13
+   |
+12 |     let _ = RawAccess::new(field, Acknowledged::VALUE_CONV);
+   |             ^^^^^^^^^^^^^^--------------------------------- argument #3 of type `&'static PerlCitation` is missing
+   |
+note: associated function defined here
+  --> src/exiftool_tables/runtime.rs
+   |
+   |     pub fn new(
+   |            ^^^
+help: provide the argument
+   |
+12 |     let _ = RawAccess::new(field, Acknowledged::VALUE_CONV, /* &'static PerlCitation */);
+   |                                                           +++++++++++++++++++++++++++++

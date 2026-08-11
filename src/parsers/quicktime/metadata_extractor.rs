@@ -10,7 +10,9 @@
 use super::atom_parser::Atom;
 use super::tag_mapping::atom_to_exiftool_tag;
 use crate::core::{FileReader, MetadataMap, TagValue};
-use crate::exiftool_tables::{DecodedValue, decode_binary_table, find_table};
+use crate::exiftool_tables::{
+    Acknowledged, DecodedValue, PerlCitation, RawAccess, decode_binary_table, find_table,
+};
 use crate::io::timestamp::{mac_time_to_exif_datetime, mac_time_to_local_exif_datetime};
 use crate::io::{ByteOrder, EndianReader};
 use crate::parsers::tiff::ifd_parser::{ByteOrder as TiffByteOrder, parse_ifd};
@@ -3528,35 +3530,56 @@ fn extract_pentax_maker_notes(data: &[u8], metadata: &mut MetadataMap) -> Result
         return Ok(());
     }
 
+    // Pentax.pm's `%MOV` key 38 (`ExposureTime`): `ValueConv => '$val ? 10 /
+    // $val : 0'`, then `PrintExposureTime`. The generated schema has no
+    // ValueConv form, so `Field::omitted.value_conv` is set and `emit`
+    // refuses it; this citation is the acknowledgment RawAccess requires.
+    const EXPOSURE_TIME_CITATION: PerlCitation = PerlCitation {
+        module: "Pentax",
+        table: "MOV",
+        tag: "ExposureTime",
+        lines: "key 38 ValueConv, Pentax.pm",
+    };
+
     let table = find_table("Pentax", "MOV")
         .ok_or_else(|| "generated Pentax::MOV binary table is missing".to_string())?;
-    for decoded in decode_binary_table(table, data, ByteOrder::Little) {
+    for decoded in decode_binary_table(table, data, ByteOrder::Little).fields() {
         let value = match decoded.field.name {
-            "Make" => match decoded.raw {
-                DecodedValue::String(value) => TagValue::new_string(value),
+            // Clean field (`Omitted::NONE`): `emit` is sufficient.
+            "Make" => match decoded.emit() {
+                Some(value @ TagValue::String(_)) => value,
                 _ => continue,
             },
-            // ExifTool Pentax.pm `%MOV` key 38 ValueConv:
-            // `$val ? 10 / $val : 0`, followed by PrintExposureTime.
-            "ExposureTime" => match decoded.raw {
-                DecodedValue::Integer(0) => TagValue::new_string("0"),
-                DecodedValue::Integer(raw) => {
-                    TagValue::new_string(format_exposure_time_seconds(10.0 / raw as f64))
-                }
-                _ => continue,
-            },
-            // Pentax::MOV has no ValueConv between these raw values and their
-            // generated PrintConv, so applying it explicitly is sound.
-            "FNumber" | "WhiteBalance" | "FocalLength" => {
-                let Some(printed) = decoded.apply_print_conv_to_raw() else {
+            "ExposureTime" => {
+                let Some(access) =
+                    RawAccess::new(decoded, Acknowledged::VALUE_CONV, &EXPOSURE_TIME_CITATION)
+                else {
                     continue;
                 };
-                TagValue::new_string(printed)
+                match access.raw() {
+                    DecodedValue::Integer(0) => TagValue::new_string("0"),
+                    DecodedValue::Integer(raw) => {
+                        TagValue::new_string(format_exposure_time_seconds(10.0 / *raw as f64))
+                    }
+                    _ => continue,
+                }
             }
+            // Pentax::MOV has no ValueConv between these raw values and their
+            // generated PrintConv (`Omitted::NONE`), so `emit` renders them
+            // directly.
+            "FNumber" | "WhiteBalance" | "FocalLength" => match decoded.emit() {
+                Some(value @ TagValue::String(_)) => value,
+                _ => continue,
+            },
             // This PrintConv remains format-specific until its exact spelling
-            // is registered in the generated expression translator.
-            "ExposureCompensation" => match decoded.raw {
-                DecodedValue::SignedRational(numerator, denominator) if denominator != 0 => {
+            // is registered in the generated expression translator; the field
+            // is `Omitted::NONE`, so `emit`'s raw fallback (PrintConv::None
+            // here) is exactly the rational this arm already reads.
+            "ExposureCompensation" => match decoded.emit() {
+                Some(TagValue::Rational {
+                    numerator,
+                    denominator,
+                }) if denominator != 0 => {
                     let value = f64::from(numerator) / f64::from(denominator);
                     TagValue::new_string(if value == 0.0 {
                         "0".to_string()
@@ -3566,8 +3589,8 @@ fn extract_pentax_maker_notes(data: &[u8], metadata: &mut MetadataMap) -> Result
                 }
                 _ => continue,
             },
-            "ISO" => match decoded.raw {
-                DecodedValue::Integer(value) => TagValue::Integer(value),
+            "ISO" => match decoded.emit() {
+                Some(value @ TagValue::Integer(_)) => value,
                 _ => continue,
             },
             // New generated fields require a source-level conversion audit

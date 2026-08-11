@@ -617,14 +617,16 @@ pub fn parse_casio_qvci_segment(data: &[u8], metadata: &mut MetadataMap) {
     };
     // Byte order is irrelevant to every field this function reads (all
     // fixed-width strings), so this is an arbitrary but harmless choice.
-    let fields =
+    let decode =
         crate::exiftool_tables::decode_binary_table(table, data, crate::io::ByteOrder::Big);
+    // All three named fields are `Omitted::NONE` in the generated table, so
+    // `emit` never refuses here.
     for name in ["ModelType", "ManufactureIndex", "ManufactureCode"] {
-        let Some(decoded) = fields.iter().find(|f| f.field.name == name) else {
+        let Some(decoded) = decode.fields().iter().find(|f| f.field.name == name) else {
             continue;
         };
-        if let crate::exiftool_tables::DecodedValue::String(text) = &decoded.raw {
-            metadata.insert(format!("Casio:{name}"), TagValue::new_string(text.clone()));
+        if let Some(TagValue::String(text)) = decoded.emit() {
+            metadata.insert(format!("Casio:{name}"), TagValue::new_string(text));
         }
     }
 }

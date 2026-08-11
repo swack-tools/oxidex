@@ -15,6 +15,7 @@
 //! `if let Ok`, or an `eprintln!` inside a parser.
 
 use crate::core::metadata_map::MetadataMap;
+use crate::exiftool_tables::RefusalCounts;
 
 /// How far a read got.
 ///
@@ -69,11 +70,11 @@ impl std::fmt::Display for ParseStatus {
 ///
 /// `Warning` and `Error` mirror the two tags ExifTool's own `Warn`/`Error`
 /// (`ExifTool.pm:5616`, `:5654`) produce. `Refusal` is a third kind neither
-/// of those Perl subs has: it is the seam for Step 10's runtime refusals
+/// of those Perl subs has: it is the seam Step 10's runtime refusals
 /// (a maintainer policy decision to decline walking a structure at all,
-/// rather than a parse failure) to report into once that step lands. Step
-/// 10 is owned by the orchestrator and is **not** implemented by this
-/// module -- nothing here constructs a `Refusal` today.
+/// rather than a parse failure) report into -- see
+/// [`Diagnostic::refusals`], which builds one from a
+/// [`RefusalCounts`][crate::exiftool_tables::RefusalCounts].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DiagnosticKind {
     /// Recoverable: some tags may be missing or a sub-block was skipped,
@@ -108,12 +109,45 @@ impl Diagnostic {
         }
     }
 
-    /// Reserved for Step 10's runtime refusals. Not called anywhere yet.
+    /// Step 10's runtime refusals: a low-level constructor for a caller that
+    /// already has a rendered message. Most callers want
+    /// [`Diagnostic::refusals`] instead, which formats a
+    /// [`RefusalCounts`][crate::exiftool_tables::RefusalCounts] consistently.
     pub fn refusal<S: Into<String>>(message: S) -> Self {
         Diagnostic {
             kind: DiagnosticKind::Refusal,
             message: message.into(),
         }
+    }
+
+    /// Build a `Refusal` diagnostic from one table's [`RefusalCounts`], or
+    /// `None` when nothing was withheld -- so a call site can
+    /// `.and_then(|d| sink.push(d))` straight off a `decode_binary_table`
+    /// result without a separate `is_empty` check.
+    ///
+    /// `module`/`table` identify the generated table
+    /// (`exiftool_tables::BinaryTable::module`/`::table`), matching how
+    /// [`crate::exiftool_tables::PerlCitation`] names one, so a diagnostic
+    /// and the `RawAccess` citations a parser used against the same table
+    /// read the same way.
+    #[must_use]
+    pub fn refusals(module: &str, table: &str, counts: RefusalCounts) -> Option<Self> {
+        if counts.total() == 0 {
+            return None;
+        }
+        Some(Self::refusal(format!(
+            "{module}::{table}: {total} field{plural} withheld \
+             (value_conv={value_conv} raw_conv={raw_conv} condition={condition} \
+             hook={hook} subdirectory={subdirectory} offset_unsound={offset_unsound})",
+            total = counts.total(),
+            plural = if counts.total() == 1 { "" } else { "s" },
+            value_conv = counts.value_conv,
+            raw_conv = counts.raw_conv,
+            condition = counts.condition,
+            hook = counts.hook,
+            subdirectory = counts.subdirectory,
+            offset_unsound = counts.offset_unsound,
+        )))
     }
 }
 
@@ -170,6 +204,34 @@ mod tests {
         assert_eq!(Diagnostic::warning("w").kind, DiagnosticKind::Warning);
         assert_eq!(Diagnostic::error("e").kind, DiagnosticKind::Error);
         assert_eq!(Diagnostic::refusal("r").kind, DiagnosticKind::Refusal);
+    }
+
+    #[test]
+    fn refusals_is_none_when_nothing_was_withheld() {
+        assert_eq!(
+            Diagnostic::refusals("PhotoCD", "Main", RefusalCounts::default()),
+            None
+        );
+    }
+
+    #[test]
+    fn refusals_summarizes_every_reason_by_name() {
+        let counts = RefusalCounts {
+            value_conv: 9,
+            raw_conv: 3,
+            condition: 6,
+            hook: 0,
+            subdirectory: 0,
+            offset_unsound: 0,
+        };
+        let diagnostic =
+            Diagnostic::refusals("PhotoCD", "Main", counts).expect("nonzero counts produce Some");
+        assert_eq!(diagnostic.kind, DiagnosticKind::Refusal);
+        assert!(diagnostic.message.contains("PhotoCD::Main"));
+        assert!(diagnostic.message.contains("18 fields withheld"));
+        assert!(diagnostic.message.contains("value_conv=9"));
+        assert!(diagnostic.message.contains("raw_conv=3"));
+        assert!(diagnostic.message.contains("condition=6"));
     }
 
     #[test]

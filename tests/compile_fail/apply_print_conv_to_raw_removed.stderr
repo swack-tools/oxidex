@@ -1,0 +1,5 @@
+error[E0599]: no method named `apply_print_conv_to_raw` found for reference `&DecodedField` in the current scope
+  --> tests/compile_fail/apply_print_conv_to_raw_removed.rs:13:19
+   |
+13 |     let _ = field.apply_print_conv_to_raw();
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^ method not found in `&DecodedField`

@@ -1,0 +1,5 @@
+error[E0616]: field `raw` of struct `DecodedField` is private
+  --> tests/compile_fail/decoded_field_raw_is_private.rs:12:20
+   |
+12 |     let _ = &field.raw;
+   |                    ^^^ private field
