@@ -1,0 +1,49 @@
+[
+ {"id": "pentax_printhex_unmapped_format", "file": "Image/ExifTool/Pentax.pm", "start": 1135, "end": 1135, "note": "FlashMode's PrintHex=>1, which selects ExifTool.pm's hex 'Unknown (0x%x)' unknown-value format instead of decimal -- Rust: FLASH_MODE_INTERNAL/EXTERNAL fall back through flash_mode_lookup's hex formatting."},
+ {"id": "exiftool_pm_printhex_unknown_format", "file": "Image/ExifTool.pm", "start": 3628, "end": 3631, "note": "The unknown-value hex format PrintHex selects -- Rust: pentax.rs flash_mode_lookup's 'Unknown (0x{:x})'."},
+ {"id": "pentax_crypt_shutter_count_xor", "file": "Image/ExifTool/Pentax.pm", "start": 6860, "end": 6869, "note": "CryptShutterCount XOR: date ^ (0xffffffff - time) -- Rust: pentax.rs's ShutterCount decrypt."},
+ {"id": "pentax_shutter_count_unpack", "file": "Image/ExifTool/Pentax.pm", "start": 2284, "end": 2284, "note": "ShutterCount unpack('N') (big-endian u32 read)."},
+ {"id": "pentax_date_raw_capture", "file": "Image/ExifTool/Pentax.pm", "start": 976, "end": 976, "note": "PentaxDate raw byte capture (DataMember, feeds CryptShutterCount)."},
+ {"id": "pentax_time_raw_capture", "file": "Image/ExifTool/Pentax.pm", "start": 992, "end": 992, "note": "PentaxTime raw byte capture (DataMember, feeds CryptShutterCount)."},
+ {"id": "pentax_exposure_time_valueconv", "file": "Image/ExifTool/Pentax.pm", "start": 1475, "end": 1475, "note": "ExposureTime ValueConv $val*1e-5."},
+ {"id": "pentax_bulb_threshold", "file": "Image/ExifTool/Pentax.pm", "start": 1478, "end": 1478, "note": "Bulb threshold 42949 in ExposureTime PrintConv."},
+ {"id": "pentax_flash_exposure_comp_divisor256", "file": "Image/ExifTool/Pentax.pm", "start": 2186, "end": 2186, "note": "FlashExposureComp ValueConv divisor 256."},
+ {"id": "pentax_flash_exposure_comp_divisor6", "file": "Image/ExifTool/Pentax.pm", "start": 2192, "end": 2194, "note": "FlashExposureComp divisor 6, first-byte-only variant."},
+ {"id": "pentax_flash_exposure_comp_printconv_256", "file": "Image/ExifTool/Pentax.pm", "start": 2188, "end": 2188, "note": "FlashExposureComp PrintConv (256-divisor variant)."},
+ {"id": "pentax_flash_exposure_comp_printconv_6", "file": "Image/ExifTool/Pentax.pm", "start": 2196, "end": 2196, "note": "FlashExposureComp PrintConv (6-divisor variant)."},
+ {"id": "pentax_lens_fstops_formula", "file": "Image/ExifTool/Pentax.pm", "start": 4414, "end": 4421, "note": "LensFStops '5 + ($val^0x07)/2', Mask 0x70."},
+
+ {"id": "panasonic_program_iso_sentinels", "file": "Image/ExifTool/Panasonic.pm", "start": 793, "end": 802, "note": "ProgramISO 0x3c sentinels 65534/65535/-1 ('Intelligent ISO'/'n/a' handling)."},
+ {"id": "panasonic_transform_pairs_1", "file": "Image/ExifTool/Panasonic.pm", "start": 970, "end": 983, "note": "Transform pairs {-3 2,-1 1,0 0,1 1,3 2} and no-OTHER raw fallback (first site)."},
+ {"id": "panasonic_transform_pairs_2", "file": "Image/ExifTool/Panasonic.pm", "start": 1587, "end": 1600, "note": "Transform pairs (second site)."},
+ {"id": "panasonic_lens_firmware_tr", "file": "Image/ExifTool/Panasonic.pm", "start": 999, "end": 1006, "note": "LensFirmwareVersion tr/ /./ (space-to-dot ValueConv)."},
+
+ {"id": "sony_extrainfo3_battery_voltage1", "file": "Image/ExifTool/Sony.pm", "start": 5951, "end": 5959, "note": "BatteryVoltage1 model predicate: $$self{Model} !~ /^(NEX-(3|5|5C|C3|VG10|VG10E))\\b/."},
+ {"id": "sony_extrainfo3_battery_voltage2", "file": "Image/ExifTool/Sony.pm", "start": 5960, "end": 5968, "note": "BatteryVoltage2 model predicate (same NEX exclusion)."},
+ {"id": "sony_extrainfo3_image_stabilization", "file": "Image/ExifTool/Sony.pm", "start": 5980, "end": 5988, "note": "ImageStabilization model predicate (same NEX exclusion)."},
+ {"id": "sony_camera_orientation_non_nex", "file": "Image/ExifTool/Sony.pm", "start": 6070, "end": 6079, "note": "non-NEX CameraOrientation mask 0x30."},
+
+ {"id": "xmp_ignore_et_prop", "file": "Image/ExifTool/XMP.pm", "start": 264, "end": 265, "note": "%ignoreEtProp membership (desc/prt/val/id/tagid/toolkit/table/index)."},
+ {"id": "xmp_exif_table_start", "file": "Image/ExifTool/XMP.pm", "start": 1988, "end": 1988, "note": "%Image::ExifTool::XMP::exif table declaration -- exif-namespace-only APEX values live under this table."},
+ {"id": "xmp_aperture_value_apex", "file": "Image/ExifTool/XMP.pm", "start": 2088, "end": 2088, "note": "exif-namespace-only APEX ApertureValue."},
+ {"id": "xmp_max_aperture_value_apex", "file": "Image/ExifTool/XMP.pm", "start": 2102, "end": 2102, "note": "exif-namespace-only APEX MaxApertureValue."},
+ {"id": "xmp_exposure_time_print", "file": "Image/ExifTool/XMP.pm", "start": 2042, "end": 2046, "note": "ExposureTime PrintExposureTime wiring."},
+ {"id": "xmp_crs_aperture_value", "file": "Image/ExifTool/XMP.pm", "start": 1367, "end": 1367, "note": "crs plain-real ApertureValue (not APEX)."},
+ {"id": "xmp_autoconv_rational", "file": "Image/ExifTool/XMP.pm", "start": 3678, "end": 3678, "note": "XMPAutoConv rational evaluation."},
+
+ {"id": "quicktime_timeinfo_cr3_gate", "file": "Image/ExifTool/QuickTime.pm", "start": 280, "end": 280, "note": "%timeInfo ConvertUnixTime gate: FileType eq 'CR3'."},
+ {"id": "quicktime_timeinfo_block", "file": "Image/ExifTool/QuickTime.pm", "start": 242, "end": 291, "note": "%timeInfo full block containing the CR3 gate."},
+ {"id": "exiftool_pm_convert_unix_time", "file": "Image/ExifTool.pm", "start": 6784, "end": 6810, "note": "ConvertUnixTime localtime/TimeZoneString."},
+ {"id": "canon_pm_cncv_filetype_override", "file": "Image/ExifTool/Canon.pm", "start": 271, "end": 271, "note": "Canon.pm CNCV-based FileType override (the CR3 gate is CNCV, not the crx ftyp brand)."},
+
+ {"id": "exif_pm_composite_image_size", "file": "Image/ExifTool/Exif.pm", "start": 4747, "end": 4766, "note": "Composite:ImageSize Desire 4 RawImageCroppedSize, returned first when truthy."},
+ {"id": "exif_pm_print_exposure_time", "file": "Image/ExifTool/Exif.pm", "start": 5701, "end": 5711, "note": "PrintExposureTime."},
+
+ {"id": "jpeg2000_compatible_brands", "file": "Image/ExifTool/Jpeg2000.pm", "start": 575, "end": 579, "note": "CompatibleBrands List=>1 ValueConv 4-byte chunking with null-chunk drop."},
+ {"id": "quicktime_compatible_brands", "file": "Image/ExifTool/QuickTime.pm", "start": 1046, "end": 1050, "note": "CompatibleBrands List=>1 ValueConv 4-byte chunking (QuickTime's own copy)."},
+
+ {"id": "exiftool_script_escape_json", "file": "exiftool", "start": 3801, "end": 3801, "note": "EscapeJSON -- governs which values print unquoted in -j."},
+ {"id": "exiftool_script_escape_json_numeric_regex", "file": "exiftool", "start": 3809, "end": 3809, "note": "EscapeJSON's numeric regex."},
+
+ {"id": "canon_pm_focal_plane_rational", "file": "Image/ExifTool/Canon.pm", "start": 10145, "end": 10175, "note": "canon_sensor_diag FocalPlane rational inputs."}
+]

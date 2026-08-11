@@ -3597,6 +3597,126 @@ fn pentax_model_id_name(id: u32) -> Option<&'static str> {
     TABLE.iter().find(|(v, _)| *v == id).map(|(_, name)| *name)
 }
 
+/// Staleness/consistency tests (tag-machinery overhaul Step 16): registers the
+/// Stage 1 Step 1 facts named in `OVERHAUL_PROGRESS.md`'s "Staleness-hook
+/// facts to register at Step 16" section -- `FlashMode`'s two position hashes,
+/// the `ISO` enum, and `AFPointSelected`'s three model-conditioned
+/// alternatives -- against `dump_tables.pl`'s output for the pinned ExifTool
+/// tree, so a bump that changes one of these hand-embedded Pentax facts is a
+/// red test instead of a silent divergence.
+///
+/// Each test below calls the REAL production decoder (`FLASH_MODE_INTERNAL`,
+/// `FLASH_MODE_EXTERNAL`, `ISO_SPEED`, or the three
+/// `af_point_selected_*` functions) for every key ExifTool's current table
+/// declares.
+///
+/// Fixtures: `tools/exiftool-tables/fixtures/pentax_{flash_mode,iso,
+/// af_point_selected}.json`, produced by `gen_staleness_facts.py`.
+#[cfg(test)]
+mod staleness_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn decode_mismatches<'a>(
+        expected: &'a BTreeMap<String, String>,
+        mut decode: impl FnMut(i64) -> String,
+    ) -> Vec<String> {
+        let mut mismatches = Vec::new();
+        for (k, expected_name) in expected {
+            let id: i64 = k.parse().expect("fixture key is not an integer");
+            let got = decode(id);
+            if &got != expected_name {
+                mismatches.push(format!(
+                    "id {id}: got {got:?}, ExifTool says {expected_name:?}"
+                ));
+            }
+        }
+        mismatches
+    }
+
+    #[test]
+    fn flash_mode_matches_pentax_pm() {
+        const FIXTURE: &str =
+            include_str!("../../../../tools/exiftool-tables/fixtures/pentax_flash_mode.json");
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            internal: BTreeMap<String, String>,
+            external: BTreeMap<String, String>,
+        }
+        let f: Fixture =
+            serde_json::from_str(FIXTURE).expect("pentax_flash_mode.json is valid JSON");
+        assert_eq!(
+            f.internal.len(),
+            15,
+            "FlashMode position-0 hash size changed"
+        );
+        assert_eq!(
+            f.external.len(),
+            10,
+            "FlashMode position-1 hash size changed"
+        );
+
+        let mut mismatches =
+            decode_mismatches(&f.internal, |id| FLASH_MODE_INTERNAL.decode(id as i32));
+        mismatches.extend(decode_mismatches(&f.external, |id| {
+            FLASH_MODE_EXTERNAL.decode(id as i32)
+        }));
+        assert!(
+            mismatches.is_empty(),
+            "Pentax FlashMode decoders have drifted from Pentax.pm:1131-1163:\n  {}",
+            mismatches.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn iso_matches_pentax_pm() {
+        const FIXTURE: &str =
+            include_str!("../../../../tools/exiftool-tables/fixtures/pentax_iso.json");
+        let f: BTreeMap<String, String> =
+            serde_json::from_str(FIXTURE).expect("pentax_iso.json is valid JSON");
+        assert!(f.len() >= 75, "Pentax ISO enum size dropped to {}", f.len());
+
+        let mismatches = decode_mismatches(&f, |id| ISO_SPEED.decode(id as i32));
+        assert!(
+            mismatches.is_empty(),
+            "Pentax ISO_SPEED has drifted from Pentax.pm:1491-1581:\n  {}",
+            mismatches.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn af_point_selected_matches_pentax_pm() {
+        const FIXTURE: &str = include_str!(
+            "../../../../tools/exiftool-tables/fixtures/pentax_af_point_selected.json"
+        );
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            k1_645z: BTreeMap<String, String>,
+            k3_kp: BTreeMap<String, String>,
+            default: BTreeMap<String, String>,
+        }
+        let f: Fixture =
+            serde_json::from_str(FIXTURE).expect("pentax_af_point_selected.json is valid JSON");
+        assert_eq!(f.k1_645z.len(), 56, "K-1/645Z AFPointSelected size changed");
+        assert_eq!(f.k3_kp.len(), 60, "K-3/KP AFPointSelected size changed");
+        assert_eq!(f.default.len(), 18, "default AFPointSelected size changed");
+
+        let mut mismatches =
+            decode_mismatches(&f.k1_645z, |id| af_point_selected_k1_645z(id as u16));
+        mismatches.extend(decode_mismatches(&f.k3_kp, |id| {
+            af_point_selected_k3_kp(id as u16)
+        }));
+        mismatches.extend(decode_mismatches(&f.default, |id| {
+            af_point_selected_other(id as u16)
+        }));
+        assert!(
+            mismatches.is_empty(),
+            "Pentax AFPointSelected decoders have drifted from Pentax.pm:1219-1408:\n  {}",
+            mismatches.join("\n  ")
+        );
+    }
+}
+
 // ============================================================================
 // Unit Tests
 // ============================================================================

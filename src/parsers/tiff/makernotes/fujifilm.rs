@@ -1997,6 +1997,73 @@ pub fn is_fujifilm_makernote(data: &[u8]) -> bool {
     data.len() >= 12 && &data[0..8] == FUJIFILM_HEADER
 }
 
+/// Staleness/consistency test (tag-machinery overhaul Step 16): registers the
+/// Stage 1 Step 2 fact named in `OVERHAUL_PROGRESS.md` -- `ImageStabilization`
+/// (tag 0x1422)'s two element hashes -- against `dump_tables.pl`'s output for
+/// the pinned ExifTool tree.
+///
+/// Calls the real production decoders, `DECODE_IMAGE_STABILIZATION` and
+/// `DECODE_IMAGE_STABILIZATION_MODE`, for every key ExifTool's current
+/// `FujiFilm.pm:790-804` declares.
+///
+/// Fixture: `tools/exiftool-tables/fixtures/fujifilm_image_stabilization.json`.
+#[cfg(test)]
+mod staleness_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    const FIXTURE: &str = include_str!(
+        "../../../../tools/exiftool-tables/fixtures/fujifilm_image_stabilization.json"
+    );
+
+    #[derive(serde::Deserialize)]
+    struct Fixture {
+        element0: BTreeMap<String, String>,
+        element1: BTreeMap<String, String>,
+    }
+
+    #[test]
+    fn image_stabilization_matches_fujifilm_pm() {
+        let f: Fixture =
+            serde_json::from_str(FIXTURE).expect("fujifilm_image_stabilization.json is valid JSON");
+        assert_eq!(
+            f.element0.len(),
+            6,
+            "ImageStabilization element-0 map size changed"
+        );
+        assert_eq!(
+            f.element1.len(),
+            3,
+            "ImageStabilization element-1 map size changed"
+        );
+
+        let mut mismatches = Vec::new();
+        for (k, expected) in &f.element0 {
+            let id: i32 = k.parse().expect("fixture key is not an integer");
+            let got = DECODE_IMAGE_STABILIZATION.decode(id);
+            if &got != expected {
+                mismatches.push(format!(
+                    "element0 id {id}: got {got:?}, ExifTool says {expected:?}"
+                ));
+            }
+        }
+        for (k, expected) in &f.element1 {
+            let id: i32 = k.parse().expect("fixture key is not an integer");
+            let got = DECODE_IMAGE_STABILIZATION_MODE.decode(id);
+            if &got != expected {
+                mismatches.push(format!(
+                    "element1 id {id}: got {got:?}, ExifTool says {expected:?}"
+                ));
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "FujiFilm ImageStabilization decoders have drifted from FujiFilm.pm:790-804:\n  {}",
+            mismatches.join("\n  ")
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

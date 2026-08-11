@@ -297,6 +297,116 @@ pub mod canon {
             .ok()
             .map(|i| CANON_LENS_TYPES[i].1)
     }
+
+    /// Staleness/consistency test (tag-machinery overhaul Step 16):
+    /// `CANON_LENS_TYPES` is a hand transcription of ExifTool's
+    /// `%canonLensTypes` (Canon.pm:97), reached through `Canon::CameraSettings`
+    /// key 22's `PrintConv`. No committed generator produces this file, so a
+    /// bump can add, rename or drop a lens id and nothing would notice.
+    ///
+    /// Calls the real [`lookup`] entry point for every INTEGER-keyed id
+    /// ExifTool's current `%canonLensTypes` declares (239 of them at ExifTool
+    /// 13.59) and asserts the name matches exactly. The 296 fractional-keyed
+    /// entries (`2.1`, `33.14`, ...) that disambiguate `Composite:LensID` are
+    /// deliberately not transcribed here or by this test -- see this module's
+    /// own doc comment -- and are reported as an explicit, counted omission
+    /// rather than silently ignored.
+    ///
+    /// Fixture: `tools/exiftool-tables/fixtures/canon_lens_types.json`.
+    #[cfg(test)]
+    mod staleness_tests {
+        use super::lookup;
+
+        const FIXTURE: &str =
+            include_str!("../../../../tools/exiftool-tables/fixtures/canon_lens_types.json");
+
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            entries: Vec<(i64, String)>,
+            fractional_key_count_not_covered: u32,
+        }
+
+        fn fixture() -> Fixture {
+            serde_json::from_str(FIXTURE).expect("canon_lens_types.json fixture is valid JSON")
+        }
+
+        #[test]
+        fn fixture_is_the_expected_size() {
+            let f = fixture();
+            assert!(
+                f.entries.len() >= 220,
+                "canon_lens_types.json has {} integer-keyed entries, expected \
+                 ~239 -- did the fixture generator regress?",
+                f.entries.len()
+            );
+            // Purely informational: names the size of the gap this test does
+            // NOT cover, per AGENTS.md's omit-and-count discipline, so the
+            // omission is a counted number in the test output rather than a
+            // silent absence.
+            assert!(
+                f.fractional_key_count_not_covered >= 250,
+                "fractional-key count dropped to {} -- if ExifTool restructured \
+                 %canonLensTypes to resolve ambiguous ids without fractional \
+                 keys, this comment and lens_data.rs's own doc comment are \
+                 both stale",
+                f.fractional_key_count_not_covered
+            );
+        }
+
+        /// Every integer-keyed id ExifTool currently declares must decode,
+        /// through the real production [`lookup`] function, to exactly the
+        /// name ExifTool gives it.
+        #[test]
+        fn every_dumped_integer_lens_id_decodes_correctly() {
+            let f = fixture();
+            let mut mismatches = Vec::new();
+            for (id, expected_name) in &f.entries {
+                // lookup() takes u16 -- the -1 "n/a" sentinel is read as
+                // int16u by ExifTool, so it is unreachable through this
+                // signature and is verified separately, against
+                // CANON_LENS_TYPES directly, in `n_a_sentinels_present`.
+                if *id < 0 {
+                    continue;
+                }
+                let Ok(id_u16) = u16::try_from(*id) else {
+                    mismatches.push(format!(
+                        "id {id} does not fit u16 -- lookup() cannot reach it"
+                    ));
+                    continue;
+                };
+                match lookup(id_u16) {
+                    Some(got) if got == expected_name => {}
+                    Some(got) => mismatches.push(format!(
+                        "id {id}: got {got:?}, ExifTool says {expected_name:?}"
+                    )),
+                    None => mismatches.push(format!(
+                        "id {id}: lookup() returned None, ExifTool says {expected_name:?}"
+                    )),
+                }
+            }
+            assert!(
+                mismatches.is_empty(),
+                "CANON_LENS_TYPES has drifted from ExifTool's %canonLensTypes \
+                 ({} of {} integer-keyed ids differ):\n  {}",
+                mismatches.len(),
+                f.entries.len(),
+                mismatches.join("\n  ")
+            );
+        }
+
+        /// The -1/65535 "n/a" sentinels lookup() cannot reach directly --
+        /// checked against the underlying table rather than the u16-only API.
+        #[test]
+        fn n_a_sentinels_present() {
+            let has = |want: i64| {
+                super::CANON_LENS_TYPES
+                    .iter()
+                    .any(|&(id, name)| id == want && name == "n/a")
+            };
+            assert!(has(-1), "CANON_LENS_TYPES lost its -1 'n/a' sentinel");
+            assert!(has(65535), "CANON_LENS_TYPES lost its 65535 'n/a' sentinel");
+        }
+    }
 }
 
 /// Sony lens database

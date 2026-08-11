@@ -383,6 +383,20 @@ registry grows. Protect that property.
   refuse, so the honest state to leave this in is: unreconstructed, the gap
   measured and named here, rather than a generator nobody can trust.
 
+  **Step 16 update:** still no generator, but no longer silently invisible
+  either. `tools/exiftool-tables/check_hand_enum_drift.py` extracts every
+  literal `(key, "value")` pair textually present in each of these six files
+  (plus `canon.rs`'s own un-generated `const_decoder!`/`bitfield_decoder!`
+  arms) and diffs the multiset against every PrintConv enum/list entry
+  `dump_tables.pl` reports for the cited ExifTool module(s), against a
+  committed baseline count (`tools/exiftool-tables/fixtures/
+  hand_enum_drift_baseline.json`) that a CI step (`.github/workflows/ci.yml`'s
+  `verify-tables` job) re-checks against the pin on every push. This is a
+  fingerprint, not a field-level correspondence to the DSL each file actually
+  uses — see `check_hand_enum_drift.py`'s own header for what it can and
+  cannot catch — but a value ExifTool renames or removes now moves a counted
+  number instead of vanishing unnoticed.
+
 ## Relationship to the AI harness
 
 **This methodology is intended to be the default, and the

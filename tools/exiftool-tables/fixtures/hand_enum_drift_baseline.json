@@ -1,0 +1,23 @@
+{
+ "src/parsers/tiff/makernotes/canon.rs": {
+  "rust_only_count": 236
+ },
+ "src/parsers/tiff/makernotes/minolta_a100_tables.rs": {
+  "rust_only_count": 297
+ },
+ "src/parsers/tiff/makernotes/nikon/encrypted_tables.rs": {
+  "rust_only_count": 16
+ },
+ "src/parsers/tiff/makernotes/nikon/settings_tables.rs": {
+  "rust_only_count": 0
+ },
+ "src/parsers/tiff/makernotes/sony/enciphered_tables.rs": {
+  "rust_only_count": 780
+ },
+ "src/parsers/tiff/makernotes/sony/main_extra_tables.rs": {
+  "rust_only_count": 20
+ },
+ "src/parsers/tiff/makernotes/sony/plain_tables.rs": {
+  "rust_only_count": 328
+ }
+}

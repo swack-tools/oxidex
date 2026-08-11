@@ -331,6 +331,212 @@ pub fn dispatch_makernote_with_context_and_values(
     Ok(())
 }
 
+/// Staleness/consistency test (tag-machinery overhaul Step 16, R5 stage 1):
+/// diffs ExifTool's real `@MakerNotes::Main` dispatch table against this
+/// file's hand-written `match`.
+///
+/// `@MakerNotes::Main` (MakerNotes.pm:35-...) is the 94-row list ExifTool
+/// itself dispatches MakerNote parsing on, tried in order until a
+/// `Condition` matches. Until Step 16, `dump_tables.pl` only ever walked the
+/// stash's HASH globs, so this array -- the single ARRAY-shaped tag table in
+/// the entire pinned ExifTool tree -- was invisible to every instrument in
+/// this repo. The #636 regen found 401 stale hand-embedded facts and nothing
+/// could report them; this is one category of that class made checkable.
+///
+/// This module does NOT try to reproduce every `Condition` regex (many are
+/// multi-line Perl on `$$valPt`/`$$self{Make}`/`$$self{Model}` together, not
+/// mechanically translatable without Step 15's expression compiler). What it
+/// checks instead, at VENDOR granularity: every vendor prefix that
+/// `SubDirectory.TagTable` names in the current dump is accounted for by name
+/// in exactly one of three hand-maintained buckets below (mapped by this
+/// dispatcher's `match`, mapped elsewhere in the codebase, or explicitly
+/// out of scope) -- and, in the other direction, every vendor the buckets
+/// name still has a real route in the current dump. A vendor ExifTool adds
+/// that fits none of the buckets, or a bucket entry ExifTool has since
+/// removed, is exactly the drift this step exists to make visible instead of
+/// silent.
+///
+/// Fixture: `tools/exiftool-tables/fixtures/makernote_routes.json`, produced
+/// by `gen_staleness_facts.py` from `dump_tables.pl`'s output (pinned
+/// ExifTool 13.59). Regenerate on a bump; see that script's header.
+#[cfg(test)]
+mod staleness_tests {
+    use std::collections::BTreeSet;
+
+    /// Compiled in at build time -- hermetic, no `/tmp` read, no live
+    /// ExifTool needed to run `cargo test`.
+    const ROUTES_FIXTURE: &str =
+        include_str!("../../../tools/exiftool-tables/fixtures/makernote_routes.json");
+
+    /// Vendors this dispatcher reaches through its `match` on the normalized
+    /// Make string, or through [`parser_for_make_prefix`]'s prefix matching.
+    /// Keep this in sync with the match arms above BY HAND: that hand-sync
+    /// obligation is exactly what the two tests below check, not assume.
+    const MAPPED_BY_MAKE: &[&str] = &[
+        "Apple",
+        "Canon",
+        "Casio",
+        "DJI",
+        "FLIR",
+        "FujiFilm",
+        "GE",
+        "HP",
+        "JVC",
+        "Kodak",
+        "Minolta",
+        "Motorola",
+        "Nikon",
+        "Nintendo",
+        "Olympus",
+        "Panasonic",
+        "Pentax",
+        "Reconyx",
+        "Ricoh",
+        "Samsung",
+        "Sanyo",
+        "Sony",
+    ];
+
+    /// Vendors dispatched before the Make-keyed `match` even runs, by
+    /// MakerNote signature alone -- see the `phaseone::is_phaseone_makernote`
+    /// check at the top of `dispatch_makernote_with_context_and_values`.
+    const MAPPED_BY_SIGNATURE: &[&str] = &["PhaseOne"];
+
+    /// Vendors `@MakerNotes::Main` names as a `SubDirectory` target that this
+    /// dispatcher does NOT reach -- a different code path in this crate reads
+    /// them instead. (vendor, reason).
+    const HANDLED_ELSEWHERE: &[(&str, &str)] = &[(
+        "Sigma",
+        "Sigma MakerNote value offsets are relative to the enclosing TIFF \
+         header, unreadable from the payload alone -- \
+         core::tiff_helpers::parse_exif_subifd routes Sigma to \
+         makernotes::sigma directly, bypassing this dispatcher entirely.",
+    )];
+
+    /// Vendors `@MakerNotes::Main` names that this dispatcher deliberately
+    /// does not implement, with the reason (mirrors the prose comments
+    /// above, e.g. `"google" is absent on purpose`). (vendor, reason).
+    const INTENTIONALLY_UNMAPPED: &[(&str, &str)] = &[
+        (
+            "Google",
+            "Google::HDRPlusMakerNote is string-id-keyed and reads an \
+             encrypted/gzipped protobuf blob, not a numeric TIFF IFD -- it \
+             cannot be reached through this Make-keyed dispatch at all.",
+        ),
+        (
+            "Unknown",
+            "ExifTool's own generic fallback table for makes with no \
+             vendor-specific structure (Hasselblad, ISL, Kyocera signatures \
+             in the current dump) -- it carries no vendor-specific tags to \
+             lose by not implementing it.",
+        ),
+    ];
+
+    #[derive(serde::Deserialize)]
+    struct RoutesFixture {
+        row_count: usize,
+        rows: Vec<Row>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Row {
+        name: String,
+        target: Option<String>,
+        #[serde(rename = "condition")]
+        #[allow(dead_code)]
+        _condition: String,
+    }
+
+    fn fixture() -> RoutesFixture {
+        serde_json::from_str(ROUTES_FIXTURE).expect("makernote_routes.json fixture is valid JSON")
+    }
+
+    fn all_known_vendors() -> BTreeSet<&'static str> {
+        MAPPED_BY_MAKE
+            .iter()
+            .copied()
+            .chain(MAPPED_BY_SIGNATURE.iter().copied())
+            .chain(HANDLED_ELSEWHERE.iter().map(|(v, _)| *v))
+            .chain(INTENTIONALLY_UNMAPPED.iter().map(|(v, _)| *v))
+            .collect()
+    }
+
+    #[test]
+    fn fixture_row_count_matches_exiftool_main_table() {
+        let f = fixture();
+        assert_eq!(
+            f.rows.len(),
+            f.row_count,
+            "fixture's own row_count disagrees with its rows array length -- corrupt fixture"
+        );
+        // Not a magic number: @MakerNotes::Main had exactly 94 rows when this
+        // fixture was generated (pinned ExifTool 13.59). A large drop would
+        // mean dump_tables.pl's ARRAY capture regressed, not that ExifTool
+        // shrank its own dispatch table.
+        assert!(
+            f.row_count >= 90,
+            "MakerNotes::Main row_count {} looks too small for ExifTool 13.59 \
+             (expected 94) -- did dump_tables.pl's ARRAY capture regress?",
+            f.row_count
+        );
+    }
+
+    /// Forward direction: every vendor ExifTool's `MakerNotes::Main` routes
+    /// to is accounted for by name. A vendor present in the fixture but
+    /// absent from every bucket is a route nothing in this file has been
+    /// told about.
+    #[test]
+    fn every_dumped_vendor_is_accounted_for() {
+        let f = fixture();
+        let known = all_known_vendors();
+
+        let mut missing = Vec::new();
+        for row in &f.rows {
+            let Some(target) = &row.target else {
+                continue;
+            };
+            let vendor = target.split("::").next().unwrap_or(target);
+            if !known.contains(vendor) {
+                missing.push(format!("{} (row {}, target {})", vendor, row.name, target));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "MakerNotes::Main routes to a vendor this staleness mirror does \
+             not know about -- after confirming whether the dispatcher above \
+             actually handles it, add the vendor to MAPPED_BY_MAKE, \
+             HANDLED_ELSEWHERE or INTENTIONALLY_UNMAPPED in this test module:\n  {}",
+            missing.join("\n  ")
+        );
+    }
+
+    /// Reverse direction: every vendor a bucket claims is handled must still
+    /// have a real route in the current dump. A name here ExifTool no longer
+    /// routes to is a claim about a route that does not exist any more.
+    #[test]
+    fn every_known_vendor_still_appears_in_exiftool() {
+        let f = fixture();
+        let seen: BTreeSet<&str> = f
+            .rows
+            .iter()
+            .filter_map(|r| r.target.as_deref())
+            .map(|t| t.split("::").next().unwrap_or(t))
+            .collect();
+
+        let stale: Vec<&str> = all_known_vendors()
+            .into_iter()
+            .filter(|vendor| !seen.contains(vendor))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "this test's mirror claims ExifTool routes MakerNotes to {:?}, but \
+             the current dump has no such route for at least one -- either \
+             ExifTool removed it, or the vendor name in the mirror is wrong",
+            stale
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

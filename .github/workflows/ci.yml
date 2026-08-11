@@ -502,6 +502,58 @@ jobs:
             echo "::error::a committed tier-2 generated file does not match what its generator produces against ExifTool ${ET_VERSION}. Either the file was hand-edited, or it is stale relative to the pin -- re-run 'tools/exiftool-tables/regen-all.sh --tier2-only' and commit the result." >&2
             exit 1
           fi
+      # Tag-machinery overhaul Step 16 (R5 stage 1 / R9(a)): the same
+      # rerun-and-diff idea as tier 2 above, applied to hand-embedded facts
+      # that have no generator at all -- three sub-checks: data-diffable
+      # fixtures, the coarse enum-fingerprint drift baseline for the six
+      # generator-less files plus canon.rs, and the Stage 1 formula/condition
+      # anchor snapshots (see `just check-staleness`'s own header for why each
+      # exists; this step is that recipe's body inlined so it does not need a
+      # `just` binary on this runner). Reuses the SAME extracted tree the two
+      # steps above already fetched, rather than fetching ExifTool a third
+      # time in this job.
+      - name: Check staleness facts, drift baselines and Perl-source anchors
+        env:
+          ET_VERSION: ${{ steps.stamp.outputs.version }}
+        run: |
+          set -euo pipefail
+          ROOT="$PWD/exiftool-${ET_VERSION}"
+          LIB="$ROOT/lib"
+          DUMP="$RUNNER_TEMP/tables-${ET_VERSION}.json"
+          perl tools/exiftool-tables/dump_tables.pl "$LIB" > "$DUMP"
+
+          TMPFIX="$RUNNER_TEMP/staleness-fixtures"
+          mkdir -p "$TMPFIX"
+          python3 tools/exiftool-tables/gen_staleness_facts.py "$DUMP" "$TMPFIX"
+          if ! diff -ru tools/exiftool-tables/fixtures "$TMPFIX" \
+              --exclude hand_enum_drift_baseline.json; then
+            echo "::error::committed staleness fixtures are stale relative to ExifTool ${ET_VERSION} -- re-run 'python3 tools/exiftool-tables/gen_staleness_facts.py <dump.json> tools/exiftool-tables/fixtures', update the Rust these fixtures check, and commit both." >&2
+            exit 1
+          fi
+
+          python3 tools/exiftool-tables/check_hand_enum_drift.py \
+            --dump "$DUMP" \
+            --baseline tools/exiftool-tables/fixtures/hand_enum_drift_baseline.json \
+            "src/parsers/tiff/makernotes/sony/enciphered_tables.rs=Sony" \
+            "src/parsers/tiff/makernotes/sony/plain_tables.rs=Sony" \
+            "src/parsers/tiff/makernotes/sony/main_extra_tables.rs=Sony" \
+            "src/parsers/tiff/makernotes/nikon/encrypted_tables.rs=Nikon,NikonCustom" \
+            "src/parsers/tiff/makernotes/nikon/settings_tables.rs=NikonSettings" \
+            "src/parsers/tiff/makernotes/minolta_a100_tables.rs=Minolta" \
+            "src/parsers/tiff/makernotes/canon.rs=Canon"
+
+          python3 tools/exiftool-tables/check_perl_anchors.py "$ROOT"
+      # The data-diffable half of these same facts runs as real `cargo test`s
+      # against the fixtures the step above just confirmed are current --
+      # hermetic (no /tmp, no network: the fixtures are embedded at compile
+      # time via `include_str!`), so they run as part of `cargo nextest run
+      # --all-features` in the Build & Test job already, matched on the
+      # `staleness` module name pattern
+      # (parsers::tiff::makernote_dispatcher::staleness_tests,
+      # parsers::tiff::makernotes::{canon,fujifilm,pentax,lens_data::canon}::
+      # *staleness*). Not re-run here: this job has no Rust build cache, and
+      # a from-scratch compile would blow its 10-minute budget for a check
+      # the other job already gates on every push.
 
   metrics:
     name: Benchmarks

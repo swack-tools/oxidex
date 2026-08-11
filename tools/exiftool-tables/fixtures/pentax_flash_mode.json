@@ -1,0 +1,31 @@
+{
+ "external": {
+  "0": "n/a - Off-Auto-Aperture",
+  "63": "Internal",
+  "256": "External, Auto",
+  "575": "External, Flash Problem",
+  "768": "External, Manual",
+  "772": "External, P-TTL Auto",
+  "773": "External, Contrast-control Sync",
+  "774": "External, High-speed Sync",
+  "780": "External, Wireless",
+  "781": "External, Wireless, High-speed Sync"
+ },
+ "internal": {
+  "0": "Auto, Did not fire",
+  "1": "Off, Did not fire",
+  "2": "On, Did not fire",
+  "3": "Auto, Did not fire, Red-eye reduction",
+  "5": "On, Did not fire, Wireless (Master)",
+  "256": "Auto, Fired",
+  "258": "On, Fired",
+  "259": "Auto, Fired, Red-eye reduction",
+  "260": "On, Red-eye reduction",
+  "261": "On, Wireless (Master)",
+  "262": "On, Wireless (Control)",
+  "264": "On, Soft",
+  "265": "On, Slow-sync",
+  "266": "On, Slow-sync, Red-eye reduction",
+  "267": "On, Trailing-curtain Sync"
+ }
+}

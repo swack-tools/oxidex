@@ -9310,3 +9310,75 @@ mod tests {
         assert_eq!(decode_canon_model_id(0xdeadbeef), "Unknown (3735928559)");
     }
 }
+
+/// Staleness/consistency test (tag-machinery overhaul Step 16): `CANON_MODEL_IDS`
+/// (this file) is a hand transcription of ExifTool's `%canonModelID`
+/// (Canon.pm:656), the `PrintConv` for MakerNote tag 0x0010 `CanonModelID`. It
+/// carries no committed generator (unlike the six `gen_*.pl`-backed tables --
+/// see `docs/TRANSCRIPTION.md`'s "Honest limits"), so a bump can add, rename or
+/// remove a model id and nothing would notice.
+///
+/// This calls the REAL production entry point, [`decode_canon_model_id`], for
+/// every id ExifTool's current `%canonModelID` declares (357 of them at
+/// ExifTool 13.59) and asserts the string matches exactly -- a behavioral
+/// check against the actual decode path, not a static mirror of the array.
+///
+/// Fixture: `tools/exiftool-tables/fixtures/canon_model_ids.json`, produced by
+/// `gen_staleness_facts.py` from `dump_tables.pl`'s output. Regenerate on a
+/// bump.
+#[cfg(test)]
+mod canon_model_id_staleness {
+    use super::decode_canon_model_id;
+
+    const FIXTURE: &str =
+        include_str!("../../../../tools/exiftool-tables/fixtures/canon_model_ids.json");
+
+    #[derive(serde::Deserialize)]
+    struct Fixture {
+        entries: Vec<(i64, String)>,
+    }
+
+    fn fixture() -> Fixture {
+        serde_json::from_str(FIXTURE).expect("canon_model_ids.json fixture is valid JSON")
+    }
+
+    #[test]
+    fn fixture_is_the_expected_size() {
+        let f = fixture();
+        // Not a magic number: ExifTool's %canonModelID had exactly 357 entries
+        // when this fixture was generated (13.59), matching this file's own
+        // "All 357 entries" doc comment on CANON_MODEL_IDS. A large drop would
+        // mean the fixture generator broke, not that ExifTool shrank the table.
+        assert!(
+            f.entries.len() >= 340,
+            "canon_model_ids.json has {} entries, expected ~357 -- did the \
+             fixture generator regress?",
+            f.entries.len()
+        );
+    }
+
+    /// Every id ExifTool currently declares must decode, through the real
+    /// production function, to exactly the name ExifTool gives it.
+    #[test]
+    fn every_dumped_model_id_decodes_correctly() {
+        let f = fixture();
+        let mut mismatches = Vec::new();
+        for (id, expected_name) in &f.entries {
+            let id = *id as u32;
+            let got = decode_canon_model_id(id);
+            if &got != expected_name {
+                mismatches.push(format!(
+                    "id {id:#x}: got {got:?}, ExifTool says {expected_name:?}"
+                ));
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "CANON_MODEL_IDS has drifted from ExifTool's %canonModelID \
+             ({} of {} ids differ):\n  {}",
+            mismatches.len(),
+            f.entries.len(),
+            mismatches.join("\n  ")
+        );
+    }
+}

@@ -1,0 +1,15 @@
+{
+ "element0": {
+  "0": "None",
+  "1": "Optical",
+  "2": "Sensor-shift",
+  "3": "OIS Lens",
+  "258": "IBIS/OIS + DIS",
+  "512": "Digital"
+ },
+ "element1": {
+  "0": "Off",
+  "1": "On (mode 1, continuous)",
+  "2": "On (mode 2, shooting only)"
+ }
+}

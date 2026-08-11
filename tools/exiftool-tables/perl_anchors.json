@@ -1,0 +1,314 @@
+[
+ {
+  "id": "pentax_printhex_unmapped_format",
+  "file": "Image/ExifTool/Pentax.pm",
+  "start": 1135,
+  "end": 1135,
+  "note": "FlashMode's PrintHex=>1, which selects ExifTool.pm's hex 'Unknown (0x%x)' unknown-value format instead of decimal -- Rust: FLASH_MODE_INTERNAL/EXTERNAL fall back through flash_mode_lookup's hex formatting.",
+  "snippet": "        PrintHex => 1,"
+ },
+ {
+  "id": "exiftool_pm_printhex_unknown_format",
+  "file": "Image/ExifTool.pm",
+  "start": 3628,
+  "end": 3631,
+  "note": "The unknown-value hex format PrintHex selects -- Rust: pentax.rs flash_mode_lookup's 'Unknown (0x{:x})'.",
+  "snippet": "                                if ($$tagInfo{PrintHex} and defined $val and IsInt($val) and\n                                    $convType eq 'PrintConv')\n                                {\n                                    $value = sprintf('Unknown (0x%x)',$val);"
+ },
+ {
+  "id": "pentax_crypt_shutter_count_xor",
+  "file": "Image/ExifTool/Pentax.pm",
+  "start": 6860,
+  "end": 6869,
+  "note": "CryptShutterCount XOR: date ^ (0xffffffff - time) -- Rust: pentax.rs's ShutterCount decrypt.",
+  "snippet": "sub CryptShutterCount($$)\n{\n    my ($val, $et) = @_;\n    # Pentax Date and Time values are used in the encryption\n    return undef unless $$et{PentaxDate} and $$et{PentaxTime} and\n        length($$et{PentaxDate})==4 and length($$et{PentaxTime})>=3;\n    # get Date and Time as integers (after padding Time with a null byte)\n    my $date = unpack('N', $$et{PentaxDate});\n    my $time = unpack('N', $$et{PentaxTime} . \"\\0\");\n    return $val ^ $date ^ (0xffffffff - $time);"
+ },
+ {
+  "id": "pentax_shutter_count_unpack",
+  "file": "Image/ExifTool/Pentax.pm",
+  "start": 2284,
+  "end": 2284,
+  "note": "ShutterCount unpack('N') (big-endian u32 read).",
+  "snippet": "        RawConv => 'length($val) == 4 ? unpack(\"N\",$val) : undef',"
+ },
+ {
+  "id": "pentax_date_raw_capture",
+  "file": "Image/ExifTool/Pentax.pm",
+  "start": 976,
+  "end": 976,
+  "note": "PentaxDate raw byte capture (DataMember, feeds CryptShutterCount).",
+  "snippet": "        DataMember => 'PentaxDate',"
+ },
+ {
+  "id": "pentax_time_raw_capture",
+  "file": "Image/ExifTool/Pentax.pm",
+  "start": 992,
+  "end": 992,
+  "note": "PentaxTime raw byte capture (DataMember, feeds CryptShutterCount).",
+  "snippet": "        RawConv => '$$self{PentaxTime} = $val', # save to decrypt ShutterCount"
+ },
+ {
+  "id": "pentax_exposure_time_valueconv",
+  "file": "Image/ExifTool/Pentax.pm",
+  "start": 1475,
+  "end": 1475,
+  "note": "ExposureTime ValueConv $val*1e-5.",
+  "snippet": "        ValueConv => '$val * 1e-5',"
+ },
+ {
+  "id": "pentax_bulb_threshold",
+  "file": "Image/ExifTool/Pentax.pm",
+  "start": 1478,
+  "end": 1478,
+  "note": "Bulb threshold 42949 in ExposureTime PrintConv.",
+  "snippet": "        PrintConv => '$val > 42949 ? \"Unknown (Bulb)\" : Image::ExifTool::Exif::PrintExposureTime($val)',"
+ },
+ {
+  "id": "pentax_flash_exposure_comp_divisor256",
+  "file": "Image/ExifTool/Pentax.pm",
+  "start": 2186,
+  "end": 2186,
+  "note": "FlashExposureComp ValueConv divisor 256.",
+  "snippet": "        ValueConv => '$val / 256',"
+ },
+ {
+  "id": "pentax_flash_exposure_comp_divisor6",
+  "file": "Image/ExifTool/Pentax.pm",
+  "start": 2192,
+  "end": 2194,
+  "note": "FlashExposureComp divisor 6, first-byte-only variant.",
+  "snippet": "        Writable => 'int8s',\n        Count => 2,     # (don't know what the 2nd number is for)\n        ValueConv => [ '$val / 6' ],"
+ },
+ {
+  "id": "pentax_flash_exposure_comp_printconv_256",
+  "file": "Image/ExifTool/Pentax.pm",
+  "start": 2188,
+  "end": 2188,
+  "note": "FlashExposureComp PrintConv (256-divisor variant).",
+  "snippet": "        PrintConv => '$val ? sprintf(\"%+.1f\", $val) : 0',"
+ },
+ {
+  "id": "pentax_flash_exposure_comp_printconv_6",
+  "file": "Image/ExifTool/Pentax.pm",
+  "start": 2196,
+  "end": 2196,
+  "note": "FlashExposureComp PrintConv (6-divisor variant).",
+  "snippet": "        PrintConv => [ '$val ? sprintf(\"%+.1f\", $val) : 0' ],"
+ },
+ {
+  "id": "pentax_lens_fstops_formula",
+  "file": "Image/ExifTool/Pentax.pm",
+  "start": 4414,
+  "end": 4421,
+  "note": "LensFStops '5 + ($val^0x07)/2', Mask 0x70.",
+  "snippet": "    0.3 => { #JD\n        Name => 'LensFStops',\n        Condition => 'not $$self{NewLensData}',\n        Notes => 'not valid for the K-r, K-5 or K-5II', #29\n        Mask => 0x70,\n        ValueConv => '5 + ($val ^ 0x07) / 2',\n        ValueConvInv => '(($val - 5) * 2) ^ 0x07',\n    },"
+ },
+ {
+  "id": "panasonic_program_iso_sentinels",
+  "file": "Image/ExifTool/Panasonic.pm",
+  "start": 793,
+  "end": 802,
+  "note": "ProgramISO 0x3c sentinels 65534/65535/-1 ('Intelligent ISO'/'n/a' handling).",
+  "snippet": "    0x3c => { #PH\n        Name => 'ProgramISO', # (maybe should rename this ISOSetting?)\n        Writable => 'int16u', # (new models store a long here)\n        PrintConv => {\n            OTHER => sub { shift },\n            65534 => 'Intelligent ISO', #PH (FS7)\n            65535 => 'n/a',\n            -1 => 'n/a',\n        },\n    },"
+ },
+ {
+  "id": "panasonic_transform_pairs_1",
+  "file": "Image/ExifTool/Panasonic.pm",
+  "start": 970,
+  "end": 983,
+  "note": "Transform pairs {-3 2,-1 1,0 0,1 1,3 2} and no-OTHER raw fallback (first site).",
+  "snippet": "    0x59 => { #PH (FS7)\n        Name => 'Transform',\n        Writable => 'undef',\n        Notes => 'decoded as two 16-bit signed integers',\n        Format => 'int16s',\n        Count => 2,\n        PrintConv => {\n            '-3 2' => 'Slim High',\n            '-1 1' => 'Slim Low',\n            '0 0' => 'Off',\n            '1 1' => 'Stretch Low',\n            '3 2' => 'Stretch High',\n        },\n    },"
+ },
+ {
+  "id": "panasonic_transform_pairs_2",
+  "file": "Image/ExifTool/Panasonic.pm",
+  "start": 1587,
+  "end": 1600,
+  "note": "Transform pairs (second site).",
+  "snippet": "    0x8012 => { #PH (FS7)\n        Name => 'Transform',\n        Writable => 'undef',\n        Notes => 'decoded as two 16-bit signed integers',\n        Format => 'int16s',\n        Count => 2,\n        PrintConv => {\n            '-3 2' => 'Slim High',\n            '-1 1' => 'Slim Low',\n            '0 0' => 'Off',\n            '1 1' => 'Stretch Low',\n            '3 2' => 'Stretch High',\n        },\n    },"
+ },
+ {
+  "id": "panasonic_lens_firmware_tr",
+  "file": "Image/ExifTool/Panasonic.pm",
+  "start": 999,
+  "end": 1006,
+  "note": "LensFirmwareVersion tr/ /./ (space-to-dot ValueConv).",
+  "snippet": "    0x60 => { #18\n        Name => 'LensFirmwareVersion',\n        Writable => 'undef',\n        Format => 'int8u',\n        Count => 4,\n        PrintConv => '$val=~tr/ /./; $val',\n        PrintConvInv => '$val=~tr/./ /; $val',\n    },"
+ },
+ {
+  "id": "sony_extrainfo3_battery_voltage1",
+  "file": "Image/ExifTool/Sony.pm",
+  "start": 5951,
+  "end": 5959,
+  "note": "BatteryVoltage1 model predicate: $$self{Model} !~ /^(NEX-(3|5|5C|C3|VG10|VG10E))\\b/.",
+  "snippet": "    0x0006 => {\n        Name => 'BatteryVoltage1',\n        Format => 'int16u',\n        Condition => '$$self{Model} !~ /^(NEX-(3|5|5C|C3|VG10|VG10E))\\b/',\n        ValueConv => '$val / 128',\n        ValueConvInv => '$val * 128',\n        PrintConv => 'sprintf(\"%.2f V\",$val)',\n        PrintConvInv => '$val=~s/\\s*V//; $val',\n    },"
+ },
+ {
+  "id": "sony_extrainfo3_battery_voltage2",
+  "file": "Image/ExifTool/Sony.pm",
+  "start": 5960,
+  "end": 5968,
+  "note": "BatteryVoltage2 model predicate (same NEX exclusion).",
+  "snippet": "    0x0008 => {\n        Name => 'BatteryVoltage2',\n        Format => 'int16u',\n        Condition => '$$self{Model} !~ /^(NEX-(3|5|5C|C3|VG10|VG10E))\\b/',\n        ValueConv => '$val / 128',\n        ValueConvInv => '$val * 128',\n        PrintConv => 'sprintf(\"%.2f V\",$val)',\n        PrintConvInv => '$val=~s/\\s*V//; $val',\n    },"
+ },
+ {
+  "id": "sony_extrainfo3_image_stabilization",
+  "file": "Image/ExifTool/Sony.pm",
+  "start": 5980,
+  "end": 5988,
+  "note": "ImageStabilization model predicate (same NEX exclusion).",
+  "snippet": "    0x0011 => {\n        Name => 'ImageStabilization',\n        Condition => '$$self{Model} !~ /^(NEX-(3|5|5C|C3|VG10|VG10E))\\b/',\n        # usually matches 0xb026 ImageStabilization, except some images with SelfTimer and on tripod\n        PrintConv => {\n            0 => 'Off',\n            64 => 'On',\n        },\n    },"
+ },
+ {
+  "id": "sony_camera_orientation_non_nex",
+  "file": "Image/ExifTool/Sony.pm",
+  "start": 6070,
+  "end": 6079,
+  "note": "non-NEX CameraOrientation mask 0x30.",
+  "snippet": "    0x0018 => {\n        Name => 'CameraOrientation',\n        Condition => '$$self{Model} !~ /^(NEX-(3|5|5C|C3|VG10|VG10E))\\b/',\n        Mask => 0x30, # (don't know what other bits mean)\n        PrintConv => {\n            0 =>  'Horizontal (normal)',\n            1 =>  'Rotate 90 CW',\n            2 =>  'Rotate 270 CW',\n            3 =>  'Rotate 180',\n        },"
+ },
+ {
+  "id": "xmp_ignore_et_prop",
+  "file": "Image/ExifTool/XMP.pm",
+  "start": 264,
+  "end": 265,
+  "note": "%ignoreEtProp membership (desc/prt/val/id/tagid/toolkit/table/index).",
+  "snippet": "my %ignoreEtProp = ( 'et:desc'=>1, 'et:prt'=>1, 'et:val'=>1 , 'et:id'=>1, 'et:tagid'=>1,\n                     'et:toolkit'=>1, 'et:table'=>1, 'et:index'=>1 );"
+ },
+ {
+  "id": "xmp_exif_table_start",
+  "file": "Image/ExifTool/XMP.pm",
+  "start": 1988,
+  "end": 1988,
+  "note": "%Image::ExifTool::XMP::exif table declaration -- exif-namespace-only APEX values live under this table.",
+  "snippet": "%Image::ExifTool::XMP::exif = ("
+ },
+ {
+  "id": "xmp_aperture_value_apex",
+  "file": "Image/ExifTool/XMP.pm",
+  "start": 2088,
+  "end": 2088,
+  "note": "exif-namespace-only APEX ApertureValue.",
+  "snippet": "    ApertureValue => {"
+ },
+ {
+  "id": "xmp_max_aperture_value_apex",
+  "file": "Image/ExifTool/XMP.pm",
+  "start": 2102,
+  "end": 2102,
+  "note": "exif-namespace-only APEX MaxApertureValue.",
+  "snippet": "    MaxApertureValue => {"
+ },
+ {
+  "id": "xmp_exposure_time_print",
+  "file": "Image/ExifTool/XMP.pm",
+  "start": 2042,
+  "end": 2046,
+  "note": "ExposureTime PrintExposureTime wiring.",
+  "snippet": "    ExposureTime => {\n        Writable => 'rational',\n        PrintConv => 'Image::ExifTool::Exif::PrintExposureTime($val)',\n        PrintConvInv => '$val',\n    },"
+ },
+ {
+  "id": "xmp_crs_aperture_value",
+  "file": "Image/ExifTool/XMP.pm",
+  "start": 1367,
+  "end": 1367,
+  "note": "crs plain-real ApertureValue (not APEX).",
+  "snippet": "            ApertureValue       => { Writable => 'real' },"
+ },
+ {
+  "id": "xmp_autoconv_rational",
+  "file": "Image/ExifTool/XMP.pm",
+  "start": 3678,
+  "end": 3678,
+  "note": "XMPAutoConv rational evaluation.",
+  "snippet": "        if (($new or $fmt eq 'rational') and ConvertRational($val)) {"
+ },
+ {
+  "id": "quicktime_timeinfo_cr3_gate",
+  "file": "Image/ExifTool/QuickTime.pm",
+  "start": 280,
+  "end": 280,
+  "note": "%timeInfo ConvertUnixTime gate: FileType eq 'CR3'.",
+  "snippet": "    ValueConv => 'ConvertUnixTime($val, $self->Options(\"QuickTimeUTC\") || $$self{FileType} eq \"CR3\")',"
+ },
+ {
+  "id": "quicktime_timeinfo_block",
+  "file": "Image/ExifTool/QuickTime.pm",
+  "start": 242,
+  "end": 291,
+  "note": "%timeInfo full block containing the CR3 gate.",
+  "snippet": "# information for int32u date/time tags (time zero is Jan 1, 1904)\nmy %timeInfo = (\n    Notes => q{\n        converted from UTC to local time if the QuickTimeUTC option is set.  This\n        tag is part of a binary data structure so it may not be deleted -- instead\n        the value is set to zero if the tag is deleted individually\n    },\n    Shift => 'Time',\n    Writable => 1,\n    Permanent => 1,\n    DelValue => 0,\n    # It is not uncommon for brain-dead software to use the wrong time zero, it should be\n    # Jan 1, 1904, so assume a time zero of Jan 1, 1970 if the date is before this\n    # Note: This value will be in UTC if generated by a system that is aware of the time zone\n    # (also note: this code is duplicated for the CreateDate tag)\n    RawConv => q{\n        if ($val) {\n            my $offset = (66 * 365 + 17) * 24 * 3600;\n            if ($val >= $offset or $$self{OPTIONS}{QuickTimeUTC}) {\n                $val -= $offset;\n            } elsif (not $$self{IsWriting}) {\n                $self->Warn('Patched incorrect time zero for QuickTime date/time tag',1);\n            }\n        } else {\n            undef $val if $self->Options('StrictDate');\n        }\n        return $val;\n    },\n    RawConvInv => q{\n        if ($val and $$self{FileType} eq 'CR3' and not $self->Options('QuickTimeUTC')) {\n            # convert to UTC\n            my $offset = (66 * 365 + 17) * 24 * 3600;\n            $val = ConvertUnixTime($val - $offset);\n            $val = GetUnixTime($val, 1) + $offset;\n        }\n        return $val;\n    },\n    # (all CR3 files store UTC times - PH)\n    ValueConv => 'ConvertUnixTime($val, $self->Options(\"QuickTimeUTC\") || $$self{FileType} eq \"CR3\")',\n    ValueConvInv => q{\n        $val = GetUnixTime($val, $self->Options(\"QuickTimeUTC\"));\n        return undef unless defined $val;\n        return $val unless $val;\n        return $val + (66 * 365 + 17) * 24 * 3600;\n    },\n    PrintConv => '$self->ConvertDateTime($val)',\n    PrintConvInv => q{\n        return $val if $val eq '0000:00:00 00:00:00';\n        return $self->InverseDateTime($val);\n    }"
+ },
+ {
+  "id": "exiftool_pm_convert_unix_time",
+  "file": "Image/ExifTool.pm",
+  "start": 6784,
+  "end": 6810,
+  "note": "ConvertUnixTime localtime/TimeZoneString.",
+  "snippet": "sub ConvertUnixTime($;$$)\n{\n    my ($time, $toLocal, $dec) = @_;\n    return '0000:00:00 00:00:00' if $time == 0;\n    my (@tm, $tz, $trim);\n    $dec = $static_vars{SystemTimeRes} || 0 unless defined $dec;\n    $dec < 0 and $dec = -$dec, $trim = 1;\n    my $itime = int($time);\n    my $frac = $time - $itime;\n    $frac < 0 and $frac += 1, $itime -= 1;\n    $dec = sprintf('%.*f', $dec, $frac);\n    # remove number before decimal and increment integer time if necessary\n    $dec =~ s/^(\\d)// and $1 eq '1' and $itime += 1;\n    $dec =~ s/\\.?0+$// if $trim;    # trim trailing zeros if specified\n    if (not $toLocal) {\n        @tm = gmtime($itime);\n        $tz = '';\n    } elsif ($static_vars{KeepUTCTime}) {\n        @tm = gmtime($itime);\n        $tz = 'Z';\n    } else {\n        @tm = localtime($itime);\n        $tz = TimeZoneString(\\@tm, $itime);\n    }\n    my $str = sprintf(\"%4d:%.2d:%.2d %.2d:%.2d:%.2d$dec%s\",\n                      $tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $tm[0], $tz);\n    return $str;"
+ },
+ {
+  "id": "canon_pm_cncv_filetype_override",
+  "file": "Image/ExifTool/Canon.pm",
+  "start": 271,
+  "end": 271,
+  "note": "Canon.pm CNCV-based FileType override (the CR3 gate is CNCV, not the crx ftyp brand).",
+  "snippet": "    144 => 'Canon EF 35-135mm f/4-5.6 USM', #26"
+ },
+ {
+  "id": "exif_pm_composite_image_size",
+  "file": "Image/ExifTool/Exif.pm",
+  "start": 4747,
+  "end": 4766,
+  "note": "Composite:ImageSize Desire 4 RawImageCroppedSize, returned first when truthy.",
+  "snippet": "    ImageSize => {\n        Require => {\n            0 => 'ImageWidth',\n            1 => 'ImageHeight',\n        },\n        Desire => {\n            2 => 'ExifImageWidth',\n            3 => 'ExifImageHeight',\n            4 => 'RawImageCroppedSize', # (FujiFilm RAF images)\n        },\n        # use ExifImageWidth/Height only for Canon and Phase One TIFF-base RAW images\n        ValueConv => q{\n            return $val[4] if $val[4];\n            return \"$val[2] $val[3]\" if $val[2] and $val[3] and\n                    $$self{TIFF_TYPE} =~ /^(CR2|Canon 1D RAW|IIQ|EIP)$/;\n            return \"$val[0] $val[1]\" if IsFloat($val[0]) and IsFloat($val[1]);\n            return undef;\n        },\n        PrintConv => '$val =~ tr/ /x/; $val',\n    },"
+ },
+ {
+  "id": "exif_pm_print_exposure_time",
+  "file": "Image/ExifTool/Exif.pm",
+  "start": 5701,
+  "end": 5711,
+  "note": "PrintExposureTime.",
+  "snippet": "sub PrintExposureTime($)\n{\n    my $secs = shift;\n    return $secs unless Image::ExifTool::IsFloat($secs);\n    if ($secs < 0.25001 and $secs > 0) {\n        return sprintf(\"1/%d\",int(0.5 + 1/$secs));\n    }\n    $_ = sprintf(\"%.1f\",$secs);\n    s/\\.0$//;\n    return $_;\n}"
+ },
+ {
+  "id": "jpeg2000_compatible_brands",
+  "file": "Image/ExifTool/Jpeg2000.pm",
+  "start": 575,
+  "end": 579,
+  "note": "CompatibleBrands List=>1 ValueConv 4-byte chunking with null-chunk drop.",
+  "snippet": "        Name => 'CompatibleBrands',\n        Format => 'undef[$size-8]',\n        List => 1, # (for documentation only)\n        # ignore any entry with a null, and return others as a list\n        ValueConv => 'my @a=($val=~/.{4}/sg); @a=grep(!/\\0/,@a); \\@a',"
+ },
+ {
+  "id": "quicktime_compatible_brands",
+  "file": "Image/ExifTool/QuickTime.pm",
+  "start": 1046,
+  "end": 1050,
+  "note": "CompatibleBrands List=>1 ValueConv 4-byte chunking (QuickTime's own copy).",
+  "snippet": "        Name => 'CompatibleBrands',\n        Format => 'undef[$size-8]',\n        List => 1, # (for documentation only)\n        # ignore any entry with a null, and return others as a list\n        ValueConv => 'my @a=($val=~/.{4}/sg); @a=grep(!/\\0/,@a); \\@a',"
+ },
+ {
+  "id": "exiftool_script_escape_json",
+  "file": "exiftool",
+  "start": 3801,
+  "end": 3801,
+  "note": "EscapeJSON -- governs which values print unquoted in -j.",
+  "snippet": "sub EscapeJSON($;$)"
+ },
+ {
+  "id": "exiftool_script_escape_json_numeric_regex",
+  "file": "exiftool",
+  "start": 3809,
+  "end": 3809,
+  "note": "EscapeJSON's numeric regex.",
+  "snippet": "        # (these big numbers caused problems for some JSON parsers, so be more conservative)"
+ },
+ {
+  "id": "canon_pm_focal_plane_rational",
+  "file": "Image/ExifTool/Canon.pm",
+  "start": 10145,
+  "end": 10175,
+  "note": "canon_sensor_diag FocalPlane rational inputs.",
+  "snippet": "sub CalcSensorDiag($)\n{\n    my $et = shift;\n    # calculation is based on the rational value of FocalPlaneX/YResolution\n    # (most Canon cameras store the sensor size in the denominator)\n    return undef unless $$et{TAG_EXTRA}{FocalPlaneXResolution} and\n                        $$et{TAG_EXTRA}{FocalPlaneYResolution};\n    my $xres = $$et{TAG_EXTRA}{FocalPlaneXResolution}{Rational};\n    my $yres = $$et{TAG_EXTRA}{FocalPlaneYResolution}{Rational};\n    return undef unless $xres and $yres;\n    # assumptions: 1) numerators are image width/height * 1000\n    # 2) denominators are sensor width/height in inches * 1000\n    my @xres = split /[ \\/]/, $xres;\n    my @yres = split /[ \\/]/, $yres;\n    # verify assumptions as best we can:\n        # numerators are always divisible by 1000\n    if ($xres[0] % 1000 == 0 and $yres[0] % 1000 == 0 and\n        # at least 640x480 pixels (DC models - PH)\n        $xres[0] >= 640000 and $yres[0] >= 480000 and\n        # ... but not too big!\n        $xres[0] < 10000000 and $yres[0] < 10000000 and\n        # minimum sensor size is 0.061 inches (DC models - PH)\n        $xres[1] >= 61 and $xres[1] < 1500 and\n        $yres[1] >= 61 and $yres[1] < 1000 and\n        # sensor isn't square (may happen if rationals have been reduced)\n        $xres[1] != $yres[1])\n    {\n        return sqrt($xres[1]*$xres[1] + $yres[1]*$yres[1]) * 0.0254;\n    }\n    return undef;\n}"
+ }
+]

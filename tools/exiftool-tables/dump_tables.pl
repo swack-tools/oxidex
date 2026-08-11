@@ -261,11 +261,42 @@ sub dump_module {
         };
     }
 
+    # ARRAY package variables -- e.g. @Image::ExifTool::MakerNotes::Main, an
+    # ordered list of routing entries tried in order until one's Condition
+    # matches. A hash table has no concept of "try these in this order until
+    # one wins"; MakerNotes::Main IS that concept, so it has to be an array,
+    # and until now dump_tables.pl only ever walked the stash's HASH globs --
+    # this array (94 rows) was invisible to it entirely.
+    #
+    # Only arrays whose elements are refs (HASH, or ARRAY-of-alternatives, the
+    # same %$tagTablePtr shapes dump_tag_entry already understands for a
+    # single hash entry) are kept. An array of bare scalars is enum/constant
+    # data, not a routing or tag table, mirroring the $struct_vals gate above
+    # for hashes.
+    my %arrays;
+    for my $sym (sort keys %$stash) {
+        next if $sym =~ /::$/;
+        my $glob = $stash->{$sym};
+        next unless ref(\$glob) eq 'GLOB' || ref($glob) eq 'GLOB';
+        my $aref = eval { \@{"${pkg}::${sym}"} };
+        next unless $aref && ref $aref eq 'ARRAY' && @$aref;
+        next unless grep { ref $_ } @$aref;
+
+        my @rows = map { dump_tag_entry($_) } @$aref;
+        $arrays{$sym} = {
+            full_name => "${pkg}::${sym}",
+            rows      => \@rows,
+            row_count => scalar(@rows),
+        };
+    }
+
     return {
-        module     => $module,
-        package    => $pkg,
-        tables     => \%tables,
-        table_count=> scalar(keys %tables),
+        module      => $module,
+        package     => $pkg,
+        tables      => \%tables,
+        table_count => scalar(keys %tables),
+        arrays      => \%arrays,
+        array_count => scalar(keys %arrays),
     };
 }
 
@@ -293,7 +324,7 @@ for my $m (@modules) {
         warn "SKIP $m: $r->{error}";
         next;
     }
-    next unless $r->{table_count};
+    next unless $r->{table_count} || $r->{array_count};
     $out{$m} = $r;
     $ok++;
 }

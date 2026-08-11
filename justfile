@@ -1240,3 +1240,78 @@ verify-tables version="":
 
     python3 tools/exiftool-tables/verify.py "$GENERATED" "$LIB" \
         --oracle tools/exiftool-tables/oracle.pl
+
+# Tag-machinery overhaul Step 16 (R5 stage 1 / R9(a)): staleness/consistency
+# checks for hand-embedded ExifTool facts that have no committed generator at
+# all -- lens databases, MakerNote model-ID tables, the six generator-less
+# binary-data files (sony/nikon/minolta), and the Stage 1 fixes' formulas and
+# conditions. `cargo test staleness` (see below) checks the data-diffable
+# facts against fixtures already committed under tools/exiftool-tables/
+# fixtures/ -- hermetic, no network, no live ExifTool. THIS recipe is the
+# regen-all.sh-style check that those committed fixtures/snapshots/baselines
+# are still what a fresh dump of the pinned tree would produce -- the thing
+# that would tell you to re-run gen_staleness_facts.py after a bump, before
+# `cargo test staleness` ever goes red on CI.
+# Defaults to .exiftool-version, same pin discipline as verify-tables.
+check-staleness version="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    VERSION="{{version}}"
+    if [[ -z "$VERSION" ]]; then
+        VERSION=$(tr -d '[:space:]' < .exiftool-version)
+        [[ -n "$VERSION" ]] || { echo "❌ .exiftool-version is empty" >&2; exit 1; }
+    fi
+
+    CACHE="${OXIDEX_ET_CACHE:-target/exiftool-src}"
+    ROOT="$CACHE/exiftool-$VERSION"
+    LIB="$ROOT/lib"
+    if [[ ! -d "$LIB" ]]; then
+        echo "📦 Fetching ExifTool $VERSION (not cached)"
+        mkdir -p "$CACHE"
+        curl -sSL -o "$CACHE/et-$VERSION.tar.gz" \
+            "https://github.com/exiftool/exiftool/archive/refs/tags/$VERSION.tar.gz"
+        tar xzf "$CACHE/et-$VERSION.tar.gz" -C "$CACHE"
+    fi
+
+    DUMP="$CACHE/tables-$VERSION.json"
+    if [[ ! -r "$DUMP" ]]; then
+        echo ">> dumping ExifTool $VERSION tables (dump_tables.pl)"
+        perl tools/exiftool-tables/dump_tables.pl "$LIB" > "$DUMP"
+    fi
+
+    echo "=========================================================="
+    echo ">> data-diffable facts: regenerate fixtures and diff"
+    echo "=========================================================="
+    TMPFIX="$(mktemp -d)"
+    trap 'rm -rf "$TMPFIX"' EXIT
+    python3 tools/exiftool-tables/gen_staleness_facts.py "$DUMP" "$TMPFIX"
+    if ! diff -ru tools/exiftool-tables/fixtures "$TMPFIX" \
+            --exclude hand_enum_drift_baseline.json; then
+        echo "❌ committed staleness fixtures are stale relative to ExifTool $VERSION." >&2
+        echo "   Re-run: python3 tools/exiftool-tables/gen_staleness_facts.py \"$DUMP\" tools/exiftool-tables/fixtures" >&2
+        echo "   then update the hand-embedded Rust these fixtures check, and 'cargo test staleness'." >&2
+        exit 1
+    fi
+
+    echo "=========================================================="
+    echo ">> coarse enum-fingerprint drift (six generator-less files + canon.rs)"
+    echo "=========================================================="
+    python3 tools/exiftool-tables/check_hand_enum_drift.py \
+        --dump "$DUMP" \
+        --baseline tools/exiftool-tables/fixtures/hand_enum_drift_baseline.json \
+        "src/parsers/tiff/makernotes/sony/enciphered_tables.rs=Sony" \
+        "src/parsers/tiff/makernotes/sony/plain_tables.rs=Sony" \
+        "src/parsers/tiff/makernotes/sony/main_extra_tables.rs=Sony" \
+        "src/parsers/tiff/makernotes/nikon/encrypted_tables.rs=Nikon,NikonCustom" \
+        "src/parsers/tiff/makernotes/nikon/settings_tables.rs=NikonSettings" \
+        "src/parsers/tiff/makernotes/minolta_a100_tables.rs=Minolta" \
+        "src/parsers/tiff/makernotes/canon.rs=Canon"
+
+    echo "=========================================================="
+    echo ">> Stage 1 formula/condition anchors (verbatim-text snapshot diff)"
+    echo "=========================================================="
+    python3 tools/exiftool-tables/check_perl_anchors.py "$ROOT"
+
+    echo
+    echo "✅ check-staleness: fixtures, drift baselines and anchors all current for ExifTool $VERSION"
