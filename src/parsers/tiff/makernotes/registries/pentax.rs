@@ -9,9 +9,9 @@ use super::super::shared::tag_registry::TagRegistry;
 // Re-export decoders from pentax.rs
 // These decoders are defined using const_decoder! macros in the main parser
 use super::super::pentax::{
-    AUTO_BRACKETING, COLOR_SPACE, CONTRAST, DRIVE_MODE, FLASH_MODE, FOCUS_MODE, IMAGE_SIZE,
-    METERING_MODE, PICTURE_MODE, PIXEL_SHIFT_RESOLUTION, QUALITY, SATURATION, SHAKE_REDUCTION,
-    SHARPNESS, WHITE_BALANCE, WHITE_BALANCE_MODE, WORLD_TIME_LOCATION,
+    AUTO_BRACKETING, COLOR_SPACE, CONTRAST, DRIVE_MODE, FLASH_MODE_INTERNAL, FOCUS_MODE,
+    IMAGE_SIZE, METERING_MODE, PICTURE_MODE, PIXEL_SHIFT_RESOLUTION, QUALITY, SATURATION,
+    SHAKE_REDUCTION, SHARPNESS, WHITE_BALANCE, WHITE_BALANCE_MODE, WORLD_TIME_LOCATION,
 };
 
 // ============================================================================
@@ -39,7 +39,13 @@ pub fn pentax_registry() -> TagRegistry {
         .register_raw(0x0001, "PentaxModelType")
         .register_enum_tag_required(0x0008, "Quality", &QUALITY)
         .register_enum_tag_required(0x000B, "PictureMode", &PICTURE_MODE)
-        .register_enum_tag_required(0x000C, "FlashMode", &FLASH_MODE)
+        // Note: FlashMode is really a `Count => -1` list decoded
+        // position-by-position (see `pentax.rs::decode_flash_mode_element`
+        // and Pentax.pm:1131-1163); this registry entry only wires up the
+        // position-0 hash and is unused by the live parse path (see
+        // `PentaxParser::parse_located`), which is the only place this tag
+        // is actually decoded.
+        .register_enum_tag_required(0x000C, "FlashMode", &FLASH_MODE_INTERNAL)
         .register_enum_tag_required(0x000D, "FocusMode", &FOCUS_MODE)
         .register_enum_tag_required(0x0017, "MeteringMode", &METERING_MODE)
         .register_enum_tag_required(0x0018, "AutoBracketing", &AUTO_BRACKETING)
