@@ -8,6 +8,7 @@
 use super::binary::{
     BinTable, BinTag, Fmt, print_exposure_time, print_f_number, read_scalar, signed_adjustment,
 };
+use super::binary_data::model_matches;
 use super::lens_spec::print_lens_spec;
 use crate::exiftool_tables::{self, DecodedValue};
 use crate::io::{ByteOrder as IoByteOrder, EndianReader};
@@ -682,6 +683,28 @@ const EXTRA_INFO2_MODELS: [&str; 5] = [
     "DSLR-A390",
 ];
 
+/// `ExtraInfo3`'s NEX model gate, shared verbatim by `BatteryVoltage1`
+/// (0x0006), `BatteryVoltage2` (0x0008), `ImageStabilization` (0x0011,
+/// Sony.pm:5951-5988) and the non-NEX `CameraOrientation` (0x0018, mask
+/// 0x30, Sony.pm:6070-6079): `Condition => '$$self{Model} !~
+/// /^(NEX-(3|5|5C|C3|VG10|VG10E))\b/'`.
+const EXTRA_INFO3_NEX_MODEL_RE: &str = r"^(NEX-(3|5|5C|C3|VG10|VG10E))\b";
+
+/// Sony.pm:6058-6067 and 6070-6079: `ExtraInfo3`'s two `CameraOrientation`
+/// variants (NEX 0x0016/mask 0xc0, non-NEX 0x0018/mask 0x30) share this enum.
+fn camera_orientation(value: i64) -> Option<String> {
+    Some(
+        match value {
+            0 => "Horizontal (normal)",
+            1 => "Rotate 90 CW",
+            2 => "Rotate 270 CW",
+            3 => "Rotate 180",
+            _ => return None,
+        }
+        .to_string(),
+    )
+}
+
 /// Decodes tag 0x0116, whose layout Sony.pm picks by model: `ExtraInfo`
 /// (A850/A900, forced big-endian), `ExtraInfo2` (A230/A290/A330/A380/A390),
 /// or `ExtraInfo3` (every other body that writes this tag, Sony.pm:868-871).
@@ -702,6 +725,23 @@ pub fn extract_extra_info(
     let Some(table) = exiftool_tables::find_table("Sony", table_name) else {
         return;
     };
+
+    // `ExtraInfo3` fields Sony.pm gates on `$$self{Model}`
+    // (Sony.pm:5951-5988, 6070-6079). `Field::omitted.condition` records that
+    // a `Condition` exists but not what it tests, so `apply_print_conv_to_raw`
+    // cannot evaluate it -- the generic `_` arm below must not run for these,
+    // or a NEX body gets DSLR/SLT-only fields it never carries. That includes
+    // `CameraOrientation`: its masked byte at 0x18 happened to read 0 on the
+    // one NEX-VG10E sample this was checked against, coincidentally matching
+    // the *real* NEX-only reading at a different offset (0x16) -- a wrong
+    // value under the right name that a spot check cannot tell from a right
+    // one. Values are captured here and only emitted after the loop, once the
+    // model predicate has actually been evaluated.
+    let mut battery_voltage1: Option<i64> = None;
+    let mut battery_voltage2: Option<i64> = None;
+    let mut image_stabilization_gated: Option<String> = None;
+    let mut camera_orientation_non_nex: Option<String> = None;
+
     for decoded in exiftool_tables::decode_binary_table(table, data, order) {
         let name = decoded.field.name;
         match name {
@@ -724,18 +764,83 @@ pub fn extract_extra_info(
                     }
                 }
             }
-            // Sony.pm (ExtraInfo3, 0x0006/0x0008): `ValueConv => '$val / 128'`,
-            // `PrintConv => 'sprintf("%.2f V",$val)'`.
-            "BatteryVoltage1" | "BatteryVoltage2" => {
+            // Sony.pm:5951-5967: `ValueConv => '$val / 128'`, `PrintConv =>
+            // 'sprintf("%.2f V",$val)'`. `Field::omitted.value_conv` is set
+            // (the schema has no PrintConv form for a value the ValueConv
+            // already transformed), so `apply_print_conv_to_raw` always
+            // refuses this field; the ValueConv+PrintConv pair is applied by
+            // hand below, but ONLY once the model condition captured here has
+            // been checked -- never unconditionally.
+            "BatteryVoltage1" => {
                 if let DecodedValue::Integer(v) = decoded.raw {
-                    tags.insert(format!("Sony:{name}"), format!("{:.2} V", v as f64 / 128.0));
+                    battery_voltage1 = Some(v);
                 }
+            }
+            "BatteryVoltage2" => {
+                if let DecodedValue::Integer(v) = decoded.raw {
+                    battery_voltage2 = Some(v);
+                }
+            }
+            // `ExtraInfo2`'s `ImageStabilization` (A230/290/330/380/390) has
+            // no `Condition` at all -- only `ExtraInfo3`'s carries the NEX
+            // gate -- so this guard on `omitted.condition` leaves the
+            // `ExtraInfo2` field on the unconditional `_` path below and
+            // diverts only the gated one.
+            "ImageStabilization" if decoded.field.omitted.condition => {
+                image_stabilization_gated = decoded.apply_print_conv_to_raw();
+            }
+            "CameraOrientation" => {
+                camera_orientation_non_nex = decoded.apply_print_conv_to_raw();
             }
             _ => {
                 if let Some(printed) = decoded.apply_print_conv_to_raw() {
                     tags.insert(format!("Sony:{name}"), printed);
                 }
             }
+        }
+    }
+
+    if table_name != "ExtraInfo3" {
+        return;
+    }
+    if !model_matches(EXTRA_INFO3_NEX_MODEL_RE, model) {
+        // Sony.pm:5951-5988: the negated condition holds, so ExifTool reports
+        // these for every non-NEX body that writes `ExtraInfo3`. Confirmed
+        // absent instead for a NEX body by the pinned oracle (ExifTool
+        // 13.59, `-a -G1 -s`, SonyNEX-VG10E.jpg): no BatteryVoltage1/
+        // BatteryVoltage2 tag at all.
+        if let Some(v) = battery_voltage1 {
+            tags.insert(
+                "Sony:BatteryVoltage1".to_string(),
+                format!("{:.2} V", v as f64 / 128.0),
+            );
+        }
+        if let Some(v) = battery_voltage2 {
+            tags.insert(
+                "Sony:BatteryVoltage2".to_string(),
+                format!("{:.2} V", v as f64 / 128.0),
+            );
+        }
+        if let Some(printed) = image_stabilization_gated {
+            tags.insert("Sony:ImageStabilization".to_string(), printed);
+        }
+        if let Some(printed) = camera_orientation_non_nex {
+            tags.insert("Sony:CameraOrientation".to_string(), printed);
+        }
+    } else if let Some(&raw) = data.get(0x16) {
+        // Sony.pm:6058-6067 -- the NEX-only `CameraOrientation` variant
+        // (mask 0xc0). `0x0016` is a Perl array of two model-conditioned
+        // alternatives at the same offset (`MemoryCardConfiguration` for
+        // DSLR bodies, this one for NEX); the generator does not transcribe
+        // that shape, so `SONY_EXTRAINFO3` (`binary_tables.rs`) has no field
+        // at this offset at all -- there is no `decoded.raw` to read it from.
+        // Reading the byte directly here is not an approximation: it is the
+        // exact byte/mask Sony.pm names, gated on the exact model predicate
+        // above. Verified against the pinned oracle's `-v3` trace on
+        // SonyNEX-VG10E.jpg: byte 0x16 = 0x3e, `(0x3e & 0xc0) >> 6` = 0 ->
+        // "Horizontal (normal)", matching `-a -G1 -s`'s `CameraOrientation`.
+        if let Some(printed) = camera_orientation((i64::from(raw) & 0xc0) >> 6) {
+            tags.insert("Sony:CameraOrientation".to_string(), printed);
         }
     }
 }
@@ -865,5 +970,97 @@ mod tests {
             &mut ungated_tags
         ));
         assert!(!ungated_tags.contains_key("Sony:AFMicroAdjValue"));
+    }
+
+    /// The 30-byte `ExtraInfo3` payload from the SonyNEX-VG10E.jpg sample's
+    /// tag 0x0116 (`oxidex -v3` / the pinned oracle's `-v3` trace agree on the
+    /// bytes: `ff 03 48 00 2a ff 02 c0 c4 cc ce cf d1 ae ae 00 cc 00 ff ff ff
+    /// 3a 3e ff cc cc e4 02 f7 02`). Byte 0x16 = 0x3e is the one this test
+    /// pins: `(0x3e & 0xc0) >> 6 = 0`, ExifTool's NEX-only `CameraOrientation`
+    /// reading of "Horizontal (normal)" (Sony.pm:6058-6067).
+    const EXTRA_INFO3_NEX_VG10E_BYTES: [u8; 30] = [
+        0xff, 0x03, 0x48, 0x00, 0x2a, 0xff, 0x02, 0xc0, 0xc4, 0xcc, 0xce, 0xcf, 0xd1, 0xae, 0xae,
+        0x00, 0xcc, 0x00, 0xff, 0xff, 0xff, 0x3a, 0x3e, 0xff, 0xcc, 0xcc, 0xe4, 0x02, 0xf7, 0x02,
+    ];
+
+    #[test]
+    fn extra_info3_omits_battery_voltage_on_nex_bodies() {
+        // Sony.pm:5951-5967 -- `Condition => '$$self{Model} !~
+        // /^(NEX-(3|5|5C|C3|VG10|VG10E))\b/'`. NEX-VG10E matches the excluded
+        // set, so ExifTool reports neither BatteryVoltage1 nor
+        // BatteryVoltage2 at all. Confirmed against the pinned oracle
+        // (ExifTool 13.59, `-a -G1 -s`, SonyNEX-VG10E.jpg): no
+        // BatteryVoltage1/BatteryVoltage2 tag in the output. Before this fix,
+        // oxidex reported "384.02 V" / "409.53 V" here -- the correct
+        // ValueConv arithmetic run without the model gate that should have
+        // suppressed it.
+        let mut tags = HashMap::new();
+        extract_extra_info(
+            &EXTRA_INFO3_NEX_VG10E_BYTES,
+            Some("NEX-VG10E"),
+            IoByteOrder::Little,
+            &mut tags,
+        );
+        assert!(!tags.contains_key("Sony:BatteryVoltage1"));
+        assert!(!tags.contains_key("Sony:BatteryVoltage2"));
+        // Sony.pm:5980-5988 carries the same gate; also absent.
+        assert!(!tags.contains_key("Sony:ImageStabilization"));
+    }
+
+    #[test]
+    fn extra_info3_camera_orientation_reads_the_nex_only_byte_and_mask() {
+        // Sony.pm:6058-6067 -- the NEX variant lives at 0x0016/mask 0xc0, not
+        // the DSLR/SLT one this table transcribes at 0x0018/mask 0x30 (which
+        // Sony.pm gates OUT for NEX bodies). Byte 0x16 = 0x3e decodes to 0 ->
+        // "Horizontal (normal)", matching the pinned oracle's `-a -G1 -s`
+        // `Sony:CameraOrientation` on this exact sample.
+        let mut tags = HashMap::new();
+        extract_extra_info(
+            &EXTRA_INFO3_NEX_VG10E_BYTES,
+            Some("NEX-VG10E"),
+            IoByteOrder::Little,
+            &mut tags,
+        );
+        assert_eq!(
+            tags.get("Sony:CameraOrientation"),
+            Some(&"Horizontal (normal)".to_string())
+        );
+    }
+
+    #[test]
+    fn extra_info3_emits_battery_voltage_and_the_non_nex_orientation_on_dslr_bodies() {
+        // The same bytes under a body Sony.pm's negated condition does NOT
+        // exclude: BatteryVoltage1/2 (0x0006/0x0008, ValueConv `$val / 128`),
+        // ImageStabilization (0x0011) and the 0x0018/mask 0x30
+        // `CameraOrientation` variant should all be reported.
+        let mut tags = HashMap::new();
+        extract_extra_info(
+            &EXTRA_INFO3_NEX_VG10E_BYTES,
+            Some("DSLR-A580"),
+            IoByteOrder::Little,
+            &mut tags,
+        );
+        // bytes 6-7 = 0x02 0xc0 LE = 0xc002 = 49154; 49154 / 128 = 384.015625
+        assert_eq!(
+            tags.get("Sony:BatteryVoltage1"),
+            Some(&"384.02 V".to_string())
+        );
+        // bytes 8-9 = 0xc4 0xcc LE = 0xccc4 = 52420; 52420 / 128 = 409.53125
+        assert_eq!(
+            tags.get("Sony:BatteryVoltage2"),
+            Some(&"409.53 V".to_string())
+        );
+        // byte 0x11 = 0x00 -> Off.
+        assert_eq!(
+            tags.get("Sony:ImageStabilization"),
+            Some(&"Off".to_string())
+        );
+        // byte 0x18 = 0xcc, mask 0x30 -> 0 -> "Horizontal (normal)" (the
+        // non-NEX variant this table transcribes; distinct from the NEX-only
+        // 0x16/0xc0 byte, which is not read for a non-NEX model).
+        assert_eq!(
+            tags.get("Sony:CameraOrientation"),
+            Some(&"Horizontal (normal)".to_string())
+        );
     }
 }
