@@ -133,9 +133,9 @@ pub fn parse_embedded_xmp(xmp_data: &[u8], metadata: &mut MetadataMap) -> bool {
             for (name, value) in tags {
                 let value = match value {
                     XmpValue::Scalar(value) => TagValue::new_string(value),
-                    XmpValue::List(values) => TagValue::Array(
-                        values.into_iter().map(TagValue::new_string).collect(),
-                    ),
+                    XmpValue::List(values) => {
+                        TagValue::Array(values.into_iter().map(TagValue::new_string).collect())
+                    }
                 };
                 metadata.insert(name, value);
             }
