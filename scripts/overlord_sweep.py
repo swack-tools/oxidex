@@ -1635,6 +1635,33 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
             "bisection": bisection_result, "failed_squads": failed_squads, "preflight": health,
         }
 
+    # Normalize formatting BEFORE either idempotency check below. Both
+    # checks are commit-to-commit diffs (`ref..HEAD`), which never see
+    # uncommitted working-tree changes -- so this has to actually commit,
+    # not just reformat the working tree. Reuses format_sweep_branch
+    # itself (idempotent: the LATER call, further down, finds nothing left
+    # to do and reports "already cargo-fmt clean"). Committing here cannot
+    # leak an extra row into the evidence table or judgment queue below:
+    # both are built from all_shas, and commits_contributed resolves each
+    # squad's contribution from the merge boundaries recorded in
+    # merge_infos (computed earlier this round, before any fmt call), not
+    # from "whatever sits on HEAD now" -- see commits_contributed's own
+    # docstring.
+    #
+    # Measured 2026-08-11: PR #694 duplicated #692 (byte-identical diffs,
+    # md5-verified) despite the path-scoped duplicate check from #693 --
+    # the ONLY difference the scoped diff found was rustfmt line-wrapping
+    # (e.g. a 3-line `match` arm collapsed to one line), because #692's
+    # branch had already been through format_sweep_branch's fmt-and-commit
+    # step while THIS round's comparison ran on raw, pre-fmt worker output.
+    # Both idempotency checks below compare tree content; unformatted
+    # content can never match a PR that already went through fmt, no
+    # matter how many times the same gap gets re-solved with functionally
+    # identical code. A fmt failure here is not fatal -- format_sweep_branch
+    # itself logs and reports it, and this degrades to exactly today's
+    # pre-fix behavior (comparing unformatted content), never worse.
+    format_sweep_branch(repo_root, run_git, fmt_fn=fmt_fn, log_fn=log_fn)
+
     # The repo's DURABLE idempotency rule: compare the TREE, not the SHA.
     # A cherry-pick or a squash gives identical content a fresh sha (fresh
     # committer timestamp), so a stamp whose whole contribution is already
@@ -1779,14 +1806,18 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
     body = build_pr_body(evidence_rows=evidence_rows, judgment_entries=judgment_entries, branch=branch)
     title = build_sweep_pr_title(branch, all_shas, merge_infos)
 
-    # Formatting is deliberately the LAST thing to touch the branch.
+    # Usually a no-op by now: the idempotency-check section above already
+    # ran format_sweep_branch once, before either the origin_ref or the
+    # open-PR duplicate check, so both compare formatted content. Kept
+    # here (rather than relying solely on that earlier call) because
     # all_shas / the evidence table / the judgment queue above are the
-    # TAG-FIX commits, and the fmt commit is not one of them: it carries
-    # no trailers, closes no gap, and must not show up as a row in the
-    # PR's evidence table or as an entry in the judgment queue. Running
-    # it after cargo_test_workspace_fn is also deliberate -- rustfmt only
-    # moves whitespace, so re-running a multi-minute workspace suite
-    # afterwards would double the sweep's wall clock for no semantic gain.
+    # TAG-FIX commits, and the fmt commit must never show up as a row in
+    # the PR's evidence table or as an entry in the judgment queue --
+    # calling it again after they're built, not before, is what keeps that
+    # true regardless of whether the earlier call already committed
+    # everything or the fmt-and-commit step still needs to happen
+    # (fmt_fn=None in a caller that never wired the earlier normalization
+    # in, or a fmt failure there that a retry here might still recover).
     fmt_result = format_sweep_branch(repo_root, run_git, fmt_fn=fmt_fn, log_fn=log_fn)
 
     # The lint gate CI will apply, applied BEFORE the push rather than after.
