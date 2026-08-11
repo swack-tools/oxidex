@@ -655,15 +655,31 @@ const_decoder!(pub
     ]
 );
 
-// Decodes image stabilization
+// Decodes ImageStabilization (tag 0x1422), element 0 of the 3x int16u array:
+// the IS system in use. FujiFilm.pm:790-800 (the first of the two hashrefs in
+// the array PrintConv at line 794). There is no 256 key in ExifTool's table --
+// that entry, and the other four labels here, were invented; the real map is
+// 0/1/2/3/258/512 only.
 const_decoder!(pub
     DECODE_IMAGE_STABILIZATION, i32, [
         (0, "None"),
-        (1, "Optical"),
-        (2, "Sensor-Shift"),
-        (3, "Optical + Sensor-Shift"),
-        (256, "Lens-Sensor Shift"),
-        (512, "Lens-5-Axis"),
+        (1, "Optical"), //PH FujiFilm.pm:796
+        (2, "Sensor-shift"), //PH FujiFilm.pm:797 (now IBIS/OIS, ref forum13708)
+        (3, "OIS Lens"), //forum9815 FujiFilm.pm:798 (optical+sensor?)
+        (258, "IBIS/OIS + DIS"), //forum13708 FujiFilm.pm:799 (digital on top of IBIS/OIS)
+        (512, "Digital"), //PH FujiFilm.pm:800
+    ]
+);
+
+// Decodes ImageStabilization (tag 0x1422), element 1 of the 3x int16u array:
+// the IS mode. FujiFilm.pm:801-804 (the second hashref in the array
+// PrintConv). Element 2 (a frame/lens-shake counter) has no PrintConv in
+// ExifTool and is rendered as the raw int16u.
+const_decoder!(pub
+    DECODE_IMAGE_STABILIZATION_MODE, i32, [
+        (0, "Off"),
+        (1, "On (mode 1, continuous)"),
+        (2, "On (mode 2, shooting only)"),
     ]
 );
 
@@ -1376,13 +1392,26 @@ impl MakerNoteParser for FujifilmParser {
                     );
                 }
 
-                // Image Stabilization
+                // Image Stabilization (tag 0x1422). FujiFilm.pm:790-806: a 3x
+                // int16u array (Count => 3). 3 * 2 = 6 bytes never fits in the
+                // 4-byte inline value_offset field, so value_offset is always
+                // a pointer into `data` -- reading it directly as a scalar
+                // (the old code) decoded the file offset as if it were the
+                // tag value. Element 0 and element 1 each have their own
+                // PrintConv hash (array PrintConv); element 2 has none and
+                // prints as the raw number, joined with "; " to match
+                // ExifTool's list rendering.
                 FUJI_IMAGE_STABILIZATION => {
-                    let value = entry.value_offset as i32;
-                    tags.insert(
-                        "FujiFilm:ImageStabilization".to_string(),
-                        DECODE_IMAGE_STABILIZATION.decode(value).to_string(),
-                    );
+                    if let Some(array) = extract_u16_array(&entry, data, fuji_byte_order)
+                        && array.len() >= 3
+                    {
+                        let parts = [
+                            DECODE_IMAGE_STABILIZATION.decode(array[0] as i32),
+                            DECODE_IMAGE_STABILIZATION_MODE.decode(array[1] as i32),
+                            array[2].to_string(),
+                        ];
+                        tags.insert("FujiFilm:ImageStabilization".to_string(), parts.join("; "));
+                    }
                 }
 
                 // Scene Recognition
@@ -2337,5 +2366,131 @@ mod tests {
         let tags = decode_settings(&FUJIFILM_FOCUSSETTINGS, &[0x02, 0x02, 0x00, 0x00]);
         assert_eq!(tags["FujiFilm:FocusMode2"], "AF-C");
         assert_eq!(tags["FujiFilm:AFAreaMode"], "Wide/Tracking");
+    }
+
+    // ImageStabilization (tag 0x1422). FujiFilm.pm:790-806 (ExifTool 13.59).
+    //
+    //     0x1422 => {
+    //         Name => 'ImageStabilization',
+    //         Writable => 'int16u',
+    //         Count => 3,
+    //         PrintConv => [{
+    //             0 => 'None',
+    //             1 => 'Optical', #PH
+    //             2 => 'Sensor-shift', #PH (now IBIS/OIS, ref forum13708)
+    //             3 => 'OIS Lens', #forum9815 (optical+sensor?)
+    //             258 => 'IBIS/OIS + DIS', #forum13708 (digital on top of IBIS/OIS)
+    //             512 => 'Digital', #PH
+    //         },{
+    //             0 => 'Off',
+    //             1 => 'On (mode 1, continuous)',
+    //             2 => 'On (mode 2, shooting only)',
+    //         }],
+    //     },
+    //
+    // verified against the pinned oracle (13.59) on
+    // stage1-samples/FujiFilm/FujiFilmX-S10.jpg:
+    //   `[FujiFilm]      ImageStabilization              : OIS Lens; On (mode 1, continuous); 0`
+
+    /// Element 0 -- the IS system (FujiFilm.pm:795-800). There is no 256 key
+    /// in ExifTool's hash; that entry (and the other four labels) were
+    /// invented in an earlier revision of this file.
+    #[test]
+    fn test_decode_image_stabilization_system() {
+        assert_eq!(DECODE_IMAGE_STABILIZATION.decode(0), "None");
+        assert_eq!(DECODE_IMAGE_STABILIZATION.decode(1), "Optical");
+        assert_eq!(DECODE_IMAGE_STABILIZATION.decode(2), "Sensor-shift");
+        assert_eq!(DECODE_IMAGE_STABILIZATION.decode(3), "OIS Lens");
+        assert_eq!(DECODE_IMAGE_STABILIZATION.decode(258), "IBIS/OIS + DIS");
+        assert_eq!(DECODE_IMAGE_STABILIZATION.decode(512), "Digital");
+        // 256 was the invented key this replaced; it is not in FujiFilm.pm
+        // and must not decode to any of the real labels.
+        assert_eq!(DECODE_IMAGE_STABILIZATION.decode(256), "Unknown (256)");
+    }
+
+    /// Element 1 -- the IS mode (FujiFilm.pm:801-804).
+    #[test]
+    fn test_decode_image_stabilization_mode() {
+        assert_eq!(DECODE_IMAGE_STABILIZATION_MODE.decode(0), "Off");
+        assert_eq!(
+            DECODE_IMAGE_STABILIZATION_MODE.decode(1),
+            "On (mode 1, continuous)"
+        );
+        assert_eq!(
+            DECODE_IMAGE_STABILIZATION_MODE.decode(2),
+            "On (mode 2, shooting only)"
+        );
+    }
+
+    /// End-to-end pointer decode: 6 bytes (3x int16u) never fit in the 4-byte
+    /// inline `value_offset` field, so `value_offset` must be read as a
+    /// pointer into the MakerNote body, not as the tag's value itself (the
+    /// bug this test pins). Bytes are hand-embedded, not read from any /tmp
+    /// path:
+    //
+    //   offset  0..8   "FUJIFILM"
+    //   offset  8..12  IFD offset = 12                (u32 LE)
+    //   offset 12..14  entry_count = 1                (u16 LE)
+    //   offset 14..16  tag_id = 0x1422                (u16 LE)
+    //   offset 16..18  field_type = 3 (SHORT)         (u16 LE)
+    //   offset 18..22  value_count = 3                (u32 LE)
+    //   offset 22..26  value_offset = 26 (pointer)     (u32 LE)
+    //   offset 26..32  array data: 3, 1, 0             (3x u16 LE)
+    //
+    // array data (3, 1, 0) mirrors the oracle-observed
+    // FujiFilmX-S10.jpg encoding: element 0 = 3 ("OIS Lens"), element 1 = 1
+    // ("On (mode 1, continuous)"), element 2 = 0 (no PrintConv, raw number).
+    #[test]
+    fn test_image_stabilization_reads_pointer_not_inline_value() {
+        let data: &[u8] = &[
+            0x46, 0x55, 0x4a, 0x49, 0x46, 0x49, 0x4c, 0x4d, // "FUJIFILM"
+            0x0c, 0x00, 0x00, 0x00, // IFD offset = 12
+            0x01, 0x00, // entry_count = 1
+            0x22, 0x14, // tag_id = 0x1422
+            0x03, 0x00, // field_type = SHORT
+            0x03, 0x00, 0x00, 0x00, // value_count = 3
+            0x1a, 0x00, 0x00, 0x00, // value_offset = 26
+            0x03, 0x00, 0x01, 0x00, 0x00, 0x00, // array data: 3, 1, 0
+        ];
+
+        let parser = FujifilmParser;
+        let mut tags = HashMap::new();
+        parser
+            .parse(data, ByteOrder::LittleEndian, &mut tags)
+            .expect("synthetic FujiFilm MakerNote should parse");
+
+        assert_eq!(
+            tags["FujiFilm:ImageStabilization"],
+            "OIS Lens; On (mode 1, continuous); 0"
+        );
+    }
+
+    /// Never-approximate rule (AGENTS.md): if the pointed-to array data is
+    /// truncated (value_offset run off the end of the buffer),
+    /// `extract_u16_array` returns `None` and the tag must be omitted
+    /// entirely -- not inserted with a value read from garbage/out-of-bounds
+    /// memory, and not partially filled from 1 or 2 of the 3 elements.
+    #[test]
+    fn test_image_stabilization_omits_when_pointer_is_out_of_bounds() {
+        let data: &[u8] = &[
+            0x46, 0x55, 0x4a, 0x49, 0x46, 0x49, 0x4c, 0x4d, // "FUJIFILM"
+            0x0c, 0x00, 0x00, 0x00, // IFD offset = 12
+            0x01, 0x00, // entry_count = 1
+            0x22, 0x14, // tag_id = 0x1422
+            0x03, 0x00, // field_type = SHORT
+            0x03, 0x00, 0x00, 0x00, // value_count = 3
+            0xff, 0x00, 0x00, 0x00, // value_offset = 255 -- past end of buffer
+        ];
+
+        let parser = FujifilmParser;
+        let mut tags = HashMap::new();
+        parser
+            .parse(data, ByteOrder::LittleEndian, &mut tags)
+            .expect("a truncated array pointer must not fail the whole parse");
+
+        assert!(
+            !tags.contains_key("FujiFilm:ImageStabilization"),
+            "out-of-bounds array pointer must omit the tag, not approximate one"
+        );
     }
 }
