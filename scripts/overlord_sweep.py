@@ -1691,7 +1691,23 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
     # open_sweep_prs_fn is optional (None in every existing test and any
     # caller that predates this check) so this is additive: skip
     # entirely rather than fail a sweep over a `gh` hiccup.
+    #
+    # Scoped to the PATHS this round's own squad merges touched, not a raw
+    # full-tree diff. Measured 2026-08-11: the raw full-tree version of this
+    # check missed a real duplicate (PR #692 vs #690, since confirmed
+    # byte-identical by md5) because THIS branch was cut from an origin/main
+    # that had since gained an unrelated commit (this very fix, #691) that
+    # PR #690's branch -- opened before #691 merged -- does not carry. Every
+    # future round inherits any commit that lands on origin/main in the
+    # meantime, so a full-tree compare against an older open PR sees THAT
+    # unrelated drift as "different" and never again matches, no matter how
+    # many times the same gap gets re-solved identically. Comparing only the
+    # paths this round actually changed isolates the tag-fix content from
+    # incidental history the two branches don't share.
     if open_sweep_prs_fn is not None:
+        changed_rc, changed_out, _changed_err = run_git(
+            ["diff", "--name-only", f"{origin_ref}..HEAD"], repo_root)
+        changed_paths = [p for p in changed_out.splitlines() if p.strip()] if changed_rc == 0 else []
         # origin_ref is "<remote>/<branch>" in production (ORIGIN_MAIN =
         # "origin/main") and a bare local branch name ("main") in tests
         # that want no real remote at all -- same split every other
@@ -1703,7 +1719,7 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
         open_prs = open_sweep_prs_fn() or []
         for pr in open_prs:
             head = pr.get("headRefName") if isinstance(pr, dict) else None
-            if not head or head == branch:
+            if not head or head == branch or not changed_paths:
                 continue
             candidate_ref = head
             if remote:
@@ -1716,7 +1732,8 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
                     # checking that candidate, never the whole duplicate scan.
                     continue
                 candidate_ref = f"refs/remotes/{remote}/{head}"
-            cmp_rc, _out2, _err2 = run_git(["diff", "--quiet", f"{candidate_ref}..HEAD"], repo_root)
+            cmp_rc, _out2, _err2 = run_git(
+                ["diff", "--quiet", f"{candidate_ref}..HEAD", "--", *changed_paths], repo_root)
             if cmp_rc == 0:
                 pr_ref = pr.get("url") or pr.get("number") or head
                 log_fn(f"{branch} is tree-identical to already-open {pr_ref} ({head}) -- skipping "
