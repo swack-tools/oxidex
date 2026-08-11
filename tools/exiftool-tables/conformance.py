@@ -21,12 +21,34 @@ emits `BMP:Width`, ExifTool does not, and ExifTool's BMP table contains
 rename, not two independent defects. The value check is what makes the
 inference safe -- name similarity alone would guess, and guessing is how you
 get a confident wrong mapping.
+
+Matching is group-qualified: a same-named tag from two different groups is
+only paired across groups when the value matches (a harmless group alias) or
+the name was unique on both sides to begin with. Bare-name comparison is
+group-blind, and group-blind comparison is not free of cost -- on a single-
+file APE.mpc corpus, comparing every OxiDex `MPC:*`/`APE:*`/`ID3:*`/`ID3v1:*`
+tag against every ExifTool tag sharing its bare name manufactured 10 false
+VALUE diffs and one false cross-group MATCH out of tags that, group-
+qualified, are 11 `MPC:*` MISSING, 11 `APE:*` MISSING, `ID3v1:*` EXTRA (Oxi-
+Dex reads the trailer ExifTool's JSON writer drops when ID3v2 outranks it),
+and zero VALUE. See test_conformance.py for the pinned regression.
+
+EXTRA is a precision axis, not a recall penalty: it is reported (with a
+`precision` column and an EXTRA vote table) but never enters the score/
+ceiling denominator, so a format cannot buy a better score by inventing tags
+and is not punished on recall for genuinely extra ones -- later stages
+budget it explicitly (Step 21's default-mode EXTRA-budget gate reads this).
+
+Real VALUE differences are further classed by severity -- identity,
+structural, numeric, date_time, binary, display_only -- so a PrintConv
+rounding nit doesn't read the same as a wrong decode.
 """
 
 import argparse
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 from collections import Counter, defaultdict
@@ -188,6 +210,133 @@ def occurrence_name(group, name, duplicate):
     return f"{group}:{name}" if duplicate else name
 
 
+_DATE_RE = re.compile(r"^\d{4}[:\-]\d{2}[:\-]\d{2}([ T]\d{2}:\d{2}:\d{2})?")
+
+
+def classify_severity(expected, actual):
+    """Bucket a genuine VALUE difference by what kind of gap it represents.
+
+    This runs only after matching/missing/extra are already decided -- it
+    never changes a count, it labels the value_diff pairs so a reviewer (or
+    a later CI gate, see Stage 4's output-mode matrix) can tell a PrintConv
+    rounding nit from a wrong decode without opening every file by hand.
+
+    Classes: identity (same string modulo case/whitespace -- a formatting
+    nit), date_time, binary (a "(Binary data N bytes...)" placeholder on
+    either side), numeric (both sides parse as numbers but disagree),
+    display_only (one side is a substring of the other -- usually a
+    PrintConv applied on one side only, e.g. "5" vs "5 (Standard)"), and
+    structural (the fallback: genuinely different data).
+    """
+    e, a = str(expected), str(actual)
+    if _DATE_RE.match(e) or _DATE_RE.match(a):
+        return "date_time"
+    if "Binary data" in e or "Binary data" in a:
+        return "binary"
+    if e.casefold().strip() == a.casefold().strip():
+        return "identity"
+    try:
+        float(e)
+        float(a)
+        return "numeric"
+    except ValueError:
+        pass
+    e_norm, a_norm = e.casefold(), a.casefold()
+    if e_norm and a_norm and (e_norm in a_norm or a_norm in e_norm):
+        return "display_only"
+    return "structural"
+
+
+def _match_bucket(_name, expected, actual):
+    """Resolve one tag-name bucket (all ET and OxiDex occurrences of `name`
+    in one file) into matched / value_diff / leftover-missing / leftover-
+    extra, group-qualified.
+
+    Four tiers, most specific evidence first, each consuming what it pairs
+    so a later tier never re-considers an already-decided occurrence:
+
+      1. Exact group AND exact value.  Unambiguous under any circumstance.
+      2. Exact value, any group.  A harmless group alias (OxiDex normalises
+         a number of ExifTool's group names) still identifies the same
+         underlying data, so this stays group-blind -- but only as a value-
+         confirmed pairing, never a blind position grab.
+      3. Exact group, differing value.  The strongest evidence of a real
+         PrintConv/value discrepancy once (1)/(2) found nothing.
+      4. Last resort: pair whatever is left, but ONLY when the tag name was
+         unique on both sides to begin with (exactly one ET occurrence, one
+         OxiDex occurrence). This is the fix for the APE.mpc cascade: the
+         old code punted here whenever *anything* remained on the OxiDex
+         side, regardless of how many candidates were competing, and that
+         is what let an unrelated MPC:*/APE:*/ID3v1:* value get pulled in
+         and reported as a false VALUE diff (or, when the value happened to
+         coincide, a false MATCH) against a completely different real tag.
+         When the name occurs more than once on either side, an unresolved
+         leftover is reported as MISSING + EXTRA instead of a guessed pair
+         -- under-claiming a defect classification is deliberate here, the
+         same principle infer_renames() below already applies to renames.
+    """
+    original_expected_n = len(expected)
+    original_actual_n = len(actual)
+    duplicate = original_expected_n > 1 or original_actual_n > 1
+
+    remaining_actual = list(actual)
+    matched_pairs = []   # (group, value) from the ET side, for `matched`
+    diff_pairs = []      # (e_group, e_value, a_group, a_value)
+
+    # Tier 1: exact group + exact value.
+    still = []
+    for g, v in expected:
+        idx = next(
+            (i for i, (og, ov) in enumerate(remaining_actual)
+             if og == g and norm_value(ov) == norm_value(v)),
+            None,
+        )
+        if idx is not None:
+            remaining_actual.pop(idx)
+            matched_pairs.append((g, v))
+        else:
+            still.append((g, v))
+    expected = still
+
+    # Tier 2: exact value, any group (harmless alias tolerance).
+    still = []
+    for g, v in expected:
+        idx = next(
+            (i for i, (_og, ov) in enumerate(remaining_actual)
+             if norm_value(ov) == norm_value(v)),
+            None,
+        )
+        if idx is not None:
+            remaining_actual.pop(idx)
+            matched_pairs.append((g, v))
+        else:
+            still.append((g, v))
+    expected = still
+
+    # Tier 3: exact group, value differs.
+    still = []
+    for g, v in expected:
+        idx = next(
+            (i for i, (og, _ov) in enumerate(remaining_actual) if og == g),
+            None,
+        )
+        if idx is not None:
+            og, ov = remaining_actual.pop(idx)
+            diff_pairs.append((g, v, og, ov))
+        else:
+            still.append((g, v))
+    expected = still
+
+    # Tier 4: cross-group punt, gated on name-uniqueness (see docstring).
+    if (original_expected_n == 1 and original_actual_n == 1
+            and expected and remaining_actual):
+        g, v = expected.pop(0)
+        og, ov = remaining_actual.pop(0)
+        diff_pairs.append((g, v, og, ov))
+
+    return matched_pairs, diff_pairs, expected, remaining_actual, duplicate
+
+
 def compare(et, ox):
     et_by_name = tags_by_name(et)
     ox_by_name = tags_by_name(ox)
@@ -198,39 +347,17 @@ def compare(et, ox):
     for n in et_by_name.keys() | ox_by_name.keys():
         expected = et_by_name.get(n, [])
         actual = list(ox_by_name.get(n, []))
-        duplicate = len(expected) > 1 or len(actual) > 1
 
-        for g, v in expected:
-            # The old one-entry map compared the first same-named tag from
-            # each side.  In a PDF, that could compare PDF:CreateDate against
-            # EXIF:CreateDate despite an equal PDF:CreateDate being present.
-            # Prefer an equal value, regardless of a harmless group alias.
-            equal = next(
-                (i for i, (_og, ov) in enumerate(actual)
-                 if norm_value(v) == norm_value(ov)),
-                None,
-            )
-            if equal is not None:
-                actual.pop(equal)
-                matched.append(n)
-                continue
+        matched_pairs, diff_pairs, leftover_expected, leftover_actual, duplicate = (
+            _match_bucket(n, expected, actual)
+        )
 
-            # When no values match, an exact group is the strongest evidence
-            # that this is a real PrintConv/value discrepancy.  Retain the
-            # historical group-agnostic fallback for names that occur once.
-            same_group = next(
-                (i for i, (og, _ov) in enumerate(actual) if og == g),
-                None,
-            )
-            candidate = same_group if same_group is not None else (0 if actual else None)
-            if candidate is None:
-                missing[occurrence_name(g, n, duplicate)] = (g, v)
-                continue
-
-            _og, ov = actual.pop(candidate)
-            value_diff.append((n, v, ov))
-
-        for g, v in actual:
+        matched.extend(n for _g, _v in matched_pairs)
+        for _g, v, _og, ov in diff_pairs:
+            value_diff.append((n, v, ov, classify_severity(v, ov)))
+        for g, v in leftover_expected:
+            missing[occurrence_name(g, n, duplicate)] = (g, v)
+        for g, v in leftover_actual:
             extra[occurrence_name(g, n, duplicate)] = (g, v)
 
     renames = infer_renames(missing, extra)
@@ -245,6 +372,29 @@ def compare(et, ox):
         "extra": extra,
         "renames": renames,
     }
+
+
+# --- Step 13 seam ---------------------------------------------------------
+# Step 13 adds ReadReport (Parsed|Partial|IdentifiedOnly|Unsupported) to
+# OxiDex's own output -- a machine-readable parse-status distinct from "did
+# it emit any tags at all" (see AGENTS.md: "detected is not parsed"). Once
+# that lands, this hook stops returning None and starts feeding a genuine
+# IdentifiedOnly-per-format count into the report and into --json-out, so a
+# format that only ever emits identity tags stops being invisible in the
+# conformance table. Deliberately unimplemented here -- Step 13 owns it.
+def parser_status(_path, _ox):
+    return None
+
+
+# --- Stage 4 seam ----------------------------------------------------------
+# Stage 4 gives OxiDex a TagOccurrence store carrying family-0/1 group
+# identity per occurrence. Once that exists, this hook can return a
+# family-0 "ExifTool-compatible" view and a family-1 "OxiDex-structural"
+# view of one file's comparison, so this instrument reports both without
+# another rewrite of compare(). Deliberately unimplemented here -- Stage 4
+# owns it.
+def family_views(_et, _ox):
+    return None
 
 
 def main():
@@ -363,7 +513,10 @@ def main():
     per_ext = defaultdict(Counter)
     rename_votes = defaultdict(Counter)
     missing_votes = Counter()
+    extra_votes = Counter()
+    severity_votes = Counter()
     detail = []
+    per_file = {}
 
     scored_files = 0
     et_tags_seen = 0
@@ -390,9 +543,25 @@ def main():
             rename_votes[ext][(on, en)] += 1
         for n in r["missing"]:
             missing_votes[(ext, n)] += 1
+        for n in r["extra"]:
+            extra_votes[(ext, n)] += 1
+        for _n, _ev, _ov, sev in r["value_diff"]:
+            severity_votes[sev] += 1
 
-        total = c["matched"] + c["value_diff"] + c["missing"] + c["renames"]
         detail.append((len(r["missing"]) + len(r["renames"]), path, r))
+
+        # (c) --json-out per-file VALUE/EXTRA identities, so a reviewer (or
+        # a later stage's CI gate) can see exactly which tags disagreed on
+        # which file without re-running the corpus. parser_status/
+        # family_views are Step 13 / Stage 4 seams -- always None today.
+        per_file[path] = {
+            "format": ext,
+            "value_diff": [[n, ev, ov, sev] for n, ev, ov, sev in r["value_diff"]],
+            "extra": {k: list(v) for k, v in r["extra"].items()},
+            "missing": {k: list(v) for k, v in r["missing"].items()},
+            "parser_status": parser_status(path, ox),
+            "family_views": family_views(et, ox),
+        }
 
     # Refuse to print a number from a run that plainly did not happen. A
     # degraded oracle does not crash: it reads a fraction of the corpus and
@@ -409,9 +578,19 @@ def main():
             "   Check the oracle can actually read this corpus before trusting any score."
         )
 
+    # score/ceiling (recall) are computed over matched+value_diff+missing+
+    # renames only -- extra never enters that denominator, by design (see
+    # AGENTS.md "bare-name comparison is group-blind" / project memory).
+    # precision is the separate axis this step adds: how much of what
+    # OxiDex emitted for a matched name was real vs. spurious. It is
+    # reported, not folded into score, so a format cannot buy a better
+    # score by emitting extra noise, and cannot be penalized on recall for
+    # emitting it either -- extras are budgeted by later stages (Step 21's
+    # "default-mode EXTRA budget ~= 0" gate reads this column).
     print(f"{'format':<10}{'files':>6}{'match':>7}{'rename':>8}"
-          f"{'value':>7}{'missing':>9}{'score':>8}{'ceiling':>9}")
-    print("-" * 64)
+          f"{'value':>7}{'missing':>9}{'extra':>7}{'score':>8}"
+          f"{'ceiling':>9}{'precision':>11}")
+    print("-" * 86)
     grand = Counter()
     for ext in sorted(per_ext):
         c = per_ext[ext]
@@ -422,16 +601,23 @@ def main():
         score = c["matched"] / tot
         # What the score becomes if every rename is corrected -- free coverage.
         ceiling = (c["matched"] + c["renames"]) / tot
+        denom = c["matched"] + c["extra"]
+        precision = (c["matched"] / denom) if denom else 1.0
         print(f"{ext:<10}{c['files']:>6}{c['matched']:>7}{c['renames']:>8}"
-              f"{c['value_diff']:>7}{c['missing']:>9}{score:>7.1%}{ceiling:>9.1%}")
+              f"{c['value_diff']:>7}{c['missing']:>9}{c['extra']:>7}"
+              f"{score:>7.1%}{ceiling:>9.1%}{precision:>10.1%}")
 
     tot = grand["matched"] + grand["value_diff"] + grand["missing"] + grand["renames"]
-    print("-" * 64)
+    print("-" * 86)
     if tot:
+        g_denom = grand["matched"] + grand["extra"]
+        g_precision = (grand["matched"] / g_denom) if g_denom else 1.0
         print(f"{'TOTAL':<10}{grand['files']:>6}{grand['matched']:>7}"
               f"{grand['renames']:>8}{grand['value_diff']:>7}{grand['missing']:>9}"
+              f"{grand['extra']:>7}"
               f"{grand['matched']/tot:>7.1%}"
-              f"{(grand['matched']+grand['renames'])/tot:>9.1%}")
+              f"{(grand['matched']+grand['renames'])/tot:>9.1%}"
+              f"{g_precision:>10.1%}")
 
     if rename_votes:
         print("\nrenames -- OxiDex reads these correctly under the wrong name.")
@@ -440,15 +626,28 @@ def main():
             for (on, en), n in rename_votes[ext].most_common():
                 print(f"  {ext:<8} {on:<26} -> {en:<26} ({n} file{'s'*(n>1)})")
 
+    if severity_votes:
+        print("\nvalue differences by severity (precision debt, not recall):")
+        for sev, c in severity_votes.most_common():
+            print(f"  {sev:<14} {c}")
+
     print("\ntop genuinely missing tags (real extraction work):")
     for (ext, n), c in missing_votes.most_common(25):
         print(f"  {ext:<8} {n:<34} {c} file{'s'*(c>1)}")
+
+    if extra_votes:
+        print("\ntop OxiDex-only tags (precision axis -- budgeted, not scored):")
+        for (ext, n), c in extra_votes.most_common(25):
+            print(f"  {ext:<8} {n:<34} {c} file{'s'*(c>1)}")
 
     if args.show:
         for _k, path, r in sorted(detail, reverse=True)[:args.show]:
             print(f"\n--- {os.path.basename(path)} ---")
             print("  missing:", ", ".join(sorted(r["missing"])) or "-")
             print("  extra:  ", ", ".join(sorted(r["extra"])) or "-")
+            if r["value_diff"]:
+                print("  value:  ", ", ".join(
+                    f"{n} [{sev}]" for n, _ev, _ov, sev in r["value_diff"]))
 
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as fh:
@@ -456,7 +655,16 @@ def main():
                 {"per_format": {k: dict(v) for k, v in per_ext.items()},
                  "renames": {k: {f"{a}->{b}": n for (a, b), n in v.items()}
                              for k, v in rename_votes.items()},
-                 "missing": {f"{e}:{n}": c for (e, n), c in missing_votes.items()}},
+                 "missing": {f"{e}:{n}": c for (e, n), c in missing_votes.items()},
+                 # (b) extras as a precision axis, symmetric with `missing`.
+                 "extra": {f"{e}:{n}": c for (e, n), c in extra_votes.items()},
+                 # (d) severity histogram of real VALUE differences.
+                 "severity": dict(severity_votes),
+                 # (c) per-file VALUE/EXTRA/MISSING identities.
+                 "per_file": per_file,
+                 # (e)/(f) seams -- always empty until Step 13 / Stage 4 land.
+                 "parser_status": {},
+                 "family_views": {}},
                 fh, indent=2, sort_keys=True)
         print(f"\nwrote {args.json_out}")
 
