@@ -18,6 +18,9 @@ use crate::core::jpeg_helpers::{
     process_spiff_segments, process_uniform_resource_name_segments, process_xmp_segments,
 };
 use crate::core::operations_helpers::{read_u16, read_u32};
+use crate::core::read_report::{
+    Diagnostic, DiagnosticKind, DiagnosticSink, ParseStatus, ReadReport,
+};
 #[cfg(test)]
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
 use crate::core::tiff_helpers::parse_ifd_chain;
@@ -470,6 +473,253 @@ pub fn read_metadata_with_detector(
     Ok(metadata)
 }
 
+/// Reads metadata from a file, returning a [`ReadReport`] rather than a bare
+/// `Result<MetadataMap>`.
+///
+/// This is the machine-readable counterpart to [`read_metadata`]. Where
+/// `read_metadata` either hands back a full `MetadataMap` or fails the whole
+/// read, `read_metadata_report` always hands back whatever could be
+/// extracted -- filesystem tags at a minimum -- tagged with a [`ParseStatus`]
+/// that says how far the read got, plus the [`Diagnostic`]s a caller can
+/// inspect programmatically instead of grepping stderr.
+///
+/// See [`read_metadata_report_with_detector`] for the full behavior; this is
+/// that function fixed to [`DetectorMode::Signature`].
+pub fn read_metadata_report(path: &Path) -> Result<ReadReport> {
+    read_metadata_report_with_detector(path, DetectorMode::Signature)
+}
+
+/// [`read_metadata_report`], with the detector mode exposed.
+///
+/// This mirrors [`read_metadata_with_detector`] step for step through
+/// filesystem-metadata extraction, format detection, and dispatch, but
+/// diverges at two points where the older function had no choice but to
+/// fail the whole read:
+///
+/// * **A recognised format whose parser cannot complete** (a truncated
+///   JPEG, a damaged sub-block) used to return `Err`, discarding the
+///   filesystem metadata already gathered. ExifTool does not do this:
+///   `ProcessJPEG` clears its `$success` flag on a bad segment but keeps
+///   walking the file, and only afterwards does `$success or
+///   $self->Warn('JPEG format error')` (`ExifTool.pm:8483`) turn that into
+///   a `Warning` tag rather than an exception -- `Warn` itself
+///   (`ExifTool.pm:5616-5643`) is just `FoundTag('Warning', $str)`, a
+///   warning is another extracted tag, not a distinct failure channel. This
+///   function does the same: on such a failure it still returns filesystem
+///   + identity tags, records the problem as a `Diagnostic`, mirrors it
+///   into a `File:Warning` tag, and reports [`ParseStatus::Partial`].
+/// * **A format neither a parser nor `crate::filetype::identify` can name**
+///   used to return `Err` too. This function instead reports
+///   [`ParseStatus::Unsupported`] with the filesystem tags it already had
+///   and a diagnostic explaining why.
+///
+/// The genuinely successful paths are unchanged in substance: a full parse
+/// with nothing pushed to the diagnostic sink is [`ParseStatus::Parsed`]; a
+/// full parse that pushed at least one diagnostic (a malformed embedded XMP
+/// packet, say, in an otherwise-healthy JPEG) is [`ParseStatus::Partial`];
+/// and the pre-existing "detected but not parsed" fallback --
+/// [`add_identity_tags`] reached because the format has no parser at all --
+/// is [`ParseStatus::IdentifiedOnly`]. AGENTS.md calls that state "detected
+/// is not parsed": a file can report a perfectly correct `FileType` while
+/// 100% of its real tags are missing, and `IdentifiedOnly` is what makes
+/// that machine-distinguishable from an actual parse.
+///
+/// Diagnostic collection only runs through JPEG and PNG today (the two
+/// parsers this step threaded a sink into); every other format's parser
+/// still resolves internally the way it always did; a hard failure from one
+/// of them lands on the "recognised format whose parser cannot complete"
+/// branch above with a single diagnostic built from the propagated error,
+/// same as before this step, just no longer thrown away as an `Err`.
+pub fn read_metadata_report_with_detector(
+    path: &Path,
+    detector_mode: DetectorMode,
+) -> Result<ReadReport> {
+    // Step 1: Extract file system metadata (File:FileName, File:FileSize, etc.)
+    let mut metadata = match crate::core::file_metadata::extract_file_metadata(path) {
+        Ok(file_meta) => file_meta,
+        Err(e) => {
+            eprintln!("Warning: Failed to extract file metadata: {}", e);
+            MetadataMap::new()
+        }
+    };
+
+    // Step 2: Open file with MMapReader for zero-copy access
+    let reader = MMapReader::new(path)?;
+
+    // Step 3: Detect format
+    let mut format = match detect_format_with_mode(&reader, detector_mode) {
+        Ok(f) => f,
+        Err(e) => return Ok(identify_or_report_unsupported(metadata, &reader, path, e)),
+    };
+
+    // Step 3b: Camera raw formats hiding behind a TIFF magic number
+    if format == FileFormat::TIFF {
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if let Ok(magic_bytes) = reader.read(0, 32)
+            && let Some(raw_format) = crate::parsers::raw::detect_raw_format(magic_bytes, filename)
+        {
+            format = FileFormat::CameraRaw(raw_format);
+        }
+    }
+
+    // Step 4: Dispatch. JPEG and PNG go through their diagnostics-carrying
+    // entry points so a recoverable problem inside an otherwise-successful
+    // parse surfaces as `Partial` rather than vanishing into stderr.
+    let mut diagnostics: DiagnosticSink = Vec::new();
+    let dispatch_result = match format {
+        FileFormat::JPEG => parse_jpeg_metadata_with_diagnostics(&reader, &mut diagnostics),
+        FileFormat::PNG => {
+            crate::parsers::png::parse_png_metadata_with_diagnostics(&reader, &mut diagnostics)
+        }
+        _ => dispatch_format_parser(&reader, format),
+    };
+
+    let format_metadata = match dispatch_result {
+        Ok(m) => m,
+        Err(e) => {
+            if is_unsupported(&e) {
+                return Ok(identify_or_report_unsupported(metadata, &reader, path, e));
+            }
+            // A format we do have a parser for, but that parser could not
+            // finish. Keep what identification gives us instead of failing
+            // outright -- see the ExifTool.pm citations on this function's
+            // doc comment.
+            return Ok(if add_identity_tags(&mut metadata, &reader, path) {
+                // JPEG gets ExifTool's own wording verbatim
+                // (`$self->Warn('JPEG format error')`, ExifTool.pm:8483) so
+                // the two tools agree byte-for-byte on a truncated JPEG.
+                // Every other format keeps the real error text -- there is
+                // no equivalent fixed phrase to match, and the actual
+                // message is more useful than inventing one.
+                let message = if format == FileFormat::JPEG {
+                    "JPEG format error".to_string()
+                } else {
+                    e.to_string()
+                };
+                let diagnostics = vec![Diagnostic::warning(message)];
+                record_diagnostics(&mut metadata, &diagnostics);
+                normalize_identity_tags(&mut metadata);
+                crate::composite::apply(&mut metadata);
+                ReadReport {
+                    metadata,
+                    status: ParseStatus::Partial,
+                    diagnostics,
+                }
+            } else {
+                let diagnostics = vec![Diagnostic::warning(e.to_string())];
+                record_diagnostics(&mut metadata, &diagnostics);
+                ReadReport {
+                    metadata,
+                    status: ParseStatus::Unsupported,
+                    diagnostics,
+                }
+            });
+        }
+    };
+
+    // Step 5: Merge, same as `read_metadata_with_detector`.
+    metadata.merge(format_metadata);
+    drop_redundant_file_size(&mut metadata);
+    add_identity_tags(&mut metadata, &reader, path);
+    normalize_identity_tags(&mut metadata);
+
+    if !metadata.contains_key("File:ExifByteOrder")
+        && format != FileFormat::DR4
+        && let Ok(head) = reader.read(0, 2)
+    {
+        let order = match &head[..] {
+            b"II" => Some(ByteOrder::LittleEndian),
+            b"MM" => Some(ByteOrder::BigEndian),
+            _ => None,
+        };
+        if let Some(order) = order {
+            metadata.insert(
+                "File:ExifByteOrder",
+                TagValue::new_string(order.exif_byte_order_tag()),
+            );
+        }
+    }
+
+    crate::composite::apply(&mut metadata);
+
+    record_diagnostics(&mut metadata, &diagnostics);
+    let status = if diagnostics.is_empty() {
+        ParseStatus::Parsed
+    } else {
+        ParseStatus::Partial
+    };
+
+    Ok(ReadReport {
+        metadata,
+        status,
+        diagnostics,
+    })
+}
+
+/// Shared tail of `read_metadata_report_with_detector`'s two "format
+/// detection/dispatch declined this file" branches: try to at least name
+/// the file from `crate::filetype`'s identification tables
+/// ([`add_identity_tags`]), and either way record why the real parse never
+/// happened.
+fn identify_or_report_unsupported(
+    mut metadata: MetadataMap,
+    reader: &dyn FileReader,
+    path: &Path,
+    e: ExifToolError,
+) -> ReadReport {
+    if add_identity_tags(&mut metadata, reader, path) {
+        crate::composite::apply(&mut metadata);
+        return ReadReport {
+            metadata,
+            status: ParseStatus::IdentifiedOnly,
+            diagnostics: Vec::new(),
+        };
+    }
+    let diagnostics = vec![Diagnostic::warning(e.to_string())];
+    record_diagnostics(&mut metadata, &diagnostics);
+    ReadReport {
+        metadata,
+        status: ParseStatus::Unsupported,
+        diagnostics,
+    }
+}
+
+/// Surfaces diagnostics as ExifTool-style tags instead of leaving them only
+/// in `ReadReport::diagnostics`.
+///
+/// `Warn`/`Error` (`ExifTool.pm:5616`, `:5654`) both resolve to
+/// `$self->FoundTag('Warning'|'Error', $str)` -- in ExifTool a diagnostic
+/// *is* a tag, not a side channel that can go unreported. OxiDex has no
+/// per-read family-1 group to file it under, so both land under `File:`,
+/// the same group the pre-existing Casio CAM `File:Warning`
+/// (`parse_casio_cam_metadata`, below) already uses. Multiple messages of
+/// the same kind are joined with `"; "` rather than overwriting each other,
+/// and an existing value at the key is never clobbered, so nothing routed
+/// through here is silently lost the way the `eprintln!`s it replaces were.
+fn record_diagnostics(metadata: &mut MetadataMap, diagnostics: &[Diagnostic]) {
+    let warnings: Vec<&str> = diagnostics
+        .iter()
+        .filter(|d| d.kind == DiagnosticKind::Warning)
+        .map(|d| d.message.as_str())
+        .collect();
+    if !warnings.is_empty() && !metadata.contains_key("File:Warning") {
+        metadata.insert("File:Warning", TagValue::new_string(warnings.join("; ")));
+    }
+
+    let errors: Vec<&str> = diagnostics
+        .iter()
+        .filter(|d| d.kind == DiagnosticKind::Error)
+        .map(|d| d.message.as_str())
+        .collect();
+    if !errors.is_empty() && !metadata.contains_key("File:Error") {
+        metadata.insert("File:Error", TagValue::new_string(errors.join("; ")));
+    }
+    // DiagnosticKind::Refusal is deliberately not surfaced as a tag here --
+    // it is the seam for Step 10's runtime refusals, which are a maintainer
+    // policy decision rather than something ExifTool would ever call a
+    // `Warning`/`Error`. Nothing constructs one yet.
+}
+
 /// Writes modified metadata to a file at the specified path.
 ///
 /// This function orchestrates the complete metadata write workflow:
@@ -917,15 +1167,28 @@ pub fn copy_metadata(src: &Path, dest: &Path, tags: Option<&[String]>) -> Result
 /// * `Ok(MetadataMap)` - Successfully parsed metadata from all segments
 /// * `Err(ExifToolError)` - Parse error or invalid JPEG structure
 pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
+    let mut diagnostics = Vec::new();
+    parse_jpeg_metadata_with_diagnostics(reader, &mut diagnostics)
+}
+
+/// Same as [`parse_jpeg_metadata`], but pushes recoverable problems (a
+/// malformed XMP packet, an unparseable APP13 Photoshop resource, ...) into
+/// `diagnostics` instead of dropping them. [`read_metadata_report_with_detector`]
+/// is the only caller that reads `diagnostics` back out; `parse_jpeg_metadata`
+/// itself discards them, matching its previous (silent) behavior exactly.
+pub(crate) fn parse_jpeg_metadata_with_diagnostics(
+    reader: &dyn FileReader,
+    diagnostics: &mut DiagnosticSink,
+) -> Result<MetadataMap> {
     // Parse JPEG segment structure
     let segments = parse_segments(reader)?;
 
     let mut metadata = MetadataMap::new();
 
     // Process different segment types
-    process_jfif_segments(&segments, &mut metadata);
-    process_exif_segments(&segments, reader, &mut metadata);
-    process_xmp_segments(&segments, &mut metadata);
+    process_jfif_segments(&segments, &mut metadata, diagnostics);
+    process_exif_segments(&segments, reader, &mut metadata, diagnostics);
+    process_xmp_segments(&segments, &mut metadata, diagnostics);
 
     // AFCP and FotoStation write their records after the JPEG's EOI, so they
     // need the whole file rather than the parsed segment list. Both can carry
@@ -962,8 +1225,8 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
         }
     }
 
-    process_iptc_segments(&segments, &mut metadata);
-    process_photoshop_segments(&segments, &mut metadata);
+    process_iptc_segments(&segments, &mut metadata, diagnostics);
+    process_photoshop_segments(&segments, &mut metadata, diagnostics);
     process_uniform_resource_name_segments(&segments, &mut metadata);
     process_icc_segments(&segments, &mut metadata);
     process_mpf_segments(&segments, &mut metadata);
@@ -1590,6 +1853,172 @@ mod tests {
         assert_eq!(
             canonical_write_tag_name("IFD0:ModifyDate"),
             "IFD0:ModifyDate"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // ReadReport / diagnostic sink (Step 13)
+    // ------------------------------------------------------------------
+
+    /// A minimal, hand-built JPEG: SOI, one APP1 segment starting `FLIR\0`
+    /// but far short of `MIN_FLIR_SEGMENT_LENGTH` (11 bytes), then EOI.
+    /// `parse_flir_segment` rejects it with "FLIR segment too short",
+    /// exercising the swallow site at `jpeg_helpers.rs`'s
+    /// `process_exif_segments` (formerly `let _ = parse_flir_segment(...)`).
+    fn jpeg_with_undersized_flir_segment() -> Vec<u8> {
+        let mut bytes = vec![0xFF, 0xD8]; // SOI
+        let flir_data = b"FLIR\0"; // 5 bytes, well under MIN_FLIR_SEGMENT_LENGTH
+        bytes.push(0xFF);
+        bytes.push(0xE1); // APP1
+        let len = (flir_data.len() + 2) as u16; // length field includes itself
+        bytes.extend_from_slice(&len.to_be_bytes());
+        bytes.extend_from_slice(flir_data);
+        bytes.push(0xFF);
+        bytes.push(0xD9); // EOI
+        bytes
+    }
+
+    #[test]
+    fn malformed_flir_segment_is_recorded_not_swallowed() {
+        let reader = TestReader::new(jpeg_with_undersized_flir_segment());
+        let mut diagnostics = Vec::new();
+
+        // The read itself still succeeds -- one bad sub-block does not fail
+        // an otherwise-parseable JPEG.
+        let _metadata = parse_jpeg_metadata_with_diagnostics(&reader, &mut diagnostics)
+            .expect("a bad FLIR segment does not fail the whole JPEG parse");
+
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "the FLIR failure must be recorded exactly once"
+        );
+        assert_eq!(diagnostics[0].kind, DiagnosticKind::Warning);
+        assert!(
+            diagnostics[0].message.contains("FLIR"),
+            "diagnostic should name what failed: {}",
+            diagnostics[0].message
+        );
+    }
+
+    #[test]
+    fn record_diagnostics_joins_multiple_warnings_into_one_tag() {
+        let mut metadata = MetadataMap::new();
+        let diagnostics = vec![
+            Diagnostic::warning("first problem"),
+            Diagnostic::warning("second problem"),
+        ];
+        record_diagnostics(&mut metadata, &diagnostics);
+        assert_eq!(
+            metadata.get_string("File:Warning"),
+            Some("first problem; second problem")
+        );
+    }
+
+    #[test]
+    fn record_diagnostics_never_overwrites_an_existing_warning_tag() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("File:Warning", TagValue::new_string("parser's own warning"));
+        record_diagnostics(&mut metadata, &[Diagnostic::warning("sink warning")]);
+        assert_eq!(
+            metadata.get_string("File:Warning"),
+            Some("parser's own warning"),
+            "an existing File:Warning must win over the sink's"
+        );
+    }
+
+    #[test]
+    fn record_diagnostics_files_errors_separately_from_warnings() {
+        let mut metadata = MetadataMap::new();
+        record_diagnostics(
+            &mut metadata,
+            &[Diagnostic::warning("w"), Diagnostic::error("e")],
+        );
+        assert_eq!(metadata.get_string("File:Warning"), Some("w"));
+        assert_eq!(metadata.get_string("File:Error"), Some("e"));
+    }
+
+    #[test]
+    fn record_diagnostics_does_not_surface_refusals_as_tags() {
+        // Refusal is reserved for Step 10 and must not masquerade as a
+        // Warning/Error tag today.
+        let mut metadata = MetadataMap::new();
+        record_diagnostics(&mut metadata, &[Diagnostic::refusal("not implemented yet")]);
+        assert!(metadata.get_string("File:Warning").is_none());
+        assert!(metadata.get_string("File:Error").is_none());
+    }
+
+    /// The truncated-JPEG motivating defect, end to end through
+    /// `read_metadata_report`. Bytes are embedded, not read from disk: the
+    /// first 20 bytes of a real JPEG (SOI, an APP1/Exif segment header
+    /// declaring a 0x098c-byte payload, and the start of a TIFF header)
+    /// with everything after byte 20 missing.
+    ///
+    /// The pinned oracle (`/usr/bin/perl5.34 ... exiftool`, ExifTool
+    /// 13.59) reports this file as `FileType: JPEG`, `MIMEType:
+    /// image/jpeg`, and `Warning: JPEG format error`, exiting 0.
+    /// `ExifTool.pm:8483`: `$success or $self->Warn('JPEG format
+    /// error');` -- `ProcessJPEG` degrades instead of raising an
+    /// exception, which is the model this test holds oxidex to.
+    const TRUNCATED_JPEG: &[u8] = &[
+        0xff, 0xd8, 0xff, 0xe1, 0x09, 0x8c, 0x45, 0x78, 0x69, 0x66, 0x00, 0x00, 0x49, 0x49, 0x2a,
+        0x00, 0x08, 0x00, 0x00, 0x00,
+    ];
+
+    #[test]
+    fn truncated_jpeg_reports_partial_instead_of_failing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("truncated.jpg");
+        std::fs::write(&path, TRUNCATED_JPEG).expect("write truncated JPEG fixture");
+
+        let report = read_metadata_report(&path)
+            .expect("a damaged-but-identifiable JPEG must still read Ok");
+
+        assert_eq!(report.status, ParseStatus::Partial);
+
+        // Filesystem tags survived.
+        assert!(report.metadata.get_string("File:FileName").is_some());
+        assert!(report.metadata.get_string("File:FileSize").is_some());
+
+        // Identity tags survived: the file is still nameable even though
+        // its content could not be parsed.
+        assert_eq!(report.metadata.get_string("File:FileType"), Some("JPEG"));
+        assert_eq!(
+            report.metadata.get_string("File:FileTypeExtension"),
+            Some("jpg")
+        );
+        assert_eq!(
+            report.metadata.get_string("File:MIMEType"),
+            Some("image/jpeg")
+        );
+
+        // ExifTool's own wording for this exact failure mode.
+        assert_eq!(
+            report.metadata.get_string("File:Warning"),
+            Some("JPEG format error")
+        );
+
+        assert_eq!(report.diagnostics.len(), 1);
+        assert_eq!(report.diagnostics[0].message, "JPEG format error");
+        assert_eq!(report.diagnostics[0].kind, DiagnosticKind::Warning);
+    }
+
+    #[test]
+    fn mie_reports_identified_only() {
+        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/exiftool/t/images/MIE.mie");
+        if !path.is_file() {
+            eprintln!("skipping: pinned fixture not present at {}", path.display());
+            return;
+        }
+
+        let report =
+            read_metadata_report(path).expect("MIE identifies even though it has no parser");
+
+        assert_eq!(report.status, ParseStatus::IdentifiedOnly);
+        assert_eq!(report.metadata.get_string("File:FileType"), Some("MIE"));
+        assert!(
+            report.diagnostics.is_empty(),
+            "the ~40-format no-parser fallback is not itself a diagnosable problem"
         );
     }
 

@@ -5,6 +5,7 @@
 
 use super::{FileReader, MetadataMap, TagValue};
 use crate::core::operations_helpers::read_u32;
+use crate::core::read_report::{Diagnostic, DiagnosticSink};
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
 use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd};
 use crate::exiftool_tables::{DecodedValue, decode_binary_table, find_table};
@@ -35,10 +36,22 @@ use crate::tag_db::lookup_tag_name;
 ///
 /// * `segments` - Parsed JPEG segments
 /// * `metadata` - MetadataMap to populate with JFIF tags
-pub fn process_jfif_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+/// * `diagnostics` - Sink for problems that don't stop the read (a
+///   malformed JFXX extension segment is skipped, not fatal)
+pub fn process_jfif_segments(
+    segments: &[Segment],
+    metadata: &mut MetadataMap,
+    diagnostics: &mut DiagnosticSink,
+) {
     for segment in segments.iter().filter(|s| s.marker == 0xFFE0) {
         // Also try extended APP0 parser for JFXX segments
-        let _ = crate::parsers::jpeg::app_parsers::parse_app0_extended(segment.data, metadata);
+        if let Err(e) =
+            crate::parsers::jpeg::app_parsers::parse_app0_extended(segment.data, metadata)
+        {
+            diagnostics.push(Diagnostic::warning(format!(
+                "Failed to parse JFXX extension in APP0: {e}"
+            )));
+        }
 
         // Check if this is a JFIF segment (starts with "JFIF\0")
         if segment.data.len() >= 14 && &segment.data[0..5] == b"JFIF\0" {
@@ -135,10 +148,13 @@ pub fn process_jfif_segments(segments: &[Segment], metadata: &mut MetadataMap) {
 /// * `segments` - Parsed JPEG segments
 /// * `reader` - File reader for accessing full file (needed for offset calculations)
 /// * `metadata` - MetadataMap to populate with EXIF tags
+/// * `diagnostics` - Sink for problems that don't stop the read (a
+///   malformed FLIR/EXIF sub-block is skipped, not fatal to the JPEG read)
 pub fn process_exif_segments(
     segments: &[Segment],
     reader: &dyn FileReader,
     metadata: &mut MetadataMap,
+    diagnostics: &mut DiagnosticSink,
 ) {
     // Find all APP1 segments (EXIF/XMP/FLIR)
     let app1_segments: Vec<_> = segments.iter().filter(|s| s.is_app1()).collect();
@@ -147,7 +163,11 @@ pub fn process_exif_segments(
     for segment in app1_segments {
         // Check if this is a FLIR segment (starts with "FLIR\0")
         if segment.data.len() >= 5 && &segment.data[0..5] == b"FLIR\0" {
-            let _ = crate::parsers::jpeg::flir_parser::parse_flir_segment(segment.data, metadata);
+            if let Err(e) =
+                crate::parsers::jpeg::flir_parser::parse_flir_segment(segment.data, metadata)
+            {
+                diagnostics.push(Diagnostic::warning(format!("Incomplete FLIR record: {e}")));
+            }
             continue;
         }
 
@@ -207,82 +227,89 @@ pub fn process_exif_segments(
             let tiff_reader = TiffSubReader::new(reader, tiff_offset);
 
             // Parse IFD structure
-            if let Ok(tags) = parse_ifd(&tiff_reader, ifd_offset, byte_order) {
-                // Process IFD0 tags and get sub-IFD offsets
-                let (exif_ifd_offset, gps_ifd_offset) =
-                    process_ifd0_tags(&tags, byte_order, metadata);
+            match parse_ifd(&tiff_reader, ifd_offset, byte_order) {
+                Err(e) => {
+                    diagnostics.push(Diagnostic::warning(format!(
+                        "Failed to parse EXIF IFD0: {e}"
+                    )));
+                }
+                Ok(tags) => {
+                    // Process IFD0 tags and get sub-IFD offsets
+                    let (exif_ifd_offset, gps_ifd_offset) =
+                        process_ifd0_tags(&tags, byte_order, metadata, diagnostics);
 
-                // Parse EXIF Sub-IFD if present. `tiff_offset` is the absolute
-                // file position of the TIFF header, which ExifTool adds to
-                // stored offsets (e.g. the Interop IFD's OtherImageStart).
-                // `tiff_data.len()` is the APP1 segment's EXIF payload -- what
-                // ExifTool calls `$dataLen` -- and bounds how far a MakerNote
-                // decoder may resolve its own value offsets. `tiff_reader`
-                // itself runs to the end of the file, so this is the tighter
-                // of the two limits and keeps a MakerNote out of the JPEG's
-                // compressed scan data.
-                if let Some(offset) = exif_ifd_offset {
-                    parse_exif_subifd(
+                    // Parse EXIF Sub-IFD if present. `tiff_offset` is the absolute
+                    // file position of the TIFF header, which ExifTool adds to
+                    // stored offsets (e.g. the Interop IFD's OtherImageStart).
+                    // `tiff_data.len()` is the APP1 segment's EXIF payload -- what
+                    // ExifTool calls `$dataLen` -- and bounds how far a MakerNote
+                    // decoder may resolve its own value offsets. `tiff_reader`
+                    // itself runs to the end of the file, so this is the tighter
+                    // of the two limits and keeps a MakerNote out of the JPEG's
+                    // compressed scan data.
+                    if let Some(offset) = exif_ifd_offset {
+                        parse_exif_subifd(
+                            &tiff_reader,
+                            offset,
+                            byte_order,
+                            tiff_offset,
+                            tiff_data.len() as u64,
+                            metadata,
+                        );
+                    }
+
+                    // Parse GPS Sub-IFD if present
+                    if let Some(offset) = gps_ifd_offset {
+                        parse_gps_subifd(&tiff_reader, offset, byte_order, metadata);
+                    }
+
+                    // IFD0's on-disk entry count, needed to locate its own
+                    // next-IFD pointer (immediately after the last entry).
+                    // `tags.len()` is NOT this: parse_ifd silently drops
+                    // malformed entries, so it can undercount, which walks the
+                    // pointer lookup too few entries into the file and misreads
+                    // whatever bytes happen to sit there -- typically the tail of
+                    // a skipped entry -- as the next-IFD offset. `parse_ifd`
+                    // above already succeeded reading this exact IFD, so this
+                    // 2-byte re-read cannot fail in practice; `tags.len()` is
+                    // kept only as a defensive fallback, never the primary path.
+                    let ifd0_entry_count = crate::parsers::tiff::ifd_parser::ifd_entry_count(
                         &tiff_reader,
-                        offset,
+                        ifd_offset,
+                        byte_order,
+                    )
+                    .map(|count| count as usize)
+                    .unwrap_or(tags.len());
+
+                    // Walk IFD0's next-IFD pointer to IFD1 (the thumbnail IFD), which
+                    // carries Compression/ThumbnailOffset/ThumbnailLength/ThumbnailImage.
+                    // `tiff_offset` is the absolute file position of the TIFF header,
+                    // which ExifTool adds to the stored ThumbnailOffset.
+                    crate::core::tiff_helpers::parse_ifd1_thumbnail(
+                        &tiff_reader,
+                        ifd_offset,
+                        ifd0_entry_count,
                         byte_order,
                         tiff_offset,
-                        tiff_data.len() as u64,
+                        metadata,
+                    );
+
+                    // Walk IFD1's next-IFD pointer to IFD2. Leica JPEGs carry a
+                    // second, larger preview there under tag 0x0111/0x0117,
+                    // named PreviewImageStart/PreviewImageLength (not
+                    // StripOffsets/StripByteCounts - see Exif.pm:707-768).
+                    // Offsets are TIFF-relative: the helper reads via
+                    // `tiff_reader` and uses `tiff_offset` only for the absolute
+                    // JpgFromRawStart value ExifTool displays.
+                    crate::core::tiff_helpers::parse_ifd2_preview_image(
+                        &tiff_reader,
+                        ifd_offset,
+                        ifd0_entry_count,
+                        byte_order,
+                        tiff_offset,
                         metadata,
                     );
                 }
-
-                // Parse GPS Sub-IFD if present
-                if let Some(offset) = gps_ifd_offset {
-                    parse_gps_subifd(&tiff_reader, offset, byte_order, metadata);
-                }
-
-                // IFD0's on-disk entry count, needed to locate its own
-                // next-IFD pointer (immediately after the last entry).
-                // `tags.len()` is NOT this: parse_ifd silently drops
-                // malformed entries, so it can undercount, which walks the
-                // pointer lookup too few entries into the file and misreads
-                // whatever bytes happen to sit there -- typically the tail of
-                // a skipped entry -- as the next-IFD offset. `parse_ifd`
-                // above already succeeded reading this exact IFD, so this
-                // 2-byte re-read cannot fail in practice; `tags.len()` is
-                // kept only as a defensive fallback, never the primary path.
-                let ifd0_entry_count = crate::parsers::tiff::ifd_parser::ifd_entry_count(
-                    &tiff_reader,
-                    ifd_offset,
-                    byte_order,
-                )
-                .map(|count| count as usize)
-                .unwrap_or(tags.len());
-
-                // Walk IFD0's next-IFD pointer to IFD1 (the thumbnail IFD), which
-                // carries Compression/ThumbnailOffset/ThumbnailLength/ThumbnailImage.
-                // `tiff_offset` is the absolute file position of the TIFF header,
-                // which ExifTool adds to the stored ThumbnailOffset.
-                crate::core::tiff_helpers::parse_ifd1_thumbnail(
-                    &tiff_reader,
-                    ifd_offset,
-                    ifd0_entry_count,
-                    byte_order,
-                    tiff_offset,
-                    metadata,
-                );
-
-                // Walk IFD1's next-IFD pointer to IFD2. Leica JPEGs carry a
-                // second, larger preview there under tag 0x0111/0x0117,
-                // named PreviewImageStart/PreviewImageLength (not
-                // StripOffsets/StripByteCounts - see Exif.pm:707-768).
-                // Offsets are TIFF-relative: the helper reads via
-                // `tiff_reader` and uses `tiff_offset` only for the absolute
-                // JpgFromRawStart value ExifTool displays.
-                crate::core::tiff_helpers::parse_ifd2_preview_image(
-                    &tiff_reader,
-                    ifd_offset,
-                    ifd0_entry_count,
-                    byte_order,
-                    tiff_offset,
-                    metadata,
-                );
             }
         }
     }
@@ -298,6 +325,8 @@ pub fn process_exif_segments(
 /// * `tags` - Parsed IFD tags
 /// * `byte_order` - Byte order for interpreting multi-byte values
 /// * `metadata` - MetadataMap to populate
+/// * `diagnostics` - Sink for problems that don't stop the read (an
+///   unparseable embedded ICC profile is skipped, not fatal)
 ///
 /// # Returns
 ///
@@ -306,6 +335,7 @@ fn process_ifd0_tags(
     tags: &[(u16, u16, u32, std::borrow::Cow<[u8]>)],
     byte_order: ByteOrder,
     metadata: &mut MetadataMap,
+    diagnostics: &mut DiagnosticSink,
 ) -> (Option<u64>, Option<u64>) {
     let mut exif_ifd_offset = None;
     let mut gps_ifd_offset = None;
@@ -362,7 +392,9 @@ fn process_ifd0_tags(
                     }
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to parse ICC profile in EXIF IFD0: {}", e);
+                    diagnostics.push(Diagnostic::warning(format!(
+                        "Failed to parse ICC profile in EXIF IFD0: {e}"
+                    )));
                 }
             }
             // Don't continue - the raw blob is still added below, matching
@@ -413,7 +445,13 @@ fn process_ifd0_tags(
 ///
 /// * `segments` - Parsed JPEG segments
 /// * `metadata` - MetadataMap to populate with XMP tags
-pub fn process_xmp_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+/// * `diagnostics` - Sink for problems that don't stop the read (malformed
+///   XMP is skipped, not fatal to the JPEG read)
+pub fn process_xmp_segments(
+    segments: &[Segment],
+    metadata: &mut MetadataMap,
+    diagnostics: &mut DiagnosticSink,
+) {
     match extract_xmp_from_segments(segments) {
         Ok(xmp_tags) => {
             // Add all XMP tags to metadata
@@ -437,8 +475,9 @@ pub fn process_xmp_segments(segments: &[Segment], metadata: &mut MetadataMap) {
             }
         }
         Err(e) => {
-            // Log error but continue processing (don't fail entire read)
-            eprintln!("Warning: Failed to parse XMP: {}", e);
+            // Continue processing (don't fail entire read); the problem is
+            // recorded rather than dropped.
+            diagnostics.push(Diagnostic::warning(format!("Failed to parse XMP: {e}")));
         }
     }
 }
@@ -452,7 +491,13 @@ pub fn process_xmp_segments(segments: &[Segment], metadata: &mut MetadataMap) {
 ///
 /// * `segments` - Parsed JPEG segments
 /// * `metadata` - MetadataMap to populate with IPTC tags
-pub fn process_iptc_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+/// * `diagnostics` - Sink for problems that don't stop the read (malformed
+///   IPTC is skipped, not fatal to the JPEG read)
+pub fn process_iptc_segments(
+    segments: &[Segment],
+    metadata: &mut MetadataMap,
+    diagnostics: &mut DiagnosticSink,
+) {
     if let Some(digest) =
         crate::parsers::jpeg::iptc_parser::current_iptc_digest_from_segments(segments)
     {
@@ -476,8 +521,11 @@ pub fn process_iptc_segments(segments: &[Segment], metadata: &mut MetadataMap) {
             }
         }
         Err(e) => {
-            // Log error but continue processing
-            eprintln!("Warning: Failed to extract IPTC metadata: {}", e);
+            // Continue processing; the problem is recorded rather than
+            // dropped.
+            diagnostics.push(Diagnostic::warning(format!(
+                "Failed to extract IPTC metadata: {e}"
+            )));
         }
     }
 }
@@ -494,7 +542,13 @@ pub fn process_iptc_segments(segments: &[Segment], metadata: &mut MetadataMap) {
 ///
 /// * `segments` - Parsed JPEG segments
 /// * `metadata` - MetadataMap to populate with Photoshop tags
-pub fn process_photoshop_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+/// * `diagnostics` - Sink for problems that don't stop the read (a
+///   malformed APP13 Photoshop resource is skipped, not fatal)
+pub fn process_photoshop_segments(
+    segments: &[Segment],
+    metadata: &mut MetadataMap,
+    diagnostics: &mut DiagnosticSink,
+) {
     const APP13_MARKER: u16 = 0xFFED;
     const PHOTOSHOP_HEADER: &[u8] = b"Photoshop 3.0\0";
     const ADOBE_CM_HEADER: &[u8] = b"Adobe_CM";
@@ -502,22 +556,25 @@ pub fn process_photoshop_segments(segments: &[Segment], metadata: &mut MetadataM
     // Join runs of consecutive Photoshop APP13 segments, dropping the
     // repeated header on every continuation segment.
     let mut combined: Vec<u8> = Vec::new();
-    let flush = |combined: &mut Vec<u8>, metadata: &mut MetadataMap| {
-        if combined.is_empty() {
-            return;
-        }
-        match parse_photoshop_irb(combined) {
-            Ok(photoshop_metadata) => {
-                for (key, value) in photoshop_metadata.iter() {
-                    metadata.insert(key.clone(), value.clone());
+    let flush =
+        |combined: &mut Vec<u8>, metadata: &mut MetadataMap, diagnostics: &mut DiagnosticSink| {
+            if combined.is_empty() {
+                return;
+            }
+            match parse_photoshop_irb(combined) {
+                Ok(photoshop_metadata) => {
+                    for (key, value) in photoshop_metadata.iter() {
+                        metadata.insert(key.clone(), value.clone());
+                    }
+                }
+                Err(e) => {
+                    diagnostics.push(Diagnostic::warning(format!(
+                        "Failed to parse APP13 Photoshop segment: {e}"
+                    )));
                 }
             }
-            Err(e) => {
-                eprintln!("Warning: Failed to parse APP13 Photoshop segment: {}", e);
-            }
-        }
-        combined.clear();
-    };
+            combined.clear();
+        };
 
     for segment in segments.iter() {
         if segment.marker == APP13_MARKER
@@ -533,7 +590,7 @@ pub fn process_photoshop_segments(segments: &[Segment], metadata: &mut MetadataM
         let is_photoshop =
             segment.marker == APP13_MARKER && segment.data.starts_with(PHOTOSHOP_HEADER);
         if !is_photoshop {
-            flush(&mut combined, metadata);
+            flush(&mut combined, metadata, diagnostics);
             continue;
         }
         if combined.is_empty() {
@@ -542,7 +599,7 @@ pub fn process_photoshop_segments(segments: &[Segment], metadata: &mut MetadataM
             combined.extend_from_slice(&segment.data[PHOTOSHOP_HEADER.len()..]);
         }
     }
-    flush(&mut combined, metadata);
+    flush(&mut combined, metadata, diagnostics);
 }
 
 /// Processes APP3 "Meta" segments and extracts Kodak Meta IFD metadata.
@@ -1898,7 +1955,7 @@ mod tests {
             .expect("parse pinned DJI fixture");
         let mut metadata = MetadataMap::new();
 
-        process_exif_segments(&segments, &reader, &mut metadata);
+        process_exif_segments(&segments, &reader, &mut metadata, &mut Vec::new());
         process_dji_thermal_segments(&segments, &mut metadata);
 
         assert_eq!(metadata.get_string("IFD0:Make"), Some("DJI"));
@@ -1929,7 +1986,7 @@ mod tests {
             .expect("parse pinned Leica TL2 segments");
         let mut metadata = MetadataMap::new();
 
-        process_exif_segments(&segments, &reader, &mut metadata);
+        process_exif_segments(&segments, &reader, &mut metadata, &mut Vec::new());
 
         assert_eq!(metadata.get_integer("IFD2:JpgFromRawStart"), Some(7063524));
         assert_eq!(metadata.get_integer("IFD2:JpgFromRawLength"), Some(1215652));
@@ -1956,7 +2013,7 @@ mod tests {
             .expect("parse pinned Leica CL segments");
         let mut metadata = MetadataMap::new();
 
-        process_exif_segments(&segments, &reader, &mut metadata);
+        process_exif_segments(&segments, &reader, &mut metadata, &mut Vec::new());
 
         assert_eq!(
             metadata.get_integer("IFD2:PreviewImageStart"),
@@ -1990,7 +2047,7 @@ mod tests {
             .expect("parse pinned Olympus SH-25MR segments");
         let mut metadata = MetadataMap::new();
 
-        process_exif_segments(&segments, &reader, &mut metadata);
+        process_exif_segments(&segments, &reader, &mut metadata, &mut Vec::new());
 
         assert_eq!(
             metadata.get_string("GPS:GPSAreaInformation"),
@@ -2014,7 +2071,7 @@ mod tests {
             .expect("parse pinned Ricoh2 segments");
         let mut metadata = MetadataMap::new();
 
-        process_exif_segments(&segments, &reader, &mut metadata);
+        process_exif_segments(&segments, &reader, &mut metadata, &mut Vec::new());
         let formatted = crate::core::exiftool_compat::format_for_exiftool(&metadata);
 
         assert_eq!(
@@ -2040,7 +2097,7 @@ mod tests {
             .expect("parse pinned Nikon Z7 II segments");
         let mut metadata = MetadataMap::new();
 
-        process_exif_segments(&segments, &reader, &mut metadata);
+        process_exif_segments(&segments, &reader, &mut metadata, &mut Vec::new());
 
         assert_eq!(
             metadata.get_string("ExifIFD:LensSerialNumber"),
@@ -2066,7 +2123,7 @@ mod tests {
             .expect("parse pinned Samsung SDC-130Z segments");
         let mut metadata = MetadataMap::new();
 
-        process_exif_segments(&segments, &reader, &mut metadata);
+        process_exif_segments(&segments, &reader, &mut metadata, &mut Vec::new());
 
         assert_eq!(
             metadata.get_string("ExifIFD:LearningOptOutIn"),
@@ -2092,7 +2149,7 @@ mod tests {
             .expect("parse pinned Panasonic TZ57 segments");
         let mut metadata = MetadataMap::new();
 
-        process_exif_segments(&segments, &reader, &mut metadata);
+        process_exif_segments(&segments, &reader, &mut metadata, &mut Vec::new());
 
         assert_eq!(
             metadata.get_string("IFD0:PanasonicTitle2"),
@@ -2197,7 +2254,7 @@ mod tests {
 
         let segment = Segment::new(APP13_MARKER, 0, &app13_data);
         let mut metadata = MetadataMap::new();
-        process_iptc_segments(&[segment], &mut metadata);
+        process_iptc_segments(&[segment], &mut metadata, &mut Vec::new());
 
         assert_eq!(
             metadata.get("IPTC:ReferenceNumber"),
@@ -2225,7 +2282,7 @@ mod tests {
 
         let segment = Segment::new(APP13_MARKER, 0, &app13_data);
         let mut metadata = MetadataMap::new();
-        process_iptc_segments(&[segment], &mut metadata);
+        process_iptc_segments(&[segment], &mut metadata, &mut Vec::new());
 
         assert_eq!(
             metadata.get_string("File:CurrentIPTCDigest"),
@@ -2257,7 +2314,7 @@ mod tests {
 
         let segment = Segment::new(APP13_MARKER, 0, &app13_data);
         let mut metadata = MetadataMap::new();
-        process_iptc_segments(&[segment], &mut metadata);
+        process_iptc_segments(&[segment], &mut metadata, &mut Vec::new());
 
         assert_eq!(
             metadata.get_string("File:CurrentIPTCDigest"),
@@ -2271,7 +2328,7 @@ mod tests {
         let segment = Segment::new(0xFFED, 0, data);
         let mut metadata = MetadataMap::new();
 
-        process_photoshop_segments(&[segment], &mut metadata);
+        process_photoshop_segments(&[segment], &mut metadata, &mut Vec::new());
 
         assert_eq!(metadata.get_integer("APP13:AdobeCMType"), Some(3));
     }
@@ -2282,7 +2339,7 @@ mod tests {
         let segment = Segment::new(0xFFED, 0, data);
         let mut metadata = MetadataMap::new();
 
-        process_photoshop_segments(&[segment], &mut metadata);
+        process_photoshop_segments(&[segment], &mut metadata, &mut Vec::new());
 
         assert!(!metadata.contains_key("APP13:AdobeCMType"));
     }
@@ -2561,7 +2618,7 @@ mod print_im_tests {
         let reader = TestReader::new(jpeg_with_ifd0_print_im(b"0300"));
         let segments = parse_segments(&reader).unwrap();
         let mut metadata = MetadataMap::new();
-        process_exif_segments(&segments, &reader, &mut metadata);
+        process_exif_segments(&segments, &reader, &mut metadata, &mut Vec::new());
 
         assert_eq!(metadata.get_string("PrintIM:PrintIMVersion"), Some("0300"));
         assert!(metadata.get("IFD0:PrintIM").is_none());
@@ -2586,7 +2643,12 @@ mod transfer_function_tests {
         )];
         let mut metadata = MetadataMap::new();
 
-        process_ifd0_tags(&tags, ByteOrder::LittleEndian, &mut metadata);
+        process_ifd0_tags(
+            &tags,
+            ByteOrder::LittleEndian,
+            &mut metadata,
+            &mut Vec::new(),
+        );
 
         assert_eq!(
             crate::core::exiftool_compat::format_for_exiftool(&metadata)

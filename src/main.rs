@@ -12,8 +12,9 @@ use oxidex::cli::value_parser::parse_cli_tag_value;
 use oxidex::core::date_shift::{ShiftOperation, shift_metadata_dates};
 use oxidex::core::exiftool_compat::format_for_exiftool;
 use oxidex::core::operations::{
-    clear_all_metadata, copy_metadata, modify_tag, read_metadata_with_detector, remove_tag,
+    clear_all_metadata, copy_metadata, modify_tag, read_metadata_report_with_detector, remove_tag,
 };
+use oxidex::core::read_report::ParseStatus;
 use std::process;
 
 fn main() {
@@ -230,8 +231,37 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
 
 /// Handles read operations (displaying metadata)
 fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
-    match read_metadata_with_detector(file, args.detector) {
-        Ok(metadata) => {
+    match read_metadata_report_with_detector(file, args.detector) {
+        Ok(report) => {
+            // `--strict` opts back into the old fail-fast behavior: a read
+            // that didn't fully parse is an error, not partial output. See
+            // `CliArgs::strict` and `read_metadata_report_with_detector`'s
+            // doc comment for why the default is otherwise to degrade
+            // gracefully (ExifTool.pm:8483's `Warn('JPEG format error')`
+            // model) rather than discard the whole read.
+            if args.strict
+                && !matches!(
+                    report.status,
+                    ParseStatus::Parsed | ParseStatus::IdentifiedOnly
+                )
+            {
+                let reason = report
+                    .diagnostics
+                    .first()
+                    .map(|d| d.message.clone())
+                    .unwrap_or_else(|| report.status.to_string());
+                eprintln!(
+                    "Error: Failed to read metadata from '{}': {} (status: {})",
+                    file.display(),
+                    reason,
+                    report.status
+                );
+                process::exit(1);
+            }
+
+            let status = report.status;
+            let metadata = report.metadata;
+
             // Check if any metadata was found
             if metadata.is_empty() {
                 println!("No metadata found in file: {}", file.display());
@@ -257,9 +287,11 @@ fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
                 let output = formatter.format(&metadata, filter_slice);
                 print!("{}", output);
             } else if args.json {
-                // JSON output format
+                // JSON output format. Carries `Status` for any read that
+                // didn't fully parse (see `JsonFormatter::format_with_status`);
+                // identical to plain `format` for a healthy `Parsed` read.
                 let formatter = JsonFormatter;
-                let output = formatter.format(&metadata, filter_slice);
+                let output = formatter.format_with_status(&metadata, filter_slice, Some(status));
                 println!("{}", output);
             } else if args.short_format {
                 // Short format output (-s flag)

@@ -40,6 +40,7 @@ pub mod chunk_parser;
 mod exif;
 mod value_conversion;
 
+use crate::core::read_report::{Diagnostic, DiagnosticSink};
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use chunk_parser::{
@@ -92,6 +93,20 @@ use chunk_parser::{
 /// # }
 /// ```
 pub fn parse_png_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
+    let mut diagnostics = Vec::new();
+    parse_png_metadata_with_diagnostics(reader, &mut diagnostics)
+}
+
+/// Same as [`parse_png_metadata`], but pushes recoverable problems (a
+/// malformed embedded XMP packet, an undecodable iCCP profile, an unknown
+/// iCCP compression method) into `diagnostics` instead of dropping them.
+/// [`crate::core::operations::read_metadata_report_with_detector`] is the
+/// only caller that reads `diagnostics` back out; `parse_png_metadata`
+/// itself discards them, matching its previous (silent) behavior exactly.
+pub fn parse_png_metadata_with_diagnostics(
+    reader: &dyn FileReader,
+    diagnostics: &mut DiagnosticSink,
+) -> Result<MetadataMap> {
     let file_size = reader.size();
 
     // Verify PNG signature
@@ -309,7 +324,9 @@ pub fn parse_png_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                                 }
                             }
                             Err(e) => {
-                                eprintln!("Warning: Failed to parse XMP in iTXt chunk: {}", e);
+                                diagnostics.push(Diagnostic::warning(format!(
+                                    "Failed to parse XMP in iTXt chunk: {e}"
+                                )));
                                 // Fall back to storing as regular iTXt
                                 let tag_name = format!("PNG:iTXt:{}", keyword);
                                 metadata.insert(tag_name, TagValue::new_string(text));
@@ -366,8 +383,10 @@ pub fn parse_png_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                 // The eXIf chunk contains raw TIFF/EXIF data which needs to be parsed
                 // to extract tags from IFD0, ExifIFD, and GPS IFD
                 if let Err(e) = exif::parse_and_insert_exif_tags(&chunk.data, &mut metadata) {
-                    eprintln!("Warning: Failed to parse eXIf chunk: {}", e);
-                    // Silently skip malformed eXIf chunks
+                    diagnostics.push(Diagnostic::warning(format!(
+                        "Failed to parse eXIf chunk: {e}"
+                    )));
+                    // Skip malformed eXIf chunks (recorded above, not fatal)
                 }
             }
 
@@ -401,17 +420,19 @@ pub fn parse_png_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                                     }
                                 }
                                 Err(e) => {
-                                    eprintln!("Warning: Failed to parse ICC profile in PNG: {}", e);
+                                    diagnostics.push(Diagnostic::warning(format!(
+                                        "Failed to parse ICC profile in PNG: {e}"
+                                    )));
                                 }
                             }
                         } else {
-                            eprintln!("Warning: Failed to decompress iCCP chunk data");
+                            diagnostics
+                                .push(Diagnostic::warning("Failed to decompress iCCP chunk data"));
                         }
                     } else {
-                        eprintln!(
-                            "Warning: Unknown iCCP compression method: {}",
-                            compression_method
-                        );
+                        diagnostics.push(Diagnostic::warning(format!(
+                            "Unknown iCCP compression method: {compression_method}"
+                        )));
                     }
                 }
             }

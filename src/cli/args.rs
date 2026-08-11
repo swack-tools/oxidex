@@ -92,6 +92,19 @@ pub struct CliArgs {
     /// Prints "old_name -> new_name" for each file without actually renaming.
     pub dry_run: bool,
 
+    /// Fail a read instead of degrading it.
+    ///
+    /// By default a read that hits a recoverable problem -- a truncated
+    /// JPEG, a format neither a parser nor the identification tables can
+    /// name -- still returns whatever it could get (filesystem tags at a
+    /// minimum) tagged with a non-`Parsed` `Status`, the same way ExifTool
+    /// itself keeps going and reports a `Warning` tag rather than raising
+    /// an exception (`ExifTool.pm:8483`). `--strict` opts back into the
+    /// older fail-fast behavior: a read that would come back as anything
+    /// other than `Status: Parsed` or `Status: IdentifiedOnly` exits with
+    /// an error instead.
+    pub strict: bool,
+
     /// Tag modifications and file path. Use -TAG=VALUE to modify tags.
     /// Example: -EXIF:Artist="John Doe" -EXIF:Copyright=2025 photo.jpg
     /// The last argument must be the file path.
@@ -214,6 +227,7 @@ impl CliArgs {
         let mut tags_from_file = None;
         let mut date_format = None;
         let mut dry_run = false;
+        let mut strict = false;
         let mut args = Vec::new();
 
         // Pre-process arguments to handle tag modifications that look like flags
@@ -347,6 +361,11 @@ impl CliArgs {
                 Long("readonly") => {
                     readonly = true;
                 }
+                // Strict: fail a degraded read instead of returning partial
+                // output. See the field doc on `CliArgs::strict`.
+                Long("strict") => {
+                    strict = true;
+                }
                 // ExifTool compatibility mode. Now the default, so this is a
                 // no-op; it stays accepted because scripts pass it, and because
                 // silently rejecting a flag that used to matter is worse than
@@ -439,6 +458,7 @@ impl CliArgs {
             tags_from_file,
             date_format,
             dry_run,
+            strict,
             args,
         })
     }
@@ -876,6 +896,9 @@ fn print_help() {
         "        --backup                Create backup copy before modifying file (.bak extension)"
     );
     println!("        --readonly              Enable read-only mode to prevent file modifications");
+    println!(
+        "        --strict                Fail a damaged/unidentifiable read instead of returning partial output"
+    );
     println!(
         "        --detector VALUE        File detection mode: signature (default) or magika (AI-powered)"
     );

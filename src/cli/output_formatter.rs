@@ -219,8 +219,17 @@ impl OutputFormatter for HumanReadableFormatter {
 /// ```
 pub struct JsonFormatter;
 
-impl OutputFormatter for JsonFormatter {
-    fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String {
+impl JsonFormatter {
+    /// Builds the flat `{"Group:Tag": value, ...}` map shared by [`format`]
+    /// and [`format_with_status`].
+    ///
+    /// [`format`]: OutputFormatter::format
+    /// [`format_with_status`]: JsonFormatter::format_with_status
+    fn build_json_map(
+        &self,
+        metadata: &MetadataMap,
+        filter_tags: Option<&[String]>,
+    ) -> serde_json::Map<String, serde_json::Value> {
         // If filter is specified, create a new filtered metadata map
         let metadata_to_filter = if let Some(filter) = filter_tags {
             let filtered: MetadataMap = metadata
@@ -242,6 +251,48 @@ impl OutputFormatter for JsonFormatter {
             let json_value = tag_value_to_json(Some(tag_name.as_str()), tag_value);
             json_map.insert(tag_name.clone(), json_value);
         }
+
+        json_map
+    }
+
+    /// Like [`format`](OutputFormatter::format), but adds a top-level
+    /// `"Status"` key carrying [`ParseStatus::as_str`] -- `read_metadata_
+    /// report`'s machine-readable answer to "how far did this read get?"
+    /// (see `core::read_report`).
+    ///
+    /// The key is added only when `status` is `Some` and is not
+    /// [`ParseStatus::Parsed`]: a fully successful parse is exactly what
+    /// `format` already produces, so this is byte-identical to `format` for
+    /// every healthy file. A degraded read (a truncated JPEG recovered as
+    /// `Partial`, an unparsed-but-identified format like MIE) gains the
+    /// marker instead of looking indistinguishable from a clean read.
+    pub fn format_with_status(
+        &self,
+        metadata: &MetadataMap,
+        filter_tags: Option<&[String]>,
+        status: Option<crate::core::read_report::ParseStatus>,
+    ) -> String {
+        let mut json_map = self.build_json_map(metadata, filter_tags);
+
+        if let Some(status) = status
+            && status != crate::core::read_report::ParseStatus::Parsed
+        {
+            json_map.insert(
+                "Status".to_string(),
+                serde_json::Value::String(status.as_str().to_string()),
+            );
+        }
+
+        match serde_json::to_string_pretty(&vec![json_map]) {
+            Ok(json) => json,
+            Err(e) => format!("[{{\"error\": \"Failed to serialize metadata: {}\"}}]", e),
+        }
+    }
+}
+
+impl OutputFormatter for JsonFormatter {
+    fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String {
+        let json_map = self.build_json_map(metadata, filter_tags);
 
         // Serialize to pretty JSON wrapped in an array for Perl ExifTool compatibility
         // Perl ExifTool outputs: [{...}] (array with one object per file)

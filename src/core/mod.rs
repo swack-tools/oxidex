@@ -22,6 +22,7 @@ pub mod metadata;
 pub mod metadata_map;
 pub mod operations;
 pub mod operations_helpers;
+pub mod read_report;
 pub mod tag_conversion;
 pub mod tag_normalization;
 pub mod tag_value;
@@ -39,7 +40,11 @@ pub use flag_utils::decode_flags;
 pub use format_parser_trait::FormatParser;
 pub use metadata::Metadata;
 pub use metadata_map::MetadataMap;
-pub use operations::{clear_all_metadata, modify_tag, read_metadata, remove_tag, write_metadata};
+pub use operations::{
+    clear_all_metadata, modify_tag, read_metadata, read_metadata_report,
+    read_metadata_report_with_detector, remove_tag, write_metadata,
+};
+pub use read_report::{Diagnostic, DiagnosticKind, DiagnosticSink, ParseStatus, ReadReport};
 pub use tag_normalization::{normalize_metadata_map, normalize_tag_family};
 pub use tag_value::TagValue;
 pub use validation::validate_tag_value;
