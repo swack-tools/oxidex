@@ -97,7 +97,13 @@ pub fn panasonic_registry() -> TagRegistry {
         .register_i32(0x0043, "JPEGQuality", decode_jpeg_quality)
         .register_enum_tag_required(0x003A, "WorldTimeLocation", &WORLD_TIME_LOCATION)
         .register_enum_tag_required(0x003B, "TextStamp", &TEXT_STAMP)
-        .register_integer_tag(0x003C, "ProgramISO", None)
+        // ProgramISO: Writable => 'int16u' but Panasonic.pm:795 notes "new
+        // models store a long here" -- the wire field type varies (SHORT on
+        // PanasonicDMC-FS4/TS10/G2, all int16u[1] per `exiftool -v3`), and
+        // `inline_scalar_i32` already reads either width/signedness
+        // correctly. PrintConv (Panasonic.pm:796-801) is `OTHER => sub
+        // {shift}` (identity) plus three sentinels.
+        .register_i32(0x003C, "ProgramISO", decode_program_iso)
         // AdvancedSceneType has no PrintConv in ExifTool; it stays numeric
         .register_integer_tag(0x003D, "AdvancedSceneType", None)
         .register_enum_tag_required(0x003E, "TextStamp", &TEXT_STAMP)
@@ -118,9 +124,18 @@ pub fn panasonic_registry() -> TagRegistry {
         // not be registered as scalars here.
         .register_raw(0x0051, "LensType")
         .register_raw(0x0053, "AccessoryType")
+        // Transform: `Writable => 'undef'`, `Format => 'int16s'`, `Count => 2`
+        // (Panasonic.pm:970-983) -- two signed 16-bit values, default
+        // ValueConv space-joins them, PrintConv maps the pair to a name.
+        // Extraction and the pair-lookup live in `parse_entry`; this entry
+        // only carries the name for the fallback/registry-name path.
         .register_raw(0x0059, "Transform")
         .register_enum_tag_required(0x005D, "IntelligentExposure", &INTELLIGENT_EXPOSURE)
-        .register_integer_tag(0x0060, "LensFirmwareVersion", None)
+        // LensFirmwareVersion: `Writable => 'undef'`, `Format => 'int8u'`,
+        // `Count => 4` (Panasonic.pm:999-1006) -- four bytes, default
+        // ValueConv space-joins them, PrintConv `tr/ /./` dot-joins.
+        // Extraction lives in `parse_entry`.
+        .register_raw(0x0060, "LensFirmwareVersion")
         .register_enum_tag_required(0x0062, "FlashWarning", &FLASH_WARNING)
         .register_enum_tag_required(0x0070, "IntelligentResolution", &INTELLIGENT_RESOLUTION)
         // MergedImages is a plain count, not an enum: Panasonic.pm:1089-1093
@@ -196,16 +211,17 @@ pub fn panasonic_registry() -> TagRegistry {
         // (Panasonic.pm:1568, :1574), same PrintConv as 0x3b and 0x3e.
         .register_enum_tag_required(0x8008, "TextStamp", &TEXT_STAMP)
         .register_enum_tag_required(0x8009, "TextStamp", &TEXT_STAMP)
+        // 0x8012 is `Transform` (Panasonic.pm:1587-1600), not `Transform2`:
+        // the same `undef`/`Format => 'int16s'`/`Count => 2` layout and the
+        // same pair-keyed PrintConv as 0x0059 above -- ExifTool reports both
+        // under the identical name `Panasonic:Transform`. `parse_entry`
+        // matches both tag IDs together, so this just carries the name.
+        .register_raw(0x8012, "Transform")
     // 0x8010 is `BabyAge` (Panasonic.pm:1580), not `BabyAge2`: a `string`
     // with `PrintConv => '$val eq "9999:99:99 00:00:00" ? "(not set)" : $val'`.
     // It was registered as a bare integer, which cannot produce that value, and
     // 0x0033 already delivers a matching `Panasonic:BabyAge`. Omitted rather
     // than renamed, so no wrong value ships under the real name.
-    //
-    // 0x8012 is `Transform` (Panasonic.pm:1587), not `Transform2`: `int16s`
-    // `Count => 2` whose PrintConv keys are integer *pairs*
-    // ('0 0' => 'Off', '-3 2' => 'Slim High', ...). A one-value On/Off decoder
-    // cannot express that, so it is omitted too.
 }
 
 /// Panasonic SceneMode (0x8001).
@@ -274,6 +290,37 @@ fn decode_dark_focus_environment(value: i32) -> String {
     }
 }
 
+/// Panasonic ProgramISO (0x3c).
+///
+/// Panasonic.pm:793-802:
+/// ```perl
+/// 0x3c => {
+///     Name => 'ProgramISO', # (maybe should rename this ISOSetting?)
+///     Writable => 'int16u', # (new models store a long here)
+///     PrintConv => {
+///         OTHER => sub { shift },
+///         65534 => 'Intelligent ISO', #PH (FS7)
+///         65535 => 'n/a',
+///         -1 => 'n/a',
+///     },
+/// },
+/// ```
+/// `OTHER => sub { shift }` is the identity PrintConv (print the raw
+/// number); the three sentinels override it. `-1` only arises on the "new
+/// models store a long here" path -- a 16-bit unsigned read can never
+/// produce it -- and `inline_scalar_i32` (panasonic.rs) already reads a
+/// count==1 LONG/SLONG field via `entry.value_offset` directly, so a
+/// genuine 0xFFFFFFFF SLONG reaches this decoder as `-1` without any
+/// extra plumbing here.
+fn decode_program_iso(value: i32) -> String {
+    match value {
+        65534 => "Intelligent ISO".to_string(),
+        65535 => "n/a".to_string(),
+        -1 => "n/a".to_string(),
+        _ => value.to_string(),
+    }
+}
+
 // ============================================================================
 // TESTS
 // ============================================================================
@@ -326,5 +373,33 @@ mod tests {
         assert_eq!(registry.decode_i32(0x8003, 1), "No");
         assert_eq!(registry.decode_i32(0x8003, 2), "Yes");
         assert_eq!(registry.decode_i32(0x8003, 0), "Unknown (0)");
+    }
+
+    /// ProgramISO (0x3c) sentinels, from Panasonic.pm:793-802's PrintConv:
+    /// `65534 => 'Intelligent ISO'`, `65535 => 'n/a'`, `-1 => 'n/a'`, and
+    /// `OTHER => sub { shift }` (identity) for everything else.
+    ///
+    /// `combined-samples/Panasonic/PanasonicDMC-FS4.jpg` tag 0x003c reads
+    /// `fe ff` LE int16u[1] = 65534 (`exiftool -v3`); the pinned oracle's
+    /// `-a -G1 -s` on that file reports `[Panasonic] ProgramISO :
+    /// Intelligent ISO`. PanasonicDMC-TS10.jpg is the 65535 case
+    /// (`ff ff` -> `n/a`), and PanasonicDMC-G2.jpg is the plain-number case
+    /// (`64 00` -> 100, printed as `100`).
+    #[test]
+    fn program_iso_matches_exiftool_sentinels() {
+        let registry = panasonic_registry();
+
+        assert_eq!(registry.get_tag_name(0x003C), Some("ProgramISO"));
+        // PanasonicDMC-FS4.jpg
+        assert_eq!(registry.decode_i32(0x003C, 65534), "Intelligent ISO");
+        // PanasonicDMC-TS10.jpg
+        assert_eq!(registry.decode_i32(0x003C, 65535), "n/a");
+        // The "-1" sentinel only arises via the "new models store a long
+        // here" SLONG path Panasonic.pm:795 notes -- unreachable from a
+        // 16-bit unsigned read, reachable once `inline_scalar_i32`
+        // (panasonic.rs) passes through a genuine SLONG -1.
+        assert_eq!(registry.decode_i32(0x003C, -1), "n/a");
+        // PanasonicDMC-G2.jpg: OTHER => identity, prints the raw number.
+        assert_eq!(registry.decode_i32(0x003C, 100), "100");
     }
 }

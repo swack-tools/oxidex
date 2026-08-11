@@ -956,6 +956,38 @@ impl PanasonicParser {
                 }
                 return;
             }
+            // Transform: `undef[4]` read as two int16s (Panasonic.pm:970-983
+            // tag 0x59, :1587-1600 tag 0x8012 -- identical layout, identical
+            // PrintConv, identical Name, so both land under the one
+            // `Panasonic:Transform` key). The default ValueConv space-joins
+            // the pair; PrintConv maps the joined string to a mode name, or
+            // falls back to the raw "a b" pair when no entry matches
+            // (ExifTool's default behavior for an unmatched hash PrintConv
+            // key). `register_raw` gives both tag IDs the `Transform` name,
+            // but the pair decode itself needs the raw bytes, not a scalar,
+            // so it can't go through the generic `inline_scalar_i32`
+            // fallback below.
+            0x0059 | 0x8012 => {
+                if let Some(bytes) = extract_raw_bytes(entry, data, ifd_offset, data_base, byte_order)
+                    && let Some(printed) = decode_transform(&bytes, byte_order)
+                {
+                    tags.insert("Panasonic:Transform".to_string(), printed);
+                }
+                return;
+            }
+            // LensFirmwareVersion: `undef[4]` read as four int8u
+            // (Panasonic.pm:999-1006). The default ValueConv space-joins the
+            // four bytes ("0 1 0 0"); PrintConv is `$val=~tr/ /./; $val`,
+            // turning the spaces into dots ("0.1.0.0").
+            0x0060 => {
+                if let Some(bytes) = extract_raw_bytes(entry, data, ifd_offset, data_base, byte_order) {
+                    tags.insert(
+                        "Panasonic:LensFirmwareVersion".to_string(),
+                        decode_lens_firmware_version(&bytes),
+                    );
+                }
+                return;
+            }
             _ => {}
         }
 
@@ -1497,6 +1529,75 @@ fn format_firmware_version(bytes: &[u8]) -> String {
     } else {
         String::from_utf8_lossy(bytes).replace(' ', ".")
     }
+}
+
+/// LensFirmwareVersion (0x0060) rendering, from ExifTool Panasonic.pm:999-1006:
+/// `Format => 'int8u', Count => 4`, no ValueConv (so the default
+/// `undef`+numeric-Format ValueConv applies -- the bytes are unpacked and
+/// joined with spaces, e.g. "0 1 0 0"), then
+/// `PrintConv => '$val=~tr/ /./; $val'` turns those spaces into dots. Unlike
+/// `format_firmware_version` (0x0002), there is no text/binary branch here --
+/// this tag is unconditionally four unsigned bytes.
+///
+/// `combined-samples/Panasonic/PanasonicDMC-G2.jpg` tag 0x0060, `exiftool -v3`:
+/// `07b6: 00 01 00 00` -> `LensFirmwareVersion = 0 1 0 0` -> PrintConv "0.1.0.0".
+fn decode_lens_firmware_version(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(u8::to_string)
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// Transform (0x0059 and 0x8012) rendering, from ExifTool Panasonic.pm:970-983
+/// (0x59) and :1587-1600 (0x8012) -- byte-for-byte identical tables:
+/// ```perl
+/// Writable => 'undef',
+/// Format => 'int16s',
+/// Count => 2,
+/// PrintConv => {
+///     '-3 2' => 'Slim High',
+///     '-1 1' => 'Slim Low',
+///     '0 0'  => 'Off',
+///     '1 1'  => 'Stretch Low',
+///     '3 2'  => 'Stretch High',
+/// },
+/// ```
+/// No ValueConv is declared, so the default `undef`+numeric-Format ValueConv
+/// applies: the two `int16s` are unpacked and joined with a space (e.g.
+/// "0 0"). PrintConv is a plain hash with no `OTHER` key, so ExifTool's
+/// default behavior for an unmatched value is to print the ValueConv string
+/// itself -- `decode_transform` mirrors that by returning `key` unchanged
+/// when it isn't one of the five named pairs.
+///
+/// Returns `None` only when `bytes` isn't exactly 4 long (unreachable
+/// out-of-line value, mirroring the other extraction helpers here).
+fn decode_transform(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
+    let [b0, b1, b2, b3] = bytes else {
+        return None;
+    };
+    let (a, b) = match byte_order {
+        ByteOrder::LittleEndian => (
+            i16::from_le_bytes([*b0, *b1]),
+            i16::from_le_bytes([*b2, *b3]),
+        ),
+        ByteOrder::BigEndian => (
+            i16::from_be_bytes([*b0, *b1]),
+            i16::from_be_bytes([*b2, *b3]),
+        ),
+    };
+    let key = format!("{a} {b}");
+    Some(
+        match key.as_str() {
+            "-3 2" => "Slim High",
+            "-1 1" => "Slim Low",
+            "0 0" => "Off",
+            "1 1" => "Stretch Low",
+            "3 2" => "Stretch High",
+            _ => return Some(key),
+        }
+        .to_string(),
+    )
 }
 
 /// InternalSerialNumber (0x0025) rendering, from ExifTool Panasonic.pm:
@@ -2559,6 +2660,190 @@ mod tests {
         assert_eq!(
             tags.get("Panasonic:RecognizedFace3Position").unwrap(),
             "0 257 1 0"
+        );
+    }
+
+    /// Transform (0x0059/0x8012) pair decode, from Panasonic.pm:970-983
+    /// (0x59) and :1587-1600 (0x8012) -- identical `PrintConv` hash:
+    /// `{'-3 2'=>'Slim High', '-1 1'=>'Slim Low', '0 0'=>'Off',
+    ///   '1 1'=>'Stretch Low', '3 2'=>'Stretch High'}`.
+    ///
+    /// `0 0` bytes are the real `combined-samples/Panasonic/
+    /// PanasonicDMC-FS4.jpg` and `PanasonicDMC-TS10.jpg` payloads (both tag
+    /// 0x0059 and tag 0x8012 read `00 00 00 00`, `exiftool -v3`); the pinned
+    /// oracle's `-a -G1 -s` on either file reports `[Panasonic] Transform :
+    /// Off` (twice -- once per tag ID; see
+    /// `transform_both_tag_ids_reach_the_same_decode_through_full_parse`
+    /// below for that half). The other four named pairs are constructed:
+    /// Panasonic.pm never shows a real sample for them, only the table.
+    #[test]
+    fn transform_decodes_named_pairs_little_endian() {
+        // "0 0" -> Off
+        assert_eq!(
+            decode_transform(&[0x00, 0x00, 0x00, 0x00], ByteOrder::LittleEndian).as_deref(),
+            Some("Off")
+        );
+        // "-3 2" -> Slim High (-3 = 0xFFFD LE, 2 = 0x0002 LE)
+        assert_eq!(
+            decode_transform(&[0xFD, 0xFF, 0x02, 0x00], ByteOrder::LittleEndian).as_deref(),
+            Some("Slim High")
+        );
+        // "-1 1" -> Slim Low
+        assert_eq!(
+            decode_transform(&[0xFF, 0xFF, 0x01, 0x00], ByteOrder::LittleEndian).as_deref(),
+            Some("Slim Low")
+        );
+        // "1 1" -> Stretch Low
+        assert_eq!(
+            decode_transform(&[0x01, 0x00, 0x01, 0x00], ByteOrder::LittleEndian).as_deref(),
+            Some("Stretch Low")
+        );
+        // "3 2" -> Stretch High
+        assert_eq!(
+            decode_transform(&[0x03, 0x00, 0x02, 0x00], ByteOrder::LittleEndian).as_deref(),
+            Some("Stretch High")
+        );
+    }
+
+    /// The same five pairs, big-endian byte order, proving the decode reads
+    /// the int16s halves per the *entry's* resolved byte order rather than
+    /// assuming little-endian (MakerNotePanasonic is `ByteOrder =>
+    /// 'Unknown'`, so a big-endian MakerNote is a real, exercised case
+    /// elsewhere in this file -- see `byte_order_tests`).
+    #[test]
+    fn transform_decodes_named_pairs_big_endian() {
+        assert_eq!(
+            decode_transform(&[0x00, 0x00, 0x00, 0x00], ByteOrder::BigEndian).as_deref(),
+            Some("Off")
+        );
+        assert_eq!(
+            decode_transform(&[0xFF, 0xFD, 0x00, 0x02], ByteOrder::BigEndian).as_deref(),
+            Some("Slim High")
+        );
+    }
+
+    /// Panasonic.pm's Transform `PrintConv` hash has no `OTHER` key, so
+    /// ExifTool's default behavior for a value that matches none of the five
+    /// named pairs is to print the (space-joined) value itself, not to
+    /// invent or suppress a label. `decode_transform` must do the same.
+    #[test]
+    fn transform_falls_back_to_the_raw_pair_when_unmatched() {
+        // "5 9" is not one of the five named pairs.
+        assert_eq!(
+            decode_transform(&[0x05, 0x00, 0x09, 0x00], ByteOrder::LittleEndian).as_deref(),
+            Some("5 9")
+        );
+    }
+
+    /// A `Transform` entry whose value can't be dereferenced to exactly 4
+    /// bytes (e.g. an out-of-line pointer landing outside the MakerNote
+    /// slice) must be omitted, not printed as an approximation of a pair
+    /// decode it cannot actually perform -- the "omit rather than
+    /// approximate" rule (AGENTS.md).
+    #[test]
+    fn transform_omits_when_byte_count_is_not_four() {
+        assert_eq!(decode_transform(&[], ByteOrder::LittleEndian), None);
+        assert_eq!(
+            decode_transform(&[0x00, 0x00], ByteOrder::LittleEndian),
+            None
+        );
+        assert_eq!(
+            decode_transform(
+                &[0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+                ByteOrder::LittleEndian
+            ),
+            None
+        );
+    }
+
+    /// LensFirmwareVersion (0x0060), from Panasonic.pm:999-1006: no
+    /// ValueConv (default undef+int8u[4] ValueConv space-joins the bytes),
+    /// `PrintConv => '$val=~tr/ /./; $val'` dot-joins them.
+    ///
+    /// `0 1 0 0` is the real `combined-samples/Panasonic/
+    /// PanasonicDMC-G2.jpg` payload: tag 0x0060 reads `00 01 00 00`
+    /// (`exiftool -v3`), and the pinned oracle's `-a -G1 -s` on that file
+    /// reports `[Panasonic] LensFirmwareVersion : 0.1.0.0`.
+    #[test]
+    fn lens_firmware_version_dot_joins_bytes() {
+        assert_eq!(decode_lens_firmware_version(&[0, 1, 0, 0]), "0.1.0.0");
+        assert_eq!(decode_lens_firmware_version(&[1, 2, 3, 4]), "1.2.3.4");
+    }
+
+    /// Full pipeline: an embedded one-entry Panasonic MakerNote whose
+    /// ProgramISO tag is `0x003c` (`int16u[1]`, wire bytes `fe ff` LE =
+    /// 65534) -- `PanasonicDMC-FS4.jpg`'s actual bytes (`exiftool -v3`) --
+    /// pinning that the registry-driven scalar fallback (parse_entry's last
+    /// arm) reaches the new `decode_program_iso` sentinel, not just the
+    /// decoder function in isolation.
+    #[test]
+    fn program_iso_sentinel_reached_through_full_parse() {
+        let mut data = b"Panasonic\0\0\0".to_vec();
+        data.extend_from_slice(&1u16.to_le_bytes()); // entry_count
+        data.extend_from_slice(&0x003Cu16.to_le_bytes()); // ProgramISO
+        data.extend_from_slice(&3u16.to_le_bytes()); // int16u
+        data.extend_from_slice(&1u32.to_le_bytes()); // count 1
+        // A count==1 SHORT lives in the first two bytes of the value field.
+        data.extend_from_slice(&0xFFFEu16.to_le_bytes()); // 65534, LE
+        data.extend_from_slice(&[0, 0]);
+
+        let mut tags = HashMap::new();
+        parse_panasonic_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
+        assert_eq!(
+            tags.get("Panasonic:ProgramISO").map(String::as_str),
+            Some("Intelligent ISO")
+        );
+    }
+
+    /// Full pipeline: both `Transform` tag IDs (0x0059 and 0x8012) in one
+    /// MakerNote, each `undef[4]` holding `00 00 00 00` -- the real
+    /// `PanasonicDMC-FS4.jpg`/`PanasonicDMC-TS10.jpg` bytes at both offsets
+    /// (`exiftool -v3`). Both land under the single `Panasonic:Transform`
+    /// key (ExifTool's own JSON output collapses the same-named duplicate
+    /// the same way -- `exiftool -j -a -G1 -s` on either file prints one
+    /// `"Panasonic:Transform": "Off"`), so this pins that the second entry's
+    /// decode doesn't silently disagree with the first rather than pinning
+    /// map cardinality.
+    #[test]
+    fn transform_both_tag_ids_reach_the_same_decode_through_full_parse() {
+        let mut data = b"Panasonic\0\0\0".to_vec();
+        data.extend_from_slice(&2u16.to_le_bytes()); // entry_count
+        // Tag 0x0059: undef[4], all zero -> "0 0" -> "Off".
+        data.extend_from_slice(&0x0059u16.to_le_bytes());
+        data.extend_from_slice(&7u16.to_le_bytes()); // undef
+        data.extend_from_slice(&4u32.to_le_bytes()); // count (bytes)
+        data.extend_from_slice(&[0, 0, 0, 0]);
+        // Tag 0x8012: same layout, same bytes.
+        data.extend_from_slice(&0x8012u16.to_le_bytes());
+        data.extend_from_slice(&7u16.to_le_bytes());
+        data.extend_from_slice(&4u32.to_le_bytes());
+        data.extend_from_slice(&[0, 0, 0, 0]);
+
+        let mut tags = HashMap::new();
+        parse_panasonic_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
+        assert_eq!(
+            tags.get("Panasonic:Transform").map(String::as_str),
+            Some("Off")
+        );
+    }
+
+    /// Full pipeline: `LensFirmwareVersion` (0x0060) as `undef[4]` holding
+    /// `00 01 00 00` -- `PanasonicDMC-G2.jpg`'s real bytes (`exiftool -v3`).
+    #[test]
+    fn lens_firmware_version_reached_through_full_parse() {
+        let mut data = b"Panasonic\0\0\0".to_vec();
+        data.extend_from_slice(&1u16.to_le_bytes()); // entry_count
+        data.extend_from_slice(&0x0060u16.to_le_bytes()); // LensFirmwareVersion
+        data.extend_from_slice(&7u16.to_le_bytes()); // undef
+        data.extend_from_slice(&4u32.to_le_bytes()); // count (bytes)
+        data.extend_from_slice(&[0, 1, 0, 0]);
+
+        let mut tags = HashMap::new();
+        parse_panasonic_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
+        assert_eq!(
+            tags.get("Panasonic:LensFirmwareVersion")
+                .map(String::as_str),
+            Some("0.1.0.0")
         );
     }
 }
