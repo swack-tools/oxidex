@@ -1701,6 +1701,68 @@ class RunSweepIntegrationTests(GitRepoTestCase):
         # re-collecting the stamp forever would spin every round.
         self.assertIn("canon", cursor["squads"])
 
+    def test_an_unrelated_commit_landing_on_main_meanwhile_does_not_defeat_the_duplicate_check(self):
+        """Measured 2026-08-11: PR #692 duplicated #690 (byte-identical
+        diffs, md5-verified) and the FIRST version of this fix -- a raw
+        full-tree compare -- missed it. #690's branch was cut before this
+        very fix (#691) landed on main; #692's branch was cut after, so it
+        legitimately carries #691's scripts/ changes that #690's branch
+        does not. A full-tree diff sees that as "different" forever, no
+        matter how many times the SAME gap gets re-solved identically --
+        every future round inherits whatever unrelated commits landed on
+        main in the meantime. The fix: scope the comparison to the paths
+        THIS round's own squad merges touched, so incidental history the
+        two branches don't share can never mask a real duplicate.
+        """
+        repo = self.make_repo()
+        # An earlier round already published this exact fix as an open PR,
+        # cut from main BEFORE the unrelated commit below landed.
+        git(repo, "branch", "sweep/tags-earlier", "main")
+        git(repo, "checkout", "-q", "sweep/tags-earlier")
+        self.commit_file(repo, "src/a.rs", "fn a() {}\n", "sweep: fix JPEG:Foo")
+        git(repo, "checkout", "-q", "main")
+
+        # A completely unrelated PR (infra, docs, anything) lands on main in
+        # between -- e.g. this very fix.
+        self.commit_file(repo, "scripts/unrelated.py", "# unrelated infra change\n", "infra: unrelated fix")
+
+        # THIS round's squad branch is cut from the NEW main tip (so it
+        # carries the unrelated commit #690 never saw) and produces the
+        # identical fix under a fresh sha.
+        git(repo, "branch", "squad/canon", "main")
+        git(repo, "checkout", "-q", "squad/canon")
+        canon_sha = self.commit_file(
+            repo, "src/a.rs", "fn a() {}\n", "fix JPEG:Foo",
+            trailers=[("Format", "JPEG"), ("Tag", "MakerNotes:Foo")],
+        )
+        git(repo, "checkout", "-q", "main")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            config_toml = self._config_toml(Path(tmpdir), ["canon"])
+            squad_merge_loop.record_head(
+                squad_merge_loop.squad_status_file(home, "canon"), "workerhead", status="consumed",
+                patch_id="p1", format_name="JPEG", squad_sha=canon_sha, now_fn=lambda: 100,
+            )
+            tested, pushed, prs = [], [], []
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused",
+                comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+                config_path=config_toml, sweep_state_path=home / "sweep-state.json", origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                cargo_test_workspace_fn=lambda repo_root: tested.append(1) or (True, "ok"),
+                push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
+                create_pr_fn=lambda *a, **kw: prs.append(a) or {"ok": True, "url": "u"},
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
+                open_sweep_prs_fn=lambda: [
+                    {"headRefName": "sweep/tags-earlier", "number": 42, "url": "https://example/pull/42"},
+                ],
+            )
+        self.assertEqual(result["status"], "duplicate_of_open_pr")
+        self.assertEqual(tested, [])
+        self.assertEqual(pushed, [])
+        self.assertEqual(prs, [])
+
     def test_a_content_DIFFERENT_open_pr_does_not_veto_a_genuinely_new_fix(self):
         """The duplicate gate must not become a second, accidental
         zero_delta check: an open sweep PR fixing a DIFFERENT tag must
