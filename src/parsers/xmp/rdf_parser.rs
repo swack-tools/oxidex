@@ -4068,31 +4068,69 @@ fn print_xmp_exposure_time(seconds: f64) -> String {
 
 /// A rational with no PrintConv, printed the way Perl prints a number.
 ///
-/// Perl's default stringification is 15 significant digits with trailing zeros
-/// removed, which is why ExifTool reports 2272000/224 as "10142.8571428571".
+/// Perl's default stringification is `%.15g`: 15 *significant* digits with
+/// trailing zeros removed, which is why ExifTool reports 2272000/224 as
+/// "10142.8571428571" and 1/213 as "0.00469483568075117".
+///
+/// Significant digits are not decimal places. For a value below 1 the zeros
+/// between the point and the first non-zero digit are placeholders, so
+/// counting decimals truncates: 1/213 came out "0.00469483568075", fourteen
+/// decimals but only twelve significant digits, against the oracle's fifteen.
 fn format_xmp_plain_rational(value: &str) -> String {
     let Some(number) = parse_xmp_number(value) else {
         return value.trim().to_string();
     };
-    let formatted = format!("{:.*e}", 14, number);
-    // Round-trip through the 15-significant-digit form, then render plainly.
-    let rounded: f64 = formatted.parse().unwrap_or(number);
-    let mut text = format!("{}", rounded);
-    if let Some(dot) = text.find('.') {
-        // Perl keeps at most 15 significant digits.
-        let significant = text[..dot].trim_start_matches('-').len();
-        let keep = 15usize.saturating_sub(significant);
-        if text.len() - dot - 1 > keep {
-            text = format!("{:.*}", keep, rounded);
-            while text.ends_with('0') {
-                text.pop();
-            }
-            if text.ends_with('.') {
-                text.pop();
-            }
-        }
+    format_perl_g15(number)
+}
+
+/// Renders `number` as Perl's `%.15g` does.
+///
+/// `%g` picks scientific notation when the decimal exponent is below -4 or at
+/// least the precision, and fixed notation otherwise; either way it keeps 15
+/// significant digits and drops trailing zeros.
+fn format_perl_g15(number: f64) -> String {
+    const PRECISION: i32 = 15;
+
+    if !number.is_finite() || number == 0.0 {
+        return format!("{number}");
     }
-    text
+
+    let exponent = number.abs().log10().floor() as i32;
+    // log10 of a value just under a power of ten can land a digit low; the
+    // rendered string is the authority, so correct against it.
+    let exponent = {
+        let probe = format!("{:.*e}", (PRECISION - 1) as usize, number);
+        probe
+            .split(['e', 'E'])
+            .nth(1)
+            .and_then(|e| e.parse::<i32>().ok())
+            .unwrap_or(exponent)
+    };
+
+    if exponent < -4 || exponent >= PRECISION {
+        // Rust writes "1e-5"; C and Perl write "1e-05" -- signed exponent,
+        // at least two digits -- so the exponent is rendered by hand.
+        let rendered = format!("{:.*e}", (PRECISION - 1) as usize, number);
+        let mantissa = rendered
+            .split(['e', 'E'])
+            .next()
+            .map(trim_trailing_zeros)
+            .unwrap_or_else(|| rendered.clone());
+        let sign = if exponent < 0 { '-' } else { '+' };
+        return format!("{mantissa}e{sign}{:02}", exponent.abs());
+    }
+
+    let decimals = (PRECISION - 1 - exponent).max(0) as usize;
+    trim_trailing_zeros(&format!("{number:.decimals$}"))
+}
+
+/// Drops trailing fractional zeros, and the point if nothing follows it.
+fn trim_trailing_zeros(text: &str) -> String {
+    if !text.contains('.') {
+        return text.to_string();
+    }
+    let trimmed = text.trim_end_matches('0');
+    trimmed.strip_suffix('.').unwrap_or(trimmed).to_string()
 }
 
 /// Formats EXIF focal length value.
@@ -5853,6 +5891,29 @@ mod top_level_struct_tests {
         assert_eq!(format_xmp_plain_rational("2272000/224"), "10142.8571428571");
         // [XMP] ExposureCompensation : -1   (exif:ExposureBiasValue = -3/3)
         assert_eq!(format_exif_exposure_compensation("-3/3"), "-1");
+    }
+
+    /// Perl's `%.15g` keeps 15 *significant* digits, not 15 decimals. Each
+    /// expectation below is `perl5.34 -e 'printf("%.15g\n", $v)'` from the
+    /// pinned 13.59 tree, run per value.
+    #[test]
+    fn plain_rational_keeps_fifteen_significant_digits() {
+        // The regression: counting decimals gave "0.00469483568075" -- 14
+        // decimals, 12 significant digits. ExifIFD:ExposureTime on the pinned
+        // t/images/XMP.xml is exactly this value.
+        assert_eq!(format_xmp_plain_rational("1/213"), "0.00469483568075117");
+        assert_eq!(format_xmp_plain_rational("1/3"), "0.333333333333333");
+        // Above 1 the old decimal count happened to agree; keep it pinned.
+        assert_eq!(format_xmp_plain_rational("2272000/224"), "10142.8571428571");
+        // %g switches to scientific below 1e-4 and at/above 1e15.
+        assert_eq!(format_xmp_plain_rational("1/100000"), "1e-05");
+        assert_eq!(
+            format_xmp_plain_rational("123456789012345678"),
+            "1.23456789012346e+17"
+        );
+        assert_eq!(format_xmp_plain_rational("0"), "0");
+        // Non-numeric input is passed through untouched, never guessed at.
+        assert_eq!(format_xmp_plain_rational("not a number"), "not a number");
     }
 
     /// `XMP-exif:ShutterSpeedValue` is APEX (`XMP.pm:2081`,
