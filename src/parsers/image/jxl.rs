@@ -215,20 +215,31 @@ impl JXLParser {
                             );
                         }
 
-                        // Compatible brands (remaining 4-byte chunks)
+                        // Compatible brands (remaining 4-byte chunks).
+                        //
+                        // Model: Jpeg2000.pm:574-579 / QuickTime.pm:1045-1050
+                        // `CompatibleBrands`' ValueConv --
+                        // `my @a=($val=~/.{4}/sg); @a=grep(!/\0/,@a); \@a` --
+                        // splits the remainder of the ftyp box into 4-byte
+                        // chunks, drops any chunk containing a null byte, and
+                        // returns the rest as a genuine list (`List => 1`),
+                        // not a stringified one.
                         if ftyp_data.len() > 8 {
-                            let mut brands: Vec<String> = Vec::new();
+                            let mut brands: Vec<TagValue> = Vec::new();
                             let mut brand_offset = 8;
                             while brand_offset + 4 <= ftyp_data.len() {
                                 let brand = &ftyp_data[brand_offset..brand_offset + 4];
-                                let brand_str = String::from_utf8_lossy(brand).to_string();
-                                brands.push(format!("\"{}\"", brand_str));
+                                if !brand.contains(&0u8) {
+                                    brands.push(TagValue::new_string(
+                                        String::from_utf8_lossy(brand).to_string(),
+                                    ));
+                                }
                                 brand_offset += 4;
                             }
                             if !brands.is_empty() {
                                 metadata.insert(
                                     "Jpeg2000:CompatibleBrands".to_string(),
-                                    TagValue::new_string(format!("[{}]", brands.join(", "))),
+                                    TagValue::Array(brands),
                                 );
                             }
                         }

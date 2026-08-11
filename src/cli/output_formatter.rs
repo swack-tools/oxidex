@@ -31,6 +31,8 @@ use crate::core::tag_value::TagValue;
 use crate::core::value_formatter::format_gps_reference;
 use crate::parsers::tiff::tiff_enums::tiff_enum_to_string;
 use csv::Writer;
+use regex::Regex;
+use std::sync::LazyLock;
 
 /// Renders the placeholder ExifTool prints in place of binary tag data.
 ///
@@ -254,10 +256,40 @@ impl OutputFormatter for JsonFormatter {
     }
 }
 
+/// The `exiftool` script's own numeric-string test, `EscapeJSON` (around line
+/// 3807): a string that looks like a JSON/PHP number is emitted unquoted,
+/// regardless of which tag it came from --
+/// `^-?(\d|[1-9]\d{1,14})(\.\d{1,16})?(e[-+]?\d{1,3})?$` case-insensitively.
+/// This is json.org's numeric grammar, tightened by ExifTool (capped digit
+/// counts) so oversized numbers don't upset some JSON parsers. A leading zero
+/// on a multi-digit integer part fails the match on purpose, so zero-padded
+/// strings (serial numbers, etc.) stay quoted.
+static EXIFTOOL_JSON_NUMBER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^-?(?:\d|[1-9]\d{1,14})(?:\.\d{1,16})?(?:e[-+]?\d{1,3})?$")
+        .expect("static regex is valid")
+});
+
+/// Renders a string tag value as a JSON number when ExifTool's own `-j`
+/// writer would, so a `TagValue::String` holding e.g. a Composite's rendered
+/// `"0.026"` matches the oracle's unquoted `0.026` instead of diverging by
+/// quoting.
+fn exiftool_json_number(s: &str) -> Option<serde_json::Value> {
+    if !EXIFTOOL_JSON_NUMBER.is_match(s) {
+        return None;
+    }
+    if s.contains(['.', 'e', 'E']) {
+        serde_json::Number::from_f64(s.parse::<f64>().ok()?).map(serde_json::Value::Number)
+    } else {
+        s.parse::<i64>().ok().map(|i| serde_json::json!(i))
+    }
+}
+
 /// Converts a TagValue to a serde_json::Value for Perl ExifTool-compatible output
 ///
 /// This unwraps the TagValue enum and produces simple JSON values:
-/// - String → JSON string (except literal "true"/"false", which become JSON booleans)
+/// - String → JSON string, unless it is literal "true"/"false" (→ JSON
+///   boolean) or looks like a number per [`EXIFTOOL_JSON_NUMBER`] (→ JSON
+///   number, unquoted, matching `exiftool -j`)
 /// - Integer → JSON number
 /// - Float → JSON number
 /// - Rational → JSON string "numerator/denominator"
@@ -280,6 +312,8 @@ fn tag_value_to_json(tag_name: Option<&str>, value: &TagValue) -> serde_json::Va
                 serde_json::Value::Bool(true)
             } else if s.eq_ignore_ascii_case("false") {
                 serde_json::Value::Bool(false)
+            } else if let Some(n) = exiftool_json_number(s) {
+                n
             } else {
                 serde_json::Value::String(s.clone())
             }
