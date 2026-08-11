@@ -127,14 +127,22 @@ def conv_for(tag, stats):
         return f"PrintConv::StrEnum(&[{body}])"
 
     if kind == "expr":
-        t = exprs.translate(pc.get("expr"))
+        raw = pc.get("expr")
+        t = exprs.translate_or_compile(raw)
         if t:
-            stats["expr_translated"] += 1
+            # translate_or_compile() tries the hand-verified TRANSLATIONS
+            # exact-match table first, then Step 15's grammar compiler
+            # (exprs.compile()) -- counted separately so a coverage report
+            # can tell curated translations from mechanically-derived ones.
+            if exprs.normalize(raw) in exprs.TRANSLATIONS:
+                stats["expr_translated"] += 1
+            else:
+                stats["expr_compiled"] += 1
             # Translated expressions are emitted by name so the generated code
             # stays readable and the mapping stays auditable.
-            return f"PrintConv::Expr(ExprId::{expr_ident(pc['expr'])})"
+            return f"PrintConv::Expr(ExprId::{expr_ident(raw)})"
         stats["expr_unsupported"] += 1
-        stats["unsupported_exprs"][exprs.normalize(pc.get("expr") or "")] += 1
+        stats["unsupported_exprs"][exprs.normalize(raw or "")] += 1
         return "PrintConv::None"
 
     stats["conv_dropped"] += 1
@@ -445,7 +453,12 @@ PRELUDE = '''//! ExifTool binary tag tables, generated from ExifTool's own Perl 
 //! exactly are emitted without the conversion or omitted, never approximated;
 //! the generator prints a full accounting of what it dropped.
 
-#![allow(clippy::unreadable_literal, clippy::too_many_lines)]
+#![allow(clippy::unreadable_literal, clippy::too_many_lines, unused_parens)]
+// unused_parens: Step 15's expression compiler (tools/exiftool-tables/exprs.py
+// `compile()`) wraps every subexpression in explicit parentheses so operator
+// precedence never depends on Rust's grouping matching Perl's -- that is a
+// correctness guarantee, not sloppiness, and some of those parens are
+// syntactically redundant once the surrounding expression is fixed.
 
 __VERSION_BLOCK__
 
@@ -665,15 +678,32 @@ def gen_expr_enum(used):
     variants = "\n".join(f"    /// `{rust_str(e)}`\n    {i}," for i, e in sorted(used.items()))
     arms = []
     for ident, expr in sorted(used.items()):
-        rty, rexpr = exprs.translate(expr)
+        rty, rexpr = exprs.translate_or_compile(expr)
         body = rexpr.replace("{v}", "val")
+        # perl_num, not a bare format!("{}", ...) / format!("{v}"): Perl's
+        # own numeric-to-string conversion goes through %.15g (scientific
+        # notation outside ~[1e-4, 1e15)), which Rust's Display for f64 never
+        # produces on its own -- see exprs.rs::perl_num's doc comment for the
+        # verify_exprs.py failure that found this.
         if rty == "f64":
-            arms.append(f'            ExprId::{ident} => Some(format!("{{}}", {body})),')
+            arms.append(
+                f"            ExprId::{ident} => "
+                f"Some(crate::exiftool_tables::exprs::perl_num({body})),"
+            )
+        elif rty == "f64_int":
+            # Perl's int() returns an integer (IV): exact decimal digits,
+            # never %.15g's scientific notation, regardless of magnitude --
+            # see exprs.rs::perl_int and exprs.py's _NUMERIC_VTYPES docstring.
+            arms.append(
+                f"            ExprId::{ident} => "
+                f"Some(crate::exiftool_tables::exprs::perl_int({body})),"
+            )
         elif rty == "String":
             arms.append(f"            ExprId::{ident} => Some({body}),")
         else:  # Option<f64>
             arms.append(
-                f'            ExprId::{ident} => ({body}).map(|v| format!("{{v}}")),'
+                f"            ExprId::{ident} => "
+                f"({body}).map(crate::exiftool_tables::exprs::perl_num),"
             )
     arm_body = "\n".join(arms)
     return f"""
@@ -709,7 +739,8 @@ REPORT = (
         ("tags emitted", "tag_emitted"),
         ("int enums", "enum_int"),
         ("string enums", "enum_str"),
-        ("exprs translated", "expr_translated"),
+        ("exprs translated (exact match)", "expr_translated"),
+        ("exprs translated (grammar-compiled, Step 15)", "expr_compiled"),
         ("masked fields", "tag_masked"),
         ("bit fields (frac + Mask)", "tag_fractional_masked"),
     )),
@@ -777,9 +808,13 @@ def main():
     # Collect the expressions actually referenced so the enum has no dead arms.
     # Iterate in sorted order: set iteration order varies between runs, and a
     # generator whose output depends on it cannot be checked into git.
+    # known_num_domain_exprs() is TRANSLATIONS union every numeric-domain
+    # expression Step 15's grammar compiler (exprs.compile()) accepted while
+    # gen_table ran above -- gen_conv() populates that cache as a side effect
+    # of every translate_or_compile() call, so it is complete by this point.
     used = {}
     joined = "".join(chunks)
-    for e in sorted(exprs.TRANSLATIONS):
+    for e in sorted(exprs.known_num_domain_exprs()):
         ident = expr_ident(e)
         if ident in used and used[ident] != e:
             raise SystemExit(

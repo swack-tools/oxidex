@@ -1742,13 +1742,21 @@ pub fn process_dji_thermal_segments(
             diagnostics.push(diagnostic);
         }
         for decoded in decode.fields() {
+            // Step 15's compiler translates the temperature and distance
+            // PrintConvs (`sprintf("%.1f C",$val)` / `sprintf("%.1f m",$val)`),
+            // so `emit()` hands back the rendered string. These arms used to
+            // re-format the raw float themselves because the generated table
+            // carried `PrintConv::None`; matching on Float now silently drops
+            // the tag. Take the generated rendering, as Emissivity already did.
             let value = match (decoded.field.name, decoded.emit()) {
-                ("AmbientTemperature" | "ReflectedTemperature", Some(TagValue::Float(value))) => {
-                    Some(format!("{value:.1} C"))
-                }
-                ("ObjectDistance", Some(TagValue::Float(value))) => Some(format!("{value:.1} m")),
-                ("Emissivity", Some(TagValue::String(rendered))) => Some(rendered),
-                ("IDString", Some(TagValue::String(value))) => Some(value),
+                (
+                    "AmbientTemperature"
+                    | "ReflectedTemperature"
+                    | "ObjectDistance"
+                    | "Emissivity"
+                    | "IDString",
+                    Some(TagValue::String(rendered)),
+                ) => Some(rendered),
                 _ => None,
             };
             if let Some(value) = value {

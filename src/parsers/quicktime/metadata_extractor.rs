@@ -3571,22 +3571,18 @@ fn extract_pentax_maker_notes(data: &[u8], metadata: &mut MetadataMap) -> Result
                 Some(value @ TagValue::String(_)) => value,
                 _ => continue,
             },
-            // This PrintConv remains format-specific until its exact spelling
-            // is registered in the generated expression translator; the field
-            // is `Omitted::NONE`, so `emit`'s raw fallback (PrintConv::None
-            // here) is exactly the rational this arm already reads.
+            // Pentax::MOV's ExposureCompensation PrintConv is `$val ?
+            // sprintf("%+.1f", $val) : 0` -- Step 15's expression compiler
+            // (tools/exiftool-tables/exprs.py) now registers this exact
+            // spelling, so the generated `ExprId` arm applies it directly
+            // and `emit` returns the formatted string, exactly like
+            // FNumber/WhiteBalance/FocalLength above. This used to hand-roll
+            // the same `%+.1f` formatting from the raw Rational because the
+            // field was `PrintConv::None` (untranslated); now that it isn't,
+            // duplicating the formatting here would be a second, divergeable
+            // copy of the same rule the generator already owns.
             "ExposureCompensation" => match decoded.emit() {
-                Some(TagValue::Rational {
-                    numerator,
-                    denominator,
-                }) if denominator != 0 => {
-                    let value = f64::from(numerator) / f64::from(denominator);
-                    TagValue::new_string(if value == 0.0 {
-                        "0".to_string()
-                    } else {
-                        format!("{value:+.1}")
-                    })
-                }
+                Some(value @ TagValue::String(_)) => value,
                 _ => continue,
             },
             "ISO" => match decoded.emit() {

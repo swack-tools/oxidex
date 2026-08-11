@@ -1,0 +1,462 @@
+#!/usr/bin/env python3
+"""Step 15's differential expression oracle.
+
+An expression `exprs.py` claims to translate (by exact match in TRANSLATIONS
+or by `compile()`'s grammar) is not verified because it looks obviously
+right. It is verified because this script ran ExifTool's own Perl -- the
+pinned release, not whatever `perl`/`exiftool` happen to resolve on PATH --
+and the shipped Rust translation over the same probe inputs and diffed the
+results. Anything that disagrees is refused and counted here, the same way
+codegen.py refuses and counts an untranslatable expression; this script's job
+is only to say which of the "translated" set actually deserves that label.
+
+Design of the probe set (see `probes_for`): a small fixed battery (0, a
+negative, a fraction, a large value, values right at the census's own
+`0x7fffffff`/`655.345`-style boundaries) plus every numeric literal that
+appears *inside* the expression text itself, each probed at -1/0/+1 around it
+-- because a boundary condition written as `$val > 655.345` is only exercised
+by testing near 655.345, not by a generic battery that has no idea that
+number is special to this expression.
+
+Instruments named, per AGENTS.md doctrine:
+  - Perl side:  /usr/bin/perl5.34 -I <pinned ExifTool 13.59 lib>, capability-
+    probed before use (never a bare `perl`/`exiftool` off PATH).
+  - Rust side:  a throwaway `src/bin/expr_oracle_harness.rs`, auto-discovered
+    by Cargo, built and run via `cargo run` -- i.e. the exact Rust source
+    text `exprs.py` emits (for compile()) and the hand-written functions in
+    `src/exiftool_tables/exprs.rs` (for the named helpers), not a
+    reimplementation of either. The harness file is generated and deleted by
+    this script; it is never committed.
+
+Numeric ("f64"/"Option<f64>") results are compared by parsed value (relative
+tolerance 1e-9), because Rust's and Perl's float-to-string algorithms are not
+contractually identical and a formatting difference is not a translation
+bug. Every other result (String) is compared as exact text, because that
+text IS the tag value a caller sees.
+"""
+import argparse
+import json
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import exprs
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+HARNESS_PATH = REPO_ROOT / "src" / "bin" / "expr_oracle_harness.rs"
+
+SLOTS = ("ValueConv", "PrintConv", "RawConv")
+
+
+# --- census (same walk as expr_coverage.py / expr_census.py) --------------
+
+def walk_tags(node, out):
+    if isinstance(node, dict):
+        out.append(node)
+    elif isinstance(node, list):
+        for v in node:
+            walk_tags(v, out)
+
+
+def census(tables_json_path):
+    d = json.load(open(tables_json_path, encoding="utf-8"))
+    counter = {}
+    for _modname, mod in d["modules"].items():
+        for _tname, t in (mod.get("tables") or {}).items():
+            for _tid, tagnode in (t.get("tags") or {}).items():
+                variants = []
+                walk_tags(tagnode, variants)
+                for tag in variants:
+                    for slot in SLOTS:
+                        v = tag.get(slot)
+                        if isinstance(v, dict) and v.get("kind") == "expr":
+                            e = v.get("expr")
+                            if isinstance(e, str) and e.strip():
+                                counter[e] = counter.get(e, 0) + 1
+    return d.get("exiftool_version"), counter
+
+
+# --- capability probe ------------------------------------------------------
+
+def capability_probe(perl_bin, et_lib, expect_version):
+    """AGENTS.md: a matching -ver is not a working oracle. Confirm the
+    interpreter runs, the pinned library loads (not some other ExifTool that
+    happens to be findable), reports the exact pinned version, and can
+    actually execute a real conversion -- not just parse."""
+    script = (
+        f'use lib "{et_lib}"; use Image::ExifTool; use Image::ExifTool::Exif;\n'
+        'print "VERSION\\t$Image::ExifTool::VERSION\\n";\n'
+        'print "PROBE\\t", Image::ExifTool::Exif::PrintExposureTime(0.125), "\\n";\n'
+    )
+    r = subprocess.run([perl_bin, "-e", script], capture_output=True, text=True, timeout=30)
+    lines = dict(
+        line.split("\t", 1) for line in r.stdout.splitlines() if "\t" in line
+    )
+    ok = (
+        r.returncode == 0
+        and lines.get("VERSION") == expect_version
+        and lines.get("PROBE") == "1/8"
+    )
+    print(
+        f"capability probe: perl={perl_bin} lib={et_lib} "
+        f"version={lines.get('VERSION')!r} PrintExposureTime(0.125)={lines.get('PROBE')!r} "
+        f"rc={r.returncode} -> {'OK' if ok else 'FAILED'}"
+    )
+    if not ok:
+        print("STDERR:", r.stderr, file=sys.stderr)
+        raise SystemExit(
+            "oracle capability probe failed -- refusing to trust this Perl/ExifTool "
+            "as ground truth (AGENTS.md: a matching -ver is not a working oracle)"
+        )
+
+
+# --- probe sets --------------------------------------------------------
+
+NUM_BASE = [
+    0.0, 1.0, -1.0, 0.5, -0.5, 2.0, 3.0, 10.0, 100.0, -128.0, 127.0, 255.0,
+    256.0, 65535.0, 65536.0, 1e6, -1e6, 1e-6, 1e18, 2147483647.0, 2147483648.0,
+    4294967295.0, 655.345, 655.36,
+]
+_LIT_RE = re.compile(r"0[xX][0-9a-fA-F]+|\d+\.\d+(?:[eE][+-]?\d+)?|\d+(?:[eE][+-]?\d+)?")
+
+
+def numeric_probes_for(expr):
+    vals = set(NUM_BASE)
+    for m in _LIT_RE.finditer(expr):
+        t = m.group()
+        try:
+            v = float(int(t, 16)) if t[:2].lower() == "0x" else float(t)
+        except ValueError:
+            continue
+        vals.update((v, v + 1.0, v - 1.0))
+        if v != 0.0:
+            vals.add(-v)
+    return sorted(vals)
+
+
+STR_PROBES_TR = [
+    "2024-01-02 10:20:30", "no-dashes-or-space", "", "-T", "a-b",
+    "\x00hello\x00world\x00", "  double  space  ", "2024:01:02",
+]
+STR_PROBES_CDT = [
+    "2024:01:02 03:04:05", "2024:01:02 03:04:05-07:00", "2024:01:02 03:04:05Z",
+    "", "not a date at all",
+]
+BYTES_PROBES_SRC = ["Hello", "", "abc", "A", "Test String", "cafe"]
+
+
+def probes_for(domain, raw_expr):
+    if domain == "num":
+        return numeric_probes_for(raw_expr)
+    if domain == "str":
+        if "ConvertDateTime" in raw_expr:
+            return STR_PROBES_CDT
+        return STR_PROBES_TR
+    # "bytes": the probe values must already be genuine UCS2 -- 2 bytes per
+    # character, in whichever order (II=little-endian, MM=big-endian) this
+    # specific expression declares -- not raw UTF-8/ASCII text. Encoding
+    # plain-text bytes and calling that a UCS2 buffer was the harness's own
+    # first bug (found by feeding it to both oracles: Perl decoded 5
+    # single-byte ASCII "Hello" bytes as UCS2 pairs and produced mojibake
+    # that happened to differ from Rust's *different* mojibake -- neither
+    # side was wrong, the probe was).
+    little_endian = '"II"' in raw_expr
+    enc = "utf-16-le" if little_endian else "utf-16-be"
+    return [s.encode(enc) for s in BYTES_PROBES_SRC]
+
+
+# --- Perl side --------------------------------------------------------
+
+def perl_escape(s):
+    return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\x00", "\\0")
+
+
+def build_perl_script(jobs, et_lib):
+    lines = [
+        f'use lib "{et_lib}";',
+        "use Image::ExifTool;",
+        "use Image::ExifTool::Exif;",
+        "use Image::ExifTool::GPS;",
+        "my $self = new Image::ExifTool;",
+        "binmode STDOUT, ':utf8';",
+        # ExifTool itself runs every ValueConv/PrintConv/RawConv string
+        # through `eval $conv` from inside ExifTool.pm (see e.g. its line
+        # 9378) -- `eval STRING` resolves barewords in the *calling* code's
+        # package, so a conversion that calls a bareword sub ExifTool.pm
+        # itself defines (IsInt, IsFloat, ...) only resolves there, not in
+        # `main`. Running the oracle's evals from `main` instead was a
+        # harness bug that looked like every IsInt($val) probe erroring --
+        # it was never a translation defect, it was this script calling the
+        # real subroutine from the wrong namespace.
+        "package Image::ExifTool;",
+    ]
+    for job_id, domain, raw, probe in jobs:
+        if domain == "num":
+            set_val = f"my $val = {probe!r};"
+        elif domain == "str":
+            set_val = f'my $val = "{perl_escape(probe)}";'
+        else:
+            set_val = f'my $val = pack("H*", "{probe.hex()}");'  # probe is already bytes
+        lines.append("{")
+        lines.append(f"  {set_val}")
+        lines.append(f"  my $r = eval {{ {raw} }};")
+        lines.append(f'  if ($@) {{ print "J{job_id}\\tERROR\\n"; }}')
+        lines.append(f'  elsif (!defined $r) {{ print "J{job_id}\\tUNDEF\\n"; }}')
+        lines.append(f'  else {{ my $s = $r; $s =~ s/\\n/\\\\n/g; print "J{job_id}\\t$s\\n"; }}')
+        lines.append("}")
+    return "\n".join(lines)
+
+
+def run_perl(perl_bin, script_text, timeout):
+    # A `-e` argument is subject to the OS argv-length limit; the full probe
+    # battery comfortably exceeds it, so the script is always written to a
+    # temp file and run as a script, not inlined.
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".pl", delete=False) as fh:
+        fh.write(script_text)
+        script_path = fh.name
+    try:
+        r = subprocess.run([perl_bin, script_path], capture_output=True, text=True, timeout=timeout)
+    finally:
+        Path(script_path).unlink(missing_ok=True)
+    if r.returncode != 0:
+        print("PERL HARNESS STDERR:", r.stderr[-4000:], file=sys.stderr)
+        raise SystemExit(f"perl harness exited {r.returncode}")
+    out = {}
+    for line in r.stdout.splitlines():
+        if "\t" in line:
+            jid, val = line.split("\t", 1)
+            out[jid] = val
+    return out
+
+
+# --- Rust side --------------------------------------------------------
+
+def rust_num_literal(v):
+    s = repr(float(v)).replace("e+", "e")
+    if "." not in s and "e" not in s and "inf" not in s and "nan" not in s:
+        s += ".0"
+    return f"({s}_f64)"
+
+
+def rust_str_literal(s):
+    out = []
+    for ch in s:
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif ch == "\x00":
+            out.append("\\0")
+        elif ch == "\n":
+            out.append("\\n")
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
+def rust_bytes_literal(b):
+    body = ", ".join(f"0x{byte:02x}u8" for byte in b)  # b is already bytes
+    return f"(&[{body}][..])"
+
+
+def render_probe(domain, probe):
+    if domain == "num":
+        return rust_num_literal(probe)
+    if domain == "str":
+        return rust_str_literal(probe)
+    return rust_bytes_literal(probe)
+
+
+def build_rust_harness(jobs, by_expr):
+    body = []
+    for job_id, domain, raw, probe in jobs:
+        rust_type, rust_code = by_expr[raw]
+        lit = render_probe(domain, probe)
+        code = rust_code.replace("{v}", lit)
+        # The compiled text uses `crate::exiftool_tables::exprs::...` because
+        # that is correct where it actually ships: spliced into
+        # binary_tables.rs, part of the `oxidex` lib crate, where `crate`
+        # means that crate. This harness is a *different* crate (a `src/bin`
+        # binary), where `crate::` means itself -- rewrite the path rather
+        # than change the text under test.
+        code = code.replace("crate::exiftool_tables::exprs::", "oxidex::exiftool_tables::exprs::")
+        # Mirror codegen.py's gen_expr_enum exactly, including its perl_num
+        # wrapping for bare numeric results -- the harness exists to test
+        # what ships, not a simplified stand-in for it.
+        if rust_type == "f64":
+            expr_code = f"oxidex::exiftool_tables::exprs::perl_num({code})"
+        elif rust_type == "f64_int":
+            expr_code = f"oxidex::exiftool_tables::exprs::perl_int({code})"
+        elif rust_type == "Option<f64>":
+            expr_code = (
+                f"match ({code}).map(oxidex::exiftool_tables::exprs::perl_num) "
+                '{ Some(s) => s, None => "UNDEF".to_string() }'
+            )
+        else:  # String
+            expr_code = f"({code})"
+        body.append(
+            f'    out.push_str(&format!("J{job_id}\\t{{}}\\n", '
+            f"{{ let __r: String = {expr_code}; __r.replace('\\n', \"\\\\n\") }}));"
+        )
+    src = (
+        "// GENERATED by tools/exiftool-tables/verify_exprs.py -- not committed.\n"
+        "use oxidex::exiftool_tables::exprs::*;\n"
+        "#[allow(clippy::all, unused_parens, unused_variables)]\n"
+        "fn main() {\n"
+        "    let mut out = String::new();\n"
+        + "\n".join(body)
+        + "\n    print!(\"{out}\");\n"
+        "}\n"
+    )
+    return src
+
+
+def run_rust(jobs, by_expr, timeout):
+    src = build_rust_harness(jobs, by_expr)
+    HARNESS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    HARNESS_PATH.write_text(src, encoding="utf-8")
+    try:
+        r = subprocess.run(
+            ["cargo", "run", "--quiet", "--bin", "expr_oracle_harness"],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=timeout,
+        )
+        if r.returncode != 0:
+            print("RUST HARNESS STDERR:", r.stderr[-6000:], file=sys.stderr)
+            raise SystemExit(f"rust harness exited {r.returncode}")
+        out = {}
+        for line in r.stdout.splitlines():
+            if "\t" in line:
+                jid, val = line.split("\t", 1)
+                out[jid] = val
+        return out
+    finally:
+        HARNESS_PATH.unlink(missing_ok=True)
+
+
+# --- comparison --------------------------------------------------------
+
+def results_match(rust_type, perl_val, rust_val):
+    if perl_val == rust_val:
+        return True
+    if perl_val in ("UNDEF", "ERROR") or rust_val in ("UNDEF", "ERROR"):
+        return False
+    if rust_type in ("f64", "f64_int", "Option<f64>"):
+        try:
+            pf, rf = float(perl_val), float(rust_val)
+            return abs(pf - rf) <= max(1e-9, abs(pf) * 1e-9)
+        except ValueError:
+            return False
+    return False
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("tables_json")
+    ap.add_argument("--perl", default="/usr/bin/perl5.34")
+    ap.add_argument("--et-lib", default="/tmp/oxidex-exiftool-cache/exiftool/lib")
+    ap.add_argument("--timeout", type=int, default=180)
+    ap.add_argument("--sample-lines", type=int, default=15)
+    args = ap.parse_args()
+
+    version, counter = census(args.tables_json)
+    capability_probe(args.perl, args.et_lib, version)
+
+    # Every expression the shipped translator (TRANSLATIONS + compile())
+    # claims to handle, across all three value domains -- this is the whole
+    # "translated" surface, not just what codegen.py wires into a binary
+    # table's ExprId.
+    by_expr = {}       # raw_expr -> (rust_type, rust_code)
+    domain_of = {}      # raw_expr -> domain
+    for e in counter:
+        r = exprs.translate_or_compile_any(e)
+        if r:
+            domain, rty, code = r
+            by_expr[e] = (rty, code)
+            domain_of[e] = domain
+
+    jobs = []
+    for e in sorted(by_expr):
+        for probe in probes_for(domain_of[e], e):
+            jobs.append((len(jobs), domain_of[e], e, probe))
+
+    print(f"pinned release        {version}")
+    print(f"translated expressions {len(by_expr)}   probe jobs {len(jobs)}")
+
+    perl_script = build_perl_script(jobs, args.et_lib)
+    print("running Perl oracle ...")
+    perl_out = run_perl(args.perl, perl_script, args.timeout)
+
+    print("running Rust harness (cargo run --bin expr_oracle_harness) ...")
+    rust_out = run_rust(jobs, by_expr, args.timeout)
+
+    per_expr = {}  # raw_expr -> [pass, fail, skip]
+    fail_examples = []
+    skip_examples = []
+    for job_id, domain, raw, probe in jobs:
+        jid = f"J{job_id}"
+        pv = perl_out.get(jid, "<missing>")
+        rv = rust_out.get(jid, "<missing>")
+        rty = by_expr[raw][0]
+        stats = per_expr.setdefault(raw, [0, 0, 0])
+        if pv == "ERROR":
+            # This probe value isn't meaningful for this expression (e.g. a
+            # division that legitimately dies in Perl for this input) --
+            # not a translation defect, so it is counted separately, not as
+            # a failure.
+            stats[2] += 1
+            if len(skip_examples) < 20:
+                skip_examples.append((raw, probe, pv, rv))
+            continue
+        if results_match(rty, pv, rv):
+            stats[0] += 1
+        else:
+            stats[1] += 1
+            if len(fail_examples) < 40:
+                fail_examples.append((raw, probe, pv, rv))
+
+    total_pass = sum(s[0] for s in per_expr.values())
+    total_fail = sum(s[1] for s in per_expr.values())
+    total_skip = sum(s[2] for s in per_expr.values())
+    exprs_all_pass = sum(1 for s in per_expr.values() if s[1] == 0)
+    exprs_any_fail = sum(1 for s in per_expr.values() if s[1] > 0)
+
+    print()
+    print(f"probe-level: PASS {total_pass}  FAIL {total_fail}  SKIP(perl errored) {total_skip}")
+    print(f"expression-level: PASS (0 failing probes) {exprs_all_pass}/{len(by_expr)}"
+          f"   FAIL (>=1 failing probe) {exprs_any_fail}/{len(by_expr)}")
+    print()
+    print(f"sample of {min(args.sample_lines, len(per_expr))} per-expression results:")
+    for raw in sorted(per_expr)[: args.sample_lines]:
+        p, f, sk = per_expr[raw]
+        status = "PASS" if f == 0 else "FAIL"
+        s = re.sub(r"\s+", " ", raw.strip())[:70]
+        print(f"  {status}  probes(pass={p} fail={f} skip={sk})  {s}")
+
+    if fail_examples:
+        print()
+        print("FAILING probe examples (raw_expr, probe, perl, rust):")
+        for raw, probe, pv, rv in fail_examples:
+            s = re.sub(r"\s+", " ", raw.strip())[:70]
+            print(f"  expr={s!r} probe={probe!r} perl={pv!r} rust={rv!r}")
+
+    if skip_examples:
+        print()
+        print(f"sample of Perl-errored (skipped) probes ({total_skip} total):")
+        for raw, probe, pv, rv in skip_examples[:10]:
+            s = re.sub(r"\s+", " ", raw.strip())[:70]
+            print(f"  expr={s!r} probe={probe!r}")
+
+    print()
+    if exprs_any_fail:
+        print(f"RESULT: FAIL -- {exprs_any_fail} expression(s) disagree with the pinned Perl oracle")
+        raise SystemExit(1)
+    print("RESULT: PASS -- every translated expression agreed with the pinned Perl oracle "
+          f"on every probe ({total_pass} probe comparisons, {total_skip} skipped as "
+          "inapplicable-to-probe Perl errors)")
+
+
+if __name__ == "__main__":
+    main()

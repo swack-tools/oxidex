@@ -37,6 +37,7 @@
 //! ```
 
 pub mod binary_tables;
+pub mod exprs;
 pub mod runtime;
 
 pub use binary_tables::{

@@ -14,7 +14,12 @@
 //! exactly are emitted without the conversion or omitted, never approximated;
 //! the generator prints a full accounting of what it dropped.
 
-#![allow(clippy::unreadable_literal, clippy::too_many_lines)]
+#![allow(clippy::unreadable_literal, clippy::too_many_lines, unused_parens)]
+// unused_parens: Step 15's expression compiler (tools/exiftool-tables/exprs.py
+// `compile()`) wraps every subexpression in explicit parentheses so operator
+// precedence never depends on Rust's grouping matching Perl's -- that is a
+// correctness guarantee, not sloppiness, and some of those parens are
+// syntactically redundant once the surrounding expression is fixed.
 
 /// The ExifTool release these tables were transcribed from.
 ///
@@ -233,60 +238,634 @@ impl PrintConv {
 /// Adding an entry there fixes every tag sharing that expression at once.
 #[derive(Clone, Copy, Debug)]
 pub enum ExprId {
+    /// `5 - $val`
+    E5Val124E69,
+    /// `Image::ExifTool::Exif::PrintExposureTime($val)`
+    ImageExifToolExifPrintExposureTimeVal6037F3,
+    /// `Image::ExifTool::Exif::PrintFNumber($val)`
+    ImageExifToolExifPrintFNumberVal30CE5C,
+    /// `Image::ExifTool::GPS::ToDMS($self, $val, 1)`
+    ImageExifToolGPSToDMSSelfVal15C3C42,
+    /// `Image::ExifTool::GPS::ToDMS($self, $val, 1, \"E\")`
+    ImageExifToolGPSToDMSSelfVal1E4009F1,
+    /// `Image::ExifTool::GPS::ToDMS($self, $val, 1, \"N\")`
+    ImageExifToolGPSToDMSSelfVal1N224F39,
+    /// `int($val + 0.5)`
+    IntVal0515A83F,
+    /// `int($val * 1000 + 0.5) / 1000`
+    IntVal10000510006E64E7,
+    /// `int($val * 100 + 0.5) / 100`
+    IntVal100051005DA1FC,
+    /// `return 'Full' if $val > 0.99; Image::ExifTool::Exif::PrintExposureTime($val);`
+    ReturnFullIfVal099ImageExifToolExifPrint399F0D,
+    /// `sprintf(\"%.0f%%\", $val * 100)`
+    Sprintf0fVal100BFB803,
+    /// `sprintf(\"%.0f\", $val)`
+    Sprintf0fValAA8A5C,
     /// `sprintf(\"%.0f\",$val)`
     Sprintf0fValB74070,
+    /// `sprintf(\"0x%02x\", $val)`
+    Sprintf0x02xValD63744,
+    /// `sprintf(\"0x%.2x\", $val)`
+    Sprintf0x2xVal3DFFE7,
+    /// `sprintf(\"0x%.4x\", $val)`
+    Sprintf0x4xVal4F789C,
+    /// `sprintf(\"0x%.4x\",$val)`
+    Sprintf0x4xVal8F8283,
+    /// `sprintf(\"0x%.8x (ControlPanelCPL)\", $val)`
+    Sprintf0x8xControlPanelCPLVal02788B,
+    /// `sprintf(\"0x%.8x (GameFolder)\", $val)`
+    Sprintf0x8xGameFolderVal6FD200,
+    /// `sprintf(\"0x%.8x\", $val)`
+    Sprintf0x8xValE92A9C,
+    /// `sprintf(\"0x%.8x\",$val)`
+    Sprintf0x8xValF8EB3E,
+    /// `sprintf(\"0x%x\", $val)`
+    Sprintf0xXVal0CF3C7,
+    /// `sprintf(\"%.1f C\",$val)`
+    Sprintf1fCVal0EB0FD,
+    /// `sprintf(\"%.1f C\", $val)`
+    Sprintf1fCVal612E5F,
+    /// `sprintf(\"%.1f deg\", $val)`
+    Sprintf1fDegVal72F5D3,
+    /// `sprintf(\"%.1f m\", $val/10)`
+    Sprintf1fMVal106DDD2D,
+    /// `sprintf(\"%.1f m\",$val)`
+    Sprintf1fMVal475DA2,
     /// `sprintf(\"%.1f mm\",$val)`
     Sprintf1fMmVal03B2CA,
+    /// `sprintf(\"%.1f %%\",$val*100)`
+    Sprintf1fVal10092339C,
+    /// `sprintf(\"%.1f %%\", $val * 100)`
+    Sprintf1fVal100FA8A3F,
     /// `sprintf(\"%.1f\",$val)`
     Sprintf1fVal2C65CD,
+    /// `sprintf(\"%+.1f\",$val)`
+    Sprintf1fVal76416C,
+    /// `sprintf(\"%.1f\", $val)`
+    Sprintf1fValA23FF8,
+    /// `sprintf(\"%.1fx\",$val)`
+    Sprintf1fxVal75F7E3,
+    /// `sprintf(\"%.2f C\", $val)`
+    Sprintf2fCValE99431,
+    /// `sprintf(\"%.2f m\", $val)`
+    Sprintf2fMVal111346,
+    /// `sprintf(\"%.2f m\",$val)`
+    Sprintf2fMValDE91AC,
+    /// `sprintf(\"%.2f V\", $val)`
+    Sprintf2fVVal0F6F5C,
+    /// `sprintf(\"%.2f V\",$val)`
+    Sprintf2fVValC53075,
+    /// `sprintf(\"%.2f%%\", $val * 100)`
+    Sprintf2fVal100E767A4,
+    /// `sprintf(\"%.2f\", $val)`
+    Sprintf2fVal25FBBD,
     /// `sprintf(\"%.2f\",$val)`
     Sprintf2fVal67A3D4,
+    /// `sprintf(\"%.3d\",$val)`
+    Sprintf3dValCD66A0,
+    /// `sprintf(\"%.3d\", $val)`
+    Sprintf3dValEC0DC0,
+    /// `sprintf(\"%.3f m\", $val)`
+    Sprintf3fMVal40374B,
+    /// `sprintf(\"%+.3f\", $val)`
+    Sprintf3fVal4F4146,
+    /// `sprintf(\"%.4d\",$val)`
+    Sprintf4dVal069066,
+    /// `sprintf(\"%.4d\", $val)`
+    Sprintf4dVal57D3F5,
+    /// `sprintf(\"%.4f\", $val)`
+    Sprintf4fVal8DBB61,
+    /// `sprintf(\"%.5f\",$val)`
+    Sprintf5fValCD9331,
+    /// `sprintf(\"%.6f\",$val)`
+    Sprintf6fVal812570,
+    /// `sprintf(\"%.8x\",$val)`
+    Sprintf8xVal307B5B,
+    /// `sprintf(\"%d (level %.1f)\", $val, $val/30)`
+    SprintfDLevel1fValVal305690B0,
+    /// `sprintf(\"%+d\",$val)`
+    SprintfDValDD5E9B,
+    /// `sprintf(\"Ver.%.2x.%.3d\",$val>>8,$val&0xff)`
+    SprintfVer2x3dVal8Val0xffC071B3,
+    /// `sprintf(\"%x.%.2x\",$val>>8,$val&0xff)`
+    SprintfX2xVal8Val0xff6A1FC8,
+    /// `$val>0.99 ? \"Full\" : sprintf(\"%.0f%%\",$val*100)`
+    Val099FullSprintf0fVal10057F6C0,
+    /// `$val == 0? \"No Delay\" : sprintf(\"%.0f sec\",$val)`
+    Val0NoDelaySprintf0fSecValF4232D,
+    /// `$val > 0 ? sprintf(\"%.0f\", $val) : \"\"`
+    Val0Sprintf0fVal693AB4,
+    /// `$val > 0 ? \"+$val\" : $val`
+    Val0ValValFADF1F,
+    /// `$val==0x7f ? \"n/a\" : $val`
+    Val0x7fNAVal58D144,
+    /// `$val == 1? \"1 Second\" : sprintf(\"%.0f Seconds\",$val)`
+    Val11SecondSprintf0fSecondsValAD0A27,
+    /// `\"$val %\"`
+    Val22FAFA,
+    /// `$val == 255 ? \"n/a\" : $val`
+    Val255NAVal3B2FAD,
+    /// `$val == 255 ? \"Strobe or Misfire\" : sprintf(\"%.0f%%\", $val * 100)`
+    Val255StrobeOrMisfireSprintf0fVal1007EA656,
+    /// `$val > 266 ? \"inf\" : sprintf(\"%.2f m\", $val)`
+    Val266InfSprintf2fMVal45AF3A,
+    /// `$val==42 ? \"Out of range\" : \"$val dB\"`
+    Val42OutOfRangeValDB52FE9F,
+    /// `$val + 4`
+    Val43107D1,
     /// `$val > 655.345 ? \"inf\" : \"$val m\"`
     Val655345InfValM017F6F,
+    /// `$val < 65535 ? \"$val m\" : \"inf\"`
+    Val65535ValMInf7F039B,
     /// `\"$val%\"`
     Val81464B,
+    /// `$val == 8 ? \"n/a\" : $val`
+    Val8NAVal47D064,
+    /// `$val == 90 ? \"n/a\" : $val`
+    Val90NAValFF23A0,
     /// `\"$val C\"`
     ValC6E725F,
+    /// `\"$val dBm\"`
+    ValDBm64BBA9,
+    /// `\"$val F\"`
+    ValF12B6B2,
+    /// `\"$val fps\"`
+    ValFps5FE401,
+    /// `\"$val Hz\"`
+    ValHz0BE507,
+    /// `$val ? Image::ExifTool::Exif::PrintExposureTime($val) : \"Bulb\"`
+    ValImageExifToolExifPrintExposureTimeVal833680,
+    /// `$val ? int($val + 0.5) : \"n/a\"`
+    ValIntVal05NA4D7000,
+    /// `\"$val K\"`
+    ValKF4D6A4,
+    /// `\"$val kbit/s\"`
+    ValKbitSA388E2,
     /// `\"$val m\"`
     ValM5C5F88,
+    /// `\"$val micrometers\"`
+    ValMicrometersAA5D0D,
     /// `\"$val mm\"`
     ValMm18ABDF,
+    /// `\"$val/mm\"`
+    ValMm91C43E,
+    /// `$val ? \"Mode $val\" : \"Off\"`
+    ValModeValOffE2B4A5,
+    /// `\"$val ms\"`
+    ValMsE7A6DA,
     /// `\"$val s\"`
     ValSAD369C,
+    /// `$val ? sprintf(\"%.0f\",$val) : \"Auto\"`
+    ValSprintf0fValAutoAD1F9D,
+    /// `$val ? sprintf(\"0x%.4x\",$val) : $val`
+    ValSprintf0x4xValValB81079,
+    /// `$val ? sprintf(\"%.1f sec\",$val/1000) : \"Off\"`
+    ValSprintf1fSecVal1000Off2184A1,
     /// `$val ? sprintf(\"%+.1f\",$val) : 0`
     ValSprintf1fVal00A047C,
+    /// `$val ? sprintf(\"%+.1f\", $val) : 0`
+    ValSprintf1fVal0892CDF,
+    /// `$val ? sprintf(\"%.2f m\",$val) : \"inf\"`
+    ValSprintf2fMValInf535F8A,
+    /// `$val ? sprintf(\"%.2fV\", $val * 5 / 186) : \"n/a\"`
+    ValSprintf2fVVal5186NA6B12D1,
     /// `$val ? sprintf(\"%+.2f\", $val) : 0`
     ValSprintf2fVal000C83C,
+    /// `\"$val V\"`
+    ValV3D321A,
+    /// `$val ? $val : \"All\"`
+    ValValAll05E31D,
+    /// `$val ? $val : \"Auto\"`
+    ValValAutoFAE0CC,
+    /// `$val ? $val : \"Infinite\"`
+    ValValInfiniteB70B6F,
+    /// `$val ? \"$val m\" : \"inf\"`
+    ValValMInf56B932,
+    /// `$val ? $val : \"(none)\"`
+    ValValNoneDB9F65,
+    /// `$val ? $val : \"Use BitDepth\"`
+    ValValUseBitDepthDC6974,
+    /// `$val ? \"Yes\" : \"No\"`
+    ValYesNo0B6886,
 }
 
 impl ExprId {
     #[must_use]
     pub fn apply(&self, val: f64) -> Option<String> {
         match self {
+            ExprId::E5Val124E69 => {
+                Some(crate::exiftool_tables::exprs::perl_num(((5.0_f64) - (val))))
+            }
+            ExprId::ImageExifToolExifPrintExposureTimeVal6037F3 => {
+                Some(crate::exiftool_tables::exprs::print_exposure_time(val))
+            }
+            ExprId::ImageExifToolExifPrintFNumberVal30CE5C => {
+                Some(crate::exiftool_tables::exprs::print_f_number(val))
+            }
+            ExprId::ImageExifToolGPSToDMSSelfVal15C3C42 => {
+                Some(crate::exiftool_tables::exprs::gps_to_dms(val, None))
+            }
+            ExprId::ImageExifToolGPSToDMSSelfVal1E4009F1 => {
+                Some(crate::exiftool_tables::exprs::gps_to_dms(val, Some('E')))
+            }
+            ExprId::ImageExifToolGPSToDMSSelfVal1N224F39 => {
+                Some(crate::exiftool_tables::exprs::gps_to_dms(val, Some('N')))
+            }
+            ExprId::IntVal0515A83F => Some(crate::exiftool_tables::exprs::perl_int(
+                ((val) + (0.5_f64)).trunc(),
+            )),
+            ExprId::IntVal10000510006E64E7 => Some(crate::exiftool_tables::exprs::perl_num(
+                (((((val) * (1000.0_f64)) + (0.5_f64)).trunc()) / (1000.0_f64)),
+            )),
+            ExprId::IntVal100051005DA1FC => Some(crate::exiftool_tables::exprs::perl_num(
+                (((((val) * (100.0_f64)) + (0.5_f64)).trunc()) / (100.0_f64)),
+            )),
+            ExprId::ReturnFullIfVal099ImageExifToolExifPrint399F0D => Some(if val > 0.99 {
+                "Full".to_string()
+            } else {
+                crate::exiftool_tables::exprs::print_exposure_time(val)
+            }),
+            ExprId::Sprintf0fVal100BFB803 => Some(format!("{:.0}%", ((val) * (100.0_f64)))),
+            ExprId::Sprintf0fValAA8A5C => Some(format!("{:.0}", val)),
             ExprId::Sprintf0fValB74070 => Some(format!("{:.0}", val)),
+            ExprId::Sprintf0x02xValD63744 => Some(format!("0x{:02x}", ((val) as i64 as u64))),
+            ExprId::Sprintf0x2xVal3DFFE7 => Some(format!("0x{:02x}", ((val) as i64 as u64))),
+            ExprId::Sprintf0x4xVal4F789C => Some(format!("0x{:04x}", ((val) as i64 as u64))),
+            ExprId::Sprintf0x4xVal8F8283 => Some(format!("0x{:04x}", ((val) as i64 as u64))),
+            ExprId::Sprintf0x8xControlPanelCPLVal02788B => {
+                Some(format!("0x{:08x} (ControlPanelCPL)", ((val) as i64 as u64)))
+            }
+            ExprId::Sprintf0x8xGameFolderVal6FD200 => {
+                Some(format!("0x{:08x} (GameFolder)", ((val) as i64 as u64)))
+            }
+            ExprId::Sprintf0x8xValE92A9C => Some(format!("0x{:08x}", ((val) as i64 as u64))),
+            ExprId::Sprintf0x8xValF8EB3E => Some(format!("0x{:08x}", ((val) as i64 as u64))),
+            ExprId::Sprintf0xXVal0CF3C7 => Some(format!("0x{:x}", ((val) as i64 as u64))),
+            ExprId::Sprintf1fCVal0EB0FD => Some(format!("{:.1} C", val)),
+            ExprId::Sprintf1fCVal612E5F => Some(format!("{:.1} C", val)),
+            ExprId::Sprintf1fDegVal72F5D3 => Some(format!("{:.1} deg", val)),
+            ExprId::Sprintf1fMVal106DDD2D => Some(format!("{:.1} m", ((val) / (10.0_f64)))),
+            ExprId::Sprintf1fMVal475DA2 => Some(format!("{:.1} m", val)),
             ExprId::Sprintf1fMmVal03B2CA => Some(format!("{:.1} mm", val)),
+            ExprId::Sprintf1fVal10092339C => Some(format!("{:.1} %", ((val) * (100.0_f64)))),
+            ExprId::Sprintf1fVal100FA8A3F => Some(format!("{:.1} %", ((val) * (100.0_f64)))),
             ExprId::Sprintf1fVal2C65CD => Some(format!("{:.1}", val)),
+            ExprId::Sprintf1fVal76416C => Some(format!("{:+.1}", val)),
+            ExprId::Sprintf1fValA23FF8 => Some(format!("{:.1}", val)),
+            ExprId::Sprintf1fxVal75F7E3 => Some(format!("{:.1}x", val)),
+            ExprId::Sprintf2fCValE99431 => Some(format!("{:.2} C", val)),
+            ExprId::Sprintf2fMVal111346 => Some(format!("{:.2} m", val)),
+            ExprId::Sprintf2fMValDE91AC => Some(format!("{:.2} m", val)),
+            ExprId::Sprintf2fVVal0F6F5C => Some(format!("{:.2} V", val)),
+            ExprId::Sprintf2fVValC53075 => Some(format!("{:.2} V", val)),
+            ExprId::Sprintf2fVal100E767A4 => Some(format!("{:.2}%", ((val) * (100.0_f64)))),
+            ExprId::Sprintf2fVal25FBBD => Some(format!("{:.2}", val)),
             ExprId::Sprintf2fVal67A3D4 => Some(format!("{:.2}", val)),
+            ExprId::Sprintf3dValCD66A0 => Some(format!("{}", {
+                let __v = ((val) as i64);
+                if __v < 0 {
+                    format!("-{:03}", __v.unsigned_abs())
+                } else {
+                    format!("{:03}", __v as u64)
+                }
+            })),
+            ExprId::Sprintf3dValEC0DC0 => Some(format!("{}", {
+                let __v = ((val) as i64);
+                if __v < 0 {
+                    format!("-{:03}", __v.unsigned_abs())
+                } else {
+                    format!("{:03}", __v as u64)
+                }
+            })),
+            ExprId::Sprintf3fMVal40374B => Some(format!("{:.3} m", val)),
+            ExprId::Sprintf3fVal4F4146 => Some(format!("{:+.3}", val)),
+            ExprId::Sprintf4dVal069066 => Some(format!("{}", {
+                let __v = ((val) as i64);
+                if __v < 0 {
+                    format!("-{:04}", __v.unsigned_abs())
+                } else {
+                    format!("{:04}", __v as u64)
+                }
+            })),
+            ExprId::Sprintf4dVal57D3F5 => Some(format!("{}", {
+                let __v = ((val) as i64);
+                if __v < 0 {
+                    format!("-{:04}", __v.unsigned_abs())
+                } else {
+                    format!("{:04}", __v as u64)
+                }
+            })),
+            ExprId::Sprintf4fVal8DBB61 => Some(format!("{:.4}", val)),
+            ExprId::Sprintf5fValCD9331 => Some(format!("{:.5}", val)),
+            ExprId::Sprintf6fVal812570 => Some(format!("{:.6}", val)),
+            ExprId::Sprintf8xVal307B5B => Some(format!("{:08x}", ((val) as i64 as u64))),
+            ExprId::SprintfDLevel1fValVal305690B0 => Some(format!(
+                "{:} (level {:.1})",
+                ((val) as i64),
+                ((val) / (30.0_f64))
+            )),
+            ExprId::SprintfDValDD5E9B => Some(format!("{:+}", ((val) as i64))),
+            ExprId::SprintfVer2x3dVal8Val0xffC071B3 => Some(format!(
+                "Ver.{:02x}.{}",
+                (((val) as i64 as u64) >> ((8.0_f64) as i64 as u64)),
+                {
+                    let __v =
+                        (((((val) as i64 as u64) & ((255.0_f64) as i64 as u64)) as f64) as i64);
+                    if __v < 0 {
+                        format!("-{:03}", __v.unsigned_abs())
+                    } else {
+                        format!("{:03}", __v as u64)
+                    }
+                }
+            )),
+            ExprId::SprintfX2xVal8Val0xff6A1FC8 => Some(format!(
+                "{:x}.{:02x}",
+                (((val) as i64 as u64) >> ((8.0_f64) as i64 as u64)),
+                (((val) as i64 as u64) & ((255.0_f64) as i64 as u64))
+            )),
+            ExprId::Val099FullSprintf0fVal10057F6C0 => Some(
+                (if ((val) > (0.99_f64)) {
+                    "Full".to_string()
+                } else {
+                    format!("{:.0}%", ((val) * (100.0_f64)))
+                }),
+            ),
+            ExprId::Val0NoDelaySprintf0fSecValF4232D => Some(
+                (if ((val) == (0.0_f64)) {
+                    "No Delay".to_string()
+                } else {
+                    format!("{:.0} sec", val)
+                }),
+            ),
+            ExprId::Val0Sprintf0fVal693AB4 => Some(
+                (if ((val) > (0.0_f64)) {
+                    format!("{:.0}", val)
+                } else {
+                    "".to_string()
+                }),
+            ),
+            ExprId::Val0ValValFADF1F => Some(
+                (if ((val) > (0.0_f64)) {
+                    format!("+{}", crate::exiftool_tables::exprs::perl_num(val))
+                } else {
+                    crate::exiftool_tables::exprs::perl_num(val)
+                }),
+            ),
+            ExprId::Val0x7fNAVal58D144 => Some(
+                (if ((val) == (127.0_f64)) {
+                    "n/a".to_string()
+                } else {
+                    crate::exiftool_tables::exprs::perl_num(val)
+                }),
+            ),
+            ExprId::Val11SecondSprintf0fSecondsValAD0A27 => Some(
+                (if ((val) == (1.0_f64)) {
+                    "1 Second".to_string()
+                } else {
+                    format!("{:.0} Seconds", val)
+                }),
+            ),
+            ExprId::Val22FAFA => Some(format!(
+                "{} %",
+                crate::exiftool_tables::exprs::perl_num(val)
+            )),
+            ExprId::Val255NAVal3B2FAD => Some(
+                (if ((val) == (255.0_f64)) {
+                    "n/a".to_string()
+                } else {
+                    crate::exiftool_tables::exprs::perl_num(val)
+                }),
+            ),
+            ExprId::Val255StrobeOrMisfireSprintf0fVal1007EA656 => Some(
+                (if ((val) == (255.0_f64)) {
+                    "Strobe or Misfire".to_string()
+                } else {
+                    format!("{:.0}%", ((val) * (100.0_f64)))
+                }),
+            ),
+            ExprId::Val266InfSprintf2fMVal45AF3A => Some(
+                (if ((val) > (266.0_f64)) {
+                    "inf".to_string()
+                } else {
+                    format!("{:.2} m", val)
+                }),
+            ),
+            ExprId::Val42OutOfRangeValDB52FE9F => Some(
+                (if ((val) == (42.0_f64)) {
+                    "Out of range".to_string()
+                } else {
+                    format!("{} dB", crate::exiftool_tables::exprs::perl_num(val))
+                }),
+            ),
+            ExprId::Val43107D1 => {
+                Some(crate::exiftool_tables::exprs::perl_num(((val) + (4.0_f64))))
+            }
             ExprId::Val655345InfValM017F6F => Some(if val > 655.345 {
                 "inf".to_string()
             } else {
-                format!("{} m", val)
+                format!("{} m", crate::exiftool_tables::exprs::perl_num(val))
             }),
-            ExprId::Val81464B => Some(format!("{}%", val)),
-            ExprId::ValC6E725F => Some(format!("{} C", val)),
-            ExprId::ValM5C5F88 => Some(format!("{} m", val)),
-            ExprId::ValMm18ABDF => Some(format!("{} mm", val)),
-            ExprId::ValSAD369C => Some(format!("{} s", val)),
+            ExprId::Val65535ValMInf7F039B => Some(
+                (if ((val) < (65535.0_f64)) {
+                    format!("{} m", crate::exiftool_tables::exprs::perl_num(val))
+                } else {
+                    "inf".to_string()
+                }),
+            ),
+            ExprId::Val81464B => Some(format!("{}%", crate::exiftool_tables::exprs::perl_num(val))),
+            ExprId::Val8NAVal47D064 => Some(
+                (if ((val) == (8.0_f64)) {
+                    "n/a".to_string()
+                } else {
+                    crate::exiftool_tables::exprs::perl_num(val)
+                }),
+            ),
+            ExprId::Val90NAValFF23A0 => Some(
+                (if ((val) == (90.0_f64)) {
+                    "n/a".to_string()
+                } else {
+                    crate::exiftool_tables::exprs::perl_num(val)
+                }),
+            ),
+            ExprId::ValC6E725F => Some(format!(
+                "{} C",
+                crate::exiftool_tables::exprs::perl_num(val)
+            )),
+            ExprId::ValDBm64BBA9 => Some(format!(
+                "{} dBm",
+                crate::exiftool_tables::exprs::perl_num(val)
+            )),
+            ExprId::ValF12B6B2 => Some(format!(
+                "{} F",
+                crate::exiftool_tables::exprs::perl_num(val)
+            )),
+            ExprId::ValFps5FE401 => Some(format!(
+                "{} fps",
+                crate::exiftool_tables::exprs::perl_num(val)
+            )),
+            ExprId::ValHz0BE507 => Some(format!(
+                "{} Hz",
+                crate::exiftool_tables::exprs::perl_num(val)
+            )),
+            ExprId::ValImageExifToolExifPrintExposureTimeVal833680 => Some(
+                (if ((val) != 0.0) {
+                    crate::exiftool_tables::exprs::print_exposure_time(val)
+                } else {
+                    "Bulb".to_string()
+                }),
+            ),
+            ExprId::ValIntVal05NA4D7000 => Some(
+                (if ((val) != 0.0) {
+                    crate::exiftool_tables::exprs::perl_int(((val) + (0.5_f64)).trunc())
+                } else {
+                    "n/a".to_string()
+                }),
+            ),
+            ExprId::ValKF4D6A4 => Some(format!(
+                "{} K",
+                crate::exiftool_tables::exprs::perl_num(val)
+            )),
+            ExprId::ValKbitSA388E2 => Some(format!(
+                "{} kbit/s",
+                crate::exiftool_tables::exprs::perl_num(val)
+            )),
+            ExprId::ValM5C5F88 => Some(format!(
+                "{} m",
+                crate::exiftool_tables::exprs::perl_num(val)
+            )),
+            ExprId::ValMicrometersAA5D0D => Some(format!(
+                "{} micrometers",
+                crate::exiftool_tables::exprs::perl_num(val)
+            )),
+            ExprId::ValMm18ABDF => Some(format!(
+                "{} mm",
+                crate::exiftool_tables::exprs::perl_num(val)
+            )),
+            ExprId::ValMm91C43E => Some(format!(
+                "{}/mm",
+                crate::exiftool_tables::exprs::perl_num(val)
+            )),
+            ExprId::ValModeValOffE2B4A5 => Some(
+                (if ((val) != 0.0) {
+                    format!("Mode {}", crate::exiftool_tables::exprs::perl_num(val))
+                } else {
+                    "Off".to_string()
+                }),
+            ),
+            ExprId::ValMsE7A6DA => Some(format!(
+                "{} ms",
+                crate::exiftool_tables::exprs::perl_num(val)
+            )),
+            ExprId::ValSAD369C => Some(format!(
+                "{} s",
+                crate::exiftool_tables::exprs::perl_num(val)
+            )),
+            ExprId::ValSprintf0fValAutoAD1F9D => Some(
+                (if ((val) != 0.0) {
+                    format!("{:.0}", val)
+                } else {
+                    "Auto".to_string()
+                }),
+            ),
+            ExprId::ValSprintf0x4xValValB81079 => Some(
+                (if ((val) != 0.0) {
+                    format!("0x{:04x}", ((val) as i64 as u64))
+                } else {
+                    crate::exiftool_tables::exprs::perl_num(val)
+                }),
+            ),
+            ExprId::ValSprintf1fSecVal1000Off2184A1 => Some(
+                (if ((val) != 0.0) {
+                    format!("{:.1} sec", ((val) / (1000.0_f64)))
+                } else {
+                    "Off".to_string()
+                }),
+            ),
             ExprId::ValSprintf1fVal00A047C => Some(if val != 0.0 {
                 format!("{:+.1}", val)
             } else {
                 "0".to_string()
             }),
+            ExprId::ValSprintf1fVal0892CDF => Some(
+                (if ((val) != 0.0) {
+                    format!("{:+.1}", val)
+                } else {
+                    crate::exiftool_tables::exprs::perl_num(0.0_f64)
+                }),
+            ),
+            ExprId::ValSprintf2fMValInf535F8A => Some(
+                (if ((val) != 0.0) {
+                    format!("{:.2} m", val)
+                } else {
+                    "inf".to_string()
+                }),
+            ),
+            ExprId::ValSprintf2fVVal5186NA6B12D1 => Some(
+                (if ((val) != 0.0) {
+                    format!("{:.2}V", (((val) * (5.0_f64)) / (186.0_f64)))
+                } else {
+                    "n/a".to_string()
+                }),
+            ),
             ExprId::ValSprintf2fVal000C83C => Some(if val != 0.0 {
                 format!("{:+.2}", val)
             } else {
                 "0".to_string()
             }),
+            ExprId::ValV3D321A => Some(format!(
+                "{} V",
+                crate::exiftool_tables::exprs::perl_num(val)
+            )),
+            ExprId::ValValAll05E31D => Some(
+                (if ((val) != 0.0) {
+                    crate::exiftool_tables::exprs::perl_num(val)
+                } else {
+                    "All".to_string()
+                }),
+            ),
+            ExprId::ValValAutoFAE0CC => Some(
+                (if ((val) != 0.0) {
+                    crate::exiftool_tables::exprs::perl_num(val)
+                } else {
+                    "Auto".to_string()
+                }),
+            ),
+            ExprId::ValValInfiniteB70B6F => Some(
+                (if ((val) != 0.0) {
+                    crate::exiftool_tables::exprs::perl_num(val)
+                } else {
+                    "Infinite".to_string()
+                }),
+            ),
+            ExprId::ValValMInf56B932 => Some(
+                (if ((val) != 0.0) {
+                    format!("{} m", crate::exiftool_tables::exprs::perl_num(val))
+                } else {
+                    "inf".to_string()
+                }),
+            ),
+            ExprId::ValValNoneDB9F65 => Some(
+                (if ((val) != 0.0) {
+                    crate::exiftool_tables::exprs::perl_num(val)
+                } else {
+                    "(none)".to_string()
+                }),
+            ),
+            ExprId::ValValUseBitDepthDC6974 => Some(
+                (if ((val) != 0.0) {
+                    crate::exiftool_tables::exprs::perl_num(val)
+                } else {
+                    "Use BitDepth".to_string()
+                }),
+            ),
+            ExprId::ValYesNo0B6886 => Some(
+                (if ((val) != 0.0) {
+                    "Yes".to_string()
+                } else {
+                    "No".to_string()
+                }),
+            ),
         }
     }
 }
@@ -791,7 +1370,7 @@ pub static BMP_MAIN: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValValUseBitDepthDC6974),
         },
         Field {
             index: 36,
@@ -807,7 +1386,7 @@ pub static BMP_MAIN: BinaryTable = BinaryTable {
                 hook: true,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValValAll05E31D),
         },
         Field {
             index: 40,
@@ -817,7 +1396,7 @@ pub static BMP_MAIN: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x8xValF8EB3E),
         },
         Field {
             index: 44,
@@ -827,7 +1406,7 @@ pub static BMP_MAIN: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x8xValF8EB3E),
         },
         Field {
             index: 48,
@@ -837,7 +1416,7 @@ pub static BMP_MAIN: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x8xValF8EB3E),
         },
         Field {
             index: 52,
@@ -847,7 +1426,7 @@ pub static BMP_MAIN: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x8xValF8EB3E),
         },
         Field {
             index: 56,
@@ -1711,7 +2290,7 @@ pub static CANON_CAMERAINFO1000D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -1806,7 +2385,7 @@ pub static CANON_CAMERAINFO1000D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fxVal75F7E3),
         },
         Field {
             index: 29,
@@ -2647,7 +3226,7 @@ pub static CANON_CAMERAINFO1D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 10,
@@ -3597,7 +4176,7 @@ pub static CANON_CAMERAINFO1DX: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -4507,7 +5086,7 @@ pub static CANON_CAMERAINFO1DMKII: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 9,
@@ -5397,7 +5976,7 @@ pub static CANON_CAMERAINFO1DMKIII: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -5445,7 +6024,7 @@ pub static CANON_CAMERAINFO1DMKIII: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fxVal75F7E3),
         },
         Field {
             index: 29,
@@ -6365,7 +6944,7 @@ pub static CANON_CAMERAINFO1DMKIIN: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 9,
@@ -7205,7 +7784,7 @@ pub static CANON_CAMERAINFO1DMKIV: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -8154,7 +8733,7 @@ pub static CANON_CAMERAINFO40D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -8218,7 +8797,7 @@ pub static CANON_CAMERAINFO40D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fxVal75F7E3),
         },
         Field {
             index: 29,
@@ -9081,7 +9660,7 @@ pub static CANON_CAMERAINFO450D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -9145,7 +9724,7 @@ pub static CANON_CAMERAINFO450D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fxVal75F7E3),
         },
         Field {
             index: 29,
@@ -9992,7 +10571,7 @@ pub static CANON_CAMERAINFO500D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -10974,7 +11553,7 @@ pub static CANON_CAMERAINFO50D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -11956,7 +12535,7 @@ pub static CANON_CAMERAINFO550D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -12908,7 +13487,7 @@ pub static CANON_CAMERAINFO5D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -13586,7 +14165,7 @@ pub static CANON_CAMERAINFO5D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fxVal75F7E3),
         },
         Field {
             index: 39,
@@ -14893,7 +15472,7 @@ pub static CANON_CAMERAINFO5DMKII: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -14998,7 +15577,7 @@ pub static CANON_CAMERAINFO5DMKII: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fxVal75F7E3),
         },
         Field {
             index: 30,
@@ -15938,7 +16517,7 @@ pub static CANON_CAMERAINFO5DMKIII: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -16912,7 +17491,7 @@ pub static CANON_CAMERAINFO600D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -17864,7 +18443,7 @@ pub static CANON_CAMERAINFO60D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -18764,7 +19343,7 @@ pub static CANON_CAMERAINFO650D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -19738,7 +20317,7 @@ pub static CANON_CAMERAINFO6D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -20658,7 +21237,7 @@ pub static CANON_CAMERAINFO70D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -21510,7 +22089,7 @@ pub static CANON_CAMERAINFO750D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -22404,7 +22983,7 @@ pub static CANON_CAMERAINFO7D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -23388,7 +23967,7 @@ pub static CANON_CAMERAINFO80D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -24318,7 +24897,7 @@ pub static CANON_CAMERAINFOPOWERSHOT: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 23,
@@ -24422,7 +25001,7 @@ pub static CANON_CAMERAINFOPOWERSHOT2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 24,
@@ -25076,7 +25655,7 @@ pub static CANON_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 16,
@@ -25854,7 +26433,7 @@ pub static CANON_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValMm91C43E),
         },
         Field {
             index: 26,
@@ -27155,7 +27734,7 @@ pub static CANON_COLORDATA10: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val255StrobeOrMisfireSprintf0fVal1007EA656),
         },
         Field {
             index: 666,
@@ -27165,7 +27744,7 @@ pub static CANON_COLORDATA10: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf2fVVal5186NA6B12D1),
         },
         Field {
             index: 810,
@@ -27673,7 +28252,7 @@ pub static CANON_COLORDATA12: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val255StrobeOrMisfireSprintf0fVal1007EA656),
         },
         Field {
             index: 516,
@@ -27683,7 +28262,7 @@ pub static CANON_COLORDATA12: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf2fVVal5186NA6B12D1),
         },
         Field {
             index: 660,
@@ -28319,7 +28898,7 @@ pub static CANON_COLORDATA3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val255StrobeOrMisfireSprintf0fVal1007EA656),
         },
         Field {
             index: 585,
@@ -28329,7 +28908,7 @@ pub static CANON_COLORDATA3: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf2fVVal5186NA6B12D1),
         },
         Field {
             index: 586,
@@ -28441,7 +29020,7 @@ pub static CANON_COLORDATA4: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val255StrobeOrMisfireSprintf0fVal1007EA656),
         },
         Field {
             index: 620,
@@ -28451,7 +29030,7 @@ pub static CANON_COLORDATA4: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf2fVVal5186NA6B12D1),
         },
         Field {
             index: 640,
@@ -29292,7 +29871,7 @@ pub static CANON_COLORDATA7: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val255StrobeOrMisfireSprintf0fVal1007EA656),
         },
         Field {
             index: 409,
@@ -29302,7 +29881,7 @@ pub static CANON_COLORDATA7: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf2fVVal5186NA6B12D1),
         },
         Field {
             index: 429,
@@ -30760,7 +31339,7 @@ pub static CANON_FILEINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fxVal75F7E3),
         },
         Field {
             index: 19,
@@ -33680,7 +34259,7 @@ pub static CANON_SHOTINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -33765,7 +34344,7 @@ pub static CANON_SHOTINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val8NAVal47D064),
         },
         Field {
             index: 12,
@@ -34478,7 +35057,7 @@ pub static CANONCUSTOM_PERSONALFUNCVALUES: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 5,
@@ -34494,7 +35073,7 @@ pub static CANONCUSTOM_PERSONALFUNCVALUES: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -35084,7 +35663,7 @@ pub static CANONRAW_EXPOSUREINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 2,
@@ -36255,7 +36834,7 @@ pub static CANONVRD_GAMMAINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf3fVal4F4146),
         },
         Field {
             index: 13,
@@ -36271,7 +36850,7 @@ pub static CANONVRD_GAMMAINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf3fVal4F4146),
         },
         Field {
             index: 14,
@@ -36287,7 +36866,7 @@ pub static CANONVRD_GAMMAINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf3fVal4F4146),
         },
         Field {
             index: 15,
@@ -37692,7 +38271,7 @@ pub static CANONVRD_VER2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0fVal100BFB803),
         },
         Field {
             index: 103,
@@ -37708,7 +38287,7 @@ pub static CANONVRD_VER2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0fVal100BFB803),
         },
         Field {
             index: 104,
@@ -37724,7 +38303,7 @@ pub static CANONVRD_VER2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0fVal100BFB803),
         },
         Field {
             index: 105,
@@ -37740,7 +38319,7 @@ pub static CANONVRD_VER2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0fVal100BFB803),
         },
         Field {
             index: 106,
@@ -38390,7 +38969,7 @@ pub static CANONVRD_VER2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0fVal100BFB803),
         },
         Field {
             index: 223,
@@ -39218,7 +39797,7 @@ pub static DJI_THERMALPARAMS2: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 4,
@@ -39228,7 +39807,7 @@ pub static DJI_THERMALPARAMS2: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fMVal475DA2),
         },
         Field {
             index: 8,
@@ -39258,7 +39837,7 @@ pub static DJI_THERMALPARAMS2: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 101,
@@ -39548,7 +40127,7 @@ pub static DPX_MAIN: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf8xVal307B5B),
         },
         Field {
             index: 768,
@@ -40767,7 +41346,7 @@ pub static EXE_MAIN: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x4xVal4F789C),
         },
         Field {
             index: 30,
@@ -40944,7 +41523,7 @@ pub static EXE_PEVERSION: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x4xVal8F8283),
         },
         Field {
             index: 7,
@@ -41252,7 +41831,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fMValDE91AC),
         },
         Field {
             index: 40,
@@ -41268,7 +41847,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 44,
@@ -41284,7 +41863,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 48,
@@ -41300,7 +41879,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 52,
@@ -41326,7 +41905,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fVal10092339C),
         },
         Field {
             index: 88,
@@ -41366,7 +41945,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf6fVal812570),
         },
         Field {
             index: 116,
@@ -41376,7 +41955,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf6fVal812570),
         },
         Field {
             index: 120,
@@ -41386,7 +41965,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf6fVal812570),
         },
         Field {
             index: 124,
@@ -41396,7 +41975,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf6fVal812570),
         },
         Field {
             index: 128,
@@ -41406,7 +41985,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf6fVal812570),
         },
         Field {
             index: 144,
@@ -41422,7 +42001,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 148,
@@ -41438,7 +42017,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 152,
@@ -41454,7 +42033,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 156,
@@ -41470,7 +42049,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 160,
@@ -41486,7 +42065,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 164,
@@ -41502,7 +42081,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 168,
@@ -41518,7 +42097,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 172,
@@ -41534,7 +42113,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 212,
@@ -41614,7 +42193,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fDegVal72F5D3),
         },
         Field {
             index: 492,
@@ -41740,7 +42319,7 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fMVal475DA2),
         },
         Field {
             index: 1124,
@@ -42044,7 +42623,7 @@ pub static FLIR_FPF: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 220,
@@ -42060,7 +42639,7 @@ pub static FLIR_FPF: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 224,
@@ -42140,7 +42719,7 @@ pub static FLIR_FPF: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fMValDE91AC),
         },
         Field {
             index: 488,
@@ -42156,7 +42735,7 @@ pub static FLIR_FPF: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 492,
@@ -42172,7 +42751,7 @@ pub static FLIR_FPF: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 496,
@@ -42182,7 +42761,7 @@ pub static FLIR_FPF: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fVal10092339C),
         },
         Field {
             index: 500,
@@ -42218,7 +42797,7 @@ pub static FLIR_FPF: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 512,
@@ -42234,7 +42813,7 @@ pub static FLIR_FPF: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 516,
@@ -42414,7 +42993,7 @@ pub static FLIR_GPSINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolGPSToDMSSelfVal1N224F39),
         },
         Field {
             index: 24,
@@ -42430,7 +43009,7 @@ pub static FLIR_GPSINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolGPSToDMSSelfVal1E4009F1),
         },
         Field {
             index: 32,
@@ -42446,7 +43025,7 @@ pub static FLIR_GPSINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fMVal111346),
         },
         Field {
             index: 64,
@@ -42462,7 +43041,7 @@ pub static FLIR_GPSINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fVal25FBBD),
         },
         Field {
             index: 68,
@@ -42598,7 +43177,7 @@ pub static FLIR_GPS_UUID: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolGPSToDMSSelfVal1N224F39),
         },
         Field {
             index: 2,
@@ -42608,7 +43187,7 @@ pub static FLIR_GPS_UUID: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolGPSToDMSSelfVal1E4009F1),
         },
         Field {
             index: 3,
@@ -43264,7 +43843,7 @@ pub static FLIR_PARAMS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 2,
@@ -43280,7 +43859,7 @@ pub static FLIR_PARAMS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 3,
@@ -43300,7 +43879,7 @@ pub static FLIR_PARAMS: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fMValDE91AC),
         },
         Field {
             index: 5,
@@ -43310,7 +43889,7 @@ pub static FLIR_PARAMS: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fVal10092339C),
         },
         Field {
             index: 6,
@@ -43336,7 +43915,7 @@ pub static FLIR_PARAMS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 8,
@@ -43380,7 +43959,7 @@ pub static FLIR_PIP: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::SprintfDValDD5E9B),
         },
         Field {
             index: 3,
@@ -43390,7 +43969,7 @@ pub static FLIR_PIP: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::SprintfDValDD5E9B),
         },
         Field {
             index: 4,
@@ -43816,7 +44395,7 @@ pub static FONT_PFM: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::SprintfX2xVal8Val0xff6A1FC8),
         },
         Field {
             index: 6,
@@ -44470,7 +45049,7 @@ pub static FUJIFILM_MOV: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 50,
@@ -44490,7 +45069,7 @@ pub static FUJIFILM_MOV: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal0892CDF),
         },
     ],
 };
@@ -44639,7 +45218,7 @@ pub static GIF_ANIMATION: BinaryTable = BinaryTable {
         count: 1,
         mask: None,
         omitted: Omitted::NONE,
-        print_conv: PrintConv::None,
+        print_conv: PrintConv::Expr(ExprId::ValValInfiniteB70B6F),
     }],
 };
 
@@ -44702,7 +45281,7 @@ pub static GIF_MIDICONTROL: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x4xVal4F789C),
         },
         Field {
             index: 6,
@@ -45046,7 +45625,7 @@ pub static H264_CAMERA1: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val42OutOfRangeValDB52FE9F),
         },
         Field {
             index: 1,
@@ -45259,7 +45838,7 @@ pub static H264_SHUTTER: BinaryTable = BinaryTable {
             hook: false,
             subdirectory: false,
         },
-        print_conv: PrintConv::None,
+        print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
     }],
 };
 
@@ -45304,7 +45883,7 @@ pub static HP_TYPE4: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 20,
@@ -45386,7 +45965,7 @@ pub static HP_TYPE6: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 20,
@@ -48045,7 +48624,7 @@ pub static INFIRAY_MIXMODE: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fVal100FA8A3F),
         },
         Field {
             index: 5,
@@ -48139,7 +48718,7 @@ pub static INFIRAY_OPMODE: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fCValE99431),
         },
     ],
 };
@@ -48163,7 +48742,7 @@ pub static INFIRAY_PICTURE: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fCValE99431),
         },
         Field {
             index: 4,
@@ -48173,7 +48752,7 @@ pub static INFIRAY_PICTURE: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fMVal111346),
         },
         Field {
             index: 8,
@@ -48183,7 +48762,7 @@ pub static INFIRAY_PICTURE: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fVal25FBBD),
         },
         Field {
             index: 12,
@@ -48193,7 +48772,7 @@ pub static INFIRAY_PICTURE: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fVal100FA8A3F),
         },
         Field {
             index: 16,
@@ -48203,7 +48782,7 @@ pub static INFIRAY_PICTURE: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fCValE99431),
         },
         Field {
             index: 32,
@@ -48327,7 +48906,7 @@ pub static INFIRAY_SENSOR: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fVal25FBBD),
         },
         Field {
             index: 324,
@@ -48337,7 +48916,7 @@ pub static INFIRAY_SENSOR: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fVal25FBBD),
         },
         Field {
             index: 384,
@@ -48956,7 +49535,7 @@ pub static JPEG_NITF: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0xXVal0CF3C7),
         },
     ],
 };
@@ -49439,7 +50018,7 @@ pub static KANDAO_GPS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolGPSToDMSSelfVal1N224F39),
         },
         Field {
             index: 12,
@@ -49455,7 +50034,7 @@ pub static KANDAO_GPS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolGPSToDMSSelfVal1E4009F1),
         },
         Field {
             index: 20,
@@ -49505,7 +50084,7 @@ pub static KANDAO_GPSX: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolGPSToDMSSelfVal1N224F39),
         },
         Field {
             index: 20,
@@ -49521,7 +50100,7 @@ pub static KANDAO_GPSX: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolGPSToDMSSelfVal1E4009F1),
         },
         Field {
             index: 28,
@@ -49625,7 +50204,7 @@ pub static KODAK_MOV: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 82,
@@ -49831,7 +50410,7 @@ pub static KODAK_MAIN: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 36,
@@ -49847,7 +50426,7 @@ pub static KODAK_MAIN: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 56,
@@ -49910,7 +50489,7 @@ pub static KODAK_MAIN: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValValAutoFAE0CC),
         },
         Field {
             index: 96,
@@ -49946,7 +50525,7 @@ pub static KODAK_MAIN: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValModeValOffE2B4A5),
         },
         Field {
             index: 102,
@@ -50217,7 +50796,7 @@ pub static KODAK_TYPE3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 60,
@@ -50295,7 +50874,7 @@ pub static KODAK_TYPE5: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 26,
@@ -50423,7 +51002,7 @@ pub static KODAK_TYPE6: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 24,
@@ -50549,7 +51128,7 @@ pub static KODAK_TYPE9: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 20,
@@ -50741,7 +51320,7 @@ pub static KYOCERARAW_MAIN: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 60,
@@ -51510,7 +52089,7 @@ pub static LNK_CONSOLEDATA: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x2xVal3DFFE7),
         },
         Field {
             index: 10,
@@ -51520,7 +52099,7 @@ pub static LNK_CONSOLEDATA: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x2xVal3DFFE7),
         },
         Field {
             index: 12,
@@ -51626,7 +52205,7 @@ pub static LNK_CONSOLEDATA: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValYesNo0B6886),
         },
         Field {
             index: 116,
@@ -51636,7 +52215,7 @@ pub static LNK_CONSOLEDATA: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValYesNo0B6886),
         },
         Field {
             index: 120,
@@ -51646,7 +52225,7 @@ pub static LNK_CONSOLEDATA: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValYesNo0B6886),
         },
         Field {
             index: 124,
@@ -51656,7 +52235,7 @@ pub static LNK_CONSOLEDATA: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValYesNo0B6886),
         },
         Field {
             index: 128,
@@ -51686,7 +52265,7 @@ pub static LNK_CONSOLEDATA: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValYesNo0B6886),
         },
     ],
 };
@@ -51896,7 +52475,7 @@ pub static LNK_CONTROLPANELCPL: BinaryTable = BinaryTable {
         count: 1,
         mask: None,
         omitted: Omitted::NONE,
-        print_conv: PrintConv::None,
+        print_conv: PrintConv::Expr(ExprId::Sprintf0x8xControlPanelCPLVal02788B),
     }],
 };
 
@@ -51975,7 +52554,7 @@ pub static LNK_GAMEFOLDERINFO: BinaryTable = BinaryTable {
         count: 1,
         mask: None,
         omitted: Omitted::NONE,
-        print_conv: PrintConv::None,
+        print_conv: PrintConv::Expr(ExprId::Sprintf0x8xGameFolderVal6FD200),
     }],
 };
 
@@ -56885,7 +57464,7 @@ pub static LNK_MAIN: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValValNoneDB9F65),
         },
         Field {
             index: 60,
@@ -60582,7 +61161,7 @@ pub static MNG_MNGHEADER: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x8xValE92A9C),
         },
     ],
 };
@@ -61394,7 +61973,7 @@ pub static MRC_FEI12: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x8xValE92A9C),
         },
         Field {
             index: 12,
@@ -61826,7 +62405,7 @@ pub static MRC_FEI12: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x8xValE92A9C),
         },
         Field {
             index: 301,
@@ -62290,7 +62869,7 @@ pub static MRC_FEI12: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x8xValE92A9C),
         },
         Field {
             index: 518,
@@ -62642,7 +63221,7 @@ pub static MRC_FEI12: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x8xValE92A9C),
         },
         Field {
             index: 752,
@@ -63817,7 +64396,7 @@ pub static MINOLTA_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::IntVal0515A83F),
         },
         Field {
             index: 9,
@@ -63833,7 +64412,7 @@ pub static MINOLTA_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 10,
@@ -63951,7 +64530,7 @@ pub static MINOLTA_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValValMInf56B932),
         },
         Field {
             index: 20,
@@ -64614,7 +65193,7 @@ pub static MINOLTA_CAMERASETTINGS5D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 54,
@@ -65104,7 +65683,7 @@ pub static MINOLTA_CAMERASETTINGS7D: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 74,
@@ -65256,7 +65835,7 @@ pub static MINOLTA_CAMERASETTINGSA100: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValImageExifToolExifPrintExposureTimeVal833680),
         },
         Field {
             index: 7,
@@ -65272,7 +65851,7 @@ pub static MINOLTA_CAMERASETTINGSA100: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintFNumberVal30CE5C),
         },
         Field {
             index: 8,
@@ -65288,7 +65867,7 @@ pub static MINOLTA_CAMERASETTINGSA100: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValImageExifToolExifPrintExposureTimeVal833680),
         },
         Field {
             index: 9,
@@ -65304,7 +65883,7 @@ pub static MINOLTA_CAMERASETTINGSA100: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintFNumberVal30CE5C),
         },
         Field {
             index: 10,
@@ -66410,7 +66989,7 @@ pub static MINOLTA_MOV1: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 50,
@@ -66490,7 +67069,7 @@ pub static MINOLTA_MOV2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 42,
@@ -67157,7 +67736,7 @@ pub static MINOLTA_WBINFOA100: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValImageExifToolExifPrintExposureTimeVal833680),
         },
         Field {
             index: 18874,
@@ -67173,7 +67752,7 @@ pub static MINOLTA_WBINFOA100: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::IntVal0515A83F),
         },
         Field {
             index: 18875,
@@ -67189,7 +67768,7 @@ pub static MINOLTA_WBINFOA100: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val266InfSprintf2fMVal45AF3A),
         },
         Field {
             index: 18877,
@@ -68138,7 +68717,7 @@ pub static MINOLTARAW_RIF: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValValAutoFAE0CC),
         },
         Field {
             index: 77,
@@ -68170,7 +68749,7 @@ pub static MINOLTARAW_RIF: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValValAutoFAE0CC),
         },
         Field {
             index: 79,
@@ -69123,7 +69702,7 @@ pub static NIKON_AFTUNE: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val255NAVal3B2FAD),
         },
         Field {
             index: 2,
@@ -69133,7 +69712,7 @@ pub static NIKON_AFTUNE: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 3,
@@ -69143,7 +69722,7 @@ pub static NIKON_AFTUNE: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
     ],
 };
@@ -69265,7 +69844,7 @@ pub static NIKON_AUTOCAPTUREINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fMVal106DDD2D),
         },
         Field {
             index: 78,
@@ -69281,7 +69860,7 @@ pub static NIKON_AUTOCAPTUREINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fMVal106DDD2D),
         },
         Field {
             index: 95,
@@ -70430,7 +71009,7 @@ pub static NIKON_DISTORTIONINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf5fValCD9331),
         },
         Field {
             index: 28,
@@ -70440,7 +71019,7 @@ pub static NIKON_DISTORTIONINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf5fValCD9331),
         },
         Field {
             index: 36,
@@ -70450,7 +71029,7 @@ pub static NIKON_DISTORTIONINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf5fValCD9331),
         },
     ],
 };
@@ -70726,7 +71305,7 @@ pub static NIKON_FILEINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf3dValEC0DC0),
         },
         Field {
             index: 4,
@@ -70736,7 +71315,7 @@ pub static NIKON_FILEINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf4dVal57D3F5),
         },
     ],
 };
@@ -70879,7 +71458,7 @@ pub static NIKON_FLASHINFO0100: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValHz0BE507),
         },
         Field {
             index: 13,
@@ -71143,7 +71722,7 @@ pub static NIKON_FLASHINFO0102: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValHz0BE507),
         },
         Field {
             index: 14,
@@ -71435,7 +72014,7 @@ pub static NIKON_FLASHINFO0103: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValHz0BE507),
         },
         Field {
             index: 14,
@@ -71796,7 +72375,7 @@ pub static NIKON_FLASHINFO0106: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValHz0BE507),
         },
         Field {
             index: 14,
@@ -72113,7 +72692,7 @@ pub static NIKON_FLASHINFO0107: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValHz0BE507),
         },
         Field {
             index: 14,
@@ -72405,7 +72984,7 @@ pub static NIKON_FLASHINFO0300: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValHz0BE507),
         },
         Field {
             index: 14,
@@ -72591,7 +73170,7 @@ pub static NIKON_FLASHINFO0300: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
         },
         Field {
             index: 37,
@@ -72951,7 +73530,7 @@ pub static NIKON_ISOINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::IntVal0515A83F),
         },
         Field {
             index: 4,
@@ -73003,7 +73582,7 @@ pub static NIKON_ISOINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::IntVal0515A83F),
         },
         Field {
             index: 10,
@@ -73135,7 +73714,7 @@ pub static NIKON_INTERVALINFOD6: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val11SecondSprintf0fSecondsValAD0A27),
         },
         Field {
             index: 436,
@@ -73331,7 +73910,7 @@ pub static NIKON_LENSDATA00: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fVal25FBBD),
         },
         Field {
             index: 8,
@@ -73471,7 +74050,7 @@ pub static NIKON_LENSDATA01: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x02xValD63744),
         },
         Field {
             index: 9,
@@ -73487,7 +74066,7 @@ pub static NIKON_LENSDATA01: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf2fMValInf535F8A),
         },
         Field {
             index: 10,
@@ -73529,7 +74108,7 @@ pub static NIKON_LENSDATA01: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fVal25FBBD),
         },
         Field {
             index: 13,
@@ -73685,7 +74264,7 @@ pub static NIKON_LENSDATA0204: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x02xValD63744),
         },
         Field {
             index: 10,
@@ -73701,7 +74280,7 @@ pub static NIKON_LENSDATA0204: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf2fMValInf535F8A),
         },
         Field {
             index: 11,
@@ -73743,7 +74322,7 @@ pub static NIKON_LENSDATA0204: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fVal25FBBD),
         },
         Field {
             index: 14,
@@ -74023,7 +74602,7 @@ pub static NIKON_LENSDATA0800: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf2fMValInf535F8A),
         },
         Field {
             index: 12,
@@ -74071,7 +74650,7 @@ pub static NIKON_LENSDATA0800: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fVal25FBBD),
         },
         Field {
             index: 15,
@@ -74511,7 +75090,7 @@ pub static NIKON_MOV: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 42,
@@ -75050,7 +75629,7 @@ pub static NIKON_MENUSETTINGSZ6III: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val11SecondSprintf0fSecondsValAD0A27),
         },
         Field {
             index: 548,
@@ -75416,7 +75995,7 @@ pub static NIKON_MENUSETTINGSZ6III: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0NoDelaySprintf0fSecValF4232D),
         },
         Field {
             index: 910,
@@ -75432,7 +76011,7 @@ pub static NIKON_MENUSETTINGSZ6III: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0NoDelaySprintf0fSecValF4232D),
         },
         Field {
             index: 1002,
@@ -75685,7 +76264,7 @@ pub static NIKON_MENUSETTINGSZ7II: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val11SecondSprintf0fSecondsValAD0A27),
         },
         Field {
             index: 232,
@@ -75998,7 +76577,7 @@ pub static NIKON_MENUSETTINGSZ8: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val11SecondSprintf0fSecondsValAD0A27),
         },
         Field {
             index: 286,
@@ -77867,7 +78446,7 @@ pub static NIKON_MENUSETTINGSZ9: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val11SecondSprintf0fSecondsValAD0A27),
         },
         Field {
             index: 274,
@@ -78437,7 +79016,7 @@ pub static NIKON_MENUSETTINGSZ9V3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val11SecondSprintf0fSecondsValAD0A27),
         },
         Field {
             index: 290,
@@ -79038,7 +79617,7 @@ pub static NIKON_MENUSETTINGSZ9V4: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val11SecondSprintf0fSecondsValAD0A27),
         },
         Field {
             index: 290,
@@ -81571,7 +82150,7 @@ pub static NIKON_PICTURECONTROL: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0x7fNAVal58D144),
         },
     ],
 };
@@ -82209,7 +82788,7 @@ pub static NIKON_ROTATIONINFOD500: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0Sprintf0fVal693AB4),
         },
         Field {
             index: 36,
@@ -82225,7 +82804,7 @@ pub static NIKON_ROTATIONINFOD500: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0Sprintf0fVal693AB4),
         },
         Field {
             index: 1330,
@@ -82833,7 +83412,7 @@ pub static NIKON_VIGNETTEINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf5fValCD9331),
         },
         Field {
             index: 52,
@@ -82843,7 +83422,7 @@ pub static NIKON_VIGNETTEINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf5fValCD9331),
         },
         Field {
             index: 68,
@@ -82853,7 +83432,7 @@ pub static NIKON_VIGNETTEINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf5fValCD9331),
         },
     ],
 };
@@ -83263,7 +83842,7 @@ pub static NIKONCAPTURE_EXPOSURE: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf4fVal8DBB61),
         },
         Field {
             index: 36,
@@ -84517,7 +85096,7 @@ pub static NIKONCUSTOM_SETTINGSD3: BinaryTable = BinaryTable {
                 shift: 0,
             }),
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValFps5FE401),
         },
         Field {
             index: 10,
@@ -85548,7 +86127,7 @@ pub static NIKONCUSTOM_SETTINGSD4: BinaryTable = BinaryTable {
                 shift: 0,
             }),
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValFps5FE401),
         },
         Field {
             index: 12,
@@ -86957,7 +87536,7 @@ pub static NIKONCUSTOM_SETTINGSD40: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ReturnFullIfVal099ImageExifToolExifPrint399F0D),
         },
         Field {
             index: 9,
@@ -86973,7 +87552,7 @@ pub static NIKONCUSTOM_SETTINGSD40: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fVal76416C),
         },
         Field {
             index: 10,
@@ -87394,7 +87973,7 @@ pub static NIKONCUSTOM_SETTINGSD5: BinaryTable = BinaryTable {
                 shift: 0,
             }),
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValFps5FE401),
         },
         Field {
             index: 12,
@@ -89074,7 +89653,7 @@ pub static NIKONCUSTOM_SETTINGSD500: BinaryTable = BinaryTable {
                 shift: 0,
             }),
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValFps5FE401),
         },
         Field {
             index: 12,
@@ -90671,7 +91250,7 @@ pub static NIKONCUSTOM_SETTINGSD5000: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ReturnFullIfVal099ImageExifToolExifPrint399F0D),
         },
         Field {
             index: 32,
@@ -91057,7 +91636,7 @@ pub static NIKONCUSTOM_SETTINGSD5100: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ReturnFullIfVal099ImageExifToolExifPrint399F0D),
         },
     ],
 };
@@ -91469,7 +92048,7 @@ pub static NIKONCUSTOM_SETTINGSD5200: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ReturnFullIfVal099ImageExifToolExifPrint399F0D),
         },
     ],
 };
@@ -92415,7 +92994,7 @@ pub static NIKONCUSTOM_SETTINGSD700: BinaryTable = BinaryTable {
                 shift: 0,
             }),
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValFps5FE401),
         },
         Field {
             index: 12,
@@ -92561,7 +93140,7 @@ pub static NIKONCUSTOM_SETTINGSD700: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ReturnFullIfVal099ImageExifToolExifPrint399F0D),
         },
         Field {
             index: 17,
@@ -92580,7 +93159,7 @@ pub static NIKONCUSTOM_SETTINGSD700: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 17,
@@ -92618,7 +93197,7 @@ pub static NIKONCUSTOM_SETTINGSD700: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValHz0BE507),
         },
         Field {
             index: 18,
@@ -93473,7 +94052,7 @@ pub static NIKONCUSTOM_SETTINGSD7000: BinaryTable = BinaryTable {
                 shift: 0,
             }),
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValFps5FE401),
         },
         Field {
             index: 11,
@@ -93956,7 +94535,7 @@ pub static NIKONCUSTOM_SETTINGSD7000: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ReturnFullIfVal099ImageExifToolExifPrint399F0D),
         },
         Field {
             index: 24,
@@ -93975,7 +94554,7 @@ pub static NIKONCUSTOM_SETTINGSD7000: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 24,
@@ -94013,7 +94592,7 @@ pub static NIKONCUSTOM_SETTINGSD7000: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValHz0BE507),
         },
         Field {
             index: 26,
@@ -94584,7 +95163,7 @@ pub static NIKONCUSTOM_SETTINGSD80: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 7,
@@ -94647,7 +95226,7 @@ pub static NIKONCUSTOM_SETTINGSD80: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ReturnFullIfVal099ImageExifToolExifPrint399F0D),
         },
         Field {
             index: 9,
@@ -94666,7 +95245,7 @@ pub static NIKONCUSTOM_SETTINGSD80: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 9,
@@ -94704,7 +95283,7 @@ pub static NIKONCUSTOM_SETTINGSD80: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValHz0BE507),
         },
         Field {
             index: 10,
@@ -94810,7 +95389,7 @@ pub static NIKONCUSTOM_SETTINGSD80: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ReturnFullIfVal099ImageExifToolExifPrint399F0D),
         },
         Field {
             index: 13,
@@ -94848,7 +95427,7 @@ pub static NIKONCUSTOM_SETTINGSD80: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ReturnFullIfVal099ImageExifToolExifPrint399F0D),
         },
         Field {
             index: 14,
@@ -94886,7 +95465,7 @@ pub static NIKONCUSTOM_SETTINGSD80: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ReturnFullIfVal099ImageExifToolExifPrint399F0D),
         },
         Field {
             index: 15,
@@ -95098,7 +95677,7 @@ pub static NIKONCUSTOM_SETTINGSD800: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ReturnFullIfVal099ImageExifToolExifPrint399F0D),
         },
         Field {
             index: 24,
@@ -95117,7 +95696,7 @@ pub static NIKONCUSTOM_SETTINGSD800: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 24,
@@ -95155,7 +95734,7 @@ pub static NIKONCUSTOM_SETTINGSD800: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValHz0BE507),
         },
         Field {
             index: 25,
@@ -95206,7 +95785,7 @@ pub static NIKONCUSTOM_SETTINGSD800: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ReturnFullIfVal099ImageExifToolExifPrint399F0D),
         },
         Field {
             index: 28,
@@ -95243,7 +95822,7 @@ pub static NIKONCUSTOM_SETTINGSD800: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ReturnFullIfVal099ImageExifToolExifPrint399F0D),
         },
         Field {
             index: 29,
@@ -95280,7 +95859,7 @@ pub static NIKONCUSTOM_SETTINGSD800: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ReturnFullIfVal099ImageExifToolExifPrint399F0D),
         },
         Field {
             index: 30,
@@ -95894,7 +96473,7 @@ pub static NIKONCUSTOM_SETTINGSD810: BinaryTable = BinaryTable {
                 shift: 0,
             }),
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValFps5FE401),
         },
         Field {
             index: 12,
@@ -97233,7 +97812,7 @@ pub static NIKONCUSTOM_SETTINGSD850: BinaryTable = BinaryTable {
                 shift: 0,
             }),
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValFps5FE401),
         },
         Field {
             index: 12,
@@ -98838,7 +99417,7 @@ pub static NIKONCUSTOM_SETTINGSD90: BinaryTable = BinaryTable {
                 shift: 0,
             }),
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValFps5FE401),
         },
         Field {
             index: 11,
@@ -99181,7 +99760,7 @@ pub static NIKONCUSTOM_SETTINGSD90: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ReturnFullIfVal099ImageExifToolExifPrint399F0D),
         },
         Field {
             index: 25,
@@ -99200,7 +99779,7 @@ pub static NIKONCUSTOM_SETTINGSD90: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 25,
@@ -99238,7 +99817,7 @@ pub static NIKONCUSTOM_SETTINGSD90: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValHz0BE507),
         },
         Field {
             index: 31,
@@ -99693,7 +100272,7 @@ pub static NIKONCUSTOM_SETTINGSZ6III: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValFps5FE401),
         },
         Field {
             index: 65,
@@ -101387,7 +101966,7 @@ pub static NIKONCUSTOM_SETTINGSZ8: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValFps5FE401),
         },
         Field {
             index: 61,
@@ -102890,7 +103469,7 @@ pub static NIKONCUSTOM_SETTINGSZ8: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValFps5FE401),
         },
         Field {
             index: 281,
@@ -103332,7 +103911,7 @@ pub static NIKONCUSTOM_SETTINGSZ8: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf1fSecVal1000Off2184A1),
         },
     ],
 };
@@ -103684,7 +104263,7 @@ pub static NIKONCUSTOM_SETTINGSZ9: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValFps5FE401),
         },
         Field {
             index: 61,
@@ -105187,7 +105766,7 @@ pub static NIKONCUSTOM_SETTINGSZ9: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValFps5FE401),
         },
         Field {
             index: 277,
@@ -106065,7 +106644,7 @@ pub static NIKONCUSTOM_SETTINGSZ9V4: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValFps5FE401),
         },
         Field {
             index: 61,
@@ -107568,7 +108147,7 @@ pub static NIKONCUSTOM_SETTINGSZ9V4: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValFps5FE401),
         },
         Field {
             index: 301,
@@ -108160,7 +108739,7 @@ pub static NINTENDO_CAMERAINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fVal25FBBD),
         },
         Field {
             index: 48,
@@ -108589,7 +109168,7 @@ pub static OLYMPUS_AVI: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintFNumberVal30CE5C),
         },
         Field {
             index: 131,
@@ -109055,7 +109634,7 @@ pub static OLYMPUS_MOV1: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintFNumberVal30CE5C),
         },
         Field {
             index: 50,
@@ -109125,7 +109704,7 @@ pub static OLYMPUS_MOV2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 58,
@@ -109135,7 +109714,7 @@ pub static OLYMPUS_MOV2: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintFNumberVal30CE5C),
         },
         Field {
             index: 66,
@@ -109219,7 +109798,7 @@ pub static OLYMPUS_MP4: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintFNumberVal30CE5C),
         },
         Field {
             index: 48,
@@ -109669,7 +110248,7 @@ pub static OLYMPUS_OLYM: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintFNumberVal30CE5C),
         },
         Field {
             index: 127,
@@ -109860,7 +110439,7 @@ pub static OLYMPUS_WAV: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf4dVal57D3F5),
         },
         Field {
             index: 38,
@@ -110954,7 +111533,7 @@ pub static PGF_MAIN: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x2xVal3DFFE7),
         },
         Field {
             index: 8,
@@ -112300,7 +112879,7 @@ pub static PANASONIC_FOCUSINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val65535ValMInf7F039B),
         },
         Field {
             index: 1,
@@ -113918,7 +114497,7 @@ pub static PARROT_V1: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 24,
@@ -113938,7 +114517,7 @@ pub static PARROT_V1: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValDBm64BBA9),
         },
         Field {
             index: 27,
@@ -113948,7 +114527,7 @@ pub static PARROT_V1: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val22FAFA),
         },
         Field {
             index: 28,
@@ -113964,7 +114543,7 @@ pub static PARROT_V1: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolGPSToDMSSelfVal1N224F39),
         },
         Field {
             index: 32,
@@ -113980,7 +114559,7 @@ pub static PARROT_V1: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolGPSToDMSSelfVal1E4009F1),
         },
         Field {
             index: 36,
@@ -113999,7 +114578,7 @@ pub static PARROT_V1: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf3fMVal40374B),
         },
         Field {
             index: 36,
@@ -114028,7 +114607,7 @@ pub static PARROT_V1: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf3fMVal40374B),
         },
         Field {
             index: 44,
@@ -114186,7 +114765,7 @@ pub static PARROT_V2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf3fMVal40374B),
         },
         Field {
             index: 8,
@@ -114202,7 +114781,7 @@ pub static PARROT_V2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolGPSToDMSSelfVal1N224F39),
         },
         Field {
             index: 12,
@@ -114218,7 +114797,7 @@ pub static PARROT_V2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolGPSToDMSSelfVal1E4009F1),
         },
         Field {
             index: 16,
@@ -114237,7 +114816,7 @@ pub static PARROT_V2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf3fMVal40374B),
         },
         Field {
             index: 16,
@@ -114394,7 +114973,7 @@ pub static PARROT_V2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 50,
@@ -114483,7 +115062,7 @@ pub static PARROT_V2: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValDBm64BBA9),
         },
         Field {
             index: 55,
@@ -114493,7 +115072,7 @@ pub static PARROT_V2: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val22FAFA),
         },
     ],
 };
@@ -114523,7 +115102,7 @@ pub static PARROT_V3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf3fMVal40374B),
         },
         Field {
             index: 8,
@@ -114539,7 +115118,7 @@ pub static PARROT_V3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolGPSToDMSSelfVal1N224F39),
         },
         Field {
             index: 12,
@@ -114555,7 +115134,7 @@ pub static PARROT_V3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolGPSToDMSSelfVal1E4009F1),
         },
         Field {
             index: 16,
@@ -114574,7 +115153,7 @@ pub static PARROT_V3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf3fMVal40374B),
         },
         Field {
             index: 16,
@@ -114715,7 +115294,7 @@ pub static PARROT_V3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 54,
@@ -114786,7 +115365,7 @@ pub static PARROT_V3: BinaryTable = BinaryTable {
                 shift: 8,
             }),
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValKbitSA388E2),
         },
         Field {
             index: 64,
@@ -114809,7 +115388,7 @@ pub static PARROT_V3: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValDBm64BBA9),
         },
         Field {
             index: 69,
@@ -114819,7 +115398,7 @@ pub static PARROT_V3: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val22FAFA),
         },
         Field {
             index: 70,
@@ -114918,7 +115497,7 @@ pub static PENTAX_AEINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 1,
@@ -114950,7 +115529,7 @@ pub static PENTAX_AEINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::IntVal0515A83F),
         },
         Field {
             index: 3,
@@ -114998,7 +115577,7 @@ pub static PENTAX_AEINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 6,
@@ -115065,7 +115644,7 @@ pub static PENTAX_AEINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val255NAVal3B2FAD),
         },
         Field {
             index: 9,
@@ -115187,7 +115766,7 @@ pub static PENTAX_AEINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal0892CDF),
         },
         Field {
             index: 21,
@@ -115197,7 +115776,7 @@ pub static PENTAX_AEINFO: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val90NAValFF23A0),
         },
     ],
 };
@@ -115227,7 +115806,7 @@ pub static PENTAX_AEINFO2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 3,
@@ -115259,7 +115838,7 @@ pub static PENTAX_AEINFO2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::IntVal0515A83F),
         },
         Field {
             index: 5,
@@ -115317,7 +115896,7 @@ pub static PENTAX_AEINFO2: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val255NAVal3B2FAD),
         },
         Field {
             index: 15,
@@ -115415,7 +115994,7 @@ pub static PENTAX_AEINFO2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
     ],
 };
@@ -115445,7 +116024,7 @@ pub static PENTAX_AEINFO3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 17,
@@ -115477,7 +116056,7 @@ pub static PENTAX_AEINFO3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::IntVal0515A83F),
         },
         Field {
             index: 28,
@@ -115541,7 +116120,7 @@ pub static PENTAX_AEINFO3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
     ],
 };
@@ -115591,7 +116170,7 @@ pub static PENTAX_AFINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValMsE7A6DA),
         },
         Field {
             index: 11,
@@ -115774,7 +116353,7 @@ pub static PENTAX_AFINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::E5Val124E69),
         },
         Field {
             index: 2400,
@@ -116041,7 +116620,7 @@ pub static PENTAX_BATTERYINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fVVal0F6F5C),
         },
         Field {
             index: 8,
@@ -116057,7 +116636,7 @@ pub static PENTAX_BATTERYINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fVVal0F6F5C),
         },
         Field {
             index: 16,
@@ -116112,7 +116691,7 @@ pub static PENTAX_BATTERYINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fVVal0F6F5C),
         },
     ],
 };
@@ -116901,7 +117480,7 @@ pub static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 19,
@@ -116949,7 +117528,7 @@ pub static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal0892CDF),
         },
     ],
 };
@@ -120177,7 +120756,7 @@ pub static PENTAX_FLASHINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValIntVal05NA4D7000),
         },
         Field {
             index: 25,
@@ -120812,7 +121391,7 @@ pub static PENTAX_LENSDATA: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fValA23FF8),
         },
         Field {
             index: 10,
@@ -120831,7 +121410,7 @@ pub static PENTAX_LENSDATA: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0fValAA8A5C),
         },
         Field {
             index: 12,
@@ -120866,7 +121445,7 @@ pub static PENTAX_LENSDATA: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fValA23FF8),
         },
     ],
 };
@@ -123540,7 +124119,7 @@ pub static PENTAX_MOV: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 42,
@@ -123560,7 +124139,7 @@ pub static PENTAX_MOV: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal0892CDF),
         },
         Field {
             index: 68,
@@ -123647,7 +124226,7 @@ pub static PENTAX_PENT: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 60,
@@ -123667,7 +124246,7 @@ pub static PENTAX_PENT: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal0892CDF),
         },
         Field {
             index: 84,
@@ -123755,7 +124334,7 @@ pub static PENTAX_PENT: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolGPSToDMSSelfVal15C3C42),
         },
         Field {
             index: 233,
@@ -123787,7 +124366,7 @@ pub static PENTAX_PENT: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolGPSToDMSSelfVal15C3C42),
         },
         Field {
             index: 259,
@@ -124168,7 +124747,7 @@ pub static PENTAX_TEMPINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal612E5F),
         },
         Field {
             index: 14,
@@ -124184,7 +124763,7 @@ pub static PENTAX_TEMPINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal612E5F),
         },
         Field {
             index: 20,
@@ -124232,7 +124811,7 @@ pub static PENTAX_TEMPINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal612E5F),
         },
     ],
 };
@@ -124797,7 +125376,7 @@ pub static PHOTOCD_MAIN: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValMicrometersAA5D0D),
         },
         Field {
             index: 112,
@@ -125371,7 +125950,7 @@ pub static PHOTOSHOP_JPEG_QUALITY: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val43107D1),
         },
         Field {
             index: 1,
@@ -125507,7 +126086,7 @@ pub static PHOTOSHOP_RESOLUTION: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::IntVal100051005DA1FC),
         },
         Field {
             index: 2,
@@ -125533,7 +126112,7 @@ pub static PHOTOSHOP_RESOLUTION: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::IntVal100051005DA1FC),
         },
         Field {
             index: 6,
@@ -127591,7 +128170,7 @@ pub static QUICKTIME_HEVCCONFIG: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::SprintfDLevel1fValVal305690B0),
         },
         Field {
             index: 13,
@@ -128152,7 +128731,7 @@ pub static QUICKTIME_MOVIEHEADER: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fVal100E767A4),
         },
         Field {
             index: 18,
@@ -128620,7 +129199,7 @@ pub static QUICKTIME_TRACKHEADER: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fVal100E767A4),
         },
         Field {
             index: 19,
@@ -129116,7 +129695,7 @@ pub static RIFF_AVIHEADER: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::IntVal10000510006E64E7),
         },
         Field {
             index: 1,
@@ -130075,7 +130654,7 @@ pub static RIFF_USERTEXT: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolGPSToDMSSelfVal1N224F39),
         },
         Field {
             index: 64,
@@ -130091,7 +130670,7 @@ pub static RIFF_USERTEXT: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolGPSToDMSSelfVal1E4009F1),
         },
         Field {
             index: 68,
@@ -130330,7 +130909,7 @@ pub static RECONYX_HYPERFIRE: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x4xVal4F789C),
         },
         Field {
             index: 1,
@@ -130442,7 +131021,7 @@ pub static RECONYX_HYPERFIRE: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValF12B6B2),
         },
         Field {
             index: 20,
@@ -130528,7 +131107,7 @@ pub static RECONYX_HYPERFIRE: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValV3D321A),
         },
         Field {
             index: 43,
@@ -130723,7 +131302,7 @@ pub static RECONYX_HYPERFIRE2: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValF12B6B2),
         },
         Field {
             index: 80,
@@ -130999,7 +131578,7 @@ pub static RECONYX_HYPERFIRE4K: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValF12B6B2),
         },
         Field {
             index: 58,
@@ -131426,7 +132005,7 @@ pub static RECONYX_MICROFIRE: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValF12B6B2),
         },
         Field {
             index: 96,
@@ -131732,7 +132311,7 @@ pub static RECONYX_ULTRAFIRE: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValF12B6B2),
         },
         Field {
             index: 70,
@@ -131768,7 +132347,7 @@ pub static RECONYX_ULTRAFIRE: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValV3D321A),
         },
         Field {
             index: 75,
@@ -131902,7 +132481,7 @@ pub static RED_RED2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::IntVal10000510006E64E7),
         },
     ],
 };
@@ -132428,7 +133007,7 @@ pub static SAMSUNG_MP4: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 50,
@@ -132448,7 +133027,7 @@ pub static SAMSUNG_MP4: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal0892CDF),
         },
         Field {
             index: 106,
@@ -132920,7 +133499,7 @@ pub static SANYO_MOV: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 42,
@@ -133039,7 +133618,7 @@ pub static SANYO_MP4: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal0892CDF),
         },
         Field {
             index: 106,
@@ -135811,7 +136390,7 @@ pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValImageExifToolExifPrintExposureTimeVal833680),
         },
         Field {
             index: 1,
@@ -135827,7 +136406,7 @@ pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintFNumberVal30CE5C),
         },
         Field {
             index: 2,
@@ -135934,7 +136513,7 @@ pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValKF4D6A4),
         },
         Field {
             index: 8,
@@ -135950,7 +136529,7 @@ pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 12,
@@ -135966,7 +136545,7 @@ pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValKF4D6A4),
         },
         Field {
             index: 13,
@@ -135982,7 +136561,7 @@ pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 15,
@@ -136114,7 +136693,7 @@ pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf0fValAutoAD1F9D),
         },
         Field {
             index: 24,
@@ -136194,7 +136773,7 @@ pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 29,
@@ -136210,7 +136789,7 @@ pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 30,
@@ -136226,7 +136805,7 @@ pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 31,
@@ -136242,7 +136821,7 @@ pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 34,
@@ -136258,7 +136837,7 @@ pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 35,
@@ -136370,7 +136949,7 @@ pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValImageExifToolExifPrintExposureTimeVal833680),
         },
         Field {
             index: 48,
@@ -136386,7 +136965,7 @@ pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintFNumberVal30CE5C),
         },
         Field {
             index: 60,
@@ -136603,7 +137182,7 @@ pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
                 shift: 0,
             }),
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf3dValCD66A0),
         },
         Field {
             index: 155,
@@ -136616,7 +137195,7 @@ pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
                 shift: 0,
             }),
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf4dVal069066),
         },
     ],
 };
@@ -136646,7 +137225,7 @@ pub static SONY_CAMERASETTINGS2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValImageExifToolExifPrintExposureTimeVal833680),
         },
         Field {
             index: 1,
@@ -136662,7 +137241,7 @@ pub static SONY_CAMERASETTINGS2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintFNumberVal30CE5C),
         },
         Field {
             index: 2,
@@ -136742,7 +137321,7 @@ pub static SONY_CAMERASETTINGS2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValKF4D6A4),
         },
         Field {
             index: 7,
@@ -136758,7 +137337,7 @@ pub static SONY_CAMERASETTINGS2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 8,
@@ -136784,7 +137363,7 @@ pub static SONY_CAMERASETTINGS2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValKF4D6A4),
         },
         Field {
             index: 12,
@@ -136800,7 +137379,7 @@ pub static SONY_CAMERASETTINGS2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 14,
@@ -136907,7 +137486,7 @@ pub static SONY_CAMERASETTINGS2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf0fValAutoAD1F9D),
         },
         Field {
             index: 22,
@@ -136966,7 +137545,7 @@ pub static SONY_CAMERASETTINGS2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 26,
@@ -136982,7 +137561,7 @@ pub static SONY_CAMERASETTINGS2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 27,
@@ -136998,7 +137577,7 @@ pub static SONY_CAMERASETTINGS2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 31,
@@ -137062,7 +137641,7 @@ pub static SONY_CAMERASETTINGS2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValImageExifToolExifPrintExposureTimeVal833680),
         },
         Field {
             index: 41,
@@ -137078,7 +137657,7 @@ pub static SONY_CAMERASETTINGS2: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintFNumberVal30CE5C),
         },
         Field {
             index: 60,
@@ -137318,7 +137897,7 @@ pub static SONY_CAMERASETTINGS3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValImageExifToolExifPrintExposureTimeVal833680),
         },
         Field {
             index: 1,
@@ -137334,7 +137913,7 @@ pub static SONY_CAMERASETTINGS3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintFNumberVal30CE5C),
         },
         Field {
             index: 2,
@@ -137560,7 +138139,7 @@ pub static SONY_CAMERASETTINGS3: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 17,
@@ -137570,7 +138149,7 @@ pub static SONY_CAMERASETTINGS3: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 18,
@@ -137580,7 +138159,7 @@ pub static SONY_CAMERASETTINGS3: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 22,
@@ -137658,7 +138237,7 @@ pub static SONY_CAMERASETTINGS3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValKF4D6A4),
         },
         Field {
             index: 24,
@@ -137668,7 +138247,7 @@ pub static SONY_CAMERASETTINGS3: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 25,
@@ -138139,7 +138718,7 @@ pub static SONY_CAMERASETTINGS3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf3dValCD66A0),
         },
         Field {
             index: 276,
@@ -138158,7 +138737,7 @@ pub static SONY_CAMERASETTINGS3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf4dVal069066),
         },
         Field {
             index: 512,
@@ -138330,7 +138909,7 @@ pub static SONY_CAMERASETTINGS3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf4dVal069066),
         },
         Field {
             index: 790,
@@ -138349,7 +138928,7 @@ pub static SONY_CAMERASETTINGS3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf3dValCD66A0),
         },
         Field {
             index: 1008,
@@ -138365,7 +138944,7 @@ pub static SONY_CAMERASETTINGS3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::SprintfX2xVal8Val0xff6A1FC8),
         },
         Field {
             index: 1011,
@@ -138381,7 +138960,7 @@ pub static SONY_CAMERASETTINGS3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::SprintfVer2x3dVal8Val0xffC071B3),
         },
         Field {
             index: 1015,
@@ -138786,7 +139365,7 @@ pub static SONY_CAMERASETTINGS3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf4dVal069066),
         },
         Field {
             index: 1026,
@@ -138805,7 +139384,7 @@ pub static SONY_CAMERASETTINGS3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf3dValCD66A0),
         },
     ],
 };
@@ -138835,7 +139414,7 @@ pub static SONY_EXTRAINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 12,
@@ -138919,7 +139498,7 @@ pub static SONY_EXTRAINFO3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal0EB0FD),
         },
         Field {
             index: 4,
@@ -138945,7 +139524,7 @@ pub static SONY_EXTRAINFO3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fVValC53075),
         },
         Field {
             index: 8,
@@ -138961,7 +139540,7 @@ pub static SONY_EXTRAINFO3: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fVValC53075),
         },
         Field {
             index: 17,
@@ -139866,7 +140445,7 @@ pub static SONY_FOCUSINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf0fValAutoAD1F9D),
         },
         Field {
             index: 111,
@@ -139882,7 +140461,7 @@ pub static SONY_FOCUSINFO: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf0fValAutoAD1F9D),
         },
         Field {
             index: 119,
@@ -140735,7 +141314,7 @@ pub static SONY_MORESETTINGS: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 9,
@@ -140745,7 +141324,7 @@ pub static SONY_MORESETTINGS: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 10,
@@ -140755,7 +141334,7 @@ pub static SONY_MORESETTINGS: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 13,
@@ -140833,7 +141412,7 @@ pub static SONY_MORESETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValKF4D6A4),
         },
         Field {
             index: 15,
@@ -140843,7 +141422,7 @@ pub static SONY_MORESETTINGS: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
         Field {
             index: 16,
@@ -140998,7 +141577,7 @@ pub static SONY_MORESETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintFNumberVal30CE5C),
         },
         Field {
             index: 36,
@@ -141030,7 +141609,7 @@ pub static SONY_MORESETTINGS: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValImageExifToolExifPrintExposureTimeVal833680),
         },
         Field {
             index: 40,
@@ -141345,7 +141924,7 @@ pub static SONY_PMP: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
         Field {
             index: 106,
@@ -142173,7 +142752,7 @@ pub static THEORA_IDENTIFICATION: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::IntVal10000510006E64E7),
         },
         Field {
             index: 23,
@@ -142189,7 +142768,7 @@ pub static THEORA_IDENTIFICATION: BinaryTable = BinaryTable {
                 hook: false,
                 subdirectory: false,
             },
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::IntVal10000510006E64E7),
         },
         Field {
             index: 29,
@@ -142589,7 +143168,7 @@ pub static ZIP_MAIN: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::ValSprintf0x4xValValB81079),
         },
         Field {
             index: 4,
@@ -142644,7 +143223,7 @@ pub static ZIP_MAIN: BinaryTable = BinaryTable {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
-            print_conv: PrintConv::None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf0x8xValF8EB3E),
         },
         Field {
             index: 9,
