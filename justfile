@@ -1208,6 +1208,25 @@ regen-tables-all:
 regen-tables-tier2:
     tools/exiftool-tables/regen-all.sh --tier2-only
 
+# Tag-machinery overhaul Step 17 (R8): bump the pinned ExifTool release.
+# write pin -> fetch/capability-probe -> snapshot the pre-bump dump JSON ->
+# regen ALL tiers -> verify -> triage_bump.py classifies every JSON-to-JSON
+# delta AUTO/EXPR/COND/HAND -> conformance double-run with floors -> gate
+# check (zero group-qualified VALUE regressions; MISSING growth <= the
+# EXPR+COND+HAND count). Does not commit anything -- review the reports
+# under --report-dir (default target/bump-report), re-baseline any ratchet
+# that legitimately moved, then commit tables + reports together.
+#
+# `--dry-run` runs the identical pipeline and then reverts .exiftool-version
+# and every generated file, asserting the working tree ends up clean -- the
+# way to exercise the machinery (e.g. against a past, already-published
+# release delta via `--from`) without moving the repo's actual pin. See
+# tools/exiftool-tables/bump-exiftool.sh's header for the full flag set
+# (--from, --report-dir, --corpus, --min-files, --min-tags,
+# --skip-conformance).
+bump-exiftool version *args:
+    tools/exiftool-tables/bump-exiftool.sh {{version}} {{args}}
+
 # Verify the committed generated tables still match ExifTool exactly.
 # Defaults to .exiftool-version -- the pin is the only source of truth for the
 # release this repo grades against. Reading it out of the generated file

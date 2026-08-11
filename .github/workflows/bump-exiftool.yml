@@ -1,0 +1,134 @@
+name: Bump ExifTool
+
+# Tag-machinery overhaul Step 17 (R8): manually-triggered wrapper around
+# `just bump-exiftool` (tools/exiftool-tables/bump-exiftool.sh). Never runs
+# on push/schedule -- a release bump is a deliberate act with a triage report
+# a human should read, not something that should land silently.
+#
+# dry_run (default true): exercises the FULL pipeline -- fetch, capability-
+# probe, regen-all, verify, triage, conformance double-run, gates -- and then
+# reverts .exiftool-version and every generated file, so the default
+# dispatch is safe to click without discussion. Set dry_run=false to perform
+# a real bump: this job then pushes the regenerated tables plus the triage/
+# gate reports to a new branch for a human to open a PR from (this workflow
+# does not open the PR itself, to avoid adding a third-party PR-automation
+# action to the trust boundary for something a maintainer should read first
+# anyway).
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Target ExifTool release (e.g. 13.60)'
+        required: true
+      from_version:
+        description: 'Baseline release for the triage report (default: current .exiftool-version pin)'
+        required: false
+      dry_run:
+        description: 'Exercise the pipeline and revert (true) or perform a real bump and push a branch (false)'
+        required: true
+        default: 'true'
+      skip_conformance:
+        description: 'Skip the before/after conformance double-run (triage report only -- much faster)'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: bump-exiftool
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Bump ExifTool (${{ inputs.version }})
+    runs-on: warp-ubuntu-latest-x64-4x
+    timeout-minutes: 60
+    permissions:
+      # contents: write only matters on a real (non-dry-run) bump, to push
+      # the result branch below. A dry run needs nothing more than read.
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: rustfmt
+
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          cache-on-failure: true
+          cache-provider: warpbuild
+          shared-key: bump-exiftool
+
+      # dump_tables.pl and the tier-2 gen_*.pl scripts need Archive::Zip for
+      # the capability probe (a matching -ver is not a working oracle -- see
+      # AGENTS.md and scripts/exiftool_oracle.py). System perl on this image
+      # does not have it.
+      - name: Install Archive::Zip
+        run: |
+          sudo cpanm --notest Archive::Zip 2>/dev/null || sudo cpan -T Archive::Zip
+          perl -MArchive::Zip -e 1
+
+      - name: Run the bump machinery
+        id: bump
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          set -euo pipefail
+          ARGS=(tools/exiftool-tables/bump-exiftool.sh "${{ inputs.version }}"
+                --report-dir "$RUNNER_TEMP/bump-report")
+          if [[ -n "${{ inputs.from_version }}" ]]; then
+            ARGS+=(--from "${{ inputs.from_version }}")
+          fi
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            ARGS+=(--dry-run)
+          fi
+          if [[ "${{ inputs.skip_conformance }}" == "true" ]]; then
+            ARGS+=(--skip-conformance)
+          fi
+          # No sample corpus is fetched in this job -- the conformance
+          # double-run (when not skipped) grades against whatever this
+          # checkout's tests/fixtures carries. A maintainer wanting the
+          # richer combined-samples/t/images corpora should run this
+          # locally with `just bump-exiftool ... --corpus <dir>` instead;
+          # see AGENTS.md's floor-caveat note on why an unstated corpus
+          # choice is not acceptable for a number that gates a merge.
+          "${ARGS[@]}"
+
+      - name: Upload triage + gate reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa9 # v4.6.2
+        with:
+          name: bump-exiftool-${{ inputs.version }}-reports
+          path: ${{ runner.temp }}/bump-report/
+          if-no-files-found: warn
+
+      - name: Push a branch for review (real bump only)
+        if: inputs.dry_run != 'true'
+        run: |
+          set -euo pipefail
+          BRANCH="bump-exiftool/${{ inputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "::error::bump produced no changes to commit"
+            exit 1
+          fi
+          git commit -m "build(exiftool): bump pinned release to ${{ inputs.version }}
+
+          Machinery: tools/exiftool-tables/bump-exiftool.sh (Step 17).
+          Triage report and gate results are attached to this workflow run
+          as the bump-exiftool-${{ inputs.version }}-reports artifact --
+          read it before merging."
+          git push origin "$BRANCH" --force-with-lease
+          echo "### Bump branch pushed" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Branch \`$BRANCH\` pushed. Open a PR:" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "gh pr create --base main --head $BRANCH --title 'build(exiftool): bump to ${{ inputs.version }}'" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Read the triage/gate reports in this run's artifacts first." >> "$GITHUB_STEP_SUMMARY"

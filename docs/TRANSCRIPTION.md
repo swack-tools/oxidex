@@ -397,6 +397,16 @@ registry grows. Protect that property.
   cannot catch — but a value ExifTool renames or removes now moves a counted
   number instead of vanishing unnoticed.
 
+  **Step 17 update:** the bump machinery (`just bump-exiftool`,
+  `tools/exiftool-tables/bump-exiftool.sh`) makes this explicit at bump time
+  too, not just in CI. `tools/exiftool-tables/triage_bump.py` classifies
+  every JSON-to-JSON delta between two pinned releases as AUTO/EXPR/COND/
+  HAND, and unconditionally lists these same six files as standing HAND
+  items on every run — regardless of whether the release being bumped
+  touched Sony/Nikon/Minolta at all — because "nothing changed here" is not
+  the same claim as "this is covered". See
+  `docs/reference/bump-reports/13.58-to-13.59.md` for a worked example.
+
 ## Relationship to the AI harness
 
 **This methodology is intended to be the default, and the

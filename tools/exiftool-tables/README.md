@@ -8,6 +8,14 @@ just regen-tables          # fetch + extract + generate + verify (tier 1 only)
 just verify-tables         # re-check committed tier-1 output against ExifTool
 just regen-tables-all      # tier 1 AND tier 2, from one resolved ExifTool tree
 just regen-tables-tier2    # tier 2 only -- what CI's verify-tables job runs
+just bump-exiftool <ver>   # the whole release-bump pipeline: pin, fetch,
+                            # capability-probe, regen-all, verify, triage
+                            # every JSON-to-JSON delta AUTO/EXPR/COND/HAND,
+                            # conformance double-run, gate check. --dry-run
+                            # exercises it and reverts every change -- see
+                            # tools/exiftool-tables/bump-exiftool.sh and
+                            # docs/reference/bump-reports/13.58-to-13.59.md
+                            # for a worked example.
 ```
 
 `regen-tables` (this directory's `regen.sh`) only ever produced
