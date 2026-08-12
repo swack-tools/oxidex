@@ -65,6 +65,19 @@
 #define EXIFTOOL_RATIONAL_SIG_DIGITS 10
 
 /*
+ The priority every occurrence minted through the `insert()` shim carries.
+
+ ExifTool's `FoundTag` defaults an ordinary tag's priority to `1` --
+ "the normal default" (`ExifTool.pm:9562`) -- unless the tag config sets
+ `Priority`, `Avoid`, or the enclosing table sets `PRIORITY`/
+ `LOW_PRIORITY_DIR`, none of which the shim has visibility into. Using the
+ same default here means every shim occurrence for a given key ties on
+ priority, which is exactly the property Phase A's zero-behavior-change
+ invariant relies on (see [`TagSink::record`]).
+ */
+#define SHIM_DEFAULT_PRIORITY 1
+
+/*
  Magic number byte 0 (0x7F)
  */
 #define EI_MAG0 0
