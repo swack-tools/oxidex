@@ -85,8 +85,18 @@ layer (6.3/6.4) both need a form the current code destroys before storage.
 today's `MetadataMap`, reproducing current output exactly:
 
 1. highest `priority` wins;
-2. tie → lowest `order` (first arrival), matching FoundTag;
+2. tie → the **newer** arrival wins;
 3. the loser is retained, not dropped — reachable via `-a`.
+
+> **Correction (2026-08-11, after sign-off).** Rule 2 originally read "lowest `order`
+> (first arrival), matching FoundTag". **That was wrong**, and the implementing agent
+> caught it against the pinned Perl. `ExifTool.pm:9564` is
+> `if ($priority >= $oldPriority ...)` — the `>=` means an equal-priority *newer* arrival
+> displaces the incumbent, moving the old value aside to `$nextTag`. Newest-wins is also
+> the only rule that reproduces today's `HashMap::insert()` overwrite behavior, so it is
+> what D3's zero-behavior-change requirement demands. `order` remains stored and is still
+> the file-order record; it is simply not the tiebreak. The implementation follows the
+> Perl, not this document's original prose.
 
 `MetadataMap` survives **unchanged as the projected view**. That is what makes this
 tractable at 4,034 call sites: parsers keep calling `insert()`, which becomes a
