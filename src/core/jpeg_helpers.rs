@@ -5,6 +5,7 @@
 
 use super::{FileReader, MetadataMap, TagValue};
 use crate::core::operations_helpers::read_u32;
+use crate::core::read_options::ReadOptions;
 use crate::core::read_report::{Diagnostic, DiagnosticSink};
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
 use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd};
@@ -909,6 +910,20 @@ fn insert_icc_tags(icc_data: &[u8], metadata: &mut MetadataMap) {
 /// * `segments` - Parsed JPEG segments
 /// * `metadata` - MetadataMap to populate with File-level tags
 pub fn process_sof_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    process_sof_segments_with_options(segments, metadata, &ReadOptions::default_full_listing());
+}
+
+/// [`process_sof_segments`], with Step 21's request-awareness exposed --
+/// see `core::read_options` for what this gates and why (the ten
+/// SOF-derived diagnostic tags -- `JPEG:Width`/`Height`, the duplicate
+/// `JPEG:ColorComponents`, `ComponentID_1..3`, `YCbCrSubSampling_1..3`,
+/// `SamplingFactors` -- move behind `--extended-output`; the real
+/// `File:`-grouped SOF tags and `File:YCbCrSubSampling` are unaffected).
+pub fn process_sof_segments_with_options(
+    segments: &[Segment],
+    metadata: &mut MetadataMap,
+    options: &ReadOptions,
+) {
     // SOF markers range from 0xFFC0 to 0xFFCF (excluding 0xFFC4, 0xFFC8, 0xFFCC)
     const SOF_MARKERS: [u16; 13] = [
         0xFFC0, 0xFFC1, 0xFFC2, 0xFFC3, 0xFFC5, 0xFFC6, 0xFFC7, 0xFFC9, 0xFFCA, 0xFFCB, 0xFFCD,
@@ -918,10 +933,11 @@ pub fn process_sof_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     for segment in segments.iter() {
         if SOF_MARKERS.contains(&segment.marker) {
             // Parse SOF segment using the app_parsers module
-            let _ = crate::parsers::jpeg::app_parsers::parse_sof_segment(
+            let _ = crate::parsers::jpeg::app_parsers::parse_sof_segment_with_options(
                 segment.marker,
                 segment.data,
                 metadata,
+                options,
             );
             // Only process the first SOF segment found
             break;
@@ -1335,10 +1351,46 @@ pub fn process_com_segments(segments: &[Segment], metadata: &mut MetadataMap) {
 ///
 /// Collects DQT payloads indexed by table id (first byte & 0x0F, ids 0-3,
 /// later segments overwrite earlier ones — ExifTool.pm DQT handler) and emits
-/// File:JPEGQualityEstimate. ExifTool computes this tag only when explicitly
-/// requested; oxidex has no tag-request mechanism and always emits it (see
-/// tests/integration/KNOWN_DISCREPANCIES.md).
+/// File:JPEGQualityEstimate.
 pub fn process_dqt_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    process_dqt_segments_with_options(segments, metadata, &ReadOptions::default_full_listing());
+}
+
+/// [`process_dqt_segments`], with Step 21's request-awareness exposed.
+///
+/// `ExifTool.pm:7682-7692`'s DQT handler only *saves* the DQT payload --
+/// the expensive half of the computation -- when
+/// `$$req{jpegdigest} or $$req{jpegqualityestimate} or
+/// ($$options{RequestAll} and $$options{RequestAll} > 2)`:
+///
+/// ```perl
+/// } elsif ($marker == 0xdb and length($$segDataPt) and    # DQT
+///     # save the DQT data only if JPEGDigest has been requested
+///     # (Note: since we aren't checking the API RequestAll option here, the
+///     #  application must use the RequestTags option to generate these tags
+///     #  if they have not been specifically requested. The reason is that
+///     #  there is too much overhead involved in the calculation of this tag
+///     #  to make this worth the CPU time.)
+///     ($$req{jpegdigest} or $$req{jpegqualityestimate}
+///     or ($$options{RequestAll} and $$options{RequestAll} > 2)))
+/// ```
+///
+/// `options.should_emit("jpegqualityestimate")` is that same check
+/// (`extended()` standing in for `RequestAll > 2`, `is_requested` for
+/// `$$req{jpegqualityestimate}`). oxidex's computation is cheap enough that
+/// gating the CPU cost specifically does not matter, but the *tag* still
+/// must not appear in default output -- confirmed against the pinned
+/// oracle: `t/images/Canon.jpg`'s default `-j`/`-a` output contains zero
+/// `JPEGQualityEstimate`, while `-s -JPEGQualityEstimate` on the same file
+/// returns `61`.
+pub fn process_dqt_segments_with_options(
+    segments: &[Segment],
+    metadata: &mut MetadataMap,
+    options: &ReadOptions,
+) {
+    if !options.should_emit("jpegqualityestimate") {
+        return;
+    }
     const DQT_MARKER: u16 = 0xFFDB;
     let mut dqt_list: [Option<&[u8]>; 4] = [None, None, None, None];
     for segment in segments.iter().filter(|s| s.marker == DQT_MARKER) {

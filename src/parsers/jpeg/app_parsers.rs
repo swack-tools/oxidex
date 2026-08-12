@@ -8,6 +8,7 @@
 //! - COM: JPEG Comment
 //! - SOF: Start of Frame (component information)
 
+use crate::core::read_options::ReadOptions;
 use crate::core::{Instance, MetadataMap, TagValue};
 use crate::io::EndianReader;
 
@@ -310,6 +311,30 @@ pub fn parse_sof_segment(
     data: &[u8],
     metadata: &mut MetadataMap,
 ) -> Result<(), String> {
+    parse_sof_segment_with_options(marker, data, metadata, &ReadOptions::default_full_listing())
+}
+
+/// [`parse_sof_segment`], with Step 21's request-awareness exposed.
+///
+/// Ten of this function's tags have no ExifTool counterpart at all (there is
+/// no `-ComponentID_1` or `-JPEG:Width` to request against real ExifTool):
+/// `JPEG:Width`, `JPEG:Height`, the duplicate `JPEG:ColorComponents` (the
+/// real `File:ColorComponents` is unaffected), `JPEG:ComponentID_1..3`,
+/// `JPEG:YCbCrSubSampling_1..3` and `JPEG:SamplingFactors`. Verified against
+/// the pinned oracle on `t/images/Canon.jpg`: none of the eleven appear in
+/// default `-j`/`-a` output. Gated on `options.extended()` alone (OxiDex's
+/// own diagnostic namespace, `--extended-output` -- not on
+/// `should_emit`/a specific request, since there is no real tag name a
+/// caller could request in the first place). `File:BitsPerSample`,
+/// `File:ImageHeight`/`Width`, `File:ColorComponents`, `File:EncodingProcess`
+/// and `File:YCbCrSubSampling` (singular) are real ExifTool tags and stay
+/// unconditional.
+pub fn parse_sof_segment_with_options(
+    marker: u16,
+    data: &[u8],
+    metadata: &mut MetadataMap,
+    options: &ReadOptions,
+) -> Result<(), String> {
     if data.len() < 6 {
         return Err("SOF segment too short".to_string());
     }
@@ -343,15 +368,18 @@ pub fn parse_sof_segment(
         "File:ColorComponents".to_string(),
         TagValue::Integer(num_components as i64),
     );
-    // Also add JPEG: prefixed version for format-specific tagging
-    metadata.insert(
-        "JPEG:ColorComponents".to_string(),
-        TagValue::Integer(num_components as i64),
-    );
-
-    // Also add JPEG: prefixed versions for format-specific tagging
-    metadata.insert("JPEG:Width".to_string(), TagValue::Integer(width as i64));
-    metadata.insert("JPEG:Height".to_string(), TagValue::Integer(height as i64));
+    // `JPEG:ColorComponents`/`JPEG:Width`/`JPEG:Height` are OxiDex's own
+    // diagnostic duplicates of `File:ColorComponents`/`File:ImageWidth`/
+    // `File:ImageHeight` above -- no ExifTool counterpart, extended-only.
+    // See `parse_sof_segment_with_options`'s doc comment.
+    if options.extended() {
+        metadata.insert(
+            "JPEG:ColorComponents".to_string(),
+            TagValue::Integer(num_components as i64),
+        );
+        metadata.insert("JPEG:Width".to_string(), TagValue::Integer(width as i64));
+        metadata.insert("JPEG:Height".to_string(), TagValue::Integer(height as i64));
+    }
 
     // Encoding process - match ExifTool's format with coding suffix
     let encoding = match marker {
@@ -424,16 +452,23 @@ pub fn parse_sof_segment(
             _ => "Unknown",
         };
 
-        metadata.insert(
-            format!("JPEG:ComponentID_{}", i + 1),
-            TagValue::String(component_name.to_string()),
-        );
-
+        // `JPEG:ComponentID_N`/`JPEG:YCbCrSubSampling_N`/`JPEG:SamplingFactors`
+        // (below) are OxiDex-only diagnostic tags -- no ExifTool
+        // counterpart, extended-only. See
+        // `parse_sof_segment_with_options`'s doc comment. The combined
+        // `sampling_factors_vec` is still built unconditionally (it is
+        // cheap and used only to feed `JPEG:SamplingFactors` itself).
         let subsampling_str = format!("{}x{}", h_sampling, v_sampling);
-        metadata.insert(
-            format!("JPEG:YCbCrSubSampling_{}", i + 1),
-            TagValue::String(subsampling_str.clone()),
-        );
+        if options.extended() {
+            metadata.insert(
+                format!("JPEG:ComponentID_{}", i + 1),
+                TagValue::String(component_name.to_string()),
+            );
+            metadata.insert(
+                format!("JPEG:YCbCrSubSampling_{}", i + 1),
+                TagValue::String(subsampling_str.clone()),
+            );
+        }
 
         // Collect sampling factors for the combined tag
         sampling_factors_vec.push(subsampling_str);
@@ -442,7 +477,7 @@ pub fn parse_sof_segment(
     }
 
     // Add combined JPEG:SamplingFactors tag (comma-separated)
-    if !sampling_factors_vec.is_empty() {
+    if !sampling_factors_vec.is_empty() && options.extended() {
         metadata.insert(
             "JPEG:SamplingFactors".to_string(),
             TagValue::String(sampling_factors_vec.join(", ")),
@@ -805,7 +840,51 @@ mod tests {
             metadata.get_string("File:YCbCrSubSampling"),
             Some("YCbCr4:2:0 (2 2)")
         );
+        // Step 21: `JPEG:ComponentID_N`/`JPEG:Width`/`JPEG:Height`/the
+        // duplicate `JPEG:ColorComponents`/`JPEG:YCbCrSubSampling_N`/
+        // `JPEG:SamplingFactors` have no ExifTool counterpart and move
+        // behind `--extended-output` -- confirmed absent from the pinned
+        // oracle's default `t/images/Canon.jpg` output. `parse_sof_segment`
+        // (no options) is the non-extended default, same as
+        // `ReadOptions::default_full_listing()`.
+        assert_eq!(metadata.get_string("JPEG:ComponentID_1"), None);
+        assert_eq!(metadata.get_integer("JPEG:Width"), None);
+        assert_eq!(metadata.get_integer("JPEG:Height"), None);
+        assert_eq!(metadata.get_integer("JPEG:ColorComponents"), None);
+        assert_eq!(metadata.get_string("JPEG:SamplingFactors"), None);
+    }
+
+    #[test]
+    fn test_parse_sof_baseline_extended_output_restores_the_diagnostic_tags() {
+        let data = [
+            0x08, // Precision: 8 bits
+            0x01, 0xE0, // Height: 480
+            0x02, 0x80, // Width: 640
+            0x03, // Components: 3 (YCbCr)
+            // Component 1: Y
+            0x01, 0x22, 0x00, // ID=1, sampling=2x2, quant=0
+            // Component 2: Cb
+            0x02, 0x11, 0x01, // ID=2, sampling=1x1, quant=1
+            // Component 3: Cr
+            0x03, 0x11, 0x01, // ID=3, sampling=1x1, quant=1
+        ];
+
+        let mut metadata = MetadataMap::new();
+        let options = ReadOptions::new(&[], true);
+        let result = parse_sof_segment_with_options(0xFFC0, &data, &mut metadata, &options);
+
+        assert!(result.is_ok());
         assert_eq!(metadata.get_string("JPEG:ComponentID_1"), Some("Y"));
+        assert_eq!(metadata.get_string("JPEG:ComponentID_2"), Some("Cb"));
+        assert_eq!(metadata.get_string("JPEG:ComponentID_3"), Some("Cr"));
+        assert_eq!(metadata.get_integer("JPEG:Width"), Some(640));
+        assert_eq!(metadata.get_integer("JPEG:Height"), Some(480));
+        assert_eq!(metadata.get_integer("JPEG:ColorComponents"), Some(3));
+        assert_eq!(metadata.get_string("JPEG:YCbCrSubSampling_1"), Some("2x2"));
+        assert_eq!(
+            metadata.get_string("JPEG:SamplingFactors"),
+            Some("2x2, 1x1, 1x1")
+        );
     }
 
     /// Builds the 32-byte APP8 SPIFF payload ExifTool recognizes

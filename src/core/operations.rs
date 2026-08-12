@@ -11,13 +11,15 @@ use crate::core::jpeg_helpers::{
     extract_direct_preview_image, process_app3_segments, process_app6_segments,
     process_app10_segments, process_app11_segments, process_app12_segments, process_app14_segments,
     process_app15_segments, process_com_segments, process_dji_dbg_segments,
-    process_dji_thermal_segments, process_dqt_segments, process_exif_segments,
+    process_dji_thermal_segments, process_dqt_segments_with_options, process_exif_segments,
     process_icc_segments, process_infiray_segments, process_iptc_segments, process_jfif_segments,
     process_mpf_segments, process_photoshop_segments, process_qualcomm_segments,
-    process_ricoh_rmeta_segments, process_samsung_unique_id_segments, process_sof_segments,
-    process_spiff_segments, process_uniform_resource_name_segments, process_xmp_segments,
+    process_ricoh_rmeta_segments, process_samsung_unique_id_segments,
+    process_sof_segments_with_options, process_spiff_segments,
+    process_uniform_resource_name_segments, process_xmp_segments,
 };
 use crate::core::operations_helpers::{read_u16, read_u32};
+use crate::core::read_options::ReadOptions;
 use crate::core::read_report::{
     Diagnostic, DiagnosticKind, DiagnosticSink, ParseStatus, ReadReport,
 };
@@ -345,6 +347,27 @@ pub fn read_metadata_with_detector(
     path: &Path,
     detector_mode: DetectorMode,
 ) -> Result<MetadataMap> {
+    read_metadata_with_detector_and_options(
+        path,
+        detector_mode,
+        &ReadOptions::default_full_listing(),
+    )
+}
+
+/// [`read_metadata_with_detector`], with Step 21's request-awareness
+/// (`ReadOptions`) exposed. This is the entry point the CLI uses so that a
+/// specifically-requested `-JPEGQualityEstimate` or `--extended-output` read
+/// actually reaches the JPEG parser; every other caller (library
+/// consumers, the surgical writer's original/desired diff, every
+/// pre-existing test) keeps using [`read_metadata_with_detector`] or
+/// [`read_metadata`], which default to
+/// [`ReadOptions::default_full_listing`] and so observe no behavior change
+/// from this step.
+pub fn read_metadata_with_detector_and_options(
+    path: &Path,
+    detector_mode: DetectorMode,
+    options: &ReadOptions,
+) -> Result<MetadataMap> {
     // Step 1: Extract file system metadata (File:FileName, File:FileSize, etc.)
     // This is done first and independently of the file format
     let mut metadata = match crate::core::file_metadata::extract_file_metadata(path) {
@@ -402,7 +425,7 @@ pub fn read_metadata_with_detector(
     // ~40 formats OxiDex has no parser for. Failing the whole read there threw
     // away the file-system metadata too, so those files produced no output at
     // all rather than partial output.
-    let format_metadata = match dispatch_format_parser(&reader, format) {
+    let format_metadata = match dispatch_format_parser(&reader, format, options) {
         Ok(m) => m,
         Err(e) => {
             if is_unsupported(&e) && add_identity_tags(&mut metadata, &reader, path) {
@@ -534,6 +557,22 @@ pub fn read_metadata_report_with_detector(
     path: &Path,
     detector_mode: DetectorMode,
 ) -> Result<ReadReport> {
+    read_metadata_report_with_detector_and_options(
+        path,
+        detector_mode,
+        &ReadOptions::default_full_listing(),
+    )
+}
+
+/// [`read_metadata_report_with_detector`], with Step 21's request-awareness
+/// (`ReadOptions`) exposed. See
+/// [`read_metadata_with_detector_and_options`]'s doc comment -- the same
+/// reasoning applies here.
+pub fn read_metadata_report_with_detector_and_options(
+    path: &Path,
+    detector_mode: DetectorMode,
+    options: &ReadOptions,
+) -> Result<ReadReport> {
     // Step 1: Extract file system metadata (File:FileName, File:FileSize, etc.)
     let mut metadata = match crate::core::file_metadata::extract_file_metadata(path) {
         Ok(file_meta) => file_meta,
@@ -567,11 +606,13 @@ pub fn read_metadata_report_with_detector(
     // parse surfaces as `Partial` rather than vanishing into stderr.
     let mut diagnostics: DiagnosticSink = Vec::new();
     let dispatch_result = match format {
-        FileFormat::JPEG => parse_jpeg_metadata_with_diagnostics(&reader, &mut diagnostics),
+        FileFormat::JPEG => {
+            parse_jpeg_metadata_with_diagnostics(&reader, &mut diagnostics, options)
+        }
         FileFormat::PNG => {
             crate::parsers::png::parse_png_metadata_with_diagnostics(&reader, &mut diagnostics)
         }
-        _ => dispatch_format_parser(&reader, format),
+        _ => dispatch_format_parser(&reader, format, options),
     };
 
     let format_metadata = match dispatch_result {
@@ -1190,9 +1231,12 @@ pub fn copy_metadata(src: &Path, dest: &Path, tags: Option<&[String]>) -> Result
 ///
 /// * `Ok(MetadataMap)` - Successfully parsed metadata from all segments
 /// * `Err(ExifToolError)` - Parse error or invalid JPEG structure
-pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
+pub(crate) fn parse_jpeg_metadata(
+    reader: &dyn FileReader,
+    options: &ReadOptions,
+) -> Result<MetadataMap> {
     let mut diagnostics = Vec::new();
-    parse_jpeg_metadata_with_diagnostics(reader, &mut diagnostics)
+    parse_jpeg_metadata_with_diagnostics(reader, &mut diagnostics, options)
 }
 
 /// Same as [`parse_jpeg_metadata`], but pushes recoverable problems (a
@@ -1203,6 +1247,7 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
 pub(crate) fn parse_jpeg_metadata_with_diagnostics(
     reader: &dyn FileReader,
     diagnostics: &mut DiagnosticSink,
+    options: &ReadOptions,
 ) -> Result<MetadataMap> {
     // Parse JPEG segment structure
     let segments = parse_segments(reader)?;
@@ -1263,9 +1308,9 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
     process_mpf_segments(&segments, &mut metadata);
     // APP2/APP4 FPXR: FlashPix streams split across application segments.
     crate::parsers::jpeg::flashpix::process_fpxr_segments(&segments, &mut metadata);
-    process_sof_segments(&segments, &mut metadata);
+    process_sof_segments_with_options(&segments, &mut metadata, options);
     process_com_segments(&segments, &mut metadata);
-    process_dqt_segments(&segments, &mut metadata);
+    process_dqt_segments_with_options(&segments, &mut metadata, options);
     process_spiff_segments(&segments, &mut metadata);
     process_ricoh_rmeta_segments(&segments, &mut metadata);
 
@@ -1505,7 +1550,7 @@ pub(crate) fn parse_casio_cam_metadata(reader: &dyn FileReader) -> Result<Metada
     };
 
     // Parse the JPEG metadata
-    let mut metadata = parse_jpeg_metadata(&jpeg_reader)?;
+    let mut metadata = parse_jpeg_metadata(&jpeg_reader, &ReadOptions::default_full_listing())?;
 
     // Add warning tag to match ExifTool's behavior
     metadata.insert(
@@ -1916,8 +1961,12 @@ mod tests {
 
         // The read itself still succeeds -- one bad sub-block does not fail
         // an otherwise-parseable JPEG.
-        let _metadata = parse_jpeg_metadata_with_diagnostics(&reader, &mut diagnostics)
-            .expect("a bad FLIR segment does not fail the whole JPEG parse");
+        let _metadata = parse_jpeg_metadata_with_diagnostics(
+            &reader,
+            &mut diagnostics,
+            &ReadOptions::default_full_listing(),
+        )
+        .expect("a bad FLIR segment does not fail the whole JPEG parse");
 
         assert_eq!(
             diagnostics.len(),
@@ -2097,7 +2146,8 @@ mod tests {
         );
         let reader = crate::io::buffered_reader::BufferedReader::new(path)
             .expect("read pinned Samsung GT-i8910 fixture");
-        let metadata = parse_jpeg_metadata(&reader).expect("parse pinned Samsung fixture");
+        let metadata = parse_jpeg_metadata(&reader, &ReadOptions::default_full_listing())
+            .expect("parse pinned Samsung fixture");
 
         assert_eq!(metadata.get_integer("APP4:PreviewImageWidth"), Some(816));
         assert_eq!(metadata.get_integer("APP4:PreviewImageHeight"), Some(459));

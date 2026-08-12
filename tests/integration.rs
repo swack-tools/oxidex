@@ -130,6 +130,9 @@ mod cli_feature_tests;
 #[path = "integration/cli_batch_wiring_tests.rs"]
 mod cli_batch_wiring_tests;
 
+#[path = "integration/cli_batch_equivalence_tests.rs"]
+mod cli_batch_equivalence_tests;
+
 #[path = "integration/cli_typed_value_tests.rs"]
 mod cli_typed_value_tests;
 

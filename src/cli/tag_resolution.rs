@@ -24,6 +24,9 @@
 //! with the larger `order` (the more recently recorded one). `-a` skips the
 //! arbitration and keeps every match, in file order.
 
+use crate::cli::args::CliArgs;
+use crate::core::exiftool_compat::format_for_exiftool;
+use crate::core::read_options::ReadOptions;
 use crate::core::tag_occurrence::TagOccurrence;
 use crate::core::{MetadataMap, TagValue};
 
@@ -337,6 +340,80 @@ pub fn render_group_display_lines(
         ));
     }
     out
+}
+
+/// Step 21: the display-ready result of resolving one file's raw read
+/// against a set of CLI flags -- either an already-rendered block of text
+/// (the `-Gn` + human/short special case [`render_group_display_lines`]'s
+/// doc comment explains) or a synthesized [`MetadataMap`] ready for any
+/// `OutputFormatter` with `filter_tags: None`.
+pub enum ResolvedFileOutput {
+    /// Pre-rendered `"[label] name: value\n"` lines, from
+    /// [`render_group_display_lines`].
+    Lines(String),
+    /// Display-ready metadata: PrintConv applied or not per
+    /// `--no-print-conv`, already filtered/resolved, keyed the way the
+    /// caller's `-Gn`/plain-key choice requires.
+    Metadata(MetadataMap),
+}
+
+/// Builds one file's display-ready output from its raw read result and the
+/// CLI flags that shape it -- shared by the single-file path
+/// (`main.rs::handle_read_operation`) and the batch/directory path
+/// (`cli::batch_processor`), so the two modes agree on `-a`, `-G*`,
+/// `--no-print-conv` and the default (unfiltered) listing for the same file.
+///
+/// This closes the gap Step 20 left open: before this step, batch mode fed
+/// `args.specific_tags()` straight into each `OutputFormatter`'s own
+/// exact/suffix `filter_tags` matching, bypassing this module entirely, so
+/// batch runs never saw Step 20's group/priority-aware resolution --
+/// `-EXIF:Make`, `-a`, and `-Gn` were single-file-only. Batch also never
+/// applied [`ReadOptions::strip_extended_only`], so a directory read still
+/// showed Step 21's hex-fallback/ZIP-forensic diagnostic tags by default
+/// while a single-file read of the same file did not.
+///
+/// Mirrors `handle_read_operation`'s two branches:
+/// * a specific `-TAG` request resolves through
+///   [`resolve_requested_tags`]/[`build_display_map`]/
+///   [`render_group_display_lines`], exactly as documented on those
+///   functions;
+/// * the unfiltered default listing goes through
+///   [`ReadOptions::strip_extended_only`] (Step 21's extended-namespace
+///   filter -- moot for the specific-request branch above, since a
+///   filtered-out tag can still be reached there by explicit name) and then
+///   `without_print_conv`/`format_for_exiftool`, unchanged from before this
+///   step.
+pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> ResolvedFileOutput {
+    let tag_filter = args.specific_tags();
+    let no_print_conv = !args.exiftool_compat();
+
+    if let Some(requested) = &tag_filter {
+        let resolved = resolve_requested_tags(raw_metadata, requested, args.all_tags);
+        if let Some(families) = &args.group_display
+            && !args.json
+            && !args.csv
+        {
+            let lines =
+                render_group_display_lines(&resolved, families, no_print_conv, args.short_format);
+            return ResolvedFileOutput::Lines(lines);
+        }
+        let metadata = build_display_map(
+            &resolved,
+            args.group_display.as_deref(),
+            no_print_conv,
+            !args.json,
+        );
+        return ResolvedFileOutput::Metadata(metadata);
+    }
+
+    let options = ReadOptions::new(&[], args.extended_output);
+    let filtered = options.strip_extended_only(raw_metadata);
+    let metadata = if no_print_conv {
+        filtered.without_print_conv()
+    } else {
+        format_for_exiftool(&filtered)
+    };
+    ResolvedFileOutput::Metadata(metadata)
 }
 
 #[cfg(test)]

@@ -5446,13 +5446,23 @@ fn parse_canon_makernote_impl_located_with_values(
                         tags.insert("Canon:AFPoint".to_string(), AF_POINT.decode(af_point));
                     }
 
-                    // CanonExposureMode (index 20) - Exposure mode setting
-                    // Also output as Canon:ExposureMode for backward compatibility
+                    // CanonExposureMode (index 20) - Exposure mode setting.
+                    // Canon.pm:2487 names CameraSettings key 20
+                    // `CanonExposureMode` only; there is no `ExposureMode`
+                    // alias in the Canon table (that name belongs to the
+                    // standard EXIF tag, `ExifIFD:ExposureMode`, a distinct
+                    // value from a distinct table). The former
+                    // "backward compatibility" `Canon:ExposureMode` alias
+                    // duplicated that name under the Canon group with no
+                    // ExifTool counterpart -- see conformance.py's EXTRA
+                    // axis, Step 21 (`OVERHAUL_OXIDEX_PLAN.md`), and the
+                    // sibling `Canon:FlashMode`/`Canon:DriveMode` fixes just
+                    // above/below this one, which removed the same kind of
+                    // invented alias.
                     if array.len() > CAMERA_SETTINGS_EXPOSURE_MODE {
                         let exposure_mode =
                             EXPOSURE_MODE.decode(array[CAMERA_SETTINGS_EXPOSURE_MODE]);
-                        tags.insert("Canon:CanonExposureMode".to_string(), exposure_mode.clone());
-                        tags.insert("Canon:ExposureMode".to_string(), exposure_mode);
+                        tags.insert("Canon:CanonExposureMode".to_string(), exposure_mode);
                     }
 
                     // LensType (`%Canon::CameraSettings` key 22, Canon.pm:2499):
@@ -7261,9 +7271,13 @@ mod tests {
             Some(&"Evaluative".to_string())
         );
         assert_eq!(
-            result.get("Canon:ExposureMode"),
+            result.get("Canon:CanonExposureMode"),
             Some(&"Program AE".to_string())
         );
+        // Canon.pm:2487 names this key `CanonExposureMode` only; a shortened
+        // `ExposureMode` alias under the Canon group is not emitted by
+        // ExifTool (that name belongs to the standard EXIF tag instead).
+        assert_eq!(result.get("Canon:ExposureMode"), None);
         // `%Canon::CameraSettings` key 16 is CameraISO, whose ValueConv is a lookup
         // (Canon.pm:10464) - the slot is a code, not a literal speed, and there is no
         // `ISO` key in this table.

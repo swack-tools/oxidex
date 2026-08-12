@@ -3,7 +3,7 @@
 //! This module handles dispatching to the appropriate format-specific parser
 //! based on the detected file format.
 
-use super::{FileFormat, FileReader, MetadataMap};
+use super::{FileFormat, FileReader, MetadataMap, ReadOptions};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::archive::ar::parse_ar_metadata;
 use crate::parsers::archive::gz::parse_gz_metadata;
@@ -107,14 +107,24 @@ use super::operations::{parse_casio_cam_metadata, parse_jpeg_metadata, parse_tif
 ///
 /// * `reader` - File reader providing access to the file data
 /// * `format` - Detected file format
+/// * `options` - Step 21 request-awareness (`ReadOptions`): which specific
+///   tags were asked for and whether OxiDex's `--extended-output` namespace
+///   is on. Only JPEG consults this today (`JPEGQualityEstimate`'s request
+///   gate and the SOF/DQT diagnostic-tag extended gate); every other format
+///   parser's signature is unchanged and simply does not receive it. See
+///   `core::read_options` for why.
 ///
 /// # Returns
 ///
 /// * `Ok(MetadataMap)` - Successfully parsed metadata
 /// * `Err(ExifToolError)` - Parse error or unsupported format
-pub fn dispatch_format_parser(reader: &dyn FileReader, format: FileFormat) -> Result<MetadataMap> {
+pub fn dispatch_format_parser(
+    reader: &dyn FileReader,
+    format: FileFormat,
+    options: &ReadOptions,
+) -> Result<MetadataMap> {
     match format {
-        FileFormat::JPEG => parse_jpeg_metadata(reader),
+        FileFormat::JPEG => parse_jpeg_metadata(reader, options),
         FileFormat::TIFF => parse_tiff_metadata(reader),
         FileFormat::PNG => parse_png_metadata(reader),
         FileFormat::PDF => parse_pdf_metadata(reader),

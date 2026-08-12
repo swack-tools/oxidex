@@ -22,6 +22,7 @@ pub mod metadata;
 pub mod metadata_map;
 pub mod operations;
 pub mod operations_helpers;
+pub mod read_options;
 pub mod read_report;
 pub mod tag_conversion;
 pub mod tag_normalization;
@@ -44,8 +45,10 @@ pub use metadata::Metadata;
 pub use metadata_map::MetadataMap;
 pub use operations::{
     clear_all_metadata, modify_tag, read_metadata, read_metadata_report,
-    read_metadata_report_with_detector, remove_tag, write_metadata,
+    read_metadata_report_with_detector, read_metadata_report_with_detector_and_options,
+    read_metadata_with_detector_and_options, remove_tag, write_metadata,
 };
+pub use read_options::ReadOptions;
 pub use read_report::{Diagnostic, DiagnosticKind, DiagnosticSink, ParseStatus, ReadReport};
 pub use tag_normalization::{normalize_metadata_map, normalize_tag_family};
 pub use tag_occurrence::{Group, Instance, Provenance, SHIM_DEFAULT_PRIORITY, TagOccurrence};

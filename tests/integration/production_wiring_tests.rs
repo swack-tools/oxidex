@@ -1,7 +1,10 @@
 use base64::Engine as _;
-use oxidex::core::operations::{modify_tag, read_metadata, write_metadata};
-use oxidex::core::{MetadataMap, TagValue};
+use oxidex::core::operations::{
+    modify_tag, read_metadata, read_metadata_with_detector_and_options, write_metadata,
+};
+use oxidex::core::{MetadataMap, ReadOptions, TagValue};
 use oxidex::error::ExifToolError;
+use oxidex::parsers::DetectorMode;
 use std::fs;
 use std::io::Write;
 use tempfile::NamedTempFile;
@@ -1852,14 +1855,41 @@ fn dqt_payload() -> Vec<u8> {
     p
 }
 
+/// Step 21: ExifTool computes `JPEGQualityEstimate` only when specifically
+/// requested (`ExifTool.pm:7682-7692` -- `$$req{jpegqualityestimate}`, its
+/// own comment explaining why: "there is too much overhead involved in the
+/// calculation of this tag to make this worth the CPU time" by default).
+/// Confirmed against the pinned oracle: `t/images/Canon.jpg`'s default
+/// `-j`/`-a` output contains zero `JPEGQualityEstimate`. `read_metadata`
+/// (used by `read_temp_file`, above) is the plain, non-request-aware entry
+/// point, so it must not surface the tag either.
 #[test]
-fn jpeg_dqt_yields_exiftool_quality_estimate() {
+fn jpeg_dqt_quality_estimate_is_absent_by_default() {
     let jpeg = jpeg_with_segments(&[
         jpeg_segment(0xDB, &dqt_payload()),
         jpeg_segment(0xC0, &sof0_payload()),
     ]);
     let metadata = read_temp_file(&jpeg, ".jpg");
-    // ExifTool 13.55 reports 87 for this quantization table
+    assert_eq!(metadata.get_integer("File:JPEGQualityEstimate"), None);
+}
+
+/// The other half of the same gate: a caller that explicitly requests
+/// `JPEGQualityEstimate` (`ReadOptions`, matching ExifTool's
+/// `REQ_TAG_LOOKUP`) still gets it computed and reported, unchanged from
+/// before this step -- ExifTool 13.55 reports 87 for this quantization
+/// table, the same value the always-on behavior used to assert.
+#[test]
+fn jpeg_dqt_yields_exiftool_quality_estimate_when_requested() {
+    let jpeg = jpeg_with_segments(&[
+        jpeg_segment(0xDB, &dqt_payload()),
+        jpeg_segment(0xC0, &sof0_payload()),
+    ]);
+    let mut file = temp_with_suffix(".jpg");
+    file.write_all(&jpeg).expect("write DQT fixture");
+    let options = ReadOptions::new(&["JPEGQualityEstimate".to_string()], false);
+    let metadata =
+        read_metadata_with_detector_and_options(file.path(), DetectorMode::Signature, &options)
+            .expect("read through production metadata path with JPEGQualityEstimate requested");
     assert_eq!(metadata.get_integer("File:JPEGQualityEstimate"), Some(87));
 }
 

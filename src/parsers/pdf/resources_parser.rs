@@ -167,6 +167,7 @@ pub fn parse_resources_metadata(reader: &dyn FileReader) -> Result<MetadataMap> 
                                         if let Ok(jpeg_meta) =
                                             crate::core::operations::parse_jpeg_metadata(
                                                 &stream_reader,
+                                                &crate::core::ReadOptions::default_full_listing(),
                                             )
                                         {
                                             if !jpeg_meta.is_empty() {

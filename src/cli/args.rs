@@ -59,6 +59,23 @@ pub struct CliArgs {
     /// describes) but never populates this field.
     pub group_display: Option<Vec<u8>>,
 
+    /// Step 21 (`--extended-output`): reveals OxiDex's own non-ExifTool
+    /// diagnostic/forensic namespace on an unfiltered listing -- the ten
+    /// JPEG SOF diagnostic tags (`JPEG:ComponentID_N`, `JPEG:Width`/
+    /// `Height`, ...), the undecoded-MakerNote hex-fallback tag
+    /// (`ExifIFD:0x927C` and its kin in any IFD), and ZIP's per-entry
+    /// forensic tags (`ZIP:File1:CRC32`, ...). None of these are real
+    /// ExifTool tags -- default output must match ExifTool's own
+    /// (AGENTS.md output-contract/8.4), so they are hidden unless this flag
+    /// opts in. See `core::read_options` for the full namespace and the
+    /// ExifTool.pm citations this models. `JPEGQualityEstimate` is
+    /// unaffected by this flag specifically: it is a real ExifTool tag,
+    /// gated on being individually requested (`-JPEGQualityEstimate`)
+    /// rather than on this namespace flag -- though `--extended-output`
+    /// also reveals it, matching ExifTool's own `RequestAll`-vs-`RequestTags`
+    /// shape (`ExifTool.pm:7688-7689`).
+    pub extended_output: bool,
+
     /// Recursive directory processing
     pub recursive: bool,
 
@@ -253,6 +270,7 @@ impl CliArgs {
         let mut short_format = false;
         let mut all_tags = false;
         let mut group_display: Option<Vec<u8>> = None;
+        let mut extended_output = false;
         let mut recursive = false;
         let mut preserve_file_times = false;
         let mut backup = false;
@@ -408,6 +426,11 @@ impl CliArgs {
                 Long("strict") => {
                     strict = true;
                 }
+                // Step 21: reveal OxiDex's own diagnostic/forensic
+                // namespace. See the field doc on `CliArgs::extended_output`.
+                Long("extended-output") => {
+                    extended_output = true;
+                }
                 // ExifTool compatibility mode. Now the default, so this is a
                 // no-op; it stays accepted because scripts pass it, and because
                 // silently rejecting a flag that used to matter is worse than
@@ -493,6 +516,7 @@ impl CliArgs {
             short_format,
             all_tags,
             group_display,
+            extended_output,
             recursive,
             preserve_file_times,
             backup,
@@ -941,6 +965,9 @@ fn print_help() {
     println!("        --readonly              Enable read-only mode to prevent file modifications");
     println!(
         "        --strict                Fail a damaged/unidentifiable read instead of returning partial output"
+    );
+    println!(
+        "        --extended-output       Show OxiDex's own diagnostic/forensic tags (no ExifTool counterpart), hidden by default"
     );
     println!(
         "        --detector VALUE        File detection mode: signature (default) or magika (AI-powered)"

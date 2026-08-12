@@ -1475,9 +1475,19 @@ pub fn rewrite_jpeg_exif(file_bytes: &[u8], desired: &MetadataMap) -> Result<Vec
         Some(tiff_bytes) => {
             let scan = scan_exif_entries(tiff_bytes)?;
             // The exact reader the diff must mirror: parse the whole JPEG the
-            // same way read_metadata does (includes tag-name normalization)
+            // same way read_metadata does (includes tag-name normalization).
+            // `ReadOptions::default_full_listing()` (non-extended, nothing
+            // specifically requested) is correct here regardless: the
+            // undecoded-MakerNote hex-fallback key (`ExifIFD:0x927C`) this
+            // diff depends on is inserted unconditionally at the source --
+            // Step 21 only hides it at the CLI *display* boundary, never in
+            // this internal map -- see `core::read_options`'s "Two different
+            // gate sites" doc comment.
             let reader = SliceReader(file_bytes);
-            let original_map = crate::core::operations::parse_jpeg_metadata(&reader)?;
+            let original_map = crate::core::operations::parse_jpeg_metadata(
+                &reader,
+                &crate::core::ReadOptions::default_full_listing(),
+            )?;
             (scan, original_map)
         }
         None => (
@@ -2293,7 +2303,11 @@ mod tests {
         let tiff = super::super::exif_surgical_test_support::tiff_slice(&bytes).to_vec();
         let scan = scan_exif_entries(&tiff).unwrap();
         let reader = SliceReader(&bytes);
-        let original = crate::core::operations::parse_jpeg_metadata(&reader).unwrap();
+        let original = crate::core::operations::parse_jpeg_metadata(
+            &reader,
+            &crate::core::ReadOptions::default_full_listing(),
+        )
+        .unwrap();
         assert!(
             original.contains_key("EXIF:InteropIndex"),
             "fixture must surface an InteropIFD tag for this test to be meaningful"
@@ -2463,7 +2477,11 @@ mod tests {
         let tiff = super::super::exif_surgical_test_support::tiff_slice(&bytes).to_vec();
         let scan = scan_exif_entries(&tiff).unwrap();
         let reader = SliceReader(&bytes);
-        let original = crate::core::operations::parse_jpeg_metadata(&reader).unwrap();
+        let original = crate::core::operations::parse_jpeg_metadata(
+            &reader,
+            &crate::core::ReadOptions::default_full_listing(),
+        )
+        .unwrap();
         assert!(
             original.get("ExifIFD:0x927C").is_some(),
             "fixture must surface the MakerNote hex-fallback key"

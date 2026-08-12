@@ -8,10 +8,10 @@ use crate::cli::args::CliArgs;
 use crate::cli::output_formatter::{
     CsvFormatter, HumanReadableFormatter, JsonFormatter, OutputFormatter, ShortFormatter,
 };
+use crate::cli::tag_resolution::{ResolvedFileOutput, resolve_file_output};
 use crate::cli::value_parser::parse_cli_tag_value;
 use crate::core::MetadataMap;
-use crate::core::exiftool_compat::format_for_exiftool;
-use crate::core::operations::{modify_tag, read_metadata_with_detector};
+use crate::core::operations::{modify_tag, read_metadata_with_detector_and_options};
 use crate::error::{ExifToolError, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
@@ -250,11 +250,22 @@ pub fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
     let success_count = AtomicUsize::new(0);
     let error_count = AtomicUsize::new(0);
 
+    // Step 21: the same `ReadOptions` single-file mode builds
+    // (`main.rs::handle_read_operation`), from the same two inputs -- the
+    // specific tags requested and `--extended-output` -- built once outside
+    // the per-file loop since `args` is shared across every file in the
+    // batch. Without this, a batch `-JPEGQualityEstimate` or
+    // `--extended-output` request never reached the JPEG parser at all.
+    let tag_filter = args.specific_tags();
+    let read_options =
+        crate::core::ReadOptions::new(tag_filter.as_deref().unwrap_or(&[]), args.extended_output);
+
     // Process files in parallel
     let results: Vec<_> = files
         .par_iter()
         .map(|path| {
-            let result = read_metadata_with_detector(path, args.detector);
+            let result =
+                read_metadata_with_detector_and_options(path, args.detector, &read_options);
 
             match &result {
                 Ok(_) => {
@@ -274,18 +285,23 @@ pub fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
 
     progress.finish_and_clear();
 
-    let tag_filter = args.specific_tags();
-    let filter_slice = tag_filter.as_deref();
-
-    // Output results
+    // Output results. Each file's raw read is resolved through
+    // `cli::tag_resolution::resolve_file_output` -- the same function
+    // `main.rs::handle_read_operation` uses -- so `-a`/`-G*`/
+    // `--no-print-conv`/the unfiltered default listing behave identically
+    // between batch and single-file mode for the same file (Step 21 closes
+    // the Step 20 gap where batch instead fed `args.specific_tags()`
+    // straight into each formatter's own exact/suffix `filter_tags`
+    // matching, bypassing Step 20's group/priority-aware resolution
+    // entirely).
     if args.csv {
-        output_csv_results(&results, args, filter_slice)?;
+        output_csv_results(&results, args)?;
     } else if args.json {
-        output_json_results(&results, args, filter_slice)?;
+        output_json_results(&results, args)?;
     } else if args.short_format {
-        output_short_results(&results, args, filter_slice);
+        output_short_results(&results, args);
     } else {
-        output_human_readable_results(&results, args, filter_slice);
+        output_human_readable_results(&results, args);
     }
 
     Ok(BatchStats {
@@ -418,19 +434,23 @@ fn create_progress_bar(total: usize, action: &str) -> ProgressBar {
     pb
 }
 
-fn format_metadata_for_output(metadata: &MetadataMap, args: &CliArgs) -> MetadataMap {
-    if args.exiftool_compat() {
-        format_for_exiftool(metadata)
-    } else {
-        metadata.clone()
+/// Resolves one file's raw read the same way `main.rs::handle_read_operation`
+/// does (`cli::tag_resolution::resolve_file_output`) for a caller that only
+/// ever wants the `MetadataMap` form. Both callers of this helper
+/// (CSV and JSON output) already gate on `args.csv`/`args.json`, so
+/// `resolve_file_output` never takes its `-Gn` + human/short `Lines` branch
+/// here (that branch requires `!args.json && !args.csv`) -- the `Lines` arm
+/// below is unreachable in practice and returns an empty map rather than
+/// panicking, so a future change to that invariant fails loud (empty tags)
+/// instead of crashing a batch run.
+fn resolved_metadata_for_structured_output(metadata: &MetadataMap, args: &CliArgs) -> MetadataMap {
+    match resolve_file_output(metadata, args) {
+        ResolvedFileOutput::Metadata(m) => m,
+        ResolvedFileOutput::Lines(_) => MetadataMap::new(),
     }
 }
 
-fn output_csv_results(
-    results: &[(PathBuf, Result<MetadataMap>)],
-    args: &CliArgs,
-    filter_slice: Option<&[String]>,
-) -> Result<()> {
+fn output_csv_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs) -> Result<()> {
     let formatter = CsvFormatter;
     let mut writer = csv::Writer::from_writer(Vec::new());
 
@@ -440,8 +460,8 @@ fn output_csv_results(
 
     for (path, result) in results {
         if let Ok(metadata) = result {
-            let metadata = format_metadata_for_output(metadata, args);
-            let rendered = formatter.format(&metadata, filter_slice);
+            let metadata = resolved_metadata_for_structured_output(metadata, args);
+            let rendered = formatter.format(&metadata, None);
             let source_file = path.display().to_string();
             // Parse without implicit header handling and skip the formatter's
             // "Tag,Value" header row explicitly, so a formatter change cannot
@@ -482,20 +502,25 @@ fn output_csv_results(
     Ok(())
 }
 
-fn output_short_results(
-    results: &[(PathBuf, Result<MetadataMap>)],
-    args: &CliArgs,
-    filter_slice: Option<&[String]>,
-) {
+fn output_short_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs) {
     let formatter = ShortFormatter;
 
     for (path, result) in results {
         if let Ok(metadata) = result {
-            let metadata = format_metadata_for_output(metadata, args);
-            let output = formatter.format(&metadata, filter_slice);
-            if !output.is_empty() {
-                println!("SourceFile: {}", path.display());
-                print!("{}", output);
+            match resolve_file_output(metadata, args) {
+                ResolvedFileOutput::Lines(lines) => {
+                    if !lines.is_empty() {
+                        println!("SourceFile: {}", path.display());
+                        print!("{}", lines);
+                    }
+                }
+                ResolvedFileOutput::Metadata(metadata) => {
+                    let output = formatter.format(&metadata, None);
+                    if !output.is_empty() {
+                        println!("SourceFile: {}", path.display());
+                        print!("{}", output);
+                    }
+                }
             }
         }
     }
@@ -507,11 +532,7 @@ fn output_short_results(
 /// - SourceFile: file path
 /// - All metadata tags (for successful reads)
 /// - Error message (for failed reads)
-fn output_json_results(
-    results: &[(PathBuf, Result<MetadataMap>)],
-    args: &CliArgs,
-    filter_slice: Option<&[String]>,
-) -> Result<()> {
+fn output_json_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs) -> Result<()> {
     use serde_json::{Value, json};
 
     let formatter = JsonFormatter;
@@ -521,8 +542,8 @@ fn output_json_results(
         .map(|(path, result)| -> Result<Value> {
             match result {
                 Ok(metadata) => {
-                    let metadata = format_metadata_for_output(metadata, args);
-                    let formatted = formatter.format(&metadata, filter_slice);
+                    let metadata = resolved_metadata_for_structured_output(metadata, args);
+                    let formatted = formatter.format(&metadata, None);
                     let mut values: Vec<Value> = serde_json::from_str(&formatted).map_err(|e| {
                         ExifToolError::parse_error(format!("Failed to parse formatted JSON: {}", e))
                     })?;
@@ -671,20 +692,20 @@ mod json_ordering_tests {
 /// Outputs results in human-readable format.
 ///
 /// Prints each file's metadata with a file path header.
-fn output_human_readable_results(
-    results: &[(PathBuf, Result<MetadataMap>)],
-    args: &CliArgs,
-    filter_slice: Option<&[String]>,
-) {
+fn output_human_readable_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs) {
     let formatter = HumanReadableFormatter;
 
     for (path, result) in results {
         match result {
             Ok(metadata) => {
                 println!("File: {}", path.display());
-                let metadata = format_metadata_for_output(metadata, args);
-                let output = formatter.format(&metadata, filter_slice);
-                print!("{}", output);
+                match resolve_file_output(metadata, args) {
+                    ResolvedFileOutput::Lines(lines) => print!("{}", lines),
+                    ResolvedFileOutput::Metadata(metadata) => {
+                        let output = formatter.format(&metadata, None);
+                        print!("{}", output);
+                    }
+                }
             }
             Err(_) => {
                 // Error already printed to stderr during processing

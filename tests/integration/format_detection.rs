@@ -8,6 +8,7 @@ mod common;
 
 use common::TestReader;
 use oxidex::core::FileFormat;
+use oxidex::core::ReadOptions;
 use oxidex::core::format_dispatch::dispatch_format_parser;
 use oxidex::parsers::detect_format;
 use oxidex::parsers::raw::RawFormat;
@@ -229,8 +230,12 @@ fn test_parse_dpx_direct_table_fields() {
     data[800..804].copy_from_slice(&[50, 6, 6, 10]);
     data[820..839].copy_from_slice(b"Synthetic DPX test\0");
 
-    let metadata = dispatch_format_parser(&TestReader::new(data), FileFormat::DPX)
-        .expect("DPX header should parse");
+    let metadata = dispatch_format_parser(
+        &TestReader::new(data),
+        FileFormat::DPX,
+        &ReadOptions::default_full_listing(),
+    )
+    .expect("DPX header should parse");
 
     assert_eq!(metadata.get_string("FileType"), Some("DPX"));
     // `image/x-dpx` reaches output as `File:MIMEType`, from the generated MIME

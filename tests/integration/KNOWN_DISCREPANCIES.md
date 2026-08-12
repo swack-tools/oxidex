@@ -93,11 +93,16 @@ This document tracks acceptable differences in metadata extraction between ExifT
 
 ## JPEG COM / DQT wiring (2026-07-19)
 
-- **File:JPEGQualityEstimate is always emitted.** ExifTool computes this tag
-  only when explicitly requested (`-JPEGQualityEstimate` or `RequestAll > 2`)
-  because of Perl-side overhead; oxidex has no tag-request mechanism and the
-  computation is trivial, so it is always present. Values match ExifTool's
-  algorithm exactly (JPEGDigest.pm EstimateQuality).
+- **File:JPEGQualityEstimate is request-gated as of Step 21 (2026-08-12),
+  superseding the "always emitted" note this replaces.** ExifTool computes
+  this tag only when explicitly requested (`-JPEGQualityEstimate` or
+  `RequestAll > 2`, `ExifTool.pm:7682-7692`); oxidex now models the same
+  `REQ_TAG_LOOKUP` check (`core::read_options::ReadOptions`) and only
+  computes/emits the tag when specifically requested or under
+  `--extended-output`. Values still match ExifTool's algorithm exactly
+  (JPEGDigest.pm EstimateQuality) -- confirmed against the pinned oracle:
+  `-s -JPEGQualityEstimate` on `t/images/Canon.jpg` returns `61`, matching
+  `oxidex -s -JPEGQualityEstimate` on the same file.
 - **Multiple COM segments collapse to one File:Comment (last wins).** ExifTool
   reports each COM segment as a duplicate Comment tag under `-a`; MetadataMap
   stores one value per key.
@@ -109,6 +114,37 @@ This document tracks acceptable differences in metadata extraction between ExifT
   carrying multiple APP2 ICC_PROFILE segments each marked chunk 1 of 1 warn
   and keep the first profile's tags, matching ExifTool's behavior; the
   previous oxidex release silently kept the last.
+
+## OxiDex's extended-output namespace (Step 21, 2026-08-12)
+
+Prior to Step 21, oxidex emitted several tags in its *default* read mode
+that real ExifTool never emits under any option -- not even `-u`
+(Unknown). That made a precision comparison against the pinned oracle
+unscoreable (AGENTS.md's output-contract/8.4): `tools/exiftool-tables/
+conformance.py`'s EXTRA axis on `t/images/Canon.jpg` alone counted 13 such
+tags before this step, 0 after.
+
+These tags still exist -- they are useful for debugging oxidex itself --
+but now require the CLI's `--extended-output` flag (or, for
+`JPEGQualityEstimate` specifically, an explicit `-JPEGQualityEstimate`
+request; see the DQT note above). The namespace:
+
+| Tags | Source |
+|---|---|
+| `JPEG:Width`, `JPEG:Height`, `JPEG:ColorComponents` (a duplicate of `File:ColorComponents`), `JPEG:ComponentID_1..3`, `JPEG:YCbCrSubSampling_1..3`, `JPEG:SamplingFactors` | `src/parsers/jpeg/app_parsers.rs::parse_sof_segment_with_options` |
+| The undecoded-MakerNote hex-fallback tag (`ExifIFD:0x927C` when no vendor parser or `MakerNoteUnknown*` condition claims the note) and, generally, any tag whose name is `tag_db::lookup_tag_name`'s bare-hex fallback (an id with no name in the generated database, in any IFD) | `src/core/tiff_helpers.rs` (source-computed unconditionally, for `src/writers/exif_surgical.rs`'s round-trip fidelity; filtered at the CLI display boundary by `core::read_options::ReadOptions::strip_extended_only`) |
+| ZIP's per-entry forensic tags (`ZIP:File<N>:Filename`, `:CRC32`, `:CompressedSize`, ...) -- real ExifTool's `ZIP.pm` reports the unnumbered `Zip*` fields for the archive's first local file header only, never a per-entry breakdown | `src/parsers/archive/zip.rs`, filtered the same way as the hex-fallback tags above |
+
+ZIP's *archive-level* forensic summary fields (`ZIP:TotalCompressedSize`,
+`ZIP:CompressionRatio`, `ZIP:CreationDate`, `ZIP:CompressionMethod`, ...)
+are a related but explicitly out-of-scope EXTRA source Step 21 did not
+touch -- confirmed still present via `conformance.py --only ZIP.zip`. A
+future step should fold them into the same namespace.
+
+See `src/core/read_options.rs`'s module doc comment for the full design
+(including why the hex-fallback/ZIP categories are filtered at the CLI
+display boundary rather than gated at the source, unlike
+`JPEGQualityEstimate` and the JPEG SOF tags).
 
 ## Testing Strategy
 

@@ -10,9 +10,9 @@ use oxidex::cli::output_formatter::{
 use oxidex::cli::rename;
 use oxidex::cli::value_parser::parse_cli_tag_value;
 use oxidex::core::date_shift::{ShiftOperation, shift_metadata_dates};
-use oxidex::core::exiftool_compat::format_for_exiftool;
 use oxidex::core::operations::{
-    clear_all_metadata, copy_metadata, modify_tag, read_metadata_report_with_detector, remove_tag,
+    clear_all_metadata, copy_metadata, modify_tag, read_metadata_report_with_detector_and_options,
+    remove_tag,
 };
 use oxidex::core::read_report::ParseStatus;
 use std::process;
@@ -231,7 +231,15 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
 
 /// Handles read operations (displaying metadata)
 fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
-    match read_metadata_report_with_detector(file, args.detector) {
+    // Step 21: build request-awareness (`ReadOptions`) from the specific
+    // tags requested and `--extended-output` *before* reading, so a
+    // specifically-requested `-JPEGQualityEstimate` (or `--extended-output`)
+    // actually reaches the JPEG parser instead of being computed
+    // unconditionally or not at all. See `core::read_options`.
+    let tag_filter = args.specific_tags();
+    let read_options =
+        oxidex::core::ReadOptions::new(tag_filter.as_deref().unwrap_or(&[]), args.extended_output);
+    match read_metadata_report_with_detector_and_options(file, args.detector, &read_options) {
         Ok(report) => {
             // `--strict` opts back into the old fail-fast behavior: a read
             // that didn't fully parse is an error, not partial output. See
@@ -268,82 +276,30 @@ fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
                 return;
             }
 
-            // Get specific tags filter if provided (e.g., oxidex -Make -Model photo.jpg)
-            let tag_filter = args.specific_tags();
-            let no_print_conv = !args.exiftool_compat();
-
             // A specific `-TAG` request goes through Step 20's group/priority-
-            // aware resolution (`cli::tag_resolution`) instead of the exact/
-            // suffix match `tag_matches_filter` used to apply: it is the only
-            // path that can pick the right occurrence among several sharing a
-            // short name (`-Make` on a file with both `IFD0:Make` and
-            // `CIFF:Make`), honor a group qualifier (`-EXIF:Make`), list every
-            // retained occurrence (`-a`), or show the pre-PrintConv form on a
-            // per-occurrence basis. Every existing renderer
-            // (Human/JSON/CSV/Short) is reused unchanged: the resolved values
-            // are already display-ready, fed through as a synthesized
-            // `MetadataMap` with `filter_tags: None`.
+            // aware resolution (`cli::tag_resolution::resolve_requested_tags`)
+            // instead of the exact/suffix match `tag_matches_filter` used to
+            // apply; the unfiltered default listing applies Step 21's
+            // extended-namespace filter. See
+            // `cli::tag_resolution::resolve_file_output`'s doc comment for
+            // the full rationale, including why `-Gn` + human/short output
+            // is rendered directly rather than through a formatter.
             //
-            // No filter -- the default whole-file listing -- keeps its
-            // existing shape entirely (full-corpus A/B gate: default-mode
-            // output must stay unchanged), except that `--no-print-conv` now
-            // goes through `without_print_conv` instead of a bare pass-
-            // through, so format-before-store tags (`File:FileSize`) select
-            // their raw form there too, not just under a specific request.
-            //
-            // `-Gn` combined with human/short output is a further special
-            // case, for two reasons this step renders directly via
-            // `render_group_display_lines` instead of going through the
-            // synthesized-map + formatter path every other combination uses:
-            //
-            // 1. A multi-family label contains its own colon
-            //    (`"File:System"`), and `ShortFormatter` derives its
-            //    "short name" from the stored key by splitting on the
-            //    *last* colon (`tag_name.rsplit(':').next()`) -- so a
-            //    bracketed key like `"[File:System] FileSize"` gets
-            //    corrupted to `"System] FileSize"`.
-            // 2. `HumanReadableFormatter`/`ShortFormatter` both sort their
-            //    input alphabetically by key, which loses `-a`'s file order
-            //    once the group label is part of the sorted string
-            //    (`[CIFF] Make` sorts before `[IFD0] Make`). The pinned
-            //    oracle's own `-a -G1 -s -Make` row requires file order.
-            if let Some(requested) = &tag_filter {
-                let resolved = oxidex::cli::tag_resolution::resolve_requested_tags(
-                    &raw_metadata,
-                    requested,
-                    args.all_tags,
-                );
-                if let Some(families) = &args.group_display
-                    && !args.json
-                    && !args.csv
-                {
-                    let output = oxidex::cli::tag_resolution::render_group_display_lines(
-                        &resolved,
-                        families,
-                        no_print_conv,
-                        args.short_format,
-                    );
+            // Shared with batch mode (`cli::batch_processor`) via
+            // `cli::tag_resolution::resolve_file_output`, so the two CLI
+            // paths agree on `-a`/`-G*`/`--no-print-conv`/the extended
+            // namespace for the same file (Step 21 closes the Step 20 gap
+            // where batch bypassed this module entirely). `show_header`
+            // (the human-readable `"File: ..."`/`"Found N ..."` preamble)
+            // only ever applies to the unfiltered full listing.
+            match oxidex::cli::tag_resolution::resolve_file_output(&raw_metadata, args) {
+                oxidex::cli::tag_resolution::ResolvedFileOutput::Lines(output) => {
                     print!("{}", output);
-                    return;
                 }
-                let metadata = oxidex::cli::tag_resolution::build_display_map(
-                    &resolved,
-                    args.group_display.as_deref(),
-                    no_print_conv,
-                    !args.json,
-                );
-                print_resolved_metadata(file, &metadata, args, status, false);
-                return;
+                oxidex::cli::tag_resolution::ResolvedFileOutput::Metadata(metadata) => {
+                    print_resolved_metadata(file, &metadata, args, status, tag_filter.is_none());
+                }
             }
-
-            // No filter reaches this point (both `tag_filter` branches above
-            // return), so this is always the full-listing case.
-            let metadata = if no_print_conv {
-                raw_metadata.without_print_conv()
-            } else {
-                format_for_exiftool(&raw_metadata)
-            };
-            print_resolved_metadata(file, &metadata, args, status, true);
         }
         Err(e) => {
             eprintln!(
