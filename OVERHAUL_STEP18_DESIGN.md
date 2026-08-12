@@ -1,6 +1,17 @@
 # Step 18 design checkpoint — `TagOccurrence` and `TagSink`
 
-**Status: awaiting maintainer sign-off. No implementation has started.**
+**Status: SIGNED OFF by the maintainer 2026-08-11. Implementation authorized.**
+
+Decisions as answered:
+- **D1 — `Vec<TagOccurrence>` plus a lazily-built index.** File order stays intrinsic;
+  optimise later against a benchmark, not a guess.
+- **D2 — an interner from the start** (`Arc<str>` / arena), covering both generated
+  `&'static` names and XMP names discovered at parse time.
+- **D3 — Phase A is PURELY ADDITIVE.** Zero intended behavior change, so a failing
+  byte-identity diff unambiguously means a bug. Real duplicate retention lands in Step 19.
+- **D4 — leave the `value_forms` sidecar until Step 22**, which consumes the occurrence
+  winner view anyway; retiring it in Phase A would break the purely-additive property the
+  A/B gate depends on.
 Orchestrator-authored (plan rule 7 — never delegated). Base: `refactor/tag-machinery`
 @ `3d5a6a2a`. This is the resolution of disagreement **D1** and the largest single type
 change in the plan (effort L).
