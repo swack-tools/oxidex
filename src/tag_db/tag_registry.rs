@@ -7815,3 +7815,46 @@ mod tests {
         assert_eq!(tag.value_type(), ValueType::String);
     }
 }
+
+/// Numeric IDs that ExifTool declares, the manual write registry carries, and
+/// the YAML-built read index does NOT — so they write correctly and read back
+/// under their hex spelling (the W8 write/read asymmetry recorded in
+/// `src/bin/jpeg-tag-matrix/report.rs`).
+///
+/// This is deliberately an explicit allowlist rather than a general reverse
+/// view of [`TAG_REGISTRY`], because a general view is provably wrong in two
+/// ways that only surfaced under test:
+///
+/// * It ignores IFD scope. `TAG_REGISTRY` holds `EXIF:ThumbnailLength` at
+///   0x0202, but that tag is IFD1-only; a blanket reverse lookup renamed
+///   `IFD0:0x0202` to `IFD0:ThumbnailLength`, which ExifTool never emits.
+///   `TagDescriptor` carries no `WriteGroup`, so the scope cannot be checked.
+/// * The hex spelling is load-bearing for the writer. `exif_surgical` relies
+///   on MakerNote keys staying hex to detect changed/removed keys instead of
+///   silently dropping them.
+///
+/// Closing W8 generally therefore needs `WriteGroup` in the descriptor, which
+/// is a schema change, not a lookup change. Until then each entry here is
+/// added with its Exif.pm citation and its IFD scope stated.
+const MANUAL_ONLY_NUMERIC_NAMES: &[(u16, FormatFamily, &str, &str)] = &[
+    // Exif.pm:1050-1054 -- `Writable => 'string'`, `WriteGroup => 'IFD0'`.
+    (0x0151, FormatFamily::EXIF, "IFD0", "TargetPrinter"),
+];
+
+/// Looks up a name for a numeric ID that only the manual registry knows.
+///
+/// `ifd_name` is matched against the entry's declared `WriteGroup`, so a tag
+/// scoped to one IFD can never leak into another.
+#[must_use]
+pub fn manual_only_name_for_id(
+    tag_id: u16,
+    format_family: FormatFamily,
+    ifd_name: &str,
+) -> Option<&'static str> {
+    MANUAL_ONLY_NUMERIC_NAMES
+        .iter()
+        .find(|(id, family, scope, _)| {
+            *id == tag_id && *family == format_family && *scope == ifd_name
+        })
+        .map(|(_, _, _, name)| *name)
+}
