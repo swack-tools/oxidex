@@ -260,58 +260,90 @@ fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
             }
 
             let status = report.status;
-            let metadata = report.metadata;
+            let raw_metadata = report.metadata;
 
             // Check if any metadata was found
-            if metadata.is_empty() {
+            if raw_metadata.is_empty() {
                 println!("No metadata found in file: {}", file.display());
                 return;
             }
 
-            // Apply ExifTool-compatible formatting if requested
-            let metadata = if args.exiftool_compat() {
-                format_for_exiftool(&metadata)
-            } else {
-                metadata
-            };
-
             // Get specific tags filter if provided (e.g., oxidex -Make -Model photo.jpg)
             let tag_filter = args.specific_tags();
-            let filter_slice = tag_filter.as_deref();
+            let no_print_conv = !args.exiftool_compat();
 
-            // Output based on requested format using formatters
-            // Check CSV first, then JSON, then short, then default to human-readable
-            if args.csv {
-                // CSV output format
-                let formatter = CsvFormatter;
-                let output = formatter.format(&metadata, filter_slice);
-                print!("{}", output);
-            } else if args.json {
-                // JSON output format. Carries `Status` for any read that
-                // didn't fully parse (see `JsonFormatter::format_with_status`);
-                // identical to plain `format` for a healthy `Parsed` read.
-                let formatter = JsonFormatter;
-                let output = formatter.format_with_status(&metadata, filter_slice, Some(status));
-                println!("{}", output);
-            } else if args.short_format {
-                // Short format output (-s flag)
-                let formatter = ShortFormatter;
-                let output = formatter.format(&metadata, filter_slice);
-                print!("{}", output);
-            } else {
-                // Human-readable output format
-                if filter_slice.is_none() {
-                    // Only show header when showing all tags
-                    println!("File: {}", file.display());
-                    println!("Found {} metadata tag(s):", metadata.len());
-                    println!();
+            // A specific `-TAG` request goes through Step 20's group/priority-
+            // aware resolution (`cli::tag_resolution`) instead of the exact/
+            // suffix match `tag_matches_filter` used to apply: it is the only
+            // path that can pick the right occurrence among several sharing a
+            // short name (`-Make` on a file with both `IFD0:Make` and
+            // `CIFF:Make`), honor a group qualifier (`-EXIF:Make`), list every
+            // retained occurrence (`-a`), or show the pre-PrintConv form on a
+            // per-occurrence basis. Every existing renderer
+            // (Human/JSON/CSV/Short) is reused unchanged: the resolved values
+            // are already display-ready, fed through as a synthesized
+            // `MetadataMap` with `filter_tags: None`.
+            //
+            // No filter -- the default whole-file listing -- keeps its
+            // existing shape entirely (full-corpus A/B gate: default-mode
+            // output must stay unchanged), except that `--no-print-conv` now
+            // goes through `without_print_conv` instead of a bare pass-
+            // through, so format-before-store tags (`File:FileSize`) select
+            // their raw form there too, not just under a specific request.
+            //
+            // `-Gn` combined with human/short output is a further special
+            // case, for two reasons this step renders directly via
+            // `render_group_display_lines` instead of going through the
+            // synthesized-map + formatter path every other combination uses:
+            //
+            // 1. A multi-family label contains its own colon
+            //    (`"File:System"`), and `ShortFormatter` derives its
+            //    "short name" from the stored key by splitting on the
+            //    *last* colon (`tag_name.rsplit(':').next()`) -- so a
+            //    bracketed key like `"[File:System] FileSize"` gets
+            //    corrupted to `"System] FileSize"`.
+            // 2. `HumanReadableFormatter`/`ShortFormatter` both sort their
+            //    input alphabetically by key, which loses `-a`'s file order
+            //    once the group label is part of the sorted string
+            //    (`[CIFF] Make` sorts before `[IFD0] Make`). The pinned
+            //    oracle's own `-a -G1 -s -Make` row requires file order.
+            if let Some(requested) = &tag_filter {
+                let resolved = oxidex::cli::tag_resolution::resolve_requested_tags(
+                    &raw_metadata,
+                    requested,
+                    args.all_tags,
+                );
+                if let Some(families) = &args.group_display
+                    && !args.json
+                    && !args.csv
+                {
+                    let output = oxidex::cli::tag_resolution::render_group_display_lines(
+                        &resolved,
+                        families,
+                        no_print_conv,
+                        args.short_format,
+                    );
+                    print!("{}", output);
+                    return;
                 }
-
-                // Use HumanReadableFormatter
-                let formatter = HumanReadableFormatter;
-                let output = formatter.format(&metadata, filter_slice);
-                print!("{}", output);
+                let metadata = oxidex::cli::tag_resolution::build_display_map(
+                    &resolved,
+                    args.group_display.as_deref(),
+                    no_print_conv,
+                    !args.json,
+                );
+                print_resolved_metadata(file, &metadata, args, status, false);
+                return;
             }
+
+            // No filter reaches this point (both `tag_filter` branches above
+            // return), so this is always the full-listing case.
+            let metadata = if no_print_conv {
+                raw_metadata.without_print_conv()
+            } else {
+                format_for_exiftool(&raw_metadata)
+            };
+            print_resolved_metadata(file, &metadata, args, status, true);
         }
         Err(e) => {
             eprintln!(
@@ -321,6 +353,47 @@ fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
             );
             process::exit(1);
         }
+    }
+}
+
+/// Dispatches an already display-ready `metadata` (PrintConv applied or
+/// not, filtered to exactly what should show) to whichever formatter
+/// `args` selects. Shared tail of [`handle_read_operation`]'s two paths --
+/// a resolved specific-tag request and the full-listing default -- which
+/// differ only in how `metadata` was built, not in how it is printed.
+/// `show_header` gates the human-readable `"File: ..." / "Found N ..."`
+/// preamble, which only ever applied to the unfiltered full listing.
+fn print_resolved_metadata(
+    file: &std::path::Path,
+    metadata: &oxidex::core::MetadataMap,
+    args: &CliArgs,
+    status: ParseStatus,
+    show_header: bool,
+) {
+    if args.csv {
+        let formatter = CsvFormatter;
+        let output = formatter.format(metadata, None);
+        print!("{}", output);
+    } else if args.json {
+        // Carries `Status` for any read that didn't fully parse (see
+        // `JsonFormatter::format_with_status`); identical to plain `format`
+        // for a healthy `Parsed` read.
+        let formatter = JsonFormatter;
+        let output = formatter.format_with_status(metadata, None, Some(status));
+        println!("{}", output);
+    } else if args.short_format {
+        let formatter = ShortFormatter;
+        let output = formatter.format(metadata, None);
+        print!("{}", output);
+    } else {
+        if show_header {
+            println!("File: {}", file.display());
+            println!("Found {} metadata tag(s):", metadata.len());
+            println!();
+        }
+        let formatter = HumanReadableFormatter;
+        let output = formatter.format(metadata, None);
+        print!("{}", output);
     }
 }
 

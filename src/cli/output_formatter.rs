@@ -602,7 +602,7 @@ impl OutputFormatter for ShortFormatter {
 /// MakerNote/GPS text is full of 3-byte U+FFFD replacement characters, and 14
 /// files in the sample corpus (Samsung and Canon JPEGs, via
 /// `GPS:GPSProcessingMethod`) killed the whole `oxidex -e -s` invocation on it.
-fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String {
+pub(crate) fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String {
     if let Some(label) = friendly_enum_name(tag_name, value) {
         return label;
     }
@@ -668,7 +668,7 @@ fn join_list(items: Vec<String>) -> String {
 ///
 /// Converts each TagValue variant into a clean string representation
 /// without the enum structure (e.g., "Canon" instead of "String(\"Canon\")").
-fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
+pub(crate) fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
     if let Some(label) = friendly_enum_name(tag_name, value) {
         return label;
     }

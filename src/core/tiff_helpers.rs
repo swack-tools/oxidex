@@ -2814,13 +2814,33 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
         if tag_name == PRINT_IM_VERSION_TAG && metadata.contains_key(PRINT_IM_VERSION_TAG) {
             continue;
         }
+        let tag_value = TagValue::String(tag_value_str);
+        // Canon.pm:2723-2724 sets `Priority => 0` on `%Canon::FocalLength`
+        // key 1 explicitly: "the EXIF FocalLength is more reliable, so set
+        // this priority to zero". Every other MakerNote tag this loop
+        // records goes in at `record_makernote_tag`'s ordinary priority (1),
+        // which is also what the standard EXIF `FocalLength` gets -- so
+        // without this, a bare `-FocalLength` request tied on priority and
+        // fell to whichever arrived later (Step 20's cross-group request
+        // resolution, `cli::tag_resolution`), which is backwards: the pinned
+        // oracle's `Canon.jpg` resolves the bare request to `ExifIFD:
+        // FocalLength` (`34.0 mm`), not `Canon:FocalLength` (`34 mm`).
+        if tag_name == "Canon:FocalLength" {
+            metadata.insert_occurrence(
+                tag_name,
+                tag_value,
+                0,
+                "Canon",
+                crate::core::Instance::default(),
+            );
+            continue;
+        }
         // Convert string value to TagValue. `record_makernote_tag` recognizes
         // Pentax's `insert_low_priority_retained` synthetic `"<key> (N)"`
         // duplicate marker (LensType/LensFocalLength/PentaxModelID) and
         // records it as a real, always-losing occurrence instead of a
         // literal `"Tag (N)"` tag name; every other manufacturer's tags
         // pass straight through unaffected.
-        let tag_value = TagValue::String(tag_value_str);
         crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
             metadata, tag_name, tag_value,
         );

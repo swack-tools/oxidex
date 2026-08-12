@@ -38,8 +38,26 @@ pub struct CliArgs {
     /// Short output format (not yet fully implemented)
     pub short_format: bool,
 
-    /// Display all tags (default behavior, currently has no effect)
+    /// Display every retained occurrence of a requested tag, not just the
+    /// current priority winner (ExifTool's `-a`). Consumed by
+    /// `cli::tag_resolution` wherever a specific `-TAG` is requested;
+    /// without a tag filter, full-listing output is unaffected (Step 20's
+    /// `OVERHAUL_STEP18_DESIGN.md` scope -- see the module doc there).
     pub all_tags: bool,
+
+    /// Family numbers requested by `-G`/`-Gn`/`-Gn:m` (uppercase only), in
+    /// the order given -- `None` when no `-G` flag was seen.
+    ///
+    /// ExifTool defaults a bare `-G` to family 0 (confirmed against the
+    /// pinned oracle, not assumed: `-G -s -Make` on `t/images/ExifTool.jpg`
+    /// prints `[MakerNotes]`, family 0, not `[CIFF]`, family 1). Lowercase
+    /// `-g` requests ExifTool's *grouped* listing (`---- Group ----`
+    /// headers, tags nested underneath) rather than an inline per-tag
+    /// prefix; that is a different rendering this step does not implement,
+    /// so `-g` is still accepted (as it always was, to avoid the
+    /// `-j -G1 -a` regression `is_group_display_flag`'s doc comment
+    /// describes) but never populates this field.
+    pub group_display: Option<Vec<u8>>,
 
     /// Recursive directory processing
     pub recursive: bool,
@@ -147,6 +165,22 @@ fn is_group_display_flag(arg: &str) -> bool {
     rest.chars().all(|c| c.is_ascii_digit() || c == ':')
 }
 
+/// Parses an uppercase `-G`/`-Gn`/`-Gn:m:...` flag into the family numbers
+/// requested, in order. Returns `None` for a lowercase `-g` flag (or
+/// anything else `is_group_display_flag` matched but this function does not
+/// handle) -- see [`CliArgs::group_display`]'s doc comment for why.
+fn parse_group_display_families(arg: &str) -> Option<Vec<u8>> {
+    let body = arg.strip_prefix('-')?;
+    let rest = body.strip_prefix('G')?;
+    if rest.is_empty() {
+        // ExifTool's own default (confirmed against the pinned oracle, see
+        // `CliArgs::group_display`'s doc comment): family 0.
+        return Some(vec![0]);
+    }
+    let families: Option<Vec<u8>> = rest.split(':').map(|part| part.parse().ok()).collect();
+    families.filter(|families| !families.is_empty())
+}
+
 fn is_lexopt_short_arg(arg: &str) -> bool {
     let Some(body) = arg.strip_prefix('-') else {
         return false;
@@ -218,6 +252,7 @@ impl CliArgs {
         let mut csv = false;
         let mut short_format = false;
         let mut all_tags = false;
+        let mut group_display: Option<Vec<u8>> = None;
         let mut recursive = false;
         let mut preserve_file_times = false;
         let mut backup = false;
@@ -247,14 +282,21 @@ impl CliArgs {
             let arg = normalize_exiftool_option(raw_arg);
 
             // ExifTool's group-display flags (-G, -G0..-G8, -g, -g0..-g8, and
-            // colon-separated family lists like -G1:2) are accepted as a
-            // no-op: oxidex already prints "Group:Tag" key names
-            // unconditionally. Without this, an unrecognized "-G1" fell
-            // through to the tag-modification/specific-tag branch below and
-            // was treated as a request for a tag literally named "G1" --
-            // matching nothing and silently emptying the entire tag set
-            // (`-j -G1 -a` returned `[{}]` instead of the full extraction).
+            // colon-separated family lists like -G1:2) must not fall through
+            // to the tag-modification/specific-tag branch below, where an
+            // unrecognized "-G1" was treated as a request for a tag
+            // literally named "G1" -- matching nothing and silently
+            // emptying the entire tag set (`-j -G1 -a` returned `[{}]`
+            // instead of the full extraction). Step 20 stops discarding the
+            // family list outright (`-G*` was a pure no-op before this):
+            // `-G`/`-Gn`/`-Gn:m` now populate `group_display`, consumed by
+            // `cli::tag_resolution` wherever a specific `-TAG` is requested.
+            // `-g` continues to be swallowed without effect -- see
+            // `CliArgs::group_display`'s doc comment for why.
             if is_group_display_flag(&arg) {
+                if let Some(families) = parse_group_display_families(&arg) {
+                    group_display = Some(families);
+                }
                 continue;
             }
 
@@ -450,6 +492,7 @@ impl CliArgs {
             csv,
             short_format,
             all_tags,
+            group_display,
             recursive,
             preserve_file_times,
             backup,

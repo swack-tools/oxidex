@@ -1212,6 +1212,13 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
     // Process different segment types
     process_jfif_segments(&segments, &mut metadata, diagnostics);
     process_exif_segments(&segments, reader, &mut metadata, diagnostics);
+    // Must run after `process_exif_segments`: a CIFF directory embedded in an
+    // APP0 segment can carry its own `Make`/`Model`, and Step 18/19's
+    // equal-priority tie rule (`TagSink::record`) gives the win to whichever
+    // occurrence is recorded *later* -- which is what the pinned oracle's
+    // `t/images/ExifTool.jpg` requires (`-Make` resolves to CIFF's `Canon`,
+    // not `IFD0`'s `FUJIFILM`). See `jpeg::ciff_app0` for the citation.
+    crate::parsers::jpeg::ciff_app0::process_ciff_app0_segments(&segments, &mut metadata);
     process_xmp_segments(&segments, &mut metadata, diagnostics);
 
     // AFCP and FotoStation write their records after the JPEG's EOI, so they

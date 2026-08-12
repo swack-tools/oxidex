@@ -172,6 +172,43 @@ impl MetadataMap {
         previous
     }
 
+    /// Like [`insert_occurrence`](Self::insert_occurrence), but also attaches
+    /// the value `--no-print-conv` should show instead of `display_value`.
+    ///
+    /// Step 20 (`OVERHAUL_STEP18_DESIGN.md` §2.3 Phase C) needs this at
+    /// sites that fuse ExifTool's ValueConv/PrintConv into one formatted
+    /// string before ever calling `insert()` -- AGENTS.md's tagmodel/1.5
+    /// finding, "`--no-print-conv` cannot restore raw, because formatting
+    /// happens before storage". `extract_file_metadata`'s `File:FileSize`
+    /// (`file_metadata.rs`) is the one call site this step migrates: it
+    /// stores `"26 kB"` as `display_value` (unchanged from today, so every
+    /// existing reader -- `get_string`, JSON/CSV/human output,
+    /// `format_for_exiftool`'s pass-through -- observes no change) and the
+    /// byte count `26106` as `no_print_conv_value`, which only
+    /// [`MetadataMap::without_print_conv`] and the CLI's request-resolution
+    /// path (`cli::tag_resolution`) ever read back out.
+    pub(crate) fn insert_occurrence_with_raw<K: Into<String>>(
+        &mut self,
+        key: K,
+        display_value: TagValue,
+        no_print_conv_value: TagValue,
+        priority: u8,
+        group1: &str,
+        instance: super::tag_occurrence::Instance,
+    ) -> Option<TagValue> {
+        let key = key.into();
+        self.value_forms.remove(&key);
+        let previous = self.sink.get(&key).cloned();
+        let order = self.sink.next_order();
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, display_value, order);
+        occurrence.priority = priority;
+        occurrence.group1 = super::tag_occurrence::intern(group1);
+        occurrence.instance = instance;
+        occurrence.value = Some(no_print_conv_value);
+        self.sink.record(key, occurrence);
+        previous
+    }
+
     /// Every occurrence recorded for `key`, winners and losers alike, in
     /// file order. Exists to let Step 19's migrated call sites verify real
     /// duplicate retention (`cargo test --lib`) without a `-a` output mode,
@@ -305,6 +342,41 @@ impl MetadataMap {
     /// Returns an iterator over tag values
     pub fn values(&self) -> impl Iterator<Item = &TagValue> {
         self.sink.values()
+    }
+
+    /// Every key's current winner, paired with its full [`TagOccurrence`]
+    /// rather than the flattened display value [`MetadataMap::iter`] gives.
+    /// Used by Step 20's `--no-print-conv` handling and the CLI's
+    /// group/priority-aware request resolution (`cli::tag_resolution`).
+    pub(crate) fn winner_occurrences(&self) -> impl Iterator<Item = (&String, &TagOccurrence)> {
+        self.sink.winner_occurrences()
+    }
+
+    /// A copy of this map with each tag's stored value swapped for the form
+    /// `--no-print-conv` should show.
+    ///
+    /// For every key whose winning occurrence carries a value attached via
+    /// [`MetadataMap::insert_occurrence_with_raw`], that value is used.
+    /// Every other key is unaffected: its stored value already *is* the
+    /// pre-PrintConv form (parsers store raw values and `format_for_exiftool`
+    /// converts them to display strings as a separate pass -- see
+    /// `core::exiftool_compat` -- so skipping that pass, which is what
+    /// `--no-print-conv` has always done, already gave the right answer for
+    /// every tag except the handful of format-before-store sites this step
+    /// migrates). This is the whole-map counterpart to the CLI's
+    /// occurrence-aware resolution for a specific `-TAG` request; the
+    /// unfiltered/default-listing path uses this one so `--no-print-conv`
+    /// behaves consistently whether or not a tag filter is given.
+    pub fn without_print_conv(&self) -> MetadataMap {
+        let mut out = MetadataMap::with_capacity(self.len());
+        for (key, occurrence) in self.winner_occurrences() {
+            let value = occurrence
+                .value
+                .clone()
+                .unwrap_or_else(|| occurrence.raw.clone());
+            out.insert(key.clone(), value);
+        }
+        out
     }
 
     /// Typed getter for string values

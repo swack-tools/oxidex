@@ -7,6 +7,7 @@
 pub mod afcp;
 pub mod app_parsers;
 pub mod app_segments;
+pub(crate) mod ciff_app0;
 pub mod exif_parser;
 pub mod flashpix;
 pub mod flir_parser;

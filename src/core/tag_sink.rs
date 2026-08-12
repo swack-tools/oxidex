@@ -146,6 +146,25 @@ impl TagSink {
         self.winners.get(key).map(|&idx| &self.occurrences[idx].raw)
     }
 
+    /// The current winner occurrence for `key`, not just its `raw` value.
+    ///
+    /// Step 20's output-projection work (`-a`/`-G*`/`--no-print-conv`) needs
+    /// the whole occurrence -- `priority`, `group0`/`group1`, `order`, and
+    /// the `value` slot a parser may have attached via
+    /// [`super::metadata_map::MetadataMap::insert_occurrence_with_raw`] --
+    /// not just the flattened display value `get()` returns.
+    pub fn winner_occurrence(&self, key: &str) -> Option<&TagOccurrence> {
+        self.winners.get(key).map(|&idx| &self.occurrences[idx])
+    }
+
+    /// Every key's current winner, paired with its full occurrence. The
+    /// occurrence-aware counterpart to [`TagSink::iter`].
+    pub fn winner_occurrences(&self) -> impl Iterator<Item = (&String, &TagOccurrence)> {
+        self.winners
+            .iter()
+            .map(move |(k, &idx)| (k, &self.occurrences[idx]))
+    }
+
     pub fn get_mut(&mut self, key: &str) -> Option<&mut TagValue> {
         let idx = *self.winners.get(key)?;
         Some(&mut self.occurrences[idx].raw)

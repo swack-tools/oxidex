@@ -159,13 +159,29 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
         );
     }
 
-    // File size (human-readable format)
+    // File size. ExifTool's `%Extra` declares `FileSize` with a
+    // `PrintConv => \&ConvertFileSize` (ExifTool.pm:1388-1389) over the raw
+    // byte count; oxidex used to fuse that conversion in at insert time
+    // (storing only `"26 kB"`), which is exactly AGENTS.md's tagmodel/1.5
+    // finding -- `--no-print-conv` had nothing to select, because the raw
+    // byte count was already gone by the time it ran. `-n -s -FileSize` on
+    // the pinned `t/images/ExifTool.jpg` (26106 bytes) must print `26106`;
+    // `-G0:1 -s -FileSize` (no `-n`) must still print `[File:System]
+    // FileSize : 26 kB`, unchanged from before this step. Storing both
+    // forms on the same occurrence -- the formatted string where every
+    // existing reader already looks, the byte count where only
+    // `--no-print-conv` (`MetadataMap::without_print_conv`,
+    // `cli::tag_resolution`) looks -- satisfies both without touching any
+    // other reader of this tag.
     let file_size = file_metadata.len();
     let size_str = fmt_file_size(file_size);
-    insert_system_tag(
-        &mut metadata,
+    metadata.insert_occurrence_with_raw(
         "File:FileSize",
         TagValue::new_string(size_str),
+        TagValue::new_integer(file_size as i64),
+        SHIM_DEFAULT_PRIORITY,
+        "System",
+        Instance::default(),
     );
 
     // File modification date/time
