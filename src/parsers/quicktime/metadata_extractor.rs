@@ -9,7 +9,7 @@
 
 use super::atom_parser::Atom;
 use super::tag_mapping::atom_to_exiftool_tag;
-use crate::core::{FileReader, MetadataMap, TagValue};
+use crate::core::{FileReader, Instance, MetadataMap, SHIM_DEFAULT_PRIORITY, TagValue};
 use crate::exiftool_tables::{
     Acknowledged, DecodedValue, PerlCitation, RawAccess, decode_binary_table, find_table,
 };
@@ -838,6 +838,23 @@ fn extract_movie_header(
 }
 
 /// Extract track header metadata from tkhd atom
+///
+/// Step 19: emits family-1 `Track1..TrackN` (`instance` = `track_index + 1`)
+/// instead of the `_N` name-suffix convention the rest of this file still
+/// uses, so every tag stays under its real ExifTool name
+/// (`QuickTime:TrackID`, not `QuickTime:TrackID_2`). Per-track occurrences
+/// never displace each other (`TagSink::record`'s `Instance` guard,
+/// `ExifTool.pm:9564`'s `DOC_NUM` condition) -- confirmed against the pinned
+/// oracle on `CanonRaw.cr3`: `-a -G1 -s -TrackID` reports `[Track1] 1`,
+/// `[Track2] 2`, `[Track3] 3`, `[Track4] 4`, and the default (family-0-only)
+/// view keeps `QuickTime:TrackID = 1` -- Track1's value, because it is the
+/// first sub-document to claim the bare key. Scoped to this one function:
+/// `extract_media_header` and `extract_video_frame_rate` (below) still read
+/// a per-track `QuickTime:MediaTimeScale` back out of `metadata` by its
+/// suffixed key, which the occurrence model's single winner-per-key view
+/// cannot serve correctly for tracks 2+ without also threading the value
+/// through the call rather than round-tripping it through the map -- left
+/// for a later step rather than risked here.
 fn extract_track_header(
     tkhd: &Atom,
     metadata: &mut MetadataMap,
@@ -881,16 +898,22 @@ fn extract_track_header(
             )
         };
 
-    // Use track index for tag names if we have multiple tracks
-    let track_suffix = if track_index > 0 {
-        format!("_{}", track_index + 1)
-    } else {
-        String::new()
+    // Family-1 group and per-track instance identity for this track, in
+    // place of the old `_N` name-suffix convention. Track1 (track_index==0)
+    // is Instance(1), not the main-document default Instance(0) -- every
+    // track, including the first, is a `tkhd` sub-document in ExifTool's
+    // sense, and `Instance(1)`'s only special status here is that it is the
+    // first to claim each bare key.
+    let group1 = format!("Track{}", track_index + 1);
+    let instance = Instance((track_index + 1) as u32);
+    let insert_track_tag = |metadata: &mut MetadataMap, key: &'static str, value: TagValue| {
+        metadata.insert_occurrence(key, value, SHIM_DEFAULT_PRIORITY, &group1, instance);
     };
 
     // Track header version (ExifTool outputs this)
-    metadata.insert(
-        format!("QuickTime:TrackHeaderVersion{}", track_suffix),
+    insert_track_tag(
+        metadata,
+        "QuickTime:TrackHeaderVersion",
         TagValue::Integer(version as i64),
     );
 
@@ -900,18 +923,21 @@ fn extract_track_header(
     let create_date_str = render_quicktime_datetime(creation_time, is_cr3);
     let modify_date_str = render_quicktime_datetime(modification_time, is_cr3);
 
-    metadata.insert(
-        format!("QuickTime:TrackCreateDate{}", track_suffix),
+    insert_track_tag(
+        metadata,
+        "QuickTime:TrackCreateDate",
         TagValue::String(create_date_str),
     );
-    metadata.insert(
-        format!("QuickTime:TrackModifyDate{}", track_suffix),
+    insert_track_tag(
+        metadata,
+        "QuickTime:TrackModifyDate",
         TagValue::String(modify_date_str),
     );
 
     // Track ID
-    metadata.insert(
-        format!("QuickTime:TrackID{}", track_suffix),
+    insert_track_tag(
+        metadata,
+        "QuickTime:TrackID",
         TagValue::Integer(track_id as i64),
     );
 
@@ -926,16 +952,18 @@ fn extract_track_header(
     } else {
         format!("{} units", duration)
     };
-    metadata.insert(
-        format!("QuickTime:TrackDuration{}", track_suffix),
+    insert_track_tag(
+        metadata,
+        "QuickTime:TrackDuration",
         TagValue::String(duration_str),
     );
 
     // Track layer (2 bytes at version-dependent offset)
     let layer_offset = if version == 1 { 44 } else { 32 };
     if let Some(layer) = r.i16_at(layer_offset) {
-        metadata.insert(
-            format!("QuickTime:TrackLayer{}", track_suffix),
+        insert_track_tag(
+            metadata,
+            "QuickTime:TrackLayer",
             TagValue::Integer(layer as i64),
         );
     }
@@ -944,8 +972,9 @@ fn extract_track_header(
     // Volume is at layer_offset + 4 (2 bytes altGroup + 2 bytes to volume)
     if let Some(volume_raw) = r.i16_at(volume_offset) {
         let volume_pct = (volume_raw as f64 / 256.0) * 100.0;
-        metadata.insert(
-            format!("QuickTime:TrackVolume{}", track_suffix),
+        insert_track_tag(
+            metadata,
+            "QuickTime:TrackVolume",
             TagValue::String(format!("{:.2}%", volume_pct)),
         );
     }
@@ -956,8 +985,9 @@ fn extract_track_header(
 
     // Track enabled flag (bit 0 of flags)
     let enabled = (flags[2] & 0x01) != 0;
-    metadata.insert(
-        format!("QuickTime:TrackEnabled{}", track_suffix),
+    insert_track_tag(
+        metadata,
+        "QuickTime:TrackEnabled",
         TagValue::String(if enabled { "Yes" } else { "No" }.to_string()),
     );
 
@@ -965,16 +995,18 @@ fn extract_track_header(
     if r.len() >= width_offset + 8 {
         if let Some(width_fixed) = r.u32_at(width_offset) {
             let width = (width_fixed >> 16) as f64 + (width_fixed & 0xFFFF) as f64 / 65536.0;
-            metadata.insert(
-                format!("QuickTime:TrackWidth{}", track_suffix),
+            insert_track_tag(
+                metadata,
+                "QuickTime:TrackWidth",
                 TagValue::String(format!("{:.2}", width)),
             );
         }
 
         if let Some(height_fixed) = r.u32_at(width_offset + 4) {
             let height = (height_fixed >> 16) as f64 + (height_fixed & 0xFFFF) as f64 / 65536.0;
-            metadata.insert(
-                format!("QuickTime:TrackHeight{}", track_suffix),
+            insert_track_tag(
+                metadata,
+                "QuickTime:TrackHeight",
                 TagValue::String(format!("{:.2}", height)),
             );
         }
@@ -3653,6 +3685,50 @@ mod tests {
             metadata.get_string("QuickTime:HandlerClass"),
             Some("Data Handler")
         );
+    }
+
+    /// Step 19: `extract_track_header` emits family-1 `Track1..TrackN`
+    /// instead of `_N` name suffixes, and later tracks never displace
+    /// Track1's `TrackID` -- matching the pinned oracle's `CanonRaw.cr3`
+    /// (`-a -G1 -s -TrackID` -> `[Track1] 1`..`[Track4] 4`; default view
+    /// keeps `QuickTime:TrackID = 1`).
+    #[test]
+    fn extract_track_header_emits_family1_track_groups_and_retains_every_track() {
+        fn tkhd_with_track_id(track_id: u32) -> [u8; 84] {
+            let mut data = [0u8; 84];
+            data[12..16].copy_from_slice(&track_id.to_be_bytes());
+            data
+        }
+
+        let mut metadata = MetadataMap::new();
+        for (index, track_id) in [1u32, 2, 3, 4].into_iter().enumerate() {
+            let bytes = tkhd_with_track_id(track_id);
+            let tkhd = Atom {
+                atom_type: FourCC::from_string("tkhd").expect("valid atom type"),
+                data: &bytes,
+                header_size: 8,
+            };
+            extract_track_header(&tkhd, &mut metadata, index, false).expect("parses");
+        }
+
+        // The bare key -- what default (`-j`, no `-G1`) output reports --
+        // stays Track1's value no matter how many later tracks arrive.
+        assert_eq!(metadata.get_integer("QuickTime:TrackID"), Some(1));
+
+        // Every track is still retained, in file order, tagged with its own
+        // family-1 group and no `_N` suffix anywhere in the key.
+        let occurrences = metadata.occurrences_for("QuickTime:TrackID");
+        assert_eq!(occurrences.len(), 4, "all four tracks must be retained");
+        for (index, occurrence) in occurrences.iter().enumerate() {
+            assert_eq!(
+                occurrence.raw,
+                TagValue::Integer((index + 1) as i64),
+                "track {} value",
+                index + 1
+            );
+            assert_eq!(&*occurrence.group1, format!("Track{}", index + 1));
+            assert_eq!(occurrence.instance, Instance((index + 1) as u32));
+        }
     }
 
     #[test]

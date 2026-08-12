@@ -1280,15 +1280,54 @@ pub fn process_app15_segments(segments: &[Segment], metadata: &mut MetadataMap) 
     }
 }
 
-/// Processes JPEG COM (comment) segments.
+/// Processes JPEG COM (comment) segments, and the APP10 "UNICODE" comment
+/// variant that JPEG.pm's `%Main` table declares as the very same `Comment`
+/// tag (`APP10 => [{ Name => 'Comment', Condition => '$$valPt =~
+/// /^UNICODE\0/' }, ...]`, JPEG.pm:260-268) -- see
+/// [`crate::parsers::jpeg::app_parsers::parse_app10_unicode_comment_segment`].
 ///
 /// COM segments (marker 0xFFFE) carry free-form comment text. ExifTool exposes
-/// them as File:Comment with trailing NULs stripped; when several COM segments
-/// are present the last one wins (MetadataMap holds one value per key).
+/// them as File:Comment with trailing NULs stripped; when several segments --
+/// of either kind -- are present the *first one in the file* wins
+/// (`Comment`'s Extra-table `Priority => 0`, `ExifTool.pm:1311-1315`, "to
+/// preserve order of JPEG COM segments" -- see
+/// [`crate::parsers::jpeg::app_parsers::parse_comment_segment`]). Every
+/// segment is still recorded, so later ones remain reachable as retained,
+/// non-winning occurrences rather than being overwritten.
+///
+/// Both kinds are gathered and sorted by [`Segment::offset`] before either is
+/// parsed, rather than each being handled by its own single-marker pass in
+/// whatever fixed order this module happens to call them in: the two share
+/// one `Priority => 0` tag, so which one is genuinely first *in the file* is
+/// exactly what decides the winner, and only true byte position answers
+/// that. `ExifTool.jpg`'s own layout is why this matters -- its APP10
+/// Unicode segment (offset ~18228) precedes its COM segment (offset
+/// ~21931), so the Unicode comment must win despite COM being the more
+/// commonly-checked case.
 pub fn process_com_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     const COM_MARKER: u16 = 0xFFFE;
-    for segment in segments.iter().filter(|s| s.marker == COM_MARKER) {
-        let _ = crate::parsers::jpeg::app_parsers::parse_comment_segment(segment.data, metadata);
+    const APP10_MARKER: u16 = 0xFFEA;
+    const UNICODE_PREFIX: &[u8] = b"UNICODE\0";
+
+    let mut comment_segments: Vec<&Segment> = segments
+        .iter()
+        .filter(|s| {
+            s.marker == COM_MARKER
+                || (s.marker == APP10_MARKER && s.data.starts_with(UNICODE_PREFIX))
+        })
+        .collect();
+    comment_segments.sort_by_key(|s| s.offset);
+
+    for segment in comment_segments {
+        if segment.marker == COM_MARKER {
+            let _ =
+                crate::parsers::jpeg::app_parsers::parse_comment_segment(segment.data, metadata);
+        } else {
+            let _ = crate::parsers::jpeg::app_parsers::parse_app10_unicode_comment_segment(
+                segment.data,
+                metadata,
+            );
+        }
     }
 }
 
@@ -1871,6 +1910,50 @@ fn merge(source: MetadataMap, metadata: &mut MetadataMap) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `ExifTool.jpg`'s own shape: an APP10 Unicode comment segment earlier
+    /// in the file than a COM segment. Both are the same `Priority => 0`
+    /// `Comment` tag, so the *earlier byte offset* must win regardless of
+    /// which marker type this module happens to build its result vector
+    /// from first -- a fixed per-type processing order would get this
+    /// backwards, which is exactly the bug this test pins.
+    #[test]
+    fn process_com_segments_orders_app10_unicode_and_com_by_true_file_offset() {
+        let mut app10_payload = b"UNICODE\0".to_vec();
+        for unit in "unicode wins".encode_utf16() {
+            app10_payload.extend_from_slice(&unit.to_be_bytes());
+        }
+        let com_payload = b"com loses\0";
+
+        let segments = vec![
+            // COM appears earlier in this Vec, but later in the file --
+            // `offset` must be what decides the winner, not Vec position.
+            Segment::new(0xFFFE, 500, com_payload),
+            Segment::new(0xFFEA, 100, &app10_payload),
+        ];
+
+        let mut metadata = MetadataMap::new();
+        process_com_segments(&segments, &mut metadata);
+
+        assert_eq!(
+            metadata.get_string("File:Comment"),
+            Some("unicode wins"),
+            "the segment at the lower file offset must win, not the one first in the Vec"
+        );
+        assert_eq!(metadata.occurrences_for("File:Comment").len(), 2);
+    }
+
+    #[test]
+    fn process_com_segments_ignores_non_unicode_app10_payloads() {
+        // HDR gain-curve data (a disjoint APP10 payload shape this module
+        // handles separately, see `process_app10_segments`) must never be
+        // mistaken for a Comment.
+        let hdr_payload = b"HDR\0some gain curve bytes";
+        let segments = vec![Segment::new(0xFFEA, 0, hdr_payload)];
+        let mut metadata = MetadataMap::new();
+        process_com_segments(&segments, &mut metadata);
+        assert!(!metadata.contains_key("File:Comment"));
+    }
 
     fn dji_thermal_params2(relative_humidity: f32) -> Vec<u8> {
         let mut payload = vec![0; 68];

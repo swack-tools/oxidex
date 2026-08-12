@@ -47,7 +47,7 @@ use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_u16_array, extract_u32_array};
 use super::shared::binary_subdir::{self, BinaryTable, Cond, ModelPat};
 use super::shared::generic_decoders::ON_OFF;
-use super::shared::tag_priority::insert_low_priority;
+use super::shared::tag_priority::insert_low_priority_retained;
 use subdir_tables::{
     PENTAX_AFINFO, PENTAX_AWBINFO, PENTAX_BATTERYINFO, PENTAX_CAMERASETTINGS, PENTAX_CONV6,
     PENTAX_EVSTEPINFO, PENTAX_FACEINFO, PENTAX_FACEPOS, PENTAX_FACESIZE, PENTAX_FILTERINFO,
@@ -1405,7 +1405,7 @@ impl PentaxParser {
                         // (Pentax.pm:4202), as is the 0x0207 copy below. Between
                         // two 0-priority instances ExifTool keeps the first
                         // (ExifTool.pm:9541-9551), and 0x003f is read first.
-                        insert_low_priority(tags, "Pentax:LensType".to_string(), name);
+                        insert_low_priority_retained(tags, "Pentax:LensType".to_string(), name);
                     }
                     if raw.len() >= 4 {
                         let extender = if raw[3] == 0 {
@@ -2268,7 +2268,7 @@ impl PentaxParser {
                             // PentaxK100D.jpg carries `0 0 0 0` here, which
                             // decodes to a real lens name ("M-42 or No Lens")
                             // and so overwrote the correct one silently.
-                            insert_low_priority(tags, "Pentax:LensType".to_string(), name);
+                            insert_low_priority_retained(tags, "Pentax:LensType".to_string(), name);
                         }
                     }
                     if raw.len() >= 4 + 17 {
@@ -2306,7 +2306,7 @@ impl PentaxParser {
                             10.0 * (focal_raw >> 2) as f64 * 4f64.powi((focal_raw & 0x03) - 2);
                         // `%Pentax::LensData` key 9 is `Priority => 0`
                         // (Pentax.pm:4506).
-                        insert_low_priority(
+                        insert_low_priority_retained(
                             tags,
                             "Pentax:LensFocalLength".to_string(),
                             format!("{:.1} mm", focal),
@@ -2350,7 +2350,7 @@ impl PentaxParser {
                             // "(Optio SVi uses incorrect Optio SV ID here)"
                             // (Pentax.pm:4723). The 0x0005 copy read earlier is
                             // the one that prints.
-                            insert_low_priority(
+                            insert_low_priority_retained(
                                 tags,
                                 "Pentax:PentaxModelID".to_string(),
                                 name.to_string(),
@@ -5165,6 +5165,132 @@ mod tests {
             metadata.get_string("Pentax:PreviewImageSize"),
             Some("640x480")
         );
+    }
+
+    /// Step 19: Pentax.jpg's `LensType` and `PentaxModelID` are each written
+    /// twice (0x003f "LensRec" + 0x0207 "LensInfo"'s duplicate for
+    /// `LensType`; 0x0005 + 0x0215 "CameraInfo" for `PentaxModelID`) --
+    /// confirmed against the pinned oracle's `-a -G1 -s` on this exact file,
+    /// which lists `[Pentax] LensType` and `[Pentax] PentaxModelID` twice
+    /// each. The winner (what default output reports) must be unchanged
+    /// from before this step.
+    ///
+    /// This does not additionally assert an occurrence *count*: whether
+    /// oxidex's own decode reaches both of ExifTool's duplicate-producing
+    /// sites on this particular file is a decode-coverage question this
+    /// step does not touch (Stage 1 territory) -- see
+    /// `pentax_lens_type_and_model_id_duplicates_are_retained_end_to_end`,
+    /// below, for a controlled, corpus-independent proof that the retention
+    /// mechanism itself keeps both occurrences whenever both writer sites
+    /// do fire.
+    #[test]
+    fn pentax_jpg_lens_type_default_winner_is_unchanged() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
+        let metadata = crate::core::operations::read_metadata(std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Pentax.jpg",
+        ))
+        .expect("read pinned Pentax.jpg fixture");
+
+        assert_eq!(
+            metadata.get_string("Pentax:LensType"),
+            Some("Sigma or Tamron Lens (3 44)"),
+            "the default winner must be unchanged"
+        );
+        assert_eq!(metadata.get_string("Pentax:PentaxModelID"), Some("K10D"));
+
+        // No synthetic "(N)" marker key ever leaked out as a real tag name.
+        assert!(metadata.get_string("Pentax:LensType (1)").is_none());
+        assert!(metadata.get_string("Pentax:PentaxModelID (1)").is_none());
+    }
+
+    /// Controlled, corpus-independent end-to-end proof: when both of
+    /// `LensType`'s `Priority => 0` writer sites fire (0x003f `LensRec` and
+    /// 0x0207 `LensInfo`, the exact bytes `exiftool -v3` prints for
+    /// `Pentax/PentaxK100D.jpg` -- see `pentax_block`'s doc comment above),
+    /// routing the parser's `tags: HashMap<String, String>` output through
+    /// [`crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag`]
+    /// (the same function every real makernote-merge call site now uses)
+    /// keeps the first as the default winner *and* retains the second as a
+    /// real, always-losing `TagOccurrence` -- rather than the synthetic
+    /// `"Pentax:LensType (1)"` marker key leaking out as a literal tag name.
+    #[test]
+    fn pentax_lens_type_and_model_id_duplicates_are_retained_end_to_end() {
+        let mut camera_info = Vec::new();
+        camera_info.extend_from_slice(&76_400u32.to_be_bytes()); // PentaxModelID
+        camera_info.extend_from_slice(&20_040_101u32.to_be_bytes()); // ManufactureDate
+        camera_info.extend_from_slice(&1u32.to_be_bytes()); // ProductionCode major
+        camera_info.extend_from_slice(&0u32.to_be_bytes()); // ProductionCode minor
+        camera_info.extend_from_slice(&7u32.to_be_bytes()); // InternalSerialNumber
+
+        let data = pentax_block(
+            &[
+                (0x0005, 4, 1, 76_405),      // PentaxModelID LONG -> "Optio SVi"
+                (0x003F, 1, 4, 0x07F4_0000), // LensRec -> "smc PENTAX-DA 21mm F3.2 AL Limited"
+                (0x0207, 1, 4, 0x0000_0000), // LensInfo -> "M-42 or No Lens"
+                (0x0215, 4, 5, 64),          // CameraInfo
+            ],
+            &camera_info,
+        );
+
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+
+        let mut metadata = crate::core::MetadataMap::new();
+        for (tag_name, tag_value) in tags {
+            crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
+                &mut metadata,
+                tag_name,
+                crate::core::TagValue::new_string(tag_value),
+            );
+        }
+
+        assert_eq!(
+            metadata.get_string("Pentax:LensType"),
+            Some("smc PENTAX-DA 21mm F3.2 AL Limited"),
+            "0x003f LensRec must still be the default winner -- true regardless of\
+             merge order, since the winner's SHIM_DEFAULT_PRIORITY (1) always beats\
+             the shadowed copy's priority 0 whichever arrives first"
+        );
+        // `tags: HashMap<String, String>` -- the `MakerNoteParser` trait's
+        // output shape -- has no defined iteration order, so which of the
+        // two keys the merge loop visits first (and therefore which ends up
+        // at `occurrences()[0]` vs `[1]`) is not deterministic; only the
+        // *set* of retained values and the winner (asserted above) are.
+        let lens_type_occurrences = metadata.occurrences_for("Pentax:LensType");
+        assert_eq!(
+            lens_type_occurrences.len(),
+            2,
+            "both LensType copies must be retained"
+        );
+        let lens_type_values: Vec<&str> = lens_type_occurrences
+            .iter()
+            .filter_map(|o| o.raw.as_string())
+            .collect();
+        for expected in ["smc PENTAX-DA 21mm F3.2 AL Limited", "M-42 or No Lens"] {
+            assert!(
+                lens_type_values.contains(&expected),
+                "expected {expected:?} among retained LensType values, got {lens_type_values:?}"
+            );
+        }
+
+        assert_eq!(
+            metadata.get_string("Pentax:PentaxModelID"),
+            Some("Optio SVi"),
+            "0x0005 Main must still be the default winner"
+        );
+        assert_eq!(
+            metadata.occurrences_for("Pentax:PentaxModelID").len(),
+            2,
+            "both PentaxModelID copies must be retained"
+        );
+
+        // The synthetic "(N)" marker key must never leak out as a real tag.
+        assert!(metadata.get_string("Pentax:LensType (1)").is_none());
+        assert!(metadata.get_string("Pentax:PentaxModelID (1)").is_none());
     }
 }
 

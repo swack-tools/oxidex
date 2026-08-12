@@ -66,6 +66,85 @@ pub(crate) fn insert_low_priority(tags: &mut HashMap<String, String>, key: Strin
     tags.entry(key).or_insert(value);
 }
 
+/// Like [`insert_low_priority`], but for callers migrated to Step 19's real
+/// occurrence retention (`OVERHAUL_STEP18_DESIGN.md` §2.3 Phase B):
+/// currently just Pentax's `LensType`/`LensFocalLength`/`PentaxModelID`
+/// duplicate pairs (`pentax.rs`).
+///
+/// A shadowed value is not discarded outright as [`insert_low_priority`]
+/// does -- it is stashed under a synthetic `"<key> (N)"` companion key,
+/// mirroring `FoundTag`'s own `"$tag ($nextInd)"` duplicate-key convention
+/// (`ExifTool.pm:9532`). The `HashMap<String, String>` this trait's callers
+/// pass has no way to hold two values under one key, so the companion key is
+/// the seam: `tiff_helpers.rs`'s makernote merge recognizes it and records
+/// the shadowed value as a real, always-losing `TagOccurrence` under its
+/// base key instead of literally inserting a garbage `"Tag (N)"` tag name.
+///
+/// Every other `MakerNoteParser` -- everyone except Pentax -- keeps calling
+/// [`insert_low_priority`] unchanged (`shared/binary_subdir.rs`'s generic
+/// dispatch, in particular), so this function's behavior never reaches any
+/// other manufacturer's output.
+pub(crate) fn insert_low_priority_retained(
+    tags: &mut HashMap<String, String>,
+    key: String,
+    value: String,
+) {
+    if !tags.contains_key(&key) {
+        tags.insert(key, value);
+        return;
+    }
+    let mut n = 1u32;
+    while tags.contains_key(&format!("{key} ({n})")) {
+        n += 1;
+    }
+    tags.insert(format!("{key} ({n})"), value);
+}
+
+/// The other half of [`insert_low_priority_retained`]: records one
+/// `MakerNoteParser`-produced `(tag_name, value)` pair into a real
+/// `MetadataMap`, recognizing the `"<key> (N)"` synthetic duplicate marker
+/// and routing it to [`crate::core::MetadataMap::insert_occurrence`] as a
+/// real, always-losing `TagOccurrence` under its base key -- instead of what
+/// every makernote-merge call site used to do unconditionally, which would
+/// otherwise literally insert a tag named e.g. `"Pentax:LensType (1)"` that
+/// no ExifTool output ever produces.
+///
+/// Every non-Pentax manufacturer's tags pass straight through unaffected:
+/// only [`insert_low_priority_retained`] ever mints a `"(N)"`-suffixed key,
+/// and only Pentax's four call sites (`pentax.rs`) use it, so
+/// [`strip_duplicate_marker`] never matches anything else's tag name.
+///
+/// Every makernote-merge call site in the tree (JPEG/TIFF's
+/// `tiff_helpers.rs`, `avi.rs`'s Pentax `hymn`/`mknt` chunks, and RAW's
+/// `DNGPrivateData` MakN record) goes through this rather than a bare
+/// `metadata.insert()`, because Pentax MakerNotes can reach any of them.
+pub(crate) fn record_makernote_tag(
+    metadata: &mut crate::core::MetadataMap,
+    tag_name: String,
+    tag_value: crate::core::TagValue,
+) {
+    if let Some(base) = strip_duplicate_marker(&tag_name) {
+        metadata.insert_occurrence(base, tag_value, 0, "", crate::core::Instance::default());
+    } else {
+        metadata.insert(tag_name, tag_value);
+    }
+}
+
+/// Recognizes [`insert_low_priority_retained`]'s `"<key> (N)"` synthetic
+/// duplicate-marker convention and returns the base key, or `None` if
+/// `tag_name` carries no such marker.
+fn strip_duplicate_marker(tag_name: &str) -> Option<&str> {
+    let rest = tag_name.strip_suffix(')')?;
+    let paren = rest.rfind(" (")?;
+    let (base, digits) = rest.split_at(paren);
+    let digits = &digits[2..];
+    if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+        Some(base)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,5 +213,139 @@ mod tests {
         insert_low_priority(&mut tags, "Pentax:LensType".to_string(), "low".to_string());
         tags.insert("Pentax:LensType".to_string(), "normal".to_string());
         assert_eq!(tags["Pentax:LensType"], "normal");
+    }
+
+    #[test]
+    fn insert_low_priority_retained_keeps_the_winner_at_the_bare_key() {
+        let mut tags = HashMap::new();
+        insert_low_priority_retained(
+            &mut tags,
+            "Pentax:LensType".to_string(),
+            "first".to_string(),
+        );
+        insert_low_priority_retained(
+            &mut tags,
+            "Pentax:LensType".to_string(),
+            "second".to_string(),
+        );
+        assert_eq!(tags["Pentax:LensType"], "first");
+    }
+
+    #[test]
+    fn insert_low_priority_retained_stashes_the_shadowed_value_under_a_companion_key() {
+        let mut tags = HashMap::new();
+        insert_low_priority_retained(
+            &mut tags,
+            "Pentax:LensType".to_string(),
+            "first".to_string(),
+        );
+        insert_low_priority_retained(
+            &mut tags,
+            "Pentax:LensType".to_string(),
+            "second".to_string(),
+        );
+        assert_eq!(
+            tags.get("Pentax:LensType (1)").map(String::as_str),
+            Some("second")
+        );
+    }
+
+    #[test]
+    fn insert_low_priority_retained_numbers_a_third_shadowed_value_distinctly() {
+        let mut tags = HashMap::new();
+        insert_low_priority_retained(
+            &mut tags,
+            "Pentax:LensType".to_string(),
+            "first".to_string(),
+        );
+        insert_low_priority_retained(
+            &mut tags,
+            "Pentax:LensType".to_string(),
+            "second".to_string(),
+        );
+        insert_low_priority_retained(
+            &mut tags,
+            "Pentax:LensType".to_string(),
+            "third".to_string(),
+        );
+        assert_eq!(tags["Pentax:LensType"], "first");
+        assert_eq!(
+            tags.get("Pentax:LensType (1)").map(String::as_str),
+            Some("second")
+        );
+        assert_eq!(
+            tags.get("Pentax:LensType (2)").map(String::as_str),
+            Some("third")
+        );
+    }
+
+    #[test]
+    fn insert_low_priority_retained_shadows_a_value_an_earlier_plain_insert_established() {
+        // PentaxModelID's shape: the normal (0x0005) copy is a plain
+        // `tags.insert`, and the low-priority (0x0215 CameraInfo) copy
+        // arrives after it and must still be retained, not silently
+        // dropped, even though it never displaces the winner.
+        let mut tags = HashMap::new();
+        tags.insert("Pentax:PentaxModelID".to_string(), "K10D".to_string());
+        insert_low_priority_retained(
+            &mut tags,
+            "Pentax:PentaxModelID".to_string(),
+            "K10D".to_string(),
+        );
+        assert_eq!(tags["Pentax:PentaxModelID"], "K10D");
+        assert_eq!(
+            tags.get("Pentax:PentaxModelID (1)").map(String::as_str),
+            Some("K10D")
+        );
+    }
+
+    #[test]
+    fn strip_duplicate_marker_recognizes_the_synthetic_key() {
+        assert_eq!(
+            strip_duplicate_marker("Pentax:LensType (1)"),
+            Some("Pentax:LensType")
+        );
+        assert_eq!(
+            strip_duplicate_marker("Pentax:LensType (12)"),
+            Some("Pentax:LensType")
+        );
+    }
+
+    #[test]
+    fn strip_duplicate_marker_ignores_ordinary_tag_names() {
+        assert_eq!(strip_duplicate_marker("Pentax:LensType"), None);
+        assert_eq!(strip_duplicate_marker("Pentax:LensType ()"), None);
+        assert_eq!(strip_duplicate_marker("Pentax:LensType (x)"), None);
+    }
+
+    #[test]
+    fn record_makernote_tag_ends_a_full_pentax_duplicate_pair_at_the_real_key_only() {
+        let mut metadata = crate::core::MetadataMap::new();
+        let mut tags = HashMap::new();
+        insert_low_priority_retained(
+            &mut tags,
+            "Pentax:LensType".to_string(),
+            "first".to_string(),
+        );
+        insert_low_priority_retained(
+            &mut tags,
+            "Pentax:LensType".to_string(),
+            "second".to_string(),
+        );
+
+        for (tag_name, value) in tags {
+            record_makernote_tag(
+                &mut metadata,
+                tag_name,
+                crate::core::TagValue::String(value),
+            );
+        }
+
+        assert_eq!(metadata.get_string("Pentax:LensType"), Some("first"));
+        assert!(
+            metadata.get_string("Pentax:LensType (1)").is_none(),
+            "the synthetic marker key must never become a real tag name"
+        );
+        assert_eq!(metadata.occurrences_for("Pentax:LensType").len(), 2);
     }
 }

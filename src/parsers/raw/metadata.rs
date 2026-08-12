@@ -3182,8 +3182,18 @@ fn parse_adobe_makn_record(block: &[u8], make: &str, metadata: &mut MetadataMap)
         );
         return;
     }
+    // `make` is a dynamic value here (a Pentax DNG's DNGPrivateData MakN
+    // record names Pentax), so `record_makernote_tag` -- not a bare
+    // `insert` -- is required: it recognizes
+    // `insert_low_priority_retained`'s synthetic `"<key> (N)"` duplicate
+    // marker and records it as a real, always-losing occurrence rather than
+    // a literal `"Tag (N)"` tag name.
     for (tag_name, tag_value) in tags {
-        metadata.insert(tag_name, TagValue::new_string(tag_value));
+        crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
+            metadata,
+            tag_name,
+            TagValue::new_string(tag_value),
+        );
     }
 }
 

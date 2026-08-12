@@ -139,6 +139,67 @@ impl MetadataMap {
         previous
     }
 
+    /// Records an occurrence with an explicit priority, family-1 group and
+    /// instance identity, following ExifTool's `FoundTag` arbitration
+    /// (`ExifTool.pm:9448`+) instead of `insert()`'s flat
+    /// `SHIM_DEFAULT_PRIORITY` / `Instance::default()`.
+    ///
+    /// Step 19's exemplar families (`OVERHAUL_STEP18_DESIGN.md` §2.3
+    /// Phase B) use this wherever real `Priority => 0` or per-track/
+    /// sub-document semantics apply -- JPEG COM segments, QuickTime track
+    /// headers, diagnostic warnings, and one Pentax MakerNote duplicate
+    /// pair. Every other call site keeps going through `insert()`
+    /// unchanged. See each call site for its own `ExifTool.pm` citation and
+    /// [`super::tag_sink::TagSink::record`] for the arbitration rule this
+    /// feeds.
+    pub(crate) fn insert_occurrence<K: Into<String>>(
+        &mut self,
+        key: K,
+        value: TagValue,
+        priority: u8,
+        group1: &str,
+        instance: super::tag_occurrence::Instance,
+    ) -> Option<TagValue> {
+        let key = key.into();
+        self.value_forms.remove(&key);
+        let previous = self.sink.get(&key).cloned();
+        let order = self.sink.next_order();
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, value, order);
+        occurrence.priority = priority;
+        occurrence.group1 = super::tag_occurrence::intern(group1);
+        occurrence.instance = instance;
+        self.sink.record(key, occurrence);
+        previous
+    }
+
+    /// Every occurrence recorded for `key`, winners and losers alike, in
+    /// file order. Exists to let Step 19's migrated call sites verify real
+    /// duplicate retention (`cargo test --lib`) without a `-a` output mode,
+    /// which is Step 20+'s job; nothing in default output reads this.
+    #[cfg(test)]
+    pub(crate) fn occurrences_for(&self, key: &str) -> Vec<&TagOccurrence> {
+        self.sink
+            .occurrences()
+            .iter()
+            .filter(|o| o.lookup_key() == key)
+            .collect()
+    }
+
+    /// Every occurrence recorded so far, winners and losers alike, in file
+    /// order, paired with the lookup key it was recorded under.
+    ///
+    /// Exists for consumers that rebuild a whole `MetadataMap` from another
+    /// one's contents -- [`normalize_metadata_map`](super::tag_normalization::normalize_metadata_map),
+    /// in particular -- so they can replay every occurrence (preserving
+    /// priority, family-1 group and instance) instead of iterating
+    /// [`MetadataMap::iter`]'s winner-only projection and silently
+    /// flattening every retained duplicate back to `insert()`'s
+    /// `SHIM_DEFAULT_PRIORITY`, the same failure mode `merge()` had before
+    /// Step 19 fixed it.
+    pub(crate) fn all_occurrences(&self) -> impl Iterator<Item = (String, &TagOccurrence)> {
+        self.sink.occurrences().iter().map(|o| (o.lookup_key(), o))
+    }
+
     /// Attaches a full-precision value form to an existing visible tag.
     ///
     /// The value is intentionally absent from iteration and serialization. It
@@ -156,10 +217,29 @@ impl MetadataMap {
     }
 
     /// Merges another map while retaining private value forms.
+    ///
+    /// Every occurrence from `other` -- not just its winner projection -- is
+    /// replayed into `self`'s own sink via
+    /// [`TagSink::record_carrying_over`], preserving each occurrence's
+    /// priority, family-1 group and instance rather than flattening it back
+    /// to `insert()`'s `SHIM_DEFAULT_PRIORITY`/`Instance::default()`.
+    ///
+    /// This matters because `merge()` is the one place a parser's own
+    /// sub-map (`format_metadata`, built by an entire segment pipeline) enters
+    /// the file's final `MetadataMap` (`operations.rs` Step 5) -- so the
+    /// original shape here (`other.sink.into_winner_map()` then a bare
+    /// `self.insert()` per key) would have silently thrown away every one
+    /// of Step 19's retained duplicates and real priorities the instant a
+    /// JPEG's `process_com_segments`-built sub-map crossed this boundary,
+    /// making the retention promise those call sites document a lie for
+    /// every multi-stage parser. Replaying occurrences one at a time
+    /// reproduces `other`'s own winner exactly (the tie-break rule is
+    /// deterministic over a fixed relative order) while keeping every
+    /// occurrence reachable afterward.
     pub(crate) fn merge(&mut self, other: MetadataMap) {
         let MetadataMap { sink, value_forms } = other;
-        for (key, value) in sink.into_winner_map() {
-            self.insert(key, value);
+        for occurrence in sink.into_occurrences() {
+            self.sink.record_carrying_over(occurrence);
         }
         for (key, value) in value_forms {
             self.set_value_form(key, value);
@@ -494,5 +574,106 @@ mod tests {
         let map: MetadataMap = tags.into_iter().collect();
         assert_eq!(map.len(), 2);
         assert_eq!(map.get_string("EXIF:Make"), Some("Canon"));
+    }
+}
+
+#[cfg(test)]
+mod step19_duplicate_retention_regression {
+    //! Part V §1.1 of the merged tag review found ~209-215 repeated
+    //! `group:name` cases across 53/194 `t/images` files that
+    //! `HashMap`-backed `MetadataMap` silently collapsed to one instance
+    //! each. Step 19 closes that for five specific tags across five
+    //! specific pinned files -- not the whole corpus, which stays
+    //! unmigrated until later exemplar families follow the same pattern.
+    //!
+    //! This is also the regression pin for two flattening points Step 19
+    //! discovered and fixed while wiring these families up end to end:
+    //! `MetadataMap::merge` (used wherever a parser's own sub-map enters the
+    //! final map -- the JPEG pipeline, in particular) and
+    //! `normalize_metadata_map` (the JPEG parser's own last step) each used
+    //! to iterate only the winner projection and rebuild a fresh map from
+    //! it, which silently re-flattened every retained duplicate straight
+    //! back to `insert()`'s `SHIM_DEFAULT_PRIORITY` the moment either ran --
+    //! so `ExifTool.jpg` reached this test with only one `File:Comment`
+    //! occurrence even after `parse_comment_segment`/
+    //! `parse_app10_unicode_comment_segment` correctly recorded two.
+
+    use std::path::Path;
+
+    fn occurrence_count(path: &str, key: &str) -> usize {
+        let path = Path::new(path);
+        if !path.is_file() {
+            eprintln!("skip: pinned fixture {} not present", path.display());
+            return usize::MAX; // never equals an asserted expectation
+        }
+        let report = crate::core::operations::read_metadata_report(path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        report.metadata.occurrences_for(key).len()
+    }
+
+    /// Two `Comment` sources -- the COM marker and the APP10 "UNICODE"
+    /// variant JPEG.pm declares as the same tag -- both `Priority => 0`.
+    #[test]
+    fn exiftool_jpg_retains_both_comment_sources() {
+        let n = occurrence_count(
+            "/tmp/oxidex-exiftool-cache/exiftool/t/images/ExifTool.jpg",
+            "File:Comment",
+        );
+        if n == usize::MAX {
+            return;
+        }
+        assert_eq!(n, 2);
+    }
+
+    /// One `tkhd` per track; each is a `TrackID` occurrence, and only
+    /// `Track1`'s wins the bare key (`TagSink::record`'s DOC_NUM guard).
+    #[test]
+    fn quicktime_mov_retains_both_track_ids() {
+        let n = occurrence_count(
+            "/tmp/oxidex-exiftool-cache/exiftool/t/images/QuickTime.mov",
+            "QuickTime:TrackID",
+        );
+        if n == usize::MAX {
+            return;
+        }
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn canonraw_cr3_retains_all_four_track_ids() {
+        let n = occurrence_count(
+            "/tmp/oxidex-exiftool-cache/exiftool/t/images/CanonRaw.cr3",
+            "QuickTime:TrackID",
+        );
+        if n == usize::MAX {
+            return;
+        }
+        assert_eq!(n, 4);
+    }
+
+    /// Pentax's 0x003f `LensRec` + 0x0207 `LensInfo` duplicate pair, and
+    /// the 0x0005 Main + 0x0215 `CameraInfo` `PentaxModelID` pair.
+    #[test]
+    fn pentax_jpg_retains_lens_type_and_model_id_duplicates() {
+        let root = "/tmp/oxidex-exiftool-cache/exiftool/t/images/Pentax.jpg";
+        let lens = occurrence_count(root, "Pentax:LensType");
+        let model = occurrence_count(root, "Pentax:PentaxModelID");
+        if lens == usize::MAX {
+            return;
+        }
+        assert_eq!(lens, 2);
+        assert_eq!(model, 2);
+    }
+
+    #[test]
+    fn pentax_avi_retains_lens_type_and_model_id_duplicates() {
+        let root = "/tmp/oxidex-exiftool-cache/exiftool/t/images/Pentax.avi";
+        let lens = occurrence_count(root, "Pentax:LensType");
+        let model = occurrence_count(root, "Pentax:PentaxModelID");
+        if lens == usize::MAX {
+            return;
+        }
+        assert_eq!(lens, 2);
+        assert_eq!(model, 2);
     }
 }

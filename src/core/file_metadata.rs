@@ -41,7 +41,7 @@
 //! ```
 
 use crate::core::value_formatter::format_file_size as fmt_file_size;
-use crate::core::{MetadataMap, TagValue};
+use crate::core::{Instance, MetadataMap, SHIM_DEFAULT_PRIORITY, TagValue};
 use crate::error::Result;
 use std::fs;
 use std::path::Path;
@@ -104,6 +104,30 @@ pub(crate) const UNKNOWN_MIME_TYPE: &str = "application/unknown";
 /// # Ok(())
 /// # }
 /// ```
+/// A filesystem fact, family-1 `System` per ExifTool's `%Extra` overrides
+/// (`ExifTool.pm:1317-1319` `Directory`, `:1333-1334` `FileName`,
+/// `:1388-1389` `FileSize`, `:1435-1443` `FileModifyDate`, `:1452-1462`
+/// `FileAccessDate`, `:1476-1479` `FileInodeChangeDate`/`FileCreateDate`,
+/// `:1496-1501` `FilePermissions`) -- confirmed group-qualified against the
+/// pinned oracle: `-G0:1 -FileName -Directory -FileSize -FileModifyDate
+/// Canon.jpg` prints `[File:System]` for all four. `FileType`,
+/// `FileTypeExtension` and `MIMEType` (below, outside this helper) get no
+/// such override in `%Extra` (`ExifTool.pm:1420-1432`, and `MIMEType` has no
+/// `%Extra` entry at all) -- family 1 there is simply group 0 (`File`),
+/// confirmed by the same oracle invocation printing plain `[File]` for
+/// `FileType`. Inserted at [`SHIM_DEFAULT_PRIORITY`], same as `insert()`:
+/// nothing about these tags needs real priority arbitration, only the
+/// family-1 label `insert()` cannot carry.
+fn insert_system_tag(metadata: &mut MetadataMap, key: &'static str, value: TagValue) {
+    metadata.insert_occurrence(
+        key,
+        value,
+        SHIM_DEFAULT_PRIORITY,
+        "System",
+        Instance::default(),
+    );
+}
+
 pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::with_capacity(10);
 
@@ -114,8 +138,9 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
     if let Some(filename) = path.file_name()
         && let Some(filename_str) = filename.to_str()
     {
-        metadata.insert(
-            "File:FileName".to_string(),
+        insert_system_tag(
+            &mut metadata,
+            "File:FileName",
             TagValue::new_string(filename_str.to_string()),
         );
     }
@@ -127,19 +152,28 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
         } else {
             parent.to_string_lossy().to_string()
         };
-        metadata.insert("File:Directory".to_string(), TagValue::new_string(dir_str));
+        insert_system_tag(
+            &mut metadata,
+            "File:Directory",
+            TagValue::new_string(dir_str),
+        );
     }
 
     // File size (human-readable format)
     let file_size = file_metadata.len();
     let size_str = fmt_file_size(file_size);
-    metadata.insert("File:FileSize".to_string(), TagValue::new_string(size_str));
+    insert_system_tag(
+        &mut metadata,
+        "File:FileSize",
+        TagValue::new_string(size_str),
+    );
 
     // File modification date/time
     if let Ok(modified) = file_metadata.modified() {
         let formatted_date = format_system_time(modified);
-        metadata.insert(
-            "File:FileModifyDate".to_string(),
+        insert_system_tag(
+            &mut metadata,
+            "File:FileModifyDate",
             TagValue::new_string(formatted_date),
         );
     }
@@ -147,8 +181,9 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
     // File access date/time
     if let Ok(accessed) = file_metadata.accessed() {
         let formatted_date = format_system_time(accessed);
-        metadata.insert(
-            "File:FileAccessDate".to_string(),
+        insert_system_tag(
+            &mut metadata,
+            "File:FileAccessDate",
             TagValue::new_string(formatted_date),
         );
     }
@@ -160,8 +195,9 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
         let ctime = file_metadata.ctime();
         let system_time = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(ctime as u64);
         let formatted_date = format_system_time(system_time);
-        metadata.insert(
-            "File:FileInodeChangeDate".to_string(),
+        insert_system_tag(
+            &mut metadata,
+            "File:FileInodeChangeDate",
             TagValue::new_string(formatted_date),
         );
     }
@@ -170,8 +206,9 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
     {
         if let Ok(created) = file_metadata.created() {
             let formatted_date = format_system_time(created);
-            metadata.insert(
-                "File:FileCreateDate".to_string(),
+            insert_system_tag(
+                &mut metadata,
+                "File:FileCreateDate",
                 TagValue::new_string(formatted_date),
             );
         }
@@ -183,8 +220,9 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
         let permissions = file_metadata.permissions();
         let mode = permissions.mode();
         let perm_str = format_unix_permissions(mode);
-        metadata.insert(
-            "File:FilePermissions".to_string(),
+        insert_system_tag(
+            &mut metadata,
+            "File:FilePermissions",
             TagValue::new_string(perm_str),
         );
     }
@@ -192,8 +230,9 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
     #[cfg(windows)]
     {
         // Windows doesn't have Unix-style permissions, so we show a placeholder
-        metadata.insert(
-            "File:FilePermissions".to_string(),
+        insert_system_tag(
+            &mut metadata,
+            "File:FilePermissions",
             TagValue::new_string("-rw-rw-rw-".to_string()),
         );
     }
@@ -654,6 +693,42 @@ mod tests {
         assert_eq!(meta.get_string("File:FileType"), Some("M2TS"));
         assert_eq!(meta.get_string("File:FileTypeExtension"), Some("mts"));
         assert_eq!(meta.get_string("File:MIMEType"), Some("video/m2ts"));
+    }
+
+    /// Step 19: filesystem facts get family-1 `System`
+    /// (`ExifTool.pm:1333-1334` etc.), but `FileType`/`FileTypeExtension`/
+    /// `MIMEType` get no such override and stay unmarked -- the boundary the
+    /// pinned oracle draws between `[File:System] FileSize` and
+    /// `[File] FileType` on `ExifTool.jpg`.
+    #[test]
+    fn test_extract_file_metadata_marks_system_facts_but_not_file_type() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("clip.mts");
+        std::fs::write(&path, b"placeholder").expect("write");
+
+        let meta = extract_file_metadata(&path).expect("extract");
+        for key in [
+            "File:FileName",
+            "File:Directory",
+            "File:FileSize",
+            "File:FileModifyDate",
+            "File:FileAccessDate",
+        ] {
+            let occurrences = meta.occurrences_for(key);
+            assert_eq!(occurrences.len(), 1, "{key} should be recorded once");
+            assert_eq!(
+                &*occurrences[0].group1, "System",
+                "{key} should be [File:System]"
+            );
+        }
+        for key in ["File:FileType", "File:FileTypeExtension", "File:MIMEType"] {
+            let occurrences = meta.occurrences_for(key);
+            assert_eq!(occurrences.len(), 1, "{key} should be recorded once");
+            assert_eq!(
+                &*occurrences[0].group1, "",
+                "{key} should carry no group1 override"
+            );
+        }
     }
 
     /// End-to-end regression for the second reported misdetection (.m4a).

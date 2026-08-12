@@ -4,7 +4,7 @@
 //! It orchestrates format detection, parser selection, and metadata extraction
 //! following the hexagonal architecture pattern.
 
-use super::{FileFormat, FileReader, MetadataMap, TagValue};
+use super::{FileFormat, FileReader, Instance, MetadataMap, TagValue};
 use crate::core::file_metadata::UNKNOWN_MIME_TYPE;
 use crate::core::format_dispatch::dispatch_format_parser;
 use crate::core::jpeg_helpers::{
@@ -692,18 +692,42 @@ fn identify_or_report_unsupported(
 /// *is* a tag, not a side channel that can go unreported. OxiDex has no
 /// per-read family-1 group to file it under, so both land under `File:`,
 /// the same group the pre-existing Casio CAM `File:Warning`
-/// (`parse_casio_cam_metadata`, below) already uses. Multiple messages of
-/// the same kind are joined with `"; "` rather than overwriting each other,
-/// and an existing value at the key is never clobbered, so nothing routed
-/// through here is silently lost the way the `eprintln!`s it replaces were.
+/// (`parse_casio_cam_metadata`, below) already uses.
+///
+/// Warnings: each *distinct* message becomes its own occurrence at priority
+/// `0`, one call to [`MetadataMap::insert_occurrence`] per message --
+/// `Warn` itself dedupes identical text before ever calling `FoundTag`
+/// (`WAS_WARNED`, `ExifTool.pm:5629-5636`), so a repeated message is
+/// recorded once here too. The default view is then whichever warning was
+/// recorded *first*: verified against the pinned oracle on `GE.jpg`, which
+/// carries two distinct MakerNotes-offset warnings and reports only the
+/// first (`"...offset for tag 0x0200"`) as the bare `Warning` tag under
+/// `-j -Warning`, `-j -a -Warning` and `-Warning` alike -- i.e. `-a` makes no
+/// difference to the default winner, matching two `Priority => 0`-shaped
+/// arrivals tying in the first's favor. An existing higher-priority
+/// `File:Warning` (e.g. Casio's own, below, inserted through the ordinary
+/// `insert()` shim) is *never* clobbered by a diagnostic either, for the
+/// same reason: `TagSink::record`'s priority-0 promotion means a real
+/// priority-1 tag always beats a priority-0 arrival, in either order. So
+/// nothing routed through here is silently lost the way the `eprintln!`s it
+/// replaces were, and every distinct message stays reachable through the
+/// occurrence store even when it does not win the default view.
 fn record_diagnostics(metadata: &mut MetadataMap, diagnostics: &[Diagnostic]) {
-    let warnings: Vec<&str> = diagnostics
+    const WARNING_PRIORITY: u8 = 0;
+    let mut seen_warnings = std::collections::HashSet::new();
+    for d in diagnostics
         .iter()
         .filter(|d| d.kind == DiagnosticKind::Warning)
-        .map(|d| d.message.as_str())
-        .collect();
-    if !warnings.is_empty() && !metadata.contains_key("File:Warning") {
-        metadata.insert("File:Warning", TagValue::new_string(warnings.join("; ")));
+    {
+        if seen_warnings.insert(d.message.as_str()) {
+            metadata.insert_occurrence(
+                "File:Warning",
+                TagValue::new_string(d.message.clone()),
+                WARNING_PRIORITY,
+                "",
+                Instance::default(),
+            );
+        }
     }
 
     let errors: Vec<&str> = diagnostics
@@ -1902,17 +1926,38 @@ mod tests {
     }
 
     #[test]
-    fn record_diagnostics_joins_multiple_warnings_into_one_tag() {
+    fn record_diagnostics_first_of_several_warnings_wins_and_all_are_retained() {
+        // Matches the pinned oracle on GE.jpg: two distinct warnings, and
+        // the bare `Warning` tag is always the first regardless of `-a`
+        // (ExifTool.pm:9541-9551's Priority=>0-shaped tie).
         let mut metadata = MetadataMap::new();
         let diagnostics = vec![
             Diagnostic::warning("first problem"),
             Diagnostic::warning("second problem"),
         ];
         record_diagnostics(&mut metadata, &diagnostics);
-        assert_eq!(
-            metadata.get_string("File:Warning"),
-            Some("first problem; second problem")
+        assert_eq!(metadata.get_string("File:Warning"), Some("first problem"));
+
+        let occurrences = metadata.occurrences_for("File:Warning");
+        assert_eq!(occurrences.len(), 2, "both warnings must be retained");
+        assert_eq!(occurrences[0].raw, TagValue::new_string("first problem"));
+        assert_eq!(occurrences[1].raw, TagValue::new_string("second problem"));
+    }
+
+    #[test]
+    fn record_diagnostics_deduplicates_identical_warning_text() {
+        // `Warn`'s `WAS_WARNED` dedupes identical text before ever calling
+        // `FoundTag` (ExifTool.pm:5629-5636) -- a repeated message is one
+        // occurrence, not two.
+        let mut metadata = MetadataMap::new();
+        record_diagnostics(
+            &mut metadata,
+            &[
+                Diagnostic::warning("same problem"),
+                Diagnostic::warning("same problem"),
+            ],
         );
+        assert_eq!(metadata.occurrences_for("File:Warning").len(), 1);
     }
 
     #[test]
@@ -1924,6 +1969,19 @@ mod tests {
             metadata.get_string("File:Warning"),
             Some("parser's own warning"),
             "an existing File:Warning must win over the sink's"
+        );
+    }
+
+    #[test]
+    fn record_diagnostics_never_overwrites_an_existing_warning_tag_inserted_after() {
+        // The priority-0 promotion rule makes this true in either
+        // insertion order, unlike a `contains_key` guard would be.
+        let mut metadata = MetadataMap::new();
+        record_diagnostics(&mut metadata, &[Diagnostic::warning("sink warning")]);
+        metadata.insert("File:Warning", TagValue::new_string("parser's own warning"));
+        assert_eq!(
+            metadata.get_string("File:Warning"),
+            Some("parser's own warning"),
         );
     }
 

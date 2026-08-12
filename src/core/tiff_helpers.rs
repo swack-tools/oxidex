@@ -2814,9 +2814,16 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
         if tag_name == PRINT_IM_VERSION_TAG && metadata.contains_key(PRINT_IM_VERSION_TAG) {
             continue;
         }
-        // Convert string value to TagValue
+        // Convert string value to TagValue. `record_makernote_tag` recognizes
+        // Pentax's `insert_low_priority_retained` synthetic `"<key> (N)"`
+        // duplicate marker (LensType/LensFocalLength/PentaxModelID) and
+        // records it as a real, always-losing occurrence instead of a
+        // literal `"Tag (N)"` tag name; every other manufacturer's tags
+        // pass straight through unaffected.
         let tag_value = TagValue::String(tag_value_str);
-        metadata.insert(tag_name, tag_value);
+        crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
+            metadata, tag_name, tag_value,
+        );
     }
     for (tag_name, value) in value_forms {
         metadata.set_value_form(tag_name, value);

@@ -142,6 +142,21 @@ impl TagOccurrence {
             origin: Provenance::default(),
         }
     }
+
+    /// Reconstructs the lookup key this occurrence was recorded under:
+    /// `"{group0}:{name}"`, or bare `name` when `group0` is empty. The exact
+    /// inverse of the split `from_insert_shim` performs, and equally exact
+    /// for Step 19's non-shim call sites -- none of them ever puts a colon
+    /// in `group0`. Used wherever an occurrence needs to be re-recorded
+    /// under its own key without the caller having to have kept the
+    /// original string around (`MetadataMap::merge`, in particular).
+    pub(crate) fn lookup_key(&self) -> String {
+        if self.group0.is_empty() {
+            self.name.to_string()
+        } else {
+            format!("{}:{}", self.group0, self.name)
+        }
+    }
 }
 
 /// A process-wide interner for tag/group names.

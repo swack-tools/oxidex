@@ -551,8 +551,19 @@ fn parse_pentax_data_list(
                     crate::parsers::tiff::ifd_parser::ByteOrder::BigEndian,
                     &mut makernote_tags,
                 );
+                // Every call here is Pentax (the `make` argument above is a
+                // literal `"Pentax"`), so `record_makernote_tag` -- not a
+                // bare `insert` -- is required: it recognizes
+                // `insert_low_priority_retained`'s synthetic `"<key> (N)"`
+                // duplicate marker (LensType/LensFocalLength/PentaxModelID)
+                // and records it as a real, always-losing occurrence rather
+                // than a literal `"Tag (N)"` tag name.
                 for (tag_name, tag_value_str) in makernote_tags {
-                    metadata.insert(tag_name, TagValue::String(tag_value_str));
+                    crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
+                        metadata,
+                        tag_name,
+                        TagValue::String(tag_value_str),
+                    );
                 }
             }
         }

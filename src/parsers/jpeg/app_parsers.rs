@@ -8,7 +8,7 @@
 //! - COM: JPEG Comment
 //! - SOF: Start of Frame (component information)
 
-use crate::core::{MetadataMap, TagValue};
+use crate::core::{Instance, MetadataMap, TagValue};
 use crate::io::EndianReader;
 
 /// Parse Picture Info (Ducky) segment (APP12)
@@ -113,23 +113,82 @@ fn decode_ducky_text(value_data: &[u8]) -> String {
 ///
 /// ExifTool exposes COM data as the File:Comment tag and strips trailing NUL
 /// bytes ("some dumb softwares add null terminators" — ExifTool.pm COM handler).
+///
+/// The Extra table's `Comment` entry is `Priority => 0, # to preserve order
+/// of JPEG COM segments` (`ExifTool.pm:1311-1315`), so when a file carries
+/// more than one COM segment the *first* one is ExifTool's default answer,
+/// not the last: two `Priority => 0` arrivals tie in the first's favor
+/// (`ExifTool.pm:9541-9551`, `9564`; see `TagSink::record`). Every segment
+/// still reaches [`MetadataMap`] via [`MetadataMap::insert_occurrence`], so
+/// later ones are retained as losing occurrences rather than discarded --
+/// on `ExifTool.jpg` the oracle's `-a -G1 -s -Comment` confirms both:
+/// `"© PhotoStudio Unicode comment.."` then `"a comment"`, in file order.
 pub fn parse_comment_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
     let end = data.iter().rposition(|&b| b != 0).map_or(0, |p| p + 1);
     let trimmed = &data[..end];
+    const COMMENT_PRIORITY: u8 = 0;
     match std::str::from_utf8(trimmed) {
         Ok(comment) => {
-            metadata.insert(
-                "File:Comment".to_string(),
+            metadata.insert_occurrence(
+                "File:Comment",
                 TagValue::String(comment.to_string()),
+                COMMENT_PRIORITY,
+                "",
+                Instance::default(),
             );
         }
         Err(_) => {
-            metadata.insert(
-                "File:Comment".to_string(),
+            metadata.insert_occurrence(
+                "File:Comment",
                 TagValue::Binary(trimmed.to_vec()),
+                COMMENT_PRIORITY,
+                "",
+                Instance::default(),
             );
         }
     }
+    Ok(())
+}
+
+/// Parse an APP10 "UNICODE" comment segment (marker 0xFFEA).
+///
+/// This is a *second* source for the same `File:Comment` tag `parse_comment_segment`
+/// writes, not a separate tag: JPEG.pm's `%Main` table declares it directly,
+/// `APP10 => [{ Name => 'Comment', Condition => '$$valPt =~ /^UNICODE\0/',
+/// Notes => 'PhotoStudio Unicode comment' }, ...]` (JPEG.pm:260-268) --
+/// the same `Comment` name the COM marker uses, so it shares the Extra
+/// table's `Priority => 0` (`ExifTool.pm:1311-1315`) and the same
+/// first-arrival-wins tie-break (`ExifTool.pm:9541-9551`). Distinct from
+/// the *other* APP10 payload shape this crate already parses --
+/// `parse_app10_hdr`'s `"HDR\0"`/`"AROT"`-prefixed gain-curve data, an
+/// unrelated tag family under a disjoint prefix.
+///
+/// The payload is `"UNICODE\0"` (8 bytes) followed by UTF-16BE text with no
+/// terminator of its own -- the segment's declared length is the only
+/// boundary, and nothing is trimmed (unlike the NUL-terminated COM case):
+/// `ExifTool.jpg`'s segment ends in a literal `\r\n`, which the oracle's
+/// `-j` output reproduces verbatim (`"© PhotoStudio Unicode comment\r\n"`).
+pub fn parse_app10_unicode_comment_segment(
+    data: &[u8],
+    metadata: &mut MetadataMap,
+) -> Result<(), String> {
+    const PREFIX: &[u8] = b"UNICODE\0";
+    let Some(text_bytes) = data.strip_prefix(PREFIX) else {
+        return Err("APP10 segment is not a UNICODE comment".to_string());
+    };
+    let units: Vec<u16> = text_bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+        .collect();
+    let comment = String::from_utf16_lossy(&units);
+    const COMMENT_PRIORITY: u8 = 0;
+    metadata.insert_occurrence(
+        "File:Comment",
+        TagValue::String(comment),
+        COMMENT_PRIORITY,
+        "",
+        Instance::default(),
+    );
     Ok(())
 }
 
@@ -653,6 +712,54 @@ mod tests {
             metadata.get("File:Comment"),
             Some(&TagValue::Binary(vec![0xFF, 0xFE, 0x00, 0x41]))
         );
+    }
+
+    /// Step 19: two COM segments -- the *first* wins the default view
+    /// (`Comment`'s `Priority => 0`, `ExifTool.pm:1311-1315`), matching the
+    /// pinned oracle's `ExifTool.jpg` default `Comment`, and the second is
+    /// still retained rather than discarded, matching `-a -G1 -s -Comment`
+    /// returning both in file order.
+    #[test]
+    fn test_parse_comment_segment_first_of_two_wins_and_both_are_retained() {
+        let mut metadata = MetadataMap::new();
+        parse_comment_segment(b"first comment\0", &mut metadata).unwrap();
+        parse_comment_segment(b"second comment\0", &mut metadata).unwrap();
+
+        assert_eq!(
+            metadata.get_string("File:Comment"),
+            Some("first comment"),
+            "the first COM segment must stay the default winner"
+        );
+
+        let occurrences = metadata.occurrences_for("File:Comment");
+        assert_eq!(occurrences.len(), 2, "both segments must be retained");
+        assert_eq!(occurrences[0].raw, TagValue::new_string("first comment"));
+        assert_eq!(occurrences[1].raw, TagValue::new_string("second comment"));
+    }
+
+    /// The exact payload shape `ExifTool.jpg`'s APP10 segment carries:
+    /// `"UNICODE\0"` followed by UTF-16BE text ending in a literal `\r\n`
+    /// that must survive undropped (unlike COM's NUL-trimming).
+    #[test]
+    fn test_parse_app10_unicode_comment_segment() {
+        let mut payload = b"UNICODE\0".to_vec();
+        for unit in "\u{a9} PhotoStudio Unicode comment\r\n".encode_utf16() {
+            payload.extend_from_slice(&unit.to_be_bytes());
+        }
+        let mut metadata = MetadataMap::new();
+        parse_app10_unicode_comment_segment(&payload, &mut metadata).unwrap();
+        assert_eq!(
+            metadata.get_string("File:Comment"),
+            Some("© PhotoStudio Unicode comment\r\n")
+        );
+    }
+
+    #[test]
+    fn test_parse_app10_unicode_comment_segment_rejects_a_non_unicode_payload() {
+        let mut metadata = MetadataMap::new();
+        let result = parse_app10_unicode_comment_segment(b"HDR\0some other data", &mut metadata);
+        assert!(result.is_err());
+        assert!(!metadata.contains_key("File:Comment"));
     }
 
     #[test]

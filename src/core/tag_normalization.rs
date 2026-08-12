@@ -137,13 +137,30 @@ pub fn normalize_tag_family(tag_key: &str) -> String {
 /// assert_eq!(normalized.get_string("ExifIFD:Make"), Some("Canon"));
 /// assert_eq!(normalized.get_string("IFD0:Model"), Some("EOS R5"));
 /// ```
+///
+/// Step 19: rebuilt from [`MetadataMap::all_occurrences`] rather than
+/// [`MetadataMap::iter`]'s winner-only projection, so every retained
+/// occurrence -- not just each key's current winner -- survives family
+/// renaming with its own priority, family-1 group and instance intact. This
+/// is the one call site in the JPEG pipeline where a segment producing more
+/// than one occurrence for the same key (`File:Comment`'s two `Priority =>
+/// 0` sources, in particular) is still live *before* this function runs --
+/// iterating winners only would have silently thrown the loser away a
+/// second time, immediately after `MetadataMap::merge` was fixed to stop
+/// doing exactly that at the pipeline's other flattening point.
 pub fn normalize_metadata_map(map: &crate::core::MetadataMap) -> crate::core::MetadataMap {
     let mut normalized = crate::core::MetadataMap::with_capacity(map.len());
-    for (key, value) in map.iter() {
-        let normalized_key = normalize_tag_family(key);
-        normalized.insert(normalized_key.clone(), value.clone());
-        if let Some(value_form) = map.value_form(key) {
-            normalized.set_value_form(normalized_key, value_form);
+    for (key, occurrence) in map.all_occurrences() {
+        let normalized_key = normalize_tag_family(&key);
+        normalized.insert_occurrence(
+            normalized_key.clone(),
+            occurrence.raw.clone(),
+            occurrence.priority,
+            &occurrence.group1,
+            occurrence.instance,
+        );
+        if let Some(value_form) = map.value_form(&key) {
+            normalized.set_value_form(normalized_key, value_form.to_string());
         }
     }
     normalized
