@@ -11,13 +11,9 @@
 //! `src/parsers/tiff/makernotes` for exactly this reason (see
 //! `tiff/makernote_dispatcher.rs` and `tiff/makernotes/mod.rs`).
 //!
-//! Only the scalar device/app identification fields are decoded here
-//! (`Google.pm:547-561` plus `FrameCount`/`CreateDate` at `9-3`/`9-36-1`).
-//! The large binary payloads under the same table (`ImageData`,
-//! `TimeLogText`, `SummaryText`, per-frame `PayloadFrame*`, ...) are left
-//! unimplemented -- getting their exact ExifTool-reported byte counts and
-//! binary framing right is a separate, larger effort, and a wrong value
-//! under a real tag name is worse than an absent tag.
+//! This implements the named scalar HDRP fields exercised by the pinned
+//! corpus.  Unknown protobuf records deliberately remain absent: a plausible
+//! value under a real ExifTool tag name is worse than no value at all.
 
 use std::io::Read;
 
@@ -44,6 +40,22 @@ pub fn decode_hdrp_plus_makernote(raw_value: &str) -> Vec<(String, String)> {
     }
 
     let top = parse_fields(&inflated);
+
+    // `1-1`/`1-2`: the named finished-image records (Google.pm:526-527).
+    // ImageData is Binary => 1, so ExifTool renders its decoded byte length.
+    if let Some(Field::Bytes(sub1)) = last_field(&top, 1) {
+        let f1 = parse_fields(sub1);
+        push_string_field(&f1, 1, "MakerNotes:ImageName", &mut out);
+        if let Some(Field::Bytes(bytes)) = last_field(&f1, 2) {
+            out.push((
+                "MakerNotes:ImageData".to_string(),
+                format!(
+                    "(Binary data {} bytes, use -b option to extract)",
+                    bytes.len()
+                ),
+            ));
+        }
+    }
 
     // `9-36-1`: HDR-Plus frame CreateDate (Google.pm:539-546).
     if let Some(Field::Bytes(sub9)) = last_field(&top, 9) {
@@ -72,8 +84,50 @@ pub fn decode_hdrp_plus_makernote(raw_value: &str) -> Vec<(String, String)> {
         push_string_field(&f12, 4, "MakerNotes:DeviceHardwareRevision", &mut out);
         push_string_field(&f12, 6, "MakerNotes:HDRPSoftware", &mut out);
         push_string_field(&f12, 7, "MakerNotes:AndroidRelease", &mut out);
+        // `12-8`: Unix milliseconds, PrintConv => ConvertDateTime
+        // (Google.pm:554-559). The protobuf value is integral milliseconds,
+        // and the source table's precision is three decimal places.
+        if let Some(Field::Varint(millis)) = last_field(&f12, 8) {
+            if let Ok(millis) = i64::try_from(*millis)
+                && let Some(utc) = chrono::DateTime::from_timestamp_millis(millis)
+            {
+                out.push((
+                    "MakerNotes:SoftwareDate".to_string(),
+                    utc.with_timezone(&chrono::Local)
+                        .format("%Y:%m:%d %H:%M:%S%.3f%:z")
+                        .to_string(),
+                ));
+            }
+        }
         push_string_field(&f12, 9, "MakerNotes:Application", &mut out);
         push_string_field(&f12, 10, "MakerNotes:AppVersion", &mut out);
+
+        // `12-12-*`, `12-13-*`, and `12-14` are protobuf fixed32 floats.
+        // ExifTool widens the f32 and stringifies the resulting Perl NV with
+        // `%.15g`; keep that exact rendering through the shared formatter.
+        if let Some(Field::Bytes(exposure)) = last_field(&f12, 12) {
+            let exposure = parse_fields(exposure);
+            push_f32_field(
+                &exposure,
+                1,
+                "MakerNotes:ExposureTimeMin",
+                1.0 / 1000.0,
+                &mut out,
+            );
+            push_f32_field(
+                &exposure,
+                2,
+                "MakerNotes:ExposureTimeMax",
+                1.0 / 1000.0,
+                &mut out,
+            );
+        }
+        if let Some(Field::Bytes(iso)) = last_field(&f12, 13) {
+            let iso = parse_fields(iso);
+            push_f32_field(&iso, 1, "MakerNotes:ISOMin", 1.0, &mut out);
+            push_f32_field(&iso, 2, "MakerNotes:ISOMax", 1.0, &mut out);
+        }
+        push_f32_field(&f12, 14, "MakerNotes:MaxAnalogISO", 1.0, &mut out);
     }
 
     out
@@ -274,14 +328,16 @@ enum Field<'a> {
     Varint(u64),
     /// Wire type 2 (string, bytes, or embedded message).
     Bytes(&'a [u8]),
+    /// Wire type 5. Google HDRP uses these for its `float` fields.
+    Fixed32(u32),
 }
 
 /// Parses top-level Protobuf records from `data`, stopping (and keeping
 /// whatever was already decoded) at the first malformed record rather than
 /// guessing at a resync point. Only wire types 0 (varint) and 2
 /// (length-delimited) are needed for the fields this module reads; a
-/// fixed32/fixed64 record is skipped over (kept out of the result) since
-/// none of the target fields use them.
+/// fixed64 records are skipped. Fixed32 is retained because Google HDRP's
+/// known exposure and ISO fields are protobuf `float`s.
 fn parse_fields(data: &[u8]) -> Vec<(u32, Field<'_>)> {
     let mut out = Vec::new();
     let mut pos = 0usize;
@@ -322,6 +378,12 @@ fn parse_fields(data: &[u8]) -> Vec<(u32, Field<'_>)> {
                 if pos + 4 > data.len() {
                     break;
                 }
+                out.push((
+                    id,
+                    Field::Fixed32(u32::from_le_bytes(
+                        data[pos..pos + 4].try_into().expect("four-byte field"),
+                    )),
+                ));
                 pos += 4;
             }
             _ => break, // deprecated group start/end (3/4) or invalid type
@@ -367,6 +429,22 @@ fn push_string_field(
         && let Ok(s) = std::str::from_utf8(bytes)
     {
         out.push((tag.to_string(), s.to_string()));
+    }
+}
+
+fn push_f32_field(
+    fields: &[(u32, Field<'_>)],
+    id: u32,
+    tag: &str,
+    scale: f64,
+    out: &mut Vec<(String, String)>,
+) {
+    if let Some(Field::Fixed32(bits)) = last_field(fields, id) {
+        let value = f64::from(f32::from_bits(*bits)) * scale;
+        out.push((
+            tag.to_string(),
+            crate::core::formatters::numeric_precision::perl_number(value),
+        ));
     }
 }
 

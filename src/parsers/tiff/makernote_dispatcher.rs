@@ -118,6 +118,13 @@ fn parser_for_make_prefix(
     if make.starts_with("general imaging") {
         return Some(Box::new(ge::GeParser) as Box<dyn MakerNoteParser>);
     }
+    // MakerNotes.pm's MakerNoteFLIR is selected by `Make =~ /^(FLIR
+    // Systems|Teledyne FLIR)/`.  The corpus FLIR_i7 identifies itself as
+    // "FLIR Systems AB", so an exact "flir systems" arm silently skipped its
+    // TIFF MakerNote and left the three rational measurements unreachable.
+    if make.starts_with("flir systems") || make.starts_with("teledyne flir") {
+        return Some(Box::new(flir::FlirParser) as Box<dyn MakerNoteParser>);
+    }
     if make.starts_with("samsung") {
         // The Samsung GX-1L/GX-1S/GX10/GX20 are rebadged Pentax bodies and
         // write a Pentax "AOC\0" MakerNote; ExifTool files their tags under

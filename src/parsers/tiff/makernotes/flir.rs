@@ -37,9 +37,11 @@
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use std::collections::HashMap;
 
+use super::makernote_context::MakerNoteContext;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_string};
 use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
+use super::shared::table_ifd::print_rational;
 
 // Import registry module
 use super::registries::flir_registry;
@@ -313,6 +315,100 @@ impl FlirParser {
     pub fn new() -> Self {
         FlirParser
     }
+
+    /// Parse the FLIR MakerNote IFD.  Its entry offsets count from the
+    /// enclosing TIFF header, not from the MakerNote value.  The directory
+    /// itself remains in `directory_data`, while `value_data` is the TIFF
+    /// context that resolves those offsets.
+    fn parse_ifd(
+        &self,
+        directory_data: &[u8],
+        value_data: &[u8],
+        byte_order: ByteOrder,
+        tags: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
+        let config = IfdParserConfig {
+            signature: Some(FLIR_SIGNATURE),
+            signature_offset: 4,
+            max_entries: 200,
+        };
+
+        let registry = flir_registry();
+        parse_ifd_entries(directory_data, byte_order, &config, |entry, _| {
+            // FLIR.pm Main: tags 1 and 2 are rational64s, while tag 3 is
+            // rational64u with PrintConv sprintf("%.2f", $val).  Do not
+            // route these through the old SHORT-only registry path.
+            match entry.tag_id {
+                0x0001 | 0x0002 if entry.field_type == 5 && entry.value_count == 1 => {
+                    let offset = entry.value_offset as usize;
+                    let Some(bytes) = value_data.get(offset..offset + 8) else {
+                        return;
+                    };
+                    let reader = crate::io::EndianReader::new(bytes, byte_order.to_io_byte_order());
+                    let (Some(numerator), Some(denominator)) = (reader.i32_at(0), reader.i32_at(4))
+                    else {
+                        return;
+                    };
+                    let name = if entry.tag_id == 0x0001 {
+                        "ImageTemperatureMax"
+                    } else {
+                        "ImageTemperatureMin"
+                    };
+                    tags.insert(
+                        format!("MakerNotes:{name}"),
+                        print_rational(i64::from(numerator), i64::from(denominator)),
+                    );
+                }
+                0x0003 if entry.field_type == 5 && entry.value_count == 1 => {
+                    let offset = entry.value_offset as usize;
+                    let Some(bytes) = value_data.get(offset..offset + 8) else {
+                        return;
+                    };
+                    let reader = crate::io::EndianReader::new(bytes, byte_order.to_io_byte_order());
+                    let (Some(numerator), Some(denominator)) = (reader.u32_at(0), reader.u32_at(4))
+                    else {
+                        return;
+                    };
+                    if denominator != 0 {
+                        tags.insert(
+                            "MakerNotes:Emissivity".to_string(),
+                            format!("{:.2}", f64::from(numerator) / f64::from(denominator)),
+                        );
+                    }
+                }
+                _ if matches!(
+                    entry.tag_id,
+                    FLIR_MODEL
+                        | FLIR_SERIAL
+                        | FLIR_FIRMWARE
+                        | FLIR_LENS_MODEL
+                        | FLIR_CALIBRATION_DATE
+                ) =>
+                {
+                    if let Some(s) = extract_string(entry, value_data, byte_order) {
+                        let tag_name = match entry.tag_id {
+                            FLIR_MODEL => "Model",
+                            FLIR_SERIAL => "SerialNumber",
+                            FLIR_FIRMWARE => "FirmwareVersion",
+                            FLIR_LENS_MODEL => "LensModel",
+                            FLIR_CALIBRATION_DATE => "CalibrationDate",
+                            _ => return,
+                        };
+                        tags.insert(format!("FLIR:{tag_name}"), s);
+                    }
+                }
+                _ => {
+                    if let Some(array) = extract_i16_array(entry, value_data, byte_order)
+                        && let Some(&val) = array.first()
+                        && let Some(tag_name) = registry.get_tag_name(entry.tag_id)
+                    {
+                        let formatted_value = registry.decode_i16(entry.tag_id, val);
+                        tags.insert(format!("FLIR:{tag_name}"), formatted_value);
+                    }
+                }
+            }
+        })
+    }
 }
 
 impl MakerNoteParser for FlirParser {
@@ -337,49 +433,17 @@ impl MakerNoteParser for FlirParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
-        // Configure IFD parser for FLIR MakerNote format
-        let config = IfdParserConfig {
-            signature: Some(FLIR_SIGNATURE),
-            signature_offset: 4,
-            max_entries: 200,
-        };
+        self.parse_ifd(data, data, byte_order, tags)
+    }
 
-        // Create registry on-demand
-        let registry = flir_registry();
-
-        // Use shared IFD parser to eliminate boilerplate
-        parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
-            // Handle string tags
-            if matches!(
-                entry.tag_id,
-                FLIR_MODEL | FLIR_SERIAL | FLIR_FIRMWARE | FLIR_LENS_MODEL | FLIR_CALIBRATION_DATE
-            ) {
-                if let Some(s) = extract_string(entry, parse_data, byte_order) {
-                    let tag_name = match entry.tag_id {
-                        FLIR_MODEL => "Model",
-                        FLIR_SERIAL => "SerialNumber",
-                        FLIR_FIRMWARE => "FirmwareVersion",
-                        FLIR_LENS_MODEL => "LensModel",
-                        FLIR_CALIBRATION_DATE => "CalibrationDate",
-                        _ => return,
-                    };
-                    tags.insert(format!("FLIR:{}", tag_name), s);
-                }
-            } else {
-                // Try to extract as i16 array
-                if let Some(array) = extract_i16_array(entry, parse_data, byte_order)
-                    && let Some(&val) = array.first()
-                {
-                    // Registry lookup: get tag name and decode value
-                    if let Some(tag_name) = registry.get_tag_name(entry.tag_id) {
-                        let formatted_value = registry.decode_i16(entry.tag_id, val);
-                        tags.insert(format!("FLIR:{}", tag_name), formatted_value);
-                    }
-                }
-            }
-        })?;
-
-        Ok(())
+    fn parse_with_context(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        _model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
+        self.parse_ifd(ctx.payload(), ctx.tiff(), byte_order, tags)
     }
 }
 

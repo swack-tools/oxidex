@@ -7,6 +7,28 @@
 //! - Tag extraction from synthetic test data
 
 const PENTAX_Q7: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Pentax/PentaxQ7.jpg";
+const PENTAX_OPTIO_430: &str =
+    "/tmp/oxidex-exiftool-cache/combined-samples/Pentax/PentaxOptio430.jpg";
+
+/// Pentax Type2 records store their city codes as four-byte `undef` values,
+/// including significant trailing spaces.  ExifTool exposes the raw string,
+/// not a numeric city lookup, for these legacy Optio fields.
+#[test]
+fn pentax_type2_preserves_hometown_and_destination_city_codes() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(PENTAX_OPTIO_430).is_file() {
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(PENTAX_OPTIO_430)).expect("Pentax Optio 430 parses");
+    assert_eq!(metadata.get_string("Pentax:HometownCityCode"), Some("NYC "));
+    assert_eq!(
+        metadata.get_string("Pentax:DestinationCityCode"),
+        Some("    ")
+    );
+}
 
 /// ExifTool 13.59 decodes the Q7's 0x0238 CAFPointInfo record even when its
 /// zero-by-zero grid contains no selected or in-focus points.  The empty

@@ -778,12 +778,18 @@ const CANON_FILE_NUMBER: u16 = 0x0008;
 const CANON_OWNER_NAME: u16 = 0x0009;
 const CANON_SERIAL_NUMBER: u16 = 0x000C;
 const CANON_CAMERA_INFO: u16 = 0x000D;
+/// Canon.pm:1497 -- plain `int32u`, the byte length Canon wrote for the file.
+const CANON_FILE_LENGTH: u16 = 0x000E;
 const CANON_CUSTOM_FUNCTIONS: u16 = 0x000F;
 const CANON_MODEL_ID: u16 = 0x0010;
 const CANON_FLASH_INFO: u16 = 0x0003;
 const CANON_AF_INFO: u16 = 0x0012;
 const CANON_SERIAL_NUMBER_FORMAT: u16 = 0x0015;
+/// Canon.pm:1627 -- `int16u` with a three-value PrintConv.
+const CANON_SUPER_MACRO: u16 = 0x001A;
 const CANON_AF_INFO2: u16 = 0x0026;
+/// Canon.pm:6802 -- `%Canon::FaceDetect2`, a byte-addressed BinaryData record.
+const CANON_FACE_DETECT2: u16 = 0x0025;
 /// Canon.pm:1726 -- 16-byte undef value rendered with `unpack("H*", $val)`.
 const CANON_IMAGE_UNIQUE_ID: u16 = 0x0028;
 /// ExifTool Canon.pm:1764 -- `0x3c => { Name => 'AFInfo3', ... TagTable =>
@@ -799,6 +805,10 @@ const CANON_BATTERY_TYPE: u16 = 0x0038;
 const CANON_FILE_INFO: u16 = 0x0093;
 const CANON_LENS_MODEL: u16 = 0x0095;
 const CANON_INTERNAL_SERIAL_NUMBER: u16 = 0x0096;
+/// Canon.pm:1781 -- `int32u`, no conversion.
+const CANON_RAW_DATA_LENGTH: u16 = 0x0082;
+/// Canon.pm:1907 -- `%Canon::ColorBalance`, signed RGGB arrays.
+const CANON_COLOR_BALANCE: u16 = 0x00A9;
 const CANON_PROCESSING_INFO: u16 = 0x00A0;
 const CANON_MEASURED_COLOR: u16 = 0x00AA;
 /// `%Canon::ModifiedInfo` (Canon.pm:7319) is a BinaryData record. Its model-gated
@@ -4808,15 +4818,20 @@ pub fn canon_tag_to_name(tag_id: u16) -> String {
         CANON_OWNER_NAME => "OwnerName",
         CANON_SERIAL_NUMBER => "SerialNumber",
         CANON_CAMERA_INFO => "CameraInfo",
+        CANON_FILE_LENGTH => "CanonFileLength",
         CANON_CUSTOM_FUNCTIONS => "CustomFunctions",
         CANON_MODEL_ID => "CanonModelID",
         CANON_AF_INFO => "AFInfo",
         CANON_SERIAL_NUMBER_FORMAT => "SerialNumberFormat",
+        CANON_SUPER_MACRO => "SuperMacro",
         CANON_AF_INFO2 => "AFInfo2",
         CANON_AF_INFO3 => "AFInfo3",
+        CANON_FACE_DETECT2 => "FaceDetect2",
         CANON_FILE_INFO => "FileInfo",
         CANON_LENS_MODEL => "LensModel",
         CANON_INTERNAL_SERIAL_NUMBER => "InternalSerialNumber",
+        CANON_RAW_DATA_LENGTH => "RawDataLength",
+        CANON_COLOR_BALANCE => "ColorBalance",
         CANON_PROCESSING_INFO => "ProcessingInfo",
         CANON_MEASURED_COLOR => "MeasuredColor",
         CANON_COLOR_SPACE => "ColorSpace",
@@ -5216,6 +5231,30 @@ fn parse_canon_makernote_impl_located_with_values(
                     "Canon:SerialNumberFormat".to_string(),
                     SERIAL_NUMBER_FORMAT.decode(entry.value_offset as i64),
                 );
+            }
+
+            // Canon.pm names these as direct scalar MakerNote fields.  Their
+            // IFD values are already decoded in the correct byte order.
+            CANON_FILE_LENGTH => {
+                tags.insert(
+                    "Canon:CanonFileLength".to_string(),
+                    entry.value_offset.to_string(),
+                );
+            }
+            CANON_RAW_DATA_LENGTH => {
+                tags.insert(
+                    "Canon:RawDataLength".to_string(),
+                    entry.value_offset.to_string(),
+                );
+            }
+            CANON_SUPER_MACRO => {
+                let value = match entry.value_offset as u16 {
+                    0 => "Off".to_string(),
+                    1 => "On (1)".to_string(),
+                    2 => "On (2)".to_string(),
+                    other => format!("Unknown ({other})"),
+                };
+                tags.insert("Canon:SuperMacro".to_string(), value);
             }
 
             // ThumbnailImageValidArea (tag 0x0013) - int16u[4] crop box
@@ -6066,6 +6105,68 @@ fn parse_canon_makernote_impl_located_with_values(
                         "Canon:InternalSerialNumber".to_string(),
                         String::from_utf8_lossy(text).to_string(),
                     );
+
+                    // `%Canon::SerialInfo` key 0 is a fixed `string[9]` and
+                    // emits only when its first six bytes satisfy `/^\w{6}/`.
+                    if let Some(serial) = raw.get(..9)
+                        && serial[..6]
+                            .iter()
+                            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+                    {
+                        tags.insert(
+                            "Canon:InternalSerialNumber2".to_string(),
+                            String::from_utf8_lossy(serial).to_string(),
+                        );
+                    }
+                }
+            }
+
+            // FaceDetect2 (0x0025) has `FORMAT => int8u`, so its keys are byte
+            // offsets, not the 16-bit-word indexes used by the generic Canon
+            // BinaryData parser.  Byte 0 is an unnamed marker; 1 and 2 are
+            // FaceWidth and FacesDetected respectively.
+            CANON_FACE_DETECT2 => {
+                if let Some(record) = extract_canon_bytes_with_base(entry, ifd_data, base) {
+                    if let Some(&width) = record.get(1) {
+                        tags.insert("Canon:FaceWidth".to_string(), width.to_string());
+                    }
+                    if let Some(&count) = record.get(2) {
+                        tags.insert("Canon:FacesDetected".to_string(), count.to_string());
+                    }
+                }
+            }
+
+            // ColorBalance (0x00a9) is a signed 16-bit BinaryData record
+            // whose index 0 is data, not a byte-count prefix.  Canon D60 is
+            // the sole alternate at index 29: it calls the four levels
+            // BlackLevels instead of WB_RGGBLevelsCustom.
+            CANON_COLOR_BALANCE => {
+                if let Some(array) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                {
+                    for (index, name) in [
+                        (1, "Canon:WB_RGGBLevelsAuto"),
+                        (5, "Canon:WB_RGGBLevelsDaylight"),
+                        (9, "Canon:WB_RGGBLevelsShade"),
+                        (13, "Canon:WB_RGGBLevelsCloudy"),
+                        (17, "Canon:WB_RGGBLevelsTungsten"),
+                        (21, "Canon:WB_RGGBLevelsFluorescent"),
+                        (25, "Canon:WB_RGGBLevelsFlash"),
+                        (
+                            29,
+                            if has_trailing_boundary(&model, "EOS D60") {
+                                "Canon:BlackLevels"
+                            } else {
+                                "Canon:WB_RGGBLevelsCustom"
+                            },
+                        ),
+                        (33, "Canon:WB_RGGBLevelsKelvin"),
+                        (37, "Canon:WB_RGGBBlackLevels"),
+                    ] {
+                        if let Some(values) = array.get(index..index + 4) {
+                            tags.insert(name.to_string(), join_i16_slice(values));
+                        }
+                    }
                 }
             }
 
