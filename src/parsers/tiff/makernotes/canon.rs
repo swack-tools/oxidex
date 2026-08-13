@@ -801,6 +801,10 @@ const CANON_LENS_MODEL: u16 = 0x0095;
 const CANON_INTERNAL_SERIAL_NUMBER: u16 = 0x0096;
 const CANON_PROCESSING_INFO: u16 = 0x00A0;
 const CANON_MEASURED_COLOR: u16 = 0x00AA;
+/// `%Canon::ModifiedInfo` (Canon.pm:7319) is a BinaryData record. Its model-gated
+/// `ModifiedSharpness` and ValueConv `ModifiedDigitalGain` cannot be emitted by the
+/// generated generic table, so they are decoded in the MakerNote parser below.
+const CANON_MODIFIED_INFO: u16 = 0x00B1;
 const CANON_COLOR_SPACE: u16 = 0x00B4;
 const CANON_VRD_OFFSET: u16 = 0x00D0;
 /// ExifTool Canon.pm:1965 — `0xe0 => { Name => 'SensorInfo', ... }`
@@ -6350,6 +6354,28 @@ fn parse_canon_makernote_impl_located_with_values(
                     binary_tables::parse_binary_table(
                         tag, raw_bytes, &record, byte_order, &mut tags,
                     );
+
+                    // `%Canon::ModifiedInfo` (Canon.pm:7331-7369): key 2 is present
+                    // only when `$$self{Model} =~ /\b(1D|5D)/`, and key 11 applies
+                    // `ValueConv => '$val / 10'`. The generated BinaryData table
+                    // intentionally omits both non-literal rules. `record` is indexed
+                    // by the table's `FIRST_ENTRY => 1`, hence these are keys 2 and 11.
+                    if tag == CANON_MODIFIED_INFO {
+                        if (has_word(&model, "1D") || has_word(&model, "5D"))
+                            && let Some(&sharpness) = record.get(2)
+                        {
+                            tags.insert(
+                                "Canon:ModifiedSharpness".to_string(),
+                                sharpness.to_string(),
+                            );
+                        }
+                        if let Some(&digital_gain) = record.get(11) {
+                            tags.insert(
+                                "Canon:ModifiedDigitalGain".to_string(),
+                                format_perl_number(digital_gain as f64 / 10.0),
+                            );
+                        }
+                    }
 
                     // TimeZone (`%Canon::TimeInfo` key 1, Canon.pm:6641) is the one
                     // TimeInfo field `binary_tables` leaves out -- its `PrintConv` is

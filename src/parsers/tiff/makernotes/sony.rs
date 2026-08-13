@@ -94,6 +94,12 @@ const TAG_SHOT_INFO: u16 = 0x3000;
 /// `$$self{AFAreaILCA}` (Sony.pm:1279, 1297), which four of `AFPointSelected`'s
 /// five arms are gated on.
 const TAG_AF_AREA_MODE_SETTING: u16 = 0x201c;
+/// `PixelShiftInfo` is a six-byte opaque value whose useful representation is
+/// entirely ExifTool's RawConv/PrintConv pair (Sony.pm:1643-1674).
+const TAG_PIXEL_SHIFT_INFO: u16 = 0x202f;
+/// `HiddenInfo` is an int32u offset/length pair which is itself a binary
+/// sub-directory (Sony.pm:1744-1748, 6090-6110).
+const TAG_HIDDEN_INFO: u16 = 0x2044;
 
 /// `PreviewImage` (Sony.pm:906-939). Deliberately absent from [`MAIN_TABLE`]
 /// - see [`parse_sony_preview_image_tag`] for why this tag needs the whole
@@ -172,7 +178,13 @@ impl MakerNoteParser for SonyParser {
         // no enclosing block, so the subtraction is skipped instead of landing
         // somewhere plausible and wrong.
         let data = ctx.payload();
-        match parse_sony_makernote_impl(data, byte_order, model, ctx.payload_tiff_offset()) {
+        match parse_sony_makernote_impl(
+            data,
+            byte_order,
+            model,
+            ctx.payload_tiff_offset(),
+            ctx.tiff_base(),
+        ) {
             Ok(parsed_tags) => {
                 tags.extend(parsed_tags);
                 Ok(())
@@ -297,6 +309,7 @@ fn parse_sony_makernote_impl(
     _byte_order: ByteOrder,
     model: Option<&str>,
     data_base: Option<u32>,
+    tiff_base: u64,
 ) -> Result<HashMap<String, String>> {
     if data.is_empty() {
         return Ok(HashMap::new());
@@ -478,6 +491,39 @@ fn parse_sony_makernote_impl(
                     &mut cipher_ctx,
                 );
             }
+            TAG_PIXEL_SHIFT_INFO => {
+                if let Some(printed) = render_pixel_shift_info(&value, byte_order) {
+                    found.push(Found::new(
+                        "Sony:PixelShiftInfo".to_string(),
+                        printed,
+                        DEFAULT_PRIORITY,
+                    ));
+                }
+            }
+            TAG_HIDDEN_INFO => {
+                // This sub-directory is not a pointer to one payload: its
+                // value is the two int32u fields ProcessBinaryData exposes.
+                // Decode the pair rather than following the first component,
+                // since ExifTool prints both fields even though the offset is
+                // marked IsOffset for writing.
+                if let (Some(offset), Some(length)) = (value.int_at(0), value.int_at(1)) {
+                    // `HiddenDataOffset` is flagged IsOffset in Sony.pm, so
+                    // ProcessExif turns its TIFF-relative raw value into a
+                    // file-relative one by adding the TIFF header's absolute
+                    // location.  JPEG's APP1 TIFF begins at byte 12.
+                    let offset = offset.checked_add_unsigned(tiff_base).unwrap_or(offset);
+                    found.push(Found::new(
+                        "Sony:HiddenDataOffset".to_string(),
+                        offset.to_string(),
+                        SUB_DIRECTORY_PRIORITY,
+                    ));
+                    found.push(Found::new(
+                        "Sony:HiddenDataLength".to_string(),
+                        length.to_string(),
+                        SUB_DIRECTORY_PRIORITY,
+                    ));
+                }
+            }
             TAG_MINOLTA_MAKERNOTE => {
                 let Some(start) = value.first_int().filter(|v| *v != 0) else {
                     continue;
@@ -547,6 +593,42 @@ fn parse_sony_makernote_impl(
     }
 
     Ok(resolve_duplicates(found))
+}
+
+/// Applies Sony.pm's PixelShiftInfo `RawConv` followed by its `PrintConv`.
+///
+/// The stored value is `undef[6]`, so it must be read by raw byte offsets,
+/// not by its TIFF component type.  The first four bytes are an unsigned
+/// integer in the MakerNote's byte order; the trailing bytes are the shot and
+/// source-image count.
+fn render_pixel_shift_info(value: &SonyValue<'_>, byte_order: ByteOrder) -> Option<String> {
+    let bytes = value.bytes();
+    let group = match byte_order {
+        ByteOrder::LittleEndian => u32::from_le_bytes(bytes.get(0..4)?.try_into().ok()?),
+        ByteOrder::BigEndian => u32::from_be_bytes(bytes.get(0..4)?.try_into().ok()?),
+    };
+    let shot = *bytes.get(4)?;
+    let total = *bytes.get(5)?;
+    let raw = format!(
+        "{:02}{:02}{:02}{:02} {} {} 0x{:x}",
+        (group >> 17) & 0x1f,
+        (group >> 12) & 0x1f,
+        (group >> 6) & 0x3f,
+        group & 0x3f,
+        shot,
+        total,
+        group >> 22
+    );
+    if raw == "00000000 0 0 0x0" {
+        return Some("n/a".to_string());
+    }
+    Some(format!(
+        "Group {}, Shot {}/{} (0x{:x})",
+        &raw[..8],
+        shot,
+        total,
+        group >> 22
+    ))
 }
 
 /// Decodes the text blocks from the non-IFD `SONY PIC\0` MakerNote.
