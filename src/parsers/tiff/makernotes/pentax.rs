@@ -214,6 +214,9 @@ const PENTAX_FIRMWARE_VERSION_VIDEO: u16 = 0x0230;
 // `undef` strings, not the numeric City-table fields at 0x0023/0x0024.
 const PENTAX_TYPE2_HOMETOWN_CITY_CODE: u16 = 0x1000;
 const PENTAX_TYPE2_DESTINATION_CITY_CODE: u16 = 0x1001;
+/// Casio Type3's BestShotMode, carried by the AOC MakerNote in the Pentax
+/// Optio 430RS.  Casio.pm calls out its non-zero values as model-dependent.
+const PENTAX_TYPE3_BEST_SHOT_MODE: u16 = 0x3007;
 
 // ============================================================================
 // Declarative Decoder Definitions
@@ -2190,6 +2193,14 @@ impl PentaxParser {
                         extract_raw_string_preserve_spaces(&entry, data, value_base, byte_order)
                     {
                         tags.insert("Pentax:DestinationCityCode".to_string(), value);
+                    }
+                }
+                // Casio.pm Type3 0x3007 is model-dependent for all non-zero
+                // values.  Zero is consistently `Off`, including the
+                // Pentax Optio 430RS's AOC directory.
+                PENTAX_TYPE3_BEST_SHOT_MODE => {
+                    if extract_value_as_i32(&entry, byte_order) == 0 {
+                        tags.insert("Casio:BestShotMode".to_string(), "Off".to_string());
                     }
                 }
 

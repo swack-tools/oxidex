@@ -7,6 +7,7 @@ const PIXEL_10_PRO_XL: &str =
 const PIXEL_6A: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Google/GooglePixel6a.jpg";
 const PIXEL_ORIGINAL: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Google/GooglePixel.jpg";
 const PIXEL_4A: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Google/GooglePixel4a.jpg";
+const PIXEL_5: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Google/GooglePixel5.jpg";
 
 /// The v3 HDR+ XMP envelope is encrypted and gzip-compressed protobuf.  These
 /// direct field-12 strings are pinned from ExifTool 13.59's Google table.
@@ -146,6 +147,23 @@ fn original_pixel_tiff_hdrp_v2_matches_exiftool() {
     assert_eq!(
         metadata.get_string("MakerNotes:LoggingMetadataText"),
         Some("(Binary data 1754 bytes, use -b option to extract)")
+    );
+}
+
+/// Pixel 5 carries a second, EXIF-resident HDRP-v2 stream for portrait
+/// Rectiface diagnostics. ExifTool 13.59 identifies its indented heading and
+/// retains the 886-byte payload as a Binary tag.
+#[test]
+fn pixel_5_tiff_hdrp_v2_rectiface_matches_exiftool() {
+    if !Path::new(PIXEL_5).is_file() {
+        eprintln!("skipping: corpus fixture not present at {PIXEL_5}");
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(PIXEL_5)).expect("Google Pixel 5 parses");
+    assert_eq!(
+        metadata.get_string("MakerNotes:RectifaceText"),
+        Some("(Binary data 886 bytes, use -b option to extract)")
     );
 }
 

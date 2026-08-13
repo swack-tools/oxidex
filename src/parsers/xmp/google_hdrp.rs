@@ -263,6 +263,11 @@ fn decode_hdrp_v2_text(inflated: &[u8]) -> Vec<(String, String)> {
 }
 
 fn parse_v2_heading(line: &str) -> Option<(String, &str, bool)> {
+    // `ProcessHDRPMakerNote` in Google.pm matches `^ ?([A-Z].*)$`: HDRP-v2
+    // portrait diagnostics therefore use a single leading space before their
+    // heading (Pixel 5: ` Rectiface:`). Strip only that one marker for heading
+    // recognition; the payload remains byte-for-byte unchanged below.
+    let line = line.strip_prefix(' ').unwrap_or(line);
     const HEADINGS: &[(&str, &str)] = &[
         ("InitParams", "InitParamsText"),
         ("Logging metadata", "LoggingMetadataText"),
