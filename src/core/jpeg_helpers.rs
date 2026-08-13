@@ -528,6 +528,31 @@ pub fn process_xmp_segments(segments: &[Segment], metadata: &mut MetadataMap) {
         Ok(xmp_tags) => {
             // Add all XMP tags to metadata
             for (tag_name, value) in xmp_tags {
+                // Google Photos' Device:Container/Directory is a sequence of
+                // embedded-image records. ExifTool's JSON output keeps the
+                // primary record (the first `rdf:li`) for these flattened
+                // fields; retaining a List, or letting a later XMP packet
+                // overwrite it, instead exposes depth-map auxiliary records.
+                if matches!(
+                    tag_name.as_str(),
+                    "XMP:ContainerDirectoryMime"
+                        | "XMP:ContainerDirectoryLength"
+                        | "XMP:ContainerDirectoryDataURI"
+                ) {
+                    if metadata.contains_key(&tag_name) {
+                        continue;
+                    }
+                    let primary = match value {
+                        crate::parsers::xmp::rdf_parser::XmpValue::List(values) => {
+                            values.into_iter().next()
+                        }
+                        crate::parsers::xmp::rdf_parser::XmpValue::Scalar(value) => Some(value),
+                    };
+                    if let Some(primary) = primary {
+                        metadata.insert(tag_name, TagValue::new_string(primary));
+                    }
+                    continue;
+                }
                 // A List keeps its entries apart -- ExifTool reports
                 // dc:subject as a list, not one joined string.
                 let tag_value = match value {
@@ -1917,6 +1942,26 @@ mod tests {
         let mut metadata = MetadataMap::new();
         metadata.insert("IFD0:Make", TagValue::new_string("DJI"));
         metadata
+    }
+
+    #[test]
+    fn pinned_pixel4a_container_directory_keeps_the_primary_item() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
+        let path = std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Google/GooglePixel4a.jpg",
+        );
+        let metadata = crate::core::operations::read_metadata(path)
+            .expect("read pinned Google Pixel 4a fixture");
+
+        for (tag, expected) in [
+            ("XMP:ContainerDirectoryMime", "image/jpeg"),
+            ("XMP:ContainerDirectoryLength", "0"),
+            ("XMP:ContainerDirectoryDataURI", "primary_image"),
+        ] {
+            assert_eq!(metadata.get_string(tag), Some(expected), "{tag}");
+        }
     }
 
     #[test]
