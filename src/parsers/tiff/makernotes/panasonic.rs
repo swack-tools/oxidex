@@ -812,6 +812,14 @@ impl PanasonicParser {
             if let Some(record) = extract_raw_bytes(entry, data, ifd_offset, data_base, byte_order)
             {
                 decode_binary_subdir(table, &record, byte_order, "Panasonic", tags);
+                // FaceRecInfo age fields are ExifTool `string[20]` values.
+                // Its JSON writer replaces each malformed source byte with
+                // ASCII `?`; Rust's generic lossy UTF-8 decoder uses U+FFFD.
+                // Keep the adjustment local to this declared string table so
+                // other maker-note text continues to retain its native rules.
+                if tag_id == 0x0061 {
+                    normalize_face_rec_ages(tags);
+                }
                 if tag_id == 0x2003 {
                     decode_panasonic_datetime(&record, tags);
                 }
@@ -1157,6 +1165,19 @@ impl PanasonicParser {
             let value = inline_scalar_i32(entry, byte_order);
             let decoded = registry.decode_i32(tag_id, value);
             tags.insert(format!("Panasonic:{}", tag_name), decoded);
+        }
+    }
+}
+
+/// ExifTool's JSON text path turns malformed bytes in FaceRecInfo's declared
+/// age strings into ASCII question marks. The shared binary decoder retains
+/// Rust's replacement character, so normalize only the three documented age
+/// fields after that table is decoded.
+fn normalize_face_rec_ages(tags: &mut HashMap<String, String>) {
+    for face in 1..=3 {
+        let key = format!("Panasonic:RecognizedFace{face}Age");
+        if let Some(value) = tags.get_mut(&key) {
+            *value = value.replace('\u{fffd}', "?");
         }
     }
 }
@@ -2812,6 +2833,7 @@ mod tests {
             "Panasonic",
             &mut tags,
         );
+        normalize_face_rec_ages(&mut tags);
         assert_eq!(tags.get("Panasonic:FacesRecognized").unwrap(), "1024");
         assert_eq!(tags.get("Panasonic:RecognizedFace1Name").unwrap(), "8");
         assert_eq!(
@@ -2820,6 +2842,10 @@ mod tests {
         );
         assert_eq!(tags.get("Panasonic:RecognizedFace1Age").unwrap(), "");
         assert_eq!(tags.get("Panasonic:RecognizedFace2Name").unwrap(), "\u{16}");
+        assert_eq!(
+            tags.get("Panasonic:RecognizedFace3Age").unwrap(),
+            "\u{10}\u{1}?"
+        );
         assert_eq!(
             tags.get("Panasonic:RecognizedFace2Position").unwrap(),
             "0 8 0 0"
