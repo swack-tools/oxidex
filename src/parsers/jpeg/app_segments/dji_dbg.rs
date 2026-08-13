@@ -54,6 +54,16 @@ pub fn parse_dji_info_records_in_group(records: &[u8], group: &str) -> MetadataM
                     b"GimbalDegree(Y,P,R)" => Some(("GimbalDegree", value)),
                     b"FlightDegree(Y,P,R)" => Some(("FlightDegree", value)),
                     b"ae_dbg_info" => Some(("AEDebugInfo", value)),
+                    b"ae_histogram_info" => Some(("AEHistogramInfo", value)),
+                    b"ae_local_histogram" => Some(("AELocalHistogram", value)),
+                    b"ae_liveview_histogram_info" => Some(("AELiveViewHistogramInfo", value)),
+                    b"ae_liveview_local_histogram" => Some(("AELiveViewLocalHistogram", value)),
+                    b"awb_dbg_info" => Some(("AWBDebugInfo", value)),
+                    b"af_dbg_info" => Some(("AFDebugInfo", value)),
+                    b"hiso" => Some(("Histogram", value)),
+                    b"xidiri" => Some(("Xidiri", value)),
+                    b"adj_dbg_info" => Some(("ADJDebugInfo", value)),
+                    b"hyperlapse_dbg_info" => Some(("HyperlapsDebugInfo", value)),
                     _ => None,
                 })
         else {

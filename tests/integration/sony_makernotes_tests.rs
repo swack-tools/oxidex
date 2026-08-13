@@ -17,6 +17,7 @@ use std::path::Path;
 const A900: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSLR-A900.jpg";
 const A580: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSLR-A580.jpg";
 const DSC_H300: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSC-H300.jpg";
+const ZV_E10M2: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyZV-E10M2.jpg";
 
 /// Builds a headerless little-endian Sony MakerNote from `(tag, type, count,
 /// value)` entries, followed by `trailing` bytes for any out-of-line values.
@@ -114,6 +115,25 @@ fn test_sony_dsc_h300_pic_text_blocks_match_exiftool() {
         Some("(Binary data 671 bytes, use -b option to extract)")
     );
     assert_eq!(metadata.get_string("Sony:Barcode"), Some("A0D9P7016135"));
+}
+
+#[test]
+fn test_sony_zv_e10m2_hidden_and_pixel_shift_info_match_exiftool() {
+    if !Path::new(ZV_E10M2).is_file() {
+        eprintln!("skipping: corpus fixture not present at {ZV_E10M2}");
+        return;
+    }
+    // Pinned ExifTool 13.59, SonyZV-E10M2.jpg:
+    //   HiddenDataOffset = 13938688, HiddenDataLength = 53248,
+    //   PixelShiftInfo = n/a.  The first two are the 0x2044 HiddenInfo
+    // int32u pair; PixelShiftInfo is 0x202f's all-zero six-byte sentinel.
+    let metadata = read_metadata(Path::new(ZV_E10M2)).expect("Sony ZV-E10M2 parses");
+    assert_eq!(
+        metadata.get_string("Sony:HiddenDataOffset"),
+        Some("13938688")
+    );
+    assert_eq!(metadata.get_string("Sony:HiddenDataLength"), Some("53248"));
+    assert_eq!(metadata.get_string("Sony:PixelShiftInfo"), Some("n/a"));
 }
 
 #[test]
