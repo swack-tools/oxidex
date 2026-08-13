@@ -563,6 +563,24 @@ const_decoder!(pub SHUTTER_TYPE, i32,
 // Touch AE decoder (tag 0x00AB)
 const_decoder!(pub TOUCH_AE, i32, [(0, "Off"), (1, "On"),]);
 
+// Panasonic.pm:1165-1443. Leica's D-Lux 8 reaches these through
+// MakerNoteLeica10, which ExifTool routes to Panasonic::Main.
+const_decoder!(pub VIDEO_BURST_RESOLUTION, i32, [(1, "Off or 4K"), (4, "6K"),]);
+const_decoder!(pub RED_EYE_REMOVAL, i32, [(0, "Off"), (1, "On"),]);
+const_decoder!(pub VIDEO_BURST_MODE, i32,
+    [(0x01, "Off"), (0x04, "Post Focus"), (0x18, "4K Burst"),
+     (0x28, "4K Burst (Start/Stop)"), (0x48, "4K Pre-burst"),
+     (0x108, "Loop Recording"), (0x810, "6K Burst"),
+     (0x820, "6K Burst (Start/Stop)"), (0x408, "Focus Stacking"),
+     (0x1001, "High Resolution Mode"),]
+);
+const_decoder!(pub LONG_EXPOSURE_NR_USED, i32, [(1, "No"), (2, "Yes"),]);
+const_decoder!(pub VIDEO_PREBURST, i32, [(0, "No"), (1, "4K or 6K"),]);
+const_decoder!(pub SENSOR_TYPE, i32, [(0, "Multi-aspect"), (1, "Standard"),]);
+const_decoder!(pub MONOCHROME_GRAIN_EFFECT, i32,
+    [(0, "Off"), (1, "Low"), (2, "Standard"), (3, "High"),]
+);
+
 /// Represents a Panasonic MakerNote parser
 pub struct PanasonicParser;
 
@@ -996,6 +1014,41 @@ impl PanasonicParser {
                 }
                 return;
             }
+            // HighlightShadow is signed SHORT[2] (Panasonic.pm:1330-1335).
+            0x00AD => {
+                if let Some(values) = extract_component_values(
+                    entry, data, ifd_offset, data_base, byte_order,
+                ) {
+                    tags.insert(
+                        "Panasonic:HighlightShadow".to_string(),
+                        values
+                            .iter()
+                            .map(|&value| (value as u16 as i16).to_string())
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    );
+                }
+                return;
+            }
+            // PostFocusMerging is LONG[2], whose sole PrintConv recognizes
+            // the pair `0 0` (Panasonic.pm:1392-1396).
+            0x00BF => {
+                if let Some(values) = extract_component_values(
+                    entry, data, ifd_offset, data_base, byte_order,
+                ) {
+                    let printed = if values.as_slice() == [0, 0] {
+                        "Post Focus Auto Merging or None".to_string()
+                    } else {
+                        values
+                            .iter()
+                            .map(u32::to_string)
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    };
+                    tags.insert("Panasonic:PostFocusMerging".to_string(), printed);
+                }
+                return;
+            }
             _ => {}
         }
 
@@ -1006,8 +1059,21 @@ impl PanasonicParser {
         // Format override means the wire field type (SHORT, unsigned) cannot
         // tell the generic fallback below to sign-interpret these, so they
         // stay a hand-picked case like RollAngle/PitchAngle just below.
-        if matches!(tag_id, 0x0046 | 0x0047 | 0x008C | 0x008D | 0x008E) {
+        if matches!(
+            tag_id,
+            0x0046 | 0x0047 | 0x008B | 0x008C | 0x008D | 0x008E | 0x00BD
+        ) {
             let value = inline_u16_value(entry, byte_order) as i16;
+            if let Some(tag_name) = registry.get_tag_name(tag_id) {
+                tags.insert(format!("Panasonic:{}", tag_name), value.to_string());
+            }
+            return;
+        }
+
+        // WBShiftCreativeControl's wire field is BYTE but Panasonic.pm reads
+        // it as int8s. The generic scalar path cannot infer that override.
+        if tag_id == 0x0092 {
+            let value = inline_i8_value(entry, byte_order);
             if let Some(tag_name) = registry.get_tag_name(tag_id) {
                 tags.insert(format!("Panasonic:{}", tag_name), value.to_string());
             }
@@ -1343,6 +1409,16 @@ fn inline_u16_value(entry: &IfdEntry, byte_order: ByteOrder) -> u16 {
     }
 }
 
+/// Numeric value of a single inline BYTE/SBYTE, accounting for TIFF byte
+/// order just as [`inline_u16_value`] does for SHORT values.
+fn inline_i8_value(entry: &IfdEntry, byte_order: ByteOrder) -> i8 {
+    let byte = match byte_order {
+        ByteOrder::LittleEndian => entry.value_offset as u8,
+        ByteOrder::BigEndian => (entry.value_offset >> 24) as u8,
+    };
+    byte as i8
+}
+
 /// Extracts an entry's value as a list of numeric components, honoring the
 /// entry's field type: int8u/undef entries yield one component per byte,
 /// int16u entries one per 16-bit word. Returns None for unsupported types or
@@ -1378,6 +1454,29 @@ fn extract_component_values(
                     .map(|c| match byte_order {
                         ByteOrder::LittleEndian => u32::from(u16::from_le_bytes([c[0], c[1]])),
                         ByteOrder::BigEndian => u32::from(u16::from_be_bytes([c[0], c[1]])),
+                    })
+                    .collect(),
+            )
+        }
+        // LONG: four bytes per component.
+        4 => {
+            let byte_len = count.checked_mul(4)?;
+            let bytes: Vec<u8> = if byte_len <= 4 {
+                let field = match byte_order {
+                    ByteOrder::LittleEndian => entry.value_offset.to_le_bytes(),
+                    ByteOrder::BigEndian => entry.value_offset.to_be_bytes(),
+                };
+                field[0..byte_len].to_vec()
+            } else {
+                let abs_offset = resolve_value_offset(entry, ifd_offset, data_base, byte_len)?;
+                full_data.get(abs_offset..abs_offset + byte_len)?.to_vec()
+            };
+            Some(
+                bytes
+                    .chunks_exact(4)
+                    .map(|c| match byte_order {
+                        ByteOrder::LittleEndian => u32::from_le_bytes([c[0], c[1], c[2], c[3]]),
+                        ByteOrder::BigEndian => u32::from_be_bytes([c[0], c[1], c[2], c[3]]),
                     })
                     .collect(),
             )

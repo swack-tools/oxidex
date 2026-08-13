@@ -671,12 +671,109 @@ impl OlympusParser {
                     tags,
                 );
             }
+
+            if entry.tag_id == OLYMPUS_CAMERA_SETTINGS_SUBIFD {
+                parse_camera_settings_af_subject_detection(
+                    data,
+                    start,
+                    base,
+                    effective_byte_order,
+                    tags,
+                );
+            }
         }
 
         parse_camera_type_and_quality(data, ifd_start, &entries, base, effective_byte_order, tags);
 
         Ok(())
     }
+}
+
+/// Decode the OM-series `CameraSettings` binary records that ExifTool routes
+/// through `Olympus::{AFTargetInfo,SubjectDetectInfo}`.  Both are `undef`
+/// fields in the enclosing IFD, but their documented payload is a fixed
+/// `int16u` array (Olympus.pm:2805-2849), so reinterpreting only these bytes
+/// is lossless and independent of the enclosing TIFF field type.
+fn parse_camera_settings_af_subject_detection(
+    data: &[u8],
+    start: usize,
+    base: Option<i64>,
+    order: ByteOrder,
+    tags: &mut HashMap<String, String>,
+) {
+    let Some(entries) = ifd::read_ifd(data, start, order) else {
+        return;
+    };
+    let floor = start + 2 + entries.len() * 12 + 4;
+
+    for entry in &entries {
+        let Some(raw) = ifd::decode_entry_with_floor(data, entry, base, order, None, floor) else {
+            continue;
+        };
+        let values = match raw {
+            // These fields are normally stored as `int16u`, while ExifTool
+            // overrides their *format* to `undef` before passing the payload
+            // to its binary sub-table.  Accept either representation so the
+            // byte-layout interpretation stays correct for both variants.
+            ifd::OlyVal::Int(values) => values,
+            ifd::OlyVal::Bytes(bytes) => {
+                let Some(values) = ifd::decode_bytes(&bytes, ifd::ftype::TIFF_SHORT, order)
+                    .and_then(|value| value.ints().map(|values| values.to_vec()))
+                else {
+                    continue;
+                };
+                values
+            }
+            _ => continue,
+        };
+
+        match entry.tag_id {
+            // AFTargetInfo: width/height, focus-area X/Y/width/height, then
+            // selected-area X/Y/width/height.
+            0x030a if values.len() >= 10 => {
+                tags.insert("Olympus:AFFrameSize".to_string(), pair(&values, 0));
+                tags.insert("Olympus:AFFocusArea".to_string(), quad(&values, 2));
+                tags.insert("Olympus:AFSelectedArea".to_string(), quad(&values, 6));
+            }
+            // SubjectDetectInfo: frame, subject area, detail area, and a
+            // status enum at index 10.
+            0x030b if values.len() >= 11 => {
+                tags.insert(
+                    "Olympus:SubjectDetectFrameSize".to_string(),
+                    pair(&values, 0),
+                );
+                tags.insert("Olympus:SubjectDetectArea".to_string(), quad(&values, 2));
+                tags.insert("Olympus:SubjectDetectDetail".to_string(), quad(&values, 6));
+                let status = match values[10] {
+                    0 => "No Data".to_string(),
+                    257 => "Subject and L1 Detail Detected".to_string(),
+                    258 => "Subject and L2 Detail Detected".to_string(),
+                    260 => "Subject Detected, No Details".to_string(),
+                    515 => "Face and Eye Detected".to_string(),
+                    516 => "Face Detected".to_string(),
+                    771 => "Subject Detail or Eye Detected".to_string(),
+                    772 => "No Subject or Face Detected".to_string(),
+                    value => format!("Unknown ({value})"),
+                };
+                tags.insert("Olympus:SubjectDetectStatus".to_string(), status);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn pair(values: &[i64], index: usize) -> String {
+    format!("{} {}", values[index], values[index + 1])
+}
+
+fn quad(values: &[i64], index: usize) -> String {
+    format!(
+        "{} {} {} {}",
+        values[index],
+        values[index + 1],
+        values[index + 2],
+        values[index + 3]
+    )
 }
 
 /// `Olympus::Main` 0x0201 `Quality`, 0x0207 `CameraType` and the 0x0208

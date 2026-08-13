@@ -20,10 +20,11 @@ use super::super::panasonic::{
     AF_ASSIST_LAMP, AUDIO, BRACKET_SETTINGS, BURST_MODE, CAMERA_ORIENTATION, CLEAR_RETOUCH,
     COLOR_EFFECT, COLOR_MODE, CONTRAST_MODE, CONVERSION_LENS, FILM_MODE, FLASH_CURTAIN,
     FLASH_WARNING, FOCUS_MODE, HDR, IMAGE_QUALITY, IMAGE_STABILIZATION, INTELLIGENT_D_RANGE,
-    INTELLIGENT_EXPOSURE, INTELLIGENT_RESOLUTION, LONG_EXPOSURE_NR, MACRO_MODE, NOISE_REDUCTION,
-    OPTICAL_ZOOM_MODE, PHOTO_STYLE, ROTATION, SELF_TIMER, SHADING_COMPENSATION, SHOOTING_MODE,
-    SHUTTER_TYPE, SWEEP_PANORAMA_DIRECTION, TEXT_STAMP, TIMER_RECORDING, TOUCH_AE, WHITE_BALANCE,
-    WORLD_TIME_LOCATION,
+    INTELLIGENT_EXPOSURE, INTELLIGENT_RESOLUTION, LONG_EXPOSURE_NR, LONG_EXPOSURE_NR_USED,
+    MACRO_MODE, MONOCHROME_GRAIN_EFFECT, NOISE_REDUCTION, OPTICAL_ZOOM_MODE, PHOTO_STYLE,
+    RED_EYE_REMOVAL, ROTATION, SELF_TIMER, SENSOR_TYPE, SHADING_COMPENSATION, SHOOTING_MODE,
+    SHUTTER_TYPE, SWEEP_PANORAMA_DIRECTION, TEXT_STAMP, TIMER_RECORDING, TOUCH_AE,
+    VIDEO_BURST_MODE, VIDEO_BURST_RESOLUTION, VIDEO_PREBURST, WHITE_BALANCE, WORLD_TIME_LOCATION,
 };
 
 // ============================================================================
@@ -137,6 +138,8 @@ pub fn panasonic_registry() -> TagRegistry {
         .register_integer_tag(0x0086, "ManometerPressure", None)
         .register_enum_tag_required(0x0089, "PhotoStyle", &PHOTO_STYLE)
         .register_enum_tag_required(0x008A, "ShadingCompensation", &SHADING_COMPENSATION)
+        // Signed Format overrides are handled in PanasonicParser::parse_entry.
+        .register_raw(0x008B, "WBShiftIntelligentAuto")
         // 0x008C-0x008E are int16u on the wire but `Format => 'int16s'`
         // overrides the read (Panasonic.pm:1170-1187): a plain unsigned
         // decode turned a negative reading like -3 into 65533. Signed
@@ -150,6 +153,7 @@ pub fn panasonic_registry() -> TagRegistry {
         // parse_entry alongside the accelerometer axes.
         .register_raw(0x0090, "RollAngle")
         .register_raw(0x0091, "PitchAngle")
+        .register_raw(0x0092, "WBShiftCreativeControl")
         .register_enum_tag_required(0x0093, "SweepPanoramaDirection", &SWEEP_PANORAMA_DIRECTION)
         .register_integer_tag(0x0094, "SweepPanoramaFieldOfView", None)
         .register_enum_tag_required(0x0096, "TimerRecording", &TIMER_RECORDING)
@@ -165,6 +169,16 @@ pub fn panasonic_registry() -> TagRegistry {
         // instead of the wrong integer decode of the raw numerator bytes.
         .register_raw(0x00A3, "ClearRetouchValue")
         .register_enum_tag_required(0x00AB, "TouchAE", &TOUCH_AE)
+        .register_raw(0x00AD, "HighlightShadow")
+        .register_enum_tag_required(0x00B3, "VideoBurstResolution", &VIDEO_BURST_RESOLUTION)
+        .register_enum_tag_required(0x00B9, "RedEyeRemoval", &RED_EYE_REMOVAL)
+        .register_enum_tag_required(0x00BB, "VideoBurstMode", &VIDEO_BURST_MODE)
+        .register_raw(0x00BD, "FocusBracket")
+        .register_enum_tag_required(0x00BE, "LongExposureNRUsed", &LONG_EXPOSURE_NR_USED)
+        .register_raw(0x00BF, "PostFocusMerging")
+        .register_enum_tag_required(0x00C1, "VideoPreburst", &VIDEO_PREBURST)
+        .register_enum_tag_required(0x00CA, "SensorType", &SENSOR_TYPE)
+        .register_enum_tag_required(0x00D2, "MonochromeGrainEffect", &MONOCHROME_GRAIN_EFFECT)
         // Recent full-frame bodies (DC-S1/S5/GH6 generation). The scalar
         // tags are decoded in PanasonicParser::parse_entry where their TIFF
         // field formats and ValueConv rules are available.

@@ -114,6 +114,8 @@ const NIKON_AF_RESPONSE: u16 = 0x00AD;
 const NIKON_TONING_EFFECT_STR: u16 = 0x00B3;
 /// `ColorTemperatureAuto`, int16u (`Nikon::Main` 0x004f, D850 and later).
 const NIKON_COLOR_TEMPERATURE_AUTO: u16 = 0x004F;
+/// `Nikon::MakerNotes0x56`, the Z8/Z9/Zf burst-information record.
+const NIKON_MAKER_NOTES_0X56: u16 = 0x0056;
 /// Offsets recorded by Nikon Capture (`Nikon::CaptureOffsets`).
 const NIKON_CAPTURE_OFFSETS: u16 = 0x0E0E;
 /// Sub-IFD written by Nikon Scan (`Nikon::Scan`).
@@ -949,6 +951,14 @@ impl NikonParser {
                 NIKON_COLOR_TEMPERATURE_AUTO => {
                     if let Some(value) = scalar_of(entry) {
                         tags.insert("Nikon:ColorTemperatureAuto".to_string(), value.to_string());
+                    }
+                }
+
+                // Z-series burst information.  This is a fixed 16-byte
+                // ProcessBinaryData record, not an IFD.
+                NIKON_MAKER_NOTES_0X56 => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        sub_tables::parse_maker_notes_0x56(&bytes, order, tags);
                     }
                 }
 

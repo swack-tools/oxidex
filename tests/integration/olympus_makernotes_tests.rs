@@ -6,6 +6,37 @@
 //! - Header validation
 //! - Tag extraction from synthetic test data
 
+const OM_1: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Olympus/OlympusOM-1.jpg";
+
+/// OM-1 stores these fields in CameraSettings' nested AFTargetInfo and
+/// SubjectDetectInfo binary records.  Expectations are pinned from ExifTool
+/// 13.59 with `-G1 -s` on the real corpus fixture.
+#[test]
+fn om_1_reports_nested_af_and_subject_detection_tags() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(OM_1).is_file() {
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(OM_1)).expect("OM-1 parses");
+    assert_eq!(metadata.get_string("Olympus:AFFrameSize"), Some("640 480"));
+    assert_eq!(metadata.get_string("Olympus:AFFocusArea"), Some("0 0 0 0"));
+    assert_eq!(
+        metadata.get_string("Olympus:SubjectDetectFrameSize"),
+        Some("640 480")
+    );
+    assert_eq!(
+        metadata.get_string("Olympus:SubjectDetectArea"),
+        Some("0 0 0 0")
+    );
+    assert_eq!(
+        metadata.get_string("Olympus:SubjectDetectStatus"),
+        Some("No Subject or Face Detected")
+    );
+}
+
 #[test]
 fn test_olympus_header_validation() {
     use oxidex::parsers::tiff::makernotes::olympus::OlympusParser;

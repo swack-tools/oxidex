@@ -16,6 +16,7 @@ use std::path::Path;
 
 const A900: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSLR-A900.jpg";
 const A580: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSLR-A580.jpg";
+const DSC_H300: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSC-H300.jpg";
 
 /// Builds a headerless little-endian Sony MakerNote from `(tag, type, count,
 /// value)` entries, followed by `trailing` bytes for any out-of-line values.
@@ -93,6 +94,26 @@ fn test_sony_a900_camera_info_matches_exiftool() {
         metadata.get_string("Sony:ExtraInfoVersion"),
         Some("0.1.0.0")
     );
+}
+
+#[test]
+fn test_sony_dsc_h300_pic_text_blocks_match_exiftool() {
+    if !Path::new(DSC_H300).is_file() {
+        eprintln!("skipping: corpus fixture not present at {DSC_H300}");
+        return;
+    }
+    let metadata = read_metadata(Path::new(DSC_H300)).expect("Sony DSC-H300 parses");
+    // Pinned ExifTool 13.59's ProcessSonyPIC reports the two text blocks as
+    // binary data (769 and 671 bytes) and extracts `BC:` as this barcode.
+    assert_eq!(
+        metadata.get_string("Sony:TextInfo1"),
+        Some("(Binary data 769 bytes, use -b option to extract)")
+    );
+    assert_eq!(
+        metadata.get_string("Sony:TextInfo2"),
+        Some("(Binary data 671 bytes, use -b option to extract)")
+    );
+    assert_eq!(metadata.get_string("Sony:Barcode"), Some("A0D9P7016135"));
 }
 
 #[test]
