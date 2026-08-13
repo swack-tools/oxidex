@@ -998,6 +998,9 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
         for (key, value) in crate::parsers::mie::parse_mie_trailer(file).iter() {
             metadata.insert(key.clone(), value.clone());
         }
+        for (key, value) in crate::parsers::vivo::parse_vivo_trailer(file).iter() {
+            metadata.insert(key.clone(), value.clone());
+        }
     }
 
     // Process HDR and manufacturer-specific APP segments
