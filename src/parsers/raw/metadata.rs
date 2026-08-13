@@ -6525,6 +6525,11 @@ fn parse_ciff_record(tag: u16, record: &[u8], metadata: &mut MetadataMap) {
                 .collect::<Vec<_>>();
 
             for (index, name) in [
+                (0usize, "NumAFPoints"),
+                (1, "ValidAFPoints"),
+                (2, "CanonImageWidth"),
+                (3, "CanonImageHeight"),
+                (4, "AFImageWidth"),
                 (5usize, "AFImageHeight"),
                 (6, "AFAreaWidth"),
                 (7, "AFAreaHeight"),
@@ -6553,6 +6558,33 @@ fn parse_ciff_record(tag: u16, record: &[u8], metadata: &mut MetadataMap) {
             let Some(end) = y_start.checked_add(point_count) else {
                 return;
             };
+
+            let focus_words = point_count.div_ceil(16);
+            if let Some(focus) = end
+                .checked_add(focus_words)
+                .and_then(|focus_end| values.get(end..focus_end))
+            {
+                let focus = focus
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(word_index, &word)| {
+                        (0..16).filter_map(move |bit| {
+                            ((word & (1 << bit)) != 0).then(|| (word_index * 16 + bit).to_string())
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                insert_canon_crw_tag(
+                    metadata,
+                    "AFInfo",
+                    "AFPointsInFocus",
+                    TagValue::new_string(if focus.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        focus
+                    }),
+                );
+            }
 
             for (name, range) in [
                 ("AFAreaXPositions", x_start..y_start),
@@ -6830,6 +6862,41 @@ mod crw_shot_info_tests {
         assert_eq!(
             metadata.get("MakerNotes:WB_RGGBBlackLevels"),
             Some(&TagValue::new_string("125 124 125 124"))
+        );
+    }
+
+    #[test]
+    fn crw_af_info_emits_the_scalar_and_focus_bit_fields() {
+        let mut values = vec![0_u16; 23];
+        values[0] = 7;
+        values[1] = 7;
+        values[2] = 3072;
+        values[3] = 2048;
+        values[4] = 3072;
+        values[22] = 8;
+        let record = values
+            .into_iter()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        let mut metadata = MetadataMap::new();
+
+        parse_ciff_record(0x1038, &record, &mut metadata);
+
+        assert_eq!(
+            metadata.get("MakerNotes:NumAFPoints"),
+            Some(&TagValue::new_integer(7))
+        );
+        assert_eq!(
+            metadata.get("MakerNotes:ValidAFPoints"),
+            Some(&TagValue::new_integer(7))
+        );
+        assert_eq!(
+            metadata.get("MakerNotes:AFImageWidth"),
+            Some(&TagValue::new_integer(3072))
+        );
+        assert_eq!(
+            metadata.get("MakerNotes:AFPointsInFocus"),
+            Some(&TagValue::new_string("3"))
         );
     }
 }
