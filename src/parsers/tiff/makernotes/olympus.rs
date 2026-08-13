@@ -106,6 +106,7 @@ const OLYMPUS_HEADER_TYPE1: &[u8] = b"OLYMP\x00";
 // already routes here; only the signature check rejected them, so every OM
 // System JPEG yielded no Olympus tags at all.
 const OLYMPUS_HEADER_TYPE3: &[u8] = b"OM SYSTEM\x00";
+const OLYMPUS_HEADER_CAMER: &[u8] = b"CAMER\0";
 
 // Sub-IFD pointer tag IDs - these point to nested IFD structures
 const OLYMPUS_EQUIPMENT_SUBIFD: u16 = 0x2010;
@@ -404,6 +405,10 @@ impl MakerNoteParser for OlympusParser {
             return true;
         }
 
+        if data.len() >= 8 && data.starts_with(OLYMPUS_HEADER_CAMER) {
+            return true;
+        }
+
         false
     }
 
@@ -613,13 +618,18 @@ impl OlympusParser {
             Some(0)
         };
 
+        let main_table = if data.starts_with(OLYMPUS_HEADER_CAMER) {
+            tables::CAMER_MAIN
+        } else {
+            tables::MAIN
+        };
         ifd::walk_directory(
             data,
             ifd_start,
             base,
             effective_byte_order,
             "Olympus",
-            tables::MAIN,
+            main_table,
             tags,
         );
 
@@ -1364,6 +1374,10 @@ fn detect_header_type_and_offsets(
 
     // Check Type 1 headers: ExifTool's `Start => '$valuePtr + 8'`.
     if data.len() >= 8 && &data[0..6] == OLYMPUS_HEADER_TYPE1 {
+        return Ok((8, default_byte_order));
+    }
+
+    if data.len() >= 8 && data.starts_with(OLYMPUS_HEADER_CAMER) {
         return Ok((8, default_byte_order));
     }
 
