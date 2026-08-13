@@ -442,9 +442,7 @@ fn parse_sony_makernote_impl(
             }
             TAG_FOCUS_INFO => {
                 let mut tags = HashMap::new();
-                let more_info_model = model
-                    .is_some_and(|model| matches!(model, "DSLR-A450" | "DSLR-A500" | "DSLR-A550"));
-                if !amount::extract_focus_info(value.bytes(), model, &mut tags) && more_info_model {
+                if !amount::extract_focus_info(value.bytes(), model, &mut tags) {
                     amount::extract_more_info(value.bytes(), model, &mut tags);
                 }
                 push_all(&mut found, tags, SUB_DIRECTORY_PRIORITY);

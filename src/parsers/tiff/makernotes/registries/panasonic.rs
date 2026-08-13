@@ -165,6 +165,21 @@ pub fn panasonic_registry() -> TagRegistry {
         // instead of the wrong integer decode of the raw numerator bytes.
         .register_raw(0x00A3, "ClearRetouchValue")
         .register_enum_tag_required(0x00AB, "TouchAE", &TOUCH_AE)
+        // Recent full-frame bodies (DC-S1/S5/GH6 generation). The scalar
+        // tags are decoded in PanasonicParser::parse_entry where their TIFF
+        // field formats and ValueConv rules are available.
+        .register_raw(0x00C5, "LensTypeModel")
+        .register_i32(0x00D4, "HybridLogGamma", decode_on_off)
+        .register_raw(0x00D6, "NoiseReductionStrength")
+        .register_raw(0x00DE, "AFAreaSize")
+        .register_raw(0x00E4, "LensTypeModel")
+        .register_integer_tag(0x00E8, "MinimumISO", None)
+        .register_i32(0x00E9, "AFSubjectDetection", decode_af_subject_detection)
+        .register_i32(0x00EE, "DynamicRangeBoost", decode_on_off)
+        .register_string_tag(0x00F1, "LUT1Name")
+        .register_integer_tag(0x00F3, "LUT1Opacity", None)
+        .register_string_tag(0x00F4, "LUT2Name")
+        .register_integer_tag(0x00F5, "LUT2Opacity", None)
         // ====================================================================
         // Additional integer/numeric tags
         // ====================================================================
@@ -220,6 +235,34 @@ fn decode_scene_mode(value: i32) -> String {
         return "Off".to_string();
     }
     SHOOTING_MODE.decode(value)
+}
+
+fn decode_on_off(value: i32) -> String {
+    match value {
+        0 => "Off".to_string(),
+        1 => "On".to_string(),
+        _ => format!("Unknown ({value})"),
+    }
+}
+
+fn decode_af_subject_detection(value: i32) -> String {
+    match value {
+        0 => "n/a".to_string(),
+        1 => "Human Eye/Face/Body".to_string(),
+        2 => "Animal".to_string(),
+        3 => "Human Eye/Face".to_string(),
+        4 => "Animal Body".to_string(),
+        5 => "Animal Eye/Body".to_string(),
+        6 => "Car".to_string(),
+        7 => "Motorcycle".to_string(),
+        8 => "Car (main part priority)".to_string(),
+        9 => "Motorcycle (helmet priority)".to_string(),
+        10 => "Train".to_string(),
+        11 => "Train (main part priority)".to_string(),
+        12 => "Airplane".to_string(),
+        13 => "Airplane (nose priority)".to_string(),
+        _ => format!("Unknown ({value})"),
+    }
 }
 
 fn decode_video_frame_rate(value: i32) -> String {
