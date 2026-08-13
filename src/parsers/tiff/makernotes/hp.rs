@@ -20,6 +20,8 @@
 
 #![allow(dead_code)]
 
+use crate::exiftool_tables::{DecodedValue, decode_binary_table, find_table};
+use crate::io::ByteOrder as IoByteOrder;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -65,6 +67,34 @@ impl HpParser {
     /// Creates a new HP parser instance
     pub fn new() -> Self {
         HpParser
+    }
+
+    /// MakerNotes.pm selects HP Type4 by this payload signature before it
+    /// consults the camera Make.  The record is binary data, not an IFD.
+    pub fn is_type4_makernote(data: &[u8]) -> bool {
+        matches!(data.get(..6), Some(b"IIII\x04\0") | Some(b"IIII\x05\0"))
+    }
+
+    /// Decode the lossless subset of HP's Type4 binary table.
+    ///
+    /// `MaxAperture`, `ExposureTime`, and `SerialNumber` have omitted source
+    /// conversions, so emitting their raw bytes would be misleading.  The
+    /// generated table records which fields are safe to retain verbatim.
+    pub fn parse_type4(data: &[u8], tags: &mut HashMap<String, String>) {
+        let Some(table) = find_table("HP", "Type4") else {
+            return;
+        };
+        for decoded in decode_binary_table(table, data, IoByteOrder::Little) {
+            if decoded.field.omitted.value_conv || decoded.field.omitted.raw_conv {
+                continue;
+            }
+            let value = match decoded.raw {
+                DecodedValue::String(value) => value,
+                DecodedValue::Integer(value) => value.to_string(),
+                _ => continue,
+            };
+            tags.insert(format!("HP:{}", decoded.field.name), value);
+        }
     }
 
     /// Parses a single HP MakerNote IFD entry and extracts its tag value
@@ -165,5 +195,24 @@ mod tests {
             .parse(&data, ByteOrder::LittleEndian, &mut tags)
             .expect("HP maker note should parse");
         assert!(tags.is_empty(), "unexpected HP tags: {tags:?}");
+    }
+
+    #[test]
+    fn type4_signature_dispatches_lossless_datetime() {
+        let mut data = vec![0_u8; 118];
+        data[..6].copy_from_slice(b"IIII\x04\0");
+        data[20..40].copy_from_slice(b"2216/02/28 03:49:48\0");
+        data[52..54].copy_from_slice(&400_u16.to_le_bytes());
+        let mut tags = HashMap::new();
+
+        assert!(HpParser::is_type4_makernote(&data));
+        HpParser::parse_type4(&data, &mut tags);
+
+        assert_eq!(
+            tags.get("HP:CameraDateTime"),
+            Some(&"2216/02/28 03:49:48".to_string())
+        );
+        assert_eq!(tags.get("HP:ISO"), Some(&"400".to_string()));
+        assert!(tags.get("HP:ExposureTime").is_none());
     }
 }
