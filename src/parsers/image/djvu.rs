@@ -177,7 +177,8 @@ fn metadata_from_expression(expression: Expression, metadata: &mut MetadataMap) 
                 "DjVu:Trapped".to_string(),
                 TagValue::new_string(value.trim_start_matches('/').to_string()),
             ),
-            "note" | "Subject" | "Keywords" | "Creator" | "Producer" => {
+            "note" => metadata.insert("DjVu:Note".to_string(), TagValue::new_string(value.clone())),
+            "Subject" | "Keywords" | "Creator" | "Producer" => {
                 metadata.insert(format!("DjVu:{name}"), TagValue::new_string(value.clone()))
             }
             _ => None,
