@@ -671,6 +671,14 @@ impl OlympusParser {
                     tags,
                 );
                 parse_focus_info_af_info(data, start, base, effective_byte_order, tags);
+                parse_focus_info_af_point_details(
+                    data,
+                    start,
+                    base,
+                    effective_byte_order,
+                    model,
+                    tags,
+                );
             }
 
             if entry.tag_id == OLYMPUS_CAMERA_SETTINGS_SUBIFD {
@@ -689,6 +697,36 @@ impl OlympusParser {
 
         Ok(())
     }
+}
+
+/// Older Olympus bodies expose `FocusInfo` 0x031b as an undecoded
+/// unsigned integer.  ExifTool deliberately leaves that variant raw; newer
+/// E-M/OM bodies instead apply a nine-column bitfield conversion, so emitting
+/// the raw value for them would be a confident but wrong tag.
+fn parse_focus_info_af_point_details(
+    data: &[u8],
+    start: usize,
+    base: Option<i64>,
+    order: ByteOrder,
+    model: Option<&str>,
+    tags: &mut HashMap<String, String>,
+) {
+    if model.is_some_and(|model| model.starts_with("E-M") || model.starts_with("OM-")) {
+        return;
+    }
+    let Some(entries) = ifd::read_ifd(data, start, order) else {
+        return;
+    };
+    let floor = start + 2 + entries.len() * 12 + 4;
+    let Some(entry) = entries.iter().find(|entry| entry.tag_id == 0x031b) else {
+        return;
+    };
+    let Some(value) = ifd::decode_entry_with_floor(data, entry, base, order, None, floor)
+        .and_then(|value| value.first_int())
+    else {
+        return;
+    };
+    tags.insert("Olympus:AFPointDetails".to_string(), value.to_string());
 }
 
 /// Emit ExifTool's `Olympus::Composite::ZoomedPreviewImage` when the paired

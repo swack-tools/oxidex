@@ -9,6 +9,8 @@
 const OM_1: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Olympus/OlympusOM-1.jpg";
 const U20D: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Olympus/Olympus_u20D.jpg";
 const U1040: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Olympus/Olympus_u1040.jpg";
+const E_P5: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Olympus/OlympusE-P5.jpg";
+const TG_870: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Olympus/OlympusTG-870.jpg";
 
 /// The legacy u20D MakerNote stores `WBMode` in Olympus::Main 0x1015.  The
 /// exact display value is pinned from ExifTool 13.59 on the real fixture.
@@ -41,6 +43,41 @@ fn u1040_reports_zoomed_preview_image() {
         metadata.get_string("Olympus:ZoomedPreviewImage"),
         Some("(Binary data 92592 bytes, use -b option to extract)")
     );
+}
+
+/// The E-P5 is an older-model `AFPointDetails` variant, which ExifTool 13.59
+/// deliberately reports as raw `0`.  Its cached-empty Extender record is the
+/// one fully certain composite path: `None` means `Not attached`.
+#[test]
+fn e_p5_reports_legacy_af_point_details_and_empty_extender_status() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(E_P5).is_file() {
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(E_P5)).expect("E-P5 parses");
+    assert_eq!(metadata.get_string("Olympus:AFPointDetails"), Some("0"));
+    assert_eq!(
+        metadata.get_string("Composite:ExtenderStatus"),
+        Some("Not attached")
+    );
+}
+
+/// ExifTool 13.59's full two-column `StackedImage` conversion reports this
+/// TG-870 record as `No`, not two independently printed zeroes.
+#[test]
+fn tg_870_reports_stacked_image() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(TG_870).is_file() {
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(TG_870)).expect("TG-870 parses");
+    assert_eq!(metadata.get_string("Olympus:StackedImage"), Some("No"));
 }
 
 /// OM-1 stores these fields in CameraSettings' nested AFTargetInfo and

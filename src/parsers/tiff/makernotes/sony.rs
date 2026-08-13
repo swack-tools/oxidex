@@ -459,7 +459,9 @@ fn parse_sony_makernote_impl(
                 let mut tags = HashMap::new();
                 let bytes = value.bytes();
                 if !amount::extract_camera_info(bytes, model, &mut tags) {
-                    amount::extract_camera_info2(bytes, &mut tags);
+                    if !amount::extract_camera_info2(bytes, &mut tags) {
+                        amount::extract_camera_info3(bytes, model, &mut tags);
+                    }
                 }
                 push_all(&mut found, tags, SUB_DIRECTORY_PRIORITY);
             }
@@ -697,6 +699,20 @@ fn extract_pic_fields(text: &[u8], tags: &mut HashMap<String, String>) {
             value
         };
         tags.insert("Sony:Barcode".to_string(), value.to_string());
+    }
+
+    // Sony.pm:10604: `Temp:Clbt:` is the board temperature, terminated by the
+    // next comma in the PIC status record.  Keep this separate from `Temp:`:
+    // that prefix is the camera temperature and has a different RawConv.
+    if let Some(start) = text.find("Temp:Clbt:") {
+        let value = text[start + "Temp:Clbt:".len()..]
+            .split(',')
+            .next()
+            .unwrap_or_default()
+            .trim();
+        if !value.is_empty() {
+            tags.insert("Sony:BoardTemperature".to_string(), format!("{value} C"));
+        }
     }
 }
 

@@ -8,6 +8,39 @@
 //! agreed with `%canonLensTypes` on 22 of its 146 entries; because the tests
 //! were written from the same table, they passed the whole time.
 
+const CANON_EOS_M10: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonEOS_M10.jpg";
+const CANON_EOS_R6M2: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonEOS_R6m2.jpg";
+
+/// Canon.pm FileInfo key 6 uses `RawConv => '$val <= 0 ? undef : $val'` and
+/// its `canonQuality` table renders the real EOS M10 corpus value 3 as Fine.
+#[test]
+fn eos_m10_reports_file_info_raw_jpg_quality() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(CANON_EOS_M10).is_file() {
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(CANON_EOS_M10)).expect("EOS M10 parses");
+    assert_eq!(metadata.get_string("Canon:RawJpgQuality"), Some("Fine"));
+}
+
+/// Canon.pm CameraSettings key 52 is `HDR-PQ`; pinned ExifTool 13.59 reports
+/// the real EOS R6 Mark II corpus value as Off.
+#[test]
+fn eos_r6m2_reports_camera_settings_hdr_pq() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(CANON_EOS_R6M2).is_file() {
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(CANON_EOS_R6M2)).expect("EOS R6 Mark II parses");
+    assert_eq!(metadata.get_string("Canon:HDR-PQ"), Some("Off"));
+}
+
 #[test]
 fn test_canon_lens_database_integration() {
     // This test verifies that lens IDs from real Canon JPEG files

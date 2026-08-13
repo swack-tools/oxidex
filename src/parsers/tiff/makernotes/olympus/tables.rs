@@ -442,6 +442,47 @@ fn print_sensor_temperature_multi(val: &OlyVal) -> Option<String> {
     Some(format!("{} C", trimmed))
 }
 
+/// Olympus::CameraSettings 0x0804 `StackedImage`.
+///
+/// This is a two-element `int32u` value, not two independently converted
+/// columns: the first element selects the capture mode and the second is
+/// either the image count or the ND/GND strength.  The wildcard cases below
+/// are ExifTool's `OTHER` handler in Olympus.pm:2636-2681.
+fn print_stacked_image(val: &OlyVal) -> Option<String> {
+    let values = val.ints()?;
+    if values.len() != 2 {
+        return Some(format!("Unknown ({})", val.print_raw()));
+    }
+    let (mode, detail) = (values[0], values[1]);
+    let fixed = match (mode, detail) {
+        (0, 0) => Some("No"),
+        (3, 2) => Some("ND2 (1EV)"),
+        (3, 4) => Some("ND4 (2EV)"),
+        (3, 8) => Some("ND8 (3EV)"),
+        (3, 16) => Some("ND16 (4EV)"),
+        (3, 32) => Some("ND32 (5EV)"),
+        (3, 64) => Some("ND64 (6EV)"),
+        (5, 4) => Some("HDR1"),
+        (6, 4) => Some("HDR2"),
+        (8, 8) => Some("Tripod high resolution"),
+        (11, 12) => Some("Hand-held high resolution (11 12)"),
+        (11, 16) => Some("Hand-held high resolution (11 16)"),
+        (13, 2) => Some("GND2 (1EV)"),
+        (13, 4) => Some("GND4 (2EV)"),
+        (13, 8) => Some("GND8 (3EV)"),
+        _ => None,
+    };
+    if let Some(value) = fixed {
+        return Some(value.to_string());
+    }
+    match mode {
+        1 => Some(format!("Live Composite ({detail} images)")),
+        4 => Some(format!("Live Time/Bulb ({detail} images)")),
+        9 => Some(format!("Focus-stacked ({detail} images)")),
+        _ => Some(format!("Unknown ({})", val.print_raw())),
+    }
+}
+
 // ===========================================================================
 // Olympus::Main
 // ===========================================================================
@@ -1250,6 +1291,7 @@ pub static CAMERA_SETTINGS: &[TagDef] = &[
             (4, "On, S-IS Auto"),
         ],
     ),
+    TagDef::func(0x0804, "StackedImage", print_stacked_image),
     TagDef {
         id: 0x0821,
         name: "ISOAutoSettings",
