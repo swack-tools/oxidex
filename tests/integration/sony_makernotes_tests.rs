@@ -192,6 +192,41 @@ fn test_sony_duplicate_names_resolve_by_priority() {
 }
 
 #[test]
+fn test_sony_more_settings_a550_fields_follow_exiftool_layout() {
+    // `Sony::MoreInfo` is a little-endian offset directory. Its block id 1
+    // selects `Sony::MoreSettings`; ExifTool 13.59 defines these A550 rows at
+    // 0x1a (`int16uRev[2]`), 0x24 (`int16s / 8`) and 0x28 (Orientation map).
+    let mut more_info = vec![0u8; 20480];
+    more_info[0..2].copy_from_slice(&1u16.to_le_bytes());
+    more_info[2..4].copy_from_slice(&20480u16.to_le_bytes());
+    more_info[4..6].copy_from_slice(&1u16.to_le_bytes());
+    more_info[6..8].copy_from_slice(&8u16.to_le_bytes());
+    more_info[8 + 0x1a..8 + 0x1e].copy_from_slice(&[0, 4, 0, 8]);
+    more_info[8 + 0x24..8 + 0x26].copy_from_slice(&(-8i16).to_le_bytes());
+    more_info[8 + 0x28] = 6;
+
+    let mut maker_note = build_makernote(&[(0x0020, 7, 20480, 1018)], &[]);
+    maker_note.extend_from_slice(&more_info);
+    let mut tiff = vec![0u8; 1000];
+    tiff.extend_from_slice(&maker_note);
+    let ctx = MakerNoteContext::in_tiff(&tiff, 1000, maker_note.len(), 0);
+    let mut tags = HashMap::new();
+    SonyParser
+        .parse_with_context(&ctx, ByteOrder::LittleEndian, Some("DSLR-A550"), &mut tags)
+        .unwrap();
+
+    assert_eq!(tags.get("Sony:CustomWB_RBLevels"), Some(&"4 8".to_string()));
+    assert_eq!(
+        tags.get("Sony:ExposureCompensation2"),
+        Some(&"-1.0".to_string())
+    );
+    assert_eq!(
+        tags.get("Sony:Orientation2"),
+        Some(&"Rotate 90 CW".to_string())
+    );
+}
+
+#[test]
 fn test_sony_parse_empty_data() {
     assert!(parse(&[]).is_empty());
     assert!(parse(b"\x01").is_empty());
