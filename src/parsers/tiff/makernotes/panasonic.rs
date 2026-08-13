@@ -41,7 +41,9 @@ use super::makernote_context::{MakerNoteContext, value_overlaps_directory};
 use super::shared::MakerNoteParser;
 use super::shared::binary_subdir::{BinaryTable, decode_binary_subdir};
 use super::shared::ifd_parser_base::resolve_byte_order_at;
-use face_tables::{PANASONIC_FACEDETINFO, PANASONIC_FACERECINFO, PANASONIC_TIMEINFO};
+use face_tables::{
+    PANASONIC_FACEDETINFO, PANASONIC_FACERECINFO, PANASONIC_TIMEINFO, PANASONIC_TYPE2,
+};
 
 // Import declarative decoder macros
 use crate::const_decoder;
@@ -97,6 +99,13 @@ fn panasonic_ifd_offset(data: &[u8]) -> Option<usize> {
     } else {
         None
     }
+}
+
+/// `MakerNotePanasonic2` is the legacy fixed `Panasonic::Type2` record.
+/// MakerNotes.pm:743-750 selects it from a `MKE` signature and forces little
+/// endian, independent of the enclosing TIFF's byte order.
+fn is_panasonic_type2_makernote(data: &[u8]) -> bool {
+    data.starts_with(b"MKE")
 }
 
 // ============================================================================
@@ -597,7 +606,7 @@ impl MakerNoteParser for PanasonicParser {
         // Panasonic header: "Panasonic\0\0\0" (12 bytes), or the unnumbered
         // "LEICA\0\0\0" (8 bytes) a bare-Make "LEICA" body writes for the
         // same Panasonic::Main table.
-        panasonic_ifd_offset(data).is_some()
+        panasonic_ifd_offset(data).is_some() || is_panasonic_type2_makernote(data)
     }
 
     fn parse(
@@ -675,6 +684,20 @@ impl PanasonicParser {
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
+            return Ok(());
+        }
+
+        // `MakerNotePanasonic2` does not contain an IFD.  ExifTool routes a
+        // `MKE*` payload directly to `Panasonic::Type2` and explicitly fixes
+        // its byte order to little endian (MakerNotes.pm:743-750).
+        if is_panasonic_type2_makernote(data) {
+            decode_binary_subdir(
+                &PANASONIC_TYPE2,
+                data,
+                ByteOrder::LittleEndian,
+                "Panasonic",
+                tags,
+            );
             return Ok(());
         }
 
@@ -789,6 +812,9 @@ impl PanasonicParser {
             if let Some(record) = extract_raw_bytes(entry, data, ifd_offset, data_base, byte_order)
             {
                 decode_binary_subdir(table, &record, byte_order, "Panasonic", tags);
+                if tag_id == 0x2003 {
+                    decode_panasonic_datetime(&record, tags);
+                }
             }
             return;
         }
@@ -1332,6 +1358,27 @@ struct TiffValueBase {
 /// offsets are already payload-relative and this is never consulted.
 fn value_offset_correction(model: Option<&str>) -> u32 {
     if model == Some("DC-FT7") { 12 } else { 0 }
+}
+
+/// Decode `Panasonic::TimeInfo` entry 0 exactly as its ExifTool 13.59
+/// `ValueConv`: `unpack "H4H2H2H2H2H2H2"`.  The bytes are packed BCD-like
+/// date/time digits; formatting their hexadecimal nibbles is intentional, and
+/// not a numeric date conversion.  Its `RawConv` suppresses a record that
+/// starts with NUL.
+fn decode_panasonic_datetime(record: &[u8], tags: &mut HashMap<String, String>) {
+    let Some(bytes) = record.get(..8) else {
+        return;
+    };
+    if bytes[0] == 0 {
+        return;
+    }
+    tags.insert(
+        "Panasonic:PanasonicDateTime".to_string(),
+        format!(
+            "{:02x}{:02x}:{:02x}:{:02x} {:02x}:{:02x}:{:02x}.{:02x}",
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ),
+    );
 }
 
 /// A `string` value the way ExifTool reads one.

@@ -11,6 +11,47 @@ use crate::parsers::tiff::makernotes::shared::binary_subdir::{
     BinaryTable, Cond, Field, Fmt, PrintConv, ValueConv,
 };
 
+/// `Image::ExifTool::Panasonic::Type2` -- 2 fields, FORMAT `int16u`.
+///
+/// The legacy `MakerNotePanasonic2` payload is a fixed little-endian binary
+/// record (`MKE*`), not the regular Panasonic TIFF-like directory.  This is
+/// transcribed from Panasonic.pm:2257-2276 in the pinned ExifTool 13.59 tree.
+pub(crate) static PANASONIC_TYPE2: BinaryTable = BinaryTable {
+    name: "Type2",
+    default_format: Fmt::U16,
+    first_entry: 0,
+    fields: &[
+        Field {
+            key: "0",
+            index: 0,
+            cond: Cond::Always,
+            name: "MakerNoteType",
+            format: Some(Fmt::Str(4)),
+            count: 1,
+            set_member: None,
+            gate: None,
+            mask: None,
+            value_conv: ValueConv::None,
+            print_conv: PrintConv::None,
+            low_priority: false,
+        },
+        Field {
+            key: "3",
+            index: 3,
+            cond: Cond::Always,
+            name: "Gain",
+            format: Some(Fmt::U16),
+            count: 1,
+            set_member: None,
+            gate: None,
+            mask: None,
+            value_conv: ValueConv::None,
+            print_conv: PrintConv::None,
+            low_priority: false,
+        },
+    ],
+};
+
 /// `Image::ExifTool::Panasonic::FaceDetInfo` -- 6 fields, FORMAT `int16u`.
 ///
 /// Transcribed from ExifTool's in-memory tag table by

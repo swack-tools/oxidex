@@ -505,6 +505,27 @@ pub static MAIN: &[TagDef] = &[
     TagDef::raw(0x1010, "FlashChargeLevel"),
     TagDef::typed(0x1011, "ColorMatrix", ftype::TIFF_SSHORT),
     TagDef::raw(0x1012, "BlackLevel"),
+    // Olympus.pm:1022-1037.  This is a two-column PrintConv: the pair is
+    // matched as a space-joined list, not as two independent white-balance
+    // settings.
+    TagDef::list_lookup(
+        0x1015,
+        "WBMode",
+        &[
+            ("1", "Auto"),
+            ("1 0", "Auto"),
+            ("1 2", "Auto (2)"),
+            ("1 4", "Auto (4)"),
+            ("2 2", "3000 Kelvin"),
+            ("2 3", "3700 Kelvin"),
+            ("2 4", "4000 Kelvin"),
+            ("2 5", "4500 Kelvin"),
+            ("2 6", "5500 Kelvin"),
+            ("2 7", "6500 Kelvin"),
+            ("2 8", "7500 Kelvin"),
+            ("3 0", "One-touch"),
+        ],
+    ),
     TagDef::raw(0x1019, "ColorMatrixNumber"),
     TagDef::raw(0x1024, "InternalFlashTable"),
     TagDef::raw(0x1025, "ExternalFlashGValue"),
@@ -567,8 +588,16 @@ pub static MAIN: &[TagDef] = &[
 // occurrence wins, not the last. Reusing `MAIN` wholesale here would get
 // that backwards for any file whose MainInfoIFD carries a different value
 // for one of them. Until each such tag is individually verified, only the
-// one tag actually in scope is re-declared.
-pub static MAIN_INFO: &[TagDef] = &[TagDef::raw(0x0104, "BodyFirmwareVersion")];
+// individually verified entries are re-declared.
+pub static MAIN_INFO: &[TagDef] = &[
+    TagDef::raw(0x0104, "BodyFirmwareVersion"),
+    // Olympus_u1040.jpg proves these occur in MainInfoIFD, rather than the
+    // top-level Main IFD.  They have no same-named top-level competitors on
+    // that fixture, and pair to form the documented zoomed-preview composite.
+    TagDef::raw(0x0F04, "ZoomedPreviewStart"),
+    TagDef::raw(0x0F05, "ZoomedPreviewLength"),
+    TagDef::raw(0x0F06, "ZoomedPreviewSize"),
+];
 
 // ===========================================================================
 // Olympus::Equipment (0x2010)

@@ -894,6 +894,15 @@ impl PentaxParser {
                     if entry.tag_id == PENTAX_FILTER_INFO {
                         decode_pentax_digital_filters(&record, tags);
                     }
+                    // `FlashInfo` byte 24 uses the fractional key `24.1` in
+                    // Pentax.pm:4650-4661.  The table generator represents
+                    // integer byte offsets only, so it deliberately leaves
+                    // this `Mask` + `ValueConv` field out.  Decode the exact
+                    // upstream conversion alongside the otherwise-generated
+                    // FlashInfo table.
+                    if entry.tag_id == PENTAX_FLASH_INFO {
+                        decode_pentax_external_flash_guide_number(&record, tags);
+                    }
                     // `LensInfoQ`'s `LensInfo` field (Pentax.pm:6048-6053,
                     // offset 0x2a, `string[20]`) has a `ValueConv =>
                     // '$val=~s/mm/mm /'` -- inserting a space after the
@@ -2610,6 +2619,27 @@ fn pentax_filter_setting_value(id: u8, value: i8) -> String {
     } else {
         value.to_string()
     }
+}
+
+/// Decode `Pentax::FlashInfo`'s fractional index `24.1`.
+///
+/// ExifTool's `Mask => 0x1f` reads byte 24's low five bits, remaps stored 29
+/// to -3, then applies `2**($val / 16 + 4)` and prints zero as `n/a`
+/// (Pentax.pm:4650-4661).  It is intentionally separate from the generated
+/// binary table because `24.1` is not an integer byte offset.
+fn decode_pentax_external_flash_guide_number(record: &[u8], tags: &mut HashMap<String, String>) {
+    let Some(&byte) = record.get(24) else {
+        return;
+    };
+    let raw = byte & 0x1f;
+    let value = if raw == 0 {
+        "n/a".to_string()
+    } else {
+        let exponent = if raw == 29 { -3.0 } else { f64::from(raw) };
+        let guide_number = 2_f64.powf(exponent / 16.0 + 4.0);
+        (guide_number + 0.5).floor().to_string()
+    };
+    tags.insert("Pentax:ExternalFlashGuideNumber".to_string(), value);
 }
 
 fn pentax_binary_subdir(
@@ -4521,6 +4551,25 @@ mod tests {
         assert_eq!(
             metadata.get_string("Pentax:PreviewImageSize"),
             Some("640x480")
+        );
+    }
+
+    #[test]
+    fn samsung_gx20_flash_info_decodes_external_flash_guide_number() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
+        // Pentax.pm:4650-4661: FlashInfo's byte 24 is masked with 0x1f,
+        // converted as 2**(raw / 16 + 4), and printed as the nearest integer.
+        // Samsung GX20 is a Pentax-family body, so ExifTool reports this in
+        // the Pentax group even though the fixture lives under Samsung.
+        let metadata = crate::core::operations::read_metadata(std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGX20.jpg",
+        ))
+        .expect("read pinned Samsung GX20 fixture");
+        assert_eq!(
+            metadata.get_string("Pentax:ExternalFlashGuideNumber"),
+            Some("n/a")
         );
     }
 }
