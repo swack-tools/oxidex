@@ -412,10 +412,13 @@ fn insert_ciff_value(
             }
             for (offset, name) in [(4, "FocalPlaneXSize"), (6, "FocalPlaneYSize")] {
                 if let Some(value) = short(offset) {
+                    let millimeters = value as f64 * 0.0254;
+                    let key = format!("CIFF:{name}");
                     metadata.insert(
-                        format!("CIFF:{name}"),
-                        TagValue::String(format!("{:.2} mm", value as f64 * 0.0254)),
+                        key.clone(),
+                        TagValue::String(format!("{millimeters:.2} mm")),
                     );
+                    metadata.set_value_form(key, millimeters.to_string());
                 }
             }
         }
@@ -450,5 +453,30 @@ mod tests {
             metadata.get("CIFF:FreeBytes"),
             Some(TagValue::Binary(value)) if value == &free_bytes
         ));
+    }
+
+    #[test]
+    fn focal_plane_sizes_keep_value_conv_precision() {
+        // Canon.pm converts 1/1000-inch CIFF values with `* 25.4 / 1000`,
+        // then displays two decimals.  Composite ScaleFactor35efl must
+        // consume the unrounded ValueConv form.
+        let mut metadata = MetadataMap::new();
+        let record = [0_u16, 0, 914, 610]
+            .into_iter()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+
+        insert_ciff_value(0x1029, None, &record, Endian::Little, &mut metadata);
+
+        assert_eq!(
+            metadata.get("CIFF:FocalPlaneXSize"),
+            Some(&TagValue::new_string("23.22 mm"))
+        );
+        assert_eq!(metadata.value_form("CIFF:FocalPlaneXSize"), Some("23.2156"));
+        assert_eq!(
+            metadata.get("CIFF:FocalPlaneYSize"),
+            Some(&TagValue::new_string("15.49 mm"))
+        );
+        assert_eq!(metadata.value_form("CIFF:FocalPlaneYSize"), Some("15.494"));
     }
 }

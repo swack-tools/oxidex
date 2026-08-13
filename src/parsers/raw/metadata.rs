@@ -6494,16 +6494,19 @@ fn parse_ciff_record(tag: u16, record: &[u8], metadata: &mut MetadataMap) {
                 }
             }
         }
-        // CanonRaw.pm tag 0x102a -> Canon::ShotInfo. The generated table
-        // identifies AEBBracketValue as int16 index 17.
+        // CanonRaw.pm tag 0x102a -> Canon::ShotInfo. This CIFF record has
+        // Canon's regular leading size word, so the shared table decoder can
+        // apply every value and print conversion directly.
         0x102A => {
-            if let Some(raw) = read_ciff_u16(record, 17 * 2).map(|value| value as i16) {
-                insert_canon_crw_tag(
-                    metadata,
-                    "ShotInfo",
-                    "AEBBracketValue",
-                    TagValue::new_string(print_fraction(canon_ev(raw))),
-                );
+            parse_ciff_canon_subdirectory(0x0004, record, metadata);
+            // Canon.pm's FNumber ValueConv is the unrounded f-stop while its
+            // PrintConv is `%.2g`. Preserve the former for Composite aperture,
+            // DOF, and hyperfocal-distance arithmetic.
+            if let Some(raw) = read_ciff_u16(record, 21 * 2).map(|value| value as i16)
+                && raw > 0
+            {
+                let value = 2.0_f64.powf(canon_ev(raw) / 2.0);
+                metadata.set_value_form("MakerNotes:FNumber", value.to_string());
             }
         }
         // CanonRaw.pm tag 0x1038 -> Canon::AFInfo. This serial record has no
@@ -6683,13 +6686,13 @@ fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     // CRW's `HEAPCCDR` is the standalone form of CIFF.  Decode its ordinary
     // CIFF records through the same transcribed record reader as the JPEG
     // `HEAPJPGM` variant, then retain the Canon-specific nested records below.
-    for (key, value) in
-        crate::parsers::jpeg::app_segments::ciff::parse_ciff_container(data, b"HEAPCCDR")
-    {
+    let ciff_metadata =
+        crate::parsers::jpeg::app_segments::ciff::parse_ciff_container(data, b"HEAPCCDR");
+    for (key, source_value) in ciff_metadata.iter() {
         // CRW shares CIFF's record directory but not every JPEG APP0 display
         // conversion.  Apply the CanonRaw.pm forms here rather than leaking
         // the JPEG-only renderings into the Canon maker-note family.
-        let value = match (key.as_str(), value) {
+        let value = match (key.as_str(), source_value.clone()) {
             ("CIFF:Model" | "CIFF:ROMOperationMode", TagValue::String(value)) => {
                 TagValue::new_string(value.split('\0').next().unwrap_or_default())
             }
@@ -6700,7 +6703,10 @@ fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
             ("CIFF:MeasuredEV", _) => continue,
             (_, value) => value,
         };
-        metadata.insert(key, value);
+        metadata.insert(key.clone(), value);
+        if let Some(value_form) = ciff_metadata.value_form(key) {
+            metadata.set_value_form(key.clone(), value_form);
+        }
     }
     let Some(heap_start) = read_ciff_u32(data, 2).map(|value| value as usize) else {
         return Ok(metadata);
@@ -6729,6 +6735,75 @@ fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     );
 
     Ok(metadata)
+}
+
+#[cfg(test)]
+mod crw_shot_info_tests {
+    use super::*;
+
+    fn crw_with_focal_plane_record() -> Vec<u8> {
+        let mut data = vec![0_u8; 42];
+        data[..2].copy_from_slice(b"II");
+        data[2..6].copy_from_slice(&14_u32.to_le_bytes());
+        data[6..14].copy_from_slice(b"HEAPCCDR");
+        data[14..16].copy_from_slice(&1_u16.to_le_bytes());
+        data[16..18].copy_from_slice(&0x1029_u16.to_le_bytes());
+        data[18..22].copy_from_slice(&8_u32.to_le_bytes());
+        data[22..26].copy_from_slice(&16_u32.to_le_bytes());
+        for (index, value) in [0_u16, 0, 914, 610].into_iter().enumerate() {
+            let offset = 30 + index * 2;
+            data[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+        }
+        // The final word points from the heap start to the root directory.
+        data[38..42].copy_from_slice(&0_u32.to_le_bytes());
+        data
+    }
+
+    #[test]
+    fn crw_retains_ciff_focal_plane_value_conv_for_composites() {
+        let metadata = parse_canon_crw(&crw_with_focal_plane_record(), RawFormat::CanonCRW)
+            .expect("synthetic CRW parses");
+
+        assert_eq!(
+            metadata.get("CIFF:FocalPlaneXSize"),
+            Some(&TagValue::new_string("23.22 mm"))
+        );
+        assert_eq!(metadata.value_form("CIFF:FocalPlaneXSize"), Some("23.2156"));
+    }
+
+    /// CanonRaw.crw's `0x102a` CIFF record is Canon's length-prefixed
+    /// `ShotInfo` int16 array.  ExifTool 13.59 renders these fixture values
+    /// through the ordinary Canon ShotInfo table.
+    #[test]
+    fn crw_shot_info_routes_the_length_prefixed_record_through_canon() {
+        let record = [
+            66, 0, 160, 65376, 116, 189, 0, 0, 3, 0, 8, 8, 0, 65535, 0, 20, 0, 0, 1, 142, 119, 116,
+            192, 47, 0, 0, 252, 0, 65535, 0, 0, 0, 0,
+        ]
+        .into_iter()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+        let mut metadata = MetadataMap::new();
+
+        parse_ciff_record(0x102a, &record, &mut metadata);
+
+        assert_eq!(
+            metadata.get("MakerNotes:AutoISO"),
+            Some(&TagValue::new_string("100"))
+        );
+        assert_eq!(
+            metadata.get("MakerNotes:TargetAperture"),
+            Some(&TagValue::new_string("3.6"))
+        );
+        assert_eq!(
+            metadata.get("MakerNotes:ExposureTime"),
+            Some(&TagValue::new_string("1/64"))
+        );
+        assert_eq!(
+            metadata.value_form("MakerNotes:FNumber"),
+            Some("3.563594872561357")
+        );
+    }
 }
 
 /// Format the Compression tag value (0x0103) from the X3F JPEG preview's
