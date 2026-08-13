@@ -375,6 +375,12 @@ fn insert_ciff_value(
                 TagValue::String(text()),
             );
         }
+        0x080c => {
+            metadata.insert(
+                "CIFF:ComponentVersion".to_string(),
+                TagValue::String(text()),
+            );
+        }
         0x1029 => {
             if let Some(value) = short(0) {
                 let value = match value {

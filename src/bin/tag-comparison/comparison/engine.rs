@@ -34,7 +34,7 @@ pub(crate) fn normalize_family_for_comparison(family: &str) -> &str {
         | "Pentax" | "Samsung" | "Leica" | "Casio" | "Minolta" | "Sigma" | "Ricoh" | "Kodak"
         | "Sanyo" | "JVC" | "Motorola" | "HP" | "DJI" | "Apple" | "Google" | "Reconyx"
         | "Parrot" | "InfiRay" | "Lytro" | "PhaseOne" | "Leaf" | "Red" | "Qualcomm"
-        | "Nintendo" | "GE" | "LG" => "MakerNotes",
+        | "Nintendo" | "GE" | "LG" | "CIFF" => "MakerNotes",
         // XMP namespace variants -> XMP (ExifTool often simplifies these)
         "XMP-exif" | "XMP-tiff" | "XMP-photoshop" | "XMP-iptcCore" | "XMP-iptcExt"
         | "XMP-xmpMM" | "XMP-xmpRights" | "XMP-dc" | "XMP-xmp" | "XMP-crs" | "XMP-plus"
