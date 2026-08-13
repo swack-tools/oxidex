@@ -15,7 +15,7 @@ use crate::parsers::tiff::geotiff_parser;
 use crate::parsers::tiff::ifd_parser::{
     ByteOrder, find_entry_position, ifd_entry_count, parse_ifd,
 };
-use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values;
+use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values_and_file_type;
 use crate::parsers::tiff::makernotes::makernote_context::{
     MakerNoteContext, value_overlaps_directory,
 };
@@ -320,7 +320,7 @@ pub fn parse_ifd_chain(
                 reader.size(),
                 makernote_bytes,
             );
-            parse_makernote(&ctx, byte_order, metadata);
+            parse_makernote(&ctx, byte_order, None, metadata);
         }
 
         // Read next IFD offset. This MUST be the on-disk entry count, not
@@ -815,6 +815,20 @@ pub fn parse_exif_subifd(
     tiff_len: u64,
     metadata: &mut MetadataMap,
 ) {
+    parse_exif_subifd_with_file_type(
+        reader, offset, byte_order, tiff_base, tiff_len, None, metadata,
+    );
+}
+
+pub fn parse_exif_subifd_with_file_type(
+    reader: &dyn FileReader,
+    offset: u64,
+    byte_order: ByteOrder,
+    tiff_base: u64,
+    tiff_len: u64,
+    file_type: Option<&'static str>,
+    metadata: &mut MetadataMap,
+) {
     if let Ok(exif_tags) = parse_ifd(reader, offset, byte_order) {
         // Track MakerNote and InteroperabilityIFD pointer in EXIF IFD
         // An EXIF IFD may declare 0x927C more than once -- an editor that
@@ -927,7 +941,7 @@ pub fn parse_exif_subifd(
                 tiff_len,
                 makernote_bytes,
             );
-            parse_makernote(&ctx, byte_order, metadata);
+            parse_makernote(&ctx, byte_order, file_type, metadata);
         }
 
         // Third pass: Parse Interoperability IFD if pointer was found
@@ -2764,7 +2778,12 @@ fn makernote_context<'a>(
 /// * `ctx` - Where the MakerNote sits, and how far its decoder may read
 /// * `byte_order` - Byte order for interpreting multi-byte values
 /// * `metadata` - MetadataMap to populate with manufacturer-specific tags
-fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: &mut MetadataMap) {
+fn parse_makernote(
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    file_type: Option<&'static str>,
+    metadata: &mut MetadataMap,
+) {
     // Extract camera make from metadata to determine which parser to use
     let make = metadata.get_string("IFD0:Make").unwrap_or("").to_string();
     // A few MakerNote sub-structures are laid out per camera model rather than
@@ -2831,11 +2850,12 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
     // Parse MakerNote using the dispatcher
     let mut makernote_tags = HashMap::new();
     let mut value_forms = HashMap::new();
-    if let Err(e) = dispatch_makernote_with_context_and_values(
+    if let Err(e) = dispatch_makernote_with_context_and_values_and_file_type(
         &make,
         model.as_deref(),
         ctx,
         byte_order,
+        file_type,
         &mut makernote_tags,
         &mut value_forms,
     ) {

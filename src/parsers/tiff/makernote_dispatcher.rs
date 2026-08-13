@@ -183,6 +183,26 @@ pub fn dispatch_makernote_with_context_and_values(
     tags: &mut HashMap<String, String>,
     value_forms: &mut HashMap<String, String>,
 ) -> Result<(), String> {
+    dispatch_makernote_with_context_and_values_and_file_type(
+        make,
+        model,
+        ctx,
+        byte_order,
+        None,
+        tags,
+        value_forms,
+    )
+}
+
+pub fn dispatch_makernote_with_context_and_values_and_file_type(
+    make: &str,
+    model: Option<&str>,
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    file_type: Option<&'static str>,
+    tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
+) -> Result<(), String> {
     use crate::parsers::tiff::makernotes::shared::MakerNoteParser;
 
     let data = ctx.payload();
@@ -221,6 +241,18 @@ pub fn dispatch_makernote_with_context_and_values(
     // binary-table fields.
     if hp::HpParser::is_type4_makernote(data) {
         hp::HpParser::parse_type4(data, tags);
+        return Ok(());
+    }
+
+    if matches!(make_normalized.as_str(), "nikon" | "nikon corporation") {
+        nikon::NikonParser.parse_with_context_and_file_type(
+            ctx,
+            byte_order,
+            model,
+            file_type,
+            tags,
+            value_forms,
+        )?;
         return Ok(());
     }
 
