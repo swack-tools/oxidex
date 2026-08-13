@@ -11,6 +11,7 @@ const PENTAX_OPTIO_430: &str =
     "/tmp/oxidex-exiftool-cache/combined-samples/Pentax/PentaxOptio430.jpg";
 const PENTAX_OPTIO_430_RS: &str =
     "/tmp/oxidex-exiftool-cache/combined-samples/Pentax/PentaxOptio430RS.jpg";
+const PENTAX_EI_200: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Pentax/PentaxEI-200.jpg";
 
 /// Pentax Type2 records store their city codes as four-byte `undef` values,
 /// including significant trailing spaces.  ExifTool exposes the raw string,
@@ -46,6 +47,21 @@ fn pentax_optio_430rs_reports_casio_best_shot_off() {
     let metadata =
         read_metadata(Path::new(PENTAX_OPTIO_430_RS)).expect("Pentax Optio 430RS parses");
     assert_eq!(metadata.get_string("Casio:BestShotMode"), Some("Off"));
+}
+
+/// The EI-200 is Pentax-branded but carries ExifTool's signature-selected
+/// Kodak Type-2 record.  Its maker must therefore retain the Kodak family.
+#[test]
+fn pentax_ei_200_reports_kodak_type2_maker() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(PENTAX_EI_200).is_file() {
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(PENTAX_EI_200)).expect("Pentax EI-200 parses");
+    assert_eq!(metadata.get_string("Kodak:KodakMaker"), Some("PENTAX"));
 }
 
 /// ExifTool 13.59 decodes the Q7's 0x0238 CAFPointInfo record even when its

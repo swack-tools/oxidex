@@ -56,6 +56,7 @@
 //! assert_eq!(formatted.get_string("EXIF:FocalLength"), Some("50.0 mm"));
 //! ```
 
+use crate::composite::compute::format_xmp_gps_coordinate;
 use crate::core::binary_decoders::decode_user_comment;
 use crate::core::formatters::exif_print_conv::{
     print_exposure_time, print_f_number, print_fraction,
@@ -205,6 +206,25 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
         && let Some(s) = value.as_string()
     {
         return TagValue::String(format_gps_lon_ref(s));
+    }
+
+    // XMP's `GPSLatitude`/`GPSLongitude` carry a DMS-ish coordinate and its
+    // hemisphere in one string. XMP.pm applies `%latConv`/`%longConv`, which
+    // emits standard DMS text; TIFF GPS coordinates have a separate Ref tag
+    // and therefore must not enter this branch.
+    if tag_name.starts_with("XMP")
+        && let Some(s) = value.as_string()
+    {
+        let positive_reference = match base_name {
+            "GPSLatitude" => Some('N'),
+            "GPSLongitude" => Some('E'),
+            _ => None,
+        };
+        if let Some(positive_reference) = positive_reference
+            && let Some(formatted) = format_xmp_gps_coordinate(s, positive_reference)
+        {
+            return TagValue::String(formatted);
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -2734,6 +2754,28 @@ mod tests {
         let metadata = MetadataMap::new();
         let formatted = format_for_exiftool(&metadata);
         assert!(formatted.is_empty());
+    }
+
+    /// XMP's GPS coordinate ValueConv accepts degree/minute values followed
+    /// by a hemisphere and PrintConv renders the standard DMS form.
+    #[test]
+    fn xmp_gps_coordinates_use_pinned_exiftool_dms_printconv() {
+        assert_eq!(
+            format_tag_value(
+                "XMP-exif:GPSLatitude",
+                &TagValue::new_string("43,30.4233408N"),
+            )
+            .as_string(),
+            Some("43 deg 30' 25.40\" N")
+        );
+        assert_eq!(
+            format_tag_value(
+                "XMP-exif:GPSLongitude",
+                &TagValue::new_string("16,26.3012136E"),
+            )
+            .as_string(),
+            Some("16 deg 26' 18.07\" E")
+        );
     }
 
     // -------------------------------------------------------------------------

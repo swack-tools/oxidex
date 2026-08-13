@@ -43,6 +43,11 @@ use super::shared::MakerNoteParser;
 /// => '$valuePtr + 8'`, past the signature + 2-byte pad.
 const KODAK_MAIN_START: usize = 8;
 
+/// MakerNotes.pm:275-284 identifies Kodak Type-2 records by their fixed
+/// eight-byte prefix, irrespective of the camera's EXIF Make.  Pentax EI-200
+/// is one such rebadge.
+const KODAK_TYPE2_PREFIX: &[u8; 8] = b"\x01\0\x01\0\0\0\x04\0";
+
 /// Kodak.pm:1-227 field names this parser reads, each verified against
 /// `combined-samples/Kodak.jpg` (`exiftool -G1 -s -a`, 13.59 pinned oracle).
 /// Offsets are relative to the `Start`-shifted record (i.e. `field.index`
@@ -133,6 +138,31 @@ impl KodakParser {
             );
         }
     }
+
+    fn parse_type2_record(&self, data: &[u8], tags: &mut HashMap<String, String>) {
+        if !data.starts_with(KODAK_TYPE2_PREFIX) {
+            return;
+        }
+        // Kodak.pm Type2::0x08 is string[32].  ExifTool trims at its first
+        // NUL, retaining the `Kodak:` family even for a Pentax rebrand.
+        let Some(bytes) = data.get(8..40) else {
+            return;
+        };
+        let end = bytes
+            .iter()
+            .position(|&byte| byte == 0)
+            .unwrap_or(bytes.len());
+        tags.insert(
+            "Kodak:KodakMaker".to_string(),
+            String::from_utf8_lossy(&bytes[..end]).into_owned(),
+        );
+    }
+}
+
+/// Whether a MakerNote must be dispatched to `Kodak::Type2` before matching
+/// its camera Make.  `MakerNotes.pm:275-284` selects this solely by payload.
+pub fn is_kodak_type2_makernote(data: &[u8]) -> bool {
+    data.starts_with(KODAK_TYPE2_PREFIX)
 }
 
 impl MakerNoteParser for KodakParser {
@@ -150,6 +180,10 @@ impl MakerNoteParser for KodakParser {
         _byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
+        if is_kodak_type2_makernote(data) {
+            self.parse_type2_record(data, tags);
+            return Ok(());
+        }
         // Byte order is signature-determined for Kodak1a/1b (see the module
         // doc comment), not inherited from the enclosing TIFF -- ignore the
         // caller's `byte_order` the same way Casio Type2 and Sanyo resolve
