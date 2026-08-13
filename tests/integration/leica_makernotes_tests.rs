@@ -132,6 +132,225 @@ fn test_leica_makernote_parse_error_invalid_entry_count() {
     assert!(result.is_err());
 }
 
+/// Leica Q3's `MakerNoteLeica8` uses the Leica5 table, whose 0x05ff entry is
+/// a TIFF `CameraIFD` rooted at the MakerNote start (Panasonic.pm:2052-2059).
+/// The nested directory is PanasonicRaw.pm's CameraIFD table: these are its
+/// first three named entries, as reported by the pinned ExifTool 13.59 corpus
+/// fixture `LeicaQ3_43.jpg`.
+#[test]
+fn test_leica5_camera_ifd_reports_first_named_panasonic_raw_entries() {
+    use oxidex::parsers::tiff::ifd_parser::ByteOrder;
+    use oxidex::parsers::tiff::makernotes::leica::LeicaMakerNoteParser;
+    use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
+    use std::collections::HashMap;
+
+    let parser = LeicaMakerNoteParser;
+    let mut tags = HashMap::new();
+    let mut data = vec![0u8; 82];
+
+    // MakerNoteLeica8: Leica5 table, IFD at byte 8, values relative to byte 0.
+    data[0..8].copy_from_slice(b"LEICA\0\x08\0");
+    data[8..10].copy_from_slice(&1u16.to_le_bytes());
+    data[10..12].copy_from_slice(&0x05ffu16.to_le_bytes());
+    data[12..14].copy_from_slice(&7u16.to_le_bytes()); // UNDEFINED
+    data[14..18].copy_from_slice(&50u32.to_le_bytes());
+    data[18..22].copy_from_slice(&32u32.to_le_bytes());
+
+    // CameraIFD TIFF header and its IFD at offset 8.
+    data[32..36].copy_from_slice(b"II*\0");
+    data[36..40].copy_from_slice(&8u32.to_le_bytes());
+    data[40..42].copy_from_slice(&3u16.to_le_bytes());
+
+    // PanasonicRaw::CameraIFD 0x1001 / 0x1100 / 0x1101.
+    data[42..44].copy_from_slice(&0x1001u16.to_le_bytes());
+    data[44..46].copy_from_slice(&4u16.to_le_bytes());
+    data[46..50].copy_from_slice(&1u32.to_le_bytes());
+    data[50..54].copy_from_slice(&0u32.to_le_bytes());
+
+    data[54..56].copy_from_slice(&0x1100u16.to_le_bytes());
+    // LeicaQ3_43.jpg stores this as TIFF SHORT (int16u), as confirmed by
+    // pinned ExifTool 13.59's `-v3` traversal of CameraIFD.
+    data[56..58].copy_from_slice(&3u16.to_le_bytes());
+    data[58..62].copy_from_slice(&1u32.to_le_bytes());
+    data[62..64].copy_from_slice(&430i16.to_le_bytes());
+
+    data[66..68].copy_from_slice(&0x1101u16.to_le_bytes());
+    data[68..70].copy_from_slice(&3u16.to_le_bytes());
+    data[70..74].copy_from_slice(&1u32.to_le_bytes());
+    data[74..76].copy_from_slice(&787i16.to_le_bytes());
+
+    parser
+        .parse(&data, ByteOrder::LittleEndian, &mut tags)
+        .expect("Leica5 CameraIFD should be structurally valid");
+
+    assert_eq!(
+        tags.get("PanasonicRaw:MultishotOn"),
+        Some(&"No".to_string())
+    );
+    assert_eq!(
+        tags.get("PanasonicRaw:FocusStepNear"),
+        Some(&"430".to_string())
+    );
+    assert_eq!(
+        tags.get("PanasonicRaw:FocusStepCount"),
+        Some(&"787".to_string())
+    );
+}
+
+/// In real Q3 JPEGs, Leica5's ordinary fields use MakerNote-relative offsets,
+/// but the 0x05ff CameraIFD entry is TIFF-relative.  Keep that exception
+/// explicit: a detached MakerNote cannot resolve this value, while the real
+/// JPEG EXIF route supplies the enclosing TIFF context.
+#[test]
+fn test_leica5_camera_ifd_uses_enclosing_tiff_offset_when_located() {
+    use oxidex::parsers::tiff::ifd_parser::ByteOrder;
+    use oxidex::parsers::tiff::makernotes::leica::LeicaMakerNoteParser;
+    use oxidex::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
+    use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
+    use std::collections::HashMap;
+
+    let maker_note_offset = 64usize;
+    let camera_ifd_offset = 160usize;
+    let camera_ifd_len = 74usize;
+    let mut tiff = vec![0u8; camera_ifd_offset + camera_ifd_len];
+    tiff[0..4].copy_from_slice(b"II*\0");
+
+    // MakerNoteLeica8 / Leica5, IFD at byte 8 of the payload.
+    let maker_note = &mut tiff[maker_note_offset..];
+    maker_note[0..8].copy_from_slice(b"LEICA\0\x08\0");
+    maker_note[8..10].copy_from_slice(&1u16.to_le_bytes());
+    maker_note[10..12].copy_from_slice(&0x05ffu16.to_le_bytes());
+    maker_note[12..14].copy_from_slice(&7u16.to_le_bytes());
+    maker_note[14..18].copy_from_slice(&(camera_ifd_len as u32).to_le_bytes());
+    // Crucially this is a TIFF-relative offset, deliberately beyond the
+    // MakerNote payload so the old payload-relative route cannot reach it.
+    maker_note[18..22].copy_from_slice(&(camera_ifd_offset as u32).to_le_bytes());
+
+    tiff[camera_ifd_offset..camera_ifd_offset + 4].copy_from_slice(b"II*\0");
+    tiff[camera_ifd_offset + 4..camera_ifd_offset + 8].copy_from_slice(&8u32.to_le_bytes());
+    tiff[camera_ifd_offset + 8..camera_ifd_offset + 10].copy_from_slice(&5u16.to_le_bytes());
+    let entries = [
+        // ExifTool reports these as int32u. Q3 writes its private int32u
+        // TIFF type (0x0101), not ordinary TIFF LONG (4).
+        (0x1001u16, 0x0101u16, 0u32),
+        (0x1100u16, 3u16, 430u32),
+        (0x1101u16, 3u16, 787u32),
+        (0x1102u16, 0x0101u16, 0u32),
+        (0x1200u16, 0x0101u16, 1u32),
+    ];
+    for (index, (tag, field_type, value)) in entries.into_iter().enumerate() {
+        let offset = camera_ifd_offset + 10 + index * 12;
+        tiff[offset..offset + 2].copy_from_slice(&tag.to_le_bytes());
+        tiff[offset + 2..offset + 4].copy_from_slice(&field_type.to_le_bytes());
+        tiff[offset + 4..offset + 8].copy_from_slice(&1u32.to_le_bytes());
+        tiff[offset + 8..offset + 12].copy_from_slice(&value.to_le_bytes());
+    }
+
+    let parser = LeicaMakerNoteParser;
+    let context = MakerNoteContext::in_tiff(&tiff, maker_note_offset, 22, 0);
+    let mut tags = HashMap::new();
+    parser
+        .parse_with_context(&context, ByteOrder::LittleEndian, None, &mut tags)
+        .expect("located Leica5 CameraIFD should parse");
+
+    assert_eq!(
+        tags.get("PanasonicRaw:MultishotOn"),
+        Some(&"No".to_string())
+    );
+    assert_eq!(
+        tags.get("PanasonicRaw:FocusStepNear"),
+        Some(&"430".to_string())
+    );
+    assert_eq!(
+        tags.get("PanasonicRaw:FocusStepCount"),
+        Some(&"787".to_string())
+    );
+    assert_eq!(tags.get("PanasonicRaw:FlashFired"), Some(&"No".to_string()));
+    assert_eq!(
+        tags.get("PanasonicRaw:LensAttached"),
+        Some(&"Yes".to_string())
+    );
+}
+
+/// The remaining named scalar fields in Leica Q3's embedded CameraIFD use the
+/// PanasonicRaw table's conversions, rather than generic TIFF formatting.
+#[test]
+fn test_leica5_camera_ifd_applies_panasonic_raw_conversions() {
+    use oxidex::parsers::tiff::ifd_parser::ByteOrder;
+    use oxidex::parsers::tiff::makernotes::leica::LeicaMakerNoteParser;
+    use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
+    use std::collections::HashMap;
+
+    let parser = LeicaMakerNoteParser;
+    let mut tags = HashMap::new();
+    let entries: &[(u16, u16, u32)] = &[
+        (0x1102, 4, 0),      // FlashFired = No
+        (0x1105, 4, 430),    // ZoomPosition
+        (0x1200, 4, 1),      // LensAttached = Yes
+        (0x1202, 3, 0xf002), // LensTypeModel = "02 f0"
+        (0x1203, 3, 43),     // FocalLengthIn35mmFormat
+        (0x1301, 8, 1280),   // ApertureValue = 5.7
+        (0x1302, 8, 2408),   // ShutterSpeedValue = 1/679
+        (0x1303, 8, 0),      // SensitivityValue
+        (0x1412, 1, 0),      // FacesDetected = No
+        (0x3300, 1, 0),      // WhiteBalanceSet = Auto
+        (0x3420, 3, 2213),   // WB_RedLevelAuto
+        (0x3421, 3, 1882),   // WB_BlueLevelAuto
+        (0x3501, 1, 1),      // Orientation = Horizontal (normal)
+        (0x3600, 1, 0),      // WhiteBalanceDetected = Auto
+    ];
+    let camera_ifd_offset = 32usize;
+    let ifd_offset = camera_ifd_offset + 8;
+    let mut data = vec![0u8; ifd_offset + 2 + entries.len() * 12 + 4];
+    let camera_ifd_len = u32::try_from(data.len() - camera_ifd_offset).unwrap();
+
+    // Leica5 maker-note IFD at byte 8, pointing at the embedded TIFF.
+    data[0..8].copy_from_slice(b"LEICA\0\x08\0");
+    data[8..10].copy_from_slice(&1u16.to_le_bytes());
+    data[10..12].copy_from_slice(&0x05ffu16.to_le_bytes());
+    data[12..14].copy_from_slice(&7u16.to_le_bytes());
+    data[14..18].copy_from_slice(&camera_ifd_len.to_le_bytes());
+    data[18..22].copy_from_slice(&(camera_ifd_offset as u32).to_le_bytes());
+    data[camera_ifd_offset..camera_ifd_offset + 4].copy_from_slice(b"II*\0");
+    data[camera_ifd_offset + 4..ifd_offset].copy_from_slice(&8u32.to_le_bytes());
+    data[ifd_offset..ifd_offset + 2].copy_from_slice(&(entries.len() as u16).to_le_bytes());
+
+    for (index, &(tag, field_type, value)) in entries.iter().enumerate() {
+        let offset = ifd_offset + 2 + index * 12;
+        data[offset..offset + 2].copy_from_slice(&tag.to_le_bytes());
+        data[offset + 2..offset + 4].copy_from_slice(&field_type.to_le_bytes());
+        data[offset + 4..offset + 8].copy_from_slice(&1u32.to_le_bytes());
+        data[offset + 8..offset + 12].copy_from_slice(&value.to_le_bytes());
+    }
+
+    parser
+        .parse(&data, ByteOrder::LittleEndian, &mut tags)
+        .unwrap();
+
+    for (name, expected) in [
+        ("FlashFired", "No"),
+        ("ZoomPosition", "430"),
+        ("LensAttached", "Yes"),
+        ("LensTypeModel", "02 f0"),
+        ("FocalLengthIn35mmFormat", "43 mm"),
+        ("ApertureValue", "5.7"),
+        ("ShutterSpeedValue", "1/679"),
+        ("SensitivityValue", "0"),
+        ("FacesDetected", "No"),
+        ("WhiteBalanceSet", "Auto"),
+        ("WB_RedLevelAuto", "2213"),
+        ("WB_BlueLevelAuto", "1882"),
+        ("Orientation", "Horizontal (normal)"),
+        ("WhiteBalanceDetected", "Auto"),
+    ] {
+        assert_eq!(
+            tags.get(&format!("PanasonicRaw:{name}")),
+            Some(&expected.to_string()),
+            "{name}"
+        );
+    }
+}
+
 /// `MakerNoteLeica2` (M8), values immediately after the entry table.
 ///
 /// Ground truth: `exiftool -G1 -s LeicaM8.jpg` reports

@@ -4,16 +4,29 @@ use crate::core::{MetadataMap, TagValue};
 
 const HEADER: &[u8] = b"DJI-DBG\0";
 
-/// Extracts the known `sensor_id` record from a DJI-DBG APP7 payload.
+/// Extracts known `DJI::Info` records from a DJI-DBG APP7 payload.
 ///
 /// ExifTool selects `DJI::Info` only when APP7 starts with `DJI-DBG\0`, then
 /// `ProcessDJIInfo` accepts contiguous bracketed records. Its printable-value
 /// path removes only trailing NUL bytes; non-printable values remain binary.
 pub fn parse_dji_dbg_app7(data: &[u8]) -> MetadataMap {
+    data.strip_prefix(HEADER)
+        .map_or_else(MetadataMap::new, |records| {
+            parse_dji_info_records_in_group(records, "APP7")
+        })
+}
+
+/// Extracts the bracketed record stream used by `DJI::Info`.
+///
+/// ExifTool uses the same table for an APP7 `DJI-DBG\0` payload and for the
+/// `MakerNoteDJIInfo` EXIF value.  The latter starts directly with `[`.
+pub fn parse_dji_info_records(records: &[u8]) -> MetadataMap {
+    parse_dji_info_records_in_group(records, "APP7")
+}
+
+/// Extracts the bracketed `DJI::Info` stream under its ExifTool group.
+pub fn parse_dji_info_records_in_group(records: &[u8], group: &str) -> MetadataMap {
     let mut metadata = MetadataMap::new();
-    let Some(records) = data.strip_prefix(HEADER) else {
-        return metadata;
-    };
 
     let mut offset = 0;
     while records.get(offset) == Some(&b'[') {
@@ -31,7 +44,24 @@ pub fn parse_dji_dbg_app7(data: &[u8]) -> MetadataMap {
         let Some(end) = end else { break };
 
         let record = &records[offset + 1..end];
-        if let Some(value) = record.strip_prefix(b"sensor_id:") {
+        let mut parts = record.splitn(2, |byte| *byte == b':');
+        let Some((name, value)) =
+            parts
+                .next()
+                .zip(parts.next())
+                .and_then(|(name, value)| match name {
+                    b"sensor_id" => Some(("SensorID", value)),
+                    b"GimbalDegree(Y,P,R)" => Some(("GimbalDegree", value)),
+                    b"FlightDegree(Y,P,R)" => Some(("FlightDegree", value)),
+                    b"ae_dbg_info" => Some(("AEDebugInfo", value)),
+                    _ => None,
+                })
+        else {
+            offset = end + 1;
+            continue;
+        };
+
+        {
             let printable = value
                 .iter()
                 .rposition(|byte| *byte != 0)
@@ -41,11 +71,11 @@ pub fn parse_dji_dbg_app7(data: &[u8]) -> MetadataMap {
             }) {
                 let value = printable.expect("checked above");
                 metadata.insert(
-                    "APP7:SensorID",
+                    format!("{group}:{name}"),
                     TagValue::String(String::from_utf8_lossy(value).into_owned()),
                 );
             } else {
-                metadata.insert("APP7:SensorID", TagValue::Binary(value.to_vec()));
+                metadata.insert(format!("{group}:{name}"), TagValue::Binary(value.to_vec()));
             }
         }
         offset = end + 1;

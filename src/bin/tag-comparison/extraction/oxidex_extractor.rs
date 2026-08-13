@@ -1045,7 +1045,6 @@ mod tests {
         assert!(collisions.is_empty());
     }
 
-    #[test]
     /// Canon:FileNumber arrives from the Canon parser already rendered as
     /// `directory-file` (`format_canon_file_number`, Canon.pm:1260); the
     /// extractor must not re-derive it. The old bit-shift re-derivation here

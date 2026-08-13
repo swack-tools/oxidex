@@ -79,6 +79,7 @@ const SONY_HEADER_LEN: usize = 12;
 const TAG_CAMERA_INFO: u16 = 0x0010;
 const TAG_FOCUS_INFO: u16 = 0x0020;
 const TAG_CAMERA_SETTINGS: u16 = 0x0114;
+const TAG_EXTRA_INFO: u16 = 0x0116;
 /// 0xb028 is not a value but a TIFF-relative pointer to a whole nested Minolta
 /// MakerNote, which the DSLR-A100 writes alongside its Sony one. A stored zero
 /// means the IFD is absent.
@@ -86,8 +87,6 @@ const TAG_MINOLTA_MAKERNOTE: u16 = 0xb028;
 /// 0x1003's only job outside its own sub-directory is to set
 /// `$$self{Panorama}`, which two of the 0x2010 variants are gated on.
 const TAG_PANORAMA: u16 = 0x1003;
-/// `ExtraInfo`/`ExtraInfo2`/`ExtraInfo3`, chosen by model (Sony.pm:854-872).
-const TAG_EXTRA_INFO: u16 = 0x0116;
 /// `ShotInfo`, which every DSC and camcorder writes and no DSLR does.
 const TAG_SHOT_INFO: u16 = 0x3000;
 /// `AFAreaModeSetting`. Beyond its own value it sets `$$self{AFAreaILCE}` or
@@ -443,7 +442,11 @@ fn parse_sony_makernote_impl(
             }
             TAG_FOCUS_INFO => {
                 let mut tags = HashMap::new();
-                amount::extract_focus_info(value.bytes(), model, &mut tags);
+                let more_info_model = model
+                    .is_some_and(|model| matches!(model, "DSLR-A450" | "DSLR-A500" | "DSLR-A550"));
+                if !amount::extract_focus_info(value.bytes(), model, &mut tags) && more_info_model {
+                    amount::extract_more_info(value.bytes(), model, &mut tags);
+                }
                 push_all(&mut found, tags, SUB_DIRECTORY_PRIORITY);
             }
             TAG_CAMERA_SETTINGS => {

@@ -123,6 +123,9 @@ mod leica5 {
     /// ASCII.
     pub(super) const LENS_TYPE: u16 = 0x0303;
     pub(super) const SERIAL_NUMBER: u16 = 0x0305;
+    /// `SubDirectory => { TagTable => PanasonicRaw::CameraIFD, Base =>
+    /// '$start', ProcessProc => ProcessTIFF }` (Panasonic.pm:2052-2059).
+    pub(super) const CAMERA_IFD: u16 = 0x05FF;
 }
 
 /// `%Panasonic::Leica6` (Panasonic.pm:2111), used by the S2 and M (Typ 240)
@@ -419,6 +422,267 @@ fn read_leica_string(values: LeicaValues<'_>, value_offset: u32, count: u32) -> 
     // where `trim_end_matches('\0')` alone would leave the space padding in.
     let text = bytes.split(|&b| b == 0).next().unwrap_or(bytes);
     Some(String::from_utf8_lossy(text).trim_end().to_string())
+}
+
+/// Named entries in `%PanasonicRaw::CameraIFD` (PanasonicRaw.pm:500-668),
+/// embedded by Leica5's 0x05ff `CameraIFD`.
+///
+/// Leica5 explicitly declares this as a TIFF subdirectory with its own byte
+/// order and IFD offset.  Decode only fields whose type and conversion are
+/// fully specified by that table; unknown camera fields stay absent rather
+/// than being reinterpreted as generic TIFF tags.
+fn parse_leica5_camera_ifd(data: &[u8], tags: &mut HashMap<String, String>) {
+    let byte_order = match data.get(..4) {
+        Some(b"II*\0") => ByteOrder::LittleEndian,
+        Some(b"MM\0*") => ByteOrder::BigEndian,
+        _ => return,
+    };
+    let reader = EndianReader::new(data, byte_order.to_io_byte_order());
+    let Some(ifd_offset) = reader
+        .u32_at(4)
+        .and_then(|offset| usize::try_from(offset).ok())
+    else {
+        return;
+    };
+    let Some(entry_count) = reader.u16_at(ifd_offset).map(usize::from) else {
+        return;
+    };
+    if entry_count > 200 {
+        return;
+    }
+    let Some(entries_end) = ifd_offset.checked_add(2).and_then(|start| {
+        entry_count
+            .checked_mul(12)
+            .and_then(|len| start.checked_add(len))
+    }) else {
+        return;
+    };
+    if entries_end > data.len() {
+        return;
+    }
+
+    for index in 0..entry_count {
+        let entry_offset = ifd_offset + 2 + index * 12;
+        let entry_reader = EndianReader::new(
+            &data[entry_offset..entry_offset + 12],
+            byte_order.to_io_byte_order(),
+        );
+        let (Some(tag_id), Some(field_type), Some(count)) = (
+            entry_reader.u16_at(0),
+            entry_reader.u16_at(2),
+            entry_reader.u32_at(4),
+        ) else {
+            continue;
+        };
+        if count != 1 {
+            continue;
+        }
+
+        let u8_value = || entry_reader.u8_at(8);
+        let u16_value = || entry_reader.u16_at(8);
+        let i16_value = || entry_reader.i16_at(8);
+        let u32_value = || entry_reader.u32_at(8);
+
+        match (tag_id, field_type) {
+            // PanasonicRaw declares these as int32u. Leica Q3 stores them
+            // with its private int32u TIFF type (0x0101), while other Leica5
+            // variants use ordinary LONG or BYTE forms.
+            (0x1001, 1 | 4 | 0x0101) => match if field_type == 1 {
+                u8_value().map(u32::from)
+            } else {
+                u32_value()
+            } {
+                Some(0) => {
+                    tags.insert("PanasonicRaw:MultishotOn".to_string(), "No".to_string());
+                }
+                Some(1) => {
+                    tags.insert("PanasonicRaw:MultishotOn".to_string(), "Yes".to_string());
+                }
+                _ => {}
+            },
+            // LeicaQ3_43.jpg stores 0x1100/0x1101 as TIFF SHORT. The
+            // PanasonicRaw table has no PrintConv for either value.
+            (0x1100, 3) => {
+                if let Some(value) = entry_reader.u16_at(8) {
+                    tags.insert("PanasonicRaw:FocusStepNear".to_string(), value.to_string());
+                }
+            }
+            (0x1101, 3) => {
+                if let Some(value) = entry_reader.u16_at(8) {
+                    tags.insert("PanasonicRaw:FocusStepCount".to_string(), value.to_string());
+                }
+            }
+            // 0x1102 has the same boolean PrintConv as 0x1001.
+            (0x1102, 1 | 4 | 0x0101) => match if field_type == 1 {
+                u8_value().map(u32::from)
+            } else {
+                u32_value()
+            } {
+                Some(0) => {
+                    tags.insert("PanasonicRaw:FlashFired".to_string(), "No".to_string());
+                }
+                Some(1) => {
+                    tags.insert("PanasonicRaw:FlashFired".to_string(), "Yes".to_string());
+                }
+                _ => {}
+            },
+            (0x1105, 4) => {
+                if let Some(value) = u32_value() {
+                    tags.insert("PanasonicRaw:ZoomPosition".to_string(), value.to_string());
+                }
+            }
+            // 0x1200 has the same boolean PrintConv as 0x1001.
+            (0x1200, 1 | 4 | 0x0101) => match if field_type == 1 {
+                u8_value().map(u32::from)
+            } else {
+                u32_value()
+            } {
+                Some(0) => {
+                    tags.insert("PanasonicRaw:LensAttached".to_string(), "No".to_string());
+                }
+                Some(1) => {
+                    tags.insert("PanasonicRaw:LensAttached".to_string(), "Yes".to_string());
+                }
+                _ => {}
+            },
+            // 0x1202 uses `sprintf("%.4x", $val)` then swaps the two byte
+            // pairs, so the LE value 0xf002 is rendered as `02 f0`.
+            (0x1202, 3) => {
+                if let Some(value) = u16_value() {
+                    let bytes = value.to_be_bytes();
+                    tags.insert(
+                        "PanasonicRaw:LensTypeModel".to_string(),
+                        format!("{:02x} {:02x}", bytes[1], bytes[0]),
+                    );
+                }
+            }
+            (0x1203, 3) => {
+                if let Some(value) = u16_value() {
+                    tags.insert(
+                        "PanasonicRaw:FocalLengthIn35mmFormat".to_string(),
+                        format!("{value} mm"),
+                    );
+                }
+            }
+            // ValueConv => `2 ** ($val / 512)`, PrintConv => `%.1f`.
+            (0x1301, 8) => {
+                if let Some(value) = i16_value() {
+                    tags.insert(
+                        "PanasonicRaw:ApertureValue".to_string(),
+                        format!("{:.1}", 2_f64.powf(f64::from(value) / 512.0)),
+                    );
+                }
+            }
+            // ValueConv => `2 ** (-$val / 256)`, PrintConv =>
+            // `Image::ExifTool::Exif::PrintExposureTime($val)`.
+            (0x1302, 8) => {
+                if let Some(value) = i16_value() {
+                    let seconds = 2_f64.powf(-f64::from(value) / 256.0);
+                    tags.insert(
+                        "PanasonicRaw:ShutterSpeedValue".to_string(),
+                        crate::core::formatters::exif_print_conv::print_exposure_time(seconds),
+                    );
+                }
+            }
+            // ValueConv => `$val / 256` with no PrintConv.
+            (0x1303, 8) => {
+                if let Some(value) = i16_value() {
+                    tags.insert(
+                        "PanasonicRaw:SensitivityValue".to_string(),
+                        format_number(f64::from(value) / 256.0),
+                    );
+                }
+            }
+            (0x1412, 1) => match u8_value() {
+                Some(0) => {
+                    tags.insert("PanasonicRaw:FacesDetected".to_string(), "No".to_string());
+                }
+                Some(1) => {
+                    tags.insert("PanasonicRaw:FacesDetected".to_string(), "Yes".to_string());
+                }
+                _ => {}
+            },
+            (0x3300, 1) => {
+                if let Some(value) = u8_value().and_then(panasonic_white_balance) {
+                    tags.insert(
+                        "PanasonicRaw:WhiteBalanceSet".to_string(),
+                        value.to_string(),
+                    );
+                }
+            }
+            (0x3420, 3) => {
+                if let Some(value) = u16_value() {
+                    tags.insert(
+                        "PanasonicRaw:WB_RedLevelAuto".to_string(),
+                        value.to_string(),
+                    );
+                }
+            }
+            (0x3421, 3) => {
+                if let Some(value) = u16_value() {
+                    tags.insert(
+                        "PanasonicRaw:WB_BlueLevelAuto".to_string(),
+                        value.to_string(),
+                    );
+                }
+            }
+            (0x3501, 1) => {
+                if let Some(value) = u8_value().and_then(tiff_orientation) {
+                    tags.insert("PanasonicRaw:Orientation".to_string(), value.to_string());
+                }
+            }
+            (0x3600, 1) => {
+                if let Some(value) = u8_value().and_then(panasonic_white_balance) {
+                    tags.insert(
+                        "PanasonicRaw:WhiteBalanceDetected".to_string(),
+                        value.to_string(),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn format_number(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        value.to_string()
+    }
+}
+
+fn panasonic_white_balance(value: u8) -> Option<&'static str> {
+    Some(match value {
+        0 => "Auto",
+        1 => "Daylight",
+        2 => "Cloudy",
+        3 => "Tungsten",
+        4 | 6 | 7 => "n/a",
+        5 => "Flash",
+        8 => "Custom#1",
+        9 => "Custom#2",
+        10 => "Custom#3",
+        11 => "Custom#4",
+        12 => "Shade",
+        13 => "Kelvin",
+        16 => "AWBc",
+        _ => return None,
+    })
+}
+
+fn tiff_orientation(value: u8) -> Option<&'static str> {
+    Some(match value {
+        1 => "Horizontal (normal)",
+        2 => "Mirror horizontal",
+        3 => "Rotate 180",
+        4 => "Mirror vertical",
+        5 => "Mirror horizontal and rotate 270 CW",
+        6 => "Rotate 90 CW",
+        7 => "Mirror horizontal and rotate 90 CW",
+        8 => "Rotate 270 CW",
+        _ => return None,
+    })
 }
 
 /// Reads an ASCII entry of the `%Panasonic::Leica4` sub-directories.
@@ -753,7 +1017,29 @@ impl LeicaMakerNoteParser {
             match layout {
                 LeicaLayout::Leica2 => self.decode_leica2_entry(&entry, values, byte_order, tags),
                 LeicaLayout::Leica3 => self.decode_leica3_entry(&entry, values, byte_order, tags),
-                LeicaLayout::Leica5 => self.decode_leica5_entry(&entry, values, tags),
+                LeicaLayout::Leica5 => {
+                    // Leica5's ordinary values use the MakerNote-relative
+                    // `Base => '$start - 8'`, but its 0x05ff CameraIFD is a
+                    // nested TIFF directory.  The directory entry's offset
+                    // is relative to the enclosing TIFF header, not to the
+                    // Leica payload: Q3_43.jpg stores 0x095c here, which
+                    // addresses the TIFF at 0x095c (the `II*` begins there),
+                    // while indexing the payload at 0x095c lands elsewhere.
+                    // Prefer the located TIFF context for that one entry;
+                    // retain the payload path for detached callers/tests.
+                    let camera_ifd = (entry.tag_id == leica5::CAMERA_IFD)
+                        .then(|| {
+                            ctx.filter(|ctx| ctx.is_located()).and_then(|ctx| {
+                                usize::try_from(entry.value_offset).ok().and_then(|offset| {
+                                    usize::try_from(entry.value_count).ok().and_then(|count| {
+                                        ctx.tiff().get(offset..offset.checked_add(count)?)
+                                    })
+                                })
+                            })
+                        })
+                        .flatten();
+                    self.decode_leica5_entry(&entry, values, camera_ifd, tags);
+                }
                 LeicaLayout::Leica6 => self.decode_leica6_entry(&entry, tags),
                 LeicaLayout::Leica9 => self.decode_leica9_entry(&entry, values, byte_order, tags),
                 // No ExifTool table is known to correspond to this header;
@@ -962,6 +1248,7 @@ impl LeicaMakerNoteParser {
         &self,
         entry: &IfdEntry,
         values: Option<LeicaValues<'_>>,
+        camera_ifd: Option<&[u8]>,
         tags: &mut HashMap<String, String>,
     ) {
         match entry.tag_id {
@@ -979,6 +1266,17 @@ impl LeicaMakerNoteParser {
                     "Leica:SerialNumber".to_string(),
                     entry.value_offset.to_string(),
                 );
+            }
+            leica5::CAMERA_IFD => {
+                if let Some(camera_ifd) = camera_ifd.or_else(|| {
+                    values.and_then(|values| {
+                        usize::try_from(entry.value_count)
+                            .ok()
+                            .and_then(|count| values.read(entry.value_offset, count))
+                    })
+                }) {
+                    parse_leica5_camera_ifd(camera_ifd, tags);
+                }
             }
             _ => {}
         }

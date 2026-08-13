@@ -887,6 +887,13 @@ impl PentaxParser {
                         &mut members,
                         tags,
                     );
+                    // Pentax.pm's FilterInfo uses a PrintFilter callback for
+                    // the repeated 17-byte records after the two source
+                    // indices; the generated binary table intentionally
+                    // retains only the fields it can transcribe exactly.
+                    if entry.tag_id == PENTAX_FILTER_INFO {
+                        decode_pentax_digital_filters(&record, tags);
+                    }
                     // `LensInfoQ`'s `LensInfo` field (Pentax.pm:6048-6053,
                     // offset 0x2a, `string[20]`) has a `ValueConv =>
                     // '$val=~s/mm/mm /'` -- inserting a space after the
@@ -2337,6 +2344,265 @@ fn right_align_inline_value(entry: IfdEntry, byte_order: ByteOrder) -> IfdEntry 
 /// produces nothing here rather than a guess -- `%Pentax` has an
 /// `...Unknown` companion table for exactly those, and ExifTool reports no
 /// named tags from it either.
+/// ExifTool 13.59's `Pentax::PrintFilter` (Pentax.pm:6664) for FilterInfo's
+/// twenty repeated `undef[17]` records.  Its list return is kept as JSON so
+/// the compatibility extractor normalizes it exactly like ExifTool `-json`.
+fn decode_pentax_digital_filters(record: &[u8], tags: &mut HashMap<String, String>) {
+    const FILTERS: [&str; 255] = {
+        let mut names = [""; 255];
+        names[1] = "Base Parameter Adjust";
+        names[2] = "Soft Focus";
+        names[3] = "High Contrast";
+        names[4] = "Color Filter";
+        names[5] = "Extract Color";
+        names[6] = "Monochrome";
+        names[7] = "Slim";
+        names[9] = "Fisheye";
+        names[10] = "Toy Camera";
+        names[11] = "Retro";
+        names[12] = "Pastel";
+        names[13] = "Water Color";
+        names[14] = "HDR";
+        names[16] = "Miniature";
+        names[17] = "Starburst";
+        names[18] = "Posterization";
+        names[19] = "Sketch Filter";
+        names[20] = "Shading";
+        names[21] = "Invert Color";
+        names[23] = "Tone Expansion";
+        names[27] = "Unicolor Bold";
+        names[28] = "Bold Monochrome";
+        names[29] = "Replace Color";
+        names[254] = "Custom Filter";
+        names
+    };
+    const SETTINGS: [&str; 53] = [
+        "",
+        "Brightness",
+        "Saturation",
+        "Hue",
+        "Contrast",
+        "Sharpness",
+        "SoftFocus",
+        "ShadowBlur",
+        "HighContrast",
+        "Color",
+        "Density",
+        "ExtractedColor",
+        "ColorRange",
+        "FilterEffect",
+        "ToningBA",
+        "InvertColor",
+        "Slim",
+        "EffectDensity",
+        "Size",
+        "Angle",
+        "Fisheye",
+        "DistortionType",
+        "DistortionLevel",
+        "ShadingType",
+        "ShadingLevel",
+        "Shading",
+        "Blur",
+        "ToneBreak",
+        "Toning",
+        "FrameComposite",
+        "PastelStrength",
+        "Intensity",
+        "Saturation2",
+        "HDR",
+        "",
+        "FocusPlane",
+        "FocusWidth",
+        "PlaneAngle",
+        "Blur2",
+        "Shape",
+        "Posterization",
+        "Contrast2",
+        "ScratchEffect",
+        "",
+        "",
+        "ToneExpansion",
+        "",
+        "UnicolorBold",
+        "BoldMonochrome",
+        "OriginalColor",
+        "NewColor",
+        "ColorScale",
+        "Toning2",
+    ];
+    for (slot, raw) in record
+        .get(5..)
+        .unwrap_or_default()
+        .chunks_exact(17)
+        .take(20)
+        .enumerate()
+    {
+        let filter = raw[0];
+        if filter == 0 {
+            continue;
+        }
+        let label = FILTERS[filter as usize];
+        let mut values = vec![if label.is_empty() {
+            format!("Unknown ({filter})")
+        } else {
+            label.to_string()
+        }];
+        for pair in raw[1..].chunks_exact(2) {
+            let id = pair[0];
+            if id == 0 {
+                continue;
+            }
+            let name = SETTINGS
+                .get(id as usize)
+                .copied()
+                .filter(|s| !s.is_empty())
+                .map_or_else(|| format!("Unknown({id})"), str::to_string);
+            values.push(format!(
+                "{name}={}",
+                pentax_filter_setting_value(id, pair[1] as i8)
+            ));
+        }
+        tags.insert(
+            format!("Pentax:DigitalFilter{:02}", slot + 1),
+            serde_json::to_string(&values).expect("filter strings serialize"),
+        );
+    }
+}
+
+fn pentax_filter_setting_value(id: u8, value: i8) -> String {
+    let mapped = match id {
+        7 | 15 | 42 => match value {
+            0 => Some("Off"),
+            1 => Some("On"),
+            _ => None,
+        },
+        9 | 47 | 49 | 50 => match value {
+            1 => Some("Red"),
+            2 => Some("Magenta"),
+            3 => Some("Blue"),
+            4 => Some("Cyan"),
+            5 => Some("Green"),
+            6 => Some("Yellow"),
+            _ => None,
+        },
+        11 => match value {
+            0 => Some("Off"),
+            1 => Some("Red"),
+            2 => Some("Magenta"),
+            3 => Some("Blue"),
+            4 => Some("Cyan"),
+            5 => Some("Green"),
+            6 => Some("Yellow"),
+            _ => None,
+        },
+        10 => match value {
+            1 => Some("Light"),
+            2 => Some("Standard"),
+            3 => Some("Dark"),
+            _ => None,
+        },
+        13 => match value {
+            0 => Some("Off"),
+            1 => Some("Red"),
+            2 => Some("Green"),
+            3 => Some("Blue"),
+            4 => Some("Infrared"),
+            _ => None,
+        },
+        17 => match value {
+            1 => Some("Sparse"),
+            2 => Some("Normal"),
+            3 => Some("Dense"),
+            _ => None,
+        },
+        18 => match value {
+            1 => Some("Small"),
+            2 => Some("Medium"),
+            3 => Some("Large"),
+            _ => None,
+        },
+        19 => match value {
+            0 => Some("0deg"),
+            2 => Some("30deg"),
+            3 => Some("45deg"),
+            4 => Some("60deg"),
+            _ => None,
+        },
+        20 | 30 | 33 => match value {
+            1 => Some("Weak"),
+            2 => Some("Medium"),
+            3 => Some("Strong"),
+            _ => None,
+        },
+        22 => match value {
+            0 => Some("Off"),
+            1 => Some("Weak"),
+            2 => Some("Medium"),
+            3 => Some("Strong"),
+            _ => None,
+        },
+        27 => match value {
+            0 => Some("Off"),
+            1 => Some("Red"),
+            2 => Some("Green"),
+            3 => Some("Blue"),
+            4 => Some("Yellow"),
+            _ => None,
+        },
+        29 => match value {
+            0 => Some("None"),
+            1 => Some("Thin"),
+            2 => Some("Medium"),
+            3 => Some("Thick"),
+            _ => None,
+        },
+        32 => match value {
+            0 => Some("Off"),
+            1 => Some("Low"),
+            2 => Some("Medium"),
+            3 => Some("High"),
+            _ => None,
+        },
+        36 => match value {
+            1 => Some("Narrow"),
+            2 => Some("Middle"),
+            3 => Some("Wide"),
+            _ => None,
+        },
+        37 => match value {
+            0 => Some("Horizontal"),
+            1 => Some("Vertical"),
+            2 => Some("Positive slope"),
+            3 => Some("Negative slope"),
+            _ => None,
+        },
+        39 => match value {
+            1 => Some("Cross"),
+            2 => Some("Star"),
+            3 => Some("Snowflake"),
+            4 => Some("Heart"),
+            5 => Some("Note"),
+            _ => None,
+        },
+        41 | 45 => match value {
+            1 => Some("Low"),
+            2 => Some("Medium"),
+            3 => Some("High"),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(text) = mapped {
+        return text.to_string();
+    }
+    if matches!(id, 1 | 2 | 3 | 4 | 5 | 12 | 14 | 16 | 24 | 28 | 35 | 52) && value != 0 {
+        format!("{value:+}")
+    } else {
+        value.to_string()
+    }
+}
+
 fn pentax_binary_subdir(
     entry: &IfdEntry,
     model: Option<&str>,
@@ -4140,6 +4406,33 @@ mod tests {
         };
         assert_eq!(order(false), Some(ByteOrder::BigEndian));
         assert_eq!(order(true), Some(ByteOrder::LittleEndian));
+    }
+
+    #[test]
+    fn digital_filters_match_real_k5_filterinfo_records() {
+        // PentaxK-5.jpg 0x022a offsets 0x0005, 0x007c, and 0x0126 from
+        // ExifTool 13.59 `-v3`; 19 and 20 are all-zero/off records.
+        let mut record = vec![0; 345];
+        record[5..22].copy_from_slice(&[10, 25, 2, 26, 2, 27, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        record[5 + 7 * 17..5 + 8 * 17]
+            .copy_from_slice(&[16, 35, 0, 36, 2, 37, 0, 38, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
+        record[5 + 17 * 17..5 + 18 * 17]
+            .copy_from_slice(&[254, 6, 0, 8, 0, 15, 0, 21, 1, 22, 0, 23, 1, 24, 0, 27, 0]);
+        let mut tags = HashMap::new();
+        decode_pentax_digital_filters(&record, &mut tags);
+        assert_eq!(
+            tags["Pentax:DigitalFilter01"],
+            r#"["Toy Camera","Shading=2","Blur=2","ToneBreak=Red"]"#
+        );
+        assert_eq!(
+            tags["Pentax:DigitalFilter08"],
+            r#"["Miniature","FocusPlane=0","FocusWidth=Middle","PlaneAngle=Horizontal","Blur2=2"]"#
+        );
+        assert_eq!(
+            tags["Pentax:DigitalFilter18"],
+            r#"["Custom Filter","SoftFocus=0","HighContrast=0","InvertColor=Off","DistortionType=1","DistortionLevel=Off","ShadingType=1","ShadingLevel=0","ToneBreak=Off"]"#
+        );
+        assert!(!tags.contains_key("Pentax:DigitalFilter19"));
     }
 
     /// `combined-samples/Pentax/PentaxK-5.jpg` tag 0x022b: the exact 8 record

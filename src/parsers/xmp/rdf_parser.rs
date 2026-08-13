@@ -509,6 +509,21 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
         results.push((tag, value));
     }
 
+    // Google stores the HDR+ maker note as an XMP base64 property, but its
+    // contents are a separately encrypted/gzipped protobuf stream.  Decode
+    // only the stable device-information submessage that ExifTool 13.59
+    // exposes; unknown protobuf fields deliberately remain absent.
+    if let Some((_, payload)) = results
+        .iter()
+        .find(|(tag, _)| tag == "XMP:HDRPlusMakerNote")
+    {
+        for (tag, value) in decode_google_hdrp_v3_device_info(payload) {
+            if !results.iter().any(|(existing, _)| existing == &tag) {
+                results.push((tag, value));
+            }
+        }
+    }
+
     // XMP's reported tag name is derived from the namespace URI, not the XML
     // prefix.  Two different custom namespaces can therefore collapse onto
     // the same generic `XMP:<name>` tag when a prefix is rebound in a later
@@ -2834,6 +2849,137 @@ fn base64_binary_placeholder(value: &str) -> Option<String> {
         "(Binary data {} bytes, use -b option to extract)",
         decoded.len()
     ))
+}
+
+/// Decode the documented v3 Google HDR+ maker-note envelope.
+///
+/// The blob is `HDRP\\x03`, followed by xorshift64*-encrypted gzip data.  We
+/// intentionally support only protobuf field 12's direct string members: this
+/// avoids presenting guesses for the many undocumented HDR+ fields.
+fn decode_google_hdrp_v3_device_info(encoded: &str) -> Vec<(String, String)> {
+    use base64::Engine;
+    use std::io::Read;
+
+    const HEADER: &[u8] = b"HDRP\x03";
+    const MAX_DECOMPRESSED: u64 = 4 * 1024 * 1024;
+    const DEVICE_FIELDS: &[(u64, &str)] = &[
+        (1, "DeviceMake"),
+        (2, "DeviceModel"),
+        (3, "DeviceCodename"),
+        (4, "DeviceHardwareRevision"),
+        (6, "HDRPSoftware"),
+        (7, "AndroidRelease"),
+        (9, "Application"),
+        (10, "AppVersion"),
+    ];
+
+    let compact: String = encoded.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut encrypted = match base64::engine::general_purpose::STANDARD
+        .decode(&compact)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(&compact))
+    {
+        Ok(mut bytes) if bytes.starts_with(HEADER) => bytes.split_off(HEADER.len()),
+        _ => return Vec::new(),
+    };
+
+    let original_len = encrypted.len();
+    encrypted.resize((original_len + 7) & !7, 0);
+    let mut key = 0x2515_606b_4a77_91cd_u64;
+    for chunk in encrypted.chunks_exact_mut(8) {
+        // Google.pm's 32-bit implementation is xorshift64* evaluated before
+        // each little-endian word is XORed.
+        key ^= key >> 12;
+        key ^= key << 25;
+        key ^= key >> 27;
+        key = key.wrapping_mul(0x2545_f491_4f6c_dd1d);
+        let word = u64::from_le_bytes(chunk.try_into().expect("eight-byte chunk")) ^ key;
+        chunk.copy_from_slice(&word.to_le_bytes());
+    }
+    encrypted.truncate(original_len);
+
+    let mut decoded = Vec::new();
+    if flate2::read::GzDecoder::new(encrypted.as_slice())
+        .take(MAX_DECOMPRESSED)
+        .read_to_end(&mut decoded)
+        .is_err()
+    {
+        return Vec::new();
+    }
+
+    let mut fields = protobuf_length_delimited_fields(&decoded);
+    let Some(device) = fields.remove(&12) else {
+        return Vec::new();
+    };
+    let device_fields = protobuf_length_delimited_fields(&device);
+    DEVICE_FIELDS
+        .iter()
+        .filter_map(|(number, name)| {
+            let value = std::str::from_utf8(device_fields.get(number)?).ok()?;
+            (!value.is_empty()).then(|| (format!("Google:{name}"), value.to_owned()))
+        })
+        .collect()
+}
+
+/// Read length-delimited protobuf fields without trying to infer their schema.
+/// Duplicate fields keep the first value, matching the XMP parser's existing
+/// first-emitted-tag policy.
+fn protobuf_length_delimited_fields(data: &[u8]) -> std::collections::HashMap<u64, Vec<u8>> {
+    let mut result = std::collections::HashMap::new();
+    let mut offset = 0;
+    while offset < data.len() {
+        let Some(key) = protobuf_varint(data, &mut offset) else {
+            break;
+        };
+        let field = key >> 3;
+        match key & 7 {
+            0 => {
+                if protobuf_varint(data, &mut offset).is_none() {
+                    break;
+                }
+            }
+            1 => {
+                offset = match offset.checked_add(8).filter(|end| *end <= data.len()) {
+                    Some(end) => end,
+                    None => break,
+                }
+            }
+            2 => {
+                let Some(length) = protobuf_varint(data, &mut offset)
+                    .and_then(|length| usize::try_from(length).ok())
+                else {
+                    break;
+                };
+                let Some(end) = offset.checked_add(length).filter(|end| *end <= data.len()) else {
+                    break;
+                };
+                result
+                    .entry(field)
+                    .or_insert_with(|| data[offset..end].to_vec());
+                offset = end;
+            }
+            5 => {
+                offset = match offset.checked_add(4).filter(|end| *end <= data.len()) {
+                    Some(end) => end,
+                    None => break,
+                }
+            }
+            _ => break,
+        }
+    }
+    result
+}
+
+fn protobuf_varint(data: &[u8], offset: &mut usize) -> Option<u64> {
+    let mut value = 0_u64;
+    for shift in (0..64).step_by(7) {
+        let byte = *data.get(*offset)?;
+        *offset += 1;
+        value |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return Some(value);
+        }
+    }
+    None
 }
 
 /// Formats a tag name to match ExifTool's XMP output conventions.
