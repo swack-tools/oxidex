@@ -680,11 +680,37 @@ impl MakerNoteParser for NikonParser {
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_with_preview_ifd_base(data, byte_order, model, tags, value_forms, None)
+        self.parse_with_preview_ifd_base(data, byte_order, model, tags, value_forms, None, None)
     }
 }
 
 impl NikonParser {
+    pub fn parse_with_context_and_file_type(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        file_type: Option<&'static str>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        if !ctx.payload().starts_with(b"Nikon\0") {
+            if let Some(version) = decode_print_im_from_ifd(ctx, 0, byte_order) {
+                tags.insert("PrintIM:PrintIMVersion".to_string(), version);
+            }
+            return Ok(());
+        }
+        self.parse_with_preview_ifd_base(
+            ctx.window(),
+            byte_order,
+            model,
+            tags,
+            value_forms,
+            None,
+            file_type,
+        )
+    }
+
     fn parse_with_preview_ifd_base(
         &self,
         data: &[u8],
@@ -693,6 +719,7 @@ impl NikonParser {
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
         preview_ifd_base: Option<u64>,
+        file_type: Option<&'static str>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
             return Ok(());
@@ -850,7 +877,7 @@ impl NikonParser {
             serial: encrypted::serial_key(serial_raw.as_deref(), model),
             count,
         });
-        let mut ctx = binary_data::Ctx::new(model, None);
+        let mut ctx = binary_data::Ctx::new(model, file_type);
         let mut parsed_value_forms = HashMap::new();
 
         // Parse IFD entries starting at the IFD location
@@ -1946,6 +1973,7 @@ pub fn parse_nikon_makernotes_with_preview_ifd_base(
         tags,
         value_forms,
         Some(preview_ifd_base),
+        None,
     )
 }
 
@@ -2210,6 +2238,22 @@ mod tests {
         assert_eq!(
             metadata.get_string("MakerNotes:PreviewImage"),
             Some("(Binary data 26 bytes, use -b option to extract)")
+        );
+    }
+
+    #[test]
+    fn pinned_d810_jpeg_emits_file_type_gated_wb_bracketing_steps() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
+        let path =
+            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Nikon/NikonD810.jpg");
+        let metadata =
+            crate::core::operations::read_metadata(path).expect("read pinned Nikon D810 fixture");
+
+        assert_eq!(
+            metadata.get_string("Nikon:WBBracketingSteps"),
+            Some("WB Bracketing Disabled")
         );
     }
 }

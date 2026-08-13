@@ -6,7 +6,7 @@
 use super::{FileReader, MetadataMap, TagValue};
 use crate::core::operations_helpers::read_u32;
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
-use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd};
+use crate::core::tiff_helpers::{parse_exif_subifd_with_file_type, parse_gps_subifd};
 use crate::exiftool_tables::{DecodedValue, decode_binary_table, find_table};
 use crate::io::EndianReader;
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
@@ -226,12 +226,13 @@ pub fn process_exif_segments(
                 // of the two limits and keeps a MakerNote out of the JPEG's
                 // compressed scan data.
                 if let Some(offset) = exif_ifd_offset {
-                    parse_exif_subifd(
+                    parse_exif_subifd_with_file_type(
                         &tiff_reader,
                         offset,
                         byte_order,
                         tiff_offset,
                         tiff_data.len() as u64,
+                        Some("JPEG"),
                         metadata,
                     );
                 }
