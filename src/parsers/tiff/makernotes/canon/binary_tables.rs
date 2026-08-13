@@ -285,6 +285,24 @@ const TABLE_AF_CONFIG_CONV34: &[(i64, &str)] = &[
     (4, "Disabled"),
 ];
 const TABLE_AF_CONFIG_CONV35: &[(i64, &str)] = &[(0, "Auto"), (1, "Enable"), (2, "Disable")];
+// Canon.pm:9364-9377.  The EOS R alternative at key 7 differs from the
+// unconditioned legacy conversion, so it must only be used for EOS R bodies.
+const TABLE_AF_CONFIG_CONV44: &[(i64, &str)] = &[
+    (0, "Disable After One-Shot"),
+    (1, "One-Shot -> Enabled"),
+    (2, "One-Shot -> Enabled (magnify)"),
+    (3, "Disable in AF Mode"),
+];
+// Canon.pm:9435-9454.  These two fields exist only for EOS-1D X and EOS R
+// bodies; applying the names to the same record slots on other cameras would
+// be a plausible but incorrect decode.
+const TABLE_AF_CONFIG_CONV45: &[(i64, &str)] =
+    &[(0, "Show in Field of View"), (1, "Show Outside View")];
+const TABLE_AF_CONFIG_CONV46: &[(i64, &str)] = &[
+    (0, "Initial AF Point Selected"),
+    (1, "Manual AF Point"),
+    (2, "Auto"),
+];
 const TABLE_AF_CONFIG_CONV36: &[(i64, &str)] = &[
     (0, "None"),
     (1, "People"),
@@ -802,6 +820,13 @@ const TABLE_AF_CONFIG: &[CanonBinaryField] = &[
         conv: CanonBinaryConv::Map(TABLE_AF_CONFIG_CONV26),
     },
     CanonBinaryField {
+        index: 7,
+        name: "USMLensElectronicMF",
+        format: CanonBinaryFormat::Int32s,
+        count: 1,
+        conv: CanonBinaryConv::Map(TABLE_AF_CONFIG_CONV44),
+    },
+    CanonBinaryField {
         index: 8,
         name: "AFAssistBeam",
         format: CanonBinaryFormat::Int32s,
@@ -863,6 +888,20 @@ const TABLE_AF_CONFIG: &[CanonBinaryField] = &[
         format: CanonBinaryFormat::Int32s,
         count: 1,
         conv: CanonBinaryConv::Map(TABLE_AF_CONFIG_CONV35),
+    },
+    CanonBinaryField {
+        index: 18,
+        name: "AFStatusViewfinder",
+        format: CanonBinaryFormat::Int32s,
+        count: 1,
+        conv: CanonBinaryConv::Map(TABLE_AF_CONFIG_CONV45),
+    },
+    CanonBinaryField {
+        index: 19,
+        name: "InitialAFPointInServo",
+        format: CanonBinaryFormat::Int32s,
+        count: 1,
+        conv: CanonBinaryConv::Map(TABLE_AF_CONFIG_CONV46),
     },
     CanonBinaryField {
         index: 20,
@@ -1484,6 +1523,22 @@ fn select_table(tag_id: u16, raw: &[u8]) -> Option<&'static CanonBinaryTable> {
         })
 }
 
+/// Whether a model satisfies an AFConfig field's `Condition` in Canon.pm.
+fn af_config_field_applies(name: &str, model: &str) -> bool {
+    match name {
+        // Canon.pm:9364: `$$self{Model} =~ /EOS R\d/`.
+        "USMLensElectronicMF" => model
+            .split("EOS R")
+            .skip(1)
+            .any(|suffix| suffix.as_bytes().first().is_some_and(u8::is_ascii_digit)),
+        // Canon.pm:9435 and :9444: `$$self{Model} =~ /EOS-1D X|EOS R/`.
+        "AFStatusViewfinder" | "InitialAFPointInServo" => {
+            model.contains("EOS-1D X") || model.contains("EOS R")
+        }
+        _ => true,
+    }
+}
+
 /// Decodes a `%Canon` binary sub-table into `Canon:`-prefixed tags.
 ///
 /// `raw` is the record exactly as stored, for the ExifTool `Condition` that some tags put
@@ -1496,6 +1551,7 @@ pub(crate) fn parse_binary_table(
     raw: &[u8],
     record: &[i16],
     byte_order: ByteOrder,
+    model: &str,
     tags: &mut HashMap<String, String>,
 ) -> bool {
     if lookup(tag_id).is_none() {
@@ -1518,6 +1574,12 @@ pub(crate) fn parse_binary_table(
     });
 
     for field in entry.fields {
+        // `%Canon::AFConfig` has per-field Conditions which select the R-body
+        // interpretations of slots 7, 18 and 19.  Keep them with the table but
+        // reject them unless the camera model satisfies ExifTool's exact regex.
+        if tag_id == 0x4028 && !af_config_field_applies(field.name, model) {
+            continue;
+        }
         if let Some(gate) = entry.gate
             && let Some((_, minimum)) = gate.minimums.iter().find(|(name, _)| *name == field.name)
             && count.is_none_or(|detected| detected < *minimum)
@@ -1572,7 +1634,7 @@ mod tests {
                 ByteOrder::BigEndian => (*word as u16).to_be_bytes(),
             })
             .collect();
-        parse_binary_table(tag, &raw, record, byte_order, tags)
+        parse_binary_table(tag, &raw, record, byte_order, "", tags)
     }
 
     #[test]
@@ -1610,6 +1672,59 @@ mod tests {
     #[test]
     fn test_length_prefixed_table_keeps_exiftool_indices() {
         assert!(table_is_length_prefixed(0x4028));
+    }
+
+    #[test]
+    fn test_af_config_r_body_conditions_do_not_leak_to_legacy_models() {
+        // `%Canon::AFConfig` is int32s with FIRST_ENTRY => 1.  Populate the
+        // three model-conditioned fields at their ExifTool indices.
+        let mut record = vec![0i16; 40];
+        record[14] = 2; // key 7: One-Shot -> Enabled (magnify)
+        record[36] = 0; // key 18: Show in Field of View
+        record[38] = 2; // key 19: Auto
+        let raw: Vec<u8> = record
+            .iter()
+            .flat_map(|word| (*word as u16).to_le_bytes())
+            .collect();
+
+        let mut r_tags = HashMap::new();
+        assert!(parse_binary_table(
+            0x4028,
+            &raw,
+            &record,
+            ByteOrder::LittleEndian,
+            "Canon EOS R6m2",
+            &mut r_tags,
+        ));
+        assert_eq!(
+            r_tags.get("Canon:USMLensElectronicMF"),
+            Some(&"One-Shot -> Enabled (magnify)".to_string())
+        );
+        assert_eq!(
+            r_tags.get("Canon:AFStatusViewfinder"),
+            Some(&"Show in Field of View".to_string())
+        );
+        assert_eq!(
+            r_tags.get("Canon:InitialAFPointInServo"),
+            Some(&"Auto".to_string())
+        );
+
+        let mut legacy_tags = HashMap::new();
+        assert!(parse_binary_table(
+            0x4028,
+            &raw,
+            &record,
+            ByteOrder::LittleEndian,
+            "Canon EOS 5D Mark III",
+            &mut legacy_tags,
+        ));
+        for name in [
+            "Canon:USMLensElectronicMF",
+            "Canon:AFStatusViewfinder",
+            "Canon:InitialAFPointInServo",
+        ] {
+            assert!(!legacy_tags.contains_key(name));
+        }
     }
 
     /// The AFMicroAdj record from CanonRaw.cr3 has a signed rational at key 2.
@@ -1769,6 +1884,7 @@ mod tests {
             bytes,
             &words(bytes),
             ByteOrder::LittleEndian,
+            "",
             &mut tags,
         ));
         tags
@@ -1812,6 +1928,7 @@ mod tests {
             &record,
             &words(&record),
             ByteOrder::LittleEndian,
+            "",
             &mut tags,
         ));
         assert!(tags.is_empty());
@@ -1928,6 +2045,7 @@ mod tests {
             &zeros,
             &words(&zeros),
             ByteOrder::LittleEndian,
+            "",
             &mut tags,
         ));
         assert!(tags.is_empty());
@@ -1954,6 +2072,7 @@ mod tests {
             &zeros,
             &words(&zeros),
             ByteOrder::LittleEndian,
+            "",
             &mut tags,
         ));
         assert!(tags.is_empty());

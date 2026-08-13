@@ -1529,6 +1529,25 @@ impl NikonParser {
                     if let Some(bytes) = bytes_of(entry)
                         && bytes.len() >= 4
                     {
+                        // Nikon.pm's generic ShotInfo table has a P6000-only
+                        // byte at 0x10.  This Coolpix block starts with four
+                        // NUL bytes, so it deliberately selects ShotInfoUnknown
+                        // and cannot enter the normal encrypted dispatcher.
+                        // Keep this exact model gate beside the raw source;
+                        // no D-series ShotInfo layout shares this fallback.
+                        if model.is_some_and(|m| {
+                            m.strip_suffix("P6000").is_some_and(|head| {
+                                !head.ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                            })
+                        }) && let Some(&raw) = bytes.get(0x10)
+                        {
+                            let printed = match raw {
+                                0 => "Off".to_string(),
+                                1 => "On".to_string(),
+                                other => format!("Unknown ({other})"),
+                            };
+                            tags.insert("Nikon:DistortionControl".to_string(), printed);
+                        }
                         let version = ascii_value(&bytes[..4]);
                         if version.len() == 4 && version.chars().all(|c| c.is_ascii_digit()) {
                             tags.insert("Nikon:ShotInfoVersion".to_string(), version);

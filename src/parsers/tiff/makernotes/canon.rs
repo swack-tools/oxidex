@@ -6380,7 +6380,7 @@ fn parse_canon_makernote_impl_located_with_values(
                     let raw_bytes =
                         extract_canon_bytes_with_base(entry, ifd_data, base).unwrap_or_default();
                     binary_tables::parse_binary_table(
-                        tag, raw_bytes, &record, byte_order, &mut tags,
+                        tag, raw_bytes, &record, byte_order, &model, &mut tags,
                     );
 
                     // `%Canon::ModifiedInfo` (Canon.pm:7331-7369): key 2 is present

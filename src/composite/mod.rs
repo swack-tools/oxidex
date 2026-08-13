@@ -103,6 +103,19 @@ fn lookup_key(map: &MetadataMap, key: &str) -> Option<String> {
     }
     let raw = map.get(key)?;
     let base_name = crate::core::exiftool_compat::strip_family_prefix(key);
+    // TIFF's GPSAltitudeRef is a one-byte field. It remains Binary until the
+    // CLI output formatter runs, but GPS.pm's Composite is evaluated before
+    // that formatter. Supply the same PrintConv form here so the Composite
+    // sees the reference ExifTool gives it (GPS.pm:406-431).
+    if base_name == "GPSAltitudeRef" {
+        if let TagValue::Binary(bytes) = raw {
+            if let Some(rendered) =
+                crate::core::formatters::gps_altitude_ref::format_gps_altitude_ref_bytes(bytes)
+            {
+                return Some(rendered);
+            }
+        }
+    }
     if let Some(converted) = crate::core::exiftool_compat::apex_value_conv(base_name, raw) {
         return value_string(&converted);
     }
@@ -398,6 +411,19 @@ mod tests {
         // Megapixels depends on ImageSize, which is itself derived -- this only
         // works because resolution runs to a fixpoint.
         assert_eq!(m.get_string("Composite:Megapixels"), Some("12.0"));
+    }
+
+    #[test]
+    fn gps_altitude_uses_gps_values_when_reference_is_present() {
+        let mut m = map_of(&[
+            ("GPS:GPSAltitude", "27.99831776 m"),
+            ("GPS:GPSAltitudeRef", "Above Sea Level"),
+        ]);
+        apply(&mut m);
+        assert_eq!(
+            m.get_string("Composite:GPSAltitude"),
+            Some("27.9 m Above Sea Level")
+        );
     }
 
     #[test]
