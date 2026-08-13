@@ -53,6 +53,7 @@ pub fn parse_dji_info_records_in_group(records: &[u8], group: &str) -> MetadataM
                     b"sensor_id" => Some(("SensorID", value)),
                     b"GimbalDegree(Y,P,R)" => Some(("GimbalDegree", value)),
                     b"FlightDegree(Y,P,R)" => Some(("FlightDegree", value)),
+                    b"FlightSpeed(X,Y,Z)" => Some(("FlightSpeed", value)),
                     b"ae_dbg_info" => Some(("AEDebugInfo", value)),
                     b"ae_histogram_info" => Some(("AEHistogramInfo", value)),
                     b"ae_local_histogram" => Some(("AELocalHistogram", value)),

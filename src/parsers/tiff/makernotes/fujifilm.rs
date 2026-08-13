@@ -165,6 +165,9 @@ const FUJI_AFC_SETTINGS: u16 = 0x102E; // FujiFilm.pm:349
 const FUJI_DRIVE_SETTINGS: u16 = 0x1103; // FujiFilm.pm:609
 const FUJI_PIXEL_SHIFT_SHOTS: u16 = 0x1105;
 const FUJI_PIXEL_SHIFT_OFFSET_NEW: u16 = 0x1106;
+const FUJI_COMPOSITE_IMAGE_MODE: u16 = 0x1150;
+const FUJI_COMPOSITE_IMAGE_COUNT1: u16 = 0x1151;
+const FUJI_COMPOSITE_IMAGE_COUNT2: u16 = 0x1152;
 const FUJI_PANORAMA_ANGLE: u16 = 0x1153;
 const FUJI_PANORAMA_DIRECTION: u16 = 0x1154;
 
@@ -617,6 +620,19 @@ const_decoder!(pub
         (2, "Left"),
         (3, "Up"),
         (4, "Down"),
+    ]
+);
+
+// FujiFilm.pm:615-625. Unknown values deliberately use the shared decoder's
+// numeric fallback rather than a guessed label.
+const_decoder!(pub
+    DECODE_COMPOSITE_IMAGE_MODE, i32, [
+        (0, "n/a"),
+        (1, "Pro Low-light"),
+        (2, "Pro Focus"),
+        (32, "Panorama"),
+        (128, "HDR"),
+        (1024, "Multi-exposure"),
     ]
 );
 
@@ -1335,6 +1351,31 @@ impl MakerNoteParser for FujifilmParser {
                             format!("X:{} Y:{}", array[0], array[1]),
                         );
                     }
+                }
+
+                // Composite image tags. FujiFilm.pm:615-635 defines the
+                // first as int32u with a PrintConv, followed by two bare
+                // int16u counters.
+                FUJI_COMPOSITE_IMAGE_MODE => {
+                    let value = entry.value_offset as i32;
+                    tags.insert(
+                        "FujiFilm:CompositeImageMode".to_string(),
+                        DECODE_COMPOSITE_IMAGE_MODE.decode(value).to_string(),
+                    );
+                }
+
+                FUJI_COMPOSITE_IMAGE_COUNT1 => {
+                    tags.insert(
+                        "FujiFilm:CompositeImageCount1".to_string(),
+                        entry.value_offset.to_string(),
+                    );
+                }
+
+                FUJI_COMPOSITE_IMAGE_COUNT2 => {
+                    tags.insert(
+                        "FujiFilm:CompositeImageCount2".to_string(),
+                        entry.value_offset.to_string(),
+                    );
                 }
 
                 // Panorama tags
