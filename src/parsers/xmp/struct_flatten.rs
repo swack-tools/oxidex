@@ -51,6 +51,7 @@ const MWG_REGIONS_NS: &str = "http://www.metadataworkinggroup.com/schemas/region
 const MWG_COLLECTIONS_NS: &str = "http://www.metadataworkinggroup.com/schemas/collections/";
 const MWG_KEYWORDS_NS: &str = "http://www.metadataworkinggroup.com/schemas/keywords/";
 const GOOGLE_DEVICE_NS: &str = "http://ns.google.com/photos/dd/1.0/device/";
+const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 
 /// `(root namespace URI, ID prefix, replacement)` -- the schemas whose
 /// structures carry a `FlatName`. Matched longest-prefix-first, and only when
@@ -327,6 +328,18 @@ fn close_frame(stack: &mut Vec<Frame>, collected: &mut Vec<(String, Vec<String>)
         return;
     }
     let value = frame.text.trim().to_string();
+
+    // Google Device's `Cameras` and `Profiles` are list structures with an
+    // `rdf:type` child under each `rdf:li`.  The struct's `FlatName => ''`
+    // affects its fields, but not the container property itself: ExifTool
+    // reports the property as the type URI (Google.pm, Device table).  RDF
+    // elements normally contribute no tag ID, so retain this narrow case
+    // before the generic leaf handling drops the `rdf:type` frame.
+    if frame.uri.as_deref() == Some(RDF_NS)
+        && let Some(tag) = google_device_container_type_tag(stack, &value)
+    {
+        record(collected, tag, value.clone());
+    }
     if value.is_empty() {
         // An empty struct field -- `<mwg-rs:Extensions rdf:parseType="Resource"/>`
         // -- is still a tag ExifTool reports, with an empty value. Only a
@@ -342,6 +355,25 @@ fn close_frame(stack: &mut Vec<Frame>, collected: &mut Vec<(String, Vec<String>)
         record(collected, tag, value);
     }
     stack.pop();
+}
+
+/// Returns the Google Device container tag represented by an `rdf:type`
+/// value, when it is one of the two containers ExifTool exposes directly.
+fn google_device_container_type_tag(stack: &[Frame], type_uri: &str) -> Option<String> {
+    const TYPE_PREFIX: &str = "http://ns.google.com/photos/dd/1.0/device/:";
+    let type_name = type_uri.strip_prefix(TYPE_PREFIX)?;
+
+    for frame in stack.iter().rev() {
+        if frame.uri.as_deref() != Some(GOOGLE_DEVICE_NS) {
+            continue;
+        }
+        match (frame.part.as_deref(), type_name) {
+            (Some("Cameras"), "Camera") => return Some("Cameras".to_string()),
+            (Some("Profiles"), "Profile") => return Some("Profiles".to_string()),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Reports RDF shorthand attributes (`<Item:Container Item:Mime="image/jpeg"/>`)
@@ -873,10 +905,32 @@ mod tests {
         let tags = extract_flattened_struct_fields(XMP).unwrap();
         assert_eq!(value_of(&tags, "XMP:Trait").as_deref(), Some("Physical"));
         assert_eq!(
+            value_of(&tags, "XMP:Cameras").as_deref(),
+            Some("http://ns.google.com/photos/dd/1.0/device/:Camera")
+        );
+        assert_eq!(
             value_of(&tags, "XMP:DepthMapFar").as_deref(),
             Some("6.145783")
         );
         assert!(value_of(&tags, "XMP:CamerasTrait").is_none());
+    }
+
+    #[test]
+    fn google_device_profiles_keep_their_type_uri() {
+        const XMP: &[u8] = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+ <rdf:Description xmlns:Device="http://ns.google.com/photos/dd/1.0/device/">
+  <Device:Profiles>
+   <rdf:Seq><rdf:li rdf:parseType="Resource">
+    <rdf:type>http://ns.google.com/photos/dd/1.0/device/:Profile</rdf:type>
+   </rdf:li></rdf:Seq>
+  </Device:Profiles>
+ </rdf:Description>
+</rdf:RDF>"#;
+        let tags = extract_flattened_struct_fields(XMP).unwrap();
+        assert_eq!(
+            value_of(&tags, "XMP:Profiles").as_deref(),
+            Some("http://ns.google.com/photos/dd/1.0/device/:Profile")
+        );
     }
 
     #[test]

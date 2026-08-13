@@ -12,6 +12,7 @@
 //! Adding one function here fixes that tag for *every* format at once, which is
 //! why this layer is worth building before chasing per-format gaps.
 use crate::core::formatters::duration::convert_duration;
+use crate::core::formatters::exif_enums::flash_label;
 use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::parsers::tiff::makernotes::panasonic::SHOOTING_MODE;
 
@@ -91,6 +92,60 @@ fn printed_integer(value: &str) -> Option<i64> {
             .parse()
             .ok()
     })
+}
+
+/// Reverse the XMP `exif:Flash` member PrintConvs before XMP.pm packs them
+/// into the ordinary EXIF Flash bitfield.  The parser has already applied
+/// these PrintConvs, so Composite must not feed labels such as `Off` into
+/// Perl's numeric operators as though they were the raw 2.
+fn xmp_flash_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+fn xmp_flash_return(value: &str) -> Option<i64> {
+    match value.trim() {
+        "No return detection" => Some(0),
+        "Return not detected" => Some(2),
+        "Return detected" => Some(3),
+        other => printed_integer(other),
+    }
+}
+
+fn xmp_flash_mode(value: &str) -> Option<i64> {
+    match value.trim() {
+        "Unknown" => Some(0),
+        "On" => Some(1),
+        "Off" => Some(2),
+        "Auto" => Some(3),
+        other => printed_integer(other),
+    }
+}
+
+/// XMP.pm:2808-2840 `Composite::Flash` ValueConv followed by Exif.pm's
+/// `%flash` PrintConv.  Return `None` for values outside the documented XMP
+/// field domains rather than manufacture a plausible EXIF bitfield.
+fn xmp_flash(i: Inputs) -> Option<Computed> {
+    let fired = xmp_flash_bool(get(i, 0)?)?;
+    let returned = xmp_flash_return(get(i, 1)?)?;
+    let mode = xmp_flash_mode(get(i, 2)?)?;
+    let function = xmp_flash_bool(get(i, 3)?)?;
+    let red_eye = xmp_flash_bool(get(i, 4)?)?;
+    if !(0..=3).contains(&returned) || !(0..=3).contains(&mode) {
+        return None;
+    }
+    let value = (i64::from(fired))
+        | (returned << 1)
+        | (mode << 3)
+        | (i64::from(function) << 5)
+        | (i64::from(red_eye) << 6);
+    let print = flash_label(value)
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("Unknown (0x{value:x})"));
+    Computed::new(value.to_string(), print)
 }
 
 /// ExifTool's `ConvertBitrate`: scale by 1000 through bps/kbps/Mbps/Gbps,
@@ -643,6 +698,12 @@ fn panasonic_advanced_scene_mode(model: &str, scene: &str, advanced: &str) -> Op
 #[must_use]
 pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
     match (module, name) {
+        // XMP.pm:2808-2840 packs the separately extracted `exif:Flash`
+        // fields into the ordinary EXIF Flash value, then uses Exif.pm's
+        // `%flash` PrintConv.  NikonCoolpixP520.jpg exercises the all-false,
+        // FlashMode=Off branch.
+        ("XMP", "Flash") => xmp_flash(i),
+
         // Olympus.pm:4337-4345 first validates the Extender byte-string.  A
         // printed `None` is its exact `0 00` case and immediately returns 0;
         // handle only that branch until the remaining byte-string and
