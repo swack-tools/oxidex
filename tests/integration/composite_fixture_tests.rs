@@ -18,6 +18,7 @@ const SAMSUNG_GT_I8910: &str =
     "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGT-i8910.jpg";
 const NIKON_Z7_2: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Nikon/NikonZ7_2.jpg";
 const NIKON_P6000: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Nikon/NikonCoolpixP6000.jpg";
+const NIKON_D5500: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Nikon/NikonD5500.jpg";
 
 /// Kodak.pm's DateCreated Composite joins YearCreated and MonthDayCreated.
 /// ExifTool 13.59 reports `2002:05:01` for this corpus image.
@@ -139,4 +140,20 @@ fn nikon_p6000_fixture_reports_distortion_control() {
 
     let metadata = read_metadata(Path::new(NIKON_P6000)).expect("Nikon P6000 fixture parses");
     assert_eq!(metadata.get_string("Nikon:DistortionControl"), Some("Off"));
+}
+
+/// Nikon.pm's LensSpec Composite concatenates the already print-converted
+/// MakerNote Lens and LensType values. Pinned ExifTool 13.59 reports this
+/// exact value for NikonD5500.jpg.
+#[test]
+fn nikon_d5500_fixture_reports_composite_lens_spec() {
+    if !Path::new(NIKON_D5500).is_file() {
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(NIKON_D5500)).expect("Nikon D5500 fixture parses");
+    assert_eq!(
+        metadata.get_string("Composite:LensSpec"),
+        Some("18-55mm f/3.5-5.6 G VR")
+    );
 }

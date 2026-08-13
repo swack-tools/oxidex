@@ -731,6 +731,107 @@ fn decode_bits_16(words: &[i16]) -> String {
     }
 }
 
+/// The seven category names in Canon.pm's `Categories` BITMASK (tag 0x23).
+const CANON_CATEGORY_BITS: [&str; 7] = [
+    "People", "Scenery", "Events", "User 1", "User 2", "User 3", "To Do",
+];
+
+/// Render Canon's compact-camera category record (Canon.pm:1674-1694).
+///
+/// The tag is emitted only when its leading `int32u` is the literal 8.  That is
+/// ExifTool's `Condition` and prevents this old two-LONG layout from being
+/// mistaken for unrelated data on another body.
+fn decode_canon_categories(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
+    let reader = EndianReader::new(bytes, byte_order.to_io_byte_order());
+    if reader.u32_at(0) != Some(8) {
+        return None;
+    }
+    let bits = reader.u32_at(4)?;
+    if bits == 0 {
+        return Some("(none)".to_string());
+    }
+    let names = CANON_CATEGORY_BITS
+        .iter()
+        .enumerate()
+        .filter(|(bit, _)| bits & (1 << bit) != 0)
+        .map(|(_, name)| *name)
+        .collect::<Vec<_>>();
+    // `DecodeBits` keeps unrecognised bits as `[N]`; Categories uses a literal
+    // BITMASK, so preserve that same forward-compatible representation.
+    let unknown = (0..32)
+        .filter(|bit| *bit >= CANON_CATEGORY_BITS.len() && bits & (1 << bit) != 0)
+        .map(|bit| format!("[{bit}]"));
+    let mut values = names.into_iter().map(str::to_string).collect::<Vec<_>>();
+    values.extend(unknown);
+    Some(values.join(", "))
+}
+
+/// Canon.pm's `PrintAFPoints1D` exact 56-bit display mapping.  Blank positions
+/// are structural padding in the 5-row 45-point grid and consume a bit too.
+const CANON_1D_AF_POINT_NAMES: [&str; 56] = [
+    "", "", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "", "", "B1", "B2", "B3", "B4", "B5", "B6",
+    "B7", "B8", "B9", "B10", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11",
+    "D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9", "D10", "", "", "E1", "E2", "E3", "E4",
+    "E5", "E6", "E7", "", "", "", "", "",
+];
+const CANON_1D_AF_POINT_CODES: [u8; 56] = [
+    0, 0, 0x04, 0x06, 0x08, 0x0a, 0x0c, 0x0e, 0x10, 0, 0, 0x21, 0x23, 0x25, 0x27, 0x29, 0x2b, 0x2d,
+    0x2f, 0x31, 0x33, 0x40, 0x42, 0x44, 0x46, 0x48, 0x4a, 0x4c, 0x4d, 0x50, 0x52, 0x54, 0x61, 0x63,
+    0x65, 0x67, 0x69, 0x6b, 0x6d, 0x6f, 0x71, 0x73, 0, 0, 0x84, 0x86, 0x88, 0x8a, 0x8c, 0x8e, 0x90,
+    0, 0, 0, 0, 0,
+];
+
+/// Exact `Image::ExifTool::Canon::PrintAFPoints1D` rendering.
+fn decode_canon_af_points_1d(bytes: &[u8]) -> Option<String> {
+    if bytes.len() != 8 {
+        return None;
+    }
+    let focus = bytes[0];
+    let focusing = CANON_1D_AF_POINT_CODES
+        .iter()
+        .zip(CANON_1D_AF_POINT_NAMES)
+        .find_map(|(&code, name)| (code == focus && !name.is_empty()).then_some(name))
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if focus == 0xff {
+                "Auto".to_string()
+            } else {
+                format!("Unknown (0x{focus:02x})")
+            }
+        });
+    let points = bytes[1..]
+        .iter()
+        .flat_map(|byte| (0..8).map(move |bit| byte & (1 << bit) != 0))
+        .zip(CANON_1D_AF_POINT_NAMES)
+        .filter_map(|(set, name)| (set && !name.is_empty()).then_some(name))
+        .collect::<Vec<_>>();
+    Some(format!("{} ({})", focusing, points.join(",")))
+}
+
+fn canon_binary_placeholder(size: usize) -> String {
+    format!("(Binary data {size} bytes, use -b option to extract)")
+}
+
+/// Canon.pm's `%longBin` operates on the decoded `int16u` value, not on its
+/// original storage.  Therefore a 626-byte tone curve reports 1,679 bytes:
+/// that is the length of `"13 0 0 ..."`, which ExifTool turns into a binary
+/// display value once it exceeds 64 characters.
+fn decode_canon_long_bin_u16(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
+    if bytes.len() % 2 != 0 {
+        return None;
+    }
+    let reader = EndianReader::new(bytes, byte_order.to_io_byte_order());
+    let rendered = (0..bytes.len() / 2)
+        .map(|index| reader.u16_at(index * 2).map(|value| value.to_string()))
+        .collect::<Option<Vec<_>>>()?
+        .join(" ");
+    Some(if rendered.len() > 64 {
+        canon_binary_placeholder(rendered.len())
+    } else {
+        rendered
+    })
+}
+
 /// Joins a slice of AF coordinates the way ExifTool prints an `int16s[n]` value.
 fn join_i16_slice(values: &[i16]) -> String {
     values
@@ -788,6 +889,9 @@ const CANON_SERIAL_NUMBER_FORMAT: u16 = 0x0015;
 /// Canon.pm:1627 -- `int16u` with a three-value PrintConv.
 const CANON_SUPER_MACRO: u16 = 0x001A;
 const CANON_AF_INFO2: u16 = 0x0026;
+/// Canon.pm:1674 -- two little-endian int32 values.  The first is the literal 8;
+/// the second is a category bitmask.
+const CANON_CATEGORIES: u16 = 0x0023;
 /// Canon.pm:6802 -- `%Canon::FaceDetect2`, a byte-addressed BinaryData record.
 const CANON_FACE_DETECT2: u16 = 0x0025;
 /// Canon.pm:1726 -- 16-byte undef value rendered with `unpack("H*", $val)`.
@@ -805,16 +909,28 @@ const CANON_BATTERY_TYPE: u16 = 0x0038;
 const CANON_FILE_INFO: u16 = 0x0093;
 const CANON_LENS_MODEL: u16 = 0x0095;
 const CANON_INTERNAL_SERIAL_NUMBER: u16 = 0x0096;
+/// Canon.pm:1826 -- eight opaque bytes encoding the EOS-1D's 45-point AF grid.
+const CANON_AF_POINTS_IN_FOCUS_1D: u16 = 0x0094;
+/// Canon.pm:1849 -- explicitly Binary, so its display length is the source byte count.
+const CANON_DUST_REMOVAL_DATA: u16 = 0x0097;
 /// Canon.pm:1781 -- `int32u`, no conversion.
 const CANON_RAW_DATA_LENGTH: u16 = 0x0082;
 /// Canon.pm:1907 -- `%Canon::ColorBalance`, signed RGGB arrays.
 const CANON_COLOR_BALANCE: u16 = 0x00A9;
 const CANON_PROCESSING_INFO: u16 = 0x00A0;
+/// Canon.pm:1902-1905 -- `int16u` arrays whose `%longBin` conversion first turns the
+/// numbers into a space-separated string, then makes strings over 64 bytes Binary.
+const CANON_TONE_CURVE_TABLE: u16 = 0x00A1;
+const CANON_SHARPNESS_TABLE: u16 = 0x00A2;
+const CANON_SHARPNESS_FREQ_TABLE: u16 = 0x00A3;
+const CANON_WHITE_BALANCE_TABLE: u16 = 0x00A4;
 const CANON_MEASURED_COLOR: u16 = 0x00AA;
 /// `%Canon::ModifiedInfo` (Canon.pm:7319) is a BinaryData record. Its model-gated
 /// `ModifiedSharpness` and ValueConv `ModifiedDigitalGain` cannot be emitted by the
 /// generated generic table, so they are decoded in the MakerNote parser below.
 const CANON_MODIFIED_INFO: u16 = 0x00B1;
+const CANON_TONE_CURVE_MATCHING: u16 = 0x00B2;
+const CANON_WHITE_BALANCE_MATCHING: u16 = 0x00B3;
 const CANON_COLOR_SPACE: u16 = 0x00B4;
 const CANON_VRD_OFFSET: u16 = 0x00D0;
 /// ExifTool Canon.pm:1965 — `0xe0 => { Name => 'SensorInfo', ... }`
@@ -4825,16 +4941,25 @@ pub fn canon_tag_to_name(tag_id: u16) -> String {
         CANON_SERIAL_NUMBER_FORMAT => "SerialNumberFormat",
         CANON_SUPER_MACRO => "SuperMacro",
         CANON_AF_INFO2 => "AFInfo2",
+        CANON_CATEGORIES => "Categories",
         CANON_AF_INFO3 => "AFInfo3",
         CANON_FACE_DETECT2 => "FaceDetect2",
         CANON_FILE_INFO => "FileInfo",
+        CANON_AF_POINTS_IN_FOCUS_1D => "AFPointsInFocus1D",
         CANON_LENS_MODEL => "LensModel",
         CANON_INTERNAL_SERIAL_NUMBER => "InternalSerialNumber",
+        CANON_DUST_REMOVAL_DATA => "DustRemovalData",
         CANON_RAW_DATA_LENGTH => "RawDataLength",
         CANON_COLOR_BALANCE => "ColorBalance",
         CANON_PROCESSING_INFO => "ProcessingInfo",
+        CANON_TONE_CURVE_TABLE => "ToneCurveTable",
+        CANON_SHARPNESS_TABLE => "SharpnessTable",
+        CANON_SHARPNESS_FREQ_TABLE => "SharpnessFreqTable",
+        CANON_WHITE_BALANCE_TABLE => "WhiteBalanceTable",
         CANON_MEASURED_COLOR => "MeasuredColor",
         CANON_COLOR_SPACE => "ColorSpace",
+        CANON_TONE_CURVE_MATCHING => "ToneCurveMatching",
+        CANON_WHITE_BALANCE_MATCHING => "WhiteBalanceMatching",
         CANON_VRD_OFFSET => "VRDOffset",
         _ => return format!("Canon:Unknown-{:#06X}", tag_id),
     };
@@ -5180,6 +5305,64 @@ fn parse_canon_makernote_impl_located_with_values(
     // returning whatever tags we found even if parsing isn't perfect
     let _ = parse_ifd_entries(data, byte_order, &config, |entry, ifd_data| {
         match entry.tag_id {
+            // Canon.pm 0x23: an old compact-camera two-LONG record. Its first
+            // LONG is structural and must be exactly 8 before ExifTool exposes
+            // the category bitmask in the second.
+            CANON_CATEGORIES => {
+                if let Some(bytes) = extract_canon_bytes_with_base(entry, ifd_data, base)
+                    && let Some(value) = decode_canon_categories(bytes, byte_order)
+                {
+                    tags.insert("Canon:Categories".to_string(), value);
+                }
+            }
+
+            // EOS-1D's opaque eight-byte focus-grid record. This is not the
+            // ordinary AFInfo bitset: its bit positions include padding and its
+            // first byte identifies the selected point.
+            CANON_AF_POINTS_IN_FOCUS_1D => {
+                if let Some(bytes) = extract_canon_bytes_with_base(entry, ifd_data, base)
+                    && let Some(value) = decode_canon_af_points_1d(bytes)
+                {
+                    tags.insert("Canon:AFPointsInFocus1D".to_string(), value);
+                }
+            }
+
+            // DustRemovalData explicitly carries ExifTool's Binary flag, so no
+            // numeric decoding occurs before the command-line placeholder is rendered.
+            CANON_DUST_REMOVAL_DATA => {
+                if let Some(bytes) = extract_canon_bytes_with_base(entry, ifd_data, base) {
+                    tags.insert(
+                        "Canon:DustRemovalData".to_string(),
+                        canon_binary_placeholder(bytes.len()),
+                    );
+                }
+            }
+
+            // Canon.pm's `%longBin` values are declared `int16u`. ExifTool builds
+            // their space-joined number string first, then converts it to Binary
+            // only when that decoded string exceeds 64 bytes.
+            CANON_TONE_CURVE_TABLE
+            | CANON_SHARPNESS_TABLE
+            | CANON_SHARPNESS_FREQ_TABLE
+            | CANON_WHITE_BALANCE_TABLE
+            | CANON_TONE_CURVE_MATCHING
+            | CANON_WHITE_BALANCE_MATCHING => {
+                if let Some(bytes) = extract_canon_bytes_with_base(entry, ifd_data, base)
+                    && let Some(value) = decode_canon_long_bin_u16(bytes, byte_order)
+                {
+                    let name = match entry.tag_id {
+                        CANON_TONE_CURVE_TABLE => "ToneCurveTable",
+                        CANON_SHARPNESS_TABLE => "SharpnessTable",
+                        CANON_SHARPNESS_FREQ_TABLE => "SharpnessFreqTable",
+                        CANON_WHITE_BALANCE_TABLE => "WhiteBalanceTable",
+                        CANON_TONE_CURVE_MATCHING => "ToneCurveMatching",
+                        CANON_WHITE_BALANCE_MATCHING => "WhiteBalanceMatching",
+                        _ => unreachable!("long-bin match is exhaustive"),
+                    };
+                    tags.insert(format!("Canon:{name}"), value);
+                }
+            }
+
             // Simple string tags (Phase 1)
             // Canon MakerNotes use TIFF-relative offsets, so we use extract_canon_string
             // which properly calculates and applies the base offset
