@@ -798,7 +798,11 @@ impl PanasonicParser {
             // Supplementary info strings (Title, BabyName)
             0x0065 | 0x0066 |
             // Location-related strings
-            0x0067 | 0x0069 | 0x006B | 0x006D | 0x006F | 0x0080 => {
+            0x0067 | 0x0069 | 0x006B | 0x006D | 0x006F | 0x0080 |
+            // LUT names are ordinary null-terminated strings.  They may be
+            // empty, which is still a present ExifTool tag and must not be
+            // dropped by a truthiness check.
+            0x00F1 | 0x00F4 => {
                 if let Some(value) = extract_string_value(entry, data, ifd_offset, data_base)
                     && let Some(tag_name) = registry.get_tag_name(tag_id) {
                         tags.insert(format!("Panasonic:{}", tag_name), value);
@@ -923,6 +927,42 @@ impl PanasonicParser {
                     .and_then(|pairs| decode_af_point_position(&pairs));
                 if let Some(printed) = printed {
                     tags.insert("Panasonic:AFPointPosition".to_string(), printed);
+                }
+                return;
+            }
+            // The newer full-frame MakerNote range uses two encodings that
+            // differ from the generic scalar path: LensTypeModel is a SHORT
+            // with Panasonic.pm's byte-swapped hex ValueConv, while the two
+            // adjustment values are signed rational64 records.
+            0x00C5 | 0x00E4 => {
+                let raw = inline_u16_value(entry, byte_order);
+                if raw != 0 {
+                    tags.insert(
+                        "Panasonic:LensTypeModel".to_string(),
+                        format!("{:02x} {:02x}", raw as u8, (raw >> 8) as u8),
+                    );
+                }
+                return;
+            }
+            0x00D6 => {
+                if let Some(value) = extract_rational_values(entry, data, ifd_offset, data_base, byte_order)
+                    .and_then(|values| values.first().copied())
+                    .and_then(|(num, den)| format_rational64s(num as i32, den as i32))
+                {
+                    tags.insert("Panasonic:NoiseReductionStrength".to_string(), value);
+                }
+                return;
+            }
+            0x00DE => {
+                if let Some(value) = extract_rational_values(entry, data, ifd_offset, data_base, byte_order)
+                    .and_then(|values| {
+                        values
+                            .iter()
+                            .map(|&(num, den)| format_rational64u(num, den))
+                            .collect::<Option<Vec<_>>>()
+                    })
+                {
+                    tags.insert("Panasonic:AFAreaSize".to_string(), value.join(" "));
                 }
                 return;
             }
@@ -1425,6 +1465,15 @@ fn trim_trailing_zeros(s: &str) -> &str {
 /// `GetRational64u` (ExifTool.pm:6114-6120): `$denom or return $numer ? 'inf' : 'undef'`,
 /// otherwise `RoundFloat($numer/$denom, 10)`.
 fn format_rational64u(numerator: u32, denominator: u32) -> Option<String> {
+    if denominator == 0 {
+        return Some(if numerator != 0 { "inf" } else { "undef" }.to_string());
+    }
+    sprintf_g(f64::from(numerator) / f64::from(denominator), 10)
+}
+
+/// Signed counterpart of [`format_rational64u`] for Panasonic's image-style
+/// adjustment records, which Panasonic.pm declares `rational64s`.
+fn format_rational64s(numerator: i32, denominator: i32) -> Option<String> {
     if denominator == 0 {
         return Some(if numerator != 0 { "inf" } else { "undef" }.to_string());
     }

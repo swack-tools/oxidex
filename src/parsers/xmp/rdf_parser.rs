@@ -515,7 +515,7 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
     // exposes; unknown protobuf fields deliberately remain absent.
     if let Some((_, payload)) = results
         .iter()
-        .find(|(tag, _)| tag == "XMP:HDRPlusMakerNote")
+        .find(|(tag, _)| tag == "XMP:HDRPlusMakerNote" || tag == "XMP:HDRPMakerNote")
     {
         for (tag, value) in decode_google_hdrp_v3_device_info(payload) {
             if !results.iter().any(|(existing, _)| existing == &tag) {
@@ -542,7 +542,11 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
     // a chance to see -- and rewrite -- the raw base64 text.
     let raw_hdrp_makernote = results
         .iter()
-        .find(|(tag, _)| tag == "XMP:HDRPlusMakerNote")
+        .find(|(tag, _)| tag == "XMP:HDRPlusMakerNote" || tag == "XMP:HDRPMakerNote")
+        .map(|(_, value)| value.clone());
+    let raw_hdrp_shot_log = results
+        .iter()
+        .find(|(tag, _)| tag == "XMP:ShotLogData")
         .map(|(_, value)| value.clone());
 
     // Post-process results to apply formatting for specific tags
@@ -568,6 +572,16 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
     if let Some(raw) = raw_hdrp_makernote {
         for (tag, value) in super::google_hdrp::decode_hdrp_plus_makernote(&raw) {
             if !formatted.iter().any(|(t, _)| *t == tag) {
+                formatted.push((tag, XmpValue::Scalar(value)));
+            }
+        }
+    }
+
+    // Older HDRP v2 image notes keep their burst counters in a separate,
+    // protobuf-framed `GCamera:ShotLogData` property (Google.pm:576-577).
+    if let Some(raw) = raw_hdrp_shot_log {
+        for (tag, value) in super::google_hdrp::decode_hdrp_shot_log_data(&raw) {
+            if !formatted.iter().any(|(existing, _)| *existing == tag) {
                 formatted.push((tag, XmpValue::Scalar(value)));
             }
         }

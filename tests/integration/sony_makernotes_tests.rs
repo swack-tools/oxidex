@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 const A900: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSLR-A900.jpg";
+const A580: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSLR-A580.jpg";
 
 /// Builds a headerless little-endian Sony MakerNote from `(tag, type, count,
 /// value)` entries, followed by `trailing` bytes for any out-of-line values.
@@ -262,6 +263,28 @@ fn test_sony_more_settings_a550_fields_follow_exiftool_layout() {
         tags.get("Sony:Orientation2"),
         Some(&"Rotate 90 CW".to_string())
     );
+}
+
+#[test]
+fn test_sony_a580_conditional_maker_note_fields_match_exiftool() {
+    if !Path::new(A580).is_file() {
+        eprintln!("skipping: corpus fixture not present at {A580}");
+        return;
+    }
+    // Pinned ExifTool 13.59 reports these from the model-gated MoreSettings
+    // (0x20 / 0x7c) and ExtraInfo3 (0x14) alternatives. The generated schema
+    // omits those alternatives, so this guards the manual selection against
+    // real camera bytes rather than an invented layout.
+    let metadata = read_metadata(Path::new(A580)).expect("Sony DSLR-A580 parses");
+    assert_eq!(
+        metadata.get_string("Sony:LiveViewAFMethod"),
+        Some("Phase-detect AF")
+    );
+    assert_eq!(
+        metadata.get_string("Sony:FlashActionExternal"),
+        Some("Did not fire")
+    );
+    assert_eq!(metadata.get_string("Sony:ModeDialPosition"), Some("Manual"));
 }
 
 #[test]

@@ -798,7 +798,7 @@ pub fn extract_focus_info(
 // ============================================================================
 
 /// Decodes `MoreSettings` (block id 1) in Sony's little-endian `MoreInfo`
-/// offset directory.  ExifTool exposes these rows only on DSLR-A450/A500/A550.
+/// offset directory.
 pub fn extract_more_info(
     data: &[u8],
     model: Option<&str>,
@@ -833,11 +833,16 @@ pub fn extract_more_info(
         .min()
         .unwrap_or(len);
     let block = &data[*start..end];
-    if !model.is_some_and(|m| matches!(m, "DSLR-A450" | "DSLR-A500" | "DSLR-A550")) {
+    let model = model.unwrap_or("");
+    let early_a_mount = matches!(model, "DSLR-A450" | "DSLR-A500" | "DSLR-A550");
+    let later_a_mount = matches!(model, "DSLR-A560" | "DSLR-A580")
+        || model.starts_with("SLT-A")
+        || matches!(model, "NEX-C3" | "NEX-VG10" | "NEX-VG10E");
+    if !early_a_mount && !later_a_mount {
         return true;
     }
 
-    if let Some(raw) = block.get(0x1a..0x1e) {
+    if early_a_mount && let Some(raw) = block.get(0x1a..0x1e) {
         let red = u16::from_be_bytes([raw[0], raw[1]]);
         let blue = u16::from_be_bytes([raw[2], raw[3]]);
         tags.insert(
@@ -845,7 +850,7 @@ pub fn extract_more_info(
             format!("{red} {blue}"),
         );
     }
-    if let Some(raw) = block.get(0x24..0x26) {
+    if early_a_mount && let Some(raw) = block.get(0x24..0x26) {
         let value = f64::from(i16::from_le_bytes([raw[0], raw[1]])) / 8.0;
         let printed = if value == 0.0 {
             "0".to_string()
@@ -854,7 +859,7 @@ pub fn extract_more_info(
         };
         tags.insert("Sony:ExposureCompensation2".to_string(), printed);
     }
-    if let Some(value) = block.get(0x28) {
+    if early_a_mount && let Some(value) = block.get(0x28) {
         let printed = match value {
             1 => Some("Horizontal (normal)"),
             2 => Some("Rotate 180"),
@@ -864,6 +869,33 @@ pub fn extract_more_info(
         };
         if let Some(printed) = printed {
             tags.insert("Sony:Orientation2".to_string(), printed.to_string());
+        }
+    }
+    // MoreSettings' 0x20 and 0x7c use model-overlapping alternatives.  The
+    // generated schema retains only the earlier A450/A500/A550 arms, but
+    // Sony.pm defines these for A560/A580, SLT-Axx and NEX-C3/VG10 bodies.
+    if later_a_mount {
+        if let Some(value) = block.get(0x20) {
+            let printed = match value {
+                0 => Some("n/a"),
+                1 => Some("Phase-detect AF"),
+                2 => Some("Contrast AF"),
+                _ => None,
+            };
+            if let Some(printed) = printed {
+                tags.insert("Sony:LiveViewAFMethod".to_string(), printed.to_string());
+            }
+        }
+        if let Some(value) = block.get(0x7c) {
+            let printed = match value {
+                136 => Some("Did not fire"),
+                167 => Some("Fired"),
+                182 => Some("Fired, HSS"),
+                _ => None,
+            };
+            if let Some(printed) = printed {
+                tags.insert("Sony:FlashActionExternal".to_string(), printed.to_string());
+            }
         }
     }
     true
@@ -992,6 +1024,44 @@ pub fn extract_extra_info(
                     version[0], version[1], version[2], version[3]
                 ),
             );
+        }
+    }
+
+    // ExtraInfo3's 0x14 is a DSLR mode-dial position, while 0x16 describes
+    // the A-mount camera's active card.  They are conditional alternatives
+    // omitted from the generated table because the same bytes mean other
+    // things on SLT and NEX bodies.
+    if table_name == "ExtraInfo3" && model.starts_with("DSLR-") {
+        if let Some(value) = data.get(0x14) {
+            let printed = match value {
+                248 => Some("No Flash"),
+                249 => Some("Aperture-priority AE"),
+                250 => Some("SCN"),
+                251 => Some("Shutter speed priority AE"),
+                252 => Some("Auto"),
+                253 => Some("Program AE"),
+                254 => Some("Panorama"),
+                255 => Some("Manual"),
+                _ => None,
+            };
+            if let Some(printed) = printed {
+                tags.insert("Sony:ModeDialPosition".to_string(), printed.to_string());
+            }
+        }
+        if let Some(value) = data.get(0x16) {
+            let printed = match value {
+                244 => Some("MemoryStick in use, SD card present"),
+                245 => Some("MemoryStick in use, SD slot empty"),
+                252 => Some("SD card in use, MemoryStick present"),
+                254 => Some("SD card in use, MemoryStick slot empty"),
+                _ => None,
+            };
+            if let Some(printed) = printed {
+                tags.insert(
+                    "Sony:MemoryCardConfiguration".to_string(),
+                    printed.to_string(),
+                );
+            }
         }
     }
 }

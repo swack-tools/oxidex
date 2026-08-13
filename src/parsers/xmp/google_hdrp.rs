@@ -32,9 +32,16 @@ use std::io::Read;
 /// decrypt/gunzip -- rather than fabricating a value.
 pub fn decode_hdrp_plus_makernote(raw_value: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
-    let Some(inflated) = decrypt_and_inflate(raw_value) else {
+    let Some((version, inflated)) = decrypt_and_inflate_any(raw_value) else {
         return out;
     };
+
+    if version == 2 {
+        return decode_hdrp_v2_text(&inflated);
+    }
+    if version != 3 {
+        return out;
+    }
 
     let top = parse_fields(&inflated);
 
@@ -72,20 +79,37 @@ pub fn decode_hdrp_plus_makernote(raw_value: &str) -> Vec<(String, String)> {
     out
 }
 
+/// Extracts the two scalar fields in `Google::ShotLogData` (Google.pm:576-577).
+/// This is a separate HDRP v3 property in v2-era Pixel XMP packets.
+pub fn decode_hdrp_shot_log_data(raw_value: &str) -> Vec<(String, String)> {
+    // `ShotLogData` is marked `IsProtobuf` by the table, so ExifTool parses
+    // it as protobuf even when its enclosing HDRP stream is version 2.
+    let Some((_, inflated)) = decrypt_and_inflate_any(raw_value) else {
+        return Vec::new();
+    };
+    let fields = parse_fields(&inflated);
+    let mut out = Vec::new();
+    if let Some(Field::Varint(n)) = last_field(&fields, 2) {
+        out.push(("MakerNotes:MeteringFrameCount".to_string(), n.to_string()));
+    }
+    if let Some(Field::Varint(n)) = last_field(&fields, 3) {
+        out.push((
+            "MakerNotes:OriginalPayloadFrameCount".to_string(),
+            n.to_string(),
+        ));
+    }
+    out
+}
+
 /// Base64-decodes, decrypts, and gunzips a `HdrPlusMakernote` value,
 /// mirroring `Google::ProcessHDRP` (Google.pm:670-780). Returns `None` on
 /// any failure, or if the decoded version isn't 3 (protobuf-framed).
-fn decrypt_and_inflate(raw_value: &str) -> Option<Vec<u8>> {
+fn decrypt_and_inflate_any(raw_value: &str) -> Option<(u8, Vec<u8>)> {
     let decoded = decode_base64_flexible(raw_value)?;
     if decoded.len() < 5 || &decoded[0..4] != b"HDRP" {
         return None;
     }
     let version = decoded[4];
-    if version != 3 {
-        // Version 2 is the older text-based HDRPMakerNote format
-        // (`ProcessHDRPMakerNote`, Google.pm:630-663) -- not implemented.
-        return None;
-    }
 
     let mut payload = decoded[5..].to_vec();
     let pad = (8 - (payload.len() % 8)) % 8;
@@ -118,7 +142,107 @@ fn decrypt_and_inflate(raw_value: &str) -> Option<Vec<u8>> {
     let mut gz = flate2::read::GzDecoder::new(&payload[..]);
     let mut buf = Vec::new();
     gz.read_to_end(&mut buf).ok()?;
-    Some(buf)
+    Some((version, buf))
+}
+
+/// Mirrors the stable, text-format branch of `ProcessHDRPMakerNote`
+/// (Google.pm:630-663).  It deliberately reports only the named table entries
+/// and their exact binary placeholders; unknown diagnostic headings remain
+/// absent rather than being given invented tag names.
+fn decode_hdrp_v2_text(inflated: &[u8]) -> Vec<(String, String)> {
+    let text = String::from_utf8_lossy(inflated);
+    let mut out = Vec::new();
+    let mut active: Option<(String, String)> = None;
+
+    for raw_line in text.split_inclusive('\n') {
+        let line = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+        if let Some((name, value, is_base64)) = parse_v2_heading(line) {
+            if let Some((tag, value)) = active.take() {
+                push_v2_binary(&mut out, &tag, value.len());
+            }
+            if is_base64 {
+                if let Some(bytes) = decode_base64_flexible(value) {
+                    push_v2_binary(&mut out, &name, bytes.len());
+                }
+            } else if !value.is_empty() {
+                active = Some((name, value.to_string()));
+            } else {
+                active = Some((name, String::new()));
+            }
+        } else if let Some((_, value)) = active.as_mut() {
+            // Perl's `ProcessHDRPMakerNote` captures through the byte before
+            // the next heading, including this line's terminating newline.
+            value.push_str(raw_line);
+        }
+    }
+    if let Some((tag, value)) = active {
+        push_v2_binary(&mut out, &tag, value.len());
+    }
+
+    // `ProcessHDRPMakerNote` funnels free-form, non-heading diagnostic text
+    // through ProcessingNotes. The final such line is the value retained by
+    // ExifTool's metadata map for the Pixel 6a fixture.
+    if let Some(note) = text
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| line.starts_with("Neither warping nor relighting"))
+    {
+        out.push(("MakerNotes:ProcessingNotes".to_string(), note.to_string()));
+    }
+    out
+}
+
+fn parse_v2_heading(line: &str) -> Option<(String, &str, bool)> {
+    const HEADINGS: &[(&str, &str)] = &[
+        ("InitParams", "InitParamsText"),
+        ("Logging metadata", "LoggingMetadataText"),
+        ("Merged image", "MergedImage"),
+        ("Finished image", "FinishedImage"),
+        ("Payload metadata", "PayloadMetadataText"),
+        ("ShotLogData", "ShotLogDataText"),
+        ("ShotParams", "ShotParamsText"),
+        ("StaticMetadata", "StaticMetadataText"),
+        ("Summary", "SummaryText"),
+        ("Time log", "TimeLogText"),
+        ("Unused logging metadata", "UnusedLoggingMetadata"),
+        ("Rectiface", "RectifaceText"),
+        ("GoudaRequest", "GoudaRequestText"),
+    ];
+    if let Some(rest) = line.strip_prefix("Payload frame ") {
+        let (index, rest) = rest.split_once(" (base64): ")?;
+        if index.chars().all(|c| c.is_ascii_digit()) {
+            // ExifTool indexes repeated tags, padding to the largest source
+            // index width (00..10 for Pixel 6a; 0..8 for Pixel 5).
+            return Some((format!("PayloadFrame{index}"), rest, true));
+        }
+    }
+    for &(heading, tag) in HEADINGS {
+        if line == heading {
+            return Some((tag.to_string(), "", false));
+        }
+        if let Some(value) = line.strip_prefix(heading).and_then(|v| v.strip_prefix(":")) {
+            return Some((
+                tag.to_string(),
+                value.strip_prefix(' ').unwrap_or(value),
+                false,
+            ));
+        }
+        if let Some(value) = line
+            .strip_prefix(heading)
+            .and_then(|v| v.strip_prefix(" (base64): "))
+        {
+            return Some((tag.to_string(), value, true));
+        }
+    }
+    None
+}
+
+fn push_v2_binary(out: &mut Vec<(String, String)>, tag: &str, len: usize) {
+    out.push((
+        format!("MakerNotes:{tag}"),
+        format!("(Binary data {len} bytes, use -b option to extract)"),
+    ));
 }
 
 /// XORs the little-endian `u32` at `buf[offset..offset+4]` with `word`.
