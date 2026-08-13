@@ -8,6 +8,58 @@
 
 const DC_S1M2ES: &str =
     "/tmp/oxidex-exiftool-cache/combined-samples/Panasonic/PanasonicDC-S1M2ES.jpg";
+const LEICA_D_LUX8: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaD-Lux8.jpg";
+
+/// Leica's D-Lux 8 uses ExifTool's `MakerNoteLeica10`, which routes its
+/// "LEICA CAMERA AG" MakerNote to Panasonic::Main.  The expected values below
+/// are from the pinned ExifTool 13.59 oracle (`-G1 -s -n`).
+#[test]
+fn leica_d_lux8_reports_panasonic_main_late_tags() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(LEICA_D_LUX8).is_file() {
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(LEICA_D_LUX8)).expect("Leica D-Lux 8 parses");
+    assert_eq!(
+        metadata.get_string("Panasonic:WBShiftIntelligentAuto"),
+        Some("0")
+    );
+    assert_eq!(
+        metadata.get_string("Panasonic:WBShiftCreativeControl"),
+        Some("0")
+    );
+    assert_eq!(
+        metadata.get_string("Panasonic:HighlightShadow"),
+        Some("0 0")
+    );
+    assert_eq!(
+        metadata.get_string("Panasonic:VideoBurstResolution"),
+        Some("Off or 4K")
+    );
+    assert_eq!(metadata.get_string("Panasonic:RedEyeRemoval"), Some("Off"));
+    assert_eq!(metadata.get_string("Panasonic:VideoBurstMode"), Some("Off"));
+    assert_eq!(metadata.get_string("Panasonic:FocusBracket"), Some("0"));
+    assert_eq!(
+        metadata.get_string("Panasonic:LongExposureNRUsed"),
+        Some("No")
+    );
+    assert_eq!(
+        metadata.get_string("Panasonic:PostFocusMerging"),
+        Some("Post Focus Auto Merging or None")
+    );
+    assert_eq!(metadata.get_string("Panasonic:VideoPreburst"), Some("No"));
+    assert_eq!(
+        metadata.get_string("Panasonic:SensorType"),
+        Some("Multi-aspect")
+    );
+    assert_eq!(
+        metadata.get_string("Panasonic:MonochromeGrainEffect"),
+        Some("Off")
+    );
+}
 
 #[test]
 fn panasonic_dc_s1m2es_reports_late_makernote_tags() {

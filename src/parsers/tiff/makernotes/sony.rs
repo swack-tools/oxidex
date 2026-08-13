@@ -70,6 +70,7 @@ use value::SonyValue;
 const SONY_DSC_SIGNATURE: &[u8] = b"SONY DSC ";
 const SONY_CAM_SIGNATURE: &[u8] = b"SONY CAM ";
 const SONY_SIGNATURE: &[u8] = b"SONY";
+const SONY_PIC_SIGNATURE: &[u8] = b"SONY PIC\0";
 
 /// Length of the "SONY xxx " header, including the three NUL bytes that pad it.
 /// ExifTool starts the IFD at a fixed `$valuePtr + 12`.
@@ -299,6 +300,15 @@ fn parse_sony_makernote_impl(
 ) -> Result<HashMap<String, String>> {
     if data.is_empty() {
         return Ok(HashMap::new());
+    }
+
+    // `Sony::PIC` is not a TIFF IFD.  ExifTool's ProcessSonyPIC scans its
+    // complete payload for printable text runs, exposes each long run as a
+    // binary TextInfo tag, then derives selected key/value fields from those
+    // same runs (Sony.pm:11076-11115).  Parsing its first two bytes as an IFD
+    // count would silently return no tags for DSC-H300-class notes.
+    if data.starts_with(SONY_PIC_SIGNATURE) {
+        return Ok(parse_sony_pic(data));
     }
 
     // Skip whichever header this body writes; the IFD follows it.
@@ -537,6 +547,75 @@ fn parse_sony_makernote_impl(
     }
 
     Ok(resolve_duplicates(found))
+}
+
+/// Decodes the text blocks from the non-IFD `SONY PIC\0` MakerNote.
+///
+/// This mirrors the deliberately broad `ProcessSonyPIC` scan in the pinned
+/// ExifTool source: `/(\w[\x09\x0a\x0d\x20-\x7e]+)/sg`, retaining only runs
+/// longer than 32 bytes.  TextInfo remains binary in ExifTool output, so the
+/// public map carries its normal display placeholder rather than guessing a
+/// string encoding or normalizing its whitespace.
+fn parse_sony_pic(data: &[u8]) -> HashMap<String, String> {
+    let mut tags = HashMap::new();
+    let mut text_info_index = 0usize;
+    let mut cursor = 0usize;
+
+    while cursor < data.len() {
+        while cursor < data.len() && !(data[cursor].is_ascii_alphanumeric() || data[cursor] == b'_')
+        {
+            cursor += 1;
+        }
+        let start = cursor;
+        while cursor < data.len() && matches!(data[cursor], b'\t' | b'\n' | b'\r' | b' '..=b'~') {
+            cursor += 1;
+        }
+        let text = &data[start..cursor];
+        if text.len() <= 32 {
+            continue;
+        }
+
+        text_info_index += 1;
+        tags.insert(
+            format!("Sony:TextInfo{text_info_index}"),
+            format!(
+                "(Binary data {} bytes, use -b option to extract)",
+                text.len()
+            ),
+        );
+        extract_pic_fields(text, &mut tags);
+    }
+
+    tags
+}
+
+/// Applies the explicit field rules from `Sony::PIC` to one TextInfo block.
+fn extract_pic_fields(text: &[u8], tags: &mut HashMap<String, String>) {
+    let Ok(text) = std::str::from_utf8(text) else {
+        return;
+    };
+
+    for (prefix, barcode) in [("BC:", true), ("barcode:", false), ("BarCode:", false)] {
+        let Some(start) = text.find(prefix) else {
+            continue;
+        };
+        let value = text[start + prefix.len()..]
+            .trim_start()
+            .split(|c: char| c.is_ascii_whitespace() || matches!(c, ';' | ',' | ':'))
+            .next()
+            .unwrap_or_default();
+        if value.is_empty() || (barcode && tags.contains_key("Sony:Barcode")) {
+            continue;
+        }
+        let value = if prefix == "BC:" {
+            value.split("IP1").next().unwrap_or(value)
+        } else if prefix == "BarCode:" && value.len() > 12 {
+            &value[..12]
+        } else {
+            value
+        };
+        tags.insert("Sony:Barcode".to_string(), value.to_string());
+    }
 }
 
 /// ExifTool's priority for a tag whose table declares none.
