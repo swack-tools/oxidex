@@ -106,6 +106,50 @@ fn panasonic_dc_s1m2es_reports_late_makernote_tags() {
 }
 
 #[test]
+fn panasonic_dc_s1m2es_reports_late_makernote_tags() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Panasonic/PanasonicDC-S1M2ES.jpg").is_file() {
+        return;
+    }
+
+    let fixture = "/tmp/oxidex-exiftool-cache/combined-samples/Panasonic/PanasonicDC-S1M2ES.jpg";
+    if !Path::new(fixture).is_file() {
+        eprintln!("skipping: corpus fixture not present at {fixture}");
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(fixture)).expect("Panasonic DC-S1M2ES parses");
+    assert_eq!(metadata.get_string("Panasonic:HybridLogGamma"), Some("Off"));
+    assert_eq!(
+        metadata.get_string("Panasonic:LensTypeModel"),
+        Some("07 40")
+    );
+    assert_eq!(metadata.get_string("Panasonic:MinimumISO"), Some("100"));
+    assert_eq!(
+        metadata.get_string("Panasonic:AFSubjectDetection"),
+        Some("Human Eye/Face/Body")
+    );
+    assert_eq!(
+        metadata.get_string("Panasonic:DynamicRangeBoost"),
+        Some("Off")
+    );
+    assert_eq!(metadata.get_string("Panasonic:LUT1Name"), Some(""));
+    assert_eq!(metadata.get_string("Panasonic:LUT1Opacity"), Some("0"));
+    assert_eq!(metadata.get_string("Panasonic:LUT2Name"), Some(""));
+    assert_eq!(metadata.get_string("Panasonic:LUT2Opacity"), Some("0"));
+    assert_eq!(
+        metadata.get_string("Panasonic:AFAreaSize"),
+        Some("0.0205078125 0.03125")
+    );
+    assert_eq!(
+        metadata.get_string("Panasonic:NoiseReductionStrength"),
+        Some("0")
+    );
+}
+
+#[test]
 fn test_panasonic_parser_trait() {
     use oxidex::parsers::tiff::makernotes::panasonic::PanasonicParser;
     use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
