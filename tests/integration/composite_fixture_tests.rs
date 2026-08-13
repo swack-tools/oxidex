@@ -49,6 +49,28 @@ fn flir_fixture_reports_composite_peak_spectral_sensitivity() {
     );
 }
 
+/// The TIFF MakerNote in FLIR.jpg stores these separately from the FLIR APP1
+/// binary record as `rational64u[1]`: 308/1, 281/1 and 80/100.  Pinning all
+/// three makes the TIFF-relative MakerNote value base observable instead of
+/// accidentally relying on the APP1 copy of Emissivity.
+#[test]
+fn flir_fixture_reports_makernote_rational_measurements() {
+    if !Path::new(FLIR).is_file() {
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(FLIR)).expect("FLIR fixture parses");
+    assert_eq!(
+        metadata.get_string("MakerNotes:ImageTemperatureMax"),
+        Some("308")
+    );
+    assert_eq!(
+        metadata.get_string("MakerNotes:ImageTemperatureMin"),
+        Some("281")
+    );
+    assert_eq!(metadata.get_string("MakerNotes:Emissivity"), Some("0.80"));
+}
+
 /// GPS.pm's altitude Composite truncates to one decimal place, while XMP's
 /// coordinates furnish the A55 reference composites. These source fixtures
 /// also cover the north/east suffix form used by Adobe XMP GPS values.

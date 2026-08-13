@@ -117,6 +117,21 @@ pub const DJI_HASSELBLAD: u16 = 0x011C;
 const DJI_DEWARP_DATA: u16 = 0x011D; // Lens distortion correction data
 const DJI_HYPERLAPSE_MODE: u16 = 0x011E; // Hyperlapse/Timelapse mode
 
+/// DJI Phantom-style MakerNote attitude/velocity fields.  ExifTool's
+/// `DJI::Main` declares these as inline `float` values, not the scaled
+/// integer telemetry fields used by newer DJI models.
+const DJI_FLOAT_FIELDS: &[(u16, &str)] = &[
+    (0x0003, "SpeedX"),
+    (0x0004, "SpeedY"),
+    (0x0005, "SpeedZ"),
+    (0x0006, "Pitch"),
+    (0x0007, "Yaw"),
+    (0x0008, "Roll"),
+    (0x0009, "CameraPitch"),
+    (0x000a, "CameraYaw"),
+    (0x000b, "CameraRoll"),
+];
+
 // DJI signature for validation
 const DJI_SIGNATURE: &[u8] = b"DJI";
 
@@ -333,6 +348,22 @@ impl DjiParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) {
+        // DJI::Main 0x0003..0x000b is a compact, ordinary TIFF IFD used by
+        // Phantom-era cameras such as the FC330.  The four value bytes are
+        // the IEEE-754 float itself; treating them as a value offset (or as
+        // integer telemetry) loses all nine fields.  Its PrintConv is
+        // `sprintf("%+.2f", $val)` in the pinned ExifTool 13.59 table.
+        if entry.field_type == 11 && entry.value_count == 1 {
+            if let Some((_, tag_name)) = DJI_FLOAT_FIELDS
+                .iter()
+                .find(|(tag_id, _)| *tag_id == entry.tag_id)
+            {
+                let value = f32::from_bits(entry.value_offset);
+                tags.insert(format!("DJI:{tag_name}"), format!("{value:+.2}"));
+                return;
+            }
+        }
+
         // Handle string tags separately (not in registry)
         match entry.tag_id {
             DJI_MAKE | DJI_MODEL | DJI_FIRMWARE_VERSION | DJI_SERIAL_NUMBER => {

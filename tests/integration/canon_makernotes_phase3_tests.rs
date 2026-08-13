@@ -10,6 +10,14 @@
 
 const CANON_EOS_M10: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonEOS_M10.jpg";
 const CANON_EOS_R6M2: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonEOS_R6m2.jpg";
+const CANON_SAMPLE: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Canon.jpg";
+const CANON_EOS_1DS: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonEOS-1DS.jpg";
+const CANON_SX20IS: &str =
+    "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonPowerShotSX20IS.jpg";
+const CANON_A560: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonPowerShotA560.jpg";
+const CANON_EOS_5D_M3: &str =
+    "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonEOS5D_MarkIII.jpg";
+const CANON_EOS_D60: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonEOS_D60.jpg";
 
 /// Canon.pm FileInfo key 6 uses `RawConv => '$val <= 0 ? undef : $val'` and
 /// its `canonQuality` table renders the real EOS M10 corpus value 3 as Fine.
@@ -39,6 +47,33 @@ fn eos_r6m2_reports_camera_settings_hdr_pq() {
 
     let metadata = read_metadata(Path::new(CANON_EOS_R6M2)).expect("EOS R6 Mark II parses");
     assert_eq!(metadata.get_string("Canon:HDR-PQ"), Some("Off"));
+}
+
+/// Pinned ExifTool 13.59 ground truth for Canon's direct MakerNote fields and
+/// its two plain BinaryData records.  These files deliberately cover both the
+/// model-gated D60 ColorBalance variant and the normal ColorBalance variant.
+#[test]
+fn canon_direct_and_binary_makernote_fields_match_pinned_exiftool() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    let cases = [
+        (CANON_SAMPLE, "Canon:CanonFileLength", "4480822"),
+        (CANON_SAMPLE, "Canon:WB_RGGBBlackLevels", "124 123 124 123"),
+        (CANON_EOS_1DS, "Canon:RawDataLength", "0"),
+        (CANON_SX20IS, "Canon:SuperMacro", "Off"),
+        (CANON_A560, "Canon:FaceWidth", "35"),
+        (CANON_EOS_5D_M3, "Canon:InternalSerialNumber2", "AD0010003"),
+        (CANON_EOS_D60, "Canon:BlackLevels", "128 128 128 128"),
+    ];
+
+    for (path, tag, expected) in cases {
+        if !Path::new(path).is_file() {
+            return;
+        }
+        let metadata = read_metadata(Path::new(path)).expect("Canon fixture parses");
+        assert_eq!(metadata.get_string(tag), Some(expected), "{path}: {tag}");
+    }
 }
 
 #[test]

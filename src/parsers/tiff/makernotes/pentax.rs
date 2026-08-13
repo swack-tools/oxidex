@@ -210,6 +210,11 @@ const PENTAX_ARTIST: u16 = 0x022E;
 const PENTAX_COPYRIGHT: u16 = 0x022F;
 const PENTAX_FIRMWARE_VERSION_VIDEO: u16 = 0x0230;
 
+// Legacy Optio Type2 (Casio-like) MakerNote fields.  These are raw four-byte
+// `undef` strings, not the numeric City-table fields at 0x0023/0x0024.
+const PENTAX_TYPE2_HOMETOWN_CITY_CODE: u16 = 0x1000;
+const PENTAX_TYPE2_DESTINATION_CITY_CODE: u16 = 0x1001;
+
 // ============================================================================
 // Declarative Decoder Definitions
 // ============================================================================
@@ -672,13 +677,14 @@ pub fn is_pentax_makernote(data: &[u8]) -> bool {
         return true;
     }
 
-    // Some Pentax cameras have no header, just start with IFD
-    // We'll validate by checking if first two bytes form a reasonable entry count
+    // Some Pentax cameras have no header, just start with an IFD. The legacy
+    // Type2 Optio records follow their enclosing TIFF byte order, so accept a
+    // plausible directory count in either order.
     if data.len() >= 2 {
-        let reader = EndianReader::little_endian(data);
-        let entry_count = reader.u16_at(0).unwrap_or(0);
-        // Reasonable entry count: 1-200 entries
-        if entry_count > 0 && entry_count < 200 {
+        let little_endian_count = EndianReader::little_endian(data).u16_at(0).unwrap_or(0);
+        let big_endian_count = EndianReader::big_endian(data).u16_at(0).unwrap_or(0);
+        // Reasonable entry count: 1-200 entries.
+        if (1..200).contains(&little_endian_count) || (1..200).contains(&big_endian_count) {
             return true;
         }
     }
@@ -2170,6 +2176,20 @@ impl PentaxParser {
                         extract_raw_string_preserve_spaces(&entry, data, value_base, byte_order)
                     {
                         tags.insert("Pentax:FirmwareVersion".to_string(), value);
+                    }
+                }
+                PENTAX_TYPE2_HOMETOWN_CITY_CODE => {
+                    if let Some(value) =
+                        extract_raw_string_preserve_spaces(&entry, data, value_base, byte_order)
+                    {
+                        tags.insert("Pentax:HometownCityCode".to_string(), value);
+                    }
+                }
+                PENTAX_TYPE2_DESTINATION_CITY_CODE => {
+                    if let Some(value) =
+                        extract_raw_string_preserve_spaces(&entry, data, value_base, byte_order)
+                    {
+                        tags.insert("Pentax:DestinationCityCode".to_string(), value);
                     }
                 }
 
