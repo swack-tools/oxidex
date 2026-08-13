@@ -65,6 +65,7 @@ const FUJI_SHADOW_TONE: u16 = 0x1040;
 const FUJI_HIGHLIGHT_TONE: u16 = 0x1041;
 const FUJI_DIGITAL_ZOOM: u16 = 0x1044;
 const FUJI_SHUTTER_TYPE: u16 = 0x1050;
+const FUJI_CROP_FLAG: u16 = 0x1051;
 
 // Film Simulation and Color Tags
 //
@@ -1057,6 +1058,15 @@ impl MakerNoteParser for FujifilmParser {
                     );
                 }
 
+                // FujiFilm.pm:564-570 declares this as a plain int8u: no
+                // PrintConv applies, so preserve its numeric value verbatim.
+                FUJI_CROP_FLAG => {
+                    tags.insert(
+                        "FujiFilm:CropFlag".to_string(),
+                        entry.value_offset.to_string(),
+                    );
+                }
+
                 // Warning flags -- one table each, see the decoders above.
                 FUJI_BLUR_WARNING => {
                     let value = entry.value_offset as i32;
@@ -1605,6 +1615,7 @@ fn fujifilm_tag_to_name(tag_id: u16) -> String {
         FUJI_HIGHLIGHT_TONE => "HighlightTone",
         FUJI_DIGITAL_ZOOM => "DigitalZoom",
         FUJI_SHUTTER_TYPE => "ShutterType",
+        FUJI_CROP_FLAG => "CropFlag",
         FUJI_FILM_MODE => "FilmMode",
         FUJI_DYNAMIC_RANGE => "DynamicRange",
         FUJI_DYNAMIC_RANGE_SETTING => "DynamicRangeSetting",
