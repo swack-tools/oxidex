@@ -2053,6 +2053,36 @@ mod tests {
     }
 
     #[test]
+    fn nikon_z7_2_reports_exiftool_focus_position_coordinates() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
+        let path =
+            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Nikon/NikonZ7_2.jpg");
+        if !path.exists() {
+            eprintln!("skipping: corpus fixture not present at {}", path.display());
+            return;
+        }
+        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+            .expect("read pinned Nikon Z7 II fixture");
+        let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
+            .expect("parse pinned Nikon Z7 II segments");
+        let mut metadata = MetadataMap::new();
+
+        process_exif_segments(&segments, &reader, &mut metadata);
+        let formatted = crate::core::exiftool_compat::format_for_exiftool(&metadata);
+
+        assert_eq!(
+            formatted.get_string("Nikon:FocusPositionHorizontal"),
+            Some("1R of Center")
+        );
+        assert_eq!(
+            formatted.get_string("Nikon:FocusPositionVertical"),
+            Some("3D from Center")
+        );
+    }
+
+    #[test]
     fn samsung_sdc130z_learning_opt_out_uses_exif_int16u_override() {
         if !crate::test_support::pinned_corpus_available() {
             return;

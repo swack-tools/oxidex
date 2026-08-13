@@ -6,6 +6,31 @@
 //! - Header validation
 //! - Tag extraction from synthetic test data
 
+const PENTAX_Q7: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Pentax/PentaxQ7.jpg";
+
+/// ExifTool 13.59 decodes the Q7's 0x0238 CAFPointInfo record even when its
+/// zero-by-zero grid contains no selected or in-focus points.  The empty
+/// bitfields must be represented as ExifTool's `(none)`, not omitted.
+#[test]
+fn pentax_q7_reports_empty_caf_point_sets() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(PENTAX_Q7).is_file() {
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(PENTAX_Q7)).expect("Pentax Q7 parses");
+    assert_eq!(
+        metadata.get_string("Pentax:CAFPointsInFocus"),
+        Some("(none)")
+    );
+    assert_eq!(
+        metadata.get_string("Pentax:CAFPointsSelected"),
+        Some("(none)")
+    );
+}
+
 #[test]
 fn test_pentax_parser_trait_implementation() {
     use oxidex::parsers::tiff::makernotes::pentax::PentaxParser;

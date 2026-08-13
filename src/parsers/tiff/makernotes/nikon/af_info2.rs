@@ -221,6 +221,32 @@ fn model_matches(model: &str, prefixes: &[&str]) -> bool {
     })
 }
 
+/// ExifTool's `PrintAFPointsLeftRight`: zero is an unfocused point, the
+/// middle column is `C`, and all remaining columns are relative to it.
+fn focus_position_left_right(value: u16, divisor: u16, columns: u16) -> String {
+    let column = value / divisor;
+    let center = (columns + 1) / 2;
+    match column.cmp(&center) {
+        std::cmp::Ordering::Equal => "C".to_string(),
+        std::cmp::Ordering::Less if column == 0 => "n/a".to_string(),
+        std::cmp::Ordering::Less => format!("{}L of Center", center - column),
+        std::cmp::Ordering::Greater => format!("{}R of Center", column - center),
+    }
+}
+
+/// ExifTool's `PrintAFPointsUpDown`: zero is an unfocused point, the middle
+/// row is `C`, and all remaining rows are relative to it.
+fn focus_position_up_down(value: u16, divisor: u16, rows: u16) -> String {
+    let row = value / divisor;
+    let center = (rows + 1) / 2;
+    match row.cmp(&center) {
+        std::cmp::Ordering::Equal => "C".to_string(),
+        std::cmp::Ordering::Less if row == 0 => "n/a".to_string(),
+        std::cmp::Ordering::Less => format!("{}U from Center", center - row),
+        std::cmp::Ordering::Greater => format!("{}D from Center", row - center),
+    }
+}
+
 /// Walk `Nikon::Main` 0x00b7.
 pub fn parse_af_info2(
     data: &[u8],
@@ -453,6 +479,30 @@ pub fn parse_af_info2(
             if coords == 1 {
                 put_coord(46, "AFAreaXPosition", tags);
                 put_coord(48, "AFAreaYPosition", tags);
+
+                // AFInfo2V0300 uses measured 260-pixel horizontal and
+                // 292-pixel vertical spacing for the 405/493-point Z7/Z7 II
+                // bodies (Nikon.pm:4827-4868).  ExifTool only emits these
+                // derived positions when the corresponding coordinate is
+                // non-zero.
+                if model_matches(model.unwrap_or(""), &["NIKON Z 7", "NIKON Z 7_2"]) {
+                    if let Some(x) = read_u16(data, 46, order)
+                        && x != 0
+                    {
+                        tags.insert(
+                            "Nikon:FocusPositionHorizontal".to_string(),
+                            focus_position_left_right(x, 260, 29),
+                        );
+                    }
+                    if let Some(y) = read_u16(data, 48, order)
+                        && y != 0
+                    {
+                        tags.insert(
+                            "Nikon:FocusPositionVertical".to_string(),
+                            focus_position_up_down(y, 292, 17),
+                        );
+                    }
+                }
             }
             put_u16(50, "AFAreaWidth", tags);
             put_u16(52, "AFAreaHeight", tags);

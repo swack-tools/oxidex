@@ -168,6 +168,7 @@ pub fn panasonic_registry() -> TagRegistry {
         // handled in parse_entry so 0/0 reads "undef" per GetRational64u
         // instead of the wrong integer decode of the raw numerator bytes.
         .register_raw(0x00A3, "ClearRetouchValue")
+        .register_raw(0x00A7, "OutputLUT")
         .register_enum_tag_required(0x00AB, "TouchAE", &TOUCH_AE)
         .register_raw(0x00AD, "HighlightShadow")
         .register_enum_tag_required(0x00B3, "VideoBurstResolution", &VIDEO_BURST_RESOLUTION)
@@ -183,6 +184,7 @@ pub fn panasonic_registry() -> TagRegistry {
         // tags are decoded in PanasonicParser::parse_entry where their TIFF
         // field formats and ValueConv rules are available.
         .register_raw(0x00C5, "LensTypeModel")
+        .register_raw(0x00C4, "LensTypeMake")
         .register_i32(0x00D4, "HybridLogGamma", decode_on_off)
         .register_raw(0x00D6, "NoiseReductionStrength")
         .register_raw(0x00DE, "AFAreaSize")

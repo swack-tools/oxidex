@@ -796,6 +796,18 @@ impl PanasonicParser {
         // Special handling for string tags (must read from data buffer)
         // These tags contain text data that needs to be extracted from the makernote
         match tag_id {
+            // OutputLUT is flagged `Binary => 1` in Panasonic.pm:1310-1317.
+            // Its raw type varies by body, so preserve ExifTool's standard
+            // declared-byte-count placeholder instead of rendering samples.
+            0x00A7 => {
+                if let Some(bytes) = extract_raw_bytes(entry, data, ifd_offset, data_base, byte_order) {
+                    tags.insert(
+                        "Panasonic:OutputLUT".to_string(),
+                        crate::cli::output_formatter::binary_placeholder(bytes.len()),
+                    );
+                }
+                return;
+            }
             // DataDump is a Binary undef payload. ExifTool prints its byte
             // count unless -b is requested, never the payload or offset.
             0x0021 => {

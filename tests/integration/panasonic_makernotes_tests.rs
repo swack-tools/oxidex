@@ -9,6 +9,35 @@
 const DC_S1M2ES: &str =
     "/tmp/oxidex-exiftool-cache/combined-samples/Panasonic/PanasonicDC-S1M2ES.jpg";
 const LEICA_D_LUX8: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaD-Lux8.jpg";
+const LEICA_V_LUX: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaV-LUX.jpg";
+const LEICA_CAM_DC25: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaCAM-DC25.jpg";
+
+#[test]
+fn leica_v_lux_reports_binary_output_lut() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(LEICA_V_LUX).is_file() {
+        return;
+    }
+    let metadata = read_metadata(Path::new(LEICA_V_LUX)).expect("Leica V-LUX parses");
+    assert_eq!(
+        metadata.get_string("Panasonic:OutputLUT"),
+        Some("(Binary data 864 bytes, use -b option to extract)")
+    );
+}
+
+#[test]
+fn leica_cam_dc25_reports_lens_type_make() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(LEICA_CAM_DC25).is_file() {
+        return;
+    }
+    let metadata = read_metadata(Path::new(LEICA_CAM_DC25)).expect("Leica CAM-DC25 parses");
+    assert_eq!(metadata.get_string("Panasonic:LensTypeMake"), Some("0"));
+}
 
 /// Leica's D-Lux 8 uses ExifTool's `MakerNoteLeica10`, which routes its
 /// "LEICA CAMERA AG" MakerNote to Panasonic::Main.  The expected values below

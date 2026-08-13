@@ -6,6 +6,41 @@
 //! - Header validation
 //! - Tag extraction from synthetic test data
 
+const LEICA_Q_TYP116: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaQ_Typ116.jpg";
+const LEICA_M_MONOCHROM: &str =
+    "/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaM_Monochrom.jpg";
+
+/// Pinned ExifTool 13.59 ground truth: Leica5 (MakerNoteLeica8) exposes the
+/// ASCII directory independently of the original filename.
+#[test]
+fn leica_q_typ116_reports_original_directory() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(LEICA_Q_TYP116).is_file() {
+        return;
+    }
+    let metadata = read_metadata(Path::new(LEICA_Q_TYP116)).expect("Leica Q parses");
+    assert_eq!(
+        metadata.get_string("Leica:OriginalDirectory"),
+        Some("100LEICA")
+    );
+}
+
+/// Pinned ExifTool 13.59 ground truth: Leica4's JPEG size enum value 0 is
+/// `5216x3472`, not its raw integer representation.
+#[test]
+fn leica_m_monochrom_reports_jpeg_size() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(LEICA_M_MONOCHROM).is_file() {
+        return;
+    }
+    let metadata = read_metadata(Path::new(LEICA_M_MONOCHROM)).expect("Leica M Monochrom parses");
+    assert_eq!(metadata.get_string("Leica:JPEGSize"), Some("5216x3472"));
+}
+
 #[test]
 fn test_leica_header_validation_short() {
     use oxidex::parsers::tiff::makernotes::leica::is_leica_makernote;
