@@ -9,6 +9,8 @@
 const PENTAX_Q7: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Pentax/PentaxQ7.jpg";
 const PENTAX_OPTIO_430: &str =
     "/tmp/oxidex-exiftool-cache/combined-samples/Pentax/PentaxOptio430.jpg";
+const PENTAX_OPTIO_430_RS: &str =
+    "/tmp/oxidex-exiftool-cache/combined-samples/Pentax/PentaxOptio430RS.jpg";
 
 /// Pentax Type2 records store their city codes as four-byte `undef` values,
 /// including significant trailing spaces.  ExifTool exposes the raw string,
@@ -28,6 +30,22 @@ fn pentax_type2_preserves_hometown_and_destination_city_codes() {
         metadata.get_string("Pentax:DestinationCityCode"),
         Some("    ")
     );
+}
+
+/// The AOC Type-3 directory in the Optio 430RS uses Casio's 0x3007 field.
+/// Its zero value is the only model-independent Best Shot rendering: `Off`.
+#[test]
+fn pentax_optio_430rs_reports_casio_best_shot_off() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(PENTAX_OPTIO_430_RS).is_file() {
+        return;
+    }
+
+    let metadata =
+        read_metadata(Path::new(PENTAX_OPTIO_430_RS)).expect("Pentax Optio 430RS parses");
+    assert_eq!(metadata.get_string("Casio:BestShotMode"), Some("Off"));
 }
 
 /// ExifTool 13.59 decodes the Q7's 0x0238 CAFPointInfo record even when its

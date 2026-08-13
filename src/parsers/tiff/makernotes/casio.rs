@@ -359,6 +359,8 @@ const CASIO_TYPE2_HOMETOWN_CITY: u16 = 0x3006;
 /// one of which a given payload can ever carry (Type1 XOR Type2). This is
 /// the one `Casio2.jpg` (a Type2 payload) actually exercises.
 const CASIO_TYPE2_ENHANCEMENT: u16 = 0x3016;
+/// Casio.pm:1644-1661 (Type2::0x301b), an inline `int16u` ArtMode enum.
+const CASIO_TYPE2_ART_MODE: u16 = 0x301B;
 
 /// Unpacks the two `int16u` values `PreviewImageSize` (`Casio.pm:280-286`)
 /// packs into one 4-byte inline entry, in the entry's own byte order.
@@ -471,6 +473,30 @@ pub fn parse_casio_type2_extra_tags(
             other => format!("Unknown ({other})"),
         };
         metadata.insert("Casio:Enhancement", TagValue::new_string(text));
+    }
+
+    if let Some(entry) = find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_ART_MODE)
+        && let Some(value) = extract_u16_value(&entry, &[], byte_order)
+    {
+        // Casio.pm Type2::0x301b PrintConv.  An unmapped value is deliberately
+        // rendered as ExifTool's usual `Unknown (N)` rather than guessed.
+        let text = match value {
+            0 => "Normal".to_string(),
+            8 => "Silent Movie".to_string(),
+            39 => "HDR".to_string(),
+            45 => "Premium Auto".to_string(),
+            47 => "Painting".to_string(),
+            49 => "Crayon Drawing".to_string(),
+            51 => "Panorama".to_string(),
+            52 => "Art HDR".to_string(),
+            62 => "High Speed Night Shot".to_string(),
+            64 => "Monochrome".to_string(),
+            67 => "Toy Camera".to_string(),
+            68 => "Pop Art".to_string(),
+            69 => "Light Tone".to_string(),
+            other => format!("Unknown ({other})"),
+        };
+        metadata.insert("Casio:ArtMode", TagValue::new_string(text));
     }
 
     if let Some(entry) = find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_HOMETOWN_CITY) {
