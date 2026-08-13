@@ -87,8 +87,6 @@ const TAG_MINOLTA_MAKERNOTE: u16 = 0xb028;
 /// 0x1003's only job outside its own sub-directory is to set
 /// `$$self{Panorama}`, which two of the 0x2010 variants are gated on.
 const TAG_PANORAMA: u16 = 0x1003;
-/// `ExtraInfo`/`ExtraInfo2`/`ExtraInfo3`, chosen by model (Sony.pm:854-872).
-const TAG_EXTRA_INFO: u16 = 0x0116;
 /// `ShotInfo`, which every DSC and camcorder writes and no DSLR does.
 const TAG_SHOT_INFO: u16 = 0x3000;
 /// `AFAreaModeSetting`. Beyond its own value it sets `$$self{AFAreaILCE}` or
@@ -458,17 +456,6 @@ fn parse_sony_makernote_impl(
                     .find(|(counts, _, _)| counts.contains(&bytes.len()))
                 {
                     push_plain(&mut found, *table, bytes, *order, &mut cipher_ctx);
-                }
-            }
-            TAG_EXTRA_INFO => {
-                // ExifTool assigns this short big-endian binary directory to
-                // A850/A900 only.  The count is also checked in the decoder;
-                // preserving the model gate prevents an unrelated 0x0116
-                // payload from borrowing this camera generation's layout.
-                if model.is_some_and(|m| matches!(m, "DSLR-A850" | "DSLR-A900")) {
-                    let mut tags = HashMap::new();
-                    amount::extract_extra_info(value.bytes(), &mut tags);
-                    push_all(&mut found, tags, SUB_DIRECTORY_PRIORITY);
                 }
             }
             TAG_SHOT_INFO => {

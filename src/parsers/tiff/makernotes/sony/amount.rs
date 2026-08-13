@@ -298,7 +298,7 @@ const CAMERA_INFO2_COUNTS: [usize; 2] = [5506, 6118];
 /// The A700/A850/A900 `CameraInfo` directory is byte-addressed. Its LensSpec
 /// is stored with each 16-bit word reversed, while the AF status words retain
 /// the directory's declared big-endian order.
-const CAMERA_INFO_COUNTS: [usize; 2] = [368, 5478];
+const LEGACY_CAMERA_INFO_COUNTS: [usize; 2] = [368, 5478];
 
 static A900_AF_POINT: &[(u8, &str)] = &[
     (0, "Upper-left"),
@@ -327,8 +327,9 @@ static A900_AF_POINT: &[(u8, &str)] = &[
 ];
 
 /// Decodes the older A700/A850/A900 `CameraInfo` directory.
-pub fn extract_camera_info(data: &[u8], tags: &mut HashMap<String, String>) -> bool {
-    if !CAMERA_INFO_COUNTS.contains(&data.len()) {
+#[allow(dead_code)]
+fn extract_camera_info_legacy(data: &[u8], tags: &mut HashMap<String, String>) -> bool {
+    if !LEGACY_CAMERA_INFO_COUNTS.contains(&data.len()) {
         return false;
     }
     // `LensSpec` has the same eight-byte representation as the other A-mount
@@ -418,7 +419,8 @@ pub fn extract_camera_info(data: &[u8], tags: &mut HashMap<String, String>) -> b
 /// The table has a handful of deliberately `Unknown` ExifTool rows.  Do not
 /// emit those: they are suppressed by the oracle, while the three documented
 /// fields below are stable output from the real cameras.
-pub fn extract_extra_info(data: &[u8], tags: &mut HashMap<String, String>) -> bool {
+#[allow(dead_code)]
+fn extract_extra_info_legacy(data: &[u8], tags: &mut HashMap<String, String>) -> bool {
     if data.len() != 30 {
         return false;
     }
@@ -792,6 +794,82 @@ pub fn extract_focus_info(
 }
 
 // ============================================================================
+// MoreInfo / MoreSettings (tag 0x0020, count 20480)
+// ============================================================================
+
+/// Decodes `MoreSettings` (block id 1) in Sony's little-endian `MoreInfo`
+/// offset directory.  ExifTool exposes these rows only on DSLR-A450/A500/A550.
+pub fn extract_more_info(
+    data: &[u8],
+    model: Option<&str>,
+    tags: &mut HashMap<String, String>,
+) -> bool {
+    let reader = EndianReader::little_endian(data);
+    let (Some(entry_count), Some(declared_len)) = (reader.u16_at(0), reader.u16_at(2)) else {
+        return false;
+    };
+    let entry_count = usize::from(entry_count);
+    let len = usize::from(declared_len).min(data.len());
+    if entry_count > 50 || len < 4 + entry_count * 4 {
+        return false;
+    }
+
+    let entries: Vec<(u16, usize)> = (0..entry_count)
+        .filter_map(|index| {
+            let pos = 4 + index * 4;
+            Some((reader.u16_at(pos)?, usize::from(reader.u16_at(pos + 2)?)))
+        })
+        .collect();
+    let Some((_, start)) = entries.iter().find(|(id, _)| *id == 1) else {
+        return true;
+    };
+    if *start >= len {
+        return true;
+    }
+    let end = entries
+        .iter()
+        .map(|(_, offset)| *offset)
+        .filter(|offset| *offset > *start && *offset <= len)
+        .min()
+        .unwrap_or(len);
+    let block = &data[*start..end];
+    if !model.is_some_and(|m| matches!(m, "DSLR-A450" | "DSLR-A500" | "DSLR-A550")) {
+        return true;
+    }
+
+    if let Some(raw) = block.get(0x1a..0x1e) {
+        let red = u16::from_be_bytes([raw[0], raw[1]]);
+        let blue = u16::from_be_bytes([raw[2], raw[3]]);
+        tags.insert(
+            "Sony:CustomWB_RBLevels".to_string(),
+            format!("{red} {blue}"),
+        );
+    }
+    if let Some(raw) = block.get(0x24..0x26) {
+        let value = f64::from(i16::from_le_bytes([raw[0], raw[1]])) / 8.0;
+        let printed = if value == 0.0 {
+            "0".to_string()
+        } else {
+            format!("{value:+.1}")
+        };
+        tags.insert("Sony:ExposureCompensation2".to_string(), printed);
+    }
+    if let Some(value) = block.get(0x28) {
+        let printed = match value {
+            1 => Some("Horizontal (normal)"),
+            2 => Some("Rotate 180"),
+            6 => Some("Rotate 90 CW"),
+            8 => Some("Rotate 270 CW"),
+            _ => None,
+        };
+        if let Some(printed) = printed {
+            tags.insert("Sony:Orientation2".to_string(), printed.to_string());
+        }
+    }
+    true
+}
+
+// ============================================================================
 // Panorama (tag 0x1003)
 // ============================================================================
 
@@ -889,6 +967,31 @@ pub fn extract_extra_info(
                     tags.insert(format!("Sony:{name}"), printed);
                 }
             }
+        }
+    }
+
+    // The generated `ExtraInfo` schema omits the temperature conversion in
+    // Sony.pm.  Keep the model-selected layout above, then add its three
+    // documented values directly for the 30-byte A850/A900 directory.
+    if table_name == "ExtraInfo" && data.len() == 30 {
+        if let Some(value) = data.get(1) {
+            let celsius = (*value as f64 - 32.0) / 1.8;
+            tags.insert(
+                "Sony:BatteryTemperature".to_string(),
+                format!("{celsius:.1} C"),
+            );
+        }
+        if let Some(value) = data.get(0x0c) {
+            tags.insert("Sony:BatteryLevel".to_string(), format!("{value}%"));
+        }
+        if let Some(version) = data.get(0x1a..0x1e) {
+            tags.insert(
+                "Sony:ExtraInfoVersion".to_string(),
+                format!(
+                    "{}.{}.{}.{}",
+                    version[0], version[1], version[2], version[3]
+                ),
+            );
         }
     }
 }

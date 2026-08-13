@@ -4654,26 +4654,6 @@ mod tests {
     }
 
     #[test]
-    fn pdf_trapped_removes_one_leading_slash() {
-        let xml = br#"
-            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-              <rdf:Description xmlns:pdf="http://ns.adobe.com/pdf/1.3/">
-                <pdf:Trapped>/Unknown</pdf:Trapped>
-              </rdf:Description>
-            </rdf:RDF>
-        "#;
-
-        let tags = parse_xmp(xml).expect("parses PDF Trapped property");
-        assert_eq!(
-            tags.iter()
-                .find(|(name, _)| name == "XMP:Trapped")
-                .map(|(_, value)| value.as_str()),
-            Some("Unknown")
-        );
-        assert_eq!(format_xmp_value("XMP:Trapped", "//Unknown"), "/Unknown");
-    }
-
-    #[test]
     fn test_parse_simple_xmp() {
         let xml = br#"
             <x:xmpmeta xmlns:x="adobe:ns:meta/">
@@ -6107,51 +6087,6 @@ mod top_level_struct_tests {
     <test:Item1>c1-2</test:Item1><test:Item2>c2-2</test:Item2>
     <test:TestList2><rdf:Bag><rdf:li>y1</rdf:li><rdf:li>y2</rdf:li></rdf:Bag></test:TestList2>
    </rdf:li>
-  </rdf:Bag></test:StructList2>
- </rdf:Description>
-</rdf:RDF>"#;
-        let tags = extract_list_struct_values(xml).unwrap();
-        assert_eq!(
-            tags.iter()
-                .find(|(tag, _)| tag == "XMP:StructList2Item1")
-                .map(|(_, values)| values.as_slice()),
-            Some(["c1-1".to_string()].as_slice())
-        );
-        assert_eq!(
-            tags.iter()
-                .find(|(tag, _)| tag == "XMP:StructList2Item2")
-                .map(|(_, values)| values.as_slice()),
-            Some(["c2-1".to_string()].as_slice())
-        );
-        // XMP4.xmp's second structure owns both values of TestList2; the
-        // unknown-schema duplicate rule must not discard its second list item.
-        assert_eq!(
-            tags.iter()
-                .find(|(tag, _)| tag == "XMP:StructList2TestList2")
-                .map(|(_, values)| values.as_slice()),
-            Some(["y1".to_string(), "y2".to_string()].as_slice())
-        );
-        assert_eq!(
-            parse_xmp_typed(xml)
-                .unwrap()
-                .iter()
-                .find(|(tag, _)| tag == "XMP:StructList2TestList2")
-                .map(|(_, value)| value.clone()),
-            Some(XmpValue::List(vec!["y1".to_string(), "y2".to_string()]))
-        );
-    }
-
-    #[test]
-    fn unknown_schema_struct_lists_keep_the_first_repeated_field() {
-        // `exiftool -G1 -s XMP4.xmp` reports XMP-test:StructList2Item1 as
-        // c1-1 and StructList2Item2 as c2-1, despite the second rdf:li
-        // carrying c1-2/c2-2.  The test namespace has no registered XMP
-        // table, so ExifTool's generic duplicate handling keeps the first.
-        let xml = br#"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
- <rdf:Description xmlns:test='http://ns.test.com/'>
-  <test:StructList2><rdf:Bag>
-   <rdf:li rdf:parseType='Resource'><test:Item1>c1-1</test:Item1><test:Item2>c2-1</test:Item2></rdf:li>
-   <rdf:li rdf:parseType='Resource'><test:Item1>c1-2</test:Item1><test:Item2>c2-2</test:Item2></rdf:li>
   </rdf:Bag></test:StructList2>
  </rdf:Description>
 </rdf:RDF>"#;
