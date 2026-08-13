@@ -6371,6 +6371,83 @@ fn canon_ev(raw: i16) -> f64 {
 
 fn parse_ciff_record(tag: u16, record: &[u8], metadata: &mut MetadataMap) {
     match tag {
+        // CanonRaw.pm's simple subdirectories. These are CIFF records in a
+        // CRW heap, not TIFF IFDs; the table layouts are fixed little-endian
+        // scalars.
+        0x10b5 => {
+            let quality = read_ciff_u16(record, 2);
+            let size = read_ciff_u16(record, 4);
+            if let Some(value) = quality {
+                let value = match value {
+                    1 => "Economy".to_string(),
+                    2 => "Normal".to_string(),
+                    3 => "Fine".to_string(),
+                    5 => "Superfine".to_string(),
+                    other => other.to_string(),
+                };
+                metadata.insert("MakerNotes:RawJpgQuality", TagValue::new_string(value));
+            }
+            if let Some(value) = size {
+                let value = match value {
+                    0 => "Large".to_string(),
+                    1 => "Medium".to_string(),
+                    2 => "Small".to_string(),
+                    other => other.to_string(),
+                };
+                metadata.insert("MakerNotes:RawJpgSize", TagValue::new_string(value));
+            }
+            for (offset, name) in [(6usize, "RawJpgWidth"), (8, "RawJpgHeight")] {
+                if let Some(value) = read_ciff_u16(record, offset) {
+                    metadata.insert(
+                        format!("MakerNotes:{name}"),
+                        TagValue::Integer(i64::from(value)),
+                    );
+                }
+            }
+        }
+        0x10ae => {
+            if let Some(value) = read_ciff_u16(record, 0) {
+                metadata.insert(
+                    "MakerNotes:ColorTemperature",
+                    TagValue::Integer(i64::from(value)),
+                );
+            }
+        }
+        0x10b4 => {
+            if let Some(value) = read_ciff_u16(record, 0) {
+                let value = match value {
+                    1 => "sRGB".to_string(),
+                    2 => "Adobe RGB".to_string(),
+                    0xffff => "Uncalibrated".to_string(),
+                    other => other.to_string(),
+                };
+                metadata.insert("MakerNotes:ColorSpace", TagValue::new_string(value));
+            }
+        }
+        0x1817 => {
+            if let Some(value) = read_ciff_u32(record, 0) {
+                let value = value.to_string();
+                let split = value.len().saturating_sub(4);
+                metadata.insert(
+                    "MakerNotes:FileNumber",
+                    TagValue::new_string(format!("{}-{}", &value[..split], &value[split..])),
+                );
+            }
+        }
+        0x1835 => {
+            for (offset, name) in [
+                (0usize, "DecoderTableNumber"),
+                (8, "CompressedDataOffset"),
+                (12, "CompressedDataLength"),
+            ] {
+                if let Some(value) = read_ciff_u32(record, offset) {
+                    metadata.insert(
+                        format!("MakerNotes:{name}"),
+                        TagValue::Integer(i64::from(value)),
+                    );
+                }
+            }
+        }
         // CanonRaw.pm tag 0x102a -> Canon::ShotInfo. The generated table
         // identifies AEBBracketValue as int16 index 17.
         0x102A => {
@@ -6556,6 +6633,28 @@ fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     // that start.
     if data.get(..2) != Some(b"II") || data.get(6..14) != Some(b"HEAPCCDR") {
         return Ok(metadata);
+    }
+    // CRW's `HEAPCCDR` is the standalone form of CIFF.  Decode its ordinary
+    // CIFF records through the same transcribed record reader as the JPEG
+    // `HEAPJPGM` variant, then retain the Canon-specific nested records below.
+    for (key, value) in
+        crate::parsers::jpeg::app_segments::ciff::parse_ciff_container(data, b"HEAPCCDR")
+    {
+        // CRW shares CIFF's record directory but not every JPEG APP0 display
+        // conversion.  Apply the CanonRaw.pm forms here rather than leaking
+        // the JPEG-only renderings into the Canon maker-note family.
+        let value = match (key.as_str(), value) {
+            ("CIFF:Model" | "CIFF:ROMOperationMode", TagValue::String(value)) => {
+                TagValue::new_string(value.split('\0').next().unwrap_or_default())
+            }
+            // CanonRaw.pm supplies its own FileNumber conversion. The raw
+            // CIFF integer is not an equivalent fallback: the generic Canon
+            // renderer otherwise turns 1161602 into a wrong maker-note tag.
+            ("CIFF:FileNumber", TagValue::Integer(_)) => continue,
+            ("CIFF:MeasuredEV", _) => continue,
+            (_, value) => value,
+        };
+        metadata.insert(key, value);
     }
     let Some(heap_start) = read_ciff_u32(data, 2).map(|value| value as usize) else {
         return Ok(metadata);

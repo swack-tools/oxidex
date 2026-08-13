@@ -41,11 +41,19 @@ impl Endian {
 
 /// Parses an APP0 payload when it contains the CIFF `HEAPJPGM` signature.
 pub fn parse_ciff_app0(data: &[u8]) -> MetadataMap {
+    parse_ciff_container(data, b"HEAPJPGM")
+}
+
+/// Parses either CIFF container form.  Standalone Canon CRW files use the
+/// same directory encoding as the JPEG APP0 `HEAPJPGM` payload, but identify
+/// it as `HEAPCCDR` (CanonRaw.pm).  Keeping the directory reader shared
+/// prevents CRW from falling back to its former two-record stub.
+pub fn parse_ciff_container(data: &[u8], signature: &[u8; 8]) -> MetadataMap {
     let (endian, header_len) = match data.get(..14) {
-        Some(header) if &header[..2] == b"II" && &header[6..14] == b"HEAPJPGM" => {
+        Some(header) if &header[..2] == b"II" && &header[6..14] == signature => {
             (Endian::Little, Endian::Little.u32(&header[2..6]))
         }
-        Some(header) if &header[..2] == b"MM" && &header[6..14] == b"HEAPJPGM" => {
+        Some(header) if &header[..2] == b"MM" && &header[6..14] == signature => {
             (Endian::Big, Endian::Big.u32(&header[2..6]))
         }
         _ => return MetadataMap::new(),
