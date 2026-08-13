@@ -695,6 +695,11 @@ impl OxiDexExtractor {
         raw_entries.sort_by_key(|(key, _)| *key);
 
         for (key, value) in raw_entries {
+            // ExifTool's family-0 JSON view prefers the EXIF namespace when
+            // both XMP-exif and XMP-tiff provide NativeDigest.
+            if key == "XMP-tiff:NativeDigest" && metadata.get("XMP-exif:NativeDigest").is_some() {
+                continue;
+            }
             if matches!(format, Some("NEF" | "NRW"))
                 && Self::nef_ifd0_field_is_superseded(key, metadata)
             {
@@ -1192,7 +1197,7 @@ mod tests {
             tags.iter()
                 .find(|tag| tag.key() == "XMP:NativeDigest")
                 .map(|tag| tag.value.as_str()),
-            Some("tiff digest")
+            Some("exif digest")
         );
         assert_eq!(
             tags.iter()
