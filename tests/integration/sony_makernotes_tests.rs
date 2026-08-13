@@ -5,12 +5,16 @@
 //! with near-identical strings, so an assertion invented to match the
 //! implementation would look exactly like one that matches the camera.
 
+use oxidex::core::operations::read_metadata;
 use oxidex::parsers::tiff::ifd_parser::ByteOrder;
 use oxidex::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
 use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
 use oxidex::parsers::tiff::makernotes::sony::{SonyParser, parse_sony_makernote};
 use oxidex::parsers::tiff::makernotes::sony_lens_database::lookup_lens_name;
 use std::collections::HashMap;
+use std::path::Path;
+
+const A900: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSLR-A900.jpg";
 
 /// Builds a headerless little-endian Sony MakerNote from `(tag, type, count,
 /// value)` entries, followed by `trailing` bytes for any out-of-line values.
@@ -53,6 +57,40 @@ fn test_sony_lens_database_uses_exiftool_spellings() {
     assert_eq!(
         lookup_lens_name(25501),
         Some("Minolta AF 50mm F1.7".to_string())
+    );
+}
+
+#[test]
+fn test_sony_a900_camera_info_matches_exiftool() {
+    if !Path::new(A900).is_file() {
+        eprintln!("skipping: corpus fixture not present at {A900}");
+        return;
+    }
+    let metadata = read_metadata(Path::new(A900)).expect("Sony DSLR-A900 parses");
+    // Pinned ExifTool 13.59 reports these from CameraInfo (tag 0x0010,
+    // 5478-byte A900 layout). The AF words use Sony's reversed int16 order.
+    assert_eq!(metadata.get_string("Sony:AFPoint"), Some("Lower-right"));
+    assert_eq!(
+        metadata.get_string("Sony:AFStatusFarRight"),
+        Some("Front Focus (-65)")
+    );
+    assert_eq!(
+        metadata.get_string("Sony:AFStatusTop"),
+        Some("Out of Focus")
+    );
+    assert_eq!(metadata.get_string("Sony:AFMicroAdjMode"), Some("Off"));
+    assert_eq!(
+        metadata.get_string("Sony:AFMicroAdjRegisteredLenses"),
+        Some("0")
+    );
+    // ExtraInfo (0x0116) is a separate, model-gated 30-byte directory.
+    assert_eq!(
+        metadata.get_string("Sony:BatteryTemperature"),
+        Some("46.1 C")
+    );
+    assert_eq!(
+        metadata.get_string("Sony:ExtraInfoVersion"),
+        Some("0.1.0.0")
     );
 }
 

@@ -79,6 +79,7 @@ const SONY_HEADER_LEN: usize = 12;
 const TAG_CAMERA_INFO: u16 = 0x0010;
 const TAG_FOCUS_INFO: u16 = 0x0020;
 const TAG_CAMERA_SETTINGS: u16 = 0x0114;
+const TAG_EXTRA_INFO: u16 = 0x0116;
 /// 0xb028 is not a value but a TIFF-relative pointer to a whole nested Minolta
 /// MakerNote, which the DSLR-A100 writes alongside its Sony one. A stored zero
 /// means the IFD is absent.
@@ -457,6 +458,17 @@ fn parse_sony_makernote_impl(
                     .find(|(counts, _, _)| counts.contains(&bytes.len()))
                 {
                     push_plain(&mut found, *table, bytes, *order, &mut cipher_ctx);
+                }
+            }
+            TAG_EXTRA_INFO => {
+                // ExifTool assigns this short big-endian binary directory to
+                // A850/A900 only.  The count is also checked in the decoder;
+                // preserving the model gate prevents an unrelated 0x0116
+                // payload from borrowing this camera generation's layout.
+                if model.is_some_and(|m| matches!(m, "DSLR-A850" | "DSLR-A900")) {
+                    let mut tags = HashMap::new();
+                    amount::extract_extra_info(value.bytes(), &mut tags);
+                    push_all(&mut found, tags, SUB_DIRECTORY_PRIORITY);
                 }
             }
             TAG_SHOT_INFO => {

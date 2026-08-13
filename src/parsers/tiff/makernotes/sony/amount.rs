@@ -292,6 +292,159 @@ static CAMERA_INFO2: BinTable = BinTable {
 const CAMERA_INFO2_COUNTS: [usize; 2] = [5506, 6118];
 
 // ============================================================================
+// CameraInfo (tag 0x0010, count 368 or 5478)
+// ============================================================================
+
+/// The A700/A850/A900 `CameraInfo` directory is byte-addressed. Its LensSpec
+/// is stored with each 16-bit word reversed, while the AF status words retain
+/// the directory's declared big-endian order.
+const CAMERA_INFO_COUNTS: [usize; 2] = [368, 5478];
+
+static A900_AF_POINT: &[(u8, &str)] = &[
+    (0, "Upper-left"),
+    (1, "Left"),
+    (2, "Lower-left"),
+    (3, "Far Left"),
+    (4, "Bottom Assist-left"),
+    (5, "Bottom"),
+    (6, "Bottom Assist-right"),
+    (7, "Center-7"),
+    (8, "Center-horizontal"),
+    (9, "Center-9"),
+    (10, "Center-10"),
+    (11, "Center-11"),
+    (12, "Center-12"),
+    (13, "Center-vertical"),
+    (14, "Center-14"),
+    (15, "Top Assist-left"),
+    (16, "Top"),
+    (17, "Top Assist-right"),
+    (18, "Far Right"),
+    (19, "Upper-right"),
+    (20, "Right"),
+    (21, "Lower-right"),
+    (22, "Center F2.8"),
+];
+
+/// Decodes the older A700/A850/A900 `CameraInfo` directory.
+pub fn extract_camera_info(data: &[u8], tags: &mut HashMap<String, String>) -> bool {
+    if !CAMERA_INFO_COUNTS.contains(&data.len()) {
+        return false;
+    }
+    // `LensSpec` has the same eight-byte representation as the other A-mount
+    // bodies after swapping each 16-bit word.
+    if let Some(raw) = data.get(..8) {
+        let mut spec = [0u8; 8];
+        for (out, pair) in spec.chunks_exact_mut(2).zip(raw.chunks_exact(2)) {
+            out.copy_from_slice(&[pair[1], pair[0]]);
+        }
+        if let Some(value) = print_lens_spec(&spec) {
+            tags.insert("Sony:LensSpec".to_string(), value);
+        }
+    }
+    if let Some(value) = data.get(0x14).copied().map(i64::from) {
+        let printed = super::binary::lookup(FOCUS_MODE_SETTING, value)
+            .unwrap_or_else(|| super::binary::unknown(value));
+        tags.insert("Sony:FocusModeSetting".to_string(), printed);
+    }
+    if let Some(value) = data.get(0x15).copied().map(i64::from) {
+        let printed = super::binary::lookup(AF_POINT_SELECTED, value)
+            .unwrap_or_else(|| super::binary::unknown(value));
+        tags.insert("Sony:AFPointSelected".to_string(), printed);
+    }
+    if let Some(value) = data.get(0x19).copied() {
+        let printed = A900_AF_POINT
+            .iter()
+            .find(|(raw, _)| *raw == value)
+            .map(|(_, name)| (*name).to_string())
+            .unwrap_or_else(|| format!("Unknown ({value})"));
+        tags.insert("Sony:AFPoint".to_string(), printed);
+    }
+    const AF_STATUS: &[(usize, &str)] = &[
+        (0x1e, "AFStatusActiveSensor"),
+        (0x20, "AFStatusUpper-left"),
+        (0x22, "AFStatusLeft"),
+        (0x24, "AFStatusLower-left"),
+        (0x26, "AFStatusFarLeft"),
+        (0x28, "AFStatusBottomAssist-left"),
+        (0x2a, "AFStatusBottom"),
+        (0x2c, "AFStatusBottomAssist-right"),
+        (0x2e, "AFStatusCenter-7"),
+        (0x30, "AFStatusCenter-horizontal"),
+        (0x32, "AFStatusCenter-9"),
+        (0x34, "AFStatusCenter-10"),
+        (0x36, "AFStatusCenter-11"),
+        (0x38, "AFStatusCenter-12"),
+        (0x3a, "AFStatusCenter-vertical"),
+        (0x3c, "AFStatusCenter-14"),
+        (0x3e, "AFStatusTopAssist-left"),
+        (0x40, "AFStatusTop"),
+        (0x42, "AFStatusTopAssist-right"),
+        (0x44, "AFStatusFarRight"),
+        (0x46, "AFStatusUpper-right"),
+        (0x48, "AFStatusRight"),
+        (0x4a, "AFStatusLower-right"),
+        (0x4c, "AFStatusCenterF2-8"),
+    ];
+    for (offset, name) in AF_STATUS {
+        if let Some(raw) = data.get(*offset..offset + 2) {
+            let value = i16::from_be_bytes([raw[0], raw[1]]) as i64;
+            if let Some(printed) = af_status(value) {
+                tags.insert(format!("Sony:{name}"), printed);
+            }
+        }
+    }
+    if let Some(value) = data.get(0x130) {
+        tags.insert(
+            "Sony:AFMicroAdjValue".to_string(),
+            (*value as i16 - 20).to_string(),
+        );
+    }
+    if let Some(value) = data.get(0x131) {
+        tags.insert(
+            "Sony:AFMicroAdjMode".to_string(),
+            if value & 0x80 == 0 { "Off" } else { "On" }.to_string(),
+        );
+        tags.insert(
+            "Sony:AFMicroAdjRegisteredLenses".to_string(),
+            (value & 0x7f).to_string(),
+        );
+    }
+    true
+}
+
+/// Decodes the 30-byte hardware directory at 0x0116 on DSLR-A850/A900 bodies.
+///
+/// The table has a handful of deliberately `Unknown` ExifTool rows.  Do not
+/// emit those: they are suppressed by the oracle, while the three documented
+/// fields below are stable output from the real cameras.
+pub fn extract_extra_info(data: &[u8], tags: &mut HashMap<String, String>) -> bool {
+    if data.len() != 30 {
+        return false;
+    }
+    if let Some(value) = data.get(1) {
+        let celsius = (*value as f64 - 32.0) / 1.8;
+        tags.insert(
+            "Sony:BatteryTemperature".to_string(),
+            format!("{celsius:.1} C"),
+        );
+    }
+    if let Some(value) = data.get(0x0c) {
+        tags.insert("Sony:BatteryLevel".to_string(), format!("{value}%"));
+    }
+    if let Some(version) = data.get(0x1a..0x1e) {
+        tags.insert(
+            "Sony:ExtraInfoVersion".to_string(),
+            format!(
+                "{}.{}.{}.{}",
+                version[0], version[1], version[2], version[3]
+            ),
+        );
+    }
+    true
+}
+
+// ============================================================================
 // FocusInfo (tag 0x0020, count 19154 or 19148)
 // ============================================================================
 
