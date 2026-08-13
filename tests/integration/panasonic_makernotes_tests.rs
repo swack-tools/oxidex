@@ -11,10 +11,6 @@ fn panasonic_dc_s1m2es_reports_late_makernote_tags() {
     use oxidex::core::operations::read_metadata;
     use std::path::Path;
 
-    if !crate::test_support::pinned_corpus_available() {
-        return;
-    }
-
     let fixture = "/tmp/oxidex-exiftool-cache/combined-samples/Panasonic/PanasonicDC-S1M2ES.jpg";
     if !Path::new(fixture).is_file() {
         eprintln!("skipping: corpus fixture not present at {fixture}");
