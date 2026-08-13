@@ -7,6 +7,41 @@
 //! - Tag extraction from synthetic test data
 
 const OM_1: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Olympus/OlympusOM-1.jpg";
+const U20D: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Olympus/Olympus_u20D.jpg";
+const U1040: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Olympus/Olympus_u1040.jpg";
+
+/// The legacy u20D MakerNote stores `WBMode` in Olympus::Main 0x1015.  The
+/// exact display value is pinned from ExifTool 13.59 on the real fixture.
+#[test]
+fn u20d_reports_main_white_balance_mode() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(U20D).is_file() {
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(U20D)).expect("u20D parses");
+    assert_eq!(metadata.get_string("Olympus:WBMode"), Some("Auto"));
+}
+
+/// Olympus::Main 0x0f04/0x0f05 form a binary composite `ZoomedPreviewImage`.
+/// ExifTool 13.59 reports 92,592 bytes on this real u1040 fixture.
+#[test]
+fn u1040_reports_zoomed_preview_image() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(U1040).is_file() {
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(U1040)).expect("u1040 parses");
+    assert_eq!(
+        metadata.get_string("Olympus:ZoomedPreviewImage"),
+        Some("(Binary data 92592 bytes, use -b option to extract)")
+    );
+}
 
 /// OM-1 stores these fields in CameraSettings' nested AFTargetInfo and
 /// SubjectDetectInfo binary records.  Expectations are pinned from ExifTool

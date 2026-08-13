@@ -11,6 +11,44 @@ const DC_S1M2ES: &str =
 const LEICA_D_LUX8: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaD-Lux8.jpg";
 const LEICA_V_LUX: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaV-LUX.jpg";
 const LEICA_CAM_DC25: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaCAM-DC25.jpg";
+const DC_S5M2: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Panasonic/PanasonicDC-S5M2.jpg";
+const PV_DV401_K: &str =
+    "/tmp/oxidex-exiftool-cache/combined-samples/Panasonic/PanasonicPV-DV401-K.jpg";
+
+/// ExifTool 13.59's `Panasonic::TimeInfo` entry 0 is an eight-byte packed BCD
+/// timestamp, not a TIFF date string.  The real fixture covers the omitted
+/// `RawConv` and `ValueConv` path.
+#[test]
+fn panasonic_dc_s5m2_reports_packed_datetime() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(DC_S5M2).is_file() {
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(DC_S5M2)).expect("Panasonic DC-S5M2 parses");
+    assert_eq!(
+        metadata.get_string("Panasonic:PanasonicDateTime"),
+        Some("2023:01:15 22:30:54.37")
+    );
+}
+
+/// `MakerNotePanasonic2` is a fixed little-endian binary record beginning
+/// `MKE*`, rather than Panasonic's ordinary TIFF-like IFD MakerNote.
+#[test]
+fn panasonic_pv_dv401_reports_type2_gain() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(PV_DV401_K).is_file() {
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(PV_DV401_K)).expect("Panasonic PV-DV401 parses");
+    assert_eq!(metadata.get_string("Panasonic:MakerNoteType"), Some("MKEM"));
+    assert_eq!(metadata.get_string("Panasonic:Gain"), Some("136"));
+}
 
 #[test]
 fn leica_v_lux_reports_binary_output_lut() {

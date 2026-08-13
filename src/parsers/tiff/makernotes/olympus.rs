@@ -685,9 +685,40 @@ impl OlympusParser {
         }
 
         parse_camera_type_and_quality(data, ifd_start, &entries, base, effective_byte_order, tags);
+        insert_zoomed_preview_image(tags);
 
         Ok(())
     }
+}
+
+/// Emit ExifTool's `Olympus::Composite::ZoomedPreviewImage` when the paired
+/// Main-IFD tags are present.  `ExtractImage` receives the stored offset and
+/// byte count and writes the standard binary placeholder in normal output;
+/// the metadata map carries that placeholder rather than retaining a second
+/// copy of the JPEG payload.
+///
+/// The pair must be numeric and the length must be non-zero.  This is the
+/// same condition under which `ExtractImage` has a concrete byte span; a
+/// malformed table value is omitted instead of represented as a plausible
+/// binary tag.
+fn insert_zoomed_preview_image(tags: &mut HashMap<String, String>) {
+    let Some(_start) = tags
+        .get("Olympus:ZoomedPreviewStart")
+        .and_then(|value| value.parse::<u64>().ok())
+    else {
+        return;
+    };
+    let Some(length) = tags
+        .get("Olympus:ZoomedPreviewLength")
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|length| *length > 0)
+    else {
+        return;
+    };
+    tags.insert(
+        "Olympus:ZoomedPreviewImage".to_string(),
+        format!("(Binary data {length} bytes, use -b option to extract)"),
+    );
 }
 
 /// Decode the one documented scalar in Olympus `AFInfo`.
