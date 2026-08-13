@@ -73,6 +73,10 @@ pub(crate) fn normalize_family_for_comparison(family: &str) -> &str {
         // ExifTool does use for GoPro MP4/GPMF tracks) still matches oxidex's
         // "GoPro:" tags.
         "GoPro" => "APP6",
+        // Vivo's JPEG trailer table declares `GROUPS => { 0 => 'Trailer',
+        // 1 => 'Vivo' }`.  OxiDex keeps the product-facing family-1 key,
+        // while this comparison uses ExifTool family 0, so align the two.
+        "Vivo" => "Trailer",
         // CanonDR4 -> CanonVRD. Same case as FLIR, AROT and SPIFF above:
         // `%CanonVRD::DR4` declares GROUPS => { 1 => 'CanonDR4' } with no
         // family-0 override, so ExifTool files a DPP 4 recipe tag under
@@ -1023,6 +1027,11 @@ mod tests {
     #[test]
     fn test_canon_custom_family_normalizes_to_makernotes() {
         assert_eq!(normalize_family_for_comparison("CanonCustom"), "MakerNotes");
+    }
+
+    #[test]
+    fn test_vivo_family1_normalizes_to_exiftool_trailer_family0() {
+        assert_eq!(normalize_family_for_comparison("Vivo"), "Trailer");
     }
 
     #[test]

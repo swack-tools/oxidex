@@ -83,6 +83,62 @@ impl RicohParser {
         RicohParser
     }
 
+    /// MakerNotes.pm's Ricoh Type2 is a TIFF IFD with two undocumented pad
+    /// bytes after the entry count.  A few Pentax-branded Ricoh compacts use
+    /// it, so dispatch is signature-gated rather than Make-gated.
+    pub fn is_type2_makernote(data: &[u8]) -> bool {
+        matches!(data.get(..8), Some(b"II*\0\x08\0\0\0" | b"MM\0*\0\0\0\x08"))
+    }
+
+    pub fn parse_type2(data: &[u8], tags: &mut HashMap<String, String>) {
+        let byte_order = if data.starts_with(b"II") {
+            ByteOrder::LittleEndian
+        } else if data.starts_with(b"MM") {
+            ByteOrder::BigEndian
+        } else {
+            return;
+        };
+        let reader = EndianReader::new(data, byte_order.to_io_byte_order());
+        let Some(count) = reader.u16_at(8) else {
+            return;
+        };
+        for index in 0..usize::from(count) {
+            let Some(base) = 12_usize.checked_add(index.saturating_mul(12)) else {
+                return;
+            };
+            let (Some(tag_id), Some(field_type), Some(value_count), Some(value_offset)) = (
+                reader.u16_at(base),
+                reader.u16_at(base + 2),
+                reader.u32_at(base + 4),
+                reader.u32_at(base + 8),
+            ) else {
+                return;
+            };
+            match (tag_id, field_type, value_count) {
+                (0x0207, 2, 4) => {
+                    let raw = data.get(base + 8..base + 12).unwrap_or_default();
+                    let value = raw.split(|&byte| byte == 0).next().unwrap_or_default();
+                    tags.insert(
+                        "Ricoh:RicohModel".to_string(),
+                        String::from_utf8_lossy(value).into_owned(),
+                    );
+                }
+                (0x0300, 7, 32) => {
+                    let Some(raw) = data.get(value_offset as usize..value_offset as usize + 32)
+                    else {
+                        continue;
+                    };
+                    let value = raw.split(|&byte| byte == 0).next().unwrap_or_default();
+                    tags.insert(
+                        "Ricoh:RicohMake".to_string(),
+                        String::from_utf8_lossy(value).trim_end().to_string(),
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Parse a single IFD entry and extract tag value
     ///
     /// # Arguments
@@ -397,6 +453,28 @@ pub fn parse_ricoh_extra_tags(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn type2_makernote_extracts_xg1_make_and_empty_model() {
+        let mut data = vec![0; 0xf4];
+        data[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+        data[8..10].copy_from_slice(&2_u16.to_le_bytes());
+        data[12..14].copy_from_slice(&0x0207_u16.to_le_bytes());
+        data[14..16].copy_from_slice(&2_u16.to_le_bytes());
+        data[16..20].copy_from_slice(&4_u32.to_le_bytes());
+        data[24..26].copy_from_slice(&0x0300_u16.to_le_bytes());
+        data[26..28].copy_from_slice(&7_u16.to_le_bytes());
+        data[28..32].copy_from_slice(&32_u32.to_le_bytes());
+        data[32..36].copy_from_slice(&0xd4_u32.to_le_bytes());
+        data[0xd4..0xde].copy_from_slice(b"XG-1Pentax");
+        data[0xde..0xf4].fill(b' ');
+
+        let mut tags = HashMap::new();
+        RicohParser::parse_type2(&data, &mut tags);
+
+        assert_eq!(tags.get("Ricoh:RicohModel"), Some(&String::new()));
+        assert_eq!(tags.get("Ricoh:RicohMake"), Some(&"XG-1Pentax".to_string()));
+    }
 
     #[test]
     fn test_ricoh_parser_trait() {
