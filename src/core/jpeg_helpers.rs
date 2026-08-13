@@ -292,6 +292,111 @@ pub fn process_exif_segments(
     }
 }
 
+/// Extract Canon's version-3 Original Decision Data block.
+///
+/// Canon records its file-relative offset in the maker note, while the actual
+/// block resides outside the APP1 TIFF payload.  `Canon.pm::ReadODD` validates
+/// the all-`0xff` header and then, for version 3, copies three length-prefixed
+/// records (the third length includes its own four-byte word).  Keep the same
+/// strict bounds so a malformed maker-note offset can never reach JPEG scan
+/// data as a fabricated binary tag.
+pub fn process_canon_original_decision_data(reader: &dyn FileReader, metadata: &mut MetadataMap) {
+    let offset = metadata
+        .get_integer("Canon:OriginalDecisionDataOffset")
+        .and_then(|value| usize::try_from(value).ok())
+        .or_else(|| {
+            metadata
+                .get_string("Canon:OriginalDecisionDataOffset")
+                .and_then(|value| value.parse().ok())
+        });
+    let Some(offset) = offset else {
+        return;
+    };
+    let Some(file_len) = usize::try_from(reader.size()).ok() else {
+        return;
+    };
+    let Some(header_end) = offset.checked_add(8) else {
+        return;
+    };
+    if header_end > file_len {
+        return;
+    }
+    let Ok(header) = reader.read(offset as u64, 8) else {
+        return;
+    };
+    if header.get(..4) != Some(&[0xff; 4]) {
+        return;
+    }
+
+    let little_endian = metadata
+        .get_string("File:ExifByteOrder")
+        .is_some_and(|order| order.starts_with("Little-endian"));
+    let read_u32 = |bytes: &[u8]| {
+        let bytes: [u8; 4] = bytes.get(..4)?.try_into().ok()?;
+        Some(if little_endian {
+            u32::from_le_bytes(bytes)
+        } else {
+            u32::from_be_bytes(bytes)
+        })
+    };
+    let Some(version) = read_u32(&header[4..]) else {
+        return;
+    };
+    if version != 3 {
+        return;
+    }
+
+    let mut total = 8_usize;
+    for index in 0..3 {
+        let Some(length_offset) = offset.checked_add(total) else {
+            return;
+        };
+        let Some(length_end) = length_offset.checked_add(4) else {
+            return;
+        };
+        if length_end > file_len {
+            return;
+        }
+        let Ok(length_bytes) = reader.read(length_offset as u64, 4) else {
+            return;
+        };
+        let Some(length) = read_u32(length_bytes) else {
+            return;
+        };
+        if length > 0x10000 {
+            return;
+        }
+        let payload_len = if index == 2 {
+            let Some(payload_len) = length.checked_sub(4) else {
+                return;
+            };
+            payload_len
+        } else {
+            length
+        };
+        let Some(next_total) = total
+            .checked_add(4)
+            .and_then(|value| value.checked_add(payload_len as usize))
+        else {
+            return;
+        };
+        let Some(end) = offset.checked_add(next_total) else {
+            return;
+        };
+        if end > file_len {
+            return;
+        }
+        total = next_total;
+    }
+
+    if let Ok(data) = reader.read(offset as u64, total) {
+        metadata.insert(
+            "Composite:OriginalDecisionData".to_string(),
+            TagValue::Binary(data.to_vec()),
+        );
+    }
+}
+
 /// Processes IFD0 tags from JPEG EXIF data.
 ///
 /// Extracts tags from the main IFD (IFD0) and identifies pointers to
@@ -2599,6 +2704,64 @@ mod print_im_tests {
 
         assert_eq!(metadata.get_string("PrintIM:PrintIMVersion"), Some("0300"));
         assert!(metadata.get("IFD0:PrintIM").is_none());
+    }
+}
+
+#[cfg(test)]
+mod canon_original_decision_data_tests {
+    use super::*;
+    use crate::test_support::TestReader;
+
+    fn metadata_for_offset(offset: usize) -> MetadataMap {
+        let mut metadata = MetadataMap::new();
+        metadata.insert(
+            "Canon:OriginalDecisionDataOffset".to_string(),
+            TagValue::String(offset.to_string()),
+        );
+        metadata.insert(
+            "File:ExifByteOrder".to_string(),
+            TagValue::String("Little-endian (Intel, II)".to_string()),
+        );
+        metadata
+    }
+
+    #[test]
+    fn extracts_version_three_length_prefixed_data() {
+        let offset = 16;
+        let mut file = vec![0_u8; offset];
+        file.extend_from_slice(&[0xff; 4]);
+        file.extend_from_slice(&3_u32.to_le_bytes());
+        file.extend_from_slice(&20_u32.to_le_bytes());
+        file.extend_from_slice(&[1_u8; 20]);
+        file.extend_from_slice(&20_u32.to_le_bytes());
+        file.extend_from_slice(&[2_u8; 20]);
+        file.extend_from_slice(&12_u32.to_le_bytes());
+        file.extend_from_slice(&[3_u8; 8]);
+        let reader = TestReader::new(file.clone());
+        let mut metadata = metadata_for_offset(offset);
+
+        process_canon_original_decision_data(&reader, &mut metadata);
+
+        assert_eq!(
+            metadata.get("Composite:OriginalDecisionData"),
+            Some(&TagValue::Binary(file[offset..].to_vec()))
+        );
+    }
+
+    #[test]
+    fn rejects_version_three_third_length_smaller_than_its_word() {
+        let offset = 0;
+        let mut file = vec![0xff; 4];
+        file.extend_from_slice(&3_u32.to_le_bytes());
+        file.extend_from_slice(&0_u32.to_le_bytes());
+        file.extend_from_slice(&0_u32.to_le_bytes());
+        file.extend_from_slice(&3_u32.to_le_bytes());
+        let reader = TestReader::new(file);
+        let mut metadata = metadata_for_offset(offset);
+
+        process_canon_original_decision_data(&reader, &mut metadata);
+
+        assert!(metadata.get("Composite:OriginalDecisionData").is_none());
     }
 }
 
