@@ -19,6 +19,7 @@ use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_
 use crate::parsers::tiff::makernotes::makernote_context::{
     MakerNoteContext, value_overlaps_directory,
 };
+use crate::parsers::xmp::rdf_parser::{XmpValue, parse_xmp_typed};
 use crate::tag_db::lookup_tag_name;
 use std::collections::HashMap;
 
@@ -52,6 +53,8 @@ const INTEROPERABILITY_IFD_POINTER: u16 = 0xA005;
 
 /// MakerNote (0x927C): the manufacturer's private block in the EXIF IFD.
 const MAKERNOTE: u16 = 0x927C;
+/// ApplicationNotes (0x02BC): an embedded XMP packet in the EXIF IFD.
+const XMP_APPLICATION_NOTES: u16 = 0x02BC;
 const TAG_SUBFILE_TYPE: u16 = 0x00FE;
 
 // Image-carrying tags some cameras (Samsung SPH-A800/A940, Canon XL H1) write
@@ -846,6 +849,26 @@ pub fn parse_exif_subifd(
                 let iop_offset = read_u32(bytes, byte_order);
                 interop_ifd_offset = Some(iop_offset as u64);
                 // Don't add the pointer tag to metadata - we'll parse the sub-IFD instead
+                continue;
+            }
+
+            // Exif.pm routes ApplicationNotes (tag 700) into XMP rather than
+            // reporting the opaque TIFF value. DJI XT2 is one such camera:
+            // its `drone-dji:RtkFlag` lives only in this packet, not in a
+            // JPEG APP1 XMP segment. Keep RDF collections as metadata arrays
+            // just as `process_xmp_segments` does.
+            if *tag_id == XMP_APPLICATION_NOTES {
+                if let Ok(xmp_tags) = parse_xmp_typed(bytes) {
+                    for (tag_name, value) in xmp_tags {
+                        let tag_value = match value {
+                            XmpValue::List(values) => TagValue::Array(
+                                values.into_iter().map(TagValue::new_string).collect(),
+                            ),
+                            XmpValue::Scalar(value) => TagValue::new_string(value),
+                        };
+                        metadata.insert(tag_name, tag_value);
+                    }
+                }
                 continue;
             }
 

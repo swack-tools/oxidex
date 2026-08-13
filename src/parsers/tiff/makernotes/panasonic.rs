@@ -41,7 +41,7 @@ use super::makernote_context::{MakerNoteContext, value_overlaps_directory};
 use super::shared::MakerNoteParser;
 use super::shared::binary_subdir::{BinaryTable, decode_binary_subdir};
 use super::shared::ifd_parser_base::resolve_byte_order_at;
-use face_tables::{PANASONIC_FACEDETINFO, PANASONIC_FACERECINFO};
+use face_tables::{PANASONIC_FACEDETINFO, PANASONIC_FACERECINFO, PANASONIC_TIMEINFO};
 
 // Import declarative decoder macros
 use crate::const_decoder;
@@ -1154,6 +1154,7 @@ const fn panasonic_binary_subdir(tag_id: u16) -> Option<&'static BinaryTable> {
     match tag_id {
         0x004E => Some(&PANASONIC_FACEDETINFO),
         0x0061 => Some(&PANASONIC_FACERECINFO),
+        0x2003 => Some(&PANASONIC_TIMEINFO),
         _ => None,
     }
 }

@@ -44,6 +44,11 @@ static NAMESPACE_TO_FAMILY: LazyLock<HashMap<&'static str, &'static str>> = Lazy
     m.insert("http://iptc.org/std/Iptc4xmpExt/2008-02-29/", "XMP-iptcExt");
     m.insert("http://ns.useplus.org/ldf/xmp/1.0/", "XMP-plus");
 
+    // ExifTool's compatibility output normalizes the drone-dji schema under
+    // the generic XMP family. This must be a URI mapping: camera files may
+    // bind the schema to any XML prefix.
+    m.insert("http://www.dji.com/drone-dji/1.0/", "XMP");
+
     m
 });
 
@@ -141,5 +146,13 @@ mod tests {
     #[test]
     fn test_unknown_namespace_returns_none() {
         assert_eq!(namespace_to_family("http://example.com/unknown/"), None);
+    }
+
+    #[test]
+    fn test_dji_drone_namespace_maps_to_xmp() {
+        assert_eq!(
+            namespace_to_family("http://www.dji.com/drone-dji/1.0/"),
+            Some("XMP")
+        );
     }
 }

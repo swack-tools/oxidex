@@ -1534,6 +1534,8 @@ pub static FOCUS_INFO: &[TagDef] = &[
     ),
     TagDef::func(0x1209, "ManualFlash", print_manual_flash),
     TagDef::lookup(0x120A, "MacroLED", OFF_ON),
+    // Olympus.pm FocusInfo 0x2100: scalar int16u, no conversion.
+    TagDef::raw(0x2100, "AntiShockWaitingTime"),
 ];
 
 /// FocusInfo 0x1500 SensorTemperature has two ExifTool variants selected by
