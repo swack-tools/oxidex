@@ -244,6 +244,14 @@ pub fn dispatch_makernote_with_context_and_values_and_file_type(
         return Ok(());
     }
 
+    // MakerNotes.pm selects Ricoh Type2 from its TIFF signature before Make
+    // matching.  Pentax-branded Ricoh XG bodies otherwise take the broad
+    // `ricoh imaging` Pentax path and lose these two Type2 fields.
+    if ricoh::RicohParser::is_type2_makernote(data) {
+        ricoh::RicohParser::parse_type2(data, tags);
+        return Ok(());
+    }
+
     if matches!(make_normalized.as_str(), "nikon" | "nikon corporation") {
         nikon::NikonParser.parse_with_context_and_file_type(
             ctx,
