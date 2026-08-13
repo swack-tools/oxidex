@@ -447,6 +447,25 @@ impl OxiDexExtractor {
         if let Some(audio_timescale) = tag_map.get(media_timescale_2).cloned() {
             tag_map.insert(media_timescale.to_string(), audio_timescale);
         }
+
+        // `exiftool -json -G` collapses repeated visual-track source dimensions
+        // to its last occurrence. Preserve that family-0 behavior when OxiDex
+        // names later tracks with a numeric suffix.
+        for tag in ["SourceImageWidth", "SourceImageHeight"] {
+            let prefix = format!("QuickTime:{tag}_");
+            let value = tag_map
+                .iter()
+                .filter_map(|(key, value)| {
+                    key.strip_prefix(&prefix)
+                        .and_then(|suffix| suffix.parse::<usize>().ok())
+                        .map(|suffix| (suffix, value.clone()))
+                })
+                .max_by_key(|(suffix, _)| *suffix)
+                .map(|(_, value)| value);
+            if let Some(value) = value {
+                tag_map.insert(format!("QuickTime:{tag}"), value);
+            }
+        }
     }
 
     /// Apply comparison-specific normalization for ExifTool compatibility reports
@@ -948,6 +967,44 @@ mod tests {
         let (tags, collisions) = extractor.flatten_metadata(&metadata, None);
         assert_eq!(tags.len(), 0);
         assert!(collisions.is_empty());
+    }
+
+    #[test]
+    fn quicktime_source_dimensions_use_the_last_visual_track() {
+        let mut tags = HashMap::from([
+            ("QuickTime:SourceImageWidth".to_string(), "6000".to_string()),
+            (
+                "QuickTime:SourceImageHeight".to_string(),
+                "4000".to_string(),
+            ),
+            (
+                "QuickTime:SourceImageWidth_2".to_string(),
+                "1624".to_string(),
+            ),
+            (
+                "QuickTime:SourceImageHeight_2".to_string(),
+                "1080".to_string(),
+            ),
+            (
+                "QuickTime:SourceImageWidth_3".to_string(),
+                "6288".to_string(),
+            ),
+            (
+                "QuickTime:SourceImageHeight_3".to_string(),
+                "4056".to_string(),
+            ),
+        ]);
+
+        OxiDexExtractor::normalize_quicktime_track_tags(&mut tags);
+
+        assert_eq!(
+            tags.get("QuickTime:SourceImageWidth"),
+            Some(&"6288".to_string())
+        );
+        assert_eq!(
+            tags.get("QuickTime:SourceImageHeight"),
+            Some(&"4056".to_string())
+        );
     }
 
     /// The flattener is tag-blind: whatever string the library produced is
