@@ -79,6 +79,9 @@ mod sony_makernotes_tests;
 #[path = "integration/fujifilm_makernotes_tests.rs"]
 mod fujifilm_makernotes_tests;
 
+#[path = "integration/casio_qvci_tests.rs"]
+mod casio_qvci_tests;
+
 #[path = "integration/panasonic_makernotes_tests.rs"]
 mod panasonic_makernotes_tests;
 
@@ -96,6 +99,9 @@ mod sigma_makernotes_tests;
 
 #[path = "integration/phaseone_makernotes_tests.rs"]
 mod phaseone_makernotes_tests;
+
+#[path = "integration/composite_fixture_tests.rs"]
+mod composite_fixture_tests;
 
 // This one was never declared, so `tests/integration/apple_makernotes_tests.rs`
 // never compiled and never ran -- which is how it kept asserting an

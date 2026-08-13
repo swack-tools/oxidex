@@ -24,6 +24,7 @@ pub mod sub_tables;
 pub mod value_reader;
 
 use super::nikon_capture_data;
+use crate::core::formatters::numeric_precision::perl_number;
 use crate::error::{ExifToolError, Result};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use crate::parsers::tiff::makernotes::shared::ifd_parser_base::{
@@ -47,6 +48,7 @@ use value_reader::{
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_u16_array, extract_u32_array};
 use super::shared::print_im::decode_print_im_from_ifd;
+use super::shared::table_ifd;
 
 // Nikon MakerNote Tag IDs (from ExifTool Nikon.pm)
 /// Nikon Capture NX edit history (`NikonCaptureData`), a record stream
@@ -214,6 +216,76 @@ const LENS_DATA_MIN_FOCAL_LENGTH: usize = 9;
 const LENS_DATA_MAX_FOCAL_LENGTH: usize = 10;
 const LENS_DATA_MAX_APERTURE_AT_MIN_FOCAL: usize = 11;
 const LENS_DATA_MAX_APERTURE_AT_MAX_FOCAL: usize = 12;
+
+/// Parses the two Type2 fields exercised by NikonE700.jpg.
+///
+/// `Nikon\0\x01` MakerNotes are a little-endian IFD at byte 8, selected by
+/// `Nikon.pm`'s `Type2` table. They have no embedded TIFF header, so their
+/// offset base and tag IDs are unrelated to the modern Nikon main table.
+fn parse_legacy_type2(data: &[u8], tags: &mut HashMap<String, String>) {
+    const IFD_START: usize = 8;
+    let Some(entries) = table_ifd::read_ifd(data, IFD_START, ByteOrder::LittleEndian) else {
+        return;
+    };
+    let first_value_at = IFD_START + 2 + entries.len() * 12 + 4;
+    // Type2 stores offsets relative to the outer TIFF base, whereas `data`
+    // begins at the MakerNote.  Its earliest referenced payload follows the
+    // IFD immediately, which gives the otherwise-unavailable base correction.
+    let value_offset_correction = entries
+        .iter()
+        .filter_map(|entry| {
+            let offset = entry.value_offset as usize;
+            if offset >= first_value_at {
+                Some(offset - first_value_at)
+            } else {
+                None
+            }
+        })
+        .min()
+        .unwrap_or(0);
+
+    for entry in entries {
+        let (name, expected_type) = match entry.tag_id {
+            // Type2 0x0008 `Focus`, rational64u: 0/0 prints `undef`.
+            0x0008 => ("Focus", table_ifd::ftype::TIFF_RATIONAL),
+            // Type2 0x000b `Converter`, int16u.
+            0x000b => ("Converter", table_ifd::ftype::TIFF_SHORT),
+            _ => continue,
+        };
+        if entry.count != 1 || entry.field_type != expected_type {
+            continue;
+        }
+        if name == "Focus" {
+            let Some(offset) = (entry.value_offset as usize).checked_sub(value_offset_correction)
+            else {
+                continue;
+            };
+            let Some(raw) = data.get(offset..offset.saturating_add(8)) else {
+                continue;
+            };
+            let numerator = u32::from_le_bytes(raw[0..4].try_into().expect("slice length"));
+            let denominator = u32::from_le_bytes(raw[4..8].try_into().expect("slice length"));
+            let value = if denominator == 0 {
+                "undef".to_string()
+            } else {
+                perl_number(numerator as f64 / denominator as f64)
+            };
+            tags.insert(format!("Nikon:{name}"), value);
+            continue;
+        }
+
+        if let Some(value) = table_ifd::decode_entry_with_floor(
+            data,
+            &entry,
+            Some(0),
+            ByteOrder::LittleEndian,
+            None,
+            first_value_at,
+        ) {
+            tags.insert(format!("Nikon:{name}"), value.print_raw());
+        }
+    }
+}
 
 /// Decodes Nikon flash mode to human-readable string (`Nikon::Main` 0x0087).
 fn decode_flash_mode(value: i32) -> String {
@@ -623,6 +695,11 @@ impl NikonParser {
         preview_ifd_base: Option<u64>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
+            return Ok(());
+        }
+
+        if data.starts_with(b"Nikon\0\x01") {
+            parse_legacy_type2(data, tags);
             return Ok(());
         }
 
@@ -1904,6 +1981,35 @@ mod tests {
         assert!(is_nikon_makernote(b"Nikon\0extra data"));
         assert!(!is_nikon_makernote(b"Canon\0"));
         assert!(!is_nikon_makernote(b"Nikon")); // Too short
+    }
+
+    #[test]
+    fn legacy_type2_renders_zero_over_zero_focus_and_converter() {
+        // Nikon.pm's Type2 table starts a little-endian IFD eight bytes after
+        // the Nikon signature, rather than an embedded TIFF header.
+        let mut data = b"Nikon\0\x01\0".to_vec();
+        data.extend_from_slice(&2u16.to_le_bytes());
+
+        // Focus (0x0008): rational64u 0/0, rendered by ExifTool as undef.
+        data.extend_from_slice(&0x0008u16.to_le_bytes());
+        data.extend_from_slice(&5u16.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&38u32.to_le_bytes());
+
+        // Converter (0x000b): inline int16u zero.
+        data.extend_from_slice(&0x000bu16.to_le_bytes());
+        data.extend_from_slice(&3u16.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes()); // next IFD
+        data.extend_from_slice(&0u32.to_le_bytes()); // Focus numerator
+        data.extend_from_slice(&0u32.to_le_bytes()); // Focus denominator
+
+        let mut tags = HashMap::new();
+        parse_nikon_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
+
+        assert_eq!(tags.get("Nikon:Focus"), Some(&"undef".to_string()));
+        assert_eq!(tags.get("Nikon:Converter"), Some(&"0".to_string()));
     }
 
     #[test]

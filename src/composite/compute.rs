@@ -634,6 +634,20 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             Computed::new(seconds.to_string(), convert_duration(seconds))
         }
 
+        // FLIR.pm:1311-1314 Composite::PeakSpectralSensitivity:
+        //   ValueConv => '14387.6515/$val'
+        //   PrintConv => 'sprintf("%.1f um", $val)'
+        // `PlanckB` is a camera calibration constant, so a zero value is not
+        // meaningful and must not turn into an infinite derived tag.
+        ("FLIR", "PeakSpectralSensitivity") => {
+            let planck_b = f(get(i, 0))?;
+            if planck_b == 0.0 {
+                return None;
+            }
+            let micrometres = 14_387.651_5 / planck_b;
+            Computed::new(micrometres.to_string(), format!("{micrometres:.1} um"))
+        }
+
         // QuickTime.pm:8653-8665:
         // `int(MediaDataSize * 8 / (Duration / TimeScale) + 0.5)` followed
         // by `ConvertBitrate`. `Duration` reaches this layer in its unrounded
@@ -1254,6 +1268,12 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
         ("IPTC", "DateTimeCreated" | "DigitalCreationDateTime") => {
             Computed::same(format!("{} {}", get(i, 0)?, get(i, 1)?))
         }
+
+        // Kodak.pm:3023-3030 Composite::DateCreated. `MonthDayCreated` is
+        // already ValueConv'd from its two bytes to `MM:DD`, so the Composite
+        // merely joins it to the four-digit year. Keeping this as a string
+        // also retains ExifTool's zero-padded date representation exactly.
+        ("Kodak", "DateCreated") => Computed::same(format!("{}:{}", get(i, 0)?, get(i, 1)?)),
 
         // Exif.pm synthesizes DateTimeOriginal only when the independent date
         // and time inputs exist; DateTimeCreated wins when it contains a time.
