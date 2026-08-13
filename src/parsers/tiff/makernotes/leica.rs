@@ -91,6 +91,8 @@ mod l4_subdir {
     pub(super) const JPEG_QUALITY: u16 = 0x3034;
     pub(super) const WB_RGB_LEVELS: u16 = 0x3036;
     pub(super) const USER_PROFILE: u16 = 0x3038;
+    /// `int32u` with the exact fixed-size PrintConv in Panasonic.pm:1852-1861.
+    pub(super) const JPEG_SIZE: u16 = 0x303A;
     pub(super) const SERIAL_NUMBER: u16 = 0x3103;
     pub(super) const FIRMWARE_VERSION: u16 = 0x3109;
     pub(super) const BASE_ISO: u16 = 0x312A;
@@ -123,6 +125,9 @@ mod leica5 {
     /// ASCII.
     pub(super) const LENS_TYPE: u16 = 0x0303;
     pub(super) const SERIAL_NUMBER: u16 = 0x0305;
+    /// ASCII directory name; Panasonic.pm:2020 declares this independently
+    /// from OriginalFileName (0x0407).
+    pub(super) const ORIGINAL_DIRECTORY: u16 = 0x0408;
     /// `SubDirectory => { TagTable => PanasonicRaw::CameraIFD, Base =>
     /// '$start', ProcessProc => ProcessTIFF }` (Panasonic.pm:2052-2059).
     pub(super) const CAMERA_IFD: u16 = 0x05FF;
@@ -324,6 +329,13 @@ fn leica_layout(data: &[u8]) -> Option<LeicaLayout> {
     // No signature: a bare IFD, if the entry count is plausible.
     let entry_count = EndianReader::little_endian(data).u16_at(0).unwrap_or(0);
     (entry_count > 0 && entry_count < 150).then_some(LeicaLayout::Leica3)
+}
+
+/// `MakerNoteLeica8` (Q/SL/CL, headers `LEICA\\0\\x08|09|0a\\0`) uses
+/// normal TIFF-relative offsets: unlike `MakerNoteLeica5`, its SubDirectory
+/// declaration intentionally has no `Base` (MakerNotes.pm:703-711).
+fn leica5_uses_tiff_offsets(data: &[u8]) -> bool {
+    matches!(data.get(6), Some(0x08 | 0x09 | 0x0a))
 }
 
 /// Where a Leica MakerNote entry's out-of-line value lives.
@@ -964,9 +976,9 @@ impl LeicaMakerNoteParser {
                     base,
                 })
             }
-            // `MakerNoteLeica5` declares `Base => '$start - 8'`
-            // (MakerNotes.pm:657) -- the payload's own start, same
-            // convention as Leica4.
+            // Leica5's normal values use the MakerNote payload base. A later
+            // Leica8 exception (`OriginalDirectory`) is selected per entry
+            // below, so it must not alter the base for PanasonicRaw fields.
             LeicaLayout::Leica5 => Some(LeicaValues {
                 block: data,
                 base: 0,
@@ -1038,7 +1050,17 @@ impl LeicaMakerNoteParser {
                             })
                         })
                         .flatten();
-                    self.decode_leica5_entry(&entry, values, camera_ifd, tags);
+                    let entry_values = if leica5_uses_tiff_offsets(data)
+                        && entry.tag_id == leica5::ORIGINAL_DIRECTORY
+                    {
+                        ctx.filter(|ctx| ctx.is_located()).map(|ctx| LeicaValues {
+                            block: ctx.tiff(),
+                            base: 0,
+                        })
+                    } else {
+                        values
+                    };
+                    self.decode_leica5_entry(&entry, entry_values, camera_ifd, tags);
                 }
                 LeicaLayout::Leica6 => self.decode_leica6_entry(&entry, tags),
                 LeicaLayout::Leica9 => self.decode_leica9_entry(&entry, values, byte_order, tags),
@@ -1266,6 +1288,13 @@ impl LeicaMakerNoteParser {
                     "Leica:SerialNumber".to_string(),
                     entry.value_offset.to_string(),
                 );
+            }
+            leica5::ORIGINAL_DIRECTORY if entry.field_type == 2 => {
+                if let Some(s) = values.and_then(|values| {
+                    read_leica_string(values, entry.value_offset, entry.value_count)
+                }) {
+                    tags.insert("Leica:OriginalDirectory".to_string(), s);
+                }
             }
             leica5::CAMERA_IFD => {
                 if let Some(camera_ifd) = camera_ifd.or_else(|| {
@@ -1516,6 +1545,19 @@ impl LeicaMakerNoteParser {
                         "Leica:JPEGQuality".to_string(),
                         L4_DECODE_JPEG_QUALITY.decode(value),
                     );
+                }
+                l4_subdir::JPEG_SIZE => {
+                    let printed = match value_offset {
+                        0 => Some("5216x3472"),
+                        1 => Some("3840x2592"),
+                        2 => Some("2592x1728"),
+                        3 => Some("1728x1152"),
+                        4 => Some("1280x864"),
+                        _ => None,
+                    };
+                    if let Some(printed) = printed {
+                        tags.insert("Leica:JPEGSize".to_string(), printed.to_string());
+                    }
                 }
                 l4_subdir::WB_RGB_LEVELS => {
                     // WB RGB Levels are stored as 3 rational values

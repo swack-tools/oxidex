@@ -1578,9 +1578,9 @@ impl PentaxParser {
                 // (key 1.1) reads the same byte as "WxH" instead of
                 // multiplying: `ValueConv => '($val>>4)." ".($val&0x0f)'` then
                 // `PrintConv => '$val =~ tr/ /x/; $val'` turns the space into
-                // an "x". `CAFPointsInFocus`/`CAFPointsSelected` need
-                // `DecodeAFPoints`, a bitmask walk over a grid whose size this
-                // byte determines, and neither is decoded here.
+                // an "x". `CAFPointsInFocus`/`CAFPointsSelected` use
+                // `DecodeAFPoints`, a two-bit walk over the grid this byte
+                // determines.
                 PENTAX_CAF_POINT_INFO => {
                     let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if raw.len() >= 2 {
@@ -1590,6 +1590,15 @@ impl PentaxParser {
                         tags.insert(
                             "Pentax:CAFGridSize".to_string(),
                             format!("{}x{}", b >> 4, b & 0x0f),
+                        );
+                        let point_bits = raw.get(2..).unwrap_or_default();
+                        tags.insert(
+                            "Pentax:CAFPointsInFocus".to_string(),
+                            decode_caf_points(point_bits, n, 0x02),
+                        );
+                        tags.insert(
+                            "Pentax:CAFPointsSelected".to_string(),
+                            decode_caf_points(point_bits, n, 0x03),
                         );
                     }
                 }
@@ -4519,6 +4528,33 @@ mod tests {
 // ============================================================================
 // Value Extraction Helpers for Byte Order Handling
 // ============================================================================
+
+/// Decode the two-bit contrast-detect AF point records in `CAFPointInfo`.
+///
+/// This is ExifTool's `DecodeAFPoints($val, $num, 2, $mask)` from
+/// Pentax.pm:6727-6754.  Points are numbered one-based and packed from each
+/// byte's most-significant two bits downwards.  ExifTool renders an empty
+/// point list as `(none)`.
+fn decode_caf_points(bytes: &[u8], point_count: u32, required_value: u8) -> String {
+    let mut points = Vec::new();
+
+    for point in 0..point_count {
+        let byte_index = (point / 4) as usize;
+        let Some(&byte) = bytes.get(byte_index) else {
+            break;
+        };
+        let shift = 6 - (point % 4) * 2;
+        if (byte >> shift) & 0x03 == required_value {
+            points.push((point + 1).to_string());
+        }
+    }
+
+    if points.is_empty() {
+        "(none)".to_string()
+    } else {
+        points.join(",")
+    }
+}
 
 fn extract_u8_value(entry: &IfdEntry, _byte_order: ByteOrder) -> u8 {
     // `right_align_inline_value` normalizes both byte orders before tag
