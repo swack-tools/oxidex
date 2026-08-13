@@ -25,6 +25,9 @@ use crate::parsers::jpeg::xmp_parser::extract_xmp_from_segments;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
 use crate::parsers::tiff::tiff_subreader::TiffSubReader;
 use crate::tag_db::lookup_tag_name;
+use chrono::{Duration, NaiveDate};
+use quick_xml::Reader;
+use quick_xml::events::Event;
 
 /// Processes JFIF APP0 segments and extracts version and resolution metadata.
 ///
@@ -1370,6 +1373,72 @@ pub fn process_com_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     }
 }
 
+/// Processes Media Jukebox's APP9 XML packet.
+///
+/// ExifTool's JPEG APP9 handler recognizes the exact `Media Jukebox\\0`
+/// signature and files the selected packet fields under the XML group.  Its
+/// `Date` is an OLE Automation day count, rendered as an ExifTool datetime.
+pub fn process_media_jukebox_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    const APP9_MARKER: u16 = 0xFFE9;
+    const IDENTIFIER: &[u8] = b"Media Jukebox\0";
+    const FIELDS: [&str; 7] = [
+        "Tool_Name",
+        "Tool_Version",
+        "People",
+        "Places",
+        "Album",
+        "Name",
+        "Date",
+    ];
+
+    for segment in segments
+        .iter()
+        .filter(|segment| segment.marker == APP9_MARKER)
+    {
+        let Some(xml) = segment.data.strip_prefix(IDENTIFIER) else {
+            continue;
+        };
+        let mut reader = Reader::from_reader(xml);
+        reader.config_mut().trim_text(true);
+        let mut buffer = Vec::new();
+        let mut current: Option<String> = None;
+
+        loop {
+            match reader.read_event_into(&mut buffer) {
+                Ok(Event::Start(element)) => {
+                    let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+                    current = FIELDS.contains(&name.as_str()).then_some(name);
+                }
+                Ok(Event::Text(text)) => {
+                    if let Some(field) = current.as_deref()
+                        && let Ok(value) = text.decode()
+                    {
+                        let value = if field == "Date" {
+                            format_media_jukebox_date(value.as_ref())
+                                .unwrap_or_else(|| value.into_owned())
+                        } else {
+                            value.into_owned()
+                        };
+                        metadata.insert(format!("XML:{field}"), TagValue::new_string(value));
+                    }
+                }
+                Ok(Event::End(_)) => current = None,
+                Ok(Event::Eof) | Err(_) => break,
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+}
+
+fn format_media_jukebox_date(value: &str) -> Option<String> {
+    let days = value.parse::<f64>().ok()?;
+    let seconds = (days * 86_400.0).round() as i64;
+    let epoch = NaiveDate::from_ymd_opt(1899, 12, 30)?.and_hms_opt(0, 0, 0)?;
+    let date = epoch.checked_add_signed(Duration::seconds(seconds))?;
+    Some(date.format("%Y:%m:%d %H:%M:%S").to_string())
+}
+
 /// Processes DQT (Define Quantization Table) segments into a quality estimate.
 ///
 /// Collects DQT payloads indexed by table id (first byte & 0x0F, ids 0-3,
@@ -1942,6 +2011,30 @@ mod tests {
         let mut metadata = MetadataMap::new();
         metadata.insert("IFD0:Make", TagValue::new_string("DJI"));
         metadata
+    }
+
+    #[test]
+    fn media_jukebox_app9_emits_exiftool_xml_fields() {
+        let segment = Segment::new(
+            0xFFE9,
+            0,
+            b"Media Jukebox\0<MJMD><Tool_Name>Media Center</Tool_Name><Tool_Version>19.0.67</Tool_Version><People>Santa</People><Places>Jamaica</Places><Album>2013-09-01</Album><Name>Glass home at night</Name><Date>41518.8418865740750334</Date></MJMD>",
+        );
+        let mut metadata = MetadataMap::new();
+
+        process_media_jukebox_segments(&[segment], &mut metadata);
+
+        for (tag, expected) in [
+            ("XML:Tool_Name", "Media Center"),
+            ("XML:Tool_Version", "19.0.67"),
+            ("XML:People", "Santa"),
+            ("XML:Places", "Jamaica"),
+            ("XML:Album", "2013-09-01"),
+            ("XML:Name", "Glass home at night"),
+            ("XML:Date", "2013:09:01 20:12:19"),
+        ] {
+            assert_eq!(metadata.get_string(tag), Some(expected), "{tag}");
+        }
     }
 
     #[test]
