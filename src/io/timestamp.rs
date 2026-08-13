@@ -114,6 +114,36 @@ pub fn mac_time_to_exif_datetime(mac_time: u64) -> Option<String> {
     ))
 }
 
+/// Converts a Mac/QuickTime timestamp to ExifTool's local-time rendering.
+///
+/// Canon CR3 is the exception among QuickTime-family formats: QuickTime.pm
+/// passes its header timestamps through `ConvertUnixTime` with `QuickTimeUTC`,
+/// which presents the UTC instant in the local zone and retains its offset.
+pub fn mac_time_to_exif_datetime_local(mac_time: u64) -> Option<String> {
+    use chrono::{Local, TimeZone};
+
+    let unix = mac_time_to_unix(mac_time)?;
+    Local
+        .timestamp_opt(unix, 0)
+        .single()
+        .map(|time| time.format("%Y:%m:%d %H:%M:%S%:z").to_string())
+}
+
+#[cfg(test)]
+mod mac_time_tests {
+    use super::*;
+
+    #[test]
+    fn mac_time_local_rendering_includes_the_local_offset() {
+        const MAC_UNIX_DIFF: u64 = 2_082_844_800;
+        let rendered = mac_time_to_exif_datetime_local(MAC_UNIX_DIFF + 1_519_216_536)
+            .expect("2018 timestamp is after the Unix epoch");
+
+        assert!(rendered.starts_with("2018:02:21 "));
+        assert!(rendered.ends_with("+00:00") || rendered.rfind('-').is_some());
+    }
+}
+
 /// Converts Unix timestamp to date/time components.
 /// Returns (year, month, day, hour, minute, second).
 fn unix_to_datetime(unix_time: i64) -> (i32, u32, u32, u32, u32, u32) {

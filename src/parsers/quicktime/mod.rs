@@ -113,13 +113,22 @@ pub fn parse_quicktime_metadata(reader: &dyn FileReader) -> Result<MetadataMap, 
 ///
 /// No signature check: the caller has already identified the container.
 pub fn parse_quicktime_metadata_from_bytes(data: &[u8]) -> Result<MetadataMap, String> {
+    parse_quicktime_metadata_from_bytes_with_local_timestamps(data, false)
+}
+
+/// Parse already-buffered QuickTime atoms, optionally applying the CR3-only
+/// local-time rendering ExifTool uses for movie, track and media headers.
+pub fn parse_quicktime_metadata_from_bytes_with_local_timestamps(
+    data: &[u8],
+    local_timestamps: bool,
+) -> Result<MetadataMap, String> {
     // Parse top-level atoms
     let atoms = atom_parser::parse_atoms(data)
         .map_err(|e| format!("Failed to parse atoms: {}", e))?
         .1;
 
     // Extract metadata from the atoms
-    metadata_extractor::extract_metadata(&atoms)
+    metadata_extractor::extract_metadata_with_local_timestamps(&atoms, local_timestamps)
 }
 
 /// Validate QuickTime/MP4 file signature.
