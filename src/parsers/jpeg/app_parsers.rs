@@ -608,9 +608,9 @@ pub fn parse_jpeg_hdr_segment(data: &[u8], metadata: &mut MetadataMap) -> Result
 /// `ManufactureIndex` and `ManufactureCode` are plain fixed-width strings
 /// with no `ValueConv`/`PrintConv`, so the generated table's raw
 /// `DecodedValue::String` is already ExifTool's printed value.
-/// `CasioQuality` (has an `IntEnum` `PrintConv`) and `DateTimeOriginal` (has
-/// a `ValueConv`+`PrintConv` this crate does not reproduce) are left out
-/// rather than guessed.
+/// `CasioQuality` has a generated `IntEnum` `PrintConv`, so it can be emitted
+/// exactly. `DateTimeOriginal` has a `ValueConv`+`PrintConv` this crate does
+/// not reproduce and remains omitted rather than guessed.
 pub fn parse_casio_qvci_segment(data: &[u8], metadata: &mut MetadataMap) {
     let Some(table) = crate::exiftool_tables::find_table("Casio", "QVCI") else {
         return;
@@ -626,6 +626,19 @@ pub fn parse_casio_qvci_segment(data: &[u8], metadata: &mut MetadataMap) {
         if let crate::exiftool_tables::DecodedValue::String(text) = &decoded.raw {
             metadata.insert(format!("Casio:{name}"), TagValue::new_string(text.clone()));
         }
+    }
+
+    let Some(decoded) = fields
+        .iter()
+        .find(|field| field.field.name == "CasioQuality")
+    else {
+        return;
+    };
+    if let Some(rendered) = decoded.apply_print_conv_to_raw() {
+        metadata.insert(
+            "Casio:CasioQuality".to_string(),
+            TagValue::new_string(rendered),
+        );
     }
 }
 
