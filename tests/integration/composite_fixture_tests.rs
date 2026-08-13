@@ -19,6 +19,7 @@ const SAMSUNG_GT_I8910: &str =
 const NIKON_Z7_2: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Nikon/NikonZ7_2.jpg";
 const NIKON_P6000: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Nikon/NikonCoolpixP6000.jpg";
 const NIKON_D5500: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Nikon/NikonD5500.jpg";
+const NIKON_P520: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Nikon/NikonCoolpixP520.jpg";
 
 /// Kodak.pm's DateCreated Composite joins YearCreated and MonthDayCreated.
 /// ExifTool 13.59 reports `2002:05:01` for this corpus image.
@@ -140,6 +141,22 @@ fn nikon_p6000_fixture_reports_distortion_control() {
 
     let metadata = read_metadata(Path::new(NIKON_P6000)).expect("Nikon P6000 fixture parses");
     assert_eq!(metadata.get_string("Nikon:DistortionControl"), Some("Off"));
+}
+
+/// XMP.pm's Flash composite packs the five XMP-exif component fields into the
+/// standard EXIF flash bitfield before applying Exif.pm's flash PrintConv.
+/// Pinned ExifTool 13.59 reports `Off, Did not fire` for NikonCoolpixP520.jpg.
+#[test]
+fn nikon_p520_fixture_reports_xmp_flash_composite() {
+    if !Path::new(NIKON_P520).is_file() {
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(NIKON_P520)).expect("Nikon P520 fixture parses");
+    assert_eq!(
+        metadata.get_string("Composite:Flash"),
+        Some("Off, Did not fire")
+    );
 }
 
 /// Nikon.pm's LensSpec Composite concatenates the already print-converted

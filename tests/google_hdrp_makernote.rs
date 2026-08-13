@@ -5,6 +5,8 @@ const PIXEL_10: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Google/Googl
 const PIXEL_10_PRO_XL: &str =
     "/tmp/oxidex-exiftool-cache/combined-samples/Google/GooglePixel10ProXL.jpg";
 const PIXEL_6A: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Google/GooglePixel6a.jpg";
+const PIXEL_ORIGINAL: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Google/GooglePixel.jpg";
+const PIXEL_4A: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Google/GooglePixel4a.jpg";
 
 /// The v3 HDR+ XMP envelope is encrypted and gzip-compressed protobuf.  These
 /// direct field-12 strings are pinned from ExifTool 13.59's Google table.
@@ -127,5 +129,42 @@ fn pixel_6a_hdrp_v2_fields_match_exiftool() {
     assert_eq!(
         metadata.get_string("MakerNotes:ProcessingNotes"),
         Some("Neither warping nor relighting is required -> proceeds to ContiZoom.")
+    );
+}
+
+/// The original Pixel writes its HDRP-v2 stream directly in EXIF MakerNote
+/// 0x927c, rather than in a GCamera XMP property.  Google.pm applies the same
+/// `ProcessHDRP` decoder to that signature-selected payload.
+#[test]
+fn original_pixel_tiff_hdrp_v2_matches_exiftool() {
+    if !Path::new(PIXEL_ORIGINAL).is_file() {
+        eprintln!("skipping: corpus fixture not present at {PIXEL_ORIGINAL}");
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(PIXEL_ORIGINAL)).expect("original Pixel parses");
+    assert_eq!(
+        metadata.get_string("MakerNotes:LoggingMetadataText"),
+        Some("(Binary data 1754 bytes, use -b option to extract)")
+    );
+}
+
+/// Google Device's list containers retain their `rdf:type` URI as the root
+/// property while their individual fields use `FlatName => ''`.
+#[test]
+fn pixel_4a_device_container_types_match_exiftool() {
+    if !Path::new(PIXEL_4A).is_file() {
+        eprintln!("skipping: corpus fixture not present at {PIXEL_4A}");
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(PIXEL_4A)).expect("Pixel 4a parses");
+    assert_eq!(
+        metadata.get_string("XMP:Cameras"),
+        Some("http://ns.google.com/photos/dd/1.0/device/:Camera")
+    );
+    assert_eq!(
+        metadata.get_string("XMP:Profiles"),
+        Some("http://ns.google.com/photos/dd/1.0/device/:Profile")
     );
 }

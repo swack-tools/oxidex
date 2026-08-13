@@ -27,8 +27,21 @@ use std::io::Read;
 /// format handled by a different, unimplemented code path), or fails to
 /// decrypt/gunzip -- rather than fabricating a value.
 pub fn decode_hdrp_plus_makernote(raw_value: &str) -> Vec<(String, String)> {
+    let Some(decoded) = decode_base64_flexible(raw_value) else {
+        return Vec::new();
+    };
+    decode_hdrp_makernote_bytes(&decoded)
+}
+
+/// Decodes the raw bytes of an Exif `MakerNoteGoogle` (`HDRP\\x02` or
+/// `HDRP\\x03`).  Google uses the identical encrypted envelope for its XMP
+/// `HdrPlusMakernote` property and for the TIFF MakerNote selected by
+/// `MakerNotes.pm`'s `MakerNoteGoogle` condition, so keeping the cryptographic
+/// and text/protobuf decoding in one place prevents the two entry points from
+/// drifting.
+pub fn decode_hdrp_makernote_bytes(raw: &[u8]) -> Vec<(String, String)> {
     let mut out = Vec::new();
-    let Some((version, inflated)) = decrypt_and_inflate_any(raw_value) else {
+    let Some((version, inflated)) = decrypt_and_inflate(raw) else {
         return out;
     };
 
@@ -138,7 +151,10 @@ pub fn decode_hdrp_plus_makernote(raw_value: &str) -> Vec<(String, String)> {
 pub fn decode_hdrp_shot_log_data(raw_value: &str) -> Vec<(String, String)> {
     // `ShotLogData` is marked `IsProtobuf` by the table, so ExifTool parses
     // it as protobuf even when its enclosing HDRP stream is version 2.
-    let Some((_, inflated)) = decrypt_and_inflate_any(raw_value) else {
+    let Some(decoded) = decode_base64_flexible(raw_value) else {
+        return Vec::new();
+    };
+    let Some((_, inflated)) = decrypt_and_inflate(&decoded) else {
         return Vec::new();
     };
     let fields = parse_fields(&inflated);
@@ -158,8 +174,7 @@ pub fn decode_hdrp_shot_log_data(raw_value: &str) -> Vec<(String, String)> {
 /// Base64-decodes, decrypts, and gunzips a `HdrPlusMakernote` value,
 /// mirroring `Google::ProcessHDRP` (Google.pm:670-780). Returns `None` on
 /// any failure, or if the decoded version isn't 3 (protobuf-framed).
-fn decrypt_and_inflate_any(raw_value: &str) -> Option<(u8, Vec<u8>)> {
-    let decoded = decode_base64_flexible(raw_value)?;
+fn decrypt_and_inflate(decoded: &[u8]) -> Option<(u8, Vec<u8>)> {
     if decoded.len() < 5 || &decoded[0..4] != b"HDRP" {
         return None;
     }
