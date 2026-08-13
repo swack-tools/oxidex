@@ -151,6 +151,14 @@ impl PartialEq<&str> for XmpValue {
 /// `["ExifTool","Test","XMP"]`, and a caller that stores one joined string can
 /// never reproduce that. Callers that build a `TagValue` should use this.
 pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
+    Ok(parse_xmp_typed_with_rational_forms(xml_bytes)?.0)
+}
+
+/// Parse typed XMP while retaining the unreduced focal-plane resolution forms
+/// needed by Canon's sensor-diagonal composite conversion.
+pub(crate) fn parse_xmp_typed_with_rational_forms(
+    xml_bytes: &[u8],
+) -> Result<(Vec<(String, XmpValue)>, Vec<(String, String)>)> {
     let mut reader = Reader::from_reader(xml_bytes);
     reader.config_mut().trim_text(true); // Trim whitespace from text nodes
 
@@ -557,6 +565,8 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
         .find(|(tag, _)| tag == "XMP:ShotLogData")
         .map(|(_, value)| value.clone());
 
+    let mut rational_forms = Vec::new();
+
     // Post-process results to apply formatting for specific tags
     let mut formatted: Vec<(String, XmpValue)> = results
         .into_iter()
@@ -570,6 +580,12 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
                     (tag, XmpValue::List(formatted))
                 }
                 None => {
+                    if matches!(
+                        tag.rsplit(':').next(),
+                        Some("FocalPlaneXResolution" | "FocalPlaneYResolution")
+                    ) {
+                        rational_forms.push((tag.clone(), value.clone()));
+                    }
                     let formatted = format_xmp_value(&tag, &value);
                     (tag, XmpValue::Scalar(formatted))
                 }
@@ -595,7 +611,7 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
         }
     }
 
-    Ok(formatted)
+    Ok((formatted, rational_forms))
 }
 
 /// Extracts flattened fields from the IPTC Extension AboutCvTerm structured bag.
