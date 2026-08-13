@@ -127,6 +127,15 @@ fn format_significant_3(value: f64) -> String {
         .to_string()
 }
 
+/// Render a fixed-precision decimal without a non-significant trailing zero.
+/// This is the textual form Perl emits after GPS.pm's `int($val * 10) / 10`.
+fn format_decimal(value: f64, decimals: usize) -> String {
+    format!("{value:.decimals$}")
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+}
+
 /// Sony.pm's `sprintf("%.4g", $val)` for `FocusDistance2`.
 fn sony_four_sig(value: f64) -> String {
     if value == 0.0 {
@@ -1255,6 +1264,58 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             )
         }
 
+        // Nikon.pm:13247-13261.  AFInfo2 has already PrintConv'd these two
+        // inputs by the time Composite runs, so translate only the documented
+        // display forms back to the small integer domains used by Nikon.pm's
+        // ValueConv.  Unknown schema/detection values must stay absent rather
+        // than being guessed as an AF mode.
+        ("Nikon", "PhaseDetectAF") => {
+            let detection = match get(i, 1)? {
+                "Phase Detect" => true,
+                "Contrast Detect" | "Hybrid" => false,
+                _ => return None,
+            };
+            let raw_schema = match get(i, 0)? {
+                "Off" => 0,
+                "51-point" => 1,
+                "11-point" => 2,
+                "39-point" => 3,
+                "153-point" => 7,
+                "81-point" => 8,
+                "105-point" => 9,
+                _ => return None,
+            };
+            let printed = if !detection {
+                "Off"
+            } else {
+                match raw_schema {
+                    0 => "Off",
+                    1 => "On (51-point)",
+                    2 => "On (11-point)",
+                    3 => "On (39-point)",
+                    7 => "On (153-point)",
+                    9 => "On (105-point)",
+                    // Nikon.pm deliberately has no PrintConv for 81-point.
+                    _ => return None,
+                }
+            };
+            Computed::same(printed)
+        }
+
+        // Nikon.pm:13263-13270.  As above, AFDetectionMethod is already in
+        // its Nikon.pm PrintConv form here.
+        ("Nikon", "ContrastDetectAF") => {
+            let autofocus = !get(i, 0)?
+                .get(..6)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Manual"));
+            let contrast = match get(i, 1)? {
+                "Phase Detect" | "Hybrid" => false,
+                "Contrast Detect" => true,
+                _ => return None,
+            };
+            Computed::same(if autofocus && contrast { "On" } else { "Off" })
+        }
+
         // Exif.pm `RedBlueBalance`, followed by
         // `int($val * 1e6 + 0.5) * 1e-6`.
         ("Exif", "RedBalance" | "BlueBalance") => {
@@ -1281,14 +1342,17 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
         ("GPS", "GPSDateTime") => Computed::same(format!("{} {}Z", get(i, 0)?, get(i, 1)?)),
 
         // GPS.pm signed-coordinate ValueConv and default ToDMS PrintConv.
-        ("GPS", "GPSLatitude" | "GPSLongitude" | "GPSDestLongitude") => {
+        // Destination latitude has the same latitude (S/N) polarity as the
+        // ordinary latitude field; it is deliberately kept in this shared
+        // branch so the DMS formatting cannot drift between the two tags.
+        ("GPS", "GPSLatitude" | "GPSDestLatitude" | "GPSLongitude" | "GPSDestLongitude") => {
             let coordinate = get(i, 0)?;
             if coordinate.is_empty() {
                 return Computed::same("");
             }
             let mut value = gps_degrees(coordinate)?;
             let reference = get(i, 1)?.trim();
-            let negative = if name == "GPSLatitude" {
+            let negative = if matches!(name, "GPSLatitude" | "GPSDestLatitude") {
                 reference.starts_with(['S', 's'])
             } else {
                 reference.starts_with(['W', 'w'])
@@ -1298,8 +1362,89 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             }
             Computed::new(
                 value.to_string(),
-                gps_print(value, if name == "GPSLatitude" { 'N' } else { 'E' }),
+                gps_print(
+                    value,
+                    if matches!(name, "GPSLatitude" | "GPSDestLatitude") {
+                        'N'
+                    } else {
+                        'E'
+                    },
+                ),
             )
+        }
+
+        // GPS.pm Composite::GPSAltitude (GPS.pm:406-431).  The parser has
+        // already applied GPSAltitudeRef's PrintConv, so recognize both its
+        // displayed Above/Below-Sea-Level form and a raw numeric fallback.
+        ("GPS", "GPSAltitude") => {
+            let pairs = [(get(i, 0), get(i, 1)), (get(i, 2), get(i, 3))];
+            for (altitude, reference) in pairs {
+                let (Some(altitude), Some(reference)) = (altitude, reference) else {
+                    continue;
+                };
+                let Some(mut value) = f(Some(altitude)) else {
+                    continue;
+                };
+                let below = reference.to_ascii_lowercase().contains("below")
+                    || f(Some(reference)).is_some_and(|raw| raw != 0.0);
+                if below {
+                    value = -value.abs();
+                }
+                // Perl's `int($val * 10) / 10` truncates toward zero.
+                let truncated = (value * 10.0).trunc() / 10.0;
+                let rendered = format_decimal(truncated, 1);
+                let print = if reference.contains("Sea") {
+                    // The parsed altitude can already carry its unit in the
+                    // intermediate value form.  GPSAltitudeRef itself is
+                    // unitless; strip that inherited suffix before composing
+                    // ExifTool's single `m` in the final display value.
+                    let reference = reference.trim_end().trim_end_matches(" m");
+                    format!("{rendered} m {reference}")
+                } else if truncated.is_sign_negative() {
+                    format!("{} m Below Sea Level", rendered.trim_start_matches('-'))
+                } else {
+                    format!("{rendered} m Above Sea Level")
+                };
+                return Computed::new(value.to_string(), print);
+            }
+            None
+        }
+
+        // Exif.pm Composite::PreviewImageSize: concatenate the two dimensions
+        // verbatim, not numerically, matching ExifTool's `"$val[0]x$val[1]"`.
+        ("Exif", "PreviewImageSize") => Computed::same(format!("{}x{}", get(i, 0)?, get(i, 1)?)),
+
+        // XMP.pm:2748-2785. XMP coordinates may be numeric decimal degrees or
+        // Adobe's DMS-like `43,30.4233408N` string. `IsFloat` only accepts the
+        // former; otherwise Perl takes the final direction character.
+        ("XMP", "GPSLatitudeRef" | "GPSDestLatitudeRef") => {
+            let coordinate = get(i, 0)?.trim();
+            let raw = coordinate.parse::<f64>().ok();
+            let value = match raw {
+                Some(value) if value < 0.0 => "S",
+                Some(_) => "N",
+                None => match coordinate.chars().last()?.to_ascii_uppercase() {
+                    'N' => "N",
+                    'S' => "S",
+                    _ => return None,
+                },
+            };
+            Computed::new(value, if value == "N" { "North" } else { "South" })
+        }
+
+        ("XMP", "GPSLongitudeRef" | "GPSDestLongitudeRef") => {
+            let coordinate = get(i, 0)?.trim();
+            let raw = coordinate.parse::<f64>().ok();
+            let value = match raw {
+                Some(value) if value < 0.0 => "W",
+                Some(_) => "E",
+                None => match coordinate.chars().last()?.to_ascii_uppercase() {
+                    'E' => "E",
+                    'W' => "W",
+                    _ => return None,
+                },
+            };
+            Computed::new(value, if value == "E" { "East" } else { "West" })
         }
 
         // Exif.pm Composite::GPSPosition uses the ValueConv forms separated by

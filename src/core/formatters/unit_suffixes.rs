@@ -233,7 +233,11 @@ fn format_focal_length_mm(value: &str) -> String {
 fn format_with_meter_suffix(value: &str) -> String {
     // Avoid duplicating suffix if already present.
     // Note: We need to be careful not to match " mm" when checking for " m"
-    if value.ends_with(" m") && !value.ends_with(" mm") {
+    // GPS.pm's Composite::GPSAltitude is fully rendered as e.g.
+    // `27.9 m Above Sea Level`: the meter appears before the reference text,
+    // not at the end. Treat that as already unitized just as we do the
+    // parenthesized FocalLength composite form above.
+    if (value.ends_with(" m") && !value.ends_with(" mm")) || value.contains(" m ") {
         return value.to_string();
     }
     format!("{} m", value)
