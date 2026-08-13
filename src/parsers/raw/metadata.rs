@@ -6417,6 +6417,10 @@ fn parse_ciff_record(tag: u16, record: &[u8], metadata: &mut MetadataMap) {
             }
         }
         0x1031 => parse_ciff_canon_subdirectory(0x00e0, record, metadata),
+        // CanonRaw.pm tag 0x10a9 -> Canon::ColorBalance. Like ShotInfo,
+        // ColorBalance is a size-prefixed Canon int16 directory stored directly
+        // in the CIFF heap.
+        0x10a9 => parse_ciff_canon_subdirectory(0x00a9, record, metadata),
         // CanonRaw.pm's simple subdirectories. These are CIFF records in a
         // CRW heap, not TIFF IFDs; the table layouts are fixed little-endian
         // scalars.
@@ -6802,6 +6806,30 @@ mod crw_shot_info_tests {
         assert_eq!(
             metadata.value_form("MakerNotes:FNumber"),
             Some("3.563594872561357")
+        );
+    }
+
+    #[test]
+    fn crw_color_balance_routes_the_length_prefixed_record_through_canon() {
+        let record = [
+            82_u16, 1740, 832, 831, 931, 1722, 832, 831, 989, 2035, 832, 831, 839, 1878, 832, 831,
+            903, 1228, 913, 912, 1668, 1506, 842, 841, 1381, 1964, 832, 831, 877, 1722, 832, 831,
+            989, 1722, 832, 831, 988, 125, 124, 125, 124,
+        ]
+        .into_iter()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+        let mut metadata = MetadataMap::new();
+
+        parse_ciff_record(0x10a9, &record, &mut metadata);
+
+        assert_eq!(
+            metadata.get("MakerNotes:WB_RGGBLevelsAuto"),
+            Some(&TagValue::new_string("1740 832 831 931"))
+        );
+        assert_eq!(
+            metadata.get("MakerNotes:WB_RGGBBlackLevels"),
+            Some(&TagValue::new_string("125 124 125 124"))
         );
     }
 }
