@@ -49,6 +49,7 @@ fn dji_mavic2_app7_attitude_records_match_exiftool() {
 
     assert_eq!(metadata.get_string("DJI:FlightDegree"), Some("-7,-45,-28"));
     assert_eq!(metadata.get_string("DJI:GimbalDegree"), Some("-69,-900,0"));
+    assert_eq!(metadata.get_string("DJI:FlightSpeed"), Some("9,0,0"));
 }
 
 /// ExifTool's `DJI::Info` table preserves non-printable records as binary
