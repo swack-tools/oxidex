@@ -735,6 +735,17 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             Computed::same("Not attached")
         }
 
+        // Olympus.pm's Equipment LensType PrintConv is also used by
+        // Panasonic.pm for the paired LensTypeMake/LensTypeModel fields.
+        // The lookup keys are already in ExifTool's byte-print form.
+        ("Olympus", "LensType") => {
+            let key = format!("{} {}", get(i, 0)?, get(i, 1)?);
+            crate::parsers::tiff::makernotes::olympus::lookups::EQUIPMENT_LENS_TYPE
+                .iter()
+                .find(|(candidate, _)| *candidate == key)
+                .and_then(|(_, value)| Computed::same(*value))
+        }
+
         ("Panasonic", "AdvancedSceneMode") => {
             panasonic_advanced_scene_mode(get(i, 0)?, get(i, 1)?, get(i, 2)?)
         }
@@ -2319,5 +2330,15 @@ mod tests {
     fn missing_required_input_yields_nothing() {
         assert_eq!(c("ImageSize", &[Some("4000"), None]), None);
         assert_eq!(c("Megapixels", &[None]), None);
+    }
+
+    #[test]
+    fn olympus_lens_type_composite_reuses_equipment_lookup() {
+        assert_eq!(
+            compute("Olympus", "LensType", &[Some("2"), Some("20 10")], None)
+                .map(|computed| computed.print),
+            Some("Lumix G Vario 12-32mm F3.5-5.6 Asph. Mega OIS".to_string())
+        );
+        assert!(compute("Olympus", "LensType", &[Some("2"), Some("ff ff")], None).is_none());
     }
 }
