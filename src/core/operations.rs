@@ -13,10 +13,10 @@ use crate::core::jpeg_helpers::{
     process_app15_segments, process_canon_original_decision_data, process_com_segments,
     process_dji_dbg_segments, process_dji_thermal_segments, process_dqt_segments,
     process_exif_segments, process_icc_segments, process_infiray_segments, process_iptc_segments,
-    process_jfif_segments, process_mpf_segments, process_photoshop_segments,
-    process_qualcomm_segments, process_ricoh_rmeta_segments, process_samsung_unique_id_segments,
-    process_sof_segments, process_spiff_segments, process_uniform_resource_name_segments,
-    process_xmp_segments,
+    process_jfif_segments, process_media_jukebox_segments, process_mpf_segments,
+    process_photoshop_segments, process_qualcomm_segments, process_ricoh_rmeta_segments,
+    process_samsung_unique_id_segments, process_sof_segments, process_spiff_segments,
+    process_uniform_resource_name_segments, process_xmp_segments,
 };
 use crate::core::operations_helpers::{read_u16, read_u32};
 #[cfg(test)]
@@ -975,6 +975,7 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
     process_com_segments(&segments, &mut metadata);
     process_dqt_segments(&segments, &mut metadata);
     process_spiff_segments(&segments, &mut metadata);
+    process_media_jukebox_segments(&segments, &mut metadata);
     process_ricoh_rmeta_segments(&segments, &mut metadata);
 
     // Canon VRD sits after the JPEG's EOI, so it needs the whole file rather
@@ -1001,6 +1002,9 @@ pub(crate) fn parse_jpeg_metadata(reader: &dyn FileReader) -> Result<MetadataMap
             metadata.insert(key.clone(), value.clone());
         }
         for (key, value) in crate::parsers::vivo::parse_vivo_trailer(file).iter() {
+            metadata.insert(key.clone(), value.clone());
+        }
+        for (key, value) in crate::parsers::samsung_trailer::parse_samsung_trailer(file).iter() {
             metadata.insert(key.clone(), value.clone());
         }
     }
