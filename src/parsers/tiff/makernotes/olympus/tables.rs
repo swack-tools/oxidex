@@ -9,6 +9,11 @@
 use super::ifd::{Conv, ElemConv, OlyVal, TagDef, ftype};
 use super::lookups::{CAMERA_TYPE2, EQUIPMENT_EXTENDER, EQUIPMENT_LENS_TYPE};
 
+/// Pentax/Minolta OEM `CAMER\0` MakerNotes use Olympus::Main's directory
+/// layout, but 0x2050 is a binary CameraParameters block rather than the
+/// regular Olympus FocusInfo sub-IFD pointer.
+pub static CAMER_MAIN: &[TagDef] = &[TagDef::binary(0x2050, "CameraParameters")];
+
 // ===========================================================================
 // Shared PrintConv hashes
 // ===========================================================================

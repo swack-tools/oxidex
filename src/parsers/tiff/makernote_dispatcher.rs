@@ -252,6 +252,14 @@ pub fn dispatch_makernote_with_context_and_values_and_file_type(
         return Ok(());
     }
 
+    // MakerNotes.pm routes the OEM `CAMER\0` signature to Olympus::Main
+    // before Make dispatch; several Pentax compact cameras use this layout.
+    if data.starts_with(b"CAMER\0") {
+        let parser = olympus::OlympusParser;
+        parser.parse_with_context(ctx, byte_order, model, tags)?;
+        return Ok(());
+    }
+
     if matches!(make_normalized.as_str(), "nikon" | "nikon corporation") {
         nikon::NikonParser.parse_with_context_and_file_type(
             ctx,
