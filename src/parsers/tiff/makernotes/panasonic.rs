@@ -986,6 +986,24 @@ impl PanasonicParser {
                 }
                 return;
             }
+            // Transform is an int16s pair. Panasonic.pm applies PrintConv to
+            // the pair as a whole, so the generic scalar path's first word
+            // cannot represent its value.
+            0x0059 | 0x8012 => {
+                if let Some(bytes) =
+                    extract_raw_bytes(entry, data, ifd_offset, data_base, byte_order)
+                {
+                    let values = bytes
+                        .chunks_exact(2)
+                        .map(|word| match byte_order {
+                            ByteOrder::LittleEndian => u32::from(u16::from_le_bytes([word[0], word[1]])),
+                            ByteOrder::BigEndian => u32::from(u16::from_be_bytes([word[0], word[1]])),
+                        })
+                        .collect::<Vec<_>>();
+                    tags.insert("Panasonic:Transform".to_string(), decode_transform(&values));
+                }
+                return;
+            }
             // The newer full-frame MakerNote range uses two encodings that
             // differ from the generic scalar path: LensTypeModel is a SHORT
             // with Panasonic.pm's byte-swapped hex ValueConv, while the two
@@ -1852,6 +1870,25 @@ fn decode_af_area_mode(values: &[u32], model: Option<&str>) -> String {
     }
 }
 
+/// Panasonic.pm's Transform PrintConv is keyed by the complete signed SHORT
+/// pair. Unknown pairs retain their signed values, matching ExifTool's
+/// fallback formatting for an unmatched PrintConv entry.
+fn decode_transform(values: &[u32]) -> String {
+    let signed: Vec<i16> = values.iter().map(|&value| value as u16 as i16).collect();
+    match signed.as_slice() {
+        [-3, 2] => "Slim High".to_string(),
+        [-1, 1] => "Slim Low".to_string(),
+        [0, 0] => "Off".to_string(),
+        [1, 1] => "Stretch Low".to_string(),
+        [3, 2] => "Stretch High".to_string(),
+        _ => signed
+            .iter()
+            .map(i16::to_string)
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
+}
+
 /// Matches ExifTool's `/DMC-FZ10\b/` model condition: "DMC-FZ10" followed by a
 /// word boundary (so DMC-FZ100 and DC-FZ10002 do not match)
 fn is_dmc_fz10(model: Option<&str>) -> bool {
@@ -2693,6 +2730,29 @@ mod tests {
             format_rational64u(4_294_967_295, 1024).unwrap(),
             "4194303.999"
         );
+    }
+
+    /// Panasonic.pm declares Transform as two signed SHORT values and maps
+    /// the complete pair, not either component in isolation.
+    #[test]
+    fn transform_decodes_signed_pair_print_conversions() {
+        assert_eq!(decode_transform(&[0, 0]), "Off");
+        assert_eq!(decode_transform(&[1, 1]), "Stretch Low");
+        assert_eq!(decode_transform(&[3, 2]), "Stretch High");
+        assert_eq!(decode_transform(&[0xfffd, 2]), "Slim High");
+        assert_eq!(decode_transform(&[0xffff, 1]), "Slim Low");
+
+        // LeicaV-LUX20 stores this tag as UNDEF[4] but Panasonic.pm's
+        // `Format => int16s` reinterprets it as two signed words.
+        let mut data = PANASONIC_HEADER.to_vec();
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&0x0059u16.to_le_bytes());
+        data.extend_from_slice(&7u16.to_le_bytes()); // undef on wire
+        data.extend_from_slice(&4u32.to_le_bytes());
+        data.extend_from_slice(&[0, 0, 0, 0]);
+        let mut tags = HashMap::new();
+        parse_panasonic_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
+        assert_eq!(tags.get("Panasonic:Transform").unwrap(), "Off");
     }
 
     /// `combined-samples/Panasonic/PanasonicDC-S1.jpg`, MakerNote tag 0x004e:

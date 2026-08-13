@@ -3,6 +3,8 @@ use std::path::Path;
 
 const PRO70: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonPowerShotPro70.jpg";
 const EXIFTOOL_JPEG: &str = "/tmp/oxidex-exiftool-cache/combined-samples/ExifTool.jpg";
+const POWERSHOT_600: &str =
+    "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonPowerShot600.jpg";
 
 #[test]
 fn canon_pro70_app0_ciff_matches_exiftool() {
@@ -41,4 +43,18 @@ fn exiftool_jpeg_app0_ciff_matches_exiftool() {
         Some("Canon PowerShot A5")
     );
     assert_eq!(metadata.get_string("CIFF:FocalLength"), Some("5 mm"));
+}
+
+#[test]
+fn powershot_600_app0_ciff_reports_component_version() {
+    if !Path::new(POWERSHOT_600).is_file() {
+        eprintln!("skipping: corpus fixture not present at {POWERSHOT_600}");
+        return;
+    }
+    let metadata =
+        read_metadata(Path::new(POWERSHOT_600)).expect("Canon PowerShot 600 JPEG parses");
+    assert_eq!(
+        metadata.get_string("CIFF:ComponentVersion"),
+        Some("Component version 1.00")
+    );
 }
