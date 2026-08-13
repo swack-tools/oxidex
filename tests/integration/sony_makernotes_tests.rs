@@ -15,7 +15,10 @@ use std::collections::HashMap;
 use std::path::Path;
 
 const A900: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSLR-A900.jpg";
+const A380: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSLR-A380.jpg";
+const A550: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSLR-A550.jpg";
 const A580: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSLR-A580.jpg";
+const DSC_W370: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSC-W370.jpg";
 const DSC_H300: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSC-H300.jpg";
 const ZV_E10M2: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyZV-E10M2.jpg";
 
@@ -115,6 +118,35 @@ fn test_sony_dsc_h300_pic_text_blocks_match_exiftool() {
         Some("(Binary data 671 bytes, use -b option to extract)")
     );
     assert_eq!(metadata.get_string("Sony:Barcode"), Some("A0D9P7016135"));
+}
+
+#[test]
+fn test_sony_wave12_distance_more_settings_camera_info_and_pic_match_exiftool() {
+    for path in [A380, A550, A580, DSC_W370] {
+        if !Path::new(path).is_file() {
+            eprintln!("skipping: corpus fixture not present at {path}");
+            return;
+        }
+    }
+
+    // Pinned ExifTool 13.59 values.  A380's 128 FocusPosition is the explicit
+    // infinity sentinel; A550's MoreSettings supplies FocusPosition2=190,
+    // FocalLength2=19.2 mm and FlashExposureCompSet2=0; CameraInfo3 on A580
+    // supplies FocalLengthTeleZoom; W370's PIC text supplies BoardTemperature.
+    let a380 = read_metadata(Path::new(A380)).expect("Sony DSLR-A380 parses");
+    assert_eq!(a380.get_string("Composite:FocusDistance"), Some("inf"));
+
+    let a550 = read_metadata(Path::new(A550)).expect("Sony DSLR-A550 parses");
+    assert_eq!(a550.get_string("Sony:FocusPosition2"), Some("190"));
+    assert_eq!(a550.get_string("Sony:FocalLength2"), Some("19.2 mm"));
+    assert_eq!(a550.get_string("Sony:FlashExposureCompSet2"), Some("0"));
+    assert_eq!(a550.get_string("Composite:FocusDistance2"), Some("3.196 m"));
+
+    let a580 = read_metadata(Path::new(A580)).expect("Sony DSLR-A580 parses");
+    assert_eq!(a580.get_string("Sony:FocalLengthTeleZoom"), Some("70.0 mm"));
+
+    let w370 = read_metadata(Path::new(DSC_W370)).expect("Sony DSC-W370 parses");
+    assert_eq!(w370.get_string("Sony:BoardTemperature"), Some("28 C"));
 }
 
 #[test]

@@ -974,6 +974,8 @@ const CAMERA_SETTINGS_MANUAL_FLASH_OUTPUT: usize = 41;
 const CAMERA_SETTINGS_COLOR_TONE: usize = 42;
 /// ExifTool `%Canon::CameraSettings` key 46 (Canon.pm:2664) — `SRAWQuality`.
 const CAMERA_SETTINGS_SRAW_QUALITY: usize = 46;
+/// ExifTool `%Canon::CameraSettings` key 52 (Canon.pm:2688) — `HDR-PQ`.
+const CAMERA_SETTINGS_HDR_PQ: usize = 52;
 
 // ShotInfo array (tag 0x0004) indices
 // Reference: ExifTool Canon.pm ShotInfo table
@@ -1057,6 +1059,7 @@ const FILE_INFO_FILTER_EFFECT: usize = 14;
 /// ExifTool `%Canon::FileInfo` key 15 (Canon.pm:6984) — `ToningEffect`.
 const FILE_INFO_TONING_EFFECT: usize = 15;
 /// ExifTool `%Canon::FileInfo` key 7 (Canon.pm:6934) — `RawJpgSize`.
+const FILE_INFO_RAW_JPG_QUALITY: usize = 6;
 const FILE_INFO_RAW_JPG_SIZE: usize = 7;
 /// ExifTool `%Canon::FileInfo` key 19 (Canon.pm:7003) — `LiveViewShooting`.
 const FILE_INFO_LIVE_VIEW_SHOOTING: usize = 19;
@@ -5630,6 +5633,20 @@ fn parse_canon_makernote_impl_located_with_values(
                     {
                         tags.insert("Canon:ColorTone".to_string(), print_parameter(color_tone));
                     }
+
+                    // HDR-PQ (index 52). Canon.pm has no RawConv here: 0 and 1 are
+                    // the normal Off/On values and -1 deliberately prints as n/a.
+                    if let Some(&hdr_pq) = array.get(CAMERA_SETTINGS_HDR_PQ) {
+                        let rendered =
+                            crate::exiftool_tables::find_table("Canon", "CameraSettings")
+                                .and_then(|table| {
+                                    table.fields.iter().find(|field| field.name == "HDR-PQ")
+                                })
+                                .and_then(|field| field.print_conv.apply(i64::from(hdr_pq)))
+                                .unwrap_or_else(|| format!("Unknown ({hdr_pq})"));
+                        tags.insert("Canon:HDR-PQ".to_string(), rendered);
+                    }
+
                     // SRAWQuality (index 46). Canon.pm:2664 omits the -1 sentinel with
                     // `RawConv => '$val==-1 ? undef : $val'`; its PrintConv labels are
                     // deliberately limited to 0/1/2. Leave other values as ExifTool's
@@ -6108,6 +6125,17 @@ fn parse_canon_makernote_impl_located_with_values(
                         tags.insert(
                             "Canon:RawJpgSize".to_string(),
                             CANON_IMAGE_SIZE.decode(raw_jpg_size),
+                        );
+                    }
+
+                    // RawJpgQuality (Perl key 6). `RawConv => '$val <= 0 ? undef :
+                    // $val'`: zero is absent, unlike RawJpgSize where it means Large.
+                    if let Some(&raw_jpg_quality) = array.get(FILE_INFO_RAW_JPG_QUALITY)
+                        && raw_jpg_quality > 0
+                    {
+                        tags.insert(
+                            "Canon:RawJpgQuality".to_string(),
+                            decode_file_info_enum("RawJpgQuality", i64::from(raw_jpg_quality)),
                         );
                     }
 

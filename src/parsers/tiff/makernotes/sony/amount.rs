@@ -743,6 +743,31 @@ pub fn extract_camera_info2(data: &[u8], tags: &mut HashMap<String, String>) -> 
     true
 }
 
+/// Decodes the bounded `CameraInfo3` field needed by the 15360-byte A-mount
+/// layout.  The length and model gate are the `Sony::Main` / `CameraInfo3`
+/// conditions from Sony.pm:718-742 and 3015-3020 respectively.
+pub fn extract_camera_info3(
+    data: &[u8],
+    model: Option<&str>,
+    tags: &mut HashMap<String, String>,
+) -> bool {
+    if data.len() != 15360 {
+        return false;
+    }
+    if matches!(model.unwrap_or(""), "DSLR-A450" | "DSLR-A500" | "DSLR-A550") {
+        return true;
+    }
+    let Some(raw) = data.get(0x10..0x12) else {
+        return true;
+    };
+    let focal_length = f64::from(u16::from_le_bytes([raw[0], raw[1]])) * 2.0 / 3.0;
+    tags.insert(
+        "Sony:FocalLengthTeleZoom".to_string(),
+        format!("{focal_length:.1} mm"),
+    );
+    true
+}
+
 /// Decodes tag 0x0020 when it holds a `FocusInfo` block.
 pub fn extract_focus_info(
     data: &[u8],
@@ -858,6 +883,27 @@ pub fn extract_more_info(
             format!("{value:+.1}")
         };
         tags.insert("Sony:ExposureCompensation2".to_string(), printed);
+    }
+    if early_a_mount && let Some(&raw) = block.get(0x23) {
+        // Sony.pm:3806-3813: each 16 raw steps doubles the focal length.
+        let focal_length = 10.0 * 2f64.powf((f64::from(raw) - 28.0) / 16.0);
+        tags.insert(
+            "Sony:FocalLength2".to_string(),
+            format!("{focal_length:.1} mm"),
+        );
+    }
+    if early_a_mount && let Some(raw) = block.get(0x26..0x28) {
+        // Sony.pm:3850-3859: signed little-endian eighth-EV value.
+        let value = f64::from(i16::from_le_bytes([raw[0], raw[1]])) / 8.0;
+        let printed = if value == 0.0 {
+            "0".to_string()
+        } else {
+            format!("{value:+.1}")
+        };
+        tags.insert("Sony:FlashExposureCompSet2".to_string(), printed);
+    }
+    if early_a_mount && let Some(&raw) = block.get(0x29) {
+        tags.insert("Sony:FocusPosition2".to_string(), raw.to_string());
     }
     if early_a_mount && let Some(value) = block.get(0x28) {
         let printed = match value {

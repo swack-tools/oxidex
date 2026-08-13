@@ -127,6 +127,26 @@ fn format_significant_3(value: f64) -> String {
         .to_string()
 }
 
+/// Sony.pm's `sprintf("%.4g", $val)` for `FocusDistance2`.
+fn sony_four_sig(value: f64) -> String {
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    let exponent = value.abs().log10().floor() as i32;
+    if exponent < -4 || exponent >= 4 {
+        let rendered = format!("{:.3e}", value);
+        let (mantissa, exponent) = rendered.split_once('e').unwrap_or((&rendered, "0"));
+        let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
+        return format!("{mantissa}e{exponent}");
+    }
+    let decimals = (3 - exponent).max(0) as usize;
+    let rendered = format!("{value:.decimals$}");
+    rendered
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+}
+
 fn canon_exposure_mode(value: &str) -> Option<i64> {
     Some(match value {
         "Easy" => 0,
@@ -614,8 +634,44 @@ fn panasonic_advanced_scene_mode(model: &str, scene: &str, advanced: &str) -> Op
 #[must_use]
 pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
     match (module, name) {
+        // Olympus.pm:4337-4345 first validates the Extender byte-string.  A
+        // printed `None` is its exact `0 00` case and immediately returns 0;
+        // handle only that branch until the remaining byte-string and
+        // aperture comparisons are independently represented here.
+        ("Olympus", "ExtenderStatus") if get(i, 0) == Some("None") => {
+            Computed::same("Not attached")
+        }
+
         ("Panasonic", "AdvancedSceneMode") => {
             panasonic_advanced_scene_mode(get(i, 0)?, get(i, 1)?, get(i, 2)?)
+        }
+
+        // Sony.pm:10895-10928.  FocusPosition's 128-and-up range is Sony's
+        // infinity sentinel; FocusPosition2 has a distinct 255 sentinel and
+        // is displayed with four significant digits.
+        ("Sony", "FocusDistance") => {
+            let (position, focal_length) = (f(get(i, 0))?, f(get(i, 1))?);
+            if position >= 128.0 {
+                Computed::same("inf")
+            } else {
+                let distance = position * focal_length / 1000.0;
+                Computed::new(distance.to_string(), format!("{distance} m"))
+            }
+        }
+
+        ("Sony", "FocusDistance2") => {
+            let (position, focal_length_35mm) = (f(get(i, 0))?, f(get(i, 1))?);
+            if position == 0.0 {
+                return None;
+            }
+            if position >= 255.0 {
+                return Computed::same("inf");
+            }
+            let distance = (2f64.powf(position / 16.0 - 5.0) + 1.0) * focal_length_35mm / 1000.0;
+            Computed::new(
+                distance.to_string(),
+                format!("{} m", sony_four_sig(distance)),
+            )
         }
 
         // AIFF.pm:136-145 Composite::Duration:
