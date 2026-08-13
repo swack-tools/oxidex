@@ -42,6 +42,13 @@ pub enum TagType {
     S15Fixed16Array,
     /// Payload ExifTool has no formatter for, reported as binary data
     Binary,
+    /// Coding-independent code points (`cicp`, ICC_Profile.pm:761-825): four
+    /// single-byte enums at fixed offsets 8..11 of the tag payload --
+    /// `ColorPrimaries`, `TransferCharacteristics`, `MatrixCoefficients`,
+    /// `VideoFullRangeFlag` -- read via `ProcessBinaryData` the same way
+    /// `view`/`meas` are. ExifTool's own comment notes the conversions are
+    /// shared with `Image::ExifTool::QuickTime::ColorRep`.
+    Cicp,
 }
 
 impl TagType {
@@ -51,7 +58,10 @@ impl TagType {
     /// `not $subdir`, so subdirectory tags keep their structured decoder even
     /// when a profile writes an unexpected payload type.
     pub fn is_subdirectory(self) -> bool {
-        matches!(self, TagType::ViewingConditions | TagType::Measurement)
+        matches!(
+            self,
+            TagType::ViewingConditions | TagType::Measurement | TagType::Cicp
+        )
     }
 }
 
@@ -220,7 +230,90 @@ pub static TAG_REGISTRY: &[TagDef] = &[
         name: "Technology",
         tag_type: TagType::Signature,
     },
+    // Coding-independent code points (ICC_Profile.pm:759-825). `name` here
+    // is a placeholder label, the same convention `view`/`meas` above use --
+    // `TagType::Cicp`'s decoder emits four independent fields
+    // (`ColorPrimaries`, `TransferCharacteristics`, `MatrixCoefficients`,
+    // `VideoFullRangeFlag`) rather than a single value under this name.
+    TagDef {
+        signature: "cicp",
+        name: "ColorRep",
+        tag_type: TagType::Cicp,
+    },
 ];
+
+/// `ColorPrimaries` (ICC_Profile.pm:766-780, byte offset 8 of a `cicp` tag).
+pub static CICP_COLOR_PRIMARIES: &[(u8, &str)] = &[
+    (1, "BT.709"),
+    (2, "Unspecified"),
+    (4, "BT.470 System M (historical)"),
+    (5, "BT.470 System B, G (historical)"),
+    (6, "BT.601"),
+    (7, "SMPTE 240"),
+    (8, "Generic film (color filters using illuminant C)"),
+    (9, "BT.2020, BT.2100"),
+    (10, "SMPTE 428 (CIE 1931 XYZ)"),
+    (11, "SMPTE RP 431-2"),
+    (12, "SMPTE EG 432-1"),
+    (22, "EBU Tech. 3213-E"),
+];
+
+/// `TransferCharacteristics` (ICC_Profile.pm:781-800, offset 9).
+pub static CICP_TRANSFER_CHARACTERISTICS: &[(u8, &str)] = &[
+    (0, "For future use (0)"),
+    (1, "BT.709"),
+    (2, "Unspecified"),
+    (3, "For future use (3)"),
+    (4, "BT.470 System M (historical)"),
+    (5, "BT.470 System B, G (historical)"),
+    (6, "BT.601"),
+    (7, "SMPTE 240 M"),
+    (8, "Linear"),
+    (9, "Logarithmic (100 : 1 range)"),
+    (10, "Logarithmic (100 * Sqrt(10) : 1 range)"),
+    (11, "IEC 61966-2-4"),
+    (12, "BT.1361"),
+    (13, "sRGB or sYCC"),
+    (14, "BT.2020 10-bit systems"),
+    (15, "BT.2020 12-bit systems"),
+    (16, "SMPTE ST 2084, ITU BT.2100 PQ"),
+    (17, "SMPTE ST 428"),
+    (18, "BT.2100 HLG, ARIB STD-B67"),
+];
+
+/// `MatrixCoefficients` (ICC_Profile.pm:801-816, offset 10).
+pub static CICP_MATRIX_COEFFICIENTS: &[(u8, &str)] = &[
+    (0, "Identity matrix"),
+    (1, "BT.709"),
+    (2, "Unspecified"),
+    (3, "For future use (3)"),
+    (4, "US FCC 73.628"),
+    (5, "BT.470 System B, G (historical)"),
+    (6, "BT.601"),
+    (7, "SMPTE 240 M"),
+    (8, "YCgCo"),
+    (9, "BT.2020 non-constant luminance, BT.2100 YCbCr"),
+    (10, "BT.2020 constant luminance"),
+    (11, "SMPTE ST 2085 YDzDx"),
+    (12, "Chromaticity-derived non-constant luminance"),
+    (13, "Chromaticity-derived constant luminance"),
+    (14, "BT.2100 ICtCp"),
+];
+
+/// `VideoFullRangeFlag` (ICC_Profile.pm:817-820, offset 11).
+pub static CICP_VIDEO_FULL_RANGE_FLAG: &[(u8, &str)] = &[(0, "Limited"), (1, "Full")];
+
+/// Looks up a `cicp` enum byte in one of the four tables above, matching
+/// ExifTool's own fallback for an unmapped hash `PrintConv` value
+/// (`exiftool` script: `$value = "Unknown ($val)"`, ExifTool.pm:3633's
+/// library equivalent).
+pub fn cicp_print(table: &[(u8, &str)], value: u8) -> String {
+    table
+        .iter()
+        .find(|(code, _)| *code == value)
+        .map(|(_, name)| name.to_string())
+        .unwrap_or_else(|| format!("Unknown ({value})"))
+}
 
 // ============================================================================
 // LOOKUP TABLES

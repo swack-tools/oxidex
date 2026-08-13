@@ -388,9 +388,7 @@ fn process_ifd0_tags(
         if *tag_id == 0x8773 && bytes.len() >= 128 {
             match crate::parsers::icc::parse_icc_profile_data(bytes) {
                 Ok(icc_tags) => {
-                    for (tag_name, value) in icc_tags {
-                        metadata.insert(format!("ICC_Profile:{}", tag_name), value);
-                    }
+                    crate::parsers::icc::insert_icc_tags(metadata, icc_tags);
                 }
                 Err(e) => {
                     diagnostics.push(Diagnostic::warning(format!(
@@ -850,7 +848,7 @@ pub fn process_icc_segments(segments: &[Segment], metadata: &mut MetadataMap) {
 
     // Fast path: single-chunk profile parses in place, no reassembly copy.
     if icc_segments.len() == 1 && icc_segments[0].data[12] == 1 && icc_segments[0].data[13] == 1 {
-        insert_icc_tags(&icc_segments[0].data[14..], metadata);
+        insert_icc_profile_bytes(&icc_segments[0].data[14..], metadata);
         return;
     }
 
@@ -867,7 +865,7 @@ pub fn process_icc_segments(segments: &[Segment], metadata: &mut MetadataMap) {
                 .iter()
                 .find(|s| s.data[12] == 1 && s.data[13] == 1)
             {
-                insert_icc_tags(&seg.data[14..], metadata);
+                insert_icc_profile_bytes(&seg.data[14..], metadata);
             }
             return;
         }
@@ -881,18 +879,20 @@ pub fn process_icc_segments(segments: &[Segment], metadata: &mut MetadataMap) {
         return;
     }
     match assembler.assemble() {
-        Ok(profile) => insert_icc_tags(&profile, metadata),
+        Ok(profile) => insert_icc_profile_bytes(&profile, metadata),
         Err(e) => eprintln!("Warning: Failed to assemble ICC profile: {}", e),
     }
 }
 
-/// Parses raw ICC profile bytes and inserts ICC_Profile-prefixed tags.
-fn insert_icc_tags(icc_data: &[u8], metadata: &mut MetadataMap) {
+/// Parses raw ICC profile bytes and inserts ICC_Profile-prefixed tags,
+/// grouped by table provenance (ICC-header/ICC-cicp/ICC-view/ICC-meas --
+/// Step 22). Named distinctly from `parsers::icc::insert_icc_tags` (which
+/// this wraps): that one takes already-decoded tags, this one takes the raw
+/// profile bytes.
+fn insert_icc_profile_bytes(icc_data: &[u8], metadata: &mut MetadataMap) {
     match crate::parsers::icc::parse_icc_profile_data(icc_data) {
         Ok(icc_tags) => {
-            for (tag_name, value) in icc_tags {
-                metadata.insert(format!("ICC_Profile:{}", tag_name), value);
-            }
+            crate::parsers::icc::insert_icc_tags(metadata, icc_tags);
         }
         Err(e) => {
             eprintln!("Warning: Failed to parse ICC profile: {}", e);
@@ -1159,9 +1159,20 @@ pub fn process_app12_segments(segments: &[Segment], metadata: &mut MetadataMap) 
             // one with no tag=value text yields nothing, matching ExifTool.
             match parse_app12_picture_info(segment.data) {
                 Ok(picture_info) => {
-                    for (key, value) in picture_info.iter() {
-                        metadata.insert(key.clone(), value.clone());
-                    }
+                    // `merge`, not a manual `.iter()` loop: `iter()` is the
+                    // winner-projection view (bare `(&String, &TagValue)`,
+                    // Step 18's flattened read-only shape) and re-inserting
+                    // through it drops `parse_app12_picture_info`'s own
+                    // `PRIORITY => 0` occurrences back to the plain
+                    // `insert()` shim's default priority -- the same
+                    // flattening class Step 19 fixed for `MetadataMap::
+                    // merge` itself and `normalize_metadata_map`, just at a
+                    // third call site `rg`-ing for `.iter()` after a
+                    // sub-parser call did not catch until this one broke
+                    // `Composite:Aperture` on `ExifTool.jpg`
+                    // (`APP12:FNumber` "11.0" winning the bare `FNumber` tie
+                    // over `ExifIFD:FNumber` "3.5").
+                    metadata.merge(picture_info);
                 }
                 Err(e) => {
                     eprintln!("Warning: Failed to parse APP12 Picture Info segment: {}", e);

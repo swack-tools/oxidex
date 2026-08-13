@@ -216,12 +216,10 @@ fn parse_flif_metadata_chunks(
                 b"iCCP" => {
                     if let Ok(icc_tags) = crate::parsers::icc::parse_icc_profile_data(&inflated) {
                         // `parse_icc_profile_data` returns bare names; the
-                        // `ICC_Profile:` family is added by whoever embeds
-                        // the profile, the same way `parse_icc_file` does it
-                        // for a standalone .icc.
-                        for (tag_name, value) in icc_tags {
-                            metadata.insert(format!("ICC_Profile:{}", tag_name), value);
-                        }
+                        // `ICC_Profile:` family, and each tag's family-1
+                        // group, is added by `insert_icc_tags` the same way
+                        // `parse_icc_file` does it for a standalone .icc.
+                        crate::parsers::icc::insert_icc_tags(metadata, icc_tags);
                     }
                 }
                 _ => {}

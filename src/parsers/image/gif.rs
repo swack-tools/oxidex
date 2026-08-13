@@ -628,9 +628,7 @@ impl FormatParser for GIFParser {
             if icc_data.len() >= 128 {
                 match crate::parsers::icc::parse_icc_profile_data(&icc_data) {
                     Ok(icc_tags) => {
-                        for (tag_name, value) in icc_tags {
-                            metadata.insert(format!("ICC_Profile:{}", tag_name), value);
-                        }
+                        crate::parsers::icc::insert_icc_tags(&mut metadata, icc_tags);
                     }
                     Err(e) => {
                         eprintln!("Warning: Failed to parse ICC profile in GIF: {}", e);

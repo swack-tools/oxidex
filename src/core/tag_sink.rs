@@ -167,7 +167,39 @@ impl TagSink {
 
     pub fn get_mut(&mut self, key: &str) -> Option<&mut TagValue> {
         let idx = *self.winners.get(key)?;
+        // A caller that mutates `raw` directly (bypassing `record`) can make
+        // any previously-attached `value` (ValueConv) form stale -- it was
+        // computed from the old `raw`. Step 18-21 tracked this invalidation
+        // via a separate `value_forms` sidecar in `MetadataMap`; Step 22
+        // folded that sidecar into `TagOccurrence.value` itself, so the same
+        // invalidation now happens here, at the one place a occurrence's
+        // `raw` can change without going through `record`.
+        self.occurrences[idx].value = None;
         Some(&mut self.occurrences[idx].raw)
+    }
+
+    /// Attaches `value` as the `ValueConv` form of the current winner
+    /// occurrence for `key`, if `key` has a winner. Returns whether a
+    /// winner existed to attach to.
+    ///
+    /// This is Step 22's replacement for `MetadataMap`'s old private
+    /// `value_forms: HashMap<String, String>` sidecar (D4 in
+    /// `OVERHAUL_STEP18_DESIGN.md`, deferred from Step 18 to this step): the
+    /// full-precision form now lives directly on the occurrence it augments
+    /// rather than in a side table keyed by the same string twice. Any
+    /// occurrence recorded later under the same key starts with `value:
+    /// None` (`TagOccurrence::from_insert_shim`), so a stale form is
+    /// automatically discarded the moment a new occurrence displaces it --
+    /// no separate invalidation bookkeeping needed for that path, only for
+    /// the in-place mutation `get_mut` allows (see its own doc comment).
+    pub fn set_winner_value(&mut self, key: &str, value: TagValue) -> bool {
+        match self.winners.get(key) {
+            Some(&idx) => {
+                self.occurrences[idx].value = Some(value);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Removes `key` from the winner projection. The occurrence itself stays

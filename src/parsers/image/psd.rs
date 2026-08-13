@@ -313,11 +313,10 @@ impl PSDParser {
                         "HasICCProfile".to_string(),
                         TagValue::String("Yes".to_string()),
                     );
-                    // Parse ICC profile data
+                    // Parse ICC profile data, grouped by table provenance
+                    // (ICC-header/ICC-cicp/ICC-view/ICC-meas -- Step 22).
                     if let Ok(icc_tags) = parse_icc_profile_data(resource_data) {
-                        for (key, value) in icc_tags {
-                            metadata.insert(format!("ICC_Profile:{}", key), value);
-                        }
+                        crate::parsers::icc::insert_icc_tags(metadata, icc_tags);
                     }
                 }
                 IPTC_NAA_RECORD => {

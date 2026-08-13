@@ -608,7 +608,19 @@ pub(crate) fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String
     }
 
     match value {
-        TagValue::String(s) => s.clone(),
+        // ExifTool's own `Printable()` in the `exiftool` script (not the
+        // `Printable()` *method* on the library object, which is a
+        // different sub with a different job) strips trailing whitespace
+        // from every non-JSON, non-XML value before printing it
+        // (`exiftool`:4044-4047, `$val =~ s/\s+$//;`) -- confirmed against
+        // the pinned oracle on `ExifTool.jpg`'s ICC header, whose
+        // `ColorSpaceData`/`ProfileConnectionSpace` are the ICU-spec
+        // space-padded `"RGB "`/`"XYZ "` in the actual file bytes (and in
+        // `-j` output, byte-identical on both sides): `exiftool -a -G1 -s`
+        // prints `RGB`/`XYZ`, no trailing space, but oxidex's `-s` output
+        // printed the untrimmed `"RGB "` before this fix. `.trim_end()`
+        // only, matching Perl's `\s+$` (trailing only, not leading).
+        TagValue::String(s) => s.trim_end().to_string(),
         TagValue::Integer(i) => i.to_string(),
         TagValue::Float(f) => format!("{:.2}", f), // Limit decimal places
         TagValue::Rational {
@@ -674,7 +686,12 @@ pub(crate) fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
     }
 
     match value {
-        TagValue::String(s) => s.clone(),
+        // See `format_tag_value_short`'s matching arm: this backs both the
+        // default plain-text output and `-csv`, and the `exiftool` script's
+        // own trailing-whitespace strip (`exiftool`:3006-3009,
+        // `$val =~ s/\s+$//;`) applies to every non-JSON, non-XML format,
+        // not just `-s`.
+        TagValue::String(s) => s.trim_end().to_string(),
         TagValue::Integer(i) => i.to_string(),
         TagValue::Float(f) => f.to_string(),
         TagValue::Rational {

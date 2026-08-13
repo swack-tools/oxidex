@@ -6,10 +6,23 @@
 //!
 //! # Mapping Rules
 //!
-//! - `Profile:` -> `ICC_Profile:` (with name normalization for TRC tags)
 //! - `ExifIFD:`, `IFD0:`, `IFD1:`, `GPS:` remain unchanged (to match Perl ExifTool output)
 //! - Manufacturer names (`Canon:`, `Nikon:`, `Sony:`, etc.) remain unchanged
 //! - `Fujifilm:` -> `FujiFilm:` (ExifTool capitalises both halves)
+//!
+//! Step 22 retired this module's former `Profile:` -> `ICC_Profile:` entry
+//! (plus its `BlueToneReproductionCurve` -> `BlueTRC`-style name shortening):
+//! every ICC extraction site now inserts directly under `ICC_Profile:` with
+//! its real family-1 group (`ICC-header`, `ICC-cicp`, `ICC-view`, `ICC-meas`,
+//! or none) attached at extraction time (`src/parsers/icc/mod.rs`), so there
+//! is no more `Profile:`-prefixed key for this module to rewrite. Before this
+//! step, that rewrite only ran for JPEG (via [`normalize_metadata_map`],
+//! JPEG's own last pipeline stage) -- every other ICC-bearing format (PNG's
+//! `iCCP` chunk, GIF, FLIF, PSD, XCF, standalone `.icc`, embedded TIFF/RAW)
+//! never called it at all, so their ICC tags stayed under the internal
+//! `Profile:` prefix forever. That was the PNG "leak" this step's plan
+//! names: not a bug in this module, but every non-JPEG caller never reaching
+//! it.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -40,8 +53,6 @@ static FAMILY_MAPPINGS: LazyLock<HashMap<&'static str, &'static str>> = LazyLock
     m.insert("Olympus", "Olympus");
     m.insert("Pentax", "Pentax");
     m.insert("Samsung", "Samsung");
-    // ICC Profile mapping - OxiDex uses "Profile" but ExifTool uses "ICC_Profile"
-    m.insert("Profile", "ICC_Profile");
     m
 });
 
@@ -61,23 +72,17 @@ static FAMILY_MAPPINGS: LazyLock<HashMap<&'static str, &'static str>> = LazyLock
 /// ```
 /// use oxidex::core::tag_normalization::normalize_tag_name;
 ///
-/// // TRC (Tone Reproduction Curve) tags are shortened in ExifTool
-/// assert_eq!(normalize_tag_name("ICC_Profile", "BlueToneReproductionCurve"), "BlueTRC");
-/// assert_eq!(normalize_tag_name("ICC_Profile", "BlueMatrixColumn"), "BlueMatrixColumn");
+/// assert_eq!(normalize_tag_name("EXIF", "Make"), "Make");
 /// ```
-pub fn normalize_tag_name(family: &str, name: &str) -> String {
-    match (family, name) {
-        // ICC Profile naming differences - ExifTool uses abbreviated "TRC" suffix
-        // instead of "ToneReproductionCurve" for tone reproduction curve tags.
-        // The ICC registry now emits the short names directly, so these arms are
-        // a backstop for any caller still holding the long `Description` form.
-        ("ICC_Profile", "BlueToneReproductionCurve") => "BlueTRC".to_string(),
-        ("ICC_Profile", "GreenToneReproductionCurve") => "GreenTRC".to_string(),
-        ("ICC_Profile", "RedToneReproductionCurve") => "RedTRC".to_string(),
-        ("ICC_Profile", "GrayToneReproductionCurve") => "GrayTRC".to_string(),
-        // All other tag names remain unchanged
-        _ => name.to_string(),
-    }
+pub fn normalize_tag_name(_family: &str, name: &str) -> String {
+    // No family currently needs a name-level rewrite. ICC's
+    // `BlueToneReproductionCurve` -> `BlueTRC`-style shortening used to live
+    // here as a backstop for `Profile:`-prefixed keys; Step 22 removed the
+    // `Profile:` family mapping entirely (see the module doc comment), and
+    // the ICC tag registry (`src/parsers/icc/registries.rs`) already emits
+    // the short names directly at the source, so the backstop had nothing
+    // left to catch.
+    name.to_string()
 }
 
 /// Normalize a tag key to match ExifTool family conventions
@@ -99,7 +104,7 @@ pub fn normalize_tag_name(family: &str, name: &str) -> String {
 /// assert_eq!(normalize_tag_family("ExifIFD:Make"), "ExifIFD:Make");
 /// assert_eq!(normalize_tag_family("IFD0:Make"), "IFD0:Make");
 /// assert_eq!(normalize_tag_family("Canon:LensModel"), "Canon:LensModel");
-/// assert_eq!(normalize_tag_family("Profile:BlueToneReproductionCurve"), "ICC_Profile:BlueTRC");
+/// assert_eq!(normalize_tag_family("Fujifilm:Quality"), "FujiFilm:Quality");
 /// ```
 pub fn normalize_tag_family(tag_key: &str) -> String {
     if let Some((family, name)) = tag_key.split_once(':')
@@ -148,20 +153,23 @@ pub fn normalize_tag_family(tag_key: &str) -> String {
 /// iterating winners only would have silently thrown the loser away a
 /// second time, immediately after `MetadataMap::merge` was fixed to stop
 /// doing exactly that at the pipeline's other flattening point.
+///
+/// Step 22: copies each occurrence via
+/// [`MetadataMap::insert_renamed_occurrence`] instead of
+/// [`MetadataMap::insert_occurrence`] plus a separate `value_form`
+/// reattachment. The old two-call shape silently dropped
+/// `TagOccurrence.value` for any occurrence that had one (`insert_occurrence`
+/// has no `value` parameter), which the `value_forms` sidecar papered over
+/// only for tags that also happened to go through `set_value_form` under the
+/// exact same key string -- `insert_occurrence_with_raw`'s no-print-conv
+/// form (Step 20) was never covered by that sidecar and was quietly lost by
+/// this function specifically. `insert_renamed_occurrence` clones the whole
+/// occurrence, so both forms now survive the rename intact.
 pub fn normalize_metadata_map(map: &crate::core::MetadataMap) -> crate::core::MetadataMap {
     let mut normalized = crate::core::MetadataMap::with_capacity(map.len());
     for (key, occurrence) in map.all_occurrences() {
         let normalized_key = normalize_tag_family(&key);
-        normalized.insert_occurrence(
-            normalized_key.clone(),
-            occurrence.raw.clone(),
-            occurrence.priority,
-            &occurrence.group1,
-            occurrence.instance,
-        );
-        if let Some(value_form) = map.value_form(&key) {
-            normalized.set_value_form(normalized_key, value_form.to_string());
-        }
+        normalized.insert_renamed_occurrence(normalized_key, occurrence);
     }
     normalized
 }
@@ -268,112 +276,42 @@ mod tests {
     }
 
     #[test]
-    fn test_profile_to_icc_profile() {
-        // Basic Profile -> ICC_Profile family mapping
-        assert_eq!(
-            normalize_tag_family("Profile:BlueMatrixColumn"),
-            "ICC_Profile:BlueMatrixColumn"
-        );
-        assert_eq!(
-            normalize_tag_family("Profile:CMMFlags"),
-            "ICC_Profile:CMMFlags"
-        );
-        assert_eq!(
-            normalize_tag_family("Profile:ColorSpaceData"),
-            "ICC_Profile:ColorSpaceData"
-        );
-        assert_eq!(
-            normalize_tag_family("Profile:ProfileVersion"),
-            "ICC_Profile:ProfileVersion"
-        );
+    fn test_normalize_tag_name_is_identity_now() {
+        // Step 22 retired ICC's TRC-shortening special case (the ICC
+        // registry emits short names directly at extraction time instead --
+        // see `src/parsers/icc/registries.rs`), so this function has nothing
+        // left to rewrite.
+        assert_eq!(normalize_tag_name("EXIF", "Make"), "Make");
+        assert_eq!(normalize_tag_name("ICC_Profile", "BlueTRC"), "BlueTRC");
     }
 
     #[test]
-    fn test_trc_name_normalization() {
-        // ToneReproductionCurve tags should be shortened to TRC
-        assert_eq!(
-            normalize_tag_family("Profile:BlueToneReproductionCurve"),
-            "ICC_Profile:BlueTRC"
-        );
-        assert_eq!(
-            normalize_tag_family("Profile:GreenToneReproductionCurve"),
-            "ICC_Profile:GreenTRC"
-        );
-        assert_eq!(
-            normalize_tag_family("Profile:RedToneReproductionCurve"),
-            "ICC_Profile:RedTRC"
-        );
-        assert_eq!(
-            normalize_tag_family("Profile:GrayToneReproductionCurve"),
-            "ICC_Profile:GrayTRC"
-        );
-    }
-
-    #[test]
-    fn test_normalize_tag_name_directly() {
-        // Test the normalize_tag_name function directly
-        assert_eq!(
-            normalize_tag_name("ICC_Profile", "BlueToneReproductionCurve"),
-            "BlueTRC"
-        );
-        assert_eq!(
-            normalize_tag_name("ICC_Profile", "GreenToneReproductionCurve"),
-            "GreenTRC"
-        );
-        assert_eq!(
-            normalize_tag_name("ICC_Profile", "RedToneReproductionCurve"),
-            "RedTRC"
-        );
-        assert_eq!(
-            normalize_tag_name("ICC_Profile", "GrayToneReproductionCurve"),
-            "GrayTRC"
-        );
-
-        // Non-TRC tags should remain unchanged
-        assert_eq!(
-            normalize_tag_name("ICC_Profile", "BlueMatrixColumn"),
-            "BlueMatrixColumn"
-        );
-        assert_eq!(
-            normalize_tag_name("ICC_Profile", "ProfileVersion"),
-            "ProfileVersion"
-        );
-
-        // Other families should not have name changes
-        assert_eq!(
-            normalize_tag_name("EXIF", "BlueToneReproductionCurve"),
-            "BlueToneReproductionCurve"
-        );
-    }
-
-    #[test]
-    fn test_normalize_metadata_map_with_icc_profile() {
+    fn test_normalize_metadata_map_preserves_value_form() {
+        // Regression pin for the Step 22 finding documented on
+        // `normalize_metadata_map`: renaming a family used to drop
+        // `TagOccurrence.value` (the ValueConv form) because the old
+        // `insert_occurrence` call this function made has no `value`
+        // parameter. `insert_renamed_occurrence` carries the whole
+        // occurrence across the rename instead.
         let mut map = MetadataMap::new();
-        map.insert(
-            "Profile:BlueMatrixColumn",
-            TagValue::new_string("0.14307 0.06061 0.7141"),
+        map.insert_occurrence_with_raw(
+            "ExifIFD:FileSize",
+            TagValue::new_string("26 kB"),
+            TagValue::new_integer(26106),
+            crate::core::SHIM_DEFAULT_PRIORITY,
+            "ExifIFD",
+            crate::core::Instance::default(),
         );
-        map.insert(
-            "Profile:BlueToneReproductionCurve",
-            TagValue::new_string("(Binary data)"),
-        );
-        map.insert("Profile:CMMFlags", TagValue::new_string("Not Embedded"));
 
         let normalized = normalize_metadata_map(&map);
 
-        // Profile should be normalized to ICC_Profile
+        assert_eq!(normalized.get_string("ExifIFD:FileSize"), Some("26 kB"));
         assert_eq!(
-            normalized.get_string("ICC_Profile:BlueMatrixColumn"),
-            Some("0.14307 0.06061 0.7141")
-        );
-        // ToneReproductionCurve should be shortened to TRC
-        assert_eq!(
-            normalized.get_string("ICC_Profile:BlueTRC"),
-            Some("(Binary data)")
-        );
-        assert_eq!(
-            normalized.get_string("ICC_Profile:CMMFlags"),
-            Some("Not Embedded")
+            normalized
+                .without_print_conv()
+                .get_integer("ExifIFD:FileSize"),
+            Some(26106),
+            "the no-print-conv form must survive the rename"
         );
     }
 }

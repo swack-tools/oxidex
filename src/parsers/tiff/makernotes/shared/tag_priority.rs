@@ -125,9 +125,168 @@ pub(crate) fn record_makernote_tag(
 ) {
     if let Some(base) = strip_duplicate_marker(&tag_name) {
         metadata.insert_occurrence(base, tag_value, 0, "", crate::core::Instance::default());
-    } else {
-        metadata.insert(tag_name, tag_value);
+        return;
     }
+    if let Some(group1) = priority_zero_duplicate_group1(&tag_name) {
+        // ExifTool declares `Priority => 0` on each of these -- see
+        // `PRIORITY_ZERO_DUPLICATES`' own doc comment for the exact
+        // per-manufacturer `.pm` citations. Every one is a MakerNote-side
+        // duplicate of a standard EXIF tag (an APEX-derived FNumber/
+        // ExposureTime, a log-scale-derived ISO, a binary-record
+        // FocalLength, ...) that ExifTool itself trusts less than the
+        // ordinary EXIF copy.
+        //
+        // Step 20's composite/CLI arbitration (`cli::tag_resolution::
+        // resolve_requested_tags`) resolves an unqualified `-TAG` request or
+        // Composite `Desire`/`Require` by priority-then-order, so at the
+        // ordinary default priority these MakerNote duplicates -- extracted
+        // *after* the main EXIF IFD on every file where MakerNote parsing
+        // runs later in the same IFD pass -- would otherwise win the tie on
+        // `order` alone and silently feed a wrong shutter speed/aperture/
+        // ISO/focal length into every composite chained from them
+        // (`Aperture`, `ShutterSpeed`, `LightValue`, `HyperfocalDistance`,
+        // `CircleOfConfusion`, `DOF`, `FocalLength35efl`, `ScaleFactor35efl`).
+        // Caught on 500+ corpus JPEGs (Canon's `ExposureTime`/`FNumber`) and
+        // Nikon's own `ISO` duplicate, plus the equivalent CR2/CR3/DNG/MRW/
+        // NEF/RW2 RAW containers, when Step 22's full-corpus conformance run
+        // first exercised this arbitration end to end -- see the
+        // `ExposureTime` example this function's own regression test pins.
+        metadata.insert_occurrence(
+            tag_name,
+            tag_value,
+            0,
+            group1,
+            crate::core::Instance::default(),
+        );
+        return;
+    }
+    metadata.insert(tag_name, tag_value);
+}
+
+/// MakerNote tags ExifTool itself declares `Priority => 0` for, mapped to
+/// the family-1 group their manufacturer prefix implies -- a small, explicit
+/// allowlist rather than a manufacturer-wide rule, because MakerNote tags
+/// are not uniformly lower priority than EXIF in ExifTool (`CIFF:Make`, for
+/// one, legitimately outranks `IFD0:Make` on `ExifTool.jpg` -- confirmed
+/// against the pinned oracle and pinned by `cli::tag_resolution`'s own test
+/// suite), so [`priority_zero_duplicate_group1`] only demotes the specific
+/// tags actually declared low priority in the pinned source:
+///
+/// * `Canon:FocalLength` -- `%Canon::FocalLength` key 1 explicitly
+///   (Canon.pm:2723-2724, "the EXIF FocalLength is more reliable").
+/// * `Canon:FNumber`/`Canon:ExposureTime` -- `%Canon::ShotInfo` keys 21 and
+///   22 explicitly (Canon.pm:2956-2994).
+/// * `Canon:ISO`/`Canon:CameraTemperature`/`Canon:MacroMagnification`/
+///   `Canon:FocalLength`/`Canon:MinFocal`/`Canon:MaxFocal` -- the
+///   *table-level* `PRIORITY => 0` every `%Canon::CameraInfo*` sub-table
+///   declares (Canon.pm:3162 and 20+ other CameraInfo tables, "these tags
+///   are not reliable since they change with firmware version"). These six
+///   are ExifTool's own shared `%ci*` Perl hashes (`my %ciFNumber`,
+///   `%ciExposureTime`, `%ciISO`, `%ciCameraTemperature`,
+///   `%ciMacroMagnification`, `%ciFocalLength`, `%ciMinFocal`, `%ciMaxFocal`,
+///   Canon.pm:3087-3149), each embedded verbatim into every CameraInfo table
+///   via `0x04 => { %ciExposureTime }`-style splices -- which is exactly why
+///   `src/parsers/tiff/makernotes/canon/camera_info.rs` already keeps its
+///   own decode of them in a `camera_info_tags` map merged with
+///   `PRIORITY => 0` semantics (`merge_priority0`), but only *within*
+///   Canon's own tag set; nothing carried that semantics out to this
+///   cross-manufacturer arbitration point until this fix.
+/// * `Nikon:ISO` -- Nikon.pm:1803 explicitly, `Priority => 0, # the EXIF ISO
+///   is more reliable` (MakerNote tag 0x0002). `Nikon:FocalLength` --
+///   Nikon.pm:5908 explicitly (the `NewLensData` `%Nikon::LensData0403`-style
+///   entry, tag 0x3c). `Nikon:FNumber` -- Nikon.pm:5898 explicitly, the
+///   same `NewLensData` table's tag 0x38 (confirmed on `NikonZ5.jpg`:
+///   `ExifIFD:FNumber` "8.0" vs `Nikon:FNumber` "6.2", the encrypted
+///   `LensData` mirrorless-Z-series bodies carry).
+/// * `Minolta:ISO`/`Minolta:ExposureTime`/`Minolta:FNumber`/
+///   `Minolta:FocalLength`/`Minolta:MaxAperture` -- the table-level
+///   `PRIORITY => 0` on `%Minolta::CameraSettings`/`%CameraSettingsOld`
+///   (Minolta.pm:974, "not as reliable as other tags") and, for
+///   `Minolta:FNumber`/`Minolta:ExposureTime` specifically on the Sony
+///   DSLR-A100, `%Minolta::CameraSettingsA100` (Minolta.pm:1874, "may not be
+///   as reliable as other information") -- both tables `src/parsers/tiff/
+///   makernotes/minolta.rs` already decodes into its own `sub_dir` output
+///   with a comment noting "All four tables are PRIORITY => 0, the same
+///   tier CameraSettings reports under", same shape as Canon's
+///   `camera_info_tags`.
+/// * `Sony:FNumber`/`Sony:ExposureTime`/`Sony:ISO`/`Sony:FocalLength` --
+///   the table-level `PRIORITY => 0` several `%Sony::*` sub-tables declare
+///   (Sony.pm:3531 `%MoreSettings` and 20+ other tables across Sony's many
+///   camera-generation-specific binary records), same shape as Canon's
+///   `%Canon::CameraInfo*` and Minolta's `%CameraSettings`. Confirmed on
+///   `SonyDSLR-A900.jpg` (`ExifIFD:FNumber` "4.5" vs `Sony:FNumber` "4.8")
+///   and `SonyILCE-3500.jpg` (`ExifIFD:FocalLength` "125.0 mm" vs
+///   `Sony:FocalLength` "158.0 mm").
+/// * `MakerNotes:ISO`/`MakerNotes:ExposureTime`/`MakerNotes:FNumber`/
+///   `MakerNotes:FocalLength`/`MakerNotes:MaxAperture` -- the *other*
+///   Minolta `%CameraSettings` decoder, `src/parsers/raw/
+///   minolta_makernote.rs` (used for standalone `.mrw` files' `TTW` block,
+///   a separate code path from `minolta.rs`'s `MinoltaParser` because MRW's
+///   MakerNote value offsets are TIFF-base-relative rather than note-
+///   relative). This decoder inserts under the literal `MakerNotes:`
+///   prefix -- the same cross-manufacturer convention several other
+///   MakerNote parsers use for a handful of tags (`PreviewImage`/
+///   `PreviewImageStart` in particular) -- rather than `Minolta:`, so it is
+///   listed separately from the entries above even though it decodes the
+///   identical ExifTool table. Left at `group1 = ""` (falls back to the
+///   shim's own `MakerNotes` group0, matching this decoder's existing
+///   display) rather than corrected to `Minolta` here, since fixing that
+///   display mismatch would mean auditing every other tag this convention
+///   is intentionally shared with (`src/parsers/tiff/makernotes/{sigma,
+///   sony,minolta,nikon,olympus,casio}.rs` all key `PreviewImage` the same
+///   way) -- out of scope for the value-correctness fix this table exists
+///   for.
+/// * `Pentax:ExposureTime`/`Pentax:FNumber` -- Pentax.pm:1472-1483
+///   explicitly (MakerNote tags 0x0012/0x0013). `Pentax:ISO` --
+///   Pentax.pm:2686/6264 explicitly (two different tag IDs across Pentax's
+///   several MakerNote sub-formats, both `Priority => 0`).
+///   `Pentax:FocalLength` -- Pentax.pm:1746/1759 explicitly (the
+///   model-conditional `%Pentax::Main` tag 0x0006 entries).
+///
+/// Not exhaustive: other manufacturers declare the same `Priority => 0` "let
+/// EXIF take priority" convention for their own ISO/FNumber/FocalLength-
+/// shaped MakerNote fields (Casio.pm does too, confirmed against the pinned
+/// source), but this list only covers the tag names this crate's own
+/// MakerNote parsers currently produce under a name that also collides with
+/// a standard EXIF/Composite dependency name -- covering a name that never
+/// collides would be dead code with no observable effect.
+const PRIORITY_ZERO_DUPLICATES: &[(&str, &str)] = &[
+    ("Canon:FocalLength", "Canon"),
+    ("Canon:FNumber", "Canon"),
+    ("Canon:ExposureTime", "Canon"),
+    ("Canon:ISO", "Canon"),
+    ("Canon:CameraTemperature", "Canon"),
+    ("Canon:MacroMagnification", "Canon"),
+    ("Canon:MinFocal", "Canon"),
+    ("Canon:MaxFocal", "Canon"),
+    ("Nikon:ISO", "Nikon"),
+    ("Nikon:FocalLength", "Nikon"),
+    ("Nikon:FNumber", "Nikon"),
+    ("Pentax:ExposureTime", "Pentax"),
+    ("Pentax:FNumber", "Pentax"),
+    ("Pentax:ISO", "Pentax"),
+    ("Pentax:FocalLength", "Pentax"),
+    ("Minolta:ISO", "Minolta"),
+    ("Minolta:ExposureTime", "Minolta"),
+    ("Minolta:FNumber", "Minolta"),
+    ("Minolta:FocalLength", "Minolta"),
+    ("Minolta:MaxAperture", "Minolta"),
+    ("MakerNotes:ISO", ""),
+    ("MakerNotes:ExposureTime", ""),
+    ("MakerNotes:FNumber", ""),
+    ("MakerNotes:FocalLength", ""),
+    ("MakerNotes:MaxAperture", ""),
+    ("Sony:FNumber", "Sony"),
+    ("Sony:ExposureTime", "Sony"),
+    ("Sony:ISO", "Sony"),
+    ("Sony:FocalLength", "Sony"),
+];
+
+fn priority_zero_duplicate_group1(tag_name: &str) -> Option<&'static str> {
+    PRIORITY_ZERO_DUPLICATES
+        .iter()
+        .find(|(name, _)| *name == tag_name)
+        .map(|(_, group1)| *group1)
 }
 
 /// Recognizes [`insert_low_priority_retained`]'s `"<key> (N)"` synthetic
@@ -347,5 +506,88 @@ mod tests {
             "the synthetic marker key must never become a real tag name"
         );
         assert_eq!(metadata.occurrences_for("Pentax:LensType").len(), 2);
+    }
+
+    /// Step 22 regression pin: `Canon:ExposureTime` (Canon.pm:2965-2994,
+    /// `Priority => 0`) must not win the bare `ExposureTime` composite
+    /// dependency over a normal-priority `ExifIFD:ExposureTime`, even when
+    /// it is recorded *after* the EXIF one -- the ordinary case, since
+    /// MakerNotes parsing runs later in the same IFD pass. Before this fix,
+    /// both occurrences tied at `SHIM_DEFAULT_PRIORITY` and the tie went to
+    /// whichever was recorded last (`TagSink::record`'s own rule), which
+    /// is backwards: real ExifTool's `$priority >= $oldPriority` keeps the
+    /// higher-priority EXIF tag under the bare name regardless of arrival
+    /// order. Found on `CanonDIGITAL_IXUS100IS.jpg`
+    /// (`ExifIFD:ExposureTime` "1/200" vs `Canon:ExposureTime` "1/193")
+    /// when Step 22's full-corpus conformance run first exercised
+    /// `cli::tag_resolution::resolve_requested_tags`'s bare-name
+    /// arbitration against real MakerNote data end to end.
+    #[test]
+    fn canon_exposure_time_defers_to_the_normal_priority_exif_tag() {
+        let mut metadata = crate::core::MetadataMap::new();
+        // Recorded in file order: EXIF's ExposureTime first, Canon's
+        // MakerNote copy second -- the shape every affected corpus file has.
+        metadata.insert(
+            "ExifIFD:ExposureTime",
+            crate::core::TagValue::new_string("1/200"),
+        );
+        record_makernote_tag(
+            &mut metadata,
+            "Canon:ExposureTime".to_string(),
+            crate::core::TagValue::new_string("1/193"),
+        );
+
+        let resolved = crate::cli::tag_resolution::resolve_requested_tags(
+            &metadata,
+            &["ExposureTime".to_string()],
+            false,
+        );
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(
+            resolved[0].occurrence.raw,
+            crate::core::TagValue::new_string("1/200"),
+            "the bare ExposureTime dependency must bind the normal-priority EXIF tag"
+        );
+        // Both occurrences are still retained -- `-a`/`-G1` still reaches
+        // Canon's own copy under its own key.
+        assert_eq!(metadata.get_string("Canon:ExposureTime"), Some("1/193"));
+    }
+
+    /// Same shape, for `Nikon:ISO` (Nikon.pm:1803, `Priority => 0, # the
+    /// EXIF ISO is more reliable`).
+    #[test]
+    fn nikon_iso_defers_to_the_normal_priority_exif_tag() {
+        let mut metadata = crate::core::MetadataMap::new();
+        metadata.insert("ExifIFD:ISO", crate::core::TagValue::new_integer(50));
+        record_makernote_tag(
+            &mut metadata,
+            "Nikon:ISO".to_string(),
+            crate::core::TagValue::new_integer(0),
+        );
+
+        let resolved = crate::cli::tag_resolution::resolve_requested_tags(
+            &metadata,
+            &["ISO".to_string()],
+            false,
+        );
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(
+            resolved[0].occurrence.raw,
+            crate::core::TagValue::new_integer(50)
+        );
+    }
+
+    #[test]
+    fn priority_zero_duplicate_group1_is_exact_and_narrow() {
+        assert_eq!(
+            priority_zero_duplicate_group1("Canon:ExposureTime"),
+            Some("Canon")
+        );
+        assert_eq!(priority_zero_duplicate_group1("Nikon:ISO"), Some("Nikon"));
+        // Every other same-named MakerNote tag is unaffected -- in
+        // particular CIFF:Make, which legitimately outranks IFD0:Make on
+        // `ExifTool.jpg` (see `cli::tag_resolution`'s own pinned test).
+        assert_eq!(priority_zero_duplicate_group1("CIFF:Make"), None);
+        assert_eq!(priority_zero_duplicate_group1("Canon:LensModel"), None);
     }
 }

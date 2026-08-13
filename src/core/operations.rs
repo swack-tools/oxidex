@@ -1308,10 +1308,24 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
     process_mpf_segments(&segments, &mut metadata);
     // APP2/APP4 FPXR: FlashPix streams split across application segments.
     crate::parsers::jpeg::flashpix::process_fpxr_segments(&segments, &mut metadata);
+    // SPIFF (APP8) runs before SOF: in a real JPEG byte stream every APPn
+    // marker precedes the SOF marker, so ExifTool's own file-order-driven
+    // FoundTag arbitration always records SPIFF's ImageWidth/ImageHeight
+    // before SOF's own File:ImageWidth/ImageHeight -- meaning, on the rare
+    // file that carries both (ExifTool.jpg, a deliberately multi-format
+    // test fixture), File:ImageWidth wins the bare `ImageWidth` composite
+    // dependency tie by `order` alone (both are ordinary, undeclared
+    // priority -- neither table sets `Priority`/`PRIORITY`, confirmed
+    // against JPEG.pm's `%SPIFF` GROUPS declaration). Processing them in
+    // this file's original SOF-then-SPIFF order inverted that tie and fed
+    // Composite:ImageSize/Megapixels the SPIFF dimensions instead
+    // (`Composite:ImageSize` "3000x4500"/"13.5" MP where the pinned oracle
+    // reports "8x8"/"6.4e-05" MP), caught only once Step 22 replaced the
+    // old hard-coded group-rank table with real priority+order arbitration.
+    process_spiff_segments(&segments, &mut metadata);
     process_sof_segments_with_options(&segments, &mut metadata, options);
     process_com_segments(&segments, &mut metadata);
     process_dqt_segments_with_options(&segments, &mut metadata, options);
-    process_spiff_segments(&segments, &mut metadata);
     process_ricoh_rmeta_segments(&segments, &mut metadata);
 
     // Canon VRD sits after the JPEG's EOI, so it needs the whole file rather

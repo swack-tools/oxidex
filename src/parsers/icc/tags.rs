@@ -5,8 +5,9 @@
 
 use super::binary::{read_s15fixed16, read_signature, read_u16fixed16, read_u32_be};
 use super::registries::{
-    GEOMETRY_TYPES, ILLUMINANT_TYPES, OBSERVER_TYPES, TAG_REGISTRY, TECHNOLOGIES, TagType,
-    lookup_in_table,
+    CICP_COLOR_PRIMARIES, CICP_MATRIX_COEFFICIENTS, CICP_TRANSFER_CHARACTERISTICS,
+    CICP_VIDEO_FULL_RANGE_FLAG, GEOMETRY_TYPES, ILLUMINANT_TYPES, OBSERVER_TYPES, TAG_REGISTRY,
+    TECHNOLOGIES, TagType, cicp_print, lookup_in_table,
 };
 use crate::core::TagValue;
 use crate::core::formatters::perl_number;
@@ -45,6 +46,41 @@ pub fn parse_tags_registry(data: &[u8], metadata: &mut HashMap<String, TagValue>
     }
 
     Ok(())
+}
+
+/// The ExifTool family-1 group that owns a decoded tag-table output field,
+/// by its output *name* rather than its source signature.
+///
+/// Three of `TAG_REGISTRY`'s entries decode through their own
+/// `GROUPS => { 1 => '...' }` sub-table instead of the un-grouped `%Main`
+/// table every scalar tag (`desc`, `wtpt`, `rXYZ`, the `mluc`-driven
+/// language records, ...) reads through: `ColorRep`/`cicp`
+/// (ICC_Profile.pm:761-825, `ICC-cicp`), `ViewingConditions`/`view`
+/// (`:831-849`, `ICC-view`), `Measurement`/`meas` (`:850-926`, `ICC-meas`).
+/// Each explodes into several output field names rather than one, so this
+/// is keyed by the fixed, deterministic set of names
+/// [`decode_cicp`]/[`decode_viewing_conditions`]/[`decode_measurement`]
+/// actually produce -- not derived from the signature at the call site,
+/// since by the time a name reaches `icc::insert_icc_tags` its
+/// originating signature is no longer attached to it. Everything else
+/// (including every `mluc`-derived language-suffixed name, which still
+/// shares its base tag's un-grouped default) returns `""`, meaning "no
+/// family-1 override" -- ExifTool's own default when a table's `GROUPS`
+/// sets no `1 =>` entry.
+pub fn icc_output_group1(name: &str) -> &'static str {
+    match name {
+        "ColorPrimaries"
+        | "TransferCharacteristics"
+        | "MatrixCoefficients"
+        | "VideoFullRangeFlag" => "ICC-cicp",
+        "ViewingCondIlluminant" | "ViewingCondSurround" | "ViewingCondIlluminantType" => "ICC-view",
+        "MeasurementObserver"
+        | "MeasurementBacking"
+        | "MeasurementGeometry"
+        | "MeasurementFlare"
+        | "MeasurementIlluminant" => "ICC-meas",
+        _ => "",
+    }
 }
 
 /// Decodes a single tag using the tag registry
@@ -104,6 +140,10 @@ fn decode_tag(signature: &str, data: &[u8], size: usize, metadata: &mut HashMap<
             let name = lookup_in_table(TECHNOLOGIES, &sig);
             TagValue::new_string(name.to_string())
         }),
+        TagType::Cicp => {
+            decode_cicp(data, metadata);
+            None
+        }
     };
 
     if let Some(value) = result {
@@ -294,6 +334,39 @@ fn decode_measurement(
         );
     }
     None // This tag produces multiple entries, not a single value
+}
+
+/// Decodes a `cicp` (coding-independent code points) tag into its four
+/// independent enum fields.
+///
+/// ICC_Profile.pm:759-825 processes this via `ProcessBinaryData` over the
+/// whole tag payload, with `ColorPrimaries`/`TransferCharacteristics`/
+/// `MatrixCoefficients`/`VideoFullRangeFlag` at fixed byte offsets 8/9/10/11
+/// -- the same layout every `cicpType` payload uses (ITU-T H.273), bytes
+/// 0-3 being the `cicp` type signature and 4-7 reserved, both of which
+/// `ProcessBinaryData` simply never reads. Like `view`/`meas`, this produces
+/// several metadata entries rather than one, so `decode_tag` discards this
+/// function's `None` return and reads the entries it inserted directly.
+fn decode_cicp(data: &[u8], metadata: &mut HashMap<String, TagValue>) {
+    if data.len() < 12 {
+        return;
+    }
+    metadata.insert(
+        "ColorPrimaries".to_string(),
+        TagValue::new_string(cicp_print(CICP_COLOR_PRIMARIES, data[8])),
+    );
+    metadata.insert(
+        "TransferCharacteristics".to_string(),
+        TagValue::new_string(cicp_print(CICP_TRANSFER_CHARACTERISTICS, data[9])),
+    );
+    metadata.insert(
+        "MatrixCoefficients".to_string(),
+        TagValue::new_string(cicp_print(CICP_MATRIX_COEFFICIENTS, data[10])),
+    );
+    metadata.insert(
+        "VideoFullRangeFlag".to_string(),
+        TagValue::new_string(cicp_print(CICP_VIDEO_FULL_RANGE_FLAG, data[11])),
+    );
 }
 
 // ============================================================================

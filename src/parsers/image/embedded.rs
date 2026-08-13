@@ -109,9 +109,7 @@ pub fn parse_embedded_icc(icc_data: &[u8], metadata: &mut MetadataMap) -> bool {
     match crate::parsers::icc::parse_icc_profile_data(icc_data) {
         Ok(tags) => {
             let found = !tags.is_empty();
-            for (name, value) in tags {
-                metadata.insert(format!("ICC_Profile:{}", name), value);
-            }
+            crate::parsers::icc::insert_icc_tags(metadata, tags);
             found
         }
         Err(_) => false,

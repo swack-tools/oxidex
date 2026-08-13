@@ -29,6 +29,7 @@ use crate::core::exiftool_compat::format_for_exiftool;
 use crate::core::read_options::ReadOptions;
 use crate::core::tag_occurrence::TagOccurrence;
 use crate::core::{MetadataMap, TagValue};
+use std::collections::HashSet;
 
 /// Maps a stored occurrence's `group0` to ExifTool's real family-0 group.
 ///
@@ -406,7 +407,59 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
         return ResolvedFileOutput::Metadata(metadata);
     }
 
+    // No specific `-TAG` request: the "list everything" default. Before this
+    // fix, `-G*` was silently a no-op here -- it only ever took effect on
+    // the branch above, so `oxidex -G1 -s` (or `-j` with no explicit tag)
+    // rendered every tag ungrouped, with no bracket/prefix at all,
+    // regardless of `-G*`. That made every occurrence's real family-1 group
+    // -- ICC's `ICC-header`/`ICC-cicp`/`ICC-view`/`ICC-meas` among them --
+    // invisible through the single most natural way of asking for it.
+    // Reuses the same two renderers the `-TAG` branch above does
+    // (`render_group_display_lines` for the bracket/file-order human-short
+    // case, `build_display_map` otherwise), just fed every occurrence that
+    // survives `ReadOptions::strip_extended_only`'s filter instead of a
+    // name-requested subset.
     let options = ReadOptions::new(&[], args.extended_output);
+    if let Some(families) = &args.group_display {
+        // `strip_extended_only` only needs to decide which *keys* survive;
+        // running it against `MetadataMap::iter()`'s winner-only view and
+        // reading back its key set (rather than its flattened values) is
+        // what lets the occurrences walked below keep their real `group1` --
+        // `strip_extended_only`'s own output re-derives `group0` from the
+        // literal key via the plain `insert()` shim and would flatten it
+        // right back out otherwise.
+        let surviving = options.strip_extended_only(raw_metadata);
+        let surviving_keys: HashSet<&str> = surviving.keys().map(String::as_str).collect();
+        let mut resolved: Vec<ResolvedOccurrence> = if args.all_tags {
+            raw_metadata
+                .all_occurrences()
+                .filter(|(key, _)| surviving_keys.contains(key.as_str()))
+                .map(|(lookup_key, occurrence)| ResolvedOccurrence {
+                    occurrence,
+                    lookup_key,
+                })
+                .collect()
+        } else {
+            raw_metadata
+                .winner_occurrences()
+                .filter(|(key, _)| surviving_keys.contains(key.as_str()))
+                .map(|(key, occurrence)| ResolvedOccurrence {
+                    occurrence,
+                    lookup_key: key.clone(),
+                })
+                .collect()
+        };
+        resolved.sort_by_key(|entry| entry.occurrence.order);
+
+        if !args.json && !args.csv {
+            let lines =
+                render_group_display_lines(&resolved, families, no_print_conv, args.short_format);
+            return ResolvedFileOutput::Lines(lines);
+        }
+        let metadata = build_display_map(&resolved, Some(families), no_print_conv, !args.json);
+        return ResolvedFileOutput::Metadata(metadata);
+    }
+
     let filtered = options.strip_extended_only(raw_metadata);
     let metadata = if no_print_conv {
         filtered.without_print_conv()

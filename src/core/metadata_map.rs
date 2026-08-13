@@ -33,22 +33,24 @@ use std::collections::HashMap;
 pub struct MetadataMap {
     /// Every occurrence recorded through `insert()`, plus the winner
     /// projection over them. See the module doc comment.
+    ///
+    /// Full-precision `ValueConv` forms -- ExifTool keeps a tag's converted
+    /// value separate from its `PrintConv` display; a rounded display such
+    /// as Nikon's `FocusDistance` must not be fed back into DOF arithmetic
+    /// -- live on each occurrence's own [`TagOccurrence::value`] field
+    /// rather than in a separate sidecar keyed by the same string twice.
+    /// That sidecar (`value_forms: HashMap<String, String>`) was Step 8(b)'s
+    /// tactical carriage, explicitly deferred past Step 18 Phase A by design
+    /// decision D4 in `OVERHAUL_STEP18_DESIGN.md` ("leave `value_forms`
+    /// until Step 22, which consumes the occurrence winner view anyway").
+    /// This is Step 22: [`MetadataMap::set_value_form`]/[`MetadataMap::
+    /// value_form`] below now read and write `TagOccurrence.value` via
+    /// [`TagSink::set_winner_value`] instead of a second map, so serde
+    /// skipping it is automatic (occurrences were never serialized to begin
+    /// with -- only the winner projection's `raw` form is, via
+    /// `Serialize for MetadataMap` below) rather than a field the old
+    /// sidecar had to be deliberately excluded from.
     sink: TagSink,
-
-    /// Full-precision `ValueConv` forms used by derived tags.
-    ///
-    /// ExifTool keeps a tag's converted value separate from its `PrintConv`
-    /// display. Most OxiDex tags need only one form, but a rounded display such
-    /// as Nikon's `FocusDistance` must not be fed back into DOF arithmetic.
-    /// This sidecar is deliberately private and skipped by serde: it augments
-    /// an existing tag and is never itself an emitted metadata tag.
-    ///
-    /// Design decision D4 (Step 18): left alone in Phase A rather than
-    /// folded into `TagOccurrence.value`, since doing so would touch the
-    /// Composite layer this sidecar feeds and break the purely-additive
-    /// property the A/B gate depends on. Step 22 is where this sidecar
-    /// retires.
-    value_forms: HashMap<String, String>,
 }
 
 // Hand-rolled rather than `#[derive(Serialize, Deserialize)]` +
@@ -87,7 +89,6 @@ impl MetadataMap {
     pub fn new() -> Self {
         Self {
             sink: TagSink::new(),
-            value_forms: HashMap::new(),
         }
     }
 
@@ -98,7 +99,6 @@ impl MetadataMap {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             sink: TagSink::with_capacity(capacity),
-            value_forms: HashMap::new(),
         }
     }
 
@@ -130,8 +130,11 @@ impl MetadataMap {
     pub fn insert<K: Into<String>>(&mut self, key: K, value: TagValue) -> Option<TagValue> {
         let key = key.into();
         // Replacing the visible tag invalidates any ValueConv form belonging
-        // to its predecessor. Parsers attach a new form explicitly afterwards.
-        self.value_forms.remove(&key);
+        // to its predecessor: `TagOccurrence::from_insert_shim` always
+        // starts a fresh occurrence at `value: None`, so the old form simply
+        // does not carry forward to whichever occurrence wins the key next
+        // (Step 22 -- see the `sink` field's own doc comment). Parsers
+        // attach a new form explicitly afterwards via `set_value_form`.
         let previous = self.sink.get(&key).cloned();
         let order = self.sink.next_order();
         let occurrence = TagOccurrence::from_insert_shim(&key, value, order);
@@ -161,7 +164,6 @@ impl MetadataMap {
         instance: super::tag_occurrence::Instance,
     ) -> Option<TagValue> {
         let key = key.into();
-        self.value_forms.remove(&key);
         let previous = self.sink.get(&key).cloned();
         let order = self.sink.next_order();
         let mut occurrence = TagOccurrence::from_insert_shim(&key, value, order);
@@ -197,7 +199,6 @@ impl MetadataMap {
         instance: super::tag_occurrence::Instance,
     ) -> Option<TagValue> {
         let key = key.into();
-        self.value_forms.remove(&key);
         let previous = self.sink.get(&key).cloned();
         let order = self.sink.next_order();
         let mut occurrence = TagOccurrence::from_insert_shim(&key, display_value, order);
@@ -207,6 +208,47 @@ impl MetadataMap {
         occurrence.value = Some(no_print_conv_value);
         self.sink.record(key, occurrence);
         previous
+    }
+
+    /// Copies `occurrence` into this map under `new_key`, preserving every
+    /// field -- `raw`, `value` (the ValueConv form Step 22 folded into
+    /// `TagOccurrence`), `print`, priority, family-1 group and instance --
+    /// and re-deriving only `id`/`name`/`group0` from `new_key`'s own split.
+    ///
+    /// Used by [`tag_normalization::normalize_metadata_map`
+    /// ](super::tag_normalization::normalize_metadata_map) to rename a
+    /// family prefix (`ExifIFD:` -> `EXIF:`, `Fujifilm:` -> `FujiFilm:`,
+    /// ...) without flattening the occurrence back to `insert()`'s shim
+    /// defaults. Before this step, that call site went through
+    /// [`insert_occurrence`](Self::insert_occurrence) (which has no `value`
+    /// parameter) plus a separate `value_forms` sidecar re-attachment, which
+    /// silently dropped any `TagOccurrence.value` a migrated call site had
+    /// already attached (Step 20's `insert_occurrence_with_raw` sites, in
+    /// particular) the moment a JPEG-family tag passed through renaming --
+    /// invisible until this step folded `value_forms` away and this method
+    /// took over carrying the whole occurrence across the rename instead.
+    pub(crate) fn insert_renamed_occurrence(
+        &mut self,
+        new_key: String,
+        occurrence: &TagOccurrence,
+    ) {
+        let order = self.sink.next_order();
+        let (group0, name) = match new_key.split_once(':') {
+            Some((g, n)) => (
+                super::tag_occurrence::intern(g),
+                super::tag_occurrence::intern(n),
+            ),
+            None => (
+                super::tag_occurrence::intern(""),
+                super::tag_occurrence::intern(&new_key),
+            ),
+        };
+        let mut renamed = occurrence.clone();
+        renamed.id = oxidex_tags::TagId::Named(new_key.clone());
+        renamed.group0 = group0;
+        renamed.name = name;
+        renamed.order = order;
+        self.sink.record(new_key, renamed);
     }
 
     /// Every occurrence recorded for `key`, winners and losers alike, in
@@ -239,27 +281,37 @@ impl MetadataMap {
 
     /// Attaches a full-precision value form to an existing visible tag.
     ///
-    /// The value is intentionally absent from iteration and serialization. It
-    /// is currently consumed only by the Composite layer.
+    /// The value is intentionally absent from iteration and serialization
+    /// (only the winner projection's `raw` form is ever emitted -- see
+    /// `Serialize for MetadataMap`, above). Consumed by the Composite layer
+    /// (`src/composite/mod.rs`) and by [`MetadataMap::without_print_conv`]/
+    /// the CLI's `--no-print-conv` resolution (`cli::tag_resolution`), which
+    /// read it back via [`TagOccurrence::value`] alongside every other
+    /// migrated call site's ValueConv form -- Step 22 folded this method's
+    /// old private `value_forms` sidecar into that same field rather than
+    /// keeping two mechanisms for the same concept (see the `sink` field's
+    /// doc comment).
     pub(crate) fn set_value_form<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
         let key = key.into();
-        if self.sink.contains_key(&key) {
-            self.value_forms.insert(key, value.into());
-        }
+        self.sink
+            .set_winner_value(&key, TagValue::new_string(value.into()));
     }
 
     /// Returns the full-precision value form attached to `key`, if any.
     pub(crate) fn value_form(&self, key: &str) -> Option<&str> {
-        self.value_forms.get(key).map(String::as_str)
+        self.sink
+            .winner_occurrence(key)?
+            .value
+            .as_ref()?
+            .as_string()
     }
 
-    /// Merges another map while retaining private value forms.
-    ///
-    /// Every occurrence from `other` -- not just its winner projection -- is
-    /// replayed into `self`'s own sink via
+    /// Merges another map, replaying every occurrence -- not just the
+    /// winner projection -- from `other` into `self`'s own sink via
     /// [`TagSink::record_carrying_over`], preserving each occurrence's
-    /// priority, family-1 group and instance rather than flattening it back
-    /// to `insert()`'s `SHIM_DEFAULT_PRIORITY`/`Instance::default()`.
+    /// priority, family-1 group, instance and `value` (ValueConv) form
+    /// rather than flattening it back to `insert()`'s
+    /// `SHIM_DEFAULT_PRIORITY`/`Instance::default()`.
     ///
     /// This matters because `merge()` is the one place a parser's own
     /// sub-map (`format_metadata`, built by an entire segment pipeline) enters
@@ -272,14 +324,13 @@ impl MetadataMap {
     /// every multi-stage parser. Replaying occurrences one at a time
     /// reproduces `other`'s own winner exactly (the tie-break rule is
     /// deterministic over a fixed relative order) while keeping every
-    /// occurrence reachable afterward.
+    /// occurrence reachable afterward. Since `value` now lives on the
+    /// occurrence itself (Step 22), replaying the occurrence carries its
+    /// ValueConv form across the boundary automatically -- no separate
+    /// `value_forms` pass is needed anymore.
     pub(crate) fn merge(&mut self, other: MetadataMap) {
-        let MetadataMap { sink, value_forms } = other;
-        for occurrence in sink.into_occurrences() {
+        for occurrence in other.sink.into_occurrences() {
             self.sink.record_carrying_over(occurrence);
-        }
-        for (key, value) in value_forms {
-            self.set_value_form(key, value);
         }
     }
 
@@ -296,7 +347,8 @@ impl MetadataMap {
     pub fn get_mut(&mut self, key: &str) -> Option<&mut TagValue> {
         // A mutable reference can change the visible value without another
         // call into this map, so its old ValueConv form is no longer sound.
-        self.value_forms.remove(key);
+        // `TagSink::get_mut` itself clears the winner occurrence's `value`
+        // field for exactly this reason -- see its own doc comment.
         self.sink.get_mut(key)
     }
 
@@ -304,7 +356,6 @@ impl MetadataMap {
     ///
     /// Returns the value if the tag existed, `None` otherwise.
     pub fn remove(&mut self, key: &str) -> Option<TagValue> {
-        self.value_forms.remove(key);
         self.sink.remove(key)
     }
 
@@ -326,7 +377,6 @@ impl MetadataMap {
     /// Clears all tags from the map
     pub fn clear(&mut self) {
         self.sink.clear();
-        self.value_forms.clear();
     }
 
     /// Returns an iterator over tag names and values

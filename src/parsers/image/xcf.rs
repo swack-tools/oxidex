@@ -205,16 +205,13 @@ fn parse_parasites(payload: &[u8], metadata: &mut MetadataMap) {
     }
 }
 
-/// Decodes an embedded ICC profile and files its tags under `ICC_Profile:`.
+/// Decodes an embedded ICC profile and files its tags under `ICC_Profile:`,
+/// grouped by table provenance (ICC-header/ICC-cicp/ICC-view/ICC-meas --
+/// Step 22).
 fn insert_icc_profile(icc_data: &[u8], metadata: &mut MetadataMap) {
     match crate::parsers::icc::parse_icc_profile_data(icc_data) {
         Ok(icc_tags) => {
-            // `parse_icc_profile_data` returns bare names; the `ICC_Profile:`
-            // family is added by whoever embeds the profile, the same way
-            // `flif.rs` and `gif.rs` do for their containers.
-            for (tag_name, value) in icc_tags {
-                metadata.insert(format!("ICC_Profile:{}", tag_name), value);
-            }
+            crate::parsers::icc::insert_icc_tags(metadata, icc_tags);
         }
         Err(e) => {
             eprintln!("Warning: Failed to parse ICC profile in XCF: {}", e);

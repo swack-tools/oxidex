@@ -19,9 +19,9 @@ pub mod tables;
 
 pub use tables::{COMPOSITES, Composite};
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
-use crate::core::{MetadataMap, TagValue};
+use crate::core::{Instance, MetadataMap, TagOccurrence, TagValue};
 
 /// Maximum resolution passes.
 ///
@@ -59,155 +59,54 @@ fn value_string(v: &TagValue) -> Option<String> {
     }
 }
 
-/// Rank the groups that can supply an unqualified Composite dependency.
+/// The value to feed downstream composites for `occurrence`: its `value`
+/// (ValueConv) form when one is attached -- Step 22 folded the old
+/// `value_forms` sidecar into [`TagOccurrence::value`], so this is where a
+/// full-precision Nikon `FocusDistance` or an XMP `n/d` focal-plane
+/// resolution (or another composite's own unrounded result -- see
+/// [`apply`]'s own insertion, below) is read back -- or, failing that,
+/// [`crate::core::exiftool_compat::apex_value_conv`]'s ValueConv for an
+/// APEX-encoded rational, or the occurrence's raw stored form otherwise.
 ///
-/// `MetadataMap` is backed by a randomized `HashMap`, so its iteration order
-/// must never decide which of several same-named tags wins. Structural/file
-/// groups precede embedded metadata, followed by EXIF directories, maker notes,
-/// and XMP.  The key itself is the final tie-breaker, making unknown groups
-/// deterministic too.
-fn lookup_rank(key: &str) -> (u8, &str) {
-    let group = key.split_once(':').map_or("", |(group, _)| group);
-    let rank = match group {
-        "Composite" => 0,
-        "File" => 1,
-        // Primary container/image groups. These provide the displayed file
-        // dimensions when a format parser does not also publish a bare key.
-        "JPEG" | "PNG" | "GIF" | "BMP" | "WebP" | "JXL" | "HEIF" | "QuickTime" | "RIFF" | "AVI"
-        | "Matroska" | "ASF" | "Flash" | "H264" | "Photoshop" | "PDF" | "SVG" | "EXR" | "BPG"
-        | "FLIF" | "FITS" => 2,
-        // Standard TIFF/EXIF directories.
-        "EXIF" | "IFD0" | "ExifIFD" | "InteropIFD" | "GPS" => 3,
-        group if group.starts_with("SubIFD") => 3,
-        "MakerNotes" => 4,
-        group if group.starts_with("XMP") => 5,
-        _ => 6,
-    };
-    (rank, key)
-}
-
-/// Look up one fully-qualified key, applying APEX ValueConv but not PrintConv.
-///
-/// ExifTool's Composite table (Exif.pm:4678) reads `$val[N]` post-ValueConv:
-/// for ShutterSpeedValue/ApertureValue/MaxApertureValue that means seconds and
-/// f-stops, not the raw APEX-encoded rational still sitting in the map at
-/// this point in the pipeline -- [`crate::core::exiftool_compat::format_tag_value`]
-/// only runs at CLI output time, after composites have already been derived.
-/// Reusing [`crate::core::exiftool_compat::apex_value_conv`] here keeps the
-/// conversion in one place rather than re-deriving `2**(-$val)` a second time.
-/// The helper returns a raw numeric value, so downstream composites retain the
-/// precision that an emitted `1/152` or `4.7` PrintConv string would discard.
-fn lookup_key(map: &MetadataMap, key: &str) -> Option<String> {
-    if let Some(v) = map.value_form(key) {
-        return Some(v.to_string());
+/// This mirrors ExifTool's Composite table reading `$val[N]` *post-ValueConv*
+/// (Exif.pm:4678): [`crate::core::exiftool_compat::format_tag_value`] (the
+/// PrintConv step) only runs at CLI output time, after composites have
+/// already been derived, so a bare stored value is already the ValueConv
+/// form for every tag that has no separate PrintConv step -- which is every
+/// case not covered by `value`/`apex_value_conv` here.
+fn occurrence_value_string(occurrence: &TagOccurrence) -> Option<String> {
+    if let Some(v) = &occurrence.value {
+        return value_string(v);
     }
-    let raw = map.get(key)?;
-    let base_name = crate::core::exiftool_compat::strip_family_prefix(key);
-    if let Some(converted) = crate::core::exiftool_compat::apex_value_conv(base_name, raw) {
+    if let Some(converted) =
+        crate::core::exiftool_compat::apex_value_conv(&occurrence.name, &occurrence.raw)
+    {
         return value_string(&converted);
     }
-    value_string(raw)
+    value_string(&occurrence.raw)
 }
 
-/// Look up a tag by bare name, ignoring any `Group:` prefix.
+/// Resolves one Composite dependency key (already normalized to `Group:Tag`
+/// form, or bare) against every occurrence [`crate::core::tag_sink::TagSink`]
+/// has ever recorded -- using
+/// [`crate::cli::tag_resolution::resolve_requested_tags`]'s own
+/// priority/order arbitration, the exact rule a CLI `-TAG` request resolves
+/// through.
 ///
-/// ExifTool resolves composite inputs by name across all groups, so
-/// `EXIF:FocalLength` satisfies a dependency written as `FocalLength`. An exact
-/// match wins over a suffix match so an explicitly-grouped tag is preferred;
-/// otherwise [`lookup_rank`] supplies a stable group preference.
-fn lookup(map: &MetadataMap, name: &str) -> Option<String> {
-    lookup_ranked(map, name, true)
-}
-
-/// [`lookup`] restricted to tags that were read from the file.
-///
-/// Used for the one case where ExifTool's priority rule says a derived value
-/// must not shadow an extracted one; see [`resolve`].
-fn lookup_extracted(map: &MetadataMap, name: &str) -> Option<String> {
-    lookup_ranked(map, name, false)
-}
-
-fn lookup_ranked(map: &MetadataMap, name: &str, composites: bool) -> Option<String> {
-    if let Some(v) = lookup_key(map, name) {
-        return Some(v);
-    }
-    // ExifTool's `EXIF:` dependency prefix is a family-0 group. OxiDex emits
-    // the family-1 IFD name (`ExifIFD:` or `IFD0:`), so bridge that one
-    // generated namespace deliberately. Other explicit groups remain exact:
-    // `GPS:GPSLatitude` must not silently bind an unrelated suffix match.
-    if let Some(bare) = name.strip_prefix("EXIF:") {
-        for family in ["ExifIFD", "IFD0", "EXIF"] {
-            let key = format!("{family}:{bare}");
-            if let Some(v) = lookup_key(map, &key) {
-                return Some(v);
-            }
-        }
-        return None;
-    }
-    if name.contains(':') {
-        return None;
-    }
-
-    // Unqualified dependencies resolve through [`lookup_rank`] alone. An
-    // earlier hardcoded family list did the same job, but the two orders
-    // disagreed -- the list tried EXIF before File, while `lookup_rank` ranks
-    // File first so that a container's own dimensions win for ImageWidth. Two
-    // precedence tables that contradict each other cannot both be right, and
-    // the ranking is the one with a test pinning it, so it is the only one
-    // kept. It still resolves standard EXIF ahead of same-named MakerNote
-    // values, and still makes the choice independent of the randomized
-    // HashMap iteration order.
-    let suffix = format!(":{name}");
-    map.iter()
-        .filter(|(k, _)| k.ends_with(&suffix))
-        .filter(|(k, _)| composites || !k.starts_with("Composite:"))
-        .min_by_key(|(k, _)| lookup_rank(k))
-        .and_then(|(k, _)| lookup_key(map, k))
-}
-
-/// A composite value produced by this run, with the priority of the definition
-/// that produced it.
-struct Derived {
-    /// The `ValueConv` form -- full precision, what dependents consume.
-    value: String,
-    /// See [`Composite::priority`].
-    priority: i8,
-}
-
-/// Resolve a composite input, preferring an already-computed unrounded value.
-///
-/// `values` holds the `ValueConv` form of composites computed earlier in this
-/// run. Consulting it first is what stops precision loss from compounding down
-/// a chain: `HyperfocalDistance` needs `CircleOfConfusion` to full precision,
-/// not the `0.019 mm` that gets printed.
-///
-/// An unqualified dependency is not a search across groups in ExifTool: it
-/// reads exactly one entry, the *bare* tag key. All line numbers below are from
-/// the release named by `.exiftool-version`, which these tables are generated
-/// from and verified against.
-///
-/// ```text
-/// ExifTool.pm:4008 (BuildCompositeTags)
-///     if (defined $$rawValue{$reqTag}) {
-/// ```
-///
-/// Which tag holds that key is decided by `FoundTag`'s priority arbitration,
-/// and a Composite competes for it like any other tag:
-///
-/// ```text
-/// ExifTool.pm:9442
-///     if ($priority >= $oldPriority and ...)
-///         # move existing tag out of the way since this tag is higher priority
-/// ```
-///
-/// `$oldPriority` defaults to 1 for an ordinarily-extracted main-document tag
-/// (ExifTool.pm:9422-9429), and a Composite defaults to 1 as well -- the
-/// `Composite` table declares no `PRIORITY` (ExifTool.pm:2256-2262), so an
-/// undeclared one falls through to "the normal default" at ExifTool.pm:9440.
-/// So a Composite normally *does* take the name: `Composite:LensID` and
-/// `Composite:GPSLatitude` really are what a bare `LensID` or `GPSLatitude`
-/// dependency binds, which the corpus confirms. The exception is a definition
-/// that demotes itself, and `Canon:ISO` is the one that matters here:
+/// This is Step 22's replacement for the old `lookup_rank`/`lookup_ranked`
+/// hard-coded group-rank table plus suffix scan
+/// (`OVERHAUL_STEP18_DESIGN.md` Phase C): that rank table was a *guess* at
+/// group precedence, disconnected from what `TagSink` actually recorded, and
+/// a suffix scan over `map.iter()` (the winner-only projection) could not
+/// see a Composite's own declared priority at all. The Casio fix this
+/// session's evidence cites is the sharp case: a single wrong tag *name*
+/// (`CCDSensitivity` where ExifTool says `ISO`) silently cost two tags,
+/// because `Composite:LightValue` resolved its `Require: ISO` by scanning
+/// for any `*:ISO` key rather than asking who actually wins the name.
+/// Routing through the same function the CLI uses for `-TAG` means
+/// composites and the CLI can no longer disagree about which occurrence a
+/// bare or group-qualified dependency name means -- including a
+/// `Priority => 0` demotion like Canon's:
 ///
 /// ```text
 /// Canon.pm:9781-9782
@@ -215,39 +114,43 @@ struct Derived {
 ///         Priority => 0,  # let EXIF:ISO take priority
 /// ```
 ///
-/// `0 >= 1` is false, so `EXIF:ISO` keeps the bare key and `Composite:LightValue`
-/// -- whose `Require` is the unqualified `ISO` (Exif.pm:4687-4691) -- is computed
-/// from the camera's recorded ISO, not from Canon's `BaseISO * AutoISO / 100`.
-fn resolve(map: &MetadataMap, values: &HashMap<&str, Derived>, name: &str) -> Option<String> {
-    // An explicit group is a namespace constraint, not merely decoration.
-    // In particular, GPS::Composite requires `GPS:GPSLongitude`: after the
-    // first pass has produced Composite:GPSLongitude, rebinding that generated
-    // value here would feed the signed composite back into itself and flip a
-    // western longitude east on the next fixpoint pass.  The one explicit
-    // generated namespace is `Composite:` itself.
-    if let Some(bare) = name.strip_prefix("Composite:") {
-        return values
-            .get(bare)
-            .map(|d| d.value.clone())
-            .or_else(|| lookup(map, name));
-    }
-    // Generated QuickTime Composite dependencies retain ExifTool's
-    // `Module::Tag` table notation, while parsed values use the emitted
-    // `Group:Tag` key. Resolve that notation at the composite boundary.
-    if let Some((group, tag)) = name.split_once("::") {
-        return lookup(map, &format!("{group}:{tag}"));
-    }
-    if name.contains(':') {
-        return lookup(map, name);
-    }
-    match values.get(name) {
-        // Priority >= 1: the composite would have claimed the bare key.
-        Some(d) if d.priority >= 1 => Some(d.value.clone()),
-        // Demoted: an extracted tag of this name keeps the bare key. With no
-        // such tag there is nothing to lose to, and the composite holds it.
-        Some(d) => lookup_extracted(map, name).or_else(|| Some(d.value.clone())),
-        None => lookup(map, name),
-    }
+/// [`apply`] now inserts every computed Composite via `insert_occurrence_with_raw`
+/// carrying its own real `Composite::priority` (clamped at 0), so
+/// `Composite:ISO`'s occurrence genuinely competes at priority 0 against
+/// `ExifIFD:ISO`'s ordinary priority 1 through this same arbitration --
+/// `0 >= 1` is false, so the extracted tag wins the bare `ISO` key and
+/// `Composite:LightValue` (`Require => { 2 => 'ISO' }`, Exif.pm:4687-4691)
+/// binds to it, not to `Canon:BaseISO * Canon:AutoISO / 100`. No separate
+/// demoted-composite special case is needed for this anymore: it is the
+/// same rule as every other name.
+fn resolve_dependency(map: &MetadataMap, key: &str) -> Option<String> {
+    let requested = [key.to_string()];
+    let resolved = crate::cli::tag_resolution::resolve_requested_tags(map, &requested, false);
+    let occurrence = resolved.into_iter().next()?.occurrence;
+    occurrence_value_string(occurrence)
+}
+
+/// Resolve a composite input.
+///
+/// An unqualified dependency is not a search across groups in ExifTool: it
+/// reads exactly one entry, the *bare* tag key, whichever occurrence
+/// currently wins it (`ExifTool.pm:4008`, `BuildCompositeTags`:
+/// `if (defined $$rawValue{$reqTag})`). A group-qualified dependency
+/// (`EXIF:Make`, `GPS:GPSLongitude`, `Composite:ScaleFactor35efl`) is a
+/// namespace constraint, not decoration -- in particular, GPS's own
+/// `Composite:GPSPosition` requires the *explicit* `GPS:GPSLongitude`, so
+/// that a later pass's freshly-derived `Composite:GPSLongitude` (which the
+/// same bare-name arbitration this function delegates to would otherwise
+/// prefer, since a composite normally displaces a same-priority extracted
+/// tag on its own later `order`) is never rebound into its own input --
+/// which would flip a western longitude east. `[`resolve_dependency`] itself
+/// enforces every qualifier exactly this way, so this function only needs
+/// to normalize the two dependency-name notations ExifTool's generated
+/// tables use (`Module::Tag` for QuickTime, `Group:Tag` for everything
+/// parsed) onto one separator before delegating.
+fn resolve(map: &MetadataMap, name: &str) -> Option<String> {
+    let key = name.replacen("::", ":", 1);
+    resolve_dependency(map, &key)
 }
 
 /// Compute every Composite tag whose inputs are available, and insert them.
@@ -258,10 +161,8 @@ pub fn apply(map: &mut MetadataMap) -> usize {
     let mut added = 0;
     // ExifTool branches on manufacturer for Canon sensor geometry, so resolve
     // it once up front rather than per composite.
-    let make = lookup(map, "Make");
-    let file_type = lookup(map, "FileType");
-    // ValueConv forms of composites computed so far, keyed by bare tag name.
-    let mut values: HashMap<&str, Derived> = HashMap::new();
+    let make = resolve(map, "Make");
+    let file_type = resolve(map, "FileType");
     // Composites this run produced. They may be recomputed on a later pass
     // once more of their optional inputs exist; tags that came from the file
     // are never touched.
@@ -280,7 +181,7 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             // the Composite output key.
             if comp.module == "Exif"
                 && comp.name == "DateTimeOriginal"
-                && lookup(map, "DateTimeOriginal").is_some()
+                && resolve(map, "DateTimeOriginal").is_some()
             {
                 continue;
             }
@@ -306,7 +207,7 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             let mut owned: Vec<Option<String>> = vec![None; input_len];
             let mut satisfied = true;
             for &(index, dep) in comp.require {
-                match resolve(map, &values, dep) {
+                match resolve(map, dep) {
                     Some(v) => owned[index] = Some(v),
                     None => {
                         satisfied = false;
@@ -318,7 +219,7 @@ pub fn apply(map: &mut MetadataMap) -> usize {
                 continue;
             }
             for &(index, dep) in comp.desire {
-                owned[index] = resolve(map, &values, dep);
+                owned[index] = resolve(map, dep);
             }
             // Exif.pm ImageSize ValueConv (Exif.pm:4384-4390) prefers
             // ExifImageWidth/Height over the required IFD0 ImageWidth/Height
@@ -346,14 +247,54 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             if let Some(c) = compute::compute(comp.module, comp.name, &inputs, make.as_deref()) {
                 // Count only genuine changes, so the fixpoint still terminates.
                 let changed = map.get_string(&key) != Some(c.print.as_str());
-                values.insert(
-                    comp.name,
-                    Derived {
-                        value: c.value,
-                        priority: comp.priority,
-                    },
+                // Carrying the composite's own declared `Composite::priority`
+                // (ExifTool.pm:9442's `Priority`, clamped at 0 -- the lowest
+                // this crate's u8 `TagOccurrence::priority` can represent,
+                // which is also FoundTag's own floor: nothing beneath the
+                // "yield to any ordinarily-extracted tag" case at priority 0
+                // has a different effect) is what lets `resolve_dependency`
+                // arbitrate a same-named extracted tag against this
+                // Composite the same way FoundTag would -- see
+                // `resolve_dependency`'s own doc comment for the Canon `ISO`
+                // worked example this replaces the old `values`/`Derived`
+                // special case with. Attaching `c.value` (the full-precision
+                // ValueConv form) via `insert_occurrence_with_raw` is what
+                // lets a later composite in this same pass (or a later pass)
+                // read this one back at full precision instead of the
+                // rounded `c.print` string -- the same job the old
+                // in-memory `values` cache did, now folded into the
+                // occurrence itself.
+                let priority = comp.priority.max(0) as u8;
+                // A composite revisited on a later pass (`already_ours`) is
+                // refining its *own* prior guess, not contending with a
+                // second source for the name -- `FocalLength35efl` upgrading
+                // from "34.0 mm" to "34.0 mm (35 mm equivalent: 54.0 mm)" is
+                // the same logical tag, not two tags racing for one key. But
+                // `TagSink::record`'s priority-0 promotion rule (matching
+                // `ExifTool.pm:9541-9551`) treats a same-priority arrival as
+                // *losing* to an existing priority-0 winner, precisely to
+                // make a genuine `Priority => 0` tie (JPEG COM's two comment
+                // sources) resolve to the first arrival. Applied naively
+                // here, that rule would freeze every demoted composite
+                // (`Composite:GPSPosition`, `Canon:ISO`, ...) at whatever
+                // its first, least-informed pass produced and block every
+                // later pass's better answer from ever landing. Removing the
+                // key first makes the re-insertion land in the sink's vacant
+                // branch, which records unconditionally -- refining a
+                // composite's own value is not the same operation as a
+                // second source contending for its name, and this is what
+                // keeps the two from being conflated.
+                if already_ours {
+                    map.remove(&key);
+                }
+                map.insert_occurrence_with_raw(
+                    key,
+                    TagValue::new_string(c.print),
+                    TagValue::new_string(c.value),
+                    priority,
+                    "",
+                    Instance::default(),
                 );
-                map.insert(key, TagValue::new_string(c.print));
                 if !already_ours {
                     added += 1;
                 }
@@ -447,21 +388,29 @@ mod tests {
     }
 
     #[test]
-    fn unqualified_lookup_has_deterministic_group_precedence() {
-        // Each MetadataMap gets an independently-randomized HashMap seed. A
-        // plain `.find()` therefore selected every one of these values across
-        // repeated runs, making ImageSize change nondeterministically.
+    fn unqualified_lookup_is_deterministic_and_favors_the_last_recorded_occurrence() {
+        // `TagSink`'s own winner rule (`ExifTool.pm:9564`, `$priority >=
+        // $oldPriority`) is what `resolve_dependency` now delegates to via
+        // `cli::tag_resolution::resolve_requested_tags`: every occurrence
+        // minted through the `insert()` shim ties at
+        // `SHIM_DEFAULT_PRIORITY`, so the *last-recorded* one wins,
+        // regardless of its group name -- unlike the old hard-coded
+        // File-before-EXIF-before-MakerNotes rank table this replaced. This
+        // is deterministic because `TagSink` stores occurrences in a `Vec`
+        // (file order is intrinsic to it), not because of anything about
+        // group names.
         for _ in 0..1_000 {
             let mut m = map_of(&[
                 ("MakerNotes:ImageWidth", "1624"),
                 ("EXIF:ImageWidth", "6000"),
                 ("File:ImageWidth", "4000"),
             ]);
-            assert_eq!(lookup(&m, "ImageWidth").as_deref(), Some("4000"));
+            assert_eq!(resolve(&m, "ImageWidth").as_deref(), Some("4000"));
 
-            // An actual unqualified key remains authoritative.
+            // An actual unqualified key remains authoritative: `insert()`
+            // records it after the three above, so it wins on `order` too.
             m.insert("ImageWidth", TagValue::new_string("8000"));
-            assert_eq!(lookup(&m, "ImageWidth").as_deref(), Some("8000"));
+            assert_eq!(resolve(&m, "ImageWidth").as_deref(), Some("8000"));
         }
 
         let mut m = map_of(&[
@@ -475,10 +424,19 @@ mod tests {
     }
 
     #[test]
-    fn unknown_groups_use_the_key_as_a_stable_tiebreaker() {
+    fn unqualified_lookup_ignores_group_name_and_uses_recording_order_alone() {
+        // Regression pin against the old rank table's `(rank, key)` tiebreak,
+        // which fell back to *alphabetical key order* for two groups it did
+        // not otherwise rank -- "Alpha:Thing" beat "Zulu:Thing" purely by
+        // spelling. The new rule has no such fallback: whichever occurrence
+        // was recorded last wins, so reversing the insertion order must
+        // reverse the winner too.
         for _ in 0..1_000 {
-            let m = map_of(&[("Zulu:Thing", "last"), ("Alpha:Thing", "first")]);
-            assert_eq!(lookup(&m, "Thing").as_deref(), Some("first"));
+            let forward = map_of(&[("Zulu:Thing", "first"), ("Alpha:Thing", "second")]);
+            assert_eq!(resolve(&forward, "Thing").as_deref(), Some("second"));
+
+            let reversed = map_of(&[("Alpha:Thing", "first"), ("Zulu:Thing", "second")]);
+            assert_eq!(resolve(&reversed, "Thing").as_deref(), Some("second"));
         }
     }
 
@@ -609,7 +567,7 @@ mod tests {
         );
         m.insert("ExifIFD:ISO", TagValue::Integer(100));
         let shutter_value_conv =
-            lookup_key(&m, "ExifIFD:ShutterSpeedValue").expect("APEX shutter ValueConv");
+            resolve(&m, "ExifIFD:ShutterSpeedValue").expect("APEX shutter ValueConv");
         let shutter_seconds: f64 = shutter_value_conv.parse().expect("numeric ValueConv");
         assert!((shutter_seconds - 2f64.powf(-7.25)).abs() < f64::EPSILON);
         assert_ne!(shutter_value_conv, "1/152");
@@ -792,5 +750,97 @@ mod tests {
     fn terminates_on_an_empty_map() {
         let mut m = MetadataMap::new();
         assert_eq!(apply(&mut m), 0);
+    }
+}
+
+#[cfg(test)]
+mod step22_bare_name_arbitration_regression {
+    //! Pinned-corpus regressions this step's own full-corpus conformance
+    //! run found while replacing the hard-coded group-rank table with real
+    //! priority+order arbitration (`OVERHAUL_STEP18_DESIGN.md` Phase C):
+    //! a same-named tag from a lower-priority source (a JPEG APP12
+    //! "Picture Info" segment, `PRIORITY => 0` in ExifTool's own
+    //! `%APP12::PictureInfo` table) or a source ExifTool's real file-order
+    //! scan visits *before* the one that should win (SPIFF vs SOF) can
+    //! otherwise win a bare Composite dependency's priority/order tie.
+    //!
+    //! `ExifTool.jpg` is deliberately multi-format (it round-trips through
+    //! ExifTool's own test suite carrying JPEG, SPIFF, CIFF, EXIF, IPTC and
+    //! an APP12 Picture Info segment all in one file), which is exactly why
+    //! it is the file that exercises this: it is one of the only corpus
+    //! files where a genuinely lower-priority or later-in-scan-order source
+    //! carries a same-named tag a Composite also depends on.
+
+    use std::path::Path;
+
+    fn composite_string(path: &str, key: &str) -> Option<String> {
+        let path = Path::new(path);
+        if !path.is_file() {
+            eprintln!("skip: pinned fixture {} not present", path.display());
+            return Some("<skipped: fixture absent>".to_string());
+        }
+        let report = crate::core::operations::read_metadata_report(path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        report
+            .metadata
+            .get_string(key)
+            .map(std::string::ToString::to_string)
+    }
+
+    const EXIFTOOL_JPG: &str = "/tmp/oxidex-exiftool-cache/exiftool/t/images/ExifTool.jpg";
+
+    /// `Composite:ImageSize`/`Megapixels` bare-resolve `ImageWidth`/
+    /// `ImageHeight`, both ordinary (undeclared) priority in ExifTool
+    /// (`JPEG.pm`'s `%SPIFF` table sets no `PRIORITY`). Real ExifTool's
+    /// SOF marker is always scanned *after* an APP8 SPIFF marker in a real
+    /// JPEG byte stream, so `File:ImageWidth` (from SOF) is recorded after
+    /// `SPIFF:ImageWidth` and wins the tie by `order`
+    /// (`ExifTool.pm:9564`). Pinned oracle (13.59, `-G -s -j -a`):
+    /// `Composite:ImageSize` = `"8x8"`, `Composite:Megapixels` =
+    /// `6.4e-05`. Before this step's `operations.rs` fix (processing
+    /// `process_spiff_segments` before `process_sof_segments_with_options`,
+    /// matching that real scan order), oxidex read `"3000x4500"`/`13.5` --
+    /// SPIFF's own (much larger, unrelated) declared dimensions.
+    #[test]
+    fn exiftool_jpg_image_size_prefers_the_later_scanned_sof_dimensions() {
+        assert_eq!(
+            composite_string(EXIFTOOL_JPG, "Composite:ImageSize"),
+            Some("8x8".to_string())
+        );
+    }
+
+    #[test]
+    fn exiftool_jpg_megapixels_matches_the_sof_dimensions_not_spiffs() {
+        let mp = composite_string(EXIFTOOL_JPG, "Composite:Megapixels");
+        if mp.as_deref() == Some("<skipped: fixture absent>") {
+            return;
+        }
+        let mp: f64 = mp.expect("Composite:Megapixels").parse().expect("numeric");
+        assert!(
+            (mp - 0.000064).abs() < 1e-9,
+            "expected ~6.4e-05 (8x8 px), got {mp}"
+        );
+    }
+
+    /// `Composite:Aperture`'s unqualified `Desire => {0 => 'FNumber'}`
+    /// (Exif.pm:4782) must bind `ExifIFD:FNumber` ("3.5"), not the JPEG
+    /// APP12 Picture Info segment's own same-named `APP12:FNumber`
+    /// ("11.0") -- `%APP12::PictureInfo` declares `PRIORITY => 0`
+    /// (APP12.pm:27), which the JPEG-segment merge point silently dropped
+    /// before this step's `jpeg_helpers.rs` fix (looping through
+    /// `picture_info.iter()`'s winner-only projection and re-inserting via
+    /// the plain `insert()` shim, instead of `MetadataMap::merge`, flattened
+    /// every occurrence back to `SHIM_DEFAULT_PRIORITY`). Pinned oracle:
+    /// `Composite:Aperture` = `"3.5"`, `Composite:LightValue` = `"10.9"`.
+    #[test]
+    fn exiftool_jpg_aperture_defers_to_exif_over_the_priority_zero_app12_segment() {
+        assert_eq!(
+            composite_string(EXIFTOOL_JPG, "Composite:Aperture"),
+            Some("3.5".to_string())
+        );
+        assert_eq!(
+            composite_string(EXIFTOOL_JPG, "Composite:LightValue"),
+            Some("10.9".to_string())
+        );
     }
 }
