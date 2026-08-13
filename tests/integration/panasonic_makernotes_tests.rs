@@ -6,12 +6,19 @@
 //! - Header validation
 //! - Tag extraction from synthetic test data
 
+const DC_S1M2ES: &str =
+    "/tmp/oxidex-exiftool-cache/combined-samples/Panasonic/PanasonicDC-S1M2ES.jpg";
+
 #[test]
 fn panasonic_dc_s1m2es_reports_late_makernote_tags() {
     use oxidex::core::operations::read_metadata;
     use std::path::Path;
 
-    let fixture = "/tmp/oxidex-exiftool-cache/combined-samples/Panasonic/PanasonicDC-S1M2ES.jpg";
+    if !Path::new(DC_S1M2ES).is_file() {
+        return;
+    }
+
+    let fixture = DC_S1M2ES;
     if !Path::new(fixture).is_file() {
         eprintln!("skipping: corpus fixture not present at {fixture}");
         return;
