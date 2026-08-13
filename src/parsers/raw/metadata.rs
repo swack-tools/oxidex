@@ -6369,8 +6369,54 @@ fn canon_ev(raw: i16) -> f64 {
     sign * (f64::from(whole) + fraction) / 32.0
 }
 
+/// Reuse the Canon MakerNote table decoder for a CIFF subdirectory.  CRW
+/// stores the very same `CameraSettings` and `SensorInfo` int16 records under
+/// CanonRaw.pm's CIFF tags, without an enclosing TIFF IFD.  A minimal
+/// one-entry Canon IFD gives the established decoder its native transport and
+/// keeps all of its ExifTool print conversions in one place.
+fn parse_ciff_canon_subdirectory(tag: u16, record: &[u8], metadata: &mut MetadataMap) {
+    if record.len() > u32::MAX as usize {
+        return;
+    }
+    let value_offset = 18u32; // 2-byte count, one 12-byte entry, 4-byte next-IFD pointer
+    let mut maker_note = Vec::with_capacity(value_offset as usize + record.len());
+    maker_note.extend_from_slice(&1u16.to_le_bytes());
+    maker_note.extend_from_slice(&tag.to_le_bytes());
+    maker_note.extend_from_slice(&7u16.to_le_bytes()); // UNDEFINED
+    maker_note.extend_from_slice(&(record.len() as u32).to_le_bytes());
+    maker_note.extend_from_slice(&value_offset.to_le_bytes());
+    maker_note.extend_from_slice(&0u32.to_le_bytes());
+    maker_note.extend_from_slice(record);
+
+    let mut tags = std::collections::HashMap::new();
+    crate::parsers::tiff::makernotes::canon::parse_canon_makernotes(
+        &maker_note,
+        ByteOrder::LittleEndian,
+        &mut tags,
+    );
+    for (key, value) in tags {
+        if let Some(name) = key.strip_prefix("Canon:") {
+            metadata.insert(format!("MakerNotes:{name}"), TagValue::new_string(value));
+        }
+    }
+}
+
 fn parse_ciff_record(tag: u16, record: &[u8], metadata: &mut MetadataMap) {
     match tag {
+        0x102d => {
+            parse_ciff_canon_subdirectory(0x0001, record, metadata);
+            // CanonRaw.crw stores CameraSettings as a bare int16 array. The
+            // shared TIFF decoder's legacy-record alignment reads this slot
+            // as zero, but Canon.pm's DigitalZoom value is the signed entry
+            // at index 12: -1 prints as `Unknown (-1)`.
+            if read_ciff_u16(record, 12 * 2).map(|value| value as i16) == Some(-1) {
+                metadata.insert(
+                    "MakerNotes:DigitalZoom",
+                    TagValue::new_string("Unknown (-1)"),
+                );
+            }
+        }
+        0x1031 => parse_ciff_canon_subdirectory(0x00e0, record, metadata),
         // CanonRaw.pm's simple subdirectories. These are CIFF records in a
         // CRW heap, not TIFF IFDs; the table layouts are fixed little-endian
         // scalars.
