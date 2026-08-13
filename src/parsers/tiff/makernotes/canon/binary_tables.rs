@@ -58,6 +58,9 @@ enum CanonBinaryConv {
     /// sub that keeps the raw value visible:
     /// `return sprintf("On (0x%.2x)",$val) if $val & 0x08; return sprintf("Off (0x%.2x)",$val);`
     IntelligentContrast,
+    /// `%Canon::AFConfig` key 1 (Canon.pm:9322): `ValueConv => '$val + 1'`, then
+    /// `11 => 'Case A'`, `0x80000000 => 'n/a'`, or `Case <value>`.
+    AFConfigTool,
 }
 
 /// One field of a `%Canon` binary sub-table.
@@ -754,6 +757,13 @@ const TABLE_HDR_INFO: &[CanonBinaryField] = &[
 /// 1'` (Canon.pm:9322-9332), and this module only reproduces fields with no `ValueConv`.
 const TABLE_AF_CONFIG: &[CanonBinaryField] = &[
     CanonBinaryField {
+        index: 1,
+        name: "AFConfigTool",
+        format: CanonBinaryFormat::Int32s,
+        count: 1,
+        conv: CanonBinaryConv::AFConfigTool,
+    },
+    CanonBinaryField {
         index: 2,
         name: "AFTrackingSensitivity",
         format: CanonBinaryFormat::Int32s,
@@ -1424,6 +1434,11 @@ fn render_value(conv: CanonBinaryConv, value: i64) -> String {
             0xffff => "n/a".to_string(),
             other if other & 0x08 != 0 => format!("On (0x{other:02x})"),
             other => format!("Off (0x{other:02x})"),
+        },
+        CanonBinaryConv::AFConfigTool => match value + 1 {
+            11 => "Case A".to_string(),
+            0x8000_0000 => "n/a".to_string(),
+            case => format!("Case {case}"),
         },
         CanonBinaryConv::Bitmask(table) => {
             // ExifTool's DecodeBits defaults to a 32-bit word and retains set bits

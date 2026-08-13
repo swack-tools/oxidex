@@ -326,6 +326,64 @@ pub fn parse_file_info(
     }
 }
 
+/// `Nikon::MakerNotes0x56` (Main tag 0x0056), the Z-series burst record.
+///
+/// The packed word at offset four is only meaningful when it is non-zero;
+/// ExifTool uses that same value as the `BurstFlag` condition for the five
+/// burst fields.  The final word is independently reported as pixel shift.
+pub fn parse_maker_notes_0x56(data: &[u8], order: ByteOrder, tags: &mut HashMap<String, String>) {
+    if data.len() < 4 {
+        return;
+    }
+    let firmware = ascii_value(&data[..4]);
+    if firmware.len() == 4 && firmware.as_bytes().iter().all(u8::is_ascii_digit) {
+        tags.insert(
+            "Nikon:FirmwareVersion56".to_string(),
+            format!("{}.{}", &firmware[..2], &firmware[2..]),
+        );
+    }
+
+    let burst = read_u32(data, 4, order).unwrap_or(0);
+    if burst != 0 {
+        tags.insert(
+            "Nikon:BurstStartSlotNumber".to_string(),
+            (((burst & 0x2000_0000) >> 29) + 1).to_string(),
+        );
+        tags.insert(
+            "Nikon:BurstStartFolderNumber".to_string(),
+            ((burst & 0x1ff8_0000) >> 19).to_string(),
+        );
+        tags.insert(
+            "Nikon:BurstStartImageNumber".to_string(),
+            ((burst & 0x0007_ffe0) >> 5).to_string(),
+        );
+        if let Some(kind) = match burst & 0x1f {
+            0 => Some("JPG"),
+            2 => Some("NEF"),
+            3 => Some("TIF"),
+            4 => Some("NDF"),
+            5 => Some("MOV"),
+            6 => Some("NEV"),
+            7 => Some("MP4"),
+            _ => None,
+        } {
+            tags.insert("Nikon:BurstStartImageType".to_string(), kind.to_string());
+        }
+        if let Some(number) = read_u32(data, 8, order) {
+            tags.insert("Nikon:BurstShotNumber".to_string(), number.to_string());
+        }
+    }
+    if let Some(active) = read_u32(data, 12, order) {
+        if let Some(printed) = match active {
+            0 => Some("No"),
+            1 => Some("Yes"),
+            _ => None,
+        } {
+            tags.insert("Nikon:PixelShiftActive".to_string(), printed.to_string());
+        }
+    }
+}
+
 /// `Nikon::AFTune` (`Nikon::Main` 0x00b9).
 pub fn parse_af_tune(data: &[u8], tags: &mut HashMap<String, String>) {
     const AF_FINE_TUNE: &[(u8, &str)] =
@@ -753,6 +811,23 @@ mod tests {
         parse_file_info(&data, ByteOrder::LittleEndian, None, &mut tags);
         assert_eq!(tags["Nikon:DirectoryNumber"], "100");
         assert_eq!(tags["Nikon:FileNumber"], "0027");
+    }
+
+    #[test]
+    fn maker_notes_0x56_decodes_z_series_burst_record() {
+        // Exact 0x0056 payload from the pinned NikonZf.jpg fixture.
+        let data = [
+            b'0', b'1', b'0', b'0', 0xa0, 0xe7, 0x30, 0x03, 1, 0, 0, 0, 1, 0, 0, 0,
+        ];
+        let mut tags = HashMap::new();
+        parse_maker_notes_0x56(&data, ByteOrder::LittleEndian, &mut tags);
+        assert_eq!(tags["Nikon:FirmwareVersion56"], "01.00");
+        assert_eq!(tags["Nikon:BurstStartSlotNumber"], "1");
+        assert_eq!(tags["Nikon:BurstStartFolderNumber"], "102");
+        assert_eq!(tags["Nikon:BurstStartImageNumber"], "1853");
+        assert_eq!(tags["Nikon:BurstStartImageType"], "JPG");
+        assert_eq!(tags["Nikon:BurstShotNumber"], "1");
+        assert_eq!(tags["Nikon:PixelShiftActive"], "Yes");
     }
 
     #[test]
