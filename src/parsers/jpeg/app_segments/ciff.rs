@@ -206,6 +206,12 @@ fn insert_ciff_value(
     };
 
     match tag {
+        0x0001 => {
+            metadata.insert(
+                "CIFF:FreeBytes".to_string(),
+                TagValue::Binary(value.to_vec()),
+            );
+        }
         0x1803 => {
             if let Some(format) = integer(0) {
                 let format = match format as u32 {
@@ -419,10 +425,22 @@ fn format_number(value: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_ciff_app0;
+    use super::{Endian, insert_ciff_value, parse_ciff_app0};
+    use crate::core::{MetadataMap, TagValue};
 
     #[test]
     fn rejects_non_ciff_app0_data() {
         assert!(parse_ciff_app0(b"JFIF\0\x01\x02").is_empty());
+    }
+
+    #[test]
+    fn preserves_free_bytes_as_binary() {
+        let mut metadata = MetadataMap::new();
+        let free_bytes = [0_u8; 12];
+        insert_ciff_value(0x0001, None, &free_bytes, Endian::Little, &mut metadata);
+        assert!(matches!(
+            metadata.get("CIFF:FreeBytes"),
+            Some(TagValue::Binary(value)) if value == &free_bytes
+        ));
     }
 }

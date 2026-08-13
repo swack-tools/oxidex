@@ -46,6 +46,7 @@ pub mod text;
 pub mod tiff;
 pub mod trailer;
 pub mod video;
+pub mod vivo;
 pub mod xmp;
 
 // Optional AI-powered file detection (feature: magika)
