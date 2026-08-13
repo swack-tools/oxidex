@@ -59,6 +59,10 @@ fn leica_d_lux8_reports_panasonic_main_late_tags() {
         metadata.get_string("Panasonic:MonochromeGrainEffect"),
         Some("Off")
     );
+    assert_eq!(
+        metadata.get_string("Panasonic:TimeLapseShotNumber"),
+        Some("0")
+    );
 }
 
 #[test]

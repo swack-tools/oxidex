@@ -670,6 +670,7 @@ impl OlympusParser {
                     model,
                     tags,
                 );
+                parse_focus_info_af_info(data, start, base, effective_byte_order, tags);
             }
 
             if entry.tag_id == OLYMPUS_CAMERA_SETTINGS_SUBIFD {
@@ -687,6 +688,40 @@ impl OlympusParser {
 
         Ok(())
     }
+}
+
+/// Decode the one documented scalar in Olympus `AFInfo`.
+///
+/// `FocusInfo` tag 0x0328 is an `undef` byte block whose nested table is
+/// `Olympus::AFInfo`.  ExifTool 13.59 declares `CAFSensitivity` at byte
+/// offset 0x062c with `Format => int8s`; reading no other field prevents a
+/// guessed interpretation of this mostly undocumented record.
+fn parse_focus_info_af_info(
+    data: &[u8],
+    start: usize,
+    base: Option<i64>,
+    order: ByteOrder,
+    tags: &mut HashMap<String, String>,
+) {
+    let Some(entries) = ifd::read_ifd(data, start, order) else {
+        return;
+    };
+    let floor = start + 2 + entries.len() * 12 + 4;
+    let Some(entry) = entries.iter().find(|entry| entry.tag_id == 0x0328) else {
+        return;
+    };
+    let Some(ifd::OlyVal::Bytes(bytes)) =
+        ifd::decode_entry_with_floor(data, entry, base, order, None, floor)
+    else {
+        return;
+    };
+    let Some(&value) = bytes.get(0x062c) else {
+        return;
+    };
+    tags.insert(
+        "Olympus:CAFSensitivity".to_string(),
+        (value as i8).to_string(),
+    );
 }
 
 /// Decode the OM-series `CameraSettings` binary records that ExifTool routes

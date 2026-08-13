@@ -4,6 +4,21 @@ use std::path::Path;
 const DJI_M30T: &str = "/tmp/oxidex-exiftool-cache/combined-samples/DJI/DJI_M30T.jpg";
 const DJI_MAVIC2_ENTERPRISE_ADVANCED: &str =
     "/tmp/oxidex-exiftool-cache/combined-samples/DJI/DJI_MAVIC2-ENTERPRISE-ADVANCED.jpg";
+const DJI_XT2: &str = "/tmp/oxidex-exiftool-cache/combined-samples/DJI/DJI_XT2.jpg";
+
+/// ExifTool's comparison normalizes the `drone-dji` schema as XMP. The XT2
+/// fixture's `RtkFlag` is an integer-valued property with no PrintConv, so
+/// ExifTool 13.59 reports its text value unchanged.
+#[test]
+fn dji_xt2_xmp_rtk_flag_matches_exiftool() {
+    if !Path::new(DJI_XT2).is_file() {
+        eprintln!("skipping: corpus fixture not present at {DJI_XT2}");
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(DJI_XT2)).expect("DJI XT2 parses");
+    assert_eq!(metadata.get_string("XMP:RtkFlag"), Some("0"));
+}
 
 /// ExifTool 13.59 selects DJI::Info for APP7 `DJI-DBG\0` and exposes the
 /// bracketed `sensor_id` record unchanged.

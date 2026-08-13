@@ -37,6 +37,27 @@ fn om_1_reports_nested_af_and_subject_detection_tags() {
     );
 }
 
+/// ExifTool 13.59 reads this real OM-1 fixture's FocusInfo sub-IFD and its
+/// nested AFInfo binary record.  The two values are scalar fields, not
+/// display conversions: `AntiShockWaitingTime` is FocusInfo 0x2100 and
+/// `CAFSensitivity` is signed byte 0x062c of AFInfo.
+#[test]
+fn om_1_reports_focus_info_wait_and_caf_sensitivity() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    if !Path::new(OM_1).is_file() {
+        return;
+    }
+
+    let metadata = read_metadata(Path::new(OM_1)).expect("OM-1 parses");
+    assert_eq!(
+        metadata.get_string("Olympus:AntiShockWaitingTime"),
+        Some("0")
+    );
+    assert_eq!(metadata.get_string("Olympus:CAFSensitivity"), Some("0"));
+}
+
 #[test]
 fn test_olympus_header_validation() {
     use oxidex::parsers::tiff::makernotes::olympus::OlympusParser;

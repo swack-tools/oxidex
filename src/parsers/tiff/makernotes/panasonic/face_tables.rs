@@ -258,3 +258,31 @@ pub(crate) static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
         },
     ],
 };
+
+/// `Image::ExifTool::Panasonic::TimeInfo` -- 1 transcribable field,
+/// `FORMAT int8u`.
+///
+/// Transcribed from ExifTool 13.59's in-memory tag table by
+/// `tools/exiftool-tables/codegen_subdirs.py --allow-skip`.  The table's
+/// `PanasonicDateTime` field is deliberately omitted because its RawConv and
+/// date conversion are not yet modeled by the binary-subdirectory generator;
+/// `TimeLapseShotNumber` has no conversion and is reproduced exactly.
+pub(crate) static PANASONIC_TIMEINFO: BinaryTable = BinaryTable {
+    name: "TimeInfo",
+    default_format: Fmt::U8,
+    first_entry: 0,
+    fields: &[Field {
+        key: "16",
+        index: 16,
+        cond: Cond::Always,
+        name: "TimeLapseShotNumber",
+        format: Some(Fmt::U32),
+        count: 1,
+        set_member: None,
+        gate: None,
+        mask: None,
+        value_conv: ValueConv::None,
+        print_conv: PrintConv::None,
+        low_priority: false,
+    }],
+};
