@@ -18,6 +18,11 @@ const CANON_A560: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Canon/Cano
 const CANON_EOS_5D_M3: &str =
     "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonEOS5D_MarkIII.jpg";
 const CANON_EOS_D60: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonEOS_D60.jpg";
+const CANON_EOS_1D: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonEOS-1D.jpg";
+const CANON_REBEL_T1I: &str =
+    "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonEOS_REBEL_T1i.jpg";
+const CANON_A1300: &str =
+    "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonPowerShotA1300.jpg";
 
 /// Canon.pm FileInfo key 6 uses `RawConv => '$val <= 0 ? undef : $val'` and
 /// its `canonQuality` table renders the real EOS M10 corpus value 3 as Fine.
@@ -65,6 +70,68 @@ fn canon_direct_and_binary_makernote_fields_match_pinned_exiftool() {
         (CANON_A560, "Canon:FaceWidth", "35"),
         (CANON_EOS_5D_M3, "Canon:InternalSerialNumber2", "AD0010003"),
         (CANON_EOS_D60, "Canon:BlackLevels", "128 128 128 128"),
+    ];
+
+    for (path, tag, expected) in cases {
+        if !Path::new(path).is_file() {
+            return;
+        }
+        let metadata = read_metadata(Path::new(path)).expect("Canon fixture parses");
+        assert_eq!(metadata.get_string(tag), Some(expected), "{path}: {tag}");
+    }
+}
+
+/// Pinned ExifTool 13.59's nontrivial Canon direct-field behavior: the EOS-1D
+/// AF grid has padding bits, `%longBin` measures decoded number text rather
+/// than source bytes, and DustRemovalData is unconditionally binary.
+#[test]
+fn canon_legacy_direct_fields_match_pinned_exiftool() {
+    use oxidex::core::operations::read_metadata;
+    use std::path::Path;
+
+    let cases = [
+        (
+            CANON_EOS_1D,
+            "Canon:AFPointsInFocus1D",
+            "Auto (B6,B7,C6,C7,C8,D6,D7,D8)",
+        ),
+        (
+            CANON_EOS_1D,
+            "Canon:ToneCurveTable",
+            "(Binary data 1679 bytes, use -b option to extract)",
+        ),
+        (
+            CANON_EOS_1D,
+            "Canon:SharpnessTable",
+            "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        ),
+        (
+            CANON_EOS_1D,
+            "Canon:SharpnessFreqTable",
+            "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        ),
+        (
+            CANON_EOS_1D,
+            "Canon:WhiteBalanceTable",
+            "(Binary data 2217 bytes, use -b option to extract)",
+        ),
+        (
+            CANON_EOS_1D,
+            "Canon:ToneCurveMatching",
+            "(Binary data 95 bytes, use -b option to extract)",
+        ),
+        (
+            CANON_EOS_1D,
+            "Canon:WhiteBalanceMatching",
+            "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        ),
+        (
+            CANON_REBEL_T1I,
+            "Canon:DustRemovalData",
+            "(Binary data 1024 bytes, use -b option to extract)",
+        ),
+        (CANON_A1300, "Canon:Categories", "(none)"),
+        (CANON_EOS_R6M2, "Canon:AutoAFPointSelEOSiTRAF", "Enable"),
     ];
 
     for (path, tag, expected) in cases {

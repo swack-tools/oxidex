@@ -841,6 +841,13 @@ const TABLE_AF_CONFIG: &[CanonBinaryField] = &[
         conv: CanonBinaryConv::Map(TABLE_AF_CONFIG_CONV28),
     },
     CanonBinaryField {
+        index: 10,
+        name: "AutoAFPointSelEOSiTRAF",
+        format: CanonBinaryFormat::Int32s,
+        count: 1,
+        conv: CanonBinaryConv::Map(&[(0, "Enable"), (1, "Disable")]),
+    },
+    CanonBinaryField {
         index: 11,
         name: "LensDriveWhenAFImpossible",
         format: CanonBinaryFormat::Int32s,
@@ -1526,6 +1533,9 @@ fn select_table(tag_id: u16, raw: &[u8]) -> Option<&'static CanonBinaryTable> {
 /// Whether a model satisfies an AFConfig field's `Condition` in Canon.pm.
 fn af_config_field_applies(name: &str, model: &str) -> bool {
     match name {
+        // Canon.pm:9418 -- valid for selected EOS bodies, with the concrete
+        // exclusion expressed as `$$self{Model} !~ /5D /`.
+        "AutoAFPointSelEOSiTRAF" => !model.contains("5D "),
         // Canon.pm:9364: `$$self{Model} =~ /EOS R\d/`.
         "USMLensElectronicMF" => model
             .split("EOS R")

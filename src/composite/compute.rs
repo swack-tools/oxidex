@@ -1264,6 +1264,11 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             )
         }
 
+        // Nikon.pm:13215-13222 Composite::LensSpec. Both dependencies have
+        // already passed their MakerNote PrintConv, and Nikon's ValueConv and
+        // PrintConv are the same literal space-separated join at this layer.
+        ("Nikon", "LensSpec") => Computed::same(format!("{} {}", get(i, 0)?, get(i, 1)?)),
+
         // Nikon.pm:13247-13261.  AFInfo2 has already PrintConv'd these two
         // inputs by the time Composite runs, so translate only the documented
         // display forms back to the small integer domains used by Nikon.pm's
