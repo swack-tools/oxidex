@@ -212,13 +212,20 @@ fn normalize_value_for_comparison(value: &str) -> String {
     //    src/parsers/xmp/rdf_parser.rs and its engine-side counterpart, and
     //    is deliberately left exactly as it was here -- changing the join
     //    would move 15 more comparisons underneath that work in flight.
-    if normalized.starts_with('[') && normalized.ends_with(']') {
-        let inner = &normalized[1..normalized.len() - 1];
-        let items: Vec<&str> = inner
-            .split(',')
-            .map(|s| s.trim().trim_matches('"'))
-            .collect();
-        return items.join(" ");
+    if normalized.starts_with('[')
+        && normalized.ends_with(']')
+        && let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(normalized)
+    {
+        return items
+            .into_iter()
+            .map(|item| match item {
+                serde_json::Value::String(value) => value,
+                other => other.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim()
+            .to_string();
     }
 
     normalized.to_string()
@@ -799,6 +806,16 @@ mod tests {
             normalize_value_for_comparison(r#"["ExifTool","Test","XMP"]"#),
             "ExifTool Test XMP"
         );
+    }
+
+    #[test]
+    fn test_json_array_transport_preserves_binary_summary_commas() {
+        let binary = "(Binary data 32 bytes, use -b option to extract)";
+        assert_eq!(
+            normalize_value_for_comparison(&format!(r#"["{binary}","{binary}"]"#)),
+            format!("{binary} {binary}")
+        );
+        assert_eq!(normalize_value_for_comparison(r#"["",""]"#), "");
     }
 
     #[test]
