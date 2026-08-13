@@ -215,6 +215,15 @@ pub fn dispatch_makernote_with_context_and_values(
         return Ok(());
     }
 
+    // MakerNotes.pm:206-213 dispatches HP Type4 by its `IIII\x04|\x05\0`
+    // payload before Make matching.  Pentax-branded Optio E65 files carry
+    // this HP record, so routing by Make would otherwise lose its exact
+    // binary-table fields.
+    if hp::HpParser::is_type4_makernote(data) {
+        hp::HpParser::parse_type4(data, tags);
+        return Ok(());
+    }
+
     // Vendors that spell their own name several ways across model generations
     // are matched by prefix rather than by an exhaustive literal list. Olympus
     // alone writes six different strings across the sample corpus -- "OLYMPUS
