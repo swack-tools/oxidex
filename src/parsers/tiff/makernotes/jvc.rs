@@ -24,6 +24,7 @@ use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
+use super::makernote_context::MakerNoteContext;
 use super::registries::jvc::jvc_registry;
 use super::shared::MakerNoteParser;
 use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
@@ -154,6 +155,33 @@ impl JvcParser {
         JvcParser
     }
 
+    /// Walk the MakerNote directory in `directory_data`, resolving its
+    /// out-of-line TIFF entry values through `value_data`.  `CPUVersions` in
+    /// JVC.jpg is at TIFF offset 0x328, so the declared MakerNote alone does
+    /// not provide the offset base ExifTool's directory inherits.
+    fn parse_note(
+        &self,
+        directory_data: &[u8],
+        value_data: &[u8],
+        byte_order: ByteOrder,
+        tags: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
+        let config = IfdParserConfig {
+            // MakerNotes.pm:237-243 selects `MakerNoteJVC` on `^JVC ` and
+            // declares `Start => '$valuePtr + 4'`.  The four-byte signature
+            // is not an IFD count (read as 0x564a without this skip).
+            // Headerless synthetic/legacy notes keep the shared parser's
+            // normal zero-offset behavior.
+            signature: Some(b"JVC "),
+            signature_offset: 4,
+            max_entries: 500,
+        };
+
+        parse_ifd_entries(directory_data, byte_order, &config, |entry, _| {
+            self.parse_entry(entry, value_data, byte_order, tags);
+        })
+    }
+
     /// Parses a single JVC MakerNote IFD entry and extracts its tag value
     /// Uses centralized registry for tag metadata and decoding
     fn parse_entry(
@@ -198,22 +226,26 @@ impl MakerNoteParser for JvcParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
-        let config = IfdParserConfig {
-            signature: None,
-            signature_offset: 0,
-            max_entries: 500,
-        };
+        self.parse_note(data, data, byte_order, tags)
+    }
 
-        parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
-            self.parse_entry(entry, parse_data, byte_order, tags);
-        })?;
-        Ok(())
+    fn parse_with_context(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        _model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
+        self.parse_note(ctx.payload(), ctx.tiff(), byte_order, tags)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    const JVC_FIXTURE: &str = "/tmp/oxidex-exiftool-cache/combined-samples/JVC.jpg";
 
     /// Builds a maker-note IFD in the requested byte order so both branches of
     /// `extract_u16_value` / `extract_raw_string` are exercised.
@@ -332,5 +364,22 @@ mod tests {
             // deliberately unnamed and must not be reported as Quality.
             assert_eq!(tags.len(), 2, "{order:?}: {tags:?}");
         }
+    }
+
+    /// The real note begins `JVC `, then its IFD.  ExifTool's
+    /// MakerNoteJVC `Start => '$valuePtr + 4'` must be reflected by the
+    /// production dispatch, not only by the synthetic IFD decoder above.
+    #[test]
+    fn jvc_fixture_reports_cpu_versions() {
+        if !Path::new(JVC_FIXTURE).is_file() {
+            return;
+        }
+
+        let metadata = crate::core::operations::read_metadata(Path::new(JVC_FIXTURE))
+            .expect("JVC fixture parses");
+        assert_eq!(
+            metadata.get_string("JVC:CPUVersions"),
+            Some("CPU1 2.00, 0, CPU2 0496, 0")
+        );
     }
 }

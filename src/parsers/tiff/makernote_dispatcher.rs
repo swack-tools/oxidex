@@ -205,6 +205,16 @@ pub fn dispatch_makernote_with_context_and_values(
         return Ok(());
     }
 
+    // MakerNotes.pm:275-284 selects Kodak Type-2 by its payload, not Make:
+    // Kodak, HP, Pentax and Minolta all sold cameras carrying this record.
+    // This must precede the Pentax Make-prefix route so EI-200 keeps its
+    // ExifTool `Kodak:` family.
+    if kodak::is_kodak_type2_makernote(data) {
+        let parser = kodak::KodakParser;
+        parser.parse_with_context(ctx, byte_order, model, tags)?;
+        return Ok(());
+    }
+
     // Vendors that spell their own name several ways across model generations
     // are matched by prefix rather than by an exhaustive literal list. Olympus
     // alone writes six different strings across the sample corpus -- "OLYMPUS

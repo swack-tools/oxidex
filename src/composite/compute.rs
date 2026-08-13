@@ -353,6 +353,29 @@ fn gps_degrees(value: &str) -> Option<f64> {
     )
 }
 
+/// Applies XMP's `%latConv`/`%longConv`: coordinate text is first normalized
+/// to decimal degrees, then rendered with `GPS::ToDMS` and its hemisphere.
+/// XMP carries the hemisphere on the value itself (for example
+/// `43,30.4233408N`), unlike TIFF GPS where it is a separate `*Ref` tag.
+pub(crate) fn format_xmp_gps_coordinate(value: &str, positive_reference: char) -> Option<String> {
+    let value = value.trim();
+    let reference = value.chars().last()?;
+    let negative_reference = match positive_reference {
+        'N' => 'S',
+        'E' => 'W',
+        _ => return None,
+    };
+    if reference != positive_reference && reference != negative_reference {
+        return None;
+    }
+    let numeric = value.strip_suffix(reference)?.trim();
+    let mut degrees = gps_degrees(numeric)?;
+    if reference == negative_reference {
+        degrees = -degrees.abs();
+    }
+    Some(gps_print(degrees, positive_reference))
+}
+
 fn gps_print(mut degrees: f64, positive_reference: char) -> String {
     let negative_reference = match positive_reference {
         'N' => 'S',
