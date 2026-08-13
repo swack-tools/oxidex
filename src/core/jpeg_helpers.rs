@@ -15,8 +15,8 @@ use crate::parsers::jpeg::app_segments::infiray::{binary_data_placeholder, read_
 use crate::parsers::jpeg::app_segments::infiray_tables as infiray;
 use crate::parsers::jpeg::app_segments::{
     parse_app6_ijpeg, parse_app10_hdr, parse_app11_jpeg_hdr, parse_app12_olympus,
-    parse_app12_picture_info, parse_app14_adobe, parse_infiray_isothermal, parse_jumbf,
-    parse_meta_app3, parse_photoshop_irb,
+    parse_app12_picture_info, parse_app14_adobe, parse_ciff_app0, parse_infiray_isothermal,
+    parse_jumbf, parse_meta_app3, parse_photoshop_irb,
 };
 use crate::parsers::jpeg::icc_chunk_assembler::IccChunkAssembler;
 use crate::parsers::jpeg::quality_estimate::estimate_quality_from_dqt_tables;
@@ -39,6 +39,10 @@ pub fn process_jfif_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     for segment in segments.iter().filter(|s| s.marker == 0xFFE0) {
         // Also try extended APP0 parser for JFXX segments
         let _ = crate::parsers::jpeg::app_parsers::parse_app0_extended(segment.data, metadata);
+
+        // A second APP0 record on early Canon PowerShot JPEGs can be a full
+        // CIFF `HEAPJPGM` directory, independent of the JFIF header.
+        metadata.merge(parse_ciff_app0(segment.data));
 
         // Check if this is a JFIF segment (starts with "JFIF\0")
         if segment.data.len() >= 14 && &segment.data[0..5] == b"JFIF\0" {
