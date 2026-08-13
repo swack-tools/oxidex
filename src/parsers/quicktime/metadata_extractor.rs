@@ -11,7 +11,7 @@ use super::atom_parser::Atom;
 use super::tag_mapping::atom_to_exiftool_tag;
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::exiftool_tables::{DecodedValue, decode_binary_table, find_table};
-use crate::io::timestamp::mac_time_to_exif_datetime;
+use crate::io::timestamp::{mac_time_to_exif_datetime, mac_time_to_exif_datetime_local};
 use crate::io::{ByteOrder, EndianReader};
 use crate::parsers::tiff::ifd_parser::{ByteOrder as TiffByteOrder, parse_ifd};
 use crate::tag_db::lookup_tag_name;
@@ -57,10 +57,11 @@ fn extract_track_metadata(
     trak: &Atom,
     metadata: &mut MetadataMap,
     index: usize,
+    local_timestamps: bool,
 ) -> Result<(), String> {
     // Extract track header - optional
     if let Some(tkhd) = trak.find_child("tkhd") {
-        let _ = extract_track_header(&tkhd, metadata, index);
+        let _ = extract_track_header(&tkhd, metadata, index, local_timestamps);
     }
 
     // Extract track aperture mode dimensions (tapt) - optional
@@ -86,7 +87,7 @@ fn extract_track_metadata(
 
     // Extract media header - optional
     if let Some(mdhd) = mdia.find_child("mdhd") {
-        let _ = extract_media_header(&mdhd, metadata, index);
+        let _ = extract_media_header(&mdhd, metadata, index, local_timestamps);
     }
 
     // Media information - required for sample table access
@@ -303,6 +304,16 @@ fn extract_track_aperture(
 
 /// Extract all metadata from QuickTime/MP4 atoms
 pub fn extract_metadata(root_atoms: &[Atom]) -> Result<MetadataMap, String> {
+    extract_metadata_with_local_timestamps(root_atoms, false)
+}
+
+/// Extract metadata, optionally rendering movie, track and media header
+/// timestamps in the local zone. Canon CR3 is the only caller that needs this
+/// ExifTool QuickTimeUTC behavior.
+pub fn extract_metadata_with_local_timestamps(
+    root_atoms: &[Atom],
+    local_timestamps: bool,
+) -> Result<MetadataMap, String> {
     let mut metadata = MetadataMap::with_capacity(50);
 
     // Extract file-level metadata from ftyp and mdat atoms
@@ -317,7 +328,7 @@ pub fn extract_metadata(root_atoms: &[Atom]) -> Result<MetadataMap, String> {
     if let Some(moov) = moov {
         // Extract movie header metadata (mvhd)
         if let Some(mvhd) = moov.find_child("mvhd") {
-            extract_movie_header(&mvhd, &mut metadata)?;
+            extract_movie_header(&mvhd, &mut metadata, local_timestamps)?;
         }
 
         // Extract track headers (tkhd) from all trak atoms
@@ -330,7 +341,7 @@ pub fn extract_metadata(root_atoms: &[Atom]) -> Result<MetadataMap, String> {
             for (index, trak) in trak_atoms.iter().enumerate() {
                 // Ignore errors - missing atoms in a track should not prevent
                 // processing other tracks (preserves original behavior)
-                let _ = extract_track_metadata(trak, &mut metadata, index);
+                let _ = extract_track_metadata(trak, &mut metadata, index, local_timestamps);
             }
         }
 
@@ -659,7 +670,11 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
 }
 
 /// Extract movie header metadata from mvhd atom
-fn extract_movie_header(mvhd: &Atom, metadata: &mut MetadataMap) -> Result<(), String> {
+fn extract_movie_header(
+    mvhd: &Atom,
+    metadata: &mut MetadataMap,
+    local_timestamps: bool,
+) -> Result<(), String> {
     if mvhd.data.len() < 100 {
         return Ok(());
     }
@@ -696,10 +711,18 @@ fn extract_movie_header(mvhd: &Atom, metadata: &mut MetadataMap) -> Result<(), S
 
     // Add both legacy CreateDate/ModifyDate and new MediaCreateDate/MediaModifyDate
     // Use shared timestamp utility for dates after 1970, fallback to legacy for older dates
-    let create_date_str = mac_time_to_exif_datetime(creation_time)
-        .unwrap_or_else(|| format_mac_time_legacy(creation_time));
-    let modify_date_str = mac_time_to_exif_datetime(modification_time)
-        .unwrap_or_else(|| format_mac_time_legacy(modification_time));
+    let create_date_str = (if local_timestamps {
+        mac_time_to_exif_datetime_local(creation_time)
+    } else {
+        mac_time_to_exif_datetime(creation_time)
+    })
+    .unwrap_or_else(|| format_mac_time_legacy(creation_time));
+    let modify_date_str = (if local_timestamps {
+        mac_time_to_exif_datetime_local(modification_time)
+    } else {
+        mac_time_to_exif_datetime(modification_time)
+    })
+    .unwrap_or_else(|| format_mac_time_legacy(modification_time));
 
     metadata.insert(
         "QuickTime:CreateDate".to_string(),
@@ -814,6 +837,7 @@ fn extract_track_header(
     tkhd: &Atom,
     metadata: &mut MetadataMap,
     track_index: usize,
+    local_timestamps: bool,
 ) -> Result<(), String> {
     if tkhd.data.len() < 84 {
         return Ok(());
@@ -867,10 +891,18 @@ fn extract_track_header(
 
     // Add track-specific timestamp tags
     // Use shared timestamp utility for dates after 1970, fallback to legacy for older dates
-    let create_date_str = mac_time_to_exif_datetime(creation_time)
-        .unwrap_or_else(|| format_mac_time_legacy(creation_time));
-    let modify_date_str = mac_time_to_exif_datetime(modification_time)
-        .unwrap_or_else(|| format_mac_time_legacy(modification_time));
+    let create_date_str = (if local_timestamps {
+        mac_time_to_exif_datetime_local(creation_time)
+    } else {
+        mac_time_to_exif_datetime(creation_time)
+    })
+    .unwrap_or_else(|| format_mac_time_legacy(creation_time));
+    let modify_date_str = (if local_timestamps {
+        mac_time_to_exif_datetime_local(modification_time)
+    } else {
+        mac_time_to_exif_datetime(modification_time)
+    })
+    .unwrap_or_else(|| format_mac_time_legacy(modification_time));
 
     metadata.insert(
         format!("QuickTime:TrackCreateDate{}", track_suffix),
@@ -960,6 +992,7 @@ fn extract_media_header(
     mdhd: &Atom,
     metadata: &mut MetadataMap,
     track_index: usize,
+    local_timestamps: bool,
 ) -> Result<(), String> {
     if mdhd.data.len() < 24 {
         return Ok(());
@@ -1005,10 +1038,18 @@ fn extract_media_header(
 
     // Media timestamps
     // Use shared timestamp utility for dates after 1970, fallback to legacy for older dates
-    let create_date_str = mac_time_to_exif_datetime(creation_time)
-        .unwrap_or_else(|| format_mac_time_legacy(creation_time));
-    let modify_date_str = mac_time_to_exif_datetime(modification_time)
-        .unwrap_or_else(|| format_mac_time_legacy(modification_time));
+    let create_date_str = (if local_timestamps {
+        mac_time_to_exif_datetime_local(creation_time)
+    } else {
+        mac_time_to_exif_datetime(creation_time)
+    })
+    .unwrap_or_else(|| format_mac_time_legacy(creation_time));
+    let modify_date_str = (if local_timestamps {
+        mac_time_to_exif_datetime_local(modification_time)
+    } else {
+        mac_time_to_exif_datetime(modification_time)
+    })
+    .unwrap_or_else(|| format_mac_time_legacy(modification_time));
 
     metadata.insert(
         format!("QuickTime:MediaCreateDate{}", track_suffix),

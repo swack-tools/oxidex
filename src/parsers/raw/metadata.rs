@@ -4706,12 +4706,15 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
     // it is the same box an MP4 carries. Walk it with the QuickTime box parser
     // before touching the Canon boxes: this is the whole QuickTime tag group,
     // and none of it needed new code.
-    let mut metadata = match crate::parsers::quicktime::parse_quicktime_metadata_from_bytes(data) {
-        Ok(map) => map,
-        // A CR3 whose box tree does not parse still has readable CMT boxes
-        // below (find_cr3_box scans rather than walks), so this is not fatal.
-        Err(_) => MetadataMap::new(),
-    };
+    let mut metadata =
+        match crate::parsers::quicktime::parse_quicktime_metadata_from_bytes_with_local_timestamps(
+            data, true,
+        ) {
+            Ok(map) => map,
+            // A CR3 whose box tree does not parse still has readable CMT boxes
+            // below (find_cr3_box scans rather than walks), so this is not fatal.
+            Err(_) => MetadataMap::new(),
+        };
 
     // File type. ExifTool starts from the `ftyp` major brand `crx ` -- which on
     // its own only says "Canon Raw", shared by CR3 and CRM -- and then lets the
