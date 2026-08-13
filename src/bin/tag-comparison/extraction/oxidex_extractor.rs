@@ -387,8 +387,24 @@ impl OxiDexExtractor {
             TagValue::DateTime(dt) => dt.format("%Y:%m:%d %H:%M:%S").to_string(),
             TagValue::Struct(_) => "[Structured data]".to_string(),
             TagValue::Array(arr) => {
-                serde_json::to_string(&arr.iter().map(Self::format_value).collect::<Vec<String>>())
-                    .expect("a vector of strings is JSON-serializable")
+                // Preserve scalar type in structured output. In particular,
+                // XMP real sequences must remain JSON numbers, not strings.
+                fn as_json(value: &TagValue) -> serde_json::Value {
+                    match value {
+                        TagValue::Integer(i) => serde_json::Value::Number((*i).into()),
+                        TagValue::Float(f) => serde_json::Number::from_f64(*f)
+                            .map(serde_json::Value::Number)
+                            .unwrap_or_else(|| {
+                                serde_json::Value::String(OxiDexExtractor::format_value(value))
+                            }),
+                        TagValue::Array(values) => {
+                            serde_json::Value::Array(values.iter().map(as_json).collect())
+                        }
+                        _ => serde_json::Value::String(OxiDexExtractor::format_value(value)),
+                    }
+                }
+                serde_json::to_string(&serde_json::Value::Array(arr.iter().map(as_json).collect()))
+                    .expect("TagValue arrays are JSON-serializable")
             }
         }
     }

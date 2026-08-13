@@ -225,6 +225,10 @@ fn decode_hdrp_v2_text(inflated: &[u8]) -> Vec<(String, String)> {
 
     for raw_line in text.split_inclusive('\n') {
         let line = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+        let generic_heading = line
+            .strip_prefix(' ')
+            .unwrap_or(line)
+            .starts_with(|c: char| c.is_ascii_uppercase());
         if let Some((name, value, is_base64)) = parse_v2_heading(line) {
             if let Some((tag, value)) = active.take() {
                 push_v2_binary(&mut out, &tag, value.len());
@@ -237,6 +241,10 @@ fn decode_hdrp_v2_text(inflated: &[u8]) -> Vec<(String, String)> {
                 active = Some((name, value.to_string()));
             } else {
                 active = Some((name, String::new()));
+            }
+        } else if generic_heading {
+            if let Some((tag, value)) = active.take() {
+                push_v2_binary(&mut out, &tag, value.len());
             }
         } else if let Some((_, value)) = active.as_mut() {
             // Perl's `ProcessHDRPMakerNote` captures through the byte before
