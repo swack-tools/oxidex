@@ -3524,9 +3524,19 @@
 #define MONTH_DAY_CREATED 18
 
 /*
+ Kodak.pm:85-91: `int8u[4]`, formatted as hh:mm:ss.hh.
+ */
+#define TIME_CREATED 20
+
+/*
  Kodak.pm:225-230: `int16u`, `ValueConv => '$val / 100'`.
  */
 #define TOTAL_ZOOM 98
+
+/*
+ Kodak.pm:231-235: `int16u`, zero is `Off`.
+ */
+#define DATE_TIME_STAMP 100
 
 #define CAMERAINFOA100 0
 

@@ -65,8 +65,12 @@ mod field_offset {
     pub const YEAR_CREATED: usize = 0x10;
     /// Kodak.pm:78-84: `int8u[2]`.
     pub const MONTH_DAY_CREATED: usize = 0x12;
+    /// Kodak.pm:85-91: `int8u[4]`, formatted as hh:mm:ss.hh.
+    pub const TIME_CREATED: usize = 0x14;
     /// Kodak.pm:225-230: `int16u`, `ValueConv => '$val / 100'`.
     pub const TOTAL_ZOOM: usize = 0x62;
+    /// Kodak.pm:231-235: `int16u`, zero is `Off`.
+    pub const DATE_TIME_STAMP: usize = 0x64;
 }
 
 /// Kodak MakerNote parser implementation
@@ -128,6 +132,18 @@ impl KodakParser {
             );
         }
 
+        // TimeCreated: Kodak.pm's `%.2d:%.2d:%.2d.%.2d` conversion.
+        if let Some(bytes) = record.get(field_offset::TIME_CREATED..field_offset::TIME_CREATED + 4)
+        {
+            tags.insert(
+                "Kodak:TimeCreated".to_string(),
+                format!(
+                    "{:02}:{:02}:{:02}.{:02}",
+                    bytes[0], bytes[1], bytes[2], bytes[3]
+                ),
+            );
+        }
+
         // TotalZoom: int16u, ValueConv '$val / 100' (no PrintConv, so the
         // ValueConv'd number prints directly -- Perl's default number
         // stringification, which perl_number reproduces).
@@ -135,6 +151,17 @@ impl KodakParser {
             tags.insert(
                 "Kodak:TotalZoom".to_string(),
                 perl_number(f64::from(v) / 100.0),
+            );
+        }
+
+        if let Some(v) = reader.u16_at(field_offset::DATE_TIME_STAMP) {
+            tags.insert(
+                "Kodak:DateTimeStamp".to_string(),
+                if v == 0 {
+                    "Off".to_string()
+                } else {
+                    format!("Mode {v}")
+                },
             );
         }
     }
@@ -230,7 +257,9 @@ mod tests {
         record[0x10..0x12].copy_from_slice(&2002u16.to_be_bytes());
         record[0x12] = 5;
         record[0x13] = 1;
+        record[0x14..0x18].copy_from_slice(&[10, 22, 28, 62]);
         record[0x62..0x64].copy_from_slice(&140u16.to_be_bytes());
+        record[0x64..0x66].copy_from_slice(&0u16.to_be_bytes());
         data.extend_from_slice(&record);
 
         let mut tags = HashMap::new();
@@ -251,6 +280,11 @@ mod tests {
             Some(&"05:01".to_string())
         );
         assert_eq!(tags.get("Kodak:TotalZoom"), Some(&"1.4".to_string()));
+        assert_eq!(
+            tags.get("Kodak:TimeCreated"),
+            Some(&"10:22:28.62".to_string())
+        );
+        assert_eq!(tags.get("Kodak:DateTimeStamp"), Some(&"Off".to_string()));
     }
 
     #[test]
