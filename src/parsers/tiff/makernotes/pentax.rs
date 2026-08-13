@@ -1416,9 +1416,29 @@ impl PentaxParser {
                     }
                 }
                 PENTAX_SENSOR_SIZE => {
+                    // Pentax.pm:2065 stores two int16u dimensions inline,
+                    // divides each by 500, then prints fixed three decimals.
+                    // Honor the MakerNote's active byte order: Samsung GX
+                    // fixtures carry this Pentax table in big-endian form.
+                    let bytes = match byte_order {
+                        ByteOrder::LittleEndian => entry.value_offset.to_le_bytes(),
+                        ByteOrder::BigEndian => entry.value_offset.to_be_bytes(),
+                    };
+                    let width = match byte_order {
+                        ByteOrder::LittleEndian => u16::from_le_bytes([bytes[0], bytes[1]]),
+                        ByteOrder::BigEndian => u16::from_be_bytes([bytes[0], bytes[1]]),
+                    };
+                    let height = match byte_order {
+                        ByteOrder::LittleEndian => u16::from_le_bytes([bytes[2], bytes[3]]),
+                        ByteOrder::BigEndian => u16::from_be_bytes([bytes[2], bytes[3]]),
+                    };
                     tags.insert(
                         "Pentax:SensorSize".to_string(),
-                        entry.value_offset.to_string(),
+                        format!(
+                            "{:.3} x {:.3} mm",
+                            f64::from(width) / 500.0,
+                            f64::from(height) / 500.0
+                        ),
                     );
                 }
                 PENTAX_IMAGE_AREA_OFFSET => {
