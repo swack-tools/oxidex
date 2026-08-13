@@ -560,7 +560,24 @@ pub fn process_xmp_segments(segments: &[Segment], metadata: &mut MetadataMap) {
                 // dc:subject as a list, not one joined string.
                 let tag_value = match value {
                     crate::parsers::xmp::rdf_parser::XmpValue::List(values) => {
-                        TagValue::Array(values.into_iter().map(TagValue::new_string).collect())
+                        // Panasonic writes this sequence as XMP real values.
+                        // Keep the parsed numeric representation so JSON output
+                        // has numbers (rather than quoted lexical strings), while
+                        // retaining the normal verbatim treatment for other XMP
+                        // lists such as dc:subject and tone curves.
+                        if tag_name == "XMP:NormalizedCropCorners" {
+                            TagValue::Array(
+                                values
+                                    .into_iter()
+                                    .map(|value| match value.parse::<f64>() {
+                                        Ok(number) if number.is_finite() => TagValue::Float(number),
+                                        _ => TagValue::new_string(value),
+                                    })
+                                    .collect(),
+                            )
+                        } else {
+                            TagValue::Array(values.into_iter().map(TagValue::new_string).collect())
+                        }
                     }
                     // XMP is a text format and ExifTool prints the property's
                     // characters back verbatim: crs:ProcessVersion "11.0" is

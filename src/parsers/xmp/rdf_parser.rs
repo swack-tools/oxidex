@@ -440,9 +440,12 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
     // ("$tag .= ucfirst($nm)", XMP.pm). This is what produces e.g.
     // exif:Flash/exif:Mode -> FlashMode and test:BareStruct/test:Item1 ->
     // BareStructItem1.
+    let list_structs = extract_list_struct_values(xml_bytes)?;
     let struct_fields = extract_top_level_struct_values(xml_bytes)?;
     for (tag, value) in &struct_fields {
-        if !results.iter().any(|(t, _)| t == tag) {
+        if !list_structs.iter().any(|(list_tag, _)| list_tag == tag)
+            && !results.iter().any(|(t, _)| t == tag)
+        {
             results.push((tag.clone(), value.clone()));
         }
     }
@@ -474,13 +477,14 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
     // LocationCreated, Manifest, MWG keyword hierarchies. Appended last so the
     // focused passes above, which know their schemas' FlatName overrides, keep
     // precedence over this one's plain path concatenation.
-    let list_structs = extract_list_struct_values(xml_bytes)?;
     for (tag, values) in &list_structs {
+        // A nested `rdf:Description` can leave the main pass with only the
+        // first `rdf:li` as a scalar. Keep the list transport even then.
+        if values.len() > 1 {
+            list_elements.retain(|(existing, _)| existing != tag);
+            list_elements.push((tag.clone(), values.clone()));
+        }
         if !results.iter().any(|(t, _)| t == tag) {
-            if values.len() > 1 {
-                list_elements.retain(|(existing, _)| existing != tag);
-                list_elements.push((tag.clone(), values.clone()));
-            }
             results.push((tag.clone(), values.join(", ")));
         }
     }
@@ -491,11 +495,15 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
     // keeps precedence over this one's plain concatenation.
     let flattened = super::struct_flatten::extract_flattened_struct_fields(xml_bytes)?;
     for (tag, values) in flattened {
+        // The main RDF walk can have already recorded the first rdf:li as a
+        // scalar.  A flattened nested structure is authoritative about the
+        // collection transport, so install it before retaining that text view.
+        if values.len() > 1 {
+            list_elements.retain(|(existing, _)| existing != &tag);
+            list_elements.push((tag.clone(), values.clone()));
+        }
         if results.iter().any(|(t, _)| *t == tag) {
             continue;
-        }
-        if values.len() > 1 {
-            list_elements.push((tag.clone(), values.clone()));
         }
         results.push((tag, values.join(", ")));
     }
@@ -2842,10 +2850,11 @@ const BASE64_DECODED_BINARY_TAGS: [&str; 2] = ["XMP:ImageData", "XMP:DepthImage"
 /// base64 text and ExifTool prints the length of that text, not of the bytes it
 /// encodes. GooglePixel6a.jpg's `GCamera:hdrp_makernote` is 79648 characters
 /// long and ExifTool reports 79648 bytes, where the decoded payload is 59734.
-const RAW_BINARY_TAGS: [&str; 3] = [
+const RAW_BINARY_TAGS: [&str; 4] = [
     "XMP:HDRPMakerNote",
     "XMP:HDRPlusMakerNote",
     "XMP:ShotLogData",
+    "XMP-GMask:Data",
 ];
 
 /// Renders a base64 XMP property the way ExifTool renders a binary tag.
@@ -6169,6 +6178,57 @@ mod top_level_struct_tests {
                 .find(|(t, _)| t == "XMP:ManifestReferenceFilePath")
                 .map(|(_, values)| values.as_slice()),
             Some([r"C:\some path\file.ext".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn nested_look_parameter_curves_remain_list_values() {
+        // Lightroom writes a crs:Look resource containing a second resource
+        // (`crs:Parameters`) whose curve fields are rdf:Seq lists.  ExifTool
+        // exposes every point under LookParametersToneCurvePV2012.
+        let xml = br#"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+         xmlns:crs='http://ns.adobe.com/camera-raw-settings/1.0/'>
+ <rdf:Description>
+  <crs:Look>
+   <rdf:Description>
+   <crs:Parameters>
+    <rdf:Description>
+    <crs:ToneCurvePV2012><rdf:Seq>
+     <rdf:li>0, 0</rdf:li><rdf:li>22, 16</rdf:li><rdf:li>255, 255</rdf:li>
+    </rdf:Seq></crs:ToneCurvePV2012>
+    </rdf:Description>
+   </crs:Parameters>
+   </rdf:Description>
+  </crs:Look>
+ </rdf:Description>
+</rdf:RDF>"#;
+
+        assert_eq!(
+            super::super::struct_flatten::extract_flattened_struct_fields(xml)
+                .unwrap()
+                .iter()
+                .find(|(tag, _)| tag == "XMP:LookParametersToneCurvePV2012")
+                .map(|(_, values)| values.as_slice()),
+            Some(
+                [
+                    "0, 0".to_string(),
+                    "22, 16".to_string(),
+                    "255, 255".to_string()
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(
+            parse_xmp_typed(xml)
+                .unwrap()
+                .iter()
+                .find(|(tag, _)| tag == "XMP:LookParametersToneCurvePV2012")
+                .map(|(_, value)| value),
+            Some(&XmpValue::List(vec![
+                "0, 0".to_string(),
+                "22, 16".to_string(),
+                "255, 255".to_string(),
+            ]))
         );
     }
 }

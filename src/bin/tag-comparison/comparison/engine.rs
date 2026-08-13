@@ -38,7 +38,8 @@ pub(crate) fn normalize_family_for_comparison(family: &str) -> &str {
         // XMP namespace variants -> XMP (ExifTool often simplifies these)
         "XMP-exif" | "XMP-tiff" | "XMP-photoshop" | "XMP-iptcCore" | "XMP-iptcExt"
         | "XMP-xmpMM" | "XMP-xmpRights" | "XMP-dc" | "XMP-xmp" | "XMP-crs" | "XMP-plus"
-        | "XMP-GDepth" | "XMP-GCamera" | "XMP-Device" | "XMP-darktable" | "XMP-xmpDM" => "XMP",
+        | "XMP-GDepth" | "XMP-GCamera" | "XMP-GMask" | "XMP-Device" | "XMP-darktable"
+        | "XMP-xmpDM" => "XMP",
         // FLIR -> APP1 (ExifTool convention)
         "FLIR" => "APP1",
         // AROT is ExifTool's family-1 name for the HDR gain table stored in
@@ -1049,6 +1050,11 @@ mod tests {
     #[test]
     fn test_vivo_family1_normalizes_to_exiftool_trailer_family0() {
         assert_eq!(normalize_family_for_comparison("Vivo"), "Trailer");
+    }
+
+    #[test]
+    fn test_gmask_xmp_namespace_normalizes_to_exiftool_family0() {
+        assert_eq!(normalize_family_for_comparison("XMP-GMask"), "XMP");
     }
 
     #[test]

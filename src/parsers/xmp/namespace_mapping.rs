@@ -48,6 +48,7 @@ static NAMESPACE_TO_FAMILY: LazyLock<HashMap<&'static str, &'static str>> = Lazy
     // the generic XMP family. This must be a URI mapping: camera files may
     // bind the schema to any XML prefix.
     m.insert("http://www.dji.com/drone-dji/1.0/", "XMP");
+    m.insert("http://ns.google.com/photos/1.0/gmaskmap/", "XMP-GMask");
 
     m
 });
