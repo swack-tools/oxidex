@@ -724,6 +724,7 @@ mod tests {
                 mask: None,
                 omitted: Omitted::NONE,
                 print_conv: PrintConv::None,
+                subdir: None,
             },
             Field {
                 index: 2,
@@ -734,6 +735,7 @@ mod tests {
                 mask: None,
                 omitted: Omitted::NONE,
                 print_conv: PrintConv::Expr(ExprId::Sprintf0fValB74070),
+                subdir: None,
             },
             Field {
                 index: 4,
@@ -744,6 +746,7 @@ mod tests {
                 mask: None,
                 omitted: Omitted::NONE,
                 print_conv: PrintConv::None,
+                subdir: None,
             },
         ];
         static TABLE: BinaryTable = BinaryTable {
@@ -803,6 +806,7 @@ mod tests {
                 }),
                 omitted: Omitted::NONE,
                 print_conv: PrintConv::None,
+                subdir: None,
             },
             Field {
                 index: 4,
@@ -816,6 +820,7 @@ mod tests {
                 }),
                 omitted: Omitted::NONE,
                 print_conv: PrintConv::IntEnum(&[(0xB, "Eleven")]),
+                subdir: None,
             },
             Field {
                 index: 4,
@@ -829,6 +834,7 @@ mod tests {
                 }),
                 omitted: Omitted::NONE,
                 print_conv: PrintConv::None,
+                subdir: None,
             },
             // Same word, no mask: Step 11 reports the whole word, not a slice.
             Field {
@@ -840,6 +846,7 @@ mod tests {
                 mask: None,
                 omitted: Omitted::NONE,
                 print_conv: PrintConv::None,
+                subdir: None,
             },
         ];
         static TABLE: BinaryTable = BinaryTable {
@@ -1009,6 +1016,7 @@ mod tests {
                 subdirectory: false,
             },
             print_conv: PrintConv::None,
+            subdir: None,
         }];
         static TABLE: BinaryTable = BinaryTable {
             module: "Test",
@@ -1074,6 +1082,7 @@ mod tests {
                 }),
                 omitted: Omitted::NONE,
                 print_conv: PrintConv::IntEnum(&[(1, "Upright"), (5, "Rotated")]),
+                subdir: None,
             },
             // A high slice: shift is what makes the enum keys mean anything.
             Field {
@@ -1088,6 +1097,7 @@ mod tests {
                 }),
                 omitted: Omitted::NONE,
                 print_conv: PrintConv::None,
+                subdir: None,
             },
             // A PrintConv keyed on post-ValueConv values must not be applied
             // to the raw one.
@@ -1106,6 +1116,7 @@ mod tests {
                     subdirectory: false,
                 },
                 print_conv: PrintConv::IntEnum(&[(0, "Wrong")]),
+                subdir: None,
             },
         ];
         static TABLE: BinaryTable = BinaryTable {
@@ -1165,6 +1176,7 @@ mod tests {
                 subdirectory: false,
             },
             print_conv: PrintConv::None,
+            subdir: None,
         };
         let decoded = DecodedField {
             field: &FIELD,
@@ -1209,6 +1221,7 @@ mod tests {
                     subdirectory: false,
                 },
                 print_conv: PrintConv::None,
+                subdir: None,
             },
             Field {
                 index: 1,
@@ -1225,6 +1238,7 @@ mod tests {
                     subdirectory: false,
                 },
                 print_conv: PrintConv::None,
+                subdir: None,
             },
             Field {
                 index: 2,
@@ -1235,6 +1249,7 @@ mod tests {
                 mask: None,
                 omitted: Omitted::NONE,
                 print_conv: PrintConv::None,
+                subdir: None,
             },
         ];
         static TABLE: BinaryTable = BinaryTable {
@@ -1279,6 +1294,7 @@ mod tests {
                 mask: None,
                 omitted: Omitted::NONE,
                 print_conv: PrintConv::None,
+                subdir: None,
             },
             Field {
                 index: 5,
@@ -1289,6 +1305,7 @@ mod tests {
                 mask: None,
                 omitted: Omitted::NONE,
                 print_conv: PrintConv::None,
+                subdir: None,
             },
         ];
         static TABLE: BinaryTable = BinaryTable {
@@ -1328,6 +1345,7 @@ mod tests {
             mask: None,
             omitted: Omitted::NONE,
             print_conv: PrintConv::None,
+            subdir: None,
         };
         static NEX_FIELD: Field = Field {
             name: "CameraOrientation",

@@ -74,7 +74,14 @@ FIELD_RE = re.compile(
     # completeness bug, not a cosmetic one.
     r'|Expr\(\s*ExprId::\w+\s*,?\s*\)'
     r'|IntEnum\(&\[.*?\]\)'
-    r'|StrEnum\(&\[.*?\]\)))',
+    r'|StrEnum\(&\[.*?\]\)))'
+    # Step 27: `subdir:` is the last field. Its value (`None` or
+    # `Some(SubdirEdge { ... })`, arbitrarily nested via `Start::Expr(&...)`)
+    # is NOT captured here -- a fixed-depth regex cannot bound arbitrary
+    # nesting safely, the same reason enum bodies are rescanned by
+    # `_enum_body` instead of captured inline. This only anchors the offset
+    # `_value_span` starts scanning from; see `_parse_one_field`.
+    r',\s*subdir:\s*',
     re.S,
 )
 FIELD_COUNT_RE = re.compile(r'Field\s*\{\s*index:')
@@ -136,6 +143,50 @@ def _bracket_span(src, open_bracket):
     raise SystemExit("unterminated `[...]` in generated file")
 
 
+_OPENERS = {"(", "[", "{"}
+_CLOSERS = {")", "]", "}"}
+
+
+def _value_span(src, start):
+    """From `start` (the first character of a struct-literal field's VALUE,
+    e.g. the `N` of `None` or `S` of `Some(...)`), return the end index
+    (exclusive) of that value: the position of the top-level comma that ends
+    it, or of the unmatched closing brace that ends the enclosing `Field {
+    ... }` literal when this was the last field (rustfmt does not always
+    leave a trailing comma before `}` on a single-line literal). Honors
+    nested `()`/`[]`/`{}` of any kind and string literals/escapes, the same
+    discipline `_bracket_span` applies to `[...]` alone -- needed here
+    because `subdir: Some(SubdirEdge { ... })` nests a `{}` inside a `()`,
+    and `Start::Expr(&StartExpr::Add(&StartExpr::DirStart, &StartExpr::Val))`
+    nests `()` arbitrarily deep depending on which arithmetic shape
+    `tools/exiftool-tables/subdirs.py` compiled.
+    """
+    i = start
+    depth, in_str = 0, False
+    while i < len(src):
+        c = src[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+        elif c in _OPENERS:
+            depth += 1
+        elif c in _CLOSERS:
+            if depth == 0:
+                return i
+            depth -= 1
+        elif c == "," and depth == 0:
+            return i
+        i += 1
+    raise SystemExit("unterminated field value in generated file")
+
+
 def _enum_body(src, open_bracket):
     """The text between `[` at open_bracket and its true matching `]`.
 
@@ -175,11 +226,54 @@ def unescape(s):
              .replace('\x00', '\\'))
 
 
-def _parse_one_field(src, f, k, fields, enums, masks, hooks, subdirs):
-    """Populate `fields`/`enums`/`masks`/`hooks`/`subdirs` from one `FIELD_RE`
-    match `f`, under dict key `k`. Shared by the plain-`fields:` scan and the
-    `variants:` scan below -- a `Field {...}` literal means the same thing in
-    both places, only what `k` looks like differs (see `parse_rust`)."""
+# Step 27: the `Some(SubdirEdge { module: "...", table: "...", start: ...`
+# prefix, up to (not including) the `start:` value itself -- `_parse_subdir_
+# value` locates the rest (`start`/`base`) by scanning from there with
+# `_value_span`, since their content nests arbitrarily (`Start::Expr(&Start
+# Expr::Add(...))`) and a fixed-depth regex cannot bound that safely. The
+# fixed `module, table, start, base, byte_order, validate` key order is
+# `codegen.py`'s `compile_subdir`'s own emission order, never reordered.
+_SUBDIR_EDGE_RE = re.compile(
+    r'^Some\(\s*SubdirEdge\s*\{\s*'
+    r'module:\s*"(?P<module>[^"]*)"\s*,\s*'
+    r'table:\s*"(?P<table>[^"]*)"\s*,\s*'
+    r'start:\s*',
+    re.S,
+)
+
+
+def _parse_subdir_value(text):
+    """`text` is the raw value captured for one field's `subdir:` struct
+    member -- `"None"` or `"Some(SubdirEdge { ... })"` (rustfmt may have
+    wrapped it across lines and/or added trailing commas; both are
+    whitespace-tolerant here). Returns `None`, or `(module, table,
+    start_text, base_text)` with the latter two left as raw (unparsed) Rust
+    source -- `main()`'s independent grammar check (`_arith_is_well_formed`)
+    reads that text directly rather than trusting a second parse of it."""
+    text = text.strip()
+    if text == "None":
+        return None
+    m = _SUBDIR_EDGE_RE.match(text)
+    if not m:
+        raise SystemExit(f"unrecognised subdir value {text!r}")
+    start_begin = m.end()
+    start_end = _value_span(text, start_begin)
+    start_text = text[start_begin:start_end].strip()
+    bm = re.match(r"\s*,\s*base:\s*", text[start_end:])
+    if not bm:
+        raise SystemExit(f"unrecognised subdir value (base) in {text!r}")
+    base_begin = start_end + bm.end()
+    base_end = _value_span(text, base_begin)
+    base_text = text[base_begin:base_end].strip()
+    return m.group("module"), m.group("table"), start_text, base_text
+
+
+def _parse_one_field(src, f, k, fields, enums, masks, hooks, subdirs, subdir_edges):
+    """Populate `fields`/`enums`/`masks`/`hooks`/`subdirs`/`subdir_edges` from
+    one `FIELD_RE` match `f`, under dict key `k`. Shared by the plain-`fields:`
+    scan and the `variants:` scan below -- a `Field {...}` literal means the
+    same thing in both places, only what `k` looks like differs (see
+    `parse_rust`)."""
     fields[k] = unescape(f.group("name"))
 
     bits = f.group("mask_bits")
@@ -191,6 +285,12 @@ def _parse_one_field(src, f, k, fields, enums, masks, hooks, subdirs):
         hooks.add(k)
     if "subdirectory: true" in omitted:
         subdirs.add(k)
+
+    # `FIELD_RE` consumes `,\s*subdir:\s*` but does not capture the value
+    # itself (unbounded nesting -- see the pattern's own comment), so its
+    # value starts exactly at the whole match's end.
+    subdir_val_end = _value_span(src, f.end())
+    subdir_edges[k] = _parse_subdir_value(src[f.end():subdir_val_end])
 
     pc = f.group("pc")
     # Rescan the enum body from the source itself rather than
@@ -221,15 +321,19 @@ def _parse_one_field(src, f, k, fields, enums, masks, hooks, subdirs):
 
 
 def parse_rust(path):
-    """-> (fields, enums, masks, hooks, subdirs, sound_until, variant_keys)
+    """-> (fields, enums, masks, hooks, subdirs, subdir_edges, sound_until, variant_keys)
 
     fields{k->name}, enums{k->{key:val}}, masks{k->(bits,shift)},
     hooks{k}, subdirs{k} (sets of field keys with that Omitted flag set),
+    subdir_edges{k -> None | (module, table, start_text, base_text)} (Step
+    27: every field's `subdir:` value, present or not -- unlike the other
+    dicts this one always has an entry for every field, `None` included, so
+    `main()` can tell "no edge" from "field not parsed"),
     sound_until{(mod,tbl)->int|None} (the table's offsets_sound_until).
 
-    `fields`/`enums`/`masks`/`hooks`/`subdirs` hold BOTH plain `fields:`
-    entries (keyed `(mod, tbl, "22")`, exactly as before Step 23) and
-    `variants:` alternatives (keyed `(mod, tbl, "22#0")`, `(mod, tbl,
+    `fields`/`enums`/`masks`/`hooks`/`subdirs`/`subdir_edges` hold BOTH plain
+    `fields:` entries (keyed `(mod, tbl, "22")`, exactly as before Step 23)
+    and `variants:` alternatives (keyed `(mod, tbl, "22#0")`, `(mod, tbl,
     "22#1")`, ... -- 0-based array position, matching `oracle.pl`'s own
     `"$k#$i"` key for a `_variants` alternative). The two key spaces cannot
     collide: a plain key is never built with `#` in it. `variant_keys` is the
@@ -241,6 +345,7 @@ def parse_rust(path):
 
     fields, enums, masks = {}, defaultdict(dict), {}
     hooks, subdirs = set(), set()
+    subdir_edges = {}
     sound_until = {}
     variant_keys = set()
     bounds = [(m.start(), m.group("module"), m.group("table"), m.group("sound_until"))
@@ -272,7 +377,9 @@ def parse_rust(path):
                 # them by ExifTool's original "12.1" string, so rebuild that
                 # form.
                 key = idx if sub == "None" else f"{idx}.{sub[5:-1]}"
-                _parse_one_field(src, f, (mod, tbl, key), fields, enums, masks, hooks, subdirs)
+                _parse_one_field(
+                    src, f, (mod, tbl, key), fields, enums, masks, hooks, subdirs, subdir_edges
+                )
 
         # `variants: &[VariantGroup { index, sub, alternatives: &[(Cond,
         # Field), ...] }, ...]` -- each `VariantGroup`'s own `alternatives`
@@ -292,7 +399,9 @@ def parse_rust(path):
                 for pos, f in enumerate(FIELD_RE.finditer(src, a_start, a_end)):
                     k = (mod, tbl, f"{base_key}#{pos}")
                     variant_keys.add(k)
-                    _parse_one_field(src, f, k, fields, enums, masks, hooks, subdirs)
+                    _parse_one_field(
+                        src, f, k, fields, enums, masks, hooks, subdirs, subdir_edges
+                    )
 
     # Every Field in the file must have been parsed -- separately for each
     # population, so a formatting change that defeats one pattern (say,
@@ -311,7 +420,7 @@ def parse_rust(path):
             f"`variants:` arrays contain {expected_variant} -- the "
             "verifier's pattern is out of date; fix it before trusting a PASS"
         )
-    return fields, enums, masks, hooks, subdirs, sound_until, variant_keys
+    return fields, enums, masks, hooks, subdirs, subdir_edges, sound_until, variant_keys
 
 
 def load_oracle(lib, oracle_pl):
@@ -321,6 +430,15 @@ def load_oracle(lib, oracle_pl):
     ).stdout
     names, enums, masks = {}, defaultdict(dict), {}
     hooks, subdirs, varfmts = set(), set(), set()
+    # Step 27: the raw SubDirectory facts behind each `subdirs` membership --
+    # {(mod,sym,key) -> {"tagtable":str, "start":str, "base":str,
+    # "processproc":bool, "byteorder":bool, "validate":bool}}, independent of
+    # dump_tables.pl/codegen.py/subdirs.py (oracle.pl reads the live Perl
+    # hash directly). `main()` uses this to independently decide whether
+    # `codegen.py`'s SubdirEdge compiler should have modeled or refused each
+    # field, and cross-checks that decision against what actually landed in
+    # the generated Rust.
+    subdir_facts = {}
     for line in out.splitlines():
         p = line.split("\t")
         if len(p) == 4:
@@ -331,11 +449,20 @@ def load_oracle(lib, oracle_pl):
             masks[(p[0], p[1], p[2])] = (int(p[4], 0), int(p[5]))
         elif len(p) == 5 and p[3] == "HOOK":
             hooks.add((p[0], p[1], p[2]))
-        elif len(p) == 5 and p[3] == "SUBDIR":
-            subdirs.add((p[0], p[1], p[2]))
+        elif len(p) == 10 and p[3] == "SUBDIR":
+            key = (p[0], p[1], p[2])
+            subdirs.add(key)
+            subdir_facts[key] = {
+                "tagtable": p[4],
+                "start": p[5],
+                "base": p[6],
+                "processproc": p[7] == "1",
+                "byteorder": p[8] == "1",
+                "validate": p[9] == "1",
+            }
         elif len(p) == 5 and p[3] == "VARFMT":
             varfmts.add((p[0], p[1], p[2]))
-    return names, enums, masks, hooks, subdirs, varfmts
+    return names, enums, masks, hooks, subdirs, subdir_facts, varfmts
 
 
 def oracle_version(lib):
@@ -417,6 +544,58 @@ def norm_key(k):
         return str(k)
 
 
+# Step 27: independent (deliberately NOT importing `tools/exiftool-tables/
+# subdirs.py`) re-derivation of whether a SubDirectory's Start/Base source
+# text is plausibly inside the closed arithmetic grammar `subdirs.py`
+# compiles -- see that module and `src/exiftool_tables/subdir.rs` for the
+# grammar itself (integers, `$val`/`$dirStart` or `$start`/`$base`, `+`/`-`/
+# `*`, parens). This is a tokenizer over the ORACLE's raw source string, not
+# a full parser: it does not build a tree the way `subdirs.py`'s AST walk
+# does, so it cannot catch every malformed arrangement of otherwise-valid
+# tokens (`$val $val` tokenizes fine here despite being invalid Perl). What
+# it does catch, independently of `subdirs.py`'s own logic, is the dangerous
+# direction: a token this grammar cannot possibly reach (a function call, a
+# comparison operator, an unknown `$variable`) appearing in an expression
+# `codegen.py` nonetheless modeled as an edge.
+_ARITH_TOKEN_RE = re.compile(r"\$\w+|\d+|[+\-*()]|\s+")
+
+
+def _arith_is_well_formed(text, allowed_dollar_vars):
+    pos = 0
+    while pos < len(text):
+        m = _ARITH_TOKEN_RE.match(text, pos)
+        if not m:
+            return False
+        tok = m.group(0)
+        if tok.startswith("$") and tok[1:] not in allowed_dollar_vars:
+            return False
+        pos = m.end()
+    return True
+
+
+_TAGTABLE_RE = re.compile(r"^Image::ExifTool::(\w+)::(\w+)$")
+
+
+def expected_subdir_edge(fact):
+    """Independently decide, from one oracle SUBDIR row's raw facts, whether
+    `codegen.py`'s `compile_subdir` should have modeled an edge or refused
+    it, and what module/table it should name if so. Returns `(module, table)`
+    or `None` (refuse) -- mirrors `subdirs.py`'s decision tree by re-deriving
+    it from the same primitive facts, not by calling into `subdirs.py`."""
+    if fact["processproc"] or fact["byteorder"] or fact["validate"]:
+        return None
+    m = _TAGTABLE_RE.match(fact["tagtable"])
+    if not m:
+        return None
+    start = fact["start"]
+    if "$" in start and not _arith_is_well_formed(start, {"val", "dirStart"}):
+        return None
+    base = fact["base"]
+    if base and not _arith_is_well_formed(base, {"start", "base"}):
+        return None
+    return m.group(1), m.group(2)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("generated_rs")
@@ -428,9 +607,10 @@ def main():
     version = check_version(args.generated_rs, args.exiftool_lib)
     print(f"ExifTool {version}")
     (
-        gen_fields, gen_enums, gen_masks, gen_hooks, gen_subdirs, gen_sound_until, gen_variant_keys,
+        gen_fields, gen_enums, gen_masks, gen_hooks, gen_subdirs, gen_subdir_edges,
+        gen_sound_until, gen_variant_keys,
     ) = parse_rust(args.generated_rs)
-    or_names, or_enums, or_masks, or_hooks, or_subdirs, or_varfmts = load_oracle(
+    or_names, or_enums, or_masks, or_hooks, or_subdirs, or_subdir_facts, or_varfmts = load_oracle(
         args.exiftool_lib, args.oracle
     )
 
@@ -554,6 +734,33 @@ def main():
             if len(subdir_examples) < args.show:
                 subdir_examples.append((k, got, want))
 
+    # Step 27: does `codegen.py`'s SubdirEdge compiler (`subdirs.py`) agree
+    # with an INDEPENDENT re-derivation (`expected_subdir_edge`, built from
+    # the oracle's raw TAGTABLE/START/BASE/PROCESSPROC/BYTEORDER/VALIDATE
+    # facts, not by calling `subdirs.py`) about which SubDirectory-flagged
+    # fields should carry a modeled edge, and whether the module/table it
+    # names is right. Checked only over fields where BOTH sides agree the
+    # flag itself is set (`subdir_bad` above already reports a flag
+    # disagreement; comparing edges under a flag mismatch would just be
+    # noise on top of a problem already reported).
+    edge_ok = edge_bad = 0
+    edge_examples = []
+    for k in gen_fields:
+        if k not in gen_subdirs or k not in or_subdirs:
+            continue
+        fact = or_subdir_facts.get(k)
+        if fact is None:
+            continue
+        expected = expected_subdir_edge(fact)
+        got = gen_subdir_edges.get(k)
+        got_pair = (got[0], got[1]) if got is not None else None
+        if got_pair == expected:
+            edge_ok += 1
+        else:
+            edge_bad += 1
+            if len(edge_examples) < args.show:
+                edge_examples.append((k, got_pair, expected))
+
     # `offsets_sound_until` is a per-table derived fact: the index of the
     # first refused `var_*` field, recorded only when some emitted field of
     # that table actually sits past it (see codegen.py's `gen_table`).
@@ -626,6 +833,9 @@ def main():
     print(f"subdirectory flags {subdir_ok + subdir_bad}")
     print(f"  match          {subdir_ok}")
     print(f"  MISMATCH       {subdir_bad}")
+    print(f"subdirectory edges (Step 27) {edge_ok + edge_bad}")
+    print(f"  match          {edge_ok}")
+    print(f"  MISMATCH       {edge_bad}")
     print(f"offsets_sound_until tables {sound_ok + sound_bad}")
     print(f"  match          {sound_ok}")
     print(f"  MISMATCH       {sound_bad}")
@@ -650,13 +860,15 @@ def main():
         print(f"  hook  {k}: generated {got!r} != exiftool {want!r}")
     for k, got, want in subdir_examples:
         print(f"  subdirectory  {k}: generated {got!r} != exiftool {want!r}")
+    for k, got, want in edge_examples:
+        print(f"  subdir edge  {k}: generated {got!r} != expected {want!r}")
     for k, got, want in sound_examples:
         print(f"  offsets_sound_until  {k}: generated {got!r} != expected {want!r}")
 
     failed = (
         name_bad + enum_bad + orphan + mask_bad
         + variant_name_bad + variant_enum_bad + variant_orphan + variant_mask_bad
-        + hook_bad + subdir_bad + sound_bad
+        + hook_bad + subdir_bad + edge_bad + sound_bad
     )
     print("\nRESULT:", "PASS" if failed == 0 else f"FAIL ({failed} discrepancies)")
     sys.exit(1 if failed else 0)

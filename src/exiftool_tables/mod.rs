@@ -40,6 +40,7 @@ pub mod binary_tables;
 pub mod cond;
 pub mod exprs;
 pub mod runtime;
+pub mod subdir;
 
 pub use binary_tables::{
     ALL_BINARY_TABLES, BinaryTable, EXIFTOOL_VERSION, ExprId, Field, Fmt, Mask, Omitted, PrintConv,
@@ -50,6 +51,7 @@ pub use runtime::{
     RefusalCounts, TableDecode, all_fractional_census, decode_binary_table,
     decode_binary_table_variants, fractional_census,
 };
+pub use subdir::{BaseExpr, ByteOrderRule, Start, StartExpr, SubdirEdge};
 
 /// Look up a generated table by ExifTool module and table name,
 /// e.g. `("Canon", "CameraSettings")`.
@@ -216,6 +218,66 @@ mod tests {
         }
         assert_eq!(hooks, 35, "Hook-carrying emitted fields");
         assert_eq!(subdirs, 63, "SubDirectory-carrying emitted fields");
+    }
+
+    /// Step 27's accounting identity, the sequel to the one above: every
+    /// `SubDirectory`-carrying field (63 in `fields:` + 5 inside `_variants`
+    /// groups = 68, matching `codegen.py`'s `omitted_subdirectory` REPORT
+    /// line) either gets a modeled [`subdir::SubdirEdge`] or is refused with
+    /// a reason -- never silently neither. At 13.59 the only refusal reason
+    /// live is a `ProcessProc` override (Panasonic `PANA`'s three
+    /// `Image::ExifTool::ProcessTIFF`-routed `ExifData` fields plus its
+    /// `ProcessLeicaLEIC`-routed `MakerNoteLeica5` field -- `PANA`'s fifth
+    /// ProcessProc-routed field, `JPEG-likeData`, never reaches this check at
+    /// all: its `Format => 'undef[$size-0x10]'` is a data-dependent width
+    /// this generator already refuses on unrelated grounds
+    /// (`tag_fmt_unsupported`), so it is not among the 68 flagged fields to
+    /// begin with. `subdir.rs`'s module doc has the full citation). A future
+    /// regen that starts silently dropping edges it used to model, or
+    /// silently modeling one it should refuse (e.g. a table that starts
+    /// declaring `ByteOrder`/`Validate`, which this schema does not compile
+    /// -- see `subdir.rs`), fails this test instead of only showing up as an
+    /// unread diff.
+    #[test]
+    fn subdir_edges_cover_every_subdirectory_flagged_field() {
+        let (mut flagged, mut modeled, mut process_proc_refused) = (0usize, 0usize, 0usize);
+        let mut check = |f: &Field| {
+            if !f.omitted.subdirectory {
+                return;
+            }
+            flagged += 1;
+            match f.subdir {
+                Some(_) => modeled += 1,
+                // The census below only distinguishes "refused" from
+                // "modeled" -- see the module-doc citation for why the sole
+                // observed refusal reason is a ProcessProc override; a
+                // different reason showing up here (rather than as a
+                // `modeled` bump) would still pass this loop but should
+                // change the assertion below, which is the point of pinning
+                // the exact counts rather than just "modeled + refused ==
+                // flagged".
+                None => process_proc_refused += 1,
+            }
+        };
+        for t in ALL_BINARY_TABLES {
+            for f in t.fields {
+                check(f);
+            }
+            for group in t.variants {
+                for (_, f) in group.alternatives {
+                    check(f);
+                }
+            }
+        }
+        assert_eq!(
+            flagged, 68,
+            "SubDirectory-carrying fields (fields + variants)"
+        );
+        assert_eq!(modeled, 64, "fields that got a modeled SubdirEdge");
+        assert_eq!(
+            process_proc_refused, 4,
+            "fields refused for a custom ProcessProc (Panasonic PANA ExifData x3, MakerNoteLeica5 x1)"
+        );
     }
 
     /// `offsets_sound_until` must be set on exactly the tables where a

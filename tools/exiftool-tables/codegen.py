@@ -27,6 +27,7 @@ from collections import Counter
 
 import conds
 import exprs
+import subdirs
 
 # ExifTool format names -> (Rust Fmt variant, byte width).  Sized formats
 # (string[32]) are handled separately since their width is per-field.
@@ -292,6 +293,78 @@ def omitted_for(tag, stats, condition_resolved=False):
     ) + " }"
 
 
+def compile_subdir(sd, stats):
+    """Step 27: compile a tag's `SubDirectory` hash into Rust source for
+    `Field.subdir` (`Option<SubdirEdge>`), or refuse-and-count.
+
+    Returns `"None"` for a tag with no `SubDirectory` at all -- silently, no
+    counter touched, since that is simply not this tag's concern. For a tag
+    that DOES carry one, returns either `Some(SubdirEdge {...})` (and bumps
+    `subdir_edge_modeled`) or `"None"` (and bumps exactly one
+    `subdir_refused_*` reason counter) -- never a guess. See
+    `src/exiftool_tables/subdir.rs`'s module doc for the ExifTool.pm
+    citations behind every check here, and `tools/exiftool-tables/subdirs.py`
+    for the Start/Base grammar compiler itself.
+
+    Every field this runs on already has `omitted.subdirectory` set by
+    `omitted_for` above (same `tag.get("SubDirectory") is not None` test), so
+    `subdir_edge_modeled + sum(subdir_refused_*)` is exactly
+    `omitted_subdirectory` -- an accounting identity
+    `src/exiftool_tables/mod.rs`'s `subdir_edges_cover_every_subdirectory_
+    flagged_field` test pins for the pinned release.
+    """
+    if not isinstance(sd, dict):
+        return "None"
+
+    try:
+        module, table = subdirs.parse_tag_table(sd.get("TagTable"))
+    except subdirs.SubdirCompileError:
+        stats["subdir_refused_tagtable"] += 1
+        return "None"
+
+    # ExifTool.pm:10148 routes the TARGET table through `$$subdir{ProcessProc}`
+    # instead of the ordinary ProcessBinaryData/ProcessDirectory dispatch when
+    # it is set -- a SubdirEdge that named the table but dropped that fact
+    # would describe how the target is read wrongly, not merely incompletely.
+    if sd.get("ProcessProc") is not None:
+        stats["subdir_refused_processproc"] += 1
+        return "None"
+    # Dead keys in this code path (ProcessBinaryData's SubDirectory branch
+    # never reads either) -- refused rather than silently ignored so a future
+    # release that starts declaring one is a loud signal, not a silent no-op.
+    # See subdir.rs's module doc, "Why byte_order/validate are always inert".
+    if sd.get("ByteOrder") is not None:
+        stats["subdir_refused_byteorder"] += 1
+        return "None"
+    if sd.get("Validate") is not None:
+        stats["subdir_refused_validate"] += 1
+        return "None"
+
+    try:
+        start_src = subdirs.compile_start(sd.get("Start"))
+    except subdirs.SubdirCompileError:
+        stats["subdir_refused_start"] += 1
+        return "None"
+
+    base_val = sd.get("Base")
+    base_src = "None"
+    if base_val is not None:
+        try:
+            base_expr_src = subdirs.compile_base(base_val)
+        except subdirs.SubdirCompileError:
+            stats["subdir_refused_base"] += 1
+            return "None"
+        base_src = f"Some(&{base_expr_src})"
+
+    stats["subdir_edge_modeled"] += 1
+    return (
+        "Some(SubdirEdge { "
+        f'module: "{rust_str(module)}", table: "{rust_str(table)}", '
+        f"start: {start_src}, base: {base_src}, byte_order: None, validate: false"
+        " })"
+    )
+
+
 def _merge_stats(dst, src):
     """`dst.update(src)` done by hand: `Counter.update` adds values via `+=`,
     which breaks for the two keys (`unsupported_exprs`,
@@ -396,10 +469,12 @@ def gen_field_literal(
     if record_offset_hazard and var_sound_until is not None and idx > var_sound_until:
         stats["tag_offset_unsound"] += 1
     sub_s = "None" if sub is None else f"Some({sub})"
+    subdir_src = compile_subdir(tag.get("SubDirectory"), stats)
     field_src = (
         f'Field {{ index: {idx}, sub: {sub_s}, name: "{rust_str(name)}", '
         f"format: {fmt_expr}, count: {count}, mask: {mask}, "
-        f"omitted: {omitted_for(tag, stats, condition_resolved)}, print_conv: {pc} }}"
+        f"omitted: {omitted_for(tag, stats, condition_resolved)}, print_conv: {pc}, "
+        f"subdir: {subdir_src} }}"
     )
     return field_src, var_sound_until
 
@@ -632,6 +707,15 @@ __VERSION_BLOCK__
 // nondeterminism `codegen.py`'s own module doc warns against elsewhere.
 #[allow(unused_imports)]
 use super::cond::{CmpOp, Cond, EffectSource, VariantGroup};
+// Step 27: same "imported unconditionally" reasoning as EffectSource above --
+// which of these a given generation run actually constructs depends on which
+// SubDirectory Start/Base shapes the pinned tree happens to carry (today:
+// every FieldRelative literal, one Add(DirStart, Val) shape, one bare
+// BaseExpr::Start -- see src/exiftool_tables/subdir.rs's module doc), not on
+// this file's own logic, so a conditional `use` would be the same
+// generator-output nondeterminism the comment above already rules out.
+#[allow(unused_imports)]
+use super::subdir::{BaseExpr, ByteOrderRule, Start, StartExpr, SubdirEdge};
 
 /// A binary-table field format.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -767,6 +851,14 @@ pub struct Field {
     /// What ExifTool does to this field that the transcription does not.
     pub omitted: Omitted,
     pub print_conv: PrintConv,
+    /// `Some` when `omitted.subdirectory` is set AND this field's
+    /// `SubDirectory.Start`/`Base`/`ProcessProc`/`ByteOrder`/`Validate` fall
+    /// within the closed grammar `src/exiftool_tables/subdir.rs` compiles
+    /// (Step 27). `None` either because the field has no `SubDirectory` at
+    /// all, or because it does but was refused -- `codegen.py`'s REPORT
+    /// (`subdir_edge_modeled` vs `subdir_refused_*`) says which, per field,
+    /// and never approximates one it cannot compile.
+    pub subdir: Option<SubdirEdge>,
 }
 
 /// A `ProcessBinaryData` table.
@@ -924,6 +1016,7 @@ REPORT = (
         ("exprs translated (grammar-compiled, Step 15)", "expr_compiled"),
         ("masked fields", "tag_masked"),
         ("bit fields (frac + Mask)", "tag_fractional_masked"),
+        ("SubDirectory edges modeled (Step 27)", "subdir_edge_modeled"),
     )),
     ("partial -- exact matches kept, fallback dropped", (
         ("int enums", "enum_int_partial"),
@@ -955,6 +1048,15 @@ REPORT = (
     ("offsets unsound past a refused var_* field (fields also counted above)", (
         ("tables affected", "table_offsets_unsound"),
         ("fields affected", "tag_offset_unsound"),
+    )),
+    ("SubDirectory edges refused, not approximated (Step 27; of the "
+     "'SubDirectory' count above)", (
+        ("custom ProcessProc (target not walked the ordinary way)", "subdir_refused_processproc"),
+        ("ByteOrder declared (ProcessBinaryData never reads it here)", "subdir_refused_byteorder"),
+        ("Validate declared (ProcessBinaryData never reads it here)", "subdir_refused_validate"),
+        ("TagTable missing or an unrecognised shape", "subdir_refused_tagtable"),
+        ("Start expression outside the closed grammar", "subdir_refused_start"),
+        ("Base expression outside the closed grammar", "subdir_refused_base"),
     )),
 )
 

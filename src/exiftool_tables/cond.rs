@@ -511,6 +511,7 @@ mod tests {
             mask: None,
             omitted: super::super::Omitted::NONE,
             print_conv: super::super::PrintConv::None,
+            subdir: None,
         };
         let nex_field = super::super::Field {
             name: "CameraOrientation",

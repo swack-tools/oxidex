@@ -13,13 +13,24 @@
 #   MODULE  TABLE  INDEX  ENUM    KEY  VALUE        -- one per PrintConv entry (6)
 #   MODULE  TABLE  INDEX  MASK    BITS  SHIFT       -- one per masked field (6)
 #   MODULE  TABLE  INDEX  HOOK    (empty)           -- field carries a Hook (5)
-#   MODULE  TABLE  INDEX  SUBDIR  (empty)           -- field carries a SubDirectory (5)
 #   MODULE  TABLE  INDEX  VARFMT  (empty)           -- field's Format is var_* (5)
+#   MODULE  TABLE  INDEX  SUBDIR  TAGTABLE  START  BASE  PROCESSPROC  BYTEORDER  VALIDATE
+#                                                    -- field carries a SubDirectory (10)
 #
-# The trailing empty column on HOOK/SUBDIR/VARFMT lines is not decorative: it
-# is what keeps them from colliding with a NAME line on column count (both
+# The trailing empty column on HOOK/VARFMT lines is not decorative: it is
+# what keeps them from colliding with a NAME line on column count (both
 # would otherwise be 4 columns, and a tag genuinely named "Hook" is not
-# impossible).
+# impossible). SUBDIR carries the raw facts Step 27's `verify.py` needs to
+# independently re-derive whether `codegen.py`'s SubdirEdge compiler
+# (`tools/exiftool-tables/subdirs.py`) should have modeled this field's edge
+# or refused it, and why -- TAGTABLE/START/BASE are the raw (to_text) source
+# strings, empty when the key is absent; PROCESSPROC/BYTEORDER/VALIDATE are
+# '1' when the key is present at all (a coderef for ProcessProc, an arbitrary
+# scalar or expression for the other two) and '' when absent, since presence
+# alone is what codegen.py's compiler gates on for these three (see
+# src/exiftool_tables/subdir.rs's module doc for why: ProcessProc changes how
+# the target is walked, and ByteOrder/Validate are keys ProcessBinaryData's
+# SubDirectory branch never reads at all).
 
 use strict;
 use warnings;
@@ -70,12 +81,31 @@ sub emit_entry {
 
     # Hook and SubDirectory are the two constructs codegen.py records
     # but cannot execute (see tools/exiftool-tables/codegen.py's
-    # `omitted_for`). Presence, not content, is what a caller needs to
-    # know -- a Hook can rewrite later fields' format/byte order
-    # in ways this generator does not run, and a SubDirectory means the
-    # bytes are the entry to a nested table, not this field's value.
+    # `omitted_for`). A Hook can rewrite later fields' format/byte order
+    # in ways this generator does not run, so presence alone is all a
+    # caller needs. A SubDirectory means the bytes are the entry to a
+    # nested table -- Step 27 additionally models WHERE that entry leads
+    # (src/exiftool_tables/subdir.rs), so its row carries the raw facts
+    # (independently of dump_tables.pl/codegen.py/subdirs.py) that decide
+    # whether that modeling should have succeeded.
     print join("\t", $mod, $sym, $key, 'HOOK', ''), "\n" if defined $e->{Hook};
-    print join("\t", $mod, $sym, $key, 'SUBDIR', ''), "\n" if defined $e->{SubDirectory};
+    if (defined $e->{SubDirectory} && ref $e->{SubDirectory} eq 'HASH') {
+        my $sd = $e->{SubDirectory};
+        my $rawtext = sub {
+            my ($v) = @_;
+            return '' unless defined $v;
+            return ref $v ? '__REF__' : clean($v);
+        };
+        my $present = sub { defined $_[0] ? '1' : '' };
+        print join("\t", $mod, $sym, $key, 'SUBDIR',
+            $rawtext->($sd->{TagTable}),
+            $rawtext->($sd->{Start}),
+            $rawtext->($sd->{Base}),
+            $present->($sd->{ProcessProc}),
+            $present->($sd->{ByteOrder}),
+            $present->($sd->{Validate}),
+        ), "\n";
+    }
 
     # A `var_*` Format is data-dependent width: ExifTool computes the
     # real byte offset by walking the bytes, so the generator's static
