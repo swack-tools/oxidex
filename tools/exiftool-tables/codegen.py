@@ -1889,6 +1889,16 @@ def gen_expr_enum(used):
             value_bytes.append(f"            ExprId::{ident} => Some(ExprValue::String({body})),")
 
     def arms_or_none(arms):
+        # A domain-specific arms list (num/str/bytes) is exhaustive over
+        # ExprId on its own whenever EVERY translated expression happens to
+        # land in that one domain -- not a corner case: a small `used` set
+        # can easily be 100% "num" (as any binary-table-only ExprId subset
+        # commonly is). When that happens, appending `_ => None` anyway is
+        # dead code, and `cargo clippy -D warnings` (the merge/CI gate) fails
+        # the whole build on an `unreachable_patterns` error. Only emit the
+        # catch-all when the arms list is provably not exhaustive.
+        if len(arms) >= len(used):
+            return "\n".join(arms)
         return "\n".join([*arms, "            _ => None,"])
 
     return f"""

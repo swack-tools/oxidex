@@ -1,16 +1,16 @@
 {
   "exiftool_version": "13.59",
   "instrument": "tools/exiftool-tables/codegen.py --expr-ledger (verify_exprs.py PASS ledger)",
-  "oracle_ledger": "/home/allen/git/rb-s24b/tools/exiftool-tables/expr_oracle_ledger.json",
+  "oracle_ledger": "tools/exiftool-tables/expr_oracle_ledger.json",
   "schema": 1,
   "value_conv": {
-    "compiled": 824,
-    "refused": 402,
+    "compiled": 0,
+    "refused": 1251,
     "refused_by_reason": {
       "input_domain": 10,
       "nonexpr": 57,
-      "oracle": 8,
-      "shape": 327
+      "oracle": 839,
+      "shape": 345
     },
     "top_refused_expressions": [
       {
@@ -24,6 +24,10 @@
       {
         "expression": "my @a=split \" \",$val;$a[0]*=2;$a[3]*=2;\"@a\"",
         "uses": 19
+      },
+      {
+        "expression": "$val=$val/1e7-11644473600; ConvertUnixTime($val,1)",
+        "uses": 9
       },
       {
         "expression": "$val =~ s/[ \\0]+$//; $val",
@@ -107,10 +111,6 @@
       },
       {
         "expression": "my @a = split ' ', $val; $_ /= 0x40000000 foreach @a; \"@a\";",
-        "uses": 3
-      },
-      {
-        "expression": "$val / ($$self{FocalUnits} || 1)",
         "uses": 3
       }
     ]
