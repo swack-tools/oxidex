@@ -6124,6 +6124,53 @@ fn model_is_dimage_a200(metadata: &MetadataMap) -> bool {
         .is_some_and(|m| m.trim() == "DiMAGE A200")
 }
 
+/// `%Minolta::CameraSettings` names that keep normal priority anyway, because
+/// the EXIF tag they collide with is itself `Priority => 0`.
+///
+/// EXIF `0xA403 WhiteBalance` carries the comment "set Priority to zero to
+/// keep this WhiteBalance from overriding the MakerNotes WhiteBalance, since
+/// the MakerNotes WhiteBalance ... is more accurate" (Exif.pm:2873-2881), so
+/// in ExifTool both occurrences are `Priority => 0` and the *first* one keeps
+/// the plain name (`ExifTool.pm:9544-9551` promotes the stored 0 to 1, so
+/// :9564's `0 >= 1` fails). First is the MakerNote's: ExifTool walks the
+/// ExifIFD in tag order and 0x927C precedes 0xA403 -- visible in
+/// `exiftool-pinned.sh -a -G1 -s -WhiteBalance combined-samples/Minolta.mrw`,
+/// which prints `[Minolta]` before `[ExifIFD]`, and in the default projection,
+/// which reports `[Minolta] WhiteBalance: Auto`.
+///
+/// This parser cannot reproduce that by arrival order: it runs the whole TTW
+/// EXIF walk (`parse_tiff_based_raw`) before the MakerNote, so both
+/// occurrences would be priority 0 with the EXIF one first and `ExifIFD` would
+/// take the name -- the opposite of the oracle. Holding the MakerNote copy at
+/// normal priority makes it displace the EXIF one, which is the outcome
+/// Exif.pm:2877's `Priority => 0` exists to produce. The divergence is in the
+/// mechanism, not the result; modelling it by order instead would mean
+/// interleaving the MakerNote into the EXIF IFD walk at 0x927C, which is a
+/// wider change than this fix.
+const CAMERA_SETTINGS_OUTRANKS_EXIF: &[&str] = &["MakerNotes:WhiteBalance"];
+
+/// Records one `MinoltaRaw::PRD`/`WBG`/`RIF` tag under family-1 `MinoltaRaw`.
+///
+/// All three tables declare `GROUPS => { 0 => 'MakerNotes', ... }`
+/// (MinoltaRaw.pm:56, :113, :140) and carry no family-1 of their own, so
+/// ExifTool names family 1 after the module processing them: `-G0` reports
+/// `MakerNotes` and `-G1` reports `MinoltaRaw`. Measured on
+/// `combined-samples/Minolta.mrw` under `exiftool-pinned.sh -a -G1 -s`, which
+/// puts 28 tags in `[MinoltaRaw]` -- exactly the names these three arms decode
+/// -- against 58 in `[Minolta]` for the TTW MakerNote. A plain
+/// `metadata.insert` leaves family 1 empty, and `tag_resolution`'s family-1
+/// accessor then falls back to family 0, which is why every one of the 28 was
+/// reported as `[MakerNotes]`. Family 0 is unchanged either way.
+fn insert_minolta_raw(metadata: &mut MetadataMap, key: String, value: TagValue) {
+    metadata.insert_occurrence(
+        key,
+        value,
+        crate::core::SHIM_DEFAULT_PRIORITY,
+        "MinoltaRaw",
+        crate::core::Instance::default(),
+    );
+}
+
 fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
     metadata.insert(
@@ -6185,21 +6232,61 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // part of the block. Decode it here, where the base is the
                     // TTW buffer we already hold.
                     //
-                    // `record_makernote_tag` -- not a bare `insert` -- is
-                    // required: `parse_ttw_makernotes` decodes
-                    // `%Minolta::CameraSettings`, ExifTool's own
-                    // `PRIORITY => 0` table (Minolta.pm:974), under this
-                    // decoder's `MakerNotes:` tag-name convention, and only
-                    // `record_makernote_tag` knows to demote
-                    // `MakerNotes:ISO`/`FNumber`/`ExposureTime`/
-                    // `FocalLength`/`MaxAperture` accordingly.
-                    for (key, value) in
-                        crate::parsers::raw::minolta_makernote::parse_ttw_makernotes(block_data)
-                    {
-                        crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
-                            &mut metadata,
+                    // `%Minolta::CameraSettings` is ExifTool's own
+                    // `PRIORITY => 0` table (Minolta.pm:974, "not as reliable
+                    // as other tags"), so every tag it produces loses the
+                    // plain name to the EXIF copy this file also carries:
+                    // `FoundTag` reads the table's `PRIORITY` at
+                    // ExifTool.pm:9467-9473 and compares it at :9564, where a
+                    // 0 never displaces a value already present and is itself
+                    // displaced by any later normal-priority one.
+                    //
+                    // The demotion is taken per *source table*, from the set
+                    // `parse_ttw_makernotes` returns, not per tag name:
+                    // `%Minolta::Main` is normal priority and shares seven
+                    // names with the subdirectory, so a name-keyed rule would
+                    // demote Main's readings too.
+                    //
+                    // Measured on `combined-samples/Minolta.mrw`, this is what
+                    // moves `MeteringMode` from the MakerNote's
+                    // "Multi-segment" to `ExifIFD`'s "Unknown" -- the pinned
+                    // 13.59 oracle's default projection under
+                    // `exiftool-pinned.sh -G1 -s -MeteringMode`. Both
+                    // occurrences existed and decoded correctly before; only
+                    // the arbitration was wrong. `ExposureMode` and
+                    // `ExposureCompensation` move to `ExifIFD` the same way,
+                    // at an unchanged value.
+                    //
+                    // This supersedes, for MRW only, the `MakerNotes:ISO`/
+                    // `ExposureTime`/`FNumber`/`FocalLength`/`MaxAperture`
+                    // rows in `tag_priority::PRIORITY_ZERO_DUPLICATES`, which
+                    // demoted the same five tags by name from this same
+                    // decoder; those rows stay for the other MakerNote merge
+                    // sites that route through `record_makernote_tag`.
+                    let decoded =
+                        crate::parsers::raw::minolta_makernote::parse_ttw_makernotes(block_data);
+                    for (key, value) in decoded.tags {
+                        // The TTW walk also emits PrintIM's own `PrintIM:`
+                        // key, which is not a Minolta MakerNote tag and keeps
+                        // its own group.
+                        let group1 = if key.starts_with("MakerNotes:") {
+                            "Minolta"
+                        } else {
+                            ""
+                        };
+                        let priority = if decoded.camera_settings.contains(&key)
+                            && !CAMERA_SETTINGS_OUTRANKS_EXIF.contains(&key.as_str())
+                        {
+                            0
+                        } else {
+                            crate::core::SHIM_DEFAULT_PRIORITY
+                        };
+                        metadata.insert_occurrence(
                             key,
                             value,
+                            priority,
+                            group1,
+                            crate::core::Instance::default(),
                         );
                     }
                 }
@@ -6220,7 +6307,8 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             .trim_end_matches(|c: char| c == '\0' || c.is_whitespace())
                             .to_string();
                         if !firmware.is_empty() {
-                            metadata.insert(
+                            insert_minolta_raw(
+                                &mut metadata,
                                 "MakerNotes:FirmwareID".to_string(),
                                 TagValue::new_string(firmware),
                             );
@@ -6228,23 +6316,27 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     }
                     if let (Some(sensor_h), Some(sensor_w)) = (reader.u16_at(8), reader.u16_at(10))
                     {
-                        metadata.insert(
+                        insert_minolta_raw(
+                            &mut metadata,
                             "MakerNotes:SensorHeight".to_string(),
                             TagValue::Integer(sensor_h as i64),
                         );
-                        metadata.insert(
+                        insert_minolta_raw(
+                            &mut metadata,
                             "MakerNotes:SensorWidth".to_string(),
                             TagValue::Integer(sensor_w as i64),
                         );
                     }
                     if let Some(v) = block_data.get(16) {
-                        metadata.insert(
+                        insert_minolta_raw(
+                            &mut metadata,
                             "MakerNotes:RawDepth".to_string(),
                             TagValue::Integer(*v as i64),
                         );
                     }
                     if let Some(v) = block_data.get(17) {
-                        metadata.insert(
+                        insert_minolta_raw(
+                            &mut metadata,
                             "MakerNotes:BitDepth".to_string(),
                             TagValue::Integer(*v as i64),
                         );
@@ -6252,7 +6344,8 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     if let Some(v) = block_data.get(18) {
                         // An unlisted code reports itself rather than being
                         // rounded to Padded or Linear.
-                        metadata.insert(
+                        insert_minolta_raw(
+                            &mut metadata,
                             "MakerNotes:StorageMethod".to_string(),
                             TagValue::new_string(match v {
                                 82 => "Padded".to_string(),
@@ -6262,7 +6355,8 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         );
                     }
                     if let Some(v) = block_data.get(23) {
-                        metadata.insert(
+                        insert_minolta_raw(
+                            &mut metadata,
                             "MakerNotes:BayerPattern".to_string(),
                             TagValue::new_string(match v {
                                 1 => "RGGB".to_string(),
@@ -6277,11 +6371,13 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         // EXIF:ImageWidth/Height pair comes from the TTW
                         // block's own IFD0, so emitting these as EXIF both hid
                         // the MakerNotes tags and duplicated the IFD0 values.
-                        metadata.insert(
+                        insert_minolta_raw(
+                            &mut metadata,
                             "MakerNotes:ImageWidth".to_string(),
                             TagValue::Integer(img_w as i64),
                         );
-                        metadata.insert(
+                        insert_minolta_raw(
+                            &mut metadata,
                             "MakerNotes:ImageHeight".to_string(),
                             TagValue::Integer(img_h as i64),
                         );
@@ -6308,7 +6404,8 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         // ExifTool-compat layer apply the EXIF 0 => "Normal"
                         // mapping by name, which turned ExifTool's "0" into
                         // "Normal"; a string keeps the raw reading intact.
-                        metadata.insert(
+                        insert_minolta_raw(
+                            &mut metadata,
                             format!("MakerNotes:{name}"),
                             TagValue::new_string(v.to_string()),
                         );
@@ -6341,10 +6438,15 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     if (6..=12).contains(&hi) {
                         s.push_str(&format!(" ({})", hi as i16 - 8));
                     }
-                    metadata.insert("MakerNotes:WBMode".to_string(), TagValue::new_string(s));
+                    insert_minolta_raw(
+                        &mut metadata,
+                        "MakerNotes:WBMode".to_string(),
+                        TagValue::new_string(s),
+                    );
                 }
                 if let Some(v) = block_data.get(5) {
-                    metadata.insert(
+                    insert_minolta_raw(
+                        &mut metadata,
                         "MakerNotes:ProgramMode".to_string(),
                         TagValue::new_string(match v {
                             0 => "None".to_string(),
@@ -6371,13 +6473,18 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             format!("{}", iso.round() as i64)
                         }
                     };
-                    metadata.insert("MakerNotes:ISOSetting".to_string(), TagValue::new_string(s));
+                    insert_minolta_raw(
+                        &mut metadata,
+                        "MakerNotes:ISOSetting".to_string(),
+                        TagValue::new_string(s),
+                    );
                 }
                 if let Some(v) = block_data.get(7) {
                     // RIF offset 7 is ColorMode, using Minolta's own colour
                     // mode table. The block was decoded either side of this
                     // byte but never at it.
-                    metadata.insert(
+                    insert_minolta_raw(
+                        &mut metadata,
                         "MakerNotes:ColorMode".to_string(),
                         TagValue::new_string(
                             crate::parsers::raw::minolta_makernote::minolta_color_mode(u32::from(
@@ -6395,26 +6502,30 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     (28, "WB_RBLevelsCustom"),
                 ] {
                     if let (Some(a), Some(b)) = (be16(off), be16(off + 2)) {
-                        metadata.insert(
+                        insert_minolta_raw(
+                            &mut metadata,
                             format!("MakerNotes:{name}"),
                             TagValue::new_string(format!("{a} {b}")),
                         );
                     }
                 }
                 if let Some(v) = i8(56) {
-                    metadata.insert(
+                    insert_minolta_raw(
+                        &mut metadata,
                         "MakerNotes:ColorFilter".to_string(),
                         TagValue::Integer(v as i64),
                     );
                 }
                 if let Some(v) = block_data.get(57) {
-                    metadata.insert(
+                    insert_minolta_raw(
+                        &mut metadata,
                         "MakerNotes:BWFilter".to_string(),
                         TagValue::Integer(*v as i64),
                     );
                 }
                 if let Some(v) = block_data.get(58) {
-                    metadata.insert(
+                    insert_minolta_raw(
+                        &mut metadata,
                         "MakerNotes:ZoneMatching".to_string(),
                         TagValue::new_string(match v {
                             0 => "ISO Setting Used".to_string(),
@@ -6425,7 +6536,11 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     );
                 }
                 if let Some(v) = i8(59) {
-                    metadata.insert("MakerNotes:Hue".to_string(), TagValue::Integer(v as i64));
+                    insert_minolta_raw(
+                        &mut metadata,
+                        "MakerNotes:Hue".to_string(),
+                        TagValue::Integer(v as i64),
+                    );
                 }
             }
             b"\x00WBG" => {
@@ -6438,7 +6553,8 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 // channel ExifTool reports as 1.988) were wrong besides.
                 let reader = crate::io::EndianReader::big_endian(block_data);
                 if let Some(scale) = block_data.get(0..4) {
-                    metadata.insert(
+                    insert_minolta_raw(
+                        &mut metadata,
                         "MakerNotes:WBScale".to_string(),
                         TagValue::new_string(
                             scale
@@ -6460,7 +6576,8 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     } else {
                         "MakerNotes:WB_RGGBLevels"
                     };
-                    metadata.insert(
+                    insert_minolta_raw(
+                        &mut metadata,
                         name.to_string(),
                         TagValue::new_string(
                             levels

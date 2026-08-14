@@ -24,10 +24,25 @@ use crate::core::TagValue;
 use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A parsed value plus the tags it produced.
 type Tags = HashMap<String, TagValue>;
+
+/// What [`parse_ttw_makernotes`] hands back: the decoded tags, plus the subset
+/// of their keys whose visible value came from `%Minolta::CameraSettings`.
+///
+/// That table is ExifTool's own `PRIORITY => 0` (Minolta.pm:974, "not as
+/// reliable as other tags") while `%Minolta::Main` is not, and `FoundTag`
+/// arbitrates the two against the file's EXIF copies by exactly that number
+/// (`ExifTool.pm:9467-9473`, `:9544-9564`). The caller cannot recover the
+/// distinction from the tag names alone -- seven names occur in both tables --
+/// so it travels with the tags.
+pub struct TtwMakerNote {
+    pub tags: Tags,
+    /// Keys carrying a `%Minolta::CameraSettings` value, i.e. `Priority => 0`.
+    pub camera_settings: HashSet<String>,
+}
 
 // ============================================================================
 // Byte access helpers
@@ -756,8 +771,15 @@ fn parse_camera_settings(data: &[u8], model: &str) -> Tags {
 // ============================================================================
 
 /// Decode the Minolta MakerNote IFD at `mn_offset` within the TTW buffer.
-fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> Tags {
+///
+/// Returns the `%Minolta::Main` tags merged with the `%Minolta::CameraSettings`
+/// subdirectory's, and the set of keys the subdirectory ended up owning -- see
+/// [`TtwMakerNote`] for why that set has to leave this function.
+fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags, HashSet<String>) {
     let mut tags = Tags::new();
+    // Held apart from `tags` until the end of the function; see the merge
+    // there for why that reproduces ExifTool's own name arbitration.
+    let mut camera_settings = Tags::new();
     let mut preview: (Option<usize>, Option<usize>) = (None, None);
 
     for e in read_ifd(t, mn_offset) {
@@ -778,9 +800,7 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> Tags {
                 if e.tag == 0x0003 && model == "DiMAGE X31" {
                     continue;
                 }
-                for (k, v) in parse_camera_settings(e.bytes(t), model) {
-                    tags.insert(k, v);
-                }
+                camera_settings.extend(parse_camera_settings(e.bytes(t), model));
             }
             // 0x0018 is an 8 kB block whose mere presence means stabilisation
             // was enabled, but only on the bodies ExifTool lists. On the A100
@@ -992,7 +1012,29 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> Tags {
         );
     }
 
-    tags
+    // Merge the `%Minolta::CameraSettings` subdirectory last, without
+    // displacing anything `%Minolta::Main` already reported.
+    //
+    // Seven names occur in both tables -- WhiteBalance, ColorMode,
+    // MinoltaQuality, MinoltaImageSize, FlashExposureComp, ImageStabilization,
+    // ZoneMatching -- and ExifTool reports the `%Minolta::Main` reading for
+    // each: a TIFF IFD is walked in tag-id order, the subdirectory is tag
+    // 0x0001/0x0003, and every Main entry that shares a name has a higher id,
+    // so the Main value arrives second at equal-or-higher priority and takes
+    // the plain name (`ExifTool.pm:9564`). Skipping an already-present key
+    // here is that same outcome, and it is what the old inline
+    // `tags.insert(k, v)` in the 0x0001/0x0003 arm already produced -- values
+    // are unchanged by this restructuring. What it adds is the set below:
+    // which keys are still the `PRIORITY => 0` table's (Minolta.pm:974).
+    let mut owned_by_camera_settings = HashSet::new();
+    for (key, value) in camera_settings {
+        if !tags.contains_key(&key) {
+            owned_by_camera_settings.insert(key.clone());
+            tags.insert(key, value);
+        }
+    }
+
+    (tags, owned_by_camera_settings)
 }
 
 // ============================================================================
@@ -1004,24 +1046,30 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> Tags {
 ///
 /// `ttw` must be the raw TTW block payload, which is a complete little- or
 /// big-endian TIFF structure. Returns the tags keyed by family, ready to be
-/// merged into the file's metadata map.
-pub fn parse_ttw_makernotes(ttw: &[u8]) -> Tags {
+/// merged into the file's metadata map, together with the `PRIORITY => 0`
+/// subset [`TtwMakerNote`] documents.
+pub fn parse_ttw_makernotes(ttw: &[u8]) -> TtwMakerNote {
     let mut tags = Tags::new();
+    let mut camera_settings = HashSet::new();
+    let empty = |tags: Tags| TtwMakerNote {
+        tags,
+        camera_settings: HashSet::new(),
+    };
 
     let big_endian = match ttw.get(0..2) {
         Some(b"MM") => true,
         Some(b"II") => false,
-        _ => return tags,
+        _ => return empty(tags),
     };
     let t = Tiff {
         data: ttw,
         big_endian,
     };
     if t.u16(2) != Some(42) {
-        return tags;
+        return empty(tags);
     }
     let Some(ifd0) = t.u32(4) else {
-        return tags;
+        return empty(tags);
     };
 
     // Walk IFD0 for the camera identity, the PrintIM block, and the ExifIFD
@@ -1052,20 +1100,23 @@ pub fn parse_ttw_makernotes(ttw: &[u8]) -> Tags {
     }
 
     let Some(exif_ifd) = exif_ifd else {
-        return tags;
+        return empty(tags);
     };
 
     // The MakerNote lives in the ExifIFD as tag 0x927C.
     for e in read_ifd(&t, exif_ifd as usize) {
         if e.tag == 0x927c && e.count > 2 {
-            for (k, v) in parse_main(&t, e.value_offset, &make, &model) {
-                tags.insert(k, v);
-            }
+            let (main, owned) = parse_main(&t, e.value_offset, &make, &model);
+            tags.extend(main);
+            camera_settings = owned;
             break;
         }
     }
 
-    tags
+    TtwMakerNote {
+        tags,
+        camera_settings,
+    }
 }
 
 #[cfg(test)]
@@ -1132,7 +1183,7 @@ mod tests {
 
     #[test]
     fn non_tiff_input_is_rejected() {
-        assert!(parse_ttw_makernotes(b"not a tiff").is_empty());
-        assert!(parse_ttw_makernotes(&[]).is_empty());
+        assert!(parse_ttw_makernotes(b"not a tiff").tags.is_empty());
+        assert!(parse_ttw_makernotes(&[]).tags.is_empty());
     }
 }
