@@ -18,27 +18,40 @@ fn printed(value: &TagValue) -> String {
     }
 }
 
-/// ExifTool 13.59 derives this from the MAC header in
-/// `t/images/APE.ape`: `((TotalFrames - 1) * BlocksPerFrame +
-/// FinalFrameBlocks) / SampleRate`, then applies `ConvertDuration`.
+/// The four MAC-header fields `Image::ExifTool::APE::Composite::Duration`
+/// (APE.pm:83-92) derives its value from: `((TotalFrames - 1) *
+/// BlocksPerFrame + FinalFrameBlocks) / SampleRate`, then `ConvertDuration`.
 ///
-/// This fails if the composite is omitted or if any input is used with the
-/// wrong layout or conversion.
+/// This test asserts the *inputs*, because the duration itself is not this
+/// parser's tag: ExifTool reports it as `Composite:Duration` and has no
+/// `APE:Duration` at all. The derivation is pinned by
+/// `composite::compute::tests::audio_and_riff_durations`, and the end-to-end
+/// result was checked against the pinned oracle on this same fixture
+/// (`Composite:Duration` = "2.64 s" from both tools). This still fails if any
+/// input is read with the wrong layout or conversion.
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
-fn ape_fixture_reports_composite_duration() {
+fn ape_fixture_reports_the_composite_duration_inputs() {
     let path = Path::new("/tmp/oxidex-exiftool-cache/exiftool/t/images/APE.ape");
     let reader = BufferedReader::new(path).expect("Failed to open pinned APE fixture");
     let metadata = parse_ape_metadata(&reader).expect("Failed to parse pinned APE fixture");
 
-    assert_eq!(
-        printed(
-            metadata
-                .get("APE:Duration")
-                .expect("OxiDex missing APE:Duration")
-        ),
-        "2.64 s"
-    );
+    for (tag, expected) in [
+        ("APE:SampleRate", "44100"),
+        ("APE:TotalFrames", "2"),
+        ("APE:BlocksPerFrame", "73728"),
+        ("APE:FinalFrameBlocks", "42662"),
+    ] {
+        assert_eq!(
+            printed(
+                metadata
+                    .get(tag)
+                    .unwrap_or_else(|| panic!("OxiDex missing {tag}"))
+            ),
+            expected,
+            "{tag}"
+        );
+    }
 }
 
 #[test]

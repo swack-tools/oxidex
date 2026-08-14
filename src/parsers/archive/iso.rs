@@ -5,7 +5,6 @@
 
 #![allow(dead_code)]
 
-use crate::core::value_formatter::format_file_size;
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
@@ -236,8 +235,12 @@ impl ISOParser {
             37,
         )?;
 
-        // Reported as the raw count and size; VolumeSize is a Composite tag
-        // (VolumeBlockCount * VolumeBlockSize), not a field on the descriptor.
+        // Reported as the raw count and size only. VolumeSize is a Composite
+        // tag (VolumeBlockCount * VolumeBlockSize, ISO.pm:119-126), not a
+        // field on the descriptor: emitting it here too put it under `ISO:`
+        // where the pinned oracle puts it under `Composite:`, and left
+        // `ISO::VolumeSize` in codegen_composite.py's "never fire" list
+        // because nothing computed it. `composite::compute` computes it now.
         let block_count = Self::read_u32_both(reader, PVD_OFFSET + 80)?;
         let block_size = Self::read_u16_both(reader, PVD_OFFSET + 128)?;
         metadata.insert(
@@ -248,13 +251,6 @@ impl ISOParser {
             "ISO:VolumeBlockSize".to_string(),
             TagValue::String(block_size.to_string()),
         );
-        metadata.insert(
-            "ISO:VolumeSize".to_string(),
-            TagValue::String(format_file_size(
-                u64::from(block_count) * u64::from(block_size),
-            )),
-        );
-
         Self::insert_directory_date(
             reader,
             metadata,

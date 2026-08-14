@@ -909,9 +909,18 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
     // FocusDistanceUpper/Lower) has the same shape the other way around:
     // `$val > 655.345 ? "inf" : "$val m"` -- the raw sentinel 0xffff (655.35 m
     // after the ValueConv) means "not focused / infinity", and is exactly as
-    // deliberate as Minolta's zero.
-    const DELIBERATE_INFINITY: &[&str] =
-        &["FocusDistance", "FocusDistanceUpper", "FocusDistanceLower"];
+    // deliberate as Minolta's zero. Sony's `Composite:FocusDistance2` is the
+    // third of the same kind: its ValueConv is `return 'inf' if $val >= 255`
+    // and its PrintConv `$val eq "inf" ? $val : sprintf("%.4g m", $val)`, so
+    // the FocusPosition2 sentinel 255 means infinity, not a divide-by-zero.
+    // Without it here, 8 Sony bodies in the sample corpus printed "undef"
+    // where the pinned oracle prints "inf".
+    const DELIBERATE_INFINITY: &[&str] = &[
+        "FocusDistance",
+        "FocusDistance2",
+        "FocusDistanceUpper",
+        "FocusDistanceLower",
+    ];
     if let Some(s) = value.as_string() {
         if (s == "inf" || s == "-inf" || s == "Infinity" || s == "-Infinity")
             && !DELIBERATE_INFINITY.contains(&base_name)

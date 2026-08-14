@@ -133,6 +133,20 @@ pub fn format_with_unit(tag_name: &str, value: &str) -> String {
     // This handles fully-qualified names like "EXIF:FocalLength" or "Composite:FocalLengthIn35mmFormat"
     let base_name = tag_name.rsplit(':').next().unwrap_or(tag_name);
 
+    // `Composite:GPSAltitude` is not an EXIF altitude missing its unit: its own
+    // PrintConv (GPS.pm:423-431) renders the unit and the sea-level reference
+    // together -- "207 m Above Sea Level" -- so the meter suffix is already
+    // there, just not at the end of the string. `format_with_meter_suffix`
+    // tests `ends_with(" m")` and so appended a second one, giving
+    // "207 m Above Sea Level m" against the pinned oracle's "207 m Above Sea
+    // Level". This is the same shape as the `contains(" mm")` guard
+    // `format_with_mm_suffix` already carries for `Composite:FocalLength35efl`
+    // (see its doc comment); a `contains(" m")` test is not usable for meters,
+    // because " m" is a prefix of " mm" and of every word starting with m.
+    if base_name == "GPSAltitude" && tag_name.starts_with("Composite:") {
+        return value.to_string();
+    }
+
     // EXIF's own FocalLength (0x920a) forces exactly one decimal place --
     // Exif.pm:2401 `PrintConv => 'sprintf("%.1f mm",$val)'`. That is what
     // makes `exiftool -G1 -s` print `15.0 mm`, `70.0 mm` and `7.2 mm` where a

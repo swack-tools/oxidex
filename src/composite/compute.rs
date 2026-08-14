@@ -120,16 +120,27 @@ fn convert_bitrate(bitrate: f64) -> String {
 /// Perl's `%.3g`, without exponential notation for the values ConvertBitrate
 /// receives after unit scaling.
 fn format_significant_3(value: f64) -> String {
+    format_significant(value, 3)
+}
+
+/// Perl's `%.*g` for the non-exponential range these composites live in:
+/// `digits` significant figures, with trailing zeros (and a bare decimal
+/// point) stripped, which is what `%g` does and `%f` does not.
+fn format_significant(value: f64, digits: i32) -> String {
     if value == 0.0 {
         return "0".to_string();
     }
     let magnitude = value.abs().log10().floor() as i32;
-    let decimals = (2 - magnitude).max(0) as usize;
+    let decimals = (digits - 1 - magnitude).max(0) as usize;
     let rendered = format!("{value:.decimals$}");
-    rendered
-        .trim_end_matches('0')
-        .trim_end_matches('.')
-        .to_string()
+    if rendered.contains('.') {
+        rendered
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
+    } else {
+        rendered
+    }
 }
 
 fn canon_exposure_mode(value: &str) -> Option<i64> {
@@ -363,6 +374,398 @@ fn red_blue_balance(i: Inputs<'_>, blue: bool) -> Option<f64> {
     } else {
         Some(component / green)
     }
+}
+
+/// ExifTool's `Image::ExifTool::IsFloat` (ExifTool.pm:5947-5953), applied to a
+/// value that reaches this layer already carrying its `PrintConv` unit suffix.
+///
+/// `GPS:GPSAltitude`'s ExifTool `ValueConv` is a bare number and its
+/// `PrintConv` is `"$val m"` (GPS.pm:124, in the `0x0006` tag at
+/// GPS.pm:119-126) -- a verbatim append with no rounding -- but oxidex's GPS
+/// parser stores only the printed form, so
+/// `@val` arrives here as `"207 m"` where ExifTool's holds `207`. Stripping
+/// that one suffix recovers the ValueConv value *exactly* rather than
+/// approximating it; anything else (`"inf"`, `"undef"`, an empty string) is
+/// refused, which is the same answer ExifTool's own `IsFloat` gives for those.
+fn perl_is_float(value: &str) -> Option<f64> {
+    let value = value.trim();
+    let value = value.strip_suffix(" m").unwrap_or(value).trim();
+    if value.is_empty() {
+        return None;
+    }
+    // ExifTool's IsFloat regex admits digits, one optional decimal point, an
+    // optional sign and an optional exponent -- and nothing else. Rust's own
+    // parser additionally accepts "inf"/"NaN", which that regex rejects, so
+    // screen those out rather than letting them through as numbers.
+    if !value
+        .bytes()
+        .all(|b| b.is_ascii_digit() || matches!(b, b'.' | b'-' | b'+' | b'e' | b'E'))
+    {
+        return None;
+    }
+    let parsed: f64 = value.parse().ok()?;
+    parsed.is_finite().then_some(parsed)
+}
+
+/// Perl's `int($val * 10) / 10`: scale, truncate *toward zero*, scale back.
+fn truncate_to_tenths(value: f64) -> f64 {
+    (value * 10.0).trunc() / 10.0
+}
+
+/// GPS.pm:107-117 / XMP2.pl:354-366's shared `GPSAltitudeRef` `PrintConv`,
+/// read in whichever direction the caller's input needs.
+///
+/// Composite:GPSAltitude needs both halves of ExifTool's pair: `$val[$_+1]`
+/// for its Perl truthiness (`$val[$_+1] ? -abs($val[$_]) : $val[$_]`) and
+/// `$prt[$_+1]` verbatim in the printed string. oxidex's parsers supply only
+/// one of the two -- the EXIF path the raw `int8u`, another parser could
+/// supply the label -- so this resolves either into the `(code, print)` pair
+/// ExifTool holds. Both modules declare the identical four-entry hash. A code
+/// outside it renders as ExifTool's `Unknown (N)`, which is also the form
+/// `printed_integer` reads back; anything else is refused rather than assumed
+/// to be zero.
+fn gps_altitude_ref(label: &str) -> Option<(i64, String)> {
+    const REFS: [(i64, &str); 4] = [
+        (0, "Above Sea Level"),
+        (1, "Below Sea Level"),
+        (2, "Positive Sea Level (sea-level ref)"),
+        (3, "Negative Sea Level (sea-level ref)"),
+    ];
+    let label = label.trim();
+    if let Some(&(code, printed)) = REFS.iter().find(|(_, printed)| *printed == label) {
+        return Some((code, printed.to_string()));
+    }
+    // The other direction: oxidex's EXIF parser hands the composite layer the
+    // raw `int8u` (`super::value_string`), so the label has to be rendered
+    // here -- forward through the same hash, with ExifTool's `Unknown (N)`
+    // for a code the hash does not name.
+    let code = printed_integer(label)?;
+    let printed = REFS
+        .iter()
+        .find(|(known, _)| *known == code)
+        .map_or_else(|| format!("Unknown ({code})"), |(_, p)| (*p).to_string());
+    Some((code, printed))
+}
+
+/// GPS.pm:406-432 Composite::GPSAltitude.
+///
+/// ```perl
+/// RawConv => '(defined $val[1] or defined $val[3]) ? $val : undef',
+/// ValueConv => q{
+///     foreach (0,2) {
+///         next unless defined $val[$_] and IsFloat($val[$_]) and defined $val[$_+1];
+///         return $val[$_+1] ? -abs($val[$_]) : $val[$_];
+///     }
+///     return undef;
+/// },
+/// PrintConv => q{
+///     foreach (0,2) {
+///         next unless defined $val[$_] and IsFloat($val[$_]);
+///         next unless defined $prt[$_+1] and $prt[$_+1] =~ /Sea/;
+///         return((int($val[$_]*10)/10) . ' m ' . $prt[$_+1]);
+///     }
+///     $val = int($val * 10) / 10;
+///     return(($val =~ s/^-// ? "$val m Below" : "$val m Above") . " Sea Level");
+/// },
+/// ```
+///
+/// The `PrintConv` loop prints the *unsigned* `$val[$_]` next to the ref's own
+/// label, so the displayed string never depends on the sign the `ValueConv`
+/// applied -- which is why the `Positive Sea Level (sea-level ref)` code (2,
+/// Perl-truthy, hence `-abs`) can only ever change the value form.
+fn gps_altitude(i: Inputs<'_>) -> Option<Computed> {
+    // `IsFloat($val[$_])`, over the forms an altitude can reach this layer in:
+    // GPS.pm's `"$val m"` print form, an unconverted EXIF `n/d` rational, or a
+    // plain number. All three are the ValueConv value ExifTool would hold,
+    // recovered exactly; `inf` and `undef` (GPS.pm:124's other two PrintConv
+    // outputs) parse as neither and are refused, which is the same answer
+    // ExifTool's own `IsFloat` gives them.
+    let altitude_of = |v: Option<&str>| -> Option<f64> {
+        let v = v?.trim();
+        let v = v.strip_suffix(" m").unwrap_or(v);
+        if v.contains('/') {
+            f(Some(v))
+        } else {
+            perl_is_float(v)
+        }
+    };
+
+    // RawConv: at least one of the two refs must exist, or there is no
+    // altitude to sign and ExifTool emits nothing at all.
+    if get(i, 1).is_none() && get(i, 3).is_none() {
+        return None;
+    }
+
+    let mut value = None;
+    for base in [0usize, 2] {
+        let (Some(altitude), Some(reference)) = (get(i, base), get(i, base + 1)) else {
+            continue;
+        };
+        let Some(altitude) = altitude_of(Some(altitude)) else {
+            continue;
+        };
+        value = Some(if gps_altitude_ref(reference)?.0 != 0 {
+            -altitude.abs()
+        } else {
+            altitude
+        });
+        break;
+    }
+    let value = value?;
+
+    for base in [0usize, 2] {
+        let Some(altitude) = altitude_of(get(i, base)) else {
+            continue;
+        };
+        let Some(reference) = get(i, base + 1)
+            .and_then(gps_altitude_ref)
+            .map(|(_, printed)| printed)
+            .filter(|label| label.contains("Sea"))
+        else {
+            continue;
+        };
+        return Computed::new(
+            crate::exiftool_tables::exprs::perl_num(value),
+            format!(
+                "{} m {reference}",
+                crate::exiftool_tables::exprs::perl_num(truncate_to_tenths(altitude))
+            ),
+        );
+    }
+
+    let truncated = truncate_to_tenths(value);
+    let printed = crate::exiftool_tables::exprs::perl_num(truncated);
+    let print = match printed.strip_prefix('-') {
+        Some(positive) => format!("{positive} m Below Sea Level"),
+        None => format!("{printed} m Above Sea Level"),
+    };
+    Computed::new(crate::exiftool_tables::exprs::perl_num(value), print)
+}
+
+/// Reverse of Nikon.pm:928-932's `%aFDetectionMethod`, which is the only form
+/// `Nikon:AFDetectionMethod` reaches this layer in: the generated binary-table
+/// walker renders a field's transcribed `PrintConv` at extraction time
+/// (`exiftool_tables::runtime::DecodedField::emit`), so no numeric `ValueConv`
+/// survives for the two AF composites to compare against.
+fn nikon_af_detection_method(label: &str) -> Option<i64> {
+    Some(match label.trim() {
+        "Phase Detect" => 0,
+        "Contrast Detect" => 1,
+        "Hybrid" => 2,
+        other => printed_integer(other)?,
+    })
+}
+
+/// Reverse of `Nikon:FocusPointSchema`'s `PrintConv`, which ExifTool declares
+/// three times over -- Nikon.pm:4169-4177 (0-3), Nikon.pm:4383-4393 (0,1,2,7)
+/// and Nikon.pm:4761-4771 (0,1,8,9), one per AFInfo2 layout. The three maps
+/// disagree about which codes exist but never about what a given label means,
+/// so the label -> code direction is single-valued across all three and does
+/// not depend on knowing which layout produced it.
+fn nikon_focus_point_schema(label: &str) -> Option<i64> {
+    Some(match label.trim() {
+        "Off" => 0,
+        "51-point" => 1,
+        "11-point" => 2,
+        "39-point" => 3,
+        "153-point" => 7,
+        "81-point" => 8,
+        "105-point" => 9,
+        other => printed_integer(other)?,
+    })
+}
+
+/// `Image::ExifTool::Olympus::ExtenderStatus` (Olympus.pm:4337-4351).
+///
+/// ```perl
+/// sub ExtenderStatus($$$)
+/// {
+///     my ($extender, $lensType, $maxAperture) = @_;
+///     my @info = split ' ', $extender;
+///     # validate that extender identifier is reasonable
+///     return 0 unless @info >= 2 and hex($info[1]);
+///     # if it's not an EC-14 (id '0 04') then assume it was really attached
+///     # (other extenders don't seem to affect the reported max aperture)
+///     return 1 if "$info[0] $info[1]" ne '0 04';
+///     # get the maximum aperture for this lens (in $1)
+///     $lensType =~ / F(\d+(\.\d+)?)/ or return 1;
+///     # If the maximum aperture at the maximum focal length is greater than the
+///     # known max/max aperture of the lens, then the extender must be attached
+///     return(($maxAperture - $1 > 0.2) ? 1 : 2);
+/// }
+/// ```
+///
+/// `$extender` is `Olympus:Extender`'s ValueConv, `sprintf("%x %.2x",
+/// @bytes[0,2])` (Olympus.pm:1708-1724, Equipment 0x0301). oxidex's Olympus
+/// parser stores the *PrintConv* of that key instead, so `extender_value_conv` below inverts
+/// the four-entry lookup to recover it exactly; `$lensType` is already the
+/// print form ExifTool passes here (`$prt[1]`, not `$val[1]`).
+fn olympus_extender_status(extender: &str, lens_type: &str, max_aperture: f64) -> Option<i64> {
+    let info: Vec<&str> = extender.split_whitespace().collect();
+    if info.len() < 2 || i64::from_str_radix(info[1], 16).ok()? == 0 {
+        return Some(0);
+    }
+    if format!("{} {}", info[0], info[1]) != "0 04" {
+        return Some(1);
+    }
+    // Perl's ` F(\d+(\.\d+)?)`: the first " F" followed by a number.
+    let Some(aperture) = lens_type.split(" F").nth(1).and_then(|rest| {
+        let end = rest
+            .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .unwrap_or(rest.len());
+        // A bare "." or a trailing "." is not what the Perl regex accepts.
+        rest[..end].parse::<f64>().ok()
+    }) else {
+        return Some(1);
+    };
+    Some(if max_aperture - aperture > 0.2 { 1 } else { 2 })
+}
+
+/// Recover `Olympus:Extender`'s ValueConv (`"%x %.2x"`) from the PrintConv
+/// oxidex stores, using the same four-entry table the parser printed it with
+/// (`parsers::tiff::makernotes::olympus::lookups::EQUIPMENT_EXTENDER`). The
+/// map is closed and injective, and ExifTool's own `Unknown (%x %.2x)` fallback
+/// carries the key verbatim, so this is an exact inverse rather than a guess.
+fn olympus_extender_value_conv(printed: &str) -> Option<&str> {
+    let printed = printed.trim();
+    if let Some(key) = printed
+        .strip_prefix("Unknown (")
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
+        return Some(key);
+    }
+    crate::parsers::tiff::makernotes::olympus::lookups::EQUIPMENT_EXTENDER
+        .iter()
+        .find(|(_, label)| *label == printed)
+        .map(|(key, _)| *key)
+}
+
+/// `Image::ExifTool::Exif::PrintCFAPattern` (Exif.pm:5756-5773), which takes
+/// Composite::CFAPattern's own `"rows cols c c c c"` ValueConv string.
+fn print_cfa_pattern(value: &str) -> String {
+    const COLORS: [&str; 7] = ["Red", "Green", "Blue", "Cyan", "Magenta", "Yellow", "White"];
+    let a: Vec<&str> = value.split_whitespace().collect();
+    if a.len() < 2 {
+        return "<truncated data>".to_string();
+    }
+    let (Some(rows), Some(cols)) = (
+        a[0].parse::<usize>().ok().filter(|n| *n != 0),
+        a[1].parse::<usize>().ok().filter(|n| *n != 0),
+    ) else {
+        return "<zero pattern size>".to_string();
+    };
+    let end = 2 + rows * cols;
+    if end > a.len() {
+        return "<invalid pattern size>".to_string();
+    }
+    let mut out = String::from("[");
+    let mut pos = 2;
+    loop {
+        let color = a[pos]
+            .parse::<usize>()
+            .ok()
+            .and_then(|n| COLORS.get(n).copied())
+            .unwrap_or("Unknown");
+        out.push_str(color);
+        pos += 1;
+        if pos >= end {
+            break;
+        }
+        if (pos - 2) % cols == 0 {
+            out.push_str("][");
+        } else {
+            out.push(',');
+        }
+    }
+    out.push(']');
+    out
+}
+
+/// `Image::ExifTool::PostScript::ImageSize` (PostScript.pm:162-172): read the
+/// first two integers of `ImageData`, or fall back to the width and height
+/// implied by `BoundingBox`'s four.
+fn postscript_image_size(i: Inputs<'_>, want_height: bool) -> Option<i64> {
+    let ints = |s: &str, n: usize| -> Option<Vec<i64>> {
+        let parsed: Vec<i64> = s
+            .split_whitespace()
+            .take(n)
+            .map(str::parse)
+            .collect::<Result<_, _>>()
+            .ok()?;
+        (parsed.len() == n).then_some(parsed)
+    };
+    if let Some(d) = get(i, 0)
+        .filter(|v| perl_truthy(Some(v)))
+        .and_then(|v| ints(v, 2))
+    {
+        return Some(d[usize::from(want_height)]);
+    }
+    let b = get(i, 1)
+        .filter(|v| perl_truthy(Some(v)))
+        .and_then(|v| ints(v, 4))?;
+    Some(if want_height {
+        b[3] - b[1]
+    } else {
+        b[2] - b[0]
+    })
+}
+
+/// Reverse of the `Return` and `Mode` `PrintConv` maps of XMP.pm's `Flash`
+/// struct (XMP.pm:2140-2147 and XMP.pm:2148-2156, inside the struct at
+/// XMP.pm:2134-2160), whose numbers Composite::Flash shifts into the packed
+/// EXIF `Flash` byte. Both are closed hashes -- `Return` has three entries
+/// (0, 2, 3) and `Mode` four -- and oxidex's XMP parser stores only their
+/// labels.
+fn xmp_flash_field(label: &str, mode: bool) -> Option<i64> {
+    Some(match (label.trim(), mode) {
+        ("No return detection", false) => 0,
+        ("Return not detected", false) => 2,
+        ("Return detected", false) => 3,
+        ("Unknown", true) => 0,
+        ("On", true) => 1,
+        ("Off", true) => 2,
+        ("Auto", true) => 3,
+        (other, _) => printed_integer(other)?,
+    })
+}
+
+/// XMP.pm:2748-2788's four `GPS<Dest>L(at|ong)itudeRef` composites, which
+/// differ only in which hemisphere letters they read and print.
+///
+/// ```perl
+/// ValueConv => q{
+///     IsFloat($val[0]) and return $val[0] < 0 ? "S" : "N";
+///     $val[0] =~ /^.*([NS])/;
+///     return $1;
+/// },
+/// PrintConv => { N => 'North', S => 'South' },   # E/W for longitude
+/// ```
+fn xmp_gps_ref(i: Inputs<'_>, longitude: bool) -> Option<Computed> {
+    let (positive, negative) = if longitude { ('E', 'W') } else { ('N', 'S') };
+    let coordinate = get(i, 0)?;
+    let letter = match perl_is_float(coordinate) {
+        Some(degrees) => {
+            if degrees < 0.0 {
+                negative
+            } else {
+                positive
+            }
+        }
+        // Perl's `.*` is greedy, so this is the LAST N/S (or E/W) in the
+        // string, not the first.
+        None => coordinate
+            .chars()
+            .rev()
+            .find(|c| *c == positive || *c == negative)?,
+    };
+    let print = match letter {
+        'N' => "North",
+        'S' => "South",
+        'E' => "East",
+        'W' => "West",
+        _ => return None,
+    };
+    Computed::new(letter.to_string(), print)
 }
 
 /// ExifTool's shared `RawConv` for the three Composite SubSec timestamps:
@@ -1267,19 +1670,343 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             Computed::same(subsec_date_time(i)?)
         }
 
+        // Exif.pm:5157-5163 Composite::PreviewImageSize:
+        //   require:   0) PreviewImageWidth, 1) PreviewImageHeight
+        //   ValueConv: `"$val[0]x$val[1]"`
+        // No PrintConv at all, so the value and display forms are the same
+        // string -- the `x` is part of the ValueConv here, unlike
+        // Composite::ImageSize where it is the PrintConv's `tr/ /x/`.
+        ("Exif", "PreviewImageSize") => Computed::same(format!("{}x{}", get(i, 0)?, get(i, 1)?)),
+
+        // Exif.pm:5221-5234 Composite::CFAPattern:
+        //   require:   0) CFARepeatPatternDim, 1) CFAPattern2
+        //   ValueConv: q{
+        //       my @a = split / /, $val[0];
+        //       my @b = split / /, $val[1];
+        //       return '?' unless @a==2 and @b==$a[0]*$a[1];
+        //       return "$a[0] $a[1] @b";
+        //   }
+        //   PrintConv: `Image::ExifTool::Exif::PrintCFAPattern($val)`
+        ("Exif", "CFAPattern") => {
+            let dim: Vec<&str> = get(i, 0)?.split(' ').collect();
+            let pattern: Vec<&str> = get(i, 1)?.split(' ').collect();
+            let expected = dim
+                .first()
+                .and_then(|v| v.parse::<usize>().ok())
+                .zip(dim.get(1).and_then(|v| v.parse::<usize>().ok()))
+                .map(|(rows, cols)| rows * cols);
+            if dim.len() != 2 || expected != Some(pattern.len()) {
+                // ExifTool's own literal `'?'` -- an emitted tag, so it is
+                // reproduced rather than dropped.
+                return Computed::new("?", print_cfa_pattern("?"));
+            }
+            let value = format!("{} {} {}", dim[0], dim[1], pattern.join(" "));
+            let print = print_cfa_pattern(&value);
+            Computed::new(value, print)
+        }
+
+        // GPS.pm:406-432 Composite::GPSAltitude -- see `gps_altitude`.
+        ("GPS", "GPSAltitude") => gps_altitude(i),
+
+        // Kodak.pm:3023-3030 Composite::DateCreated:
+        //   require:   0) Kodak:YearCreated, 1) Kodak:MonthDayCreated
+        //   ValueConv: `"$val[0]:$val[1]"` (no PrintConv)
+        ("Kodak", "DateCreated") => Computed::same(format!("{}:{}", get(i, 0)?, get(i, 1)?)),
+
+        // ISO.pm:119-126 Composite::VolumeSize:
+        //   require:   0) ISO:VolumeBlockCount, 1) ISO:VolumeBlockSize
+        //   ValueConv: `$val[0] * $val[1]`
+        //   PrintConv: `\&Image::ExifTool::ConvertFileSize`
+        //
+        // `core::value_formatter::format_file_size` is the existing port of
+        // ConvertFileSize -- it is what the ISO parser itself called when it
+        // emitted this under the wrong group (see `parsers::archive::iso`,
+        // whose own comment already said "VolumeSize is a Composite tag ...
+        // not a field on the descriptor").
+        ("ISO", "VolumeSize") => {
+            let bytes = f(get(i, 0))? * f(get(i, 1))?;
+            Computed::new(
+                crate::exiftool_tables::exprs::perl_num(bytes),
+                crate::core::value_formatter::format_file_size(bytes as u64),
+            )
+        }
+
+        // Nikon.pm:13215-13222 Composite::LensSpec:
+        //   require:   0) Nikon:Lens, 1) Nikon:LensType
+        //   ValueConv: `"$val[0] $val[1]"`
+        //   PrintConv: `"$prt[0] $prt[1]"`
+        //
+        // oxidex's Nikon maker-note parser stores `Lens` and `LensType` in
+        // their PrintConv forms only ("70mm f/2.8", "G"), so what arrives here
+        // is ExifTool's `@prt`, not its `@val`. That makes the emitted tag --
+        // the PrintConv branch, which is the only form the CLI and the
+        // comparison harness ever see -- exact, and leaves the internal
+        // `.value` carrying the same string instead of ExifTool's
+        // `"70 70 2.8 2.8 14"`. No Composite requires `LensSpec`, so that
+        // value form is never read back by anything; it is recorded here so
+        // the limitation is stated rather than hidden.
+        ("Nikon", "LensSpec") => Computed::same(format!("{} {}", get(i, 0)?, get(i, 1)?)),
+
+        // Nikon.pm:13247-13262 Composite::PhaseDetectAF:
+        //   require:   0) Nikon:FocusPointSchema, 1) Nikon:AFDetectionMethod
+        //   ValueConv: `(($val[1]) == 0) ? ($val[0]) : 0`
+        //   PrintConv: { 0 => 'Off', 1 => 'On (51-point)', 2 => 'On (11-point)',
+        //                3 => 'On (39-point)', 7 => 'On (153-point)',
+        //                9 => 'On (105-point)' }
+        ("Nikon", "PhaseDetectAF") => {
+            let schema = nikon_focus_point_schema(get(i, 0)?)?;
+            let method = nikon_af_detection_method(get(i, 1)?)?;
+            let value = if method == 0 { schema } else { 0 };
+            let print = match value {
+                0 => "Off".to_string(),
+                1 => "On (51-point)".to_string(),
+                2 => "On (11-point)".to_string(),
+                3 => "On (39-point)".to_string(),
+                7 => "On (153-point)".to_string(),
+                9 => "On (105-point)".to_string(),
+                other => format!("Unknown ({other})"),
+            };
+            Computed::new(value.to_string(), print)
+        }
+
+        // Nikon.pm:13263-13270 Composite::ContrastDetectAF:
+        //   require:   0) Nikon:FocusMode, 1) Nikon:AFDetectionMethod
+        //   ValueConv: `(($val[0] !~ /^Manual/i) and ($val[1] == 1)) ? 1 : 0`
+        //   PrintConv: `%offOn` -- { 0 => 'Off', 1 => 'On' }
+        ("Nikon", "ContrastDetectAF") => {
+            let focus_mode = get(i, 0)?;
+            let method = nikon_af_detection_method(get(i, 1)?)?;
+            let value = i64::from(
+                !focus_mode
+                    .trim_start()
+                    .to_ascii_lowercase()
+                    .starts_with("manual")
+                    && method == 1,
+            );
+            Computed::new(
+                value.to_string(),
+                if value == 1 { "On" } else { "Off" }.to_string(),
+            )
+        }
+
+        // Olympus.pm:4283-4300 Composite::ExtenderStatus:
+        //   require:   0) Olympus:Extender, 1) Olympus:LensType,
+        //              2) MaxApertureValue
+        //   ValueConv: `Image::ExifTool::Olympus::ExtenderStatus($val[0],$prt[1],$val[2])`
+        //   PrintConv: { 0 => 'Not attached', 1 => 'Attached', 2 => 'Removed' }
+        ("Olympus", "ExtenderStatus") => {
+            let extender = olympus_extender_value_conv(get(i, 0)?)?;
+            let status = olympus_extender_status(extender, get(i, 1)?, f(get(i, 2))?)?;
+            let print = match status {
+                0 => "Not attached",
+                1 => "Attached",
+                2 => "Removed",
+                _ => return None,
+            };
+            Computed::new(status.to_string(), print)
+        }
+
+        // PostScript.pm:132-138 Composite::ImageWidth,
+        // PostScript.pm:139-145 Composite::ImageHeight:
+        //   desire:    0) Main:PostScript:ImageData, 1) PostScript:BoundingBox
+        //   ValueConv: `Image::ExifTool::PostScript::ImageSize(\@val, 0|1)`
+        ("PostScript", "ImageWidth" | "ImageHeight") => {
+            let size = postscript_image_size(i, name == "ImageHeight")?;
+            Computed::same(size.to_string())
+        }
+
+        // Sony.pm:10895-10903 Composite::FocusDistance:
+        //   require:   0) Sony:FocusPosition, 1) FocalLength
+        //   ValueConv: `$val >= 128 ? "inf" : $val * $val[1] / 1000`
+        //   PrintConv: `$val eq "inf" ? $val : "$val m"`
+        // `$val` is `$val[0]` for a Composite (ExifTool.pm:3611-3612).
+        ("Sony", "FocusDistance") => {
+            let position = f(get(i, 0))?;
+            if position >= 128.0 {
+                return Computed::same("inf");
+            }
+            let metres = position * f(get(i, 1))? / 1000.0;
+            let value = crate::exiftool_tables::exprs::perl_num(metres);
+            Computed::new(value.clone(), format!("{value} m"))
+        }
+
+        // Sony.pm:10904-10928 Composite::FocusDistance2:
+        //   require:   0) Sony:FocusPosition2, 1) FocalLengthIn35mmFormat
+        //   ValueConv: q{
+        //       return undef unless $val;
+        //       return 'inf' if $val >= 255;
+        //       return (2**($val/16-5) + 1) * $val[1] / 1000;
+        //   }
+        //   PrintConv: `$val eq "inf" ? $val : sprintf("%.4g m", $val)`
+        ("Sony", "FocusDistance2") => {
+            let position = f(get(i, 0))?;
+            if position == 0.0 {
+                return None;
+            }
+            if position >= 255.0 {
+                return Computed::same("inf");
+            }
+            let metres = (2f64.powf(position / 16.0 - 5.0) + 1.0) * f(get(i, 1))? / 1000.0;
+            Computed::new(
+                crate::exiftool_tables::exprs::perl_num(metres),
+                format!("{} m", format_significant(metres, 4)),
+            )
+        }
+
+        // XMP.pm:2808-2842 Composite::Flash:
+        //   desire:    0) XMP:FlashFired, 1) XMP:FlashReturn, 2) XMP:FlashMode,
+        //              3) XMP:FlashFunction, 4) XMP:FlashRedEyeMode, 5) XMP:Flash
+        //   ValueConv: `((lc $val[0] eq 'true') ? 0x01 : 0) | (($val[1]||0) << 1) |
+        //               (($val[2]||0) << 3) | ((lc $val[3] eq 'true') ? 0x20 : 0) |
+        //               ((lc $val[4] eq 'true') ? 0x40 : 0)`
+        //   PrintConv: `%Image::ExifTool::Exif::flash`, PrintHex => 1
+        //
+        // The `ref $val[5] eq 'HASH'` branch (a structured `XMP:Flash`) is not
+        // reproduced: oxidex's XMP parser flattens a Flash struct into the same
+        // five scalar fields this reads at 0-4, and there is no `Struct` value
+        // for `value_string` to hand over here (`super::value_string` returns
+        // `None` for `TagValue::Struct`), so index 5 never arrives as a hash.
+        ("XMP", "Flash") => {
+            let boolean =
+                |n: usize| get(i, n).is_some_and(|v| v.trim().eq_ignore_ascii_case("true")) as i64;
+            let field = |n: usize, mode: bool| match get(i, n) {
+                Some(label) => xmp_flash_field(label, mode),
+                None => Some(0),
+            };
+            let value = boolean(0)
+                | (field(1, false)? << 1)
+                | (field(2, true)? << 3)
+                | (boolean(3) << 5)
+                | (boolean(4) << 6);
+            Computed::new(
+                value.to_string(),
+                crate::core::formatters::exif_enums::format_flash(value),
+            )
+        }
+
+        // XMP.pm:2748-2788 Composite::GPSLatitudeRef / GPSLongitudeRef (and
+        // their two GPSDest siblings), all four the same shape:
+        //   require:   0) XMP-exif:GPS<Dest>L(at|ong)itude
+        //   ValueConv: q{
+        //       IsFloat($val[0]) and return $val[0] < 0 ? "S" : "N";
+        //       $val[0] =~ /^.*([NS])/;
+        //       return $1;
+        //   }
+        //   PrintConv: { N => 'North', S => 'South' } (E/W for longitude)
+        //
+        // Split in two rather than written as one four-way alternation
+        // because `codegen_composite.py`'s `_COMPUTE_ARM_RE` reads this file
+        // line by line: rustfmt breaks a pattern that wide across three lines,
+        // and the triage line then reports all four as having no registered
+        // computation. The check is precision-limited by design (its own doc
+        // comment says so), so keeping each arm on one line is what keeps the
+        // "never fire" count honest.
+        ("XMP", "GPSLatitudeRef" | "GPSDestLatitudeRef") => xmp_gps_ref(i, false),
+        ("XMP", "GPSLongitudeRef" | "GPSDestLongitudeRef") => xmp_gps_ref(i, true),
+
+        // APE.pm:83-92 Composite::Duration:
+        //   require:   0) APE:SampleRate, 1) APE:TotalFrames,
+        //              2) APE:BlocksPerFrame, 3) APE:FinalFrameBlocks
+        //   RawConv:   `($val[0] && $val[1]) ?
+        //               (($val[1] - 1) * $val[2] + $val[3]) / $val[0] : undef`
+        //   PrintConv: `ConvertDuration($val)`
+        ("APE", "Duration") => {
+            let (rate, frames) = (f(get(i, 0))?, f(get(i, 1))?);
+            if rate == 0.0 || frames == 0.0 {
+                return None;
+            }
+            let seconds = ((frames - 1.0) * f(get(i, 2))? + f(get(i, 3))?) / rate;
+            Computed::new(
+                crate::exiftool_tables::exprs::perl_num(seconds),
+                convert_duration(seconds),
+            )
+        }
+
+        // FLAC.pm:137-145 Composite::Duration:
+        //   require:   0) FLAC:SampleRate, 1) FLAC:TotalSamples
+        //   ValueConv: `($val[0] and $val[1]) ? $val[1] / $val[0] : undef`
+        //   PrintConv: `ConvertDuration($val)`
+        // The same shape as AIFF::Duration above, including the "a zero sample
+        // count is as disqualifying as a zero rate" guard -- which is what the
+        // one FLAC carrier in the corpus exercises (TotalSamples 0, so both
+        // ExifTool and this emit nothing).
+        ("FLAC", "Duration") => {
+            let (rate, samples) = (f(get(i, 0))?, f(get(i, 1))?);
+            if rate == 0.0 || samples == 0.0 {
+                return None;
+            }
+            let seconds = samples / rate;
+            Computed::new(
+                crate::exiftool_tables::exprs::perl_num(seconds),
+                convert_duration(seconds),
+            )
+        }
+
+        // RIFF.pm:1548-1560 Composite::Duration:
+        //   require:   0) RIFF:FrameRate, 1) RIFF:FrameCount
+        //   desire:    2) VideoFrameRate, 3) VideoFrameCount
+        //   RawConv:   `Image::ExifTool::RIFF::CalcDuration($self, @val)`
+        //   PrintConv: `ConvertDuration($val)`
+        //
+        // RIFF.pm:1645-1666, the head of CalcDuration, is the whole of the
+        // computation for a file with no sub-documents:
+        //   my $dur1;
+        //   $dur1 = $val[1] / $val[0] if $val[0];
+        //   if ($val[2] and $val[3]) {
+        //       my $dur2 = $val[3] / $val[2];
+        //       my $rat = $dur1 / $dur2;
+        //       $dur1 = $dur2 if $rat > 1.9 and $rat < 3.1;
+        //   }
+        //   $totalDuration += $dur1 if defined $dur1;
+        //   last unless $subDoc++ < $$et{DOC_COUNT};
+        // `$subDoc` starts at 0, so the trailing `last` fires immediately
+        // unless DOC_COUNT is non-zero. oxidex extracts no RIFF sub-documents
+        // at all, so `VideoFrameRate`/`VideoFrameCount` for a second stream
+        // could not be resolved even if they existed -- the summation branch is
+        // unreachable here rather than approximated.
+        ("RIFF", "Duration") => {
+            let rate = f(get(i, 0))?;
+            if rate == 0.0 {
+                return None;
+            }
+            let mut seconds = f(get(i, 1))? / rate;
+            if let (Some(video_rate), Some(video_count)) = (f(get(i, 2)), f(get(i, 3)))
+                && video_rate != 0.0
+                && video_count != 0.0
+            {
+                let alternate = video_count / video_rate;
+                let ratio = seconds / alternate;
+                if ratio > 1.9 && ratio < 3.1 {
+                    seconds = alternate;
+                }
+            }
+            Computed::new(
+                crate::exiftool_tables::exprs::perl_num(seconds),
+                convert_duration(seconds),
+            )
+        }
+
         // GPS.pm Composite::GPSDateTime:
         //   `"$val[0] $val[1]Z"`, followed by ConvertDateTime.
         ("GPS", "GPSDateTime") => Computed::same(format!("{} {}Z", get(i, 0)?, get(i, 1)?)),
 
         // GPS.pm signed-coordinate ValueConv and default ToDMS PrintConv.
-        ("GPS", "GPSLatitude" | "GPSLongitude" | "GPSDestLongitude") => {
+        //
+        // GPS.pm:433-440 `GPSDestLatitude` is the same shape as `GPSLatitude`
+        // -- `Require => { 0 => 'GPS:GPSDestLatitude', 1 =>
+        // 'GPS:GPSDestLatitudeRef' }`, `ValueConv => '$val[1] =~ /^S/i ?
+        // -$val[0] : $val[0]'`, `PrintConv => 'ToDMS($self, $val, 1, "N")'` --
+        // so it joins the latitude side of this arm, exactly as
+        // `GPSDestLongitude` (GPS.pm:441-448) already joins the longitude side.
+        ("GPS", "GPSLatitude" | "GPSLongitude" | "GPSDestLatitude" | "GPSDestLongitude") => {
+            let latitude = name == "GPSLatitude" || name == "GPSDestLatitude";
             let coordinate = get(i, 0)?;
             if coordinate.is_empty() {
                 return Computed::same("");
             }
             let mut value = gps_degrees(coordinate)?;
             let reference = get(i, 1)?.trim();
-            let negative = if name == "GPSLatitude" {
+            let negative = if latitude {
                 reference.starts_with(['S', 's'])
             } else {
                 reference.starts_with(['W', 'w'])
@@ -1289,7 +2016,7 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             }
             Computed::new(
                 value.to_string(),
-                gps_print(value, if name == "GPSLatitude" { 'N' } else { 'E' }),
+                gps_print(value, if latitude { 'N' } else { 'E' }),
             )
         }
 
@@ -2128,5 +2855,489 @@ mod tests {
     fn missing_required_input_yields_nothing() {
         assert_eq!(c("ImageSize", &[Some("4000"), None]), None);
         assert_eq!(c("Megapixels", &[None]), None);
+    }
+
+    // ------------------------------------------------------------------
+    // Step 30: composites that previously had no registered computation and
+    // so never fired. Every expectation below is the pinned oracle's own
+    // output (`exiftool-pinned.sh -G -s -j -a`, ExifTool 13.59) on the named
+    // corpus carrier, with the inputs as `oxidex -j` reports them for that
+    // same file -- the two instruments quoted in the commit message.
+    // ------------------------------------------------------------------
+
+    /// Print form for a composite in a module other than `Exif`.
+    fn cg(module: &str, name: &str, v: &[Option<&str>]) -> Option<String> {
+        compute(module, name, v, None).map(|c| c.print)
+    }
+
+    #[test]
+    fn preview_image_size_joins_the_required_pair() {
+        // combined-samples/Canon/CanonEOS_DIGITAL_REBEL.jpg:
+        // Canon:PreviewImageWidth 1536, Canon:PreviewImageHeight 1024
+        // -> Composite:PreviewImageSize "1536x1024"
+        assert_eq!(
+            c("PreviewImageSize", &[Some("1536"), Some("1024")]).as_deref(),
+            Some("1536x1024")
+        );
+        assert_eq!(c("PreviewImageSize", &[Some("1536"), None]), None);
+    }
+
+    #[test]
+    fn gps_altitude_prints_magnitude_beside_its_reference() {
+        // combined-samples/Samsung/SamsungSCH-I535.jpg:
+        // GPS:GPSAltitude "207 m", GPS:GPSAltitudeRef 0 -> "207 m Above Sea Level"
+        assert_eq!(
+            cg(
+                "GPS",
+                "GPSAltitude",
+                &[Some("207 m"), Some("0"), None, None]
+            )
+            .as_deref(),
+            Some("207 m Above Sea Level")
+        );
+        // combined-samples/Samsung/SamsungSM-G930F.jpg: ref 1 -> "0 m Below Sea Level".
+        // The printed magnitude is the UNSIGNED $val[0]; only the value form
+        // takes the -abs() the ValueConv applies.
+        let below = compute(
+            "GPS",
+            "GPSAltitude",
+            &[Some("0 m"), Some("1"), None, None],
+            None,
+        )
+        .expect("below-sea-level altitude fires");
+        assert_eq!(below.print, "0 m Below Sea Level");
+        let negative = compute(
+            "GPS",
+            "GPSAltitude",
+            &[Some("12.5 m"), Some("1"), None, None],
+            None,
+        )
+        .expect("below-sea-level altitude fires");
+        assert_eq!(negative.print, "12.5 m Below Sea Level");
+        assert_eq!(negative.value, "-12.5");
+        // A parser that hands over the label instead of the byte resolves the
+        // same way (GPS.pm's PrintConv read in the other direction).
+        assert_eq!(
+            cg(
+                "GPS",
+                "GPSAltitude",
+                &[Some("207 m"), Some("Above Sea Level"), None, None]
+            )
+            .as_deref(),
+            Some("207 m Above Sea Level")
+        );
+        // RawConv: neither reference present -> ExifTool emits nothing.
+        assert_eq!(
+            cg("GPS", "GPSAltitude", &[Some("207 m"), None, None, None]),
+            None
+        );
+        // "inf" is not a float, so no branch of the ValueConv loop returns.
+        assert_eq!(
+            cg("GPS", "GPSAltitude", &[Some("inf"), Some("0"), None, None]),
+            None
+        );
+    }
+
+    #[test]
+    fn gps_dest_latitude_signs_and_prints_like_gps_latitude() {
+        // combined-samples/Samsung/SamsungL73.jpg:
+        // GPS:GPSDestLatitude "35 deg 48' 8.00\"", ref "North"
+        assert_eq!(
+            cg(
+                "GPS",
+                "GPSDestLatitude",
+                &[Some("35 deg 48' 8.00\""), Some("North")]
+            )
+            .as_deref(),
+            Some("35 deg 48' 8.00\" N")
+        );
+        // The southern branch is the whole point of the arm being split by name.
+        assert_eq!(
+            cg("GPS", "GPSDestLatitude", &[Some("35 deg"), Some("South")]).as_deref(),
+            Some("35 deg 0' 0.00\" S")
+        );
+    }
+
+    #[test]
+    fn nikon_lens_spec_joins_the_two_print_forms() {
+        // combined-samples/Nikon/NikonD750.jpg: Nikon:Lens "70mm f/2.8",
+        // Nikon:LensType "G" -> Composite:LensSpec "70mm f/2.8 G".
+        assert_eq!(
+            cg("Nikon", "LensSpec", &[Some("70mm f/2.8"), Some("G")]).as_deref(),
+            Some("70mm f/2.8 G")
+        );
+        // combined-samples/Nikon/NikonD850.jpg
+        assert_eq!(
+            cg("Nikon", "LensSpec", &[Some("105mm f/1.4"), Some("E G")]).as_deref(),
+            Some("105mm f/1.4 E G")
+        );
+    }
+
+    #[test]
+    fn nikon_phase_detect_af_reports_the_schema_only_for_phase_detect() {
+        // combined-samples/Nikon/NikonD850.jpg: FocusPointSchema "153-point",
+        // AFDetectionMethod "Phase Detect" -> "On (153-point)".
+        assert_eq!(
+            cg(
+                "Nikon",
+                "PhaseDetectAF",
+                &[Some("153-point"), Some("Phase Detect")]
+            )
+            .as_deref(),
+            Some("On (153-point)")
+        );
+        // combined-samples/Nikon/NikonD750.jpg: schema Off -> "Off".
+        assert_eq!(
+            cg(
+                "Nikon",
+                "PhaseDetectAF",
+                &[Some("Off"), Some("Phase Detect")]
+            )
+            .as_deref(),
+            Some("Off")
+        );
+        // combined-samples/Nikon/NikonZ50.jpg: an 81-point schema under Hybrid
+        // detection is forced to 0 by `($val[1] == 0) ? $val[0] : 0`, which is
+        // why ExifTool prints "Off" and not "Unknown (8)".
+        assert_eq!(
+            cg(
+                "Nikon",
+                "PhaseDetectAF",
+                &[Some("81-point"), Some("Hybrid")]
+            )
+            .as_deref(),
+            Some("Off")
+        );
+        // combined-samples/Nikon/NikonD6.jpg
+        assert_eq!(
+            cg(
+                "Nikon",
+                "PhaseDetectAF",
+                &[Some("105-point"), Some("Phase Detect")]
+            )
+            .as_deref(),
+            Some("On (105-point)")
+        );
+        // A label neither map names is refused rather than guessed at.
+        assert_eq!(
+            cg(
+                "Nikon",
+                "PhaseDetectAF",
+                &[Some("wat"), Some("Phase Detect")]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn nikon_contrast_detect_af_needs_both_non_manual_and_contrast() {
+        // combined-samples/Nikon/NikonD750.jpg: FocusMode "Manual" -> "Off".
+        assert_eq!(
+            cg(
+                "Nikon",
+                "ContrastDetectAF",
+                &[Some("Manual"), Some("Phase Detect")]
+            )
+            .as_deref(),
+            Some("Off")
+        );
+        assert_eq!(
+            cg(
+                "Nikon",
+                "ContrastDetectAF",
+                &[Some("AF-S"), Some("Contrast Detect")]
+            )
+            .as_deref(),
+            Some("On")
+        );
+        // Contrast detect but manual focus: the `!~ /^Manual/i` half fails.
+        assert_eq!(
+            cg(
+                "Nikon",
+                "ContrastDetectAF",
+                &[Some("Manual"), Some("Contrast Detect")]
+            )
+            .as_deref(),
+            Some("Off")
+        );
+    }
+
+    #[test]
+    fn olympus_extender_status_reads_the_extender_id() {
+        // combined-samples/Olympus/OlympusE-330.jpg: Olympus:Extender "None"
+        // (ValueConv "0 00") -> hex("00") is 0 -> "Not attached".
+        assert_eq!(
+            cg(
+                "Olympus",
+                "ExtenderStatus",
+                &[
+                    Some("None"),
+                    Some("Olympus Zuiko Digital 14-54mm F2.8-3.5"),
+                    Some("2.8")
+                ]
+            )
+            .as_deref(),
+            Some("Not attached")
+        );
+        // A non-EC-14 extender is assumed attached outright (Olympus.pm:4345).
+        assert_eq!(
+            cg(
+                "Olympus",
+                "ExtenderStatus",
+                &[
+                    Some("Olympus EX-25 Extension Tube"),
+                    Some("Olympus Zuiko Digital 14-54mm F2.8-3.5"),
+                    Some("2.8")
+                ]
+            )
+            .as_deref(),
+            Some("Attached")
+        );
+        // The EC-14 branch compares the reported max aperture against the
+        // lens's own: 5.6 - 3.5 > 0.2 -> attached; 3.5 - 3.5 -> removed.
+        let ec14 = Some("Olympus Zuiko Digital EC-14 1.4x Teleconverter");
+        assert_eq!(
+            cg(
+                "Olympus",
+                "ExtenderStatus",
+                &[
+                    ec14,
+                    Some("Olympus Zuiko Digital 14-54mm F3.5-5.6"),
+                    Some("5.6")
+                ]
+            )
+            .as_deref(),
+            Some("Attached")
+        );
+        assert_eq!(
+            cg(
+                "Olympus",
+                "ExtenderStatus",
+                &[
+                    ec14,
+                    Some("Olympus Zuiko Digital 14-54mm F3.5-5.6"),
+                    Some("3.5")
+                ]
+            )
+            .as_deref(),
+            Some("Removed")
+        );
+    }
+
+    #[test]
+    fn sony_focus_distances_scale_by_focal_length() {
+        // combined-samples/Sony/SonyDSLR-A200.jpg: FocusPosition 94,
+        // FocalLength "30.0 mm" -> 94 * 30 / 1000 = 2.82 -> "2.82 m".
+        assert_eq!(
+            cg("Sony", "FocusDistance", &[Some("94"), Some("30.0 mm")]).as_deref(),
+            Some("2.82 m")
+        );
+        // combined-samples/Sony/SonyDSLR-A380.jpg: FocusPosition 128 -> "inf".
+        assert_eq!(
+            cg("Sony", "FocusDistance", &[Some("128"), Some("55.0 mm")]).as_deref(),
+            Some("inf")
+        );
+        // combined-samples/Sony/SonyILCE-7S.jpg: FocusPosition2 133,
+        // FocalLengthIn35mmFormat "35 mm" -> "0.3827 m" (sprintf "%.4g m").
+        assert_eq!(
+            cg("Sony", "FocusDistance2", &[Some("133"), Some("35 mm")]).as_deref(),
+            Some("0.3827 m")
+        );
+        // `return undef unless $val` and `'inf' if $val >= 255`.
+        assert_eq!(
+            cg("Sony", "FocusDistance2", &[Some("0"), Some("35 mm")]),
+            None
+        );
+        assert_eq!(
+            cg("Sony", "FocusDistance2", &[Some("255"), Some("35 mm")]).as_deref(),
+            Some("inf")
+        );
+    }
+
+    #[test]
+    fn xmp_flash_packs_the_five_scalar_fields() {
+        // combined-samples/Canon/CanonPowerShotG15.jpg: FlashFired false,
+        // FlashReturn "No return detection" (0), FlashMode "Off" (2),
+        // FlashFunction false, FlashRedEyeMode false
+        // -> 2 << 3 == 0x10 -> "Off, Did not fire".
+        assert_eq!(
+            cg(
+                "XMP",
+                "Flash",
+                &[
+                    Some("false"),
+                    Some("No return detection"),
+                    Some("Off"),
+                    Some("false"),
+                    Some("false"),
+                    None
+                ]
+            )
+            .as_deref(),
+            Some("Off, Did not fire")
+        );
+        // 0x01 | (3 << 1) | (1 << 3) | 0x40 == 0x4f
+        assert_eq!(
+            cg(
+                "XMP",
+                "Flash",
+                &[
+                    Some("True"),
+                    Some("Return detected"),
+                    Some("On"),
+                    Some("false"),
+                    Some("true"),
+                    None
+                ]
+            )
+            .as_deref(),
+            Some("On, Red-eye reduction, Return detected")
+        );
+    }
+
+    #[test]
+    fn xmp_gps_refs_read_the_last_hemisphere_letter() {
+        // combined-samples/Samsung/SamsungGalaxyA55_5G.jpg:
+        // XMP-exif:GPSLatitude "43,30.4233408N" -> "North".
+        assert_eq!(
+            cg("XMP", "GPSLatitudeRef", &[Some("43,30.4233408N")]).as_deref(),
+            Some("North")
+        );
+        assert_eq!(
+            cg("XMP", "GPSLongitudeRef", &[Some("16,26.3012136E")]).as_deref(),
+            Some("East")
+        );
+        assert_eq!(
+            cg("XMP", "GPSLatitudeRef", &[Some("43,30.4233408S")]).as_deref(),
+            Some("South")
+        );
+        // The IsFloat branch: a signed decimal has no letter to read.
+        assert_eq!(
+            cg("XMP", "GPSLatitudeRef", &[Some("-43.5070557")]).as_deref(),
+            Some("South")
+        );
+        assert_eq!(
+            cg("XMP", "GPSLongitudeRef", &[Some("16.438353")]).as_deref(),
+            Some("East")
+        );
+    }
+
+    #[test]
+    fn iso_volume_size_multiplies_the_block_geometry() {
+        // combined-samples/ISO.iso: VolumeBlockCount 190976,
+        // VolumeBlockSize 2048 -> 391118848 bytes -> "391 MB".
+        let computed = compute("ISO", "VolumeSize", &[Some("190976"), Some("2048")], None)
+            .expect("VolumeSize fires");
+        assert_eq!(computed.value, "391118848");
+        assert_eq!(computed.print, "391 MB");
+    }
+
+    #[test]
+    fn kodak_date_created_joins_year_and_month_day() {
+        // combined-samples/Kodak.jpg: YearCreated 2002, MonthDayCreated "05:01".
+        assert_eq!(
+            cg("Kodak", "DateCreated", &[Some("2002"), Some("05:01")]).as_deref(),
+            Some("2002:05:01")
+        );
+    }
+
+    #[test]
+    fn postscript_image_size_prefers_image_data_over_bounding_box() {
+        // combined-samples/PostScript.eps: ImageData "8 8 8 3 1 8 2 \"beginimage\"",
+        // BoundingBox "0 0 8 8" -> ImageWidth 8, ImageHeight 8.
+        let data = Some("8 8 8 3 1 8 2 \"beginimage\"");
+        let bbox = Some("0 0 8 8");
+        assert_eq!(
+            cg("PostScript", "ImageWidth", &[data, bbox]).as_deref(),
+            Some("8")
+        );
+        assert_eq!(
+            cg("PostScript", "ImageHeight", &[data, bbox]).as_deref(),
+            Some("8")
+        );
+        // With no ImageData the BoundingBox difference stands in
+        // (PostScript.pm:168-169).
+        assert_eq!(
+            cg("PostScript", "ImageWidth", &[None, Some("10 20 100 220")]).as_deref(),
+            Some("90")
+        );
+        assert_eq!(
+            cg("PostScript", "ImageHeight", &[None, Some("10 20 100 220")]).as_deref(),
+            Some("200")
+        );
+        assert_eq!(cg("PostScript", "ImageWidth", &[None, None]), None);
+    }
+
+    #[test]
+    fn cfa_pattern_prefixes_the_repeat_dimensions() {
+        // combined-samples/Nikon.nef: CFARepeatPatternDim "2 2",
+        // CFAPattern2 "2 1 1 0" -> "[Blue,Green][Green,Red]".
+        let computed = compute("Exif", "CFAPattern", &[Some("2 2"), Some("2 1 1 0")], None)
+            .expect("CFAPattern fires");
+        assert_eq!(computed.value, "2 2 2 1 1 0");
+        assert_eq!(computed.print, "[Blue,Green][Green,Red]");
+        // combined-samples/DNG.dng
+        assert_eq!(
+            c("CFAPattern", &[Some("2 2"), Some("0 1 1 2")]).as_deref(),
+            Some("[Red,Green][Green,Blue]")
+        );
+        // A pattern whose length disagrees with the dimensions is ExifTool's
+        // literal '?', which PrintCFAPattern renders as truncated data.
+        assert_eq!(
+            c("CFAPattern", &[Some("2 2"), Some("0 1")]).as_deref(),
+            Some("<truncated data>")
+        );
+    }
+
+    #[test]
+    fn audio_and_riff_durations() {
+        // combined-samples/APE.ape: SampleRate 44100, TotalFrames 2,
+        // BlocksPerFrame 73728, FinalFrameBlocks 42662 -> "2.64 s".
+        assert_eq!(
+            cg(
+                "APE",
+                "Duration",
+                &[Some("44100"), Some("2"), Some("73728"), Some("42662")]
+            )
+            .as_deref(),
+            Some("2.64 s")
+        );
+        // combined-samples/FLAC.flac carries TotalSamples 0, and the
+        // `($val[0] and $val[1])` guard is why ExifTool emits nothing for it.
+        assert_eq!(cg("FLAC", "Duration", &[Some("8000"), Some("0")]), None);
+        assert_eq!(
+            cg("FLAC", "Duration", &[Some("44100"), Some("441000")]).as_deref(),
+            Some("10.00 s")
+        );
+        // combined-samples/RIFF.avi: FrameRate 15, FrameCount 233 -> "15.53 s".
+        assert_eq!(
+            cg("RIFF", "Duration", &[Some("15"), Some("233"), None, None]).as_deref(),
+            Some("15.53 s")
+        );
+        // combined-samples/Pentax.avi: FrameRate 24, FrameCount 600.
+        assert_eq!(
+            cg("RIFF", "Duration", &[Some("24"), Some("600"), None, None]).as_deref(),
+            Some("25.00 s")
+        );
+        // RIFF.pm:1660-1664: the video-stream pair wins only when the header
+        // duration is 2x-3x longer than it.
+        assert_eq!(
+            cg(
+                "RIFF",
+                "Duration",
+                &[Some("15"), Some("466"), Some("15"), Some("233")]
+            )
+            .as_deref(),
+            Some("15.53 s")
+        );
+        assert_eq!(
+            cg(
+                "RIFF",
+                "Duration",
+                &[Some("15"), Some("240"), Some("15"), Some("233")]
+            )
+            .as_deref(),
+            Some("16.00 s")
+        );
     }
 }

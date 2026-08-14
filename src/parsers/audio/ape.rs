@@ -25,7 +25,6 @@
 //! - <http://www.personal.uni-jena.de/~pfk/mpp/sv8/apetag.html>
 //! - ExifTool Source: `lib/Image/ExifTool/APE.pm`
 
-use crate::core::formatters::convert_duration;
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::exiftool_tables::{
@@ -223,35 +222,16 @@ fn parse_new_header(header: &[u8], metadata: &mut MetadataMap) {
         }
     }
 
-    let scalar = |name: &str| -> Option<u64> {
-        decode
-            .fields()
-            .iter()
-            .find(|decoded| decoded.field.name == name)
-            .and_then(|decoded| match decoded.emit() {
-                Some(TagValue::Integer(value)) => u64::try_from(value).ok(),
-                _ => None,
-            })
-    };
-
-    // `Image::ExifTool::APE::Composite::Duration` (APE.pm:81-93):
-    // `(($val[1] - 1) * $val[2] + $val[3]) / $val[0]`, guarded by
-    // `$val[0] && $val[1]`. A Composite, not a binary field -- it has no
-    // entry in `NewHeader` and the engine cannot produce it.
-    if let (Some(sample_rate), Some(total_frames), Some(blocks_per_frame), Some(final_frame_blocks)) = (
-        scalar("SampleRate"),
-        scalar("TotalFrames"),
-        scalar("BlocksPerFrame"),
-        scalar("FinalFrameBlocks"),
-    ) && sample_rate != 0
-        && total_frames != 0
-    {
-        let samples = (total_frames - 1) * blocks_per_frame + final_frame_blocks;
-        metadata.insert(
-            "APE:Duration".to_string(),
-            TagValue::new_string(convert_duration(samples as f64 / sample_rate as f64)),
-        );
-    }
+    // Duration is NOT emitted here. `Image::ExifTool::APE::Composite::Duration`
+    // (APE.pm:83-92) derives it from four `NewHeader` fields, and ExifTool
+    // reports the result under `Composite:`, not `APE:` -- re-probed against
+    // the pin: `exiftool-pinned.sh -G1 -s -j -a APE.ape` prints
+    // `"Composite:Duration": "2.64 s"` and no `APE:Duration` at all. This
+    // function used to compute the same formula itself, which put the right
+    // number under the wrong group and left `APE::Duration` in
+    // codegen_composite.py's never-fires list because nothing in
+    // `composite::compute` claimed it. `composite::compute` claims it now, so
+    // computing it here as well would emit the tag twice.
 }
 
 /// Formats a MAC version code the way ExifTool's `$val / 1000` does

@@ -32,7 +32,7 @@ fn real_avi_carriers_keep_riff_values_without_an_avi_group() {
                 ("RIFF:FrameRate", TagValue::String("24".to_string())),
                 ("RIFF:ImageWidth", TagValue::Integer(1280)),
                 ("RIFF:ImageHeight", TagValue::Integer(720)),
-                ("RIFF:Duration", TagValue::String("25.00".to_string())),
+                ("RIFF:FrameCount", TagValue::Integer(600)),
                 ("RIFF:VideoCodec", TagValue::String("mjpg".to_string())),
                 ("RIFF:NumChannels", TagValue::Integer(1)),
                 ("RIFF:SampleRate", TagValue::Integer(32000)),
@@ -45,7 +45,7 @@ fn real_avi_carriers_keep_riff_values_without_an_avi_group() {
                 ("RIFF:FrameRate", TagValue::String("15".to_string())),
                 ("RIFF:ImageWidth", TagValue::Integer(320)),
                 ("RIFF:ImageHeight", TagValue::Integer(240)),
-                ("RIFF:Duration", TagValue::String("15.53".to_string())),
+                ("RIFF:FrameCount", TagValue::Integer(233)),
                 ("RIFF:VideoCodec", TagValue::String("mjpg".to_string())),
                 ("RIFF:NumChannels", TagValue::Integer(1)),
                 ("RIFF:SampleRate", TagValue::Integer(11024)),
@@ -63,6 +63,19 @@ fn real_avi_carriers_keep_riff_values_without_an_avi_group() {
         assert!(
             metadata.iter().all(|(key, _)| !key.starts_with("AVI:")),
             "{file}: fabricated AVI family-1 group returned"
+        );
+        // `RIFF:Duration` is not an ExifTool tag for AVI. The only `Duration`
+        // in RIFF.pm's own tables is `RIFF::ANMF`'s (RIFF.pm:1400-1414), the
+        // animated-WebP frame chunk; AVI's comes from
+        // `Image::ExifTool::RIFF::Composite::Duration` (RIFF.pm:1549-1560) and
+        // is reported under `Composite:`. Re-probed against the pin:
+        // `exiftool-pinned.sh -G1 -s -j -a` prints `"Composite:Duration"` for
+        // both carriers here and no `RIFF:Duration`. `RIFF:FrameCount` above
+        // is one of that composite's two Required inputs.
+        assert_eq!(
+            metadata.get("RIFF:Duration"),
+            None,
+            "{file}: RIFF:Duration is oxidex's invention, not an ExifTool tag"
         );
     }
 }

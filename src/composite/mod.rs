@@ -55,7 +55,21 @@ fn value_string(v: &TagValue) -> Option<String> {
         // for a typed UTC value so the SubSec composites do not silently starve
         // if a parser upgrades its representation.
         TagValue::DateTime(dt) => Some(dt.format("%Y:%m:%d %H:%M:%S").to_string()),
-        // Binary, Struct and Array are not inputs to any implemented Composite.
+        // A one-byte `Binary` is how oxidex's EXIF parser stores an `int8u`
+        // tag whose PrintConv the CLI applies later -- `GPS:GPSAltitudeRef`
+        // is `Binary([0])`, not `Integer(0)`. ExifTool's ValueConv for such a
+        // tag is simply that byte, so rendering it as the integer is the
+        // ValueConv, not an interpretation of it; without this,
+        // `Composite:GPSAltitude` starves on a `GPSAltitudeRef` that is
+        // demonstrably present (`map.contains_key` is true and the CLI prints
+        // "Above Sea Level" for it) and silently never fires.
+        //
+        // Longer `Binary` runs are still refused: a multi-byte blob has no
+        // single ValueConv number, and guessing an encoding for one is the
+        // approximation this layer exists to avoid.
+        TagValue::Binary(bytes) if bytes.len() == 1 => Some(bytes[0].to_string()),
+        // Longer Binary, Struct and Array are not inputs to any implemented
+        // Composite.
         _ => None,
     }
 }

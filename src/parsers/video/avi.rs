@@ -364,7 +364,10 @@ fn parse_avih_chunk(
     // Offset 36: dwHeight
     let microsec_per_frame = r.u32_at(0).unwrap_or(0);
     let max_bytes_per_sec = r.u32_at(4).unwrap_or(0);
-    let total_frames = r.u32_at(16).unwrap_or(0);
+    // dwTotalFrames (offset 16) is deliberately not read: ExifTool takes
+    // TotalFrameCount from dmlh only (see below), and the one other consumer
+    // -- this parser's own `RIFF:Duration` -- was the composite's formula
+    // under a tag ExifTool does not have, and is gone.
     let stream_count = r.u32_at(24).unwrap_or(0);
     let width = r.u32_at(32).unwrap_or(0);
     let height = r.u32_at(36).unwrap_or(0);
@@ -417,15 +420,22 @@ fn parse_avih_chunk(
         );
     }
 
-    // Calculate duration if we have frame rate and total frames
-    if microsec_per_frame > 0 && total_frames > 0 {
-        let duration_secs = (microsec_per_frame as f64 * total_frames as f64) / 1_000_000.0;
-        let duration_str = format!("{:.2}", duration_secs);
-        metadata.insert(
-            "RIFF:Duration".to_string(),
-            TagValue::new_string(duration_str),
-        );
-    }
+    // Duration is NOT emitted here. ExifTool has no `RIFF:Duration` for AVI:
+    // the only `Duration` in `RIFF.pm`'s own tables is `RIFF::ANMF`'s
+    // (RIFF.pm:1400-1414), the animated-WebP frame chunk, a different carrier
+    // entirely. For AVI the value comes from
+    // `Image::ExifTool::RIFF::Composite::Duration` (RIFF.pm:1549-1560), which
+    // Requires `RIFF:FrameRate` and `RIFF:FrameCount` and reports under
+    // `Composite:`. Re-probed against the pin:
+    // `exiftool-pinned.sh -G1 -s -j -a RIFF.avi` prints
+    // `"Composite:Duration": "15.53 s"` and no `RIFF:Duration` at all.
+    //
+    // This block used to compute the composite's own formula here and file it
+    // under `RIFF:`. Bare-name scoring hid that as a VALUE diff (`15.53` vs
+    // `"15.53 s"`) rather than an EXTRA, so it read as a rendering bug in a
+    // real tag instead of a tag ExifTool does not have. `composite::compute`
+    // claims `RIFF::Duration` now, and leaving this in emitted the value twice
+    // -- measured as +2 EXTRA on the AVI row.
 
     Ok(())
 }
@@ -1096,9 +1106,10 @@ mod tests {
     /// re-derivation cannot reintroduce the divergent rendering under either
     /// name.
     ///
-    /// 40000 us/frame is 25 fps and 391 frames is 15.64 s, chosen so the old
-    /// renderings ("25.000 fps", "0:16") differ from the correct ones ("25",
-    /// "15.64") in both digits and shape.
+    /// 40000 us/frame is 25 fps and 391 frames, chosen so the old FrameRate
+    /// rendering ("25.000 fps") differs from the correct one ("25") in both
+    /// digits and shape. The duration those two imply (15.64 s) is now the
+    /// Composite's to derive, not this parser's to emit.
     #[test]
     fn synthetic_avi_pins_riff_renderings_and_emits_no_avi_group() {
         let data = synthetic_avi(40_000, 391, &[(b"vids", b"MJPG", 0), (b"auds", b"VORB", 0)]);
@@ -1109,9 +1120,16 @@ mod tests {
             metadata.get("RIFF:FrameRate"),
             Some(&TagValue::String("25".to_string())),
         );
+        // No `RIFF:Duration`: ExifTool reports AVI duration only as
+        // `Composite:Duration` (RIFF.pm:1549-1560), so there is no `RIFF:`
+        // tag of that name to render. This synthetic carries no strh
+        // dwLength, so `RIFF:FrameCount` -- the composite's other Required
+        // input -- is absent too; the derivation itself is pinned on the real
+        // carriers in `avi_integration_tests`.
         assert_eq!(
             metadata.get("RIFF:Duration"),
-            Some(&TagValue::String("15.64".to_string())),
+            None,
+            "ExifTool has no RIFF:Duration for AVI -- it is a Composite",
         );
         assert_eq!(
             metadata.get("RIFF:VideoCodec"),
