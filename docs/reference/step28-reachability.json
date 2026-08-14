@@ -5431,7 +5431,7 @@
       "edges": [],
       "fields": 8,
       "gate_a": true,
-      "hand_wired": false,
+      "hand_wired": true,
       "module": "PSP",
       "status": "eligible",
       "table": "Image"
@@ -7495,7 +7495,7 @@
       "edges": [],
       "fields": 14,
       "gate_a": true,
-      "hand_wired": false,
+      "hand_wired": true,
       "module": "Sony",
       "status": "eligible",
       "table": "PMP"
@@ -7644,7 +7644,7 @@
       "edges": [],
       "fields": 3,
       "gate_a": true,
-      "hand_wired": false,
+      "hand_wired": true,
       "module": "ZISRAW",
       "status": "eligible",
       "table": "Main"
