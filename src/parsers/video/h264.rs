@@ -23,9 +23,13 @@
 //! - ITU-T Rec. H.264, section 7.3.2.1 (sequence parameter set)
 //! - ExifTool Source: `lib/Image/ExifTool/H264.pm`
 
+use std::collections::HashMap;
+
 use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::core::formatters::perl_number as format_perl_number;
 use crate::core::{MetadataMap, TagValue};
+use crate::exiftool_tables::{Ctx, Dir, find_table, process_binary_data};
+use crate::io::ByteOrder;
 
 /// Parse an accumulated H.264 elementary stream payload.
 ///
@@ -597,16 +601,32 @@ fn decode_make_model(value: &[u8; 4], metadata: &mut MetadataMap) -> Option<&'st
 }
 
 /// MDPM 0xe1 (`RecInfo`), written by some Canon camcorders.
+///
+/// H264.pm:552-569 routes this four-byte record through
+/// `ProcessBinaryData`'s `H264::RecInfo` table.  Keep the call site literal:
+/// Step 28's reachability census deliberately counts literal `find_table`
+/// roots, and the table itself remains off until its Gate-B allowlist entry
+/// exists.
 fn decode_rec_info(value: &[u8; 4], metadata: &mut MetadataMap) {
-    let text = match value[0] {
-        0x02 => "XP+".to_string(), // High Quality 12 Mbps
-        0x04 => "SP".to_string(),  // Standard Play 7 Mbps
-        0x05 => "LP".to_string(),  // Long Play 5 Mbps
-        0x06 => "FXP".to_string(), // High Quality 17 Mbps
-        0x07 => "MXP".to_string(), // High Quality 24 Mbps
-        other => format!("Unknown ({})", other),
+    let Some(table) = find_table("H264", "RecInfo") else {
+        return;
     };
-    metadata.insert("H264:RecordingMode".to_string(), TagValue::new_string(text));
+    if !table.enabled() {
+        return;
+    }
+
+    let mut members = HashMap::new();
+    let mut ctx = Ctx::new(&mut members);
+    let mut emitted = Vec::new();
+    process_binary_data(
+        table,
+        Dir::whole(value, ByteOrder::Big),
+        &mut ctx,
+        &mut emitted,
+    );
+    for tag in emitted {
+        metadata.insert(format!("H264:{}", tag.name), tag.value);
+    }
 }
 
 #[cfg(test)]
@@ -740,13 +760,13 @@ mod tests {
         assert!(metadata.is_empty());
     }
 
-    /// Codes outside each PrintConv table must report themselves rather than
-    /// borrowing a neighbouring label.
+    /// Codes outside each PrintConv table must report their raw value rather
+    /// than borrowing a neighbouring label.
     #[test]
     fn test_unknown_codes_report_themselves() {
         let mut metadata = MetadataMap::new();
         decode_rec_info(&[0x03, 0, 0, 0], &mut metadata);
-        assert_eq!(shown(&metadata, "H264:RecordingMode"), "Unknown (3)");
+        assert_eq!(shown(&metadata, "H264:RecordingMode"), "3");
 
         let mut metadata = MetadataMap::new();
         assert_eq!(decode_make_model(&[0x12, 0x34, 0, 0], &mut metadata), None);

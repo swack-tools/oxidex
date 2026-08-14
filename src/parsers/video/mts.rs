@@ -875,7 +875,7 @@ fn format_significant_3(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::TestReader;
+    use crate::test_support::{PINNED_CORPUS_ROOT, TestReader, pinned_corpus_available};
 
     /// Build a 188-byte TS packet with the given PID and payload.
     fn ts_packet(pid: u16, payload_unit_start: bool, payload: &[u8]) -> Vec<u8> {
@@ -1046,6 +1046,27 @@ mod tests {
         let reader = TestReader::from_slice(&data);
         let parser = MtsParser;
         assert!(parser.parse(&reader).is_err());
+    }
+
+    /// Regression carrier for H264::RecInfo's generic-engine call site.
+    ///
+    /// This is deliberately the real M2TS sample, rather than a manufactured
+    /// MDPM record: it verifies the transport parser reaches the record and
+    /// that the engine's H264.pm:552-569 `PrintConv` renders the value the
+    /// pinned oracle reports for that file.
+    #[test]
+    fn real_m2ts_rec_info_uses_the_generated_binary_table() {
+        if !pinned_corpus_available() {
+            return;
+        }
+        let path = format!("{PINNED_CORPUS_ROOT}/M2TS.mts");
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let metadata = MtsParser
+            .parse(&TestReader::new(bytes))
+            .expect("pinned M2TS sample parses");
+        assert_eq!(shown(&metadata, "H264:RecordingMode"), "FXP");
     }
 
     #[test]

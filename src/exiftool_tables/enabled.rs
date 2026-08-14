@@ -75,6 +75,14 @@ pub static ENABLED: &[(&str, &str)] = &[
     // Canon::CMP1 -- `src/parsers/raw/metadata.rs:4788`, the CR3 `CMP1` box.
     // Corpus carriers: `CanonRaw.cr3` plus the Canon vendor directory.
     ("Canon", "CMP1"),
+    // H264::RecInfo -- Gate B: `conformance.py` on the real `M2TS.mts`
+    // carrier versus the 38144a2c control: 22 match / 0 VALUE / 1 MISSING /
+    // 0 EXTRA on both sides (the carrier already exercised the hand-written
+    // predecessor).
+    // `src/parsers/video/h264.rs` now routes H264.pm:552-569 through the
+    // shared ProcessBinaryData engine; one line is this table's review and
+    // revert unit.
+    ("H264", "RecInfo"),
     // ID3::v1 -- `src/parsers/audio/mp3.rs:499`, the 128-byte ID3v1 trailer.
     // This one is the clearest case for the shared `ReadValue`: every field
     // is a `string[N]` butted against the end of a fixed 128-byte record,
