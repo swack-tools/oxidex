@@ -188,6 +188,8 @@ domains = [
   "src/exiftool_tables/enabled.rs",      # Gate B allowlist
   "tools/exiftool-tables/verify_subdirs.py",
   "src/bin/jpeg-tag-matrix/baseline.json",
+  "src/exiftool_tables/binary_tables.rs",  # GENERATED -- see note below
+  "src/exiftool_tables/runtime.rs",        # hand-written, references the generated ExprId enum
 ]
 ```
 
@@ -272,3 +274,75 @@ P6 is the most speculative and the easiest to over-build. The cheap 80% is check
 - **Forced rebase can interrupt an agent mid-thought** and will occasionally cost work when a rebase conflicts. That is the intended trade: today's alternative was discovering the same conflict 24 commits later, when it was much more expensive.
 - **Conflict domains are a hand-maintained list**, so they will go stale. Mitigation: when the train bisects to a culprit whose write set was file-disjoint from the batch, that is evidence of a *missing* domain — log it and require it be added.
 - **The capability ledger check is only as good as the instrument behind it.** If it grades against a degraded oracle it will confidently report that everything is already implemented. It must run the same capability probe as the gate.
+
+---
+
+## 7. Addenda from the 2026-08-14 rollout
+
+Three failure classes surfaced while building this and are not covered above.
+
+**A verdict must distinguish FAIL from ABORT.** `staging/rb-s26` holds two
+verdicts from the same host: `gate-s26-fix` → `PASS`, and
+`gate-staging-rb-s26-c` → `FAIL tests`. The second was rustc taking
+`signal: 9, SIGKILL` during the `-C lto -C codegen-units=1` link of the test
+binary — an OOM kill, not a code defect. The two are indistinguishable in the
+current schema, and that ambiguity is what made two readers disagree about
+whether Step 26 was green. Add `result: PASS | FAIL | ABORT` where ABORT covers
+OOM, low disk, lost oracle, and killed process, and make ABORT non-admissible
+but also non-damning: it schedules a retry rather than condemning the branch.
+Memory headroom belongs in the desired-state `limits` alongside disk.
+
+**Work identity is per-host, not global.** The ryzen (`ubuntuwork`) has three
+accounts — `allen`, `runner`, `swackhamer` — and its fleet gates run as
+`swackhamer`, whose home and `~/gatelogs/` are unreadable to `allen`, the user
+ssh lands as. Measuring `allen`'s home there reports no oracle, no corpus and no
+verdicts while gates run fine under the other identity; `kill` against them
+returns "Operation not permitted". `refs/fleet/hosts/<host>` must therefore
+record the **owning user**, and `fleet status` must measure that user's paths.
+Without it the reconciler will double-start work it cannot see.
+
+**Toolchain must be measured the way the gate resolves it.** On both Macs a
+login shell resolves Homebrew's rustc from `/opt/homebrew/bin`, while the gate
+prepends `$HOME/.cargo/bin` and gets rustup's. The two disagreed for most of a
+day, and the discrepancy is invisible unless the probe replicates the gate's
+exact `PATH`. `doctor.py` does this; anything else that reports a toolchain
+must too.
+
+**Still open: macOS gate viability.** `tests/ffi_c_integration.rs` fails in
+`--release` on the M4 under rustc 1.90.0, 1.95.0 and 1.97.1 alike, with
+`ld: mis-aligned LINKEDIT string pool` in `liboxidex.dylib`; `-Wl,-ld_classic`
+is rejected as obsolete by that linker. No macOS host has yet been *verified*
+to pass it, so "the M4 is broken" and "no Apple Silicon host can run this gate"
+are both still consistent with the evidence. Until one Mac is measured green,
+treat macOS gate slots as unproven rather than merely degraded.
+
+**Two tasks computed `toolchain_id` differently, and both were right.** T0.1's
+`doctor.py` hashes `rustc -vV` with the `host:` line **stripped**, giving all
+four hosts one canonical id (`b5d14336…`). T0.3's `gate.sh` hashes it
+**unstripped**, giving the i7 `b2bdf493…`. Keying verdict admissibility on
+either alone is wrong, because they answer different questions:
+
+- *Is this host on the canonical compiler?* — needs the host line stripped, so
+  a Mac and a Linux box on the same rustc release compare equal.
+- *Is this verdict transferable to that host?* — needs the host line **kept**.
+  `ffi_c_integration` passes on Linux and fails on both Macs at the identical
+  rustc release, so a Linux verdict must not satisfy a macOS gate slot.
+
+Carry both: `rustc_id` (stripped, for `doctor.py` and desired-state health) and
+`platform_id` (unstripped, part of the verdict cache key). Collapsing them would
+let a Linux PASS silently satisfy a macOS host, which is precisely the
+cross-platform skew that cost a day here.
+
+**`regen.sh` has a hidden host dependency.** The committed oracle ledger's
+digest must match the `tables.json` that a host's *Perl* produces, and only the
+i7's Perl (5.38.2) currently does — a Mac's Perl yields a different digest, and
+`load_oracle_ledger()` then silently returns `None`, refusing **every**
+oracle-gated expression (observed: 248 → 7 `ExprId` variants, discovered only
+when one of the 241 missing ones broke compilation). Consequences: (a) any
+automation that calls `regen.sh` — including `drift.converge()`'s
+generated-file resolution — is currently i7-only, and the fleet must route
+regen work there until the ledger digest is host-independent; (b) a silent
+`None` from a failed digest check is an omit-without-count and must become a
+loud refusal. Separately, `verify_exprs.py` carries a pre-existing 1e18-probe
+precision mismatch (Nikon PrintAFPoints) that will block the next from-scratch
+regen on a non-i7 host — flagged for its own fix, not papered over here.
